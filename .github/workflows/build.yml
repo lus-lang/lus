@@ -174,9 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lus-wasm
-          path: |
-            lus/wasm/dist/lus.js
-            lus/wasm/dist/lus.wasm
+          path: lus/wasm/dist/
 
   release:
     name: Create Pre-release
@@ -202,8 +200,8 @@ jobs:
           cp artifacts/lus-linux-musl/lus release/lus-linux-musl
           cp artifacts/lus-macos/lus release/lus-macos
           cp artifacts/lus-windows/lus.exe release/lus-windows.exe
-          cp artifacts/lus-wasm/lus/wasm/dist/lus.js release/lus.js
-          cp artifacts/lus-wasm/lus/wasm/dist/lus.wasm release/lus.wasm
+          cp artifacts/lus-wasm/lus.js release/lus.js
+          cp artifacts/lus-wasm/lus.wasm release/lus.wasm
 
       - name: Create unstable release
         run: |
