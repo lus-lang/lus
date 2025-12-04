@@ -126,7 +126,7 @@ pkg = import('pkgconfig')
 pkg.generate(liblua,
   name: 'lus',
   description: 'A small, productive programming language.',
-  url: 'https://lus-lang.org/',
+  url: 'https://lus.dev/',
 )
 
 # Test suite
