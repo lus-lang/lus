@@ -21,7 +21,11 @@
     }
 
     button {
-      @apply inline-flex items-center gap-2 px-2 py-1 bg-linear-to-br;
+      @apply inline-flex items-center gap-2 px-2 py-1 bg-linear-to-br cursor-pointer;
+
+      &:disabled {
+        @apply cursor-not-allowed pointer-events-none opacity-50;
+      }
     }
 
     &[data-color="lime"] {

@@ -30,8 +30,10 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
   <div class="px-4 mt-2 flex gap-2 flex-wrap items-center">
     {
       links?.windows ? (
-        <a href={links.windows} class="no-underline font-normal text-lime-950">
-          <PlatformWindows class="inline-block w-4 h-4" /> Windows
+        <a href={links.windows} class="no-underline text-inherit! font-normal!">
+          <button>
+            <PlatformWindows class="inline-block w-4 h-4" /> Windows
+          </button>
         </a>
       ) : (
         <button disabled>
@@ -41,8 +43,10 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
     }
     {
       links?.macos ? (
-        <a href={links.macos} class="no-underline font-normal text-lime-950">
-          <PlatformMac class="inline-block w-4 h-4" /> macOS (Silicon)
+        <a href={links.macos} class="no-underline text-inherit! font-normal!">
+          <button>
+            <PlatformMac class="inline-block w-4 h-4" /> macOS (Silicon)
+          </button>
         </a>
       ) : (
         <button disabled>
@@ -54,9 +58,11 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
       links?.linuxGlibc ? (
         <a
           href={links.linuxGlibc}
-          class="no-underline font-normal text-lime-950"
+          class="no-underline text-inherit! font-normal!"
         >
-          <PlatformLinuxGlibc class="inline-block w-4 h-4" /> Linux (glibc)
+          <button>
+            <PlatformLinuxGlibc class="inline-block w-4 h-4" /> Linux (glibc)
+          </button>
         </a>
       ) : (
         <button disabled>
@@ -68,9 +74,11 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
       links?.linuxMusl ? (
         <a
           href={links.linuxMusl}
-          class="no-underline font-normal text-lime-950"
+          class="no-underline text-inherit! font-normal!"
         >
-          <PlatformLinuxMusl class="inline-block w-4 h-4" /> Linux (musl)
+          <button>
+            <PlatformLinuxMusl class="inline-block w-4 h-4" /> Linux (musl)
+          </button>
         </a>
       ) : (
         <button disabled>
@@ -82,9 +90,11 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
       links?.sourceTarball ? (
         <a
           href={links.sourceTarball}
-          class="no-underline font-normal text-lime-950"
+          class="no-underline text-inherit! font-normal!"
         >
-          <DownloadIcon class="inline-block w-4 h-4" /> Source code
+          <button>
+            <DownloadIcon class="inline-block w-4 h-4" /> Source code
+          </button>
         </a>
       ) : (
         <button disabled>

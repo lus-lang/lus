@@ -32,7 +32,7 @@ interface GitHubRelease {
 }
 
 const ASSET_NAMES = {
-  windows: "lus-win.exe",
+  windows: "lus-windows.exe",
   macos: "lus-macos",
   linuxGlibc: "lus-linux",
   linuxMusl: "lus-linux-musl",
