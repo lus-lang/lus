@@ -180,12 +180,11 @@ jobs:
         run: |
           SHORT_SHA="${{ github.sha }}"
           SHORT_SHA="${SHORT_SHA:0:7}"
-          
+
           gh release create "unstable-${SHORT_SHA}" \
             --title "Unstable (${SHORT_SHA})" \
             --notes "Automated build from commit ${{ github.sha }}" \
             --prerelease \
-            --latest \
             release/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
