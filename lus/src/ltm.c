@@ -31,7 +31,8 @@ LUAI_DDEF const char *const luaT_typenames_[LUA_TOTALTYPES] = {
   "no value",
   "nil", "boolean", udatatypename, "number",
   "string", "table", "function", udatatypename, "thread",
-  "upvalue", "proto" /* these last cases are used for tests only */
+  "enum",  /* LUA_TENUM = 9 */
+  "upvalue", "proto", "enumroot" /* these last cases are used for tests only */
 };
 
 

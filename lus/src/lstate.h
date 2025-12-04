@@ -421,6 +421,8 @@ union GCUnion {
   struct Proto p;
   struct lua_State th;  /* thread */
   struct UpVal upv;
+  struct Enum en;        /* enum value */
+  struct EnumRoot er;    /* enum root */
 };
 
 
@@ -443,6 +445,8 @@ union GCUnion {
 #define gco2p(o)  check_exp((o)->tt == LUA_VPROTO, &((cast_u(o))->p))
 #define gco2th(o)  check_exp((o)->tt == LUA_VTHREAD, &((cast_u(o))->th))
 #define gco2upv(o)	check_exp((o)->tt == LUA_VUPVAL, &((cast_u(o))->upv))
+#define gco2enum(o)  check_exp((o)->tt == LUA_VENUM, &((cast_u(o))->en))
+#define gco2enumroot(o)  check_exp((o)->tt == LUA_VENUMROOT, &((cast_u(o))->er))
 
 
 /*

@@ -80,3 +80,28 @@ local t = { a = 1, b = 2, c = 3 }
 local a, b, c from t
 print(a, b, c) -- 1 2 3
 ```
+
+## Enums
+
+Lua does not have a built-in enum type. Developers typically simulate enums using tables with string keys or sequential integers, but these approaches lack type safety; there's nothing preventing comparison between unrelated "enum" values or accidental use of invalid values.
+
+Lus introduces first-class enums with the `enum ... end` expression. Enum values are symbols: they are only equal to other values from the same enum with the same name. This provides type safety while still allowing ordering comparisons by position. Use `tonumber()` to get the 1-based index, and index any enum value by name or number to access other members of the same enum.
+
+```lua
+local color = enum red, green, blue end
+local status = enum ok, error end
+
+-- Enums are symbols, not numbers
+assert(color.red ~= status.ok)  -- Different enums, never equal
+assert(color == color.red)      -- Enum equals its first value
+
+-- Ordering by position
+assert(color.red < color.green)
+
+-- Access by name or index
+assert(color.red.blue == color.blue)
+assert(color[2] == color.green)
+
+-- Get numeric index
+assert(tonumber(color.blue) == 3)
+```

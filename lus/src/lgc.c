@@ -16,6 +16,7 @@
 
 #include "ldebug.h"
 #include "ldo.h"
+#include "lenum.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "lmem.h"
@@ -154,6 +155,15 @@ static l_mem objsize (GCObject *o) {
       res = sizeof(UpVal);
       break;
     }
+    case LUA_VENUM: {
+      res = sizeenum;
+      break;
+    }
+    case LUA_VENUMROOT: {
+      EnumRoot *root = gco2enumroot(o);
+      res = luaE_rootsize(root);
+      break;
+    }
     default: res = 0; lua_assert(0);
   }
   return cast(l_mem, res);
@@ -172,6 +182,7 @@ static GCObject **getgclist (GCObject *o) {
       lua_assert(u->nuvalue > 0);
       return &u->gclist;
     }
+    case LUA_VENUMROOT: return &gco2enumroot(o)->gclist;
     default: lua_assert(0); return 0;
   }
 }
@@ -363,8 +374,14 @@ static void reallymarkobject (global_State *g, GCObject *o) {
       /* else... */
     }  /* FALLTHROUGH */
     case LUA_VLCL: case LUA_VCCL: case LUA_VTABLE:
-    case LUA_VTHREAD: case LUA_VPROTO: {
+    case LUA_VTHREAD: case LUA_VPROTO: case LUA_VENUMROOT: {
       linkobjgclist(o, g->gray);  /* to be visited later */
+      break;
+    }
+    case LUA_VENUM: {
+      Enum *e = gco2enum(o);
+      markobject(g, e->root);  /* mark its root */
+      set2black(o);  /* nothing else to mark */
       break;
     }
     default: lua_assert(0); break;
@@ -721,6 +738,17 @@ static l_mem traversethread (global_State *g, lua_State *th) {
 
 
 /*
+** Traverse an enum root: mark all name strings.
+*/
+static l_mem traverseenumroot (global_State *g, EnumRoot *root) {
+  int i;
+  for (i = 0; i < root->size; i++)
+    markobjectN(g, root->names[i]);
+  return 1 + root->size;
+}
+
+
+/*
 ** traverse one gray object, turning it to black. Return an estimate
 ** of the number of slots traversed.
 */
@@ -735,6 +763,7 @@ static l_mem propagatemark (global_State *g) {
     case LUA_VCCL: return traverseCclosure(g, gco2ccl(o));
     case LUA_VPROTO: return traverseproto(g, gco2p(o));
     case LUA_VTHREAD: return traversethread(g, gco2th(o));
+    case LUA_VENUMROOT: return traverseenumroot(g, gco2enumroot(o));
     default: lua_assert(0); return 0;
   }
 }
@@ -874,6 +903,14 @@ static void freeobj (lua_State *L, GCObject *o) {
       if (ts->shrlen == LSTRMEM)  /* must free external string? */
         (*ts->falloc)(ts->ud, ts->contents, ts->u.lnglen + 1, 0);
       luaM_freemem(L, ts, luaS_sizelngstr(ts->u.lnglen, ts->shrlen));
+      break;
+    }
+    case LUA_VENUM: {
+      luaE_free(L, gco2enum(o));
+      break;
+    }
+    case LUA_VENUMROOT: {
+      luaE_freeroot(L, gco2enumroot(o));
       break;
     }
     default: lua_assert(0);

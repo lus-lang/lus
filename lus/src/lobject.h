@@ -22,13 +22,14 @@
 #define LUA_TUPVAL	LUA_NUMTYPES  /* upvalues */
 #define LUA_TPROTO	(LUA_NUMTYPES+1)  /* function prototypes */
 #define LUA_TDEADKEY	(LUA_NUMTYPES+2)  /* removed keys in tables */
+#define LUA_TENUMROOT	(LUA_NUMTYPES+3)  /* enum root (internal) */
 
 
 
 /*
 ** number of all possible types (including LUA_TNONE but excluding DEADKEY)
 */
-#define LUA_TOTALTYPES		(LUA_TPROTO + 2)
+#define LUA_TOTALTYPES		(LUA_TENUMROOT + 2)
 
 
 /*
@@ -816,6 +817,58 @@ typedef struct Table {
 
 /* }================================================================== */
 
+
+/*
+** {==================================================================
+** Enums
+** ===================================================================
+*/
+
+#define LUA_VENUM	makevariant(LUA_TENUM, 0)
+#define LUA_VENUMROOT	makevariant(LUA_TENUMROOT, 0)
+
+#define ttisenum(o)		checktag((o), ctb(LUA_VENUM))
+
+#define enumvalue(o)	check_exp(ttisenum(o), gco2enum(val_(o).gc))
+
+#define setenumvalue(L,obj,x) \
+  { TValue *io = (obj); Enum *x_ = (x); \
+    val_(io).gc = obj2gco(x_); settt_(io, ctb(LUA_VENUM)); \
+    checkliveness(L,io); }
+
+#define setenumvalue2s(L,o,e)	setenumvalue(L,s2v(o),e)
+
+
+/*
+** EnumRoot: Internal structure holding the name-to-index mapping.
+** The names array is a flexible array member storing TString pointers.
+*/
+typedef struct EnumRoot {
+  CommonHeader;
+  int size;           /* number of enum values */
+  GCObject *gclist;   /* for GC traversal */
+  TString *names[1];  /* flexible array: names[0..size-1] */
+} EnumRoot;
+
+
+/*
+** Enum: User-visible enum value.
+** Points to its root and stores its 1-based index.
+*/
+typedef struct Enum {
+  CommonHeader;
+  struct EnumRoot *root;  /* the enum definition */
+  int idx;                /* 1-based index */
+} Enum;
+
+
+/* size of an EnumRoot with n names */
+#define sizeenumroot(n)	(offsetof(EnumRoot, names) + (n) * sizeof(TString *))
+
+/* size of an Enum value */
+#define sizeenum	(sizeof(Enum))
+
+/* }================================================================== */
 
 
 /*

@@ -52,6 +52,7 @@ core_sources = files(
   'src/ldebug.c',
   'src/ldo.c',
   'src/ldump.c',
+  'src/lenum.c',
   'src/lfunc.c',
   'src/lgc.c',
   'src/llex.c',
@@ -131,6 +132,7 @@ pkg.generate(liblua,
 
 # Test suite
 test_files = [
+  'enum',
   'errors',
   'from',
   'ifassign',

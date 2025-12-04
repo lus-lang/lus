@@ -19,6 +19,7 @@
 #include "lapi.h"
 #include "ldebug.h"
 #include "ldo.h"
+#include "lenum.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "lmem.h"
@@ -658,6 +659,39 @@ LUA_API int lua_pushthread (lua_State *L) {
   api_incr_top(L);
   lua_unlock(L);
   return (mainthread(G(L)) == L);
+}
+
+
+/*
+** Push an enum onto the stack from string/number pairs on the stack.
+** Usage: push string then number for each pair, then call lua_pushenum(L, npairs).
+** The pairs are consumed from the stack and an enum value is pushed.
+** The pushed enum is the first value (index 1).
+*/
+LUA_API void lua_pushenum (lua_State *L, int npairs) {
+  EnumRoot *root;
+  Enum *e;
+  int i;
+  lua_lock(L);
+  api_check(L, npairs > 0, "enum must have at least one member");
+  api_checkpop(L, npairs * 2);  /* check that we have enough pairs */
+  /* Create enum root */
+  root = luaE_newroot(L, npairs);
+  /* Fill in the names from the stack (pairs are: string, number) */
+  for (i = 0; i < npairs; i++) {
+    int base = -(npairs * 2) + (i * 2);  /* index of this pair's string */
+    TValue *str = index2value(L, base);
+    api_check(L, ttisstring(str), "enum name must be a string");
+    root->names[i] = tsvalue(str);
+  }
+  /* Pop the pairs from the stack */
+  L->top.p -= npairs * 2;
+  /* Create first enum value and push it */
+  e = luaE_new(L, root, 1);
+  setenumvalue(L, s2v(L->top.p), e);
+  api_incr_top(L);
+  luaC_checkGC(L);
+  lua_unlock(L);
 }
 
 

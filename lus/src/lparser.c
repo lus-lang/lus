@@ -18,6 +18,7 @@
 #include "lcode.h"
 #include "ldebug.h"
 #include "ldo.h"
+#include "lenum.h"
 #include "lfunc.h"
 #include "llex.h"
 #include "lmem.h"
@@ -1352,9 +1353,65 @@ static void suffixedexp (LexState *ls, expdesc *v) {
 }
 
 
+/*
+** Maximum number of names in an enum declaration
+*/
+#define MAXENUMNAMES 255
+
+
+/*
+** Parse an enum expression: enum NAME { ',' NAME } end
+** Creates an EnumRoot with all names, returns the first enum value.
+*/
+static void enumexpr (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  lua_State *L = ls->L;
+  TString *names[MAXENUMNAMES];
+  int nnames = 0;
+  int k;
+  EnumRoot *root;
+  Enum *e;
+  TValue tv;
+
+  /* skip 'enum' keyword */
+  luaX_next(ls);
+
+  /* parse names */
+  do {
+    if (nnames >= MAXENUMNAMES)
+      luaX_syntaxerror(ls, "too many names in enum");
+    names[nnames++] = str_checkname(ls);
+  } while (testnext(ls, ','));
+
+  /* expect 'end' */
+  check_match(ls, TK_END, TK_ENUM, ls->linenumber);
+
+  /* Create the enum root with all names */
+  root = luaE_newroot(L, nnames);
+  for (int i = 0; i < nnames; i++) {
+    root->names[i] = names[i];
+  }
+
+  /* Create the first enum value (index 1) */
+  e = luaE_new(L, root, 1);
+
+  /* Add the enum value as a constant */
+  setenumvalue(L, &tv, e);
+  /* Use addk directly - enums are unique, no caching */
+  luaM_growvector(L, fs->f->k, fs->nk, fs->f->sizek, TValue,
+                  MAXARG_Ax, "constants");
+  setobj(L, &fs->f->k[fs->nk], &tv);
+  k = fs->nk++;
+  luaC_barrier(L, fs->f, &tv);
+
+  /* Return expression referencing the constant */
+  init_exp(v, VK, k);
+}
+
+
 static void simpleexp (LexState *ls, expdesc *v) {
   /* simpleexp -> FLT | INT | STRING | NIL | TRUE | FALSE | ... |
-                  constructor | FUNCTION body | CATCH expr | suffixedexp */
+                  constructor | FUNCTION body | CATCH expr | ENUM expr | suffixedexp */
   switch (ls->t.token) {
     case TK_FLT: {
       init_exp(v, VKFLT, 0);
@@ -1400,6 +1457,10 @@ static void simpleexp (LexState *ls, expdesc *v) {
     }
     case TK_CATCH: {  /* catch expression */
       catchexpr(ls, v);
+      return;
+    }
+    case TK_ENUM: {  /* enum expression */
+      enumexpr(ls, v);
       return;
     }
     default: {

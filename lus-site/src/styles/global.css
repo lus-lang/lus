@@ -53,13 +53,15 @@ section {
 
   p:has(+ h2),
   ul:has(+ h2),
-  ol:has(+ h2) {
+  ol:has(+ h2),
+  pre:has(+ h2) {
     @apply mb-8;
   }
 
   pre {
+    @apply mt-4;
     code {
-      @apply block overflow-x-scroll bg-white px-4;
+      @apply block overflow-x-scroll bg-white p-4;
     }
   }
 }

@@ -21,6 +21,7 @@
 #include "lapi.h"
 #include "ldebug.h"
 #include "ldo.h"
+#include "lenum.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "lobject.h"
@@ -295,6 +296,29 @@ lu_byte luaV_finishget (lua_State *L, const TValue *t, TValue *key,
   for (loop = 0; loop < MAXTAGLOOP; loop++) {
     if (tag == LUA_VNOTABLE) {  /* 't' is not a table? */
       lua_assert(!ttistable(t));
+      /* Check if 't' is an enum */
+      if (ttisenum(t)) {
+        Enum *e = enumvalue(t);
+        EnumRoot *root = e->root;
+        Enum *result = NULL;
+        if (ttisstring(key)) {  /* index by name */
+          TString *name = tsvalue(key);
+          result = luaE_getbyname(L, root, name);
+          if (result == NULL)
+            luaG_runerror(L, "enum has no member '%s'", getstr(name));
+        }
+        else if (ttisinteger(key)) {  /* index by integer */
+          lua_Integer idx = ivalue(key);
+          result = luaE_getbyidx(L, root, (int)idx);
+          if (result == NULL)
+            luaG_runerror(L, "enum index %I out of range", (LUAI_UACINT)idx);
+        }
+        else {
+          luaG_typeerror(L, key, "index enum with");
+        }
+        setenumvalue(L, s2v(val), result);
+        return LUA_VENUM;
+      }
       tm = luaT_gettmbyobj(L, t, TM_INDEX);
       if (l_unlikely(notm(tm)))
         luaG_typeerror(L, t, "index");  /* no metamethod */
@@ -538,6 +562,10 @@ static int lessthanothers (lua_State *L, const TValue *l, const TValue *r) {
   lua_assert(!ttisnumber(l) || !ttisnumber(r));
   if (ttisstring(l) && ttisstring(r))  /* both are strings? */
     return l_strcmp(tsvalue(l), tsvalue(r)) < 0;
+  else if (ttisenum(l) && ttisenum(r)) {  /* both are enums? */
+    /* Enums compare by index (allows e.g. enum_a.x < enum_a.y) */
+    return enumvalue(l)->idx < enumvalue(r)->idx;
+  }
   else
     return luaT_callorderTM(L, l, r, TM_LT);
 }
@@ -560,6 +588,10 @@ static int lessequalothers (lua_State *L, const TValue *l, const TValue *r) {
   lua_assert(!ttisnumber(l) || !ttisnumber(r));
   if (ttisstring(l) && ttisstring(r))  /* both are strings? */
     return l_strcmp(tsvalue(l), tsvalue(r)) <= 0;
+  else if (ttisenum(l) && ttisenum(r)) {  /* both are enums? */
+    /* Enums compare by index (allows e.g. enum_a.x <= enum_a.y) */
+    return enumvalue(l)->idx <= enumvalue(r)->idx;
+  }
   else
     return luaT_callorderTM(L, l, r, TM_LE);
 }
@@ -640,6 +672,12 @@ int luaV_equalobj (lua_State *L, const TValue *t1, const TValue *t2) {
       }
       case LUA_VLCF:
         return (fvalue(t1) == fvalue(t2));
+      case LUA_VENUM: {
+        /* Two enum values are equal iff same root AND same index */
+        Enum *e1 = enumvalue(t1);
+        Enum *e2 = enumvalue(t2);
+        return (e1->root == e2->root && e1->idx == e2->idx);
+      }
       default:  /* functions and threads */
         return (gcvalue(t1) == gcvalue(t2));
     }

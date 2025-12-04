@@ -374,3 +374,174 @@ The pattern used:
 - The table expression is evaluated only once (not once per field)
 - Works with Lua 5.5's global declaration system (`global` keyword and checking)
 - No new opcodes required; uses existing `GETFIELD` instruction
+
+## Enums
+
+Enums are a new type that provide symbolic constants with identity-based comparison. Each enum value belongs to an "enum root" which defines the set of valid names and their indices.
+
+#### Type System
+
+**New type constant in `lua.h`:**
+
+- `LUA_TENUM = 9` - The enum base type
+- `LUA_NUMTYPES` updated to 10
+
+**Variant tags in `lobject.h`:**
+
+- `LUA_VENUM` - User-visible enum value
+- `LUA_VENUMROOT` - Internal enum root (holds name-to-index mapping)
+
+#### Data Structures
+
+**`EnumRoot`** (internal, not directly accessible to users):
+
+```c
+typedef struct EnumRoot {
+  CommonHeader;
+  int size;           /* number of enum values */
+  GCObject *gclist;   /* for GC traversal */
+  TString *names[1];  /* flexible array: names[0..size-1] */
+} EnumRoot;
+```
+
+**`Enum`** (user-visible enum value):
+
+```c
+typedef struct Enum {
+  CommonHeader;
+  struct EnumRoot *root;  /* the enum definition */
+  int idx;                /* 1-based index */
+} Enum;
+```
+
+#### Lexer Changes
+
+Added `TK_ENUM` to the reserved words enum in `llex.h` and the corresponding "enum" string in `llex.c`.
+
+#### Parser Changes
+
+**New function `enumexpr()`:**
+
+Parses `enum NAME { ',' NAME } end`:
+
+1. Skips `TK_ENUM`
+2. Collects all names into an array using `str_checkname()`
+3. Creates the EnumRoot with `luaE_newroot()`
+4. Creates the first enum value with `luaE_new()`
+5. Adds the enum value as a constant with `luaK_enumK()`
+6. Returns expression pointing to the constant
+
+**Modified `simpleexp()`:**
+
+Added `TK_ENUM` case that calls `enumexpr()`.
+
+#### Code Generation
+
+For `local a = enum x, y, z end`:
+
+```
+LOADK    R[0] K[0]     ; K[0] is the first enum value (index 1)
+; (local 'a' is now in R[0])
+```
+
+The enum root and first value are created at compile time and stored as constants.
+
+#### VM Changes
+
+**Enum Indexing:**
+
+When indexing an enum value:
+
+1. **By string**: Look up the name in the root's `names` array. If found, create/return an enum value with that index. If not found, error.
+
+2. **By integer**: Check bounds (1 to size). If valid, create/return an enum value with that index. If invalid, error.
+
+**Modified `luaV_finishget()`:**
+
+Added handling for `LUA_TENUM` type to perform enum-specific indexing.
+
+#### Garbage Collection
+
+**Traversal (`lgc.c`):**
+
+- `traverseenum()`: Marks the enum's root
+- `traverseenumroot()`: Marks all name strings in the root
+
+**Freeing:**
+
+- `freeobj()` updated to handle `LUA_VENUM` and `LUA_VENUMROOT`
+- EnumRoot frees its names array
+- Enum values are simple fixed-size allocations
+
+#### C API
+
+**New functions in `lapi.c`:**
+
+```c
+/* Push an enum onto the stack from pairs on the stack.
+** Usage: push string/number pairs, then call lua_pushenum(L, npairs).
+** Example:
+**   lua_pushstring(L, "foo");
+**   lua_pushinteger(L, 1);
+**   lua_pushstring(L, "bar");
+**   lua_pushinteger(L, 2);
+**   lua_pushenum(L, 2);  // creates enum{foo=1, bar=2}, pushes foo
+*/
+LUA_API void lua_pushenum (lua_State *L, int npairs);
+
+/* Check if value at index is an enum */
+LUA_API int lua_isenum (lua_State *L, int idx);
+
+/* Get the integer index of an enum value (1-based) */
+LUA_API lua_Integer lua_toenumidx (lua_State *L, int idx);
+```
+
+**Updated functions:**
+
+- `lua_type()`: Returns `LUA_TENUM` for enum values
+- `lua_typename()`: Returns "enum" for `LUA_TENUM`
+
+#### Base Library Changes
+
+**`tonumber()`:**
+
+Updated to handle enums: returns the 1-based index of the enum value.
+
+**`type()`:**
+
+Returns "enum" for enum values (automatic via `lua_typename`).
+
+#### Comparison Semantics
+
+- **Equality (`==`, `~=`)**: Two enum values are equal only if they have the same root AND the same index.
+- **Ordering (`<`, `<=`, `>`, `>=`)**: Enums compare by their numeric indices (allows `enum_a.x < enum_a.y`).
+- **Cross-enum comparison**: Different enum roots are never equal, but ordering comparison between them raises an error (or compares by index, TBD).
+
+#### Files Modified/Created
+
+| File          | Changes                                                             |
+| ------------- | ------------------------------------------------------------------- |
+| `lua.h`       | Added `LUA_TENUM`, updated `LUA_NUMTYPES`                           |
+| `lobject.h`   | Added `LUA_VENUM`, `LUA_VENUMROOT`, Enum/EnumRoot structs, macros   |
+| `lstate.h`    | Added Enum/EnumRoot to GCUnion, gco2enum/gco2enumroot macros        |
+| `lenum.h`     | **NEW**: Enum function declarations                                 |
+| `lenum.c`     | **NEW**: Enum implementation                                        |
+| `llex.h`      | Added `TK_ENUM` to reserved words enum                              |
+| `llex.c`      | Added "enum" to token strings                                       |
+| `ltm.c`       | Added "enum" to type names array                                    |
+| `lgc.c`       | Added traverseenum, traverseenumroot, updated freeobj/propagatemark |
+| `lparser.c`   | Added `enumexpr()`, updated `simpleexp()`                           |
+| `lcode.c`     | Added `luaK_enumK()` for enum constants                             |
+| `lvm.c`       | Updated `luaV_finishget()` for enum indexing                        |
+| `lapi.c`      | Added `lua_pushenum()`, `lua_isenum()`, `lua_toenumidx()`           |
+| `lbaselib.c`  | Updated `tonumber` to handle enums                                  |
+| `meson.build` | Added `lenum.c` to sources                                          |
+
+#### Key Implementation Details
+
+- Enum roots are created at parse time and stored as constants in the function prototype
+- All enum values in a family share the same root pointer (identity comparison)
+- The root's `names` array is allocated inline using flexible array member
+- Enum indexing by string is O(n) for simplicity; could be optimized with hash lookup
+- No new opcodes required; enum indexing uses existing `GETTABLE`/`GETFIELD` paths with type-specific handling in `luaV_finishget()`
+- Cross-enum ordering comparisons error (different "types" of enums shouldn't be compared for order)

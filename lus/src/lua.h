@@ -70,8 +70,9 @@ typedef struct lua_State lua_State;
 #define LUA_TFUNCTION		6
 #define LUA_TUSERDATA		7
 #define LUA_TTHREAD		8
+#define LUA_TENUM		9
 
-#define LUA_NUMTYPES		9
+#define LUA_NUMTYPES		10
 
 
 
@@ -254,6 +255,7 @@ LUA_API void  (lua_pushcclosure) (lua_State *L, lua_CFunction fn, int n);
 LUA_API void  (lua_pushboolean) (lua_State *L, int b);
 LUA_API void  (lua_pushlightuserdata) (lua_State *L, void *p);
 LUA_API int   (lua_pushthread) (lua_State *L);
+LUA_API void  (lua_pushenum) (lua_State *L, int npairs);
 
 
 /*
@@ -407,6 +409,7 @@ LUA_API void (lua_closeslot) (lua_State *L, int idx);
 #define lua_isnil(L,n)		(lua_type(L, (n)) == LUA_TNIL)
 #define lua_isboolean(L,n)	(lua_type(L, (n)) == LUA_TBOOLEAN)
 #define lua_isthread(L,n)	(lua_type(L, (n)) == LUA_TTHREAD)
+#define lua_isenum(L,n)		(lua_type(L, (n)) == LUA_TENUM)
 #define lua_isnone(L,n)		(lua_type(L, (n)) == LUA_TNONE)
 #define lua_isnoneornil(L, n)	(lua_type(L, (n)) <= 0)
 

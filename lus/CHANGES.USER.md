@@ -6,6 +6,7 @@
 - Assignments can now be made in `if`/`elseif` statements.
 - `?` suffix operator for safely navigating around nil values.
 - `from` expression deconstructs a table's fields.
+- Enums have been added.
 
 ## `catch` expression
 
@@ -131,4 +132,41 @@ assert(a == 1 and c == 3)
 f, e, d from t
 global d, e, f from t -- Same as above; Lua 5.5 feature.
 assert(d == 4 and e == 5 and f == 6)
+```
+
+## Enums
+
+Enums can be declared with the `enum <name>, <name>, ... <name> end` syntax. The returned enum is equal to the enum's first value, and can be indexed to access other enum members.
+
+```lua
+local enum_a = enum
+    apple, orange, celery, broccoli
+end
+
+local enum_b = enum
+    foo, bar, lorem, ipsum
+end
+
+-- `my_enum` is the first value of the enum.
+-- Don't worry, enums are indexable, so you
+-- can get the other values.
+assert(enum_a == enum_a.apple)
+
+-- Index any enum values to access its neighbors.
+assert(enum_a.orange ~= enum_a.celery)
+
+-- Enums are symbols, not numbers. Even if distinct
+-- enums have similar positions, they are not equal.
+assert(enum_a.apple ~= enum_b.foo)
+
+-- However, you can still do number-based comparions.
+assert(enum_a.orange > enum_a.apple)
+
+-- To access the underlying number, use `tonumber`.
+-- Enum indices start at 1, not 0.
+assert(tonumber(enum_a.apple) == 1)
+
+-- To index an enum value from a number,
+-- just index any enum value with the index.
+assert(enum_a[1] == enum_a.apple)
 ```

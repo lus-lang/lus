@@ -20,6 +20,8 @@
 #include "lauxlib.h"
 #include "lualib.h"
 #include "llimits.h"
+#include "lobject.h"
+#include "lstate.h"
 
 
 static int luaB_print (lua_State *L) {
@@ -84,6 +86,13 @@ static int luaB_tonumber (lua_State *L) {
   if (lua_isnoneornil(L, 2)) {  /* standard conversion? */
     if (lua_type(L, 1) == LUA_TNUMBER) {  /* already a number? */
       lua_settop(L, 1);  /* yes; return it */
+      return 1;
+    }
+    else if (lua_type(L, 1) == LUA_TENUM) {  /* enum value? */
+      /* Get the enum's index (1-based) */
+      const TValue *o = s2v(L->ci->func.p + 1);  /* first argument */
+      Enum *e = enumvalue(o);
+      lua_pushinteger(L, e->idx);
       return 1;
     }
     else {
