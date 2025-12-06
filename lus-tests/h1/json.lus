@@ -1,0 +1,395 @@
+global setmetatable, assert, type, require, fromjson, tojson, io, tostring, table
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("json")
+
+tests:it("fromjson parses null as nil", function()
+    local result = fromjson("null")
+    assert(result == nil, "null should parse to nil")
+end)
+
+tests:it("fromjson parses true", function()
+    local result = fromjson("true")
+    assert(result == true, "true should parse to true")
+end)
+
+tests:it("fromjson parses false", function()
+    local result = fromjson("false")
+    assert(result == false, "false should parse to false")
+end)
+
+tests:it("fromjson parses integer", function()
+    local result = fromjson("42")
+    assert(result == 42, "42 should parse to 42")
+end)
+
+tests:it("fromjson parses negative integer", function()
+    local result = fromjson("-123")
+    assert(result == -123, "-123 should parse to -123")
+end)
+
+tests:it("fromjson parses float", function()
+    local result = fromjson("-3.14")
+    assert(result == -3.14, "-3.14 should parse to -3.14")
+end)
+
+tests:it("fromjson parses exponential notation", function()
+    local result = fromjson("1.5e10")
+    assert(result == 1.5e10, "1.5e10 should parse correctly")
+end)
+
+tests:it("fromjson parses simple string", function()
+    local result = fromjson('"hello"')
+    assert(result == "hello", '"hello" should parse to hello')
+end)
+
+tests:it("fromjson parses empty string", function()
+    local result = fromjson('""')
+    assert(result == "", '"" should parse to empty string')
+end)
+
+tests:it("fromjson parses escape sequences", function()
+    assert(fromjson('"a\\nb"') == "a\nb", "\\n should become newline")
+    assert(fromjson('"a\\tb"') == "a\tb", "\\t should become tab")
+    assert(fromjson('"a\\\\b"') == "a\\b", "\\\\ should become backslash")
+    assert(fromjson('"a\\"b"') == 'a"b', '\\" should become quote')
+end)
+
+tests:it("fromjson parses unicode escape", function()
+    local result = fromjson('"\\u0041"')
+    assert(result == "A", "\\u0041 should be A")
+end)
+
+tests:it("fromjson parses surrogate pairs", function()
+    -- U+1F600 (grinning face) = \uD83D\uDE00
+    local result = fromjson('"\\uD83D\\uDE00"')
+    assert(result == "\xF0\x9F\x98\x80", "surrogate pair should decode correctly")
+end)
+
+tests:it("fromjson parses empty array", function()
+    local result = fromjson("[]")
+    assert(type(result) == "table", "[] should be table")
+    assert(#result == 0, "[] should be empty")
+end)
+
+tests:it("fromjson parses array with values", function()
+    local result = fromjson("[1, 2, 3]")
+    assert(type(result) == "table", "[1,2,3] should be table")
+    assert(result[1] == 1, "first element should be 1")
+    assert(result[2] == 2, "second element should be 2")
+    assert(result[3] == 3, "third element should be 3")
+end)
+
+tests:it("fromjson parses nested array", function()
+    local result = fromjson("[[1, 2], [3, 4]]")
+    assert(result[1][1] == 1, "nested access failed")
+    assert(result[2][2] == 4, "nested access failed")
+end)
+
+tests:it("fromjson parses empty object", function()
+    local result = fromjson("{}")
+    assert(type(result) == "table", "{} should be table")
+end)
+
+tests:it("fromjson parses object with values", function()
+    local result = fromjson('{"name":"test","value":123}')
+    assert(result.name == "test", "name should be test")
+    assert(result.value == 123, "value should be 123")
+end)
+
+tests:it("fromjson parses nested object", function()
+    local result = fromjson('{"a":{"b":{"c":42}}}')
+    assert(result.a.b.c == 42, "nested access should work")
+end)
+
+tests:it("fromjson parses mixed nested structure", function()
+    local result = fromjson('{"arr":[1,2],"obj":{"x":true}}')
+    assert(result.arr[1] == 1, "array in object failed")
+    assert(result.obj.x == true, "object in object failed")
+end)
+
+tests:it("fromjson handles whitespace", function()
+    local result = fromjson('  { "a" : 1 }  ')
+    assert(result.a == 1, "whitespace should be ignored")
+end)
+
+tests:it("fromjson rejects invalid JSON", function()
+    local ok, err = catch fromjson("not json")
+    assert(ok == false, "invalid JSON should error")
+end)
+
+tests:it("fromjson rejects trailing comma in array", function()
+    local ok, err = catch fromjson("[1, 2,]")
+    assert(ok == false, "trailing comma should error")
+end)
+
+tests:it("fromjson rejects unquoted keys", function()
+    local ok, err = catch fromjson("{key: 1}")
+    assert(ok == false, "unquoted keys should error")
+end)
+
+tests:it("fromjson rejects single quotes", function()
+    local ok, err = catch fromjson("'hello'")
+    assert(ok == false, "single quotes should error")
+end)
+
+tests:it("fromjson rejects control characters in string", function()
+    local ok, err = catch fromjson('"hello\tworld"')
+    assert(ok == false, "unescaped tab should error")
+end)
+
+tests:it("tojson serializes nil as null", function()
+    local result = tojson(nil)
+    assert(result == "null", "nil should serialize to null")
+end)
+
+tests:it("tojson serializes true", function()
+    local result = tojson(true)
+    assert(result == "true", "true should serialize to true")
+end)
+
+tests:it("tojson serializes false", function()
+    local result = tojson(false)
+    assert(result == "false", "false should serialize to false")
+end)
+
+tests:it("tojson serializes integer", function()
+    local result = tojson(42)
+    assert(result == "42", "42 should serialize to 42")
+end)
+
+tests:it("tojson serializes negative integer", function()
+    local result = tojson(-123)
+    assert(result == "-123", "-123 should serialize to -123")
+end)
+
+tests:it("tojson serializes simple string", function()
+    local result = tojson("hello")
+    assert(result == '"hello"', "hello should serialize to \"hello\"")
+end)
+
+tests:it("tojson escapes special characters", function()
+    assert(tojson("a\nb") == '"a\\nb"', "newline should be escaped")
+    assert(tojson("a\tb") == '"a\\tb"', "tab should be escaped")
+    assert(tojson("a\\b") == '"a\\\\b"', "backslash should be escaped")
+    assert(tojson('a"b') == '"a\\"b"', "quote should be escaped")
+end)
+
+tests:it("tojson serializes empty table as empty array", function()
+    local result = tojson({})
+    assert(result == "[]", "empty table should be []")
+end)
+
+tests:it("tojson serializes array", function()
+    local result = tojson({1, 2, 3})
+    assert(result == "[1,2,3]", "array should serialize correctly")
+end)
+
+tests:it("tojson serializes object", function()
+    local result = tojson({a = 1})
+    assert(result == '{"a":1}', "object should serialize correctly")
+end)
+
+tests:it("tojson serializes nested structure", function()
+    local data = {arr = {1, 2}, obj = {x = true}}
+    local result = tojson(data)
+    -- Order of keys is not guaranteed, so check for presence
+    assert(result:find('"arr"'), "should contain arr key")
+    assert(result:find('%[1,2%]'), "should contain array value")
+end)
+
+tests:it("tojson handles inf as null", function()
+    local result = tojson(1/0)
+    assert(result == "null", "inf should serialize as null")
+end)
+
+tests:it("tojson handles -inf as null", function()
+    local result = tojson(-1/0)
+    assert(result == "null", "-inf should serialize as null")
+end)
+
+tests:it("tojson handles nan as null", function()
+    local result = tojson(0/0)
+    assert(result == "null", "nan should serialize as null")
+end)
+
+tests:it("tojson calls __json metamethod", function()
+    local mt = {
+        __json = function(self)
+            return {id = self.secret}
+        end
+    }
+    local obj = setmetatable({secret = 42, private = "hidden"}, mt)
+    local result = tojson(obj)
+    assert(result == '{"id":42}', "__json should transform value")
+end)
+
+tests:it("tojson filter can omit properties", function()
+    local data = {a = 1, b = 2, c = 3}
+    local result = tojson(data, function(k, v)
+        if k == "b" then return nil end
+        return v
+    end)
+    assert(not result:find('"b"'), "b should be omitted")
+    assert(result:find('"a"'), "a should be present")
+    assert(result:find('"c"'), "c should be present")
+end)
+
+tests:it("tojson filter can transform values", function()
+    local data = {x = "original"}
+    local result = tojson(data, function(k, v)
+        if k == "x" then return "transformed" end
+        return v
+    end)
+    assert(result == '{"x":"transformed"}', "filter should transform value")
+end)
+
+tests:it("tojson skips functions", function()
+    local data = {a = 1, fn = function() end}
+    local result = tojson(data)
+    assert(not result:find("fn"), "functions should be skipped")
+end)
+
+tests:it("tojson detects circular references", function()
+    local a = {}
+    a.self = a
+    local ok, err = catch tojson(a)
+    assert(ok == false, "circular reference should error")
+end)
+
+-- ============================================================
+-- roundtrip tests
+-- ============================================================
+
+tests:it("roundtrip preserves string", function()
+    local original = "hello world"
+    local result = fromjson(tojson(original))
+    assert(result == original, "string roundtrip failed")
+end)
+
+tests:it("roundtrip preserves number", function()
+    local original = 123.456
+    local result = fromjson(tojson(original))
+    assert(result == original, "number roundtrip failed")
+end)
+
+tests:it("roundtrip preserves boolean", function()
+    assert(fromjson(tojson(true)) == true, "true roundtrip failed")
+    assert(fromjson(tojson(false)) == false, "false roundtrip failed")
+end)
+
+tests:it("roundtrip preserves nil", function()
+    local result = fromjson(tojson(nil))
+    assert(result == nil, "nil roundtrip failed")
+end)
+
+tests:it("roundtrip preserves simple object", function()
+    local original = {name = "test", value = 123, active = true}
+    local json = tojson(original)
+    local parsed = fromjson(json)
+    assert(parsed.name == "test", "name mismatch")
+    assert(parsed.value == 123, "value mismatch")
+    assert(parsed.active == true, "active mismatch")
+end)
+
+tests:it("roundtrip preserves nested structure", function()
+    local original = {
+        level1 = {
+            level2 = {
+                data = "deep"
+            }
+        }
+    }
+    local json = tojson(original)
+    local parsed = fromjson(json)
+    assert(parsed.level1.level2.data == "deep", "nested roundtrip failed")
+end)
+
+tests:it("roundtrip preserves array", function()
+    local original = {1, 2, 3, 4, 5}
+    local json = tojson(original)
+    local parsed = fromjson(json)
+    assert(#parsed == 5, "array length mismatch")
+    assert(parsed[3] == 3, "array value mismatch")
+end)
+
+-- RFC 8259 Test Suite (if h1/json folder exists)
+local function file_exists(path)
+    local f = io.open(path, "r")
+    if f then f:close() return true end
+    return false
+end
+
+local function readfile(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+local function get_json_test_files()
+    local files = {y = {}, n = {}, i = {}}
+    local handle = io.popen("ls lus-tests/h1/json/*.json 2>/dev/null")
+    if not handle then return nil end
+    
+    for line in handle:lines() do
+        local basename = line:match("([^/]+)%.json$")
+        if basename then
+            local prefix = basename:sub(1, 1)
+            if prefix == "y" then
+                files.y[#files.y + 1] = line
+            elseif prefix == "n" then
+                files.n[#files.n + 1] = line
+            elseif prefix == "i" then
+                files.i[#files.i + 1] = line
+            end
+        end
+    end
+    handle:close()
+    
+    if #files.y == 0 and #files.n == 0 and #files.i == 0 then
+        return nil
+    end
+    return files
+end
+
+local json_files = get_json_test_files()
+
+if json_files then
+    -- y_* files (must parse successfully)
+    for i = 1, #json_files.y do
+        local path = json_files.y[i]
+        local basename = path:match("([^/]+)$")
+        tests:it("y_: " .. basename, function()
+            local content = readfile(path)
+            assert(content, "Failed to read file: " .. path)
+            fromjson(content)
+        end)
+    end
+    
+    -- n_* files (must fail to parse)
+    for i = 1, #json_files.n do
+        local path = json_files.n[i]
+        local basename = path:match("([^/]+)$")
+        tests:it("n_: " .. basename, function()
+            local content = readfile(path)
+            assert(content, "Failed to read file: " .. path)
+            local ok, err = catch fromjson(content)
+            assert(not ok, "Expected parse error but got success")
+        end)
+    end
+    
+    -- i_* files (implementation-defined, soft-fail)
+    for i = 1, #json_files.i do
+        local path = json_files.i[i]
+        local basename = path:match("([^/]+)$")
+        tests:it("i_: " .. basename, function()
+            local content = readfile(path)
+            assert(content, "Failed to read file: " .. path)
+            local ok, result = catch fromjson(content)
+        end)
+    end
+end
+
+tests:finish()

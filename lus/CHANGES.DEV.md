@@ -545,3 +545,47 @@ Returns "enum" for enum values (automatic via `lua_typename`).
 - Enum indexing by string is O(n) for simplicity; could be optimized with hash lookup
 - No new opcodes required; enum indexing uses existing `GETTABLE`/`GETFIELD` paths with type-specific handling in `luaV_finishget()`
 - Cross-enum ordering comparisons error (different "types" of enums shouldn't be compared for order)
+
+## JSON
+
+Lus adds RFC 8259 compliant `tojson` and `fromjson` global functions for JSON serialization and deserialization. [Tested against 369 RFC 8259 test files (95 valid, 188 invalid, 86 implementation-defined)](https://github.com/nst/JSONTestSuite).
+
+#### API
+
+**`fromjson(json_string)`**
+- Parses JSON string into Lua value
+- Returns: `table`, `string`, `number`, `boolean`, or `nil`
+- Throws error on invalid JSON with position information
+
+**`tojson(value, [filter])`**
+- Serializes Lua value to compact JSON string
+- Optional `filter(key, value)` callback for transformation/filtering
+- Returns `nil` from filter to omit a property
+- `__json` metamethod: if present, called with `self`, return value is serialized instead
+
+#### Implementation
+
+The implementation is in `ljsonlib.c` with an iterative state-machine parser and recursive serializer.
+
+**Parser Features:**
+- All JSON types: strings, numbers, booleans, null, arrays, objects
+- Escape sequences: `\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX`
+- Surrogate pair handling for supplementary Unicode characters
+- Clear error messages with byte position
+- Iterative design using direct object manipulation (no Lua stack overflow)
+
+**Serializer Features:**
+- Automatic array vs object detection (contiguous 1..n integer keys = array)
+- `inf`/`-inf`/`nan` serialized as `null` (per RFC 8259)
+- Cycle detection with error on circular references
+- Skips unsupported types: functions, threads, enums, userdata (without `__json`)
+
+#### Files Created/Modified
+
+| File          | Changes                                            |
+| ------------- | -------------------------------------------------- |
+| `ljsonlib.c`  | **NEW**: JSON parser and serializer (~1030 lines)  |
+| `lualib.h`    | Added `luaopen_json` declaration                   |
+| `linit.c`     | Call `luaopen_json()` to register globals          |
+| `meson.build` | Added `ljsonlib.c` to lib_sources                  |
+

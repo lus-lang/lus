@@ -1,4 +1,4 @@
-global print, require, assert, type, collectgarbage, setmetatable, getmetatable, tostring, pairs, load, string, math, table, error, _G, next, rawset, coroutine
+global print, require, assert, type, collectgarbage, setmetatable, getmetatable, tostring, pairs, load, string, math, table, error, _G, next, rawset, coroutine, tojson, fromjson
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("gc")
@@ -136,6 +136,33 @@ tests:it("gc not reentrant in incremental mode", function()
     end})
     collectgarbage()
     assert(not res)
+end)
+
+tests:it("json serialization/deserialization doesn't leak", function()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    
+    -- Perform many JSON operations
+    for i = 1, 1000 do
+        local data = {
+            name = "test" .. i,
+            values = {1, 2, 3, 4, 5},
+            nested = {a = 1, b = 2, c = {d = 3}}
+        }
+        local json = tojson(data)
+        local parsed = fromjson(json)
+        -- Also test error paths (caught errors shouldn't leak)
+        local ok = catch fromjson("invalid json " .. i)
+    end
+    
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    
+    -- Memory shouldn't grow significantly (allow some slack for interned strings)
+    local growth = after - before
+    assert(growth < 100, "JSON operations leaked memory: " .. growth .. " KB")
 end)
 
 tests:finish()

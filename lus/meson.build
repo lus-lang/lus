@@ -92,6 +92,7 @@ lib_sources = files(
   'src/lstrlib.c',
   'src/ltablib.c',
   'src/lutf8lib.c',
+  'src/ljsonlib.c',
   'src/linit.c',
 )
 
@@ -183,6 +184,7 @@ h1_tests = [
   'h1/cstack',
   'h1/gengc',
   'h1/memerr',
+  'h1/json',
 ]
 
 foreach t : h1_tests

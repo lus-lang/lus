@@ -1,0 +1,176 @@
+---
+order: 106
+title: Acquis 6 - JSON
+acquis: true
+---
+
+The `fromjson` and `tojson` global functions provide RFC 8259 compliant JSON parsing and serialization.
+
+## Parsing with `fromjson`
+
+Parse a JSON string into a Lus value:
+
+```lua
+local data = fromjson('{"name": "Alice", "age": 30}')
+assert(data.name == "Alice")
+assert(data.age == 30)
+```
+
+All JSON types map to Lus types:
+
+```lua
+fromjson("null")           -- nil
+fromjson("true")           -- true
+fromjson("false")          -- false
+fromjson("42")             -- 42 (integer)
+fromjson("3.14")           -- 3.14 (number)
+fromjson('"hello"')        -- "hello"
+fromjson("[1, 2, 3]")      -- {1, 2, 3}
+fromjson('{"a": 1}')       -- {a = 1}
+```
+
+### Error handling
+
+Invalid JSON throws an error with position information:
+
+```lua
+local ok, err = catch fromjson('{"invalid}')
+assert(not ok)
+assert(err:match("position"))  -- "JSON parse error at position 10: ..."
+```
+
+## Serializing with `tojson`
+
+Serialize a Lus value to a JSON string:
+
+```lua
+local json = tojson({name = "Bob", scores = {95, 87, 92}})
+-- '{"name":"Bob","scores":[95,87,92]}'
+```
+
+### Array vs object detection
+
+Tables with contiguous integer keys 1..n become JSON arrays:
+
+```lua
+tojson({10, 20, 30})           -- "[10,20,30]"
+tojson({a = 1, b = 2})         -- '{"a":1,"b":2}'
+tojson({})                     -- "[]"
+```
+
+### Special values
+
+Non-finite numbers become `null`:
+
+```lua
+tojson(math.huge)      -- "null"
+tojson(-math.huge)     -- "null"
+tojson(0/0)            -- "null" (NaN)
+```
+
+## Filtering with `tojson`
+
+Pass a filter function to transform or omit values:
+
+```lua
+local data = {
+    name = "Alice",
+    password = "secret",
+    age = 30
+}
+
+-- Omit sensitive fields by returning nil
+local json = tojson(data, function(key, value)
+    if key == "password" then return nil end
+    return value
+end)
+-- '{"name":"Alice","age":30}'
+```
+
+Transform values:
+
+```lua
+local data = {price = 100, tax = 0.08}
+
+local json = tojson(data, function(key, value)
+    if key == "price" then return value * (1 + data.tax) end
+    if key == "tax" then return nil end
+    return value
+end)
+-- '{"price":108}'
+```
+
+## Custom serialization with `__json`
+
+Tables with a `__json` metamethod use it for serialization:
+
+```lua
+local Point = {}
+Point.__index = Point
+Point.__json = function(self)
+    return {x = self.x, y = self.y}
+end
+
+local p = setmetatable({x = 10, y = 20, internal = "data"}, Point)
+local json = tojson(p)
+-- '{"x":10,"y":20}' (internal field excluded)
+```
+
+The metamethod receives `self` and returns the value to serialize:
+
+```lua
+local wrapper = setmetatable({value = 42}, {
+    __json = function(self) return self.value end
+})
+tojson(wrapper)  -- "42"
+```
+
+## Unsupported types
+
+Functions, coroutines, userdata, and enums are skipped during serialization (unless they have `__json`):
+
+```lua
+local data = {
+    name = "test",
+    callback = function() end,  -- skipped
+    thread = coroutine.create(function() end)  -- skipped
+}
+tojson(data)  -- '{"name":"test"}'
+```
+
+## Circular reference detection
+
+Circular references throw an error:
+
+```lua
+local t = {}
+t.self = t
+
+local ok = catch tojson(t)
+assert(not ok)  -- "circular reference detected"
+```
+
+## Roundtrip preservation
+
+Values survive serialization and parsing:
+
+```lua
+local original = {
+    users = {
+        {name = "Alice", active = true},
+        {name = "Bob", active = false}
+    },
+    count = 2
+}
+
+local roundtrip = fromjson(tojson(original))
+assert(roundtrip.count == 2)
+assert(roundtrip.users[1].name == "Alice")
+assert(roundtrip.users[2].active == false)
+```
+
+---
+
+## Motivation
+
+Lua lacks built-in JSON support. Developers must use external libraries or write parsing code, adding dependencies for what should otherwise be a built-in feature.
