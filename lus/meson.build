@@ -20,28 +20,38 @@ lua_link_args = []
 lua_deps = [m_dep]
 
 if system == 'linux'
-  lua_c_args += '-DLUA_USE_LINUX'
+  lua_c_args += ['-DLUA_USE_LINUX', '-DLUS_PLATFORM_LINUX']
   lua_link_args += '-Wl,-E'
   dl_dep = cc.find_library('dl', required: false)
   lua_deps += dl_dep
 elif system == 'darwin'
-  lua_c_args += ['-DLUA_USE_MACOSX', '-DLUA_USE_READLINE']
+  lua_c_args += ['-DLUA_USE_MACOSX', '-DLUA_USE_READLINE', '-DLUS_PLATFORM_DARWIN']
   readline_dep = cc.find_library('readline', required: true)
   lua_deps += readline_dep
-elif system == 'freebsd' or system == 'netbsd' or system == 'openbsd'
-  lua_c_args += ['-DLUA_USE_LINUX', '-DLUA_USE_READLINE']
+elif system == 'freebsd'
+  lua_c_args += ['-DLUA_USE_LINUX', '-DLUA_USE_READLINE', '-DLUS_PLATFORM_FREEBSD']
+  lua_link_args += '-Wl,-E'
+  edit_dep = cc.find_library('edit', required: true)
+  lua_deps += edit_dep
+elif system == 'netbsd'
+  lua_c_args += ['-DLUA_USE_LINUX', '-DLUA_USE_READLINE', '-DLUS_PLATFORM_NETBSD']
+  lua_link_args += '-Wl,-E'
+  edit_dep = cc.find_library('edit', required: true)
+  lua_deps += edit_dep
+elif system == 'openbsd'
+  lua_c_args += ['-DLUA_USE_LINUX', '-DLUA_USE_READLINE', '-DLUS_PLATFORM_OPENBSD']
   lua_link_args += '-Wl,-E'
   edit_dep = cc.find_library('edit', required: true)
   lua_deps += edit_dep
 elif system == 'sunos'
-  lua_c_args += ['-DLUA_USE_POSIX', '-DLUA_USE_DLOPEN', '-D_REENTRANT']
+  lua_c_args += ['-DLUA_USE_POSIX', '-DLUA_USE_DLOPEN', '-D_REENTRANT', '-DLUS_PLATFORM_SUNOS']
   dl_dep = cc.find_library('dl', required: false)
   lua_deps += dl_dep
 elif system == 'windows'
-  # Static build - no special defines needed
+  lua_c_args += '-DLUS_PLATFORM_WINDOWS'
 else
   # Generic POSIX fallback
-  lua_c_args += '-DLUA_USE_POSIX'
+  lua_c_args += ['-DLUA_USE_POSIX', '-DLUS_PLATFORM_POSIX']
 endif
 
 # Core source files

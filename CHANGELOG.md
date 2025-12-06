@@ -12,6 +12,7 @@
 - Added `catch` expression for error handling in expressions.
 - Added optional chaining with the `?` suffix operator.
 - Added first-class enums with the `enum` keyword.
+- Added `os.platform` function that returns the platform name.
 - Added support for WebAssembly builds.
 - Added pre-built test suites in four harnesses.
 - Removed `pcall` and `xpcall` in favor of `catch`.

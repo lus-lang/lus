@@ -1,4 +1,4 @@
-global print, require, assert, type, string, math, table, ipairs, pcall, error
+global print, require, assert, type, string, math, table, ipairs, pcall, error, os
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("tpack")
@@ -7,7 +7,7 @@ local pack = string.pack
 local packsize = string.packsize
 local unpack = string.unpack
 
-local is_windows = package.config:sub(1,1) == "\\"
+local platform = os.platform()
 
 tests:it("basic sizes", function()
     assert(packsize("b") == 1)
@@ -17,7 +17,7 @@ tests:it("basic sizes", function()
     assert(packsize("i") >= 4)
     assert(packsize("I") >= 4)
     -- 'l' is 4 bytes on Windows, 8 bytes on Unix
-    if is_windows then
+    if platform == "windows" then
         assert(packsize("l") == 4)
         assert(packsize("L") == 4)
     else
