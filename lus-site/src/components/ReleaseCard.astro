@@ -20,14 +20,14 @@ interface Props {
 const { version, releaseDate, name, color = "lime", links } = Astro.props
 ---
 
-<Card color={color} class="flex-1">
+<Card color={color} class="flex-1 flex flex-col">
   <h2 slot="title">
     <DownloadIcon class="inline-block w-4 h-4" />
     {name}
     ({version})
   </h2>
   <p>Released on {releaseDate}. <slot /></p>
-  <div class="px-4 mt-2 flex gap-2 flex-wrap items-center">
+  <div class="px-4 flex gap-2 flex-wrap items-center mt-auto">
     {
       links?.windows ? (
         <a href={links.windows} class="no-underline text-inherit! font-normal!">
