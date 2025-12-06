@@ -13,6 +13,8 @@ global print, os, io, tonumber, require, string
 local build_type = os.getenv("BUILD_TYPE") or "Unstable"
 print("H4 Runner: Build Type = " .. build_type)
 
+local platform = os.platform()
+
 local function run_benchmark(name, cmd)
     print("Benchmarking: " .. name)
     local start = os.clock()
@@ -44,7 +46,14 @@ local function evaluate(name, time)
 end
 
 local metrics = {}
-local lus_cmd = "lus/build/lus"
+
+-- Determine lus binary path based on platform
+local lus_cmd
+if platform == "windows" then
+    lus_cmd = "lus\\build\\lus.exe"
+else
+    lus_cmd = "lus/build/lus"
+end
 
 -- Check if binary exists
 local f = io.open(lus_cmd, "r")
@@ -55,7 +64,9 @@ else
     f:close()
 end
 
-local time = run_benchmark("fib", lus_cmd .. " lus-tests/h4/bench_fib.lus")
+-- On Windows, use backslashes for benchmark path
+local bench_path = (platform == "windows") and "lus-tests\\h4\\bench_fib.lus" or "lus-tests/h4/bench_fib.lus"
+local time = run_benchmark("fib", lus_cmd .. " " .. bench_path)
 if not time then os.exit(1) end
 
 local status = evaluate("fib", time)
