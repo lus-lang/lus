@@ -1,0 +1,47 @@
+---
+import Layout from "../../components/Layout.astro"
+import { getCollection } from "astro:content"
+
+const news = await getCollection("news")
+const sorted = news.toSorted(
+    (a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime(),
+)
+---
+
+<Layout title="News">
+    <main>
+        <section>
+            <h1>News</h1>
+            <ul>
+                {
+                    sorted.map((item) => (
+                        <li>
+                            <a href={`/news/${item.id}`}>
+                                <span class="date">{item.data.date}</span>
+                                <span class="title">{item.data.title}</span>
+                            </a>
+                        </li>
+                    ))
+                }
+            </ul>
+        </section>
+    </main>
+</Layout>
+
+<style>
+    @reference "../../styles/global.css";
+
+    ul {
+        @apply list-none p-0 space-y-2;
+    }
+
+    a {
+        @apply flex gap-4 items-baseline;
+        .date {
+            @apply text-sm text-lime-600;
+        }
+        .title {
+            @apply font-medium;
+        }
+    }
+</style>

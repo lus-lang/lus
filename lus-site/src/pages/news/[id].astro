@@ -1,25 +1,27 @@
 ---
-import { getCollection, getEntry, render } from "astro:content"
-
 import Layout from "../../components/Layout.astro"
+import { getCollection, getEntry, render } from "astro:content"
 
 export async function getStaticPaths() {
   const news = await getCollection("news")
-  return news.map((news) => ({
-    params: { id: news.id },
+  return news.map((page) => ({
+    params: { id: page.id },
+    props: { page },
   }))
 }
 
-const thisNews = await getEntry("news", Astro.params.id)!
-const renderedNews = await render(thisNews)
+const page = await getEntry("news", Astro.params.id!)!
+const rendered = await render(page)
 ---
 
-<Layout title={thisNews.data.title}>
+<Layout title={page.data.title}>
   <main>
-    <article>
-      <p class="date">{thisNews.data.date}</p>
-      <renderedNews.Content />
-    </article>
+    <section class="flex gap-2">
+      <article class="flex-1 min-w-0">
+        <p class="date">{page.data.date}</p>
+        <rendered.Content />
+      </article>
+    </section>
   </main>
 </Layout>
 
@@ -27,6 +29,7 @@ const renderedNews = await render(thisNews)
   @reference "../../styles/global.css";
 
   article {
+    @apply space-y-4;
     .date {
       @apply text-sm text-lime-800;
     }
@@ -34,5 +37,25 @@ const renderedNews = await render(thisNews)
 
   article :global(h1) {
     @apply text-2xl font-bold text-lime-800 pb-4;
+  }
+
+  aside {
+    @apply min-w-48 w-1/6;
+    a {
+      @apply block;
+      .date {
+        @apply block text-xs text-lime-600;
+      }
+      .title {
+        @apply block;
+      }
+    }
+  }
+
+  .toc {
+    @apply text-lime-700 mb-4;
+    a {
+      @apply font-normal no-underline hover:bg-lime-200 lowercase;
+    }
   }
 </style>
