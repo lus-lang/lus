@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lauxlib.h"
 #include "events/lev.h"
+#include "lauxlib.h"
 #include "lua.h"
 #include "lualib.h"
 
@@ -25,10 +25,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
-/* c-ares headers */
-#include <ares.h>
-
-/* Platform-specific socket headers */
+/* Platform-specific socket headers - must come before ares.h for fd_set */
 #if defined(LUS_PLATFORM_WINDOWS)
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -58,6 +55,9 @@ typedef int socket_t;
 #define SOCKET_EWOULDBLOCK EWOULDBLOCK
 #define sock_close close
 #endif
+
+/* c-ares headers - needs fd_set from above */
+#include <ares.h>
 
 /*
 ** {======================================================
@@ -329,12 +329,13 @@ static int resolve_hostname(lua_State *L, const char *hostname, int port,
 
     bitmask = ares_getsock(channel, socks, ARES_GETSOCK_MAXNUM);
     for (i = 0; i < ARES_GETSOCK_MAXNUM; i++) {
-      if (ARES_GETSOCK_READABLE(bitmask, i)) {
+      /* Use unsigned literal to avoid UBSan "left shift of 1 by 31" error */
+      if (bitmask & (1U << i)) { /* readable */
         FD_SET(socks[i], &read_fds);
         if ((int)socks[i] + 1 > nfds)
           nfds = (int)socks[i] + 1;
       }
-      if (ARES_GETSOCK_WRITABLE(bitmask, i)) {
+      if (bitmask & (1U << (i + ARES_GETSOCK_MAXNUM))) { /* writable */
         FD_SET(socks[i], &write_fds);
         if ((int)socks[i] + 1 > nfds)
           nfds = (int)socks[i] + 1;
@@ -351,10 +352,11 @@ static int resolve_hostname(lua_State *L, const char *hostname, int port,
     /* Process all ready sockets */
     for (i = 0; i < ARES_GETSOCK_MAXNUM; i++) {
       ares_socket_t rfd = ARES_SOCKET_BAD, wfd = ARES_SOCKET_BAD;
-      if (ARES_GETSOCK_READABLE(bitmask, i) && FD_ISSET(socks[i], &read_fds)) {
+      if ((bitmask & (1U << i)) && FD_ISSET(socks[i], &read_fds)) {
         rfd = socks[i];
       }
-      if (ARES_GETSOCK_WRITABLE(bitmask, i) && FD_ISSET(socks[i], &write_fds)) {
+      if ((bitmask & (1U << (i + ARES_GETSOCK_MAXNUM))) &&
+          FD_ISSET(socks[i], &write_fds)) {
         wfd = socks[i];
       }
       if (rfd != ARES_SOCKET_BAD || wfd != ARES_SOCKET_BAD) {

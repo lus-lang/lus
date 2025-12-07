@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson llvm libssl-dev libcares-dev
+          sudo apt-get install -y meson llvm libssl-dev libc-ares-dev
 
       - name: Build with sanitizers
         run: |
@@ -56,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson libssl-dev libcares-dev
+          sudo apt-get install -y meson libssl-dev libc-ares-dev
 
       - name: Build
         run: |
