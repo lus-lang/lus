@@ -1,0 +1,570 @@
+--[[
+  Network Library Tests for Lus
+  Tests: TCP, UDP, and HTTP/HTTPS functionality
+  
+  Note: Uses 'catch' expression for protected execution.
+]]
+
+global print, network, type, assert, require, tostring, coroutine, string
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("network")
+
+-- ============================================
+-- Library Structure Tests
+-- ============================================
+
+tests:it("network global exists", function()
+  assert(type(network) == "table", "network should be a table")
+end)
+
+tests:it("network.tcp subtable exists", function()
+  assert(type(network.tcp) == "table", "network.tcp should be a table")
+  assert(type(network.tcp.connect) == "function", "network.tcp.connect should be a function")
+  assert(type(network.tcp.bind) == "function", "network.tcp.bind should be a function")
+end)
+
+tests:it("network.udp subtable exists", function()
+  assert(type(network.udp) == "table", "network.udp should be a table")
+  assert(type(network.udp.open) == "function", "network.udp.open should be a function")
+end)
+
+tests:it("network.fetch function exists", function()
+  assert(type(network.fetch) == "function", "network.fetch should be a function")
+end)
+
+-- ============================================
+-- TCP Basic Tests
+-- ============================================
+
+tests:it("TCP server bind and close", function()
+  local server = network.tcp.bind("127.0.0.1", 19999)
+  assert(server ~= nil, "server should be created")
+  assert(tostring(server):find("server"), "tostring should indicate server")
+  server:close()
+  assert(tostring(server):find("closed"), "tostring should indicate closed")
+end)
+
+tests:it("TCP connection refused error", function()
+  local ok, err = catch network.tcp.connect("127.0.0.1", 19997)
+  assert(not ok, "should fail to connect to closed port")
+  assert(type(err) == "string", "error should be string")
+end)
+
+tests:it("TCP server has expected methods", function()
+  local server = network.tcp.bind("127.0.0.1", 19995)
+  assert(type(server.accept) == "function", "should have accept")
+  assert(type(server.close) == "function", "should have close")
+  assert(type(server.settimeout) == "function", "should have settimeout")
+  server:close()
+end)
+
+-- ============================================
+-- UDP Tests
+-- ============================================
+
+tests:it("UDP socket create and close", function()
+  local sock = network.udp.open()
+  assert(sock ~= nil, "UDP socket should be created")
+  assert(tostring(sock):find("udpsocket"), "tostring should indicate udpsocket")
+  sock:close()
+  assert(tostring(sock):find("closed"), "tostring should indicate closed")
+end)
+
+tests:it("UDP socket has expected methods", function()
+  local sock = network.udp.open()
+  assert(type(sock.sendto) == "function", "should have sendto")
+  assert(type(sock.receive) == "function", "should have receive")
+  assert(type(sock.setsockname) == "function", "should have setsockname")
+  assert(type(sock.close) == "function", "should have close")
+  sock:close()
+end)
+
+tests:it("UDP socket bind to port", function()
+  local sock = network.udp.open(19994, "127.0.0.1")
+  assert(sock ~= nil, "bound UDP socket should be created")
+  sock:close()
+end)
+
+tests:it("using closed UDP socket raises error", function()
+  local sock = network.udp.open()
+  sock:close()
+  local ok, err = catch sock:sendto("test", "127.0.0.1", 1234)
+  assert(not ok, "should fail on closed socket")
+  assert(err:find("closed"), "error should mention closed")
+end)
+
+-- ============================================
+-- HTTP/HTTPS Tests
+-- ============================================
+
+tests:it("HTTPS GET request", function()
+  -- This test requires network access
+  local ok, result = catch network.fetch("https://httpbin.org/get")
+  
+  if not ok then
+    print("Skipping HTTPS test - network unavailable: " .. tostring(result))
+    return
+  end
+  
+  local status, body, headers = network.fetch("https://httpbin.org/get")
+  
+  assert(status == 200, "status should be 200, got: " .. tostring(status))
+  assert(#body > 0, "body should not be empty")
+  assert(type(headers) == "table", "headers should be a table")
+  assert(headers["content-type"] ~= nil, "should have content-type header")
+end)
+
+tests:it("HTTPS POST request", function()
+  local ok = catch network.fetch("https://httpbin.org/post", "POST", 
+    {["Content-Type"] = "application/json"}, 
+    '{"test": true}')
+  
+  if not ok then
+    print("Skipping POST test - network unavailable")
+    return
+  end
+  
+  local status, body = network.fetch(
+    "https://httpbin.org/post",
+    "POST",
+    {["Content-Type"] = "application/json"},
+    '{"test": true}'
+  )
+  
+  assert(status == 200, "POST status should be 200")
+  assert(body:find('"test"'), "body should contain posted data")
+end)
+
+tests:it("DNS resolution failure", function()
+  local ok, err = catch network.fetch("https://invalid.hostname.that.does.not.exist.example/")
+  assert(not ok, "should fail for invalid hostname")
+  assert(type(err) == "string", "error should be string")
+end)
+
+-- ============================================
+-- Event Loop Integration Tests
+-- ============================================
+
+tests:it("fetch in detached coroutine", function()
+  local co = coroutine.create(function()
+    -- Use sleep to confirm detached behavior works
+    coroutine.sleep(0.01)
+    
+    local ok, result = catch network.fetch("https://httpbin.org/get")
+    if not ok then
+      return "skip", result
+    end
+    
+    local status, body, headers = network.fetch("https://httpbin.org/get")
+    return status, #body > 0, type(headers) == "table"
+  end)
+  
+  coroutine.detach(co)
+  local success, status, has_body, has_headers = coroutine.resume(co)
+  
+  assert(success, "resume should succeed")
+  if status == "skip" then
+    print("Skipping detached fetch test - network unavailable")
+    return
+  end
+  
+  assert(status == 200, "status should be 200")
+  assert(has_body, "should have body")
+  assert(has_headers, "should have headers")
+end)
+
+tests:it("multiple sequential fetches in detached coroutine", function()
+  local co = coroutine.create(function()
+    -- Test that multiple fetches work in sequence within a detached coroutine
+    local ok = catch network.fetch("https://httpbin.org/get")
+    if not ok then
+      return "skip"
+    end
+    
+    local results = {}
+    
+    -- Fetch 1
+    local s1 = network.fetch("https://httpbin.org/status/200")
+    results[1] = s1
+    
+    -- Small sleep between requests
+    coroutine.sleep(0.01)
+    
+    -- Fetch 2
+    local s2 = network.fetch("https://httpbin.org/status/201")
+    results[2] = s2
+    
+    return results[1], results[2]
+  end)
+  
+  coroutine.detach(co)
+  local success, r1, r2 = coroutine.resume(co)
+  
+  assert(success, "resume should succeed")
+  if r1 == "skip" then
+    print("Skipping sequential fetch test - network unavailable")
+    return
+  end
+  
+  assert(r1 == 200, "first fetch should return 200")
+  assert(r2 == 201, "second fetch should return 201")
+end)
+
+tests:it("detached TCP server bind and close", function()
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)  -- Confirm detached works
+    
+    local server = network.tcp.bind("127.0.0.1", 19998)
+    assert(server ~= nil, "server should be created")
+    
+    -- Verify server works
+    local has_accept = type(server.accept) == "function"
+    server:close()
+    
+    local is_closed = tostring(server):find("closed") ~= nil
+    return has_accept, is_closed
+  end)
+  
+  coroutine.detach(co)
+  local success, has_accept, is_closed = coroutine.resume(co)
+  
+  assert(success, "resume should succeed")
+  assert(has_accept, "server should have accept method")
+  assert(is_closed, "server should be closed after close()")
+end)
+
+tests:it("detached UDP operations", function()
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)
+    
+    local sock = network.udp.open()
+    assert(sock ~= nil, "UDP socket should be created")
+    
+    local has_sendto = type(sock.sendto) == "function"
+    sock:close()
+    
+    local is_closed = tostring(sock):find("closed") ~= nil
+    return has_sendto, is_closed
+  end)
+  
+  coroutine.detach(co)
+  local success, has_sendto, is_closed = coroutine.resume(co)
+  
+  assert(success, "resume should succeed")
+  assert(has_sendto, "socket should have sendto method")
+  assert(is_closed, "socket should be closed after close()")
+end)
+
+tests:it("error in detached network coroutine propagates", function()
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)
+    -- Force an error by connecting to invalid port
+    network.tcp.connect("127.0.0.1", 19996)
+  end)
+  
+  coroutine.detach(co)
+  local ok, err = catch coroutine.resume(co)
+  
+  -- Should fail because port 19996 is not listening
+  assert(not ok, "resume should fail on connection error")
+  assert(type(err) == "string", "error should be string")
+end)
+
+-- ============================================
+-- Async Socket Receive Tests
+-- These tests use external servers to verify async receive
+-- since our cooperative event loop requires explicit resume()
+-- ============================================
+
+tests:it("async HTTP receive with multiple endpoints", function()
+  local co = coroutine.create(function()
+    -- Verify network is available
+    local ok = catch network.fetch("https://httpbin.org/get")
+    if not ok then
+      return "skip"
+    end
+    
+    -- Multiple fetches test async receive path
+    local s1, body1 = network.fetch("https://httpbin.org/ip")
+    local s2, body2 = network.fetch("https://httpbin.org/user-agent")
+    local s3, body3 = network.fetch("https://httpbin.org/headers")
+    
+    return s1, s2, s3, #body1 > 0, #body2 > 0, #body3 > 0
+  end)
+  
+  coroutine.detach(co)
+  local ok, s1, s2, s3, b1, b2, b3 = coroutine.resume(co)
+  
+  assert(ok, "resume should succeed")
+  if s1 == "skip" then
+    print("Skipping - network unavailable")
+    return
+  end
+  
+  assert(s1 == 200, "first request should be 200")
+  assert(s2 == 200, "second request should be 200")
+  assert(s3 == 200, "third request should be 200")
+  assert(b1, "first body should have content")
+  assert(b2, "second body should have content")
+  assert(b3, "third body should have content")
+end)
+
+tests:it("async receive large response", function()
+  local co = coroutine.create(function()
+    -- This returns ~10KB of data, testing chunked receive
+    local ok = catch network.fetch("https://httpbin.org/stream/50")
+    if not ok then
+      return "skip"
+    end
+    
+    local status, body = network.fetch("https://httpbin.org/stream/50")
+    return status, #body
+  end)
+  
+  coroutine.detach(co)
+  local ok, status, len = coroutine.resume(co)
+  
+  assert(ok, "resume should succeed")
+  if status == "skip" then
+    print("Skipping - network unavailable")
+    return
+  end
+  
+  assert(status == 200, "status should be 200")
+  assert(len > 1000, "should receive substantial response: " .. tostring(len))
+end)
+
+tests:it("async receive with interleaved sleep", function()
+  local co = coroutine.create(function()
+    local ok = catch network.fetch("https://httpbin.org/get")
+    if not ok then
+      return "skip"
+    end
+    
+    -- Interleave sleep with network operations
+    local s1 = network.fetch("https://httpbin.org/status/200")
+    coroutine.sleep(0.05)
+    
+    local s2 = network.fetch("https://httpbin.org/status/201")
+    coroutine.sleep(0.05)
+    
+    local s3 = network.fetch("https://httpbin.org/status/202")
+    
+    return s1, s2, s3
+  end)
+  
+  coroutine.detach(co)
+  local ok, s1, s2, s3 = coroutine.resume(co)
+  
+  assert(ok, "resume should succeed")
+  if s1 == "skip" then
+    print("Skipping - network unavailable")
+    return
+  end
+  
+  assert(s1 == 200, "first status should be 200")
+  assert(s2 == 201, "second status should be 201")
+  assert(s3 == 202, "third status should be 202")
+end)
+
+tests:it("async TCP connect and send", function()
+  -- Test that async connect works in detached coroutine
+  local port = 19870
+  local server = network.tcp.bind("127.0.0.1", port)
+  server:settimeout(1)
+  
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)
+    
+    local sock = network.tcp.connect("127.0.0.1", port)
+    sock:send("Hello from detached!\n")
+    sock:close()
+    return true
+  end)
+  
+  coroutine.detach(co)
+  local ok, result = coroutine.resume(co)
+  
+  -- Accept and verify data
+  local client = server:accept()
+  local data = nil
+  if client then
+    client:settimeout(1)
+    data = client:receive("*l")
+    client:close()
+  end
+  server:close()
+  
+  assert(ok, "detached connect should succeed")
+  assert(result == true, "should complete")
+  assert(data == "Hello from detached!", "server should receive data: " .. tostring(data))
+end)
+
+tests:it("async multiple connections in sequence", function()
+  local port = 19871
+  local server = network.tcp.bind("127.0.0.1", port)
+  server:settimeout(1)
+  
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)
+    
+    -- Multiple sequential connections
+    for i = 1, 3 do
+      local sock = network.tcp.connect("127.0.0.1", port)
+      sock:send("Message " .. i .. "\n")
+      sock:close()
+    end
+    
+    return true
+  end)
+  
+  coroutine.detach(co)
+  local ok, result = coroutine.resume(co)
+  
+  -- Accept all three connections
+  local messages = {}
+  for i = 1, 3 do
+    local client = server:accept()
+    if client then
+      client:settimeout(1)
+      messages[i] = client:receive("*l")
+      client:close()
+    end
+  end
+  server:close()
+  
+  assert(ok, "detached should succeed")
+  assert(result == true, "should complete")
+  assert(messages[1] == "Message 1", "should receive message 1")
+  assert(messages[2] == "Message 2", "should receive message 2")
+  assert(messages[3] == "Message 3", "should receive message 3")
+end)
+
+tests:it("async UDP sendto in detached coroutine", function()
+  local port = 19872
+  local receiver = network.udp.open(port, "127.0.0.1")
+  
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)
+    
+    local sock = network.udp.open()
+    sock:sendto("UDP async message", "127.0.0.1", port)
+    sock:close()
+    return true
+  end)
+  
+  coroutine.detach(co)
+  local ok, result = coroutine.resume(co)
+  
+  local data = receiver:receive()
+  receiver:close()
+  
+  assert(ok, "detached UDP should succeed")
+  assert(result == true, "should complete")
+  assert(data == "UDP async message", "should receive UDP data: " .. tostring(data))
+end)
+
+tests:it("async error handling in network op", function()
+  local co = coroutine.create(function()
+    coroutine.sleep(0.01)
+    -- Try to connect to a port that's not listening
+    network.tcp.connect("127.0.0.1", 19899)
+  end)
+  
+  coroutine.detach(co)
+  local ok, err = catch coroutine.resume(co)
+  
+  assert(not ok, "should fail on connection refused")
+  assert(type(err) == "string", "should get error message")
+end)
+
+tests:it("async fetch POST with receive", function()
+  local co = coroutine.create(function()
+    local ok = catch network.fetch("https://httpbin.org/post", "POST")
+    if not ok then
+      return "skip"
+    end
+    
+    local status, body = network.fetch(
+      "https://httpbin.org/post",
+      "POST",
+      {["Content-Type"] = "text/plain"},
+      "Test data from async coroutine"
+    )
+    
+    return status, body:find("Test data from async coroutine") ~= nil
+  end)
+  
+  coroutine.detach(co)
+  local ok, status, found = coroutine.resume(co)
+  
+  assert(ok, "resume should succeed")
+  if status == "skip" then
+    print("Skipping - network unavailable")
+    return
+  end
+  
+  assert(status == 200, "POST should return 200")
+  assert(found, "response should contain posted data")
+end)
+
+tests:it("async fetch with headers received", function()
+  local co = coroutine.create(function()
+    local ok = catch network.fetch("https://httpbin.org/get")
+    if not ok then
+      return "skip"
+    end
+    
+    local status, body, headers = network.fetch("https://httpbin.org/response-headers?X-Test-Header=async-value")
+    
+    return status, headers["x-test-header"]
+  end)
+  
+  coroutine.detach(co)
+  local ok, status, header_val = coroutine.resume(co)
+  
+  assert(ok, "resume should succeed")
+  if status == "skip" then
+    print("Skipping - network unavailable")
+    return
+  end
+  
+  assert(status == 200, "should get 200")
+  assert(header_val == "async-value", "should receive custom header: " .. tostring(header_val))
+end)
+
+tests:it("async rapid sequential fetches", function()
+  local co = coroutine.create(function()
+    local ok = catch network.fetch("https://httpbin.org/get")
+    if not ok then
+      return "skip"
+    end
+    
+    local results = {}
+    for i = 1, 5 do
+      local status = network.fetch("https://httpbin.org/status/" .. (199 + i))
+      results[i] = status
+    end
+    
+    return results[1], results[2], results[3], results[4], results[5]
+  end)
+  
+  coroutine.detach(co)
+  local ok, r1, r2, r3, r4, r5 = coroutine.resume(co)
+  
+  assert(ok, "resume should succeed")
+  if r1 == "skip" then
+    print("Skipping - network unavailable")
+    return
+  end
+  
+  assert(r1 == 200, "first should be 200")
+  assert(r2 == 201, "second should be 201")
+  assert(r3 == 202, "third should be 202")
+  assert(r4 == 203, "fourth should be 203")
+  assert(r5 == 204, "fifth should be 204")
+end)
+
+tests:finish()
+

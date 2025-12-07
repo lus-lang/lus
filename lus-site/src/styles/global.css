@@ -63,6 +63,26 @@ blockquote {
   @apply border bg-lime-100 border-lime-300 p-4 text-lime-700;
 }
 
+table {
+  @apply w-full border-collapse my-4;
+
+  th, td {
+    @apply border border-lime-300 px-4 py-2 text-left;
+  }
+
+  th {
+    @apply bg-lime-100 font-semibold;
+  }
+
+  tr:nth-child(even) td {
+    @apply bg-lime-50;
+  }
+
+  tr:hover td {
+    @apply bg-lime-100;
+  }
+}
+
 html.unstable {
   body {
     @apply text-red-950 bg-red-50;

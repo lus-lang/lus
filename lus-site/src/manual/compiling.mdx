@@ -8,6 +8,24 @@ Compiling Lus is a straightforward process. You will need the following tools to
 - The Lus source code, which can be downloaded from its [repository](https://github.com/loukamb/lus).
 - A C compiler ([gcc](https://gcc.gnu.org/) or [clang](https://clang.llvm.org/) recommended).
 - The [Meson build system](https://mesonbuild.com/).
+- OpenSSL development libraries (for HTTPS support)
+- c-ares development libraries (for async DNS)
+
+### Installing Dependencies
+
+```bash
+# macOS (Homebrew)
+brew install openssl c-ares
+
+# Ubuntu/Debian
+sudo apt install libssl-dev libc-ares-dev
+
+# Fedora/RHEL
+sudo dnf install openssl-devel c-ares-devel
+
+# Windows (vcpkg)
+vcpkg install openssl c-ares
+```
 
 After downloading and extracting the source code, navigate to the `/lus` directory and run the following commands to prepare, compile, and execute the runtime:
 

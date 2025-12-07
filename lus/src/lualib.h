@@ -55,6 +55,10 @@ LUAMOD_API int(luaopen_utf8)(lua_State *L);
 #define LUA_FSLIBK (LUA_UTF8LIBK << 1)
 LUAMOD_API int(luaopen_fs)(lua_State *L);
 
+#define LUA_NETLIBNAME "network"
+#define LUA_NETLIBK (LUA_FSLIBK << 1)
+LUAMOD_API int(luaopen_network)(lua_State *L);
+
 /* JSON global functions (tojson, fromjson) */
 LUAMOD_API int(luaopen_json)(lua_State *L);
 

@@ -777,3 +777,378 @@ print(latin) -- "" (characters skipped, cannot be represented)
 | File        | Changes                                             |
 | ----------- | --------------------------------------------------- |
 | `lstrlib.c` | Added `str_transcode` and encoding helper functions |
+
+## `network` Library
+
+The `network` library provides native TCP, UDP, and HTTP/HTTPS networking capabilities through a new source file `lnetlib.c`.
+
+#### External Dependencies
+
+- **OpenSSL**: Required for HTTPS/TLS support
+- **c-ares**: Async DNS resolution library
+
+#### Platform Abstraction
+
+Cross-platform socket abstraction using preprocessor directives:
+
+```c
+#if defined(LUS_PLATFORM_WINDOWS)
+  typedef SOCKET socket_t;
+  #define sock_close closesocket
+  // Winsock initialization via WSAStartup
+#else
+  typedef int socket_t;
+  #define sock_close close
+  // POSIX sockets (Linux, macOS, BSD)
+#endif
+```
+
+#### Userdata Types
+
+Three userdata types with metatables:
+
+| Type | Metatable | Description |
+|------|-----------|-------------|
+| `LSocket` | `network.socket` | TCP client connection |
+| `LServer` | `network.server` | TCP listening server |
+| `LUDPSocket` | `network.udpsocket` | UDP datagram socket |
+
+Each includes `__gc`, `__close`, and `__tostring` metamethods.
+
+#### API Functions
+
+**TCP:**
+- `network.tcp.connect(address, port)` → Socket
+- `network.tcp.bind(address, port, [backlog])` → Server
+- `socket:send(data)`, `socket:receive([pattern])`, `socket:close()`, `socket:settimeout(sec)`
+- `server:accept()`, `server:close()`, `server:settimeout(sec)`
+
+**UDP:**
+- `network.udp.open([port], [address])` → UDPSocket
+- `udp:sendto(data, addr, port)`, `udp:receive([size])`, `udp:close()`
+
+**HTTP:**
+- `network.fetch(url, [method], [headers], [body])` → status, body, headers
+
+#### DNS Resolution
+
+Uses c-ares `ares_getaddrinfo()` for async-capable DNS lookups supporting IPv4/IPv6.
+
+#### TLS/HTTPS
+
+OpenSSL integration for secure connections:
+- `SSL_CTX` created once at library init
+- `SSL_connect()` for handshake, `SSL_read()`/`SSL_write()` for I/O
+- Certificate verification via system CA certificates
+
+#### Files Modified
+
+| File | Changes |
+|------|---------|
+| `lnetlib.c` | NEW - Full network library implementation (~1600 lines) |
+| `linit.c` | Register `luaopen_network` in stdlibs |
+| `lualib.h` | Add `LUA_NETLIBNAME`, `LUA_NETLIBK`, `luaopen_network` |
+| `meson.build` | Add `lnetlib.c`, OpenSSL/c-ares deps, Winsock for Windows |
+
+#### Async I/O for Event Loop
+
+Network operations in detached coroutines automatically use non-blocking I/O:
+
+**Async Functions:**
+
+- `socket:send()` - Yields on `EWOULDBLOCK`, preserves bytes-sent progress via `lua_KContext`
+- `socket:receive()` - All patterns (`*l`, `*a`, bytes) yield on `EWOULDBLOCK`
+- Event loop waits for fd readiness, then resumes coroutine
+
+**Implementation Pattern:**
+
+```c
+static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
+  int detached = is_detached(L);
+  
+  if (detached) {
+    set_nonblocking(sock->fd, 1);
+  }
+  
+  // ... receive loop ...
+  
+  if (got == SOCKET_ERROR_VAL) {
+    int err = SOCKET_ERRNO;
+    if (err == SOCKET_EWOULDBLOCK) {
+      if (detached) {
+        set_yield_reason(L, YIELD_IO);
+        set_yield_fd(L, (int)sock->fd);
+        set_yield_events(L, EVLOOP_READ);
+        return lua_yield(L, 0);
+      }
+    }
+  }
+  
+  if (detached) set_nonblocking(sock->fd, 0);
+  return 1;
+}
+```
+
+## Event Loop
+
+Lus provides an opt-in event loop for running detached coroutines with non-blocking I/O and timed sleeps. The event loop uses platform-native backends and integrates seamlessly with the coroutine API.
+
+#### Design Philosophy
+
+- **Opt-in**: Only coroutines explicitly marked with `coroutine.detach()` participate in event-driven execution
+- **No new top-level API**: No `run()` or `loop()` function; `coroutine.resume` drives detached coroutines
+- **Native backends**: Uses OS-native event APIs (epoll, kqueue, IOCP) for efficiency
+- **Transparent I/O**: Network operations automatically yield when they would block
+
+#### Coroutine API Extensions
+
+**`coroutine.detach(co)`**
+
+Marks a coroutine for event-driven execution:
+
+```lua
+local co = coroutine.create(function()
+  coroutine.sleep(0.1)  -- only works in detached coroutines
+  return "done"
+end)
+
+coroutine.detach(co)
+local ok, result = coroutine.resume(co)  -- runs to completion
+print(result)  -- "done"
+```
+
+**`coroutine.sleep(seconds)`**
+
+Yields execution for a specified duration (only valid in detached coroutines):
+
+```lua
+coroutine.sleep(0.5)    -- sleep 500ms
+coroutine.sleep(0.001)  -- sleep 1ms
+coroutine.sleep(0)      -- yield immediately, return on next tick
+```
+
+#### Implementation
+
+**Header File (`leventloop.h`):**
+
+```c
+/* Event Backend Interface */
+typedef struct EventBackend EventBackend;
+
+typedef struct EventBackendOps {
+  void (*destroy)(EventBackend *backend);
+  int (*add)(EventBackend *backend, int fd, int events, void *userdata);
+  int (*remove)(EventBackend *backend, int fd);
+  int (*wait)(EventBackend *backend, EventResult *results, 
+              int max_results, int timeout_ms);
+} EventBackendOps;
+
+/* Create platform-specific backend */
+EventBackend *eventbackend_create(EventBackendOps **ops_out);
+
+/* Event Flags */
+#define EVLOOP_READ   1
+#define EVLOOP_WRITE  2
+#define EVLOOP_ERROR  4
+
+/* Yield Reasons */
+#define YIELD_NORMAL  0  /* Regular coroutine.yield() */
+#define YIELD_IO      1  /* Waiting for I/O event */
+#define YIELD_SLEEP   2  /* Waiting for timer */
+```
+
+**Core Scheduler (`leventloop.c`):**
+
+The scheduler manages per-coroutine state and the event-driven resume loop:
+
+```c
+typedef struct CoroutineState {
+  int detached;           /* Is this coroutine detached? */
+  int yield_reason;       /* YIELD_NORMAL, YIELD_IO, YIELD_SLEEP */
+  int yield_fd;           /* File descriptor for I/O wait */
+  int yield_events;       /* EVLOOP_READ/WRITE/ERROR */
+  lua_Number yield_deadline;  /* Absolute time for sleep */
+} CoroutineState;
+
+typedef struct Scheduler {
+  EventBackend *backend;
+  EventBackendOps *ops;
+} Scheduler;
+```
+
+**Resume Loop (`detached_resume`):**
+
+When resuming a detached coroutine, the event loop handles yielding:
+
+```c
+int detached_resume(lua_State *L, lua_State *co, int nargs) {
+  Scheduler *sched = scheduler_get(L);
+  
+  for (;;) {
+    int status = lua_resume(co, L, nargs, &nres);
+    
+    if (status == LUA_YIELD) {
+      int reason = get_yield_reason(co);
+      
+      if (reason == YIELD_IO) {
+        int fd = get_yield_fd(co);
+        int events = get_yield_events(co);
+        
+        sched->ops->add(sched->backend, fd, events, NULL);
+        sched->ops->wait(sched->backend, &result, 1, -1);
+        sched->ops->remove(sched->backend, fd);
+        
+        set_yield_reason(co, YIELD_NORMAL);
+        nargs = 0;
+        continue;
+      }
+      else if (reason == YIELD_SLEEP) {
+        lua_Number deadline = get_yield_deadline(co);
+        lua_Number now = eventloop_now();
+        int wait_ms = (int)((deadline - now) * 1000);
+        if (wait_ms > 0) {
+          sched->ops->wait(sched->backend, &result, 0, wait_ms);
+        }
+        set_yield_reason(co, YIELD_NORMAL);
+        nargs = 0;
+        continue;
+      }
+      // Normal yield - return control to caller
+      return lua_gettop(co);
+    }
+    
+    if (status == LUA_OK) {
+      // Coroutine completed
+      lua_xmove(co, L, nres);
+      return nres;
+    }
+    
+    // Error - propagate to caller
+    return lua_error(L);
+  }
+}
+```
+
+#### Platform Backends
+
+**epoll (Linux):**
+
+```c
+/* lev_epoll.c */
+EventBackend *eventbackend_create(EventBackendOps **ops_out) {
+  EpollBackend *eb = malloc(sizeof(EpollBackend));
+  eb->epfd = epoll_create1(EPOLL_CLOEXEC);
+  *ops_out = &epoll_ops;
+  return (EventBackend *)eb;
+}
+
+static int epoll_add(EventBackend *b, int fd, int events, void *ud) {
+  struct epoll_event ev = {0};
+  ev.data.fd = fd;
+  if (events & EVLOOP_READ) ev.events |= EPOLLIN;
+  if (events & EVLOOP_WRITE) ev.events |= EPOLLOUT;
+  return epoll_ctl(eb->epfd, EPOLL_CTL_ADD, fd, &ev);
+}
+```
+
+**kqueue (macOS/BSD):**
+
+```c
+/* lev_kqueue.c */
+EventBackend *eventbackend_create(EventBackendOps **ops_out) {
+  KqueueBackend *kb = malloc(sizeof(KqueueBackend));
+  kb->kq = kqueue();
+  *ops_out = &kqueue_ops;
+  return (EventBackend *)kb;
+}
+
+static int kqueue_add(EventBackend *b, int fd, int events, void *ud) {
+  struct kevent ev;
+  int filter = (events & EVLOOP_READ) ? EVFILT_READ : EVFILT_WRITE;
+  EV_SET(&ev, fd, filter, EV_ADD | EV_ONESHOT, 0, 0, ud);
+  return kevent(kb->kq, &ev, 1, NULL, 0, NULL);
+}
+```
+
+**IOCP (Windows):**
+
+```c
+/* lev_iocp.c */
+EventBackend *eventbackend_create(EventBackendOps **ops_out) {
+  IOCPBackend *ib = malloc(sizeof(IOCPBackend));
+  ib->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+  *ops_out = &iocp_ops;
+  return (EventBackend *)ib;
+}
+```
+
+**select (fallback):**
+
+```c
+/* lev_select.c */
+/* Portable fallback using select() for platforms without epoll/kqueue/IOCP */
+```
+
+#### Modified `coroutine.resume`
+
+The standard resume function detects detached coroutines and dispatches to the event loop:
+
+```c
+static int luaB_coresume(lua_State *L) {
+  lua_State *co = getco(L);
+  
+  if (is_detached(co)) {
+    if (nargs > 0) {
+      lua_xmove(L, co, nargs);
+    }
+    int r = detached_resume(L, co, nargs);
+    lua_pushboolean(L, 1);
+    lua_insert(L, -(r + 1));
+    return r + 1;
+  }
+  
+  // Normal resume for non-detached coroutines
+  return auxresume(L, co, nargs);
+}
+```
+
+#### Build Configuration
+
+Platform selection in `meson.build`:
+
+```meson
+if host_machine.system() == 'linux'
+  lib_sources += 'src/lev_epoll.c'
+elif host_machine.system() == 'darwin' or host_machine.system() == 'freebsd'
+  lib_sources += 'src/lev_kqueue.c'
+elif host_machine.system() == 'windows'
+  lib_sources += 'src/lev_iocp.c'
+else
+  lib_sources += 'src/lev_select.c'
+endif
+
+lib_sources += 'src/leventloop.c'
+```
+
+#### Files Created/Modified
+
+| File | Changes |
+|------|---------|
+| `leventloop.h` | **NEW** - Event backend interface, event flags, yield reasons |
+| `leventloop.c` | **NEW** - Scheduler, coroutine state, detached_resume loop |
+| `lev_epoll.c` | **NEW** - Linux epoll backend |
+| `lev_kqueue.c` | **NEW** - macOS/BSD kqueue backend |
+| `lev_iocp.c` | **NEW** - Windows IOCP backend |
+| `lev_select.c` | **NEW** - Portable select() fallback |
+| `lcorolib.c` | Added `coroutine.detach`, `coroutine.sleep`, modified `resume` |
+| `lnetlib.c` | Added async I/O support for detached coroutines |
+| `meson.build` | Platform-specific backend selection |
+
+#### Key Implementation Details
+
+- **State stored in registry**: Coroutine state is stored as userdata keyed by coroutine pointer in `LUA_REGISTRYINDEX`
+- **Scheduler per-VM**: One scheduler per Lua state, created lazily on first detach
+- **Transparent yielding**: Network operations automatically yield when they would block, without explicit user code
+- **Error propagation**: Errors in detached coroutines propagate immediately to `coroutine.resume` caller
+- **Timer precision**: Uses `clock_gettime(CLOCK_MONOTONIC)` on POSIX, `QueryPerformanceCounter` on Windows
+

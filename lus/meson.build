@@ -21,6 +21,11 @@ lus_c_args = []
 lus_link_args = []
 lus_deps = [m_dep]
 
+# Required dependencies for network library
+openssl_dep = dependency('openssl', required: true)
+cares_dep = dependency('libcares', required: true)
+lus_deps += [openssl_dep, cares_dep]
+
 if system == 'linux'
   lus_c_args += ['-DLUA_USE_LINUX', '-DLUS_PLATFORM_LINUX']
   lus_link_args += '-Wl,-E'
@@ -51,6 +56,8 @@ elif system == 'sunos'
   lus_deps += dl_dep
 elif system == 'windows'
   lus_c_args += '-DLUS_PLATFORM_WINDOWS'
+  ws2_dep = cc.find_library('ws2_32', required: true)
+  lus_deps += ws2_dep
 else
   # Generic POSIX fallback
   lus_c_args += ['-DLUA_USE_POSIX', '-DLUS_PLATFORM_POSIX']
@@ -96,8 +103,24 @@ lib_sources = files(
   'src/lutf8lib.c',
   'src/ljsonlib.c',
   'src/lfslib.c',
+  'src/lnetlib.c',
+  'src/events/lev.c',
   'src/linit.c',
 )
+
+# Platform-specific event loop backends
+if system == 'linux'
+  lib_sources += files('src/events/lev_epoll.c')
+elif system == 'darwin' or system == 'freebsd' or system == 'openbsd' or system == 'netbsd' or system == 'dragonfly'
+  lib_sources += files('src/events/lev_kqueue.c')
+elif system == 'windows'
+  lib_sources += files('src/events/lev_iocp.c')
+elif system == 'sunos'
+  # Solaris/illumos uses event ports - fallback to select for now
+  lib_sources += files('src/events/lev_select.c')
+else
+  lib_sources += files('src/events/lev_select.c')
+endif
 
 # Headers to install
 install_headers(
@@ -180,6 +203,8 @@ h1_tests = [
   'h1/gengc',
   'h1/memerr',
   'h1/json',
+  'h1/network',
+  'h1/eventloop',
 ]
 
 foreach t : h1_tests

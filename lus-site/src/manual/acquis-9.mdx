@@ -1,0 +1,146 @@
+---
+order: 109
+title: Acquis 9 - Event Loop
+acquis: true
+draft: true
+---
+
+The event loop enables detached coroutines to perform non-blocking I/O and timed sleeps. Coroutines marked with `coroutine.detach` participate in event-driven execution, automatically yielding on I/O operations and resuming when ready.
+
+## Detaching coroutines
+
+Mark a coroutine for event-driven execution with `coroutine.detach`:
+
+```lua
+local co = coroutine.create(function()
+  coroutine.sleep(0.1)  -- yields for 100ms
+  return "done"
+end)
+
+coroutine.detach(co)
+local ok, result = coroutine.resume(co)
+print(result)  -- "done"
+```
+
+Once detached, the coroutine can use `coroutine.sleep` and will automatically yield during network I/O that would block.
+
+## Sleeping
+
+`coroutine.sleep(seconds)` yields the coroutine for the specified duration:
+
+```lua
+coroutine.sleep(1.5)    -- sleep 1.5 seconds
+coroutine.sleep(0.001)  -- sleep 1 millisecond
+coroutine.sleep(0)      -- yield immediately, resume on next tick
+```
+
+Sleep only works in detached coroutines. Calling it in a regular coroutine raises an error:
+
+```lua
+local co = coroutine.create(function()
+  coroutine.sleep(0.1)  -- error: not detached
+end)
+local ok, err = coroutine.resume(co)
+assert(not ok)
+```
+
+## Non-blocking network I/O
+
+Network operations in detached coroutines automatically become non-blocking:
+
+```lua
+local co = coroutine.create(function()
+  -- These operations yield when they would block
+  local status, body = network.fetch("https://example.com/api")
+  return status
+end)
+
+coroutine.detach(co)
+local ok, status = coroutine.resume(co)
+print(status)  -- 200
+```
+
+The event loop waits for socket readiness using the platform's native event API (epoll on Linux, kqueue on macOS, IOCP on Windows).
+
+## Multiple operations
+
+Detached coroutines can perform multiple I/O operations in sequence:
+
+```lua
+local co = coroutine.create(function()
+  local s1 = network.fetch("https://api.example.com/users")
+  coroutine.sleep(0.1)  -- rate limit
+  local s2 = network.fetch("https://api.example.com/posts")
+  return s1, s2
+end)
+
+coroutine.detach(co)
+local ok, status1, status2 = coroutine.resume(co)
+```
+
+## Error handling
+
+Errors in detached coroutines propagate to the caller:
+
+```lua
+local co = coroutine.create(function()
+  coroutine.sleep(0.1)
+  error("something went wrong")
+end)
+
+coroutine.detach(co)
+local ok, err = catch coroutine.resume(co)
+assert(not ok)
+print(err)  -- "something went wrong"
+```
+
+## Regular yields
+
+Detached coroutines can still use regular `coroutine.yield`:
+
+```lua
+local co = coroutine.create(function()
+  coroutine.yield("first")
+  coroutine.sleep(0.1)
+  coroutine.yield("second")
+  return "done"
+end)
+
+coroutine.detach(co)
+print(coroutine.resume(co))  -- true, "first"
+print(coroutine.resume(co))  -- true, "second"
+print(coroutine.resume(co))  -- true, "done"
+```
+
+---
+
+## Motivation
+
+Lua's cooperative coroutines are powerful but limited to synchronous execution. Real-world applications need I/O without blocking the entire program.
+
+### Traditional approach
+
+Without an event loop, network operations block:
+
+```lua
+-- This blocks the entire program
+local status = network.fetch("https://slow-api.example.com")
+-- Can't do anything else while waiting
+```
+
+### Event-driven execution
+
+With `coroutine.detach`, I/O yields control to the event loop:
+
+```lua
+local co = coroutine.create(function()
+  local status = network.fetch("https://slow-api.example.com")
+  return status
+end)
+coroutine.detach(co)
+coroutine.resume(co)  -- Internally yields during I/O, resumes when ready
+```
+
+### Opt-in design
+
+Regular coroutines work exactly as before. Only explicitly detached coroutines participate in event-driven execution. This preserves backward compatibility and keeps the behavior predictable.
