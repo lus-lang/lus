@@ -5,6 +5,7 @@
 */
 
 #include "lua.h"
+#include <stddef.h> /* for NULL */
 
 /* Forward declare opaque types */
 typedef struct ThreadPool ThreadPool;
@@ -103,6 +104,12 @@ lua_Number eventloop_now(void) { return 0; }
 ThreadPool *scheduler_get_threadpool(lua_State *L) {
   (void)L;
   return NULL; /* No thread pool in WASM */
+}
+
+void threadpool_submit(ThreadPool *pool, ThreadPoolTask *task) {
+  (void)pool;
+  (void)task;
+  /* No-op in WASM - should never be called since is_detached() returns 0 */
 }
 
 /* Network stubs */
