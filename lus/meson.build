@@ -211,15 +211,12 @@ test('h3/io', lus_exe,
   suite : ['h3', 'h3-local'])
 
 # h3/ci runs directly on the host (CI environments only)
-# Skip on Windows as it requires bash/popen capabilities
-if system != 'windows'
-  test('h3/ci', lus_exe,
-    args : ['lus-tests/h3/runner_direct.lus'],
-    workdir : meson.project_source_root() / '..',
-    suite : ['h3-ci'],
-    timeout: 60,
-  )
-endif
+test('h3/ci', lus_exe,
+  args : ['lus-tests/h3/runner_direct.lus'],
+  workdir : meson.project_source_root() / '..',
+  suite : ['h3-ci'],
+  timeout: 60,
+)
 
 # H4: Performance (Lus Runner)
 test('h4/bench', lus_exe,

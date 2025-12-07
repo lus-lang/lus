@@ -24,7 +24,8 @@ tests:it("version check (-v)", function()
 end)
 
 tests:it("execute string (-e)", function()
-    local out = run_lus("-e 'print(10*10)'")
+    local quote = (package.config:sub(1,1) == "\\") and '"' or "'"
+    local out = run_lus("-e " .. quote .. "print(10*10)" .. quote)
     -- popen output trailing newline often
     assert(string.find(out, "100"))
 end)
