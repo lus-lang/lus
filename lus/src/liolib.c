@@ -753,14 +753,8 @@ static int read_all(lua_State *L, FILE *f, AsyncReadTask **out_task) {
         /* Submit to thread pool */
         threadpool_submit(pool, (ThreadPoolTask *)task);
 
-        /* Set up yield for thread pool completion
-         * Clear fd/events/deadline to prevent accidental resume by timer or fd
-         * checks */
-        set_yield_reason(L, YIELD_THREADPOOL);
-        set_yield_task(L, (ThreadPoolTask *)task);
-        set_yield_fd(L, -1);      /* No fd */
-        set_yield_events(L, 0);   /* No events */
-        set_yield_deadline(L, 0); /* No deadline */
+        /* Set up yield for thread pool completion */
+        SETUP_ASYNC_YIELD(L, task);
 
         /* Return task so caller can yield with it */
         if (out_task)
@@ -987,8 +981,7 @@ static int g_write(lua_State *L, FILE *f, int arg) {
         threadpool_submit(pool, (ThreadPoolTask *)task);
 
         /* Set up yield for thread pool completion */
-        set_yield_reason(L, YIELD_THREADPOOL);
-        set_yield_task(L, (ThreadPoolTask *)task);
+        SETUP_ASYNC_YIELD(L, task);
 
         /* Yield with continuation */
         return (int)lua_yieldk(L, 0, (lua_KContext)task, g_write_cont);
