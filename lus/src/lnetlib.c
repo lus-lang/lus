@@ -1701,28 +1701,25 @@ static int net_fetch(lua_State *L) {
   sock_close(fd);
 
   /* Push the result body string */
-  luaL_pushresult(&resp_body); /* Stack: [headers, ..., body] */
+  luaL_pushresult(&resp_body); /* body is now at top, headers at headers_idx */
 
-  /* Clean up stack - we only want headers and body */
-  /* At this point: headers_idx has headers, top has body */
-  /* We need to return: status, body, headers */
+  /* At this point: headers at headers_idx, body at top */
+  /* We need to return: status, body, headers in that order */
 
-  /* First, get body string and save it */
-  lua_insert(L,
-             headers_idx +
-                 1); /* Move body right after headers: [headers, body, ...] */
-  lua_settop(L, headers_idx +
-                    1); /* Discard anything above body: [headers, body] */
+  /* Step 1: Push status and headers */
+  lua_pushinteger(L, status);    /* [..., headers@idx, body, status] */
+  lua_pushvalue(L, headers_idx); /* [..., headers@idx, body, status, headers] */
 
-  /* Now push status at the beginning */
-  lua_pushinteger(L, status); /* [headers, body, status] */
-  lua_insert(L, headers_idx); /* [status, headers, body] */
+  /* Step 2: Remove original headers */
+  lua_remove(L, headers_idx); /* [..., body, status, headers] */
 
-  /* Swap headers and body to get [status, body, headers] */
-  lua_pushvalue(L, -1); /* [status, headers, body, body] */
-  lua_pushvalue(L, -3); /* [status, headers, body, body, headers] */
-  lua_remove(L, -4);    /* [status, body, body, headers] */
-  lua_remove(L, -3);    /* [status, body, headers] */
+  /* Step 3: Stack top 3 = body(-3), status(-2), headers(-1) */
+  /*         Want       = status(-3), body(-2), headers(-1) */
+  /* Rotate elements at -3 and -2 using lua_rotate on just those 2 */
+  lua_rotate(L, -3, -1); /* Rotate 3 elements: ABC -> BCA, so
+                            body,status,headers -> status,headers,body */
+  lua_rotate(L, -2, -1); /* Rotate bottom 2 of top 3: status,headers,body ->
+                            status,body,headers */
 
   return 3;
 }

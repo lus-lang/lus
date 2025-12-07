@@ -6,6 +6,7 @@ framework.__index = framework
 -- Colors for output
 local red = "\27[31m"
 local green = "\27[32m"
+local yellow = "\27[33m"
 local reset = "\27[0m"
 
 -- tracegc functionality (from tracegc.lua)
@@ -41,6 +42,7 @@ function framework.new(name)
     self.tests = 0
     self.passed = 0
     self.failed = 0
+    self.soft_failed = 0  -- soft failures don't block CI
     print("Running Suite: " .. name)
     return self
 end
@@ -59,6 +61,20 @@ function framework:it(desc, fn)
         self.failed = self.failed + 1
         print("    " .. red .. "✗" .. reset .. " " .. desc)
         print("      Error: " .. tostring(err))
+    end
+end
+
+-- Soft test: failures are reported but don't fail the suite (for flaky external dependencies)
+function framework:soft(desc, fn)
+    self.tests = self.tests + 1
+    local status, err = catch fn()
+    if status then
+        self.passed = self.passed + 1
+        print("    " .. green .. "✓" .. reset .. " " .. desc)
+    else
+        self.soft_failed = self.soft_failed + 1
+        print("    " .. yellow .. "⚠" .. reset .. " " .. desc .. " (soft fail)")
+        print("      Warning: " .. tostring(err))
     end
 end
 
@@ -101,10 +117,17 @@ end
 
 function framework:finish()
     print("")
-    print(string.format("Result: %d/%d passed", self.passed, self.tests))
+    local result_str = string.format("Result: %d/%d passed", self.passed, self.tests)
+    if self.soft_failed > 0 then
+        result_str = result_str .. string.format(" (%d soft failures)", self.soft_failed)
+    end
+    print(result_str)
     if self.failed > 0 then
         print(red .. "FAILED" .. reset)
         os.exit(1)
+    elseif self.soft_failed > 0 then
+        print(yellow .. "PASSED (with warnings)" .. reset)
+        os.exit(0)  -- Still passes, but warns
     else
         print(green .. "PASSED" .. reset)
         os.exit(0)

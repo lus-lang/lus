@@ -98,7 +98,7 @@ end)
 -- HTTP/HTTPS Tests
 -- ============================================
 
-tests:it("HTTPS GET request", function()
+tests:soft("HTTPS GET request", function()
   -- This test requires network access
   local ok, result = catch network.fetch("https://httpbin.org/get")
   
@@ -115,7 +115,7 @@ tests:it("HTTPS GET request", function()
   assert(headers["content-type"] ~= nil, "should have content-type header")
 end)
 
-tests:it("HTTPS POST request", function()
+tests:soft("HTTPS POST request", function()
   local ok = catch network.fetch("https://httpbin.org/post", "POST", 
     {["Content-Type"] = "application/json"}, 
     '{"test": true}')
@@ -146,7 +146,7 @@ end)
 -- Event Loop Integration Tests
 -- ============================================
 
-tests:it("fetch in detached coroutine", function()
+tests:soft("fetch in detached coroutine", function()
   local results = {}
   local co = coroutine.create(function()
     -- Use sleep to confirm detached behavior works
