@@ -645,7 +645,7 @@ The `fs` library is implemented in C (`lfslib.c`) and exposed as a global `fs` t
 
 #### Implementation Details
 
-- **Cross-Platform**: Uses `#if defined(LUS_PLATFORM_WINDOWS)` to select between Win32 API (`FindFirstFile`, `CopyFile`, `GetFinalPathNameByHandle`) and POSIX (`opendir`, `sendfile` fallback, `readlink`).
+- **Cross-Platform**: Uses `#if defined(LUS_PLATFORM_WINDOWS)` to select between Win32 API (`FindFirstFile`, `CopyFile`, `GetFinalPathNameByHandle`) and POSIX (`opendir`, `sendfile` fallback, `readlink`)
 - **Recursive Remove**: Implemented manually to handle directory traversal and file deletion safely on both platforms.
 - **Symlinks on Windows**: `fs.follow` extracts the final path and strips the `\\?\` prefix if present.
 
