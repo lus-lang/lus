@@ -128,13 +128,25 @@ jobs:
       - name: Setup Meson
         run: pip install meson
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        id: cache-vcpkg
         with:
-          vcpkgGitCommitId: 'a7b6122f6b6504d16d96117336a0562693579933'
-          runVcpkgInstall: true
-        env:
-          VCPKG_DEFAULT_TRIPLET: x64-windows
+          path: vcpkg/installed
+          key: vcpkg-x64-windows-openssl-cares-${{ runner.os }}
+
+      - name: Install vcpkg and dependencies
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install openssl:x64-windows c-ares:x64-windows pkgconf:x64-windows
+
+      - name: Bootstrap vcpkg (cache hit)
+        if: steps.cache-vcpkg.outputs.cache-hit == 'true'
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
 
       - name: Build
         env:
