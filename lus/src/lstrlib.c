@@ -2089,7 +2089,8 @@ static int decode_base64(const unsigned char *src, size_t srclen,
                          luaL_Buffer *b) {
   size_t i = 0;
   unsigned char buf[3];
-  int accum = 0, bits = 0;
+  unsigned int accum = 0;
+  int bits = 0;
 
   while (i < srclen) {
     unsigned char c = src[i++];
