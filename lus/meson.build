@@ -122,6 +122,9 @@ else
   lib_sources += files('src/events/lev_select.c')
 endif
 
+# Thread pool for async work (cross-platform)
+lib_sources += files('src/events/lev_threadpool.c')
+
 # Headers to install
 install_headers(
   'src/lua.h',
@@ -208,11 +211,21 @@ h1_tests = [
 ]
 
 foreach t : h1_tests
-  test('h1/' + fs.name(t), lus_exe,
-    args: ['lus-tests' / t + '.lus'],
-    workdir: meson.project_source_root() / '..',
-    suite: 'h1',
-  )
+  # Network tests need more time due to external HTTP requests
+  if t == 'h1/network'
+    test('h1/' + fs.name(t), lus_exe,
+      args: ['lus-tests' / t + '.lus'],
+      workdir: meson.project_source_root() / '..',
+      suite: 'h1',
+      timeout: 120,
+    )
+  else
+    test('h1/' + fs.name(t), lus_exe,
+      args: ['lus-tests' / t + '.lus'],
+      workdir: meson.project_source_root() / '..',
+      suite: 'h1',
+    )
+  endif
 endforeach
 
 # H2: C API (Compiled Executables)
@@ -244,6 +257,14 @@ test('h3/ci', lus_exe,
   workdir : meson.project_source_root() / '..',
   suite : ['h3-ci'],
   timeout: 60,
+)
+
+# Async I/O tests
+test('h3/asyncio', lus_exe,
+  args : ['lus-tests/h3/asyncio.lus'],
+  workdir : meson.project_source_root() / '..',
+  suite : ['h3', 'h3-local'],
+  timeout: 30,
 )
 
 # H4: Performance (Lus Runner)

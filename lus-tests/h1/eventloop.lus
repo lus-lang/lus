@@ -1,7 +1,7 @@
 --[[
   Event Loop Test Suite
-  Tests coroutine.detach and coroutine.sleep with focus on edge cases
-  and common event loop pain points
+  Tests coroutine.detach, coroutine.sleep, coroutine.poll, and coroutine.pending
+  with Node.js-style async semantics
 ]]
 
 global print, coroutine, math, os, assert, error, type, tostring, require, table
@@ -23,6 +23,23 @@ tests:it("coroutine.sleep exists", function()
   tests:assert_true(type(coroutine.sleep) == "function")
 end)
 
+tests:it("coroutine.poll exists", function()
+  tests:assert_true(type(coroutine.poll) == "function")
+end)
+
+tests:it("coroutine.pending exists", function()
+  tests:assert_true(type(coroutine.pending) == "function")
+end)
+
+tests:it("coroutine.status_e enum exists", function()
+  local s = coroutine.status_e
+  tests:assert_true(s ~= nil, "status_e should exist")
+  tests:assert_true(s.pending ~= nil, "status_e.pending should exist")
+  tests:assert_true(s.completed ~= nil, "status_e.completed should exist")
+  tests:assert_true(s.yielded ~= nil, "status_e.yielded should exist")
+  tests:assert_true(s.error ~= nil, "status_e.error should exist")
+end)
+
 -- ============================================================
 -- SECTION 2: coroutine.detach Validation
 -- ============================================================
@@ -37,24 +54,36 @@ tests:it("cannot detach dead coroutine", function()
   tests:assert_true(not ok, "detaching dead coroutine should fail")
 end)
 
-tests:it("can detach suspended coroutine", function()
-  local co = coroutine.create(function()
-    coroutine.yield()
-    return "after yield"
-  end)
-  
-  local ok = coroutine.detach(co)
-  tests:assert_true(ok)
+tests:it("detach synchronous coroutine returns completed", function()
+  local co = coroutine.create(function() return 42 end)
+  local status, result = coroutine.detach(co)
+  tests:assert_equal(status, coroutine.status_e.completed)
+  tests:assert_equal(result, 42)
 end)
 
-tests:it("can detach newly created coroutine", function()
-  local co = coroutine.create(function() return 42 end)
-  local ok = coroutine.detach(co)
-  tests:assert_true(ok)
+tests:it("detach yielding coroutine returns yielded", function()
+  local co = coroutine.create(function()
+    coroutine.yield("hello")
+    return "done"
+  end)
+  local status, val = coroutine.detach(co)
+  tests:assert_equal(status, coroutine.status_e.yielded)
+  tests:assert_equal(val, "hello")
+end)
+
+tests:it("detach sleeping coroutine returns pending", function()
+  local co = coroutine.create(function()
+    coroutine.sleep(0.1)
+    return "done"
+  end)
+  local status = coroutine.detach(co)
+  tests:assert_equal(status, coroutine.status_e.pending)
+  tests:assert_true(coroutine.pending() > 0)
   
-  local success, result = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(result, 42)
+  -- Poll to complete
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
 end)
 
 -- ============================================================
@@ -74,18 +103,6 @@ tests:it("sleep fails in non-detached coroutine", function()
   tests:assert_true(not ok, "sleep should fail in non-detached coroutine")
 end)
 
-tests:it("sleep with negative duration fails", function()
-  local co = coroutine.create(function()
-    local ok, err = catch coroutine.sleep(-1)
-    return ok, err
-  end)
-  
-  coroutine.detach(co)
-  local success, ok, err = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_true(not ok, "negative sleep should fail")
-end)
-
 tests:it("sleep with zero duration succeeds immediately", function()
   local executed = false
   local co = coroutine.create(function()
@@ -94,332 +111,252 @@ tests:it("sleep with zero duration succeeds immediately", function()
     return "done"
   end)
   
-  coroutine.detach(co)
-  local success, result = coroutine.resume(co)
-  tests:assert_true(success)
+  local status = coroutine.detach(co)
+  -- Zero sleep may yield to pending or complete immediately
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
   tests:assert_true(executed)
-  tests:assert_equal(result, "done")
 end)
 
 -- ============================================================
--- SECTION 4: Sleep Timing Accuracy
+-- SECTION 4: Sleep Timing and Poll
 -- ============================================================
 
-tests:describe("Sleep timing")
+tests:describe("Sleep timing and poll")
 
--- Note: We verify that sleep returns, and timing is reasonable using os.time (seconds granularity)
-tests:it("100ms sleep completes successfully", function()
+tests:it("100ms sleep completes after poll", function()
+  local completed = false
   local co = coroutine.create(function()
-    local before = os.time()
     coroutine.sleep(0.1)
-    local after = os.time()
-    return after - before
+    completed = true
   end)
   
-  coroutine.detach(co)
-  local success, elapsed = coroutine.resume(co)
-  tests:assert_true(success)
-  -- os.time has second granularity, so elapsed should be 0 or 1
-  tests:assert_true(elapsed >= 0, "sleep returned negative time")
-  tests:assert_true(elapsed <= 2, "sleep took too long: " .. tostring(elapsed))
+  local status = coroutine.detach(co)
+  tests:assert_equal(status, coroutine.status_e.pending)
+  
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
+  tests:assert_true(completed)
 end)
 
-tests:it("multiple consecutive sleeps complete", function()
+tests:it("multiple sleeps in sequence", function()
+  local count = 0
   local co = coroutine.create(function()
-    local count = 0
     coroutine.sleep(0.05)
     count = count + 1
     coroutine.sleep(0.05)
     count = count + 1
     coroutine.sleep(0.05)
     count = count + 1
-    return count
   end)
   
   coroutine.detach(co)
-  local success, count = coroutine.resume(co)
-  tests:assert_true(success)
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
   tests:assert_equal(count, 3)
 end)
 
--- ============================================================
--- SECTION 5: Return Value Handling
--- ============================================================
-
-tests:describe("Return values")
-
-tests:it("single return value preserved", function()
-  local co = coroutine.create(function()
-    coroutine.sleep(0.01)
-    return 42
+tests:it("multiple parallel sleeps", function()
+  local results = {}
+  
+  local co1 = coroutine.create(function()
+    coroutine.sleep(0.05)
+    results[1] = "done1"
   end)
   
-  coroutine.detach(co)
-  local success, result = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(result, 42)
-end)
-
-tests:it("multiple return values preserved", function()
-  local co = coroutine.create(function()
-    coroutine.sleep(0.01)
-    return 1, 2, 3, "four", true
+  local co2 = coroutine.create(function()
+    coroutine.sleep(0.05)
+    results[2] = "done2"
   end)
   
-  coroutine.detach(co)
-  local success, a, b, c, d, e = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(a, 1)
-  tests:assert_equal(b, 2)
-  tests:assert_equal(c, 3)
-  tests:assert_equal(d, "four")
-  tests:assert_equal(e, true)
-end)
-
-tests:it("nil return values handled correctly", function()
-  local co = coroutine.create(function()
-    coroutine.sleep(0.01)
-    return nil, nil, "end"
-  end)
+  coroutine.detach(co1)
+  coroutine.detach(co2)
   
-  coroutine.detach(co)
-  local success, a, b, c = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(a, nil)
-  tests:assert_equal(b, nil)
-  tests:assert_equal(c, "end")
+  tests:assert_equal(coroutine.pending(), 2)
+  
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
+  
+  tests:assert_equal(results[1], "done1")
+  tests:assert_equal(results[2], "done2")
 end)
 
 -- ============================================================
--- SECTION 6: Error Propagation
+-- SECTION 5: Error Handling
 -- ============================================================
 
 tests:describe("Error handling")
 
-tests:it("error before sleep propagates", function()
+tests:it("immediate error returns error status", function()
   local co = coroutine.create(function()
-    error("early error")
-    coroutine.sleep(0.01)
+    error("immediate failure")
   end)
   
-  coroutine.detach(co)
-  -- Use catch to capture the error from resume
-  local ok, err = catch coroutine.resume(co)
-  tests:assert_true(not ok, "resume should fail on error")
+  local status, err = coroutine.detach(co)
+  tests:assert_equal(status, coroutine.status_e.error)
+  tests:assert_true(err:find("immediate failure") ~= nil)
 end)
 
-tests:it("error after sleep propagates", function()
+tests:it("error after sleep thrown on poll", function()
   local co = coroutine.create(function()
-    coroutine.sleep(0.01)
-    error("late error")
+    coroutine.sleep(0.05)
+    error("delayed failure")
   end)
   
-  coroutine.detach(co)
-  -- Use catch to capture the error from resume
-  local ok, err = catch coroutine.resume(co)
-  tests:assert_true(not ok, "resume should fail on error")
+  local status = coroutine.detach(co)
+  tests:assert_equal(status, coroutine.status_e.pending)
+  
+  local ok, err = catch coroutine.poll(1)
+  tests:assert_true(not ok, "poll should throw error")
+  tests:assert_true(err:find("delayed failure") ~= nil)
+end)
+
+tests:it("catch allows continued polling", function()
+  local results = {}
+  
+  local co1 = coroutine.create(function()
+    coroutine.sleep(0.05)
+    error("co1 failed")
+  end)
+  
+  local co2 = coroutine.create(function()
+    coroutine.sleep(0.1)
+    results[1] = "co2 done"
+  end)
+  
+  coroutine.detach(co1)
+  coroutine.detach(co2)
+  
+  -- Poll and catch errors
+  while coroutine.pending() > 0 do
+    local ok, err = catch coroutine.poll(1)
+    if not ok then
+      results[2] = "caught: " .. tostring(err):sub(1, 20)
+    end
+  end
+  
+  tests:assert_equal(results[1], "co2 done")
+  tests:assert_true(results[2] ~= nil, "should have caught error")
 end)
 
 -- ============================================================
--- SECTION 7: Coroutine State Transitions
+-- SECTION 6: State Transitions
 -- ============================================================
 
 tests:describe("State transitions")
 
-tests:it("detached coroutine can complete and become dead", function()
+tests:it("completed coroutine is dead", function()
+  local co = coroutine.create(function() return 1 end)
+  coroutine.detach(co)
+  tests:assert_equal(coroutine.status(co), "dead")
+end)
+
+tests:it("pending coroutine is suspended", function()
   local co = coroutine.create(function()
-    coroutine.sleep(0.01)
-    return "done"
+    coroutine.sleep(1)
+    return 1
   end)
-  
   coroutine.detach(co)
   tests:assert_equal(coroutine.status(co), "suspended")
   
-  coroutine.resume(co)
-  tests:assert_equal(coroutine.status(co), "dead")
-end)
-
-tests:it("coroutine.close works on detached coroutine", function()
-  local co = coroutine.create(function()
-    coroutine.yield()  -- Will never be reached after close
-    coroutine.sleep(1.0)
-  end)
-  
-  coroutine.detach(co)
-  local ok = coroutine.close(co)
-  tests:assert_true(ok)
-  tests:assert_equal(coroutine.status(co), "dead")
+  -- Cleanup
+  coroutine.close(co)
 end)
 
 -- ============================================================
--- SECTION 8: Normal Yield in Detached Coroutine
--- ============================================================
-
-tests:describe("Normal yield in detached coroutine")
-
-tests:it("yield without sleep returns to caller", function()
-  local co = coroutine.create(function()
-    coroutine.yield("yielded")
-    return "finished"
-  end)
-  
-  coroutine.detach(co)
-  
-  local success1, val1 = coroutine.resume(co)
-  tests:assert_true(success1)
-  tests:assert_equal(val1, "yielded")
-  tests:assert_equal(coroutine.status(co), "suspended")
-  
-  local success2, val2 = coroutine.resume(co)
-  tests:assert_true(success2)
-  tests:assert_equal(val2, "finished")
-  tests:assert_equal(coroutine.status(co), "dead")
-end)
-
-tests:it("mixed yield and sleep", function()
-  local steps = {}
-  local co = coroutine.create(function()
-    table.insert(steps, "start")
-    coroutine.yield("y1")
-    table.insert(steps, "after y1")
-    coroutine.sleep(0.01)
-    table.insert(steps, "after sleep")
-    coroutine.yield("y2")
-    table.insert(steps, "after y2")
-    return "done"
-  end)
-  
-  coroutine.detach(co)
-  
-  local ok, r1 = coroutine.resume(co)
-  tests:assert_true(ok)
-  tests:assert_equal(r1, "y1")
-  tests:assert_equal(#steps, 1)
-  
-  local ok2, r2 = coroutine.resume(co)
-  tests:assert_true(ok2)
-  tests:assert_equal(r2, "y2")
-  tests:assert_equal(#steps, 3)  -- after y1, after sleep
-  
-  local ok3, r3 = coroutine.resume(co)
-  tests:assert_true(ok3)
-  tests:assert_equal(r3, "done")
-  tests:assert_equal(#steps, 4)
-end)
-
--- ============================================================
--- SECTION 9: Arguments to Resume
--- ============================================================
-
-tests:describe("Resume arguments")
-
-tests:it("initial arguments passed to coroutine function", function()
-  local co = coroutine.create(function(a, b, c)
-    coroutine.sleep(0.01)
-    return a + b + c
-  end)
-  
-  coroutine.detach(co)
-  local success, result = coroutine.resume(co, 1, 2, 3)
-  tests:assert_true(success)
-  tests:assert_equal(result, 6)
-end)
-
-tests:it("resume arguments passed through yield", function()
-  local co = coroutine.create(function()
-    local x = coroutine.yield()
-    coroutine.sleep(0.01)
-    return x * 2
-  end)
-  
-  coroutine.detach(co)
-  coroutine.resume(co)  -- Start, hits yield
-  local success, result = coroutine.resume(co, 21)  -- Pass 21 through yield
-  tests:assert_true(success)
-  tests:assert_equal(result, 42)
-end)
-
--- ============================================================
--- SECTION 10: Stress Tests
+-- SECTION 7: Stress tests
 -- ============================================================
 
 tests:describe("Stress tests")
 
 tests:it("many small sleeps", function()
+  local count = 0
   local co = coroutine.create(function()
-    local count = 0
-    for i = 1, 20 do
-      coroutine.sleep(0.001)  -- 1ms each
+    for i = 1, 50 do
+      coroutine.sleep(0.001)
       count = count + 1
     end
-    return count
   end)
   
   coroutine.detach(co)
-  local success, count = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(count, 20)
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
+  tests:assert_equal(count, 50)
 end)
 
-tests:it("detach and resume immediately multiple times", function()
+tests:it("many parallel coroutines", function()
+  local results = {}
+  local coros = {}
+  
   for i = 1, 10 do
     local co = coroutine.create(function()
-      coroutine.sleep(0.001)
-      return i
+      coroutine.sleep(0.01)
+      results[i] = i
     end)
+    coros[i] = co
     coroutine.detach(co)
-    local success, result = coroutine.resume(co)
-    tests:assert_true(success)
-    tests:assert_equal(result, i)
+  end
+  
+  tests:assert_equal(coroutine.pending(), 10)
+  
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
+  
+  for i = 1, 10 do
+    tests:assert_equal(results[i], i)
   end
 end)
 
 -- ============================================================
--- SECTION 11: Edge Cases
+-- SECTION 8: Edge cases
 -- ============================================================
 
 tests:describe("Edge cases")
 
-tests:it("detach same coroutine twice is idempotent", function()
-  local co = coroutine.create(function()
-    coroutine.sleep(0.01)
-    return "ok"
-  end)
-  
-  local ok1 = coroutine.detach(co)
-  local ok2 = coroutine.detach(co)
-  tests:assert_true(ok1)
-  tests:assert_true(ok2)
-  
-  local success, result = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(result, "ok")
-end)
-
 tests:it("very short sleep (1 microsecond)", function()
+  local done = false
   local co = coroutine.create(function()
-    coroutine.sleep(0.000001)  -- 1 microsecond
-    return "fast"
+    coroutine.sleep(0.000001)
+    done = true
   end)
   
   coroutine.detach(co)
-  local success, result = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(result, "fast")
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
+  tests:assert_true(done)
 end)
 
 tests:it("table passed through detached coroutine", function()
+  local tbl = {x = 10, y = 20}
+  local result
   local co = coroutine.create(function()
     coroutine.sleep(0.01)
-    return {key = "value", nested = {a = 1}}
+    result = tbl
+    tbl.z = 30
   end)
   
   coroutine.detach(co)
-  local success, result = coroutine.resume(co)
-  tests:assert_true(success)
-  tests:assert_equal(result.key, "value")
-  tests:assert_equal(result.nested.a, 1)
+  while coroutine.pending() > 0 do
+    coroutine.poll(1)
+  end
+  
+  tests:assert_equal(result.x, 10)
+  tests:assert_equal(result.y, 20)
+  tests:assert_equal(result.z, 30)
 end)
 
--- Run all tests
+tests:it("poll with no pending returns immediately", function()
+  tests:assert_equal(coroutine.pending(), 0)
+  -- Should not block
+  coroutine.poll()
+  tests:assert_equal(coroutine.pending(), 0)
+end)
+
 tests:finish()

@@ -109,23 +109,57 @@ receiver:close()
 
 ## Async I/O with event loop
 
-Network operations become non-blocking in detached coroutines:
+Network operations become non-blocking in detached coroutines. Use `coroutine.poll` to process the event loop and `coroutine.pending` to check for waiting coroutines:
 
 ```lua
+local status1, status2
 local co = coroutine.create(function()
-  -- These yield when they would block
-  local s1, body1 = network.fetch("https://api.example.com/data1")
-  local s2, body2 = network.fetch("https://api.example.com/data2")
-  return s1, s2
+  -- These yield when they would block, resume automatically when ready
+  local body1, body2
+  status1, body1 = network.fetch("https://api.example.com/data1")
+  status2, body2 = network.fetch("https://api.example.com/data2")
 end)
 
-coroutine.detach(co)
-local ok, status1, status2 = coroutine.resume(co)
+coroutine.detach(co)  -- starts execution immediately
+
+-- Poll until complete
+while coroutine.pending() > 0 do
+  coroutine.poll(5)
+end
+
+print(status1, status2)  -- results are available
+```
+
+### Parallel requests
+
+Multiple detached coroutines run concurrently:
+
+```lua
+local results = {}
+
+for i, endpoint in ipairs({"users", "posts", "comments"}) do
+  local co = coroutine.create(function()
+    local status, body = network.fetch("https://api.example.com/" .. endpoint)
+    results[i] = {status = status, body = body}
+  end)
+  coroutine.detach(co)
+end
+
+-- All three requests run in parallel
+while coroutine.pending() > 0 do
+  coroutine.poll(5)
+end
+
+-- All results ready
+for i, r in ipairs(results) do
+  print(i, r.status)
+end
 ```
 
 ### Async TCP example
 
 ```lua
+local response_size
 local co = coroutine.create(function()
   local sock = network.tcp.connect("example.com", 80)
   sock:settimeout(5)
@@ -134,12 +168,34 @@ local co = coroutine.create(function()
   local response = sock:receive("*a")  -- yields, doesn't block
   sock:close()
   
-  return #response
+  response_size = #response
 end)
 
 coroutine.detach(co)
-local ok, size = coroutine.resume(co)
-print("Received", size, "bytes")
+while coroutine.pending() > 0 do
+  coroutine.poll(5)
+end
+
+print("Received", response_size, "bytes")
+```
+
+### Error handling in async code
+
+Errors in detached coroutines are thrown by `poll()`. Use `catch` to handle them:
+
+```lua
+local co = coroutine.create(function()
+  network.fetch("https://invalid.host.example")
+end)
+
+coroutine.detach(co)
+
+while coroutine.pending() > 0 do
+  local ok, err = catch coroutine.poll(5)
+  if not ok then
+    print("Request failed:", err)
+  end
+end
 ```
 
 ## Socket methods
@@ -191,11 +247,18 @@ local status, body = network.fetch("https://api.example.com/data")
 I/O automatically becomes non-blocking in detached coroutines:
 
 ```lua
--- Same code works sync and async
+-- Blocking (in regular code)
 local status = network.fetch(url)
 
--- In detached coroutine: yields during I/O
--- In regular code: blocks until complete
+-- Non-blocking (in detached coroutine)
+local co = coroutine.create(function()
+  result = network.fetch(url)  -- yields during I/O
+end)
+coroutine.detach(co)
+while coroutine.pending() > 0 do
+  -- Can do other work here
+  coroutine.poll(0.1)
+end
 ```
 
 ### Cross-platform consistency

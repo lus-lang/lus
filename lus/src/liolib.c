@@ -9,7 +9,6 @@
 
 #include "lprefix.h"
 
-
 #include <ctype.h>
 #include <errno.h>
 #include <locale.h>
@@ -19,10 +18,11 @@
 
 #include "lua.h"
 
+#include "events/lev.h"
+#include "events/lev_threadpool.h"
 #include "lauxlib.h"
-#include "lualib.h"
 #include "llimits.h"
-
+#include "lualib.h"
 
 /*
 ** Change this macro to accept other modes for 'fopen' besides
@@ -65,15 +65,15 @@ static int l_checkmode(const char *mode) {
 
 #if !defined(l_checkmodep)
 /* Windows accepts "[rw][bt]?" as valid modes */
-#define l_checkmodep(m)            \
-  ((m[0] == 'r' || m[0] == 'w') && \
+#define l_checkmodep(m)                                                        \
+  ((m[0] == 'r' || m[0] == 'w') &&                                             \
    (m[1] == '\0' || ((m[1] == 'b' || m[1] == 't') && m[2] == '\0')))
 #endif
 
 #else /* }{ */
 
 /* ISO C definitions */
-#define l_popen(L, c, m) \
+#define l_popen(L, c, m)                                                       \
   ((void)c, (void)m, luaL_error(L, "'popen' not supported"), (FILE *)0)
 #define l_pclose(L, file) ((void)L, (void)file, -1)
 
@@ -81,14 +81,12 @@ static int l_checkmode(const char *mode) {
 
 #endif /* } */
 
-
 #if !defined(l_checkmodep)
 /* By default, Lua accepts only "r" or "w" as valid modes */
 #define l_checkmodep(m) ((m[0] == 'r' || m[0] == 'w') && m[1] == '\0')
 #endif
 
 /* }====================================================== */
-
 
 #if !defined(l_getc) /* { */
 
@@ -103,7 +101,6 @@ static int l_checkmode(const char *mode) {
 #endif
 
 #endif /* } */
-
 
 /*
 ** {======================================================
@@ -121,7 +118,7 @@ static int l_checkmode(const char *mode) {
 #define l_ftell(f) ftello(f)
 #define l_seeknum off_t
 
-#elif defined(LUA_USE_WINDOWS) && !defined(_CRTIMP_TYPEINFO) && \
+#elif defined(LUA_USE_WINDOWS) && !defined(_CRTIMP_TYPEINFO) &&                \
     defined(_MSC_VER) && (_MSC_VER >= 1400) /* }{ */
 
 /* Windows (but not DDK) and Visual C++ 2005 or higher */
@@ -142,20 +139,102 @@ static int l_checkmode(const char *mode) {
 
 /* }====================================================== */
 
-
 #define IO_PREFIX "_IO_"
 #define IOPREF_LEN (sizeof(IO_PREFIX) / sizeof(char) - 1)
 #define IO_INPUT (IO_PREFIX "input")
 #define IO_OUTPUT (IO_PREFIX "output")
 
+/*
+** {======================================================
+** ASYNC FILE I/O
+** =======================================================
+** Thread pool-based async file operations for detached coroutines.
+** Worker threads perform blocking I/O, results collected on main thread.
+*/
+
+/* Task data for async file read */
+typedef struct AsyncReadTask {
+  ThreadPoolTask base; /* Base task (must be first) */
+  FILE *f;             /* File to read from */
+  char *buffer;        /* Result buffer (malloc'd by worker) */
+  size_t size;         /* Size of result */
+  size_t request_size; /* Requested read size (0 = read all) */
+  int read_type;       /* 0=all, 1=line, 2=bytes */
+  int chop;            /* For line reads: chop newline? */
+  int eof;             /* EOF reached? */
+  int ferr;            /* ferror result */
+} AsyncReadTask;
+
+/* Task data for async file write */
+typedef struct AsyncWriteTask {
+  ThreadPoolTask base; /* Base task (must be first) */
+  FILE *f;             /* File to write to */
+  const char *data;    /* Data to write (user's string, don't free) */
+  size_t len;          /* Length of data */
+  size_t written;      /* Bytes actually written */
+  int ferr;            /* ferror result */
+} AsyncWriteTask;
+
+/* Worker function: read entire file */
+static void async_read_all_work(ThreadPoolTask *task) {
+  AsyncReadTask *rt = (AsyncReadTask *)task;
+
+  /* Seek to end to get size */
+  long start = ftell(rt->f);
+  fseek(rt->f, 0, SEEK_END);
+  long end = ftell(rt->f);
+  fseek(rt->f, start, SEEK_SET);
+
+  size_t remaining = (size_t)(end - start);
+  rt->buffer = (char *)malloc(remaining + 1);
+  if (!rt->buffer) {
+    rt->base.error = strdup("out of memory");
+    return;
+  }
+
+  rt->size = fread(rt->buffer, 1, remaining, rt->f);
+  rt->buffer[rt->size] = '\0';
+  rt->eof = feof(rt->f);
+  rt->ferr = ferror(rt->f);
+}
+
+/* Worker function: read N bytes */
+static void async_read_bytes_work(ThreadPoolTask *task) {
+  AsyncReadTask *rt = (AsyncReadTask *)task;
+
+  rt->buffer = (char *)malloc(rt->request_size + 1);
+  if (!rt->buffer) {
+    rt->base.error = strdup("out of memory");
+    return;
+  }
+
+  rt->size = fread(rt->buffer, 1, rt->request_size, rt->f);
+  rt->buffer[rt->size] = '\0';
+  rt->eof = feof(rt->f);
+  rt->ferr = ferror(rt->f);
+}
+
+/* Worker function: write data */
+static void async_write_work(ThreadPoolTask *task) {
+  AsyncWriteTask *wt = (AsyncWriteTask *)task;
+
+  wt->written = fwrite(wt->data, 1, wt->len, wt->f);
+  wt->ferr = ferror(wt->f);
+  fflush(wt->f); /* Ensure data is written */
+}
+
+/* Get scheduler's thread pool */
+static ThreadPool *get_threadpool(lua_State *L) {
+  return scheduler_get_threadpool(L);
+}
+
+/* }====================================================== */
 
 typedef luaL_Stream LStream;
-
 
 #define tolstream(L) ((LStream *)luaL_checkudata(L, 1, LUA_FILEHANDLE))
 
 #define isclosed(p) ((p)->closef == NULL)
-
 
 static int io_type(lua_State *L) {
   LStream *p;
@@ -170,7 +249,6 @@ static int io_type(lua_State *L) {
   return 1;
 }
 
-
 static int f_tostring(lua_State *L) {
   LStream *p = tolstream(L);
   if (isclosed(p))
@@ -180,7 +258,6 @@ static int f_tostring(lua_State *L) {
   return 1;
 }
 
-
 static FILE *tofile(lua_State *L) {
   LStream *p = tolstream(L);
   if (l_unlikely(isclosed(p)))
@@ -188,7 +265,6 @@ static FILE *tofile(lua_State *L) {
   lua_assert(p->f);
   return p->f;
 }
-
 
 /*
 ** When creating file handles, always creates a 'closed' file handle
@@ -202,7 +278,6 @@ static LStream *newprefile(lua_State *L) {
   return p;
 }
 
-
 /*
 ** Calls the 'close' function from a file handle. The 'volatile' avoids
 ** a bug in some versions of the Clang compiler (e.g., clang 3.0 for
@@ -215,12 +290,10 @@ static int aux_close(lua_State *L) {
   return (*cf)(L);  /* close it */
 }
 
-
 static int f_close(lua_State *L) {
   tofile(L); /* make sure argument is an open stream */
   return aux_close(L);
 }
-
 
 static int io_close(lua_State *L) {
   if (lua_isnone(L, 1))                            /* no argument? */
@@ -228,14 +301,12 @@ static int io_close(lua_State *L) {
   return f_close(L);
 }
 
-
 static int f_gc(lua_State *L) {
   LStream *p = tolstream(L);
   if (!isclosed(p) && p->f != NULL)
     aux_close(L); /* ignore closed and incompletely open files */
   return 0;
 }
-
 
 /*
 ** function to close regular files
@@ -246,7 +317,6 @@ static int io_fclose(lua_State *L) {
   return luaL_fileresult(L, (fclose(p->f) == 0), NULL);
 }
 
-
 static LStream *newfile(lua_State *L) {
   LStream *p = newprefile(L);
   p->f = NULL;
@@ -254,14 +324,12 @@ static LStream *newfile(lua_State *L) {
   return p;
 }
 
-
 static void opencheck(lua_State *L, const char *fname, const char *mode) {
   LStream *p = newfile(L);
   p->f = fopen(fname, mode);
   if (l_unlikely(p->f == NULL))
     luaL_error(L, "cannot open file '%s' (%s)", fname, strerror(errno));
 }
-
 
 static int io_open(lua_State *L) {
   const char *filename = luaL_checkstring(L, 1);
@@ -274,7 +342,6 @@ static int io_open(lua_State *L) {
   return (p->f == NULL) ? luaL_fileresult(L, 0, filename) : 1;
 }
 
-
 /*
 ** function to close 'popen' files
 */
@@ -283,7 +350,6 @@ static int io_pclose(lua_State *L) {
   errno = 0;
   return luaL_execresult(L, l_pclose(L, p->f));
 }
-
 
 static int io_popen(lua_State *L) {
   const char *filename = luaL_checkstring(L, 1);
@@ -296,14 +362,12 @@ static int io_popen(lua_State *L) {
   return (p->f == NULL) ? luaL_fileresult(L, 0, filename) : 1;
 }
 
-
 static int io_tmpfile(lua_State *L) {
   LStream *p = newfile(L);
   errno = 0;
   p->f = tmpfile();
   return (p->f == NULL) ? luaL_fileresult(L, 0, NULL) : 1;
 }
-
 
 static FILE *getiofile(lua_State *L, const char *findex) {
   LStream *p;
@@ -313,7 +377,6 @@ static FILE *getiofile(lua_State *L, const char *findex) {
     luaL_error(L, "default %s file is closed", findex + IOPREF_LEN);
   return p->f;
 }
-
 
 static int g_iofile(lua_State *L, const char *f, const char *mode) {
   if (!lua_isnoneornil(L, 1)) {
@@ -331,19 +394,11 @@ static int g_iofile(lua_State *L, const char *f, const char *mode) {
   return 1;
 }
 
+static int io_input(lua_State *L) { return g_iofile(L, IO_INPUT, "r"); }
 
-static int io_input(lua_State *L) {
-  return g_iofile(L, IO_INPUT, "r");
-}
-
-
-static int io_output(lua_State *L) {
-  return g_iofile(L, IO_OUTPUT, "w");
-}
-
+static int io_output(lua_State *L) { return g_iofile(L, IO_OUTPUT, "w"); }
 
 static int io_readline(lua_State *L);
-
 
 /*
 ** maximum number of arguments to 'f:lines'/'io.lines' (it + 3 must fit
@@ -370,13 +425,11 @@ static void aux_lines(lua_State *L, int toclose) {
   lua_pushcclosure(L, io_readline, 3 + n);
 }
 
-
 static int f_lines(lua_State *L) {
   tofile(L); /* check that it's a valid file handle */
   aux_lines(L, 0);
   return 1;
 }
-
 
 /*
 ** Return an iteration function for 'io.lines'. If file has to be
@@ -392,8 +445,7 @@ static int io_lines(lua_State *L) {
     lua_replace(L, 1);                            /* put it at index 1 */
     tofile(L);   /* check that it's a valid file handle */
     toclose = 0; /* do not close it after iteration */
-  }
-  else { /* open a new file */
+  } else {       /* open a new file */
     const char *filename = luaL_checkstring(L, 1);
     opencheck(L, filename, "r");
     lua_replace(L, 1); /* put file at index 1 */
@@ -405,11 +457,9 @@ static int io_lines(lua_State *L) {
     lua_pushnil(L);      /* control */
     lua_pushvalue(L, 1); /* file is the to-be-closed variable (4th result) */
     return 4;
-  }
-  else
+  } else
     return 1;
 }
-
 
 /*
 ** {======================================================
@@ -417,12 +467,10 @@ static int io_lines(lua_State *L) {
 ** =======================================================
 */
 
-
 /* maximum length of a numeral */
 #if !defined(L_MAXLENNUM)
 #define L_MAXLENNUM 200
 #endif
-
 
 /* auxiliary structure used by 'read_number' */
 typedef struct {
@@ -432,7 +480,6 @@ typedef struct {
   char buff[L_MAXLENNUM + 1]; /* +1 for ending '\0' */
 } RN;
 
-
 /*
 ** Add current char to buffer (if not out of space) and read next one
 */
@@ -440,14 +487,12 @@ static int nextc(RN *rn) {
   if (l_unlikely(rn->n >= L_MAXLENNUM)) { /* buffer overflow? */
     rn->buff[0] = '\0';                   /* invalidate result */
     return 0;                             /* fail */
-  }
-  else {
+  } else {
     rn->buff[rn->n++] = cast_char(rn->c); /* save current char */
     rn->c = l_getc(rn->f);                /* read next one */
     return 1;
   }
 }
-
 
 /*
 ** Accept current char if it is in 'set' (of size 2)
@@ -459,7 +504,6 @@ static int test2(RN *rn, const char *set) {
     return 0;
 }
 
-
 /*
 ** Read a sequence of (hex)digits
 */
@@ -469,7 +513,6 @@ static int readdigits(RN *rn, int hex) {
     count++;
   return count;
 }
-
 
 /*
 ** Read a number: first reads a valid prefix of a numeral into a buffer.
@@ -489,7 +532,7 @@ static int read_number(lua_State *L, FILE *f) {
   do {
     rn.c = l_getc(rn.f);
   } while (isspace(rn.c)); /* skip spaces */
-  test2(&rn, "-+");        /* optional sign */
+  test2(&rn, "-+"); /* optional sign */
   if (test2(&rn, "00")) {
     if (test2(&rn, "xX"))
       hex = 1; /* numeral is hexadecimal */
@@ -514,14 +557,12 @@ static int read_number(lua_State *L, FILE *f) {
   }
 }
 
-
 static int test_eof(lua_State *L, FILE *f) {
   int c = getc(f);
   ungetc(c, f); /* no-op when c == EOF */
   lua_pushliteral(L, "");
   return (c != EOF);
 }
-
 
 static int read_line(lua_State *L, FILE *f, int chop) {
   luaL_Buffer b;
@@ -543,8 +584,72 @@ static int read_line(lua_State *L, FILE *f, int chop) {
   return (c == '\n' || lua_rawlen(L, -1) > 0);
 }
 
+/* Continuation for async read_all - called when thread pool task completes */
+static int read_all_cont(lua_State *L, int status, lua_KContext ctx) {
+  (void)status;
+  AsyncReadTask *task = (AsyncReadTask *)ctx;
+
+  if (task->base.error) {
+    /* Error occurred in worker thread */
+    char *err = task->base.error;
+    if (task->buffer)
+      free(task->buffer);
+    free(task);
+    lua_pushnil(L);
+    lua_pushstring(L, err);
+    free(err);
+    return 2;
+  }
+
+  /* Push the result buffer to Lua stack */
+  if (task->buffer && task->size > 0) {
+    lua_pushlstring(L, task->buffer, task->size);
+    free(task->buffer);
+  } else {
+    lua_pushliteral(L, "");
+    if (task->buffer)
+      free(task->buffer);
+  }
+
+  /* Clear the task reference and free task */
+  set_yield_task(L, NULL);
+  free(task);
+
+  return 1;
+}
 
 static void read_all(lua_State *L, FILE *f) {
+  /* Check if we're in a detached coroutine for async operation */
+  if (is_detached(L)) {
+    ThreadPool *pool = get_threadpool(L);
+    if (pool) {
+      /* Create async task */
+      AsyncReadTask *task = (AsyncReadTask *)malloc(sizeof(AsyncReadTask));
+      if (task) {
+        memset(task, 0, sizeof(AsyncReadTask));
+        task->base.work = async_read_all_work;
+        task->f = f;
+        task->read_type = 0; /* read all */
+
+        /* Submit to thread pool */
+        threadpool_submit(pool, (ThreadPoolTask *)task);
+
+        /* Set up yield for thread pool completion */
+        set_yield_reason(L, YIELD_THREADPOOL);
+        set_yield_task(L, (ThreadPoolTask *)task);
+
+        /* Yield with continuation - when resumed, read_all_cont will be called
+         */
+        lua_yieldk(L, 0, (lua_KContext)task, read_all_cont);
+        /* Note: lua_yieldk does not return here in normal operation */
+
+        /* If we get here, yieldk failed - fall through to sync path */
+        free(task);
+      }
+    }
+  }
+
+  /* Synchronous fallback */
   size_t nr;
   luaL_Buffer b;
   luaL_buffinit(L, &b);
@@ -556,8 +661,63 @@ static void read_all(lua_State *L, FILE *f) {
   luaL_pushresult(&b); /* close buffer */
 }
 
+/* Continuation for async read_chars - called when thread pool task completes */
+static int read_chars_cont(lua_State *L, int status, lua_KContext ctx) {
+  (void)status;
+  AsyncReadTask *task = (AsyncReadTask *)ctx;
+
+  if (task->base.error) {
+    char *err = task->base.error;
+    if (task->buffer)
+      free(task->buffer);
+    free(task);
+    lua_pushnil(L);
+    lua_pushstring(L, err);
+    free(err);
+    return 0; /* Indicate failure */
+  }
+
+  /* Push the result buffer to Lua stack */
+  int success = (task->size > 0);
+  if (task->buffer && task->size > 0) {
+    lua_pushlstring(L, task->buffer, task->size);
+    free(task->buffer);
+  } else {
+    lua_pushliteral(L, "");
+    if (task->buffer)
+      free(task->buffer);
+  }
+
+  set_yield_task(L, NULL);
+  free(task);
+
+  return success;
+}
 
 static int read_chars(lua_State *L, FILE *f, size_t n) {
+  /* Check if we're in a detached coroutine for async operation */
+  if (is_detached(L)) {
+    ThreadPool *pool = get_threadpool(L);
+    if (pool) {
+      AsyncReadTask *task = (AsyncReadTask *)malloc(sizeof(AsyncReadTask));
+      if (task) {
+        memset(task, 0, sizeof(AsyncReadTask));
+        task->base.work = async_read_bytes_work;
+        task->f = f;
+        task->request_size = n;
+        task->read_type = 2; /* read bytes */
+
+        threadpool_submit(pool, (ThreadPoolTask *)task);
+
+        set_yield_reason(L, YIELD_THREADPOOL);
+        set_yield_task(L, (ThreadPoolTask *)task);
+
+        return (int)lua_yieldk(L, 0, (lua_KContext)task, read_chars_cont);
+      }
+    }
+  }
+
+  /* Synchronous fallback */
   size_t nr; /* number of chars actually read */
   char *p;
   luaL_Buffer b;
@@ -569,7 +729,6 @@ static int read_chars(lua_State *L, FILE *f, size_t n) {
   return (nr > 0);     /* true iff read something */
 }
 
-
 static int g_read(lua_State *L, FILE *f, int first) {
   int nargs = lua_gettop(L) - 1;
   int n, success;
@@ -578,8 +737,7 @@ static int g_read(lua_State *L, FILE *f, int first) {
   if (nargs == 0) { /* no arguments? */
     success = read_line(L, f, 1);
     n = first + 1; /* to return 1 result */
-  }
-  else {
+  } else {
     /* ensure stack space for all results and for auxlib's buffer */
     luaL_checkstack(L, nargs + LUA_MINSTACK, "too many arguments");
     success = 1;
@@ -587,22 +745,26 @@ static int g_read(lua_State *L, FILE *f, int first) {
       if (lua_type(L, n) == LUA_TNUMBER) {
         size_t l = (size_t)luaL_checkinteger(L, n);
         success = (l == 0) ? test_eof(L, f) : read_chars(L, f, l);
-      }
-      else {
+      } else {
         const char *p = luaL_checkstring(L, n);
         if (*p == '*')
           p++; /* skip optional '*' (for compatibility) */
         switch (*p) {
-          case 'n': /* number */ success = read_number(L, f); break;
-          case 'l': /* line */ success = read_line(L, f, 1); break;
-          case 'L': /* line with end-of-line */
-            success = read_line(L, f, 0);
-            break;
-          case 'a':         /* file */
-            read_all(L, f); /* read entire file */
-            success = 1;    /* always success */
-            break;
-          default: return luaL_argerror(L, n, "invalid format");
+        case 'n': /* number */
+          success = read_number(L, f);
+          break;
+        case 'l': /* line */
+          success = read_line(L, f, 1);
+          break;
+        case 'L': /* line with end-of-line */
+          success = read_line(L, f, 0);
+          break;
+        case 'a':         /* file */
+          read_all(L, f); /* read entire file */
+          success = 1;    /* always success */
+          break;
+        default:
+          return luaL_argerror(L, n, "invalid format");
         }
       }
     }
@@ -616,16 +778,11 @@ static int g_read(lua_State *L, FILE *f, int first) {
   return n - first;
 }
 
-
 static int io_read(lua_State *L) {
   return g_read(L, getiofile(L, IO_INPUT), 1);
 }
 
-
-static int f_read(lua_State *L) {
-  return g_read(L, tofile(L), 2);
-}
-
+static int f_read(lua_State *L) { return g_read(L, tofile(L), 2); }
 
 /*
 ** Iteration function for 'lines'.
@@ -660,11 +817,62 @@ static int io_readline(lua_State *L) {
 
 /* }====================================================== */
 
+/* Continuation for async g_write - called when thread pool task completes */
+static int g_write_cont(lua_State *L, int status, lua_KContext ctx) {
+  (void)status;
+  AsyncWriteTask *task = (AsyncWriteTask *)ctx;
+
+  int ferr = task->ferr;
+  size_t written = task->written;
+  size_t expected = task->len;
+
+  set_yield_task(L, NULL);
+  free(task);
+
+  if (ferr || written < expected) {
+    /* Write error */
+    return luaL_fileresult(L, 0, NULL);
+  }
+
+  /* Success - return file handle (already on stack) */
+  return 1;
+}
 
 static int g_write(lua_State *L, FILE *f, int arg) {
   int nargs = lua_gettop(L) - arg;
   size_t totalbytes = 0; /* total number of bytes written */
   errno = 0;
+
+  /* For async: only handle single-argument case in detached coroutines */
+  if (nargs == 1 && is_detached(L)) {
+    ThreadPool *pool = get_threadpool(L);
+    if (pool) {
+      size_t len;
+      const char *s = luaL_checklstring(L, arg, &len);
+
+      /* Create async task */
+      AsyncWriteTask *task = (AsyncWriteTask *)malloc(sizeof(AsyncWriteTask));
+      if (task) {
+        memset(task, 0, sizeof(AsyncWriteTask));
+        task->base.work = async_write_work;
+        task->f = f;
+        task->data = s; /* Note: string is anchored on Lua stack */
+        task->len = len;
+
+        /* Submit to thread pool */
+        threadpool_submit(pool, (ThreadPoolTask *)task);
+
+        /* Set up yield for thread pool completion */
+        set_yield_reason(L, YIELD_THREADPOOL);
+        set_yield_task(L, (ThreadPoolTask *)task);
+
+        /* Yield with continuation */
+        return (int)lua_yieldk(L, 0, (lua_KContext)task, g_write_cont);
+      }
+    }
+  }
+
+  /* Synchronous fallback (multiple args or not detached) */
   for (; nargs--; arg++) { /* for each argument */
     char buff[LUA_N2SBUFFSZ];
     const char *s;
@@ -673,8 +881,7 @@ static int g_write(lua_State *L, FILE *f, int arg) {
     if (len > 0) { /* did conversion work (value was a number)? */
       s = buff;
       len--;
-    }
-    else /* must be a string */
+    } else /* must be a string */
       s = luaL_checklstring(L, arg, &len);
     numbytes = fwrite(s, sizeof(char), len, f);
     totalbytes += numbytes;
@@ -687,18 +894,15 @@ static int g_write(lua_State *L, FILE *f, int arg) {
   return 1; /* no errors; file handle already on stack top */
 }
 
-
 static int io_write(lua_State *L) {
   return g_write(L, getiofile(L, IO_OUTPUT), 1);
 }
-
 
 static int f_write(lua_State *L) {
   FILE *f = tofile(L);
   lua_pushvalue(L, 1); /* push file at the stack top (to be returned) */
   return g_write(L, f, 2);
 }
-
 
 static int f_seek(lua_State *L) {
   static const int mode[] = {SEEK_SET, SEEK_CUR, SEEK_END};
@@ -719,7 +923,6 @@ static int f_seek(lua_State *L) {
   }
 }
 
-
 static int f_setvbuf(lua_State *L) {
   static const int mode[] = {_IONBF, _IOFBF, _IOLBF};
   static const char *const modenames[] = {"no", "full", "line", NULL};
@@ -732,22 +935,16 @@ static int f_setvbuf(lua_State *L) {
   return luaL_fileresult(L, res == 0, NULL);
 }
 
-
 static int aux_flush(lua_State *L, FILE *f) {
   errno = 0;
   return luaL_fileresult(L, fflush(f) == 0, NULL);
 }
 
-
-static int f_flush(lua_State *L) {
-  return aux_flush(L, tofile(L));
-}
-
+static int f_flush(lua_State *L) { return aux_flush(L, tofile(L)); }
 
 static int io_flush(lua_State *L) {
   return aux_flush(L, getiofile(L, IO_OUTPUT));
 }
-
 
 /*
 ** functions for 'io' library
@@ -758,7 +955,6 @@ static const luaL_Reg iolib[] = {
     {"popen", io_popen}, {"read", io_read},   {"tmpfile", io_tmpfile},
     {"type", io_type},   {"write", io_write}, {NULL, NULL}};
 
-
 /*
 ** methods for file handles
 */
@@ -766,7 +962,6 @@ static const luaL_Reg meth[] = {{"read", f_read},       {"write", f_write},
                                 {"lines", f_lines},     {"flush", f_flush},
                                 {"seek", f_seek},       {"close", f_close},
                                 {"setvbuf", f_setvbuf}, {NULL, NULL}};
-
 
 /*
 ** metamethods for file handles
@@ -777,7 +972,6 @@ static const luaL_Reg metameth[] = {{"__index", NULL}, /* placeholder */
                                     {"__tostring", f_tostring},
                                     {NULL, NULL}};
 
-
 static void createmeta(lua_State *L) {
   luaL_newmetatable(L, LUA_FILEHANDLE); /* metatable for file handles */
   luaL_setfuncs(L, metameth, 0);        /* add metamethods to new metatable */
@@ -786,7 +980,6 @@ static void createmeta(lua_State *L) {
   lua_setfield(L, -2, "__index");       /* metatable.__index = method table */
   lua_pop(L, 1);                        /* pop metatable */
 }
-
 
 /*
 ** function to (not) close the standard files stdin, stdout, and stderr
@@ -799,7 +992,6 @@ static int io_noclose(lua_State *L) {
   return 2;
 }
 
-
 static void createstdfile(lua_State *L, FILE *f, const char *k,
                           const char *fname) {
   LStream *p = newprefile(L);
@@ -811,7 +1003,6 @@ static void createstdfile(lua_State *L, FILE *f, const char *k,
   }
   lua_setfield(L, -2, fname); /* add file to module */
 }
-
 
 LUAMOD_API int luaopen_io(lua_State *L) {
   luaL_newlib(L, iolib); /* new module */

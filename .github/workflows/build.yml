@@ -132,11 +132,12 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install openssl:x64-windows c-ares:x64-windows
+          .\vcpkg\vcpkg install openssl:x64-windows c-ares:x64-windows pkgconf:x64-windows
 
       - name: Build
         env:
           PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg/installed/x64-windows/lib/pkgconfig
+          PKG_CONFIG: ${{ github.workspace }}/vcpkg/installed/x64-windows/tools/pkgconf/pkgconf.exe
         run: |
           cd lus
           meson setup build --buildtype=release

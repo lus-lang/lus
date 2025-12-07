@@ -62,6 +62,11 @@ function framework:it(desc, fn)
     end
 end
 
+function framework:skip(desc, fn)
+    -- Don't run the test, just mark it as skipped
+    print("    - " .. desc .. " (skipped)")
+end
+
 function framework:expect(value)
     return {
         to_be = function(expected)

@@ -13,8 +13,8 @@
 
 #include "lua.h"
 
-#include "lauxlib.h"
 #include "events/lev.h"
+#include "lauxlib.h"
 #include "llimits.h"
 #include "lualib.h"
 
@@ -209,12 +209,14 @@ static int luaB_close(lua_State *L) {
 
 /*
 ** coroutine.detach(co)
-** Mark a coroutine for event-driven execution.
-** When resumed, I/O operations will yield and use the event loop.
+** Start a coroutine for event-driven execution.
+** Runs immediately until async I/O or completion, then returns.
+** Returns: status_e enum value, followed by results if applicable.
 */
 static int luaB_detach(lua_State *L) {
   lua_State *co = getco(L);
   int status = auxstatus(L, co);
+  int nres;
 
   if (status == COS_DEAD) {
     return luaL_error(L, "cannot detach a dead coroutine");
@@ -224,8 +226,49 @@ static int luaB_detach(lua_State *L) {
   }
 
   mark_detached(co);
-  lua_pushboolean(L, 1);
-  return 1;
+
+  /* Start the coroutine immediately */
+  int lua_status = lua_resume(co, L, 0, &nres);
+
+  if (lua_status == LUA_YIELD) {
+    int reason = get_yield_reason(co);
+    if (reason == YIELD_IO || reason == YIELD_SLEEP) {
+      /* Async I/O - add to pending list and return status_e.pending */
+      int fd = get_yield_fd(co);
+      int events = get_yield_events(co);
+      lua_Number deadline = get_yield_deadline(co);
+      scheduler_add_pending(L, co, fd, events, deadline);
+
+      /* Get status_e.pending enum value */
+      lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
+      lua_getfield(L, -1, "pending");
+      lua_remove(L, -2); /* Remove the enum table */
+      return 1;
+    } else {
+      /* Normal yield - return status_e.yielded + values */
+      lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
+      lua_getfield(L, -1, "yielded");
+      lua_remove(L, -2);
+      lua_xmove(co, L, nres);
+      return 1 + nres;
+    }
+  } else if (lua_status == LUA_OK) {
+    /* Completed synchronously - return status_e.completed + results */
+    unmark_detached(co);
+    lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
+    lua_getfield(L, -1, "completed");
+    lua_remove(L, -2);
+    lua_xmove(co, L, nres);
+    return 1 + nres;
+  } else {
+    /* Error - return status_e.error + error message */
+    unmark_detached(co);
+    lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
+    lua_getfield(L, -1, "error");
+    lua_remove(L, -2);
+    lua_xmove(co, L, 1); /* Move error message */
+    return 2;
+  }
 }
 
 /*
@@ -251,6 +294,37 @@ static int luaB_sleep(lua_State *L) {
   return lua_yield(L, 0);
 }
 
+/*
+** coroutine.poll([timeout])
+** Process pending I/O and resume ready coroutines.
+** timeout: optional, seconds to wait. nil = non-blocking, -1 = block
+*indefinitely
+** Throws any errors from detached coroutines.
+*/
+static int luaB_poll(lua_State *L) {
+  int timeout_ms = 0;
+
+  if (!lua_isnoneornil(L, 1)) {
+    lua_Number timeout = luaL_checknumber(L, 1);
+    if (timeout < 0) {
+      timeout_ms = -1; /* Block indefinitely */
+    } else {
+      timeout_ms = (int)(timeout * 1000);
+    }
+  }
+
+  return scheduler_poll(L, timeout_ms);
+}
+
+/*
+** coroutine.pending()
+** Returns the number of coroutines waiting on I/O.
+*/
+static int luaB_pending(lua_State *L) {
+  lua_pushinteger(L, scheduler_pending_count(L));
+  return 1;
+}
+
 static const luaL_Reg co_funcs[] = {{"create", luaB_cocreate},
                                     {"resume", luaB_coresume},
                                     {"running", luaB_corunning},
@@ -261,9 +335,30 @@ static const luaL_Reg co_funcs[] = {{"create", luaB_cocreate},
                                     {"close", luaB_close},
                                     {"detach", luaB_detach},
                                     {"sleep", luaB_sleep},
+                                    {"poll", luaB_poll},
+                                    {"pending", luaB_pending},
                                     {NULL, NULL}};
 
 LUAMOD_API int luaopen_coroutine(lua_State *L) {
   luaL_newlib(L, co_funcs);
+
+  /* Create status_e enum: pending, completed, yielded, error */
+  lua_pushstring(L, "pending");
+  lua_pushinteger(L, 1);
+  lua_pushstring(L, "completed");
+  lua_pushinteger(L, 2);
+  lua_pushstring(L, "yielded");
+  lua_pushinteger(L, 3);
+  lua_pushstring(L, "error");
+  lua_pushinteger(L, 4);
+  lua_pushenum(L, 4);
+
+  /* Store in registry for detach() to access */
+  lua_pushvalue(L, -1);
+  lua_setfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
+
+  /* Also add to coroutine table */
+  lua_setfield(L, -2, "status_e");
+
   return 1;
 }

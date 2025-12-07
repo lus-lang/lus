@@ -15,9 +15,10 @@
 #define EVLOOP_ERROR 4
 
 /* Yield reasons for detached coroutines */
-#define YIELD_NORMAL 0 /* Regular yield (return to caller) */
-#define YIELD_IO 1     /* Waiting for I/O */
-#define YIELD_SLEEP 2  /* Sleeping for duration */
+#define YIELD_NORMAL 0     /* Regular yield (return to caller) */
+#define YIELD_IO 1         /* Waiting for I/O */
+#define YIELD_SLEEP 2      /* Sleeping for duration */
+#define YIELD_THREADPOOL 3 /* Waiting for thread pool task */
 
 /* Event result (normalized across all backends) */
 typedef struct {
@@ -42,6 +43,15 @@ typedef struct {
 /* Get the platform-specific backend operations */
 LUAI_FUNC const BackendOps *eventloop_get_backend(void);
 
+/* Pending coroutine - waiting on I/O or timer */
+typedef struct PendingCoroutine {
+  lua_State *co;       /* The coroutine */
+  int fd;              /* File descriptor (-1 for timers) */
+  int events;          /* Events to wait for */
+  lua_Number deadline; /* When to wake up (0 = no timeout) */
+  struct PendingCoroutine *next;
+} PendingCoroutine;
+
 /* Scheduler state (stored in lua_State extra space or registry) */
 typedef struct Scheduler Scheduler;
 
@@ -49,6 +59,12 @@ typedef struct Scheduler Scheduler;
 LUAI_FUNC Scheduler *scheduler_get(lua_State *L);
 LUAI_FUNC void scheduler_init(lua_State *L);
 LUAI_FUNC void scheduler_cleanup(lua_State *L);
+
+/* Pending coroutine management */
+LUAI_FUNC void scheduler_add_pending(lua_State *L, lua_State *co, int fd,
+                                     int events, lua_Number deadline);
+LUAI_FUNC int scheduler_poll(lua_State *L, int timeout_ms);
+LUAI_FUNC int scheduler_pending_count(lua_State *L);
 
 /* Detached coroutine management */
 LUAI_FUNC int is_detached(lua_State *co);
@@ -70,5 +86,12 @@ LUAI_FUNC int detached_resume(lua_State *L, lua_State *co, int nargs);
 
 /* Timer utilities */
 LUAI_FUNC lua_Number eventloop_now(void); /* Current time in seconds */
+
+/* Thread pool integration */
+struct ThreadPoolTask; /* Forward declaration */
+struct ThreadPool;     /* Forward declaration */
+LUAI_FUNC void set_yield_task(lua_State *co, struct ThreadPoolTask *task);
+LUAI_FUNC struct ThreadPoolTask *get_yield_task(lua_State *co);
+LUAI_FUNC struct ThreadPool *scheduler_get_threadpool(lua_State *L);
 
 #endif
