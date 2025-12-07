@@ -40,6 +40,10 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:symbolize=1
         run: meson test -C lus/build -v --print-errorlogs --suite h1 --suite h2 --suite h3-ci --suite h4
 
+      - name: Print test log on failure
+        if: failure()
+        run: cat lus/build/meson-logs/testlog.txt
+
   linux-glibc:
     name: Linux (glibc)
     needs: sanitize
@@ -62,6 +66,10 @@ jobs:
 
       - name: Test
         run: meson test -C lus/build --suite h1 --suite h2 --suite h3-ci --suite h4
+
+      - name: Print test log on failure
+        if: failure()
+        run: cat lus/build/meson-logs/testlog.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -92,6 +100,10 @@ jobs:
       - name: Test
         # Skip H3 (Container in Container)
         run: meson test -C lus/build --suite h1 --suite h2 --suite h4
+
+      - name: Print test log on failure
+        if: failure()
+        run: cat lus/build/meson-logs/testlog.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -126,6 +138,10 @@ jobs:
         # Run all harnesses including H3 (CI mode)
         run: meson test -C lus/build --suite h1 --suite h2 --suite h3-ci --suite h4
 
+      - name: Print test log on failure
+        if: failure()
+        run: Get-Content lus/build/meson-logs/testlog.txt
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -153,6 +169,10 @@ jobs:
       - name: Test
         # Skip H3 on macOS (no default container runtime guaranteed)
         run: meson test -C lus/build --suite h1 --suite h2 --suite h4
+
+      - name: Print test log on failure
+        if: failure()
+        run: cat lus/build/meson-logs/testlog.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
