@@ -13,11 +13,14 @@
 
 #if defined(LUS_PLATFORM_WINDOWS)
 
+/* clang-format off */
+/* DO NOT REORDER PLEASE */
+#include <winsock2.h>
+#include <windows.h>
 #include <mswsock.h>
+/* clang-format on */
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
-#include <winsock2.h>
 
 #include "lev.h"
 

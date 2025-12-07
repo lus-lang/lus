@@ -30,6 +30,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 typedef SOCKET socket_t;
+typedef SSIZE_T ssize_t; /* POSIX type not defined on MSVC */
 #define SOCKET_INVALID INVALID_SOCKET
 #define SOCKET_ERROR_VAL SOCKET_ERROR
 #define SOCKET_ERRNO WSAGetLastError()
