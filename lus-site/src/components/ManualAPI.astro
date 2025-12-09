@@ -3,19 +3,13 @@
 ---
 
 <!-- Environment Functions -->
-<h2 id="pledge">pledge (name [, value])</h2>
+<h2 id="pledge">pledge (name...)</h2>
 <p>
   Grants or checks a permission. Returns <code>true</code> if the permission was
   granted, <code>false</code> if it was denied or the state is sealed.
 </p>
 <p>
-  The <code>name</code> argument specifies the permission, optionally with a sub-permission
-  (e.g., <code>"fs"</code>, <code>"fs:read"</code>). The optional <code
-    >value</code
-  >
-  can restrict access to a specific path or URL pattern (e.g., <code
-    >"fs:read=/tmp/*"</code
-  >).
+  The <code>name</code> arguments specify the permissions to grant or check.
 </p>
 <p>
   Special permissions: <code>"all"</code> grants all permissions (CLI only),
