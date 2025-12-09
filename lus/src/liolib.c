@@ -22,6 +22,7 @@
 #include "events/lev_threadpool.h"
 #include "lauxlib.h"
 #include "llimits.h"
+#include "lpledge.h"
 #include "lualib.h"
 
 /*
@@ -418,6 +419,12 @@ static int io_pclose(lua_State *L) {
 static int io_popen(lua_State *L) {
   const char *filename = luaL_checkstring(L, 1);
   const char *mode = luaL_optstring(L, 2, "r");
+
+  /* Check exec permission */
+  if (!lus_haspledge(L, "exec", NULL)) {
+    return luaL_error(L, "permission \"exec\" denied for popen");
+  }
+
   LStream *p = newprefile(L);
   luaL_argcheck(L, l_checkmodep(mode), 2, "invalid mode");
   errno = 0;

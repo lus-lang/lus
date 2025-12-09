@@ -9,7 +9,6 @@
 
 #include "lprefix.h"
 
-
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,11 +17,11 @@
 #include "lua.h"
 
 #include "lauxlib.h"
-#include "lualib.h"
 #include "llimits.h"
 #include "lobject.h"
+#include "lpledge.h"
 #include "lstate.h"
-
+#include "lualib.h"
 
 static int luaB_print(lua_State *L) {
   int n = lua_gettop(L); /* number of arguments */
@@ -38,7 +37,6 @@ static int luaB_print(lua_State *L) {
   lua_writeline();
   return 0;
 }
-
 
 /*
 ** Creates a warning with all given arguments.
@@ -56,7 +54,6 @@ static int luaB_warn(lua_State *L) {
   lua_warning(L, lua_tostring(L, n), 0); /* close warning */
   return 0;
 }
-
 
 #define SPACECHARS " \f\n\r\t\v"
 
@@ -86,21 +83,18 @@ static const char *b_str2int(const char *s, unsigned base, lua_Integer *pn) {
   return s;
 }
 
-
 static int luaB_tonumber(lua_State *L) {
   if (lua_isnoneornil(L, 2)) {           /* standard conversion? */
     if (lua_type(L, 1) == LUA_TNUMBER) { /* already a number? */
       lua_settop(L, 1);                  /* yes; return it */
       return 1;
-    }
-    else if (lua_type(L, 1) == LUA_TENUM) { /* enum value? */
+    } else if (lua_type(L, 1) == LUA_TENUM) { /* enum value? */
       /* Get the enum's index (1-based) */
       const TValue *o = s2v(L->ci->func.p + 1); /* first argument */
       Enum *e = enumvalue(o);
       lua_pushinteger(L, e->idx);
       return 1;
-    }
-    else {
+    } else {
       size_t l;
       const char *s = lua_tolstring(L, 1, &l);
       if (s != NULL && lua_stringtonumber(L, s) == l + 1)
@@ -108,8 +102,7 @@ static int luaB_tonumber(lua_State *L) {
       /* else not a number */
       luaL_checkany(L, 1); /* (but there must be some parameter) */
     }
-  }
-  else {
+  } else {
     size_t l;
     const char *s;
     lua_Integer n = 0; /* to avoid warnings */
@@ -126,7 +119,6 @@ static int luaB_tonumber(lua_State *L) {
   return 1;
 }
 
-
 static int luaB_error(lua_State *L) {
   int level = (int)luaL_optinteger(L, 2, 1);
   lua_settop(L, 1);
@@ -138,7 +130,6 @@ static int luaB_error(lua_State *L) {
   return lua_error(L);
 }
 
-
 static int luaB_getmetatable(lua_State *L) {
   luaL_checkany(L, 1);
   if (!lua_getmetatable(L, 1)) {
@@ -148,7 +139,6 @@ static int luaB_getmetatable(lua_State *L) {
   luaL_getmetafield(L, 1, "__metatable");
   return 1; /* returns either __metatable field (if present) or metatable */
 }
-
 
 static int luaB_setmetatable(lua_State *L) {
   int t = lua_type(L, 2);
@@ -161,14 +151,12 @@ static int luaB_setmetatable(lua_State *L) {
   return 1;
 }
 
-
 static int luaB_rawequal(lua_State *L) {
   luaL_checkany(L, 1);
   luaL_checkany(L, 2);
   lua_pushboolean(L, lua_rawequal(L, 1, 2));
   return 1;
 }
-
 
 static int luaB_rawlen(lua_State *L) {
   int t = lua_type(L, 1);
@@ -177,7 +165,6 @@ static int luaB_rawlen(lua_State *L) {
   lua_pushinteger(L, l_castU2S(lua_rawlen(L, 1)));
   return 1;
 }
-
 
 static int luaB_rawget(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
@@ -196,7 +183,6 @@ static int luaB_rawset(lua_State *L) {
   return 1;
 }
 
-
 static int pushmode(lua_State *L, int oldmode) {
   if (oldmode == -1)
     luaL_pushfail(L); /* invalid call to 'lua_gc' */
@@ -205,14 +191,13 @@ static int pushmode(lua_State *L, int oldmode) {
   return 1;
 }
 
-
 /*
 ** check whether call to 'lua_gc' was valid (not inside a finalizer)
 */
-#define checkvalres(res) \
-  {                      \
-    if (res == -1)       \
-      break;             \
+#define checkvalres(res)                                                       \
+  {                                                                            \
+    if (res == -1)                                                             \
+      break;                                                                   \
   }
 
 static int luaB_collectgarbage(lua_State *L) {
@@ -224,55 +209,54 @@ static int luaB_collectgarbage(lua_State *L) {
                                  LUA_GCGEN,   LUA_GCINC,     LUA_GCPARAM};
   int o = optsnum[luaL_checkoption(L, 1, "collect", opts)];
   switch (o) {
-    case LUA_GCCOUNT: {
-      int k = lua_gc(L, o);
-      int b = lua_gc(L, LUA_GCCOUNTB);
-      checkvalres(k);
-      lua_pushnumber(L, (lua_Number)k + ((lua_Number)b / 1024));
-      return 1;
-    }
-    case LUA_GCSTEP: {
-      lua_Integer n = luaL_optinteger(L, 2, 0);
-      int res = lua_gc(L, o, cast_sizet(n));
-      checkvalres(res);
-      lua_pushboolean(L, res);
-      return 1;
-    }
-    case LUA_GCISRUNNING: {
-      int res = lua_gc(L, o);
-      checkvalres(res);
-      lua_pushboolean(L, res);
-      return 1;
-    }
-    case LUA_GCGEN: {
-      return pushmode(L, lua_gc(L, o));
-    }
-    case LUA_GCINC: {
-      return pushmode(L, lua_gc(L, o));
-    }
-    case LUA_GCPARAM: {
-      static const char *const params[] = {
-          "minormul", "majorminor", "minormajor", "pause",
-          "stepmul",  "stepsize",   NULL};
-      static const char pnum[] = {LUA_GCPMINORMUL,   LUA_GCPMAJORMINOR,
-                                  LUA_GCPMINORMAJOR, LUA_GCPPAUSE,
-                                  LUA_GCPSTEPMUL,    LUA_GCPSTEPSIZE};
-      int p = pnum[luaL_checkoption(L, 2, NULL, params)];
-      lua_Integer value = luaL_optinteger(L, 3, -1);
-      lua_pushinteger(L, lua_gc(L, o, p, (int)value));
-      return 1;
-    }
-    default: {
-      int res = lua_gc(L, o);
-      checkvalres(res);
-      lua_pushinteger(L, res);
-      return 1;
-    }
+  case LUA_GCCOUNT: {
+    int k = lua_gc(L, o);
+    int b = lua_gc(L, LUA_GCCOUNTB);
+    checkvalres(k);
+    lua_pushnumber(L, (lua_Number)k + ((lua_Number)b / 1024));
+    return 1;
+  }
+  case LUA_GCSTEP: {
+    lua_Integer n = luaL_optinteger(L, 2, 0);
+    int res = lua_gc(L, o, cast_sizet(n));
+    checkvalres(res);
+    lua_pushboolean(L, res);
+    return 1;
+  }
+  case LUA_GCISRUNNING: {
+    int res = lua_gc(L, o);
+    checkvalres(res);
+    lua_pushboolean(L, res);
+    return 1;
+  }
+  case LUA_GCGEN: {
+    return pushmode(L, lua_gc(L, o));
+  }
+  case LUA_GCINC: {
+    return pushmode(L, lua_gc(L, o));
+  }
+  case LUA_GCPARAM: {
+    static const char *const params[] = {"minormul", "majorminor", "minormajor",
+                                         "pause",    "stepmul",    "stepsize",
+                                         NULL};
+    static const char pnum[] = {LUA_GCPMINORMUL,   LUA_GCPMAJORMINOR,
+                                LUA_GCPMINORMAJOR, LUA_GCPPAUSE,
+                                LUA_GCPSTEPMUL,    LUA_GCPSTEPSIZE};
+    int p = pnum[luaL_checkoption(L, 2, NULL, params)];
+    lua_Integer value = luaL_optinteger(L, 3, -1);
+    lua_pushinteger(L, lua_gc(L, o, p, (int)value));
+    return 1;
+  }
+  default: {
+    int res = lua_gc(L, o);
+    checkvalres(res);
+    lua_pushinteger(L, res);
+    return 1;
+  }
   }
   luaL_pushfail(L); /* invalid call (inside a finalizer) */
   return 1;
 }
-
 
 static int luaB_type(lua_State *L) {
   int t = lua_type(L, 1);
@@ -280,7 +264,6 @@ static int luaB_type(lua_State *L) {
   lua_pushstring(L, lua_typename(L, t));
   return 1;
 }
-
 
 static int luaB_next(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
@@ -292,7 +275,6 @@ static int luaB_next(lua_State *L) {
     return 1;
   }
 }
-
 
 static int pairscont(lua_State *L, int status, lua_KContext k) {
   (void)L;
@@ -308,14 +290,12 @@ static int luaB_pairs(lua_State *L) {
     lua_pushvalue(L, 1);             /* state */
     lua_pushnil(L);                  /* initial value */
     lua_pushnil(L);                  /* to-be-closed object */
-  }
-  else {
+  } else {
     lua_pushvalue(L, 1);              /* argument 'self' to metamethod */
     lua_callk(L, 1, 4, 0, pairscont); /* get 4 values from metamethod */
   }
   return 4;
 }
-
 
 /*
 ** Traversal function for 'ipairs'
@@ -326,7 +306,6 @@ static int ipairsaux(lua_State *L) {
   lua_pushinteger(L, i);
   return (lua_geti(L, 1, i) == LUA_TNIL) ? 1 : 2;
 }
-
 
 /*
 ** 'ipairs' function. Returns 'ipairsaux', given "table", 0.
@@ -340,7 +319,6 @@ static int luaB_ipairs(lua_State *L) {
   return 3;
 }
 
-
 static int load_aux(lua_State *L, int status, int envidx) {
   if (l_likely(status == LUA_OK)) {
     if (envidx != 0) {               /* 'env' parameter? */
@@ -349,14 +327,12 @@ static int load_aux(lua_State *L, int status, int envidx) {
         lua_pop(L, 1); /* remove 'env' if not used by previous call */
     }
     return 1;
-  }
-  else { /* error (message is on top of the stack) */
+  } else { /* error (message is on top of the stack) */
     luaL_pushfail(L);
     lua_insert(L, -2); /* put before error message */
     return 2;          /* return fail plus error message */
   }
 }
-
 
 static const char *getMode(lua_State *L, int idx) {
   const char *mode = luaL_optstring(L, idx, "bt");
@@ -365,15 +341,24 @@ static const char *getMode(lua_State *L, int idx) {
   return mode;
 }
 
-
 static int luaB_loadfile(lua_State *L) {
   const char *fname = luaL_optstring(L, 1, NULL);
   const char *mode = getMode(L, 2);
   int env = (!lua_isnone(L, 3) ? 3 : 0); /* 'env' index or 0 if no 'env' */
+
+  /* Check fs:read permission if loading from file */
+  if (fname != NULL) {
+    lus_checkfsperm(L, "fs:read", fname);
+  }
+
+  /* Check load permission for dynamic code loading */
+  if (!lus_haspledge(L, "load", NULL)) {
+    return luaL_error(L, "permission \"load\" denied");
+  }
+
   int status = luaL_loadfilex(L, fname, mode);
   return load_aux(L, status, env);
 }
-
 
 /*
 ** {======================================================
@@ -381,14 +366,12 @@ static int luaB_loadfile(lua_State *L) {
 ** =======================================================
 */
 
-
 /*
 ** reserved slot, above all arguments, to hold a copy of the returned
 ** string to avoid it being collected while parsed. 'load' has four
 ** optional arguments (chunk, source name, mode, and environment).
 */
 #define RESERVEDSLOT 5
-
 
 /*
 ** Reader for generic 'load' function: 'lua_load' uses the
@@ -405,13 +388,11 @@ static const char *generic_reader(lua_State *L, void *ud, size_t *size) {
     lua_pop(L, 1); /* pop result */
     *size = 0;
     return NULL;
-  }
-  else if (l_unlikely(!lua_isstring(L, -1)))
+  } else if (l_unlikely(!lua_isstring(L, -1)))
     luaL_error(L, "reader function must return a string");
   lua_replace(L, RESERVEDSLOT); /* save string in reserved slot */
   return lua_tolstring(L, RESERVEDSLOT, size);
 }
-
 
 static int luaB_load(lua_State *L) {
   int status;
@@ -419,11 +400,16 @@ static int luaB_load(lua_State *L) {
   const char *s = lua_tolstring(L, 1, &l);
   const char *mode = getMode(L, 3);
   int env = (!lua_isnone(L, 4) ? 4 : 0); /* 'env' index or 0 if no 'env' */
-  if (s != NULL) {                       /* loading a string? */
+
+  /* Check load permission for dynamic code loading */
+  if (!lus_haspledge(L, "load", NULL)) {
+    return luaL_error(L, "permission \"load\" denied");
+  }
+
+  if (s != NULL) { /* loading a string? */
     const char *chunkname = luaL_optstring(L, 2, s);
     status = luaL_loadbufferx(L, s, l, chunkname, mode);
-  }
-  else { /* loading from a reader function */
+  } else { /* loading from a reader function */
     const char *chunkname = luaL_optstring(L, 2, "=(load)");
     luaL_checktype(L, 1, LUA_TFUNCTION);
     lua_settop(L, RESERVEDSLOT); /* create reserved slot */
@@ -434,23 +420,31 @@ static int luaB_load(lua_State *L) {
 
 /* }====================================================== */
 
-
 static int dofilecont(lua_State *L, int d1, lua_KContext d2) {
   (void)d1;
   (void)d2; /* only to match 'lua_Kfunction' prototype */
   return lua_gettop(L) - 1;
 }
 
-
 static int luaB_dofile(lua_State *L) {
   const char *fname = luaL_optstring(L, 1, NULL);
+
+  /* Check fs:read permission if loading from file */
+  if (fname != NULL) {
+    lus_checkfsperm(L, "fs:read", fname);
+  }
+
+  /* Check load permission for dynamic code loading */
+  if (!lus_haspledge(L, "load", NULL)) {
+    return luaL_error(L, "permission \"load\" denied");
+  }
+
   lua_settop(L, 1);
   if (l_unlikely(luaL_loadfile(L, fname) != LUA_OK))
     return lua_error(L);
   lua_callk(L, 0, LUA_MULTRET, 0, dofilecont);
   return dofilecont(L, 0, 0);
 }
-
 
 static int luaB_assert(lua_State *L) {
   if (l_likely(lua_toboolean(L, 1)))         /* condition is true? */
@@ -464,14 +458,12 @@ static int luaB_assert(lua_State *L) {
   }
 }
 
-
 static int luaB_select(lua_State *L) {
   int n = lua_gettop(L);
   if (lua_type(L, 1) == LUA_TSTRING && *lua_tostring(L, 1) == '#') {
     lua_pushinteger(L, n - 1);
     return 1;
-  }
-  else {
+  } else {
     lua_Integer i = luaL_checkinteger(L, 1);
     if (i < 0)
       i = n + i;
@@ -482,13 +474,11 @@ static int luaB_select(lua_State *L) {
   }
 }
 
-
 static int luaB_tostring(lua_State *L) {
   luaL_checkany(L, 1);
   luaL_tolstring(L, 1, NULL);
   return 1;
 }
-
 
 static const luaL_Reg base_funcs[] = {{"assert", luaB_assert},
                                       {"collectgarbage", luaB_collectgarbage},
@@ -500,6 +490,7 @@ static const luaL_Reg base_funcs[] = {{"assert", luaB_assert},
                                       {"load", luaB_load},
                                       {"next", luaB_next},
                                       {"pairs", luaB_pairs},
+                                      {"pledge", luaB_pledge},
                                       {"print", luaB_print},
                                       {"warn", luaB_warn},
                                       {"rawequal", luaB_rawequal},
@@ -516,6 +507,14 @@ static const luaL_Reg base_funcs[] = {{"assert", luaB_assert},
                                       {"_VERSION", NULL},
                                       {NULL, NULL}};
 
+/*
+** Simple granter for base permissions: exec, load, seal, all.
+** These permissions have no subpermissions or values to validate.
+*/
+static void base_granter(lua_State *L, lus_PledgeRequest *p) {
+  /* For base permissions, just confirm the grant or check */
+  lus_setpledge(L, p, p->sub, p->value);
+}
 
 LUAMOD_API int luaopen_base(lua_State *L) {
   /* open lib into global table */
@@ -527,5 +526,12 @@ LUAMOD_API int luaopen_base(lua_State *L) {
   /* set global _VERSION */
   lua_pushliteral(L, LUA_VERSION);
   lua_setfield(L, -2, "_VERSION");
+
+  /* Register base permission granters */
+  lus_registerpledge(L, "exec", base_granter);
+  lus_registerpledge(L, "load", base_granter);
+  lus_registerpledge(L, "seal", base_granter);
+  lus_registerpledge(L, "all", base_granter);
+
   return 1;
 }

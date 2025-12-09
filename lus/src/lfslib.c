@@ -15,6 +15,8 @@
 #include <string.h>
 
 #include "lauxlib.h"
+#include "lglob.h"
+#include "lpledge.h"
 #include "lua.h"
 #include "lualib.h"
 
@@ -58,12 +60,15 @@ static int is_sep(char c) {
 
 /* Helper: check if path is absolute */
 static int is_absolute(const char *path, size_t len) {
-  if (len == 0) return 0;
+  if (len == 0)
+    return 0;
 #if defined(LUS_PLATFORM_WINDOWS)
   /* Absolute: starts with \ or / or has drive letter like C:\ */
-  if (is_sep(path[0])) return 1;
-  if (len >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') ||
-                   (path[0] >= 'a' && path[0] <= 'z')) &&
+  if (is_sep(path[0]))
+    return 1;
+  if (len >= 3 &&
+      ((path[0] >= 'A' && path[0] <= 'Z') ||
+       (path[0] >= 'a' && path[0] <= 'z')) &&
       path[1] == ':' && is_sep(path[2]))
     return 1;
   return 0;
@@ -87,7 +92,8 @@ static int fs_path_join(lua_State *L) {
     size_t len;
     const char *s = luaL_checklstring(L, i, &len);
 
-    if (len == 0) continue; /* Skip empty components */
+    if (len == 0)
+      continue; /* Skip empty components */
 
     /* If this component is absolute, it replaces everything before it */
     if (is_absolute(s, len)) {
@@ -224,9 +230,61 @@ static int glob_match(const char *pattern, const char *string) {
 #endif
 }
 
+/*
+** fs granter: handles fs permission requests and checks.
+** Called by lus_pledge for granting and lus_haspledge for checking.
+*/
+static void fs_granter(lua_State *L, lus_PledgeRequest *p) {
+  /* Granting: accept read/write subpermissions or base fs */
+  if (p->status == LUS_PLEDGE_GRANT || p->status == LUS_PLEDGE_UPDATE) {
+    if (p->sub == NULL) {
+      /* Grant global fs permission */
+      lus_setpledge(L, p, NULL, p->value);
+    } else if (strcmp(p->sub, "read") == 0 || strcmp(p->sub, "write") == 0) {
+      /* Grant read or write permission */
+      lus_setpledge(L, p, p->sub, p->value);
+    } else {
+      /* Unknown subpermission = error */
+      luaL_error(L, "unknown fs subpermission: '%s'", p->sub);
+    }
+    return;
+  }
+
+  /* Checking: match path against stored globs */
+  if (p->status == LUS_PLEDGE_CHECK) {
+    const char *path = p->value;
+
+    /* No path to check = allowed if permission exists */
+    if (path == NULL) {
+      lus_setpledge(L, p, p->sub, NULL);
+      return;
+    }
+
+    /* If has_base and no values, global access */
+    if (p->has_base && p->count == 0) {
+      lus_setpledge(L, p, p->sub, NULL);
+      return;
+    }
+
+    /* Iterate stored values and check against path using glob */
+    while (lus_nextpledge(L, p)) {
+      if (p->current && lus_glob_match_path(p->current, path, 1)) {
+        lus_setpledge(L, p, p->sub, NULL);
+        return;
+      }
+    }
+    /* No match = not processed = denied */
+  }
+}
+
+/* Helper: check fs permission before operations (using shared helper) */
+#define check_fs_permission(L, perm, path) lus_checkfsperm(L, perm, path)
+
 static int fs_list(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
   const char *glob = luaL_optstring(L, 2, NULL);
+
+  check_fs_permission(L, "fs:read", path);
 
   lua_newtable(L);
   int i = 1;
@@ -280,6 +338,9 @@ static int fs_list(lua_State *L) {
 static int fs_copy(lua_State *L) {
   const char *src = luaL_checkstring(L, 1);
   const char *dst = luaL_checkstring(L, 2);
+
+  check_fs_permission(L, "fs:read", src);
+  check_fs_permission(L, "fs:write", dst);
 
 #if defined(LUS_PLATFORM_WINDOWS)
   if (!CopyFile(src, dst, TRUE)) { /* TRUE = fail if exists */
@@ -355,6 +416,10 @@ static int fs_copy(lua_State *L) {
 static int fs_move(lua_State *L) {
   const char *src = luaL_checkstring(L, 1);
   const char *dst = luaL_checkstring(L, 2);
+
+  check_fs_permission(L, "fs:read", src);
+  check_fs_permission(L, "fs:write", src); /* move deletes source */
+  check_fs_permission(L, "fs:write", dst);
 
 #if defined(LUS_PLATFORM_WINDOWS)
   /* MoveFile fails if dst exists, which is what we want */
@@ -491,6 +556,8 @@ static int fs_remove(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
   int recursive = lua_toboolean(L, 2);
 
+  check_fs_permission(L, "fs:write", path);
+
 #if defined(LUS_PLATFORM_WINDOWS)
   DWORD attrs = GetFileAttributes(path);
   if (attrs == INVALID_FILE_ATTRIBUTES) {
@@ -594,10 +661,12 @@ static int fs_follow(lua_State *L) {
     DWORD err = GetLastError();
     if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
       return luaL_error(L, "path '%s' not found", path);
-    return luaL_error(L, "cannot open '%s': error %lu", path, (unsigned long)err);
+    return luaL_error(L, "cannot open '%s': error %lu", path,
+                      (unsigned long)err);
   }
   char buf[MAX_PATH];
-  /* VOLUME_NAME_DOS returns path with drive letter, usually prefixed with \\?\  */
+  /* VOLUME_NAME_DOS returns path with drive letter, usually prefixed with
+   * \\?\  */
   DWORD len = GetFinalPathNameByHandle(hFile, buf, MAX_PATH, VOLUME_NAME_DOS);
   if (len == 0) {
     DWORD err = GetLastError();
@@ -653,8 +722,7 @@ static int fs_createlink(lua_State *L) {
   /* Determine if target is a directory to use correct flag */
   DWORD flags = 0;
   DWORD attrs = GetFileAttributes(target);
-  if (attrs != INVALID_FILE_ATTRIBUTES &&
-      (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+  if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
     flags = SYMBOLIC_LINK_FLAG_DIRECTORY;
   }
   /* SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE for dev mode (Win10+) */
@@ -664,8 +732,9 @@ static int fs_createlink(lua_State *L) {
     DWORD err = GetLastError();
     if (err == ERROR_PRIVILEGE_NOT_HELD)
       return luaL_error(
-          L, "failed to create symlink '%s': requires administrator or "
-             "developer mode",
+          L,
+          "failed to create symlink '%s': requires administrator or "
+          "developer mode",
           at);
     return luaL_error(L, "failed to create symlink '%s' -> '%s': error %lu", at,
                       target, (unsigned long)err);
@@ -678,7 +747,8 @@ static int fs_createlink(lua_State *L) {
   return 0;
 }
 
-/* Helper: create a single directory, returns 0 on success, 1 if exists, -1 on error */
+/* Helper: create a single directory, returns 0 on success, 1 if exists, -1 on
+ * error */
 static int create_single_dir(const char *path) {
 #if defined(LUS_PLATFORM_WINDOWS)
   if (CreateDirectoryA(path, NULL))
@@ -719,8 +789,9 @@ static int create_dirs_recursive(lua_State *L, const char *path) {
 
 #if defined(LUS_PLATFORM_WINDOWS)
   /* Skip drive letter if present (e.g., "C:\") */
-  if (len >= 2 && ((p[0] >= 'A' && p[0] <= 'Z') ||
-                   (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':') {
+  if (len >= 2 &&
+      ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
+      p[1] == ':') {
     p += 2;
     if (*p == '\\' || *p == '/')
       p++;
@@ -798,8 +869,8 @@ static int fs_createdirectory(lua_State *L) {
       return luaL_error(L, "cannot create directory '%s': already exists",
                         path);
     if (err == ERROR_PATH_NOT_FOUND)
-      return luaL_error(L, "cannot create directory '%s': parent does not exist",
-                        path);
+      return luaL_error(
+          L, "cannot create directory '%s': parent does not exist", path);
     return luaL_error(L, "cannot create directory '%s': error %lu", path,
                       (unsigned long)err);
   }
@@ -810,8 +881,8 @@ static int fs_createdirectory(lua_State *L) {
       return luaL_error(L, "cannot create directory '%s': already exists",
                         path);
     if (err == ENOENT)
-      return luaL_error(L, "cannot create directory '%s': parent does not exist",
-                        path);
+      return luaL_error(
+          L, "cannot create directory '%s': parent does not exist", path);
     if (err == EACCES)
       return luaL_error(L, "cannot create directory '%s': permission denied",
                         path);
@@ -839,10 +910,13 @@ static const luaL_Reg fspathlib[] = {{"join", fs_path_join},
                                      {NULL, NULL}};
 
 LUAMOD_API int luaopen_fs(lua_State *L) {
+  /* Register fs granter for permission checking */
+  lus_registerpledge(L, "fs", fs_granter);
+
   luaL_newlib(L, fslib);
-  // Add fs.path
+  /* Add fs.path */
   luaL_newlib(L, fspathlib);
-  // Add constants
+  /* Add constants */
   lua_pushliteral(L, FS_DIRSEPSTR);
   lua_setfield(L, -2, "separator");
   lua_pushliteral(L, FS_PATH_SEP);

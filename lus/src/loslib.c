@@ -19,6 +19,7 @@
 
 #include "lauxlib.h"
 #include "llimits.h"
+#include "lpledge.h"
 #include "lualib.h"
 
 /*
@@ -147,6 +148,12 @@
 static int os_execute(lua_State *L) {
   const char *cmd = luaL_optstring(L, 1, NULL);
   int stat;
+
+  /* Check exec permission */
+  if (cmd != NULL && !lus_haspledge(L, "exec", NULL)) {
+    return luaL_error(L, "permission \"exec\" denied for os.execute");
+  }
+
   errno = 0;
   stat = l_system(cmd);
   if (cmd != NULL)

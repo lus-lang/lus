@@ -8,7 +8,6 @@
 
 #include "lprefix.h"
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,9 +17,9 @@
 #include "lua.h"
 
 #include "lauxlib.h"
-#include "lualib.h"
 #include "llimits.h"
-
+#include "lpledge.h"
+#include "lualib.h"
 
 #if !defined(LUA_PROGNAME)
 #define LUA_PROGNAME "lus"
@@ -32,11 +31,9 @@
 
 #define LUA_INITVARVERSION LUA_INIT_VAR LUA_VERSUFFIX
 
-
 static lua_State *globalL = NULL;
 
 static const char *progname = LUA_PROGNAME;
-
 
 #if defined(LUA_USE_POSIX) /* { */
 
@@ -57,7 +54,6 @@ static void setsignal(int sig, void (*handler)(int)) {
 
 #endif /* } */
 
-
 /*
 ** Hook set by signal function to stop the interpreter.
 */
@@ -66,7 +62,6 @@ static void lstop(lua_State *L, lua_Debug *ar) {
   lua_sethook(L, NULL, 0, 0); /* reset hook */
   luaL_error(L, "interrupted!");
 }
-
 
 /*
 ** Function to be called at a C signal. Because a C signal cannot
@@ -79,7 +74,6 @@ static void laction(int i) {
   setsignal(i, SIG_DFL); /* if another SIGINT happens, terminate process */
   lua_sethook(globalL, lstop, flag, 1);
 }
-
 
 static void print_usage(const char *badoption) {
   lua_writestringerror("%s: ", progname);
@@ -97,11 +91,12 @@ static void print_usage(const char *badoption) {
       "  -v        show version information\n"
       "  -E        ignore environment variables\n"
       "  -W        turn warnings on\n"
+      "  -P perm   grant permission (e.g., -Pfs:read, -Pnetwork)\n"
+      "  --pledge perm  same as -P\n"
       "  --        stop handling options\n"
       "  -         stop handling options and execute stdin\n",
       progname);
 }
-
 
 /*
 ** Prints an error message, adding the program name in front of it
@@ -112,7 +107,6 @@ static void l_message(const char *pname, const char *msg) {
     lua_writestringerror("%s: ", pname);
   lua_writestringerror("%s\n", msg);
 }
-
 
 /*
 ** Check whether 'status' is not OK and, if so, prints the error
@@ -128,7 +122,6 @@ static int report(lua_State *L, int status) {
   }
   return status;
 }
-
 
 /*
 ** Message handler used to run all chunks
@@ -147,7 +140,6 @@ static int msghandler(lua_State *L) {
   return 1;                     /* return the traceback */
 }
 
-
 /*
 ** Interface to 'lua_pcall', which sets appropriate message function
 ** and C-signal handler. Used to run all chunks.
@@ -165,12 +157,10 @@ static int docall(lua_State *L, int narg, int nres) {
   return status;
 }
 
-
 static void print_version(void) {
   lua_writestring(LUA_COPYRIGHT, strlen(LUA_COPYRIGHT));
   lua_writeline();
 }
-
 
 /*
 ** Create the 'arg' table, which stores all arguments from the
@@ -193,23 +183,19 @@ static void createargtable(lua_State *L, char **argv, int argc, int script) {
   lua_setglobal(L, "arg");
 }
 
-
 static int dochunk(lua_State *L, int status) {
   if (status == LUA_OK)
     status = docall(L, 0, 0);
   return report(L, status);
 }
 
-
 static int dofile(lua_State *L, const char *name) {
   return dochunk(L, luaL_loadfile(L, name));
 }
 
-
 static int dostring(lua_State *L, const char *s, const char *name) {
   return dochunk(L, luaL_loadbuffer(L, s, strlen(s), name));
 }
-
 
 /*
 ** Receives 'globname[=modname]' and runs 'globname = require(modname)'.
@@ -223,8 +209,7 @@ static int dolibrary(lua_State *L, char *globname) {
   if (modname == NULL) { /* no explicit name? */
     modname = globname;  /* module name is equal to global name */
     suffix = strchr(modname, *LUA_IGMARK); /* look for a suffix mark */
-  }
-  else {
+  } else {
     *modname = '\0'; /* global name ends here */
     modname++;       /* module name starts after the '=' */
   }
@@ -238,7 +223,6 @@ static int dolibrary(lua_State *L, char *globname) {
   }
   return report(L, status);
 }
-
 
 /*
 ** Push on the stack the contents of table 'arg' from 1 to #arg
@@ -255,7 +239,6 @@ static int pushargs(lua_State *L) {
   return n;
 }
 
-
 static int handle_script(lua_State *L, char **argv) {
   int status;
   const char *fname = argv[0];
@@ -269,14 +252,12 @@ static int handle_script(lua_State *L, char **argv) {
   return report(L, status);
 }
 
-
 /* bits of various argument indicators in 'args' */
 #define has_error 1 /* bad option */
 #define has_i 2     /* -i */
 #define has_v 4     /* -v */
 #define has_e 8     /* -e */
 #define has_E 16    /* -E */
-
 
 /*
 ** Traverses all arguments from 'argv', returning a mask with those
@@ -291,8 +272,7 @@ static int collectargs(char **argv, int *first) {
   if (argv[0] != NULL) {  /* is there a program name? */
     if (argv[0][0])       /* not empty? */
       progname = argv[0]; /* save it */
-  }
-  else { /* no program name */
+  } else {                /* no program name */
     *first = -1;
     return 0;
   }
@@ -301,43 +281,61 @@ static int collectargs(char **argv, int *first) {
     if (argv[i][0] != '-')      /* not an option? */
       return args;              /* stop handling options */
     switch (argv[i][1]) {       /* else check option */
-      case '-':                 /* '--' */
-        if (argv[i][2] != '\0') /* extra characters after '--'? */
-          return has_error;     /* invalid option */
-        /* if there is a script name, it comes after '--' */
-        *first = (argv[i + 1] != NULL) ? i + 1 : 0;
-        return args;
-      case '\0': /* '-' */ return args; /* script "name" is '-' */
-      case 'E':
-        if (argv[i][2] != '\0') /* extra characters? */
-          return has_error;     /* invalid option */
-        args |= has_E;
-        break;
-      case 'W':
-        if (argv[i][2] != '\0') /* extra characters? */
-          return has_error;     /* invalid option */
-        break;
-      case 'i': args |= has_i; /* (-i implies -v) */ /* FALLTHROUGH */
-      case 'v':
-        if (argv[i][2] != '\0') /* extra characters? */
-          return has_error;     /* invalid option */
-        args |= has_v;
-        break;
-      case 'e': args |= has_e;    /* FALLTHROUGH */
-      case 'l':                   /* both options need an argument */
-        if (argv[i][2] == '\0') { /* no concatenated argument? */
-          i++;                    /* try next 'argv' */
+    case '-':                   /* '--' */
+      if (argv[i][2] != '\0') { /* extra characters after '--'? */
+        /* Check for --pledge */
+        if (strcmp(argv[i] + 2, "pledge") == 0) {
+          i++; /* skip to argument */
           if (argv[i] == NULL || argv[i][0] == '-')
-            return has_error; /* no next argument or it is another option */
+            return has_error; /* no argument */
+          break;
         }
-        break;
-      default: /* invalid option */ return has_error;
+        return has_error; /* invalid option */
+      }
+      /* if there is a script name, it comes after '--' */
+      *first = (argv[i + 1] != NULL) ? i + 1 : 0;
+      return args;
+    case '\0':     /* '-' */
+      return args; /* script "name" is '-' */
+    case 'E':
+      if (argv[i][2] != '\0') /* extra characters? */
+        return has_error;     /* invalid option */
+      args |= has_E;
+      break;
+    case 'W':
+      if (argv[i][2] != '\0') /* extra characters? */
+        return has_error;     /* invalid option */
+      break;
+    case 'i':
+      args |= has_i; /* (-i implies -v) */ /* FALLTHROUGH */
+    case 'v':
+      if (argv[i][2] != '\0') /* extra characters? */
+        return has_error;     /* invalid option */
+      args |= has_v;
+      break;
+    case 'e':
+      args |= has_e;            /* FALLTHROUGH */
+    case 'l':                   /* both options need an argument */
+      if (argv[i][2] == '\0') { /* no concatenated argument? */
+        i++;                    /* try next 'argv' */
+        if (argv[i] == NULL || argv[i][0] == '-')
+          return has_error; /* no next argument or it is another option */
+      }
+      break;
+    case 'P':                   /* pledge option */
+      if (argv[i][2] == '\0') { /* no concatenated argument? */
+        i++;                    /* try next 'argv' */
+        if (argv[i] == NULL || argv[i][0] == '-')
+          return has_error; /* no next argument or it is another option */
+      }
+      break;
+    default: /* invalid option */
+      return has_error;
     }
   }
   *first = 0; /* no script name */
   return args;
 }
-
 
 /*
 ** Processes options 'e' and 'l', which involve running Lua code, and
@@ -350,27 +348,84 @@ static int runargs(lua_State *L, char **argv, int n) {
     int option = argv[i][1];
     lua_assert(argv[i][0] == '-'); /* already checked */
     switch (option) {
-      case 'e':
-      case 'l': {
-        int status;
-        char *extra = argv[i] + 2; /* both options need an argument */
-        if (*extra == '\0')
-          extra = argv[++i];
-        lua_assert(extra != NULL);
-        status = (option == 'e') ? dostring(L, extra, "=(command line)")
-                                 : dolibrary(L, extra);
-        if (status != LUA_OK)
-          return 0;
-        break;
+    case 'e':
+    case 'l': {
+      int status;
+      char *extra = argv[i] + 2; /* both options need an argument */
+      if (*extra == '\0')
+        extra = argv[++i];
+      lua_assert(extra != NULL);
+      status = (option == 'e') ? dostring(L, extra, "=(command line)")
+                               : dolibrary(L, extra);
+      if (status != LUA_OK)
+        return 0;
+      break;
+    }
+    case 'W':
+      lua_warning(L, "@on", 0); /* warnings on */
+      break;
+    case 'P': { /* pledge permission */
+      char *pledge_str = argv[i] + 2;
+      if (*pledge_str == '\0')
+        pledge_str = argv[++i];
+      lua_assert(pledge_str != NULL);
+      /* Parse and grant the pledge */
+      int rejected = 0;
+      const char *p = pledge_str;
+      if (*p == '~') {
+        rejected = 1;
+        p++;
       }
-      case 'W':
-        lua_warning(L, "@on", 0); /* warnings on */
-        break;
+      /* Extract name and value */
+      const char *eq = strchr(p, '=');
+      char namebuf[256];
+      const char *value = NULL;
+      if (eq) {
+        size_t namelen = eq - p;
+        if (namelen >= sizeof(namebuf)) {
+          l_message(progname, "pledge name too long");
+          return 0;
+        }
+        memcpy(namebuf, p, namelen);
+        namebuf[namelen] = '\0';
+        value = eq + 1;
+      } else {
+        size_t namelen = strlen(p);
+        if (namelen >= sizeof(namebuf)) {
+          l_message(progname, "pledge name too long");
+          return 0;
+        }
+        strcpy(namebuf, p);
+      }
+      /* Handle special permissions */
+      if (strcmp(namebuf, "all") == 0 && !rejected) {
+        /* Grant common permissions - all from CLI is allowed */
+        lus_pledge(L, "exec", NULL);
+        lus_pledge(L, "load", NULL);
+        lus_pledge(L, "fs", NULL);
+        lus_pledge(L, "network", NULL);
+      } else if (strcmp(namebuf, "seal") == 0) {
+        /* Seal is handled after all pledges are processed */
+        /* Store it - we'll seal at the end */
+        /* For now, just grant it; the pledge system handles sealing */
+        lus_pledge(L, "seal", NULL);
+      } else if (rejected) {
+        /* Mark as rejected */
+        lus_rejectpledge(L, namebuf);
+      } else {
+        if (!lus_pledge(L, namebuf, value)) {
+          char msg[512];
+          snprintf(msg, sizeof(msg), "failed to grant pledge '%s'", pledge_str);
+          l_message(progname, msg);
+          return 0;
+        }
+      }
+      break;
+    }
     }
   }
   return 1;
 }
-
 
 static int handle_luainit(lua_State *L) {
   const char *name = "=" LUA_INITVARVERSION;
@@ -387,7 +442,6 @@ static int handle_luainit(lua_State *L) {
     return dostring(L, init, name);
 }
 
-
 /*
 ** {==================================================================
 ** Read-Eval-Print Loop (REPL)
@@ -402,7 +456,6 @@ static int handle_luainit(lua_State *L) {
 #if !defined(LUA_MAXINPUT)
 #define LUA_MAXINPUT 512
 #endif
-
 
 /*
 ** lua_stdin_is_tty detects whether the standard input is a 'tty' (that
@@ -431,7 +484,6 @@ static int handle_luainit(lua_State *L) {
 
 #endif /* } */
 
-
 /*
 ** * lua_initreadline initializes the readline system.
 ** * lua_readline defines how to show a prompt and then read a line from
@@ -446,8 +498,8 @@ static int handle_luainit(lua_State *L) {
 #if defined(LUA_USE_READLINE) /* { */
 /* Lua will be linked with '-lreadline' */
 
-#include <readline/readline.h>
 #include <readline/history.h>
+#include <readline/readline.h>
 
 #define lua_initreadline(L) ((void)L, rl_readline_name = "lua")
 #define lua_readline(buff, prompt) ((void)buff, readline(prompt))
@@ -465,7 +517,6 @@ static l_readlineT l_readline = NULL;
 typedef void (*l_addhistT)(const char *string);
 static l_addhistT l_addhist = NULL;
 
-
 static char *lua_readline(char *buff, const char *prompt) {
   if (l_readline != NULL)         /* is there a 'readline'? */
     return (*l_readline)(prompt); /* use it */
@@ -476,20 +527,17 @@ static char *lua_readline(char *buff, const char *prompt) {
   }
 }
 
-
 static void lua_saveline(const char *line) {
   if (l_addhist != NULL) /* is there an 'add_history'? */
     (*l_addhist)(line);  /* use it */
   /* else nothing to be done */
 }
 
-
 static void lua_freeline(char *line) {
   if (l_readline != NULL) /* is there a 'readline'? */
     free(line);           /* free line created by it */
   /* else 'lua_readline' used an automatic buffer; nothing to free */
 }
-
 
 #if defined(LUA_USE_DLOPEN) && defined(LUA_READLINELIB) /* { */
 /* try to load 'readline' dynamically */
@@ -523,7 +571,6 @@ static void lua_initreadline(lua_State *L) {
 
 #endif /* } */
 
-
 /*
 ** Return the string to be used as a prompt by the interpreter. Leave
 ** the string (or nil, if using the default value) on the stack, to keep
@@ -543,7 +590,6 @@ static const char *get_prompt(lua_State *L, int firstline) {
 #define EOFMARK "<eof>"
 #define marklen (sizeof(EOFMARK) / sizeof(char) - 1)
 
-
 /*
 ** Check whether 'status' signals a syntax error and the error
 ** message at the top of the stack ends with the above mark for
@@ -558,7 +604,6 @@ static int incomplete(lua_State *L, int status) {
   }
   return 0; /* else... */
 }
-
 
 /*
 ** Prompt the user, read a line, and push it into the Lua stack.
@@ -579,7 +624,6 @@ static int pushline(lua_State *L, int firstline) {
   return 1;
 }
 
-
 /*
 ** Try to compile line on the stack as 'return <line>;'; on return, stack
 ** has either compiled chunk or original line (if compilation failed).
@@ -595,7 +639,6 @@ static int addreturn(lua_State *L) {
   return status;
 }
 
-
 static void checklocal(const char *line) {
   static const size_t szloc = sizeof("local") - 1;
   static const char space[] = " \t";
@@ -607,7 +650,6 @@ static void checklocal(const char *line) {
         "warning: locals do not survive across lines in interactive mode");
   }
 }
-
 
 /*
 ** Read multiple lines until a complete Lua statement or an error not
@@ -629,7 +671,6 @@ static int multiline(lua_State *L) {
     line = lua_tolstring(L, 1, &len); /* get what is has */
   }
 }
-
 
 /*
 ** Read a line and try to load (compile) it first as an expression (by
@@ -653,7 +694,6 @@ static int loadline(lua_State *L) {
   return status;
 }
 
-
 /*
 ** Prints (calling the Lua 'print' function) any values on the stack
 */
@@ -668,7 +708,6 @@ static void l_print(lua_State *L) {
                                           lua_tostring(L, -1)));
   }
 }
-
 
 /*
 ** Do the REPL: repeatedly read (load) a line, evaluate (call) it, and
@@ -697,7 +736,6 @@ static void doREPL(lua_State *L) {
 #if !defined(luai_openlibs)
 #define luai_openlibs(L) luaL_openselectedlibs(L, ~0, 0)
 #endif
-
 
 /*
 ** Main body of stand-alone interpreter (to be called in protected mode).
@@ -740,14 +778,12 @@ static int pmain(lua_State *L) {
     if (lua_stdin_is_tty()) { /* running in interactive mode? */
       print_version();
       doREPL(L); /* do read-eval-print loop */
-    }
-    else
+    } else
       dofile(L, NULL); /* executes stdin as a file */
   }
   lua_pushboolean(L, 1); /* signal no errors */
   return 1;
 }
-
 
 int main(int argc, char **argv) {
   int status, result;

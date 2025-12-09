@@ -1129,3 +1129,111 @@ static void read_all(lua_State *L, FILE *f) {
 | `liolib.c` | Async I/O infrastructure for file operations |
 | `meson.build` | Platform-specific backend selection |
 
+## Permission System (Acquis 11)
+
+A capability-based permission system for sandboxing Lus scripts. Permissions are granted via the `pledge()` function or CLI `--pledge`/`-P` flags.
+
+#### Core Concepts
+
+- **Permissions**: Named capabilities like `fs`, `exec`, `network`
+- **Sub-permissions**: Fine-grained control like `fs:read`, `fs:write`, `network:http`
+- **Values**: Path/URL restrictions like `fs:read=/tmp/*`
+- **Seal**: Once granted, prevents new permissions
+- **Rejection**: Using `~` prefix blocks future grants
+
+#### C API
+
+```c
+/* Grant or check a permission (with optional value restriction) */
+int lus_pledge(lua_State *L, const char *name, const char *value);
+
+/* Check if permission is granted */
+int lus_haspledge(lua_State *L, const char *name, const char *value);
+
+/* Confirm a permission (used by granters) */
+void lus_confirmpledge(lua_State *L, const char *name, const char *value);
+
+/* Register a library-specific granter */
+void lus_registerpledge(lua_State *L, const char *base, lus_PledgeGranter fn);
+
+/* Get permission value count and indexed access (for granters) */
+int lus_getpledgevalcount(lua_State *L, const char *name);
+const char *lus_getpledgeval_i(lua_State *L, const char *name, int idx);
+```
+
+#### Helper Macro
+
+```c
+/* Build permission names with subpermissions (used by granters) */
+char namebuf[LUS_PLEDGE_NAME_MAX];
+LUS_PLEDGE_NAME(namebuf, "fs", subperm);  /* -> "fs" or "fs:read" */
+```
+
+#### Lua API
+
+```lua
+-- Grant permission (returns true on success, false on failure)
+pledge("fs")                     -- Global fs access
+pledge("fs:read=/tmp/*")         -- Restricted read access
+pledge("~network")               -- Reject network permission
+pledge("seal")                   -- Prevent new permissions
+```
+
+#### CLI Support
+
+```bash
+lus -Pfs script.lus              # Grant fs permission
+lus --pledge=network:http script # Grant specific permission
+lus -P~exec script.lus           # Pre-reject exec permission
+```
+
+#### Granter System
+
+Libraries register granters to handle their own permission semantics:
+
+```c
+/* Example: fs granter uses glob matching for paths */
+static int fs_granter(lua_State *L, int is_checking) {
+  const char *subperm = lua_isstring(L, -2) ? lua_tostring(L, -2) : NULL;
+  const char *path = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
+  
+  if (!is_checking) {
+    /* Granting: just confirm */
+    lus_confirmpledge(L, namebuf, path);
+    return 1;
+  }
+  
+  /* Checking: match path against stored glob patterns */
+  int count = lus_getpledgevalcount(L, namebuf);
+  if (count == 0) return 1;  /* Global access */
+  
+  for (int i = 0; i < count; i++) {
+    const char *pattern = lus_getpledgeval_i(L, namebuf, i);
+    if (pattern && lus_glob_match_path(pattern, path, 1))
+      return 1;
+  }
+  return 0;
+}
+
+/* Registration in luaopen_fs */
+lus_registerpledge(L, "fs", fs_granter);
+```
+
+#### Files Created/Modified
+
+| File | Changes |
+|------|---------|
+| `lglob.h` | Glob matching API declarations |
+| `lglob.c` | Path canonicalization, glob/URL matching |
+| `lpledge.h` | Permission system C API |
+| `lpledge.c` | Core storage, granter registry, Lua `pledge()` |
+| `lstate.h` | Added `pledges` field to `lua_State` |
+| `lstate.c` | Permission init/copy/free in thread lifecycle |
+| `lua.c` | CLI `--pledge`/`-P` argument handling |
+| `lbaselib.c` | Register `pledge` as global function |
+| `lfslib.c` | fs granter with path glob matching |
+| `liolib.c` | exec permission check for io.popen |
+| `loslib.c` | exec permission check for os.execute |
+| `lnetlib.c` | network granter with URL matching |
+| `meson.build` | Added new source files, pledge test |
+

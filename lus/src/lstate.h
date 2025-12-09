@@ -9,7 +9,6 @@
 
 #include "lua.h"
 
-
 /* Some header files included here need this definition */
 typedef struct CallInfo CallInfo;
 
@@ -18,7 +17,6 @@ typedef struct CallInfo CallInfo;
 #include "lobject.h"
 #include "ltm.h"
 #include "lzio.h"
-
 
 /*
 ** Some notes about garbage-collected objects: All objects in Lua must
@@ -90,7 +88,6 @@ typedef struct CallInfo CallInfo;
 ** of gray lists. (They don't even have a 'gclist' field.)
 */
 
-
 /*
 ** About 'nCcalls':  This count has two parts: the lower 16 bits counts
 ** the number of recursive invocations in the C stack; the higher
@@ -99,13 +96,11 @@ typedef struct CallInfo CallInfo;
 ** instruction.)
 */
 
-
 /* true if this thread does not have non-yieldable calls in the stack */
 #define yieldable(L) (((L)->nCcalls & 0xffff0000) == 0)
 
 /* real number of C calls */
 #define getCcalls(L) ((L)->nCcalls & 0xffff)
-
 
 /* Increment the number of non-yieldable calls */
 #define incnny(L) ((L)->nCcalls += 0x10000)
@@ -116,9 +111,7 @@ typedef struct CallInfo CallInfo;
 /* Non-yieldable call increment */
 #define nyci (0x10000 | 1)
 
-
 struct lua_longjmp; /* defined in ldo.c */
-
 
 /*
 ** Atomic type (relative to signals) to better ensure that 'lua_sethook'
@@ -129,7 +122,6 @@ struct lua_longjmp; /* defined in ldo.c */
 #define l_signalT sig_atomic_t
 #endif
 
-
 /*
 ** Extra stack space to handle TM calls and some other extras. This
 ** space is not included in 'stack_last'. It is used only to avoid stack
@@ -138,7 +130,6 @@ struct lua_longjmp; /* defined in ldo.c */
 ** never use this extra space, so it does not need to be kept clean.
 */
 #define EXTRA_STACK 5
-
 
 /*
 ** Size of cache for strings in the API. 'N' is the number of
@@ -150,24 +141,20 @@ struct lua_longjmp; /* defined in ldo.c */
 #define STRCACHE_M 2
 #endif
 
-
 #define BASIC_STACK_SIZE (2 * LUA_MINSTACK)
 
 #define stacksize(th) cast_int((th)->stack_last.p - (th)->stack.p)
-
 
 /* kinds of Garbage Collection */
 #define KGC_INC 0      /* incremental gc */
 #define KGC_GENMINOR 1 /* generational gc in minor (regular) mode */
 #define KGC_GENMAJOR 2 /* generational in major mode */
 
-
 typedef struct stringtable {
   TString **hash; /* array of buckets (linked lists of strings) */
   int nuse;       /* number of elements */
   int size;       /* number of buckets */
 } stringtable;
-
 
 /*
 ** Information about a call.
@@ -226,13 +213,11 @@ struct CallInfo {
   l_uint32 callstatus;
 };
 
-
 /*
 ** Maximum expected number of results from a function
 ** (must fit in CIST_NRESULTS).
 */
 #define MAXRESULTS 250
-
 
 /*
 ** Bits in CallInfo status
@@ -268,7 +253,6 @@ struct CallInfo {
 /* function "called" a finalizer */
 #define CIST_FIN (CIST_HOOKYIELD << 1)
 
-
 #define get_nresults(cs) (cast_int((cs) & CIST_NRESULTS) - 1)
 
 /*
@@ -278,11 +262,10 @@ struct CallInfo {
 ** because of an error.  (Three bits are enough for error status.)
 */
 #define getcistrecst(ci) (((ci)->callstatus >> CIST_RECST) & 7)
-#define setcistrecst(ci, st)                                               \
-  check_exp(((st) & 7) == (st), /* status must fit in three bits */        \
-            ((ci)->callstatus = ((ci)->callstatus & ~(7u << CIST_RECST)) | \
+#define setcistrecst(ci, st)                                                   \
+  check_exp(((st) & 7) == (st), /* status must fit in three bits */            \
+            ((ci)->callstatus = ((ci)->callstatus & ~(7u << CIST_RECST)) |     \
                                 (cast(l_uint32, st) << CIST_RECST)))
-
 
 /* active function is a Lua function */
 #define isLua(ci) (!((ci)->callstatus & CIST_C))
@@ -290,12 +273,10 @@ struct CallInfo {
 /* call is running Lua code (not a hook) */
 #define isLuacode(ci) (!((ci)->callstatus & (CIST_C | CIST_HOOKED)))
 
-
-#define setoah(ci, v) \
-  ((ci)->callstatus = \
+#define setoah(ci, v)                                                          \
+  ((ci)->callstatus =                                                          \
        ((v) ? (ci)->callstatus | CIST_OAH : (ci)->callstatus & ~CIST_OAH))
 #define getoah(ci) (((ci)->callstatus & CIST_OAH) ? 1 : 0)
-
 
 /*
 ** 'per thread' state
@@ -327,8 +308,8 @@ struct lua_State {
     int ftransfer; /* offset of first value transferred */
     int ntransfer; /* number of values transferred */
   } transferinfo;
+  struct PledgeStore *pledges; /* permission storage */
 };
-
 
 /*
 ** thread state + extra space
@@ -337,7 +318,6 @@ typedef struct LX {
   lu_byte extra_[LUA_EXTRASPACE];
   lua_State l;
 } LX;
-
 
 /*
 ** 'global state', shared by all threads of this state
@@ -389,7 +369,6 @@ typedef struct global_State {
   LX mainth;                                 /* main thread of this state */
 } global_State;
 
-
 #define G(L) (L->l_G)
 #define mainthread(G) (&(G)->mainth.l)
 
@@ -398,7 +377,6 @@ typedef struct global_State {
 ** build.
 */
 #define completestate(g) ttisnil(&g->nilvalue)
-
 
 /*
 ** Union of all collectable objects (only for conversions)
@@ -422,7 +400,6 @@ union GCUnion {
   struct EnumRoot er; /* enum root */
 };
 
-
 /*
 ** ISO C99, 6.7.2.1 p.14:
 ** "A pointer to a union object, suitably converted, points to each of
@@ -431,12 +408,12 @@ union GCUnion {
 #define cast_u(o) cast(union GCUnion *, (o))
 
 /* macros to convert a GCObject into a specific value */
-#define gco2ts(o) \
+#define gco2ts(o)                                                              \
   check_exp(novariant((o)->tt) == LUA_TSTRING, &((cast_u(o))->ts))
 #define gco2u(o) check_exp((o)->tt == LUA_VUSERDATA, &((cast_u(o))->u))
 #define gco2lcl(o) check_exp((o)->tt == LUA_VLCL, &((cast_u(o))->cl.l))
 #define gco2ccl(o) check_exp((o)->tt == LUA_VCCL, &((cast_u(o))->cl.c))
-#define gco2cl(o) \
+#define gco2cl(o)                                                              \
   check_exp(novariant((o)->tt) == LUA_TFUNCTION, &((cast_u(o))->cl))
 #define gco2t(o) check_exp((o)->tt == LUA_VTABLE, &((cast_u(o))->h))
 #define gco2p(o) check_exp((o)->tt == LUA_VPROTO, &((cast_u(o))->p))
@@ -445,17 +422,14 @@ union GCUnion {
 #define gco2enum(o) check_exp((o)->tt == LUA_VENUM, &((cast_u(o))->en))
 #define gco2enumroot(o) check_exp((o)->tt == LUA_VENUMROOT, &((cast_u(o))->er))
 
-
 /*
 ** macro to convert a Lua object into a GCObject
 */
-#define obj2gco(v) \
+#define obj2gco(v)                                                             \
   check_exp(novariant((v)->tt) >= LUA_TSTRING, &(cast_u(v)->gc))
-
 
 /* actual number of total memory allocated */
 #define gettotalbytes(g) ((g)->GCtotalbytes - (g)->GCdebt)
-
 
 LUAI_FUNC void luaE_setdebt(global_State *g, l_mem debt);
 LUAI_FUNC void luaE_freethread(lua_State *L, lua_State *L1);
@@ -467,6 +441,5 @@ LUAI_FUNC void luaE_incCstack(lua_State *L);
 LUAI_FUNC void luaE_warning(lua_State *L, const char *msg, int tocont);
 LUAI_FUNC void luaE_warnerror(lua_State *L, const char *where);
 LUAI_FUNC TStatus luaE_resetthread(lua_State *L, TStatus status);
-
 
 #endif

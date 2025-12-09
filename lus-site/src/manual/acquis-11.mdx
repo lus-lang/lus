@@ -1,0 +1,209 @@
+---
+order: 111
+title: Acquis 11 - Permissions
+acquis: true
+draft: true
+---
+
+The `pledge` function provides capability-based sandboxing for Lus scripts. Permissions must be explicitly granted before sensitive operations like file access, network requests, or command execution can occur.
+
+## Basic usage
+
+Grant permissions with the `pledge` function:
+
+```lua
+-- Grant filesystem access
+pledge("fs")
+
+-- Grant network access
+pledge("network")
+
+-- Grant command execution
+pledge("exec")
+```
+
+Without the appropriate permission, operations are denied:
+
+```lua
+-- Without pledge("fs"):
+local ok, err = catch fs.list("/tmp")
+assert(not ok)  -- permission denied
+
+-- With pledge("fs"):
+pledge("fs")
+local files = fs.list("/tmp")  -- works
+```
+
+## Permission structure
+
+Permissions use a hierarchical naming scheme:
+
+```lua
+-- Base permission: grants all sub-permissions
+pledge("fs")         -- grants fs:read, fs:write, etc.
+pledge("network")    -- grants network:tcp, network:http, etc.
+
+-- Specific sub-permission: grants only that capability
+pledge("fs:read")    -- only reading, not writing
+pledge("network:http")  -- only HTTP, not raw TCP
+```
+
+## Value restrictions
+
+Permissions can include path or URL restrictions:
+
+```lua
+-- Grant read access only to /tmp
+pledge("fs:read=/tmp")
+
+-- Grant read access to all paths under /home
+pledge("fs:read=/home/*")
+
+-- Grant HTTP access to specific domain
+pledge("network:http=api.example.com/*")
+```
+
+Glob patterns are supported for path matching. On systems with symlinks, paths are canonicalized before matching (e.g., `/tmp` resolves to `/private/tmp` on macOS).
+
+## Permission rejection
+
+Use the `~` prefix to permanently reject a permission:
+
+```lua
+-- Reject network access
+pledge("~network")
+
+-- Later: cannot grant what was rejected
+local ok = pledge("network")  -- returns false
+```
+
+This is useful for host applications that want to restrict scripts from ever acquiring certain capabilities.
+
+## Sealing permissions
+
+The `seal` permission prevents any future permission changes:
+
+```lua
+pledge("fs")
+pledge("network")
+pledge("seal")
+
+-- After seal, new permissions are denied
+local ok = pledge("exec")  -- returns false
+```
+
+This provides defense-in-depth by locking down capabilities early in script execution.
+
+## Permission checks
+
+The `pledge` function returns `true` on success, `false` on failure:
+
+```lua
+if pledge("fs") then
+  print("Filesystem access granted")
+else
+  print("Filesystem access denied")
+end
+```
+
+For sealed or rejected permissions, `pledge` returns `false` without erroring. For invalid permission names, it raises an error.
+
+## CLI usage
+
+Grant permissions from the command line:
+
+```bash
+# Grant single permission
+lus -Pfs script.lus
+lus --pledge=fs script.lus
+
+# Grant multiple permissions
+lus -Pfs -Pnetwork script.lus
+
+# Grant with restrictions
+lus -Pfs:read=/tmp script.lus
+
+# Reject permissions
+lus -P~exec script.lus
+```
+
+Scripts can then request only what was already granted:
+
+```lua
+-- script.lus (run with: lus -Pfs:read=/tmp script.lus)
+pledge("fs:read=/tmp")  -- granted
+pledge("fs:write")      -- denied, not in CLI grant
+```
+
+## Coroutine inheritance
+
+Permissions are inherited by coroutines:
+
+```lua
+pledge("fs")
+
+local co = coroutine.create(function()
+  fs.list("/tmp")  -- inherits fs permission
+end)
+```
+
+## Available permissions
+
+| Permission | Description |
+|------------|-------------|
+| `fs` | All filesystem operations |
+| `fs:read` | Reading files and directories |
+| `fs:write` | Creating, modifying, deleting files |
+| `load` | Loading code at runtime (`load`, `loadfile`, `dofile`, `require`) |
+| `exec` | Running external commands (`os.execute`, `io.popen`) |
+| `network` | All network operations |
+| `network:tcp` | TCP socket connections |
+| `network:udp` | UDP socket operations |
+| `network:http` | HTTP/HTTPS requests |
+
+> [!NOTE]
+> The `loadfile`, `dofile`, and `require` functions require both `fs:read` (to read the file) and `load` (to execute the code). The `load` function requires only `load`.
+
+---
+
+## Motivation
+
+Lus scripts often handle untrusted input or run in sandboxed environments. The permission system provides controlled access to system resources.
+
+### Defense in depth
+
+Scripts explicitly declare their needs, making it clear what capabilities are required:
+
+```lua
+-- Script header shows requirements
+pledge("fs:read")
+pledge("network:http")
+
+-- Rest of script uses only these capabilities
+```
+
+### Principle of least privilege
+
+Restrict access to only what's needed:
+
+```lua
+-- Only read from specific directory
+pledge("fs:read=/var/log/app/*")
+
+-- Script can read logs but nothing else
+local logs = fs.list("/var/log/app")
+catch fs.list("/etc")  -- denied
+```
+
+### Host control
+
+Host applications can pre-reject capabilities before running scripts:
+
+```lua
+-- Host application
+pledge("~exec")    -- scripts cannot run commands
+pledge("~network") -- scripts cannot access network
+pledge("seal")     -- lock it down
+
+dofile("untrusted.lus")  -- runs with restrictions
+```

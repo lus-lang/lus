@@ -1,5 +1,6 @@
 ---
 import ManualLayout from "../../../components/ManualLayout.astro"
+import ManualAPI from "../../../components/ManualAPI.astro"
 ---
 
 <ManualLayout title="API">
@@ -99,6 +100,7 @@ import ManualLayout from "../../../components/ManualLayout.astro"
             <a href="#next">next</a>
             <a href="#pairs">pairs</a>
             <a data-from="removed">pcall</a>
+            <a href="#pledge" data-from="lus-unstable">pledge</a>
             <a href="#print">print</a>
             <a href="#rawequal">rawequal</a>
             <a href="#rawget">rawget</a>
@@ -623,6 +625,44 @@ import ManualLayout from "../../../components/ManualLayout.astro"
               >luaopen_network</a
             >
           </p>
+          <h3>Permission System</h3>
+          <p>
+            <a href="#lus_PledgeRequest" data-from="lus-unstable"
+              >lus_PledgeRequest</a
+            >
+            <a href="#lus_PledgeGranter" data-from="lus-unstable"
+              >lus_PledgeGranter</a
+            >
+            <a href="#LUS_PLEDGE_GRANT" data-from="lus-unstable"
+              >LUS_PLEDGE_GRANT</a
+            >
+            <a href="#lus_initpledge" data-from="lus-unstable">lus_initpledge</a
+            >
+            <a href="#lus_nextpledge" data-from="lus-unstable">lus_nextpledge</a
+            >
+            <a href="#lus_setpledge" data-from="lus-unstable">lus_setpledge</a>
+            <a href="#lus_pledge" data-from="lus-unstable">lus_pledge</a>
+            <a href="#lus_haspledge" data-from="lus-unstable">lus_haspledge</a>
+            <a href="#lus_registerpledge" data-from="lus-unstable"
+              >lus_registerpledge</a
+            >
+            <a href="#lus_rejectpledge" data-from="lus-unstable"
+              >lus_rejectpledge</a
+            >
+            <a href="#lus_rejectrequest" data-from="lus-unstable"
+              >lus_rejectrequest</a
+            >
+            <a href="#lus_pledgeerror" data-from="lus-unstable"
+              >lus_pledgeerror</a
+            >
+            <a href="#lus_revokepledge" data-from="lus-unstable"
+              >lus_revokepledge</a
+            >
+            <a href="#lus_issealed" data-from="lus-unstable">lus_issealed</a>
+            <a href="#lus_checkfsperm" data-from="lus-unstable"
+              >lus_checkfsperm</a
+            >
+          </p>
           <h3>Constants</h3>
           <p>
             <a href="#LUA_ERRERR">LUA_ERRERR</a>
@@ -687,4 +727,5 @@ import ManualLayout from "../../../components/ManualLayout.astro"
       </tr>
     </tbody>
   </table>
+  <ManualAPI />
 </ManualLayout>

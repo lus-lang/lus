@@ -74,11 +74,13 @@ core_sources = files(
   'src/lenum.c',
   'src/lfunc.c',
   'src/lgc.c',
+  'src/lglob.c',
   'src/llex.c',
   'src/lmem.c',
   'src/lobject.c',
   'src/lopcodes.c',
   'src/lparser.c',
+  'src/lpledge.c',
   'src/lstate.c',
   'src/lstring.c',
   'src/ltable.c',
@@ -208,6 +210,7 @@ h1_tests = [
   'h1/json',
   'h1/network',
   'h1/eventloop',
+  'h1/pledge',
 ]
 
 foreach t : h1_tests

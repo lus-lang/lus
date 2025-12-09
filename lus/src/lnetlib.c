@@ -17,6 +17,7 @@
 
 #include "events/lev.h"
 #include "lauxlib.h"
+#include "lpledge.h"
 #include "lua.h"
 #include "lualib.h"
 
@@ -1172,6 +1173,16 @@ static int tcp_connect(lua_State *L) {
   const char *address = luaL_checkstring(L, 1);
   int port = (int)luaL_checkinteger(L, 2);
 
+  /* Build host:port string for permission check */
+  char hostport[512];
+  snprintf(hostport, sizeof(hostport), "%s:%d", address, port);
+
+  /* Check network:tcp permission */
+  if (!lus_haspledge(L, "network:tcp", hostport)) {
+    return luaL_error(L, "permission \"network:tcp\" denied for '%s'",
+                      hostport);
+  }
+
   init_winsock(L);
 
   struct sockaddr_storage addr;
@@ -1255,6 +1266,11 @@ static const luaL_Reg tcp_funcs[] = {
 static int udp_open(lua_State *L) {
   int port = (int)luaL_optinteger(L, 1, 0);
   const char *address = luaL_optstring(L, 2, NULL);
+
+  /* Check network:udp permission */
+  if (!lus_haspledge(L, "network:udp", NULL)) {
+    return luaL_error(L, "permission \"network:udp\" denied");
+  }
 
   init_winsock(L);
 
@@ -1432,6 +1448,11 @@ static int net_fetch(lua_State *L) {
   /* headers table at index 3 (optional) */
   size_t body_len = 0;
   const char *body = luaL_optlstring(L, 4, NULL, &body_len);
+
+  /* Check network:http permission */
+  if (!lus_haspledge(L, "network:http", url)) {
+    return luaL_error(L, "permission \"network:http\" denied for '%s'", url);
+  }
 
   ParsedURL parsed;
   if (parse_url(url, &parsed) != 0) {
@@ -1743,7 +1764,69 @@ static void create_metatable(lua_State *L, const char *name,
 
 static const luaL_Reg network_funcs[] = {{"fetch", net_fetch}, {NULL, NULL}};
 
+/*
+** Network granter: handles network permission requests and checks.
+** Called by lus_pledge for granting and lus_haspledge for checking.
+*/
+static void network_granter(lua_State *L, lus_PledgeRequest *p) {
+  /* Granting: accept tcp/udp/http subpermissions or base network */
+  if (p->status == LUS_PLEDGE_GRANT || p->status == LUS_PLEDGE_UPDATE) {
+    if (p->sub == NULL) {
+      /* Grant global network permission */
+      lus_setpledge(L, p, NULL, p->value);
+    } else if (strcmp(p->sub, "tcp") == 0 || strcmp(p->sub, "udp") == 0 ||
+               strcmp(p->sub, "http") == 0) {
+      /* Grant specific network permission */
+      lus_setpledge(L, p, p->sub, p->value);
+    } else {
+      /* Unknown subpermission = error */
+      luaL_error(L, "unknown network subpermission: '%s'", p->sub);
+    }
+    return;
+  }
+
+  /* Checking: match value against stored patterns */
+  if (p->status == LUS_PLEDGE_CHECK) {
+    const char *value = p->value;
+
+    /* No value to check = allowed if permission exists */
+    if (value == NULL) {
+      lus_setpledge(L, p, p->sub, NULL);
+      return;
+    }
+
+    /* If has_base and no values, global access */
+    if (p->has_base && p->count == 0) {
+      lus_setpledge(L, p, p->sub, NULL);
+      return;
+    }
+
+    /* Iterate stored values and check for match */
+    while (lus_nextpledge(L, p)) {
+      if (p->current) {
+        /* Exact match */
+        if (strcmp(p->current, value) == 0) {
+          lus_setpledge(L, p, p->sub, NULL);
+          return;
+        }
+        /* Wildcard prefix match */
+        size_t plen = strlen(p->current);
+        if (plen > 0 && p->current[plen - 1] == '*') {
+          if (strncmp(p->current, value, plen - 1) == 0) {
+            lus_setpledge(L, p, p->sub, NULL);
+            return;
+          }
+        }
+      }
+    }
+    /* No match = not processed = denied */
+  }
+}
+
 LUAMOD_API int luaopen_network(lua_State *L) {
+  /* Register network granter for permission checking */
+  lus_registerpledge(L, "network", network_granter);
+
   /* Create metatables */
   create_metatable(L, SOCKET_METATABLE, socket_methods);
   create_metatable(L, SERVER_METATABLE, server_methods);

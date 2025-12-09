@@ -1,0 +1,204 @@
+---
+
+---
+
+<!-- Environment Functions -->
+<h2 id="pledge">pledge (name [, value])</h2>
+<p>
+  Grants or checks a permission. Returns <code>true</code> if the permission was
+  granted, <code>false</code> if it was denied or the state is sealed.
+</p>
+<p>
+  The <code>name</code> argument specifies the permission, optionally with a sub-permission
+  (e.g., <code>"fs"</code>, <code>"fs:read"</code>). The optional <code
+    >value</code
+  >
+  can restrict access to a specific path or URL pattern (e.g., <code
+    >"fs:read=/tmp/*"</code
+  >).
+</p>
+<p>
+  Special permissions: <code>"all"</code> grants all permissions (CLI only),
+  <code>"seal"</code> prevents future permission changes. The <code>~</code> prefix
+  rejects a permission permanently.
+</p>
+<pre><code>pledge("fs")           -- grant filesystem access
+pledge("fs:read=/tmp") -- grant read access to /tmp only
+pledge("~network")     -- reject network permission
+pledge("seal")         -- lock permissions</code></pre>
+
+<!-- C API Types -->
+
+<h2 id="lus_PledgeRequest">lus_PledgeRequest</h2>
+<pre><code>{`typedef struct lus_PledgeRequest {
+  const char *base;     /* "fs", "network", etc. */
+  const char *sub;      /* "read", "tcp", or NULL */
+  const char *value;    /* requested value, or NULL */
+  const char *current;  /* current stored value during iteration */
+  int status;           /* LUS_PLEDGE_GRANT, UPDATE, or CHECK */
+  int count;            /* number of stored values */
+  int has_base;         /* 1 if base permission already granted */
+} lus_PledgeRequest;`}</code></pre>
+<p>
+  Request structure passed to granter callbacks. Contains all information about
+  the permission being granted or checked.
+</p>
+<p>
+  <code>status</code> indicates the operation: <code>LUS_PLEDGE_GRANT</code> for
+  new grants,
+  <code>LUS_PLEDGE_UPDATE</code> for updates, <code>LUS_PLEDGE_CHECK</code> for access
+  checks.
+</p>
+
+<h2 id="lus_PledgeGranter">lus_PledgeGranter</h2>
+<pre><code>typedef void (*lus_PledgeGranter)(lua_State *L, lus_PledgeRequest *p);</code></pre>
+<p>
+  Callback type for permission granters. Libraries register granters to handle
+  their own permission validation logic.
+</p>
+<p>
+  Granters should call <code>lus_setpledge</code> to confirm valid permissions. Unprocessed
+  requests are automatically denied. For invalid subpermissions, use <code
+    >luaL_error</code
+  > to report an error.
+</p>
+
+<!-- Status Constants -->
+
+<h2 id="LUS_PLEDGE_GRANT">Status Constants</h2>
+<pre><code>#define LUS_PLEDGE_GRANT  0  /* New permission request */
+#define LUS_PLEDGE_UPDATE 1  /* Updating existing permission */
+#define LUS_PLEDGE_CHECK  2  /* Read-only permission check */</code></pre>
+<p>
+  Values for <code>lus_PledgeRequest.status</code>. Granters should handle
+  GRANT/UPDATE for permission grants and CHECK for access checks.
+</p>
+
+<!-- Iterator Functions -->
+
+<h2 id="lus_initpledge">lus_initpledge</h2>
+<pre><code>void lus_initpledge(lua_State *L, lus_PledgeRequest *p, const char *base);</code></pre>
+<p>
+  Initializes a pledge request for C-side grants. This bypasses granters and is
+  used for direct permission grants from C code.
+</p>
+<pre><code>{`lus_PledgeRequest p;
+lus_initpledge(L, &p, "fs");
+lus_setpledge(L, &p, "read", "/tmp/*");`}</code></pre>
+
+<h2 id="lus_nextpledge">lus_nextpledge</h2>
+<pre><code>int lus_nextpledge(lua_State *L, lus_PledgeRequest *p);</code></pre>
+<p>
+  Iterates through stored values for a permission. Sets <code
+    >p-&gt;current</code
+  >
+  to the next stored value.
+</p>
+<p>
+  Returns <code>1</code> if there are more values, <code>0</code> when done.
+</p>
+<pre><code>{`while (lus_nextpledge(L, p)) {
+  if (match(p->current, p->value))
+    lus_setpledge(L, p, p->sub, NULL);
+}`}</code></pre>
+
+<h2 id="lus_setpledge">lus_setpledge</h2>
+<pre><code>void lus_setpledge(lua_State *L, lus_PledgeRequest *p,
+                   const char *sub, const char *value);</code></pre>
+<p>
+  Confirms or sets a pledge value. Marks the request as processed, preventing
+  automatic denial. Must be called by granters to approve a permission.
+</p>
+<p>
+  <code>sub</code> is the subpermission (e.g., "read") or NULL for base.
+  <code>value</code> is the value to store (e.g., path) or NULL for unrestricted.
+</p>
+
+<h2 id="lus_rejectrequest">lus_rejectrequest</h2>
+<pre><code>void lus_rejectrequest(lua_State *L, lus_PledgeRequest *p);</code></pre>
+<p>
+  Permanently rejects a permission using the request struct. Future attempts to
+  grant this permission will fail.
+</p>
+
+<h2 id="lus_pledgeerror">lus_pledgeerror</h2>
+<pre><code>void lus_pledgeerror(lua_State *L, lus_PledgeRequest *p, const char *msg);</code></pre>
+<p>
+  Sets a denial error message for user-facing feedback. Called by granters to
+  explain why a permission was denied.
+</p>
+
+<!-- Public API Functions -->
+
+<h2 id="lus_pledge">lus_pledge</h2>
+<pre><code>int lus_pledge(lua_State *L, const char *name, const char *value);</code></pre>
+<p>
+  Grants a permission to the Lua state. Triggers the granter callback for
+  validation. Returns <code>1</code> on success, <code>0</code> if denied or sealed.
+</p>
+<p>
+  Throws an error if the permission name is not recognized (no granter
+  registered).
+</p>
+
+<h2 id="lus_haspledge">lus_haspledge</h2>
+<pre><code>int lus_haspledge(lua_State *L, const char *name, const char *value);</code></pre>
+<p>
+  Checks if a permission has been granted. The <code>value</code> argument specifies
+  the resource being accessed (e.g., a file path).
+</p>
+<p>
+  Returns <code>1</code> if access is allowed, <code>0</code> if denied.
+</p>
+
+<h2 id="lus_registerpledge">lus_registerpledge</h2>
+<pre><code>void lus_registerpledge(lua_State *L, const char *base, lus_PledgeGranter fn);</code></pre>
+<p>
+  Registers a granter callback for a permission namespace. Call this in your
+  library's <code>luaopen_*</code> function.
+</p>
+<pre><code>{`static void my_granter(lua_State *L, lus_PledgeRequest *p) {
+  if (p->status == LUS_PLEDGE_CHECK) {
+    lus_setpledge(L, p, p->sub, NULL);  /* allow */
+  } else {
+    lus_setpledge(L, p, p->sub, p->value);  /* grant */
+  }
+}
+
+LUAMOD_API int luaopen_mylib(lua_State *L) {
+  lus_registerpledge(L, "mylib", my_granter);
+  /* ... */
+}`}</code></pre>
+
+<h2 id="lus_rejectpledge">lus_rejectpledge</h2>
+<pre><code>int lus_rejectpledge(lua_State *L, const char *name);</code></pre>
+<p>
+  Permanently rejects a permission by name (string-based version). Returns <code
+    >1</code
+  > on success, <code>0</code> if sealed.
+</p>
+
+<h2 id="lus_revokepledge">lus_revokepledge</h2>
+<pre><code>int lus_revokepledge(lua_State *L, const char *name);</code></pre>
+<p>
+  Revokes a previously granted permission. Clears all stored values for the
+  permission. Returns <code>1</code> on success, <code>0</code> if sealed or not
+  found.
+</p>
+
+<h2 id="lus_issealed">lus_issealed</h2>
+<pre><code>int lus_issealed(lua_State *L);</code></pre>
+<p>
+  Returns <code>1</code> if the permission state is sealed, <code>0</code> otherwise.
+  When sealed, no new permissions can be granted or rejected.
+</p>
+
+<h2 id="lus_checkfsperm">lus_checkfsperm</h2>
+<pre><code>int lus_checkfsperm(lua_State *L, const char *perm, const char *path);</code></pre>
+<p>
+  Convenience function for filesystem permission checks. Checks if <code
+    >perm</code
+  >
+  (e.g., "fs:read") is granted for <code>path</code>. Raises an error if denied.
+</p>
+<pre><code>lus_checkfsperm(L, "fs:read", "/etc/passwd");  /* error if denied */</code></pre>
