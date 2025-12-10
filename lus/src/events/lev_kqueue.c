@@ -184,7 +184,7 @@ static int kqueue_wait_events(EventBackend *be, EventResult *results, int max,
       ev = EVLOOP_READ;
     if (events[i].filter == EVFILT_WRITE)
       ev = EVLOOP_WRITE;
-    if (events[i].flags & EVLOOP_ERROR)
+    if (events[i].flags & EV_ERROR)
       ev |= EVLOOP_ERROR;
 
     /* Check if this fd already has a result */

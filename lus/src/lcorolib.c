@@ -16,8 +16,56 @@
 #include "events/lev.h"
 #include "lauxlib.h"
 #include "llimits.h"
+#include "ltask.h"
 #include "lualib.h"
 
+/*
+** Sleep task data - stores the deadline for wakeup
+*/
+typedef struct {
+  lua_Number start_time;
+  lua_Number deadline;
+} SleepTaskData;
+
+/*
+** Sleep task handler.
+** INIT: Store start_time and deadline in task data, enqueue task.
+** RESUME: Register with scheduler for timer wakeup, dequeue.
+** COMPLETE: Return elapsed time, close task.
+*/
+int lus_sleep_handler(lua_State *L, lus_Task *t) {
+  SleepTaskData d;
+
+  switch (t->status) {
+  case LUS_TASK_INIT: {
+    /* Get sleep duration from Lua stack (arg 1) */
+    lua_Number seconds = lua_tonumber(L, 1);
+    d.start_time = eventloop_now();
+    d.deadline = d.start_time + seconds;
+    lus_task_setdata(t, &d, sizeof(d));
+    return LUS_TASK_ACT_ENQUEUE;
+  }
+  case LUS_TASK_RESUME: {
+    /* Register with scheduler for timer wakeup */
+    lus_task_getdata(t, &d);
+    set_yield_reason(L, YIELD_SLEEP);
+    set_yield_deadline(L, d.deadline);
+    return LUS_TASK_ACT_DEQUEUE;
+  }
+  case LUS_TASK_COMPLETE: {
+    /* Sleep finished - push elapsed time */
+    lus_task_getdata(t, &d);
+    lua_Number elapsed = eventloop_now() - d.start_time;
+    lua_pushnumber(L, elapsed);
+    return LUS_TASK_ACT_CLOSE;
+  }
+  case LUS_TASK_CLOSE:
+    /* No cleanup needed */
+    return 0;
+  default:
+    return LUS_TASK_ACT_CLOSE;
+  }
+}
 static lua_State *getco(lua_State *L) {
   lua_State *co = lua_tothread(L, 1);
   luaL_argexpected(L, co, 1, "thread");
@@ -288,12 +336,14 @@ static int luaB_sleep(lua_State *L) {
     return luaL_error(L, "sleep duration must be non-negative");
   }
 
-  /* Set up sleep yield */
-  lua_Number deadline = eventloop_now() + seconds;
-  set_yield_reason(L, YIELD_SLEEP);
-  set_yield_deadline(L, deadline);
+  /* Create sleep task - handler is invoked with INIT */
+  lus_Task *t = lus_task(L, LUS_TASK_SLEEP);
+  if (!t) {
+    return luaL_error(L, "failed to create sleep task");
+  }
 
-  return lua_yield(L, 0);
+  /* Yield with task - handler will be invoked with RESUME */
+  return lus_task_yield(L, t);
 }
 
 /*
@@ -327,6 +377,18 @@ static int luaB_pending(lua_State *L) {
   return 1;
 }
 
+/*
+** coroutine.run()
+** Run the event loop until all pending coroutines complete.
+** Blocks efficiently using kernel I/O primitives (kqueue/epoll/IOCP).
+*/
+static int luaB_run(lua_State *L) {
+  while (scheduler_pending_count(L) > 0) {
+    scheduler_poll(L, -1); /* Block until event */
+  }
+  return 0;
+}
+
 static const luaL_Reg co_funcs[] = {{"create", luaB_cocreate},
                                     {"resume", luaB_coresume},
                                     {"running", luaB_corunning},
@@ -339,10 +401,14 @@ static const luaL_Reg co_funcs[] = {{"create", luaB_cocreate},
                                     {"sleep", luaB_sleep},
                                     {"poll", luaB_poll},
                                     {"pending", luaB_pending},
+                                    {"run", luaB_run},
                                     {NULL, NULL}};
 
 LUAMOD_API int luaopen_coroutine(lua_State *L) {
   luaL_newlib(L, co_funcs);
+
+  /* Register sleep task handler */
+  /* Task handlers registered centrally in scheduler_init */
 
   /* Create status_e enum: pending, completed, yielded, error */
   lua_pushstring(L, "pending");

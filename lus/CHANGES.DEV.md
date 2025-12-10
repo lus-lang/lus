@@ -891,245 +891,190 @@ static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
 
 ## Event Loop
 
-Lus provides an opt-in event loop for running detached coroutines with non-blocking I/O and timed sleeps. The event loop uses platform-native backends and integrates seamlessly with the coroutine API.
+Lus provides an opt-in event loop for running detached coroutines with non-blocking I/O and timed sleeps.
 
-#### Design Philosophy
+#### Coroutine API
 
-- **Opt-in**: Only coroutines explicitly marked with `coroutine.detach()` participate in event-driven execution
-- **Explicit polling**: User controls event processing via `coroutine.poll()`
-- **Native backends**: Uses OS-native event APIs (epoll, kqueue, IOCP) for efficiency
-- **Thread pool**: Background thread pool for file I/O and blocking operations
-
-#### Coroutine API Extensions
-
-**`coroutine.detach(co)` → status_e**
-
-Starts a coroutine for event-driven execution. Runs immediately until async I/O or completion:
+| Function | Description |
+|----------|-------------|
+| `coroutine.detach(co)` | Start coroutine for event-driven execution, returns `status_e` |
+| `coroutine.run()` | Block until all pending coroutines complete |
+| `coroutine.poll([timeout])` | Process pending I/O, resume ready coroutines |
+| `coroutine.pending()` | Return count of pending coroutines |
+| `coroutine.sleep(seconds)` | Yield for duration (detached only) |
 
 ```lua
 local co = coroutine.create(function()
   coroutine.sleep(0.1)
   return "done"
 end)
-
-local status = coroutine.detach(co)
-if status == coroutine.status_e.pending then
-  -- Coroutine is waiting on async I/O
-  while coroutine.pending() > 0 do
-    coroutine.poll(1)
-  end
-end
+coroutine.detach(co)
+coroutine.run()  -- blocks until co completes
 ```
 
-Returns a `coroutine.status_e` enum value:
-- `pending`: Coroutine yielded on async I/O, waiting in event loop
-- `completed`: Coroutine finished synchronously
-- `yielded`: Coroutine called regular `coroutine.yield()`
-- `error`: Coroutine threw an error
+#### Scheduler Implementation
 
-**`coroutine.poll([timeout_secs])` → void**
-
-Processes the event loop, resuming ready coroutines. Throws any errors from completed coroutines:
-
-```lua
-while coroutine.pending() > 0 do
-  catch coroutine.poll(5)  -- 5 second timeout
-end
-```
-
-**`coroutine.pending()` → integer**
-
-Returns the count of coroutines waiting in the event loop.
-
-**`coroutine.sleep(seconds)`**
-
-Yields execution for a specified duration (only valid in detached coroutines):
-
-```lua
-coroutine.sleep(0.5)    -- sleep 500ms
-coroutine.sleep(0.001)  -- sleep 1ms
-coroutine.sleep(0)      -- yield immediately
-```
-
-#### Implementation
-
-**Header File (`lev.h`):**
+The scheduler state lives in `global_State->scheduler`:
 
 ```c
-/* Yield reasons for detached coroutines */
-#define YIELD_NORMAL 0     /* Regular yield */
-#define YIELD_IO 1         /* Waiting for I/O */
-#define YIELD_SLEEP 2      /* Sleeping for duration */
-#define YIELD_THREADPOOL 3 /* Waiting for thread pool task */
-
-/* Event flags */
-#define EVLOOP_READ 1
-#define EVLOOP_WRITE 2
-#define EVLOOP_ERROR 4
-
-/* Scheduler management */
-Scheduler *scheduler_get(lua_State *L);
-void scheduler_init(lua_State *L);
-void scheduler_cleanup(lua_State *L);
-
-/* Pending coroutine management */
-void scheduler_add_pending(lua_State *L, lua_State *co, int fd,
-                           int events, lua_Number deadline);
-int scheduler_poll(lua_State *L, int timeout_ms);
-int scheduler_pending_count(lua_State *L);
-
-/* Thread pool access */
-ThreadPool *scheduler_get_threadpool(lua_State *L);
-```
-
-**Scheduler Structure (`lev.c`):**
-
-```c
-struct Scheduler {
-  EventBackend *backend;     /* Platform-specific event backend */
-  const BackendOps *ops;     /* Backend operations */
-  ThreadPool *threadpool;    /* Thread pool for async work */
-  PendingCoroutine *pending; /* Linked list of pending coroutines */
+typedef struct lus_Scheduler {
+  EventBackend *backend;         /* Platform backend (kqueue/epoll/IOCP) */
+  const BackendOps *ops;
+  struct ThreadPool *threadpool; /* For blocking file I/O */
+  PendingCoroutine *pending;     /* Linked list */
   int pending_count;
-  char *pending_error;       /* Error to throw on next poll() */
-};
+  char *pending_error;
+} lus_Scheduler;
+```
+
+**Yield reasons** tracked per coroutine:
+- `YIELD_IO` — waiting for socket readable/writable
+- `YIELD_SLEEP` — waiting for deadline
+- `YIELD_THREADPOOL` — waiting for thread pool task
+
+**`scheduler_poll()` flow:**
+1. Calculate timeout from earliest deadline
+2. `ops->wait()` on platform backend (kqueue/epoll)
+3. Iterate pending list, resume coroutines with ready fd or expired timer
+4. Clear `yield_deadline` before resume to prevent stale timer triggering
+5. If resumed coroutine yields again, re-add to pending (skip past head to avoid infinite loop)
+
+#### Task API
+
+The primary way to integrate with the event loop is through tasks (`ltask.h`):
+
+```c
+typedef struct lus_Task {
+  int type;         /* Task type ID */
+  int status;       /* INIT, RESUME, COMPLETE, CLOSE */
+  lua_State *co;    /* Owning coroutine */
+  void *data;       /* Handler-defined data (copied) */
+  size_t data_size;
+} lus_Task;
+```
+
+**Task Types:**
+- `LUS_TASK_SLEEP` (-1) — `coroutine.sleep`
+- `LUS_TASK_IO` (-2) — Socket I/O
+- Positive IDs available for embedders
+
+**Task Lifecycle:**
+1. `LUS_TASK_INIT` — Handler initializes task
+2. `LUS_TASK_RESUME` — Task starts/resumes
+3. `LUS_TASK_COMPLETE` — Operation finished
+4. `LUS_TASK_CLOSE` — Cleanup
+
+**C API:**
+
+| Function | Description |
+|----------|-------------|
+| `lus_task_register(L, type, handler)` | Register handler for task type |
+| `lus_task(L, type)` | Create new task, calls handler with INIT |
+| `lus_task_setdata(t, data, size)` | Store data on task (copied) |
+| `lus_task_getdata(t, out)` | Retrieve task data |
+| `lus_task_yield(L, t)` | Yield coroutine with task |
+| `lus_task_complete(t)` | Mark task as complete |
+| `lus_isasync(L)` | Check if in detached coroutine |
+
+**Handler Pattern (Sleep Example):**
+
+```c
+typedef struct {
+  lua_Number start_time;
+  lua_Number deadline;
+} SleepTaskData;
+
+static int sleep_handler(lua_State *L, lus_Task *t) {
+  SleepTaskData d;
+
+  switch (t->status) {
+    case LUS_TASK_INIT: {
+      /* Get args from stack, store in task data */
+      lua_Number seconds = lua_tonumber(L, 1);
+      d.start_time = eventloop_now();
+      d.deadline = d.start_time + seconds;
+      lus_task_setdata(t, &d, sizeof(d));
+      return LUS_TASK_ACT_ENQUEUE;
+    }
+    case LUS_TASK_RESUME: {
+      /* Register wakeup condition with scheduler */
+      lus_task_getdata(t, &d);
+      set_yield_reason(L, YIELD_SLEEP);
+      set_yield_deadline(L, d.deadline);
+      return LUS_TASK_ACT_DEQUEUE;
+    }
+    case LUS_TASK_COMPLETE: {
+      /* Push results, return ACT_CLOSE */
+      lus_task_getdata(t, &d);
+      lua_pushnumber(L, eventloop_now() - d.start_time);
+      return LUS_TASK_ACT_CLOSE;
+    }
+    case LUS_TASK_CLOSE:
+      /* Cleanup (if needed) */
+      return 0;
+  }
+}
+```
+
+**Task Flow:**
+1. `lus_task(L, type)` → INIT handler → ACT_ENQUEUE → task enqueued
+2. First yield → scheduler resumes → RESUME handler → sets wakeup conditions → ACT_DEQUEUE
+3. Event occurs → scheduler resumes → COMPLETE handler → pushes results → ACT_CLOSE
+4. CLOSE handler runs → task freed
+
+#### Making C Code Async-Aware
+
+```c
+if (is_detached(L)) {
+  set_nonblocking(fd, 1);
+}
+
+ssize_t got = recv(fd, buf, len, 0);
+if (got == -1 && errno == EWOULDBLOCK) {
+  if (is_detached(L)) {
+    set_yield_reason(L, YIELD_IO);
+    set_yield_fd(L, fd);
+    set_yield_events(L, EVLOOP_READ);
+    return lua_yieldk(L, 0, ctx, continuation_fn);
+  }
+}
+```
+
+Socket data accumulates in `LSocket.buffer` (not `luaL_Buffer`) to persist across yields:
+
+```c
+sock_buffer_ensure(sock, additional)
+sock_buffer_append(sock, data, len)
+sock_buffer_push_and_clear(L, sock)
 ```
 
 #### Platform Backends
 
-**epoll (Linux):**
-- Efficient edge-triggered event notification
-- Uses `epoll_create1()`, `epoll_ctl()`, `epoll_wait()`
+| Platform | Backend | Functions |
+|----------|---------|-----------|
+| Linux | epoll | `epoll_create1`, `epoll_ctl`, `epoll_wait` |
+| macOS/BSD | kqueue | `kqueue`, `kevent` |
+| Windows | IOCP | `CreateIoCompletionPort`, `GetQueuedCompletionStatusEx` |
+| Fallback | select | Portable but less efficient |
 
-**kqueue (macOS/BSD):**
-- Kernel event queue with efficient batching
-- Uses `kqueue()`, `kevent()`
+#### Files
 
-**IOCP (Windows):**
-- I/O Completion Ports for async I/O
-- Uses `CreateIoCompletionPort()`, `GetQueuedCompletionStatusEx()`
-
-**select (fallback):**
-- Portable fallback for platforms without native async
-
-#### Thread Pool
-
-The scheduler includes a thread pool for blocking operations that cannot use event-driven I/O (file operations, etc.):
-
-**Header (`lev_threadpool.h`):**
-
-```c
-typedef struct ThreadPoolTask ThreadPoolTask;
-typedef void (*ThreadPoolWorkFn)(ThreadPoolTask *task);
-
-struct ThreadPoolTask {
-  ThreadPoolWorkFn work;    /* Function to execute in worker */
-  void *userdata;           /* Task-specific data */
-  void *result;             /* Result from worker */
-  char *error;              /* Error message if failed */
-  volatile int done;        /* Completion flag */
-};
-
-ThreadPool *threadpool_create(int num_threads);
-void threadpool_destroy(ThreadPool *pool);
-void threadpool_submit(ThreadPool *pool, ThreadPoolTask *task);
-int threadpool_poll(ThreadPool *pool, ThreadPoolTask **completed, int max);
-```
-
-**Implementation (`lev_threadpool.c`):**
-
-Cross-platform implementation using:
-- **POSIX**: pthreads + pipe for notification
-- **Windows**: Win32 threads + event for notification
-
-Worker threads perform blocking I/O in the background. The scheduler polls for completion and resumes waiting coroutines.
-
-#### Making C Code Async-Aware
-
-Documentation in `lev.c` explains how to make Lus C functions async-aware:
-
-1. **Check detached state**: `if (is_detached(L)) { ... }`
-2. **For socket I/O**: Yield with `YIELD_IO`, `set_yield_fd()`, `set_yield_events()`
-3. **For blocking work**: Use thread pool, yield with `YIELD_THREADPOOL`
-4. **For sleeps**: Yield with `YIELD_SLEEP`, `set_yield_deadline()`
-
-**Key constraint**: Worker threads must NEVER touch `lua_State` (GIL).
-
-#### Async File I/O
-
-File operations in `liolib.c` are async-aware in detached coroutines. They use the thread pool to avoid blocking:
-
-**Async-aware functions:**
-- `read_all()` — reads entire file with `*a` pattern
-- `read_chars()` — reads N bytes
-- `g_write()` — writes data (single-argument case)
-
-**Continuation Pattern:**
-
-Each async function uses `lua_yieldk` with a continuation function:
-
-```c
-/* Example: read_all async pattern */
-static int read_all_cont(lua_State *L, int status, lua_KContext ctx) {
-  AsyncReadTask *task = (AsyncReadTask *)ctx;
-  
-  if (task->base.error) {
-    /* Handle error */
-    free(task);
-    return luaL_error(L, "%s", task->base.error);
-  }
-  
-  /* Push result to stack */
-  lua_pushlstring(L, task->buffer, task->size);
-  free(task->buffer);
-  free(task);
-  return 1;
-}
-
-static void read_all(lua_State *L, FILE *f) {
-  if (is_detached(L)) {
-    ThreadPool *pool = get_threadpool(L);
-    if (pool) {
-      AsyncReadTask *task = malloc(sizeof(AsyncReadTask));
-      task->base.work = async_read_all_work;
-      task->f = f;
-      
-      threadpool_submit(pool, task);
-      set_yield_reason(L, YIELD_THREADPOOL);
-      set_yield_task(L, task);
-      
-      lua_yieldk(L, 0, (lua_KContext)task, read_all_cont);
-    }
-  }
-  
-  /* Synchronous fallback */
-  // ...standard fread loop...
-}
-```
-
-**Worker functions** (run in thread pool):
-- `async_read_all_work()` — reads entire file into malloc'd buffer
-- `async_read_bytes_work()` — reads N bytes into malloc'd buffer  
-- `async_write_work()` — writes data using fwrite
-
-#### Files Created/Modified
-
-| File | Changes |
+| File | Purpose |
 |------|---------|
-| `lev.h` | Event loop interface, yield reasons, scheduler API |
-| `lev.c` | Scheduler, poll loop, async-awareness documentation |
-| `lev_epoll.c` | Linux epoll backend |
-| `lev_kqueue.c` | macOS/BSD kqueue backend |
-| `lev_iocp.c` | Windows IOCP backend |
-| `lev_select.c` | Portable select() fallback |
-| `lev_threadpool.h` | Thread pool interface |
-| `lev_threadpool.c` | Cross-platform thread pool |
-| `lcorolib.c` | `detach`, `poll`, `pending`, `sleep`, `status_e` |
-| `lnetlib.c` | Async I/O for network operations |
-| `liolib.c` | Async I/O infrastructure for file operations |
-| `meson.build` | Platform-specific backend selection |
+| `ltask.h` | Task API, `lus_Task` struct |
+| `ltask.c` | Task management, handler registry |
+| `lev.h` | Scheduler struct, yield APIs, event flags |
+| `lev.c` | Scheduler polling, pending management |
+| `lev_kqueue.c` | macOS/BSD backend |
+| `lev_epoll.c` | Linux backend |
+| `lev_threadpool.c` | Thread pool for file I/O |
+| `lcorolib.c` | `detach`, `run`, `poll`, `sleep`, `pending` |
+| `lnetlib.c` | Async socket operations |
 
-## Permission System (Acquis 11)
+
+
+
+## Permission System
 
 A capability-based permission system for Lus scripts. Permissions are granted via the `pledge()` function or CLI `--pledge`/`-P` flags.
 
@@ -1156,7 +1101,7 @@ pledge("seal")                   -- Prevent new permissions
 
 ```bash
 lus -Pfs script.lus              # Grant fs permission
-lus --pledge=network:http script # Grant specific permission
+lus --pledge network:http script # Grant specific permission
 lus -P~exec script.lus           # Pre-reject exec permission
 ```
 
@@ -1249,4 +1194,10 @@ lus_registerpledge(L, "fs", fs_granter);
 | `lnetlib.c` | network granter with URL matching |
 | `loadlib.c` | fs:read + load permission checks for require |
 | `meson.build` | Added new source files, pledge test |
+
+
+
+
+
+
 

@@ -4,7 +4,9 @@
   with Node.js-style async semantics
 ]]
 
-global print, coroutine, math, os, assert, error, type, tostring, require, table
+global pledge, print, coroutine, math, os, assert, error, type, tostring, require, table
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("Event Loop")

@@ -52,11 +52,33 @@ typedef struct PendingCoroutine {
   struct PendingCoroutine *next;
 } PendingCoroutine;
 
-/* Scheduler state (stored in lua_State extra space or registry) */
-typedef struct Scheduler Scheduler;
+/* Maximum number of registered task handlers */
+#define LUS_MAX_TASK_HANDLERS 32
+
+/* Scheduler state (stored in global_State) */
+typedef struct lus_Scheduler {
+  EventBackend *backend;
+  const BackendOps *ops;
+  struct ThreadPool *threadpool; /* Thread pool for async work */
+  PendingCoroutine *pending;     /* Linked list of pending coroutines */
+  int pending_count;             /* Number of pending coroutines */
+  char *pending_error;           /* Error to throw on next poll() */
+  /* Task system */
+  struct lus_TaskHandler_entry {
+    int type;
+    void *handler;
+  } task_handlers[LUS_MAX_TASK_HANDLERS]; /* Registered task handlers */
+  int task_handler_count;
+  struct lus_Task *task_queue_head;
+  struct lus_Task *task_queue_tail;
+  int task_queue_count;
+} lus_Scheduler;
+
+/* Forward declaration for task system */
+struct lus_Task;
 
 /* Scheduler management */
-LUAI_FUNC Scheduler *scheduler_get(lua_State *L);
+LUAI_FUNC lus_Scheduler *scheduler_get(lua_State *L);
 LUAI_FUNC void scheduler_init(lua_State *L);
 LUAI_FUNC void scheduler_cleanup(lua_State *L);
 

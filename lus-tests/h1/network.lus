@@ -5,7 +5,9 @@
   Note: Uses 'catch' expression for protected execution.
 ]]
 
-global print, network, type, assert, require, tostring, coroutine, string, error
+global pledge, print, network, type, assert, require, tostring, coroutine, string, error
+
+pledge("load", "fs:read=./lus-tests/*", "network", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("network")

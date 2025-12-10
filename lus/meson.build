@@ -107,6 +107,7 @@ lib_sources = files(
   'src/lfslib.c',
   'src/lnetlib.c',
   'src/events/lev.c',
+  'src/ltask.c',
   'src/linit.c',
 )
 

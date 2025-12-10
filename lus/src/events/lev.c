@@ -46,6 +46,8 @@
 #include <string.h>
 
 #include "../lauxlib.h"
+#include "../lmem.h"
+#include "../lstate.h"
 #include "../lua.h"
 #include "lev.h"
 #include "lev_threadpool.h"
@@ -89,47 +91,38 @@ lua_Number eventloop_now(void) {
   "lus.pending_coros" /* Table to anchor pending coroutines                    \
                        */
 
-struct Scheduler {
-  EventBackend *backend;
-  const BackendOps *ops;
-  ThreadPool *threadpool;    /* Thread pool for async work */
-  PendingCoroutine *pending; /* Linked list of pending coroutines */
-  int pending_count;         /* Number of pending coroutines */
-  char *pending_error;       /* Error to throw on next poll() */
-};
-
-Scheduler *scheduler_get(lua_State *L) {
-  lua_getfield(L, LUA_REGISTRYINDEX, SCHEDULER_KEY);
-  Scheduler *sched = (Scheduler *)lua_touserdata(L, -1);
-  lua_pop(L, 1);
-  return sched;
-}
+lus_Scheduler *scheduler_get(lua_State *L) { return G(L)->scheduler; }
 
 void scheduler_init(lua_State *L) {
   /* Check if already initialized */
-  lua_getfield(L, LUA_REGISTRYINDEX, SCHEDULER_KEY);
-  if (!lua_isnil(L, -1)) {
-    lua_pop(L, 1);
+  if (G(L)->scheduler != NULL) {
     return;
   }
-  lua_pop(L, 1);
 
-  /* Create scheduler */
-  Scheduler *sched = (Scheduler *)lua_newuserdata(L, sizeof(Scheduler));
+  /* Allocate scheduler using Lua allocator */
+  lus_Scheduler *sched = luaM_new(L, lus_Scheduler);
+
   sched->ops = eventloop_get_backend();
   sched->backend = sched->ops->create();
   sched->threadpool = threadpool_create(4); /* 4 worker threads */
   sched->pending = NULL;
   sched->pending_count = 0;
   sched->pending_error = NULL;
+  /* Task system initialization */
+  sched->task_handler_count = 0;
+  sched->task_queue_head = NULL;
+  sched->task_queue_tail = NULL;
+  sched->task_queue_count = 0;
 
   if (!sched->backend) {
     if (sched->threadpool)
       threadpool_destroy(sched->threadpool);
+    luaM_free(L, sched);
     luaL_error(L, "failed to create event loop backend");
+    return;
   }
 
-  lua_setfield(L, LUA_REGISTRYINDEX, SCHEDULER_KEY);
+  G(L)->scheduler = sched;
 
   /* Create table to anchor pending coroutines (prevent GC) */
   lua_newtable(L);
@@ -137,7 +130,7 @@ void scheduler_init(lua_State *L) {
 }
 
 void scheduler_cleanup(lua_State *L) {
-  Scheduler *sched = scheduler_get(L);
+  lus_Scheduler *sched = G(L)->scheduler;
   if (sched) {
     /* Free pending list */
     PendingCoroutine *p = sched->pending;
@@ -164,15 +157,16 @@ void scheduler_cleanup(lua_State *L) {
       threadpool_destroy(sched->threadpool);
       sched->threadpool = NULL;
     }
+
+    luaM_free(L, sched);
+    G(L)->scheduler = NULL;
   }
-  lua_pushnil(L);
-  lua_setfield(L, LUA_REGISTRYINDEX, SCHEDULER_KEY);
   lua_pushnil(L);
   lua_setfield(L, LUA_REGISTRYINDEX, PENDING_KEY);
 }
 
 ThreadPool *scheduler_get_threadpool(lua_State *L) {
-  Scheduler *sched = scheduler_get(L);
+  lus_Scheduler *sched = scheduler_get(L);
   if (!sched) {
     scheduler_init(L);
     sched = scheduler_get(L);
@@ -186,14 +180,14 @@ ThreadPool *scheduler_get_threadpool(lua_State *L) {
 */
 void scheduler_add_pending(lua_State *L, lua_State *co, int fd, int events,
                            lua_Number deadline) {
-  Scheduler *sched = scheduler_get(L);
+  lus_Scheduler *sched = scheduler_get(L);
   if (!sched) {
     scheduler_init(L);
     sched = scheduler_get(L);
   }
 
-  /* Create pending entry */
-  PendingCoroutine *p = (PendingCoroutine *)malloc(sizeof(PendingCoroutine));
+  /* Create pending entry using Lua allocator */
+  PendingCoroutine *p = luaM_new(L, PendingCoroutine);
   p->co = co;
   p->fd = fd;
   p->events = events;
@@ -222,7 +216,7 @@ void scheduler_add_pending(lua_State *L, lua_State *co, int fd, int events,
 ** Returns 0 (no Lua values pushed).
 */
 int scheduler_poll(lua_State *L, int timeout_ms) {
-  Scheduler *sched = scheduler_get(L);
+  lus_Scheduler *sched = scheduler_get(L);
   if (!sched) {
     return 0; /* No scheduler, nothing to do */
   }
@@ -297,6 +291,9 @@ int scheduler_poll(lua_State *L, int timeout_ms) {
     if (should_resume) {
       lua_State *co = cur->co;
 
+      /* Save next pointer before list modifications */
+      PendingCoroutine *next_to_check = cur->next;
+
       /* Remove from pending list */
       *pp = cur->next;
       sched->pending_count--;
@@ -317,7 +314,8 @@ int scheduler_poll(lua_State *L, int timeout_ms) {
 
       /* Clear yield state and resume */
       set_yield_reason(co, YIELD_NORMAL);
-      set_yield_task(co, NULL); /* Clear any stale task pointer */
+      set_yield_task(co, NULL);  /* Clear any stale task pointer */
+      set_yield_deadline(co, 0); /* Clear any stale deadline */
 
       /* Check coroutine is still resumable */
       int co_status = lua_status(co);
@@ -342,9 +340,16 @@ int scheduler_poll(lua_State *L, int timeout_ms) {
         int reason = get_yield_reason(co);
         if (reason == YIELD_IO || reason == YIELD_SLEEP ||
             reason == YIELD_THREADPOOL) {
-          /* Re-add to pending list */
+          /* Re-add to pending list (adds to HEAD, so update pp) */
           scheduler_add_pending(L, co, get_yield_fd(co), get_yield_events(co),
                                 get_yield_deadline(co));
+          /* Skip past the newly added entry to continue where we left off */
+          pp = &sched->pending->next;
+          /* But we need to skip to next_to_check in the original list */
+          /* Actually, set *pp to point past the re-added element */
+          while (*pp != NULL && *pp != next_to_check) {
+            pp = &(*pp)->next;
+          }
         }
         /* Otherwise it's a normal yield - coroutine is suspended */
       } else if (status == LUA_OK) {
@@ -382,7 +387,7 @@ int scheduler_poll(lua_State *L, int timeout_ms) {
 ** Return the number of pending coroutines.
 */
 int scheduler_pending_count(lua_State *L) {
-  Scheduler *sched = scheduler_get(L);
+  lus_Scheduler *sched = scheduler_get(L);
   return sched ? sched->pending_count : 0;
 }
 
@@ -526,7 +531,7 @@ ThreadPoolTask *get_yield_task(lua_State *co) {
 */
 
 int detached_resume(lua_State *L, lua_State *co, int nargs) {
-  Scheduler *sched = scheduler_get(L);
+  lus_Scheduler *sched = scheduler_get(L);
   if (!sched || !sched->backend) {
     scheduler_init(L);
     sched = scheduler_get(L);
