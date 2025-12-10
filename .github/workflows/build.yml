@@ -16,7 +16,7 @@ on:
 jobs:
   # Sanitizer build to catch memory bugs
   sanitize:
-    name: Sanitizers (ASan + UBSan)
+    name: Sanitizers
     runs-on: ubuntu-latest
 
     steps:

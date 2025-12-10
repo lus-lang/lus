@@ -1,4 +1,6 @@
-global print, require, assert, type, os, fs, io, string, arg, tostring, collectgarbage, package
+global print, require, assert, type, os, fs, io, string, arg, tostring, collectgarbage, package, pledge
+
+pledge("load", "fs", "exec", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("cli")

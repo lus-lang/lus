@@ -100,6 +100,9 @@ end)
 -- HTTP/HTTPS Tests
 -- ============================================
 
+-- TODO: More reliable domains. Please.
+
+--[[
 tests:soft("HTTPS GET request", function()
   -- This test requires network access
   local ok, result = catch network.fetch("https://httpbin.org/get")
@@ -137,6 +140,7 @@ tests:soft("HTTPS POST request", function()
   assert(status == 200, "POST status should be 200")
   assert(body:find('"test"'), "body should contain posted data")
 end)
+--]]
 
 tests:it("DNS resolution failure", function()
   local ok, err = catch network.fetch("https://invalid.hostname.that.does.not.exist.example/")

@@ -8,7 +8,9 @@
       - Acceptable/Good -> PASS
 ]]
 
-global print, os, io, tonumber, require, string
+global print, os, io, tonumber, require, string, pledge
+
+pledge("load", "fs", "exec", "seal")
 
 local build_type = os.getenv("BUILD_TYPE") or "Unstable"
 print("H4 Runner: Build Type = " .. build_type)

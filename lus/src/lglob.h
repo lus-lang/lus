@@ -25,8 +25,6 @@ LUAI_FUNC int lus_glob_match_path(const char *pattern, const char *path,
 
 /*
 ** URL glob matching for network:http permissions.
-** Supports wildcards in domain (e.g., *.example.com) and path (e.g.,
-*example.com/*)
 ** Returns 1 if pattern matches url, 0 otherwise.
 */
 LUAI_FUNC int lus_glob_match_url(const char *pattern, const char *url);

@@ -1,7 +1,9 @@
+global print, fs, io, os, assert, error, type, tostring, string, pledge, require
+
+pledge("load", "fs", "exec", "seal")
+
 local framework = require("lus-tests.framework")
 local tests = framework.new("fs")
-
-global print, fs, io, os, assert, error, type, tostring, string
 
 -- ============================================================================
 -- Test Helpers

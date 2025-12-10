@@ -155,7 +155,7 @@ int lus_glob_match_path(const char *pattern, const char *path,
           pattern_to_use = canon_pattern;
         }
       } else if (last_sep == NULL && i > 0) {
-        /* Pattern like "dir/*" - try to resolve the prefix as a directory */
+        /* Pattern like "dir *" - try to resolve the prefix as a directory */
         char resolved_prefix[PATH_MAX];
         if (realpath(prefix, resolved_prefix) != NULL) {
           snprintf(canon_pattern, PATH_MAX, "%s%s", resolved_prefix,
@@ -198,8 +198,6 @@ int lus_glob_match_url(const char *pattern, const char *url) {
   ** URL pattern matching:
   ** - Pattern can be a domain: "example.com" matches "http://example.com/..."
   ** - Pattern can have wildcard subdomain: "*.example.com"
-  ** - Pattern can have wildcard path: "example.com/*"
-  ** - Pattern can be full URL with wildcards: "https://api.example.com/v1/*"
   */
 
   /* If pattern has no scheme, only match against host */

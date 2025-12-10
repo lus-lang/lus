@@ -1,4 +1,6 @@
-global print, io, assert, os, fs
+global print, io, assert, os, fs, pledge
+
+pledge("load", "fs", "exec", "seal")
 
 local path = os.tmpname()
 

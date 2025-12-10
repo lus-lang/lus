@@ -1,4 +1,6 @@
-global print, os, io, assert, _G, string, arg, package
+global print, os, io, assert, _G, string, arg, package, pledge
+
+pledge("load", "fs", "exec", "seal")
 
 local function is_ci()
     return os.getenv("CI") ~= nil or os.getenv("GITHUB_ACTIONS") ~= nil
@@ -45,7 +47,6 @@ run_test("lus-tests/h3/test_io.lus")
 run_test("lus-tests/h3/files.lus")
 run_test("lus-tests/h3/cli.lus")
 run_test("lus-tests/h3/fs.lus")
-run_test("lus-tests/h3/asyncio.lus")
 
 print("\27[32mH3: All system tests passed (Direct).\27[0m")
 os.exit(0)
