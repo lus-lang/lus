@@ -106,27 +106,8 @@ lib_sources = files(
   'src/ljsonlib.c',
   'src/lfslib.c',
   'src/lnetlib.c',
-  'src/events/lev.c',
-  'src/ltask.c',
   'src/linit.c',
 )
-
-# Platform-specific event loop backends
-if system == 'linux'
-  lib_sources += files('src/events/lev_epoll.c')
-elif system == 'darwin' or system == 'freebsd' or system == 'openbsd' or system == 'netbsd' or system == 'dragonfly'
-  lib_sources += files('src/events/lev_kqueue.c')
-elif system == 'windows'
-  lib_sources += files('src/events/lev_iocp.c')
-elif system == 'sunos'
-  # Solaris/illumos uses event ports - fallback to select for now
-  lib_sources += files('src/events/lev_select.c')
-else
-  lib_sources += files('src/events/lev_select.c')
-endif
-
-# Thread pool for async work (cross-platform)
-lib_sources += files('src/events/lev_threadpool.c')
 
 # Headers to install
 install_headers(
@@ -210,7 +191,6 @@ h1_tests = [
   'h1/memerr',
   'h1/json',
   'h1/network',
-  'h1/eventloop',
   'h1/pledge',
 ]
 

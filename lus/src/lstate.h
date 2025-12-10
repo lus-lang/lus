@@ -367,8 +367,6 @@ typedef struct global_State {
   lua_WarnFunction warnf;                    /* warning function */
   void *ud_warn;                             /* auxiliary data to 'warnf' */
   LX mainth;                                 /* main thread of this state */
-  /* Async scheduler state */
-  struct lus_Scheduler *scheduler; /* event loop scheduler */
 } global_State;
 
 #define G(L) (L->l_G)

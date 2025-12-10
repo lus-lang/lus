@@ -850,226 +850,26 @@ OpenSSL integration for secure connections:
 | `lualib.h` | Add `LUA_NETLIBNAME`, `LUA_NETLIBK`, `luaopen_network` |
 | `meson.build` | Add `lnetlib.c`, OpenSSL/c-ares deps, Winsock for Windows |
 
-#### Async I/O for Event Loop
+#### ~~Async I/O for Event Loop~~ (REMOVED)
 
-Network operations in detached coroutines automatically use non-blocking I/O:
+> **Note:** The event loop and async I/O functionality has been **removed**. All network operations are now synchronous/blocking. The `coroutine.detach`, `coroutine.run`, `coroutine.poll`, `coroutine.pending`, and `coroutine.sleep` functions no longer exist. The standard Lua 5.5 coroutine library has been restored.
 
-**Async Functions:**
+**Network operations are purely synchronous:**
+- `socket:send()` - Blocks until all data is sent
+- `socket:receive()` - Blocks until data is received
+- `server:accept()` - Blocks until a connection arrives
+- `network.connect()` - Blocks until connected or error
 
-- `socket:send()` - Yields on `EWOULDBLOCK`, preserves bytes-sent progress via `lua_KContext`
-- `socket:receive()` - All patterns (`*l`, `*a`, bytes) yield on `EWOULDBLOCK`
-- Event loop waits for fd readiness, then resumes coroutine
+## ~~Event Loop~~ (REMOVED)
 
-**Implementation Pattern:**
+The event loop has been **completely removed** from Lus. This includes:
 
-```c
-static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
-  int detached = is_detached(L);
-  
-  if (detached) {
-    set_nonblocking(sock->fd, 1);
-  }
-  
-  // ... receive loop ...
-  
-  if (got == SOCKET_ERROR_VAL) {
-    int err = SOCKET_ERRNO;
-    if (err == SOCKET_EWOULDBLOCK) {
-      if (detached) {
-        set_yield_reason(L, YIELD_IO);
-        set_yield_fd(L, (int)sock->fd);
-        set_yield_events(L, EVLOOP_READ);
-        return lua_yield(L, 0);
-      }
-    }
-  }
-  
-  if (detached) set_nonblocking(sock->fd, 0);
-  return 1;
-}
-```
+- **Removed files:** `ltask.c`, `ltask.h`, `lev.c`, `lev.h`, `lev_kqueue.c`, `lev_epoll.c`, `lev_threadpool.c`
+- **Removed coroutine functions:** `detach`, `run`, `poll`, `pending`, `sleep`
+- **Removed from `global_State`:** `scheduler` field
+- **Restored:** Standard Lua 5.5 coroutine library (`lcorolib.c`)
 
-## Event Loop
-
-Lus provides an opt-in event loop for running detached coroutines with non-blocking I/O and timed sleeps.
-
-#### Coroutine API
-
-| Function | Description |
-|----------|-------------|
-| `coroutine.detach(co)` | Start coroutine for event-driven execution, returns `status_e` |
-| `coroutine.run()` | Block until all pending coroutines complete |
-| `coroutine.poll([timeout])` | Process pending I/O, resume ready coroutines |
-| `coroutine.pending()` | Return count of pending coroutines |
-| `coroutine.sleep(seconds)` | Yield for duration (detached only) |
-
-```lua
-local co = coroutine.create(function()
-  coroutine.sleep(0.1)
-  return "done"
-end)
-coroutine.detach(co)
-coroutine.run()  -- blocks until co completes
-```
-
-#### Scheduler Implementation
-
-The scheduler state lives in `global_State->scheduler`:
-
-```c
-typedef struct lus_Scheduler {
-  EventBackend *backend;         /* Platform backend (kqueue/epoll/IOCP) */
-  const BackendOps *ops;
-  struct ThreadPool *threadpool; /* For blocking file I/O */
-  PendingCoroutine *pending;     /* Linked list */
-  int pending_count;
-  char *pending_error;
-} lus_Scheduler;
-```
-
-**Yield reasons** tracked per coroutine:
-- `YIELD_IO` — waiting for socket readable/writable
-- `YIELD_SLEEP` — waiting for deadline
-- `YIELD_THREADPOOL` — waiting for thread pool task
-
-**`scheduler_poll()` flow:**
-1. Calculate timeout from earliest deadline
-2. `ops->wait()` on platform backend (kqueue/epoll)
-3. Iterate pending list, resume coroutines with ready fd or expired timer
-4. Clear `yield_deadline` before resume to prevent stale timer triggering
-5. If resumed coroutine yields again, re-add to pending (skip past head to avoid infinite loop)
-
-#### Task API
-
-The primary way to integrate with the event loop is through tasks (`ltask.h`):
-
-```c
-typedef struct lus_Task {
-  int type;         /* Task type ID */
-  int status;       /* INIT, RESUME, COMPLETE, CLOSE */
-  lua_State *co;    /* Owning coroutine */
-  void *data;       /* Handler-defined data (copied) */
-  size_t data_size;
-} lus_Task;
-```
-
-**Task Types:**
-- `LUS_TASK_SLEEP` (-1) — `coroutine.sleep`
-- `LUS_TASK_IO` (-2) — Socket I/O
-- Positive IDs available for embedders
-
-**Task Lifecycle:**
-1. `LUS_TASK_INIT` — Handler initializes task
-2. `LUS_TASK_RESUME` — Task starts/resumes
-3. `LUS_TASK_COMPLETE` — Operation finished
-4. `LUS_TASK_CLOSE` — Cleanup
-
-**C API:**
-
-| Function | Description |
-|----------|-------------|
-| `lus_task_register(L, type, handler)` | Register handler for task type |
-| `lus_task(L, type)` | Create new task, calls handler with INIT |
-| `lus_task_setdata(t, data, size)` | Store data on task (copied) |
-| `lus_task_getdata(t, out)` | Retrieve task data |
-| `lus_task_yield(L, t)` | Yield coroutine with task |
-| `lus_task_complete(t)` | Mark task as complete |
-| `lus_isasync(L)` | Check if in detached coroutine |
-
-**Handler Pattern (Sleep Example):**
-
-```c
-typedef struct {
-  lua_Number start_time;
-  lua_Number deadline;
-} SleepTaskData;
-
-static int sleep_handler(lua_State *L, lus_Task *t) {
-  SleepTaskData d;
-
-  switch (t->status) {
-    case LUS_TASK_INIT: {
-      /* Get args from stack, store in task data */
-      lua_Number seconds = lua_tonumber(L, 1);
-      d.start_time = eventloop_now();
-      d.deadline = d.start_time + seconds;
-      lus_task_setdata(t, &d, sizeof(d));
-      return LUS_TASK_ACT_ENQUEUE;
-    }
-    case LUS_TASK_RESUME: {
-      /* Register wakeup condition with scheduler */
-      lus_task_getdata(t, &d);
-      set_yield_reason(L, YIELD_SLEEP);
-      set_yield_deadline(L, d.deadline);
-      return LUS_TASK_ACT_DEQUEUE;
-    }
-    case LUS_TASK_COMPLETE: {
-      /* Push results, return ACT_CLOSE */
-      lus_task_getdata(t, &d);
-      lua_pushnumber(L, eventloop_now() - d.start_time);
-      return LUS_TASK_ACT_CLOSE;
-    }
-    case LUS_TASK_CLOSE:
-      /* Cleanup (if needed) */
-      return 0;
-  }
-}
-```
-
-**Task Flow:**
-1. `lus_task(L, type)` → INIT handler → ACT_ENQUEUE → task enqueued
-2. First yield → scheduler resumes → RESUME handler → sets wakeup conditions → ACT_DEQUEUE
-3. Event occurs → scheduler resumes → COMPLETE handler → pushes results → ACT_CLOSE
-4. CLOSE handler runs → task freed
-
-#### Making C Code Async-Aware
-
-```c
-if (is_detached(L)) {
-  set_nonblocking(fd, 1);
-}
-
-ssize_t got = recv(fd, buf, len, 0);
-if (got == -1 && errno == EWOULDBLOCK) {
-  if (is_detached(L)) {
-    set_yield_reason(L, YIELD_IO);
-    set_yield_fd(L, fd);
-    set_yield_events(L, EVLOOP_READ);
-    return lua_yieldk(L, 0, ctx, continuation_fn);
-  }
-}
-```
-
-Socket data accumulates in `LSocket.buffer` (not `luaL_Buffer`) to persist across yields:
-
-```c
-sock_buffer_ensure(sock, additional)
-sock_buffer_append(sock, data, len)
-sock_buffer_push_and_clear(L, sock)
-```
-
-#### Platform Backends
-
-| Platform | Backend | Functions |
-|----------|---------|-----------|
-| Linux | epoll | `epoll_create1`, `epoll_ctl`, `epoll_wait` |
-| macOS/BSD | kqueue | `kqueue`, `kevent` |
-| Windows | IOCP | `CreateIoCompletionPort`, `GetQueuedCompletionStatusEx` |
-| Fallback | select | Portable but less efficient |
-
-#### Files
-
-| File | Purpose |
-|------|---------|
-| `ltask.h` | Task API, `lus_Task` struct |
-| `ltask.c` | Task management, handler registry |
-| `lev.h` | Scheduler struct, yield APIs, event flags |
-| `lev.c` | Scheduler polling, pending management |
-| `lev_kqueue.c` | macOS/BSD backend |
-| `lev_epoll.c` | Linux backend |
-| `lev_threadpool.c` | Thread pool for file I/O |
-| `lcorolib.c` | `detach`, `run`, `poll`, `sleep`, `pending` |
-| `lnetlib.c` | Async socket operations |
+The rationale for removal was to simplify the codebase and focus on synchronous I/O. Applications requiring async I/O should use Lua coroutines with explicit polling or integrate with an external event loop.
 
 
 

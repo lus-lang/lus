@@ -1,266 +1,208 @@
 ---
 order: 110
-title: Acquis 10 - Network
+title: Acquis 10 - Permissions
 acquis: true
 draft: true
 ---
 
-The `network` library provides TCP, UDP, and HTTP/HTTPS networking with native SSL support. It integrates with the event loop for non-blocking I/O in detached coroutines.
+The `pledge` function provides capability-based sandboxing for Lus scripts. Permissions must be explicitly granted before sensitive operations like file access, network requests, or command execution can occur.
 
-## HTTP requests
+## Basic usage
 
-Use `network.fetch` for HTTP and HTTPS requests:
+Grant permissions with the `pledge` function:
 
 ```lua
-local status, body, headers = network.fetch("https://httpbin.org/get")
-print(status)  -- 200
-print(#body)   -- response size
-print(headers["content-type"])  -- "application/json"
+-- Grant filesystem access
+pledge("fs")
+
+-- Grant network access
+pledge("network")
+
+-- Grant command execution
+pledge("exec")
 ```
 
-### POST requests
-
-Pass method, headers, and body as additional arguments:
+Without the appropriate permission, operations are denied:
 
 ```lua
-local status, body = network.fetch(
-  "https://httpbin.org/post",
-  "POST",
-  {["Content-Type"] = "application/json"},
-  '{"name": "Lus"}'
-)
+-- Without pledge("fs"):
+local ok, err = catch fs.list("/tmp")
+assert(not ok)  -- permission denied
+
+-- With pledge("fs"):
+pledge("fs")
+local files = fs.list("/tmp")  -- works
 ```
 
-### Error handling
+## Permission structure
 
-Network errors raise Lua errors:
+Permissions use a hierarchical naming scheme:
 
 ```lua
-local ok, err = catch network.fetch("https://invalid.host.example")
-if not ok then
-  print("Request failed:", err)
+-- Base permission: grants all sub-permissions
+pledge("fs")         -- grants fs:read, fs:write, etc.
+pledge("network")    -- grants network:tcp, network:http, etc.
+
+-- Specific sub-permission: grants only that capability
+pledge("fs:read")    -- only reading, not writing
+pledge("network:http")  -- only HTTP, not raw TCP
+```
+
+## Value restrictions
+
+Permissions can include path or URL restrictions:
+
+```lua
+-- Grant read access only to /tmp
+pledge("fs:read=/tmp")
+
+-- Grant read access to all paths under /home
+pledge("fs:read=/home/*")
+
+-- Grant HTTP access to specific domain
+pledge("network:http=api.example.com/*")
+```
+
+Glob patterns are supported for path matching. On systems with symlinks, paths are canonicalized before matching (e.g., `/tmp` resolves to `/private/tmp` on macOS).
+
+## Permission rejection
+
+Use the `~` prefix to permanently reject a permission:
+
+```lua
+-- Reject network access
+pledge("~network")
+
+-- Later: cannot grant what was rejected
+local ok = pledge("network")  -- returns false
+```
+
+This is useful for host applications that want to restrict scripts from ever acquiring certain capabilities.
+
+## Sealing permissions
+
+The `seal` permission prevents any future permission changes:
+
+```lua
+pledge("fs")
+pledge("network")
+pledge("seal")
+
+-- After seal, new permissions are denied
+local ok = pledge("exec")  -- returns false
+```
+
+This provides defense-in-depth by locking down capabilities early in script execution.
+
+## Permission checks
+
+The `pledge` function returns `true` on success, `false` on failure:
+
+```lua
+if pledge("fs") then
+  print("Filesystem access granted")
+else
+  print("Filesystem access denied")
 end
 ```
 
-## TCP connections
+For sealed or rejected permissions, `pledge` returns `false` without erroring. For invalid permission names, it raises an error.
 
-### Client connections
+## CLI usage
 
-Connect to a TCP server and exchange data:
+Grant permissions from the command line:
 
-```lua
-local sock = network.tcp.connect("example.com", 80)
-sock:settimeout(5)  -- 5 second timeout
+```bash
+# Grant single permission
+lus -Pfs script.lus
+lus --pledge=fs script.lus
 
-sock:send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
-local response = sock:receive("*a")  -- receive until EOF
-sock:close()
+# Grant multiple permissions
+lus -Pfs -Pnetwork script.lus
+
+# Grant with restrictions
+lus -Pfs:read=/tmp script.lus
+
+# Reject permissions
+lus -P~exec script.lus
 ```
 
-### Receive patterns
-
-The `receive` method supports several patterns:
+Scripts can then request only what was already granted:
 
 ```lua
--- Receive exactly N bytes
-local data = sock:receive(1024)
-
--- Receive a line (strips trailing newline)
-local line = sock:receive("*l")
-
--- Receive all data until EOF
-local all = sock:receive("*a")
+-- script.lus (run with: lus -Pfs:read=/tmp script.lus)
+pledge("fs:read=/tmp")  -- granted
+pledge("fs:write")      -- denied, not in CLI grant
 ```
 
-### TCP servers
+## Coroutine inheritance
 
-Create a listening server:
-
-```lua
-local server = network.tcp.bind("127.0.0.1", 8080)
-server:settimeout(10)
-
-local client = server:accept()
-client:settimeout(5)
-
-local request = client:receive("*l")
-client:send("HTTP/1.0 200 OK\r\n\r\nHello!\n")
-client:close()
-
-server:close()
-```
-
-## UDP sockets
-
-Create, send, and receive datagrams:
+Permissions are inherited by coroutines:
 
 ```lua
--- Sender
-local sender = network.udp.open()
-sender:sendto("Hello UDP", "127.0.0.1", 9000)
-sender:close()
+pledge("fs")
 
--- Receiver (bound to port)
-local receiver = network.udp.open(9000, "127.0.0.1")
-local data, addr, port = receiver:receive()
-print(data, addr, port)  -- "Hello UDP", "127.0.0.1", sender_port
-receiver:close()
-```
-
-## Async I/O with event loop
-
-Network operations become non-blocking in detached coroutines. Use `coroutine.poll` to process the event loop and `coroutine.pending` to check for waiting coroutines:
-
-```lua
-local status1, status2
 local co = coroutine.create(function()
-  -- These yield when they would block, resume automatically when ready
-  local body1, body2
-  status1, body1 = network.fetch("https://api.example.com/data1")
-  status2, body2 = network.fetch("https://api.example.com/data2")
+  fs.list("/tmp")  -- inherits fs permission
 end)
-
-coroutine.detach(co)  -- starts execution immediately
-
--- Poll until complete
-while coroutine.pending() > 0 do
-  coroutine.poll(5)
-end
-
-print(status1, status2)  -- results are available
 ```
 
-### Parallel requests
+## Available permissions
 
-Multiple detached coroutines run concurrently:
+| Permission | Description |
+|------------|-------------|
+| `fs` | All filesystem operations |
+| `fs:read` | Reading files and directories |
+| `fs:write` | Creating, modifying, deleting files |
+| `load` | Loading code at runtime (`load`, `loadfile`, `dofile`, `require`) |
+| `exec` | Running external commands (`os.execute`, `io.popen`) |
+| `network` | All network operations |
+| `network:tcp` | TCP socket connections |
+| `network:udp` | UDP socket operations |
+| `network:http` | HTTP/HTTPS requests |
 
-```lua
-local results = {}
-
-for i, endpoint in ipairs({"users", "posts", "comments"}) do
-  local co = coroutine.create(function()
-    local status, body = network.fetch("https://api.example.com/" .. endpoint)
-    results[i] = {status = status, body = body}
-  end)
-  coroutine.detach(co)
-end
-
--- All three requests run in parallel
-while coroutine.pending() > 0 do
-  coroutine.poll(5)
-end
-
--- All results ready
-for i, r in ipairs(results) do
-  print(i, r.status)
-end
-```
-
-### Async TCP example
-
-```lua
-local response_size
-local co = coroutine.create(function()
-  local sock = network.tcp.connect("example.com", 80)
-  sock:settimeout(5)
-  
-  sock:send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
-  local response = sock:receive("*a")  -- yields, doesn't block
-  sock:close()
-  
-  response_size = #response
-end)
-
-coroutine.detach(co)
-while coroutine.pending() > 0 do
-  coroutine.poll(5)
-end
-
-print("Received", response_size, "bytes")
-```
-
-### Error handling in async code
-
-Errors in detached coroutines are thrown by `poll()`. Use `catch` to handle them:
-
-```lua
-local co = coroutine.create(function()
-  network.fetch("https://invalid.host.example")
-end)
-
-coroutine.detach(co)
-
-while coroutine.pending() > 0 do
-  local ok, err = catch coroutine.poll(5)
-  if not ok then
-    print("Request failed:", err)
-  end
-end
-```
-
-## Socket methods
-
-### TCP client socket
-
-| Method | Description |
-|--------|-------------|
-| `send(data)` | Send data, returns bytes sent |
-| `receive([pattern])` | Receive data (default: `"*l"`) |
-| `settimeout(seconds)` | Set operation timeout |
-| `close()` | Close the connection |
-
-### TCP server
-
-| Method | Description |
-|--------|-------------|
-| `accept()` | Accept a client connection |
-| `settimeout(seconds)` | Set accept timeout |
-| `close()` | Stop listening |
-
-### UDP socket
-
-| Method | Description |
-|--------|-------------|
-| `sendto(data, addr, port)` | Send datagram |
-| `receive([size])` | Receive datagram (default: 8192) |
-| `setsockname(addr, port)` | Bind to address and port |
-| `close()` | Close the socket |
+> The `loadfile`, `dofile`, and `require` functions require both `fs:read` (to read the file) and `load` (to execute the code). The `load` function requires only `load`.
 
 ---
 
 ## Motivation
 
-Lus provides native networking without external dependencies. The library handles platform differences and integrates with the event loop for modern async patterns.
+Lus scripts often handle untrusted input or run in sandboxed environments. The permission system provides controlled access to system resources.
 
-### Single-call HTTP
+### Defense in depth
 
-Compare to using raw sockets:
-
-```lua
--- Without network.fetch: 20+ lines of socket, TLS, HTTP parsing
--- With network.fetch:
-local status, body = network.fetch("https://api.example.com/data")
-```
-
-### Transparent async
-
-I/O automatically becomes non-blocking in detached coroutines:
+Scripts explicitly declare their needs, making it clear what capabilities are required:
 
 ```lua
--- Blocking (in regular code)
-local status = network.fetch(url)
+-- Script header shows requirements
+pledge("fs:read")
+pledge("network:http")
 
--- Non-blocking (in detached coroutine)
-local co = coroutine.create(function()
-  result = network.fetch(url)  -- yields during I/O
-end)
-coroutine.detach(co)
-while coroutine.pending() > 0 do
-  -- Can do other work here
-  coroutine.poll(0.1)
-end
+-- Rest of script uses only these capabilities
 ```
 
-### Cross-platform consistency
+### Principle of least privilege
 
-The library handles platform-specific socket APIs (Winsock vs POSIX) and TLS configuration transparently.
+Restrict access to only what's needed:
+
+```lua
+-- Only read from specific directory
+pledge("fs:read=/var/log/app/*")
+
+-- Script can read logs but nothing else
+local logs = fs.list("/var/log/app")
+catch fs.list("/etc")  -- denied
+```
+
+### Host control
+
+Host applications can pre-reject capabilities before running scripts:
+
+```lua
+-- Host application
+pledge("~exec")    -- scripts cannot run commands
+pledge("~network") -- scripts cannot access network
+pledge("seal")     -- lock it down
+
+dofile("untrusted.lus")  -- runs with restrictions
+```

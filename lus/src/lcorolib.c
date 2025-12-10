@@ -13,59 +13,10 @@
 
 #include "lua.h"
 
-#include "events/lev.h"
 #include "lauxlib.h"
 #include "llimits.h"
-#include "ltask.h"
 #include "lualib.h"
 
-/*
-** Sleep task data - stores the deadline for wakeup
-*/
-typedef struct {
-  lua_Number start_time;
-  lua_Number deadline;
-} SleepTaskData;
-
-/*
-** Sleep task handler.
-** INIT: Store start_time and deadline in task data, enqueue task.
-** RESUME: Register with scheduler for timer wakeup, dequeue.
-** COMPLETE: Return elapsed time, close task.
-*/
-int lus_sleep_handler(lua_State *L, lus_Task *t) {
-  SleepTaskData d;
-
-  switch (t->status) {
-  case LUS_TASK_INIT: {
-    /* Get sleep duration from Lua stack (arg 1) */
-    lua_Number seconds = lua_tonumber(L, 1);
-    d.start_time = eventloop_now();
-    d.deadline = d.start_time + seconds;
-    lus_task_setdata(t, &d, sizeof(d));
-    return LUS_TASK_ACT_ENQUEUE;
-  }
-  case LUS_TASK_RESUME: {
-    /* Register with scheduler for timer wakeup */
-    lus_task_getdata(t, &d);
-    set_yield_reason(L, YIELD_SLEEP);
-    set_yield_deadline(L, d.deadline);
-    return LUS_TASK_ACT_DEQUEUE;
-  }
-  case LUS_TASK_COMPLETE: {
-    /* Sleep finished - push elapsed time */
-    lus_task_getdata(t, &d);
-    lua_Number elapsed = eventloop_now() - d.start_time;
-    lua_pushnumber(L, elapsed);
-    return LUS_TASK_ACT_CLOSE;
-  }
-  case LUS_TASK_CLOSE:
-    /* No cleanup needed */
-    return 0;
-  default:
-    return LUS_TASK_ACT_CLOSE;
-  }
-}
 static lua_State *getco(lua_State *L) {
   lua_State *co = lua_tothread(L, 1);
   luaL_argexpected(L, co, 1, "thread");
@@ -100,30 +51,8 @@ static int auxresume(lua_State *L, lua_State *co, int narg) {
 
 static int luaB_coresume(lua_State *L) {
   lua_State *co = getco(L);
-  int nargs = lua_gettop(L) - 1;
   int r;
-
-  /* Check if this is a detached coroutine */
-  if (is_detached(co)) {
-    /* Move arguments to coroutine */
-    if (nargs > 0) {
-      if (l_unlikely(!lua_checkstack(co, nargs))) {
-        lua_pushboolean(L, 0);
-        lua_pushliteral(L, "too many arguments to resume");
-        return 2;
-      }
-      lua_xmove(L, co, nargs);
-    }
-    /* Use event-driven resume */
-    r = detached_resume(L, co, nargs);
-    /* detached_resume either returns results or errors via lua_error */
-    lua_pushboolean(L, 1);
-    lua_insert(L, -(r + 1));
-    return r + 1;
-  }
-
-  /* Normal resume for non-detached coroutines */
-  r = auxresume(L, co, nargs);
+  r = auxresume(L, co, lua_gettop(L) - 1);
   if (l_unlikely(r < 0)) {
     lua_pushboolean(L, 0);
     lua_insert(L, -2);
@@ -255,140 +184,6 @@ static int luaB_close(lua_State *L) {
   }
 }
 
-/*
-** coroutine.detach(co)
-** Start a coroutine for event-driven execution.
-** Runs immediately until async I/O or completion, then returns.
-** Returns: status_e enum value, followed by results if applicable.
-*/
-static int luaB_detach(lua_State *L) {
-  lua_State *co = getco(L);
-  int status = auxstatus(L, co);
-  int nres;
-
-  if (status == COS_DEAD) {
-    return luaL_error(L, "cannot detach a dead coroutine");
-  }
-  if (status == COS_RUN) {
-    return luaL_error(L, "cannot detach a running coroutine");
-  }
-
-  mark_detached(co);
-
-  /* Start the coroutine immediately */
-  int lua_status = lua_resume(co, L, 0, &nres);
-
-  if (lua_status == LUA_YIELD) {
-    int reason = get_yield_reason(co);
-    if (reason == YIELD_IO || reason == YIELD_SLEEP ||
-        reason == YIELD_THREADPOOL) {
-      /* Async I/O or thread pool - add to pending list and return
-       * status_e.pending */
-      int fd = get_yield_fd(co);
-      int events = get_yield_events(co);
-      lua_Number deadline = get_yield_deadline(co);
-      scheduler_add_pending(L, co, fd, events, deadline);
-
-      /* Get status_e.pending enum value */
-      lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
-      lua_getfield(L, -1, "pending");
-      lua_remove(L, -2); /* Remove the enum table */
-      return 1;
-    } else {
-      /* Normal yield - return status_e.yielded + values */
-      lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
-      lua_getfield(L, -1, "yielded");
-      lua_remove(L, -2);
-      lua_xmove(co, L, nres);
-      return 1 + nres;
-    }
-  } else if (lua_status == LUA_OK) {
-    /* Completed synchronously - return status_e.completed + results */
-    unmark_detached(co);
-    lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
-    lua_getfield(L, -1, "completed");
-    lua_remove(L, -2);
-    lua_xmove(co, L, nres);
-    return 1 + nres;
-  } else {
-    /* Error - return status_e.error + error message */
-    unmark_detached(co);
-    lua_getfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
-    lua_getfield(L, -1, "error");
-    lua_remove(L, -2);
-    lua_xmove(co, L, 1); /* Move error message */
-    return 2;
-  }
-}
-
-/*
-** coroutine.sleep(seconds)
-** Yield for a specified duration. Only works in detached coroutines.
-*/
-static int luaB_sleep(lua_State *L) {
-  lua_Number seconds = luaL_checknumber(L, 1);
-
-  if (!is_detached(L)) {
-    return luaL_error(L, "coroutine.sleep only works in detached coroutines");
-  }
-
-  if (seconds < 0) {
-    return luaL_error(L, "sleep duration must be non-negative");
-  }
-
-  /* Create sleep task - handler is invoked with INIT */
-  lus_Task *t = lus_task(L, LUS_TASK_SLEEP);
-  if (!t) {
-    return luaL_error(L, "failed to create sleep task");
-  }
-
-  /* Yield with task - handler will be invoked with RESUME */
-  return lus_task_yield(L, t);
-}
-
-/*
-** coroutine.poll([timeout])
-** Process pending I/O and resume ready coroutines.
-** timeout: optional, seconds to wait. nil = non-blocking, -1 = block
-*indefinitely
-** Throws any errors from detached coroutines.
-*/
-static int luaB_poll(lua_State *L) {
-  int timeout_ms = 0;
-
-  if (!lua_isnoneornil(L, 1)) {
-    lua_Number timeout = luaL_checknumber(L, 1);
-    if (timeout < 0) {
-      timeout_ms = -1; /* Block indefinitely */
-    } else {
-      timeout_ms = (int)(timeout * 1000);
-    }
-  }
-
-  return scheduler_poll(L, timeout_ms);
-}
-
-/*
-** coroutine.pending()
-** Returns the number of coroutines waiting on I/O.
-*/
-static int luaB_pending(lua_State *L) {
-  lua_pushinteger(L, scheduler_pending_count(L));
-  return 1;
-}
-
-/*
-** coroutine.run()
-** Run the event loop until all pending coroutines complete.
-** Blocks efficiently using kernel I/O primitives (kqueue/epoll/IOCP).
-*/
-static int luaB_run(lua_State *L) {
-  while (scheduler_pending_count(L) > 0) {
-    scheduler_poll(L, -1); /* Block until event */
-  }
-  return 0;
-}
-
 static const luaL_Reg co_funcs[] = {{"create", luaB_cocreate},
                                     {"resume", luaB_coresume},
                                     {"running", luaB_corunning},
@@ -397,36 +192,9 @@ static const luaL_Reg co_funcs[] = {{"create", luaB_cocreate},
                                     {"yield", luaB_yield},
                                     {"isyieldable", luaB_yieldable},
                                     {"close", luaB_close},
-                                    {"detach", luaB_detach},
-                                    {"sleep", luaB_sleep},
-                                    {"poll", luaB_poll},
-                                    {"pending", luaB_pending},
-                                    {"run", luaB_run},
                                     {NULL, NULL}};
 
 LUAMOD_API int luaopen_coroutine(lua_State *L) {
   luaL_newlib(L, co_funcs);
-
-  /* Register sleep task handler */
-  /* Task handlers registered centrally in scheduler_init */
-
-  /* Create status_e enum: pending, completed, yielded, error */
-  lua_pushstring(L, "pending");
-  lua_pushinteger(L, 1);
-  lua_pushstring(L, "completed");
-  lua_pushinteger(L, 2);
-  lua_pushstring(L, "yielded");
-  lua_pushinteger(L, 3);
-  lua_pushstring(L, "error");
-  lua_pushinteger(L, 4);
-  lua_pushenum(L, 4);
-
-  /* Store in registry for detach() to access */
-  lua_pushvalue(L, -1);
-  lua_setfield(L, LUA_REGISTRYINDEX, "coroutine.status_e");
-
-  /* Also add to coroutine table */
-  lua_setfield(L, -2, "status_e");
-
   return 1;
 }

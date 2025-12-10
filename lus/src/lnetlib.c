@@ -15,10 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "events/lev.h"
 #include "lauxlib.h"
 #include "lpledge.h"
-#include "ltask.h"
 #include "lua.h"
 #include "lualib.h"
 
@@ -113,46 +111,6 @@ static SSL_CTX *ssl_ctx = NULL;
 static int winsock_initialized = 0;
 #endif
 static int cares_initialized = 0;
-
-/*
-** {======================================================
-** Socket Task Data Structures
-** =======================================================
-*/
-
-/* Socket send task data - uses registry ref to root the userdata */
-typedef struct {
-  int sock_ref;      /* Registry reference to socket userdata */
-  size_t total_sent; /* Bytes already sent */
-} SocketSendTaskData;
-
-/* Receive mode */
-typedef enum {
-  RECV_BYTES, /* Read exactly n bytes */
-  RECV_LINE,  /* Read until newline */
-  RECV_ALL    /* Read all available */
-} RecvMode;
-
-/* Socket recv task data - uses registry ref to root the userdata */
-typedef struct {
-  int sock_ref; /* Registry reference to socket userdata */
-  RecvMode mode;
-  size_t target_bytes; /* For RECV_BYTES mode */
-} SocketRecvTaskData;
-
-/* Server accept task data - uses registry ref to root the userdata */
-typedef struct {
-  int server_ref; /* Registry reference to server userdata */
-} SocketAcceptTaskData;
-
-/* TCP connect task data */
-typedef struct {
-  socket_t fd;
-  struct sockaddr_storage addr;
-  socklen_t addrlen;
-  int use_ssl;
-  char host[256]; /* For SSL hostname verification */
-} SocketConnectTaskData;
 
 /* }====================================================== */
 
@@ -452,35 +410,18 @@ static LSocket *new_socket(lua_State *L) {
 }
 
 /*
-** Async socket send implementation
-** Uses lua_yieldk for proper continuation when running in detached coroutine.
-** The context (lua_KContext) stores the number of bytes already sent.
+** Synchronous socket send implementation
 */
 
-static int socket_send_impl(lua_State *L, int status, lua_KContext ctx);
-
 static int socket_send(lua_State *L) {
-  /* Initial call - start with 0 bytes sent */
-  return socket_send_impl(L, LUA_OK, 0);
-}
-
-static int socket_send_impl(lua_State *L, int status, lua_KContext ctx) {
   LSocket *sock = check_socket(L, 1);
   size_t len;
   const char *data = luaL_checklstring(L, 2, &len);
-  size_t total = (size_t)ctx; /* Bytes already sent from previous calls */
-  int detached = is_detached(L);
+  size_t total = 0;
   ssize_t sent;
 
-  (void)status; /* Unused - we don't distinguish resume reasons */
-
-  /* For detached coroutines, set non-blocking mode */
-  if (detached) {
-    set_nonblocking(sock->fd, 1);
-  }
-
   while (total < len) {
-    if (sock->timeout_ms >= 0 && !detached) {
+    if (sock->timeout_ms >= 0) {
       int ready = wait_socket(sock->fd, 1, sock->timeout_ms);
       if (ready <= 0) {
         if (ready == 0) {
@@ -495,17 +436,8 @@ static int socket_send_impl(lua_State *L, int status, lua_KContext ctx) {
       if (sent <= 0) {
         int ssl_err = SSL_get_error(sock->ssl, (int)sent);
         if (ssl_err == SSL_ERROR_WANT_WRITE || ssl_err == SSL_ERROR_WANT_READ) {
-          if (detached) {
-            /* Yield with continuation - will resume at socket_send_impl */
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_WRITE);
-            return lua_yieldk(L, 0, (lua_KContext)total, socket_send_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_ssl_error(L, "SSL send");
       }
     } else {
@@ -513,26 +445,12 @@ static int socket_send_impl(lua_State *L, int status, lua_KContext ctx) {
       if (sent == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
         if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-          if (detached) {
-            /* Yield with continuation - will resume at socket_send_impl */
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_WRITE);
-            return lua_yieldk(L, 0, (lua_KContext)total, socket_send_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_socket_error(L, "send");
       }
     }
     total += (size_t)sent;
-  }
-
-  /* Restore blocking mode */
-  if (detached) {
-    set_nonblocking(sock->fd, 0);
   }
 
   lua_pushinteger(L, (lua_Integer)total);
@@ -541,18 +459,9 @@ static int socket_send_impl(lua_State *L, int status, lua_KContext ctx) {
 
 /*
 ** ========================================================
-** Async receive implementation using lua_yieldk
-**
-** Key design: We can't use luaL_Buffer across yields because it uses
-** stack-based pointers. Instead, we accumulate data in the socket's
-** buffer field and use lua_KContext to track the target byte count.
+** Synchronous receive implementation
 ** ========================================================
 */
-
-/* Forward declarations */
-static int recv_bytes_impl(lua_State *L, int status, lua_KContext ctx);
-static int recv_line_impl(lua_State *L, int status, lua_KContext ctx);
-static int recv_all_impl(lua_State *L, int status, lua_KContext ctx);
 
 /* Helper: ensure socket buffer has capacity for additional bytes */
 static void sock_buffer_ensure(LSocket *sock, size_t additional) {
@@ -578,40 +487,21 @@ static void sock_buffer_push_and_clear(lua_State *L, LSocket *sock) {
   lua_pushlstring(L, sock->buffer, sock->buflen);
   sock->buflen = 0;
 }
-
-/* Read exactly n bytes - async implementation with continuation */
+/* Read exactly n bytes - synchronous implementation */
 static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
-  (void)sock; /* sock re-extracted from stack in continuation */
-  /* Store target size in context, buffer will accumulate data */
-  return recv_bytes_impl(L, LUA_OK, (lua_KContext)n);
-}
-
-static int recv_bytes_impl(lua_State *L, int status, lua_KContext ctx) {
-  LSocket *sock = check_socket(L, 1);
-  size_t target = (size_t)ctx;
-  int detached = is_detached(L);
   char buf[DEFAULT_RECV_SIZE];
 
-  (void)status;
-
-  /* For detached coroutines, use non-blocking mode */
-  if (detached) {
-    set_nonblocking(sock->fd, 1);
-  }
-
   /* Read until we have enough data */
-  while (sock->buflen < target) {
+  while (sock->buflen < n) {
     ssize_t got;
-    size_t want = target - sock->buflen;
+    size_t want = n - sock->buflen;
     if (want > sizeof(buf))
       want = sizeof(buf);
 
-    /* Wait for data (blocking mode with timeout) */
-    if (sock->timeout_ms >= 0 && !detached) {
+    /* Wait for data with timeout */
+    if (sock->timeout_ms >= 0) {
       int ready = wait_socket(sock->fd, 0, sock->timeout_ms);
       if (ready <= 0) {
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         if (ready == 0)
           return luaL_error(L, "receive timeout");
         return push_socket_error(L, "receive");
@@ -625,22 +515,12 @@ static int recv_bytes_impl(lua_State *L, int status, lua_KContext ctx) {
         int ssl_err = SSL_get_error(sock->ssl, (int)got);
         if (ssl_err == SSL_ERROR_ZERO_RETURN) {
           /* EOF - return what we have */
-          if (detached)
-            set_nonblocking(sock->fd, 0);
           sock_buffer_push_and_clear(L, sock);
           return 1;
         }
         if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-          if (detached) {
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_READ);
-            return lua_yieldk(L, 0, ctx, recv_bytes_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_ssl_error(L, "SSL receive");
       }
     } else {
@@ -648,22 +528,12 @@ static int recv_bytes_impl(lua_State *L, int status, lua_KContext ctx) {
       if (got == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
         if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-          if (detached) {
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_READ);
-            return lua_yieldk(L, 0, ctx, recv_bytes_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_socket_error(L, "receive");
       }
       if (got == 0) {
         /* EOF - return what we have */
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         sock_buffer_push_and_clear(L, sock);
         return 1;
       }
@@ -673,34 +543,13 @@ static int recv_bytes_impl(lua_State *L, int status, lua_KContext ctx) {
     sock_buffer_append(sock, buf, (size_t)got);
   }
 
-  /* Restore blocking mode and return result */
-  if (detached) {
-    set_nonblocking(sock->fd, 0);
-  }
-
   sock_buffer_push_and_clear(L, sock);
   return 1;
 }
 
-/* Read until newline - async implementation with continuation */
+/* Read until newline - synchronous implementation */
 static int recv_line(lua_State *L, LSocket *sock) {
-  (void)sock; /* sock re-extracted from stack in continuation */
-  /* Context of 0 means we're reading for newline */
-  return recv_line_impl(L, LUA_OK, 0);
-}
-
-static int recv_line_impl(lua_State *L, int status, lua_KContext ctx) {
-  LSocket *sock = check_socket(L, 1);
-  int detached = is_detached(L);
   char buf[DEFAULT_RECV_SIZE];
-
-  (void)status;
-  (void)ctx;
-
-  /* For detached coroutines, use non-blocking mode */
-  if (detached) {
-    set_nonblocking(sock->fd, 1);
-  }
 
   for (;;) {
     /* Check if buffer already contains a newline */
@@ -726,8 +575,6 @@ static int recv_line_impl(lua_State *L, int status, lua_KContext ctx) {
         }
         sock->buflen -= consumed;
 
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return 1;
       }
     }
@@ -735,12 +582,10 @@ static int recv_line_impl(lua_State *L, int status, lua_KContext ctx) {
     /* No newline found, read more data */
     ssize_t got;
 
-    /* Wait for data (blocking mode with timeout) */
-    if (sock->timeout_ms >= 0 && !detached) {
+    /* Wait for data with timeout */
+    if (sock->timeout_ms >= 0) {
       int ready = wait_socket(sock->fd, 0, sock->timeout_ms);
       if (ready <= 0) {
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         if (ready == 0)
           return luaL_error(L, "receive timeout");
         return push_socket_error(L, "receive");
@@ -754,22 +599,12 @@ static int recv_line_impl(lua_State *L, int status, lua_KContext ctx) {
         int ssl_err = SSL_get_error(sock->ssl, (int)got);
         if (ssl_err == SSL_ERROR_ZERO_RETURN) {
           /* EOF - return what we have */
-          if (detached)
-            set_nonblocking(sock->fd, 0);
           sock_buffer_push_and_clear(L, sock);
           return 1;
         }
         if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-          if (detached) {
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_READ);
-            return lua_yieldk(L, 0, 0, recv_line_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_ssl_error(L, "SSL receive");
       }
     } else {
@@ -777,22 +612,12 @@ static int recv_line_impl(lua_State *L, int status, lua_KContext ctx) {
       if (got == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
         if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-          if (detached) {
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_READ);
-            return lua_yieldk(L, 0, 0, recv_line_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_socket_error(L, "receive");
       }
       if (got == 0) {
         /* EOF - return what we have */
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         sock_buffer_push_and_clear(L, sock);
         return 1;
       }
@@ -802,36 +627,17 @@ static int recv_line_impl(lua_State *L, int status, lua_KContext ctx) {
     sock_buffer_append(sock, buf, (size_t)got);
   }
 }
-
-/* Read until connection closed - async implementation with continuation */
+/* Read until connection closed - synchronous implementation */
 static int recv_all(lua_State *L, LSocket *sock) {
-  (void)sock; /* sock re-extracted from stack in continuation */
-  /* Context of 0, we just read until EOF */
-  return recv_all_impl(L, LUA_OK, 0);
-}
-
-static int recv_all_impl(lua_State *L, int status, lua_KContext ctx) {
-  LSocket *sock = check_socket(L, 1);
-  int detached = is_detached(L);
   char buf[DEFAULT_RECV_SIZE];
-
-  (void)status;
-  (void)ctx;
-
-  /* For detached coroutines, use non-blocking mode */
-  if (detached) {
-    set_nonblocking(sock->fd, 1);
-  }
 
   for (;;) {
     ssize_t got;
 
-    /* Wait for data (blocking mode with timeout) */
-    if (sock->timeout_ms >= 0 && !detached) {
+    /* Wait for data with timeout */
+    if (sock->timeout_ms >= 0) {
       int ready = wait_socket(sock->fd, 0, sock->timeout_ms);
       if (ready <= 0) {
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         if (ready == 0)
           return luaL_error(L, "receive timeout");
         return push_socket_error(L, "receive");
@@ -845,22 +651,12 @@ static int recv_all_impl(lua_State *L, int status, lua_KContext ctx) {
         int ssl_err = SSL_get_error(sock->ssl, (int)got);
         if (ssl_err == SSL_ERROR_ZERO_RETURN) {
           /* EOF - return all accumulated data */
-          if (detached)
-            set_nonblocking(sock->fd, 0);
           sock_buffer_push_and_clear(L, sock);
           return 1;
         }
         if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-          if (detached) {
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_READ);
-            return lua_yieldk(L, 0, 0, recv_all_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_ssl_error(L, "SSL receive");
       }
     } else {
@@ -868,22 +664,12 @@ static int recv_all_impl(lua_State *L, int status, lua_KContext ctx) {
       if (got == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
         if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-          if (detached) {
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_READ);
-            return lua_yieldk(L, 0, 0, recv_all_impl);
-          }
           continue;
         }
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         return push_socket_error(L, "receive");
       }
       if (got == 0) {
         /* EOF - return all accumulated data */
-        if (detached)
-          set_nonblocking(sock->fd, 0);
         sock_buffer_push_and_clear(L, sock);
         return 1;
       }
@@ -897,15 +683,6 @@ static int recv_all_impl(lua_State *L, int status, lua_KContext ctx) {
 static int socket_receive(lua_State *L) {
   LSocket *sock = check_socket(L, 1);
 
-  /* Use task system for detached coroutines */
-  if (is_detached(L)) {
-    lus_Task *t = lus_task(L, LUS_TASK_SOCKET_RECV);
-    if (!t)
-      return luaL_error(L, "failed to create recv task");
-    return lus_task_yield(L, t);
-  }
-
-  /* Sync mode - use original blocking implementation */
   if (lua_type(L, 2) == LUA_TNUMBER) {
     lua_Integer n = luaL_checkinteger(L, 2);
     if (n <= 0 || n > MAX_RECV_SIZE) {
@@ -1016,30 +793,14 @@ static LServer *new_server(lua_State *L) {
   return srv;
 }
 
-/* Forward declaration for continuation */
-static int server_accept_impl(lua_State *L, int status, lua_KContext ctx);
-
 static int server_accept(lua_State *L) {
-  return server_accept_impl(L, LUA_OK, 0);
-}
-
-static int server_accept_impl(lua_State *L, int status, lua_KContext ctx) {
   LServer *srv = check_server(L, 1);
   struct sockaddr_storage addr;
   socklen_t addrlen = sizeof(addr);
   socket_t client_fd;
-  int detached = is_detached(L);
-
-  (void)status;
-  (void)ctx;
-
-  /* For detached coroutines, use non-blocking mode */
-  if (detached) {
-    set_nonblocking(srv->fd, 1);
-  }
 
   /* Blocking mode with timeout */
-  if (srv->timeout_ms >= 0 && !detached) {
+  if (srv->timeout_ms >= 0) {
     int ready = wait_socket(srv->fd, 0, srv->timeout_ms);
     if (ready <= 0) {
       if (ready == 0) {
@@ -1051,26 +812,7 @@ static int server_accept_impl(lua_State *L, int status, lua_KContext ctx) {
 
   client_fd = accept(srv->fd, (struct sockaddr *)&addr, &addrlen);
   if (client_fd == SOCKET_INVALID) {
-    int err = SOCKET_ERRNO;
-    if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-      if (detached) {
-        /* Yield to event loop - wait for readable (incoming connection) */
-        set_yield_reason(L, YIELD_IO);
-        set_yield_fd(L, (int)srv->fd);
-        set_yield_events(L, EVLOOP_READ);
-        return lua_yieldk(L, 0, 0, server_accept_impl);
-      }
-      /* Shouldn't happen in blocking mode, but handle it */
-      return push_socket_error(L, "accept");
-    }
-    if (detached)
-      set_nonblocking(srv->fd, 0);
     return push_socket_error(L, "accept");
-  }
-
-  /* Restore blocking mode */
-  if (detached) {
-    set_nonblocking(srv->fd, 0);
   }
 
   LSocket *sock = new_socket(L);
@@ -1293,9 +1035,6 @@ static const luaL_Reg udpsocket_methods[] = {{"sendto", udp_sendto},
 ** =======================================================
 */
 
-/* Forward declaration for continuation */
-static int tcp_connect_impl(lua_State *L, int status, lua_KContext ctx);
-
 static int tcp_connect(lua_State *L) {
   const char *address = luaL_checkstring(L, 1);
   int port = (int)luaL_checkinteger(L, 2);
@@ -1323,62 +1062,16 @@ static int tcp_connect(lua_State *L) {
                       sock_strerror(SOCKET_ERRNO));
   }
 
-  int detached = is_detached(L);
-
-  /* For detached coroutines, use non-blocking connect */
-  if (detached) {
-    set_nonblocking(fd, 1);
-  }
-
   if (connect(fd, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR_VAL) {
     int err = SOCKET_ERRNO;
-    /* Check if connection is in progress (non-blocking) */
-    if (detached && (err == SOCKET_EINPROGRESS || err == SOCKET_EWOULDBLOCK)) {
-      /* Store fd in context, yield waiting for write (connect complete) */
-      set_yield_reason(L, YIELD_IO);
-      set_yield_fd(L, (int)fd);
-      set_yield_events(L, EVLOOP_WRITE);
-      return lua_yieldk(L, 0, (lua_KContext)fd, tcp_connect_impl);
-    }
     sock_close(fd);
     return luaL_error(L, "cannot connect to %s:%d: %s", address, port,
                       sock_strerror(err));
   }
 
-  /* Connect completed synchronously */
-  if (detached) {
-    set_nonblocking(fd, 0);
-  }
-
   LSocket *sock = new_socket(L);
   sock->fd = fd;
 
-  return 1;
-}
-
-static int tcp_connect_impl(lua_State *L, int status, lua_KContext ctx) {
-  socket_t fd = (socket_t)ctx;
-  int err = 0;
-  socklen_t errlen = sizeof(err);
-
-  (void)status;
-
-  /* Check if connect completed successfully */
-  if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &errlen) < 0) {
-    err = SOCKET_ERRNO;
-  }
-
-  /* Restore blocking mode */
-  set_nonblocking(fd, 0);
-
-  if (err != 0) {
-    sock_close(fd);
-    return luaL_error(L, "connect failed: %s", sock_strerror(err));
-  }
-
-  /* Create and return socket userdata */
-  LSocket *sock = new_socket(L);
-  sock->fd = fd;
   return 1;
 }
 
@@ -1996,440 +1689,9 @@ static void network_granter(lua_State *L, lus_PledgeRequest *p) {
   }
 }
 
-/*
-** {======================================================
-** Socket Task Handlers
-** =======================================================
-*/
-
-/*
-** Socket send task handler.
-** INIT: Store socket ref in registry, enable non-blocking.
-** RESUME: Attempt send, re-yield if would block.
-** COMPLETE: Push bytes sent, restore blocking mode.
-** CLOSE: Unref socket from registry.
-*/
-int lus_socket_send_handler(lua_State *L, lus_Task *t) {
-  SocketSendTaskData d;
-
-  switch (t->status) {
-  case LUS_TASK_INIT: {
-    LSocket *sock = check_socket(L, 1);
-    size_t len;
-    luaL_checklstring(L, 2, &len); /* Validate data exists */
-
-    /* Store socket in registry to prevent GC */
-    lua_pushvalue(L, 1);
-    d.sock_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    d.total_sent = 0;
-    lus_task_setdata(t, &d, sizeof(d));
-
-    /* Enable non-blocking for async operation */
-    set_nonblocking(sock->fd, 1);
-    return LUS_TASK_ACT_ENQUEUE;
-  }
-  case LUS_TASK_RESUME: {
-    lus_task_getdata(t, &d);
-
-    /* Retrieve socket from registry */
-    lua_rawgeti(L, LUA_REGISTRYINDEX, d.sock_ref);
-    LSocket *sock = check_socket(L, -1);
-    lua_pop(L, 1);
-
-    size_t len;
-    const char *data = lua_tolstring(L, 2, &len);
-    ssize_t sent;
-
-    while (d.total_sent < len) {
-      if (sock->ssl) {
-        sent = SSL_write(sock->ssl, data + d.total_sent,
-                         (int)(len - d.total_sent));
-        if (sent <= 0) {
-          int ssl_err = SSL_get_error(sock->ssl, (int)sent);
-          if (ssl_err == SSL_ERROR_WANT_WRITE ||
-              ssl_err == SSL_ERROR_WANT_READ) {
-            /* Need to wait - set up I/O yield */
-            lus_task_setdata(t, &d, sizeof(d));
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_WRITE);
-            return LUS_TASK_ACT_DEQUEUE;
-          }
-          /* Real error */
-          set_nonblocking(sock->fd, 0);
-          push_ssl_error(L, "SSL send");
-          return LUS_TASK_ACT_ERROR;
-        }
-      } else {
-        sent =
-            send(sock->fd, data + d.total_sent, (int)(len - d.total_sent), 0);
-        if (sent == SOCKET_ERROR_VAL) {
-          int err = SOCKET_ERRNO;
-          if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-            /* Need to wait - set up I/O yield */
-            lus_task_setdata(t, &d, sizeof(d));
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_WRITE);
-            return LUS_TASK_ACT_DEQUEUE;
-          }
-          /* Real error */
-          set_nonblocking(sock->fd, 0);
-          push_socket_error(L, "send");
-          return LUS_TASK_ACT_ERROR;
-        }
-      }
-      d.total_sent += (size_t)sent;
-    }
-
-    /* All data sent - mark complete */
-    lus_task_setdata(t, &d, sizeof(d));
-    return LUS_TASK_ACT_CLOSE;
-  }
-  case LUS_TASK_COMPLETE: {
-    /* Scheduler triggered completion - perform send and close */
-    lus_task_getdata(t, &d);
-
-    /* Retrieve socket from registry */
-    lua_rawgeti(L, LUA_REGISTRYINDEX, d.sock_ref);
-    LSocket *sock = check_socket(L, -1);
-    lua_pop(L, 1);
-
-    size_t len;
-    const char *data = lua_tolstring(L, 2, &len);
-    ssize_t sent;
-
-    while (d.total_sent < len) {
-      if (sock->ssl) {
-        sent = SSL_write(sock->ssl, data + d.total_sent,
-                         (int)(len - d.total_sent));
-        if (sent <= 0) {
-          int ssl_err = SSL_get_error(sock->ssl, (int)sent);
-          if (ssl_err == SSL_ERROR_WANT_WRITE ||
-              ssl_err == SSL_ERROR_WANT_READ) {
-            /* Need more I/O - set up yield again */
-            lus_task_setdata(t, &d, sizeof(d));
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_WRITE);
-            return LUS_TASK_ACT_DEQUEUE;
-          }
-          set_nonblocking(sock->fd, 0);
-          push_ssl_error(L, "SSL send");
-          return LUS_TASK_ACT_ERROR;
-        }
-      } else {
-        sent =
-            send(sock->fd, data + d.total_sent, (int)(len - d.total_sent), 0);
-        if (sent == SOCKET_ERROR_VAL) {
-          int err = SOCKET_ERRNO;
-          if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-            lus_task_setdata(t, &d, sizeof(d));
-            set_yield_reason(L, YIELD_IO);
-            set_yield_fd(L, (int)sock->fd);
-            set_yield_events(L, EVLOOP_WRITE);
-            return LUS_TASK_ACT_DEQUEUE;
-          }
-          set_nonblocking(sock->fd, 0);
-          push_socket_error(L, "send");
-          return LUS_TASK_ACT_ERROR;
-        }
-      }
-      d.total_sent += (size_t)sent;
-    }
-
-    /* Done - restore blocking and push result */
-    set_nonblocking(sock->fd, 0);
-    lua_pushinteger(L, (lua_Integer)d.total_sent);
-    return LUS_TASK_ACT_CLOSE;
-  }
-  case LUS_TASK_CLOSE: {
-    /* Unref socket from registry and restore blocking mode */
-    lus_task_getdata(t, &d);
-    if (d.sock_ref != LUA_NOREF) {
-      lua_rawgeti(L, LUA_REGISTRYINDEX, d.sock_ref);
-      if (lua_isuserdata(L, -1)) {
-        LSocket *sock = (LSocket *)lua_touserdata(L, -1);
-        set_nonblocking(sock->fd, 0);
-      }
-      lua_pop(L, 1);
-      luaL_unref(L, LUA_REGISTRYINDEX, d.sock_ref);
-    }
-    return 0;
-  }
-  default:
-    return LUS_TASK_ACT_CLOSE;
-  }
-}
-
-/*
-** Socket recv task handler.
-** INIT: Store socket ref in registry, set mode and target bytes.
-** RESUME/COMPLETE: Read data, accumulate in socket buffer.
-** CLOSE: Unref socket from registry.
-*/
-int lus_socket_recv_handler(lua_State *L, lus_Task *t) {
-  SocketRecvTaskData d;
-  char buf[DEFAULT_RECV_SIZE];
-
-  switch (t->status) {
-  case LUS_TASK_INIT: {
-    LSocket *sock = check_socket(L, 1);
-
-    /* Store socket in registry to prevent GC */
-    lua_pushvalue(L, 1);
-    d.sock_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    /* Determine mode from argument */
-    if (lua_type(L, 2) == LUA_TNUMBER) {
-      d.mode = RECV_BYTES;
-      d.target_bytes = (size_t)lua_tointeger(L, 2);
-    } else {
-      const char *pattern = luaL_optstring(L, 2, "*l");
-      if (strcmp(pattern, "*l") == 0) {
-        d.mode = RECV_LINE;
-        d.target_bytes = 0;
-      } else if (strcmp(pattern, "*a") == 0) {
-        d.mode = RECV_ALL;
-        d.target_bytes = 0;
-      } else {
-        luaL_unref(L, LUA_REGISTRYINDEX, d.sock_ref);
-        return luaL_error(L, "invalid receive pattern: %s", pattern);
-      }
-    }
-
-    lus_task_setdata(t, &d, sizeof(d));
-
-    /* Enable non-blocking for async operation */
-    set_nonblocking(sock->fd, 1);
-    return LUS_TASK_ACT_ENQUEUE;
-  }
-  case LUS_TASK_RESUME:
-  case LUS_TASK_COMPLETE: {
-    lus_task_getdata(t, &d);
-
-    /* Retrieve socket from registry */
-    lua_rawgeti(L, LUA_REGISTRYINDEX, d.sock_ref);
-    LSocket *sock = check_socket(L, -1);
-    lua_pop(L, 1);
-
-    ssize_t got;
-
-    switch (d.mode) {
-    case RECV_BYTES: {
-      /* Read until we have target_bytes */
-      while (sock->buflen < d.target_bytes) {
-        size_t want = d.target_bytes - sock->buflen;
-        if (want > sizeof(buf))
-          want = sizeof(buf);
-
-        if (sock->ssl) {
-          got = SSL_read(sock->ssl, buf, (int)want);
-          if (got <= 0) {
-            int ssl_err = SSL_get_error(sock->ssl, (int)got);
-            if (ssl_err == SSL_ERROR_ZERO_RETURN) {
-              /* EOF - return what we have */
-              set_nonblocking(sock->fd, 0);
-              sock_buffer_push_and_clear(L, sock);
-              return LUS_TASK_ACT_CLOSE;
-            }
-            if (ssl_err == SSL_ERROR_WANT_READ ||
-                ssl_err == SSL_ERROR_WANT_WRITE) {
-              lus_task_setdata(t, &d, sizeof(d));
-              set_yield_reason(L, YIELD_IO);
-              set_yield_fd(L, (int)sock->fd);
-              set_yield_events(L, EVLOOP_READ);
-              return LUS_TASK_ACT_DEQUEUE;
-            }
-            set_nonblocking(sock->fd, 0);
-            push_ssl_error(L, "SSL receive");
-            return LUS_TASK_ACT_ERROR;
-          }
-        } else {
-          got = recv(sock->fd, buf, (int)want, 0);
-          if (got == SOCKET_ERROR_VAL) {
-            int err = SOCKET_ERRNO;
-            if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-              lus_task_setdata(t, &d, sizeof(d));
-              set_yield_reason(L, YIELD_IO);
-              set_yield_fd(L, (int)sock->fd);
-              set_yield_events(L, EVLOOP_READ);
-              return LUS_TASK_ACT_DEQUEUE;
-            }
-            set_nonblocking(sock->fd, 0);
-            push_socket_error(L, "receive");
-            return LUS_TASK_ACT_ERROR;
-          }
-          if (got == 0) {
-            /* EOF - return what we have */
-            set_nonblocking(sock->fd, 0);
-            sock_buffer_push_and_clear(L, sock);
-            return LUS_TASK_ACT_CLOSE;
-          }
-        }
-        sock_buffer_append(sock, buf, (size_t)got);
-      }
-
-      /* Got enough data */
-      set_nonblocking(sock->fd, 0);
-      sock_buffer_push_and_clear(L, sock);
-      return LUS_TASK_ACT_CLOSE;
-    }
-
-    case RECV_LINE: {
-      for (;;) {
-        /* Check if buffer already contains a newline */
-        if (sock->buflen > 0) {
-          char *nl = memchr(sock->buffer, '\n', sock->buflen);
-          if (nl) {
-            size_t linelen = (size_t)(nl - sock->buffer);
-            size_t pushlen = linelen;
-
-            /* Strip \r if present */
-            if (pushlen > 0 && sock->buffer[pushlen - 1] == '\r') {
-              pushlen--;
-            }
-
-            /* Push the line (without \r\n) */
-            lua_pushlstring(L, sock->buffer, pushlen);
-
-            /* Remove line + newline from buffer */
-            size_t consumed = linelen + 1;
-            if (consumed < sock->buflen) {
-              memmove(sock->buffer, sock->buffer + consumed,
-                      sock->buflen - consumed);
-            }
-            sock->buflen -= consumed;
-
-            set_nonblocking(sock->fd, 0);
-            return LUS_TASK_ACT_CLOSE;
-          }
-        }
-
-        /* No newline found, read more data */
-        if (sock->ssl) {
-          got = SSL_read(sock->ssl, buf, sizeof(buf));
-          if (got <= 0) {
-            int ssl_err = SSL_get_error(sock->ssl, (int)got);
-            if (ssl_err == SSL_ERROR_ZERO_RETURN) {
-              set_nonblocking(sock->fd, 0);
-              sock_buffer_push_and_clear(L, sock);
-              return LUS_TASK_ACT_CLOSE;
-            }
-            if (ssl_err == SSL_ERROR_WANT_READ ||
-                ssl_err == SSL_ERROR_WANT_WRITE) {
-              lus_task_setdata(t, &d, sizeof(d));
-              set_yield_reason(L, YIELD_IO);
-              set_yield_fd(L, (int)sock->fd);
-              set_yield_events(L, EVLOOP_READ);
-              return LUS_TASK_ACT_DEQUEUE;
-            }
-            set_nonblocking(sock->fd, 0);
-            push_ssl_error(L, "SSL receive");
-            return LUS_TASK_ACT_ERROR;
-          }
-        } else {
-          got = recv(sock->fd, buf, sizeof(buf), 0);
-          if (got == SOCKET_ERROR_VAL) {
-            int err = SOCKET_ERRNO;
-            if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-              lus_task_setdata(t, &d, sizeof(d));
-              set_yield_reason(L, YIELD_IO);
-              set_yield_fd(L, (int)sock->fd);
-              set_yield_events(L, EVLOOP_READ);
-              return LUS_TASK_ACT_DEQUEUE;
-            }
-            set_nonblocking(sock->fd, 0);
-            push_socket_error(L, "receive");
-            return LUS_TASK_ACT_ERROR;
-          }
-          if (got == 0) {
-            set_nonblocking(sock->fd, 0);
-            sock_buffer_push_and_clear(L, sock);
-            return LUS_TASK_ACT_CLOSE;
-          }
-        }
-        sock_buffer_append(sock, buf, (size_t)got);
-      }
-    }
-
-    case RECV_ALL: {
-      /* Read until EOF */
-      for (;;) {
-        if (sock->ssl) {
-          got = SSL_read(sock->ssl, buf, sizeof(buf));
-          if (got <= 0) {
-            int ssl_err = SSL_get_error(sock->ssl, (int)got);
-            if (ssl_err == SSL_ERROR_ZERO_RETURN) {
-              set_nonblocking(sock->fd, 0);
-              sock_buffer_push_and_clear(L, sock);
-              return LUS_TASK_ACT_CLOSE;
-            }
-            if (ssl_err == SSL_ERROR_WANT_READ ||
-                ssl_err == SSL_ERROR_WANT_WRITE) {
-              lus_task_setdata(t, &d, sizeof(d));
-              set_yield_reason(L, YIELD_IO);
-              set_yield_fd(L, (int)sock->fd);
-              set_yield_events(L, EVLOOP_READ);
-              return LUS_TASK_ACT_DEQUEUE;
-            }
-            set_nonblocking(sock->fd, 0);
-            push_ssl_error(L, "SSL receive");
-            return LUS_TASK_ACT_ERROR;
-          }
-        } else {
-          got = recv(sock->fd, buf, sizeof(buf), 0);
-          if (got == SOCKET_ERROR_VAL) {
-            int err = SOCKET_ERRNO;
-            if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
-              lus_task_setdata(t, &d, sizeof(d));
-              set_yield_reason(L, YIELD_IO);
-              set_yield_fd(L, (int)sock->fd);
-              set_yield_events(L, EVLOOP_READ);
-              return LUS_TASK_ACT_DEQUEUE;
-            }
-            set_nonblocking(sock->fd, 0);
-            push_socket_error(L, "receive");
-            return LUS_TASK_ACT_ERROR;
-          }
-          if (got == 0) {
-            set_nonblocking(sock->fd, 0);
-            sock_buffer_push_and_clear(L, sock);
-            return LUS_TASK_ACT_CLOSE;
-          }
-        }
-        sock_buffer_append(sock, buf, (size_t)got);
-      }
-    }
-    }
-    return LUS_TASK_ACT_CLOSE;
-  }
-  case LUS_TASK_CLOSE: {
-    /* Unref socket from registry and restore blocking mode */
-    lus_task_getdata(t, &d);
-    if (d.sock_ref != LUA_NOREF) {
-      lua_rawgeti(L, LUA_REGISTRYINDEX, d.sock_ref);
-      if (lua_isuserdata(L, -1)) {
-        LSocket *sock = (LSocket *)lua_touserdata(L, -1);
-        set_nonblocking(sock->fd, 0);
-      }
-      lua_pop(L, 1);
-      luaL_unref(L, LUA_REGISTRYINDEX, d.sock_ref);
-    }
-    return 0;
-  }
-  default:
-    return LUS_TASK_ACT_CLOSE;
-  }
-}
-
-/* }====================================================== */
-
 LUAMOD_API int luaopen_network(lua_State *L) {
   /* Register network granter for permission checking */
   lus_registerpledge(L, "network", network_granter);
-
-  /* Task handlers registered centrally in scheduler_init */
 
   /* Create metatables */
   create_metatable(L, SOCKET_METATABLE, socket_methods);
