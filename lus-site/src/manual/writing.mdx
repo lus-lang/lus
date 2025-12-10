@@ -1,0 +1,57 @@
+---
+order: 6
+title: Writing Lus
+draft: true
+---
+
+While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus.
+
+## Permissions ("pledging")
+
+Lus implements a capability-based permission model where scripts have to explicitly declare the access they need to the runtime and its libraries. While this can be used for sandboxing and other security purposes, its primary use case is to avoid unexpected behavior, such as unintended writes to sensitive system files. **You will most likely have to pledge permissions to your scripts.**
+
+Pledging can be done either through the `pledge` function at runtime, or through `--pledge`/`-P` commandline arguments. The `pledge` function is a variadic function that takes a list of permissions as arguments; these permissions can later be rejected or sealed to make them immutable. When pledges are defined through commandline arguments, they are sealed by default and the interpreter cannot request additional pledges.
+
+Currently, you can `pledge` permissions to access the filesystem, the network, and code evaluation at runtime. For example, to pledge universal access to the filesystem, you can run the interpreter with the `--pledge fs`/`-Pfs` argument, or run the following code in your script:
+
+```lua
+global pledge, print, fs
+
+if pledge("fs") then
+    print(fs.list("."))
+end
+```
+
+Certain permissions can also have subpermissions, further restricting what the script can do. For example, `fs` can be pledged with `read` and `write` subpermissions, which allow the script to read and write to the filesystem, respectively. Certain permissions may also accept values, such as `fs` with a path to pledge access to a specific directory. For example:
+
+```lua
+if pledge("fs:read=/tmp/*") then
+    -- We can now read files in /tmp
+    print(fs.list("/tmp"))
+end
+```
+
+You can also _reject_ permissions, which will bar the interpreter from ever acquiring them. This is done through prefixing the permission with `~`:
+
+```lua
+if pledge("~fs") then
+    -- We can now never acquire the fs permission.
+    assert(not pledge("fs"))
+end
+
+-- You can also reject permissions through commandline arguments:
+-- lus --pledge=~fs -P~network
+```
+
+It is also possible to seal permissions, making them immutable, through pledging the special `seal` permission. It isn't necessary to add `--pledge=seal`/`-Pseal` to the commandline arguments, as pledging any permissions through commandline arguments will automatically seal them.
+
+```lua
+if pledge("seal") then
+    -- We can now never acquire additional permissions.
+    assert(not pledge("fs"))
+end
+```
+
+The special permission `all` can be pledged through commandline arguments to pledge all permissions at once, which is mostly useful for debugging or prototyping. It is not possible to pledge `all` through code. Obviously, you shouldn't use this permission in production.
+
+It is good practice in Lus to include a `pledge` statement at the very beginning of your main script, before any other code, so that prospecting developers can see which potentially disruptive permissions your script requires. While writing a library, you should avoid using `seal` to let the main program grant itself additional permissions when needed; runtime `seal` is most useful when invoked _after_ libraries have been loaded.
