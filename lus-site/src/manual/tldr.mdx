@@ -1,0 +1,21 @@
+---
+order: 50
+title: TL;DR
+draft: false
+---
+
+This is a summary of the differences between Lus and Lua. The full specification for each feature can be found by clicking its [acquis](/manual/acquis-0) specification. Some features are meta and do not have an acquis (such as build-related features).
+
+- [Acquis 1](/manual/acquis-1): Expression-level `catch` statements instead of `pcall`/`xpcall` for error handling.
+- [Acquis 2](/manual/acquis-2): Optional/nil-coalescing suffix operator `?` for right-associative expressions.
+- [Acquis 3](/manual/acquis-3): Assignments in `if` and `elseif` statements which create scoped variables.
+- [Acquis 4](/manual/acquis-4): Table destructuring with the new `from` assignment statement.
+- [Acquis 5](/manual/acquis-5): First-class enum support with the `enum ... end` syntax.
+- [Acquis 6](/manual/acquis-6): Much-needed `tojson`/`fromjson` implementation.
+- [Acquis 7](/manual/acquis-7): Filesystem functionality through the `fs.*` library.
+- [Acquis 8](/manual/acquis-8): `string.transcode` for converting between different encodings.
+- [Acquis 9](/manual/acquis-9): Network library featuring TCP/UDP support and a generic HTTP fetch implementation.
+- [Acquis 10](/manual/acquis-10): A [`pledge`](https://man.openbsd.org/pledge.2)-like capability-based permissions system for explicitly defining what your code needs access to.
+- [Acquis 11](/manual/acquis-11): Concurrency based on M:N hybrid threading and message passing through workers.
+- First-class support for WebAssembly.
+-  Switch from Makefiles to Meson for compilation.
