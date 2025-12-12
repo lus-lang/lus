@@ -11,14 +11,11 @@
 #include <stdarg.h>
 #include <stddef.h>
 
-#define LUA_COPYRIGHT                                                          \
-  LUA_RELEASE                                                                  \
-  " Copyright (C) 2025-2026 Louka Ménard Blondin; Copyright (C) 1994-2025 "   \
-  "Lua.org, PUC-Rio"
-#define LUA_AUTHORS "R. Ierusalimschy, L. H. de Figueiredo, W. Celes"
+#define LUA_COPYRIGHT LUA_RELEASE " (https://lus.dev/manual)"
+#define LUA_AUTHORS "https://lus.dev/manual/license"
 
 #define LUA_VERSION_MAJOR_N 1
-#define LUA_VERSION_MINOR_N 2
+#define LUA_VERSION_MINOR_N 3
 #define LUA_VERSION_RELEASE_N 0
 
 #define LUA_VERSION_NUM (LUA_VERSION_MAJOR_N * 100 + LUA_VERSION_MINOR_N)
