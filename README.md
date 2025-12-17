@@ -1,6 +1,6 @@
 <p>
 <a href="https://lus.dev">
-<img src="./lus-site/src/assets/logo.svg" width="64" height"64">
+<img src="./lus-site/src/assets/logo.svg" width="64" height="64">
 </a>
 </p>
 
