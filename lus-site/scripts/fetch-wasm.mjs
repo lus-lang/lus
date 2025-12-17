@@ -9,7 +9,7 @@ import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const GITHUB_REPO = "loukamb/lus"
+const GITHUB_REPO = "lus-lang/lus"
 const OUTPUT_DIR = join(__dirname, "..", "public", "wasm")
 const MANIFEST_PATH = join(OUTPUT_DIR, "manifest.json")
 
