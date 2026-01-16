@@ -32,7 +32,7 @@ export default defineConfig({
         // @ts-ignore
         {
           ...lusGrammar,
-          aliases: ["lua", "lus"],
+          aliases: ["lua"],
         },
       ],
     },
