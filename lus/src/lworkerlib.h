@@ -69,6 +69,14 @@ typedef struct MessageQueue {
 } MessageQueue;
 
 /*
+** Receive context for multi-worker select
+*/
+typedef struct ReceiveContext {
+  lus_mutex_t mutex;
+  lus_cond_t cond;
+} ReceiveContext;
+
+/*
 ** Worker state (N workers scheduled onto M threads)
 */
 struct WorkerState {
@@ -85,6 +93,7 @@ struct WorkerState {
   char *script_path;        /* path to worker script */
   int nargs;                /* number of arguments (for initial varargs) */
   int refcount;             /* reference count */
+  ReceiveContext *recv_ctx; /* context for multi-worker select (NULL if none) */
 };
 
 /*

@@ -326,6 +326,7 @@ static WorkerState *worker_new(lua_State *parent, const char *path) {
   w->script_path = strdup(path);
   w->status = LUS_WORKER_RUNNING;
   w->refcount = 1;
+  w->recv_ctx = NULL;
 
   lus_mutex_init(&w->mutex);
   lus_cond_init(&w->outbox_cond);
@@ -365,6 +366,21 @@ static void worker_decref(WorkerState *w) {
 }
 
 /* }====================================================== */
+
+/*
+** Signal the receive context if a receiver is waiting.
+** Call with worker mutex already locked. Grabs ctx, then unlocks mutex
+** before signaling to avoid deadlock.
+*/
+static void signal_recv_ctx(WorkerState *w) {
+  ReceiveContext *ctx = w->recv_ctx;
+  lus_mutex_unlock(&w->mutex);
+  if (ctx) {
+    lus_mutex_lock(&ctx->mutex);
+    lus_cond_signal(&ctx->cond);
+    lus_mutex_unlock(&ctx->mutex);
+  }
+}
 
 /*
 ** {======================================================
@@ -424,7 +440,15 @@ static int worker_lib_message(lua_State *L) {
   lus_mutex_lock(&w->mutex);
   msgqueue_push(&w->outbox, buf.data, buf.size);
   lus_cond_signal(&w->outbox_cond);
+  ReceiveContext *ctx = w->recv_ctx;  /* grab before unlocking */
   lus_mutex_unlock(&w->mutex);
+
+  /* Signal multi-worker select if receiver is waiting */
+  if (ctx) {
+    lus_mutex_lock(&ctx->mutex);
+    lus_cond_signal(&ctx->cond);
+    lus_mutex_unlock(&ctx->mutex);
+  }
 
   return 0;
 }
@@ -466,7 +490,7 @@ static void worker_run(WorkerState *w) {
     w->status = LUS_WORKER_ERROR;
     w->error_msg = strdup("failed to create Lua state");
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-    lus_mutex_unlock(&w->mutex);
+    signal_recv_ctx(w);  /* wake multi-worker select */
     return;
   }
   w->L = L;
@@ -494,8 +518,28 @@ static void worker_run(WorkerState *w) {
   lua_setfield(L, -2, "peek");
   lua_pop(L, 1);
 
-  /* Deserialize and push initial arguments */
-  /* TODO: handle initial varargs from inbox */
+  /* Deserialize and push initial arguments from inbox */
+  int nargs = w->nargs;
+  for (int i = 0; i < nargs; i++) {
+    char *data;
+    size_t size;
+    lus_mutex_lock(&w->mutex);
+    int got = msgqueue_pop(&w->inbox, &data, &size);
+    lus_mutex_unlock(&w->mutex);
+    if (!got)
+      break; /* shouldn't happen if nargs was set correctly */
+    DeserBuffer db = {data, size, 0};
+    if (!deserialize_value(L, &db)) {
+      free(data);
+      lus_mutex_lock(&w->mutex);
+      w->status = LUS_WORKER_ERROR;
+      w->error_msg = strdup("failed to deserialize initial argument");
+      lus_cond_signal(&w->outbox_cond);
+      signal_recv_ctx(w);  /* wake multi-worker select */
+      return;
+    }
+    free(data);
+  }
 
   /* Load and run the script */
   if (luaL_loadfile(L, w->script_path) != LUA_OK) {
@@ -504,24 +548,29 @@ static void worker_run(WorkerState *w) {
     const char *err = lua_tostring(L, -1);
     w->error_msg = strdup(err ? err : "unknown load error");
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-    lus_mutex_unlock(&w->mutex);
+    signal_recv_ctx(w);  /* wake multi-worker select */
     return;
   }
 
-  if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+  /* Move function below arguments */
+  if (nargs > 0) {
+    lua_insert(L, -(nargs + 1));  /* move chunk under args */
+  }
+
+  if (lua_pcall(L, nargs, 0, 0) != LUA_OK) {
     lus_mutex_lock(&w->mutex);
     w->status = LUS_WORKER_ERROR;
     const char *err = lua_tostring(L, -1);
     w->error_msg = strdup(err ? err : "unknown runtime error");
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-    lus_mutex_unlock(&w->mutex);
+    signal_recv_ctx(w);  /* wake multi-worker select */
     return;
   }
 
   lus_mutex_lock(&w->mutex);
   w->status = LUS_WORKER_DEAD;
   lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-  lus_mutex_unlock(&w->mutex);
+  signal_recv_ctx(w);  /* wake multi-worker select */
 }
 
 /* Pool thread function */
@@ -694,6 +743,20 @@ static int lib_receive(lua_State *L) {
     workers[i] = check_worker(L, i + 1);
   }
 
+  /* Create shared receive context for multi-worker select */
+  ReceiveContext ctx;
+  lus_mutex_init(&ctx.mutex);
+  lus_cond_init(&ctx.cond);
+
+  /* Register this context with each worker */
+  for (int i = 0; i < nworkers; i++) {
+    lus_mutex_lock(&workers[i]->mutex);
+    workers[i]->recv_ctx = &ctx;
+    lus_mutex_unlock(&workers[i]->mutex);
+  }
+
+  int result = 0;
+
   /* Try to get message from any worker */
   while (1) {
     int all_dead = 1;
@@ -706,8 +769,18 @@ static int lib_receive(lua_State *L) {
       if (w->status == LUS_WORKER_ERROR && w->error_msg) {
         char *errmsg = strdup(w->error_msg);
         lus_mutex_unlock(&w->mutex);
+        /* Cleanup before error */
+        for (int k = 0; k < nworkers; k++) {
+          lus_mutex_lock(&workers[k]->mutex);
+          workers[k]->recv_ctx = NULL;
+          lus_mutex_unlock(&workers[k]->mutex);
+        }
+        lus_cond_destroy(&ctx.cond);
+        lus_mutex_destroy(&ctx.mutex);
         free(workers);
-        return luaL_error(L, "%s", errmsg);
+        lua_pushstring(L, errmsg);
+        free(errmsg);
+        return lua_error(L);
       }
 
       if (w->status != LUS_WORKER_DEAD && w->status != LUS_WORKER_ERROR) {
@@ -725,6 +798,14 @@ static int lib_receive(lua_State *L) {
           lua_pushnil(L);
         if (!deserialize_value(L, &db)) {
           free(data);
+          /* Cleanup */
+          for (int k = 0; k < nworkers; k++) {
+            lus_mutex_lock(&workers[k]->mutex);
+            workers[k]->recv_ctx = NULL;
+            lus_mutex_unlock(&workers[k]->mutex);
+          }
+          lus_cond_destroy(&ctx.cond);
+          lus_mutex_destroy(&ctx.mutex);
           free(workers);
           return luaL_error(L, "failed to deserialize message");
         }
@@ -732,8 +813,8 @@ static int lib_receive(lua_State *L) {
         /* Push nils for remaining workers */
         for (int j = i + 1; j < nworkers; j++)
           lua_pushnil(L);
-        free(workers);
-        return nworkers;
+        result = nworkers;
+        goto cleanup;
       }
       lus_mutex_unlock(&w->mutex);
     }
@@ -742,17 +823,27 @@ static int lib_receive(lua_State *L) {
     if (all_dead) {
       for (int i = 0; i < nworkers; i++)
         lua_pushnil(L);
-      free(workers);
-      return nworkers;
+      result = nworkers;
+      goto cleanup;
     }
 
-    /* Wait on first worker's condition (simplified) */
-    /* TODO: proper multi-worker select */
-    WorkerState *w = workers[0];
-    lus_mutex_lock(&w->mutex);
-    lus_cond_wait(&w->outbox_cond, &w->mutex);
-    lus_mutex_unlock(&w->mutex);
+    /* Wait on shared condition - any worker can wake us */
+    lus_mutex_lock(&ctx.mutex);
+    lus_cond_wait(&ctx.cond, &ctx.mutex);
+    lus_mutex_unlock(&ctx.mutex);
   }
+
+cleanup:
+  /* Unregister context from all workers */
+  for (int i = 0; i < nworkers; i++) {
+    lus_mutex_lock(&workers[i]->mutex);
+    workers[i]->recv_ctx = NULL;
+    lus_mutex_unlock(&workers[i]->mutex);
+  }
+  lus_cond_destroy(&ctx.cond);
+  lus_mutex_destroy(&ctx.mutex);
+  free(workers);
+  return result;
 }
 
 /* worker.send(w, value) */
