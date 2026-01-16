@@ -22,7 +22,7 @@ interface WasmManifest {
 
 function toWasmRelease(
   entry: { version: string } | null,
-  isStable: boolean
+  isStable: boolean,
 ): WasmRelease | null {
   if (!entry) return null
 
@@ -72,7 +72,22 @@ export interface LusModule {
 export async function loadLusWasm(release: WasmRelease): Promise<LusModule> {
   // Fetch the JS loader
   const jsResponse = await fetch(release.jsUrl)
-  const jsCode = await jsResponse.text()
+  let jsCode = await jsResponse.text()
+
+  // Rewrite relative URLs to absolute paths before blob creation
+  // Emscripten-generated code uses new URL('lus.wasm', import.meta.url)
+  // which fails when loaded from a blob: URL
+  const baseUrl = new URL(release.jsUrl, window.location.href).href
+  const baseDir = baseUrl.substring(0, baseUrl.lastIndexOf("/") + 1)
+  jsCode = jsCode.replace(
+    /new URL\(['"]([^'"]+)['"]\s*,\s*import\.meta\.url\)/g,
+    (_, relativePath) => `new URL("${baseDir}${relativePath}")`,
+  )
+  // Also fix the _scriptName assignment used for scriptDirectory
+  jsCode = jsCode.replace(
+    /var _scriptName\s*=\s*import\.meta\.url/g,
+    `var _scriptName = "${baseUrl}"`,
+  )
 
   // Create a blob URL to import the module
   const blob = new Blob([jsCode], { type: "application/javascript" })
