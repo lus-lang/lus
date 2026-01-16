@@ -1,0 +1,381 @@
+{
+  "name": "Lus",
+  "scopeName": "source.lus",
+  "patterns": [
+    {
+      "begin": "\\b(?:(local)\\s+)?(function)\\b(?![,:])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.local.lus"
+        },
+        "2": {
+          "name": "keyword.control.lus"
+        }
+      },
+      "end": "(?<=[\\)\\-{}\\[\\]\"'])",
+      "name": "meta.function.lus",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "begin": "(\\()",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.parameters.begin.lus"
+            }
+          },
+          "end": "(\\))|(?=[\\-{}\\[\\]\"'])|(?<!\\.)\\.(?!\\.)",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.parameters.finish.lus"
+            }
+          },
+          "name": "meta.parameter.lus",
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "match": "(\\.{3})\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+              "captures": {
+                "1": {
+                  "name": "constant.language.lus"
+                },
+                "2": {
+                  "name": "variable.parameter.function.lus"
+                }
+              }
+            },
+            {
+              "match": "[a-zA-Z_][a-zA-Z0-9_]*",
+              "name": "variable.parameter.function.lus"
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.arguments.lus"
+            }
+          ]
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b\\s*(?=:)",
+          "name": "entity.name.class.lus"
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "name": "entity.name.function.lus"
+        }
+      ]
+    },
+    {
+      "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(\\.[0-9A-Fa-f]*)?([eE]-?\\d*)?([pP][-+]\\d+)?",
+      "name": "constant.numeric.float.hexadecimal.lus"
+    },
+    {
+      "match": "(?<![\\w\\d.])0[xX]\\.[0-9A-Fa-f]+([eE]-?\\d*)?([pP][-+]\\d+)?",
+      "name": "constant.numeric.float.hexadecimal.lus"
+    },
+    {
+      "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(?![pPeE.0-9])",
+      "name": "constant.numeric.integer.hexadecimal.lus"
+    },
+    {
+      "match": "(?<![\\w\\d.])\\d+(\\.\\d*)?([eE]-?\\d*)?",
+      "name": "constant.numeric.float.lus"
+    },
+    {
+      "match": "(?<![\\w\\d.])\\.\\d+([eE]-?\\d*)?",
+      "name": "constant.numeric.float.lus"
+    },
+    {
+      "match": "(?<![\\w\\d.])\\d+(?![pPeE.0-9])",
+      "name": "constant.numeric.integer.lus"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.comment.lus"
+        }
+      },
+      "match": "\\A(#!).*$\\n?",
+      "name": "comment.line.shebang.lus"
+    },
+    {
+      "include": "#comment"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "keyword.control.goto.lus"
+        },
+        "2": {
+          "name": "string.tag.lus"
+        }
+      },
+      "match": "\\b(goto)\\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+    },
+    {
+      "captures": {
+        "1": {
+          "name": "punctuation.section.embedded.begin.lus"
+        },
+        "2": {
+          "name": "punctuation.section.embedded.end.lus"
+        }
+      },
+      "match": "(::)\\s*[a-zA-Z_][a-zA-Z0-9_]*\\s*(::)",
+      "name": "string.tag.lus"
+    },
+    {
+      "match": "<\\s*(const|close)\\s*>",
+      "captures": {
+        "0": {
+          "name": "storage.type.attribute.lus"
+        }
+      }
+    },
+    {
+      "match": "\\<[a-zA-Z_\\*][a-zA-Z0-9_\\.\\*\\-]*\\>",
+      "name": "storage.type.generic.lus"
+    },
+    {
+      "match": "\\b(break|catch|do|else|end|enum|for|from|if|elseif|goto|in|repeat|return|then|until|while)\\b",
+      "name": "keyword.control.lus"
+    },
+    {
+      "match": "\\b(local)\\b",
+      "name": "keyword.local.lus"
+    },
+    {
+      "match": "^\\s*(global)\\b(?!\\s*=)",
+      "captures": {
+        "1": {
+          "name": "keyword.global.lus"
+        }
+      }
+    },
+    {
+      "match": "\\b(function)\\b(?![,:])",
+      "name": "keyword.control.lus"
+    },
+    {
+      "match": "(?<![^.]\\.|:)\\b(false|nil(?!:)|true|_ENV|_G|_VERSION|math\\.(pi|huge|maxinteger|mininteger)|utf8\\.charpattern|io\\.(stdin|stdout|stderr)|package\\.(config|cpath|loaded|path|preload|searchers)|fs\\.path\\.(delimiter|separator))\\b|(?<![.])\\.{3}(?!\\.)",
+      "name": "constant.language.lus"
+    },
+    {
+      "match": "(?<![^.]\\.|:)\\b(self)\\b",
+      "name": "variable.language.self.lus"
+    },
+    {
+      "match": "(?<![^.]\\.|:)\\b(assert|collectgarbage|dofile|error|fromjson|getmetatable|ipairs|load|loadfile|next|pairs|pledge|print|rawequal|rawget|rawlen|rawset|require|select|setmetatable|tojson|tonumber|tostring|type|warn)\\b(?!\\s*=(?!=))",
+      "name": "support.function.lus"
+    },
+    {
+      "match": "(?<![^.]\\.|:)\\b(async)\\b(?!\\s*=(?!=))",
+      "name": "entity.name.tag.lus"
+    },
+    {
+      "match": "(?<![^.]\\.|:)\\b(coroutine\\.(create|isyieldable|close|resume|running|status|wrap|yield)|string\\.(byte|char|dump|find|format|gmatch|gsub|len|lower|match|pack|packsize|rep|reverse|sub|transcode|unpack|upper)|table\\.(concat|create|insert|move|pack|remove|sort|unpack)|math\\.(abs|acos|asin|atan2?|ceil|cos|deg|exp|floor|fmod|frexp|ldexp|log|max|min|modf|rad|random|randomseed|sin|sqrt|tan|tointeger|type|ult)|io\\.(close|flush|input|lines|open|output|popen|read|tmpfile|type|write)|os\\.(clock|date|difftime|execute|exit|getenv|platform|setlocale|time|tmpname)|package\\.(loadlib|searchpath)|debug\\.(debug|gethook|getinfo|getlocal|getmetatable|getregistry|getupvalue|getuservalue|parse|sethook|setlocal|setmetatable|setupvalue|setuservalue|traceback|upvalueid|upvaluejoin)|utf8\\.(char|codes|codepoint|len|offset)|fs\\.(copy|createdirectory|createlink|follow|list|move|remove|type)|fs\\.path\\.(join|name|parent|split)|network\\.(fetch)|network\\.tcp\\.(bind|connect)|network\\.udp\\.(open)|worker\\.(create|message|peek|receive|send|status)|json\\.(encode|decode))\\b(?!\\s*=(?!=))",
+      "name": "support.function.library.lus"
+    },
+    {
+      "match": "\\b(\\|\\||\\&\\&|\\!)\\b",
+      "name": "keyword.operator.lus"
+    },
+    {
+      "match": "\\b(and|or|not)\\b",
+      "name": "keyword.operator.logical.lus"
+    },
+    {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s*(?:[({\"']|\\[\\[))",
+      "name": "support.function.any-method.lus"
+    },
+    {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s*\\??:)",
+      "name": "entity.name.class.lus"
+    },
+    {
+      "match": "(?<=[^.]\\.|:)\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*=\\s*\\b(function)\\b)",
+      "name": "entity.other.attribute.lus"
+    },
+    {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*=\\s*\\b(function)\\b)",
+      "name": "variable.other.lus"
+    },
+    {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s*=\\s*\\b(function)\\b)",
+      "name": "entity.name.function.lus"
+    },
+    {
+      "match": "\\+|-|%|#|\\*|\\/|\\^|==?|~=|!=|<=?|>=?|(?<!\\.)\\.{2}(?!\\.)|\\?",
+      "name": "keyword.operator.lus"
+    }
+  ],
+  "repository": {
+    "escaped_char": {
+      "patterns": [
+        {
+          "match": "\\\\[abfnrtv\\\\\"'\\n]",
+          "name": "constant.character.escape.lus"
+        },
+        {
+          "match": "\\\\z[\\n\\t ]*",
+          "name": "constant.character.escape.lus"
+        },
+        {
+          "match": "\\\\\\d{1,3}",
+          "name": "constant.character.escape.byte.lus"
+        },
+        {
+          "match": "\\\\x[0-9A-Fa-f][0-9A-Fa-f]",
+          "name": "constant.character.escape.byte.lus"
+        },
+        {
+          "match": "\\\\u\\{[0-9A-Fa-f]+\\}",
+          "name": "constant.character.escape.unicode.lus"
+        },
+        {
+          "match": "\\\\.",
+          "name": "invalid.illegal.character.escape.lus"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "begin": "'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lus"
+            }
+          },
+          "end": "'[ \\t]*|(?=\\n)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lus"
+            }
+          },
+          "name": "string.quoted.single.lus",
+          "patterns": [
+            {
+              "include": "#escaped_char"
+            }
+          ]
+        },
+        {
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lus"
+            }
+          },
+          "end": "\"[ \\t]*|(?=\\n)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lus"
+            }
+          },
+          "name": "string.quoted.double.lus",
+          "patterns": [
+            {
+              "include": "#escaped_char"
+            }
+          ]
+        },
+        {
+          "begin": "`",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lus"
+            }
+          },
+          "end": "`[ \\t]*|(?=\\n)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lus"
+            }
+          },
+          "name": "string.quoted.template.lus"
+        },
+        {
+          "begin": "(?<!--)\\[(=*)\\[",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.lus"
+            }
+          },
+          "end": "\\]\\1\\][ \\t]*",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.lus"
+            }
+          },
+          "name": "string.quoted.other.multiline.lus"
+        }
+      ]
+    },
+    "comment": {
+      "patterns": [
+        {
+          "begin": "(^[ \\t]+)?(?=--)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.whitespace.comment.leading.lus"
+            }
+          },
+          "end": "(?!\\G)((?!^)[ \\t]+\\n)?",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.whitespace.comment.trailing.lus"
+            }
+          },
+          "patterns": [
+            {
+              "begin": "--\\[(=*)\\[",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.comment.begin.lus"
+                }
+              },
+              "end": "(--)?\\]\\1\\]",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.comment.end.lus"
+                }
+              },
+              "name": "comment.block.lus"
+            },
+            {
+              "begin": "--",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.comment.lus"
+                }
+              },
+              "end": "\\n",
+              "name": "comment.line.double-dash.lus"
+            }
+          ]
+        },
+        {
+          "begin": "\\/\\*",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.lus"
+            }
+          },
+          "end": "\\*\\/",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.lus"
+            }
+          },
+          "name": "comment.block.lus"
+        }
+      ]
+    }
+  }
+}

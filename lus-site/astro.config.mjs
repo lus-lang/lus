@@ -5,7 +5,9 @@ import tailwindcss from "@tailwindcss/vite"
 
 import mdx from "@astrojs/mdx"
 
-import sitemap from "@astrojs/sitemap";
+import sitemap from "@astrojs/sitemap"
+
+import lusGrammar from "../lus-textmate/lus.tmLanguage.json"
 
 // https://astro.build/config
 export default defineConfig({
@@ -26,6 +28,13 @@ export default defineConfig({
         light: "github-light",
         dark: "github-light",
       },
+      langs: [
+        // @ts-ignore
+        {
+          ...lusGrammar,
+          aliases: ["lua", "lus"],
+        },
+      ],
     },
   },
   integrations: [mdx(), sitemap()],
