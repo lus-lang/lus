@@ -59,6 +59,9 @@ static void statement(LexState *ls);
 static void expr(LexState *ls, expdesc *v);
 static void catchexpr(LexState *ls, expdesc *v);
 static void catchstat(LexState *ls, int line);
+static int isassigncond(LexState *ls);
+static int assigncond(LexState *ls);
+
 
 static l_noret error_expected(LexState *ls, int token) {
   luaX_syntaxerror(
@@ -472,8 +475,8 @@ static void buildglobal(LexState *ls, TString *varname, expdesc *var) {
   init_exp(var, VGLOBAL, -1);         /* global by default */
   singlevaraux(fs, ls->envn, var, 1); /* get environment variable */
   if (var->k == VGLOBAL)
-    luaK_semerror(ls, "_ENV is global when accessing variable '%s'",
-                  getstr(varname));
+    luaK_semerror(ls, "%s is global when accessing variable '%s'",
+                  LUA_ENV, getstr(varname));
   luaK_exp2anyregup(fs, var);  /* _ENV could be a constant */
   codestring(&key, varname);   /* key is variable name */
   luaK_indexed(fs, var, &key); /* 'var' represents _ENV[varname] */
@@ -2026,16 +2029,28 @@ static void labelstat(LexState *ls, TString *name, int line) {
 
 static void whilestat(LexState *ls, int line) {
   /* whilestat -> WHILE cond DO block END */
+  /* cond can be: expr | NAME {',' NAME} '=' explist (assignment condition) */
   FuncState *fs = ls->fs;
   int whileinit;
   int condexit;
   BlockCnt bl;
+  BlockCnt outerbl;  /* outer block for condition variables */
   LusAstNode *condast = NULL;
   LusAstNode *saved_curblock = NULL;
 
   luaX_next(ls); /* skip WHILE */
+
+  /* Enter outer block for condition variables */
+  enterblock(fs, &outerbl, 0);
+
   whileinit = luaK_getlabel(fs);
-  condexit = cond(ls, &condast); /* read condition, capture AST */
+
+  /* Check if this is an assignment condition */
+  if (isassigncond(ls)) {
+    condexit = assigncond(ls); /* parse assignment and generate tests */
+  } else {
+    condexit = cond(ls, &condast); /* read normal condition */
+  }
 
   /* Store condition and set up body collection */
   if (AST_ACTIVE(ls) && ls->ast->curnode) {
@@ -2058,7 +2073,11 @@ static void whilestat(LexState *ls, int line) {
   }
 
   luaK_patchtohere(fs, condexit); /* false conditions finish the loop */
+
+  /* Leave outer block (closes condition variable scopes) */
+  leaveblock(fs);
 }
+
 
 static void repeatstat(LexState *ls, int line) {
   /* repeatstat -> REPEAT block UNTIL cond */

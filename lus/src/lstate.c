@@ -63,14 +63,19 @@ void luaE_setdebt(global_State *g, l_mem debt) {
   g->GCdebt = debt;
 }
 
-CallInfo *luaE_extendCI(lua_State *L) {
+CallInfo *luaE_extendCI(lua_State *L, int err) {
   CallInfo *ci;
-  lua_assert(L->ci->next == NULL);
-  ci = luaM_new(L, CallInfo);
-  lua_assert(L->ci->next == NULL);
-  L->ci->next = ci;
+  ci = cast(CallInfo *, luaM_saferealloc_(L, NULL, 0, sizeof(CallInfo)));
+  if (l_unlikely(ci == NULL)) { /* allocation failed? */
+    if (err)
+      luaM_error(L);    /* raise the error */
+    return NULL;        /* else only report it */
+  }
+  ci->next = L->ci->next;
   ci->previous = L->ci;
-  ci->next = NULL;
+  L->ci->next = ci;
+  if (ci->next)
+    ci->next->previous = ci;
   ci->u.l.trap = 0;
   ci->u.l.catchinfo.active = 0; /* no active catch handler */
   L->nci++;

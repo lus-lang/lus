@@ -1,0 +1,144 @@
+---
+order: 113
+title: Acquis 13 - While-Assignment
+acquis: true
+---
+
+The `while` statement can now include assignments in its condition. Variables assigned in the condition are scoped to the loop body, and the expression is re-evaluated on each iteration.
+
+## Syntax
+
+Assignments use the `=` operator within the condition:
+
+```lua
+while var = expr do
+    -- var is available here
+    -- expr is re-evaluated each iteration
+end
+
+while a, b = expr1, expr2 do
+    -- all variables available here
+end
+```
+
+The condition is true when **all** assigned values are truthy (not nil or false). When any value becomes falsy, the loop exits.
+
+```lua
+while x = getNext() do
+    print(x)  -- prints each value until getNext() returns nil
+end
+```
+
+## Single variable assignment
+
+The simplest form assigns one value and tests it on each iteration:
+
+```lua
+local function makeCounter(max)
+    local i = 0
+    return function()
+        i = i + 1
+        return i <= max and i or nil
+    end
+end
+
+local next = makeCounter(3)
+while v = next() do
+    print(v)  -- prints 1, 2, 3
+end
+```
+
+This is particularly useful for iterator functions:
+
+```lua
+while line = file:read() do
+    process(line)
+end
+```
+
+## Multiple variable assignment
+
+Multiple variables can be assigned and tested simultaneously:
+
+```lua
+while a, b = getTwo() do
+    print(a, b)
+end
+```
+
+The condition fails if **any** assigned value becomes falsy:
+
+```lua
+local function coords()
+    -- returns nil, nil when done
+    local x, y = getNextPoint()
+    return x, y
+end
+
+while x, y = coords() do
+    plot(x, y)
+end
+```
+
+## Variable scoping
+
+Variables declared in while conditions are scoped to the loop body:
+
+```lua
+while data = fetch() do
+    process(data)
+end
+-- data is not visible here
+```
+
+This prevents pollution of the outer scope and clearly indicates the variable's purpose.
+
+## Comparison with standard Lua
+
+### Redundant patterns
+
+A common Lua pattern requires separate assignment and test:
+
+```lua
+-- Lua: separate assignment and test
+local line = file:read()
+while line do
+    process(line)
+    line = file:read()  -- must repeat the expression
+end
+```
+
+With while-assignment:
+
+```lua
+-- Lus: combined
+while line = file:read() do
+    process(line)
+end
+```
+
+### Iterator simulation
+
+While-assignment provides a cleaner alternative to complex iterator protocols for simple cases:
+
+```lua
+-- Lus: simple iterator pattern
+local function queue_pop(q)
+    return table.remove(q, 1)
+end
+
+local queue = {1, 2, 3, 4, 5}
+while item = queue_pop(queue) do
+    print(item)
+end
+```
+
+---
+
+## Relationship to If-Assignment
+
+While-Assignment extends [Acquis 3 (If-Assignment)](/manual/acquis-3) with the same semantics:
+
+- Same syntax: `NAME { ',' NAME } '=' explist`
+- Same truthiness test: condition fails if any value is falsy
+- Key difference: the expression is re-evaluated on each loop iteration

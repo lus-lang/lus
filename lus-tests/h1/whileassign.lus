@@ -1,0 +1,231 @@
+--[[
+  Tests for while-assignment conditions in Lus
+
+  The feature allows:
+    while var = expr do ... end
+    while a, b = expr1, expr2 do ... end
+
+  Variables declared in conditions are scoped to the loop body.
+  The expression is re-evaluated on each iteration.
+  If any assigned value is nil/false, the loop exits.
+]]
+
+global print, setmetatable, assert, _G, require, os, pledge, table
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("whileassign")
+
+tests:it("while with truthy assignment that becomes nil", function()
+    local results = {}
+    local i = 0
+    local function next_value()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = next_value() do
+        table.insert(results, v)
+    end
+    assert(#results == 3, "should have 3 values")
+    assert(results[1] == 1, "first should be 1")
+    assert(results[2] == 2, "second should be 2")
+    assert(results[3] == 3, "third should be 3")
+end)
+
+tests:it("while with immediate nil", function()
+    local entered = false
+    while x = nil do
+        entered = true
+    end
+    assert(not entered, "should not enter loop when nil")
+end)
+
+tests:it("while with immediate false", function()
+    local entered = false
+    while x = false do
+        entered = true
+    end
+    assert(not entered, "should not enter loop when false")
+end)
+
+tests:it("while with zero (truthy in Lua) then nil", function()
+    local values = {}
+    local calls = 0
+    local function get()
+        calls = calls + 1
+        if calls == 1 then return 0
+        elseif calls == 2 then return 0
+        else return nil end
+    end
+    while x = get() do
+        table.insert(values, x)
+    end
+    assert(#values == 2, "0 is truthy, should have 2 iterations")
+    assert(values[1] == 0, "first should be 0")
+    assert(values[2] == 0, "second should be 0")
+end)
+
+tests:it("while with empty string (truthy) then nil", function()
+    local count = 0
+    local calls = 0
+    local function get()
+        calls = calls + 1
+        return calls <= 2 and "" or nil
+    end
+    while s = get() do
+        count = count + 1
+    end
+    assert(count == 2, "empty string is truthy")
+end)
+
+tests:it("while with function returning table then nil", function()
+    local sum = 0
+    local data = {{1}, {2}, {3}}
+    local idx = 0
+    local function next_item()
+        idx = idx + 1
+        return data[idx]
+    end
+    while item = next_item() do
+        sum = sum + item[1]
+    end
+    assert(sum == 6, "sum of 1+2+3 should be 6")
+end)
+
+tests:it("multiple variables all truthy until one becomes nil", function()
+    local results = {}
+    local call = 0
+    local function get_pair()
+        call = call + 1
+        if call == 1 then return 1, 2
+        elseif call == 2 then return 3, 4
+        else return nil, nil end
+    end
+    while a, b = get_pair() do
+        table.insert(results, a + b)
+    end
+    assert(#results == 2, "should have 2 iterations")
+    assert(results[1] == 3, "1+2=3")
+    assert(results[2] == 7, "3+4=7")
+end)
+
+tests:it("multiple variables with second becoming nil first", function()
+    local count = 0
+    local call = 0
+    local function get_pair()
+        call = call + 1
+        if call == 1 then return 1, 2
+        elseif call == 2 then return 3, nil  -- second is nil
+        else return nil, nil end
+    end
+    while a, b = get_pair() do
+        count = count + 1
+    end
+    assert(count == 1, "should stop when b becomes nil")
+end)
+
+tests:it("variable not visible after loop", function()
+    local i = 0
+    local function get()
+        i = i + 1
+        return i <= 1 and i or nil
+    end
+    while loop_var = get() do
+        assert(loop_var == 1)
+    end
+    assert(_G.loop_var == nil, "loop_var should not leak to globals")
+end)
+
+tests:it("nested while statements with assignments", function()
+    local outer_sum = 0
+    local outer_i = 0
+    local function outer_next()
+        outer_i = outer_i + 1
+        return outer_i <= 2 and outer_i or nil
+    end
+    while o = outer_next() do
+        local inner_i = 0
+        local function inner_next()
+            inner_i = inner_i + 1
+            return inner_i <= 2 and inner_i or nil
+        end
+        while i = inner_next() do
+            outer_sum = outer_sum + o * i
+        end
+    end
+    -- outer: 1,2 inner: 1,2 for each
+    -- 1*1 + 1*2 + 2*1 + 2*2 = 1 + 2 + 2 + 4 = 9
+    assert(outer_sum == 9, "nested loop sum should be 9")
+end)
+
+tests:it("break works with while-assignment", function()
+    local last = 0
+    local i = 0
+    local function get()
+        i = i + 1
+        return i
+    end
+    while v = get() do
+        if v > 3 then break end
+        last = v
+    end
+    assert(last == 3, "should break when v > 3")
+end)
+
+tests:it("reading from queue pattern", function()
+    local queue = {1, 2, 3, 4, 5}
+    local results = {}
+    local function pop()
+        return table.remove(queue, 1)
+    end
+    while item = pop() do
+        table.insert(results, item)
+    end
+    assert(#results == 5, "should have popped all 5 items")
+    assert(results[1] == 1 and results[5] == 5, "order should be preserved")
+end)
+
+tests:it("single iteration when first call returns nil", function()
+    local count = 0
+    local function always_nil()
+        return nil
+    end
+    while x = always_nil() do
+        count = count + 1
+    end
+    assert(count == 0, "should never enter loop")
+end)
+
+tests:it("expression re-evaluated each iteration", function()
+    local counter = {value = 0}
+    local function increment()
+        counter.value = counter.value + 1
+        return counter.value <= 3 and counter.value or nil
+    end
+    local sum = 0
+    while v = increment() do
+        sum = sum + v
+    end
+    assert(sum == 6, "1+2+3 = 6")
+    assert(counter.value == 4, "increment called 4 times (3 truthy + 1 nil)")
+end)
+
+tests:it("catch expression in while assignment", function()
+    local count = 0
+    local calls = 0
+    local function maybe_error()
+        calls = calls + 1
+        if calls <= 2 then
+            return calls
+        else
+            return nil
+        end
+    end
+    while ok, val = catch maybe_error() do
+        count = count + 1
+    end
+    assert(count == 2, "should iterate twice")
+end)
+
+tests:finish()

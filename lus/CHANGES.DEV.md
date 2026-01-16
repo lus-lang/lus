@@ -40,14 +40,12 @@ typedef struct CatchInfo {
 #### Error Handling Flow
 
 1. **Setup (OP_CATCH):**
-
    - Saves `L->errorJmp` to `catchinfo.prev_errorJmp`
    - Calls `setjmp(catchinfo.jmpbuf)`
    - Sets `catchinfo.active = 1`
    - Normal path: continues to next instruction
 
 2. **Error occurs (luaD_throw modified):**
-
    - Walks `CallInfo` chain looking for active catch
    - If found: sets `L->ci` to catch frame, `longjmp` to catch's jmpbuf
    - Error path in OP_CATCH: restores `cl`, `k`, `base` (stale after longjmp)
@@ -184,6 +182,74 @@ This differs from standard Lua where each block has its own scope. The nested `b
 - The outer `BlockCnt` ensures proper variable lifetime across the entire if statement
 - Variables from earlier conditions are visible in later conditions due to shared outer scope
 - Standard `adjust_assign()` handles expression count mismatches (extra variables become nil, which causes the condition to fail)
+
+## Assignments in `while` conditions
+
+The `while` assignment condition feature extends the `if`/`elseif` assignment pattern to `while` loops. It is implemented entirely in the parser (`lparser.c`), requiring no new opcodes or VM changes.
+
+#### Syntax
+
+```lua
+while var = expr do
+    -- var is available here
+    -- expr is re-evaluated each iteration
+end
+
+while a, b = expr1, expr2 do
+    -- condition fails when any value is falsy
+end
+```
+
+#### Parser Changes
+
+**Modified `whilestat()`:**
+
+The `whilestat()` function now:
+
+1. Wraps the entire construct in an outer `BlockCnt` scope for condition variables
+2. Checks `isassigncond()` after skipping `WHILE`
+3. Calls `assigncond()` for assignment conditions, or `cond()` for normal expressions
+
+The condition label (`whileinit`) is set AFTER entering the outer block, so the expression is properly re-evaluated on each loop iteration.
+
+#### Code Generation
+
+For `while v = fn() do ... end`:
+
+```
+; outer block entered
+whileinit:                     ; label for loop back
+CALL fn -> R[base]             ; evaluate expression
+TEST R[base]                   ; if falsy, jump to exit
+JMP exit
+; (variable v now active)
+... loop body ...
+JMP whileinit                  ; loop back
+exit:
+; outer block left (v out of scope)
+```
+
+Key difference from `if`: the expression evaluation and test are inside the loop, so they re-execute each iteration.
+
+#### Scoping Implementation
+
+The outer block in `whilestat()` ensures:
+
+- Variables declared in the condition are visible in the loop body
+- Variables go out of scope when the loop ends (not visible after `end`)
+
+#### Files Modified
+
+| File        | Changes                                            |
+| ----------- | -------------------------------------------------- |
+| `lparser.c` | Modified `whilestat()`, added forward declarations |
+
+#### Key Implementation Details
+
+- Reuses `isassigncond()` and `assigncond()` from the if-assignment feature
+- No new tokens, opcodes, or VM changes required
+- The outer `BlockCnt` with `isloop=0` scopes condition variables; the inner `BlockCnt` with `isloop=1` handles break statements
+- Expression is re-evaluated each iteration because `whileinit` label is inside the outer block
 
 ## `?` conditional (optional chaining) expression
 
@@ -807,27 +873,30 @@ Cross-platform socket abstraction using preprocessor directives:
 
 Three userdata types with metatables:
 
-| Type | Metatable | Description |
-|------|-----------|-------------|
-| `LSocket` | `network.socket` | TCP client connection |
-| `LServer` | `network.server` | TCP listening server |
-| `LUDPSocket` | `network.udpsocket` | UDP datagram socket |
+| Type         | Metatable           | Description           |
+| ------------ | ------------------- | --------------------- |
+| `LSocket`    | `network.socket`    | TCP client connection |
+| `LServer`    | `network.server`    | TCP listening server  |
+| `LUDPSocket` | `network.udpsocket` | UDP datagram socket   |
 
 Each includes `__gc`, `__close`, and `__tostring` metamethods.
 
 #### API Functions
 
 **TCP:**
+
 - `network.tcp.connect(address, port)` → Socket
 - `network.tcp.bind(address, port, [backlog])` → Server
 - `socket:send(data)`, `socket:receive([pattern])`, `socket:close()`, `socket:settimeout(sec)`
 - `server:accept()`, `server:close()`, `server:settimeout(sec)`
 
 **UDP:**
+
 - `network.udp.open([port], [address])` → UDPSocket
 - `udp:sendto(data, addr, port)`, `udp:receive([size])`, `udp:close()`
 
 **HTTP:**
+
 - `network.fetch(url, [method], [headers], [body])` → status, body, headers
 
 #### DNS Resolution
@@ -837,17 +906,18 @@ Uses c-ares `ares_getaddrinfo()` for async-capable DNS lookups supporting IPv4/I
 #### TLS/HTTPS
 
 OpenSSL integration for secure connections:
+
 - `SSL_CTX` created once at library init
 - `SSL_connect()` for handshake, `SSL_read()`/`SSL_write()` for I/O
 - Certificate verification via system CA certificates
 
 #### Files Modified
 
-| File | Changes |
-|------|---------|
-| `lnetlib.c` | NEW - Full network library implementation (~1600 lines) |
-| `linit.c` | Register `luaopen_network` in stdlibs |
-| `lualib.h` | Add `LUA_NETLIBNAME`, `LUA_NETLIBK`, `luaopen_network` |
+| File          | Changes                                                   |
+| ------------- | --------------------------------------------------------- |
+| `lnetlib.c`   | NEW - Full network library implementation (~1600 lines)   |
+| `linit.c`     | Register `luaopen_network` in stdlibs                     |
+| `lualib.h`    | Add `LUA_NETLIBNAME`, `LUA_NETLIBK`, `luaopen_network`    |
 | `meson.build` | Add `lnetlib.c`, OpenSSL/c-ares deps, Winsock for Windows |
 
 #### ~~Async I/O for Event Loop~~ (REMOVED)
@@ -855,6 +925,7 @@ OpenSSL integration for secure connections:
 > **Note:** The event loop and async I/O functionality has been **removed**. All network operations are now synchronous/blocking. The `coroutine.detach`, `coroutine.run`, `coroutine.poll`, `coroutine.pending`, and `coroutine.sleep` functions no longer exist. The standard Lua 5.5 coroutine library has been restored.
 
 **Network operations are purely synchronous:**
+
 - `socket:send()` - Blocks until all data is sent
 - `socket:receive()` - Blocks until data is received
 - `server:accept()` - Blocks until a connection arrives
@@ -870,9 +941,6 @@ The event loop has been **completely removed** from Lus. This includes:
 - **Restored:** Standard Lua 5.5 coroutine library (`lcorolib.c`)
 
 The rationale for removal was to simplify the codebase and focus on synchronous I/O. Applications requiring async I/O should use Lua coroutines with explicit polling or integrate with an external event loop.
-
-
-
 
 ## Permission System
 
@@ -929,19 +997,19 @@ typedef void (*lus_PledgeGranter)(lua_State *L, lus_PledgeRequest *p);
 
 #### C API
 
-| Function | Description |
-|----------|-------------|
-| `lus_pledge(L, name, value)` | Grant a permission |
-| `lus_haspledge(L, name, value)` | Check if permission is granted |
-| `lus_registerpledge(L, base, fn)` | Register a granter for a permission namespace |
-| `lus_initpledge(L, &p, base)` | Initialize request for C-side grants |
-| `lus_nextpledge(L, &p)` | Iterate stored values, sets `p->current` |
-| `lus_setpledge(L, &p, sub, value)` | Confirm/store a pledge |
-| `lus_rejectpledge(L, name)` | Permanently reject a permission |
-| `lus_rejectrequest(L, &p)` | Reject using request struct |
-| `lus_pledgeerror(L, &p, msg)` | Set denial error message |
-| `lus_issealed(L)` | Check if sealed |
-| `lus_checkfsperm(L, perm, path)` | Check fs permission or raise error |
+| Function                           | Description                                   |
+| ---------------------------------- | --------------------------------------------- |
+| `lus_pledge(L, name, value)`       | Grant a permission                            |
+| `lus_haspledge(L, name, value)`    | Check if permission is granted                |
+| `lus_registerpledge(L, base, fn)`  | Register a granter for a permission namespace |
+| `lus_initpledge(L, &p, base)`      | Initialize request for C-side grants          |
+| `lus_nextpledge(L, &p)`            | Iterate stored values, sets `p->current`      |
+| `lus_setpledge(L, &p, sub, value)` | Confirm/store a pledge                        |
+| `lus_rejectpledge(L, name)`        | Permanently reject a permission               |
+| `lus_rejectrequest(L, &p)`         | Reject using request struct                   |
+| `lus_pledgeerror(L, &p, msg)`      | Set denial error message                      |
+| `lus_issealed(L)`                  | Check if sealed                               |
+| `lus_checkfsperm(L, perm, path)`   | Check fs permission or raise error            |
 
 #### Granter System
 
@@ -960,7 +1028,7 @@ static void fs_granter(lua_State *L, lus_PledgeRequest *p) {
     }
     return;
   }
-  
+
   /* Checking: match path against stored glob patterns */
   if (p->status == LUS_PLEDGE_CHECK) {
     while (lus_nextpledge(L, p)) {
@@ -978,22 +1046,22 @@ lus_registerpledge(L, "fs", fs_granter);
 
 #### Files Created/Modified
 
-| File | Changes |
-|------|---------|
-| `lglob.h` | Glob matching API declarations |
-| `lglob.c` | Path canonicalization, glob/URL matching |
-| `lpledge.h` | Permission system C API, `lus_PledgeRequest` struct |
-| `lpledge.c` | Core storage, granter registry, Lua `pledge()` |
-| `lstate.h` | Added `pledges` field to `lua_State` |
-| `lstate.c` | Permission init/copy/free in thread lifecycle |
-| `lua.c` | CLI `--pledge`/`-P` argument handling |
-| `lbaselib.c` | Register `pledge` as global, `load`/`exec` granters |
-| `lfslib.c` | fs granter with path glob matching |
-| `liolib.c` | exec permission check for io.popen |
-| `loslib.c` | exec permission check for os.execute |
-| `lnetlib.c` | network granter with URL matching |
-| `loadlib.c` | fs:read + load permission checks for require |
-| `meson.build` | Added new source files, pledge test |
+| File          | Changes                                             |
+| ------------- | --------------------------------------------------- |
+| `lglob.h`     | Glob matching API declarations                      |
+| `lglob.c`     | Path canonicalization, glob/URL matching            |
+| `lpledge.h`   | Permission system C API, `lus_PledgeRequest` struct |
+| `lpledge.c`   | Core storage, granter registry, Lua `pledge()`      |
+| `lstate.h`    | Added `pledges` field to `lua_State`                |
+| `lstate.c`    | Permission init/copy/free in thread lifecycle       |
+| `lua.c`       | CLI `--pledge`/`-P` argument handling               |
+| `lbaselib.c`  | Register `pledge` as global, `load`/`exec` granters |
+| `lfslib.c`    | fs granter with path glob matching                  |
+| `liolib.c`    | exec permission check for io.popen                  |
+| `loslib.c`    | exec permission check for os.execute                |
+| `lnetlib.c`   | network granter with URL matching                   |
+| `loadlib.c`   | fs:read + load permission checks for require        |
+| `meson.build` | Added new source files, pledge test                 |
 
 ## Workers
 
@@ -1002,12 +1070,14 @@ The `worker` library implements M:N concurrency using separate Lua interpreter s
 #### Architecture
 
 **Thread Pool (M threads):**
+
 - Initialized lazily on first `worker.create` call
 - M = number of logical CPU cores (capped at 32)
 - Threads wait on a shared condition variable for work
 - Workers are enqueued and dequeued from a runnable queue
 
 **Worker State (N workers):**
+
 - Each worker has its own `lua_State`, inbox, and outbox message queues
 - Reference counted for proper cleanup
 - Status: `RUNNING`, `BLOCKED`, `DEAD`, or `ERROR`
@@ -1015,11 +1085,13 @@ The `worker` library implements M:N concurrency using separate Lua interpreter s
 #### Message Passing
 
 Messages are deep-copied between states using binary serialization:
+
 - Supported types: nil, boolean, number, integer, string, table (nested)
 - Unsupported types (userdata, threads, functions) error on serialize
 - Message queues protected by per-worker mutex
 
 **Format tags:**
+
 ```c
 #define SER_NIL     0
 #define SER_BOOL    1
@@ -1032,12 +1104,14 @@ Messages are deep-copied between states using binary serialization:
 #### Lua API
 
 **Main thread:**
+
 - `worker.create(path, ...)` - spawn worker, returns handle
 - `worker.status(w)` - returns `"running"` or `"dead"`
 - `worker.send(w, value)` - send message to worker inbox
 - `worker.receive(w1, ...)` - blocking select-style receive from outboxes
 
 **Worker thread:**
+
 - `worker.message(value)` - send message to outbox (for main to receive)
 - `worker.peek()` - blocking receive from inbox
 
@@ -1060,19 +1134,20 @@ The `lus_onworker` callback is invoked when a new worker state is created, allow
 #### Permissions
 
 Workers require:
+
 - `load` pledge (to execute code)
 - `fs:read` pledge for the script path
 
 #### Modified/New Files
 
-| File | Changes |
-|------|---------|
+| File           | Changes                                                 |
+| -------------- | ------------------------------------------------------- |
 | `lworkerlib.h` | Thread pool, worker state, message queue structs; C API |
-| `lworkerlib.c` | Core implementation (~860 lines) |
-| `lualib.h` | `LUA_WORKERLIBNAME`, `luaopen_worker` declaration |
-| `linit.c` | Worker library registration |
-| `lua.c` | `lus_onworker` callback registration in REPL |
-| `meson.build` | Added source file, thread dependency, test |
+| `lworkerlib.c` | Core implementation (~860 lines)                        |
+| `lualib.h`     | `LUA_WORKERLIBNAME`, `luaopen_worker` declaration       |
+| `linit.c`      | Worker library registration                             |
+| `lua.c`        | `lus_onworker` callback registration in REPL            |
+| `meson.build`  | Added source file, thread dependency, test              |
 
 ## AST Infrastructure
 
@@ -1118,14 +1193,14 @@ Example JSON output:
     {
       "type": "local",
       "line": 1,
-      "names": [{"type": "name", "line": 1, "value": "x"}],
+      "names": [{ "type": "name", "line": 1, "value": "x" }],
       "values": [
         {
           "type": "binop",
           "line": 1,
           "op": "+",
-          "left": {"type": "number", "line": 1, "value": 1},
-          "right": {"type": "number", "line": 1, "value": 2}
+          "left": { "type": "number", "line": 1, "value": 1 },
+          "right": { "type": "number", "line": 1, "value": 2 }
         }
       ]
     }
@@ -1136,6 +1211,7 @@ Example JSON output:
 ### AST Node Structure
 
 Each AST node contains:
+
 - `type`: Node type string (e.g., `"chunk"`, `"local"`, `"binop"`)
 - `line`: Source line number
 - Type-specific fields (e.g., `"binop"` has `op`, `left`, `right`)
@@ -1143,11 +1219,11 @@ Each AST node contains:
 
 ### AST Node Types
 
-| Category | Node Types |
-|----------|------------|
-| Statements | `chunk`, `block`, `local`, `global`, `assign`, `if`, `while`, `repeat`, `fornum`, `forgen`, `funcstat`, `localfunc`, `globalfunc`, `return`, `callstat`, `break`, `goto`, `label`, `catchstat`, `do` |
-| Expressions | `nil`, `true`, `false`, `number`, `string`, `vararg`, `name`, `index`, `field`, `binop`, `unop`, `table`, `funcexpr`, `callexpr`, `methodcall`, `enum`, `optchain`, `from`, `catchexpr` |
-| Auxiliary | `param`, `namelist`, `explist`, `elseif`, `else`, `tablefield` |
+| Category    | Node Types                                                                                                                                                                                           |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Statements  | `chunk`, `block`, `local`, `global`, `assign`, `if`, `while`, `repeat`, `fornum`, `forgen`, `funcstat`, `localfunc`, `globalfunc`, `return`, `callstat`, `break`, `goto`, `label`, `catchstat`, `do` |
+| Expressions | `nil`, `true`, `false`, `number`, `string`, `vararg`, `name`, `index`, `field`, `binop`, `unop`, `table`, `funcexpr`, `callexpr`, `methodcall`, `enum`, `optchain`, `from`, `catchexpr`              |
+| Auxiliary   | `param`, `namelist`, `explist`, `elseif`, `else`, `tablefield`                                                                                                                                       |
 
 ### Parser Modifications
 
@@ -1184,14 +1260,14 @@ int lusA_tojson(LusAst *ast, const char *filename);
 
 ### Modified/New Files
 
-| File | Changes |
-|------|---------|
-| `last.h` | AST node types enum, `LusAstNode` struct, `LusAst` container, C API |
-| `last.c` | Implementation (~850 lines): node creation, Lua table conversion, DOT export, JSON export |
-| `lparser.h` | Forward declaration for `LusAst`, modified `luaY_parser` signature |
-| `lparser.c` | Added AST creation in `mainfunc`, includes `last.h` |
-| `llex.h` | Added `ast` field to `LexState` |
-| `ldo.c` | Updated `luaY_parser` call with NULL AST |
-| `ldblib.c` | Implemented `debug.parse` function |
-| `lua.c` | Added `--ast-graph` and `--ast-json` command-line options |
-| `meson.build` | Added `last.c` to core sources |
+| File          | Changes                                                                                   |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `last.h`      | AST node types enum, `LusAstNode` struct, `LusAst` container, C API                       |
+| `last.c`      | Implementation (~850 lines): node creation, Lua table conversion, DOT export, JSON export |
+| `lparser.h`   | Forward declaration for `LusAst`, modified `luaY_parser` signature                        |
+| `lparser.c`   | Added AST creation in `mainfunc`, includes `last.h`                                       |
+| `llex.h`      | Added `ast` field to `LexState`                                                           |
+| `ldo.c`       | Updated `luaY_parser` call with NULL AST                                                  |
+| `ldblib.c`    | Implemented `debug.parse` function                                                        |
+| `lua.c`       | Added `--ast-graph` and `--ast-json` command-line options                                 |
+| `meson.build` | Added `last.c` to core sources                                                            |

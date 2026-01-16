@@ -2,7 +2,6 @@
 order: 112
 title: Acquis 12 - AST
 acquis: true
-draft: true
 ---
 
 Lus can generate an abstract syntax tree from Lus code using the `debug.parse` function and command-line options, which is mostly useful for static analysis, code transformation, and tooling.
@@ -46,7 +45,7 @@ local function walk(node, indent)
   indent = indent or 0
   local prefix = string.rep("  ", indent)
   print(prefix .. node.type .. " (line " .. node.line .. ")")
-  
+
   if node.children then
     for _, child in ipairs(node.children) do
       walk(child, indent + 1)
@@ -63,11 +62,11 @@ walk(ast)
 
 ### Node Types
 
-| Category | Types |
-|----------|-------|
-| Statements | `chunk`, `block`, `local`, `global`, `assign`, `if`, `while`, `repeat`, `fornum`, `forgen`, `funcstat`, `localfunc`, `globalfunc`, `return`, `callstat`, `break`, `goto`, `label`, `catchstat`, `do` |
-| Expressions | `nil`, `true`, `false`, `number`, `string`, `vararg`, `name`, `index`, `field`, `binop`, `unop`, `table`, `funcexpr`, `callexpr`, `methodcall`, `catchexpr`, `optchain`, `enum`, `from` |
-| Auxiliary | `param`, `namelist`, `explist`, `elseif`, `else`, `tablefield` |
+| Category    | Types                                                                                                                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Statements  | `chunk`, `block`, `local`, `global`, `assign`, `if`, `while`, `repeat`, `fornum`, `forgen`, `funcstat`, `localfunc`, `globalfunc`, `return`, `callstat`, `break`, `goto`, `label`, `catchstat`, `do` |
+| Expressions | `nil`, `true`, `false`, `number`, `string`, `vararg`, `name`, `index`, `field`, `binop`, `unop`, `table`, `funcexpr`, `callexpr`, `methodcall`, `catchexpr`, `optchain`, `enum`, `from`              |
+| Auxiliary   | `param`, `namelist`, `explist`, `elseif`, `else`, `tablefield`                                                                                                                                       |
 
 ### Type-Specific Fields
 
@@ -121,14 +120,14 @@ Example JSON output:
     {
       "type": "local",
       "line": 1,
-      "names": [{"type": "name", "line": 1, "value": "x"}],
+      "names": [{ "type": "name", "line": 1, "value": "x" }],
       "values": [
         {
           "type": "binop",
           "line": 1,
           "op": "+",
-          "left": {"type": "number", "line": 1, "value": 1},
-          "right": {"type": "number", "line": 1, "value": 2}
+          "left": { "type": "number", "line": 1, "value": 1 },
+          "right": { "type": "number", "line": 1, "value": 2 }
         }
       ]
     }

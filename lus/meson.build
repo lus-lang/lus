@@ -170,6 +170,7 @@ h1_tests = [
   'h1/errors',
   'h1/from',
   'h1/ifassign',
+  'h1/whileassign',
   'h1/optchain',
   'h1/bitwise',
   'h1/math',

@@ -17,6 +17,13 @@ tests:it("basic vararg", function()
     assert(f(10, 20, 30) == 2)
 end)
 
+tests:it("named vararg", function()
+    local function f(a, ...b)
+        assert(b)
+    end
+    f(10, 20, 30)
+end)
+
 tests:it("select basics", function()
     assert(select("#", 1, 2, 3) == 3)
     assert(select(2, "a", "b", "c") == "b")

@@ -2,7 +2,6 @@
 order: 109
 title: Acquis 9 - Network
 acquis: true
-draft: true
 ---
 
 The `network` library provides TCP, UDP, and HTTP/HTTPS networking with native SSL support.
@@ -111,29 +110,29 @@ receiver:close()
 
 ### TCP client socket
 
-| Method | Description |
-|--------|-------------|
-| `send(data)` | Send data, returns bytes sent |
-| `receive([pattern])` | Receive data (default: `"*l"`) |
-| `settimeout(seconds)` | Set operation timeout |
-| `close()` | Close the connection |
+| Method                | Description                    |
+| --------------------- | ------------------------------ |
+| `send(data)`          | Send data, returns bytes sent  |
+| `receive([pattern])`  | Receive data (default: `"*l"`) |
+| `settimeout(seconds)` | Set operation timeout          |
+| `close()`             | Close the connection           |
 
 ### TCP server
 
-| Method | Description |
-|--------|-------------|
-| `accept()` | Accept a client connection |
-| `settimeout(seconds)` | Set accept timeout |
-| `close()` | Stop listening |
+| Method                | Description                |
+| --------------------- | -------------------------- |
+| `accept()`            | Accept a client connection |
+| `settimeout(seconds)` | Set accept timeout         |
+| `close()`             | Stop listening             |
 
 ### UDP socket
 
-| Method | Description |
-|--------|-------------|
-| `sendto(data, addr, port)` | Send datagram |
-| `receive([size])` | Receive datagram (default: 8192) |
-| `setsockname(addr, port)` | Bind to address and port |
-| `close()` | Close the socket |
+| Method                     | Description                      |
+| -------------------------- | -------------------------------- |
+| `sendto(data, addr, port)` | Send datagram                    |
+| `receive([size])`          | Receive datagram (default: 8192) |
+| `setsockname(addr, port)`  | Bind to address and port         |
+| `close()`                  | Close the socket                 |
 
 ---
 

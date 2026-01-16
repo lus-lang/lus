@@ -2,7 +2,6 @@
 order: 110
 title: Acquis 10 - Permissions
 acquis: true
-draft: true
 ---
 
 The `pledge` function provides capability-based sandboxing for Lus scripts. Permissions must be explicitly granted before sensitive operations like file access, network requests, or command execution can occur.
@@ -145,11 +144,11 @@ pledge("network")
 
 local co = coroutine.create(function()
   fs.list("/tmp")  -- inherits fs permission
-  
+
   -- Restrict our copy further
   pledge("~network")  -- reject network in this coroutine
   pledge("seal")      -- seal this coroutine's permissions
-  
+
   -- network is now denied in this coroutine
   local ok = pledge("network")
   assert(not ok)
@@ -177,13 +176,13 @@ local function run_sandboxed(fn, allowed_perms)
     pledge("~fs")
     pledge("~network")
     pledge("~exec")
-    
+
     -- Then grant only what's allowed
     for _, perm in ipairs(allowed_perms) do
       pledge(perm)
     end
     pledge("seal")  -- lock it down
-    
+
     fn()  -- run the untrusted code
   end)
   return coroutine.resume(co)
@@ -208,12 +207,12 @@ pledge("network")
 local level1 = coroutine.create(function()
   pledge("~exec")     -- no command execution
   pledge("~network")  -- no network
-  
+
   -- Second level: read-only filesystem
   local level2 = coroutine.create(function()
     pledge("~fs:write")  -- remove write capability
     pledge("seal")
-    
+
     -- Can only read files now
     local data = io.open("/etc/hosts"):read("*a")
     local ok = catch io.open("/tmp/x", "w")  -- denied
@@ -227,17 +226,17 @@ coroutine.resume(level1)
 
 ## Available permissions
 
-| Permission | Description |
-|------------|-------------|
-| `fs` | All filesystem operations |
-| `fs:read` | Reading files and directories |
-| `fs:write` | Creating, modifying, deleting files |
-| `load` | Loading code at runtime (`load`, `loadfile`, `dofile`, `require`) |
-| `exec` | Running external commands (`os.execute`, `io.popen`) |
-| `network` | All network operations |
-| `network:tcp` | TCP socket connections |
-| `network:udp` | UDP socket operations |
-| `network:http` | HTTP/HTTPS requests |
+| Permission     | Description                                                       |
+| -------------- | ----------------------------------------------------------------- |
+| `fs`           | All filesystem operations                                         |
+| `fs:read`      | Reading files and directories                                     |
+| `fs:write`     | Creating, modifying, deleting files                               |
+| `load`         | Loading code at runtime (`load`, `loadfile`, `dofile`, `require`) |
+| `exec`         | Running external commands (`os.execute`, `io.popen`)              |
+| `network`      | All network operations                                            |
+| `network:tcp`  | TCP socket connections                                            |
+| `network:udp`  | UDP socket operations                                             |
+| `network:http` | HTTP/HTTPS requests                                               |
 
 > The `loadfile`, `dofile`, and `require` functions require both `fs:read` (to read the file) and `load` (to execute the code). The `load` function requires only `load`.
 
