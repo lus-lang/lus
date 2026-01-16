@@ -37,7 +37,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           @apply hover:bg-lime-200 text-lime-900 font-black;
         }
 
-        &[data-from="lus-unstable"] {
+        &[data-from="lus"] {
           @apply hover:bg-red-200 text-red-900 font-black;
         }
       }
@@ -100,7 +100,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#next">next</a>
             <a href="#pairs">pairs</a>
             <a data-from="removed">pcall</a>
-            <a href="#pledge" data-from="lus-unstable">pledge</a>
+            <a href="#pledge" data-from="lus">pledge</a>
             <a href="#print">print</a>
             <a href="#rawequal">rawequal</a>
             <a href="#rawget">rawget</a>
@@ -137,7 +137,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#debug.getregistry">debug.getregistry</a>
             <a href="#debug.getupvalue">debug.getupvalue</a>
             <a href="#debug.getuservalue">debug.getuservalue</a>
-            <a href="#debug.parse" data-from="lus-unstable">debug.parse</a>
+            <a href="#debug.parse" data-from="lus">debug.parse</a>
             <a href="#debug.sethook">debug.sethook</a>
             <a href="#debug.setlocal">debug.setlocal</a>
             <a href="#debug.setmetatable">debug.setmetatable</a>
@@ -228,45 +228,45 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           </p>
           <h3>Network</h3>
           <p>
-            <a href="#network.fetch" data-from="lus-unstable">network.fetch</a>
-            <a href="#network.tcp.bind" data-from="lus-unstable"
+            <a href="#network.fetch" data-from="lus">network.fetch</a>
+            <a href="#network.tcp.bind" data-from="lus"
               >network.tcp.bind</a
             >
-            <a href="#network.tcp.connect" data-from="lus-unstable"
+            <a href="#network.tcp.connect" data-from="lus"
               >network.tcp.connect</a
             >
-            <a href="#network.udp.open" data-from="lus-unstable"
+            <a href="#network.udp.open" data-from="lus"
               >network.udp.open</a
             >
 
-            <a href="#server:accept" data-from="lus-unstable">server:accept</a>
-            <a href="#server:close" data-from="lus-unstable">server:close</a>
-            <a href="#server:settimeout" data-from="lus-unstable"
+            <a href="#server:accept" data-from="lus">server:accept</a>
+            <a href="#server:close" data-from="lus">server:close</a>
+            <a href="#server:settimeout" data-from="lus"
               >server:settimeout</a
             >
 
-            <a href="#socket:close" data-from="lus-unstable">socket:close</a>
-            <a href="#socket:receive" data-from="lus-unstable">socket:receive</a
+            <a href="#socket:close" data-from="lus">socket:close</a>
+            <a href="#socket:receive" data-from="lus">socket:receive</a
             >
-            <a href="#socket:send" data-from="lus-unstable">socket:send</a>
-            <a href="#socket:settimeout" data-from="lus-unstable"
+            <a href="#socket:send" data-from="lus">socket:send</a>
+            <a href="#socket:settimeout" data-from="lus"
               >socket:settimeout</a
             >
 
-            <a href="#udp:close" data-from="lus-unstable">udp:close</a>
-            <a href="#udp:receive" data-from="lus-unstable">udp:receive</a>
-            <a href="#udp:sendto" data-from="lus-unstable">udp:sendto</a>
+            <a href="#udp:close" data-from="lus">udp:close</a>
+            <a href="#udp:receive" data-from="lus">udp:receive</a>
+            <a href="#udp:sendto" data-from="lus">udp:sendto</a>
           </p>
           <h3>Worker</h3>
           <p>
-            <a href="#worker.create" data-from="lus-unstable">worker.create</a>
-            <a href="#worker.status" data-from="lus-unstable">worker.status</a>
-            <a href="#worker.receive" data-from="lus-unstable">worker.receive</a
+            <a href="#worker.create" data-from="lus">worker.create</a>
+            <a href="#worker.status" data-from="lus">worker.status</a>
+            <a href="#worker.receive" data-from="lus">worker.receive</a
             >
-            <a href="#worker.send" data-from="lus-unstable">worker.send</a>
-            <a href="#worker.message" data-from="lus-unstable">worker.message</a
+            <a href="#worker.send" data-from="lus">worker.send</a>
+            <a href="#worker.message" data-from="lus">worker.message</a
             >
-            <a href="#worker.peek" data-from="lus-unstable">worker.peek</a>
+            <a href="#worker.peek" data-from="lus">worker.peek</a>
           </p>
           <h3>OS</h3>
           <p>
@@ -311,7 +311,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#string.rep">string.rep</a>
             <a href="#string.reverse">string.reverse</a>
             <a href="#string.sub">string.sub</a>
-            <a data-from="lus-unstable" href="#string.transcode"
+            <a data-from="lus" href="#string.transcode"
               >string.transcode</a
             >
             <a href="#string.unpack">string.unpack</a>
@@ -619,60 +619,60 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#luaopen_utf8">luaopen_utf8</a>
             <a href="#luaopen_fs" data-from="lus">luaopen_fs</a>
             <a href="#luaopen_json" data-from="lus">luaopen_json</a>
-            <a href="#luaopen_network" data-from="lus-unstable"
+            <a href="#luaopen_network" data-from="lus"
               >luaopen_network</a
             >
-            <a href="#luaopen_worker" data-from="lus-unstable">luaopen_worker</a
+            <a href="#luaopen_worker" data-from="lus">luaopen_worker</a
             >
           </p>
           <h3>Worker System</h3>
           <p>
-            <a href="#lus_WorkerSetup" data-from="lus-unstable"
+            <a href="#lus_WorkerSetup" data-from="lus"
               >lus_WorkerSetup</a
             >
-            <a href="#lus_onworker" data-from="lus-unstable">lus_onworker</a>
-            <a href="#lus_worker_pool_init" data-from="lus-unstable"
+            <a href="#lus_onworker" data-from="lus">lus_onworker</a>
+            <a href="#lus_worker_pool_init" data-from="lus"
               >lus_worker_pool_init</a
             >
-            <a href="#lus_worker_pool_shutdown" data-from="lus-unstable"
+            <a href="#lus_worker_pool_shutdown" data-from="lus"
               >lus_worker_pool_shutdown</a
             >
           </p>
           <h3>Permission System</h3>
           <p>
-            <a href="#lus_PledgeRequest" data-from="lus-unstable"
+            <a href="#lus_PledgeRequest" data-from="lus"
               >lus_PledgeRequest</a
             >
-            <a href="#lus_PledgeGranter" data-from="lus-unstable"
+            <a href="#lus_PledgeGranter" data-from="lus"
               >lus_PledgeGranter</a
             >
-            <a href="#LUS_PLEDGE_GRANT" data-from="lus-unstable"
+            <a href="#LUS_PLEDGE_GRANT" data-from="lus"
               >LUS_PLEDGE_GRANT</a
             >
-            <a href="#lus_initpledge" data-from="lus-unstable">lus_initpledge</a
+            <a href="#lus_initpledge" data-from="lus">lus_initpledge</a
             >
-            <a href="#lus_nextpledge" data-from="lus-unstable">lus_nextpledge</a
+            <a href="#lus_nextpledge" data-from="lus">lus_nextpledge</a
             >
-            <a href="#lus_setpledge" data-from="lus-unstable">lus_setpledge</a>
-            <a href="#lus_pledge" data-from="lus-unstable">lus_pledge</a>
-            <a href="#lus_haspledge" data-from="lus-unstable">lus_haspledge</a>
-            <a href="#lus_registerpledge" data-from="lus-unstable"
+            <a href="#lus_setpledge" data-from="lus">lus_setpledge</a>
+            <a href="#lus_pledge" data-from="lus">lus_pledge</a>
+            <a href="#lus_haspledge" data-from="lus">lus_haspledge</a>
+            <a href="#lus_registerpledge" data-from="lus"
               >lus_registerpledge</a
             >
-            <a href="#lus_rejectpledge" data-from="lus-unstable"
+            <a href="#lus_rejectpledge" data-from="lus"
               >lus_rejectpledge</a
             >
-            <a href="#lus_rejectrequest" data-from="lus-unstable"
+            <a href="#lus_rejectrequest" data-from="lus"
               >lus_rejectrequest</a
             >
-            <a href="#lus_pledgeerror" data-from="lus-unstable"
+            <a href="#lus_pledgeerror" data-from="lus"
               >lus_pledgeerror</a
             >
-            <a href="#lus_revokepledge" data-from="lus-unstable"
+            <a href="#lus_revokepledge" data-from="lus"
               >lus_revokepledge</a
             >
-            <a href="#lus_issealed" data-from="lus-unstable">lus_issealed</a>
-            <a href="#lus_checkfsperm" data-from="lus-unstable"
+            <a href="#lus_issealed" data-from="lus">lus_issealed</a>
+            <a href="#lus_checkfsperm" data-from="lus"
               >lus_checkfsperm</a
             >
           </p>
