@@ -6,11 +6,11 @@ title: Introduction
 import { Image } from "astro:assets"
 import Napoleon from "../assets/napoleon.jpg"
 
-Lus is a small, productive programming language derived from Lua. It's not meant to follow the latest trends in programming language theory, but to iterate on the minimalism and ease of use of Lua so that it can better solve real-world problems.
+Lus is a small, productive programming language. It should be able to be picked up easily by programmers and put to good use right away.
 
-It is a _superset_ of Lua, meaning that most Lua code is also valid Lus code. Seasoned Lua programmers should be able to pick up Lus easily and make use of its benefits right away. However, unlike most other language supersets, Lus has its own runtime and standard library, so it is a complete language in its own right.
+It is a _superset_ of Lua that iterates on its minimalism and ease of use so that it can better solve real-world problems. Unlike other language supersets, Lus is a complete language with its own runtime; no transcompilation is involved and no dependence on the Lua runtime is required.
 
-Lus is a [sovereign](/faq#sovereignty) language, meaning that you can reliably use it for most programming tasks without depending on third-party runtimes or libraries. This is a departure from its predecessor, Lua, which receives most of its production-capable functionality from third-party contributions, as its runtime and conservative standard library are limited.
+Lus is a [sovereign](/faq#sovereignty) language, meaning that you can use it for most programming tasks without having to depend on third-party runtimes or libraries. This is a departure from its predecessor, which receives most of its production-capable functionality from third-party contributions.
 
 Lus is a personal project of [Louka Ménard Blondin](https://louka.sh) and is maintained on a best-effort basis.
 
@@ -18,27 +18,27 @@ Lus is a personal project of [Louka Ménard Blondin](https://louka.sh) and is ma
 
 These are the design goals of Lus that guide the language's development.
 
-- **Boring is good.** The language should not implement every new trend in programming language theory. It should be small, predictable, and easy to work with while remaining extensible. If you can learn the language in a weekend and use it for years to come without having to re-learn it on a nightly basis, Lus has achieved its goal.
+- **Boring is good.** The language should not implement every new trend in programming language theory.
 
-- **Use-first approach.** The language shouldn't be difficult to find, install, and use. Grab the binary from an officially provided release, place it somewhere comfortable on your machine, and you're ready to go. No dependencies, no build steps, no setup.
+- **Use-first approach.** The language shouldn't be difficult to find, install, and use.
 
-- **Solve real-world problems.** The language must be oriented towards productivity and not just theoretical purity. This implies strong Socratic questioning of every proposed modification to determine their usefulness and value. The existence of a feature in another language is never sufficient to justify its addition to Lus; what exactly does it solve? Do we have to do it the same way?
+- **Solve real-world problems.** The language must be oriented towards productivity and not just theoretical purity.
 
-- **Sovereignty.** The language should be reasonably usable on its own without dependence on third-party runtimes or libraries. You should rarely have to use libraries unless you need something domain-specific or case-specific. To this end, the standard library must be greatly extended from Lua's core library to provide a complete language, while avoiding bloat.
+- **Sovereignty.** The language should be reasonably usable on its own without dependence on third-party runtimes or libraries.
 
-- **Minimalism.** Lus should retain Lua's ease of adoption, with concise and readable syntax. Syntactic additions should fit naturally into the language, and existing syntax should not be changed beyond recognition unless absolutely necessary. When a new syntax or semantic is considered for addition, it should be implemented, as possible, as an additional specification of existing syntax.
+- **Minimalism.** Lus should retain Lua's ease of adoption, with concise and readable syntax involving the smallest possible number of keywords.
 
-- **Strong release enginering.** The language should have stable, well-tested releases and not be in a constant state of flux. This means not being afraid of waiting long periods of time between releases, implementing a solid series of test harnesses to ensure the language's stability, and never making promises as to which features will be added in the next release.
+- **Strong release enginering.** The language should have stable, well-tested releases and not be in a constant state of flux.
 
-- **Backwards _embeddability_.** Lua was engineered to be highly embeddable, and while we focus on the sovereignty of the runtime, we also want to preserve the ease of integration that we inherited. Library functions therefore retain their `lua_` prefix (other than what is unique to Lus) and Lus, when compiled as a library, should be a drop-in replacement for Lua.
+- **Backwards _embeddability_.** Lua was engineered to be highly embeddable, and while we focus on the sovereignty of the runtime, we also want to preserve the ease of integration that we inherited.
 
 The following are **non-goals** of Lus.
 
-- **Strong typing.** The language should remain appreciative of Lua's strict adherence to dynamic typing. Virtually all other derivatives of Lua add strong typing features, which are distracting and detrimental to the language's productivity.
+- **Strong typing.** The language should remain appreciative of Lua's strict adherence to dynamic typing.
 
-- **_Other language syndrome._** Familiarity is often mistaken for competence. Developers like to solve problems using patterns from languages they already know rather than implementing idiomatic solutions; a JavaScript developer might implement a module system, a Python developer might add decorators, and a C developer might add switch statements. Lus resists importing foreign idioms and instead seeks language-proper solutions to its problems.
+- **_Other language syndrome._** Developers like to solve problems using patterns from languages they already know rather than implementing idiomatic solutions. Lus resists this and instead seeks language-proper solutions to its problems.
 
-- **Modules.** Downstream of _other language syndrome_ is the introduction of modules, code units with their own scope and visibility rules, which are an anti-pattern contemporarily imported from JavaScript. Instead, Lus should rely on the existing require-based loader system to load code. This means no import/export functionality.
+- **Modules.** Code units with their own scope and visibility rules are an anti-pattern imported from JavaScript. Lus instead relies on the existing require-based loader system to load code; any visibility concerns are handled by the existing system of local variables and closures.
 
 - **Native code generation.** Lus focuses on improving its existing interpreter rather than developing a compiler to generate native code, as is often found in other derivatives of Lua. This is not an opinion on the merits of native code generation, but rather a scope-fixing decision to limit the language's complexity.
 
