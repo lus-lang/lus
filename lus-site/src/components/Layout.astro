@@ -1,5 +1,6 @@
 ---
 import { Image } from "astro:assets"
+import { ClientRouter } from "astro:transitions"
 import "@fontsource-variable/atkinson-hyperlegible-next"
 import "@fontsource-variable/atkinson-hyperlegible-next/wght-italic.css"
 import "@fontsource-variable/atkinson-hyperlegible-mono"
@@ -55,8 +56,9 @@ const currentLogo = Astro.props.unstable ? logoUnstable : logo
     }
 
     <title>Lus{Astro.props.title && ` - ${Astro.props.title}`}</title>
+    <ClientRouter />
   </head>
-  <body>
+  <body transition:animate="none">
     <header>
       <div class="header-inner">
         <Image
