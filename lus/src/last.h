@@ -266,6 +266,9 @@ LUAI_FUNC int lusA_tojson(LusAst *ast, const char *filename);
 /* Get string name for node type */
 LUAI_FUNC const char *lusA_typename(LusAstType type);
 
+/* Analyze AST and emit pedantic warnings */
+LUAI_FUNC void lusA_analyze(lua_State *L, LusAst *ast, const char *chunkname);
+
 /*
 ** Macros for conditional AST building in parser
 */

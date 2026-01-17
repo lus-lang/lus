@@ -21,6 +21,7 @@
 #include "lmem.h"
 #include "lparser.h"
 #include "lpledge.h"
+#include "lstate.h"
 #include "lualib.h"
 #include "lworkerlib.h"
 #include "lzio.h"
@@ -41,6 +42,7 @@ static const char *progname = LUA_PROGNAME;
 
 static const char *astgraph_output = NULL; /* --ast-graph output file */
 static const char *astjson_output = NULL;  /* --ast-json output file */
+static int pedantic_warnings = 0;          /* -Wpedantic flag */
 
 /*
 ** Worker setup callback - gives workers the same libraries as main state
@@ -106,6 +108,7 @@ static void print_usage(const char *badoption) {
       "  -v        show version information\n"
       "  -E        ignore environment variables\n"
       "  -W        turn warnings on\n"
+      "  -Wpedantic turn on pedantic warnings\n"
       "  -P perm   grant permission (e.g., -Pfs:read, -Pnetwork)\n"
       "  --pledge perm  same as -P\n"
       "  --ast-graph file  dump AST to .dot file (does not run script)\n"
@@ -542,9 +545,13 @@ static int collectargs(char **argv, int *first) {
       args |= has_E;
       break;
     case 'W':
-      if (argv[i][2] != '\0') /* extra characters? */
-        return has_error;     /* invalid option */
-      break;
+      if (argv[i][2] == '\0') /* just -W */
+        break;
+      else if (strcmp(argv[i] + 2, "pedantic") == 0) { /* -Wpedantic */
+        pedantic_warnings = 1;
+        break;
+      } else
+        return has_error; /* unknown -W option */
     case 'i':
       args |= has_i; /* (-i implies -v) */ /* FALLTHROUGH */
     case 'v':
@@ -601,7 +608,11 @@ static int runargs(lua_State *L, char **argv, int n) {
       break;
     }
     case 'W':
-      lua_warning(L, "@on", 0); /* warnings on */
+      lua_warning(L, "@on", 0); /* warnings on (both -W and -Wpedantic) */
+      if (strcmp(argv[i] + 2, "pedantic") == 0) {
+        /* Enable pedantic AST-based warnings */
+        G(L)->pedantic = 1;
+      }
       break;
     case 'P': { /* pledge permission */
       char *pledge_str = argv[i] + 2;

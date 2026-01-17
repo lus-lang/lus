@@ -491,8 +491,15 @@ static int db_parse(lua_State *L) {
     return 0;
   }
 
+  /* Stop GC during parsing - AST holds raw TString* pointers that are
+     not anchored to the Lua stack, so GC could collect them */
+  lua_gc(L, LUA_GCSTOP, 0);
+
   /* Parse with AST generation enabled */
   cl = luaY_parser(L, &z, &buff, &dyd, chunkname, c, ast);
+
+  /* Restart GC */
+  lua_gc(L, LUA_GCRESTART, 0);
 
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);

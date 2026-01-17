@@ -6,6 +6,10 @@ draft: true
 
 While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus.
 
+## Use of `-Wpedantic`
+
+Using the `-Wpedantic` flag during development can help catch old Lua idioms which are no longer relevant in Lus. This is your best friend for upgrading Lua code to Lus code; it will catch most of what can be safely rewritten by generating an AST for every chunk and analyzing them at compile time. That said, avoid using this flag in production as AST generation is processor-heavy and involves additional memory allocation.
+
 ## Permissions ("pledging")
 
 Lus implements a capability-based permission model where scripts have to explicitly declare the access they need to the runtime and its libraries. While this can be used for sandboxing and other security purposes, its primary use case is to avoid unexpected behavior, such as unintended writes to sensitive system files. **You will most likely have to pledge permissions to your scripts.**

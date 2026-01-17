@@ -1,0 +1,110 @@
+---
+order: 114
+title: Acquis 14 - Pedantic Warnings
+acquis: true
+draft: true
+---
+
+The `-Wpedantic` flag enables AST-based warnings that identify Lua idioms which can be improved using Lus features. This flag should ideally only be used during development and be avoided in production as it force-enables AST generation for _every_ chunk, which increases memory usage and slows down code generation.
+
+## Usage
+
+```bash
+lus -Wpedantic script.lus
+```
+
+Warnings are printed to stderr using the standard warning format:
+
+```
+Lua warning: filename:line: message
+```
+
+## Warnings
+
+### W1: Pledge After Seal
+
+Calling `pledge()` after `pledge("seal")` has no effect because permissions are frozen.
+
+```lua
+pledge("fs")
+pledge("seal")
+pledge("network")  -- Warning: pledge() after pledge("seal") has no effect
+```
+
+### W2: pcall/xpcall Deprecation
+
+References to `pcall` or `xpcall` suggest using the `catch` expression instead ([Acquis 1](/manual/acquis-1)).
+
+```lua
+local ok, err = pcall(risky)  -- Warning: 'pcall' is deprecated, use 'catch'
+```
+
+Use instead:
+
+```lua
+local ok, result = catch risky()
+```
+
+### W3: Moveable Local Declaration
+
+Local variables that are only used in the immediately following `if` or `while` condition can be moved into the condition using assignment syntax ([Acquis 3](/manual/acquis-3), [Acquis 13](/manual/acquis-13)).
+
+```lua
+local x = getValue()
+if x then          -- Warning: local declaration can be moved to if condition
+    process(x)
+end
+```
+
+Use instead:
+
+```lua
+if x = getValue() then
+    process(x)
+end
+```
+
+### W4: And-Chain for Optional Chaining
+
+Multi-level `and` chains checking for nil can use optional chaining ([Acquis 2](/manual/acquis-2)).
+
+```lua
+local port = cfg and cfg.server and cfg.server.port
+-- Warning: and-chain can use optional chaining: x?.y?.z
+```
+
+Use instead:
+
+```lua
+local port = cfg?.server?.port
+```
+
+This also applies to nested `if x ~= nil` checks:
+
+```lua
+if cfg ~= nil then
+    if cfg.server ~= nil then
+        print(cfg.server.port)
+    end
+end
+-- Warning: nested nil checks can use optional chaining: x?.y?.z
+```
+
+### W5: Manual Table Deconstruction
+
+Pattern of extracting multiple fields from a table can use `from` syntax ([Acquis 4](/manual/acquis-4)).
+
+```lua
+local a, b, c = t.a, t.b, t.c
+-- Warning: use 'from' destructuring: local ... from t
+```
+
+Use instead:
+
+```lua
+local a, b, c from t
+```
+
+## Combining with -W
+
+The `-Wpedantic` flag implies `-W` (enables runtime warnings), so both compile-time pedantic warnings and runtime `warn()` calls are active.

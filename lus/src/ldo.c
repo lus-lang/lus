@@ -30,11 +30,7 @@
 #include "lundump.h"
 #include "lvm.h"
 #include "lzio.h"
-
-#ifdef LUS_NEW_PARSER
-#include "lcode2.h"
-#include "lparser2.h"
-#endif
+#include "last.h"
 
 #define errorstatus(s) ((s) > LUA_YIELD)
 
@@ -1092,12 +1088,17 @@ static void f_parser(lua_State *L, void *ud) {
     cl = luaU_undump(L, p->z, p->name, fixed);
   } else {
     checkmode(L, mode, "text");
-#ifdef LUS_NEW_PARSER
-    /* New unified AST parser + codegen (GC-safe: closure first, then table) */
-    cl = lusY_parser(L, p->z, &p->buff, &p->dyd, p->name, c);
-#else
-    cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c, NULL);
-#endif
+
+    /* Check if pedantic mode is enabled */
+    if (G(L)->pedantic) {
+      LusAst *ast = lusA_new(L);
+      cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c, ast);
+      lusA_analyze(L, ast, p->name);
+      lusA_free(L, ast);
+    } else {
+      cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c, NULL);
+    }
+
   }
   lua_assert(cl->nupvalues == cl->p->sizeupvalues);
   luaF_initupvals(L, cl);
