@@ -1,5 +1,6 @@
 -- Assignment Conditions: Variables declared in if/while conditions.
 -- playground: true
+-- unstable: true
 
 global print
 

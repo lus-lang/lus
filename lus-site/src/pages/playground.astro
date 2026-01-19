@@ -2,31 +2,32 @@
 import PlaygroundLayout from "../components/PlaygroundLayout.astro"
 
 // Import all .lus files from lus-examples
-const exampleFiles = import.meta.glob('../../../lus-examples/*.lus', { 
-  query: '?raw',
-  import: 'default',
-  eager: true 
+const exampleFiles = import.meta.glob("../../../lus-examples/*.lus", {
+  query: "?raw",
+  import: "default",
+  eager: true,
 }) as Record<string, string>
 
 // Filter to only playground-enabled examples and extract metadata
-const examples: Array<{ name: string; content: string }> = []
+const examples: Array<{ name: string; content: string; unstable: boolean }> = []
 for (const [path, content] of Object.entries(exampleFiles)) {
   // Check for "-- playground: true" in the first few lines
-  if (content.includes('playground: true') || path.endsWith('hello.lus')) {
-    const name = path.split('/').pop()!.replace('.lus', '')
-    examples.push({ name, content })
+  if (content.includes("playground: true") || path.endsWith("hello.lus")) {
+    const name = path.split("/").pop()!.replace(".lus", "")
+    const unstable = content.includes("unstable: true")
+    examples.push({ name, content, unstable })
   }
 }
 
 // Sort with hello first, then alphabetically
 examples.sort((a, b) => {
-  if (a.name === 'hello') return -1
-  if (b.name === 'hello') return 1
+  if (a.name === "hello") return -1
+  if (b.name === "hello") return 1
   return a.name.localeCompare(b.name)
 })
 
 // Default to hello.lus
-const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
+const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 ---
 
 <PlaygroundLayout>
@@ -44,9 +45,18 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
     <div class="pane-header">
       <span>Code</span>
       <select id="example-select" class="example-select">
-        {examples.map(ex => (
-          <option value={ex.name} selected={ex.name === 'hello'}>{ex.name}</option>
-        ))}
+        {
+          examples.map((ex) => (
+            <option
+              value={ex.name}
+              selected={ex.name === "hello"}
+              data-unstable={ex.unstable}
+            >
+              {ex.name}
+              {ex.unstable ? " *" : ""}
+            </option>
+          ))
+        }
       </select>
     </div>
     <div id="code-editor"></div>
@@ -57,12 +67,18 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
   </div>
 </PlaygroundLayout>
 
-<script define:vars={{ examples: examples, defaultContent: defaultExample?.content || '' }}>
-  window.__lusExamples = examples;
-  window.__lusDefaultContent = defaultContent;
+<script
+  define:vars={{
+    examples: examples,
+    defaultContent: defaultExample?.content || "",
+  }}
+>
+  window.__lusExamples = examples
+  window.__lusDefaultContent = defaultContent
 </script>
 
 <script>
+  // @ts-nocheck
   import { init } from "modern-monaco"
   import { registerSyntax } from "modern-monaco/core"
   //@ts-ignore
@@ -80,15 +96,17 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
   const runBtn = document.getElementById("run-btn") as HTMLButtonElement
   const clearBtn = document.getElementById("clear-btn") as HTMLButtonElement
   const versionSelect = document.getElementById(
-    "version-select"
+    "version-select",
   ) as HTMLSelectElement
   const versionTag = document.getElementById("version-tag")!
-  const exampleSelect = document.getElementById("example-select") as HTMLSelectElement
+  const exampleSelect = document.getElementById(
+    "example-select",
+  ) as HTMLSelectElement
 
-  // @ts-ignore
-  const examples: Array<{ name: string; content: string }> = window.__lusExamples || []
-  // @ts-ignore
-  const defaultContent: string = window.__lusDefaultContent || 'print("Hello, Lus!")'
+  const examples: Array<{ name: string; content: string }> =
+    window.__lusExamples || []
+  const defaultContent: string =
+    window.__lusDefaultContent || 'print("Hello, Lus!")'
 
   let currentModule: LusModule | null = null
   let releases: { stable: WasmRelease | null; unstable: WasmRelease | null }
@@ -97,7 +115,7 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
 
   function appendOutput(
     text: string,
-    type: "output" | "error" | "system" = "output"
+    type: "output" | "error" | "system" = "output",
   ) {
     const lines = text.split("\n")
     for (const lineText of lines) {
@@ -154,7 +172,7 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
   }
 
   function loadExample(name: string) {
-    const example = examples.find(e => e.name === name)
+    const example = examples.find((e) => e.name === name)
     if (example && editor) {
       editor.setValue(example.content)
     }
@@ -170,7 +188,8 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
       automaticLayout: true,
       minimap: { enabled: false },
       fontSize: 14,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      fontFamily:
+        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       lineNumbers: "on",
       scrollBeyondLastLine: false,
       wordWrap: "on",
@@ -187,7 +206,10 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
   async function initWasm() {
     try {
       if (typeof SharedArrayBuffer === "undefined") {
-        appendOutput("SharedArrayBuffer not available. This is probably because you're running this site locally. This is a funny bug on both Firefox and Chromium:\nhttps://bugzilla.mozilla.org/show_bug.cgi?id=1984864\nhttps://issues.chromium.org/issues/386633375\n(let me know when this is fixed so I can remove this message)", "error")
+        appendOutput(
+          "SharedArrayBuffer not available. This is probably because you're running this site locally. This is a funny bug on both Firefox and Chromium:\nhttps://bugzilla.mozilla.org/show_bug.cgi?id=1984864\nhttps://issues.chromium.org/issues/386633375\n(let me know when this is fixed so I can remove this message)",
+          "error",
+        )
         return
       }
 
@@ -219,6 +241,8 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
       const defaultRelease = releases.stable || releases.unstable
       if (defaultRelease) {
         await loadVersion(defaultRelease)
+        // Disable unstable examples if stable version is loaded
+        updateExampleAvailability(!releases.stable)
       }
     } catch (e) {
       appendOutput(`Failed to fetch releases: ${e}`, "error")
@@ -228,11 +252,28 @@ const defaultExample = examples.find(e => e.name === 'hello') || examples[0]
   runBtn.addEventListener("click", runCode)
   clearBtn.addEventListener("click", clearOutput)
 
+  function updateExampleAvailability(isUnstable: boolean) {
+    const options = exampleSelect.querySelectorAll("option")
+    for (const opt of options) {
+      const requiresUnstable = opt.dataset.unstable === "true"
+      opt.disabled = requiresUnstable && !isUnstable
+    }
+    // If current selection is now disabled, switch to hello
+    const currentOpt = exampleSelect.querySelector(
+      `option[value="${exampleSelect.value}"]`,
+    ) as HTMLOptionElement
+    if (currentOpt?.disabled) {
+      exampleSelect.value = "hello"
+      loadExample("hello")
+    }
+  }
+
   versionSelect.addEventListener("change", async () => {
     const selected = versionSelect.value
     const release = selected === "stable" ? releases.stable : releases.unstable
     if (release) {
       await loadVersion(release)
+      updateExampleAvailability(selected === "unstable")
     }
   })
 

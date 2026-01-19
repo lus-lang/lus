@@ -1,5 +1,6 @@
 -- Groups: Structured bindings that unpack into individual variables.
 -- playground: true
+-- unstable: true
 
 global print
 
