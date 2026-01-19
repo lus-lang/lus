@@ -401,39 +401,39 @@ void luaV_finishset(lua_State *L, const TValue *t, TValue *key, TValue *val,
 /*
 ** Compare two strings 'ts1' x 'ts2', returning an integer less-equal-
 ** -greater than zero if 'ts1' is less-equal-greater than 'ts2'.
-** Uses 4-byte aligned comparison for performance.
+** Uses 4-byte aligned comparison for performance where safe.
 */
 static int l_strcmp(const TString *ts1, const TString *ts2) {
   size_t len1, len2;
   const char *s1 = getlstr(ts1, len1);
   const char *s2 = getlstr(ts2, len2);
   size_t n = len1 > len2 ? len2 : len1;
-  size_t i;
-  for (i = 0; i < n; i += 4) {
-    /* Read 4 bytes at a time (note: may read up to 3 bytes past end) */
+  size_t i = 0;
+  /* Compare 4 bytes at a time, only while we have at least 4 bytes left */
+  while (i + 4 <= n) {
     l_uint32 va = lus_getu32(s1 + i);
     l_uint32 vb = lus_getu32(s2 + i);
     if (va != vb) {
       /* Byte-swap on little-endian for correct lexicographic order */
-#if !defined(LUA_USE_C89) && (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || \
+#if (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || \
     defined(_WIN32) || defined(__i386__) || defined(__x86_64__) || defined(__aarch64__)
       va = lus_bswap(va); vb = lus_bswap(vb);
 #endif
-      /* Handle comparison near end of string */
-      {
-        int rem = cast_int(i) - cast_int(n);
-        if (rem >= -3) {
-          /* Shift out bytes past string end */
-          va >>= 32 + (rem << 3);
-          vb >>= 32 + (rem << 3);
-          if (va == vb) break;  /* Equal after masking: compare by length */
-        }
-      }
       return va < vb ? -1 : 1;
     }
+    i += 4;
+  }
+  /* Compare remaining bytes one at a time */
+  while (i < n) {
+    unsigned char c1 = (unsigned char)s1[i];
+    unsigned char c2 = (unsigned char)s2[i];
+    if (c1 != c2)
+      return c1 < c2 ? -1 : 1;
+    i++;
   }
   return (len1 > len2) - (len1 < len2);
 }
+
 
 
 
