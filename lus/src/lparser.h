@@ -106,10 +106,11 @@ typedef struct expdesc {
 #define RDKVAVAR 2   /* vararg parameter */
 #define RDKTOCLOSE 3 /* to-be-closed */
 #define RDKCTC 4     /* local compile-time constant */
-#define GDKREG 5     /* regular global */
-#define GDKCONST 6   /* global constant */
+#define RDKGROUP 5   /* local group (compile-time namespace) */
+#define GDKREG 6     /* regular global */
+#define GDKCONST 7   /* global constant */
 
-/* variables that live in registers */
+/* variables that live in registers (excludes compile-time constants and groups) */
 #define varinreg(v) ((v)->vd.kind <= RDKTOCLOSE)
 
 /* test for global variables */
@@ -126,6 +127,23 @@ typedef union Vardesc {
   } vd;
   TValue k; /* constant value (if any) */
 } Vardesc;
+
+/* description of a group field (for local groups) */
+typedef struct GroupField {
+  TString *name;           /* field name */
+  lu_byte ridx;            /* register index for this field */
+  lu_byte kind;            /* field kind (RDKCONST, RDKGROUP, etc.) */
+  struct GroupField *next; /* next field in group (linked list) */
+  struct GroupDesc *subgroup; /* non-NULL if this is a nested group */
+} GroupField;
+
+/* description of a local group */
+typedef struct GroupDesc {
+  TString *name;      /* group variable name */
+  GroupField *fields; /* head of field list */
+  int nfields;        /* number of fields */
+  struct GroupDesc *next; /* next group in active list */
+} GroupDesc;
 
 /* description of pending goto statements and label statements */
 typedef struct Labeldesc {
@@ -152,6 +170,7 @@ typedef struct Dyndata {
   } actvar;
   Labellist gt;    /* list of pending gotos */
   Labellist label; /* list of active labels */
+  GroupDesc *groups; /* list of active local groups */
 } Dyndata;
 
 /* control of blocks */

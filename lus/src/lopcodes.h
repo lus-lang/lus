@@ -347,6 +347,8 @@ typedef enum {
   OP_CATCH,    /*	A sBx	begin catch block: if error, jump sBx; status in R[A] */
   OP_ENDCATCH, /*	A B C	end catch: R[A]:=true; B=nresults; C=jump offset */
 
+  OP_SLICE,    /*	A B C	R[A] := slice(R[B], R[C], R[C+1])		*/
+
   OP_EXTRAARG /*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

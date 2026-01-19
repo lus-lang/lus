@@ -1,0 +1,129 @@
+global print, require, assert, type, string, table, setmetatable, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("slices")
+
+-- Table slices
+tests:it("basic table slice", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[2,4]
+    assert(s[1] == 2)
+    assert(s[2] == 3)
+    assert(s[3] == 4)
+    assert(#s == 3)
+end)
+
+tests:it("table slice from start", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[,3]
+    assert(s[1] == 1)
+    assert(s[2] == 2)
+    assert(s[3] == 3)
+    assert(#s == 3)
+end)
+
+tests:it("table slice to end", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[3,]
+    assert(s[1] == 3)
+    assert(s[2] == 4)
+    assert(s[3] == 5)
+    assert(#s == 3)
+end)
+
+tests:it("table slice reverse", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[4,2]
+    assert(s[1] == 4)
+    assert(s[2] == 3)
+    assert(s[3] == 2)
+    assert(#s == 3)
+end)
+
+tests:it("table slice full copy", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[,]
+    assert(#s == 5)
+    assert(s[1] == 1)
+    assert(s[5] == 5)
+end)
+
+-- String slices
+tests:it("basic string slice", function()
+    local s = "hello"
+    assert(s[2,4] == "ell")
+end)
+
+tests:it("string slice from start", function()
+    local s = "hello"
+    assert(s[,3] == "hel")
+end)
+
+tests:it("string slice to end", function()
+    local s = "hello"
+    assert(s[3,] == "llo")
+end)
+
+tests:it("string slice reverse", function()
+    local s = "hello"
+    assert(s[4,2] == "lle")
+end)
+
+tests:it("string slice full", function()
+    local s = "hello"
+    assert(s[,] == "hello")
+end)
+
+-- __slice metamethod
+tests:it("__slice metamethod", function()
+    local mt = {
+        __slice = function(self, start, finish)
+            return {s = start, f = finish}
+        end
+    }
+    local x = setmetatable({}, mt)
+    local result = x[5,10]
+    assert(result.s == 5)
+    assert(result.f == 10)
+end)
+
+tests:it("__slice with nil start", function()
+    local mt = {
+        __slice = function(self, start, finish)
+            return {s = start, f = finish}
+        end
+    }
+    local x = setmetatable({}, mt)
+    local result = x[,20]
+    assert(result.s == nil)
+    assert(result.f == 20)
+end)
+
+tests:it("__slice with nil end", function()
+    local mt = {
+        __slice = function(self, start, finish)
+            return {s = start, f = finish}
+        end
+    }
+    local x = setmetatable({}, mt)
+    local result = x[10,]
+    assert(result.s == 10)
+    assert(result.f == nil)
+end)
+
+-- Edge cases
+tests:it("single element slice", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[3,3]
+    assert(#s == 1)
+    assert(s[1] == 3)
+end)
+
+tests:it("single char string slice", function()
+    local s = "hello"
+    assert(s[3,3] == "l")
+end)
+
+tests:finish()

@@ -62,6 +62,9 @@ static void catchstat(LexState *ls, int line);
 static int isassigncond(LexState *ls);
 static int assigncond(LexState *ls);
 
+/* prototypes for group functions (used before definition) */
+static GroupDesc *findgroup(LexState *ls, TString *name);
+static GroupField *findgroupfield(GroupDesc *g, TString *name);
 
 static l_noret error_expected(LexState *ls, int token) {
   luaX_syntaxerror(
@@ -241,7 +244,7 @@ lu_byte luaY_nvarstack(FuncState *fs) { return reglevel(fs, fs->nactvar); }
 static LocVar *localdebuginfo(FuncState *fs, int vidx) {
   Vardesc *vd = getlocalvardesc(fs, vidx);
   if (!varinreg(vd))
-    return NULL; /* no debug info. for constants */
+    return NULL; /* no debug info. for constants and groups */
   else {
     int idx = vd->vd.pidx;
     lua_assert(idx < fs->ndebugvars);
@@ -1288,6 +1291,72 @@ static void suffixedexp(LexState *ls, expdesc *v) {
   int niljumps = NO_JUMP; /* list of jumps for nil short-circuit */
   int basereg = -1; /* base register for optional chain (-1 = not in chain) */
   primaryexp(ls, v);
+  
+  /* Handle local groups: resolve group.field to field register */
+  GroupDesc *curgroup = NULL; /* track current group context for subgroups */
+  
+  while (1) {
+    /* Check if we're in a group context */
+    if (curgroup == NULL && v->k == VLOCAL) {
+      Vardesc *vd = getlocalvardesc(fs, v->u.var.vidx);
+      if (vd->vd.kind != RDKGROUP)
+        break; /* not a group, continue normally */
+      
+      /* It's a group - get its GroupDesc */
+      curgroup = findgroup(ls, vd->vd.name);
+      if (curgroup == NULL) {
+        luaK_semerror(ls, "internal error: group '%s' not found", 
+                      getstr(vd->vd.name));
+      }
+    }
+    
+    if (curgroup == NULL)
+      break; /* not in group context */
+    
+    /* Must be followed by '.' for field access, or '=' for group overwrite */
+    if (ls->t.token != '.') {
+      if (ls->t.token == '=') {
+        /* Group overwrite: z = { ... } - leave v as-is, handled by exprstat */
+        break;
+      }
+      luaK_semerror(ls, "cannot pass local group");
+    }
+    
+    /* Parse the field access: '.' NAME */
+    luaX_next(ls); /* skip '.' */
+    TString *fieldname = str_checkname(ls);
+    
+    GroupField *field = findgroupfield(curgroup, fieldname);
+    if (field == NULL) {
+      luaK_semerror(ls, "'%s' is not a field of group '%s'",
+                    getstr(fieldname), getstr(curgroup->name));
+    }
+    
+    /* If field is a subgroup, update curgroup and continue */
+    if (field->kind == RDKGROUP && field->subgroup != NULL) {
+      curgroup = field->subgroup;
+      /* Continue loop to handle parent.c.d */
+    } else {
+      /* Regular field: find the variable and create assignable expr */
+      int i;
+      int found = 0;
+      for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {
+        Vardesc *fvd = getlocalvardesc(fs, i);
+        if (strcmp(getstr(fvd->vd.name), getstr(fieldname)) == 0 &&
+            fvd->vd.ridx == field->ridx) {
+          init_var(fs, v, i);
+          found = 1;
+          break;
+        }
+      }
+      if (!found) {
+        /* Fallback to VNONRELOC if variable not found */
+        init_exp(v, VNONRELOC, field->ridx);
+      }
+      break; /* exit loop */
+    }
+  }
+  
   for (;;) {
     switch (ls->t.token) {
     case '?': {      /* optional chaining marker */
@@ -1316,20 +1385,75 @@ static void suffixedexp(LexState *ls, expdesc *v) {
         discharge2basereg(fs, v, basereg);
       break;
     }
-    case '[': { /* '[' exp ']' */
-      expdesc key;
+    case '[': { /* '[' exp ']' OR '[' expr? ',' expr? ']' (slice) */
       int line = ls->linenumber;
       LusAstNode *table_ast = v->ast; /* save table AST before overwrite */
       luaK_exp2anyregup(fs, v);
-      yindex(ls, &key);
-      luaK_indexed(fs, v, &key);
-      /* Create AST_INDEX node */
-      if (AST_ACTIVE(ls)) {
-        LusAstNode *idx = lusA_newnode(ls->ast, AST_INDEX, line);
-        idx->u.index.table = table_ast;
-        idx->u.index.key = key.ast;
-        v->ast = idx;
+      int tblreg = luaK_exp2anyreg(fs, v); /* table/string register */
+      
+      luaX_next(ls); /* skip '[' */
+      
+      /* Check for slice: starts with ',' or has ',' after first expr */
+      expdesc start, end;
+      int is_slice = 0;
+      
+      if (ls->t.token == ',') {
+        /* [, expr] - start omitted */
+        is_slice = 1;
+        init_exp(&start, VNIL, 0);
+        luaX_next(ls); /* skip ',' */
+        if (ls->t.token == ']') {
+          /* [,] - both omitted */
+          init_exp(&end, VNIL, 0);
+        } else {
+          expr(ls, &end);
+        }
+      } else {
+        /* Parse first expression */
+        expr(ls, &start);
+        if (ls->t.token == ',') {
+          /* [expr, expr?] - this is a slice */
+          is_slice = 1;
+          luaX_next(ls); /* skip ',' */
+          if (ls->t.token == ']') {
+            /* [expr,] - end omitted */
+            init_exp(&end, VNIL, 0);
+          } else {
+            expr(ls, &end);
+          }
+        }
       }
+      
+      checknext(ls, ']');
+      
+      if (is_slice) {
+        /* Generate OP_SLICE: R[A] := slice(R[B], R[C], R[C+1]) */
+        /* Put start and end into consecutive registers */
+        int startreg = fs->freereg;
+        luaK_exp2nextreg(fs, &start);
+        luaK_exp2nextreg(fs, &end);
+        /* Generate slice instruction with placeholder destination */
+        /* Use 0 as dest, will be relocated later */
+        int pc = luaK_codeABC(fs, OP_SLICE, 0, tblreg, startreg);
+        /* Free the temp registers for start/end */
+        fs->freereg = startreg;
+        /* Mark as relocatable - dest register will be set when used */
+        init_exp(v, VRELOC, pc);
+        /* TODO: AST node for slice */
+      } else {
+        /* Normal indexing */
+        LusAstNode *key_ast = start.ast;
+        luaK_exp2val(fs, &start);
+        luaK_indexed(fs, v, &start);
+        /* Create AST_INDEX node */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *idx = lusA_newnode(ls->ast, AST_INDEX, line);
+          idx->u.index.table = table_ast;
+          idx->u.index.key = key_ast;
+          v->ast = idx;
+        }
+      }
+      
       /* If in optional chain, discharge to basereg */
       if (basereg != -1)
         discharge2basereg(fs, v, basereg);
@@ -2397,6 +2521,8 @@ static lu_byte getvarattribute(LexState *ls, lu_byte df) {
       return RDKCONST; /* read-only variable */
     else if (strcmp(attr, "close") == 0)
       return RDKTOCLOSE; /* to-be-closed variable */
+    else if (strcmp(attr, "group") == 0)
+      return RDKGROUP; /* local group */
     else
       luaK_semerror(ls, "unknown attribute '%s'", attr);
   }
@@ -2460,6 +2586,216 @@ static void localfrom(LexState *ls, int firstidx, int nvars) {
   adjustlocalvars(ls, nvars);
 }
 
+/*
+** =======================================================================
+** Local Groups
+** =======================================================================
+*/
+
+/*
+** Find a group by name in the active groups list.
+*/
+static GroupDesc *findgroup(LexState *ls, TString *name) {
+  GroupDesc *g = ls->dyd->groups;
+  while (g != NULL) {
+    if (eqstr(g->name, name))
+      return g;
+    g = g->next;
+  }
+  return NULL;
+}
+
+/*
+** Find a field within a group by name.
+*/
+static GroupField *findgroupfield(GroupDesc *g, TString *name) {
+  GroupField *f = g->fields;
+  int pos = 0;
+  while (f != NULL) {
+    if (eqstr(f->name, name)) {
+      /* Found field at position pos with ridx f->ridx */
+      return f;
+    }
+    f = f->next;
+    pos++;
+  }
+  return NULL;
+}
+
+/*
+** Allocate a new GroupDesc for tracking group metadata.
+*/
+static GroupDesc *newgroup(LexState *ls, TString *name) {
+  lua_State *L = ls->L;
+  GroupDesc *g = luaM_new(L, GroupDesc);
+  g->name = name;
+  g->fields = NULL;
+  g->nfields = 0;
+  g->next = ls->dyd->groups;
+  ls->dyd->groups = g;
+  return g;
+}
+
+/*
+** Allocate a new GroupField and add to group.
+*/
+static GroupField *newgroupfield(LexState *ls, GroupDesc *g, TString *name,
+                                  lu_byte ridx, lu_byte kind) {
+  lua_State *L = ls->L;
+  GroupField *f = luaM_new(L, GroupField);
+  f->name = name;
+  f->ridx = ridx;
+  f->kind = kind;
+  f->next = NULL;
+  f->subgroup = NULL;
+  /* append to end of list */
+  if (g->fields == NULL) {
+    g->fields = f;
+  } else {
+    GroupField *tail = g->fields;
+    while (tail->next != NULL)
+      tail = tail->next;
+    tail->next = f;
+  }
+  g->nfields++;
+  return f;
+}
+
+/*
+** Parse a group constructor: '{' { [attrib] NAME '=' expr [SEP] } '}'
+** Each field becomes a real local variable with its register.
+** The GroupField tracks the mapping from field name to variable index.
+*/
+static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
+  FuncState *fs = ls->fs;
+  GroupDesc *g = newgroup(ls, groupname);
+  int line = ls->linenumber;
+  int nfields = 0;
+  int firstidx = -1; /* vardesc index of first field */
+  
+  checknext(ls, '{');
+  
+  while (ls->t.token != '}') {
+    TString *fieldname = str_checkname(ls);         /* get field name first */
+    lu_byte fieldkind = getvarattribute(ls, VDKREG); /* attribute after name */
+    checknext(ls, '=');
+    
+    if (fieldkind == RDKGROUP) {
+      /* Subgroup: recurse */
+      GroupDesc *subg = groupconstructor(ls, fieldname);
+      /* Store subgroup reference - fields are already created as locals */
+      GroupField *f = newgroupfield(ls, g, fieldname, 0, RDKGROUP);
+      f->subgroup = subg;
+    } else {
+      /* Regular field: create a real local variable */
+      expdesc e;
+      int vidx;
+      
+      /* Predeclare the field as a local variable */
+      vidx = new_varkind(ls, fieldname, fieldkind);
+      if (firstidx < 0) firstidx = vidx;
+      
+      /* Parse and evaluate the expression into the next register */
+      expr(ls, &e);
+      luaK_exp2nextreg(fs, &e);
+      
+      /* NOW activate the variable - it will get the register we just used */
+      adjustlocalvars(ls, 1);
+      
+      /* Track the field -> variable mapping */
+      Vardesc *vd = getlocalvardesc(fs, vidx);
+      GroupField *f = newgroupfield(ls, g, fieldname, vd->vd.ridx, fieldkind);
+      (void)f;
+      nfields++;
+    }
+    
+    /* Skip optional separator */
+    if (!testnext(ls, ',') && !testnext(ls, ';')) {
+      if (ls->t.token != '}')
+        luaK_semerror(ls, "expected ',' or ';' in group constructor");
+    }
+  }
+  
+  check_match(ls, '}', '{', line);
+  return g;
+}
+
+/*
+** Handle local group declaration: local name <group> = { ... } or = othergroup
+** Groups don't allocate registers themselves - only their fields do.
+*/
+static void groupstat(LexState *ls, TString *groupname) {
+  FuncState *fs = ls->fs;
+  int vidx;
+  int basereg = fs->freereg; /* first field will go here */
+  
+  /* Create group placeholder - but DON'T call adjustlocalvars! */
+  /* Groups don't get registers, only their fields do */
+  vidx = new_varkind(ls, groupname, RDKGROUP);
+  
+  /* Manually activate the group variable (without allocating a register) */
+  fs->nactvar++;
+  Vardesc *gvar = getlocalvardesc(fs, vidx);
+  gvar->vd.ridx = cast_byte(basereg); /* points to first field's future register */
+  gvar->vd.pidx = -1; /* no debug entry for groups */
+  
+  /* Parse the '=' */
+  checknext(ls, '=');
+  
+  if (ls->t.token == '{') {
+    /* Constructor: local g <group> = { ... } */
+    GroupDesc *g = groupconstructor(ls, groupname);
+    (void)g; /* group tracking used for field lookup */
+  } else {
+    /* Copy from another group: local y <group> = x */
+    expdesc src;
+    primaryexp(ls, &src);
+    
+    /* Check if source is a group */
+    if (src.k != VLOCAL) {
+      luaK_semerror(ls, "group can only be copied from another group");
+    }
+    Vardesc *srcvd = getlocalvardesc(fs, src.u.var.vidx);
+    if (srcvd->vd.kind != RDKGROUP) {
+      luaK_semerror(ls, "group can only be copied from another group");
+    }
+    
+    /* Find source group's GroupDesc */
+    GroupDesc *srcg = findgroup(ls, srcvd->vd.name);
+    if (srcg == NULL) {
+      luaK_semerror(ls, "internal error: source group not found");
+    }
+    
+    /* Create a new GroupDesc for the destination */
+    GroupDesc *g = newgroup(ls, groupname);
+    
+    /* Copy each field from source to destination */
+    GroupField *sf;
+    for (sf = srcg->fields; sf != NULL; sf = sf->next) {
+      if (sf->kind == RDKGROUP && sf->subgroup != NULL) {
+        /* Subgroup: recursively copy (for now, just link to same subgroup) */
+        GroupField *f = newgroupfield(ls, g, sf->name, 0, RDKGROUP);
+        f->subgroup = sf->subgroup; /* share subgroup structure */
+      } else {
+        /* Regular field: create new local and copy value */
+        int fvidx = new_varkind(ls, sf->name, sf->kind);
+        
+        /* Copy value from source field's register */
+        luaK_codeABC(fs, OP_MOVE, fs->freereg, sf->ridx, 0);
+        luaK_reserveregs(fs, 1);
+        
+        /* Activate the variable */
+        adjustlocalvars(ls, 1);
+        
+        /* Track field mapping */
+        Vardesc *fvd = getlocalvardesc(fs, fvidx);
+        GroupField *f = newgroupfield(ls, g, sf->name, fvd->vd.ridx, sf->kind);
+        (void)f;
+      }
+    }
+  }
+}
+
 static void localstat(LexState *ls) {
   /* stat -> LOCAL NAME attrib { ',' NAME attrib } ['=' explist | 'from' expr]
    */
@@ -2474,11 +2810,19 @@ static void localstat(LexState *ls) {
   LusAstNode *names_head = NULL;
   LusAstNode *names_tail = NULL;
 
-  /* get prefixed attribute (if any); default is regular local variable */
-  lu_byte defkind = getvarattribute(ls, VDKREG);
   do {                                           /* for each variable */
     TString *vname = str_checkname(ls);          /* get its name */
-    lu_byte kind = getvarattribute(ls, defkind); /* postfixed attribute */
+    lu_byte kind = getvarattribute(ls, VDKREG);  /* attribute (if any) */
+    
+    /* Handle local groups: local name <group> = { ... } */
+    if (kind == RDKGROUP) {
+      if (nvars > 0) {
+        luaK_semerror(ls, "group must be sole variable in declaration");
+      }
+      groupstat(ls, vname);
+      return; /* group handled separately */
+    }
+    
     vidx = new_varkind(ls, vname, kind);         /* predeclare it */
 
     /* Build AST name list */
@@ -2743,6 +3087,64 @@ static void exprstat(LexState *ls) {
   suffixedexp(ls, &v.v);
   if (ls->t.token == '=' || ls->t.token == ',' ||
       ls->t.token == TK_FROM) { /* stat -> assignment ? */
+    
+    /* Check if this is a group overwrite: group = { ... } */
+    if (v.v.k == VLOCAL && ls->t.token == '=') {
+      Vardesc *vd = getlocalvardesc(fs, v.v.u.var.vidx);
+      if (vd->vd.kind == RDKGROUP) {
+        /* Group overwrite: z = { field = value, ... } */
+        luaX_next(ls); /* skip '=' */
+        if (ls->t.token != '{') {
+          luaK_semerror(ls, "group can only be assigned a constructor or another group");
+        }
+        
+        GroupDesc *g = findgroup(ls, vd->vd.name);
+        if (g == NULL) {
+          luaK_semerror(ls, "internal error: group not found");
+        }
+        
+        /* Parse constructor and assign fields */
+        int line = ls->linenumber;
+        checknext(ls, '{');
+        
+        while (ls->t.token != '}') {
+          TString *fieldname = str_checkname(ls);
+          lu_byte fieldkind = getvarattribute(ls, VDKREG);
+          checknext(ls, '=');
+          
+          /* Find the field in the group */
+          GroupField *field = findgroupfield(g, fieldname);
+          if (field == NULL) {
+            luaK_semerror(ls, "'%s' is not a field of group '%s'",
+                          getstr(fieldname), getstr(vd->vd.name));
+          }
+          
+          if (fieldkind == RDKGROUP) {
+            luaK_semerror(ls, "cannot overwrite subgroups");
+          }
+          
+          /* Parse expression and assign to field's register */
+          expdesc e;
+          expr(ls, &e);
+          luaK_exp2nextreg(fs, &e);
+          /* Move result to field's register */
+          if (fs->freereg - 1 != field->ridx) {
+            luaK_codeABC(fs, OP_MOVE, field->ridx, fs->freereg - 1, 0);
+          }
+          fs->freereg--; /* free temp register */
+          
+          /* Skip separator */
+          if (!testnext(ls, ',') && !testnext(ls, ';')) {
+            if (ls->t.token != '}')
+              luaK_semerror(ls, "expected ',' or ';' in group overwrite");
+          }
+        }
+        
+        check_match(ls, '}', '{', line);
+        return; /* handled */
+      }
+    }
+    
     /* Store LHS AST for assignment */
     if (AST_ACTIVE(ls) && ls->ast->curnode) {
       ls->ast->curnode->u.assign.lhs = v.v.ast;

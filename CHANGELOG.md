@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+**Release date:** TBD
+
+- Added local groups.
+- Added slices for strings, tables, and vectors.
+
 ## 1.3.0
 
 **Release date:** January 16, 2026

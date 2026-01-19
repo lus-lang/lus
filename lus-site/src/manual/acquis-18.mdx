@@ -1,0 +1,100 @@
+---
+order: 118
+title: Acquis 18 - Local groups
+acquis: true
+draft: true
+---
+
+Local groups provide a way to group multiple local variables under a single name. It allows for table-like semantics while storing the variables on the stack, which may be more efficient when you simply need to group values together, or when you may have conflicting names for variables.
+
+Groups are _not_ first-class objects and cannot be moved or passed.
+
+## Basic usage
+
+```lus
+local z <group> = {
+    a = 1,
+    b = 2,
+    c = 3
+}
+
+-- Access them like tables
+print(z.a + z.b + z.c)
+```
+
+Trying to pass the group will error.
+
+```lus
+local z <group> = { a = 1 }
+print(z) -- "cannot pass local group"
+```
+
+## Copying and overwriting
+
+A group can be copied to another group; the target group must either be uninitialized or it must have the same fields as the source group.
+
+```lus
+-- initializing a new group with a copy
+local z <group> = { a = 1 }
+local y <group> = z
+```
+
+You can overwrite a group; any missing fields will remain the same, so be careful not to confuse this with assigning a table where the fields will become nil.
+
+```lus
+local z <group> = { a = 1, b = 2 }
+z = { a = 10 }
+print(z.a, z.b) -- 10 2
+```
+
+You cannot extend a group with new fields.
+
+```lus
+local z <group> = { a = 1, b = 2 }
+z = { c = 10 } -- "c" is not a valid field of local group
+```
+
+## Subgroups
+
+Groups can be stored inside of other groups, declared by prefixing the variable name with `group`.
+
+```lus
+local parent <group> = {
+    a = 1,
+    b = 2,
+    c <group> = {
+        d = 3,
+        e = 4
+    },
+    f <const> = 9 -- cannot be overwritten
+}
+
+print(parent.c.d)
+```
+
+> Be careful not to confuse subgroups with nested tables.
+
+## Use cases
+
+### Utilities
+
+Common utility functions can be stored in a group instead of a table or laid over the stack.
+
+```lus
+local math_number <group> = {
+    add = function() --[[ ... ]] end
+    sub = function() --[[ ... ]] end
+    mul = function() --[[ ... ]] end
+    div = function() --[[ ... ]] end
+}
+
+-- no conflicting variable names here
+local math_vector <group> = {
+    add = function() --[[ ... ]] end
+    sub = function() --[[ ... ]] end
+    mul = function() --[[ ... ]] end
+    div = function() --[[ ... ]] end
+}
+
+print(math_number.add(1, 2), math_vector.add({1,1,1},{2,2,2}))
+```

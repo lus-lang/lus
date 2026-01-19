@@ -2220,6 +2220,104 @@ returning: /* trap already set */
         pc += offset;
         vmbreak;
       }
+      vmcase(OP_SLICE) {
+        /* R[A] := slice(R[B], R[C], R[C+1]) */
+        StkId ra = RA(i);
+        TValue *obj = vRB(i);
+        TValue *vstart = vRC(i);
+        TValue *vend = s2v(RC(i) + 1);
+        
+        /* Check for __slice metamethod first */
+        const TValue *tm = luaT_gettmbyobj(L, obj, TM_SLICE);
+        if (!notm(tm)) {
+          /* Copy values before setting up call (to avoid aliasing) */
+          TValue objcopy, startcopy, endcopy;
+          setobj(L, &objcopy, obj);
+          setobj(L, &startcopy, vstart);
+          setobj(L, &endcopy, vend);
+          /* Call metamethod: __slice(obj, start, end) */
+          StkId func = L->top.p;
+          setobj2s(L, func, tm);
+          setobj2s(L, func + 1, &objcopy);
+          setobj2s(L, func + 2, &startcopy);
+          setobj2s(L, func + 3, &endcopy);
+          L->top.p = func + 4;
+          savepc(ci);
+          if (isLuacode(ci))
+            luaD_call(L, func, 1);
+          else
+            luaD_callnoyield(L, func, 1);
+          updatetrap(ci);
+          updatebase(ci);
+          setobjs2s(L, ra, --L->top.p);
+        }
+        else if (ttistable(obj)) {
+          /* Built-in table slice */
+          Table *t = hvalue(obj);
+          lua_Integer istart = ttisnil(vstart) ? 1 : ivalue(vstart);
+          lua_Integer iend = ttisnil(vend) ? (lua_Integer)luaH_getn(L, t) : ivalue(vend);
+          int reverse = (istart > iend);
+          lua_Integer step = reverse ? -1 : 1;
+          lua_Integer count = (reverse ? istart - iend : iend - istart) + 1;
+          
+          /* Create result table */
+          L->top.p = ra + 1;
+          Table *result = luaH_new(L);
+          sethvalue2s(L, ra, result);
+          if (count > 0) {
+            luaH_resize(L, result, cast_uint(count), 0);
+            lua_Integer j = 1;
+            for (lua_Integer idx = istart; reverse ? idx >= iend : idx <= iend; idx += step) {
+              TValue val;
+              lu_byte tag = luaH_getint(t, idx, &val);
+              if (!tagisempty(tag)) {
+                luaH_setint(L, result, j, &val);
+              }
+              j++;
+            }
+          }
+          checkGC(L, ra + 1);
+        }
+        else if (ttisstring(obj)) {
+          /* Built-in string slice */
+          TString *s = tsvalue(obj);
+          size_t len;
+          const char *str = getlstr(s, len);
+          lua_Integer istart = ttisnil(vstart) ? 1 : ivalue(vstart);
+          lua_Integer iend = ttisnil(vend) ? (lua_Integer)len : ivalue(vend);
+          
+          /* Clamp to valid range */
+          if (istart < 1) istart = 1;
+          if (iend > (lua_Integer)len) iend = (lua_Integer)len;
+          
+          int reverse = (istart > iend);
+          size_t resultlen = reverse ? (size_t)(istart - iend + 1) : (size_t)(iend - istart + 1);
+          
+          if (istart > (lua_Integer)len || iend < 1 || (istart > iend && !reverse)) {
+            /* Empty result */
+            setsvalue2s(L, ra, luaS_newlstr(L, "", 0));
+          } else if (reverse) {
+            /* Reverse string slice */
+            char *buf = luaM_newblock(L, resultlen + 1);
+            size_t j = 0;
+            for (lua_Integer idx = istart; idx >= iend; idx--) {
+              buf[j++] = str[idx - 1];
+            }
+            buf[resultlen] = '\0';
+            setsvalue2s(L, ra, luaS_newlstr(L, buf, resultlen));
+            luaM_freemem(L, buf, resultlen + 1);
+          } else {
+            /* Forward string slice */
+            setsvalue2s(L, ra, luaS_newlstr(L, str + istart - 1, resultlen));
+          }
+          checkGC(L, ra + 1);
+        }
+        else {
+          /* No __slice and not a sliceable type */
+          Protect(luaG_typeerror(L, obj, "slice"));
+        }
+        vmbreak;
+      }
       vmcase(OP_EXTRAARG) {
         lua_assert(0);
         vmbreak;

@@ -48,6 +48,6 @@ static const void *const disptab[NUM_OPCODES] = {
     &&L_OP_RETURN1,  &&L_OP_FORLOOP,   &&L_OP_FORPREP,    &&L_OP_TFORPREP,
     &&L_OP_TFORCALL, &&L_OP_TFORLOOP,  &&L_OP_SETLIST,    &&L_OP_CLOSURE,
     &&L_OP_VARARG,   &&L_OP_GETVARG,   &&L_OP_ERRNNIL,    &&L_OP_VARARGPREP,
-    &&L_OP_CATCH,    &&L_OP_ENDCATCH,  &&L_OP_EXTRAARG
+    &&L_OP_CATCH,    &&L_OP_ENDCATCH,  &&L_OP_SLICE,    &&L_OP_EXTRAARG
 
 };

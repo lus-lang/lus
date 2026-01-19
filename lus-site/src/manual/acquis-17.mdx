@@ -1,0 +1,30 @@
+---
+order: 117
+title: Acquis 17 - Cloning
+acquis: true
+draft: true
+---
+
+`table.clone(t, deep)` creates a copy of a table, which is shallow by default unless `deep` is true. Circular references will be re-created in deep copies.
+
+## Usage
+
+```lus
+local t = {1, 2, 3, {4, 5}}
+local x = table.clone(t)  -- {1, 2, 3, {4, 5}}
+assert(x ~= t)
+assert(x[4] == t[4]) -- shallow copy by default
+
+local y = table.clone(t, true)  -- {1, 2, 3, {4, 5}}
+assert(y ~= t)
+assert(y[4] ~= t[4]) -- deep copy
+```
+
+## Circular references
+
+```lus
+local t = {}
+t.a = t
+local x = table.clone(t, true)  -- {a = {a = ...}}
+assert(x.a.a == x)
+```

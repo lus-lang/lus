@@ -1,0 +1,173 @@
+global print, require, assert, type, string, table, setmetatable, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("groups")
+
+tests:it("basic group declaration and access", function()
+    local z <group> = {
+        a = 1,
+        b = 2,
+        c = 3
+    }
+    assert(z.a == 1)
+    assert(z.b == 2)
+    assert(z.c == 3)
+end)
+
+tests:it("group with arithmetic on fields", function()
+    local z <group> = { a = 10, b = 20 }
+    assert(z.a + z.b == 30)
+    assert(z.a * z.b == 200)
+end)
+
+tests:it("group with function values", function()
+    local utils <group> = {
+        add = function(x, y) return x + y end,
+        sub = function(x, y) return x - y end
+    }
+    assert(utils.add(5, 3) == 8)
+    assert(utils.sub(5, 3) == 2)
+end)
+
+tests:it("group with mixed value types", function()
+    local mixed <group> = {
+        num = 42,
+        str = "hello",
+        bool = true,
+        tbl = {1, 2, 3}
+    }
+    assert(mixed.num == 42)
+    assert(mixed.str == "hello")
+    assert(mixed.bool == true)
+    assert(mixed.tbl[1] == 1)
+end)
+
+tests:it("multiple groups in same scope", function()
+    local a <group> = { x = 1, y = 2 }
+    local b <group> = { x = 10, y = 20 }
+    assert(a.x == 1)
+    assert(b.x == 10)
+    assert(a.y + b.y == 22)
+end)
+
+tests:it("field mutation", function()
+    local z <group> = { a = 1, b = 2 }
+    z.a = 100
+    z.b = 200
+    assert(z.a == 100)
+    assert(z.b == 200)
+end)
+
+tests:it("const field", function()
+    local z <group> = { a = 1, b <const> = 2 }
+    assert(z.a == 1)
+    assert(z.b == 2)
+    z.a = 100  -- allowed
+    assert(z.a == 100)
+    -- z.b = 100  -- would error: attempt to assign to const variable
+end)
+
+tests:it("subgroups", function()
+    local parent <group> = {
+        a = 1,
+        b = 2,
+        c <group> = {
+            d = 3,
+            e = 4
+        }
+    }
+    assert(parent.a == 1)
+    assert(parent.b == 2)
+    assert(parent.c.d == 3)
+    assert(parent.c.e == 4)
+end)
+
+tests:it("subgroup field mutation", function()
+    local parent <group> = {
+        a = 1,
+        c <group> = {
+            d = 10
+        }
+    }
+    parent.c.d = 100
+    assert(parent.c.d == 100)
+end)
+
+tests:it("deeply nested subgroups", function()
+    local root <group> = {
+        a <group> = {
+            b <group> = {
+                c = 42
+            }
+        }
+    }
+    assert(root.a.b.c == 42)
+end)
+
+tests:it("multiple sibling subgroups", function()
+    local parent <group> = {
+        a = 1,
+        first <group> = {
+            x = 10,
+            y = 20
+        },
+        second <group> = {
+            x = 100,
+            y = 200
+        },
+        b = 2
+    }
+    assert(parent.a == 1)
+    assert(parent.b == 2)
+    assert(parent.first.x == 10)
+    assert(parent.first.y == 20)
+    assert(parent.second.x == 100)
+    assert(parent.second.y == 200)
+end)
+
+tests:it("deeply nested sibling subgroups", function()
+    local root <group> = {
+        left <group> = {
+            inner <group> = {
+                val = 1
+            }
+        },
+        right <group> = {
+            inner <group> = {
+                val = 2
+            }
+        }
+    }
+    assert(root.left.inner.val == 1)
+    assert(root.right.inner.val == 2)
+end)
+
+tests:it("group copying", function()
+    local z <group> = { a = 1, b = 2 }
+    local y <group> = z
+    assert(y.a == 1)
+    assert(y.b == 2)
+    -- Copies are independent
+    z.a = 100
+    assert(z.a == 100)
+    assert(y.a == 1)  -- y unchanged
+end)
+
+tests:it("group overwriting", function()
+    local z <group> = { a = 1, b = 2 }
+    z = { a = 10 }  -- partial overwrite
+    assert(z.a == 10)
+    assert(z.b == 2)  -- unchanged
+end)
+
+tests:it("group overwriting multiple fields", function()
+    local z <group> = { a = 1, b = 2, c = 3 }
+    z = { a = 100, c = 300 }
+    assert(z.a == 100)
+    assert(z.b == 2)  -- unchanged
+    assert(z.c == 300)
+end)
+
+tests:finish()

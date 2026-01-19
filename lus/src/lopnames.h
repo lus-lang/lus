@@ -27,6 +27,6 @@ static const char *const opnames[] = {
     "TEST",       "TESTSET",  "CALL",     "TAILCALL", "RETURN",   "RETURN0",
     "RETURN1",    "FORLOOP",  "FORPREP",  "TFORPREP", "TFORCALL", "TFORLOOP",
     "SETLIST",    "CLOSURE",  "VARARG",   "GETVARG",  "ERRNNIL",  "VARARGPREP",
-    "CATCH",      "ENDCATCH", "EXTRAARG", NULL};
+    "CATCH",      "ENDCATCH", "SLICE",    "EXTRAARG", NULL};
 
 #endif

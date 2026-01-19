@@ -202,7 +202,9 @@ h1_tests = [
   'h1/json',
   'h1/network',
   'h1/worker',
-  'h1/parse'
+  'h1/parse',
+  'h1/slices',
+  'h1/groups'
 ]
 
 foreach t : h1_tests

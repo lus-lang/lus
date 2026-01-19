@@ -1,0 +1,60 @@
+---
+order: 116
+title: Acquis 16 - Slices
+acquis: true
+draft: true
+---
+
+Slices provide a way to extract a subsequence of a sequence of values.
+
+## Usage
+
+Subsequences can be extracted from either tables, strings, or vectors using the `,` operator.
+
+```lus
+local t = {1, 2, 3, 4, 5}
+local s = t[2,4]  -- {2, 3, 4}
+
+local s = "hello"
+local s = s[2,4]  -- "ell"
+
+local v = vector.create(1024)
+local s = v[512,1024] -- vector from index 512 to 1024
+```
+
+If no starting index is provided, the slice starts from the first element:
+
+```lus
+local t = {1, 2, 3, 4, 5}
+local s = t[,3]  -- {1, 2, 3}
+```
+
+If no ending index is provided, the slice ends at the last element:
+
+```lus
+local t = {1, 2, 3, 4, 5}
+local s = t[2,]  -- {2, 3, 4, 5}
+```
+
+## `__slice`
+
+The `__slice` metamethod can be used to define custom slice behavior for a table.
+
+```lus
+local mt = {
+    __slice = function(self, start, finish)
+        start = start or 1
+        finish = finish or error("Must provide finish index")
+        local result = {}
+        for i = start, finish do
+            result[i] = i
+        end
+        return result
+    end
+}
+
+local range = setmetatable({}, mt)
+local s = range[10, 100] -- {10, 11, ... 100}
+local x = range[, 100] -- {1, 2, ... 100}
+assert(not catch range[100,]) -- finish index is required
+```

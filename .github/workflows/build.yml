@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   push:
@@ -13,10 +13,80 @@ on:
       - "lus-tests/**"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # Sanitizer build to catch memory bugs
+  # Platform-specific tests run in parallel
+  test:
+    name: Test (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-glibc
+            runner: ubuntu-latest
+            suites: "--suite h1 --suite h2 --suite h3-ci --suite h4"
+          - platform: linux-musl
+            runner: ubuntu-latest
+            container: alpine:latest
+            suites: "--suite h1 --suite h2 --suite h4"
+          - platform: macos-silicon
+            runner: macos-14
+            suites: "--suite h1 --suite h2 --suite h4"
+          # Windows temporarily disabled
+          # - platform: windows
+          #   runner: windows-latest
+          #   suites: "--suite h1 --suite h2 --suite h3-ci --suite h4"
+    outputs:
+      linux-glibc: ${{ steps.result.outputs.linux-glibc }}
+      linux-musl: ${{ steps.result.outputs.linux-musl }}
+      macos-silicon: ${{ steps.result.outputs.macos-silicon }}
+
+    steps:
+      - name: Install dependencies (Alpine)
+        if: matrix.container == 'alpine:latest'
+        run: apk add --no-cache build-base meson openssl-dev c-ares-dev git
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.runner == 'ubuntu-latest' && matrix.container == null
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson llvm libssl-dev libc-ares-dev
+
+      - name: Install dependencies (macOS)
+        if: matrix.runner == 'macos-14'
+        run: brew install meson readline openssl c-ares
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (debug)
+        run: |
+          cd lus
+          meson setup build --buildtype=debug
+          meson compile -C build lus:executable
+
+      - name: Test
+        run: meson test -C lus/build -v --print-errorlogs ${{ matrix.suites }}
+
+      - name: Print test log on failure
+        if: failure()
+        run: cat lus/build/meson-logs/testlog.txt
+
+      - name: Set result output
+        id: result
+        if: always()
+        run: echo "${{ matrix.platform }}=${{ job.status }}" >> $GITHUB_OUTPUT
+
+  # Sanitizer build for memory safety validation
   sanitize:
     name: Sanitizers
+    needs: [test]
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
 
     steps:
@@ -38,175 +108,91 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0:print_stacktrace=1:symbolize=1
           UBSAN_OPTIONS: print_stacktrace=1:symbolize=1
-        run: meson test -C lus/build -v --print-errorlogs --suite h1 --suite h2 --suite h3-ci --suite h4
+        run: meson test -C lus/build -v --print-errorlogs --maxfail=1 --suite h1 --suite h2 --suite h3-ci --suite h4
 
       - name: Print test log on failure
         if: failure()
         run: cat lus/build/meson-logs/testlog.txt
 
-  linux-glibc:
-    name: Linux (glibc)
-    needs: sanitize
-    runs-on: ubuntu-latest
+  # Platform-specific release builds (only for platforms that passed tests)
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: [test]
+    if: always() && !cancelled()
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-glibc
+            runner: ubuntu-latest
+            artifact: lus-linux
+            artifact_path: lus/build/lus
+          - platform: linux-musl
+            runner: ubuntu-latest
+            container: alpine:latest
+            artifact: lus-linux-musl
+            artifact_path: lus/build/lus
+          - platform: macos-silicon
+            runner: macos-14
+            artifact: lus-macos
+            artifact_path: lus/build/lus
+          # Windows temporarily disabled
+          # - platform: windows
+          #   runner: windows-latest
+          #   artifact: lus-windows
+          #   artifact_path: lus/build/lus.exe
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check if test passed
+        id: check
+        shell: bash
+        run: |
+          result="${{ needs.test.outputs[matrix.platform] }}"
+          if [[ "$result" == "success" ]]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "✅ Test for ${{ matrix.platform }} passed, proceeding with build"
+          else
+            echo "proceed=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Skipping build - test for ${{ matrix.platform }} did not pass (status: $result)"
+          fi
 
-      - name: Install dependencies
+      - name: Install dependencies (Alpine)
+        if: steps.check.outputs.proceed == 'true' && matrix.container == 'alpine:latest'
+        run: apk add --no-cache build-base meson openssl-dev c-ares-dev git
+
+      - name: Install dependencies (Ubuntu)
+        if: steps.check.outputs.proceed == 'true' && matrix.runner == 'ubuntu-latest' && matrix.container == null
         run: |
           sudo apt-get update
           sudo apt-get install -y meson libssl-dev libc-ares-dev
 
-      - name: Build
-        run: |
-          cd lus
-          meson setup build --buildtype=release
-          meson compile -C build lus:executable
-
-      - name: Test
-        run: meson test -C lus/build --suite h1 --suite h2 --suite h3-ci --suite h4
-
-      - name: Print test log on failure
-        if: failure()
-        run: cat lus/build/meson-logs/testlog.txt
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lus-linux
-          path: lus/build/lus
-
-  linux-musl:
-    name: Linux (musl)
-    needs: sanitize
-    runs-on: ubuntu-latest
-    container:
-      image: alpine:latest
-
-    steps:
-      - name: Install dependencies
-        run: apk add --no-cache build-base meson openssl-dev c-ares-dev
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build
-        run: |
-          cd lus
-          meson setup build --buildtype=release
-          meson compile -C build lus:executable
-
-      - name: Test
-        # Skip H3 (Container in Container)
-        run: meson test -C lus/build --suite h1 --suite h2 --suite h4
-
-      - name: Print test log on failure
-        if: failure()
-        run: cat lus/build/meson-logs/testlog.txt
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lus-linux-musl
-          path: lus/build/lus
-
-  windows:
-    name: Windows (x64)
-    if: false  # Temporarily disabled - Windows build issues being resolved
-    needs: sanitize
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Setup Meson
-        run: pip install meson
-
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        id: cache-vcpkg
-        with:
-          path: vcpkg/installed
-          key: vcpkg-x64-windows-openssl-cares-${{ runner.os }}
-
-      - name: Install vcpkg and dependencies
-        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install openssl:x64-windows c-ares:x64-windows pkgconf:x64-windows
-
-      - name: Bootstrap vcpkg (cache hit)
-        if: steps.cache-vcpkg.outputs.cache-hit == 'true'
-        run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
-
-      - name: Build
-        env:
-          PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg/installed/x64-windows/lib/pkgconfig
-          PKG_CONFIG: ${{ github.workspace }}/vcpkg/installed/x64-windows/tools/pkgconf/pkgconf.exe
-        run: |
-          cd lus
-          meson setup build --buildtype=release
-          meson compile -C build lus:executable
-
-      - name: Test
-        # Run all harnesses including H3 (CI mode)
-        run: meson test -C lus/build --suite h1 --suite h2 --suite h3-ci --suite h4
-
-      - name: Print test log on failure
-        if: failure()
-        run: Get-Content lus/build/meson-logs/testlog.txt
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lus-windows
-          path: lus/build/lus.exe
-
-  macos-silicon:
-    name: macOS (Apple Silicon)
-    needs: sanitize
-    runs-on: macos-14
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: Install dependencies (macOS)
+        if: steps.check.outputs.proceed == 'true' && matrix.runner == 'macos-14'
         run: brew install meson readline openssl c-ares
 
-      - name: Build
+      - name: Checkout
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Build (release)
+        if: steps.check.outputs.proceed == 'true'
         run: |
           cd lus
           meson setup build --buildtype=release
           meson compile -C build lus:executable
 
-      - name: Test
-        # Skip H3 on macOS (no default container runtime guaranteed)
-        run: meson test -C lus/build --suite h1 --suite h2 --suite h4
-
-      - name: Print test log on failure
-        if: failure()
-        run: cat lus/build/meson-logs/testlog.txt
-
       - name: Upload artifact
+        if: steps.check.outputs.proceed == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: lus-macos
-          path: lus/build/lus
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact_path }}
 
-  wasm:
-    name: WebAssembly
-    needs: sanitize
+  # WASM build (separate - no test dependency)
+  build-wasm:
+    name: Build (wasm)
     runs-on: ubuntu-latest
 
     steps:
@@ -229,11 +215,74 @@ jobs:
           name: lus-wasm
           path: lus/wasm/dist/
 
+  # Test result summary
+  summary:
+    name: Summary
+    needs: [test, sanitize, build, build-wasm]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # Test results
+          for platform in linux-glibc linux-musl macos-silicon; do
+            result="${{ needs.test.outputs[env.platform] }}"
+            case "$platform" in
+              linux-glibc) result="${{ needs.test.outputs.linux-glibc }}" ;;
+              linux-musl) result="${{ needs.test.outputs.linux-musl }}" ;;
+              macos-silicon) result="${{ needs.test.outputs.macos-silicon }}" ;;
+            esac
+            if [[ "$result" == "success" ]]; then
+              echo "| $platform | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            elif [[ "$result" == "failure" ]]; then
+              echo "| $platform | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $platform | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔬 Sanitizers" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ needs.sanitize.result }}" == "success" ]]; then
+            echo "✅ Memory safety checks passed" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.sanitize.result }}" == "failure" ]]; then
+            echo "❌ Memory safety issues detected" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⏭️ Sanitizer checks skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ needs.build.result }}" == "success" ]]; then
+            echo "✅ Release builds completed" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "⚠️ Some release builds failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⏭️ Release builds skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.build-wasm.result }}" == "success" ]]; then
+            echo "✅ WASM build completed" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build-wasm.result }}" == "failure" ]]; then
+            echo "❌ WASM build failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⏭️ WASM build skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Create pre-release with available artifacts
   release:
     name: Create Pre-release
-    needs: [linux-glibc, linux-musl, macos-silicon, wasm]  # windows temporarily disabled
+    needs: [build, build-wasm]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !cancelled()
     permissions:
       contents: write
 
@@ -241,29 +290,99 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Delete previous unstable releases
+        run: |
+          # Get all releases starting with 'unstable-'
+          releases=$(gh release list --json tagName --jq '.[] | select(.tagName | startswith("unstable-")) | .tagName' || true)
+
+          for tag in $releases; do
+            echo "Deleting old unstable release: $tag"
+            gh release delete "$tag" --yes --cleanup-tag || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download available artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+        continue-on-error: true
 
       - name: Prepare release assets
+        id: prepare
         run: |
           mkdir -p release
-          cp artifacts/lus-linux/lus release/lus-linux
-          cp artifacts/lus-linux-musl/lus release/lus-linux-musl
-          cp artifacts/lus-macos/lus release/lus-macos
-          # cp artifacts/lus-windows/lus.exe release/lus-windows.exe  # Windows temporarily disabled
-          cp artifacts/lus-wasm/lus.js release/lus.js
-          cp artifacts/lus-wasm/lus.wasm release/lus.wasm
+          count=0
+
+          # Linux (glibc)
+          if [ -f artifacts/lus-linux/lus ]; then
+            cp artifacts/lus-linux/lus release/lus-linux
+            echo "✅ linux-glibc artifact included"
+            ((count++))
+          else
+            echo "⏭️ linux-glibc artifact not available"
+          fi
+
+          # Linux (musl)
+          if [ -f artifacts/lus-linux-musl/lus ]; then
+            cp artifacts/lus-linux-musl/lus release/lus-linux-musl
+            echo "✅ linux-musl artifact included"
+            ((count++))
+          else
+            echo "⏭️ linux-musl artifact not available"
+          fi
+
+          # macOS
+          if [ -f artifacts/lus-macos/lus ]; then
+            cp artifacts/lus-macos/lus release/lus-macos
+            echo "✅ macos artifact included"
+            ((count++))
+          else
+            echo "⏭️ macos artifact not available"
+          fi
+
+          # Windows (temporarily disabled)
+          # if [ -f artifacts/lus-windows/lus.exe ]; then
+          #   cp artifacts/lus-windows/lus.exe release/lus-windows.exe
+          #   echo "✅ windows artifact included"
+          #   ((count++))
+          # fi
+
+          # WASM
+          if [ -f artifacts/lus-wasm/lus.js ]; then
+            cp artifacts/lus-wasm/lus.js release/lus.js
+            cp artifacts/lus-wasm/lus.wasm release/lus.wasm
+            echo "✅ wasm artifacts included"
+            ((count++))
+          else
+            echo "⏭️ wasm artifacts not available"
+          fi
+
+          echo "artifact_count=$count" >> $GITHUB_OUTPUT
+
+          if [ $count -eq 0 ]; then
+            echo "❌ No artifacts available for release"
+            exit 1
+          fi
+
+          echo ""
+          echo "📦 Release contents ($count platforms):"
+          ls -la release/
 
       - name: Create unstable release
         run: |
           SHORT_SHA="${{ github.sha }}"
           SHORT_SHA="${SHORT_SHA:0:7}"
 
+          artifact_count="${{ steps.prepare.outputs.artifact_count }}"
+
           gh release create "unstable-${SHORT_SHA}" \
             --title "Unstable (${SHORT_SHA})" \
-            --notes "Automated build from commit ${{ github.sha }}" \
+            --notes "Automated build from commit ${{ github.sha }}
+
+          **Included platforms:** ${artifact_count}/4 available
+
+          > ⚠️ This is an unstable pre-release build. Use at your own risk." \
             --prerelease \
             release/*
         env:

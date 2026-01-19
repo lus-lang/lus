@@ -1,0 +1,57 @@
+---
+order: 115
+title: Acquis 15 - Vectors
+acquis: true
+draft: true
+---
+
+Vectors are user-managed buffers that are interfaced with pack-like semantics.
+
+## Usage
+
+Vectors can be created with `vector.create`, accepting a capacity and an optional `fast` flag which, when passed, does not zero-initialize the buffer.
+
+```lus
+local v = vector.create(1024)  -- capacity 1024, zero-initialized
+local v = vector.create(1024, true)  -- capacity 1024, uninitialized
+```
+
+`vector.pack` and `vector.unpack` can be used to write and read values from a buffer at a specified index. The formats are the same used in `string.pack` and `string.unpack`.
+
+```lus
+local v = vector.create(1024)
+vector.pack(v, 0, "I4", 123456789) -- write 123456789 as a 4-byte unsigned integer at index 0
+local x = vector.unpack(v, 0, "I4")  -- read 4-byte unsigned integer at index 0
+```
+
+`vector.clone` can be used to create a copy of a vector.
+
+```lus
+local v = vector.create(1024)
+local v2 = vector.clone(v)
+```
+
+The size of a vector can be retrieved with `vector.size` or `#v`.
+
+```lus
+local v = vector.create(1024)
+assert(vector.size(v) == #v)
+```
+
+## Iteration
+
+`vector.unpackmany` can be used to iteratively unpack from a vector. The signature is the same as `vector.unpack`, but returns a generator that can be iterated over. An additional end _count_ (not index) can be passed to limit the number of iterations.
+
+```lus
+-- Iterate until end of vector
+for a, b, c in vector.unpackmany(v, 0, "I4I4I4") do
+    print(a, b, c)
+end
+
+-- Iterate until 10 reads have been performed
+for a, b, c in vector.unpackmany(v, 0, "I4I4I4", 10) do
+    print(a, b, c)
+end
+```
+
+> The iteration will error if the unpack falls out of bounds.
