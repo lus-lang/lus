@@ -56,7 +56,6 @@ end
 
 -- Combine with if-assignment
 local response = {ok = true, body = "Response body"}
-if ok = response.ok then
-    local body from response
+if ok, body from response then
     print("Response:", body)
 end
