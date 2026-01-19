@@ -74,6 +74,7 @@ static GroupDesc *groupconstructor(LexState *ls, TString *groupname);
 /* prototypes for attribute/local functions (used by assigncond) */
 static lu_byte getvarattribute(LexState *ls, lu_byte df);
 static void checktoclose(FuncState *fs, int level);
+static void localfrom(LexState *ls, int firstidx, int nvars);
 
 static l_noret error_expected(LexState *ls, int token) {
   luaX_syntaxerror(
@@ -2400,7 +2401,7 @@ static void forstat(LexState *ls, int line) {
 static int isassigncond(LexState *ls) {
   if (ls->t.token == TK_NAME) {
     int lookahead = luaX_lookahead(ls);
-    if (lookahead == '=' || lookahead == ',')
+    if (lookahead == '=' || lookahead == ',' || lookahead == TK_FROM)
       return 1;
     /* Detect attribute syntax: NAME '<' NAME '>' ...
        After lookahead scans '<', ls->current points to the next raw char.
@@ -2448,69 +2449,77 @@ static int assigncond(LexState *ls) {
     nvars++;
   } while (testnext(ls, ','));
 
-  checknext(ls, '=');
-
-  if (ngroups > 0) {
-    /* Group path: all variables must be groups */
-    if (ngroups != nvars)
-      luaK_semerror(ls,
-                    "cannot mix <group> with non-group variables in condition");
+  if (testnext(ls, TK_FROM)) {
+    /* 'from' table deconstruction: x, y, z from tbl */
+    if (ngroups > 0)
+      luaK_semerror(ls, "cannot use 'from' with <group> variables");
     if (toclose != -1)
-      luaK_semerror(ls, "cannot use <close> with <group> variables");
-    /* Parse a constructor for each group - groups are always truthy */
-    for (i = 0; i < nvars; i++) {
-      Vardesc *gvar = getlocalvardesc(fs, firstidx + i);
-      TString *gname = gvar->vd.name;
-      int basereg = fs->freereg;
-      fs->nactvar++;
-      gvar->vd.ridx = cast_byte(basereg);
-      gvar->vd.pidx = -1;
-      if (ls->t.token == '{') {
-        GroupDesc *g = groupconstructor(ls, gname);
-        (void)g;
-      } else {
-        expdesc src;
-        primaryexp(ls, &src);
-        if (src.k != VLOCAL)
-          luaK_semerror(ls, "group can only be copied from another group");
-        Vardesc *srcvd = getlocalvardesc(fs, src.u.var.vidx);
-        if (srcvd->vd.kind != RDKGROUP)
-          luaK_semerror(ls, "group can only be copied from another group");
-        GroupDesc *srcg = findgroup(ls, srcvd->vd.name);
-        if (srcg == NULL)
-          luaK_semerror(ls, "internal error: source group not found");
-        GroupDesc *g = newgroup(ls, gname);
-        GroupField *sf;
-        for (sf = srcg->fields; sf != NULL; sf = sf->next) {
-          if (sf->kind == RDKGROUP && sf->subgroup != NULL) {
-            GroupField *f = newgroupfield(ls, g, sf->name, 0, RDKGROUP);
-            f->subgroup = sf->subgroup;
-          } else {
-            int fvidx = new_varkind(ls, sf->name, sf->kind);
-            luaK_codeABC(fs, OP_MOVE, fs->freereg, sf->ridx, 0);
-            luaK_reserveregs(fs, 1);
-            adjustlocalvars(ls, 1);
-            Vardesc *fvd = getlocalvardesc(fs, fvidx);
-            GroupField *f =
-                newgroupfield(ls, g, sf->name, fvd->vd.ridx, sf->kind);
-            (void)f;
+      luaK_semerror(ls, "cannot use 'from' with to-be-closed variables");
+    localfrom(ls, firstidx, nvars);
+  } else {
+    checknext(ls, '=');
+
+    if (ngroups > 0) {
+      /* Group path: all variables must be groups */
+      if (ngroups != nvars)
+        luaK_semerror(
+            ls, "cannot mix <group> with non-group variables in condition");
+      if (toclose != -1)
+        luaK_semerror(ls, "cannot use <close> with <group> variables");
+      /* Parse a constructor for each group - groups are always truthy */
+      for (i = 0; i < nvars; i++) {
+        Vardesc *gvar = getlocalvardesc(fs, firstidx + i);
+        TString *gname = gvar->vd.name;
+        int basereg = fs->freereg;
+        fs->nactvar++;
+        gvar->vd.ridx = cast_byte(basereg);
+        gvar->vd.pidx = -1;
+        if (ls->t.token == '{') {
+          GroupDesc *g = groupconstructor(ls, gname);
+          (void)g;
+        } else {
+          expdesc src;
+          primaryexp(ls, &src);
+          if (src.k != VLOCAL)
+            luaK_semerror(ls, "group can only be copied from another group");
+          Vardesc *srcvd = getlocalvardesc(fs, src.u.var.vidx);
+          if (srcvd->vd.kind != RDKGROUP)
+            luaK_semerror(ls, "group can only be copied from another group");
+          GroupDesc *srcg = findgroup(ls, srcvd->vd.name);
+          if (srcg == NULL)
+            luaK_semerror(ls, "internal error: source group not found");
+          GroupDesc *g = newgroup(ls, gname);
+          GroupField *sf;
+          for (sf = srcg->fields; sf != NULL; sf = sf->next) {
+            if (sf->kind == RDKGROUP && sf->subgroup != NULL) {
+              GroupField *f = newgroupfield(ls, g, sf->name, 0, RDKGROUP);
+              f->subgroup = sf->subgroup;
+            } else {
+              int fvidx = new_varkind(ls, sf->name, sf->kind);
+              luaK_codeABC(fs, OP_MOVE, fs->freereg, sf->ridx, 0);
+              luaK_reserveregs(fs, 1);
+              adjustlocalvars(ls, 1);
+              Vardesc *fvd = getlocalvardesc(fs, fvidx);
+              GroupField *f =
+                  newgroupfield(ls, g, sf->name, fvd->vd.ridx, sf->kind);
+              (void)f;
+            }
           }
         }
+        if (i < nvars - 1)
+          checknext(ls, ',');
       }
-      if (i < nvars - 1)
-        checknext(ls, ',');
+      return NO_JUMP; /* groups always exist, so condition is always true */
     }
-    return NO_JUMP; /* groups always exist, so condition is always true */
+
+    /* Parse expressions */
+    nexps = explist(ls, &e);
+    adjust_assign(ls, nvars, nexps, &e);
+
+    /* Activate variables */
+    adjustlocalvars(ls, nvars);
+    checktoclose(fs, toclose);
   }
-
-  /* Parse expressions */
-  nexps = explist(ls, &e);
-  adjust_assign(ls, nvars, nexps, &e);
-
-  /* Activate variables (they now have values in registers base..base+nvars-1)
-   */
-  adjustlocalvars(ls, nvars);
-  checktoclose(fs, toclose);
 
   /* Generate test for each variable: if any is false/nil, jump to false path */
   for (i = 0; i < nvars; i++) {

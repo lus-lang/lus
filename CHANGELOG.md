@@ -8,6 +8,7 @@
 - Added `vector` type and library for buffers.
 - Added slices for strings, tables, and vectors.
 - Added `table.clone(t, deep?)` to create copies of tables.
+- `from` deconstruction can now be done in `if`/`while` assignments.
 - Refactored actions workflow.
 - Various runtime optimizations:
   - Constant-time O(1) string hashing using sparse ARX algorithm.
