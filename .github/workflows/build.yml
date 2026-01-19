@@ -322,7 +322,7 @@ jobs:
           if [ -f artifacts/lus-linux/lus ]; then
             cp artifacts/lus-linux/lus release/lus-linux
             echo "✅ linux-glibc artifact included"
-            ((count++))
+            count=$((count + 1))
           else
             echo "⏭️ linux-glibc artifact not available"
           fi
@@ -331,7 +331,7 @@ jobs:
           if [ -f artifacts/lus-linux-musl/lus ]; then
             cp artifacts/lus-linux-musl/lus release/lus-linux-musl
             echo "✅ linux-musl artifact included"
-            ((count++))
+            count=$((count + 1))
           else
             echo "⏭️ linux-musl artifact not available"
           fi
@@ -340,7 +340,7 @@ jobs:
           if [ -f artifacts/lus-macos/lus ]; then
             cp artifacts/lus-macos/lus release/lus-macos
             echo "✅ macos artifact included"
-            ((count++))
+            count=$((count + 1))
           else
             echo "⏭️ macos artifact not available"
           fi
@@ -349,7 +349,7 @@ jobs:
           # if [ -f artifacts/lus-windows/lus.exe ]; then
           #   cp artifacts/lus-windows/lus.exe release/lus-windows.exe
           #   echo "✅ windows artifact included"
-          #   ((count++))
+          #   count=$((count + 1))
           # fi
 
           # WASM
@@ -357,7 +357,7 @@ jobs:
             cp artifacts/lus-wasm/lus.js release/lus.js
             cp artifacts/lus-wasm/lus.wasm release/lus.wasm
             echo "✅ wasm artifacts included"
-            ((count++))
+            count=$((count + 1))
           else
             echo "⏭️ wasm artifacts not available"
           fi
