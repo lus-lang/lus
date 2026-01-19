@@ -6,7 +6,7 @@ If you _do_ make a PR, make sure to:
 
 - [**Have read the project goals.**](https://lus.dev/manual/introduction/#goals) It is possible that your suggestion is a _non-goal_ of the project and therefore barred from being accepted. Likewise, it is possible for your suggestion to go _against_ the goals, which will result in the same.
 - **Test, test, test.** Please follow our [testing protocol](/lus-tests/README.md) to ensure your changes aren't breaking anything and that you're not introducing a massive _performance_ regression as well. If you are introducing a new language feature, please also add a test for it.
-- **Document, document, document.** Please document your changes in the [CHANGELOG](/CHANGELOG.md) under the section suffixed with "(**WIP**)", which is located at the bottom of the file. Changes should be simple one-line summaries; additional details can be added in the body of the PR.
+- **Document, document, document.** Please document your changes in the [CHANGELOG](/CHANGELOG.md). Changes should be simple one-line summaries; additional details can be added in the body of the PR.
 - **Format your code.** There is a `.clang-format` file that dictates code formatting. Please pair it with an extension in your editor to automatically format your code when saving. [`clangd`](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd) is a good choice. No formatting, no merging.
 
 If you haven't done any of the above, either submit a draft PR until you have or simply don't submit a PR at all. When all else fails, [Louka Ménard Blondin](https://louka.sh) is the BDFL of the project and has the final say on whether or not your contribution will be accepted.
@@ -17,7 +17,7 @@ If you are using large language models to write code, or is suspected of doing s
 
 - **Are you a programmer?**
   - If not, your PR will be rejected.
-- **Do you know how to program in C and Lus?** 
+- **Do you know how to program in C and Lus?**
   - Have you used either language before to build a project? If not, please familiarize with building software in both languages so that your next PR won't be rejected. Preferably, do it with some brain-coding.
 - **Do you know how Lus works internally?**
   - If not, please spend some time studying the internal workings of the language. It is irresponsible to submit a PR without understanding how the language even works to begin with.

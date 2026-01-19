@@ -30,6 +30,7 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "ltm.h"
+#include "lvector.h"
 #include "lvm.h"
 
 
@@ -791,6 +792,10 @@ void luaV_objlen(lua_State *L, StkId ra, const TValue *rb) {
     }
     case LUA_VLNGSTR: {
       setivalue(s2v(ra), cast_st2S(tsvalue(rb)->u.lnglen));
+      return;
+    }
+    case LUA_VVECTOR: {
+      setivalue(s2v(ra), cast_st2S(vecvalue(rb)->len));
       return;
     }
     default: { /* try metamethod */
@@ -2309,6 +2314,39 @@ returning: /* trap already set */
           } else {
             /* Forward string slice */
             setsvalue2s(L, ra, luaS_newlstr(L, str + istart - 1, resultlen));
+          }
+          checkGC(L, ra + 1);
+        }
+        else if (ttisvector(obj)) {
+          /* Built-in vector slice */
+          Vector *v = vecvalue(obj);
+          lua_Integer istart = ttisnil(vstart) ? 1 : ivalue(vstart);
+          lua_Integer iend = ttisnil(vend) ? (lua_Integer)v->len : ivalue(vend);
+          
+          /* Clamp to valid range */
+          if (istart < 1) istart = 1;
+          if (iend > (lua_Integer)v->len) iend = (lua_Integer)v->len;
+          
+          int reverse = (istart > iend);
+          size_t resultlen = (istart > (lua_Integer)v->len || iend < 1) ? 0 :
+                             (reverse ? (size_t)(istart - iend + 1) : (size_t)(iend - istart + 1));
+          
+          if (resultlen == 0) {
+            /* Empty vector */
+            Vector *result = luaV_newvec(L, 0, 1);
+            setvecvalue2s(L, ra, result);
+          } else if (reverse) {
+            /* Reverse vector slice */
+            Vector *result = luaV_newvec(L, resultlen, 1);
+            for (size_t j = 0; j < resultlen; j++) {
+              result->data[j] = v->data[istart - 1 - j];
+            }
+            setvecvalue2s(L, ra, result);
+          } else {
+            /* Forward vector slice */
+            Vector *result = luaV_newvec(L, resultlen, 1);
+            memcpy(result->data, v->data + istart - 1, resultlen);
+            setvecvalue2s(L, ra, result);
           }
           checkGC(L, ra + 1);
         }

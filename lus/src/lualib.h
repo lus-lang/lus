@@ -63,6 +63,10 @@ LUAMOD_API int(luaopen_network)(lua_State *L);
 #define LUA_WORKERLIBK (LUA_NETLIBK << 1)
 LUAMOD_API int(luaopen_worker)(lua_State *L);
 
+#define LUA_VECLIBNAME "vector"
+#define LUA_VECLIBK (LUA_WORKERLIBK << 1)
+LUAMOD_API int(luaopen_vector)(lua_State *L);
+
 /* JSON global functions (tojson, fromjson) */
 LUAMOD_API int(luaopen_json)(lua_State *L);
 

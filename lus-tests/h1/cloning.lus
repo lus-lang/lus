@@ -1,0 +1,131 @@
+global print, require, assert, type, table, setmetatable, pledge, next, pairs
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("cloning")
+
+-- Shallow copy basic
+tests:it("shallow copy basic", function()
+  local t = {1, 2, 3}
+  local x = table.clone(t)
+  assert(x ~= t, "should be different table")
+  assert(x[1] == 1 and x[2] == 2 and x[3] == 3, "should have same values")
+end)
+
+-- Shallow copy preserves nested references
+tests:it("shallow copy nested reference", function()
+  local inner = {4, 5}
+  local t = {1, 2, 3, inner}
+  local x = table.clone(t)
+  assert(x ~= t, "should be different table")
+  assert(x[4] == t[4], "nested table should be same reference")
+end)
+
+-- Deep copy basic
+tests:it("deep copy basic", function()
+  local t = {1, 2, 3}
+  local x = table.clone(t, true)
+  assert(x ~= t, "should be different table")
+  assert(x[1] == 1 and x[2] == 2 and x[3] == 3, "should have same values")
+end)
+
+-- Deep copy creates new nested tables
+tests:it("deep copy nested", function()
+  local inner = {4, 5}
+  local t = {1, 2, 3, inner}
+  local x = table.clone(t, true)
+  assert(x ~= t, "should be different table")
+  assert(x[4] ~= t[4], "nested table should be different reference")
+  assert(x[4][1] == 4 and x[4][2] == 5, "nested values should be same")
+end)
+
+-- Deep copy multiple levels
+tests:it("deep copy multiple levels", function()
+  local t = {a = {b = {c = 1}}}
+  local x = table.clone(t, true)
+  assert(x.a ~= t.a, "level 1 should be different")
+  assert(x.a.b ~= t.a.b, "level 2 should be different")
+  assert(x.a.b.c == 1, "value should be same")
+end)
+
+-- Circular reference
+tests:it("circular reference", function()
+  local t = {}
+  t.a = t
+  local x = table.clone(t, true)
+  assert(x ~= t, "should be different table")
+  assert(x.a == x, "circular ref should point to clone")
+  assert(x.a ~= t.a, "circular ref should not point to original")
+end)
+
+-- Complex circular reference
+tests:it("complex circular reference", function()
+  local a = {}
+  local b = {}
+  a.b = b
+  b.a = a
+  local x = table.clone(a, true)
+  assert(x ~= a, "should be different table")
+  assert(x.b ~= b, "nested should be different")
+  assert(x.b.a == x, "circular ref should be correct")
+end)
+
+-- Metatable preserved (shared in shallow)
+tests:it("metatable preserved shallow", function()
+  local mt = {__index = function() return 42 end}
+  local t = setmetatable({}, mt)
+  local x = table.clone(t)
+  assert(x.anything == 42, "metatable should work")
+end)
+
+-- Metatable preserved (shared in deep)
+tests:it("metatable preserved deep", function()
+  local mt = {__index = function() return 42 end}
+  local t = setmetatable({}, mt)
+  local x = table.clone(t, true)
+  assert(x.anything == 42, "metatable should work")
+end)
+
+-- Hash table keys
+tests:it("hash table keys", function()
+  local t = {a = 1, b = 2, c = 3}
+  local x = table.clone(t)
+  assert(x.a == 1 and x.b == 2 and x.c == 3, "hash keys should be copied")
+end)
+
+-- Mixed array and hash
+tests:it("mixed array and hash", function()
+  local t = {1, 2, 3, x = "a", y = "b"}
+  local x = table.clone(t)
+  assert(x[1] == 1 and x[2] == 2 and x[3] == 3, "array part should be copied")
+  assert(x.x == "a" and x.y == "b", "hash part should be copied")
+end)
+
+-- Empty table
+tests:it("empty table", function()
+  local t = {}
+  local x = table.clone(t)
+  assert(x ~= t, "should be different table")
+  assert(next(x) == nil, "should be empty")
+end)
+
+-- Table as key (deep copy)
+tests:it("table as key deep copy", function()
+  local key = {1}
+  local t = {[key] = "value"}
+  local x = table.clone(t, true)
+  -- Find the key in the clone
+  local newkey = nil
+  for k in pairs(x) do
+    if type(k) == "table" then
+      newkey = k
+      break
+    end
+  end
+  assert(newkey ~= nil, "should have table key")
+  assert(newkey ~= key, "table key should be cloned")
+  assert(x[newkey] == "value", "value should be accessible")
+end)
+
+tests:finish()

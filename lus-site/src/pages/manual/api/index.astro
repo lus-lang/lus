@@ -319,6 +319,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           </p>
           <h3>Table</h3>
           <p>
+            <a href="#table.clone" data-from="lus-unstable">table.clone</a>
             <a href="#table.concat">table.concat</a>
             <a href="#table.create">table.create</a>
             <a href="#table.insert">table.insert</a>
@@ -327,6 +328,16 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#table.remove">table.remove</a>
             <a href="#table.sort">table.sort</a>
             <a href="#table.unpack">table.unpack</a>
+          </p>
+          <h3>Vector</h3>
+          <p>
+            <a href="#vector.create" data-from="lus-unstable">vector.create</a>
+            <a href="#vector.pack" data-from="lus-unstable">vector.pack</a>
+            <a href="#vector.unpack" data-from="lus-unstable">vector.unpack</a>
+            <a href="#vector.clone" data-from="lus-unstable">vector.clone</a>
+            <a href="#vector.size" data-from="lus-unstable">vector.size</a>
+            <a href="#vector.resize" data-from="lus-unstable">vector.resize</a>
+            <a href="#vector.unpackmany" data-from="lus-unstable">vector.unpackmany</a>
           </p>
           <h3>UTF-8</h3>
           <p>
@@ -366,6 +377,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#metamethods">__pow</a>
             <a href="#metamethods">__shl</a>
             <a href="#metamethods">__shr</a>
+            <a href="#__slice" data-from="lus-unstable">__slice</a>
             <a href="#metamethods">__sub</a>
             <a href="#tostring">__tostring</a>
             <a href="#metamethods">__unm</a>
@@ -445,6 +457,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#lua_istable">lua_istable</a>
             <a href="#lua_isthread">lua_isthread</a>
             <a href="#lua_isuserdata">lua_isuserdata</a>
+            <a href="#lua_isvector" data-from="lus-unstable">lua_isvector</a>
             <a href="#lua_isyieldable">lua_isyieldable</a>
             <a href="#lua_len">lua_len</a>
             <a href="#lua_load">lua_load</a>
@@ -622,6 +635,9 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#luaopen_network" data-from="lus"
               >luaopen_network</a
             >
+            <a href="#luaopen_vector" data-from="lus-unstable"
+              >luaopen_vector</a
+            >
             <a href="#luaopen_worker" data-from="lus">luaopen_worker</a
             >
           </p>
@@ -730,6 +746,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#LUA_TENUM" data-from="lus">LUA_TENUM</a>
             <a href="#LUA_TSTRING">LUA_TSTRING</a>
             <a href="#LUA_TTABLE">LUA_TTABLE</a>
+            <a href="#LUA_TVECTOR" data-from="lus-unstable">LUA_TVECTOR</a>
             <a href="#LUA_TTHREAD">LUA_TTHREAD</a>
             <a href="#LUA_TUSERDATA">LUA_TUSERDATA</a>
             <a href="#LUA_USE_APICHECK">LUA_USE_APICHECK</a>

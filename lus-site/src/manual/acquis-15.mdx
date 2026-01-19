@@ -38,6 +38,13 @@ local v = vector.create(1024)
 assert(vector.size(v) == #v)
 ```
 
+A vector can be resized with `vector.resize`.
+
+```lus
+local v = vector.create(1024)
+vector.resize(v, 2048)
+```
+
 ## Iteration
 
 `vector.unpackmany` can be used to iteratively unpack from a vector. The signature is the same as `vector.unpack`, but returns a generator that can be iterated over. An additional end _count_ (not index) can be passed to limit the number of iterations.

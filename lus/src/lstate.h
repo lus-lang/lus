@@ -399,6 +399,7 @@ union GCUnion {
   struct UpVal upv;
   struct Enum en;     /* enum value */
   struct EnumRoot er; /* enum root */
+  struct Vector vec;  /* vector buffer */
 };
 
 /*
@@ -422,6 +423,7 @@ union GCUnion {
 #define gco2upv(o) check_exp((o)->tt == LUA_VUPVAL, &((cast_u(o))->upv))
 #define gco2enum(o) check_exp((o)->tt == LUA_VENUM, &((cast_u(o))->en))
 #define gco2enumroot(o) check_exp((o)->tt == LUA_VENUMROOT, &((cast_u(o))->er))
+#define gco2vec(o) check_exp((o)->tt == LUA_VVECTOR, &((cast_u(o))->vec))
 
 /*
 ** macro to convert a Lua object into a GCObject

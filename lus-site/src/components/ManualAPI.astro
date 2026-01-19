@@ -302,3 +302,85 @@ local ast = debug.parse(code, "myfile.lus")`}</code></pre>
   <code>line</code> (source line number). Additional fields depend on node type. See
   <a href="/manual/acquis-12">Acquis 12</a> for details.
 </p>
+
+<!-- Vector Library -->
+
+<h2 id="vector.create">vector.create (capacity [, fast])</h2>
+<p>
+  Creates a new vector with the given <code>capacity</code> in bytes. If <code>fast</code>
+  is true, the buffer is not zero-initialized (faster but contents are undefined).
+</p>
+<pre><code>{`local v = vector.create(1024)        -- zero-initialized
+local v = vector.create(1024, true)  -- fast, uninitialized`}</code></pre>
+
+<h2 id="vector.pack">vector.pack (v, offset, fmt, ...)</h2>
+<p>
+  Packs values into the vector <code>v</code> starting at <code>offset</code>.
+  Uses the same format string as <code>string.pack</code>.
+</p>
+<pre><code>{`local v = vector.create(16)
+vector.pack(v, 0, "I4I4I4", 1, 2, 3)`}</code></pre>
+
+<h2 id="vector.unpack">vector.unpack (v, offset, fmt)</h2>
+<p>
+  Unpacks values from the vector <code>v</code> starting at <code>offset</code>.
+  Uses the same format string as <code>string.unpack</code>. Returns unpacked values
+  followed by the next offset.
+</p>
+<pre><code>{`local a, b, c, nextpos = vector.unpack(v, 0, "I4I4I4")`}</code></pre>
+
+<h2 id="vector.clone">vector.clone (v)</h2>
+<p>
+  Creates a copy of the vector <code>v</code>.
+</p>
+
+<h2 id="vector.size">vector.size (v)</h2>
+<p>
+  Returns the size of the vector in bytes. Equivalent to <code>#v</code>.
+</p>
+
+<h2 id="vector.resize">vector.resize (v, newsize)</h2>
+<p>
+  Resizes the vector to <code>newsize</code> bytes. New bytes are zero-initialized.
+  Existing data within the new size is preserved.
+</p>
+
+<h2 id="vector.unpackmany">vector.unpackmany (v, offset, fmt [, count])</h2>
+<p>
+  Returns an iterator that repeatedly unpacks values from <code>v</code> using the format
+  <code>fmt</code>. Optional <code>count</code> limits the number of iterations.
+</p>
+<pre><code>{`for a, b in vector.unpackmany(v, 0, "I4I4") do
+  print(a, b)
+end`}</code></pre>
+
+<!-- Table Library Additions -->
+
+<h2 id="table.clone">table.clone (t [, deep])</h2>
+<p>
+  Creates a copy of the table <code>t</code>. If <code>deep</code> is true, nested tables
+  are recursively cloned. Deep copies preserve circular references.
+</p>
+<pre><code>{`local x = table.clone(t)        -- shallow copy
+local y = table.clone(t, true)  -- deep copy
+
+-- Circular references preserved
+local t = {}
+t.a = t
+local c = table.clone(t, true)
+assert(c.a == c)`}</code></pre>
+
+<!-- Metamethods -->
+
+<h2 id="__slice">__slice</h2>
+<p>
+  The <code>__slice</code> metamethod is called when the slice operator is used on a table.
+  It receives the table, start index, and end index (which may be nil).
+</p>
+<pre><code>{`local mt = {
+  __slice = function(self, start, finish)
+    return {start = start, finish = finish}
+  end
+}
+local x = setmetatable({}, mt)
+local result = x[5, 10]  -- calls __slice(x, 5, 10)`}</code></pre>

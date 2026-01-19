@@ -1,8 +1,6 @@
 /*
 ** $Id: lua.h $
-** Lua - A Scripting Language
-** Lua.org, PUC-Rio, Brazil (www.lua.org)
-** See Copyright Notice at the end of this file
+** See copyright information at https://lus.dev/manual/license
 */
 
 #ifndef lua_h
@@ -15,7 +13,7 @@
 #define LUA_AUTHORS "https://lus.dev/manual/license"
 
 #define LUA_VERSION_MAJOR_N 1
-#define LUA_VERSION_MINOR_N 3
+#define LUA_VERSION_MINOR_N 4
 #define LUA_VERSION_RELEASE_N 0
 
 #define LUA_VERSION_NUM (LUA_VERSION_MAJOR_N * 100 + LUA_VERSION_MINOR_N)
@@ -62,8 +60,9 @@ typedef struct lua_State lua_State;
 #define LUA_TUSERDATA 7
 #define LUA_TTHREAD 8
 #define LUA_TENUM 9
+#define LUA_TVECTOR 10
 
-#define LUA_NUMTYPES 10
+#define LUA_NUMTYPES 11
 
 /* minimum Lua stack available to a C function */
 #define LUA_MINSTACK 20
@@ -372,6 +371,7 @@ LUA_API void(lua_closeslot)(lua_State *L, int idx);
 #define lua_isboolean(L, n) (lua_type(L, (n)) == LUA_TBOOLEAN)
 #define lua_isthread(L, n) (lua_type(L, (n)) == LUA_TTHREAD)
 #define lua_isenum(L, n) (lua_type(L, (n)) == LUA_TENUM)
+#define lua_isvector(L, n) (lua_type(L, (n)) == LUA_TVECTOR)
 #define lua_isnone(L, n) (lua_type(L, (n)) == LUA_TNONE)
 #define lua_isnoneornil(L, n) (lua_type(L, (n)) <= 0)
 

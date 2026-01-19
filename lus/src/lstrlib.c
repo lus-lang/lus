@@ -25,6 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 #include "llimits.h"
+#include "lpack.h"
 
 
 /*
@@ -1429,187 +1430,38 @@ static int str_format(lua_State *L) {
 
 /* value used for padding */
 #if !defined(LUAL_PACKPADBYTE)
-#define LUAL_PACKPADBYTE 0x00
+#define LUAL_PACKPADBYTE LPACK_PADBYTE
 #endif
 
-/* maximum size for the binary representation of an integer */
-#define MAXINTSIZE 16
+/* Use shared pack definitions from lpack.h */
+#define MAXINTSIZE LPACK_MAXINTSIZE
+#define NB LPACK_NB
+#define MC LPACK_MC
+#define SZINT LPACK_SZINT
 
-/* number of bits in a character */
-#define NB CHAR_BIT
+/* Alias shared types for local compatibility */
+typedef lpack_Header Header;
+typedef lpack_KOption KOption;
 
-/* mask for one character (NB 1's) */
-#define MC ((1 << NB) - 1)
+/* Alias enum values */
+#define Kint       Lpack_Kint
+#define Kuint      Lpack_Kuint
+#define Kfloat     Lpack_Kfloat
+#define Knumber    Lpack_Knumber
+#define Kdouble    Lpack_Kdouble
+#define Kchar      Lpack_Kchar
+#define Kstring    Lpack_Kstring
+#define Kzstr      Lpack_Kzstr
+#define Kpadding   Lpack_Kpadding
+#define Kpaddalign Lpack_Kpaddalign
+#define Knop       Lpack_Knop
 
-/* size of a lua_Integer */
-#define SZINT ((int)sizeof(lua_Integer))
-
-
-/* dummy union to get native endianness */
-static const union {
-  int dummy;
-  char little; /* true iff machine is little endian */
-} nativeendian = {1};
-
-
-/*
-** information to pack/unpack stuff
-*/
-typedef struct Header {
-  lua_State *L;
-  int islittle;
-  unsigned maxalign;
-} Header;
-
-
-/*
-** options for pack/unpack
-*/
-typedef enum KOption {
-  Kint,       /* signed integers */
-  Kuint,      /* unsigned integers */
-  Kfloat,     /* single-precision floating-point numbers */
-  Knumber,    /* Lua "native" floating-point numbers */
-  Kdouble,    /* double-precision floating-point numbers */
-  Kchar,      /* fixed-length strings */
-  Kstring,    /* strings with prefixed length */
-  Kzstr,      /* zero-terminated strings */
-  Kpadding,   /* padding */
-  Kpaddalign, /* padding for alignment */
-  Knop        /* no-op (configuration or spaces) */
-} KOption;
-
-
-/*
-** Read an integer numeral from string 'fmt' or return 'df' if
-** there is no numeral
-*/
-static int digit(int c) {
-  return '0' <= c && c <= '9';
-}
-
-static size_t getnum(const char **fmt, size_t df) {
-  if (!digit(**fmt)) /* no number? */
-    return df;       /* return default value */
-  else {
-    size_t a = 0;
-    do {
-      a = a * 10 + cast_uint(*((*fmt)++) - '0');
-    } while (digit(**fmt) && a <= (MAX_SIZE - 9) / 10);
-    return a;
-  }
-}
-
-
-/*
-** Read an integer numeral and raises an error if it is larger
-** than the maximum size of integers.
-*/
-static unsigned getnumlimit(Header *h, const char **fmt, size_t df) {
-  size_t sz = getnum(fmt, df);
-  if (l_unlikely((sz - 1u) >= MAXINTSIZE))
-    return cast_uint(luaL_error(h->L, "integral size (%d) out of limits [1,%d]",
-                                sz, MAXINTSIZE));
-  return cast_uint(sz);
-}
-
-
-/*
-** Initialize Header
-*/
-static void initheader(lua_State *L, Header *h) {
-  h->L = L;
-  h->islittle = nativeendian.little;
-  h->maxalign = 1;
-}
-
-
-/*
-** Read and classify next option. 'size' is filled with option's size.
-*/
-static KOption getoption(Header *h, const char **fmt, size_t *size) {
-  /* dummy structure to get native alignment requirements */
-  struct cD {
-    char c;
-    union {
-      LUAI_MAXALIGN;
-    } u;
-  };
-  int opt = *((*fmt)++);
-  *size = 0; /* default */
-  switch (opt) {
-    case 'b': *size = sizeof(char); return Kint;
-    case 'B': *size = sizeof(char); return Kuint;
-    case 'h': *size = sizeof(short); return Kint;
-    case 'H': *size = sizeof(short); return Kuint;
-    case 'l': *size = sizeof(long); return Kint;
-    case 'L': *size = sizeof(long); return Kuint;
-    case 'j': *size = sizeof(lua_Integer); return Kint;
-    case 'J': *size = sizeof(lua_Integer); return Kuint;
-    case 'T': *size = sizeof(size_t); return Kuint;
-    case 'f': *size = sizeof(float); return Kfloat;
-    case 'n': *size = sizeof(lua_Number); return Knumber;
-    case 'd': *size = sizeof(double); return Kdouble;
-    case 'i': *size = getnumlimit(h, fmt, sizeof(int)); return Kint;
-    case 'I': *size = getnumlimit(h, fmt, sizeof(int)); return Kuint;
-    case 's': *size = getnumlimit(h, fmt, sizeof(size_t)); return Kstring;
-    case 'c':
-      *size = getnum(fmt, cast_sizet(-1));
-      if (l_unlikely(*size == cast_sizet(-1)))
-        luaL_error(h->L, "missing size for format option 'c'");
-      return Kchar;
-    case 'z': return Kzstr;
-    case 'x': *size = 1; return Kpadding;
-    case 'X': return Kpaddalign;
-    case ' ': break;
-    case '<': h->islittle = 1; break;
-    case '>': h->islittle = 0; break;
-    case '=': h->islittle = nativeendian.little; break;
-    case '!': {
-      const size_t maxalign = offsetof(struct cD, u);
-      h->maxalign = getnumlimit(h, fmt, maxalign);
-      break;
-    }
-    default: luaL_error(h->L, "invalid format option '%c'", opt);
-  }
-  return Knop;
-}
-
-
-/*
-** Read, classify, and fill other details about the next option.
-** 'psize' is filled with option's size, 'notoalign' with its
-** alignment requirements.
-** Local variable 'size' gets the size to be aligned. (Kpadal option
-** always gets its full alignment, other options are limited by
-** the maximum alignment ('maxalign'). Kchar option needs no alignment
-** despite its size.
-*/
-static KOption getdetails(Header *h, size_t totalsize, const char **fmt,
-                          size_t *psize, unsigned *ntoalign) {
-  KOption opt = getoption(h, fmt, psize);
-  size_t align = *psize;   /* usually, alignment follows size */
-  if (opt == Kpaddalign) { /* 'X' gets alignment from following option */
-    if (**fmt == '\0' || getoption(h, fmt, &align) == Kchar || align == 0)
-      luaL_argerror(h->L, 1, "invalid next option for option 'X'");
-  }
-  if (align <= 1 || opt == Kchar) /* need no alignment? */
-    *ntoalign = 0;
-  else {
-    if (align > h->maxalign) /* enforce maximum alignment */
-      align = h->maxalign;
-    if (l_unlikely(!ispow2(align))) { /* not a power of 2? */
-      *ntoalign = 0;                  /* to avoid warnings */
-      luaL_argerror(h->L, 1, "format asks for alignment not power of 2");
-    }
-    else {
-      /* 'szmoda' = totalsize % align */
-      unsigned szmoda = cast_uint(totalsize & (align - 1));
-      *ntoalign = cast_uint((align - szmoda) & (align - 1));
-    }
-  }
-  return opt;
-}
+/* Alias shared functions */
+#define initheader    lpack_initheader
+#define getoption     lpack_getoption
+#define getdetails    lpack_getdetails
+#define copywithendian lpack_copywithendian
+#define unpackint     lpack_unpackint
 
 
 /*
@@ -1617,37 +1469,13 @@ static KOption getdetails(Header *h, size_t totalsize, const char **fmt,
 ** The final 'if' handles the case when 'size' is larger than
 ** the size of a Lua integer, correcting the extra sign-extension
 ** bytes if necessary (by default they would be zeros).
+** NOTE: This version uses luaL_Buffer, unlike lpack_packint which uses raw buffer.
 */
 static void packint(luaL_Buffer *b, lua_Unsigned n, int islittle, unsigned size,
                     int neg) {
   char *buff = luaL_prepbuffsize(b, size);
-  unsigned i;
-  buff[islittle ? 0 : size - 1] = (char)(n & MC); /* first byte */
-  for (i = 1; i < size; i++) {
-    n >>= NB;
-    buff[islittle ? i : size - 1 - i] = (char)(n & MC);
-  }
-  if (neg && size > SZINT) {       /* negative number need sign extension? */
-    for (i = SZINT; i < size; i++) /* correct extra bytes */
-      buff[islittle ? i : size - 1 - i] = (char)MC;
-  }
-  luaL_addsize(b, size); /* add result to buffer */
-}
-
-
-/*
-** Copy 'size' bytes from 'src' to 'dest', correcting endianness if
-** given 'islittle' is different from native endianness.
-*/
-static void copywithendian(char *dest, const char *src, unsigned size,
-                           int islittle) {
-  if (islittle == nativeendian.little)
-    memcpy(dest, src, size);
-  else {
-    dest += size - 1;
-    while (size-- != 0)
-      *(dest--) = *(src++);
-  }
+  lpack_packint(buff, n, islittle, size, neg);
+  luaL_addsize(b, size);
 }
 
 
@@ -1779,39 +1607,6 @@ static int str_packsize(lua_State *L) {
   return 1;
 }
 
-
-/*
-** Unpack an integer with 'size' bytes and 'islittle' endianness.
-** If size is smaller than the size of a Lua integer and integer
-** is signed, must do sign extension (propagating the sign to the
-** higher bits); if size is larger than the size of a Lua integer,
-** it must check the unread bytes to see whether they do not cause an
-** overflow.
-*/
-static lua_Integer unpackint(lua_State *L, const char *str, int islittle,
-                             int size, int issigned) {
-  lua_Unsigned res = 0;
-  int i;
-  int limit = (size <= SZINT) ? size : SZINT;
-  for (i = limit - 1; i >= 0; i--) {
-    res <<= NB;
-    res |= (lua_Unsigned)(unsigned char)str[islittle ? i : size - 1 - i];
-  }
-  if (size < SZINT) { /* real size smaller than lua_Integer? */
-    if (issigned) {   /* needs sign extension? */
-      lua_Unsigned mask = (lua_Unsigned)1 << (size * NB - 1);
-      res = ((res ^ mask) - mask); /* do sign extension */
-    }
-  }
-  else if (size > SZINT) { /* must check unread bytes */
-    int mask = (!issigned || (lua_Integer)res >= 0) ? 0 : MC;
-    for (i = limit; i < size; i++) {
-      if (l_unlikely((unsigned char)str[islittle ? i : size - 1 - i] != mask))
-        luaL_error(L, "%d-byte integer does not fit into Lua Integer", size);
-    }
-  }
-  return (lua_Integer)res;
-}
 
 
 static int str_unpack(lua_State *L) {

@@ -404,10 +404,123 @@ static int sort(lua_State *L) {
 /* }====================================================== */
 
 
+/*
+** {======================================================
+** Clone
+** =======================================================
+*/
+
+/*
+** Helper for deep cloning. srcidx is the source table, mapidx is
+** the table mapping source tables to their clones (for circular refs).
+** Leaves the clone on top of the stack.
+*/
+static void clone_deep(lua_State *L, int srcidx, int mapidx) {
+  /* Convert relative indices to absolute */
+  srcidx = lua_absindex(L, srcidx);
+  mapidx = lua_absindex(L, mapidx);
+  
+  /* Check if already cloned (circular reference) */
+  lua_pushvalue(L, srcidx);
+  if (lua_rawget(L, mapidx) != LUA_TNIL) {
+    /* Already cloned - return existing clone */
+    return;  /* clone is on stack */
+  }
+  lua_pop(L, 1);  /* pop nil */
+  
+  /* Create new table */
+  lua_newtable(L);
+  int newidx = lua_gettop(L);
+  
+  /* Register in map before recursing (for circular refs) */
+  lua_pushvalue(L, srcidx);  /* key = source table */
+  lua_pushvalue(L, newidx);  /* value = new table */
+  lua_rawset(L, mapidx);
+  
+  /* Copy all key-value pairs */
+  lua_pushnil(L);
+  while (lua_next(L, srcidx) != 0) {
+    /* Stack: key, value */
+    int keyidx = lua_gettop(L) - 1;
+    int validx = lua_gettop(L);
+    
+    /* Clone key if it's a table */
+    if (lua_istable(L, keyidx)) {
+      clone_deep(L, keyidx, mapidx);
+      /* Stack: key, value, cloned_key */
+    } else {
+      lua_pushvalue(L, keyidx);
+      /* Stack: key, value, key_copy */
+    }
+    
+    /* Clone value if it's a table */
+    if (lua_istable(L, validx)) {
+      clone_deep(L, validx, mapidx);
+      /* Stack: key, value, new_key, cloned_value */
+    } else {
+      lua_pushvalue(L, validx);
+      /* Stack: key, value, new_key, value_copy */
+    }
+    
+    /* Set new[new_key] = new_value */
+    lua_settable(L, newidx);
+    /* Stack: key, value */
+    
+    lua_pop(L, 1);  /* pop value, keep key for next iteration */
+  }
+  
+  /* Copy metatable (shared, not deep cloned) */
+  if (lua_getmetatable(L, srcidx)) {
+    lua_setmetatable(L, newidx);
+  }
+  
+  /* newidx table is already on top */
+}
+
+
+/*
+** table.clone(t [, deep])
+** Create a copy of table. If 'deep' is true, recursively clone nested tables.
+** Deep copies preserve circular references.
+*/
+static int tclone(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  int deep = lua_toboolean(L, 2);
+  
+  if (deep) {
+    /* Need a table to track cloned tables for circular references */
+    lua_newtable(L);  /* cloned_map at top of stack */
+    int mapidx = lua_gettop(L);
+    clone_deep(L, 1, mapidx);
+    /* Remove the map, keep only the result */
+    lua_remove(L, mapidx);
+  } else {
+    /* Shallow clone */
+    lua_newtable(L);
+    lua_pushnil(L);
+    while (lua_next(L, 1) != 0) {
+      /* Stack: new_table, key, value */
+      lua_pushvalue(L, -2);  /* copy key */
+      lua_insert(L, -2);     /* Stack: new_table, key, key_copy, value */
+      lua_settable(L, -4);   /* new[key_copy] = value */
+      /* Stack: new_table, key */
+    }
+    /* Copy metatable if present */
+    if (lua_getmetatable(L, 1)) {
+      lua_setmetatable(L, -2);
+    }
+  }
+  return 1;
+}
+
+/* }====================================================== */
+
+
 static const luaL_Reg tab_funcs[] = {
-    {"concat", tconcat}, {"create", tcreate}, {"insert", tinsert},
-    {"pack", tpack},     {"unpack", tunpack}, {"remove", tremove},
-    {"move", tmove},     {"sort", sort},      {NULL, NULL}};
+    {"clone", tclone},   {"concat", tconcat}, {"create", tcreate},
+    {"insert", tinsert}, {"pack", tpack},     {"unpack", tunpack},
+    {"remove", tremove}, {"move", tmove},     {"sort", sort},
+    {NULL, NULL}};
 
 
 LUAMOD_API int luaopen_table(lua_State *L) {

@@ -126,4 +126,132 @@ tests:it("gmatch across coroutines (bug 5.3.2)", function()
   assert(co() == "2")
 end)
 
+tests:it("string.pack basic integers", function()
+  -- basic integer packing
+  local packed = string.pack("i4", 123456)
+  assert(#packed == 4)
+  local val = string.unpack("i4", packed)
+  assert(val == 123456)
+  
+  -- unsigned integers
+  packed = string.pack("I4", 0xFFFFFFFF)
+  val = string.unpack("I4", packed)
+  assert(val == 0xFFFFFFFF)
+  
+  -- negative integers
+  packed = string.pack("i4", -12345)
+  val = string.unpack("i4", packed)
+  assert(val == -12345)
+  
+  -- byte (signed and unsigned)
+  packed = string.pack("b", -1)
+  val = string.unpack("b", packed)
+  assert(val == -1)
+  
+  packed = string.pack("B", 255)
+  val = string.unpack("B", packed)
+  assert(val == 255)
+end)
+
+tests:it("string.pack shorts and longs", function()
+  -- short
+  local packed = string.pack("h", 12345)
+  assert(#packed == 2)
+  local val = string.unpack("h", packed)
+  assert(val == 12345)
+  
+  -- unsigned short
+  packed = string.pack("H", 65535)
+  val = string.unpack("H", packed)
+  assert(val == 65535)
+  
+  -- lua_Integer (j/J)
+  packed = string.pack("j", 123456789)
+  val = string.unpack("j", packed)
+  assert(val == 123456789)
+end)
+
+tests:it("string.pack floats", function()
+  -- float
+  local packed = string.pack("f", 3.14)
+  assert(#packed == 4)
+  local val = string.unpack("f", packed)
+  assert(math.abs(val - 3.14) < 0.001)
+  
+  -- double
+  packed = string.pack("d", 3.14159265358979)
+  assert(#packed == 8)
+  val = string.unpack("d", packed)
+  assert(math.abs(val - 3.14159265358979) < 0.0000001)
+  
+  -- lua_Number (n)
+  packed = string.pack("n", 2.718281828)
+  val = string.unpack("n", packed)
+  assert(math.abs(val - 2.718281828) < 0.0000001)
+end)
+
+tests:it("string.pack endianness", function()
+  -- little endian
+  local packed = string.pack("<i4", 0x01020304)
+  assert(string.byte(packed, 1) == 0x04) -- least significant first
+  
+  -- big endian
+  packed = string.pack(">i4", 0x01020304)
+  assert(string.byte(packed, 1) == 0x01) -- most significant first
+  
+  -- verify unpack handles endianness
+  local le = string.pack("<i4", 1000)
+  local be = string.pack(">i4", 1000)
+  assert(string.unpack("<i4", le) == 1000)
+  assert(string.unpack(">i4", be) == 1000)
+end)
+
+tests:it("string.pack fixed strings", function()
+  -- fixed-size string
+  local packed = string.pack("c5", "hello")
+  assert(packed == "hello")
+  local val = string.unpack("c5", packed)
+  assert(val == "hello")
+  
+  -- padding on short string
+  packed = string.pack("c5", "hi")
+  assert(#packed == 5)
+  
+  -- zero-terminated string
+  packed = string.pack("z", "hello")
+  assert(#packed == 6) -- includes null terminator
+  val = string.unpack("z", packed)
+  assert(val == "hello")
+end)
+
+tests:it("string.pack multiple values", function()
+  local packed = string.pack("i4i4i4", 10, 20, 30)
+  assert(#packed == 12)
+  
+  local a, b, c, nextpos = string.unpack("i4i4i4", packed)
+  assert(a == 10)
+  assert(b == 20)
+  assert(c == 30)
+  assert(nextpos == 13) -- next position after data
+end)
+
+tests:it("string.pack offset unpack", function()
+  local packed = string.pack("xxxi4", 42) -- 3 padding bytes + integer
+  assert(#packed == 7)
+  
+  -- unpack at offset
+  local val, nextpos = string.unpack("i4", packed, 4)
+  assert(val == 42)
+  assert(nextpos == 8)
+end)
+
+tests:it("string.packsize", function()
+  assert(string.packsize("i4") == 4)
+  assert(string.packsize("i4i4") == 8)
+  assert(string.packsize("bBhHlLjJ") > 0)
+  assert(string.packsize("fd") == 12)
+  assert(string.packsize("c10") == 10)
+  assert(string.packsize("xxx") == 3)
+end)
+
 tests:finish()

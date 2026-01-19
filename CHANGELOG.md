@@ -5,7 +5,10 @@
 **Release date:** TBD
 
 - Added local groups.
+- Added `vector` type and library.
 - Added slices for strings, tables, and vectors.
+- Added `table.clone(t, deep?)`.
+- Refactored actions workflow
 
 ## 1.3.0
 

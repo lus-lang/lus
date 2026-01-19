@@ -25,6 +25,7 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "ltm.h"
+#include "lvector.h"
 
 
 /*
@@ -178,6 +179,11 @@ static l_mem objsize(GCObject *o) {
     case LUA_VENUMROOT: {
       EnumRoot *root = gco2enumroot(o);
       res = luaE_rootsize(root);
+      break;
+    }
+    case LUA_VVECTOR: {
+      Vector *v = gco2vec(o);
+      res = luaV_vecsize(v);
       break;
     }
     default: res = 0; lua_assert(0);
@@ -402,6 +408,10 @@ static void reallymarkobject(global_State *g, GCObject *o) {
       Enum *e = gco2enum(o);
       markobject(g, e->root); /* mark its root */
       set2black(o);           /* nothing else to mark */
+      break;
+    }
+    case LUA_VVECTOR: {
+      set2black(o);  /* vectors have no references to mark */
       break;
     }
     default: lua_assert(0); break;
@@ -916,6 +926,10 @@ static void freeobj(lua_State *L, GCObject *o) {
     }
     case LUA_VENUMROOT: {
       luaE_freeroot(L, gco2enumroot(o));
+      break;
+    }
+    case LUA_VVECTOR: {
+      luaV_freevec(L, gco2vec(o));
       break;
     }
     default: lua_assert(0);

@@ -1,5 +1,5 @@
 project('lus', 'c',
-  version: '1.2.0',
+  version: '1.4.0',
   default_options: [
     'c_std=gnu11',
     'warning_level=2',
@@ -87,6 +87,7 @@ core_sources = files(
   'src/lmem.c',
   'src/lobject.c',
   'src/lopcodes.c',
+  'src/lpack.c',
   'src/lparser.c',
   'src/lpledge.c',
   'src/lstate.c',
@@ -94,6 +95,7 @@ core_sources = files(
   'src/ltable.c',
   'src/ltm.c',
   'src/lundump.c',
+  'src/lvector.c',
   'src/lvm.c',
   'src/lzio.c',
 )
@@ -115,6 +117,7 @@ lib_sources = files(
   'src/lfslib.c',
   'src/lnetlib.c',
   'src/lworkerlib.c',
+  'src/lvectorlib.c',
   'src/linit.c',
 )
 
@@ -204,7 +207,9 @@ h1_tests = [
   'h1/worker',
   'h1/parse',
   'h1/slices',
-  'h1/groups'
+  'h1/groups',
+  'h1/vectors',
+  'h1/cloning'
 ]
 
 foreach t : h1_tests

@@ -1,0 +1,187 @@
+global print, require, assert, type, string, table, vector, pledge, math
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("vectors")
+
+-- Basic creation
+tests:it("basic creation", function()
+  local v = vector.create(1024)
+  assert(#v == 1024, "length should be 1024")
+  assert(vector.size(v) == 1024, "size should be 1024")
+  assert(type(v) == "vector", "type should be vector")
+end)
+
+-- Fast creation (uninitialized)
+tests:it("fast creation", function()
+  local v = vector.create(512, true)
+  assert(#v == 512, "length should be 512")
+end)
+
+-- Zero-length vector
+tests:it("zero-length vector", function()
+  local v = vector.create(0)
+  assert(#v == 0, "length should be 0")
+end)
+
+-- Pack/unpack single integer
+tests:it("pack unpack integer", function()
+  local v = vector.create(8)
+  vector.pack(v, 0, "I4", 123456789)
+  local val = vector.unpack(v, 0, "I4")
+  assert(val == 123456789, "should unpack same value")
+end)
+
+-- Pack/unpack multiple integers
+tests:it("pack unpack multiple", function()
+  local v = vector.create(16)
+  vector.pack(v, 0, "I4I4I4", 1, 2, 3)
+  local a, b, c = vector.unpack(v, 0, "I4I4I4")
+  assert(a == 1 and b == 2 and c == 3, "should unpack all values")
+end)
+
+-- Pack/unpack bytes
+tests:it("pack unpack bytes", function()
+  local v = vector.create(4)
+  vector.pack(v, 0, "BBBB", 10, 20, 30, 40)
+  local a, b, c, d = vector.unpack(v, 0, "BBBB")
+  assert(a == 10 and b == 20 and c == 30 and d == 40, "should unpack bytes")
+end)
+
+-- Pack/unpack float
+tests:it("pack unpack float", function()
+  local v = vector.create(8)
+  vector.pack(v, 0, "f", 3.14)
+  local val = vector.unpack(v, 0, "f")
+  assert(math.abs(val - 3.14) < 0.01, "should unpack float approximately")
+end)
+
+-- Pack/unpack double
+tests:it("pack unpack double", function()
+  local v = vector.create(16)
+  vector.pack(v, 0, "d", 3.141592653589793)
+  local val = vector.unpack(v, 0, "d")
+  assert(math.abs(val - 3.141592653589793) < 0.0001, "should unpack double")
+end)
+
+-- Pack/unpack fixed-size string
+tests:it("pack unpack string", function()
+  local v = vector.create(10)
+  vector.pack(v, 0, "c5", "hello")
+  local val = vector.unpack(v, 0, "c5")
+  assert(val == "hello", "should unpack string")
+end)
+
+-- Clone
+tests:it("clone vector", function()
+  local v = vector.create(8)
+  vector.pack(v, 0, "I4", 42)
+  local v2 = vector.clone(v)
+  assert(#v2 == #v, "clone should have same length")
+  assert(vector.unpack(v2, 0, "I4") == 42, "clone should have same data")
+end)
+
+-- Resize (grow)
+tests:it("resize grow", function()
+  local v = vector.create(8)
+  vector.pack(v, 0, "I4", 999)
+  vector.resize(v, 16)
+  assert(#v == 16, "size should be 16 after resize")
+  assert(vector.unpack(v, 0, "I4") == 999, "original data should be preserved")
+end)
+
+-- Resize (shrink)
+tests:it("resize shrink", function()
+  local v = vector.create(16)
+  vector.pack(v, 0, "I4", 888)
+  vector.resize(v, 8)
+  assert(#v == 8, "size should be 8 after resize")
+  assert(vector.unpack(v, 0, "I4") == 888, "data in range should be preserved")
+end)
+
+-- Slice forward
+tests:it("slice forward", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)
+  end
+  local s = v[3, 7]  -- bytes 3-7 (values 3-7)
+  assert(#s == 5, "slice length should be 5")
+  assert(vector.unpack(s, 0, "B") == 3, "first byte should be 3")
+  assert(vector.unpack(s, 4, "B") == 7, "last byte should be 7")
+end)
+
+-- Slice reverse
+tests:it("slice reverse", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)
+  end
+  local s = v[7, 3]  -- reverse: bytes 7 down to 3
+  assert(#s == 5, "slice length should be 5")
+  assert(vector.unpack(s, 0, "B") == 7, "first byte should be 7 (reversed)")
+  assert(vector.unpack(s, 4, "B") == 3, "last byte should be 3 (reversed)")
+end)
+
+-- Slice from start
+tests:it("slice from start", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)
+  end
+  local s = v[, 5]  -- bytes 1-5
+  assert(#s == 5, "slice length should be 5")
+  assert(vector.unpack(s, 0, "B") == 1, "first byte should be 1")
+end)
+
+-- Slice to end
+tests:it("slice to end", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)
+  end
+  local s = v[6, ]  -- bytes 6-10
+  assert(#s == 5, "slice length should be 5")
+  assert(vector.unpack(s, 0, "B") == 6, "first byte should be 6")
+end)
+
+-- Slice full copy
+tests:it("slice full copy", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)
+  end
+  local s = v[, ]  -- full copy
+  assert(#s == 10, "full slice should have same length")
+end)
+
+-- Endianness test (simplified)
+tests:it("endianness", function()
+  local v = vector.create(8)
+  vector.pack(v, 0, "<I4", 0x12345678)  -- little endian
+  local b1, b2 = vector.unpack(v, 0, "BB")
+  assert(b1 == 0x78 and b2 == 0x56, "little endian should have LSB first")
+  
+  vector.pack(v, 0, ">I4", 0x12345678)  -- big endian
+  b1, b2 = vector.unpack(v, 0, "BB")
+  assert(b1 == 0x12 and b2 == 0x34, "big endian should have MSB first")
+end)
+
+-- unpackmany iterator
+tests:it("unpackmany iterator", function()
+  local v = vector.create(12)
+  vector.pack(v, 0, "I4", 10)
+  vector.pack(v, 4, "I4", 20)
+  vector.pack(v, 8, "I4", 30)
+  local sum = 0
+  local count = 0
+  for val in vector.unpackmany(v, 0, "I4") do
+    sum = sum + val
+    count = count + 1
+  end
+  assert(count == 3, "should have 3 iterations, got " .. count)
+  assert(sum == 60, "sum should be 60")
+end)
+
+tests:finish()

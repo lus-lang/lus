@@ -943,6 +943,44 @@ typedef struct Enum {
 
 
 /*
+** {==================================================================
+** Vectors
+** ===================================================================
+*/
+
+/*
+** Vector: A mutable byte buffer.
+** Data is stored separately to allow efficient resizing.
+*/
+typedef struct Vector {
+  CommonHeader;
+  size_t len;    /* current buffer length in bytes */
+  size_t alloc;  /* allocated buffer size */
+  char *data;    /* pointer to buffer data */
+} Vector;
+
+
+#define LUA_VVECTOR makevariant(LUA_TVECTOR, 0)
+
+#define ttisvector(o) checktag((o), ctb(LUA_VVECTOR))
+
+#define vecvalue(o) check_exp(ttisvector(o), gco2vec(val_(o).gc))
+
+#define setvecvalue(L, obj, x)    \
+  {                               \
+    TValue *io = (obj);           \
+    Vector *x_ = (x);             \
+    val_(io).gc = obj2gco(x_);    \
+    settt_(io, ctb(LUA_VVECTOR)); \
+    checkliveness(L, io);         \
+  }
+
+#define setvecvalue2s(L, o, v) setvecvalue(L, s2v(o), v)
+
+/* }================================================================== */
+
+
+/*
 ** 'module' operation for hashing (size is always a power of 2)
 */
 #define lmod(s, size) \
