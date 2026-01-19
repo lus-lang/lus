@@ -1,0 +1,62 @@
+-- From Destructuring: Extract table fields into local variables.
+-- playground: true
+
+global print
+
+-- Basic destructuring: field names become variable names
+local point = {x = 10, y = 20, z = 30}
+local x, y, z from point
+print("Extracted:", x, y, z)  --> 10    20    30
+
+-- Works with any table
+local config = {
+    host = "localhost",
+    port = 8080,
+    debug = true
+}
+local host, port, debug from config
+print("Config:", host, port, debug)
+
+-- Missing fields become nil
+local partial = {a = 1, c = 3}
+local a, b, c from partial
+print("Partial:", a, b, c)  --> 1    nil    3
+
+-- Combine with const for immutable bindings
+local settings = {version = "1.0", name = "MyApp"}
+local version <const>, name <const> from settings
+print("App:", name, "v" .. version)
+-- version = "2.0"  -- Would error: attempt to assign to const
+
+-- Nested tables
+local user = {
+    name = "Alice",
+    profile = {
+        age = 30,
+        city = "NYC"
+    }
+}
+local name, profile from user
+local age, city from profile
+print("User:", name, age, city)
+
+-- Practical example: function returning structured data
+local function get_result()
+    return {
+        success = true,
+        data = "Hello, World!",
+        timestamp = 1234567890
+    }
+end
+
+local success, data, timestamp from get_result()
+if success then
+    print("Got data:", data, "at", timestamp)
+end
+
+-- Combine with if-assignment
+local response = {ok = true, body = "Response body"}
+if ok = response.ok then
+    local body from response
+    print("Response:", body)
+end

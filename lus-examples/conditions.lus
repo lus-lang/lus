@@ -1,0 +1,74 @@
+-- Assignment Conditions: Variables declared in if/while conditions.
+-- playground: true
+
+global print
+
+-- Basic if-assignment: variable declared inline
+if x = 42 then
+    print("x is truthy:", x)
+end
+
+-- Falsy values (nil, false) fail the condition
+if y = nil then
+    print("This won't print")
+else
+    print("y was nil, so we're in else")
+end
+
+-- Multiple variables: ALL must be truthy
+if a, b, c = 1, 2, 3 then
+    print("All truthy:", a, b, c)
+end
+
+if a, b, c = 1, nil, 3 then
+    print("This won't print - b is nil")
+else
+    print("One was falsy!")
+end
+
+-- Elseif chains - variables accumulate
+if first = nil then
+    print("first")
+elseif second = nil then
+    print("second")  
+elseif third = "winner" then
+    -- We can see first and second here too!
+    print("third:", third, "first:", first, "second:", second)
+end
+
+-- Practical example: result checking
+local function divide(a, b)
+    if b == 0 then return nil end
+    return a / b
+end
+
+if result = divide(10, 2) then
+    print("10 / 2 =", result)
+end
+
+if result = divide(10, 0) then
+    print("This won't print")
+else
+    print("Division by zero!")
+end
+
+-- While-assignment: loop until falsy
+local count = 5
+local function countdown()
+    if count > 0 then
+        count = count - 1
+        return count + 1
+    end
+    return nil
+end
+
+print("Countdown:")
+while n = countdown() do
+    print("  ", n)
+end
+
+-- Const attribute in conditions
+if pi <const> = 3.14159 then
+    print("Pi is", pi)
+    -- pi = 0  -- Would error: attempt to assign to const variable
+end

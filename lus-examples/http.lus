@@ -1,4 +1,5 @@
 -- Simple HTTP server in Lus.
+-- playground: false
 
 global network, pledge, print
 

@@ -1,0 +1,49 @@
+-- Groups: Structured bindings that unpack into individual variables.
+-- playground: true
+
+global print
+
+-- Define a group with named fields
+local point <group> = {
+    x = 10,
+    y = 20,
+    z = 30
+}
+
+-- Fields are accessed like table members, but they're real locals
+print("Point:", point.x, point.y, point.z)
+
+-- Groups can have attributes on their fields
+local config <group> = {
+    host <const> = "localhost",  -- immutable field
+    port = 8080,
+    debug = true
+}
+
+print("Server:", config.host .. ":" .. config.port)
+
+-- Multiple groups in one declaration
+local a <group>, b <group> = {val = 1}, {val = 2}
+print("Two groups:", a.val, b.val)
+
+-- Nested groups for hierarchical data
+local player <group> = {
+    name = "Hero",
+    stats <group> = {
+        health = 100,
+        mana = 50
+    },
+    position <group> = {
+        x = 0,
+        y = 0
+    }
+}
+
+print("Player:", player.name)
+print("Stats:", player.stats.health, "HP,", player.stats.mana, "MP")
+print("Position:", player.position.x, player.position.y)
+
+-- Groups in conditions
+if result <group> = {ok = true, value = 42} then
+    print("Result:", result.ok, result.value)
+end

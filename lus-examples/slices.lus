@@ -1,0 +1,54 @@
+-- Slices: Extract subsequences from tables, strings, and vectors.
+-- playground: true
+
+global print, table, setmetatable, error
+
+-- Basic table slicing: t[start, end]
+local numbers = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+print("Original:", table.concat(numbers, ", "))
+print("numbers[2,5]:", table.concat(numbers[2,5], ", "))  --> 2, 3, 4, 5
+print("numbers[7,10]:", table.concat(numbers[7,10], ", ")) --> 7, 8, 9, 10
+
+-- Omit start (defaults to 1)
+print("numbers[,3]:", table.concat(numbers[,3], ", "))  --> 1, 2, 3
+
+-- Omit end (defaults to length)
+print("numbers[8,]:", table.concat(numbers[8,], ", "))  --> 8, 9, 10
+
+-- String slicing works the same way
+local str = "Hello, World!"
+print("\nString slicing:")
+print("Original:", str)
+print("str[1,5]:", str[1,5])   --> Hello
+print("str[8,12]:", str[8,12]) --> World
+
+-- Practical: chunk processing with a loop
+local data = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
+print("\nProcessing in chunks of 3:")
+local chunk_size = 3
+for i = 1, #data, chunk_size do
+    local chunk_end = i + chunk_size - 1
+    if chunk_end > #data then chunk_end = #data end
+    print("  Chunk:", table.concat(data[i, chunk_end], ", "))
+end
+
+-- Custom __slice metamethod
+local mt = {
+    __slice = function(self, start, finish)
+        start = start or 1
+        finish = finish or 10  -- default range
+        local result = {}
+        for i = start, finish do
+            result[#result + 1] = i * i  -- squares
+        end
+        return result
+    end
+}
+
+local squares = setmetatable({}, mt)
+print("\nCustom __slice (squares):")
+local sq1 = squares[1,5]
+print("  squares[1,5]:", sq1[1], sq1[2], sq1[3], sq1[4], sq1[5])  --> 1 4 9 16 25
+local sq2 = squares[,3]
+print("  squares[,3]:", sq2[1], sq2[2], sq2[3])  --> 1 4 9
