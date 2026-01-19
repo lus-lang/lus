@@ -145,6 +145,10 @@ jobs:
           #   artifact_path: lus/build/lus.exe
 
     steps:
+      - name: Install bash (Alpine)
+        if: matrix.container == 'alpine:latest'
+        run: apk add --no-cache bash
+
       - name: Check if test passed
         id: check
         shell: bash
