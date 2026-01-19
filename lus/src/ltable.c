@@ -619,11 +619,15 @@ static void setnodevector(lua_State *L, Table *t, unsigned size) {
     }
     t->lsizenode = cast_byte(lsize);
     setnodummy(t);
-    for (i = 0; i < cast_int(size); i++) {
-      Node *n = gnode(t, i);
-      gnext(n) = 0;
-      setnilkey(n);
-      setempty(gval(n));
+    /* Copy node pointer to local for alias analysis optimization */
+    {
+      Node *node = t->node;
+      for (i = 0; i < cast_int(size); i++) {
+        Node *n = &node[i];
+        gnext(n) = 0;
+        setnilkey(n);
+        setempty(gval(n));
+      }
     }
   }
 }
@@ -635,8 +639,10 @@ static void setnodevector(lua_State *L, Table *t, unsigned size) {
 static void reinserthash(lua_State *L, Table *ot, Table *t) {
   unsigned j;
   unsigned size = sizenode(ot);
+  /* Copy node pointer to local for alias analysis optimization */
+  Node *oldnode = ot->node;
   for (j = 0; j < size; j++) {
-    Node *old = gnode(ot, j);
+    Node *old = &oldnode[j];
     if (!isempty(gval(old))) {
       /* doesn't need barrier/invalidate cache, as entry was
          already present in the table */

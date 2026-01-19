@@ -50,12 +50,39 @@ int luaS_eqstr(TString *a, TString *b) {
 }
 
 
+/*
+** Rotate left helper - compilers transform this into a single rotate
+** instruction.
+*/
+#define lus_rol(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+
+/*
+** Sparse ARX string hash - O(1) constant time.
+** Samples 4 strategic positions using Bob Jenkins' lookup3 mixing.
+*/
 static unsigned luaS_hash(const char *str, size_t l, unsigned seed) {
-  unsigned int h = seed ^ cast_uint(l);
-  for (; l > 0; l--)
-    h ^= ((h << 5) + (h >> 2) + cast_byte(str[l - 1]));
+  l_uint32 a, b, h = cast_uint(l) ^ seed;
+  if (l == 0) {
+    return h;  /* empty string: just return seed mixed with length (0) */
+  } else if (l >= 4) {
+    a = lus_getu32(str);
+    h ^= lus_getu32(str + l - 4);
+    b = lus_getu32(str + (l >> 1) - 2);
+    h ^= b; h -= lus_rol(b, 14);
+    b += lus_getu32(str + (l >> 2) - 1);
+  } else {
+    a = *(const lu_byte *)str;
+    h ^= *(const lu_byte *)(str + l - 1);
+    b = *(const lu_byte *)(str + (l >> 1));
+    h ^= b; h -= lus_rol(b, 14);
+  }
+  a ^= h; a -= lus_rol(h, 11);
+  b ^= a; b -= lus_rol(a, 25);
+  h ^= b; h -= lus_rol(b, 16);
   return h;
 }
+
 
 
 unsigned luaS_hashlongstr(TString *ts) {

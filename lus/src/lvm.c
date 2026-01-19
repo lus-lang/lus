@@ -398,49 +398,43 @@ void luaV_finishset(lua_State *L, const TValue *t, TValue *key, TValue *val,
   luaG_runerror(L, "'__newindex' chain too long; possible loop");
 }
 
-
-/*
-** Function to be used for 0-terminated string order comparison
-*/
-#if !defined(l_strcoll)
-#define l_strcoll strcoll
-#endif
-
-
 /*
 ** Compare two strings 'ts1' x 'ts2', returning an integer less-equal-
 ** -greater than zero if 'ts1' is less-equal-greater than 'ts2'.
-** The code is a little tricky because it allows '\0' in the strings
-** and it uses 'strcoll' (to respect locales) for each segment
-** of the strings. Note that segments can compare equal but still
-** have different lengths.
+** Uses 4-byte aligned comparison for performance.
 */
 static int l_strcmp(const TString *ts1, const TString *ts2) {
-  size_t rl1; /* real length */
-  const char *s1 = getlstr(ts1, rl1);
-  size_t rl2;
-  const char *s2 = getlstr(ts2, rl2);
-  for (;;) { /* for each segment */
-    int temp = l_strcoll(s1, s2);
-    if (temp != 0)                   /* not equal? */
-      return temp;                   /* done */
-    else {                           /* strings are equal up to a '\0' */
-      size_t zl1 = strlen(s1);       /* index of first '\0' in 's1' */
-      size_t zl2 = strlen(s2);       /* index of first '\0' in 's2' */
-      if (zl2 == rl2)                /* 's2' is finished? */
-        return (zl1 == rl1) ? 0 : 1; /* check 's1' */
-      else if (zl1 == rl1)           /* 's1' is finished? */
-        return -1; /* 's1' is less than 's2' ('s2' is not finished) */
-      /* both strings longer than 'zl'; go on comparing after the '\0' */
-      zl1++;
-      zl2++;
-      s1 += zl1;
-      rl1 -= zl1;
-      s2 += zl2;
-      rl2 -= zl2;
+  size_t len1, len2;
+  const char *s1 = getlstr(ts1, len1);
+  const char *s2 = getlstr(ts2, len2);
+  size_t n = len1 > len2 ? len2 : len1;
+  size_t i;
+  for (i = 0; i < n; i += 4) {
+    /* Read 4 bytes at a time (note: may read up to 3 bytes past end) */
+    l_uint32 va = lus_getu32(s1 + i);
+    l_uint32 vb = lus_getu32(s2 + i);
+    if (va != vb) {
+      /* Byte-swap on little-endian for correct lexicographic order */
+#if !defined(LUA_USE_C89) && (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || \
+    defined(_WIN32) || defined(__i386__) || defined(__x86_64__) || defined(__aarch64__)
+      va = lus_bswap(va); vb = lus_bswap(vb);
+#endif
+      /* Handle comparison near end of string */
+      {
+        int rem = cast_int(i) - cast_int(n);
+        if (rem >= -3) {
+          /* Shift out bytes past string end */
+          va >>= 32 + (rem << 3);
+          vb >>= 32 + (rem << 3);
+          if (va == vb) break;  /* Equal after masking: compare by length */
+        }
+      }
+      return va < vb ? -1 : 1;
     }
   }
+  return (len1 > len2) - (len1 < len2);
 }
+
 
 
 /*

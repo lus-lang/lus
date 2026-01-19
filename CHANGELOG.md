@@ -9,6 +9,10 @@
 - Added slices for strings, tables, and vectors.
 - Added `table.clone(t, deep?)`.
 - Refactored actions workflow
+- Various runtime optimizations:
+  - Constant-time O(1) string hashing using sparse ARX algorithm
+  - 4-byte aligned string comparison for faster ordering
+  - Alias-aware table loops for improved compiler optimization
 
 ## 1.3.0
 

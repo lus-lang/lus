@@ -323,10 +323,45 @@ typedef unsigned long l_uint32;
 
 #endif
 
+/*
+** {==================================================================
+** Optimized memory access helpers
+** ===================================================================
+*/
+
+/*
+** Unaligned 32-bit read using packed union (works across architectures).
+** GCC/Clang use __attribute__((packed)); MSVC allows unaligned reads on x86.
+*/
+#if defined(__GNUC__) || defined(__clang__)
+typedef union __attribute__((packed)) { l_uint32 u; } lus_Unaligned32;
+#define lus_getu32(p) (((const lus_Unaligned32 *)(p))->u)
+#else
+/* MSVC and other compilers: direct cast (works on x86/x64) */
+#define lus_getu32(p) (*(const l_uint32 *)(p))
+#endif
+
+/*
+** Byte-swap for 32-bit integers (for little-endian lexicographic comparison).
+*/
+#if defined(__GNUC__) || defined(__clang__)
+#define lus_bswap(x) __builtin_bswap32(x)
+#elif defined(_MSC_VER)
+#include <stdlib.h>
+#define lus_bswap(x) _byteswap_ulong(x)
+#else
+/* Fallback: manual byte swap */
+#define lus_bswap(x) \
+  (((x) << 24) | (((x) & 0xff00) << 8) | (((x) >> 8) & 0xff00) | ((x) >> 24))
+#endif
+
+/* }================================================================== */
+
 
 /* Give these macros simpler names for internal use */
 #define l_likely(x) luai_likely(x)
 #define l_unlikely(x) luai_unlikely(x)
+
 
 /*
 ** {==================================================================
