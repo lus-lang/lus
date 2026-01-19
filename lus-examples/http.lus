@@ -1,0 +1,28 @@
+-- Simple HTTP server in Lus.
+
+global network, pledge, print
+
+pledge("network", "seal")
+
+local server = network.tcp.bind("0.0.0.0", 8080)
+print("HTTP server listening on http://localhost:8080")
+
+while client <close> = server:accept() do
+    local request_line = client:receive("*l")
+    if request_line then
+        print("Request: " .. request_line)
+        repeat
+            local header = client:receive("*l")
+        until not header or header == ""
+        
+        local body = "<h1>Hello world from Lus!</h1>"
+        local response = "HTTP/1.1 200 OK\r\n"
+            .. "Content-Type: text/html\r\n"
+            .. "Content-Length: " .. #body .. "\r\n"
+            .. "Connection: close\r\n"
+            .. "\r\n"
+            .. body
+        
+        client:send(response)
+    end
+end
