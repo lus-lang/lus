@@ -13,6 +13,7 @@
   - Constant-time O(1) string hashing using sparse ARX algorithm
   - 4-byte aligned string comparison for faster ordering
   - Alias-aware table loops for improved compiler optimization
+- Fixed race condition in `worker.receive` that could cause lost wakeups.
 
 ## 1.3.0
 

@@ -74,6 +74,7 @@ typedef struct MessageQueue {
 typedef struct ReceiveContext {
   lus_mutex_t mutex;
   lus_cond_t cond;
+  int ready; /* set by workers when message posted, prevents lost wakeup */
 } ReceiveContext;
 
 /*

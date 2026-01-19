@@ -370,13 +370,14 @@ static void worker_decref(WorkerState *w) {
 /*
 ** Signal the receive context if a receiver is waiting.
 ** Call with worker mutex already locked. Grabs ctx, then unlocks mutex
-** before signaling to avoid deadlock.
+** before signaling to avoid deadlock. Sets ready flag to prevent lost wakeup.
 */
 static void signal_recv_ctx(WorkerState *w) {
   ReceiveContext *ctx = w->recv_ctx;
   lus_mutex_unlock(&w->mutex);
   if (ctx) {
     lus_mutex_lock(&ctx->mutex);
+    ctx->ready = 1; /* set flag before signal to prevent lost wakeup */
     lus_cond_signal(&ctx->cond);
     lus_mutex_unlock(&ctx->mutex);
   }
@@ -440,12 +441,13 @@ static int worker_lib_message(lua_State *L) {
   lus_mutex_lock(&w->mutex);
   msgqueue_push(&w->outbox, buf.data, buf.size);
   lus_cond_signal(&w->outbox_cond);
-  ReceiveContext *ctx = w->recv_ctx;  /* grab before unlocking */
+  ReceiveContext *ctx = w->recv_ctx; /* grab before unlocking */
   lus_mutex_unlock(&w->mutex);
 
   /* Signal multi-worker select if receiver is waiting */
   if (ctx) {
     lus_mutex_lock(&ctx->mutex);
+    ctx->ready = 1; /* set flag before signal to prevent lost wakeup */
     lus_cond_signal(&ctx->cond);
     lus_mutex_unlock(&ctx->mutex);
   }
@@ -490,7 +492,7 @@ static void worker_run(WorkerState *w) {
     w->status = LUS_WORKER_ERROR;
     w->error_msg = strdup("failed to create Lua state");
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-    signal_recv_ctx(w);  /* wake multi-worker select */
+    signal_recv_ctx(w);               /* wake multi-worker select */
     return;
   }
   w->L = L;
@@ -535,7 +537,7 @@ static void worker_run(WorkerState *w) {
       w->status = LUS_WORKER_ERROR;
       w->error_msg = strdup("failed to deserialize initial argument");
       lus_cond_signal(&w->outbox_cond);
-      signal_recv_ctx(w);  /* wake multi-worker select */
+      signal_recv_ctx(w); /* wake multi-worker select */
       return;
     }
     free(data);
@@ -548,13 +550,13 @@ static void worker_run(WorkerState *w) {
     const char *err = lua_tostring(L, -1);
     w->error_msg = strdup(err ? err : "unknown load error");
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-    signal_recv_ctx(w);  /* wake multi-worker select */
+    signal_recv_ctx(w);               /* wake multi-worker select */
     return;
   }
 
   /* Move function below arguments */
   if (nargs > 0) {
-    lua_insert(L, -(nargs + 1));  /* move chunk under args */
+    lua_insert(L, -(nargs + 1)); /* move chunk under args */
   }
 
   if (lua_pcall(L, nargs, 0, 0) != LUA_OK) {
@@ -563,14 +565,14 @@ static void worker_run(WorkerState *w) {
     const char *err = lua_tostring(L, -1);
     w->error_msg = strdup(err ? err : "unknown runtime error");
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-    signal_recv_ctx(w);  /* wake multi-worker select */
+    signal_recv_ctx(w);               /* wake multi-worker select */
     return;
   }
 
   lus_mutex_lock(&w->mutex);
   w->status = LUS_WORKER_DEAD;
   lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
-  signal_recv_ctx(w);  /* wake multi-worker select */
+  signal_recv_ctx(w);               /* wake multi-worker select */
 }
 
 /* Pool thread function */
@@ -747,6 +749,7 @@ static int lib_receive(lua_State *L) {
   ReceiveContext ctx;
   lus_mutex_init(&ctx.mutex);
   lus_cond_init(&ctx.cond);
+  ctx.ready = 0;
 
   /* Register this context with each worker */
   for (int i = 0; i < nworkers; i++) {
@@ -828,8 +831,12 @@ static int lib_receive(lua_State *L) {
     }
 
     /* Wait on shared condition - any worker can wake us */
+    /* Hold mutex during check-and-wait to prevent lost wakeup race */
     lus_mutex_lock(&ctx.mutex);
-    lus_cond_wait(&ctx.cond, &ctx.mutex);
+    while (!ctx.ready) {
+      lus_cond_wait(&ctx.cond, &ctx.mutex);
+    }
+    ctx.ready = 0; /* reset for next iteration */
     lus_mutex_unlock(&ctx.mutex);
   }
 
