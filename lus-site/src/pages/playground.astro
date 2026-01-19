@@ -238,11 +238,13 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
       versionSelect.disabled = false
 
-      const defaultRelease = releases.stable || releases.unstable
+      // Default to unstable if available, otherwise stable
+      const defaultRelease = releases.unstable || releases.stable
       if (defaultRelease) {
+        versionSelect.value =
+          defaultRelease === releases.unstable ? "unstable" : "stable"
         await loadVersion(defaultRelease)
-        // Disable unstable examples if stable version is loaded
-        updateExampleAvailability(!releases.stable)
+        updateExampleAvailability(defaultRelease === releases.unstable)
       }
     } catch (e) {
       appendOutput(`Failed to fetch releases: ${e}`, "error")
