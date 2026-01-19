@@ -7,13 +7,10 @@
 #ifndef llimits_h
 #define llimits_h
 
-
 #include <limits.h>
 #include <stddef.h>
 
-
 #include "lua.h"
-
 
 #define l_numbits(t) cast_int(sizeof(t) * CHAR_BIT)
 
@@ -36,11 +33,9 @@ typedef unsigned long lu_mem;
 
 #define MAX_LMEM cast(l_mem, (cast(lu_mem, 1) << (l_numbits(l_mem) - 1)) - 1)
 
-
 /* chars used as small naturals (so that 'char' is reserved for characters) */
 typedef unsigned char lu_byte;
 typedef signed char ls_byte;
-
 
 /* Type for thread status/error codes */
 typedef lu_byte TStatus;
@@ -55,8 +50,8 @@ typedef lu_byte TStatus;
 ** Maximum size for strings and userdata visible for Lua; should be
 ** representable as a lua_Integer and as a size_t.
 */
-#define MAX_SIZE                                    \
-  (sizeof(size_t) < sizeof(lua_Integer) ? MAX_SIZET \
+#define MAX_SIZE                                                               \
+  (sizeof(size_t) < sizeof(lua_Integer) ? MAX_SIZET                            \
                                         : cast_sizet(LUA_MAXINTEGER))
 
 /*
@@ -64,10 +59,8 @@ typedef lu_byte TStatus;
 */
 #define ispow2(x) (((x) & ((x) - 1)) == 0)
 
-
 /* number of chars of a literal string without the ending \0 */
 #define LL(x) (sizeof(x) / sizeof(char) - 1)
-
 
 /*
 ** conversion of pointer to unsigned integer: this is for hashing only;
@@ -75,7 +68,7 @@ typedef lu_byte TStatus;
 ** value. (In strict ISO C this may cause undefined behavior, but no
 ** actual machine seems to bother.)
 */
-#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) && \
+#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) &&                      \
     __STDC_VERSION__ >= 199901L
 #include <stdint.h>
 #if defined(UINTPTR_MAX) /* even in C99 this type is optional */
@@ -89,11 +82,9 @@ typedef lu_byte TStatus;
 
 #define point2uint(p) cast_uint((L_P2I)(p) & UINT_MAX)
 
-
 /* types of 'usual argument conversions' for lua_Number and lua_Integer */
 typedef LUAI_UACNUMBER l_uacNumber;
 typedef LUAI_UACINT l_uacInt;
-
 
 /*
 ** Internal assertions for in-house debugging
@@ -115,12 +106,10 @@ typedef LUAI_UACINT l_uacInt;
 /* to avoid problems with conditions too long */
 #define lua_longassert(c) assert_code((c) ? (void)0 : lua_assert(0))
 
-
 /* macro to avoid warnings about unused variables */
 #if !defined(UNUSED)
 #define UNUSED(x) ((void)(x))
 #endif
-
 
 /* type casts (a macro highlights casts in the code) */
 #define cast(t, exp) ((t)(exp))
@@ -138,7 +127,6 @@ typedef LUAI_UACINT l_uacInt;
 #define cast_sizet(i) cast(size_t, (i))
 #define cast_Integer(i) cast(lua_Integer, (i))
 #define cast_Inst(i) cast(Instruction, (i))
-
 
 /* cast a signed lua_Integer to lua_Unsigned */
 #if !defined(l_castS2U)
@@ -185,7 +173,6 @@ typedef void (*voidf)(void);
 #define cast_func(p) ((voidf)(p))
 #endif
 
-
 /*
 ** non-return type
 */
@@ -201,7 +188,6 @@ typedef void (*voidf)(void);
 
 #endif
 
-
 /*
 ** Inline functions
 */
@@ -215,7 +201,6 @@ typedef void (*voidf)(void);
 
 #define l_sinline static l_inline
 
-
 /*
 ** An unsigned with (at least) 4 bytes
 */
@@ -224,7 +209,6 @@ typedef unsigned int l_uint32;
 #else
 typedef unsigned long l_uint32;
 #endif
-
 
 /*
 ** The luai_num* macros define the primitive operations over numbers.
@@ -252,18 +236,18 @@ typedef unsigned long l_uint32;
 ** (as the result 'm' of 'fmod' has the same sign of 'a').
 */
 #if !defined(luai_nummod)
-#define luai_nummod(L, a, b, m)                     \
-  {                                                 \
-    (void)L;                                        \
-    (m) = l_mathop(fmod)(a, b);                     \
-    if (((m) > 0) ? (b) < 0 : ((m) < 0 && (b) > 0)) \
-      (m) += (b);                                   \
+#define luai_nummod(L, a, b, m)                                                \
+  {                                                                            \
+    (void)L;                                                                   \
+    (m) = l_mathop(fmod)(a, b);                                                \
+    if (((m) > 0) ? (b) < 0 : ((m) < 0 && (b) > 0))                            \
+      (m) += (b);                                                              \
   }
 #endif
 
 /* exponentiation */
 #if !defined(luai_numpow)
-#define luai_numpow(L, a, b) \
+#define luai_numpow(L, a, b)                                                   \
   ((void)L, (b == 2) ? (a) * (a) : l_mathop(pow)(a, b))
 #endif
 
@@ -281,7 +265,6 @@ typedef unsigned long l_uint32;
 #define luai_numisnan(a) (!luai_numeq((a), (a)))
 #endif
 
-
 /*
 ** lua_numbertointeger converts a float number with an integral value
 ** to an integer, or returns 0 if the float is not within the range of
@@ -291,10 +274,9 @@ typedef unsigned long l_uint32;
 ** MAXINTEGER may not have one, and therefore its conversion to float
 ** may have an ill-defined value.)
 */
-#define lua_numbertointeger(n, p)         \
-  ((n) >= (LUA_NUMBER)(LUA_MININTEGER) && \
+#define lua_numbertointeger(n, p)                                              \
+  ((n) >= (LUA_NUMBER)(LUA_MININTEGER) &&                                      \
    (n) < -(LUA_NUMBER)(LUA_MININTEGER) && (*(p) = (LUA_INTEGER)(n), 1))
-
 
 /*
 ** LUAI_FUNC is a mark for all extern functions that are not to be
@@ -311,7 +293,7 @@ typedef unsigned long l_uint32;
 */
 #if !defined(LUAI_FUNC)
 
-#if defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 302) && \
+#if defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 302) &&         \
     (defined(__ELF__) || defined(__MACH__))
 #define LUAI_FUNC __attribute__((visibility("internal"))) extern
 #else
@@ -334,7 +316,9 @@ typedef unsigned long l_uint32;
 ** GCC/Clang use __attribute__((packed)); MSVC allows unaligned reads on x86.
 */
 #if defined(__GNUC__) || defined(__clang__)
-typedef union __attribute__((packed)) { l_uint32 u; } lus_Unaligned32;
+typedef union __attribute__((packed)) {
+  l_uint32 u;
+} lus_Unaligned32;
 #define lus_getu32(p) (((const lus_Unaligned32 *)(p))->u)
 #else
 /* MSVC and other compilers: direct cast (works on x86/x64) */
@@ -351,17 +335,59 @@ typedef union __attribute__((packed)) { l_uint32 u; } lus_Unaligned32;
 #define lus_bswap(x) _byteswap_ulong(x)
 #else
 /* Fallback: manual byte swap */
-#define lus_bswap(x) \
+#define lus_bswap(x)                                                           \
   (((x) << 24) | (((x) & 0xff00) << 8) | (((x) >> 8) & 0xff00) | ((x) >> 24))
+#endif
+
+/*
+** 64-bit optimizations for 64-bit platforms.
+** LUS_64BIT is defined when we can use 64-bit operations.
+*/
+#if UINTPTR_MAX == UINT64_MAX || defined(__LP64__) || defined(_WIN64)
+#define LUS_64BIT 1
+typedef unsigned long long l_uint64;
+
+/* Unaligned 64-bit read */
+#if defined(__GNUC__) || defined(__clang__)
+typedef union __attribute__((packed)) {
+  l_uint64 u;
+} lus_Unaligned64;
+#define lus_getu64(p) (((const lus_Unaligned64 *)(p))->u)
+#else
+#define lus_getu64(p) (*(const l_uint64 *)(p))
+#endif
+
+/* Byte-swap for 64-bit integers */
+#if defined(__GNUC__) || defined(__clang__)
+#define lus_bswap64(x) __builtin_bswap64(x)
+#elif defined(_MSC_VER)
+#define lus_bswap64(x) _byteswap_uint64(x)
+#else
+#define lus_bswap64(x)                                                         \
+  (((x) << 56) | (((x) & 0xff00) << 40) | (((x) & 0xff0000) << 24) |           \
+   (((x) & 0xff000000) << 8) | (((x) >> 8) & 0xff000000) |                     \
+   (((x) >> 24) & 0xff0000) | (((x) >> 40) & 0xff00) | ((x) >> 56))
+#endif
+
+#endif /* LUS_64BIT */
+
+/*
+** Attribute to prevent inlining of cold (rarely executed) functions.
+** Used to keep hot paths smaller for better instruction cache efficiency.
+*/
+#if defined(__GNUC__) || defined(__clang__)
+#define l_noinline __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define l_noinline __declspec(noinline)
+#else
+#define l_noinline /* empty */
 #endif
 
 /* }================================================================== */
 
-
 /* Give these macros simpler names for internal use */
 #define l_likely(x) luai_likely(x)
 #define l_unlikely(x) luai_unlikely(x)
-
 
 /*
 ** {==================================================================

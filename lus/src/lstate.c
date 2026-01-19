@@ -68,8 +68,8 @@ CallInfo *luaE_extendCI(lua_State *L, int err) {
   ci = cast(CallInfo *, luaM_saferealloc_(L, NULL, 0, sizeof(CallInfo)));
   if (l_unlikely(ci == NULL)) { /* allocation failed? */
     if (err)
-      luaM_error(L);    /* raise the error */
-    return NULL;        /* else only report it */
+      luaM_error(L); /* raise the error */
+    return NULL;     /* else only report it */
   }
   ci->next = L->ci->next;
   ci->previous = L->ci;
@@ -221,6 +221,7 @@ static void preinit_thread(lua_State *L, global_State *g) {
   L->twups = L; /* thread has no upvalues */
   L->nCcalls = 0;
   L->errorJmp = NULL;
+  L->activeCatch = NULL; /* no active catch handler */
   L->hook = NULL;
   L->hookmask = 0;
   L->basehookcount = 0;

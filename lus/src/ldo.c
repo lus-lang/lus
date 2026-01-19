@@ -15,6 +15,7 @@
 #include "lua.h"
 
 #include "lapi.h"
+#include "last.h"
 #include "ldebug.h"
 #include "ldo.h"
 #include "lfunc.h"
@@ -30,7 +31,6 @@
 #include "lundump.h"
 #include "lvm.h"
 #include "lzio.h"
-#include "last.h"
 
 #define errorstatus(s) ((s) > LUA_YIELD)
 
@@ -110,22 +110,20 @@ void luaD_seterrorobj(lua_State *L, TStatus errcode, StkId oldtop) {
 }
 
 l_noret luaD_throw(lua_State *L, TStatus errcode) {
-  /* First check for active catch block by walking up the CallInfo chain */
-  CallInfo *ci;
-  for (ci = L->ci; ci != NULL; ci = ci->previous) {
-    if (isLua(ci) && ci->u.l.catchinfo.active) {
-      /* Found an active catch handler - unwind to it */
-      CatchInfo *cinfo = &ci->u.l.catchinfo;
-      /* Save the error object by copying it to a safe location.
-      ** We store the offset of where the error is, since pointers may be stale
-      ** after stack reallocation. The error is currently at L->top.p - 1. */
-      cinfo->erroffset = savestack(L, L->top.p - 1);
-      /* Restore to catch frame */
-      L->ci = ci;
-      /* Jump to catch handler's jmpbuf, bypassing L->errorJmp chain */
-      cinfo->status = errcode;
-      longjmp(cinfo->jmpbuf, 1);
-    }
+  /* O(1) check for active catch block using L->activeCatch */
+  if (L->activeCatch != NULL) {
+    CallInfo *ci = L->activeCatch;
+    lua_assert(isLua(ci) && ci->u.l.catchinfo.active);
+    CatchInfo *cinfo = &ci->u.l.catchinfo;
+    /* Save the error object by copying it to a safe location.
+    ** We store the offset of where the error is, since pointers may be stale
+    ** after stack reallocation. The error is currently at L->top.p - 1. */
+    cinfo->erroffset = savestack(L, L->top.p - 1);
+    /* Restore to catch frame */
+    L->ci = ci;
+    /* Jump to catch handler's jmpbuf, bypassing L->errorJmp chain */
+    cinfo->status = errcode;
+    longjmp(cinfo->jmpbuf, 1);
   }
   if (L->errorJmp) {               /* thread has an error handler? */
     L->errorJmp->status = errcode; /* set status */
@@ -404,7 +402,6 @@ void luaD_inctop(lua_State *L) {
   luaD_checkstack(L, 1);
 }
 
-
 /*
 ** Check whether stacks have enough space to run a simple function (such
 ** as a finalizer): At least BASIC_STACK_SIZE in the Lua stack, two
@@ -419,7 +416,7 @@ int luaD_checkminstack(lua_State *L) {
     return 0; /* unable to allocate second ci */
   if (L->stack_last.p - L->top.p >= BASIC_STACK_SIZE)
     return 1; /* enough (BASIC_STACK_SIZE) free slots in the Lua stack */
-  else /* try to grow stack to a size with enough free slots */
+  else        /* try to grow stack to a size with enough free slots */
     return luaD_growstack(L, BASIC_STACK_SIZE, 0);
 }
 
@@ -1098,7 +1095,6 @@ static void f_parser(lua_State *L, void *ud) {
     } else {
       cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c, NULL);
     }
-
   }
   lua_assert(cl->nupvalues == cl->p->sizeupvalues);
   luaF_initupvals(L, cl);

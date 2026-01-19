@@ -4,15 +4,18 @@
 
 **Release date:** TBD
 
-- Added local groups.
-- Added `vector` type and library.
+- Added local groups for grouping stack-allocated variables.
+- Added `vector` type and library for buffers.
 - Added slices for strings, tables, and vectors.
-- Added `table.clone(t, deep?)`.
-- Refactored actions workflow
+- Added `table.clone(t, deep?)` to create copies of tables.
+- Refactored actions workflow.
 - Various runtime optimizations:
-  - Constant-time O(1) string hashing using sparse ARX algorithm
-  - 4-byte aligned string comparison for faster ordering
-  - Alias-aware table loops for improved compiler optimization
+  - Constant-time O(1) string hashing using sparse ARX algorithm.
+  - 4-byte aligned string comparison for faster ordering.
+  - 8-byte aligned string comparison on 64-bit platforms.
+  - Alias-aware table loops for improved compiler optimization.
+  - O(1) catch handler lookup via `activeCatch` pointer.
+  - Cold path extraction for trap handling and catch error recovery.
 - Fixed race condition in `worker.receive` that could cause lost wakeups.
 
 ## 1.3.0

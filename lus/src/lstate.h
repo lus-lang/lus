@@ -179,6 +179,7 @@ typedef struct stringtable {
 typedef struct CatchInfo {
   jmp_buf jmpbuf;                    /* setjmp buffer for error recovery */
   struct lua_longjmp *prev_errorJmp; /* saved previous error handler */
+  CallInfo *prev_activeCatch;        /* saved previous active catch handler */
   volatile TStatus status;           /* error status (if error occurred) */
   const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
   ptrdiff_t erroffset;  /* stack offset of error object (survives realloc) */
@@ -295,7 +296,8 @@ struct lua_State {
   GCObject *gclist;
   struct lua_State *twups;      /* list of threads with open upvalues */
   struct lua_longjmp *errorJmp; /* current error recover point */
-  CallInfo base_ci;             /* CallInfo for first level (C host) */
+  CallInfo *activeCatch; /* deepest active catch handler (for O(1) lookup) */
+  CallInfo base_ci;      /* CallInfo for first level (C host) */
   volatile lua_Hook hook;
   ptrdiff_t errfunc; /* current error handling function (stack index) */
   l_uint32 nCcalls;  /* number of nested non-yieldable or C calls */
