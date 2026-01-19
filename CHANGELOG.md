@@ -18,7 +18,6 @@
   - Cold path extraction for trap handling and catch error recovery.
 - Fixed race condition in `worker.receive` that could cause lost wakeups.
 - Fixed attribute usage in if-assignments and while-assignments.
-- Fixed `OP_SLICE` dumping in the bytecode compiler.
 
 ## 1.3.0
 
