@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lua.h"
 #include "lauxlib.h"
+#include "lua.h"
 
 #include "lapi.h"
 #include "ldebug.h"
@@ -86,8 +86,7 @@ static int doargs(int argc, char *argv[]) {
       if (version)
         ++version;
       break;
-    }
-    else if (IS("-")) /* end of options; use stdin */
+    } else if (IS("-")) /* end of options; use stdin */
       break;
     else if (IS("-l")) /* list */
       ++listing;
@@ -98,8 +97,7 @@ static int doargs(int argc, char *argv[]) {
         usage("'-o' needs argument");
       if (IS("-"))
         output = NULL;
-    }
-    else if (IS("-p")) /* parse only */
+    } else if (IS("-p")) /* parse only */
       dumping = 0;
     else if (IS("-s")) /* strip debug information */
       stripping = 1;
@@ -127,8 +125,7 @@ static const char *reader(lua_State *L, void *ud, size_t *size) {
   if ((*(int *)ud)--) {
     *size = sizeof(FUNCTION) - 1;
     return FUNCTION;
-  }
-  else {
+  } else {
     *size = 0;
     return NULL;
   }
@@ -224,21 +221,39 @@ static void PrintString(const TString *ts) {
   for (i = 0; i < n; i++) {
     int c = (int)(unsigned char)s[i];
     switch (c) {
-      case '"': printf("\\\""); break;
-      case '\\': printf("\\\\"); break;
-      case '\a': printf("\\a"); break;
-      case '\b': printf("\\b"); break;
-      case '\f': printf("\\f"); break;
-      case '\n': printf("\\n"); break;
-      case '\r': printf("\\r"); break;
-      case '\t': printf("\\t"); break;
-      case '\v': printf("\\v"); break;
-      default:
-        if (isprint(c))
-          printf("%c", c);
-        else
-          printf("\\%03d", c);
-        break;
+    case '"':
+      printf("\\\"");
+      break;
+    case '\\':
+      printf("\\\\");
+      break;
+    case '\a':
+      printf("\\a");
+      break;
+    case '\b':
+      printf("\\b");
+      break;
+    case '\f':
+      printf("\\f");
+      break;
+    case '\n':
+      printf("\\n");
+      break;
+    case '\r':
+      printf("\\r");
+      break;
+    case '\t':
+      printf("\\t");
+      break;
+    case '\v':
+      printf("\\v");
+      break;
+    default:
+      if (isprint(c))
+        printf("%c", c);
+      else
+        printf("\\%03d", c);
+      break;
     }
   }
   printf("\"");
@@ -247,14 +262,26 @@ static void PrintString(const TString *ts) {
 static void PrintType(const Proto *f, int i) {
   const TValue *o = &f->k[i];
   switch (ttypetag(o)) {
-    case LUA_VNIL: printf("N"); break;
-    case LUA_VFALSE:
-    case LUA_VTRUE: printf("B"); break;
-    case LUA_VNUMFLT: printf("F"); break;
-    case LUA_VNUMINT: printf("I"); break;
-    case LUA_VSHRSTR:
-    case LUA_VLNGSTR: printf("S"); break;
-    default: /* cannot happen */ printf("?%d", ttypetag(o)); break;
+  case LUA_VNIL:
+    printf("N");
+    break;
+  case LUA_VFALSE:
+  case LUA_VTRUE:
+    printf("B");
+    break;
+  case LUA_VNUMFLT:
+    printf("F");
+    break;
+  case LUA_VNUMINT:
+    printf("I");
+    break;
+  case LUA_VSHRSTR:
+  case LUA_VLNGSTR:
+    printf("S");
+    break;
+  default: /* cannot happen */
+    printf("?%d", ttypetag(o));
+    break;
   }
   printf("\t");
 }
@@ -262,21 +289,33 @@ static void PrintType(const Proto *f, int i) {
 static void PrintConstant(const Proto *f, int i) {
   const TValue *o = &f->k[i];
   switch (ttypetag(o)) {
-    case LUA_VNIL: printf("nil"); break;
-    case LUA_VFALSE: printf("false"); break;
-    case LUA_VTRUE: printf("true"); break;
-    case LUA_VNUMFLT: {
-      char buff[100];
-      sprintf(buff, LUA_NUMBER_FMT, fltvalue(o));
-      printf("%s", buff);
-      if (buff[strspn(buff, "-0123456789")] == '\0')
-        printf(".0");
-      break;
-    }
-    case LUA_VNUMINT: printf(LUA_INTEGER_FMT, ivalue(o)); break;
-    case LUA_VSHRSTR:
-    case LUA_VLNGSTR: PrintString(tsvalue(o)); break;
-    default: /* cannot happen */ printf("?%d", ttypetag(o)); break;
+  case LUA_VNIL:
+    printf("nil");
+    break;
+  case LUA_VFALSE:
+    printf("false");
+    break;
+  case LUA_VTRUE:
+    printf("true");
+    break;
+  case LUA_VNUMFLT: {
+    char buff[100];
+    sprintf(buff, LUA_NUMBER_FMT, fltvalue(o));
+    printf("%s", buff);
+    if (buff[strspn(buff, "-0123456789")] == '\0')
+      printf(".0");
+    break;
+  }
+  case LUA_VNUMINT:
+    printf(LUA_INTEGER_FMT, ivalue(o));
+    break;
+  case LUA_VSHRSTR:
+  case LUA_VLNGSTR:
+    PrintString(tsvalue(o));
+    break;
+  default: /* cannot happen */
+    printf("?%d", ttypetag(o));
+    break;
   }
 }
 
@@ -310,278 +349,373 @@ static void PrintCode(const Proto *f) {
       printf("[-]\t");
     printf("%-9s\t", opnames[o]);
     switch (o) {
-      case OP_MOVE: printf("%d %d", a, b); break;
-      case OP_LOADI: printf("%d %d", a, sbx); break;
-      case OP_LOADF: printf("%d %d", a, sbx); break;
-      case OP_LOADK:
-        printf("%d %d", a, bx);
-        printf(COMMENT);
-        PrintConstant(f, bx);
-        break;
-      case OP_LOADKX:
-        printf("%d", a);
-        printf(COMMENT);
-        PrintConstant(f, EXTRAARG);
-        break;
-      case OP_LOADFALSE: printf("%d", a); break;
-      case OP_LFALSESKIP: printf("%d", a); break;
-      case OP_LOADTRUE: printf("%d", a); break;
-      case OP_LOADNIL:
-        printf("%d %d", a, b);
-        printf(COMMENT "%d out", b + 1);
-        break;
-      case OP_GETUPVAL:
-        printf("%d %d", a, b);
-        printf(COMMENT "%s", UPVALNAME(b));
-        break;
-      case OP_SETUPVAL:
-        printf("%d %d", a, b);
-        printf(COMMENT "%s", UPVALNAME(b));
-        break;
-      case OP_GETTABUP:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT "%s", UPVALNAME(b));
+    case OP_MOVE:
+      printf("%d %d", a, b);
+      break;
+    case OP_LOADI:
+      printf("%d %d", a, sbx);
+      break;
+    case OP_LOADF:
+      printf("%d %d", a, sbx);
+      break;
+    case OP_LOADK:
+      printf("%d %d", a, bx);
+      printf(COMMENT);
+      PrintConstant(f, bx);
+      break;
+    case OP_LOADKX:
+      printf("%d", a);
+      printf(COMMENT);
+      PrintConstant(f, EXTRAARG);
+      break;
+    case OP_LOADFALSE:
+      printf("%d", a);
+      break;
+    case OP_LFALSESKIP:
+      printf("%d", a);
+      break;
+    case OP_LOADTRUE:
+      printf("%d", a);
+      break;
+    case OP_LOADNIL:
+      printf("%d %d", a, b);
+      printf(COMMENT "%d out", b + 1);
+      break;
+    case OP_GETUPVAL:
+      printf("%d %d", a, b);
+      printf(COMMENT "%s", UPVALNAME(b));
+      break;
+    case OP_SETUPVAL:
+      printf("%d %d", a, b);
+      printf(COMMENT "%s", UPVALNAME(b));
+      break;
+    case OP_GETTABUP:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT "%s", UPVALNAME(b));
+      printf(" ");
+      PrintConstant(f, c);
+      break;
+    case OP_GETTABLE:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_GETI:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_GETFIELD:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_SETTABUP:
+      printf("%d %d %d%s", a, b, c, ISK);
+      printf(COMMENT "%s", UPVALNAME(a));
+      printf(" ");
+      PrintConstant(f, b);
+      if (isk) {
         printf(" ");
         PrintConstant(f, c);
-        break;
-      case OP_GETTABLE: printf("%d %d %d", a, b, c); break;
-      case OP_GETI: printf("%d %d %d", a, b, c); break;
-      case OP_GETFIELD:
-        printf("%d %d %d", a, b, c);
+      }
+      break;
+    case OP_SETTABLE:
+      printf("%d %d %d%s", a, b, c, ISK);
+      if (isk) {
         printf(COMMENT);
         PrintConstant(f, c);
-        break;
-      case OP_SETTABUP:
-        printf("%d %d %d%s", a, b, c, ISK);
-        printf(COMMENT "%s", UPVALNAME(a));
+      }
+      break;
+    case OP_SETI:
+      printf("%d %d %d%s", a, b, c, ISK);
+      if (isk) {
+        printf(COMMENT);
+        PrintConstant(f, c);
+      }
+      break;
+    case OP_SETFIELD:
+      printf("%d %d %d%s", a, b, c, ISK);
+      printf(COMMENT);
+      PrintConstant(f, b);
+      if (isk) {
         printf(" ");
-        PrintConstant(f, b);
-        if (isk) {
-          printf(" ");
-          PrintConstant(f, c);
-        }
-        break;
-      case OP_SETTABLE:
-        printf("%d %d %d%s", a, b, c, ISK);
-        if (isk) {
-          printf(COMMENT);
-          PrintConstant(f, c);
-        }
-        break;
-      case OP_SETI:
-        printf("%d %d %d%s", a, b, c, ISK);
-        if (isk) {
-          printf(COMMENT);
-          PrintConstant(f, c);
-        }
-        break;
-      case OP_SETFIELD:
-        printf("%d %d %d%s", a, b, c, ISK);
-        printf(COMMENT);
-        PrintConstant(f, b);
-        if (isk) {
-          printf(" ");
-          PrintConstant(f, c);
-        }
-        break;
-      case OP_NEWTABLE:
-        printf("%d %d %d%s", a, vb, vc, ISK);
-        printf(COMMENT "%d", vc + EXTRAARGC);
-        break;
-      case OP_SELF:
-        printf("%d %d %d%s", a, b, c, ISK);
-        if (isk) {
-          printf(COMMENT);
-          PrintConstant(f, c);
-        }
-        break;
-      case OP_ADDI: printf("%d %d %d", a, b, sc); break;
-      case OP_ADDK:
-        printf("%d %d %d", a, b, c);
+        PrintConstant(f, c);
+      }
+      break;
+    case OP_NEWTABLE:
+      printf("%d %d %d%s", a, vb, vc, ISK);
+      printf(COMMENT "%d", vc + EXTRAARGC);
+      break;
+    case OP_SELF:
+      printf("%d %d %d%s", a, b, c, ISK);
+      if (isk) {
         printf(COMMENT);
         PrintConstant(f, c);
-        break;
-      case OP_SUBK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_MULK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_MODK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_POWK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_DIVK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_IDIVK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_BANDK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_BORK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_BXORK:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        PrintConstant(f, c);
-        break;
-      case OP_SHLI: printf("%d %d %d", a, b, sc); break;
-      case OP_SHRI: printf("%d %d %d", a, b, sc); break;
-      case OP_ADD: printf("%d %d %d", a, b, c); break;
-      case OP_SUB: printf("%d %d %d", a, b, c); break;
-      case OP_MUL: printf("%d %d %d", a, b, c); break;
-      case OP_MOD: printf("%d %d %d", a, b, c); break;
-      case OP_POW: printf("%d %d %d", a, b, c); break;
-      case OP_DIV: printf("%d %d %d", a, b, c); break;
-      case OP_IDIV: printf("%d %d %d", a, b, c); break;
-      case OP_BAND: printf("%d %d %d", a, b, c); break;
-      case OP_BOR: printf("%d %d %d", a, b, c); break;
-      case OP_BXOR: printf("%d %d %d", a, b, c); break;
-      case OP_SHL: printf("%d %d %d", a, b, c); break;
-      case OP_SHR: printf("%d %d %d", a, b, c); break;
-      case OP_MMBIN:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT "%s", eventname(c));
-        break;
-      case OP_MMBINI:
-        printf("%d %d %d %d", a, sb, c, isk);
-        printf(COMMENT "%s", eventname(c));
-        if (isk)
-          printf(" flip");
-        break;
-      case OP_MMBINK:
-        printf("%d %d %d %d", a, b, c, isk);
-        printf(COMMENT "%s ", eventname(c));
-        PrintConstant(f, b);
-        if (isk)
-          printf(" flip");
-        break;
-      case OP_UNM: printf("%d %d", a, b); break;
-      case OP_BNOT: printf("%d %d", a, b); break;
-      case OP_NOT: printf("%d %d", a, b); break;
-      case OP_LEN: printf("%d %d", a, b); break;
-      case OP_CONCAT: printf("%d %d", a, b); break;
-      case OP_CLOSE: printf("%d", a); break;
-      case OP_TBC: printf("%d", a); break;
-      case OP_JMP:
-        printf("%d", GETARG_sJ(i));
-        printf(COMMENT "to %d", GETARG_sJ(i) + pc + 2);
-        break;
-      case OP_EQ: printf("%d %d %d", a, b, isk); break;
-      case OP_LT: printf("%d %d %d", a, b, isk); break;
-      case OP_LE: printf("%d %d %d", a, b, isk); break;
-      case OP_EQK:
-        printf("%d %d %d", a, b, isk);
-        printf(COMMENT);
-        PrintConstant(f, b);
-        break;
-      case OP_EQI: printf("%d %d %d", a, sb, isk); break;
-      case OP_LTI: printf("%d %d %d", a, sb, isk); break;
-      case OP_LEI: printf("%d %d %d", a, sb, isk); break;
-      case OP_GTI: printf("%d %d %d", a, sb, isk); break;
-      case OP_GEI: printf("%d %d %d", a, sb, isk); break;
-      case OP_TEST: printf("%d %d", a, isk); break;
-      case OP_TESTSET: printf("%d %d %d", a, b, isk); break;
-      case OP_CALL:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT);
-        if (b == 0)
-          printf("all in ");
-        else
-          printf("%d in ", b - 1);
-        if (c == 0)
-          printf("all out");
-        else
-          printf("%d out", c - 1);
-        break;
-      case OP_TAILCALL:
-        printf("%d %d %d%s", a, b, c, ISK);
-        printf(COMMENT "%d in", b - 1);
-        break;
-      case OP_RETURN:
-        printf("%d %d %d%s", a, b, c, ISK);
-        printf(COMMENT);
-        if (b == 0)
-          printf("all out");
-        else
-          printf("%d out", b - 1);
-        break;
-      case OP_RETURN0: break;
-      case OP_RETURN1: printf("%d", a); break;
-      case OP_FORLOOP:
-        printf("%d %d", a, bx);
-        printf(COMMENT "to %d", pc - bx + 2);
-        break;
-      case OP_FORPREP:
-        printf("%d %d", a, bx);
-        printf(COMMENT "exit to %d", pc + bx + 3);
-        break;
-      case OP_TFORPREP:
-        printf("%d %d", a, bx);
-        printf(COMMENT "to %d", pc + bx + 2);
-        break;
-      case OP_TFORCALL: printf("%d %d", a, c); break;
-      case OP_TFORLOOP:
-        printf("%d %d", a, bx);
-        printf(COMMENT "to %d", pc - bx + 2);
-        break;
-      case OP_SETLIST:
-        printf("%d %d %d%s", a, vb, vc, ISK);
-        if (isk)
-          printf(COMMENT "%d", c + EXTRAARGC);
-        break;
-      case OP_CLOSURE:
-        printf("%d %d", a, bx);
-        printf(COMMENT "%p", VOID(f->p[bx]));
-        break;
-      case OP_VARARG:
-        printf("%d %d %d%s", a, b, c, ISK);
-        printf(COMMENT);
-        if (c == 0)
-          printf("all out");
-        else
-          printf("%d out", c - 1);
-        break;
-      case OP_GETVARG: printf("%d %d %d", a, b, c); break;
-      case OP_ERRNNIL:
-        printf("%d %d", a, bx);
-        printf(COMMENT);
-        if (bx == 0)
-          printf("?");
-        else
-          PrintConstant(f, bx - 1);
-        break;
-      case OP_VARARGPREP: printf("%d", a); break;
-      case OP_CATCH:
-        printf("%d %d", a, sbx);
-        printf(COMMENT "to %d on error", pc + sbx + 2);
-        break;
-      case OP_ENDCATCH:
-        printf("%d %d %d", a, b, c);
-        printf(COMMENT "%d out; to %d", b - 1, pc + c + 2);
-        break;
-      case OP_EXTRAARG: printf("%d", ax); break;
+      }
+      break;
+    case OP_ADDI:
+      printf("%d %d %d", a, b, sc);
+      break;
+    case OP_ADDK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_SUBK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_MULK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_MODK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_POWK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_DIVK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_IDIVK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_BANDK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_BORK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_BXORK:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      PrintConstant(f, c);
+      break;
+    case OP_SHLI:
+      printf("%d %d %d", a, b, sc);
+      break;
+    case OP_SHRI:
+      printf("%d %d %d", a, b, sc);
+      break;
+    case OP_ADD:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_SUB:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_MUL:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_MOD:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_POW:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_DIV:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_IDIV:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_BAND:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_BOR:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_BXOR:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_SHL:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_SHR:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_MMBIN:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT "%s", eventname(c));
+      break;
+    case OP_MMBINI:
+      printf("%d %d %d %d", a, sb, c, isk);
+      printf(COMMENT "%s", eventname(c));
+      if (isk)
+        printf(" flip");
+      break;
+    case OP_MMBINK:
+      printf("%d %d %d %d", a, b, c, isk);
+      printf(COMMENT "%s ", eventname(c));
+      PrintConstant(f, b);
+      if (isk)
+        printf(" flip");
+      break;
+    case OP_UNM:
+      printf("%d %d", a, b);
+      break;
+    case OP_BNOT:
+      printf("%d %d", a, b);
+      break;
+    case OP_NOT:
+      printf("%d %d", a, b);
+      break;
+    case OP_LEN:
+      printf("%d %d", a, b);
+      break;
+    case OP_CONCAT:
+      printf("%d %d", a, b);
+      break;
+    case OP_CLOSE:
+      printf("%d", a);
+      break;
+    case OP_TBC:
+      printf("%d", a);
+      break;
+    case OP_JMP:
+      printf("%d", GETARG_sJ(i));
+      printf(COMMENT "to %d", GETARG_sJ(i) + pc + 2);
+      break;
+    case OP_EQ:
+      printf("%d %d %d", a, b, isk);
+      break;
+    case OP_LT:
+      printf("%d %d %d", a, b, isk);
+      break;
+    case OP_LE:
+      printf("%d %d %d", a, b, isk);
+      break;
+    case OP_EQK:
+      printf("%d %d %d", a, b, isk);
+      printf(COMMENT);
+      PrintConstant(f, b);
+      break;
+    case OP_EQI:
+      printf("%d %d %d", a, sb, isk);
+      break;
+    case OP_LTI:
+      printf("%d %d %d", a, sb, isk);
+      break;
+    case OP_LEI:
+      printf("%d %d %d", a, sb, isk);
+      break;
+    case OP_GTI:
+      printf("%d %d %d", a, sb, isk);
+      break;
+    case OP_GEI:
+      printf("%d %d %d", a, sb, isk);
+      break;
+    case OP_TEST:
+      printf("%d %d", a, isk);
+      break;
+    case OP_TESTSET:
+      printf("%d %d %d", a, b, isk);
+      break;
+    case OP_CALL:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT);
+      if (b == 0)
+        printf("all in ");
+      else
+        printf("%d in ", b - 1);
+      if (c == 0)
+        printf("all out");
+      else
+        printf("%d out", c - 1);
+      break;
+    case OP_TAILCALL:
+      printf("%d %d %d%s", a, b, c, ISK);
+      printf(COMMENT "%d in", b - 1);
+      break;
+    case OP_RETURN:
+      printf("%d %d %d%s", a, b, c, ISK);
+      printf(COMMENT);
+      if (b == 0)
+        printf("all out");
+      else
+        printf("%d out", b - 1);
+      break;
+    case OP_RETURN0:
+      break;
+    case OP_RETURN1:
+      printf("%d", a);
+      break;
+    case OP_FORLOOP:
+      printf("%d %d", a, bx);
+      printf(COMMENT "to %d", pc - bx + 2);
+      break;
+    case OP_FORPREP:
+      printf("%d %d", a, bx);
+      printf(COMMENT "exit to %d", pc + bx + 3);
+      break;
+    case OP_TFORPREP:
+      printf("%d %d", a, bx);
+      printf(COMMENT "to %d", pc + bx + 2);
+      break;
+    case OP_TFORCALL:
+      printf("%d %d", a, c);
+      break;
+    case OP_TFORLOOP:
+      printf("%d %d", a, bx);
+      printf(COMMENT "to %d", pc - bx + 2);
+      break;
+    case OP_SETLIST:
+      printf("%d %d %d%s", a, vb, vc, ISK);
+      if (isk)
+        printf(COMMENT "%d", c + EXTRAARGC);
+      break;
+    case OP_CLOSURE:
+      printf("%d %d", a, bx);
+      printf(COMMENT "%p", VOID(f->p[bx]));
+      break;
+    case OP_VARARG:
+      printf("%d %d %d%s", a, b, c, ISK);
+      printf(COMMENT);
+      if (c == 0)
+        printf("all out");
+      else
+        printf("%d out", c - 1);
+      break;
+    case OP_GETVARG:
+      printf("%d %d %d", a, b, c);
+      break;
+    case OP_ERRNNIL:
+      printf("%d %d", a, bx);
+      printf(COMMENT);
+      if (bx == 0)
+        printf("?");
+      else
+        PrintConstant(f, bx - 1);
+      break;
+    case OP_VARARGPREP:
+      printf("%d", a);
+      break;
+    case OP_CATCH:
+      printf("%d %d", a, sbx);
+      printf(COMMENT "to %d on error", pc + sbx + 2);
+      break;
+    case OP_ENDCATCH:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT "%d out; to %d", b - 1, pc + c + 2);
+      break;
+    case OP_SLICE:
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT "R[%d] := slice(R[%d], R[%d], R[%d])", a, b, c, c + 1);
+      break;
+    case OP_EXTRAARG:
+      printf("%d", ax);
+      break;
 #if 0
    default:
 	printf("%d %d %d",a,b,c);
