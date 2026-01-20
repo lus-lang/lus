@@ -23,14 +23,16 @@
 ** Node type names for debugging and Graphviz output
 */
 static const char *const ast_typenames[] = {
-    "chunk",      "block",  "local",      "global",   "assign",     "if",
-    "while",      "repeat", "fornum",     "forgen",   "funcstat",   "localfunc",
-    "globalfunc", "return", "callstat",   "break",    "goto",       "label",
-    "catchstat",  "do",     "nil",        "true",     "false",      "number",
-    "string",     "vararg", "name",       "index",    "field",      "binop",
-    "unop",       "table",  "funcexpr",   "callexpr", "methodcall", "enum",
-    "optchain",   "from",   "catchexpr",  "param",    "namelist",   "explist",
-    "elseif",     "else",   "tablefield", NULL};
+    "chunk",      "block",     "local",      "global",    "assign",
+    "if",         "while",     "repeat",     "fornum",    "forgen",
+    "funcstat",   "localfunc", "globalfunc", "return",    "callstat",
+    "break",      "goto",      "label",      "catchstat", "do",
+    "nil",        "true",      "false",      "number",    "string",
+    "vararg",     "name",      "index",      "field",     "binop",
+    "unop",       "table",     "funcexpr",   "callexpr",  "methodcall",
+    "enum",       "optchain",  "from",       "catchexpr", "slice",
+    "param",      "namelist",  "explist",    "elseif",    "else",
+    "tablefield", NULL};
 
 const char *lusA_typename(LusAstType type) {
   if (type >= 0 &&
@@ -159,6 +161,11 @@ static void freenodetree(lua_State *L, LusAstNode *node) {
     break;
   case AST_ENUM:
     freenodetree(L, node->u.enumdef.names);
+    break;
+  case AST_SLICE:
+    freenodetree(L, node->u.slice.table);
+    freenodetree(L, node->u.slice.start);
+    freenodetree(L, node->u.slice.finish);
     break;
   default:
     /* No nested nodes to free */
@@ -416,6 +423,15 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
   case AST_ENUM:
     nodetotable(L, node->u.enumdef.names);
     lua_setfield(L, -2, "names");
+    break;
+
+  case AST_SLICE:
+    nodetotable(L, node->u.slice.table);
+    lua_setfield(L, -2, "table");
+    nodetotable(L, node->u.slice.start);
+    lua_setfield(L, -2, "start");
+    nodetotable(L, node->u.slice.finish);
+    lua_setfield(L, -2, "finish");
     break;
 
   default:
@@ -837,6 +853,21 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
     }
     break;
 
+  case AST_SLICE:
+    if (node->u.slice.table) {
+      fprintf(f, ",\n%*s\"table\": ", indent + 2, "");
+      emit_json_node(f, node->u.slice.table, 0);
+    }
+    if (node->u.slice.start) {
+      fprintf(f, ",\n%*s\"start\": ", indent + 2, "");
+      emit_json_node(f, node->u.slice.start, 0);
+    }
+    if (node->u.slice.finish) {
+      fprintf(f, ",\n%*s\"finish\": ", indent + 2, "");
+      emit_json_node(f, node->u.slice.finish, 0);
+    }
+    break;
+
   default:
     break;
   }
@@ -884,7 +915,7 @@ int lusA_tojson(LusAst *ast, const char *filename) {
 typedef struct AnalyzeState {
   lua_State *L;
   const char *chunkname;
-  int pledge_sealed;  /* 1 if pledge("seal") was encountered */
+  int pledge_sealed; /* 1 if pledge("seal") was encountered */
 } AnalyzeState;
 
 /*
@@ -950,44 +981,45 @@ static int count_siblings(LusAstNode *node) {
 ** and the field names match the variable names (for W5: manual deconstruction)
 */
 static int check_manual_deconstruction(LusAstNode *names, LusAstNode *values,
-                                        const char **tablename) {
+                                       const char **tablename) {
   LusAstNode *n = names;
   LusAstNode *v = values;
   const char *base_table = NULL;
-  
+
   if (n == NULL || v == NULL)
     return 0;
-  
+
   while (n != NULL && v != NULL) {
     /* Variable must be a name */
     const char *varname = get_name(n);
     if (varname == NULL)
       return 0;
-    
+
     /* Value must be a field access (table.field, not table[key]) */
     if (v->type != AST_FIELD)
       return 0;
-    
+
     /* The table base must be a simple name */
     LusAstNode *table = v->u.index.table;
     LusAstNode *key = v->u.index.key;
-    
+
     if (table == NULL || table->type != AST_NAME)
       return 0;
-    
+
     const char *tname = get_name(table);
     if (tname == NULL)
       return 0;
-    
+
     /* All accesses must be from the same table */
     if (base_table == NULL) {
       base_table = tname;
     } else if (strcmp(base_table, tname) != 0) {
       return 0;
     }
-    
+
     /* The key must be a string matching the variable name */
-    /* For AST_FIELD, the key is stored in u.index.key as AST_STRING or AST_NAME */
+    /* For AST_FIELD, the key is stored in u.index.key as AST_STRING or AST_NAME
+     */
     const char *keyname = NULL;
     if (key != NULL) {
       if (key->type == AST_STRING && key->u.str != NULL)
@@ -995,18 +1027,18 @@ static int check_manual_deconstruction(LusAstNode *names, LusAstNode *values,
       else if (key->type == AST_NAME && key->u.str != NULL)
         keyname = getstr(key->u.str);
     }
-    
+
     if (keyname == NULL || strcmp(keyname, varname) != 0)
       return 0;
-    
+
     n = n->next;
     v = v->next;
   }
-  
+
   /* Must have matched all items (same count) */
   if (n != NULL || v != NULL)
     return 0;
-  
+
   *tablename = base_table;
   return 1;
 }
@@ -1018,7 +1050,7 @@ static int check_manual_deconstruction(LusAstNode *names, LusAstNode *values,
 static LusAstNode *get_nil_compare_var(LusAstNode *node, int *is_neq) {
   if (node == NULL || node->type != AST_BINOP)
     return NULL;
-  
+
   /* Check for ~= or == with nil */
   if (node->u.binop.op == AST_OP_NE) {
     *is_neq = 1;
@@ -1027,18 +1059,18 @@ static LusAstNode *get_nil_compare_var(LusAstNode *node, int *is_neq) {
   } else {
     return NULL;
   }
-  
+
   LusAstNode *left = node->u.binop.left;
   LusAstNode *right = node->u.binop.right;
-  
+
   /* Check: left ~= nil */
   if (right != NULL && right->type == AST_NIL)
     return left;
-  
+
   /* Check: nil ~= left (less common) */
   if (left != NULL && left->type == AST_NIL)
     return right;
-  
+
   return NULL;
 }
 
@@ -1048,23 +1080,23 @@ static LusAstNode *get_nil_compare_var(LusAstNode *node, int *is_neq) {
 */
 static int check_nested_nil_ifs(LusAstNode *node, int depth) {
   if (depth >= 2)
-    return 1;  /* Found at least 2 levels - worth warning */
-  
+    return 1; /* Found at least 2 levels - worth warning */
+
   if (node == NULL || node->type != AST_IF)
     return 0;
-  
+
   int is_neq;
   LusAstNode *cond_var = get_nil_compare_var(node->u.ifstat.cond, &is_neq);
-  
+
   /* Must be ~= nil check */
   if (cond_var == NULL || !is_neq)
     return 0;
-  
+
   /* Check if body has exactly one statement which is another if */
   LusAstNode *body = node->child;
   if (body == NULL)
     return 0;
-  
+
   /* Count children - should be single if statement */
   int count = 0;
   LusAstNode *inner_if = NULL;
@@ -1073,11 +1105,11 @@ static int check_nested_nil_ifs(LusAstNode *node, int depth) {
     if (c->type == AST_IF)
       inner_if = c;
   }
-  
+
   if (count == 1 && inner_if != NULL) {
     return check_nested_nil_ifs(inner_if, depth + 1);
   }
-  
+
   return 0;
 }
 
@@ -1088,64 +1120,67 @@ static int check_nested_nil_ifs(LusAstNode *node, int depth) {
 static int check_and_chain_depth(LusAstNode *node) {
   if (node == NULL)
     return 0;
-  
+
   if (node->type != AST_BINOP || node->u.binop.op != AST_OP_AND)
     return 0;
-  
+
   /* Right side should be a field access or another and-chain */
   LusAstNode *right = node->u.binop.right;
   if (right == NULL)
     return 0;
-  
+
   int right_is_field = (right->type == AST_FIELD || right->type == AST_INDEX);
-  
+
   /* Left side could be a name, field access, or another and-chain */
   LusAstNode *left = node->u.binop.left;
   if (left == NULL)
     return 0;
-  
+
   if (left->type == AST_BINOP && left->u.binop.op == AST_OP_AND) {
     int left_depth = check_and_chain_depth(left);
     if (left_depth >= 1 && right_is_field)
       return left_depth + 1;
   }
-  
+
   /* Base case: x and x.y */
   int left_is_name = (left->type == AST_NAME);
   int left_is_field = (left->type == AST_FIELD || left->type == AST_INDEX);
-  
+
   if ((left_is_name || left_is_field) && right_is_field)
     return 1;
-  
+
   return 0;
 }
 
 /*
 ** Collect all names referenced in an expression
 */
-static void collect_names(LusAstNode *node, const char ***names, int *count, int *cap) {
+static void collect_names(LusAstNode *node, const char ***names, int *count,
+                          int *cap) {
   if (node == NULL)
     return;
-  
+
   if (node->type == AST_NAME) {
     const char *name = get_name(node);
     if (name != NULL) {
       /* Add to array */
       if (*count >= *cap) {
         int newcap = (*cap == 0) ? 8 : (*cap * 2);
-        const char **newarr = (const char **)realloc(*names, newcap * sizeof(char *));
-        if (newarr == NULL) return;
+        const char **newarr =
+            (const char **)realloc(*names, newcap * sizeof(char *));
+        if (newarr == NULL)
+          return;
         *names = newarr;
         *cap = newcap;
       }
       (*names)[(*count)++] = name;
     }
   }
-  
+
   /* Recurse into children and type-specific nodes */
   collect_names(node->child, names, count, cap);
   collect_names(node->next, names, count, cap);
-  
+
   switch (node->type) {
   case AST_BINOP:
     collect_names(node->u.binop.left, names, count, cap);
@@ -1235,8 +1270,8 @@ static int name_in_array(const char *name, const char **arr, int count) {
 */
 static int names_used_after(LusAstNode *decl_names, LusAstNode *after_stmt) {
   if (after_stmt == NULL || after_stmt->next == NULL)
-    return 0;  /* Nothing after means can move */
-  
+    return 0; /* Nothing after means can move */
+
   /* Collect declared names */
   const char *declared[32];
   int decl_count = 0;
@@ -1245,25 +1280,25 @@ static int names_used_after(LusAstNode *decl_names, LusAstNode *after_stmt) {
     if (name != NULL)
       declared[decl_count++] = name;
   }
-  
+
   if (decl_count == 0)
     return 0;
-  
+
   /* Collect all names used after the statement */
   const char **used = NULL;
   int used_count = 0, used_cap = 0;
-  
+
   for (LusAstNode *stmt = after_stmt->next; stmt != NULL; stmt = stmt->next) {
     collect_names(stmt, &used, &used_count, &used_cap);
   }
-  
+
   /* Check if any declared name is used */
   int found = 0;
   for (int i = 0; i < decl_count && !found; i++) {
     if (name_in_array(declared[i], used, used_count))
       found = 1;
   }
-  
+
   free(used);
   return found;
 }
@@ -1271,31 +1306,32 @@ static int names_used_after(LusAstNode *decl_names, LusAstNode *after_stmt) {
 /*
 ** Forward declaration
 */
-static void analyze_node(AnalyzeState *as, LusAstNode *node, LusAstNode *parent);
+static void analyze_node(AnalyzeState *as, LusAstNode *node,
+                         LusAstNode *parent);
 
 /*
 ** Analyze a statement list (block children)
 */
 static void analyze_block(AnalyzeState *as, LusAstNode *first_stmt) {
   LusAstNode *stmt = first_stmt;
-  
+
   while (stmt != NULL) {
     /* W3: Check for local followed by if/while that uses only that local */
     if (stmt->type == AST_LOCAL && !stmt->u.decl.isfrom) {
       LusAstNode *next_stmt = stmt->next;
-      if (next_stmt != NULL && 
+      if (next_stmt != NULL &&
           (next_stmt->type == AST_IF || next_stmt->type == AST_WHILE)) {
         /* Check if the declared variable is in the condition */
         LusAstNode *names = stmt->u.decl.names;
-        LusAstNode *cond = (next_stmt->type == AST_IF) 
-                           ? next_stmt->u.ifstat.cond 
-                           : next_stmt->u.loop.cond;
-        
+        LusAstNode *cond = (next_stmt->type == AST_IF)
+                               ? next_stmt->u.ifstat.cond
+                               : next_stmt->u.loop.cond;
+
         /* Collect names from condition */
         const char **cond_names = NULL;
         int cond_count = 0, cond_cap = 0;
         collect_names(cond, &cond_names, &cond_count, &cond_cap);
-        
+
         /* Check if at least one declared name is in condition */
         int in_cond = 0;
         for (LusAstNode *n = names; n != NULL; n = n->next) {
@@ -1305,23 +1341,24 @@ static void analyze_block(AnalyzeState *as, LusAstNode *first_stmt) {
             break;
           }
         }
-        
+
         free(cond_names);
-        
+
         if (in_cond) {
           /* Check if names are used after the if/while */
           if (!names_used_after(names, next_stmt)) {
             const char *kind = (next_stmt->type == AST_IF) ? "if" : "while";
             char msg[256];
-            snprintf(msg, sizeof(msg), 
-              "local declaration can be moved to %s condition (use %s-assignment)",
-              kind, kind);
+            snprintf(msg, sizeof(msg),
+                     "local declaration can be moved to %s condition (use "
+                     "%s-assignment)",
+                     kind, kind);
             emit_warning(as, stmt->line, msg);
           }
         }
       }
     }
-    
+
     analyze_node(as, stmt, NULL);
     stmt = stmt->next;
   }
@@ -1330,44 +1367,48 @@ static void analyze_block(AnalyzeState *as, LusAstNode *first_stmt) {
 /*
 ** Main analysis function for a single node
 */
-static void analyze_node(AnalyzeState *as, LusAstNode *node, LusAstNode *parent) {
+static void analyze_node(AnalyzeState *as, LusAstNode *node,
+                         LusAstNode *parent) {
   if (node == NULL)
     return;
-  
+
   (void)parent;
-  
+
   switch (node->type) {
   /* W2: pcall/xpcall deprecation */
   case AST_NAME: {
     const char *name = get_name(node);
     if (name != NULL) {
       if (strcmp(name, "pcall") == 0) {
-        emit_warning(as, node->line, 
-          "'pcall' no longer exists; use 'catch' expression instead");
+        emit_warning(
+            as, node->line,
+            "'pcall' no longer exists; use 'catch' expression instead");
       } else if (strcmp(name, "xpcall") == 0) {
-        emit_warning(as, node->line,
-          "'xpcall' no longer exists; use 'catch' expression instead");
+        emit_warning(
+            as, node->line,
+            "'xpcall' no longer exists; use 'catch' expression instead");
       }
     }
     break;
   }
-  
+
   /* W1: pledge after seal + W2 extension for pledge calls */
   case AST_CALLSTAT:
   case AST_CALLEXPR: {
     LusAstNode *func = node->u.call.func;
     LusAstNode *args = node->u.call.args;
-    
+
     /* Check for pledge("seal") and subsequent pledge calls */
     if (is_name(func, "pledge")) {
       if (as->pledge_sealed) {
         emit_warning(as, node->line,
-          "pledge() after pledge(\"seal\") has no effect; permissions are frozen");
+                     "pledge() after pledge(\"seal\") has no effect; "
+                     "permissions are frozen");
       } else if (args != NULL && is_string_literal(args, "seal")) {
         as->pledge_sealed = 1;
       }
     }
-    
+
     /* Recurse into children */
     analyze_node(as, func, node);
     for (LusAstNode *arg = args; arg != NULL; arg = arg->next) {
@@ -1375,7 +1416,7 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node, LusAstNode *parent)
     }
     break;
   }
-  
+
   /* W5: Manual table deconstruction */
   case AST_LOCAL: {
     if (!node->u.decl.isfrom) {
@@ -1383,137 +1424,137 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node, LusAstNode *parent)
       LusAstNode *values = node->u.decl.values;
       int name_count = count_siblings(names);
       int value_count = count_siblings(values);
-      
+
       /* Need multiple items and same count */
       if (name_count >= 2 && name_count == value_count) {
         const char *tablename = NULL;
         if (check_manual_deconstruction(names, values, &tablename)) {
           char msg[256];
           snprintf(msg, sizeof(msg),
-            "use 'from' destructuring: local ... from %s", tablename);
+                   "use 'from' destructuring: local ... from %s", tablename);
           emit_warning(as, node->line, msg);
         }
       }
     }
-    
+
     /* Recurse into values */
     for (LusAstNode *v = node->u.decl.values; v != NULL; v = v->next) {
       analyze_node(as, v, node);
     }
     break;
   }
-  
+
   /* W4: Nested nil checks */
   case AST_IF: {
     if (check_nested_nil_ifs(node, 0)) {
       emit_warning(as, node->line,
-        "nested nil checks can use optional chaining: x?.y?.z");
+                   "nested nil checks can use optional chaining: x?.y?.z");
     }
-    
+
     /* Recurse */
     analyze_node(as, node->u.ifstat.cond, node);
     analyze_block(as, node->child);
     analyze_node(as, node->u.ifstat.elsepart, node);
     break;
   }
-  
+
   /* W4: And-chains for optional chaining */
   case AST_BINOP: {
     if (node->u.binop.op == AST_OP_AND) {
       int depth = check_and_chain_depth(node);
       if (depth >= 2) {
         emit_warning(as, node->line,
-          "and-chain can use optional chaining: x?.y?.z");
+                     "and-chain can use optional chaining: x?.y?.z");
       }
     }
-    
+
     /* Recurse */
     analyze_node(as, node->u.binop.left, node);
     analyze_node(as, node->u.binop.right, node);
     break;
   }
-  
+
   /* Generic recursion for other node types */
   case AST_UNOP:
     analyze_node(as, node->u.unop.operand, node);
     break;
-    
+
   case AST_WHILE:
   case AST_REPEAT:
     analyze_node(as, node->u.loop.cond, node);
     analyze_block(as, node->child);
     break;
-    
+
   case AST_FORNUM:
     analyze_node(as, node->u.fornum.init, node);
     analyze_node(as, node->u.fornum.limit, node);
     analyze_node(as, node->u.fornum.step, node);
     analyze_block(as, node->child);
     break;
-    
+
   case AST_FORGEN:
     for (LusAstNode *e = node->u.forgen.explist; e != NULL; e = e->next)
       analyze_node(as, e, node);
     analyze_block(as, node->child);
     break;
-    
+
   case AST_FIELD:
   case AST_INDEX:
     analyze_node(as, node->u.index.table, node);
     analyze_node(as, node->u.index.key, node);
     break;
-    
+
   case AST_ASSIGN:
     for (LusAstNode *l = node->u.assign.lhs; l != NULL; l = l->next)
       analyze_node(as, l, node);
     for (LusAstNode *r = node->u.assign.rhs; r != NULL; r = r->next)
       analyze_node(as, r, node);
     break;
-    
+
   case AST_RETURN:
     for (LusAstNode *v = node->u.ret.values; v != NULL; v = v->next)
       analyze_node(as, v, node);
     break;
-    
+
   case AST_CATCHEXPR:
   case AST_CATCHSTAT:
     analyze_node(as, node->u.catchnode.expr, node);
     break;
-    
+
   case AST_OPTCHAIN:
     analyze_node(as, node->u.optchain.base, node);
     analyze_node(as, node->u.optchain.suffix, node);
     break;
-    
+
   case AST_TABLE:
     for (LusAstNode *f = node->u.table.fields; f != NULL; f = f->next)
       analyze_node(as, f, node);
     break;
-    
+
   case AST_TABLEFIELD:
     analyze_node(as, node->u.field.key, node);
     analyze_node(as, node->u.field.value, node);
     break;
-    
+
   case AST_FUNCEXPR:
   case AST_LOCALFUNC:
   case AST_GLOBALFUNC:
   case AST_FUNCSTAT:
     analyze_block(as, node->child);
     break;
-    
+
   case AST_DO:
   case AST_BLOCK:
   case AST_CHUNK:
     analyze_block(as, node->child);
     break;
-    
+
   case AST_METHODCALL:
     analyze_node(as, node->u.call.func, node);
     for (LusAstNode *arg = node->u.call.args; arg != NULL; arg = arg->next)
       analyze_node(as, arg, node);
     break;
-    
+
   default:
     /* Leaf nodes or unsupported - no action */
     break;
@@ -1526,11 +1567,11 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node, LusAstNode *parent)
 void lusA_analyze(lua_State *L, LusAst *ast, const char *chunkname) {
   if (ast == NULL || ast->root == NULL)
     return;
-  
+
   AnalyzeState as;
   as.L = L;
   as.chunkname = chunkname;
   as.pledge_sealed = 0;
-  
+
   analyze_block(&as, ast->root->child);
 }

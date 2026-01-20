@@ -55,6 +55,7 @@ typedef enum {
   AST_OPTCHAIN,   /* optional chaining (?) */
   AST_FROM,       /* from deconstruction */
   AST_CATCHEXPR,  /* catch expression */
+  AST_SLICE,      /* slice expression t[a,b] */
   /* Auxiliary */
   AST_PARAM,      /* function parameter */
   AST_NAMELIST,   /* list of names */
@@ -218,6 +219,12 @@ typedef struct LusAstNode {
     struct {
       struct LusAstNode *names; /* name list */
     } enumdef;
+    /* AST_SLICE */
+    struct {
+      struct LusAstNode *table;  /* table/string/vector being sliced */
+      struct LusAstNode *start;  /* start index (or NULL for beginning) */
+      struct LusAstNode *finish; /* end index (or NULL for end) */
+    } slice;
   } u;
 } LusAstNode;
 
