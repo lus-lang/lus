@@ -64,8 +64,9 @@ jobs:
       - name: Install dependencies (Windows)
         if: matrix.runner == 'windows-latest'
         run: |
-          choco install meson openssl -y
-          choco install c-ares --version=1.21.0 -y
+          choco install meson -y
+          vcpkg install openssl:x64-windows c-ares:x64-windows
+          echo "CMAKE_PREFIX_PATH=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -184,8 +185,9 @@ jobs:
       - name: Install dependencies (Windows)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
         run: |
-          choco install meson openssl -y
-          choco install c-ares --version=1.21.0 -y
+          choco install meson -y
+          vcpkg install openssl:x64-windows c-ares:x64-windows
+          echo "CMAKE_PREFIX_PATH=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
 
       - name: Checkout
         if: steps.check.outputs.proceed == 'true'
