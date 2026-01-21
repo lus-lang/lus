@@ -1,0 +1,175 @@
+---
+order: 4
+title: Guide to Lus
+draft: true
+---
+
+## Welcome!
+
+This handy guide will give you a brief rundown on the language. If you manage to make it through, you will be equipped with a good understanding of the language's internals and know everything necessary to write idiomatic Lus code.
+
+> **This guide is a work-in-progress.**
+
+## Variables
+
+Variables in Lus are _dynamically typed_; any variable can hold any type of value at any time. A variable is either _local_ or _global_ depending on how it is declared.
+
+### Scope
+
+Lus is lexically scoped. The scope of a local variable begins at the first statement after its declaration and extends to the end of its enclosing block. A declaration _shadows_ any outer declaration of the same name within its scope:
+
+```lus
+local x = 10
+do
+  local x = x + 1   -- new 'x' initialized from outer 'x'
+  print(x)          --> 11
+  do
+    local x = x + 1
+    print(x)        --> 12
+  end
+  print(x)          --> 11
+end
+print(x)            --> 10 (the outer one)
+```
+
+Note that in `local x = x`, the new `x` is not yet in scope, so the right-hand side refers to the outer variable.
+
+### Global variables
+
+By default, assigning to an undeclared name creates a global variable. All chunks start with an implicit `global *` declaration that allows this behavior. You can also explicitly declare globals:
+
+```lus
+counter = 0         -- implicit global (allowed by default)
+
+global config       -- explicit declaration
+config = {}
+```
+
+Inside an explicit `global` declaration, the implicit `global *` is voided; all variables must be declared, and undeclared names cause an error. This is useful for catching typos and enforcing stricter code:
+
+```lus
+x = 1               -- Ok, global by default
+do
+  global y          -- voids implicit declaration for this block
+  y = 1             -- Ok, y is declared
+  x = 1             -- ERROR: x not declared in this scope
+end
+x = 2               -- Ok, global by default again
+```
+
+### Upvalues
+
+Local variables can be accessed by functions defined within their scope. A local variable used by an inner function is called an _upvalue_. Each execution of a `local` statement creates new variables:
+
+```lus
+local callbacks = {}
+local x = 20
+
+for i = 1, 3 do
+  local y = 0
+  callbacks[i] = function()
+    y = y + 1
+    return x + y
+  end
+end
+```
+
+This creates three closures, each with its own `y` but sharing the same `x`.
+
+## Values
+
+There are ten types of values in Lus: `nil`, `boolean`, `number`, `string`, `table`, `function`, `thread`, `userdata`, `enum`, and `vector`.
+
+### `nil`
+
+Nil values, represented by the universal constant `nil`, represent the _absence_ of a value. When a function returns no values, it will return `nil`; when a variable does not exist, the variable will be equal to `nil`. Nil values are, however, first-class objects like any other value, meaning that you can insert them into tables, pass them as arguments, and use them anywhere else you would use a value.
+
+### `boolean`
+
+Boolean values are your good old `true` and `false`. In conditional contexts, only `nil` and `false` are considered _falsy_; all other values, including `0` and empty strings, are _truthy_.
+
+### `number`
+
+Numbers in Lus are either 64-bit integers or floating point numbers. While they are both represented by the `number` type, their subtype remains accessible through [`math.type`](/manual/api#math.type). The runtime will convert between the two subtypes as needed; there is no generally need to keep track of or otherwise enforce the subtype of a number, unless you have strict arithmetic needs.
+
+### `string`
+
+Strings are immutable sequences of 8-bit characters. The runtime does not enforce any specific encoding; it is up to the user to ensure that strings are encoded in a way that is appropriate for their intended use. To this end, Lus provides the [`utf8`](/manual/api#utf8) library for working with UTF-8 encoded strings, as well as [`string.transcode`](/manual/api#string.transcode) for transcoding strings between different encodings.
+
+While strings can theoretically be used as buffers, the [`vector`](#vector) type is more appropriate (and efficient!) for this purpose.
+
+### `table`
+
+Tables are the primary data structure in Lus. They possess an array component for sequential access and a map component for random access; both are accessed through the same `t[n]` syntax, where the array component will be indexed when `n` is a number and the map component will be indexed when `n` is any other value, except `nil` which is considered an invalid index.
+
+Tables are versatile for their capacity to represent any data structure; they can be used as arrays, sets, maps, trees, and more thanks to the automatic dispatch between the array and map components. Any other functionality can be implemented through _metatables_, which allow you to describe behavior for operations such as indexing, comparison, and arithmetic.
+
+### `function`
+
+Functions are first-class objects in Lus; they can be assigned to variables, passed as arguments, returned from other functions, and even constructed at runtime. Each function is internally composed of two parts, the prototype and the closure; the prototype represents the function's _code_, while the closure represents the function's _context_, which lists the values captured by the function at the time of its instantiation, called _upvalues_.
+
+### `thread`
+
+Threads represent _coroutines_, which are lightweight units of execution that can be paused and resumed. They are useful for the implementation of iterators, generators, and other similar patterns where you need to yield control to another function. The type name `thread` is a bit of a misnomer preserved for backwards compatibility; coroutines are not true operating system threads. [Workers](/manual/guide#workers), however, are and should be used anywhere concurrency is required.
+
+### `userdata`
+
+Userdata are pointers to arbitrary data. Like tables, they can receive a metatable to define their behavior, but cannot otherwise be used or modified in any way. They are generated by programs embedding the Lus runtime and some parts of the standard library. In a pure Lus environment, you will most likely never encounter a userdata value outside of the [`io`](/manual/api#io) library when accessing files.
+
+### `enum`
+
+Enums define a closed set of named constants. Internally, an enum consists of two parts: an _EnumRoot_ that holds the array of names, and individual _Enum_ values that reference both the root and a 1-based index. When you access an enum member like `Color.Red`, Lus looks up the name in the root's array and returns a new Enum value pointing to that index.
+
+Enum values are comparable only within the same root; `Color.Red == Color.Red` is true, but comparing enums from different definitions is always false. This makes enums ideal for representing distinct states or options where type safety matters.
+
+### `vector`
+
+Vectors are resizable byte buffers for working with raw binary data. They let you read and write values of various sizes at specific positions within the buffer, making them useful for file formats, network protocols, and performance-critical code. They are similar to userdata, but userdata are opaque, not resizable, and managed exclusively by the runtime or the embedding program.
+
+## Error handling
+
+Several operations in Lus can raise an error. An error interrupts normal program flow, but the program can recover by catching it.
+
+Use the [`error`](/manual/api#error) function to raise an error explicitly:
+
+```lus
+local function divide(a, b)
+  if b == 0 then
+    error("division by zero")
+  end
+  return a / b
+end
+```
+
+The `catch` expression evaluates a sub-expression and captures any error that occurs. It returns a boolean indicating success and either the result or the error object:
+
+```lus
+local ok, result = catch divide(10, 0)
+if ok then
+  print("Result:", result)
+else
+  print("Error:", result)  --> Error: division by zero
+end
+```
+
+If an error is not caught, it propagates up to the host program, which can handle it appropriately (for example, by printing a message and exiting).
+
+An error object can be any value except `nil`. Lus itself generates string error messages, but your code can use tables or other types for richer error information.
+
+Lus also provides a warning system via [`warn`](/manual/api#warn). Unlike errors, warnings do not interrupt execution; they simply emit a message to the user.
+
+## Internals
+
+### Implementation
+
+Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and ressembles traditional machine code.
+
+The Lus interpreter is a register-based virtual machine where the operands of each instruction either represents a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct; `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on.
+
+### Memory management
+
+Lus implements a mark-and-sweep generational garbage collector that detects and frees any unused memory. Objects allocated by the runtime are tracked by the collector. When memory pressure rises, the collector pauses execution to identify which objects are still reachable from the program's roots and reclaims everything else.
+
+The garbage collector can also operate _generationally_, meaning it can divide objects into generations based on their age. As most objects in programs die young, we can account for their rapid expiration and optimize accordingly. Newly created objects belong to the young generation and are collected frequently; objects that survive multiple collection cycles are promoted to the old generation, which is collected less often. Generational garbage collection is enabled by default.
+
+You rarely need to think about garbage collection in practice. However, if you're working with performance-sensitive code or managing large amounts of data, Lus exposes the [`collectgarbage`](/manual/api#collectgarbage) function to let you interface with the garbage collector.
