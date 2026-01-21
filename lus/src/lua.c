@@ -14,10 +14,17 @@
 
 #include <signal.h>
 
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#else
+#include <windows.h>
+#endif
+
 #include "lua.h"
 
 #include "last.h"
 #include "lauxlib.h"
+#include "lbundle.h"
 #include "lmem.h"
 #include "lparser.h"
 #include "lpledge.h"
@@ -43,6 +50,15 @@ static const char *progname = LUA_PROGNAME;
 static const char *astgraph_output = NULL; /* --ast-graph output file */
 static const char *astjson_output = NULL;  /* --ast-json output file */
 static int pedantic_warnings = 0;          /* -Wpedantic flag */
+
+/* Standalone bundle options */
+static const char *standalone_entry = NULL; /* --standalone entry file */
+#define MAX_INCLUDES 256
+static const char *includes[MAX_INCLUDES]; /* --include files */
+static int num_includes = 0;
+#define MAX_PRESERVED_ARGS 64
+static const char *preserved_args[MAX_PRESERVED_ARGS]; /* --args values */
+static int num_preserved_args = 0;
 
 /*
 ** Worker setup callback - gives workers the same libraries as main state
@@ -113,6 +129,8 @@ static void print_usage(const char *badoption) {
       "  --pledge perm  same as -P\n"
       "  --ast-graph file  dump AST to .dot file (does not run script)\n"
       "  --ast-json file   dump AST to JSON file (does not run script)\n"
+      "  --standalone file create standalone executable from script\n"
+      "  --include path[:alias] include file/dir in standalone bundle\n"
       "  --        stop handling options\n"
       "  -         stop handling options and execute stdin\n",
       progname);
@@ -480,6 +498,584 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   return 1;
 }
 
+/*
+** Writer function for lua_dump to write to a buffer
+*/
+typedef struct {
+  char *buf;
+  size_t size;
+  size_t capacity;
+} DumpBuffer;
+
+static int dump_writer(lua_State *L, const void *p, size_t sz, void *ud) {
+  DumpBuffer *db = (DumpBuffer *)ud;
+  (void)L;
+  if (db->size + sz > db->capacity) {
+    size_t newcap = db->capacity * 2;
+    if (newcap < db->size + sz)
+      newcap = db->size + sz + 1024;
+    char *newbuf = (char *)realloc(db->buf, newcap);
+    if (newbuf == NULL)
+      return 1;
+    db->buf = newbuf;
+    db->capacity = newcap;
+  }
+  memcpy(db->buf + db->size, p, sz);
+  db->size += sz;
+  return 0;
+}
+
+/*
+** Get module name from file path, optionally with alias
+** "foo.lua" -> "foo"
+** "foo.lua:bar" -> "bar"
+** "dir/foo.lua" -> "dir.foo"
+*/
+static void get_module_name(const char *path, char *out, size_t outsize) {
+  const char *colon = strchr(path, ':');
+  if (colon != NULL) {
+    /* Use alias after colon */
+    size_t len = strlen(colon + 1);
+    if (len >= outsize)
+      len = outsize - 1;
+    memcpy(out, colon + 1, len);
+    out[len] = '\0';
+    return;
+  }
+
+  /* Extract basename and remove extension */
+  const char *start = path;
+  const char *p;
+
+  /* Find last component for basename */
+  for (p = path; *p; p++) {
+    if (*p == '/' || *p == '\\')
+      start = p + 1;
+  }
+
+  /* Copy and convert path separators to dots, remove extension */
+  size_t i = 0;
+  for (p = start; *p && i < outsize - 1; p++) {
+    if (*p == '/' || *p == '\\') {
+      out[i++] = '.';
+    } else if (*p == '.' &&
+               (strcmp(p, ".lua") == 0 || strcmp(p, ".lus") == 0)) {
+      break;
+    } else {
+      out[i++] = *p;
+    }
+  }
+  out[i] = '\0';
+}
+
+/*
+** Get file path without alias
+*/
+static const char *get_file_path(const char *path) {
+  const char *colon = strchr(path, ':');
+  if (colon != NULL) {
+    static char buf[4096];
+    size_t len = colon - path;
+    if (len >= sizeof(buf))
+      len = sizeof(buf) - 1;
+    memcpy(buf, path, len);
+    buf[len] = '\0';
+    return buf;
+  }
+  return path;
+}
+
+/*
+** Check if path is a directory
+*/
+static int is_directory(const char *path) {
+#if defined(_WIN32)
+  DWORD attr = GetFileAttributesA(path);
+  return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
+#else
+  struct stat st;
+  return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+#endif
+}
+
+#if !defined(_WIN32)
+#include <dirent.h>
+#endif
+
+/*
+** Add files from a directory to the include list (recursive).
+** Returns number of files added, or -1 on error.
+*/
+static int include_directory(const char *dirpath, const char *prefix,
+                             const char **file_list, int *file_count,
+                             int max_files) {
+  char fullpath[4096];
+  char modprefix[LUSB_MAX_NAME];
+  int added = 0;
+
+#if defined(_WIN32)
+  char search_path[4096];
+  WIN32_FIND_DATA fd;
+  HANDLE hFind;
+
+  snprintf(search_path, sizeof(search_path), "%s\\*", dirpath);
+  hFind = FindFirstFile(search_path, &fd);
+  if (hFind == INVALID_HANDLE_VALUE)
+    return -1;
+
+  do {
+    /* Skip . and .. */
+    if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
+      continue;
+
+    /* Build full path */
+    snprintf(fullpath, sizeof(fullpath), "%s\\%s", dirpath, fd.cFileName);
+
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      /* Recurse into subdirectory */
+      if (prefix[0] != '\0')
+        snprintf(modprefix, sizeof(modprefix), "%s.%s", prefix, fd.cFileName);
+      else
+        snprintf(modprefix, sizeof(modprefix), "%s", fd.cFileName);
+
+      int sub = include_directory(fullpath, modprefix, file_list, file_count,
+                                  max_files);
+      if (sub < 0) {
+        FindClose(hFind);
+        return -1;
+      }
+      added += sub;
+    } else {
+      /* Check if it's a .lua or .lus file */
+      size_t len = strlen(fd.cFileName);
+      if ((len > 4 && strcmp(fd.cFileName + len - 4, ".lua") == 0) ||
+          (len > 4 && strcmp(fd.cFileName + len - 4, ".lus") == 0)) {
+        if (*file_count >= max_files) {
+          FindClose(hFind);
+          return -1;
+        }
+        /* Store as "path:module.name" format */
+        char *entry_str = (char *)malloc(4096);
+        if (entry_str == NULL) {
+          FindClose(hFind);
+          return -1;
+        }
+        /* Build module name: prefix + basename without extension */
+        char modname[LUSB_MAX_NAME];
+        size_t baselen = len - 4;
+        if (prefix[0] != '\0')
+          snprintf(modname, sizeof(modname), "%s.%.*s", prefix, (int)baselen,
+                   fd.cFileName);
+        else
+          snprintf(modname, sizeof(modname), "%.*s", (int)baselen,
+                   fd.cFileName);
+
+        snprintf(entry_str, 4096, "%s:%s", fullpath, modname);
+        file_list[*file_count] = entry_str;
+        (*file_count)++;
+        added++;
+      }
+    }
+  } while (FindNextFile(hFind, &fd));
+  FindClose(hFind);
+
+#else /* POSIX */
+  DIR *dir;
+  struct dirent *entry;
+
+  dir = opendir(dirpath);
+  if (dir == NULL)
+    return -1;
+
+  while ((entry = readdir(dir)) != NULL) {
+    /* Skip . and .. */
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+      continue;
+
+    /* Build full path */
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
+
+    if (is_directory(fullpath)) {
+      /* Recurse into subdirectory */
+      if (prefix[0] != '\0')
+        snprintf(modprefix, sizeof(modprefix), "%s.%s", prefix, entry->d_name);
+      else
+        snprintf(modprefix, sizeof(modprefix), "%s", entry->d_name);
+
+      int sub = include_directory(fullpath, modprefix, file_list, file_count,
+                                  max_files);
+      if (sub < 0) {
+        closedir(dir);
+        return -1;
+      }
+      added += sub;
+    } else {
+      /* Check if it's a .lua or .lus file */
+      size_t len = strlen(entry->d_name);
+      if ((len > 4 && strcmp(entry->d_name + len - 4, ".lua") == 0) ||
+          (len > 4 && strcmp(entry->d_name + len - 4, ".lus") == 0)) {
+        if (*file_count >= max_files) {
+          closedir(dir);
+          return -1;
+        }
+        /* Store as "path:module.name" format */
+        char *entry_str = (char *)malloc(4096);
+        if (entry_str == NULL) {
+          closedir(dir);
+          return -1;
+        }
+        /* Build module name: prefix + basename without extension */
+        char modname[LUSB_MAX_NAME];
+        size_t baselen = len - 4; /* strip .lua or .lus */
+        if (prefix[0] != '\0')
+          snprintf(modname, sizeof(modname), "%s.%.*s", prefix, (int)baselen,
+                   entry->d_name);
+        else
+          snprintf(modname, sizeof(modname), "%.*s", (int)baselen,
+                   entry->d_name);
+
+        snprintf(entry_str, 4096, "%s:%s", fullpath, modname);
+        file_list[*file_count] = entry_str;
+        (*file_count)++;
+        added++;
+      }
+    }
+  }
+
+  closedir(dir);
+#endif
+
+  return added;
+}
+
+/*
+** Create standalone executable with bundled scripts
+*/
+static int create_standalone(lua_State *L) {
+  char exepath[4096];
+  char outpath[4096];
+  FILE *exefile, *outfile;
+  long exesize;
+  char *exedata;
+  DumpBuffer *bytecodes = NULL;
+  const char **names = NULL;
+  size_t *offsets = NULL;
+  size_t *sizes = NULL;
+  int file_count = 0;
+  int file_capacity = 0;
+  size_t total_bytecode_size = 0;
+  unsigned char *index_data;
+  size_t index_size;
+  unsigned char footer[8];
+  const char *entryname = "main";
+  int i;
+
+  /* Get current executable path */
+  if (!lusB_getexepath(exepath, sizeof(exepath))) {
+    l_message(progname, "cannot get executable path");
+    return 0;
+  }
+
+  /* Open current executable for reading */
+  exefile = fopen(exepath, "rb");
+  if (exefile == NULL) {
+    l_message(progname, "cannot open executable");
+    return 0;
+  }
+
+  /* Get executable size */
+  fseek(exefile, 0, SEEK_END);
+  exesize = ftell(exefile);
+  fseek(exefile, 0, SEEK_SET);
+
+  /* Read executable */
+  exedata = (char *)malloc(exesize);
+  if (exedata == NULL) {
+    fclose(exefile);
+    l_message(progname, "out of memory");
+    return 0;
+  }
+  if (fread(exedata, 1, exesize, exefile) != (size_t)exesize) {
+    free(exedata);
+    fclose(exefile);
+    l_message(progname, "cannot read executable");
+    return 0;
+  }
+  fclose(exefile);
+
+  /* Create output filename from entry point */
+  {
+    const char *entry = standalone_entry;
+    const char *base = entry;
+    const char *p, *ext;
+
+    /* Find basename */
+    for (p = entry; *p; p++) {
+      if (*p == '/' || *p == '\\')
+        base = p + 1;
+    }
+
+    /* Find extension */
+    ext = strrchr(base, '.');
+    if (ext == NULL)
+      ext = base + strlen(base);
+
+    /* Build output path */
+    size_t baselen = ext - base;
+    if (baselen >= sizeof(outpath))
+      baselen = sizeof(outpath) - 1;
+    memcpy(outpath, base, baselen);
+#if defined(_WIN32)
+    strcpy(outpath + baselen, ".exe");
+#else
+    outpath[baselen] = '\0';
+#endif
+  }
+
+  /* Compile entry point and all includes */
+  file_capacity = num_includes + 1;
+  bytecodes = (DumpBuffer *)calloc(file_capacity, sizeof(DumpBuffer));
+  names = (const char **)calloc(file_capacity, sizeof(const char *));
+  offsets = (size_t *)calloc(file_capacity, sizeof(size_t));
+  sizes = (size_t *)calloc(file_capacity, sizeof(size_t));
+
+  if (!bytecodes || !names || !offsets || !sizes) {
+    free(exedata);
+    free(bytecodes);
+    free(names);
+    free(offsets);
+    free(sizes);
+    l_message(progname, "out of memory");
+    return 0;
+  }
+
+  /* Compile entry point */
+  {
+    char modname[LUSB_MAX_NAME];
+    get_module_name(standalone_entry, modname, sizeof(modname));
+    entryname = strdup(modname);
+
+    if (luaL_loadfile(L, standalone_entry) != LUA_OK) {
+      l_message(progname, lua_tostring(L, -1));
+      free(exedata);
+      free(bytecodes);
+      free(names);
+      free(offsets);
+      free(sizes);
+      return 0;
+    }
+
+    bytecodes[file_count].buf = NULL;
+    bytecodes[file_count].size = 0;
+    bytecodes[file_count].capacity = 0;
+
+    if (lua_dump(L, dump_writer, &bytecodes[file_count], 1) != 0) {
+      l_message(progname, "cannot dump bytecode");
+      free(exedata);
+      free(bytecodes);
+      free(names);
+      free(offsets);
+      free(sizes);
+      return 0;
+    }
+    lua_pop(L, 1);
+
+    names[file_count] = entryname;
+    offsets[file_count] = total_bytecode_size;
+    sizes[file_count] = bytecodes[file_count].size;
+    total_bytecode_size += bytecodes[file_count].size;
+    file_count++;
+  }
+
+  /* Expand directories and compile includes */
+  {
+    /* Build expanded file list from includes (files + directory contents) */
+    const char *expanded[LUSB_MAX_FILES];
+    int expanded_count = 0;
+
+    for (i = 0; i < num_includes; i++) {
+      const char *filepath = get_file_path(includes[i]);
+
+      if (is_directory(filepath)) {
+        /* Get directory base name for module prefix */
+        const char *dirbase = filepath;
+        const char *p;
+        for (p = filepath; *p; p++) {
+          if (*p == '/' || *p == '\\')
+            dirbase = p + 1;
+        }
+        /* Expand directory recursively */
+        if (include_directory(filepath, dirbase, expanded, &expanded_count,
+                              LUSB_MAX_FILES) < 0) {
+          lua_writestringerror("warning: failed to include directory: %s\n",
+                               filepath);
+        }
+      } else {
+        /* Regular file */
+        if (expanded_count >= LUSB_MAX_FILES) {
+          l_message(progname, "too many include files");
+          for (int j = 0; j < file_count; j++)
+            free(bytecodes[j].buf);
+          free(exedata);
+          free(bytecodes);
+          free(names);
+          free(offsets);
+          free(sizes);
+          return 0;
+        }
+        expanded[expanded_count++] = includes[i];
+      }
+    }
+
+    /* Reallocate arrays if we have more files from directory expansion */
+    if (file_count + expanded_count > file_capacity) {
+      file_capacity = file_count + expanded_count;
+      bytecodes =
+          (DumpBuffer *)realloc(bytecodes, file_capacity * sizeof(DumpBuffer));
+      names =
+          (const char **)realloc(names, file_capacity * sizeof(const char *));
+      offsets = (size_t *)realloc(offsets, file_capacity * sizeof(size_t));
+      sizes = (size_t *)realloc(sizes, file_capacity * sizeof(size_t));
+      if (!bytecodes || !names || !offsets || !sizes) {
+        l_message(progname, "out of memory");
+        return 0;
+      }
+    }
+
+    /* Compile each expanded file */
+    for (i = 0; i < expanded_count; i++) {
+      const char *filepath = get_file_path(expanded[i]);
+      char modname[LUSB_MAX_NAME];
+
+      get_module_name(expanded[i], modname, sizeof(modname));
+
+      if (luaL_loadfile(L, filepath) != LUA_OK) {
+        l_message(progname, lua_tostring(L, -1));
+        /* Clean up */
+        for (int j = 0; j < file_count; j++)
+          free(bytecodes[j].buf);
+        for (int j = 0; j < expanded_count; j++) {
+          /* Free strings allocated by include_directory */
+          if (expanded[j] != includes[j])
+            free((void *)expanded[j]);
+        }
+        free(exedata);
+        free(bytecodes);
+        free(names);
+        free(offsets);
+        free(sizes);
+        return 0;
+      }
+
+      bytecodes[file_count].buf = NULL;
+      bytecodes[file_count].size = 0;
+      bytecodes[file_count].capacity = 0;
+
+      if (lua_dump(L, dump_writer, &bytecodes[file_count], 1) != 0) {
+        l_message(progname, "cannot dump bytecode");
+        for (int j = 0; j < file_count; j++)
+          free(bytecodes[j].buf);
+        for (int j = 0; j < expanded_count; j++) {
+          if (expanded[j] != includes[j])
+            free((void *)expanded[j]);
+        }
+        free(exedata);
+        free(bytecodes);
+        free(names);
+        free(offsets);
+        free(sizes);
+        return 0;
+      }
+      lua_pop(L, 1);
+
+      names[file_count] = strdup(modname);
+      offsets[file_count] = total_bytecode_size;
+      sizes[file_count] = bytecodes[file_count].size;
+      total_bytecode_size += bytecodes[file_count].size;
+      file_count++;
+    }
+
+    /* Free strings allocated by include_directory */
+    for (i = 0; i < expanded_count; i++) {
+      if (expanded[i] != includes[i])
+        free((void *)expanded[i]);
+    }
+  }
+
+  /* Build index with preserved CLI args */
+  index_data = lusB_buildindex(LUSB_VERSION, entryname, num_preserved_args,
+                               (char **)preserved_args, file_count, names,
+                               offsets, sizes, &index_size);
+
+  if (index_data == NULL) {
+    for (i = 0; i < file_count; i++)
+      free(bytecodes[i].buf);
+    free(exedata);
+    free(bytecodes);
+    free(names);
+    free(offsets);
+    free(sizes);
+    l_message(progname, "cannot build index");
+    return 0;
+  }
+
+  /* Write output file */
+  outfile = fopen(outpath, "wb");
+  if (outfile == NULL) {
+    for (i = 0; i < file_count; i++)
+      free(bytecodes[i].buf);
+    free(index_data);
+    free(exedata);
+    free(bytecodes);
+    free(names);
+    free(offsets);
+    free(sizes);
+    l_message(progname, "cannot create output file");
+    return 0;
+  }
+
+  /* Write executable */
+  fwrite(exedata, 1, exesize, outfile);
+
+  /* Write bytecode blobs */
+  for (i = 0; i < file_count; i++) {
+    fwrite(bytecodes[i].buf, 1, bytecodes[i].size, outfile);
+  }
+
+  /* Write index */
+  fwrite(index_data, 1, index_size, outfile);
+
+  /* Write footer: index_size (4 bytes LE) + magic (4 bytes) */
+  footer[0] = (unsigned char)(index_size & 0xFF);
+  footer[1] = (unsigned char)((index_size >> 8) & 0xFF);
+  footer[2] = (unsigned char)((index_size >> 16) & 0xFF);
+  footer[3] = (unsigned char)((index_size >> 24) & 0xFF);
+  memcpy(footer + 4, LUSB_MAGIC, LUSB_MAGIC_SIZE);
+  fwrite(footer, 1, 8, outfile);
+
+  fclose(outfile);
+
+#if !defined(_WIN32)
+  /* Make output executable on Unix */
+  chmod(outpath, 0755);
+#endif
+
+  lua_writestringerror("Created standalone: %s\n", outpath);
+
+  /* Cleanup */
+  for (i = 0; i < file_count; i++) {
+    free(bytecodes[i].buf);
+  }
+  free(index_data);
+  free(exedata);
+  free(bytecodes);
+  free(names);
+  free(offsets);
+  free(sizes);
+
+  return 1;
+}
+
 /* bits of various argument indicators in 'args' */
 #define has_error 1 /* bad option */
 #define has_i 2     /* -i */
@@ -516,6 +1112,11 @@ static int collectargs(char **argv, int *first) {
           i++; /* skip to argument */
           if (argv[i] == NULL || argv[i][0] == '-')
             return has_error; /* no argument */
+          /* Preserve for bundle */
+          if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
+            preserved_args[num_preserved_args++] = "--pledge";
+            preserved_args[num_preserved_args++] = argv[i];
+          }
           break;
         }
         if (strcmp(argv[i] + 2, "ast-graph") == 0) {
@@ -532,6 +1133,24 @@ static int collectargs(char **argv, int *first) {
           astjson_output = argv[i];
           break;
         }
+        if (strcmp(argv[i] + 2, "standalone") == 0) {
+          i++; /* skip to argument */
+          if (argv[i] == NULL || argv[i][0] == '-')
+            return has_error; /* no argument */
+          standalone_entry = argv[i];
+          break;
+        }
+        if (strcmp(argv[i] + 2, "include") == 0) {
+          i++; /* skip to argument */
+          if (argv[i] == NULL || argv[i][0] == '-')
+            return has_error; /* no argument */
+          if (num_includes >= MAX_INCLUDES) {
+            l_message(progname, "too many --include arguments");
+            return has_error;
+          }
+          includes[num_includes++] = argv[i];
+          break;
+        }
         return has_error; /* invalid option */
       }
       /* if there is a script name, it comes after '--' */
@@ -545,10 +1164,16 @@ static int collectargs(char **argv, int *first) {
       args |= has_E;
       break;
     case 'W':
-      if (argv[i][2] == '\0') /* just -W */
+      if (argv[i][2] == '\0') { /* just -W */
+        /* Preserve for bundle */
+        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+          preserved_args[num_preserved_args++] = argv[i];
         break;
-      else if (strcmp(argv[i] + 2, "pedantic") == 0) { /* -Wpedantic */
+      } else if (strcmp(argv[i] + 2, "pedantic") == 0) { /* -Wpedantic */
         pedantic_warnings = 1;
+        /* Preserve for bundle */
+        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+          preserved_args[num_preserved_args++] = argv[i];
         break;
       } else
         return has_error; /* unknown -W option */
@@ -566,6 +1191,15 @@ static int collectargs(char **argv, int *first) {
         i++;                    /* try next 'argv' */
         if (argv[i] == NULL || argv[i][0] == '-')
           return has_error; /* no next argument or it is another option */
+        /* Preserve for bundle (2 args) */
+        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
+          preserved_args[num_preserved_args++] = argv[i - 1];
+          preserved_args[num_preserved_args++] = argv[i];
+        }
+      } else {
+        /* Preserve for bundle (1 concatenated arg) */
+        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+          preserved_args[num_preserved_args++] = argv[i];
       }
       break;
     case 'P':                   /* pledge option */
@@ -573,6 +1207,15 @@ static int collectargs(char **argv, int *first) {
         i++;                    /* try next 'argv' */
         if (argv[i] == NULL || argv[i][0] == '-')
           return has_error; /* no next argument or it is another option */
+        /* Preserve for bundle (2 args) */
+        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
+          preserved_args[num_preserved_args++] = argv[i - 1];
+          preserved_args[num_preserved_args++] = argv[i];
+        }
+      } else {
+        /* Preserve for bundle (1 concatenated arg) */
+        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+          preserved_args[num_preserved_args++] = argv[i];
       }
       break;
     default: /* invalid option */
@@ -594,6 +1237,17 @@ static int runargs(lua_State *L, char **argv, int n) {
     int option = argv[i][1];
     lua_assert(argv[i][0] == '-'); /* already checked */
     switch (option) {
+    case '-': /* long options: --standalone, --include, --pledge, etc. */
+      /* Skip long options that have arguments */
+      if (strcmp(argv[i] + 2, "standalone") == 0 ||
+          strcmp(argv[i] + 2, "include") == 0 ||
+          strcmp(argv[i] + 2, "pledge") == 0 ||
+          strcmp(argv[i] + 2, "ast-graph") == 0 ||
+          strcmp(argv[i] + 2, "ast-json") == 0) {
+        i++; /* skip the argument */
+      }
+      /* else: just '--' by itself or unrecognized - skip it */
+      break;
     case 'e':
     case 'l': {
       int status;
@@ -1036,6 +1690,40 @@ static int pmain(lua_State *L) {
     return 1; /* done - don't run script */
   }
 
+  /* Handle --standalone option */
+  if (standalone_entry != NULL) {
+    if (!create_standalone(L))
+      return 0;
+    lua_pushboolean(L, 1);
+    return 1; /* done - created standalone */
+  }
+
+  /* Handle bundle execution (if running from embedded bundle) */
+  if (g_bundle != NULL) {
+    size_t size;
+    char *bytecode = lusB_getfile(g_bundle, g_bundle->entrypoint, &size);
+    if (bytecode == NULL) {
+      l_message(progname, "cannot find entrypoint in bundle");
+      return 0;
+    }
+    /* Load bytecode */
+    char chunkname[300];
+    snprintf(chunkname, sizeof(chunkname), "=%s", g_bundle->entrypoint);
+    int status = luaL_loadbuffer(L, bytecode, size, chunkname);
+    free(bytecode);
+    if (status != LUA_OK) {
+      report(L, status);
+      return 0;
+    }
+    /* Call entrypoint with script args */
+    int n = pushargs(L);
+    status = docall(L, n, LUA_MULTRET);
+    if (status != LUA_OK)
+      return 0;
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   if (script > 0) { /* execute main script (if there is one) */
     if (handle_script(L, argv + script) != LUA_OK)
       return 0; /* interrupt in case of error */
@@ -1055,18 +1743,66 @@ static int pmain(lua_State *L) {
 
 int main(int argc, char **argv) {
   int status, result;
-  lua_State *L = luaL_newstate(); /* create state */
+  lua_State *L;
+  char **effective_argv = argv;
+  int effective_argc = argc;
+  char **synthetic_argv = NULL;
+
+  /* Check for embedded bundle before anything else */
+  if (lusB_detect()) {
+    g_bundle = lusB_load();
+    if (g_bundle == NULL) {
+      l_message(argv[0], "cannot load embedded bundle");
+      return EXIT_FAILURE;
+    }
+    /*
+    ** Inject preserved args + "--" + entrypoint into argv
+    ** Format: argv[0] + preserved_args + "--" + entrypoint + user_args
+    ** This ensures:
+    ** - preserved args are processed by runargs()
+    ** - "--" stops option parsing
+    ** - entrypoint becomes arg[0] (the "script name")
+    ** - user args become arg[1], arg[2], etc.
+    */
+    effective_argc =
+        argc + g_bundle->num_args + 2; /* +1 for "--", +1 for entrypoint */
+    synthetic_argv = (char **)malloc((effective_argc + 1) * sizeof(char *));
+    if (synthetic_argv == NULL) {
+      l_message(argv[0], "cannot allocate argv");
+      lusB_free(g_bundle);
+      return EXIT_FAILURE;
+    }
+    synthetic_argv[0] = argv[0];
+    for (int i = 0; i < g_bundle->num_args; i++) {
+      synthetic_argv[1 + i] = g_bundle->args[i];
+    }
+    synthetic_argv[1 + g_bundle->num_args] = "--";
+    synthetic_argv[2 + g_bundle->num_args] = argv[0];
+    for (int i = 1; i < argc; i++) {
+      synthetic_argv[g_bundle->num_args + 2 + i] = argv[i];
+    }
+    synthetic_argv[effective_argc] = NULL;
+    effective_argv = synthetic_argv;
+  }
+
+  L = luaL_newstate(); /* create state */
   if (L == NULL) {
     l_message(argv[0], "cannot create state: not enough memory");
+    free(synthetic_argv);
+    if (g_bundle)
+      lusB_free(g_bundle);
     return EXIT_FAILURE;
   }
-  lua_gc(L, LUA_GCSTOP);          /* stop GC while building state */
-  lua_pushcfunction(L, &pmain);   /* to call 'pmain' in protected mode */
-  lua_pushinteger(L, argc);       /* 1st argument */
-  lua_pushlightuserdata(L, argv); /* 2nd argument */
-  status = lua_pcall(L, 2, 1, 0); /* do the call */
-  result = lua_toboolean(L, -1);  /* get result */
+  lua_gc(L, LUA_GCSTOP);              /* stop GC while building state */
+  lua_pushcfunction(L, &pmain);       /* to call 'pmain' in protected mode */
+  lua_pushinteger(L, effective_argc); /* 1st argument */
+  lua_pushlightuserdata(L, effective_argv); /* 2nd argument */
+  status = lua_pcall(L, 2, 1, 0);           /* do the call */
+  result = lua_toboolean(L, -1);            /* get result */
   report(L, status);
   lua_close(L);
+  free(synthetic_argv);
+  if (g_bundle)
+    lusB_free(g_bundle);
   return (result && status == LUA_OK) ? EXIT_SUCCESS : EXIT_FAILURE;
 }

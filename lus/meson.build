@@ -74,6 +74,7 @@ endif
 core_sources = files(
   'src/lapi.c',
   'src/last.c',
+  'src/lbundle.c',
   'src/lcode.c',
   'src/lctype.c',
   'src/ldebug.c',

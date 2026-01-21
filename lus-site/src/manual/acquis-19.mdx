@@ -1,0 +1,97 @@
+---
+order: 119
+title: Acquis 19 - Standalone Binaries
+acquis: true
+draft: true
+---
+
+Lus can bundle scripts and their dependencies into the interpreter executable itself, creating standalone binaries that run without external files.
+
+## Basic Usage
+
+Use `--standalone` to create a standalone executable from a script:
+
+```bash
+lus --standalone app.lus
+```
+
+This creates an executable named `app` (or `app.exe` on Windows) that runs the bundled script when executed.
+
+```bash
+./app
+```
+
+## Including Files
+
+Use `--include` to bundle additional files that can be `require()`d at runtime:
+
+```bash
+lus --standalone app.lus --include lib/utils.lus --include lib/config.lus
+```
+
+The bundled modules are available via their derived module names:
+
+```lua
+-- app.lus
+local utils = require("utils")   -- loads bundled lib/utils.lus
+local config = require("config") -- loads bundled lib/config.lus
+```
+
+### Module Aliases
+
+Use the `:alias` syntax to specify a custom module name:
+
+```bash
+lus --standalone app.lus --include vendor/json.lus:json
+```
+
+```lua
+-- app.lus
+local json = require("json")  -- loads bundled vendor/json.lus
+```
+
+## Including Directories
+
+Entire directories can be included, with files recursively bundled using dot-notation module names:
+
+```bash
+lus --standalone app.lus --include lib
+```
+
+```lua
+-- app.lus
+local http = require("lib.http")      -- loads lib/http.lus
+local utils = require("lib.utils")    -- loads lib/utils.lus
+local sub = require("lib.sub.module") -- loads lib/sub/module.lus
+```
+
+Only `.lus` and `.lua` files are included from directories.
+
+## Module Resolution
+
+When `require()` is called, bundled modules are checked before the filesystem, which take precedence over same-named files in the working directory.
+
+## Preserved Arguments
+
+CLI flags like `-P` and `-W` are automatically preserved in the bundle and applied at runtime:
+
+```bash
+lus --standalone app.lus -Pfs -Pnetwork
+./app  # runs with fs and network permissions
+```
+
+## Runtime Arguments
+
+Arguments passed to the standalone binary are available via the `arg` table and `...`:
+
+```bash
+./app foo bar baz
+```
+
+```lua
+-- app.lus
+print(arg[0])  -- "./app"
+print(arg[1])  -- "foo"
+print(arg[2])  -- "bar"
+print(...)     -- "foo", "bar", "baz"
+```

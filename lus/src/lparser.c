@@ -1449,7 +1449,14 @@ static void suffixedexp(LexState *ls, expdesc *v) {
         fs->freereg = startreg;
         /* Mark as relocatable - dest register will be set when used */
         init_exp(v, VRELOC, pc);
-        /* TODO: AST node for slice */
+        /* Create AST_SLICE node */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *slice = lusA_newnode(ls->ast, AST_SLICE, line);
+          slice->u.slice.table = table_ast;
+          slice->u.slice.start = start.ast;
+          slice->u.slice.finish = end.ast;
+          v->ast = slice;
+        }
       } else {
         /* Normal indexing */
         LusAstNode *key_ast = start.ast;

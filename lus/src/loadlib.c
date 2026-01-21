@@ -20,6 +20,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lbundle.h"
 #include "llimits.h"
 #include "lpledge.h"
 #include "lualib.h"
@@ -572,6 +573,36 @@ static int searcher_preload(lua_State *L) {
   }
 }
 
+/*
+** Bundle searcher - looks for module in embedded bundle (if present)
+*/
+static int searcher_bundle(lua_State *L) {
+  const char *name = luaL_checkstring(L, 1);
+  size_t size;
+  char *bytecode;
+  char chunkname[300];
+
+  if (g_bundle == NULL)
+    return 1; /* no bundle active */
+
+  /* Try to get module from bundle */
+  bytecode = lusB_getfile(g_bundle, name, &size);
+  if (bytecode == NULL)
+    return 1; /* module not in bundle */
+
+  /* Load bytecode */
+  snprintf(chunkname, sizeof(chunkname), "=%s", name);
+  if (luaL_loadbuffer(L, bytecode, size, chunkname) != LUA_OK) {
+    free(bytecode);
+    return luaL_error(L, "error loading '%s' from bundle: %s", name,
+                      lua_tostring(L, -1));
+  }
+  free(bytecode);
+
+  lua_pushliteral(L, ":bundle:");
+  return 2;
+}
+
 static void findloader(lua_State *L, const char *name) {
   int i;
   luaL_Buffer msg; /* to build error message */
@@ -646,8 +677,10 @@ static const luaL_Reg pk_funcs[] = {{"loadlib", ll_loadlib},
 static const luaL_Reg ll_funcs[] = {{"require", ll_require}, {NULL, NULL}};
 
 static void createsearcherstable(lua_State *L) {
-  static const lua_CFunction searchers[] = {searcher_preload, searcher_Lua,
-                                            searcher_C, searcher_Croot, NULL};
+  static const lua_CFunction searchers[] = {
+      searcher_preload, searcher_bundle, /* bundle searcher before file
+                                            searchers */
+      searcher_Lua,     searcher_C,      searcher_Croot, NULL};
   int i;
   /* create 'searchers' table */
   lua_createtable(L, sizeof(searchers) / sizeof(searchers[0]) - 1, 0);

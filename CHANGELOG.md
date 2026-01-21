@@ -4,6 +4,7 @@
 
 **Release date:** TBD
 
+- Added `--standalone` to generate standalone binaries.
 - Added local groups for grouping stack-allocated variables.
 - Added `vector` type and library for buffers.
 - Added slices for strings, tables, and vectors.
