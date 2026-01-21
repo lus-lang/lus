@@ -24,7 +24,6 @@ SOURCES=(
   "$SRC_DIR/lfslib.c"
   "$SRC_DIR/lgc.c"
   "$SRC_DIR/lglob.c"
-  "$SRC_DIR/lbundle.c"
   "$SRC_DIR/linit.c"
   "$SRC_DIR/liolib.c"
   "$SRC_DIR/ljsonlib.c"

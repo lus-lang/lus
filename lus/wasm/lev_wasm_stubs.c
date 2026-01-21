@@ -117,3 +117,14 @@ int luaopen_network(lua_State *L) {
   (void)L;
   return 0; /* Network not available in WASM */
 }
+
+/* Bundle stubs - bundles not supported in WASM */
+#include "lbundle.h"
+LusBundle *g_bundle = NULL;
+
+char *lusB_getfile(LusBundle *bundle, const char *name, size_t *size) {
+  (void)bundle;
+  (void)name;
+  (void)size;
+  return NULL; /* Bundles not supported in WASM */
+}
