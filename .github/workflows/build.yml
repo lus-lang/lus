@@ -37,14 +37,14 @@ jobs:
           - platform: macos-silicon
             runner: macos-14
             suites: "--suite h1 --suite h2 --suite h4"
-          # Windows temporarily disabled
-          # - platform: windows
-          #   runner: windows-latest
-          #   suites: "--suite h1 --suite h2 --suite h3-ci --suite h4"
+          - platform: windows
+            runner: windows-latest
+            suites: "--suite h1 --suite h2 --suite h4"
     outputs:
       linux-glibc: ${{ steps.result.outputs.linux-glibc }}
       linux-musl: ${{ steps.result.outputs.linux-musl }}
       macos-silicon: ${{ steps.result.outputs.macos-silicon }}
+      windows: ${{ steps.result.outputs.windows }}
 
     steps:
       - name: Install dependencies (Alpine)
@@ -60,6 +60,12 @@ jobs:
       - name: Install dependencies (macOS)
         if: matrix.runner == 'macos-14'
         run: brew install meson readline openssl c-ares
+
+      - name: Install dependencies (Windows)
+        if: matrix.runner == 'windows-latest'
+        run: |
+          choco install meson openssl -y
+          choco install c-ares --version=1.21.0 -y
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -138,11 +144,10 @@ jobs:
             runner: macos-14
             artifact: lus-macos
             artifact_path: lus/build/lus
-          # Windows temporarily disabled
-          # - platform: windows
-          #   runner: windows-latest
-          #   artifact: lus-windows
-          #   artifact_path: lus/build/lus.exe
+          - platform: windows
+            runner: windows-latest
+            artifact: lus-windows
+            artifact_path: lus/build/lus.exe
 
     steps:
       - name: Install bash (Alpine)
@@ -175,6 +180,12 @@ jobs:
       - name: Install dependencies (macOS)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'macos-14'
         run: brew install meson readline openssl c-ares
+
+      - name: Install dependencies (Windows)
+        if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
+        run: |
+          choco install meson openssl -y
+          choco install c-ares --version=1.21.0 -y
 
       - name: Checkout
         if: steps.check.outputs.proceed == 'true'
@@ -235,12 +246,13 @@ jobs:
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
 
           # Test results
-          for platform in linux-glibc linux-musl macos-silicon; do
+          for platform in linux-glibc linux-musl macos-silicon windows; do
             result="${{ needs.test.outputs[env.platform] }}"
             case "$platform" in
               linux-glibc) result="${{ needs.test.outputs.linux-glibc }}" ;;
               linux-musl) result="${{ needs.test.outputs.linux-musl }}" ;;
               macos-silicon) result="${{ needs.test.outputs.macos-silicon }}" ;;
+              windows) result="${{ needs.test.outputs.windows }}" ;;
             esac
             if [[ "$result" == "success" ]]; then
               echo "| $platform | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
@@ -345,12 +357,14 @@ jobs:
             echo "⏭️ macos artifact not available"
           fi
 
-          # Windows (temporarily disabled)
-          # if [ -f artifacts/lus-windows/lus.exe ]; then
-          #   cp artifacts/lus-windows/lus.exe release/lus-windows.exe
-          #   echo "✅ windows artifact included"
-          #   count=$((count + 1))
-          # fi
+          # Windows
+          if [ -f artifacts/lus-windows/lus.exe ]; then
+            cp artifacts/lus-windows/lus.exe release/lus-windows.exe
+            echo "✅ windows artifact included"
+            count=$((count + 1))
+          else
+            echo "⏭️ windows artifact not available"
+          fi
 
           # WASM
           if [ -f artifacts/lus-wasm/lus.js ]; then
@@ -384,7 +398,7 @@ jobs:
             --title "Unstable (${SHORT_SHA})" \
             --notes "Automated build from commit ${{ github.sha }}
 
-          **Included platforms:** ${artifact_count}/4 available
+          **Included platforms:** ${artifact_count}/5 available
 
           > ⚠️ This is an unstable pre-release build. Use at your own risk." \
             --prerelease \

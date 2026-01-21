@@ -55,7 +55,7 @@ elif system == 'sunos'
   dl_dep = cc.find_library('dl', required: false)
   lus_deps += dl_dep
 elif system == 'windows'
-  lus_c_args += '-DLUS_PLATFORM_WINDOWS'
+  lus_c_args += ['-DLUS_PLATFORM_WINDOWS', '-DLUA_USE_WINDOWS']
   ws2_dep = cc.find_library('ws2_32', required: true)
   lus_deps += ws2_dep
 else
@@ -64,10 +64,8 @@ else
 endif
 
 # Threading library (for worker support)
-if system != 'windows'
-  thread_dep = dependency('threads', required: true)
-  lus_deps += thread_dep
-endif
+thread_dep = dependency('threads', required: true)
+lus_deps += thread_dep
 
 
 # Core source files
