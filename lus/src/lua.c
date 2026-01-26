@@ -331,15 +331,10 @@ static int handle_astgraph(lua_State *L, const char *fname,
   fseek(f, 0, SEEK_END);
   fsize = ftell(f);
   fseek(f, 0, SEEK_SET);
-  content = (char *)malloc(fsize + 1);
-  if (content == NULL) {
-    fclose(f);
-    l_message(progname, "out of memory");
-    return 0;
-  }
+  content = luaM_newblock(L, fsize + 1);
   if (fread(content, 1, fsize, f) != (size_t)fsize) {
     fclose(f);
-    free(content);
+    luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot read file");
     return 0;
   }
@@ -349,7 +344,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
   /* Parse with AST generation */
   ast = lusA_new(L);
   if (ast == NULL) {
-    free(content);
+    luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot create AST");
     return 0;
   }
@@ -373,7 +368,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
   if (c == LUA_SIGNATURE[0]) {
     lusA_free(L, ast);
     luaZ_freebuffer(L, &buff);
-    free(content);
+    luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot parse binary chunk");
     return 0;
   }
@@ -388,7 +383,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
   luaM_freearray(L, dyd.label.arr, cast_sizet(dyd.label.size));
   lua_pop(L, 1); /* remove closure */
 
-  free(content);
+  luaM_freemem(L, content, fsize + 1);
 
   /* Dump AST to .dot file */
   if (!lusA_tographviz(ast, output)) {
@@ -426,15 +421,10 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   fseek(f, 0, SEEK_END);
   fsize = ftell(f);
   fseek(f, 0, SEEK_SET);
-  content = (char *)malloc(fsize + 1);
-  if (content == NULL) {
-    fclose(f);
-    l_message(progname, "out of memory");
-    return 0;
-  }
+  content = luaM_newblock(L, fsize + 1);
   if (fread(content, 1, fsize, f) != (size_t)fsize) {
     fclose(f);
-    free(content);
+    luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot read file");
     return 0;
   }
@@ -444,7 +434,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   /* Parse with AST generation */
   ast = lusA_new(L);
   if (ast == NULL) {
-    free(content);
+    luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot create AST");
     return 0;
   }
@@ -468,7 +458,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   if (c == LUA_SIGNATURE[0]) {
     lusA_free(L, ast);
     luaZ_freebuffer(L, &buff);
-    free(content);
+    luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot parse binary chunk");
     return 0;
   }
@@ -483,7 +473,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   luaM_freearray(L, dyd.label.arr, cast_sizet(dyd.label.size));
   lua_pop(L, 1); /* remove closure */
 
-  free(content);
+  luaM_freemem(L, content, fsize + 1);
 
   /* Dump AST to JSON file */
   if (!lusA_tojson(ast, output)) {
@@ -509,15 +499,11 @@ typedef struct {
 
 static int dump_writer(lua_State *L, const void *p, size_t sz, void *ud) {
   DumpBuffer *db = (DumpBuffer *)ud;
-  (void)L;
   if (db->size + sz > db->capacity) {
     size_t newcap = db->capacity * 2;
     if (newcap < db->size + sz)
       newcap = db->size + sz + 1024;
-    char *newbuf = (char *)realloc(db->buf, newcap);
-    if (newbuf == NULL)
-      return 1;
-    db->buf = newbuf;
+    db->buf = luaM_reallocvchar(L, db->buf, db->capacity, newcap);
     db->capacity = newcap;
   }
   memcpy(db->buf + db->size, p, sz);
@@ -789,14 +775,9 @@ static int create_standalone(lua_State *L) {
   fseek(exefile, 0, SEEK_SET);
 
   /* Read executable */
-  exedata = (char *)malloc(exesize);
-  if (exedata == NULL) {
-    fclose(exefile);
-    l_message(progname, "out of memory");
-    return 0;
-  }
+  exedata = luaM_newblock(L, (size_t)exesize);
   if (fread(exedata, 1, exesize, exefile) != (size_t)exesize) {
-    free(exedata);
+    luaM_freemem(L, exedata, (size_t)exesize);
     fclose(exefile);
     l_message(progname, "cannot read executable");
     return 0;
@@ -834,20 +815,10 @@ static int create_standalone(lua_State *L) {
 
   /* Compile entry point and all includes */
   file_capacity = num_includes + 1;
-  bytecodes = (DumpBuffer *)calloc(file_capacity, sizeof(DumpBuffer));
-  names = (const char **)calloc(file_capacity, sizeof(const char *));
-  offsets = (size_t *)calloc(file_capacity, sizeof(size_t));
-  sizes = (size_t *)calloc(file_capacity, sizeof(size_t));
-
-  if (!bytecodes || !names || !offsets || !sizes) {
-    free(exedata);
-    free(bytecodes);
-    free(names);
-    free(offsets);
-    free(sizes);
-    l_message(progname, "out of memory");
-    return 0;
-  }
+  bytecodes = luaM_newvector(L, file_capacity, DumpBuffer);
+  names = luaM_newvector(L, file_capacity, const char *);
+  offsets = luaM_newvector(L, file_capacity, size_t);
+  sizes = luaM_newvector(L, file_capacity, size_t);
 
   /* Compile entry point */
   {
@@ -857,11 +828,11 @@ static int create_standalone(lua_State *L) {
 
     if (luaL_loadfile(L, standalone_entry) != LUA_OK) {
       l_message(progname, lua_tostring(L, -1));
-      free(exedata);
-      free(bytecodes);
-      free(names);
-      free(offsets);
-      free(sizes);
+      luaM_freemem(L, exedata, (size_t)exesize);
+      luaM_freearray(L, bytecodes, file_capacity);
+      luaM_freearray(L, names, file_capacity);
+      luaM_freearray(L, offsets, file_capacity);
+      luaM_freearray(L, sizes, file_capacity);
       return 0;
     }
 
@@ -871,11 +842,11 @@ static int create_standalone(lua_State *L) {
 
     if (lua_dump(L, dump_writer, &bytecodes[file_count], 1) != 0) {
       l_message(progname, "cannot dump bytecode");
-      free(exedata);
-      free(bytecodes);
-      free(names);
-      free(offsets);
-      free(sizes);
+      luaM_freemem(L, exedata, (size_t)exesize);
+      luaM_freearray(L, bytecodes, file_capacity);
+      luaM_freearray(L, names, file_capacity);
+      luaM_freearray(L, offsets, file_capacity);
+      luaM_freearray(L, sizes, file_capacity);
       return 0;
     }
     lua_pop(L, 1);
@@ -915,12 +886,12 @@ static int create_standalone(lua_State *L) {
         if (expanded_count >= LUSB_MAX_FILES) {
           l_message(progname, "too many include files");
           for (int j = 0; j < file_count; j++)
-            free(bytecodes[j].buf);
-          free(exedata);
-          free(bytecodes);
-          free(names);
-          free(offsets);
-          free(sizes);
+            luaM_freemem(L, bytecodes[j].buf, bytecodes[j].capacity);
+          luaM_freemem(L, exedata, (size_t)exesize);
+          luaM_freearray(L, bytecodes, file_capacity);
+          luaM_freearray(L, names, file_capacity);
+          luaM_freearray(L, offsets, file_capacity);
+          luaM_freearray(L, sizes, file_capacity);
           return 0;
         }
         expanded[expanded_count++] = includes[i];
@@ -929,17 +900,16 @@ static int create_standalone(lua_State *L) {
 
     /* Reallocate arrays if we have more files from directory expansion */
     if (file_count + expanded_count > file_capacity) {
+      int old_capacity = file_capacity;
       file_capacity = file_count + expanded_count;
-      bytecodes =
-          (DumpBuffer *)realloc(bytecodes, file_capacity * sizeof(DumpBuffer));
-      names =
-          (const char **)realloc(names, file_capacity * sizeof(const char *));
-      offsets = (size_t *)realloc(offsets, file_capacity * sizeof(size_t));
-      sizes = (size_t *)realloc(sizes, file_capacity * sizeof(size_t));
-      if (!bytecodes || !names || !offsets || !sizes) {
-        l_message(progname, "out of memory");
-        return 0;
-      }
+      bytecodes = luaM_reallocvector(L, bytecodes, old_capacity, file_capacity,
+                                     DumpBuffer);
+      names = luaM_reallocvector(L, names, old_capacity, file_capacity,
+                                 const char *);
+      offsets =
+          luaM_reallocvector(L, offsets, old_capacity, file_capacity, size_t);
+      sizes =
+          luaM_reallocvector(L, sizes, old_capacity, file_capacity, size_t);
     }
 
     /* Compile each expanded file */
@@ -953,17 +923,17 @@ static int create_standalone(lua_State *L) {
         l_message(progname, lua_tostring(L, -1));
         /* Clean up */
         for (int j = 0; j < file_count; j++)
-          free(bytecodes[j].buf);
+          luaM_freemem(L, bytecodes[j].buf, bytecodes[j].capacity);
         for (int j = 0; j < expanded_count; j++) {
           /* Free strings allocated by include_directory */
           if (expanded[j] != includes[j])
             free((void *)expanded[j]);
         }
-        free(exedata);
-        free(bytecodes);
-        free(names);
-        free(offsets);
-        free(sizes);
+        luaM_freemem(L, exedata, (size_t)exesize);
+        luaM_freearray(L, bytecodes, file_capacity);
+        luaM_freearray(L, names, file_capacity);
+        luaM_freearray(L, offsets, file_capacity);
+        luaM_freearray(L, sizes, file_capacity);
         return 0;
       }
 
@@ -974,16 +944,16 @@ static int create_standalone(lua_State *L) {
       if (lua_dump(L, dump_writer, &bytecodes[file_count], 1) != 0) {
         l_message(progname, "cannot dump bytecode");
         for (int j = 0; j < file_count; j++)
-          free(bytecodes[j].buf);
+          luaM_freemem(L, bytecodes[j].buf, bytecodes[j].capacity);
         for (int j = 0; j < expanded_count; j++) {
           if (expanded[j] != includes[j])
             free((void *)expanded[j]);
         }
-        free(exedata);
-        free(bytecodes);
-        free(names);
-        free(offsets);
-        free(sizes);
+        luaM_freemem(L, exedata, (size_t)exesize);
+        luaM_freearray(L, bytecodes, file_capacity);
+        luaM_freearray(L, names, file_capacity);
+        luaM_freearray(L, offsets, file_capacity);
+        luaM_freearray(L, sizes, file_capacity);
         return 0;
       }
       lua_pop(L, 1);
@@ -1009,12 +979,12 @@ static int create_standalone(lua_State *L) {
 
   if (index_data == NULL) {
     for (i = 0; i < file_count; i++)
-      free(bytecodes[i].buf);
-    free(exedata);
-    free(bytecodes);
-    free(names);
-    free(offsets);
-    free(sizes);
+      luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
+    luaM_freemem(L, exedata, (size_t)exesize);
+    luaM_freearray(L, bytecodes, file_capacity);
+    luaM_freearray(L, names, file_capacity);
+    luaM_freearray(L, offsets, file_capacity);
+    luaM_freearray(L, sizes, file_capacity);
     l_message(progname, "cannot build index");
     return 0;
   }
@@ -1023,13 +993,13 @@ static int create_standalone(lua_State *L) {
   outfile = fopen(outpath, "wb");
   if (outfile == NULL) {
     for (i = 0; i < file_count; i++)
-      free(bytecodes[i].buf);
-    free(index_data);
-    free(exedata);
-    free(bytecodes);
-    free(names);
-    free(offsets);
-    free(sizes);
+      luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
+    free(index_data); /* allocated by lusB_buildindex (uses malloc) */
+    luaM_freemem(L, exedata, (size_t)exesize);
+    luaM_freearray(L, bytecodes, file_capacity);
+    luaM_freearray(L, names, file_capacity);
+    luaM_freearray(L, offsets, file_capacity);
+    luaM_freearray(L, sizes, file_capacity);
     l_message(progname, "cannot create output file");
     return 0;
   }
@@ -1064,14 +1034,14 @@ static int create_standalone(lua_State *L) {
 
   /* Cleanup */
   for (i = 0; i < file_count; i++) {
-    free(bytecodes[i].buf);
+    luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
   }
-  free(index_data);
-  free(exedata);
-  free(bytecodes);
-  free(names);
-  free(offsets);
-  free(sizes);
+  free(index_data); /* allocated by lusB_buildindex (uses malloc) */
+  luaM_freemem(L, exedata, (size_t)exesize);
+  luaM_freearray(L, bytecodes, file_capacity);
+  luaM_freearray(L, names, file_capacity);
+  luaM_freearray(L, offsets, file_capacity);
+  luaM_freearray(L, sizes, file_capacity);
 
   return 1;
 }

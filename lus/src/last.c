@@ -1155,8 +1155,8 @@ static int check_and_chain_depth(LusAstNode *node) {
 /*
 ** Collect all names referenced in an expression
 */
-static void collect_names(LusAstNode *node, const char ***names, int *count,
-                          int *cap) {
+static void collect_names(lua_State *L, LusAstNode *node, const char ***names,
+                          int *count, int *cap) {
   if (node == NULL)
     return;
 
@@ -1166,11 +1166,7 @@ static void collect_names(LusAstNode *node, const char ***names, int *count,
       /* Add to array */
       if (*count >= *cap) {
         int newcap = (*cap == 0) ? 8 : (*cap * 2);
-        const char **newarr =
-            (const char **)realloc(*names, newcap * sizeof(char *));
-        if (newarr == NULL)
-          return;
-        *names = newarr;
+        *names = luaM_reallocvector(L, *names, *cap, newcap, const char *);
         *cap = newcap;
       }
       (*names)[(*count)++] = name;
@@ -1178,75 +1174,75 @@ static void collect_names(LusAstNode *node, const char ***names, int *count,
   }
 
   /* Recurse into children and type-specific nodes */
-  collect_names(node->child, names, count, cap);
-  collect_names(node->next, names, count, cap);
+  collect_names(L, node->child, names, count, cap);
+  collect_names(L, node->next, names, count, cap);
 
   switch (node->type) {
   case AST_BINOP:
-    collect_names(node->u.binop.left, names, count, cap);
-    collect_names(node->u.binop.right, names, count, cap);
+    collect_names(L, node->u.binop.left, names, count, cap);
+    collect_names(L, node->u.binop.right, names, count, cap);
     break;
   case AST_UNOP:
-    collect_names(node->u.unop.operand, names, count, cap);
+    collect_names(L, node->u.unop.operand, names, count, cap);
     break;
   case AST_FIELD:
   case AST_INDEX:
-    collect_names(node->u.index.table, names, count, cap);
-    collect_names(node->u.index.key, names, count, cap);
+    collect_names(L, node->u.index.table, names, count, cap);
+    collect_names(L, node->u.index.key, names, count, cap);
     break;
   case AST_CALLEXPR:
   case AST_CALLSTAT:
   case AST_METHODCALL:
-    collect_names(node->u.call.func, names, count, cap);
-    collect_names(node->u.call.args, names, count, cap);
+    collect_names(L, node->u.call.func, names, count, cap);
+    collect_names(L, node->u.call.args, names, count, cap);
     break;
   case AST_IF:
-    collect_names(node->u.ifstat.cond, names, count, cap);
-    collect_names(node->u.ifstat.thenpart, names, count, cap);
-    collect_names(node->u.ifstat.elsepart, names, count, cap);
+    collect_names(L, node->u.ifstat.cond, names, count, cap);
+    collect_names(L, node->u.ifstat.thenpart, names, count, cap);
+    collect_names(L, node->u.ifstat.elsepart, names, count, cap);
     break;
   case AST_WHILE:
   case AST_REPEAT:
-    collect_names(node->u.loop.cond, names, count, cap);
-    collect_names(node->u.loop.body, names, count, cap);
+    collect_names(L, node->u.loop.cond, names, count, cap);
+    collect_names(L, node->u.loop.body, names, count, cap);
     break;
   case AST_FORNUM:
-    collect_names(node->u.fornum.var, names, count, cap);
-    collect_names(node->u.fornum.init, names, count, cap);
-    collect_names(node->u.fornum.limit, names, count, cap);
-    collect_names(node->u.fornum.step, names, count, cap);
-    collect_names(node->u.fornum.body, names, count, cap);
+    collect_names(L, node->u.fornum.var, names, count, cap);
+    collect_names(L, node->u.fornum.init, names, count, cap);
+    collect_names(L, node->u.fornum.limit, names, count, cap);
+    collect_names(L, node->u.fornum.step, names, count, cap);
+    collect_names(L, node->u.fornum.body, names, count, cap);
     break;
   case AST_FORGEN:
-    collect_names(node->u.forgen.names, names, count, cap);
-    collect_names(node->u.forgen.explist, names, count, cap);
-    collect_names(node->u.forgen.body, names, count, cap);
+    collect_names(L, node->u.forgen.names, names, count, cap);
+    collect_names(L, node->u.forgen.explist, names, count, cap);
+    collect_names(L, node->u.forgen.body, names, count, cap);
     break;
   case AST_LOCAL:
   case AST_GLOBAL:
-    collect_names(node->u.decl.values, names, count, cap);
+    collect_names(L, node->u.decl.values, names, count, cap);
     break;
   case AST_ASSIGN:
-    collect_names(node->u.assign.lhs, names, count, cap);
-    collect_names(node->u.assign.rhs, names, count, cap);
+    collect_names(L, node->u.assign.lhs, names, count, cap);
+    collect_names(L, node->u.assign.rhs, names, count, cap);
     break;
   case AST_RETURN:
-    collect_names(node->u.ret.values, names, count, cap);
+    collect_names(L, node->u.ret.values, names, count, cap);
     break;
   case AST_CATCHEXPR:
   case AST_CATCHSTAT:
-    collect_names(node->u.catchnode.expr, names, count, cap);
+    collect_names(L, node->u.catchnode.expr, names, count, cap);
     break;
   case AST_OPTCHAIN:
-    collect_names(node->u.optchain.base, names, count, cap);
-    collect_names(node->u.optchain.suffix, names, count, cap);
+    collect_names(L, node->u.optchain.base, names, count, cap);
+    collect_names(L, node->u.optchain.suffix, names, count, cap);
     break;
   case AST_TABLE:
-    collect_names(node->u.table.fields, names, count, cap);
+    collect_names(L, node->u.table.fields, names, count, cap);
     break;
   case AST_TABLEFIELD:
-    collect_names(node->u.field.key, names, count, cap);
-    collect_names(node->u.field.value, names, count, cap);
+    collect_names(L, node->u.field.key, names, count, cap);
+    collect_names(L, node->u.field.value, names, count, cap);
     break;
   default:
     break;
@@ -1268,7 +1264,8 @@ static int name_in_array(const char *name, const char **arr, int count) {
 ** Check if any of the declared names are used after the given statement
 ** (for W3: moveable locals)
 */
-static int names_used_after(LusAstNode *decl_names, LusAstNode *after_stmt) {
+static int names_used_after(lua_State *L, LusAstNode *decl_names,
+                            LusAstNode *after_stmt) {
   if (after_stmt == NULL || after_stmt->next == NULL)
     return 0; /* Nothing after means can move */
 
@@ -1289,7 +1286,7 @@ static int names_used_after(LusAstNode *decl_names, LusAstNode *after_stmt) {
   int used_count = 0, used_cap = 0;
 
   for (LusAstNode *stmt = after_stmt->next; stmt != NULL; stmt = stmt->next) {
-    collect_names(stmt, &used, &used_count, &used_cap);
+    collect_names(L, stmt, &used, &used_count, &used_cap);
   }
 
   /* Check if any declared name is used */
@@ -1299,7 +1296,7 @@ static int names_used_after(LusAstNode *decl_names, LusAstNode *after_stmt) {
       found = 1;
   }
 
-  free(used);
+  luaM_freearray(L, used, used_cap);
   return found;
 }
 
@@ -1330,7 +1327,7 @@ static void analyze_block(AnalyzeState *as, LusAstNode *first_stmt) {
         /* Collect names from condition */
         const char **cond_names = NULL;
         int cond_count = 0, cond_cap = 0;
-        collect_names(cond, &cond_names, &cond_count, &cond_cap);
+        collect_names(as->L, cond, &cond_names, &cond_count, &cond_cap);
 
         /* Check if at least one declared name is in condition */
         int in_cond = 0;
@@ -1342,11 +1339,11 @@ static void analyze_block(AnalyzeState *as, LusAstNode *first_stmt) {
           }
         }
 
-        free(cond_names);
+        luaM_freearray(as->L, cond_names, cond_cap);
 
         if (in_cond) {
           /* Check if names are used after the if/while */
-          if (!names_used_after(names, next_stmt)) {
+          if (!names_used_after(as->L, names, next_stmt)) {
             const char *kind = (next_stmt->type == AST_IF) ? "if" : "while";
             char msg[256];
             snprintf(msg, sizeof(msg),

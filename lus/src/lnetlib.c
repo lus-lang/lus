@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "lauxlib.h"
+#include "lmem.h"
 #include "lpledge.h"
 #include "lua.h"
 #include "lualib.h"
@@ -464,20 +465,21 @@ static int socket_send(lua_State *L) {
 */
 
 /* Helper: ensure socket buffer has capacity for additional bytes */
-static void sock_buffer_ensure(LSocket *sock, size_t additional) {
+static void sock_buffer_ensure(lua_State *L, LSocket *sock, size_t additional) {
   size_t needed = sock->buflen + additional;
   if (needed > sock->bufcap) {
     size_t newcap = sock->bufcap ? sock->bufcap * 2 : 4096;
     while (newcap < needed)
       newcap *= 2;
-    sock->buffer = realloc(sock->buffer, newcap);
+    sock->buffer = luaM_reallocvchar(L, sock->buffer, sock->bufcap, newcap);
     sock->bufcap = newcap;
   }
 }
 
 /* Helper: append data to socket buffer */
-static void sock_buffer_append(LSocket *sock, const char *data, size_t len) {
-  sock_buffer_ensure(sock, len);
+static void sock_buffer_append(lua_State *L, LSocket *sock, const char *data,
+                               size_t len) {
+  sock_buffer_ensure(L, sock, len);
   memcpy(sock->buffer + sock->buflen, data, len);
   sock->buflen += len;
 }
@@ -540,7 +542,7 @@ static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
     }
 
     /* Append received data to buffer */
-    sock_buffer_append(sock, buf, (size_t)got);
+    sock_buffer_append(L, sock, buf, (size_t)got);
   }
 
   sock_buffer_push_and_clear(L, sock);
@@ -624,7 +626,7 @@ static int recv_line(lua_State *L, LSocket *sock) {
     }
 
     /* Append received data to buffer */
-    sock_buffer_append(sock, buf, (size_t)got);
+    sock_buffer_append(L, sock, buf, (size_t)got);
   }
 }
 /* Read until connection closed - synchronous implementation */
@@ -676,7 +678,7 @@ static int recv_all(lua_State *L, LSocket *sock) {
     }
 
     /* Append received data to buffer */
-    sock_buffer_append(sock, buf, (size_t)got);
+    sock_buffer_append(L, sock, buf, (size_t)got);
   }
 }
 
@@ -724,8 +726,9 @@ static int socket_close(lua_State *L) {
       sock->fd = SOCKET_INVALID;
     }
     if (sock->buffer) {
-      free(sock->buffer);
+      luaM_freemem(L, sock->buffer, sock->bufcap);
       sock->buffer = NULL;
+      sock->bufcap = 0;
     }
     sock->closed = 1;
   }
