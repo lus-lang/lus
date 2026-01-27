@@ -351,12 +351,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
 
   /* Initialize parser data structures */
   luaZ_initbuffer(L, &buff);
-  dyd.actvar.arr = NULL;
-  dyd.actvar.size = 0;
-  dyd.gt.arr = NULL;
-  dyd.gt.size = 0;
-  dyd.label.arr = NULL;
-  dyd.label.size = 0;
+  luaY_initdyndata(L, &dyd);
 
   /* Initialize reader */
   reader.s = content;
@@ -368,6 +363,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
   if (c == LUA_SIGNATURE[0]) {
     lusA_free(L, ast);
     luaZ_freebuffer(L, &buff);
+    luaY_freedyndata(&dyd);
     luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot parse binary chunk");
     return 0;
@@ -378,9 +374,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
 
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);
-  luaM_freearray(L, dyd.actvar.arr, cast_sizet(dyd.actvar.size));
-  luaM_freearray(L, dyd.gt.arr, cast_sizet(dyd.gt.size));
-  luaM_freearray(L, dyd.label.arr, cast_sizet(dyd.label.size));
+  luaY_freedyndata(&dyd); /* free arena (all arrays freed with it) */
   lua_pop(L, 1); /* remove closure */
 
   luaM_freemem(L, content, fsize + 1);
@@ -441,12 +435,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
 
   /* Initialize parser data structures */
   luaZ_initbuffer(L, &buff);
-  dyd.actvar.arr = NULL;
-  dyd.actvar.size = 0;
-  dyd.gt.arr = NULL;
-  dyd.gt.size = 0;
-  dyd.label.arr = NULL;
-  dyd.label.size = 0;
+  luaY_initdyndata(L, &dyd);
 
   /* Initialize reader */
   reader.s = content;
@@ -458,6 +447,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   if (c == LUA_SIGNATURE[0]) {
     lusA_free(L, ast);
     luaZ_freebuffer(L, &buff);
+    luaY_freedyndata(&dyd);
     luaM_freemem(L, content, fsize + 1);
     l_message(progname, "cannot parse binary chunk");
     return 0;
@@ -468,9 +458,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
 
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);
-  luaM_freearray(L, dyd.actvar.arr, cast_sizet(dyd.actvar.size));
-  luaM_freearray(L, dyd.gt.arr, cast_sizet(dyd.gt.size));
-  luaM_freearray(L, dyd.label.arr, cast_sizet(dyd.label.size));
+  luaY_freedyndata(&dyd); /* free arena (all arrays freed with it) */
   lua_pop(L, 1); /* remove closure */
 
   luaM_freemem(L, content, fsize + 1);

@@ -36,6 +36,25 @@
 
 #define hasmultret(k) ((k) == VCALL || (k) == VVARARG || (k) == VCATCH)
 
+/*
+** Grow an array using arena allocation (orphan pattern).
+** When the array is full, allocate a new larger array from the arena,
+** copy existing data, and let the old array stay orphaned in the arena.
+*/
+#define growarray_arena(L, arena, arr, nelems, size, t, limit, what) \
+  do { \
+    if ((nelems) >= (size)) { \
+      int newsize = ((size) == 0) ? 4 : (size) * 2; \
+      if (newsize > (limit)) \
+        luaG_runerror(L, "too many " what); \
+      t *newarr = luaA_new_array(arena, newsize, t); \
+      if ((size) > 0) \
+        memcpy(newarr, arr, cast_sizet(size) * sizeof(t)); \
+      (arr) = newarr; \
+      (size) = newsize; \
+    } \
+  } while (0)
+
 /* because all strings are unified by the scanner, the parser
    can use pointer equality for string equality */
 #define eqstr(a, b) ((a) == (b))
@@ -201,8 +220,8 @@ static int new_varkind(LexState *ls, TString *name, lu_byte kind) {
   FuncState *fs = ls->fs;
   Dyndata *dyd = ls->dyd;
   Vardesc *var;
-  luaM_growvector(L, dyd->actvar.arr, dyd->actvar.n + 1, dyd->actvar.size,
-                  Vardesc, SHRT_MAX, "variable declarations");
+  growarray_arena(L, dyd->arena, dyd->actvar.arr, dyd->actvar.n,
+                  dyd->actvar.size, Vardesc, SHRT_MAX, "variable declarations");
   var = &dyd->actvar.arr[dyd->actvar.n++];
   var->vd.kind = kind; /* default */
   var->vd.name = name;
@@ -611,8 +630,8 @@ static Labeldesc *findlabel(LexState *ls, TString *name, int ilb) {
 static int newlabelentry(LexState *ls, Labellist *l, TString *name, int line,
                          int pc) {
   int n = l->n;
-  luaM_growvector(ls->L, l->arr, n, l->size, Labeldesc, SHRT_MAX,
-                  "labels/gotos");
+  growarray_arena(ls->L, ls->dyd->arena, l->arr, n, l->size, Labeldesc,
+                  SHRT_MAX, "labels/gotos");
   l->arr[n].name = name;
   l->arr[n].line = line;
   l->arr[n].nactvar = ls->fs->nactvar;
@@ -2722,25 +2741,35 @@ static GroupField *findgroupfield(GroupDesc *g, TString *name) {
 
 /*
 ** Allocate a new GroupDesc for tracking group metadata.
+** Uses arena allocation for fast cleanup.
 */
 static GroupDesc *newgroup(LexState *ls, TString *name) {
-  lua_State *L = ls->L;
-  GroupDesc *g = luaM_new(L, GroupDesc);
+  Dyndata *dyd = ls->dyd;
+  GroupDesc *g;
+  /* Create arena on first group allocation */
+  if (dyd->arena == NULL)
+    dyd->arena = luaA_new(ls->L, 4096); /* 4KB arena for groups */
+  g = luaA_new_obj(dyd->arena, GroupDesc);
   g->name = name;
   g->fields = NULL;
   g->nfields = 0;
-  g->next = ls->dyd->groups;
-  ls->dyd->groups = g;
+  g->next = dyd->groups;
+  dyd->groups = g;
   return g;
 }
 
 /*
 ** Allocate a new GroupField and add to group.
+** Uses arena allocation for fast cleanup.
 */
 static GroupField *newgroupfield(LexState *ls, GroupDesc *g, TString *name,
                                  lu_byte ridx, lu_byte kind) {
-  lua_State *L = ls->L;
-  GroupField *f = luaM_new(L, GroupField);
+  Dyndata *dyd = ls->dyd;
+  GroupField *f;
+  /* Arena should already exist from newgroup, but create if needed */
+  if (dyd->arena == NULL)
+    dyd->arena = luaA_new(ls->L, 4096);
+  f = luaA_new_obj(dyd->arena, GroupField);
   f->name = name;
   f->ridx = ridx;
   f->kind = kind;

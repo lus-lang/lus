@@ -1108,18 +1108,11 @@ TStatus luaD_protectedparser(lua_State *L, ZIO *z, const char *name,
   p.z = z;
   p.name = name;
   p.mode = mode;
-  p.dyd.actvar.arr = NULL;
-  p.dyd.actvar.size = 0;
-  p.dyd.gt.arr = NULL;
-  p.dyd.gt.size = 0;
-  p.dyd.label.arr = NULL;
-  p.dyd.label.size = 0;
+  luaY_initdyndata(L, &p.dyd);
   luaZ_initbuffer(L, &p.buff);
   status = luaD_pcall(L, f_parser, &p, savestack(L, L->top.p), L->errfunc);
   luaZ_freebuffer(L, &p.buff);
-  luaM_freearray(L, p.dyd.actvar.arr, cast_sizet(p.dyd.actvar.size));
-  luaM_freearray(L, p.dyd.gt.arr, cast_sizet(p.dyd.gt.size));
-  luaM_freearray(L, p.dyd.label.arr, cast_sizet(p.dyd.label.size));
+  luaY_freedyndata(&p.dyd); /* free arena (all arrays freed with it) */
   decnny(L);
   return status;
 }

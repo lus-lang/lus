@@ -8,9 +8,8 @@
 #ifndef lzio_h
 #define lzio_h
 
+#include "larena.h"
 #include "lua.h"
-
-#include "lmem.h"
 
 
 #define EOZ (-1) /* end of stream */
@@ -20,13 +19,25 @@ typedef struct Zio ZIO;
 #define zgetc(z) (((z)->n--) > 0 ? cast_uchar(*(z)->p++) : luaZ_fill(z))
 
 
+/*
+** Mbuffer: Arena-backed resizable buffer for lexer tokens
+** Uses arena allocation for fast reset and cleanup.
+*/
 typedef struct Mbuffer {
-  char *buffer;
-  size_t n;
-  size_t buffsize;
+  char *buffer;      /* current buffer pointer */
+  size_t n;          /* bytes used in buffer */
+  size_t buffsize;   /* current buffer capacity */
+  LuaArena *arena;   /* arena for buffer allocation */
 } Mbuffer;
 
-#define luaZ_initbuffer(L, buff) ((buff)->buffer = NULL, (buff)->buffsize = 0)
+/* Initialize buffer with arena */
+LUAI_FUNC void luaZ_initbuffer(lua_State *L, Mbuffer *buff);
+
+/* Free buffer and its arena */
+LUAI_FUNC void luaZ_freebuffer(lua_State *L, Mbuffer *buff);
+
+/* Resize buffer (allocates from arena) */
+LUAI_FUNC void luaZ_resizebuffer(lua_State *L, Mbuffer *buff, size_t size);
 
 #define luaZ_buffer(buff) ((buff)->buffer)
 #define luaZ_sizebuffer(buff) ((buff)->buffsize)
@@ -34,14 +45,6 @@ typedef struct Mbuffer {
 
 #define luaZ_buffremove(buff, i) ((buff)->n -= cast_sizet(i))
 #define luaZ_resetbuffer(buff) ((buff)->n = 0)
-
-
-#define luaZ_resizebuffer(L, buff, size)                             \
-  ((buff)->buffer =                                                  \
-       luaM_reallocvchar(L, (buff)->buffer, (buff)->buffsize, size), \
-   (buff)->buffsize = size)
-
-#define luaZ_freebuffer(L, buff) luaZ_resizebuffer(L, buff, 0)
 
 
 LUAI_FUNC void luaZ_init(lua_State *L, ZIO *z, lua_Reader reader, void *data);

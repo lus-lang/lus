@@ -21,6 +21,7 @@
 #include "lauxlib.h"
 #include "lgc.h"
 #include "llimits.h"
+#include "lmem.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"

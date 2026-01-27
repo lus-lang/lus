@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "larena.h"
 #include "lauxlib.h"
-#include "lmem.h"
 #include "lpledge.h"
 #include "lua.h"
 #include "lualib.h"
@@ -67,8 +67,10 @@ static void msgqueue_init(MessageQueue *q) {
   q->count = 0;
 }
 
-static void msgqueue_push(MessageQueue *q, char *data, size_t size) {
+static void msgqueue_push(MessageQueue *q, StandaloneArena *arena, char *data,
+                          size_t size) {
   MessageNode *node = (MessageNode *)malloc(sizeof(MessageNode));
+  node->arena = arena;
   node->data = data;
   node->size = size;
   node->next = NULL;
@@ -81,7 +83,8 @@ static void msgqueue_push(MessageQueue *q, char *data, size_t size) {
   q->count++;
 }
 
-static int msgqueue_pop(MessageQueue *q, char **data, size_t *size) {
+static int msgqueue_pop(MessageQueue *q, StandaloneArena **arena, char **data,
+                        size_t *size) {
   MessageNode *node = q->head;
   if (!node)
     return 0;
@@ -89,6 +92,7 @@ static int msgqueue_pop(MessageQueue *q, char **data, size_t *size) {
   if (!q->head)
     q->tail = NULL;
   q->count--;
+  *arena = node->arena;
   *data = node->data;
   *size = node->size;
   free(node);
@@ -96,10 +100,11 @@ static int msgqueue_pop(MessageQueue *q, char **data, size_t *size) {
 }
 
 static void msgqueue_clear(MessageQueue *q) {
+  StandaloneArena *arena;
   char *data;
   size_t size;
-  while (msgqueue_pop(q, &data, &size)) {
-    free(data);
+  while (msgqueue_pop(q, &arena, &data, &size)) {
+    luaA_freestandalone(arena);
   }
 }
 
@@ -119,31 +124,61 @@ static void msgqueue_clear(MessageQueue *q) {
 #define SER_STRING 4
 #define SER_TABLE 5
 
-/* Buffer for serialization */
+/*
+** Buffer for serialization - uses standalone arena for cross-thread safety.
+** Arena provides backing storage; we maintain a contiguous buffer within it.
+*/
 typedef struct {
-  char *data;
-  size_t size;
-  size_t cap;
+  StandaloneArena *arena; /* arena for data storage */
+  char *data;             /* contiguous buffer in arena */
+  size_t size;            /* bytes written */
+  size_t cap;             /* buffer capacity */
 } SerBuffer;
 
+/* Default arena block size for serialization (4KB) */
+#define SERBUF_ARENA_SIZE 4096
+/* Default initial buffer size */
+#define SERBUF_INIT_SIZE 256
+
 static void serbuf_init(SerBuffer *b) {
-  b->data = NULL;
+  b->arena = luaA_newstandalone(SERBUF_ARENA_SIZE);
+  /* Pre-allocate initial buffer from arena */
+  b->data = (char *)luaA_allocstandalone(b->arena, SERBUF_INIT_SIZE);
   b->size = 0;
-  b->cap = 0;
+  b->cap = SERBUF_INIT_SIZE;
 }
 
-static void serbuf_ensure(lua_State *L, SerBuffer *b, size_t need) {
+static void serbuf_free(SerBuffer *b) {
+  if (b->arena != NULL) {
+    luaA_freestandalone(b->arena);
+    b->arena = NULL;
+    b->data = NULL;
+    b->size = 0;
+    b->cap = 0;
+  }
+}
+
+static void serbuf_ensure(SerBuffer *b, size_t need) {
   if (b->size + need > b->cap) {
-    size_t newcap = (b->cap == 0) ? 256 : b->cap * 2;
+    /* Need larger buffer - allocate new one from arena */
+    size_t newcap = b->cap * 2;
     while (newcap < b->size + need)
       newcap *= 2;
-    b->data = luaM_reallocvchar(L, b->data, b->cap, newcap);
+    char *newdata = (char *)luaA_allocstandalone(b->arena, newcap);
+    if (newdata == NULL)
+      return; /* allocation failed */
+    /* Copy existing data to new buffer */
+    if (b->size > 0)
+      memcpy(newdata, b->data, b->size);
+    /* Old buffer stays in arena (will be freed with arena) */
+    b->data = newdata;
     b->cap = newcap;
   }
 }
 
 static void serbuf_write(lua_State *L, SerBuffer *b, const void *p, size_t n) {
-  serbuf_ensure(L, b, n);
+  (void)L;
+  serbuf_ensure(b, n);
   memcpy(b->data + b->size, p, n);
   b->size += n;
 }
@@ -433,13 +468,13 @@ static int worker_lib_message(lua_State *L) {
   SerBuffer buf;
   serbuf_init(&buf);
   if (!serialize_value(L, 1, &buf, 0)) {
-    free(buf.data);
+    serbuf_free(&buf);
     return lua_error(L);
   }
 
-  /* Push to outbox */
+  /* Push to outbox - ownership of arena transfers to message queue */
   lus_mutex_lock(&w->mutex);
-  msgqueue_push(&w->outbox, buf.data, buf.size);
+  msgqueue_push(&w->outbox, buf.arena, buf.data, buf.size);
   lus_cond_signal(&w->outbox_cond);
   ReceiveContext *ctx = w->recv_ctx; /* grab before unlocking */
   lus_mutex_unlock(&w->mutex);
@@ -463,6 +498,7 @@ static int worker_lib_peek(lua_State *L) {
   if (!w)
     return luaL_error(L, "worker.peek called outside worker context");
 
+  StandaloneArena *arena;
   char *data;
   size_t size;
 
@@ -471,16 +507,16 @@ static int worker_lib_peek(lua_State *L) {
     /* Block until message arrives */
     lus_cond_wait(&w->inbox_cond, &w->mutex);
   }
-  msgqueue_pop(&w->inbox, &data, &size);
+  msgqueue_pop(&w->inbox, &arena, &data, &size);
   lus_mutex_unlock(&w->mutex);
 
   /* Deserialize */
   DeserBuffer db = {data, size, 0};
   if (!deserialize_value(L, &db)) {
-    free(data);
+    luaA_freestandalone(arena);
     return luaL_error(L, "failed to deserialize message");
   }
-  free(data);
+  luaA_freestandalone(arena);
   return 1;
 }
 
@@ -523,16 +559,17 @@ static void worker_run(WorkerState *w) {
   /* Deserialize and push initial arguments from inbox */
   int nargs = w->nargs;
   for (int i = 0; i < nargs; i++) {
+    StandaloneArena *arena;
     char *data;
     size_t size;
     lus_mutex_lock(&w->mutex);
-    int got = msgqueue_pop(&w->inbox, &data, &size);
+    int got = msgqueue_pop(&w->inbox, &arena, &data, &size);
     lus_mutex_unlock(&w->mutex);
     if (!got)
       break; /* shouldn't happen if nargs was set correctly */
     DeserBuffer db = {data, size, 0};
     if (!deserialize_value(L, &db)) {
-      free(data);
+      luaA_freestandalone(arena);
       lus_mutex_lock(&w->mutex);
       w->status = LUS_WORKER_ERROR;
       w->error_msg = strdup("failed to deserialize initial argument");
@@ -540,7 +577,7 @@ static void worker_run(WorkerState *w) {
       signal_recv_ctx(w); /* wake multi-worker select */
       return;
     }
-    free(data);
+    luaA_freestandalone(arena);
   }
 
   /* Load and run the script */
@@ -692,11 +729,11 @@ static int lib_create(lua_State *L) {
     serbuf_init(&buf);
     if (!serialize_value(L, i, &buf, 0)) {
       worker_decref(w);
-      free(buf.data);
+      serbuf_free(&buf);
       return lua_error(L);
     }
     lus_mutex_lock(&w->mutex);
-    msgqueue_push(&w->inbox, buf.data, buf.size);
+    msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size);
     lus_mutex_unlock(&w->mutex);
   }
   w->nargs = nargs;
@@ -790,9 +827,10 @@ static int lib_receive(lua_State *L) {
         all_dead = 0;
       }
 
+      StandaloneArena *arena;
       char *data;
       size_t size;
-      if (msgqueue_pop(&w->outbox, &data, &size)) {
+      if (msgqueue_pop(&w->outbox, &arena, &data, &size)) {
         lus_mutex_unlock(&w->mutex);
         /* Deserialize and return */
         DeserBuffer db = {data, size, 0};
@@ -800,7 +838,7 @@ static int lib_receive(lua_State *L) {
         for (int j = 0; j < i; j++)
           lua_pushnil(L);
         if (!deserialize_value(L, &db)) {
-          free(data);
+          luaA_freestandalone(arena);
           /* Cleanup */
           for (int k = 0; k < nworkers; k++) {
             lus_mutex_lock(&workers[k]->mutex);
@@ -812,7 +850,7 @@ static int lib_receive(lua_State *L) {
           free(workers);
           return luaL_error(L, "failed to deserialize message");
         }
-        free(data);
+        luaA_freestandalone(arena);
         /* Push nils for remaining workers */
         for (int j = i + 1; j < nworkers; j++)
           lua_pushnil(L);
@@ -861,13 +899,13 @@ static int lib_send(lua_State *L) {
   SerBuffer buf;
   serbuf_init(&buf);
   if (!serialize_value(L, 2, &buf, 0)) {
-    free(buf.data);
+    serbuf_free(&buf);
     return lua_error(L);
   }
 
-  /* Push to inbox */
+  /* Push to inbox - ownership of arena transfers to message queue */
   lus_mutex_lock(&w->mutex);
-  msgqueue_push(&w->inbox, buf.data, buf.size);
+  msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size);
   lus_cond_signal(&w->inbox_cond);
   lus_mutex_unlock(&w->mutex);
 
@@ -933,28 +971,29 @@ LUA_API int lus_worker_send(lua_State *L, WorkerState *w, int idx) {
   SerBuffer buf;
   serbuf_init(&buf);
   if (!serialize_value(L, idx, &buf, 0)) {
-    free(buf.data);
+    serbuf_free(&buf);
     return 0;
   }
   lus_mutex_lock(&w->mutex);
-  msgqueue_push(&w->inbox, buf.data, buf.size);
+  msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size);
   lus_cond_signal(&w->inbox_cond);
   lus_mutex_unlock(&w->mutex);
   return 1;
 }
 
 LUA_API int lus_worker_receive(lua_State *L, WorkerState *w) {
+  StandaloneArena *arena;
   char *data;
   size_t size;
   lus_mutex_lock(&w->mutex);
-  int got = msgqueue_pop(&w->outbox, &data, &size);
+  int got = msgqueue_pop(&w->outbox, &arena, &data, &size);
   lus_mutex_unlock(&w->mutex);
   if (!got)
     return 0;
 
   DeserBuffer db = {data, size, 0};
   int ok = deserialize_value(L, &db);
-  free(data);
+  luaA_freestandalone(arena);
   return ok;
 }
 

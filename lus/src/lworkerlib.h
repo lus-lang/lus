@@ -6,6 +6,7 @@
 #ifndef lworkerlib_h
 #define lworkerlib_h
 
+#include "larena.h"
 #include "lua.h"
 
 /* Platform-specific threading primitives */
@@ -51,12 +52,13 @@ typedef struct WorkerState WorkerState;
 typedef struct MessageNode MessageNode;
 
 /*
-** Message queue node - holds serialized Lua value
+** Message queue node - holds serialized Lua value in arena
 */
 struct MessageNode {
-  char *data;        /* serialized value buffer */
-  size_t size;       /* buffer size */
-  MessageNode *next; /* linked list */
+  StandaloneArena *arena; /* arena containing serialized data */
+  char *data;             /* pointer into arena (first block data) */
+  size_t size;            /* serialized data size */
+  MessageNode *next;      /* linked list */
 };
 
 /*

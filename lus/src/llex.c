@@ -31,9 +31,12 @@
 #define next(ls) (ls->current = zgetc(ls->z))
 
 
-/* minimum size for string buffer */
+/* minimum size for string buffer
+** Increased from 32 to 256 to reduce early reallocations.
+** Typical identifiers and small strings fit without reallocation.
+*/
 #if !defined(LUA_MINBUFFER)
-#define LUA_MINBUFFER 32
+#define LUA_MINBUFFER 256
 #endif
 
 

@@ -71,6 +71,7 @@ lus_deps += thread_dep
 # Core source files
 core_sources = files(
   'src/lapi.c',
+  'src/larena.c',
   'src/last.c',
   'src/lbundle.c',
   'src/lcode.c',

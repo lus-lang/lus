@@ -7,6 +7,7 @@
 #ifndef last_h
 #define last_h
 
+#include "larena.h"
 #include "lobject.h"
 #include "lua.h"
 
@@ -229,10 +230,11 @@ typedef struct LusAstNode {
 } LusAstNode;
 
 /*
-** AST Container (plain allocation, not GC-managed)
+** AST Container (uses arena allocation for fast alloc/free)
 */
 typedef struct LusAst {
   lua_State *L;         /* lua state for allocations */
+  LuaArena *arena;      /* arena for node allocation */
   LusAstNode *root;     /* root node */
   LusAstNode *curnode;  /* current statement node being built */
   LusAstNode *curblock; /* current block/parent for nested statements */

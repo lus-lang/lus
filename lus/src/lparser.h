@@ -7,6 +7,7 @@
 #ifndef lparser_h
 #define lparser_h
 
+#include "larena.h"
 #include "llimits.h"
 #include "lobject.h"
 #include "lzio.h"
@@ -168,10 +169,41 @@ typedef struct Dyndata {
     int n;
     int size;
   } actvar;
-  Labellist gt;    /* list of pending gotos */
-  Labellist label; /* list of active labels */
-  GroupDesc *groups; /* list of active local groups */
+  Labellist gt;        /* list of pending gotos */
+  Labellist label;     /* list of active labels */
+  GroupDesc *groups;   /* list of active local groups */
+  LuaArena *arena;     /* arena for parser temporaries */
 } Dyndata;
+
+/*
+** Dyndata arena configuration
+*/
+#define DYNDATA_ARENA_SIZE    8192  /* 8KB arena for parser temporaries */
+#define DYNDATA_ACTVAR_INIT   32    /* initial actvar array size */
+#define DYNDATA_LABEL_INIT    8     /* initial label/goto array size */
+
+/*
+** Initialize Dyndata with arena allocation
+*/
+#define luaY_initdyndata(L, dyd) \
+  do { \
+    (dyd)->arena = luaA_new(L, DYNDATA_ARENA_SIZE); \
+    (dyd)->actvar.arr = luaA_new_array((dyd)->arena, DYNDATA_ACTVAR_INIT, Vardesc); \
+    (dyd)->actvar.n = 0; \
+    (dyd)->actvar.size = DYNDATA_ACTVAR_INIT; \
+    (dyd)->gt.arr = luaA_new_array((dyd)->arena, DYNDATA_LABEL_INIT, Labeldesc); \
+    (dyd)->gt.n = 0; \
+    (dyd)->gt.size = DYNDATA_LABEL_INIT; \
+    (dyd)->label.arr = luaA_new_array((dyd)->arena, DYNDATA_LABEL_INIT, Labeldesc); \
+    (dyd)->label.n = 0; \
+    (dyd)->label.size = DYNDATA_LABEL_INIT; \
+    (dyd)->groups = NULL; \
+  } while (0)
+
+/*
+** Free Dyndata (just free the arena - everything else is in it)
+*/
+#define luaY_freedyndata(dyd) luaA_free((dyd)->arena)
 
 /* control of blocks */
 struct BlockCnt; /* defined in lparser.c */

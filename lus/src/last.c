@@ -15,6 +15,7 @@
 
 #include "lua.h"
 
+#include "larena.h"
 #include "last.h"
 #include "lmem.h"
 #include "lobject.h"
@@ -42,154 +43,48 @@ const char *lusA_typename(LusAstType type) {
 }
 
 /*
-** Create a new AST container (uses plain memory, not GC-managed)
+** Create a new AST container (uses arena allocation for fast alloc/free)
 */
 LusAst *lusA_new(lua_State *L) {
   LusAst *ast = luaM_new(L, LusAst);
-  memset(ast, 0, sizeof(LusAst));
   ast->L = L;
+  ast->arena = luaA_newdefault(L);
   ast->root = NULL;
+  ast->curnode = NULL;
+  ast->curblock = NULL;
   ast->nodecount = 0;
   return ast;
 }
 
 /*
-** Free a single node (does not free children)
+** Free a single node (no-op with arena allocation)
+** Kept for API compatibility but does nothing - arena handles all freeing.
 */
 void lusA_freenode(lua_State *L, LusAstNode *node) {
-  if (node == NULL)
-    return;
-  luaM_free(L, node);
-}
-
-/*
-** Recursively free a node and all its descendants
-*/
-static void freenodetree(lua_State *L, LusAstNode *node) {
-  if (node == NULL)
-    return;
-
-  /* Check for already-freed node (double-free protection) */
-  if ((int)node->type < 0) {
-    /* This node was already freed - skip it */
-    return;
-  }
-
-  /* Mark as freed to prevent double-free */
-  node->type = (LusAstType)(-1);
-
-  /* Free siblings first */
-  freenodetree(L, node->next);
-
-  /* Free children */
-  freenodetree(L, node->child);
-
-  /* Free type-specific data */
-  switch (node->type) {
-  case AST_BINOP:
-    freenodetree(L, node->u.binop.left);
-    freenodetree(L, node->u.binop.right);
-    break;
-  case AST_UNOP:
-    freenodetree(L, node->u.unop.operand);
-    break;
-  case AST_FUNCEXPR:
-  case AST_LOCALFUNC:
-  case AST_GLOBALFUNC:
-  case AST_FUNCSTAT:
-    freenodetree(L, node->u.func.params);
-    /* body is in children, not u.func.body */
-    break;
-  case AST_IF:
-    freenodetree(L, node->u.ifstat.cond);
-    /* then/else are in children */
-    break;
-  case AST_WHILE:
-  case AST_REPEAT:
-    freenodetree(L, node->u.loop.cond);
-    /* body is in children */
-    break;
-  case AST_FORNUM:
-    freenodetree(L, node->u.fornum.var);
-    freenodetree(L, node->u.fornum.init);
-    freenodetree(L, node->u.fornum.limit);
-    freenodetree(L, node->u.fornum.step);
-    /* body is in children */
-    break;
-  case AST_FORGEN:
-    freenodetree(L, node->u.forgen.names);
-    freenodetree(L, node->u.forgen.explist);
-    /* body is in children */
-    break;
-  case AST_LOCAL:
-  case AST_GLOBAL:
-    freenodetree(L, node->u.decl.names);
-    freenodetree(L, node->u.decl.values);
-    break;
-  case AST_ASSIGN:
-    freenodetree(L, node->u.assign.lhs);
-    freenodetree(L, node->u.assign.rhs);
-    break;
-  case AST_FIELD:
-  case AST_INDEX:
-    freenodetree(L, node->u.index.table);
-    freenodetree(L, node->u.index.key);
-    break;
-  case AST_CALLEXPR:
-  case AST_CALLSTAT:
-  case AST_METHODCALL:
-    freenodetree(L, node->u.call.func);
-    freenodetree(L, node->u.call.args);
-    break;
-  case AST_TABLE:
-    freenodetree(L, node->u.table.fields);
-    break;
-  case AST_TABLEFIELD:
-    freenodetree(L, node->u.field.key);
-    freenodetree(L, node->u.field.value);
-    break;
-  case AST_RETURN:
-    freenodetree(L, node->u.ret.values);
-    break;
-  case AST_CATCHEXPR:
-  case AST_CATCHSTAT:
-    freenodetree(L, node->u.catchnode.expr);
-    break;
-  case AST_OPTCHAIN:
-    freenodetree(L, node->u.optchain.base);
-    freenodetree(L, node->u.optchain.suffix);
-    break;
-  case AST_ENUM:
-    freenodetree(L, node->u.enumdef.names);
-    break;
-  case AST_SLICE:
-    freenodetree(L, node->u.slice.table);
-    freenodetree(L, node->u.slice.start);
-    freenodetree(L, node->u.slice.finish);
-    break;
-  default:
-    /* No nested nodes to free */
-    break;
-  }
-
-  luaM_free(L, node);
+  (void)L;
+  (void)node;
+  /* Arena handles all node memory - individual frees are no-ops */
 }
 
 /*
 ** Free an AST and all its nodes
+** With arena allocation, this is O(1) - just free the arena
 */
 void lusA_free(lua_State *L, LusAst *ast) {
+  (void)L;
   if (ast == NULL)
     return;
-  freenodetree(L, ast->root);
-  luaM_free(L, ast);
+  /* Free the arena (frees all nodes in one operation) */
+  luaA_free(ast->arena);
+  /* Free the AST container itself */
+  luaM_free(ast->L, ast);
 }
 
 /*
-** Allocate a new node
+** Allocate a new node from the arena
 */
 LusAstNode *lusA_newnode(LusAst *ast, LusAstType type, int line) {
-  LusAstNode *node = luaM_new(ast->L, LusAstNode);
+  LusAstNode *node = luaA_new_obj(ast->arena, LusAstNode);
   memset(node, 0, sizeof(LusAstNode));
   node->type = type;
   node->line = line;

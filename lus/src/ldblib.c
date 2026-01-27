@@ -470,12 +470,7 @@ static int db_parse(lua_State *L) {
 
   /* Initialize parser data structures */
   luaZ_initbuffer(L, &buff);
-  dyd.actvar.arr = NULL;
-  dyd.actvar.size = 0;
-  dyd.gt.arr = NULL;
-  dyd.gt.size = 0;
-  dyd.label.arr = NULL;
-  dyd.label.size = 0;
+  luaY_initdyndata(L, &dyd);
 
   /* Initialize reader from string */
   reader.s = code;
@@ -487,6 +482,7 @@ static int db_parse(lua_State *L) {
   if (c == LUA_SIGNATURE[0]) {
     lusA_free(L, ast);
     luaZ_freebuffer(L, &buff);
+    luaY_freedyndata(&dyd);
     luaL_error(L, "cannot parse binary chunk");
     return 0;
   }
@@ -503,9 +499,7 @@ static int db_parse(lua_State *L) {
 
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);
-  luaM_freearray(L, dyd.actvar.arr, cast_sizet(dyd.actvar.size));
-  luaM_freearray(L, dyd.gt.arr, cast_sizet(dyd.gt.size));
-  luaM_freearray(L, dyd.label.arr, cast_sizet(dyd.label.size));
+  luaY_freedyndata(&dyd); /* free arena (all arrays freed with it) */
 
   /* Pop the closure from stack (we don't need it) */
   lua_pop(L, 1);
