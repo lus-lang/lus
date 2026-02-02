@@ -66,8 +66,7 @@ jobs:
         run: |
           pip install meson ninja
           vcpkg install c-ares:x64-windows
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib\VC\x64\MT" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
 
@@ -194,8 +193,7 @@ jobs:
         run: |
           pip install meson ninja
           vcpkg install c-ares:x64-windows
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib\VC\x64\MT" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
 
