@@ -13,11 +13,11 @@
 - Refactored actions workflow.
 - Various runtime optimizations:
   - Constant-time O(1) string hashing using sparse ARX algorithm.
-  - 4-byte aligned string comparison for faster ordering.
-  - 8-byte aligned string comparison on 64-bit platforms.
+  - Aligned string comparison for faster ordering.
   - Alias-aware table loops for improved compiler optimization.
   - O(1) catch handler lookup via `activeCatch` pointer.
   - Cold path extraction for trap handling and catch error recovery.
+  - Arena-aware allocations where performance can be reliably improved.
 - Fixed race condition in `worker.receive` that could cause lost wakeups.
 - Fixed attribute usage in if-assignments and while-assignments.
 
