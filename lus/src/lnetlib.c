@@ -39,6 +39,7 @@ typedef SSIZE_T ssize_t; /* POSIX type not defined on MSVC */
 #define SOCKET_EINPROGRESS WSAEWOULDBLOCK
 #define SOCKET_EWOULDBLOCK WSAEWOULDBLOCK
 #define sock_close closesocket
+#define SHUT_WR SD_SEND
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
