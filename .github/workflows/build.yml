@@ -65,8 +65,9 @@ jobs:
         if: matrix.runner == 'windows-latest'
         run: |
           pip install meson ninja
+          choco install pkgconfiglite --no-progress
           vcpkg install c-ares:x64-windows
-          echo "CMAKE_PREFIX_PATH=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
 
@@ -81,7 +82,7 @@ jobs:
         run: |
           cd lus
           meson setup build --buildtype=debug
-          meson compile -C build lus:executable
+          meson compile -C build 'lus:executable'
 
       - name: Test
         run: meson test -C lus/build -v --print-errorlogs ${{ matrix.suites }}
@@ -192,8 +193,9 @@ jobs:
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
         run: |
           pip install meson ninja
+          choco install pkgconfiglite --no-progress
           vcpkg install c-ares:x64-windows
-          echo "CMAKE_PREFIX_PATH=C:\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
 
@@ -210,7 +212,7 @@ jobs:
         run: |
           cd lus
           meson setup build --buildtype=release
-          meson compile -C build lus:executable
+          meson compile -C build 'lus:executable'
 
       - name: Upload artifact
         if: steps.check.outputs.proceed == 'true'
@@ -261,7 +263,6 @@ jobs:
 
           # Test results
           for platform in linux-glibc linux-musl macos-silicon windows; do
-            result="${{ needs.test.outputs[env.platform] }}"
             case "$platform" in
               linux-glibc) result="${{ needs.test.outputs.linux-glibc }}" ;;
               linux-musl) result="${{ needs.test.outputs.linux-musl }}" ;;
