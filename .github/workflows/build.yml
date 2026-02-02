@@ -166,7 +166,12 @@ jobs:
         id: check
         shell: bash
         run: |
-          result="${{ needs.test.outputs[matrix.platform] }}"
+          case "${{ matrix.platform }}" in
+            linux-glibc) result="${{ needs.test.outputs.linux-glibc }}" ;;
+            linux-musl) result="${{ needs.test.outputs.linux-musl }}" ;;
+            macos-silicon) result="${{ needs.test.outputs.macos-silicon }}" ;;
+            windows) result="${{ needs.test.outputs.windows }}" ;;
+          esac
           if [[ "$result" == "success" ]]; then
             echo "proceed=true" >> $GITHUB_OUTPUT
             echo "✅ Test for ${{ matrix.platform }} passed, proceeding with build"
