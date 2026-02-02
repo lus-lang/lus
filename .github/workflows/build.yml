@@ -94,6 +94,7 @@ jobs:
       - name: Set result output
         id: result
         if: always()
+        shell: bash
         run: echo "${{ matrix.platform }}=${{ job.status }}" >> $GITHUB_OUTPUT
 
   # Sanitizer build for memory safety validation
