@@ -344,7 +344,7 @@ typedef enum {
 
   OP_VARARGPREP, /* 	(adjust varargs)				*/
 
-  OP_CATCH,    /*	A sBx	begin catch block: if error, jump sBx; status in R[A] */
+  OP_CATCH,    /*	A B C	begin catch: B=handler+1 (0=none); C=offset to error path */
   OP_ENDCATCH, /*	A B C	end catch: R[A]:=true; B=nresults; C=jump offset */
 
   OP_SLICE,    /*	A B C	R[A] := slice(R[B], R[C], R[C+1])		*/

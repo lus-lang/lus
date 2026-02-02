@@ -199,4 +199,221 @@ tests:it("random", function()
     assert(a == b)
 end)
 
+-- ============================================
+-- Edge Case Tests
+-- ============================================
+
+tests:it("integer overflow wraps", function()
+    -- Adding to maxint should wrap
+    local result = maxint + 1
+    assert(result == minint, "maxint + 1 should wrap to minint")
+    
+    -- Subtracting from minint should wrap
+    result = minint - 1
+    assert(result == maxint, "minint - 1 should wrap to maxint")
+end)
+
+tests:it("integer multiplication overflow", function()
+    local big = maxint // 2
+    local result = big * 3
+    -- Should overflow/wrap
+    assert(math.type(result) == "integer")
+end)
+
+tests:it("division edge cases", function()
+    -- Division by zero float
+    assert(1.0 / 0.0 == math.huge)
+    assert(-1.0 / 0.0 == -math.huge)
+    
+    -- Integer division by zero errors
+    local ok1, err1 = catch (function() return 1 // 0 end)()
+    assert(not ok1, "integer division by zero should error")
+    
+    local ok2, err2 = catch (function() return 1 % 0 end)()
+    assert(not ok2, "modulo by zero should error")
+end)
+
+tests:it("NaN propagation", function()
+    local nan = 0/0
+    
+    -- NaN in arithmetic produces NaN
+    assert(isNaN(nan + 1))
+    assert(isNaN(nan - 1))
+    assert(isNaN(nan * 2))
+    assert(isNaN(nan / 2))
+    assert(isNaN(nan ^ 2))
+    assert(isNaN(-nan))
+    
+    -- NaN in math functions
+    assert(isNaN(math.sin(nan)))
+    assert(isNaN(math.cos(nan)))
+    assert(isNaN(math.sqrt(nan)))
+    assert(isNaN(math.log(nan)))
+    assert(isNaN(math.floor(nan)))
+    assert(isNaN(math.ceil(nan)))
+end)
+
+tests:it("infinity arithmetic", function()
+    local inf = math.huge
+    local ninf = -math.huge
+    
+    assert(inf + 1 == inf)
+    assert(inf - 1 == inf)
+    assert(inf * 2 == inf)
+    assert(inf * -1 == ninf)
+    assert(ninf + ninf == ninf)
+    
+    -- inf - inf is NaN
+    assert(isNaN(inf - inf))
+    assert(isNaN(inf + ninf))
+    
+    -- inf * 0 is NaN
+    assert(isNaN(inf * 0))
+end)
+
+tests:it("infinity comparisons", function()
+    local inf = math.huge
+    assert(inf > maxint)
+    assert(inf > 1e308)
+    assert(-inf < minint)
+    assert(inf == inf)
+    assert(-inf == -inf)
+    assert(inf ~= -inf)
+end)
+
+tests:it("math.abs edge cases", function()
+    assert(math.abs(0) == 0)
+    assert(math.abs(-0.0) == 0)
+    assert(math.abs(minint) == minint)  -- minint has no positive equivalent
+    assert(math.abs(math.huge) == math.huge)
+    assert(math.abs(-math.huge) == math.huge)
+    assert(isNaN(math.abs(0/0)))
+end)
+
+tests:it("math.floor and ceil with large numbers", function()
+    assert(math.floor(1e15) == 1e15)
+    assert(math.ceil(1e15) == 1e15)
+    assert(math.floor(1e15 + 0.5) == 1e15)
+    assert(math.ceil(1e15 + 0.5) == 1e15 + 1)
+    
+    -- With infinity
+    assert(math.floor(math.huge) == math.huge)
+    assert(math.ceil(-math.huge) == -math.huge)
+end)
+
+tests:it("math.min and max edge cases", function()
+    -- Single argument
+    assert(math.min(5) == 5)
+    assert(math.max(5) == 5)
+    
+    -- With infinity
+    assert(math.min(1, 2, math.huge) == 1)
+    assert(math.max(1, 2, -math.huge) == 2)
+    
+    -- NaN comparison
+    local nan = 0/0
+    -- min/max with NaN should return NaN
+    assert(isNaN(math.min(nan, 1)))
+    assert(isNaN(math.max(nan, 1)))
+end)
+
+tests:it("math.sqrt edge cases", function()
+    assert(math.sqrt(0) == 0)
+    assert(math.sqrt(1) == 1)
+    assert(math.sqrt(math.huge) == math.huge)
+    
+    -- sqrt of negative is NaN
+    assert(isNaN(math.sqrt(-1)))
+    assert(isNaN(math.sqrt(-math.huge)))
+end)
+
+tests:it("math.log edge cases", function()
+    assert(math.log(1) == 0)
+    assert(math.log(math.exp(1)) == 1)
+    assert(math.log(math.huge) == math.huge)
+    
+    -- log of negative is NaN
+    assert(isNaN(math.log(-1)))
+    
+    -- log of 0 is -inf
+    assert(math.log(0) == -math.huge)
+    
+    -- log with base
+    assert(eq(math.log(8, 2), 3))
+    assert(eq(math.log(1000, 10), 3))
+end)
+
+tests:it("math.exp edge cases", function()
+    assert(math.exp(0) == 1)
+    assert(math.exp(math.huge) == math.huge)
+    assert(math.exp(-math.huge) == 0)
+    assert(isNaN(math.exp(0/0)))
+end)
+
+tests:it("math.atan with two arguments", function()
+    assert(eq(math.atan(0, 1), 0))
+    assert(eq(math.atan(1, 0), math.pi / 2))
+    assert(eq(math.atan(-1, 0), -math.pi / 2))
+    assert(eq(math.atan(0, -1), math.pi))
+end)
+
+tests:it("math.random range validation", function()
+    -- Random with range
+    for i = 1, 100 do
+        local r = math.random(5, 10)
+        assert(r >= 5 and r <= 10)
+    end
+    
+    -- Single bound
+    for i = 1, 100 do
+        local r = math.random(100)
+        assert(r >= 1 and r <= 100)
+    end
+end)
+
+tests:it("math.fmod edge cases", function()
+    assert(math.fmod(5, 3) == 2)
+    assert(math.fmod(-5, 3) == -2)
+    assert(math.fmod(5, -3) == 2)
+    assert(math.fmod(-5, -3) == -2)
+    
+    -- With float
+    assert(eq(math.fmod(5.5, 2), 1.5))
+    
+    -- Large values
+    assert(math.fmod(maxint, 3) == maxint % 3)
+end)
+
+tests:it("integer to float conversion at boundaries", function()
+    -- When integer is exactly representable as float
+    local n = 2^50  -- well within double precision range
+    local as_float = n + 0.0
+    assert(math.type(as_float) == "float")
+    
+    -- Basic conversion works
+    assert(math.type(123) == "integer")
+    assert(math.type(123.0) == "float")
+    assert(math.type(123 + 0.0) == "float")
+end)
+
+tests:it("bitwise operations at boundaries", function()
+    -- Basic bitwise not
+    assert(~0 == -1)
+    
+    -- Shift right
+    assert(maxint >> 1 == maxint // 2)
+    
+    -- Bitwise operations preserve type
+    assert(math.type(maxint & maxint) == "integer")
+    assert(math.type(maxint | 0) == "integer")
+    assert(math.type(~0) == "integer")
+end)
+
+tests:it("ult (unsigned less than)", function()
+    assert(math.ult(0, 1))
+    assert(not math.ult(1, 0))
+    assert(math.ult(-1, 0) == false)  -- -1 as unsigned is maxuint
+    assert(math.ult(0, -1))  -- 0 < maxuint
+end)
+
 tests:finish()

@@ -1037,7 +1037,8 @@ static void GCTM(lua_State *L) {
     setobj2s(L, L->top.p++, tm);   /* push finalizer... */
     setobj2s(L, L->top.p++, &v);   /* ... and its argument */
     L->ci->callstatus |= CIST_FIN; /* will run a finalizer */
-    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 2), 0);
+    /* Use luaD_catchcall which disables Lua catch blocks */
+    status = luaD_catchcall(L, dothecall, NULL);
     L->ci->callstatus &= ~CIST_FIN;     /* not running a finalizer anymore */
     L->allowhook = oldah;               /* restore hooks */
     g->gcstp = oldgcstp;                /* restore state */

@@ -254,4 +254,184 @@ tests:it("string.packsize", function()
   assert(string.packsize("xxx") == 3)
 end)
 
+-- ============================================
+-- Edge Case Tests
+-- ============================================
+
+tests:it("empty string operations", function()
+    local s = ""
+    assert(string.len(s) == 0)
+    assert(string.sub(s, 1, 10) == "")
+    assert(string.reverse(s) == "")
+    assert(string.upper(s) == "")
+    assert(string.lower(s) == "")
+    assert(string.rep(s, 100) == "")
+    assert(string.find(s, "") == 1)
+    assert(string.match(s, ".*") == "")
+end)
+
+tests:it("empty string concatenation", function()
+    assert("" .. "" == "")
+    assert("a" .. "" == "a")
+    assert("" .. "b" == "b")
+    assert("" .. "" .. "" == "")
+end)
+
+tests:it("large string creation with rep", function()
+    local s = string.rep("x", 100000)
+    assert(#s == 100000)
+    assert(string.sub(s, 1, 5) == "xxxxx")
+    assert(string.sub(s, -5) == "xxxxx")
+end)
+
+tests:it("string.sub edge cases", function()
+    local s = "hello"
+    -- Beyond string bounds
+    assert(string.sub(s, 100) == "")
+    assert(string.sub(s, 1, 100) == "hello")
+    assert(string.sub(s, -100) == "hello")
+    assert(string.sub(s, -100, 100) == "hello")
+    -- Zero index
+    assert(string.sub(s, 0) == "hello")
+    assert(string.sub(s, 0, 0) == "")
+    -- Reversed indices
+    assert(string.sub(s, 5, 1) == "")
+end)
+
+tests:it("string.find with special pattern chars", function()
+    local s = "hello.world"
+    -- Find literal dot
+    assert(string.find(s, ".", 1, true) == 6)
+    -- Find pattern dot (matches any char)
+    assert(string.find(s, ".") == 1)
+    
+    -- Special pattern characters
+    local special = "a+b*c?d"
+    assert(string.find(special, "+", 1, true) == 2)
+    assert(string.find(special, "*", 1, true) == 4)
+    assert(string.find(special, "?", 1, true) == 6)
+end)
+
+tests:it("string.gsub with empty pattern", function()
+    local s = "hello"
+    -- Empty match inserts between each char
+    local r, n = string.gsub(s, "", "-")
+    assert(r == "-h-e-l-l-o-")
+    assert(n == 6)
+end)
+
+tests:it("string.gsub replacement count limit", function()
+    local s = "aaaa"
+    local r, n = string.gsub(s, "a", "b", 2)
+    assert(r == "bbaa")
+    assert(n == 2)
+end)
+
+tests:it("string.byte edge cases", function()
+    local s = "abc"
+    -- No indices returns first byte
+    assert(string.byte(s) == 97)
+    -- Beyond string bounds
+    assert(string.byte(s, 10) == nil)
+    -- Negative index
+    assert(string.byte(s, -1) == 99)
+    -- Multiple bytes beyond end
+    local a, b, c, d = string.byte(s, 1, 5)
+    assert(a == 97 and b == 98 and c == 99 and d == nil)
+end)
+
+tests:it("string.char edge cases", function()
+    assert(string.char() == "")
+    assert(string.char(0) == "\0")
+    assert(string.char(255) == "\255")
+end)
+
+tests:it("string.format edge cases", function()
+    -- %s with non-string
+    assert(string.format("%s", 123) == "123")
+    assert(string.format("%s", true) == "true")
+    assert(string.format("%s", nil) == "nil")
+    
+    -- Width and precision
+    assert(string.format("%10s", "hi") == "        hi")
+    assert(string.format("%-10s", "hi") == "hi        ")
+    assert(string.format("%.3s", "hello") == "hel")
+    
+    -- Integer formats
+    assert(string.format("%05d", 42) == "00042")
+    assert(string.format("%+d", 42) == "+42")
+    assert(string.format("% d", 42) == " 42")
+end)
+
+tests:it("string.format error cases", function()
+    -- Missing argument
+    checkerror("no value", string.format, "%d")
+end)
+
+tests:it("string.pack error cases", function()
+    -- Invalid format
+    checkerror("invalid format", string.pack, "%")
+    
+    -- Value out of range for format
+    checkerror("overflow", string.pack, "b", 200)  -- signed byte max is 127
+end)
+
+tests:it("string.unpack error cases", function()
+    -- Not enough data
+    checkerror("data string too short", string.unpack, "i4", "ab")
+    
+    -- Invalid format
+    checkerror("invalid format", string.unpack, "%", "test")
+end)
+
+tests:it("string with embedded nulls", function()
+    local s = "hello\0world"
+    assert(#s == 11)
+    assert(string.byte(s, 6) == 0)
+    assert(string.sub(s, 7) == "world")
+    assert(string.find(s, "\0") == 6)
+end)
+
+tests:it("string.match captures", function()
+    -- Multiple captures
+    local a, b, c = string.match("hello world test", "(%w+) (%w+) (%w+)")
+    assert(a == "hello" and b == "world" and c == "test")
+    
+    -- No captures returns whole match
+    assert(string.match("hello", "l+") == "ll")
+    
+    -- Position capture
+    local pos = string.match("hello", "()l")
+    assert(pos == 3)
+end)
+
+tests:it("string.gmatch iteration", function()
+    local count = 0
+    local words = {}
+    for w in string.gmatch("hello world test", "%w+") do
+        count = count + 1
+        words[count] = w
+    end
+    assert(count == 3)
+    assert(words[1] == "hello" and words[2] == "world" and words[3] == "test")
+end)
+
+tests:it("string.gmatch with captures", function()
+    local pairs_t = {}
+    for k, v in string.gmatch("a=1,b=2,c=3", "(%w+)=(%w+)") do
+        pairs_t[k] = v
+    end
+    assert(pairs_t.a == "1" and pairs_t.b == "2" and pairs_t.c == "3")
+end)
+
+tests:it("very long string concatenation", function()
+    local parts = {}
+    for i = 1, 1000 do
+        parts[i] = tostring(i)
+    end
+    local s = table.concat(parts)
+    assert(#s > 0)
+    assert(string.sub(s, 1, 1) == "1")
+end)
+
 tests:finish()

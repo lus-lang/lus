@@ -1727,19 +1727,43 @@ static UnOpr getunopr(int op) {
 */
 static void catchexpr(LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int base = fs->freereg; /* base register for result */
+  int base = fs->freereg; /* base register for result - MUST be set BEFORE handler */
   int catchpc;
   int endcatchpc;
   int line = ls->linenumber;
   expdesc innerexp;
+  int handler_reg = 0;  /* 0 means no handler (B field value) */
 
   luaX_next(ls); /* skip 'catch' */
 
-  /* Reserve register for status (results will go in next registers) */
+  /* Reserve 1 register for status FIRST - this establishes the result base.
+  ** This ensures the catch results start at the expected register regardless
+  ** of whether a handler is present. */
   luaK_reserveregs(fs, 1);
+  /* Now freereg = base + 1 */
 
-  /* Emit OP_CATCH with placeholder offset - this sets up the try block */
-  catchpc = luaK_codeABx(fs, OP_CATCH, base, 0);
+  /* Check for optional error handler: catch[handler] expr */
+  if (testnext(ls, '[')) {
+    expdesc handler;
+    /* Evaluate handler AFTER reserving status slot.
+    ** Handler goes at freereg (base+1 or higher), which will be overwritten
+    ** by inner expression results on success - but that's OK because handler
+    ** is only needed on error, and we copy it to a safe location at runtime. */
+    expr(ls, &handler);
+    luaK_exp2nextreg(fs, &handler);
+    /* Handler is now at fs->freereg - 1.
+    ** Store (register + 1) in handler_reg, so 0 means no handler. */
+    handler_reg = fs->freereg;  /* This is handler_register + 1 */
+    checknext(ls, ']');
+  }
+
+  /* Emit OP_CATCH: A=base (status reg), B=handler_reg (0=none), C=offset */
+  catchpc = luaK_codeABC(fs, OP_CATCH, base, handler_reg, 0);
+
+  /* Reset freereg to base+1 so inner expression results go right after status.
+  ** This may "forget" the handler's register, but the VM will copy the handler
+  ** to a safe location before evaluating the inner expression. */
+  fs->freereg = cast_byte(base + 1);
 
   /* Parse the expression, results go starting at base+1 */
   expr(ls, &innerexp);
@@ -1760,10 +1784,12 @@ static void catchexpr(LexState *ls, expdesc *v) {
    ** The B field (nresults) will be updated by luaK_setreturns if needed. */
   endcatchpc = luaK_codeABC(fs, OP_ENDCATCH, base, 2, 0);
 
-  /* Fix the OP_CATCH to jump to error path (current position) */
+  /* Fix the OP_CATCH's C field (offset to error path) */
   {
     int offset = fs->pc - (catchpc + 1);
-    SETARG_sBx(fs->f->code[catchpc], offset);
+    if (offset > MAXARG_C)
+      luaX_syntaxerror(ls, "catch expression too large (max 255 instructions)");
+    SETARG_C(fs->f->code[catchpc], offset);
   }
 
   /* Error path is empty in bytecode - VM sets R[A] = false and R[A+1] = error
@@ -1791,17 +1817,36 @@ static void catchexpr(LexState *ls, expdesc *v) {
 
 static void catchstat(LexState *ls, int line) {
   FuncState *fs = ls->fs;
-  int base = fs->freereg; /* base register for result */
+  int base = fs->freereg; /* base register for result - MUST be set BEFORE handler */
   int catchpc;
   expdesc innerexp;
+  int handler_reg = 0;  /* 0 means no handler (B field value) */
 
   luaX_next(ls); /* skip 'catch' */
 
-  /* Reserve register for status (results will go in next registers) */
+  /* Reserve 1 register for status FIRST - this establishes the result base. */
   luaK_reserveregs(fs, 1);
+  /* Now freereg = base + 1 */
 
-  /* Emit OP_CATCH with placeholder offset - this sets up the try block */
-  catchpc = luaK_codeABx(fs, OP_CATCH, base, 0);
+  /* Check for optional error handler: catch[handler] expr */
+  if (testnext(ls, '[')) {
+    expdesc handler;
+    /* Evaluate handler AFTER reserving status slot.
+    ** Handler goes at freereg (base+1 or higher). */
+    expr(ls, &handler);
+    luaK_exp2nextreg(fs, &handler);
+    /* Handler is now at fs->freereg - 1.
+    ** Store (register + 1) in handler_reg, so 0 means no handler. */
+    handler_reg = fs->freereg;  /* This is handler_register + 1 */
+    checknext(ls, ']');
+  }
+
+  /* Emit OP_CATCH: A=base (status reg), B=handler_reg (0=none), C=offset */
+  catchpc = luaK_codeABC(fs, OP_CATCH, base, handler_reg, 0);
+
+  /* Reset freereg to base+1 so inner expression results go right after status.
+  ** The VM will copy the handler to a safe location before evaluating inner expr. */
+  fs->freereg = cast_byte(base + 1);
 
   /* Parse the expression, results go starting at base+1 */
   expr(ls, &innerexp);
@@ -1818,10 +1863,12 @@ static void catchstat(LexState *ls, int line) {
   /* Emit OP_ENDCATCH: A=base, B=1 (0 results), C=jump offset (placeholder) */
   luaK_codeABC(fs, OP_ENDCATCH, base, 1, 0);
 
-  /* Fix the OP_CATCH to jump to error path (current position) */
+  /* Fix the OP_CATCH's C field (offset to error path) */
   {
     int offset = fs->pc - (catchpc + 1);
-    SETARG_sBx(fs->f->code[catchpc], offset);
+    if (offset > MAXARG_C)
+      luaX_syntaxerror(ls, "catch expression too large (max 255 instructions)");
+    SETARG_C(fs->f->code[catchpc], offset);
   }
 
   /* Reset freereg - catch statement discards all results */

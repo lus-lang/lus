@@ -18,6 +18,7 @@
 
 #include "lua.h"
 
+#include "lapi.h"
 #include "lauxlib.h"
 #include "lgc.h"
 #include "llimits.h"
@@ -93,6 +94,7 @@ static void parse_literal(JsonParser *p, const char *lit, int len) {
 /* Container frame for iterative parsing with direct object manipulation */
 typedef struct {
   Table *table;    /* Container table (direct pointer) */
+  int anchor_idx;  /* Index in anchor table where this container is stored */
   int is_array;    /* 1 = array, 0 = object */
   lua_Integer idx; /* For arrays: next index */
   TString *key;    /* For objects: current key (NULL if none) */
@@ -107,6 +109,12 @@ static void parse_value_iterative(JsonParser *p) {
   ContainerFrame *stack = luaM_newvector(L, stack_cap, ContainerFrame);
   size_t stack_size = 0;
   int depth = 0;
+
+  /* Create an anchor table on Lua stack to protect objects from GC.
+   * We store all in-progress containers and their keys here. */
+  lua_newtable(L);
+  int anchor_idx = lua_gettop(L);
+  int next_anchor = 1;  /* Next index in anchor table */
 
   /* Current parsed value */
   TValue value;
@@ -339,13 +347,20 @@ static void parse_value_iterative(JsonParser *p) {
     }
     case '[':
       if (++depth > JSON_MAX_DEPTH) {
+        lua_pop(L, 1); /* pop anchor table */
         luaM_freearray(L, stack, stack_cap);
         json_error(p, "maximum nesting depth exceeded");
       }
       p->json++;
       skip_whitespace(p);
       {
-        Table *t = luaH_new(L);
+        /* Create table using public API to ensure GC safety */
+        lua_newtable(L);
+        Table *t = hvalue(s2v(L->top.p - 1));
+        /* Store in anchor table to keep it alive */
+        lua_rawseti(L, anchor_idx, next_anchor);
+        int my_anchor = next_anchor++;
+
         if (peek(p) == ']') {
           p->json++; /* empty array */
           depth--;
@@ -359,6 +374,7 @@ static void parse_value_iterative(JsonParser *p) {
             stack_cap = newcap;
           }
           stack[stack_size].table = t;
+          stack[stack_size].anchor_idx = my_anchor;
           stack[stack_size].is_array = 1;
           stack[stack_size].idx = 1;
           stack[stack_size].key = NULL;
@@ -369,13 +385,20 @@ static void parse_value_iterative(JsonParser *p) {
       break;
     case '{':
       if (++depth > JSON_MAX_DEPTH) {
+        lua_pop(L, 1); /* pop anchor table */
         luaM_freearray(L, stack, stack_cap);
         json_error(p, "maximum nesting depth exceeded");
       }
       p->json++;
       skip_whitespace(p);
       {
-        Table *t = luaH_new(L);
+        /* Create table using public API to ensure GC safety */
+        lua_newtable(L);
+        Table *t = hvalue(s2v(L->top.p - 1));
+        /* Store in anchor table to keep it alive */
+        lua_rawseti(L, anchor_idx, next_anchor);
+        int my_anchor = next_anchor++;
+
         if (peek(p) == '}') {
           p->json++; /* empty object */
           depth--;
@@ -383,6 +406,7 @@ static void parse_value_iterative(JsonParser *p) {
         } else {
           /* Parse key */
           if (peek(p) != '"') {
+            lua_pop(L, 1); /* pop anchor table */
             luaM_freearray(L, stack, stack_cap);
             json_error(p, "expected string key in object");
           }
@@ -428,7 +452,13 @@ static void parse_value_iterative(JsonParser *p) {
           if (p->json < p->end)
             p->json++; /* skip closing quote */
           expect(p, ':', "after object key");
-          TString *keystr = luaS_newlstr(L, kbuf, klen);
+
+          /* Create key string using public API */
+          lua_pushlstring(L, kbuf, klen);
+          TString *keystr = tsvalue(s2v(L->top.p - 1));
+          /* Store key in anchor table */
+          lua_rawseti(L, anchor_idx, next_anchor);
+          next_anchor++;
           luaM_freearray(L, kbuf, kcap);
 
           /* Push container frame */
@@ -439,6 +469,7 @@ static void parse_value_iterative(JsonParser *p) {
             stack_cap = newcap;
           }
           stack[stack_size].table = t;
+          stack[stack_size].anchor_idx = my_anchor;
           stack[stack_size].is_array = 0;
           stack[stack_size].idx = 0;
           stack[stack_size].key = keystr;
@@ -482,6 +513,7 @@ static void parse_value_iterative(JsonParser *p) {
         if (accept(p, ',')) {
           /* Parse next key */
           if (peek(p) != '"') {
+            lua_pop(L, 1); /* pop anchor table */
             luaM_freearray(L, stack, stack_cap);
             json_error(p, "expected string key");
           }
@@ -521,7 +553,13 @@ static void parse_value_iterative(JsonParser *p) {
           if (p->json < p->end)
             p->json++;
           expect(p, ':', "after object key");
-          parent->key = luaS_newlstr(L, kbuf, klen);
+          /* Create new key using public API */
+          lua_pushlstring(L, kbuf, klen);
+          TString *newkey = tsvalue(s2v(L->top.p - 1));
+          /* Store key in anchor table */
+          lua_rawseti(L, anchor_idx, next_anchor);
+          next_anchor++;
+          parent->key = newkey;
           luaM_freearray(L, kbuf, kcap);
           break; /* Parse value */
         } else {
@@ -539,9 +577,28 @@ static void parse_value_iterative(JsonParser *p) {
 
   luaM_freearray(L, stack, stack_cap);
 
-  /* Push final result onto Lua stack */
-  setobj2s(L, L->top.p, &value);
-  L->top.p++;
+  /* Remove anchor table and push final result onto Lua stack */
+  lua_pop(L, 1); /* pop anchor table */
+
+  /* Push final result using proper API */
+  if (ttisnil(&value)) {
+    lua_pushnil(L);
+  } else if (ttisboolean(&value)) {
+    lua_pushboolean(L, !l_isfalse(&value));
+  } else if (ttisinteger(&value)) {
+    lua_pushinteger(L, ivalue(&value));
+  } else if (ttisfloat(&value)) {
+    lua_pushnumber(L, fltvalue(&value));
+  } else if (ttisstring(&value)) {
+    TString *ts = tsvalue(&value);
+    lua_pushlstring(L, getstr(ts), tsslen(ts));
+  } else if (ttistable(&value)) {
+    /* Push the table - it's still alive because it was in our anchor table */
+    setobj2s(L, L->top.p, &value);
+    api_incr_top(L);
+  } else {
+    lua_pushnil(L); /* fallback */
+  }
 }
 
 static int json_fromjson(lua_State *L) {
@@ -570,7 +627,7 @@ static int json_fromjson(lua_State *L) {
 
 typedef struct {
   lua_State *L;
-  luaL_Buffer b;
+  int parts_idx;   /* stack index of parts table (array of strings) */
   int filter_idx;  /* stack index of filter function (0 if none) */
   int depth;       /* current nesting depth */
   int visited_idx; /* stack index of visited table (for cycle detection) */
@@ -578,58 +635,77 @@ typedef struct {
 
 static void write_value(JsonWriter *w, int idx);
 
-static void write_char(JsonWriter *w, char c) { luaL_addchar(&w->b, c); }
+/* Add a single character to output */
+static void write_char(JsonWriter *w, char c) {
+  lua_State *L = w->L;
+  char buf[2] = {c, '\0'};
+  lua_pushstring(L, buf);
+  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
+}
 
+/* Add raw string to output */
 static void write_string_raw(JsonWriter *w, const char *s, size_t len) {
-  luaL_addlstring(&w->b, s, len);
+  lua_State *L = w->L;
+  lua_pushlstring(L, s, len);
+  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
 }
 
+/* Add literal string to output */
 static void write_literal(JsonWriter *w, const char *s) {
-  luaL_addstring(&w->b, s);
+  lua_State *L = w->L;
+  lua_pushstring(L, s);
+  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
 }
 
-/* Write a JSON string (with escaping) */
+/* Write a JSON string (with escaping) - builds complete string then adds to parts */
 static void write_json_string(JsonWriter *w, const char *s, size_t len) {
-  size_t i;
-  write_char(w, '"');
+  lua_State *L = w->L;
+  luaL_Buffer b;
+  luaL_buffinit(L, &b);
 
-  for (i = 0; i < len; i++) {
+  luaL_addchar(&b, '"');
+
+  for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)s[i];
     switch (c) {
     case '"':
-      write_string_raw(w, "\\\"", 2);
+      luaL_addlstring(&b, "\\\"", 2);
       break;
     case '\\':
-      write_string_raw(w, "\\\\", 2);
+      luaL_addlstring(&b, "\\\\", 2);
       break;
     case '\b':
-      write_string_raw(w, "\\b", 2);
+      luaL_addlstring(&b, "\\b", 2);
       break;
     case '\f':
-      write_string_raw(w, "\\f", 2);
+      luaL_addlstring(&b, "\\f", 2);
       break;
     case '\n':
-      write_string_raw(w, "\\n", 2);
+      luaL_addlstring(&b, "\\n", 2);
       break;
     case '\r':
-      write_string_raw(w, "\\r", 2);
+      luaL_addlstring(&b, "\\r", 2);
       break;
     case '\t':
-      write_string_raw(w, "\\t", 2);
+      luaL_addlstring(&b, "\\t", 2);
       break;
     default:
       if (c < 0x20) {
         /* Control character - use \u00XX escape */
         char buf[8];
         snprintf(buf, sizeof(buf), "\\u%04x", c);
-        write_string_raw(w, buf, 6);
+        luaL_addlstring(&b, buf, 6);
       } else {
-        write_char(w, (char)c);
+        luaL_addchar(&b, (char)c);
       }
     }
   }
 
-  write_char(w, '"');
+  luaL_addchar(&b, '"');
+  luaL_pushresult(&b);
+
+  /* Add result to parts table */
+  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
 }
 
 /* Check if a value type can be serialized to JSON */
@@ -995,7 +1071,9 @@ static int json_tojson(lua_State *L) {
   lua_newtable(L);
   w.visited_idx = lua_gettop(L);
 
-  luaL_buffinit(L, &w.b);
+  /* Create parts table to collect string pieces */
+  lua_newtable(L);
+  w.parts_idx = lua_gettop(L);
 
   /* If filter is provided and top-level value needs filtering */
   if (w.filter_idx != 0) {
@@ -1016,7 +1094,12 @@ static int json_tojson(lua_State *L) {
     write_value(&w, 1);
   }
 
-  luaL_pushresult(&w.b);
+  /* Concatenate all parts using table.concat */
+  lua_getglobal(L, "table");
+  lua_getfield(L, -1, "concat");
+  lua_pushvalue(L, w.parts_idx);
+  lua_call(L, 1, 1);
+
   return 1;
 }
 

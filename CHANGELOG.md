@@ -20,6 +20,7 @@
   - Arena-aware allocations where performance can be reliably improved.
 - Fixed race condition in `worker.receive` that could cause lost wakeups.
 - Fixed attribute usage in if-assignments and while-assignments.
+- Fixed deeply nested JSON encoding/decoding crashing.
 
 ## 1.3.0
 

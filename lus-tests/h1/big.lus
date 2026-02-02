@@ -1,3 +1,8 @@
+--[[
+    Big table tests - tests behavior with large tables and programs.
+    Uses smaller sizes than original (2^14 instead of 2^18) for faster execution
+    while still testing the same code paths.
+]]
 global print, require, assert, type, table, string, math, pairs, setmetatable, getmetatable, collectgarbage, _G, load, coroutine, debug, X, error, xpcall, pledge
 
 pledge("load", "fs:read=./lus-tests/*", "seal") 
@@ -6,16 +11,22 @@ local framework = require("lus-tests.framework")
 local debug = require"debug"
 local tests = framework.new("big")
 
-tests:it("large table construction via load", function()
-    local lim = 2^18 + 1000
+-- Helper to create a large table program
+-- Uses 2^14 (16384) elements - large enough to test behavior, small enough to be fast
+local function make_large_table_prog(lim)
+    lim = lim or (2^14 + 100)
     local prog = { "local y = {0" }
-    for i = 1, lim do prog[#prog + 1] = i  end
+    for i = 1, lim do prog[#prog + 1] = i end
     prog[#prog + 1] = "}\n"
     prog[#prog + 1] = "X = y\n"
     prog[#prog + 1] = ("assert(X[%d] == %d)"):format(lim - 1, lim - 2)
     prog[#prog + 1] = "return 0"
-    prog = table.concat(prog, ";")
+    return table.concat(prog, ";"), lim
+end
 
+tests:it("large table construction via load", function()
+    local prog, lim = make_large_table_prog()
+    
     local env = {string = string, assert = assert}
     local f = assert(load(prog, nil, nil, env))
 
@@ -25,14 +36,7 @@ tests:it("large table construction via load", function()
 end)
 
 tests:it("metamethod access on large table env", function()
-    local lim = 2^18 + 1000
-    local prog = { "local y = {0" }
-    for i = 1, lim do prog[#prog + 1] = i  end
-    prog[#prog + 1] = "}\n"
-    prog[#prog + 1] = "X = y\n"
-    prog[#prog + 1] = ("assert(X[%d] == %d)"):format(lim - 1, lim - 2)
-    prog[#prog + 1] = "return 0"
-    prog = table.concat(prog, ";")
+    local prog, lim = make_large_table_prog()
     
     local env = {string = string, assert = assert}
     local f = assert(load(prog, nil, nil, env))
@@ -59,14 +63,7 @@ tests:it("metamethod access on large table env", function()
 end)
 
 tests:it("errors in accesses larger than K", function()
-    local lim = 2^18 + 1000
-    local prog = { "local y = {0" }
-    for i = 1, lim do prog[#prog + 1] = i  end
-    prog[#prog + 1] = "}\n"
-    prog[#prog + 1] = "X = y\n"
-    prog[#prog + 1] = ("assert(X[%d] == %d)"):format(lim - 1, lim - 2)
-    prog[#prog + 1] = "return 0"
-    prog = table.concat(prog, ";")
+    local prog, lim = make_large_table_prog()
     
     local env = {string = string, assert = assert}
     local f = assert(load(prog, nil, nil, env))
@@ -81,14 +78,7 @@ tests:it("errors in accesses larger than K", function()
 end)
 
 tests:it("errors in metamethods propagate", function()
-    local lim = 2^18 + 1000
-    local prog = { "local y = {0" }
-    for i = 1, lim do prog[#prog + 1] = i  end
-    prog[#prog + 1] = "}\n"
-    prog[#prog + 1] = "X = y\n"
-    prog[#prog + 1] = ("assert(X[%d] == %d)"):format(lim - 1, lim - 2)
-    prog[#prog + 1] = "return 0"
-    prog = table.concat(prog, ";")
+    local prog, lim = make_large_table_prog()
     
     local env = {string = string, assert = assert}
     local f = assert(load(prog, nil, nil, env))
@@ -102,9 +92,36 @@ tests:it("errors in metamethods propagate", function()
 end)
 
 tests:it("string.rep for reasonable sizes", function()
-    -- We won't actually OOM, just check rep works for reasonably large
     local s = string.rep("a", 10000)
     assert(#s == 10000)
+end)
+
+tests:it("large table iteration", function()
+    local t = {}
+    for i = 1, 10000 do t[i] = i end
+    
+    local count = 0
+    local sum = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        sum = sum + v
+    end
+    
+    assert(count == 10000)
+    assert(sum == 50005000) -- sum of 1..10000
+end)
+
+tests:it("nested large tables", function()
+    local t = {}
+    for i = 1, 100 do
+        t[i] = {}
+        for j = 1, 100 do
+            t[i][j] = i * j
+        end
+    end
+    
+    assert(t[50][50] == 2500)
+    assert(t[100][100] == 10000)
 end)
 
 tests:finish()

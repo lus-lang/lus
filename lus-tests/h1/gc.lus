@@ -167,5 +167,284 @@ tests:it("json serialization/deserialization doesn't leak", function()
     assert(growth < 100, "JSON operations leaked memory: " .. growth .. " KB")
 end)
 
+-- ============================================
+-- Stress Tests and Advanced GC Scenarios
+-- ============================================
+
+tests:it("resurrection in finalizer", function()
+    -- Object can be resurrected in finalizer and collected again
+    local resurrected = nil
+    local finalize_count = 0
+    
+    local mt = {
+        __gc = function(self)
+            finalize_count = finalize_count + 1
+            if finalize_count == 1 then
+                -- Resurrect the object by storing it globally
+                resurrected = self
+            end
+        end
+    }
+    
+    local obj = setmetatable({value = 42}, mt)
+    obj = nil
+    collectgarbage()
+    collectgarbage()
+    
+    assert(finalize_count >= 1, "should have finalized at least once")
+    assert(resurrected ~= nil, "object should be resurrected")
+    assert(resurrected.value == 42, "resurrected object should have data")
+    
+    -- Clear resurrection and collect again
+    resurrected = nil
+    collectgarbage()
+    collectgarbage()
+    
+    -- Should finalize again (or may not depending on implementation)
+end)
+
+tests:it("finalizer basic functionality", function()
+    -- Test basic finalizer functionality
+    local finalized = false
+    local mt = {__gc = function() finalized = true end}
+    local obj = setmetatable({}, mt)
+    obj = nil
+    
+    collectgarbage()
+    collectgarbage()
+    collectgarbage()
+    
+    assert(finalized == true, "finalizer should have run after collectgarbage")
+end)
+
+tests:it("weak table creation and collection", function()
+    -- Test that weak tables can be created, used, and collected properly
+    local weak_k = setmetatable({}, {__mode = 'k'})
+    local weak_v = setmetatable({}, {__mode = 'v'})
+    
+    -- Test weak key table
+    local key = {}
+    weak_k[key] = "value"
+    assert(weak_k[key] == "value", "weak key table should work while key exists")
+    
+    -- Test weak value table
+    local val = {}
+    weak_v["mykey"] = val
+    assert(weak_v["mykey"] == val, "weak value table should work while value exists")
+    
+    -- Clear references and collect
+    key = nil
+    val = nil
+    collectgarbage()
+    collectgarbage()
+    collectgarbage()
+    
+    -- Verify weak key entry was collected
+    local key_count = 0
+    for k, v in pairs(weak_k) do key_count = key_count + 1 end
+    assert(key_count == 0, "weak key table should be empty after key is collected")
+    
+    -- Verify weak value entry was collected
+    assert(weak_v["mykey"] == nil, "weak value should be nil after collection")
+end)
+
+tests:it("gc during table iteration is safe", function()
+    local t = {}
+    for i = 1, 100 do t[i] = {} end
+    
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        if count % 10 == 0 then
+            collectgarbage("step", 10)
+        end
+    end
+    
+    assert(count == 100, "should iterate all elements")
+end)
+
+tests:it("many small allocations stress", function()
+    -- Create and discard many small objects
+    -- This tests that GC can handle rapid allocation/deallocation
+    local before = collectgarbage("count")
+    
+    for i = 1, 10000 do
+        local t = {a = 1, b = 2, c = 3}
+        local s = "string" .. i
+        local f = function() return i end
+    end
+    
+    -- Force collection
+    collectgarbage()
+    collectgarbage()
+    
+    local after = collectgarbage("count")
+    -- Memory shouldn't grow unboundedly - GC should have collected the garbage
+    -- Allow some growth for test infrastructure, but not 10000x
+    assert(after < before + 1000, "memory should be reclaimed, before: " .. before .. " after: " .. after)
+end)
+
+tests:it("nested table structures with gc", function()
+    -- Test that nested structures are properly collected
+    local before = collectgarbage("count")
+    
+    -- Create nested structures
+    local outer = {}
+    for i = 1, 100 do
+        outer[i] = {inner = {value = i, data = string.rep("x", 100)}}
+    end
+    
+    local during = collectgarbage("count")
+    assert(during > before, "memory should increase with allocations")
+    
+    -- Clear and collect
+    outer = nil
+    collectgarbage()
+    collectgarbage()
+    
+    local after = collectgarbage("count")
+    -- Memory should decrease after collection (may not be exact due to other allocations)
+    assert(after < during, "memory should decrease after collection")
+end)
+
+tests:it("multiple objects with finalizers all run", function()
+    -- Test that all finalizers run for multiple objects
+    local finalize_count = 0
+    local finalized_ids = {}
+    
+    for i = 1, 5 do
+        local obj = setmetatable({id = i}, {
+            __gc = function(self)
+                finalize_count = finalize_count + 1
+                finalized_ids[self.id] = true
+            end
+        })
+    end
+    
+    collectgarbage()
+    collectgarbage()
+    collectgarbage()
+    
+    assert(finalize_count == 5, "all 5 finalizers should run, got: " .. finalize_count)
+    for i = 1, 5 do
+        assert(finalized_ids[i], "finalizer for object " .. i .. " should have run")
+    end
+end)
+
+tests:it("incremental gc step works without error", function()
+    -- Create garbage
+    local before = collectgarbage("count")
+    local garbage = {}
+    for i = 1, 1000 do
+        garbage[i] = {string.rep("x", 100)}
+    end
+    local peak = collectgarbage("count")
+    assert(peak > before, "memory should grow with allocations")
+    
+    -- Clear references
+    garbage = nil
+    
+    -- Do incremental collection - verify step returns a boolean (did it finish)
+    local step_count = 0
+    for i = 1, 100 do
+        local finished = collectgarbage("step", 10)
+        step_count = step_count + 1
+        -- step returns true when collection is complete
+        if finished then break end
+    end
+    
+    assert(step_count > 0, "should have done at least one step")
+    
+    -- Do a full collection to ensure memory can be reclaimed
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after < peak, "full gc after incremental should reduce memory")
+end)
+
+tests:it("gc operations return expected values", function()
+    -- Test various gc operations work and return expected types
+    collectgarbage()
+    collectgarbage("collect")
+    collectgarbage("stop")
+    collectgarbage("restart")
+    
+    -- gc("count") should return memory usage as a number
+    local mem = collectgarbage("count")
+    assert(type(mem) == "number", "gc count should return number, got: " .. type(mem))
+    assert(mem > 0, "memory usage should be positive")
+    
+    -- Allocate some memory
+    local t = {}
+    for i = 1, 100 do
+        t[i] = string.rep("x", 100)
+    end
+    
+    local mem_after = collectgarbage("count")
+    assert(mem_after > mem, "memory should increase after allocations")
+    
+    -- Clean up
+    t = nil
+    collectgarbage()
+end)
+
+tests:it("weak key table collects unreferenced keys", function()
+    -- Test that weak key tables collect entries when keys become unreferenced
+    local weak = setmetatable({}, {__mode = 'k'})
+    
+    local key = {}
+    weak[key] = "value"
+    
+    -- Key is still referenced, should exist
+    assert(weak[key] == "value", "value should exist while key is referenced")
+    
+    -- Remove reference and collect
+    key = nil
+    collectgarbage()
+    collectgarbage()
+    collectgarbage()
+    
+    -- Table should be empty after collection
+    local count = 0
+    for k, v in pairs(weak) do count = count + 1 end
+    assert(count == 0, "weak key table should be empty after key is unreferenced")
+end)
+
+tests:it("gc with coroutines", function()
+    -- Test that GC works correctly with coroutines
+    local coroutine_ran = false
+    local coroutine_completed = false
+    
+    local co = coroutine.create(function()
+        coroutine_ran = true
+        local t = {}
+        for i = 1, 100 do
+            t[i] = {value = i}
+        end
+        coroutine.yield("yielded")
+        t = nil
+        coroutine_completed = true
+        return "done"
+    end)
+    
+    local ok1, result1 = coroutine.resume(co)
+    assert(ok1, "first resume should succeed")
+    assert(result1 == "yielded", "should yield with value")
+    assert(coroutine_ran, "coroutine should have started")
+    
+    collectgarbage()
+    
+    local ok2, result2 = coroutine.resume(co)
+    assert(ok2, "second resume should succeed")
+    assert(result2 == "done", "should return done")
+    assert(coroutine_completed, "coroutine should have completed")
+    
+    -- Coroutine is now dead
+    assert(coroutine.status(co) == "dead", "coroutine should be dead")
+    
+    co = nil
+    collectgarbage()
+    collectgarbage()
+end)
+
 tests:finish()
 

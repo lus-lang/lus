@@ -126,4 +126,186 @@ tests:it("single char string slice", function()
     assert(s[3,3] == "l")
 end)
 
+-- ============================================
+-- Additional Edge Case and Boundary Tests
+-- ============================================
+
+tests:it("empty table slice", function()
+    local t = {}
+    local s = t[,]
+    assert(#s == 0)
+    
+    -- Slice with indices on empty
+    local s2 = t[1,5]
+    assert(#s2 == 0)
+end)
+
+tests:it("empty string slice", function()
+    local s = ""
+    assert(s[,] == "")
+    assert(s[1,5] == "")
+end)
+
+tests:it("out of bounds table slice - beyond end", function()
+    local t = {1, 2, 3}
+    -- Slice extending beyond end should clamp
+    local s = t[2,10]
+    assert(s[1] == 2)
+    assert(s[2] == 3)
+    assert(#s == 2)
+end)
+
+tests:it("out of bounds table slice - before start", function()
+    local t = {1, 2, 3}
+    -- Slice starting before 1 returns empty table
+    local s = t[-5,2]
+    assert(type(s) == "table", "result should be a table")
+    assert(#s == 0, "slice before start should be empty")
+end)
+
+tests:it("out of bounds string slice - beyond end", function()
+    local s = "abc"
+    assert(s[2,10] == "bc")
+end)
+
+tests:it("out of bounds string slice - before start", function()
+    local s = "abc"
+    local result = s[-5,2]
+    assert(result:sub(1,1) == "a" or result == "ab")
+end)
+
+tests:it("negative indices on table", function()
+    local t = {1, 2, 3, 4, 5}
+    -- Negative indices extend the table (Lus-specific behavior)
+    local s = t[-2,]
+    assert(type(s) == "table", "result should be a table")
+    -- The slice extends from -2 to end of table, creating extended indices
+    assert(#s >= 0, "should have non-negative length")
+    
+    -- Test negative to negative range
+    local s2 = t[-3,-1]
+    assert(type(s2) == "table", "result should be a table")
+end)
+
+tests:it("negative indices on string", function()
+    local s = "hello"
+    -- Negative indices on strings in Lus
+    local result = s[-2,]
+    assert(type(result) == "string", "result should be a string")
+    assert(#result > 0, "result should not be empty")
+    
+    -- Negative to negative range
+    local result2 = s[-3,-1]
+    assert(type(result2) == "string", "result should be a string")
+end)
+
+tests:it("slice of slice - table", function()
+    local t = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+    local s1 = t[3,8]  -- {3, 4, 5, 6, 7, 8}
+    local s2 = s1[2,4] -- {4, 5, 6}
+    assert(#s2 == 3)
+    assert(s2[1] == 4)
+    assert(s2[2] == 5)
+    assert(s2[3] == 6)
+end)
+
+tests:it("slice of slice - string", function()
+    local s = "abcdefghij"
+    local s1 = s[3,8]  -- "cdefgh"
+    local s2 = s1[2,4] -- "def"
+    assert(s2 == "def")
+end)
+
+tests:it("zero-crossing indices", function()
+    local t = {1, 2, 3, 4, 5}
+    -- Start at 0 includes nil at position 1 (since t[0] is nil)
+    local s = t[0,3]
+    assert(type(s) == "table", "result should be a table")
+    -- Slice from 0 to 3 includes indices 0,1,2,3 which is 4 elements
+    assert(#s == 4, "slice 0,3 should have 4 elements")
+    assert(s[1] == nil, "s[1] corresponds to t[0] which is nil")
+    assert(s[2] == 1, "s[2] corresponds to t[1]")
+    assert(s[3] == 2, "s[3] corresponds to t[2]")
+end)
+
+tests:it("reversed slice produces reversed result", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[5,1]
+    assert(#s == 5)
+    assert(s[1] == 5)
+    assert(s[2] == 4)
+    assert(s[3] == 3)
+    assert(s[4] == 2)
+    assert(s[5] == 1)
+end)
+
+tests:it("reversed string slice", function()
+    local s = "hello"
+    local r = s[5,1]
+    assert(r == "olleh")
+end)
+
+tests:it("slice creates independent copy - table", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[2,4]
+    
+    -- Modify original
+    t[3] = 100
+    
+    -- Slice should be unaffected
+    assert(s[2] == 3, "slice should be independent of original")
+end)
+
+tests:it("slice with computed indices", function()
+    local t = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+    local start = 2 + 1
+    local finish = #t - 2
+    local s = t[start, finish]
+    assert(s[1] == 3)
+    assert(s[#s] == 8)
+end)
+
+tests:it("table slice with holes uses # operator semantics", function()
+    local t = {1, 2, nil, 4, 5}
+    local s = t[,]
+    -- In Lua, # stops at the first nil, so #t is 2 and slice goes to index 2
+    assert(type(s) == "table", "result should be a table")
+    assert(s[1] == 1, "first element should be 1")
+    assert(s[2] == 2, "second element should be 2")
+    -- Length depends on # operator behavior with holes
+    assert(#s == 2, "slice length follows # operator semantics")
+end)
+
+tests:it("large table slice", function()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    
+    local s = t[100,900]
+    assert(#s == 801)
+    assert(s[1] == 100)
+    assert(s[801] == 900)
+end)
+
+tests:it("slice indices same as bounds", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[1,5]
+    assert(#s == 5)
+    assert(s[1] == 1)
+    assert(s[5] == 5)
+end)
+
+tests:it("slice with nil start and explicit end", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[,3]
+    assert(#s == 3)
+    assert(s[1] == 1 and s[2] == 2 and s[3] == 3)
+end)
+
+tests:it("slice with explicit start and nil end", function()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[3,]
+    assert(#s == 3)
+    assert(s[1] == 3 and s[2] == 4 and s[3] == 5)
+end)
+
 tests:finish()

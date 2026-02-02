@@ -167,6 +167,21 @@ TStatus luaD_rawrunprotected(lua_State *L, Pfunc f, void *ud) {
   return lj.status;
 }
 
+
+/*
+** Run a protected function, ensuring that Lua-level catch blocks
+** do not intercept errors from this internal operation.
+** This is the new catch-based API for internal runtime operations.
+*/
+TStatus luaD_catchcall(lua_State *L, Pfunc f, void *ud) {
+  CallInfo *oldActiveCatch = L->activeCatch;
+  TStatus status;
+  L->activeCatch = NULL;  /* disable Lua catch blocks */
+  status = luaD_rawrunprotected(L, f, ud);
+  L->activeCatch = oldActiveCatch;  /* restore Lua catch blocks */
+  return status;
+}
+
 /* }====================================================== */
 
 /*
@@ -931,6 +946,7 @@ static TStatus precover(lua_State *L, TStatus status) {
 LUA_API int lua_resume(lua_State *L, lua_State *from, int nargs,
                        int *nresults) {
   TStatus status;
+  CallInfo *oldActiveCatch;
   lua_lock(L);
   if (L->status == LUA_OK) {  /* may be starting a coroutine */
     if (L->ci != &L->base_ci) /* not in base level? */
@@ -945,9 +961,15 @@ LUA_API int lua_resume(lua_State *L, lua_State *from, int nargs,
   L->nCcalls++;
   luai_userstateresume(L, nargs);
   api_checkpop(L, (L->status == LUA_OK) ? nargs + 1 : nargs);
+  /* Disable Lua catch blocks during coroutine resume (errors should
+  ** be handled by the coroutine's internal pcall recovery or returned
+  ** to the caller, not caught by an outer Lua catch block) */
+  oldActiveCatch = L->activeCatch;
+  L->activeCatch = NULL;
   status = luaD_rawrunprotected(L, resume, &nargs);
   /* continue running after recoverable errors */
   status = precover(L, status);
+  L->activeCatch = oldActiveCatch;
   if (l_likely(!errorstatus(status)))
     lua_assert(status == L->status);       /* normal end or yield */
   else {                                   /* unrecoverable error */
@@ -1015,13 +1037,17 @@ static void closepaux(lua_State *L, void *ud) {
 TStatus luaD_closeprotected(lua_State *L, ptrdiff_t level, TStatus status) {
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
+  CallInfo *oldActiveCatch = L->activeCatch;
+  L->activeCatch = NULL;  /* disable Lua catch during tbc close */
   for (;;) { /* keep closing upvalues until no more errors */
     struct CloseP pcl;
     pcl.level = restorestack(L, level);
     pcl.status = status;
     status = luaD_rawrunprotected(L, &closepaux, &pcl);
-    if (l_likely(status == LUA_OK)) /* no more errors? */
+    if (l_likely(status == LUA_OK)) { /* no more errors? */
+      L->activeCatch = oldActiveCatch;
       return pcl.status;
+    }
     else { /* an error occurred; restore saved state and repeat */
       L->ci = old_ci;
       L->allowhook = old_allowhooks;
@@ -1104,13 +1130,52 @@ TStatus luaD_protectedparser(lua_State *L, ZIO *z, const char *name,
                              const char *mode) {
   struct SParser p;
   TStatus status;
+  lua_longjmp lj;  /* local setjmp buffer for error recovery */
+  CallInfo *old_ci = L->ci;
+  lu_byte old_allowhooks = L->allowhook;
+  ptrdiff_t old_top = savestack(L, L->top.p);
+  l_uint32 oldnCcalls = L->nCcalls;
+  CallInfo *oldActiveCatch = L->activeCatch;
+
   incnny(L); /* cannot yield during parsing */
   p.z = z;
   p.name = name;
   p.mode = mode;
   luaY_initdyndata(L, &p.dyd);
   luaZ_initbuffer(L, &p.buff);
-  status = luaD_pcall(L, f_parser, &p, savestack(L, L->top.p), L->errfunc);
+
+  /* Set up protected execution using inline setjmp.
+  ** This replaces the call to luaD_pcall with direct setjmp/longjmp. */
+  lj.status = LUA_OK;
+  lj.previous = L->errorJmp;  /* chain new error handler */
+  L->errorJmp = &lj;
+  L->activeCatch = NULL;  /* disable Lua catch blocks during parsing */
+
+  /* Use setjmp to establish recovery point.
+  ** If an error occurs during parsing, luaD_throw will longjmp back here. */
+#if defined(LUA_USE_POSIX)
+  if (_setjmp(lj.b) == 0) {
+#else
+  if (setjmp(lj.b) == 0) {
+#endif
+    /* Normal path: call the parser */
+    f_parser(L, &p);
+  }
+  /* If we get here via longjmp, lj.status contains the error code */
+
+  L->errorJmp = lj.previous;  /* restore old error handler */
+  L->activeCatch = oldActiveCatch;  /* restore Lua catch blocks */
+  L->nCcalls = oldnCcalls;
+  status = lj.status;
+
+  if (l_unlikely(status != LUA_OK)) {  /* an error occurred? */
+    L->ci = old_ci;
+    L->allowhook = old_allowhooks;
+    status = luaD_closeprotected(L, old_top, status);
+    luaD_seterrorobj(L, status, restorestack(L, old_top));
+    luaD_shrinkstack(L);  /* restore stack size in case of overflow */
+  }
+
   luaZ_freebuffer(L, &p.buff);
   luaY_freedyndata(&p.dyd); /* free arena (all arrays freed with it) */
   decnny(L);

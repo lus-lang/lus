@@ -182,11 +182,13 @@ typedef struct CatchInfo {
   CallInfo *prev_activeCatch;        /* saved previous active catch handler */
   volatile TStatus status;           /* error status (if error occurred) */
   const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
-  ptrdiff_t erroffset;  /* stack offset of error object (survives realloc) */
-  ptrdiff_t baseoffset; /* stack offset of base register (survives realloc) */
-  lu_byte destreg;      /* destination register for status/error */
-  lu_byte nresults;     /* expected number of results (for nil-filling) */
-  lu_byte active;       /* 1 if catch block is active */
+  ptrdiff_t erroffset;    /* stack offset of error object (survives realloc) */
+  ptrdiff_t baseoffset;   /* stack offset of base register (survives realloc) */
+  ptrdiff_t handleroffset; /* stack offset of handler copy (0 = no handler) */
+  lu_byte destreg;        /* destination register for status/error */
+  lu_byte nresults;       /* expected number of results (for nil-filling) */
+  lu_byte active;         /* 1 if catch block is active */
+  lu_byte handlerreg;     /* handler register + 1 (0 = no handler) - legacy */
 } CatchInfo;
 
 struct CallInfo {

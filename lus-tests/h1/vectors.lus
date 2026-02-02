@@ -1,4 +1,4 @@
-global print, require, assert, type, string, table, vector, pledge, math
+global print, require, assert, type, string, table, vector, pledge, math, tostring
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -182,6 +182,170 @@ tests:it("unpackmany iterator", function()
   end
   assert(count == 3, "should have 3 iterations, got " .. count)
   assert(sum == 60, "sum should be 60")
+end)
+
+-- ============================================
+-- Negative/Error Case Tests
+-- ============================================
+
+tests:it("pack out of bounds", function()
+  local v = vector.create(4)
+  -- Packing beyond vector size should error
+  local ok, err = catch vector.pack(v, 2, "I4", 123)
+  assert(not ok, "should error when packing beyond bounds")
+end)
+
+tests:it("unpack out of bounds", function()
+  local v = vector.create(4)
+  vector.pack(v, 0, "I4", 42)
+  -- Unpacking beyond vector size should error
+  local ok, err = catch vector.unpack(v, 2, "I4")
+  assert(not ok, "should error when unpacking beyond bounds")
+end)
+
+tests:it("negative offset errors", function()
+  local v = vector.create(8)
+  local ok, err = catch vector.pack(v, -1, "I4", 123)
+  assert(not ok, "should error with negative offset")
+end)
+
+tests:it("invalid format string", function()
+  local v = vector.create(8)
+  local ok, err = catch vector.pack(v, 0, "%", 123)
+  assert(not ok, "should error with invalid format")
+end)
+
+tests:it("operations on zero-size vector", function()
+  local v = vector.create(0)
+  assert(#v == 0, "zero-size vector should have length 0")
+  
+  -- Can't pack anything into zero-size
+  local ok, err = catch vector.pack(v, 0, "B", 1)
+  assert(not ok, "should error packing into zero-size vector")
+  
+  -- Can't unpack anything from zero-size
+  local ok2, err2 = catch vector.unpack(v, 0, "B")
+  assert(not ok2, "should error unpacking from zero-size vector")
+end)
+
+tests:it("resize to zero", function()
+  local v = vector.create(8)
+  vector.pack(v, 0, "I4", 42)
+  vector.resize(v, 0)
+  assert(#v == 0, "resized vector should have length 0")
+end)
+
+tests:it("clone of zero-size vector", function()
+  local v = vector.create(0)
+  local c = vector.clone(v)
+  assert(#c == 0, "clone of zero-size should be zero-size")
+end)
+
+tests:it("slice with invalid indices clamps to bounds", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)  -- pack values 1-10 at offsets 0-9
+  end
+  
+  -- Slice beyond bounds clamps to valid range
+  -- Vector slices use 1-based inclusive indices
+  -- v[5,20] means bytes 5-10 (1-based), which is 0-based offsets 4-9 = 6 bytes
+  local s = v[5, 20]
+  assert(#s == 6, "slice should clamp to valid range, got length " .. #s)
+  -- First byte of slice is original offset 4 which has value 5
+  assert(vector.unpack(s, 0, "B") == 5, "first element should be 5")
+  -- Last byte of slice is original offset 9 which has value 10
+  assert(vector.unpack(s, 5, "B") == 10, "last element should be 10")
+end)
+
+tests:it("slice with negative indices returns empty", function()
+  local v = vector.create(10)
+  for i = 0, 9 do
+    vector.pack(v, i, "B", i + 1)
+  end
+  
+  -- Negative indices return empty vector in Lus
+  local s = v[-5, -1]
+  assert(type(s) == "vector", "result should be a vector")
+  assert(#s == 0, "negative index slice should be empty")
+end)
+
+tests:it("resize larger preserves data", function()
+  local v = vector.create(4)
+  vector.pack(v, 0, "I4", 0x12345678)
+  vector.resize(v, 16)
+  assert(#v == 16, "size should be 16")
+  assert(vector.unpack(v, 0, "I4") == 0x12345678, "original data preserved")
+end)
+
+tests:it("resize smaller truncates", function()
+  local v = vector.create(16)
+  vector.pack(v, 0, "I4", 0x11111111)
+  vector.pack(v, 4, "I4", 0x22222222)
+  vector.pack(v, 8, "I4", 0x33333333)
+  vector.resize(v, 8)
+  assert(#v == 8, "size should be 8")
+  assert(vector.unpack(v, 0, "I4") == 0x11111111, "first int preserved")
+  assert(vector.unpack(v, 4, "I4") == 0x22222222, "second int preserved")
+  -- Third int is truncated
+end)
+
+tests:it("pack string too long for fixed size errors", function()
+  local v = vector.create(10)
+  -- Packing a string longer than the format specifies should error
+  local ok, err = catch vector.pack(v, 0, "c3", "hello")
+  assert(not ok, "should error when string is longer than format size")
+  assert(tostring(err):find("longer than given size"), "error should mention size mismatch")
+end)
+
+tests:it("unpack string from insufficient data", function()
+  local v = vector.create(3)
+  vector.pack(v, 0, "c3", "abc")
+  -- Try to unpack more than available
+  local ok, err = catch vector.unpack(v, 0, "c10")
+  assert(not ok, "should error when unpacking more than available")
+end)
+
+tests:it("multiple pack/unpack operations", function()
+  local v = vector.create(100)
+  
+  -- Pack various types at various offsets
+  vector.pack(v, 0, "B", 255)
+  vector.pack(v, 1, "h", -1000)
+  vector.pack(v, 3, "I4", 123456789)
+  vector.pack(v, 7, "d", 3.14159265358979)
+  vector.pack(v, 15, "c5", "hello")
+  
+  -- Unpack and verify
+  assert(vector.unpack(v, 0, "B") == 255)
+  assert(vector.unpack(v, 1, "h") == -1000)
+  assert(vector.unpack(v, 3, "I4") == 123456789)
+  assert(math.abs(vector.unpack(v, 7, "d") - 3.14159265358979) < 0.0000001)
+  assert(vector.unpack(v, 15, "c5") == "hello")
+end)
+
+tests:it("unpackmany on empty vector", function()
+  local v = vector.create(0)
+  local count = 0
+  for val in vector.unpackmany(v, 0, "I4") do
+    count = count + 1
+  end
+  assert(count == 0, "should have 0 iterations on empty vector")
+end)
+
+tests:it("unpackmany with offset", function()
+  local v = vector.create(16)
+  vector.pack(v, 0, "I4", 1)
+  vector.pack(v, 4, "I4", 2)
+  vector.pack(v, 8, "I4", 3)
+  vector.pack(v, 12, "I4", 4)
+  
+  -- Start from offset 4
+  local sum = 0
+  for val in vector.unpackmany(v, 4, "I4") do
+    sum = sum + val
+  end
+  assert(sum == 2 + 3 + 4, "should unpack from offset 4: " .. sum)
 end)
 
 tests:finish()

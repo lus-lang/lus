@@ -702,8 +702,8 @@ static void PrintCode(const Proto *f) {
       printf("%d", a);
       break;
     case OP_CATCH:
-      printf("%d %d", a, sbx);
-      printf(COMMENT "to %d on error", pc + sbx + 2);
+      printf("%d %d %d", a, b, c);
+      printf(COMMENT "handler=%d; to %d on error", b ? b - 1 : -1, pc + c + 2);
       break;
     case OP_ENDCATCH:
       printf("%d %d %d", a, b, c);

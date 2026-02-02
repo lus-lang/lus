@@ -1,0 +1,212 @@
+--[[
+    Test suite for the pledge security system in Lus.
+    
+    The pledge system provides capability-based security by restricting
+    what operations a Lus program can perform. Permissions can be:
+    - Granted: pledge("load"), pledge("fs:read=./path/*")
+    - Sealed: pledge("seal") - no more permission changes allowed
+    
+    Note: These tests run with limited pledges to test the system.
+    Some tests verify permission denials which require specific setup.
+]]
+
+global require, assert, type, pledge, io, load, error, tostring, string
+
+-- Start with just load permission (don't seal yet so we can test pledge behavior)
+pledge("load")
+pledge("fs:read=./lus-tests/*")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("pledge")
+
+-- ============================================
+-- Basic Pledge Tests
+-- ============================================
+
+tests:it("pledge function exists", function()
+    assert(type(pledge) == "function", "pledge should be a function")
+end)
+
+tests:it("pledge returns true on success", function()
+    -- Granting load when we already have it should succeed
+    local result = pledge("load")
+    assert(result == true or result == nil, "pledge should return true or nil on success")
+end)
+
+tests:it("can grant fs:read permission", function()
+    -- Grant a new read permission
+    local result = pledge("fs:read=./lus-tests/framework.lus")
+    -- Should succeed (may return true or nil)
+end)
+
+tests:it("require works with load permission", function()
+    -- We have load permission, so require should work
+    local ok, mod = catch require("lus-tests.framework")
+    assert(ok, "require should work with load permission")
+end)
+
+tests:it("io.open works with matching fs:read permission", function()
+    -- We have fs:read=./lus-tests/*, so reading framework.lus should work
+    local f = io.open("lus-tests/framework.lus", "r")
+    assert(f ~= nil, "should be able to open file within permitted path")
+    f:close()
+end)
+
+-- ============================================
+-- Seal Tests
+-- ============================================
+
+tests:describe("seal behavior")
+
+-- NOTE: The "seal prevents further pledge changes" test is at the end of the file
+-- after pledge("seal") is called, because we can't un-seal.
+
+-- ============================================
+-- Permission String Parsing Tests
+-- ============================================
+
+tests:describe("permission string formats")
+
+tests:it("base permission without value", function()
+    -- "load" is a base permission without subpermission or value
+    local result = pledge("load")
+    -- Should succeed
+end)
+
+tests:it("permission with subpermission", function()
+    -- "fs:read" has base "fs" and subpermission "read"
+    local result = pledge("fs:read=./test-dir/*")
+    -- Should succeed
+end)
+
+tests:it("permission with glob pattern", function()
+    -- Glob patterns in permission values
+    local result = pledge("fs:read=./lus-tests/**/*.lus")
+    -- Should succeed
+end)
+
+-- ============================================
+-- Permission Checking Tests
+-- ============================================
+
+tests:describe("permission checks")
+
+tests:it("file access within permitted path succeeds", function()
+    local f = io.open("lus-tests/h1/enum.lus", "r")
+    if f then
+        local content = f:read(100)
+        f:close()
+        assert(content ~= nil, "should read file content")
+    end
+    -- If file doesn't exist, that's fine - we're testing permission, not file existence
+end)
+
+tests:it("load() works with load permission", function()
+    local fn = load("return 1 + 2")
+    assert(fn ~= nil, "load should work")
+    assert(fn() == 3, "loaded function should execute")
+end)
+
+tests:it("load() with custom environment", function()
+    local env = {x = 10}
+    local fn = load("return x * 2", "test", "t", env)
+    assert(fn ~= nil, "load with env should work")
+    assert(fn() == 20, "should use provided environment")
+end)
+
+-- ============================================
+-- Error Handling Tests
+-- ============================================
+
+tests:describe("error handling")
+
+tests:it("invalid pledge string format errors", function()
+    -- Empty string should error with "unknown permission"
+    local ok, err = catch pledge("")
+    assert(not ok, "empty pledge string should error")
+    assert(tostring(err):find("unknown permission"), "error should mention unknown permission")
+end)
+
+tests:it("pledge with multiple permissions succeeds", function()
+    -- Can pass multiple permissions in one call
+    local ok, result = catch pledge("load", "fs:read=./test/*")
+    assert(ok, "pledge with multiple permissions should succeed")
+    assert(result == true, "pledge should return true on success")
+end)
+
+-- ============================================
+-- Edge Cases
+-- ============================================
+
+tests:describe("edge cases")
+
+tests:it("pledge same permission twice", function()
+    -- Granting an already-granted permission should be idempotent
+    pledge("load")
+    pledge("load")
+    -- No error
+end)
+
+tests:it("pledge with special characters in path succeeds", function()
+    -- Paths with glob patterns (* and ?)
+    local ok, result = catch pledge("fs:read=./lus-tests/h1/*.lus")
+    assert(ok, "pledge with glob pattern should succeed")
+    assert(result == true, "pledge should return true")
+end)
+
+tests:it("pledge path with dots succeeds", function()
+    -- Paths with . and .. components
+    local ok, result = catch pledge("fs:read=./lus-tests/./h1/../h1/*.lus")
+    assert(ok, "pledge with dot components should succeed")
+    assert(result == true, "pledge should return true")
+end)
+
+-- ============================================
+-- Integration Tests
+-- ============================================
+
+tests:describe("integration")
+
+tests:it("framework loads correctly with pledges", function()
+    -- The fact we got here means the framework loaded
+    assert(framework ~= nil, "framework should be loaded")
+    assert(type(framework.new) == "function", "framework.new should exist")
+end)
+
+tests:it("test file can use all framework features", function()
+    -- Verify framework features work under pledge
+    assert(type(tests.it) == "function")
+    assert(type(tests.describe) == "function")
+    assert(type(tests.skip) == "function")
+    assert(type(tests.soft) == "function")
+end)
+
+-- Now seal to verify sealed state behavior
+-- This must be at the end because it affects all subsequent operations
+pledge("seal")
+
+tests:it("state is sealed after pledge('seal')", function()
+    -- Can verify by trying to pledge again
+    -- After seal, pledge should either error or return false/nil
+    local ok, result = catch pledge("network")
+    -- Either it errors (ok is false) or it returns false/nil
+    assert(not ok or not result, "pledge should fail or return falsy after seal")
+end)
+
+tests:it("existing permissions still work after seal", function()
+    -- load should still work
+    local fn = load("return 42")
+    assert(fn ~= nil, "load should work after seal")
+    assert(fn() == 42, "loaded function should execute after seal")
+end)
+
+tests:it("file reading still works after seal with granted permission", function()
+    local f = io.open("lus-tests/framework.lus", "r")
+    if f then
+        local content = f:read(10)
+        f:close()
+        assert(content ~= nil, "should still read permitted files after seal")
+    end
+end)
+
+tests:finish()

@@ -197,7 +197,7 @@ h1_tests = [
   'h1/utf8',
   'h1/vararg',
   'h1/db',
-  # 'h1/big', maybe not now
+  'h1/big',
   'h1/bwcoercion',
   'h1/cstack',
   'h1/gengc',
@@ -209,7 +209,8 @@ h1_tests = [
   'h1/slices',
   'h1/groups',
   'h1/vectors',
-  'h1/cloning'
+  'h1/cloning',
+  'h1/pledge'
 ]
 
 foreach t : h1_tests

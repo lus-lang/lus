@@ -1269,31 +1269,58 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
   StkId ebase = restorestack(L, cinfo->baseoffset);
   StkId func = ebase - 1;
   LClosure *ecl = clLvalue(s2v(func));
-  StkId errorRa = ebase + cinfo->destreg;
-  StkId errobj = restorestack(L, cinfo->erroffset);
   Instruction endcatch = *(cinfo->errorpc - 1);
   int b = GETARG_B(endcatch);
   int nresults = (b == 0) ? 2 : (b - 1);
   int j;
+  ptrdiff_t errobjoffset = cinfo->erroffset;  /* save error object offset */
 
   /* Restore error handler and deactivate catch */
   L->errorJmp = cinfo->prev_errorJmp;
   L->activeCatch = cinfo->prev_activeCatch; /* restore previous catch */
   cinfo->active = 0;
 
-  /* Set R[A] = false */
-  setbfvalue(s2v(errorRa));
-
-  /* Set R[A+1] = error message */
-  setobjs2s(L, errorRa + 1, errobj);
-
-  /* Nil-fill remaining slots if nresults > 2 */
-  for (j = 2; j < nresults; j++) {
-    setnilvalue(s2v(errorRa + j));
+  /* If a handler is set, call it to transform the error */
+  if (cinfo->handleroffset != 0) {
+    StkId handler = restorestack(L, cinfo->handleroffset);
+    if (ttisfunction(s2v(handler))) {
+      StkId errobj = restorestack(L, errobjoffset);
+      /* Set up call: push handler and error object */
+      StkId callbase = L->top.p;
+      setobjs2s(L, callbase, handler);      /* push handler */
+      setobjs2s(L, callbase + 1, errobj);   /* push error object */
+      L->top.p = callbase + 2;
+      /* Call handler with error object, get 1 result */
+      /* Note: if handler throws, that error propagates (no nested catch) */
+      luaD_call(L, callbase, 1);
+      /* After call, stack may have been reallocated. Recompute base. */
+      ebase = restorestack(L, cinfo->baseoffset);
+      func = ebase - 1;
+      ecl = clLvalue(s2v(func));
+      /* Save result offset (handler result is at L->top.p - 1) */
+      errobjoffset = savestack(L, L->top.p - 1);
+    }
   }
 
-  /* Adjust stack top to include all expected results */
-  L->top.p = errorRa + nresults;
+  /* Recompute stack pointers (may have changed during handler call) */
+  {
+    StkId errorRa = ebase + cinfo->destreg;
+    StkId errobj = restorestack(L, errobjoffset);
+
+    /* Set R[A] = false */
+    setbfvalue(s2v(errorRa));
+
+    /* Set R[A+1] = error message (possibly transformed by handler) */
+    setobjs2s(L, errorRa + 1, errobj);
+
+    /* Nil-fill remaining slots if nresults > 2 */
+    for (j = 2; j < nresults; j++) {
+      setnilvalue(s2v(errorRa + j));
+    }
+
+    /* Adjust stack top to include all expected results */
+    L->top.p = errorRa + nresults;
+  }
 
   /* Restore VM variables */
   *pci = eci;
@@ -2078,7 +2105,8 @@ returning: /* trap already set */
         ** occurs during the expression evaluation, we catch it here instead
         ** of propagating the error up.
         ** A = destination register for status/result
-        ** sBx = offset to error handler (end of catch body)
+        ** B = handler register + 1 (0 = no handler)
+        ** C = offset to error handler (end of catch body)
         **
         ** Implementation uses setjmp/longjmp directly within the VM to create
         ** an inline protected execution context. When an error is thrown,
@@ -2087,7 +2115,8 @@ returning: /* trap already set */
         ** for the duration of the catch block.
         */
         int a = GETARG_A(i);
-        int offset = GETARG_sBx(i);
+        int b = GETARG_B(i);
+        int offset = GETARG_C(i);
         CatchInfo *catchinfo = &ci->u.l.catchinfo;
 
         /* Save previous handlers and set up catch */
@@ -2096,10 +2125,24 @@ returning: /* trap already set */
         catchinfo->status = LUA_OK;
         catchinfo->errorpc = pc + offset;
         catchinfo->destreg = cast_byte(a);
+        catchinfo->handlerreg = cast_byte(b);  /* handler register + 1 (0=none) */
         /* Use L->ci->func.p directly (from heap, not clobberable local) */
         catchinfo->baseoffset = savestack(L, L->ci->func.p + 1);
         catchinfo->active = 1;
         L->activeCatch = ci; /* this CI is now the active catch handler */
+
+        /* If handler is present, copy it to top of stack to protect it from
+        ** being overwritten by inner expression results. The inner expression
+        ** may use registers starting at A+1, which could overlap with where
+        ** the handler was placed. */
+        if (b != 0) {
+          StkId handler = base + (b - 1);  /* handler's original position */
+          setobjs2s(L, L->top.p, handler); /* copy to top of stack */
+          catchinfo->handleroffset = savestack(L, L->top.p);
+          L->top.p++;  /* protect the copy */
+        } else {
+          catchinfo->handleroffset = 0;
+        }
 
         /* Use setjmp to establish the recovery point */
         if (setjmp(catchinfo->jmpbuf) == 0) {

@@ -6,7 +6,7 @@
   All protected execution is done via the 'catch' expression.
 ]]
 
-global print, setmetatable, assert, error, type, _G, coroutine, require, pcall, xpcall, os, pledge
+global print, setmetatable, assert, error, type, _G, coroutine, require, pcall, xpcall, os, pledge, collectgarbage
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -318,6 +318,161 @@ tests:it("catch with assert failure", function()
     local ok, err = catch assert(false, "assert failed")
     assert(ok == false)
     assert(err:find("assert failed"))
+end)
+
+-- ============================================
+-- Additional Negative/Edge Case Tests
+-- ============================================
+
+tests:it("error() with level beyond stack depth", function()
+    -- Level larger than stack depth should work but adjust line info
+    local ok, err = catch error("high level error", 100)
+    assert(not ok)
+    assert(err:find("high level error"))
+end)
+
+tests:it("error() with negative level", function()
+    local ok, err = catch error("negative level", -1)
+    assert(not ok)
+    assert(err:find("negative level"))
+end)
+
+tests:it("nested catch expressions", function()
+    -- catch inside catch
+    local outer_ok, outer_result = catch (function()
+        local inner_ok, inner_err = catch error("inner error")
+        assert(not inner_ok)
+        assert(inner_err:find("inner error"))
+        return "outer success"
+    end)()
+    assert(outer_ok)
+    assert(outer_result == "outer success")
+end)
+
+tests:it("catch propagates through multiple levels", function()
+    local function level3() error("deep error") end
+    local function level2() level3() end
+    local function level1() level2() end
+    
+    local ok, err = catch level1()
+    assert(not ok)
+    assert(err:find("deep error"))
+end)
+
+tests:it("error in __gc finalizer becomes warning", function()
+    -- In Lua/Lus, __gc errors are caught by the internal pcall that runs
+    -- finalizers and converted to warnings. They do NOT propagate to
+    -- enclosing catch blocks.
+    local finalized = false
+    local mt = {
+        __gc = function()
+            finalized = true
+            error("finalizer error")
+        end
+    }
+    
+    -- Run GC - the finalizer error becomes a warning, not a caught error
+    local inner_ok, inner_result = catch (function()
+        local obj = setmetatable({}, mt)
+        obj = nil
+        collectgarbage()
+        collectgarbage()
+        return "success"
+    end)()
+    
+    -- The catch succeeds because __gc errors become warnings
+    assert(inner_ok, "__gc errors should become warnings, not propagate to catch")
+    assert(inner_result == "success", "function should complete successfully")
+    assert(finalized, "finalizer should have run")
+end)
+
+tests:it("catch with recursive error", function()
+    local count = 0
+    local function recurse()
+        count = count + 1
+        if count > 5 then
+            error("recursion limit")
+        end
+        recurse()
+    end
+    
+    local ok, err = catch recurse()
+    assert(not ok)
+    assert(err:find("recursion limit"))
+    assert(count > 5)
+end)
+
+tests:it("catch with nil error message", function()
+    local ok, err = catch error(nil)
+    assert(not ok)
+    -- error(nil) should produce some error message
+    assert(err ~= nil)
+end)
+
+tests:it("catch with boolean error", function()
+    local ok, err = catch error(true)
+    assert(not ok)
+    -- Error messages may remain as booleans or be converted to strings
+    assert(err == true or type(err) == "string", "error should be boolean or string")
+end)
+
+tests:it("catch in coroutine", function()
+    local co = coroutine.create(function()
+        local ok, err = catch error("coroutine error")
+        assert(not ok)
+        assert(err:find("coroutine error"))
+        return "coro done"
+    end)
+    
+    local success, result = coroutine.resume(co)
+    assert(success)
+    assert(result == "coro done")
+end)
+
+tests:it("error from tostring in error message", function()
+    local mt = {
+        __tostring = function() error("tostring error") end
+    }
+    local obj = setmetatable({}, mt)
+    
+    -- When error() is called with an object whose __tostring throws,
+    -- the tostring error propagates as the error message
+    local ok, err = catch error(obj)
+    assert(not ok, "error should be caught")
+    assert(type(err) == "string", "error should be a string")
+    assert(err:find("tostring error"), "error should contain tostring error message")
+end)
+
+tests:it("catch catches stack overflow", function()
+    -- NOTE: Must use non-tail-recursive function to actually trigger stack overflow.
+    -- A tail-recursive function like `return infinite()` gets optimized to reuse
+    -- the same stack frame, so it runs forever without overflowing.
+    local function non_tail_infinite(n)
+        n = n + 1
+        non_tail_infinite(n)
+        return n  -- prevents tail call optimization
+    end
+    local ok, err = catch non_tail_infinite(0)
+    assert(not ok, "should have caught stack overflow")
+    assert(err:find("stack overflow"), "error should mention stack overflow")
+end)
+
+tests:it("catch with multiple sequential errors", function()
+    -- Multiple errors in sequence should all be caught properly
+    for i = 1, 10 do
+        local ok, err = catch error("error " .. i)
+        assert(not ok)
+        assert(err:find("error " .. i))
+    end
+end)
+
+tests:it("error during table construction", function()
+    local function throwing() error("construction error") end
+    local ok, err = catch (function()
+        local t = { a = 1, b = throwing() }
+    end)()
+    assert(not ok)
+    assert(err:find("construction error"))
 end)
 
 tests:finish()

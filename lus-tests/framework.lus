@@ -1,4 +1,4 @@
-global print, tostring, type, string, table, io, os, setmetatable, error, collectgarbage
+global print, tostring, type, string, table, io, os, setmetatable, error, collectgarbage, ipairs, pairs, math
 
 local framework = {}
 framework.__index = framework
@@ -43,6 +43,7 @@ function framework.new(name)
     self.passed = 0
     self.failed = 0
     self.soft_failed = 0  -- soft failures don't block CI
+    self.skipped = 0      -- skipped tests (not counted in total)
     print("Running Suite: " .. name)
     return self
 end
@@ -51,9 +52,37 @@ function framework:describe(desc)
     print("  context: " .. desc)
 end
 
+-- Setup hook: called before each test
+function framework:before(fn)
+    self._before = fn
+end
+
+-- Teardown hook: called after each test (even on failure)
+function framework:after(fn)
+    self._after = fn
+end
+
 function framework:it(desc, fn)
     self.tests = self.tests + 1
+    
+    -- Run before hook if set
+    if self._before then
+        local before_ok, before_err = catch self._before()
+        if not before_ok then
+            self.failed = self.failed + 1
+            print("    " .. red .. "✗" .. reset .. " " .. desc)
+            print("      Error in before hook: " .. tostring(before_err))
+            return
+        end
+    end
+    
     local status, err = catch fn()
+    
+    -- Run after hook if set (even on failure)
+    if self._after then
+        catch self._after()
+    end
+    
     if status then
         self.passed = self.passed + 1
         print("    " .. green .. "✓" .. reset .. " " .. desc)
@@ -67,7 +96,25 @@ end
 -- Soft test: failures are reported but don't fail the suite (for flaky external dependencies)
 function framework:soft(desc, fn)
     self.tests = self.tests + 1
+    
+    -- Run before hook if set
+    if self._before then
+        local before_ok, before_err = catch self._before()
+        if not before_ok then
+            self.soft_failed = self.soft_failed + 1
+            print("    " .. yellow .. "⚠" .. reset .. " " .. desc .. " (soft fail)")
+            print("      Error in before hook: " .. tostring(before_err))
+            return
+        end
+    end
+    
     local status, err = catch fn()
+    
+    -- Run after hook if set (even on failure)
+    if self._after then
+        catch self._after()
+    end
+    
     if status then
         self.passed = self.passed + 1
         print("    " .. green .. "✓" .. reset .. " " .. desc)
@@ -78,9 +125,37 @@ function framework:soft(desc, fn)
     end
 end
 
-function framework:skip(desc, fn)
+function framework:skip(desc, reason)
     -- Don't run the test, just mark it as skipped
-    print("    - " .. desc .. " (skipped)")
+    self.skipped = self.skipped + 1
+    local msg = "    - " .. desc .. " (skipped"
+    if reason then
+        msg = msg .. ": " .. reason
+    end
+    msg = msg .. ")"
+    print(msg)
+end
+
+-- Parameterized tests: run the same test with multiple sets of data
+-- cases should be a table of tables, each inner table contains args for the test function
+-- Example: tests:each("adds numbers", {{1, 2, 3}, {4, 5, 9}}, function(a, b, expected) ... end)
+function framework:each(desc, cases, fn)
+    for i, case in ipairs(cases) do
+        local case_desc = desc .. " [case " .. i .. "]"
+        self:it(case_desc, function()
+            fn(table.unpack(case))
+        end)
+    end
+end
+
+-- Soft parameterized tests
+function framework:soft_each(desc, cases, fn)
+    for i, case in ipairs(cases) do
+        local case_desc = desc .. " [case " .. i .. "]"
+        self:soft(case_desc, function()
+            fn(table.unpack(case))
+        end)
+    end
 end
 
 function framework:expect(value)
@@ -115,11 +190,114 @@ function framework:assert_equal(actual, expected, msg)
     end
 end
 
+-- Assert that a function throws an error, optionally matching a pattern
+function framework:assert_throws(fn, pattern, msg)
+    local ok, err = catch fn()
+    if ok then
+        error(msg or "Expected function to throw an error, but it succeeded")
+    end
+    if pattern and not string.find(tostring(err), pattern) then
+        error(msg or ("Expected error matching '" .. pattern .. "', got: " .. tostring(err)))
+    end
+end
+
+-- Assert that a string contains a pattern
+function framework:assert_contains(str, pattern, msg)
+    if type(str) ~= "string" then
+        error(msg or ("Expected string, got " .. type(str)))
+    end
+    if not string.find(str, pattern) then
+        error(msg or ("Expected string to contain '" .. pattern .. "', got: " .. str))
+    end
+end
+
+-- Assert that a value is of a specific type
+function framework:assert_type(value, expected_type, msg)
+    local actual_type = type(value)
+    if actual_type ~= expected_type then
+        error(msg or ("Expected type '" .. expected_type .. "', got '" .. actual_type .. "'"))
+    end
+end
+
+-- Assert that two numbers are approximately equal (for floating point)
+function framework:assert_near(actual, expected, delta, msg)
+    delta = delta or 0.0001
+    if type(actual) ~= "number" or type(expected) ~= "number" then
+        error(msg or "assert_near requires number arguments")
+    end
+    local diff = actual - expected
+    if diff < 0 then diff = -diff end
+    if diff > delta then
+        error(msg or ("Expected " .. tostring(expected) .. " ± " .. tostring(delta) .. ", got " .. tostring(actual)))
+    end
+end
+
+-- Helper function for deep equality comparison
+local function deep_equal(a, b, visited)
+    if a == b then return true end
+    if type(a) ~= type(b) then return false end
+    if type(a) ~= "table" then return false end
+    
+    visited = visited or {}
+    if visited[a] and visited[a][b] then return true end
+    visited[a] = visited[a] or {}
+    visited[a][b] = true
+    
+    -- Check all keys in a exist in b with same values
+    for k, v in pairs(a) do
+        if not deep_equal(v, b[k], visited) then return false end
+    end
+    -- Check b doesn't have extra keys
+    for k in pairs(b) do
+        if a[k] == nil then return false end
+    end
+    return true
+end
+
+-- Assert that two tables are deeply equal
+function framework:assert_deep_equal(actual, expected, msg)
+    if not deep_equal(actual, expected) then
+        error(msg or "Tables are not deeply equal")
+    end
+end
+
+-- Assert that a value is nil
+function framework:assert_nil(value, msg)
+    if value ~= nil then
+        error(msg or ("Expected nil, got " .. tostring(value)))
+    end
+end
+
+-- Assert that a value is not nil
+function framework:assert_not_nil(value, msg)
+    if value == nil then
+        error(msg or "Expected non-nil value, got nil")
+    end
+end
+
+-- Assert that a value has a specific length
+function framework:assert_length(value, expected_len, msg)
+    local actual_len = #value
+    if actual_len ~= expected_len then
+        error(msg or ("Expected length " .. tostring(expected_len) .. ", got " .. tostring(actual_len)))
+    end
+end
+
+-- Assert that a value is falsy (nil or false)
+function framework:assert_false(value, msg)
+    if value then
+        error(msg or ("Expected falsy value, got " .. tostring(value)))
+    end
+end
+
 function framework:finish()
     print("")
     local result_str = string.format("Result: %d/%d passed", self.passed, self.tests)
     if self.soft_failed > 0 then
         result_str = result_str .. string.format(" (%d soft failures)", self.soft_failed)
+    end
+    if self.skipped > 0 then
+        result_str = result_str .. string.format(" (%d skipped)", self.skipped)
     end
     print(result_str)
     if self.failed > 0 then

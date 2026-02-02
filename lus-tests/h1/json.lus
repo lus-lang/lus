@@ -1,4 +1,4 @@
-global setmetatable, assert, type, require, fromjson, tojson, io, tostring, table, fs, string, pledge
+global setmetatable, assert, type, require, fromjson, tojson, io, tostring, table, fs, string, pledge, ipairs, math
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -392,5 +392,219 @@ if json_files then
         end)
     end
 end
+
+-- ============================================
+-- Stress Tests
+-- ============================================
+
+tests:it("deeply nested objects", function()
+    -- Create deeply nested structure
+    local depth = 50
+    local json_str = string.rep('{"a":', depth) .. '1' .. string.rep('}', depth)
+    
+    local result = fromjson(json_str)
+    
+    -- Verify nesting
+    local current = result
+    for i = 1, depth do
+        assert(type(current) == "table", "level " .. i .. " should be table")
+        current = current.a
+    end
+    assert(current == 1, "innermost value should be 1")
+end)
+
+tests:it("deeply nested arrays", function()
+    local depth = 50
+    local json_str = string.rep('[', depth) .. '42' .. string.rep(']', depth)
+    
+    local result = fromjson(json_str)
+    
+    local current = result
+    for i = 1, depth do
+        assert(type(current) == "table", "level " .. i .. " should be table")
+        current = current[1]
+    end
+    assert(current == 42, "innermost value should be 42")
+end)
+
+tests:it("large array", function()
+    local parts = {}
+    for i = 1, 1000 do
+        parts[i] = tostring(i)
+    end
+    local json_str = '[' .. table.concat(parts, ',') .. ']'
+    
+    local result = fromjson(json_str)
+    
+    assert(#result == 1000, "should have 1000 elements")
+    assert(result[1] == 1, "first element")
+    assert(result[500] == 500, "middle element")
+    assert(result[1000] == 1000, "last element")
+end)
+
+tests:it("large object", function()
+    local parts = {}
+    for i = 1, 500 do
+        parts[i] = string.format('"key%d":%d', i, i)
+    end
+    local json_str = '{' .. table.concat(parts, ',') .. '}'
+    
+    local result = fromjson(json_str)
+    
+    assert(result.key1 == 1)
+    assert(result.key250 == 250)
+    assert(result.key500 == 500)
+end)
+
+tests:it("long string value", function()
+    local long_str = string.rep("x", 10000)
+    local json_str = tojson(long_str)
+    local result = fromjson(json_str)
+    
+    assert(result == long_str, "long string should roundtrip")
+    assert(#result == 10000, "length should be preserved")
+end)
+
+tests:it("string with many escapes", function()
+    local str_with_escapes = ""
+    for i = 1, 100 do
+        str_with_escapes = str_with_escapes .. "\n\t\r\\\""
+    end
+    
+    local json_str = tojson(str_with_escapes)
+    local result = fromjson(json_str)
+    
+    assert(result == str_with_escapes, "escaped string should roundtrip")
+end)
+
+tests:it("unicode strings", function()
+    local tests_data = {
+        "Hello, 世界!",          -- Chinese
+        "Привет мир",            -- Russian
+        "مرحبا بالعالم",         -- Arabic
+        "🎉🎊🎁",                 -- Emoji
+        "∑∏∫∂",                  -- Math symbols
+        "\u{1F600}\u{1F601}",    -- More emoji via escape
+    }
+    
+    for _, str in ipairs(tests_data) do
+        local json_str = tojson(str)
+        local result = fromjson(json_str)
+        assert(result == str, "unicode string should roundtrip: " .. str)
+    end
+end)
+
+tests:it("mixed nested structure", function()
+    local data = {
+        name = "test",
+        values = {1, 2, 3, {nested = true}},
+        metadata = {
+            created = "2024-01-01",
+            tags = {"a", "b", "c"},
+            config = {
+                enabled = true,
+                count = 42,
+                ratio = 3.14
+            }
+        }
+    }
+    
+    local json_str = tojson(data)
+    local result = fromjson(json_str)
+    
+    assert(result.name == "test")
+    assert(result.values[1] == 1)
+    assert(result.values[4].nested == true)
+    assert(result.metadata.config.enabled == true)
+    assert(result.metadata.config.count == 42)
+end)
+
+tests:it("tojson with many repeated keys", function()
+    local data = {}
+    for i = 1, 100 do
+        data["repeated_key_name_" .. i] = i
+    end
+    
+    local json_str = tojson(data)
+    local result = fromjson(json_str)
+    
+    for i = 1, 100 do
+        assert(result["repeated_key_name_" .. i] == i)
+    end
+end)
+
+tests:it("numeric precision", function()
+    local numbers = {
+        0,
+        1,
+        -1,
+        0.5,
+        -0.5,
+        1e10,
+        1e-10,
+        123456789,
+        -123456789,
+        3.141592653589793,
+    }
+    
+    for _, n in ipairs(numbers) do
+        local json_str = tojson(n)
+        local result = fromjson(json_str)
+        -- Allow small floating point differences
+        local diff = math.abs(result - n)
+        local tolerance = math.abs(n) * 1e-10
+        if tolerance < 1e-15 then tolerance = 1e-15 end
+        assert(diff <= tolerance, "number " .. n .. " should roundtrip, got " .. result)
+    end
+end)
+
+tests:it("whitespace handling variations", function()
+    -- Various whitespace combinations that are valid JSON
+    local test_cases = {
+        '  {"a":1}  ',
+        '\n\t{\n\t"a"\n:\n1\n}\n',
+        '{"a" : 1}',
+        '{ "a" : 1 }',
+        '[  1  ,  2  ,  3  ]',
+    }
+    
+    for _, json_str in ipairs(test_cases) do
+        local ok, result = catch fromjson(json_str)
+        assert(ok, "should parse: " .. json_str)
+    end
+end)
+
+tests:it("boolean and null edge cases", function()
+    -- Array of booleans and nulls
+    local json_str = '[true, false, null, true, null, false]'
+    local result = fromjson(json_str)
+    
+    assert(result[1] == true)
+    assert(result[2] == false)
+    assert(result[3] == nil)
+    assert(result[4] == true)
+    assert(result[5] == nil)
+    assert(result[6] == false)
+end)
+
+tests:it("empty structures", function()
+    assert(type(fromjson('{}')) == "table")
+    assert(type(fromjson('[]')) == "table")
+    assert(#fromjson('[]') == 0)
+    
+    -- Nested empty
+    local result = fromjson('{"a":{}, "b":[]}')
+    assert(type(result.a) == "table")
+    assert(type(result.b) == "table")
+end)
+
+tests:it("duplicate keys behavior", function()
+    -- JSON spec says behavior is implementation-defined
+    -- Most implementations use the last value
+    local json_str = '{"a":1, "a":2}'
+    local result = fromjson(json_str)
+    -- Just verify it parses without error
+    assert(type(result) == "table")
+end)
 
 tests:finish()
