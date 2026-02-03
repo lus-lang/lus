@@ -117,6 +117,17 @@ typedef struct expdesc {
 /* test for global variables */
 #define varglobal(v) ((v)->vd.kind >= GDKREG)
 
+/* runtime attribute info for a variable */
+typedef struct RuntimeAttr {
+  TString *name;           /* attribute expression start (name) */
+  lu_byte iscall;          /* 1 if this is a function call (has args) */
+  lu_byte ridx;            /* register holding evaluated attr (set after eval) */
+  struct RuntimeAttr *next;/* next attribute in chain */
+} RuntimeAttr;
+
+/* Forward declaration for GroupDesc */
+struct GroupDesc;
+
 /* description of an active variable */
 typedef union Vardesc {
   struct {
@@ -125,6 +136,9 @@ typedef union Vardesc {
     lu_byte ridx;  /* register holding the variable */
     short pidx;    /* index of the variable in the Proto's 'locvars' array */
     TString *name; /* variable name */
+    RuntimeAttr *attrs;  /* linked list of runtime attributes (or NULL) */
+    lu_byte nattrs;      /* count of runtime attributes */
+    struct GroupDesc *parentgroup; /* parent group if this is a group field (or NULL) */
   } vd;
   TValue k; /* constant value (if any) */
 } Vardesc;
@@ -144,6 +158,8 @@ typedef struct GroupDesc {
   GroupField *fields; /* head of field list */
   int nfields;        /* number of fields */
   struct GroupDesc *next; /* next group in active list */
+  RuntimeAttr *attrs;  /* group-level runtime attributes (or NULL) */
+  lu_byte nattrs;      /* count of runtime attributes */
 } GroupDesc;
 
 /* description of pending goto statements and label statements */

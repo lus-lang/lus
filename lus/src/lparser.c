@@ -77,6 +77,7 @@ typedef struct BlockCnt {
 */
 static void statement(LexState *ls);
 static void expr(LexState *ls, expdesc *v);
+static BinOpr subexpr(LexState *ls, expdesc *v, int limit);
 static void interpexp(LexState *ls, expdesc *v);
 static void catchexpr(LexState *ls, expdesc *v);
 static void catchstat(LexState *ls, int line);
@@ -90,10 +91,48 @@ static GroupDesc *newgroup(LexState *ls, TString *name);
 static GroupField *newgroupfield(LexState *ls, GroupDesc *g, TString *name,
                                  lu_byte ridx, lu_byte kind);
 static GroupDesc *groupconstructor(LexState *ls, TString *groupname);
+static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
+                                          RuntimeAttr *parentattrs,
+                                          lu_byte nparentattrs);
 
 /* prototypes for attribute/local functions (used by assigncond) */
+static lu_byte parseattributes(LexState *ls, RuntimeAttr **attrs, int *nattrs);
 static lu_byte getvarattribute(LexState *ls, lu_byte df);
 static void checktoclose(FuncState *fs, int level);
+static void call_runtime_attrs(LexState *ls, int valreg, TString *varname,
+                                RuntimeAttr *attrs);
+
+/*
+** Concatenate two TStrings with a separator character.
+** Returns a new TString: str1 + sep + str2
+*/
+static TString *concat_strings(LexState *ls, TString *s1, char sep, TString *s2) {
+  lua_State *L = ls->L;
+  size_t l1 = tsslen(s1);
+  size_t l2 = tsslen(s2);
+  size_t totallen = l1 + 1 + l2;  /* +1 for separator */
+  char buf[256];  /* stack buffer for short strings */
+  char *p;
+  TString *result;
+
+  if (totallen < sizeof(buf)) {
+    p = buf;
+  } else {
+    p = luaM_newvector(L, totallen + 1, char);
+  }
+
+  memcpy(p, getstr(s1), l1);
+  p[l1] = sep;
+  memcpy(p + l1 + 1, getstr(s2), l2);
+
+  result = luaS_newlstr(L, p, totallen);
+
+  if (p != buf) {
+    luaM_freearray(L, p, totallen + 1);
+  }
+
+  return result;
+}
 static void localfrom(LexState *ls, int firstidx, int nvars);
 
 static l_noret error_expected(LexState *ls, int token) {
@@ -213,10 +252,11 @@ static short registerlocalvar(LexState *ls, FuncState *fs, TString *varname) {
 }
 
 /*
-** Create a new variable with the given 'name' and given 'kind'.
+** Create a new variable with the given 'name', 'kind', and runtime attributes.
 ** Return its index in the function.
 */
-static int new_varkind(LexState *ls, TString *name, lu_byte kind) {
+static int new_varkind_attrs(LexState *ls, TString *name, lu_byte kind,
+                              RuntimeAttr *attrs, lu_byte nattrs) {
   lua_State *L = ls->L;
   FuncState *fs = ls->fs;
   Dyndata *dyd = ls->dyd;
@@ -224,9 +264,20 @@ static int new_varkind(LexState *ls, TString *name, lu_byte kind) {
   growarray_arena(L, dyd->arena, dyd->actvar.arr, dyd->actvar.n,
                   dyd->actvar.size, Vardesc, SHRT_MAX, "variable declarations");
   var = &dyd->actvar.arr[dyd->actvar.n++];
-  var->vd.kind = kind; /* default */
+  var->vd.kind = kind;
   var->vd.name = name;
+  var->vd.attrs = attrs;
+  var->vd.nattrs = nattrs;
+  var->vd.parentgroup = NULL;
   return dyd->actvar.n - 1 - fs->firstlocal;
+}
+
+/*
+** Create a new variable with the given 'name' and given 'kind'.
+** Return its index in the function.
+*/
+static int new_varkind(LexState *ls, TString *name, lu_byte kind) {
+  return new_varkind_attrs(ls, name, kind, NULL, 0);
 }
 
 /*
@@ -2197,11 +2248,60 @@ static void check_conflict(LexState *ls, struct LHS_assign *lh, expdesc *v) {
   }
 }
 
+/*
+** Store value to a variable, handling runtime attributes if present.
+** For VLOCAL with runtime attributes (direct or via parent group):
+**   1. If value is nil, skip handlers and store directly
+**   2. Otherwise, call handlers and store the result
+*/
+static void storevar_with_attrs(LexState *ls, expdesc *var, expdesc *ex) {
+  FuncState *fs = ls->fs;
+
+  /* Check if this is a local with runtime attributes */
+  if (var->k == VLOCAL) {
+    Vardesc *vd = getlocalvardesc(fs, var->u.var.vidx);
+    RuntimeAttr *attrs = vd->vd.attrs;
+    lu_byte nattrs = vd->vd.nattrs;
+    TString *handlername = vd->vd.name;
+
+    /* Check for parent group's runtime attrs */
+    if (nattrs == 0 && vd->vd.parentgroup != NULL) {
+      GroupDesc *pg = vd->vd.parentgroup;
+      if (pg->nattrs > 0) {
+        attrs = pg->attrs;
+        nattrs = pg->nattrs;
+        /* Construct "groupname.fieldname" */
+        handlername = concat_strings(ls, pg->name, '.', vd->vd.name);
+      }
+    }
+
+    if (nattrs > 0) {
+      /* Has runtime attributes - need to call handlers */
+      int valreg;
+      /* First, evaluate the expression to a register */
+      luaK_exp2nextreg(fs, ex);
+      valreg = fs->freereg - 1;
+      /* Call the attribute handlers (modifies valreg if handlers return non-nil) */
+      call_runtime_attrs(ls, valreg, handlername, attrs);
+      /* Move result to variable's register */
+      if (valreg != vd->vd.ridx) {
+        luaK_codeABC(fs, OP_MOVE, vd->vd.ridx, valreg, 0);
+      }
+      fs->freereg--;  /* free the temp register */
+      return;
+    }
+  }
+
+  /* No runtime attributes - use standard store */
+  luaK_storevar(fs, var, ex);
+}
+
 /* Create code to store the "top" register in 'var' */
-static void storevartop(FuncState *fs, expdesc *var) {
+static void storevartop(LexState *ls, expdesc *var) {
+  FuncState *fs = ls->fs;
   expdesc e;
   init_exp(&e, VNONRELOC, fs->freereg - 1);
-  luaK_storevar(fs, var, &e); /* will also free the top register */
+  storevar_with_attrs(ls, var, &e); /* handles runtime attrs if needed */
 }
 
 /*
@@ -2269,7 +2369,7 @@ static void assignfrom(LexState *ls, struct LHS_assign *lh, int nvars) {
   /* Store each value to its variable (in reverse order like restassign) */
   cur = lh;
   for (i = nvars - 1; i >= 0; i--) {
-    storevartop(fs, &cur->v);
+    storevartop(ls, &cur->v);
     cur = cur->prev;
   }
 }
@@ -2302,11 +2402,11 @@ static int restassign(LexState *ls, struct LHS_assign *lh, int nvars) {
       adjust_assign(ls, nvars, nexps, &e);
     else {
       luaK_setoneret(ls->fs, &e); /* close last expression */
-      luaK_storevar(ls->fs, &lh->v, &e);
+      storevar_with_attrs(ls, &lh->v, &e);
       return 0; /* avoid default */
     }
   }
-  storevartop(ls->fs, &lh->v); /* default assignment */
+  storevartop(ls, &lh->v); /* default assignment */
   return 0;
 }
 
@@ -2804,22 +2904,143 @@ static void localfunc(LexState *ls) {
   localdebuginfo(fs, fvar)->startpc = fs->pc;
 }
 
-static lu_byte getvarattribute(LexState *ls, lu_byte df) {
-  /* attrib -> ['<' NAME '>'] */
-  if (testnext(ls, '<')) {
-    TString *ts = str_checkname(ls);
-    const char *attr = getstr(ts);
-    checknext(ls, '>');
-    if (strcmp(attr, "const") == 0)
-      return RDKCONST; /* read-only variable */
-    else if (strcmp(attr, "close") == 0)
-      return RDKTOCLOSE; /* to-be-closed variable */
-    else if (strcmp(attr, "group") == 0)
-      return RDKGROUP; /* local group */
-    else
-      luaK_semerror(ls, "unknown attribute '%s'", attr);
+/*
+** Check if a name is a builtin attribute.
+** Returns the attribute kind, or -1 if not a builtin.
+*/
+static int isbuiltin_attr(const char *attr) {
+  if (strcmp(attr, "const") == 0)
+    return RDKCONST;
+  else if (strcmp(attr, "close") == 0)
+    return RDKTOCLOSE;
+  else if (strcmp(attr, "group") == 0)
+    return RDKGROUP;
+  return -1;  /* not a builtin */
+}
+
+/*
+** Priority limit for attribute expressions.
+** Comparison operators (<, >, <=, >=, ==, ~=) have priority 3.
+** Using limit 3 means these operators stop the attribute expression,
+** which is necessary since '>' ends the attribute list.
+** Arithmetic, bitwise, and concatenation operators still work.
+*/
+#define ATTR_EXPR_LIMIT 3
+
+/*
+** Parse a runtime attribute expression.
+** Supports most expressions: names, function calls, arithmetic, etc.
+** Comparison operators are excluded since '>' ends the attribute.
+** Creates a hidden local to store the evaluated attribute function.
+** Examples: <myattr>, <only "number">, <validators.range(1, 10)>, <1+2>
+*/
+static void parse_runtime_attr(LexState *ls, RuntimeAttr *ra) {
+  FuncState *fs = ls->fs;
+  expdesc attrexp;
+
+  /* Create a hidden local to hold the attribute function.
+  ** This ensures the attribute stays alive for the variable's lifetime. */
+  new_localvarliteral(ls, "(attr)");
+  adjustlocalvars(ls, 1);  /* activate immediately to reserve register */
+
+  /* Get the register assigned to the hidden local */
+  int attridx = fs->nactvar - 1;
+  Vardesc *attrvd = getlocalvardesc(fs, attridx);
+
+  /* Parse the attribute expression using subexpr with a limit.
+  ** The limit stops parsing at comparison operators (priority 3),
+  ** which is necessary since '>' ends the attribute list.
+  ** This still allows arithmetic, bitwise, string concat, etc. */
+  subexpr(ls, &attrexp, ATTR_EXPR_LIMIT);
+
+  /* Evaluate the attribute expression into the hidden local's register */
+  luaK_exp2nextreg(fs, &attrexp);
+
+  /* The result should now be in the hidden local's register.
+  ** If it ended up elsewhere, move it. */
+  if (fs->freereg - 1 != attrvd->vd.ridx) {
+    luaK_codeABC(fs, OP_MOVE, attrvd->vd.ridx, fs->freereg - 1, 0);
+    fs->freereg--;  /* free the temp register */
   }
-  return df; /* return default value */
+
+  /* Store the attribute info */
+  ra->name = NULL;  /* no single name for arbitrary expressions */
+  ra->ridx = attrvd->vd.ridx;
+  ra->iscall = 0;  /* not used anymore, kept for compatibility */
+}
+
+/*
+** Parse comma-separated attributes: '<' attr {',' attr} '>'
+** Returns builtin kind and populates attrs list with runtime attr info.
+** Builtins (const, close, group) must come first and are simple names.
+** Runtime attributes can be ANY expression.
+*/
+static lu_byte parseattributes(LexState *ls, RuntimeAttr **attrs, int *nattrs) {
+  lu_byte kind = VDKREG;
+  int saw_runtime = 0;
+  RuntimeAttr *attrlist = NULL;
+  RuntimeAttr **attrtail = &attrlist;
+  int count = 0;
+
+  if (attrs) *attrs = NULL;
+  if (nattrs) *nattrs = 0;
+
+  if (!testnext(ls, '<'))
+    return VDKREG;  /* no attributes */
+
+  do {
+    /* Check if this is a builtin attribute (simple NAME: const, close, group).
+    ** Builtins are checked by peeking at the token without consuming it,
+    ** so that non-builtin names can be parsed as full expressions. */
+    int builtin = -1;
+    if (ls->t.token == TK_NAME) {
+      const char *name = getstr(ls->t.seminfo.ts);
+      builtin = isbuiltin_attr(name);
+    }
+
+    if (builtin >= 0) {
+      /* Builtin attribute - consume the name token */
+      luaX_next(ls);
+      if (saw_runtime)
+        luaK_semerror(ls,
+          "compile-time attribute '%s' must come before runtime attributes",
+          (builtin == RDKCONST) ? "const" :
+          (builtin == RDKTOCLOSE) ? "close" : "group");
+      if (kind != VDKREG && kind != builtin)
+        luaK_semerror(ls, "conflicting attributes");
+      kind = (lu_byte)builtin;
+    }
+    else {
+      /* Runtime attribute - parse ANY expression */
+      saw_runtime = 1;
+      RuntimeAttr *ra = luaA_new_obj(ls->dyd->arena, RuntimeAttr);
+      parse_runtime_attr(ls, ra);
+      ra->next = NULL;
+      /* Append to list (maintain order) */
+      *attrtail = ra;
+      attrtail = &ra->next;
+      count++;
+    }
+  } while (testnext(ls, ','));
+
+  checknext(ls, '>');
+
+  if (attrs) *attrs = attrlist;
+  if (nattrs) *nattrs = count;
+  return kind;
+}
+
+/*
+** Wrapper for contexts that only allow compile-time attributes.
+** Returns the compile-time kind, errors if runtime attributes are present.
+*/
+static lu_byte getvarattribute(LexState *ls, lu_byte df) {
+  RuntimeAttr *attrs;
+  int nattrs;
+  lu_byte kind = parseattributes(ls, &attrs, &nattrs);
+  if (nattrs > 0)
+    luaK_semerror(ls, "runtime attributes not supported in this context");
+  return (kind == VDKREG) ? df : kind;
 }
 
 static void checktoclose(FuncState *fs, int level) {
@@ -2827,6 +3048,84 @@ static void checktoclose(FuncState *fs, int level) {
     marktobeclosed(fs);
     luaK_codeABC(fs, OP_TBC, reglevel(fs, level), 0, 0);
   }
+}
+
+/*
+** Generate code to call runtime attributes for a value.
+** 'valreg' is the register containing the value to be transformed.
+** 'varname' is the variable name (for passing to handlers).
+** 'attrs' is the linked list of RuntimeAttr.
+** The final result is left in 'valreg'.
+**
+** For each attribute handler:
+**   1. Check if value is nil - if so, skip all handlers
+**   2. Call handler(name, value)
+**   3. If result is nil, keep the previous value
+**   4. Otherwise, use the result as the new value
+*/
+static void call_runtime_attrs(LexState *ls, int valreg, TString *varname,
+                                RuntimeAttr *attrs) {
+  FuncState *fs = ls->fs;
+  RuntimeAttr *attr;
+  int skipjump = NO_JUMP;  /* jump to skip all handlers if value is nil */
+  int nilk;
+
+  if (attrs == NULL)
+    return;  /* no runtime attributes */
+
+  /* Get nil constant index (used for comparisons) */
+  nilk = luaK_nilK(fs);
+
+  /* First, check if value is nil - skip all handlers if so */
+  /* EQK valreg, nilK, k=1 means jump if valreg == nil */
+  luaK_codeABCk(fs, OP_EQK, valreg, nilk, 0, 1);
+  skipjump = luaK_jump(fs);
+
+  /* For each attribute, generate: call attr(name, value), handle nil return */
+  for (attr = attrs; attr != NULL; attr = attr->next) {
+    int base = fs->freereg;
+    int nilskip;
+    expdesc nameexp;
+
+    /* Reserve registers for call: attr, name, value */
+    luaK_reserveregs(fs, 3);
+
+    /* Copy attribute function from its hidden local to base register.
+    ** The attribute was pre-evaluated and stored in a hidden local
+    ** during parseattributes, with its register stored in attr->ridx. */
+    luaK_codeABC(fs, OP_MOVE, base, attr->ridx, 0);
+
+    /* Load variable name string constant */
+    codestring(&nameexp, varname);
+    luaK_exp2nextreg(fs, &nameexp);
+    /* nameexp is now in freereg-1, move to base+1 if needed */
+    if (fs->freereg - 1 != base + 1) {
+      luaK_codeABC(fs, OP_MOVE, base + 1, fs->freereg - 1, 0);
+    }
+    fs->freereg = cast_byte(base + 2);  /* reset freereg for value */
+
+    /* Copy current value to base+2 */
+    luaK_codeABC(fs, OP_MOVE, base + 2, valreg, 0);
+
+    /* CALL attr(name, value) -> 1 result at base */
+    luaK_codeABC(fs, OP_CALL, base, 3, 2);  /* 2 args, 1 result */
+
+    /* Check if result is nil - if so, skip the move */
+    luaK_codeABCk(fs, OP_EQK, base, nilk, 0, 1);  /* jump if result == nil */
+    nilskip = luaK_jump(fs);
+
+    /* Result is not nil - move to valreg */
+    luaK_codeABC(fs, OP_MOVE, valreg, base, 0);
+
+    /* Patch the nil skip jump to here */
+    luaK_patchtohere(fs, nilskip);
+
+    /* Free the temporary registers */
+    fs->freereg = cast_byte(base);
+  }
+
+  /* Patch the initial nil-value skip jump to here */
+  luaK_patchtohere(fs, skipjump);
 }
 
 /*
@@ -2929,6 +3228,8 @@ static GroupDesc *newgroup(LexState *ls, TString *name) {
   g->name = name;
   g->fields = NULL;
   g->nfields = 0;
+  g->attrs = NULL;
+  g->nattrs = 0;
   g->next = dyd->groups;
   dyd->groups = g;
   return g;
@@ -2968,8 +3269,11 @@ static GroupField *newgroupfield(LexState *ls, GroupDesc *g, TString *name,
 ** Parse a group constructor: '{' { [attrib] NAME '=' expr [SEP] } '}'
 ** Each field becomes a real local variable with its register.
 ** The GroupField tracks the mapping from field name to variable index.
+** If parentattrs is non-NULL, call them for each field initialization.
 */
-static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
+static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
+                                          RuntimeAttr *parentattrs,
+                                          lu_byte nparentattrs) {
   FuncState *fs = ls->fs;
   GroupDesc *g = newgroup(ls, groupname);
   int line = ls->linenumber;
@@ -2984,8 +3288,9 @@ static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
     checknext(ls, '=');
 
     if (fieldkind == RDKGROUP) {
-      /* Subgroup: recurse */
-      GroupDesc *subg = groupconstructor(ls, fieldname);
+      /* Subgroup: recurse (pass parent attrs for nested fields) */
+      GroupDesc *subg = groupconstructor_attrs(ls, fieldname,
+                                                parentattrs, nparentattrs);
       /* Store subgroup reference - fields are already created as locals */
       GroupField *f = newgroupfield(ls, g, fieldname, 0, RDKGROUP);
       f->subgroup = subg;
@@ -2993,6 +3298,7 @@ static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
       /* Regular field: create a real local variable */
       expdesc e;
       int vidx;
+      int valreg;
 
       /* Predeclare the field as a local variable */
       vidx = new_varkind(ls, fieldname, fieldkind);
@@ -3002,6 +3308,14 @@ static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
       /* Parse and evaluate the expression into the next register */
       expr(ls, &e);
       luaK_exp2nextreg(fs, &e);
+      valreg = fs->freereg - 1;
+
+      /* Call parent's runtime attribute handlers if any */
+      if (nparentattrs > 0) {
+        /* Construct "groupname.fieldname" */
+        TString *fullname = concat_strings(ls, groupname, '.', fieldname);
+        call_runtime_attrs(ls, valreg, fullname, parentattrs);
+      }
 
       /* NOW activate the variable - it will get the register we just used */
       adjustlocalvars(ls, 1);
@@ -3024,6 +3338,13 @@ static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
   return g;
 }
 
+/*
+** Legacy wrapper for groupconstructor without parent attrs.
+*/
+static GroupDesc *groupconstructor(LexState *ls, TString *groupname) {
+  return groupconstructor_attrs(ls, groupname, NULL, 0);
+}
+
 static void localstat(LexState *ls) {
   /* stat -> LOCAL NAME attrib { ',' NAME attrib } ['=' explist | 'from' expr]
    */
@@ -3034,6 +3355,7 @@ static void localstat(LexState *ls) {
   int firstidx = -1; /* index of first variable */
   int nvars = 0;
   int ngroups = 0; /* count of <group> variables */
+  int nwithattrs = 0; /* count of variables with runtime attrs */
   int nexps;
   expdesc e;
   LusAstNode *names_head = NULL;
@@ -3041,12 +3363,16 @@ static void localstat(LexState *ls) {
 
   do {                                          /* for each variable */
     TString *vname = str_checkname(ls);         /* get its name */
-    lu_byte kind = getvarattribute(ls, VDKREG); /* attribute (if any) */
+    RuntimeAttr *attrs = NULL;
+    int nattrs = 0;
+    lu_byte kind = parseattributes(ls, &attrs, &nattrs);
 
-    vidx = new_varkind(ls, vname, kind); /* predeclare it */
+    vidx = new_varkind_attrs(ls, vname, kind, attrs, (lu_byte)nattrs);
 
     if (kind == RDKGROUP)
       ngroups++;
+    if (nattrs > 0)
+      nwithattrs++;
 
     /* Build AST name list */
     if (AST_ACTIVE(ls)) {
@@ -3070,6 +3396,10 @@ static void localstat(LexState *ls) {
     nvars++;
   } while (testnext(ls, ','));
 
+  /* Runtime attributes not yet supported with multiple variables or 'from' */
+  if (nwithattrs > 0 && nvars > 1)
+    luaK_semerror(ls, "runtime attributes not supported with multiple variables");
+
   if (ngroups > 0) {
     /* Group path: all variables must be groups */
     int i;
@@ -3091,8 +3421,29 @@ static void localstat(LexState *ls) {
 
       if (ls->t.token == '{') {
         /* Constructor: { ... } */
-        GroupDesc *g = groupconstructor(ls, gname);
-        (void)g;
+        GroupDesc *g = groupconstructor_attrs(ls, gname,
+                                              gvar->vd.attrs, gvar->vd.nattrs);
+        /* Copy runtime attrs from Vardesc to GroupDesc for assignments */
+        if (gvar->vd.nattrs > 0) {
+          g->attrs = gvar->vd.attrs;
+          g->nattrs = gvar->vd.nattrs;
+          /* Set parentgroup for all fields so assignments call handlers */
+          GroupField *fld;
+          for (fld = g->fields; fld != NULL; fld = fld->next) {
+            if (fld->kind != RDKGROUP) {
+              /* Find the Vardesc for this field by register */
+              int j;
+              for (j = 0; j < fs->nactvar; j++) {
+                Vardesc *fvd = getlocalvardesc(fs, j);
+                if (fvd->vd.ridx == fld->ridx &&
+                    strcmp(getstr(fvd->vd.name), getstr(fld->name)) == 0) {
+                  fvd->vd.parentgroup = g;
+                  break;
+                }
+              }
+            }
+          }
+        }
       } else {
         /* Copy from another group */
         expdesc src;
@@ -3129,6 +3480,8 @@ static void localstat(LexState *ls) {
   } else if (testnext(ls, TK_FROM)) { /* table deconstruction? */
     if (toclose != -1)
       luaK_semerror(ls, "cannot use 'from' with to-be-closed variables");
+    if (nwithattrs > 0)
+      luaK_semerror(ls, "runtime attributes not supported with 'from'");
     localfrom(ls, firstidx, nvars);
     /* Mark as from syntax in AST */
     if (AST_ACTIVE(ls) && ls->ast->curnode) {
@@ -3153,6 +3506,16 @@ static void localstat(LexState *ls) {
     } else {
       adjust_assign(ls, nvars, nexps, &e);
       adjustlocalvars(ls, nvars);
+      /* Call runtime attributes for variables that have them */
+      if (nwithattrs > 0) {
+        int i;
+        for (i = 0; i < nvars; i++) {
+          Vardesc *vd = getlocalvardesc(fs, firstidx + i);
+          if (vd->vd.nattrs > 0) {
+            call_runtime_attrs(ls, vd->vd.ridx, vd->vd.name, vd->vd.attrs);
+          }
+        }
+      }
     }
     checktoclose(fs, toclose);
   } else {
@@ -3214,7 +3577,7 @@ static void initglobal(LexState *ls, int nvars, int firstidx, int n, int line) {
     initglobal(ls, nvars, firstidx, n + 1, line);
     leavelevel(ls);
     checkglobal(ls, varname, line);
-    storevartop(fs, &var);
+    storevartop(ls, &var);
   }
 }
 
@@ -3276,7 +3639,7 @@ static void globalfrom(LexState *ls, int nvars, int firstidx, int n, int line) {
 
     /* Now store the value from stack to global */
     checkglobal(ls, varname, line);
-    storevartop(fs, &var);
+    storevartop(ls, &var);
   }
 }
 

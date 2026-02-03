@@ -1,0 +1,478 @@
+--[[
+    Runtime Attributes Test Suite
+    Tests for local variable runtime attributes feature (acquis-22)
+]]
+
+global print, require, assert, type, pledge, ipairs, setmetatable, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("runtime_attributes")
+
+-- =============================================================================
+-- Basic Usage Tests
+-- =============================================================================
+
+tests:it("handler called on init", function()
+    local called = false
+    local function handler(name, value)
+        called = true
+        assert(name == "x", "name should be 'x'")
+        assert(value == 10, "value should be 10")
+        return value
+    end
+    local x <handler> = 10
+    assert(called, "handler should be called on initialization")
+    assert(x == 10, "x should be 10")
+end)
+
+tests:it("handler called on assignment", function()
+    local calls = 0
+    local function handler(name, value)
+        calls = calls + 1
+        return value
+    end
+    local x <handler> = 1
+    assert(calls == 1, "should be called once on init")
+    x = 2
+    assert(calls == 2, "should be called on assignment")
+    x = 3
+    assert(calls == 3, "should be called on each assignment")
+end)
+
+tests:it("return value modifies variable", function()
+    local function addone(name, value)
+        return value + 1
+    end
+    local x <addone> = 10
+    assert(x == 11, "init: 10 + 1 = 11")
+    x = 20
+    assert(x == 21, "assign: 20 + 1 = 21")
+end)
+
+tests:it("nil return keeps original value", function()
+    local function validator(name, value)
+        return nil  -- keep original
+    end
+    local x <validator> = 42
+    assert(x == 42, "nil return should keep original value")
+    x = 100
+    assert(x == 100, "nil return should keep original on assignment")
+end)
+
+-- =============================================================================
+-- Nil Assignment Tests
+-- =============================================================================
+
+tests:it("nil assignment skips handler", function()
+    local called = false
+    local function handler(name, value)
+        called = true
+        return value
+    end
+    local x <handler> = 10
+    called = false  -- reset
+    x = nil
+    assert(not called, "handler should NOT be called when assigning nil")
+end)
+
+tests:it("nil init skips handler", function()
+    local called = false
+    local function handler(name, value)
+        called = true
+        return value
+    end
+    local x <handler> = nil
+    assert(not called, "handler should NOT be called when initializing with nil")
+end)
+
+-- =============================================================================
+-- Multiple Attributes Tests
+-- =============================================================================
+
+tests:it("multiple attributes called in order", function()
+    local order = {}
+    local function first(name, value)
+        order[#order + 1] = "first"
+        return value + 1
+    end
+    local function second(name, value)
+        order[#order + 1] = "second"
+        return value + 2
+    end
+    local x <first, second> = 10
+    -- first: 10 -> 11, second: 11 -> 13
+    assert(x == 13, "10 + 1 + 2 = 13")
+    assert(order[1] == "first", "first should be called first")
+    assert(order[2] == "second", "second should be called second")
+end)
+
+tests:it("multiple attributes - value chaining", function()
+    local function double(name, value)
+        return value * 2
+    end
+    local function addten(name, value)
+        return value + 10
+    end
+    local x <double, addten> = 5
+    -- double: 5 -> 10, addten: 10 -> 20
+    assert(x == 20, "5 * 2 + 10 = 20")
+end)
+
+tests:it("multiple attributes - nil return keeps previous", function()
+    local function first(name, value)
+        return value + 1  -- returns non-nil
+    end
+    local function second(name, value)
+        return nil  -- returns nil, keeps first's result
+    end
+    local x <first, second> = 10
+    assert(x == 11, "second's nil should keep first's result (11)")
+end)
+
+-- =============================================================================
+-- Group Variable Tests
+-- =============================================================================
+
+tests:it("group with runtime attr - init", function()
+    local names = {}
+    local function handler(name, value)
+        names[#names + 1] = name
+        return value
+    end
+    local z <group, handler> = { a = 1, b = 2 }
+    assert(#names == 2, "handler should be called for each field")
+    -- Check that dotted names were passed
+    local found_a, found_b = false, false
+    for _, n in ipairs(names) do
+        if n == "z.a" then found_a = true end
+        if n == "z.b" then found_b = true end
+    end
+    assert(found_a, "should have 'z.a'")
+    assert(found_b, "should have 'z.b'")
+end)
+
+tests:it("group with runtime attr - assignment", function()
+    local last_name = nil
+    local last_value = nil
+    local function handler(name, value)
+        last_name = name
+        last_value = value
+        return value
+    end
+    local z <group, handler> = { a = 1, b = 2 }
+    z.a = 100
+    assert(last_name == "z.a", "handler should receive 'z.a'")
+    assert(last_value == 100, "handler should receive new value")
+    z.b = 200
+    assert(last_name == "z.b", "handler should receive 'z.b'")
+    assert(last_value == 200, "handler should receive new value")
+end)
+
+tests:it("group with runtime attr - value modification", function()
+    local function increment(name, value)
+        return value + 1
+    end
+    local z <group, increment> = { a = 10, b = 20 }
+    assert(z.a == 11, "a: 10 + 1 = 11")
+    assert(z.b == 21, "b: 20 + 1 = 21")
+    z.a = 100
+    assert(z.a == 101, "a: 100 + 1 = 101")
+end)
+
+-- =============================================================================
+-- Type Handling Tests
+-- =============================================================================
+
+tests:it("handler with number value", function()
+    local received_type = nil
+    local function handler(name, value)
+        received_type = type(value)
+        return value
+    end
+    local x <handler> = 42
+    assert(received_type == "number", "should receive number")
+end)
+
+tests:it("handler with string value", function()
+    local received_type = nil
+    local function handler(name, value)
+        received_type = type(value)
+        return value
+    end
+    local x <handler> = "hello"
+    assert(received_type == "string", "should receive string")
+end)
+
+tests:it("handler with boolean value", function()
+    local received_type = nil
+    local function handler(name, value)
+        received_type = type(value)
+        return value
+    end
+    local x <handler> = true
+    assert(received_type == "boolean", "should receive boolean")
+end)
+
+tests:it("handler with table value", function()
+    local received_type = nil
+    local function handler(name, value)
+        received_type = type(value)
+        return value
+    end
+    local x <handler> = { a = 1 }
+    assert(received_type == "table", "should receive table")
+end)
+
+tests:it("handler with function value", function()
+    local received_type = nil
+    local function handler(name, value)
+        received_type = type(value)
+        return value
+    end
+    local f = function() end
+    local x <handler> = f
+    assert(received_type == "function", "should receive function")
+end)
+
+-- =============================================================================
+-- Edge Cases
+-- =============================================================================
+
+tests:it("false value (not nil) calls handler", function()
+    local called = false
+    local function handler(name, value)
+        called = true
+        assert(value == false, "should receive false")
+        return value
+    end
+    local x <handler> = false
+    assert(called, "handler should be called for false value")
+    assert(x == false, "x should be false")
+end)
+
+tests:it("0 value calls handler", function()
+    local called = false
+    local function handler(name, value)
+        called = true
+        assert(value == 0, "should receive 0")
+        return value
+    end
+    local x <handler> = 0
+    assert(called, "handler should be called for 0")
+end)
+
+tests:it("empty string value calls handler", function()
+    local called = false
+    local function handler(name, value)
+        called = true
+        assert(value == "", "should receive empty string")
+        return value
+    end
+    local x <handler> = ""
+    assert(called, "handler should be called for empty string")
+end)
+
+-- =============================================================================
+-- Common Patterns
+-- =============================================================================
+
+tests:it("clamping pattern", function()
+    local function clamp(min, max)
+        return function(name, value)
+            if value < min then return min end
+            if value > max then return max end
+            return value
+        end
+    end
+    local c = clamp(0, 100)
+    local x <c> = 50
+    assert(x == 50, "50 is in range")
+    x = 150
+    assert(x == 100, "150 clamped to 100")
+    x = -10
+    assert(x == 0, "-10 clamped to 0")
+end)
+
+tests:it("logging pattern", function()
+    local log = {}
+    local function logger(name, value)
+        log[#log + 1] = { name = name, value = value }
+        return value
+    end
+    local x <logger> = 1
+    x = 2
+    x = 3
+    assert(#log == 3, "should have 3 log entries")
+    assert(log[1].value == 1, "first log value")
+    assert(log[2].value == 2, "second log value")
+    assert(log[3].value == 3, "third log value")
+end)
+
+-- =============================================================================
+-- Function Call Attribute Expression Tests
+-- =============================================================================
+
+tests:it("function call attribute - only(type)", function()
+    -- Factory function that creates a type validator
+    local function only(expected_type)
+        return function(name, value)
+            assert(type(value) == expected_type,
+                   `expected {expected_type}, got {type(value)}`)
+            return value
+        end
+    end
+    -- Use the factory call directly as an attribute
+    local x <only("number")> = 10
+    assert(x == 10, "should accept number")
+    x = 20
+    assert(x == 20, "should accept another number")
+end)
+
+tests:it("function call attribute - clamp(min,max)", function()
+    local function clamp(min, max)
+        return function(name, value)
+            if value < min then return min end
+            if value > max then return max end
+            return value
+        end
+    end
+    -- Use factory call directly as attribute
+    local x <clamp(0, 100)> = 50
+    assert(x == 50, "50 stays 50")
+    x = 150
+    assert(x == 100, "150 clamped to 100")
+    x = -20
+    assert(x == 0, "-20 clamped to 0")
+end)
+
+tests:it("function call attribute - string argument", function()
+    local called_with = nil
+    local function tag(t)
+        return function(name, value)
+            called_with = t
+            return value
+        end
+    end
+    local x <tag "hello"> = 1
+    assert(called_with == "hello", "should pass string arg")
+end)
+
+tests:it("function call attribute - table argument", function()
+    local config = nil
+    local function configure(opts)
+        return function(name, value)
+            config = opts
+            return value
+        end
+    end
+    local x <configure { min = 0, max = 100 }> = 50
+    assert(config ~= nil, "config should be set")
+    assert(config.min == 0, "min should be 0")
+    assert(config.max == 100, "max should be 100")
+end)
+
+tests:it("function call attribute - module.factory pattern", function()
+    -- Simulate a module with a factory function
+    local validators = {
+        range = function(min, max)
+            return function(name, value)
+                if value < min then return min end
+                if value > max then return max end
+                return value
+            end
+        end
+    }
+    local x <validators.range(1, 10)> = 5
+    assert(x == 5, "5 stays 5")
+    x = 15
+    assert(x == 10, "15 clamped to 10")
+    x = -5
+    assert(x == 1, "-5 clamped to 1")
+end)
+
+tests:it("function call attribute with value modification", function()
+    local function multiply(factor)
+        return function(name, value)
+            return value * factor
+        end
+    end
+    local x <multiply(2)> = 5
+    assert(x == 10, "5 * 2 = 10")
+    x = 3
+    assert(x == 6, "3 * 2 = 6")
+end)
+
+tests:it("function call attribute - chained with simple attr", function()
+    local calls = {}
+    local function double()
+        return function(name, value)
+            calls[#calls + 1] = "double"
+            return value * 2
+        end
+    end
+    local function logger(name, value)
+        calls[#calls + 1] = "logger"
+        return value
+    end
+    local x <double(), logger> = 5
+    assert(x == 10, "doubled to 10")
+    assert(#calls == 2, "both called")
+    assert(calls[1] == "double", "double first")
+    assert(calls[2] == "logger", "logger second")
+end)
+
+-- =============================================================================
+-- Arbitrary Expression Attribute Tests
+-- =============================================================================
+
+tests:it("arithmetic expression as attribute", function()
+    -- Use arithmetic to select from a table of handlers
+    local handlers = {
+        [3] = function(name, value) return value * 10 end,
+        [7] = function(name, value) return value * 100 end,
+    }
+    local x <handlers[1+2]> = 5
+    assert(x == 50, "should use handlers[3]")
+end)
+
+tests:it("inline function as attribute", function()
+    local x <function(name, value) return value + 100 end> = 5
+    assert(x == 105, "inline function should work")
+end)
+
+tests:it("conditional expression as attribute (and/or)", function()
+    local use_doubler = true
+    local double = function(name, value) return value * 2 end
+    local triple = function(name, value) return value * 3 end
+    -- and/or have lower priority than our limit, so need parens
+    local x <(use_doubler and double or triple)> = 10
+    assert(x == 20, "should use doubler")
+end)
+
+tests:it("parenthesized expression", function()
+    local handlers = {}
+    handlers.get = function() 
+        return function(name, value) return value + 1 end 
+    end
+    local x <(handlers.get())> = 10
+    assert(x == 11, "parenthesized works")
+end)
+
+tests:it("string concatenation in attribute", function()
+    local attrs = {}
+    attrs["my" .. "handler"] = function(name, value) return value * 2 end
+    local x <attrs["my" .. "handler"]> = 5
+    assert(x == 10, "concat works in indexing")
+end)
+
+tests:it("bitwise operations in attribute", function()
+    local handlers = {
+        [6] = function(name, value) return value + 100 end
+    }
+    local x <handlers[2 | 4]> = 1  -- 2 | 4 = 6
+    assert(x == 101, "bitwise or works")
+end)
+
+tests:finish()

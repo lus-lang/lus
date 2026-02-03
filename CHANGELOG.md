@@ -5,6 +5,7 @@
 **Release date:** TBA
 
 - Added string interpolation.
+- Added runtime attributes.
 
 ## 1.4.0
 

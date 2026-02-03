@@ -659,7 +659,7 @@ static int boolT(FuncState *fs) {
 /*
 ** Add nil to list of constants and return its index.
 */
-static int nilK(FuncState *fs) {
+int luaK_nilK(FuncState *fs) {
   TValue k, v;
   setnilvalue(&v);
   /* cannot use nil as key; instead use table itself */
@@ -1069,7 +1069,7 @@ static int luaK_exp2K(FuncState *fs, expdesc *e) {
     switch (e->k) { /* move constants to 'k' */
       case VTRUE: info = boolT(fs); break;
       case VFALSE: info = boolF(fs); break;
-      case VNIL: info = nilK(fs); break;
+      case VNIL: info = luaK_nilK(fs); break;
       case VKINT: info = luaK_intK(fs, e->u.ival); break;
       case VKFLT: info = luaK_numberK(fs, e->u.nval); break;
       case VKSTR: info = stringK(fs, e->u.strval); break;
