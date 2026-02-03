@@ -1,0 +1,222 @@
+---
+order: 120
+title: Acquis 20 - Catch Handlers
+acquis: true
+---
+
+The `catch` expression supports an optional handler function that transforms errors before they are returned. This allows custom error processing without additional code after the catch.
+
+## Syntax
+
+A handler is specified in brackets between `catch` and the expression:
+
+```lua
+local success, ... = catch[handler] <expression>
+```
+
+When the expression raises an error, the handler function is called with the error message. The handler's return value replaces the original error in the catch result.
+
+```lua
+-- Basic handler that extracts just the message
+local function simplify(err)
+    return err:match("^[^:]+:[^:]+: (.+)") or err
+end
+
+local ok, err = catch[simplify] error("something went wrong")
+assert(ok == false)
+assert(err == "something went wrong")  -- simplified error
+```
+
+## Handler behavior
+
+### On error
+
+When the expression raises an error:
+
+1. The handler is called with the error object
+2. The handler's return value becomes the second return value
+3. `success` is `false`
+
+```lua
+local function wrap(err)
+    return { message = err, timestamp = os.time() }
+end
+
+local ok, result = catch[wrap] error("database connection failed")
+assert(ok == false)
+assert(type(result) == "table")
+assert(result.message:match("database connection failed"))
+```
+
+### On success
+
+When the expression evaluates successfully, the handler is not called:
+
+```lua
+local called = false
+local function handler(err)
+    called = true
+    return err
+end
+
+local ok, val = catch[handler] (1 + 2)
+assert(ok == true)
+assert(val == 3)
+assert(called == false)  -- handler was never invoked
+```
+
+## Common patterns
+
+### Error normalization
+
+Standardize error formats across different sources:
+
+```lua
+local function normalize(err)
+    if type(err) == "string" then
+        return { code = "UNKNOWN", message = err }
+    elseif type(err) == "table" then
+        return err
+    else
+        return { code = "UNKNOWN", message = tostring(err) }
+    end
+end
+
+local ok, err = catch[normalize] someOperation()
+if not ok then
+    print("Error " .. err.code .. ": " .. err.message)
+end
+```
+
+### Logging errors
+
+Log errors while still returning them:
+
+```lua
+local function logged(err)
+    io.stderr:write("[ERROR] " .. tostring(err) .. "\n")
+    return err
+end
+
+local ok, result = catch[logged] riskyOperation()
+-- Error is logged AND returned for handling
+```
+
+### Error translation
+
+Convert technical errors to user-friendly messages:
+
+```lua
+local translations = {
+    ["ECONNREFUSED"] = "Could not connect to server",
+    ["ETIMEDOUT"] = "Connection timed out",
+}
+
+local function translate(err)
+    for code, message in pairs(translations) do
+        if err:find(code) then
+            return message
+        end
+    end
+    return "An unexpected error occurred"
+end
+
+local ok, err = catch[translate] connect(host, port)
+if not ok then
+    showUserError(err)  -- user-friendly message
+end
+```
+
+### Chained handlers
+
+Handlers can be composed for complex error processing:
+
+```lua
+local function compose(f, g)
+    return function(x) return f(g(x)) end
+end
+
+local logAndSimplify = compose(simplify, logged)
+local ok, err = catch[logAndSimplify] operation()
+```
+
+## Handler errors
+
+If the handler itself throws an error, that error propagates normally (it is not caught):
+
+```lua
+local function badHandler(err)
+    error("handler failed")  -- this propagates!
+end
+
+-- This will raise "handler failed", not return it
+catch[badHandler] error("original error")
+```
+
+To catch handler errors, nest another catch:
+
+```lua
+local ok, result = catch (catch[badHandler] error("original"))
+```
+
+## Inline handlers
+
+Anonymous functions work directly in the handler position:
+
+```lua
+local ok, err = catch[function(e) return e:upper() end] error("oops")
+assert(err == "OOPS")
+```
+
+## Comparison with xpcall
+
+Lua's `xpcall` provides similar functionality but operates at the function level:
+
+```lua
+-- Lua: xpcall with error handler
+local ok, result = xpcall(function()
+    return someOperation()
+end, function(err)
+    return "Handled: " .. err
+end)
+```
+
+With catch handlers:
+
+```lua
+-- Lus: catch with handler
+local ok, result = catch[function(e) return "Handled: " .. e end] someOperation()
+```
+
+The catch handler syntax is more concise for single expressions and doesn't require wrapping the protected code in a function.
+
+---
+
+## Motivation
+
+### Post-processing errors
+
+Without handlers, error transformation requires additional code after the catch:
+
+```lua
+-- Without handler
+local ok, err = catch operation()
+if not ok then
+    err = transform(err)
+end
+```
+
+With handlers, the transformation is part of the catch:
+
+```lua
+-- With handler
+local ok, err = catch[transform] operation()
+```
+
+### Consistent error handling
+
+Handlers encourage consistent error processing by making the transformation explicit at the catch site rather than scattered throughout the code.
+
+### Separation of concerns
+
+The handler separates "what to do with errors" from "what operation to try", making code easier to read and maintain.

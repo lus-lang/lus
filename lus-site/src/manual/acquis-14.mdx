@@ -2,7 +2,6 @@
 order: 114
 title: Acquis 14 - Pedantic Warnings
 acquis: true
-draft: true
 ---
 
 The `-Wpedantic` flag enables AST-based warnings that identify Lua idioms which can be improved using Lus features. This flag should ideally only be used during development and be avoided in production as it force-enables AST generation for _every_ chunk, which increases memory usage and slows down code generation.

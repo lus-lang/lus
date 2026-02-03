@@ -307,7 +307,9 @@ local ast = debug.parse(code, "myfile.lus")`}</code></pre>
 
 <h2 id="vector.create">vector.create (capacity [, fast])</h2>
 <p>
-  Creates a new vector with the given <code>capacity</code> in bytes. If <code>fast</code>
+  Creates a new vector with the given <code>capacity</code> in bytes. If <code
+    >fast</code
+  >
   is true, the buffer is not zero-initialized (faster but contents are undefined).
 </p>
 <pre><code>{`local v = vector.create(1024)        -- zero-initialized
@@ -324,8 +326,8 @@ vector.pack(v, 0, "I4I4I4", 1, 2, 3)`}</code></pre>
 <h2 id="vector.unpack">vector.unpack (v, offset, fmt)</h2>
 <p>
   Unpacks values from the vector <code>v</code> starting at <code>offset</code>.
-  Uses the same format string as <code>string.unpack</code>. Returns unpacked values
-  followed by the next offset.
+  Uses the same format string as <code>string.unpack</code>. Returns unpacked
+  values followed by the next offset.
 </p>
 <pre><code>{`local a, b, c, nextpos = vector.unpack(v, 0, "I4I4I4")`}</code></pre>
 
@@ -347,7 +349,8 @@ vector.pack(v, 0, "I4I4I4", 1, 2, 3)`}</code></pre>
 
 <h2 id="vector.unpackmany">vector.unpackmany (v, offset, fmt [, count])</h2>
 <p>
-  Returns an iterator that repeatedly unpacks values from <code>v</code> using the format
+  Returns an iterator that repeatedly unpacks values from <code>v</code> using the
+  format
   <code>fmt</code>. Optional <code>count</code> limits the number of iterations.
 </p>
 <pre><code>{`for a, b in vector.unpackmany(v, 0, "I4I4") do
@@ -358,8 +361,8 @@ end`}</code></pre>
 
 <h2 id="table.clone">table.clone (t [, deep])</h2>
 <p>
-  Creates a copy of the table <code>t</code>. If <code>deep</code> is true, nested tables
-  are recursively cloned. Deep copies preserve circular references.
+  Creates a copy of the table <code>t</code>. If <code>deep</code> is true, nested
+  tables are recursively cloned. Deep copies preserve circular references.
 </p>
 <pre><code>{`local x = table.clone(t)        -- shallow copy
 local y = table.clone(t, true)  -- deep copy
@@ -374,8 +377,8 @@ assert(c.a == c)`}</code></pre>
 
 <h2 id="__slice">__slice</h2>
 <p>
-  The <code>__slice</code> metamethod is called when the slice operator is used on a table.
-  It receives the table, start index, and end index (which may be nil).
+  The <code>__slice</code> metamethod is called when the slice operator is used on
+  a table. It receives the table, start index, and end index (which may be nil).
 </p>
 <pre><code>{`local mt = {
   __slice = function(self, start, finish)
@@ -384,3 +387,81 @@ assert(c.a == c)`}</code></pre>
 }
 local x = setmetatable({}, mt)
 local result = x[5, 10]  -- calls __slice(x, 5, 10)`}</code></pre>
+
+<!-- Deprecated C API -->
+
+<h2 id="lua_pcall">lua_pcall / lua_pcallk (deprecated)</h2>
+<p>
+  <strong>Deprecated.</strong> These functions still exist for compatibility but should
+  not be used in new code. Lus uses a unified catch-based error handling mechanism
+  internally.
+</p>
+<p>
+  For C code that needs protected execution, use the <code>CPROTECT</code> macros
+  instead:
+</p>
+<pre><code>{`#include "ldo.h"
+
+void my_protected_operation(lua_State *L) {
+  CCatchInfo cinfo;
+  CPROTECT_BEGIN(L, &cinfo)
+    /* code that may throw errors */
+    lua_pushstring(L, "hello");
+    lua_call(L, 0, 0);  /* unprotected call */
+  CPROTECT_END(L, &cinfo);
+
+  if (cinfo.status != LUA_OK) {
+    /* handle error - error object is on stack */
+    const char *err = lua_tostring(L, -1);
+    printf("Error: %s\\n", err);
+    lua_pop(L, 1);
+  }
+}`}</code></pre>
+<p>
+  The <code>CPROTECT</code> macros integrate with Lus's unified error handling system.
+  When compiled as C++, they use native <code>try</code>/<code>catch</code> for better
+  exception interoperability. In C mode, they use <code>setjmp</code>/<code
+    >longjmp</code
+  >.
+</p>
+
+<h2 id="CCatchInfo">CCatchInfo</h2>
+<pre><code>{`typedef struct CCatchInfo {
+  struct CCatchInfo *prev;  /* previous C catch (for nesting) */
+  volatile TStatus status;  /* error status */
+  ptrdiff_t erroffset;      /* stack offset of error object */
+#if !defined(__cplusplus) || defined(LUA_USE_LONGJMP)
+  jmp_buf jmpbuf;           /* setjmp buffer (C only) */
+#endif
+} CCatchInfo;`}</code></pre>
+<p>
+  Structure for C-level protected execution. Declare one on the stack and pass
+  its address to <code>CPROTECT_BEGIN</code>/<code>CPROTECT_END</code>.
+</p>
+<p>
+  After <code>CPROTECT_END</code>, check <code>cinfo.status</code> for the result.
+  <code>LUA_OK</code> indicates success; any other value indicates an error occurred.
+</p>
+
+<h2 id="CPROTECT_BEGIN">CPROTECT_BEGIN / CPROTECT_END</h2>
+<pre><code>{`CPROTECT_BEGIN(L, &cinfo)
+  /* protected code */
+CPROTECT_END(L, &cinfo);`}</code></pre>
+<p>
+  Macros for C-level protected execution. Code between <code
+    >CPROTECT_BEGIN</code
+  > and
+  <code>CPROTECT_END</code> is protected from Lua errors.
+</p>
+<p>
+  <strong>Important:</strong> Local variables modified between these macros may have
+  undefined values after an error (due to <code>longjmp</code> semantics). Use
+  <code>volatile</code> for variables that must be preserved across errors.
+</p>
+<pre><code>{`volatile int counter = 0;
+CCatchInfo cinfo;
+CPROTECT_BEGIN(L, &cinfo)
+  counter++;  /* counter is volatile, so it's preserved */
+  lua_error(L);
+CPROTECT_END(L, &cinfo);
+/* counter == 1 here */`}</code></pre>

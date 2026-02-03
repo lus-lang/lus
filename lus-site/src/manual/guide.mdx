@@ -158,6 +158,45 @@ An error object can be any value except `nil`. Lus itself generates string error
 
 Lus also provides a warning system via [`warn`](/manual/api#warn). Unlike errors, warnings do not interrupt execution; they simply emit a message to the user.
 
+### Catch handlers
+
+The `catch` expression supports an optional handler function that transforms errors before they are returned:
+
+```lus
+local function simplify(err)
+  return err:match("^[^:]+:[^:]+: (.+)") or err
+end
+
+local ok, err = catch[simplify] divide(10, 0)
+-- err is now just "division by zero" without file/line prefix
+```
+
+When an error occurs, the handler is called with the error object and its return value replaces the original error. On success, the handler is not called. See [Acquis 20](/manual/acquis-20) for details.
+
+### C API error handling
+
+Lus uses a unified catch-based error handling mechanism that differs from Lua's traditional `pcall`/`xpcall` approach. While `lua_pcall` and `lua_pcallk` still exist for compatibility, new C code should use the `CPROTECT` macros:
+
+```c
+#include "ldo.h"
+
+void my_function(lua_State *L) {
+  CCatchInfo cinfo;
+  CPROTECT_BEGIN(L, &cinfo)
+    /* code that may throw errors */
+    lua_pushstring(L, "test");
+    lua_call(L, 0, 0);
+  CPROTECT_END(L, &cinfo);
+
+  if (cinfo.status != LUA_OK) {
+    /* handle error */
+    lua_pop(L, 1);  /* remove error object */
+  }
+}
+```
+
+The `CPROTECT` macros integrate with Lus's `catch` expressions, ensuring consistent error handling between C and Lus code. When compiled as C++, they use native `try`/`catch`; in C mode, they use `setjmp`/`longjmp`.
+
 ## Internals
 
 ### Implementation

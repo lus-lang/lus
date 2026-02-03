@@ -33,6 +33,10 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           @apply line-through text-neutral-500 hover:bg-transparent;
         }
 
+        &[data-from="deprecated"] {
+          @apply text-yellow-900 hover:bg-yellow-200 italic;
+        }
+
         &[data-from="lus"] {
           @apply hover:bg-lime-200 text-lime-900 font-black;
         }
@@ -62,6 +66,10 @@ import ManualAPI from "../../../components/ManualAPI.astro"
         @apply text-sky-900 bg-sky-100;
       }
 
+      .legend-deprecated {
+        @apply text-yellow-900 bg-yellow-100;
+      }
+
       .legend-removed {
         @apply text-neutral-500 bg-neutral-100 line-through;
       }
@@ -76,6 +84,9 @@ import ManualAPI from "../../../components/ManualAPI.astro"
     <div><span class="legend-lua">blue</span> Lua functions</div>
     <div>
       <span class="legend-removed">gray</span> Lua functions removed in Lus
+    </div>
+    <div>
+      <span class="legend-deprecated">yellow</span> Lua functions deprecated in Lus
     </div>
   </div>
 
@@ -229,29 +240,20 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           <h3>Network</h3>
           <p>
             <a href="#network.fetch" data-from="lus">network.fetch</a>
-            <a href="#network.tcp.bind" data-from="lus"
-              >network.tcp.bind</a
-            >
+            <a href="#network.tcp.bind" data-from="lus">network.tcp.bind</a>
             <a href="#network.tcp.connect" data-from="lus"
               >network.tcp.connect</a
             >
-            <a href="#network.udp.open" data-from="lus"
-              >network.udp.open</a
-            >
+            <a href="#network.udp.open" data-from="lus">network.udp.open</a>
 
             <a href="#server:accept" data-from="lus">server:accept</a>
             <a href="#server:close" data-from="lus">server:close</a>
-            <a href="#server:settimeout" data-from="lus"
-              >server:settimeout</a
-            >
+            <a href="#server:settimeout" data-from="lus">server:settimeout</a>
 
             <a href="#socket:close" data-from="lus">socket:close</a>
-            <a href="#socket:receive" data-from="lus">socket:receive</a
-            >
+            <a href="#socket:receive" data-from="lus">socket:receive</a>
             <a href="#socket:send" data-from="lus">socket:send</a>
-            <a href="#socket:settimeout" data-from="lus"
-              >socket:settimeout</a
-            >
+            <a href="#socket:settimeout" data-from="lus">socket:settimeout</a>
 
             <a href="#udp:close" data-from="lus">udp:close</a>
             <a href="#udp:receive" data-from="lus">udp:receive</a>
@@ -261,11 +263,9 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           <p>
             <a href="#worker.create" data-from="lus">worker.create</a>
             <a href="#worker.status" data-from="lus">worker.status</a>
-            <a href="#worker.receive" data-from="lus">worker.receive</a
-            >
+            <a href="#worker.receive" data-from="lus">worker.receive</a>
             <a href="#worker.send" data-from="lus">worker.send</a>
-            <a href="#worker.message" data-from="lus">worker.message</a
-            >
+            <a href="#worker.message" data-from="lus">worker.message</a>
             <a href="#worker.peek" data-from="lus">worker.peek</a>
           </p>
           <h3>OS</h3>
@@ -311,15 +311,13 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#string.rep">string.rep</a>
             <a href="#string.reverse">string.reverse</a>
             <a href="#string.sub">string.sub</a>
-            <a data-from="lus" href="#string.transcode"
-              >string.transcode</a
-            >
+            <a data-from="lus" href="#string.transcode">string.transcode</a>
             <a href="#string.unpack">string.unpack</a>
             <a href="#string.upper">string.upper</a>
           </p>
           <h3>Table</h3>
           <p>
-            <a href="#table.clone" data-from="lus-unstable">table.clone</a>
+            <a href="#table.clone" data-from="lus">table.clone</a>
             <a href="#table.concat">table.concat</a>
             <a href="#table.create">table.create</a>
             <a href="#table.insert">table.insert</a>
@@ -331,13 +329,13 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           </p>
           <h3>Vector</h3>
           <p>
-            <a href="#vector.create" data-from="lus-unstable">vector.create</a>
-            <a href="#vector.pack" data-from="lus-unstable">vector.pack</a>
-            <a href="#vector.unpack" data-from="lus-unstable">vector.unpack</a>
-            <a href="#vector.clone" data-from="lus-unstable">vector.clone</a>
-            <a href="#vector.size" data-from="lus-unstable">vector.size</a>
-            <a href="#vector.resize" data-from="lus-unstable">vector.resize</a>
-            <a href="#vector.unpackmany" data-from="lus-unstable">vector.unpackmany</a>
+            <a href="#vector.create" data-from="lus">vector.create</a>
+            <a href="#vector.pack" data-from="lus">vector.pack</a>
+            <a href="#vector.unpack" data-from="lus">vector.unpack</a>
+            <a href="#vector.clone" data-from="lus">vector.clone</a>
+            <a href="#vector.size" data-from="lus">vector.size</a>
+            <a href="#vector.resize" data-from="lus">vector.resize</a>
+            <a href="#vector.unpackmany" data-from="lus">vector.unpackmany</a>
           </p>
           <h3>UTF-8</h3>
           <p>
@@ -377,7 +375,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#metamethods">__pow</a>
             <a href="#metamethods">__shl</a>
             <a href="#metamethods">__shr</a>
-            <a href="#__slice" data-from="lus-unstable">__slice</a>
+            <a href="#__slice" data-from="lus">__slice</a>
             <a href="#metamethods">__sub</a>
             <a href="#tostring">__tostring</a>
             <a href="#metamethods">__unm</a>
@@ -457,7 +455,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#lua_istable">lua_istable</a>
             <a href="#lua_isthread">lua_isthread</a>
             <a href="#lua_isuserdata">lua_isuserdata</a>
-            <a href="#lua_isvector" data-from="lus-unstable">lua_isvector</a>
+            <a href="#lua_isvector" data-from="lus">lua_isvector</a>
             <a href="#lua_isyieldable">lua_isyieldable</a>
             <a href="#lua_len">lua_len</a>
             <a href="#lua_load">lua_load</a>
@@ -468,8 +466,8 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#lua_next">lua_next</a>
             <a href="#lua_numbertocstring">lua_numbertocstring</a>
             <a href="#lua_numbertointeger">lua_numbertointeger</a>
-            <a href="#lua_pcall">lua_pcall</a>
-            <a href="#lua_pcallk">lua_pcallk</a>
+            <a href="#lua_pcall" data-from="deprecated">lua_pcall</a>
+            <a href="#lua_pcallk" data-from="deprecated">lua_pcallk</a>
             <a href="#lua_pop">lua_pop</a>
             <a href="#lua_pushboolean">lua_pushboolean</a>
             <a href="#lua_pushcclosure">lua_pushcclosure</a>
@@ -632,20 +630,13 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#luaopen_utf8">luaopen_utf8</a>
             <a href="#luaopen_fs" data-from="lus">luaopen_fs</a>
             <a href="#luaopen_json" data-from="lus">luaopen_json</a>
-            <a href="#luaopen_network" data-from="lus"
-              >luaopen_network</a
-            >
-            <a href="#luaopen_vector" data-from="lus-unstable"
-              >luaopen_vector</a
-            >
-            <a href="#luaopen_worker" data-from="lus">luaopen_worker</a
-            >
+            <a href="#luaopen_network" data-from="lus">luaopen_network</a>
+            <a href="#luaopen_vector" data-from="lus">luaopen_vector</a>
+            <a href="#luaopen_worker" data-from="lus">luaopen_worker</a>
           </p>
           <h3>Worker System</h3>
           <p>
-            <a href="#lus_WorkerSetup" data-from="lus"
-              >lus_WorkerSetup</a
-            >
+            <a href="#lus_WorkerSetup" data-from="lus">lus_WorkerSetup</a>
             <a href="#lus_onworker" data-from="lus">lus_onworker</a>
             <a href="#lus_worker_pool_init" data-from="lus"
               >lus_worker_pool_init</a
@@ -656,41 +647,21 @@ import ManualAPI from "../../../components/ManualAPI.astro"
           </p>
           <h3>Permission System</h3>
           <p>
-            <a href="#lus_PledgeRequest" data-from="lus"
-              >lus_PledgeRequest</a
-            >
-            <a href="#lus_PledgeGranter" data-from="lus"
-              >lus_PledgeGranter</a
-            >
-            <a href="#LUS_PLEDGE_GRANT" data-from="lus"
-              >LUS_PLEDGE_GRANT</a
-            >
-            <a href="#lus_initpledge" data-from="lus">lus_initpledge</a
-            >
-            <a href="#lus_nextpledge" data-from="lus">lus_nextpledge</a
-            >
+            <a href="#lus_PledgeRequest" data-from="lus">lus_PledgeRequest</a>
+            <a href="#lus_PledgeGranter" data-from="lus">lus_PledgeGranter</a>
+            <a href="#LUS_PLEDGE_GRANT" data-from="lus">LUS_PLEDGE_GRANT</a>
+            <a href="#lus_initpledge" data-from="lus">lus_initpledge</a>
+            <a href="#lus_nextpledge" data-from="lus">lus_nextpledge</a>
             <a href="#lus_setpledge" data-from="lus">lus_setpledge</a>
             <a href="#lus_pledge" data-from="lus">lus_pledge</a>
             <a href="#lus_haspledge" data-from="lus">lus_haspledge</a>
-            <a href="#lus_registerpledge" data-from="lus"
-              >lus_registerpledge</a
-            >
-            <a href="#lus_rejectpledge" data-from="lus"
-              >lus_rejectpledge</a
-            >
-            <a href="#lus_rejectrequest" data-from="lus"
-              >lus_rejectrequest</a
-            >
-            <a href="#lus_pledgeerror" data-from="lus"
-              >lus_pledgeerror</a
-            >
-            <a href="#lus_revokepledge" data-from="lus"
-              >lus_revokepledge</a
-            >
+            <a href="#lus_registerpledge" data-from="lus">lus_registerpledge</a>
+            <a href="#lus_rejectpledge" data-from="lus">lus_rejectpledge</a>
+            <a href="#lus_rejectrequest" data-from="lus">lus_rejectrequest</a>
+            <a href="#lus_pledgeerror" data-from="lus">lus_pledgeerror</a>
+            <a href="#lus_revokepledge" data-from="lus">lus_revokepledge</a>
             <a href="#lus_issealed" data-from="lus">lus_issealed</a>
-            <a href="#lus_checkfsperm" data-from="lus"
-              >lus_checkfsperm</a
-            >
+            <a href="#lus_checkfsperm" data-from="lus">lus_checkfsperm</a>
           </p>
           <h3>Constants</h3>
           <p>
@@ -746,7 +717,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#LUA_TENUM" data-from="lus">LUA_TENUM</a>
             <a href="#LUA_TSTRING">LUA_TSTRING</a>
             <a href="#LUA_TTABLE">LUA_TTABLE</a>
-            <a href="#LUA_TVECTOR" data-from="lus-unstable">LUA_TVECTOR</a>
+            <a href="#LUA_TVECTOR" data-from="lus">LUA_TVECTOR</a>
             <a href="#LUA_TTHREAD">LUA_TTHREAD</a>
             <a href="#LUA_TUSERDATA">LUA_TUSERDATA</a>
             <a href="#LUA_USE_APICHECK">LUA_USE_APICHECK</a>
