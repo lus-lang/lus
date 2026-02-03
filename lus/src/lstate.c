@@ -220,8 +220,8 @@ static void preinit_thread(lua_State *L, global_State *g) {
   L->nci = 0;
   L->twups = L; /* thread has no upvalues */
   L->nCcalls = 0;
-  L->errorJmp = NULL;
-  L->activeCatch = NULL; /* no active catch handler */
+  L->cCatch = NULL;      /* no C-level catch handler */
+  L->activeCatch = NULL; /* no active Lua catch handler */
   L->hook = NULL;
   L->hookmask = 0;
   L->basehookcount = 0;
@@ -369,10 +369,17 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   setgcparam(g, MAJORMINOR, LUAI_MAJORMINOR);
   for (i = 0; i < LUA_NUMTYPES; i++)
     g->mt[i] = NULL;
-  if (luaD_rawrunprotected(L, f_luaopen, NULL) != LUA_OK) {
-    /* memory allocation error: free partial state */
-    close_state(L);
-    L = NULL;
+  /* Use CPROTECT for state initialization */
+  {
+    CCatchInfo cinfo;
+    CPROTECT_BEGIN(L, &cinfo)
+      f_luaopen(L, NULL);
+    CPROTECT_END(L, &cinfo);
+    if (cinfo.status != LUA_OK) {
+      /* memory allocation error: free partial state */
+      close_state(L);
+      L = NULL;
+    }
   }
   return L;
 }

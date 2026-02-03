@@ -11,6 +11,7 @@
 
 /* Some header files included here need this definition */
 typedef struct CallInfo CallInfo;
+typedef struct CCatchInfo CCatchInfo;  /* C-level catch info (defined in ldo.h) */
 
 #include <setjmp.h> /* for jmp_buf in CatchInfo */
 
@@ -111,8 +112,6 @@ typedef struct CallInfo CallInfo;
 /* Non-yieldable call increment */
 #define nyci (0x10000 | 1)
 
-struct lua_longjmp; /* defined in ldo.c */
-
 /*
 ** Atomic type (relative to signals) to better ensure that 'lua_sethook'
 ** is thread safe
@@ -173,12 +172,10 @@ typedef struct stringtable {
 /*
 ** Catch block information for inline catch expression.
 ** When a catch block is active, errors jump to the catch handler
-** instead of propagating up. The lua_longjmp structure is stored here
-** so it persists for the duration of the catch block.
+** instead of propagating up.
 */
 typedef struct CatchInfo {
   jmp_buf jmpbuf;                    /* setjmp buffer for error recovery */
-  struct lua_longjmp *prev_errorJmp; /* saved previous error handler */
   CallInfo *prev_activeCatch;        /* saved previous active catch handler */
   volatile TStatus status;           /* error status (if error occurred) */
   const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
@@ -188,7 +185,6 @@ typedef struct CatchInfo {
   lu_byte destreg;        /* destination register for status/error */
   lu_byte nresults;       /* expected number of results (for nil-filling) */
   lu_byte active;         /* 1 if catch block is active */
-  lu_byte handlerreg;     /* handler register + 1 (0 = no handler) - legacy */
 } CatchInfo;
 
 struct CallInfo {
@@ -297,7 +293,7 @@ struct lua_State {
   StkIdRel tbclist;    /* list of to-be-closed variables */
   GCObject *gclist;
   struct lua_State *twups;      /* list of threads with open upvalues */
-  struct lua_longjmp *errorJmp; /* current error recover point */
+  CCatchInfo *cCatch;           /* C-level catch handler */
   CallInfo *activeCatch; /* deepest active catch handler (for O(1) lookup) */
   CallInfo base_ci;      /* CallInfo for first level (C host) */
   volatile lua_Hook hook;

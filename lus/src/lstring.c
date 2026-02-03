@@ -350,8 +350,12 @@ TString *luaS_newextlstr(lua_State *L, const char *s, size_t len,
     f_newext(L, &ne); /* just create header */
   }
   else {
+    CCatchInfo cinfo;
     ne.kind = LSTRMEM;
-    if (luaD_rawrunprotected(L, f_newext, &ne) != LUA_OK) { /* mem. error? */
+    CPROTECT_BEGIN(L, &cinfo)
+      f_newext(L, &ne);
+    CPROTECT_END(L, &cinfo);
+    if (cinfo.status != LUA_OK) { /* mem. error? */
       (*falloc)(ud, cast_voidp(s), len + 1, 0); /* free external string */
       luaM_error(L);                            /* re-raise memory error */
     }

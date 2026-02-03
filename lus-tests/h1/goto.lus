@@ -20,28 +20,29 @@ end)
 
 tests:it("goto error handling (scoping)", function()
     local function checkerr(code, msg)
+        -- catch load(code) returns (status, result, error_if_any)
+        -- If load throws: status=false, result=thrown_error
+        -- If load returns normally: status=true, result=load_result, error_if_any=load_error
         local ok, f, err = catch load(code)
         if not ok then
-             -- load raised error directly
-             err = f
-             assert(string.find(err, msg), "Load raise '"..err.."' missing '"..msg.."'")
+             -- load raised error directly (status=false means throw)
+             assert(string.find(f, msg), "Load raise '"..f.."' missing '"..msg.."'")
              return
         end
         
-        -- If load returned nil, err without raising
+        -- load didn't throw, check if it returned nil + error
         if f == nil then
-             err = f
-             local real_f = f
-             local real_err = err
-             if real_f == nil then
-                 assert(string.find(real_err, msg), "Load error '"..tostring(real_err).."' missing '"..msg.."'")
-             else
-                 -- load succeeded, run it
-                 local run_ok, run_err = catch real_f()
-                 assert(not run_ok, "Expected runtime error for: "..code)
-                 assert(string.find(run_err, msg), "Error '"..run_err.."' missing '"..msg.."'")
-             end
+             -- load returned (nil, error_message), which catch wraps as (true, nil, error_message)
+             -- So 'err' contains the actual error message
+             assert(err ~= nil, "Expected error message from load")
+             assert(string.find(err, msg), "Load error '"..tostring(err).."' missing '"..msg.."'")
+             return
         end
+        
+        -- load succeeded with a function, run it and expect runtime error
+        local run_ok, run_err = catch f()
+        assert(not run_ok, "Expected runtime error for: "..code)
+        assert(string.find(run_err, msg), "Error '"..run_err.."' missing '"..msg.."'")
     end
 
     -- cannot see label inside block

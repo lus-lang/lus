@@ -275,12 +275,13 @@ tests:it("generic load", function()
     assert(a() == "\0" and _G.x == 33)
     assert(debug.getinfo(a).source == "modname")
     
-    -- cannot read text in binary mode - Lus may throw or return nil
-    local status, msg = catch load(read1(x), "modname", "b", {})
-    assert(not status)
+    -- cannot read text in binary mode - load returns nil + error message
+    -- catch wraps the call, so we get (true, nil, error) on success (no throw)
+    local status, result, err = catch load(read1(x), "modname", "b", {})
+    assert(status == true and result == nil, "load should return nil for binary mode on text")
     
-    status, msg = catch load(x, "modname", "b")
-    assert(not status)
+    status, result, err = catch load(x, "modname", "b")
+    assert(status == true and result == nil, "load should return nil for binary mode on text")
 
     a = assert(load(function () return nil end))
     a()  -- empty chunk
@@ -331,15 +332,11 @@ tests:it("limit of multiple returns (254 values)", function()
     assert(#res == 254 and res[254] == 10)
 
     code = code .. ",10"
-    -- Lus may throw or return nil for the error
-    local status, msg = catch load(code)
-    -- If catch returns the load result, check it, otherwise status is already the error
-    if type(status) == "function" then
-        -- This shouldn't happen for 255 returns, but just in case
-        assert(false, "Expected load to fail")
-    else
-        assert(not status)
-    end
+    -- load returns nil + error for too many returns (doesn't throw)
+    local status, result, err = catch load(code)
+    -- catch returns (true, nil, error) since load doesn't throw
+    assert(status == true, "catch should succeed (load doesn't throw)")
+    assert(result == nil, "load should return nil for too many returns")
 end)
 
 tests:finish()

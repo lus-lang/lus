@@ -563,7 +563,11 @@ static void pushbuff(lua_State *L, void *ud) {
 static const char *clearbuff(BuffFS *buff) {
   lua_State *L = buff->L;
   const char *res;
-  if (luaD_rawrunprotected(L, pushbuff, buff) != LUA_OK) /* errors? */
+  CCatchInfo cinfo;
+  CPROTECT_BEGIN(L, &cinfo)
+    pushbuff(L, buff);
+  CPROTECT_END(L, &cinfo);
+  if (cinfo.status != LUA_OK) /* errors? */
     res = NULL; /* error message is on the top of the stack */
   else
     res = getstr(tsvalue(s2v(L->top.p - 1)));
