@@ -1,6 +1,5 @@
 -- Slices: Extract subsequences from tables, strings, and vectors.
 -- playground: true
--- unstable: true
 
 global print, table, setmetatable, error
 
