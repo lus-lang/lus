@@ -74,7 +74,7 @@ tests:it("syntax errors in literals", function()
       end
     end
     
-    lexerror("`", "unexpected symbol")
+    lexerror("`", "unfinished interpolated string")  -- backtick starts interpolated strings in Lus
     lexerror(" ' ", "unfinished string")
 end)
 

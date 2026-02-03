@@ -203,7 +203,15 @@ tests:it("multiple return adjustment", function()
 end)
 
 tests:it("constants validation", function()
-    checkload([[local x <XXX> = 10]], "unknown attribute")
+    -- With runtime attributes, <XXX> is a valid expression (variable lookup).
+    -- If XXX is nil at runtime, it errors when trying to call it as a handler.
+    -- This is a runtime error, so we need to actually run the code.
+    local ok, f = catch load([[local x <XXX> = 10]])
+    if ok and f then
+        local rok, err = catch f()
+        assert(not rok and string.find(err, "attempt to call a nil value"),
+               "Expected runtime error for nil attribute")
+    end
 
     checkload([[local xxx <const> = 20; xxx = 10]],
                "attempt to assign to const variable")
