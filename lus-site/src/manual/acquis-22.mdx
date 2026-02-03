@@ -1,0 +1,116 @@
+---
+order: 122
+title: Acquis 22 - Runtime Attributes
+acquis: true
+draft: true
+---
+
+In addition to the compile time attributes, local variables can also be given runtime attributes to specialize their assignment behavior.
+
+## Basic usage
+
+Runtime attributes are declared as functions and inserted prior to the `local` keyword and the variable name. The function will be called with the variable name and value as arguments when initialized and assigned.
+
+```lus
+local function printvar(name, value)
+    print(name, value)
+end
+
+local x <printvar> = 10 -- prints "x 10"
+x = 20 -- prints "x 20"
+```
+
+The return value of the function will be used as the value of the variable, unless it is `nil`, in which case the original value will be used.
+
+```lus
+local function modifyvar(name, value)
+    return value + 1
+end
+
+local x <modifyvar> = 10
+assert(x == 11)
+```
+
+The attribute will **not** be invoked when assigning `nil` to the variable. For all intents and purposes, assigning `nil` to a variable is equivalent to deleting the variable.
+
+```lus
+local function printvar(name, value)
+    print(name, value)
+end
+
+local x <printvar> = 10 -- prints "x 10"
+x = nil -- not invoked; nothing printed
+```
+
+## Multiple attributes
+
+Multiple attributes can be provided by separating them with commas. They will be invoked in the order they are provided. The last returned value will be used as the value of the variable; previous values will be passed as arguments to the next attribute.
+
+```lus
+local function first(name, value)
+    print("first", name, value)
+    return value + 1
+end
+
+local function second(name, value)
+    print("second", name, value)
+    return value + 2
+end
+
+local x <first, second> = 10 -- prints "first x 10", then "second x 12"
+assert(x == 12)
+```
+
+If using any compile-time attributes (e.g., `const` or `close`), they must be provided first.
+
+```lus
+local function first(name, value)
+    print("first", name, value)
+end
+
+local x <first, const> = 10 -- error: compile-time attributes must be provided first
+local y <const, first> = 10 -- ok
+```
+
+## Attribute lifetime
+
+Attribute values will only be garbage collected when the variable goes out of scope; the attribute creates a relationship between the variable and the function. This can be demonstrated by using a metatable with a `__gc` metamethod:
+
+```lus
+local printvar = setmetatable({}, {
+    __gc = function(self)
+        print("printvar is being closed")
+    end,
+    __call = function(self, name, value)
+        print(name, value)
+    end
+end})
+local x <printvar> = 10 -- prints "x 10"
+printvar = nil
+x = 20 -- prints "x 20", printvar is cached
+x = nil -- prints "printvar is being closed"
+```
+
+## Common patterns
+
+A common pattern is to use a function to generate the attribute, which allows for parameterizing the attribute behavior. In this example, we constrain the type of a local variable to be a number.
+
+```lus
+local function only(type)
+    return function(name, value)
+        if type(value) ~= "number" then
+            error(`Expected $type, got $(type(value))`)
+        end
+        return value
+    end
+end
+
+
+local x <only "number"> = 10
+
+-- alternatively...
+local number = only("number")
+local y <number> = 10
+
+y = "hello" -- error: Expected number, got string
+```

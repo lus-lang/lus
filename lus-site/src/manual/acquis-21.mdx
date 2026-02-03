@@ -1,0 +1,38 @@
+---
+order: 121
+title: Acquis 21 - String Interpolation
+acquis: true
+draft: true
+---
+
+String interpolation allows for the dynamic construction of strings by interpolating values into a template, which may be more intuitive than concatenation.
+
+## Syntax
+
+Backticks are used to open and close interpolated strings.
+
+```lus
+print(`Hello, world!`)
+```
+
+Variables can be interpolated using the `$name` syntax, while expressions use the `$(expr)` syntax.
+
+```lus
+local x = "world"
+print(`Hello, $x!`)
+print(`The answer is $(10 + 20).`)
+```
+
+Interpolated strings can include newlines.
+
+```lus
+local x = "world"
+print(`
+Hello, $x!
+The answer is $(10 + 20).
+`)
+```
+
+## Semantics
+
+Values in interpolated strings are converted using the same mechanism as `print` and `tostring`. If you have a table with a `__tostring` metamethod, it will be invoked to retrieve the string representation of the table.

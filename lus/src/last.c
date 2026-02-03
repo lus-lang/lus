@@ -32,8 +32,8 @@ static const char *const ast_typenames[] = {
     "vararg",     "name",      "index",      "field",     "binop",
     "unop",       "table",     "funcexpr",   "callexpr",  "methodcall",
     "enum",       "optchain",  "from",       "catchexpr", "slice",
-    "param",      "namelist",  "explist",    "elseif",    "else",
-    "tablefield", NULL};
+    "interp",     "param",     "namelist",   "explist",   "elseif",
+    "else",       "tablefield", NULL};
 
 const char *lusA_typename(LusAstType type) {
   if (type >= 0 &&
@@ -327,6 +327,13 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     lua_setfield(L, -2, "start");
     nodetotable(L, node->u.slice.finish);
     lua_setfield(L, -2, "finish");
+    break;
+
+  case AST_INTERP:
+    nodetotable(L, node->u.interp.parts);
+    lua_setfield(L, -2, "parts");
+    lua_pushinteger(L, node->u.interp.nparts);
+    lua_setfield(L, -2, "nparts");
     break;
 
   default:
@@ -761,6 +768,14 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
       fprintf(f, ",\n%*s\"finish\": ", indent + 2, "");
       emit_json_node(f, node->u.slice.finish, 0);
     }
+    break;
+
+  case AST_INTERP:
+    if (node->u.interp.parts) {
+      fprintf(f, ",\n%*s\"parts\": ", indent + 2, "");
+      emit_json_children(f, node->u.interp.parts, indent + 2);
+    }
+    fprintf(f, ",\n%*s\"nparts\": %d", indent + 2, "", node->u.interp.nparts);
     break;
 
   default:

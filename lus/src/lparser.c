@@ -77,6 +77,7 @@ typedef struct BlockCnt {
 */
 static void statement(LexState *ls);
 static void expr(LexState *ls, expdesc *v);
+static void interpexp(LexState *ls, expdesc *v);
 static void catchexpr(LexState *ls, expdesc *v);
 static void catchstat(LexState *ls, int line);
 static int isassigncond(LexState *ls);
@@ -1602,6 +1603,129 @@ static void enumexpr(LexState *ls, expdesc *v) {
   init_exp(v, VK, k);
 }
 
+
+/*
+** Parse an interpolated string expression.
+** Generates OP_TOSTRING for each interpolated value and OP_CONCAT for
+** the final result.
+** Format: `literal$name` or `literal$(expr)literal`
+*/
+static void interpexp(LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  int firstreg = fs->freereg;
+  int nparts = 0;
+  /* AST support */
+  LusAstNode *astnode = NULL;
+  LusAstNode *lastpart = NULL;
+  if (AST_ACTIVE(ls)) {
+    astnode = lusA_newnode(ls->ast, AST_INTERP, line);
+    astnode->u.interp.parts = NULL;
+    astnode->u.interp.nparts = 0;
+  }
+
+  /* Process: literal, expr, literal, expr, ... literal */
+  for (;;) {
+    /* Emit literal string part (if non-empty) */
+    TString *lit = ls->t.seminfo.ts;
+    if (tsslen(lit) > 0) {
+      expdesc litexp;
+      codestring(&litexp, lit);
+      luaK_exp2nextreg(fs, &litexp);
+      nparts++;
+      /* AST: add string literal node */
+      if (AST_ACTIVE(ls)) {
+        LusAstNode *strnode = lusA_newnode(ls->ast, AST_STRING, ls->linenumber);
+        strnode->u.str = lit;
+        if (lastpart == NULL)
+          astnode->u.interp.parts = strnode;
+        else
+          lastpart->next = strnode;
+        lastpart = strnode;
+      }
+    }
+
+    /* Check what kind of token we have */
+    if (ls->t.token == TK_INTERP_SIMPLE || ls->t.token == TK_INTERP_END) {
+      /* End of interpolated string */
+      luaX_next(ls);
+      break;
+    }
+
+    /* TK_INTERP_BEGIN or TK_INTERP_MID: there's an expression to parse */
+    if (ls->interp_name != NULL) {
+      /* $name interpolation - variable was read by lexer */
+      expdesc varexp;
+      buildvar(ls, ls->interp_name, &varexp);
+      luaK_exp2nextreg(fs, &varexp);
+      /* Emit OP_TOSTRING to convert to string */
+      int reg = fs->freereg - 1;
+      luaK_codeABC(fs, OP_TOSTRING, reg, reg, 0);
+      nparts++;
+      /* AST: add variable name node */
+      if (AST_ACTIVE(ls)) {
+        LusAstNode *namenode = lusA_newnode(ls->ast, AST_NAME, ls->linenumber);
+        namenode->u.str = ls->interp_name;
+        if (lastpart == NULL)
+          astnode->u.interp.parts = namenode;
+        else
+          lastpart->next = namenode;
+        lastpart = namenode;
+      }
+      luaX_next(ls);  /* consume TK_INTERP_BEGIN/MID */
+    }
+    else {
+      /* $(expr) interpolation - need to parse expression */
+      luaX_next(ls);  /* consume TK_INTERP_BEGIN/MID */
+      expdesc exprexp;
+      expr(ls, &exprexp);
+      luaK_exp2nextreg(fs, &exprexp);
+      /* Emit OP_TOSTRING to convert to string */
+      int reg = fs->freereg - 1;
+      luaK_codeABC(fs, OP_TOSTRING, reg, reg, 0);
+      nparts++;
+      /* AST: add expression node */
+      if (AST_ACTIVE(ls) && exprexp.ast != NULL) {
+        if (lastpart == NULL)
+          astnode->u.interp.parts = exprexp.ast;
+        else
+          lastpart->next = exprexp.ast;
+        lastpart = exprexp.ast;
+      }
+      /* After expr, current token should be TK_INTERP_MID or TK_INTERP_END
+         (set by lexer when it saw the closing ')') */
+    }
+  }
+
+  /* Generate result */
+  if (nparts == 0) {
+    /* Empty interpolated string -> empty string constant */
+    TString *empty = luaX_newstring(ls, "", 0);
+    codestring(v, empty);
+    /* No luaK_fixline here - codestring doesn't emit instructions */
+  }
+  else if (nparts == 1) {
+    /* Single part - result is already in firstreg */
+    init_exp(v, VNONRELOC, firstreg);
+    luaK_fixline(fs, line);
+  }
+  else {
+    /* Multiple parts - concatenate them */
+    luaK_codeABC(fs, OP_CONCAT, firstreg, nparts, 0);
+    /* Free registers used by intermediate parts (result stays in firstreg) */
+    fs->freereg = firstreg + 1;
+    init_exp(v, VNONRELOC, firstreg);
+    luaK_fixline(fs, line);
+  }
+
+  /* Set AST node */
+  if (AST_ACTIVE(ls)) {
+    astnode->u.interp.nparts = nparts;
+    v->ast = astnode;
+  }
+}
+
+
 static void simpleexp(LexState *ls, expdesc *v) {
   /* simpleexp -> FLT | INT | STRING | NIL | TRUE | FALSE | ... |
                   constructor | FUNCTION body | CATCH expr | ENUM expr |
@@ -1635,6 +1759,11 @@ static void simpleexp(LexState *ls, expdesc *v) {
       v->ast->u.str = ls->t.seminfo.ts;
     }
     break;
+  }
+  case TK_INTERP_BEGIN:
+  case TK_INTERP_SIMPLE: {
+    interpexp(ls, v);
+    return;
   }
   case TK_NIL: {
     init_exp(v, VNIL, 0);

@@ -574,6 +574,9 @@ static void PrintCode(const Proto *f) {
     case OP_LEN:
       printf("%d %d", a, b);
       break;
+    case OP_TOSTRING:
+      printf("%d %d", a, b);
+      break;
     case OP_CONCAT:
       printf("%d %d", a, b);
       break;

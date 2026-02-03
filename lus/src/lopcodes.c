@@ -127,6 +127,8 @@ LUAI_DDEF const lu_byte luaP_opmodes[NUM_OPCODES] = {
     ,
     opmode(0, 0, 0, 0, 1, iABC) /* OP_LEN */
     ,
+    opmode(0, 0, 0, 0, 1, iABC) /* OP_TOSTRING */
+    ,
     opmode(0, 0, 0, 0, 1, iABC) /* OP_CONCAT */
     ,
     opmode(0, 0, 0, 0, 0, iABC) /* OP_CLOSE */

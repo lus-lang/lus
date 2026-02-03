@@ -783,6 +783,66 @@ void luaV_objlen(lua_State *L, StkId ra, const TValue *rb) {
 
 
 /*
+** Convert any value to a string.
+** Handles __tostring metamethod for tables and userdata.
+*/
+void luaV_tostring(lua_State *L, StkId ra, const TValue *rb) {
+  switch (ttypetag(rb)) {
+    case LUA_VSHRSTR:
+    case LUA_VLNGSTR:
+      setobj2s(L, ra, rb);  /* already a string */
+      return;
+    case LUA_VNUMINT: {
+      char buff[LUA_N2SBUFFSZ];
+      unsigned len = luaO_tostringbuff(rb, buff);
+      setsvalue2s(L, ra, luaS_newlstr(L, buff, len));
+      return;
+    }
+    case LUA_VNUMFLT: {
+      char buff[LUA_N2SBUFFSZ];
+      unsigned len = luaO_tostringbuff(rb, buff);
+      setsvalue2s(L, ra, luaS_newlstr(L, buff, len));
+      return;
+    }
+    case LUA_VNIL:
+      setsvalue2s(L, ra, luaS_newliteral(L, "nil"));
+      return;
+    case LUA_VTRUE:
+      setsvalue2s(L, ra, luaS_newliteral(L, "true"));
+      return;
+    case LUA_VFALSE:
+      setsvalue2s(L, ra, luaS_newliteral(L, "false"));
+      return;
+    default: {
+      /* Check for __tostring metamethod */
+      const TValue *tm = luaT_gettmbyobj(L, rb, TM_TOSTRING);
+      if (!notm(tm)) {
+        /* Call metamethod: result goes to ra */
+        luaT_callTMres(L, tm, rb, rb, ra);
+        if (l_unlikely(!ttisstring(s2v(ra))))
+          luaG_runerror(L, "'__tostring' must return a string");
+      }
+      else {
+        /* Default: "typename: 0xaddress" */
+        const char *tname = luaT_objtypename(L, rb);
+        const void *p;
+        if (iscollectable(rb))
+          p = gcvalue(rb);
+        else if (ttislightuserdata(rb))
+          p = pvalue(rb);
+        else
+          p = NULL;
+        luaO_pushfstring(L, "%s: %p", tname, p);
+        setobjs2s(L, ra, L->top.p - 1);  /* copy result to ra */
+        L->top.p--;  /* pop the pushed string */
+      }
+      return;
+    }
+  }
+}
+
+
+/*
 ** Perform a slice operation: obj[start:end]
 ** Handles strings, vectors, tables, and metamethods.
 */
@@ -1884,6 +1944,11 @@ returning: /* trap already set */
       vmcase(OP_LEN) {
         StkId ra = RA(i);
         Protect(luaV_objlen(L, ra, vRB(i)));
+        vmbreak;
+      }
+      vmcase(OP_TOSTRING) {
+        StkId ra = RA(i);
+        Protect(luaV_tostring(L, ra, vRB(i)));
         vmbreak;
       }
       vmcase(OP_CONCAT) {

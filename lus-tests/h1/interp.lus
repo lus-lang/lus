@@ -1,0 +1,262 @@
+global print, require, string, math, assert, package, pairs, ipairs, type, error, _G, table, load, tostring, tonumber, select, rawset, os, coroutine, pledge, setmetatable
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("interpolation")
+
+local string = string
+
+-- ============================================
+-- Basic String Interpolation Tests
+-- ============================================
+
+tests:it("simple literal string", function()
+    local s = `hello`
+    assert(s == "hello")
+end)
+
+tests:it("empty interpolated string", function()
+    local s = ``
+    assert(s == "")
+end)
+
+tests:it("variable interpolation with $name", function()
+    local name = "world"
+    local s = `hello $name`
+    assert(s == "hello world")
+end)
+
+tests:it("expression interpolation with $(expr)", function()
+    local s = `the answer is $(40 + 2)`
+    assert(s == "the answer is 42")
+end)
+
+tests:it("multiple interpolations", function()
+    local a = "foo"
+    local b = "bar"
+    local s = `$a and $b`
+    assert(s == "foo and bar")
+end)
+
+tests:it("mixed variables and expressions", function()
+    local x = 10
+    local s = `x is $x, double is $(x * 2)`
+    assert(s == "x is 10, double is 20")
+end)
+
+tests:it("adjacent interpolations", function()
+    local a = "hello"
+    local b = "world"
+    local s = `$a$b`
+    assert(s == "helloworld")
+end)
+
+-- ============================================
+-- Type Conversion Tests
+-- ============================================
+
+tests:it("number interpolation", function()
+    local n = 42
+    local s = `value: $n`
+    assert(s == "value: 42")
+end)
+
+tests:it("float interpolation", function()
+    local f = 3.14
+    local s = `pi is approximately $f`
+    assert(string.find(s, "3.14") ~= nil)
+end)
+
+tests:it("boolean interpolation true", function()
+    local t = true
+    local s = `value: $t`
+    assert(s == "value: true")
+end)
+
+tests:it("boolean interpolation false", function()
+    local f = false
+    local s = `value: $f`
+    assert(s == "value: false")
+end)
+
+tests:it("nil interpolation", function()
+    local n = nil
+    local s = `value is $n`
+    assert(s == "value is nil")
+end)
+
+tests:it("table interpolation without __tostring", function()
+    local t = {}
+    local s = `table: $t`
+    assert(string.find(s, "table:") ~= nil)
+end)
+
+-- ============================================
+-- __tostring Metamethod Tests
+-- ============================================
+
+tests:it("__tostring metamethod is called", function()
+    local mt = {
+        __tostring = function(self)
+            return "custom:" .. self.value
+        end
+    }
+    local obj = setmetatable({value = 42}, mt)
+    local s = `object is $obj`
+    assert(s == "object is custom:42")
+end)
+
+tests:it("__tostring with expression", function()
+    local mt = {
+        __tostring = function(self)
+            return "point(" .. self.x .. "," .. self.y .. ")"
+        end
+    }
+    local p = setmetatable({x = 10, y = 20}, mt)
+    local s = `location: $(p)`
+    assert(s == "location: point(10,20)")
+end)
+
+-- ============================================
+-- Escape Sequence Tests
+-- ============================================
+
+tests:it("escaped dollar sign $$", function()
+    local s = `price: $$100`
+    assert(s == "price: $100")
+end)
+
+tests:it("escaped backtick", function()
+    local s = `code: \`example\``
+    assert(s == "code: `example`")
+end)
+
+tests:it("newline escape", function()
+    local s = `line1\nline2`
+    assert(s == "line1\nline2")
+end)
+
+tests:it("tab escape", function()
+    local s = `col1\tcol2`
+    assert(s == "col1\tcol2")
+end)
+
+tests:it("backslash escape", function()
+    local s = `path: C:\\Users`
+    assert(s == "path: C:\\Users")
+end)
+
+-- ============================================
+-- Multiline Interpolated Strings
+-- ============================================
+
+tests:it("multiline string", function()
+    local s = `line1
+line2
+line3`
+    assert(string.find(s, "\n") ~= nil)
+end)
+
+tests:it("multiline with interpolation", function()
+    local name = "world"
+    local s = `hello
+$name`
+    assert(s == "hello\nworld")
+end)
+
+-- ============================================
+-- Complex Expression Tests
+-- ============================================
+
+tests:it("function call in expression", function()
+    local function double(x) return x * 2 end
+    local s = `result: $(double(21))`
+    assert(s == "result: 42")
+end)
+
+tests:it("nested parentheses in expression", function()
+    local s = `result: $(((1 + 2) * 3))`
+    assert(s == "result: 9")
+end)
+
+tests:it("table access in expression", function()
+    local t = {value = 100}
+    local s = `value: $(t.value)`
+    assert(s == "value: 100")
+end)
+
+tests:it("method call in expression", function()
+    local obj = {
+        getValue = function(self)
+            return "test"
+        end
+    }
+    local s = `value: $(obj:getValue())`
+    assert(s == "value: test")
+end)
+
+tests:it("string concat in expression", function()
+    local a = "hello"
+    local b = "world"
+    local s = `$(a .. " " .. b)`
+    assert(s == "hello world")
+end)
+
+-- ============================================
+-- Edge Cases
+-- ============================================
+
+tests:it("only expression, no literal", function()
+    local x = 42
+    local s = `$x`
+    assert(s == "42")
+end)
+
+tests:it("empty parts between interpolations", function()
+    local a = 1
+    local b = 2
+    local s = `$(a)$(b)`
+    assert(s == "12")
+end)
+
+tests:it("trailing interpolation", function()
+    local x = "end"
+    local s = `the $x`
+    assert(s == "the end")
+end)
+
+tests:it("leading interpolation", function()
+    local x = "start"
+    local s = `$x here`
+    assert(s == "start here")
+end)
+
+-- ============================================
+-- Independence from Global tostring
+-- ============================================
+
+tests:it("works when tostring is nil", function()
+    local original_tostring = tostring
+    _G.tostring = nil
+    
+    local x = 42
+    local result = `value: $x`
+    
+    _G.tostring = original_tostring
+    assert(result == "value: 42")
+end)
+
+tests:it("works when tostring is shadowed", function()
+    local original_tostring = tostring
+    _G.tostring = function() return "shadowed" end
+    
+    local x = 100
+    local result = `number: $x`
+    
+    _G.tostring = original_tostring
+    -- Should use internal conversion, not the shadowed tostring
+    assert(result == "number: 100")
+end)
+
+tests:finish()

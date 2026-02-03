@@ -69,7 +69,12 @@ enum RESERVED {
   TK_FLT,
   TK_INT,
   TK_NAME,
-  TK_STRING
+  TK_STRING,
+  /* string interpolation tokens */
+  TK_INTERP_BEGIN,   /* `foo$( or `foo$name - start with literal, expr follows */
+  TK_INTERP_MID,     /* )bar$( or )bar$name - middle section after expr */
+  TK_INTERP_END,     /* )baz` - final literal section */
+  TK_INTERP_SIMPLE   /* `foo` - no interpolations, just a string */
 };
 
 /* number of reserved words */
@@ -105,6 +110,9 @@ typedef struct LexState {
   TString *brkn;       /* "break" name (used as a label) */
   TString *glbn;       /* "global" name (when not a reserved word) */
   struct LusAst *ast;  /* optional AST being built (NULL if not building) */
+  /* string interpolation state */
+  int interp_depth;     /* parenthesis depth inside $(...), 0 = not in interp */
+  TString *interp_name; /* variable name for $name interpolation (NULL if $(expr)) */
 } LexState;
 
 LUAI_FUNC void luaX_init(lua_State *L);

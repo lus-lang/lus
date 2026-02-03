@@ -13,7 +13,7 @@
 #define LUA_AUTHORS "https://lus.dev/manual/license"
 
 #define LUA_VERSION_MAJOR_N 1
-#define LUA_VERSION_MINOR_N 4
+#define LUA_VERSION_MINOR_N 5
 #define LUA_VERSION_RELEASE_N 0
 
 #define LUA_VERSION_NUM (LUA_VERSION_MAJOR_N * 100 + LUA_VERSION_MINOR_N)

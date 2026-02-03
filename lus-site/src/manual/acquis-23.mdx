@@ -1,0 +1,66 @@
+---
+order: 123
+title: Acquis 23 - Do Expressions
+acquis: true
+draft: true
+---
+
+Do expressions are `do`/`end` blocks that evaluate to the value returned through the `provide` keyword.
+
+## Basic usage
+
+Do expressions can be used anywhere an expression is allowed. The expression will be evaluated to the value returned through the `provide` keyword.
+
+```lus
+local x = do
+    local y = 10
+    provide y
+end
+assert(x == 10)
+
+local z = 5 + do provide 10 end
+assert(z == 15)
+
+print(do provide local foo = "bar" provide "hello from " .. foo end) -- prints "hello from bar"
+```
+
+If no value is provided through the `provide` keyword, the do expression will evaluate to `nil`.
+
+```lus
+local x = do
+    local y = 10
+end
+assert(x == nil)
+```
+
+Multiple values can be provided, which will fill any local variables in order.
+
+```lus
+local x, y = do
+    provide 10, 20
+end
+assert(x == 10 and y == 20)
+```
+
+## Catch expressions
+
+Do expressions naturally integrate with the `catch` expression and serve as a more performant `pcall`-like construct.
+
+```lus
+local ok, x = catch do
+    provide 10
+end
+assert(ok and x == 10)
+```
+
+## Use with group statements
+
+Do expressions can be used with group local variables to initialize them.
+
+```lus
+local x <group> = do
+    local y <group> = { a = 1, b = 2 }
+    provide y
+end
+assert(x.a == 1 and x.b == 2)
+```

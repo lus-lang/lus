@@ -57,6 +57,7 @@ typedef enum {
   AST_FROM,       /* from deconstruction */
   AST_CATCHEXPR,  /* catch expression */
   AST_SLICE,      /* slice expression t[a,b] */
+  AST_INTERP,     /* interpolated string */
   /* Auxiliary */
   AST_PARAM,      /* function parameter */
   AST_NAMELIST,   /* list of names */
@@ -226,6 +227,11 @@ typedef struct LusAstNode {
       struct LusAstNode *start;  /* start index (or NULL for beginning) */
       struct LusAstNode *finish; /* end index (or NULL for end) */
     } slice;
+    /* AST_INTERP - interpolated string */
+    struct {
+      struct LusAstNode *parts;  /* list of string literals and expressions */
+      int nparts;                /* number of parts */
+    } interp;
   } u;
 } LusAstNode;
 

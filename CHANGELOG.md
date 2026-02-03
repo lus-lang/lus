@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0 (**WIP**)
+
+**Release date:** TBA
+
+- Added string interpolation.
+
 ## 1.4.0
 
 **Release date:** February 2, 2026

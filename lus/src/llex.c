@@ -50,7 +50,8 @@ static const char *const luaX_tokens[] = {
     "if",     "in",    "local",    "nil",       "not",      "or",      "repeat",
     "return", "then",  "true",     "until",     "while",    "//",      "..",
     "...",    "==",    ">=",       "<=",        "~=",       "<<",      ">>",
-    "::",     "<eof>", "<number>", "<integer>", "<name>",   "<string>"};
+    "::",     "<eof>", "<number>", "<integer>", "<name>",   "<string>",
+    "<interp_begin>", "<interp_mid>", "<interp_end>", "<interp_simple>"};
 
 
 #define save_and_next(ls) (save(ls, ls->current), next(ls))
@@ -195,6 +196,8 @@ void luaX_setinput(lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->glbn = luaS_newliteral(L, "global"); /* get "global" string */
   ls->glbn->extra = 0;                     /* mark it as not reserved */
 #endif
+  ls->interp_depth = 0;  /* not in interpolated string */
+  ls->interp_name = NULL;  /* no variable name */
   luaZ_resizebuffer(ls->L, ls->buff, LUA_MINBUFFER); /* initialize buffer */
 }
 
@@ -477,7 +480,104 @@ static void read_string(LexState *ls, int del, SemInfo *seminfo) {
 }
 
 
+/*
+** Read an interpolated string section until $name, $(, or closing backtick.
+** Handles escape sequences. Returns appropriate token type.
+** Stores literal text in seminfo->ts.
+** For $name interpolation, stores variable name in ls->interp_name.
+*/
+static int read_interp_section(LexState *ls, SemInfo *seminfo,
+                                int beginType, int endType) {
+  ls->interp_name = NULL;  /* clear any previous variable name */
+  luaZ_resetbuffer(ls->buff);
+  for (;;) {
+    switch (ls->current) {
+      case EOZ:
+        lexerror(ls, "unfinished interpolated string", TK_EOS);
+        break;  /* to avoid warnings */
+      case '`': {
+        /* End of interpolated string */
+        next(ls);
+        seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
+                                      luaZ_bufflen(ls->buff));
+        return endType;
+      }
+      case '$': {
+        next(ls);
+        if (ls->current == '$') {
+          /* $$ -> literal $ */
+          save(ls, '$');
+          next(ls);
+        }
+        else if (ls->current == '(') {
+          /* $( -> expression interpolation */
+          next(ls);
+          ls->interp_depth = 1;
+          seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
+                                        luaZ_bufflen(ls->buff));
+          return beginType;
+        }
+        else if (lislalpha(ls->current)) {
+          /* $name -> variable interpolation */
+          /* First, save accumulated literal */
+          seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
+                                        luaZ_bufflen(ls->buff));
+          /* Read the variable name */
+          luaZ_resetbuffer(ls->buff);
+          do {
+            save_and_next(ls);
+          } while (lislalnum(ls->current));
+          /* Store variable name */
+          ls->interp_name = luaX_newstring(ls, luaZ_buffer(ls->buff),
+                                            luaZ_bufflen(ls->buff));
+          /* Set flag to continue reading string on next llex call */
+          ls->interp_depth = -1;  /* -1 = just finished $name */
+          return beginType;
+        }
+        else {
+          lexerror(ls, "invalid interpolation after '$'", TK_STRING);
+        }
+        break;
+      }
+      case '\\': {
+        /* Escape sequences */
+        next(ls);
+        switch (ls->current) {
+          case '`': save(ls, '`'); next(ls); break;
+          case '$': save(ls, '$'); next(ls); break;
+          case 'n': save(ls, '\n'); next(ls); break;
+          case 't': save(ls, '\t'); next(ls); break;
+          case 'r': save(ls, '\r'); next(ls); break;
+          case '\\': save(ls, '\\'); next(ls); break;
+          case '\n':
+          case '\r':
+            save(ls, '\n');
+            inclinenumber(ls);
+            break;
+          default:
+            lexerror(ls, "invalid escape sequence in interpolated string", TK_STRING);
+        }
+        break;
+      }
+      case '\n':
+      case '\r':
+        /* Newlines allowed in interpolated strings */
+        save(ls, '\n');
+        inclinenumber(ls);
+        break;
+      default:
+        save_and_next(ls);
+    }
+  }
+}
+
+
 static int llex(LexState *ls, SemInfo *seminfo) {
+  /* Check if we're continuing an interpolated string after $name */
+  if (ls->interp_depth == -1) {
+    ls->interp_depth = 0;  /* reset flag */
+    return read_interp_section(ls, seminfo, TK_INTERP_MID, TK_INTERP_END);
+  }
   luaZ_resetbuffer(ls->buff);
   for (;;) {
     switch (ls->current) {
@@ -569,6 +669,24 @@ static int llex(LexState *ls, SemInfo *seminfo) {
       case '\'': { /* short literal strings */
         read_string(ls, ls->current, seminfo);
         return TK_STRING;
+      }
+      case '`': { /* interpolated string */
+        next(ls);
+        return read_interp_section(ls, seminfo, TK_INTERP_BEGIN, TK_INTERP_SIMPLE);
+      }
+      case '(': {
+        next(ls);
+        if (ls->interp_depth > 0)
+          ls->interp_depth++;
+        return '(';
+      }
+      case ')': {
+        next(ls);
+        if (ls->interp_depth > 0 && --ls->interp_depth == 0) {
+          /* End of $(expr), continue reading interpolated string */
+          return read_interp_section(ls, seminfo, TK_INTERP_MID, TK_INTERP_END);
+        }
+        return ')';
       }
       case '.': { /* '.', '..', '...', or number */
         save_and_next(ls);

@@ -40,7 +40,7 @@ static const void *const disptab[NUM_OPCODES] = {
     &&L_OP_IDIV,     &&L_OP_BAND,      &&L_OP_BOR,        &&L_OP_BXOR,
     &&L_OP_SHL,      &&L_OP_SHR,       &&L_OP_MMBIN,      &&L_OP_MMBINI,
     &&L_OP_MMBINK,   &&L_OP_UNM,       &&L_OP_BNOT,       &&L_OP_NOT,
-    &&L_OP_LEN,      &&L_OP_CONCAT,    &&L_OP_CLOSE,      &&L_OP_TBC,
+    &&L_OP_LEN,      &&L_OP_TOSTRING,  &&L_OP_CONCAT,     &&L_OP_CLOSE,      &&L_OP_TBC,
     &&L_OP_JMP,      &&L_OP_EQ,        &&L_OP_LT,         &&L_OP_LE,
     &&L_OP_EQK,      &&L_OP_EQI,       &&L_OP_LTI,        &&L_OP_LEI,
     &&L_OP_GTI,      &&L_OP_GEI,       &&L_OP_TEST,       &&L_OP_TESTSET,
