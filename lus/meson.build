@@ -210,7 +210,10 @@ h1_tests = [
   'h1/groups',
   'h1/vectors',
   'h1/cloning',
-  'h1/pledge'
+  'h1/pledge',
+  'h1/runtime-attrs',
+  'h1/doexpr',
+  'h1/interp'
 ]
 
 foreach t : h1_tests

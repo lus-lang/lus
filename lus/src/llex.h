@@ -48,6 +48,7 @@ enum RESERVED {
   TK_NIL,
   TK_NOT,
   TK_OR,
+  TK_PROVIDE,
   TK_REPEAT,
   TK_RETURN,
   TK_THEN,

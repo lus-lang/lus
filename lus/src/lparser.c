@@ -34,7 +34,7 @@
    smaller than 250, due to the bytecode format) */
 #define MAXVARS 200
 
-#define hasmultret(k) ((k) == VCALL || (k) == VVARARG || (k) == VCATCH)
+#define hasmultret(k) ((k) == VCALL || (k) == VVARARG || (k) == VCATCH || (k) == VDOEXPR)
 
 /*
 ** Grow an array using arena allocation (orphan pattern).
@@ -70,6 +70,11 @@ typedef struct BlockCnt {
   lu_byte upval;     /* true if some variable in the block is an upvalue */
   lu_byte isloop;    /* 1 if 'block' is a loop; 2 if it has pending breaks */
   lu_byte insidetbc; /* true if inside the scope of a to-be-closed var. */
+  /* do-expression support */
+  lu_byte isdoexpr;     /* true if this is a do-expression block */
+  int doexpr_base;      /* base register for do-expression results */
+  int doexpr_exitjump;  /* jump list for provide statements */
+  int doexpr_nvalues;   /* number of values provided (0 if no provide yet) */
 } BlockCnt;
 
 /*
@@ -81,6 +86,8 @@ static BinOpr subexpr(LexState *ls, expdesc *v, int limit);
 static void interpexp(LexState *ls, expdesc *v);
 static void catchexpr(LexState *ls, expdesc *v);
 static void catchstat(LexState *ls, int line);
+static void doexpr(LexState *ls, expdesc *v);
+static void providestat(LexState *ls);
 static int isassigncond(LexState *ls);
 static int assigncond(LexState *ls);
 
@@ -763,6 +770,11 @@ static void enterblock(FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->upval = 0;
   /* inherit 'insidetbc' from enclosing block */
   bl->insidetbc = (fs->bl != NULL && fs->bl->insidetbc);
+  /* do-expression fields */
+  bl->isdoexpr = 0;
+  bl->doexpr_base = 0;
+  bl->doexpr_exitjump = NO_JUMP;
+  bl->doexpr_nvalues = 0;
   bl->previous = fs->bl; /* link block in function's block list */
   fs->bl = bl;
   lua_assert(fs->freereg == luaY_nvarstack(fs));
@@ -911,6 +923,10 @@ static void statlist(LexState *ls) {
     if (ls->t.token == TK_RETURN) {
       statement(ls);
       return; /* 'return' must be last statement */
+    }
+    if (ls->t.token == TK_PROVIDE) {
+      statement(ls);
+      return; /* 'provide' must be last statement in scope */
     }
     statement(ls);
   }
@@ -1860,6 +1876,10 @@ static void simpleexp(LexState *ls, expdesc *v) {
     catchexpr(ls, v);
     return;
   }
+  case TK_DO: { /* do expression */
+    doexpr(ls, v);
+    return;
+  }
   case TK_ENUM: { /* enum expression */
     enumexpr(ls, v);
     return;
@@ -2055,6 +2075,172 @@ static void catchstat(LexState *ls, int line) {
   fs->freereg = cast_byte(base);
 
   luaK_fixline(fs, line);
+}
+
+/*
+** Parse a do expression: do <statements> [provide <explist>] end
+** Returns the value(s) from the provide statement, or nil if no provide.
+** The result is placed in a register.
+**
+** CRITICAL ISSUE: The Lua parser's vardesc array ordering conflicts with
+** do-expressions when used as initializers. In `local x = do local y...`,
+** x's vardesc is created (but not activated) before doexpr runs.
+** When we then create y's vardesc, adjustlocalvars uses nactvar-based
+** indexing which retrieves x's vardesc instead of y's!
+**
+** SOLUTION: Keep nactvar "elevated" to account for pending vardesc entries
+** during the entire parsing of the block. Additionally, we must pre-assign
+** ridx values to pending variables so that reglevel() returns correct values
+** when computing register allocation for variables inside the do-block.
+*/
+static void doexpr(LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  BlockCnt bl;
+  int base = fs->freereg;
+  int line = ls->linenumber;
+
+  /* Calculate how many vardesc entries are "pending" (created but not activated).
+  ** These are entries between the current array size and what nactvar expects. */
+  int pending = ls->dyd->actvar.n - fs->firstlocal - fs->nactvar;
+  int real_nactvar = fs->nactvar;  /* save the real count */
+
+  luaX_next(ls);  /* skip 'do' */
+
+  /* Reserve result register and initialize to nil (default if no provide) */
+  luaK_reserveregs(fs, 1);
+  luaK_nil(fs, base, 1);
+
+  /* Pre-assign ridx to pending variables so reglevel() works correctly.
+  ** These variables will get their final ridx when adjustlocalvars is called
+  ** after the do-expression completes. For now, we need placeholder values
+  ** so that variables created INSIDE the do-block get correct registers.
+  ** We use reglevel(fs, nactvar) as the starting ridx for pending vars. */
+  {
+    int i;
+    int ridx = luaY_nvarstack(fs);
+    for (i = 0; i < pending; i++) {
+      Vardesc *vd = getlocalvardesc(fs, fs->nactvar + i);
+      vd->vd.ridx = cast_byte(ridx++);
+    }
+  }
+
+  /* Temporarily elevate nactvar to skip over pending vardesc entries.
+  ** This makes adjustlocalvars use correct vidx values during block parsing.
+  ** KEEP it elevated during all of statlist(). */
+  fs->nactvar += pending;
+
+  /* Enter block with elevated nactvar */
+  enterblock(fs, &bl, 0);
+  bl.isdoexpr = 1;
+  bl.doexpr_base = base;
+  bl.doexpr_exitjump = NO_JUMP;
+
+  /* Parse block contents - nactvar stays elevated */
+  statlist(ls);
+
+  /* Patch all provide jumps to here */
+  luaK_patchtohere(fs, bl.doexpr_exitjump);
+
+  check_match(ls, TK_END, TK_DO, line);
+
+  /* leaveblock will use bl.nactvar (which includes pending) to clean up.
+  ** After leaveblock, nactvar is reset to bl.nactvar. */
+  leaveblock(fs);
+
+  /* Restore the real nactvar (without the pending vars) */
+  fs->nactvar = real_nactvar;
+
+  /* Clear the temporary ridx values from pending variables.
+  ** They will get their real ridx when adjustlocalvars is called later. */
+  {
+    int i;
+    for (i = 0; i < pending; i++) {
+      Vardesc *vd = getlocalvardesc(fs, fs->nactvar + i);
+      vd->vd.ridx = 0;  /* reset to 0 (will be set properly later) */
+    }
+  }
+
+  /* After leaveblock, freereg is reset. Set it to base+1 to keep result. */
+  fs->freereg = cast_byte(base + 1);
+
+  /* Result is a do-expression (multi-return).
+  ** Like VCALL, the actual number of results depends on context.
+  ** Encode both base register and number of values provided in info:
+  ** info = base | (nvalues << 8), where nvalues comes from the block.
+  ** If nvalues is 0 (no provide), treat as 1 (the nil default).
+  ** If nvalues is -1 (inner multi-return), we can't know, so be conservative. */
+  {
+    int nvalues = bl.doexpr_nvalues;
+    if (nvalues == 0) nvalues = 1;  /* no provide = 1 nil */
+    if (nvalues < 0) nvalues = 255;  /* unknown = assume many (won't nil-fill) */
+    init_exp(v, VDOEXPR, base | (nvalues << 8));
+  }
+}
+
+/*
+** Handle the 'provide' statement inside a do-expression.
+** Evaluates the expression list and moves results to the do-expr's base register.
+** Then jumps to the end of the do-expression.
+*/
+static void providestat(LexState *ls) {
+  FuncState *fs = ls->fs;
+  BlockCnt *bl;
+  int base;
+  expdesc e;
+
+  /* Find enclosing do-expression block */
+  for (bl = fs->bl; bl != NULL; bl = bl->previous) {
+    if (bl->isdoexpr)
+      goto found;
+  }
+  luaX_syntaxerror(ls, "'provide' outside do expression");
+
+found:
+  base = bl->doexpr_base;
+  luaX_next(ls);  /* skip 'provide' */
+
+  if (block_follow(ls, 1) || ls->t.token == ';') {
+    /* provide with no values = provide nil (already set at do-expr start) */
+    bl->doexpr_nvalues = 1;  /* counts as 1 nil value */
+  } else {
+    /* Parse expression list into temporary registers, then move to base.
+    ** We can't directly put results at 'base' because it's a local variable
+    ** slot that might conflict with the expression evaluation. */
+    int nexps = explist(ls, &e);
+    bl->doexpr_nvalues = nexps;  /* track how many values were provided */
+    if (hasmultret(e.k)) {
+      /* Multi-return: let it fill in starting at freereg */
+      luaK_setmultret(fs, &e);
+      /* Move first result to base */
+      luaK_exp2anyreg(fs, &e);
+      if (e.u.info != base) {
+        luaK_codeABC(fs, OP_MOVE, base, e.u.info, 0);
+      }
+      /* For multi-return, we don't know exact count, assume needs may vary */
+      bl->doexpr_nvalues = -1;  /* -1 means "unknown/multi-return" */
+    } else if (nexps == 1) {
+      /* Single expression: move to base */
+      luaK_exp2anyreg(fs, &e);
+      if (e.u.info != base) {
+        luaK_codeABC(fs, OP_MOVE, base, e.u.info, 0);
+      }
+    } else {
+      /* Multiple expressions: they're already in consecutive registers.
+      ** Move them to base. */
+      luaK_exp2nextreg(fs, &e);  /* close last expression */
+      /* Results are in [freereg - nexps, freereg).
+      ** Move to [base, base + nexps). */
+      int src = fs->freereg - nexps;
+      if (src != base) {
+        for (int i = 0; i < nexps; i++) {
+          luaK_codeABC(fs, OP_MOVE, base + i, src + i, 0);
+        }
+      }
+    }
+  }
+
+  /* Jump to end of do-expression */
+  luaK_concat(fs, &bl->doexpr_exitjump, luaK_jump(fs));
 }
 
 static BinOpr getbinopr(int op) {
@@ -3945,6 +4131,10 @@ static void statement(LexState *ls) {
       node = lusA_newnode(ls->ast, AST_RETURN, line);
     luaX_next(ls); /* skip RETURN */
     retstat(ls);
+    break;
+  }
+  case TK_PROVIDE: { /* stat -> providestat */
+    providestat(ls);
     break;
   }
   case TK_BREAK: { /* stat -> breakstat */

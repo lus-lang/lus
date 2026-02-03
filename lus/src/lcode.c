@@ -761,6 +761,28 @@ void luaK_setreturns(FuncState *fs, expdesc *e, int nresults) {
     Instruction *endcatch = &getinstruction(fs, e);
     SETARG_B(*endcatch, nresults + 1); /* B = nresults + 1 (like CALL) */
   }
+  else if (e->k == VDOEXPR) {
+    /* Do-expression: values are already in registers starting at base.
+    ** e->u.info encodes: base | (nvalues << 8)
+    ** where nvalues is how many values the provide statement gave.
+    ** Only nil-fill if nresults > nvalues. */
+    int base = e->u.info & 0xFF;
+    int nvalues = (e->u.info >> 8) & 0xFF;
+    if (nresults == LUA_MULTRET) {
+      /* Multi-return context (like function call's last argument).
+      ** Leave freereg at base + nvalues (the values provided).
+      ** No nil-fill needed - the caller will handle variable args. */
+      fs->freereg = cast_byte(base + nvalues);
+    } else {
+      if (nresults > nvalues) {
+        /* Nil-fill the extra slots beyond what provide gave */
+        luaK_nil(fs, base + nvalues, nresults - nvalues);
+      }
+      fs->freereg = cast_byte(base + nresults);
+    }
+    e->u.info = base;  /* restore to just base for subsequent handling */
+    e->k = VNONRELOC;  /* now treated as fixed position */
+  }
   else {
     lua_assert(e->k == VVARARG);
     SETARG_C(*pc, nresults + 1);
@@ -801,6 +823,12 @@ void luaK_setoneret(FuncState *fs, expdesc *e) {
   else if (e->k == VVARARG) {
     SETARG_C(getinstruction(fs, e), 2);
     e->k = VRELOC; /* can relocate its simple result */
+  }
+  else if (e->k == VDOEXPR) {
+    /* Do-expression: first result is at base register.
+    ** e->u.info encodes base | (nvalues << 8), extract just base. */
+    e->u.info = e->u.info & 0xFF;  /* extract base register */
+    e->k = VNONRELOC; /* result has fixed position */
   }
   else if (e->k == VCATCH) {
     /* Catch expression returns (status, result...) - first value is status.
@@ -875,7 +903,8 @@ void luaK_dischargevars(FuncState *fs, expdesc *e) {
     }
     case VVARARG:
     case VCALL:
-    case VCATCH: {
+    case VCATCH:
+    case VDOEXPR: {
       luaK_setoneret(fs, e);
       break;
     }

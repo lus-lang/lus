@@ -72,7 +72,8 @@ typedef enum {
               info = instruction pc */
   VCALL,     /* expression is a function call; info = instruction pc */
   VVARARG,   /* vararg expression; info = instruction pc */
-  VCATCH /* catch expression; info = base register; returns (status, result) */
+  VCATCH,    /* catch expression; info = base register; returns (status, result) */
+  VDOEXPR    /* do expression; info = base register; can return multiple values */
 } expkind;
 
 #define vkisvar(k) (VLOCAL <= (k) && (k) <= VINDEXSTR)
