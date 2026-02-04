@@ -130,19 +130,58 @@
       "name": "string.tag.lus"
     },
     {
-      "match": "<\\s*(const|close)\\s*>",
-      "captures": {
+      "match": "<\\s*(const|close|group)\\s*>",
+      "name": "storage.type.attribute.lus"
+    },
+    {
+      "begin": "<(?![=<])",
+      "beginCaptures": {
         "0": {
           "name": "storage.type.attribute.lus"
         }
-      }
+      },
+      "end": ">",
+      "endCaptures": {
+        "0": {
+          "name": "storage.type.attribute.lus"
+        }
+      },
+      "name": "meta.attribute.lus",
+      "patterns": [
+        {
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+          "name": "storage.type.attribute.lus"
+        },
+        {
+          "include": "$self"
+        }
+      ]
     },
     {
-      "match": "\\<[a-zA-Z_\\*][a-zA-Z0-9_\\.\\*\\-]*\\>",
-      "name": "storage.type.generic.lus"
+      "begin": "\\b(catch)\\s*(\\[)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.lus"
+        },
+        "2": {
+          "name": "punctuation.section.brackets.begin.lus"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.brackets.end.lus"
+        }
+      },
+      "name": "meta.catch-handler.lus",
+      "patterns": [
+        {
+          "include": "$self"
+        }
+      ]
     },
     {
-      "match": "\\b(break|catch|do|else|end|enum|for|from|if|elseif|goto|in|repeat|return|then|until|while)\\b",
+      "match": "\\b(break|catch|do|else|end|enum|for|from|if|elseif|goto|in|provide|repeat|return|then|until|while)\\b",
       "name": "keyword.control.lus"
     },
     {
@@ -210,7 +249,7 @@
       "name": "entity.name.function.lus"
     },
     {
-      "match": "\\+|-|%|#|\\*|\\/|\\^|==?|~=|!=|<=?|>=?|(?<!\\.)\\.{2}(?!\\.)|\\?",
+      "match": "\\+|-|%|#|\\*|\\/|\\^|==?|~=|!=|<=?|>=?|(?<!\\.)\\.{2}(?!\\.)|\\?\\.|\\?:|\\?",
       "name": "keyword.operator.lus"
     }
   ],
@@ -298,7 +337,37 @@
               "name": "punctuation.definition.string.end.lus"
             }
           },
-          "name": "string.quoted.template.lus"
+          "name": "string.quoted.template.lus",
+          "patterns": [
+            {
+              "match": "\\$\\$",
+              "name": "constant.character.escape.lus"
+            },
+            {
+              "match": "\\$[a-zA-Z_][a-zA-Z0-9_]*",
+              "name": "variable.other.interpolated.lus"
+            },
+            {
+              "begin": "\\$\\(",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.lus"
+                }
+              },
+              "end": "\\)",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.lus"
+                }
+              },
+              "name": "meta.embedded.expression.lus",
+              "patterns": [
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
         },
         {
           "begin": "(?<!--)\\[(=*)\\[",
