@@ -33,7 +33,7 @@ static const char *const ast_typenames[] = {
     "unop",       "table",     "funcexpr",   "callexpr",  "methodcall",
     "enum",       "optchain",  "from",       "catchexpr", "slice",
     "interp",     "param",     "namelist",   "explist",   "elseif",
-    "else",       "tablefield", NULL};
+    "else",       "tablefield", "error_expr", "error_stat", NULL};
 
 const char *lusA_typename(LusAstType type) {
   if (type >= 0 &&
@@ -53,6 +53,11 @@ LusAst *lusA_new(lua_State *L) {
   ast->curnode = NULL;
   ast->curblock = NULL;
   ast->nodecount = 0;
+  ast->comments = NULL;
+  ast->lastcomment = NULL;
+  ast->errors = NULL;
+  ast->lasterror = NULL;
+  ast->recover = 0;
   return ast;
 }
 
@@ -83,11 +88,14 @@ void lusA_free(lua_State *L, LusAst *ast) {
 /*
 ** Allocate a new node from the arena
 */
-LusAstNode *lusA_newnode(LusAst *ast, LusAstType type, int line) {
+LusAstNode *lusA_newnode(LusAst *ast, LusAstType type, int line, int column) {
   LusAstNode *node = luaA_new_obj(ast->arena, LusAstNode);
   memset(node, 0, sizeof(LusAstNode));
   node->type = type;
   node->line = line;
+  node->column = column;
+  node->endline = 0;    /* to be set when node is complete */
+  node->endcolumn = 0;
   node->next = NULL;
   node->child = NULL;
   ast->nodecount++;
@@ -122,6 +130,52 @@ void lusA_addsibling(LusAstNode *node, LusAstNode *sibling) {
 }
 
 /*
+** Add a comment to the AST
+*/
+void lusA_addcomment(LusAst *ast, int line, int column, int endline,
+                     int endcolumn, int islong, TString *text) {
+  if (ast == NULL)
+    return;
+  LusComment *c = luaA_new_obj(ast->arena, LusComment);
+  c->next = NULL;
+  c->line = line;
+  c->column = column;
+  c->endline = endline;
+  c->endcolumn = endcolumn;
+  c->islong = islong;
+  c->text = text;
+  /* Append to end of comment list */
+  if (ast->lastcomment == NULL) {
+    ast->comments = c;
+    ast->lastcomment = c;
+  } else {
+    ast->lastcomment->next = c;
+    ast->lastcomment = c;
+  }
+}
+
+/*
+** Add a parse error to the AST
+*/
+void lusA_adderror(LusAst *ast, int line, int column, TString *message) {
+  if (ast == NULL)
+    return;
+  LusParseError *e = luaA_new_obj(ast->arena, LusParseError);
+  e->next = NULL;
+  e->line = line;
+  e->column = column;
+  e->message = message;
+  /* Append to end of error list */
+  if (ast->lasterror == NULL) {
+    ast->errors = e;
+    ast->lasterror = e;
+  } else {
+    ast->lasterror->next = e;
+    ast->lasterror = e;
+  }
+}
+
+/*
 ** Binary operator names for Graphviz
 */
 static const char *binop_names[] = {
@@ -148,9 +202,19 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
   lua_pushstring(L, lusA_typename(node->type));
   lua_setfield(L, -2, "type");
 
-  /* line */
+  /* line and column */
   lua_pushinteger(L, node->line);
   lua_setfield(L, -2, "line");
+  lua_pushinteger(L, node->column);
+  lua_setfield(L, -2, "column");
+
+  /* end line and column (if set) */
+  if (node->endline > 0) {
+    lua_pushinteger(L, node->endline);
+    lua_setfield(L, -2, "endline");
+    lua_pushinteger(L, node->endcolumn);
+    lua_setfield(L, -2, "endcolumn");
+  }
 
   /* Type-specific fields */
   switch (node->type) {
@@ -164,12 +228,43 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_STRING:
-  case AST_NAME:
   case AST_LABEL:
   case AST_GOTO:
     if (node->u.str != NULL) {
       lua_pushstring(L, getstr(node->u.str));
       lua_setfield(L, -2, "value");
+    }
+    break;
+
+  case AST_NAME:
+    if (node->u.var.name != NULL) {
+      lua_pushstring(L, getstr(node->u.var.name));
+      lua_setfield(L, -2, "value");
+    }
+    /* Include attribute information if present */
+    /* Attribute kinds: RDKCONST=1, RDKTOCLOSE=3, RDKGROUP=5, others are runtime */
+    if (node->u.var.attrkind != 0) {
+      const char *attrname = NULL;
+      switch (node->u.var.attrkind) {
+        case 1: attrname = "const"; break;  /* RDKCONST */
+        case 3: attrname = "close"; break;  /* RDKTOCLOSE */
+        case 5: attrname = "group"; break;  /* RDKGROUP */
+        default: attrname = "runtime"; break;
+      }
+      lua_pushstring(L, attrname);
+      lua_setfield(L, -2, "attr");
+    }
+    /* Serialize runtime attributes if present */
+    if (node->u.var.runtimeattrs != NULL) {
+      int i = 1;
+      LusAstNode *ra = node->u.var.runtimeattrs;
+      lua_newtable(L);
+      while (ra != NULL) {
+        nodetotable(L, ra);
+        lua_rawseti(L, -2, i++);
+        ra = ra->next;
+      }
+      lua_setfield(L, -2, "runtimeattrs");
     }
     break;
 
@@ -201,8 +296,27 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
   case AST_LOCALFUNC:
   case AST_GLOBALFUNC:
   case AST_FUNCSTAT:
-    nodetotable(L, node->u.func.params);
-    lua_setfield(L, -2, "params");
+    if (node->u.func.name != NULL) {
+      lua_pushstring(L, getstr(node->u.func.name));
+      lua_setfield(L, -2, "name");
+    }
+    /* Serialize function name expression (for a.b.c:method paths) */
+    if (node->u.func.nameexpr != NULL) {
+      nodetotable(L, node->u.func.nameexpr);
+      lua_setfield(L, -2, "nameexpr");
+    }
+    /* Serialize params as array (linked list of AST_NAME nodes) */
+    if (node->u.func.params != NULL) {
+      int i = 1;
+      LusAstNode *p = node->u.func.params;
+      lua_newtable(L);
+      while (p != NULL) {
+        nodetotable(L, p);
+        lua_rawseti(L, -2, i++);
+        p = p->next;
+      }
+      lua_setfield(L, -2, "params");
+    }
     nodetotable(L, node->u.func.body);
     lua_setfield(L, -2, "body");
     lua_pushboolean(L, node->u.func.isvararg);
@@ -336,6 +450,14 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     lua_setfield(L, -2, "nparts");
     break;
 
+  case AST_ERROR_EXPR:
+  case AST_ERROR_STAT:
+    if (node->u.error.message != NULL) {
+      lua_pushstring(L, getstr(node->u.error.message));
+      lua_setfield(L, -2, "message");
+    }
+    break;
+
   default:
     break;
   }
@@ -367,6 +489,48 @@ void lusA_totable(lua_State *L, LusAst *ast) {
   }
   lua_gc(L, LUA_GCSTOP); /* prevent GC during AST traversal */
   nodetotable(L, ast->root);
+  /* Add comments array if there are any comments */
+  if (ast->comments != NULL) {
+    lua_newtable(L);  /* create comments array */
+    int i = 1;
+    for (LusComment *c = ast->comments; c != NULL; c = c->next) {
+      lua_newtable(L);  /* comment table */
+      lua_pushinteger(L, c->line);
+      lua_setfield(L, -2, "line");
+      lua_pushinteger(L, c->column);
+      lua_setfield(L, -2, "column");
+      lua_pushinteger(L, c->endline);
+      lua_setfield(L, -2, "endline");
+      lua_pushinteger(L, c->endcolumn);
+      lua_setfield(L, -2, "endcolumn");
+      lua_pushboolean(L, c->islong);
+      lua_setfield(L, -2, "islong");
+      if (c->text != NULL) {
+        lua_pushstring(L, getstr(c->text));
+        lua_setfield(L, -2, "text");
+      }
+      lua_rawseti(L, -2, i++);  /* comments[i] = comment_table */
+    }
+    lua_setfield(L, -2, "comments");  /* root.comments = comments_array */
+  }
+  /* Add errors array if there are any parse errors */
+  if (ast->errors != NULL) {
+    lua_newtable(L);  /* create errors array */
+    int i = 1;
+    for (LusParseError *e = ast->errors; e != NULL; e = e->next) {
+      lua_newtable(L);  /* error table */
+      lua_pushinteger(L, e->line);
+      lua_setfield(L, -2, "line");
+      lua_pushinteger(L, e->column);
+      lua_setfield(L, -2, "column");
+      if (e->message != NULL) {
+        lua_pushstring(L, getstr(e->message));
+        lua_setfield(L, -2, "message");
+      }
+      lua_rawseti(L, -2, i++);  /* errors[i] = error_table */
+    }
+    lua_setfield(L, -2, "errors");  /* root.errors = errors_array */
+  }
   lua_gc(L, LUA_GCRESTART); /* resume GC */
 }
 

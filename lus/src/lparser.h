@@ -124,6 +124,7 @@ typedef struct RuntimeAttr {
   lu_byte iscall;          /* 1 if this is a function call (has args) */
   lu_byte ridx;            /* register holding evaluated attr (set after eval) */
   struct RuntimeAttr *next;/* next attribute in chain */
+  struct LusAstNode *ast;  /* AST node for the attribute expression */
 } RuntimeAttr;
 
 /* Forward declaration for GroupDesc */

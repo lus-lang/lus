@@ -918,6 +918,100 @@ static void close_func(LexState *ls) {
 */
 
 /*
+** =======================================================
+** Error recovery helpers for AST generation
+** =======================================================
+*/
+
+/*
+** Tokens that can legally start a statement.
+** Used for pre-validation in error recovery mode.
+*/
+static int can_start_statement(int token) {
+  switch (token) {
+    case ';':           /* empty statement */
+    case TK_IF:
+    case TK_WHILE:
+    case TK_DO:
+    case TK_FOR:
+    case TK_REPEAT:
+    case TK_FUNCTION:
+    case TK_LOCAL:
+    case TK_GLOBAL:
+    case TK_DBCOLON:    /* label */
+    case TK_RETURN:
+    case TK_PROVIDE:
+    case TK_BREAK:
+    case TK_CATCH:
+    case TK_GOTO:
+    case TK_NAME:       /* assignment or function call */
+    case '(':           /* grouped expression -> call/assign */
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/*
+** Synchronization tokens for error recovery.
+** These are tokens where we can safely resume parsing after an error.
+*/
+static int is_sync_token(int token) {
+  switch (token) {
+    case ';':
+    case TK_END:
+    case TK_ELSE:
+    case TK_ELSEIF:
+    case TK_UNTIL:
+    case TK_RETURN:
+    case TK_LOCAL:
+    case TK_FUNCTION:
+    case TK_IF:
+    case TK_WHILE:
+    case TK_FOR:
+    case TK_REPEAT:
+    case TK_DO:
+    case TK_BREAK:
+    case TK_GOTO:
+    case TK_EOS:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/*
+** Skip tokens until a synchronization point is reached.
+** Used to recover from syntax errors.
+*/
+static void skip_to_sync(LexState *ls) {
+  while (!is_sync_token(ls->t.token)) {
+    luaX_next(ls);
+  }
+  /* Consume ';' if present to avoid infinite loops */
+  if (ls->t.token == ';')
+    luaX_next(ls);
+}
+
+/*
+** Create an AST_ERROR_STAT node and record the error in the AST's error list.
+** Used when error recovery detects an invalid token sequence.
+*/
+static LusAstNode *create_error_stat(LexState *ls, int line, int column,
+                                      const char *msg) {
+  LusAstNode *node = lusA_newnode(ls->ast, AST_ERROR_STAT, line, column);
+  node->u.error.message = luaS_new(ls->L, msg);
+  lusA_adderror(ls->ast, line, column, node->u.error.message);
+  return node;
+}
+
+/*
+** =======================================================
+** End of error recovery helpers
+** =======================================================
+*/
+
+/*
 ** check whether current token is in the follow set of a block.
 ** 'until' closes syntactical blocks, but do not close scope,
 ** so it is handled in separate.
@@ -938,7 +1032,36 @@ static int block_follow(LexState *ls, int withuntil) {
 
 static void statlist(LexState *ls) {
   /* statlist -> { stat [';'] } */
-  while (!block_follow(ls, 1)) {
+  for (;;) {
+    /* Check for block termination */
+    if (block_follow(ls, 1)) {
+      /* In recovery mode at top level, orphan block-enders are errors.
+      ** curblock is NULL only at the true top level (main chunk).
+      ** Inside function bodies, curblock points to the function node. */
+      if (AST_ACTIVE(ls) && ls->ast->recover && ls->ast->curblock == NULL) {
+        int token = ls->t.token;
+        if (token == TK_END || token == TK_ELSE ||
+            token == TK_ELSEIF || token == TK_UNTIL) {
+          /* Orphan block-ending keyword at top level */
+          int line = ls->linenumber;
+          int column = ls->tokencolumn;
+          const char *msg = luaO_pushfstring(ls->L,
+              "unexpected '%s' (no matching block)", luaX_token2str(ls, token));
+
+          LusAstNode *errnode = create_error_stat(ls, line, column, msg);
+          lua_pop(ls->L, 1);  /* pop the error message */
+
+          /* Add error node to root */
+          if (ls->ast->root != NULL)
+            lusA_addchild(ls->ast->root, errnode);
+
+          luaX_next(ls);  /* skip the orphan keyword */
+          continue;
+        }
+      }
+      break;  /* normal block termination */
+    }
+
     if (ls->t.token == TK_RETURN) {
       statement(ls);
       return; /* 'return' must be last statement */
@@ -947,6 +1070,29 @@ static void statlist(LexState *ls) {
       statement(ls);
       return; /* 'provide' must be last statement in scope */
     }
+
+    /* Error recovery: pre-validate token before parsing statement */
+    if (AST_ACTIVE(ls) && ls->ast->recover) {
+      if (!can_start_statement(ls->t.token)) {
+        /* Invalid token - create error node and skip to sync point */
+        int line = ls->linenumber;
+        int column = ls->tokencolumn;
+        const char *msg = luaO_pushfstring(ls->L,
+            "unexpected '%s'", luaX_token2str(ls, ls->t.token));
+
+        LusAstNode *errnode = create_error_stat(ls, line, column, msg);
+        lua_pop(ls->L, 1);  /* pop the error message from luaO_pushfstring */
+
+        /* Add error node to current block */
+        LusAstNode *parent = ls->ast->curblock ? ls->ast->curblock : ls->ast->root;
+        if (parent != NULL)
+          lusA_addchild(parent, errnode);
+
+        skip_to_sync(ls);
+        continue;
+      }
+    }
+
     statement(ls);
   }
 }
@@ -956,6 +1102,7 @@ static void fieldsel(LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   expdesc key;
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   LusAstNode *table_ast = v->ast; /* save before overwrite */
   luaK_exp2anyregup(fs, v);
   luaX_next(ls);                     /* skip the dot or colon */
@@ -964,9 +1111,9 @@ static void fieldsel(LexState *ls, expdesc *v) {
   luaK_indexed(fs, v, &key);
   /* Create AST_FIELD node */
   if (AST_ACTIVE(ls)) {
-    LusAstNode *field = lusA_newnode(ls->ast, AST_FIELD, line);
+    LusAstNode *field = lusA_newnode(ls->ast, AST_FIELD, line, column);
     field->u.index.table = table_ast;
-    LusAstNode *keynode = lusA_newnode(ls->ast, AST_STRING, line);
+    LusAstNode *keynode = lusA_newnode(ls->ast, AST_STRING, line, column);
     keynode->u.str = fname;
     field->u.index.key = keynode;
     v->ast = field;
@@ -1102,6 +1249,7 @@ static void constructor(LexState *ls, expdesc *t) {
      sep -> ',' | ';' */
   FuncState *fs = ls->fs;
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
   ConsControl cc;
   luaK_code(fs, 0); /* space for extra arg. */
@@ -1126,9 +1274,10 @@ static void constructor(LexState *ls, expdesc *t) {
   luaK_settablesize(fs, pc, t->u.info, cc.na, cc.nh);
   /* Create AST_TABLE node */
   if (AST_ACTIVE(ls)) {
-    t->ast = lusA_newnode(ls->ast, AST_TABLE, line);
+    t->ast = lusA_newnode(ls->ast, AST_TABLE, line, column);
     /* Fields are not tracked individually for now */
     t->ast->u.table.fields = NULL;
+    AST_SETEND_LAST(t->ast, ls);  /* end at closing '}' */
   }
 }
 
@@ -1145,21 +1294,58 @@ static void parlist(LexState *ls) {
   Proto *f = fs->f;
   int nparams = 0;
   int varargk = 0;
+  LusAstNode *params_head = NULL, *params_tail = NULL;
   if (ls->t.token != ')') { /* is 'parlist' not empty? */
     do {
       switch (ls->t.token) {
       case TK_NAME: {
-        new_localvar(ls, str_checkname(ls));
+        int paramline = ls->linenumber;
+        int paramcol = ls->tokencolumn;
+        TString *paramname = str_checkname(ls);
+        new_localvar(ls, paramname);
         nparams++;
+        /* Build AST node for parameter */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *param = lusA_newnode(ls->ast, AST_NAME, paramline, paramcol);
+          param->u.var.name = paramname;
+          param->u.var.attrkind = 0;
+          param->u.var.runtimeattrs = NULL;
+          AST_SETEND_LAST(param, ls);
+          /* Append to params list */
+          if (params_tail) {
+            params_tail->next = param;
+            params_tail = param;
+          } else {
+            params_head = params_tail = param;
+          }
+        }
         break;
       }
       case TK_DOTS: {
         varargk = 1;
         luaX_next(ls); /* skip '...' */
-        if (ls->t.token == TK_NAME)
-          new_varkind(ls, str_checkname(ls), RDKVAVAR);
-        else
+        if (ls->t.token == TK_NAME) {
+          int paramline = ls->linenumber;
+          int paramcol = ls->tokencolumn;
+          TString *varargtablename = str_checkname(ls);
+          new_varkind(ls, varargtablename, RDKVAVAR);
+          /* Build AST node for vararg table parameter */
+          if (AST_ACTIVE(ls)) {
+            LusAstNode *param = lusA_newnode(ls->ast, AST_NAME, paramline, paramcol);
+            param->u.var.name = varargtablename;
+            param->u.var.attrkind = 0;
+            param->u.var.runtimeattrs = NULL;
+            AST_SETEND_LAST(param, ls);
+            if (params_tail) {
+              params_tail->next = param;
+              params_tail = param;
+            } else {
+              params_head = params_tail = param;
+            }
+          }
+        } else {
           new_localvarliteral(ls, "(vararg table)");
+        }
         break;
       }
       default:
@@ -1175,6 +1361,10 @@ static void parlist(LexState *ls) {
   }
   /* reserve registers for parameters (plus vararg parameter, if present) */
   luaK_reserveregs(fs, fs->nactvar);
+  /* Store params in the function AST node (curblock is the function node) */
+  if (AST_ACTIVE(ls) && ls->ast->curblock != NULL) {
+    ls->ast->curblock->u.func.params = params_head;
+  }
 }
 
 static void body(LexState *ls, expdesc *e, int ismethod, int line) {
@@ -1252,6 +1442,7 @@ static void funcargs(LexState *ls, expdesc *f) {
   expdesc args;
   int base, nparams;
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   LusAstNode *func_ast = f->ast; /* save function AST before overwrite */
   LusAstNode *args_ast = NULL;
 
@@ -1278,7 +1469,7 @@ static void funcargs(LexState *ls, expdesc *f) {
   case TK_STRING: { /* funcargs -> STRING */
     codestring(&args, ls->t.seminfo.ts);
     if (AST_ACTIVE(ls)) {
-      args_ast = lusA_newnode(ls->ast, AST_STRING, line);
+      args_ast = lusA_newnode(ls->ast, AST_STRING, line, column);
       args_ast->u.str = ls->t.seminfo.ts;
     }
     luaX_next(ls); /* must use 'seminfo' before 'next' */
@@ -1302,10 +1493,11 @@ static void funcargs(LexState *ls, expdesc *f) {
 
   /* Create call AST node */
   if (AST_ACTIVE(ls)) {
-    LusAstNode *call = lusA_newnode(ls->ast, AST_CALLEXPR, line);
+    LusAstNode *call = lusA_newnode(ls->ast, AST_CALLEXPR, line, column);
     call->u.call.func = func_ast;
     call->u.call.args = args_ast;
     call->u.call.method = NULL;
+    AST_SETEND_LAST(call, ls);  /* end at closing ')' or after string/table arg */
     f->ast = call;
   }
 
@@ -1333,13 +1525,16 @@ static void primaryexp(LexState *ls, expdesc *v) {
   }
   case TK_NAME: {
     int line = ls->linenumber;
+    int column = ls->tokencolumn;
     TString *name =
         ls->t.seminfo.ts; /* capture name before singlevar consumes it */
     singlevar(ls, v);
     /* Create AST_NAME node */
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_NAME, line);
-      v->ast->u.str = name;
+      v->ast = lusA_newnode(ls->ast, AST_NAME, line, column);
+      v->ast->u.var.name = name;
+      v->ast->u.var.attrkind = 0;  /* no attributes for variable references */
+      v->ast->u.var.runtimeattrs = NULL;
     }
     return;
   }
@@ -1503,6 +1698,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
     }
     case '[': { /* '[' exp ']' OR '[' expr? ',' expr? ']' (slice) */
       int line = ls->linenumber;
+      int column = ls->tokencolumn;
       LusAstNode *table_ast = v->ast; /* save table AST before overwrite */
       luaK_exp2anyregup(fs, v);
       int tblreg = luaK_exp2anyreg(fs, v); /* table/string register */
@@ -1557,7 +1753,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
         init_exp(v, VRELOC, pc);
         /* Create AST_SLICE node */
         if (AST_ACTIVE(ls)) {
-          LusAstNode *slice = lusA_newnode(ls->ast, AST_SLICE, line);
+          LusAstNode *slice = lusA_newnode(ls->ast, AST_SLICE, line, column);
           slice->u.slice.table = table_ast;
           slice->u.slice.start = start.ast;
           slice->u.slice.finish = end.ast;
@@ -1570,7 +1766,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
         luaK_indexed(fs, v, &start);
         /* Create AST_INDEX node */
         if (AST_ACTIVE(ls)) {
-          LusAstNode *idx = lusA_newnode(ls->ast, AST_INDEX, line);
+          LusAstNode *idx = lusA_newnode(ls->ast, AST_INDEX, line, column);
           idx->u.index.table = table_ast;
           idx->u.index.key = key_ast;
           v->ast = idx;
@@ -1585,6 +1781,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
     case ':': { /* ':' NAME funcargs */
       expdesc key;
       int line = ls->linenumber;
+      int column = ls->tokencolumn;
       LusAstNode *obj_ast = v->ast; /* save object AST */
       TString *method_name = NULL;
       luaX_next(ls);
@@ -1594,7 +1791,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
       funcargs(ls, v);
       /* Create AST_METHODCALL node */
       if (AST_ACTIVE(ls)) {
-        LusAstNode *mcall = lusA_newnode(ls->ast, AST_METHODCALL, line);
+        LusAstNode *mcall = lusA_newnode(ls->ast, AST_METHODCALL, line, column);
         mcall->u.call.func = obj_ast;
         mcall->u.call.method = method_name;
         mcall->u.call.args = v->ast ? v->ast->u.call.args : NULL;
@@ -1699,13 +1896,14 @@ static void enumexpr(LexState *ls, expdesc *v) {
 static void interpexp(LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   int firstreg = fs->freereg;
   int nparts = 0;
   /* AST support */
   LusAstNode *astnode = NULL;
   LusAstNode *lastpart = NULL;
   if (AST_ACTIVE(ls)) {
-    astnode = lusA_newnode(ls->ast, AST_INTERP, line);
+    astnode = lusA_newnode(ls->ast, AST_INTERP, line, column);
     astnode->u.interp.parts = NULL;
     astnode->u.interp.nparts = 0;
   }
@@ -1721,7 +1919,7 @@ static void interpexp(LexState *ls, expdesc *v) {
       nparts++;
       /* AST: add string literal node */
       if (AST_ACTIVE(ls)) {
-        LusAstNode *strnode = lusA_newnode(ls->ast, AST_STRING, ls->linenumber);
+        LusAstNode *strnode = lusA_newnode(ls->ast, AST_STRING, ls->linenumber, ls->tokencolumn);
         strnode->u.str = lit;
         if (lastpart == NULL)
           astnode->u.interp.parts = strnode;
@@ -1750,8 +1948,10 @@ static void interpexp(LexState *ls, expdesc *v) {
       nparts++;
       /* AST: add variable name node */
       if (AST_ACTIVE(ls)) {
-        LusAstNode *namenode = lusA_newnode(ls->ast, AST_NAME, ls->linenumber);
-        namenode->u.str = ls->interp_name;
+        LusAstNode *namenode = lusA_newnode(ls->ast, AST_NAME, ls->linenumber, ls->tokencolumn);
+        namenode->u.var.name = ls->interp_name;
+        namenode->u.var.attrkind = 0;  /* no attributes in interpolation */
+        namenode->u.var.runtimeattrs = NULL;
         if (lastpart == NULL)
           astnode->u.interp.parts = namenode;
         else
@@ -1817,12 +2017,13 @@ static void simpleexp(LexState *ls, expdesc *v) {
                   constructor | FUNCTION body | CATCH expr | ENUM expr |
      suffixedexp */
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   switch (ls->t.token) {
   case TK_FLT: {
     init_exp(v, VKFLT, 0);
     v->u.nval = ls->t.seminfo.r;
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_NUMBER, line);
+      v->ast = lusA_newnode(ls->ast, AST_NUMBER, line, column);
       v->ast->u.num.isint = 0;
       v->ast->u.num.val.n = ls->t.seminfo.r;
     }
@@ -1832,7 +2033,7 @@ static void simpleexp(LexState *ls, expdesc *v) {
     init_exp(v, VKINT, 0);
     v->u.ival = ls->t.seminfo.i;
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_NUMBER, line);
+      v->ast = lusA_newnode(ls->ast, AST_NUMBER, line, column);
       v->ast->u.num.isint = 1;
       v->ast->u.num.val.i = ls->t.seminfo.i;
     }
@@ -1841,7 +2042,7 @@ static void simpleexp(LexState *ls, expdesc *v) {
   case TK_STRING: {
     codestring(v, ls->t.seminfo.ts);
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_STRING, line);
+      v->ast = lusA_newnode(ls->ast, AST_STRING, line, column);
       v->ast->u.str = ls->t.seminfo.ts;
     }
     break;
@@ -1854,21 +2055,21 @@ static void simpleexp(LexState *ls, expdesc *v) {
   case TK_NIL: {
     init_exp(v, VNIL, 0);
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_NIL, line);
+      v->ast = lusA_newnode(ls->ast, AST_NIL, line, column);
     }
     break;
   }
   case TK_TRUE: {
     init_exp(v, VTRUE, 0);
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_TRUE, line);
+      v->ast = lusA_newnode(ls->ast, AST_TRUE, line, column);
     }
     break;
   }
   case TK_FALSE: {
     init_exp(v, VFALSE, 0);
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_FALSE, line);
+      v->ast = lusA_newnode(ls->ast, AST_FALSE, line, column);
     }
     break;
   }
@@ -1878,7 +2079,7 @@ static void simpleexp(LexState *ls, expdesc *v) {
                     "cannot use '...' outside a vararg function");
     init_exp(v, VVARARG, luaK_codeABC(fs, OP_VARARG, 0, fs->f->numparams, 1));
     if (AST_ACTIVE(ls)) {
-      v->ast = lusA_newnode(ls->ast, AST_VARARG, line);
+      v->ast = lusA_newnode(ls->ast, AST_VARARG, line, column);
     }
     break;
   }
@@ -1887,8 +2088,23 @@ static void simpleexp(LexState *ls, expdesc *v) {
     return;
   }
   case TK_FUNCTION: {
+    LusAstNode *funcnode = NULL;
+    LusAstNode *saved_curnode = NULL;
     luaX_next(ls);
+    /* Create AST node for function expression and set curnode so body()
+    ** properly sets curblock for the function body. This is critical for
+    ** error recovery to correctly detect top-level vs nested context. */
+    if (AST_ACTIVE(ls)) {
+      funcnode = lusA_newnode(ls->ast, AST_FUNCEXPR, line, column);
+      saved_curnode = ls->ast->curnode;
+      ls->ast->curnode = funcnode;
+    }
     body(ls, v, 0, ls->linenumber);
+    /* Restore curnode and set the expression's AST */
+    if (AST_ACTIVE(ls)) {
+      ls->ast->curnode = saved_curnode;
+      v->ast = funcnode;
+    }
     return;
   }
   case TK_CATCH: { /* catch expression */
@@ -1909,6 +2125,8 @@ static void simpleexp(LexState *ls, expdesc *v) {
   }
   }
   luaX_next(ls);
+  /* Set end position for simple expressions (after consuming token) */
+  AST_SETEND_LAST(v->ast, ls);
 }
 
 static UnOpr getunopr(int op) {
@@ -2343,15 +2561,21 @@ static BinOpr subexpr(LexState *ls, expdesc *v, int limit) {
   uop = getunopr(ls->t.token);
   if (uop != OPR_NOUNOPR) { /* prefix (unary) operator? */
     int line = ls->linenumber;
+    int column = ls->tokencolumn;
     LusAstNode *unop_node = NULL;
     luaX_next(ls); /* skip operator */
     subexpr(ls, v, UNARY_PRIORITY);
     luaK_prefix(ls->fs, uop, v, line);
     /* Build unary AST node */
     if (AST_ACTIVE(ls)) {
-      unop_node = lusA_newnode(ls->ast, AST_UNOP, line);
+      unop_node = lusA_newnode(ls->ast, AST_UNOP, line, column);
       unop_node->u.unop.op = (int)uop;
       unop_node->u.unop.operand = v->ast;
+      /* End position is the end of the operand */
+      if (v->ast != NULL) {
+        unop_node->endline = v->ast->endline;
+        unop_node->endcolumn = v->ast->endcolumn;
+      }
       v->ast = unop_node;
     }
   } else
@@ -2362,6 +2586,7 @@ static BinOpr subexpr(LexState *ls, expdesc *v, int limit) {
     expdesc v2;
     BinOpr nextop;
     int line = ls->linenumber;
+    int column = ls->tokencolumn;
     LusAstNode *left_ast = v->ast;
     luaX_next(ls); /* skip operator */
     luaK_infix(ls->fs, op, v);
@@ -2370,10 +2595,15 @@ static BinOpr subexpr(LexState *ls, expdesc *v, int limit) {
     luaK_posfix(ls->fs, op, v, &v2, line);
     /* Build binary AST node */
     if (AST_ACTIVE(ls)) {
-      LusAstNode *binop_node = lusA_newnode(ls->ast, AST_BINOP, line);
+      LusAstNode *binop_node = lusA_newnode(ls->ast, AST_BINOP, line, column);
       binop_node->u.binop.op = (int)op;
       binop_node->u.binop.left = left_ast;
       binop_node->u.binop.right = v2.ast;
+      /* End position is the end of the right operand */
+      if (v2.ast != NULL) {
+        binop_node->endline = v2.ast->endline;
+        binop_node->endcolumn = v2.ast->endcolumn;
+      }
       v->ast = binop_node;
     }
     op = nextop;
@@ -3101,11 +3331,16 @@ static void localfunc(LexState *ls) {
   expdesc b;
   FuncState *fs = ls->fs;
   int fvar = fs->nactvar;              /* function's variable index */
-  new_localvar(ls, str_checkname(ls)); /* new local variable */
+  TString *funcname = str_checkname(ls); /* capture name before consuming */
+  new_localvar(ls, funcname);          /* new local variable */
   adjustlocalvars(ls, 1);              /* enter its scope */
   body(ls, &b, 0, ls->linenumber);     /* function created in next register */
   /* debug information will only see the variable after this point! */
   localdebuginfo(fs, fvar)->startpc = fs->pc;
+  /* Store function name in AST */
+  if (AST_ACTIVE(ls) && ls->ast->curnode != NULL) {
+    ls->ast->curnode->u.func.name = funcname;
+  }
 }
 
 /*
@@ -3171,6 +3406,7 @@ static void parse_runtime_attr(LexState *ls, RuntimeAttr *ra) {
   ra->name = NULL;  /* no single name for arbitrary expressions */
   ra->ridx = attrvd->vd.ridx;
   ra->iscall = 0;  /* not used anymore, kept for compatibility */
+  ra->ast = attrexp.ast;  /* capture AST node for the attribute expression */
 }
 
 /*
@@ -3481,7 +3717,9 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
   FuncState *fs = ls->fs;
   GroupDesc *g = newgroup(ls, groupname);
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   int nfields = 0;
+  (void)column;  /* may be used later for AST */
   int firstidx = -1; /* vardesc index of first field */
 
   checknext(ls, '{');
@@ -3566,6 +3804,8 @@ static void localstat(LexState *ls) {
   LusAstNode *names_tail = NULL;
 
   do {                                          /* for each variable */
+    int nameline = ls->linenumber;             /* save position before consuming */
+    int namecolumn = ls->tokencolumn;
     TString *vname = str_checkname(ls);         /* get its name */
     RuntimeAttr *attrs = NULL;
     int nattrs = 0;
@@ -3578,10 +3818,31 @@ static void localstat(LexState *ls) {
     if (nattrs > 0)
       nwithattrs++;
 
-    /* Build AST name list */
+    /* Build AST name list with attribute information */
     if (AST_ACTIVE(ls)) {
-      LusAstNode *name_node = lusA_newnode(ls->ast, AST_NAME, ls->linenumber);
-      name_node->u.str = vname;
+      LusAstNode *name_node = lusA_newnode(ls->ast, AST_NAME, nameline, namecolumn);
+      name_node->u.var.name = vname;
+      name_node->u.var.attrkind = (int)kind;  /* store attribute kind */
+      /* Capture runtime attributes as linked list of AST nodes */
+      if (nattrs > 0 && attrs != NULL) {
+        LusAstNode *rattrs_head = NULL, *rattrs_tail = NULL;
+        RuntimeAttr *ra;
+        for (ra = attrs; ra != NULL; ra = ra->next) {
+          if (ra->ast != NULL) {
+            LusAstNode *attr_node = ra->ast;
+            attr_node->next = NULL;  /* ensure clean linking */
+            if (rattrs_tail) {
+              rattrs_tail->next = attr_node;
+              rattrs_tail = attr_node;
+            } else {
+              rattrs_head = rattrs_tail = attr_node;
+            }
+          }
+        }
+        name_node->u.var.runtimeattrs = rattrs_head;
+      } else {
+        name_node->u.var.runtimeattrs = NULL;
+      }
       if (names_tail) {
         names_tail->next = name_node;
         names_tail = name_node;
@@ -3921,6 +4182,11 @@ static void funcstat(LexState *ls, int line) {
   expdesc v, b;
   luaX_next(ls); /* skip FUNCTION */
   ismethod = funcname(ls, &v);
+  /* Store function name expression and ismethod in AST */
+  if (AST_ACTIVE(ls) && ls->ast->curnode != NULL) {
+    ls->ast->curnode->u.func.nameexpr = v.ast;
+    ls->ast->curnode->u.func.ismethod = ismethod;
+  }
   check_readonly(ls, &v);
   body(ls, &b, ismethod, line);
   luaK_storevar(ls->fs, &v, &b);
@@ -4046,6 +4312,7 @@ static void retstat(LexState *ls) {
 
 static void statement(LexState *ls) {
   int line = ls->linenumber; /* may be needed for error messages */
+  int column = ls->tokencolumn;
   LusAstNode *node = NULL;   /* AST node for this statement */
   enterlevel(ls);
   switch (ls->t.token) {
@@ -4055,7 +4322,7 @@ static void statement(LexState *ls) {
   }
   case TK_IF: { /* stat -> ifstat */
     if (AST_ACTIVE(ls)) {
-      node = lusA_newnode(ls->ast, AST_IF, line);
+      node = lusA_newnode(ls->ast, AST_IF, line, column);
       ls->ast->curnode = node;
     }
     ifstat(ls, line);
@@ -4065,7 +4332,7 @@ static void statement(LexState *ls) {
   }
   case TK_WHILE: { /* stat -> whilestat */
     if (AST_ACTIVE(ls)) {
-      node = lusA_newnode(ls->ast, AST_WHILE, line);
+      node = lusA_newnode(ls->ast, AST_WHILE, line, column);
       ls->ast->curnode = node;
     }
     whilestat(ls, line);
@@ -4074,17 +4341,25 @@ static void statement(LexState *ls) {
     break;
   }
   case TK_DO: { /* stat -> DO block END */
-    if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_DO, line);
+    LusAstNode *saved_curblock = NULL;
+    if (AST_ACTIVE(ls)) {
+      node = lusA_newnode(ls->ast, AST_DO, line, column);
+      /* Set curblock so statements inside the do block become children
+      ** and error recovery can correctly detect nested context */
+      saved_curblock = ls->ast->curblock;
+      ls->ast->curblock = node;
+    }
     luaX_next(ls); /* skip DO */
     block(ls);
     check_match(ls, TK_END, TK_DO, line);
+    if (AST_ACTIVE(ls))
+      ls->ast->curblock = saved_curblock;
     break;
   }
   case TK_FOR: { /* stat -> forstat */
     /* forstat will determine if it's fornum or forgen */
     if (AST_ACTIVE(ls)) {
-      node = lusA_newnode(ls->ast, AST_FORNUM, line);
+      node = lusA_newnode(ls->ast, AST_FORNUM, line, column);
       ls->ast->curnode = node;
     }
     forstat(ls, line);
@@ -4094,7 +4369,7 @@ static void statement(LexState *ls) {
   }
   case TK_REPEAT: { /* stat -> repeatstat */
     if (AST_ACTIVE(ls)) {
-      node = lusA_newnode(ls->ast, AST_REPEAT, line);
+      node = lusA_newnode(ls->ast, AST_REPEAT, line, column);
       ls->ast->curnode = node;
     }
     repeatstat(ls, line);
@@ -4104,7 +4379,7 @@ static void statement(LexState *ls) {
   }
   case TK_FUNCTION: { /* stat -> funcstat */
     if (AST_ACTIVE(ls)) {
-      node = lusA_newnode(ls->ast, AST_FUNCSTAT, line);
+      node = lusA_newnode(ls->ast, AST_FUNCSTAT, line, column);
       ls->ast->curnode = node;
     }
     funcstat(ls, line);
@@ -4116,13 +4391,13 @@ static void statement(LexState *ls) {
     luaX_next(ls);                   /* skip LOCAL */
     if (testnext(ls, TK_FUNCTION)) { /* local function? */
       if (AST_ACTIVE(ls)) {
-        node = lusA_newnode(ls->ast, AST_LOCALFUNC, line);
+        node = lusA_newnode(ls->ast, AST_LOCALFUNC, line, column);
         ls->ast->curnode = node;
       }
       localfunc(ls);
     } else {
       if (AST_ACTIVE(ls)) {
-        node = lusA_newnode(ls->ast, AST_LOCAL, line);
+        node = lusA_newnode(ls->ast, AST_LOCAL, line, column);
         ls->ast->curnode = node;
       }
       localstat(ls);
@@ -4133,20 +4408,20 @@ static void statement(LexState *ls) {
   }
   case TK_GLOBAL: { /* stat -> globalstatfunc */
     if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_GLOBAL, line);
+      node = lusA_newnode(ls->ast, AST_GLOBAL, line, column);
     globalstatfunc(ls, line);
     break;
   }
   case TK_DBCOLON: { /* stat -> label */
     if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_LABEL, line);
+      node = lusA_newnode(ls->ast, AST_LABEL, line, column);
     luaX_next(ls); /* skip double colon */
     labelstat(ls, str_checkname(ls), line);
     break;
   }
   case TK_RETURN: { /* stat -> retstat */
     if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_RETURN, line);
+      node = lusA_newnode(ls->ast, AST_RETURN, line, column);
     luaX_next(ls); /* skip RETURN */
     retstat(ls);
     break;
@@ -4157,19 +4432,19 @@ static void statement(LexState *ls) {
   }
   case TK_BREAK: { /* stat -> breakstat */
     if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_BREAK, line);
+      node = lusA_newnode(ls->ast, AST_BREAK, line, column);
     breakstat(ls, line);
     break;
   }
   case TK_CATCH: { /* stat -> catchstat */
     if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_CATCHSTAT, line);
+      node = lusA_newnode(ls->ast, AST_CATCHSTAT, line, column);
     catchstat(ls, line);
     break;
   }
   case TK_GOTO: { /* stat -> 'goto' NAME */
     if (AST_ACTIVE(ls))
-      node = lusA_newnode(ls->ast, AST_GOTO, line);
+      node = lusA_newnode(ls->ast, AST_GOTO, line, column);
     luaX_next(ls); /* skip 'goto' */
     gotostat(ls, line);
     break;
@@ -4184,7 +4459,7 @@ static void statement(LexState *ls) {
         /* 'global <attrib>' or 'global name' or 'global *' or
            'global function' */
         if (AST_ACTIVE(ls))
-          node = lusA_newnode(ls->ast, AST_GLOBAL, line);
+          node = lusA_newnode(ls->ast, AST_GLOBAL, line, column);
         globalstatfunc(ls, line);
         break;
       }
@@ -4194,7 +4469,7 @@ static void statement(LexState *ls) {
   /* FALLTHROUGH */
   default: { /* stat -> func | assignment */
     if (AST_ACTIVE(ls)) {
-      node = lusA_newnode(ls->ast, AST_ASSIGN, line);
+      node = lusA_newnode(ls->ast, AST_ASSIGN, line, column);
       ls->ast->curnode = node;
     }
     exprstat(ls);
@@ -4203,6 +4478,8 @@ static void statement(LexState *ls) {
     break;
   }
   }
+  /* Set end position for the statement node */
+  AST_SETEND_LAST(node, ls);
   /* Add statement node to current block (or root if no block context) */
   if (node != NULL && AST_ACTIVE(ls)) {
     LusAstNode *parent = ls->ast->curblock ? ls->ast->curblock : ls->ast->root;
@@ -4237,7 +4514,7 @@ static void mainfunc(LexState *ls, FuncState *fs) {
   luaC_objbarrier(ls->L, fs->f, env->name);
   /* Create root AST chunk node if AST generation is enabled */
   if (AST_ACTIVE(ls)) {
-    ls->ast->root = lusA_newnode(ls->ast, AST_CHUNK, 1);
+    ls->ast->root = lusA_newnode(ls->ast, AST_CHUNK, 1, 1);
   }
   luaX_next(ls); /* read first token */
   statlist(ls);  /* parse main body */

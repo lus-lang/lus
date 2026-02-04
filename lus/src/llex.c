@@ -15,6 +15,7 @@
 
 #include "lua.h"
 
+#include "last.h"
 #include "lctype.h"
 #include "ldebug.h"
 #include "ldo.h"
@@ -28,7 +29,7 @@
 #include "lzio.h"
 
 
-#define next(ls) (ls->current = zgetc(ls->z))
+#define next(ls) (ls->column++, ls->current = zgetc(ls->z))
 
 
 /* minimum size for string buffer
@@ -173,6 +174,7 @@ static void inclinenumber(LexState *ls) {
     next(ls); /* skip '\n\r' or '\r\n' */
   if (++ls->linenumber >= INT_MAX)
     lexerror(ls, "chunk has too many lines", 0);
+  ls->column = 1; /* reset column at start of new line */
 }
 
 
@@ -186,6 +188,9 @@ void luaX_setinput(lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->fs = NULL;
   ls->linenumber = 1;
   ls->lastline = 1;
+  ls->column = 1;           /* start at column 1 */
+  ls->lastcolumn = 1;
+  ls->tokencolumn = 1;
   ls->source = source;
   /* all three strings here ("_ENV", "break", "global") were fixed,
      so they cannot be collected */
@@ -580,6 +585,7 @@ static int llex(LexState *ls, SemInfo *seminfo) {
   }
   luaZ_resetbuffer(ls->buff);
   for (;;) {
+    ls->tokencolumn = ls->column;  /* remember where token starts */
     switch (ls->current) {
       case '\n':
       case '\r': { /* line breaks */ inclinenumber(ls); break;
@@ -590,6 +596,8 @@ static int llex(LexState *ls, SemInfo *seminfo) {
       case '\v': { /* spaces */ next(ls); break;
       }
       case '-': { /* '-' or '--' (comment) */
+        int startline = ls->linenumber;
+        int startcol = ls->column;  /* column of first '-' */
         next(ls);
         if (ls->current != '-')
           return '-';
@@ -599,14 +607,34 @@ static int llex(LexState *ls, SemInfo *seminfo) {
           size_t sep = skip_sep(ls);
           luaZ_resetbuffer(ls->buff); /* 'skip_sep' may dirty the buffer */
           if (sep >= 2) {
-            read_long_string(ls, NULL, sep); /* skip long comment */
+            /* Capture long comment content if AST is being built */
+            if (ls->ast != NULL) {
+              SemInfo seminfo;
+              read_long_string(ls, &seminfo, sep);
+              lusA_addcomment(ls->ast, startline, startcol, ls->linenumber,
+                              ls->column, 1, seminfo.ts);
+            } else {
+              read_long_string(ls, NULL, sep); /* skip long comment */
+            }
             luaZ_resetbuffer(ls->buff); /* previous call may dirty the buff. */
             break;
           }
         }
         /* else short comment */
-        while (!currIsNewline(ls) && ls->current != EOZ)
-          next(ls); /* skip until end of line (or end of file) */
+        if (ls->ast != NULL) {
+          /* Capture short comment text */
+          luaZ_resetbuffer(ls->buff);
+          while (!currIsNewline(ls) && ls->current != EOZ)
+            save_and_next(ls);
+          TString *text = luaS_newlstr(ls->L, luaZ_buffer(ls->buff),
+                                       luaZ_bufflen(ls->buff));
+          lusA_addcomment(ls->ast, startline, startcol, ls->linenumber,
+                          ls->column, 0, text);
+          luaZ_resetbuffer(ls->buff);
+        } else {
+          while (!currIsNewline(ls) && ls->current != EOZ)
+            next(ls); /* skip until end of line (or end of file) */
+        }
         break;
       }
       case '[': { /* long string or simply '[' */
@@ -745,6 +773,7 @@ static int llex(LexState *ls, SemInfo *seminfo) {
 
 void luaX_next(LexState *ls) {
   ls->lastline = ls->linenumber;
+  ls->lastcolumn = ls->tokencolumn;  /* save column of consumed token */
   if (ls->lookahead.token != TK_EOS) { /* is there a look-ahead token? */
     ls->t = ls->lookahead;             /* use this one */
     ls->lookahead.token = TK_EOS;      /* and discharge it */

@@ -98,6 +98,9 @@ typedef struct LexState {
   int current;          /* current character (charint) */
   int linenumber;       /* input line counter */
   int lastline;         /* line of last token 'consumed' */
+  int column;           /* current column (1-indexed, reset on newline) */
+  int lastcolumn;       /* column of last token 'consumed' */
+  int tokencolumn;      /* column where current token started */
   Token t;              /* current token */
   Token lookahead;      /* look ahead token */
   struct FuncState *fs; /* current function (parser) */

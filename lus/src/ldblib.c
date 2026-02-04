@@ -17,9 +17,11 @@
 
 #include "last.h"
 #include "lauxlib.h"
+#include "ldo.h"
 #include "llimits.h"
 #include "lmem.h"
 #include "lparser.h"
+#include "lstring.h"
 #include "lualib.h"
 #include "lzio.h"
 
@@ -451,8 +453,47 @@ static const char *parseGetS(lua_State *L, void *ud, size_t *size) {
 
 /*
 ** Parse a string and return its AST as a table.
-** debug.parse(code, [chunkname]) -> table or nil, error
+** debug.parse(code, [chunkname]) -> table, errors | nil, error
+** On success: returns AST table and nil (no errors)
+** On error: returns nil and error message string
 */
+
+/* Structure for passing parse data through protected call */
+typedef struct ParseData {
+  const char *code;
+  size_t len;
+  const char *chunkname;
+  LusAst *ast;
+  Mbuffer *buff;
+  Dyndata *dyd;
+} ParseData;
+
+/* Protected parse function */
+static void f_parse(lua_State *L, void *ud) {
+  ParseData *pd = (ParseData *)ud;
+  ParseStringReader reader;
+  ZIO z;
+  int c;
+
+  reader.s = pd->code;
+  reader.size = pd->len;
+  luaZ_init(L, &z, parseGetS, &reader);
+  c = zgetc(&z);
+
+  /* Check for binary chunk */
+  if (c == LUA_SIGNATURE[0]) {
+    luaL_error(L, "cannot parse binary chunk");
+    return;
+  }
+
+  /* Parse with AST generation enabled */
+  LClosure *cl = luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
+
+  /* Pop the closure from stack (we don't need it) */
+  lua_pop(L, 1);
+  (void)cl;
+}
+
 static int db_parse(lua_State *L) {
   size_t len;
   const char *code = luaL_checklstring(L, 1, &len);
@@ -460,50 +501,111 @@ static int db_parse(lua_State *L) {
   LusAst *ast;
   Mbuffer buff;
   Dyndata dyd;
-  ZIO z;
-  LClosure *cl;
-  ParseStringReader reader;
-  int c;
+  ParseData pd;
+  TStatus status;
+
+  /* Parse options table if provided (third argument) */
+  int include_comments = 1;  /* default: include comments */
+  int error_recover = 1;     /* default: return partial AST on error */
+
+  if (lua_istable(L, 3)) {
+    /* Get 'comments' option */
+    lua_getfield(L, 3, "comments");
+    if (!lua_isnil(L, -1)) {
+      include_comments = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
+
+    /* Get 'recover' option */
+    lua_getfield(L, 3, "recover");
+    if (!lua_isnil(L, -1)) {
+      error_recover = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
+  }
 
   /* Initialize AST container */
   ast = lusA_new(L);
+  ast->recover = error_recover;
 
   /* Initialize parser data structures */
   luaZ_initbuffer(L, &buff);
   luaY_initdyndata(L, &dyd);
 
-  /* Initialize reader from string */
-  reader.s = code;
-  reader.size = len;
-  luaZ_init(L, &z, parseGetS, &reader);
-  c = zgetc(&z); /* read first character */
-
-  /* Check for binary chunk */
-  if (c == LUA_SIGNATURE[0]) {
-    lusA_free(L, ast);
-    luaZ_freebuffer(L, &buff);
-    luaY_freedyndata(&dyd);
-    luaL_error(L, "cannot parse binary chunk");
-    return 0;
-  }
+  /* Setup parse data */
+  pd.code = code;
+  pd.len = len;
+  pd.chunkname = chunkname;
+  pd.ast = ast;
+  pd.buff = &buff;
+  pd.dyd = &dyd;
 
   /* Stop GC during parsing - AST holds raw TString* pointers that are
      not anchored to the Lua stack, so GC could collect them */
   lua_gc(L, LUA_GCSTOP, 0);
 
-  /* Parse with AST generation enabled */
-  cl = luaY_parser(L, &z, &buff, &dyd, chunkname, c, ast);
+  /* Parse with protected call to catch errors */
+  status = luaD_pcall(L, f_parse, &pd, savestack(L, L->top.p), 0);
 
   /* Restart GC */
   lua_gc(L, LUA_GCRESTART, 0);
 
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);
-  luaY_freedyndata(&dyd); /* free arena (all arrays freed with it) */
+  luaY_freedyndata(&dyd);
 
-  /* Pop the closure from stack (we don't need it) */
-  lua_pop(L, 1);
-  (void)cl; /* silence unused warning */
+  if (status != LUA_OK) {
+    /* Parse failed - check if we should return partial AST */
+    /* Error message is on the stack */
+    const char *errmsg = lua_tostring(L, -1);
+
+    if (error_recover && ast->root != NULL) {
+      /* We have a partial AST - add the error to it and return partial AST */
+      /* Extract line/column from error message if possible (format: "file:line: ...") */
+      int errline = 1, errcol = 1;
+      /* Error message format is typically "[string \"...\"]:<line>: <message>" */
+      const char *colon = errmsg ? strchr(errmsg, ':') : NULL;
+      if (colon && colon[1]) {
+        /* Skip to line number after first colon */
+        const char *linestart = colon + 1;
+        if (*linestart == ':') linestart++;  /* handle :: case */
+        errline = atoi(linestart);
+        if (errline <= 0) errline = 1;
+      }
+
+      /* Create a TString for the error message and add to AST errors */
+      TString *errmsg_ts = errmsg ? luaS_new(L, errmsg) : NULL;
+      lusA_adderror(ast, errline, errcol, errmsg_ts);
+
+      /* Convert partial AST to Lua table (includes errors array) */
+      lua_pop(L, 1);  /* remove error message from stack */
+
+      /* Filter out comments if not requested */
+      if (!include_comments) {
+        ast->comments = NULL;
+        ast->lastcomment = NULL;
+      }
+
+      lusA_totable(L, ast);
+      lusA_free(L, ast);
+
+      /* Return partial AST table and nil */
+      lua_pushnil(L);
+      return 2;
+    }
+
+    /* No partial AST or recover disabled - return nil and error message */
+    lusA_free(L, ast);
+    lua_pushnil(L);
+    lua_insert(L, -2);  /* put nil before error message */
+    return 2;
+  }
+
+  /* Filter out comments if not requested */
+  if (!include_comments) {
+    ast->comments = NULL;
+    ast->lastcomment = NULL;
+  }
 
   /* Convert AST to Lua table */
   lusA_totable(L, ast);
@@ -511,7 +613,9 @@ static int db_parse(lua_State *L) {
   /* Free AST (the table is now a copy) */
   lusA_free(L, ast);
 
-  return 1;
+  /* Return AST table and nil (no errors) */
+  lua_pushnil(L);
+  return 2;
 }
 
 static const luaL_Reg dblib[] = {{"debug", db_debug},
