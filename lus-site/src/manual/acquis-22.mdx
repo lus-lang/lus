@@ -87,7 +87,7 @@ local printvar = setmetatable({}, {
 end})
 local x <printvar> = 10 -- prints "x 10"
 printvar = nil
-x = 20 -- prints "x 20", printvar is cached
+x = 20 -- prints "x 20"
 x = nil -- prints "printvar is being closed"
 ```
 
