@@ -134,7 +134,7 @@
       "name": "storage.type.attribute.lus"
     },
     {
-      "begin": "<(?![=<])",
+      "begin": "<(?![=<\\s])",
       "beginCaptures": {
         "0": {
           "name": "storage.type.attribute.lus"
