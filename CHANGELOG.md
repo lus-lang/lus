@@ -5,7 +5,8 @@
 **Release date:** TBA
 
 - Added string interpolation.
-- Added runtime attributes.
+- Added runtime attributes for altering local assignments.
+- Added error-processing handlers to `catch` expressions.
 
 ## 1.4.0
 
