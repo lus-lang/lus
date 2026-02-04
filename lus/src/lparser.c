@@ -790,12 +790,31 @@ static l_noret undefgoto(LexState *ls, Labeldesc *gt) {
                 getstr(gt->name), gt->line);
 }
 
+/*
+** Find minimum freereg when inside a do-expression.
+** Returns the doexpr_base + 1 of the innermost enclosing do-expression,
+** or 0 if not inside any do-expression.
+*/
+static lu_byte doexpr_minfreereg(BlockCnt *bl) {
+  for (; bl != NULL; bl = bl->previous) {
+    if (bl->isdoexpr)
+      return cast_byte(bl->doexpr_base + 1);
+  }
+  return 0;
+}
+
 static void leaveblock(FuncState *fs) {
   BlockCnt *bl = fs->bl;
   LexState *ls = fs->ls;
   lu_byte stklevel = reglevel(fs, bl->nactvar); /* level outside block */
+  lu_byte minreg;
   if (bl->previous && bl->upval)                /* need a 'close'? */
     luaK_codeABC(fs, OP_CLOSE, stklevel, 0, 0);
+  /* When inside a do-expression, don't free registers below the result slot.
+  ** Inner blocks (like if-then-else) shouldn't clobber the do-expr's result. */
+  minreg = doexpr_minfreereg(bl->previous);
+  if (stklevel < minreg)
+    stklevel = minreg;
   fs->freereg = stklevel;                 /* free registers */
   removevars(fs, bl->nactvar);            /* remove block locals */
   lua_assert(bl->nactvar == fs->nactvar); /* back to level on entry */
@@ -1945,10 +1964,9 @@ static void catchexpr(LexState *ls, expdesc *v) {
   /* Check for optional error handler: catch[handler] expr */
   if (testnext(ls, '[')) {
     expdesc handler;
-    /* Evaluate handler AFTER reserving status slot.
-    ** Handler goes at freereg (base+1 or higher), which will be overwritten
-    ** by inner expression results on success - but that's OK because handler
-    ** is only needed on error, and we copy it to a safe location at runtime. */
+    /* Evaluate handler at freereg (base+1).
+    ** This slot will be overwritten by inner expression results on success,
+    ** but the VM saves a copy of the handler for use on error. */
     expr(ls, &handler);
     luaK_exp2nextreg(fs, &handler);
     /* Handler is now at fs->freereg - 1.
@@ -1961,8 +1979,8 @@ static void catchexpr(LexState *ls, expdesc *v) {
   catchpc = luaK_codeABC(fs, OP_CATCH, base, handler_reg, 0);
 
   /* Reset freereg to base+1 so inner expression results go right after status.
-  ** This may "forget" the handler's register, but the VM will copy the handler
-  ** to a safe location before evaluating the inner expression. */
+  ** The handler (if any) is copied to CatchInfo.handler by the VM, so its
+  ** register can be reused by the inner expression. */
   fs->freereg = cast_byte(base + 1);
 
   /* Parse the expression, results go starting at base+1 */

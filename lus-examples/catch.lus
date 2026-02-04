@@ -1,7 +1,7 @@
 -- Catch Expression: Handle errors without pcall/xpcall boilerplate.
 -- playground: true
 
-global print, error, tonumber, type, pairs
+global print, error, tonumber, type, pairs, tostring
 
 -- Basic catch: returns (ok, result) or (nil, error_message)
 local ok, value = catch (1 + 2)
@@ -81,3 +81,88 @@ print("\nSafe wrapper:")
 print("  safe_wrapper(10):", safe_wrapper(10))   --> 20
 print("  safe_wrapper(-5):", safe_wrapper(-5))   --> 0
 print("  safe_wrapper(200):", safe_wrapper(200)) --> 0
+
+-- =============================================================================
+-- Catch Handlers: Transform errors inline (Acquis 20)
+-- =============================================================================
+
+print("\n--- Catch Handlers ---")
+
+-- Simplify error messages by extracting just the message part
+local function simplify(err)
+    -- Error format: "file:line: message\nstack traceback:..."
+    -- Use gsub to remove everything from newline onwards, then extract message
+    local first_line = err:gsub("\n.*", "")
+    local msg = first_line:match("^[^:]+:%d+: (.+)") or first_line
+    return msg
+end
+
+local ok, err = catch[simplify] error("Something went wrong!")
+print("Simplified error:", err)  --> Something went wrong!
+
+-- Logging handler: log errors and pass them through
+local function logged(err)
+    print("[ERROR LOG]", err)
+    return err
+end
+
+local ok, result = catch[logged] error("Database connection failed")
+print("Caught after logging:", ok, result ~= nil)
+
+-- Error normalization: convert all errors to a standard format
+local function normalize(err)
+    if type(err) == "string" then
+        local first = err:gsub("\n.*", "")
+        local msg = first:match("^[^:]+:%d+: (.+)") or first
+        return { code = "ERR", message = msg }
+    elseif type(err) == "table" then
+        return err
+    else
+        return { code = "UNKNOWN", message = tostring(err) }
+    end
+end
+
+local ok, err = catch[normalize] error("File not found")
+if not ok then
+    print("Normalized error:", err.code, "-", err.message)
+end
+
+-- Handler with success: handler only called on error
+local handler_called = false
+local function track_handler(err)
+    handler_called = true
+    return err
+end
+
+local ok, val = catch[track_handler] (100 + 200)
+print("Success case - handler called?", handler_called)  --> false
+print("Success value:", val)  --> 300
+
+-- Inline anonymous handler
+local ok, err = catch[function(e) 
+    local first = e:gsub("\n.*", "")
+    local msg = first:match("^[^:]+:%d+: (.+)") or first
+    return msg:upper() 
+end] error("lowercase error")
+print("Uppercased error:", err)  --> LOWERCASE ERROR
+
+-- Practical: user-friendly error translation
+local translations = {
+    ["Division by zero"] = "Cannot divide by zero",
+    ["Negative input"] = "Please enter a positive number",
+}
+
+local function translate(err)
+    -- Extract just the message part before looking up
+    local first = err:gsub("\n.*", "")
+    local msg = first:match("^[^:]+:%d+: (.+)") or first
+    for pattern, message in pairs(translations) do
+        if msg:find(pattern, 1, true) then  -- plain match
+            return message
+        end
+    end
+    return "An unexpected error occurred"
+end
+
+local ok, friendly = catch[translate] risky_divide(10, 0)
+print("User-friendly message:", friendly)

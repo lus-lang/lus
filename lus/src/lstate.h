@@ -181,7 +181,7 @@ typedef struct CatchInfo {
   const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
   ptrdiff_t erroffset;    /* stack offset of error object (survives realloc) */
   ptrdiff_t baseoffset;   /* stack offset of base register (survives realloc) */
-  ptrdiff_t handleroffset; /* stack offset of handler copy (0 = no handler) */
+  TValue handler;         /* error handler function (nil if no handler) */
   lu_byte destreg;        /* destination register for status/error */
   lu_byte nresults;       /* expected number of results (for nil-filling) */
   lu_byte active;         /* 1 if catch block is active */

@@ -1,0 +1,95 @@
+-- Do Expressions: Inline blocks that evaluate to a value via `provide`.
+-- playground: true
+-- unstable: true
+
+global print, math, pairs
+
+-- Basic do expression: compute a value with local scope
+local radius = 5
+local area = do
+    local pi = 3.14159
+    provide pi * radius * radius
+end
+print("Circle area:", area)  --> ~78.54
+
+-- Configuration building with intermediate steps
+local config = do
+    local base_port = 8000
+    local env_offset = 80  -- e.g., from environment
+    provide {
+        port = base_port + env_offset,
+        host = "localhost",
+        debug = true
+    }
+end
+print("Server config:", config.host .. ":" .. config.port)
+
+-- Conditional initialization with provide
+local score = 750
+local level = do
+    if score >= 1000 then
+        provide "expert"
+    elseif score >= 500 then
+        provide "intermediate"
+    elseif score >= 100 then
+        provide "beginner"
+    else
+        provide "novice"
+    end
+end
+print("Level for", score .. ":", level)  --> intermediate
+
+-- Multi-value provide for parallel assignment
+local data = {3, 1, 4, 1, 5, 9, 2, 6}
+local min_val, max_val = do
+    local lo, hi = math.huge, -math.huge
+    for _, v in pairs(data) do
+        if v < lo then lo = v end
+        if v > hi then hi = v end
+    end
+    provide lo, hi
+end
+print("Min/Max:", min_val, max_val)  --> 1    9
+
+-- Do expressions in arithmetic
+local base = 100
+local adjusted = base + do
+    local modifier = 0.15
+    provide base * modifier
+end
+print("Adjusted value:", adjusted)  --> 115
+
+-- Nested do expressions
+local result = do
+    local outer = 10
+    local inner = do
+        provide outer * 2
+    end
+    provide inner + 5
+end
+print("Nested result:", result)  --> 25
+
+-- Do expression as function argument
+local function greet(msg)
+    print("Greeting:", msg)
+end
+
+local hour = 14  -- 2 PM
+greet(do
+    if hour < 12 then
+        provide "Good morning!"
+    elseif hour < 18 then
+        provide "Good afternoon!"
+    else
+        provide "Good evening!"
+    end
+end)
+
+-- Practical: building a formatted message
+local user = { name = "Alice", items = 3 }
+local message = do
+    local prefix = "[INFO]"
+    local content = user.name .. " has " .. user.items .. " items"
+    provide prefix .. " " .. content
+end
+print(message)

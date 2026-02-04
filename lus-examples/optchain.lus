@@ -1,0 +1,98 @@
+-- Optional Chaining: Safe navigation through potentially nil values.
+-- playground: true
+
+global print, pairs
+
+-- Deep config access without crashes
+local config = {
+    database = {
+        primary = { host = "db1.local", port = 5432 },
+        -- backup is not defined
+    },
+    cache = {
+        enabled = true,
+        ttl = 3600
+    }
+}
+
+print("Primary host:", config?.database?.primary?.host)  --> db1.local
+print("Backup host:", config?.database?.backup?.host)    --> nil (no error)
+print("Cache TTL:", config?.cache?.ttl)                  --> 3600
+print("Missing path:", config?.logging?.level?.name)    --> nil (no error)
+
+-- Defaults with 'or'
+local timeout = config?.network?.timeout or 30
+local log_level = config?.logging?.level or "info"
+print("Timeout:", timeout)     --> 30
+print("Log level:", log_level) --> info
+
+-- Safe method calls
+local logger = {
+    log = function(self, level, msg)
+        print("[" .. level .. "]", msg)
+    end
+}
+
+local _ = logger?:log("INFO", "Application started")  --> [INFO] Application started
+
+local missing_logger = nil
+_ = missing_logger?:log("ERROR", "This won't crash")  --> nothing happens
+print("After missing logger call")
+
+-- Safe function calls
+local handlers = {
+    on_success = function() print("Success!") end,
+    -- on_error is not defined
+}
+
+_ = handlers.on_success?()  --> Success!
+_ = handlers.on_error?()    --> nothing happens (nil, no error)
+print("Handlers called safely")
+
+-- Array access
+local users = {
+    { name = "Alice", profile = { email = "alice@example.com" } },
+    { name = "Bob" },  -- no profile
+    -- third user doesn't exist
+}
+
+print("User 1 email:", users?[1]?.profile?.email)  --> alice@example.com
+print("User 2 email:", users?[2]?.profile?.email)  --> nil
+print("User 3 email:", users?[3]?.profile?.email)  --> nil
+
+-- Practical: API response handling
+local function fetch_user(id)
+    if id == 1 then
+        return {
+            data = {
+                user = { name = "Alice", settings = { theme = "dark" } }
+            }
+        }
+    end
+    return nil  -- user not found
+end
+
+local response = fetch_user(1)
+local theme = response?.data?.user?.settings?.theme or "light"
+print("User 1 theme:", theme)  --> dark
+
+local response2 = fetch_user(999)
+local theme2 = response2?.data?.user?.settings?.theme or "light"
+print("User 999 theme:", theme2)  --> light (default)
+
+-- Chaining with method calls and indexing
+local app = {
+    services = {
+        auth = {
+            get_user = function(self)
+                return { id = 1, name = "Admin" }
+            end
+        }
+    }
+}
+
+local user_name = app?.services?.auth?:get_user()?.name
+print("Auth user:", user_name)  --> Admin
+
+local missing_service = app?.services?.payments?:process()?.result
+print("Missing service result:", missing_service)  --> nil

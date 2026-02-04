@@ -1,0 +1,76 @@
+-- String Interpolation: Build strings with embedded expressions.
+-- playground: true
+-- unstable: true
+
+global print, setmetatable, os, math, string, tostring
+
+-- Basic variable interpolation with $name
+local name = "Alice"
+local age = 30
+print(`Hello, $name! You are $age years old.`)
+
+-- Expression interpolation with $(expr)
+local items = 5
+local price = 19.99
+print(`Total: $(string.format("%.2f", items * price)) for $items items`)
+
+-- Conditional expressions
+local score = 85
+print(`Grade: $(score >= 90 and "A" or score >= 80 and "B" or "C")`)
+
+-- Math expressions
+local radius = 5
+print(`Circle area: $(math.pi * radius * radius)`)
+
+-- Table field access
+local user = { name = "Bob", role = "admin" }
+print(`User $(user.name) has role: $(user.role)`)
+
+-- Function calls in interpolation
+local function greet(n)
+    return "Hello, " .. n
+end
+print(`Message: $(greet("World"))`)
+
+-- Multi-line templates
+local report = `
+=============================
+  User Report
+=============================
+Name: $name
+Age: $age
+Items: $items
+Status: $(items > 0 and "Active" or "Inactive")
+=============================`
+print(report)
+
+-- Escaping: use $$ for literal $
+local price_str = `Price: $$$(items * price)`
+print(price_str)  --> Price: $99.95
+
+-- Objects with __tostring
+local Point = {}
+Point.__index = Point
+Point.__tostring = function(self)
+    return "(" .. self.x .. ", " .. self.y .. ")"
+end
+
+local function new_point(x, y)
+    return setmetatable({x = x, y = y}, Point)
+end
+
+local p = new_point(10, 20)
+print(`Point location: $p`)  --> Point location: (10, 20)
+
+-- Building SQL-like queries (example pattern)
+local table_name = "users"
+local field = "email"
+local value = "test@example.com"
+local query = `SELECT * FROM $table_name WHERE $field = '$(value)'`
+print(query)
+
+-- Nested interpolation
+local first = "John"
+local last = "Doe"
+local full = `$first $last`
+print(`Full name is: $full`)

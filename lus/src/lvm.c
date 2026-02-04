@@ -1465,25 +1465,22 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
   cinfo->active = 0;
 
   /* If a handler is set, call it to transform the error */
-  if (cinfo->handleroffset != 0) {
-    StkId handler = restorestack(L, cinfo->handleroffset);
-    if (ttisfunction(s2v(handler))) {
-      StkId errobj = restorestack(L, errobjoffset);
-      /* Set up call: push handler and error object */
-      StkId callbase = L->top.p;
-      setobjs2s(L, callbase, handler);      /* push handler */
-      setobjs2s(L, callbase + 1, errobj);   /* push error object */
-      L->top.p = callbase + 2;
-      /* Call handler with error object, get 1 result */
-      /* Note: if handler throws, that error propagates (no nested catch) */
-      luaD_call(L, callbase, 1);
-      /* After call, stack may have been reallocated. Recompute base. */
-      ebase = restorestack(L, cinfo->baseoffset);
-      func = ebase - 1;
-      ecl = clLvalue(s2v(func));
-      /* Save result offset (handler result is at L->top.p - 1) */
-      errobjoffset = savestack(L, L->top.p - 1);
-    }
+  if (ttisfunction(&cinfo->handler)) {
+    StkId errobj = restorestack(L, errobjoffset);
+    /* Set up call: push handler and error object */
+    StkId callbase = L->top.p;
+    setobj2s(L, callbase, &cinfo->handler);  /* push handler from CatchInfo */
+    setobjs2s(L, callbase + 1, errobj);      /* push error object */
+    L->top.p = callbase + 2;
+    /* Call handler with error object, get 1 result */
+    /* Note: if handler throws, that error propagates (no nested catch) */
+    luaD_call(L, callbase, 1);
+    /* After call, stack may have been reallocated. Recompute base. */
+    ebase = restorestack(L, cinfo->baseoffset);
+    func = ebase - 1;
+    ecl = clLvalue(s2v(func));
+    /* Save result offset (handler result is at L->top.p - 1) */
+    errobjoffset = savestack(L, L->top.p - 1);
   }
 
   /* Recompute stack pointers (may have changed during handler call) */
@@ -2318,17 +2315,13 @@ returning: /* trap already set */
         catchinfo->active = 1;
         L->activeCatch = ci; /* this CI is now the active catch handler */
 
-        /* If handler is present, copy it to top of stack to protect it from
-        ** being overwritten by inner expression results. The inner expression
-        ** may use registers starting at A+1, which could overlap with where
-        ** the handler was placed. */
+        /* If handler is present, copy it to CatchInfo.handler.
+        ** This survives stack reallocation and works for nested catches. */
         if (b != 0) {
           StkId handler = base + (b - 1);  /* handler's original position */
-          setobjs2s(L, L->top.p, handler); /* copy to top of stack */
-          catchinfo->handleroffset = savestack(L, L->top.p);
-          L->top.p++;  /* protect the copy */
+          setobj(L, &catchinfo->handler, s2v(handler));
         } else {
-          catchinfo->handleroffset = 0;
+          setnilvalue(&catchinfo->handler);
         }
 
         /* Use setjmp to establish the recovery point */

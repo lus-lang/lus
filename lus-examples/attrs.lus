@@ -1,0 +1,99 @@
+-- Runtime Attributes: Hook into variable assignment for validation and observation.
+-- playground: true
+-- unstable: true
+
+global print, type, math, error, tostring, pairs
+
+-- Basic attribute: log all assignments
+local function traced(name, value)
+    print("[TRACE]", name, "=", value)
+    return value
+end
+
+local counter <traced> = 0
+counter = counter + 1
+counter = counter + 1
+print("Final counter:", counter)
+print()
+
+-- Type enforcement: ensure variable is always a number
+local function number_only(name, value)
+    if type(value) ~= "number" then
+        error(name .. " must be a number, got " .. type(value))
+    end
+    return value
+end
+
+local score <number_only> = 100
+score = score + 50
+print("Score:", score)
+print()
+
+-- Range clamping: keep values within bounds
+local function clamped(min, max)
+    return function(name, value)
+        if value < min then return min end
+        if value > max then return max end
+        return value
+    end
+end
+
+local volume <clamped(0, 100)> = 50
+print("Initial volume:", volume)
+volume = 150  -- gets clamped to 100
+print("After setting to 150:", volume)
+volume = -20  -- gets clamped to 0
+print("After setting to -20:", volume)
+print()
+
+-- Value transformation: round to integer
+local function rounded(name, value)
+    return math.floor(value + 0.5)
+end
+
+local pixels <rounded> = 10.7
+print("Rounded pixels:", pixels)  --> 11
+pixels = 5.2
+print("Rounded again:", pixels)   --> 5
+print()
+
+-- Multiple attributes: chain transformations
+local function positive(name, value)
+    if value < 0 then
+        return -value  -- make positive
+    end
+    return value
+end
+
+local distance <positive, rounded> = -15.7
+print("Positive and rounded:", distance)  --> 16
+print()
+
+-- Practical: observable state with change notification
+local observers = {}
+
+local function observable(name, value)
+    if observers[name] then
+        for _, callback in pairs(observers[name]) do
+            callback(name, value)
+        end
+    end
+    return value
+end
+
+local function on_change(var_name, callback)
+    observers[var_name] = observers[var_name] or {}
+    observers[var_name][#observers[var_name] + 1] = callback
+end
+
+-- Set up observer before creating the variable
+on_change("health", function(name, val)
+    if val <= 20 then
+        print("WARNING: " .. name .. " is critically low!")
+    end
+end)
+
+local health <observable> = 100
+health = 50
+health = 15  -- triggers warning
+print("Health:", health)
