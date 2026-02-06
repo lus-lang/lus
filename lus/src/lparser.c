@@ -1144,6 +1144,7 @@ typedef struct ConsControl {
   int na;         /* number of array elements already stored */
   int tostore;    /* number of array elements pending to be stored */
   int maxtostore; /* maximum number of pending elements */
+  LusAstNode *last_field_ast; /* last field AST node (for constructor AST) */
 } ConsControl;
 
 /*
@@ -1163,10 +1164,20 @@ static void recfield(LexState *ls, ConsControl *cc) {
   FuncState *fs = ls->fs;
   lu_byte reg = ls->fs->freereg;
   expdesc tab, key, val;
-  if (ls->t.token == TK_NAME)
+  int fline = ls->linenumber;
+  int fcol = ls->tokencolumn;
+  LusAstNode *key_ast = NULL;
+  if (ls->t.token == TK_NAME) {
+    /* Capture key name for AST before codename consumes it */
+    if (AST_ACTIVE(ls)) {
+      key_ast = lusA_newnode(ls->ast, AST_STRING, fline, fcol);
+      key_ast->u.str = ls->t.seminfo.ts;
+    }
     codename(ls, &key);
-  else /* ls->t.token == '[' */
+  } else { /* ls->t.token == '[' */
     yindex(ls, &key);
+    key_ast = key.ast;  /* yindex stores key AST in key.ast */
+  }
   cc->nh++;
   checknext(ls, '=');
   tab = *cc->t;
@@ -1174,6 +1185,13 @@ static void recfield(LexState *ls, ConsControl *cc) {
   expr(ls, &val);
   luaK_storevar(fs, &tab, &val);
   fs->freereg = reg; /* free registers */
+  /* Build AST_TABLEFIELD for record field */
+  if (AST_ACTIVE(ls)) {
+    LusAstNode *tf = lusA_newnode(ls->ast, AST_TABLEFIELD, fline, fcol);
+    tf->u.field.key = key_ast;
+    tf->u.field.value = val.ast;
+    cc->last_field_ast = tf;
+  }
 }
 
 static void closelistfield(FuncState *fs, ConsControl *cc) {
@@ -1204,8 +1222,17 @@ static void lastlistfield(FuncState *fs, ConsControl *cc) {
 
 static void listfield(LexState *ls, ConsControl *cc) {
   /* listfield -> exp */
+  int fline = ls->linenumber;
+  int fcol = ls->tokencolumn;
   expr(ls, &cc->v);
   cc->tostore++;
+  /* Build AST_TABLEFIELD for list field (no key) */
+  if (AST_ACTIVE(ls)) {
+    LusAstNode *tf = lusA_newnode(ls->ast, AST_TABLEFIELD, fline, fcol);
+    tf->u.field.key = NULL;
+    tf->u.field.value = cc->v.ast;
+    cc->last_field_ast = tf;
+  }
 }
 
 static void field(LexState *ls, ConsControl *cc) {
@@ -1252,32 +1279,44 @@ static void constructor(LexState *ls, expdesc *t) {
   int column = ls->tokencolumn;
   int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
   ConsControl cc;
+  LusAstNode *tbl_node = NULL;
   luaK_code(fs, 0); /* space for extra arg. */
   cc.na = cc.nh = cc.tostore = 0;
   cc.t = t;
+  cc.last_field_ast = NULL;
   init_exp(t, VNONRELOC, fs->freereg); /* table will be at stack top */
   luaK_reserveregs(fs, 1);
   init_exp(&cc.v, VVOID, 0); /* no value (yet) */
   checknext(ls, '{' /*}*/);
   cc.maxtostore = maxtostore(fs);
+
+  /* Create AST_TABLE node early so we can add children as we parse */
+  if (AST_ACTIVE(ls))
+    tbl_node = lusA_newnode(ls->ast, AST_TABLE, line, column);
+
   do {
     if (ls->t.token == /*{*/ '}')
       break;
     if (cc.v.k != VVOID)       /* is there a previous list item? */
       closelistfield(fs, &cc); /* close it */
+
+    cc.last_field_ast = NULL;
     field(ls, &cc);
+
+    /* Add field AST to table node */
+    if (AST_ACTIVE(ls) && tbl_node && cc.last_field_ast)
+      lusA_addchild(tbl_node, cc.last_field_ast);
+
     luaY_checklimit(fs, cc.tostore + cc.na + cc.nh, MAX_CNST,
                     "items in a constructor");
   } while (testnext(ls, ',') || testnext(ls, ';'));
   check_match(ls, /*{*/ '}', '{' /*}*/, line);
   lastlistfield(fs, &cc);
   luaK_settablesize(fs, pc, t->u.info, cc.na, cc.nh);
-  /* Create AST_TABLE node */
+  /* Finalize AST_TABLE node */
   if (AST_ACTIVE(ls)) {
-    t->ast = lusA_newnode(ls->ast, AST_TABLE, line, column);
-    /* Fields are not tracked individually for now */
-    t->ast->u.table.fields = NULL;
-    AST_SETEND_LAST(t->ast, ls);  /* end at closing '}' */
+    AST_SETEND_LAST(tbl_node, ls);
+    t->ast = tbl_node;
   }
 }
 
@@ -1345,6 +1384,17 @@ static void parlist(LexState *ls) {
           }
         } else {
           new_localvarliteral(ls, "(vararg table)");
+          /* Add AST_VARARG node for '...' parameter */
+          if (AST_ACTIVE(ls)) {
+            LusAstNode *param = lusA_newnode(ls->ast, AST_VARARG,
+                                             ls->lastline, ls->lastcolumn);
+            if (params_tail) {
+              params_tail->next = param;
+              params_tail = param;
+            } else {
+              params_head = params_tail = param;
+            }
+          }
         }
         break;
       }
@@ -1445,6 +1495,7 @@ static void funcargs(LexState *ls, expdesc *f) {
   int column = ls->tokencolumn;
   LusAstNode *func_ast = f->ast; /* save function AST before overwrite */
   LusAstNode *args_ast = NULL;
+  lu_byte callstyle = 0;  /* 0=parens, 1=string, 2=table */
 
   switch (ls->t.token) {
   case '(': { /* funcargs -> '(' [ explist ] ')' */
@@ -1464,6 +1515,7 @@ static void funcargs(LexState *ls, expdesc *f) {
   case '{' /*}*/: { /* funcargs -> constructor */
     constructor(ls, &args);
     args_ast = args.ast;
+    callstyle = 2;
     break;
   }
   case TK_STRING: { /* funcargs -> STRING */
@@ -1471,7 +1523,9 @@ static void funcargs(LexState *ls, expdesc *f) {
     if (AST_ACTIVE(ls)) {
       args_ast = lusA_newnode(ls->ast, AST_STRING, line, column);
       args_ast->u.str = ls->t.seminfo.ts;
+      args_ast->quote = ls->strquote;
     }
+    callstyle = 1;
     luaX_next(ls); /* must use 'seminfo' before 'next' */
     break;
   }
@@ -1497,6 +1551,7 @@ static void funcargs(LexState *ls, expdesc *f) {
     call->u.call.func = func_ast;
     call->u.call.args = args_ast;
     call->u.call.method = NULL;
+    call->u.call.callstyle = callstyle;
     AST_SETEND_LAST(call, ls);  /* end at closing ')' or after string/table arg */
     f->ast = call;
   }
@@ -1521,6 +1576,9 @@ static void primaryexp(LexState *ls, expdesc *v) {
     expr(ls, v);
     check_match(ls, ')', '(', line);
     luaK_dischargevars(ls->fs, v);
+    /* Mark expression as parenthesized for the formatter */
+    if (AST_ACTIVE(ls) && v->ast)
+      v->ast->paren = 1;
     return;
   }
   case TK_NAME: {
@@ -1634,37 +1692,64 @@ static void suffixedexp(LexState *ls, expdesc *v) {
     }
 
     /* Parse the field access: '.' NAME */
-    luaX_next(ls); /* skip '.' */
-    TString *fieldname = str_checkname(ls);
+    {
+      int dotline = ls->linenumber;
+      int dotcol = ls->tokencolumn;
+      LusAstNode *table_ast = v->ast; /* save group AST before overwrite */
+      luaX_next(ls); /* skip '.' */
+      int fnameline = ls->linenumber;
+      int fnamecol = ls->tokencolumn;
+      TString *fieldname = str_checkname(ls);
 
-    GroupField *field = findgroupfield(curgroup, fieldname);
-    if (field == NULL) {
-      luaK_semerror(ls, "'%s' is not a field of group '%s'", getstr(fieldname),
-                    getstr(curgroup->name));
-    }
+      GroupField *field = findgroupfield(curgroup, fieldname);
+      if (field == NULL) {
+        luaK_semerror(ls, "'%s' is not a field of group '%s'",
+                      getstr(fieldname), getstr(curgroup->name));
+      }
 
-    /* If field is a subgroup, update curgroup and continue */
-    if (field->kind == RDKGROUP && field->subgroup != NULL) {
-      curgroup = field->subgroup;
-      /* Continue loop to handle parent.c.d */
-    } else {
-      /* Regular field: find the variable and create assignable expr */
-      int i;
-      int found = 0;
-      for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {
-        Vardesc *fvd = getlocalvardesc(fs, i);
-        if (strcmp(getstr(fvd->vd.name), getstr(fieldname)) == 0 &&
-            fvd->vd.ridx == field->ridx) {
-          init_var(fs, v, i);
-          found = 1;
-          break;
+      /* If field is a subgroup, update curgroup and continue */
+      if (field->kind == RDKGROUP && field->subgroup != NULL) {
+        /* Build AST_FIELD for the intermediate group path */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, dotline, dotcol);
+          fnode->u.index.table = table_ast;
+          LusAstNode *knode = lusA_newnode(ls->ast, AST_STRING,
+                                           fnameline, fnamecol);
+          knode->u.str = fieldname;
+          fnode->u.index.key = knode;
+          v->ast = fnode;
         }
+        curgroup = field->subgroup;
+        /* Continue loop to handle parent.c.d */
+      } else {
+        /* Regular field: find the variable and create assignable expr */
+        int i;
+        int found = 0;
+        for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {
+          Vardesc *fvd = getlocalvardesc(fs, i);
+          if (strcmp(getstr(fvd->vd.name), getstr(fieldname)) == 0 &&
+              fvd->vd.ridx == field->ridx) {
+            init_var(fs, v, i);
+            found = 1;
+            break;
+          }
+        }
+        if (!found) {
+          /* Fallback to VNONRELOC if variable not found */
+          init_exp(v, VNONRELOC, field->ridx);
+        }
+        /* Build AST_FIELD for the final field access */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, dotline, dotcol);
+          fnode->u.index.table = table_ast;
+          LusAstNode *knode = lusA_newnode(ls->ast, AST_STRING,
+                                           fnameline, fnamecol);
+          knode->u.str = fieldname;
+          fnode->u.index.key = knode;
+          v->ast = fnode;
+        }
+        break; /* exit loop */
       }
-      if (!found) {
-        /* Fallback to VNONRELOC if variable not found */
-        init_exp(v, VNONRELOC, field->ridx);
-      }
-      break; /* exit loop */
     }
   }
 
@@ -1850,6 +1935,8 @@ static void enumexpr(LexState *ls, expdesc *v) {
   EnumRoot *root;
   Enum *e;
   TValue tv;
+  int line = ls->linenumber;
+  int column = ls->tokencolumn;
 
   /* skip 'enum' keyword */
   luaX_next(ls);
@@ -1864,26 +1951,50 @@ static void enumexpr(LexState *ls, expdesc *v) {
   /* expect 'end' */
   check_match(ls, TK_END, TK_ENUM, ls->linenumber);
 
-  /* Create the enum root with all names */
-  root = luaE_newroot(L, nnames);
-  for (int i = 0; i < nnames; i++) {
-    root->names[i] = names[i];
+  /* Create AST_ENUM node with name list */
+  {
+    LusAstNode *enumnode = NULL;
+    if (AST_ACTIVE(ls)) {
+      LusAstNode *head = NULL, *tail = NULL;
+      int i;
+      enumnode = lusA_newnode(ls->ast, AST_ENUM, line, column);
+      for (i = 0; i < nnames; i++) {
+        LusAstNode *namenode = lusA_newnode(ls->ast, AST_NAME, line, column);
+        namenode->u.var.name = names[i];
+        namenode->u.var.attrkind = 0;
+        namenode->u.var.runtimeattrs = NULL;
+        if (tail) { tail->next = namenode; tail = namenode; }
+        else { head = tail = namenode; }
+      }
+      enumnode->u.enumdef.names = head;
+      AST_SETEND_LAST(enumnode, ls);
+    }
+
+    /* Create the enum root with all names */
+    root = luaE_newroot(L, nnames);
+    for (int i = 0; i < nnames; i++) {
+      root->names[i] = names[i];
+    }
+
+    /* Create the first enum value (index 1) */
+    e = luaE_new(L, root, 1);
+
+    /* Add the enum value as a constant */
+    setenumvalue(L, &tv, e);
+    /* Use addk directly - enums are unique, no caching */
+    luaM_growvector(L, fs->f->k, fs->nk, fs->f->sizek, TValue, MAXARG_Ax,
+                    "constants");
+    setobj(L, &fs->f->k[fs->nk], &tv);
+    k = fs->nk++;
+    luaC_barrier(L, fs->f, &tv);
+
+    /* Return expression referencing the constant */
+    init_exp(v, VK, k);
+
+    /* Set AST after init_exp (which clears v->ast) */
+    if (AST_ACTIVE(ls))
+      v->ast = enumnode;
   }
-
-  /* Create the first enum value (index 1) */
-  e = luaE_new(L, root, 1);
-
-  /* Add the enum value as a constant */
-  setenumvalue(L, &tv, e);
-  /* Use addk directly - enums are unique, no caching */
-  luaM_growvector(L, fs->f->k, fs->nk, fs->f->sizek, TValue, MAXARG_Ax,
-                  "constants");
-  setobj(L, &fs->f->k[fs->nk], &tv);
-  k = fs->nk++;
-  luaC_barrier(L, fs->f, &tv);
-
-  /* Return expression referencing the constant */
-  init_exp(v, VK, k);
 }
 
 
@@ -2044,6 +2155,7 @@ static void simpleexp(LexState *ls, expdesc *v) {
     if (AST_ACTIVE(ls)) {
       v->ast = lusA_newnode(ls->ast, AST_STRING, line, column);
       v->ast->u.str = ls->t.seminfo.ts;
+      v->ast->quote = ls->strquote;
     }
     break;
   }
@@ -2168,6 +2280,7 @@ static void catchexpr(LexState *ls, expdesc *v) {
   int catchpc;
   int endcatchpc;
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
   expdesc innerexp;
   int handler_reg = 0;  /* 0 means no handler (B field value) */
 
@@ -2248,6 +2361,14 @@ static void catchexpr(LexState *ls, expdesc *v) {
   */
   init_exp(v, VCATCH, endcatchpc);
 
+  /* Create AST node for catch expression (after init_exp which clears ast) */
+  if (AST_ACTIVE(ls)) {
+    LusAstNode *catchnode = lusA_newnode(ls->ast, AST_CATCHEXPR, line, column);
+    catchnode->u.catchnode.expr = innerexp.ast;
+    AST_SETEND_LAST(catchnode, ls);
+    v->ast = catchnode;
+  }
+
   luaK_fixline(fs, line);
 }
 
@@ -2286,6 +2407,11 @@ static void catchstat(LexState *ls, int line) {
 
   /* Parse the expression, results go starting at base+1 */
   expr(ls, &innerexp);
+
+  /* Capture inner expression in AST_CATCHSTAT node */
+  if (AST_ACTIVE(ls) && ls->ast->curnode) {
+    ls->ast->curnode->u.catchnode.expr = innerexp.ast;
+  }
 
   /* Handle inner expression discharge */
   if (hasmultret(innerexp.k)) {
@@ -2334,6 +2460,10 @@ static void doexpr(LexState *ls, expdesc *v) {
   BlockCnt bl;
   int base = fs->freereg;
   int line = ls->linenumber;
+  int column = ls->tokencolumn;
+  LusAstNode *donode = NULL;
+  LusAstNode *saved_curblock = NULL;
+  LusAstNode *saved_curnode = NULL;
 
   /* Calculate how many vardesc entries are "pending" (created but not activated).
   ** These are entries between the current array size and what nactvar expects. */
@@ -2341,6 +2471,16 @@ static void doexpr(LexState *ls, expdesc *v) {
   int real_nactvar = fs->nactvar;  /* save the real count */
 
   luaX_next(ls);  /* skip 'do' */
+
+  /* Create AST node for do-expression and save/set curblock+curnode.
+  ** curnode must be saved because inner statements will overwrite it. */
+  if (AST_ACTIVE(ls)) {
+    donode = lusA_newnode(ls->ast, AST_DOEXPR, line, column);
+    saved_curblock = ls->ast->curblock;
+    saved_curnode = ls->ast->curnode;
+    ls->ast->curblock = donode;
+    ls->ast->curnode = NULL;  /* clear for inner statements */
+  }
 
   /* Reserve result register and initialize to nil (default if no provide) */
   luaK_reserveregs(fs, 1);
@@ -2396,6 +2536,13 @@ static void doexpr(LexState *ls, expdesc *v) {
     }
   }
 
+  /* Restore curblock and curnode */
+  if (AST_ACTIVE(ls)) {
+    ls->ast->curblock = saved_curblock;
+    ls->ast->curnode = saved_curnode;
+    AST_SETEND_LAST(donode, ls);
+  }
+
   /* After leaveblock, freereg is reset. Set it to base+1 to keep result. */
   fs->freereg = cast_byte(base + 1);
 
@@ -2411,6 +2558,10 @@ static void doexpr(LexState *ls, expdesc *v) {
     if (nvalues < 0) nvalues = 255;  /* unknown = assume many (won't nil-fill) */
     init_exp(v, VDOEXPR, base | (nvalues << 8));
   }
+
+  /* Set AST after init_exp (which clears v->ast) */
+  if (AST_ACTIVE(ls))
+    v->ast = donode;
 }
 
 /*
@@ -2443,6 +2594,11 @@ found:
     ** We can't directly put results at 'base' because it's a local variable
     ** slot that might conflict with the expression evaluation. */
     int nexps = explist(ls, &e);
+    /* Capture values in AST_PROVIDE node */
+    if (AST_ACTIVE(ls) && ls->ast->curnode &&
+        ls->ast->curnode->type == AST_PROVIDE) {
+      ls->ast->curnode->u.ret.values = e.ast;
+    }
     bl->doexpr_nvalues = nexps;  /* track how many values were provided */
     if (hasmultret(e.k)) {
       /* Multi-return: let it fill in starting at freereg */
@@ -2588,17 +2744,19 @@ static BinOpr subexpr(LexState *ls, expdesc *v, int limit) {
     int line = ls->linenumber;
     int column = ls->tokencolumn;
     LusAstNode *left_ast = v->ast;
+    LusAstNode *right_ast;
     luaX_next(ls); /* skip operator */
     luaK_infix(ls->fs, op, v);
     /* read sub-expression with higher priority */
     nextop = subexpr(ls, &v2, priority[op].right);
+    right_ast = v2.ast;  /* save BEFORE posfix which may swap */
     luaK_posfix(ls->fs, op, v, &v2, line);
     /* Build binary AST node */
     if (AST_ACTIVE(ls)) {
       LusAstNode *binop_node = lusA_newnode(ls->ast, AST_BINOP, line, column);
       binop_node->u.binop.op = (int)op;
       binop_node->u.binop.left = left_ast;
-      binop_node->u.binop.right = v2.ast;
+      binop_node->u.binop.right = right_ast;
       /* End position is the end of the right operand */
       if (v2.ast != NULL) {
         binop_node->endline = v2.ast->endline;
@@ -2781,6 +2939,23 @@ static void assignfrom(LexState *ls, struct LHS_assign *lh, int nvars) {
 
   /* Parse the source table expression into next register (after reserved) */
   expr(ls, &tbl);
+  /* Store source table and LHS names in AST */
+  if (AST_ACTIVE(ls) && ls->ast->curnode &&
+      ls->ast->curnode->type == AST_ASSIGN) {
+    ls->ast->curnode->u.assign.rhs = tbl.ast;
+    /* Build full LHS list from the chain */
+    LusAstNode *lhs_nodes[MAXVARS];
+    int n = 0;
+    for (cur = lh; cur != NULL && n < MAXVARS; cur = cur->prev)
+      lhs_nodes[n++] = cur->v.ast;
+    if (n > 0) {
+      ls->ast->curnode->u.assign.lhs = lhs_nodes[n - 1];
+      for (int j = n - 2; j >= 0; j--) {
+        if (lhs_nodes[j + 1]) lhs_nodes[j + 1]->next = lhs_nodes[j];
+      }
+      if (lhs_nodes[0]) lhs_nodes[0]->next = NULL;
+    }
+  }
   luaK_exp2nextreg(fs, &tbl);
   tblreg = fs->freereg - 1;
 
@@ -2826,12 +3001,41 @@ static int restassign(LexState *ls, struct LHS_assign *lh, int nvars) {
       return 1; /* 'from' handled everything, skip storevartop */
     leavelevel(ls);
   } else if (testnext(ls, TK_FROM)) { /* restassign -> 'from' expr */
+    /* Store from flag in AST */
+    if (AST_ACTIVE(ls) && ls->ast->curnode &&
+        ls->ast->curnode->type == AST_ASSIGN) {
+      ls->ast->curnode->u.assign.isfrom = 1;
+    }
     assignfrom(ls, lh, nvars);
     return 1; /* signal that 'from' handled all stores */
   } else {    /* restassign -> '=' explist */
     int nexps;
     checknext(ls, '=');
     nexps = explist(ls, &e);
+    /* Store RHS AST in the assignment node */
+    if (AST_ACTIVE(ls) && ls->ast->curnode &&
+        ls->ast->curnode->type == AST_ASSIGN) {
+      ls->ast->curnode->u.assign.rhs = e.ast;
+      ls->ast->curnode->u.assign.isfrom = 0;
+      /* Build full LHS list by walking the prev chain (reversed).
+      ** Collect AST nodes into an array, then link in forward order. */
+      {
+        LusAstNode *lhs_nodes[MAXVARS];
+        int n = 0;
+        struct LHS_assign *cur;
+        for (cur = lh; cur != NULL && n < MAXVARS; cur = cur->prev)
+          lhs_nodes[n++] = cur->v.ast;
+        /* Link in forward order (lhs_nodes[n-1] is first) */
+        if (n > 0) {
+          ls->ast->curnode->u.assign.lhs = lhs_nodes[n - 1];
+          for (int i = n - 2; i >= 0; i--) {
+            if (lhs_nodes[i + 1])
+              lhs_nodes[i + 1]->next = lhs_nodes[i];
+          }
+          if (lhs_nodes[0]) lhs_nodes[0]->next = NULL;
+        }
+      }
+    }
     if (nexps != nvars)
       adjust_assign(ls, nvars, nexps, &e);
     else {
@@ -2858,6 +3062,8 @@ static int cond(LexState *ls, LusAstNode **condast) {
 
 static void gotostat(LexState *ls, int line) {
   TString *name = str_checkname(ls); /* label's name */
+  if (AST_ACTIVE(ls) && ls->ast->curnode)
+    ls->ast->curnode->u.str = name;
   newgotoentry(ls, name, line);
 }
 
@@ -2918,13 +3124,15 @@ static void whilestat(LexState *ls, int line) {
   /* Check if this is an assignment condition */
   if (isassigncond(ls)) {
     condexit = assigncond(ls); /* parse assignment and generate tests */
+    /* assigncond already stored cond AST via curnode->u.ifstat.cond */
   } else {
     condexit = cond(ls, &condast); /* read normal condition */
   }
 
   /* Store condition and set up body collection */
   if (AST_ACTIVE(ls) && ls->ast->curnode) {
-    ls->ast->curnode->u.loop.cond = condast;
+    if (condast != NULL)  /* only set if cond() provided it (not assigncond) */
+      ls->ast->curnode->u.loop.cond = condast;
     /* Set curblock to this while node so body statements become children */
     saved_curblock = ls->ast->curblock;
     ls->ast->curblock = ls->ast->curnode;
@@ -3064,18 +3272,43 @@ static void fornum(LexState *ls, TString *varname, int line) {
   /* fornum -> NAME = exp,exp[,exp] forbody */
   FuncState *fs = ls->fs;
   int base = fs->freereg;
+  expdesc e;
   new_localvarliteral(ls, "(for state)");
   new_localvarliteral(ls, "(for state)");
   new_varkind(ls, varname, RDKCONST); /* control variable */
+
+  /* Store control variable name in AST */
+  if (AST_ACTIVE(ls) && ls->ast->curnode) {
+    LusAstNode *varnode = lusA_newnode(ls->ast, AST_NAME, ls->lastline,
+                                       ls->lastcolumn);
+    varnode->u.var.name = varname;
+    varnode->u.var.attrkind = 0;
+    varnode->u.var.runtimeattrs = NULL;
+    ls->ast->curnode->u.fornum.var = varnode;
+  }
+
   checknext(ls, '=');
-  exp1(ls); /* initial value */
+  expr(ls, &e); /* initial value */
+  if (AST_ACTIVE(ls) && ls->ast->curnode)
+    ls->ast->curnode->u.fornum.init = e.ast;
+  luaK_exp2nextreg(fs, &e);
+
   checknext(ls, ',');
-  exp1(ls); /* limit */
-  if (testnext(ls, ','))
-    exp1(ls); /* optional step */
-  else {      /* default step = 1 */
+  expr(ls, &e); /* limit */
+  if (AST_ACTIVE(ls) && ls->ast->curnode)
+    ls->ast->curnode->u.fornum.limit = e.ast;
+  luaK_exp2nextreg(fs, &e);
+
+  if (testnext(ls, ',')) {
+    expr(ls, &e); /* optional step */
+    if (AST_ACTIVE(ls) && ls->ast->curnode)
+      ls->ast->curnode->u.fornum.step = e.ast;
+    luaK_exp2nextreg(fs, &e);
+  } else {      /* default step = 1 */
     luaK_int(fs, fs->freereg, 1);
     luaK_reserveregs(fs, 1);
+    if (AST_ACTIVE(ls) && ls->ast->curnode)
+      ls->ast->curnode->u.fornum.step = NULL;
   }
   adjustlocalvars(ls, 2); /* start scope for internal variables */
   forbody(ls, base, line, 1, 0);
@@ -3088,19 +3321,54 @@ static void forlist(LexState *ls, TString *indexname) {
   int nvars = 4; /* function, state, closing, control */
   int line;
   int base = fs->freereg;
+  LusAstNode *names_head = NULL, *names_tail = NULL;
+
+  /* Change node type from FORNUM (default) to FORGEN */
+  if (AST_ACTIVE(ls) && ls->ast->curnode)
+    ls->ast->curnode->type = AST_FORGEN;
+
   /* create internal variables */
   new_localvarliteral(ls, "(for state)"); /* iterator function */
   new_localvarliteral(ls, "(for state)"); /* state */
   new_localvarliteral(ls, "(for state)"); /* closing var. (after swap) */
   new_varkind(ls, indexname, RDKCONST);   /* control variable */
+
+  /* Build AST name for first variable */
+  if (AST_ACTIVE(ls)) {
+    LusAstNode *n = lusA_newnode(ls->ast, AST_NAME, ls->lastline,
+                                 ls->lastcolumn);
+    n->u.var.name = indexname;
+    n->u.var.attrkind = 0;
+    n->u.var.runtimeattrs = NULL;
+    names_head = names_tail = n;
+  }
+
   /* other declared variables */
   while (testnext(ls, ',')) {
-    new_localvar(ls, str_checkname(ls));
+    int nameline = ls->linenumber;
+    int namecol = ls->tokencolumn;
+    TString *name = str_checkname(ls);
+    new_localvar(ls, name);
     nvars++;
+    if (AST_ACTIVE(ls)) {
+      LusAstNode *n = lusA_newnode(ls->ast, AST_NAME, nameline, namecol);
+      n->u.var.name = name;
+      n->u.var.attrkind = 0;
+      n->u.var.runtimeattrs = NULL;
+      names_tail->next = n;
+      names_tail = n;
+    }
   }
   checknext(ls, TK_IN);
   line = ls->linenumber;
   adjust_assign(ls, 4, explist(ls, &e), &e);
+
+  /* Store names and iterator expressions in AST */
+  if (AST_ACTIVE(ls) && ls->ast->curnode) {
+    ls->ast->curnode->u.forgen.names = names_head;
+    ls->ast->curnode->u.forgen.explist = e.ast;
+  }
+
   adjustlocalvars(ls, 3); /* start scope for internal variables */
   marktobeclosed(fs);     /* last internal var. must be closed */
   luaK_checkstack(fs, 2); /* extra space to call iterator */
@@ -3165,11 +3433,14 @@ static int assigncond(LexState *ls) {
   int falsejump = NO_JUMP;
   int i;
   int toclose = -1;
+  LusAstNode *names_head = NULL, *names_tail = NULL;
 
   base = fs->freereg; /* remember base register for variables */
 
   /* Parse variable names with optional attributes */
   do {
+    int nameline = ls->linenumber;
+    int namecol = ls->tokencolumn;
     TString *vname = str_checkname(ls);
     lu_byte kind = getvarattribute(ls, VDKREG); /* attribute (if any) */
     int vidx = new_varkind(ls, vname, kind);
@@ -3182,6 +3453,15 @@ static int assigncond(LexState *ls) {
         luaK_semerror(ls, "multiple to-be-closed variables in condition");
       toclose = fs->nactvar + nvars;
     }
+    /* Build AST name list */
+    if (AST_ACTIVE(ls)) {
+      LusAstNode *nn = lusA_newnode(ls->ast, AST_NAME, nameline, namecol);
+      nn->u.var.name = vname;
+      nn->u.var.attrkind = (int)kind;
+      nn->u.var.runtimeattrs = NULL;
+      if (names_tail) { names_tail->next = nn; names_tail = nn; }
+      else { names_head = names_tail = nn; }
+    }
     nvars++;
   } while (testnext(ls, ','));
 
@@ -3191,6 +3471,15 @@ static int assigncond(LexState *ls) {
       luaK_semerror(ls, "cannot use 'from' with <group> variables");
     if (toclose != -1)
       luaK_semerror(ls, "cannot use 'from' with to-be-closed variables");
+    /* Build assignment-condition AST with from flag */
+    if (AST_ACTIVE(ls) && ls->ast->curnode) {
+      LusAstNode *acond = lusA_newnode(ls->ast, AST_ASSIGN,
+                                        names_head ? names_head->line : 0,
+                                        names_head ? names_head->column : 0);
+      acond->u.assign.lhs = names_head;
+      acond->u.assign.isfrom = 1;
+      ls->ast->curnode->u.ifstat.cond = acond;
+    }
     localfrom(ls, firstidx, nvars);
   } else {
     checknext(ls, '=');
@@ -3250,6 +3539,18 @@ static int assigncond(LexState *ls) {
 
     /* Parse expressions */
     nexps = explist(ls, &e);
+
+    /* Build assignment-condition AST: names = values */
+    if (AST_ACTIVE(ls) && ls->ast->curnode) {
+      LusAstNode *acond = lusA_newnode(ls->ast, AST_ASSIGN,
+                                        names_head ? names_head->line : 0,
+                                        names_head ? names_head->column : 0);
+      acond->u.assign.lhs = names_head;
+      acond->u.assign.rhs = e.ast;
+      acond->u.assign.isfrom = 0;
+      ls->ast->curnode->u.ifstat.cond = acond;
+    }
+
     adjust_assign(ls, nvars, nexps, &e);
 
     /* Activate variables */
@@ -3274,13 +3575,21 @@ static void test_then_block(LexState *ls, int *escapelist) {
   /* cond can be: expr | NAME {',' NAME} '=' explist (assignment condition) */
   FuncState *fs = ls->fs;
   int condexit;
+  LusAstNode *condast = NULL;
   luaX_next(ls); /* skip IF or ELSEIF */
 
   /* Check if this is an assignment condition */
   if (isassigncond(ls)) {
     condexit = assigncond(ls); /* parse assignment and generate tests */
   } else {
-    condexit = cond(ls, NULL); /* read normal condition */
+    condexit = cond(ls, &condast); /* read normal condition */
+  }
+
+  /* Store condition in current if/elseif AST node.
+  ** For assignment conditions, assigncond() already set the cond directly.
+  ** Only overwrite if condast is non-NULL (regular condition). */
+  if (AST_ACTIVE(ls) && ls->ast->curnode && condast != NULL) {
+    ls->ast->curnode->u.ifstat.cond = condast;
   }
 
   checknext(ls, TK_THEN);
@@ -3310,11 +3619,44 @@ static void ifstat(LexState *ls, int line) {
   /* Enter outer block for condition variables */
   enterblock(fs, &bl, 0);
 
-  test_then_block(ls, &escapelist); /* IF cond THEN block */
-  while (ls->t.token == TK_ELSEIF)
-    test_then_block(ls, &escapelist); /* ELSEIF cond THEN block */
-  if (testnext(ls, TK_ELSE))
-    block(ls); /* 'else' part */
+  {
+    /* Save curnode so it survives inner statement() calls which set it to NULL */
+    LusAstNode *ifnode = AST_ACTIVE(ls) ? ls->ast->curnode : NULL;
+
+    test_then_block(ls, &escapelist); /* IF cond THEN block */
+
+    /* Restore curnode after test_then_block (inner statements clear it) */
+    if (AST_ACTIVE(ls)) ls->ast->curnode = ifnode;
+
+    while (ls->t.token == TK_ELSEIF) {
+      /* Create an AST_ELSEIF node and redirect body statements into it */
+      if (AST_ACTIVE(ls) && ifnode) {
+        LusAstNode *elseifnode = lusA_newnode(ls->ast, AST_ELSEIF,
+                                               ls->linenumber, ls->tokencolumn);
+        lusA_addchild(ifnode, elseifnode);
+        ls->ast->curnode = elseifnode;
+        ls->ast->curblock = elseifnode;
+        test_then_block(ls, &escapelist);
+        ls->ast->curnode = ifnode;
+        ls->ast->curblock = ifnode;
+      } else {
+        test_then_block(ls, &escapelist);
+      }
+    }
+    if (testnext(ls, TK_ELSE)) {
+      /* Create an AST_ELSE node and redirect body statements into it */
+      if (AST_ACTIVE(ls) && ifnode) {
+        LusAstNode *elsenode = lusA_newnode(ls->ast, AST_ELSE,
+                                             ls->lastline, ls->lastcolumn);
+        lusA_addchild(ifnode, elsenode);
+        ls->ast->curblock = elsenode;
+        block(ls);
+        ls->ast->curblock = ifnode;
+      } else {
+        block(ls);
+      }
+    }
+  }
   check_match(ls, TK_END, TK_IF, line);
   luaK_patchtohere(fs, escapelist); /* patch escape list to 'if' end */
 
@@ -3587,6 +3929,9 @@ static void localfrom(LexState *ls, int firstidx, int nvars) {
 
   /* Parse the source table expression and put in temp register */
   expr(ls, &tbl);
+  /* Store source table AST in the declaration node */
+  if (AST_ACTIVE(ls) && ls->ast->curnode)
+    ls->ast->curnode->u.decl.values = tbl.ast;
   luaK_exp2nextreg(fs, &tbl);
   tblreg = fs->freereg - 1; /* table is now in this register */
 
@@ -3719,12 +4064,18 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
   int line = ls->linenumber;
   int column = ls->tokencolumn;
   int nfields = 0;
-  (void)column;  /* may be used later for AST */
   int firstidx = -1; /* vardesc index of first field */
+  LusAstNode *tbl_ast = NULL;
+
+  /* Create AST_TABLE for this group constructor */
+  if (AST_ACTIVE(ls))
+    tbl_ast = lusA_newnode(ls->ast, AST_TABLE, line, column);
 
   checknext(ls, '{');
 
   while (ls->t.token != '}') {
+    int fline = ls->linenumber;
+    int fcol = ls->tokencolumn;
     TString *fieldname = str_checkname(ls);          /* get field name first */
     lu_byte fieldkind = getvarattribute(ls, VDKREG); /* attribute after name */
     checknext(ls, '=');
@@ -3736,6 +4087,22 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
       /* Store subgroup reference - fields are already created as locals */
       GroupField *f = newgroupfield(ls, g, fieldname, 0, RDKGROUP);
       f->subgroup = subg;
+      /* AST: add tablefield for the subgroup (value is the sub-table) */
+      if (AST_ACTIVE(ls) && tbl_ast) {
+        LusAstNode *tf = lusA_newnode(ls->ast, AST_TABLEFIELD, fline, fcol);
+        LusAstNode *key = lusA_newnode(ls->ast, AST_STRING, fline, fcol);
+        key->u.str = fieldname;
+        tf->u.field.key = key;
+        /* The subgroup's table AST was stored in curnode->u.decl.values
+        ** by the recursive call. Retrieve it: it's the last AST_TABLE
+        ** created. Actually, we need to track it differently. Let's use
+        ** a simpler approach: the subgroup table was just created as tbl_ast
+        ** in the recursive call. We can't easily get it here. Instead,
+        ** store a placeholder. The recursive call's tbl_ast is local. */
+        /* For now, just note it's a group field with a constructor */
+        tf->u.field.value = NULL; /* subgroup value is complex */
+        lusA_addchild(tbl_ast, tf);
+      }
     } else {
       /* Regular field: create a real local variable */
       expdesc e;
@@ -3749,6 +4116,17 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
 
       /* Parse and evaluate the expression into the next register */
       expr(ls, &e);
+
+      /* AST: add tablefield for this field */
+      if (AST_ACTIVE(ls) && tbl_ast) {
+        LusAstNode *tf = lusA_newnode(ls->ast, AST_TABLEFIELD, fline, fcol);
+        LusAstNode *key = lusA_newnode(ls->ast, AST_STRING, fline, fcol);
+        key->u.str = fieldname;
+        tf->u.field.key = key;
+        tf->u.field.value = e.ast;
+        lusA_addchild(tbl_ast, tf);
+      }
+
       luaK_exp2nextreg(fs, &e);
       valreg = fs->freereg - 1;
 
@@ -3777,6 +4155,14 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
   }
 
   check_match(ls, '}', '{', line);
+
+  /* Store the constructor AST in the current declaration node */
+  if (AST_ACTIVE(ls) && tbl_ast) {
+    AST_SETEND_LAST(tbl_ast, ls);
+    if (ls->ast->curnode)
+      ls->ast->curnode->u.decl.values = tbl_ast;
+  }
+
   return g;
 }
 
@@ -3872,6 +4258,11 @@ static void localstat(LexState *ls) {
       luaK_semerror(ls, "cannot mix <group> with non-group variables");
     if (toclose != -1)
       luaK_semerror(ls, "cannot use <close> with <group> variables");
+    /* Store names in AST before parsing constructor */
+    if (AST_ACTIVE(ls) && ls->ast->curnode) {
+      ls->ast->curnode->u.decl.names = names_head;
+      ls->ast->curnode->u.decl.isfrom = 0;
+    }
     checknext(ls, '=');
     /* Parse a constructor for each group */
     for (i = 0; i < nvars; i++) {
@@ -3913,6 +4304,9 @@ static void localstat(LexState *ls) {
         /* Copy from another group */
         expdesc src;
         primaryexp(ls, &src);
+        /* Store the source expression in AST */
+        if (AST_ACTIVE(ls) && ls->ast->curnode)
+          ls->ast->curnode->u.decl.values = src.ast;
         if (src.k != VLOCAL)
           luaK_semerror(ls, "group can only be copied from another group");
         Vardesc *srcvd = getlocalvardesc(fs, src.u.var.vidx);
@@ -4068,6 +4462,9 @@ static void globalfrom(LexState *ls, int nvars, int firstidx, int n, int line) {
 
     /* Parse table expression into next register (after reserved slots) */
     expr(ls, &tbl);
+    /* Store source table AST in the declaration node */
+    if (AST_ACTIVE(ls) && ls->ast->curnode)
+      ls->ast->curnode->u.decl.values = tbl.ast;
     luaK_exp2nextreg(fs, &tbl);
     tblreg = fs->freereg - 1;
 
@@ -4112,16 +4509,41 @@ static void globalnames(LexState *ls, lu_byte defkind) {
   FuncState *fs = ls->fs;
   int nvars = 0;
   int lastidx; /* index of last registered variable */
+  LusAstNode *names_head = NULL, *names_tail = NULL;
   do {         /* for each name */
+    int nameline = ls->linenumber;
+    int namecol = ls->tokencolumn;
     TString *vname = str_checkname(ls);
     lu_byte kind = getglobalattribute(ls, defkind);
     lastidx = new_varkind(ls, vname, kind);
+    /* Build AST name list */
+    if (AST_ACTIVE(ls)) {
+      LusAstNode *name_node = lusA_newnode(ls->ast, AST_NAME, nameline, namecol);
+      name_node->u.var.name = vname;
+      name_node->u.var.attrkind = 0;
+      name_node->u.var.runtimeattrs = NULL;
+      AST_SETEND_LAST(name_node, ls);
+      if (names_tail) { names_tail->next = name_node; names_tail = name_node; }
+      else { names_head = names_tail = name_node; }
+    }
     nvars++;
   } while (testnext(ls, ','));
   if (testnext(ls, TK_FROM)) { /* table deconstruction? */
     globalfrom(ls, nvars, lastidx - nvars + 1, 0, ls->linenumber);
-  } else if (testnext(ls, '=')) /* initialization? */
+    if (AST_ACTIVE(ls) && ls->ast->curnode) {
+      ls->ast->curnode->u.decl.names = names_head;
+      ls->ast->curnode->u.decl.isfrom = 1;
+    }
+  } else if (testnext(ls, '=')) { /* initialization? */
     initglobal(ls, nvars, lastidx - nvars + 1, 0, ls->linenumber);
+  } else {
+    /* No initializer -- just store names */
+    if (AST_ACTIVE(ls) && ls->ast->curnode) {
+      ls->ast->curnode->u.decl.names = names_head;
+      ls->ast->curnode->u.decl.values = NULL;
+      ls->ast->curnode->u.decl.isfrom = 0;
+    }
+  }
   fs->nactvar = cast_short(fs->nactvar + nvars); /* activate declaration */
 }
 
@@ -4166,7 +4588,17 @@ static void globalstatfunc(LexState *ls, int line) {
 static int funcname(LexState *ls, expdesc *v) {
   /* funcname -> NAME {fieldsel} [':' NAME] */
   int ismethod = 0;
+  int nameline = ls->linenumber;
+  int namecol = ls->tokencolumn;
+  TString *firstname = ls->t.seminfo.ts;  /* capture before singlevar */
   singlevar(ls, v);
+  /* Create AST_NAME for the base name (singlevar doesn't set v->ast) */
+  if (AST_ACTIVE(ls)) {
+    v->ast = lusA_newnode(ls->ast, AST_NAME, nameline, namecol);
+    v->ast->u.var.name = firstname;
+    v->ast->u.var.attrkind = 0;
+    v->ast->u.var.runtimeattrs = NULL;
+  }
   while (ls->t.token == '.')
     fieldsel(ls, v);
   if (ls->t.token == ':') {
@@ -4219,9 +4651,14 @@ static void exprstat(LexState *ls) {
 
         /* Parse constructor and assign fields */
         int line = ls->linenumber;
+        LusAstNode *tbl_ast = NULL;
+        if (AST_ACTIVE(ls))
+          tbl_ast = lusA_newnode(ls->ast, AST_TABLE, line, ls->tokencolumn);
         checknext(ls, '{');
 
         while (ls->t.token != '}') {
+          int fline = ls->linenumber;
+          int fcol = ls->tokencolumn;
           TString *fieldname = str_checkname(ls);
           lu_byte fieldkind = getvarattribute(ls, VDKREG);
           checknext(ls, '=');
@@ -4240,6 +4677,17 @@ static void exprstat(LexState *ls) {
           /* Parse expression and assign to field's register */
           expdesc e;
           expr(ls, &e);
+
+          /* AST: add tablefield */
+          if (AST_ACTIVE(ls) && tbl_ast) {
+            LusAstNode *tf = lusA_newnode(ls->ast, AST_TABLEFIELD, fline, fcol);
+            LusAstNode *key = lusA_newnode(ls->ast, AST_STRING, fline, fcol);
+            key->u.str = fieldname;
+            tf->u.field.key = key;
+            tf->u.field.value = e.ast;
+            lusA_addchild(tbl_ast, tf);
+          }
+
           luaK_exp2nextreg(fs, &e);
           /* Move result to field's register */
           if (fs->freereg - 1 != field->ridx) {
@@ -4255,6 +4703,14 @@ static void exprstat(LexState *ls) {
         }
 
         check_match(ls, '}', '{', line);
+
+        /* Store AST: LHS = group name, RHS = constructor table */
+        if (AST_ACTIVE(ls) && ls->ast->curnode) {
+          AST_SETEND_LAST(tbl_ast, ls);
+          ls->ast->curnode->u.assign.lhs = v.v.ast;
+          ls->ast->curnode->u.assign.rhs = tbl_ast;
+          ls->ast->curnode->u.assign.isfrom = 0;
+        }
         return; /* handled */
       }
     }
@@ -4270,12 +4726,20 @@ static void exprstat(LexState *ls) {
     check_condition(ls, v.v.k == VCALL, "syntax error");
     inst = &getinstruction(fs, &v.v);
     SETARG_C(*inst, 1); /* call statement uses no results */
-    /* Store call AST - change node type to CALLSTAT */
+    /* Store call AST - change node type to CALLSTAT.
+    ** Preserve the method name if the expression was a method call. */
     if (AST_ACTIVE(ls) && ls->ast->curnode) {
-      ls->ast->curnode->type = AST_CALLSTAT;
-      ls->ast->curnode->u.call.func = v.v.ast ? v.v.ast->u.call.func : NULL;
-      ls->ast->curnode->u.call.args = v.v.ast ? v.v.ast->u.call.args : NULL;
-      ls->ast->curnode->u.call.method = NULL;
+      if (v.v.ast && v.v.ast->type == AST_METHODCALL) {
+        ls->ast->curnode->type = AST_CALLSTAT;
+        ls->ast->curnode->u.call.func = v.v.ast->u.call.func;
+        ls->ast->curnode->u.call.args = v.v.ast->u.call.args;
+        ls->ast->curnode->u.call.method = v.v.ast->u.call.method;
+      } else {
+        ls->ast->curnode->type = AST_CALLSTAT;
+        ls->ast->curnode->u.call.func = v.v.ast ? v.v.ast->u.call.func : NULL;
+        ls->ast->curnode->u.call.args = v.v.ast ? v.v.ast->u.call.args : NULL;
+        ls->ast->curnode->u.call.method = NULL;
+      }
     }
   }
 }
@@ -4290,6 +4754,11 @@ static void retstat(LexState *ls) {
     nret = 0; /* return no values */
   else {
     nret = explist(ls, &e); /* optional return values */
+    /* Capture return values in AST */
+    if (AST_ACTIVE(ls) && ls->ast->curnode &&
+        ls->ast->curnode->type == AST_RETURN) {
+      ls->ast->curnode->u.ret.values = e.ast;
+    }
     if (hasmultret(e.k)) {
       luaK_setmultret(fs, &e);
       if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc) { /* tail call? */
@@ -4407,27 +4876,46 @@ static void statement(LexState *ls) {
     break;
   }
   case TK_GLOBAL: { /* stat -> globalstatfunc */
-    if (AST_ACTIVE(ls))
+    if (AST_ACTIVE(ls)) {
       node = lusA_newnode(ls->ast, AST_GLOBAL, line, column);
+      ls->ast->curnode = node;
+    }
     globalstatfunc(ls, line);
+    if (AST_ACTIVE(ls))
+      ls->ast->curnode = NULL;
     break;
   }
   case TK_DBCOLON: { /* stat -> label */
     if (AST_ACTIVE(ls))
       node = lusA_newnode(ls->ast, AST_LABEL, line, column);
     luaX_next(ls); /* skip double colon */
-    labelstat(ls, str_checkname(ls), line);
+    {
+      TString *labelname = str_checkname(ls);
+      if (AST_ACTIVE(ls) && node)
+        node->u.str = labelname;
+      labelstat(ls, labelname, line);
+    }
     break;
   }
   case TK_RETURN: { /* stat -> retstat */
-    if (AST_ACTIVE(ls))
+    if (AST_ACTIVE(ls)) {
       node = lusA_newnode(ls->ast, AST_RETURN, line, column);
+      ls->ast->curnode = node;
+    }
     luaX_next(ls); /* skip RETURN */
     retstat(ls);
+    if (AST_ACTIVE(ls))
+      ls->ast->curnode = NULL;
     break;
   }
   case TK_PROVIDE: { /* stat -> providestat */
+    if (AST_ACTIVE(ls)) {
+      node = lusA_newnode(ls->ast, AST_PROVIDE, line, column);
+      ls->ast->curnode = node;
+    }
     providestat(ls);
+    if (AST_ACTIVE(ls))
+      ls->ast->curnode = NULL;
     break;
   }
   case TK_BREAK: { /* stat -> breakstat */
@@ -4437,16 +4925,24 @@ static void statement(LexState *ls) {
     break;
   }
   case TK_CATCH: { /* stat -> catchstat */
-    if (AST_ACTIVE(ls))
+    if (AST_ACTIVE(ls)) {
       node = lusA_newnode(ls->ast, AST_CATCHSTAT, line, column);
+      ls->ast->curnode = node;
+    }
     catchstat(ls, line);
+    if (AST_ACTIVE(ls))
+      ls->ast->curnode = NULL;
     break;
   }
   case TK_GOTO: { /* stat -> 'goto' NAME */
-    if (AST_ACTIVE(ls))
+    if (AST_ACTIVE(ls)) {
       node = lusA_newnode(ls->ast, AST_GOTO, line, column);
+      ls->ast->curnode = node;
+    }
     luaX_next(ls); /* skip 'goto' */
     gotostat(ls, line);
+    if (AST_ACTIVE(ls))
+      ls->ast->curnode = NULL;
     break;
   }
 #if defined(LUA_COMPAT_GLOBAL)

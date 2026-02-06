@@ -35,6 +35,7 @@ typedef enum {
   AST_GOTO,       /* goto statement */
   AST_LABEL,      /* label */
   AST_CATCHSTAT,  /* catch statement */
+  AST_PROVIDE,    /* provide statement (inside do-expression) */
   AST_DO,         /* do block end */
   /* Expressions */
   AST_NIL,
@@ -54,7 +55,7 @@ typedef enum {
   AST_METHODCALL, /* method call (a:b()) */
   AST_ENUM,       /* enum expression */
   AST_OPTCHAIN,   /* optional chaining (?) */
-  AST_FROM,       /* from deconstruction */
+  AST_DOEXPR,     /* do-expression (do ... provide ... end) */
   AST_CATCHEXPR,  /* catch expression */
   AST_SLICE,      /* slice expression t[a,b] */
   AST_INTERP,     /* interpolated string */
@@ -87,10 +88,10 @@ typedef enum {
   AST_OP_SHL,
   AST_OP_SHR,
   AST_OP_CONCAT,
-  AST_OP_NE,
   AST_OP_EQ,
   AST_OP_LT,
   AST_OP_LE,
+  AST_OP_NE,
   AST_OP_GT,
   AST_OP_GE,
   AST_OP_AND,
@@ -119,6 +120,8 @@ typedef struct LusAstNode {
   int endcolumn;            /* end column number */
   struct LusAstNode *next;  /* for sibling lists */
   struct LusAstNode *child; /* first child node */
+  lu_byte quote;            /* for AST_STRING: original quote char (' or ") */
+  lu_byte paren;            /* 1 if expression was parenthesized: (expr) */
   union {
     /* AST_NUMBER */
     struct {
@@ -159,13 +162,12 @@ typedef struct LusAstNode {
     /* AST_IF */
     struct {
       struct LusAstNode *cond;     /* condition */
-      struct LusAstNode *thenpart; /* then block */
-      struct LusAstNode *elsepart; /* else/elseif or NULL */
+      /* then/elseif/else blocks are stored as children */
     } ifstat;
     /* AST_WHILE, AST_REPEAT */
     struct {
       struct LusAstNode *cond;
-      struct LusAstNode *body;
+      /* body statements are stored as children */
     } loop;
     /* AST_FORNUM */
     struct {
@@ -173,13 +175,13 @@ typedef struct LusAstNode {
       struct LusAstNode *init;  /* initial value */
       struct LusAstNode *limit; /* limit */
       struct LusAstNode *step;  /* step (or NULL for default 1) */
-      struct LusAstNode *body;
+      /* body statements are stored as children */
     } fornum;
     /* AST_FORGEN */
     struct {
       struct LusAstNode *names;   /* name list */
       struct LusAstNode *explist; /* iterator expressions */
-      struct LusAstNode *body;
+      /* body statements are stored as children */
     } forgen;
     /* AST_LOCAL, AST_GLOBAL */
     struct {
@@ -203,6 +205,7 @@ typedef struct LusAstNode {
       struct LusAstNode *func;
       struct LusAstNode *args;
       TString *method; /* method name for AST_METHODCALL */
+      lu_byte callstyle; /* 0=parens f(x), 1=string f"x", 2=table f{x} */
     } call;
     /* AST_TABLE */
     struct {
@@ -213,7 +216,7 @@ typedef struct LusAstNode {
       struct LusAstNode *key; /* NULL for array part */
       struct LusAstNode *value;
     } field;
-    /* AST_RETURN */
+    /* AST_RETURN, AST_PROVIDE */
     struct {
       struct LusAstNode *values; /* expression list (or NULL) */
     } ret;

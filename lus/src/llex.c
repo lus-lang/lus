@@ -610,6 +610,11 @@ static int llex(LexState *ls, SemInfo *seminfo) {
             /* Capture long comment content if AST is being built */
             if (ls->ast != NULL) {
               SemInfo seminfo;
+              /* Re-fill buffer with opening delimiter bytes that skip_sep
+              ** put there before the reset. read_long_string will add
+              ** one more bracket, and then use +sep to skip them all. */
+              for (size_t k = 1; k < sep; k++)
+                save(ls, '[');
               read_long_string(ls, &seminfo, sep);
               lusA_addcomment(ls->ast, startline, startcol, ls->linenumber,
                               ls->column, 1, seminfo.ts);
@@ -695,6 +700,7 @@ static int llex(LexState *ls, SemInfo *seminfo) {
       }
       case '"':
       case '\'': { /* short literal strings */
+        ls->strquote = (lu_byte)ls->current;  /* save quote for AST */
         read_string(ls, ls->current, seminfo);
         return TK_STRING;
       }

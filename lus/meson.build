@@ -106,6 +106,7 @@ lib_sources = files(
   'src/lbaselib.c',
   'src/lcorolib.c',
   'src/ldblib.c',
+  'src/lformat.c',
   'src/liolib.c',
   'src/lmathlib.c',
   'src/loadlib.c',

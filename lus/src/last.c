@@ -27,13 +27,14 @@ static const char *const ast_typenames[] = {
     "chunk",      "block",     "local",      "global",    "assign",
     "if",         "while",     "repeat",     "fornum",    "forgen",
     "funcstat",   "localfunc", "globalfunc", "return",    "callstat",
-    "break",      "goto",      "label",      "catchstat", "do",
-    "nil",        "true",      "false",      "number",    "string",
-    "vararg",     "name",      "index",      "field",     "binop",
-    "unop",       "table",     "funcexpr",   "callexpr",  "methodcall",
-    "enum",       "optchain",  "from",       "catchexpr", "slice",
-    "interp",     "param",     "namelist",   "explist",   "elseif",
-    "else",       "tablefield", "error_expr", "error_stat", NULL};
+    "break",      "goto",      "label",      "catchstat", "provide",
+    "do",         "nil",       "true",       "false",     "number",
+    "string",     "vararg",    "name",       "index",     "field",
+    "binop",      "unop",      "table",      "funcexpr",  "callexpr",
+    "methodcall", "enum",      "optchain",   "doexpr",    "catchexpr",
+    "slice",      "interp",    "param",      "namelist",  "explist",
+    "elseif",     "else",      "tablefield", "error_expr", "error_stat",
+    NULL};
 
 const char *lusA_typename(LusAstType type) {
   if (type >= 0 &&
@@ -403,6 +404,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_RETURN:
+  case AST_PROVIDE:
     nodetotable(L, node->u.ret.values);
     lua_setfield(L, -2, "values");
     break;
@@ -596,24 +598,17 @@ static int emit_node(FILE *f, LusAstNode *node) {
   }
   case AST_IF: {
     int cond = emit_node(f, node->u.ifstat.cond);
-    int then = emit_node(f, node->u.ifstat.thenpart);
-    int elsepart = emit_node(f, node->u.ifstat.elsepart);
     if (cond >= 0)
       fprintf(f, "  n%d -> n%d [label=\"cond\"];\n", myid, cond);
-    if (then >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"then\"];\n", myid, then);
-    if (elsepart >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"else\"];\n", myid, elsepart);
+    /* then/elseif/else blocks are in children */
     break;
   }
   case AST_WHILE:
   case AST_REPEAT: {
     int cond = emit_node(f, node->u.loop.cond);
-    int body = emit_node(f, node->u.loop.body);
     if (cond >= 0)
       fprintf(f, "  n%d -> n%d [label=\"cond\"];\n", myid, cond);
-    if (body >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"body\"];\n", myid, body);
+    /* body statements are in children */
     break;
   }
   default: {
@@ -887,6 +882,7 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
     break;
 
   case AST_RETURN:
+  case AST_PROVIDE:
     if (node->u.ret.values) {
       fprintf(f, ",\n%*s\"values\": ", indent + 2, "");
       emit_json_children(f, node->u.ret.values, indent + 2);
@@ -1272,25 +1268,32 @@ static void collect_names(lua_State *L, LusAstNode *node, const char ***names,
     break;
   case AST_IF:
     collect_names(L, node->u.ifstat.cond, names, count, cap);
-    collect_names(L, node->u.ifstat.thenpart, names, count, cap);
-    collect_names(L, node->u.ifstat.elsepart, names, count, cap);
+    /* then/elseif/else blocks are in children */
+    for (LusAstNode *c = node->child; c != NULL; c = c->next)
+      collect_names(L, c, names, count, cap);
     break;
   case AST_WHILE:
   case AST_REPEAT:
     collect_names(L, node->u.loop.cond, names, count, cap);
-    collect_names(L, node->u.loop.body, names, count, cap);
+    /* body statements are in children */
+    for (LusAstNode *c = node->child; c != NULL; c = c->next)
+      collect_names(L, c, names, count, cap);
     break;
   case AST_FORNUM:
     collect_names(L, node->u.fornum.var, names, count, cap);
     collect_names(L, node->u.fornum.init, names, count, cap);
     collect_names(L, node->u.fornum.limit, names, count, cap);
     collect_names(L, node->u.fornum.step, names, count, cap);
-    collect_names(L, node->u.fornum.body, names, count, cap);
+    /* body statements are in children */
+    for (LusAstNode *c = node->child; c != NULL; c = c->next)
+      collect_names(L, c, names, count, cap);
     break;
   case AST_FORGEN:
     collect_names(L, node->u.forgen.names, names, count, cap);
     collect_names(L, node->u.forgen.explist, names, count, cap);
-    collect_names(L, node->u.forgen.body, names, count, cap);
+    /* body statements are in children */
+    for (LusAstNode *c = node->child; c != NULL; c = c->next)
+      collect_names(L, c, names, count, cap);
     break;
   case AST_LOCAL:
   case AST_GLOBAL:
@@ -1301,6 +1304,7 @@ static void collect_names(lua_State *L, LusAstNode *node, const char ***names,
     collect_names(L, node->u.assign.rhs, names, count, cap);
     break;
   case AST_RETURN:
+  case AST_PROVIDE:
     collect_names(L, node->u.ret.values, names, count, cap);
     break;
   case AST_CATCHEXPR:
@@ -1522,10 +1526,9 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node,
                    "nested nil checks can use optional chaining: x?.y?.z");
     }
 
-    /* Recurse */
+    /* Recurse: condition + children (then/elseif/else blocks) */
     analyze_node(as, node->u.ifstat.cond, node);
     analyze_block(as, node->child);
-    analyze_node(as, node->u.ifstat.elsepart, node);
     break;
   }
 
@@ -1583,6 +1586,7 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node,
     break;
 
   case AST_RETURN:
+  case AST_PROVIDE:
     for (LusAstNode *v = node->u.ret.values; v != NULL; v = v->next)
       analyze_node(as, v, node);
     break;

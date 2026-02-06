@@ -18,6 +18,7 @@
 #include "last.h"
 #include "lauxlib.h"
 #include "ldo.h"
+#include "lformat.h"
 #include "llimits.h"
 #include "lmem.h"
 #include "lparser.h"
@@ -561,15 +562,23 @@ static int db_parse(lua_State *L) {
 
     if (error_recover && ast->root != NULL) {
       /* We have a partial AST - add the error to it and return partial AST */
-      /* Extract line/column from error message if possible (format: "file:line: ...") */
+      /* Extract line from error message.
+      ** Format: "[string \"...\"]:<line>: <msg>" or "<file>:<line>: <msg>"
+      ** or "?:?: <msg>" when source is NULL.
+      ** The first colon may be inside the source name (e.g. inside brackets),
+      ** so we look for "]:digit" first (string chunks), then fall back to
+      ** finding the first colon followed by a digit (file chunks). */
       int errline = 1, errcol = 1;
-      /* Error message format is typically "[string \"...\"]:<line>: <message>" */
-      const char *colon = errmsg ? strchr(errmsg, ':') : NULL;
-      if (colon && colon[1]) {
-        /* Skip to line number after first colon */
-        const char *linestart = colon + 1;
-        if (*linestart == ':') linestart++;  /* handle :: case */
-        errline = atoi(linestart);
+      if (errmsg) {
+        const char *p = strstr(errmsg, "]:");
+        if (p) {
+          /* String chunk: [string "name"]:LINE: ... */
+          errline = atoi(p + 2);
+        } else {
+          /* File chunk: filename:LINE: ... */
+          const char *colon = strchr(errmsg, ':');
+          if (colon) errline = atoi(colon + 1);
+        }
         if (errline <= 0) errline = 1;
       }
 
@@ -618,7 +627,32 @@ static int db_parse(lua_State *L) {
   return 2;
 }
 
+/*
+** debug.format(source [, chunkname [, indent_width]])
+** Format Lus source code. Returns formatted string, or nil + error message.
+*/
+static int db_format(lua_State *L) {
+  size_t srclen;
+  const char *source = luaL_checklstring(L, 1, &srclen);
+  const char *chunkname = luaL_optstring(L, 2, "=format");
+  int indent_width = (int)luaL_optinteger(L, 3, 4);
+  const char *errmsg = NULL;
+
+  char *result = lusF_format(L, source, srclen, chunkname,
+                              indent_width, 80, &errmsg);
+  if (result == NULL) {
+    lua_pushnil(L);
+    lua_pushstring(L, errmsg ? errmsg : "format error");
+    return 2;
+  }
+
+  lua_pushstring(L, result);
+  free(result);
+  return 1;
+}
+
 static const luaL_Reg dblib[] = {{"debug", db_debug},
+                                 {"format", db_format},
                                  {"getuservalue", db_getuservalue},
                                  {"gethook", db_gethook},
                                  {"getinfo", db_getinfo},

@@ -31,6 +31,7 @@
 #include "lstate.h"
 #include "lualib.h"
 #include "lworkerlib.h"
+#include "lformat.h"
 #include "lzio.h"
 
 #if !defined(LUA_PROGNAME)
@@ -115,8 +116,13 @@ static void print_usage(const char *badoption) {
   else
     lua_writestringerror("unrecognized option '%s'\n", badoption);
   lua_writestringerror(
-      "usage: %s [options] [script [args]]\n"
-      "Available options are:\n"
+      "usage: %s [command] [options] [script [args]]\n"
+      "\n"
+      "Commands:\n"
+      "  format    Format Lus source files\n"
+      "  run       Run a Lus script (default)\n"
+      "\n"
+      "Options:\n"
       "  -e stat   execute string 'stat'\n"
       "  -i        enter interactive mode after executing 'script'\n"
       "  -l mod    require library 'mod' into global 'mod'\n"
@@ -134,6 +140,235 @@ static void print_usage(const char *badoption) {
       "  --        stop handling options\n"
       "  -         stop handling options and execute stdin\n",
       progname);
+}
+
+/*
+** =======================================================
+** Subcommand infrastructure
+** =======================================================
+*/
+
+/* Forward declarations for functions defined later in the file */
+static void l_message(const char *pname, const char *msg);
+
+/* Forward declarations for subcommand handlers */
+static int cmd_format(lua_State *L, int argc, char **argv);
+
+/* Subcommand table entry */
+typedef struct {
+  const char *name;
+  int (*handler)(lua_State *L, int argc, char **argv);
+  const char *help;
+} Subcommand;
+
+static const Subcommand subcommands[] = {
+  {"format", cmd_format, "Format Lus source files"},
+  {NULL, NULL, NULL}
+};
+
+/*
+** Find a subcommand by name. Returns NULL if not found.
+*/
+static const Subcommand *find_subcommand(const char *name) {
+  const Subcommand *cmd;
+  for (cmd = subcommands; cmd->name != NULL; cmd++) {
+    if (strcmp(name, cmd->name) == 0)
+      return cmd;
+  }
+  return NULL;
+}
+
+/*
+** Read entire file contents into a malloc'd buffer. Returns NULL on error.
+*/
+static char *read_file_contents(const char *filename, size_t *out_len) {
+  FILE *f;
+  long len;
+  char *buf;
+
+  f = fopen(filename, "rb");
+  if (f == NULL) return NULL;
+
+  fseek(f, 0, SEEK_END);
+  len = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  if (len < 0) { fclose(f); return NULL; }
+
+  buf = (char *)malloc((size_t)len + 1);
+  if (buf == NULL) { fclose(f); return NULL; }
+
+  if (len > 0 && fread(buf, 1, (size_t)len, f) != (size_t)len) {
+    free(buf); fclose(f); return NULL;
+  }
+  buf[len] = '\0';
+  fclose(f);
+  if (out_len) *out_len = (size_t)len;
+  return buf;
+}
+
+/*
+** Read all of stdin into a malloc'd buffer.
+*/
+static char *read_stdin_contents(size_t *out_len) {
+  size_t cap = 4096, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (buf == NULL) return NULL;
+
+  while (!feof(stdin)) {
+    if (len + 4096 > cap) {
+      cap *= 2;
+      buf = (char *)realloc(buf, cap);
+      if (buf == NULL) return NULL;
+    }
+    size_t n = fread(buf + len, 1, 4096, stdin);
+    len += n;
+    if (n == 0) break;
+  }
+  buf[len] = '\0';
+  if (out_len) *out_len = len;
+  return buf;
+}
+
+/*
+** `lus format` subcommand handler.
+**
+** Usage: lus format [options] [file ...]
+**   --check    Check if files are formatted (exit 1 if not)
+**   --write    Format files in-place
+**   --stdin    Read from stdin, write to stdout
+**   --indent N Set indent width (default: 4)
+**   --help     Show help
+*/
+static int cmd_format(lua_State *L, int argc, char **argv) {
+  int check_mode = 0;
+  int write_mode = 0;
+  int stdin_mode = 0;
+  int indent_width = 4;
+  int file_start = -1;  /* index of first file argument */
+  int i;
+
+  /* Parse format-specific options */
+  for (i = 1; i < argc; i++) {
+    if (argv[i][0] != '-') {
+      file_start = i;
+      break;
+    }
+    if (strcmp(argv[i], "--check") == 0) {
+      check_mode = 1;
+    } else if (strcmp(argv[i], "--write") == 0) {
+      write_mode = 1;
+    } else if (strcmp(argv[i], "--stdin") == 0) {
+      stdin_mode = 1;
+    } else if (strcmp(argv[i], "--indent") == 0) {
+      if (i + 1 < argc) {
+        indent_width = atoi(argv[++i]);
+        if (indent_width <= 0) indent_width = 4;
+      } else {
+        l_message(progname, "'--indent' needs a number argument");
+        return 0;
+      }
+    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+      lua_writestringerror(
+        "Usage: %s format [options] [file ...]\n"
+        "\n"
+        "Options:\n"
+        "  --check    Check if files are formatted (exit 1 if not)\n"
+        "  --write    Format files in-place\n"
+        "  --stdin    Read from stdin, write to stdout\n"
+        "  --indent N Set indent width (default: 4)\n"
+        "  --help     Show this help\n"
+        "\n"
+        "With no --write or --check, prints formatted output to stdout.\n",
+        progname);
+      return 1;
+    } else {
+      l_message(progname,
+        lua_pushfstring(L, "format: unrecognized option '%s'", argv[i]));
+      return 0;
+    }
+  }
+
+  /* stdin mode */
+  if (stdin_mode) {
+    size_t srclen;
+    char *source = read_stdin_contents(&srclen);
+    if (source == NULL) {
+      l_message(progname, "failed to read stdin");
+      return 0;
+    }
+    const char *fmterr = NULL;
+    char *formatted = lusF_format(L, source, srclen, "=stdin",
+                                  indent_width, 80, &fmterr);
+    if (formatted == NULL) {
+      l_message(progname, fmterr ? fmterr : "format error");
+      free(source);
+      return 0;
+    }
+    if (check_mode) {
+      int same = (strcmp(source, formatted) == 0);
+      free(source);
+      free(formatted);
+      return same;
+    }
+    fputs(formatted, stdout);
+    free(source);
+    free(formatted);
+    return 1;
+  }
+
+  /* File mode: need at least one file */
+  if (file_start < 0) {
+    l_message(progname,
+      "format: no input files (use --stdin to read from stdin)");
+    return 0;
+  }
+
+  int all_formatted = 1;  /* for --check mode */
+
+  for (i = file_start; i < argc; i++) {
+    const char *filename = argv[i];
+    size_t srclen;
+    char *source = read_file_contents(filename, &srclen);
+    if (source == NULL) {
+      fprintf(stderr, "%s: cannot read '%s'\n", progname, filename);
+      return 0;
+    }
+
+    const char *fmterr = NULL;
+    char *formatted = lusF_format(L, source, srclen, filename,
+                                  indent_width, 80, &fmterr);
+    if (formatted == NULL) {
+      fprintf(stderr, "%s: %s\n", filename,
+              fmterr ? fmterr : "format error");
+      free(source);
+      return 0;
+    }
+
+    if (check_mode) {
+      if (strcmp(source, formatted) != 0) {
+        fprintf(stderr, "%s: not formatted\n", filename);
+        all_formatted = 0;
+      }
+    } else if (write_mode) {
+      FILE *f = fopen(filename, "wb");
+      if (f == NULL) {
+        fprintf(stderr, "%s: cannot write '%s'\n", progname, filename);
+        free(source);
+        free(formatted);
+        return 0;
+      }
+      fputs(formatted, f);
+      fclose(f);
+    } else {
+      fputs(formatted, stdout);
+    }
+
+    free(source);
+    free(formatted);
+  }
+
+  return check_mode ? all_formatted : 1;
 }
 
 /*
@@ -1607,6 +1842,28 @@ static int pmain(lua_State *L) {
   int argc = (int)lua_tointeger(L, 1);
   char **argv = (char **)lua_touserdata(L, 2);
   int script;
+
+  /* Check for subcommand before standard argument processing.
+  ** A subcommand is argv[1] that exactly matches a known command name
+  ** and does not start with '-'. If argv[1] is not a subcommand,
+  ** it falls through to the existing behavior (treated as a script). */
+  if (argc >= 2 && argv[1] != NULL && argv[1][0] != '-'
+      && g_bundle == NULL) {  /* skip subcommands for bundled executables */
+    const Subcommand *cmd = find_subcommand(argv[1]);
+    if (cmd != NULL) {
+      /* Initialize libraries for the subcommand */
+      luaL_checkversion(L);
+      luai_openlibs(L);
+      lua_gc(L, LUA_GCRESTART);
+      lua_gc(L, LUA_GCGEN);
+      /* Route to subcommand handler with shifted argv */
+      int result = cmd->handler(L, argc - 1, argv + 1);
+      lua_pushboolean(L, result);
+      return 1;
+    }
+    /* Not a subcommand -- fall through to existing behavior */
+  }
+
   int args = collectargs(argv, &script);
   int optlim = (script > 0) ? script : argc; /* first argv not an option */
   luaL_checkversion(L);        /* check that interpreter has correct version */

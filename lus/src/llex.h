@@ -114,6 +114,7 @@ typedef struct LexState {
   TString *brkn;       /* "break" name (used as a label) */
   TString *glbn;       /* "global" name (when not a reserved word) */
   struct LusAst *ast;  /* optional AST being built (NULL if not building) */
+  lu_byte strquote;    /* quote character of last string token (' or ") */
   /* string interpolation state */
   int interp_depth;     /* parenthesis depth inside $(...), 0 = not in interp */
   TString *interp_name; /* variable name for $name interpolation (NULL if $(expr)) */

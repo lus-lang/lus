@@ -1,4 +1,4 @@
-global print, require, assert, type, string, table, io, fs, debug, pledge, pairs, tostring
+global print, require, assert, type, string, table, io, fs, debug, pledge, pairs, tostring, error
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -46,6 +46,38 @@ for i = 1, #files do
         assert(content, "Could not read file: " .. file.path)
         local ok, ast = catch debug.parse(content, file.name)
         assert(ok, "Failed to parse file: " .. file.path)
+    end)
+    tests:it("format idempotent " .. file.name, function()
+        local content = readfile(file.path)
+        assert(content, "Could not read file: " .. file.path)
+        -- Format once
+        local formatted, err = debug.format(content, file.name)
+        assert(formatted, "Failed to format file: " .. file.path .. ": " .. tostring(err))
+        -- Format again: result must be identical (idempotent)
+        local formatted2, err2 = debug.format(formatted, file.name)
+        assert(formatted2, "Failed to re-format: " .. file.path .. ": " .. tostring(err2))
+        if formatted2 ~= formatted then
+            -- Find first differing line
+            local exp_lines = {}
+            for line in (formatted .. "\n"):gmatch("([^\n]*)\n") do
+                exp_lines[#exp_lines + 1] = line
+            end
+            local got_lines = {}
+            for line in (formatted2 .. "\n"):gmatch("([^\n]*)\n") do
+                got_lines[#got_lines + 1] = line
+            end
+            local diff_line = 0
+            local max = #exp_lines > #got_lines and #exp_lines or #got_lines
+            for j = 1, max do
+                if exp_lines[j] ~= got_lines[j] then
+                    diff_line = j
+                    break
+                end
+            end
+            error("Formatter not idempotent for " .. file.path .. " at line " .. diff_line
+                .. ":\n  first:  " .. tostring(exp_lines[diff_line])
+                .. "\n  second: " .. tostring(got_lines[diff_line]))
+        end
     end)
 end
 
