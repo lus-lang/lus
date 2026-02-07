@@ -1,0 +1,49 @@
+{
+  "comments": {
+    "lineComment": "--",
+    "blockComment": ["--[[", "]]"]
+  },
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string", "comment"] },
+    { "open": "'", "close": "'", "notIn": ["string", "comment"] },
+    { "open": "`", "close": "`", "notIn": ["string", "comment"] }
+  ],
+  "surroundingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"" },
+    { "open": "'", "close": "'" },
+    { "open": "`", "close": "`" }
+  ],
+  "folding": {
+    "markers": {
+      "start": "^\\s*--\\s*region\\b",
+      "end": "^\\s*--\\s*endregion\\b"
+    }
+  },
+  "indentationRules": {
+    "increaseIndentPattern": "\\b(function|if|for|while|repeat|do|else|elseif)\\b(?!.*\\bend\\b).*$|\\{\\s*$",
+    "decreaseIndentPattern": "^\\s*(end|else|elseif|until|\\})\\s*$"
+  },
+  "wordPattern": "[a-zA-Z_]\\w*",
+  "onEnterRules": [
+    {
+      "beforeText": "\\b(function|if|for|while|repeat|do|else|elseif)\\b.*$",
+      "afterText": "^\\s*end\\b",
+      "action": { "indent": "indentOutdent", "appendText": "\t" }
+    },
+    {
+      "beforeText": "\\b(function|if|for|while|repeat|do|else|elseif)\\b.*$",
+      "action": { "indent": "indent" }
+    }
+  ]
+}

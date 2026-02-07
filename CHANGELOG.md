@@ -4,9 +4,40 @@
 
 **Release date:** TBA
 
+### Lus runtime
+
 - Added string interpolation.
 - Added runtime attributes for altering local assignments.
 - Added error-processing handlers to `catch` expressions.
+- Brought `debug.parse` to parity with the internal parser.
+- Fixed `debug.parse` serializing linked lists (names, values, args, etc.) as single nodes instead of arrays.
+
+### Lus language server
+
+- Added initial language server foundation (JSON-RPC transport, LSP lifecycle, document sync).
+- Added syntax diagnostics and document symbol outline to the language server.
+- Added code formatting to the language server.
+- Added scope analysis with variable declaration tracking and name resolution.
+- Added semantic token highlighting (variables, parameters, functions, literals, comments).
+- Added go-to-definition, find-references, hover, and rename support.
+- Added cross-file analysis: `require()` resolution, module export extraction, and cross-file go-to-definition.
+- Added documentation comment extraction in hover info.
+- Added auto-completion for variables, globals, keywords, and stdlib members (all libraries including vector, fs, network, worker).
+- Added signature help with parameter hints for all stdlib functions and user-defined functions.
+- Added type inference for variables (number, string, boolean, table, function, vector, enum, thread, module) with table field tracking from constructors and assignments.
+- Added Lua 5.5 interop: `debug.parse` handles `.lua` files natively for cross-file resolution.
+- Added code folding for functions, control flow, tables, and comment blocks.
+- Added inlay hints for parameter names at call sites and inferred types on declarations.
+- Added workspace-wide symbol search with fuzzy matching.
+- Added linting: unused variable warnings and undefined global detection.
+
+### VS Code extension
+
+- Bootstrapped the `lus-vscode` extension with WASM-first architecture.
+- Added TextMate grammar and language configuration for `.lus` files.
+- Added WASM API for LSP message handling (`lus_load_lsp`, `lus_handle_message`).
+- Added non-blocking LSP entry point (`wasm.lus`) for WASM environments.
+- Added custom LSP message transport over WASM for the VS Code language client.
 
 ## 1.4.0
 

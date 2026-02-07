@@ -3,6 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$SCRIPT_DIR/../src"
+REPO_ROOT="$SCRIPT_DIR/../.."
 OUT_DIR="$SCRIPT_DIR/dist"
 
 mkdir -p "$OUT_DIR"
@@ -30,6 +31,7 @@ SOURCES=(
   "$SRC_DIR/larena.c"
   "$SRC_DIR/last.c"
   "$SRC_DIR/llex.c"
+  "$SRC_DIR/lformat.c"
   "$SRC_DIR/lmathlib.c"
   "$SRC_DIR/lmem.c"
   "$SRC_DIR/loadlib.c"
@@ -64,14 +66,14 @@ emcc "${SOURCES[@]}" \
   -pthread \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
-  -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_destroy","_malloc","_free"]' \
+  -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_destroy","_lus_load_lsp","_lus_handle_message","_malloc","_free"]' \
   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]' \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s PTHREAD_POOL_SIZE=4 \
-  -s ENVIRONMENT='web,worker' \
+  -s ENVIRONMENT='web,worker,node' \
   -s NO_EXIT_RUNTIME=1 \
+  --embed-file "$REPO_ROOT/lus-language@/lus-language" \
   -O2 \
   -DLUA_USE_C89
 
 echo "Build complete: $OUT_DIR/lus.js, $OUT_DIR/lus.wasm"
-

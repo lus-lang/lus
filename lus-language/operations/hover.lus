@@ -1,0 +1,112 @@
+global require, table, ipairs
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local modules = require("lus-language.analysis.modules")
+local types_mod = require("lus-language.analysis.types")
+
+local hover = {}
+
+-- Build a hover description from a declaration
+local function describe(decl, uri)
+  local kind = decl.kind
+  local name = decl.name
+  local parts = {}
+
+  if kind == "function" then
+    -- decl.node is the function AST node (localfunc/globalfunc) which has .params
+    local fnode = decl.node
+    if fnode and fnode.params then
+      local params = {}
+      for i = 1, #fnode.params do
+        local p = fnode.params[i]
+        params[#params + 1] = p.value or p.name or "?"
+      end
+      if fnode.isvararg then
+        params[#params + 1] = "..."
+      end
+      parts[#parts + 1] = "```lus\nfunction " .. name .. "(" .. table.concat(params, ", ") .. ")\n```"
+    else
+      parts[#parts + 1] = "```lus\nfunction " .. name .. "(...)\n```"
+    end
+
+  elseif kind == "param" then
+    parts[#parts + 1] = "```lus\n(parameter) " .. name .. "\n```"
+
+  elseif kind == "for" then
+    parts[#parts + 1] = "```lus\n(for variable) " .. name .. "\n```"
+
+  elseif kind == "global" then
+    local attr = ""
+    if decl.node and decl.node.attr == "const" then
+      attr = " <const>"
+    end
+    parts[#parts + 1] = "```lus\nglobal " .. name .. attr .. "\n```"
+
+  else
+    -- local
+    local attr = ""
+    if decl.node and decl.node.attr == "const" then
+      attr = " <const>"
+    end
+    parts[#parts + 1] = "```lus\nlocal " .. name .. attr .. "\n```"
+  end
+
+  -- Show inferred type if available (and not already shown by function signature)
+  if decl.type_info and kind ~= "function" then
+    local type_display = types_mod.display(decl.type_info)
+    if type_display ~= "unknown" then
+      parts[#parts + 1] = "*Type:* `" .. type_display .. "`"
+    end
+  end
+
+  -- Show documentation comment if present
+  if decl.doc then
+    parts[#parts + 1] = "---"
+    parts[#parts + 1] = decl.doc
+  end
+
+  -- Check if this is a require() variable and show module info
+  local tree = ast_mod.get(uri)
+  if tree then
+    local mod_name = modules.get_require_for_decl(tree, decl)
+    if mod_name then
+      parts[#parts + 1] = "---"
+      parts[#parts + 1] = "*Module:* `" .. mod_name .. "`"
+      local exports = modules.get_exports(mod_name)
+      if #exports > 0 then
+        local export_names = {}
+        for _, exp in ipairs(exports) do
+          export_names[#export_names + 1] = exp.name
+        end
+        parts[#parts + 1] = "*Exports:* " .. table.concat(export_names, ", ")
+      end
+    end
+  end
+
+  return table.concat(parts, "\n\n")
+end
+
+-- Compute hover info for a position.
+-- position is 0-based (LSP). Returns an LSP Hover or nil.
+function hover.compute(uri, position)
+  ast_mod.parse(uri)
+
+  local analysis = scope_mod.analyze(uri)
+  if not analysis then return nil end
+
+  local line = position.line + 1
+  local col = position.character + 1
+
+  local decl = scope_mod.get_declaration(analysis, line, col)
+  if not decl then return nil end
+
+  return {
+    contents = {
+      kind = "markdown",
+      value = describe(decl, uri),
+    },
+  }
+end
+
+return hover

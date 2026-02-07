@@ -1,0 +1,458 @@
+global require, ipairs, pairs, type, string, io, debug, table
+
+local uri_util = require("lus-language.util.uri")
+
+local modules = {}
+
+-- Workspace root path (set from initialize params)
+local root_path = nil
+
+-- Cache: module_name -> { uri, path, ast, exports, mtime }
+local module_cache = {}
+
+-- Dependency graph: uri -> { { module_name, resolved_uri }, ... }
+local deps = {}
+
+-- ---------------------------------------------------------------------------
+-- Configuration
+-- ---------------------------------------------------------------------------
+
+function modules.set_root(root_uri)
+  if root_uri then
+    root_path = uri_util.to_path(root_uri)
+  end
+end
+
+function modules.get_root()
+  return root_path
+end
+
+-- ---------------------------------------------------------------------------
+-- Path resolution
+-- ---------------------------------------------------------------------------
+
+-- Check if a file exists at the given path
+local function file_exists(path)
+  local f = io.open(path, "r")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
+-- Resolve a module name (e.g., "foo.bar") to a filesystem path.
+-- Tries: foo/bar.lus, foo/bar/init.lus, foo/bar.lua
+-- Returns the path or nil.
+local function resolve_path(module_name)
+  -- Convert dots to path separators
+  local rel = string.gsub(module_name, "%.", "/")
+
+  -- Base directories to search
+  local bases = {}
+  if root_path then
+    bases[#bases + 1] = root_path
+  end
+  bases[#bases + 1] = "."
+
+  -- Suffixes to try
+  local suffixes = {
+    "/" .. rel .. ".lus",
+    "/" .. rel .. "/init.lus",
+    "/" .. rel .. ".lua",
+  }
+
+  for _, base in ipairs(bases) do
+    for _, suffix in ipairs(suffixes) do
+      local path = base .. suffix
+      if file_exists(path) then
+        return path
+      end
+    end
+  end
+
+  return nil
+end
+
+-- Resolve a module name to a file URI. Returns uri or nil.
+function modules.resolve(module_name)
+  -- Check cache first
+  local cached = module_cache[module_name]
+  if cached then
+    return cached.uri
+  end
+
+  local path = resolve_path(module_name)
+  if not path then return nil end
+
+  return uri_util.from_path(path)
+end
+
+-- ---------------------------------------------------------------------------
+-- Background file loading and parsing
+-- ---------------------------------------------------------------------------
+
+-- Read a file from disk and return its contents, or nil.
+local function read_file(path)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local content = f:read("a")
+  f:close()
+  return content
+end
+
+-- Parse a module file and cache the result.
+-- Returns { uri, path, ast, exports } or nil.
+local function load_module(module_name)
+  local cached = module_cache[module_name]
+  if cached then return cached end
+
+  local path = resolve_path(module_name)
+  if not path then return nil end
+
+  local content = read_file(path)
+  if not content then return nil end
+
+  local mod_uri = uri_util.from_path(path)
+
+  local ok, ast = catch debug.parse(content, path, {
+    comments = true,
+    recover = true,
+  })
+
+  if not ok or not ast then
+    return nil
+  end
+
+  local entry = {
+    uri = mod_uri,
+    path = path,
+    ast = ast,
+    exports = nil,  -- lazily computed
+  }
+  module_cache[module_name] = entry
+  return entry
+end
+
+-- ---------------------------------------------------------------------------
+-- Export extraction
+-- ---------------------------------------------------------------------------
+
+-- Find the last return statement in a chunk's top-level children
+local function find_return(children)
+  if not children then return nil end
+  for i = #children, 1, -1 do
+    if children[i].type == "return" then
+      return children[i]
+    end
+  end
+  return nil
+end
+
+-- Extract exports from a module AST.
+-- Returns an array of { name, kind, line, column, params (for functions) }
+local function extract_exports(ast, mod_uri)
+  local exports = {}
+  if not ast or not ast.children then return exports end
+
+  -- Find what the module returns
+  local ret = find_return(ast.children)
+  if not ret or not ret.values then return exports end
+
+  local ret_val = ret.values[1]
+  if not ret_val then return exports end
+
+  if ret_val.type == "table" then
+    -- return { key = value, ... }
+    if ret_val.fields then
+      for _, field in ipairs(ret_val.fields) do
+        if field.key and field.key.type == "string" then
+          local exp = {
+            name = field.key.value,
+            kind = "field",
+            line = field.key.line or 0,
+            column = field.key.column or 0,
+            uri = mod_uri,
+          }
+          -- Check if the value is a function
+          if field.value and field.value.type == "funcexpr" then
+            exp.kind = "function"
+            exp.params = {}
+            if field.value.params then
+              for _, p in ipairs(field.value.params) do
+                exp.params[#exp.params + 1] = p.value or p.name or "?"
+              end
+            end
+          end
+          exports[#exports + 1] = exp
+        end
+      end
+    end
+
+  elseif ret_val.type == "name" then
+    -- return M  (where M is a local table)
+    -- Find function statements like function M.foo() and assignments M.foo = ...
+    local table_name = ret_val.value
+    for _, stmt in ipairs(ast.children) do
+      if stmt.type == "funcstat" and stmt.nameexpr then
+        -- function M.foo(...)
+        local ne = stmt.nameexpr
+        if ne.type == "field" and ne.table and ne.table.type == "name"
+           and ne.table.value == table_name and ne.key then
+          local fname = ne.key.value
+          if fname then
+            local exp = {
+              name = fname,
+              kind = "function",
+              line = stmt.line or 0,
+              column = stmt.column or 0,
+              uri = mod_uri,
+              params = {},
+            }
+            if stmt.params then
+              for _, p in ipairs(stmt.params) do
+                exp.params[#exp.params + 1] = p.value or p.name or "?"
+              end
+            end
+            exports[#exports + 1] = exp
+          end
+        end
+
+      elseif stmt.type == "assign" and stmt.lhs then
+        -- M.foo = value
+        for idx, lhs in ipairs(stmt.lhs) do
+          if lhs.type == "field" and lhs.table and lhs.table.type == "name"
+             and lhs.table.value == table_name and lhs.key then
+            local fname = lhs.key.value
+            if fname then
+              local exp = {
+                name = fname,
+                kind = "field",
+                line = lhs.key.line or lhs.line or 0,
+                column = lhs.key.column or lhs.column or 0,
+                uri = mod_uri,
+              }
+              -- Check if rhs is a function
+              if stmt.rhs and stmt.rhs[idx] and stmt.rhs[idx].type == "funcexpr" then
+                exp.kind = "function"
+                exp.params = {}
+                local fexpr = stmt.rhs[idx]
+                if fexpr.params then
+                  for _, p in ipairs(fexpr.params) do
+                    exp.params[#exp.params + 1] = p.value or p.name or "?"
+                  end
+                end
+              end
+              exports[#exports + 1] = exp
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return exports
+end
+
+-- ---------------------------------------------------------------------------
+-- Require detection
+-- ---------------------------------------------------------------------------
+
+-- Walk AST to find require() calls. Returns array of { module_name, node, line, column }
+local function find_requires(ast)
+  local result = {}
+  if not ast or not ast.children then return result end
+
+  local function walk(node)
+    if not node or type(node) ~= "table" then return end
+
+    -- Check for require("literal")
+    if (node.type == "callexpr" or node.type == "callstat") then
+      if node.func and node.func.type == "name" and node.func.value == "require" then
+        if node.args and node.args[1] and node.args[1].type == "string" then
+          result[#result + 1] = {
+            module_name = node.args[1].value,
+            node = node,
+            string_node = node.args[1],
+            line = node.line or 0,
+            column = node.column or 0,
+          }
+        end
+      end
+    end
+
+    -- Recurse into children
+    if node.children then
+      for _, child in ipairs(node.children) do
+        walk(child)
+      end
+    end
+    -- Recurse into expression fields
+    if node.left then walk(node.left) end
+    if node.right then walk(node.right) end
+    if node.operand then walk(node.operand) end
+    if node.func then walk(node.func) end
+    if node.args then
+      for _, arg in ipairs(node.args) do walk(arg) end
+    end
+    if node.table then walk(node.table) end
+    if node.key then walk(node.key) end
+    if node.cond then walk(node.cond) end
+    if node.init then walk(node.init) end
+    if node.limit then walk(node.limit) end
+    if node.step then walk(node.step) end
+    if node.expr then walk(node.expr) end
+    if node.base then walk(node.base) end
+    if node.suffix then walk(node.suffix) end
+    if node.values then
+      for _, v in ipairs(node.values) do walk(v) end
+    end
+    if node.lhs then
+      for _, v in ipairs(node.lhs) do walk(v) end
+    end
+    if node.rhs then
+      for _, v in ipairs(node.rhs) do walk(v) end
+    end
+    if node.explist then
+      for _, v in ipairs(node.explist) do walk(v) end
+    end
+    if node.names and type(node.names) == "table" and node.names[1] then
+      for _, v in ipairs(node.names) do walk(v) end
+    end
+    if node.fields then
+      for _, f in ipairs(node.fields) do
+        if f.key then walk(f.key) end
+        if f.value then walk(f.value) end
+      end
+    end
+    if node.parts then
+      for _, p in ipairs(node.parts) do walk(p) end
+    end
+    if node.nameexpr then walk(node.nameexpr) end
+  end
+
+  for _, child in ipairs(ast.children) do
+    walk(child)
+  end
+
+  return result
+end
+
+-- ---------------------------------------------------------------------------
+-- Public API
+-- ---------------------------------------------------------------------------
+
+-- Get exports for a module by name. Returns array of export descriptors.
+function modules.get_exports(module_name)
+  local entry = load_module(module_name)
+  if not entry then return {} end
+
+  if not entry.exports then
+    entry.exports = extract_exports(entry.ast, entry.uri)
+  end
+
+  return entry.exports
+end
+
+-- Get exports for a module by URI.
+function modules.get_exports_by_uri(mod_uri)
+  -- Search cache for this URI
+  for name, entry in pairs(module_cache) do
+    if entry.uri == mod_uri then
+      if not entry.exports then
+        entry.exports = extract_exports(entry.ast, entry.uri)
+      end
+      return entry.exports
+    end
+  end
+  return {}
+end
+
+-- Find all require() calls in an AST.
+function modules.find_requires(ast)
+  return find_requires(ast)
+end
+
+-- Check if a position (1-based) is on a require() string argument.
+-- Returns the resolved module URI if so, or nil.
+function modules.get_require_at(ast, line, col)
+  local reqs = find_requires(ast)
+  for _, req in ipairs(reqs) do
+    local sn = req.string_node
+    if sn and sn.line == line then
+      -- The AST column points to the string content; the quote is one before.
+      -- Cover the full span: opening quote through closing quote.
+      local start_col = (sn.column or 1) - 1  -- include opening quote
+      local end_col = start_col + #req.module_name + 2  -- include both quotes
+      if col >= start_col and col <= end_col then
+        return modules.resolve(req.module_name)
+      end
+    end
+  end
+  return nil
+end
+
+-- Find the module name that a local variable was assigned from require().
+-- e.g., local M = require("foo") -> returns "foo" for declaration of M.
+function modules.get_require_for_decl(ast, decl)
+  if not decl or not ast then return nil end
+
+  -- The declaration must be a local with a require() as its value
+  -- Walk the AST to find local statements where one of the values is require()
+  if not ast.children then return nil end
+
+  for _, stmt in ipairs(ast.children) do
+    if stmt.type == "local" and stmt.names and stmt.values then
+      for i, name_node in ipairs(stmt.names) do
+        local name = name_node.value or name_node.name
+        if name == decl.name and name_node.line == decl.line then
+          -- Check if the corresponding value is a require() call
+          local val = stmt.values[i]
+          if val and (val.type == "callexpr" or val.type == "callstat") then
+            if val.func and val.func.type == "name" and val.func.value == "require" then
+              if val.args and val.args[1] and val.args[1].type == "string" then
+                return val.args[1].value
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+-- Invalidate cached module info for a URI.
+function modules.invalidate(uri)
+  -- Remove from cache if this URI matches any cached module
+  for name, entry in pairs(module_cache) do
+    if entry.uri == uri then
+      module_cache[name] = nil
+    end
+  end
+  -- Clear deps for this URI
+  deps[uri] = nil
+end
+
+-- Build dependency list for a document.
+function modules.build_deps(uri, ast)
+  local reqs = find_requires(ast)
+  local dep_list = {}
+  for _, req in ipairs(reqs) do
+    local resolved = modules.resolve(req.module_name)
+    dep_list[#dep_list + 1] = {
+      module_name = req.module_name,
+      resolved_uri = resolved,
+    }
+  end
+  deps[uri] = dep_list
+  return dep_list
+end
+
+-- Get the dependency list for a document.
+function modules.get_deps(uri)
+  return deps[uri] or {}
+end
+
+return modules

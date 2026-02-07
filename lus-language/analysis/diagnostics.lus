@@ -1,0 +1,64 @@
+global require, ipairs
+
+local document = require("lus-language.document")
+local ast_mod = require("lus-language.analysis.ast")
+local protocol = require("lus-language.protocol")
+local transport = require("lus-language.transport")
+local linting = require("lus-language.analysis.linting")
+
+local diagnostics = {}
+
+-- LSP DiagnosticSeverity
+local SEVERITY_ERROR = 1
+
+-- Compute LSP Diagnostic objects from parse errors.
+-- Returns an array of diagnostics (may be empty).
+function diagnostics.compute(uri)
+  local _, errors = ast_mod.parse(uri)
+  if not errors then
+    return {}
+  end
+
+  local result = {}
+  for _, err in ipairs(errors) do
+    -- debug.parse lines/columns are 1-based; LSP is 0-based
+    local line = (err.line or 1) - 1
+    local col = (err.column or 1) - 1
+    result[#result + 1] = {
+      range = {
+        start = {line = line, character = col},
+        ["end"] = {line = line, character = col},
+      },
+      severity = SEVERITY_ERROR,
+      source = "lus",
+      message = err.message or "syntax error",
+    }
+  end
+  return result
+end
+
+-- Compute and publish diagnostics for a document.
+function diagnostics.publish(uri)
+  local diags = diagnostics.compute(uri)
+
+  -- Add lint warnings (only if parsing succeeded, i.e., we have an AST)
+  local tree = ast_mod.get(uri)
+  if tree then
+    local ok, lint_diags = catch linting.compute(uri)
+    if ok and lint_diags then
+      for _, d in ipairs(lint_diags) do
+        diags[#diags + 1] = d
+      end
+    end
+  end
+
+  transport.write_message(protocol.make_notification(
+    "textDocument/publishDiagnostics",
+    {
+      uri = uri,
+      diagnostics = diags,
+    }
+  ))
+end
+
+return diagnostics

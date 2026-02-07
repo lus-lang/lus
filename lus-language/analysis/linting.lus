@@ -1,0 +1,82 @@
+global require, ipairs, string
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+
+local linting = {}
+
+-- LSP DiagnosticSeverity
+local SEVERITY_WARNING = 2
+local SEVERITY_HINT = 4
+
+-- Standard library / built-in names that are always defined
+local STDLIB = {}
+for _, name in ipairs({
+  "print", "error", "assert", "type", "tostring", "tonumber",
+  "pairs", "ipairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen",
+  "setmetatable", "getmetatable", "require", "load", "dofile", "loadfile",
+  "collectgarbage", "pledge", "warn",
+  "string", "table", "math", "io", "os", "debug", "coroutine",
+  "utf8", "fs", "network", "worker", "vector", "package",
+  "fromjson", "tojson",
+  -- Lua internals
+  "_G", "_VERSION",
+}) do
+  STDLIB[name] = true
+end
+
+-- Names that start with _ are conventionally unused (e.g., _)
+local function is_intentionally_unused(name)
+  return string.sub(name, 1, 1) == "_"
+end
+
+-- Compute lint diagnostics for a document.
+-- Returns an array of LSP Diagnostic objects (warnings).
+function linting.compute(uri)
+  ast_mod.parse(uri)
+  local analysis = scope_mod.analyze(uri)
+  if not analysis then return {} end
+
+  local diagnostics = {}
+
+  -- Unused variable warnings
+  for _, decl in ipairs(analysis.declarations) do
+    if not is_intentionally_unused(decl.name) then
+      -- Check if the declaration has any references
+      if #decl.references == 0 then
+        -- Skip globals (they might be used in other files)
+        if decl.kind ~= "global" then
+          diagnostics[#diagnostics + 1] = {
+            range = {
+              start = {line = decl.line - 1, character = decl.column - 1},
+              ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
+            },
+            severity = SEVERITY_HINT,
+            source = "lus",
+            message = "Unused " .. decl.kind .. " '" .. decl.name .. "'",
+            tags = {1}, -- Unnecessary (faded)
+          }
+        end
+      end
+    end
+  end
+
+  -- Undefined global warnings
+  for _, ref in ipairs(analysis.references) do
+    if not ref.declaration and not STDLIB[ref.name] then
+      diagnostics[#diagnostics + 1] = {
+        range = {
+          start = {line = ref.line - 1, character = ref.column - 1},
+          ["end"] = {line = ref.line - 1, character = ref.column - 1 + #ref.name},
+        },
+        severity = SEVERITY_WARNING,
+        source = "lus",
+        message = "Undefined global '" .. ref.name .. "'",
+      }
+    end
+  end
+
+  return diagnostics
+end
+
+return linting

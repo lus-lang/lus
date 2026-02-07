@@ -1,0 +1,250 @@
+global require, ipairs, pairs, type, string
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local modules = require("lus-language.analysis.modules")
+local types_mod = require("lus-language.analysis.types")
+local sig_mod = require("lus-language.operations.signature")
+local document = require("lus-language.document")
+
+local inlay_hints = {}
+
+-- LSP InlayHintKind
+local KIND_TYPE = 1
+local KIND_PARAMETER = 2
+
+-- ---------------------------------------------------------------------------
+-- Parameter name hints at call sites
+-- ---------------------------------------------------------------------------
+
+-- Get parameter names for a function call.
+-- Returns array of param names or nil.
+local function get_param_names(func_node, analysis, uri)
+  if not func_node then return nil end
+
+  -- Simple name: look up in scope or stdlib
+  if func_node.type == "name" then
+    local name = func_node.value
+    -- Check stdlib signatures
+    local stdlib = sig_mod.STDLIB_SIGNATURES
+    if stdlib and stdlib[name] then
+      return stdlib[name]
+    end
+    -- Check scope for user-defined function
+    if analysis then
+      local s = scope_mod.get_scope_at(analysis.root, func_node.line or 0)
+      if s then
+        local visible = scope_mod.get_visible(s)
+        local decl = visible[name]
+        if decl and decl.type_info and decl.type_info.tag == "function" then
+          return decl.type_info.params
+        end
+        if decl and decl.node and decl.node.params then
+          local params = {}
+          for _, p in ipairs(decl.node.params) do
+            params[#params + 1] = p.value or p.name or "?"
+          end
+          return params
+        end
+      end
+    end
+    return nil
+  end
+
+  -- Field access: table.method
+  if func_node.type == "field" and func_node.table
+     and func_node.table.type == "name" and func_node.key then
+    local tname = func_node.table.value
+    local fname = func_node.key.value
+    if tname and fname then
+      local full = tname .. "." .. fname
+      local stdlib = sig_mod.STDLIB_SIGNATURES
+      if stdlib and stdlib[full] then
+        return stdlib[full]
+      end
+      -- Check module exports
+      if analysis then
+        local tree = ast_mod.get(uri)
+        if tree then
+          local s = scope_mod.get_scope_at(analysis.root, func_node.line or 0)
+          if s then
+            local visible = scope_mod.get_visible(s)
+            local decl = visible[tname]
+            if decl then
+              local mod_name = modules.get_require_for_decl(tree, decl)
+              if mod_name then
+                local exports = modules.get_exports(mod_name)
+                for _, exp in ipairs(exports) do
+                  if exp.name == fname and exp.params then
+                    return exp.params
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+-- Check if an argument already matches the parameter name
+local function arg_matches_param(arg_node, param_name)
+  if arg_node and arg_node.type == "name" and arg_node.value == param_name then
+    return true
+  end
+  return false
+end
+
+-- Collect parameter hints from a call expression
+local function collect_call_hints(node, analysis, uri, hints)
+  local params = get_param_names(node.func, analysis, uri)
+  if not params or #params == 0 then return end
+  if not node.args then return end
+
+  -- Skip single-arg calls to common functions (print, error, type, etc.)
+  if #node.args == 1 and #params == 1 then
+    return
+  end
+  -- Skip vararg-only functions
+  if #params == 1 and params[1] == "..." then
+    return
+  end
+
+  for i, arg in ipairs(node.args) do
+    if i <= #params then
+      local pname = params[i]
+      if pname and pname ~= "..." and not arg_matches_param(arg, pname) then
+        hints[#hints + 1] = {
+          position = {
+            line = (arg.line or 1) - 1,
+            character = (arg.column or 1) - 1,
+          },
+          label = pname .. ":",
+          kind = KIND_PARAMETER,
+          paddingRight = true,
+        }
+      end
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Type hints for local declarations
+-- ---------------------------------------------------------------------------
+
+local function collect_type_hints(node, analysis, hints)
+  if node.type ~= "local" then return end
+  if not node.names then return end
+
+  for i, name_node in ipairs(node.names) do
+    local name = name_node.value or name_node.name
+    if name and analysis then
+      -- Find the declaration
+      local s = scope_mod.get_scope_at(analysis.root, name_node.line or 0)
+      if s then
+        local visible = scope_mod.get_visible(s)
+        local decl = visible[name]
+        if decl and decl.type_info and decl.type_info.tag ~= "unknown" then
+          local type_str = types_mod.display(decl.type_info)
+          if type_str ~= "unknown" then
+            hints[#hints + 1] = {
+              position = {
+                line = (name_node.line or 1) - 1,
+                character = (name_node.column or 1) - 1 + #name,
+              },
+              label = ": " .. type_str,
+              kind = KIND_TYPE,
+              paddingLeft = true,
+            }
+          end
+        end
+      end
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- AST walker
+-- ---------------------------------------------------------------------------
+
+local function walk(node, analysis, uri, hints)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  -- Call expressions: parameter hints
+  if ntype == "callexpr" or ntype == "callstat" or ntype == "methodcall" then
+    collect_call_hints(node, analysis, uri, hints)
+  end
+
+  -- Local declarations: type hints
+  if ntype == "local" then
+    collect_type_hints(node, analysis, hints)
+  end
+
+  -- Recurse
+  if node.children then
+    for _, child in ipairs(node.children) do
+      walk(child, analysis, uri, hints)
+    end
+  end
+  if node.values then
+    for _, v in ipairs(node.values) do walk(v, analysis, uri, hints) end
+  end
+  if node.cond then walk(node.cond, analysis, uri, hints) end
+  if node.func then walk(node.func, analysis, uri, hints) end
+  if node.args then
+    for _, a in ipairs(node.args) do walk(a, analysis, uri, hints) end
+  end
+  if node.left then walk(node.left, analysis, uri, hints) end
+  if node.right then walk(node.right, analysis, uri, hints) end
+  if node.operand then walk(node.operand, analysis, uri, hints) end
+  if node.expr then walk(node.expr, analysis, uri, hints) end
+  if node.lhs then
+    for _, l in ipairs(node.lhs) do walk(l, analysis, uri, hints) end
+  end
+  if node.rhs then
+    for _, r in ipairs(node.rhs) do walk(r, analysis, uri, hints) end
+  end
+  if node.base then walk(node.base, analysis, uri, hints) end
+  if node.suffix then walk(node.suffix, analysis, uri, hints) end
+end
+
+-- ---------------------------------------------------------------------------
+-- Public API
+-- ---------------------------------------------------------------------------
+
+function inlay_hints.compute(uri, range)
+  ast_mod.parse(uri)
+  local tree = ast_mod.get(uri)
+  if not tree then return {} end
+
+  local analysis = scope_mod.analyze(uri)
+
+  local hints = {}
+  if tree.children then
+    for _, child in ipairs(tree.children) do
+      walk(child, analysis, uri, hints)
+    end
+  end
+
+  -- Filter to range if provided
+  if range then
+    local start_line = range.start.line
+    local end_line = range["end"].line
+    local filtered = {}
+    for _, hint in ipairs(hints) do
+      if hint.position.line >= start_line and hint.position.line <= end_line then
+        filtered[#filtered + 1] = hint
+      end
+    end
+    return filtered
+  end
+
+  return hints
+end
+
+return inlay_hints

@@ -1,0 +1,541 @@
+global require, ipairs, type, table, string
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+
+local semantic_tokens = {}
+
+-- Token type indices (must match the legend in protocol.lus)
+local TOKEN_VARIABLE = 0
+local TOKEN_PARAMETER = 1
+local TOKEN_FUNCTION = 2
+local TOKEN_METHOD = 3
+local TOKEN_PROPERTY = 9
+local TOKEN_NUMBER = 6
+local TOKEN_STRING = 5
+local TOKEN_COMMENT = 7
+local TOKEN_ENUM = 10
+local TOKEN_ENUM_MEMBER = 11
+
+-- Token modifier bits
+local MOD_DECLARATION = 1    -- bit 0
+local MOD_READONLY = 2       -- bit 1
+local MOD_DEFAULT_LIB = 4   -- bit 2
+
+-- Standard library names for defaultLibrary modifier
+local STDLIB = {}
+for _, name in ipairs({
+  "print", "error", "assert", "type", "tostring", "tonumber",
+  "pairs", "ipairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen",
+  "setmetatable", "getmetatable", "require", "load", "dofile",
+  "collectgarbage", "pledge",
+  "string", "table", "math", "io", "os", "debug", "coroutine",
+  "utf8", "fs", "network", "worker",
+  "fromjson", "tojson",
+}) do
+  STDLIB[name] = true
+end
+
+-- ---------------------------------------------------------------------------
+-- Token collection
+-- ---------------------------------------------------------------------------
+
+local tokens  -- collected token list during a walk
+
+local function add_token(line, col, length, token_type, modifiers)
+  tokens[#tokens + 1] = {
+    line = line,
+    col = col,
+    length = length,
+    token_type = token_type,
+    modifiers = modifiers or 0,
+  }
+end
+
+-- Forward declarations
+local walk_expr
+local walk_node
+local walk_children
+
+-- Determine the token type for a name reference based on scope analysis
+local function classify_name(ref)
+  local decl = ref.declaration
+  if not decl then
+    -- Unresolved: treat as variable (possibly stdlib)
+    local mods = 0
+    if STDLIB[ref.name] then mods = MOD_DEFAULT_LIB end
+    return TOKEN_VARIABLE, mods
+  end
+
+  local kind = decl.kind
+  if kind == "param" then
+    return TOKEN_PARAMETER, 0
+  elseif kind == "function" then
+    return TOKEN_FUNCTION, 0
+  elseif kind == "for" then
+    return TOKEN_VARIABLE, MOD_READONLY
+  elseif kind == "global" then
+    local mods = 0
+    if STDLIB[ref.name] then mods = MOD_DEFAULT_LIB end
+    return TOKEN_VARIABLE, mods
+  else
+    -- local
+    local mods = 0
+    if decl.node and decl.node.attr == "const" then
+      mods = MOD_READONLY
+    end
+    return TOKEN_VARIABLE, mods
+  end
+end
+
+-- Walk an expression for semantic tokens
+walk_expr = function(node, analysis)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  if ntype == "name" then
+    -- Look up this reference in the analysis
+    local ref = scope_mod.find_at(analysis, node.line, node.column)
+    local token_type, mods = TOKEN_VARIABLE, 0
+    if ref then
+      token_type, mods = classify_name(ref)
+    elseif STDLIB[node.value] then
+      mods = MOD_DEFAULT_LIB
+    end
+    add_token(node.line, node.column, #node.value, token_type, mods)
+
+  elseif ntype == "number" then
+    if node.endcolumn and node.column then
+      local len = node.endcolumn - node.column + 1
+      add_token(node.line, node.column, len, TOKEN_NUMBER, 0)
+    end
+
+  elseif ntype == "string" then
+    if node.endcolumn and node.column and node.endline == node.line then
+      -- Single-line string: include quotes
+      local len = node.endcolumn - node.column + 1
+      add_token(node.line, node.column, len, TOKEN_STRING, 0)
+    end
+
+  elseif ntype == "binop" then
+    walk_expr(node.left, analysis)
+    walk_expr(node.right, analysis)
+
+  elseif ntype == "unop" then
+    walk_expr(node.operand, analysis)
+
+  elseif ntype == "callexpr" or ntype == "callstat" then
+    walk_expr(node.func, analysis)
+    if node.args then
+      for _, arg in ipairs(node.args) do
+        walk_expr(arg, analysis)
+      end
+    end
+
+  elseif ntype == "methodcall" then
+    walk_expr(node.func, analysis)
+    -- The method name is a property
+    if node.method then
+      -- Method name position is not directly in the AST;
+      -- it's part of the func node, so skip for now
+    end
+    if node.args then
+      for _, arg in ipairs(node.args) do
+        walk_expr(arg, analysis)
+      end
+    end
+
+  elseif ntype == "field" then
+    walk_expr(node.table, analysis)
+    -- The field key is a property access
+    if node.key and node.key.type == "string" and node.key.line then
+      add_token(node.key.line, node.key.column, #node.key.value, TOKEN_PROPERTY, 0)
+    end
+
+  elseif ntype == "index" then
+    walk_expr(node.table, analysis)
+    walk_expr(node.key, analysis)
+
+  elseif ntype == "table" then
+    if node.fields then
+      for _, f in ipairs(node.fields) do
+        if f.key then walk_expr(f.key, analysis) end
+        if f.value then walk_expr(f.value, analysis) end
+      end
+    end
+
+  elseif ntype == "funcexpr" then
+    -- Params are declarations
+    if node.params then
+      for _, p in ipairs(node.params) do
+        local pname = p.value or p.name
+        if pname and p.line then
+          add_token(p.line, p.column, #pname, TOKEN_PARAMETER, MOD_DECLARATION)
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "catchexpr" then
+    walk_expr(node.expr, analysis)
+
+  elseif ntype == "optchain" then
+    walk_expr(node.base, analysis)
+    walk_expr(node.suffix, analysis)
+
+  elseif ntype == "slice" then
+    walk_expr(node.table, analysis)
+    if node.start then walk_expr(node.start, analysis) end
+    if node.finish then walk_expr(node.finish, analysis) end
+
+  elseif ntype == "interp" then
+    if node.parts then
+      for _, part in ipairs(node.parts) do
+        walk_expr(part, analysis)
+      end
+    end
+
+  elseif ntype == "doexpr" then
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "enum" then
+    -- Enum members
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name and name_node.line then
+          add_token(name_node.line, name_node.column, #name, TOKEN_ENUM_MEMBER, 0)
+        end
+      end
+    end
+  end
+end
+
+-- Walk a statement for semantic tokens
+walk_node = function(node, analysis)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  if ntype == "local" then
+    -- Names are declarations
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name and name_node.line then
+          local mods = MOD_DECLARATION
+          if name_node.attr == "const" then
+            mods = mods + MOD_READONLY
+          end
+          add_token(name_node.line, name_node.column, #name, TOKEN_VARIABLE, mods)
+        end
+      end
+    end
+    if node.values then
+      for _, v in ipairs(node.values) do
+        walk_expr(v, analysis)
+      end
+    end
+
+  elseif ntype == "global" then
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name and name_node.line then
+          local mods = MOD_DECLARATION
+          if STDLIB[name] then mods = mods + MOD_DEFAULT_LIB end
+          add_token(name_node.line, name_node.column, #name, TOKEN_VARIABLE, mods)
+        end
+      end
+    end
+    if node.values then
+      for _, v in ipairs(node.values) do
+        walk_expr(v, analysis)
+      end
+    end
+
+  elseif ntype == "assign" then
+    if node.lhs then
+      for _, lhs in ipairs(node.lhs) do
+        walk_expr(lhs, analysis)
+      end
+    end
+    if node.rhs then
+      for _, rhs in ipairs(node.rhs) do
+        walk_expr(rhs, analysis)
+      end
+    end
+
+  elseif ntype == "localfunc" or ntype == "globalfunc" then
+    -- Function name is a declaration
+    if node.name and node.line then
+      add_token(node.line, node.column, #node.name, TOKEN_FUNCTION, MOD_DECLARATION)
+    end
+    -- Params are declarations
+    if node.params then
+      for _, p in ipairs(node.params) do
+        local pname = p.value or p.name
+        if pname and p.line then
+          add_token(p.line, p.column, #pname, TOKEN_PARAMETER, MOD_DECLARATION)
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "funcstat" then
+    if node.nameexpr then
+      walk_expr(node.nameexpr, analysis)
+    end
+    if node.params then
+      for _, p in ipairs(node.params) do
+        local pname = p.value or p.name
+        if pname and p.line then
+          add_token(p.line, p.column, #pname, TOKEN_PARAMETER, MOD_DECLARATION)
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "fornum" then
+    -- Loop variable
+    if node.var then
+      local name = node.var.value or node.var.name
+      if name and node.var.line then
+        add_token(node.var.line, node.var.column, #name, TOKEN_VARIABLE, MOD_DECLARATION + MOD_READONLY)
+      end
+    end
+    walk_expr(node.init, analysis)
+    walk_expr(node.limit, analysis)
+    if node.step then walk_expr(node.step, analysis) end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "forgen" then
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name and name_node.line then
+          add_token(name_node.line, name_node.column, #name, TOKEN_VARIABLE, MOD_DECLARATION + MOD_READONLY)
+        end
+      end
+    end
+    if node.explist then
+      for _, e in ipairs(node.explist) do
+        walk_expr(e, analysis)
+      end
+    end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "if" then
+    if node.cond then
+      if node.cond.type == "assign" then
+        -- If-assignment: walk lhs as declarations, rhs as expressions
+        if node.cond.lhs then
+          for _, lhs in ipairs(node.cond.lhs) do
+            if lhs.type == "name" and lhs.line then
+              add_token(lhs.line, lhs.column, #lhs.value, TOKEN_VARIABLE, MOD_DECLARATION)
+            end
+          end
+        end
+        if node.cond.rhs then
+          for _, rhs in ipairs(node.cond.rhs) do
+            walk_expr(rhs, analysis)
+          end
+        end
+      else
+        walk_expr(node.cond, analysis)
+      end
+    end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "while" then
+    if node.cond then
+      if node.cond.type == "assign" then
+        if node.cond.lhs then
+          for _, lhs in ipairs(node.cond.lhs) do
+            if lhs.type == "name" and lhs.line then
+              add_token(lhs.line, lhs.column, #lhs.value, TOKEN_VARIABLE, MOD_DECLARATION)
+            end
+          end
+        end
+        if node.cond.rhs then
+          for _, rhs in ipairs(node.cond.rhs) do
+            walk_expr(rhs, analysis)
+          end
+        end
+      else
+        walk_expr(node.cond, analysis)
+      end
+    end
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "repeat" then
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+    walk_expr(node.cond, analysis)
+
+  elseif ntype == "return" or ntype == "provide" then
+    if node.values then
+      for _, v in ipairs(node.values) do
+        walk_expr(v, analysis)
+      end
+    end
+
+  elseif ntype == "callstat" then
+    walk_expr(node.func, analysis)
+    if node.args then
+      for _, arg in ipairs(node.args) do
+        walk_expr(arg, analysis)
+      end
+    end
+
+  elseif ntype == "catchstat" then
+    walk_expr(node.expr, analysis)
+
+  elseif ntype == "do" or ntype == "doexpr" then
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "elseif" then
+    walk_expr(node.cond, analysis)
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  elseif ntype == "else" then
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+
+  else
+    -- Fallback
+    if node.children then
+      walk_children(node.children, analysis)
+    end
+  end
+end
+
+walk_children = function(children, analysis)
+  for _, child in ipairs(children) do
+    walk_node(child, analysis)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Delta encoding
+-- ---------------------------------------------------------------------------
+
+local function sort_tokens(t)
+  table.sort(t, function(a, b)
+    if a.line ~= b.line then return a.line < b.line end
+    return a.col < b.col
+  end)
+end
+
+local function encode_tokens(t)
+  sort_tokens(t)
+  local data = {}
+  local prev_line = 0
+  local prev_col = 0
+  for _, tok in ipairs(t) do
+    local delta_line = tok.line - 1 - prev_line -- convert to 0-based
+    local delta_col
+    if delta_line == 0 then
+      delta_col = tok.col - 1 - prev_col -- convert to 0-based
+    else
+      delta_col = tok.col - 1 -- new line resets column
+    end
+    prev_line = tok.line - 1
+    prev_col = tok.col - 1
+    data[#data + 1] = delta_line
+    data[#data + 1] = delta_col
+    data[#data + 1] = tok.length
+    data[#data + 1] = tok.token_type
+    data[#data + 1] = tok.modifiers
+  end
+  return data
+end
+
+-- ---------------------------------------------------------------------------
+-- Public API
+-- ---------------------------------------------------------------------------
+
+-- Compute semantic tokens for a document.
+-- Returns { data = [...] } for the LSP response.
+function semantic_tokens.compute(uri)
+  local tree = ast_mod.get(uri)
+  if not tree then return {data = {}} end
+
+  -- Run scope analysis first
+  local analysis = scope_mod.analyze(uri)
+
+  -- Collect tokens
+  tokens = {}
+
+  -- Add comment tokens from the AST
+  if tree.comments then
+    for _, comment in ipairs(tree.comments) do
+      if comment.line and comment.column then
+        -- Estimate length from text
+        local len = #comment.text + 2 -- "--" prefix
+        if comment.islong then
+          len = #comment.text + 6 -- "--[[ ]]" wrapper
+        end
+        add_token(comment.line, comment.column, len, TOKEN_COMMENT, 0)
+      end
+    end
+  end
+
+  -- Walk the AST for all other tokens
+  if tree.children then
+    walk_children(tree.children, analysis)
+  end
+
+  local data = encode_tokens(tokens)
+  tokens = nil
+
+  return {data = data}
+end
+
+-- Token type legend (must match indices above)
+semantic_tokens.TOKEN_TYPES = {
+  "variable",    -- 0
+  "parameter",   -- 1
+  "function",    -- 2
+  "method",      -- 3
+  "keyword",     -- 4
+  "string",      -- 5
+  "number",      -- 6
+  "comment",     -- 7
+  "operator",    -- 8
+  "property",    -- 9
+  "enum",        -- 10
+  "enumMember",  -- 11
+}
+
+-- Token modifier legend (must match bits above)
+semantic_tokens.TOKEN_MODIFIERS = {
+  "declaration",    -- bit 0
+  "readonly",       -- bit 1
+  "defaultLibrary", -- bit 2
+}
+
+return semantic_tokens

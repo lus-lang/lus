@@ -1,0 +1,175 @@
+global require, ipairs, type, tostring
+
+local ast_mod = require("lus-language.analysis.ast")
+
+local symbols = {}
+
+-- LSP SymbolKind constants
+local SYMBOL_KIND = {
+  File = 1,
+  Module = 2,
+  Namespace = 3,
+  Package = 4,
+  Class = 5,
+  Method = 6,
+  Property = 7,
+  Field = 8,
+  Constructor = 9,
+  Enum = 10,
+  Interface = 11,
+  Function = 12,
+  Variable = 13,
+  Constant = 14,
+  String = 15,
+  Number = 16,
+  Boolean = 17,
+  Array = 18,
+}
+
+-- Build a 0-based LSP range from AST node line info (1-based)
+local function node_range(node)
+  local start_line = (node.line or 1) - 1
+  local start_col = (node.column or 1) - 1
+  local end_line = (node.endline or node.line or 1) - 1
+  local end_col = (node.endcolumn or node.column or 1) - 1
+  return {
+    start = {line = start_line, character = start_col},
+    ["end"] = {line = end_line, character = end_col},
+  }
+end
+
+-- Build a selection range (just the name) from a name node or string + line info
+local function name_range(node)
+  local line = (node.line or 1) - 1
+  local col = (node.column or 1) - 1
+  return {
+    start = {line = line, character = col},
+    ["end"] = {line = line, character = col},
+  }
+end
+
+-- Create a DocumentSymbol entry
+local function make_symbol(name, kind, range, selection_range, children)
+  local sym = {
+    name = name,
+    kind = kind,
+    range = range,
+    selectionRange = selection_range,
+  }
+  if children and #children > 0 then
+    sym.children = children
+  end
+  return sym
+end
+
+-- Extract the name string from a function AST node
+local function func_name(node)
+  if node.name then
+    return node.name
+  end
+  if node.nameexpr then
+    -- For funcstat with complex names like a.b.c
+    -- Try to reconstruct a reasonable name
+    local expr = node.nameexpr
+    if expr.type == "name" then
+      return expr.value
+    elseif expr.type == "field" and expr.key then
+      -- e.g., table.func -- show as "table.func"
+      local prefix = func_name({nameexpr = expr.table})
+      local key = expr.key
+      if type(key) == "table" and key.value then
+        key = key.value
+      end
+      if prefix then
+        return prefix .. "." .. key
+      end
+      return tostring(key)
+    elseif expr.type == "index" then
+      local prefix = func_name({nameexpr = expr.table})
+      if prefix then
+        return prefix .. "[]"
+      end
+    end
+  end
+  return "<anonymous>"
+end
+
+-- Recursively walk AST nodes and collect symbols
+local function walk(node, result)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  if ntype == "localfunc" or ntype == "globalfunc" or ntype == "funcstat" then
+    -- Function declaration
+    local name = func_name(node)
+    local kind = node.ismethod and SYMBOL_KIND.Method or SYMBOL_KIND.Function
+    local nested = {}
+    -- Walk the function body (statements are in children array)
+    if node.children then
+      for _, child in ipairs(node.children) do
+        walk(child, nested)
+      end
+    end
+    result[#result + 1] = make_symbol(
+      name, kind, node_range(node), name_range(node), nested
+    )
+
+  elseif ntype == "local" or ntype == "global" then
+    -- Variable declarations
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node
+        if type(name_node) == "table" then
+          name = name_node.value or name_node.name or "?"
+        end
+        local is_const = type(name_node) == "table"
+          and name_node.attr == "const"
+        local kind = is_const and SYMBOL_KIND.Constant or SYMBOL_KIND.Variable
+        result[#result + 1] = make_symbol(
+          name, kind, node_range(node), name_range(name_node), nil
+        )
+      end
+    end
+    -- Don't recurse into rhs values for variable declarations
+
+  elseif ntype == "assign" then
+    -- Top-level assignments: extract names from lhs
+    if node.lhs then
+      for _, lhs_node in ipairs(node.lhs) do
+        if type(lhs_node) == "table" and lhs_node.type == "name" then
+          result[#result + 1] = make_symbol(
+            lhs_node.value, SYMBOL_KIND.Variable,
+            node_range(node), name_range(lhs_node), nil
+          )
+        end
+      end
+    end
+
+  else
+    -- For block-like nodes, recurse into children
+    if node.children then
+      for _, child in ipairs(node.children) do
+        walk(child, result)
+      end
+    end
+  end
+end
+
+-- Compute document symbols for a given URI.
+-- Returns an array of DocumentSymbol objects (hierarchical).
+function symbols.compute(uri)
+  local tree = ast_mod.get(uri)
+  if not tree then return {} end
+
+  local result = {}
+  -- The root node is a "chunk" with children
+  if tree.children then
+    for _, child in ipairs(tree.children) do
+      walk(child, result)
+    end
+  end
+  return result
+end
+
+return symbols

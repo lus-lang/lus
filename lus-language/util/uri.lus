@@ -1,0 +1,50 @@
+global string, tonumber
+
+local uri = {}
+
+-- Percent-decode a string (e.g., "%20" -> " ")
+local function percent_decode(s)
+  return (string.gsub(s, "%%(%x%x)", function(hex)
+    return string.char(tonumber(hex, 16))
+  end))
+end
+
+-- Percent-encode a string for use in a URI path component
+-- Encodes everything except unreserved characters and path separators
+local function percent_encode(s)
+  return (string.gsub(s, "([^%w%-%.%_%~/])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end))
+end
+
+-- Parse a URI string into its components
+-- Returns { scheme, authority, path }
+function uri.parse(uri_string)
+  -- Match: scheme://authority/path
+  local scheme, authority, path =
+    string.match(uri_string, "^(%a[%w%+%.%-]*)://([^/]*)(.*)")
+  if not scheme then
+    return nil
+  end
+  return {
+    scheme = scheme,
+    authority = authority,
+    path = percent_decode(path),
+  }
+end
+
+-- Convert a file:// URI to a filesystem path
+function uri.to_path(uri_string)
+  local parts = uri.parse(uri_string)
+  if not parts then
+    return nil
+  end
+  return parts.path
+end
+
+-- Convert a filesystem path to a file:// URI
+function uri.from_path(path)
+  return "file://" .. percent_encode(path)
+end
+
+return uri

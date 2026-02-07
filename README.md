@@ -19,6 +19,8 @@ This is a monorepository containing the following projects:
 - [**`/lus-tests`**](https://github.com/lus-lang/lus/tree/main/lus-tests): Tests for integrity
 - [**`/lus-textmate`**](https://github.com/lus-lang/lus/tree/main/lus-textmate): TextMate grammar
 - [**`/lus-examples`**](https://github.com/lus-lang/lus/tree/main/lus-examples): Examples of Lus syntax
+- [**`/lus-language`**](https://github.com/lus-lang/lus/tree/main/lus-language): Language server for Lus
+- [**`/lus-vscode`**](https://github.com/lus-lang/lus/tree/main/lus-vscode): VSCode extension for Lus
 
 ## License
 

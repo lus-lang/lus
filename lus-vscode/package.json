@@ -1,0 +1,60 @@
+{
+  "name": "lus",
+  "displayName": "Lus",
+  "description": "Language support for Lus — syntax highlighting, diagnostics, completion, formatting, and more.",
+  "version": "0.1.0",
+  "publisher": "lus",
+  "license": "0BSD",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lus-lang/lus"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:lus"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "lus",
+        "aliases": [
+          "Lus",
+          "lus"
+        ],
+        "extensions": [
+          ".lus"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lus",
+        "scopeName": "source.lus",
+        "path": "./syntaxes/lus.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "@types/vscode": "^1.109.0",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

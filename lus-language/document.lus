@@ -1,0 +1,92 @@
+global require, ipairs, pairs
+
+local position = require("lus-language.util.position")
+
+local store = {}
+
+-- Internal table of open documents, keyed by URI
+local documents = {}
+
+-- Open a new document (textDocument/didOpen)
+function store.open(uri, version, text)
+  documents[uri] = {
+    uri = uri,
+    version = version,
+    text = text,
+    line_index = position.build_line_index(text),
+    ast = nil,
+    parse_errors = nil,
+    last_good_ast = nil,
+  }
+end
+
+-- Apply incremental changes to a document (textDocument/didChange)
+-- Changes must be applied in reverse order to preserve earlier offsets.
+function store.change(uri, version, changes)
+  local doc = documents[uri]
+  if not doc then return end
+
+  doc.version = version
+
+  -- Apply changes in reverse order to keep offsets valid
+  for i = #changes, 1, -1 do
+    local change = changes[i]
+    doc.text = position.apply_edit(
+      doc.text, change.range, change.text, doc.line_index
+    )
+    -- Rebuild line index after each edit since offsets shift
+    doc.line_index = position.build_line_index(doc.text)
+  end
+
+  -- Invalidate cached AST since content changed
+  doc.ast = nil
+  doc.parse_errors = nil
+end
+
+-- Close a document (textDocument/didClose)
+function store.close(uri)
+  documents[uri] = nil
+end
+
+-- Get a document entry by URI, or nil if not open
+function store.get(uri)
+  return documents[uri]
+end
+
+-- Get just the text content of a document, or nil if not open
+function store.get_text(uri)
+  local doc = documents[uri]
+  if doc then
+    return doc.text
+  end
+  return nil
+end
+
+-- Store a parsed AST and its errors on a document
+function store.set_ast(uri, ast, errors)
+  local doc = documents[uri]
+  if not doc then return end
+  doc.ast = ast
+  doc.parse_errors = errors
+  if ast then
+    doc.last_good_ast = ast
+  end
+end
+
+-- Get the current AST, falling back to the last good AST
+function store.get_ast(uri)
+  local doc = documents[uri]
+  if not doc then return nil end
+  return doc.ast or doc.last_good_ast
+end
+
+-- Return a list of all open document URIs
+function store.all()
+  local uris = {}
+  for uri in pairs(documents) do
+    uris[#uris + 1] = uri
+  end
+  return uris
+end
+
+return store

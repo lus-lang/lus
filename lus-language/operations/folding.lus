@@ -1,0 +1,154 @@
+global require, ipairs, type
+
+local ast_mod = require("lus-language.analysis.ast")
+
+local folding = {}
+
+-- Foldable AST node types and their kind
+local FOLDABLE = {
+  localfunc = "region",
+  globalfunc = "region",
+  funcstat = "region",
+  funcexpr = "region",
+  ["if"] = "region",
+  ["while"] = "region",
+  ["repeat"] = "region",
+  fornum = "region",
+  forgen = "region",
+  ["do"] = "region",
+  doexpr = "region",
+  table = "region",
+}
+
+-- Collect folding ranges from an AST node (recursive)
+local function walk(node, ranges)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  -- Check if this node is foldable and spans multiple lines
+  if FOLDABLE[ntype] then
+    local start_line = node.line
+    local end_line = node.endline
+    if start_line and end_line and end_line > start_line then
+      ranges[#ranges + 1] = {
+        startLine = start_line - 1,
+        startCharacter = (node.column or 1) - 1,
+        endLine = end_line - 1,
+        endCharacter = (node.endcolumn or 1) - 1,
+        kind = FOLDABLE[ntype],
+      }
+    end
+  end
+
+  -- Recurse into children
+  if node.children then
+    for _, child in ipairs(node.children) do
+      walk(child, ranges)
+    end
+  end
+
+  -- Recurse into expression sub-nodes that might contain foldable constructs
+  if node.values then
+    for _, v in ipairs(node.values) do walk(v, ranges) end
+  end
+  if node.cond then walk(node.cond, ranges) end
+  if node.init then walk(node.init, ranges) end
+  if node.limit then walk(node.limit, ranges) end
+  if node.step then walk(node.step, ranges) end
+  if node.expr then walk(node.expr, ranges) end
+  if node.left then walk(node.left, ranges) end
+  if node.right then walk(node.right, ranges) end
+  if node.operand then walk(node.operand, ranges) end
+  if node.func then walk(node.func, ranges) end
+  if node.args then
+    for _, a in ipairs(node.args) do walk(a, ranges) end
+  end
+  if node.base then walk(node.base, ranges) end
+  if node.suffix then walk(node.suffix, ranges) end
+  if node.nameexpr then walk(node.nameexpr, ranges) end
+  if node.lhs then
+    for _, l in ipairs(node.lhs) do walk(l, ranges) end
+  end
+  if node.rhs then
+    for _, r in ipairs(node.rhs) do walk(r, ranges) end
+  end
+  if node.explist then
+    for _, e in ipairs(node.explist) do walk(e, ranges) end
+  end
+  if node.parts then
+    for _, p in ipairs(node.parts) do walk(p, ranges) end
+  end
+end
+
+-- Collect comment folding ranges
+local function collect_comments(tree, ranges)
+  if not tree.comments then return end
+
+  -- Group consecutive single-line comments
+  local group_start = nil
+  local group_end = nil
+
+  for _, comment in ipairs(tree.comments) do
+    if comment.islong then
+      -- Long comments fold individually
+      local start_line = comment.line
+      local end_line = comment.endline or comment.line
+      if end_line > start_line then
+        ranges[#ranges + 1] = {
+          startLine = start_line - 1,
+          endLine = end_line - 1,
+          kind = "comment",
+        }
+      end
+    else
+      -- Single-line comments: group consecutive ones
+      local cline = comment.line
+      if group_start and cline == group_end + 1 then
+        group_end = cline
+      else
+        -- Flush previous group
+        if group_start and group_end > group_start then
+          ranges[#ranges + 1] = {
+            startLine = group_start - 1,
+            endLine = group_end - 1,
+            kind = "comment",
+          }
+        end
+        group_start = cline
+        group_end = cline
+      end
+    end
+  end
+
+  -- Flush last group
+  if group_start and group_end > group_start then
+    ranges[#ranges + 1] = {
+      startLine = group_start - 1,
+      endLine = group_end - 1,
+      kind = "comment",
+    }
+  end
+end
+
+-- Compute folding ranges for a document.
+function folding.compute(uri)
+  local tree = ast_mod.get(uri)
+  if not tree then return {} end
+
+  local ranges = {}
+
+  -- Collect code folding ranges
+  if tree.children then
+    for _, child in ipairs(tree.children) do
+      walk(child, ranges)
+    end
+  end
+
+  -- Collect comment folding ranges
+  collect_comments(tree, ranges)
+
+  return ranges
+end
+
+return folding

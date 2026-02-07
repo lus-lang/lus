@@ -1,0 +1,353 @@
+global require, ipairs, pairs, type, string, math, table
+
+local types = {}
+
+-- ---------------------------------------------------------------------------
+-- Type constructors
+-- ---------------------------------------------------------------------------
+
+function types.number()    return {tag = "number"} end
+function types.integer()   return {tag = "integer"} end
+function types.float()     return {tag = "float"} end
+function types.str()       return {tag = "string"} end
+function types.boolean()   return {tag = "boolean"} end
+function types.null()      return {tag = "nil"} end
+function types.unknown()   return {tag = "unknown"} end
+function types.vector()    return {tag = "vector"} end
+function types.thread()    return {tag = "thread"} end
+function types.userdata()  return {tag = "userdata"} end
+
+function types.func(params)
+  return {tag = "function", params = params or {}}
+end
+
+function types.tbl(fields)
+  return {tag = "table", fields = fields or {}}
+end
+
+function types.enumtype(members)
+  return {tag = "enum", enum_members = members or {}}
+end
+
+function types.module(module_name)
+  return {tag = "module", module_name = module_name}
+end
+
+-- ---------------------------------------------------------------------------
+-- Type queries
+-- ---------------------------------------------------------------------------
+
+-- Get the fields of a type (for table completion)
+function types.get_fields(type_info)
+  if not type_info then return nil end
+  if type_info.tag == "table" then
+    return type_info.fields
+  end
+  return nil
+end
+
+-- Add or update a field on a table type
+function types.merge_field(type_info, field_name, value_type, line, column)
+  if not type_info or type_info.tag ~= "table" then return end
+  if not type_info.fields then
+    type_info.fields = {}
+  end
+  type_info.fields[field_name] = {
+    type_info = value_type or types.unknown(),
+    line = line or 0,
+    column = column or 0,
+  }
+end
+
+-- Format a type for display (e.g., in hover)
+function types.display(type_info)
+  if not type_info then return "unknown" end
+
+  local tag = type_info.tag
+
+  if tag == "function" then
+    if type_info.params and #type_info.params > 0 then
+      return "function(" .. table.concat(type_info.params, ", ") .. ")"
+    end
+    return "function"
+
+  elseif tag == "table" then
+    if type_info.fields then
+      local names = {}
+      for name in pairs(type_info.fields) do
+        names[#names + 1] = name
+      end
+      table.sort(names)
+      if #names > 0 then
+        return "table {" .. table.concat(names, ", ") .. "}"
+      end
+    end
+    return "table"
+
+  elseif tag == "enum" then
+    if type_info.enum_members and #type_info.enum_members > 0 then
+      return "enum {" .. table.concat(type_info.enum_members, ", ") .. "}"
+    end
+    return "enum"
+
+  elseif tag == "module" then
+    if type_info.module_name then
+      return "module \"" .. type_info.module_name .. "\""
+    end
+    return "module"
+
+  else
+    return tag
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Arithmetic / operator result tables
+-- ---------------------------------------------------------------------------
+
+local ARITH_OPS = {
+  ["+"] = true, ["-"] = true, ["*"] = true, ["/"] = true,
+  ["//"] = true, ["%"] = true, ["^"] = true,
+  ["&"] = true, ["|"] = true, ["~"] = true, ["<<"] = true, [">>"] = true,
+}
+
+local COMPARE_OPS = {
+  ["=="] = true, ["~="] = true, ["<"] = true, ["<="] = true,
+  [">"] = true, [">="] = true,
+}
+
+-- ---------------------------------------------------------------------------
+-- Expression type inference
+-- ---------------------------------------------------------------------------
+
+-- Infer the type of an AST expression node.
+-- Returns a type_info table.
+function types.infer_expr(node)
+  if not node or type(node) ~= "table" then
+    return types.unknown()
+  end
+
+  local ntype = node.type
+
+  if ntype == "number" then
+    -- Distinguish integer vs float from the AST value
+    if type(node.value) == "number" then
+      if node.value == math.floor(node.value) and node.value ~= math.huge
+         and node.value ~= -math.huge then
+        return types.integer()
+      end
+      return types.float()
+    end
+    return types.number()
+
+  elseif ntype == "string" then
+    return types.str()
+
+  elseif ntype == "interp" then
+    -- String interpolation always produces a string
+    return types.str()
+
+  elseif ntype == "true" or ntype == "false" then
+    return types.boolean()
+
+  elseif ntype == "nil" then
+    return types.null()
+
+  elseif ntype == "table" then
+    -- Table constructor: extract field names and value types
+    -- Fields are stored in the children array as tablefield nodes
+    local fields = {}
+    if node.children then
+      for _, f in ipairs(node.children) do
+        if f.type == "tablefield" and f.key
+           and f.key.type == "string" and f.key.value then
+          local val_type = types.infer_expr(f.value)
+          fields[f.key.value] = {
+            type_info = val_type,
+            line = f.key.line or 0,
+            column = f.key.column or 0,
+          }
+        end
+      end
+    end
+    return types.tbl(fields)
+
+  elseif ntype == "funcexpr" then
+    local params = {}
+    if node.params then
+      for _, p in ipairs(node.params) do
+        params[#params + 1] = p.value or p.name or "?"
+      end
+    end
+    if node.isvararg then
+      params[#params + 1] = "..."
+    end
+    return types.func(params)
+
+  elseif ntype == "enum" then
+    local members = {}
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name then
+          members[#members + 1] = name
+        end
+      end
+    end
+    return types.enumtype(members)
+
+  elseif ntype == "callexpr" or ntype == "callstat" then
+    -- Check for well-known constructors
+    if node.func then
+      -- require("module")
+      if node.func.type == "name" and node.func.value == "require" then
+        if node.args and node.args[1] and node.args[1].type == "string" then
+          return types.module(node.args[1].value)
+        end
+        return types.module(nil)
+      end
+
+      -- vector.create(...)
+      if node.func.type == "field" and node.func.table
+         and node.func.table.type == "name"
+         and node.func.table.value == "vector"
+         and node.func.key and node.func.key.value == "create" then
+        return types.vector()
+      end
+
+      -- vector.clone(...)
+      if node.func.type == "field" and node.func.table
+         and node.func.table.type == "name"
+         and node.func.table.value == "vector"
+         and node.func.key and node.func.key.value == "clone" then
+        return types.vector()
+      end
+
+      -- coroutine.create(...) / coroutine.wrap(...)
+      if node.func.type == "field" and node.func.table
+         and node.func.table.type == "name"
+         and node.func.table.value == "coroutine"
+         and node.func.key then
+        local method = node.func.key.value
+        if method == "create" or method == "wrap" then
+          return types.thread()
+        end
+      end
+
+      -- table.clone(...)
+      if node.func.type == "field" and node.func.table
+         and node.func.table.type == "name"
+         and node.func.table.value == "table"
+         and node.func.key and node.func.key.value == "clone" then
+        return types.tbl()
+      end
+
+      -- tostring(...)
+      if node.func.type == "name" and node.func.value == "tostring" then
+        return types.str()
+      end
+
+      -- tonumber(...)
+      if node.func.type == "name" and node.func.value == "tonumber" then
+        return types.number()
+      end
+
+      -- type(...)
+      if node.func.type == "name" and node.func.value == "type" then
+        return types.str()
+      end
+
+      -- string.* functions mostly return strings
+      if node.func.type == "field" and node.func.table
+         and node.func.table.type == "name"
+         and node.func.table.value == "string" then
+        return types.str()
+      end
+    end
+    return types.unknown()
+
+  elseif ntype == "binop" then
+    local op = node.op
+    if op == ".." then
+      return types.str()
+    elseif ARITH_OPS[op] then
+      return types.number()
+    elseif COMPARE_OPS[op] then
+      return types.boolean()
+    elseif op == "and" then
+      -- `and` returns first falsy or last value; approximate as unknown
+      return types.unknown()
+    elseif op == "or" then
+      -- `or` returns first truthy; approximate as unknown
+      return types.unknown()
+    end
+    return types.unknown()
+
+  elseif ntype == "unop" then
+    local op = node.op
+    if op == "#" then
+      return types.integer()
+    elseif op == "not" then
+      return types.boolean()
+    elseif op == "-" then
+      return types.number()
+    elseif op == "~" then
+      return types.integer()
+    end
+    return types.unknown()
+
+  elseif ntype == "catchexpr" then
+    -- catch returns (ok, result...) where ok is boolean
+    return types.boolean()
+
+  elseif ntype == "slice" then
+    -- Slicing preserves the type of the sliced value
+    if node.table then
+      local base_type = types.infer_expr(node.table)
+      if base_type.tag == "string" or base_type.tag == "vector"
+         or base_type.tag == "table" then
+        return base_type
+      end
+    end
+    return types.unknown()
+
+  elseif ntype == "doexpr" then
+    -- Do expression evaluates to the provide'd value; hard to infer
+    return types.unknown()
+
+  elseif ntype == "vararg" then
+    return types.unknown()
+
+  end
+
+  return types.unknown()
+end
+
+-- ---------------------------------------------------------------------------
+-- Helpers for scope integration
+-- ---------------------------------------------------------------------------
+
+-- Infer type for a local/global declaration given its value node.
+-- If value_node is nil, returns unknown.
+function types.infer_decl_type(value_node)
+  if not value_node then
+    return types.unknown()
+  end
+  return types.infer_expr(value_node)
+end
+
+-- Infer type for a function declaration node (localfunc/globalfunc/funcstat)
+function types.infer_func_type(func_node)
+  local params = {}
+  if func_node.params then
+    for _, p in ipairs(func_node.params) do
+      params[#params + 1] = p.value or p.name or "?"
+    end
+  end
+  if func_node.isvararg then
+    params[#params + 1] = "..."
+  end
+  return types.func(params)
+end
+
+return types

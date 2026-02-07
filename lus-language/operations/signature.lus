@@ -1,0 +1,344 @@
+global require, ipairs, pairs, type, string, table
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local modules = require("lus-language.analysis.modules")
+local document = require("lus-language.document")
+
+local signature = {}
+
+-- ---------------------------------------------------------------------------
+-- Standard library signatures (function name -> param list)
+-- ---------------------------------------------------------------------------
+
+local STDLIB_SIGNATURES = {
+  -- Base
+  assert = {"v", "message"},
+  collectgarbage = {"opt", "arg"},
+  dofile = {"filename"},
+  error = {"message", "level"},
+  getmetatable = {"object"},
+  ipairs = {"t"},
+  loadfile = {"filename", "mode", "env"},
+  load = {"chunk", "chunkname", "mode", "env"},
+  next = {"t", "k"},
+  pairs = {"t"},
+  pledge = {"name..."},
+  print = {"..."},
+  warn = {"msg1", "..."},
+  rawequal = {"v1", "v2"},
+  rawlen = {"v"},
+  rawget = {"t", "k"},
+  rawset = {"t", "k", "v"},
+  select = {"index", "..."},
+  setmetatable = {"t", "metatable"},
+  tonumber = {"e", "base"},
+  tostring = {"v"},
+  type = {"v"},
+  require = {"modname"},
+  tojson = {"value", "filter"},
+  fromjson = {"s"},
+
+  -- string
+  ["string.byte"] = {"s", "i", "j"},
+  ["string.char"] = {"..."},
+  ["string.dump"] = {"function", "strip"},
+  ["string.find"] = {"s", "pattern", "init", "plain"},
+  ["string.format"] = {"formatstring", "..."},
+  ["string.gmatch"] = {"s", "pattern", "init"},
+  ["string.gsub"] = {"s", "pattern", "repl", "n"},
+  ["string.len"] = {"s"},
+  ["string.lower"] = {"s"},
+  ["string.match"] = {"s", "pattern", "init"},
+  ["string.rep"] = {"s", "n", "sep"},
+  ["string.reverse"] = {"s"},
+  ["string.sub"] = {"s", "i", "j"},
+  ["string.upper"] = {"s"},
+  ["string.pack"] = {"fmt", "..."},
+  ["string.packsize"] = {"fmt"},
+  ["string.unpack"] = {"fmt", "s", "pos"},
+  ["string.transcode"] = {"s", "from", "to"},
+
+  -- table
+  ["table.clone"] = {"t", "deep"},
+  ["table.concat"] = {"list", "sep", "i", "j"},
+  ["table.create"] = {"narray", "nhash"},
+  ["table.insert"] = {"list", "pos", "value"},
+  ["table.pack"] = {"..."},
+  ["table.unpack"] = {"list", "i", "j"},
+  ["table.remove"] = {"list", "pos"},
+  ["table.move"] = {"a1", "f", "e", "t", "a2"},
+  ["table.sort"] = {"list", "comp"},
+
+  -- math
+  ["math.abs"] = {"x"},
+  ["math.acos"] = {"x"},
+  ["math.asin"] = {"x"},
+  ["math.atan"] = {"y", "x"},
+  ["math.ceil"] = {"x"},
+  ["math.cos"] = {"x"},
+  ["math.deg"] = {"x"},
+  ["math.exp"] = {"x"},
+  ["math.floor"] = {"x"},
+  ["math.fmod"] = {"x", "y"},
+  ["math.frexp"] = {"x"},
+  ["math.log"] = {"x", "base"},
+  ["math.max"] = {"x", "..."},
+  ["math.min"] = {"x", "..."},
+  ["math.modf"] = {"x"},
+  ["math.rad"] = {"x"},
+  ["math.random"] = {"m", "n"},
+  ["math.randomseed"] = {"x", "y"},
+  ["math.sin"] = {"x"},
+  ["math.sqrt"] = {"x"},
+  ["math.tan"] = {"x"},
+  ["math.tointeger"] = {"x"},
+  ["math.type"] = {"x"},
+  ["math.ult"] = {"m", "n"},
+
+  -- io
+  ["io.close"] = {"file"},
+  ["io.input"] = {"file"},
+  ["io.lines"] = {"filename", "..."},
+  ["io.open"] = {"filename", "mode"},
+  ["io.output"] = {"file"},
+  ["io.popen"] = {"prog", "mode"},
+  ["io.read"] = {"..."},
+  ["io.tmpfile"] = {},
+  ["io.type"] = {"obj"},
+  ["io.write"] = {"..."},
+
+  -- os
+  ["os.clock"] = {},
+  ["os.date"] = {"format", "time"},
+  ["os.difftime"] = {"t2", "t1"},
+  ["os.execute"] = {"command"},
+  ["os.exit"] = {"code", "close"},
+  ["os.getenv"] = {"varname"},
+  ["os.platform"] = {},
+  ["os.setlocale"] = {"locale", "category"},
+  ["os.time"] = {"t"},
+  ["os.tmpname"] = {},
+
+  -- debug
+  ["debug.format"] = {"source", "chunkname", "indent_width"},
+  ["debug.getinfo"] = {"f", "what"},
+  ["debug.getlocal"] = {"f", "local_"},
+  ["debug.getmetatable"] = {"value"},
+  ["debug.getupvalue"] = {"f", "up"},
+  ["debug.parse"] = {"code", "chunkname", "options"},
+  ["debug.sethook"] = {"hook", "mask", "count"},
+  ["debug.setlocal"] = {"level", "local_", "value"},
+  ["debug.setmetatable"] = {"value", "t"},
+  ["debug.setupvalue"] = {"f", "up", "value"},
+  ["debug.traceback"] = {"message", "level"},
+  ["debug.upvalueid"] = {"f", "n"},
+  ["debug.upvaluejoin"] = {"f1", "n1", "f2", "n2"},
+
+  -- coroutine
+  ["coroutine.create"] = {"f"},
+  ["coroutine.resume"] = {"co", "..."},
+  ["coroutine.status"] = {"co"},
+  ["coroutine.wrap"] = {"f"},
+  ["coroutine.yield"] = {"..."},
+  ["coroutine.isyieldable"] = {},
+  ["coroutine.close"] = {"co"},
+
+  -- utf8
+  ["utf8.char"] = {"..."},
+  ["utf8.codepoint"] = {"s", "i", "j"},
+  ["utf8.codes"] = {"s"},
+  ["utf8.len"] = {"s", "i", "j"},
+  ["utf8.offset"] = {"s", "n", "i"},
+
+  -- fs
+  ["fs.list"] = {"path"},
+  ["fs.copy"] = {"source", "dest"},
+  ["fs.move"] = {"source", "dest"},
+  ["fs.remove"] = {"path"},
+  ["fs.type"] = {"path"},
+  ["fs.follow"] = {"path"},
+  ["fs.createlink"] = {"target", "link"},
+  ["fs.createdirectory"] = {"path"},
+  ["fs.path.join"] = {"..."},
+  ["fs.path.split"] = {"path"},
+  ["fs.path.name"] = {"path"},
+  ["fs.path.parent"] = {"path"},
+
+  -- network
+  ["network.fetch"] = {"url", "options"},
+  ["network.tcp.connect"] = {"host", "port"},
+  ["network.tcp.bind"] = {"host", "port"},
+  ["network.udp.open"] = {"host", "port"},
+
+  -- worker
+  ["worker.create"] = {"path", "..."},
+  ["worker.status"] = {"w"},
+  ["worker.receive"] = {"w1", "..."},
+  ["worker.send"] = {"w", "value"},
+  ["worker.message"] = {"value"},
+
+  -- vector
+  ["vector.create"] = {"capacity", "fast"},
+  ["vector.pack"] = {"v", "offset", "fmt", "..."},
+  ["vector.unpack"] = {"v", "offset", "fmt"},
+  ["vector.clone"] = {"v"},
+  ["vector.size"] = {"v"},
+  ["vector.resize"] = {"v", "newsize"},
+  ["vector.unpackmany"] = {"v", "offset", "fmt", "count"},
+}
+
+-- ---------------------------------------------------------------------------
+-- Parse the call context from the text before cursor
+-- ---------------------------------------------------------------------------
+
+-- Find the function name and active parameter index at a cursor position.
+-- Returns func_name, active_param_index or nil, nil.
+local function parse_call_context(text, line, col)
+  -- Get text of the current line up to cursor
+  local line_start = 1
+  local current_line = 1
+  while current_line < line do
+    local nl = string.find(text, "\n", line_start, true)
+    if not nl then break end
+    line_start = nl + 1
+    current_line = current_line + 1
+  end
+  local line_text = string.sub(text, line_start)
+  local nl_pos = string.find(line_text, "\n", 1, true)
+  if nl_pos then
+    line_text = string.sub(line_text, 1, nl_pos - 1)
+  end
+  local before = string.sub(line_text, 1, col - 1)
+
+  -- Walk backwards to find the matching ( and count commas
+  local depth = 0
+  local commas = 0
+  local paren_pos = nil
+  for i = #before, 1, -1 do
+    local c = string.sub(before, i, i)
+    if c == ")" then
+      depth = depth + 1
+    elseif c == "(" then
+      if depth == 0 then
+        paren_pos = i
+        break
+      end
+      depth = depth - 1
+    elseif c == "," and depth == 0 then
+      commas = commas + 1
+    end
+  end
+
+  if not paren_pos then return nil, nil end
+
+  -- Extract function name before the (
+  local before_paren = string.sub(before, 1, paren_pos - 1)
+  -- Match identifier.identifier or identifier:identifier or just identifier
+  local func_name = string.match(before_paren, "([%w_%.%:]+)%s*$")
+  if not func_name then return nil, nil end
+
+  return func_name, commas
+end
+
+-- ---------------------------------------------------------------------------
+-- Public API
+-- ---------------------------------------------------------------------------
+
+function signature.compute(uri, position)
+  local doc = document.get(uri)
+  if not doc then return nil end
+
+  ast_mod.parse(uri)
+  local tree = ast_mod.get(uri)
+  local analysis = scope_mod.analyze(uri)
+
+  local line = position.line + 1
+  local col = position.character + 1
+
+  local func_name, active_param = parse_call_context(doc.text, line, col)
+  if not func_name then return nil end
+
+  -- Look up the signature
+  local params = nil
+  local label = nil
+
+  -- Check stdlib signatures first
+  local stdlib_params = STDLIB_SIGNATURES[func_name]
+  if stdlib_params then
+    params = stdlib_params
+    label = func_name .. "(" .. table.concat(params, ", ") .. ")"
+  end
+
+  -- Check user-defined functions via scope analysis
+  if not params and analysis then
+    -- Try to resolve as a local/global function
+    local base_name = string.match(func_name, "^([%w_]+)$")
+    if base_name then
+      local s = scope_mod.get_scope_at(analysis.root, line)
+      if s then
+        local visible = scope_mod.get_visible(s)
+        local decl = visible[base_name]
+        if decl and decl.kind == "function" and decl.node and decl.node.params then
+          params = {}
+          for _, p in ipairs(decl.node.params) do
+            params[#params + 1] = p.value or p.name or "?"
+          end
+          if decl.node.isvararg then
+            params[#params + 1] = "..."
+          end
+          label = "function " .. base_name .. "(" .. table.concat(params, ", ") .. ")"
+        end
+      end
+    end
+
+    -- Try to resolve as M.func via module exports
+    if not params then
+      local table_name, member = string.match(func_name, "^([%w_]+)%.([%w_]+)$")
+      if table_name and member and tree then
+        local s = scope_mod.get_scope_at(analysis.root, line)
+        if s then
+          local visible = scope_mod.get_visible(s)
+          local decl = visible[table_name]
+          if decl then
+            local mod_name = modules.get_require_for_decl(tree, decl)
+            if mod_name then
+              local exports = modules.get_exports(mod_name)
+              for _, exp in ipairs(exports) do
+                if exp.name == member and exp.params then
+                  params = exp.params
+                  label = table_name .. "." .. member .. "(" .. table.concat(params, ", ") .. ")"
+                  break
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if not params then return nil end
+
+  -- Build LSP SignatureHelp
+  local param_infos = {}
+  for _, p in ipairs(params) do
+    param_infos[#param_infos + 1] = {label = p}
+  end
+
+  return {
+    signatures = {
+      {
+        label = label,
+        parameters = param_infos,
+      },
+    },
+    activeSignature = 0,
+    activeParameter = active_param or 0,
+  }
+end
+
+-- Export stdlib signatures for use by inlay hints
+signature.STDLIB_SIGNATURES = STDLIB_SIGNATURES
+
+return signature

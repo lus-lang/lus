@@ -1,0 +1,487 @@
+global require, ipairs, pairs, type, string
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local modules = require("lus-language.analysis.modules")
+local document = require("lus-language.document")
+local types_mod = require("lus-language.analysis.types")
+
+local completion = {}
+
+-- ---------------------------------------------------------------------------
+-- LSP CompletionItemKind
+-- ---------------------------------------------------------------------------
+
+local KIND = {
+  Text = 1,
+  Method = 2,
+  Function = 3,
+  Constructor = 4,
+  Field = 5,
+  Variable = 6,
+  Class = 7,
+  Interface = 8,
+  Module = 9,
+  Property = 10,
+  Unit = 11,
+  Value = 12,
+  Enum = 13,
+  Keyword = 14,
+  Snippet = 15,
+  Color = 16,
+  File = 17,
+  Reference = 18,
+  Folder = 19,
+  EnumMember = 20,
+  Constant = 21,
+  Struct = 22,
+  Event = 23,
+  Operator = 24,
+  TypeParameter = 25,
+}
+
+-- ---------------------------------------------------------------------------
+-- Lus keywords
+-- ---------------------------------------------------------------------------
+
+local KEYWORDS = {
+  "local", "global", "function", "if", "then", "else", "elseif", "end",
+  "for", "do", "while", "repeat", "until", "return", "break", "goto",
+  "in", "and", "or", "not", "true", "false", "nil",
+  "catch", "provide", "enum",
+}
+
+-- ---------------------------------------------------------------------------
+-- Standard library members (complete inventory from C source)
+-- ---------------------------------------------------------------------------
+
+local STDLIB_MEMBERS = {
+  string = {
+    {n = "byte", k = KIND.Function},
+    {n = "char", k = KIND.Function},
+    {n = "dump", k = KIND.Function},
+    {n = "find", k = KIND.Function},
+    {n = "format", k = KIND.Function},
+    {n = "gmatch", k = KIND.Function},
+    {n = "gsub", k = KIND.Function},
+    {n = "len", k = KIND.Function},
+    {n = "lower", k = KIND.Function},
+    {n = "match", k = KIND.Function},
+    {n = "rep", k = KIND.Function},
+    {n = "reverse", k = KIND.Function},
+    {n = "sub", k = KIND.Function},
+    {n = "upper", k = KIND.Function},
+    {n = "pack", k = KIND.Function},
+    {n = "packsize", k = KIND.Function},
+    {n = "unpack", k = KIND.Function},
+    {n = "transcode", k = KIND.Function},
+  },
+  table = {
+    {n = "clone", k = KIND.Function},
+    {n = "concat", k = KIND.Function},
+    {n = "create", k = KIND.Function},
+    {n = "insert", k = KIND.Function},
+    {n = "pack", k = KIND.Function},
+    {n = "unpack", k = KIND.Function},
+    {n = "remove", k = KIND.Function},
+    {n = "move", k = KIND.Function},
+    {n = "sort", k = KIND.Function},
+  },
+  math = {
+    {n = "abs", k = KIND.Function},
+    {n = "acos", k = KIND.Function},
+    {n = "asin", k = KIND.Function},
+    {n = "atan", k = KIND.Function},
+    {n = "ceil", k = KIND.Function},
+    {n = "cos", k = KIND.Function},
+    {n = "deg", k = KIND.Function},
+    {n = "exp", k = KIND.Function},
+    {n = "tointeger", k = KIND.Function},
+    {n = "floor", k = KIND.Function},
+    {n = "fmod", k = KIND.Function},
+    {n = "frexp", k = KIND.Function},
+    {n = "ult", k = KIND.Function},
+    {n = "ldexp", k = KIND.Function},
+    {n = "log", k = KIND.Function},
+    {n = "max", k = KIND.Function},
+    {n = "min", k = KIND.Function},
+    {n = "modf", k = KIND.Function},
+    {n = "rad", k = KIND.Function},
+    {n = "sin", k = KIND.Function},
+    {n = "sqrt", k = KIND.Function},
+    {n = "tan", k = KIND.Function},
+    {n = "type", k = KIND.Function},
+    {n = "random", k = KIND.Function},
+    {n = "randomseed", k = KIND.Function},
+    {n = "pi", k = KIND.Constant},
+    {n = "huge", k = KIND.Constant},
+    {n = "maxinteger", k = KIND.Constant},
+    {n = "mininteger", k = KIND.Constant},
+  },
+  io = {
+    {n = "close", k = KIND.Function},
+    {n = "flush", k = KIND.Function},
+    {n = "input", k = KIND.Function},
+    {n = "lines", k = KIND.Function},
+    {n = "open", k = KIND.Function},
+    {n = "output", k = KIND.Function},
+    {n = "popen", k = KIND.Function},
+    {n = "read", k = KIND.Function},
+    {n = "tmpfile", k = KIND.Function},
+    {n = "type", k = KIND.Function},
+    {n = "write", k = KIND.Function},
+    {n = "stdin", k = KIND.Variable},
+    {n = "stdout", k = KIND.Variable},
+    {n = "stderr", k = KIND.Variable},
+  },
+  os = {
+    {n = "clock", k = KIND.Function},
+    {n = "date", k = KIND.Function},
+    {n = "difftime", k = KIND.Function},
+    {n = "execute", k = KIND.Function},
+    {n = "exit", k = KIND.Function},
+    {n = "getenv", k = KIND.Function},
+    {n = "platform", k = KIND.Function},
+    {n = "setlocale", k = KIND.Function},
+    {n = "time", k = KIND.Function},
+    {n = "tmpname", k = KIND.Function},
+  },
+  debug = {
+    {n = "debug", k = KIND.Function},
+    {n = "format", k = KIND.Function},
+    {n = "getuservalue", k = KIND.Function},
+    {n = "gethook", k = KIND.Function},
+    {n = "getinfo", k = KIND.Function},
+    {n = "getlocal", k = KIND.Function},
+    {n = "getregistry", k = KIND.Function},
+    {n = "getmetatable", k = KIND.Function},
+    {n = "getupvalue", k = KIND.Function},
+    {n = "parse", k = KIND.Function},
+    {n = "upvaluejoin", k = KIND.Function},
+    {n = "upvalueid", k = KIND.Function},
+    {n = "setuservalue", k = KIND.Function},
+    {n = "sethook", k = KIND.Function},
+    {n = "setlocal", k = KIND.Function},
+    {n = "setmetatable", k = KIND.Function},
+    {n = "setupvalue", k = KIND.Function},
+    {n = "traceback", k = KIND.Function},
+  },
+  coroutine = {
+    {n = "create", k = KIND.Function},
+    {n = "resume", k = KIND.Function},
+    {n = "running", k = KIND.Function},
+    {n = "status", k = KIND.Function},
+    {n = "wrap", k = KIND.Function},
+    {n = "yield", k = KIND.Function},
+    {n = "isyieldable", k = KIND.Function},
+    {n = "close", k = KIND.Function},
+  },
+  utf8 = {
+    {n = "offset", k = KIND.Function},
+    {n = "codepoint", k = KIND.Function},
+    {n = "char", k = KIND.Function},
+    {n = "len", k = KIND.Function},
+    {n = "codes", k = KIND.Function},
+    {n = "charpattern", k = KIND.Constant},
+  },
+  fs = {
+    {n = "list", k = KIND.Function},
+    {n = "copy", k = KIND.Function},
+    {n = "move", k = KIND.Function},
+    {n = "remove", k = KIND.Function},
+    {n = "type", k = KIND.Function},
+    {n = "follow", k = KIND.Function},
+    {n = "createlink", k = KIND.Function},
+    {n = "createdirectory", k = KIND.Function},
+    {n = "path", k = KIND.Module},
+  },
+  ["fs.path"] = {
+    {n = "join", k = KIND.Function},
+    {n = "split", k = KIND.Function},
+    {n = "name", k = KIND.Function},
+    {n = "parent", k = KIND.Function},
+    {n = "separator", k = KIND.Constant},
+    {n = "delimiter", k = KIND.Constant},
+  },
+  network = {
+    {n = "fetch", k = KIND.Function},
+    {n = "tcp", k = KIND.Module},
+    {n = "udp", k = KIND.Module},
+  },
+  ["network.tcp"] = {
+    {n = "connect", k = KIND.Function},
+    {n = "bind", k = KIND.Function},
+  },
+  ["network.udp"] = {
+    {n = "open", k = KIND.Function},
+  },
+  worker = {
+    {n = "create", k = KIND.Function},
+    {n = "status", k = KIND.Function},
+    {n = "receive", k = KIND.Function},
+    {n = "send", k = KIND.Function},
+    {n = "message", k = KIND.Function},
+    {n = "peek", k = KIND.Function},
+  },
+  vector = {
+    {n = "create", k = KIND.Function},
+    {n = "pack", k = KIND.Function},
+    {n = "unpack", k = KIND.Function},
+    {n = "clone", k = KIND.Function},
+    {n = "size", k = KIND.Function},
+    {n = "resize", k = KIND.Function},
+    {n = "unpackmany", k = KIND.Function},
+  },
+  package = {
+    {n = "loadlib", k = KIND.Function},
+    {n = "searchpath", k = KIND.Function},
+    {n = "preload", k = KIND.Variable},
+    {n = "cpath", k = KIND.Variable},
+    {n = "path", k = KIND.Variable},
+    {n = "searchers", k = KIND.Variable},
+    {n = "loaded", k = KIND.Variable},
+    {n = "config", k = KIND.Variable},
+  },
+}
+
+-- Global functions (not in a library table)
+local GLOBAL_FUNCTIONS = {
+  "assert", "collectgarbage", "dofile", "error", "getmetatable",
+  "ipairs", "loadfile", "load", "next", "pairs", "pledge", "print",
+  "warn", "rawequal", "rawlen", "rawget", "rawset", "select",
+  "setmetatable", "tonumber", "tostring", "type", "require",
+  "tojson", "fromjson",
+}
+
+-- Standard library table names (for module-kind items)
+local STDLIB_TABLES = {
+  "string", "table", "math", "io", "os", "debug",
+  "coroutine", "utf8", "fs", "network", "worker", "vector", "package",
+}
+
+-- ---------------------------------------------------------------------------
+-- Completion logic
+-- ---------------------------------------------------------------------------
+
+-- Determine the completion context by examining text before the cursor
+local function get_context(text, line, col)
+  -- Extract the line text (1-based line)
+  local line_start = 1
+  local current_line = 1
+  while current_line < line do
+    local nl = string.find(text, "\n", line_start, true)
+    if not nl then break end
+    line_start = nl + 1
+    current_line = current_line + 1
+  end
+  local line_text = string.sub(text, line_start)
+  local nl_pos = string.find(line_text, "\n", 1, true)
+  if nl_pos then
+    line_text = string.sub(line_text, 1, nl_pos - 1)
+  end
+
+  -- Get text up to cursor column
+  local before = string.sub(line_text, 1, col - 1)
+
+  -- Check for member access: identifier.  or identifier:
+  local dot_match = string.match(before, "([%w_%.]+)%.$")
+  if dot_match then
+    return "member", dot_match
+  end
+
+  local colon_match = string.match(before, "([%w_]+):$")
+  if colon_match then
+    return "method", colon_match
+  end
+
+  -- Otherwise: scope completion with optional prefix filter
+  local prefix = string.match(before, "([%w_]+)$") or ""
+  return "scope", prefix
+end
+
+-- Build member completion items for a table name
+local function member_items(table_name)
+  local items = {}
+  -- Check stdlib
+  local members = STDLIB_MEMBERS[table_name]
+  if members then
+    for _, m in ipairs(members) do
+      items[#items + 1] = {
+        label = m.n,
+        kind = m.k,
+        detail = table_name .. "." .. m.n,
+      }
+    end
+  end
+  return items
+end
+
+-- Build completion items for module exports
+local function module_export_items(mod_name)
+  local items = {}
+  local exports = modules.get_exports(mod_name)
+  for _, exp in ipairs(exports) do
+    local kind = exp.kind == "function" and KIND.Function or KIND.Field
+    items[#items + 1] = {
+      label = exp.name,
+      kind = kind,
+      detail = mod_name .. "." .. exp.name,
+    }
+  end
+  return items
+end
+
+-- Compute completion items
+function completion.compute(uri, position)
+  ast_mod.parse(uri)
+  local tree = ast_mod.get(uri)
+  local doc = document.get(uri)
+  if not doc then return {} end
+
+  local analysis = scope_mod.analyze(uri)
+
+  -- Convert 0-based LSP to 1-based
+  local line = position.line + 1
+  local col = position.character + 1
+
+  local context, value = get_context(doc.text, line, col)
+
+  if context == "member" or context == "method" then
+    -- Member/method completion after . or :
+    local items = {}
+
+    -- Check stdlib first
+    local stdlib_items = member_items(value)
+    if #stdlib_items > 0 then
+      items = stdlib_items
+    else
+      -- Check scope for the variable
+      if analysis then
+        local base_name = string.match(value, "^([%w_]+)")
+        if base_name then
+          local decl = nil
+          local s = scope_mod.get_scope_at(analysis.root, line)
+          if s then
+            local visible = scope_mod.get_visible(s)
+            decl = visible[base_name]
+          end
+          if decl then
+            -- Check if it's a require() result variable
+            if tree then
+              local mod_name = modules.get_require_for_decl(tree, decl)
+              if mod_name then
+                items = module_export_items(mod_name)
+              end
+            end
+            -- Check type_info for table fields
+            if #items == 0 and decl.type_info then
+              local fields = types_mod.get_fields(decl.type_info)
+              if fields then
+                for fname, finfo in pairs(fields) do
+                  local fkind = KIND.Field
+                  if finfo.type_info and finfo.type_info.tag == "function" then
+                    fkind = KIND.Function
+                  end
+                  items[#items + 1] = {
+                    label = fname,
+                    kind = fkind,
+                    detail = base_name .. "." .. fname,
+                  }
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
+    -- Filter to functions only for : (method) context
+    if context == "method" then
+      local filtered = {}
+      for _, item in ipairs(items) do
+        if item.kind == KIND.Function or item.kind == KIND.Method then
+          filtered[#filtered + 1] = item
+        end
+      end
+      items = filtered
+    end
+
+    return items
+  end
+
+  -- Scope completion
+  local items = {}
+  local seen = {}
+
+  -- Add visible declarations from scope analysis
+  if analysis then
+    local s = scope_mod.get_scope_at(analysis.root, line)
+    if s then
+      local visible = scope_mod.get_visible(s)
+      for name, decl in pairs(visible) do
+        if not seen[name] then
+          seen[name] = true
+          local kind = KIND.Variable
+          if decl.kind == "function" then
+            kind = KIND.Function
+          elseif decl.kind == "param" then
+            kind = KIND.Variable
+          end
+          items[#items + 1] = {
+            label = name,
+            kind = kind,
+            detail = decl.kind,
+          }
+        end
+      end
+    end
+  end
+
+  -- Add global functions
+  for _, name in ipairs(GLOBAL_FUNCTIONS) do
+    if not seen[name] then
+      seen[name] = true
+      items[#items + 1] = {
+        label = name,
+        kind = KIND.Function,
+        detail = "global function",
+      }
+    end
+  end
+
+  -- Add stdlib table names
+  for _, name in ipairs(STDLIB_TABLES) do
+    if not seen[name] then
+      seen[name] = true
+      items[#items + 1] = {
+        label = name,
+        kind = KIND.Module,
+        detail = "standard library",
+      }
+    end
+  end
+
+  -- Add keywords
+  for _, kw in ipairs(KEYWORDS) do
+    items[#items + 1] = {
+      label = kw,
+      kind = KIND.Keyword,
+    }
+  end
+
+  -- Filter by prefix if present
+  if value and #value > 0 then
+    local filtered = {}
+    local lower_prefix = string.lower(value)
+    for _, item in ipairs(items) do
+      if string.sub(string.lower(item.label), 1, #lower_prefix) == lower_prefix then
+        filtered[#filtered + 1] = item
+      end
+    end
+    return filtered
+  end
+
+  return items
+end
+
+return completion

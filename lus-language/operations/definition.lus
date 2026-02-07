@@ -1,0 +1,100 @@
+global require, ipairs
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local modules = require("lus-language.analysis.modules")
+
+local definition = {}
+
+-- Compute go-to-definition for a position.
+-- position is 0-based (LSP). Returns an LSP Location or nil.
+function definition.compute(uri, position)
+  -- Ensure document is parsed
+  ast_mod.parse(uri)
+
+  local tree = ast_mod.get(uri)
+  local analysis = scope_mod.analyze(uri)
+  if not analysis then return nil end
+
+  -- Convert 0-based LSP position to 1-based AST position
+  local line = position.line + 1
+  local col = position.character + 1
+
+  -- Check if cursor is on a require() string argument -> jump to module file
+  if tree then
+    local mod_uri = modules.get_require_at(tree, line, col)
+    if mod_uri then
+      return {
+        uri = mod_uri,
+        range = {
+          start = {line = 0, character = 0},
+          ["end"] = {line = 0, character = 0},
+        },
+      }
+    end
+  end
+
+  -- Check for field access on a require() result (e.g., M.foo)
+  -- Find the reference at position
+  local ref = scope_mod.find_at(analysis, line, col)
+
+  -- If the reference resolves to a local declaration, check if we're on
+  -- a field access of a require() result variable
+  if not ref then
+    -- Check if we're on a declaration itself
+    local decl = scope_mod.get_declaration(analysis, line, col)
+    if decl then
+      return {
+        uri = uri,
+        range = {
+          start = {line = decl.line - 1, character = decl.column - 1},
+          ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
+        },
+      }
+    end
+    return nil
+  end
+
+  local decl = ref.declaration
+
+  -- If the reference is a field access (M.foo), check if M is a require() result
+  if not decl and ref.node then
+    -- This name is unresolved, but maybe it's a property of a module
+    -- We need to look at the parent context -- check if this is a field key
+  end
+
+  if decl then
+    -- Check if the declaration is a require() variable and we're accessing a field
+    -- Look at the AST node at the cursor to see if it's part of a field access
+    if tree then
+      local mod_name = modules.get_require_for_decl(tree, decl)
+      if mod_name then
+        -- The variable is a require() result. If this is the variable itself,
+        -- jump to the module file
+        local mod_uri = modules.resolve(mod_name)
+        if mod_uri then
+          return {
+            uri = mod_uri,
+            range = {
+              start = {line = 0, character = 0},
+              ["end"] = {line = 0, character = 0},
+            },
+          }
+        end
+      end
+    end
+
+    -- Normal in-file definition
+    return {
+      uri = uri,
+      range = {
+        start = {line = decl.line - 1, character = decl.column - 1},
+        ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
+      },
+    }
+  end
+
+  return nil
+end
+
+return definition

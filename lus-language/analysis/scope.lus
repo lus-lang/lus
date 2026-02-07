@@ -1,0 +1,598 @@
+global require, ipairs, pairs, type, string
+
+local ast_mod = require("lus-language.analysis.ast")
+local types = require("lus-language.analysis.types")
+
+local scope = {}
+
+-- ---------------------------------------------------------------------------
+-- Module-level state (set during analyze, cleared after)
+-- ---------------------------------------------------------------------------
+
+-- All collected references (flat list)
+local all_references
+-- All collected declarations (flat list)
+local all_declarations
+-- Comments array from the AST (for doc comment extraction)
+local all_comments
+
+-- ---------------------------------------------------------------------------
+-- Scope tree construction
+-- ---------------------------------------------------------------------------
+
+-- Find a doc comment on the line immediately preceding a given line.
+-- Returns the comment text or nil.
+local function find_doc_comment(line)
+  if not all_comments then return nil end
+  for _, comment in ipairs(all_comments) do
+    -- Comment that ends on the line just before the declaration
+    local comment_end = comment.endline or comment.line
+    if comment_end == line - 1 then
+      return comment.text
+    end
+  end
+  return nil
+end
+
+-- Create a new scope
+local function new_scope(kind, parent, node)
+  local s = {
+    kind = kind,
+    parent = parent,
+    node = node,
+    declarations = {},  -- name -> decl_info
+    children = {},
+  }
+  if parent then
+    parent.children[#parent.children + 1] = s
+  end
+  return s
+end
+
+-- Add a declaration to a scope
+local function add_decl(s, name, kind, node)
+  local decl_line = node.line or 0
+  local decl = {
+    name = name,
+    kind = kind,
+    node = node,
+    line = decl_line,
+    column = node.column or 0,
+    scope = s,
+    references = {},
+    doc = find_doc_comment(decl_line),
+  }
+  s.declarations[name] = decl
+  return decl
+end
+
+-- Resolve a name by walking up the scope chain
+local function resolve(name, s)
+  while s do
+    local decl = s.declarations[name]
+    if decl then return decl end
+    s = s.parent
+  end
+  return nil  -- unresolved (stdlib global or undefined)
+end
+
+-- ---------------------------------------------------------------------------
+-- AST walker
+-- ---------------------------------------------------------------------------
+
+-- Forward declaration
+local walk_node
+local walk_children
+local walk_expr
+
+-- Walk an expression node, recording name references
+local function walk_expr(node, s)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  if ntype == "name" then
+    local decl = resolve(node.value, s)
+    local ref = {
+      name = node.value,
+      node = node,
+      declaration = decl,
+      line = node.line or 0,
+      column = node.column or 0,
+    }
+    all_references[#all_references + 1] = ref
+    if decl then
+      decl.references[#decl.references + 1] = ref
+    end
+
+  elseif ntype == "binop" then
+    walk_expr(node.left, s)
+    walk_expr(node.right, s)
+
+  elseif ntype == "unop" then
+    walk_expr(node.operand, s)
+
+  elseif ntype == "callexpr" or ntype == "callstat" then
+    walk_expr(node.func, s)
+    if node.args then
+      for _, arg in ipairs(node.args) do
+        walk_expr(arg, s)
+      end
+    end
+
+  elseif ntype == "methodcall" then
+    walk_expr(node.func, s)
+    if node.args then
+      for _, arg in ipairs(node.args) do
+        walk_expr(arg, s)
+      end
+    end
+
+  elseif ntype == "field" then
+    walk_expr(node.table, s)
+    -- node.key is a property name, not a reference
+
+  elseif ntype == "index" then
+    walk_expr(node.table, s)
+    walk_expr(node.key, s)
+
+  elseif ntype == "table" then
+    if node.fields then
+      for _, f in ipairs(node.fields) do
+        if f.key then walk_expr(f.key, s) end
+        if f.value then walk_expr(f.value, s) end
+      end
+    end
+
+  elseif ntype == "funcexpr" then
+    -- Anonymous function: create child scope
+    local func_scope = new_scope("function", s, node)
+    if node.params then
+      for _, p in ipairs(node.params) do
+        local pname = p.value or p.name
+        if pname then
+          add_decl(func_scope, pname, "param", p)
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, func_scope)
+    end
+
+  elseif ntype == "catchexpr" then
+    walk_expr(node.expr, s)
+
+  elseif ntype == "optchain" then
+    walk_expr(node.base, s)
+    walk_expr(node.suffix, s)
+
+  elseif ntype == "slice" then
+    walk_expr(node.table, s)
+    if node.start then walk_expr(node.start, s) end
+    if node.finish then walk_expr(node.finish, s) end
+
+  elseif ntype == "interp" then
+    if node.parts then
+      for _, part in ipairs(node.parts) do
+        walk_expr(part, s)
+      end
+    end
+
+  elseif ntype == "doexpr" then
+    -- Do expression: creates a scope (acquis 23)
+    local doexpr_scope = new_scope("doexpr", s, node)
+    if node.children then
+      walk_children(node.children, doexpr_scope)
+    end
+
+  -- Literals: nil, true, false, number, string, vararg, enum -- no references
+  end
+end
+
+-- Walk a list of expression nodes
+local function walk_expr_list(nodes, s)
+  if not nodes then return end
+  for _, node in ipairs(nodes) do
+    walk_expr(node, s)
+  end
+end
+
+-- Walk a statement node
+walk_node = function(node, s)
+  if not node or type(node) ~= "table" then return end
+
+  local ntype = node.type
+
+  if ntype == "local" then
+    -- Walk values first (they are evaluated before names are in scope)
+    walk_expr_list(node.values, s)
+    -- Add declarations with inferred types
+    if node.names then
+      for i, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name then
+          local kind = "local"
+          if name_node.attr == "const" then kind = "local" end
+          local decl = add_decl(s, name, kind, name_node)
+          -- Infer type from the corresponding value
+          if node.values and node.values[i] then
+            decl.type_info = types.infer_expr(node.values[i])
+          end
+          all_declarations[#all_declarations + 1] = decl
+        end
+      end
+    end
+
+  elseif ntype == "global" then
+    walk_expr_list(node.values, s)
+    if node.names then
+      for i, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name then
+          local decl = add_decl(s, name, "global", name_node)
+          if node.values and node.values[i] then
+            decl.type_info = types.infer_expr(node.values[i])
+          end
+          all_declarations[#all_declarations + 1] = decl
+        end
+      end
+    end
+
+  elseif ntype == "assign" then
+    -- Walk rhs first
+    walk_expr_list(node.rhs, s)
+    -- Walk lhs (these are references, not declarations)
+    if node.lhs then
+      for i, lhs_node in ipairs(node.lhs) do
+        walk_expr(lhs_node, s)
+        -- Track field assignments: t.field = value
+        if lhs_node.type == "field" and lhs_node.table
+           and lhs_node.table.type == "name" and lhs_node.key then
+          local table_name = lhs_node.table.value
+          local field_name = lhs_node.key.value
+          if table_name and field_name then
+            local table_decl = resolve(table_name, s)
+            if table_decl and table_decl.type_info
+               and table_decl.type_info.tag == "table" then
+              local val_type = types.unknown()
+              if node.rhs and node.rhs[i] then
+                val_type = types.infer_expr(node.rhs[i])
+              end
+              types.merge_field(table_decl.type_info, field_name, val_type,
+                lhs_node.key.line or 0, lhs_node.key.column or 0)
+            end
+          end
+        end
+        -- Track plain name reassignment: update type_info
+        if lhs_node.type == "name" then
+          local decl = resolve(lhs_node.value, s)
+          if decl and node.rhs and node.rhs[i] then
+            decl.type_info = types.infer_expr(node.rhs[i])
+          end
+        end
+      end
+    end
+
+  elseif ntype == "localfunc" or ntype == "globalfunc" then
+    -- Add function name to current scope
+    local kind = ntype == "localfunc" and "function" or "function"
+    if node.name then
+      local name_node = node
+      local decl = add_decl(s, node.name, kind, name_node)
+      decl.type_info = types.infer_func_type(node)
+      all_declarations[#all_declarations + 1] = decl
+    end
+    -- Create child scope for body
+    local func_scope = new_scope("function", s, node)
+    if node.params then
+      for _, p in ipairs(node.params) do
+        local pname = p.value or p.name
+        if pname then
+          local decl = add_decl(func_scope, pname, "param", p)
+          all_declarations[#all_declarations + 1] = decl
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, func_scope)
+    end
+
+  elseif ntype == "funcstat" then
+    -- Named function statement (e.g., function a.b.c())
+    -- The nameexpr is a reference, walk it
+    if node.nameexpr then
+      walk_expr(node.nameexpr, s)
+      -- Track field function assignment: function M.foo() -> add foo to M's fields
+      if node.nameexpr.type == "field" and node.nameexpr.table
+         and node.nameexpr.table.type == "name" and node.nameexpr.key then
+        local table_name = node.nameexpr.table.value
+        local field_name = node.nameexpr.key.value
+        if table_name and field_name then
+          local table_decl = resolve(table_name, s)
+          if table_decl and table_decl.type_info
+             and table_decl.type_info.tag == "table" then
+            types.merge_field(table_decl.type_info, field_name,
+              types.infer_func_type(node),
+              node.nameexpr.key.line or 0, node.nameexpr.key.column or 0)
+          end
+        end
+      end
+    end
+    -- Create child scope for body
+    local func_scope = new_scope("function", s, node)
+    if node.params then
+      for _, p in ipairs(node.params) do
+        local pname = p.value or p.name
+        if pname then
+          local decl = add_decl(func_scope, pname, "param", p)
+          all_declarations[#all_declarations + 1] = decl
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, func_scope)
+    end
+
+  elseif ntype == "fornum" then
+    -- for var = init, limit [, step] do ... end
+    -- init, limit, step are evaluated in the parent scope
+    walk_expr(node.init, s)
+    walk_expr(node.limit, s)
+    if node.step then walk_expr(node.step, s) end
+    -- var is declared in the child scope
+    local for_scope = new_scope("for", s, node)
+    if node.var then
+      local name = node.var.value or node.var.name
+      if name then
+        local decl = add_decl(for_scope, name, "for", node.var)
+        decl.type_info = types.number()  -- fornum var is always a number
+        all_declarations[#all_declarations + 1] = decl
+      end
+    end
+    if node.children then
+      walk_children(node.children, for_scope)
+    end
+
+  elseif ntype == "forgen" then
+    -- for names in explist do ... end
+    -- explist is evaluated in the parent scope
+    walk_expr_list(node.explist, s)
+    -- names are declared in the child scope
+    local for_scope = new_scope("for", s, node)
+    if node.names then
+      for _, name_node in ipairs(node.names) do
+        local name = name_node.value or name_node.name
+        if name then
+          local decl = add_decl(for_scope, name, "for", name_node)
+          all_declarations[#all_declarations + 1] = decl
+        end
+      end
+    end
+    if node.children then
+      walk_children(node.children, for_scope)
+    end
+
+  elseif ntype == "if" then
+    -- Check for if-assignment (acquis 3): cond is an assign node
+    -- whose lhs names are scoped to the entire if block
+    local if_scope = new_scope("if", s, node)
+    if node.cond and node.cond.type == "assign" then
+      -- If-assignment: declare lhs names in the if scope
+      walk_expr_list(node.cond.rhs, s) -- rhs evaluated in parent
+      if node.cond.lhs then
+        for _, lhs_node in ipairs(node.cond.lhs) do
+          if lhs_node.type == "name" then
+            local decl = add_decl(if_scope, lhs_node.value, "local", lhs_node)
+            all_declarations[#all_declarations + 1] = decl
+          end
+        end
+      end
+    else
+      walk_expr(node.cond, s)
+    end
+    -- Walk branches (then/elseif/else) as children of the if scope
+    if node.children then
+      walk_children(node.children, if_scope)
+    end
+
+  elseif ntype == "while" then
+    -- Check for while-assignment (acquis 13)
+    local while_scope = new_scope("block", s, node)
+    if node.cond and node.cond.type == "assign" then
+      walk_expr_list(node.cond.rhs, s)
+      if node.cond.lhs then
+        for _, lhs_node in ipairs(node.cond.lhs) do
+          if lhs_node.type == "name" then
+            local decl = add_decl(while_scope, lhs_node.value, "local", lhs_node)
+            all_declarations[#all_declarations + 1] = decl
+          end
+        end
+      end
+    else
+      walk_expr(node.cond, s)
+    end
+    if node.children then
+      walk_children(node.children, while_scope)
+    end
+
+  elseif ntype == "repeat" then
+    local repeat_scope = new_scope("block", s, node)
+    if node.children then
+      walk_children(node.children, repeat_scope)
+    end
+    -- cond is evaluated in the repeat scope (can see locals from body)
+    walk_expr(node.cond, repeat_scope)
+
+  elseif ntype == "do" then
+    local do_scope = new_scope("block", s, node)
+    if node.children then
+      walk_children(node.children, do_scope)
+    end
+
+  elseif ntype == "return" or ntype == "provide" then
+    walk_expr_list(node.values, s)
+
+  elseif ntype == "callstat" then
+    walk_expr(node.func, s)
+    if node.args then
+      for _, arg in ipairs(node.args) do
+        walk_expr(arg, s)
+      end
+    end
+
+  elseif ntype == "catchstat" then
+    walk_expr(node.expr, s)
+
+  elseif ntype == "elseif" then
+    -- elseif branches: cond + body
+    walk_expr(node.cond, s)
+    if node.children then
+      walk_children(node.children, s)
+    end
+
+  elseif ntype == "else" then
+    if node.children then
+      walk_children(node.children, s)
+    end
+
+  elseif ntype == "goto" or ntype == "label" or ntype == "break" then
+    -- No references to walk
+
+  else
+    -- Fallback: try to walk children for any block-like node
+    if node.children then
+      walk_children(node.children, s)
+    end
+  end
+end
+
+-- Walk a list of statement nodes
+walk_children = function(children, s)
+  for _, child in ipairs(children) do
+    walk_node(child, s)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Public API
+-- ---------------------------------------------------------------------------
+
+-- Build scope tree for a document. Returns analysis result or nil.
+function scope.analyze(uri)
+  local tree = ast_mod.get(uri)
+  if not tree then return nil end
+
+  -- Reset collectors
+  all_references = {}
+  all_declarations = {}
+  all_comments = tree.comments
+
+  -- Build root scope
+  local root = new_scope("chunk", nil, tree)
+
+  -- Walk the AST
+  if tree.children then
+    walk_children(tree.children, root)
+  end
+
+  local result = {
+    root = root,
+    declarations = all_declarations,
+    references = all_references,
+  }
+
+  -- Clear module-level references
+  all_references = nil
+  all_declarations = nil
+  all_comments = nil
+
+  return result
+end
+
+-- Find the reference at a given 1-based line and column
+function scope.find_at(analysis, line, col)
+  if not analysis then return nil end
+  for _, ref in ipairs(analysis.references) do
+    if ref.line == line and ref.column == col then
+      return ref
+    end
+    -- Also check if the position is within the name
+    if ref.line == line and ref.node then
+      local name_len = #ref.name
+      if col >= ref.column and col < ref.column + name_len then
+        return ref
+      end
+    end
+  end
+  return nil
+end
+
+-- Get the declaration for the name at a given 1-based position
+function scope.get_declaration(analysis, line, col)
+  local ref = scope.find_at(analysis, line, col)
+  if ref then
+    return ref.declaration
+  end
+  -- Also check if we're clicking on a declaration itself
+  if analysis then
+    for _, decl in ipairs(analysis.declarations) do
+      if decl.line == line then
+        local name_len = #decl.name
+        if col >= decl.column and col < decl.column + name_len then
+          return decl
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Get all references to a declaration
+function scope.get_references(analysis, decl)
+  if not decl then return {} end
+  return decl.references
+end
+
+-- Find the innermost scope containing a given 1-based line.
+-- Walks the scope tree recursively, returning the deepest match.
+function scope.get_scope_at(root, line)
+  if not root then return nil end
+  -- Check if this scope's node contains the line
+  local node = root.node
+  if node then
+    local start_line = node.line or 0
+    local end_line = node.endline or start_line
+    -- For chunk (root), always matches
+    if root.kind ~= "chunk" and (line < start_line or line > end_line) then
+      return nil
+    end
+  end
+  -- Try to find a more specific child scope
+  for _, child in ipairs(root.children) do
+    local found = scope.get_scope_at(child, line)
+    if found then return found end
+  end
+  return root
+end
+
+-- Collect all declarations visible from a scope by walking up the parent chain.
+-- Inner scopes shadow outer ones. Returns a table: name -> decl.
+function scope.get_visible(s)
+  -- Collect from outermost to innermost so inner shadows outer
+  local scopes = {}
+  local current = s
+  while current do
+    scopes[#scopes + 1] = current
+    current = current.parent
+  end
+  -- Apply outermost first, then inner scopes overwrite
+  local visible = {}
+  for i = #scopes, 1, -1 do
+    for name, decl in pairs(scopes[i].declarations) do
+      visible[name] = decl
+    end
+  end
+  return visible
+end
+
+return scope

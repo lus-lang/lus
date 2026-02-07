@@ -1,0 +1,71 @@
+global require, ipairs
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+
+local rename = {}
+
+-- Standard library names that cannot be renamed
+local STDLIB = {}
+for _, name in ipairs({
+  "print", "error", "assert", "type", "tostring", "tonumber",
+  "pairs", "ipairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen",
+  "setmetatable", "getmetatable", "require", "load", "dofile",
+  "collectgarbage", "pledge",
+  "string", "table", "math", "io", "os", "debug", "coroutine",
+  "utf8", "fs", "network", "worker",
+  "fromjson", "tojson",
+}) do
+  STDLIB[name] = true
+end
+
+-- Compute rename for a position.
+-- position is 0-based (LSP). new_name is the desired new name.
+-- Returns an LSP WorkspaceEdit or nil if rename is not possible.
+function rename.compute(uri, position, new_name)
+  ast_mod.parse(uri)
+
+  local analysis = scope_mod.analyze(uri)
+  if not analysis then return nil end
+
+  local line = position.line + 1
+  local col = position.character + 1
+
+  local decl = scope_mod.get_declaration(analysis, line, col)
+  if not decl then return nil end
+
+  -- Don't rename stdlib globals
+  if STDLIB[decl.name] then return nil end
+
+  -- Collect all edit locations: declaration + references
+  local edits = {}
+
+  -- Declaration itself
+  edits[#edits + 1] = {
+    range = {
+      start = {line = decl.line - 1, character = decl.column - 1},
+      ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
+    },
+    newText = new_name,
+  }
+
+  -- All references
+  local refs = scope_mod.get_references(analysis, decl)
+  for _, ref in ipairs(refs) do
+    edits[#edits + 1] = {
+      range = {
+        start = {line = ref.line - 1, character = ref.column - 1},
+        ["end"] = {line = ref.line - 1, character = ref.column - 1 + #ref.name},
+      },
+      newText = new_name,
+    }
+  end
+
+  return {
+    changes = {
+      [uri] = edits,
+    },
+  }
+end
+
+return rename

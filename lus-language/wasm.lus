@@ -1,8 +1,12 @@
-global require, io, os, arg, tostring, pledge
+-- WASM entry point for the Lus language server.
+-- Instead of a blocking stdio loop, exposes a _lsp_handle(json) function
+-- that processes one LSP message at a time. The WASM host calls this
+-- function for each incoming message and captures io.write output.
 
-pledge("load", "fs:read=./*")
+global require, io, tostring, fromjson, tojson, pledge
 
-local transport = require("lus-language.transport")
+pledge("load", "fs:read", "seal")
+
 local protocol = require("lus-language.protocol")
 local document = require("lus-language.document")
 local diagnostics = require("lus-language.analysis.diagnostics")
@@ -20,23 +24,18 @@ local doc_folding = require("lus-language.operations.folding")
 local doc_inlay = require("lus-language.operations.inlay_hints")
 local ws_symbols = require("lus-language.operations.workspace_symbols")
 
-local log = transport.log
-
 -- Server state
 local initialized = false
 local shutdown_requested = false
 
 -- ---------------------------------------------------------------------------
--- Handlers
+-- Handlers (same as main.lus)
 -- ---------------------------------------------------------------------------
 
 local handlers = {}
 
--- initialize: return server capabilities
 function handlers.initialize(msg)
   initialized = true
-  log("initialized, pid:", msg.params.processId)
-  -- Store workspace root for cross-file resolution
   local root_uri = msg.params.rootUri
   if not root_uri and msg.params.workspaceFolders then
     local folders = msg.params.workspaceFolders
@@ -46,142 +45,106 @@ function handlers.initialize(msg)
   end
   if root_uri then
     modules.set_root(root_uri)
-    log("workspace root:", root_uri)
   end
   return protocol.make_response(msg.id, protocol.initialize_result())
 end
 
--- initialized: client acknowledgement, nothing to do
 function handlers.initialized()
-  log("client confirmed initialization")
-  return nil -- notification, no response
+  return nil
 end
 
--- shutdown: mark for shutdown, respond with null
 function handlers.shutdown(msg)
   shutdown_requested = true
-  log("shutdown requested")
   return protocol.make_response(msg.id, nil)
 end
 
--- exit: terminate the process
 function handlers.exit()
-  log("exiting, shutdown was", shutdown_requested and "clean" or "unclean")
-  os.exit(shutdown_requested and 0 or 1)
+  -- No-op in WASM (can't call os.exit)
+  return nil
 end
 
--- textDocument/didOpen
 handlers["textDocument/didOpen"] = function(msg)
   local params = msg.params
   local td = params.textDocument
   document.open(td.uri, td.version, td.text)
-  log("opened:", td.uri)
   diagnostics.publish(td.uri)
-  return nil -- notification
+  return nil
 end
 
--- textDocument/didChange
 handlers["textDocument/didChange"] = function(msg)
   local params = msg.params
   local td = params.textDocument
   document.change(td.uri, td.version, params.contentChanges)
-  log("changed:", td.uri)
   diagnostics.publish(td.uri)
-  return nil -- notification
+  return nil
 end
 
--- textDocument/didClose
 handlers["textDocument/didClose"] = function(msg)
   local params = msg.params
   local td = params.textDocument
   document.close(td.uri)
-  log("closed:", td.uri)
-  return nil -- notification
+  return nil
 end
 
--- textDocument/documentSymbol
 handlers["textDocument/documentSymbol"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local syms = doc_symbols.compute(uri)
-  return protocol.make_response(msg.id, syms)
+  return protocol.make_response(msg.id, doc_symbols.compute(uri))
 end
 
--- textDocument/formatting
 handlers["textDocument/formatting"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local edits = doc_format.compute(uri, msg.params.options)
-  return protocol.make_response(msg.id, edits)
+  return protocol.make_response(msg.id, doc_format.compute(uri, msg.params.options))
 end
 
--- textDocument/semanticTokens/full
 handlers["textDocument/semanticTokens/full"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = sem_tokens.compute(uri)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, sem_tokens.compute(uri))
 end
 
--- textDocument/definition
 handlers["textDocument/definition"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = nav_definition.compute(uri, msg.params.position)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, nav_definition.compute(uri, msg.params.position))
 end
 
--- textDocument/references
 handlers["textDocument/references"] = function(msg)
   local uri = msg.params.textDocument.uri
   local include_decl = msg.params.context and msg.params.context.includeDeclaration
-  local result = nav_references.compute(uri, msg.params.position, include_decl)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, nav_references.compute(uri, msg.params.position, include_decl))
 end
 
--- textDocument/hover
 handlers["textDocument/hover"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = nav_hover.compute(uri, msg.params.position)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, nav_hover.compute(uri, msg.params.position))
 end
 
--- textDocument/rename
 handlers["textDocument/rename"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = nav_rename.compute(uri, msg.params.position, msg.params.newName)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, nav_rename.compute(uri, msg.params.position, msg.params.newName))
 end
 
--- textDocument/completion
 handlers["textDocument/completion"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = doc_completion.compute(uri, msg.params.position)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, doc_completion.compute(uri, msg.params.position))
 end
 
--- textDocument/signatureHelp
 handlers["textDocument/signatureHelp"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = doc_signature.compute(uri, msg.params.position)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, doc_signature.compute(uri, msg.params.position))
 end
 
--- textDocument/foldingRange
 handlers["textDocument/foldingRange"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = doc_folding.compute(uri)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, doc_folding.compute(uri))
 end
 
--- textDocument/inlayHint
 handlers["textDocument/inlayHint"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local result = doc_inlay.compute(uri, msg.params.range)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, doc_inlay.compute(uri, msg.params.range))
 end
 
--- workspace/symbol
 handlers["workspace/symbol"] = function(msg)
   local query = msg.params.query or ""
-  local result = ws_symbols.compute(query)
-  return protocol.make_response(msg.id, result)
+  return protocol.make_response(msg.id, ws_symbols.compute(query))
 end
 
 -- ---------------------------------------------------------------------------
@@ -191,8 +154,6 @@ end
 local function dispatch(msg)
   local method = msg.method
   if not method then
-    -- This is a response from the client, not a request/notification.
-    -- Language servers don't typically receive these, but ignore gracefully.
     return nil
   end
 
@@ -201,62 +162,46 @@ local function dispatch(msg)
     return handler(msg)
   end
 
-  -- Unknown method
   if msg.id then
-    -- It's a request (has an id) -- respond with MethodNotFound
-    log("unknown method (request):", method)
     return protocol.make_error(msg.id, protocol.METHOD_NOT_FOUND, "Method not found: " .. method)
-  else
-    -- It's a notification (no id) -- ignore silently
-    log("unknown method (notification):", method)
-    return nil
   end
+  return nil
+end
+
+-- Write an LSP message to io.write (captured by WASM host)
+local function write_message(msg)
+  local body = tojson(msg)
+  io.write("Content-Length: " .. #body .. "\r\n\r\n")
+  io.write(body)
 end
 
 -- ---------------------------------------------------------------------------
--- Main loop
+-- Global handler function called by WASM host
 -- ---------------------------------------------------------------------------
 
-local function main()
-  -- Parse CLI arguments
-  if arg then
-    for i = 1, #arg do
-      if arg[i] == "--version" then
-        io.write("lus-language 0.1.0\n")
-        os.exit(0)
-      end
+-- _lsp_handle(json_string)
+-- Parses one JSON-RPC message, dispatches it, writes responses and
+-- any notifications (like publishDiagnostics) to io.write which the
+-- WASM host captures.
+global function _lsp_handle(json_str)
+  local ok, msg = catch fromjson(json_str)
+  if not ok or not msg then
+    return
+  end
+
+  local success, response = catch dispatch(msg)
+  if not success then
+    if msg.id then
+      response = protocol.make_error(
+        msg.id, protocol.INTERNAL_ERROR,
+        "Internal error: " .. tostring(response)
+      )
+    else
+      return
     end
   end
 
-  log("starting lus-language server")
-
-  while true do
-    -- Read next message; nil means EOF
-    local msg = transport.read_message()
-    if not msg then
-      log("EOF on stdin, exiting")
-      os.exit(shutdown_requested and 0 or 1)
-    end
-
-    -- Dispatch with error recovery so one bad message doesn't crash the server
-    local ok, response = catch dispatch(msg)
-    if not ok then
-      log("ERROR handling", msg.method or "?", ":", response)
-      -- If it was a request, send an internal error response
-      if msg.id then
-        response = protocol.make_error(
-          msg.id, protocol.INTERNAL_ERROR,
-          "Internal error: " .. tostring(response)
-        )
-      else
-        response = nil
-      end
-    end
-
-    if response then
-      transport.write_message(response)
-    end
+  if response then
+    write_message(response)
   end
 end
-
-main()

@@ -1,0 +1,75 @@
+global string
+
+local position = {}
+
+-- Build an index of byte offsets for the start of each line.
+-- Lines are 0-indexed (matching LSP convention).
+-- Returns an array where index i+1 = byte offset of line i.
+-- A trailing entry marks the end-of-string offset.
+function position.build_line_index(text)
+  local index = {1} -- line 0 starts at byte 1
+  local pos = 1
+  while true do
+    local nl = string.find(text, "\n", pos, true)
+    if not nl then break end
+    index[#index + 1] = nl + 1
+    pos = nl + 1
+  end
+  -- sentinel: one past end of string
+  index[#index + 1] = #text + 1
+  return index
+end
+
+-- Convert a 0-based line and character to a 1-based byte offset.
+-- line_index is the result of build_line_index.
+function position.line_col_to_offset(line_index, line, character)
+  local line_start = line_index[line + 1]
+  if not line_start then
+    -- past end of document
+    return line_index[#line_index]
+  end
+  return line_start + character
+end
+
+-- Convert a 1-based byte offset to a 0-based {line, character} table.
+-- line_index is the result of build_line_index.
+function position.offset_to_line_col(line_index, offset)
+  -- Binary search for the line containing offset
+  local lo, hi = 1, #line_index
+  while lo < hi do
+    local mid = lo + ((hi - lo) // 2)
+    if line_index[mid] > offset then
+      hi = mid - 1
+    elseif mid < #line_index and line_index[mid + 1] <= offset then
+      lo = mid + 1
+    else
+      lo = mid
+      break
+    end
+  end
+  local line = lo - 1 -- convert to 0-based
+  local character = offset - line_index[lo]
+  return {line = line, character = character}
+end
+
+-- Apply a single text edit to a document string.
+-- range is an LSP Range: { start = {line, character}, ["end"] = {line, character} }
+-- If range is nil, the new_text replaces the entire document.
+-- Returns the new text.
+function position.apply_edit(text, range, new_text, line_index)
+  if not range then
+    return new_text
+  end
+  line_index = line_index or position.build_line_index(text)
+  local start_offset = position.line_col_to_offset(
+    line_index, range.start.line, range.start.character
+  )
+  local end_offset = position.line_col_to_offset(
+    line_index, range["end"].line, range["end"].character
+  )
+  local before = string.sub(text, 1, start_offset - 1)
+  local after = string.sub(text, end_offset)
+  return before .. new_text .. after
+end
+
+return position

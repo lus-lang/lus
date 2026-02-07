@@ -1,0 +1,64 @@
+global require, debug, string, tonumber, type
+
+local document = require("lus-language.document")
+
+local ast = {}
+
+-- Extract line number and message from a Lua error string.
+-- Format: '[string "..."]:LINE: MESSAGE' or 'FILE:LINE: MESSAGE'
+local function parse_error_string(err_str)
+  if type(err_str) ~= "string" then
+    return {line = 1, column = 1, message = "parse error"}
+  end
+  -- Try [string "..."]:LINE: MESSAGE
+  local line, msg = string.match(err_str, ":(%d+):%s*(.+)$")
+  if line then
+    return {
+      line = tonumber(line),
+      column = 1,
+      message = msg,
+    }
+  end
+  return {line = 1, column = 1, message = err_str}
+end
+
+-- Parse a document and cache the AST.
+-- Returns the AST table (or nil on total failure) and the errors array.
+function ast.parse(uri)
+  local doc = document.get(uri)
+  if not doc then return nil, nil end
+
+  -- Already parsed and cached
+  if doc.ast then
+    return doc.ast, doc.parse_errors
+  end
+
+  local ok, tree = catch debug.parse(doc.text, uri, {
+    comments = true,
+    recover = true,
+  })
+
+  if not ok then
+    -- debug.parse threw; extract error info from the error string
+    local errors = {parse_error_string(tree)}
+    document.set_ast(uri, nil, errors)
+    return nil, errors
+  end
+
+  if tree then
+    local errors = tree.errors or {}
+    document.set_ast(uri, tree, errors)
+    return tree, errors
+  else
+    -- Total parse failure; preserve last good AST
+    document.set_ast(uri, nil, {})
+    return nil, {}
+  end
+end
+
+-- Get the cached AST for a document (current or last-good).
+function ast.get(uri)
+  return document.get_ast(uri)
+end
+
+return ast

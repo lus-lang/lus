@@ -1,0 +1,47 @@
+global require, debug
+
+local document = require("lus-language.document")
+
+local format = {}
+
+-- Format a document and return a TextEdit array for the LSP response.
+-- Returns a single TextEdit replacing the entire document, or an empty
+-- array if the code cannot be formatted (e.g., syntax error).
+function format.compute(uri, options)
+  local doc = document.get(uri)
+  if not doc then return {} end
+
+  local indent = options and options.tabSize or 4
+  local ok, formatted = catch debug.format(doc.text, uri, indent)
+
+  if not ok or not formatted then
+    -- Can't format broken code; return no edits
+    return {}
+  end
+
+  -- No change needed
+  if formatted == doc.text then
+    return {}
+  end
+
+  -- Compute end position from the line index
+  local last_line = #doc.line_index - 2 -- 0-based, minus sentinel
+  local last_char = 0
+  if last_line >= 0 then
+    local last_line_start = doc.line_index[last_line + 1]
+    local doc_end = doc.line_index[#doc.line_index]
+    last_char = doc_end - last_line_start
+  end
+
+  return {
+    {
+      range = {
+        start = {line = 0, character = 0},
+        ["end"] = {line = last_line, character = last_char},
+      },
+      newText = formatted,
+    },
+  }
+end
+
+return format

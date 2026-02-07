@@ -1,0 +1,102 @@
+local protocol = {}
+
+-- JSON-RPC error codes
+protocol.PARSE_ERROR = -32700
+protocol.INVALID_REQUEST = -32600
+protocol.METHOD_NOT_FOUND = -32601
+protocol.INVALID_PARAMS = -32602
+protocol.INTERNAL_ERROR = -32603
+
+-- LSP error codes
+protocol.SERVER_NOT_INITIALIZED = -32002
+protocol.REQUEST_CANCELLED = -32800
+
+-- TextDocumentSyncKind
+protocol.SYNC_NONE = 0
+protocol.SYNC_FULL = 1
+protocol.SYNC_INCREMENTAL = 2
+
+-- Sentinel value that serializes as JSON null via tojson (NaN -> null)
+protocol.JSON_NULL = 0 / 0
+
+-- Build a JSON-RPC success response
+-- When result is nil, uses JSON_NULL so tojson emits "result": null
+function protocol.make_response(id, result)
+  return {
+    jsonrpc = "2.0",
+    id = id,
+    result = result ~= nil and result or protocol.JSON_NULL,
+  }
+end
+
+-- Build a JSON-RPC error response
+function protocol.make_error(id, code, message)
+  return {
+    jsonrpc = "2.0",
+    id = id,
+    error = {
+      code = code,
+      message = message,
+    },
+  }
+end
+
+-- Build a JSON-RPC notification (no id, no response expected)
+function protocol.make_notification(method, params)
+  return {
+    jsonrpc = "2.0",
+    method = method,
+    params = params,
+  }
+end
+
+-- Server capabilities returned during initialize
+function protocol.server_capabilities()
+  return {
+    textDocumentSync = {
+      openClose = true,
+      change = protocol.SYNC_INCREMENTAL,
+    },
+    documentSymbolProvider = true,
+    documentFormattingProvider = true,
+    semanticTokensProvider = {
+      legend = {
+        tokenTypes = {
+          "variable", "parameter", "function", "method",
+          "keyword", "string", "number", "comment",
+          "operator", "property", "enum", "enumMember",
+        },
+        tokenModifiers = {
+          "declaration", "readonly", "defaultLibrary",
+        },
+      },
+      full = true,
+    },
+    definitionProvider = true,
+    referencesProvider = true,
+    hoverProvider = true,
+    renameProvider = true,
+    completionProvider = {
+      triggerCharacters = {".", ":"},
+    },
+    signatureHelpProvider = {
+      triggerCharacters = {"(", ","},
+    },
+    foldingRangeProvider = true,
+    inlayHintProvider = true,
+    workspaceSymbolProvider = true,
+  }
+end
+
+-- Build the full initialize result
+function protocol.initialize_result()
+  return {
+    capabilities = protocol.server_capabilities(),
+    serverInfo = {
+      name = "lus-language",
+      version = "0.1.0",
+    },
+  }
+end
+
+return protocol

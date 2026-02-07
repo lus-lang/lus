@@ -1,0 +1,72 @@
+global io, fromjson, tojson, string, tonumber, tostring, table, select
+
+local transport = {}
+
+-- Log a message to stderr (never to stdout, which is the LSP channel)
+function transport.log(...)
+  local parts = {}
+  for i = 1, select("#", ...) do
+    parts[#parts + 1] = tostring(select(i, ...))
+  end
+  io.stderr:write("[lus-language] " .. table.concat(parts, " ") .. "\n")
+  io.stderr:flush()
+end
+
+-- Read a single LSP message from stdin.
+-- Returns the parsed JSON table, or nil on EOF/error.
+function transport.read_message()
+  -- Read headers until we find Content-Length
+  local content_length = nil
+  while true do
+    local header = io.read("l")
+    if not header then
+      -- EOF
+      return nil
+    end
+    -- Strip trailing \r if present (headers end with \r\n)
+    if string.sub(header, -1) == "\r" then
+      header = string.sub(header, 1, -2)
+    end
+    -- Empty line signals end of headers
+    if header == "" then
+      break
+    end
+    -- Parse Content-Length header
+    local len = string.match(header, "^Content%-Length:%s*(%d+)")
+    if len then
+      content_length = tonumber(len)
+    end
+    -- Other headers (e.g., Content-Type) are ignored
+  end
+
+  if not content_length then
+    transport.log("ERROR: no Content-Length header found")
+    return nil
+  end
+
+  -- Read exactly content_length bytes of JSON body
+  local body = io.read(content_length)
+  if not body then
+    transport.log("ERROR: failed to read message body")
+    return nil
+  end
+
+  if #body < content_length then
+    transport.log("ERROR: short read, expected", content_length, "got", #body)
+    return nil
+  end
+
+  local msg = fromjson(body)
+  return msg
+end
+
+-- Write a single LSP message to stdout.
+function transport.write_message(msg)
+  local body = tojson(msg)
+  local header = "Content-Length: " .. #body .. "\r\n\r\n"
+  io.write(header)
+  io.write(body)
+  io.flush()
+end
+
+return transport

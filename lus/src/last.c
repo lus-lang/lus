@@ -189,6 +189,31 @@ static const char *binop_names[] = {
 static const char *unop_names[] = {"-", "~", "not", "#"};
 
 /*
+** Forward declaration
+*/
+static void nodetotable(lua_State *L, LusAstNode *node);
+
+/*
+** Convert a linked list of AST nodes to a Lua array table.
+** Traverses via node->next pointers. Pushes the array onto the stack,
+** or pushes nil if head is NULL.
+*/
+static void listtoarray(lua_State *L, LusAstNode *head) {
+  if (head == NULL) {
+    lua_pushnil(L);
+    return;
+  }
+  int i = 1;
+  LusAstNode *n = head;
+  lua_newtable(L);
+  while (n != NULL) {
+    nodetotable(L, n);
+    lua_rawseti(L, -2, i++);
+    n = n->next;
+  }
+}
+
+/*
 ** Convert a single node to a Lua table (recursive)
 */
 static void nodetotable(lua_State *L, LusAstNode *node) {
@@ -308,14 +333,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     }
     /* Serialize params as array (linked list of AST_NAME nodes) */
     if (node->u.func.params != NULL) {
-      int i = 1;
-      LusAstNode *p = node->u.func.params;
-      lua_newtable(L);
-      while (p != NULL) {
-        nodetotable(L, p);
-        lua_rawseti(L, -2, i++);
-        p = p->next;
-      }
+      listtoarray(L, node->u.func.params);
       lua_setfield(L, -2, "params");
     }
     nodetotable(L, node->u.func.body);
@@ -352,27 +370,27 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_FORGEN:
-    nodetotable(L, node->u.forgen.names);
+    listtoarray(L, node->u.forgen.names);
     lua_setfield(L, -2, "names");
-    nodetotable(L, node->u.forgen.explist);
+    listtoarray(L, node->u.forgen.explist);
     lua_setfield(L, -2, "explist");
     /* body statements are in children array */
     break;
 
   case AST_LOCAL:
   case AST_GLOBAL:
-    nodetotable(L, node->u.decl.names);
+    listtoarray(L, node->u.decl.names);
     lua_setfield(L, -2, "names");
-    nodetotable(L, node->u.decl.values);
+    listtoarray(L, node->u.decl.values);
     lua_setfield(L, -2, "values");
     lua_pushboolean(L, node->u.decl.isfrom);
     lua_setfield(L, -2, "isfrom");
     break;
 
   case AST_ASSIGN:
-    nodetotable(L, node->u.assign.lhs);
+    listtoarray(L, node->u.assign.lhs);
     lua_setfield(L, -2, "lhs");
-    nodetotable(L, node->u.assign.rhs);
+    listtoarray(L, node->u.assign.rhs);
     lua_setfield(L, -2, "rhs");
     lua_pushboolean(L, node->u.assign.isfrom);
     lua_setfield(L, -2, "isfrom");
@@ -383,7 +401,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
   case AST_METHODCALL:
     nodetotable(L, node->u.call.func);
     lua_setfield(L, -2, "func");
-    nodetotable(L, node->u.call.args);
+    listtoarray(L, node->u.call.args);
     lua_setfield(L, -2, "args");
     if (node->type == AST_METHODCALL && node->u.call.method != NULL) {
       lua_pushstring(L, getstr(node->u.call.method));
@@ -392,7 +410,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_TABLE:
-    nodetotable(L, node->u.table.fields);
+    listtoarray(L, node->u.table.fields);
     lua_setfield(L, -2, "fields");
     break;
 
@@ -405,7 +423,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
 
   case AST_RETURN:
   case AST_PROVIDE:
-    nodetotable(L, node->u.ret.values);
+    listtoarray(L, node->u.ret.values);
     lua_setfield(L, -2, "values");
     break;
 
@@ -432,7 +450,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_ENUM:
-    nodetotable(L, node->u.enumdef.names);
+    listtoarray(L, node->u.enumdef.names);
     lua_setfield(L, -2, "names");
     break;
 
@@ -446,7 +464,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_INTERP:
-    nodetotable(L, node->u.interp.parts);
+    listtoarray(L, node->u.interp.parts);
     lua_setfield(L, -2, "parts");
     lua_pushinteger(L, node->u.interp.nparts);
     lua_setfield(L, -2, "nparts");

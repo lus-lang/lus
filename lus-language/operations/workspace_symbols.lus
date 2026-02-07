@@ -1,0 +1,71 @@
+global require, ipairs, string
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local document = require("lus-language.document")
+
+local workspace_symbols = {}
+
+-- LSP SymbolKind
+local SYMBOL_KIND = {
+  Function = 12,
+  Variable = 13,
+  Constant = 14,
+}
+
+-- Simple fuzzy match: check if query chars appear in order in name
+local function fuzzy_match(name, query)
+  if not query or #query == 0 then return true end
+  local lower_name = string.lower(name)
+  local lower_query = string.lower(query)
+  local qi = 1
+  for ni = 1, #lower_name do
+    if string.sub(lower_name, ni, ni) == string.sub(lower_query, qi, qi) then
+      qi = qi + 1
+      if qi > #lower_query then return true end
+    end
+  end
+  return false
+end
+
+-- Compute workspace symbols matching a query.
+function workspace_symbols.compute(query)
+  local results = {}
+  local uris = document.all()
+
+  for _, uri in ipairs(uris) do
+    ast_mod.parse(uri)
+    local analysis = scope_mod.analyze(uri)
+    if analysis then
+      for _, decl in ipairs(analysis.declarations) do
+        -- Only include top-level and function declarations
+        if decl.kind == "function" or decl.kind == "local"
+           or decl.kind == "global" then
+          if fuzzy_match(decl.name, query) then
+            local kind = SYMBOL_KIND.Variable
+            if decl.kind == "function" then
+              kind = SYMBOL_KIND.Function
+            elseif decl.node and decl.node.attr == "const" then
+              kind = SYMBOL_KIND.Constant
+            end
+            results[#results + 1] = {
+              name = decl.name,
+              kind = kind,
+              location = {
+                uri = uri,
+                range = {
+                  start = {line = decl.line - 1, character = decl.column - 1},
+                  ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
+                },
+              },
+            }
+          end
+        end
+      end
+    end
+  end
+
+  return results
+end
+
+return workspace_symbols
