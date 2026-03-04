@@ -1,25 +1,31 @@
 ---
 order: 6
 title: Lua to Lus
-draft: true
+draft: false
 icon: arrow-right-left
 ---
 
-While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus.
+While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus. Enabling `-Wpedantic` during development will catch many of these automatically.
+
+This page is a concise migration reference. For full details on each feature, follow the links to the [Guide](/manual/guide) and the relevant Acquis pages.
 
 ## Use of `-Wpedantic`
 
 Using the `-Wpedantic` flag during development can help catch old Lua idioms which are no longer relevant in Lus. This is your best friend for upgrading Lua code to Lus code; it will catch most of what can be safely rewritten by generating an AST for every chunk and analyzing them at compile time. That said, avoid using this flag in production as AST generation is processor-heavy and involves additional memory allocation.
 
+```bash
+lus -Wpedantic myscript.lus
+```
+
+See [Acquis 14](/manual/acquis-14) for the full list of diagnostics produced by `-Wpedantic`.
+
 ## Permissions ("pledging")
 
 Lus implements a capability-based permission model where scripts have to explicitly declare the access they need to the runtime and its libraries. While this can be used for sandboxing and other security purposes, its primary use case is to avoid unexpected behavior, such as unintended writes to sensitive system files. **You will most likely have to pledge permissions to your scripts.**
 
-Pledging can be done either through the `pledge` function at runtime, or through `--pledge`/`-P` commandline arguments. The `pledge` function is a variadic function that takes a list of permissions as arguments; these permissions can later be rejected or sealed to make them immutable. When pledges are defined through commandline arguments, they are sealed by default and the interpreter cannot request additional pledges.
+Pledging can be done either through the `pledge` function at runtime, or through `--pledge`/`-P` commandline arguments. When pledges are defined through commandline arguments, they are sealed by default and the interpreter cannot request additional pledges.
 
-Currently, you can `pledge` permissions to access the filesystem, the network, and code evaluation at runtime. For example, to pledge universal access to the filesystem, you can run the interpreter with the `--pledge fs`/`-Pfs` argument, or run the following code in your script:
-
-```lua
+```lus
 global pledge, print, fs
 
 if pledge("fs") then
@@ -27,36 +33,253 @@ if pledge("fs") then
 end
 ```
 
-Certain permissions can also have subpermissions, further restricting what the script can do. For example, `fs` can be pledged with `read` and `write` subpermissions, which allow the script to read and write to the filesystem, respectively. Certain permissions may also accept values, such as `fs` with a path to pledge access to a specific directory. For example:
+Permissions can be restricted with subpermissions (e.g. `fs:read=/tmp/*`), rejected with `~` prefixes, and sealed to prevent further changes. See [Permissions](/manual/guide#permissions) in the Guide for the complete reference.
 
-```lua
-if pledge("fs:read=/tmp/*") then
-    -- We can now read files in /tmp
-    print(fs.list("/tmp"))
+## Error handling with `catch`
+
+Instead of wrapping calls in `pcall`, Lus provides the `catch` keyword which works directly on any expression. The result follows the same `ok, value` convention as `pcall`.
+
+```lus
+-- In Lua, protected calls require wrapping in a function:
+-- local ok, result = pcall(function() return riskyOp() end)
+
+-- In Lus, catch works on any expression directly:
+local ok, result = catch riskyOp()
+
+-- With a handler to transform errors:
+local ok, err = catch[simplify] riskyOp()
+```
+
+See [Error handling](/manual/guide#error-handling), [Catch handlers](/manual/guide#catch-handlers), and [Acquis 1](/manual/acquis-1).
+
+## String interpolation
+
+Backtick strings support interpolation with `$` for identifiers and `$(...)` for expressions, replacing verbose concatenation.
+
+```lus
+-- Instead of concatenation:
+-- print("Hello, " .. name .. "! Age: " .. tostring(age))
+
+-- Backtick strings interpolate with $ and $():
+print(`Hello, $name! Age: $age`)
+print(`Result: $(x + y)`)
+```
+
+See [string](/manual/guide#string) and [Acquis 21](/manual/acquis-21).
+
+## Optional chaining
+
+The `?` operator short-circuits to `nil` on any `nil` value in a chain, replacing verbose `and`-guard patterns.
+
+```lus
+-- Instead of chained and-checks:
+-- local host = config and config.server and config.server.host
+
+-- Use the ? operator:
+local host = config?.server?.host
+local name = getUser(id)?:getName()
+local val = callback?()
+```
+
+See [Optional chaining](/manual/guide#optional-chaining) and [Acquis 2](/manual/acquis-2).
+
+## If and while assignment
+
+Variables can be declared directly in `if` and `while` conditions, scoped to the block. This replaces the pattern of pre-declaring a variable before testing it.
+
+```lus
+-- Instead of pre-declaring and testing:
+-- local user = findUser(id)
+-- if user then print(user.name) end
+
+if user = findUser(id) then
+    print(user.name)
+end
+
+while line = file:read() do
+    process(line)
 end
 ```
 
-You can also _reject_ permissions, which will bar the interpreter from ever acquiring them. This is done through prefixing the permission with `~`:
+See [if, elseif, else](/manual/guide#if-elseif-else), [while](/manual/guide#while), [Acquis 3](/manual/acquis-3), and [Acquis 13](/manual/acquis-13).
 
-```lua
-if pledge("~fs") then
-    -- We can now never acquire the fs permission.
-    assert(not pledge("fs"))
-end
+## Table destructuring
 
--- You can also reject permissions through commandline arguments:
--- lus --pledge=~fs -P~network
+The `from` keyword extracts fields from a table into local variables in a single statement. It also works with `require`.
+
+```lus
+-- Instead of manually extracting fields:
+-- local x = point.x; local y = point.y
+
+local x, y from point
+local insert, remove from require("table")
 ```
 
-It is also possible to seal permissions, making them immutable, through pledging the special `seal` permission. It isn't necessary to add `--pledge=seal`/`-Pseal` to the commandline arguments, as pledging any permissions through commandline arguments will automatically seal them.
+See [Table destructuring](/manual/guide#table-destructuring) and [Acquis 4](/manual/acquis-4).
 
-```lua
-if pledge("seal") then
-    -- We can now never acquire additional permissions.
-    assert(not pledge("fs"))
+## Slices
+
+Tables and strings can be sliced with a two-argument index syntax, returning a new table or substring.
+
+```lus
+local t = {10, 20, 30, 40, 50}
+local sub = t[2, 4]     -- {20, 30, 40}
+local s = "hello"[2, 4] -- "ell"
+```
+
+See [Slices](/manual/guide#slices) and [Acquis 16](/manual/acquis-16).
+
+## Table cloning
+
+`table.clone` creates shallow or deep copies of tables, correctly handling circular references when deep copying.
+
+```lus
+local shallow = table.clone(original)
+local deep = table.clone(original, true) -- circular refs preserved
+```
+
+See [Table cloning](/manual/guide#table-cloning) and [Acquis 17](/manual/acquis-17).
+
+## Do expressions
+
+A `do ... end` block becomes an expression when it contains a `provide` statement, yielding a value from the block.
+
+```lus
+local result = do
+    local temp = compute()
+    provide temp * 2
 end
 ```
 
-The special permission `all` can be pledged through commandline arguments to pledge all permissions at once, which is mostly useful for debugging or prototyping. It is not possible to pledge `all` through code. Obviously, you shouldn't use this permission in production.
+See [Do expressions](/manual/guide#do-expressions) and [Acquis 23](/manual/acquis-23).
 
-It is good practice in Lus to include a `pledge` statement at the very beginning of your main script, before any other code, so that prospecting developers can see which potentially disruptive permissions your script requires. While writing a library, you should avoid using `seal` to let the main program grant itself additional permissions when needed; runtime `seal` is most useful when invoked _after_ libraries have been loaded.
+## Enums
+
+Lus has first-class enums. Each variant is a unique, opaque value that can be compared for equality but is distinct from strings and numbers.
+
+```lus
+local Color = enum red, green, blue end
+print(Color.red)              --> Enum<red>
+print(Color.red == Color.red) --> true
+print(Color.red == Color.green) --> false
+```
+
+See [enum](/manual/guide#enum) and [Acquis 5](/manual/acquis-5).
+
+## Local groups
+
+The `<group>` attribute creates a local variable whose table fields can be assigned individually while still being treated as a single binding.
+
+```lus
+local pos <group> = { x = 0, y = 0 }
+pos.x = 10       -- ok
+pos = { y = 5 }  -- partial update
+```
+
+See [Local groups](/manual/guide#local-groups) and [Acquis 18](/manual/acquis-18).
+
+## Variable attributes
+
+Lus extends Lua 5.4's `<const>` and `<close>` attributes and adds support for runtime attributes, which are user-defined functions called on every assignment to the variable.
+
+```lus
+local MAX <const> = 100         -- immutable
+local f <close> = io.open(path) -- auto-closed on scope exit
+
+-- Runtime attribute (called on every assignment):
+local x <validator> = 10
+```
+
+See [Variable attributes](/manual/guide#variable-attributes) and [Acquis 22](/manual/acquis-22).
+
+## Vectors
+
+Vectors are mutable, fixed-size byte buffers for efficient binary data manipulation. They use `string.pack`/`string.unpack` format strings.
+
+```lus
+local v = vector.create(1024)
+vector.pack(v, 0, "I4", 123456789)
+local x = vector.unpack(v, 0, "I4")
+```
+
+See [vector](/manual/guide#vector) and [Acquis 15](/manual/acquis-15).
+
+## New standard libraries
+
+Lus adds several standard libraries not present in Lua.
+
+### JSON
+
+The `fromjson` and `tojson` globals convert between Lus tables and JSON strings. No pledging is required.
+
+```lus
+local t = fromjson('{"key": "value"}')
+local s = tojson(t)
+```
+
+See [JSON](/manual/guide#json) and [Acquis 6](/manual/acquis-6).
+
+### Filesystem
+
+The `fs` library provides file and directory operations. Requires `pledge("fs")`.
+
+```lus
+local contents = fs.read("config.txt")
+local entries = fs.list(".")
+```
+
+See [Filesystem](/manual/guide#filesystem) and [Acquis 7](/manual/acquis-7).
+
+### Networking
+
+The `network` library provides HTTP, TCP, and UDP support. Requires `pledge("network")`.
+
+```lus
+local res = network.http("https://example.com")
+```
+
+See [Networking](/manual/guide#networking) and [Acquis 9](/manual/acquis-9).
+
+### Transcoding
+
+`string.transcode` converts strings between character encodings.
+
+```lus
+local utf16 = string.transcode(data, "utf-8", "utf-16")
+```
+
+See [Acquis 8](/manual/acquis-8).
+
+## Workers
+
+Workers provide true OS-thread concurrency via message passing, unlike coroutines which are cooperative and single-threaded.
+
+```lus
+local w = worker.create("task.lus", {data = "input"})
+while result = worker.receive(w) do
+    print(result)
+end
+```
+
+See [Workers](/manual/guide#workers) and [Acquis 11](/manual/acquis-11).
+
+## AST access
+
+Lus exposes its parser for programmatic access. `debug.parse(code)` returns the AST as a Lus table. The CLI also provides `--ast-json` and `--ast-graph` flags for dumping the AST of a file.
+
+```bash
+lus --ast-json myscript.lus
+lus --ast-graph myscript.lus
+```
+
+See [Acquis 12](/manual/acquis-12).
+
+## Standalone binaries
+
+Lus can bundle scripts and their dependencies into standalone executables with `--standalone`. Use `--include` to add additional files or directories to the bundle.
+
+```bash
+lus --standalone app.lus --include lib/
+```
+
+See [Search paths](/manual/guide#search-paths) and [Acquis 19](/manual/acquis-19).

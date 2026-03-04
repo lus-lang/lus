@@ -4,13 +4,17 @@ title: Compiling Lus
 icon: hammer
 ---
 
-Compiling Lus is a straightforward process. You will need the following tools to compile the runtime:
+Compiling Lus is a straightforward process. The build produces three artifacts: the `lus` interpreter, the `lusc` bytecode compiler, and `liblus` (a static library for embedding).
+
+You will need the following tools to compile the runtime:
 
 - The Lus source code, which can be downloaded from its [repository](https://github.com/lus-lang/lus).
 - A C compiler ([gcc](https://gcc.gnu.org/) or [clang](https://clang.llvm.org/) recommended).
 - The [Meson build system](https://mesonbuild.com/).
 - OpenSSL development libraries (for HTTPS support)
 - c-ares development libraries (for async DNS)
+- A threading library (pthreads; included by default on most systems)
+- readline (macOS) or libedit (FreeBSD/NetBSD/OpenBSD) for the REPL
 
 ### Installing Dependencies
 
@@ -24,24 +28,81 @@ sudo apt install libssl-dev libc-ares-dev
 # Fedora/RHEL
 sudo dnf install openssl-devel c-ares-devel
 
+# FreeBSD/NetBSD/OpenBSD
+pkg install openssl c-ares libedit
+
+# Arch Linux
+sudo pacman -S openssl c-ares
+
 # Windows (vcpkg)
 vcpkg install openssl c-ares
 ```
 
-After downloading and extracting the source code, navigate to the `/lus` directory and run the following commands to prepare, compile, and execute the runtime:
+## Building
 
 ```bash
+git clone https://github.com/lus-lang/lus.git
+cd lus/lus
 meson setup build
 meson compile -C build
-
-# On macOS and Linux.
-./build/lus
-
-# On Windows.
-build\lus.exe
 ```
 
-The binary will be placed in the `build` directory and is ready to be used without any further configuration. Generally, you will want to place it in a directory that is in your system's `PATH` so you can invoke it from the command line anywhere:
+The `lus` interpreter and `lusc` compiler will be placed in the `build` directory. The `lusc` compiler precompiles Lus source files to bytecode. Precompiled files load faster but are not portable across architectures.
 
-- On macOS and Linux, you can place it in the `/usr/local/bin` directory.
+### Build types
+
+```bash
+meson setup build --buildtype=release
+```
+
+The default build already enables `-O2` and LTO. The `release` buildtype additionally disables assertions via `-DNDEBUG`.
+
+### Verification
+
+```bash
+./build/lus -v
+meson test -C build
+```
+
+Tests are organized into four suites: **h1** (language integrity), **h2** (C API), **h3** (system integration), and **h4** (benchmarks). You can run a specific suite with:
+
+```bash
+meson test -C build --suite h1
+```
+
+## Installation
+
+```bash
+sudo meson install -C build
+```
+
+This installs the `lus` and `lusc` executables, headers, and static library to the system prefix (typically `/usr/local`). Alternatively, copy the binaries manually:
+
+- On macOS and Linux, you can place them in the `/usr/local/bin` directory.
 - On Windows, you should create a new directory for Lus and [follow these instructions](<https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ee537574(v=office.14)#to-add-a-path-to-the-path-environment-variable>) to add it to your system's `PATH`.
+
+## Embedding Lus
+
+The build installs the following headers: `lua.h`, `luaconf.h`, `lualib.h`, `lauxlib.h`, and `lua.hpp` (C++ wrapper). Use pkg-config to get the correct compiler and linker flags:
+
+```bash
+pkg-config --cflags --libs lus
+```
+
+Example compilation:
+
+```bash
+gcc -o myapp myapp.c $(pkg-config --cflags --libs lus) -lm -lpthread
+```
+
+See [C API error handling](/manual/guide#c-api-error-handling) in the Guide for details on using the C API.
+
+## Platform notes
+
+| Platform | Notes |
+|---|---|
+| Linux | Default target. Uses `dl` for dynamic loading. |
+| macOS | Uses `readline` for the REPL. |
+| FreeBSD, NetBSD, OpenBSD | Uses `libedit` instead of `readline`. |
+| Windows | Links `ws2_32` (Winsock) for networking. |
+| SunOS/Solaris | POSIX APIs with `dlopen`. |

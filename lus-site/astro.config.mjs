@@ -22,7 +22,13 @@ function lucideIconData() {
     },
     load(id) {
       if (id !== "\0virtual:lucide-icons") return
-      const needed = new Set(["library"])
+      const needed = new Set([
+        "library",
+        // Nav icons
+        "house", "terminal", "book-open", "circle-question-mark", "newspaper",
+        // Card icons
+        "download", "chevron-right",
+      ])
       for (const file of readdirSync(manualDir).filter((f) => f.endsWith(".mdx"))) {
         const match = readFileSync(join(manualDir, file), "utf-8").match(/^icon:\s*(.+)$/m)
         if (match) needed.add(match[1].trim())

@@ -16,8 +16,9 @@ const rendered = await render(page)
 
 <Layout title={page.data.title}>
   <main>
-    <section class="flex gap-2">
-      <article class="flex-1 min-w-0">
+    <section>
+      <a href="/news" class="back-link">← Back to news</a>
+      <article>
         <p class="date">{page.data.date}</p>
         <rendered.Content />
       </article>
@@ -28,6 +29,10 @@ const rendered = await render(page)
 <style>
   @reference "../../styles/global.css";
 
+  .back-link {
+    @apply text-sm text-lime-600 font-normal no-underline hover:underline mb-4 inline-block;
+  }
+
   article {
     @apply space-y-4;
     .date {
@@ -36,26 +41,6 @@ const rendered = await render(page)
   }
 
   article :global(h1) {
-    @apply text-2xl font-bold text-lime-800 pb-4;
-  }
-
-  aside {
-    @apply min-w-48 w-1/6;
-    a {
-      @apply block;
-      .date {
-        @apply block text-xs text-lime-600;
-      }
-      .title {
-        @apply block;
-      }
-    }
-  }
-
-  .toc {
-    @apply text-lime-700 mb-4;
-    a {
-      @apply font-normal no-underline hover:bg-lime-200 lowercase;
-    }
+    @apply text-3xl font-bold text-lime-800 tracking-tight pb-4;
   }
 </style>

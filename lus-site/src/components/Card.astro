@@ -1,23 +1,48 @@
+---
+interface Props {
+  class?: string
+  color?: "lime" | "red"
+  variant?: "default" | "feature"
+}
+
+const { color = "lime", variant = "default" } = Astro.props
+---
+
 <div
   class:list={["card", Astro.props.class]}
-  data-color={Astro.props.color || "lime"}
+  data-color={color}
+  data-variant={variant}
 >
+  <slot name="eyebrow" />
   <slot name="title" />
-  <p><slot /></p>
+  <div class="card-body"><slot /></div>
+  <slot name="footer" />
 </div>
 
 <style>
   @reference "../styles/global.css";
 
   .card {
-    @apply border lus-shadow bg-linear-to-br;
+    @apply border bg-linear-to-br;
+
+    &[data-variant="default"] {
+      @apply lus-shadow;
+    }
+
+    &[data-variant="feature"] {
+      @apply shadow-none;
+    }
 
     h2 {
       @apply font-semibold text-lg border-b border-dashed lowercase px-4 py-2;
     }
 
-    p {
+    .card-body {
       @apply px-4 py-1;
+    }
+
+    .card-body :global(p) {
+      @apply px-0 py-0;
     }
 
     button {
@@ -29,7 +54,13 @@
     }
 
     &[data-color="lime"] {
-      @apply border-lime-500 from-lime-100 to-lime-400 lus-shadow shadow-lime-500/40 text-lime-950;
+      &[data-variant="default"] {
+        @apply border-lime-500 from-lime-100 to-lime-400 lus-shadow shadow-lime-500/40 text-lime-950;
+      }
+
+      &[data-variant="feature"] {
+        @apply border-lime-300 from-white to-lime-50 text-lime-950 lus-shadow shadow-lime-500/40;
+      }
 
       h2 {
         @apply text-lime-800;
@@ -41,7 +72,13 @@
     }
 
     &[data-color="red"] {
-      @apply border-red-500 from-red-100 to-red-400 lus-shadow shadow-red-500/40 text-red-950;
+      &[data-variant="default"] {
+        @apply border-red-500 from-red-100 to-red-400 lus-shadow shadow-red-500/40 text-red-950;
+      }
+
+      &[data-variant="feature"] {
+        @apply border-red-300 from-white to-red-50 text-red-950 lus-shadow shadow-red-500/40;
+      }
 
       h2 {
         @apply text-red-800;

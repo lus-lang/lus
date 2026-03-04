@@ -1,0 +1,35 @@
+---
+// @ts-ignore
+import icons from "virtual:lucide-icons"
+
+interface Props {
+  name: string
+  size?: number
+  class?: string
+}
+
+const { name, size = 16, class: className } = Astro.props
+const paths = icons[name]
+---
+
+{
+  paths && (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class={className}
+    >
+      {paths.map(([tag, attrs]: any) => {
+        const El = tag as any
+        return <El {...attrs} />
+      })}
+    </svg>
+  )
+}

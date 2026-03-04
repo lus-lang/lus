@@ -1,8 +1,7 @@
 ---
 import type { ReleaseLinks } from "../lib/release"
 import Card from "./Card.astro"
-
-import DownloadIcon from "./icons/Download.astro"
+import Icon from "./Icon.astro"
 
 import PlatformWindows from "./icons/PlatformWindows.astro"
 import PlatformMac from "./icons/PlatformMac.astro"
@@ -22,12 +21,11 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
 
 <Card color={color} class="flex-1 flex flex-col">
   <h2 slot="title">
-    <DownloadIcon class="inline-block w-4 h-4" />
     {name}
     ({version})
   </h2>
   <p>Released on {releaseDate}. <slot /></p>
-  <div class="px-4 flex gap-2 flex-wrap items-center mt-auto">
+  <div slot="footer" class="px-4 pb-3 flex gap-2 flex-wrap items-center mt-auto">
     {
       links?.windows ? (
         <a href={links.windows} class="no-underline text-inherit! font-normal!">
@@ -93,12 +91,12 @@ const { version, releaseDate, name, color = "lime", links } = Astro.props
           class="no-underline text-inherit! font-normal!"
         >
           <button>
-            <DownloadIcon class="inline-block w-4 h-4" /> Source code
+            <Icon name="download" size={16} class="inline-block" /> Source code
           </button>
         </a>
       ) : (
         <button disabled>
-          <DownloadIcon class="inline-block w-4 h-4" /> Source code
+          <Icon name="download" size={16} class="inline-block" /> Source code
         </button>
       )
     }

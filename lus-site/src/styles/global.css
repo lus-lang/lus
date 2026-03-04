@@ -10,11 +10,11 @@
 }
 
 body {
-  @apply font-sans text-lime-950 bg-lime-50 min-h-screen flex flex-col;
+  @apply font-sans text-lime-950 bg-lime-50 min-h-screen flex flex-col antialiased;
 }
 
 main {
-  @apply container mx-auto p-8 space-y-8;
+  @apply container mx-auto px-8 py-12 space-y-12;
 }
 
 a {
@@ -25,11 +25,11 @@ section {
   @apply space-y-2;
 
   h1 {
-    @apply text-2xl font-bold;
+    @apply text-3xl font-bold tracking-tight;
   }
 
   h2 {
-    @apply text-xl font-semibold;
+    @apply text-xl font-semibold tracking-tight;
   }
 
   h3 {
@@ -46,7 +46,7 @@ section {
   pre {
     @apply my-4;
     code {
-      @apply block overflow-x-scroll bg-white p-4 border border-lime-300;
+      @apply block overflow-x-scroll bg-white p-4 border border-lime-300 leading-relaxed;
     }
   }
 }
@@ -60,7 +60,7 @@ li {
 }
 
 blockquote {
-  @apply border bg-lime-100 border-lime-300 p-4 text-lime-700;
+  @apply border-l-4 border-lime-400 bg-lime-100/60 p-4 text-lime-700;
 }
 
 table {
@@ -71,7 +71,7 @@ table {
   }
 
   th {
-    @apply bg-lime-100 font-semibold;
+    @apply bg-lime-100 font-semibold text-sm uppercase tracking-wide text-lime-700;
   }
 
   tr:nth-child(even) td {
@@ -88,11 +88,29 @@ html.unstable {
     @apply text-red-700;
   }
 
-  section pre code {
-    @apply border-red-300;
+  main {
+    @apply px-8 py-12 space-y-12;
+  }
+
+  section {
+    h1 {
+      @apply text-3xl tracking-tight;
+    }
+
+    h2 {
+      @apply tracking-tight;
+    }
+
+    pre code {
+      @apply border-red-300 leading-relaxed;
+    }
   }
 
   blockquote {
-    @apply bg-red-100 border-red-300 text-red-700;
+    @apply bg-red-100/60 border-l-4 border-red-400 text-red-700;
+  }
+
+  table th {
+    @apply text-sm uppercase tracking-wide text-red-700;
   }
 }

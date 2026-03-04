@@ -1,15 +1,13 @@
 ---
 order: 4
 title: Guide to Lus
-draft: true
+draft: false
 icon: compass
 ---
 
 ## Welcome!
 
 This handy guide will give you a brief rundown on the language. If you manage to make it through, you will be equipped with a good understanding of the language's internals and know everything necessary to write idiomatic Lus code.
-
-> **This guide is a work-in-progress.**
 
 ## Variables
 
@@ -77,6 +75,88 @@ end
 
 This creates three closures, each with its own `y` but sharing the same `x`.
 
+### Table destructuring
+
+The `from` keyword extracts named fields from a table into variables. The variable names determine which fields are read:
+
+```lus
+local point = {x = 10, y = 20, z = 30}
+local x, y from point
+print(x, y)  --> 10  20
+```
+
+The table expression is evaluated once, and missing fields become `nil`. The `from` keyword works with `local`, bare assignment, and `global` declarations:
+
+```lus
+local x, y from getPosition()   -- local declaration
+x, y from otherPoint             -- assigns to existing variables
+global width, height from getDimensions()
+```
+
+### Variable attributes
+
+Local variables can carry _attributes_ that modify their behavior. There are two compile-time attributes and a runtime attribute system.
+
+The `<const>` attribute makes a variable immutable after initialization — any attempt to reassign it is a compile-time error:
+
+```lus
+local MAX <const> = 100
+MAX = 200  -- ERROR: attempt to assign to const variable
+```
+
+The `<close>` attribute marks a variable as _to-be-closed_. When the variable goes out of scope (whether normally or via an error), its `__close` metamethod is called:
+
+```lus
+do
+  local f <close> = io.open("data.txt", "r")
+  -- use f...
+end  -- f:close() called automatically here
+```
+
+Runtime attributes use the `<attr>` syntax to attach a function that is called on every assignment. The function receives the variable name and the new value. If it returns a non-nil value, that value replaces the assigned one:
+
+```lus
+local function typed(name, value)
+  if type(value) ~= "number" then
+    error(`$name must be a number, got $(type(value))`)
+  end
+  return value
+end
+
+local x <typed> = 10     -- ok
+x = 20                   -- ok
+x = "hello"              -- ERROR: x must be a number, got string
+```
+
+The attribute function is not called when assigning `nil`. Multiple runtime attributes can be chained with commas (`<first, second>`) and run in order. Compile-time attributes must come before runtime ones.
+
+### Local groups
+
+The `<group>` attribute creates a stack-allocated named bundle of fields with dot access, without allocating a heap table:
+
+```lus
+local pos <group> = { x = 0, y = 0 }
+print(pos.x)  --> 0
+pos.x = 10
+```
+
+Groups are not first-class values — they cannot be passed to functions or stored in tables. You also cannot add new fields after initialization. However, you can perform partial reassignment to update only specific fields:
+
+```lus
+pos = { x = 5 }  -- only updates x; y remains 0
+```
+
+Groups can contain subgroups and `<const>` fields:
+
+```lus
+local player <group> = {
+  name <const> = "Alice",
+  pos <group> = { x = 0, y = 0 }
+}
+player.pos.x = 10    -- ok
+player.name = "Bob"  -- ERROR: const field
+```
+
 ## Values
 
 There are ten types of values in Lus: `nil`, `boolean`, `number`, `string`, `table`, `function`, `thread`, `userdata`, `enum`, and `vector`.
@@ -91,7 +171,7 @@ Boolean values are your good old `true` and `false`. In conditional contexts, on
 
 ### `number`
 
-Numbers in Lus are either 64-bit integers or floating point numbers. While they are both represented by the `number` type, their subtype remains accessible through [`math.type`](/manual/api#math.type). The runtime will convert between the two subtypes as needed; there is no generally need to keep track of or otherwise enforce the subtype of a number, unless you have strict arithmetic needs.
+Numbers in Lus are either 64-bit integers or floating point numbers. While they are both represented by the `number` type, their subtype remains accessible through [`math.type`](/manual/api#math.type). The runtime will convert between the two subtypes as needed; there is generally no need to keep track of or otherwise enforce the subtype of a number, unless you have strict arithmetic needs.
 
 ### `string`
 
@@ -99,15 +179,50 @@ Strings are immutable sequences of 8-bit characters. The runtime does not enforc
 
 While strings can theoretically be used as buffers, the [`vector`](#vector) type is more appropriate (and efficient!) for this purpose.
 
+String literals come in several forms. Single-quoted (`'hello'`) and double-quoted (`"hello"`) strings support escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\"`, `\'`, `\xNN` (hex byte), `\u{NNNN}` (Unicode codepoint), and `\z` (skip following whitespace). Long strings use `[[...]]` or `[=[...]=]` (with matching equals signs) and preserve their content verbatim — no escape processing:
+
+```lus
+local a = "line one\nline two"
+local b = [[
+This is a long string.
+No escapes are processed: \n stays as \n.
+]]
+```
+
+Backtick strings support _string interpolation_. Use `$name` for simple identifiers and `$(expr)` for arbitrary expressions. Values are converted via `tostring` (which respects `__tostring` metamethods). Backtick strings can span multiple lines:
+
+```lus
+local name = "Alice"
+local age = 30
+print(`Hello, $name!`)                 --> Hello, Alice!
+print(`Next year you'll be $(age+1).`) --> Next year you'll be 31.
+print(`Multi-line:
+  name = $name
+  age  = $age`)
+```
+
 ### `table`
 
 Tables are the primary data structure in Lus. They possess an array component for sequential access and a map component for random access; both are accessed through the same `t[n]` syntax, where the array component will be indexed when `n` is a number and the map component will be indexed when `n` is any other value, except `nil` which is considered an invalid index.
 
 Tables are versatile for their capacity to represent any data structure; they can be used as arrays, sets, maps, trees, and more thanks to the automatic dispatch between the array and map components. Any other functionality can be implemented through _metatables_, which allow you to describe behavior for operations such as indexing, comparison, and arithmetic.
 
+Tables are constructed with curly braces:
+
+```lus
+local empty = {}
+local list  = {1, 2, 3}
+local map   = {name = "Alice", age = 30}
+local mixed = {"a", "b", x = 10, [true] = "yes"}
+```
+
+Tables are covered in depth in [Tables](#tables), and metatables in [Metatables and metamethods](#metatables-and-metamethods).
+
 ### `function`
 
 Functions are first-class objects in Lus; they can be assigned to variables, passed as arguments, returned from other functions, and even constructed at runtime. Each function is internally composed of two parts, the prototype and the closure; the prototype represents the function's _code_, while the closure represents the function's _context_, which lists the values captured by the function at the time of its instantiation, called _upvalues_.
+
+Functions can return multiple values (`return a, b, c`), accept a variable number of arguments (`...`), and be called with method syntax (`:`) which automatically passes the receiver as the first argument. Functions are covered in depth in [Functions](#functions).
 
 ### `thread`
 
@@ -126,6 +241,906 @@ Enum values are comparable only within the same root; `Color.Red == Color.Red` i
 ### `vector`
 
 Vectors are resizable byte buffers for working with raw binary data. They let you read and write values of various sizes at specific positions within the buffer, making them useful for file formats, network protocols, and performance-critical code. They are similar to userdata, but userdata are opaque, not resizable, and managed exclusively by the runtime or the embedding program.
+
+## Operators
+
+### Arithmetic operators
+
+Lus provides the usual arithmetic operators: `+` (addition), `-` (subtraction), `*` (multiplication), `/` (float division), `//` (floor division), `%` (modulo), `^` (exponentiation), and unary `-` (negation). When both operands are integers, the result is an integer (except for `/`, which always produces a float). If either operand is a float, the other is converted to float before the operation.
+
+```lus
+print(7 + 3)    --> 10      (integer)
+print(7 / 2)    --> 3.5     (always float)
+print(7 // 2)   --> 3       (integer floor division)
+print(7 % 2)    --> 1       (integer modulo)
+print(2 ^ 10)   --> 1024.0  (always float)
+print(-3)       --> -3      (negation)
+```
+
+### Relational operators
+
+The relational operators are `==` (equal), `~=` (not equal), `<`, `>`, `<=`, and `>=`. They always produce a boolean. Equality (`==`) compares by value for numbers, strings, and booleans, but by _reference_ for tables, functions, and userdata. Two objects of different types are never equal (except for integer/float comparisons, e.g. `1 == 1.0` is true).
+
+Custom equality and ordering behavior can be defined through the `__eq`, `__lt`, and `__le` [metamethods](#metatables-and-metamethods).
+
+### Optional chaining
+
+The `?` suffix operator short-circuits a chain of indexing or call operations when any intermediate value is nil (or false), avoiding nested nil checks. There are four forms:
+
+```lus
+local host = config?.server?.host       -- field access
+local first = list?[1]                  -- bracket access
+local name = user?:getName()            -- method call
+local result = callback?()              -- function call
+```
+
+If the value before `?` is falsy, the entire remaining chain is skipped and that falsy value is returned. `false` is preserved — it returns `false`, not `nil`. Multiple `?` operators can appear in a single chain. A common pattern combines optional chaining with `or` for fallbacks:
+
+```lus
+local timeout = config?.database?.timeout or 30
+```
+
+### Logical operators
+
+The logical operators `and`, `or`, and `not` use short-circuit evaluation. Importantly, `and` and `or` return one of their operands rather than a boolean:
+
+```lus
+print(1 and 2)        --> 2      (first truthy, return second)
+print(nil and 2)      --> nil    (first falsy, return it)
+print(1 or 2)         --> 1      (first truthy, return it)
+print(nil or 2)       --> 2      (first falsy, return second)
+print(not nil)        --> true
+print(not 0)          --> false  (0 is truthy)
+```
+
+A common idiom is `x = a or default` to provide a fallback value when `a` might be nil.
+
+### String concatenation
+
+The `..` operator concatenates two strings. Numbers are automatically converted to strings when concatenated:
+
+```lus
+print("Hello, " .. "world!")  --> Hello, world!
+print("value: " .. 42)       --> value: 42
+```
+
+For building large strings from many pieces, use [`table.concat`](/manual/api#table.concat) instead, as repeated `..` creates intermediate string objects. Backtick strings support interpolation (see [string](#string) above), which is often cleaner for inline expressions.
+
+### Length operator
+
+The `#` operator returns the length of a string (in bytes), the length of a table's sequence (array portion), or the size of a vector (in bytes):
+
+```lus
+print(#"hello")       --> 5
+print(#{10, 20, 30})  --> 3
+```
+
+For tables, `#t` returns the length of the _sequence_ — the contiguous integer keys starting from 1. If the array portion has holes (nil values between entries), the result is not well-defined. Custom behavior can be defined with the `__len` metamethod.
+
+### Bitwise operators
+
+Lus provides bitwise operators that work on integers: `&` (AND), `|` (OR), `~` (XOR), `<<` (left shift), `>>` (right shift), and unary `~` (bitwise NOT). Float operands are converted to integers before the operation.
+
+```lus
+print(0xFF & 0x0F)   --> 15
+print(1 << 4)         --> 16
+print(~0)             --> -1   (all bits set)
+```
+
+### Operator precedence
+
+Operators are evaluated in the following order, from highest to lowest precedence:
+
+| Precedence | Operators |
+|---|---|
+| 1 | `^` |
+| 2 | unary `not`, `#`, `-`, `~` |
+| 3 | `*`, `/`, `//`, `%` |
+| 4 | `+`, `-` |
+| 5 | `..` |
+| 6 | `<<`, `>>` |
+| 7 | `&` |
+| 8 | `~` |
+| 9 | `\|` |
+| 10 | `<`, `>`, `<=`, `>=`, `~=`, `==` |
+| 11 | `and` |
+| 12 | `or` |
+
+Exponentiation (`^`) and concatenation (`..`) are right-associative; all other binary operators are left-associative. Parentheses can be used to override precedence.
+
+## Control flow
+
+### if, elseif, else
+
+The `if` statement executes a block when its condition is truthy. Optional `elseif` and `else` branches handle alternative cases:
+
+```lus
+if x > 0 then
+  print("positive")
+elseif x < 0 then
+  print("negative")
+else
+  print("zero")
+end
+```
+
+Remember that only `nil` and `false` are falsy; `0`, `""`, and empty tables are all truthy.
+
+An `if` or `elseif` condition can include an assignment using `=`. The assigned variables are scoped to the entire conditional block (all branches), and the condition succeeds when all assigned values are truthy:
+
+```lus
+if user = findUser(id) then
+  print(user.name)
+elseif guest = findGuest(id) then
+  print(guest.name)  -- 'user' still in scope here (nil)
+end
+```
+
+Multiple assignments work the same way — the branch is taken only when every assigned value is truthy: `if a, b = getTwoValues() then`.
+
+### while
+
+The `while` loop repeats its body as long as the condition is truthy:
+
+```lus
+local i = 1
+while i <= 5 do
+  print(i)
+  i = i + 1
+end
+```
+
+The same assignment syntax works in `while` conditions. The expression is re-evaluated on each iteration; the loop exits when any assigned value is falsy. The assigned variables are scoped to the loop body:
+
+```lus
+while line = file:read() do
+  process(line)
+end
+```
+
+### repeat ... until
+
+The `repeat` loop executes its body at least once, then repeats until the condition is true. Uniquely, the condition can reference local variables declared inside the body:
+
+```lus
+local x = 0
+repeat
+  x = x + math.random(10)
+  local msg = `total is $x`
+until x > 50
+-- 'msg' was visible in the until condition
+```
+
+### Numeric for
+
+The numeric `for` loop iterates a variable from a start value to a stop value, with an optional step:
+
+```lus
+for i = 1, 5 do       -- 1, 2, 3, 4, 5
+  print(i)
+end
+
+for i = 10, 1, -2 do  -- 10, 8, 6, 4, 2
+  print(i)
+end
+```
+
+The loop variable is local to the body. The start, stop, and step expressions are evaluated once before the loop begins.
+
+### Generic for
+
+The generic `for` loop iterates over values produced by an iterator function:
+
+```lus
+local t = {a = 1, b = 2, c = 3}
+for key, value in pairs(t) do
+  print(key, value)
+end
+
+for i, v in ipairs({10, 20, 30}) do
+  print(i, v)     --> 1 10, 2 20, 3 30
+end
+```
+
+The iterator protocol is covered in [Iterators](#iterators).
+
+### break and goto
+
+`break` exits the innermost enclosing loop:
+
+```lus
+for i = 1, 100 do
+  if i * i > 50 then
+    break
+  end
+  print(i)
+end
+```
+
+`goto` jumps to a named label within the same block. Labels are declared with `::name::`. A common use is to simulate `continue`:
+
+```lus
+for i = 1, 10 do
+  if i % 3 == 0 then goto continue end
+  print(i)
+  ::continue::
+end
+```
+
+Labels cannot jump into a nested block, out of a function, or into the scope of a local variable.
+
+### Do expressions
+
+A `do`/`end` block is normally a plain scoping block (as seen in the [Variables](#variables) examples). By using the `provide` keyword inside it, the block becomes an expression that evaluates to the provided value:
+
+```lus
+local result = do
+  local temp = compute()
+  provide temp * 2
+end
+```
+
+Multiple values can be provided for multiple assignment targets:
+
+```lus
+local x, y = do
+  local p = getPoint()
+  provide p.x, p.y
+end
+```
+
+Do expressions combine naturally with `catch` for inline error handling:
+
+```lus
+local ok, value = catch do
+  provide riskyOperation()
+end
+```
+
+## Functions
+
+### Declaration
+
+A function declaration is syntactic sugar for assigning a function value to a variable:
+
+```lus
+function greet(name)
+  print(`Hello, $name!`)
+end
+-- equivalent to: greet = function(name) ... end
+
+local function factorial(n)
+  if n <= 1 then return 1 end
+  return n * factorial(n - 1)
+end
+-- equivalent to: local factorial; factorial = function(n) ... end
+```
+
+The `local function` form pre-declares the variable, which is essential for recursive functions.
+
+### Parameters and arguments
+
+Extra arguments are discarded; missing arguments become `nil`:
+
+```lus
+local function f(a, b, c)
+  print(a, b, c)
+end
+
+f(1, 2)        --> 1  2  nil
+f(1, 2, 3, 4)  --> 1  2  3
+```
+
+### Multiple return values
+
+Functions can return multiple values. When a function call is the last (or only) expression in a list, all its results are kept; otherwise, the call is adjusted to one result:
+
+```lus
+local function two() return 10, 20 end
+
+local a, b = two()       -- a=10, b=20
+local t = {two()}        -- t = {10, 20}
+local c = two()          -- c=10 (adjusted to one)
+print(two(), "end")      --> 10  end (adjusted to one)
+print("start", two())    --> start  10  20 (last expr, all kept)
+```
+
+Use [`select("#", ...)`](/manual/api#select) to count values and [`select(n, ...)`](/manual/api#select) to access values by index from a variadic argument list.
+
+### Variadic functions
+
+Functions declared with `...` accept a variable number of arguments:
+
+```lus
+local function printf(fmt, ...)
+  io.write(string.format(fmt, ...))
+end
+
+printf("%s is %d years old\n", "Alice", 30)
+```
+
+Use [`table.pack(...)`](/manual/api#table.pack) to collect variadic arguments into a table (with an `n` field for the count), and [`table.unpack(t)`](/manual/api#table.unpack) to expand a table back into multiple values.
+
+### Method calls
+
+The colon syntax is sugar for passing the receiver as the first argument:
+
+```lus
+local obj = {name = "Alice"}
+
+function obj:greet(greeting)
+  print(greeting .. ", " .. self.name)
+end
+
+obj:greet("Hello")  --> Hello, Alice
+-- equivalent to: obj.greet(obj, "Hello")
+```
+
+The `:` can be used in both declaration and call. In a declaration, it implicitly adds `self` as the first parameter.
+
+### Closures
+
+Every function is a closure that captures variables from its enclosing scope. Each call to the enclosing function creates a new closure with its own set of upvalues:
+
+```lus
+local function counter(start)
+  local n = start
+  return function()
+    n = n + 1
+    return n
+  end
+end
+
+local c1 = counter(0)
+local c2 = counter(10)
+print(c1(), c1())  --> 1  2
+print(c2(), c2())  --> 11  12
+```
+
+See [Upvalues](#upvalues) for more on how captured variables work.
+
+### Tail calls
+
+A `return f(args)` in tail position does not consume a stack frame, allowing unbounded recursion:
+
+```lus
+local function find(node, target)
+  if node == nil then return nil end
+  if node.value == target then return node end
+  return find(node.next, target)  -- tail call
+end
+```
+
+Only `return f(args)` is a proper tail call — wrapping the call in parentheses or adding operations after it breaks the optimization.
+
+## Tables
+
+### Constructors
+
+Tables are created with constructor expressions using curly braces. Entries can be positional (array), keyed (map), or use arbitrary expressions as keys:
+
+```lus
+local empty = {}
+local array = {10, 20, 30}
+local map   = {x = 1, y = 2}
+local mixed = {"a", "b", x = 10}
+local expr  = {[1+1] = "two", [true] = "yes"}
+```
+
+Positional entries fill indices starting from 1. The last entry may be a function call or `...` that expands to fill multiple positions.
+
+### Array operations
+
+Tables used as arrays are 1-indexed. Use `#t` to get the sequence length, and the [`table`](/manual/api#table) library for common operations:
+
+```lus
+local t = {10, 20, 30}
+print(#t)                --> 3
+
+table.insert(t, 40)      -- append: {10, 20, 30, 40}
+table.insert(t, 2, 15)   -- insert at index 2: {10, 15, 20, 30, 40}
+table.remove(t, 1)       -- remove index 1: {15, 20, 30, 40}
+table.sort(t)             -- in-place sort: {15, 20, 30, 40}
+```
+
+### Map operations
+
+String keys can be accessed with dot syntax, which is sugar for bracket indexing:
+
+```lus
+local t = {name = "Alice"}
+print(t.name)            --> Alice  (same as t["name"])
+t.age = 30               -- add a field
+t.name = nil             -- remove a field
+
+-- test if a table has any entries
+if next(t) ~= nil then
+  print("not empty")
+end
+```
+
+### Iteration
+
+Use [`pairs`](/manual/api#pairs) to iterate over all entries (in no guaranteed order) and [`ipairs`](/manual/api#ipairs) to iterate the sequential integer keys:
+
+```lus
+local t = {a = 1, b = 2, "x", "y"}
+
+for k, v in pairs(t) do    -- all entries
+  print(k, v)
+end
+
+for i, v in ipairs(t) do   -- sequential: 1="x", 2="y"
+  print(i, v)
+end
+```
+
+The full iterator protocol is covered in [Iterators](#iterators).
+
+### Table cloning
+
+[`table.clone`](/manual/api#table.clone) creates a copy of a table. Without a second argument, it performs a shallow copy (sub-tables are shared references). With `true` as the second argument, it performs a deep copy where all nested tables are fully independent and circular references are correctly reconstructed.
+
+```lus
+local original = {1, 2, {3, 4}}
+local shallow  = table.clone(original)        -- inner table is shared
+local deep     = table.clone(original, true)  -- fully independent copy
+```
+
+### Slices
+
+The slice syntax `t[start, end]` extracts a subsequence from a table, string, or vector. Either bound may be omitted: `t[, 3]` starts from 1, and `t[3, ]` ends at the last element. For tables, the result is a new table; for strings, a substring; for vectors, a new vector. Custom slice behavior can be defined with the `__slice(self, start, finish)` metamethod, which receives `nil` for omitted bounds.
+
+```lus
+local t = {10, 20, 30, 40, 50}
+local a = t[2, 4]   -- {20, 30, 40}
+local b = t[, 3]    -- {10, 20, 30}
+
+local s = "hello"
+local c = s[2, 4]   -- "ell"
+```
+
+## Metatables and metamethods
+
+A _metatable_ is a regular table that defines the behavior of another table (or userdata) when certain operations are performed on it. The functions in the metatable that implement these behaviors are called _metamethods_.
+
+### Setting and getting metatables
+
+Use [`setmetatable`](/manual/api#setmetatable) to assign a metatable and [`getmetatable`](/manual/api#getmetatable) to retrieve it:
+
+```lus
+local t = {}
+local mt = {}
+setmetatable(t, mt)
+print(getmetatable(t) == mt)  --> true
+```
+
+Setting the `__metatable` field in the metatable makes `getmetatable` return that value instead, and prevents `setmetatable` from modifying it. This is useful for protecting objects from external tampering.
+
+### Indexing metamethods
+
+When you access a key that does not exist in a table, Lus looks for an `__index` metamethod. If `__index` is a table, it is searched recursively (forming a prototype chain). If it is a function, it is called with `(table, key)`:
+
+```lus
+local prototype = {greet = function(self) print(`Hello, $(self.name)`) end}
+prototype.__index = prototype
+
+local obj = setmetatable({name = "Alice"}, prototype)
+obj:greet()  --> Hello, Alice
+```
+
+The `__newindex` metamethod is triggered when assigning to a key that does not exist in the table. It receives `(table, key, value)` and can be used to intercept or redirect writes.
+
+### Arithmetic metamethods
+
+When an arithmetic operation involves a table (or userdata), Lus calls the corresponding metamethod: `__add`, `__sub`, `__mul`, `__div`, `__mod`, `__pow`, `__unm` (negation), and `__idiv` (floor division). The metamethod receives both operands:
+
+```lus
+local Vec2 = {}
+Vec2.__index = Vec2
+
+function Vec2.new(x, y)
+  return setmetatable({x = x, y = y}, Vec2)
+end
+
+function Vec2:__add(other)
+  return Vec2.new(self.x + other.x, self.y + other.y)
+end
+
+function Vec2:__tostring()
+  return `($(self.x), $(self.y))`
+end
+
+local a = Vec2.new(1, 2)
+local b = Vec2.new(3, 4)
+print(a + b)  --> (4, 6)
+```
+
+### Comparison metamethods
+
+The `__eq` metamethod defines equality for tables and userdata. The `__lt` (less than) and `__le` (less or equal) metamethods define ordering, which also enables `>` and `>=`. Both operands must share the same metamethod for it to be called.
+
+### Other metamethods
+
+Lus supports many other metamethods:
+
+- `__concat(a, b)` — the `..` operator
+- `__len(t)` — the `#` operator
+- `__call(t, ...)` — calling a table as a function
+- `__tostring(t)` — string conversion (used by [`tostring`](/manual/api#tostring) and [`print`](/manual/api#print))
+- `__gc(t)` — finalizer, called when the object is garbage collected
+- `__close(t)` — called when a to-be-closed variable goes out of scope
+- `__slice(t, start, finish)` — the slice syntax `t[i, j]`; receives `nil` for omitted bounds
+- `__json(t)` — custom JSON serialization via [`tojson`](/manual/api#tojson); should return a table representing the desired JSON output
+- `__pairs(t)` — custom iterator for [`pairs`](/manual/api#pairs)
+- `__mode` — not a function; a string (`"k"`, `"v"`, or `"kv"`) that makes the table's keys and/or values _weak_, allowing the garbage collector to reclaim them
+
+```lus
+-- __call: make a table callable
+local Multiplier = setmetatable({}, {
+  __call = function(self, x) return x * self.factor end
+})
+Multiplier.factor = 3
+print(Multiplier(10))  --> 30
+
+-- __tostring: readable output
+local point = setmetatable({x = 1, y = 2}, {
+  __tostring = function(self) return `($(self.x), $(self.y))` end
+})
+print(point)  --> (1, 2)
+
+-- __json: custom serialization
+local mt = { __json = function(self) return {x = self.x, y = self.y} end }
+local obj = setmetatable({x = 1, y = 2, internal = true}, mt)
+print(tojson(obj))  --> {"x":1,"y":2}
+```
+
+### Object-oriented programming
+
+The `__index` prototype chain is the foundation for OOP in Lus. A "class" is simply a table that serves as both the metatable and the `__index` for its instances:
+
+```lus
+local Animal = {}
+Animal.__index = Animal
+
+function Animal.new(name, sound)
+  return setmetatable({name = name, sound = sound}, Animal)
+end
+
+function Animal:speak()
+  print(`$(self.name) says $(self.sound)!`)
+end
+
+-- Inheritance
+local Dog = setmetatable({}, {__index = Animal})
+Dog.__index = Dog
+
+function Dog.new(name)
+  return Animal.new(name, "woof"):setmetatable(Dog)
+end
+
+function Dog:fetch(item)
+  print(`$(self.name) fetches the $item!`)
+end
+
+local d = Dog.new("Rex")
+d:speak()         --> Rex says woof!
+d:fetch("ball")   --> Rex fetches the ball!
+```
+
+The call to `setmetatable(Dog, {__index = Animal})` ensures that methods not found in `Dog` are looked up in `Animal`.
+
+## Iterators
+
+### The generic for loop
+
+The generic `for` loop calls an _iterator function_ on each iteration. The loop:
+
+```lus
+for var1, var2 in iterator, state, initial do
+  -- body
+end
+```
+
+calls `iterator(state, control)` each cycle, where `control` starts as `initial` and takes the value of `var1` on each subsequent call. The loop ends when the first returned value is `nil`.
+
+### pairs and ipairs
+
+[`pairs(t)`](/manual/api#pairs) returns an iterator that traverses all entries of a table using [`next`](/manual/api#next). [`ipairs(t)`](/manual/api#ipairs) returns an iterator that traverses sequential integer keys starting from 1:
+
+```lus
+for k, v in pairs({a = 1, b = 2}) do
+  print(k, v)       -- unordered
+end
+
+for i, v in ipairs({"x", "y", "z"}) do
+  print(i, v)       --> 1 x, 2 y, 3 z
+end
+```
+
+### Stateless iterators
+
+A stateless iterator relies only on the invariant state and the control variable — no closures or mutable state. This is the most efficient form:
+
+```lus
+local function range_iter(limit, current)
+  current = current + 1
+  if current > limit then return nil end
+  return current
+end
+
+local function range(n)
+  return range_iter, n, 0
+end
+
+for i in range(5) do
+  print(i)  --> 1 2 3 4 5
+end
+```
+
+### Stateful iterators
+
+A stateful iterator uses a closure to maintain internal state across calls:
+
+```lus
+local function lines(filename)
+  local file = io.open(filename, "r")
+  return function()
+    local line = file:read("l")
+    if line == nil then file:close() end
+    return line
+  end
+end
+
+for line in lines("data.txt") do
+  print(line)
+end
+```
+
+### Coroutine-based iterators
+
+[`coroutine.wrap`](/manual/api#coroutine.wrap) creates an iterator from a function that yields values. This is the most flexible form, suitable for complex traversals:
+
+```lus
+local function traverse(node)
+  if node == nil then return end
+  traverse(node.left)
+  coroutine.yield(node.value)
+  traverse(node.right)
+end
+
+local function inorder(tree)
+  return coroutine.wrap(function() traverse(tree) end)
+end
+
+for value in inorder(root) do
+  print(value)
+end
+```
+
+See [Coroutines](#coroutines) for the full coroutine API.
+
+## Coroutines
+
+Coroutines are cooperative threads of execution. Unlike OS threads, they never run in parallel; control is transferred explicitly through `resume` and `yield`.
+
+### Creating and resuming
+
+[`coroutine.create`](/manual/api#coroutine.create) creates a coroutine from a function. [`coroutine.resume`](/manual/api#coroutine.resume) starts or continues it, and [`coroutine.yield`](/manual/api#coroutine.yield) pauses it. Values flow in both directions:
+
+```lus
+local co = coroutine.create(function(x)
+  print("received", x)      --> received  10
+  local y = coroutine.yield(x + 1)
+  print("resumed with", y)  --> resumed with  20
+  return x + y
+end)
+
+local ok, a = coroutine.resume(co, 10)   -- ok=true, a=11
+local ok, b = coroutine.resume(co, 20)   -- ok=true, b=30
+```
+
+### Coroutine status
+
+[`coroutine.status`](/manual/api#coroutine.status) returns one of four states:
+
+- `"suspended"` — created but not yet started, or yielded
+- `"running"` — currently executing
+- `"normal"` — resumed another coroutine (waiting for it to yield)
+- `"dead"` — finished or stopped with an error
+
+[`coroutine.running`](/manual/api#coroutine.running) returns the currently running coroutine and a boolean indicating whether it is the main thread.
+
+### coroutine.wrap
+
+[`coroutine.wrap`](/manual/api#coroutine.wrap) provides a simpler interface: it returns a function that resumes the coroutine on each call. Errors propagate directly to the caller instead of being returned as a status:
+
+```lus
+local next_id = coroutine.wrap(function()
+  local id = 0
+  while true do
+    id = id + 1
+    coroutine.yield(id)
+  end
+end)
+
+print(next_id())  --> 1
+print(next_id())  --> 2
+print(next_id())  --> 3
+```
+
+### Closing coroutines
+
+[`coroutine.close`](/manual/api#coroutine.close) terminates a suspended coroutine, running any pending to-be-closed variables (those declared with the `<close>` attribute). After closing, the coroutine enters the `"dead"` state.
+
+## String patterns
+
+Lus uses its own pattern language for string matching, which is lighter than full regular expressions but covers most common use cases.
+
+### Pattern syntax
+
+| Element | Meaning |
+|---|---|
+| `.` | any character |
+| `%a` | letter |
+| `%d` | digit |
+| `%l` | lowercase letter |
+| `%u` | uppercase letter |
+| `%w` | alphanumeric |
+| `%s` | whitespace |
+| `%x` | hexadecimal digit |
+| `%p` | punctuation |
+| `%c` | control character |
+| `%A`, `%D`, ... | complement of the class (non-letter, non-digit, etc.) |
+| `[set]` | custom character class (e.g. `[aeiou]`, `[0-9]`, `[^%s]`) |
+| `*` | 0 or more (greedy) |
+| `+` | 1 or more (greedy) |
+| `-` | 0 or more (lazy) |
+| `?` | 0 or 1 |
+| `^` | anchor to start |
+| `$` | anchor to end |
+| `(...)` | capture |
+| `%bxy` | balanced match between chars x and y |
+
+Special characters `( ) . % + - * ? [ ] ^ $` are escaped with `%` (e.g. `%.` matches a literal dot).
+
+### Pattern functions
+
+The [`string`](/manual/api#string) library provides four pattern functions:
+
+[`string.find`](/manual/api#string.find) returns the start and end positions of a match:
+
+```lus
+local s = "hello world"
+local i, j = string.find(s, "world")
+print(i, j)  --> 7  11
+```
+
+[`string.match`](/manual/api#string.match) returns the captured values (or the whole match if there are no captures):
+
+```lus
+local date = "2026-03-04"
+local y, m, d = string.match(date, "(%d+)-(%d+)-(%d+)")
+print(y, m, d)  --> 2026  03  04
+```
+
+[`string.gmatch`](/manual/api#string.gmatch) returns an iterator over all matches:
+
+```lus
+for word in string.gmatch("one two three", "%S+") do
+  print(word)
+end
+--> one
+--> two
+--> three
+```
+
+[`string.gsub`](/manual/api#string.gsub) replaces matches with a string, table lookup, or function result:
+
+```lus
+local result = string.gsub("hello world", "%w+", string.upper)
+print(result)  --> HELLO WORLD
+```
+
+### Common patterns
+
+Patterns are _not_ regular expressions — they lack alternation (`|`), backreferences, and other regex features. However, they handle most practical tasks:
+
+```lus
+-- Match a number (integer or float)
+string.match(s, "-?%d+%.?%d*")
+
+-- Match an identifier
+string.match(s, "[%a_][%w_]*")
+
+-- Trim whitespace
+string.gsub(s, "^%s+", ""):gsub("%s+$", "")
+```
+
+## The environment
+
+### _ENV and _G
+
+Every chunk in Lus has an implicit upvalue called `_ENV`. Free names (names not bound to any local) are rewritten as `_ENV` lookups: `x` is really `_ENV.x`. By default, `_ENV` points to `_G`, the global table:
+
+```lus
+x = 10
+print(_ENV.x)   --> 10
+print(_G.x)     --> 10
+print(_ENV == _G)  --> true
+```
+
+### Sandboxing
+
+You can replace `_ENV` with a custom table to restrict what code can access:
+
+```lus
+local safe_env = {print = print, math = math}
+local chunk = load("print(math.sqrt(16))", "sandbox", "t", safe_env)
+chunk()  --> 4.0
+```
+
+For security-critical sandboxing, the `pledge` function provides fine-grained capability-based access control. Permissions follow a hierarchical naming scheme — granting a base permission implicitly grants all sub-permissions:
+
+```lus
+pledge("fs:read")           -- allow reading files
+pledge("network:http")      -- allow HTTP requests
+pledge("seal")              -- lock permissions permanently
+```
+
+Path and URL restrictions can be added: `pledge("fs:read=/var/log/*")`. Permanent rejection is done with a `~` prefix: `pledge("~exec")` denies command execution forever, even if `seal` has not been called. Permissions can also be pre-granted from the command line:
+
+```bash
+lus -Pfs -Pnetwork script.lus
+```
+
+Coroutines inherit a copy of the parent's permissions at the time of creation; changes in either the parent or the coroutine are isolated from each other.
+
+## Modules and require
+
+### Using require
+
+[`require`](/manual/api#require) loads and caches modules. On the first call, it searches for the module, runs it, and stores the return value in `package.loaded`. Subsequent calls return the cached value:
+
+```lus
+local json = require("json")
+local data = json.decode('{"x": 1}')
+```
+
+The `from` keyword (see [Table destructuring](#table-destructuring)) works with `require` to import specific names:
+
+```lus
+local insert, remove from require("table")
+```
+
+### Writing modules
+
+A module is simply a file that returns a value. The idiomatic pattern is to build a table and return it:
+
+```lus
+-- mymath.lus
+local M = {}
+
+function M.add(a, b) return a + b end
+function M.sub(a, b) return a - b end
+
+return M
+```
+
+### Search paths
+
+`require("name")` searches for files using the patterns in `package.path` (for Lus files) and `package.cpath` (for C libraries). The `?` placeholder is replaced with the module name:
+
+```lus
+print(package.path)
+--> ./?.lus;./?/init.lus;/usr/local/share/lus/?.lus
+```
+
+Custom searchers can be added to the `package.searchers` table. For distributing self-contained programs, the `--standalone` flag bundles a script and its dependencies into a single executable. Use `--include` to add files or directories; bundled modules take precedence over the filesystem. CLI flags like `-P` are baked into the binary:
+
+```bash
+lus --standalone app.lus --include lib/
+```
 
 ## Error handling
 
@@ -172,11 +1187,13 @@ local ok, err = catch[simplify] divide(10, 0)
 -- err is now just "division by zero" without file/line prefix
 ```
 
-When an error occurs, the handler is called with the error object and its return value replaces the original error. On success, the handler is not called. See [Acquis 20](/manual/acquis-20) for details.
+When an error occurs, the handler is called with the error object and its return value replaces the original error. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates uncaught.
 
 ### C API error handling
 
-Lus uses a unified catch-based error handling mechanism that differs from Lua's traditional `pcall`/`xpcall` approach. While `lua_pcall` and `lua_pcallk` still exist for compatibility, new C code should use the `CPROTECT` macros:
+_This section is primarily relevant for programs embedding the Lus runtime in C/C++._
+
+Lus uses a unified catch-based error handling mechanism. The older `lua_pcall` and `lua_pcallk` functions still work for compatibility, but new C code should use the `CPROTECT` macros:
 
 ```c
 #include "ldo.h"
@@ -198,11 +1215,74 @@ void my_function(lua_State *L) {
 
 The `CPROTECT` macros integrate with Lus's `catch` expressions, ensuring consistent error handling between C and Lus code. When compiled as C++, they use native `try`/`catch`; in C mode, they use `setjmp`/`longjmp`.
 
+## Standard library
+
+In addition to the core libraries (`math`, `string`, `table`, `io`, `os`, `utf8`, `coroutine`, `debug`, `package`), Lus ships with extended libraries for common tasks. See the [API reference](/manual/api) for complete documentation.
+
+### Permissions
+
+The [`pledge`](/manual/api#pledge) function (covered in [Sandboxing](#sandboxing)) controls access to sensitive operations. All libraries below that perform I/O require appropriate permissions. Available permission categories include `fs`, `fs:read`, `fs:write`, `network`, `network:http`, `network:tcp`, `network:udp`, `exec`, and `load`.
+
+### JSON
+
+[`fromjson`](/manual/api#fromjson) parses a JSON string into a table, and [`tojson`](/manual/api#tojson) serializes a table to JSON. JSON null maps to `nil`, arrays become integer-keyed tables, and objects become string-keyed tables:
+
+```lus
+local data = fromjson('{"name": "Alice", "scores": [95, 87]}')
+print(data.name)       --> Alice
+print(data.scores[1])  --> 95
+
+local json = tojson({name = "Bob", scores = {95, 87}})
+```
+
+`tojson` accepts an optional filter function as a second argument for transforming or omitting fields during serialization. Tables with a `__json` metamethod (see [Other metamethods](#other-metamethods)) can customize their JSON representation. Special float values (`math.huge`, `-math.huge`, NaN) serialize as `null`; circular references produce an error.
+
+### Filesystem
+
+The [`fs`](/manual/api#fs) library provides cross-platform filesystem operations. All `fs` functions throw on failure; use `catch` for error handling:
+
+```lus
+local files = fs.list("src", "*.lus")
+fs.createdirectory("build", true)   -- true creates parent directories
+fs.copy("src/main.lus", "build/main.lus")
+```
+
+Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whether it is a symlink), `fs.remove(path, recursive)`, and the `fs.path` utilities (`fs.path.join`, `fs.path.split`, `fs.path.name`, `fs.path.parent`).
+
+### Networking
+
+The [`network`](/manual/api#network) library provides HTTP/HTTPS, TCP, and UDP communication:
+
+```lus
+local status, body, headers = network.fetch("https://api.example.com/data")
+local sock = network.tcp.connect("example.com", 80)
+```
+
+`network.fetch(url, method, headers, body)` performs HTTP requests and returns the status code, response body, and response headers. TCP sockets support `send`, `receive` (with patterns: a number for N bytes, `"*l"` for a line, `"*a"` for all available data), `settimeout`, and `close`. UDP sockets are available via `network.udp.open`.
+
+### Workers
+
+[Workers](/manual/api#worker) are separate interpreter states running on a thread pool, providing true concurrency through message passing. Arguments passed to `worker.create` are deep-copied into the worker's state:
+
+```lus
+local w = worker.create("task.lus", {data = "input"})
+worker.send(w, "a message")
+while result = worker.receive(w) do
+  print(result)
+end
+```
+
+Inside a worker, `worker.message(data)` sends data back to the parent, and `worker.peek()` blocks until a message arrives. `worker.receive` can accept multiple workers and returns from whichever has a message first (select-like). Workers inherit the parent's permissions and require the `load` and `fs:read` permissions to load their script file.
+
+### Other libraries
+
+The full standard library also includes [`math`](/manual/api#math) (mathematical functions), [`string`](/manual/api#string) (string manipulation and patterns), [`table`](/manual/api#table) (table manipulation), [`io`](/manual/api#io) (file I/O), [`os`](/manual/api#os) (operating system facilities), [`utf8`](/manual/api#utf8) (UTF-8 support), [`debug`](/manual/api#debug) (debugging facilities), [`vector`](/manual/api#vector) (byte buffers), [`coroutine`](/manual/api#coroutine) (coroutine control), and [`package`](/manual/api#package) (module loading). See the [API reference](/manual/api) for complete documentation.
+
 ## Internals
 
 ### Implementation
 
-Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and ressembles traditional machine code.
+Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and resembles traditional machine code.
 
 The Lus interpreter is a register-based virtual machine where the operands of each instruction either represents a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct; `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on.
 

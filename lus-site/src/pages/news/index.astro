@@ -12,18 +12,16 @@ const sorted = news.toSorted(
     <main>
         <section>
             <h1>News</h1>
-            <ul>
+            <div class="news-grid">
                 {
                     sorted.map((item) => (
-                        <li>
-                            <a href={`/news/${item.id}`}>
-                                <span class="date">{item.data.date}</span>
-                                <span class="title">{item.data.title}</span>
-                            </a>
-                        </li>
+                        <a href={`/news/${item.id}`} class="news-card">
+                            <span class="date">{item.data.date}</span>
+                            <span class="title">{item.data.title}</span>
+                        </a>
                     ))
                 }
-            </ul>
+            </div>
         </section>
     </main>
 </Layout>
@@ -31,17 +29,19 @@ const sorted = news.toSorted(
 <style>
     @reference "../../styles/global.css";
 
-    ul {
-        @apply list-none p-0 space-y-2;
+    .news-grid {
+        @apply grid grid-cols-1 md:grid-cols-2 gap-4;
     }
 
-    a {
-        @apply flex gap-4 items-baseline;
+    .news-card {
+        @apply flex flex-col gap-1 border border-lime-200 bg-white p-4 no-underline font-normal;
+
         .date {
-            @apply text-sm text-lime-600;
+            @apply text-sm text-lime-600 font-mono;
         }
+
         .title {
-            @apply font-medium;
+            @apply font-bold text-lime-900;
         }
     }
 </style>

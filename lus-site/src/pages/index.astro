@@ -4,7 +4,7 @@ import { getCollection } from "astro:content"
 import Layout from "../components/Layout.astro"
 import Card from "../components/Card.astro"
 import ReleaseCard from "../components/ReleaseCard.astro"
-import DownloadIcon from "../components/icons/Download.astro"
+import Icon from "../components/Icon.astro"
 
 import { getAllReleases } from "../lib/release"
 
@@ -19,20 +19,41 @@ const news = allNews
 
 <Layout>
   <main>
-    <Card>
-      <h2 slot="title">A simple, straightforward language.</h2>
-      <p>
-        You've reached the website of <b>Lus</b>, a small, fast, and reliable
-        programming language that is <a href="/faq#sovereignty">sovereign</a>.
-        Check out the <a href="/manual">manual</a> to learn more about the language
-        and how to get started, or read the <a href="/manual/tldr">TL;DR</a> for a
-        quick overview of the language and its differences with Lua.
-      </p>
-    </Card>
+    <div class="bento">
+      <div class="bento-hero">
+        <Card class="h-full">
+          <h2 slot="title">A simple, straightforward language.</h2>
+          <p>
+            You've reached the website of <b>Lus</b>, a small, fast, and
+            reliable programming language that is <a href="/faq#sovereignty"
+              >sovereign</a
+            >. Check out the <a href="/manual">manual</a> to learn more about the
+            language and how to get started.
+          </p>
+        </Card>
+      </div>
 
-    <section id="download">
-      <h1>Download</h1>
-      <div class="flex md:flex-row flex-col gap-4">
+      <div class="bento-tryit">
+        <Card variant="feature" class="h-full">
+          <h2 slot="title">
+            <Icon name="terminal" size={16} class="inline-block" />
+            <a href="/playground">playground</a>
+          </h2>
+          <p>Write and run Lus code directly in your browser.</p>
+        </Card>
+      </div>
+
+      <div class="bento-learn">
+        <Card variant="feature" class="h-full">
+          <h2 slot="title">
+            <Icon name="book-open" size={16} class="inline-block" />
+            <a href="/manual">manual</a>
+          </h2>
+          <p>Read the language manual and API reference.</p>
+        </Card>
+      </div>
+
+      <div class="bento-stable">
         {
           stable ? (
             <ReleaseCard
@@ -47,14 +68,14 @@ const news = allNews
             </ReleaseCard>
           ) : (
             <Card color="lime" class="flex-1">
-              <h2 slot="title">
-                <DownloadIcon class="inline-block w-4 h-4" />
-                Stable
-              </h2>
+              <h2 slot="title">Stable</h2>
               <p>No stable release available yet.</p>
             </Card>
           )
         }
+      </div>
+
+      <div class="bento-unstable">
         {
           unstable ? (
             <ReleaseCard
@@ -69,29 +90,112 @@ const news = allNews
             </ReleaseCard>
           ) : (
             <Card color="red" class="flex-1">
-              <h2 slot="title">
-                <DownloadIcon class="inline-block w-4 h-4" />
-                Unstable
-              </h2>
+              <h2 slot="title">Unstable</h2>
               <p>No unstable release available yet.</p>
             </Card>
           )
         }
       </div>
-    </section>
 
-    <section id="news">
-      <h1>News</h1>
-      <ul>
-        {
-          news.map((item) => (
-            <li>
-              {item.data.date}:{" "}
-              <a href={`/news/${item.id}`}>{item.data.title}</a>
-            </li>
-          ))
-        }
-      </ul>
-    </section>
+      <div class="bento-news">
+        <Card variant="feature" class="h-full flex flex-col">
+          <h2 slot="title">
+            <Icon name="newspaper" size={16} class="inline-block" /> news
+          </h2>
+          <ul>
+            {
+              news.map((item) => (
+                <li>
+                  <span class="news-date">{item.data.date}</span>
+                  <a href={`/news/${item.id}`}>{item.data.title}</a>
+                </li>
+              ))
+            }
+          </ul>
+          <div slot="footer" class="px-4 pb-3 mt-auto">
+            <a href="/news" class="text-sm">All news →</a>
+          </div>
+        </Card>
+      </div>
+    </div>
   </main>
 </Layout>
+
+<style>
+  @reference "../styles/global.css";
+
+  .bento {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "hero"
+      "tryit"
+      "learn"
+      "stable"
+      "unstable"
+      "news";
+  }
+
+  @media (min-width: 768px) {
+    .bento {
+      grid-template-columns: 1fr 1fr;
+      grid-template-areas:
+        "hero    tryit"
+        "stable  learn"
+        "unstable news"
+        "news    news";
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .bento {
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+      grid-template-areas:
+        "hero     hero     tryit  learn"
+        "stable   unstable news   news";
+    }
+  }
+
+  .bento-hero {
+    grid-area: hero;
+  }
+  .bento-tryit {
+    grid-area: tryit;
+  }
+  .bento-learn {
+    grid-area: learn;
+  }
+  .bento-stable {
+    grid-area: stable;
+  }
+  .bento-unstable {
+    grid-area: unstable;
+  }
+  .bento-news {
+    grid-area: news;
+  }
+
+  .bento-stable,
+  .bento-unstable {
+    :global(.card) {
+      @apply h-full;
+    }
+  }
+
+  ul {
+    @apply list-none p-0 px-4 space-y-1;
+  }
+
+  li {
+    @apply flex gap-3 items-baseline text-sm;
+
+    .news-date {
+      @apply text-xs text-lime-600 font-mono shrink-0;
+    }
+
+    a {
+      @apply font-normal text-lime-800 no-underline hover:underline;
+    }
+  }
+</style>

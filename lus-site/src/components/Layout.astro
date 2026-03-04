@@ -9,6 +9,7 @@ import "@fontsource-variable/atkinson-hyperlegible-mono/wght-italic.css"
 import "../styles/global.css"
 import logo from "../assets/logo.svg"
 import logoUnstable from "../assets/logo-unstable.svg"
+import Icon from "./Icon.astro"
 
 interface Props {
   redirect?: string
@@ -17,6 +18,20 @@ interface Props {
 }
 
 const currentLogo = Astro.props.unstable ? logoUnstable : logo
+const path = Astro.url.pathname.replace(/\/$/, "") || "/"
+
+const navLinks = [
+  { href: "/", label: "home", icon: "house" },
+  { href: "/playground", label: "playground", icon: "terminal" },
+  { href: "/manual", label: "manual", icon: "book-open" },
+  { href: "/faq", label: "faq", icon: "circle-question-mark" },
+  { href: "/news", label: "news", icon: "newspaper" },
+]
+
+function isActive(href: string) {
+  if (href === "/") return path === "/"
+  return path.startsWith(href)
+}
 ---
 
 <html lang="en" class:list={[{ unstable: Astro.props.unstable }]}>
@@ -61,49 +76,51 @@ const currentLogo = Astro.props.unstable ? logoUnstable : logo
   <body transition:animate="none">
     <header>
       <div class="header-inner">
-        <Image
-          src={currentLogo}
-          alt="Lus"
-          class="lus-logo"
-          width={64}
-          height={64}
-        />
+        <a href="/" class="brand">
+          <Image
+            src={currentLogo}
+            alt="Lus"
+            class="lus-logo"
+            width={48}
+            height={48}
+          />
+          <span class="brand-name">Lus</span>
+        </a>
         <nav>
-          <a href="/">home</a>
-          ·
-          <a href="/playground">playground</a>
-          ·
-          <a href="/manual">manual</a>
-          ·
-          <a href="/faq">faq</a>
-          ·
-          <a href="/news">news</a>
+          {
+            navLinks.map((link) => (
+              <a
+                href={link.href}
+                class:list={[{ active: isActive(link.href) }]}
+              >
+                <Icon name={link.icon} size={14} />
+                {link.label}
+              </a>
+            ))
+          }
         </nav>
       </div>
     </header>
-  </body>
-  <slot />
+  </body><slot />
   <footer>
     <div class="footer-inner">
-      <div>
-        <Image
+      <div class="footer-brand">
+        {
+          /*<Image
           src={currentLogo}
           alt="Lus"
           class="lus-logo"
-          width={32}
-          height={32}
+          width={24}
+          height={24}
         />
+        <span class="brand-name">Lus</span>*/
+        }
       </div>
-      <div>
-        <p>
-          Lus is a personal project and copyright of <a
-            href="https://louka.sh"
-            target="_blank">Louka Ménard Blondin</a
-          > licensed under the 0-clause BSD license. Lua is copyrighted by
-          <a href="https://www.puc-rio.br/english/" target="_blank">PUC-Rio</a> and
-          licensed under the MIT license.
-        </p>
-      </div>
+      <p>
+        Copyright <a href="https://louka.sh" target="_blank"
+          >Louka Ménard Blondin</a
+        >. Licensed under the 0-clause BSD license.
+      </p>
     </div>
   </footer>
 </html>
@@ -115,29 +132,49 @@ const currentLogo = Astro.props.unstable ? logoUnstable : logo
     @apply bg-linear-to-b to-lime-50 from-lime-200;
 
     .header-inner {
-      @apply container mx-auto px-8 py-4 flex items-end gap-4;
+      @apply container mx-auto px-8 py-4 flex items-center gap-4;
+
+      .brand {
+        @apply flex items-center gap-2 no-underline;
+
+        .brand-name {
+          @apply text-lg font-bold text-lime-900 italic self-end font-serif translate-y-1;
+        }
+      }
 
       nav {
-        @apply text-lime-700 ml-auto;
+        @apply text-lime-700 ml-auto flex items-center gap-6;
         a {
-          @apply font-normal no-underline hover:bg-lime-200;
+          @apply flex items-center gap-1.5 text-sm font-normal no-underline hover:bg-lime-200;
+
+          &.active {
+            @apply font-bold text-lime-900;
+          }
         }
       }
     }
   }
 
   footer {
-    @apply py-8 text-lime-800 text-xs bg-linear-to-b from-lime-50 to-lime-100 mt-auto;
+    @apply py-6 text-lime-800 text-xs bg-linear-to-b from-lime-50 to-lime-100 mt-auto;
 
     .footer-inner {
-      @apply flex items-center px-8 gap-4 container mx-auto;
+      @apply flex items-center justify-between px-8 gap-4 container mx-auto;
 
-      div {
-        @apply lg:flex-1;
+      .footer-brand {
+        @apply flex items-center gap-2;
+
+        .brand-name {
+          @apply font-bold text-lime-900;
+        }
+
+        img {
+          @apply min-w-6 min-h-6;
+        }
       }
 
-      img {
-        @apply min-w-8 min-h-8;
+      p {
+        @apply text-right;
       }
     }
   }
@@ -146,16 +183,30 @@ const currentLogo = Astro.props.unstable ? logoUnstable : logo
     header {
       @apply to-red-50 from-red-200;
 
-      .header-inner nav {
-        @apply text-red-700;
-        a {
-          @apply hover:bg-red-200;
+      .header-inner {
+        .brand .brand-name {
+          @apply text-red-900;
+        }
+
+        nav {
+          @apply text-red-700;
+          a {
+            @apply hover:bg-red-200;
+
+            &.active {
+              @apply text-red-900;
+            }
+          }
         }
       }
     }
 
     footer {
       @apply text-red-800 from-red-50 to-red-100;
+
+      .footer-inner .footer-brand .brand-name {
+        @apply text-red-900;
+      }
     }
   }
 </style>
