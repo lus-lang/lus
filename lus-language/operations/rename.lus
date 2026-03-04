@@ -2,20 +2,18 @@ global require, ipairs
 
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
+local document = require("lus-language.document")
+local pos_util = require("lus-language.util.position")
+local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local rename = {}
 
--- Standard library names that cannot be renamed
+-- Standard library names that cannot be renamed (from lus-spec)
 local STDLIB = {}
-for _, name in ipairs({
-  "print", "error", "assert", "type", "tostring", "tonumber",
-  "pairs", "ipairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen",
-  "setmetatable", "getmetatable", "require", "load", "dofile",
-  "collectgarbage", "pledge",
-  "string", "table", "math", "io", "os", "debug", "coroutine",
-  "utf8", "fs", "network", "worker",
-  "fromjson", "tojson",
-}) do
+for _, name in ipairs(stdlib_data.globals) do
+  STDLIB[name] = true
+end
+for _, name in ipairs(stdlib_data.tables) do
   STDLIB[name] = true
 end
 
@@ -28,8 +26,10 @@ function rename.compute(uri, position, new_name)
   local analysis = scope_mod.analyze(uri)
   if not analysis then return nil end
 
-  local line = position.line + 1
-  local col = position.character + 1
+  local doc = document.get(uri)
+  if not doc then return nil end
+  local line, col = pos_util.lsp_to_byte(
+    doc.text, doc.line_index, position.line, position.character)
 
   local decl = scope_mod.get_declaration(analysis, line, col)
   if not decl then return nil end
@@ -61,11 +61,46 @@ function rename.compute(uri, position, new_name)
     }
   end
 
-  return {
-    changes = {
-      [uri] = edits,
-    },
-  }
+  local changes = {[uri] = edits}
+
+  -- Cross-file rename for globals and top-level functions
+  if decl.kind == "global" or decl.kind == "function" then
+    local all_uris = document.all()
+    for _, other_uri in ipairs(all_uris) do
+      if other_uri ~= uri then
+        ast_mod.parse(other_uri)
+        local other_analysis = scope_mod.analyze(other_uri)
+        if other_analysis then
+          local other_edits = {}
+          for _, other_decl in ipairs(other_analysis.declarations) do
+            if other_decl.name == decl.name and other_decl.kind == decl.kind then
+              other_edits[#other_edits + 1] = {
+                range = {
+                  start = {line = other_decl.line - 1, character = other_decl.column - 1},
+                  ["end"] = {line = other_decl.line - 1, character = other_decl.column - 1 + #other_decl.name},
+                },
+                newText = new_name,
+              }
+              for _, ref in ipairs(other_decl.references) do
+                other_edits[#other_edits + 1] = {
+                  range = {
+                    start = {line = ref.line - 1, character = ref.column - 1},
+                    ["end"] = {line = ref.line - 1, character = ref.column - 1 + #ref.name},
+                  },
+                  newText = new_name,
+                }
+              end
+            end
+          end
+          if #other_edits > 0 then
+            changes[other_uri] = other_edits
+          end
+        end
+      end
+    end
+  end
+
+  return {changes = changes}
 end
 
 return rename

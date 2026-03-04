@@ -4,189 +4,16 @@ local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
 local modules = require("lus-language.analysis.modules")
 local document = require("lus-language.document")
+local pos_util = require("lus-language.util.position")
+local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local signature = {}
 
 -- ---------------------------------------------------------------------------
--- Standard library signatures (function name -> param list)
+-- Standard library signatures (from lus-spec via build-lsp.js)
 -- ---------------------------------------------------------------------------
 
-local STDLIB_SIGNATURES = {
-  -- Base
-  assert = {"v", "message"},
-  collectgarbage = {"opt", "arg"},
-  dofile = {"filename"},
-  error = {"message", "level"},
-  getmetatable = {"object"},
-  ipairs = {"t"},
-  loadfile = {"filename", "mode", "env"},
-  load = {"chunk", "chunkname", "mode", "env"},
-  next = {"t", "k"},
-  pairs = {"t"},
-  pledge = {"name..."},
-  print = {"..."},
-  warn = {"msg1", "..."},
-  rawequal = {"v1", "v2"},
-  rawlen = {"v"},
-  rawget = {"t", "k"},
-  rawset = {"t", "k", "v"},
-  select = {"index", "..."},
-  setmetatable = {"t", "metatable"},
-  tonumber = {"e", "base"},
-  tostring = {"v"},
-  type = {"v"},
-  require = {"modname"},
-  tojson = {"value", "filter"},
-  fromjson = {"s"},
-
-  -- string
-  ["string.byte"] = {"s", "i", "j"},
-  ["string.char"] = {"..."},
-  ["string.dump"] = {"function", "strip"},
-  ["string.find"] = {"s", "pattern", "init", "plain"},
-  ["string.format"] = {"formatstring", "..."},
-  ["string.gmatch"] = {"s", "pattern", "init"},
-  ["string.gsub"] = {"s", "pattern", "repl", "n"},
-  ["string.len"] = {"s"},
-  ["string.lower"] = {"s"},
-  ["string.match"] = {"s", "pattern", "init"},
-  ["string.rep"] = {"s", "n", "sep"},
-  ["string.reverse"] = {"s"},
-  ["string.sub"] = {"s", "i", "j"},
-  ["string.upper"] = {"s"},
-  ["string.pack"] = {"fmt", "..."},
-  ["string.packsize"] = {"fmt"},
-  ["string.unpack"] = {"fmt", "s", "pos"},
-  ["string.transcode"] = {"s", "from", "to"},
-
-  -- table
-  ["table.clone"] = {"t", "deep"},
-  ["table.concat"] = {"list", "sep", "i", "j"},
-  ["table.create"] = {"narray", "nhash"},
-  ["table.insert"] = {"list", "pos", "value"},
-  ["table.pack"] = {"..."},
-  ["table.unpack"] = {"list", "i", "j"},
-  ["table.remove"] = {"list", "pos"},
-  ["table.move"] = {"a1", "f", "e", "t", "a2"},
-  ["table.sort"] = {"list", "comp"},
-
-  -- math
-  ["math.abs"] = {"x"},
-  ["math.acos"] = {"x"},
-  ["math.asin"] = {"x"},
-  ["math.atan"] = {"y", "x"},
-  ["math.ceil"] = {"x"},
-  ["math.cos"] = {"x"},
-  ["math.deg"] = {"x"},
-  ["math.exp"] = {"x"},
-  ["math.floor"] = {"x"},
-  ["math.fmod"] = {"x", "y"},
-  ["math.frexp"] = {"x"},
-  ["math.log"] = {"x", "base"},
-  ["math.max"] = {"x", "..."},
-  ["math.min"] = {"x", "..."},
-  ["math.modf"] = {"x"},
-  ["math.rad"] = {"x"},
-  ["math.random"] = {"m", "n"},
-  ["math.randomseed"] = {"x", "y"},
-  ["math.sin"] = {"x"},
-  ["math.sqrt"] = {"x"},
-  ["math.tan"] = {"x"},
-  ["math.tointeger"] = {"x"},
-  ["math.type"] = {"x"},
-  ["math.ult"] = {"m", "n"},
-
-  -- io
-  ["io.close"] = {"file"},
-  ["io.input"] = {"file"},
-  ["io.lines"] = {"filename", "..."},
-  ["io.open"] = {"filename", "mode"},
-  ["io.output"] = {"file"},
-  ["io.popen"] = {"prog", "mode"},
-  ["io.read"] = {"..."},
-  ["io.tmpfile"] = {},
-  ["io.type"] = {"obj"},
-  ["io.write"] = {"..."},
-
-  -- os
-  ["os.clock"] = {},
-  ["os.date"] = {"format", "time"},
-  ["os.difftime"] = {"t2", "t1"},
-  ["os.execute"] = {"command"},
-  ["os.exit"] = {"code", "close"},
-  ["os.getenv"] = {"varname"},
-  ["os.platform"] = {},
-  ["os.setlocale"] = {"locale", "category"},
-  ["os.time"] = {"t"},
-  ["os.tmpname"] = {},
-
-  -- debug
-  ["debug.format"] = {"source", "chunkname", "indent_width"},
-  ["debug.getinfo"] = {"f", "what"},
-  ["debug.getlocal"] = {"f", "local_"},
-  ["debug.getmetatable"] = {"value"},
-  ["debug.getupvalue"] = {"f", "up"},
-  ["debug.parse"] = {"code", "chunkname", "options"},
-  ["debug.sethook"] = {"hook", "mask", "count"},
-  ["debug.setlocal"] = {"level", "local_", "value"},
-  ["debug.setmetatable"] = {"value", "t"},
-  ["debug.setupvalue"] = {"f", "up", "value"},
-  ["debug.traceback"] = {"message", "level"},
-  ["debug.upvalueid"] = {"f", "n"},
-  ["debug.upvaluejoin"] = {"f1", "n1", "f2", "n2"},
-
-  -- coroutine
-  ["coroutine.create"] = {"f"},
-  ["coroutine.resume"] = {"co", "..."},
-  ["coroutine.status"] = {"co"},
-  ["coroutine.wrap"] = {"f"},
-  ["coroutine.yield"] = {"..."},
-  ["coroutine.isyieldable"] = {},
-  ["coroutine.close"] = {"co"},
-
-  -- utf8
-  ["utf8.char"] = {"..."},
-  ["utf8.codepoint"] = {"s", "i", "j"},
-  ["utf8.codes"] = {"s"},
-  ["utf8.len"] = {"s", "i", "j"},
-  ["utf8.offset"] = {"s", "n", "i"},
-
-  -- fs
-  ["fs.list"] = {"path"},
-  ["fs.copy"] = {"source", "dest"},
-  ["fs.move"] = {"source", "dest"},
-  ["fs.remove"] = {"path"},
-  ["fs.type"] = {"path"},
-  ["fs.follow"] = {"path"},
-  ["fs.createlink"] = {"target", "link"},
-  ["fs.createdirectory"] = {"path"},
-  ["fs.path.join"] = {"..."},
-  ["fs.path.split"] = {"path"},
-  ["fs.path.name"] = {"path"},
-  ["fs.path.parent"] = {"path"},
-
-  -- network
-  ["network.fetch"] = {"url", "options"},
-  ["network.tcp.connect"] = {"host", "port"},
-  ["network.tcp.bind"] = {"host", "port"},
-  ["network.udp.open"] = {"host", "port"},
-
-  -- worker
-  ["worker.create"] = {"path", "..."},
-  ["worker.status"] = {"w"},
-  ["worker.receive"] = {"w1", "..."},
-  ["worker.send"] = {"w", "value"},
-  ["worker.message"] = {"value"},
-
-  -- vector
-  ["vector.create"] = {"capacity", "fast"},
-  ["vector.pack"] = {"v", "offset", "fmt", "..."},
-  ["vector.unpack"] = {"v", "offset", "fmt"},
-  ["vector.clone"] = {"v"},
-  ["vector.size"] = {"v"},
-  ["vector.resize"] = {"v", "newsize"},
-  ["vector.unpackmany"] = {"v", "offset", "fmt", "count"},
-}
+local STDLIB_SIGNATURES = stdlib_data.signatures
 
 -- ---------------------------------------------------------------------------
 -- Parse the call context from the text before cursor
@@ -253,8 +80,8 @@ function signature.compute(uri, position)
   local tree = ast_mod.get(uri)
   local analysis = scope_mod.analyze(uri)
 
-  local line = position.line + 1
-  local col = position.character + 1
+  local line, col = pos_util.lsp_to_byte(
+    doc.text, doc.line_index, position.line, position.character)
 
   local func_name, active_param = parse_call_context(doc.text, line, col)
   if not func_name then return nil end
@@ -266,8 +93,22 @@ function signature.compute(uri, position)
   -- Check stdlib signatures first
   local stdlib_params = STDLIB_SIGNATURES[func_name]
   if stdlib_params then
-    params = stdlib_params
-    label = func_name .. "(" .. table.concat(params, ", ") .. ")"
+    -- Build typed label: name(param: type, ...)
+    params = {}
+    local label_parts = {}
+    for _, p in ipairs(stdlib_params) do
+      params[#params + 1] = p.n
+      if p.t and p.t ~= "any" then
+        label_parts[#label_parts + 1] = p.n .. ": " .. p.t
+      else
+        label_parts[#label_parts + 1] = p.n
+      end
+    end
+    local ret_suffix = ""
+    if stdlib_data.returns[func_name] then
+      ret_suffix = " -> " .. stdlib_data.returns[func_name]
+    end
+    label = func_name .. "(" .. table.concat(label_parts, ", ") .. ")" .. ret_suffix
   end
 
   -- Check user-defined functions via scope analysis
@@ -279,15 +120,22 @@ function signature.compute(uri, position)
       if s then
         local visible = scope_mod.get_visible(s)
         local decl = visible[base_name]
-        if decl and decl.kind == "function" and decl.node and decl.node.params then
-          params = {}
-          for _, p in ipairs(decl.node.params) do
-            params[#params + 1] = p.value or p.name or "?"
+        if decl then
+          if decl.kind == "function" and decl.node and decl.node.params then
+            params = {}
+            for _, p in ipairs(decl.node.params) do
+              params[#params + 1] = p.value or p.name or "?"
+            end
+            if decl.node.isvararg then
+              params[#params + 1] = "..."
+            end
+            label = "function " .. base_name .. "(" .. table.concat(params, ", ") .. ")"
+          elseif decl.type_info and decl.type_info.tag == "function"
+                 and decl.type_info.params then
+            -- Variable holding a function value (e.g., local z = some_func)
+            params = decl.type_info.params
+            label = base_name .. "(" .. table.concat(params, ", ") .. ")"
           end
-          if decl.node.isvararg then
-            params[#params + 1] = "..."
-          end
-          label = "function " .. base_name .. "(" .. table.concat(params, ", ") .. ")"
         end
       end
     end
@@ -322,8 +170,20 @@ function signature.compute(uri, position)
 
   -- Build LSP SignatureHelp
   local param_infos = {}
-  for _, p in ipairs(params) do
-    param_infos[#param_infos + 1] = {label = p}
+  -- For stdlib sigs, look up the typed info for richer labels
+  local stdlib_params = STDLIB_SIGNATURES[func_name]
+  if stdlib_params then
+    for _, p in ipairs(stdlib_params) do
+      if p.t and p.t ~= "any" then
+        param_infos[#param_infos + 1] = {label = p.n .. ": " .. p.t}
+      else
+        param_infos[#param_infos + 1] = {label = p.n}
+      end
+    end
+  else
+    for _, p in ipairs(params) do
+      param_infos[#param_infos + 1] = {label = p}
+    end
   end
 
   return {

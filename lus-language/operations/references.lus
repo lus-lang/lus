@@ -3,6 +3,7 @@ global require, ipairs
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
 local document = require("lus-language.document")
+local pos_util = require("lus-language.util.position")
 
 local references = {}
 
@@ -26,8 +27,10 @@ function references.compute(uri, position, include_declaration)
   local analysis = scope_mod.analyze(uri)
   if not analysis then return {} end
 
-  local line = position.line + 1
-  local col = position.character + 1
+  local doc = document.get(uri)
+  if not doc then return {} end
+  local line, col = pos_util.lsp_to_byte(
+    doc.text, doc.line_index, position.line, position.character)
 
   local decl = scope_mod.get_declaration(analysis, line, col)
   if not decl then return {} end

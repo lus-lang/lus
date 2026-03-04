@@ -1,0 +1,14 @@
+---
+name: math.acos
+module: math
+kind: function
+since: 0.1.0
+stability: stable
+origin: lua
+params:
+  - name: x
+    type: number
+returns: number
+---
+
+Returns the arc cosine of `x` in radians.

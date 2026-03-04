@@ -331,7 +331,7 @@
               "name": "punctuation.definition.string.begin.lus"
             }
           },
-          "end": "`[ \\t]*|(?=\\n)",
+          "end": "`[ \\t]*",
           "endCaptures": {
             "0": {
               "name": "punctuation.definition.string.end.lus"

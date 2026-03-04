@@ -158,6 +158,22 @@ static void emit_remaining_comments(FmtState *F) {
   emit_comments_before(F, -1);
 }
 
+/* Emit a trailing short comment on the same line as code.
+** Only fires for short comments (!islong) whose line matches exactly. */
+static void emit_trailing_comment(FmtState *F, int line) {
+  if (line <= 0) return;
+  LusComment *c = F->next_comment;
+  if (c == NULL || c->line != line || c->islong) return;
+  buf_adds(&F->buf, "  --");
+  if (c->text) {
+    const char *t = getstr(c->text);
+    if (t[0] != '\0' && t[0] != ' ' && t[0] != '-')
+      buf_addc(&F->buf, ' ');
+    buf_addlstr(&F->buf, t, tsslen(c->text));
+  }
+  F->next_comment = c->next;
+}
+
 /* ======================================================================
 ** Operator helpers
 ** ====================================================================== */
@@ -495,6 +511,7 @@ static void emit_funcbody(FmtState *F, LusAstNode *n, const char *prefix) {
   buf_addc(&F->buf, '(');
   emit_params(F, n->u.func.params);
   buf_addc(&F->buf, ')');
+  emit_trailing_comment(F, n->line);
   emit_nl(F);
 
   /* Body is in children */
@@ -598,6 +615,7 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
 
     case AST_DOEXPR:
       buf_adds(&F->buf, "do");
+      emit_trailing_comment(F, n->line);
       emit_nl(F);
       emit_block_children(F, n);
       emit_indent(F);
@@ -748,6 +766,7 @@ static void emit_if(FmtState *F, LusAstNode *n) {
   buf_adds(&F->buf, "if ");
   emit_cond(F, n->u.ifstat.cond);
   buf_adds(&F->buf, " then");
+  emit_trailing_comment(F, n->line);
   emit_nl(F);
 
   /* Children: mix of body statements and elseif/else nodes */
@@ -760,6 +779,7 @@ static void emit_if(FmtState *F, LusAstNode *n) {
       /* elseif has cond in u.ifstat.cond and body in children */
       emit_cond(F, c->u.ifstat.cond);
       buf_adds(&F->buf, " then");
+      emit_trailing_comment(F, c->line);
       emit_nl(F);
       F->indent++;
       for (LusAstNode *ec = c->child; ec != NULL; ec = ec->next)
@@ -768,6 +788,7 @@ static void emit_if(FmtState *F, LusAstNode *n) {
       F->indent--;
       emit_indent(F);
       buf_adds(&F->buf, "else");
+      emit_trailing_comment(F, c->line);
       emit_nl(F);
       F->indent++;
       for (LusAstNode *ec = c->child; ec != NULL; ec = ec->next)
@@ -786,6 +807,7 @@ static void emit_while(FmtState *F, LusAstNode *n) {
   buf_adds(&F->buf, "while ");
   emit_cond(F, n->u.loop.cond);
   buf_adds(&F->buf, " do");
+  emit_trailing_comment(F, n->line);
   emit_nl(F);
   emit_block_children(F, n);
   emit_indent(F);
@@ -794,6 +816,7 @@ static void emit_while(FmtState *F, LusAstNode *n) {
 
 static void emit_repeat(FmtState *F, LusAstNode *n) {
   buf_adds(&F->buf, "repeat");
+  emit_trailing_comment(F, n->line);
   emit_nl(F);
   emit_block_children(F, n);
   emit_indent(F);
@@ -816,6 +839,7 @@ static void emit_fornum(FmtState *F, LusAstNode *n) {
     emit_expr(F, n->u.fornum.step);
   }
   buf_adds(&F->buf, " do");
+  emit_trailing_comment(F, n->line);
   emit_nl(F);
   emit_block_children(F, n);
   emit_indent(F);
@@ -828,6 +852,7 @@ static void emit_forgen(FmtState *F, LusAstNode *n) {
   buf_adds(&F->buf, " in ");
   emit_exprlist(F, n->u.forgen.explist);
   buf_adds(&F->buf, " do");
+  emit_trailing_comment(F, n->line);
   emit_nl(F);
   emit_block_children(F, n);
   emit_indent(F);
@@ -875,6 +900,7 @@ static void emit_stmt(FmtState *F, LusAstNode *n) {
 
     case AST_DO:
       buf_adds(&F->buf, "do");
+      emit_trailing_comment(F, n->line);
       emit_nl(F);
       emit_block_children(F, n);
       emit_indent(F);
@@ -930,6 +956,7 @@ static void emit_stmt(FmtState *F, LusAstNode *n) {
       break;
   }
 
+  emit_trailing_comment(F, n->endline > 0 ? n->endline : n->line);
   emit_nl(F);
 }
 

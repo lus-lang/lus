@@ -527,6 +527,9 @@ static int read_interp_section(LexState *ls, SemInfo *seminfo,
           /* First, save accumulated literal */
           seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
                                         luaZ_bufflen(ls->buff));
+          /* Record position of first letter of name (after $) */
+          ls->interp_name_line = ls->linenumber;
+          ls->interp_name_column = ls->column;
           /* Read the variable name */
           luaZ_resetbuffer(ls->buff);
           do {
@@ -791,6 +794,8 @@ void luaX_next(LexState *ls) {
 
 int luaX_lookahead(LexState *ls) {
   lua_assert(ls->lookahead.token == TK_EOS);
+  int saved_tokencolumn = ls->tokencolumn;
   ls->lookahead.token = llex(ls, &ls->lookahead.seminfo);
+  ls->tokencolumn = saved_tokencolumn;  /* restore current token's column */
   return ls->lookahead.token;
 }

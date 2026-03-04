@@ -1,0 +1,337 @@
+global require, ipairs, pairs, type, string, table, io, tojson, fromjson, tostring, pledge, select, tonumber, _lsp_handle
+
+pledge("load", "fs:read=./*")
+
+-- Override io.write to capture output BEFORE loading wasm.lus
+local capture_buffer = ""
+
+local original_write = io.write
+io.write = function(...)
+  for i = 1, select("#", ...) do
+    capture_buffer = capture_buffer .. tostring(select(i, ...))
+  end
+  return io  -- match io.write chaining
+end
+
+-- Now require wasm.lus which will define _lsp_handle and call pledge("seal")
+require("lus-language.wasm")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("lsp-integration")
+
+-- ---------------------------------------------------------------------------
+-- Test helpers
+-- ---------------------------------------------------------------------------
+
+-- Helper to build an LSP range without inline ["end"] (formatter bug workaround)
+local function make_range(sl, sc, el, ec)
+  local r = {start = {line = sl, character = sc}}
+  r["end"] = {line = el, character = ec}
+  return r
+end
+
+local msg_id = 0
+
+local function next_id()
+  msg_id = msg_id + 1
+  return msg_id
+end
+
+local function send(msg)
+  capture_buffer = ""
+  _lsp_handle(tojson(msg))
+  return capture_buffer
+end
+
+local function send_request(method, params)
+  local id = next_id()
+  return send({
+    jsonrpc = "2.0",
+    id = id,
+    method = method,
+    params = params or {},
+  }), id
+end
+
+local function send_notification(method, params)
+  return send({
+    jsonrpc = "2.0",
+    method = method,
+    params = params or {},
+  })
+end
+
+-- Parse the first LSP response from the captured output
+local function parse_response(raw)
+  if not raw or raw == "" then return nil end
+  -- Find Content-Length header
+  local len_str = string.match(raw, "Content%-Length: (%d+)")
+  if not len_str then return nil end
+  -- Find the JSON body after the header
+  local body_start = string.find(raw, "\r\n\r\n")
+  if not body_start then return nil end
+  local body = string.sub(raw, body_start + 4)
+  local ok, result = catch fromjson(body)
+  if ok then return result end
+  return nil
+end
+
+-- Parse all LSP messages from captured output
+local function parse_all_responses(raw)
+  if not raw or raw == "" then return {} end
+  local results = {}
+  local pos = 1
+  while pos <= #raw do
+    local len_start, len_end = string.find(raw, "Content%-Length: (%d+)", pos)
+    if not len_start then break end
+    local len_str = string.match(raw, "Content%-Length: (%d+)", pos)
+    local len = tonumber(len_str)
+    local header_end = string.find(raw, "\r\n\r\n", len_end)
+    if not header_end then break end
+    local body_start = header_end + 4
+    local body = string.sub(raw, body_start, body_start + len - 1)
+    local ok, msg = catch fromjson(body)
+    if ok and msg then
+      results[#results + 1] = msg
+    end
+    pos = body_start + len
+  end
+  return results
+end
+
+-- =========================================================================
+-- Tests
+-- =========================================================================
+
+tests:describe("LSP protocol integration")
+
+-- Initialize handshake
+tests:it("returns capabilities on initialize", function()
+  local raw = send_request("initialize", {
+    processId = 1,
+    rootUri = "file:///test",
+    capabilities = {},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+  tests:assert_not_nil(resp.result.capabilities)
+  tests:assert_true(resp.result.capabilities.hoverProvider == true)
+  tests:assert_true(resp.result.capabilities.definitionProvider == true)
+  tests:assert_true(resp.result.capabilities.documentHighlightProvider == true)
+  tests:assert_true(resp.result.capabilities.selectionRangeProvider == true)
+end)
+
+-- Initialized notification
+tests:it("accepts initialized notification without error", function()
+  local raw = send_notification("initialized", {})
+  -- Should produce no response (it's a notification)
+  tests:assert_equal(raw, "")
+end)
+
+-- Open document triggers diagnostics
+tests:it("publishes diagnostics on didOpen", function()
+  local raw = send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = "file:///test/integration.lus",
+      languageId = "lus",
+      version = 1,
+      text = "local x = 1",
+    },
+  })
+  -- Should publish diagnostics notification
+  local msgs = parse_all_responses(raw)
+  tests:assert_true(#msgs >= 1, "expected at least 1 message (diagnostics)")
+  local diag_msg = msgs[1]
+  tests:assert_equal(diag_msg.method, "textDocument/publishDiagnostics")
+  tests:assert_not_nil(diag_msg.params)
+  tests:assert_equal(diag_msg.params.uri, "file:///test/integration.lus")
+end)
+
+-- Change document triggers updated diagnostics with errors
+tests:it("publishes error diagnostics on didChange with broken code", function()
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {
+      uri = "file:///test/integration.lus",
+      version = 2,
+    },
+    contentChanges = {
+      {
+        range = make_range(0, 0, 0, 11),
+        text = "local = = =",
+      },
+    },
+  })
+  local msgs = parse_all_responses(raw)
+  tests:assert_true(#msgs >= 1, "expected diagnostics")
+  local diag_msg = msgs[1]
+  tests:assert_equal(diag_msg.method, "textDocument/publishDiagnostics")
+  tests:assert_true(#diag_msg.params.diagnostics > 0, "expected error diagnostics")
+end)
+
+-- Fix the doc back to valid code for subsequent tests
+tests:it("clears diagnostics on valid code change", function()
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {
+      uri = "file:///test/integration.lus",
+      version = 3,
+    },
+    contentChanges = {
+      {
+        range = make_range(0, 0, 0, 11),
+        text = "local x = 1\nlocal y = x + 1",
+      },
+    },
+  })
+  local msgs = parse_all_responses(raw)
+  tests:assert_true(#msgs >= 1, "expected diagnostics notification")
+end)
+
+-- Document symbols
+tests:it("returns document symbols", function()
+  local raw = send_request("textDocument/documentSymbol", {
+    textDocument = {uri = "file:///test/integration.lus"},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+  tests:assert_type(resp.result, "table")
+end)
+
+-- Hover
+tests:it("returns hover information", function()
+  local raw = send_request("textDocument/hover", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 0, character = 6},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  -- result might be null if position doesn't resolve, which is valid
+end)
+
+-- Completion
+tests:it("returns completions", function()
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 1, character = 10},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+end)
+
+-- Unknown method returns MethodNotFound
+tests:it("returns MethodNotFound for unknown methods", function()
+  local raw = send_request("textDocument/unknownMethod", {
+    textDocument = {uri = "file:///test/integration.lus"},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.error)
+  tests:assert_equal(resp.error.code, -32601)
+end)
+
+-- Document highlight
+tests:it("returns document highlights", function()
+  local raw = send_request("textDocument/documentHighlight", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 0, character = 6},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+end)
+
+-- Selection range
+tests:it("returns selection ranges", function()
+  local raw = send_request("textDocument/selectionRange", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    positions = {{line = 0, character = 6}},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+end)
+
+-- Code action
+tests:it("returns code actions for diagnostics", function()
+  local raw = send_request("textDocument/codeAction", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    range = make_range(0, 0, 0, 0),
+    context = {diagnostics = {}},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+end)
+
+-- Prepare rename
+tests:it("returns prepare rename result", function()
+  local raw = send_request("textDocument/prepareRename", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 0, character = 6},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  -- result may be null or a range+placeholder depending on position
+end)
+
+-- Shutdown
+tests:it("responds to shutdown with null result", function()
+  local raw = send_request("shutdown", {})
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  -- result should be null (JSON null)
+  -- In Lus, tojson encodes NaN as null, and fromjson may decode it as nil or NaN
+end)
+
+-- Close document
+tests:it("accepts didClose without error", function()
+  local raw = send_notification("textDocument/didClose", {
+    textDocument = {uri = "file:///test/integration.lus"},
+  })
+  -- Should produce no direct response (notification)
+  -- But might produce diagnostics clear
+end)
+
+-- Full lifecycle test
+tests:describe("full lifecycle")
+
+tests:it("open -> edit -> get completions -> close", function()
+  -- Open
+  send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = "file:///test/lifecycle.lus",
+      languageId = "lus",
+      version = 1,
+      text = "local greeting = 'hello'\nlocal msg = gre",
+    },
+  })
+
+  -- Edit (add more text)
+  send_notification("textDocument/didChange", {
+    textDocument = {uri = "file:///test/lifecycle.lus", version = 2},
+    contentChanges = {
+      {
+        range = make_range(1, 15, 1, 15),
+        text = "eting",
+      },
+    },
+  })
+
+  -- Get completions
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = "file:///test/lifecycle.lus"},
+    position = {line = 1, character = 20},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+
+  -- Close
+  send_notification("textDocument/didClose", {
+    textDocument = {uri = "file:///test/lifecycle.lus"},
+  })
+end)
+
+-- =========================================================================
+tests:finish()

@@ -52,28 +52,37 @@ SOURCES=(
   "$SRC_DIR/lvector.c"
   "$SRC_DIR/lvectorlib.c"
   "$SRC_DIR/lvm.c"
-  "$SRC_DIR/lworkerlib.c"
   "$SRC_DIR/lzio.c"
   "$SCRIPT_DIR/lus_wasm.c"
   "$SCRIPT_DIR/lev_wasm_stubs.c"
 )
+
+# Generate LSP stdlib data from lus-spec
+echo "Generating LSP stdlib data..."
+node "$REPO_ROOT/lus-spec/build-lsp.js"
 
 echo "Building Lus WASM..."
 
 emcc "${SOURCES[@]}" \
   -I"$SRC_DIR" \
   -o "$OUT_DIR/lus.js" \
-  -pthread \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_destroy","_lus_load_lsp","_lus_handle_message","_malloc","_free"]' \
   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]' \
   -s ALLOW_MEMORY_GROWTH=1 \
-  -s PTHREAD_POOL_SIZE=4 \
-  -s ENVIRONMENT='web,worker,node' \
+  -s ENVIRONMENT='node' \
   -s NO_EXIT_RUNTIME=1 \
   --embed-file "$REPO_ROOT/lus-language@/lus-language" \
   -O2 \
   -DLUA_USE_C89
+
+# Copy to VS Code extension directory
+VSCODE_WASM="$REPO_ROOT/lus-vscode/wasm"
+if [ -d "$VSCODE_WASM" ]; then
+  cp "$OUT_DIR/lus.js" "$VSCODE_WASM/lus.js"
+  cp "$OUT_DIR/lus.wasm" "$VSCODE_WASM/lus.wasm"
+  echo "Copied to $VSCODE_WASM"
+fi
 
 echo "Build complete: $OUT_DIR/lus.js, $OUT_DIR/lus.wasm"

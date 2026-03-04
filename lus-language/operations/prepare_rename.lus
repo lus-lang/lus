@@ -1,0 +1,48 @@
+global require, ipairs
+
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local document = require("lus-language.document")
+local pos_util = require("lus-language.util.position")
+local stdlib_data = require("lus-language.analysis.stdlib_data")
+
+local prepare_rename = {}
+
+-- Standard library names that cannot be renamed (from lus-spec)
+local STDLIB = {}
+for _, name in ipairs(stdlib_data.globals) do
+  STDLIB[name] = true
+end
+for _, name in ipairs(stdlib_data.tables) do
+  STDLIB[name] = true
+end
+
+-- Validate rename is possible before starting.
+-- position is 0-based (LSP). Returns {range, placeholder} or nil.
+function prepare_rename.compute(uri, position)
+  ast_mod.parse(uri)
+
+  local analysis = scope_mod.analyze(uri)
+  if not analysis then return nil end
+
+  local doc = document.get(uri)
+  if not doc then return nil end
+  local line, col = pos_util.lsp_to_byte(
+    doc.text, doc.line_index, position.line, position.character)
+
+  local decl = scope_mod.get_declaration(analysis, line, col)
+  if not decl then return nil end
+
+  -- Don't allow renaming stdlib names
+  if STDLIB[decl.name] then return nil end
+
+  return {
+    range = {
+      start = {line = decl.line - 1, character = decl.column - 1},
+      ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
+    },
+    placeholder = decl.name,
+  }
+end
+
+return prepare_rename

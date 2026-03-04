@@ -46,7 +46,8 @@ print(report)
 
 -- Escaping: use $$ for literal $
 local price_str = `Price: $$$(items * price)`
-print(price_str)  --> Price: $99.95
+print(price_str)
+-- > Price: $99.95
 
 -- Objects with __tostring
 local Point = {}
@@ -56,17 +57,18 @@ Point.__tostring = function(self)
 end
 
 local function new_point(x, y)
-    return setmetatable({x = x, y = y}, Point)
+    return setmetatable({ x = x, y = y }, Point)
 end
 
 local p = new_point(10, 20)
-print(`Point location: $p`)  --> Point location: (10, 20)
+print(`Point location: $p`)
+-- > Point location: (10, 20)
 
 -- Building SQL-like queries (example pattern)
 local table_name = "users"
 local field = "email"
 local value = "test@example.com"
-local query = `SELECT * FROM $table_name WHERE $field = '$(value)'`
+local query = `SELECT * FROM $table_name WHERE $field = '$value'`
 print(query)
 
 -- Nested interpolation

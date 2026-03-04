@@ -1,0 +1,1833 @@
+global require, ipairs, pairs, type, string, table, io, debug, pledge, tostring, error, assert
+
+pledge("load", "fs:read=./*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("lsp-unit")
+
+-- Load LS modules
+local document = require("lus-language.document")
+local ast_mod = require("lus-language.analysis.ast")
+local scope_mod = require("lus-language.analysis.scope")
+local types_mod = require("lus-language.analysis.types")
+local diagnostics = require("lus-language.analysis.diagnostics")
+local linting = require("lus-language.analysis.linting")
+local symbols = require("lus-language.operations.symbols")
+local completion = require("lus-language.operations.completion")
+local hover = require("lus-language.operations.hover")
+local definition = require("lus-language.operations.definition")
+local references = require("lus-language.operations.references")
+local rename = require("lus-language.operations.rename")
+local sem_tokens = require("lus-language.operations.semantic_tokens")
+local signature = require("lus-language.operations.signature")
+local folding = require("lus-language.operations.folding")
+local inlay_hints = require("lus-language.operations.inlay_hints")
+local format_mod = require("lus-language.operations.format")
+local highlight = require("lus-language.operations.highlight")
+local prepare_rename = require("lus-language.operations.prepare_rename")
+local selection_range = require("lus-language.operations.selection_range")
+local code_action = require("lus-language.operations.code_action")
+
+-- ---------------------------------------------------------------------------
+-- Test helpers
+-- ---------------------------------------------------------------------------
+
+local doc_counter = 0
+
+local function open_doc(source)
+  doc_counter = doc_counter + 1
+  local uri = "file:///test/doc_" .. doc_counter .. ".lus"
+  document.open(uri, 1, source)
+  ast_mod.parse(uri)
+  return uri
+end
+
+local function close_doc(uri)
+  document.close(uri)
+end
+
+-- Helper to build an LSP range without using ["end"] literal in table constructor
+-- (the Lus formatter converts ["end"] to unquoted end which breaks parsing)
+local function make_range(sl, sc, el, ec)
+  local r = {start = {line = sl, character = sc}}
+  r["end"] = {line = el, character = ec}
+  return r
+end
+
+-- =========================================================================
+-- Document module
+-- =========================================================================
+tests:describe("document")
+
+tests:it("opens and retrieves a document", function()
+  local uri = open_doc("local x = 1")
+  local doc = document.get(uri)
+  tests:assert_not_nil(doc)
+  tests:assert_equal(doc.text, "local x = 1")
+  close_doc(uri)
+end)
+
+tests:it("returns text via get_text", function()
+  local uri = open_doc("local y = 2")
+  tests:assert_equal(document.get_text(uri), "local y = 2")
+  close_doc(uri)
+end)
+
+tests:it("returns nil for unknown URI", function()
+  tests:assert_nil(document.get("file:///nonexistent"))
+end)
+
+tests:it("closes a document", function()
+  local uri = open_doc("local z = 3")
+  close_doc(uri)
+  tests:assert_nil(document.get(uri))
+end)
+
+tests:it("lists all open documents", function()
+  local u1 = open_doc("local a = 1")
+  local u2 = open_doc("local b = 2")
+  local all = document.all()
+  tests:assert_true(#all >= 2, "expected at least 2 open documents")
+  close_doc(u1)
+  close_doc(u2)
+end)
+
+tests:it("applies incremental changes", function()
+  local uri = open_doc("local x = 1")
+  document.change(uri, 2, {
+    {range = make_range(0, 10, 0, 11), text = "42"},
+  })
+  tests:assert_equal(document.get_text(uri), "local x = 42")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- AST module
+-- =========================================================================
+tests:describe("analysis/ast")
+
+tests:it("parses valid code", function()
+  local uri = open_doc("local x = 1\nlocal y = 2")
+  local tree = ast_mod.get(uri)
+  tests:assert_not_nil(tree)
+  tests:assert_type(tree, "table")
+  close_doc(uri)
+end)
+
+tests:it("returns errors for invalid code", function()
+  local uri = open_doc("local = = =")
+  local tree, errors = ast_mod.parse(uri)
+  tests:assert_true(errors ~= nil and #errors > 0, "expected parse errors")
+  close_doc(uri)
+end)
+
+tests:it("caches AST between calls", function()
+  local uri = open_doc("local x = 1")
+  local tree1 = ast_mod.get(uri)
+  local tree2 = ast_mod.get(uri)
+  tests:assert_true(tree1 == tree2, "AST should be cached (same reference)")
+  close_doc(uri)
+end)
+
+tests:it("invalidates AST on content change", function()
+  local uri = open_doc("local x = 1")
+  local tree1 = ast_mod.get(uri)
+  document.change(uri, 2, {
+    {range = make_range(0, 10, 0, 11), text = "2"},
+  })
+  ast_mod.parse(uri)
+  -- After change, a new AST is generated
+  tests:assert_not_nil(ast_mod.get(uri))
+  close_doc(uri)
+end)
+
+tests:it("falls back to last good AST on error", function()
+  local uri = open_doc("local x = 1")
+  local good_tree = ast_mod.get(uri)
+  tests:assert_not_nil(good_tree)
+  -- Now introduce a parse error
+  document.change(uri, 2, {
+    {range = make_range(0, 0, 0, 11), text = "local = = ="},
+  })
+  ast_mod.parse(uri)
+  local fallback = ast_mod.get(uri)
+  -- Should still return the last good AST
+  tests:assert_not_nil(fallback)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Scope module
+-- =========================================================================
+tests:describe("analysis/scope")
+
+tests:it("finds local declarations", function()
+  local uri = open_doc("local x = 1\nlocal y = x + 1")
+  local analysis = scope_mod.analyze(uri)
+  tests:assert_not_nil(analysis)
+  tests:assert_true(#analysis.declarations >= 2, "expected at least 2 declarations")
+  close_doc(uri)
+end)
+
+tests:it("finds references to locals", function()
+  local uri = open_doc("local x = 1\nlocal y = x + 1")
+  local analysis = scope_mod.analyze(uri)
+  -- Find declaration of x
+  local decl = scope_mod.get_declaration(analysis, 1, 7)
+  tests:assert_not_nil(decl)
+  tests:assert_equal(decl.name, "x")
+  -- x should have at least 1 reference (on line 2)
+  local refs = scope_mod.get_references(analysis, decl)
+  tests:assert_true(#refs >= 1, "expected at least 1 reference to x")
+  close_doc(uri)
+end)
+
+tests:it("handles shadowing correctly", function()
+  local uri = open_doc("local x = 1\ndo\n  local x = 2\n  local y = x\nend")
+  local analysis = scope_mod.analyze(uri)
+  -- The reference to x on line 4 should resolve to the inner x (line 3)
+  -- "  local y = x" -> x is at column 13
+  local ref = scope_mod.find_at(analysis, 4, 13)
+  if ref then
+    tests:assert_not_nil(ref.declaration)
+    if ref.declaration then
+      tests:assert_equal(ref.declaration.line, 3)
+    end
+  else
+    -- If find_at didn't match at column 13, try the reference list
+    local found_inner = false
+    for _, r in ipairs(analysis.references) do
+      if r.line == 4 and r.name == "x" and r.declaration then
+        found_inner = r.declaration.line == 3
+      end
+    end
+    tests:assert_true(found_inner, "x on line 4 should resolve to inner x on line 3")
+  end
+  close_doc(uri)
+end)
+
+tests:it("scopes for-loop variables", function()
+  local uri = open_doc("for i = 1, 10 do\n  local y = i\nend")
+  local analysis = scope_mod.analyze(uri)
+  tests:assert_not_nil(analysis)
+  -- i should be declared as a for variable
+  local found = false
+  for _, decl in ipairs(analysis.declarations) do
+    if decl.name == "i" and decl.kind == "for" then
+      found = true
+    end
+  end
+  tests:assert_true(found, "expected for-variable declaration for i")
+  close_doc(uri)
+end)
+
+tests:it("tracks function parameters", function()
+  local uri = open_doc("local function foo(a, b)\n  return a + b\nend")
+  local analysis = scope_mod.analyze(uri)
+  local param_found = false
+  for _, decl in ipairs(analysis.declarations) do
+    if decl.name == "a" and decl.kind == "param" then
+      param_found = true
+    end
+  end
+  tests:assert_true(param_found, "expected param declaration for a")
+  close_doc(uri)
+end)
+
+tests:it("get_visible returns all visible names", function()
+  local uri = open_doc("local x = 1\nlocal y = 2\nlocal z = x + y")
+  local analysis = scope_mod.analyze(uri)
+  local s = scope_mod.get_scope_at(analysis.root, 3)
+  tests:assert_not_nil(s)
+  local visible = scope_mod.get_visible(s)
+  tests:assert_not_nil(visible["x"])
+  tests:assert_not_nil(visible["y"])
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Types module
+-- =========================================================================
+tests:describe("analysis/types")
+
+tests:it("infers integer literals", function()
+  local t = types_mod.infer_expr({type = "number", value = 42})
+  tests:assert_equal(t.tag, "integer")
+end)
+
+tests:it("infers float literals", function()
+  local t = types_mod.infer_expr({type = "number", value = 3.14})
+  tests:assert_equal(t.tag, "float")
+end)
+
+tests:it("infers string literals", function()
+  local t = types_mod.infer_expr({type = "string", value = "hello"})
+  tests:assert_equal(t.tag, "string")
+end)
+
+tests:it("infers boolean true", function()
+  local t = types_mod.infer_expr({type = "true"})
+  tests:assert_equal(t.tag, "boolean")
+end)
+
+tests:it("infers boolean false", function()
+  local t = types_mod.infer_expr({type = "false"})
+  tests:assert_equal(t.tag, "boolean")
+end)
+
+tests:it("infers nil", function()
+  local t = types_mod.infer_expr({type = "nil"})
+  tests:assert_equal(t.tag, "nil")
+end)
+
+tests:it("infers require() as module", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "name", value = "require"},
+    args = {{type = "string", value = "foo.bar"}},
+  })
+  tests:assert_equal(t.tag, "module")
+  tests:assert_equal(t.module_name, "foo.bar")
+end)
+
+tests:it("infers tostring() as string", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "name", value = "tostring"},
+    args = {{type = "number", value = 1}},
+  })
+  tests:assert_equal(t.tag, "string")
+end)
+
+tests:it("displays union types", function()
+  local u = types_mod.union({types_mod.str(), types_mod.null()})
+  local display = types_mod.display(u)
+  tests:assert_contains(display, "string")
+  tests:assert_contains(display, "nil")
+  tests:assert_contains(display, "|")
+end)
+
+tests:it("deduplicates union members", function()
+  local u = types_mod.union({types_mod.str(), types_mod.str()})
+  -- Should collapse to just string
+  tests:assert_equal(u.tag, "string")
+end)
+
+tests:it("displays function return type", function()
+  local ft = types_mod.func({"a", "b"}, types_mod.str())
+  local display = types_mod.display(ft)
+  tests:assert_contains(display, "->")
+  tests:assert_contains(display, "string")
+end)
+
+tests:it("concat operator produces string", function()
+  local t = types_mod.infer_expr({
+    type = "binop", op = "..",
+    left = {type = "string", value = "a"},
+    right = {type = "string", value = "b"},
+  })
+  tests:assert_equal(t.tag, "string")
+end)
+
+tests:it("comparison produces boolean", function()
+  local t = types_mod.infer_expr({
+    type = "binop", op = "==",
+    left = {type = "number", value = 1},
+    right = {type = "number", value = 2},
+  })
+  tests:assert_equal(t.tag, "boolean")
+end)
+
+tests:it("length operator produces integer", function()
+  local t = types_mod.infer_expr({type = "unop", op = "#", operand = {type = "string", value = "x"}})
+  tests:assert_equal(t.tag, "integer")
+end)
+
+tests:it("or operator produces union", function()
+  local t = types_mod.infer_expr({
+    type = "binop", op = "or",
+    left = {type = "string", value = "a"},
+    right = {type = "nil"},
+  })
+  tests:assert_equal(t.tag, "union")
+end)
+
+-- =========================================================================
+-- Diagnostics module
+-- =========================================================================
+tests:describe("analysis/diagnostics")
+
+tests:it("returns empty for valid code", function()
+  local uri = open_doc("local x = 1")
+  local diags = diagnostics.compute(uri)
+  tests:assert_equal(#diags, 0)
+  close_doc(uri)
+end)
+
+tests:it("returns errors for syntax errors", function()
+  local uri = open_doc("local = = =")
+  local diags = diagnostics.compute(uri)
+  tests:assert_true(#diags > 0, "expected diagnostics for syntax error")
+  close_doc(uri)
+end)
+
+tests:it("uses 0-based ranges", function()
+  local uri = open_doc("local = = =")
+  local diags = diagnostics.compute(uri)
+  if #diags > 0 then
+    tests:assert_true(diags[1].range.start.line >= 0, "line should be 0-based")
+    tests:assert_true(diags[1].range.start.character >= 0, "character should be 0-based")
+  end
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Linting module
+-- =========================================================================
+tests:describe("analysis/linting")
+
+tests:it("detects unused locals", function()
+  local uri = open_doc("local unused = 1")
+  local diags = linting.compute(uri)
+  local found = false
+  for _, d in ipairs(diags) do
+    if string.find(d.message, "Unused") and string.find(d.message, "unused") then
+      found = true
+    end
+  end
+  tests:assert_true(found, "expected unused local warning")
+  close_doc(uri)
+end)
+
+tests:it("does not flag used locals", function()
+  local uri = open_doc("local x = 1\nlocal y = x + 1\nlocal z = y")
+  local diags = linting.compute(uri)
+  for _, d in ipairs(diags) do
+    tests:assert_false(
+      string.find(d.message, "'x'") and string.find(d.message, "Unused"),
+      "x should not be flagged as unused"
+    )
+  end
+  close_doc(uri)
+end)
+
+tests:it("allows _-prefixed unused locals", function()
+  local uri = open_doc("local _unused = 1")
+  local diags = linting.compute(uri)
+  for _, d in ipairs(diags) do
+    tests:assert_false(
+      string.find(d.message, "_unused"),
+      "_unused should not be flagged"
+    )
+  end
+  close_doc(uri)
+end)
+
+tests:it("detects undefined globals", function()
+  local uri = open_doc("local x = undefined_var")
+  local diags = linting.compute(uri)
+  local found = false
+  for _, d in ipairs(diags) do
+    if string.find(d.message, "Undefined global") and string.find(d.message, "undefined_var") then
+      found = true
+    end
+  end
+  tests:assert_true(found, "expected undefined global warning")
+  close_doc(uri)
+end)
+
+tests:it("does not flag stdlib names", function()
+  local uri = open_doc("local x = print")
+  local diags = linting.compute(uri)
+  for _, d in ipairs(diags) do
+    tests:assert_false(
+      string.find(d.message, "Undefined") and string.find(d.message, "'print'"),
+      "print should not be flagged as undefined"
+    )
+  end
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Symbols
+-- =========================================================================
+tests:describe("operations/symbols")
+
+tests:it("finds function symbols", function()
+  local uri = open_doc("local function foo()\nend\nlocal function bar()\nend")
+  local syms = symbols.compute(uri)
+  tests:assert_true(#syms >= 2, "expected at least 2 function symbols")
+  close_doc(uri)
+end)
+
+tests:it("finds variable symbols", function()
+  local uri = open_doc("local x = 1\nlocal y = 'hello'")
+  local syms = symbols.compute(uri)
+  tests:assert_true(#syms >= 2, "expected at least 2 symbols")
+  close_doc(uri)
+end)
+
+tests:it("returns empty for empty document", function()
+  local uri = open_doc("")
+  local syms = symbols.compute(uri)
+  tests:assert_equal(#syms, 0)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Completion
+-- =========================================================================
+tests:describe("operations/completion")
+
+tests:it("returns scope variables", function()
+  local uri = open_doc("local myVar = 1\nlocal x = my")
+  local result = completion.compute(uri, {line = 1, character = 12})
+  tests:assert_not_nil(result)
+  -- Result should be a table (CompletionList or array)
+  tests:assert_type(result, "table")
+  close_doc(uri)
+end)
+
+tests:it("returns keywords", function()
+  local uri = open_doc("lo")
+  local result = completion.compute(uri, {line = 0, character = 2})
+  tests:assert_not_nil(result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Hover
+-- =========================================================================
+tests:describe("operations/hover")
+
+tests:it("shows hover for local variables", function()
+  local uri = open_doc("local myVar = 'hello'\nlocal x = myVar")
+  local result = hover.compute(uri, {line = 0, character = 6})
+  tests:assert_not_nil(result)
+  tests:assert_not_nil(result.contents)
+  tests:assert_contains(result.contents.value, "myVar")
+  close_doc(uri)
+end)
+
+tests:it("shows hover for functions", function()
+  local uri = open_doc("local function foo(a, b)\n  return a + b\nend\nfoo(1, 2)")
+  -- foo() call on line 4 (0-based: line 3, char 0)
+  local result = hover.compute(uri, {line = 3, character = 0})
+  tests:assert_not_nil(result)
+  tests:assert_contains(result.contents.value, "foo")
+  close_doc(uri)
+end)
+
+tests:it("returns nil for empty position", function()
+  local uri = open_doc("-- just a comment")
+  local result = hover.compute(uri, {line = 0, character = 0})
+  tests:assert_nil(result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Definition
+-- =========================================================================
+tests:describe("operations/definition")
+
+tests:it("jumps from reference to declaration", function()
+  local uri = open_doc("local x = 1\nlocal y = x")
+  local result = definition.compute(uri, {line = 1, character = 10})
+  tests:assert_not_nil(result)
+  tests:assert_equal(result.range.start.line, 0)
+  close_doc(uri)
+end)
+
+tests:it("jumps to function definition", function()
+  local uri = open_doc("local function foo()\nend\nfoo()")
+  local result = definition.compute(uri, {line = 2, character = 0})
+  tests:assert_not_nil(result)
+  tests:assert_equal(result.range.start.line, 0)
+  close_doc(uri)
+end)
+
+tests:it("returns nil for unresolved names", function()
+  local uri = open_doc("local x = unknown_thing")
+  local result = definition.compute(uri, {line = 0, character = 10})
+  -- unknown_thing is not declared, so definition should be nil
+  tests:assert_nil(result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- References
+-- =========================================================================
+tests:describe("operations/references")
+
+tests:it("finds all references with declaration", function()
+  local uri = open_doc("local x = 1\nlocal y = x\nlocal z = x")
+  local result = references.compute(uri, {line = 0, character = 6}, true)
+  -- x is declared on line 1, referenced on lines 2 and 3
+  tests:assert_true(#result >= 3, "expected at least 3 locations (decl + 2 refs)")
+  close_doc(uri)
+end)
+
+tests:it("finds references without declaration", function()
+  local uri = open_doc("local x = 1\nlocal y = x\nlocal z = x")
+  local result = references.compute(uri, {line = 0, character = 6}, false)
+  -- Without declaration, just the 2 references
+  tests:assert_true(#result >= 2, "expected at least 2 references")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Rename
+-- =========================================================================
+tests:describe("operations/rename")
+
+tests:it("renames a local and its references", function()
+  local uri = open_doc("local x = 1\nlocal y = x")
+  local result = rename.compute(uri, {line = 0, character = 6}, "newName")
+  tests:assert_not_nil(result)
+  tests:assert_not_nil(result.changes)
+  tests:assert_not_nil(result.changes[uri])
+  -- Should have edits for declaration and reference
+  tests:assert_true(#result.changes[uri] >= 2, "expected at least 2 edits")
+  close_doc(uri)
+end)
+
+tests:it("refuses to rename stdlib names", function()
+  local uri = open_doc("local x = print")
+  local result = rename.compute(uri, {line = 0, character = 10})
+  -- print is stdlib, should return nil
+  tests:assert_nil(result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Semantic Tokens
+-- =========================================================================
+tests:describe("operations/semantic_tokens")
+
+tests:it("produces data array divisible by 5", function()
+  local uri = open_doc("local x = 1\nlocal y = x + 2")
+  local result = sem_tokens.compute(uri)
+  tests:assert_not_nil(result)
+  tests:assert_not_nil(result.data)
+  tests:assert_equal(#result.data % 5, 0)
+  close_doc(uri)
+end)
+
+tests:it("returns empty data for empty doc", function()
+  local uri = open_doc("")
+  local result = sem_tokens.compute(uri)
+  tests:assert_not_nil(result)
+  tests:assert_equal(#result.data, 0)
+  close_doc(uri)
+end)
+
+tests:it("semantic token positions match source text (from/if-from)", function()
+  local source = [[
+global print
+
+-- Basic destructuring
+local point = {x = 10, y = 20, z = 30}
+local x, y, z from point
+print("Extracted:", x, y, z)
+
+local user = {
+    name = "Alice",
+    profile = { age = 30, city = "NYC" }
+}
+if profile from user then
+    print("Profile:", profile.age)
+end
+
+local function get_result()
+    return { success = true, data = "Hello" }
+end
+
+local success, data from get_result()
+if success then
+    print("Got:", data)
+end
+
+-- Combine with if-assignment
+local response = {ok = true, body = "Response body"}
+if ok, body from response then
+    print("Response:", body)
+end
+]]
+  local uri = open_doc(source)
+  local result = sem_tokens.compute(uri)
+  local data = result.data
+
+  tests:assert_equal(#data % 5, 0, "data length must be divisible by 5")
+
+  -- Split source into lines for validation
+  local lines = {}
+  for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    lines[#lines + 1] = line
+  end
+
+  -- Token type names for diagnostics
+  local type_names = {
+    [0] = "variable", [1] = "parameter", [2] = "function", [3] = "method",
+    [4] = "keyword", [5] = "string", [6] = "number", [7] = "comment",
+    [8] = "operator", [9] = "property", [10] = "enum", [11] = "enumMember",
+  }
+
+  -- Decode delta tokens to absolute positions (0-based as in LSP)
+  local prev_line, prev_col = 0, 0
+  for i = 1, #data, 5 do
+    local d_line = data[i]
+    local d_col = data[i+1]
+    local length = data[i+2]
+    local token_type = data[i+3]
+    local token_idx = (i - 1) / 5 + 1
+
+    local abs_line = prev_line + d_line
+    local abs_col
+    if d_line == 0 then
+      abs_col = prev_col + d_col
+    else
+      abs_col = d_col
+    end
+    prev_line = abs_line
+    prev_col = abs_col
+
+    -- Convert to 1-based for source lookup
+    local src_line = abs_line + 1
+    local src_col = abs_col + 1
+
+    local line_text = lines[src_line] or ""
+
+    -- Assert delta_col is non-negative
+    tests:assert_true(d_col >= 0,
+      string.format("Token #%d has negative delta_col=%d (line=%d, type=%s)",
+        token_idx, d_col, src_line, type_names[token_type] or "?"))
+
+    -- Assert token line is in range
+    tests:assert_true(src_line >= 1 and src_line <= #lines,
+      string.format("Token #%d line %d out of range (1..%d, type=%s)",
+        token_idx, src_line, #lines, type_names[token_type] or "?"))
+
+    -- Assert token doesn't overflow line bounds
+    tests:assert_true(src_col >= 1 and src_col + length - 1 <= #line_text,
+      string.format("Token #%d overflows: line=%d col=%d len=%d but line has %d chars (type=%s). Line: '%s'",
+        token_idx, src_line, src_col, length, #line_text,
+        type_names[token_type] or "?", line_text))
+
+    -- Extract actual text at this position
+    local actual = string.sub(line_text, src_col, src_col + length - 1)
+
+    -- Validate text plausibility by token type
+    if token_type == 7 then  -- comment
+      tests:assert_true(string.sub(actual, 1, 2) == "--",
+        string.format("Token #%d: comment at line=%d col=%d should start with '--' but got '%s'",
+          token_idx, src_line, src_col, actual))
+    elseif token_type == 6 then  -- number
+      tests:assert_true(string.match(actual, "^[0-9%.xXeE]+$") ~= nil,
+        string.format("Token #%d: number at line=%d col=%d got '%s'",
+          token_idx, src_line, src_col, actual))
+    elseif token_type == 5 then  -- string
+      tests:assert_true(string.sub(actual, 1, 1) == '"' or string.sub(actual, 1, 1) == "'",
+        string.format("Token #%d: string at line=%d col=%d should start with quote but got '%s'",
+          token_idx, src_line, src_col, actual))
+    elseif token_type == 0 or token_type == 1 or token_type == 2 then  -- variable/param/function
+      tests:assert_true(string.match(actual, "^[%a_][%w_]*$") ~= nil,
+        string.format("Token #%d: %s at line=%d col=%d should be identifier but got '%s'",
+          token_idx, type_names[token_type], src_line, src_col, actual))
+    elseif token_type == 9 then  -- property
+      tests:assert_true(string.match(actual, "^[%a_][%w_]*$") ~= nil,
+        string.format("Token #%d: property at line=%d col=%d should be identifier but got '%s'",
+          token_idx, src_line, src_col, actual))
+    end
+  end
+  close_doc(uri)
+end)
+
+tests:it("semantic tokens: multi-line comment skipped", function()
+  local source = '--[[\n    Multi-line comment\n    spanning lines\n]]\n\nglobal print\nlocal x = 1\nprint(x)\n'
+  local uri = open_doc(source)
+  local result = sem_tokens.compute(uri)
+  local data = result.data
+
+  tests:assert_equal(#data % 5, 0, "data length must be divisible by 5")
+
+  local lines = {}
+  for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    lines[#lines + 1] = line
+  end
+
+  local prev_line, prev_col = 0, 0
+  for i = 1, #data, 5 do
+    local d_line = data[i]
+    local d_col = data[i+1]
+    local length = data[i+2]
+    local token_type = data[i+3]
+    local token_idx = (i - 1) / 5 + 1
+
+    local abs_line = prev_line + d_line
+    local abs_col
+    if d_line == 0 then
+      abs_col = prev_col + d_col
+    else
+      abs_col = d_col
+    end
+    prev_line = abs_line
+    prev_col = abs_col
+
+    local src_line = abs_line + 1
+    local src_col = abs_col + 1
+    local line_text = lines[src_line] or ""
+
+    tests:assert_true(src_col >= 1 and src_col + length - 1 <= #line_text,
+      string.format("Token #%d overflows: line=%d col=%d len=%d but line has %d chars (type=%d). Line: '%s'",
+        token_idx, src_line, src_col, length, #line_text, token_type, line_text))
+  end
+  close_doc(uri)
+end)
+
+tests:it("semantic tokens: stale AST after failed parse returns empty", function()
+  -- Open a valid document
+  local source_v1 = "local x = 1\nlocal y = x + 2"
+  local uri = open_doc(source_v1)
+  local result1 = sem_tokens.compute(uri)
+  tests:assert_true(#result1.data > 0, "should have tokens for valid doc")
+
+  -- Simulate an incremental change that introduces a parse error
+  -- (user is mid-typing: "if profile from " with no 'then')
+  local source_v2 = "local x = 1\nif profile from \nlocal y = x + 2"
+  document.change(uri, 2, {
+    {range = make_range(1, 0, 1, 14), text = "if profile from \nlocal y = x + 2"},
+  })
+  ast_mod.parse(uri)
+
+  local result2 = sem_tokens.compute(uri)
+  -- Check: after a failed/recovery parse, do we get tokens and are they for the NEW text?
+  local data = result2.data
+  if #data > 0 then
+    local lines = {}
+    for line in (source_v2 .. "\n"):gmatch("([^\n]*)\n") do
+      lines[#lines + 1] = line
+    end
+
+    local prev_line, prev_col = 0, 0
+    for i = 1, #data, 5 do
+      local d_line = data[i]
+      local d_col = data[i+1]
+      local length = data[i+2]
+      local token_type = data[i+3]
+      local token_idx = (i - 1) / 5 + 1
+
+      local abs_line = prev_line + d_line
+      local abs_col
+      if d_line == 0 then
+        abs_col = prev_col + d_col
+      else
+        abs_col = d_col
+      end
+      prev_line = abs_line
+      prev_col = abs_col
+
+      local src_line = abs_line + 1
+      local src_col = abs_col + 1
+      -- Use actual current text from document store
+      local cur_text = document.get_text(uri)
+      local cur_lines = {}
+      for line in (cur_text .. "\n"):gmatch("([^\n]*)\n") do
+        cur_lines[#cur_lines + 1] = line
+      end
+      local line_text = cur_lines[src_line] or ""
+
+      tests:assert_true(src_col >= 1 and src_col + length - 1 <= #line_text,
+        string.format("Stale token #%d overflows after edit: line=%d col=%d len=%d lineLen=%d type=%d. Line: '%s'",
+          token_idx, src_line, src_col, length, #line_text, token_type, line_text))
+    end
+  end
+  close_doc(uri)
+end)
+
+tests:it("semantic tokens: from-examples full file", function()
+  -- Reconstructed content matching lus-examples/from.lus with if-from block
+  local source = table.concat({
+    "-- From Destructuring: Extract table fields into local variables.",
+    "-- playground: true",
+    "",
+    "global print",
+    "",
+    "-- Basic destructuring: field names become variable names",
+    "local point = {x = 10, y = 20, z = 30}",
+    "local x, y, z from point",
+    'print("Extracted:", x, y, z)',
+    "",
+    "-- Works with any table",
+    "local config = {",
+    '    host = "localhost",',
+    "    port = 8080,",
+    "    debug = true",
+    "}",
+    "local host, port, debug from config",
+    'print("Config:", host, port, debug)',
+    "",
+    "-- Missing fields become nil",
+    "local partial = {a = 1, c = 3}",
+    "local a, b, c from partial",
+    'print("Partial:", a, b, c)',
+    "",
+    "-- Combine with const for immutable bindings",
+    'local settings = {version = "1.0", name = "MyApp"}',
+    "local version <const>, name <const> from settings",
+    'print("App:", name, "v" .. version)',
+    "",
+    "-- Nested tables",
+    "local user = {",
+    '    name = "Alice",',
+    "    profile = {",
+    "        age = 30,",
+    '        city = "NYC"',
+    "    }",
+    "}",
+    "local name, profile from user",
+    "local age, city from profile",
+    'print("User:", name, age, city)',
+    "",
+    "if profile from user then",
+    "",
+    "end",
+    "",
+    "-- Practical example: function returning structured data",
+    "local function get_result()",
+    "    return {",
+    "        success = true,",
+    '        data = "Hello, World!",',
+    "        timestamp = 1234567890",
+    "    }",
+    "end",
+    "",
+    "local success, data, timestamp from get_result()",
+    "if success then",
+    '    print("Got data:", data, "at", timestamp)',
+    "end",
+    "",
+    "-- Combine with if-assignment",
+    'local response = {ok = true, body = "Response body"}',
+    "if ok, body from response then",
+    '    print("Response:", body)',
+    "end",
+    "",
+  }, "\n")
+
+  local uri = open_doc(source)
+  local result = sem_tokens.compute(uri)
+  local data = result.data
+
+  tests:assert_equal(#data % 5, 0, "data length must be divisible by 5")
+
+  local lines = {}
+  for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    lines[#lines + 1] = line
+  end
+
+  local type_names = {
+    [0] = "variable", [1] = "parameter", [2] = "function", [3] = "method",
+    [4] = "keyword", [5] = "string", [6] = "number", [7] = "comment",
+    [8] = "operator", [9] = "property", [10] = "enum", [11] = "enumMember",
+  }
+
+  local errors = {}
+  local prev_line, prev_col = 0, 0
+  for i = 1, #data, 5 do
+    local d_line = data[i]
+    local d_col = data[i+1]
+    local length = data[i+2]
+    local token_type = data[i+3]
+    local token_idx = (i - 1) / 5 + 1
+
+    local abs_line = prev_line + d_line
+    local abs_col
+    if d_line == 0 then
+      abs_col = prev_col + d_col
+    else
+      abs_col = d_col
+    end
+    prev_line = abs_line
+    prev_col = abs_col
+
+    local src_line = abs_line + 1
+    local src_col = abs_col + 1
+    local line_text = lines[src_line] or ""
+    local tname = type_names[token_type] or ("type" .. token_type)
+
+    -- Check bounds
+    if src_col < 1 or src_col + length - 1 > #line_text then
+      errors[#errors + 1] = string.format(
+        "Token #%d OVERFLOW: line=%d col=%d len=%d lineLen=%d type=%s line='%s'",
+        token_idx, src_line, src_col, length, #line_text, tname, line_text)
+    else
+      local actual = string.sub(line_text, src_col, src_col + length - 1)
+
+      -- Check plausibility
+      if token_type == 7 and string.sub(actual, 1, 2) ~= "--" then
+        errors[#errors + 1] = string.format(
+          "Token #%d BAD COMMENT: line=%d col=%d len=%d got='%s' type=%s",
+          token_idx, src_line, src_col, length, actual, tname)
+      elseif (token_type == 0 or token_type == 1 or token_type == 2 or token_type == 9) then
+        if not string.match(actual, "^[%a_][%w_]*$") then
+          errors[#errors + 1] = string.format(
+            "Token #%d BAD IDENT: line=%d col=%d len=%d got='%s' type=%s",
+            token_idx, src_line, src_col, length, actual, tname)
+        end
+      elseif token_type == 5 then
+        if string.sub(actual, 1, 1) ~= '"' and string.sub(actual, 1, 1) ~= "'" then
+          errors[#errors + 1] = string.format(
+            "Token #%d BAD STRING: line=%d col=%d len=%d got='%s' type=%s",
+            token_idx, src_line, src_col, length, actual, tname)
+        end
+      elseif token_type == 6 then
+        if not string.match(actual, "^[0-9]") then
+          errors[#errors + 1] = string.format(
+            "Token #%d BAD NUMBER: line=%d col=%d len=%d got='%s' type=%s",
+            token_idx, src_line, src_col, length, actual, tname)
+        end
+      end
+    end
+
+    tests:assert_true(d_col >= 0,
+      string.format("Token #%d negative delta_col=%d", token_idx, d_col))
+  end
+
+  -- Report all errors at once
+  if #errors > 0 then
+    tests:assert_true(false, "Token position errors:\n" .. table.concat(errors, "\n"))
+  end
+
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Signature Help
+-- =========================================================================
+tests:describe("operations/signature")
+
+tests:it("returns signature for stdlib function", function()
+  local uri = open_doc("print(")
+  local result = signature.compute(uri, {line = 0, character = 6})
+  -- Should find print's signature
+  if result then
+    tests:assert_not_nil(result.signatures)
+  end
+  close_doc(uri)
+end)
+
+tests:it("returns nil outside a call", function()
+  local uri = open_doc("local x = 1")
+  local result = signature.compute(uri, {line = 0, character = 0})
+  tests:assert_nil(result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Folding
+-- =========================================================================
+tests:describe("operations/folding")
+
+tests:it("folds function bodies", function()
+  local uri = open_doc("local function foo()\n  local x = 1\n  return x\nend")
+  local result = folding.compute(uri)
+  tests:assert_true(#result >= 1, "expected at least 1 folding range for function")
+  close_doc(uri)
+end)
+
+tests:it("folds if blocks", function()
+  local uri = open_doc("if true then\n  local x = 1\nend")
+  local result = folding.compute(uri)
+  tests:assert_true(#result >= 1, "expected at least 1 folding range for if")
+  close_doc(uri)
+end)
+
+tests:it("returns empty for single-line code", function()
+  local uri = open_doc("local x = 1")
+  local result = folding.compute(uri)
+  tests:assert_equal(#result, 0)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Inlay Hints
+-- =========================================================================
+tests:describe("operations/inlay_hints")
+
+tests:it("shows type hints for string locals", function()
+  local uri = open_doc("local x = 'hello'")
+  local result = inlay_hints.compute(uri, nil)
+  local found_type = false
+  for _, h in ipairs(result) do
+    if h.kind == 1 then  -- KIND_TYPE
+      found_type = true
+    end
+  end
+  tests:assert_true(found_type, "expected type hint for string local")
+  close_doc(uri)
+end)
+
+tests:it("shows parameter hints at call sites", function()
+  local uri = open_doc("local function foo(name, value)\nend\nfoo(1, 2)")
+  local result = inlay_hints.compute(uri, nil)
+  local found_param = false
+  for _, h in ipairs(result) do
+    if h.kind == 2 then  -- KIND_PARAMETER
+      found_param = true
+    end
+  end
+  tests:assert_true(found_param, "expected parameter hints at call site")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Format
+-- =========================================================================
+tests:describe("operations/format")
+
+tests:it("formats code with correct indentation", function()
+  local uri = open_doc("if true then\nx=1\nend")
+  local result = format_mod.compute(uri, {tabSize = 2})
+  tests:assert_not_nil(result, "expected edits")
+  tests:assert_equal(#result, 1, "expected 1 TextEdit")
+  tests:assert_contains(result[1].newText, "  x = 1")
+  close_doc(uri)
+end)
+
+tests:it("returns nil with error for broken code", function()
+  local uri = open_doc("if then then then")
+  local result, err = format_mod.compute(uri, {tabSize = 4})
+  tests:assert_nil(result, "expected nil for broken code")
+  tests:assert_not_nil(err, "expected error message")
+  close_doc(uri)
+end)
+
+tests:it("respects tabSize option", function()
+  local uri = open_doc("if true then\nx=1\nend")
+  local r4 = format_mod.compute(uri, {tabSize = 4})
+  tests:assert_contains(r4[1].newText, "    x = 1")
+  local r2 = format_mod.compute(uri, {tabSize = 2})
+  tests:assert_contains(r2[1].newText, "  x = 1")
+  close_doc(uri)
+end)
+
+tests:it("returns empty array for already-formatted code", function()
+  local uri = open_doc("local x = 1\n")
+  local first = format_mod.compute(uri, {tabSize = 4})
+  if first and #first > 0 then
+    close_doc(uri)
+    uri = open_doc(first[1].newText)
+  end
+  local second = format_mod.compute(uri, {tabSize = 4})
+  tests:assert_not_nil(second, "expected non-nil result")
+  tests:assert_equal(#second, 0, "expected no edits for already-formatted code")
+  close_doc(uri)
+end)
+
+tests:it("range formatting returns edits", function()
+  local uri = open_doc("if true then\nx=1\nend")
+  local range = make_range(0, 0, 2, 3)
+  local result, err = format_mod.compute_range(uri, range, {tabSize = 4})
+  tests:assert_not_nil(result, "expected edits from range format")
+  tests:assert_true(#result > 0, "expected at least 1 edit")
+  close_doc(uri)
+end)
+
+tests:it("preserves trailing comments inline", function()
+  local uri = open_doc("local a = 1 -- test here\n")
+  local result = format_mod.compute(uri, {tabSize = 4})
+  if #result > 0 then
+    -- The comment should be on the same line as the code
+    local first_line = string.match(result[1].newText, "[^\n]+")
+    tests:assert_contains(first_line, "local a = 1")
+    tests:assert_contains(first_line, "-- test here")
+  end
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Document Highlight (new)
+-- =========================================================================
+tests:describe("operations/highlight")
+
+tests:it("highlights declaration and references", function()
+  local uri = open_doc("local x = 1\nlocal y = x")
+  local result = highlight.compute(uri, {line = 0, character = 6})
+  tests:assert_true(#result >= 2, "expected at least 2 highlights (decl + ref)")
+  -- First should be write (declaration)
+  local has_write = false
+  local has_read = false
+  for _, h in ipairs(result) do
+    if h.kind == 3 then has_write = true end  -- KIND_WRITE
+    if h.kind == 2 then has_read = true end   -- KIND_READ
+  end
+  tests:assert_true(has_write, "expected a WRITE highlight for declaration")
+  tests:assert_true(has_read, "expected a READ highlight for reference")
+  close_doc(uri)
+end)
+
+tests:it("returns empty for unresolved position", function()
+  local uri = open_doc("-- just a comment")
+  local result = highlight.compute(uri, {line = 0, character = 5})
+  tests:assert_equal(#result, 0)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Prepare Rename (new)
+-- =========================================================================
+tests:describe("operations/prepare_rename")
+
+tests:it("validates renameable position", function()
+  local uri = open_doc("local myVar = 1\nlocal y = myVar")
+  local result = prepare_rename.compute(uri, {line = 0, character = 6})
+  tests:assert_not_nil(result)
+  tests:assert_equal(result.placeholder, "myVar")
+  close_doc(uri)
+end)
+
+tests:it("refuses stdlib rename", function()
+  local uri = open_doc("local x = print")
+  local result = prepare_rename.compute(uri, {line = 0, character = 10})
+  tests:assert_nil(result)
+  close_doc(uri)
+end)
+
+tests:it("returns nil for empty position", function()
+  local uri = open_doc("-- just a comment")
+  local result = prepare_rename.compute(uri, {line = 0, character = 5})
+  tests:assert_nil(result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Selection Range (new)
+-- =========================================================================
+tests:describe("operations/selection_range")
+
+tests:it("returns selection ranges for positions", function()
+  local uri = open_doc("local function foo()\n  local x = 1\nend")
+  local result = selection_range.compute(uri, {{line = 1, character = 8}})
+  tests:assert_true(#result >= 1, "expected at least 1 selection range")
+  tests:assert_not_nil(result[1].range)
+  close_doc(uri)
+end)
+
+tests:it("chains parent ranges", function()
+  local uri = open_doc("local function foo()\n  local x = 1\nend")
+  local result = selection_range.compute(uri, {{line = 1, character = 8}})
+  -- The innermost range should have a parent
+  if result[1] and result[1].parent then
+    tests:assert_not_nil(result[1].parent.range)
+  end
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Code Action (new)
+-- =========================================================================
+tests:describe("operations/code_action")
+
+tests:it("suggests adding global declaration", function()
+  local uri = open_doc("local x = unknown_var")
+  local diag = {
+    range = make_range(0, 10, 0, 21),
+    message = "Undefined global 'unknown_var'",
+  }
+  local result = code_action.compute(uri, diag.range, {diagnostics = {diag}})
+  tests:assert_true(#result >= 1, "expected at least 1 code action")
+  tests:assert_contains(result[1].title, "global")
+  close_doc(uri)
+end)
+
+tests:it("suggests prefixing unused local with _", function()
+  local uri = open_doc("local unused = 1")
+  local diag = {
+    range = make_range(0, 6, 0, 12),
+    message = "Unused local 'unused'",
+  }
+  local result = code_action.compute(uri, diag.range, {diagnostics = {diag}})
+  tests:assert_true(#result >= 1, "expected at least 1 code action")
+  tests:assert_contains(result[1].title, "_")
+  close_doc(uri)
+end)
+
+tests:it("returns empty without diagnostics", function()
+  local uri = open_doc("local x = 1")
+  local result = code_action.compute(uri, make_range(0, 0, 0, 0), {diagnostics = {}})
+  tests:assert_equal(#result, 0)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- Semantic Tokens: Incremental Edit (simulates VS Code's didChange flow)
+-- =========================================================================
+tests:describe("semantic_tokens/incremental_edit")
+
+tests:it("tokens correct after inserting if-from block into from.lus", function()
+  -- Original from.lus content (lines 1–41 as shipped, no if-from block)
+  local original = table.concat({
+    "-- From Destructuring: Extract table fields into local variables.",
+    "-- playground: true",
+    "",
+    "global print",
+    "",
+    "-- Basic destructuring: field names become variable names",
+    "local point = {x = 10, y = 20, z = 30}",
+    "local x, y, z from point",
+    'print("Extracted:", x, y, z)',
+    "",
+    "-- Works with any table",
+    "local config = {",
+    '    host = "localhost",',
+    "    port = 8080,",
+    "    debug = true",
+    "}",
+    "local host, port, debug from config",
+    'print("Config:", host, port, debug)',
+    "",
+    "-- Missing fields become nil",
+    "local partial = {a = 1, c = 3}",
+    "local a, b, c from partial",
+    'print("Partial:", a, b, c)',
+    "",
+    "-- Combine with const for immutable bindings",
+    'local settings = {version = "1.0", name = "MyApp"}',
+    "local version <const>, name <const> from settings",
+    'print("App:", name, "v" .. version)',
+    "",
+    "-- Nested tables",
+    "local user = {",
+    '    name = "Alice",',
+    "    profile = {",
+    "        age = 30,",
+    '        city = "NYC"',
+    "    }",
+    "}",
+    "local name, profile from user",
+    "local age, city from profile",
+    'print("User:", name, age, city)',
+    "",
+    "-- Practical example: function returning structured data",
+    "local function get_result()",
+    "    return {",
+    "        success = true,",
+    '        data = "Hello, World!",',
+    "        timestamp = 1234567890",
+    "    }",
+    "end",
+    "",
+    "local success, data, timestamp from get_result()",
+    "if success then",
+    '    print("Got data:", data, "at", timestamp)',
+    "end",
+    "",
+    "-- Combine with if-assignment",
+    'local response = {ok = true, body = "Response body"}',
+    "if ok, body from response then",
+    '    print("Response:", body)',
+    "end",
+    "",
+  }, "\n")
+
+  -- Open the document (version 1)
+  doc_counter = doc_counter + 1
+  local uri = "file:///test/doc_" .. doc_counter .. ".lus"
+  document.open(uri, 1, original)
+  ast_mod.parse(uri)
+
+  -- Now simulate typing: insert "if profile from user then\n\nend\n" after line 41
+  -- Line 41 (1-based) = 'print("User:", name, age, city)'
+  -- In 0-based LSP: line 40
+  -- We insert at the start of line 41 (0-based), which is right after line 40's newline
+  local insert_text = "\nif profile from user then\n\nend\n"
+  -- Insert at the end of line 40 (after the newline = start of line 41 0-based)
+  document.change(uri, 2, {
+    {range = make_range(41, 0, 41, 0), text = insert_text},
+  })
+  ast_mod.parse(uri)
+
+  -- Get the current text for validation
+  local modified_text = document.get_text(uri)
+  local lines = {}
+  for line in (modified_text .. "\n"):gmatch("([^\n]*)\n") do
+    lines[#lines + 1] = line
+  end
+
+  -- Compute semantic tokens on the modified document
+  local result = sem_tokens.compute(uri)
+  local data = result.data
+
+  tests:assert_equal(#data % 5, 0, "data length must be divisible by 5")
+  tests:assert_true(#data > 0, "should have tokens after incremental edit")
+
+  local type_names = {
+    [0] = "variable", [1] = "parameter", [2] = "function", [3] = "method",
+    [4] = "keyword", [5] = "string", [6] = "number", [7] = "comment",
+    [8] = "operator", [9] = "property", [10] = "enum", [11] = "enumMember",
+  }
+
+  local errors = {}
+  local prev_line, prev_col = 0, 0
+  for i = 1, #data, 5 do
+    local d_line = data[i]
+    local d_col = data[i+1]
+    local length = data[i+2]
+    local token_type = data[i+3]
+    local token_idx = (i - 1) / 5 + 1
+
+    local abs_line = prev_line + d_line
+    local abs_col
+    if d_line == 0 then
+      abs_col = prev_col + d_col
+    else
+      abs_col = d_col
+    end
+    prev_line = abs_line
+    prev_col = abs_col
+
+    local src_line = abs_line + 1
+    local src_col = abs_col + 1
+    local line_text = lines[src_line] or ""
+    local tname = type_names[token_type] or ("type" .. token_type)
+
+    -- Check bounds
+    if src_col < 1 or src_col + length - 1 > #line_text then
+      errors[#errors + 1] = string.format(
+        "Token #%d OVERFLOW: line=%d col=%d len=%d lineLen=%d type=%s line='%s'",
+        token_idx, src_line, src_col, length, #line_text, tname, line_text)
+    else
+      local actual = string.sub(line_text, src_col, src_col + length - 1)
+
+      -- Check plausibility
+      if token_type == 7 and string.sub(actual, 1, 2) ~= "--" then
+        errors[#errors + 1] = string.format(
+          "Token #%d BAD COMMENT: line=%d col=%d len=%d got='%s' type=%s",
+          token_idx, src_line, src_col, length, actual, tname)
+      elseif (token_type == 0 or token_type == 1 or token_type == 2 or token_type == 9) then
+        if not string.match(actual, "^[%a_][%w_]*$") then
+          errors[#errors + 1] = string.format(
+            "Token #%d BAD IDENT: line=%d col=%d len=%d got='%s' type=%s",
+            token_idx, src_line, src_col, length, actual, tname)
+        end
+      elseif token_type == 5 then
+        if string.sub(actual, 1, 1) ~= '"' and string.sub(actual, 1, 1) ~= "'" then
+          errors[#errors + 1] = string.format(
+            "Token #%d BAD STRING: line=%d col=%d len=%d got='%s' type=%s",
+            token_idx, src_line, src_col, length, actual, tname)
+        end
+      elseif token_type == 6 then
+        if not string.match(actual, "^[0-9]") then
+          errors[#errors + 1] = string.format(
+            "Token #%d BAD NUMBER: line=%d col=%d len=%d got='%s' type=%s",
+            token_idx, src_line, src_col, length, actual, tname)
+        end
+      end
+    end
+
+    tests:assert_true(d_col >= 0,
+      string.format("Token #%d negative delta_col=%d", token_idx, d_col))
+  end
+
+  -- Report all errors at once
+  if #errors > 0 then
+    tests:assert_true(false, "Incremental edit token errors:\n" .. table.concat(errors, "\n"))
+  end
+
+  close_doc(uri)
+end)
+
+tests:it("exact VS Code edit replay: character-by-character typing", function()
+  -- Replay the EXACT sequence of edits VS Code sends when typing
+  -- "if profile from user then" + Enter + Enter + "end" after line 41.
+  -- This tests the incremental edit path character-by-character.
+
+  -- Same original from.lus content (62 lines)
+  local original = table.concat({
+    "-- From Destructuring: Extract table fields into local variables.",
+    "-- playground: true",
+    "",
+    "global print",
+    "",
+    "-- Basic destructuring: field names become variable names",
+    "local point = {x = 10, y = 20, z = 30}",
+    "local x, y, z from point",
+    'print("Extracted:", x, y, z)  --> 10    20    30',
+    "",
+    "-- Works with any table",
+    "local config = {",
+    '    host = "localhost",',
+    "    port = 8080,",
+    "    debug = true",
+    "}",
+    "local host, port, debug from config",
+    'print("Config:", host, port, debug)',
+    "",
+    "-- Missing fields become nil",
+    "local partial = {a = 1, c = 3}",
+    "local a, b, c from partial",
+    'print("Partial:", a, b, c)  --> 1    nil    3',
+    "",
+    "-- Combine with const for immutable bindings",
+    'local settings = {version = "1.0", name = "MyApp"}',
+    "local version <const>, name <const> from settings",
+    'print("App:", name, "v" .. version)',
+    "-- version = \"2.0\"  -- Would error: attempt to assign to const",
+    "",
+    "-- Nested tables",
+    "local user = {",
+    '    name = "Alice",',
+    "    profile = {",
+    "        age = 30,",
+    '        city = "NYC"',
+    "    }",
+    "}",
+    "local name, profile from user",
+    "local age, city from profile",
+    'print("User:", name, age, city)',
+    "",
+    "-- Practical example: function returning structured data",
+    "local function get_result()",
+    "    return {",
+    "        success = true,",
+    '        data = "Hello, World!",',
+    "        timestamp = 1234567890",
+    "    }",
+    "end",
+    "",
+    "local success, data, timestamp from get_result()",
+    "if success then",
+    '    print("Got data:", data, "at", timestamp)',
+    "end",
+    "",
+    "-- Combine with if-assignment",
+    'local response = {ok = true, body = "Response body"}',
+    "if ok, body from response then",
+    '    print("Response:", body)',
+    "end",
+    "",
+  }, "\n")
+
+  doc_counter = doc_counter + 1
+  local uri = "file:///test/doc_" .. doc_counter .. ".lus"
+  document.open(uri, 1, original)
+
+  local function count_lines(text)
+    local n = 1
+    for _ in string.gmatch(text, "\n") do n = n + 1 end
+    return n
+  end
+
+  local function get_line(text, line_1based)
+    local i = 1
+    for l in (text .. "\n"):gmatch("([^\n]*)\n") do
+      if i == line_1based then return l end
+      i = i + 1
+    end
+    return nil
+  end
+
+  -- Version counter
+  local ver = 1
+  local function apply(range_sl, range_sc, range_el, range_ec, text)
+    ver = ver + 1
+    document.change(uri, ver, {
+      {range = make_range(range_sl, range_sc, range_el, range_ec), text = text},
+    })
+  end
+
+  tests:assert_equal(count_lines(document.get_text(uri)), 62, "initial: 62 lines")
+
+  -- Step 1: Insert newline at end of line 41 (0-based line 40, char 31)
+  -- Line 41 = 'print("User:", name, age, city)' = 31 chars
+  apply(40, 31, 40, 31, "\n")
+  tests:assert_equal(count_lines(document.get_text(uri)), 63, "after Enter at L41 end: 63 lines")
+
+  -- Step 2: Insert newline at start of line 42 (0-based line 41, char 0)
+  apply(41, 0, 41, 0, "\n")
+  tests:assert_equal(count_lines(document.get_text(uri)), 64, "after Enter at L42 start: 64 lines")
+
+  -- Step 3: Type "if profile from user then " character by character on line 43
+  -- (0-based line 42)
+  local typed = "if profile from user then "
+  for i = 1, #typed do
+    local ch = string.sub(typed, i, i)
+    apply(42, i - 1, 42, i - 1, ch)
+  end
+  tests:assert_equal(count_lines(document.get_text(uri)), 64, "after typing: still 64 lines")
+  tests:assert_equal(get_line(document.get_text(uri), 43), "if profile from user then ",
+    "line 43 should have typed text")
+
+  -- Step 4: Delete trailing space (0-based line 42, char 25 to 26)
+  apply(42, 25, 42, 26, "")
+  tests:assert_equal(get_line(document.get_text(uri), 43), "if profile from user then",
+    "line 43 should have no trailing space")
+
+  -- Step 5: Enter key → insert "\n    " at end of line 43 (0-based line 42, char 25)
+  apply(42, 25, 42, 25, "\n    ")
+  tests:assert_equal(count_lines(document.get_text(uri)), 65, "after first Enter: 65 lines")
+  tests:assert_equal(get_line(document.get_text(uri), 43), "if profile from user then",
+    "L43 unchanged after Enter")
+  tests:assert_equal(get_line(document.get_text(uri), 44), "    ",
+    "L44 should be 4 spaces (auto-indent)")
+
+  -- Step 6: Enter key → insert "\n    " at end of line 44 (0-based line 43, char 4)
+  apply(43, 4, 43, 4, "\n    ")
+  tests:assert_equal(count_lines(document.get_text(uri)), 66, "after second Enter: 66 lines")
+
+  -- Step 7: Backspace on line 44 → delete indent (0-based line 43, chars 0-4)
+  apply(43, 0, 43, 4, "")
+  tests:assert_equal(count_lines(document.get_text(uri)), 66, "after backspace L44: still 66 lines")
+  tests:assert_equal(get_line(document.get_text(uri), 44), "",
+    "L44 should be empty after backspace")
+
+  -- Step 8: Backspace on line 45 → delete indent (0-based line 44, chars 0-4)
+  apply(44, 0, 44, 4, "")
+  tests:assert_equal(count_lines(document.get_text(uri)), 66, "after backspace L45: still 66 lines")
+  tests:assert_equal(get_line(document.get_text(uri), 45), "",
+    "L45 should be empty after backspace")
+
+  -- Step 9: Type "end" on line 45 (0-based line 44)
+  apply(44, 0, 44, 0, "e")
+  apply(44, 1, 44, 1, "n")
+  apply(44, 2, 44, 2, "d")
+  tests:assert_equal(get_line(document.get_text(uri), 45), "end",
+    "L45 should be 'end'")
+
+  -- Final validation: check that the comment is at the correct line
+  tests:assert_equal(count_lines(document.get_text(uri)), 66, "final: 66 lines")
+  -- "-- Practical example..." was originally at line 43, should now be at 46
+  -- (original 62-line file: line 43, after +4 lines inserted: line 47)
+  -- Wait, originally at line 43, after +2 initial newlines = line 45,
+  -- after +2 Enter newlines = line 47
+  tests:assert_equal(
+    get_line(document.get_text(uri), 47),
+    "-- Practical example: function returning structured data",
+    "comment should be at line 47 (shifted by 4)")
+
+  -- Now parse and compute tokens
+  ast_mod.parse(uri)
+  local result = sem_tokens.compute(uri)
+  local data = result.data
+  tests:assert_true(#data > 0, "should have tokens")
+
+  -- Find the comment token and verify its line
+  local prev_line, prev_col = 0, 0
+  local comment_line = nil
+  for i = 1, #data, 5 do
+    local d_line = data[i]
+    local d_col = data[i+1]
+    local length = data[i+2]
+    local token_type = data[i+3]
+
+    local abs_line = prev_line + d_line
+    local abs_col
+    if d_line == 0 then
+      abs_col = prev_col + d_col
+    else
+      abs_col = d_col
+    end
+    prev_line = abs_line
+    prev_col = abs_col
+
+    -- Look for the "-- Practical example..." comment (length=56, type=7)
+    if token_type == 7 and length == 56 then
+      comment_line = abs_line + 1 -- convert to 1-based
+    end
+  end
+
+  tests:assert_not_nil(comment_line, "should find the 56-char comment token")
+  tests:assert_equal(comment_line, 47,
+    "comment token should be at line 47 (was 43, shifted by 4)")
+
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- types.from_string
+-- =========================================================================
+tests:describe("analysis/types from_string")
+
+tests:it("from_string converts simple types", function()
+  local t = types_mod.from_string("string")
+  tests:assert_equal(t.tag, "string")
+  t = types_mod.from_string("integer")
+  tests:assert_equal(t.tag, "integer")
+  t = types_mod.from_string("number")
+  tests:assert_equal(t.tag, "number")
+  t = types_mod.from_string("boolean")
+  tests:assert_equal(t.tag, "boolean")
+  t = types_mod.from_string("table")
+  tests:assert_equal(t.tag, "table")
+  t = types_mod.from_string("thread")
+  tests:assert_equal(t.tag, "thread")
+  t = types_mod.from_string("userdata")
+  tests:assert_equal(t.tag, "userdata")
+  t = types_mod.from_string("vector")
+  tests:assert_equal(t.tag, "vector")
+  t = types_mod.from_string("worker")
+  tests:assert_equal(t.tag, "worker")
+  t = types_mod.from_string("nil")
+  tests:assert_equal(t.tag, "nil")
+end)
+
+tests:it("from_string converts unions", function()
+  local t = types_mod.from_string("number|nil")
+  tests:assert_equal(t.tag, "union")
+  tests:assert_equal(#t.members, 2)
+  tests:assert_equal(t.members[1].tag, "number")
+  tests:assert_equal(t.members[2].tag, "nil")
+end)
+
+tests:it("from_string converts any to unknown", function()
+  local t = types_mod.from_string("any")
+  tests:assert_equal(t.tag, "unknown")
+end)
+
+tests:it("from_string handles function type", function()
+  local t = types_mod.from_string("function")
+  tests:assert_equal(t.tag, "function")
+end)
+
+tests:it("from_string handles function|nil union", function()
+  local t = types_mod.from_string("function|nil")
+  tests:assert_equal(t.tag, "union")
+  tests:assert_equal(t.members[1].tag, "function")
+  tests:assert_equal(t.members[2].tag, "nil")
+end)
+
+-- =========================================================================
+-- Data-driven stdlib return types
+-- =========================================================================
+tests:describe("data-driven stdlib returns")
+
+tests:it("string.len returns integer", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "string"},
+      key = {value = "len"}},
+    args = {{type = "string", value = "hello"}},
+  })
+  tests:assert_equal(t.tag, "integer")
+end)
+
+tests:it("tonumber returns number|nil union", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "name", value = "tonumber"},
+    args = {{type = "string", value = "42"}},
+  })
+  tests:assert_equal(t.tag, "union")
+end)
+
+tests:it("math.floor returns integer", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "math"},
+      key = {value = "floor"}},
+    args = {{type = "number", value = 3.14}},
+  })
+  tests:assert_equal(t.tag, "integer")
+end)
+
+tests:it("vector.create returns vector", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "vector"},
+      key = {value = "create"}},
+    args = {{type = "number", value = 10}},
+  })
+  tests:assert_equal(t.tag, "vector")
+end)
+
+tests:it("coroutine.create returns thread", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "coroutine"},
+      key = {value = "create"}},
+    args = {{type = "funcexpr"}},
+  })
+  tests:assert_equal(t.tag, "thread")
+end)
+
+tests:it("worker.create returns worker", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "worker"},
+      key = {value = "create"}},
+    args = {{type = "string", value = "task.lus"}},
+  })
+  tests:assert_equal(t.tag, "worker")
+end)
+
+tests:it("setmetatable with table constructor returns table type", function()
+  local t = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "name", value = "setmetatable"},
+    args = {
+      {type = "table", fields = {
+        {type = "tablefield",
+         key = {type = "string", value = "x"},
+         value = {type = "number", value = 1}},
+      }},
+      {type = "table"},
+    },
+  })
+  tests:assert_equal(t.tag, "table")
+  tests:assert_not_nil(t.fields)
+  tests:assert_not_nil(t.fields["x"])
+end)
+
+-- =========================================================================
+-- Scope-aware generic resolution
+-- =========================================================================
+tests:describe("scope-aware generics")
+
+tests:it("setmetatable(t, mt) infers table type through scope", function()
+  local uri = open_doc("local t = {x = 1}\nlocal result = setmetatable(t, {})")
+  local analysis = scope_mod.analyze(uri)
+  -- Find the declaration of 'result' on line 2
+  local result_decl
+  for _, decl in ipairs(analysis.declarations) do
+    if decl.name == "result" then
+      result_decl = decl
+    end
+  end
+  tests:assert_not_nil(result_decl, "expected declaration for result")
+  tests:assert_not_nil(result_decl.type_info, "expected type_info for result")
+  tests:assert_equal(result_decl.type_info.tag, "table",
+    "setmetatable should return first arg type")
+  tests:assert_not_nil(result_decl.type_info.fields,
+    "result should have fields from t")
+  tests:assert_not_nil(result_decl.type_info.fields["x"],
+    "result should have field x from t")
+  close_doc(uri)
+end)
+
+tests:it("table.clone(t) infers table type through scope", function()
+  local uri = open_doc("local t = {y = 2}\nlocal c = table.clone(t)")
+  local analysis = scope_mod.analyze(uri)
+  local clone_decl
+  for _, decl in ipairs(analysis.declarations) do
+    if decl.name == "c" then
+      clone_decl = decl
+    end
+  end
+  tests:assert_not_nil(clone_decl, "expected declaration for c")
+  tests:assert_not_nil(clone_decl.type_info, "expected type_info for c")
+  tests:assert_equal(clone_decl.type_info.tag, "table",
+    "table.clone should return first arg type")
+  tests:assert_not_nil(clone_decl.type_info.fields,
+    "c should have fields from t")
+  tests:assert_not_nil(clone_decl.type_info.fields["y"],
+    "c should have field y from t")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+tests:finish()

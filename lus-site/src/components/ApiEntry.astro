@@ -1,0 +1,30 @@
+---
+interface Props {
+  entry: {
+    data: {
+      name: string
+      kind: string
+      stability: string
+      origin: string
+      signature?: string
+      params?: { name: string; type?: string; optional?: boolean }[]
+      vararg?: boolean
+      type?: string
+      value?: string | number
+    }
+    rendered?: { Content: any }
+  }
+}
+
+const { entry } = Astro.props
+const { data, rendered } = entry
+const Content = rendered?.Content
+---
+
+<h2 id={data.name}>{data.name}{data.kind === "function" && data.params ? `(${data.params.map(p => p.optional ? `[${p.name}]` : p.name).join(", ")}${data.vararg ? ", ..." : ""})` : ""}</h2>
+
+{data.signature && (
+  <pre><code>{data.signature.replace(/^"|"$/g, "")}</code></pre>
+)}
+
+{Content && <Content />}

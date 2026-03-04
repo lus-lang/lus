@@ -101,6 +101,9 @@ static GroupDesc *groupconstructor(LexState *ls, TString *groupname);
 static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
                                           RuntimeAttr *parentattrs,
                                           lu_byte nparentattrs);
+static GroupDesc *checkgroupsource(LexState *ls);
+static void localfromgroup(LexState *ls, GroupDesc *g, int firstidx,
+                           int nvars, LusAstNode **src_ast_out);
 
 /* prototypes for attribute/local functions (used by assigncond) */
 static lu_byte parseattributes(LexState *ls, RuntimeAttr **attrs, int *nattrs);
@@ -132,6 +135,10 @@ static TString *concat_strings(LexState *ls, TString *s1, char sep, TString *s2)
   p[l1] = sep;
   memcpy(p + l1 + 1, getstr(s2), l2);
 
+  /* Note: luaS_newlstr may longjmp on OOM, leaking heap-allocated 'p'.
+  ** This only affects strings >256 chars under memory exhaustion. The
+  ** allocation is accounted in GCdebt so the state's memory stats remain
+  ** correct; the memory is reclaimed when the allocator is freed. */
   result = luaS_newlstr(L, p, totallen);
 
   if (p != buf) {
@@ -140,7 +147,8 @@ static TString *concat_strings(LexState *ls, TString *s1, char sep, TString *s2)
 
   return result;
 }
-static void localfrom(LexState *ls, int firstidx, int nvars);
+static void localfrom(LexState *ls, int firstidx, int nvars,
+                      LusAstNode **src_ast_out);
 
 static l_noret error_expected(LexState *ls, int token) {
   luaX_syntaxerror(
@@ -404,11 +412,11 @@ static void adjustlocalvars(LexState *ls, int nvars) {
   int reglevel = luaY_nvarstack(fs);
   int i;
   for (i = 0; i < nvars; i++) {
+    luaY_checklimit(fs, reglevel + 1, MAXVARS, "local variables");
     int vidx = fs->nactvar++;
     Vardesc *var = getlocalvardesc(fs, vidx);
     var->vd.ridx = cast_byte(reglevel++);
     var->vd.pidx = registerlocalvar(ls, fs, var->vd.name);
-    luaY_checklimit(fs, reglevel, MAXVARS, "local variables");
   }
 }
 
@@ -1106,6 +1114,8 @@ static void fieldsel(LexState *ls, expdesc *v) {
   LusAstNode *table_ast = v->ast; /* save before overwrite */
   luaK_exp2anyregup(fs, v);
   luaX_next(ls);                     /* skip the dot or colon */
+  int nameline = ls->linenumber;     /* field name position */
+  int namecol = ls->tokencolumn;
   TString *fname = ls->t.seminfo.ts; /* capture field name */
   codename(ls, &key);
   luaK_indexed(fs, v, &key);
@@ -1113,7 +1123,8 @@ static void fieldsel(LexState *ls, expdesc *v) {
   if (AST_ACTIVE(ls)) {
     LusAstNode *field = lusA_newnode(ls->ast, AST_FIELD, line, column);
     field->u.index.table = table_ast;
-    LusAstNode *keynode = lusA_newnode(ls->ast, AST_STRING, line, column);
+    LusAstNode *keynode =
+        lusA_newnode(ls->ast, AST_STRING, nameline, namecol);
     keynode->u.str = fname;
     field->u.index.key = keynode;
     v->ast = field;
@@ -2059,7 +2070,7 @@ static void interpexp(LexState *ls, expdesc *v) {
       nparts++;
       /* AST: add variable name node */
       if (AST_ACTIVE(ls)) {
-        LusAstNode *namenode = lusA_newnode(ls->ast, AST_NAME, ls->linenumber, ls->tokencolumn);
+        LusAstNode *namenode = lusA_newnode(ls->ast, AST_NAME, ls->interp_name_line, ls->interp_name_column);
         namenode->u.var.name = ls->interp_name;
         namenode->u.var.attrkind = 0;  /* no attributes in interpolation */
         namenode->u.var.runtimeattrs = NULL;
@@ -2236,9 +2247,18 @@ static void simpleexp(LexState *ls, expdesc *v) {
     return;
   }
   }
-  luaX_next(ls);
-  /* Set end position for simple expressions (after consuming token) */
-  AST_SETEND_LAST(v->ast, ls);
+  /* Capture end position before luaX_next advances past the token.
+  ** ls->column is one past the last character of the current token,
+  ** so column-1 is the actual end column. */
+  {
+    int endln = ls->linenumber;
+    int endcol = ls->column - 1;
+    luaX_next(ls);
+    if (v->ast != NULL) {
+      v->ast->endline = endln;
+      v->ast->endcolumn = endcol;
+    }
+  }
 }
 
 static UnOpr getunopr(int op) {
@@ -2283,6 +2303,7 @@ static void catchexpr(LexState *ls, expdesc *v) {
   int column = ls->tokencolumn;
   expdesc innerexp;
   int handler_reg = 0;  /* 0 means no handler (B field value) */
+  LusAstNode *handler_ast = NULL;  /* AST for optional handler */
 
   luaX_next(ls); /* skip 'catch' */
 
@@ -2299,6 +2320,7 @@ static void catchexpr(LexState *ls, expdesc *v) {
     ** This slot will be overwritten by inner expression results on success,
     ** but the VM saves a copy of the handler for use on error. */
     expr(ls, &handler);
+    handler_ast = handler.ast;  /* save AST before discharge */
     luaK_exp2nextreg(fs, &handler);
     /* Handler is now at fs->freereg - 1.
     ** Store (register + 1) in handler_reg, so 0 means no handler. */
@@ -2365,6 +2387,7 @@ static void catchexpr(LexState *ls, expdesc *v) {
   if (AST_ACTIVE(ls)) {
     LusAstNode *catchnode = lusA_newnode(ls->ast, AST_CATCHEXPR, line, column);
     catchnode->u.catchnode.expr = innerexp.ast;
+    catchnode->u.catchnode.handler = handler_ast;
     AST_SETEND_LAST(catchnode, ls);
     v->ast = catchnode;
   }
@@ -2378,6 +2401,7 @@ static void catchstat(LexState *ls, int line) {
   int catchpc;
   expdesc innerexp;
   int handler_reg = 0;  /* 0 means no handler (B field value) */
+  LusAstNode *handler_ast = NULL;  /* AST for optional handler */
 
   luaX_next(ls); /* skip 'catch' */
 
@@ -2391,6 +2415,7 @@ static void catchstat(LexState *ls, int line) {
     /* Evaluate handler AFTER reserving status slot.
     ** Handler goes at freereg (base+1 or higher). */
     expr(ls, &handler);
+    handler_ast = handler.ast;  /* save AST before discharge */
     luaK_exp2nextreg(fs, &handler);
     /* Handler is now at fs->freereg - 1.
     ** Store (register + 1) in handler_reg, so 0 means no handler. */
@@ -2411,6 +2436,7 @@ static void catchstat(LexState *ls, int line) {
   /* Capture inner expression in AST_CATCHSTAT node */
   if (AST_ACTIVE(ls) && ls->ast->curnode) {
     ls->ast->curnode->u.catchnode.expr = innerexp.ast;
+    ls->ast->curnode->u.catchnode.handler = handler_ast;
   }
 
   /* Handle inner expression discharge */
@@ -2937,6 +2963,52 @@ static void assignfrom(LexState *ls, struct LHS_assign *lh, int nvars) {
   base = fs->freereg;
   luaK_reserveregs(fs, nvars);
 
+  /* Check if source is a group variable */
+  {
+    GroupDesc *gsrc = checkgroupsource(ls);
+    if (gsrc) {
+      /* Group source: emit OP_MOVE from group fields */
+      int srcline = ls->linenumber;
+      int srccol = ls->tokencolumn;
+      TString *gname = ls->t.seminfo.ts;
+      luaX_next(ls); /* consume the group name token */
+
+      /* Build AST for source name and LHS list */
+      if (AST_ACTIVE(ls) && ls->ast->curnode &&
+          ls->ast->curnode->type == AST_ASSIGN) {
+        LusAstNode *srcnode =
+            lusA_newnode(ls->ast, AST_NAME, srcline, srccol);
+        srcnode->u.var.name = gname;
+        ls->ast->curnode->u.assign.rhs = srcnode;
+        LusAstNode *lhs_nodes[MAXVARS];
+        int n = 0;
+        for (cur = lh; cur != NULL && n < MAXVARS; cur = cur->prev)
+          lhs_nodes[n++] = cur->v.ast;
+        if (n > 0) {
+          ls->ast->curnode->u.assign.lhs = lhs_nodes[n - 1];
+          for (int j = n - 2; j >= 0; j--) {
+            if (lhs_nodes[j + 1]) lhs_nodes[j + 1]->next = lhs_nodes[j];
+          }
+          if (lhs_nodes[0]) lhs_nodes[0]->next = NULL;
+        }
+      }
+
+      for (i = 0; i < nvars; i++) {
+        GroupField *field = findgroupfield(gsrc, varnames[i]);
+        if (!field)
+          luaK_semerror(ls, "'%s' is not a field of group '%s'",
+                        getstr(varnames[i]), getstr(gsrc->name));
+        if (field->kind == RDKGROUP && field->subgroup)
+          luaK_semerror(ls, "cannot deconstruct subgroup '%s' with 'from'",
+                        getstr(varnames[i]));
+        luaK_codeABC(fs, OP_MOVE, base + i, field->ridx, 0);
+      }
+
+      fs->freereg = base + nvars;
+      goto do_stores;
+    }
+  }
+
   /* Parse the source table expression into next register (after reserved) */
   expr(ls, &tbl);
   /* Store source table and LHS names in AST */
@@ -2974,6 +3046,8 @@ static void assignfrom(LexState *ls, struct LHS_assign *lh, int nvars) {
 
   /* Restore freereg to after field values */
   fs->freereg = base + nvars;
+
+do_stores:
 
   /* Store each value to its variable (in reverse order like restassign) */
   cur = lh;
@@ -3198,18 +3272,6 @@ static void repeatstat(LexState *ls, int line) {
   if (AST_ACTIVE(ls)) {
     ls->ast->curblock = saved_curblock;
   }
-}
-
-/*
-** Read an expression and generate code to put its results in next
-** stack slot.
-**
-*/
-static void exp1(LexState *ls) {
-  expdesc e;
-  expr(ls, &e);
-  luaK_exp2nextreg(ls->fs, &e);
-  lua_assert(e.k == VNONRELOC);
 }
 
 /*
@@ -3480,7 +3542,19 @@ static int assigncond(LexState *ls) {
       acond->u.assign.isfrom = 1;
       ls->ast->curnode->u.ifstat.cond = acond;
     }
-    localfrom(ls, firstidx, nvars);
+    {
+      LusAstNode *from_src = NULL;
+      GroupDesc *gsrc = checkgroupsource(ls);
+      if (gsrc)
+        localfromgroup(ls, gsrc, firstidx, nvars, &from_src);
+      else
+        localfrom(ls, firstidx, nvars, &from_src);
+      if (AST_ACTIVE(ls) && ls->ast->curnode) {
+        LusAstNode *acond_node = ls->ast->curnode->u.ifstat.cond;
+        if (acond_node)
+          acond_node->u.assign.rhs = from_src;
+      }
+    }
   } else {
     checknext(ls, '=');
 
@@ -3673,6 +3747,8 @@ static void localfunc(LexState *ls) {
   expdesc b;
   FuncState *fs = ls->fs;
   int fvar = fs->nactvar;              /* function's variable index */
+  int nameline = ls->linenumber;       /* capture name position */
+  int namecol = ls->tokencolumn;
   TString *funcname = str_checkname(ls); /* capture name before consuming */
   new_localvar(ls, funcname);          /* new local variable */
   adjustlocalvars(ls, 1);              /* enter its scope */
@@ -3682,6 +3758,8 @@ static void localfunc(LexState *ls) {
   /* Store function name in AST */
   if (AST_ACTIVE(ls) && ls->ast->curnode != NULL) {
     ls->ast->curnode->u.func.name = funcname;
+    ls->ast->curnode->u.func.nameline = nameline;
+    ls->ast->curnode->u.func.namecolumn = namecol;
   }
 }
 
@@ -3911,13 +3989,72 @@ static void call_runtime_attrs(LexState *ls, int valreg, TString *varname,
 }
 
 /*
+** Probe: check if the current token names a group variable.
+** Returns the GroupDesc* if so, NULL otherwise. Does NOT consume tokens.
+*/
+static GroupDesc *checkgroupsource(LexState *ls) {
+  if (ls->t.token != TK_NAME) return NULL;
+  FuncState *fs = ls->fs;
+  expdesc probe;
+  init_exp(&probe, VVOID, 0);
+  probe.u.info = -1;
+  int res = searchvar(fs, ls->t.seminfo.ts, &probe);
+  if (res < 0 || probe.k != VLOCAL) return NULL;
+  Vardesc *vd = getlocalvardesc(fs, probe.u.var.vidx);
+  if (vd->vd.kind != RDKGROUP) return NULL;
+  return findgroup(ls, vd->vd.name);
+}
+
+/*
+** Compile 'from <group>' for local declarations and if-conditions.
+** For each variable name at firstidx..firstidx+nvars-1, find the matching
+** field in the group and emit OP_MOVE from the field's register.
+*/
+static void localfromgroup(LexState *ls, GroupDesc *g, int firstidx,
+                           int nvars, LusAstNode **src_ast_out) {
+  FuncState *fs = ls->fs;
+  int srcline = ls->linenumber;
+  int srccol = ls->tokencolumn;
+  TString *gname = ls->t.seminfo.ts;
+  luaX_next(ls); /* consume the group name token */
+
+  /* Build AST for the source name */
+  if (src_ast_out && AST_ACTIVE(ls)) {
+    LusAstNode *n = lusA_newnode(ls->ast, AST_NAME, srcline, srccol);
+    n->u.var.name = gname;
+    *src_ast_out = n;
+  }
+
+  int base = fs->freereg;
+  luaK_reserveregs(fs, nvars);
+
+  for (int i = 0; i < nvars; i++) {
+    Vardesc *vd = getlocalvardesc(fs, firstidx + i);
+    TString *fieldname = vd->vd.name;
+    GroupField *field = findgroupfield(g, fieldname);
+    if (!field)
+      luaK_semerror(ls, "'%s' is not a field of group '%s'",
+                    getstr(fieldname), getstr(g->name));
+    if (field->kind == RDKGROUP && field->subgroup)
+      luaK_semerror(ls, "cannot deconstruct subgroup '%s' with 'from'",
+                    getstr(fieldname));
+    /* Emit OP_MOVE dst=base+i, src=field->ridx */
+    luaK_codeABC(fs, OP_MOVE, base + i, field->ridx, 0);
+  }
+
+  fs->freereg = base + nvars;
+  adjustlocalvars(ls, nvars);
+}
+
+/*
 ** Handle 'from' table deconstruction for local variables.
 ** 'local a, b, c from tbl' is equivalent to 'local a, b, c = tbl.a, tbl.b,
 *tbl.c'
 ** Variables must have been predeclared. 'firstidx' is the index of the first
 ** variable, 'nvars' is the count.
 */
-static void localfrom(LexState *ls, int firstidx, int nvars) {
+static void localfrom(LexState *ls, int firstidx, int nvars,
+                      LusAstNode **src_ast_out) {
   FuncState *fs = ls->fs;
   expdesc tbl;
   int base = fs->freereg; /* base register for local variables */
@@ -3929,9 +4066,9 @@ static void localfrom(LexState *ls, int firstidx, int nvars) {
 
   /* Parse the source table expression and put in temp register */
   expr(ls, &tbl);
-  /* Store source table AST in the declaration node */
-  if (AST_ACTIVE(ls) && ls->ast->curnode)
-    ls->ast->curnode->u.decl.values = tbl.ast;
+  /* Return source table AST to the caller */
+  if (src_ast_out)
+    *src_ast_out = tbl.ast;
   luaK_exp2nextreg(fs, &tbl);
   tblreg = fs->freereg - 1; /* table is now in this register */
 
@@ -3987,14 +4124,10 @@ static GroupDesc *findgroup(LexState *ls, TString *name) {
 */
 static GroupField *findgroupfield(GroupDesc *g, TString *name) {
   GroupField *f = g->fields;
-  int pos = 0;
   while (f != NULL) {
-    if (eqstr(f->name, name)) {
-      /* Found field at position pos with ridx f->ridx */
+    if (eqstr(f->name, name))
       return f;
-    }
     f = f->next;
-    pos++;
   }
   return NULL;
 }
@@ -4063,7 +4196,6 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
   GroupDesc *g = newgroup(ls, groupname);
   int line = ls->linenumber;
   int column = ls->tokencolumn;
-  int nfields = 0;
   int firstidx = -1; /* vardesc index of first field */
   LusAstNode *tbl_ast = NULL;
 
@@ -4144,7 +4276,6 @@ static GroupDesc *groupconstructor_attrs(LexState *ls, TString *groupname,
       Vardesc *vd = getlocalvardesc(fs, vidx);
       GroupField *f = newgroupfield(ls, g, fieldname, vd->vd.ridx, fieldkind);
       (void)f;
-      nfields++;
     }
 
     /* Skip optional separator */
@@ -4341,11 +4472,19 @@ static void localstat(LexState *ls) {
       luaK_semerror(ls, "cannot use 'from' with to-be-closed variables");
     if (nwithattrs > 0)
       luaK_semerror(ls, "runtime attributes not supported with 'from'");
-    localfrom(ls, firstidx, nvars);
-    /* Mark as from syntax in AST */
-    if (AST_ACTIVE(ls) && ls->ast->curnode) {
-      ls->ast->curnode->u.decl.names = names_head;
-      ls->ast->curnode->u.decl.isfrom = 1;
+    {
+      LusAstNode *from_src = NULL;
+      GroupDesc *gsrc = checkgroupsource(ls);
+      if (gsrc)
+        localfromgroup(ls, gsrc, firstidx, nvars, &from_src);
+      else
+        localfrom(ls, firstidx, nvars, &from_src);
+      /* Mark as from syntax in AST */
+      if (AST_ACTIVE(ls) && ls->ast->curnode) {
+        ls->ast->curnode->u.decl.names = names_head;
+        ls->ast->curnode->u.decl.values = from_src;
+        ls->ast->curnode->u.decl.isfrom = 1;
+      }
     }
   } else if (testnext(ls, '=')) { /* initialization? */
     nexps = explist(ls, &e);

@@ -1,22 +1,27 @@
 ---
 order: 1
 title: Introduction
+icon: book-open
 ---
 
 import { Image } from "astro:assets"
 import Napoleon from "../assets/napoleon.jpg"
 
-Lus is a small, productive programming language. It should be able to be picked up easily by programmers and put to good use right away.
+Lus is a small, productive programming language designed to be picked up easily by programmers and put to good use right away.
 
-It is a _superset_ of Lua that iterates on its minimalism and ease of use so that it can better solve real-world problems. Unlike other language supersets, Lus is a complete language with its own runtime; no transcompilation is involved and no dependence on the Lua runtime is required.
+The language is [sovereign](/faq#sovereignty), meaning that you can use it for most tasks without having to depend on third-party libraries. The standard library should be fitted with everything that you need to develop competent programs; utilities common to networking, content transcoding, and data processing are built into the language.
 
-Lus is a [sovereign](/faq#sovereignty) language, meaning that you can use it for most programming tasks without having to depend on third-party runtimes or libraries. This is a departure from its predecessor, which receives most of its production-capable functionality from third-party contributions.
+## Background
+
+Lus is a _superset_ of Lua that iterates on its minimalism and ease of use. Unlike other language supersets, it is a complete language with its own runtime; no transcompilation is involved and no dependence on the Lua runtime is required.
+
+This language was developed out of a need to bring Lua into the world of general-purpose programming. Lua focuses on embeddability first and runtime second, which has historically resulted in its limited standard library and programmer dependence on third-party packages for even the most basic of tasks. However, even as we depart from Lua's simple scope, we still wish to retain its consiceness.
 
 Lus is a personal project of [Louka Ménard Blondin](https://louka.sh) and is maintained on a best-effort basis.
 
 ## Goals
 
-These are the design goals of Lus that guide the language's development.
+These are the design goals of Lus that drive the language's development.
 
 - **Boring is good.** The language should not implement every new trend in programming language theory.
 

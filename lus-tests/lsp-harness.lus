@@ -1,0 +1,385 @@
+global require, ipairs, pairs, type, string, table, io, tojson, fromjson, tostring, pledge, select, tonumber, _lsp_handle, error, setmetatable
+
+local harness = {}
+harness.__index = harness
+
+-- ---------------------------------------------------------------------------
+-- Internal: response parsing (same approach as lsp-integration.lus)
+-- ---------------------------------------------------------------------------
+
+local function parse_all_responses(raw)
+  if not raw or raw == "" then return {} end
+  local results = {}
+  local pos = 1
+  while pos <= #raw do
+    local len_start, len_end = string.find(raw, "Content%-Length: (%d+)", pos)
+    if not len_start then break end
+    local len_str = string.match(raw, "Content%-Length: (%d+)", pos)
+    local len = tonumber(len_str)
+    local header_end = string.find(raw, "\r\n\r\n", len_end)
+    if not header_end then break end
+    local body_start = header_end + 4
+    local body = string.sub(raw, body_start, body_start + len - 1)
+    local ok, msg = catch fromjson(body)
+    if ok and msg then
+      results[#results + 1] = msg
+    end
+    pos = body_start + len
+  end
+  return results
+end
+
+local function parse_response(raw)
+  local msgs = parse_all_responses(raw)
+  for _, m in ipairs(msgs) do
+    if m.id then return m end
+  end
+  return msgs[1]
+end
+
+-- ---------------------------------------------------------------------------
+-- Internal: LSP range helper
+-- ---------------------------------------------------------------------------
+
+local function make_range(sl, sc, el, ec)
+  local r = {start = {line = sl, character = sc}}
+  r["end"] = {line = el, character = ec}
+  return r
+end
+
+-- ---------------------------------------------------------------------------
+-- Internal: text manipulation
+-- ---------------------------------------------------------------------------
+
+-- Split text into lines (keeping newline characters is not needed;
+-- we work with 0-based line/col so we just need to know line boundaries).
+local function split_lines(text)
+  local lines = {}
+  local pos = 1
+  while true do
+    local nl = string.find(text, "\n", pos, true)
+    if nl then
+      lines[#lines + 1] = string.sub(text, pos, nl - 1)
+      pos = nl + 1
+    else
+      lines[#lines + 1] = string.sub(text, pos)
+      break
+    end
+  end
+  return lines
+end
+
+-- Reconstruct text from lines array
+local function join_lines(lines)
+  return table.concat(lines, "\n")
+end
+
+-- Apply an edit to tracked text (0-based line/col)
+local function apply_edit(text, range, new_text)
+  local lines = split_lines(text)
+  local sl = range.start.line
+  local sc = range.start.character
+  local el = range["end"].line
+  local ec = range["end"].character
+
+  -- Get the content before the edit range on the start line
+  local start_line = lines[sl + 1] or ""
+  local before = string.sub(start_line, 1, sc)
+
+  -- Get the content after the edit range on the end line
+  local end_line = lines[el + 1] or ""
+  local after = string.sub(end_line, ec + 1)
+
+  -- Build the replacement
+  local replacement = before .. new_text .. after
+  local new_lines = split_lines(replacement)
+
+  -- Replace the affected lines
+  local result = {}
+  for i = 1, sl do
+    result[#result + 1] = lines[i]
+  end
+  for _, nl in ipairs(new_lines) do
+    result[#result + 1] = nl
+  end
+  for i = el + 2, #lines do
+    result[#result + 1] = lines[i]
+  end
+
+  return join_lines(result)
+end
+
+-- ---------------------------------------------------------------------------
+-- Constructor
+-- ---------------------------------------------------------------------------
+
+function harness.new()
+  -- Capture io.write output
+  local capture_buffer = ""
+  local original_write = io.write
+  io.write = function(...)
+    for i = 1, select("#", ...) do
+      capture_buffer = capture_buffer .. tostring(select(i, ...))
+    end
+    return io
+  end
+
+  -- Load the WASM language server
+  require("lus-language.wasm")
+
+  local self = setmetatable({}, harness)
+  self._capture = function() return capture_buffer end
+  self._clear = function() capture_buffer = "" end
+  self._msg_id = 0
+  self._doc_version = {}  -- uri -> version counter
+  self._docs = {}         -- uri -> current text
+  self._diagnostics = {}  -- uri -> latest diagnostics array
+
+  -- Initialize the server
+  self:_send_request("initialize", {
+    processId = 1,
+    rootUri = "file:///test",
+    capabilities = {},
+  })
+  self:_send_notification("initialized", {})
+
+  return self
+end
+
+-- ---------------------------------------------------------------------------
+-- Internal: send helpers
+-- ---------------------------------------------------------------------------
+
+function harness:_next_id()
+  self._msg_id = self._msg_id + 1
+  return self._msg_id
+end
+
+function harness:_next_version(uri)
+  local v = (self._doc_version[uri] or 0) + 1
+  self._doc_version[uri] = v
+  return v
+end
+
+function harness:_send(msg)
+  self._clear()
+  _lsp_handle(tojson(msg))
+  local raw = self._capture()
+  -- Extract any diagnostics notifications from the response
+  local msgs = parse_all_responses(raw)
+  for _, m in ipairs(msgs) do
+    if m.method == "textDocument/publishDiagnostics" and m.params then
+      self._diagnostics[m.params.uri] = m.params.diagnostics or {}
+    end
+  end
+  return raw, msgs
+end
+
+function harness:_send_request(method, params)
+  local id = self:_next_id()
+  local raw, msgs = self:_send({
+    jsonrpc = "2.0",
+    id = id,
+    method = method,
+    params = params or {},
+  })
+  -- Find the response with matching id
+  for _, m in ipairs(msgs) do
+    if m.id == id then return m end
+  end
+  return parse_response(raw)
+end
+
+function harness:_send_notification(method, params)
+  self:_send({
+    jsonrpc = "2.0",
+    method = method,
+    params = params or {},
+  })
+end
+
+-- ---------------------------------------------------------------------------
+-- Document operations
+-- ---------------------------------------------------------------------------
+
+function harness:open(uri, text)
+  self._docs[uri] = text
+  self._doc_version[uri] = 1
+  self._send_notification(self, "textDocument/didOpen", {
+    textDocument = {
+      uri = uri,
+      languageId = "lus",
+      version = 1,
+      text = text,
+    },
+  })
+end
+
+function harness:close(uri)
+  self._docs[uri] = nil
+  self._doc_version[uri] = nil
+  self._diagnostics[uri] = nil
+  self._send_notification(self, "textDocument/didClose", {
+    textDocument = {uri = uri},
+  })
+end
+
+-- ---------------------------------------------------------------------------
+-- Editing operations (track text internally, send incremental didChange)
+-- ---------------------------------------------------------------------------
+
+function harness:insert(uri, line, col, text)
+  local range = make_range(line, col, line, col)
+  self._docs[uri] = apply_edit(self._docs[uri], range, text)
+  local version = self:_next_version(uri)
+  self._send_notification(self, "textDocument/didChange", {
+    textDocument = {uri = uri, version = version},
+    contentChanges = {{range = range, text = text}},
+  })
+end
+
+function harness:delete(uri, sl, sc, el, ec)
+  local range = make_range(sl, sc, el, ec)
+  self._docs[uri] = apply_edit(self._docs[uri], range, "")
+  local version = self:_next_version(uri)
+  self._send_notification(self, "textDocument/didChange", {
+    textDocument = {uri = uri, version = version},
+    contentChanges = {{range = range, text = ""}},
+  })
+end
+
+function harness:replace(uri, sl, sc, el, ec, text)
+  local range = make_range(sl, sc, el, ec)
+  self._docs[uri] = apply_edit(self._docs[uri], range, text)
+  local version = self:_next_version(uri)
+  self._send_notification(self, "textDocument/didChange", {
+    textDocument = {uri = uri, version = version},
+    contentChanges = {{range = range, text = text}},
+  })
+end
+
+-- Type a string character-by-character, sending one didChange per character.
+-- Returns line, col of cursor after typing is done.
+function harness:type_text(uri, line, col, str)
+  for i = 1, #str do
+    local ch = string.sub(str, i, i)
+    self:insert(uri, line, col, ch)
+    if ch == "\n" then
+      line = line + 1
+      col = 0
+    else
+      col = col + 1
+    end
+  end
+  return line, col
+end
+
+-- ---------------------------------------------------------------------------
+-- LSP requests
+-- ---------------------------------------------------------------------------
+
+function harness:completions(uri, line, col)
+  local resp = self:_send_request("textDocument/completion", {
+    textDocument = {uri = uri},
+    position = {line = line, character = col},
+  })
+  if resp and resp.result then return resp.result end
+  return nil
+end
+
+function harness:hover(uri, line, col)
+  local resp = self:_send_request("textDocument/hover", {
+    textDocument = {uri = uri},
+    position = {line = line, character = col},
+  })
+  if resp and resp.result then return resp.result end
+  return nil
+end
+
+function harness:definition(uri, line, col)
+  local resp = self:_send_request("textDocument/definition", {
+    textDocument = {uri = uri},
+    position = {line = line, character = col},
+  })
+  if resp and resp.result then return resp.result end
+  return nil
+end
+
+function harness:diagnostics(uri)
+  return self._diagnostics[uri] or {}
+end
+
+function harness:get_text(uri)
+  return self._docs[uri]
+end
+
+-- ---------------------------------------------------------------------------
+-- Assertion helpers
+-- ---------------------------------------------------------------------------
+
+function harness:assert_no_errors(uri, msg)
+  local diags = self:diagnostics(uri)
+  local errors = {}
+  for _, d in ipairs(diags) do
+    if d.severity == 1 then
+      errors[#errors + 1] = d.message
+    end
+  end
+  if #errors > 0 then
+    error((msg or "Expected no errors") .. ", got: " .. table.concat(errors, "; "))
+  end
+end
+
+function harness:assert_has_error(uri, pattern, msg)
+  local diags = self:diagnostics(uri)
+  for _, d in ipairs(diags) do
+    if d.severity == 1 and string.find(d.message, pattern) then
+      return d
+    end
+  end
+  local all = {}
+  for _, d in ipairs(diags) do
+    all[#all + 1] = d.message
+  end
+  error((msg or "Expected error matching '" .. pattern .. "'")
+    .. ", diagnostics: [" .. table.concat(all, "; ") .. "]")
+end
+
+function harness:assert_no_error_matching(uri, pattern, msg)
+  local diags = self:diagnostics(uri)
+  for _, d in ipairs(diags) do
+    if d.severity == 1 and string.find(d.message, pattern) then
+      error((msg or "Expected no error matching '" .. pattern .. "'")
+        .. ", got: " .. d.message)
+    end
+  end
+end
+
+function harness:assert_has_completion(uri, line, col, label)
+  local result = self:completions(uri, line, col)
+  if not result then
+    error("Expected completions, got nil")
+  end
+  local items = result.items or result
+  for _, item in ipairs(items) do
+    if item.label == label then return item end
+  end
+  local labels = {}
+  for _, item in ipairs(items) do
+    labels[#labels + 1] = item.label
+  end
+  error("Expected completion '" .. label .. "', got: [" .. table.concat(labels, ", ") .. "]")
+end
+
+function harness:assert_no_completion(uri, line, col, label)
+  local result = self:completions(uri, line, col)
+  if not result then return end
+  local items = result.items or result
+  for _, item in ipairs(items) do
+    if item.label == label then
+      error("Expected no completion '" .. label .. "', but found it")
+    end
+  end
+end
+
+return harness

@@ -158,15 +158,17 @@ static void serbuf_free(SerBuffer *b) {
   }
 }
 
-static void serbuf_ensure(SerBuffer *b, size_t need) {
+static int serbuf_ensure(SerBuffer *b, size_t need) {
   if (b->size + need > b->cap) {
+    if (b->size > SIZE_MAX - need)
+      return 0;  /* overflow */
     /* Need larger buffer - allocate new one from arena */
     size_t newcap = b->cap * 2;
     while (newcap < b->size + need)
       newcap *= 2;
     char *newdata = (char *)luaA_allocstandalone(b->arena, newcap);
     if (newdata == NULL)
-      return; /* allocation failed */
+      return 0;  /* allocation failed */
     /* Copy existing data to new buffer */
     if (b->size > 0)
       memcpy(newdata, b->data, b->size);
@@ -174,11 +176,12 @@ static void serbuf_ensure(SerBuffer *b, size_t need) {
     b->data = newdata;
     b->cap = newcap;
   }
+  return 1;
 }
 
 static void serbuf_write(lua_State *L, SerBuffer *b, const void *p, size_t n) {
-  (void)L;
-  serbuf_ensure(b, n);
+  if (!serbuf_ensure(b, n))
+    luaL_error(L, "out of memory in worker serialization");
   memcpy(b->data + b->size, p, n);
   b->size += n;
 }
@@ -266,7 +269,7 @@ typedef struct {
 } DeserBuffer;
 
 static int deser_read(DeserBuffer *b, void *out, size_t n) {
-  if (b->pos + n > b->size)
+  if (n > b->size - b->pos)
     return 0;
   memcpy(out, b->data + b->pos, n);
   b->pos += n;
@@ -278,24 +281,29 @@ static int deser_read_byte(DeserBuffer *b, unsigned char *out) {
 }
 
 /* Forward declaration */
-static int deserialize_value(lua_State *L, DeserBuffer *b);
+static int deserialize_value(lua_State *L, DeserBuffer *b, int depth);
 
-static int deserialize_table(lua_State *L, DeserBuffer *b) {
+static int deserialize_table(lua_State *L, DeserBuffer *b, int depth) {
+  if (depth > 100)
+    return 0;
+  luaL_checkstack(L, 3, "deserialize");
   lua_Integer count;
   if (!deser_read(b, &count, sizeof(count)))
     return 0;
+  if (count < 0 || count > 10000000)
+    return 0;
   lua_createtable(L, 0, (int)count);
   for (lua_Integer i = 0; i < count; i++) {
-    if (!deserialize_value(L, b))
+    if (!deserialize_value(L, b, depth + 1))
       return 0; /* key */
-    if (!deserialize_value(L, b))
+    if (!deserialize_value(L, b, depth + 1))
       return 0; /* value */
     lua_settable(L, -3);
   }
   return 1;
 }
 
-static int deserialize_value(lua_State *L, DeserBuffer *b) {
+static int deserialize_value(lua_State *L, DeserBuffer *b, int depth) {
   unsigned char tag;
   if (!deser_read_byte(b, &tag))
     return 0;
@@ -329,14 +337,14 @@ static int deserialize_value(lua_State *L, DeserBuffer *b) {
     size_t len;
     if (!deser_read(b, &len, sizeof(len)))
       return 0;
-    if (b->pos + len > b->size)
+    if (len > b->size - b->pos)
       return 0;
     lua_pushlstring(L, b->data + b->pos, len);
     b->pos += len;
     break;
   }
   case SER_TABLE:
-    return deserialize_table(L, b);
+    return deserialize_table(L, b, depth + 1);
   default:
     return 0;
   }
@@ -512,7 +520,7 @@ static int worker_lib_peek(lua_State *L) {
 
   /* Deserialize */
   DeserBuffer db = {data, size, 0};
-  if (!deserialize_value(L, &db)) {
+  if (!deserialize_value(L, &db, 0)) {
     luaA_freestandalone(arena);
     return luaL_error(L, "failed to deserialize message");
   }
@@ -568,7 +576,7 @@ static void worker_run(WorkerState *w) {
     if (!got)
       break; /* shouldn't happen if nargs was set correctly */
     DeserBuffer db = {data, size, 0};
-    if (!deserialize_value(L, &db)) {
+    if (!deserialize_value(L, &db, 0)) {
       luaA_freestandalone(arena);
       lus_mutex_lock(&w->mutex);
       w->status = LUS_WORKER_ERROR;
@@ -837,7 +845,7 @@ static int lib_receive(lua_State *L) {
         /* Push nils for workers before this one */
         for (int j = 0; j < i; j++)
           lua_pushnil(L);
-        if (!deserialize_value(L, &db)) {
+        if (!deserialize_value(L, &db, 0)) {
           luaA_freestandalone(arena);
           /* Cleanup */
           for (int k = 0; k < nworkers; k++) {
@@ -992,7 +1000,7 @@ LUA_API int lus_worker_receive(lua_State *L, WorkerState *w) {
     return 0;
 
   DeserBuffer db = {data, size, 0};
-  int ok = deserialize_value(L, &db);
+  int ok = deserialize_value(L, &db, 0);
   luaA_freestandalone(arena);
   return ok;
 }

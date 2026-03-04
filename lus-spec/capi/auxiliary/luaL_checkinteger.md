@@ -1,0 +1,18 @@
+---
+name: luaL_checkinteger
+header: lauxlib.h
+kind: function
+since: 0.1.0
+stability: stable
+origin: lua
+signature: "lua_Integer luaL_checkinteger (lua_State *L, int arg)"
+params:
+  - name: L
+    type: "lua_State*"
+  - name: arg
+    type: int
+returns:
+  - type: lua_Integer
+---
+
+

@@ -167,6 +167,60 @@ tests:it("cross-enum index comparison", function()
     assert(e1.a ~= e2.x)
 end)
 
+tests:it("cross-root less-than raises error", function()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.a < e2.x)
+    assert(ok == false)
+    assert(type(err) == "string")
+end)
+
+tests:it("cross-root less-equal raises error", function()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.a <= e2.x)
+    assert(ok == false)
+    assert(type(err) == "string")
+end)
+
+tests:it("cross-root greater-than raises error", function()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.b > e2.x)
+    assert(ok == false)
+end)
+
+tests:it("cross-root greater-equal raises error", function()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.b >= e2.x)
+    assert(ok == false)
+end)
+
+tests:it("cross-root equality returns false", function()
+    local e1 = enum a, b, c end
+    local e2 = enum a, b, c end
+    -- Same names/positions but different roots: never equal
+    assert(e1.a ~= e2.a)
+    assert(e1.b ~= e2.b)
+    assert(e1.c ~= e2.c)
+    assert(not (e1.a == e2.a))
+end)
+
+tests:it("single-member enum ordering", function()
+    local e = enum only end
+    assert(e.only <= e.only)
+    assert(not (e.only < e.only))
+end)
+
+tests:it("first and last member ordering", function()
+    local e = enum a, b, c, d, e end
+    assert(e.a < e.e)
+    assert(e.e > e.a)
+    assert(e.a <= e.a)
+    assert(e.e >= e.e)
+end)
+
 tests:it("enum with many values", function()
     local e = enum
         v1, v2, v3, v4, v5,

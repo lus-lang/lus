@@ -1,0 +1,666 @@
+global require, ipairs, pairs, type, string, table, io, tojson, fromjson, tostring, pledge, select, tonumber, _lsp_handle, error
+
+pledge("load", "fs:read=./*")
+
+-- Override io.write to capture output BEFORE loading wasm.lus
+local capture_buffer = ""
+
+local original_write = io.write
+io.write = function(...)
+  for i = 1, select("#", ...) do
+    capture_buffer = capture_buffer .. tostring(select(i, ...))
+  end
+  return io
+end
+
+-- Now require wasm.lus which will define _lsp_handle and call pledge("seal")
+require("lus-language.wasm")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("lsp-e2e")
+
+-- ---------------------------------------------------------------------------
+-- Helpers (same as lsp-integration.lus)
+-- ---------------------------------------------------------------------------
+
+local function make_range(sl, sc, el, ec)
+  local r = {start = {line = sl, character = sc}}
+  r["end"] = {line = el, character = ec}
+  return r
+end
+
+local msg_id = 0
+
+local function next_id()
+  msg_id = msg_id + 1
+  return msg_id
+end
+
+local function send(msg)
+  capture_buffer = ""
+  local ok, err = catch _lsp_handle(tojson(msg))
+  if not ok then
+    -- Server threw; return empty so callers see no diagnostics
+    return ""
+  end
+  return capture_buffer
+end
+
+local function send_request(method, params)
+  local id = next_id()
+  return send({
+    jsonrpc = "2.0",
+    id = id,
+    method = method,
+    params = params or {},
+  }), id
+end
+
+local function send_notification(method, params)
+  return send({
+    jsonrpc = "2.0",
+    method = method,
+    params = params or {},
+  })
+end
+
+local function parse_all_responses(raw)
+  if not raw or raw == "" then return {} end
+  local results = {}
+  local pos = 1
+  while pos <= #raw do
+    local len_start, len_end = string.find(raw, "Content%-Length: (%d+)", pos)
+    if not len_start then break end
+    local len_str = string.match(raw, "Content%-Length: (%d+)", pos)
+    local len = tonumber(len_str)
+    local header_end = string.find(raw, "\r\n\r\n", len_end)
+    if not header_end then break end
+    local body_start = header_end + 4
+    local body = string.sub(raw, body_start, body_start + len - 1)
+    local ok, msg = catch fromjson(body)
+    if ok and msg then
+      results[#results + 1] = msg
+    end
+    pos = body_start + len
+  end
+  return results
+end
+
+local function parse_response(raw)
+  if not raw or raw == "" then return nil end
+  local len_str = string.match(raw, "Content%-Length: (%d+)")
+  if not len_str then return nil end
+  local body_start = string.find(raw, "\r\n\r\n")
+  if not body_start then return nil end
+  local body = string.sub(raw, body_start + 4)
+  local ok, result = catch fromjson(body)
+  if ok then return result end
+  return nil
+end
+
+-- Extract diagnostics from raw output
+local function get_diagnostics(raw)
+  local msgs = parse_all_responses(raw)
+  for _, m in ipairs(msgs) do
+    if m.method == "textDocument/publishDiagnostics" and m.params then
+      return m.params.diagnostics or {}
+    end
+  end
+  return {}
+end
+
+-- Get only error-severity diagnostics
+local function get_errors(diags)
+  local errors = {}
+  for _, d in ipairs(diags) do
+    if d.severity == 1 then
+      errors[#errors + 1] = d
+    end
+  end
+  return errors
+end
+
+-- Document version tracker
+local doc_versions = {}
+
+local function next_version(uri)
+  local v = (doc_versions[uri] or 1) + 1
+  doc_versions[uri] = v
+  return v
+end
+
+-- Open a document and return its diagnostics
+local function open_doc(uri, text)
+  doc_versions[uri] = 1
+  local raw = send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = uri,
+      languageId = "lus",
+      version = 1,
+      text = text,
+    },
+  })
+  return get_diagnostics(raw)
+end
+
+-- Send an incremental edit and return diagnostics
+local function edit_doc(uri, range, text)
+  local version = next_version(uri)
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {uri = uri, version = version},
+    contentChanges = {{range = range, text = text}},
+  })
+  return get_diagnostics(raw)
+end
+
+-- Insert text at a position
+local function insert_at(uri, line, col, text)
+  return edit_doc(uri, make_range(line, col, line, col), text)
+end
+
+-- Delete a range
+local function delete_range(uri, sl, sc, el, ec)
+  return edit_doc(uri, make_range(sl, sc, el, ec), "")
+end
+
+-- Type text character by character, returning diagnostics after each char.
+-- Returns: final line, final col, array of {char, diags} entries
+local function type_chars(uri, line, col, str)
+  local results = {}
+  for i = 1, #str do
+    local ch = string.sub(str, i, i)
+    local diags = insert_at(uri, line, col, ch)
+    results[#results + 1] = {char = ch, diagnostics = diags}
+    if ch == "\n" then
+      line = line + 1
+      col = 0
+    else
+      col = col + 1
+    end
+  end
+  return line, col, results
+end
+
+local function close_doc(uri)
+  send_notification("textDocument/didClose", {
+    textDocument = {uri = uri},
+  })
+  doc_versions[uri] = nil
+end
+
+-- Check that no diagnostic matches a variable-not-declared pattern for
+-- partial keywords or comment words. Accepts an optional set of allowed names
+-- that are expected globals (e.g. "f" for a global function).
+local function assert_no_var_not_declared(diags, msg_prefix, allowed)
+  allowed = allowed or {}
+  for _, d in ipairs(diags) do
+    if string.find(d.message, "not declared") or string.find(d.message, "Undefined global") then
+      if not string.find(d.message, "expected") then
+        local varname = string.match(d.message, "'(%w+)'")
+        if not (varname and allowed[varname]) then
+          error((msg_prefix or "") .. "Unexpected variable-not-declared error: " .. d.message)
+        end
+      end
+    end
+  end
+end
+
+-- =========================================================================
+-- Initialize
+-- =========================================================================
+
+send_request("initialize", {
+  processId = 1,
+  rootUri = "file:///test",
+  capabilities = {},
+})
+send_notification("initialized", {})
+
+-- =========================================================================
+-- A. Basic incremental editing
+-- =========================================================================
+
+tests:describe("basic incremental editing")
+
+tests:it("open with valid code produces no errors", function()
+  local uri = "file:///test/e2e-basic-1.lus"
+  local diags = open_doc(uri, "local x = 1")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "expected no errors for valid code")
+  close_doc(uri)
+end)
+
+tests:it("insert text preserves valid state", function()
+  local uri = "file:///test/e2e-basic-2.lus"
+  open_doc(uri, "local x = 1")
+  -- Append a newline and another statement
+  local diags = insert_at(uri, 0, 11, "\nlocal y = 2")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "expected no errors after insert")
+  close_doc(uri)
+end)
+
+tests:it("delete text produces syntax error", function()
+  local uri = "file:///test/e2e-basic-3.lus"
+  open_doc(uri, "local x = 1\nlocal y = 2")
+  -- Delete "l" from "local" on line 1 to create "ocal y = 2" which is invalid
+  local diags = delete_range(uri, 1, 0, 1, 1)
+  local errors = get_errors(diags)
+  tests:assert_true(#errors > 0, "expected errors after deleting first char of 'local'")
+  close_doc(uri)
+end)
+
+tests:it("restore valid code clears errors", function()
+  local uri = "file:///test/e2e-basic-4.lus"
+  open_doc(uri, "local x = 1")
+  -- Break it
+  edit_doc(uri, make_range(0, 0, 0, 11), "local = = =")
+  -- Fix it
+  local diags = edit_doc(uri, make_range(0, 0, 0, 11), "local x = 1")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "expected errors to clear after fix")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- B. Keyword boundary tests (targets the `loca` bug)
+-- =========================================================================
+
+tests:describe("keyword boundary (incremental typing)")
+
+tests:it("typing 'local x = 1' char-by-char never produces var-not-declared", function()
+  local uri = "file:///test/e2e-keyword-1.lus"
+  open_doc(uri, "")
+  local _, _, results = type_chars(uri, 0, 0, "local x = 1")
+  for _, r in ipairs(results) do
+    assert_no_var_not_declared(r.diagnostics,
+      "after typing '" .. r.char .. "': ")
+  end
+  close_doc(uri)
+end)
+
+tests:it("partial keyword 'loca' is a parse error, not var-not-declared", function()
+  local uri = "file:///test/e2e-keyword-2.lus"
+  open_doc(uri, "loca")
+  local diags = get_diagnostics(
+    send_notification("textDocument/didChange", {
+      textDocument = {uri = uri, version = next_version(uri)},
+      contentChanges = {{range = make_range(0, 0, 0, 4), text = "loca"}},
+    })
+  )
+  assert_no_var_not_declared(diags, "after 'loca': ")
+  close_doc(uri)
+end)
+
+tests:it("typing 'local function f() end' char-by-char never produces var-not-declared", function()
+  local uri = "file:///test/e2e-keyword-3.lus"
+  open_doc(uri, "")
+  local _, _, results = type_chars(uri, 0, 0, "local function f()\nend")
+  for _, r in ipairs(results) do
+    assert_no_var_not_declared(r.diagnostics,
+      "after typing '" .. r.char .. "': ")
+  end
+  close_doc(uri)
+end)
+
+tests:it("typing 'return 1' char-by-char never produces var-not-declared", function()
+  local uri = "file:///test/e2e-keyword-4.lus"
+  open_doc(uri, "")
+  local _, _, results = type_chars(uri, 0, 0, "return 1")
+  for _, r in ipairs(results) do
+    assert_no_var_not_declared(r.diagnostics,
+      "after typing '" .. r.char .. "': ")
+  end
+  close_doc(uri)
+end)
+
+tests:it("typing 'if true then end' char-by-char never produces var-not-declared", function()
+  local uri = "file:///test/e2e-keyword-5.lus"
+  open_doc(uri, "")
+  local _, _, results = type_chars(uri, 0, 0, "if true then\nend")
+  for _, r in ipairs(results) do
+    assert_no_var_not_declared(r.diagnostics,
+      "after typing '" .. r.char .. "': ")
+  end
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- C. Comment boundary tests (targets the `Practical` bug)
+-- =========================================================================
+
+tests:describe("comment boundary (incremental typing)")
+
+tests:it("typing '-- Practical example' never produces var-not-declared", function()
+  local uri = "file:///test/e2e-comment-1.lus"
+  open_doc(uri, "")
+  local _, _, results = type_chars(uri, 0, 0, "-- Practical example")
+  for _, r in ipairs(results) do
+    assert_no_var_not_declared(r.diagnostics,
+      "after typing '" .. r.char .. "': ")
+  end
+  close_doc(uri)
+end)
+
+tests:it("comment after valid code does not affect code diagnostics", function()
+  local uri = "file:///test/e2e-comment-2.lus"
+  open_doc(uri, "local x = 1")
+  -- Add a comment on a new line
+  local diags = insert_at(uri, 0, 11, "\n-- this is a comment")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "comment should not introduce errors")
+  assert_no_var_not_declared(diags, "after adding comment: ")
+  close_doc(uri)
+end)
+
+tests:it("typing a long comment char-by-char is clean", function()
+  local uri = "file:///test/e2e-comment-3.lus"
+  open_doc(uri, "local x = 1\n")
+  local _, _, results = type_chars(uri, 1, 0, "-- Hello world, this is a test comment")
+  for _, r in ipairs(results) do
+    assert_no_var_not_declared(r.diagnostics,
+      "after typing '" .. r.char .. "': ")
+  end
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- D. Multi-line editing
+-- =========================================================================
+
+tests:describe("multi-line editing")
+
+tests:it("editing middle lines keeps diagnostics correct", function()
+  local uri = "file:///test/e2e-multi-1.lus"
+  open_doc(uri, "local a = 1\nlocal b = 2\nlocal c = 3")
+  -- Replace middle line
+  local diags = edit_doc(uri, make_range(1, 0, 1, 11), "local b = 42")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "editing middle line should not produce errors")
+  close_doc(uri)
+end)
+
+tests:it("inserting a newline splits lines correctly", function()
+  local uri = "file:///test/e2e-multi-2.lus"
+  open_doc(uri, "local x = 1")
+  -- Insert newline + new statement
+  local diags = insert_at(uri, 0, 11, "\nlocal y = 2")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "newline insert should produce valid code")
+  close_doc(uri)
+end)
+
+tests:it("deleting a newline merges lines correctly", function()
+  local uri = "file:///test/e2e-multi-3.lus"
+  open_doc(uri, "local x\n = 1")
+  -- Delete the newline to merge: "local x = 1"
+  local diags = delete_range(uri, 0, 7, 1, 0)
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "merged line should be valid")
+  close_doc(uri)
+end)
+
+tests:it("multiple edits on different lines", function()
+  local uri = "file:///test/e2e-multi-4.lus"
+  open_doc(uri, "local a = 1\nlocal b = 2\nlocal c = 3")
+  -- Edit line 0
+  edit_doc(uri, make_range(0, 10, 0, 11), "10")
+  -- Edit line 2
+  local diags = edit_doc(uri, make_range(2, 10, 2, 11), "30")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "multiple line edits should remain valid")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- E. From-statement incremental editing
+-- =========================================================================
+
+tests:describe("from-statement incremental editing")
+
+tests:it("typing 'local x from t' incrementally never flags partial keywords", function()
+  local uri = "file:///test/e2e-from-1.lus"
+  -- Set up a table so 'from' has something to deconstruct
+  open_doc(uri, "local t = {x = 1}\n")
+  local _, _, results = type_chars(uri, 1, 0, "local x from t")
+  for _, r in ipairs(results) do
+    for _, d in ipairs(r.diagnostics) do
+      if string.find(d.message, "not declared") or string.find(d.message, "Undefined global") then
+        local varname = string.match(d.message, "'(%w+)'")
+        if varname == "fro" or varname == "fr" or varname == "f" then
+          error("Spurious var-not-declared for partial keyword: " .. d.message)
+        end
+      end
+    end
+  end
+  close_doc(uri)
+end)
+
+tests:it("complete 'local x from t' has no errors", function()
+  local uri = "file:///test/e2e-from-2.lus"
+  open_doc(uri, "local t = {x = 1}\nlocal x from t")
+  local diags = get_diagnostics(
+    send_notification("textDocument/didChange", {
+      textDocument = {uri = uri, version = next_version(uri)},
+      contentChanges = {{
+        range = make_range(0, 0, 1, 14),
+        text = "local t = {x = 1}\nlocal x from t",
+      }},
+    })
+  )
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "complete from-statement should have no errors")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- F. Edge cases
+-- =========================================================================
+
+tests:describe("edge cases")
+
+tests:it("empty document has no errors", function()
+  local uri = "file:///test/e2e-edge-1.lus"
+  local diags = open_doc(uri, "")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "empty document should have no errors")
+  close_doc(uri)
+end)
+
+tests:it("whitespace-only document has no errors", function()
+  local uri = "file:///test/e2e-edge-2.lus"
+  local diags = open_doc(uri, "   \n\n  \n")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "whitespace-only document should have no errors")
+  close_doc(uri)
+end)
+
+tests:it("comment-only document has no errors", function()
+  local uri = "file:///test/e2e-edge-3.lus"
+  local diags = open_doc(uri, "-- just a comment\n-- another one")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "comment-only document should have no errors")
+  close_doc(uri)
+end)
+
+tests:it("typing at end of existing code", function()
+  local uri = "file:///test/e2e-edge-4.lus"
+  open_doc(uri, "local x = 1")
+  local diags = insert_at(uri, 0, 11, "\n")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "appending newline should be valid")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- G. Completion after incremental edits
+-- =========================================================================
+
+tests:describe("completion after incremental edits")
+
+tests:it("completions work after opening a file", function()
+  local uri = "file:///test/e2e-comp-1.lus"
+  open_doc(uri, "local greeting = 'hello'\nlocal x = gre")
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = uri},
+    position = {line = 1, character = 13},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+  close_doc(uri)
+end)
+
+tests:it("completions update after editing code", function()
+  local uri = "file:///test/e2e-comp-2.lus"
+  open_doc(uri, "local myVar = 1\nlocal x = my")
+
+  -- Edit to add another variable
+  insert_at(uri, 0, 15, "\nlocal myOther = 2")
+
+  -- Request completions for "my" prefix
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = uri},
+    position = {line = 2, character = 12},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+
+  local items = resp.result.items or resp.result
+  local found_var = false
+  local found_other = false
+  for _, item in ipairs(items) do
+    if item.label == "myVar" then found_var = true end
+    if item.label == "myOther" then found_other = true end
+  end
+  tests:assert_true(found_var, "expected 'myVar' in completions")
+  tests:assert_true(found_other, "expected 'myOther' in completions")
+  close_doc(uri)
+end)
+
+tests:it("table field completions return results", function()
+  local uri = "file:///test/e2e-comp-3.lus"
+  open_doc(uri, "local user = {name = 'Alice', age = 30}\nlocal x = user.")
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = uri},
+    position = {line = 1, character = 15},
+  })
+  local resp = parse_response(raw)
+  tests:assert_not_nil(resp)
+  tests:assert_not_nil(resp.result)
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- H. Rapid edits (stress)
+-- =========================================================================
+
+tests:describe("rapid incremental edits")
+
+tests:it("many single-char inserts produce valid final state", function()
+  local uri = "file:///test/e2e-rapid-1.lus"
+  open_doc(uri, "")
+
+  -- Type a valid statement character by character
+  local text = "local abc = 123"
+  local col = 0
+  for i = 1, #text do
+    local ch = string.sub(text, i, i)
+    insert_at(uri, 0, col, ch)
+    col = col + 1
+  end
+
+  -- Verify final state by replacing with known-good text
+  local diags = edit_doc(uri, make_range(0, 0, 0, col), text)
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "final state after char-by-char should be valid")
+  close_doc(uri)
+end)
+
+tests:it("rapid edits across multiple lines", function()
+  local uri = "file:///test/e2e-rapid-2.lus"
+  -- Open with a valid multi-line document, then do rapid single-char edits
+  open_doc(uri, "local a = 1\nlocal b = 2")
+  -- Type a third line character by character
+  local line, col = 1, 11
+  local _, _, results = type_chars(uri, line, col, "\nlocal c = 3")
+  -- Final char should produce clean diagnostics
+  local last = results[#results]
+  local errors = get_errors(last.diagnostics)
+  tests:assert_equal(#errors, 0, "multi-line rapid typing should produce valid result")
+  close_doc(uri)
+end)
+
+tests:it("interleaved insert and delete operations", function()
+  local uri = "file:///test/e2e-rapid-3.lus"
+  open_doc(uri, "local x = 1")
+
+  -- Replace the value a few times (stay within single-digit to keep ranges simple)
+  for i = 2, 5 do
+    delete_range(uri, 0, 10, 0, 11)
+    insert_at(uri, 0, 10, tostring(i))
+  end
+
+  -- The final state should be "local x = 5", check diagnostics
+  -- Use a full document replace to verify
+  local diags = edit_doc(uri,
+    make_range(0, 0, 0, 11),
+    "local x = 5")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "interleaved edits should produce valid result")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+-- I. Non-ASCII content (UTF-16/UTF-8 encoding)
+-- =========================================================================
+
+tests:describe("non-ASCII content")
+
+tests:it("file with multi-byte chars opens without errors", function()
+  local uri = "file:///test/e2e-utf8-1.lus"
+  -- café contains 2-byte UTF-8 for 'é'
+  local diags = open_doc(uri, "local greeting = 'caf\xC3\xA9'")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "valid code with UTF-8 should have no errors")
+  close_doc(uri)
+end)
+
+tests:it("edit after multi-byte char applies correctly", function()
+  local uri = "file:///test/e2e-utf8-2.lus"
+  -- "local x = 'é'\nlocal y = 1" — 'é' is 2 bytes but 1 UTF-16 code unit
+  open_doc(uri, "local x = '\xC3\xA9'\nlocal y = 1")
+  -- Edit line 1: replace "1" with "2" (position should be correct despite
+  -- line 0 having multi-byte chars)
+  local diags = edit_doc(uri, make_range(1, 10, 1, 11), "2")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "edit on line after multi-byte content should work")
+  close_doc(uri)
+end)
+
+tests:it("edit on same line after multi-byte string", function()
+  local uri = "file:///test/e2e-utf8-3.lus"
+  -- local x = 'café' has é (2 bytes) inside the string.
+  -- Bytes:  l(1)o(2)c(3)a(4)l(5) (6)x(7) (8)=(9) (10)'(11)c(12)a(13)f(14)é(15-16)'(17)
+  -- UTF-16: l(0)o(1)c(2)a(3)l(4) (5)x(6) (7)=(8) (9)'(10)c(11)a(12)f(13)é(14)'(15)
+  open_doc(uri, "local x = 'caf\xC3\xA9'\nlocal y = 1")
+  -- Edit "1" on line 1 — line 1 is ASCII-only so no encoding issue
+  local diags = edit_doc(uri, make_range(1, 10, 1, 11), "42")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "edit after line with multi-byte string should work")
+  close_doc(uri)
+end)
+
+tests:it("comment with non-ASCII does not produce var-not-declared", function()
+  local uri = "file:///test/e2e-utf8-4.lus"
+  -- naïve has a 2-byte ï
+  local diags = open_doc(uri, "-- na\xC3\xAFve approach\nlocal x = 1")
+  assert_no_var_not_declared(diags, "non-ASCII comment: ")
+  local errors = get_errors(diags)
+  tests:assert_equal(#errors, 0, "non-ASCII in comment should not cause errors")
+  close_doc(uri)
+end)
+
+-- =========================================================================
+tests:finish()

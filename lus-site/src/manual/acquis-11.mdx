@@ -2,6 +2,7 @@
 order: 111
 title: Acquis 11 - Workers
 acquis: true
+shortdesc: "Concurrency based on M:N hybrid threading and message passing through workers."
 ---
 
 Workers in Lus allows for concurrency through the instantiation of separate interpreter states running in their own threads. While workers appear to the user as isolated execution contexts, the underlying implementation utilizes a thread pool (M:N) architecture.

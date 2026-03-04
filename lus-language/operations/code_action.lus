@@ -1,0 +1,76 @@
+global require, ipairs, string
+
+local document = require("lus-language.document")
+
+local code_action = {}
+
+-- Extract name from diagnostic messages
+local function extract_name(message, pattern)
+  return string.match(message, pattern)
+end
+
+-- Compute code actions for a range and set of diagnostics.
+-- Returns an array of CodeAction objects.
+function code_action.compute(uri, range, context)
+  if not context or not context.diagnostics then return {} end
+
+  local actions = {}
+  local doc = document.get(uri)
+  if not doc then return {} end
+
+  for _, diag in ipairs(context.diagnostics) do
+    local msg = diag.message or ""
+
+    -- "Undefined global 'X'" -> Add global declaration
+    local undef_name = extract_name(msg, "Undefined global '([^']+)'")
+    if undef_name then
+      actions[#actions + 1] = {
+        title = "Add global declaration for '" .. undef_name .. "'",
+        kind = "quickfix",
+        diagnostics = {diag},
+        edit = {
+          changes = {
+            [uri] = {
+              {
+                range = {
+                  start = {line = 0, character = 0},
+                  ["end"] = {line = 0, character = 0},
+                },
+                newText = "global " .. undef_name .. "\n",
+              },
+            },
+          },
+        },
+      }
+    end
+
+    -- "Unused local 'X'" or "Unused param 'X'" etc -> Prefix with _
+    local unused_name = extract_name(msg, "Unused %w+ '([^']+)'")
+    if unused_name and string.sub(unused_name, 1, 1) ~= "_" then
+      local d_line = diag.range.start.line
+      local d_char = diag.range.start.character
+      actions[#actions + 1] = {
+        title = "Prefix '" .. unused_name .. "' with _",
+        kind = "quickfix",
+        diagnostics = {diag},
+        edit = {
+          changes = {
+            [uri] = {
+              {
+                range = {
+                  start = {line = d_line, character = d_char},
+                  ["end"] = {line = d_line, character = d_char + #unused_name},
+                },
+                newText = "_" .. unused_name,
+              },
+            },
+          },
+        },
+      }
+    end
+  end
+
+  return actions
+end
+
+return code_action

@@ -1,0 +1,82 @@
+--[[
+    Test suite for the global statement in Lus.
+
+    Syntax:
+    - global name1, name2, ...     (declare globals)
+    - global name = expr           (declare and initialize)
+    - Globals must be declared before use (enforced by convention)
+    - local variables shadow globals
+]]
+
+global assert, type, require, pledge, tostring, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("global")
+
+tests:it("basic global declaration", function()
+    -- assert is already declared global above and usable
+    assert(true)
+end)
+
+tests:it("global variables are accessible", function()
+    assert(type(assert) == "function")
+    assert(type(type) == "function")
+    assert(type(tostring) == "function")
+end)
+
+tests:it("tostring global works correctly", function()
+    assert(tostring(42) == "42")
+    assert(tostring(true) == "true")
+    assert(tostring(nil) == "nil")
+end)
+
+tests:it("local shadows global", function()
+    local assert = function() return "shadowed" end
+    assert(assert() == "shadowed")
+end)
+
+tests:it("global is visible after declaration", function()
+    -- error was declared global at the top
+    local ok, err = catch error("test error")
+    assert(ok == false)
+    assert(type(err) == "string")
+end)
+
+tests:it("multiple globals in one statement", function()
+    -- All declared in the first global statement
+    assert(type(assert) == "function")
+    assert(type(type) == "function")
+    assert(type(require) == "function")
+    assert(type(pledge) == "function")
+    assert(type(tostring) == "function")
+    assert(type(error) == "function")
+end)
+
+tests:it("global used in nested scope", function()
+    do
+        do
+            assert(type(tostring) == "function")
+            assert(tostring(123) == "123")
+        end
+    end
+end)
+
+tests:it("global used in function body", function()
+    local function check()
+        return type(assert) == "function"
+    end
+    assert(check())
+end)
+
+tests:it("local unshadows after block", function()
+    do
+        local tostring = function() return "shadow" end
+        assert(tostring() == "shadow")
+    end
+    -- After block, global tostring is visible again
+    assert(tostring(99) == "99")
+end)
+
+tests:finish()

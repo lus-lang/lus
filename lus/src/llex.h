@@ -118,6 +118,8 @@ typedef struct LexState {
   /* string interpolation state */
   int interp_depth;     /* parenthesis depth inside $(...), 0 = not in interp */
   TString *interp_name; /* variable name for $name interpolation (NULL if $(expr)) */
+  int interp_name_line;    /* line of $name variable */
+  int interp_name_column;  /* column of $name variable (first letter, after $) */
 } LexState;
 
 LUAI_FUNC void luaX_init(lua_State *L);

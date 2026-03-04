@@ -1,5 +1,7 @@
 global require, ipairs, pairs, type, string, math, table
 
+local stdlib_data = require("lus-language.analysis.stdlib_data")
+
 local types = {}
 
 -- ---------------------------------------------------------------------------
@@ -16,9 +18,10 @@ function types.unknown()   return {tag = "unknown"} end
 function types.vector()    return {tag = "vector"} end
 function types.thread()    return {tag = "thread"} end
 function types.userdata()  return {tag = "userdata"} end
+function types.worker()    return {tag = "worker"} end
 
-function types.func(params)
-  return {tag = "function", params = params or {}}
+function types.func(params, return_type)
+  return {tag = "function", params = params or {}, return_type = return_type}
 end
 
 function types.tbl(fields)
@@ -31,6 +34,66 @@ end
 
 function types.module(module_name)
   return {tag = "module", module_name = module_name}
+end
+
+function types.union(members)
+  if not members or #members == 0 then return types.unknown() end
+  if #members == 1 then return members[1] end
+  -- Deduplicate by tag
+  local seen = {}
+  local unique = {}
+  for _, m in ipairs(members) do
+    local key = m.tag or "unknown"
+    if not seen[key] then
+      seen[key] = true
+      unique[#unique + 1] = m
+    end
+  end
+  if #unique == 1 then return unique[1] end
+  return {tag = "union", members = unique}
+end
+
+-- ---------------------------------------------------------------------------
+-- Spec type string -> type_info conversion
+-- ---------------------------------------------------------------------------
+
+-- Map from spec type tag to constructor
+local FROM_STRING_MAP = {
+  string = types.str,
+  number = types.number,
+  integer = types.integer,
+  float = types.float,
+  boolean = types.boolean,
+  table = types.tbl,
+  ["function"] = function() return types.func() end,
+  thread = types.thread,
+  userdata = types.userdata,
+  vector = types.vector,
+  worker = types.worker,
+  ["nil"] = types.null,
+}
+
+-- Convert a spec type string (e.g., "string", "number|nil", "any") to a
+-- type_info table.
+function types.from_string(s)
+  if not s or s == "any" then return types.unknown() end
+  -- Handle unions: "number|nil", "string|table"
+  if string.find(s, "|", 1, true) then
+    local members = {}
+    for part in string.gmatch(s, "[^|]+") do
+      local ctor = FROM_STRING_MAP[part]
+      if ctor then
+        members[#members + 1] = ctor()
+      else
+        members[#members + 1] = types.unknown()
+      end
+    end
+    return types.union(members)
+  end
+  -- Simple type
+  local ctor = FROM_STRING_MAP[s]
+  if ctor then return ctor() end
+  return types.unknown()
 end
 
 -- ---------------------------------------------------------------------------
@@ -60,18 +123,27 @@ function types.merge_field(type_info, field_name, value_type, line, column)
 end
 
 -- Format a type for display (e.g., in hover)
-function types.display(type_info)
+-- depth parameter prevents infinite recursion on nested tables (max 2)
+function types.display(type_info, depth)
   if not type_info then return "unknown" end
+  depth = depth or 0
 
   local tag = type_info.tag
 
   if tag == "function" then
+    local base
     if type_info.params and #type_info.params > 0 then
-      return "function(" .. table.concat(type_info.params, ", ") .. ")"
+      base = "function(" .. table.concat(type_info.params, ", ") .. ")"
+    else
+      base = "function"
     end
-    return "function"
+    if type_info.return_type and type_info.return_type.tag ~= "unknown" then
+      return base .. " -> " .. types.display(type_info.return_type, depth + 1)
+    end
+    return base
 
   elseif tag == "table" then
+    if depth >= 2 then return "table" end
     if type_info.fields then
       local names = {}
       for name in pairs(type_info.fields) do
@@ -79,7 +151,22 @@ function types.display(type_info)
       end
       table.sort(names)
       if #names > 0 then
-        return "table {" .. table.concat(names, ", ") .. "}"
+        local parts = {}
+        local limit = math.min(#names, 5)
+        for i = 1, limit do
+          local fname = names[i]
+          local finfo = type_info.fields[fname]
+          local ftype = finfo and types.display(finfo.type_info, depth + 1)
+          if ftype and ftype ~= "unknown" then
+            parts[#parts + 1] = fname .. ": " .. ftype
+          else
+            parts[#parts + 1] = fname
+          end
+        end
+        if #names > 5 then
+          parts[#parts + 1] = "..."
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
       end
     end
     return "table"
@@ -95,6 +182,16 @@ function types.display(type_info)
       return "module \"" .. type_info.module_name .. "\""
     end
     return "module"
+
+  elseif tag == "union" then
+    if type_info.members then
+      local parts = {}
+      for _, m in ipairs(type_info.members) do
+        parts[#parts + 1] = types.display(m, depth)
+      end
+      return table.concat(parts, " | ")
+    end
+    return "unknown"
 
   else
     return tag
@@ -119,6 +216,73 @@ local COMPARE_OPS = {
 -- ---------------------------------------------------------------------------
 -- Expression type inference
 -- ---------------------------------------------------------------------------
+
+-- Forward declaration
+local infer_return_type
+
+-- Recursively collect all return statement types from a function body.
+-- Stops at nested function boundaries to avoid attributing inner returns
+-- to the outer function.
+local FUNC_BOUNDARIES = {
+  funcexpr = true, localfunc = true, globalfunc = true, funcstat = true,
+}
+
+local DOEXPR_BOUNDARIES = {
+  funcexpr = true, localfunc = true, globalfunc = true, funcstat = true,
+  doexpr = true,
+}
+
+local function collect_returns(node, results)
+  if not node then return end
+  if node.type == "return" then
+    if node.values and node.values[1] then
+      results[#results + 1] = types.infer_expr(node.values[1])
+    else
+      results[#results + 1] = types.null()
+    end
+    return
+  end
+  if node.children then
+    for _, child in ipairs(node.children) do
+      if not FUNC_BOUNDARIES[child.type] then
+        collect_returns(child, results)
+      end
+    end
+  end
+end
+
+-- Recursively collect all provide statement types from a do-expression body.
+-- Stops at nested function/doexpr boundaries.
+local function collect_provides(node, results)
+  if not node then return end
+  if node.type == "provide" then
+    if node.values and node.values[1] then
+      results[#results + 1] = types.infer_expr(node.values[1])
+    else
+      results[#results + 1] = types.null()
+    end
+    return
+  end
+  if node.children then
+    for _, child in ipairs(node.children) do
+      if not DOEXPR_BOUNDARIES[child.type] then
+        collect_provides(child, results)
+      end
+    end
+  end
+end
+
+infer_return_type = function(func_node)
+  if not func_node.children then return nil end
+  local results = {}
+  for _, child in ipairs(func_node.children) do
+    if not FUNC_BOUNDARIES[child.type] then
+      collect_returns(child, results)
+    end
+  end
+  if #results == 0 then return nil end
+  return types.union(results)
+end
 
 -- Infer the type of an AST expression node.
 -- Returns a type_info table.
@@ -157,8 +321,9 @@ function types.infer_expr(node)
     -- Table constructor: extract field names and value types
     -- Fields are stored in the children array as tablefield nodes
     local fields = {}
-    if node.children then
-      for _, f in ipairs(node.children) do
+    local tbl_fields = node.fields or node.children
+    if tbl_fields then
+      for _, f in ipairs(tbl_fields) do
         if f.type == "tablefield" and f.key
            and f.key.type == "string" and f.key.value then
           local val_type = types.infer_expr(f.value)
@@ -182,7 +347,8 @@ function types.infer_expr(node)
     if node.isvararg then
       params[#params + 1] = "..."
     end
-    return types.func(params)
+    local ret = infer_return_type(node)
+    return types.func(params, ret)
 
   elseif ntype == "enum" then
     local members = {}
@@ -197,9 +363,8 @@ function types.infer_expr(node)
     return types.enumtype(members)
 
   elseif ntype == "callexpr" or ntype == "callstat" then
-    -- Check for well-known constructors
     if node.func then
-      -- require("module")
+      -- require("module") — special case (depends on argument value, not type)
       if node.func.type == "name" and node.func.value == "require" then
         if node.args and node.args[1] and node.args[1].type == "string" then
           return types.module(node.args[1].value)
@@ -207,61 +372,34 @@ function types.infer_expr(node)
         return types.module(nil)
       end
 
-      -- vector.create(...)
-      if node.func.type == "field" and node.func.table
-         and node.func.table.type == "name"
-         and node.func.table.value == "vector"
-         and node.func.key and node.func.key.value == "create" then
-        return types.vector()
-      end
-
-      -- vector.clone(...)
-      if node.func.type == "field" and node.func.table
-         and node.func.table.type == "name"
-         and node.func.table.value == "vector"
-         and node.func.key and node.func.key.value == "clone" then
-        return types.vector()
-      end
-
-      -- coroutine.create(...) / coroutine.wrap(...)
-      if node.func.type == "field" and node.func.table
-         and node.func.table.type == "name"
-         and node.func.table.value == "coroutine"
-         and node.func.key then
-        local method = node.func.key.value
-        if method == "create" or method == "wrap" then
-          return types.thread()
+      -- Resolve stdlib function name from AST
+      local func_name
+      if node.func.type == "name" then
+        func_name = node.func.value
+      elseif node.func.type == "field" and node.func.table then
+        if node.func.table.type == "name" and node.func.key then
+          func_name = node.func.table.value .. "." .. node.func.key.value
+        elseif node.func.table.type == "field"
+               and node.func.table.table
+               and node.func.table.table.type == "name"
+               and node.func.table.key and node.func.key then
+          func_name = node.func.table.table.value .. "."
+            .. node.func.table.key.value .. "." .. node.func.key.value
         end
       end
 
-      -- table.clone(...)
-      if node.func.type == "field" and node.func.table
-         and node.func.table.type == "name"
-         and node.func.table.value == "table"
-         and node.func.key and node.func.key.value == "clone" then
-        return types.tbl()
-      end
-
-      -- tostring(...)
-      if node.func.type == "name" and node.func.value == "tostring" then
-        return types.str()
-      end
-
-      -- tonumber(...)
-      if node.func.type == "name" and node.func.value == "tonumber" then
-        return types.number()
-      end
-
-      -- type(...)
-      if node.func.type == "name" and node.func.value == "type" then
-        return types.str()
-      end
-
-      -- string.* functions mostly return strings
-      if node.func.type == "field" and node.func.table
-         and node.func.table.type == "name"
-         and node.func.table.value == "string" then
-        return types.str()
+      -- Data-driven stdlib return type lookup
+      if func_name and stdlib_data.returns[func_name] then
+        local ret_str = stdlib_data.returns[func_name]
+        -- For generic functions, infer from first argument at the expression
+        -- level (scope-level resolution handles the full case in scope.lus)
+        if stdlib_data.generics[func_name] and ret_str == stdlib_data.generics[func_name] then
+          if node.args and node.args[1] then
+            return types.infer_expr(node.args[1])
+          end
+          return types.unknown()
+        end
+        return types.from_string(ret_str)
       end
     end
     return types.unknown()
@@ -278,8 +416,10 @@ function types.infer_expr(node)
       -- `and` returns first falsy or last value; approximate as unknown
       return types.unknown()
     elseif op == "or" then
-      -- `or` returns first truthy; approximate as unknown
-      return types.unknown()
+      -- `or` returns first truthy or second value; produce union of both
+      local left_type = types.infer_expr(node.left)
+      local right_type = types.infer_expr(node.right)
+      return types.union({left_type, right_type})
     end
     return types.unknown()
 
@@ -312,7 +452,18 @@ function types.infer_expr(node)
     return types.unknown()
 
   elseif ntype == "doexpr" then
-    -- Do expression evaluates to the provide'd value; hard to infer
+    -- Do expression: collect types from provide statements
+    if node.children then
+      local results = {}
+      for _, child in ipairs(node.children) do
+        if not DOEXPR_BOUNDARIES[child.type] then
+          collect_provides(child, results)
+        end
+      end
+      if #results > 0 then
+        return types.union(results)
+      end
+    end
     return types.unknown()
 
   elseif ntype == "vararg" then
@@ -347,7 +498,8 @@ function types.infer_func_type(func_node)
   if func_node.isvararg then
     params[#params + 1] = "..."
   end
-  return types.func(params)
+  local ret = infer_return_type(func_node)
+  return types.func(params, ret)
 end
 
 return types

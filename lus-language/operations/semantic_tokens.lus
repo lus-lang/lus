@@ -1,7 +1,9 @@
 global require, ipairs, type, table, string
 
 local ast_mod = require("lus-language.analysis.ast")
+local document = require("lus-language.document")
 local scope_mod = require("lus-language.analysis.scope")
+local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local semantic_tokens = {}
 
@@ -22,17 +24,12 @@ local MOD_DECLARATION = 1    -- bit 0
 local MOD_READONLY = 2       -- bit 1
 local MOD_DEFAULT_LIB = 4   -- bit 2
 
--- Standard library names for defaultLibrary modifier
+-- Standard library names for defaultLibrary modifier (from lus-spec)
 local STDLIB = {}
-for _, name in ipairs({
-  "print", "error", "assert", "type", "tostring", "tonumber",
-  "pairs", "ipairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen",
-  "setmetatable", "getmetatable", "require", "load", "dofile",
-  "collectgarbage", "pledge",
-  "string", "table", "math", "io", "os", "debug", "coroutine",
-  "utf8", "fs", "network", "worker",
-  "fromjson", "tojson",
-}) do
+for _, name in ipairs(stdlib_data.globals) do
+  STDLIB[name] = true
+end
+for _, name in ipairs(stdlib_data.tables) do
   STDLIB[name] = true
 end
 
@@ -272,9 +269,13 @@ walk_node = function(node, analysis)
     end
 
   elseif ntype == "localfunc" or ntype == "globalfunc" then
-    -- Function name is a declaration
-    if node.name and node.line then
-      add_token(node.line, node.column, #node.name, TOKEN_FUNCTION, MOD_DECLARATION)
+    -- Function name is a declaration (use nameline/namecolumn for correct position)
+    if node.name then
+      local nl = node.nameline or node.line
+      local nc = node.namecolumn or node.column
+      if nl then
+        add_token(nl, nc, #node.name, TOKEN_FUNCTION, MOD_DECLARATION)
+      end
     end
     -- Params are declarations
     if node.params then
@@ -481,7 +482,11 @@ end
 -- Compute semantic tokens for a document.
 -- Returns { data = [...] } for the LSP response.
 function semantic_tokens.compute(uri)
-  local tree = ast_mod.get(uri)
+  -- Use current AST only (not stale fallback) to avoid position drift
+  -- during typing. When the parse fails mid-edit, returning empty tokens
+  -- lets VS Code fall back to TextMate grammar coloring instead of showing
+  -- tokens at wrong positions from a previous document version.
+  local tree = document.get_current_ast(uri)
   if not tree then return {data = {}} end
 
   -- Run scope analysis first
@@ -494,12 +499,15 @@ function semantic_tokens.compute(uri)
   if tree.comments then
     for _, comment in ipairs(tree.comments) do
       if comment.line and comment.column then
-        -- Estimate length from text
-        local len = #comment.text + 2 -- "--" prefix
-        if comment.islong then
-          len = #comment.text + 6 -- "--[[ ]]" wrapper
+        local endline = comment.endline or comment.line
+        if endline == comment.line then
+          -- Single-line comment only (multi-line tokens not supported by LSP)
+          local len = #comment.text + 2 -- "--" prefix
+          if comment.islong then
+            len = #comment.text + 6 -- "--[[ ]]" wrapper
+          end
+          add_token(comment.line, comment.column, len, TOKEN_COMMENT, 0)
         end
-        add_token(comment.line, comment.column, len, TOKEN_COMMENT, 0)
       end
     end
   end

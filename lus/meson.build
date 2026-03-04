@@ -2,7 +2,7 @@ project('lus', 'c',
   version: '1.4.0',
   default_options: [
     'c_std=gnu11',
-    'warning_level=2',
+    'warning_level=3',
     'optimization=2',
     'b_lto=true',
     'b_ndebug=if-release',
@@ -206,6 +206,7 @@ h1_tests = [
   'h1/json',
   'h1/network',
   'h1/worker',
+  'h1/global',
   'h1/parse',
   'h1/slices',
   'h1/groups',
@@ -214,7 +215,11 @@ h1_tests = [
   'h1/pledge',
   'h1/runtime-attrs',
   'h1/doexpr',
-  'h1/interp'
+  'h1/interp',
+  'h1/lsp-unit',
+  'h1/lsp-integration',
+  'h1/lsp-lint-h1',
+  'h1/lsp-e2e',
 ]
 
 foreach t : h1_tests

@@ -1,0 +1,9 @@
+-- types.lus - Worker test script that sends back typed values
+global worker
+
+worker.message(42)
+worker.message(3.14)
+worker.message("hello")
+worker.message(true)
+worker.message(false)
+worker.message(nil)

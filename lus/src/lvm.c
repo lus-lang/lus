@@ -549,8 +549,11 @@ static int lessthanothers(lua_State *L, const TValue *l, const TValue *r) {
   if (ttisstring(l) && ttisstring(r)) /* both are strings? */
     return l_strcmp(tsvalue(l), tsvalue(r)) < 0;
   else if (ttisenum(l) && ttisenum(r)) { /* both are enums? */
-    /* Enums compare by index (allows e.g. enum_a.x < enum_a.y) */
-    return enumvalue(l)->idx < enumvalue(r)->idx;
+    Enum *e1 = enumvalue(l);
+    Enum *e2 = enumvalue(r);
+    if (e1->root != e2->root)
+      luaG_runerror(L, "attempt to compare enum values from different types");
+    return e1->idx < e2->idx;
   } else
     return luaT_callorderTM(L, l, r, TM_LT);
 }
@@ -573,8 +576,11 @@ static int lessequalothers(lua_State *L, const TValue *l, const TValue *r) {
   if (ttisstring(l) && ttisstring(r)) /* both are strings? */
     return l_strcmp(tsvalue(l), tsvalue(r)) <= 0;
   else if (ttisenum(l) && ttisenum(r)) { /* both are enums? */
-    /* Enums compare by index (allows e.g. enum_a.x <= enum_a.y) */
-    return enumvalue(l)->idx <= enumvalue(r)->idx;
+    Enum *e1 = enumvalue(l);
+    Enum *e2 = enumvalue(r);
+    if (e1->root != e2->root)
+      luaG_runerror(L, "attempt to compare enum values from different types");
+    return e1->idx <= e2->idx;
   } else
     return luaT_callorderTM(L, l, r, TM_LE);
 }
@@ -845,6 +851,8 @@ void luaV_tostring(lua_State *L, StkId ra, const TValue *rb) {
 /*
 ** Perform a slice operation: obj[start:end]
 ** Handles strings, vectors, tables, and metamethods.
+** Note: callers must ensure vstart/vend are nil or integer.
+** The VM opcode handler guarantees this via codegen.
 */
 void luaV_slice(lua_State *L, StkId ra, const TValue *obj,
                 const TValue *vstart, const TValue *vend) {
@@ -2395,7 +2403,8 @@ returning: /* trap already set */
         StkId ra = RA(i);
         TValue *obj = vRB(i);
         TValue *vstart = vRC(i);
-        TValue *vend = s2v(RC(i) + 1);
+        StkId endslot = RC(i) + 1;  /* end value is in next register */
+        TValue *vend = s2v(endslot);
         Protect(luaV_slice(L, ra, obj, vstart, vend));
         checkGC(L, ra + 1);
         vmbreak;

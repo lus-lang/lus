@@ -2,6 +2,7 @@ global require, ipairs, string
 
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
+local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local linting = {}
 
@@ -9,19 +10,12 @@ local linting = {}
 local SEVERITY_WARNING = 2
 local SEVERITY_HINT = 4
 
--- Standard library / built-in names that are always defined
+-- Standard library / built-in names that are always defined (from lus-spec)
 local STDLIB = {}
-for _, name in ipairs({
-  "print", "error", "assert", "type", "tostring", "tonumber",
-  "pairs", "ipairs", "next", "select", "rawget", "rawset", "rawequal", "rawlen",
-  "setmetatable", "getmetatable", "require", "load", "dofile", "loadfile",
-  "collectgarbage", "pledge", "warn",
-  "string", "table", "math", "io", "os", "debug", "coroutine",
-  "utf8", "fs", "network", "worker", "vector", "package",
-  "fromjson", "tojson",
-  -- Lua internals
-  "_G", "_VERSION",
-}) do
+for _, name in ipairs(stdlib_data.globals) do
+  STDLIB[name] = true
+end
+for _, name in ipairs(stdlib_data.tables) do
   STDLIB[name] = true
 end
 

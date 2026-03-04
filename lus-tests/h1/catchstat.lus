@@ -1,4 +1,4 @@
-global print, assert, error, type, tostring, setmetatable, coroutine, table, select, require, pledge
+global print, assert, error, type, tostring, setmetatable, coroutine, table, select, require, pledge, string
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -398,6 +398,74 @@ tests:it("catch statement inside catch expression handler", function()
     end
     local ok = catch handler()
     assert(ok == false)
+end)
+
+-- ============================================================================
+-- Multi-value catch expressions
+-- ============================================================================
+
+tests:it("catch expression returns ok and value", function()
+    local ok, val = catch 42
+    assert(ok == true)
+    assert(val == 42)
+end)
+
+tests:it("catch expression returns false and error on failure", function()
+    local ok, val = catch error("msg")
+    assert(ok == false)
+    assert(type(val) == "string")
+end)
+
+tests:it("catch expression with successful function call", function()
+    local function f() return "hello" end
+    local ok, val = catch f()
+    assert(ok == true)
+    assert(val == "hello")
+end)
+
+tests:it("catch expression with multiple return values", function()
+    local function multi() return 1, 2, 3 end
+    local ok, a, b, c = catch multi()
+    assert(ok == true)
+    assert(a == 1)
+    assert(b == 2)
+    assert(c == 3)
+end)
+
+tests:it("catch expression with error returns error message", function()
+    local ok, err = catch error("specific error")
+    assert(ok == false)
+    assert(string.find(tostring(err), "specific error"))
+end)
+
+tests:it("catch expression with nil return", function()
+    local function f() return nil end
+    local ok, val = catch f()
+    assert(ok == true)
+    assert(val == nil)
+end)
+
+tests:it("catch expression with table error", function()
+    local ok, err = catch error({code = 404, msg = "not found"})
+    assert(ok == false)
+    -- Error object may be the table or a string representation
+    assert(err ~= nil)
+end)
+
+tests:it("nested catch expressions", function()
+    local ok1, val1 = catch (function()
+        local ok2, val2 = catch error("inner")
+        assert(ok2 == false)
+        return "outer"
+    end)()
+    assert(ok1 == true)
+    assert(val1 == "outer")
+end)
+
+tests:it("catch expression error handler", function()
+    local ok, val = catch[function(e) return "handled: " .. tostring(e) end] error("oops")
+    assert(ok == false)
+    assert(string.find(val, "handled:"))
 end)
 
 tests:finish()

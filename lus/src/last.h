@@ -158,6 +158,8 @@ typedef struct LusAstNode {
       struct LusAstNode *body;     /* function body */
       int isvararg;                /* has ... parameter */
       int ismethod;                /* has implicit self parameter */
+      int nameline;                /* line of the function name token */
+      int namecolumn;              /* column of the function name token */
     } func;
     /* AST_IF */
     struct {
@@ -227,7 +229,8 @@ typedef struct LusAstNode {
     } param;
     /* AST_CATCHEXPR, AST_CATCHSTAT */
     struct {
-      struct LusAstNode *expr; /* expression to catch */
+      struct LusAstNode *expr;    /* expression to catch */
+      struct LusAstNode *handler; /* optional error handler */
     } catchnode;
     /* AST_OPTCHAIN */
     struct {

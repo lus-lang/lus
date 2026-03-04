@@ -1,10 +1,55 @@
-global require, ipairs
+global require, ipairs, type
 
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
 local modules = require("lus-language.analysis.modules")
+local types_mod = require("lus-language.analysis.types")
+local document = require("lus-language.document")
+local pos_util = require("lus-language.util.position")
 
 local definition = {}
+
+-- Walk the AST to find a field access node (M.foo) where the key
+-- is at the given position. Returns {table_name, field_name} or nil.
+local function find_field_at(node, line, col)
+  if not node or type(node) ~= "table" then return nil end
+
+  if node.type == "field" and node.table and node.table.type == "name"
+     and node.key and node.key.line == line then
+    local key_col = node.key.column or 0
+    local key_name = node.key.value
+    if key_name and col >= key_col and col < key_col + #key_name then
+      return {table_name = node.table.value, field_name = key_name}
+    end
+  end
+
+  -- Recurse into all sub-nodes
+  if node.children then
+    for _, child in ipairs(node.children) do
+      local r = find_field_at(child, line, col)
+      if r then return r end
+    end
+  end
+  for _, key in ipairs({"func", "left", "right", "operand", "expr",
+                         "cond", "nameexpr", "base", "suffix",
+                         "table", "key", "value", "handler",
+                         "init", "limit", "step", "start", "finish"}) do
+    if node[key] then
+      local r = find_field_at(node[key], line, col)
+      if r then return r end
+    end
+  end
+  for _, key in ipairs({"args", "values", "lhs", "rhs", "fields",
+                         "parts", "explist"}) do
+    if node[key] then
+      for _, v in ipairs(node[key]) do
+        local r = find_field_at(v, line, col)
+        if r then return r end
+      end
+    end
+  end
+  return nil
+end
 
 -- Compute go-to-definition for a position.
 -- position is 0-based (LSP). Returns an LSP Location or nil.
@@ -16,9 +61,11 @@ function definition.compute(uri, position)
   local analysis = scope_mod.analyze(uri)
   if not analysis then return nil end
 
-  -- Convert 0-based LSP position to 1-based AST position
-  local line = position.line + 1
-  local col = position.character + 1
+  -- Convert 0-based LSP position (UTF-16) to 1-based AST position (bytes)
+  local doc = document.get(uri)
+  if not doc then return nil end
+  local line, col = pos_util.lsp_to_byte(
+    doc.text, doc.line_index, position.line, position.character)
 
   -- Check if cursor is on a require() string argument -> jump to module file
   if tree then
@@ -41,6 +88,53 @@ function definition.compute(uri, position)
   -- If the reference resolves to a local declaration, check if we're on
   -- a field access of a require() result variable
   if not ref then
+    -- Check if cursor is on a field key (M.foo where cursor is on foo)
+    if tree then
+      local field_info = find_field_at(tree, line, col)
+      if field_info then
+        local s = scope_mod.get_scope_at(analysis.root, line)
+        if s then
+          local visible = scope_mod.get_visible(s)
+          local table_decl = visible[field_info.table_name]
+          if table_decl then
+            -- Check if it's a require() result
+            local mod_name = modules.get_require_for_decl(tree, table_decl)
+            if mod_name then
+              local exports = modules.get_exports(mod_name)
+              for _, exp in ipairs(exports) do
+                if exp.name == field_info.field_name then
+                  local target_uri = exp.uri or modules.resolve(mod_name)
+                  if target_uri then
+                    return {
+                      uri = target_uri,
+                      range = {
+                        start = {line = (exp.line or 1) - 1, character = (exp.column or 1) - 1},
+                        ["end"] = {line = (exp.line or 1) - 1, character = (exp.column or 1) - 1 + #exp.name},
+                      },
+                    }
+                  end
+                end
+              end
+            end
+            -- Check in-file table field definitions
+            if table_decl.type_info then
+              local fields = types_mod.get_fields(table_decl.type_info)
+              if fields and fields[field_info.field_name] then
+                local f = fields[field_info.field_name]
+                return {
+                  uri = uri,
+                  range = {
+                    start = {line = (f.line or 1) - 1, character = (f.column or 1) - 1},
+                    ["end"] = {line = (f.line or 1) - 1, character = (f.column or 1) - 1 + #field_info.field_name},
+                  },
+                }
+              end
+            end
+          end
+        end
+      end
+    end
+
     -- Check if we're on a declaration itself
     local decl = scope_mod.get_declaration(analysis, line, col)
     if decl then
@@ -56,12 +150,6 @@ function definition.compute(uri, position)
   end
 
   local decl = ref.declaration
-
-  -- If the reference is a field access (M.foo), check if M is a require() result
-  if not decl and ref.node then
-    -- This name is unresolved, but maybe it's a property of a module
-    -- We need to look at the parent context -- check if this is a field key
-  end
 
   if decl then
     -- Check if the declaration is a require() variable and we're accessing a field

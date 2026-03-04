@@ -16,9 +16,13 @@ import { LusWasm } from "./wasm";
  * Parse Content-Length-delimited LSP messages from raw output.
  * The WASM host captures all io.write output which may contain
  * multiple LSP messages (e.g., response + publishDiagnostics notification).
+ *
+ * Content-Length is in bytes (UTF-8), but JavaScript strings are UTF-16.
+ * We use TextEncoder to find the correct character boundary for each body.
  */
 function parseLspMessages(raw: string): any[] {
   const messages: any[] = [];
+  const encoder = new TextEncoder();
   let pos = 0;
 
   while (pos < raw.length) {
@@ -26,20 +30,39 @@ function parseLspMessages(raw: string): any[] {
     const headerMatch = raw.substring(pos).match(/Content-Length:\s*(\d+)\r?\n\r?\n/);
     if (!headerMatch) break;
 
-    const contentLength = parseInt(headerMatch[1], 10);
-    const bodyStart = pos + headerMatch[0].length;
-    const bodyEnd = bodyStart + contentLength;
+    const contentLengthBytes = parseInt(headerMatch[1], 10);
+    const bodyStartChar = pos + headerMatch[0].length;
 
-    if (bodyEnd > raw.length) break;
+    // Walk characters from bodyStart, counting UTF-8 bytes, until we've
+    // consumed contentLengthBytes. This correctly handles multi-byte chars.
+    let bytesConsumed = 0;
+    let bodyEndChar = bodyStartChar;
+    while (bodyEndChar < raw.length && bytesConsumed < contentLengthBytes) {
+      const code = raw.charCodeAt(bodyEndChar);
+      if (code <= 0x7f) {
+        bytesConsumed += 1;
+      } else if (code <= 0x7ff) {
+        bytesConsumed += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff) {
+        // High surrogate — together with the next low surrogate = 4 UTF-8 bytes
+        bytesConsumed += 4;
+        bodyEndChar++; // skip low surrogate
+      } else {
+        bytesConsumed += 3;
+      }
+      bodyEndChar++;
+    }
 
-    const body = raw.substring(bodyStart, bodyEnd);
+    if (bytesConsumed < contentLengthBytes) break;
+
+    const body = raw.substring(bodyStartChar, bodyEndChar);
     try {
       messages.push(JSON.parse(body));
     } catch {
       // Skip malformed messages
     }
 
-    pos = bodyEnd;
+    pos = bodyEndChar;
   }
 
   return messages;
@@ -109,6 +132,29 @@ class WasmMessageWriter extends AbstractMessageWriter implements MessageWriter {
   async write(msg: Message): Promise<void> {
     try {
       const json = JSON.stringify(msg);
+      // Log document-affecting requests
+      const method = (msg as any).method;
+      if (method === "textDocument/didOpen") {
+        const text = (msg as any).params?.textDocument?.text ?? "";
+        const lines = text.split("\n");
+        console.log(`[lus-lsp] didOpen: ${lines.length} lines, ${text.length} chars`);
+      } else if (method === "textDocument/didChange") {
+        const changes = (msg as any).params?.contentChanges;
+        if (changes) {
+          const ver = (msg as any).params?.textDocument?.version ?? "?";
+          console.log(`[lus-lsp] didChange v${ver}: ${changes.length} change(s)`);
+          for (let ci = 0; ci < changes.length; ci++) {
+            const c = changes[ci];
+            if (c.range) {
+              const esc = (c.text ?? "").replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+              console.log(`  [${ci}] L${c.range.start.line + 1}:${c.range.start.character + 1}–L${c.range.end.line + 1}:${c.range.end.character + 1} text="${esc.length > 60 ? esc.slice(0, 60) + "..." : esc}"`);
+            } else {
+              const lines = (c.text ?? "").split("\n");
+              console.log(`  [${ci}] full: ${lines.length} lines, ${(c.text ?? "").length} chars`);
+            }
+          }
+        }
+      }
       const rawOutput = this.wasm.handleMessage(this.state, json);
 
       if (rawOutput && rawOutput.length > 0) {
@@ -122,6 +168,38 @@ class WasmMessageWriter extends AbstractMessageWriter implements MessageWriter {
         // Parse all LSP messages from the output
         const messages = parseLspMessages(rawOutput);
         for (const message of messages) {
+          // Log semantic token responses for debugging
+          if (
+            (message as any).result?.data &&
+            Array.isArray((message as any).result.data)
+          ) {
+            const data = (message as any).result.data as number[];
+            const typeNames = [
+              "variable", "parameter", "function", "method",
+              "keyword", "string", "number", "comment",
+              "operator", "property", "enum", "enumMember",
+            ];
+            console.log(
+              `[lus-semtok] ${data.length / 5} tokens, raw data length: ${data.length}`,
+            );
+            let prevLine = 0,
+              prevCol = 0;
+            for (let i = 0; i < data.length; i += 5) {
+              const dLine = data[i],
+                dCol = data[i + 1],
+                len = data[i + 2],
+                type = data[i + 3],
+                mods = data[i + 4];
+              const absLine = prevLine + dLine;
+              const absCol = dLine === 0 ? prevCol + dCol : dCol;
+              prevLine = absLine;
+              prevCol = absCol;
+              const tname = typeNames[type] || `type${type}`;
+              console.log(
+                `  [${i / 5}] L${absLine + 1}:${absCol + 1} len=${len} ${tname} mods=${mods}`,
+              );
+            }
+          }
           this.reader.push(message as Message);
         }
       }

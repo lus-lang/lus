@@ -4,24 +4,26 @@ local document = require("lus-language.document")
 
 local format = {}
 
--- Format a document and return a TextEdit array for the LSP response.
--- Returns a single TextEdit replacing the entire document, or an empty
--- array if the code cannot be formatted (e.g., syntax error).
-function format.compute(uri, options)
+-- Internal: format the full document and return (edits, err).
+-- On success: ({TextEdit}, nil) or ({}, nil) if no change needed.
+-- On failure: (nil, error_message).
+local function format_document(uri, options)
   local doc = document.get(uri)
-  if not doc then return {} end
+  if not doc then return nil, "document not found" end
 
   local indent = options and options.tabSize or 4
   local ok, formatted = catch debug.format(doc.text, uri, indent)
 
-  if not ok or not formatted then
-    -- Can't format broken code; return no edits
-    return {}
+  if not ok then
+    return nil, formatted or "format error"
+  end
+  if not formatted then
+    return nil, "format error"
   end
 
   -- No change needed
   if formatted == doc.text then
-    return {}
+    return {}, nil
   end
 
   -- Compute end position from the line index
@@ -41,7 +43,18 @@ function format.compute(uri, options)
       },
       newText = formatted,
     },
-  }
+  }, nil
+end
+
+-- Format a document and return (edits, err).
+function format.compute(uri, options)
+  return format_document(uri, options)
+end
+
+-- Range-format a document and return (edits, err).
+-- Formats the full document (LSP spec permits edits beyond the requested range).
+function format.compute_range(uri, range, options)
+  return format_document(uri, options)
 end
 
 return format

@@ -1,0 +1,53 @@
+global require, ipairs, pairs, string, io, assert, print, pledge, tostring, table
+
+pledge("load", "fs:read=./*")
+
+local document = require("lus-language.document")
+local ast_mod = require("lus-language.analysis.ast")
+local linting = require("lus-language.analysis.linting")
+local framework = require("lus-tests.framework")
+local tests = framework.new("lsp-lint-h1")
+
+-- All H1 test files (mirrors meson.build h1_tests)
+local h1_files = {
+  "enum", "errors", "from", "ifassign", "whileassign", "optchain",
+  "bitwise", "math", "strings", "attrib", "calls", "catchstat",
+  "closure", "constructs", "coroutine", "events", "gc", "goto",
+  "literals", "locals", "nextvar", "pm", "sort", "tpack",
+  "transcode", "utf8", "vararg", "db", "big", "bwcoercion",
+  "cstack", "gengc", "memerr", "json", "network", "worker",
+  "parse", "slices", "groups", "vectors", "cloning", "pledge",
+  "runtime-attrs", "doexpr", "interp", "lsp-unit", "lsp-integration",
+}
+
+tests:describe("No false 'Undefined global' warnings")
+
+for _, name in ipairs(h1_files) do
+  tests:it("lus-tests/h1/" .. name .. ".lus", function()
+    local path = "lus-tests/h1/" .. name .. ".lus"
+    local f = io.open(path, "r")
+    assert(f, "cannot open " .. path)
+    local source = f:read("*a")
+    f:close()
+
+    local uri = "file:///lint-test/" .. name .. ".lus"
+    document.open(uri, 1, source)
+    ast_mod.parse(uri)
+    local diagnostics = linting.compute(uri)
+    document.close(uri)
+
+    -- Collect "Undefined global" warnings
+    local false_positives = {}
+    for _, d in ipairs(diagnostics) do
+      if string.find(d.message, "Undefined global") then
+        false_positives[#false_positives + 1] = d.message
+            .. " (line " .. tostring(d.range.start.line + 1) .. ")"
+      end
+    end
+
+    tests:assert_equal(#false_positives, 0,
+      path .. ": " .. table.concat(false_positives, "; "))
+  end)
+end
+
+tests:finish()

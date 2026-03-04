@@ -126,6 +126,10 @@ LusState *lus_create(void) {
   /* Open all standard libraries */
   luaL_openlibs(state->L);
 
+  /* Set package.path so embedded lus-language modules are found via VFS */
+  luaL_dostring(state->L,
+                "package.path = '/?.lus;/?/init.lus;' .. package.path");
+
   /* Override print to capture output */
   lua_pushlightuserdata(state->L, state);
   lua_pushcclosure(state->L, wasm_print, 1);

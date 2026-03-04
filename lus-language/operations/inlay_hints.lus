@@ -25,10 +25,14 @@ local function get_param_names(func_node, analysis, uri)
   -- Simple name: look up in scope or stdlib
   if func_node.type == "name" then
     local name = func_node.value
-    -- Check stdlib signatures
+    -- Check stdlib signatures (extract param names from typed entries)
     local stdlib = sig_mod.STDLIB_SIGNATURES
     if stdlib and stdlib[name] then
-      return stdlib[name]
+      local names = {}
+      for _, p in ipairs(stdlib[name]) do
+        names[#names + 1] = p.n
+      end
+      return names
     end
     -- Check scope for user-defined function
     if analysis then
@@ -60,7 +64,11 @@ local function get_param_names(func_node, analysis, uri)
       local full = tname .. "." .. fname
       local stdlib = sig_mod.STDLIB_SIGNATURES
       if stdlib and stdlib[full] then
-        return stdlib[full]
+        local names = {}
+        for _, p in ipairs(stdlib[full]) do
+          names[#names + 1] = p.n
+        end
+        return names
       end
       -- Check module exports
       if analysis then
@@ -104,18 +112,28 @@ local function collect_call_hints(node, analysis, uri, hints)
   if not params or #params == 0 then return end
   if not node.args then return end
 
+  -- Method calls (obj:method(a, b)) implicitly pass self as first param,
+  -- so skip the first parameter in the hints
+  local param_offset = 0
+  if node.type == "methodcall" then
+    param_offset = 1
+  end
+
+  local effective_params = #params - param_offset
+
   -- Skip single-arg calls to common functions (print, error, type, etc.)
-  if #node.args == 1 and #params == 1 then
+  if #node.args == 1 and effective_params == 1 then
     return
   end
   -- Skip vararg-only functions
-  if #params == 1 and params[1] == "..." then
+  if effective_params == 1 and params[1 + param_offset] == "..." then
     return
   end
 
   for i, arg in ipairs(node.args) do
-    if i <= #params then
-      local pname = params[i]
+    local pi = i + param_offset
+    if pi <= #params then
+      local pname = params[pi]
       if pname and pname ~= "..." and not arg_matches_param(arg, pname) then
         hints[#hints + 1] = {
           position = {

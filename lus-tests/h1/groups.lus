@@ -170,4 +170,36 @@ tests:it("group overwriting multiple fields", function()
     assert(z.c == 300)
 end)
 
+-- from deconstruction on group
+
+tests:it("from deconstruction on group", function()
+    local player <group> = {
+        name = "Hero",
+        health = 100,
+        position <group> = { x = 0, y = 0 }
+    }
+    local name from player
+    assert(name == "Hero")
+end)
+
+tests:it("from multiple fields from group", function()
+    local player <group> = {
+        name = "Hero",
+        health = 100
+    }
+    local name, health from player
+    assert(name == "Hero" and health == 100)
+end)
+
+tests:it("if-from with group", function()
+    local player <group> = {
+        name = "Hero",
+        health = 100
+    }
+    if name, health from player then
+        assert(name == "Hero")
+        assert(health == 100)
+    end
+end)
+
 tests:finish()

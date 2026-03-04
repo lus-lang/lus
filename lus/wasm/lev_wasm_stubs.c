@@ -118,6 +118,12 @@ int luaopen_network(lua_State *L) {
   return 0; /* Network not available in WASM */
 }
 
+/* Worker stubs */
+int luaopen_worker(lua_State *L) {
+  (void)L;
+  return 0; /* Workers not available in WASM */
+}
+
 /* Bundle stubs - bundles not supported in WASM */
 #include "lbundle.h"
 LusBundle *g_bundle = NULL;

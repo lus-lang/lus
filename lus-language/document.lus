@@ -21,15 +21,15 @@ function store.open(uri, version, text)
 end
 
 -- Apply incremental changes to a document (textDocument/didChange)
--- Changes must be applied in reverse order to preserve earlier offsets.
+-- Per the LSP spec, changes are sequential: each change is relative
+-- to the document state produced by the previous change.
 function store.change(uri, version, changes)
   local doc = documents[uri]
   if not doc then return end
 
   doc.version = version
 
-  -- Apply changes in reverse order to keep offsets valid
-  for i = #changes, 1, -1 do
+  for i = 1, #changes do
     local change = changes[i]
     doc.text = position.apply_edit(
       doc.text, change.range, change.text, doc.line_index
@@ -78,6 +78,14 @@ function store.get_ast(uri)
   local doc = documents[uri]
   if not doc then return nil end
   return doc.ast or doc.last_good_ast
+end
+
+-- Get the current AST only (no stale fallback).
+-- Returns nil if the latest parse failed.
+function store.get_current_ast(uri)
+  local doc = documents[uri]
+  if not doc then return nil end
+  return doc.ast
 end
 
 -- Return a list of all open document URIs

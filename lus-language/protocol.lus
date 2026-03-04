@@ -59,6 +59,7 @@ function protocol.server_capabilities()
     },
     documentSymbolProvider = true,
     documentFormattingProvider = true,
+    documentRangeFormattingProvider = true,
     semanticTokensProvider = {
       legend = {
         tokenTypes = {
@@ -75,7 +76,10 @@ function protocol.server_capabilities()
     definitionProvider = true,
     referencesProvider = true,
     hoverProvider = true,
-    renameProvider = true,
+    renameProvider = {prepareProvider = true},
+    documentHighlightProvider = true,
+    selectionRangeProvider = true,
+    codeActionProvider = {codeActionKinds = {"quickfix"}},
     completionProvider = {
       triggerCharacters = {".", ":"},
     },

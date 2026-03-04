@@ -216,4 +216,46 @@ tests:it("regular assignment then from", function()
     assert(x == 10 and y == 20 and z == 30)
 end)
 
+-- from + group tests
+
+tests:it("local from group source", function()
+    local p <group> = { x = 10, y = 20, z = 30 }
+    local x, y from p
+    assert(x == 10 and y == 20)
+end)
+
+tests:it("local from group single field", function()
+    local cfg <group> = { host = "localhost", port = 8080 }
+    local host from cfg
+    assert(host == "localhost")
+end)
+
+tests:it("local from group all fields", function()
+    local p <group> = { a = 1, b = 2, c = 3 }
+    local a, b, c from p
+    assert(a == 1 and b == 2 and c == 3)
+end)
+
+tests:it("bare assignment from group", function()
+    local g <group> = { x = 100, y = 200 }
+    local x, y = 0, 0
+    x, y from g
+    assert(x == 100 and y == 200)
+end)
+
+tests:it("if-from with group source", function()
+    local p <group> = { ok = true, value = 42 }
+    if ok, value from p then
+        assert(ok == true)
+        assert(value == 42)
+    end
+end)
+
+tests:it("local from group field mutation independent", function()
+    local p <group> = { x = 10, y = 20 }
+    local x from p
+    p.x = 999
+    assert(x == 10) -- x was copied, not aliased
+end)
+
 tests:finish()

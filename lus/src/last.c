@@ -325,6 +325,13 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     if (node->u.func.name != NULL) {
       lua_pushstring(L, getstr(node->u.func.name));
       lua_setfield(L, -2, "name");
+      /* Serialize the name position if available */
+      if (node->u.func.nameline > 0) {
+        lua_pushinteger(L, node->u.func.nameline);
+        lua_setfield(L, -2, "nameline");
+        lua_pushinteger(L, node->u.func.namecolumn);
+        lua_setfield(L, -2, "namecolumn");
+      }
     }
     /* Serialize function name expression (for a.b.c:method paths) */
     if (node->u.func.nameexpr != NULL) {
@@ -345,6 +352,7 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     break;
 
   case AST_IF:
+  case AST_ELSEIF:
     nodetotable(L, node->u.ifstat.cond);
     lua_setfield(L, -2, "cond");
     /* then/elseif/else statements are in children array */
@@ -440,6 +448,10 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
   case AST_CATCHSTAT:
     nodetotable(L, node->u.catchnode.expr);
     lua_setfield(L, -2, "expr");
+    if (node->u.catchnode.handler) {
+      nodetotable(L, node->u.catchnode.handler);
+      lua_setfield(L, -2, "handler");
+    }
     break;
 
   case AST_OPTCHAIN:
@@ -913,6 +925,10 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
       fprintf(f, ",\n%*s\"expr\": ", indent + 2, "");
       emit_json_node(f, node->u.catchnode.expr, 0);
     }
+    if (node->u.catchnode.handler) {
+      fprintf(f, ",\n%*s\"handler\": ", indent + 2, "");
+      emit_json_node(f, node->u.catchnode.handler, 0);
+    }
     break;
 
   case AST_OPTCHAIN:
@@ -1328,6 +1344,8 @@ static void collect_names(lua_State *L, LusAstNode *node, const char ***names,
   case AST_CATCHEXPR:
   case AST_CATCHSTAT:
     collect_names(L, node->u.catchnode.expr, names, count, cap);
+    if (node->u.catchnode.handler)
+      collect_names(L, node->u.catchnode.handler, names, count, cap);
     break;
   case AST_OPTCHAIN:
     collect_names(L, node->u.optchain.base, names, count, cap);
@@ -1612,6 +1630,8 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node,
   case AST_CATCHEXPR:
   case AST_CATCHSTAT:
     analyze_node(as, node->u.catchnode.expr, node);
+    if (node->u.catchnode.handler)
+      analyze_node(as, node->u.catchnode.handler, node);
     break;
 
   case AST_OPTCHAIN:

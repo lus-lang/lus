@@ -32,17 +32,23 @@ print()
 -- Range clamping: keep values within bounds
 local function clamped(min, max)
     return function(name, value)
-        if value < min then return min end
-        if value > max then return max end
+        if value < min then
+            return min
+        end
+        if value > max then
+            return max
+        end
         return value
     end
 end
 
 local volume <clamped(0, 100)> = 50
 print("Initial volume:", volume)
-volume = 150  -- gets clamped to 100
+volume = 150
+-- gets clamped to 100
 print("After setting to 150:", volume)
-volume = -20  -- gets clamped to 0
+volume = -20
+-- gets clamped to 0
 print("After setting to -20:", volume)
 print()
 
@@ -52,21 +58,26 @@ local function rounded(name, value)
 end
 
 local pixels <rounded> = 10.7
-print("Rounded pixels:", pixels)  --> 11
+print("Rounded pixels:", pixels)
+-- > 11
 pixels = 5.2
-print("Rounded again:", pixels)   --> 5
+print("Rounded again:", pixels)
+-- > 5
 print()
 
 -- Multiple attributes: chain transformations
 local function positive(name, value)
     if value < 0 then
-        return -value  -- make positive
+        return -value
     end
+    -- make positive
+
     return value
 end
 
 local distance <positive, rounded> = -15.7
-print("Positive and rounded:", distance)  --> 16
+print("Positive and rounded:", distance)
+-- > 16
 print()
 
 -- Practical: observable state with change notification
@@ -95,5 +106,6 @@ end)
 
 local health <observable> = 100
 health = 50
-health = 15  -- triggers warning
+health = 15
+-- triggers warning
 print("Health:", health)

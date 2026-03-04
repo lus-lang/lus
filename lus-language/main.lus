@@ -19,6 +19,10 @@ local doc_signature = require("lus-language.operations.signature")
 local doc_folding = require("lus-language.operations.folding")
 local doc_inlay = require("lus-language.operations.inlay_hints")
 local ws_symbols = require("lus-language.operations.workspace_symbols")
+local doc_highlight = require("lus-language.operations.highlight")
+local doc_prepare_rename = require("lus-language.operations.prepare_rename")
+local doc_selection = require("lus-language.operations.selection_range")
+local doc_code_action = require("lus-language.operations.code_action")
 
 local log = transport.log
 
@@ -109,7 +113,20 @@ end
 -- textDocument/formatting
 handlers["textDocument/formatting"] = function(msg)
   local uri = msg.params.textDocument.uri
-  local edits = doc_format.compute(uri, msg.params.options)
+  local edits, err = doc_format.compute(uri, msg.params.options)
+  if err then
+    return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. err)
+  end
+  return protocol.make_response(msg.id, edits)
+end
+
+-- textDocument/rangeFormatting
+handlers["textDocument/rangeFormatting"] = function(msg)
+  local uri = msg.params.textDocument.uri
+  local edits, err = doc_format.compute_range(uri, msg.params.range, msg.params.options)
+  if err then
+    return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. err)
+  end
   return protocol.make_response(msg.id, edits)
 end
 
@@ -181,6 +198,34 @@ end
 handlers["workspace/symbol"] = function(msg)
   local query = msg.params.query or ""
   local result = ws_symbols.compute(query)
+  return protocol.make_response(msg.id, result)
+end
+
+-- textDocument/documentHighlight
+handlers["textDocument/documentHighlight"] = function(msg)
+  local uri = msg.params.textDocument.uri
+  local result = doc_highlight.compute(uri, msg.params.position)
+  return protocol.make_response(msg.id, result)
+end
+
+-- textDocument/prepareRename
+handlers["textDocument/prepareRename"] = function(msg)
+  local uri = msg.params.textDocument.uri
+  local result = doc_prepare_rename.compute(uri, msg.params.position)
+  return protocol.make_response(msg.id, result)
+end
+
+-- textDocument/selectionRange
+handlers["textDocument/selectionRange"] = function(msg)
+  local uri = msg.params.textDocument.uri
+  local result = doc_selection.compute(uri, msg.params.positions)
+  return protocol.make_response(msg.id, result)
+end
+
+-- textDocument/codeAction
+handlers["textDocument/codeAction"] = function(msg)
+  local uri = msg.params.textDocument.uri
+  local result = doc_code_action.compute(uri, msg.params.range, msg.params.context)
   return protocol.make_response(msg.id, result)
 end
 

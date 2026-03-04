@@ -1,8 +1,8 @@
 {
   "name": "lus",
   "displayName": "Lus",
-  "description": "Language support for Lus — syntax highlighting, diagnostics, completion, formatting, and more.",
-  "version": "0.1.0",
+  "description": "Language support for Lus with syntax highlighting, diagnostics, completion, and formatting.",
+  "version": "1.5.0",
   "publisher": "lus",
   "license": "0BSD",
   "repository": {
@@ -44,6 +44,7 @@
     ]
   },
   "scripts": {
+    "prebuild": "node ../lus-spec/build-lsp.js && cp ../lus-textmate/lus.tmLanguage.json syntaxes/lus.tmLanguage.json",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package"

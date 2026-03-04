@@ -47,3 +47,12 @@ print("Position:", player.position.x, player.position.y)
 if result <group> = {ok = true, value = 42} then
     print("Result:", result.ok, result.value)
 end
+
+-- Deconstruct group fields with 'from'
+local name from player
+print("Extracted name:", name)
+
+-- 'from' with if-condition
+if name from player then
+    print("Player name:", name)
+end

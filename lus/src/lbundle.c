@@ -267,8 +267,20 @@ LusBundle *lusB_load(void) {
   **     size:     u32 LE
   */
   p = index_data;
+  unsigned char *end = index_data + index_size;
+
+#define BUNDLE_CHECK(cond)    \
+  do {                        \
+    if (!(cond)) {            \
+      free(index_data);       \
+      lusB_free(bundle);      \
+      fclose(f);              \
+      return NULL;            \
+    }                         \
+  } while (0)
 
   /* Version */
+  BUNDLE_CHECK(p + 1 <= end);
   bundle->version = *p++;
   if (bundle->version != LUSB_VERSION) {
     free(index_data);
@@ -278,6 +290,7 @@ LusBundle *lusB_load(void) {
   }
 
   /* num_args, num_files */
+  BUNDLE_CHECK(p + 4 <= end);
   bundle->num_args = (int)read_u16(p);
   p += 2;
   bundle->num_files = (int)read_u16(p);
@@ -291,22 +304,20 @@ LusBundle *lusB_load(void) {
   }
 
   /* entrypoint */
+  BUNDLE_CHECK(p + 2 <= end);
   len = read_u16(p);
   p += 2;
-  if (len >= LUSB_MAX_NAME) {
-    free(index_data);
-    lusB_free(bundle);
-    fclose(f);
-    return NULL;
-  }
+  BUNDLE_CHECK(len < LUSB_MAX_NAME && p + len <= end);
   memcpy(bundle->entrypoint, p, len);
   bundle->entrypoint[len] = '\0';
   p += len;
 
   /* args */
   for (i = 0; i < bundle->num_args; i++) {
+    BUNDLE_CHECK(p + 2 <= end);
     len = read_u16(p);
     p += 2;
+    BUNDLE_CHECK(p + len <= end);
     bundle->args[i] = (char *)malloc(len + 1);
     if (bundle->args[i] == NULL) {
       free(index_data);
@@ -330,14 +341,10 @@ LusBundle *lusB_load(void) {
   }
 
   for (i = 0; i < bundle->num_files; i++) {
+    BUNDLE_CHECK(p + 2 <= end);
     len = read_u16(p);
     p += 2;
-    if (len >= LUSB_MAX_NAME) {
-      free(index_data);
-      lusB_free(bundle);
-      fclose(f);
-      return NULL;
-    }
+    BUNDLE_CHECK(len < LUSB_MAX_NAME && p + len + 8 <= end);
     memcpy(bundle->files[i].name, p, len);
     bundle->files[i].name[len] = '\0';
     p += len;
@@ -347,6 +354,8 @@ LusBundle *lusB_load(void) {
     bundle->files[i].size = (size_t)read_u32(p);
     p += 4;
   }
+
+#undef BUNDLE_CHECK
 
   free(index_data);
 

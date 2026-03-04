@@ -1,0 +1,60 @@
+---
+import { getCollection } from "astro:content"
+
+const manual = await getCollection("manual")
+const acquis = manual
+  .filter((p) => p.data.acquis && p.id !== "acquis-0")
+  .toSorted((a, b) => a.data.order - b.data.order)
+
+const stable = acquis.filter((p) => !p.data.draft)
+const unstable = acquis.filter((p) => p.data.draft)
+---
+
+<div class="acquis-columns">
+  <div>
+    {unstable.length > 0 && <h3>Stable</h3>}
+    <ul>
+      {
+        stable.map((p) => (
+          <li>
+            <a href={`/manual/${p.id}`}>{p.data.title}</a>
+            {p.data.shortdesc && ` ${p.data.shortdesc}`}
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+  {
+    unstable.length > 0 && (
+      <div>
+        <h3>Unstable</h3>
+        <ul>
+          {unstable.map((p) => (
+            <li>
+              <a href={`/manual/${p.id}`}>{p.data.title}</a>
+              {p.data.shortdesc && `: ${p.data.shortdesc}`}
+            </li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+</div>
+
+<style>
+  @reference "../styles/global.css";
+
+  .acquis-columns {
+    @apply flex gap-8;
+
+    > div {
+      @apply flex-1;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .acquis-columns {
+      @apply flex-col;
+    }
+  }
+</style>

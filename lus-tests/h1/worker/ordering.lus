@@ -1,0 +1,6 @@
+-- ordering.lus - Worker test script that sends numbered messages for FIFO test
+global worker
+
+for i = 1, 10 do
+    worker.message(i)
+end
