@@ -1,0 +1,74 @@
+name: Publish VSCode Extension
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-vscode:
+    name: Publish Extension
+    if: "!github.event.release.prerelease"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download WASM from release
+        run: |
+          mkdir -p lus-vscode/wasm
+          cd lus-vscode/wasm
+          gh release download "${{ github.event.release.tag_name }}" \
+            --pattern "lus.node.js" --pattern "lus.wasm" \
+            --repo "${{ github.repository }}" || {
+            echo "WASM assets not found in release, building from source..."
+            cd ../../lus/wasm
+            ./build.sh node
+            cp dist/lus.node.js ../../lus-vscode/wasm/lus.node.js
+            cp dist/lus.wasm ../../lus-vscode/wasm/lus.wasm
+          }
+          # Extension expects lus.js, not lus.node.js
+          [ -f lus.node.js ] && mv lus.node.js lus.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare language server files
+        run: cp -r lus-language lus-vscode/lus-language
+
+      - name: Set version from release tag
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          cd lus-vscode
+          npm version "$VERSION" --no-git-tag-version
+
+      - name: Build extension
+        run: |
+          cd lus-vscode
+          npm ci
+          npm run prebuild
+          npm run build
+
+      - name: Package extension
+        run: |
+          cd lus-vscode
+          npx vsce package
+          echo "VSIX=$(ls *.vsix)" >> $GITHUB_ENV
+
+      - name: Publish to Open VSX
+        run: npx ovsx publish "lus-vscode/${{ env.VSIX }}"
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+      - name: Upload .vsix to release
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "lus-vscode/${{ env.VSIX }}" \
+            --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

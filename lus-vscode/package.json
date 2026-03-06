@@ -2,8 +2,9 @@
   "name": "lus",
   "displayName": "Lus",
   "description": "Language support for Lus with syntax highlighting, diagnostics, completion, and formatting.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "publisher": "lus",
+  "icon": "icon.png",
   "license": "0BSD",
   "repository": {
     "type": "git",
