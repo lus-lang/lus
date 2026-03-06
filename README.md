@@ -21,6 +21,7 @@ This is a monorepository containing the following projects:
 - [**`/lus-examples`**](https://github.com/lus-lang/lus/tree/main/lus-examples): Examples of Lus syntax
 - [**`/lus-language`**](https://github.com/lus-lang/lus/tree/main/lus-language): Language server for Lus
 - [**`/lus-vscode`**](https://github.com/lus-lang/lus/tree/main/lus-vscode): VSCode extension for Lus
+- [**`/lus-spec`**](https://github.com/lus-lang/lus/tree/main/lus-spec): Lus language specification
 
 ## License
 

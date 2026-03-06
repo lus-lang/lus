@@ -1,5 +1,6 @@
-# Meson build directory
+# Meson build directories
 build/
+build-*/
 builddir/
 .cache
 

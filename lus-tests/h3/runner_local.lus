@@ -43,8 +43,10 @@ if not is_linux then
     os.exit(0)
 end
 
--- Path to the built binary (relative to project root)
-local lus_bin = "/src/lus/build/lus"
+-- Derive the container path from the interpreter path.
+-- arg[-1] is relative to the project root (e.g. "lus/build-linux-glibc/lus"),
+-- inside the container the project is mounted at /src.
+local lus_bin = "/src/" .. arg[-1]
 
 -- Helper to run test in container
 local function run_test_in_container(test_file)

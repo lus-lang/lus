@@ -1993,8 +1993,13 @@ static void enumexpr(LexState *ls, expdesc *v) {
     /* Add the enum value as a constant */
     setenumvalue(L, &tv, e);
     /* Use addk directly - enums are unique, no caching */
-    luaM_growvector(L, fs->f->k, fs->nk, fs->f->sizek, TValue, MAXARG_Ax,
-                    "constants");
+    {
+      int oldsize = fs->f->sizek;
+      luaM_growvector(L, fs->f->k, fs->nk, fs->f->sizek, TValue, MAXARG_Ax,
+                      "constants");
+      while (oldsize < fs->f->sizek)
+        setnilvalue(&fs->f->k[oldsize++]);
+    }
     setobj(L, &fs->f->k[fs->nk], &tv);
     k = fs->nk++;
     luaC_barrier(L, fs->f, &tv);

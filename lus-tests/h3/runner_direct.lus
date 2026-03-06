@@ -19,18 +19,8 @@ end
 
 print("\27[32mH3: Running system tests directly (CI Mode)...\27[0m")
 
-local is_windows = (package.config:sub(1,1) == "\\")
--- Default to build directory binary if executing from root
-local lus_bin = is_windows and "lus\\build\\lus.exe" or "lus/build/lus"
-
--- Check if binary exists, otherwise assume in PATH or user provided
-local f = io.open(lus_bin, "r")
-if f then 
-    f:close()
-else
-    -- Fallback to assuming 'lus' is in PATH if build path not found
-    lus_bin = "lus"
-end
+-- Use the same interpreter that is running this script
+local lus_bin = arg[-1]
 
 -- Helper to run a test file
 local function run_test(file)

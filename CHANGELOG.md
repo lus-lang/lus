@@ -2,7 +2,7 @@
 
 ## 1.5.0
 
-**Release date:** March 4, 2026
+**Release date:** March 6, 2026
 
 - Added string interpolation.
 - Added runtime attributes for altering local assignments.
@@ -16,6 +16,7 @@
 - Fixed integer overflow in `deser_read` bounds check that could allow out-of-bounds reads with large `size_t` values.
 - Fixed negative or huge table counts in worker deserialization being passed to `lua_createtable` unchecked.
 - Fixed missing `luaL_checkstack` in worker deserialization that could exhaust the Lua stack on deeply nested tables.
+- Fixed uninitialized constant slots in enum parsing that could cause a GC crash when `luaM_growvector` expanded the constants array.
 - Fixed missing bounds checking in bundle index parser.
 - `adjustlocalvars` now validates the register limit before assignment.
 

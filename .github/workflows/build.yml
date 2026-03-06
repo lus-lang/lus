@@ -81,15 +81,15 @@ jobs:
       - name: Build (debug)
         run: |
           cd lus
-          meson setup build --buildtype=debug
-          meson compile -C build 'lus:executable'
+          meson setup build-${{ matrix.platform }} --buildtype=debug
+          meson compile -C build-${{ matrix.platform }} 'lus:executable'
 
       - name: Test
-        run: meson test -C lus/build -v --print-errorlogs ${{ matrix.suites }}
+        run: meson test -C lus/build-${{ matrix.platform }} -v --print-errorlogs ${{ matrix.suites }}
 
       - name: Print test log on failure
         if: failure()
-        run: cat lus/build/meson-logs/testlog.txt
+        run: cat lus/build-${{ matrix.platform }}/meson-logs/testlog.txt
 
       - name: Set result output
         id: result
@@ -116,18 +116,18 @@ jobs:
       - name: Build with sanitizers
         run: |
           cd lus
-          meson setup build --buildtype=debug -Db_sanitize=address,undefined -Db_lundef=false
-          meson compile -C build lus:executable
+          meson setup build-sanitize --buildtype=debug -Db_sanitize=address,undefined -Db_lundef=false
+          meson compile -C build-sanitize lus:executable
 
       - name: Test
         env:
           ASAN_OPTIONS: detect_leaks=0:print_stacktrace=1:symbolize=1
           UBSAN_OPTIONS: print_stacktrace=1:symbolize=1
-        run: meson test -C lus/build -v --print-errorlogs --maxfail=1 --suite h1 --suite h2 --suite h3-ci --suite h4
+        run: meson test -C lus/build-sanitize -v --print-errorlogs --maxfail=1 --suite h1 --suite h2 --suite h3-ci --suite h4
 
       - name: Print test log on failure
         if: failure()
-        run: cat lus/build/meson-logs/testlog.txt
+        run: cat lus/build-sanitize/meson-logs/testlog.txt
 
   # Platform-specific release builds (only for platforms that passed tests)
   build:
@@ -143,20 +143,20 @@ jobs:
           - platform: linux-glibc
             runner: ubuntu-latest
             artifact: lus-linux
-            artifact_path: lus/build/lus
+            artifact_path: lus/build-linux-glibc/lus
           - platform: linux-musl
             runner: ubuntu-latest
             container: alpine:latest
             artifact: lus-linux-musl
-            artifact_path: lus/build/lus
+            artifact_path: lus/build-linux-musl/lus
           - platform: macos-silicon
             runner: macos-14
             artifact: lus-macos
-            artifact_path: lus/build/lus
+            artifact_path: lus/build-macos-silicon/lus
           - platform: windows
             runner: windows-latest
             artifact: lus-windows
-            artifact_path: lus/build/lus.exe
+            artifact_path: lus/build-windows/lus.exe
 
     steps:
       - name: Install bash (Alpine)
@@ -217,8 +217,8 @@ jobs:
         if: steps.check.outputs.proceed == 'true'
         run: |
           cd lus
-          meson setup build --buildtype=release
-          meson compile -C build 'lus:executable'
+          meson setup build-${{ matrix.platform }} --buildtype=release
+          meson compile -C build-${{ matrix.platform }} 'lus:executable'
 
       - name: Upload artifact
         if: steps.check.outputs.proceed == 'true'
