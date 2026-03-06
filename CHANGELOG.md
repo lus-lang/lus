@@ -17,6 +17,7 @@
 - Fixed negative or huge table counts in worker deserialization being passed to `lua_createtable` unchecked.
 - Fixed missing `luaL_checkstack` in worker deserialization that could exhaust the Lua stack on deeply nested tables.
 - Fixed uninitialized constant slots in enum parsing that could cause a GC crash when `luaM_growvector` expanded the constants array.
+- Fixed race condition in worker receive context signaling that could cause a use-after-free when `lib_receive` destroys a stack-allocated context while a worker thread is still accessing it.
 - Fixed missing bounds checking in bundle index parser.
 - `adjustlocalvars` now validates the register limit before assignment.
 

@@ -412,18 +412,19 @@ static void worker_decref(WorkerState *w) {
 
 /*
 ** Signal the receive context if a receiver is waiting.
-** Call with worker mutex already locked. Grabs ctx, then unlocks mutex
-** before signaling to avoid deadlock. Sets ready flag to prevent lost wakeup.
+** Call with worker mutex already locked. Holds w->mutex while signaling
+** ctx to prevent lib_receive from destroying ctx on the stack before we
+** finish accessing it. No deadlock: lib_receive never holds both mutexes.
 */
 static void signal_recv_ctx(WorkerState *w) {
   ReceiveContext *ctx = w->recv_ctx;
-  lus_mutex_unlock(&w->mutex);
   if (ctx) {
     lus_mutex_lock(&ctx->mutex);
     ctx->ready = 1; /* set flag before signal to prevent lost wakeup */
     lus_cond_signal(&ctx->cond);
     lus_mutex_unlock(&ctx->mutex);
   }
+  lus_mutex_unlock(&w->mutex);
 }
 
 /*
@@ -484,16 +485,18 @@ static int worker_lib_message(lua_State *L) {
   lus_mutex_lock(&w->mutex);
   msgqueue_push(&w->outbox, buf.arena, buf.data, buf.size);
   lus_cond_signal(&w->outbox_cond);
-  ReceiveContext *ctx = w->recv_ctx; /* grab before unlocking */
-  lus_mutex_unlock(&w->mutex);
 
-  /* Signal multi-worker select if receiver is waiting */
+  /* Signal multi-worker select if receiver is waiting.
+  ** Hold w->mutex while accessing ctx to prevent lib_receive from
+  ** destroying the stack-allocated ReceiveContext before we finish. */
+  ReceiveContext *ctx = w->recv_ctx;
   if (ctx) {
     lus_mutex_lock(&ctx->mutex);
     ctx->ready = 1; /* set flag before signal to prevent lost wakeup */
     lus_cond_signal(&ctx->cond);
     lus_mutex_unlock(&ctx->mutex);
   }
+  lus_mutex_unlock(&w->mutex);
 
   return 0;
 }
