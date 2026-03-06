@@ -19,11 +19,14 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install publishing tools
+        run: npm install -g @vscode/vsce ovsx
+
       - name: Download WASM from release
         run: |
           mkdir -p lus-vscode/wasm
           cd lus-vscode/wasm
-          gh release download "${{ github.event.release.tag_name }}" \
+          gh release download "$TAG" \
             --pattern "lus.node.js" --pattern "lus.wasm" \
             --repo "${{ github.repository }}" || {
             echo "WASM assets not found in release, building from source..."
@@ -32,20 +35,21 @@ jobs:
             cp dist/lus.node.js ../../lus-vscode/wasm/lus.node.js
             cp dist/lus.wasm ../../lus-vscode/wasm/lus.wasm
           }
-          # Extension expects lus.js, not lus.node.js
           [ -f lus.node.js ] && mv lus.node.js lus.js
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
 
       - name: Prepare language server files
         run: cp -r lus-language lus-vscode/lus-language
 
       - name: Set version from release tag
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${TAG#v}"
           cd lus-vscode
           npm version "$VERSION" --no-git-tag-version --allow-same-version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
 
       - name: Build extension
         run: |
@@ -57,18 +61,19 @@ jobs:
       - name: Package extension
         run: |
           cd lus-vscode
-          npx vsce package
+          vsce package
           echo "VSIX=$(ls *.vsix)" >> $GITHUB_ENV
 
       - name: Publish to Open VSX
-        run: npx ovsx publish "lus-vscode/${{ env.VSIX }}"
+        run: ovsx publish "lus-vscode/${{ env.VSIX }}"
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
       - name: Upload .vsix to release
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "$TAG" \
             "lus-vscode/${{ env.VSIX }}" \
             --repo "${{ github.repository }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}

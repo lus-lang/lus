@@ -11,7 +11,7 @@
     "url": "https://github.com/lus-lang/lus"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.109.0"
   },
   "categories": [
     "Programming Languages",
@@ -48,7 +48,8 @@
     "prebuild": "node ../lus-spec/build-lsp.js && cp ../lus-textmate/lus.tmLanguage.json syntaxes/lus.tmLanguage.json",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package"
+    "package": "vsce package",
+    "publish": "ovsx publish"
   },
   "devDependencies": {
     "@types/node": "^25.2.1",
