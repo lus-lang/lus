@@ -50,7 +50,7 @@ jobs:
       - name: Build extension
         run: |
           cd lus-vscode
-          npm ci
+          npm install
           npm run prebuild
           npm run build
 
