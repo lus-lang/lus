@@ -1,0 +1,96 @@
+---
+order: 7
+title: IDE Setup
+icon: code
+---
+
+Lus has an official extension for VSCode-based editors and a stdio language server that can be integrated into any editor with LSP support.
+
+## VSCode-based editors
+
+The [Lus extension](https://open-vsx.org/extension/lus/lus) provides syntax highlighting, diagnostics, code completion, hover information, go-to-definition, references, formatting, and more. It bundles a WASM build of Lus and therefore does not require a local installation of the language to work.
+
+### VSCodium, Cursor, and Antigravity
+
+Search for `Lus` in the extensions panel and install it directly.
+
+### Visual Studio Code
+
+Microsoft's VSCode uses the Visual Studio Marketplace by default, which does not host the Lus extension. You will need to install it manually:
+
+1. Download the latest `.vsix` file from the [Open VSX page](https://open-vsx.org/extension/lus/lus).
+2. Open VSCode, go to the Extensions panel, click the `...` menu, and select **Install from VSIX...**.
+3. Select the downloaded `.vsix` file.
+
+Alternatively, install from the command line (replace `version` with the version of the downloaded extension):
+
+```bash
+code --install-extension lus-version.vsix
+```
+
+> Each example below requires a local installation of `lus` and the source code's repository cloned as to access `lus-language`.
+
+## Neovim
+
+With [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig):
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+    pattern = "lus",
+    callback = function()
+        vim.lsp.start({
+            name = "lus",
+            cmd = { "lus", "/path/to/lus-language/main.lus" },
+            root_dir = vim.fs.dirname(
+                vim.fs.find({ ".git" }, { upward = true })[1]
+            ),
+        })
+    end,
+})
+```
+
+## Helix
+
+In `languages.toml`:
+
+```toml
+[[language]]
+name = "lus"
+scope = "source.lus"
+file-types = ["lus"]
+language-servers = ["lus-language"]
+
+[language-server.lus-language]
+command = "lus"
+args = ["/path/to/lus-language/main.lus"]
+```
+
+## Sublime Text
+
+With [LSP for Sublime Text](https://github.com/sublimelsp/LSP):
+
+```json
+{
+  "clients": {
+    "lus": {
+      "enabled": true,
+      "command": ["lus", "/path/to/lus-language/main.lus"],
+      "selector": "source.lus"
+    }
+  }
+}
+```
+
+## Emacs
+
+With [lsp-mode](https://github.com/emacs-lsp/lsp-mode):
+
+```elisp
+(with-eval-after-load 'lsp-mode
+  (add-to-list 'lsp-language-id-configuration '(lus-mode . "lus"))
+  (lsp-register-client
+    (make-lsp-client
+      :new-connection (lsp-stdio-connection '("lus" "/path/to/lus-language/main.lus"))
+      :activation-fn (lsp-activate-on "lus")
+      :server-id 'lus-language)))
+```

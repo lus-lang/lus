@@ -331,20 +331,20 @@ print(~0)             --> -1   (all bits set)
 
 Operators are evaluated in the following order, from highest to lowest precedence:
 
-| Precedence | Operators |
-|---|---|
-| 1 | `^` |
-| 2 | unary `not`, `#`, `-`, `~` |
-| 3 | `*`, `/`, `//`, `%` |
-| 4 | `+`, `-` |
-| 5 | `..` |
-| 6 | `<<`, `>>` |
-| 7 | `&` |
-| 8 | `~` |
-| 9 | `\|` |
-| 10 | `<`, `>`, `<=`, `>=`, `~=`, `==` |
-| 11 | `and` |
-| 12 | `or` |
+| Precedence | Operators                        |
+| ---------- | -------------------------------- |
+| 1          | `^`                              |
+| 2          | unary `not`, `#`, `-`, `~`       |
+| 3          | `*`, `/`, `//`, `%`              |
+| 4          | `+`, `-`                         |
+| 5          | `..`                             |
+| 6          | `<<`, `>>`                       |
+| 7          | `&`                              |
+| 8          | `~`                              |
+| 9          | `\|`                             |
+| 10         | `<`, `>`, `<=`, `>=`, `~=`, `==` |
+| 11         | `and`                            |
+| 12         | `or`                             |
 
 Exponentiation (`^`) and concatenation (`..`) are right-associative; all other binary operators are left-associative. Parentheses can be used to override precedence.
 
@@ -979,28 +979,28 @@ Lus uses its own pattern language for string matching, which is lighter than ful
 
 ### Pattern syntax
 
-| Element | Meaning |
-|---|---|
-| `.` | any character |
-| `%a` | letter |
-| `%d` | digit |
-| `%l` | lowercase letter |
-| `%u` | uppercase letter |
-| `%w` | alphanumeric |
-| `%s` | whitespace |
-| `%x` | hexadecimal digit |
-| `%p` | punctuation |
-| `%c` | control character |
-| `%A`, `%D`, ... | complement of the class (non-letter, non-digit, etc.) |
-| `[set]` | custom character class (e.g. `[aeiou]`, `[0-9]`, `[^%s]`) |
-| `*` | 0 or more (greedy) |
-| `+` | 1 or more (greedy) |
-| `-` | 0 or more (lazy) |
-| `?` | 0 or 1 |
-| `^` | anchor to start |
-| `$` | anchor to end |
-| `(...)` | capture |
-| `%bxy` | balanced match between chars x and y |
+| Element         | Meaning                                                   |
+| --------------- | --------------------------------------------------------- |
+| `.`             | any character                                             |
+| `%a`            | letter                                                    |
+| `%d`            | digit                                                     |
+| `%l`            | lowercase letter                                          |
+| `%u`            | uppercase letter                                          |
+| `%w`            | alphanumeric                                              |
+| `%s`            | whitespace                                                |
+| `%x`            | hexadecimal digit                                         |
+| `%p`            | punctuation                                               |
+| `%c`            | control character                                         |
+| `%A`, `%D`, ... | complement of the class (non-letter, non-digit, etc.)     |
+| `[set]`         | custom character class (e.g. `[aeiou]`, `[0-9]`, `[^%s]`) |
+| `*`             | 0 or more (greedy)                                        |
+| `+`             | 1 or more (greedy)                                        |
+| `-`             | 0 or more (lazy)                                          |
+| `?`             | 0 or 1                                                    |
+| `^`             | anchor to start                                           |
+| `$`             | anchor to end                                             |
+| `(...)`         | capture                                                   |
+| `%bxy`          | balanced match between chars x and y                      |
 
 Special characters `( ) . % + - * ? [ ] ^ $` are escaped with `%` (e.g. `%.` matches a literal dot).
 
@@ -1059,7 +1059,7 @@ string.gsub(s, "^%s+", ""):gsub("%s+$", "")
 
 ## The environment
 
-### _ENV and _G
+### \_ENV and \_G
 
 Every chunk in Lus has an implicit upvalue called `_ENV`. Free names (names not bound to any local) are rewritten as `_ENV` lookups: `x` is really `_ENV.x`. By default, `_ENV` points to `_G`, the global table:
 
