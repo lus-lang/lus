@@ -6,6 +6,60 @@ SRC_DIR="$SCRIPT_DIR/../src"
 REPO_ROOT="$SCRIPT_DIR/../.."
 OUT_DIR="$SCRIPT_DIR/dist"
 
+# --- Python version check for Emscripten ---
+MIN_PYTHON="3.10"
+
+find_python() {
+  for py in python3 python; do
+    local bin
+    bin=$(command -v "$py" 2>/dev/null) || continue
+    local ver
+    ver=$("$bin" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || continue
+    if "$bin" -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+      echo "$bin"
+      return 0
+    fi
+  done
+
+  # Check common versioned names
+  for py in python3.13 python3.12 python3.11 python3.10; do
+    local bin
+    bin=$(command -v "$py" 2>/dev/null) || continue
+    echo "$bin"
+    return 0
+  done
+
+  return 1
+}
+
+PYTHON=$(find_python) || {
+  echo "Error: Python >= $MIN_PYTHON is required by Emscripten but was not found."
+  echo "Install it or set EM_PYTHON to point to a compatible interpreter."
+  exit 1
+}
+
+# Export so Emscripten uses the correct Python
+export EM_PYTHON="$PYTHON"
+echo "Using Python: $PYTHON ($($PYTHON --version 2>&1))"
+
+# --- Platform target ---
+# Usage: ./build.sh [web|node|all]
+#   web   - browser target (playground)
+#   node  - Node.js target (VSCode extension)
+#   all   - both (default)
+TARGET="${1:-all}"
+
+case "$TARGET" in
+  web|node|all) ;;
+  *)
+    echo "Usage: $0 [web|node|all]"
+    echo "  web   Build for browsers (playground)"
+    echo "  node  Build for Node.js (VSCode extension)"
+    echo "  all   Build both (default)"
+    exit 1
+    ;;
+esac
+
 mkdir -p "$OUT_DIR"
 
 # Source files (core + libraries, excluding standalone interpreter main)
@@ -61,28 +115,58 @@ SOURCES=(
 echo "Generating LSP stdlib data..."
 node "$REPO_ROOT/lus-spec/build-lsp.js"
 
-echo "Building Lus WASM..."
-
-emcc "${SOURCES[@]}" \
-  -I"$SRC_DIR" \
-  -o "$OUT_DIR/lus.js" \
-  -s MODULARIZE=1 \
-  -s EXPORT_ES6=1 \
-  -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_destroy","_lus_load_lsp","_lus_handle_message","_malloc","_free"]' \
-  -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]' \
-  -s ALLOW_MEMORY_GROWTH=1 \
-  -s ENVIRONMENT='node' \
-  -s NO_EXIT_RUNTIME=1 \
-  --embed-file "$REPO_ROOT/lus-language@/lus-language" \
-  -O2 \
+# Shared emcc flags
+COMMON_FLAGS=(
+  -I"$SRC_DIR"
+  -s MODULARIZE=1
+  -s EXPORT_ES6=1
+  -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_destroy","_lus_load_lsp","_lus_handle_message","_malloc","_free"]'
+  -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
+  -s ALLOW_MEMORY_GROWTH=1
+  -s NO_EXIT_RUNTIME=1
+  --embed-file "$REPO_ROOT/lus-language@/lus-language"
+  -O2
   -DLUA_USE_C89
+)
 
-# Copy to VS Code extension directory
-VSCODE_WASM="$REPO_ROOT/lus-vscode/wasm"
-if [ -d "$VSCODE_WASM" ]; then
-  cp "$OUT_DIR/lus.js" "$VSCODE_WASM/lus.js"
-  cp "$OUT_DIR/lus.wasm" "$VSCODE_WASM/lus.wasm"
-  echo "Copied to $VSCODE_WASM"
+build_target() {
+  local env="$1"
+  local suffix="$2"
+
+  echo "Building Lus WASM ($env)..."
+  emcc "${SOURCES[@]}" "${COMMON_FLAGS[@]}" \
+    -s ENVIRONMENT="$env" \
+    -o "$OUT_DIR/lus${suffix}.js"
+  echo "  -> $OUT_DIR/lus${suffix}.js, $OUT_DIR/lus${suffix}.wasm"
+}
+
+if [ "$TARGET" = "web" ] || [ "$TARGET" = "all" ]; then
+  build_target "web" ".web"
 fi
 
-echo "Build complete: $OUT_DIR/lus.js, $OUT_DIR/lus.wasm"
+if [ "$TARGET" = "node" ] || [ "$TARGET" = "all" ]; then
+  build_target "node" ".node"
+fi
+
+# When both targets are built, they produce identical .wasm files.
+# Keep a shared lus.wasm and remove duplicates.
+if [ "$TARGET" = "all" ]; then
+  mv "$OUT_DIR/lus.web.wasm" "$OUT_DIR/lus.wasm"
+  rm -f "$OUT_DIR/lus.node.wasm"
+elif [ "$TARGET" = "web" ]; then
+  mv "$OUT_DIR/lus.web.wasm" "$OUT_DIR/lus.wasm"
+elif [ "$TARGET" = "node" ]; then
+  mv "$OUT_DIR/lus.node.wasm" "$OUT_DIR/lus.wasm"
+fi
+
+# Copy node build to VS Code extension directory
+if [ "$TARGET" = "node" ] || [ "$TARGET" = "all" ]; then
+  VSCODE_WASM="$REPO_ROOT/lus-vscode/wasm"
+  if [ -d "$VSCODE_WASM" ]; then
+    cp "$OUT_DIR/lus.node.js" "$VSCODE_WASM/lus.js"
+    cp "$OUT_DIR/lus.wasm" "$VSCODE_WASM/lus.wasm"
+    echo "Copied node build to $VSCODE_WASM"
+  fi
+fi
+
+echo "Build complete."

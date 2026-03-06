@@ -388,8 +388,9 @@ jobs:
           fi
 
           # WASM
-          if [ -f artifacts/lus-wasm/lus.js ]; then
-            cp artifacts/lus-wasm/lus.js release/lus.js
+          if [ -f artifacts/lus-wasm/lus.web.js ]; then
+            cp artifacts/lus-wasm/lus.web.js release/lus.web.js
+            cp artifacts/lus-wasm/lus.node.js release/lus.node.js
             cp artifacts/lus-wasm/lus.wasm release/lus.wasm
             echo "✅ wasm artifacts included"
             count=$((count + 1))

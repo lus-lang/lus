@@ -59,7 +59,8 @@ async function main() {
     if (!release) continue
 
     const assets = new Map(release.assets.map((a) => [a.name, a.browser_download_url]))
-    const jsUrl = assets.get("lus.js")
+    // Prefer the web-specific JS; fall back to the old universal lus.js
+    const jsUrl = assets.get("lus.web.js") || assets.get("lus.js")
     const wasmUrl = assets.get("lus.wasm")
 
     if (!jsUrl || !wasmUrl) {
@@ -73,6 +74,7 @@ async function main() {
 
     console.log(`\nDownloading ${type} release: ${version}`)
 
+    // Always save as lus.js for the playground loader
     await downloadFile(jsUrl, join(versionDir, "lus.js"))
     await downloadFile(wasmUrl, join(versionDir, "lus.wasm"))
 

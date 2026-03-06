@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.1
+
+**Release date:** March 6, 2026
+
+- Fixed WASM build targeting.
+
 ## 1.5.0
 
 **Release date:** March 6, 2026
