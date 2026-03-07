@@ -4,7 +4,7 @@
 local M = {}
 
 -- Global names (functions + variables + tables) for linting/rename/semantic_tokens
-M.globals = { "_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "fromjson", "getmetatable", "ipairs", "load", "loadfile", "next", "pairs", "pledge", "print", "rawequal", "rawget", "rawlen", "rawset", "require", "select", "setmetatable", "tojson", "tonumber", "tostring", "type", "warn", "_ENV" }
+M.globals = { "_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "fromcsv", "fromjson", "getmetatable", "ipairs", "load", "loadfile", "next", "pairs", "pledge", "print", "rawequal", "rawget", "rawlen", "rawset", "require", "select", "setmetatable", "tocsv", "tojson", "tonumber", "tostring", "type", "warn", "_ENV" }
 
 -- Stdlib table names
 M.tables = { "string", "table", "math", "io", "os", "debug", "coroutine", "utf8", "fs", "network", "worker", "vector", "package" }
@@ -149,15 +149,20 @@ M.members = {
     {n = "format", k = 3},
     {n = "gmatch", k = 3},
     {n = "gsub", k = 3},
+    {n = "join", k = 3},
     {n = "len", k = 3},
     {n = "lower", k = 3},
+    {n = "ltrim", k = 3},
     {n = "match", k = 3},
     {n = "pack", k = 3},
     {n = "packsize", k = 3},
     {n = "rep", k = 3},
     {n = "reverse", k = 3},
+    {n = "rtrim", k = 3},
+    {n = "split", k = 3},
     {n = "sub", k = 3},
     {n = "transcode", k = 3},
+    {n = "trim", k = 3},
     {n = "unpack", k = 3},
     {n = "upper", k = 3},
   },
@@ -165,12 +170,25 @@ M.members = {
     {n = "clone", k = 3},
     {n = "concat", k = 3},
     {n = "create", k = 3},
+    {n = "filter", k = 3},
+    {n = "groupby", k = 3},
     {n = "insert", k = 3},
+    {n = "map", k = 3},
+    {n = "mean", k = 3},
+    {n = "median", k = 3},
     {n = "move", k = 3},
     {n = "pack", k = 3},
+    {n = "reduce", k = 3},
     {n = "remove", k = 3},
+    {n = "reshape", k = 3},
     {n = "sort", k = 3},
+    {n = "sortby", k = 3},
+    {n = "stdev", k = 3},
+    {n = "sum", k = 3},
+    {n = "transpose", k = 3},
     {n = "unpack", k = 3},
+    {n = "unzip", k = 3},
+    {n = "zip", k = 3},
   },
   ["utf8"] = {
     {n = "char", k = 3},
@@ -188,6 +206,27 @@ M.members = {
     {n = "size", k = 3},
     {n = "unpack", k = 3},
     {n = "unpackmany", k = 3},
+  },
+  ["vector.archive.brotli"] = {
+    {n = "compress", k = 3},
+    {n = "decompress", k = 3},
+  },
+  ["vector.archive.deflate"] = {
+    {n = "compress", k = 3},
+    {n = "decompress", k = 3},
+  },
+  ["vector.archive.gzip"] = {
+    {n = "compress", k = 3},
+    {n = "decompress", k = 3},
+  },
+  ["vector.archive.lz4"] = {
+    {n = "compress", k = 3},
+    {n = "decompress", k = 3},
+    {n = "decompress_hc", k = 3},
+  },
+  ["vector.archive.zstd"] = {
+    {n = "compress", k = 3},
+    {n = "decompress", k = 3},
   },
   ["worker"] = {
     {n = "create", k = 3},
@@ -339,15 +378,20 @@ M.fields = {
     ["format"] = "function",
     ["gmatch"] = "function",
     ["gsub"] = "function",
+    ["join"] = "function",
     ["len"] = "function",
     ["lower"] = "function",
+    ["ltrim"] = "function",
     ["match"] = "function",
     ["pack"] = "function",
     ["packsize"] = "function",
     ["rep"] = "function",
     ["reverse"] = "function",
+    ["rtrim"] = "function",
+    ["split"] = "function",
     ["sub"] = "function",
     ["transcode"] = "function",
+    ["trim"] = "function",
     ["unpack"] = "function",
     ["upper"] = "function",
   },
@@ -355,12 +399,25 @@ M.fields = {
     ["clone"] = "function",
     ["concat"] = "function",
     ["create"] = "function",
+    ["filter"] = "function",
+    ["groupby"] = "function",
     ["insert"] = "function",
+    ["map"] = "function",
+    ["mean"] = "function",
+    ["median"] = "function",
     ["move"] = "function",
     ["pack"] = "function",
+    ["reduce"] = "function",
     ["remove"] = "function",
+    ["reshape"] = "function",
     ["sort"] = "function",
+    ["sortby"] = "function",
+    ["stdev"] = "function",
+    ["sum"] = "function",
+    ["transpose"] = "function",
     ["unpack"] = "function",
+    ["unzip"] = "function",
+    ["zip"] = "function",
   },
   ["utf8"] = {
     ["char"] = "function",
@@ -378,6 +435,27 @@ M.fields = {
     ["size"] = "function",
     ["unpack"] = "function",
     ["unpackmany"] = "function",
+  },
+  ["vector.archive.brotli"] = {
+    ["compress"] = "function",
+    ["decompress"] = "function",
+  },
+  ["vector.archive.deflate"] = {
+    ["compress"] = "function",
+    ["decompress"] = "function",
+  },
+  ["vector.archive.gzip"] = {
+    ["compress"] = "function",
+    ["decompress"] = "function",
+  },
+  ["vector.archive.lz4"] = {
+    ["compress"] = "function",
+    ["decompress"] = "function",
+    ["decompress_hc"] = "function",
+  },
+  ["vector.archive.zstd"] = {
+    ["compress"] = "function",
+    ["decompress"] = "function",
   },
   ["worker"] = {
     ["create"] = "function",
@@ -417,6 +495,7 @@ M.signatures = {
   ["debug.upvaluejoin"] = {{n = "f1", t = "function"}, {n = "n1", t = "integer"}, {n = "f2", t = "function"}, {n = "n2", t = "integer"}},
   ["dofile"] = {{n = "filename", t = "string", opt = true}},
   ["error"] = {{n = "message", t = "any"}, {n = "level", t = "integer", opt = true}},
+  ["fromcsv"] = {{n = "s", t = "string"}, {n = "headers", t = "boolean", opt = true}, {n = "delimiter", t = "string", opt = true}},
   ["fromjson"] = {{n = "s", t = "string"}},
   ["fs.copy"] = {{n = "source", t = "string"}, {n = "dest", t = "string"}},
   ["fs.createdirectory"] = {{n = "path", t = "string"}},
@@ -494,25 +573,43 @@ M.signatures = {
   ["string.format"] = {{n = "formatstring", t = "string"}, {n = "...", t = "any"}},
   ["string.gmatch"] = {{n = "s", t = "string"}, {n = "pattern", t = "string"}, {n = "init", t = "integer", opt = true}},
   ["string.gsub"] = {{n = "s", t = "string"}, {n = "pattern", t = "string"}, {n = "repl", t = "string|table|function"}, {n = "n", t = "integer", opt = true}},
+  ["string.join"] = {{n = "t", t = "table"}, {n = "delimiter", t = "string"}},
   ["string.len"] = {{n = "s", t = "string"}},
   ["string.lower"] = {{n = "s", t = "string"}},
+  ["string.ltrim"] = {{n = "s", t = "string"}, {n = "chars", t = "string", opt = true}},
   ["string.match"] = {{n = "s", t = "string"}, {n = "pattern", t = "string"}, {n = "init", t = "integer", opt = true}},
   ["string.pack"] = {{n = "fmt", t = "string"}, {n = "...", t = "any"}},
   ["string.packsize"] = {{n = "fmt", t = "string"}},
   ["string.rep"] = {{n = "s", t = "string"}, {n = "n", t = "integer"}, {n = "sep", t = "string", opt = true}},
   ["string.reverse"] = {{n = "s", t = "string"}},
+  ["string.rtrim"] = {{n = "s", t = "string"}, {n = "chars", t = "string", opt = true}},
+  ["string.split"] = {{n = "s", t = "string"}, {n = "delimiter", t = "string"}},
   ["string.sub"] = {{n = "s", t = "string"}, {n = "i", t = "integer"}, {n = "j", t = "integer", opt = true}},
   ["string.transcode"] = {{n = "s", t = "string"}, {n = "from", t = "string"}, {n = "to", t = "string"}},
+  ["string.trim"] = {{n = "s", t = "string"}, {n = "chars", t = "string", opt = true}},
   ["string.unpack"] = {{n = "fmt", t = "string"}, {n = "s", t = "string"}, {n = "pos", t = "integer", opt = true}},
   ["string.upper"] = {{n = "s", t = "string"}},
   ["table.clone"] = {{n = "t", t = "T"}, {n = "deep", t = "boolean", opt = true}},
   ["table.concat"] = {{n = "list", t = "table"}, {n = "sep", t = "string", opt = true}, {n = "i", t = "integer", opt = true}, {n = "j", t = "integer", opt = true}},
   ["table.create"] = {{n = "narray", t = "integer"}, {n = "nhash", t = "integer", opt = true}},
+  ["table.filter"] = {{n = "array", t = "table"}, {n = "predicate", t = "function"}},
+  ["table.groupby"] = {{n = "array", t = "table"}, {n = "keyfunc", t = "function"}},
   ["table.insert"] = {{n = "list", t = "table"}, {n = "pos", t = "integer", opt = true}, {n = "value", t = "any", opt = true}},
+  ["table.map"] = {{n = "array", t = "table"}, {n = "func", t = "function"}},
+  ["table.mean"] = {{n = "array", t = "table"}},
+  ["table.median"] = {{n = "array", t = "table"}},
   ["table.move"] = {{n = "a1", t = "table"}, {n = "f", t = "integer"}, {n = "e", t = "integer"}, {n = "t", t = "integer"}, {n = "a2", t = "table", opt = true}},
+  ["table.reduce"] = {{n = "array", t = "table"}, {n = "func", t = "function"}, {n = "initial", t = "any", opt = true}},
   ["table.remove"] = {{n = "list", t = "table"}, {n = "pos", t = "integer", opt = true}},
+  ["table.reshape"] = {{n = "array", t = "table"}, {n = "rows", t = "integer"}, {n = "cols", t = "integer"}},
   ["table.sort"] = {{n = "list", t = "table"}, {n = "comp", t = "function", opt = true}},
+  ["table.sortby"] = {{n = "array", t = "table"}, {n = "keyfunc", t = "function"}, {n = "asc", t = "boolean", opt = true}},
+  ["table.stdev"] = {{n = "array", t = "table"}, {n = "sample", t = "boolean", opt = true}},
+  ["table.sum"] = {{n = "array", t = "table"}},
+  ["table.transpose"] = {{n = "matrix", t = "table"}},
   ["table.unpack"] = {{n = "list", t = "table"}, {n = "i", t = "integer", opt = true}, {n = "j", t = "integer", opt = true}},
+  ["table.unzip"] = {{n = "array_of_tuples", t = "table"}},
+  ["tocsv"] = {{n = "t", t = "table"}, {n = "delimiter", t = "string", opt = true}},
   ["tojson"] = {{n = "value", t = "any"}, {n = "filter", t = "function", opt = true}},
   ["tonumber"] = {{n = "e", t = "any"}, {n = "base", t = "integer", opt = true}},
   ["tostring"] = {{n = "v", t = "any"}},
@@ -521,6 +618,17 @@ M.signatures = {
   ["utf8.codes"] = {{n = "s", t = "string"}},
   ["utf8.len"] = {{n = "s", t = "string"}, {n = "i", t = "integer", opt = true}, {n = "j", t = "integer", opt = true}},
   ["utf8.offset"] = {{n = "s", t = "string"}, {n = "n", t = "integer"}, {n = "i", t = "integer", opt = true}},
+  ["vector.archive.brotli.compress"] = {{n = "data", t = "string|vector"}, {n = "quality", t = "integer", opt = true}, {n = "lgwin", t = "integer", opt = true}},
+  ["vector.archive.brotli.decompress"] = {{n = "data", t = "string|vector"}},
+  ["vector.archive.deflate.compress"] = {{n = "data", t = "string|vector"}, {n = "level", t = "integer", opt = true}},
+  ["vector.archive.deflate.decompress"] = {{n = "data", t = "string|vector"}},
+  ["vector.archive.gzip.compress"] = {{n = "data", t = "string|vector"}, {n = "level", t = "integer", opt = true}},
+  ["vector.archive.gzip.decompress"] = {{n = "data", t = "string|vector"}},
+  ["vector.archive.lz4.compress"] = {{n = "data", t = "string|vector"}, {n = "level", t = "integer", opt = true}},
+  ["vector.archive.lz4.decompress"] = {{n = "data", t = "string|vector"}},
+  ["vector.archive.lz4.decompress_hc"] = {{n = "data", t = "string|vector"}},
+  ["vector.archive.zstd.compress"] = {{n = "data", t = "string|vector"}, {n = "level", t = "integer", opt = true}},
+  ["vector.archive.zstd.decompress"] = {{n = "data", t = "string|vector"}},
   ["vector.clone"] = {{n = "v", t = "vector"}},
   ["vector.create"] = {{n = "capacity", t = "integer"}, {n = "fast", t = "boolean", opt = true}},
   ["vector.pack"] = {{n = "v", t = "vector"}, {n = "offset", t = "integer"}, {n = "fmt", t = "string"}, {n = "...", t = "any"}},
@@ -564,6 +672,7 @@ M.returns = {
   ["debug.traceback"] = "string",
   ["debug.upvalueid"] = "userdata",
   ["dofile"] = "any",
+  ["fromcsv"] = "table",
   ["fromjson"] = "any",
   ["fs.copy"] = "boolean",
   ["fs.createdirectory"] = "boolean",
@@ -648,24 +757,42 @@ M.returns = {
   ["string.format"] = "string",
   ["string.gmatch"] = "function",
   ["string.gsub"] = "string",
+  ["string.join"] = "string",
   ["string.len"] = "integer",
   ["string.lower"] = "string",
+  ["string.ltrim"] = "string",
   ["string.match"] = "string|nil",
   ["string.pack"] = "string",
   ["string.packsize"] = "integer",
   ["string.rep"] = "string",
   ["string.reverse"] = "string",
+  ["string.rtrim"] = "string",
+  ["string.split"] = "table",
   ["string.sub"] = "string",
   ["string.transcode"] = "string",
+  ["string.trim"] = "string",
   ["string.unpack"] = "any",
   ["string.upper"] = "string",
   ["table.clone"] = "T",
   ["table.concat"] = "string",
   ["table.create"] = "table",
+  ["table.filter"] = "table",
+  ["table.groupby"] = "table",
+  ["table.map"] = "table",
+  ["table.mean"] = "number",
+  ["table.median"] = "number",
   ["table.move"] = "table",
   ["table.pack"] = "table",
+  ["table.reduce"] = "any",
   ["table.remove"] = "any",
+  ["table.reshape"] = "table",
+  ["table.stdev"] = "number",
+  ["table.sum"] = "number",
+  ["table.transpose"] = "table",
   ["table.unpack"] = "any",
+  ["table.unzip"] = "table",
+  ["table.zip"] = "table",
+  ["tocsv"] = "string",
   ["tojson"] = "string",
   ["tonumber"] = "number|nil",
   ["tostring"] = "string",
@@ -675,6 +802,17 @@ M.returns = {
   ["utf8.codes"] = "function",
   ["utf8.len"] = "integer|nil",
   ["utf8.offset"] = "integer|nil",
+  ["vector.archive.brotli.compress"] = "string|vector",
+  ["vector.archive.brotli.decompress"] = "string|vector",
+  ["vector.archive.deflate.compress"] = "string|vector",
+  ["vector.archive.deflate.decompress"] = "string|vector",
+  ["vector.archive.gzip.compress"] = "string|vector",
+  ["vector.archive.gzip.decompress"] = "string|vector",
+  ["vector.archive.lz4.compress"] = "string|vector",
+  ["vector.archive.lz4.decompress"] = "string|vector",
+  ["vector.archive.lz4.decompress_hc"] = "string|vector",
+  ["vector.archive.zstd.compress"] = "string|vector",
+  ["vector.archive.zstd.decompress"] = "string|vector",
   ["vector.clone"] = "vector",
   ["vector.create"] = "vector",
   ["vector.size"] = "integer",
@@ -770,6 +908,8 @@ Makes upvalue `n1` of closure `f1` refer to the same upvalue as `n2` of closure 
 Opens and executes the contents of `filename` as a Lus chunk. When called without arguments, executes from standard input. Returns all values returned by the chunk. Requires `load` and `fs:read` pledges.]],
   ["error"] = [[
 Raises an error with `message` as the error object. The `level` argument specifies where the error position points: 1 (default) is the caller, 2 is the caller's caller, and so on. Level 0 omits position information.]],
+  ["fromcsv"] = [[
+Parses a CSV string `s` and returns a table of rows. Each row is a sequential table of string values. When `headers` is `true`, the first row is used as column headers and subsequent rows are returned as tables keyed by those headers. The optional `delimiter` defaults to `","`.]],
   ["fromjson"] = [[
 Parses a JSON string `s` and returns the corresponding Lus value. Tables become Lus tables, JSON null becomes `nil`.]],
   ["fs.copy"] = [[
@@ -985,10 +1125,14 @@ Return a formatted string following the description in `formatstring`, which fol
 Return an iterator function that, each time it is called, returns the next captures from `pattern` in string `s`. If `pattern` has no captures, the whole match is returned. If `init` is given, the search starts at that position.]],
   ["string.gsub"] = [[
 Return a copy of `s` where all (or the first `n`) occurrences of `pattern` are replaced by `repl`. The replacement `repl` can be a string, table, or function. Also returns the total number of substitutions as a second value.]],
+  ["string.join"] = [[
+Joins elements of table `t` into a single string with `delimiter` between each element. Non-string values are converted via `tostring`. Empty table returns an empty string.]],
   ["string.len"] = [[
 Return the length of string `s` in bytes.]],
   ["string.lower"] = [[
 Return a copy of `s` with all uppercase letters changed to lowercase, according to the current locale.]],
+  ["string.ltrim"] = [[
+Removes leading characters from string `s`. If `chars` is not provided, removes whitespace (space, tab, newline, carriage return). Otherwise removes all contiguous characters present in `chars` from the left.]],
   ["string.match"] = [[
 Look for the first match of `pattern` in string `s`. Returns the captures from the match, or the whole match if there are no captures. Returns `nil` if no match is found.]],
   ["string.pack"] = [[
@@ -999,10 +1143,16 @@ Return the size of the string that would result from `string.pack` with format `
 Return a string consisting of `n` copies of `s`, separated by `sep` (empty string by default).]],
   ["string.reverse"] = [[
 Return a string with the bytes of `s` in reverse order.]],
+  ["string.rtrim"] = [[
+Removes trailing characters from string `s`. If `chars` is not provided, removes whitespace (space, tab, newline, carriage return). Otherwise removes all contiguous characters present in `chars` from the right.]],
+  ["string.split"] = [[
+Splits string `s` on the literal `delimiter`, returning a table of substrings. An empty delimiter splits into individual characters. Consecutive delimiters produce empty string entries.]],
   ["string.sub"] = [[
 Return the substring of `s` from position `i` to `j` (inclusive). Negative indices count from the end of the string. Default for `j` is `-1` (end of string).]],
   ["string.transcode"] = [[
 Transcodes string `s` from encoding `from` to encoding `to`. Supported encodings depend on the platform.]],
+  ["string.trim"] = [[
+Removes leading and trailing characters from string `s`. If `chars` is not provided, removes whitespace (space, tab, newline, carriage return). Otherwise removes all contiguous characters present in `chars` from both ends.]],
   ["string.unpack"] = [[
 Return the values packed in string `s` according to format `fmt`, starting at position `pos` (default 1). Also returns the position after the last read byte.]],
   ["string.upper"] = [[
@@ -1018,18 +1168,46 @@ local y = table.clone(t, true)  -- deep copy
 Concatenate the string or number elements of table `list`, separated by `sep` (empty string by default), from index `i` to `j`.]],
   ["table.create"] = [[
 Create a new table with pre-allocated space for `narray` array elements and `nhash` hash elements. Useful for performance when the final table size is known.]],
+  ["table.filter"] = [[
+Returns a new table containing only elements of `array` for which `predicate(element)` returns a truthy value. The original table is not modified. The result is a dense sequence.]],
+  ["table.groupby"] = [[
+Groups elements of `array` by the result of `keyfunc(element)`. Returns a new table where keys are the grouping results and values are tables of grouped elements.]],
   ["table.insert"] = [[
 Insert `value` at position `pos` in `list`, shifting up subsequent elements. If `pos` is omitted, appends to the end.]],
+  ["table.map"] = [[
+Applies `func` to each element of `array`, returning a new table of results. The function receives `(element, index)` as arguments. The original table is not modified.]],
+  ["table.mean"] = [[
+Computes the arithmetic mean of numeric values in `array`. Non-numeric values are skipped. Returns NaN if no numeric values exist.]],
+  ["table.median"] = [[
+Computes the median of numeric values in `array`. Returns the middle value for odd-length arrays, or the average of the two middle values for even-length arrays. Non-numeric values are skipped. Does not modify the original table. Returns NaN if no numeric values exist.]],
   ["table.move"] = [[
 Copy elements from table `a1` positions `f` through `e` into table `a2` (defaults to `a1`) starting at position `t`. Returns `a2`.]],
   ["table.pack"] = [[
 Return a new table with the given arguments as array elements, plus a field `"n"` set to the total number of arguments.]],
+  ["table.reduce"] = [[
+Reduces `array` to a single value by iteratively applying `func(accumulator, element, index)`. If `initial` is not provided, the first element is used and iteration starts from the second. Raises an error if `initial` is not provided and the array is empty.]],
   ["table.remove"] = [[
 Remove the element at position `pos` from `list`, shifting down subsequent elements. Default `pos` is `#list`, so it removes the last element. Returns the removed value.]],
+  ["table.reshape"] = [[
+Reshapes a 1D array into a 2D matrix with the specified dimensions, filled in row-major order. The array length must equal `rows * cols`.]],
   ["table.sort"] = [[
 Sort `list` elements in place. If `comp` is given, it must be a function that takes two elements and returns `true` when the first is less than the second. The sort is not stable.]],
+  ["table.sortby"] = [[
+Sorts `array` in-place by the key returned by `keyfunc(element)`. When `asc` is `false`, sorts in descending order. Default is ascending. Returns nothing.]],
+  ["table.stdev"] = [[
+Computes the standard deviation of numeric values in `array`. When `sample` is `true`, divides by n-1 (sample standard deviation); otherwise divides by n (population standard deviation). Non-numeric values are skipped. Returns NaN if no numeric values exist.]],
+  ["table.sum"] = [[
+Computes the sum of numeric values in `array`. Non-numeric values are skipped. Returns `0` for an empty table.]],
+  ["table.transpose"] = [[
+Transposes a 2D table (matrix) so that `result[i][j] == matrix[j][i]`. All rows must have the same length. Raises an error for non-rectangular matrices.]],
   ["table.unpack"] = [[
 Return the elements from table `list` from index `i` to `j`. Defaults to `i = 1` and `j = #list`.]],
+  ["table.unzip"] = [[
+Splits a table of tuples into separate tables (inverse of `table.zip`). Returns multiple tables, one per position in the tuples. All tuples must have the same length.]],
+  ["table.zip"] = [[
+Combines multiple tables element-wise into a table of tuples. The result length equals the length of the shortest input table. Each tuple is a table `{table1[i], table2[i], ...}`.]],
+  ["tocsv"] = [[
+Converts a table of rows `t` to a CSV string. Each row must be a sequential table of values. Non-string values are converted via `tostring`; `nil` values produce empty fields. Fields containing the delimiter, newlines, or double quotes are automatically quoted. The optional `delimiter` defaults to `","`.]],
   ["tojson"] = [[
 Converts a Lus value to a JSON string. The optional `filter` argument controls serialization. Objects with a `__json` metamethod use it for custom serialization.]],
   ["tonumber"] = [[
@@ -1050,6 +1228,28 @@ Return an iterator function that traverses `s`, returning the byte position and 
 Return the number of UTF-8 characters in `s` from position `i` to `j`. Returns `nil` plus the position of the first invalid byte on failure.]],
   ["utf8.offset"] = [[
 Return the byte position of the `n`-th UTF-8 character, counting from byte position `i` (default 1 for positive `n`, `#s + 1` for non-positive).]],
+  ["vector.archive.brotli.compress"] = [[
+Compresses `data` using Brotli format (RFC 7932). The optional `quality` (0-11, default 11) controls compression quality. The optional `lgwin` (10-24, default 22) sets the LZ77 window size. Returns the same type as the input.]],
+  ["vector.archive.brotli.decompress"] = [[
+Decompresses Brotli-compressed `data`. Returns the same type as the input.]],
+  ["vector.archive.deflate.compress"] = [[
+Compresses `data` using raw deflate format (RFC 1951) without headers. The optional `level` (0-9, default 6) controls the compression ratio. Returns the same type as the input.]],
+  ["vector.archive.deflate.decompress"] = [[
+Decompresses raw deflate-compressed `data`. No header or checksum validation is performed. Returns the same type as the input.]],
+  ["vector.archive.gzip.compress"] = [[
+Compresses `data` using gzip format. The optional `level` (0-9, default 6) controls the compression ratio. Returns the same type as the input.]],
+  ["vector.archive.gzip.decompress"] = [[
+Decompresses gzip-compressed `data`. Validates the gzip header and CRC32 checksum. Returns the same type as the input.]],
+  ["vector.archive.lz4.compress"] = [[
+Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1) controls the speed-ratio trade-off. Returns the same type as the input.]],
+  ["vector.archive.lz4.decompress"] = [[
+Decompresses LZ4 frame-compressed `data`. Validates the frame header and optional checksum. Returns the same type as the input.]],
+  ["vector.archive.lz4.decompress_hc"] = [[
+Decompresses LZ4 HC (legacy high-compression) format `data`. Provided for backward compatibility with older LZ4 HC implementations. Prefer `decompress` for new code. Returns the same type as the input.]],
+  ["vector.archive.zstd.compress"] = [[
+Compresses `data` using Zstandard format (RFC 8878). The optional `level` (-7 to 22, default 3) controls the speed-ratio trade-off. Returns the same type as the input.]],
+  ["vector.archive.zstd.decompress"] = [[
+Decompresses Zstandard-compressed `data`. Validates the frame header and optional content checksum. Returns the same type as the input.]],
   ["vector.clone"] = [[
 Creates a copy of the vector `v`.]],
   ["vector.create"] = [[

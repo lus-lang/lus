@@ -557,7 +557,7 @@ static int tmean(lua_State *L) {
     lua_pop(L, 1);
   }
   if (count == 0)
-    lua_pushnumber(L, (lua_Number)0.0 / (lua_Number)0.0); /* NaN */
+    lua_pushnumber(L, (lua_Number)NAN); /* NaN */
   else
     lua_pushnumber(L, sum / (lua_Number)count);
   return 1;
@@ -587,7 +587,7 @@ static int tmedian(lua_State *L) {
     lua_pop(L, 1);
   }
   if (count == 0) {
-    lua_pushnumber(L, (lua_Number)0.0 / (lua_Number)0.0); /* NaN */
+    lua_pushnumber(L, (lua_Number)NAN); /* NaN */
     return 1;
   }
   /* Collect numeric values into C array */
@@ -625,7 +625,7 @@ static int tstdev(lua_State *L) {
     lua_pop(L, 1);
   }
   if (count == 0 || (sample && count < 2)) {
-    lua_pushnumber(L, (lua_Number)0.0 / (lua_Number)0.0); /* NaN */
+    lua_pushnumber(L, (lua_Number)NAN); /* NaN */
     return 1;
   }
   lua_Number mean = sum / (lua_Number)count;

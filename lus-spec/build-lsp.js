@@ -159,7 +159,12 @@ for (const e of entries) {
 
   // Collect return types and generics
   if (e.returns) {
-    returns[e.name] = e.returns;
+    // returns can be a string ("table") or an array of {type, name} objects
+    if (Array.isArray(e.returns)) {
+      returns[e.name] = e.returns.map(r => r.type || "any").join(", ");
+    } else {
+      returns[e.name] = e.returns;
+    }
   }
   if (e.generic) {
     generics[e.name] = e.generic;
