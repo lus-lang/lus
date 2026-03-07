@@ -42,8 +42,8 @@ typedef enum {
   TM_CALL,
   TM_CLOSE,
   TM_SLICE,
-  TM_TOSTRING,  /* __tostring metamethod for string interpolation */
-  TM_N /* number of elements in the enum */
+  TM_TOSTRING, /* __tostring metamethod for string interpolation */
+  TM_N         /* number of elements in the enum */
 } TMS;
 
 

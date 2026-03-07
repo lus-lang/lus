@@ -954,9 +954,9 @@ typedef struct Enum {
 */
 typedef struct Vector {
   CommonHeader;
-  size_t len;    /* current buffer length in bytes */
-  size_t alloc;  /* allocated buffer size */
-  char *data;    /* pointer to buffer data */
+  size_t len;   /* current buffer length in bytes */
+  size_t alloc; /* allocated buffer size */
+  char *data;   /* pointer to buffer data */
 } Vector;
 
 

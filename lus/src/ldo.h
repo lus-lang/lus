@@ -21,11 +21,11 @@
 ** that parallels the Lua-level CatchInfo structure.
 */
 typedef struct CCatchInfo {
-  struct CCatchInfo *prev;  /* previous C catch (for nesting) */
-  volatile TStatus status;  /* error status */
-  ptrdiff_t erroffset;      /* stack offset of error object */
+  struct CCatchInfo *prev; /* previous C catch (for nesting) */
+  volatile TStatus status; /* error status */
+  ptrdiff_t erroffset;     /* stack offset of error object */
 #if !defined(__cplusplus) || defined(LUA_USE_LONGJMP)
-  jmp_buf jmpbuf;           /* setjmp buffer for error recovery (C only) */
+  jmp_buf jmpbuf; /* setjmp buffer for error recovery (C only) */
 #endif
 } CCatchInfo;
 
@@ -43,32 +43,35 @@ typedef struct CCatchInfo {
 ** exception handling. Otherwise uses setjmp/longjmp.
 */
 
-#if defined(__cplusplus) && !defined(LUA_USE_LONGJMP)  /* { */
+#if defined(__cplusplus) && !defined(LUA_USE_LONGJMP) /* { */
 
 /* C++ exception-based protection */
-#define CPROTECT_BEGIN(L, cinfo) \
-  do { \
+#define CPROTECT_BEGIN(L, cinfo)         \
+  do {                                   \
     l_uint32 _oldnCcalls = (L)->nCcalls; \
-    (cinfo)->status = LUA_OK; \
-    (cinfo)->prev = (L)->cCatch; \
-    (cinfo)->erroffset = 0; \
-    (L)->cCatch = (cinfo); \
+    (cinfo)->status = LUA_OK;            \
+    (cinfo)->prev = (L)->cCatch;         \
+    (cinfo)->erroffset = 0;              \
+    (L)->cCatch = (cinfo);               \
     try {
-
-#define CPROTECT_END(L, cinfo) \
-    } catch (CCatchInfo *_caught) { \
-      if (_caught != (cinfo)) throw; /* rethrow if not our catch */ \
-    } catch (...) { \
-      (cinfo)->status = -1; /* unknown exception */ \
-    } \
-    (L)->cCatch = (cinfo)->prev; \
-    (L)->nCcalls = _oldnCcalls; \
-  } while (0)
+#define CPROTECT_END(L, cinfo)                    \
+  }                                               \
+  catch(CCatchInfo *_caught) {                    \
+    if (_caught != (cinfo))                       \
+      throw; /* rethrow if not our catch */       \
+  }                                               \
+  catch(...) {                                    \
+    (cinfo)->status = -1; /* unknown exception */ \
+  }                                               \
+  (L)->cCatch = (cinfo)->prev;                    \
+  (L)->nCcalls = _oldnCcalls;                     \
+  }                                               \
+  while (0)
 
 /* C++ throw for luaD_throw */
 #define CPROTECT_THROW(cinfo) throw(cinfo)
 
-#else  /* }{ C setjmp/longjmp-based protection */
+#else /* }{ C setjmp/longjmp-based protection */
 
 #if defined(LUA_USE_POSIX)
 #define CPROTECT_SETJMP(buf) _setjmp(buf)
@@ -78,25 +81,25 @@ typedef struct CCatchInfo {
 #define CPROTECT_LONGJMP(buf, val) longjmp(buf, val)
 #endif
 
-#define CPROTECT_BEGIN(L, cinfo) \
-  do { \
+#define CPROTECT_BEGIN(L, cinfo)         \
+  do {                                   \
     l_uint32 _oldnCcalls = (L)->nCcalls; \
-    (cinfo)->status = LUA_OK; \
-    (cinfo)->prev = (L)->cCatch; \
-    (cinfo)->erroffset = 0; \
-    (L)->cCatch = (cinfo); \
+    (cinfo)->status = LUA_OK;            \
+    (cinfo)->prev = (L)->cCatch;         \
+    (cinfo)->erroffset = 0;              \
+    (L)->cCatch = (cinfo);               \
     if (CPROTECT_SETJMP((cinfo)->jmpbuf) == 0) {
-
 #define CPROTECT_END(L, cinfo) \
-    } \
-    (L)->cCatch = (cinfo)->prev; \
-    (L)->nCcalls = _oldnCcalls; \
-  } while (0)
+  }                            \
+  (L)->cCatch = (cinfo)->prev; \
+  (L)->nCcalls = _oldnCcalls;  \
+  }                            \
+  while (0)
 
 /* C longjmp for luaD_throw */
 #define CPROTECT_THROW(cinfo) CPROTECT_LONGJMP((cinfo)->jmpbuf, 1)
 
-#endif  /* } */
+#endif /* } */
 
 
 /*

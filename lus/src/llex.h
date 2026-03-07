@@ -72,10 +72,10 @@ enum RESERVED {
   TK_NAME,
   TK_STRING,
   /* string interpolation tokens */
-  TK_INTERP_BEGIN,   /* `foo$( or `foo$name - start with literal, expr follows */
-  TK_INTERP_MID,     /* )bar$( or )bar$name - middle section after expr */
-  TK_INTERP_END,     /* )baz` - final literal section */
-  TK_INTERP_SIMPLE   /* `foo` - no interpolations, just a string */
+  TK_INTERP_BEGIN, /* `foo$( or `foo$name - start with literal, expr follows */
+  TK_INTERP_MID,   /* )bar$( or )bar$name - middle section after expr */
+  TK_INTERP_END,   /* )baz` - final literal section */
+  TK_INTERP_SIMPLE /* `foo` - no interpolations, just a string */
 };
 
 /* number of reserved words */
@@ -116,10 +116,11 @@ typedef struct LexState {
   struct LusAst *ast;  /* optional AST being built (NULL if not building) */
   lu_byte strquote;    /* quote character of last string token (' or ") */
   /* string interpolation state */
-  int interp_depth;     /* parenthesis depth inside $(...), 0 = not in interp */
-  TString *interp_name; /* variable name for $name interpolation (NULL if $(expr)) */
-  int interp_name_line;    /* line of $name variable */
-  int interp_name_column;  /* column of $name variable (first letter, after $) */
+  int interp_depth; /* parenthesis depth inside $(...), 0 = not in interp */
+  TString *
+      interp_name; /* variable name for $name interpolation (NULL if $(expr)) */
+  int interp_name_line;   /* line of $name variable */
+  int interp_name_column; /* column of $name variable (first letter, after $) */
 } LexState;
 
 LUAI_FUNC void luaX_init(lua_State *L);

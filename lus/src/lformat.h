@@ -17,7 +17,7 @@
 ** On error, `*errmsg` is set to a static error description.
 */
 char *lusF_format(lua_State *L, const char *source, size_t srclen,
-                  const char *chunkname, int indent_width,
-                  int max_line_width, const char **errmsg);
+                  const char *chunkname, int indent_width, int max_line_width,
+                  const char **errmsg);
 
 #endif

@@ -24,10 +24,10 @@ typedef struct Zio ZIO;
 ** Uses arena allocation for fast reset and cleanup.
 */
 typedef struct Mbuffer {
-  char *buffer;      /* current buffer pointer */
-  size_t n;          /* bytes used in buffer */
-  size_t buffsize;   /* current buffer capacity */
-  LuaArena *arena;   /* arena for buffer allocation */
+  char *buffer;    /* current buffer pointer */
+  size_t n;        /* bytes used in buffer */
+  size_t buffsize; /* current buffer capacity */
+  LuaArena *arena; /* arena for buffer allocation */
 } Mbuffer;
 
 /* Initialize buffer with arena */

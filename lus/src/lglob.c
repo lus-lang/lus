@@ -46,13 +46,15 @@ static int glob_match_internal(const char *pattern, const char *string) {
         s++;
       }
       return 0;
-    } else if (*p == '?') {
+    }
+    else if (*p == '?') {
       /* ? matches exactly one character */
       if (*s == '\0')
         return 0;
       p++;
       s++;
-    } else {
+    }
+    else {
       /* Literal character match */
       if (*p != *s)
         return 0;
@@ -137,7 +139,8 @@ int lus_glob_match_path(const char *pattern, const char *path,
       if (realpath(pattern, canon_pattern) != NULL) {
         pattern_to_use = canon_pattern;
       }
-    } else if (i > 0) {
+    }
+    else if (i > 0) {
       /* Has wildcards - canonicalize the prefix */
       char prefix[PATH_MAX];
       strncpy(prefix, pattern, i);
@@ -154,7 +157,8 @@ int lus_glob_match_path(const char *pattern, const char *path,
                    pattern + (last_sep - prefix));
           pattern_to_use = canon_pattern;
         }
-      } else if (last_sep == NULL && i > 0) {
+      }
+      else if (last_sep == NULL && i > 0) {
         /* Pattern like "dir *" - try to resolve the prefix as a directory */
         char resolved_prefix[PATH_MAX];
         if (realpath(prefix, resolved_prefix) != NULL) {
@@ -179,7 +183,8 @@ static const char *get_url_host(const char *url, size_t *host_len) {
   /* Skip scheme */
   if (strncmp(p, "http://", 7) == 0) {
     p += 7;
-  } else if (strncmp(p, "https://", 8) == 0) {
+  }
+  else if (strncmp(p, "https://", 8) == 0) {
     p += 8;
   }
 
@@ -239,7 +244,8 @@ int lus_glob_match_url(const char *pattern, const char *url) {
         url_path = "/";
 
       return glob_match_internal(pattern_slash, url_path);
-    } else {
+    }
+    else {
       /* Pattern is host only: match just the host */
       char host_buf[256];
       if (url_host_len >= sizeof(host_buf))

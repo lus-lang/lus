@@ -135,8 +135,8 @@ typedef struct LusAstNode {
     TString *str;
     /* AST_NAME (variable reference or declaration) */
     struct {
-      TString *name;         /* variable name */
-      int attrkind;          /* attribute kind: 0=none, 1=const, 2=close, 3=group */
+      TString *name; /* variable name */
+      int attrkind;  /* attribute kind: 0=none, 1=const, 2=close, 3=group */
       struct LusAstNode *runtimeattrs; /* runtime attributes (if any) */
     } var;
     /* AST_BINOP */
@@ -152,18 +152,19 @@ typedef struct LusAstNode {
     } unop;
     /* AST_FUNCEXPR, AST_LOCALFUNC, AST_GLOBALFUNC, AST_FUNCSTAT */
     struct {
-      TString *name;               /* function name (for named functions, simple) */
-      struct LusAstNode *nameexpr; /* function name expression (for a.b.c paths) */
-      struct LusAstNode *params;   /* parameter list */
-      struct LusAstNode *body;     /* function body */
-      int isvararg;                /* has ... parameter */
-      int ismethod;                /* has implicit self parameter */
-      int nameline;                /* line of the function name token */
-      int namecolumn;              /* column of the function name token */
+      TString *name; /* function name (for named functions, simple) */
+      struct LusAstNode
+          *nameexpr; /* function name expression (for a.b.c paths) */
+      struct LusAstNode *params; /* parameter list */
+      struct LusAstNode *body;   /* function body */
+      int isvararg;              /* has ... parameter */
+      int ismethod;              /* has implicit self parameter */
+      int nameline;              /* line of the function name token */
+      int namecolumn;            /* column of the function name token */
     } func;
     /* AST_IF */
     struct {
-      struct LusAstNode *cond;     /* condition */
+      struct LusAstNode *cond; /* condition */
       /* then/elseif/else blocks are stored as children */
     } ifstat;
     /* AST_WHILE, AST_REPEAT */
@@ -206,7 +207,7 @@ typedef struct LusAstNode {
     struct {
       struct LusAstNode *func;
       struct LusAstNode *args;
-      TString *method; /* method name for AST_METHODCALL */
+      TString *method;   /* method name for AST_METHODCALL */
       lu_byte callstyle; /* 0=parens f(x), 1=string f"x", 2=table f{x} */
     } call;
     /* AST_TABLE */
@@ -249,12 +250,12 @@ typedef struct LusAstNode {
     } slice;
     /* AST_INTERP - interpolated string */
     struct {
-      struct LusAstNode *parts;  /* list of string literals and expressions */
-      int nparts;                /* number of parts */
+      struct LusAstNode *parts; /* list of string literals and expressions */
+      int nparts;               /* number of parts */
     } interp;
     /* AST_ERROR_EXPR, AST_ERROR_STAT - error placeholder */
     struct {
-      TString *message;  /* error message */
+      TString *message; /* error message */
     } error;
   } u;
 } LusAstNode;
@@ -263,40 +264,40 @@ typedef struct LusAstNode {
 ** Comment structure for preserved comments
 */
 typedef struct LusComment {
-  struct LusComment *next;  /* next comment in list */
-  int line;                 /* start line */
-  int column;               /* start column */
-  int endline;              /* end line */
-  int endcolumn;            /* end column */
-  int islong;               /* 1 if long comment --[[ ]], 0 if short -- */
-  TString *text;            /* comment content (without delimiters) */
+  struct LusComment *next; /* next comment in list */
+  int line;                /* start line */
+  int column;              /* start column */
+  int endline;             /* end line */
+  int endcolumn;           /* end column */
+  int islong;              /* 1 if long comment --[[ ]], 0 if short -- */
+  TString *text;           /* comment content (without delimiters) */
 } LusComment;
 
 /*
 ** Parse error structure for error recovery
 */
 typedef struct LusParseError {
-  struct LusParseError *next;  /* next error in list */
-  int line;                    /* line where error occurred */
-  int column;                  /* column where error occurred */
-  TString *message;            /* error message */
+  struct LusParseError *next; /* next error in list */
+  int line;                   /* line where error occurred */
+  int column;                 /* column where error occurred */
+  TString *message;           /* error message */
 } LusParseError;
 
 /*
 ** AST Container (uses arena allocation for fast alloc/free)
 */
 typedef struct LusAst {
-  lua_State *L;         /* lua state for allocations */
-  LuaArena *arena;      /* arena for node allocation */
-  LusAstNode *root;     /* root node */
-  LusAstNode *curnode;  /* current statement node being built */
-  LusAstNode *curblock; /* current block/parent for nested statements */
-  size_t nodecount;     /* number of nodes allocated */
-  LusComment *comments; /* list of preserved comments */
-  LusComment *lastcomment; /* last comment for appending */
-  LusParseError *errors;   /* list of parse errors */
+  lua_State *L;             /* lua state for allocations */
+  LuaArena *arena;          /* arena for node allocation */
+  LusAstNode *root;         /* root node */
+  LusAstNode *curnode;      /* current statement node being built */
+  LusAstNode *curblock;     /* current block/parent for nested statements */
+  size_t nodecount;         /* number of nodes allocated */
+  LusComment *comments;     /* list of preserved comments */
+  LusComment *lastcomment;  /* last comment for appending */
+  LusParseError *errors;    /* list of parse errors */
   LusParseError *lasterror; /* last error for appending */
-  int recover;           /* 1 if error recovery is enabled */
+  int recover;              /* 1 if error recovery is enabled */
 } LusAst;
 
 /*
@@ -310,7 +311,8 @@ LUAI_FUNC LusAst *lusA_new(lua_State *L);
 LUAI_FUNC void lusA_free(lua_State *L, LusAst *ast);
 
 /* Allocate a new node */
-LUAI_FUNC LusAstNode *lusA_newnode(LusAst *ast, LusAstType type, int line, int column);
+LUAI_FUNC LusAstNode *lusA_newnode(LusAst *ast, LusAstType type, int line,
+                                   int column);
 
 /* Free a single node (internal use) */
 LUAI_FUNC void lusA_freenode(lua_State *L, LusAstNode *node);
@@ -332,7 +334,8 @@ LUAI_FUNC void lusA_addcomment(LusAst *ast, int line, int column, int endline,
                                int endcolumn, int islong, TString *text);
 
 /* Add a parse error to the AST */
-LUAI_FUNC void lusA_adderror(LusAst *ast, int line, int column, TString *message);
+LUAI_FUNC void lusA_adderror(LusAst *ast, int line, int column,
+                             TString *message);
 
 /* Convert AST to JSON format */
 LUAI_FUNC int lusA_tojson(LusAst *ast, const char *filename);
@@ -348,37 +351,37 @@ LUAI_FUNC void lusA_analyze(lua_State *L, LusAst *ast, const char *chunkname);
 */
 #define AST_ACTIVE(ls) ((ls)->ast != NULL)
 
-#define AST_NODE(ls, type, line, column)                                       \
+#define AST_NODE(ls, type, line, column) \
   (AST_ACTIVE(ls) ? lusA_newnode((ls)->ast, (type), (line), (column)) : NULL)
 
 /* Set the end position of an AST node to the current token position */
-#define AST_SETEND(node, ls)                                                   \
-  do {                                                                         \
-    if ((node) != NULL) {                                                      \
-      (node)->endline = (ls)->linenumber;                                      \
-      (node)->endcolumn = (ls)->tokencolumn;                                   \
-    }                                                                          \
+#define AST_SETEND(node, ls)                 \
+  do {                                       \
+    if ((node) != NULL) {                    \
+      (node)->endline = (ls)->linenumber;    \
+      (node)->endcolumn = (ls)->tokencolumn; \
+    }                                        \
   } while (0)
 
 /* Set the end position of an AST node to the last consumed token position */
-#define AST_SETEND_LAST(node, ls)                                              \
-  do {                                                                         \
-    if ((node) != NULL) {                                                      \
-      (node)->endline = (ls)->lastline;                                        \
-      (node)->endcolumn = (ls)->lastcolumn;                                    \
-    }                                                                          \
+#define AST_SETEND_LAST(node, ls)           \
+  do {                                      \
+    if ((node) != NULL) {                   \
+      (node)->endline = (ls)->lastline;     \
+      (node)->endcolumn = (ls)->lastcolumn; \
+    }                                       \
   } while (0)
 
-#define AST_SETCHILD(parent, child)                                            \
-  do {                                                                         \
-    if ((parent) != NULL)                                                      \
-      lusA_addchild((parent), (child));                                        \
+#define AST_SETCHILD(parent, child)     \
+  do {                                  \
+    if ((parent) != NULL)               \
+      lusA_addchild((parent), (child)); \
   } while (0)
 
-#define AST_ADDSIBLING(node, sib)                                              \
-  do {                                                                         \
-    if ((node) != NULL)                                                        \
-      lusA_addsibling((node), (sib));                                          \
+#define AST_ADDSIBLING(node, sib)     \
+  do {                                \
+    if ((node) != NULL)               \
+      lusA_addsibling((node), (sib)); \
   } while (0)
 
 #endif

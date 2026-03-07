@@ -165,7 +165,8 @@ static void buildname(char *buf, size_t bufsize, const char *base,
                       const char *sub) {
   if (sub) {
     snprintf(buf, bufsize, "%s:%s", base, sub);
-  } else {
+  }
+  else {
     snprintf(buf, bufsize, "%s", base);
   }
 }
@@ -189,7 +190,8 @@ static void parsepledge(const char *str, int *rejected, const char **name,
     *namelen = eq - p;
     *value = eq + 1;
     *valuelen = strlen(*value);
-  } else {
+  }
+  else {
     *namelen = strlen(p);
     *value = NULL;
     *valuelen = 0;
@@ -296,7 +298,8 @@ LUA_API void lus_pledgeerror(lua_State *L, lus_PledgeRequest *p,
   if (msg) {
     store->error_msg = luaM_newvector(L, strlen(msg) + 1, char);
     strcpy(store->error_msg, msg);
-  } else {
+  }
+  else {
     store->error_msg = NULL;
   }
 }
@@ -352,7 +355,8 @@ LUA_API int lus_pledge(lua_State *L, const char *name, const char *value) {
     memcpy(basebuf, name, baselen);
     basebuf[baselen] = '\0';
     sub = colon + 1;
-  } else {
+  }
+  else {
     strncpy(basebuf, name, sizeof(basebuf) - 1);
     basebuf[sizeof(basebuf) - 1] = '\0';
   }
@@ -406,7 +410,8 @@ LUA_API int lus_haspledge(lua_State *L, const char *name, const char *value) {
     memcpy(basebuf, name, baselen);
     basebuf[baselen] = '\0';
     sub = colon + 1;
-  } else {
+  }
+  else {
     strncpy(basebuf, name, sizeof(basebuf) - 1);
     basebuf[sizeof(basebuf) - 1] = '\0';
   }
@@ -442,7 +447,8 @@ LUA_API int lus_haspledge(lua_State *L, const char *name, const char *value) {
     if (entry->nvalues == 0) {
       return 1;
     }
-  } else if (baseentry && !baseentry->rejected) {
+  }
+  else if (baseentry && !baseentry->rejected) {
     /* Use base entry for iteration */
     req.count = baseentry->nvalues;
     req._entry = baseentry;
@@ -451,7 +457,8 @@ LUA_API int lus_haspledge(lua_State *L, const char *name, const char *value) {
     if (baseentry->nvalues == 0) {
       return 1;
     }
-  } else {
+  }
+  else {
     return 0;
   }
 
@@ -518,7 +525,9 @@ LUA_API int lus_checkfsperm(lua_State *L, const char *perm, const char *path) {
 ** ========================================================
 */
 
-void luaP_initpledges(lua_State *L) { L->pledges = NULL; }
+void luaP_initpledges(lua_State *L) {
+  L->pledges = NULL;
+}
 
 PledgeStore *luaP_copypledges(lua_State *L, PledgeStore *parent) {
   if (parent == NULL)
@@ -547,7 +556,8 @@ PledgeStore *luaP_copypledges(lua_State *L, PledgeStore *parent) {
         strcpy(dst->values[j], src->values[j]);
       }
     }
-  } else {
+  }
+  else {
     copy->entries = NULL;
   }
 

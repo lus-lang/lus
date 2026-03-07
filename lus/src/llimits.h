@@ -50,8 +50,8 @@ typedef lu_byte TStatus;
 ** Maximum size for strings and userdata visible for Lua; should be
 ** representable as a lua_Integer and as a size_t.
 */
-#define MAX_SIZE                                                               \
-  (sizeof(size_t) < sizeof(lua_Integer) ? MAX_SIZET                            \
+#define MAX_SIZE                                    \
+  (sizeof(size_t) < sizeof(lua_Integer) ? MAX_SIZET \
                                         : cast_sizet(LUA_MAXINTEGER))
 
 /*
@@ -68,7 +68,7 @@ typedef lu_byte TStatus;
 ** value. (In strict ISO C this may cause undefined behavior, but no
 ** actual machine seems to bother.)
 */
-#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) &&                      \
+#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) && \
     __STDC_VERSION__ >= 199901L
 #include <stdint.h>
 #if defined(UINTPTR_MAX) /* even in C99 this type is optional */
@@ -236,18 +236,18 @@ typedef unsigned long l_uint32;
 ** (as the result 'm' of 'fmod' has the same sign of 'a').
 */
 #if !defined(luai_nummod)
-#define luai_nummod(L, a, b, m)                                                \
-  {                                                                            \
-    (void)L;                                                                   \
-    (m) = l_mathop(fmod)(a, b);                                                \
-    if (((m) > 0) ? (b) < 0 : ((m) < 0 && (b) > 0))                            \
-      (m) += (b);                                                              \
+#define luai_nummod(L, a, b, m)                     \
+  {                                                 \
+    (void)L;                                        \
+    (m) = l_mathop(fmod)(a, b);                     \
+    if (((m) > 0) ? (b) < 0 : ((m) < 0 && (b) > 0)) \
+      (m) += (b);                                   \
   }
 #endif
 
 /* exponentiation */
 #if !defined(luai_numpow)
-#define luai_numpow(L, a, b)                                                   \
+#define luai_numpow(L, a, b) \
   ((void)L, (b == 2) ? (a) * (a) : l_mathop(pow)(a, b))
 #endif
 
@@ -274,8 +274,8 @@ typedef unsigned long l_uint32;
 ** MAXINTEGER may not have one, and therefore its conversion to float
 ** may have an ill-defined value.)
 */
-#define lua_numbertointeger(n, p)                                              \
-  ((n) >= (LUA_NUMBER)(LUA_MININTEGER) &&                                      \
+#define lua_numbertointeger(n, p)         \
+  ((n) >= (LUA_NUMBER)(LUA_MININTEGER) && \
    (n) < -(LUA_NUMBER)(LUA_MININTEGER) && (*(p) = (LUA_INTEGER)(n), 1))
 
 /*
@@ -293,7 +293,7 @@ typedef unsigned long l_uint32;
 */
 #if !defined(LUAI_FUNC)
 
-#if defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 302) &&         \
+#if defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 302) && \
     (defined(__ELF__) || defined(__MACH__))
 #define LUAI_FUNC __attribute__((visibility("internal"))) extern
 #else
@@ -335,7 +335,7 @@ typedef union __attribute__((packed)) {
 #define lus_bswap(x) _byteswap_ulong(x)
 #else
 /* Fallback: manual byte swap */
-#define lus_bswap(x)                                                           \
+#define lus_bswap(x) \
   (((x) << 24) | (((x) & 0xff00) << 8) | (((x) >> 8) & 0xff00) | ((x) >> 24))
 #endif
 
@@ -363,9 +363,9 @@ typedef union __attribute__((packed)) {
 #elif defined(_MSC_VER)
 #define lus_bswap64(x) _byteswap_uint64(x)
 #else
-#define lus_bswap64(x)                                                         \
-  (((x) << 56) | (((x) & 0xff00) << 40) | (((x) & 0xff0000) << 24) |           \
-   (((x) & 0xff000000) << 8) | (((x) >> 8) & 0xff000000) |                     \
+#define lus_bswap64(x)                                               \
+  (((x) << 56) | (((x) & 0xff00) << 40) | (((x) & 0xff0000) << 24) | \
+   (((x) & 0xff000000) << 8) | (((x) >> 8) & 0xff000000) |           \
    (((x) >> 24) & 0xff0000) | (((x) >> 40) & 0xff00) | ((x) >> 56))
 #endif
 

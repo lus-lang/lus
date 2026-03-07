@@ -293,10 +293,10 @@ typedef enum {
   OP_MMBINI, /*	A sB C k	call C metamethod over R[A] and sB	*/
   OP_MMBINK, /*	A B C k		call C metamethod over R[A] and K[B]	*/
 
-  OP_UNM,  /*	A B	R[A] := -R[B]					*/
-  OP_BNOT, /*	A B	R[A] := ~R[B]					*/
-  OP_NOT,  /*	A B	R[A] := not R[B]				*/
-  OP_LEN,  /*	A B	R[A] := #R[B] (length operator)			*/
+  OP_UNM,      /*	A B	R[A] := -R[B]					*/
+  OP_BNOT,     /*	A B	R[A] := ~R[B]					*/
+  OP_NOT,      /*	A B	R[A] := not R[B]				*/
+  OP_LEN,      /*	A B	R[A] := #R[B] (length operator)			*/
   OP_TOSTRING, /*	A B	R[A] := tostring(R[B])			*/
 
   OP_CONCAT, /*	A B	R[A] := R[A].. ... ..R[A + B - 1]		*/
@@ -345,10 +345,10 @@ typedef enum {
 
   OP_VARARGPREP, /* 	(adjust varargs)				*/
 
-  OP_CATCH,    /*	A B C	begin catch: B=handler+1 (0=none); C=offset to error path */
+  OP_CATCH, /*	A B C	begin catch: B=handler+1 (0=none); C=offset to error path */
   OP_ENDCATCH, /*	A B C	end catch: R[A]:=true; B=nresults; C=jump offset */
 
-  OP_SLICE,    /*	A B C	R[A] := slice(R[B], R[C], R[C+1])		*/
+  OP_SLICE, /*	A B C	R[A] := slice(R[B], R[C], R[C+1])		*/
 
   OP_EXTRAARG /*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;

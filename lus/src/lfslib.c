@@ -133,8 +133,8 @@ static int fs_path_split(lua_State *L) {
   const char *p = path;
   while (*p) {
     if (*p == FS_DIRSEP ||
-        *p == '/') { // Handle both / and \ on Windows? stick to platform sep
-                     // primarily but allow / as common
+        *p == '/') {  // Handle both / and \ on Windows? stick to platform sep
+                      // primarily but allow / as common
       lua_pushlstring(L, start, p - start);
       lua_rawseti(L, -2, i++);
       start = p + 1;
@@ -159,7 +159,8 @@ static int fs_path_name(lua_State *L) {
 
   if (last_sep) {
     lua_pushstring(L, last_sep + 1);
-  } else {
+  }
+  else {
     lua_pushstring(L, path);
   }
   return 1;
@@ -175,12 +176,14 @@ static int fs_path_parent(lua_State *L) {
 #endif
 
   if (last_sep) {
-    if (last_sep == path) { // Root
+    if (last_sep == path) {  // Root
       lua_pushlstring(L, path, 1);
-    } else {
+    }
+    else {
       lua_pushlstring(L, path, last_sep - path);
     }
-  } else {
+  }
+  else {
     lua_pushliteral(L, ".");
   }
   return 1;
@@ -202,9 +205,9 @@ static int glob_match(const char *pattern, const char *string) {
   while (*p) {
     if (*p == '*') {
       while (*(p + 1) == '*')
-        p++; // skip multiple *
+        p++;  // skip multiple *
       if (*(p + 1) == 0)
-        return 1; // * at end matches everything
+        return 1;  // * at end matches everything
       const char *next = p + 1;
       while (*s) {
         if (glob_match(next, s))
@@ -212,12 +215,14 @@ static int glob_match(const char *pattern, const char *string) {
         s++;
       }
       return 0;
-    } else if (*p == '?') {
+    }
+    else if (*p == '?') {
       if (!*s)
         return 0;
       p++;
       s++;
-    } else {
+    }
+    else {
       if (*p != *s)
         return 0;
       p++;
@@ -240,10 +245,12 @@ static void fs_granter(lua_State *L, lus_PledgeRequest *p) {
     if (p->sub == NULL) {
       /* Grant global fs permission */
       lus_setpledge(L, p, NULL, p->value);
-    } else if (strcmp(p->sub, "read") == 0 || strcmp(p->sub, "write") == 0) {
+    }
+    else if (strcmp(p->sub, "read") == 0 || strcmp(p->sub, "write") == 0) {
       /* Grant read or write permission */
       lus_setpledge(L, p, p->sub, p->value);
-    } else {
+    }
+    else {
       /* Unknown subpermission = error */
       luaL_error(L, "unknown fs subpermission: '%s'", p->sub);
     }
@@ -500,7 +507,8 @@ static int fs_remove_recursive(const char *path) {
     } while (FindNextFileA(hFind, &fd));
     FindClose(hFind);
     return RemoveDirectoryA(path) ? 0 : -1;
-  } else {
+  }
+  else {
     return DeleteFileA(path) ? 0 : -1;
   }
 #else
@@ -546,7 +554,8 @@ static int fs_remove_recursive(const char *path) {
     }
     closedir(d);
     return rmdir(path);
-  } else {
+  }
+  else {
     return unlink(path);
   }
 #endif
@@ -573,7 +582,8 @@ static int fs_remove(lua_State *L) {
         return luaL_error(
             L, "failed to remove directory '%s' recursively: error %lu", path,
             (unsigned long)GetLastError());
-    } else {
+    }
+    else {
       if (!RemoveDirectoryA(path)) {
         DWORD err = GetLastError();
         if (err == ERROR_DIR_NOT_EMPTY)
@@ -582,7 +592,8 @@ static int fs_remove(lua_State *L) {
                           (unsigned long)err);
       }
     }
-  } else {
+  }
+  else {
     if (!DeleteFileA(path))
       return luaL_error(L, "cannot remove file '%s': error %lu", path,
                         (unsigned long)GetLastError());
@@ -600,7 +611,8 @@ static int fs_remove(lua_State *L) {
       if (fs_remove_recursive(path) != 0)
         return luaL_error(L, "failed to remove directory '%s' recursively: %s",
                           path, strerror(errno));
-    } else {
+    }
+    else {
       if (rmdir(path) != 0) {
         int err = errno;
         if (err == ENOTEMPTY)
@@ -609,7 +621,8 @@ static int fs_remove(lua_State *L) {
                           strerror(err));
       }
     }
-  } else {
+  }
+  else {
     if (unlink(path) != 0)
       return luaL_error(L, "cannot remove '%s': %s", path, strerror(errno));
   }
@@ -795,7 +808,8 @@ static int create_dirs_recursive(lua_State *L, const char *path) {
     p += 2;
     if (*p == '\\' || *p == '/')
       p++;
-  } else if (*p == '\\' || *p == '/') {
+  }
+  else if (*p == '\\' || *p == '/') {
     p++;
   }
 #else

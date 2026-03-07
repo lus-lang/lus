@@ -88,13 +88,15 @@ static int luaB_tonumber(lua_State *L) {
     if (lua_type(L, 1) == LUA_TNUMBER) { /* already a number? */
       lua_settop(L, 1);                  /* yes; return it */
       return 1;
-    } else if (lua_type(L, 1) == LUA_TENUM) { /* enum value? */
+    }
+    else if (lua_type(L, 1) == LUA_TENUM) { /* enum value? */
       /* Get the enum's index (1-based) */
       const TValue *o = s2v(L->ci->func.p + 1); /* first argument */
       Enum *e = enumvalue(o);
       lua_pushinteger(L, e->idx);
       return 1;
-    } else {
+    }
+    else {
       size_t l;
       const char *s = lua_tolstring(L, 1, &l);
       if (s != NULL && lua_stringtonumber(L, s) == l + 1)
@@ -102,7 +104,8 @@ static int luaB_tonumber(lua_State *L) {
       /* else not a number */
       luaL_checkany(L, 1); /* (but there must be some parameter) */
     }
-  } else {
+  }
+  else {
     size_t l;
     const char *s;
     lua_Integer n = 0; /* to avoid warnings */
@@ -194,10 +197,10 @@ static int pushmode(lua_State *L, int oldmode) {
 /*
 ** check whether call to 'lua_gc' was valid (not inside a finalizer)
 */
-#define checkvalres(res)                                                       \
-  {                                                                            \
-    if (res == -1)                                                             \
-      break;                                                                   \
+#define checkvalres(res) \
+  {                      \
+    if (res == -1)       \
+      break;             \
   }
 
 static int luaB_collectgarbage(lua_State *L) {
@@ -209,50 +212,50 @@ static int luaB_collectgarbage(lua_State *L) {
                                  LUA_GCGEN,   LUA_GCINC,     LUA_GCPARAM};
   int o = optsnum[luaL_checkoption(L, 1, "collect", opts)];
   switch (o) {
-  case LUA_GCCOUNT: {
-    int k = lua_gc(L, o);
-    int b = lua_gc(L, LUA_GCCOUNTB);
-    checkvalres(k);
-    lua_pushnumber(L, (lua_Number)k + ((lua_Number)b / 1024));
-    return 1;
-  }
-  case LUA_GCSTEP: {
-    lua_Integer n = luaL_optinteger(L, 2, 0);
-    int res = lua_gc(L, o, cast_sizet(n));
-    checkvalres(res);
-    lua_pushboolean(L, res);
-    return 1;
-  }
-  case LUA_GCISRUNNING: {
-    int res = lua_gc(L, o);
-    checkvalres(res);
-    lua_pushboolean(L, res);
-    return 1;
-  }
-  case LUA_GCGEN: {
-    return pushmode(L, lua_gc(L, o));
-  }
-  case LUA_GCINC: {
-    return pushmode(L, lua_gc(L, o));
-  }
-  case LUA_GCPARAM: {
-    static const char *const params[] = {"minormul", "majorminor", "minormajor",
-                                         "pause",    "stepmul",    "stepsize",
-                                         NULL};
-    static const char pnum[] = {LUA_GCPMINORMUL,   LUA_GCPMAJORMINOR,
-                                LUA_GCPMINORMAJOR, LUA_GCPPAUSE,
-                                LUA_GCPSTEPMUL,    LUA_GCPSTEPSIZE};
-    int p = pnum[luaL_checkoption(L, 2, NULL, params)];
-    lua_Integer value = luaL_optinteger(L, 3, -1);
-    lua_pushinteger(L, lua_gc(L, o, p, (int)value));
-    return 1;
-  }
-  default: {
-    int res = lua_gc(L, o);
-    checkvalres(res);
-    lua_pushinteger(L, res);
-    return 1;
-  }
+    case LUA_GCCOUNT: {
+      int k = lua_gc(L, o);
+      int b = lua_gc(L, LUA_GCCOUNTB);
+      checkvalres(k);
+      lua_pushnumber(L, (lua_Number)k + ((lua_Number)b / 1024));
+      return 1;
+    }
+    case LUA_GCSTEP: {
+      lua_Integer n = luaL_optinteger(L, 2, 0);
+      int res = lua_gc(L, o, cast_sizet(n));
+      checkvalres(res);
+      lua_pushboolean(L, res);
+      return 1;
+    }
+    case LUA_GCISRUNNING: {
+      int res = lua_gc(L, o);
+      checkvalres(res);
+      lua_pushboolean(L, res);
+      return 1;
+    }
+    case LUA_GCGEN: {
+      return pushmode(L, lua_gc(L, o));
+    }
+    case LUA_GCINC: {
+      return pushmode(L, lua_gc(L, o));
+    }
+    case LUA_GCPARAM: {
+      static const char *const params[] = {
+          "minormul", "majorminor", "minormajor", "pause",
+          "stepmul",  "stepsize",   NULL};
+      static const char pnum[] = {LUA_GCPMINORMUL,   LUA_GCPMAJORMINOR,
+                                  LUA_GCPMINORMAJOR, LUA_GCPPAUSE,
+                                  LUA_GCPSTEPMUL,    LUA_GCPSTEPSIZE};
+      int p = pnum[luaL_checkoption(L, 2, NULL, params)];
+      lua_Integer value = luaL_optinteger(L, 3, -1);
+      lua_pushinteger(L, lua_gc(L, o, p, (int)value));
+      return 1;
+    }
+    default: {
+      int res = lua_gc(L, o);
+      checkvalres(res);
+      lua_pushinteger(L, res);
+      return 1;
+    }
   }
   luaL_pushfail(L); /* invalid call (inside a finalizer) */
   return 1;
@@ -290,7 +293,8 @@ static int luaB_pairs(lua_State *L) {
     lua_pushvalue(L, 1);             /* state */
     lua_pushnil(L);                  /* initial value */
     lua_pushnil(L);                  /* to-be-closed object */
-  } else {
+  }
+  else {
     lua_pushvalue(L, 1);              /* argument 'self' to metamethod */
     lua_callk(L, 1, 4, 0, pairscont); /* get 4 values from metamethod */
   }
@@ -327,7 +331,8 @@ static int load_aux(lua_State *L, int status, int envidx) {
         lua_pop(L, 1); /* remove 'env' if not used by previous call */
     }
     return 1;
-  } else { /* error (message is on top of the stack) */
+  }
+  else { /* error (message is on top of the stack) */
     luaL_pushfail(L);
     lua_insert(L, -2); /* put before error message */
     return 2;          /* return fail plus error message */
@@ -388,7 +393,8 @@ static const char *generic_reader(lua_State *L, void *ud, size_t *size) {
     lua_pop(L, 1); /* pop result */
     *size = 0;
     return NULL;
-  } else if (l_unlikely(!lua_isstring(L, -1)))
+  }
+  else if (l_unlikely(!lua_isstring(L, -1)))
     luaL_error(L, "reader function must return a string");
   lua_replace(L, RESERVEDSLOT); /* save string in reserved slot */
   return lua_tolstring(L, RESERVEDSLOT, size);
@@ -409,7 +415,8 @@ static int luaB_load(lua_State *L) {
   if (s != NULL) { /* loading a string? */
     const char *chunkname = luaL_optstring(L, 2, s);
     status = luaL_loadbufferx(L, s, l, chunkname, mode);
-  } else { /* loading from a reader function */
+  }
+  else { /* loading from a reader function */
     const char *chunkname = luaL_optstring(L, 2, "=(load)");
     luaL_checktype(L, 1, LUA_TFUNCTION);
     lua_settop(L, RESERVEDSLOT); /* create reserved slot */
@@ -463,7 +470,8 @@ static int luaB_select(lua_State *L) {
   if (lua_type(L, 1) == LUA_TSTRING && *lua_tostring(L, 1) == '#') {
     lua_pushinteger(L, n - 1);
     return 1;
-  } else {
+  }
+  else {
     lua_Integer i = luaL_checkinteger(L, 1);
     if (i < 0)
       i = n + i;

@@ -411,7 +411,7 @@ static void reallymarkobject(global_State *g, GCObject *o) {
       break;
     }
     case LUA_VVECTOR: {
-      set2black(o);  /* vectors have no references to mark */
+      set2black(o); /* vectors have no references to mark */
       break;
     }
     default: lua_assert(0); break;
@@ -745,7 +745,7 @@ static l_mem traversethread(global_State *g, lua_State *th) {
   for (; o < th->top.p; o++) /* mark live elements in the stack */
     markvalue(g, s2v(o));
   for (uv = th->openupval; uv != NULL; uv = uv->u.open.next)
-    markobject(g, uv);           /* open upvalues cannot be collected */
+    markobject(g, uv); /* open upvalues cannot be collected */
   /* Mark handlers in active catch blocks (stored in CatchInfo, not on stack) */
   for (ci = th->ci; ci != NULL; ci = ci->previous) {
     if (isLua(ci) && ci->u.l.catchinfo.active) {

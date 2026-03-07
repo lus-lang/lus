@@ -94,7 +94,8 @@ static lua_State *getthread(lua_State *L, int *arg) {
   if (lua_isthread(L, 1)) {
     *arg = 1;
     return lua_tothread(L, 1);
-  } else {
+  }
+  else {
     *arg = 0;
     return L; /* function will operate over current thread */
   }
@@ -152,7 +153,8 @@ static int db_getinfo(lua_State *L) {
     options = lua_pushfstring(L, ">%s", options); /* add '>' to 'options' */
     lua_pushvalue(L, arg + 1); /* move function to 'L1' stack */
     lua_xmove(L, L1, 1);
-  } else { /* stack level */
+  }
+  else { /* stack level */
     if (!lua_getstack(L1, (int)luaL_checkinteger(L, arg + 1), &ar)) {
       luaL_pushfail(L); /* level out of range */
       return 1;
@@ -203,7 +205,8 @@ static int db_getlocal(lua_State *L) {
     lua_pushvalue(L, arg + 1);                      /* push function */
     lua_pushstring(L, lua_getlocal(L, NULL, nvar)); /* push local name */
     return 1; /* return only name (there is no value) */
-  } else {    /* stack-level argument */
+  }
+  else { /* stack-level argument */
     lua_Debug ar;
     const char *name;
     int level = (int)luaL_checkinteger(L, arg + 1);
@@ -216,7 +219,8 @@ static int db_getlocal(lua_State *L) {
       lua_pushstring(L, name); /* push name */
       lua_rotate(L, -2, 1);    /* re-order */
       return 2;
-    } else {
+    }
+    else {
       luaL_pushfail(L); /* no name (nor value) */
       return 1;
     }
@@ -258,7 +262,9 @@ static int auxupvalue(lua_State *L, int get) {
   return get + 1;
 }
 
-static int db_getupvalue(lua_State *L) { return auxupvalue(L, 1); }
+static int db_getupvalue(lua_State *L) {
+  return auxupvalue(L, 1);
+}
 
 static int db_setupvalue(lua_State *L) {
   luaL_checkany(L, 3);
@@ -360,7 +366,8 @@ static int db_sethook(lua_State *L) {
     func = NULL;
     mask = 0;
     count = 0; /* turn off hooks */
-  } else {
+  }
+  else {
     const char *smask = luaL_checkstring(L, arg + 2);
     luaL_checktype(L, arg + 1, LUA_TFUNCTION);
     count = (int)luaL_optinteger(L, arg + 3, 0);
@@ -392,7 +399,8 @@ static int db_gethook(lua_State *L) {
   if (hook == NULL) { /* no hook? */
     luaL_pushfail(L);
     return 1;
-  } else if (hook != hookf) /* external hook? */
+  }
+  else if (hook != hookf) /* external hook? */
     lua_pushliteral(L, "external hook");
   else { /* hook table must exist */
     lua_getfield(L, LUA_REGISTRYINDEX, HOOKKEY);
@@ -488,7 +496,8 @@ static void f_parse(lua_State *L, void *ud) {
   }
 
   /* Parse with AST generation enabled */
-  LClosure *cl = luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
+  LClosure *cl =
+      luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
 
   /* Pop the closure from stack (we don't need it) */
   lua_pop(L, 1);
@@ -506,8 +515,8 @@ static int db_parse(lua_State *L) {
   TStatus status;
 
   /* Parse options table if provided (third argument) */
-  int include_comments = 1;  /* default: include comments */
-  int error_recover = 1;     /* default: return partial AST on error */
+  int include_comments = 1; /* default: include comments */
+  int error_recover = 1;    /* default: return partial AST on error */
 
   if (lua_istable(L, 3)) {
     /* Get 'comments' option */
@@ -574,12 +583,15 @@ static int db_parse(lua_State *L) {
         if (p) {
           /* String chunk: [string "name"]:LINE: ... */
           errline = atoi(p + 2);
-        } else {
+        }
+        else {
           /* File chunk: filename:LINE: ... */
           const char *colon = strchr(errmsg, ':');
-          if (colon) errline = atoi(colon + 1);
+          if (colon)
+            errline = atoi(colon + 1);
         }
-        if (errline <= 0) errline = 1;
+        if (errline <= 0)
+          errline = 1;
       }
 
       /* Create a TString for the error message and add to AST errors */
@@ -587,7 +599,7 @@ static int db_parse(lua_State *L) {
       lusA_adderror(ast, errline, errcol, errmsg_ts);
 
       /* Convert partial AST to Lua table (includes errors array) */
-      lua_pop(L, 1);  /* remove error message from stack */
+      lua_pop(L, 1); /* remove error message from stack */
 
       /* Filter out comments if not requested */
       if (!include_comments) {
@@ -606,7 +618,7 @@ static int db_parse(lua_State *L) {
     /* No partial AST or recover disabled - return nil and error message */
     lusA_free(L, ast);
     lua_pushnil(L);
-    lua_insert(L, -2);  /* put nil before error message */
+    lua_insert(L, -2); /* put nil before error message */
     return 2;
   }
 
@@ -638,8 +650,8 @@ static int db_format(lua_State *L) {
   int indent_width = (int)luaL_optinteger(L, 3, 4);
   const char *errmsg = NULL;
 
-  char *result = lusF_format(L, source, srclen, chunkname,
-                              indent_width, 80, &errmsg);
+  char *result =
+      lusF_format(L, source, srclen, chunkname, indent_width, 80, &errmsg);
   if (result == NULL) {
     lua_pushnil(L);
     lua_pushstring(L, errmsg ? errmsg : "format error");

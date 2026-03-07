@@ -114,7 +114,7 @@ static void parse_value_iterative(JsonParser *p) {
    * We store all in-progress containers and their keys here. */
   lua_newtable(L);
   int anchor_idx = lua_gettop(L);
-  int next_anchor = 1;  /* Next index in anchor table */
+  int next_anchor = 1; /* Next index in anchor table */
 
   /* Current parsed value */
   TValue value;
@@ -126,365 +126,344 @@ static void parse_value_iterative(JsonParser *p) {
 
     /* Parse a value into 'value' */
     switch (c) {
-    case '"': {
-      /* Parse string directly */
-      size_t capacity = 256;
-      size_t len = 0;
-      char *buf = luaM_newvector(L, capacity, char);
+      case '"': {
+        /* Parse string directly */
+        size_t capacity = 256;
+        size_t len = 0;
+        char *buf = luaM_newvector(L, capacity, char);
 
-      p->json++; /* skip opening quote */
-      while (p->json < p->end && *p->json != '"') {
-        /* Ensure capacity */
-        if (len + 8 > capacity) {
-          size_t newcap = capacity * 2;
-          buf = luaM_reallocvector(L, buf, capacity, newcap, char);
-          capacity = newcap;
-        }
+        p->json++; /* skip opening quote */
+        while (p->json < p->end && *p->json != '"') {
+          /* Ensure capacity */
+          if (len + 8 > capacity) {
+            size_t newcap = capacity * 2;
+            buf = luaM_reallocvector(L, buf, capacity, newcap, char);
+            capacity = newcap;
+          }
 
-        if ((unsigned char)*p->json < 0x20) {
-          luaM_freearray(L, buf, capacity);
-          luaM_freearray(L, stack, stack_cap);
-          json_error(p, "control character in string");
-        }
-
-        if (*p->json == '\\') {
-          p->json++;
-          if (p->json >= p->end) {
+          if ((unsigned char)*p->json < 0x20) {
             luaM_freearray(L, buf, capacity);
             luaM_freearray(L, stack, stack_cap);
-            json_error(p, "unexpected end after backslash");
+            json_error(p, "control character in string");
           }
-          switch (*p->json) {
-          case '"':
-            buf[len++] = '"';
-            break;
-          case '\\':
-            buf[len++] = '\\';
-            break;
-          case '/':
-            buf[len++] = '/';
-            break;
-          case 'b':
-            buf[len++] = '\b';
-            break;
-          case 'f':
-            buf[len++] = '\f';
-            break;
-          case 'n':
-            buf[len++] = '\n';
-            break;
-          case 'r':
-            buf[len++] = '\r';
-            break;
-          case 't':
-            buf[len++] = '\t';
-            break;
-          case 'u': {
-            unsigned int codepoint = 0;
-            p->json++;
-            for (int i = 0; i < 4; i++) {
-              if (p->json >= p->end) {
-                luaM_freearray(L, buf, capacity);
-                luaM_freearray(L, stack, stack_cap);
-                json_error(p, "incomplete \\uXXXX escape");
-              }
-              char uc = *p->json;
-              codepoint <<= 4;
-              if (uc >= '0' && uc <= '9')
-                codepoint |= (unsigned)(uc - '0');
-              else if (uc >= 'a' && uc <= 'f')
-                codepoint |= (unsigned)(uc - 'a' + 10);
-              else if (uc >= 'A' && uc <= 'F')
-                codepoint |= (unsigned)(uc - 'A' + 10);
-              else {
-                luaM_freearray(L, buf, capacity);
-                luaM_freearray(L, stack, stack_cap);
-                json_error(p, "invalid hex digit");
-              }
-              p->json++;
-            }
-            p->json--; /* will be incremented at end */
 
-            /* Handle surrogate pairs */
-            if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
-              if (p->json + 1 < p->end && p->json[1] == '\\' &&
-                  p->json + 2 < p->end && p->json[2] == 'u') {
-                unsigned int low = 0;
-                p->json += 3;
+          if (*p->json == '\\') {
+            p->json++;
+            if (p->json >= p->end) {
+              luaM_freearray(L, buf, capacity);
+              luaM_freearray(L, stack, stack_cap);
+              json_error(p, "unexpected end after backslash");
+            }
+            switch (*p->json) {
+              case '"': buf[len++] = '"'; break;
+              case '\\': buf[len++] = '\\'; break;
+              case '/': buf[len++] = '/'; break;
+              case 'b': buf[len++] = '\b'; break;
+              case 'f': buf[len++] = '\f'; break;
+              case 'n': buf[len++] = '\n'; break;
+              case 'r': buf[len++] = '\r'; break;
+              case 't': buf[len++] = '\t'; break;
+              case 'u': {
+                unsigned int codepoint = 0;
+                p->json++;
                 for (int i = 0; i < 4; i++) {
-                  if (p->json >= p->end)
-                    break;
-                  char lc = *p->json;
-                  low <<= 4;
-                  if (lc >= '0' && lc <= '9')
-                    low |= (unsigned)(lc - '0');
-                  else if (lc >= 'a' && lc <= 'f')
-                    low |= (unsigned)(lc - 'a' + 10);
-                  else if (lc >= 'A' && lc <= 'F')
-                    low |= (unsigned)(lc - 'A' + 10);
+                  if (p->json >= p->end) {
+                    luaM_freearray(L, buf, capacity);
+                    luaM_freearray(L, stack, stack_cap);
+                    json_error(p, "incomplete \\uXXXX escape");
+                  }
+                  char uc = *p->json;
+                  codepoint <<= 4;
+                  if (uc >= '0' && uc <= '9')
+                    codepoint |= (unsigned)(uc - '0');
+                  else if (uc >= 'a' && uc <= 'f')
+                    codepoint |= (unsigned)(uc - 'a' + 10);
+                  else if (uc >= 'A' && uc <= 'F')
+                    codepoint |= (unsigned)(uc - 'A' + 10);
+                  else {
+                    luaM_freearray(L, buf, capacity);
+                    luaM_freearray(L, stack, stack_cap);
+                    json_error(p, "invalid hex digit");
+                  }
                   p->json++;
                 }
-                p->json--;
-                if (low >= 0xDC00 && low <= 0xDFFF) {
-                  codepoint =
-                      0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                p->json--; /* will be incremented at end */
+
+                /* Handle surrogate pairs */
+                if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                  if (p->json + 1 < p->end && p->json[1] == '\\' &&
+                      p->json + 2 < p->end && p->json[2] == 'u') {
+                    unsigned int low = 0;
+                    p->json += 3;
+                    for (int i = 0; i < 4; i++) {
+                      if (p->json >= p->end)
+                        break;
+                      char lc = *p->json;
+                      low <<= 4;
+                      if (lc >= '0' && lc <= '9')
+                        low |= (unsigned)(lc - '0');
+                      else if (lc >= 'a' && lc <= 'f')
+                        low |= (unsigned)(lc - 'a' + 10);
+                      else if (lc >= 'A' && lc <= 'F')
+                        low |= (unsigned)(lc - 'A' + 10);
+                      p->json++;
+                    }
+                    p->json--;
+                    if (low >= 0xDC00 && low <= 0xDFFF) {
+                      codepoint = 0x10000 + ((codepoint - 0xD800) << 10) +
+                                  (low - 0xDC00);
+                    }
+                  }
                 }
+
+                /* Encode as UTF-8 */
+                char utf8buf[UTF8BUFFSZ];
+                int utf8len = luaO_utf8esc(utf8buf, codepoint);
+                if (len + (size_t)utf8len > capacity) {
+                  size_t newcap = capacity * 2;
+                  buf = luaM_reallocvector(L, buf, capacity, newcap, char);
+                  capacity = newcap;
+                }
+                memcpy(buf + len, utf8buf + UTF8BUFFSZ - utf8len,
+                       (size_t)utf8len);
+                len += (size_t)utf8len;
+                break;
               }
-            }
-
-            /* Encode as UTF-8 */
-            char utf8buf[UTF8BUFFSZ];
-            int utf8len = luaO_utf8esc(utf8buf, codepoint);
-            if (len + (size_t)utf8len > capacity) {
-              size_t newcap = capacity * 2;
-              buf = luaM_reallocvector(L, buf, capacity, newcap, char);
-              capacity = newcap;
-            }
-            memcpy(buf + len, utf8buf + UTF8BUFFSZ - utf8len, (size_t)utf8len);
-            len += (size_t)utf8len;
-            break;
-          }
-          default:
-            luaM_freearray(L, buf, capacity);
-            luaM_freearray(L, stack, stack_cap);
-            json_error(p, "invalid escape sequence");
-          }
-          p->json++;
-        } else {
-          buf[len++] = *p->json;
-          p->json++;
-        }
-      }
-      if (p->json >= p->end || *p->json != '"') {
-        luaM_freearray(L, buf, capacity);
-        luaM_freearray(L, stack, stack_cap);
-        json_error(p, "unterminated string");
-      }
-      p->json++; /* skip closing quote */
-
-      TString *str = luaS_newlstr(L, buf, len);
-      setsvalue(L, &value, str);
-      luaM_freearray(L, buf, capacity);
-      break;
-    }
-    case 't':
-      parse_literal(p, "true", 4);
-      setbtvalue(&value);
-      break;
-    case 'f':
-      parse_literal(p, "false", 5);
-      setbfvalue(&value);
-      break;
-    case 'n':
-      parse_literal(p, "null", 4);
-      setnilvalue(&value);
-      break;
-    case '-':
-    case '0':
-    case '1':
-    case '2':
-    case '3':
-    case '4':
-    case '5':
-    case '6':
-    case '7':
-    case '8':
-    case '9': {
-      const char *start = p->json;
-      if (*p->json == '-')
-        p->json++;
-      if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
-        luaM_freearray(L, stack, stack_cap);
-        json_error(p, "invalid number");
-      }
-      if (*p->json == '0') {
-        p->json++;
-        if (p->json < p->end && isdigit((unsigned char)*p->json)) {
-          luaM_freearray(L, stack, stack_cap);
-          json_error(p, "leading zeros not allowed");
-        }
-      } else {
-        while (p->json < p->end && isdigit((unsigned char)*p->json))
-          p->json++;
-      }
-      int is_float = 0;
-      if (p->json < p->end && *p->json == '.') {
-        is_float = 1;
-        p->json++;
-        if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
-          luaM_freearray(L, stack, stack_cap);
-          json_error(p, "digit expected after decimal");
-        }
-        while (p->json < p->end && isdigit((unsigned char)*p->json))
-          p->json++;
-      }
-      if (p->json < p->end && (*p->json == 'e' || *p->json == 'E')) {
-        is_float = 1;
-        p->json++;
-        if (p->json < p->end && (*p->json == '+' || *p->json == '-'))
-          p->json++;
-        if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
-          luaM_freearray(L, stack, stack_cap);
-          json_error(p, "digit expected in exponent");
-        }
-        while (p->json < p->end && isdigit((unsigned char)*p->json))
-          p->json++;
-      }
-      size_t numlen = (size_t)(p->json - start);
-      char *numbuf = luaM_newvector(L, numlen + 1, char);
-      memcpy(numbuf, start, numlen);
-      numbuf[numlen] = '\0';
-      if (is_float) {
-        lua_Number n = (lua_Number)strtod(numbuf, NULL);
-        setfltvalue(&value, n);
-      } else {
-        lua_Integer n = (lua_Integer)strtoll(numbuf, NULL, 10);
-        setivalue(&value, n);
-      }
-      luaM_freearray(L, numbuf, numlen + 1);
-      (void)is_float;
-      break;
-    }
-    case '[':
-      if (++depth > JSON_MAX_DEPTH) {
-        lua_pop(L, 1); /* pop anchor table */
-        luaM_freearray(L, stack, stack_cap);
-        json_error(p, "maximum nesting depth exceeded");
-      }
-      p->json++;
-      skip_whitespace(p);
-      {
-        /* Create table using public API to ensure GC safety */
-        lua_newtable(L);
-        Table *t = hvalue(s2v(L->top.p - 1));
-        /* Store in anchor table to keep it alive */
-        lua_rawseti(L, anchor_idx, next_anchor);
-        int my_anchor = next_anchor++;
-
-        if (peek(p) == ']') {
-          p->json++; /* empty array */
-          depth--;
-          sethvalue(L, &value, t);
-        } else {
-          /* Push container frame */
-          if (stack_size >= stack_cap) {
-            size_t newcap = stack_cap * 2;
-            stack =
-                luaM_reallocvector(L, stack, stack_cap, newcap, ContainerFrame);
-            stack_cap = newcap;
-          }
-          stack[stack_size].table = t;
-          stack[stack_size].anchor_idx = my_anchor;
-          stack[stack_size].is_array = 1;
-          stack[stack_size].idx = 1;
-          stack[stack_size].key = NULL;
-          stack_size++;
-          continue; /* Parse first element */
-        }
-      }
-      break;
-    case '{':
-      if (++depth > JSON_MAX_DEPTH) {
-        lua_pop(L, 1); /* pop anchor table */
-        luaM_freearray(L, stack, stack_cap);
-        json_error(p, "maximum nesting depth exceeded");
-      }
-      p->json++;
-      skip_whitespace(p);
-      {
-        /* Create table using public API to ensure GC safety */
-        lua_newtable(L);
-        Table *t = hvalue(s2v(L->top.p - 1));
-        /* Store in anchor table to keep it alive */
-        lua_rawseti(L, anchor_idx, next_anchor);
-        int my_anchor = next_anchor++;
-
-        if (peek(p) == '}') {
-          p->json++; /* empty object */
-          depth--;
-          sethvalue(L, &value, t);
-        } else {
-          /* Parse key */
-          if (peek(p) != '"') {
-            lua_pop(L, 1); /* pop anchor table */
-            luaM_freearray(L, stack, stack_cap);
-            json_error(p, "expected string key in object");
-          }
-          /* Parse key string inline */
-          size_t kcap = 64, klen = 0;
-          char *kbuf = luaM_newvector(L, kcap, char);
-          p->json++; /* skip quote */
-          while (p->json < p->end && *p->json != '"') {
-            if (klen + 1 >= kcap) {
-              size_t newcap = kcap * 2;
-              kbuf = luaM_reallocvector(L, kbuf, kcap, newcap, char);
-              kcap = newcap;
-            }
-            if (*p->json == '\\') {
-              p->json++;
-              if (p->json >= p->end)
-                break;
-              switch (*p->json) {
-              case '"':
-                kbuf[klen++] = '"';
-                break;
-              case '\\':
-                kbuf[klen++] = '\\';
-                break;
-              case 'n':
-                kbuf[klen++] = '\n';
-                break;
-              case 't':
-                kbuf[klen++] = '\t';
-                break;
-              case 'r':
-                kbuf[klen++] = '\r';
-                break;
               default:
-                kbuf[klen++] = *p->json;
-                break;
-              }
-            } else {
-              kbuf[klen++] = *p->json;
+                luaM_freearray(L, buf, capacity);
+                luaM_freearray(L, stack, stack_cap);
+                json_error(p, "invalid escape sequence");
             }
             p->json++;
           }
-          if (p->json < p->end)
-            p->json++; /* skip closing quote */
-          expect(p, ':', "after object key");
-
-          /* Create key string using public API */
-          lua_pushlstring(L, kbuf, klen);
-          TString *keystr = tsvalue(s2v(L->top.p - 1));
-          /* Store key in anchor table */
-          lua_rawseti(L, anchor_idx, next_anchor);
-          next_anchor++;
-          luaM_freearray(L, kbuf, kcap);
-
-          /* Push container frame */
-          if (stack_size >= stack_cap) {
-            size_t newcap = stack_cap * 2;
-            stack =
-                luaM_reallocvector(L, stack, stack_cap, newcap, ContainerFrame);
-            stack_cap = newcap;
+          else {
+            buf[len++] = *p->json;
+            p->json++;
           }
-          stack[stack_size].table = t;
-          stack[stack_size].anchor_idx = my_anchor;
-          stack[stack_size].is_array = 0;
-          stack[stack_size].idx = 0;
-          stack[stack_size].key = keystr;
-          stack_size++;
-          continue; /* Parse value */
         }
+        if (p->json >= p->end || *p->json != '"') {
+          luaM_freearray(L, buf, capacity);
+          luaM_freearray(L, stack, stack_cap);
+          json_error(p, "unterminated string");
+        }
+        p->json++; /* skip closing quote */
+
+        TString *str = luaS_newlstr(L, buf, len);
+        setsvalue(L, &value, str);
+        luaM_freearray(L, buf, capacity);
+        break;
       }
-      break;
-    case -1:
-      luaM_freearray(L, stack, stack_cap);
-      json_error(p, "unexpected end of input");
-      break;
-    default:
-      luaM_freearray(L, stack, stack_cap);
-      json_error(p, "unexpected character");
+      case 't':
+        parse_literal(p, "true", 4);
+        setbtvalue(&value);
+        break;
+      case 'f':
+        parse_literal(p, "false", 5);
+        setbfvalue(&value);
+        break;
+      case 'n':
+        parse_literal(p, "null", 4);
+        setnilvalue(&value);
+        break;
+      case '-':
+      case '0':
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+      case '8':
+      case '9': {
+        const char *start = p->json;
+        if (*p->json == '-')
+          p->json++;
+        if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
+          luaM_freearray(L, stack, stack_cap);
+          json_error(p, "invalid number");
+        }
+        if (*p->json == '0') {
+          p->json++;
+          if (p->json < p->end && isdigit((unsigned char)*p->json)) {
+            luaM_freearray(L, stack, stack_cap);
+            json_error(p, "leading zeros not allowed");
+          }
+        }
+        else {
+          while (p->json < p->end && isdigit((unsigned char)*p->json))
+            p->json++;
+        }
+        int is_float = 0;
+        if (p->json < p->end && *p->json == '.') {
+          is_float = 1;
+          p->json++;
+          if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
+            luaM_freearray(L, stack, stack_cap);
+            json_error(p, "digit expected after decimal");
+          }
+          while (p->json < p->end && isdigit((unsigned char)*p->json))
+            p->json++;
+        }
+        if (p->json < p->end && (*p->json == 'e' || *p->json == 'E')) {
+          is_float = 1;
+          p->json++;
+          if (p->json < p->end && (*p->json == '+' || *p->json == '-'))
+            p->json++;
+          if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
+            luaM_freearray(L, stack, stack_cap);
+            json_error(p, "digit expected in exponent");
+          }
+          while (p->json < p->end && isdigit((unsigned char)*p->json))
+            p->json++;
+        }
+        size_t numlen = (size_t)(p->json - start);
+        char *numbuf = luaM_newvector(L, numlen + 1, char);
+        memcpy(numbuf, start, numlen);
+        numbuf[numlen] = '\0';
+        if (is_float) {
+          lua_Number n = (lua_Number)strtod(numbuf, NULL);
+          setfltvalue(&value, n);
+        }
+        else {
+          lua_Integer n = (lua_Integer)strtoll(numbuf, NULL, 10);
+          setivalue(&value, n);
+        }
+        luaM_freearray(L, numbuf, numlen + 1);
+        (void)is_float;
+        break;
+      }
+      case '[':
+        if (++depth > JSON_MAX_DEPTH) {
+          lua_pop(L, 1); /* pop anchor table */
+          luaM_freearray(L, stack, stack_cap);
+          json_error(p, "maximum nesting depth exceeded");
+        }
+        p->json++;
+        skip_whitespace(p);
+        {
+          /* Create table using public API to ensure GC safety */
+          lua_newtable(L);
+          Table *t = hvalue(s2v(L->top.p - 1));
+          /* Store in anchor table to keep it alive */
+          lua_rawseti(L, anchor_idx, next_anchor);
+          int my_anchor = next_anchor++;
+
+          if (peek(p) == ']') {
+            p->json++; /* empty array */
+            depth--;
+            sethvalue(L, &value, t);
+          }
+          else {
+            /* Push container frame */
+            if (stack_size >= stack_cap) {
+              size_t newcap = stack_cap * 2;
+              stack = luaM_reallocvector(L, stack, stack_cap, newcap,
+                                         ContainerFrame);
+              stack_cap = newcap;
+            }
+            stack[stack_size].table = t;
+            stack[stack_size].anchor_idx = my_anchor;
+            stack[stack_size].is_array = 1;
+            stack[stack_size].idx = 1;
+            stack[stack_size].key = NULL;
+            stack_size++;
+            continue; /* Parse first element */
+          }
+        }
+        break;
+      case '{':
+        if (++depth > JSON_MAX_DEPTH) {
+          lua_pop(L, 1); /* pop anchor table */
+          luaM_freearray(L, stack, stack_cap);
+          json_error(p, "maximum nesting depth exceeded");
+        }
+        p->json++;
+        skip_whitespace(p);
+        {
+          /* Create table using public API to ensure GC safety */
+          lua_newtable(L);
+          Table *t = hvalue(s2v(L->top.p - 1));
+          /* Store in anchor table to keep it alive */
+          lua_rawseti(L, anchor_idx, next_anchor);
+          int my_anchor = next_anchor++;
+
+          if (peek(p) == '}') {
+            p->json++; /* empty object */
+            depth--;
+            sethvalue(L, &value, t);
+          }
+          else {
+            /* Parse key */
+            if (peek(p) != '"') {
+              lua_pop(L, 1); /* pop anchor table */
+              luaM_freearray(L, stack, stack_cap);
+              json_error(p, "expected string key in object");
+            }
+            /* Parse key string inline */
+            size_t kcap = 64, klen = 0;
+            char *kbuf = luaM_newvector(L, kcap, char);
+            p->json++; /* skip quote */
+            while (p->json < p->end && *p->json != '"') {
+              if (klen + 1 >= kcap) {
+                size_t newcap = kcap * 2;
+                kbuf = luaM_reallocvector(L, kbuf, kcap, newcap, char);
+                kcap = newcap;
+              }
+              if (*p->json == '\\') {
+                p->json++;
+                if (p->json >= p->end)
+                  break;
+                switch (*p->json) {
+                  case '"': kbuf[klen++] = '"'; break;
+                  case '\\': kbuf[klen++] = '\\'; break;
+                  case 'n': kbuf[klen++] = '\n'; break;
+                  case 't': kbuf[klen++] = '\t'; break;
+                  case 'r': kbuf[klen++] = '\r'; break;
+                  default: kbuf[klen++] = *p->json; break;
+                }
+              }
+              else {
+                kbuf[klen++] = *p->json;
+              }
+              p->json++;
+            }
+            if (p->json < p->end)
+              p->json++; /* skip closing quote */
+            expect(p, ':', "after object key");
+
+            /* Create key string using public API */
+            lua_pushlstring(L, kbuf, klen);
+            TString *keystr = tsvalue(s2v(L->top.p - 1));
+            /* Store key in anchor table */
+            lua_rawseti(L, anchor_idx, next_anchor);
+            next_anchor++;
+            luaM_freearray(L, kbuf, kcap);
+
+            /* Push container frame */
+            if (stack_size >= stack_cap) {
+              size_t newcap = stack_cap * 2;
+              stack = luaM_reallocvector(L, stack, stack_cap, newcap,
+                                         ContainerFrame);
+              stack_cap = newcap;
+            }
+            stack[stack_size].table = t;
+            stack[stack_size].anchor_idx = my_anchor;
+            stack[stack_size].is_array = 0;
+            stack[stack_size].idx = 0;
+            stack[stack_size].key = keystr;
+            stack_size++;
+            continue; /* Parse value */
+          }
+        }
+        break;
+      case -1:
+        luaM_freearray(L, stack, stack_cap);
+        json_error(p, "unexpected end of input");
+        break;
+      default:
+        luaM_freearray(L, stack, stack_cap);
+        json_error(p, "unexpected character");
     }
 
     /* Integrate value into parent container */
@@ -498,13 +477,15 @@ static void parse_value_iterative(JsonParser *p) {
 
         if (accept(p, ',')) {
           break; /* Parse next element */
-        } else {
+        }
+        else {
           expect(p, ']', "after array element");
           depth--;
           sethvalue(L, &value, parent->table);
           stack_size--;
         }
-      } else {
+      }
+      else {
         /* Set object key-value directly */
         TValue keyval;
         setsvalue(L, &keyval, parent->key);
@@ -532,20 +513,13 @@ static void parse_value_iterative(JsonParser *p) {
               if (p->json >= p->end)
                 break;
               switch (*p->json) {
-              case '"':
-                kbuf[klen++] = '"';
-                break;
-              case '\\':
-                kbuf[klen++] = '\\';
-                break;
-              case 'n':
-                kbuf[klen++] = '\n';
-                break;
-              default:
-                kbuf[klen++] = *p->json;
-                break;
+                case '"': kbuf[klen++] = '"'; break;
+                case '\\': kbuf[klen++] = '\\'; break;
+                case 'n': kbuf[klen++] = '\n'; break;
+                default: kbuf[klen++] = *p->json; break;
               }
-            } else {
+            }
+            else {
               kbuf[klen++] = *p->json;
             }
             p->json++;
@@ -562,7 +536,8 @@ static void parse_value_iterative(JsonParser *p) {
           parent->key = newkey;
           luaM_freearray(L, kbuf, kcap);
           break; /* Parse value */
-        } else {
+        }
+        else {
           expect(p, '}', "after object value");
           depth--;
           sethvalue(L, &value, parent->table);
@@ -583,20 +558,26 @@ static void parse_value_iterative(JsonParser *p) {
   /* Push final result using proper API */
   if (ttisnil(&value)) {
     lua_pushnil(L);
-  } else if (ttisboolean(&value)) {
+  }
+  else if (ttisboolean(&value)) {
     lua_pushboolean(L, !l_isfalse(&value));
-  } else if (ttisinteger(&value)) {
+  }
+  else if (ttisinteger(&value)) {
     lua_pushinteger(L, ivalue(&value));
-  } else if (ttisfloat(&value)) {
+  }
+  else if (ttisfloat(&value)) {
     lua_pushnumber(L, fltvalue(&value));
-  } else if (ttisstring(&value)) {
+  }
+  else if (ttisstring(&value)) {
     TString *ts = tsvalue(&value);
     lua_pushlstring(L, getstr(ts), tsslen(ts));
-  } else if (ttistable(&value)) {
+  }
+  else if (ttistable(&value)) {
     /* Push the table - it's still alive because it was in our anchor table */
     setobj2s(L, L->top.p, &value);
     api_incr_top(L);
-  } else {
+  }
+  else {
     lua_pushnil(L); /* fallback */
   }
 }
@@ -668,36 +649,23 @@ static void write_json_string(JsonWriter *w, const char *s, size_t len) {
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)s[i];
     switch (c) {
-    case '"':
-      luaL_addlstring(&b, "\\\"", 2);
-      break;
-    case '\\':
-      luaL_addlstring(&b, "\\\\", 2);
-      break;
-    case '\b':
-      luaL_addlstring(&b, "\\b", 2);
-      break;
-    case '\f':
-      luaL_addlstring(&b, "\\f", 2);
-      break;
-    case '\n':
-      luaL_addlstring(&b, "\\n", 2);
-      break;
-    case '\r':
-      luaL_addlstring(&b, "\\r", 2);
-      break;
-    case '\t':
-      luaL_addlstring(&b, "\\t", 2);
-      break;
-    default:
-      if (c < 0x20) {
-        /* Control character - use \u00XX escape */
-        char buf[8];
-        snprintf(buf, sizeof(buf), "\\u%04x", c);
-        luaL_addlstring(&b, buf, 6);
-      } else {
-        luaL_addchar(&b, (char)c);
-      }
+      case '"': luaL_addlstring(&b, "\\\"", 2); break;
+      case '\\': luaL_addlstring(&b, "\\\\", 2); break;
+      case '\b': luaL_addlstring(&b, "\\b", 2); break;
+      case '\f': luaL_addlstring(&b, "\\f", 2); break;
+      case '\n': luaL_addlstring(&b, "\\n", 2); break;
+      case '\r': luaL_addlstring(&b, "\\r", 2); break;
+      case '\t': luaL_addlstring(&b, "\\t", 2); break;
+      default:
+        if (c < 0x20) {
+          /* Control character - use \u00XX escape */
+          char buf[8];
+          snprintf(buf, sizeof(buf), "\\u%04x", c);
+          luaL_addlstring(&b, buf, 6);
+        }
+        else {
+          luaL_addchar(&b, (char)c);
+        }
     }
   }
 
@@ -712,22 +680,21 @@ static void write_json_string(JsonWriter *w, const char *s, size_t len) {
 static int is_json_serializable(lua_State *L, int idx) {
   int t = lua_type(L, idx);
   switch (t) {
-  case LUA_TNIL:
-  case LUA_TBOOLEAN:
-  case LUA_TNUMBER:
-  case LUA_TSTRING:
-  case LUA_TTABLE:
-    return 1;
-  case LUA_TUSERDATA:
-    /* Userdata is serializable if it has __json metamethod */
-    if (luaL_getmetafield(L, idx, "__json") != LUA_TNIL) {
-      lua_pop(L, 1);
-      return 1;
-    }
-    return 0;
-  default:
-    /* Function, thread, lightuserdata, enum are not serializable */
-    return 0;
+    case LUA_TNIL:
+    case LUA_TBOOLEAN:
+    case LUA_TNUMBER:
+    case LUA_TSTRING:
+    case LUA_TTABLE: return 1;
+    case LUA_TUSERDATA:
+      /* Userdata is serializable if it has __json metamethod */
+      if (luaL_getmetafield(L, idx, "__json") != LUA_TNIL) {
+        lua_pop(L, 1);
+        return 1;
+      }
+      return 0;
+    default:
+      /* Function, thread, lightuserdata, enum are not serializable */
+      return 0;
   }
 }
 
@@ -774,7 +741,8 @@ static void write_number(JsonWriter *w, lua_State *L, int idx) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), LUA_INTEGER_FMT, (LUAI_UACINT)n);
     write_string_raw(w, buf, (size_t)len);
-  } else {
+  }
+  else {
     lua_Number n = lua_tonumber(L, idx);
 
     /* Handle special float values */
@@ -897,7 +865,8 @@ static void write_array(JsonWriter *w, int idx) {
 
       write_value(w, filtered_val_idx);
       lua_pop(L, 3); /* pop key, filtered value, original value */
-    } else {
+    }
+    else {
       if (!first)
         write_char(w, ',');
       first = 0;
@@ -958,7 +927,8 @@ static void write_object(JsonWriter *w, int idx) {
       /* Write filtered value */
       write_value(w, filtered_val_idx);
       lua_pop(L, 2); /* pop filtered value and original value */
-    } else {
+    }
+    else {
       if (!first)
         write_char(w, ',');
       first = 0;
@@ -998,9 +968,11 @@ static void write_table(JsonWriter *w, int idx) {
     call_json_metamethod(w, idx);
     write_value(w, lua_gettop(L));
     lua_pop(L, 1);
-  } else if (is_array(L, idx)) {
+  }
+  else if (is_array(L, idx)) {
     write_array(w, idx);
-  } else {
+  }
+  else {
     write_object(w, idx);
   }
 
@@ -1015,47 +987,42 @@ static void write_value(JsonWriter *w, int idx) {
   int t = lua_type(L, idx);
 
   switch (t) {
-  case LUA_TNIL:
-    write_literal(w, "null");
-    break;
+    case LUA_TNIL: write_literal(w, "null"); break;
 
-  case LUA_TBOOLEAN:
-    write_literal(w, lua_toboolean(L, idx) ? "true" : "false");
-    break;
+    case LUA_TBOOLEAN:
+      write_literal(w, lua_toboolean(L, idx) ? "true" : "false");
+      break;
 
-  case LUA_TNUMBER:
-    write_number(w, L, idx);
-    break;
+    case LUA_TNUMBER: write_number(w, L, idx); break;
 
-  case LUA_TSTRING: {
-    size_t len;
-    const char *s = lua_tolstring(L, idx, &len);
-    write_json_string(w, s, len);
-    break;
-  }
-
-  case LUA_TTABLE:
-    write_table(w, idx);
-    break;
-
-  case LUA_TUSERDATA:
-    /* Check for __json metamethod on userdata */
-    if (has_json_metamethod(L, idx)) {
-      call_json_metamethod(w, idx);
-      write_value(w, lua_gettop(L));
-      lua_pop(L, 1);
-    } else {
-      /* Skip userdata without __json */
-      write_literal(w, "null");
+    case LUA_TSTRING: {
+      size_t len;
+      const char *s = lua_tolstring(L, idx, &len);
+      write_json_string(w, s, len);
+      break;
     }
-    break;
 
-  default:
-    /* Skip unsupported types (function, thread, enum, lightuserdata) */
-    /* When called from object/array context, these are skipped */
-    /* When called as top-level, output null */
-    write_literal(w, "null");
-    break;
+    case LUA_TTABLE: write_table(w, idx); break;
+
+    case LUA_TUSERDATA:
+      /* Check for __json metamethod on userdata */
+      if (has_json_metamethod(L, idx)) {
+        call_json_metamethod(w, idx);
+        write_value(w, lua_gettop(L));
+        lua_pop(L, 1);
+      }
+      else {
+        /* Skip userdata without __json */
+        write_literal(w, "null");
+      }
+      break;
+
+    default:
+      /* Skip unsupported types (function, thread, enum, lightuserdata) */
+      /* When called from object/array context, these are skipped */
+      /* When called as top-level, output null */
+      write_literal(w, "null");
+      break;
   }
 }
 
@@ -1090,7 +1057,8 @@ static int json_tojson(lua_State *L) {
 
     write_value(&w, val_idx);
     lua_pop(L, 2);
-  } else {
+  }
+  else {
     write_value(&w, 1);
   }
 

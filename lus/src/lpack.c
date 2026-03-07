@@ -67,12 +67,11 @@ static size_t lpack_getnum(const char **fmt, size_t df) {
 ** than the maximum size of integers.
 */
 static unsigned lpack_getnumlimit(lpack_Header *h, const char **fmt,
-                                   size_t df) {
+                                  size_t df) {
   size_t sz = lpack_getnum(fmt, df);
   if (l_unlikely((sz - 1u) >= LPACK_MAXINTSIZE))
-    return cast_uint(
-        luaL_error(h->L, "integral size (%d) out of limits [1,%d]", sz,
-                   LPACK_MAXINTSIZE));
+    return cast_uint(luaL_error(h->L, "integral size (%d) out of limits [1,%d]",
+                                sz, LPACK_MAXINTSIZE));
   return cast_uint(sz);
 }
 
@@ -101,7 +100,9 @@ lpack_KOption lpack_getoption(lpack_Header *h, const char **fmt, size_t *size) {
     case 'n': *size = sizeof(lua_Number); return Lpack_Knumber;
     case 'd': *size = sizeof(double); return Lpack_Kdouble;
     case 'i': *size = lpack_getnumlimit(h, fmt, sizeof(int)); return Lpack_Kint;
-    case 'I': *size = lpack_getnumlimit(h, fmt, sizeof(int)); return Lpack_Kuint;
+    case 'I':
+      *size = lpack_getnumlimit(h, fmt, sizeof(int));
+      return Lpack_Kuint;
     case 's':
       *size = lpack_getnumlimit(h, fmt, sizeof(size_t));
       return Lpack_Kstring;
@@ -129,10 +130,10 @@ lpack_KOption lpack_getoption(lpack_Header *h, const char **fmt, size_t *size) {
 
 
 lpack_KOption lpack_getdetails(lpack_Header *h, size_t totalsize,
-                                const char **fmt, size_t *psize,
-                                unsigned *ntoalign) {
+                               const char **fmt, size_t *psize,
+                               unsigned *ntoalign) {
   lpack_KOption opt = lpack_getoption(h, fmt, psize);
-  size_t align = *psize; /* usually, alignment follows size */
+  size_t align = *psize;         /* usually, alignment follows size */
   if (opt == Lpack_Kpaddalign) { /* 'X' gets alignment from following option */
     if (**fmt == '\0' || lpack_getoption(h, fmt, &align) == Lpack_Kchar ||
         align == 0)
@@ -146,7 +147,8 @@ lpack_KOption lpack_getdetails(lpack_Header *h, size_t totalsize,
     if (l_unlikely(!ispow2(align))) { /* not a power of 2? */
       *ntoalign = 0;                  /* to avoid warnings */
       luaL_argerror(h->L, 1, "format asks for alignment not power of 2");
-    } else {
+    }
+    else {
       /* 'szmoda' = totalsize % align */
       unsigned szmoda = cast_uint(totalsize & (align - 1));
       *ntoalign = cast_uint((align - szmoda) & (align - 1));
@@ -157,7 +159,7 @@ lpack_KOption lpack_getdetails(lpack_Header *h, size_t totalsize,
 
 
 void lpack_packint(char *buff, lua_Unsigned n, int islittle, unsigned size,
-                    int neg) {
+                   int neg) {
   unsigned i;
   buff[islittle ? 0 : size - 1] = (char)(n & LPACK_MC); /* first byte */
   for (i = 1; i < size; i++) {
@@ -172,7 +174,7 @@ void lpack_packint(char *buff, lua_Unsigned n, int islittle, unsigned size,
 
 
 void lpack_copywithendian(char *dest, const char *src, unsigned size,
-                           int islittle) {
+                          int islittle) {
   if (islittle == nativeendian.little)
     memcpy(dest, src, size);
   else {
@@ -184,7 +186,7 @@ void lpack_copywithendian(char *dest, const char *src, unsigned size,
 
 
 lua_Integer lpack_unpackint(lua_State *L, const char *str, int islittle,
-                             int size, int issigned) {
+                            int size, int issigned) {
   lua_Unsigned res = 0;
   int i;
   int limit = (size <= LPACK_SZINT) ? size : LPACK_SZINT;
@@ -197,7 +199,8 @@ lua_Integer lpack_unpackint(lua_State *L, const char *str, int islittle,
       lua_Unsigned mask = (lua_Unsigned)1 << (size * LPACK_NB - 1);
       res = ((res ^ mask) - mask); /* do sign extension */
     }
-  } else if (size > LPACK_SZINT) { /* must check unread bytes */
+  }
+  else if (size > LPACK_SZINT) { /* must check unread bytes */
     int mask = (!issigned || (lua_Integer)res >= 0) ? 0 : LPACK_MC;
     for (i = limit; i < size; i++) {
       if (l_unlikely((unsigned char)str[islittle ? i : size - 1 - i] != mask))

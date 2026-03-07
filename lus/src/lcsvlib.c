@@ -73,8 +73,8 @@ static void parse_quoted_field(CsvParser *p) {
 */
 static void parse_unquoted_field(CsvParser *p) {
   const char *fieldstart = p->csv;
-  while (p->csv < p->end && *p->csv != p->delim &&
-         *p->csv != '\n' && *p->csv != '\r') {
+  while (p->csv < p->end && *p->csv != p->delim && *p->csv != '\n' &&
+         *p->csv != '\r') {
     p->csv++;
   }
   lua_pushlstring(p->L, fieldstart, (size_t)(p->csv - fieldstart));
@@ -179,7 +179,7 @@ static int csv_fromcsv(lua_State *L) {
       lua_settable(L, keyed_idx);  /* keyed[header] = value */
     }
     lua_rawseti(L, new_result_idx, i - 1); /* store keyed row */
-    lua_pop(L, 1); /* pop data row */
+    lua_pop(L, 1);                         /* pop data row */
   }
 
   return 1; /* new_result_idx is on top */
@@ -276,7 +276,7 @@ static int csv_tocsv(lua_State *L) {
         /* strep is now on top; get pointer from it */
         const char *field = lua_tolstring(L, -1, &flen);
         push_field(L, field, flen, delim); /* stack: strep quoted */
-        lua_remove(L, -2);                /* stack: quoted */
+        lua_remove(L, -2);                 /* stack: quoted */
         parts_add(L, parts_idx);
       }
     }
@@ -298,10 +298,7 @@ static int csv_tocsv(lua_State *L) {
 
 
 static const luaL_Reg csv_funcs[] = {
-    {"tocsv", csv_tocsv},
-    {"fromcsv", csv_fromcsv},
-    {NULL, NULL}
-};
+    {"tocsv", csv_tocsv}, {"fromcsv", csv_fromcsv}, {NULL, NULL}};
 
 
 LUAMOD_API int luaopen_csv(lua_State *L) {

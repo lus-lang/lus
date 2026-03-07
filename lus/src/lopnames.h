@@ -22,12 +22,11 @@ static const char *const opnames[] = {
     "MUL",        "MOD",      "POW",      "DIV",      "IDIV",     "BAND",
     "BOR",        "BXOR",     "SHL",      "SHR",      "MMBIN",    "MMBINI",
     "MMBINK",     "UNM",      "BNOT",     "NOT",      "LEN",      "TOSTRING",
-    "CONCAT",
-    "CLOSE",      "TBC",      "JMP",      "EQ",       "LT",       "LE",
-    "EQK",        "EQI",      "LTI",      "LEI",      "GTI",      "GEI",
-    "TEST",       "TESTSET",  "CALL",     "TAILCALL", "RETURN",   "RETURN0",
-    "RETURN1",    "FORLOOP",  "FORPREP",  "TFORPREP", "TFORCALL", "TFORLOOP",
-    "SETLIST",    "CLOSURE",  "VARARG",   "GETVARG",  "ERRNNIL",  "VARARGPREP",
-    "CATCH",      "ENDCATCH", "SLICE",    "EXTRAARG", NULL};
+    "CONCAT",     "CLOSE",    "TBC",      "JMP",      "EQ",       "LT",
+    "LE",         "EQK",      "EQI",      "LTI",      "LEI",      "GTI",
+    "GEI",        "TEST",     "TESTSET",  "CALL",     "TAILCALL", "RETURN",
+    "RETURN0",    "RETURN1",  "FORLOOP",  "FORPREP",  "TFORPREP", "TFORCALL",
+    "TFORLOOP",   "SETLIST",  "CLOSURE",  "VARARG",   "GETVARG",  "ERRNNIL",
+    "VARARGPREP", "CATCH",    "ENDCATCH", "SLICE",    "EXTRAARG", NULL};
 
 #endif

@@ -203,21 +203,21 @@
 #define LUA_SHRDIR "!\\..\\share\\lua\\" LUA_VDIR "\\"
 
 #if !defined(LUA_PATH_DEFAULT)
-#define LUA_PATH_DEFAULT                                                       \
-  LUA_LDIR "?.lus;" LUA_LDIR "?\\init.lus;" LUA_LDIR "?.lua;" LUA_LDIR         \
-           "?\\init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?\\init.lus;" LUA_CDIR   \
-           "?.lua;" LUA_CDIR "?\\init.lua;" LUA_SHRDIR "?.lus;" LUA_SHRDIR     \
-           "?\\init.lus;" LUA_SHRDIR "?.lua;" LUA_SHRDIR "?\\init.lua;"        \
-           ".\\?.lus;"                                                         \
-           ".\\?\\init.lus;"                                                   \
-           ".\\?.lua;"                                                         \
+#define LUA_PATH_DEFAULT                                                     \
+  LUA_LDIR "?.lus;" LUA_LDIR "?\\init.lus;" LUA_LDIR "?.lua;" LUA_LDIR       \
+           "?\\init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?\\init.lus;" LUA_CDIR \
+           "?.lua;" LUA_CDIR "?\\init.lua;" LUA_SHRDIR "?.lus;" LUA_SHRDIR   \
+           "?\\init.lus;" LUA_SHRDIR "?.lua;" LUA_SHRDIR "?\\init.lua;"      \
+           ".\\?.lus;"                                                       \
+           ".\\?\\init.lus;"                                                 \
+           ".\\?.lua;"                                                       \
            ".\\?\\init.lua"
 #endif
 
 #if !defined(LUA_CPATH_DEFAULT)
-#define LUA_CPATH_DEFAULT                                                      \
-  LUA_CDIR "?.dll;" LUA_CDIR "..\\lib\\lua\\" LUA_VDIR "\\?.dll;" LUA_CDIR     \
-           "loadall.dll;"                                                      \
+#define LUA_CPATH_DEFAULT                                                  \
+  LUA_CDIR "?.dll;" LUA_CDIR "..\\lib\\lua\\" LUA_VDIR "\\?.dll;" LUA_CDIR \
+           "loadall.dll;"                                                  \
            ".\\?.dll"
 #endif
 
@@ -228,19 +228,19 @@
 #define LUA_CDIR LUA_ROOT "lib/lua/" LUA_VDIR "/"
 
 #if !defined(LUA_PATH_DEFAULT)
-#define LUA_PATH_DEFAULT                                                       \
-  LUA_LDIR "?.lus;" LUA_LDIR "?/init.lus;" LUA_LDIR "?.lua;" LUA_LDIR          \
-           "?/init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?/init.lus;" LUA_CDIR     \
-           "?.lua;" LUA_CDIR "?/init.lua;"                                     \
-           "./?.lus;"                                                          \
-           "./?/init.lus;"                                                     \
-           "./?.lua;"                                                          \
+#define LUA_PATH_DEFAULT                                                   \
+  LUA_LDIR "?.lus;" LUA_LDIR "?/init.lus;" LUA_LDIR "?.lua;" LUA_LDIR      \
+           "?/init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?/init.lus;" LUA_CDIR \
+           "?.lua;" LUA_CDIR "?/init.lua;"                                 \
+           "./?.lus;"                                                      \
+           "./?/init.lus;"                                                 \
+           "./?.lua;"                                                      \
            "./?/init.lua"
 #endif
 
 #if !defined(LUA_CPATH_DEFAULT)
-#define LUA_CPATH_DEFAULT                                                      \
-  LUA_CDIR "?.so;" LUA_CDIR "loadall.so;"                                      \
+#define LUA_CPATH_DEFAULT                 \
+  LUA_CDIR "?.so;" LUA_CDIR "loadall.so;" \
            "./?.so"
 #endif
 
@@ -453,7 +453,7 @@
 
 #define LUAI_UACINT LUA_INTEGER
 
-#define lua_integer2str(s, sz, n)                                              \
+#define lua_integer2str(s, sz, n) \
   l_sprintf((s), sz, LUA_INTEGER_FMT, (LUAI_UACINT)(n))
 
 /*
@@ -563,7 +563,7 @@
 ** provide its own implementation.
 */
 #if !defined(LUA_USE_C89)
-#define lua_number2strx(L, b, sz, f, n)                                        \
+#define lua_number2strx(L, b, sz, f, n) \
   ((void)L, l_sprintf(b, sz, f, (LUAI_UACNUMBER)(n)))
 #endif
 
@@ -588,7 +588,7 @@
 */
 #define LUA_KCONTEXT ptrdiff_t
 
-#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) &&                      \
+#if !defined(LUA_USE_C89) && defined(__STDC_VERSION__) && \
     __STDC_VERSION__ >= 199901L
 #include <stdint.h>
 #if defined(INTPTR_MAX) /* even in C99 this type is optional */
@@ -681,11 +681,11 @@
 @@ LUAI_MAXALIGN defines fields that, when used in a union, ensure
 ** maximum alignment for the other items in that union.
 */
-#define LUAI_MAXALIGN                                                          \
-  lua_Number n;                                                                \
-  double u;                                                                    \
-  void *s;                                                                     \
-  lua_Integer i;                                                               \
+#define LUAI_MAXALIGN \
+  lua_Number n;       \
+  double u;           \
+  void *s;            \
+  lua_Integer i;      \
   long l
 
 /* }================================================================== */

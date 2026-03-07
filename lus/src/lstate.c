@@ -373,7 +373,7 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   {
     CCatchInfo cinfo;
     CPROTECT_BEGIN(L, &cinfo)
-      f_luaopen(L, NULL);
+    f_luaopen(L, NULL);
     CPROTECT_END(L, &cinfo);
     if (cinfo.status != LUA_OK) {
       /* memory allocation error: free partial state */

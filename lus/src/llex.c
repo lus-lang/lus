@@ -45,14 +45,52 @@
 
 
 /* ORDER RESERVED */
-static const char *const luaX_tokens[] = {
-    "and",    "break", "catch",    "do",        "else",     "elseif",  "end",
-    "enum",   "false", "for",      "from",      "function", "global",  "goto",
-    "if",     "in",    "local",    "nil",       "not",      "or",      "provide",
-    "repeat", "return", "then",  "true",     "until",     "while",    "//",      "..",
-    "...",    "==",    ">=",       "<=",        "~=",       "<<",      ">>",
-    "::",     "<eof>", "<number>", "<integer>", "<name>",   "<string>",
-    "<interp_begin>", "<interp_mid>", "<interp_end>", "<interp_simple>"};
+static const char *const luaX_tokens[] = {"and",
+                                          "break",
+                                          "catch",
+                                          "do",
+                                          "else",
+                                          "elseif",
+                                          "end",
+                                          "enum",
+                                          "false",
+                                          "for",
+                                          "from",
+                                          "function",
+                                          "global",
+                                          "goto",
+                                          "if",
+                                          "in",
+                                          "local",
+                                          "nil",
+                                          "not",
+                                          "or",
+                                          "provide",
+                                          "repeat",
+                                          "return",
+                                          "then",
+                                          "true",
+                                          "until",
+                                          "while",
+                                          "//",
+                                          "..",
+                                          "...",
+                                          "==",
+                                          ">=",
+                                          "<=",
+                                          "~=",
+                                          "<<",
+                                          ">>",
+                                          "::",
+                                          "<eof>",
+                                          "<number>",
+                                          "<integer>",
+                                          "<name>",
+                                          "<string>",
+                                          "<interp_begin>",
+                                          "<interp_mid>",
+                                          "<interp_end>",
+                                          "<interp_simple>"};
 
 
 #define save_and_next(ls) (save(ls, ls->current), next(ls))
@@ -188,7 +226,7 @@ void luaX_setinput(lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->fs = NULL;
   ls->linenumber = 1;
   ls->lastline = 1;
-  ls->column = 1;           /* start at column 1 */
+  ls->column = 1; /* start at column 1 */
   ls->lastcolumn = 1;
   ls->tokencolumn = 1;
   ls->source = source;
@@ -201,8 +239,8 @@ void luaX_setinput(lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->glbn = luaS_newliteral(L, "global"); /* get "global" string */
   ls->glbn->extra = 0;                     /* mark it as not reserved */
 #endif
-  ls->interp_depth = 0;  /* not in interpolated string */
-  ls->interp_name = NULL;  /* no variable name */
+  ls->interp_depth = 0;   /* not in interpolated string */
+  ls->interp_name = NULL; /* no variable name */
   luaZ_resizebuffer(ls->L, ls->buff, LUA_MINBUFFER); /* initialize buffer */
 }
 
@@ -491,20 +529,20 @@ static void read_string(LexState *ls, int del, SemInfo *seminfo) {
 ** Stores literal text in seminfo->ts.
 ** For $name interpolation, stores variable name in ls->interp_name.
 */
-static int read_interp_section(LexState *ls, SemInfo *seminfo,
-                                int beginType, int endType) {
-  ls->interp_name = NULL;  /* clear any previous variable name */
+static int read_interp_section(LexState *ls, SemInfo *seminfo, int beginType,
+                               int endType) {
+  ls->interp_name = NULL; /* clear any previous variable name */
   luaZ_resetbuffer(ls->buff);
   for (;;) {
     switch (ls->current) {
       case EOZ:
         lexerror(ls, "unfinished interpolated string", TK_EOS);
-        break;  /* to avoid warnings */
+        break; /* to avoid warnings */
       case '`': {
         /* End of interpolated string */
         next(ls);
-        seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
-                                      luaZ_bufflen(ls->buff));
+        seminfo->ts =
+            luaX_newstring(ls, luaZ_buffer(ls->buff), luaZ_bufflen(ls->buff));
         return endType;
       }
       case '$': {
@@ -518,15 +556,15 @@ static int read_interp_section(LexState *ls, SemInfo *seminfo,
           /* $( -> expression interpolation */
           next(ls);
           ls->interp_depth = 1;
-          seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
-                                        luaZ_bufflen(ls->buff));
+          seminfo->ts =
+              luaX_newstring(ls, luaZ_buffer(ls->buff), luaZ_bufflen(ls->buff));
           return beginType;
         }
         else if (lislalpha(ls->current)) {
           /* $name -> variable interpolation */
           /* First, save accumulated literal */
-          seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
-                                        luaZ_bufflen(ls->buff));
+          seminfo->ts =
+              luaX_newstring(ls, luaZ_buffer(ls->buff), luaZ_bufflen(ls->buff));
           /* Record position of first letter of name (after $) */
           ls->interp_name_line = ls->linenumber;
           ls->interp_name_column = ls->column;
@@ -536,10 +574,10 @@ static int read_interp_section(LexState *ls, SemInfo *seminfo,
             save_and_next(ls);
           } while (lislalnum(ls->current));
           /* Store variable name */
-          ls->interp_name = luaX_newstring(ls, luaZ_buffer(ls->buff),
-                                            luaZ_bufflen(ls->buff));
+          ls->interp_name =
+              luaX_newstring(ls, luaZ_buffer(ls->buff), luaZ_bufflen(ls->buff));
           /* Set flag to continue reading string on next llex call */
-          ls->interp_depth = -1;  /* -1 = just finished $name */
+          ls->interp_depth = -1; /* -1 = just finished $name */
           return beginType;
         }
         else {
@@ -551,19 +589,38 @@ static int read_interp_section(LexState *ls, SemInfo *seminfo,
         /* Escape sequences */
         next(ls);
         switch (ls->current) {
-          case '`': save(ls, '`'); next(ls); break;
-          case '$': save(ls, '$'); next(ls); break;
-          case 'n': save(ls, '\n'); next(ls); break;
-          case 't': save(ls, '\t'); next(ls); break;
-          case 'r': save(ls, '\r'); next(ls); break;
-          case '\\': save(ls, '\\'); next(ls); break;
+          case '`':
+            save(ls, '`');
+            next(ls);
+            break;
+          case '$':
+            save(ls, '$');
+            next(ls);
+            break;
+          case 'n':
+            save(ls, '\n');
+            next(ls);
+            break;
+          case 't':
+            save(ls, '\t');
+            next(ls);
+            break;
+          case 'r':
+            save(ls, '\r');
+            next(ls);
+            break;
+          case '\\':
+            save(ls, '\\');
+            next(ls);
+            break;
           case '\n':
           case '\r':
             save(ls, '\n');
             inclinenumber(ls);
             break;
           default:
-            lexerror(ls, "invalid escape sequence in interpolated string", TK_STRING);
+            lexerror(ls, "invalid escape sequence in interpolated string",
+                     TK_STRING);
         }
         break;
       }
@@ -573,8 +630,7 @@ static int read_interp_section(LexState *ls, SemInfo *seminfo,
         save(ls, '\n');
         inclinenumber(ls);
         break;
-      default:
-        save_and_next(ls);
+      default: save_and_next(ls);
     }
   }
 }
@@ -583,12 +639,12 @@ static int read_interp_section(LexState *ls, SemInfo *seminfo,
 static int llex(LexState *ls, SemInfo *seminfo) {
   /* Check if we're continuing an interpolated string after $name */
   if (ls->interp_depth == -1) {
-    ls->interp_depth = 0;  /* reset flag */
+    ls->interp_depth = 0; /* reset flag */
     return read_interp_section(ls, seminfo, TK_INTERP_MID, TK_INTERP_END);
   }
   luaZ_resetbuffer(ls->buff);
   for (;;) {
-    ls->tokencolumn = ls->column;  /* remember where token starts */
+    ls->tokencolumn = ls->column; /* remember where token starts */
     switch (ls->current) {
       case '\n':
       case '\r': { /* line breaks */ inclinenumber(ls); break;
@@ -600,7 +656,7 @@ static int llex(LexState *ls, SemInfo *seminfo) {
       }
       case '-': { /* '-' or '--' (comment) */
         int startline = ls->linenumber;
-        int startcol = ls->column;  /* column of first '-' */
+        int startcol = ls->column; /* column of first '-' */
         next(ls);
         if (ls->current != '-')
           return '-';
@@ -621,7 +677,8 @@ static int llex(LexState *ls, SemInfo *seminfo) {
               read_long_string(ls, &seminfo, sep);
               lusA_addcomment(ls->ast, startline, startcol, ls->linenumber,
                               ls->column, 1, seminfo.ts);
-            } else {
+            }
+            else {
               read_long_string(ls, NULL, sep); /* skip long comment */
             }
             luaZ_resetbuffer(ls->buff); /* previous call may dirty the buff. */
@@ -639,7 +696,8 @@ static int llex(LexState *ls, SemInfo *seminfo) {
           lusA_addcomment(ls->ast, startline, startcol, ls->linenumber,
                           ls->column, 0, text);
           luaZ_resetbuffer(ls->buff);
-        } else {
+        }
+        else {
           while (!currIsNewline(ls) && ls->current != EOZ)
             next(ls); /* skip until end of line (or end of file) */
         }
@@ -702,14 +760,15 @@ static int llex(LexState *ls, SemInfo *seminfo) {
           return ':';
       }
       case '"':
-      case '\'': { /* short literal strings */
-        ls->strquote = (lu_byte)ls->current;  /* save quote for AST */
+      case '\'': {                           /* short literal strings */
+        ls->strquote = (lu_byte)ls->current; /* save quote for AST */
         read_string(ls, ls->current, seminfo);
         return TK_STRING;
       }
       case '`': { /* interpolated string */
         next(ls);
-        return read_interp_section(ls, seminfo, TK_INTERP_BEGIN, TK_INTERP_SIMPLE);
+        return read_interp_section(ls, seminfo, TK_INTERP_BEGIN,
+                                   TK_INTERP_SIMPLE);
       }
       case '(': {
         next(ls);
@@ -782,7 +841,7 @@ static int llex(LexState *ls, SemInfo *seminfo) {
 
 void luaX_next(LexState *ls) {
   ls->lastline = ls->linenumber;
-  ls->lastcolumn = ls->tokencolumn;  /* save column of consumed token */
+  ls->lastcolumn = ls->tokencolumn;    /* save column of consumed token */
   if (ls->lookahead.token != TK_EOS) { /* is there a look-ahead token? */
     ls->t = ls->lookahead;             /* use this one */
     ls->lookahead.token = TK_EOS;      /* and discharge it */
@@ -796,6 +855,6 @@ int luaX_lookahead(LexState *ls) {
   lua_assert(ls->lookahead.token == TK_EOS);
   int saved_tokencolumn = ls->tokencolumn;
   ls->lookahead.token = llex(ls, &ls->lookahead.seminfo);
-  ls->tokencolumn = saved_tokencolumn;  /* restore current token's column */
+  ls->tokencolumn = saved_tokencolumn; /* restore current token's column */
   return ls->lookahead.token;
 }

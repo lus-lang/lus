@@ -33,7 +33,8 @@ Vector *luaV_newvec(lua_State *L, size_t len, int fast) {
     v->data = luaM_newblock(L, len);
     if (!fast)
       memset(v->data, 0, len);
-  } else {
+  }
+  else {
     v->data = NULL;
   }
   return v;

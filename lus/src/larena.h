@@ -111,7 +111,8 @@ LUAI_FUNC void luaA_resetstandalone(StandaloneArena *a);
 LUAI_FUNC void luaA_freestandalone(StandaloneArena *a);
 
 /* Convenience macros for standalone arena */
-#define luaA_standalone_obj(a, type) ((type *)luaA_allocstandalone(a, sizeof(type)))
+#define luaA_standalone_obj(a, type) \
+  ((type *)luaA_allocstandalone(a, sizeof(type)))
 #define luaA_standalone_array(a, n, type) \
   ((type *)luaA_allocstandalone(a, (n) * sizeof(type)))
 

@@ -68,24 +68,24 @@ LUAI_FUNC void lpack_initheader(lua_State *L, lpack_Header *h);
 
 /* Read and classify next option from format string */
 LUAI_FUNC lpack_KOption lpack_getoption(lpack_Header *h, const char **fmt,
-                                         size_t *size);
+                                        size_t *size);
 
 /* Get details including alignment requirements */
 LUAI_FUNC lpack_KOption lpack_getdetails(lpack_Header *h, size_t totalsize,
-                                          const char **fmt, size_t *psize,
-                                          unsigned *ntoalign);
+                                         const char **fmt, size_t *psize,
+                                         unsigned *ntoalign);
 
 /* Pack integer into buffer (raw, no luaL_Buffer) */
 LUAI_FUNC void lpack_packint(char *buff, lua_Unsigned n, int islittle,
-                              unsigned size, int neg);
+                             unsigned size, int neg);
 
 /* Unpack integer from buffer */
 LUAI_FUNC lua_Integer lpack_unpackint(lua_State *L, const char *str,
-                                       int islittle, int size, int issigned);
+                                      int islittle, int size, int issigned);
 
 /* Copy with endianness correction */
-LUAI_FUNC void lpack_copywithendian(char *dest, const char *src,
-                                     unsigned size, int islittle);
+LUAI_FUNC void lpack_copywithendian(char *dest, const char *src, unsigned size,
+                                    int islittle);
 
 
 #endif

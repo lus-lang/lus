@@ -162,9 +162,7 @@ typedef struct {
 } Subcommand;
 
 static const Subcommand subcommands[] = {
-  {"format", cmd_format, "Format Lus source files"},
-  {NULL, NULL, NULL}
-};
+    {"format", cmd_format, "Format Lus source files"}, {NULL, NULL, NULL}};
 
 /*
 ** Find a subcommand by name. Returns NULL if not found.
@@ -187,23 +185,33 @@ static char *read_file_contents(const char *filename, size_t *out_len) {
   char *buf;
 
   f = fopen(filename, "rb");
-  if (f == NULL) return NULL;
+  if (f == NULL)
+    return NULL;
 
   fseek(f, 0, SEEK_END);
   len = ftell(f);
   fseek(f, 0, SEEK_SET);
 
-  if (len < 0) { fclose(f); return NULL; }
+  if (len < 0) {
+    fclose(f);
+    return NULL;
+  }
 
   buf = (char *)malloc((size_t)len + 1);
-  if (buf == NULL) { fclose(f); return NULL; }
+  if (buf == NULL) {
+    fclose(f);
+    return NULL;
+  }
 
   if (len > 0 && fread(buf, 1, (size_t)len, f) != (size_t)len) {
-    free(buf); fclose(f); return NULL;
+    free(buf);
+    fclose(f);
+    return NULL;
   }
   buf[len] = '\0';
   fclose(f);
-  if (out_len) *out_len = (size_t)len;
+  if (out_len)
+    *out_len = (size_t)len;
   return buf;
 }
 
@@ -213,20 +221,24 @@ static char *read_file_contents(const char *filename, size_t *out_len) {
 static char *read_stdin_contents(size_t *out_len) {
   size_t cap = 4096, len = 0;
   char *buf = (char *)malloc(cap);
-  if (buf == NULL) return NULL;
+  if (buf == NULL)
+    return NULL;
 
   while (!feof(stdin)) {
     if (len + 4096 > cap) {
       cap *= 2;
       buf = (char *)realloc(buf, cap);
-      if (buf == NULL) return NULL;
+      if (buf == NULL)
+        return NULL;
     }
     size_t n = fread(buf + len, 1, 4096, stdin);
     len += n;
-    if (n == 0) break;
+    if (n == 0)
+      break;
   }
   buf[len] = '\0';
-  if (out_len) *out_len = len;
+  if (out_len)
+    *out_len = len;
   return buf;
 }
 
@@ -245,7 +257,7 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
   int write_mode = 0;
   int stdin_mode = 0;
   int indent_width = 4;
-  int file_start = -1;  /* index of first file argument */
+  int file_start = -1; /* index of first file argument */
   int i;
 
   /* Parse format-specific options */
@@ -256,35 +268,42 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
     }
     if (strcmp(argv[i], "--check") == 0) {
       check_mode = 1;
-    } else if (strcmp(argv[i], "--write") == 0) {
+    }
+    else if (strcmp(argv[i], "--write") == 0) {
       write_mode = 1;
-    } else if (strcmp(argv[i], "--stdin") == 0) {
+    }
+    else if (strcmp(argv[i], "--stdin") == 0) {
       stdin_mode = 1;
-    } else if (strcmp(argv[i], "--indent") == 0) {
+    }
+    else if (strcmp(argv[i], "--indent") == 0) {
       if (i + 1 < argc) {
         indent_width = atoi(argv[++i]);
-        if (indent_width <= 0) indent_width = 4;
-      } else {
+        if (indent_width <= 0)
+          indent_width = 4;
+      }
+      else {
         l_message(progname, "'--indent' needs a number argument");
         return 0;
       }
-    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+    }
+    else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
       lua_writestringerror(
-        "Usage: %s format [options] [file ...]\n"
-        "\n"
-        "Options:\n"
-        "  --check    Check if files are formatted (exit 1 if not)\n"
-        "  --write    Format files in-place\n"
-        "  --stdin    Read from stdin, write to stdout\n"
-        "  --indent N Set indent width (default: 4)\n"
-        "  --help     Show this help\n"
-        "\n"
-        "With no --write or --check, prints formatted output to stdout.\n",
-        progname);
+          "Usage: %s format [options] [file ...]\n"
+          "\n"
+          "Options:\n"
+          "  --check    Check if files are formatted (exit 1 if not)\n"
+          "  --write    Format files in-place\n"
+          "  --stdin    Read from stdin, write to stdout\n"
+          "  --indent N Set indent width (default: 4)\n"
+          "  --help     Show this help\n"
+          "\n"
+          "With no --write or --check, prints formatted output to stdout.\n",
+          progname);
       return 1;
-    } else {
-      l_message(progname,
-        lua_pushfstring(L, "format: unrecognized option '%s'", argv[i]));
+    }
+    else {
+      l_message(progname, lua_pushfstring(L, "format: unrecognized option '%s'",
+                                          argv[i]));
       return 0;
     }
   }
@@ -298,8 +317,8 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
       return 0;
     }
     const char *fmterr = NULL;
-    char *formatted = lusF_format(L, source, srclen, "=stdin",
-                                  indent_width, 80, &fmterr);
+    char *formatted =
+        lusF_format(L, source, srclen, "=stdin", indent_width, 80, &fmterr);
     if (formatted == NULL) {
       l_message(progname, fmterr ? fmterr : "format error");
       free(source);
@@ -320,11 +339,11 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
   /* File mode: need at least one file */
   if (file_start < 0) {
     l_message(progname,
-      "format: no input files (use --stdin to read from stdin)");
+              "format: no input files (use --stdin to read from stdin)");
     return 0;
   }
 
-  int all_formatted = 1;  /* for --check mode */
+  int all_formatted = 1; /* for --check mode */
 
   for (i = file_start; i < argc; i++) {
     const char *filename = argv[i];
@@ -336,11 +355,10 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
     }
 
     const char *fmterr = NULL;
-    char *formatted = lusF_format(L, source, srclen, filename,
-                                  indent_width, 80, &fmterr);
+    char *formatted =
+        lusF_format(L, source, srclen, filename, indent_width, 80, &fmterr);
     if (formatted == NULL) {
-      fprintf(stderr, "%s: %s\n", filename,
-              fmterr ? fmterr : "format error");
+      fprintf(stderr, "%s: %s\n", filename, fmterr ? fmterr : "format error");
       free(source);
       return 0;
     }
@@ -350,7 +368,8 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
         fprintf(stderr, "%s: not formatted\n", filename);
         all_formatted = 0;
       }
-    } else if (write_mode) {
+    }
+    else if (write_mode) {
       FILE *f = fopen(filename, "wb");
       if (f == NULL) {
         fprintf(stderr, "%s: cannot write '%s'\n", progname, filename);
@@ -360,7 +379,8 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
       }
       fputs(formatted, f);
       fclose(f);
-    } else {
+    }
+    else {
       fputs(formatted, stdout);
     }
 
@@ -482,7 +502,8 @@ static int dolibrary(lua_State *L, char *globname) {
   if (modname == NULL) { /* no explicit name? */
     modname = globname;  /* module name is equal to global name */
     suffix = strchr(modname, *LUA_IGMARK); /* look for a suffix mark */
-  } else {
+  }
+  else {
     *modname = '\0'; /* global name ends here */
     modname++;       /* module name starts after the '=' */
   }
@@ -610,7 +631,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);
   luaY_freedyndata(&dyd); /* free arena (all arrays freed with it) */
-  lua_pop(L, 1); /* remove closure */
+  lua_pop(L, 1);          /* remove closure */
 
   luaM_freemem(L, content, fsize + 1);
 
@@ -694,7 +715,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   /* Clean up parser data */
   luaZ_freebuffer(L, &buff);
   luaY_freedyndata(&dyd); /* free arena (all arrays freed with it) */
-  lua_pop(L, 1); /* remove closure */
+  lua_pop(L, 1);          /* remove closure */
 
   luaM_freemem(L, content, fsize + 1);
 
@@ -767,10 +788,11 @@ static void get_module_name(const char *path, char *out, size_t outsize) {
   for (p = start; *p && i < outsize - 1; p++) {
     if (*p == '/' || *p == '\\') {
       out[i++] = '.';
-    } else if (*p == '.' &&
-               (strcmp(p, ".lua") == 0 || strcmp(p, ".lus") == 0)) {
+    }
+    else if (*p == '.' && (strcmp(p, ".lua") == 0 || strcmp(p, ".lus") == 0)) {
       break;
-    } else {
+    }
+    else {
       out[i++] = *p;
     }
   }
@@ -854,7 +876,8 @@ static int include_directory(const char *dirpath, const char *prefix,
         return -1;
       }
       added += sub;
-    } else {
+    }
+    else {
       /* Check if it's a .lua or .lus file */
       size_t len = strlen(fd.cFileName);
       if ((len > 4 && strcmp(fd.cFileName + len - 4, ".lua") == 0) ||
@@ -918,7 +941,8 @@ static int include_directory(const char *dirpath, const char *prefix,
         return -1;
       }
       added += sub;
-    } else {
+    }
+    else {
       /* Check if it's a .lua or .lus file */
       size_t len = strlen(entry->d_name);
       if ((len > 4 && strcmp(entry->d_name + len - 4, ".lua") == 0) ||
@@ -1104,7 +1128,8 @@ static int create_standalone(lua_State *L) {
           lua_writestringerror("warning: failed to include directory: %s\n",
                                filepath);
         }
-      } else {
+      }
+      else {
         /* Regular file */
         if (expanded_count >= LUSB_MAX_FILES) {
           l_message(progname, "too many include files");
@@ -1131,8 +1156,7 @@ static int create_standalone(lua_State *L) {
                                  const char *);
       offsets =
           luaM_reallocvector(L, offsets, old_capacity, file_capacity, size_t);
-      sizes =
-          luaM_reallocvector(L, sizes, old_capacity, file_capacity, size_t);
+      sizes = luaM_reallocvector(L, sizes, old_capacity, file_capacity, size_t);
     }
 
     /* Compile each expanded file */
@@ -1289,130 +1313,132 @@ static int collectargs(char **argv, int *first) {
   if (argv[0] != NULL) {  /* is there a program name? */
     if (argv[0][0])       /* not empty? */
       progname = argv[0]; /* save it */
-  } else {                /* no program name */
+  }
+  else { /* no program name */
     *first = -1;
     return 0;
   }
   for (i = 1; argv[i] != NULL; i++) { /* handle arguments */
     *first = i;
-    if (argv[i][0] != '-')      /* not an option? */
-      return args;              /* stop handling options */
-    switch (argv[i][1]) {       /* else check option */
-    case '-':                   /* '--' */
-      if (argv[i][2] != '\0') { /* extra characters after '--'? */
-        /* Check for --pledge */
-        if (strcmp(argv[i] + 2, "pledge") == 0) {
-          i++; /* skip to argument */
-          if (argv[i] == NULL || argv[i][0] == '-')
-            return has_error; /* no argument */
+    if (argv[i][0] != '-')        /* not an option? */
+      return args;                /* stop handling options */
+    switch (argv[i][1]) {         /* else check option */
+      case '-':                   /* '--' */
+        if (argv[i][2] != '\0') { /* extra characters after '--'? */
+          /* Check for --pledge */
+          if (strcmp(argv[i] + 2, "pledge") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            /* Preserve for bundle */
+            if (standalone_entry &&
+                num_preserved_args < MAX_PRESERVED_ARGS - 1) {
+              preserved_args[num_preserved_args++] = "--pledge";
+              preserved_args[num_preserved_args++] = argv[i];
+            }
+            break;
+          }
+          if (strcmp(argv[i] + 2, "ast-graph") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            astgraph_output = argv[i];
+            break;
+          }
+          if (strcmp(argv[i] + 2, "ast-json") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            astjson_output = argv[i];
+            break;
+          }
+          if (strcmp(argv[i] + 2, "standalone") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            standalone_entry = argv[i];
+            break;
+          }
+          if (strcmp(argv[i] + 2, "include") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            if (num_includes >= MAX_INCLUDES) {
+              l_message(progname, "too many --include arguments");
+              return has_error;
+            }
+            includes[num_includes++] = argv[i];
+            break;
+          }
+          return has_error; /* invalid option */
+        }
+        /* if there is a script name, it comes after '--' */
+        *first = (argv[i + 1] != NULL) ? i + 1 : 0;
+        return args;
+      case '\0': /* '-' */ return args; /* script "name" is '-' */
+      case 'E':
+        if (argv[i][2] != '\0') /* extra characters? */
+          return has_error;     /* invalid option */
+        args |= has_E;
+        break;
+      case 'W':
+        if (argv[i][2] == '\0') { /* just -W */
           /* Preserve for bundle */
+          if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+            preserved_args[num_preserved_args++] = argv[i];
+          break;
+        }
+        else if (strcmp(argv[i] + 2, "pedantic") == 0) { /* -Wpedantic */
+          pedantic_warnings = 1;
+          /* Preserve for bundle */
+          if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+            preserved_args[num_preserved_args++] = argv[i];
+          break;
+        }
+        else
+          return has_error;                          /* unknown -W option */
+      case 'i': args |= has_i; /* (-i implies -v) */ /* FALLTHROUGH */
+      case 'v':
+        if (argv[i][2] != '\0') /* extra characters? */
+          return has_error;     /* invalid option */
+        args |= has_v;
+        break;
+      case 'e': args |= has_e;    /* FALLTHROUGH */
+      case 'l':                   /* both options need an argument */
+        if (argv[i][2] == '\0') { /* no concatenated argument? */
+          i++;                    /* try next 'argv' */
+          if (argv[i] == NULL || argv[i][0] == '-')
+            return has_error; /* no next argument or it is another option */
+          /* Preserve for bundle (2 args) */
           if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
-            preserved_args[num_preserved_args++] = "--pledge";
+            preserved_args[num_preserved_args++] = argv[i - 1];
             preserved_args[num_preserved_args++] = argv[i];
           }
-          break;
         }
-        if (strcmp(argv[i] + 2, "ast-graph") == 0) {
-          i++; /* skip to argument */
-          if (argv[i] == NULL || argv[i][0] == '-')
-            return has_error; /* no argument */
-          astgraph_output = argv[i];
-          break;
+        else {
+          /* Preserve for bundle (1 concatenated arg) */
+          if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+            preserved_args[num_preserved_args++] = argv[i];
         }
-        if (strcmp(argv[i] + 2, "ast-json") == 0) {
-          i++; /* skip to argument */
+        break;
+      case 'P':                   /* pledge option */
+        if (argv[i][2] == '\0') { /* no concatenated argument? */
+          i++;                    /* try next 'argv' */
           if (argv[i] == NULL || argv[i][0] == '-')
-            return has_error; /* no argument */
-          astjson_output = argv[i];
-          break;
-        }
-        if (strcmp(argv[i] + 2, "standalone") == 0) {
-          i++; /* skip to argument */
-          if (argv[i] == NULL || argv[i][0] == '-')
-            return has_error; /* no argument */
-          standalone_entry = argv[i];
-          break;
-        }
-        if (strcmp(argv[i] + 2, "include") == 0) {
-          i++; /* skip to argument */
-          if (argv[i] == NULL || argv[i][0] == '-')
-            return has_error; /* no argument */
-          if (num_includes >= MAX_INCLUDES) {
-            l_message(progname, "too many --include arguments");
-            return has_error;
+            return has_error; /* no next argument or it is another option */
+          /* Preserve for bundle (2 args) */
+          if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
+            preserved_args[num_preserved_args++] = argv[i - 1];
+            preserved_args[num_preserved_args++] = argv[i];
           }
-          includes[num_includes++] = argv[i];
-          break;
         }
-        return has_error; /* invalid option */
-      }
-      /* if there is a script name, it comes after '--' */
-      *first = (argv[i + 1] != NULL) ? i + 1 : 0;
-      return args;
-    case '\0':     /* '-' */
-      return args; /* script "name" is '-' */
-    case 'E':
-      if (argv[i][2] != '\0') /* extra characters? */
-        return has_error;     /* invalid option */
-      args |= has_E;
-      break;
-    case 'W':
-      if (argv[i][2] == '\0') { /* just -W */
-        /* Preserve for bundle */
-        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
-          preserved_args[num_preserved_args++] = argv[i];
+        else {
+          /* Preserve for bundle (1 concatenated arg) */
+          if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
+            preserved_args[num_preserved_args++] = argv[i];
+        }
         break;
-      } else if (strcmp(argv[i] + 2, "pedantic") == 0) { /* -Wpedantic */
-        pedantic_warnings = 1;
-        /* Preserve for bundle */
-        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
-          preserved_args[num_preserved_args++] = argv[i];
-        break;
-      } else
-        return has_error; /* unknown -W option */
-    case 'i':
-      args |= has_i; /* (-i implies -v) */ /* FALLTHROUGH */
-    case 'v':
-      if (argv[i][2] != '\0') /* extra characters? */
-        return has_error;     /* invalid option */
-      args |= has_v;
-      break;
-    case 'e':
-      args |= has_e;            /* FALLTHROUGH */
-    case 'l':                   /* both options need an argument */
-      if (argv[i][2] == '\0') { /* no concatenated argument? */
-        i++;                    /* try next 'argv' */
-        if (argv[i] == NULL || argv[i][0] == '-')
-          return has_error; /* no next argument or it is another option */
-        /* Preserve for bundle (2 args) */
-        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
-          preserved_args[num_preserved_args++] = argv[i - 1];
-          preserved_args[num_preserved_args++] = argv[i];
-        }
-      } else {
-        /* Preserve for bundle (1 concatenated arg) */
-        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
-          preserved_args[num_preserved_args++] = argv[i];
-      }
-      break;
-    case 'P':                   /* pledge option */
-      if (argv[i][2] == '\0') { /* no concatenated argument? */
-        i++;                    /* try next 'argv' */
-        if (argv[i] == NULL || argv[i][0] == '-')
-          return has_error; /* no next argument or it is another option */
-        /* Preserve for bundle (2 args) */
-        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS - 1) {
-          preserved_args[num_preserved_args++] = argv[i - 1];
-          preserved_args[num_preserved_args++] = argv[i];
-        }
-      } else {
-        /* Preserve for bundle (1 concatenated arg) */
-        if (standalone_entry && num_preserved_args < MAX_PRESERVED_ARGS)
-          preserved_args[num_preserved_args++] = argv[i];
-      }
-      break;
-    default: /* invalid option */
-      return has_error;
+      default: /* invalid option */ return has_error;
     }
   }
   *first = 0; /* no script name */
@@ -1430,95 +1456,100 @@ static int runargs(lua_State *L, char **argv, int n) {
     int option = argv[i][1];
     lua_assert(argv[i][0] == '-'); /* already checked */
     switch (option) {
-    case '-': /* long options: --standalone, --include, --pledge, etc. */
-      /* Skip long options that have arguments */
-      if (strcmp(argv[i] + 2, "standalone") == 0 ||
-          strcmp(argv[i] + 2, "include") == 0 ||
-          strcmp(argv[i] + 2, "pledge") == 0 ||
-          strcmp(argv[i] + 2, "ast-graph") == 0 ||
-          strcmp(argv[i] + 2, "ast-json") == 0) {
-        i++; /* skip the argument */
-      }
-      /* else: just '--' by itself or unrecognized - skip it */
-      break;
-    case 'e':
-    case 'l': {
-      int status;
-      char *extra = argv[i] + 2; /* both options need an argument */
-      if (*extra == '\0')
-        extra = argv[++i];
-      lua_assert(extra != NULL);
-      status = (option == 'e') ? dostring(L, extra, "=(command line)")
-                               : dolibrary(L, extra);
-      if (status != LUA_OK)
-        return 0;
-      break;
-    }
-    case 'W':
-      lua_warning(L, "@on", 0); /* warnings on (both -W and -Wpedantic) */
-      if (strcmp(argv[i] + 2, "pedantic") == 0) {
-        /* Enable pedantic AST-based warnings */
-        G(L)->pedantic = 1;
-      }
-      break;
-    case 'P': { /* pledge permission */
-      char *pledge_str = argv[i] + 2;
-      if (*pledge_str == '\0')
-        pledge_str = argv[++i];
-      lua_assert(pledge_str != NULL);
-      /* Parse and grant the pledge */
-      int rejected = 0;
-      const char *p = pledge_str;
-      if (*p == '~') {
-        rejected = 1;
-        p++;
-      }
-      /* Extract name and value */
-      const char *eq = strchr(p, '=');
-      char namebuf[256];
-      const char *value = NULL;
-      if (eq) {
-        size_t namelen = eq - p;
-        if (namelen >= sizeof(namebuf)) {
-          l_message(progname, "pledge name too long");
-          return 0;
+      case '-': /* long options: --standalone, --include, --pledge, etc. */
+        /* Skip long options that have arguments */
+        if (strcmp(argv[i] + 2, "standalone") == 0 ||
+            strcmp(argv[i] + 2, "include") == 0 ||
+            strcmp(argv[i] + 2, "pledge") == 0 ||
+            strcmp(argv[i] + 2, "ast-graph") == 0 ||
+            strcmp(argv[i] + 2, "ast-json") == 0) {
+          i++; /* skip the argument */
         }
-        memcpy(namebuf, p, namelen);
-        namebuf[namelen] = '\0';
-        value = eq + 1;
-      } else {
-        size_t namelen = strlen(p);
-        if (namelen >= sizeof(namebuf)) {
-          l_message(progname, "pledge name too long");
+        /* else: just '--' by itself or unrecognized - skip it */
+        break;
+      case 'e':
+      case 'l': {
+        int status;
+        char *extra = argv[i] + 2; /* both options need an argument */
+        if (*extra == '\0')
+          extra = argv[++i];
+        lua_assert(extra != NULL);
+        status = (option == 'e') ? dostring(L, extra, "=(command line)")
+                                 : dolibrary(L, extra);
+        if (status != LUA_OK)
           return 0;
-        }
-        strcpy(namebuf, p);
+        break;
       }
-      /* Handle special permissions */
-      if (strcmp(namebuf, "all") == 0 && !rejected) {
-        /* Grant common permissions - all from CLI is allowed */
-        lus_pledge(L, "exec", NULL);
-        lus_pledge(L, "load", NULL);
-        lus_pledge(L, "fs", NULL);
-        lus_pledge(L, "network", NULL);
-      } else if (strcmp(namebuf, "seal") == 0) {
-        /* Seal is handled after all pledges are processed */
-        /* Store it - we'll seal at the end */
-        /* For now, just grant it; the pledge system handles sealing */
-        lus_pledge(L, "seal", NULL);
-      } else if (rejected) {
-        /* Mark as rejected */
-        lus_rejectpledge(L, namebuf);
-      } else {
-        if (!lus_pledge(L, namebuf, value)) {
-          char msg[512];
-          snprintf(msg, sizeof(msg), "failed to grant pledge '%s'", pledge_str);
-          l_message(progname, msg);
-          return 0;
+      case 'W':
+        lua_warning(L, "@on", 0); /* warnings on (both -W and -Wpedantic) */
+        if (strcmp(argv[i] + 2, "pedantic") == 0) {
+          /* Enable pedantic AST-based warnings */
+          G(L)->pedantic = 1;
         }
+        break;
+      case 'P': { /* pledge permission */
+        char *pledge_str = argv[i] + 2;
+        if (*pledge_str == '\0')
+          pledge_str = argv[++i];
+        lua_assert(pledge_str != NULL);
+        /* Parse and grant the pledge */
+        int rejected = 0;
+        const char *p = pledge_str;
+        if (*p == '~') {
+          rejected = 1;
+          p++;
+        }
+        /* Extract name and value */
+        const char *eq = strchr(p, '=');
+        char namebuf[256];
+        const char *value = NULL;
+        if (eq) {
+          size_t namelen = eq - p;
+          if (namelen >= sizeof(namebuf)) {
+            l_message(progname, "pledge name too long");
+            return 0;
+          }
+          memcpy(namebuf, p, namelen);
+          namebuf[namelen] = '\0';
+          value = eq + 1;
+        }
+        else {
+          size_t namelen = strlen(p);
+          if (namelen >= sizeof(namebuf)) {
+            l_message(progname, "pledge name too long");
+            return 0;
+          }
+          strcpy(namebuf, p);
+        }
+        /* Handle special permissions */
+        if (strcmp(namebuf, "all") == 0 && !rejected) {
+          /* Grant common permissions - all from CLI is allowed */
+          lus_pledge(L, "exec", NULL);
+          lus_pledge(L, "load", NULL);
+          lus_pledge(L, "fs", NULL);
+          lus_pledge(L, "network", NULL);
+        }
+        else if (strcmp(namebuf, "seal") == 0) {
+          /* Seal is handled after all pledges are processed */
+          /* Store it - we'll seal at the end */
+          /* For now, just grant it; the pledge system handles sealing */
+          lus_pledge(L, "seal", NULL);
+        }
+        else if (rejected) {
+          /* Mark as rejected */
+          lus_rejectpledge(L, namebuf);
+        }
+        else {
+          if (!lus_pledge(L, namebuf, value)) {
+            char msg[512];
+            snprintf(msg, sizeof(msg), "failed to grant pledge '%s'",
+                     pledge_str);
+            l_message(progname, msg);
+            return 0;
+          }
+        }
+        break;
       }
-      break;
-    }
     }
   }
   return 1;
@@ -1847,8 +1878,8 @@ static int pmain(lua_State *L) {
   ** A subcommand is argv[1] that exactly matches a known command name
   ** and does not start with '-'. If argv[1] is not a subcommand,
   ** it falls through to the existing behavior (treated as a script). */
-  if (argc >= 2 && argv[1] != NULL && argv[1][0] != '-'
-      && g_bundle == NULL) {  /* skip subcommands for bundled executables */
+  if (argc >= 2 && argv[1] != NULL && argv[1][0] != '-' &&
+      g_bundle == NULL) { /* skip subcommands for bundled executables */
     const Subcommand *cmd = find_subcommand(argv[1]);
     if (cmd != NULL) {
       /* Initialize libraries for the subcommand */
@@ -1949,7 +1980,8 @@ static int pmain(lua_State *L) {
     if (lua_stdin_is_tty()) { /* running in interactive mode? */
       print_version();
       doREPL(L); /* do read-eval-print loop */
-    } else
+    }
+    else
       dofile(L, NULL); /* executes stdin as a file */
   }
   lua_pushboolean(L, 1); /* signal no errors */

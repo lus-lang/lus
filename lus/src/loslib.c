@@ -31,17 +31,17 @@
 #if !defined(LUA_STRFTIMEOPTIONS) /* { */
 
 #if defined(LUA_USE_WINDOWS)
-#define LUA_STRFTIMEOPTIONS                                                    \
-  "aAbBcdHIjmMpSUwWxXyYzZ%"                                                    \
-  "||"                                                                         \
+#define LUA_STRFTIMEOPTIONS \
+  "aAbBcdHIjmMpSUwWxXyYzZ%" \
+  "||"                      \
   "#c#x#d#H#I#j#m#M#S#U#w#W#y#Y" /* two-char options */
 #elif defined(LUA_USE_C89)       /* C89 (only 1-char options) */
 #define LUA_STRFTIMEOPTIONS "aAbBcdHIjmMpSUwWxXyYZ%"
 #else /* C99 specification */
-#define LUA_STRFTIMEOPTIONS                                                    \
-  "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%"                                      \
-  "||"                                                                         \
-  "EcECExEXEyEY"                                                               \
+#define LUA_STRFTIMEOPTIONS               \
+  "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%" \
+  "||"                                    \
+  "EcECExEXEyEY"                          \
   "OdOeOHOIOmOMOSOuOUOVOwOWOy" /* two-char options */
 #endif
 
@@ -113,23 +113,21 @@
 #define LUA_TMPNAMTEMPLATE "/tmp/lua_XXXXXX"
 #endif
 
-#define lua_tmpnam(b, e)                                                       \
-  {                                                                            \
-    strcpy(b, LUA_TMPNAMTEMPLATE);                                             \
-    e = mkstemp(b);                                                            \
-    if (e != -1)                                                               \
-      close(e);                                                                \
-    e = (e == -1);                                                             \
+#define lua_tmpnam(b, e)           \
+  {                                \
+    strcpy(b, LUA_TMPNAMTEMPLATE); \
+    e = mkstemp(b);                \
+    if (e != -1)                   \
+      close(e);                    \
+    e = (e == -1);                 \
   }
 
 #else /* }{ */
 
 /* ISO C definitions */
 #define LUA_TMPNAMBUFSIZE L_tmpnam
-#define lua_tmpnam(b, e)                                                       \
-  {                                                                            \
-    e = (tmpnam(b) == NULL);                                                   \
-  }
+#define lua_tmpnam(b, e) \
+  { e = (tmpnam(b) == NULL); }
 
 #endif /* } */
 
@@ -249,7 +247,8 @@ static int getfield(lua_State *L, const char *key, int d, int delta) {
     else if (l_unlikely(d < 0)) /* absent field; no default? */
       return luaL_error(L, "field '%s' missing in date table", key);
     res = d;
-  } else {
+  }
+  else {
     if (!(res >= 0 ? res - delta <= INT_MAX : INT_MIN + delta <= res))
       return luaL_error(L, "field '%s' is out-of-bound", key);
     res -= delta;
@@ -294,7 +293,8 @@ static int os_date(lua_State *L) {
   if (*s == '!') { /* UTC? */
     stm = l_gmtime(&t, &tmr);
     s++; /* skip '!' */
-  } else
+  }
+  else
     stm = l_localtime(&t, &tmr);
   if (stm == NULL) /* invalid date? */
     return luaL_error(L,
@@ -302,7 +302,8 @@ static int os_date(lua_State *L) {
   if (strcmp(s, "*t") == 0) {
     lua_createtable(L, 0, 9); /* 9 = number of fields */
     setallfields(L, stm);
-  } else {
+  }
+  else {
     char cc[4]; /* buffer for individual conversion specifiers */
     luaL_Buffer b;
     cc[0] = '%';

@@ -41,25 +41,25 @@ typedef lpack_Header Header;
 typedef lpack_KOption KOption;
 
 /* Alias enum values */
-#define Kint       Lpack_Kint
-#define Kuint      Lpack_Kuint
-#define Kfloat     Lpack_Kfloat
-#define Knumber    Lpack_Knumber
-#define Kdouble    Lpack_Kdouble
-#define Kchar      Lpack_Kchar
-#define Kstring    Lpack_Kstring
-#define Kzstr      Lpack_Kzstr
-#define Kpadding   Lpack_Kpadding
+#define Kint Lpack_Kint
+#define Kuint Lpack_Kuint
+#define Kfloat Lpack_Kfloat
+#define Knumber Lpack_Knumber
+#define Kdouble Lpack_Kdouble
+#define Kchar Lpack_Kchar
+#define Kstring Lpack_Kstring
+#define Kzstr Lpack_Kzstr
+#define Kpadding Lpack_Kpadding
 #define Kpaddalign Lpack_Kpaddalign
-#define Knop       Lpack_Knop
+#define Knop Lpack_Knop
 
 /* Alias shared functions */
-#define initheader     lpack_initheader
-#define getoption      lpack_getoption
-#define getdetails     lpack_getdetails
+#define initheader lpack_initheader
+#define getoption lpack_getoption
+#define getdetails lpack_getdetails
 #define copywithendian lpack_copywithendian
-#define packint        lpack_packint
-#define unpackint      lpack_unpackint
+#define packint lpack_packint
+#define unpackint lpack_unpackint
 
 
 /* ===================================================================
@@ -104,20 +104,22 @@ static int vec_pack(lua_State *L) {
   Header h;
   int arg = 3;
   size_t pos = (size_t)offset;
-  
-  luaL_argcheck(L, offset >= 0 && (size_t)offset <= v->len, 2, "offset out of bounds");
-  
+
+  luaL_argcheck(L, offset >= 0 && (size_t)offset <= v->len, 2,
+                "offset out of bounds");
+
   initheader(L, &h);
   while (*fmt != '\0') {
     unsigned ntoalign;
     size_t size;
     KOption opt = getdetails(&h, pos, &fmt, &size, &ntoalign);
-    luaL_argcheck(L, pos + ntoalign + size <= v->len, 2, "pack would exceed vector bounds");
-    
+    luaL_argcheck(L, pos + ntoalign + size <= v->len, 2,
+                  "pack would exceed vector bounds");
+
     /* Fill alignment padding */
     while (ntoalign-- > 0)
       v->data[pos++] = LUAL_PACKPADBYTE;
-    
+
     arg++;
     switch (opt) {
       case Kint: {
@@ -126,7 +128,8 @@ static int vec_pack(lua_State *L) {
           lua_Integer lim = (lua_Integer)1 << ((size * NB) - 1);
           luaL_argcheck(L, -lim <= n && n < lim, arg, "integer overflow");
         }
-        packint(v->data + pos, (lua_Unsigned)n, h.islittle, (unsigned)size, (n < 0));
+        packint(v->data + pos, (lua_Unsigned)n, h.islittle, (unsigned)size,
+                (n < 0));
         break;
       }
       case Kuint: {
@@ -164,11 +167,14 @@ static int vec_pack(lua_State *L) {
       case Kstring: {
         size_t len;
         const char *s = luaL_checklstring(L, arg, &len);
-        luaL_argcheck(L, size >= sizeof(lua_Unsigned) ||
-                      len < ((lua_Unsigned)1 << (size * NB)),
+        luaL_argcheck(L,
+                      size >= sizeof(lua_Unsigned) ||
+                          len < ((lua_Unsigned)1 << (size * NB)),
                       arg, "string length does not fit in given size");
-        packint(v->data + pos, (lua_Unsigned)len, h.islittle, (unsigned)size, 0);
-        luaL_argcheck(L, pos + size + len <= v->len, 2, "string would exceed vector bounds");
+        packint(v->data + pos, (lua_Unsigned)len, h.islittle, (unsigned)size,
+                0);
+        luaL_argcheck(L, pos + size + len <= v->len, 2,
+                      "string would exceed vector bounds");
         memcpy(v->data + pos + size, s, len);
         pos += len;
         break;
@@ -177,20 +183,19 @@ static int vec_pack(lua_State *L) {
         size_t len;
         const char *s = luaL_checklstring(L, arg, &len);
         luaL_argcheck(L, strlen(s) == len, arg, "string contains zeros");
-        luaL_argcheck(L, pos + len + 1 <= v->len, 2, "string would exceed vector bounds");
+        luaL_argcheck(L, pos + len + 1 <= v->len, 2,
+                      "string would exceed vector bounds");
         memcpy(v->data + pos, s, len);
         v->data[pos + len] = '\0';
         pos += len + 1;
-        size = 0;  /* already handled */
+        size = 0; /* already handled */
         break;
       }
       case Kpadding:
         v->data[pos] = LUAL_PACKPADBYTE;
         /* FALLTHROUGH */
       case Kpaddalign:
-      case Knop:
-        arg--;
-        break;
+      case Knop: arg--; break;
     }
     pos += size;
   }
@@ -208,9 +213,10 @@ static int vec_unpack(lua_State *L) {
   Header h;
   size_t pos = (size_t)offset;
   int n = 0;
-  
-  luaL_argcheck(L, offset >= 0 && (size_t)offset <= v->len, 2, "offset out of bounds");
-  
+
+  luaL_argcheck(L, offset >= 0 && (size_t)offset <= v->len, 2,
+                "offset out of bounds");
+
   initheader(L, &h);
   while (*fmt != '\0') {
     unsigned ntoalign;
@@ -223,8 +229,8 @@ static int vec_unpack(lua_State *L) {
     switch (opt) {
       case Kint:
       case Kuint: {
-        lua_Integer res = unpackint(L, v->data + pos, h.islittle,
-                                    (int)size, (opt == Kint));
+        lua_Integer res =
+            unpackint(L, v->data + pos, h.islittle, (int)size, (opt == Kint));
         lua_pushinteger(L, res);
         break;
       }
@@ -251,8 +257,8 @@ static int vec_unpack(lua_State *L) {
         break;
       }
       case Kstring: {
-        lua_Unsigned len = (lua_Unsigned)unpackint(L, v->data + pos, h.islittle,
-                                                   (int)size, 0);
+        lua_Unsigned len =
+            (lua_Unsigned)unpackint(L, v->data + pos, h.islittle, (int)size, 0);
         luaL_argcheck(L, len <= v->len - pos - size, 2, "data too short");
         lua_pushlstring(L, v->data + pos + size, (size_t)len);
         pos += (size_t)len;
@@ -268,13 +274,11 @@ static int vec_unpack(lua_State *L) {
       }
       case Kpaddalign:
       case Kpadding:
-      case Knop:
-        n--;
-        break;
+      case Knop: n--; break;
     }
     pos += size;
   }
-  lua_pushinteger(L, (lua_Integer)pos);  /* next position */
+  lua_pushinteger(L, (lua_Integer)pos); /* next position */
   return n + 1;
 }
 
@@ -330,53 +334,53 @@ static int unpackmany_iter(lua_State *L) {
   /* Get vector from upvalue - need to use API since upvalue index doesn't work with checkvector */
   if (!lua_isvector(L, lua_upvalueindex(1)))
     return luaL_error(L, "expected vector in upvalue");
-  StkId uvslot = L->ci->func.p;  /* closure is at function slot */
+  StkId uvslot = L->ci->func.p; /* closure is at function slot */
   /* For upvalue access, we need to get the TValue from the upvalue */
   TValue *uv = NULL;
   {
     CClosure *cl = clCvalue(s2v(uvslot));
-    uv = &cl->upvalue[0];  /* first upvalue is vector */
+    uv = &cl->upvalue[0]; /* first upvalue is vector */
   }
   if (!ttisvector(uv))
     return luaL_error(L, "expected vector in upvalue");
   Vector *v = vecvalue(uv);
-  
+
   const char *fmt = lua_tostring(L, lua_upvalueindex(2));
   lua_Integer pos = lua_tointeger(L, lua_upvalueindex(3));
   lua_Integer count = lua_tointeger(L, lua_upvalueindex(4));
   lua_Integer maxcount = lua_tointeger(L, lua_upvalueindex(5));
-  
+
   /* Check if we've reached the limit */
   if (maxcount > 0 && count >= maxcount)
     return 0;
-  
+
   /* Check if we're at the end of the vector */
   if ((size_t)pos >= v->len)
     return 0;
-  
+
   /* Temporarily set up for unpack */
   Header h;
   const char *fmtcopy = fmt;
   size_t fmtpos = (size_t)pos;
   int n = 0;
-  
+
   initheader(L, &h);
   while (*fmtcopy != '\0') {
     unsigned ntoalign;
     size_t size;
     KOption opt = getdetails(&h, fmtpos, &fmtcopy, &size, &ntoalign);
-    
+
     if (fmtpos + ntoalign + size > v->len)
       return luaL_error(L, "unpack falls out of bounds");
-    
+
     fmtpos += ntoalign;
     luaL_checkstack(L, 2, "too many results");
-    
+
     switch (opt) {
       case Kint:
       case Kuint: {
-        lua_Integer res = unpackint(L, v->data + fmtpos, h.islittle,
-                                    (int)size, (opt == Kint));
+        lua_Integer res = unpackint(L, v->data + fmtpos, h.islittle, (int)size,
+                                    (opt == Kint));
         lua_pushinteger(L, res);
         n++;
         break;
@@ -408,8 +412,8 @@ static int unpackmany_iter(lua_State *L) {
         break;
       }
       case Kstring: {
-        lua_Unsigned len = (lua_Unsigned)unpackint(L, v->data + fmtpos, h.islittle,
-                                                   (int)size, 0);
+        lua_Unsigned len = (lua_Unsigned)unpackint(L, v->data + fmtpos,
+                                                   h.islittle, (int)size, 0);
         if (len > v->len - fmtpos - size)
           return luaL_error(L, "data too short");
         lua_pushlstring(L, v->data + fmtpos + size, (size_t)len);
@@ -429,18 +433,17 @@ static int unpackmany_iter(lua_State *L) {
       }
       case Kpaddalign:
       case Kpadding:
-      case Knop:
-        break;
+      case Knop: break;
     }
     fmtpos += size;
   }
-  
+
   /* Update position and count in upvalues */
   lua_pushinteger(L, (lua_Integer)fmtpos);
   lua_replace(L, lua_upvalueindex(3));
   lua_pushinteger(L, count + 1);
   lua_replace(L, lua_upvalueindex(4));
-  
+
   return n;
 }
 
@@ -449,34 +452,28 @@ static int unpackmany_iter(lua_State *L) {
 ** vector.unpackmany(v, offset, fmt [, count])
 */
 static int vec_unpackmany(lua_State *L) {
-  checkvector(L, 1);  /* just validate */
-  luaL_checkinteger(L, 2);  /* offset */
-  luaL_checkstring(L, 3);   /* format */
+  checkvector(L, 1);       /* just validate */
+  luaL_checkinteger(L, 2); /* offset */
+  luaL_checkstring(L, 3);  /* format */
   lua_Integer maxcount = luaL_optinteger(L, 4, 0);
-  
+
   /* Push the iterator function with upvalues:
    * 1: vector, 2: format, 3: current position, 4: count, 5: maxcount */
-  lua_pushvalue(L, 1);  /* vector */
-  lua_pushvalue(L, 3);  /* format */
-  lua_pushvalue(L, 2);  /* initial position */
-  lua_pushinteger(L, 0);  /* count = 0 */
+  lua_pushvalue(L, 1);   /* vector */
+  lua_pushvalue(L, 3);   /* format */
+  lua_pushvalue(L, 2);   /* initial position */
+  lua_pushinteger(L, 0); /* count = 0 */
   lua_pushinteger(L, maxcount);
   lua_pushcclosure(L, unpackmany_iter, 5);
-  
+
   return 1;
 }
 
 
 static const luaL_Reg veclib[] = {
-  {"create", vec_create},
-  {"pack", vec_pack},
-  {"unpack", vec_unpack},
-  {"clone", vec_clone},
-  {"size", vec_size},
-  {"resize", vec_resize},
-  {"unpackmany", vec_unpackmany},
-  {NULL, NULL}
-};
+    {"create", vec_create},         {"pack", vec_pack}, {"unpack", vec_unpack},
+    {"clone", vec_clone},           {"size", vec_size}, {"resize", vec_resize},
+    {"unpackmany", vec_unpackmany}, {NULL, NULL}};
 
 
 #ifndef LUS_NO_ARCHIVE

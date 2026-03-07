@@ -773,15 +773,16 @@ void luaK_setreturns(FuncState *fs, expdesc *e, int nresults) {
       ** Leave freereg at base + nvalues (the values provided).
       ** No nil-fill needed - the caller will handle variable args. */
       fs->freereg = cast_byte(base + nvalues);
-    } else {
+    }
+    else {
       if (nresults > nvalues) {
         /* Nil-fill the extra slots beyond what provide gave */
         luaK_nil(fs, base + nvalues, nresults - nvalues);
       }
       fs->freereg = cast_byte(base + nresults);
     }
-    e->u.info = base;  /* restore to just base for subsequent handling */
-    e->k = VNONRELOC;  /* now treated as fixed position */
+    e->u.info = base; /* restore to just base for subsequent handling */
+    e->k = VNONRELOC; /* now treated as fixed position */
   }
   else {
     lua_assert(e->k == VVARARG);
@@ -827,8 +828,8 @@ void luaK_setoneret(FuncState *fs, expdesc *e) {
   else if (e->k == VDOEXPR) {
     /* Do-expression: first result is at base register.
     ** e->u.info encodes base | (nvalues << 8), extract just base. */
-    e->u.info = e->u.info & 0xFF;  /* extract base register */
-    e->k = VNONRELOC; /* result has fixed position */
+    e->u.info = e->u.info & 0xFF; /* extract base register */
+    e->k = VNONRELOC;             /* result has fixed position */
   }
   else if (e->k == VCATCH) {
     /* Catch expression returns (status, result...) - first value is status.
@@ -1421,7 +1422,7 @@ void luaK_indexed(FuncState *fs, expdesc *t, expdesc *k) {
     lua_assert(isKstr(fs, k));
     fillidxk(t, k->u.info, VINDEXUP); /* literal short string */
   }
-  else if (t->k == VVARGVAR) { /* indexing the vararg parameter? */
+  else if (t->k == VVARGVAR) {         /* indexing the vararg parameter? */
     int kreg = luaK_exp2anyreg(fs, k); /* put key in some register */
     lu_byte vreg = cast_byte(t->u.var.ridx); /* register with vararg param. */
     lua_assert(vreg == fs->f->numparams);

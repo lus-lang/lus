@@ -49,7 +49,9 @@ static int get_cpu_count(void) {
   return (n > 0) ? (int)n : 1;
 }
 #else
-static int get_cpu_count(void) { return 4; /* fallback */ }
+static int get_cpu_count(void) {
+  return 4; /* fallback */
+}
 #endif
 #endif
 
@@ -76,7 +78,8 @@ static void msgqueue_push(MessageQueue *q, StandaloneArena *arena, char *data,
   node->next = NULL;
   if (q->tail) {
     q->tail->next = node;
-  } else {
+  }
+  else {
     q->head = node;
   }
   q->tail = node;
@@ -161,14 +164,14 @@ static void serbuf_free(SerBuffer *b) {
 static int serbuf_ensure(SerBuffer *b, size_t need) {
   if (b->size + need > b->cap) {
     if (b->size > SIZE_MAX - need)
-      return 0;  /* overflow */
+      return 0; /* overflow */
     /* Need larger buffer - allocate new one from arena */
     size_t newcap = b->cap * 2;
     while (newcap < b->size + need)
       newcap *= 2;
     char *newdata = (char *)luaA_allocstandalone(b->arena, newcap);
     if (newdata == NULL)
-      return 0;  /* allocation failed */
+      return 0; /* allocation failed */
     /* Copy existing data to new buffer */
     if (b->size > 0)
       memcpy(newdata, b->data, b->size);
@@ -225,38 +228,36 @@ static int serialize_table(lua_State *L, int idx, SerBuffer *b, int depth) {
 static int serialize_value(lua_State *L, int idx, SerBuffer *b, int depth) {
   int t = lua_type(L, idx);
   switch (t) {
-  case LUA_TNIL:
-    serbuf_write_byte(L, b, SER_NIL);
-    break;
-  case LUA_TBOOLEAN: {
-    serbuf_write_byte(L, b, SER_BOOL);
-    unsigned char v = lua_toboolean(L, idx) ? 1 : 0;
-    serbuf_write_byte(L, b, v);
-    break;
-  }
-  case LUA_TNUMBER:
-    if (lua_isinteger(L, idx)) {
-      serbuf_write_byte(L, b, SER_INT);
-      lua_Integer i = lua_tointeger(L, idx);
-      serbuf_write(L, b, &i, sizeof(i));
-    } else {
-      serbuf_write_byte(L, b, SER_NUM);
-      lua_Number n = lua_tonumber(L, idx);
-      serbuf_write(L, b, &n, sizeof(n));
+    case LUA_TNIL: serbuf_write_byte(L, b, SER_NIL); break;
+    case LUA_TBOOLEAN: {
+      serbuf_write_byte(L, b, SER_BOOL);
+      unsigned char v = lua_toboolean(L, idx) ? 1 : 0;
+      serbuf_write_byte(L, b, v);
+      break;
     }
-    break;
-  case LUA_TSTRING: {
-    size_t len;
-    const char *s = lua_tolstring(L, idx, &len);
-    serbuf_write_byte(L, b, SER_STRING);
-    serbuf_write(L, b, &len, sizeof(len));
-    serbuf_write(L, b, s, len);
-    break;
-  }
-  case LUA_TTABLE:
-    return serialize_table(L, idx, b, depth);
-  default:
-    return luaL_error(L, "cannot serialize %s to worker", lua_typename(L, t));
+    case LUA_TNUMBER:
+      if (lua_isinteger(L, idx)) {
+        serbuf_write_byte(L, b, SER_INT);
+        lua_Integer i = lua_tointeger(L, idx);
+        serbuf_write(L, b, &i, sizeof(i));
+      }
+      else {
+        serbuf_write_byte(L, b, SER_NUM);
+        lua_Number n = lua_tonumber(L, idx);
+        serbuf_write(L, b, &n, sizeof(n));
+      }
+      break;
+    case LUA_TSTRING: {
+      size_t len;
+      const char *s = lua_tolstring(L, idx, &len);
+      serbuf_write_byte(L, b, SER_STRING);
+      serbuf_write(L, b, &len, sizeof(len));
+      serbuf_write(L, b, s, len);
+      break;
+    }
+    case LUA_TTABLE: return serialize_table(L, idx, b, depth);
+    default:
+      return luaL_error(L, "cannot serialize %s to worker", lua_typename(L, t));
   }
   return 1;
 }
@@ -309,44 +310,40 @@ static int deserialize_value(lua_State *L, DeserBuffer *b, int depth) {
     return 0;
 
   switch (tag) {
-  case SER_NIL:
-    lua_pushnil(L);
-    break;
-  case SER_BOOL: {
-    unsigned char v;
-    if (!deser_read_byte(b, &v))
-      return 0;
-    lua_pushboolean(L, v);
-    break;
-  }
-  case SER_INT: {
-    lua_Integer i;
-    if (!deser_read(b, &i, sizeof(i)))
-      return 0;
-    lua_pushinteger(L, i);
-    break;
-  }
-  case SER_NUM: {
-    lua_Number n;
-    if (!deser_read(b, &n, sizeof(n)))
-      return 0;
-    lua_pushnumber(L, n);
-    break;
-  }
-  case SER_STRING: {
-    size_t len;
-    if (!deser_read(b, &len, sizeof(len)))
-      return 0;
-    if (len > b->size - b->pos)
-      return 0;
-    lua_pushlstring(L, b->data + b->pos, len);
-    b->pos += len;
-    break;
-  }
-  case SER_TABLE:
-    return deserialize_table(L, b, depth + 1);
-  default:
-    return 0;
+    case SER_NIL: lua_pushnil(L); break;
+    case SER_BOOL: {
+      unsigned char v;
+      if (!deser_read_byte(b, &v))
+        return 0;
+      lua_pushboolean(L, v);
+      break;
+    }
+    case SER_INT: {
+      lua_Integer i;
+      if (!deser_read(b, &i, sizeof(i)))
+        return 0;
+      lua_pushinteger(L, i);
+      break;
+    }
+    case SER_NUM: {
+      lua_Number n;
+      if (!deser_read(b, &n, sizeof(n)))
+        return 0;
+      lua_pushnumber(L, n);
+      break;
+    }
+    case SER_STRING: {
+      size_t len;
+      if (!deser_read(b, &len, sizeof(len)))
+        return 0;
+      if (len > b->size - b->pos)
+        return 0;
+      lua_pushlstring(L, b->data + b->pos, len);
+      b->pos += len;
+      break;
+    }
+    case SER_TABLE: return deserialize_table(L, b, depth + 1);
+    default: return 0;
   }
   return 1;
 }
@@ -438,7 +435,8 @@ static void pool_enqueue(WorkerState *w) {
   w->next = NULL;
   if (g_pool.runnable_tail) {
     g_pool.runnable_tail->next = w;
-  } else {
+  }
+  else {
     g_pool.runnable_head = w;
   }
   g_pool.runnable_tail = w;
@@ -770,13 +768,9 @@ static int lib_status(lua_State *L) {
   lus_mutex_unlock(&w->mutex);
 
   switch (status) {
-  case LUS_WORKER_RUNNING:
-  case LUS_WORKER_BLOCKED:
-    lua_pushliteral(L, "running");
-    break;
-  default:
-    lua_pushliteral(L, "dead");
-    break;
+    case LUS_WORKER_RUNNING:
+    case LUS_WORKER_BLOCKED: lua_pushliteral(L, "running"); break;
+    default: lua_pushliteral(L, "dead"); break;
   }
   return 1;
 }

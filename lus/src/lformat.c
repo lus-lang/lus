@@ -37,7 +37,8 @@ static void buf_init(FmtBuf *b) {
   b->cap = 4096;
   b->data = (char *)malloc(b->cap);
   b->len = 0;
-  if (b->data) b->data[0] = '\0';
+  if (b->data)
+    b->data[0] = '\0';
 }
 
 static void buf_grow(FmtBuf *b, size_t need) {
@@ -70,7 +71,8 @@ static void buf_addc(FmtBuf *b, char c) {
 }
 
 static void buf_addrepeat(FmtBuf *b, char c, int n) {
-  if (n <= 0) return;
+  if (n <= 0)
+    return;
   buf_grow(b, (size_t)n);
   memset(b->data + b->len, c, (size_t)n);
   b->len += (size_t)n;
@@ -83,7 +85,8 @@ static void buf_addfmt(FmtBuf *b, const char *fmt, ...) {
   va_start(ap, fmt);
   int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
   va_end(ap);
-  if (n > 0) buf_addlstr(b, tmp, (size_t)n);
+  if (n > 0)
+    buf_addlstr(b, tmp, (size_t)n);
 }
 
 /* ======================================================================
@@ -92,11 +95,11 @@ static void buf_addfmt(FmtBuf *b, const char *fmt, ...) {
 
 typedef struct {
   FmtBuf buf;
-  int indent;          /* current indentation level */
-  int indent_width;    /* spaces per indent level */
-  int max_width;       /* max line width for layout decisions */
+  int indent;       /* current indentation level */
+  int indent_width; /* spaces per indent level */
+  int max_width;    /* max line width for layout decisions */
   /* Comment tracking */
-  LusComment *next_comment;  /* next comment to emit */
+  LusComment *next_comment; /* next comment to emit */
 } FmtState;
 
 static void emit_indent(FmtState *F) {
@@ -123,7 +126,8 @@ static int emit_comments_before(FmtState *F, int line) {
   int last_endline = 0;
   while (F->next_comment != NULL) {
     LusComment *c = F->next_comment;
-    if (line > 0 && c->line >= line) break;
+    if (line > 0 && c->line >= line)
+      break;
     /* Insert blank line if there's a gap between previous comment/code
     ** and this comment */
     if (last_endline > 0 && c->line > last_endline + 1)
@@ -134,9 +138,11 @@ static int emit_comments_before(FmtState *F, int line) {
       emit_indent(F);
       buf_adds(&F->buf, "--[[");
       emit_nl(F);
-      if (c->text) buf_addlstr(&F->buf, getstr(c->text), tsslen(c->text));
+      if (c->text)
+        buf_addlstr(&F->buf, getstr(c->text), tsslen(c->text));
       buf_adds(&F->buf, "]]");
-    } else {
+    }
+    else {
       /* Short comment */
       emit_indent(F);
       buf_adds(&F->buf, "--");
@@ -161,9 +167,11 @@ static void emit_remaining_comments(FmtState *F) {
 /* Emit a trailing short comment on the same line as code.
 ** Only fires for short comments (!islong) whose line matches exactly. */
 static void emit_trailing_comment(FmtState *F, int line) {
-  if (line <= 0) return;
+  if (line <= 0)
+    return;
   LusComment *c = F->next_comment;
-  if (c == NULL || c->line != line || c->islong) return;
+  if (c == NULL || c->line != line || c->islong)
+    return;
   buf_adds(&F->buf, "  --");
   if (c->text) {
     const char *t = getstr(c->text);
@@ -209,16 +217,24 @@ static int binop_prec(LusAstBinOp op) {
   switch (op) {
     case AST_OP_OR: return 1;
     case AST_OP_AND: return 2;
-    case AST_OP_LT: case AST_OP_GT: case AST_OP_LE:
-    case AST_OP_GE: case AST_OP_EQ: case AST_OP_NE: return 3;
+    case AST_OP_LT:
+    case AST_OP_GT:
+    case AST_OP_LE:
+    case AST_OP_GE:
+    case AST_OP_EQ:
+    case AST_OP_NE: return 3;
     case AST_OP_BOR: return 4;
     case AST_OP_BXOR: return 5;
     case AST_OP_BAND: return 6;
-    case AST_OP_SHL: case AST_OP_SHR: return 7;
+    case AST_OP_SHL:
+    case AST_OP_SHR: return 7;
     case AST_OP_CONCAT: return 8;
-    case AST_OP_ADD: case AST_OP_SUB: return 9;
-    case AST_OP_MUL: case AST_OP_DIV:
-    case AST_OP_IDIV: case AST_OP_MOD: return 10;
+    case AST_OP_ADD:
+    case AST_OP_SUB: return 9;
+    case AST_OP_MUL:
+    case AST_OP_DIV:
+    case AST_OP_IDIV:
+    case AST_OP_MOD: return 10;
     case AST_OP_POW: return 12;
     default: return 11;
   }
@@ -229,10 +245,13 @@ static int is_right_assoc(LusAstBinOp op) {
 }
 
 /* Check if child expression needs parentheses */
-static int child_needs_parens(LusAstNode *child, int parent_prec, int on_right) {
-  if (child == NULL || child->type != AST_BINOP) return 0;
+static int child_needs_parens(LusAstNode *child, int parent_prec,
+                              int on_right) {
+  if (child == NULL || child->type != AST_BINOP)
+    return 0;
   int cp = binop_prec(child->u.binop.op);
-  if (cp < parent_prec) return 1;
+  if (cp < parent_prec)
+    return 1;
   if (cp == parent_prec && on_right && !is_right_assoc(child->u.binop.op))
     return 1;
   return 0;
@@ -244,7 +263,10 @@ static int child_needs_parens(LusAstNode *child, int parent_prec, int on_right) 
 
 static void emit_string_lit(FmtState *F, LusAstNode *n) {
   TString *ts = n->u.str;
-  if (ts == NULL) { buf_adds(&F->buf, "\"\""); return; }
+  if (ts == NULL) {
+    buf_adds(&F->buf, "\"\"");
+    return;
+  }
   const char *s = getstr(ts);
   size_t len = tsslen(ts);
 
@@ -269,10 +291,13 @@ static void emit_string_lit(FmtState *F, LusAstNode *n) {
       case '\0': buf_adds(&F->buf, "\\0"); break;
       default:
         if (c == (unsigned char)q) {
-          buf_addc(&F->buf, '\\'); buf_addc(&F->buf, q);
-        } else if (c < 32) {
+          buf_addc(&F->buf, '\\');
+          buf_addc(&F->buf, q);
+        }
+        else if (c < 32) {
           buf_addfmt(&F->buf, "\\x%02x", c);
-        } else {
+        }
+        else {
           buf_addc(&F->buf, (char)c);
         }
     }
@@ -291,16 +316,20 @@ static void emit_binop(FmtState *F, LusAstNode *n) {
   LusAstNode *right = n->u.binop.right;
 
   int lp = child_needs_parens(left, prec, 0);
-  if (lp) buf_addc(&F->buf, '(');
+  if (lp)
+    buf_addc(&F->buf, '(');
   emit_expr(F, left);
-  if (lp) buf_addc(&F->buf, ')');
+  if (lp)
+    buf_addc(&F->buf, ')');
 
   buf_adds(&F->buf, binop_sym(n->u.binop.op));
 
   int rp = child_needs_parens(right, prec, 1);
-  if (rp) buf_addc(&F->buf, '(');
+  if (rp)
+    buf_addc(&F->buf, '(');
   emit_expr(F, right);
-  if (rp) buf_addc(&F->buf, ')');
+  if (rp)
+    buf_addc(&F->buf, ')');
 }
 
 static void emit_unop(FmtState *F, LusAstNode *n) {
@@ -325,22 +354,26 @@ static void emit_unop(FmtState *F, LusAstNode *n) {
   }
   LusAstNode *operand = n->u.unop.operand;
   int need_parens = operand && operand->type == AST_BINOP && !operand->paren;
-  if (need_parens) buf_addc(&F->buf, '(');
+  if (need_parens)
+    buf_addc(&F->buf, '(');
   emit_expr(F, operand);
-  if (need_parens) buf_addc(&F->buf, ')');
+  if (need_parens)
+    buf_addc(&F->buf, ')');
 }
 
 /* Emit a comma-separated expression list (linked via ->next) */
 static void emit_exprlist(FmtState *F, LusAstNode *first) {
   for (LusAstNode *n = first; n != NULL; n = n->next) {
-    if (n != first) buf_adds(&F->buf, ", ");
+    if (n != first)
+      buf_adds(&F->buf, ", ");
     emit_expr(F, n);
   }
 }
 
 /* Check if a string is a valid Lua identifier */
 static int is_valid_ident(const char *s, size_t len) {
-  if (len == 0) return 0;
+  if (len == 0)
+    return 0;
   if (!(s[0] == '_' || (s[0] >= 'a' && s[0] <= 'z') ||
         (s[0] >= 'A' && s[0] <= 'Z')))
     return 0;
@@ -360,12 +393,14 @@ static void emit_table_key(FmtState *F, LusAstNode *key) {
     size_t len = tsslen(key->u.str);
     if (is_valid_ident(s, len)) {
       buf_addlstr(&F->buf, s, len);
-    } else {
+    }
+    else {
       buf_addc(&F->buf, '[');
       emit_string_lit(F, key);
       buf_addc(&F->buf, ']');
     }
-  } else {
+  }
+  else {
     buf_addc(&F->buf, '[');
     emit_expr(F, key);
     buf_addc(&F->buf, ']');
@@ -375,7 +410,8 @@ static void emit_table_key(FmtState *F, LusAstNode *key) {
 /* Count nodes in a linked list */
 static int count_list(LusAstNode *first) {
   int count = 0;
-  for (LusAstNode *n = first; n != NULL; n = n->next) count++;
+  for (LusAstNode *n = first; n != NULL; n = n->next)
+    count++;
   return count;
 }
 
@@ -401,9 +437,11 @@ static void emit_table(FmtState *F, LusAstNode *n) {
         emit_table_key(F, c->u.field.key);
         buf_adds(&F->buf, " = ");
         emit_expr(F, c->u.field.value);
-      } else if (c->type == AST_TABLEFIELD) {
+      }
+      else if (c->type == AST_TABLEFIELD) {
         emit_expr(F, c->u.field.value);
-      } else {
+      }
+      else {
         emit_expr(F, c);
       }
       buf_addc(&F->buf, ',');
@@ -412,19 +450,23 @@ static void emit_table(FmtState *F, LusAstNode *n) {
     F->indent--;
     emit_indent(F);
     buf_addc(&F->buf, '}');
-  } else {
+  }
+  else {
     buf_adds(&F->buf, "{ ");
     int first = 1;
     for (LusAstNode *c = first_child; c != NULL; c = c->next) {
-      if (!first) buf_adds(&F->buf, ", ");
+      if (!first)
+        buf_adds(&F->buf, ", ");
       first = 0;
       if (c->type == AST_TABLEFIELD && c->u.field.key != NULL) {
         emit_table_key(F, c->u.field.key);
         buf_adds(&F->buf, " = ");
         emit_expr(F, c->u.field.value);
-      } else if (c->type == AST_TABLEFIELD) {
+      }
+      else if (c->type == AST_TABLEFIELD) {
         emit_expr(F, c->u.field.value);
-      } else {
+      }
+      else {
         emit_expr(F, c);
       }
     }
@@ -436,13 +478,11 @@ static void emit_table(FmtState *F, LusAstNode *n) {
 static void emit_call(FmtState *F, LusAstNode *n) {
   emit_expr(F, n->u.call.func);
   switch (n->u.call.callstyle) {
-    case 1:  /* string call: f "str" or f 'str' */
+    case 1: /* string call: f "str" or f 'str' */
       buf_addc(&F->buf, ' ');
       emit_expr(F, n->u.call.args);
       break;
-    case 2:  /* table call: f{...} */
-      emit_expr(F, n->u.call.args);
-      break;
+    case 2: /* table call: f{...} */ emit_expr(F, n->u.call.args); break;
     default: /* parenthesized call: f(x, y) */
       buf_addc(&F->buf, '(');
       emit_exprlist(F, n->u.call.args);
@@ -465,7 +505,8 @@ static void emit_methodcall(FmtState *F, LusAstNode *n) {
 /* Emit function parameters (linked list of AST_NAME) */
 static void emit_params(FmtState *F, LusAstNode *params) {
   for (LusAstNode *p = params; p != NULL; p = p->next) {
-    if (p != params) buf_adds(&F->buf, ", ");
+    if (p != params)
+      buf_adds(&F->buf, ", ");
     if (p->type == AST_NAME && p->u.var.name)
       buf_addlstr(&F->buf, getstr(p->u.var.name), tsslen(p->u.var.name));
     else if (p->type == AST_VARARG)
@@ -476,7 +517,8 @@ static void emit_params(FmtState *F, LusAstNode *params) {
 /* Emit function body (shared by funcexpr, localfunc, funcstat, globalfunc) */
 /* Emit a field expression, but use ':' for the last segment if is_method */
 static void emit_field_chain(FmtState *F, LusAstNode *n, int is_method) {
-  if (n == NULL) return;
+  if (n == NULL)
+    return;
   if (n->type == AST_FIELD) {
     /* Check if this is the last field in the chain (method uses ':') */
     int use_colon = is_method && (n->u.index.key != NULL);
@@ -486,11 +528,12 @@ static void emit_field_chain(FmtState *F, LusAstNode *n, int is_method) {
     else
       emit_expr(F, n->u.index.table);
     buf_addc(&F->buf, use_colon ? ':' : '.');
-    if (n->u.index.key && n->u.index.key->type == AST_STRING
-        && n->u.index.key->u.str)
+    if (n->u.index.key && n->u.index.key->type == AST_STRING &&
+        n->u.index.key->u.str)
       buf_addlstr(&F->buf, getstr(n->u.index.key->u.str),
                   tsslen(n->u.index.key->u.str));
-  } else {
+  }
+  else {
     emit_expr(F, n);
   }
 }
@@ -504,7 +547,8 @@ static void emit_funcbody(FmtState *F, LusAstNode *n, const char *prefix) {
       emit_field_chain(F, n->u.func.nameexpr, 1);
     else
       emit_expr(F, n->u.func.nameexpr);
-  } else if (n->u.func.name) {
+  }
+  else if (n->u.func.name) {
     buf_addlstr(&F->buf, getstr(n->u.func.name), tsslen(n->u.func.name));
   }
 
@@ -530,16 +574,21 @@ static void emit_interp(FmtState *F, LusAstNode *n) {
       const char *s = getstr(p->u.str);
       size_t len = tsslen(p->u.str);
       for (size_t k = 0; k < len; k++) {
-        if (s[k] == '$') buf_addc(&F->buf, '$');       /* escape $ as $$ */
-        else if (s[k] == '`') buf_addc(&F->buf, '\\'); /* escape ` as \` */
-        else if (s[k] == '\\') buf_addc(&F->buf, '\\'); /* escape \ as \\ */
+        if (s[k] == '$')
+          buf_addc(&F->buf, '$'); /* escape $ as $$ */
+        else if (s[k] == '`')
+          buf_addc(&F->buf, '\\'); /* escape ` as \` */
+        else if (s[k] == '\\')
+          buf_addc(&F->buf, '\\'); /* escape \ as \\ */
         buf_addc(&F->buf, s[k]);
       }
-    } else if (p->type == AST_NAME && p->u.var.name) {
+    }
+    else if (p->type == AST_NAME && p->u.var.name) {
       /* Simple variable: $name */
       buf_addc(&F->buf, '$');
       buf_addlstr(&F->buf, getstr(p->u.var.name), tsslen(p->u.var.name));
-    } else {
+    }
+    else {
       /* Complex expression: $(expr) */
       buf_adds(&F->buf, "$(");
       emit_expr(F, p);
@@ -554,11 +603,15 @@ static void emit_interp(FmtState *F, LusAstNode *n) {
 ** ====================================================================== */
 
 static void emit_expr(FmtState *F, LusAstNode *n) {
-  if (n == NULL) { buf_adds(&F->buf, "nil"); return; }
+  if (n == NULL) {
+    buf_adds(&F->buf, "nil");
+    return;
+  }
 
   /* Emit parentheses if expression was parenthesized in source */
   int has_paren = n->paren;
-  if (has_paren) buf_addc(&F->buf, '(');
+  if (has_paren)
+    buf_addc(&F->buf, '(');
 
   switch (n->type) {
     case AST_NIL: buf_adds(&F->buf, "nil"); break;
@@ -573,13 +626,9 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
         buf_addfmt(&F->buf, "%.14g", n->u.num.val.n);
       break;
 
-    case AST_STRING:
-      emit_string_lit(F, n);
-      break;
+    case AST_STRING: emit_string_lit(F, n); break;
 
-    case AST_NAME:
-      emit_name(F, n);
-      break;
+    case AST_NAME: emit_name(F, n); break;
 
     case AST_BINOP: emit_binop(F, n); break;
     case AST_UNOP: emit_unop(F, n); break;
@@ -588,8 +637,8 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
     case AST_FIELD:
       emit_expr(F, n->u.index.table);
       buf_addc(&F->buf, '.');
-      if (n->u.index.key && n->u.index.key->type == AST_STRING
-          && n->u.index.key->u.str)
+      if (n->u.index.key && n->u.index.key->type == AST_STRING &&
+          n->u.index.key->u.str)
         buf_addlstr(&F->buf, getstr(n->u.index.key->u.str),
                     tsslen(n->u.index.key->u.str));
       break;
@@ -604,9 +653,7 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
     case AST_CALLEXPR: emit_call(F, n); break;
     case AST_METHODCALL: emit_methodcall(F, n); break;
 
-    case AST_FUNCEXPR:
-      emit_funcbody(F, n, "function");
-      break;
+    case AST_FUNCEXPR: emit_funcbody(F, n, "function"); break;
 
     case AST_CATCHEXPR:
       buf_adds(&F->buf, "catch ");
@@ -625,10 +672,10 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
     case AST_ENUM: {
       buf_adds(&F->buf, "enum ");
       for (LusAstNode *nm = n->u.enumdef.names; nm != NULL; nm = nm->next) {
-        if (nm != n->u.enumdef.names) buf_adds(&F->buf, ", ");
+        if (nm != n->u.enumdef.names)
+          buf_adds(&F->buf, ", ");
         if (nm->type == AST_NAME && nm->u.var.name)
-          buf_addlstr(&F->buf, getstr(nm->u.var.name),
-                      tsslen(nm->u.var.name));
+          buf_addlstr(&F->buf, getstr(nm->u.var.name), tsslen(nm->u.var.name));
       }
       buf_adds(&F->buf, " end");
       break;
@@ -639,9 +686,11 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
     case AST_SLICE:
       emit_expr(F, n->u.slice.table);
       buf_addc(&F->buf, '[');
-      if (n->u.slice.start) emit_expr(F, n->u.slice.start);
+      if (n->u.slice.start)
+        emit_expr(F, n->u.slice.start);
       buf_addc(&F->buf, ',');
-      if (n->u.slice.finish) emit_expr(F, n->u.slice.finish);
+      if (n->u.slice.finish)
+        emit_expr(F, n->u.slice.finish);
       buf_addc(&F->buf, ']');
       break;
 
@@ -651,12 +700,11 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
       emit_expr(F, n->u.optchain.suffix);
       break;
 
-    default:
-      buf_adds(&F->buf, "--[[unknown expr]]");
-      break;
+    default: buf_adds(&F->buf, "--[[unknown expr]]"); break;
   }
 
-  if (has_paren) buf_addc(&F->buf, ')');
+  if (has_paren)
+    buf_addc(&F->buf, ')');
 }
 
 /* ======================================================================
@@ -665,7 +713,8 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
 
 static void emit_namelist(FmtState *F, LusAstNode *first) {
   for (LusAstNode *n = first; n != NULL; n = n->next) {
-    if (n != first) buf_adds(&F->buf, ", ");
+    if (n != first)
+      buf_adds(&F->buf, ", ");
     if (n->type == AST_NAME) {
       if (n->u.var.name)
         buf_addlstr(&F->buf, getstr(n->u.var.name), tsslen(n->u.var.name));
@@ -677,12 +726,17 @@ static void emit_namelist(FmtState *F, LusAstNode *first) {
         int has_runtime = (n->u.var.runtimeattrs != NULL);
         if (has_builtin || has_runtime) {
           buf_adds(&F->buf, " <");
-          if (n->u.var.attrkind == 1) buf_adds(&F->buf, "const");
-          else if (n->u.var.attrkind == 3) buf_adds(&F->buf, "close");
-          else if (n->u.var.attrkind == 5) buf_adds(&F->buf, "group");
-          if (has_builtin && has_runtime) buf_adds(&F->buf, ", ");
+          if (n->u.var.attrkind == 1)
+            buf_adds(&F->buf, "const");
+          else if (n->u.var.attrkind == 3)
+            buf_adds(&F->buf, "close");
+          else if (n->u.var.attrkind == 5)
+            buf_adds(&F->buf, "group");
+          if (has_builtin && has_runtime)
+            buf_adds(&F->buf, ", ");
           for (LusAstNode *a = n->u.var.runtimeattrs; a != NULL; a = a->next) {
-            if (a != n->u.var.runtimeattrs) buf_adds(&F->buf, ", ");
+            if (a != n->u.var.runtimeattrs)
+              buf_adds(&F->buf, ", ");
             emit_expr(F, a);
           }
           buf_addc(&F->buf, '>');
@@ -702,7 +756,8 @@ static void emit_local(FmtState *F, LusAstNode *n) {
   if (n->u.decl.isfrom) {
     buf_adds(&F->buf, " from ");
     emit_exprlist(F, n->u.decl.values);
-  } else if (n->u.decl.values) {
+  }
+  else if (n->u.decl.values) {
     buf_adds(&F->buf, " = ");
     emit_exprlist(F, n->u.decl.values);
   }
@@ -714,7 +769,8 @@ static void emit_global(FmtState *F, LusAstNode *n) {
   if (n->u.decl.isfrom) {
     buf_adds(&F->buf, " from ");
     emit_exprlist(F, n->u.decl.values);
-  } else if (n->u.decl.values) {
+  }
+  else if (n->u.decl.values) {
     buf_adds(&F->buf, " = ");
     emit_exprlist(F, n->u.decl.values);
   }
@@ -753,11 +809,13 @@ static void emit_cond(FmtState *F, LusAstNode *cond) {
     if (cond->u.assign.isfrom) {
       buf_adds(&F->buf, " from ");
       emit_exprlist(F, cond->u.assign.rhs);
-    } else {
+    }
+    else {
       buf_adds(&F->buf, " = ");
       emit_exprlist(F, cond->u.assign.rhs);
     }
-  } else {
+  }
+  else {
     emit_expr(F, cond);
   }
 }
@@ -784,7 +842,8 @@ static void emit_if(FmtState *F, LusAstNode *n) {
       F->indent++;
       for (LusAstNode *ec = c->child; ec != NULL; ec = ec->next)
         emit_stmt(F, ec);
-    } else if (c->type == AST_ELSE) {
+    }
+    else if (c->type == AST_ELSE) {
       F->indent--;
       emit_indent(F);
       buf_adds(&F->buf, "else");
@@ -793,7 +852,8 @@ static void emit_if(FmtState *F, LusAstNode *n) {
       F->indent++;
       for (LusAstNode *ec = c->child; ec != NULL; ec = ec->next)
         emit_stmt(F, ec);
-    } else {
+    }
+    else {
       emit_stmt(F, c);
     }
   }
@@ -826,8 +886,8 @@ static void emit_repeat(FmtState *F, LusAstNode *n) {
 
 static void emit_fornum(FmtState *F, LusAstNode *n) {
   buf_adds(&F->buf, "for ");
-  if (n->u.fornum.var && n->u.fornum.var->type == AST_NAME
-      && n->u.fornum.var->u.var.name)
+  if (n->u.fornum.var && n->u.fornum.var->type == AST_NAME &&
+      n->u.fornum.var->u.var.name)
     buf_addlstr(&F->buf, getstr(n->u.fornum.var->u.var.name),
                 tsslen(n->u.fornum.var->u.var.name));
   buf_adds(&F->buf, " = ");
@@ -875,7 +935,8 @@ static void emit_block_children(FmtState *F, LusAstNode *parent) {
 ** ====================================================================== */
 
 static void emit_stmt(FmtState *F, LusAstNode *n) {
-  if (n == NULL) return;
+  if (n == NULL)
+    return;
 
   /* Emit comments that precede this statement */
   int comment_endline = emit_comments_before(F, n->line);
@@ -911,12 +972,14 @@ static void emit_stmt(FmtState *F, LusAstNode *n) {
 
     case AST_GOTO:
       buf_adds(&F->buf, "goto ");
-      if (n->u.str) buf_addlstr(&F->buf, getstr(n->u.str), tsslen(n->u.str));
+      if (n->u.str)
+        buf_addlstr(&F->buf, getstr(n->u.str), tsslen(n->u.str));
       break;
 
     case AST_LABEL:
       buf_adds(&F->buf, "::");
-      if (n->u.str) buf_addlstr(&F->buf, getstr(n->u.str), tsslen(n->u.str));
+      if (n->u.str)
+        buf_addlstr(&F->buf, getstr(n->u.str), tsslen(n->u.str));
       buf_adds(&F->buf, "::");
       break;
 
@@ -931,15 +994,9 @@ static void emit_stmt(FmtState *F, LusAstNode *n) {
       emit_expr(F, n->u.catchnode.expr);
       break;
 
-    case AST_FUNCSTAT:
-      emit_funcbody(F, n, "function ");
-      break;
-    case AST_LOCALFUNC:
-      emit_funcbody(F, n, "local function ");
-      break;
-    case AST_GLOBALFUNC:
-      emit_funcbody(F, n, "global function ");
-      break;
+    case AST_FUNCSTAT: emit_funcbody(F, n, "function "); break;
+    case AST_LOCALFUNC: emit_funcbody(F, n, "local function "); break;
+    case AST_GLOBALFUNC: emit_funcbody(F, n, "global function "); break;
 
     case AST_ERROR_STAT:
       buf_adds(&F->buf, "-- [FORMAT ERROR: ");
@@ -996,7 +1053,8 @@ typedef struct {
 static const char *fmt_getS(lua_State *L, void *ud, size_t *size) {
   FmtStringReader *r = (FmtStringReader *)ud;
   UNUSED(L);
-  if (r->size == 0) return NULL;
+  if (r->size == 0)
+    return NULL;
   *size = r->size;
   r->size = 0;
   return r->s;
@@ -1025,8 +1083,8 @@ static void fmt_f_parse(lua_State *L, void *ud) {
     luaL_error(L, "cannot format binary chunk");
     return;
   }
-  LClosure *cl = luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c,
-                              pd->ast);
+  LClosure *cl =
+      luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
   lua_pop(L, 1);
   (void)cl;
 }
@@ -1036,8 +1094,8 @@ static void fmt_f_parse(lua_State *L, void *ud) {
 ** ====================================================================== */
 
 char *lusF_format(lua_State *L, const char *source, size_t srclen,
-                  const char *chunkname, int indent_width,
-                  int max_line_width, const char **errmsg) {
+                  const char *chunkname, int indent_width, int max_line_width,
+                  const char **errmsg) {
   LusAst *ast;
   Mbuffer buff;
   Dyndata dyd;
@@ -1047,7 +1105,7 @@ char *lusF_format(lua_State *L, const char *source, size_t srclen,
 
   /* Initialize AST container */
   ast = lusA_new(L);
-  ast->recover = 0;  /* no error recovery for formatter */
+  ast->recover = 0; /* no error recovery for formatter */
 
   /* Initialize parser structures */
   luaZ_initbuffer(L, &buff);
@@ -1075,7 +1133,8 @@ char *lusF_format(lua_State *L, const char *source, size_t srclen,
   luaY_freedyndata(&dyd);
 
   if (status != LUA_OK || ast->root == NULL) {
-    if (errmsg) *errmsg = "parse error";
+    if (errmsg)
+      *errmsg = "parse error";
     lusA_free(L, ast);
     return NULL;
   }
@@ -1096,8 +1155,8 @@ char *lusF_format(lua_State *L, const char *source, size_t srclen,
 
   /* Trim trailing whitespace, ensure single trailing newline */
   while (F.buf.len > 0 && (F.buf.data[F.buf.len - 1] == ' ' ||
-         F.buf.data[F.buf.len - 1] == '\n' ||
-         F.buf.data[F.buf.len - 1] == '\r'))
+                           F.buf.data[F.buf.len - 1] == '\n' ||
+                           F.buf.data[F.buf.len - 1] == '\r'))
     F.buf.len--;
   buf_addc(&F.buf, '\n');
 

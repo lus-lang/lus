@@ -64,25 +64,31 @@ int luaS_eqstr(TString *a, TString *b) {
 static unsigned luaS_hash(const char *str, size_t l, unsigned seed) {
   l_uint32 a, b, h = cast_uint(l) ^ seed;
   if (l == 0) {
-    return h;  /* empty string: just return seed mixed with length (0) */
-  } else if (l >= 4) {
+    return h; /* empty string: just return seed mixed with length (0) */
+  }
+  else if (l >= 4) {
     a = lus_getu32(str);
     h ^= lus_getu32(str + l - 4);
     b = lus_getu32(str + (l >> 1) - 2);
-    h ^= b; h -= lus_rol(b, 14);
+    h ^= b;
+    h -= lus_rol(b, 14);
     b += lus_getu32(str + (l >> 2) - 1);
-  } else {
+  }
+  else {
     a = *(const lu_byte *)str;
     h ^= *(const lu_byte *)(str + l - 1);
     b = *(const lu_byte *)(str + (l >> 1));
-    h ^= b; h -= lus_rol(b, 14);
+    h ^= b;
+    h -= lus_rol(b, 14);
   }
-  a ^= h; a -= lus_rol(h, 11);
-  b ^= a; b -= lus_rol(a, 25);
-  h ^= b; h -= lus_rol(b, 16);
+  a ^= h;
+  a -= lus_rol(h, 11);
+  b ^= a;
+  b -= lus_rol(a, 25);
+  h ^= b;
+  h -= lus_rol(b, 16);
   return h;
 }
-
 
 
 unsigned luaS_hashlongstr(TString *ts) {
@@ -353,9 +359,9 @@ TString *luaS_newextlstr(lua_State *L, const char *s, size_t len,
     CCatchInfo cinfo;
     ne.kind = LSTRMEM;
     CPROTECT_BEGIN(L, &cinfo)
-      f_newext(L, &ne);
+    f_newext(L, &ne);
     CPROTECT_END(L, &cinfo);
-    if (cinfo.status != LUA_OK) { /* mem. error? */
+    if (cinfo.status != LUA_OK) {               /* mem. error? */
       (*falloc)(ud, cast_voidp(s), len + 1, 0); /* free external string */
       luaM_error(L);                            /* re-raise memory error */
     }

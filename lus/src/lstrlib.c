@@ -1444,24 +1444,24 @@ typedef lpack_Header Header;
 typedef lpack_KOption KOption;
 
 /* Alias enum values */
-#define Kint       Lpack_Kint
-#define Kuint      Lpack_Kuint
-#define Kfloat     Lpack_Kfloat
-#define Knumber    Lpack_Knumber
-#define Kdouble    Lpack_Kdouble
-#define Kchar      Lpack_Kchar
-#define Kstring    Lpack_Kstring
-#define Kzstr      Lpack_Kzstr
-#define Kpadding   Lpack_Kpadding
+#define Kint Lpack_Kint
+#define Kuint Lpack_Kuint
+#define Kfloat Lpack_Kfloat
+#define Knumber Lpack_Knumber
+#define Kdouble Lpack_Kdouble
+#define Kchar Lpack_Kchar
+#define Kstring Lpack_Kstring
+#define Kzstr Lpack_Kzstr
+#define Kpadding Lpack_Kpadding
 #define Kpaddalign Lpack_Kpaddalign
-#define Knop       Lpack_Knop
+#define Knop Lpack_Knop
 
 /* Alias shared functions */
-#define initheader    lpack_initheader
-#define getoption     lpack_getoption
-#define getdetails    lpack_getdetails
+#define initheader lpack_initheader
+#define getoption lpack_getoption
+#define getdetails lpack_getdetails
 #define copywithendian lpack_copywithendian
-#define unpackint     lpack_unpackint
+#define unpackint lpack_unpackint
 
 
 /*
@@ -1608,7 +1608,6 @@ static int str_packsize(lua_State *L) {
 }
 
 
-
 static int str_unpack(lua_State *L) {
   Header h;
   const char *fmt = luaL_checkstring(L, 1);
@@ -1707,7 +1706,8 @@ typedef enum {
 } EncodingType;
 
 /* Classification macros */
-#define IS_BINARY_TO_TEXT(e) ((e) == ENC_BASE64 || (e) == ENC_URL || (e) == ENC_HEX)
+#define IS_BINARY_TO_TEXT(e) \
+  ((e) == ENC_BASE64 || (e) == ENC_URL || (e) == ENC_HEX)
 
 /* Maximum Unicode codepoint */
 #define MAXUNICODE 0x10FFFFu
@@ -1722,23 +1722,20 @@ static const char base64_enc[] =
 
 /* Base64 decoding table (-1 = invalid, -2 = padding) */
 static const signed char base64_dec[256] = {
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
-    52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-2,-1,-1,
-    -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
-    15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
-    -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
-    41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
-};
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, 62, -1, -1, -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+    61, -1, -1, -1, -2, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1,
+    -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
+    43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1};
 
 /* URL-safe characters (unreserved per RFC 3986) */
 static int is_url_safe(unsigned char c) {
@@ -1748,23 +1745,33 @@ static int is_url_safe(unsigned char c) {
 
 /* Hex digit conversion */
 static int hex_digit(unsigned char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
   return -1;
 }
 
 /* Parse encoding name to enum */
 static EncodingType parse_encoding(const char *name) {
-  if (strcmp(name, "ascii") == 0) return ENC_ASCII;
-  if (strcmp(name, "utf-8") == 0) return ENC_UTF8;
-  if (strcmp(name, "utf-8bom") == 0) return ENC_UTF8BOM;
-  if (strcmp(name, "utf-16le") == 0) return ENC_UTF16LE;
+  if (strcmp(name, "ascii") == 0)
+    return ENC_ASCII;
+  if (strcmp(name, "utf-8") == 0)
+    return ENC_UTF8;
+  if (strcmp(name, "utf-8bom") == 0)
+    return ENC_UTF8BOM;
+  if (strcmp(name, "utf-16le") == 0)
+    return ENC_UTF16LE;
   if (strcmp(name, "iso-8859-1") == 0 || strcmp(name, "latin-1") == 0)
     return ENC_ISO8859_1;
-  if (strcmp(name, "base64") == 0) return ENC_BASE64;
-  if (strcmp(name, "url") == 0) return ENC_URL;
-  if (strcmp(name, "hex") == 0) return ENC_HEX;
+  if (strcmp(name, "base64") == 0)
+    return ENC_BASE64;
+  if (strcmp(name, "url") == 0)
+    return ENC_URL;
+  if (strcmp(name, "hex") == 0)
+    return ENC_HEX;
   return ENC_INVALID;
 }
 
@@ -1784,16 +1791,19 @@ static int encode_utf8_char(l_uint32 cp, unsigned char *buf) {
   if (cp < 0x80) {
     buf[0] = (unsigned char)cp;
     return 1;
-  } else if (cp < 0x800) {
+  }
+  else if (cp < 0x800) {
     buf[0] = (unsigned char)(0xC0 | (cp >> 6));
     buf[1] = (unsigned char)(0x80 | (cp & 0x3F));
     return 2;
-  } else if (cp < 0x10000) {
+  }
+  else if (cp < 0x10000) {
     buf[0] = (unsigned char)(0xE0 | (cp >> 12));
     buf[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
     buf[2] = (unsigned char)(0x80 | (cp & 0x3F));
     return 3;
-  } else {
+  }
+  else {
     buf[0] = (unsigned char)(0xF0 | (cp >> 18));
     buf[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
     buf[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
@@ -1806,32 +1816,44 @@ static int encode_utf8_char(l_uint32 cp, unsigned char *buf) {
 ** Decode one UTF-8 sequence. Returns pointer to next char, or NULL on error.
 */
 static const unsigned char *decode_utf8_char(const unsigned char *s,
-                                              const unsigned char *end,
-                                              l_uint32 *cp) {
+                                             const unsigned char *end,
+                                             l_uint32 *cp) {
   unsigned int c = s[0];
   if (c < 0x80) {
     *cp = c;
     return s + 1;
-  } else if ((c & 0xE0) == 0xC0) {
-    if (s + 2 > end) return NULL;
-    if ((s[1] & 0xC0) != 0x80) return NULL;
+  }
+  else if ((c & 0xE0) == 0xC0) {
+    if (s + 2 > end)
+      return NULL;
+    if ((s[1] & 0xC0) != 0x80)
+      return NULL;
     *cp = ((c & 0x1F) << 6) | (s[1] & 0x3F);
-    if (*cp < 0x80) return NULL; /* overlong */
+    if (*cp < 0x80)
+      return NULL; /* overlong */
     return s + 2;
-  } else if ((c & 0xF0) == 0xE0) {
-    if (s + 3 > end) return NULL;
-    if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80) return NULL;
+  }
+  else if ((c & 0xF0) == 0xE0) {
+    if (s + 3 > end)
+      return NULL;
+    if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80)
+      return NULL;
     *cp = ((c & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-    if (*cp < 0x800) return NULL; /* overlong */
-    if (*cp >= 0xD800 && *cp <= 0xDFFF) return NULL; /* surrogate */
+    if (*cp < 0x800)
+      return NULL; /* overlong */
+    if (*cp >= 0xD800 && *cp <= 0xDFFF)
+      return NULL; /* surrogate */
     return s + 3;
-  } else if ((c & 0xF8) == 0xF0) {
-    if (s + 4 > end) return NULL;
-    if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 ||
-        (s[3] & 0xC0) != 0x80) return NULL;
-    *cp = ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
-          ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
-    if (*cp < 0x10000 || *cp > MAXUNICODE) return NULL;
+  }
+  else if ((c & 0xF8) == 0xF0) {
+    if (s + 4 > end)
+      return NULL;
+    if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80)
+      return NULL;
+    *cp = ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) |
+          (s[3] & 0x3F);
+    if (*cp < 0x10000 || *cp > MAXUNICODE)
+      return NULL;
     return s + 4;
   }
   return NULL;
@@ -1842,20 +1864,24 @@ static const unsigned char *decode_utf8_char(const unsigned char *s,
 ** Returns pointer to next position, or NULL on error.
 */
 static const unsigned char *decode_utf16le_char(const unsigned char *s,
-                                                  const unsigned char *end,
-                                                  l_uint32 *cp) {
+                                                const unsigned char *end,
+                                                l_uint32 *cp) {
   l_uint32 w1, w2;
-  if (s + 2 > end) return NULL;
+  if (s + 2 > end)
+    return NULL;
   w1 = read_utf16le(s);
   if (w1 < 0xD800 || w1 > 0xDFFF) {
     *cp = w1;
     return s + 2;
   }
   /* Surrogate pair */
-  if (w1 > 0xDBFF) return NULL; /* low surrogate first = error */
-  if (s + 4 > end) return NULL;
+  if (w1 > 0xDBFF)
+    return NULL; /* low surrogate first = error */
+  if (s + 4 > end)
+    return NULL;
   w2 = read_utf16le(s + 2);
-  if (w2 < 0xDC00 || w2 > 0xDFFF) return NULL;
+  if (w2 < 0xDC00 || w2 > 0xDFFF)
+    return NULL;
   *cp = 0x10000 + ((w1 - 0xD800) << 10) + (w2 - 0xDC00);
   return s + 4;
 }
@@ -1867,7 +1893,8 @@ static int encode_utf16le_char(l_uint32 cp, unsigned char *buf) {
   if (cp < 0x10000) {
     write_utf16le(buf, cp);
     return 2;
-  } else {
+  }
+  else {
     /* Surrogate pair */
     l_uint32 adj = cp - 0x10000;
     write_utf16le(buf, 0xD800 + (adj >> 10));
@@ -1890,17 +1917,19 @@ static int decode_base64(const unsigned char *src, size_t srclen,
   while (i < srclen) {
     unsigned char c = src[i++];
     /* Skip whitespace */
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-    
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+      continue;
+
     int val = base64_dec[c];
     if (val == -2) { /* Padding */
       break;
     }
-    if (val == -1) return -1; /* Invalid character */
-    
+    if (val == -1)
+      return -1; /* Invalid character */
+
     accum = (accum << 6) | val;
     bits += 6;
-    
+
     if (bits >= 8) {
       bits -= 8;
       buf[0] = (unsigned char)((accum >> bits) & 0xFF);
@@ -1917,23 +1946,25 @@ static void encode_base64(const unsigned char *src, size_t srclen,
                           luaL_Buffer *b) {
   size_t i;
   unsigned char out[4];
-  
+
   for (i = 0; i + 2 < srclen; i += 3) {
     out[0] = base64_enc[(src[i] >> 2) & 0x3F];
-    out[1] = base64_enc[((src[i] & 0x03) << 4) | ((src[i+1] >> 4) & 0x0F)];
-    out[2] = base64_enc[((src[i+1] & 0x0F) << 2) | ((src[i+2] >> 6) & 0x03)];
-    out[3] = base64_enc[src[i+2] & 0x3F];
+    out[1] = base64_enc[((src[i] & 0x03) << 4) | ((src[i + 1] >> 4) & 0x0F)];
+    out[2] =
+        base64_enc[((src[i + 1] & 0x0F) << 2) | ((src[i + 2] >> 6) & 0x03)];
+    out[3] = base64_enc[src[i + 2] & 0x3F];
     luaL_addlstring(b, (char *)out, 4);
   }
-  
+
   /* Handle remaining bytes */
   if (i < srclen) {
     out[0] = base64_enc[(src[i] >> 2) & 0x3F];
     if (i + 1 < srclen) {
-      out[1] = base64_enc[((src[i] & 0x03) << 4) | ((src[i+1] >> 4) & 0x0F)];
-      out[2] = base64_enc[(src[i+1] & 0x0F) << 2];
+      out[1] = base64_enc[((src[i] & 0x03) << 4) | ((src[i + 1] >> 4) & 0x0F)];
+      out[2] = base64_enc[(src[i + 1] & 0x0F) << 2];
       out[3] = '=';
-    } else {
+    }
+    else {
       out[1] = base64_enc[(src[i] & 0x03) << 4];
       out[2] = '=';
       out[3] = '=';
@@ -1946,26 +1977,29 @@ static void encode_base64(const unsigned char *src, size_t srclen,
 ** Decode URL-encoded string to bytes.
 ** Returns 0 on success, -1 on error.
 */
-static int decode_url(const unsigned char *src, size_t srclen,
-                      luaL_Buffer *b) {
+static int decode_url(const unsigned char *src, size_t srclen, luaL_Buffer *b) {
   size_t i = 0;
   unsigned char buf[1];
-  
+
   while (i < srclen) {
     unsigned char c = src[i++];
     if (c == '%') {
-      if (i + 2 > srclen) return -1;
+      if (i + 2 > srclen)
+        return -1;
       int h1 = hex_digit(src[i]);
       int h2 = hex_digit(src[i + 1]);
-      if (h1 < 0 || h2 < 0) return -1;
+      if (h1 < 0 || h2 < 0)
+        return -1;
       buf[0] = (unsigned char)((h1 << 4) | h2);
       luaL_addlstring(b, (char *)buf, 1);
       i += 2;
-    } else if (c == '+') {
+    }
+    else if (c == '+') {
       /* '+' is sometimes used for space */
       buf[0] = ' ';
       luaL_addlstring(b, (char *)buf, 1);
-    } else {
+    }
+    else {
       buf[0] = c;
       luaL_addlstring(b, (char *)buf, 1);
     }
@@ -1981,13 +2015,14 @@ static void encode_url(const unsigned char *src, size_t srclen,
   static const char hex[] = "0123456789ABCDEF";
   size_t i;
   char buf[3];
-  
+
   for (i = 0; i < srclen; i++) {
     unsigned char c = src[i];
     if (is_url_safe(c)) {
       buf[0] = (char)c;
       luaL_addlstring(b, buf, 1);
-    } else {
+    }
+    else {
       buf[0] = '%';
       buf[1] = hex[(c >> 4) & 0x0F];
       buf[2] = hex[c & 0x0F];
@@ -2000,17 +2035,18 @@ static void encode_url(const unsigned char *src, size_t srclen,
 ** Decode hex string to bytes.
 ** Returns 0 on success, -1 on error.
 */
-static int decode_hex(const unsigned char *src, size_t srclen,
-                      luaL_Buffer *b) {
+static int decode_hex(const unsigned char *src, size_t srclen, luaL_Buffer *b) {
   size_t i;
   unsigned char buf[1];
-  
-  if (srclen % 2 != 0) return -1; /* Must be even length */
-  
+
+  if (srclen % 2 != 0)
+    return -1; /* Must be even length */
+
   for (i = 0; i < srclen; i += 2) {
     int h1 = hex_digit(src[i]);
     int h2 = hex_digit(src[i + 1]);
-    if (h1 < 0 || h2 < 0) return -1;
+    if (h1 < 0 || h2 < 0)
+      return -1;
     buf[0] = (unsigned char)((h1 << 4) | h2);
     luaL_addlstring(b, (char *)buf, 1);
   }
@@ -2025,7 +2061,7 @@ static void encode_hex(const unsigned char *src, size_t srclen,
   static const char hex[] = "0123456789abcdef";
   size_t i;
   char buf[2];
-  
+
   for (i = 0; i < srclen; i++) {
     buf[0] = hex[(src[i] >> 4) & 0x0F];
     buf[1] = hex[src[i] & 0x0F];
@@ -2039,118 +2075,128 @@ static void encode_hex(const unsigned char *src, size_t srclen,
 */
 static int str_transcode(lua_State *L) {
   size_t srclen;
-  const unsigned char *src = (const unsigned char *)luaL_checklstring(L, 1, &srclen);
+  const unsigned char *src =
+      (const unsigned char *)luaL_checklstring(L, 1, &srclen);
   const char *from_str = luaL_checkstring(L, 2);
   const char *to_str = luaL_checkstring(L, 3);
   int ignorebad = lua_toboolean(L, 4);
-  
+
   EncodingType from = parse_encoding(from_str);
   EncodingType to = parse_encoding(to_str);
-  
+
   if (from == ENC_INVALID)
     return luaL_error(L, "invalid source encoding '%s'", from_str);
   if (to == ENC_INVALID)
     return luaL_error(L, "invalid target encoding '%s'", to_str);
-  
+
   luaL_Buffer b;
   luaL_buffinit(L, &b);
-  
+
   const unsigned char *p = src;
   const unsigned char *end = src + srclen;
-  
+
   /* Handle binary-to-text encodings specially */
   if (IS_BINARY_TO_TEXT(from) && IS_BINARY_TO_TEXT(to)) {
     /* Decode from source format to raw bytes, then encode to target */
     luaL_Buffer temp;
     luaL_buffinit(L, &temp);
-    
+
     int err = 0;
     if (from == ENC_BASE64) {
       err = decode_base64(src, srclen, &temp);
-    } else if (from == ENC_URL) {
+    }
+    else if (from == ENC_URL) {
       err = decode_url(src, srclen, &temp);
-    } else { /* ENC_HEX */
+    }
+    else { /* ENC_HEX */
       err = decode_hex(src, srclen, &temp);
     }
-    
+
     if (err < 0) {
       if (!ignorebad)
         return luaL_error(L, "invalid %s input", from_str);
       lua_pushliteral(L, "");
       return 1;
     }
-    
+
     luaL_pushresult(&temp);
     size_t rawlen;
-    const unsigned char *raw = (const unsigned char *)lua_tolstring(L, -1, &rawlen);
-    
+    const unsigned char *raw =
+        (const unsigned char *)lua_tolstring(L, -1, &rawlen);
+
     if (to == ENC_BASE64) {
       encode_base64(raw, rawlen, &b);
-    } else if (to == ENC_URL) {
+    }
+    else if (to == ENC_URL) {
       encode_url(raw, rawlen, &b);
-    } else { /* ENC_HEX */
+    }
+    else { /* ENC_HEX */
       encode_hex(raw, rawlen, &b);
     }
-    
+
     lua_pop(L, 1); /* pop temp string */
     luaL_pushresult(&b);
     return 1;
   }
-  
+
   /* Binary-to-text as source: decode to raw bytes first */
   if (IS_BINARY_TO_TEXT(from)) {
     luaL_Buffer temp;
     luaL_buffinit(L, &temp);
-    
+
     int err = 0;
     if (from == ENC_BASE64) {
       err = decode_base64(src, srclen, &temp);
-    } else if (from == ENC_URL) {
+    }
+    else if (from == ENC_URL) {
       err = decode_url(src, srclen, &temp);
-    } else { /* ENC_HEX */
+    }
+    else { /* ENC_HEX */
       err = decode_hex(src, srclen, &temp);
     }
-    
+
     if (err < 0) {
       if (!ignorebad)
         return luaL_error(L, "invalid %s input", from_str);
       lua_pushliteral(L, "");
       return 1;
     }
-    
+
     luaL_pushresult(&temp);
     size_t rawlen;
     src = (const unsigned char *)lua_tolstring(L, -1, &rawlen);
     srclen = rawlen;
     p = src;
     end = src + srclen;
-    
+
     /* If target is utf-8, return raw bytes directly (no validation) */
     if (to == ENC_UTF8) {
       lua_pushvalue(L, -1); /* push the temp result again */
       return 1;
     }
-    
+
     /* Now treat as UTF-8 for the "from" side */
     from = ENC_UTF8;
   }
-  
+
   /* Binary-to-text as target: encode raw bytes directly */
   if (IS_BINARY_TO_TEXT(to)) {
     /* First decode source to raw bytes (treating as UTF-8 means pass-through) */
     if (to == ENC_BASE64) {
       encode_base64(src, srclen, &b);
-    } else if (to == ENC_URL) {
+    }
+    else if (to == ENC_URL) {
       encode_url(src, srclen, &b);
-    } else { /* ENC_HEX */
+    }
+    else { /* ENC_HEX */
       encode_hex(src, srclen, &b);
     }
     luaL_pushresult(&b);
     return 1;
   }
-  
+
   /* Character-based transcoding: decode codepoints, then encode */
-  
+
   /* Pre-check for UTF-16LE: must have even number of bytes */
   if (from == ENC_UTF16LE && (srclen % 2) != 0) {
     if (!ignorebad)
@@ -2159,7 +2205,7 @@ static int str_transcode(lua_State *L) {
     srclen--;
     end = src + srclen;
   }
-  
+
   /* Handle UTF-8 BOM on input */
   if (from == ENC_UTF8BOM) {
     if (srclen >= UTF8_BOM_LEN && memcmp(p, UTF8_BOM, UTF8_BOM_LEN) == 0) {
@@ -2167,32 +2213,32 @@ static int str_transcode(lua_State *L) {
     }
     from = ENC_UTF8; /* Treat rest as UTF-8 */
   }
-  
+
   /* Add UTF-8 BOM on output if needed */
   if (to == ENC_UTF8BOM) {
     luaL_addlstring(&b, UTF8_BOM, UTF8_BOM_LEN);
     to = ENC_UTF8; /* Treat rest as UTF-8 */
   }
-  
+
   while (p < end) {
     l_uint32 cp;
     const unsigned char *next = NULL;
     unsigned char outbuf[4];
     int outlen;
-    
+
     /* Decode one codepoint from source encoding */
     switch (from) {
       case ENC_ASCII:
         if (*p > 127) {
           if (!ignorebad)
-            return luaL_error(L, "invalid ASCII byte 0x%02X at position %d",
-                              *p, (int)(p - src + 1));
+            return luaL_error(L, "invalid ASCII byte 0x%02X at position %d", *p,
+                              (int)(p - src + 1));
           p++;
           continue;
         }
         cp = *p++;
         break;
-        
+
       case ENC_UTF8:
         next = decode_utf8_char(p, end, &cp);
         if (next == NULL) {
@@ -2204,7 +2250,7 @@ static int str_transcode(lua_State *L) {
         }
         p = next;
         break;
-        
+
       case ENC_UTF16LE:
         next = decode_utf16le_char(p, end, &cp);
         if (next == NULL) {
@@ -2212,20 +2258,18 @@ static int str_transcode(lua_State *L) {
             return luaL_error(L, "invalid UTF-16LE sequence at position %d",
                               (int)(p - src + 1));
           p += 2;
-          if (p > end) p = end;
+          if (p > end)
+            p = end;
           continue;
         }
         p = next;
         break;
-        
-      case ENC_ISO8859_1:
-        cp = *p++;
-        break;
-        
-      default:
-        return luaL_error(L, "internal error: unhandled encoding");
+
+      case ENC_ISO8859_1: cp = *p++; break;
+
+      default: return luaL_error(L, "internal error: unhandled encoding");
     }
-    
+
     /* Encode codepoint to target encoding */
     switch (to) {
       case ENC_ASCII:
@@ -2238,12 +2282,12 @@ static int str_transcode(lua_State *L) {
         outbuf[0] = (unsigned char)cp;
         luaL_addlstring(&b, (char *)outbuf, 1);
         break;
-        
+
       case ENC_UTF8:
         outlen = encode_utf8_char(cp, outbuf);
         luaL_addlstring(&b, (char *)outbuf, (size_t)outlen);
         break;
-        
+
       case ENC_UTF16LE:
         if (cp >= 0xD800 && cp <= 0xDFFF) {
           if (!ignorebad)
@@ -2254,23 +2298,23 @@ static int str_transcode(lua_State *L) {
         outlen = encode_utf16le_char(cp, outbuf);
         luaL_addlstring(&b, (char *)outbuf, (size_t)outlen);
         break;
-        
+
       case ENC_ISO8859_1:
         if (cp > 255) {
           if (!ignorebad)
-            return luaL_error(L, "codepoint U+%04X cannot be encoded as ISO-8859-1",
-                              (unsigned)cp);
+            return luaL_error(
+                L, "codepoint U+%04X cannot be encoded as ISO-8859-1",
+                (unsigned)cp);
           continue;
         }
         outbuf[0] = (unsigned char)cp;
         luaL_addlstring(&b, (char *)outbuf, 1);
         break;
-        
-      default:
-        return luaL_error(L, "internal error: unhandled encoding");
+
+      default: return luaL_error(L, "internal error: unhandled encoding");
     }
   }
-  
+
   luaL_pushresult(&b);
   return 1;
 }
@@ -2358,11 +2402,9 @@ static int str_trim(lua_State *L) {
   const char *s = luaL_checklstring(L, 1, &ls);
   const char *chars = luaL_optlstring(L, 2, NULL, &lc);
   size_t start = 0, end = ls;
-  while (start < end &&
-         is_trim_char((unsigned char)s[start], chars, lc))
+  while (start < end && is_trim_char((unsigned char)s[start], chars, lc))
     start++;
-  while (end > start &&
-         is_trim_char((unsigned char)s[end - 1], chars, lc))
+  while (end > start && is_trim_char((unsigned char)s[end - 1], chars, lc))
     end--;
   lua_pushlstring(L, s + start, end - start);
   return 1;
@@ -2374,8 +2416,7 @@ static int str_ltrim(lua_State *L) {
   const char *s = luaL_checklstring(L, 1, &ls);
   const char *chars = luaL_optlstring(L, 2, NULL, &lc);
   size_t start = 0;
-  while (start < ls &&
-         is_trim_char((unsigned char)s[start], chars, lc))
+  while (start < ls && is_trim_char((unsigned char)s[start], chars, lc))
     start++;
   lua_pushlstring(L, s + start, ls - start);
   return 1;
@@ -2397,20 +2438,30 @@ static int str_rtrim(lua_State *L) {
 /* }====================================================== */
 
 
-static const luaL_Reg strlib[] = {
-    {"byte", str_byte},         {"char", str_char},
-    {"dump", str_dump},         {"find", str_find},
-    {"format", str_format},     {"gmatch", gmatch},
-    {"gsub", str_gsub},         {"join", str_join},
-    {"len", str_len},           {"lower", str_lower},
-    {"ltrim", str_ltrim},       {"match", str_match},
-    {"rep", str_rep},           {"reverse", str_reverse},
-    {"rtrim", str_rtrim},       {"split", str_split},
-    {"sub", str_sub},           {"trim", str_trim},
-    {"upper", str_upper},
-    {"pack", str_pack},         {"packsize", str_packsize},
-    {"unpack", str_unpack},     {"transcode", str_transcode},
-    {NULL, NULL}};
+static const luaL_Reg strlib[] = {{"byte", str_byte},
+                                  {"char", str_char},
+                                  {"dump", str_dump},
+                                  {"find", str_find},
+                                  {"format", str_format},
+                                  {"gmatch", gmatch},
+                                  {"gsub", str_gsub},
+                                  {"join", str_join},
+                                  {"len", str_len},
+                                  {"lower", str_lower},
+                                  {"ltrim", str_ltrim},
+                                  {"match", str_match},
+                                  {"rep", str_rep},
+                                  {"reverse", str_reverse},
+                                  {"rtrim", str_rtrim},
+                                  {"split", str_split},
+                                  {"sub", str_sub},
+                                  {"trim", str_trim},
+                                  {"upper", str_upper},
+                                  {"pack", str_pack},
+                                  {"packsize", str_packsize},
+                                  {"unpack", str_unpack},
+                                  {"transcode", str_transcode},
+                                  {NULL, NULL}};
 
 
 static void createmetatable(lua_State *L) {

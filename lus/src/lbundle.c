@@ -269,14 +269,14 @@ LusBundle *lusB_load(void) {
   p = index_data;
   unsigned char *end = index_data + index_size;
 
-#define BUNDLE_CHECK(cond)    \
-  do {                        \
-    if (!(cond)) {            \
-      free(index_data);       \
-      lusB_free(bundle);      \
-      fclose(f);              \
-      return NULL;            \
-    }                         \
+#define BUNDLE_CHECK(cond) \
+  do {                     \
+    if (!(cond)) {         \
+      free(index_data);    \
+      lusB_free(bundle);   \
+      fclose(f);           \
+      return NULL;         \
+    }                      \
   } while (0)
 
   /* Version */

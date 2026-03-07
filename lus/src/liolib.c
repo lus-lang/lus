@@ -64,15 +64,15 @@ static int l_checkmode(const char *mode) {
 
 #if !defined(l_checkmodep)
 /* Windows accepts "[rw][bt]?" as valid modes */
-#define l_checkmodep(m)                                                        \
-  ((m[0] == 'r' || m[0] == 'w') &&                                             \
+#define l_checkmodep(m)            \
+  ((m[0] == 'r' || m[0] == 'w') && \
    (m[1] == '\0' || ((m[1] == 'b' || m[1] == 't') && m[2] == '\0')))
 #endif
 
 #else /* }{ */
 
 /* ISO C definitions */
-#define l_popen(L, c, m)                                                       \
+#define l_popen(L, c, m) \
   ((void)c, (void)m, luaL_error(L, "'popen' not supported"), (FILE *)0)
 #define l_pclose(L, file) ((void)L, (void)file, -1)
 
@@ -117,7 +117,7 @@ static int l_checkmode(const char *mode) {
 #define l_ftell(f) ftello(f)
 #define l_seeknum off_t
 
-#elif defined(LUA_USE_WINDOWS) && !defined(_CRTIMP_TYPEINFO) &&                \
+#elif defined(LUA_USE_WINDOWS) && !defined(_CRTIMP_TYPEINFO) && \
     defined(_MSC_VER) && (_MSC_VER >= 1400) /* }{ */
 
 /* Windows (but not DDK) and Visual C++ 2005 or higher */
@@ -313,9 +313,13 @@ static int g_iofile(lua_State *L, const char *f, const char *mode) {
   return 1;
 }
 
-static int io_input(lua_State *L) { return g_iofile(L, IO_INPUT, "r"); }
+static int io_input(lua_State *L) {
+  return g_iofile(L, IO_INPUT, "r");
+}
 
-static int io_output(lua_State *L) { return g_iofile(L, IO_OUTPUT, "w"); }
+static int io_output(lua_State *L) {
+  return g_iofile(L, IO_OUTPUT, "w");
+}
 
 static int io_readline(lua_State *L);
 
@@ -364,7 +368,8 @@ static int io_lines(lua_State *L) {
     lua_replace(L, 1);                            /* put it at index 1 */
     tofile(L);   /* check that it's a valid file handle */
     toclose = 0; /* do not close it after iteration */
-  } else {       /* open a new file */
+  }
+  else { /* open a new file */
     const char *filename = luaL_checkstring(L, 1);
     opencheck(L, filename, "r");
     lua_replace(L, 1); /* put file at index 1 */
@@ -376,7 +381,8 @@ static int io_lines(lua_State *L) {
     lua_pushnil(L);      /* control */
     lua_pushvalue(L, 1); /* file is the to-be-closed variable (4th result) */
     return 4;
-  } else
+  }
+  else
     return 1;
 }
 
@@ -406,7 +412,8 @@ static int nextc(RN *rn) {
   if (l_unlikely(rn->n >= L_MAXLENNUM)) { /* buffer overflow? */
     rn->buff[0] = '\0';                   /* invalidate result */
     return 0;                             /* fail */
-  } else {
+  }
+  else {
     rn->buff[rn->n++] = cast_char(rn->c); /* save current char */
     rn->c = l_getc(rn->f);                /* read next one */
     return 1;
@@ -535,7 +542,8 @@ static int g_read(lua_State *L, FILE *f, int first) {
   if (nargs == 0) { /* no arguments? */
     success = read_line(L, f, 1);
     n = first + 1; /* to return 1 result */
-  } else {
+  }
+  else {
     /* ensure stack space for all results and for auxlib's buffer */
     luaL_checkstack(L, nargs + LUA_MINSTACK, "too many arguments");
     success = 1;
@@ -544,29 +552,26 @@ static int g_read(lua_State *L, FILE *f, int first) {
         size_t l = (size_t)luaL_checkinteger(L, n);
         if (l == 0) {
           success = test_eof(L, f);
-        } else {
+        }
+        else {
           success = read_chars(L, f, l);
         }
-      } else {
+      }
+      else {
         const char *p = luaL_checkstring(L, n);
         if (*p == '*')
           p++; /* skip optional '*' (for compatibility) */
         switch (*p) {
-        case 'n': /* number */
-          success = read_number(L, f);
-          break;
-        case 'l': /* line */
-          success = read_line(L, f, 1);
-          break;
-        case 'L': /* line with end-of-line */
-          success = read_line(L, f, 0);
-          break;
-        case 'a': /* file */
-          read_all(L, f);
-          success = 1; /* always success */
-          break;
-        default:
-          return luaL_argerror(L, n, "invalid format");
+          case 'n': /* number */ success = read_number(L, f); break;
+          case 'l': /* line */ success = read_line(L, f, 1); break;
+          case 'L': /* line with end-of-line */
+            success = read_line(L, f, 0);
+            break;
+          case 'a': /* file */
+            read_all(L, f);
+            success = 1; /* always success */
+            break;
+          default: return luaL_argerror(L, n, "invalid format");
         }
       }
     }
@@ -584,7 +589,9 @@ static int io_read(lua_State *L) {
   return g_read(L, getiofile(L, IO_INPUT), 1);
 }
 
-static int f_read(lua_State *L) { return g_read(L, tofile(L), 2); }
+static int f_read(lua_State *L) {
+  return g_read(L, tofile(L), 2);
+}
 
 /*
 ** Iteration function for 'lines'.
@@ -632,7 +639,8 @@ static int g_write(lua_State *L, FILE *f, int arg) {
     if (len > 0) { /* did conversion work (value was a number)? */
       s = buff;
       len--;
-    } else /* must be a string */
+    }
+    else /* must be a string */
       s = luaL_checklstring(L, arg, &len);
     numbytes = fwrite(s, sizeof(char), len, f);
     totalbytes += numbytes;
@@ -691,7 +699,9 @@ static int aux_flush(lua_State *L, FILE *f) {
   return luaL_fileresult(L, fflush(f) == 0, NULL);
 }
 
-static int f_flush(lua_State *L) { return aux_flush(L, tofile(L)); }
+static int f_flush(lua_State *L) {
+  return aux_flush(L, tofile(L));
+}
 
 static int io_flush(lua_State *L) {
   return aux_flush(L, getiofile(L, IO_OUTPUT));

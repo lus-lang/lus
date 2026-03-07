@@ -91,7 +91,8 @@ void *luaM_growaux_(lua_State *L, void *block, int nelems, int *psize,
     if (l_unlikely(size >= limit)) /* cannot grow even a little? */
       luaG_runerror(L, "too many %s (limit is %d)", what, limit);
     size = limit; /* still have at least one free place */
-  } else {
+  }
+  else {
     size *= 2;
     if (size < MINSIZEARRAY)
       size = MINSIZEARRAY; /* minimum size */
@@ -146,7 +147,8 @@ static void *tryagain(lua_State *L, void *block, size_t osize, size_t nsize) {
   if (cantryagain(g)) {
     luaC_fullgc(L, 1); /* try to free some memory... */
     return callfrealloc(g, block, osize, nsize); /* try again */
-  } else
+  }
+  else
     return NULL; /* cannot run an emergency collection */
 }
 

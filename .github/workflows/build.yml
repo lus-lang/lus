@@ -6,11 +6,19 @@ on:
     paths:
       - "lus/**"
       - "lus-tests/**"
+      - "lus-spec/**"
+      - "lus-vscode/package.json"
+      - "CHANGELOG.md"
+      - "scripts/**"
   pull_request:
     branches: [main]
     paths:
       - "lus/**"
       - "lus-tests/**"
+      - "lus-spec/**"
+      - "lus-vscode/package.json"
+      - "CHANGELOG.md"
+      - "scripts/**"
   workflow_dispatch:
 
 concurrency:
@@ -18,6 +26,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lint checks run in parallel with tests
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y clang-format
+      - run: bash scripts/lint.sh
+
   # Platform-specific tests run in parallel
   test:
     name: Test (${{ matrix.platform }})
@@ -100,7 +119,7 @@ jobs:
   # Sanitizer build for memory safety validation
   sanitize:
     name: Sanitizers
-    needs: [test]
+    needs: [test, lint]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
 
@@ -132,7 +151,7 @@ jobs:
   # Platform-specific release builds (only for platforms that passed tests)
   build:
     name: Build (${{ matrix.platform }})
-    needs: [test]
+    needs: [test, lint]
     if: always() && !cancelled()
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || null }}
@@ -255,7 +274,7 @@ jobs:
   # Test result summary
   summary:
     name: Summary
-    needs: [test, sanitize, build, build-wasm]
+    needs: [test, sanitize, build, build-wasm, lint]
     if: always()
     runs-on: ubuntu-latest
 

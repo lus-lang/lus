@@ -11,7 +11,8 @@
 
 /* Some header files included here need this definition */
 typedef struct CallInfo CallInfo;
-typedef struct CCatchInfo CCatchInfo;  /* C-level catch info (defined in ldo.h) */
+typedef struct CCatchInfo
+    CCatchInfo; /* C-level catch info (defined in ldo.h) */
 
 #include <setjmp.h> /* for jmp_buf in CatchInfo */
 
@@ -175,16 +176,16 @@ typedef struct stringtable {
 ** instead of propagating up.
 */
 typedef struct CatchInfo {
-  jmp_buf jmpbuf;                    /* setjmp buffer for error recovery */
-  CallInfo *prev_activeCatch;        /* saved previous active catch handler */
-  volatile TStatus status;           /* error status (if error occurred) */
+  jmp_buf jmpbuf;             /* setjmp buffer for error recovery */
+  CallInfo *prev_activeCatch; /* saved previous active catch handler */
+  volatile TStatus status;    /* error status (if error occurred) */
   const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
-  ptrdiff_t erroffset;    /* stack offset of error object (survives realloc) */
-  ptrdiff_t baseoffset;   /* stack offset of base register (survives realloc) */
-  TValue handler;         /* error handler function (nil if no handler) */
-  lu_byte destreg;        /* destination register for status/error */
-  lu_byte nresults;       /* expected number of results (for nil-filling) */
-  lu_byte active;         /* 1 if catch block is active */
+  ptrdiff_t erroffset;  /* stack offset of error object (survives realloc) */
+  ptrdiff_t baseoffset; /* stack offset of base register (survives realloc) */
+  TValue handler;       /* error handler function (nil if no handler) */
+  lu_byte destreg;      /* destination register for status/error */
+  lu_byte nresults;     /* expected number of results (for nil-filling) */
+  lu_byte active;       /* 1 if catch block is active */
 } CatchInfo;
 
 struct CallInfo {
@@ -261,9 +262,9 @@ struct CallInfo {
 ** because of an error.  (Three bits are enough for error status.)
 */
 #define getcistrecst(ci) (((ci)->callstatus >> CIST_RECST) & 7)
-#define setcistrecst(ci, st)                                                   \
-  check_exp(((st) & 7) == (st), /* status must fit in three bits */            \
-            ((ci)->callstatus = ((ci)->callstatus & ~(7u << CIST_RECST)) |     \
+#define setcistrecst(ci, st)                                               \
+  check_exp(((st) & 7) == (st), /* status must fit in three bits */        \
+            ((ci)->callstatus = ((ci)->callstatus & ~(7u << CIST_RECST)) | \
                                 (cast(l_uint32, st) << CIST_RECST)))
 
 /* active function is a Lua function */
@@ -272,8 +273,8 @@ struct CallInfo {
 /* call is running Lua code (not a hook) */
 #define isLuacode(ci) (!((ci)->callstatus & (CIST_C | CIST_HOOKED)))
 
-#define setoah(ci, v)                                                          \
-  ((ci)->callstatus =                                                          \
+#define setoah(ci, v) \
+  ((ci)->callstatus = \
        ((v) ? (ci)->callstatus | CIST_OAH : (ci)->callstatus & ~CIST_OAH))
 #define getoah(ci) (((ci)->callstatus & CIST_OAH) ? 1 : 0)
 
@@ -292,10 +293,10 @@ struct lua_State {
   UpVal *openupval;    /* list of open upvalues in this stack */
   StkIdRel tbclist;    /* list of to-be-closed variables */
   GCObject *gclist;
-  struct lua_State *twups;      /* list of threads with open upvalues */
-  CCatchInfo *cCatch;           /* C-level catch handler */
-  CallInfo *activeCatch; /* deepest active catch handler (for O(1) lookup) */
-  CallInfo base_ci;      /* CallInfo for first level (C host) */
+  struct lua_State *twups; /* list of threads with open upvalues */
+  CCatchInfo *cCatch;      /* C-level catch handler */
+  CallInfo *activeCatch;   /* deepest active catch handler (for O(1) lookup) */
+  CallInfo base_ci;        /* CallInfo for first level (C host) */
   volatile lua_Hook hook;
   ptrdiff_t errfunc; /* current error handling function (stack index) */
   l_uint32 nCcalls;  /* number of nested non-yieldable or C calls */
@@ -410,12 +411,12 @@ union GCUnion {
 #define cast_u(o) cast(union GCUnion *, (o))
 
 /* macros to convert a GCObject into a specific value */
-#define gco2ts(o)                                                              \
+#define gco2ts(o) \
   check_exp(novariant((o)->tt) == LUA_TSTRING, &((cast_u(o))->ts))
 #define gco2u(o) check_exp((o)->tt == LUA_VUSERDATA, &((cast_u(o))->u))
 #define gco2lcl(o) check_exp((o)->tt == LUA_VLCL, &((cast_u(o))->cl.l))
 #define gco2ccl(o) check_exp((o)->tt == LUA_VCCL, &((cast_u(o))->cl.c))
-#define gco2cl(o)                                                              \
+#define gco2cl(o) \
   check_exp(novariant((o)->tt) == LUA_TFUNCTION, &((cast_u(o))->cl))
 #define gco2t(o) check_exp((o)->tt == LUA_VTABLE, &((cast_u(o))->h))
 #define gco2p(o) check_exp((o)->tt == LUA_VPROTO, &((cast_u(o))->p))
@@ -428,7 +429,7 @@ union GCUnion {
 /*
 ** macro to convert a Lua object into a GCObject
 */
-#define obj2gco(v)                                                             \
+#define obj2gco(v) \
   check_exp(novariant((v)->tt) >= LUA_TSTRING, &(cast_u(v)->gc))
 
 /* actual number of total memory allocated */

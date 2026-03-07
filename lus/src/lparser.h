@@ -72,8 +72,8 @@ typedef enum {
               info = instruction pc */
   VCALL,     /* expression is a function call; info = instruction pc */
   VVARARG,   /* vararg expression; info = instruction pc */
-  VCATCH,    /* catch expression; info = base register; returns (status, result) */
-  VDOEXPR    /* do expression; info = base register; can return multiple values */
+  VCATCH, /* catch expression; info = base register; returns (status, result) */
+  VDOEXPR /* do expression; info = base register; can return multiple values */
 } expkind;
 
 #define vkisvar(k) (VLOCAL <= (k) && (k) <= VINDEXSTR)
@@ -120,11 +120,11 @@ typedef struct expdesc {
 
 /* runtime attribute info for a variable */
 typedef struct RuntimeAttr {
-  TString *name;           /* attribute expression start (name) */
-  lu_byte iscall;          /* 1 if this is a function call (has args) */
-  lu_byte ridx;            /* register holding evaluated attr (set after eval) */
-  struct RuntimeAttr *next;/* next attribute in chain */
-  struct LusAstNode *ast;  /* AST node for the attribute expression */
+  TString *name;  /* attribute expression start (name) */
+  lu_byte iscall; /* 1 if this is a function call (has args) */
+  lu_byte ridx;   /* register holding evaluated attr (set after eval) */
+  struct RuntimeAttr *next; /* next attribute in chain */
+  struct LusAstNode *ast;   /* AST node for the attribute expression */
 } RuntimeAttr;
 
 /* Forward declaration for GroupDesc */
@@ -138,30 +138,31 @@ typedef union Vardesc {
     lu_byte ridx;  /* register holding the variable */
     short pidx;    /* index of the variable in the Proto's 'locvars' array */
     TString *name; /* variable name */
-    RuntimeAttr *attrs;  /* linked list of runtime attributes (or NULL) */
-    lu_byte nattrs;      /* count of runtime attributes */
-    struct GroupDesc *parentgroup; /* parent group if this is a group field (or NULL) */
+    RuntimeAttr *attrs; /* linked list of runtime attributes (or NULL) */
+    lu_byte nattrs;     /* count of runtime attributes */
+    struct GroupDesc
+        *parentgroup; /* parent group if this is a group field (or NULL) */
   } vd;
   TValue k; /* constant value (if any) */
 } Vardesc;
 
 /* description of a group field (for local groups) */
 typedef struct GroupField {
-  TString *name;           /* field name */
-  lu_byte ridx;            /* register index for this field */
-  lu_byte kind;            /* field kind (RDKCONST, RDKGROUP, etc.) */
-  struct GroupField *next; /* next field in group (linked list) */
+  TString *name;              /* field name */
+  lu_byte ridx;               /* register index for this field */
+  lu_byte kind;               /* field kind (RDKCONST, RDKGROUP, etc.) */
+  struct GroupField *next;    /* next field in group (linked list) */
   struct GroupDesc *subgroup; /* non-NULL if this is a nested group */
 } GroupField;
 
 /* description of a local group */
 typedef struct GroupDesc {
-  TString *name;      /* group variable name */
-  GroupField *fields; /* head of field list */
-  int nfields;        /* number of fields */
+  TString *name;          /* group variable name */
+  GroupField *fields;     /* head of field list */
+  int nfields;            /* number of fields */
   struct GroupDesc *next; /* next group in active list */
-  RuntimeAttr *attrs;  /* group-level runtime attributes (or NULL) */
-  lu_byte nattrs;      /* count of runtime attributes */
+  RuntimeAttr *attrs;     /* group-level runtime attributes (or NULL) */
+  lu_byte nattrs;         /* count of runtime attributes */
 } GroupDesc;
 
 /* description of pending goto statements and label statements */
@@ -187,35 +188,38 @@ typedef struct Dyndata {
     int n;
     int size;
   } actvar;
-  Labellist gt;        /* list of pending gotos */
-  Labellist label;     /* list of active labels */
-  GroupDesc *groups;   /* list of active local groups */
-  LuaArena *arena;     /* arena for parser temporaries */
+  Labellist gt;      /* list of pending gotos */
+  Labellist label;   /* list of active labels */
+  GroupDesc *groups; /* list of active local groups */
+  LuaArena *arena;   /* arena for parser temporaries */
 } Dyndata;
 
 /*
 ** Dyndata arena configuration
 */
-#define DYNDATA_ARENA_SIZE    8192  /* 8KB arena for parser temporaries */
-#define DYNDATA_ACTVAR_INIT   32    /* initial actvar array size */
-#define DYNDATA_LABEL_INIT    8     /* initial label/goto array size */
+#define DYNDATA_ARENA_SIZE 8192 /* 8KB arena for parser temporaries */
+#define DYNDATA_ACTVAR_INIT 32  /* initial actvar array size */
+#define DYNDATA_LABEL_INIT 8    /* initial label/goto array size */
 
 /*
 ** Initialize Dyndata with arena allocation
 */
-#define luaY_initdyndata(L, dyd) \
-  do { \
-    (dyd)->arena = luaA_new(L, DYNDATA_ARENA_SIZE); \
-    (dyd)->actvar.arr = luaA_new_array((dyd)->arena, DYNDATA_ACTVAR_INIT, Vardesc); \
-    (dyd)->actvar.n = 0; \
-    (dyd)->actvar.size = DYNDATA_ACTVAR_INIT; \
-    (dyd)->gt.arr = luaA_new_array((dyd)->arena, DYNDATA_LABEL_INIT, Labeldesc); \
-    (dyd)->gt.n = 0; \
-    (dyd)->gt.size = DYNDATA_LABEL_INIT; \
-    (dyd)->label.arr = luaA_new_array((dyd)->arena, DYNDATA_LABEL_INIT, Labeldesc); \
-    (dyd)->label.n = 0; \
-    (dyd)->label.size = DYNDATA_LABEL_INIT; \
-    (dyd)->groups = NULL; \
+#define luaY_initdyndata(L, dyd)                                     \
+  do {                                                               \
+    (dyd)->arena = luaA_new(L, DYNDATA_ARENA_SIZE);                  \
+    (dyd)->actvar.arr =                                              \
+        luaA_new_array((dyd)->arena, DYNDATA_ACTVAR_INIT, Vardesc);  \
+    (dyd)->actvar.n = 0;                                             \
+    (dyd)->actvar.size = DYNDATA_ACTVAR_INIT;                        \
+    (dyd)->gt.arr =                                                  \
+        luaA_new_array((dyd)->arena, DYNDATA_LABEL_INIT, Labeldesc); \
+    (dyd)->gt.n = 0;                                                 \
+    (dyd)->gt.size = DYNDATA_LABEL_INIT;                             \
+    (dyd)->label.arr =                                               \
+        luaA_new_array((dyd)->arena, DYNDATA_LABEL_INIT, Labeldesc); \
+    (dyd)->label.n = 0;                                              \
+    (dyd)->label.size = DYNDATA_LABEL_INIT;                          \
+    (dyd)->groups = NULL;                                            \
   } while (0)
 
 /*

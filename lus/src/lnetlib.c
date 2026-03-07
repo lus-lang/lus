@@ -194,7 +194,8 @@ static int push_socket_error(lua_State *L, const char *prefix) {
   lua_pushnil(L);
   if (prefix) {
     lua_pushfstring(L, "%s: %s", prefix, sock_strerror(err));
-  } else {
+  }
+  else {
     lua_pushstring(L, sock_strerror(err));
   }
   return 2;
@@ -207,7 +208,8 @@ static int push_ssl_error(lua_State *L, const char *prefix) {
   lua_pushnil(L);
   if (prefix) {
     lua_pushfstring(L, "%s: %s", prefix, buf);
-  } else {
+  }
+  else {
     lua_pushstring(L, buf);
   }
   return 2;
@@ -229,7 +231,8 @@ static void set_nonblocking(socket_t fd, int nonblock) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (nonblock) {
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  } else {
+  }
+  else {
     fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
   }
 #endif
@@ -252,7 +255,8 @@ static int wait_socket(socket_t fd, int for_write, int timeout_ms) {
 
   if (for_write) {
     return select((int)fd + 1, NULL, &fds, NULL, tvp);
-  } else {
+  }
+  else {
     return select((int)fd + 1, &fds, NULL, NULL, tvp);
   }
 }
@@ -442,7 +446,8 @@ static int socket_send(lua_State *L) {
         }
         return push_ssl_error(L, "SSL send");
       }
-    } else {
+    }
+    else {
       sent = send(sock->fd, data + total, (int)(len - total), 0);
       if (sent == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
@@ -526,7 +531,8 @@ static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
         }
         return push_ssl_error(L, "SSL receive");
       }
-    } else {
+    }
+    else {
       got = recv(sock->fd, buf, (int)want, 0);
       if (got == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
@@ -610,7 +616,8 @@ static int recv_line(lua_State *L, LSocket *sock) {
         }
         return push_ssl_error(L, "SSL receive");
       }
-    } else {
+    }
+    else {
       got = recv(sock->fd, buf, sizeof(buf), 0);
       if (got == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
@@ -662,7 +669,8 @@ static int recv_all(lua_State *L, LSocket *sock) {
         }
         return push_ssl_error(L, "SSL receive");
       }
-    } else {
+    }
+    else {
       got = recv(sock->fd, buf, sizeof(buf), 0);
       if (got == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
@@ -698,9 +706,11 @@ static int socket_receive(lua_State *L) {
 
   if (strcmp(pattern, "*l") == 0) {
     return recv_line(L, sock);
-  } else if (strcmp(pattern, "*a") == 0) {
+  }
+  else if (strcmp(pattern, "*a") == 0) {
     return recv_all(L, sock);
-  } else {
+  }
+  else {
     return luaL_error(L, "invalid receive pattern: %s", pattern);
   }
 }
@@ -742,22 +752,27 @@ static int socket_settimeout(lua_State *L) {
 
   if (seconds < 0) {
     sock->timeout_ms = -1; /* blocking */
-  } else if (seconds == 0) {
+  }
+  else if (seconds == 0) {
     sock->timeout_ms = 0; /* non-blocking */
-  } else {
+  }
+  else {
     sock->timeout_ms = (int)(seconds * 1000);
   }
 
   return 0;
 }
 
-static int socket_gc(lua_State *L) { return socket_close(L); }
+static int socket_gc(lua_State *L) {
+  return socket_close(L);
+}
 
 static int socket_tostring(lua_State *L) {
   LSocket *sock = (LSocket *)luaL_checkudata(L, 1, SOCKET_METATABLE);
   if (sock->closed) {
     lua_pushstring(L, "socket (closed)");
-  } else {
+  }
+  else {
     lua_pushfstring(L, "socket (%p)", (void *)sock);
   }
   return 1;
@@ -843,22 +858,27 @@ static int server_settimeout(lua_State *L) {
 
   if (seconds < 0) {
     srv->timeout_ms = -1;
-  } else if (seconds == 0) {
+  }
+  else if (seconds == 0) {
     srv->timeout_ms = 0;
-  } else {
+  }
+  else {
     srv->timeout_ms = (int)(seconds * 1000);
   }
 
   return 0;
 }
 
-static int server_gc(lua_State *L) { return server_close(L); }
+static int server_gc(lua_State *L) {
+  return server_close(L);
+}
 
 static int server_tostring(lua_State *L) {
   LServer *srv = (LServer *)luaL_checkudata(L, 1, SERVER_METATABLE);
   if (srv->closed) {
     lua_pushstring(L, "server (closed)");
-  } else {
+  }
+  else {
     lua_pushfstring(L, "server (%p)", (void *)srv);
   }
   return 1;
@@ -968,7 +988,8 @@ static int udp_receive(lua_State *L) {
     struct sockaddr_in *sin = (struct sockaddr_in *)&addr;
     inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
     sender_port = ntohs(sin->sin_port);
-  } else {
+  }
+  else {
     struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&addr;
     inet_ntop(AF_INET6, &sin6->sin6_addr, ip, sizeof(ip));
     sender_port = ntohs(sin6->sin6_port);
@@ -1010,13 +1031,16 @@ static int udp_close(lua_State *L) {
   return 0;
 }
 
-static int udp_gc(lua_State *L) { return udp_close(L); }
+static int udp_gc(lua_State *L) {
+  return udp_close(L);
+}
 
 static int udp_tostring(lua_State *L) {
   LUDPSocket *sock = (LUDPSocket *)luaL_checkudata(L, 1, UDPSOCKET_METATABLE);
   if (sock->closed) {
     lua_pushstring(L, "udpsocket (closed)");
-  } else {
+  }
+  else {
     lua_pushfstring(L, "udpsocket (%p)", (void *)sock);
   }
   return 1;
@@ -1165,7 +1189,8 @@ static int udp_open(lua_State *L) {
         sock_close(fd);
         return luaL_error(L, "invalid address: %s", address);
       }
-    } else {
+    }
+    else {
       addr.sin_addr.s_addr = INADDR_ANY;
     }
 
@@ -1216,9 +1241,11 @@ static int parse_url(const char *url, ParsedURL *parsed) {
   /* Set default port based on scheme */
   if (strcmp(parsed->scheme, "http") == 0) {
     parsed->port = 80;
-  } else if (strcmp(parsed->scheme, "https") == 0) {
+  }
+  else if (strcmp(parsed->scheme, "https") == 0) {
     parsed->port = 443;
-  } else {
+  }
+  else {
     return -1; /* unsupported scheme */
   }
 
@@ -1290,7 +1317,8 @@ static int read_http_line(LSocket *sock, char *buf, size_t bufsize) {
         buf[pos] = '\0';
         return (got == 0) ? (int)pos : -1;
       }
-    } else {
+    }
+    else {
       got = recv(sock->fd, &c, 1, 0);
       if (got <= 0) {
         buf[pos] = '\0';
@@ -1389,7 +1417,8 @@ static int net_fetch(lua_State *L) {
   if ((strcmp(parsed.scheme, "http") == 0 && parsed.port != 80) ||
       (strcmp(parsed.scheme, "https") == 0 && parsed.port != 443)) {
     lua_pushfstring(L, "Host: %s:%d\r\n", parsed.host, parsed.port);
-  } else {
+  }
+  else {
     lua_pushfstring(L, "Host: %s\r\n", parsed.host);
   }
   luaL_addvalue(&req);
@@ -1438,7 +1467,8 @@ static int net_fetch(lua_State *L) {
     ssize_t n;
     if (sock.ssl) {
       n = SSL_write(sock.ssl, req_data + sent, (int)(req_len - sent));
-    } else {
+    }
+    else {
       n = send(fd, req_data + sent, (int)(req_len - sent), 0);
     }
     if (n <= 0) {
@@ -1492,7 +1522,8 @@ static int net_fetch(lua_State *L) {
       /* Check for Content-Length and Transfer-Encoding */
       if (strcmp(line, "content-length") == 0) {
         content_length = atoi(value);
-      } else if (strcmp(line, "transfer-encoding") == 0) {
+      }
+      else if (strcmp(line, "transfer-encoding") == 0) {
         if (strstr(value, "chunked"))
           chunked = 1;
       }
@@ -1525,7 +1556,8 @@ static int net_fetch(lua_State *L) {
         ssize_t got;
         if (sock.ssl) {
           got = SSL_read(sock.ssl, buf, to_read);
-        } else {
+        }
+        else {
           got = recv(fd, buf, to_read, 0);
         }
         if (got <= 0)
@@ -1538,7 +1570,8 @@ static int net_fetch(lua_State *L) {
       /* Read trailing CRLF */
       read_http_line(&sock, line, sizeof(line));
     }
-  } else if (content_length >= 0) {
+  }
+  else if (content_length >= 0) {
     /* Fixed Content-Length */
     int remaining = content_length;
     char buf[4096];
@@ -1550,7 +1583,8 @@ static int net_fetch(lua_State *L) {
       ssize_t got;
       if (sock.ssl) {
         got = SSL_read(sock.ssl, buf, to_read);
-      } else {
+      }
+      else {
         got = recv(fd, buf, to_read, 0);
       }
       if (got <= 0)
@@ -1559,7 +1593,8 @@ static int net_fetch(lua_State *L) {
       luaL_addlstring(&resp_body, buf, (size_t)got);
       remaining -= (int)got;
     }
-  } else {
+  }
+  else {
     /* Read until connection close */
     char buf[4096];
     for (;;) {
@@ -1573,7 +1608,8 @@ static int net_fetch(lua_State *L) {
           if (got < 0)
             break;
         }
-      } else {
+      }
+      else {
         got = recv(fd, buf, sizeof(buf), 0);
         if (got <= 0)
           break;
@@ -1644,11 +1680,13 @@ static void network_granter(lua_State *L, lus_PledgeRequest *p) {
     if (p->sub == NULL) {
       /* Grant global network permission */
       lus_setpledge(L, p, NULL, p->value);
-    } else if (strcmp(p->sub, "tcp") == 0 || strcmp(p->sub, "udp") == 0 ||
-               strcmp(p->sub, "http") == 0) {
+    }
+    else if (strcmp(p->sub, "tcp") == 0 || strcmp(p->sub, "udp") == 0 ||
+             strcmp(p->sub, "http") == 0) {
       /* Grant specific network permission */
       lus_setpledge(L, p, p->sub, p->value);
-    } else {
+    }
+    else {
       /* Unknown subpermission = error */
       luaL_error(L, "unknown network subpermission: '%s'", p->sub);
     }

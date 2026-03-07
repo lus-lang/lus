@@ -421,61 +421,63 @@ static void clone_deep(lua_State *L, int srcidx, int mapidx) {
   /* Convert relative indices to absolute */
   srcidx = lua_absindex(L, srcidx);
   mapidx = lua_absindex(L, mapidx);
-  
+
   /* Check if already cloned (circular reference) */
   lua_pushvalue(L, srcidx);
   if (lua_rawget(L, mapidx) != LUA_TNIL) {
     /* Already cloned - return existing clone */
-    return;  /* clone is on stack */
+    return; /* clone is on stack */
   }
-  lua_pop(L, 1);  /* pop nil */
-  
+  lua_pop(L, 1); /* pop nil */
+
   /* Create new table */
   lua_newtable(L);
   int newidx = lua_gettop(L);
-  
+
   /* Register in map before recursing (for circular refs) */
-  lua_pushvalue(L, srcidx);  /* key = source table */
-  lua_pushvalue(L, newidx);  /* value = new table */
+  lua_pushvalue(L, srcidx); /* key = source table */
+  lua_pushvalue(L, newidx); /* value = new table */
   lua_rawset(L, mapidx);
-  
+
   /* Copy all key-value pairs */
   lua_pushnil(L);
   while (lua_next(L, srcidx) != 0) {
     /* Stack: key, value */
     int keyidx = lua_gettop(L) - 1;
     int validx = lua_gettop(L);
-    
+
     /* Clone key if it's a table */
     if (lua_istable(L, keyidx)) {
       clone_deep(L, keyidx, mapidx);
       /* Stack: key, value, cloned_key */
-    } else {
+    }
+    else {
       lua_pushvalue(L, keyidx);
       /* Stack: key, value, key_copy */
     }
-    
+
     /* Clone value if it's a table */
     if (lua_istable(L, validx)) {
       clone_deep(L, validx, mapidx);
       /* Stack: key, value, new_key, cloned_value */
-    } else {
+    }
+    else {
       lua_pushvalue(L, validx);
       /* Stack: key, value, new_key, value_copy */
     }
-    
+
     /* Set new[new_key] = new_value */
     lua_settable(L, newidx);
     /* Stack: key, value */
-    
-    lua_pop(L, 1);  /* pop value, keep key for next iteration */
+
+    lua_pop(L, 1); /* pop value, keep key for next iteration */
   }
-  
+
   /* Copy metatable (shared, not deep cloned) */
   if (lua_getmetatable(L, srcidx)) {
     lua_setmetatable(L, newidx);
   }
-  
+
   /* newidx table is already on top */
 }
 
@@ -488,23 +490,24 @@ static void clone_deep(lua_State *L, int srcidx, int mapidx) {
 static int tclone(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   int deep = lua_toboolean(L, 2);
-  
+
   if (deep) {
     /* Need a table to track cloned tables for circular references */
-    lua_newtable(L);  /* cloned_map at top of stack */
+    lua_newtable(L); /* cloned_map at top of stack */
     int mapidx = lua_gettop(L);
     clone_deep(L, 1, mapidx);
     /* Remove the map, keep only the result */
     lua_remove(L, mapidx);
-  } else {
+  }
+  else {
     /* Shallow clone */
     lua_newtable(L);
     lua_pushnil(L);
     while (lua_next(L, 1) != 0) {
       /* Stack: new_table, key, value */
-      lua_pushvalue(L, -2);  /* copy key */
-      lua_insert(L, -2);     /* Stack: new_table, key, key_copy, value */
-      lua_settable(L, -4);   /* new[key_copy] = value */
+      lua_pushvalue(L, -2); /* copy key */
+      lua_insert(L, -2);    /* Stack: new_table, key, key_copy, value */
+      lua_settable(L, -4);  /* new[key_copy] = value */
       /* Stack: new_table, key */
     }
     /* Copy metatable if present */
@@ -675,9 +678,9 @@ static int tfilter(lua_State *L) {
     lua_geti(L, 1, i);   /* push element */
     lua_call(L, 1, 1);   /* call f(elem) */
     if (lua_toboolean(L, -1)) {
-      lua_pop(L, 1);       /* pop result */
-      lua_geti(L, 1, i);   /* push original element */
-      lua_seti(L, -2, j);  /* result[j] = element */
+      lua_pop(L, 1);      /* pop result */
+      lua_geti(L, 1, i);  /* push original element */
+      lua_seti(L, -2, j); /* result[j] = element */
       j++;
     }
     else {
@@ -705,12 +708,12 @@ static int treduce(lua_State *L) {
   }
   /* Stack: acc on top */
   for (lua_Integer i = start; i <= len; i++) {
-    lua_pushvalue(L, 2);  /* push function */
-    lua_pushvalue(L, -2); /* push accumulator */
-    lua_geti(L, 1, i);    /* push element */
+    lua_pushvalue(L, 2);   /* push function */
+    lua_pushvalue(L, -2);  /* push accumulator */
+    lua_geti(L, 1, i);     /* push element */
     lua_pushinteger(L, i); /* push index */
-    lua_call(L, 3, 1);    /* call f(acc, elem, i) */
-    lua_remove(L, -2);    /* remove old accumulator */
+    lua_call(L, 3, 1);     /* call f(acc, elem, i) */
+    lua_remove(L, -2);     /* remove old accumulator */
   }
   return 1; /* accumulator on top */
 }
@@ -728,25 +731,25 @@ static int tgroupby(lua_State *L) {
     lua_geti(L, 1, i);   /* push element */
     lua_call(L, 1, 1);   /* call f(elem) -> key */
     /* Stack: result, key */
-    lua_pushvalue(L, -1); /* duplicate key for lookup */
+    lua_pushvalue(L, -1);    /* duplicate key for lookup */
     lua_gettable(L, residx); /* get result[key] */
     if (lua_isnil(L, -1)) {
       /* Group doesn't exist yet: create it */
-      lua_pop(L, 1);          /* pop nil */
-      lua_pushvalue(L, -1);   /* duplicate key */
+      lua_pop(L, 1);           /* pop nil */
+      lua_pushvalue(L, -1);    /* duplicate key */
       lua_newtable(L);         /* new group array */
-      lua_geti(L, 1, i);      /* push element */
-      lua_seti(L, -2, 1);     /* group[1] = element */
+      lua_geti(L, 1, i);       /* push element */
+      lua_seti(L, -2, 1);      /* group[1] = element */
       lua_settable(L, residx); /* result[key] = group */
-      lua_pop(L, 1);          /* pop original key */
+      lua_pop(L, 1);           /* pop original key */
     }
     else {
       /* Group exists: append to it */
       int grpidx = lua_gettop(L);
       lua_Integer glen = luaL_len(L, grpidx);
-      lua_geti(L, 1, i);           /* push element */
+      lua_geti(L, 1, i);             /* push element */
       lua_seti(L, grpidx, glen + 1); /* group[len+1] = element */
-      lua_pop(L, 2); /* pop group and key */
+      lua_pop(L, 2);                 /* pop group and key */
     }
   }
   return 1;
@@ -755,8 +758,8 @@ static int tgroupby(lua_State *L) {
 
 /* Sortby quicksort helpers */
 
-static void sortby_swap(lua_State *L, int tabidx, int keysidx,
-                         lua_Integer a, lua_Integer b) {
+static void sortby_swap(lua_State *L, int tabidx, int keysidx, lua_Integer a,
+                        lua_Integer b) {
   /* swap t[a] and t[b] */
   lua_geti(L, tabidx, a);
   lua_geti(L, tabidx, b);
@@ -770,8 +773,8 @@ static void sortby_swap(lua_State *L, int tabidx, int keysidx,
 }
 
 /* Compare keys[a] vs keys[b]. Returns true if a should come before b. */
-static int sortby_comp(lua_State *L, int keysidx, lua_Integer a,
-                       lua_Integer b, int asc) {
+static int sortby_comp(lua_State *L, int keysidx, lua_Integer a, lua_Integer b,
+                       int asc) {
   lua_geti(L, keysidx, a);
   lua_geti(L, keysidx, b);
   int result;
@@ -783,8 +786,8 @@ static int sortby_comp(lua_State *L, int keysidx, lua_Integer a,
   return result;
 }
 
-static void sortby_qsort(lua_State *L, int tabidx, int keysidx,
-                          lua_Integer lo, lua_Integer hi, int asc) {
+static void sortby_qsort(lua_State *L, int tabidx, int keysidx, lua_Integer lo,
+                         lua_Integer hi, int asc) {
   while (lo < hi) {
     /* Median-of-three pivot selection */
     lua_Integer mid = lo + (hi - lo) / 2;
@@ -804,7 +807,8 @@ static void sortby_qsort(lua_State *L, int tabidx, int keysidx,
         ;
       while (j > lo && sortby_comp(L, keysidx, pivot, --j, asc))
         ;
-      if (i >= j) break;
+      if (i >= j)
+        break;
       sortby_swap(L, tabidx, keysidx, i, j);
     }
     sortby_swap(L, tabidx, keysidx, i, hi - 1); /* restore pivot */
@@ -825,14 +829,15 @@ static int tsortby(lua_State *L) {
   luaL_checktype(L, 2, LUA_TFUNCTION);
   int asc = lua_isnoneornil(L, 3) ? 1 : lua_toboolean(L, 3);
   lua_Integer len = luaL_len(L, 1);
-  if (len <= 1) return 0;
+  if (len <= 1)
+    return 0;
   /* Build keys table */
   lua_createtable(L, (int)len, 0);
   int keysidx = lua_gettop(L);
   for (lua_Integer i = 1; i <= len; i++) {
-    lua_pushvalue(L, 2); /* push keyfunc */
-    lua_geti(L, 1, i);   /* push element */
-    lua_call(L, 1, 1);   /* call f(elem) */
+    lua_pushvalue(L, 2);     /* push keyfunc */
+    lua_geti(L, 1, i);       /* push element */
+    lua_call(L, 1, 1);       /* call f(elem) */
     lua_seti(L, keysidx, i); /* keys[i] = result */
   }
   sortby_qsort(L, 1, keysidx, 1, len, asc);
@@ -933,10 +938,10 @@ static int ttranspose(lua_State *L) {
   for (lua_Integer j = 1; j <= cols; j++) {
     lua_createtable(L, (int)rows, 0);
     for (lua_Integer i = 1; i <= rows; i++) {
-      lua_geti(L, 1, i);   /* push row i */
-      lua_geti(L, -1, j);  /* push row[j] */
-      lua_remove(L, -2);   /* remove row */
-      lua_seti(L, -2, i);  /* new_row[i] = old_matrix[i][j] */
+      lua_geti(L, 1, i);  /* push row i */
+      lua_geti(L, -1, j); /* push row[j] */
+      lua_remove(L, -2);  /* remove row */
+      lua_seti(L, -2, i); /* new_row[i] = old_matrix[i][j] */
     }
     lua_seti(L, residx, j); /* result[j] = new_row */
   }
@@ -952,9 +957,8 @@ static int treshape(lua_State *L) {
   luaL_argcheck(L, nrows > 0, 2, "rows must be positive");
   luaL_argcheck(L, ncols > 0, 3, "cols must be positive");
   if (len != nrows * ncols)
-    return luaL_error(L,
-        "array length %I does not match %I x %I", (LUAI_UACINT)len,
-        (LUAI_UACINT)nrows, (LUAI_UACINT)ncols);
+    return luaL_error(L, "array length %I does not match %I x %I",
+                      (LUAI_UACINT)len, (LUAI_UACINT)nrows, (LUAI_UACINT)ncols);
   lua_createtable(L, (int)nrows, 0);
   int residx = lua_gettop(L);
   for (lua_Integer r = 1; r <= nrows; r++) {
@@ -972,16 +976,29 @@ static int treshape(lua_State *L) {
 /* }====================================================== */
 
 
-static const luaL_Reg tab_funcs[] = {
-    {"clone", tclone},   {"concat", tconcat}, {"create", tcreate},
-    {"filter", tfilter}, {"groupby", tgroupby},
-    {"insert", tinsert}, {"map", tmap},       {"mean", tmean},
-    {"median", tmedian}, {"move", tmove},      {"pack", tpack},
-    {"reduce", treduce}, {"remove", tremove},  {"reshape", treshape},
-    {"sort", sort},      {"sortby", tsortby},  {"stdev", tstdev},
-    {"sum", tsum},       {"transpose", ttranspose},
-    {"unpack", tunpack}, {"unzip", tunzip},    {"zip", tzip},
-    {NULL, NULL}};
+static const luaL_Reg tab_funcs[] = {{"clone", tclone},
+                                     {"concat", tconcat},
+                                     {"create", tcreate},
+                                     {"filter", tfilter},
+                                     {"groupby", tgroupby},
+                                     {"insert", tinsert},
+                                     {"map", tmap},
+                                     {"mean", tmean},
+                                     {"median", tmedian},
+                                     {"move", tmove},
+                                     {"pack", tpack},
+                                     {"reduce", treduce},
+                                     {"remove", tremove},
+                                     {"reshape", treshape},
+                                     {"sort", sort},
+                                     {"sortby", tsortby},
+                                     {"stdev", tstdev},
+                                     {"sum", tsum},
+                                     {"transpose", ttranspose},
+                                     {"unpack", tunpack},
+                                     {"unzip", tunzip},
+                                     {"zip", tzip},
+                                     {NULL, NULL}};
 
 
 LUAMOD_API int luaopen_table(lua_State *L) {

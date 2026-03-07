@@ -24,15 +24,15 @@
 ** Node type names for debugging and Graphviz output
 */
 static const char *const ast_typenames[] = {
-    "chunk",      "block",     "local",      "global",    "assign",
-    "if",         "while",     "repeat",     "fornum",    "forgen",
-    "funcstat",   "localfunc", "globalfunc", "return",    "callstat",
-    "break",      "goto",      "label",      "catchstat", "provide",
-    "do",         "nil",       "true",       "false",     "number",
-    "string",     "vararg",    "name",       "index",     "field",
-    "binop",      "unop",      "table",      "funcexpr",  "callexpr",
-    "methodcall", "enum",      "optchain",   "doexpr",    "catchexpr",
-    "slice",      "interp",    "param",      "namelist",  "explist",
+    "chunk",      "block",     "local",      "global",     "assign",
+    "if",         "while",     "repeat",     "fornum",     "forgen",
+    "funcstat",   "localfunc", "globalfunc", "return",     "callstat",
+    "break",      "goto",      "label",      "catchstat",  "provide",
+    "do",         "nil",       "true",       "false",      "number",
+    "string",     "vararg",    "name",       "index",      "field",
+    "binop",      "unop",      "table",      "funcexpr",   "callexpr",
+    "methodcall", "enum",      "optchain",   "doexpr",     "catchexpr",
+    "slice",      "interp",    "param",      "namelist",   "explist",
     "elseif",     "else",      "tablefield", "error_expr", "error_stat",
     NULL};
 
@@ -95,7 +95,7 @@ LusAstNode *lusA_newnode(LusAst *ast, LusAstType type, int line, int column) {
   node->type = type;
   node->line = line;
   node->column = column;
-  node->endline = 0;    /* to be set when node is complete */
+  node->endline = 0; /* to be set when node is complete */
   node->endcolumn = 0;
   node->next = NULL;
   node->child = NULL;
@@ -111,7 +111,8 @@ void lusA_addchild(LusAstNode *parent, LusAstNode *child) {
     return;
   if (parent->child == NULL) {
     parent->child = child;
-  } else {
+  }
+  else {
     LusAstNode *last = parent->child;
     while (last->next != NULL)
       last = last->next;
@@ -149,7 +150,8 @@ void lusA_addcomment(LusAst *ast, int line, int column, int endline,
   if (ast->lastcomment == NULL) {
     ast->comments = c;
     ast->lastcomment = c;
-  } else {
+  }
+  else {
     ast->lastcomment->next = c;
     ast->lastcomment = c;
   }
@@ -170,7 +172,8 @@ void lusA_adderror(LusAst *ast, int line, int column, TString *message) {
   if (ast->lasterror == NULL) {
     ast->errors = e;
     ast->lasterror = e;
-  } else {
+  }
+  else {
     ast->lasterror->next = e;
     ast->lasterror = e;
   }
@@ -244,254 +247,254 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
 
   /* Type-specific fields */
   switch (node->type) {
-  case AST_NUMBER:
-    if (node->u.num.isint) {
-      lua_pushinteger(L, node->u.num.val.i);
-    } else {
-      lua_pushnumber(L, node->u.num.val.n);
-    }
-    lua_setfield(L, -2, "value");
-    break;
-
-  case AST_STRING:
-  case AST_LABEL:
-  case AST_GOTO:
-    if (node->u.str != NULL) {
-      lua_pushstring(L, getstr(node->u.str));
+    case AST_NUMBER:
+      if (node->u.num.isint) {
+        lua_pushinteger(L, node->u.num.val.i);
+      }
+      else {
+        lua_pushnumber(L, node->u.num.val.n);
+      }
       lua_setfield(L, -2, "value");
-    }
-    break;
+      break;
 
-  case AST_NAME:
-    if (node->u.var.name != NULL) {
-      lua_pushstring(L, getstr(node->u.var.name));
+    case AST_STRING:
+    case AST_LABEL:
+    case AST_GOTO:
+      if (node->u.str != NULL) {
+        lua_pushstring(L, getstr(node->u.str));
+        lua_setfield(L, -2, "value");
+      }
+      break;
+
+    case AST_NAME:
+      if (node->u.var.name != NULL) {
+        lua_pushstring(L, getstr(node->u.var.name));
+        lua_setfield(L, -2, "value");
+      }
+      /* Include attribute information if present */
+      /* Attribute kinds: RDKCONST=1, RDKTOCLOSE=3, RDKGROUP=5, others are runtime */
+      if (node->u.var.attrkind != 0) {
+        const char *attrname = NULL;
+        switch (node->u.var.attrkind) {
+          case 1: attrname = "const"; break; /* RDKCONST */
+          case 3: attrname = "close"; break; /* RDKTOCLOSE */
+          case 5: attrname = "group"; break; /* RDKGROUP */
+          default: attrname = "runtime"; break;
+        }
+        lua_pushstring(L, attrname);
+        lua_setfield(L, -2, "attr");
+      }
+      /* Serialize runtime attributes if present */
+      if (node->u.var.runtimeattrs != NULL) {
+        int i = 1;
+        LusAstNode *ra = node->u.var.runtimeattrs;
+        lua_newtable(L);
+        while (ra != NULL) {
+          nodetotable(L, ra);
+          lua_rawseti(L, -2, i++);
+          ra = ra->next;
+        }
+        lua_setfield(L, -2, "runtimeattrs");
+      }
+      break;
+
+    case AST_FIELD:
+    case AST_INDEX:
+      nodetotable(L, node->u.index.table);
+      lua_setfield(L, -2, "table");
+      nodetotable(L, node->u.index.key);
+      lua_setfield(L, -2, "key");
+      break;
+
+    case AST_BINOP:
+      lua_pushstring(L, binop_names[node->u.binop.op]);
+      lua_setfield(L, -2, "op");
+      nodetotable(L, node->u.binop.left);
+      lua_setfield(L, -2, "left");
+      nodetotable(L, node->u.binop.right);
+      lua_setfield(L, -2, "right");
+      break;
+
+    case AST_UNOP:
+      lua_pushstring(L, unop_names[node->u.unop.op]);
+      lua_setfield(L, -2, "op");
+      nodetotable(L, node->u.unop.operand);
+      lua_setfield(L, -2, "operand");
+      break;
+
+    case AST_FUNCEXPR:
+    case AST_LOCALFUNC:
+    case AST_GLOBALFUNC:
+    case AST_FUNCSTAT:
+      if (node->u.func.name != NULL) {
+        lua_pushstring(L, getstr(node->u.func.name));
+        lua_setfield(L, -2, "name");
+        /* Serialize the name position if available */
+        if (node->u.func.nameline > 0) {
+          lua_pushinteger(L, node->u.func.nameline);
+          lua_setfield(L, -2, "nameline");
+          lua_pushinteger(L, node->u.func.namecolumn);
+          lua_setfield(L, -2, "namecolumn");
+        }
+      }
+      /* Serialize function name expression (for a.b.c:method paths) */
+      if (node->u.func.nameexpr != NULL) {
+        nodetotable(L, node->u.func.nameexpr);
+        lua_setfield(L, -2, "nameexpr");
+      }
+      /* Serialize params as array (linked list of AST_NAME nodes) */
+      if (node->u.func.params != NULL) {
+        listtoarray(L, node->u.func.params);
+        lua_setfield(L, -2, "params");
+      }
+      nodetotable(L, node->u.func.body);
+      lua_setfield(L, -2, "body");
+      lua_pushboolean(L, node->u.func.isvararg);
+      lua_setfield(L, -2, "isvararg");
+      lua_pushboolean(L, node->u.func.ismethod);
+      lua_setfield(L, -2, "ismethod");
+      break;
+
+    case AST_IF:
+    case AST_ELSEIF:
+      nodetotable(L, node->u.ifstat.cond);
+      lua_setfield(L, -2, "cond");
+      /* then/elseif/else statements are in children array */
+      break;
+
+    case AST_WHILE:
+    case AST_REPEAT:
+      nodetotable(L, node->u.loop.cond);
+      lua_setfield(L, -2, "cond");
+      /* body statements are in children array, not u.loop.body */
+      break;
+
+    case AST_FORNUM:
+      nodetotable(L, node->u.fornum.var);
+      lua_setfield(L, -2, "var");
+      nodetotable(L, node->u.fornum.init);
+      lua_setfield(L, -2, "init");
+      nodetotable(L, node->u.fornum.limit);
+      lua_setfield(L, -2, "limit");
+      nodetotable(L, node->u.fornum.step);
+      lua_setfield(L, -2, "step");
+      /* body statements are in children array */
+      break;
+
+    case AST_FORGEN:
+      listtoarray(L, node->u.forgen.names);
+      lua_setfield(L, -2, "names");
+      listtoarray(L, node->u.forgen.explist);
+      lua_setfield(L, -2, "explist");
+      /* body statements are in children array */
+      break;
+
+    case AST_LOCAL:
+    case AST_GLOBAL:
+      listtoarray(L, node->u.decl.names);
+      lua_setfield(L, -2, "names");
+      listtoarray(L, node->u.decl.values);
+      lua_setfield(L, -2, "values");
+      lua_pushboolean(L, node->u.decl.isfrom);
+      lua_setfield(L, -2, "isfrom");
+      break;
+
+    case AST_ASSIGN:
+      listtoarray(L, node->u.assign.lhs);
+      lua_setfield(L, -2, "lhs");
+      listtoarray(L, node->u.assign.rhs);
+      lua_setfield(L, -2, "rhs");
+      lua_pushboolean(L, node->u.assign.isfrom);
+      lua_setfield(L, -2, "isfrom");
+      break;
+
+    case AST_CALLEXPR:
+    case AST_CALLSTAT:
+    case AST_METHODCALL:
+      nodetotable(L, node->u.call.func);
+      lua_setfield(L, -2, "func");
+      listtoarray(L, node->u.call.args);
+      lua_setfield(L, -2, "args");
+      if (node->type == AST_METHODCALL && node->u.call.method != NULL) {
+        lua_pushstring(L, getstr(node->u.call.method));
+        lua_setfield(L, -2, "method");
+      }
+      break;
+
+    case AST_TABLE:
+      listtoarray(L, node->u.table.fields);
+      lua_setfield(L, -2, "fields");
+      break;
+
+    case AST_TABLEFIELD:
+      nodetotable(L, node->u.field.key);
+      lua_setfield(L, -2, "key");
+      nodetotable(L, node->u.field.value);
       lua_setfield(L, -2, "value");
-    }
-    /* Include attribute information if present */
-    /* Attribute kinds: RDKCONST=1, RDKTOCLOSE=3, RDKGROUP=5, others are runtime */
-    if (node->u.var.attrkind != 0) {
-      const char *attrname = NULL;
-      switch (node->u.var.attrkind) {
-        case 1: attrname = "const"; break;  /* RDKCONST */
-        case 3: attrname = "close"; break;  /* RDKTOCLOSE */
-        case 5: attrname = "group"; break;  /* RDKGROUP */
-        default: attrname = "runtime"; break;
+      break;
+
+    case AST_RETURN:
+    case AST_PROVIDE:
+      listtoarray(L, node->u.ret.values);
+      lua_setfield(L, -2, "values");
+      break;
+
+    case AST_PARAM:
+      if (node->u.param.name != NULL) {
+        lua_pushstring(L, getstr(node->u.param.name));
+        lua_setfield(L, -2, "name");
       }
-      lua_pushstring(L, attrname);
-      lua_setfield(L, -2, "attr");
-    }
-    /* Serialize runtime attributes if present */
-    if (node->u.var.runtimeattrs != NULL) {
-      int i = 1;
-      LusAstNode *ra = node->u.var.runtimeattrs;
-      lua_newtable(L);
-      while (ra != NULL) {
-        nodetotable(L, ra);
-        lua_rawseti(L, -2, i++);
-        ra = ra->next;
+      lua_pushinteger(L, node->u.param.kind);
+      lua_setfield(L, -2, "kind");
+      break;
+
+    case AST_CATCHEXPR:
+    case AST_CATCHSTAT:
+      nodetotable(L, node->u.catchnode.expr);
+      lua_setfield(L, -2, "expr");
+      if (node->u.catchnode.handler) {
+        nodetotable(L, node->u.catchnode.handler);
+        lua_setfield(L, -2, "handler");
       }
-      lua_setfield(L, -2, "runtimeattrs");
-    }
-    break;
+      break;
 
-  case AST_FIELD:
-  case AST_INDEX:
-    nodetotable(L, node->u.index.table);
-    lua_setfield(L, -2, "table");
-    nodetotable(L, node->u.index.key);
-    lua_setfield(L, -2, "key");
-    break;
+    case AST_OPTCHAIN:
+      nodetotable(L, node->u.optchain.base);
+      lua_setfield(L, -2, "base");
+      nodetotable(L, node->u.optchain.suffix);
+      lua_setfield(L, -2, "suffix");
+      break;
 
-  case AST_BINOP:
-    lua_pushstring(L, binop_names[node->u.binop.op]);
-    lua_setfield(L, -2, "op");
-    nodetotable(L, node->u.binop.left);
-    lua_setfield(L, -2, "left");
-    nodetotable(L, node->u.binop.right);
-    lua_setfield(L, -2, "right");
-    break;
+    case AST_ENUM:
+      listtoarray(L, node->u.enumdef.names);
+      lua_setfield(L, -2, "names");
+      break;
 
-  case AST_UNOP:
-    lua_pushstring(L, unop_names[node->u.unop.op]);
-    lua_setfield(L, -2, "op");
-    nodetotable(L, node->u.unop.operand);
-    lua_setfield(L, -2, "operand");
-    break;
+    case AST_SLICE:
+      nodetotable(L, node->u.slice.table);
+      lua_setfield(L, -2, "table");
+      nodetotable(L, node->u.slice.start);
+      lua_setfield(L, -2, "start");
+      nodetotable(L, node->u.slice.finish);
+      lua_setfield(L, -2, "finish");
+      break;
 
-  case AST_FUNCEXPR:
-  case AST_LOCALFUNC:
-  case AST_GLOBALFUNC:
-  case AST_FUNCSTAT:
-    if (node->u.func.name != NULL) {
-      lua_pushstring(L, getstr(node->u.func.name));
-      lua_setfield(L, -2, "name");
-      /* Serialize the name position if available */
-      if (node->u.func.nameline > 0) {
-        lua_pushinteger(L, node->u.func.nameline);
-        lua_setfield(L, -2, "nameline");
-        lua_pushinteger(L, node->u.func.namecolumn);
-        lua_setfield(L, -2, "namecolumn");
+    case AST_INTERP:
+      listtoarray(L, node->u.interp.parts);
+      lua_setfield(L, -2, "parts");
+      lua_pushinteger(L, node->u.interp.nparts);
+      lua_setfield(L, -2, "nparts");
+      break;
+
+    case AST_ERROR_EXPR:
+    case AST_ERROR_STAT:
+      if (node->u.error.message != NULL) {
+        lua_pushstring(L, getstr(node->u.error.message));
+        lua_setfield(L, -2, "message");
       }
-    }
-    /* Serialize function name expression (for a.b.c:method paths) */
-    if (node->u.func.nameexpr != NULL) {
-      nodetotable(L, node->u.func.nameexpr);
-      lua_setfield(L, -2, "nameexpr");
-    }
-    /* Serialize params as array (linked list of AST_NAME nodes) */
-    if (node->u.func.params != NULL) {
-      listtoarray(L, node->u.func.params);
-      lua_setfield(L, -2, "params");
-    }
-    nodetotable(L, node->u.func.body);
-    lua_setfield(L, -2, "body");
-    lua_pushboolean(L, node->u.func.isvararg);
-    lua_setfield(L, -2, "isvararg");
-    lua_pushboolean(L, node->u.func.ismethod);
-    lua_setfield(L, -2, "ismethod");
-    break;
+      break;
 
-  case AST_IF:
-  case AST_ELSEIF:
-    nodetotable(L, node->u.ifstat.cond);
-    lua_setfield(L, -2, "cond");
-    /* then/elseif/else statements are in children array */
-    break;
-
-  case AST_WHILE:
-  case AST_REPEAT:
-    nodetotable(L, node->u.loop.cond);
-    lua_setfield(L, -2, "cond");
-    /* body statements are in children array, not u.loop.body */
-    break;
-
-  case AST_FORNUM:
-    nodetotable(L, node->u.fornum.var);
-    lua_setfield(L, -2, "var");
-    nodetotable(L, node->u.fornum.init);
-    lua_setfield(L, -2, "init");
-    nodetotable(L, node->u.fornum.limit);
-    lua_setfield(L, -2, "limit");
-    nodetotable(L, node->u.fornum.step);
-    lua_setfield(L, -2, "step");
-    /* body statements are in children array */
-    break;
-
-  case AST_FORGEN:
-    listtoarray(L, node->u.forgen.names);
-    lua_setfield(L, -2, "names");
-    listtoarray(L, node->u.forgen.explist);
-    lua_setfield(L, -2, "explist");
-    /* body statements are in children array */
-    break;
-
-  case AST_LOCAL:
-  case AST_GLOBAL:
-    listtoarray(L, node->u.decl.names);
-    lua_setfield(L, -2, "names");
-    listtoarray(L, node->u.decl.values);
-    lua_setfield(L, -2, "values");
-    lua_pushboolean(L, node->u.decl.isfrom);
-    lua_setfield(L, -2, "isfrom");
-    break;
-
-  case AST_ASSIGN:
-    listtoarray(L, node->u.assign.lhs);
-    lua_setfield(L, -2, "lhs");
-    listtoarray(L, node->u.assign.rhs);
-    lua_setfield(L, -2, "rhs");
-    lua_pushboolean(L, node->u.assign.isfrom);
-    lua_setfield(L, -2, "isfrom");
-    break;
-
-  case AST_CALLEXPR:
-  case AST_CALLSTAT:
-  case AST_METHODCALL:
-    nodetotable(L, node->u.call.func);
-    lua_setfield(L, -2, "func");
-    listtoarray(L, node->u.call.args);
-    lua_setfield(L, -2, "args");
-    if (node->type == AST_METHODCALL && node->u.call.method != NULL) {
-      lua_pushstring(L, getstr(node->u.call.method));
-      lua_setfield(L, -2, "method");
-    }
-    break;
-
-  case AST_TABLE:
-    listtoarray(L, node->u.table.fields);
-    lua_setfield(L, -2, "fields");
-    break;
-
-  case AST_TABLEFIELD:
-    nodetotable(L, node->u.field.key);
-    lua_setfield(L, -2, "key");
-    nodetotable(L, node->u.field.value);
-    lua_setfield(L, -2, "value");
-    break;
-
-  case AST_RETURN:
-  case AST_PROVIDE:
-    listtoarray(L, node->u.ret.values);
-    lua_setfield(L, -2, "values");
-    break;
-
-  case AST_PARAM:
-    if (node->u.param.name != NULL) {
-      lua_pushstring(L, getstr(node->u.param.name));
-      lua_setfield(L, -2, "name");
-    }
-    lua_pushinteger(L, node->u.param.kind);
-    lua_setfield(L, -2, "kind");
-    break;
-
-  case AST_CATCHEXPR:
-  case AST_CATCHSTAT:
-    nodetotable(L, node->u.catchnode.expr);
-    lua_setfield(L, -2, "expr");
-    if (node->u.catchnode.handler) {
-      nodetotable(L, node->u.catchnode.handler);
-      lua_setfield(L, -2, "handler");
-    }
-    break;
-
-  case AST_OPTCHAIN:
-    nodetotable(L, node->u.optchain.base);
-    lua_setfield(L, -2, "base");
-    nodetotable(L, node->u.optchain.suffix);
-    lua_setfield(L, -2, "suffix");
-    break;
-
-  case AST_ENUM:
-    listtoarray(L, node->u.enumdef.names);
-    lua_setfield(L, -2, "names");
-    break;
-
-  case AST_SLICE:
-    nodetotable(L, node->u.slice.table);
-    lua_setfield(L, -2, "table");
-    nodetotable(L, node->u.slice.start);
-    lua_setfield(L, -2, "start");
-    nodetotable(L, node->u.slice.finish);
-    lua_setfield(L, -2, "finish");
-    break;
-
-  case AST_INTERP:
-    listtoarray(L, node->u.interp.parts);
-    lua_setfield(L, -2, "parts");
-    lua_pushinteger(L, node->u.interp.nparts);
-    lua_setfield(L, -2, "nparts");
-    break;
-
-  case AST_ERROR_EXPR:
-  case AST_ERROR_STAT:
-    if (node->u.error.message != NULL) {
-      lua_pushstring(L, getstr(node->u.error.message));
-      lua_setfield(L, -2, "message");
-    }
-    break;
-
-  default:
-    break;
+    default: break;
   }
 
   /* children array (for generic child lists) */
@@ -523,10 +526,10 @@ void lusA_totable(lua_State *L, LusAst *ast) {
   nodetotable(L, ast->root);
   /* Add comments array if there are any comments */
   if (ast->comments != NULL) {
-    lua_newtable(L);  /* create comments array */
+    lua_newtable(L); /* create comments array */
     int i = 1;
     for (LusComment *c = ast->comments; c != NULL; c = c->next) {
-      lua_newtable(L);  /* comment table */
+      lua_newtable(L); /* comment table */
       lua_pushinteger(L, c->line);
       lua_setfield(L, -2, "line");
       lua_pushinteger(L, c->column);
@@ -541,16 +544,16 @@ void lusA_totable(lua_State *L, LusAst *ast) {
         lua_pushstring(L, getstr(c->text));
         lua_setfield(L, -2, "text");
       }
-      lua_rawseti(L, -2, i++);  /* comments[i] = comment_table */
+      lua_rawseti(L, -2, i++); /* comments[i] = comment_table */
     }
-    lua_setfield(L, -2, "comments");  /* root.comments = comments_array */
+    lua_setfield(L, -2, "comments"); /* root.comments = comments_array */
   }
   /* Add errors array if there are any parse errors */
   if (ast->errors != NULL) {
-    lua_newtable(L);  /* create errors array */
+    lua_newtable(L); /* create errors array */
     int i = 1;
     for (LusParseError *e = ast->errors; e != NULL; e = e->next) {
-      lua_newtable(L);  /* error table */
+      lua_newtable(L); /* error table */
       lua_pushinteger(L, e->line);
       lua_setfield(L, -2, "line");
       lua_pushinteger(L, e->column);
@@ -559,9 +562,9 @@ void lusA_totable(lua_State *L, LusAst *ast) {
         lua_pushstring(L, getstr(e->message));
         lua_setfield(L, -2, "message");
       }
-      lua_rawseti(L, -2, i++);  /* errors[i] = error_table */
+      lua_rawseti(L, -2, i++); /* errors[i] = error_table */
     }
-    lua_setfield(L, -2, "errors");  /* root.errors = errors_array */
+    lua_setfield(L, -2, "errors"); /* root.errors = errors_array */
   }
   lua_gc(L, LUA_GCRESTART); /* resume GC */
 }
@@ -581,77 +584,76 @@ static int emit_node(FILE *f, LusAstNode *node) {
 
   /* Build label based on type */
   switch (node->type) {
-  case AST_NUMBER:
-    if (node->u.num.isint)
-      snprintf(buf, sizeof(buf), "number\\n%lld", (long long)node->u.num.val.i);
-    else
-      snprintf(buf, sizeof(buf), "number\\n%.14g", node->u.num.val.n);
-    label = buf;
-    break;
-  case AST_STRING:
-  case AST_NAME:
-    snprintf(buf, sizeof(buf), "%s\\n\\\"%s\\\"", lusA_typename(node->type),
-             node->u.str ? getstr(node->u.str) : "");
-    label = buf;
-    break;
-  case AST_BINOP:
-    snprintf(buf, sizeof(buf), "binop\\n%s", binop_names[node->u.binop.op]);
-    label = buf;
-    break;
-  case AST_UNOP:
-    snprintf(buf, sizeof(buf), "unop\\n%s", unop_names[node->u.unop.op]);
-    label = buf;
-    break;
-  default:
-    label = lusA_typename(node->type);
-    break;
+    case AST_NUMBER:
+      if (node->u.num.isint)
+        snprintf(buf, sizeof(buf), "number\\n%lld",
+                 (long long)node->u.num.val.i);
+      else
+        snprintf(buf, sizeof(buf), "number\\n%.14g", node->u.num.val.n);
+      label = buf;
+      break;
+    case AST_STRING:
+    case AST_NAME:
+      snprintf(buf, sizeof(buf), "%s\\n\\\"%s\\\"", lusA_typename(node->type),
+               node->u.str ? getstr(node->u.str) : "");
+      label = buf;
+      break;
+    case AST_BINOP:
+      snprintf(buf, sizeof(buf), "binop\\n%s", binop_names[node->u.binop.op]);
+      label = buf;
+      break;
+    case AST_UNOP:
+      snprintf(buf, sizeof(buf), "unop\\n%s", unop_names[node->u.unop.op]);
+      label = buf;
+      break;
+    default: label = lusA_typename(node->type); break;
   }
 
   fprintf(f, "  n%d [label=\"%s\"];\n", myid, label);
 
   /* Emit edges for type-specific children */
   switch (node->type) {
-  case AST_BINOP: {
-    int left = emit_node(f, node->u.binop.left);
-    int right = emit_node(f, node->u.binop.right);
-    if (left >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"L\"];\n", myid, left);
-    if (right >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"R\"];\n", myid, right);
-    break;
-  }
-  case AST_UNOP: {
-    int op = emit_node(f, node->u.unop.operand);
-    if (op >= 0)
-      fprintf(f, "  n%d -> n%d;\n", myid, op);
-    break;
-  }
-  case AST_IF: {
-    int cond = emit_node(f, node->u.ifstat.cond);
-    if (cond >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"cond\"];\n", myid, cond);
-    /* then/elseif/else blocks are in children */
-    break;
-  }
-  case AST_WHILE:
-  case AST_REPEAT: {
-    int cond = emit_node(f, node->u.loop.cond);
-    if (cond >= 0)
-      fprintf(f, "  n%d -> n%d [label=\"cond\"];\n", myid, cond);
-    /* body statements are in children */
-    break;
-  }
-  default: {
-    /* Emit generic children */
-    LusAstNode *c = node->child;
-    while (c != NULL) {
-      int cid = emit_node(f, c);
-      if (cid >= 0)
-        fprintf(f, "  n%d -> n%d;\n", myid, cid);
-      c = c->next;
+    case AST_BINOP: {
+      int left = emit_node(f, node->u.binop.left);
+      int right = emit_node(f, node->u.binop.right);
+      if (left >= 0)
+        fprintf(f, "  n%d -> n%d [label=\"L\"];\n", myid, left);
+      if (right >= 0)
+        fprintf(f, "  n%d -> n%d [label=\"R\"];\n", myid, right);
+      break;
     }
-    break;
-  }
+    case AST_UNOP: {
+      int op = emit_node(f, node->u.unop.operand);
+      if (op >= 0)
+        fprintf(f, "  n%d -> n%d;\n", myid, op);
+      break;
+    }
+    case AST_IF: {
+      int cond = emit_node(f, node->u.ifstat.cond);
+      if (cond >= 0)
+        fprintf(f, "  n%d -> n%d [label=\"cond\"];\n", myid, cond);
+      /* then/elseif/else blocks are in children */
+      break;
+    }
+    case AST_WHILE:
+    case AST_REPEAT: {
+      int cond = emit_node(f, node->u.loop.cond);
+      if (cond >= 0)
+        fprintf(f, "  n%d -> n%d [label=\"cond\"];\n", myid, cond);
+      /* body statements are in children */
+      break;
+    }
+    default: {
+      /* Emit generic children */
+      LusAstNode *c = node->child;
+      while (c != NULL) {
+        int cid = emit_node(f, c);
+        if (cid >= 0)
+          fprintf(f, "  n%d -> n%d;\n", myid, cid);
+        c = c->next;
+      }
+      break;
+    }
   }
 
   return myid;
@@ -691,26 +693,16 @@ static void json_escape_string(FILE *f, const char *s) {
   fputc('"', f);
   while (*s) {
     switch (*s) {
-    case '"':
-      fputs("\\\"", f);
-      break;
-    case '\\':
-      fputs("\\\\", f);
-      break;
-    case '\n':
-      fputs("\\n", f);
-      break;
-    case '\r':
-      fputs("\\r", f);
-      break;
-    case '\t':
-      fputs("\\t", f);
-      break;
-    default:
-      if ((unsigned char)*s < 32)
-        fprintf(f, "\\u%04x", (unsigned char)*s);
-      else
-        fputc(*s, f);
+      case '"': fputs("\\\"", f); break;
+      case '\\': fputs("\\\\", f); break;
+      case '\n': fputs("\\n", f); break;
+      case '\r': fputs("\\r", f); break;
+      case '\t': fputs("\\t", f); break;
+      default:
+        if ((unsigned char)*s < 32)
+          fprintf(f, "\\u%04x", (unsigned char)*s);
+        else
+          fputc(*s, f);
     }
     s++;
   }
@@ -746,234 +738,233 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
 
   /* Type-specific fields */
   switch (node->type) {
-  case AST_NUMBER:
-    if (node->u.num.isint)
-      fprintf(f, ",\n%*s\"value\": " LUA_INTEGER_FMT, indent + 2, "",
-              node->u.num.val.i);
-    else
-      fprintf(f, ",\n%*s\"value\": %g", indent + 2, "", node->u.num.val.n);
-    break;
+    case AST_NUMBER:
+      if (node->u.num.isint)
+        fprintf(f, ",\n%*s\"value\": " LUA_INTEGER_FMT, indent + 2, "",
+                node->u.num.val.i);
+      else
+        fprintf(f, ",\n%*s\"value\": %g", indent + 2, "", node->u.num.val.n);
+      break;
 
-  case AST_STRING:
-  case AST_NAME:
-  case AST_GOTO:
-  case AST_LABEL:
-    if (node->u.str != NULL) {
-      fprintf(f, ",\n%*s\"value\": ", indent + 2, "");
-      json_escape_string(f, getstr(node->u.str));
-    }
-    break;
+    case AST_STRING:
+    case AST_NAME:
+    case AST_GOTO:
+    case AST_LABEL:
+      if (node->u.str != NULL) {
+        fprintf(f, ",\n%*s\"value\": ", indent + 2, "");
+        json_escape_string(f, getstr(node->u.str));
+      }
+      break;
 
-  case AST_BINOP:
-    fprintf(f, ",\n%*s\"op\": \"%s\"", indent + 2, "",
-            binop_names[node->u.binop.op]);
-    if (node->u.binop.left) {
-      fprintf(f, ",\n%*s\"left\": ", indent + 2, "");
-      emit_json_node(f, node->u.binop.left, 0);
-    }
-    if (node->u.binop.right) {
-      fprintf(f, ",\n%*s\"right\": ", indent + 2, "");
-      emit_json_node(f, node->u.binop.right, 0);
-    }
-    break;
+    case AST_BINOP:
+      fprintf(f, ",\n%*s\"op\": \"%s\"", indent + 2, "",
+              binop_names[node->u.binop.op]);
+      if (node->u.binop.left) {
+        fprintf(f, ",\n%*s\"left\": ", indent + 2, "");
+        emit_json_node(f, node->u.binop.left, 0);
+      }
+      if (node->u.binop.right) {
+        fprintf(f, ",\n%*s\"right\": ", indent + 2, "");
+        emit_json_node(f, node->u.binop.right, 0);
+      }
+      break;
 
-  case AST_UNOP:
-    fprintf(f, ",\n%*s\"op\": \"%s\"", indent + 2, "",
-            unop_names[node->u.unop.op]);
-    if (node->u.unop.operand) {
-      fprintf(f, ",\n%*s\"operand\": ", indent + 2, "");
-      emit_json_node(f, node->u.unop.operand, 0);
-    }
-    break;
+    case AST_UNOP:
+      fprintf(f, ",\n%*s\"op\": \"%s\"", indent + 2, "",
+              unop_names[node->u.unop.op]);
+      if (node->u.unop.operand) {
+        fprintf(f, ",\n%*s\"operand\": ", indent + 2, "");
+        emit_json_node(f, node->u.unop.operand, 0);
+      }
+      break;
 
-  case AST_FUNCEXPR:
-  case AST_LOCALFUNC:
-  case AST_GLOBALFUNC:
-  case AST_FUNCSTAT:
-    if (node->u.func.params) {
-      fprintf(f, ",\n%*s\"params\": ", indent + 2, "");
-      emit_json_children(f, node->u.func.params, indent + 2);
-    }
-    break;
+    case AST_FUNCEXPR:
+    case AST_LOCALFUNC:
+    case AST_GLOBALFUNC:
+    case AST_FUNCSTAT:
+      if (node->u.func.params) {
+        fprintf(f, ",\n%*s\"params\": ", indent + 2, "");
+        emit_json_children(f, node->u.func.params, indent + 2);
+      }
+      break;
 
-  case AST_IF:
-    if (node->u.ifstat.cond) {
-      fprintf(f, ",\n%*s\"cond\": ", indent + 2, "");
-      emit_json_node(f, node->u.ifstat.cond, 0);
-    }
-    break;
+    case AST_IF:
+      if (node->u.ifstat.cond) {
+        fprintf(f, ",\n%*s\"cond\": ", indent + 2, "");
+        emit_json_node(f, node->u.ifstat.cond, 0);
+      }
+      break;
 
-  case AST_WHILE:
-  case AST_REPEAT:
-    if (node->u.loop.cond) {
-      fprintf(f, ",\n%*s\"cond\": ", indent + 2, "");
-      emit_json_node(f, node->u.loop.cond, 0);
-    }
-    break;
+    case AST_WHILE:
+    case AST_REPEAT:
+      if (node->u.loop.cond) {
+        fprintf(f, ",\n%*s\"cond\": ", indent + 2, "");
+        emit_json_node(f, node->u.loop.cond, 0);
+      }
+      break;
 
-  case AST_FORNUM:
-    if (node->u.fornum.var) {
-      fprintf(f, ",\n%*s\"var\": ", indent + 2, "");
-      emit_json_node(f, node->u.fornum.var, 0);
-    }
-    if (node->u.fornum.init) {
-      fprintf(f, ",\n%*s\"init\": ", indent + 2, "");
-      emit_json_node(f, node->u.fornum.init, 0);
-    }
-    if (node->u.fornum.limit) {
-      fprintf(f, ",\n%*s\"limit\": ", indent + 2, "");
-      emit_json_node(f, node->u.fornum.limit, 0);
-    }
-    if (node->u.fornum.step) {
-      fprintf(f, ",\n%*s\"step\": ", indent + 2, "");
-      emit_json_node(f, node->u.fornum.step, 0);
-    }
-    break;
+    case AST_FORNUM:
+      if (node->u.fornum.var) {
+        fprintf(f, ",\n%*s\"var\": ", indent + 2, "");
+        emit_json_node(f, node->u.fornum.var, 0);
+      }
+      if (node->u.fornum.init) {
+        fprintf(f, ",\n%*s\"init\": ", indent + 2, "");
+        emit_json_node(f, node->u.fornum.init, 0);
+      }
+      if (node->u.fornum.limit) {
+        fprintf(f, ",\n%*s\"limit\": ", indent + 2, "");
+        emit_json_node(f, node->u.fornum.limit, 0);
+      }
+      if (node->u.fornum.step) {
+        fprintf(f, ",\n%*s\"step\": ", indent + 2, "");
+        emit_json_node(f, node->u.fornum.step, 0);
+      }
+      break;
 
-  case AST_FORGEN:
-    if (node->u.forgen.names) {
-      fprintf(f, ",\n%*s\"names\": ", indent + 2, "");
-      emit_json_children(f, node->u.forgen.names, indent + 2);
-    }
-    if (node->u.forgen.explist) {
-      fprintf(f, ",\n%*s\"explist\": ", indent + 2, "");
-      emit_json_children(f, node->u.forgen.explist, indent + 2);
-    }
-    break;
+    case AST_FORGEN:
+      if (node->u.forgen.names) {
+        fprintf(f, ",\n%*s\"names\": ", indent + 2, "");
+        emit_json_children(f, node->u.forgen.names, indent + 2);
+      }
+      if (node->u.forgen.explist) {
+        fprintf(f, ",\n%*s\"explist\": ", indent + 2, "");
+        emit_json_children(f, node->u.forgen.explist, indent + 2);
+      }
+      break;
 
-  case AST_LOCAL:
-  case AST_GLOBAL:
-    if (node->u.decl.names) {
-      fprintf(f, ",\n%*s\"names\": ", indent + 2, "");
-      emit_json_children(f, node->u.decl.names, indent + 2);
-    }
-    if (node->u.decl.values) {
-      fprintf(f, ",\n%*s\"values\": ", indent + 2, "");
-      emit_json_children(f, node->u.decl.values, indent + 2);
-    }
-    break;
+    case AST_LOCAL:
+    case AST_GLOBAL:
+      if (node->u.decl.names) {
+        fprintf(f, ",\n%*s\"names\": ", indent + 2, "");
+        emit_json_children(f, node->u.decl.names, indent + 2);
+      }
+      if (node->u.decl.values) {
+        fprintf(f, ",\n%*s\"values\": ", indent + 2, "");
+        emit_json_children(f, node->u.decl.values, indent + 2);
+      }
+      break;
 
-  case AST_ASSIGN:
-    if (node->u.assign.lhs) {
-      fprintf(f, ",\n%*s\"lhs\": ", indent + 2, "");
-      emit_json_children(f, node->u.assign.lhs, indent + 2);
-    }
-    if (node->u.assign.rhs) {
-      fprintf(f, ",\n%*s\"rhs\": ", indent + 2, "");
-      emit_json_children(f, node->u.assign.rhs, indent + 2);
-    }
-    break;
+    case AST_ASSIGN:
+      if (node->u.assign.lhs) {
+        fprintf(f, ",\n%*s\"lhs\": ", indent + 2, "");
+        emit_json_children(f, node->u.assign.lhs, indent + 2);
+      }
+      if (node->u.assign.rhs) {
+        fprintf(f, ",\n%*s\"rhs\": ", indent + 2, "");
+        emit_json_children(f, node->u.assign.rhs, indent + 2);
+      }
+      break;
 
-  case AST_FIELD:
-  case AST_INDEX:
-    if (node->u.index.table) {
-      fprintf(f, ",\n%*s\"table\": ", indent + 2, "");
-      emit_json_node(f, node->u.index.table, 0);
-    }
-    if (node->u.index.key) {
-      fprintf(f, ",\n%*s\"key\": ", indent + 2, "");
-      emit_json_node(f, node->u.index.key, 0);
-    }
-    break;
+    case AST_FIELD:
+    case AST_INDEX:
+      if (node->u.index.table) {
+        fprintf(f, ",\n%*s\"table\": ", indent + 2, "");
+        emit_json_node(f, node->u.index.table, 0);
+      }
+      if (node->u.index.key) {
+        fprintf(f, ",\n%*s\"key\": ", indent + 2, "");
+        emit_json_node(f, node->u.index.key, 0);
+      }
+      break;
 
-  case AST_CALLEXPR:
-  case AST_CALLSTAT:
-  case AST_METHODCALL:
-    if (node->u.call.func) {
-      fprintf(f, ",\n%*s\"func\": ", indent + 2, "");
-      emit_json_node(f, node->u.call.func, 0);
-    }
-    if (node->u.call.args) {
-      fprintf(f, ",\n%*s\"args\": ", indent + 2, "");
-      emit_json_children(f, node->u.call.args, indent + 2);
-    }
-    if (node->type == AST_METHODCALL && node->u.call.method) {
-      fprintf(f, ",\n%*s\"method\": ", indent + 2, "");
-      json_escape_string(f, getstr(node->u.call.method));
-    }
-    break;
+    case AST_CALLEXPR:
+    case AST_CALLSTAT:
+    case AST_METHODCALL:
+      if (node->u.call.func) {
+        fprintf(f, ",\n%*s\"func\": ", indent + 2, "");
+        emit_json_node(f, node->u.call.func, 0);
+      }
+      if (node->u.call.args) {
+        fprintf(f, ",\n%*s\"args\": ", indent + 2, "");
+        emit_json_children(f, node->u.call.args, indent + 2);
+      }
+      if (node->type == AST_METHODCALL && node->u.call.method) {
+        fprintf(f, ",\n%*s\"method\": ", indent + 2, "");
+        json_escape_string(f, getstr(node->u.call.method));
+      }
+      break;
 
-  case AST_TABLE:
-    if (node->u.table.fields) {
-      fprintf(f, ",\n%*s\"fields\": ", indent + 2, "");
-      emit_json_children(f, node->u.table.fields, indent + 2);
-    }
-    break;
+    case AST_TABLE:
+      if (node->u.table.fields) {
+        fprintf(f, ",\n%*s\"fields\": ", indent + 2, "");
+        emit_json_children(f, node->u.table.fields, indent + 2);
+      }
+      break;
 
-  case AST_TABLEFIELD:
-    if (node->u.field.key) {
-      fprintf(f, ",\n%*s\"key\": ", indent + 2, "");
-      emit_json_node(f, node->u.field.key, 0);
-    }
-    if (node->u.field.value) {
-      fprintf(f, ",\n%*s\"value\": ", indent + 2, "");
-      emit_json_node(f, node->u.field.value, 0);
-    }
-    break;
+    case AST_TABLEFIELD:
+      if (node->u.field.key) {
+        fprintf(f, ",\n%*s\"key\": ", indent + 2, "");
+        emit_json_node(f, node->u.field.key, 0);
+      }
+      if (node->u.field.value) {
+        fprintf(f, ",\n%*s\"value\": ", indent + 2, "");
+        emit_json_node(f, node->u.field.value, 0);
+      }
+      break;
 
-  case AST_RETURN:
-  case AST_PROVIDE:
-    if (node->u.ret.values) {
-      fprintf(f, ",\n%*s\"values\": ", indent + 2, "");
-      emit_json_children(f, node->u.ret.values, indent + 2);
-    }
-    break;
+    case AST_RETURN:
+    case AST_PROVIDE:
+      if (node->u.ret.values) {
+        fprintf(f, ",\n%*s\"values\": ", indent + 2, "");
+        emit_json_children(f, node->u.ret.values, indent + 2);
+      }
+      break;
 
-  case AST_CATCHEXPR:
-  case AST_CATCHSTAT:
-    if (node->u.catchnode.expr) {
-      fprintf(f, ",\n%*s\"expr\": ", indent + 2, "");
-      emit_json_node(f, node->u.catchnode.expr, 0);
-    }
-    if (node->u.catchnode.handler) {
-      fprintf(f, ",\n%*s\"handler\": ", indent + 2, "");
-      emit_json_node(f, node->u.catchnode.handler, 0);
-    }
-    break;
+    case AST_CATCHEXPR:
+    case AST_CATCHSTAT:
+      if (node->u.catchnode.expr) {
+        fprintf(f, ",\n%*s\"expr\": ", indent + 2, "");
+        emit_json_node(f, node->u.catchnode.expr, 0);
+      }
+      if (node->u.catchnode.handler) {
+        fprintf(f, ",\n%*s\"handler\": ", indent + 2, "");
+        emit_json_node(f, node->u.catchnode.handler, 0);
+      }
+      break;
 
-  case AST_OPTCHAIN:
-    if (node->u.optchain.base) {
-      fprintf(f, ",\n%*s\"base\": ", indent + 2, "");
-      emit_json_node(f, node->u.optchain.base, 0);
-    }
-    if (node->u.optchain.suffix) {
-      fprintf(f, ",\n%*s\"suffix\": ", indent + 2, "");
-      emit_json_node(f, node->u.optchain.suffix, 0);
-    }
-    break;
+    case AST_OPTCHAIN:
+      if (node->u.optchain.base) {
+        fprintf(f, ",\n%*s\"base\": ", indent + 2, "");
+        emit_json_node(f, node->u.optchain.base, 0);
+      }
+      if (node->u.optchain.suffix) {
+        fprintf(f, ",\n%*s\"suffix\": ", indent + 2, "");
+        emit_json_node(f, node->u.optchain.suffix, 0);
+      }
+      break;
 
-  case AST_ENUM:
-    if (node->u.enumdef.names) {
-      fprintf(f, ",\n%*s\"names\": ", indent + 2, "");
-      emit_json_children(f, node->u.enumdef.names, indent + 2);
-    }
-    break;
+    case AST_ENUM:
+      if (node->u.enumdef.names) {
+        fprintf(f, ",\n%*s\"names\": ", indent + 2, "");
+        emit_json_children(f, node->u.enumdef.names, indent + 2);
+      }
+      break;
 
-  case AST_SLICE:
-    if (node->u.slice.table) {
-      fprintf(f, ",\n%*s\"table\": ", indent + 2, "");
-      emit_json_node(f, node->u.slice.table, 0);
-    }
-    if (node->u.slice.start) {
-      fprintf(f, ",\n%*s\"start\": ", indent + 2, "");
-      emit_json_node(f, node->u.slice.start, 0);
-    }
-    if (node->u.slice.finish) {
-      fprintf(f, ",\n%*s\"finish\": ", indent + 2, "");
-      emit_json_node(f, node->u.slice.finish, 0);
-    }
-    break;
+    case AST_SLICE:
+      if (node->u.slice.table) {
+        fprintf(f, ",\n%*s\"table\": ", indent + 2, "");
+        emit_json_node(f, node->u.slice.table, 0);
+      }
+      if (node->u.slice.start) {
+        fprintf(f, ",\n%*s\"start\": ", indent + 2, "");
+        emit_json_node(f, node->u.slice.start, 0);
+      }
+      if (node->u.slice.finish) {
+        fprintf(f, ",\n%*s\"finish\": ", indent + 2, "");
+        emit_json_node(f, node->u.slice.finish, 0);
+      }
+      break;
 
-  case AST_INTERP:
-    if (node->u.interp.parts) {
-      fprintf(f, ",\n%*s\"parts\": ", indent + 2, "");
-      emit_json_children(f, node->u.interp.parts, indent + 2);
-    }
-    fprintf(f, ",\n%*s\"nparts\": %d", indent + 2, "", node->u.interp.nparts);
-    break;
+    case AST_INTERP:
+      if (node->u.interp.parts) {
+        fprintf(f, ",\n%*s\"parts\": ", indent + 2, "");
+        emit_json_children(f, node->u.interp.parts, indent + 2);
+      }
+      fprintf(f, ",\n%*s\"nparts\": %d", indent + 2, "", node->u.interp.nparts);
+      break;
 
-  default:
-    break;
+    default: break;
   }
 
   /* Children array */
@@ -1117,7 +1108,8 @@ static int check_manual_deconstruction(LusAstNode *names, LusAstNode *values,
     /* All accesses must be from the same table */
     if (base_table == NULL) {
       base_table = tname;
-    } else if (strcmp(base_table, tname) != 0) {
+    }
+    else if (strcmp(base_table, tname) != 0) {
       return 0;
     }
 
@@ -1158,9 +1150,11 @@ static LusAstNode *get_nil_compare_var(LusAstNode *node, int *is_neq) {
   /* Check for ~= or == with nil */
   if (node->u.binop.op == AST_OP_NE) {
     *is_neq = 1;
-  } else if (node->u.binop.op == AST_OP_EQ) {
+  }
+  else if (node->u.binop.op == AST_OP_EQ) {
     *is_neq = 0;
-  } else {
+  }
+  else {
     return NULL;
   }
 
@@ -1282,84 +1276,83 @@ static void collect_names(lua_State *L, LusAstNode *node, const char ***names,
   collect_names(L, node->next, names, count, cap);
 
   switch (node->type) {
-  case AST_BINOP:
-    collect_names(L, node->u.binop.left, names, count, cap);
-    collect_names(L, node->u.binop.right, names, count, cap);
-    break;
-  case AST_UNOP:
-    collect_names(L, node->u.unop.operand, names, count, cap);
-    break;
-  case AST_FIELD:
-  case AST_INDEX:
-    collect_names(L, node->u.index.table, names, count, cap);
-    collect_names(L, node->u.index.key, names, count, cap);
-    break;
-  case AST_CALLEXPR:
-  case AST_CALLSTAT:
-  case AST_METHODCALL:
-    collect_names(L, node->u.call.func, names, count, cap);
-    collect_names(L, node->u.call.args, names, count, cap);
-    break;
-  case AST_IF:
-    collect_names(L, node->u.ifstat.cond, names, count, cap);
-    /* then/elseif/else blocks are in children */
-    for (LusAstNode *c = node->child; c != NULL; c = c->next)
-      collect_names(L, c, names, count, cap);
-    break;
-  case AST_WHILE:
-  case AST_REPEAT:
-    collect_names(L, node->u.loop.cond, names, count, cap);
-    /* body statements are in children */
-    for (LusAstNode *c = node->child; c != NULL; c = c->next)
-      collect_names(L, c, names, count, cap);
-    break;
-  case AST_FORNUM:
-    collect_names(L, node->u.fornum.var, names, count, cap);
-    collect_names(L, node->u.fornum.init, names, count, cap);
-    collect_names(L, node->u.fornum.limit, names, count, cap);
-    collect_names(L, node->u.fornum.step, names, count, cap);
-    /* body statements are in children */
-    for (LusAstNode *c = node->child; c != NULL; c = c->next)
-      collect_names(L, c, names, count, cap);
-    break;
-  case AST_FORGEN:
-    collect_names(L, node->u.forgen.names, names, count, cap);
-    collect_names(L, node->u.forgen.explist, names, count, cap);
-    /* body statements are in children */
-    for (LusAstNode *c = node->child; c != NULL; c = c->next)
-      collect_names(L, c, names, count, cap);
-    break;
-  case AST_LOCAL:
-  case AST_GLOBAL:
-    collect_names(L, node->u.decl.values, names, count, cap);
-    break;
-  case AST_ASSIGN:
-    collect_names(L, node->u.assign.lhs, names, count, cap);
-    collect_names(L, node->u.assign.rhs, names, count, cap);
-    break;
-  case AST_RETURN:
-  case AST_PROVIDE:
-    collect_names(L, node->u.ret.values, names, count, cap);
-    break;
-  case AST_CATCHEXPR:
-  case AST_CATCHSTAT:
-    collect_names(L, node->u.catchnode.expr, names, count, cap);
-    if (node->u.catchnode.handler)
-      collect_names(L, node->u.catchnode.handler, names, count, cap);
-    break;
-  case AST_OPTCHAIN:
-    collect_names(L, node->u.optchain.base, names, count, cap);
-    collect_names(L, node->u.optchain.suffix, names, count, cap);
-    break;
-  case AST_TABLE:
-    collect_names(L, node->u.table.fields, names, count, cap);
-    break;
-  case AST_TABLEFIELD:
-    collect_names(L, node->u.field.key, names, count, cap);
-    collect_names(L, node->u.field.value, names, count, cap);
-    break;
-  default:
-    break;
+    case AST_BINOP:
+      collect_names(L, node->u.binop.left, names, count, cap);
+      collect_names(L, node->u.binop.right, names, count, cap);
+      break;
+    case AST_UNOP:
+      collect_names(L, node->u.unop.operand, names, count, cap);
+      break;
+    case AST_FIELD:
+    case AST_INDEX:
+      collect_names(L, node->u.index.table, names, count, cap);
+      collect_names(L, node->u.index.key, names, count, cap);
+      break;
+    case AST_CALLEXPR:
+    case AST_CALLSTAT:
+    case AST_METHODCALL:
+      collect_names(L, node->u.call.func, names, count, cap);
+      collect_names(L, node->u.call.args, names, count, cap);
+      break;
+    case AST_IF:
+      collect_names(L, node->u.ifstat.cond, names, count, cap);
+      /* then/elseif/else blocks are in children */
+      for (LusAstNode *c = node->child; c != NULL; c = c->next)
+        collect_names(L, c, names, count, cap);
+      break;
+    case AST_WHILE:
+    case AST_REPEAT:
+      collect_names(L, node->u.loop.cond, names, count, cap);
+      /* body statements are in children */
+      for (LusAstNode *c = node->child; c != NULL; c = c->next)
+        collect_names(L, c, names, count, cap);
+      break;
+    case AST_FORNUM:
+      collect_names(L, node->u.fornum.var, names, count, cap);
+      collect_names(L, node->u.fornum.init, names, count, cap);
+      collect_names(L, node->u.fornum.limit, names, count, cap);
+      collect_names(L, node->u.fornum.step, names, count, cap);
+      /* body statements are in children */
+      for (LusAstNode *c = node->child; c != NULL; c = c->next)
+        collect_names(L, c, names, count, cap);
+      break;
+    case AST_FORGEN:
+      collect_names(L, node->u.forgen.names, names, count, cap);
+      collect_names(L, node->u.forgen.explist, names, count, cap);
+      /* body statements are in children */
+      for (LusAstNode *c = node->child; c != NULL; c = c->next)
+        collect_names(L, c, names, count, cap);
+      break;
+    case AST_LOCAL:
+    case AST_GLOBAL:
+      collect_names(L, node->u.decl.values, names, count, cap);
+      break;
+    case AST_ASSIGN:
+      collect_names(L, node->u.assign.lhs, names, count, cap);
+      collect_names(L, node->u.assign.rhs, names, count, cap);
+      break;
+    case AST_RETURN:
+    case AST_PROVIDE:
+      collect_names(L, node->u.ret.values, names, count, cap);
+      break;
+    case AST_CATCHEXPR:
+    case AST_CATCHSTAT:
+      collect_names(L, node->u.catchnode.expr, names, count, cap);
+      if (node->u.catchnode.handler)
+        collect_names(L, node->u.catchnode.handler, names, count, cap);
+      break;
+    case AST_OPTCHAIN:
+      collect_names(L, node->u.optchain.base, names, count, cap);
+      collect_names(L, node->u.optchain.suffix, names, count, cap);
+      break;
+    case AST_TABLE:
+      collect_names(L, node->u.table.fields, names, count, cap);
+      break;
+    case AST_TABLEFIELD:
+      collect_names(L, node->u.field.key, names, count, cap);
+      collect_names(L, node->u.field.value, names, count, cap);
+      break;
+    default: break;
   }
 }
 
@@ -1486,191 +1479,187 @@ static void analyze_node(AnalyzeState *as, LusAstNode *node,
   (void)parent;
 
   switch (node->type) {
-  /* W2: pcall/xpcall deprecation */
-  case AST_NAME: {
-    const char *name = get_name(node);
-    if (name != NULL) {
-      if (strcmp(name, "pcall") == 0) {
-        emit_warning(
-            as, node->line,
-            "'pcall' no longer exists; use 'catch' expression instead");
-      } else if (strcmp(name, "xpcall") == 0) {
-        emit_warning(
-            as, node->line,
-            "'xpcall' no longer exists; use 'catch' expression instead");
-      }
-    }
-    break;
-  }
-
-  /* W1: pledge after seal + W2 extension for pledge calls */
-  case AST_CALLSTAT:
-  case AST_CALLEXPR: {
-    LusAstNode *func = node->u.call.func;
-    LusAstNode *args = node->u.call.args;
-
-    /* Check for pledge("seal") and subsequent pledge calls */
-    if (is_name(func, "pledge")) {
-      if (as->pledge_sealed) {
-        emit_warning(as, node->line,
-                     "pledge() after pledge(\"seal\") has no effect; "
-                     "permissions are frozen");
-      } else if (args != NULL && is_string_literal(args, "seal")) {
-        as->pledge_sealed = 1;
-      }
-    }
-
-    /* Recurse into children */
-    analyze_node(as, func, node);
-    for (LusAstNode *arg = args; arg != NULL; arg = arg->next) {
-      analyze_node(as, arg, node);
-    }
-    break;
-  }
-
-  /* W5: Manual table deconstruction */
-  case AST_LOCAL: {
-    if (!node->u.decl.isfrom) {
-      LusAstNode *names = node->u.decl.names;
-      LusAstNode *values = node->u.decl.values;
-      int name_count = count_siblings(names);
-      int value_count = count_siblings(values);
-
-      /* Need multiple items and same count */
-      if (name_count >= 2 && name_count == value_count) {
-        const char *tablename = NULL;
-        if (check_manual_deconstruction(names, values, &tablename)) {
-          char msg[256];
-          snprintf(msg, sizeof(msg),
-                   "use 'from' destructuring: local ... from %s", tablename);
-          emit_warning(as, node->line, msg);
+    /* W2: pcall/xpcall deprecation */
+    case AST_NAME: {
+      const char *name = get_name(node);
+      if (name != NULL) {
+        if (strcmp(name, "pcall") == 0) {
+          emit_warning(
+              as, node->line,
+              "'pcall' no longer exists; use 'catch' expression instead");
+        }
+        else if (strcmp(name, "xpcall") == 0) {
+          emit_warning(
+              as, node->line,
+              "'xpcall' no longer exists; use 'catch' expression instead");
         }
       }
+      break;
     }
 
-    /* Recurse into values */
-    for (LusAstNode *v = node->u.decl.values; v != NULL; v = v->next) {
-      analyze_node(as, v, node);
-    }
-    break;
-  }
+    /* W1: pledge after seal + W2 extension for pledge calls */
+    case AST_CALLSTAT:
+    case AST_CALLEXPR: {
+      LusAstNode *func = node->u.call.func;
+      LusAstNode *args = node->u.call.args;
 
-  /* W4: Nested nil checks */
-  case AST_IF: {
-    if (check_nested_nil_ifs(node, 0)) {
-      emit_warning(as, node->line,
-                   "nested nil checks can use optional chaining: x?.y?.z");
-    }
-
-    /* Recurse: condition + children (then/elseif/else blocks) */
-    analyze_node(as, node->u.ifstat.cond, node);
-    analyze_block(as, node->child);
-    break;
-  }
-
-  /* W4: And-chains for optional chaining */
-  case AST_BINOP: {
-    if (node->u.binop.op == AST_OP_AND) {
-      int depth = check_and_chain_depth(node);
-      if (depth >= 2) {
-        emit_warning(as, node->line,
-                     "and-chain can use optional chaining: x?.y?.z");
+      /* Check for pledge("seal") and subsequent pledge calls */
+      if (is_name(func, "pledge")) {
+        if (as->pledge_sealed) {
+          emit_warning(as, node->line,
+                       "pledge() after pledge(\"seal\") has no effect; "
+                       "permissions are frozen");
+        }
+        else if (args != NULL && is_string_literal(args, "seal")) {
+          as->pledge_sealed = 1;
+        }
       }
+
+      /* Recurse into children */
+      analyze_node(as, func, node);
+      for (LusAstNode *arg = args; arg != NULL; arg = arg->next) {
+        analyze_node(as, arg, node);
+      }
+      break;
     }
 
-    /* Recurse */
-    analyze_node(as, node->u.binop.left, node);
-    analyze_node(as, node->u.binop.right, node);
-    break;
-  }
+    /* W5: Manual table deconstruction */
+    case AST_LOCAL: {
+      if (!node->u.decl.isfrom) {
+        LusAstNode *names = node->u.decl.names;
+        LusAstNode *values = node->u.decl.values;
+        int name_count = count_siblings(names);
+        int value_count = count_siblings(values);
 
-  /* Generic recursion for other node types */
-  case AST_UNOP:
-    analyze_node(as, node->u.unop.operand, node);
-    break;
+        /* Need multiple items and same count */
+        if (name_count >= 2 && name_count == value_count) {
+          const char *tablename = NULL;
+          if (check_manual_deconstruction(names, values, &tablename)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "use 'from' destructuring: local ... from %s", tablename);
+            emit_warning(as, node->line, msg);
+          }
+        }
+      }
 
-  case AST_WHILE:
-  case AST_REPEAT:
-    analyze_node(as, node->u.loop.cond, node);
-    analyze_block(as, node->child);
-    break;
+      /* Recurse into values */
+      for (LusAstNode *v = node->u.decl.values; v != NULL; v = v->next) {
+        analyze_node(as, v, node);
+      }
+      break;
+    }
 
-  case AST_FORNUM:
-    analyze_node(as, node->u.fornum.init, node);
-    analyze_node(as, node->u.fornum.limit, node);
-    analyze_node(as, node->u.fornum.step, node);
-    analyze_block(as, node->child);
-    break;
+    /* W4: Nested nil checks */
+    case AST_IF: {
+      if (check_nested_nil_ifs(node, 0)) {
+        emit_warning(as, node->line,
+                     "nested nil checks can use optional chaining: x?.y?.z");
+      }
 
-  case AST_FORGEN:
-    for (LusAstNode *e = node->u.forgen.explist; e != NULL; e = e->next)
-      analyze_node(as, e, node);
-    analyze_block(as, node->child);
-    break;
+      /* Recurse: condition + children (then/elseif/else blocks) */
+      analyze_node(as, node->u.ifstat.cond, node);
+      analyze_block(as, node->child);
+      break;
+    }
 
-  case AST_FIELD:
-  case AST_INDEX:
-    analyze_node(as, node->u.index.table, node);
-    analyze_node(as, node->u.index.key, node);
-    break;
+    /* W4: And-chains for optional chaining */
+    case AST_BINOP: {
+      if (node->u.binop.op == AST_OP_AND) {
+        int depth = check_and_chain_depth(node);
+        if (depth >= 2) {
+          emit_warning(as, node->line,
+                       "and-chain can use optional chaining: x?.y?.z");
+        }
+      }
 
-  case AST_ASSIGN:
-    for (LusAstNode *l = node->u.assign.lhs; l != NULL; l = l->next)
-      analyze_node(as, l, node);
-    for (LusAstNode *r = node->u.assign.rhs; r != NULL; r = r->next)
-      analyze_node(as, r, node);
-    break;
+      /* Recurse */
+      analyze_node(as, node->u.binop.left, node);
+      analyze_node(as, node->u.binop.right, node);
+      break;
+    }
 
-  case AST_RETURN:
-  case AST_PROVIDE:
-    for (LusAstNode *v = node->u.ret.values; v != NULL; v = v->next)
-      analyze_node(as, v, node);
-    break;
+    /* Generic recursion for other node types */
+    case AST_UNOP: analyze_node(as, node->u.unop.operand, node); break;
 
-  case AST_CATCHEXPR:
-  case AST_CATCHSTAT:
-    analyze_node(as, node->u.catchnode.expr, node);
-    if (node->u.catchnode.handler)
-      analyze_node(as, node->u.catchnode.handler, node);
-    break;
+    case AST_WHILE:
+    case AST_REPEAT:
+      analyze_node(as, node->u.loop.cond, node);
+      analyze_block(as, node->child);
+      break;
 
-  case AST_OPTCHAIN:
-    analyze_node(as, node->u.optchain.base, node);
-    analyze_node(as, node->u.optchain.suffix, node);
-    break;
+    case AST_FORNUM:
+      analyze_node(as, node->u.fornum.init, node);
+      analyze_node(as, node->u.fornum.limit, node);
+      analyze_node(as, node->u.fornum.step, node);
+      analyze_block(as, node->child);
+      break;
 
-  case AST_TABLE:
-    for (LusAstNode *f = node->u.table.fields; f != NULL; f = f->next)
-      analyze_node(as, f, node);
-    break;
+    case AST_FORGEN:
+      for (LusAstNode *e = node->u.forgen.explist; e != NULL; e = e->next)
+        analyze_node(as, e, node);
+      analyze_block(as, node->child);
+      break;
 
-  case AST_TABLEFIELD:
-    analyze_node(as, node->u.field.key, node);
-    analyze_node(as, node->u.field.value, node);
-    break;
+    case AST_FIELD:
+    case AST_INDEX:
+      analyze_node(as, node->u.index.table, node);
+      analyze_node(as, node->u.index.key, node);
+      break;
 
-  case AST_FUNCEXPR:
-  case AST_LOCALFUNC:
-  case AST_GLOBALFUNC:
-  case AST_FUNCSTAT:
-    analyze_block(as, node->child);
-    break;
+    case AST_ASSIGN:
+      for (LusAstNode *l = node->u.assign.lhs; l != NULL; l = l->next)
+        analyze_node(as, l, node);
+      for (LusAstNode *r = node->u.assign.rhs; r != NULL; r = r->next)
+        analyze_node(as, r, node);
+      break;
 
-  case AST_DO:
-  case AST_BLOCK:
-  case AST_CHUNK:
-    analyze_block(as, node->child);
-    break;
+    case AST_RETURN:
+    case AST_PROVIDE:
+      for (LusAstNode *v = node->u.ret.values; v != NULL; v = v->next)
+        analyze_node(as, v, node);
+      break;
 
-  case AST_METHODCALL:
-    analyze_node(as, node->u.call.func, node);
-    for (LusAstNode *arg = node->u.call.args; arg != NULL; arg = arg->next)
-      analyze_node(as, arg, node);
-    break;
+    case AST_CATCHEXPR:
+    case AST_CATCHSTAT:
+      analyze_node(as, node->u.catchnode.expr, node);
+      if (node->u.catchnode.handler)
+        analyze_node(as, node->u.catchnode.handler, node);
+      break;
 
-  default:
-    /* Leaf nodes or unsupported - no action */
-    break;
+    case AST_OPTCHAIN:
+      analyze_node(as, node->u.optchain.base, node);
+      analyze_node(as, node->u.optchain.suffix, node);
+      break;
+
+    case AST_TABLE:
+      for (LusAstNode *f = node->u.table.fields; f != NULL; f = f->next)
+        analyze_node(as, f, node);
+      break;
+
+    case AST_TABLEFIELD:
+      analyze_node(as, node->u.field.key, node);
+      analyze_node(as, node->u.field.value, node);
+      break;
+
+    case AST_FUNCEXPR:
+    case AST_LOCALFUNC:
+    case AST_GLOBALFUNC:
+    case AST_FUNCSTAT: analyze_block(as, node->child); break;
+
+    case AST_DO:
+    case AST_BLOCK:
+    case AST_CHUNK: analyze_block(as, node->child); break;
+
+    case AST_METHODCALL:
+      analyze_node(as, node->u.call.func, node);
+      for (LusAstNode *arg = node->u.call.args; arg != NULL; arg = arg->next)
+        analyze_node(as, arg, node);
+      break;
+
+    default:
+      /* Leaf nodes or unsupported - no action */
+      break;
   }
 }
 

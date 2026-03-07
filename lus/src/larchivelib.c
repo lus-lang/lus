@@ -34,8 +34,8 @@
 ** Extract raw data from a string or vector argument.
 ** Sets *is_vec to 1 if the argument is a vector, 0 if string.
 */
-static void archive_getinput(lua_State *L, int idx,
-                             const char **data, size_t *len, int *is_vec) {
+static void archive_getinput(lua_State *L, int idx, const char **data,
+                             size_t *len, int *is_vec) {
   if (lua_isstring(L, idx)) {
     *data = lua_tolstring(L, idx, len);
     *is_vec = 0;
@@ -58,8 +58,8 @@ static void archive_getinput(lua_State *L, int idx,
 ** If is_vec, creates a new vector and copies data into it.
 ** Otherwise pushes a string.
 */
-static void archive_pushresult(lua_State *L, const char *data,
-                               size_t len, int is_vec) {
+static void archive_pushresult(lua_State *L, const char *data, size_t len,
+                               int is_vec) {
   if (is_vec) {
     Vector *v = luaV_newvec(L, len, 1);
     if (len > 0)
@@ -88,8 +88,8 @@ static int archive_gzip_compress(lua_State *L) {
 
   z_stream strm;
   memset(&strm, 0, sizeof(strm));
-  int ret = deflateInit2(&strm, level, Z_DEFLATED, 15 + 16, 8,
-                         Z_DEFAULT_STRATEGY);
+  int ret =
+      deflateInit2(&strm, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
   if (ret != Z_OK)
     return luaL_error(L, "gzip compress init failed (%d)", ret);
 
@@ -110,7 +110,7 @@ static int archive_gzip_compress(lua_State *L) {
     return luaL_error(L, "gzip compress failed (%d)", ret);
 
   if (is_vec) {
-    luaL_pushresultsize(&buf, 0);  /* push empty string to balance buffer */
+    luaL_pushresultsize(&buf, 0); /* push empty string to balance buffer */
     lua_pop(L, 1);
     archive_pushresult(L, out, out_len, 1);
   }
@@ -142,7 +142,8 @@ static int archive_gzip_decompress(lua_State *L) {
 
   do {
     size_t chunk = (input_len > 0) ? input_len * 4 : 256;
-    if (chunk < 256) chunk = 256;
+    if (chunk < 256)
+      chunk = 256;
     char *out = luaL_prepbuffsize(&buf, chunk);
     strm.next_out = (Bytef *)out;
     strm.avail_out = (uInt)chunk;
@@ -162,7 +163,7 @@ static int archive_gzip_decompress(lua_State *L) {
     size_t slen;
     const char *sdata = lua_tolstring(L, -1, &slen);
     archive_pushresult(L, sdata, slen, 1);
-    lua_remove(L, -2);  /* remove temporary string */
+    lua_remove(L, -2); /* remove temporary string */
   }
   else {
     luaL_pushresult(&buf);
@@ -187,8 +188,7 @@ static int archive_deflate_compress(lua_State *L) {
 
   z_stream strm;
   memset(&strm, 0, sizeof(strm));
-  int ret = deflateInit2(&strm, level, Z_DEFLATED, -15, 8,
-                         Z_DEFAULT_STRATEGY);
+  int ret = deflateInit2(&strm, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
   if (ret != Z_OK)
     return luaL_error(L, "deflate compress init failed (%d)", ret);
 
@@ -240,7 +240,8 @@ static int archive_deflate_decompress(lua_State *L) {
 
   do {
     size_t chunk = (input_len > 0) ? input_len * 4 : 256;
-    if (chunk < 256) chunk = 256;
+    if (chunk < 256)
+      chunk = 256;
     char *out = luaL_prepbuffsize(&buf, chunk);
     strm.next_out = (Bytef *)out;
     strm.avail_out = (uInt)chunk;
@@ -287,8 +288,7 @@ static int archive_zstd_compress(lua_State *L) {
 
   size_t result = ZSTD_compress(out, bound, input, input_len, level);
   if (ZSTD_isError(result))
-    return luaL_error(L, "zstd compress failed: %s",
-                      ZSTD_getErrorName(result));
+    return luaL_error(L, "zstd compress failed: %s", ZSTD_getErrorName(result));
 
   if (is_vec) {
     luaL_pushresultsize(&buf, 0);
@@ -317,8 +317,7 @@ static int archive_zstd_decompress(lua_State *L) {
     /* Known size: single-shot decompress */
     luaL_Buffer buf;
     char *out = luaL_buffinitsize(L, &buf, (size_t)frame_size);
-    size_t result = ZSTD_decompress(out, (size_t)frame_size,
-                                    input, input_len);
+    size_t result = ZSTD_decompress(out, (size_t)frame_size, input, input_len);
     if (ZSTD_isError(result))
       return luaL_error(L, "zstd decompress failed: %s",
                         ZSTD_getErrorName(result));
@@ -382,23 +381,22 @@ static int archive_brotli_compress(lua_State *L) {
   archive_getinput(L, 1, &input, &input_len, &is_vec);
   int quality = (int)luaL_optinteger(L, 2, BROTLI_DEFAULT_QUALITY);
   int lgwin = (int)luaL_optinteger(L, 3, BROTLI_DEFAULT_WINDOW);
-  luaL_argcheck(L, quality >= BROTLI_MIN_QUALITY &&
-                quality <= BROTLI_MAX_QUALITY, 2,
-                "quality must be 0-11");
-  luaL_argcheck(L, lgwin >= BROTLI_MIN_WINDOW_BITS &&
-                lgwin <= BROTLI_MAX_WINDOW_BITS, 3,
-                "lgwin must be 10-24");
+  luaL_argcheck(L,
+                quality >= BROTLI_MIN_QUALITY && quality <= BROTLI_MAX_QUALITY,
+                2, "quality must be 0-11");
+  luaL_argcheck(
+      L, lgwin >= BROTLI_MIN_WINDOW_BITS && lgwin <= BROTLI_MAX_WINDOW_BITS, 3,
+      "lgwin must be 10-24");
 
   size_t out_len = BrotliEncoderMaxCompressedSize(input_len);
   if (out_len == 0)
-    out_len = input_len + 256;  /* fallback for empty input */
+    out_len = input_len + 256; /* fallback for empty input */
   luaL_Buffer buf;
   char *out = luaL_buffinitsize(L, &buf, out_len);
 
-  BROTLI_BOOL ok = BrotliEncoderCompress(
-      quality, lgwin, BROTLI_MODE_GENERIC,
-      input_len, (const uint8_t *)input,
-      &out_len, (uint8_t *)out);
+  BROTLI_BOOL ok =
+      BrotliEncoderCompress(quality, lgwin, BROTLI_MODE_GENERIC, input_len,
+                            (const uint8_t *)input, &out_len, (uint8_t *)out);
 
   if (!ok)
     return luaL_error(L, "brotli compress failed");
@@ -423,7 +421,8 @@ static int archive_brotli_decompress(lua_State *L) {
 
   /* Start with input_len*4 or minimum 256 */
   size_t out_cap = (input_len > 0) ? input_len * 4 : 256;
-  if (out_cap < 256) out_cap = 256;
+  if (out_cap < 256)
+    out_cap = 256;
 
   BrotliDecoderState *state = BrotliDecoderCreateInstance(NULL, NULL, NULL);
   if (!state)
@@ -440,8 +439,8 @@ static int archive_brotli_decompress(lua_State *L) {
     char *out = luaL_prepbuffsize(&buf, out_cap);
     uint8_t *next_out = (uint8_t *)out;
     size_t avail_out = out_cap;
-    result = BrotliDecoderDecompressStream(
-        state, &avail_in, &next_in, &avail_out, &next_out, NULL);
+    result = BrotliDecoderDecompressStream(state, &avail_in, &next_in,
+                                           &avail_out, &next_out, NULL);
     luaL_addsize(&buf, out_cap - avail_out);
     if (result == BROTLI_DECODER_RESULT_ERROR) {
       BrotliDecoderDestroyInstance(state);
@@ -491,8 +490,7 @@ static int archive_lz4_compress(lua_State *L) {
 
   size_t result = LZ4F_compressFrame(out, bound, input, input_len, &prefs);
   if (LZ4F_isError(result))
-    return luaL_error(L, "lz4 compress failed: %s",
-                      LZ4F_getErrorName(result));
+    return luaL_error(L, "lz4 compress failed: %s", LZ4F_getErrorName(result));
 
   if (is_vec) {
     luaL_pushresultsize(&buf, 0);
@@ -525,20 +523,21 @@ static int archive_lz4_decompress_impl(lua_State *L) {
 
   while (src_remaining > 0) {
     size_t chunk = (input_len > 0) ? input_len * 4 : 256;
-    if (chunk < 256) chunk = 256;
+    if (chunk < 256)
+      chunk = 256;
     char *out = luaL_prepbuffsize(&buf, chunk);
     size_t dst_size = chunk;
     size_t src_size = src_remaining;
     size_t ret = LZ4F_decompress(dctx, out, &dst_size, src, &src_size, NULL);
     if (LZ4F_isError(ret)) {
       LZ4F_freeDecompressionContext(dctx);
-      return luaL_error(L, "lz4 decompress failed: %s",
-                        LZ4F_getErrorName(ret));
+      return luaL_error(L, "lz4 decompress failed: %s", LZ4F_getErrorName(ret));
     }
     luaL_addsize(&buf, dst_size);
     src += src_size;
     src_remaining -= src_size;
-    if (ret == 0) break;  /* frame fully decoded */
+    if (ret == 0)
+      break; /* frame fully decoded */
   }
 
   LZ4F_freeDecompressionContext(dctx);
@@ -577,8 +576,7 @@ static int archive_lz4_decompress_hc(lua_State *L) {
 ** tbl.archive.gzip = {} if they don't exist.
 ** Leaves the deepest table on top of the stack.
 */
-static void push_nested(lua_State *L, int idx, const char *k1,
-                        const char *k2) {
+static void push_nested(lua_State *L, int idx, const char *k1, const char *k2) {
   idx = lua_absindex(L, idx);
   /* tbl[k1] */
   if (lua_getfield(L, idx, k1) != LUA_TTABLE) {
@@ -607,7 +605,7 @@ static void register_fn(lua_State *L, const char *name, lua_CFunction fn) {
 
 
 void lus_archive_register(lua_State *L) {
-  int vec_idx = lua_gettop(L);  /* vector table is at top */
+  int vec_idx = lua_gettop(L); /* vector table is at top */
 
   /* vector.archive.gzip */
   push_nested(L, vec_idx, "archive", "gzip");

@@ -565,10 +565,10 @@ static const char *clearbuff(BuffFS *buff) {
   const char *res;
   CCatchInfo cinfo;
   CPROTECT_BEGIN(L, &cinfo)
-    pushbuff(L, buff);
+  pushbuff(L, buff);
   CPROTECT_END(L, &cinfo);
   if (cinfo.status != LUA_OK) /* errors? */
-    res = NULL; /* error message is on the top of the stack */
+    res = NULL;               /* error message is on the top of the stack */
   else
     res = getstr(tsvalue(s2v(L->top.p - 1)));
   if (buff->b != buff->space)                   /* using dynamic buffer? */
