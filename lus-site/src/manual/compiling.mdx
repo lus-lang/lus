@@ -13,6 +13,7 @@ You will need the following tools to compile the runtime:
 - The [Meson build system](https://mesonbuild.com/).
 - OpenSSL development libraries (for HTTPS support)
 - c-ares development libraries (for async DNS)
+- Compression libraries: zlib, zstd, brotli, and lz4 (for `vector.archive`)
 - A threading library (pthreads; included by default on most systems)
 - readline (macOS) or libedit (FreeBSD/NetBSD/OpenBSD) for the REPL
 
@@ -20,22 +21,22 @@ You will need the following tools to compile the runtime:
 
 ```bash
 # macOS (Homebrew)
-brew install openssl c-ares
+brew install openssl c-ares zstd brotli lz4
 
 # Ubuntu/Debian
-sudo apt install libssl-dev libc-ares-dev
+sudo apt install libssl-dev libc-ares-dev zlib1g-dev libzstd-dev libbrotli-dev liblz4-dev
 
 # Fedora/RHEL
-sudo dnf install openssl-devel c-ares-devel
+sudo dnf install openssl-devel c-ares-devel zlib-devel libzstd-devel brotli-devel lz4-devel
 
 # FreeBSD/NetBSD/OpenBSD
-pkg install openssl c-ares libedit
+pkg install openssl c-ares libedit zstd brotli liblz4
 
 # Arch Linux
-sudo pacman -S openssl c-ares
+sudo pacman -S openssl c-ares zlib zstd brotli lz4
 
 # Windows (vcpkg)
-vcpkg install openssl c-ares
+vcpkg install openssl c-ares zlib zstd brotli lz4
 ```
 
 ## Building

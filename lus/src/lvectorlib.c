@@ -479,7 +479,14 @@ static const luaL_Reg veclib[] = {
 };
 
 
+#ifndef LUS_NO_ARCHIVE
+extern void lus_archive_register(lua_State *L);
+#endif
+
 LUAMOD_API int luaopen_vector(lua_State *L) {
   luaL_newlib(L, veclib);
+#ifndef LUS_NO_ARCHIVE
+  lus_archive_register(L);
+#endif
   return 1;
 }

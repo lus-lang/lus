@@ -1,0 +1,115 @@
+---
+order: 126
+title: "Acquis 26 - Compression"
+acquis: true
+shortdesc: "Compression and decompression via the vector.archive module, supporting gzip, deflate, zstd, brotli, and lz4."
+draft: true
+---
+
+The `vector.archive` module provides compression and decompression using five industry-standard algorithms. All functions accept strings or vector buffers as input and return the matching type.
+
+## Gzip
+
+Compress and decompress using gzip format (deflate with gzip header, per RFC 1952).
+
+```lus
+local compressed = vector.archive.gzip.compress("hello world", 6)
+local original = vector.archive.gzip.decompress(compressed)
+assert(original == "hello world")
+
+-- Vector buffers
+local buf = vector.create("hello world")
+local cbuf = vector.archive.gzip.compress(buf)
+local obuf = vector.archive.gzip.decompress(cbuf)
+```
+
+The optional `level` parameter (0-9, default 6) controls the trade-off between speed and compression ratio. Level 0 stores data without compression; level 9 produces the smallest output.
+
+## Raw deflate
+
+Compress and decompress using raw deflate format (RFC 1951), without gzip or zlib headers.
+
+```lus
+local compressed = vector.archive.deflate.compress("raw data", 5)
+local original = vector.archive.deflate.decompress(compressed)
+```
+
+Suitable for embedding in custom container formats. No CRC or checksum is included; the caller is responsible for integrity verification.
+
+## Zstandard
+
+Compress and decompress using Zstandard (RFC 8878), a modern algorithm with excellent speed-to-ratio balance.
+
+```lus
+local compressed = vector.archive.zstd.compress("data", 3)
+local original = vector.archive.zstd.decompress(compressed)
+
+-- Ultra-fast
+local fast = vector.archive.zstd.compress("data", -3)
+
+-- Maximum compression
+local best = vector.archive.zstd.compress("data", 22)
+```
+
+The `level` parameter ranges from -7 (ultra-fast, low compression) to 22 (maximum compression). Default is 3.
+
+## Brotli
+
+Compress and decompress using Brotli (RFC 7932), optimized for web content and text.
+
+```lus
+local compressed = vector.archive.brotli.compress("text content", 11)
+local original = vector.archive.brotli.decompress(compressed)
+
+-- Fast compression with smaller window
+local fast = vector.archive.brotli.compress("data", 3, 16)
+```
+
+The `quality` parameter (0-11, default 11) controls compression quality. The optional `lgwin` parameter (10-24, default 22) sets the LZ77 window size as a power of two.
+
+## LZ4
+
+Compress and decompress using LZ4, an extremely fast lossless compression algorithm.
+
+```lus
+local compressed = vector.archive.lz4.compress("streaming data", 1)
+local original = vector.archive.lz4.decompress(compressed)
+
+-- Higher compression
+local better = vector.archive.lz4.compress("data", 10)
+```
+
+The `level` parameter (1-12, default 1) controls the speed-ratio trade-off. LZ4 prioritizes speed over compression ratio.
+
+## Type preservation
+
+All functions preserve the input type. Passing a string returns a string; passing a vector returns a vector.
+
+```lus
+local s = vector.archive.gzip.compress("string input")
+assert(type(s) == "string")
+
+local v = vector.archive.gzip.compress(vector.create("vector input"))
+assert(type(v) == "vector")
+```
+
+## Error handling
+
+All functions raise errors on invalid input, corrupted data, or out-of-range parameters.
+
+```lus
+-- Type error
+local ok, err = catch vector.archive.gzip.compress(42)
+
+-- Corruption error
+local ok, err = catch vector.archive.gzip.decompress("not gzip data")
+
+-- Range error
+local ok, err = catch vector.archive.gzip.compress("data", 15)
+```
+
+---
+
+## Motivation
+
+Compression is essential for network transfer, storage, and data processing. By bundling multiple algorithms, Lus covers the full spectrum of use cases without external dependencies: LZ4 for real-time streaming, zstd for general-purpose use, brotli for web content, and gzip/deflate for universal compatibility.

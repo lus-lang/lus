@@ -103,6 +103,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#collectgarbage">collectgarbage</a>
             <a href="#dofile">dofile</a>
             <a href="#error">error</a>
+            <a href="#fromcsv" data-from="lus-unstable">fromcsv</a>
             <a href="#fromjson" data-from="lus">fromjson</a>
             <a href="#getmetatable">getmetatable</a>
             <a href="#ipairs">ipairs</a>
@@ -120,6 +121,7 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#require">require</a>
             <a href="#select">select</a>
             <a href="#setmetatable">setmetatable</a>
+            <a href="#tocsv" data-from="lus-unstable">tocsv</a>
             <a href="#tojson" data-from="lus">tojson</a>
             <a href="#tonumber">tonumber</a>
             <a href="#tostring">tostring</a>
@@ -201,6 +203,33 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#file:seek">file:seek</a>
             <a href="#file:setvbuf">file:setvbuf</a>
             <a href="#file:write">file:write</a>
+          </p>
+          <h3>Table</h3>
+          <p>
+            <a href="#table.clone" data-from="lus">table.clone</a>
+            <a href="#table.concat">table.concat</a>
+            <a href="#table.create">table.create</a>
+            <a href="#table.filter" data-from="lus-unstable">table.filter</a>
+            <a href="#table.groupby" data-from="lus-unstable">table.groupby</a>
+            <a href="#table.insert">table.insert</a>
+            <a href="#table.map" data-from="lus-unstable">table.map</a>
+            <a href="#table.mean" data-from="lus-unstable">table.mean</a>
+            <a href="#table.median" data-from="lus-unstable">table.median</a>
+            <a href="#table.move">table.move</a>
+            <a href="#table.pack">table.pack</a>
+            <a href="#table.reduce" data-from="lus-unstable">table.reduce</a>
+            <a href="#table.remove">table.remove</a>
+            <a href="#table.reshape" data-from="lus-unstable">table.reshape</a>
+            <a href="#table.sort">table.sort</a>
+            <a href="#table.sortby" data-from="lus-unstable">table.sortby</a>
+            <a href="#table.stdev" data-from="lus-unstable">table.stdev</a>
+            <a href="#table.sum" data-from="lus-unstable">table.sum</a>
+            <a href="#table.transpose" data-from="lus-unstable"
+              >table.transpose</a
+            >
+            <a href="#table.unpack">table.unpack</a>
+            <a href="#table.unzip" data-from="lus-unstable">table.unzip</a>
+            <a href="#table.zip" data-from="lus-unstable">table.zip</a>
           </p></td
         >
         <td>
@@ -303,29 +332,22 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#string.format">string.format</a>
             <a href="#string.gmatch">string.gmatch</a>
             <a href="#string.gsub">string.gsub</a>
+            <a href="#string.join" data-from="lus-unstable">string.join</a>
             <a href="#string.len">string.len</a>
             <a href="#string.lower">string.lower</a>
+            <a href="#string.ltrim" data-from="lus-unstable">string.ltrim</a>
             <a href="#string.match">string.match</a>
             <a href="#string.pack">string.pack</a>
             <a href="#string.packsize">string.packsize</a>
             <a href="#string.rep">string.rep</a>
             <a href="#string.reverse">string.reverse</a>
+            <a href="#string.rtrim" data-from="lus-unstable">string.rtrim</a>
+            <a href="#string.split" data-from="lus-unstable">string.split</a>
             <a href="#string.sub">string.sub</a>
             <a data-from="lus" href="#string.transcode">string.transcode</a>
+            <a href="#string.trim" data-from="lus-unstable">string.trim</a>
             <a href="#string.unpack">string.unpack</a>
             <a href="#string.upper">string.upper</a>
-          </p>
-          <h3>Table</h3>
-          <p>
-            <a href="#table.clone" data-from="lus">table.clone</a>
-            <a href="#table.concat">table.concat</a>
-            <a href="#table.create">table.create</a>
-            <a href="#table.insert">table.insert</a>
-            <a href="#table.move">table.move</a>
-            <a href="#table.pack">table.pack</a>
-            <a href="#table.remove">table.remove</a>
-            <a href="#table.sort">table.sort</a>
-            <a href="#table.unpack">table.unpack</a>
           </p>
           <h3>Vector</h3>
           <p>
@@ -336,6 +358,43 @@ import ManualAPI from "../../../components/ManualAPI.astro"
             <a href="#vector.size" data-from="lus">vector.size</a>
             <a href="#vector.resize" data-from="lus">vector.resize</a>
             <a href="#vector.unpackmany" data-from="lus">vector.unpackmany</a>
+          </p>
+          <h3>Compression</h3>
+          <p>
+            <a href="#vector.archive.brotli.compress" data-from="lus-unstable"
+              >vector.archive.brotli.compress</a
+            >
+            <a href="#vector.archive.brotli.decompress" data-from="lus-unstable"
+              >vector.archive.brotli.decompress</a
+            >
+            <a href="#vector.archive.deflate.compress" data-from="lus-unstable"
+              >vector.archive.deflate.compress</a
+            >
+            <a
+              href="#vector.archive.deflate.decompress"
+              data-from="lus-unstable">vector.archive.deflate.decompress</a
+            >
+            <a href="#vector.archive.gzip.compress" data-from="lus-unstable"
+              >vector.archive.gzip.compress</a
+            >
+            <a href="#vector.archive.gzip.decompress" data-from="lus-unstable"
+              >vector.archive.gzip.decompress</a
+            >
+            <a href="#vector.archive.lz4.compress" data-from="lus-unstable"
+              >vector.archive.lz4.compress</a
+            >
+            <a href="#vector.archive.lz4.decompress" data-from="lus-unstable"
+              >vector.archive.lz4.decompress</a
+            >
+            <a href="#vector.archive.lz4.decompress_hc" data-from="lus-unstable"
+              >vector.archive.lz4.decompress_hc</a
+            >
+            <a href="#vector.archive.zstd.compress" data-from="lus-unstable"
+              >vector.archive.zstd.compress</a
+            >
+            <a href="#vector.archive.zstd.decompress" data-from="lus-unstable"
+              >vector.archive.zstd.decompress</a
+            >
           </p>
           <h3>UTF-8</h3>
           <p>

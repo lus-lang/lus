@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.6.0 (**WIP**)
+
+**Release date:** TBD
+
+- Added `fromcsv` and `tocsv` to parse CSV files.
+- Added `table.sum` to compute the sum of numeric values.
+- Added `table.mean` to compute the arithmetic mean.
+- Added `table.median` to compute the median.
+- Added `table.stdev` to compute the standard deviation.
+- Added `table.map` to apply a function to each element.
+- Added `table.filter` to select elements by predicate.
+- Added `table.reduce` to fold a table into a single value.
+- Added `table.groupby` to group elements by a key function.
+- Added `table.sortby` to sort in-place by a key function.
+- Added `table.zip` to combine tables element-wise into tuples.
+- Added `table.unzip` to split tuples into separate tables.
+- Added `table.transpose` to transpose a 2D matrix.
+- Added `table.reshape` to reshape a 1D array into a matrix.
+- Added `string.split` to split a string on a delimiter.
+- Added `string.join` to join table elements with a delimiter.
+- Added `string.trim` to remove leading and trailing characters.
+- Added `string.ltrim` to remove leading characters.
+- Added `string.rtrim` to remove trailing characters.
+- Added `vector.archive.gzip.compress` and `vector.archive.gzip.decompress` for gzip compression.
+- Added `vector.archive.deflate.compress` and `vector.archive.deflate.decompress` for raw deflate compression.
+- Added `vector.archive.zstd.compress` and `vector.archive.zstd.decompress` for Zstandard compression.
+- Added `vector.archive.brotli.compress` and `vector.archive.brotli.decompress` for Brotli compression.
+- Added `vector.archive.lz4.compress`, `vector.archive.lz4.decompress`, and `vector.archive.lz4.decompress_hc` for LZ4 compression.
+
 ## 1.5.1
 
 **Release date:** March 6, 2026

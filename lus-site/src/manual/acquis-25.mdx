@@ -1,0 +1,236 @@
+---
+order: 125
+title: Acquis 25 - Data Processing
+acquis: true
+shortdesc: "Data processing extensions to the table and string modules."
+draft: true
+---
+
+Extensions to the `table` and `string` standard libraries for common data processing operations: aggregation, transformation, matrix operations, and string manipulation.
+
+## Table aggregation
+
+### table.sum
+
+Computes the sum of numeric values in a table. Non-numeric values are skipped. Returns `0` for an empty table.
+
+```lus
+local total = table.sum({1, 2, 3, 4, 5})
+assert(total == 15)
+
+assert(table.sum({1, "skip", 2, 3}) == 6)
+assert(table.sum({}) == 0)
+```
+
+### table.mean
+
+Computes the arithmetic mean of numeric values. Returns `0/0` (NaN) if no numeric values exist.
+
+```lus
+assert(table.mean({1, 2, 3, 4, 5}) == 3)
+assert(table.mean({10, 20}) == 15)
+
+local nan = table.mean({})
+assert(nan ~= nan) -- NaN
+```
+
+### table.median
+
+Computes the median of numeric values. Returns the middle value for odd-length arrays, or the average of the two middle values for even-length arrays. Does not modify the original table.
+
+```lus
+assert(table.median({5, 1, 3, 2, 4}) == 3)
+assert(table.median({1, 2, 3, 4}) == 2.5)
+```
+
+### table.stdev
+
+Computes the standard deviation of numeric values. When `sample` is `true`, divides by n-1 (sample standard deviation); otherwise divides by n (population standard deviation).
+
+```lus
+local values = {2, 4, 4, 4, 5, 5, 7, 9}
+local pop = table.stdev(values)        -- population
+local sam = table.stdev(values, true)  -- sample
+```
+
+## Table transformation
+
+### table.map
+
+Applies a function to each element, returning a new table of results. The function receives `(element, index)`.
+
+```lus
+local doubled = table.map({1, 2, 3}, function(x) return x * 2 end)
+assert(doubled[1] == 2 and doubled[2] == 4 and doubled[3] == 6)
+
+local names = table.map(
+    {{name = "Alice"}, {name = "Bob"}},
+    function(p) return p.name end
+)
+assert(names[1] == "Alice")
+```
+
+### table.filter
+
+Returns a new table containing only elements for which the predicate returns a truthy value.
+
+```lus
+local evens = table.filter({1, 2, 3, 4, 5}, function(x) return x % 2 == 0 end)
+assert(#evens == 2)
+assert(evens[1] == 2 and evens[2] == 4)
+```
+
+### table.reduce
+
+Reduces a table to a single value by iteratively applying a function. The function receives `(accumulator, element, index)`. If no initial value is provided, the first element is used.
+
+```lus
+local sum = table.reduce({1, 2, 3, 4, 5}, function(acc, x) return acc + x end, 0)
+assert(sum == 15)
+
+local product = table.reduce({1, 2, 3, 4}, function(acc, x) return acc * x end)
+assert(product == 24)
+```
+
+### table.groupby
+
+Groups elements by the result of a key function.
+
+```lus
+local people = {
+    {name = "Alice", dept = "eng"},
+    {name = "Bob", dept = "sales"},
+    {name = "Charlie", dept = "eng"},
+}
+
+local by_dept = table.groupby(people, function(p) return p.dept end)
+assert(#by_dept.eng == 2)
+assert(#by_dept.sales == 1)
+```
+
+### table.sortby
+
+Sorts a table in-place by a key function. When `asc` is `false`, sorts in descending order. Default is ascending.
+
+```lus
+local people = {
+    {name = "Charlie", age = 35},
+    {name = "Alice", age = 30},
+    {name = "Bob", age = 25},
+}
+
+table.sortby(people, function(p) return p.age end)
+assert(people[1].name == "Bob")
+
+table.sortby(people, function(p) return p.age end, false)
+assert(people[1].name == "Charlie")
+```
+
+## Table combining
+
+### table.zip
+
+Combines multiple tables element-wise into a table of tuples. The result length equals the shortest input.
+
+```lus
+local names = {"Alice", "Bob", "Charlie"}
+local ages = {30, 25, 35}
+
+local zipped = table.zip(names, ages)
+assert(zipped[1][1] == "Alice" and zipped[1][2] == 30)
+assert(zipped[2][1] == "Bob" and zipped[2][2] == 25)
+```
+
+### table.unzip
+
+Splits a table of tuples into separate tables (inverse of `zip`).
+
+```lus
+local zipped = {{"Alice", 30}, {"Bob", 25}}
+local names, ages = table.unzip(zipped)
+assert(names[1] == "Alice" and ages[2] == 25)
+```
+
+## Matrix operations
+
+### table.transpose
+
+Transposes a 2D table (matrix) so that `result[i][j] == matrix[j][i]`.
+
+```lus
+local m = {{1, 2, 3}, {4, 5, 6}}
+local t = table.transpose(m)
+assert(t[1][1] == 1 and t[1][2] == 4)
+assert(t[2][1] == 2 and t[2][2] == 5)
+assert(t[3][1] == 3 and t[3][2] == 6)
+```
+
+### table.reshape
+
+Reshapes a 1D array into a 2D matrix with the specified dimensions, filled in row-major order. The array length must equal `rows * cols`.
+
+```lus
+local arr = {1, 2, 3, 4, 5, 6}
+local matrix = table.reshape(arr, 2, 3)
+assert(matrix[1][1] == 1 and matrix[1][3] == 3)
+assert(matrix[2][1] == 4 and matrix[2][3] == 6)
+```
+
+## String operations
+
+### string.split
+
+Splits a string on a literal delimiter. An empty delimiter splits into individual characters.
+
+```lus
+local parts = string.split("apple,banana,cherry", ",")
+assert(parts[1] == "apple" and parts[3] == "cherry")
+
+local chars = string.split("hello", "")
+assert(#chars == 5 and chars[1] == "h")
+
+-- Consecutive delimiters produce empty strings
+local dirs = string.split("a//b", "/")
+assert(dirs[1] == "a" and dirs[2] == "" and dirs[3] == "b")
+```
+
+### string.join
+
+Joins table elements into a single string with a delimiter. Non-string values are converted via `tostring`.
+
+```lus
+assert(string.join({"hello", "world"}, " ") == "hello world")
+assert(string.join({1, 2, 3}, ",") == "1,2,3")
+assert(string.join({}, ",") == "")
+```
+
+### string.trim, string.ltrim, string.rtrim
+
+Remove leading and/or trailing whitespace (or specified characters) from a string.
+
+```lus
+assert(string.trim("  hello  ") == "hello")
+assert(string.ltrim("  hello  ") == "hello  ")
+assert(string.rtrim("  hello  ") == "  hello")
+
+-- Custom characters
+assert(string.trim("xxxhelloxxx", "x") == "hello")
+assert(string.ltrim("...test", ".") == "test")
+assert(string.rtrim("test...", ".") == "test")
+```
+
+---
+
+## Motivation
+
+### Data processing without dependencies
+
+Lus is designed to be productive out of the box. Operations like filtering, mapping, grouping, and statistical aggregation are foundational to data processing. Providing them in the standard library eliminates the need for external dependencies in common workflows.
+
+### Consistency with existing patterns
+
+The `table` and `string` modules already provide core operations. These extensions follow the same conventions: functions on existing modules, consistent parameter ordering, and predictable error behavior. The `table.sort` function already exists; `table.sortby` extends it for the common case of sorting by a derived key.
+
+### String gaps
+
+Lua's string library lacks basic operations like splitting, joining, and trimming that are standard in other languages. These are among the most frequently reimplemented utilities in Lua codebases.

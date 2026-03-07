@@ -82,6 +82,7 @@ SOURCES=(
   "$SRC_DIR/linit.c"
   "$SRC_DIR/liolib.c"
   "$SRC_DIR/ljsonlib.c"
+  "$SRC_DIR/lcsvlib.c"
   "$SRC_DIR/larena.c"
   "$SRC_DIR/last.c"
   "$SRC_DIR/llex.c"
@@ -127,6 +128,7 @@ COMMON_FLAGS=(
   --embed-file "$REPO_ROOT/lus-language@/lus-language"
   -O2
   -DLUA_USE_C89
+  -DLUS_NO_ARCHIVE
 )
 
 build_target() {

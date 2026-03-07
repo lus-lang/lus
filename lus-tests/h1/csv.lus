@@ -1,0 +1,350 @@
+global assert, type, fromcsv, tocsv, require, string, tostring, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("csv")
+
+-- ============================================================
+-- fromcsv tests
+-- ============================================================
+
+tests:it("fromcsv parses single row", function()
+    local d = fromcsv("a,b,c")
+    assert(#d == 1, "should have 1 row")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "c")
+end)
+
+tests:it("fromcsv parses multiple rows", function()
+    local d = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London")
+    assert(#d == 3, "should have 3 rows")
+    assert(d[1][1] == "name")
+    assert(d[2][1] == "Alice")
+    assert(d[2][2] == "30")
+    assert(d[3][1] == "Bob")
+    assert(d[3][3] == "London")
+end)
+
+tests:it("fromcsv parses empty string", function()
+    local d = fromcsv("")
+    assert(#d == 0, "empty input should produce empty table")
+end)
+
+tests:it("fromcsv parses empty fields", function()
+    local d = fromcsv(",b,\n,,")
+    assert(d[1][1] == "", "first field empty")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "", "third field empty")
+    assert(d[2][1] == "")
+    assert(d[2][2] == "")
+    assert(d[2][3] == "")
+end)
+
+tests:it("fromcsv parses single field", function()
+    local d = fromcsv("hello")
+    assert(#d == 1)
+    assert(d[1][1] == "hello")
+end)
+
+tests:it("fromcsv handles CRLF line endings", function()
+    local d = fromcsv("a,b\r\nc,d\r\n")
+    assert(#d == 2)
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[2][1] == "c")
+    assert(d[2][2] == "d")
+end)
+
+tests:it("fromcsv handles trailing newline", function()
+    local d = fromcsv("a,b\nc,d\n")
+    assert(#d == 2, "trailing newline should not create extra row")
+end)
+
+-- ============================================================
+-- fromcsv quoted fields
+-- ============================================================
+
+tests:it("fromcsv parses quoted field", function()
+    local d = fromcsv('"hello"')
+    assert(d[1][1] == "hello")
+end)
+
+tests:it("fromcsv parses quoted field with comma", function()
+    local d = fromcsv('"hello, world",test')
+    assert(d[1][1] == "hello, world")
+    assert(d[1][2] == "test")
+end)
+
+tests:it("fromcsv parses quoted field with newline", function()
+    local d = fromcsv('"line1\nline2",b')
+    assert(d[1][1] == "line1\nline2")
+    assert(d[1][2] == "b")
+end)
+
+tests:it("fromcsv parses escaped double quotes", function()
+    local d = fromcsv('"she said ""hi""",other')
+    assert(d[1][1] == 'she said "hi"')
+    assert(d[1][2] == "other")
+end)
+
+tests:it("fromcsv parses empty quoted field", function()
+    local d = fromcsv('"",b')
+    assert(d[1][1] == "")
+    assert(d[1][2] == "b")
+end)
+
+tests:it("fromcsv errors on unterminated quote", function()
+    local ok, err = catch fromcsv('"unterminated')
+    assert(not ok, "should error on unterminated quote")
+end)
+
+-- ============================================================
+-- fromcsv headers mode
+-- ============================================================
+
+tests:it("fromcsv headers mode", function()
+    local d = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London", true)
+    assert(#d == 2, "header row should not be in result")
+    assert(d[1].name == "Alice")
+    assert(d[1].age == "30")
+    assert(d[1].city == "Paris")
+    assert(d[2].name == "Bob")
+    assert(d[2].age == "25")
+    assert(d[2].city == "London")
+end)
+
+tests:it("fromcsv headers mode with single data row", function()
+    local d = fromcsv("x,y\n1,2", true)
+    assert(#d == 1)
+    assert(d[1].x == "1")
+    assert(d[1].y == "2")
+end)
+
+tests:it("fromcsv headers mode with no data rows", function()
+    local d = fromcsv("x,y\n", true)
+    assert(#d == 0, "no data rows should produce empty table")
+end)
+
+-- ============================================================
+-- fromcsv custom delimiter
+-- ============================================================
+
+tests:it("fromcsv with tab delimiter", function()
+    local d = fromcsv("a\tb\n1\t2", false, "\t")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[2][1] == "1")
+    assert(d[2][2] == "2")
+end)
+
+tests:it("fromcsv with semicolon delimiter", function()
+    local d = fromcsv("a;b;c", false, ";")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "c")
+end)
+
+tests:it("fromcsv with pipe delimiter", function()
+    local d = fromcsv("a|b|c", false, "|")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "c")
+end)
+
+tests:it("fromcsv delimiter must be single char", function()
+    local ok = catch fromcsv("a,b", false, ",,")
+    assert(not ok, "multi-char delimiter should error")
+end)
+
+-- ============================================================
+-- fromcsv error handling
+-- ============================================================
+
+tests:it("fromcsv errors on non-string", function()
+    local ok = catch fromcsv(true)
+    assert(not ok, "boolean should error")
+end)
+
+-- ============================================================
+-- tocsv tests
+-- ============================================================
+
+tests:it("tocsv serializes single row", function()
+    local csv = tocsv({{"a", "b", "c"}})
+    assert(csv == "a,b,c\n")
+end)
+
+tests:it("tocsv serializes multiple rows", function()
+    local csv = tocsv({
+        {"name", "age", "city"},
+        {"Alice", "30", "Paris"},
+        {"Bob", "25", "London"},
+    })
+    assert(csv == "name,age,city\nAlice,30,Paris\nBob,25,London\n")
+end)
+
+tests:it("tocsv serializes empty table", function()
+    local csv = tocsv({})
+    assert(csv == "")
+end)
+
+tests:it("tocsv serializes empty row", function()
+    local csv = tocsv({{}})
+    assert(csv == "\n")
+end)
+
+-- ============================================================
+-- tocsv auto-quoting
+-- ============================================================
+
+tests:it("tocsv quotes field with comma", function()
+    local csv = tocsv({{"hello, world"}})
+    assert(csv == '"hello, world"\n')
+end)
+
+tests:it("tocsv quotes field with newline", function()
+    local csv = tocsv({{"line1\nline2"}})
+    assert(csv == '"line1\nline2"\n')
+end)
+
+tests:it("tocsv escapes double quotes", function()
+    local csv = tocsv({{'say "hi"'}})
+    assert(csv == '"say ""hi"""\n')
+end)
+
+tests:it("tocsv quotes field with carriage return", function()
+    local csv = tocsv({{"a\rb"}})
+    assert(csv == '"a\rb"\n')
+end)
+
+-- ============================================================
+-- tocsv non-string values
+-- ============================================================
+
+tests:it("tocsv converts numbers", function()
+    local csv = tocsv({{1, 2, 3}})
+    assert(csv == "1,2,3\n")
+end)
+
+tests:it("tocsv converts booleans", function()
+    local csv = tocsv({{true, false}})
+    assert(csv == "true,false\n")
+end)
+
+tests:it("tocsv converts floats", function()
+    local csv = tocsv({{3.14}})
+    assert(csv == "3.14\n")
+end)
+
+-- ============================================================
+-- tocsv custom delimiter
+-- ============================================================
+
+tests:it("tocsv with tab delimiter", function()
+    local csv = tocsv({{"a", "b"}, {"c", "d"}}, "\t")
+    assert(csv == "a\tb\nc\td\n")
+end)
+
+tests:it("tocsv with semicolon delimiter", function()
+    local csv = tocsv({{"a", "b", "c"}}, ";")
+    assert(csv == "a;b;c\n")
+end)
+
+tests:it("tocsv delimiter must be single char", function()
+    local ok = catch tocsv({{"a"}}, ",,")
+    assert(not ok, "multi-char delimiter should error")
+end)
+
+-- ============================================================
+-- tocsv error handling
+-- ============================================================
+
+tests:it("tocsv errors on non-table", function()
+    local ok = catch tocsv("not a table")
+    assert(not ok, "string should error")
+end)
+
+tests:it("tocsv errors on non-table row", function()
+    local ok = catch tocsv({"not a table"})
+    assert(not ok, "string row should error")
+end)
+
+-- ============================================================
+-- roundtrip tests
+-- ============================================================
+
+tests:it("roundtrip preserves simple data", function()
+    local original = {{"name", "age"}, {"Alice", "30"}, {"Bob", "25"}}
+    local csv = tocsv(original)
+    local parsed = fromcsv(csv)
+    assert(#parsed == 3)
+    assert(parsed[1][1] == "name")
+    assert(parsed[2][1] == "Alice")
+    assert(parsed[3][2] == "25")
+end)
+
+tests:it("roundtrip preserves quoted fields", function()
+    local original = {{"hello, world", 'say "hi"'}}
+    local csv = tocsv(original)
+    local parsed = fromcsv(csv)
+    assert(parsed[1][1] == "hello, world")
+    assert(parsed[1][2] == 'say "hi"')
+end)
+
+tests:it("roundtrip preserves fields with newlines", function()
+    local original = {{"line1\nline2", "normal"}}
+    local csv = tocsv(original)
+    local parsed = fromcsv(csv)
+    assert(parsed[1][1] == "line1\nline2")
+    assert(parsed[1][2] == "normal")
+end)
+
+tests:it("roundtrip with custom delimiter", function()
+    local original = {{"a", "b"}, {"c", "d"}}
+    local csv = tocsv(original, "\t")
+    local parsed = fromcsv(csv, false, "\t")
+    assert(parsed[1][1] == "a")
+    assert(parsed[2][2] == "d")
+end)
+
+-- ============================================================
+-- stress tests
+-- ============================================================
+
+tests:it("large number of rows", function()
+    local rows = {}
+    for i = 1, 1000 do
+        rows[i] = {tostring(i), "value" .. tostring(i)}
+    end
+    local csv = tocsv(rows)
+    local parsed = fromcsv(csv)
+    assert(#parsed == 1000, "should have 1000 rows")
+    assert(parsed[1][1] == "1")
+    assert(parsed[500][2] == "value500")
+    assert(parsed[1000][1] == "1000")
+end)
+
+tests:it("large number of columns", function()
+    local row = {}
+    for i = 1, 200 do
+        row[i] = "col" .. tostring(i)
+    end
+    local csv = tocsv({row})
+    local parsed = fromcsv(csv)
+    assert(#parsed == 1)
+    assert(#parsed[1] == 200)
+    assert(parsed[1][1] == "col1")
+    assert(parsed[1][200] == "col200")
+end)
+
+tests:it("long field value", function()
+    local long = string.rep("x", 10000)
+    local csv = tocsv({{long}})
+    local parsed = fromcsv(csv)
+    assert(parsed[1][1] == long)
+    assert(#parsed[1][1] == 10000)
+end)
+
+tests:finish()

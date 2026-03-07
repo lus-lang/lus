@@ -1,0 +1,486 @@
+global assert, type, table, string, require, tostring, pledge, math, select, pairs
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("dataproc")
+
+-- ============================================================
+-- table.sum
+-- ============================================================
+
+tests:it("table.sum basic", function()
+    assert(table.sum({1, 2, 3, 4, 5}) == 15)
+end)
+
+tests:it("table.sum empty table", function()
+    assert(table.sum({}) == 0)
+end)
+
+tests:it("table.sum skips non-numeric", function()
+    assert(table.sum({1, "skip", 2, true, 3}) == 6)
+end)
+
+tests:it("table.sum single element", function()
+    assert(table.sum({42}) == 42)
+end)
+
+tests:it("table.sum with floats", function()
+    assert(table.sum({1.5, 2.5}) == 4.0)
+end)
+
+-- ============================================================
+-- table.mean
+-- ============================================================
+
+tests:it("table.mean basic", function()
+    assert(table.mean({1, 2, 3, 4, 5}) == 3)
+end)
+
+tests:it("table.mean two values", function()
+    assert(table.mean({10, 20}) == 15)
+end)
+
+tests:it("table.mean empty is NaN", function()
+    local nan = table.mean({})
+    assert(nan ~= nan, "empty mean should be NaN")
+end)
+
+tests:it("table.mean skips non-numeric", function()
+    assert(table.mean({10, "skip", 20}) == 15)
+end)
+
+-- ============================================================
+-- table.median
+-- ============================================================
+
+tests:it("table.median odd count", function()
+    assert(table.median({5, 1, 3, 2, 4}) == 3)
+end)
+
+tests:it("table.median even count", function()
+    assert(table.median({1, 2, 3, 4}) == 2.5)
+end)
+
+tests:it("table.median single element", function()
+    assert(table.median({7}) == 7)
+end)
+
+tests:it("table.median empty is NaN", function()
+    local nan = table.median({})
+    assert(nan ~= nan, "empty median should be NaN")
+end)
+
+tests:it("table.median does not modify original", function()
+    local t = {5, 1, 3}
+    table.median(t)
+    assert(t[1] == 5 and t[2] == 1 and t[3] == 3)
+end)
+
+-- ============================================================
+-- table.stdev
+-- ============================================================
+
+tests:it("table.stdev population", function()
+    local values = {2, 4, 4, 4, 5, 5, 7, 9}
+    local sd = table.stdev(values)
+    assert(math.abs(sd - 2.0) < 0.001, "population stdev of test data should be 2.0")
+end)
+
+tests:it("table.stdev sample", function()
+    local values = {2, 4, 4, 4, 5, 5, 7, 9}
+    local sd = table.stdev(values, true)
+    assert(sd > 2.0, "sample stdev should be > population stdev")
+end)
+
+tests:it("table.stdev empty is NaN", function()
+    local nan = table.stdev({})
+    assert(nan ~= nan, "stdev of empty should be NaN")
+end)
+
+tests:it("table.stdev single element population", function()
+    assert(table.stdev({5}) == 0)
+end)
+
+tests:it("table.stdev single element sample is NaN", function()
+    local nan = table.stdev({5}, true)
+    assert(nan ~= nan, "sample stdev of single element should be NaN")
+end)
+
+-- ============================================================
+-- table.map
+-- ============================================================
+
+tests:it("table.map basic", function()
+    local doubled = table.map({1, 2, 3}, function(x) return x * 2 end)
+    assert(doubled[1] == 2 and doubled[2] == 4 and doubled[3] == 6)
+end)
+
+tests:it("table.map receives index", function()
+    local indices = table.map({"a", "b", "c"}, function(_, i) return i end)
+    assert(indices[1] == 1 and indices[2] == 2 and indices[3] == 3)
+end)
+
+tests:it("table.map empty table", function()
+    local result = table.map({}, function(x) return x end)
+    assert(#result == 0)
+end)
+
+tests:it("table.map does not modify original", function()
+    local t = {1, 2, 3}
+    table.map(t, function(x) return x * 10 end)
+    assert(t[1] == 1 and t[2] == 2 and t[3] == 3)
+end)
+
+-- ============================================================
+-- table.filter
+-- ============================================================
+
+tests:it("table.filter basic", function()
+    local evens = table.filter({1, 2, 3, 4, 5}, function(x) return x % 2 == 0 end)
+    assert(#evens == 2)
+    assert(evens[1] == 2 and evens[2] == 4)
+end)
+
+tests:it("table.filter none match", function()
+    local result = table.filter({1, 3, 5}, function(x) return x % 2 == 0 end)
+    assert(#result == 0)
+end)
+
+tests:it("table.filter all match", function()
+    local result = table.filter({2, 4, 6}, function(x) return x % 2 == 0 end)
+    assert(#result == 3)
+end)
+
+tests:it("table.filter empty table", function()
+    local result = table.filter({}, function() return true end)
+    assert(#result == 0)
+end)
+
+-- ============================================================
+-- table.reduce
+-- ============================================================
+
+tests:it("table.reduce with initial value", function()
+    local sum = table.reduce({1, 2, 3, 4, 5}, function(acc, x) return acc + x end, 0)
+    assert(sum == 15)
+end)
+
+tests:it("table.reduce without initial value", function()
+    local product = table.reduce({1, 2, 3, 4}, function(acc, x) return acc * x end)
+    assert(product == 24)
+end)
+
+tests:it("table.reduce empty with initial", function()
+    local result = table.reduce({}, function(acc, x) return acc + x end, 42)
+    assert(result == 42)
+end)
+
+tests:it("table.reduce receives index", function()
+    local indices = {}
+    table.reduce({10, 20, 30}, function(acc, _, i)
+        indices[#indices + 1] = i
+        return acc
+    end, 0)
+    assert(indices[1] == 1 and indices[2] == 2 and indices[3] == 3)
+end)
+
+-- ============================================================
+-- table.groupby
+-- ============================================================
+
+tests:it("table.groupby basic", function()
+    local people = {
+        {name = "Alice", dept = "eng"},
+        {name = "Bob", dept = "sales"},
+        {name = "Charlie", dept = "eng"},
+    }
+    local by_dept = table.groupby(people, function(p) return p.dept end)
+    assert(#by_dept.eng == 2)
+    assert(#by_dept.sales == 1)
+    assert(by_dept.eng[1].name == "Alice")
+    assert(by_dept.eng[2].name == "Charlie")
+end)
+
+tests:it("table.groupby empty", function()
+    local result = table.groupby({}, function(x) return x end)
+    -- result should be an empty table
+    local count = 0
+    for _ in pairs(result) do count = count + 1 end
+    assert(count == 0)
+end)
+
+tests:it("table.groupby single group", function()
+    local result = table.groupby({1, 2, 3}, function() return "all" end)
+    assert(#result.all == 3)
+end)
+
+-- ============================================================
+-- table.sortby
+-- ============================================================
+
+tests:it("table.sortby ascending default", function()
+    local people = {
+        {name = "Charlie", age = 35},
+        {name = "Alice", age = 30},
+        {name = "Bob", age = 25},
+    }
+    table.sortby(people, function(p) return p.age end)
+    assert(people[1].name == "Bob")
+    assert(people[2].name == "Alice")
+    assert(people[3].name == "Charlie")
+end)
+
+tests:it("table.sortby descending", function()
+    local people = {
+        {name = "Charlie", age = 35},
+        {name = "Alice", age = 30},
+        {name = "Bob", age = 25},
+    }
+    table.sortby(people, function(p) return p.age end, false)
+    assert(people[1].name == "Charlie")
+    assert(people[2].name == "Alice")
+    assert(people[3].name == "Bob")
+end)
+
+tests:it("table.sortby single element", function()
+    local t = {{v = 1}}
+    table.sortby(t, function(x) return x.v end)
+    assert(t[1].v == 1)
+end)
+
+tests:it("table.sortby strings", function()
+    local words = {"banana", "apple", "cherry"}
+    table.sortby(words, function(w) return w end)
+    assert(words[1] == "apple")
+    assert(words[2] == "banana")
+    assert(words[3] == "cherry")
+end)
+
+-- ============================================================
+-- table.zip
+-- ============================================================
+
+tests:it("table.zip two tables", function()
+    local names = {"Alice", "Bob", "Charlie"}
+    local ages = {30, 25, 35}
+    local zipped = table.zip(names, ages)
+    assert(zipped[1][1] == "Alice" and zipped[1][2] == 30)
+    assert(zipped[2][1] == "Bob" and zipped[2][2] == 25)
+    assert(zipped[3][1] == "Charlie" and zipped[3][2] == 35)
+end)
+
+tests:it("table.zip three tables", function()
+    local a = {1, 2}
+    local b = {"x", "y"}
+    local c = {true, false}
+    local z = table.zip(a, b, c)
+    assert(z[1][1] == 1 and z[1][2] == "x" and z[1][3] == true)
+    assert(z[2][1] == 2 and z[2][2] == "y" and z[2][3] == false)
+end)
+
+tests:it("table.zip different lengths", function()
+    local a = {1, 2, 3}
+    local b = {"x", "y"}
+    local z = table.zip(a, b)
+    assert(#z == 2) -- shortest input
+end)
+
+tests:it("table.zip no arguments", function()
+    local z = table.zip()
+    assert(#z == 0)
+end)
+
+-- ============================================================
+-- table.unzip
+-- ============================================================
+
+tests:it("table.unzip basic", function()
+    local zipped = {{"Alice", 30}, {"Bob", 25}}
+    local names, ages = table.unzip(zipped)
+    assert(names[1] == "Alice" and names[2] == "Bob")
+    assert(ages[1] == 30 and ages[2] == 25)
+end)
+
+tests:it("table.unzip single column", function()
+    local zipped = {{1}, {2}, {3}}
+    local col1 = table.unzip(zipped)
+    assert(col1[1] == 1 and col1[2] == 2 and col1[3] == 3)
+end)
+
+tests:it("table.unzip empty", function()
+    local count = select("#", table.unzip({}))
+    assert(count == 0)
+end)
+
+-- ============================================================
+-- table.transpose
+-- ============================================================
+
+tests:it("table.transpose 2x3", function()
+    local m = {{1, 2, 3}, {4, 5, 6}}
+    local t = table.transpose(m)
+    assert(t[1][1] == 1 and t[1][2] == 4)
+    assert(t[2][1] == 2 and t[2][2] == 5)
+    assert(t[3][1] == 3 and t[3][2] == 6)
+end)
+
+tests:it("table.transpose 1x1", function()
+    local t = table.transpose({{42}})
+    assert(t[1][1] == 42)
+end)
+
+tests:it("table.transpose square", function()
+    local m = {{1, 2}, {3, 4}}
+    local t = table.transpose(m)
+    assert(t[1][1] == 1 and t[1][2] == 3)
+    assert(t[2][1] == 2 and t[2][2] == 4)
+end)
+
+tests:it("table.transpose empty", function()
+    local t = table.transpose({})
+    assert(#t == 0)
+end)
+
+-- ============================================================
+-- table.reshape
+-- ============================================================
+
+tests:it("table.reshape basic", function()
+    local arr = {1, 2, 3, 4, 5, 6}
+    local matrix = table.reshape(arr, 2, 3)
+    assert(matrix[1][1] == 1 and matrix[1][2] == 2 and matrix[1][3] == 3)
+    assert(matrix[2][1] == 4 and matrix[2][2] == 5 and matrix[2][3] == 6)
+end)
+
+tests:it("table.reshape single row", function()
+    local m = table.reshape({1, 2, 3}, 1, 3)
+    assert(m[1][1] == 1 and m[1][2] == 2 and m[1][3] == 3)
+end)
+
+tests:it("table.reshape single column", function()
+    local m = table.reshape({1, 2, 3}, 3, 1)
+    assert(m[1][1] == 1 and m[2][1] == 2 and m[3][1] == 3)
+end)
+
+-- ============================================================
+-- string.split
+-- ============================================================
+
+tests:it("string.split basic", function()
+    local parts = string.split("apple,banana,cherry", ",")
+    assert(parts[1] == "apple" and parts[2] == "banana" and parts[3] == "cherry")
+end)
+
+tests:it("string.split empty delimiter", function()
+    local chars = string.split("hello", "")
+    assert(#chars == 5)
+    assert(chars[1] == "h" and chars[5] == "o")
+end)
+
+tests:it("string.split consecutive delimiters", function()
+    local parts = string.split("a//b", "/")
+    assert(parts[1] == "a" and parts[2] == "" and parts[3] == "b")
+end)
+
+tests:it("string.split no delimiter found", function()
+    local parts = string.split("hello", ",")
+    assert(#parts == 1 and parts[1] == "hello")
+end)
+
+tests:it("string.split empty string", function()
+    local parts = string.split("", ",")
+    assert(#parts == 1 and parts[1] == "")
+end)
+
+tests:it("string.split method syntax", function()
+    local parts = ("a-b-c"):split("-")
+    assert(parts[1] == "a" and parts[2] == "b" and parts[3] == "c")
+end)
+
+tests:it("string.split multi-char delimiter", function()
+    local parts = string.split("a::b::c", "::")
+    assert(parts[1] == "a" and parts[2] == "b" and parts[3] == "c")
+end)
+
+-- ============================================================
+-- string.join
+-- ============================================================
+
+tests:it("string.join basic", function()
+    assert(string.join({"hello", "world"}, " ") == "hello world")
+end)
+
+tests:it("string.join non-string values", function()
+    assert(string.join({1, 2, 3}, ",") == "1,2,3")
+end)
+
+tests:it("string.join empty table", function()
+    assert(string.join({}, ",") == "")
+end)
+
+tests:it("string.join single element", function()
+    assert(string.join({"hello"}, ",") == "hello")
+end)
+
+-- ============================================================
+-- string.trim
+-- ============================================================
+
+tests:it("string.trim whitespace", function()
+    assert(string.trim("  hello  ") == "hello")
+end)
+
+tests:it("string.trim tabs and newlines", function()
+    assert(string.trim("\t\nhello\r\n") == "hello")
+end)
+
+tests:it("string.trim custom chars", function()
+    assert(string.trim("xxxhelloxxx", "x") == "hello")
+end)
+
+tests:it("string.trim no trimming needed", function()
+    assert(string.trim("hello") == "hello")
+end)
+
+tests:it("string.trim all whitespace", function()
+    assert(string.trim("   ") == "")
+end)
+
+tests:it("string.trim empty string", function()
+    assert(string.trim("") == "")
+end)
+
+tests:it("string.trim method syntax", function()
+    assert(("  hello  "):trim() == "hello")
+end)
+
+-- ============================================================
+-- string.ltrim
+-- ============================================================
+
+tests:it("string.ltrim whitespace", function()
+    assert(string.ltrim("  hello  ") == "hello  ")
+end)
+
+tests:it("string.ltrim custom chars", function()
+    assert(string.ltrim("...test", ".") == "test")
+end)
+
+-- ============================================================
+-- string.rtrim
+-- ============================================================
+
+tests:it("string.rtrim whitespace", function()
+    assert(string.rtrim("  hello  ") == "  hello")
+end)
+
+tests:it("string.rtrim custom chars", function()
+    assert(string.rtrim("test...", ".") == "test")
+end)
+
+-- ============================================================
+-- Done
+-- ============================================================
+
+tests:finish()

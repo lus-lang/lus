@@ -2278,14 +2278,136 @@ static int str_transcode(lua_State *L) {
 /* }====================================================== */
 
 
+/*
+** {======================================================
+** Split, Join, Trim
+** =======================================================
+*/
+
+
+static int str_split(lua_State *L) {
+  size_t ls, ld;
+  const char *s = luaL_checklstring(L, 1, &ls);
+  const char *delim = luaL_checklstring(L, 2, &ld);
+  lua_Integer idx = 1;
+  lua_newtable(L);
+  if (ld == 0) {
+    /* Empty delimiter: split into individual characters */
+    for (size_t i = 0; i < ls; i++) {
+      lua_pushlstring(L, s + i, 1);
+      lua_seti(L, -2, idx++);
+    }
+    return 1;
+  }
+  const char *pos = s;
+  const char *end = s + ls;
+  while (pos <= end) {
+    const char *found = lmemfind(pos, (size_t)(end - pos), delim, ld);
+    if (found) {
+      lua_pushlstring(L, pos, (size_t)(found - pos));
+      lua_seti(L, -2, idx++);
+      pos = found + ld;
+    }
+    else {
+      lua_pushlstring(L, pos, (size_t)(end - pos));
+      lua_seti(L, -2, idx++);
+      break;
+    }
+  }
+  /* If string ends with delimiter, add trailing empty string */
+  if (ls >= ld && pos == end + 1 && memcmp(end - ld + 1, delim, ld) == 0) {
+    /* pos went past end exactly by ld, meaning string ended with delim */
+  }
+  return 1;
+}
+
+
+static int str_join(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  size_t lsep;
+  const char *sep = luaL_checklstring(L, 2, &lsep);
+  lua_Integer len = luaL_len(L, 1);
+  luaL_Buffer b;
+  luaL_buffinit(L, &b);
+  for (lua_Integer i = 1; i <= len; i++) {
+    if (i > 1)
+      luaL_addlstring(&b, sep, lsep);
+    lua_geti(L, 1, i);
+    luaL_tolstring(L, -1, NULL); /* convert to string */
+    luaL_addvalue(&b);           /* add to buffer, pops string */
+    lua_pop(L, 1);               /* pop original value */
+  }
+  luaL_pushresult(&b);
+  return 1;
+}
+
+
+static int is_trim_char(int c, const char *chars, size_t nchars) {
+  if (chars == NULL)
+    return (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+  for (size_t i = 0; i < nchars; i++) {
+    if (c == (unsigned char)chars[i])
+      return 1;
+  }
+  return 0;
+}
+
+
+static int str_trim(lua_State *L) {
+  size_t ls, lc = 0;
+  const char *s = luaL_checklstring(L, 1, &ls);
+  const char *chars = luaL_optlstring(L, 2, NULL, &lc);
+  size_t start = 0, end = ls;
+  while (start < end &&
+         is_trim_char((unsigned char)s[start], chars, lc))
+    start++;
+  while (end > start &&
+         is_trim_char((unsigned char)s[end - 1], chars, lc))
+    end--;
+  lua_pushlstring(L, s + start, end - start);
+  return 1;
+}
+
+
+static int str_ltrim(lua_State *L) {
+  size_t ls, lc = 0;
+  const char *s = luaL_checklstring(L, 1, &ls);
+  const char *chars = luaL_optlstring(L, 2, NULL, &lc);
+  size_t start = 0;
+  while (start < ls &&
+         is_trim_char((unsigned char)s[start], chars, lc))
+    start++;
+  lua_pushlstring(L, s + start, ls - start);
+  return 1;
+}
+
+
+static int str_rtrim(lua_State *L) {
+  size_t ls, lc = 0;
+  const char *s = luaL_checklstring(L, 1, &ls);
+  const char *chars = luaL_optlstring(L, 2, NULL, &lc);
+  size_t end = ls;
+  while (end > 0 && is_trim_char((unsigned char)s[end - 1], chars, lc))
+    end--;
+  lua_pushlstring(L, s, end);
+  return 1;
+}
+
+
+/* }====================================================== */
+
+
 static const luaL_Reg strlib[] = {
     {"byte", str_byte},         {"char", str_char},
     {"dump", str_dump},         {"find", str_find},
     {"format", str_format},     {"gmatch", gmatch},
-    {"gsub", str_gsub},         {"len", str_len},
-    {"lower", str_lower},       {"match", str_match},
+    {"gsub", str_gsub},         {"join", str_join},
+    {"len", str_len},           {"lower", str_lower},
+    {"ltrim", str_ltrim},       {"match", str_match},
     {"rep", str_rep},           {"reverse", str_reverse},
-    {"sub", str_sub},           {"upper", str_upper},
+    {"rtrim", str_rtrim},       {"split", str_split},
+    {"sub", str_sub},           {"trim", str_trim},
+    {"upper", str_upper},
     {"pack", str_pack},         {"packsize", str_packsize},
     {"unpack", str_unpack},     {"transcode", str_transcode},
     {NULL, NULL}};

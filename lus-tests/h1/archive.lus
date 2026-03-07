@@ -1,0 +1,282 @@
+global print, require, assert, type, string, table, vector, pledge, tostring
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("archive")
+
+local sample = "Hello, World! This is a test of the compression library. " ..
+               "We need enough data to make compression meaningful. " ..
+               string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+
+local empty = ""
+
+-- ===================================================================
+-- Gzip
+-- ===================================================================
+
+tests:describe("vector.archive.gzip")
+
+tests:it("gzip roundtrip string", function()
+    local compressed = vector.archive.gzip.compress(sample)
+    assert(type(compressed) == "string", "compress should return string")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.gzip.decompress(compressed)
+    assert(decompressed == sample, "roundtrip should preserve data")
+end)
+
+tests:it("gzip roundtrip vector", function()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.gzip.compress(v)
+    assert(type(compressed) == "vector", "compress should return vector")
+    local decompressed = vector.archive.gzip.decompress(compressed)
+    assert(type(decompressed) == "vector", "decompress should return vector")
+    assert(#decompressed == #sample, "roundtrip should preserve length")
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample, "roundtrip should preserve data")
+end)
+
+tests:it("gzip empty data", function()
+    local compressed = vector.archive.gzip.compress(empty)
+    local decompressed = vector.archive.gzip.decompress(compressed)
+    assert(decompressed == empty, "empty roundtrip should work")
+end)
+
+tests:it("gzip compression levels", function()
+    local c0 = vector.archive.gzip.compress(sample, 0)
+    local c9 = vector.archive.gzip.compress(sample, 9)
+    -- Both should decompress correctly
+    assert(vector.archive.gzip.decompress(c0) == sample)
+    assert(vector.archive.gzip.decompress(c9) == sample)
+    -- Level 9 should be at least as small as level 0
+    assert(#c9 <= #c0, "higher level should compress better or equal")
+end)
+
+tests:it("gzip invalid data", function()
+    tests:assert_throws(function()
+        vector.archive.gzip.decompress("not valid gzip data!!")
+    end)
+end)
+
+tests:it("gzip invalid level", function()
+    tests:assert_throws(function()
+        vector.archive.gzip.compress(sample, 10)
+    end)
+end)
+
+-- ===================================================================
+-- Deflate
+-- ===================================================================
+
+tests:describe("vector.archive.deflate")
+
+tests:it("deflate roundtrip string", function()
+    local compressed = vector.archive.deflate.compress(sample)
+    assert(type(compressed) == "string", "compress should return string")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.deflate.decompress(compressed)
+    assert(decompressed == sample, "roundtrip should preserve data")
+end)
+
+tests:it("deflate roundtrip vector", function()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.deflate.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.deflate.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample, "roundtrip should preserve data")
+end)
+
+tests:it("deflate empty data", function()
+    local compressed = vector.archive.deflate.compress(empty)
+    local decompressed = vector.archive.deflate.decompress(compressed)
+    assert(decompressed == empty, "empty roundtrip should work")
+end)
+
+tests:it("deflate compression levels", function()
+    local c1 = vector.archive.deflate.compress(sample, 1)
+    local c9 = vector.archive.deflate.compress(sample, 9)
+    assert(vector.archive.deflate.decompress(c1) == sample)
+    assert(vector.archive.deflate.decompress(c9) == sample)
+    assert(#c9 <= #c1, "higher level should compress better or equal")
+end)
+
+-- ===================================================================
+-- Zstandard
+-- ===================================================================
+
+tests:describe("vector.archive.zstd")
+
+tests:it("zstd roundtrip string", function()
+    local compressed = vector.archive.zstd.compress(sample)
+    assert(type(compressed) == "string", "compress should return string")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.zstd.decompress(compressed)
+    assert(decompressed == sample, "roundtrip should preserve data")
+end)
+
+tests:it("zstd roundtrip vector", function()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.zstd.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.zstd.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample, "roundtrip should preserve data")
+end)
+
+tests:it("zstd empty data", function()
+    local compressed = vector.archive.zstd.compress(empty)
+    local decompressed = vector.archive.zstd.decompress(compressed)
+    assert(decompressed == empty, "empty roundtrip should work")
+end)
+
+tests:it("zstd compression levels", function()
+    local c1 = vector.archive.zstd.compress(sample, 1)
+    local c19 = vector.archive.zstd.compress(sample, 19)
+    assert(vector.archive.zstd.decompress(c1) == sample)
+    assert(vector.archive.zstd.decompress(c19) == sample)
+    assert(#c19 <= #c1, "higher level should compress better or equal")
+end)
+
+tests:it("zstd invalid data", function()
+    tests:assert_throws(function()
+        vector.archive.zstd.decompress("not valid zstd data!!")
+    end)
+end)
+
+-- ===================================================================
+-- Brotli
+-- ===================================================================
+
+tests:describe("vector.archive.brotli")
+
+tests:it("brotli roundtrip string", function()
+    local compressed = vector.archive.brotli.compress(sample)
+    assert(type(compressed) == "string", "compress should return string")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(decompressed == sample, "roundtrip should preserve data")
+end)
+
+tests:it("brotli roundtrip vector", function()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.brotli.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample, "roundtrip should preserve data")
+end)
+
+tests:it("brotli empty data", function()
+    local compressed = vector.archive.brotli.compress(empty)
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(decompressed == empty, "empty roundtrip should work")
+end)
+
+tests:it("brotli quality levels", function()
+    local c0 = vector.archive.brotli.compress(sample, 0)
+    local c11 = vector.archive.brotli.compress(sample, 11)
+    assert(vector.archive.brotli.decompress(c0) == sample)
+    assert(vector.archive.brotli.decompress(c11) == sample)
+    assert(#c11 <= #c0, "higher quality should compress better or equal")
+end)
+
+tests:it("brotli lgwin parameter", function()
+    local compressed = vector.archive.brotli.compress(sample, 6, 10)
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(decompressed == sample, "roundtrip with lgwin should work")
+end)
+
+tests:it("brotli invalid data", function()
+    tests:assert_throws(function()
+        vector.archive.brotli.decompress("not valid brotli data!!")
+    end)
+end)
+
+-- ===================================================================
+-- LZ4
+-- ===================================================================
+
+tests:describe("vector.archive.lz4")
+
+tests:it("lz4 roundtrip string", function()
+    local compressed = vector.archive.lz4.compress(sample)
+    assert(type(compressed) == "string", "compress should return string")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.lz4.decompress(compressed)
+    assert(decompressed == sample, "roundtrip should preserve data")
+end)
+
+tests:it("lz4 roundtrip vector", function()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.lz4.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.lz4.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample, "roundtrip should preserve data")
+end)
+
+tests:it("lz4 empty data", function()
+    local compressed = vector.archive.lz4.compress(empty)
+    local decompressed = vector.archive.lz4.decompress(compressed)
+    assert(decompressed == empty, "empty roundtrip should work")
+end)
+
+tests:it("lz4 compression levels", function()
+    local c1 = vector.archive.lz4.compress(sample, 1)
+    local c12 = vector.archive.lz4.compress(sample, 12)
+    assert(vector.archive.lz4.decompress(c1) == sample)
+    assert(vector.archive.lz4.decompress(c12) == sample)
+end)
+
+tests:it("lz4 decompress_hc roundtrip", function()
+    local compressed = vector.archive.lz4.compress(sample)
+    local decompressed = vector.archive.lz4.decompress_hc(compressed)
+    assert(decompressed == sample, "decompress_hc roundtrip should preserve data")
+end)
+
+tests:it("lz4 invalid data", function()
+    tests:assert_throws(function()
+        vector.archive.lz4.decompress("not valid lz4 data!!")
+    end)
+end)
+
+-- ===================================================================
+-- Cross-format checks
+-- ===================================================================
+
+tests:describe("cross-format")
+
+tests:it("different formats produce different output", function()
+    local gz = vector.archive.gzip.compress(sample)
+    local df = vector.archive.deflate.compress(sample)
+    local zs = vector.archive.zstd.compress(sample)
+    local br = vector.archive.brotli.compress(sample)
+    local lz = vector.archive.lz4.compress(sample)
+    -- All should be different from each other (different headers/formats)
+    assert(gz ~= df, "gzip and deflate should differ")
+    assert(gz ~= zs, "gzip and zstd should differ")
+    assert(zs ~= br, "zstd and brotli should differ")
+    assert(br ~= lz, "brotli and lz4 should differ")
+end)
+
+tests:it("type argument validation", function()
+    tests:assert_throws(function()
+        vector.archive.gzip.compress(true)
+    end)
+end)
+
+tests:finish()

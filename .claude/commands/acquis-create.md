@@ -97,10 +97,22 @@ Create subdirectories (`mkdir -p`) if they don't already exist. Read existing sp
 
 Read `CHANGELOG.md` in the repo root and use the topmost version number as the `since` value for all new spec files.
 
-## 5. Verify
+## 5. Add API reference entries
+
+Read `lus-site/src/pages/manual/api/index.astro` to understand the existing structure. For every new Lus stdlib function or constant defined in step 3, add an `<a>` entry to the appropriate section of the API index table of contents, marked as unstable:
+
+```html
+<a href="#module.function" data-from="lus-unstable">module.function</a>
+```
+
+For global functions (module = `base`), add to the **Generic** section. For module functions, add to the corresponding module section (e.g. `table.*` goes under **Table**, `string.*` under **String**).
+
+Insert entries in **alphabetical order** within their section. Use `data-from="lus-unstable"` for all new entries (since the acquis starts as `draft: true`).
+
+## 6. Verify
 
 Run `npx astro build` from `lus-site/` to confirm the site builds cleanly with the new acquis page.
 
-## 6. Report
+## 7. Report
 
 List all created files with their full paths, and summarize what was defined.

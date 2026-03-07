@@ -70,6 +70,9 @@ LUAMOD_API int(luaopen_vector)(lua_State *L);
 /* JSON global functions (tojson, fromjson) */
 LUAMOD_API int(luaopen_json)(lua_State *L);
 
+/* CSV global functions (tocsv, fromcsv) */
+LUAMOD_API int(luaopen_csv)(lua_State *L);
+
 /* open selected libraries */
 LUALIB_API void(luaL_openselectedlibs)(lua_State *L, int load, int preload);
 

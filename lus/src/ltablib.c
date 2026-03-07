@@ -11,7 +11,9 @@
 
 
 #include <limits.h>
+#include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lua.h"
@@ -516,10 +518,469 @@ static int tclone(lua_State *L) {
 /* }====================================================== */
 
 
+/*
+** {======================================================
+** Data processing
+** =======================================================
+*/
+
+
+/* --- Aggregation -------------------------------------------------- */
+
+
+static int tsum(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer len = luaL_len(L, 1);
+  lua_Number sum = 0;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_geti(L, 1, i);
+    if (lua_isnumber(L, -1))
+      sum += lua_tonumber(L, -1);
+    lua_pop(L, 1);
+  }
+  lua_pushnumber(L, sum);
+  return 1;
+}
+
+
+static int tmean(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer len = luaL_len(L, 1);
+  lua_Number sum = 0;
+  lua_Integer count = 0;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_geti(L, 1, i);
+    if (lua_isnumber(L, -1)) {
+      sum += lua_tonumber(L, -1);
+      count++;
+    }
+    lua_pop(L, 1);
+  }
+  if (count == 0)
+    lua_pushnumber(L, (lua_Number)0.0 / (lua_Number)0.0); /* NaN */
+  else
+    lua_pushnumber(L, sum / (lua_Number)count);
+  return 1;
+}
+
+
+static int numcmp(const void *a, const void *b) {
+  lua_Number x = *(const lua_Number *)a;
+  lua_Number y = *(const lua_Number *)b;
+  if (x < y)
+    return -1;
+  if (x > y)
+    return 1;
+  return 0;
+}
+
+
+static int tmedian(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer len = luaL_len(L, 1);
+  /* First pass: count numeric values */
+  lua_Integer count = 0;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_geti(L, 1, i);
+    if (lua_isnumber(L, -1))
+      count++;
+    lua_pop(L, 1);
+  }
+  if (count == 0) {
+    lua_pushnumber(L, (lua_Number)0.0 / (lua_Number)0.0); /* NaN */
+    return 1;
+  }
+  /* Collect numeric values into C array */
+  lua_Number *vals =
+      (lua_Number *)lua_newuserdatauv(L, count * sizeof(lua_Number), 0);
+  lua_Integer j = 0;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_geti(L, 1, i);
+    if (lua_isnumber(L, -1))
+      vals[j++] = lua_tonumber(L, -1);
+    lua_pop(L, 1);
+  }
+  qsort(vals, (size_t)count, sizeof(lua_Number), numcmp);
+  if (count % 2 == 1)
+    lua_pushnumber(L, vals[count / 2]);
+  else
+    lua_pushnumber(L, (vals[count / 2 - 1] + vals[count / 2]) / 2.0);
+  return 1;
+}
+
+
+static int tstdev(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  int sample = lua_toboolean(L, 2);
+  lua_Integer len = luaL_len(L, 1);
+  /* First pass: compute mean */
+  lua_Number sum = 0;
+  lua_Integer count = 0;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_geti(L, 1, i);
+    if (lua_isnumber(L, -1)) {
+      sum += lua_tonumber(L, -1);
+      count++;
+    }
+    lua_pop(L, 1);
+  }
+  if (count == 0 || (sample && count < 2)) {
+    lua_pushnumber(L, (lua_Number)0.0 / (lua_Number)0.0); /* NaN */
+    return 1;
+  }
+  lua_Number mean = sum / (lua_Number)count;
+  /* Second pass: compute sum of squared deviations */
+  lua_Number sumsq = 0;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_geti(L, 1, i);
+    if (lua_isnumber(L, -1)) {
+      lua_Number diff = lua_tonumber(L, -1) - mean;
+      sumsq += diff * diff;
+    }
+    lua_pop(L, 1);
+  }
+  lua_Number divisor = sample ? (lua_Number)(count - 1) : (lua_Number)count;
+  lua_pushnumber(L, sqrt(sumsq / divisor));
+  return 1;
+}
+
+
+/* --- Transformation ----------------------------------------------- */
+
+
+static int tmap(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_Integer len = luaL_len(L, 1);
+  lua_createtable(L, (int)len, 0); /* result table */
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_pushvalue(L, 2);   /* push function */
+    lua_geti(L, 1, i);     /* push element */
+    lua_pushinteger(L, i); /* push index */
+    lua_call(L, 2, 1);     /* call f(elem, i) */
+    lua_seti(L, -2, i);    /* result[i] = return value */
+  }
+  return 1;
+}
+
+
+static int tfilter(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_Integer len = luaL_len(L, 1);
+  lua_newtable(L); /* result table */
+  lua_Integer j = 1;
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_pushvalue(L, 2); /* push predicate */
+    lua_geti(L, 1, i);   /* push element */
+    lua_call(L, 1, 1);   /* call f(elem) */
+    if (lua_toboolean(L, -1)) {
+      lua_pop(L, 1);       /* pop result */
+      lua_geti(L, 1, i);   /* push original element */
+      lua_seti(L, -2, j);  /* result[j] = element */
+      j++;
+    }
+    else {
+      lua_pop(L, 1); /* pop result */
+    }
+  }
+  return 1;
+}
+
+
+static int treduce(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_Integer len = luaL_len(L, 1);
+  lua_Integer start;
+  if (!lua_isnoneornil(L, 3)) {
+    lua_pushvalue(L, 3); /* accumulator = initial value */
+    start = 1;
+  }
+  else {
+    if (len == 0)
+      return luaL_error(L, "'reduce' on empty table with no initial value");
+    lua_geti(L, 1, 1); /* accumulator = t[1] */
+    start = 2;
+  }
+  /* Stack: acc on top */
+  for (lua_Integer i = start; i <= len; i++) {
+    lua_pushvalue(L, 2);  /* push function */
+    lua_pushvalue(L, -2); /* push accumulator */
+    lua_geti(L, 1, i);    /* push element */
+    lua_pushinteger(L, i); /* push index */
+    lua_call(L, 3, 1);    /* call f(acc, elem, i) */
+    lua_remove(L, -2);    /* remove old accumulator */
+  }
+  return 1; /* accumulator on top */
+}
+
+
+static int tgroupby(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_Integer len = luaL_len(L, 1);
+  lua_newtable(L); /* result table */
+  int residx = lua_gettop(L);
+  for (lua_Integer i = 1; i <= len; i++) {
+    /* Call key function */
+    lua_pushvalue(L, 2); /* push function */
+    lua_geti(L, 1, i);   /* push element */
+    lua_call(L, 1, 1);   /* call f(elem) -> key */
+    /* Stack: result, key */
+    lua_pushvalue(L, -1); /* duplicate key for lookup */
+    lua_gettable(L, residx); /* get result[key] */
+    if (lua_isnil(L, -1)) {
+      /* Group doesn't exist yet: create it */
+      lua_pop(L, 1);          /* pop nil */
+      lua_pushvalue(L, -1);   /* duplicate key */
+      lua_newtable(L);         /* new group array */
+      lua_geti(L, 1, i);      /* push element */
+      lua_seti(L, -2, 1);     /* group[1] = element */
+      lua_settable(L, residx); /* result[key] = group */
+      lua_pop(L, 1);          /* pop original key */
+    }
+    else {
+      /* Group exists: append to it */
+      int grpidx = lua_gettop(L);
+      lua_Integer glen = luaL_len(L, grpidx);
+      lua_geti(L, 1, i);           /* push element */
+      lua_seti(L, grpidx, glen + 1); /* group[len+1] = element */
+      lua_pop(L, 2); /* pop group and key */
+    }
+  }
+  return 1;
+}
+
+
+/* Sortby quicksort helpers */
+
+static void sortby_swap(lua_State *L, int tabidx, int keysidx,
+                         lua_Integer a, lua_Integer b) {
+  /* swap t[a] and t[b] */
+  lua_geti(L, tabidx, a);
+  lua_geti(L, tabidx, b);
+  lua_seti(L, tabidx, a);
+  lua_seti(L, tabidx, b);
+  /* swap keys[a] and keys[b] */
+  lua_geti(L, keysidx, a);
+  lua_geti(L, keysidx, b);
+  lua_seti(L, keysidx, a);
+  lua_seti(L, keysidx, b);
+}
+
+/* Compare keys[a] vs keys[b]. Returns true if a should come before b. */
+static int sortby_comp(lua_State *L, int keysidx, lua_Integer a,
+                       lua_Integer b, int asc) {
+  lua_geti(L, keysidx, a);
+  lua_geti(L, keysidx, b);
+  int result;
+  if (asc)
+    result = lua_compare(L, -2, -1, LUA_OPLT);
+  else
+    result = lua_compare(L, -1, -2, LUA_OPLT);
+  lua_pop(L, 2);
+  return result;
+}
+
+static void sortby_qsort(lua_State *L, int tabidx, int keysidx,
+                          lua_Integer lo, lua_Integer hi, int asc) {
+  while (lo < hi) {
+    /* Median-of-three pivot selection */
+    lua_Integer mid = lo + (hi - lo) / 2;
+    if (sortby_comp(L, keysidx, mid, lo, asc))
+      sortby_swap(L, tabidx, keysidx, lo, mid);
+    if (sortby_comp(L, keysidx, hi, lo, asc))
+      sortby_swap(L, tabidx, keysidx, lo, hi);
+    if (sortby_comp(L, keysidx, hi, mid, asc))
+      sortby_swap(L, tabidx, keysidx, mid, hi);
+    /* Use mid as pivot, move to hi-1 */
+    sortby_swap(L, tabidx, keysidx, mid, hi - 1);
+    lua_Integer pivot = hi - 1;
+    lua_Integer i = lo;
+    lua_Integer j = hi - 1;
+    for (;;) {
+      while (sortby_comp(L, keysidx, ++i, pivot, asc))
+        ;
+      while (j > lo && sortby_comp(L, keysidx, pivot, --j, asc))
+        ;
+      if (i >= j) break;
+      sortby_swap(L, tabidx, keysidx, i, j);
+    }
+    sortby_swap(L, tabidx, keysidx, i, hi - 1); /* restore pivot */
+    /* Tail recursion on larger partition */
+    if (i - lo < hi - i) {
+      sortby_qsort(L, tabidx, keysidx, lo, i - 1, asc);
+      lo = i + 1;
+    }
+    else {
+      sortby_qsort(L, tabidx, keysidx, i + 1, hi, asc);
+      hi = i - 1;
+    }
+  }
+}
+
+static int tsortby(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  int asc = lua_isnoneornil(L, 3) ? 1 : lua_toboolean(L, 3);
+  lua_Integer len = luaL_len(L, 1);
+  if (len <= 1) return 0;
+  /* Build keys table */
+  lua_createtable(L, (int)len, 0);
+  int keysidx = lua_gettop(L);
+  for (lua_Integer i = 1; i <= len; i++) {
+    lua_pushvalue(L, 2); /* push keyfunc */
+    lua_geti(L, 1, i);   /* push element */
+    lua_call(L, 1, 1);   /* call f(elem) */
+    lua_seti(L, keysidx, i); /* keys[i] = result */
+  }
+  sortby_qsort(L, 1, keysidx, 1, len, asc);
+  return 0;
+}
+
+
+/* --- Combining ---------------------------------------------------- */
+
+
+static int tzip(lua_State *L) {
+  int nargs = lua_gettop(L);
+  if (nargs == 0) {
+    lua_newtable(L);
+    return 1;
+  }
+  /* Find minimum length */
+  lua_Integer minlen = LUA_MAXINTEGER;
+  for (int k = 1; k <= nargs; k++) {
+    luaL_checktype(L, k, LUA_TTABLE);
+    lua_Integer l = luaL_len(L, k);
+    if (l < minlen)
+      minlen = l;
+  }
+  lua_createtable(L, (int)minlen, 0);
+  for (lua_Integer i = 1; i <= minlen; i++) {
+    lua_createtable(L, nargs, 0); /* tuple */
+    for (int k = 1; k <= nargs; k++) {
+      lua_geti(L, k, i);
+      lua_seti(L, -2, k);
+    }
+    lua_seti(L, -2, i); /* result[i] = tuple */
+  }
+  return 1;
+}
+
+
+static int tunzip(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer n = luaL_len(L, 1);
+  if (n == 0)
+    return 0; /* no tuples, no return values */
+  /* Get width from first tuple */
+  lua_geti(L, 1, 1);
+  luaL_checktype(L, -1, LUA_TTABLE);
+  lua_Integer w = luaL_len(L, -1);
+  lua_pop(L, 1);
+  if (w == 0)
+    return 0;
+  /* Create w result tables */
+  if (!lua_checkstack(L, (int)w + 2))
+    return luaL_error(L, "too many columns to unzip");
+  for (lua_Integer j = 1; j <= w; j++)
+    lua_createtable(L, (int)n, 0);
+  /* Stack: result1, result2, ..., resultw */
+  int base = lua_gettop(L) - (int)w + 1; /* index of result1 */
+  for (lua_Integer i = 1; i <= n; i++) {
+    lua_geti(L, 1, i); /* push tuple */
+    int tidx = lua_gettop(L);
+    for (lua_Integer j = 1; j <= w; j++) {
+      lua_geti(L, tidx, j);
+      lua_seti(L, base + (int)j - 1, i); /* results[j][i] = tuple[j] */
+    }
+    lua_pop(L, 1); /* pop tuple */
+  }
+  return (int)w;
+}
+
+
+/* --- Matrix operations -------------------------------------------- */
+
+
+static int ttranspose(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer rows = luaL_len(L, 1);
+  if (rows == 0) {
+    lua_newtable(L);
+    return 1;
+  }
+  /* Get column count from first row */
+  lua_geti(L, 1, 1);
+  luaL_checktype(L, -1, LUA_TTABLE);
+  lua_Integer cols = luaL_len(L, -1);
+  lua_pop(L, 1);
+  /* Validate all rows have same length */
+  for (lua_Integer i = 2; i <= rows; i++) {
+    lua_geti(L, 1, i);
+    luaL_checktype(L, -1, LUA_TTABLE);
+    if (luaL_len(L, -1) != cols) {
+      lua_pop(L, 1);
+      return luaL_error(L, "non-rectangular matrix in 'transpose'");
+    }
+    lua_pop(L, 1);
+  }
+  /* Build result: cols rows of rows elements */
+  lua_createtable(L, (int)cols, 0);
+  int residx = lua_gettop(L);
+  for (lua_Integer j = 1; j <= cols; j++) {
+    lua_createtable(L, (int)rows, 0);
+    for (lua_Integer i = 1; i <= rows; i++) {
+      lua_geti(L, 1, i);   /* push row i */
+      lua_geti(L, -1, j);  /* push row[j] */
+      lua_remove(L, -2);   /* remove row */
+      lua_seti(L, -2, i);  /* new_row[i] = old_matrix[i][j] */
+    }
+    lua_seti(L, residx, j); /* result[j] = new_row */
+  }
+  return 1;
+}
+
+
+static int treshape(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer nrows = luaL_checkinteger(L, 2);
+  lua_Integer ncols = luaL_checkinteger(L, 3);
+  lua_Integer len = luaL_len(L, 1);
+  luaL_argcheck(L, nrows > 0, 2, "rows must be positive");
+  luaL_argcheck(L, ncols > 0, 3, "cols must be positive");
+  if (len != nrows * ncols)
+    return luaL_error(L,
+        "array length %I does not match %I x %I", (LUAI_UACINT)len,
+        (LUAI_UACINT)nrows, (LUAI_UACINT)ncols);
+  lua_createtable(L, (int)nrows, 0);
+  int residx = lua_gettop(L);
+  for (lua_Integer r = 1; r <= nrows; r++) {
+    lua_createtable(L, (int)ncols, 0);
+    for (lua_Integer c = 1; c <= ncols; c++) {
+      lua_geti(L, 1, (r - 1) * ncols + c);
+      lua_seti(L, -2, c); /* row[c] = t[(r-1)*ncols + c] */
+    }
+    lua_seti(L, residx, r); /* result[r] = row */
+  }
+  return 1;
+}
+
+
+/* }====================================================== */
+
+
 static const luaL_Reg tab_funcs[] = {
     {"clone", tclone},   {"concat", tconcat}, {"create", tcreate},
-    {"insert", tinsert}, {"pack", tpack},     {"unpack", tunpack},
-    {"remove", tremove}, {"move", tmove},     {"sort", sort},
+    {"filter", tfilter}, {"groupby", tgroupby},
+    {"insert", tinsert}, {"map", tmap},       {"mean", tmean},
+    {"median", tmedian}, {"move", tmove},      {"pack", tpack},
+    {"reduce", treduce}, {"remove", tremove},  {"reshape", treshape},
+    {"sort", sort},      {"sortby", tsortby},  {"stdev", tstdev},
+    {"sum", tsum},       {"transpose", ttranspose},
+    {"unpack", tunpack}, {"unzip", tunzip},    {"zip", tzip},
     {NULL, NULL}};
 
 

@@ -49,24 +49,24 @@ jobs:
     steps:
       - name: Install dependencies (Alpine)
         if: matrix.container == 'alpine:latest'
-        run: apk add --no-cache build-base meson openssl-dev c-ares-dev git bash
+        run: apk add --no-cache build-base meson openssl-dev c-ares-dev zlib-dev zstd-dev brotli-dev lz4-dev git bash
 
       - name: Install dependencies (Ubuntu)
         if: matrix.runner == 'ubuntu-latest' && matrix.container == null
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson llvm libssl-dev libc-ares-dev
+          sudo apt-get install -y meson llvm libssl-dev libc-ares-dev zlib1g-dev libzstd-dev libbrotli-dev liblz4-dev
 
       - name: Install dependencies (macOS)
         if: matrix.runner == 'macos-14'
-        run: brew install meson readline openssl c-ares
+        run: brew install meson readline openssl c-ares zstd brotli lz4
 
       - name: Install dependencies (Windows)
         if: matrix.runner == 'windows-latest'
         run: |
           pip install meson ninja
           choco install pkgconfiglite --no-progress
-          vcpkg install c-ares:x64-windows
+          vcpkg install c-ares:x64-windows zlib:x64-windows zstd:x64-windows brotli:x64-windows lz4:x64-windows
           echo "PKG_CONFIG_PATH=${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
@@ -111,7 +111,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson llvm libssl-dev libc-ares-dev
+          sudo apt-get install -y meson llvm libssl-dev libc-ares-dev zlib1g-dev libzstd-dev libbrotli-dev liblz4-dev
 
       - name: Build with sanitizers
         run: |
@@ -183,24 +183,24 @@ jobs:
 
       - name: Install dependencies (Alpine)
         if: steps.check.outputs.proceed == 'true' && matrix.container == 'alpine:latest'
-        run: apk add --no-cache build-base meson openssl-dev c-ares-dev git
+        run: apk add --no-cache build-base meson openssl-dev c-ares-dev zlib-dev zstd-dev brotli-dev lz4-dev git
 
       - name: Install dependencies (Ubuntu)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'ubuntu-latest' && matrix.container == null
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson libssl-dev libc-ares-dev
+          sudo apt-get install -y meson libssl-dev libc-ares-dev zlib1g-dev libzstd-dev libbrotli-dev liblz4-dev
 
       - name: Install dependencies (macOS)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'macos-14'
-        run: brew install meson readline openssl c-ares
+        run: brew install meson readline openssl c-ares zstd brotli lz4
 
       - name: Install dependencies (Windows)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
         run: |
           pip install meson ninja
           choco install pkgconfiglite --no-progress
-          vcpkg install c-ares:x64-windows
+          vcpkg install c-ares:x64-windows zlib:x64-windows zstd:x64-windows brotli:x64-windows lz4:x64-windows
           echo "PKG_CONFIG_PATH=${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows

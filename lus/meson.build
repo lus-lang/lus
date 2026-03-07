@@ -63,6 +63,14 @@ else
   lus_c_args += ['-DLUA_USE_POSIX', '-DLUS_PLATFORM_POSIX']
 endif
 
+# Required dependencies for compression library
+zlib_dep = dependency('zlib', required: true)
+zstd_dep = dependency('libzstd', required: true)
+brotlienc_dep = dependency('libbrotlienc', required: true)
+brotlidec_dep = dependency('libbrotlidec', required: true)
+lz4_dep = dependency('liblz4', required: true)
+lus_deps += [zlib_dep, zstd_dep, brotlienc_dep, brotlidec_dep, lz4_dep]
+
 # Threading library (for worker support)
 thread_dep = dependency('threads', required: true)
 lus_deps += thread_dep
@@ -115,10 +123,12 @@ lib_sources = files(
   'src/ltablib.c',
   'src/lutf8lib.c',
   'src/ljsonlib.c',
+  'src/lcsvlib.c',
   'src/lfslib.c',
   'src/lnetlib.c',
   'src/lworkerlib.c',
   'src/lvectorlib.c',
+  'src/larchivelib.c',
   'src/linit.c',
 )
 
@@ -204,6 +214,8 @@ h1_tests = [
   'h1/gengc',
   'h1/memerr',
   'h1/json',
+  'h1/csv',
+  'h1/dataproc',
   'h1/network',
   'h1/worker',
   'h1/global',
@@ -212,6 +224,7 @@ h1_tests = [
   'h1/groups',
   'h1/vectors',
   'h1/cloning',
+  'h1/archive',
   'h1/pledge',
   'h1/runtime-attrs',
   'h1/doexpr',
