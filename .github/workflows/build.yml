@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: sudo apt-get update && sudo apt-get install -y clang-format
+      - run: pip install 'clang-format>=21,<22'
       - run: bash scripts/lint.sh
 
   # Platform-specific tests run in parallel
