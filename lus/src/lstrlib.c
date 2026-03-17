@@ -23,9 +23,10 @@
 #include "lua.h"
 
 #include "lauxlib.h"
-#include "lualib.h"
+#include "lfastcall.h"
 #include "llimits.h"
 #include "lpack.h"
+#include "lualib.h"
 
 
 /*
@@ -2484,5 +2485,18 @@ static void createmetatable(lua_State *L) {
 LUAMOD_API int luaopen_string(lua_State *L) {
   luaL_newlib(L, strlib);
   createmetatable(L);
+  /* Register fastcalls for string library functions */
+  luaF_registerfastcall(L, FC_STRING_LEN, str_len, 1);
+  luaF_registerfastcall(L, FC_STRING_TRIM, str_trim, 1);
+  luaF_registerfastcall(L, FC_STRING_LTRIM, str_ltrim, 1);
+  luaF_registerfastcall(L, FC_STRING_RTRIM, str_rtrim, 1);
+  luaF_registerfastcall(L, FC_STRING_SPLIT, str_split, 2);
+  luaF_registerfastcall(L, FC_STRING_JOIN, str_join, 2);
+  luaF_registerfastcall(L, FC_STRING_SUB, str_sub, 3);
+  luaF_registerfastcall(L, FC_STRING_BYTE, str_byte, 2);
+  luaF_registerfastcall(L, FC_STRING_CHAR, str_char, 1);
+  luaF_registerfastcall(L, FC_STRING_LOWER, str_lower, 1);
+  luaF_registerfastcall(L, FC_STRING_UPPER, str_upper, 1);
+  luaF_registerfastcall(L, FC_STRING_REVERSE, str_reverse, 1);
   return 1;
 }

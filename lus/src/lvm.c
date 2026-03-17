@@ -22,6 +22,7 @@
 #include "ldebug.h"
 #include "ldo.h"
 #include "lenum.h"
+#include "lfastcall.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "lobject.h"
@@ -348,6 +349,8 @@ lu_byte luaV_finishget(lua_State *L, const TValue *t, TValue *key, StkId val,
 void luaV_finishset(lua_State *L, const TValue *t, TValue *key, TValue *val,
                     int hres) {
   int loop; /* counter to avoid infinite loops */
+  if (l_unlikely(hres == HREADONLY))
+    luaG_runerror(L, "attempt to modify a readonly table");
   for (loop = 0; loop < MAXTAGLOOP; loop++) {
     const TValue *tm;                            /* '__newindex' metamethod */
     if (hres != HNOTATABLE) {                    /* is 't' a table? */
@@ -2444,6 +2447,44 @@ returning: /* trap already set */
         Protect(luaV_slice(L, ra, obj, vstart, vend));
         checkGC(L, ra + 1);
         vmbreak;
+      }
+      vmcase(OP_FASTCALL) {
+        StkId ra = RA(i);
+        int b = GETARG_B(i);
+        int nresults = GETARG_C(i) - 1;
+        int fc_id = GETARG_Ax(*pc); /* peek at EXTRAARG */
+        TValue *func = s2v(ra);
+        FastCallEntry *fc = &G(L)->fastcall_table[fc_id];
+        pc++; /* always consume EXTRAARG */
+        /* Validate: loaded function matches original, single-result.
+        ** With readonly_env, the environment is frozen so the function
+        ** is guaranteed to be the original — skip pointer validation. */
+        if (l_likely(nresults == 1 &&
+                     (G(L)->readonly_env ||
+                      (fc->orig_func != NULL &&
+                       ((ttislcf(func) && fvalue(func) == fc->orig_func) ||
+                        (ttisCclosure(func) &&
+                         clCvalue(func)->f == fc->orig_func)))))) {
+          savestate(L, ci);
+          if (luaV_dofastcall(L, fc_id, ra)) {
+            updatetrap(ci);
+            vmbreak;
+          }
+        }
+        /* fallback: identical to OP_CALL */
+        {
+          CallInfo *newci;
+          if (b != 0)
+            L->top.p = ra + b;
+          savepc(ci);
+          if ((newci = luaD_precall(L, ra, nresults)) == NULL)
+            updatetrap(ci);
+          else {
+            ci = newci;
+            goto startfunc;
+          }
+          vmbreak;
+        }
       }
       vmcase(OP_EXTRAARG) {
         lua_assert(0);

@@ -28,7 +28,9 @@
 #include "lmem.h"
 #include "lparser.h"
 #include "lpledge.h"
+#include "lobject.h"
 #include "lstate.h"
+#include "ltable.h"
 #include "lualib.h"
 #include "lworkerlib.h"
 #include "lformat.h"
@@ -51,6 +53,9 @@ static const char *progname = LUA_PROGNAME;
 static const char *astgraph_output = NULL; /* --ast-graph output file */
 static const char *astjson_output = NULL;  /* --ast-json output file */
 static int pedantic_warnings = 0;          /* -Wpedantic flag */
+static int no_fastcall = 0;               /* --no-fastcall flag */
+static int readonly_env = 0;              /* --readonly-env flag */
+static void mark_env_readonly(lua_State *L);
 
 /* Standalone bundle options */
 static const char *standalone_entry = NULL; /* --standalone entry file */
@@ -67,6 +72,10 @@ static int num_preserved_args = 0;
 static void worker_setup(lua_State *parent, lua_State *worker) {
   (void)parent;
   luaL_openselectedlibs(worker, ~0, 0); /* open all standard libraries */
+  if (readonly_env) {
+    G(worker)->readonly_env = 1;
+    mark_env_readonly(worker);
+  }
 }
 
 #if defined(LUA_USE_POSIX) /* { */
@@ -137,6 +146,8 @@ static void print_usage(const char *badoption) {
       "  --ast-json file   dump AST to JSON file (does not run script)\n"
       "  --standalone file create standalone executable from script\n"
       "  --include path[:alias] include file/dir in standalone bundle\n"
+      "  --no-fastcall  disable fastcall optimizations\n"
+      "  --readonly-env freeze _ENV after init (enables fast dispatch)\n"
       "  --        stop handling options\n"
       "  -         stop handling options and execute stdin\n",
       progname);
@@ -465,6 +476,34 @@ static void print_version(void) {
 ** (If there is no interpreter's name either, 'script' is -1, so
 ** table sizes are zero.)
 */
+/*
+** Mark _ENV and all module tables as readonly.
+** Two levels deep to cover sub-modules (e.g. network.tcp).
+*/
+static void mark_env_readonly(lua_State *L) {
+  lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+  Table *g = hvalue(s2v(L->top.p - 1));
+  setreadonly(g);
+  lua_pushnil(L);
+  while (lua_next(L, -2) != 0) {
+    if (lua_type(L, -1) == LUA_TTABLE) {
+      Table *t = hvalue(s2v(L->top.p - 1));
+      setreadonly(t);
+      /* Mark sub-tables (network.tcp, network.udp, etc.) */
+      lua_pushnil(L);
+      while (lua_next(L, -2) != 0) {
+        if (lua_type(L, -1) == LUA_TTABLE) {
+          setreadonly(hvalue(s2v(L->top.p - 1)));
+        }
+        lua_pop(L, 1);
+      }
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+}
+
+
 static void createargtable(lua_State *L, char **argv, int argc, int script) {
   int i, narg;
   narg = argc - (script + 1); /* number of positive indices */
@@ -1370,6 +1409,14 @@ static int collectargs(char **argv, int *first) {
             includes[num_includes++] = argv[i];
             break;
           }
+          if (strcmp(argv[i] + 2, "no-fastcall") == 0) {
+            no_fastcall = 1;
+            break;
+          }
+          if (strcmp(argv[i] + 2, "readonly-env") == 0) {
+            readonly_env = 1;
+            break;
+          }
           return has_error; /* invalid option */
         }
         /* if there is a script name, it comes after '--' */
@@ -1909,8 +1956,14 @@ static int pmain(lua_State *L) {
     lua_setfield(L, LUA_REGISTRYINDEX, "LUA_NOENV");
   }
   luai_openlibs(L);                      /* open standard libraries */
+  if (no_fastcall)
+    G(L)->no_fastcall = 1;
   lus_onworker(L, worker_setup);         /* setup workers to get same libs */
   createargtable(L, argv, argc, script); /* create table 'arg' */
+  if (readonly_env) {
+    G(L)->readonly_env = 1;
+    mark_env_readonly(L);
+  }
   lua_gc(L, LUA_GCRESTART);              /* start GC... */
   lua_gc(L, LUA_GCGEN);                  /* ...in generational mode */
   if (!(args & has_E)) {                 /* no option '-E'? */

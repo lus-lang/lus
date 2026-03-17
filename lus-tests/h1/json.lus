@@ -394,6 +394,44 @@ if json_files then
 end
 
 -- ============================================
+-- Key Escape Sequence Tests
+-- ============================================
+
+tests:describe("key escape sequences")
+
+tests:it("parses \\/  \\b  \\f in object keys", function()
+    local r = fromjson('{"a\\/b": 1}')
+    tests:assert_equal(r["a/b"], 1)
+
+    r = fromjson('{"a\\bb": 2}')
+    tests:assert_equal(r["a\bb"], 2)
+
+    r = fromjson('{"a\\fb": 3}')
+    tests:assert_equal(r["a\fb"], 3)
+end)
+
+tests:it("parses \\uXXXX in object keys", function()
+    local r = fromjson('{"\\u0041": 1}')
+    tests:assert_equal(r["A"], 1)
+
+    r = fromjson('{"\\u00E9": 2}')
+    tests:assert_equal(r["\xC3\xA9"], 2)  -- e-acute UTF-8
+end)
+
+tests:it("parses escapes in continuation object keys", function()
+    local r = fromjson('{"first": 1, "a\\fb": 2, "\\u0042": 3}')
+    tests:assert_equal(r.first, 1)
+    tests:assert_equal(r["a\fb"], 2)
+    tests:assert_equal(r["B"], 3)
+end)
+
+tests:it("parses surrogate pairs in object keys", function()
+    local r = fromjson('{"\\uD83D\\uDE00": 1}')
+    local emoji = "\xF0\x9F\x98\x80"
+    tests:assert_equal(r[emoji], 1)
+end)
+
+-- ============================================
 -- Stress Tests
 -- ============================================
 

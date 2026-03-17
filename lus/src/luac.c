@@ -20,6 +20,7 @@
 
 #include "lapi.h"
 #include "ldebug.h"
+#include "lfastcall.h"
 #include "lobject.h"
 #include "lopcodes.h"
 #include "lopnames.h"
@@ -35,6 +36,7 @@ static void PrintFunction(const Proto *f, int full);
 static int listing = 0;                 /* list bytecodes? */
 static int dumping = 1;                 /* dump bytecodes? */
 static int stripping = 0;               /* strip debug information? */
+static int fastcalls = 0;               /* emit fastcall opcodes? */
 static char Output[] = {OUTPUT};        /* default output file name */
 static const char *output = Output;     /* actual output file name */
 static const char *progname = PROGNAME; /* actual program name */
@@ -59,13 +61,15 @@ static void usage(const char *message) {
   fprintf(stderr,
           "usage: %s [options] [filenames]\n"
           "Available options are:\n"
-          "  -l       list (use -l -l for full listing)\n"
-          "  -o name  output to file 'name' (default is \"%s\")\n"
-          "  -p       parse only\n"
-          "  -s       strip debug information\n"
-          "  -v       show version information\n"
-          "  --       stop handling options\n"
-          "  -        stop handling options and process stdin\n",
+          "  -f             emit fastcall opcodes\n"
+          "  -l             list (use -l -l for full listing)\n"
+          "  -o name        output to file 'name' (default is \"%s\")\n"
+          "  -p             parse only\n"
+          "  -s             strip debug information\n"
+          "  -v             show version information\n"
+          "  --no-fastcall  disable fastcall opcodes (overrides -f)\n"
+          "  --             stop handling options\n"
+          "  -              stop handling options and process stdin\n",
           progname, Output);
   exit(EXIT_FAILURE);
 }
@@ -80,6 +84,8 @@ static int doargs(int argc, char *argv[]) {
   for (i = 1; i < argc; i++) {
     if (*argv[i] != '-') /* end of options; keep it */
       break;
+    else if (IS("--no-fastcall")) /* disable fastcalls */
+      fastcalls = 0;
     else if (IS("--")) /* end of options; skip it */
     {
       ++i;
@@ -89,6 +95,8 @@ static int doargs(int argc, char *argv[]) {
     }
     else if (IS("-")) /* end of options; use stdin */
       break;
+    else if (IS("-f")) /* fastcalls */
+      fastcalls = 1;
     else if (IS("-l")) /* list */
       ++listing;
     else if (IS("-o")) /* output file */
@@ -165,6 +173,8 @@ static int pmain(lua_State *L) {
   const Proto *f;
   int i;
   tmname = G(L)->tmname;
+  if (fastcalls)
+    luaF_enablefastcalls(L);
   if (!lua_checkstack(L, argc))
     fatal("too many input files");
   for (i = 0; i < argc; i++) {
@@ -586,6 +596,18 @@ static void PrintCode(const Proto *f) {
       case OP_SLICE:
         printf("%d %d %d", a, b, c);
         printf(COMMENT "R[%d] := slice(R[%d], R[%d], R[%d])", a, b, c, c + 1);
+        break;
+      case OP_FASTCALL:
+        printf("%d %d %d", a, b, c);
+        printf(COMMENT "fastcall id=%d", EXTRAARG);
+        if (b == 0)
+          printf(" all in");
+        else
+          printf(" %d in", b - 1);
+        if (c == 0)
+          printf(" all out");
+        else
+          printf(" %d out", c - 1);
         break;
       case OP_EXTRAARG: printf("%d", ax); break;
 #if 0

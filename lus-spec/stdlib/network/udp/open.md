@@ -6,11 +6,13 @@ since: 0.1.0
 stability: stable
 origin: lus
 params:
-  - name: host
-    type: string
   - name: port
     type: integer
+    optional: true
+  - name: address
+    type: string
+    optional: true
 returns: userdata
 ---
 
-Opens a UDP socket bound to `host` and `port`. Returns a socket object for sending and receiving datagrams. Requires `network` pledge.
+Opens a UDP socket, optionally bound to `port` and `address`. Returns a socket object for sending and receiving datagrams. Requires `network` pledge.

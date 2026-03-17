@@ -2037,6 +2037,10 @@ void luaK_finish(FuncState *fs) {
           SETARG_k(*pc, 1);     /* must get vararg there */
         break;
       }
+      case OP_FASTCALL: {
+        i++; /* skip EXTRAARG (breaks OT/IT chain, assertion not applicable) */
+        break;
+      }
       case OP_JMP: { /* to optimize jumps to jumps */
         int target = finaltarget(p->code, i);
         fixjump(fs, i, target); /* jump directly to final target */

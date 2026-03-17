@@ -36,6 +36,98 @@ end
 
 framework.tracegc = tracegc
 
+framework.FC = {
+    TYPE = 0, RAWLEN = 1, RAWGET = 2, RAWSET = 3, RAWEQUAL = 4,
+    ASSERT = 5, GETMETATABLE = 6, SETMETATABLE = 7, TONUMBER = 8, TOSTRING = 9,
+    MATH_ABS = 10, MATH_MAX = 11, MATH_MIN = 12,
+    MATH_CEIL = 13, MATH_FLOOR = 14, MATH_SQRT = 15,
+    MATH_SIN = 16, MATH_COS = 17, MATH_TAN = 18,
+    MATH_ASIN = 19, MATH_ACOS = 20, MATH_ATAN = 21,
+    MATH_EXP = 22, MATH_LOG = 23, MATH_DEG = 24, MATH_RAD = 25,
+    MATH_FMOD = 26, MATH_ULT = 27, MATH_TOINTEGER = 28,
+    MATH_TYPE = 29, MATH_LDEXP = 30,
+    STRING_LEN = 31, STRING_TRIM = 32, STRING_LTRIM = 33, STRING_RTRIM = 34,
+    STRING_SPLIT = 35, STRING_JOIN = 36,
+    STRING_SUB = 37, STRING_BYTE = 38, STRING_CHAR = 39,
+    STRING_LOWER = 40, STRING_UPPER = 41, STRING_REVERSE = 42,
+    TABLE_SUM = 43, TABLE_MEAN = 44, TABLE_MEDIAN = 45, TABLE_STDEV = 46,
+    TABLE_TRANSPOSE = 47, TABLE_RESHAPE = 48,
+    VECTOR_CREATE = 49, VECTOR_CLONE = 50, VECTOR_SIZE = 51, VECTOR_RESIZE = 52,
+    UTF8_LEN = 53, UTF8_CODEPOINT = 54, UTF8_CHAR = 55, UTF8_OFFSET = 56,
+}
+
+local function read_varint(dump, pos)
+    local x = 0
+    local b
+    repeat
+        b = string.byte(dump, pos)
+        pos = pos + 1
+        x = (x << 7) | (b & 0x7f)
+    until (b & 0x80) == 0
+    return x, pos
+end
+
+local function read_u32le(dump, pos)
+    local b0, b1, b2, b3 = string.byte(dump, pos, pos + 3)
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24), pos + 4
+end
+
+function framework.get_fastcalls(fn)
+    local dump = string.dump(fn)
+    -- Parse header: signature(4) + version(1) + format(1) + LUAC_DATA(6)
+    local pos = 4 + 1 + 1 + 6 + 1  -- +1 for 1-indexed
+    -- Skip 4 numinfo blocks: each is 1 size byte + N value bytes
+    for i = 1, 4 do
+        local sz = string.byte(dump, pos)
+        pos = pos + 1 + sz
+    end
+    -- Skip sizeupvalues (1 byte)
+    pos = pos + 1
+    -- Function prologue: linedefined (varint), lastlinedefined (varint)
+    local _, newpos = read_varint(dump, pos)
+    pos = newpos
+    _, pos = read_varint(dump, pos)
+    -- numparams(1) + flag(1) + maxstacksize(1)
+    pos = pos + 3
+    -- Read sizecode (varint)
+    local sizecode
+    sizecode, pos = read_varint(dump, pos)
+    -- Alignment padding to 4 bytes
+    local remainder = (pos - 1) % 4
+    if remainder ~= 0 then
+        pos = pos + (4 - remainder)
+    end
+    -- Scan instructions
+    local result = {}
+    local OP_FASTCALL = 88
+    for i = 1, sizecode do
+        local instr
+        instr, pos = read_u32le(dump, pos)
+        local opcode = instr & 0x7F
+        if opcode == OP_FASTCALL and i < sizecode then
+            -- Next instruction is EXTRAARG; peek at it
+            local next_instr = read_u32le(dump, pos)
+            local fc_id = next_instr >> 7
+            result[fc_id] = (result[fc_id] or 0) + 1
+        end
+    end
+    return result
+end
+
+function framework:assert_fastcall(fn, fc_id, msg)
+    local fcs = framework.get_fastcalls(fn)
+    if not fcs[fc_id] then
+        error(msg or ("Expected OP_FASTCALL with id " .. tostring(fc_id) .. " but none found"))
+    end
+end
+
+function framework:assert_no_fastcall(fn, fc_id, msg)
+    local fcs = framework.get_fastcalls(fn)
+    if fcs[fc_id] then
+        error(msg or ("Expected no OP_FASTCALL with id " .. tostring(fc_id) .. " but found " .. tostring(fcs[fc_id])))
+    end
+end
+
 function framework.new(name)
     local self = setmetatable({}, framework)
     self.name = name

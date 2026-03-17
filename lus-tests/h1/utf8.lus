@@ -77,5 +77,54 @@ tests:it("utf8.charpattern", function()
     assert(count == 5)
 end)
 
+tests:it("4-byte character round-trip", function()
+    local s = utf8.char(0x1F600)
+    tests:assert_equal(utf8.codepoint(s), 0x1F600)
+end)
+
+tests:it("boundary codepoint round-trips", function()
+    local codepoints = {0x007F, 0x0080, 0x07FF, 0x0800, 0xFFFF, 0x10000, 0x10FFFF}
+    for _, cp in ipairs(codepoints) do
+        local s = utf8.char(cp)
+        tests:assert_equal(utf8.codepoint(s), cp)
+    end
+end)
+
+tests:it("utf8.len with byte range", function()
+    local euro = utf8.char(0x20AC)  -- 3-byte char
+    local s = "A" .. euro .. "B"    -- 1 + 3 + 1 = 5 bytes, 3 chars
+    tests:assert_equal(utf8.len(s), 3)
+    tests:assert_equal(utf8.len(s, 2, 4), 1)  -- just the euro sign
+    tests:assert_equal(utf8.len(s, 1, 1), 1)  -- just A
+    tests:assert_equal(utf8.len(s, 5, 5), 1)  -- just B
+end)
+
+tests:it("utf8.offset negative n with multi-byte", function()
+    local euro = utf8.char(0x20AC)  -- 3 bytes
+    local s = euro .. "AB"          -- 3 + 1 + 1 = 5 bytes, 3 chars
+    tests:assert_equal(utf8.offset(s, -1), 5)  -- B starts at byte 5
+    tests:assert_equal(utf8.offset(s, -2), 4)  -- A starts at byte 4
+    tests:assert_equal(utf8.offset(s, -3), 1)  -- euro starts at byte 1
+end)
+
+tests:it("rejects overlong encoding", function()
+    local overlong = "\xC0\xAF"  -- overlong encoding of U+002F
+    local len, err = utf8.len(overlong)
+    tests:assert_nil(len)
+end)
+
+tests:it("codes iterates mixed multi-byte correctly", function()
+    local s = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
+    local cps = {}
+    for _, c in utf8.codes(s) do
+        cps[#cps + 1] = c
+    end
+    tests:assert_equal(#cps, 4)
+    tests:assert_equal(cps[1], 65)      -- A
+    tests:assert_equal(cps[2], 0xE9)    -- e accent
+    tests:assert_equal(cps[3], 0x20AC)  -- euro
+    tests:assert_equal(cps[4], 0x1F600) -- emoji
+end)
+
 tests:finish()
 

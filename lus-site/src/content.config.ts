@@ -48,6 +48,7 @@ const specSchema = z.object({
   signature: z.string().optional(),
   deprecated_by: z.string().optional(),
   removed_in: z.string().optional(),
+  fastcall: z.boolean().optional(),
 })
 
 const stdlib = defineCollection({

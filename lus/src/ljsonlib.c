@@ -405,7 +405,7 @@ static void parse_value_iterative(JsonParser *p) {
             char *kbuf = luaM_newvector(L, kcap, char);
             p->json++; /* skip quote */
             while (p->json < p->end && *p->json != '"') {
-              if (klen + 1 >= kcap) {
+              if (klen + 4 >= kcap) {
                 size_t newcap = kcap * 2;
                 kbuf = luaM_reallocvector(L, kbuf, kcap, newcap, char);
                 kcap = newcap;
@@ -417,9 +417,80 @@ static void parse_value_iterative(JsonParser *p) {
                 switch (*p->json) {
                   case '"': kbuf[klen++] = '"'; break;
                   case '\\': kbuf[klen++] = '\\'; break;
+                  case '/': kbuf[klen++] = '/'; break;
+                  case 'b': kbuf[klen++] = '\b'; break;
+                  case 'f': kbuf[klen++] = '\f'; break;
                   case 'n': kbuf[klen++] = '\n'; break;
-                  case 't': kbuf[klen++] = '\t'; break;
                   case 'r': kbuf[klen++] = '\r'; break;
+                  case 't': kbuf[klen++] = '\t'; break;
+                  case 'u': {
+                    unsigned int codepoint = 0;
+                    p->json++;
+                    for (int i = 0; i < 4; i++) {
+                      if (p->json >= p->end) {
+                        luaM_freearray(L, kbuf, kcap);
+                        luaM_freearray(L, stack, stack_cap);
+                        json_error(p, "incomplete \\uXXXX escape");
+                      }
+                      char uc = *p->json;
+                      codepoint <<= 4;
+                      if (uc >= '0' && uc <= '9')
+                        codepoint |= (unsigned)(uc - '0');
+                      else if (uc >= 'a' && uc <= 'f')
+                        codepoint |= (unsigned)(uc - 'a' + 10);
+                      else if (uc >= 'A' && uc <= 'F')
+                        codepoint |= (unsigned)(uc - 'A' + 10);
+                      else {
+                        luaM_freearray(L, kbuf, kcap);
+                        luaM_freearray(L, stack, stack_cap);
+                        json_error(p, "invalid hex digit");
+                      }
+                      p->json++;
+                    }
+                    p->json--;
+                    if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                      if (p->json + 1 < p->end &&
+                          p->json[1] == '\\' &&
+                          p->json + 2 < p->end &&
+                          p->json[2] == 'u') {
+                        unsigned int low = 0;
+                        p->json += 3;
+                        for (int i = 0; i < 4; i++) {
+                          if (p->json >= p->end)
+                            break;
+                          char lc = *p->json;
+                          low <<= 4;
+                          if (lc >= '0' && lc <= '9')
+                            low |= (unsigned)(lc - '0');
+                          else if (lc >= 'a' && lc <= 'f')
+                            low |= (unsigned)(lc - 'a' + 10);
+                          else if (lc >= 'A' && lc <= 'F')
+                            low |= (unsigned)(lc - 'A' + 10);
+                          p->json++;
+                        }
+                        p->json--;
+                        if (low >= 0xDC00 && low <= 0xDFFF) {
+                          codepoint =
+                              0x10000 +
+                              ((codepoint - 0xD800) << 10) +
+                              (low - 0xDC00);
+                        }
+                      }
+                    }
+                    char utf8buf[UTF8BUFFSZ];
+                    int utf8len = luaO_utf8esc(utf8buf, codepoint);
+                    if (klen + (size_t)utf8len > kcap) {
+                      size_t newcap = kcap * 2;
+                      kbuf = luaM_reallocvector(L, kbuf, kcap,
+                                                newcap, char);
+                      kcap = newcap;
+                    }
+                    memcpy(kbuf + klen,
+                           utf8buf + UTF8BUFFSZ - utf8len,
+                           (size_t)utf8len);
+                    klen += (size_t)utf8len;
+                    break;
+                  }
                   default: kbuf[klen++] = *p->json; break;
                 }
               }
@@ -503,7 +574,7 @@ static void parse_value_iterative(JsonParser *p) {
           char *kbuf = luaM_newvector(L, kcap, char);
           p->json++; /* skip quote */
           while (p->json < p->end && *p->json != '"') {
-            if (klen + 1 >= kcap) {
+            if (klen + 4 >= kcap) {
               size_t newcap = kcap * 2;
               kbuf = luaM_reallocvector(L, kbuf, kcap, newcap, char);
               kcap = newcap;
@@ -515,7 +586,80 @@ static void parse_value_iterative(JsonParser *p) {
               switch (*p->json) {
                 case '"': kbuf[klen++] = '"'; break;
                 case '\\': kbuf[klen++] = '\\'; break;
+                case '/': kbuf[klen++] = '/'; break;
+                case 'b': kbuf[klen++] = '\b'; break;
+                case 'f': kbuf[klen++] = '\f'; break;
                 case 'n': kbuf[klen++] = '\n'; break;
+                case 'r': kbuf[klen++] = '\r'; break;
+                case 't': kbuf[klen++] = '\t'; break;
+                case 'u': {
+                  unsigned int codepoint = 0;
+                  p->json++;
+                  for (int i = 0; i < 4; i++) {
+                    if (p->json >= p->end) {
+                      luaM_freearray(L, kbuf, kcap);
+                      luaM_freearray(L, stack, stack_cap);
+                      json_error(p, "incomplete \\uXXXX escape");
+                    }
+                    char uc = *p->json;
+                    codepoint <<= 4;
+                    if (uc >= '0' && uc <= '9')
+                      codepoint |= (unsigned)(uc - '0');
+                    else if (uc >= 'a' && uc <= 'f')
+                      codepoint |= (unsigned)(uc - 'a' + 10);
+                    else if (uc >= 'A' && uc <= 'F')
+                      codepoint |= (unsigned)(uc - 'A' + 10);
+                    else {
+                      luaM_freearray(L, kbuf, kcap);
+                      luaM_freearray(L, stack, stack_cap);
+                      json_error(p, "invalid hex digit");
+                    }
+                    p->json++;
+                  }
+                  p->json--;
+                  if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                    if (p->json + 1 < p->end &&
+                        p->json[1] == '\\' &&
+                        p->json + 2 < p->end &&
+                        p->json[2] == 'u') {
+                      unsigned int low = 0;
+                      p->json += 3;
+                      for (int i = 0; i < 4; i++) {
+                        if (p->json >= p->end)
+                          break;
+                        char lc = *p->json;
+                        low <<= 4;
+                        if (lc >= '0' && lc <= '9')
+                          low |= (unsigned)(lc - '0');
+                        else if (lc >= 'a' && lc <= 'f')
+                          low |= (unsigned)(lc - 'a' + 10);
+                        else if (lc >= 'A' && lc <= 'F')
+                          low |= (unsigned)(lc - 'A' + 10);
+                        p->json++;
+                      }
+                      p->json--;
+                      if (low >= 0xDC00 && low <= 0xDFFF) {
+                        codepoint =
+                            0x10000 +
+                            ((codepoint - 0xD800) << 10) +
+                            (low - 0xDC00);
+                      }
+                    }
+                  }
+                  char utf8buf[UTF8BUFFSZ];
+                  int utf8len = luaO_utf8esc(utf8buf, codepoint);
+                  if (klen + (size_t)utf8len > kcap) {
+                    size_t newcap = kcap * 2;
+                    kbuf = luaM_reallocvector(L, kbuf, kcap,
+                                              newcap, char);
+                    kcap = newcap;
+                  }
+                  memcpy(kbuf + klen,
+                         utf8buf + UTF8BUFFSZ - utf8len,
+                         (size_t)utf8len);
+                  klen += (size_t)utf8len;
+                  break;
+                }
                 default: kbuf[klen++] = *p->json; break;
               }
             }

@@ -1,0 +1,143 @@
+--[[
+    H4 Runner: Fastcall Performance Comparison
+
+    Runs bench_fastcall.lus twice — with and without --no-fastcall — then
+    computes per-benchmark and per-category speedups. Exits with failure
+    only if fastcalls are slower than baseline (geometric mean < 1.0).
+]]
+
+global print, os, io, tonumber, string, table, math, arg, ipairs, pairs, type, pledge
+
+pledge("load", "fs", "exec", "seal")
+
+local red = "\27[31m"
+local green = "\27[32m"
+local yellow = "\27[33m"
+local dim = "\27[2m"
+local reset = "\27[0m"
+
+local lus_cmd = arg[-1]
+local platform = os.platform()
+local sep = (platform == "windows") and "\\" or "/"
+local bench_path = "lus-tests" .. sep .. "h4" .. sep .. "bench_fastcall.lus"
+
+-- Run bench and parse TSV output: returns {label -> ns} and {cat -> {ns...}}
+local function run(extra_args)
+    local cmd = lus_cmd .. " " .. (extra_args or "") .. " " .. bench_path
+    io.stderr:write("$ " .. cmd .. "\n")
+    local f = io.popen(cmd)
+    local results = {}  -- label -> ns
+    local cats = {}     -- cat -> {label -> ns}
+    local order = {}    -- insertion-ordered labels
+    for line in f:lines() do
+        local cat, label, ns_str = string.match(line, "^(%S+)\t(.+)\t([%d%.]+)$")
+        if cat and label and ns_str then
+            local ns = tonumber(ns_str)
+            results[label] = ns
+            order[#order + 1] = {cat = cat, label = label}
+            if not cats[cat] then cats[cat] = {} end
+            cats[cat][label] = ns
+        end
+    end
+    f:close()
+    return results, cats, order
+end
+
+print("=== Fastcall Performance Benchmark ===\n")
+
+-- Run with fastcalls enabled (default)
+print("Phase 1: Measuring with fastcalls " .. green .. "enabled" .. reset .. "...")
+local fc_on, cats_on, order = run("")
+
+-- Run with fastcalls disabled
+print("Phase 2: Measuring with fastcalls " .. red .. "disabled" .. reset .. " (--no-fastcall)...")
+local fc_off, cats_off = run("--no-fastcall")
+
+-- Run with readonly env (fast dispatch)
+print("Phase 3: Measuring with " .. green .. "readonly-env" .. reset .. " (--readonly-env)...")
+local fc_ro, cats_ro = run("--readonly-env")
+
+-- Compute and display results
+print(string.format("\n%-26s %9s %9s %9s %8s %8s",
+    "Benchmark", "Readonly", "Fastcall", "Normal", "RO/Norm", "FC/Norm"))
+print(string.rep("-", 76))
+
+local log_sum = 0.0
+local log_sum_ro = 0.0
+local count = 0
+local cat_logs = {}  -- cat -> {sum_fc, sum_ro, count}
+local prev_cat = nil
+
+for _, entry in ipairs(order) do
+    local label = entry.label
+    local cat = entry.cat
+    local on = fc_on[label]
+    local off = fc_off[label]
+    local ro = fc_ro[label]
+
+    if not on or not off or not ro then goto continue end
+
+    -- Category separator
+    if cat ~= prev_cat then
+        if prev_cat then print("") end
+        prev_cat = cat
+    end
+
+    local speedup = off / on
+    local speedup_ro = off / ro
+    local color_ro = (speedup_ro >= 1.1) and green or (speedup_ro >= 0.95) and dim or red
+    local color = (speedup >= 1.1) and green or (speedup >= 0.95) and dim or red
+    print(string.format("  %-24s %7.1f ns %7.1f ns %7.1f ns %s%5.2fx%s %s%5.2fx%s",
+        label, ro, on, off, color_ro, speedup_ro, reset, color, speedup, reset))
+
+    local log_s = math.log(speedup)
+    local log_s_ro = math.log(speedup_ro)
+    log_sum = log_sum + log_s
+    log_sum_ro = log_sum_ro + log_s_ro
+    count = count + 1
+
+    if not cat_logs[cat] then cat_logs[cat] = {sum_fc = 0, sum_ro = 0, count = 0} end
+    cat_logs[cat].sum_fc = cat_logs[cat].sum_fc + log_s
+    cat_logs[cat].sum_ro = cat_logs[cat].sum_ro + log_s_ro
+    cat_logs[cat].count = cat_logs[cat].count + 1
+
+    ::continue::
+end
+
+-- Category summaries
+print("\n" .. string.rep("=", 76))
+print(string.format("%-26s %28s %8s", "Category", "RO/Norm", "FC/Norm"))
+print(string.rep("-", 76))
+
+local cat_order = {"base", "math", "string", "table", "vector", "utf8"}
+for _, cat in ipairs(cat_order) do
+    local cl = cat_logs[cat]
+    if cl and cl.count > 0 then
+        local geo = math.exp(cl.sum_fc / cl.count)
+        local geo_ro = math.exp(cl.sum_ro / cl.count)
+        local color = (geo >= 1.1) and green or (geo >= 0.95) and dim or red
+        local color_ro = (geo_ro >= 1.1) and green or (geo_ro >= 0.95) and dim or red
+        print(string.format("  %-24s %s%28.2fx%s %s%5.2fx%s",
+            cat, color_ro, geo_ro, reset, color, geo, reset))
+    end
+end
+
+local overall = math.exp(log_sum / count)
+local overall_ro = math.exp(log_sum_ro / count)
+local overall_color = (overall >= 1.1) and green or (overall >= 0.95) and dim or red
+local overall_color_ro = (overall_ro >= 1.1) and green or (overall_ro >= 0.95) and dim or red
+print(string.rep("-", 76))
+print(string.format("  %-24s %s%28.2fx%s %s%5.2fx%s",
+    "OVERALL", overall_color_ro, overall_ro, reset, overall_color, overall, reset))
+print(string.format("  %-24s %s%28.0f%%%s %s%.0f%%%s",
+    "", overall_color_ro, (1 - 1/overall_ro) * 100, reset,
+    overall_color, (1 - 1/overall) * 100, reset))
+
+-- Pass/fail: fastcalls should not be slower than normal
+if overall < 1.0 then
+    print("\n" .. red .. "FAIL: fastcalls are slower than normal calls" .. reset)
+    os.exit(1)
+else
+    print("\n" .. green .. "PASS" .. reset)
+    os.exit(0)
+end

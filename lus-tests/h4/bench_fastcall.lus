@@ -1,0 +1,140 @@
+--[[
+    Fastcall Benchmark
+    Runs a suite of micro-benchmarks with fastcalls enabled and disabled,
+    then computes the per-category and overall speedup.
+]]
+
+global print, type, rawlen, rawget, rawset, rawequal, assert, getmetatable
+global setmetatable, tonumber, tostring, math, string, table, vector, utf8
+global os, collectgarbage, io, arg, ipairs
+
+collectgarbage("stop")
+
+local N = 2000000
+local NS = 500000
+local WARMUP = 3
+local RUNS = 5
+
+local benchmarks = {}
+local function add(cat, label, n, fn)
+    benchmarks[#benchmarks + 1] = {cat = cat, label = label, n = n, fn = fn}
+end
+
+-- Base
+add("base", "type(integer)", N, function(i) return type(i) end)
+add("base", "type(string)", N, function() return type("hello") end)
+add("base", "assert(true)", N, function() return assert(true) end)
+add("base", "assert(integer)", N, function(i) return assert(i) end)
+local mt = {__index = function() return 42 end}
+local obj_mt = setmetatable({}, mt)
+add("base", "getmetatable(w/ mt)", N, function() return getmetatable(obj_mt) end)
+add("base", "getmetatable(no mt)", N, function() return getmetatable({}) end)
+add("base", "tonumber(integer)", N, function(i) return tonumber(i) end)
+add("base", "tonumber(string)", N, function() return tonumber("123") end)
+add("base", "tostring(integer)", N, function(i) return tostring(i) end)
+add("base", "tostring(string)", N, function() return tostring("hello") end)
+add("base", "tostring(nil)", N, function() return tostring(nil) end)
+add("base", "tostring(bool)", N, function() return tostring(true) end)
+add("base", "rawlen(table)", N, function() return rawlen({1,2,3}) end)
+add("base", "rawequal(int,int)", N, function(i) return rawequal(i, i) end)
+local rg_t = {a=1, b=2, c=3}
+add("base", "rawget(table,key)", N, function() return rawget(rg_t, "b") end)
+
+-- Math
+add("math", "math.abs(int)", N, function(i) return math.abs(-i) end)
+add("math", "math.max(int,int)", N, function(i) return math.max(i, 100) end)
+add("math", "math.min(int,int)", N, function(i) return math.min(i, 100) end)
+add("math", "math.ceil(float)", N, function() return math.ceil(3.7) end)
+add("math", "math.floor(float)", N, function() return math.floor(3.7) end)
+add("math", "math.sqrt(float)", N, function() return math.sqrt(2.0) end)
+add("math", "math.sin(float)", N, function() return math.sin(1.0) end)
+add("math", "math.cos(float)", N, function() return math.cos(1.0) end)
+add("math", "math.exp(float)", N, function() return math.exp(1.0) end)
+add("math", "math.log(float)", N, function() return math.log(2.718) end)
+add("math", "math.deg(float)", N, function() return math.deg(3.14) end)
+add("math", "math.rad(float)", N, function() return math.rad(180.0) end)
+add("math", "math.fmod(int,int)", N, function(i) return math.fmod(i, 7) end)
+add("math", "math.ult(int,int)", N, function(i) return math.ult(i, 1000000) end)
+add("math", "math.tointeger(int)", N, function(i) return math.tointeger(i) end)
+add("math", "math.type(integer)", N, function(i) return math.type(i) end)
+add("math", "math.ldexp(1.5,10)", N, function() return math.ldexp(1.5, 10) end)
+
+-- String
+add("string", "string.len(short)", N, function() return string.len("hello") end)
+add("string", "string.trim(spaces)", N, function() return string.trim("  hello  ") end)
+add("string", "string.ltrim(spaces)", N, function() return string.ltrim("  hello") end)
+add("string", "string.rtrim(spaces)", N, function() return string.rtrim("hello  ") end)
+add("string", "string.split(5)", NS, function() return string.split("a,b,c,d,e", ",") end)
+local split50_str = string.join({}, ",")
+do
+    local parts = {}
+    for i = 1, 50 do parts[i] = "item" .. tostring(i) end
+    split50_str = string.join(parts, ",")
+end
+add("string", "string.split(50)", NS / 5, function() return string.split(split50_str, ",") end)
+add("string", "string.join(5)", NS, function() return string.join({"a","b","c","d","e"}, ",") end)
+local join50_arr = {}
+for i = 1, 50 do join50_arr[i] = "item" .. tostring(i) end
+add("string", "string.join(50)", NS / 5, function() return string.join(join50_arr, ",") end)
+add("string", "string.sub(3)", N, function() return string.sub("hello world", 2, 8) end)
+add("string", "string.byte(2)", N, function() return string.byte("hello world", 5) end)
+add("string", "string.char(1)", N, function() return string.char(65) end)
+add("string", "string.lower(1)", N, function() return string.lower("HELLO WORLD") end)
+add("string", "string.upper(1)", N, function() return string.upper("hello world") end)
+add("string", "string.reverse(1)", N, function() return string.reverse("hello world") end)
+
+-- Table
+local nums10 = {1,2,3,4,5,6,7,8,9,10}
+local nums100 = {}
+for i = 1, 100 do nums100[i] = i * 0.7 end
+local nums1k = {}
+for i = 1, 1000 do nums1k[i] = i * 0.7 end
+add("table", "table.sum(10)", NS, function() return table.sum(nums10) end)
+add("table", "table.sum(100)", NS, function() return table.sum(nums100) end)
+add("table", "table.sum(1000)", NS / 10, function() return table.sum(nums1k) end)
+add("table", "table.mean(10)", NS, function() return table.mean(nums10) end)
+add("table", "table.mean(100)", NS, function() return table.mean(nums100) end)
+add("table", "table.median(10)", NS, function() return table.median(nums10) end)
+add("table", "table.median(100)", NS / 5, function() return table.median(nums100) end)
+add("table", "table.stdev(10)", NS, function() return table.stdev(nums10) end)
+add("table", "table.stdev(100)", NS, function() return table.stdev(nums100) end)
+add("table", "table.stdev(1000)", NS / 10, function() return table.stdev(nums1k) end)
+
+-- Vector
+add("vector", "vector.create(64)", NS, function() return vector.create(64) end)
+local vec = vector.create(1024)
+add("vector", "vector.size(vec)", N, function() return vector.size(vec) end)
+add("vector", "vector.clone(1024)", NS, function() return vector.clone(vec) end)
+
+-- UTF-8
+local ustr = "Héllo, Wörld!"
+add("utf8", "utf8.len(mixed)", N, function() return utf8.len(ustr) end)
+add("utf8", "utf8.codepoint(multi)", N, function() return utf8.codepoint("é") end)
+add("utf8", "utf8.char(multi)", N, function() return utf8.char(233) end)
+add("utf8", "utf8.offset(utf8,5)", N, function() return utf8.offset(ustr, 5) end)
+
+-- Measure a single benchmark, return median ns/call
+local function measure(b)
+    local n = b.n
+    local fn = b.fn
+    for w = 1, WARMUP do
+        for i = 1, n do fn(i) end
+    end
+    local times = {}
+    for r = 1, RUNS do
+        collectgarbage("collect")
+        local t0 = os.clock()
+        for i = 1, n do fn(i) end
+        times[r] = ((os.clock() - t0) / n) * 1e9
+    end
+    table.sort(times)
+    return times[math.ceil(RUNS / 2)]
+end
+
+-- Run all and emit TSV to stdout
+io.stderr:write("Running " .. #benchmarks .. " benchmarks (" .. WARMUP .. " warmup + " .. RUNS .. " measured)...\n")
+for idx = 1, #benchmarks do
+    local b = benchmarks[idx]
+    local ns = measure(b)
+    print(string.format("%s\t%s\t%.2f", b.cat, b.label, ns))
+end

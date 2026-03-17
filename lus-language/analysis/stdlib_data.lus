@@ -547,7 +547,7 @@ M.signatures = {
   ["network.fetch"] = {{n = "url", t = "string"}, {n = "options", t = "table", opt = true}},
   ["network.tcp.bind"] = {{n = "host", t = "string"}, {n = "port", t = "integer"}},
   ["network.tcp.connect"] = {{n = "host", t = "string"}, {n = "port", t = "integer"}},
-  ["network.udp.open"] = {{n = "host", t = "string"}, {n = "port", t = "integer"}},
+  ["network.udp.open"] = {{n = "port", t = "integer", opt = true}, {n = "address", t = "string", opt = true}},
   ["next"] = {{n = "t", t = "table"}, {n = "k", t = "any", opt = true}},
   ["os.date"] = {{n = "format", t = "string", opt = true}, {n = "time", t = "integer", opt = true}},
   ["os.difftime"] = {{n = "t2", t = "integer"}, {n = "t1", t = "integer"}},
@@ -1041,7 +1041,7 @@ Binds a TCP server to `host` and `port`. Returns a server object that can accept
   ["network.tcp.connect"] = [[
 Connects to a TCP server at `host` and `port`. Returns a connection object for reading and writing. Requires `network` pledge.]],
   ["network.udp.open"] = [[
-Opens a UDP socket bound to `host` and `port`. Returns a socket object for sending and receiving datagrams. Requires `network` pledge.]],
+Opens a UDP socket, optionally bound to `port` and `address`. Returns a socket object for sending and receiving datagrams. Requires `network` pledge.]],
   ["next"] = [[
 Returns the next key--value pair after key `k` in table `t`. When called with `nil` as the second argument, returns the first pair. Returns `nil` when there are no more pairs. The traversal order is undefined.]],
   ["os.clock"] = [[

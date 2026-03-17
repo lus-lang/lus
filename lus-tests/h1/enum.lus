@@ -10,7 +10,7 @@
     - Ordering comparison by index: e.name1 < e.name2
 ]]
 
-global assert, type, tonumber, os, require, pledge
+global assert, type, tonumber, tostring, collectgarbage, os, require, pledge
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -229,6 +229,33 @@ tests:it("enum with many values", function()
     assert(tonumber(e.v1) == 1)
     assert(tonumber(e.v10) == 10)
     assert(e[5] == e.v5)
+end)
+
+tests:describe("edge cases", function()
+    tests:it("tostring on enum value", function()
+        local e = enum apple, orange end
+        local s = tostring(e.apple)
+        tests:assert_type(s, "string")
+    end)
+
+    tests:it("enum as table key", function()
+        local e = enum red, green, blue end
+        local t = {}
+        t[e.red] = "red"
+        t[e.green] = "green"
+        tests:assert_equal(t[e.red], "red")
+        tests:assert_equal(t[e.green], "green")
+        tests:assert_nil(t[e.blue])
+    end)
+
+    tests:it("enum survives GC", function()
+        local e = enum a, b, c end
+        local val = e.b
+        collectgarbage("collect")
+        collectgarbage("collect")
+        tests:assert_equal(val, e.b)
+        tests:assert_equal(tonumber(val), 2)
+    end)
 end)
 
 tests:finish()

@@ -632,6 +632,7 @@ static int fs_remove(lua_State *L) {
 
 static int fs_type(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
+  check_fs_permission(L, "fs:read", path);
 
 #if defined(LUS_PLATFORM_WINDOWS)
   DWORD attrs = GetFileAttributes(path);
@@ -667,6 +668,7 @@ static int fs_type(lua_State *L) {
 
 static int fs_follow(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
+  check_fs_permission(L, "fs:read", path);
 #if defined(LUS_PLATFORM_WINDOWS)
   HANDLE hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
@@ -730,6 +732,7 @@ static int fs_follow(lua_State *L) {
 static int fs_createlink(lua_State *L) {
   const char *at = luaL_checkstring(L, 1);
   const char *target = luaL_checkstring(L, 2);
+  check_fs_permission(L, "fs:write", at);
 
 #if defined(LUS_PLATFORM_WINDOWS)
   /* Determine if target is a directory to use correct flag */
@@ -870,6 +873,7 @@ static int create_dirs_recursive(lua_State *L, const char *path) {
 
 static int fs_createdirectory(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
+  check_fs_permission(L, "fs:write", path);
   int recursive = lua_toboolean(L, 2);
 
   if (recursive) {

@@ -19,6 +19,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lfastcall.h"
 #include "lualib.h"
 #include "llimits.h"
 
@@ -1003,5 +1004,12 @@ static const luaL_Reg tab_funcs[] = {{"clone", tclone},
 
 LUAMOD_API int luaopen_table(lua_State *L) {
   luaL_newlib(L, tab_funcs);
+  /* Register fastcalls for table library functions */
+  luaF_registerfastcall(L, FC_TABLE_SUM, tsum, 1);
+  luaF_registerfastcall(L, FC_TABLE_MEAN, tmean, 1);
+  luaF_registerfastcall(L, FC_TABLE_MEDIAN, tmedian, 1);
+  luaF_registerfastcall(L, FC_TABLE_STDEV, tstdev, 1);
+  luaF_registerfastcall(L, FC_TABLE_TRANSPOSE, ttranspose, 1);
+  luaF_registerfastcall(L, FC_TABLE_RESHAPE, treshape, 3);
   return 1;
 }

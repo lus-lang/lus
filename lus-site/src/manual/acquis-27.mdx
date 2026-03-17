@@ -1,0 +1,63 @@
+---
+order: 127
+title: "Acquis 27 - Readonly Environment"
+acquis: true
+shortdesc: "The --readonly-env flag freezes _ENV and module tables, enabling fast-dispatch fastcalls."
+draft: true
+---
+
+The `--readonly-env` flag freezes the global environment (`_ENV`) and all standard library module tables after initialization. This guarantees that no stdlib function can be replaced at runtime, allowing the VM to skip function-pointer validation on fastcalls and dispatch directly.
+
+## Usage
+
+```lus
+-- Run with: lus --readonly-env script.lus
+
+-- Standard library calls work normally
+print(type(42))           -- "number"
+print(math.abs(-5))       -- 5
+print(string.sub("hello", 1, 3))  -- "hel"
+```
+
+Any attempt to write to a frozen table raises a runtime error:
+
+```lus
+-- All of these error under --readonly-env:
+x = 1                                -- attempt to modify a readonly table
+math.abs = function(n) return n end  -- attempt to modify a readonly table
+rawset(_G, "y", 2)                   -- attempt to modify a readonly table
+setmetatable(string, {})             -- attempt to modify a readonly table
+```
+
+## Scope
+
+The flag freezes tables two levels deep from `_ENV`:
+
+- `_ENV` itself (the global table)
+- All table-valued entries in `_ENV` (`math`, `string`, `table`, `os`, `io`, `debug`, `utf8`, `coroutine`, `vector`, `network`, `worker`, `fs`, etc.)
+- All table-valued entries within those modules (`network.tcp`, `network.udp`, etc.)
+
+User-created tables are not affected. Local variables, function-scoped tables, and tables created after initialization remain fully mutable.
+
+```lus
+-- User tables are unaffected
+local t = {1, 2, 3}
+t[4] = 4                -- works fine
+
+-- New globals cannot be created
+myGlobal = "hello"      -- errors: attempt to modify a readonly table
+```
+
+## Fast dispatch
+
+When `--readonly-env` is active, the VM's `OP_FASTCALL` handler skips the runtime function-pointer comparison that normally verifies the called function hasn't been replaced. Instead, it checks a single byte flag and dispatches immediately. This reduces per-call overhead for all fastcalled stdlib functions.
+
+## Interaction with other flags
+
+- `--readonly-env` can be combined with `--no-fastcall` (readonly enforcement still applies, but fastcalls are not emitted).
+- The flag is applied after all libraries are loaded and the `arg` table is created.
+- Workers inherit the readonly-env setting from the parent state.
+
+## Interaction with pledge
+
+The `--readonly-env` flag is orthogonal to the pledge system. Pledges restrict which operations a script can perform (filesystem, network, etc.), while `--readonly-env` prevents modification of the environment tables. Both can be used together for defense-in-depth.

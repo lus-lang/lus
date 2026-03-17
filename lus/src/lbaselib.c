@@ -17,6 +17,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lfastcall.h"
 #include "llimits.h"
 #include "lobject.h"
 #include "lpledge.h"
@@ -534,6 +535,18 @@ LUAMOD_API int luaopen_base(lua_State *L) {
   /* set global _VERSION */
   lua_pushliteral(L, LUA_VERSION);
   lua_setfield(L, -2, "_VERSION");
+
+  /* Register fastcalls for base library functions */
+  luaF_registerfastcall(L, FC_TYPE, luaB_type, 1);
+  luaF_registerfastcall(L, FC_RAWLEN, luaB_rawlen, 1);
+  luaF_registerfastcall(L, FC_RAWGET, luaB_rawget, 2);
+  luaF_registerfastcall(L, FC_RAWSET, luaB_rawset, 3);
+  luaF_registerfastcall(L, FC_RAWEQUAL, luaB_rawequal, 2);
+  luaF_registerfastcall(L, FC_ASSERT, luaB_assert, 1);
+  luaF_registerfastcall(L, FC_GETMETATABLE, luaB_getmetatable, 1);
+  luaF_registerfastcall(L, FC_SETMETATABLE, luaB_setmetatable, 2);
+  luaF_registerfastcall(L, FC_TONUMBER, luaB_tonumber, 1);
+  luaF_registerfastcall(L, FC_TOSTRING, luaB_tostring, 1);
 
   /* Register base permission granters */
   lus_registerpledge(L, "exec", base_granter);

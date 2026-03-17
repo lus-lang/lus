@@ -17,6 +17,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lfastcall.h"
 #include "lualib.h"
 #include "llimits.h"
 
@@ -291,5 +292,10 @@ LUAMOD_API int luaopen_utf8(lua_State *L) {
   luaL_newlib(L, funcs);
   lua_pushlstring(L, UTF8PATT, sizeof(UTF8PATT) / sizeof(char) - 1);
   lua_setfield(L, -2, "charpattern");
+  /* Register fastcalls for utf8 library functions */
+  luaF_registerfastcall(L, FC_UTF8_LEN, utflen, 1);
+  luaF_registerfastcall(L, FC_UTF8_CODEPOINT, codepoint, 1);
+  luaF_registerfastcall(L, FC_UTF8_CHAR, utfchar, 1);
+  luaF_registerfastcall(L, FC_UTF8_OFFSET, byteoffset, 2);
   return 1;
 }

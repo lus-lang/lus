@@ -48,7 +48,6 @@ const sectionOrder = [
       d.module === "network.tcp" ||
       d.module === "network.udp",
   },
-  { title: "JSON Library", filter: (d: any) => d.module === "json" },
   { title: "Vector Library", filter: (d: any) => d.module === "vector" },
   {
     title: "Worker Library",
@@ -130,6 +129,10 @@ if (remaining.length > 0) {
     @apply bg-red-200 text-red-800;
   }
 
+  .api-badge-fastcall {
+    @apply bg-violet-200 text-violet-800;
+  }
+
   .api-signature {
     @apply font-mono text-sm bg-white border border-lime-300 px-3 py-2 mb-2 overflow-x-auto whitespace-pre;
   }
@@ -181,6 +184,9 @@ if (remaining.length > 0) {
               )}
               {badge === "lua" && (
                 <span class="api-badge api-badge-lua">lua</span>
+              )}
+              {d.fastcall && (
+                <span class="api-badge api-badge-fastcall">fastcall</span>
               )}
               {isFunction && !hasCSignature ? (
                 <Fragment>

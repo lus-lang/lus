@@ -16,6 +16,7 @@ typedef struct CCatchInfo
 
 #include <setjmp.h> /* for jmp_buf in CatchInfo */
 
+#include "lfastcall.h"
 #include "lobject.h"
 #include "ltm.h"
 #include "lzio.h"
@@ -368,6 +369,16 @@ typedef struct global_State {
   lua_WarnFunction warnf;                    /* warning function */
   void *ud_warn;                             /* auxiliary data to 'warnf' */
   lu_byte pedantic;                          /* pedantic warnings enabled */
+  lu_byte no_fastcall;                       /* disable fastcall emission */
+  lu_byte readonly_env;                      /* environment is immutable */
+  FastCallEntry fastcall_table[FC_COUNT];    /* fastcall function table */
+  TString *fc_typenames[LUA_TOTALTYPES];     /* pre-interned type names */
+  TString *fc_str_integer;                   /* pre-interned "integer" */
+  TString *fc_str_float;                     /* pre-interned "float" */
+  TString *fc_str_nil;                       /* pre-interned "nil" */
+  TString *fc_str_true;                      /* pre-interned "true" */
+  TString *fc_str_false;                     /* pre-interned "false" */
+  TString *fc_str___metatable;               /* pre-interned "__metatable" */
   LX mainth;                                 /* main thread of this state */
 } global_State;
 

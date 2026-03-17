@@ -69,9 +69,11 @@ static void msgqueue_init(MessageQueue *q) {
   q->count = 0;
 }
 
-static void msgqueue_push(MessageQueue *q, StandaloneArena *arena, char *data,
-                          size_t size) {
+static int msgqueue_push(MessageQueue *q, StandaloneArena *arena, char *data,
+                         size_t size) {
   MessageNode *node = (MessageNode *)malloc(sizeof(MessageNode));
+  if (node == NULL)
+    return 0;
   node->arena = arena;
   node->data = data;
   node->size = size;
@@ -84,6 +86,7 @@ static void msgqueue_push(MessageQueue *q, StandaloneArena *arena, char *data,
   }
   q->tail = node;
   q->count++;
+  return 1;
 }
 
 static int msgqueue_pop(MessageQueue *q, StandaloneArena **arena, char **data,
@@ -481,7 +484,10 @@ static int worker_lib_message(lua_State *L) {
 
   /* Push to outbox - ownership of arena transfers to message queue */
   lus_mutex_lock(&w->mutex);
-  msgqueue_push(&w->outbox, buf.arena, buf.data, buf.size);
+  if (!msgqueue_push(&w->outbox, buf.arena, buf.data, buf.size)) {
+    lus_mutex_unlock(&w->mutex);
+    return luaL_error(L, "out of memory");
+  }
   lus_cond_signal(&w->outbox_cond);
 
   /* Signal multi-worker select if receiver is waiting.
@@ -742,7 +748,11 @@ static int lib_create(lua_State *L) {
       return lua_error(L);
     }
     lus_mutex_lock(&w->mutex);
-    msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size);
+    if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
+      lus_mutex_unlock(&w->mutex);
+      worker_decref(w);
+      return luaL_error(L, "out of memory");
+    }
     lus_mutex_unlock(&w->mutex);
   }
   w->nargs = nargs;
@@ -910,7 +920,10 @@ static int lib_send(lua_State *L) {
 
   /* Push to inbox - ownership of arena transfers to message queue */
   lus_mutex_lock(&w->mutex);
-  msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size);
+  if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
+    lus_mutex_unlock(&w->mutex);
+    return luaL_error(L, "out of memory");
+  }
   lus_cond_signal(&w->inbox_cond);
   lus_mutex_unlock(&w->mutex);
 
@@ -980,7 +993,10 @@ LUA_API int lus_worker_send(lua_State *L, WorkerState *w, int idx) {
     return 0;
   }
   lus_mutex_lock(&w->mutex);
-  msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size);
+  if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
+    lus_mutex_unlock(&w->mutex);
+    return 0;
+  }
   lus_cond_signal(&w->inbox_cond);
   lus_mutex_unlock(&w->mutex);
   return 1;

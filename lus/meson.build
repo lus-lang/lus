@@ -88,6 +88,7 @@ core_sources = files(
   'src/ldo.c',
   'src/ldump.c',
   'src/lenum.c',
+  'src/lfastcall.c',
   'src/lfunc.c',
   'src/lgc.c',
   'src/lglob.c',
@@ -229,6 +230,7 @@ h1_tests = [
   'h1/runtime-attrs',
   'h1/doexpr',
   'h1/interp',
+  'h1/fastcall',
   'h1/lsp-unit',
   'h1/lsp-integration',
   'h1/lsp-lint-h1',
@@ -285,11 +287,19 @@ test('h3/ci', lus_exe,
 )
 
 # H4: Performance (Lus Runner)
+# Benchmarks are opt-in: run with `meson test --suite h4`
 test('h4/bench', lus_exe,
   args: ['lus-tests/h4/runner.lus'],
   workdir: meson.project_source_root() / '..',
   suite: 'h4',
   env: ['BUILD_TYPE=Unstable'], # Default to Unstable for local tests
+)
+
+test('h4/fastcall', lus_exe,
+  args: ['lus-tests/h4/runner_fastcall.lus'],
+  workdir: meson.project_source_root() / '..',
+  suite: 'h4',
+  timeout: 600,
 )
 
 

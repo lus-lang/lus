@@ -25,6 +25,7 @@
 #include "lmem.h"
 #include "lobject.h"
 #include "lopcodes.h"
+#include "lfastcall.h"
 #include "lparser.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -1512,7 +1513,70 @@ static int explist(LexState *ls, expdesc *v) {
   return n;
 }
 
-static void funcargs(LexState *ls, expdesc *f) {
+
+/*
+** Check whether the call at register 'base' with 'nparams' arguments
+** matches a fastcall pattern. Scans backward through bytecode to
+** detect:
+**   1-level: GETTABUP base, 0, K[name]  (base lib: type, rawlen, ...)
+**   2-level: GETTABUP t, 0, K[mod] + GETFIELD base, t, K[func]  (math.max, ...)
+** Returns fastcall ID or -1 if not eligible.
+*/
+static int check_fastcall(FuncState *fs, int base, int nparams) {
+  Proto *f = fs->f;
+  global_State *g = G(fs->ls->L);
+  int pc;
+  /* Scan backward to find instruction that loaded R[base] */
+  for (pc = fs->pc - 1; pc >= 0; pc--) {
+    Instruction inst = f->code[pc];
+    OpCode op = GET_OPCODE(inst);
+    if (!testAMode(op))
+      continue;
+    if (GETARG_A(inst) != base)
+      continue;
+    /* Found instruction that writes to R[base] */
+    if (op == OP_GETTABUP) {
+      /* 1-level: GETTABUP base, 0, K[idx] */
+      int upval = GETARG_B(inst);
+      int kidx = GETARG_C(inst);
+      TString *funcname;
+      if (upval != 0) return -1;
+      funcname = tsvalue(&f->k[kidx]);
+      return luaF_findfastcall(g, NULL, funcname, nparams);
+    }
+    else if (op == OP_GETFIELD) {
+      /* 2-level: GETFIELD base, R[t], K[func_idx] */
+      int tblreg = GETARG_B(inst);
+      int func_kidx = GETARG_C(inst);
+      TString *funcname = tsvalue(&f->k[func_kidx]);
+      int pc2;
+      /* Find instruction that loaded R[tblreg] */
+      for (pc2 = pc - 1; pc2 >= 0; pc2--) {
+        Instruction i2 = f->code[pc2];
+        OpCode op2 = GET_OPCODE(i2);
+        if (!testAMode(op2))
+          continue;
+        if (GETARG_A(i2) != tblreg)
+          continue;
+        if (op2 == OP_GETTABUP) {
+          int upval2 = GETARG_B(i2);
+          int mod_kidx = GETARG_C(i2);
+          TString *modname;
+          if (upval2 != 0) return -1;
+          modname = tsvalue(&f->k[mod_kidx]);
+          return luaF_findfastcall(g, modname, funcname, nparams);
+        }
+        return -1; /* table loaded by unrecognized instruction */
+      }
+      return -1;
+    }
+    return -1; /* R[base] loaded by unrecognized instruction */
+  }
+  return -1;
+}
+
+
+static void funcargs(LexState *ls, expdesc *f, int fc_eligible) {
   FuncState *fs = ls->fs;
   expdesc args;
   int base, nparams;
@@ -1568,7 +1632,23 @@ static void funcargs(LexState *ls, expdesc *f) {
       luaK_exp2nextreg(fs, &args); /* close last argument */
     nparams = fs->freereg - (base + 1);
   }
-  init_exp(f, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
+  {
+    int fc_id = -1;
+    /* Check if this call can be fastcalled */
+    if (fc_eligible && nparams != LUA_MULTRET &&
+        fs->nups > 0 && fs->f->upvalues[0].name == ls->envn &&
+        !G(fs->ls->L)->no_fastcall) {
+      fc_id = check_fastcall(fs, base, nparams);
+    }
+    if (fc_id >= 0) {
+      init_exp(f, VCALL,
+               luaK_codeABC(fs, OP_FASTCALL, base, nparams + 1, 2));
+      luaK_code(fs, CREATE_Ax(OP_EXTRAARG, fc_id));
+    }
+    else {
+      init_exp(f, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
+    }
+  }
   luaK_fixline(fs, line);
 
   /* Create call AST node */
@@ -1902,7 +1982,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
         method_name = ls->t.seminfo.ts; /* capture method name */
         codename(ls, &key);
         luaK_self(fs, v, &key);
-        funcargs(ls, v);
+        funcargs(ls, v, 0);  /* method calls are not fastcall-eligible */
         /* Create AST_METHODCALL node */
         if (AST_ACTIVE(ls)) {
           LusAstNode *mcall =
@@ -1926,7 +2006,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
       case TK_STRING:
       case '{' /*}*/: { /* funcargs */
         luaK_exp2nextreg(fs, v);
-        funcargs(ls, v);
+        funcargs(ls, v, niljumps == NO_JUMP);  /* eligible if not in opt chain */
         /* Function call result: if in chain, ensure in basereg */
         if (basereg != -1) {
           luaK_exp2anyreg(fs, v);
@@ -4960,10 +5040,21 @@ static void retstat(LexState *ls) {
     if (hasmultret(e.k)) {
       luaK_setmultret(fs, &e);
       if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc) { /* tail call? */
-        SET_OPCODE(getinstruction(fs, &e), OP_TAILCALL);
-        lua_assert(GETARG_A(getinstruction(fs, &e)) == luaY_nvarstack(fs));
+        Instruction *pc = &getinstruction(fs, &e);
+        if (GET_OPCODE(*pc) == OP_FASTCALL) {
+          /* Fastcalls produce exactly 1 result and are faster than C tail
+             calls. Undo setmultret and let OP_RETURN1 handle it. */
+          SETARG_C(*pc, 2);
+        }
+        else {
+          SET_OPCODE(*pc, OP_TAILCALL);
+          lua_assert(GETARG_A(*pc) == luaY_nvarstack(fs));
+          nret = LUA_MULTRET; /* return all values */
+        }
       }
-      nret = LUA_MULTRET; /* return all values */
+      else {
+        nret = LUA_MULTRET; /* return all values */
+      }
     }
     else {
       if (nret == 1)                     /* only one single value? */

@@ -19,8 +19,9 @@
 #include "lua.h"
 
 #include "lauxlib.h"
-#include "lualib.h"
+#include "lfastcall.h"
 #include "llimits.h"
+#include "lualib.h"
 
 
 #undef PI
@@ -753,5 +754,27 @@ LUAMOD_API int luaopen_math(lua_State *L) {
   lua_pushinteger(L, LUA_MININTEGER);
   lua_setfield(L, -2, "mininteger");
   setrandfunc(L);
+  /* Register fastcalls for math library functions */
+  luaF_registerfastcall(L, FC_MATH_ABS, math_abs, 1);
+  luaF_registerfastcall(L, FC_MATH_MAX, math_max, 2);
+  luaF_registerfastcall(L, FC_MATH_MIN, math_min, 2);
+  luaF_registerfastcall(L, FC_MATH_CEIL, math_ceil, 1);
+  luaF_registerfastcall(L, FC_MATH_FLOOR, math_floor, 1);
+  luaF_registerfastcall(L, FC_MATH_SQRT, math_sqrt, 1);
+  luaF_registerfastcall(L, FC_MATH_SIN, math_sin, 1);
+  luaF_registerfastcall(L, FC_MATH_COS, math_cos, 1);
+  luaF_registerfastcall(L, FC_MATH_TAN, math_tan, 1);
+  luaF_registerfastcall(L, FC_MATH_ASIN, math_asin, 1);
+  luaF_registerfastcall(L, FC_MATH_ACOS, math_acos, 1);
+  luaF_registerfastcall(L, FC_MATH_ATAN, math_atan, 1);
+  luaF_registerfastcall(L, FC_MATH_EXP, math_exp, 1);
+  luaF_registerfastcall(L, FC_MATH_LOG, math_log, 1);
+  luaF_registerfastcall(L, FC_MATH_DEG, math_deg, 1);
+  luaF_registerfastcall(L, FC_MATH_RAD, math_rad, 1);
+  luaF_registerfastcall(L, FC_MATH_FMOD, math_fmod, 2);
+  luaF_registerfastcall(L, FC_MATH_ULT, math_ult, 2);
+  luaF_registerfastcall(L, FC_MATH_TOINTEGER, math_toint, 1);
+  luaF_registerfastcall(L, FC_MATH_TYPE, math_type, 1);
+  luaF_registerfastcall(L, FC_MATH_LDEXP, math_ldexp, 2);
   return 1;
 }

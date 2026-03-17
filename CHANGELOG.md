@@ -5,6 +5,19 @@
 **Release date:** TBD
 
 - Added `fromcsv` and `tocsv` to parse CSV files.
+- Added VM-intrinsified fastcalls for common standard library functions, reducing call overhead by ~31% (1.46x geometric mean speedup across 57 benchmarks). When the compiler detects a call to a known stdlib function with the expected argument count, it emits `OP_FASTCALL` instead of `OP_CALL`. The VM validates at runtime that the function hasn't been replaced and executes the operation inline, falling back to a normal call otherwise.
+  - Biggest individual gains are `table.sum` (4.60x), `string.join` (3.93x), `table.stdev` (2.35x), `tostring` (2.12x), and `table.mean` (1.97x).
+  - `type`, `rawlen`, `rawget`, `rawset`, `rawequal`, `assert`, `getmetatable`, `setmetatable`, `tonumber`, `tostring`, `math.abs`, `math.max`, `math.min`, `math.ceil`, `math.floor`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.asin`, `math.acos`, `math.atan`, `math.exp`, `math.log`, `math.deg`, `math.rad`, `math.fmod`, `math.ult`, `math.tointeger`, `math.type`, `math.ldexp`, `string.len`, `string.sub`, `string.byte`, `string.char`, `string.lower`, `string.upper`, `string.reverse`, `string.trim`, `string.ltrim`, `string.rtrim`, `string.split`, `string.join`, `table.sum`, `table.mean`, `table.median`, `table.stdev`, `table.transpose`, `table.reshape`, `vector.create`, `vector.clone`, `vector.size`, `vector.resize`, `utf8.len`, `utf8.codepoint`, `utf8.char` and `utf8.offset` have supported fastcalls.
+  - Fastcall emission can be disabled by passing `--no-fastcall` to `lus`.
+- Added `--readonly-env` flag that freezes `_ENV` and all module tables after initialization, enabling fast-dispatch fastcalls that skip runtime validation.
+- Fixed `network.tcp.bind` not checking `network:tcp` permission.
+- Fixed `fs.createdirectory` and `fs.createlink` not checking `fs:write` permission.
+- Fixed `fs.type` and `fs.follow` not checking `fs:read` permission.
+- Fixed JSON parser not handling `\b`, `\f`, `\/`, and `\uXXXX` escape sequences in object keys.
+- Fixed `msgqueue_push` crashing on allocation failure in the worker library.
+
+### `table`
+
 - Added `table.sum` to compute the sum of numeric values.
 - Added `table.mean` to compute the arithmetic mean.
 - Added `table.median` to compute the median.
@@ -18,11 +31,17 @@
 - Added `table.unzip` to split tuples into separate tables.
 - Added `table.transpose` to transpose a 2D matrix.
 - Added `table.reshape` to reshape a 1D array into a matrix.
+
+### `string`
+
 - Added `string.split` to split a string on a delimiter.
 - Added `string.join` to join table elements with a delimiter.
 - Added `string.trim` to remove leading and trailing characters.
 - Added `string.ltrim` to remove leading characters.
 - Added `string.rtrim` to remove trailing characters.
+
+### `vector`
+
 - Added `vector.archive.gzip.compress` and `vector.archive.gzip.decompress` for gzip compression.
 - Added `vector.archive.deflate.compress` and `vector.archive.deflate.decompress` for raw deflate compression.
 - Added `vector.archive.zstd.compress` and `vector.archive.zstd.decompress` for Zstandard compression.

@@ -1,0 +1,1299 @@
+global print, require, string, math, assert, type, rawequal, rawget, rawset, rawlen, _G, table, tostring, tonumber, select, error, pledge, setmetatable, getmetatable, collectgarbage, load, vector, utf8, coroutine
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("fastcall")
+
+-- ==== Correctness: type() ====
+tests:it("type correctness", function()
+    assert(type(nil) == "nil")
+    assert(type(true) == "boolean")
+    assert(type(false) == "boolean")
+    assert(type(42) == "number")
+    assert(type(3.14) == "number")
+    assert(type("hello") == "string")
+    assert(type({}) == "table")
+    assert(type(print) == "function")
+    assert(type(type) == "function")
+end)
+
+-- ==== Correctness: rawlen() ====
+tests:it("rawlen correctness", function()
+    assert(rawlen({1, 2, 3}) == 3)
+    assert(rawlen({}) == 0)
+    assert(rawlen("hello") == 5)
+    assert(rawlen("") == 0)
+    assert(rawlen({1, 2, 3, 4, 5}) == 5)
+end)
+
+-- ==== Correctness: rawget() ====
+tests:it("rawget correctness", function()
+    local t = {a = 1, b = 2, [3] = "three"}
+    assert(rawget(t, "a") == 1)
+    assert(rawget(t, "b") == 2)
+    assert(rawget(t, 3) == "three")
+    assert(rawget(t, "c") == nil)
+    assert(rawget(t, 999) == nil)
+end)
+
+-- ==== Correctness: rawset() ====
+tests:it("rawset correctness", function()
+    local t = {}
+    rawset(t, "x", 10)
+    assert(t.x == 10)
+    rawset(t, 1, "one")
+    assert(t[1] == "one")
+    rawset(t, "x", nil)
+    assert(t.x == nil)
+end)
+
+-- ==== Correctness: rawequal() ====
+tests:it("rawequal correctness", function()
+    assert(rawequal(1, 1) == true)
+    assert(rawequal(1, 2) == false)
+    assert(rawequal("a", "a") == true)
+    assert(rawequal("a", "b") == false)
+    assert(rawequal(nil, nil) == true)
+    assert(rawequal(nil, false) == false)
+    local t = {}
+    assert(rawequal(t, t) == true)
+    assert(rawequal({}, {}) == false)
+end)
+
+-- ==== Correctness: math.abs() ====
+tests:it("math.abs correctness", function()
+    assert(math.abs(5) == 5)
+    assert(math.abs(-5) == 5)
+    assert(math.abs(0) == 0)
+    assert(math.abs(3.14) == 3.14)
+    assert(math.abs(-3.14) == 3.14)
+    assert(math.abs(0.0) == 0.0)
+    -- Edge case: mininteger (abs of mininteger wraps in two's complement)
+    local result = math.abs(math.mininteger)
+    assert(type(result) == "number")
+end)
+
+-- ==== Correctness: math.max() ====
+tests:it("math.max correctness", function()
+    assert(math.max(1, 2) == 2)
+    assert(math.max(2, 1) == 2)
+    assert(math.max(-1, -2) == -1)
+    assert(math.max(0, 0) == 0)
+    -- Integer-integer
+    assert(math.max(100, 200) == 200)
+    -- Float-float
+    assert(math.max(1.5, 2.5) == 2.5)
+    -- Mixed int-float
+    assert(math.max(1, 2.5) == 2.5)
+    assert(math.max(3, 2.5) == 3.0)
+end)
+
+-- ==== Correctness: math.min() ====
+tests:it("math.min correctness", function()
+    assert(math.min(1, 2) == 1)
+    assert(math.min(2, 1) == 1)
+    assert(math.min(-1, -2) == -2)
+    assert(math.min(0, 0) == 0)
+    -- Float-float
+    assert(math.min(1.5, 2.5) == 1.5)
+    -- Mixed int-float
+    assert(math.min(1, 2.5) == 1.0)
+    assert(math.min(3, 2.5) == 2.5)
+end)
+
+-- ==== Correctness: string.len() ====
+tests:it("string.len correctness", function()
+    assert(string.len("hello") == 5)
+    assert(string.len("") == 0)
+    assert(string.len("a") == 1)
+    assert(string.len("hello world") == 11)
+end)
+
+-- ==== NaN handling for math.max/min ====
+tests:it("math.max/min NaN", function()
+    local nan = 0/0
+    -- NaN comparisons are false, so behavior depends on order
+    local r1 = math.max(nan, 1)
+    local r2 = math.max(1, nan)
+    -- Both should produce consistent results with the C function
+    assert(type(r1) == "number")
+    assert(type(r2) == "number")
+end)
+
+-- ==== Environment tainting: type ====
+tests:it("tainted type fallback", function()
+    local original_type = type
+    local custom_called = false
+    -- Rebind type in a new environment
+    local env = setmetatable({
+        type = function(x)
+            custom_called = true
+            return "custom"
+        end,
+    }, {__index = _G})
+    local chunk = load("return type(42)", "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+
+    -- Verify original still works
+    assert(original_type(42) == "number")
+end)
+
+-- ==== Environment tainting: math.max ====
+tests:it("tainted math.max fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        math = {
+            max = function(a, b)
+                custom_called = true
+                return a + b
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return math.max(3, 5)", "test", "t", env)
+    local result = chunk()
+    assert(result == 8, "expected 8, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Argument count: math.max with 3 args (should NOT be fastcall'd) ====
+tests:it("math.max 3 args normal call", function()
+    -- math.max with 3 args should use normal OP_CALL (not fastcall)
+    local r = math.max(1, 2, 3)
+    assert(r == 3)
+end)
+
+-- ==== Argument count: type with 0 args ====
+tests:it("type 0 args error", function()
+    local ok, err = catch(function() return type() end)()
+    assert(not ok, "type() with 0 args should error")
+end)
+
+-- ==== Fastcall inside catch ====
+tests:it("fastcall in catch", function()
+    local ok, val = catch(function() return type(42) end)()
+    assert(ok == true)
+    assert(val == "number")
+end)
+
+-- ==== Fastcall inside loops ====
+tests:it("fastcall in for loop", function()
+    local results = {}
+    for i = 1, 5 do
+        results[i] = math.abs(-i)
+    end
+    assert(results[1] == 1)
+    assert(results[5] == 5)
+end)
+
+tests:it("fastcall in while loop", function()
+    local i = -5
+    local sum = 0
+    while i <= 5 do
+        sum = sum + math.abs(i)
+        i = i + 1
+    end
+    assert(sum == 30) -- |(-5)|+|(-4)|+...+|5| = 2*(1+2+3+4+5) = 30
+end)
+
+-- ==== Multi-return context ====
+tests:it("fastcall multi-return context", function()
+    -- When type() is used as last arg in a call, C may be changed
+    -- from 2 to 0 (multi-return). The VM should fall back to slow path.
+    local function capture(...)
+        return select("#", ...), ...
+    end
+    local n, v = capture(type(42))
+    assert(n == 1)
+    assert(v == "number")
+end)
+
+-- ==== Fastcall with local _ENV rebinding ====
+tests:it("local ENV rebinding fallback", function()
+    -- When _ENV is rebound locally, the compiler should still
+    -- emit OP_CALL (not OP_FASTCALL) since upvalue 0 won't be _ENV
+    local custom_type_called = false
+    local _ENV = setmetatable({
+        type = function(x)
+            custom_type_called = true
+            return "rebound"
+        end,
+    }, {__index = _G})
+    local result = type(42)
+    assert(result == "rebound", "expected rebound, got " .. tostring(result))
+    assert(custom_type_called)
+end)
+
+-- ==== Rawset GC correctness ====
+tests:it("rawset GC barrier", function()
+    -- Stress test rawset with string values to exercise GC barrier
+    local t = {}
+    for i = 1, 1000 do
+        rawset(t, "key" .. i, "value" .. i)
+    end
+    -- Force a GC cycle
+    collectgarbage("collect")
+    -- Verify values survived
+    assert(rawget(t, "key1") == "value1")
+    assert(rawget(t, "key1000") == "value1000")
+end)
+
+-- ==== rawget/rawset bypass metamethods ====
+tests:it("rawget bypasses __index", function()
+    local mt = {__index = function(t, k) return "meta" end}
+    local t = setmetatable({}, mt)
+    assert(t.x == "meta") -- through metamethod
+    assert(rawget(t, "x") == nil) -- bypasses metamethod
+end)
+
+tests:it("rawset bypasses __newindex", function()
+    local blocked = false
+    local mt = {__newindex = function(t, k, v) blocked = true end}
+    local t = setmetatable({}, mt)
+    rawset(t, "x", 42)
+    assert(not blocked) -- metamethod not called
+    assert(rawget(t, "x") == 42)
+end)
+
+-- ==== string.len type error fallback ====
+tests:it("string.len type error fallback", function()
+    local ok, err = catch(function() return string.len({}) end)()
+    assert(not ok, "string.len({}) should error")
+end)
+
+-- ==== Correctness: string.trim() ====
+tests:it("string.trim correctness", function()
+    assert(string.trim("  hello  ") == "hello")
+    assert(string.trim("\t\nhello\r\n") == "hello")
+    assert(string.trim("hello") == "hello")
+    assert(string.trim("   ") == "")
+    assert(string.trim("") == "")
+    assert(string.trim("  a  b  ") == "a  b")
+end)
+
+-- ==== Environment tainting: string.trim ====
+tests:it("tainted string.trim fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            trim = function(s)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.trim("  hi  ")', "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== string.trim type error fallback ====
+tests:it("string.trim type error fallback", function()
+    local ok, err = catch(function() return string.trim({}) end)()
+    assert(not ok, "string.trim({}) should error")
+end)
+
+-- ==== Correctness: string.ltrim() ====
+tests:it("string.ltrim correctness", function()
+    assert(string.ltrim("  hello  ") == "hello  ")
+    assert(string.ltrim("\thello") == "hello")
+    assert(string.ltrim("hello") == "hello")
+    assert(string.ltrim("   ") == "")
+    assert(string.ltrim("") == "")
+end)
+
+-- ==== Environment tainting: string.ltrim ====
+tests:it("tainted string.ltrim fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            ltrim = function(s)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.ltrim("  hi")', "test", "t", env)
+    local result = chunk()
+    assert(result == "custom")
+    assert(custom_called)
+end)
+
+-- ==== Correctness: string.rtrim() ====
+tests:it("string.rtrim correctness", function()
+    assert(string.rtrim("  hello  ") == "  hello")
+    assert(string.rtrim("hello\t\n") == "hello")
+    assert(string.rtrim("hello") == "hello")
+    assert(string.rtrim("   ") == "")
+    assert(string.rtrim("") == "")
+end)
+
+-- ==== Environment tainting: string.rtrim ====
+tests:it("tainted string.rtrim fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            rtrim = function(s)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.rtrim("hi  ")', "test", "t", env)
+    local result = chunk()
+    assert(result == "custom")
+    assert(custom_called)
+end)
+
+-- ==== Correctness: string.split() ====
+tests:it("string.split correctness", function()
+    local r = string.split("a,b,c", ",")
+    assert(#r == 3)
+    assert(r[1] == "a" and r[2] == "b" and r[3] == "c")
+    -- Empty delimiter: split into characters
+    r = string.split("abc", "")
+    assert(#r == 3)
+    assert(r[1] == "a" and r[2] == "b" and r[3] == "c")
+    -- Trailing delimiter
+    r = string.split("a,b,", ",")
+    assert(#r == 3)
+    assert(r[3] == "")
+    -- Empty string
+    r = string.split("", ",")
+    assert(#r == 1 and r[1] == "")
+    -- Multi-char delimiter
+    r = string.split("a::b::c", "::")
+    assert(#r == 3 and r[1] == "a" and r[2] == "b" and r[3] == "c")
+end)
+
+-- ==== Environment tainting: string.split ====
+tests:it("tainted string.split fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            split = function(s, d)
+                custom_called = true
+                return {"custom"}
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.split("a,b", ",")', "test", "t", env)
+    local result = chunk()
+    assert(result[1] == "custom")
+    assert(custom_called)
+end)
+
+-- ==== string.split type error fallback ====
+tests:it("string.split type error fallback", function()
+    local ok, err = catch(function() return string.split({}, ",") end)()
+    assert(not ok, "string.split({}, ',') should error")
+end)
+
+-- ==== Correctness: string.join() ====
+tests:it("string.join correctness", function()
+    assert(string.join({"a", "b", "c"}, ",") == "a,b,c")
+    assert(string.join({"hello"}, "-") == "hello")
+    assert(string.join({}, ",") == "")
+    assert(string.join({"a", "b"}, "") == "ab")
+    assert(string.join({"x", "y", "z"}, "::") == "x::y::z")
+end)
+
+-- ==== Environment tainting: string.join ====
+tests:it("tainted string.join fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            join = function(t, d)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.join({"a"}, ",")', "test", "t", env)
+    local result = chunk()
+    assert(result == "custom")
+    assert(custom_called)
+end)
+
+-- ==== string.join type error fallback ====
+tests:it("string.join type error fallback", function()
+    local ok, err = catch(function() return string.join("notatable", ",") end)()
+    assert(not ok, "string.join('notatable', ',') should error")
+end)
+
+-- ==== Correctness: string.sub() fastcall ====
+tests:it("string.sub correctness", function()
+    assert(string.sub("hello", 2, 4) == "ell")
+    assert(string.sub("hello", 1, 5) == "hello")
+    assert(string.sub("hello", 1, 1) == "h")
+    assert(string.sub("hello", -3, -1) == "llo")
+    assert(string.sub("hello", -3, 4) == "ll")
+    assert(string.sub("hello", 3, 2) == "")  -- start > end
+    assert(string.sub("hello", 1, 100) == "hello")  -- j beyond length
+    assert(string.sub("hello", -100, 2) == "he")  -- i before start
+    assert(string.sub("", 1, 1) == "")  -- empty string
+end)
+
+-- ==== Correctness: string.byte() fastcall ====
+tests:it("string.byte correctness", function()
+    assert(string.byte("A", 1) == 65)
+    assert(string.byte("hello", 2) == string.byte("e", 1))
+    assert(string.byte("hello", 5) == string.byte("o", 1))
+    assert(string.byte("hello", -1) == string.byte("o", 1))  -- negative index
+    assert(string.byte("hello", 6) == nil)  -- out of bounds
+    assert(string.byte("hello", 0) == string.byte("h", 1))  -- 0 maps to 1 via posrelatI
+    assert(string.byte("a", 1) == 97)
+end)
+
+-- ==== Correctness: string.char() fastcall ====
+tests:it("string.char correctness", function()
+    assert(string.char(65) == "A")
+    assert(string.char(97) == "a")
+    assert(string.char(0) == "\0")
+    assert(string.char(255) == "\xFF")
+    assert(string.char(48) == "0")
+end)
+
+-- ==== Correctness: string.lower() fastcall ====
+tests:it("string.lower correctness", function()
+    assert(string.lower("HELLO") == "hello")
+    assert(string.lower("Hello World") == "hello world")
+    assert(string.lower("already lower") == "already lower")
+    assert(string.lower("123!@#") == "123!@#")
+    assert(string.lower("") == "")
+end)
+
+-- ==== Correctness: string.upper() fastcall ====
+tests:it("string.upper correctness", function()
+    assert(string.upper("hello") == "HELLO")
+    assert(string.upper("Hello World") == "HELLO WORLD")
+    assert(string.upper("ALREADY UPPER") == "ALREADY UPPER")
+    assert(string.upper("123!@#") == "123!@#")
+    assert(string.upper("") == "")
+end)
+
+-- ==== Correctness: string.reverse() fastcall ====
+tests:it("string.reverse correctness", function()
+    assert(string.reverse("hello") == "olleh")
+    assert(string.reverse("a") == "a")
+    assert(string.reverse("") == "")
+    assert(string.reverse("ab") == "ba")
+    assert(string.reverse("12345") == "54321")
+end)
+
+-- ==== Environment tainting: string.sub ====
+tests:it("tainted string.sub fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            sub = function(s, i, j)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.sub("hello", 2, 4)', "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Environment tainting: string.lower ====
+tests:it("tainted string.lower fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        string = {
+            lower = function(s)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return string.lower("HELLO")', "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Correctness: table.sum() ====
+tests:it("table.sum correctness", function()
+    assert(table.sum({1, 2, 3, 4, 5}) == 15.0)
+    assert(table.sum({1.5, 2.5}) == 4.0)
+    assert(table.sum({}) == 0.0)
+    assert(table.sum({10}) == 10.0)
+end)
+
+-- ==== Environment tainting: table.sum ====
+tests:it("tainted table.sum fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        table = {
+            sum = function(t)
+                custom_called = true
+                return 999
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return table.sum({1,2,3})", "test", "t", env)
+    local result = chunk()
+    assert(result == 999)
+    assert(custom_called)
+end)
+
+-- ==== table.sum type error fallback ====
+tests:it("table.sum type error fallback", function()
+    local ok, err = catch(function() return table.sum("notatable") end)()
+    assert(not ok, "table.sum('notatable') should error")
+end)
+
+-- ==== Correctness: table.mean() ====
+tests:it("table.mean correctness", function()
+    assert(table.mean({2, 4, 6}) == 4.0)
+    assert(table.mean({10}) == 10.0)
+    -- Empty table returns NaN
+    local r = table.mean({})
+    assert(r ~= r) -- NaN
+end)
+
+-- ==== Environment tainting: table.mean ====
+tests:it("tainted table.mean fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        table = {
+            mean = function(t)
+                custom_called = true
+                return 42
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return table.mean({1,2,3})", "test", "t", env)
+    local result = chunk()
+    assert(result == 42)
+    assert(custom_called)
+end)
+
+-- ==== Correctness: table.median() ====
+tests:it("table.median correctness", function()
+    assert(table.median({1, 3, 5}) == 3.0)
+    assert(table.median({1, 2, 3, 4}) == 2.5)
+    assert(table.median({42}) == 42.0)
+    -- Empty table returns NaN
+    local r = table.median({})
+    assert(r ~= r)
+end)
+
+-- ==== Environment tainting: table.median ====
+tests:it("tainted table.median fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        table = {
+            median = function(t)
+                custom_called = true
+                return 99
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return table.median({1,2,3})", "test", "t", env)
+    local result = chunk()
+    assert(result == 99)
+    assert(custom_called)
+end)
+
+-- ==== Correctness: table.stdev() ====
+tests:it("table.stdev correctness", function()
+    -- Population stdev of {2, 4, 4, 4, 5, 5, 7, 9}
+    local r = table.stdev({2, 4, 4, 4, 5, 5, 7, 9})
+    assert(math.abs(r - 2.0) < 0.001, "expected ~2.0, got " .. tostring(r))
+    -- Single element: stdev is 0
+    assert(table.stdev({5}) == 0.0)
+    -- Empty returns NaN
+    local nan = table.stdev({})
+    assert(nan ~= nan)
+end)
+
+-- ==== Environment tainting: table.stdev ====
+tests:it("tainted table.stdev fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        table = {
+            stdev = function(t)
+                custom_called = true
+                return 77
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return table.stdev({1,2,3})", "test", "t", env)
+    local result = chunk()
+    assert(result == 77)
+    assert(custom_called)
+end)
+
+-- ==== table.stdev 2-arg (sample) falls back ====
+tests:it("table.stdev sample fallback", function()
+    -- 2-arg variant should NOT be fastcalled (nargs mismatch)
+    local r = table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, true)
+    assert(type(r) == "number")
+end)
+
+-- ==== Correctness: table.transpose() ====
+tests:it("table.transpose correctness", function()
+    local m = {{1, 2, 3}, {4, 5, 6}}
+    local r = table.transpose(m)
+    assert(#r == 3)
+    assert(r[1][1] == 1 and r[1][2] == 4)
+    assert(r[2][1] == 2 and r[2][2] == 5)
+    assert(r[3][1] == 3 and r[3][2] == 6)
+    -- Empty matrix
+    r = table.transpose({})
+    assert(#r == 0)
+end)
+
+-- ==== Environment tainting: table.transpose ====
+tests:it("tainted table.transpose fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        table = {
+            transpose = function(t)
+                custom_called = true
+                return {{99}}
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return table.transpose({{1,2},{3,4}})", "test", "t", env)
+    local result = chunk()
+    assert(result[1][1] == 99)
+    assert(custom_called)
+end)
+
+-- ==== table.transpose type error fallback ====
+tests:it("table.transpose type error fallback", function()
+    local ok, err = catch(function() return table.transpose("nope") end)()
+    assert(not ok, "table.transpose('nope') should error")
+end)
+
+-- ==== Correctness: table.reshape() ====
+tests:it("table.reshape correctness", function()
+    local r = table.reshape({1, 2, 3, 4, 5, 6}, 2, 3)
+    assert(#r == 2)
+    assert(r[1][1] == 1 and r[1][2] == 2 and r[1][3] == 3)
+    assert(r[2][1] == 4 and r[2][2] == 5 and r[2][3] == 6)
+    -- 1x4
+    r = table.reshape({10, 20, 30, 40}, 1, 4)
+    assert(#r == 1 and #r[1] == 4)
+    assert(r[1][4] == 40)
+end)
+
+-- ==== Environment tainting: table.reshape ====
+tests:it("tainted table.reshape fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        table = {
+            reshape = function(t, r, c)
+                custom_called = true
+                return {{0}}
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return table.reshape({1,2,3,4}, 2, 2)", "test", "t", env)
+    local result = chunk()
+    assert(result[1][1] == 0)
+    assert(custom_called)
+end)
+
+-- ==== table.reshape dimension mismatch fallback ====
+tests:it("table.reshape dimension error", function()
+    local ok, err = catch(function() return table.reshape({1, 2, 3}, 2, 2) end)()
+    assert(not ok, "reshape with mismatched dimensions should error")
+end)
+
+-- ==== Environment tainting: math.abs ====
+tests:it("tainted math.abs fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        math = {
+            abs = function(x)
+                custom_called = true
+                return 999
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return math.abs(-5)", "test", "t", env)
+    local result = chunk()
+    assert(result == 999, "expected 999, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Environment tainting: assert ====
+tests:it("tainted assert fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        assert = function(v)
+            custom_called = true
+            return "custom"
+        end,
+    }, {__index = _G})
+    local chunk = load("return assert(true)", "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Environment tainting: tonumber ====
+tests:it("tainted tonumber fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        tonumber = function(x)
+            custom_called = true
+            return 999
+        end,
+    }, {__index = _G})
+    local chunk = load('return tonumber("42")', "test", "t", env)
+    local result = chunk()
+    assert(result == 999, "expected 999, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Environment tainting: tostring ====
+tests:it("tainted tostring fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        tostring = function(x)
+            custom_called = true
+            return "custom"
+        end,
+    }, {__index = _G})
+    local chunk = load("return tostring(42)", "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Environment tainting: vector.create ====
+tests:it("tainted vector.create fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        vector = {
+            create = function(n)
+                custom_called = true
+                return "custom"
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load("return vector.create(4)", "test", "t", env)
+    local result = chunk()
+    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Environment tainting: utf8.len ====
+tests:it("tainted utf8.len fallback", function()
+    local custom_called = false
+    local env = setmetatable({
+        utf8 = {
+            len = function(s)
+                custom_called = true
+                return 999
+            end,
+        },
+    }, {__index = _G})
+    local chunk = load('return utf8.len("hello")', "test", "t", env)
+    local result = chunk()
+    assert(result == 999, "expected 999, got " .. tostring(result))
+    assert(custom_called)
+end)
+
+-- ==== Correctness: assert() ====
+tests:it("assert correctness", function()
+    assert(assert(42) == 42)
+    assert(assert("hello") == "hello")
+    assert(assert(true) == true)
+    local ok, err = catch(function() assert(false) end)()
+    assert(not ok)
+    local ok2, err2 = catch(function() assert(nil, "msg") end)()
+    assert(not ok2)
+end)
+
+-- ==== Correctness: getmetatable() ====
+tests:it("getmetatable correctness", function()
+    local mt = {__index = function() end}
+    local t = setmetatable({}, mt)
+    assert(getmetatable(t) == mt)
+    assert(getmetatable({}) == nil)
+    assert(getmetatable("hello") ~= nil) -- strings have metatable
+    -- __metatable field
+    local mt2 = {__metatable = "protected"}
+    local t2 = setmetatable({}, mt2)
+    assert(getmetatable(t2) == "protected")
+end)
+
+-- ==== Correctness: setmetatable() ====
+tests:it("setmetatable correctness", function()
+    local t = {}
+    local mt = {}
+    assert(setmetatable(t, mt) == t)
+    assert(getmetatable(t) == mt)
+    setmetatable(t, nil)
+    assert(getmetatable(t) == nil)
+end)
+
+-- ==== Correctness: tonumber() ====
+tests:it("tonumber correctness", function()
+    assert(tonumber(42) == 42)
+    assert(tonumber(3.14) == 3.14)
+    assert(tonumber("123") == 123)
+    assert(tonumber("3.14") == 3.14)
+    assert(tonumber("hello") == nil)
+    assert(tonumber(nil) == nil)
+    assert(tonumber(true) == nil)
+end)
+
+-- ==== Correctness: tostring() ====
+tests:it("tostring correctness", function()
+    assert(tostring(42) == "42")
+    assert(tostring(3.14) == "3.14")
+    assert(tostring("hello") == "hello")
+    assert(tostring(nil) == "nil")
+    assert(tostring(true) == "true")
+    assert(tostring(false) == "false")
+end)
+
+-- ==== Correctness: math.ceil/floor ====
+tests:it("math.ceil/floor correctness", function()
+    assert(math.ceil(3.2) == 4)
+    assert(math.ceil(3.0) == 3)
+    assert(math.ceil(-3.2) == -3)
+    assert(math.ceil(5) == 5)
+    assert(math.floor(3.7) == 3)
+    assert(math.floor(3.0) == 3)
+    assert(math.floor(-3.2) == -4)
+    assert(math.floor(5) == 5)
+end)
+
+-- ==== Correctness: math.sqrt ====
+tests:it("math.sqrt correctness", function()
+    assert(math.sqrt(4) == 2.0)
+    assert(math.sqrt(9) == 3.0)
+    assert(math.sqrt(0) == 0.0)
+    assert(math.abs(math.sqrt(2) - 1.4142135623730951) < 1e-10)
+end)
+
+-- ==== Correctness: math trig ====
+tests:it("math trig correctness", function()
+    assert(math.abs(math.sin(0)) < 1e-10)
+    assert(math.abs(math.cos(0) - 1.0) < 1e-10)
+    assert(math.abs(math.tan(0)) < 1e-10)
+    assert(math.abs(math.asin(0)) < 1e-10)
+    assert(math.abs(math.acos(1.0)) < 1e-10)
+    assert(math.abs(math.atan(0)) < 1e-10)
+end)
+
+-- ==== Correctness: math.exp/log ====
+tests:it("math.exp/log correctness", function()
+    assert(math.abs(math.exp(0) - 1.0) < 1e-10)
+    assert(math.abs(math.exp(1) - 2.718281828459045) < 1e-10)
+    assert(math.abs(math.log(1) - 0.0) < 1e-10)
+    assert(math.abs(math.log(math.exp(1)) - 1.0) < 1e-10)
+end)
+
+-- ==== Correctness: math.deg/rad ====
+tests:it("math.deg/rad correctness", function()
+    assert(math.abs(math.deg(math.pi) - 180.0) < 1e-6)
+    assert(math.abs(math.rad(180) - math.pi) < 1e-10)
+    assert(math.deg(0) == 0.0)
+    assert(math.rad(0) == 0.0)
+end)
+
+-- ==== Correctness: math.fmod ====
+tests:it("math.fmod correctness", function()
+    assert(math.fmod(7, 3) == 1)
+    assert(math.fmod(7.5, 3.0) == 1.5)
+    assert(math.fmod(-7, 3) == -1)
+    assert(math.fmod(10, 5) == 0)
+end)
+
+-- ==== Correctness: math.ult ====
+tests:it("math.ult correctness", function()
+    assert(math.ult(1, 2) == true)
+    assert(math.ult(2, 1) == false)
+    assert(math.ult(0, 1) == true)
+    -- -1 as unsigned is very large
+    assert(math.ult(1, -1) == true)
+    assert(math.ult(-1, 1) == false)
+end)
+
+-- ==== Correctness: math.tointeger ====
+tests:it("math.tointeger correctness", function()
+    assert(math.tointeger(5) == 5)
+    assert(math.tointeger(5.0) == 5)
+    assert(math.tointeger(5.5) == nil)
+    assert(math.tointeger("hello") == nil)
+end)
+
+-- ==== Correctness: math.type ====
+tests:it("math.type correctness", function()
+    assert(math.type(42) == "integer")
+    assert(math.type(3.14) == "float")
+    assert(math.type("hello") == nil)
+    assert(math.type(nil) == nil)
+end)
+
+-- ==== Correctness: math.ldexp ====
+tests:it("math.ldexp correctness", function()
+    assert(math.ldexp(1, 10) == 1024.0)
+    assert(math.ldexp(0.5, 1) == 1.0)
+    assert(math.ldexp(3, 0) == 3.0)
+end)
+
+-- ==== Correctness: vector operations ====
+tests:it("vector.create/size/resize correctness", function()
+    local v = vector.create(10)
+    assert(vector.size(v) == 10)
+    vector.resize(v, 20)
+    assert(vector.size(v) == 20)
+    vector.resize(v, 5)
+    assert(vector.size(v) == 5)
+end)
+
+tests:it("vector.clone correctness", function()
+    local v = vector.create(8)
+    local c = vector.clone(v)
+    assert(vector.size(c) == 8)
+    assert(v ~= c) -- different objects
+end)
+
+-- ==== Correctness: utf8 operations ====
+tests:it("utf8.len correctness", function()
+    assert(utf8.len("hello") == 5)
+    assert(utf8.len("") == 0)
+    assert(utf8.len("café") == 4)
+end)
+
+tests:it("utf8.codepoint correctness", function()
+    assert(utf8.codepoint("A") == 65)
+    assert(utf8.codepoint("é") == 233)
+end)
+
+tests:it("utf8.char correctness", function()
+    assert(utf8.char(65) == "A")
+    assert(utf8.char(233) == "é")
+end)
+
+tests:it("utf8.offset correctness", function()
+    local s, e = utf8.offset("hello", 1)
+    assert(s == 1 and e == 1)
+    s, e = utf8.offset("hello", 2)
+    assert(s == 2 and e == 2)
+    s, e = utf8.offset("café", 4)
+    assert(s == 4 and e == 5) -- é is 2 bytes
+end)
+
+-- ==== Emission verification: OP_FASTCALL detection via string.dump ====
+tests:describe("OP_FASTCALL emission")
+
+local FC = framework.FC
+
+tests:it("emits OP_FASTCALL for type()", function()
+    tests:assert_fastcall(function() return type(42) end, FC.TYPE)
+end)
+
+tests:it("emits OP_FASTCALL for rawlen()", function()
+    tests:assert_fastcall(function() return rawlen({}) end, FC.RAWLEN)
+end)
+
+tests:it("emits OP_FASTCALL for rawget()", function()
+    tests:assert_fastcall(function() local t = {} return rawget(t, "k") end, FC.RAWGET)
+end)
+
+tests:it("emits OP_FASTCALL for rawset()", function()
+    tests:assert_fastcall(function() local t = {} rawset(t, "k", 1) end, FC.RAWSET)
+end)
+
+tests:it("emits OP_FASTCALL for rawequal()", function()
+    tests:assert_fastcall(function() return rawequal(1, 2) end, FC.RAWEQUAL)
+end)
+
+tests:it("emits OP_FASTCALL for math.abs()", function()
+    tests:assert_fastcall(function() return math.abs(-1) end, FC.MATH_ABS)
+end)
+
+tests:it("emits OP_FASTCALL for math.max()", function()
+    tests:assert_fastcall(function() return math.max(1, 2) end, FC.MATH_MAX)
+end)
+
+tests:it("emits OP_FASTCALL for math.min()", function()
+    tests:assert_fastcall(function() return math.min(1, 2) end, FC.MATH_MIN)
+end)
+
+tests:it("emits OP_FASTCALL for string.len()", function()
+    tests:assert_fastcall(function() return string.len("hi") end, FC.STRING_LEN)
+end)
+
+tests:it("emits OP_FASTCALL for string.trim()", function()
+    tests:assert_fastcall(function() return string.trim(" x ") end, FC.STRING_TRIM)
+end)
+
+tests:it("emits OP_FASTCALL for string.ltrim()", function()
+    tests:assert_fastcall(function() return string.ltrim(" x") end, FC.STRING_LTRIM)
+end)
+
+tests:it("emits OP_FASTCALL for string.rtrim()", function()
+    tests:assert_fastcall(function() return string.rtrim("x ") end, FC.STRING_RTRIM)
+end)
+
+tests:it("emits OP_FASTCALL for string.split()", function()
+    tests:assert_fastcall(function() return string.split("a,b", ",") end, FC.STRING_SPLIT)
+end)
+
+tests:it("emits OP_FASTCALL for string.join()", function()
+    tests:assert_fastcall(function() return string.join({}, ",") end, FC.STRING_JOIN)
+end)
+
+tests:it("emits OP_FASTCALL for string.sub()", function()
+    tests:assert_fastcall(function(s) return string.sub(s, 1, 3) end, FC.STRING_SUB)
+end)
+
+tests:it("emits OP_FASTCALL for string.byte()", function()
+    tests:assert_fastcall(function(s) return string.byte(s, 1) end, FC.STRING_BYTE)
+end)
+
+tests:it("emits OP_FASTCALL for string.char()", function()
+    tests:assert_fastcall(function(n) return string.char(n) end, FC.STRING_CHAR)
+end)
+
+tests:it("emits OP_FASTCALL for string.lower()", function()
+    tests:assert_fastcall(function(s) return string.lower(s) end, FC.STRING_LOWER)
+end)
+
+tests:it("emits OP_FASTCALL for string.upper()", function()
+    tests:assert_fastcall(function(s) return string.upper(s) end, FC.STRING_UPPER)
+end)
+
+tests:it("emits OP_FASTCALL for string.reverse()", function()
+    tests:assert_fastcall(function(s) return string.reverse(s) end, FC.STRING_REVERSE)
+end)
+
+tests:it("emits OP_FASTCALL for table.sum()", function()
+    tests:assert_fastcall(function() return table.sum({1}) end, FC.TABLE_SUM)
+end)
+
+tests:it("emits OP_FASTCALL for table.mean()", function()
+    tests:assert_fastcall(function() return table.mean({1}) end, FC.TABLE_MEAN)
+end)
+
+tests:it("emits OP_FASTCALL for table.median()", function()
+    tests:assert_fastcall(function() return table.median({1}) end, FC.TABLE_MEDIAN)
+end)
+
+tests:it("emits OP_FASTCALL for table.stdev()", function()
+    tests:assert_fastcall(function() return table.stdev({1}) end, FC.TABLE_STDEV)
+end)
+
+tests:it("emits OP_FASTCALL for table.transpose()", function()
+    tests:assert_fastcall(function() return table.transpose({}) end, FC.TABLE_TRANSPOSE)
+end)
+
+tests:it("emits OP_FASTCALL for table.reshape()", function()
+    tests:assert_fastcall(function() return table.reshape({}, 0, 0) end, FC.TABLE_RESHAPE)
+end)
+
+tests:it("emits OP_FASTCALL for assert()", function()
+    tests:assert_fastcall(function() return assert(true) end, FC.ASSERT)
+end)
+
+tests:it("emits OP_FASTCALL for getmetatable()", function()
+    tests:assert_fastcall(function() return getmetatable({}) end, FC.GETMETATABLE)
+end)
+
+tests:it("emits OP_FASTCALL for setmetatable()", function()
+    tests:assert_fastcall(function() local t = {} return setmetatable(t, {}) end, FC.SETMETATABLE)
+end)
+
+tests:it("emits OP_FASTCALL for tonumber()", function()
+    tests:assert_fastcall(function() return tonumber("1") end, FC.TONUMBER)
+end)
+
+tests:it("emits OP_FASTCALL for tostring()", function()
+    tests:assert_fastcall(function() return tostring(1) end, FC.TOSTRING)
+end)
+
+tests:it("emits OP_FASTCALL for math.ceil()", function()
+    tests:assert_fastcall(function() return math.ceil(1.5) end, FC.MATH_CEIL)
+end)
+
+tests:it("emits OP_FASTCALL for math.floor()", function()
+    tests:assert_fastcall(function() return math.floor(1.5) end, FC.MATH_FLOOR)
+end)
+
+tests:it("emits OP_FASTCALL for math.sqrt()", function()
+    tests:assert_fastcall(function() return math.sqrt(4) end, FC.MATH_SQRT)
+end)
+
+tests:it("emits OP_FASTCALL for math.sin()", function()
+    tests:assert_fastcall(function() return math.sin(1) end, FC.MATH_SIN)
+end)
+
+tests:it("emits OP_FASTCALL for math.cos()", function()
+    tests:assert_fastcall(function() return math.cos(1) end, FC.MATH_COS)
+end)
+
+tests:it("emits OP_FASTCALL for math.atan()", function()
+    tests:assert_fastcall(function() return math.atan(1) end, FC.MATH_ATAN)
+end)
+
+tests:it("emits OP_FASTCALL for math.exp()", function()
+    tests:assert_fastcall(function() return math.exp(1) end, FC.MATH_EXP)
+end)
+
+tests:it("emits OP_FASTCALL for math.log()", function()
+    tests:assert_fastcall(function() return math.log(1) end, FC.MATH_LOG)
+end)
+
+tests:it("emits OP_FASTCALL for math.fmod()", function()
+    tests:assert_fastcall(function() return math.fmod(7, 3) end, FC.MATH_FMOD)
+end)
+
+tests:it("emits OP_FASTCALL for math.ult()", function()
+    tests:assert_fastcall(function() return math.ult(1, 2) end, FC.MATH_ULT)
+end)
+
+tests:it("emits OP_FASTCALL for math.tointeger()", function()
+    tests:assert_fastcall(function() return math.tointeger(5) end, FC.MATH_TOINTEGER)
+end)
+
+tests:it("emits OP_FASTCALL for math.type()", function()
+    tests:assert_fastcall(function() return math.type(5) end, FC.MATH_TYPE)
+end)
+
+tests:it("emits OP_FASTCALL for math.ldexp()", function()
+    tests:assert_fastcall(function() return math.ldexp(1, 10) end, FC.MATH_LDEXP)
+end)
+
+tests:it("emits OP_FASTCALL for vector.create()", function()
+    tests:assert_fastcall(function() return vector.create(8) end, FC.VECTOR_CREATE)
+end)
+
+tests:it("emits OP_FASTCALL for vector.size()", function()
+    tests:assert_fastcall(function() local v = vector.create(8) return vector.size(v) end, FC.VECTOR_SIZE)
+end)
+
+tests:it("emits OP_FASTCALL for utf8.len()", function()
+    tests:assert_fastcall(function() return utf8.len("hi") end, FC.UTF8_LEN)
+end)
+
+tests:it("emits OP_FASTCALL for utf8.char()", function()
+    tests:assert_fastcall(function() return utf8.char(65) end, FC.UTF8_CHAR)
+end)
+
+tests:it("emits OP_FASTCALL for utf8.offset()", function()
+    tests:assert_fastcall(function() return utf8.offset("hi", 1) end, FC.UTF8_OFFSET)
+end)
+
+tests:it("emits OP_FASTCALL for math.tan()", function()
+    tests:assert_fastcall(function(x) return math.tan(x) end, FC.MATH_TAN)
+end)
+
+tests:it("emits OP_FASTCALL for math.asin()", function()
+    tests:assert_fastcall(function(x) return math.asin(x) end, FC.MATH_ASIN)
+end)
+
+tests:it("emits OP_FASTCALL for math.acos()", function()
+    tests:assert_fastcall(function(x) return math.acos(x) end, FC.MATH_ACOS)
+end)
+
+tests:it("emits OP_FASTCALL for math.deg()", function()
+    tests:assert_fastcall(function(x) return math.deg(x) end, FC.MATH_DEG)
+end)
+
+tests:it("emits OP_FASTCALL for math.rad()", function()
+    tests:assert_fastcall(function(x) return math.rad(x) end, FC.MATH_RAD)
+end)
+
+tests:it("emits OP_FASTCALL for vector.clone()", function()
+    tests:assert_fastcall(function() local v = vector.create(4) return vector.clone(v) end, FC.VECTOR_CLONE)
+end)
+
+tests:it("emits OP_FASTCALL for vector.resize()", function()
+    tests:assert_fastcall(function() local v = vector.create(4) vector.resize(v, 8) end, FC.VECTOR_RESIZE)
+end)
+
+tests:it("emits OP_FASTCALL for utf8.codepoint()", function()
+    tests:assert_fastcall(function(s) return utf8.codepoint(s) end, FC.UTF8_CODEPOINT)
+end)
+
+-- ==== Negative emission cases ====
+tests:describe("OP_FASTCALL non-emission")
+
+tests:it("does not emit OP_FASTCALL for math.max with 3 args", function()
+    tests:assert_no_fastcall(function() return math.max(1, 2, 3) end, FC.MATH_MAX)
+end)
+
+tests:it("does not emit OP_FASTCALL for math.min with 3 args", function()
+    tests:assert_no_fastcall(function() return math.min(1, 2, 3) end, FC.MATH_MIN)
+end)
+
+tests:it("does not emit OP_FASTCALL for table.stdev with 2 args", function()
+    tests:assert_no_fastcall(function() return table.stdev({1}, true) end, FC.TABLE_STDEV)
+end)
+
+tests:it("does not emit OP_FASTCALL for type with 0 args", function()
+    tests:assert_no_fastcall(function() return type() end, FC.TYPE)
+end)
+
+tests:it("does not emit OP_FASTCALL for tonumber with 2 args", function()
+    tests:assert_no_fastcall(function(x) return tonumber(x, 16) end, FC.TONUMBER)
+end)
+
+tests:it("does not emit OP_FASTCALL for math.log with 2 args", function()
+    tests:assert_no_fastcall(function(x) return math.log(x, 10) end, FC.MATH_LOG)
+end)
+
+tests:it("does not emit OP_FASTCALL when _ENV is rebound", function()
+    local chunk = load("local e = _ENV; return function() local _ENV = e; return type(42) end")
+    local fn = chunk()
+    -- When _ENV is locally rebound, upvalue 0 is not _ENV,
+    -- so the compiler should NOT emit OP_FASTCALL
+    tests:assert_no_fastcall(fn, FC.TYPE)
+end)
+
+-- ==== Edge cases ====
+tests:describe("edge cases")
+
+tests:it("setmetatable blocked by __metatable", function()
+    local mt = {__metatable = "locked"}
+    local t = setmetatable({}, mt)
+    local ok, err = catch setmetatable(t, {})
+    tests:assert_true(not ok)
+end)
+
+tests:it("rawset returns the table", function()
+    local t = {}
+    local result = rawset(t, "key", "value")
+    tests:assert_equal(result, t)
+end)
+
+tests:it("fastcall in coroutine", function()
+    local co = coroutine.wrap(function()
+        coroutine.yield(type(42))
+        coroutine.yield(math.abs(-5))
+        return string.len("hello")
+    end)
+    tests:assert_equal(co(), "number")
+    tests:assert_equal(co(), 5)
+    tests:assert_equal(co(), 5)
+end)
+
+tests:it("math.abs type error", function()
+    tests:assert_throws(function() return math.abs("hello") end)
+end)
+
+tests:it("table.reshape rejects overflow dimensions", function()
+    local t = {1, 2, 3, 4}
+    tests:assert_throws(function()
+        table.reshape(t, math.maxinteger, math.maxinteger)
+    end)
+end)
+
+tests:finish()

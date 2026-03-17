@@ -10,7 +10,7 @@
     Some tests verify permission denials which require specific setup.
 ]]
 
-global require, assert, type, pledge, io, load, error, tostring, string
+global require, assert, type, pledge, io, load, error, tostring, string, fs, network
 
 -- Start with just load permission (don't seal yet so we can test pledge behavior)
 pledge("load")
@@ -179,6 +179,30 @@ tests:it("test file can use all framework features", function()
     assert(type(tests.describe) == "function")
     assert(type(tests.skip) == "function")
     assert(type(tests.soft) == "function")
+end)
+
+-- ============================================
+-- Permission Denial Tests
+-- ============================================
+
+tests:describe("permission denial")
+
+tests:it("fs operations denied without fs:write", function()
+    local ok, err = catch fs.createdirectory("/tmp/__lus_test_pledge_deny")
+    tests:assert_true(not ok)
+    tests:assert_true(tostring(err):find("permission") ~= nil)
+end)
+
+tests:it("network denied without pledge", function()
+    local ok, err = catch network.tcp.connect("127.0.0.1", 1)
+    tests:assert_true(not ok)
+    tests:assert_true(tostring(err):find("permission") ~= nil or tostring(err):find("denied") ~= nil)
+end)
+
+tests:it("tcp.bind denied without pledge", function()
+    local ok, err = catch network.tcp.bind("127.0.0.1", 0)
+    tests:assert_true(not ok)
+    tests:assert_true(tostring(err):find("permission") ~= nil)
 end)
 
 -- Now seal to verify sealed state behavior

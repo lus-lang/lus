@@ -5,6 +5,7 @@ kind: function
 since: 1.6.0
 stability: unstable
 origin: lus
+fastcall: true
 params:
   - name: t
     type: table

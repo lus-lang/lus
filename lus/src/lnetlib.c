@@ -1108,6 +1108,16 @@ static int tcp_bind(lua_State *L) {
   int port = (int)luaL_checkinteger(L, 2);
   int backlog = (int)luaL_optinteger(L, 3, DEFAULT_BACKLOG);
 
+  /* Build host:port string for permission check */
+  char hostport[512];
+  snprintf(hostport, sizeof(hostport), "%s:%d", address, port);
+
+  /* Check network:tcp permission */
+  if (!lus_haspledge(L, "network:tcp", hostport)) {
+    return luaL_error(L, "permission \"network:tcp\" denied for '%s'",
+                      hostport);
+  }
+
   init_winsock(L);
 
   struct sockaddr_storage addr;

@@ -142,7 +142,7 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0:print_stacktrace=1:symbolize=1
           UBSAN_OPTIONS: print_stacktrace=1:symbolize=1
-        run: meson test -C lus/build-sanitize -v --print-errorlogs --maxfail=1 --suite h1 --suite h2 --suite h3-ci --suite h4
+        run: meson test -C lus/build-sanitize -v --print-errorlogs --maxfail=1 --suite h1 --suite h2 --suite h3-ci
 
       - name: Print test log on failure
         if: failure()

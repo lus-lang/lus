@@ -35,6 +35,10 @@
 #define setnodummy(t) ((t)->flags &= NOTBITDUMMY)
 #define setdummy(t) ((t)->flags |= BITDUMMY)
 
+#define BITREADONLY (1 << 7)
+#define isreadonly(t) ((t)->flags & BITREADONLY)
+#define setreadonly(t) ((t)->flags |= BITREADONLY)
+
 
 /* allocated size for hash nodes */
 #define allocsizenode(t) (isdummy(t) ? 0 : sizenode(t))
@@ -83,6 +87,7 @@
 #define HOK 0
 #define HNOTFOUND 1
 #define HNOTATABLE 2
+#define HREADONLY 3
 #define HFIRSTNODE 3
 
 /*

@@ -16,6 +16,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lfastcall.h"
 #include "lgc.h"
 #include "lmem.h"
 #include "lobject.h"
@@ -485,5 +486,10 @@ LUAMOD_API int luaopen_vector(lua_State *L) {
 #ifndef LUS_NO_ARCHIVE
   lus_archive_register(L);
 #endif
+  /* Register fastcalls for vector library functions */
+  luaF_registerfastcall(L, FC_VECTOR_CREATE, vec_create, 1);
+  luaF_registerfastcall(L, FC_VECTOR_CLONE, vec_clone, 1);
+  luaF_registerfastcall(L, FC_VECTOR_SIZE, vec_size, 1);
+  luaF_registerfastcall(L, FC_VECTOR_RESIZE, vec_resize, 2);
   return 1;
 }

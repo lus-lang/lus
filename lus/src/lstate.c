@@ -17,6 +17,7 @@
 #include "lapi.h"
 #include "ldebug.h"
 #include "ldo.h"
+#include "lfastcall.h"
 #include "lfunc.h"
 #include "lgc.h"
 #include "llex.h"
@@ -204,6 +205,7 @@ static void f_luaopen(lua_State *L, void *ud) {
   luaS_init(L);
   luaT_init(L);
   luaX_init(L);
+  luaF_initfastcalls(L); /* after luaT/luaX so reserved words are fixed */
   g->gcstp = 0;              /* allow gc */
   setnilvalue(&g->nilvalue); /* now state is complete */
   luai_userstateopen(L);
@@ -367,6 +369,9 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   setgcparam(g, MINORMUL, LUAI_GENMINORMUL);
   setgcparam(g, MINORMAJOR, LUAI_MINORMAJOR);
   setgcparam(g, MAJORMINOR, LUAI_MAJORMINOR);
+  g->no_fastcall = 0;
+  g->readonly_env = 0;
+  g->pedantic = 0;
   for (i = 0; i < LUA_NUMTYPES; i++)
     g->mt[i] = NULL;
   /* Use CPROTECT for state initialization */

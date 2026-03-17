@@ -202,4 +202,30 @@ t:it("handles string messages with special characters", function()
   t:assert_equal(messages[4], "STOPPED", "last message should be STOPPED")
 end)
 
+t:describe("edge cases")
+
+t:it("serializes boolean messages", function()
+    local w = worker.create("lus-tests/h1/worker/types.lus")
+    local messages = {}
+    while true do
+        local msg = worker.receive(w)
+        if msg == nil then break end
+        table.insert(messages, msg)
+    end
+    -- types.lus sends: 42, 3.14, "hello", true, false, nil
+    -- nil terminates receive loop, so we get 5 messages
+    t:assert_equal(#messages, 5, "should receive 5 messages before nil")
+    t:assert_equal(messages[4], true, "fourth message should be true")
+    t:assert_equal(type(messages[4]), "boolean", "true should be boolean type")
+    t:assert_equal(messages[5], false, "fifth message should be false")
+    t:assert_equal(type(messages[5]), "boolean", "false should be boolean type")
+end)
+
+t:it("non-existent script propagates error via receive", function()
+    local w = worker.create("lus-tests/h1/worker/nonexistent.lus")
+    local ok, err = catch worker.receive(w)
+    t:assert_true(not ok, "should propagate file error via receive")
+    t:assert_equal(worker.status(w), "dead", "worker should be dead")
+end)
+
 t:finish()

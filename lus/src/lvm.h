@@ -94,12 +94,16 @@ typedef enum {
   }
 
 
-#define luaV_fastset(t, k, val, hres, f) \
-  (hres = (!ttistable(t) ? HNOTATABLE : f(hvalue(t), k, val)))
+#define luaV_fastset(t, k, val, hres, f)                        \
+  (hres = (!ttistable(t)          ? HNOTATABLE                  \
+           : isreadonly(hvalue(t)) ? HREADONLY                   \
+                                  : f(hvalue(t), k, val)))
 
 #define luaV_fastseti(t, k, val, hres)      \
   if (!ttistable(t))                        \
     hres = HNOTATABLE;                      \
+  else if (isreadonly(hvalue(t)))            \
+    hres = HREADONLY;                       \
   else {                                    \
     luaH_fastseti(hvalue(t), k, val, hres); \
   }

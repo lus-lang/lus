@@ -350,6 +350,8 @@ typedef enum {
 
   OP_SLICE, /*	A B C	R[A] := slice(R[B], R[C], R[C+1])		*/
 
+  OP_FASTCALL, /*	A B C	fastcall: intrinsified stdlib (next is EXTRAARG) */
+
   OP_EXTRAARG /*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

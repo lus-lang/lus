@@ -1190,6 +1190,8 @@ void luaH_finishset(lua_State *L, Table *t, const TValue *key, TValue *value,
 ** barrier and invalidate the TM cache.
 */
 void luaH_set(lua_State *L, Table *t, const TValue *key, TValue *value) {
+  if (l_unlikely(isreadonly(t)))
+    luaG_runerror(L, "attempt to modify a readonly table");
   int hres = luaH_pset(t, key, value);
   if (hres != HOK)
     luaH_finishset(L, t, key, value, hres);
@@ -1201,6 +1203,8 @@ void luaH_set(lua_State *L, Table *t, const TValue *key, TValue *value) {
 ** integers cannot be keys to metamethods.)
 */
 void luaH_setint(lua_State *L, Table *t, lua_Integer key, TValue *value) {
+  if (l_unlikely(isreadonly(t)))
+    luaG_runerror(L, "attempt to modify a readonly table");
   unsigned ik = ikeyinarray(t, key);
   if (ik > 0)
     obj2arr(t, ik - 1, value);
