@@ -86,8 +86,16 @@ local function parse_all_responses(raw)
   return results
 end
 
-local function parse_response(raw)
+local function parse_response(raw, id)
   if not raw or raw == "" then return nil end
+  if id then
+    -- Find the response matching a specific request id
+    local msgs = parse_all_responses(raw)
+    for _, m in ipairs(msgs) do
+      if m.id == id then return m end
+    end
+    return nil
+  end
   local len_str = string.match(raw, "Content%-Length: (%d+)")
   if not len_str then return nil end
   local body_start = string.find(raw, "\r\n\r\n")
@@ -519,11 +527,11 @@ tests:it("completions update after editing code", function()
   insert_at(uri, 0, 15, "\nlocal myOther = 2")
 
   -- Request completions for "my" prefix
-  local raw = send_request("textDocument/completion", {
+  local raw, id = send_request("textDocument/completion", {
     textDocument = {uri = uri},
     position = {line = 2, character = 12},
   })
-  local resp = parse_response(raw)
+  local resp = parse_response(raw, id)
   tests:assert_not_nil(resp)
   tests:assert_not_nil(resp.result)
 
