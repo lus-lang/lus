@@ -449,10 +449,8 @@ static void parse_value_iterative(JsonParser *p) {
                     }
                     p->json--;
                     if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
-                      if (p->json + 1 < p->end &&
-                          p->json[1] == '\\' &&
-                          p->json + 2 < p->end &&
-                          p->json[2] == 'u') {
+                      if (p->json + 1 < p->end && p->json[1] == '\\' &&
+                          p->json + 2 < p->end && p->json[2] == 'u') {
                         unsigned int low = 0;
                         p->json += 3;
                         for (int i = 0; i < 4; i++) {
@@ -470,10 +468,8 @@ static void parse_value_iterative(JsonParser *p) {
                         }
                         p->json--;
                         if (low >= 0xDC00 && low <= 0xDFFF) {
-                          codepoint =
-                              0x10000 +
-                              ((codepoint - 0xD800) << 10) +
-                              (low - 0xDC00);
+                          codepoint = 0x10000 + ((codepoint - 0xD800) << 10) +
+                                      (low - 0xDC00);
                         }
                       }
                     }
@@ -481,12 +477,10 @@ static void parse_value_iterative(JsonParser *p) {
                     int utf8len = luaO_utf8esc(utf8buf, codepoint);
                     if (klen + (size_t)utf8len > kcap) {
                       size_t newcap = kcap * 2;
-                      kbuf = luaM_reallocvector(L, kbuf, kcap,
-                                                newcap, char);
+                      kbuf = luaM_reallocvector(L, kbuf, kcap, newcap, char);
                       kcap = newcap;
                     }
-                    memcpy(kbuf + klen,
-                           utf8buf + UTF8BUFFSZ - utf8len,
+                    memcpy(kbuf + klen, utf8buf + UTF8BUFFSZ - utf8len,
                            (size_t)utf8len);
                     klen += (size_t)utf8len;
                     break;
@@ -618,10 +612,8 @@ static void parse_value_iterative(JsonParser *p) {
                   }
                   p->json--;
                   if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
-                    if (p->json + 1 < p->end &&
-                        p->json[1] == '\\' &&
-                        p->json + 2 < p->end &&
-                        p->json[2] == 'u') {
+                    if (p->json + 1 < p->end && p->json[1] == '\\' &&
+                        p->json + 2 < p->end && p->json[2] == 'u') {
                       unsigned int low = 0;
                       p->json += 3;
                       for (int i = 0; i < 4; i++) {
@@ -639,10 +631,8 @@ static void parse_value_iterative(JsonParser *p) {
                       }
                       p->json--;
                       if (low >= 0xDC00 && low <= 0xDFFF) {
-                        codepoint =
-                            0x10000 +
-                            ((codepoint - 0xD800) << 10) +
-                            (low - 0xDC00);
+                        codepoint = 0x10000 + ((codepoint - 0xD800) << 10) +
+                                    (low - 0xDC00);
                       }
                     }
                   }
@@ -650,12 +640,10 @@ static void parse_value_iterative(JsonParser *p) {
                   int utf8len = luaO_utf8esc(utf8buf, codepoint);
                   if (klen + (size_t)utf8len > kcap) {
                     size_t newcap = kcap * 2;
-                    kbuf = luaM_reallocvector(L, kbuf, kcap,
-                                              newcap, char);
+                    kbuf = luaM_reallocvector(L, kbuf, kcap, newcap, char);
                     kcap = newcap;
                   }
-                  memcpy(kbuf + klen,
-                         utf8buf + UTF8BUFFSZ - utf8len,
+                  memcpy(kbuf + klen, utf8buf + UTF8BUFFSZ - utf8len,
                          (size_t)utf8len);
                   klen += (size_t)utf8len;
                   break;

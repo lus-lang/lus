@@ -205,7 +205,7 @@ static void f_luaopen(lua_State *L, void *ud) {
   luaS_init(L);
   luaT_init(L);
   luaX_init(L);
-  luaF_initfastcalls(L); /* after luaT/luaX so reserved words are fixed */
+  luaF_initfastcalls(L);     /* after luaT/luaX so reserved words are fixed */
   g->gcstp = 0;              /* allow gc */
   setnilvalue(&g->nilvalue); /* now state is complete */
   luai_userstateopen(L);

@@ -1540,7 +1540,8 @@ static int check_fastcall(FuncState *fs, int base, int nparams) {
       int upval = GETARG_B(inst);
       int kidx = GETARG_C(inst);
       TString *funcname;
-      if (upval != 0) return -1;
+      if (upval != 0)
+        return -1;
       funcname = tsvalue(&f->k[kidx]);
       return luaF_findfastcall(g, NULL, funcname, nparams);
     }
@@ -1562,7 +1563,8 @@ static int check_fastcall(FuncState *fs, int base, int nparams) {
           int upval2 = GETARG_B(i2);
           int mod_kidx = GETARG_C(i2);
           TString *modname;
-          if (upval2 != 0) return -1;
+          if (upval2 != 0)
+            return -1;
           modname = tsvalue(&f->k[mod_kidx]);
           return luaF_findfastcall(g, modname, funcname, nparams);
         }
@@ -1635,14 +1637,12 @@ static void funcargs(LexState *ls, expdesc *f, int fc_eligible) {
   {
     int fc_id = -1;
     /* Check if this call can be fastcalled */
-    if (fc_eligible && nparams != LUA_MULTRET &&
-        fs->nups > 0 && fs->f->upvalues[0].name == ls->envn &&
-        !G(fs->ls->L)->no_fastcall) {
+    if (fc_eligible && nparams != LUA_MULTRET && fs->nups > 0 &&
+        fs->f->upvalues[0].name == ls->envn && !G(fs->ls->L)->no_fastcall) {
       fc_id = check_fastcall(fs, base, nparams);
     }
     if (fc_id >= 0) {
-      init_exp(f, VCALL,
-               luaK_codeABC(fs, OP_FASTCALL, base, nparams + 1, 2));
+      init_exp(f, VCALL, luaK_codeABC(fs, OP_FASTCALL, base, nparams + 1, 2));
       luaK_code(fs, CREATE_Ax(OP_EXTRAARG, fc_id));
     }
     else {
@@ -1982,7 +1982,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
         method_name = ls->t.seminfo.ts; /* capture method name */
         codename(ls, &key);
         luaK_self(fs, v, &key);
-        funcargs(ls, v, 0);  /* method calls are not fastcall-eligible */
+        funcargs(ls, v, 0); /* method calls are not fastcall-eligible */
         /* Create AST_METHODCALL node */
         if (AST_ACTIVE(ls)) {
           LusAstNode *mcall =
@@ -2006,7 +2006,7 @@ static void suffixedexp(LexState *ls, expdesc *v) {
       case TK_STRING:
       case '{' /*}*/: { /* funcargs */
         luaK_exp2nextreg(fs, v);
-        funcargs(ls, v, niljumps == NO_JUMP);  /* eligible if not in opt chain */
+        funcargs(ls, v, niljumps == NO_JUMP); /* eligible if not in opt chain */
         /* Function call result: if in chain, ensure in basereg */
         if (basereg != -1) {
           luaK_exp2anyreg(fs, v);

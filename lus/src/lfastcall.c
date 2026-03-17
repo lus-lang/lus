@@ -34,13 +34,13 @@
 ** cross-state pointer issues when workers create separate lua_States.
 ** Access macros for convenience:
 */
-#define fc_str_integer   (G(L)->fc_str_integer)
-#define fc_str_float     (G(L)->fc_str_float)
-#define fc_str_nil       (G(L)->fc_str_nil)
-#define fc_str_true      (G(L)->fc_str_true)
-#define fc_str_false     (G(L)->fc_str_false)
+#define fc_str_integer (G(L)->fc_str_integer)
+#define fc_str_float (G(L)->fc_str_float)
+#define fc_str_nil (G(L)->fc_str_nil)
+#define fc_str_true (G(L)->fc_str_true)
+#define fc_str_false (G(L)->fc_str_false)
 #define fc_str___metatable (G(L)->fc_str___metatable)
-#define fc_typenames     (G(L)->fc_typenames)
+#define fc_typenames (G(L)->fc_typenames)
 
 
 /*
@@ -105,8 +105,7 @@ static const char *fc_memfind(const char *s1, size_t l1, const char *s2,
     const char *init;
     l2--;
     l1 -= l2;
-    while (l1 > 0 &&
-           (init = (const char *)memchr(s1, *s2, l1)) != NULL) {
+    while (l1 > 0 && (init = (const char *)memchr(s1, *s2, l1)) != NULL) {
       init++;
       if (memcmp(init, s2 + 1, l2) == 0)
         return init - 1;
@@ -135,8 +134,7 @@ static int fc_numcmp(const void *a, const void *b) {
 
 
 /* Helper: check default whitespace */
-#define fc_isspace(c)                                                \
-  ((c) == ' ' || (c) == '\t' || (c) == '\n' || (c) == '\r')
+#define fc_isspace(c) ((c) == ' ' || (c) == '\t' || (c) == '\n' || (c) == '\r')
 
 
 /*
@@ -174,8 +172,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       break;
     }
     case FC_RAWSET: {
-      TValue *t = s2v(ra + 1), *k = s2v(ra + 2),
-             *v = s2v(ra + 3);
+      TValue *t = s2v(ra + 1), *k = s2v(ra + 2), *v = s2v(ra + 3);
       if (l_likely(ttistable(t))) {
         luaH_set(L, hvalue(t), k, v);
         luaC_barrierback(L, obj2gco(hvalue(s2v(ra + 1))), v);
@@ -214,8 +211,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       }
       else {
         TValue mmval;
-        lu_byte tag =
-            luaH_getshortstr(mt, fc_str___metatable, &mmval);
+        lu_byte tag = luaH_getshortstr(mt, fc_str___metatable, &mmval);
         if (!tagisempty(tag)) {
           setobj2s(L, ra, &mmval);
         }
@@ -286,8 +282,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setsvalue2s(L, ra, fc_str_nil);
       }
       else if (ttisboolean(arg)) {
-        setsvalue2s(L, ra,
-                    l_isfalse(arg) ? fc_str_false : fc_str_true);
+        setsvalue2s(L, ra, l_isfalse(arg) ? fc_str_false : fc_str_true);
       }
       else if (ttisnumber(arg)) {
         TValue temp;
@@ -321,10 +316,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setivalue(s2v(ra), (i1 > i2) ? i1 : i2);
       }
       else if (ttisnumber(v1) && ttisnumber(v2)) {
-        lua_Number n1 =
-            ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
-        lua_Number n2 =
-            ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
+        lua_Number n1 = ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
+        lua_Number n2 = ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
         setfltvalue(s2v(ra), (n1 > n2) ? n1 : n2);
       }
       else {
@@ -339,10 +332,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setivalue(s2v(ra), (i1 < i2) ? i1 : i2);
       }
       else if (ttisnumber(v1) && ttisnumber(v2)) {
-        lua_Number n1 =
-            ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
-        lua_Number n2 =
-            ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
+        lua_Number n1 = ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
+        lua_Number n2 = ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
         setfltvalue(s2v(ra), (n1 < n2) ? n1 : n2);
       }
       else {
@@ -352,15 +343,14 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
     }
 
 /* Macro for simple unary math fastcalls (always return float) */
-#define FC_MATH_UNARY(op)                                          \
-  {                                                                \
-    TValue *arg = s2v(ra + 1);                                     \
-    if (!ttisnumber(arg))                                          \
-      return 0;                                                    \
-    lua_Number n =                                                 \
-        (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);\
-    setfltvalue(s2v(ra), l_mathop(op)(n));                         \
-    break;                                                         \
+#define FC_MATH_UNARY(op)                                                      \
+  {                                                                            \
+    TValue *arg = s2v(ra + 1);                                                 \
+    if (!ttisnumber(arg))                                                      \
+      return 0;                                                                \
+    lua_Number n = (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg); \
+    setfltvalue(s2v(ra), l_mathop(op)(n));                                     \
+    break;                                                                     \
   }
 
     case FC_MATH_CEIL: {
@@ -411,8 +401,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (!ttisnumber(arg))
         return 0;
-      lua_Number y =
-          (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
+      lua_Number y = (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
       setfltvalue(s2v(ra), l_mathop(atan2)(y, l_mathop(1.0)));
       break;
     }
@@ -421,8 +410,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (!ttisnumber(arg))
         return 0;
-      lua_Number n =
-          (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
+      lua_Number n = (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
       setfltvalue(s2v(ra), l_mathop(log)(n));
       break;
     }
@@ -430,20 +418,16 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (!ttisnumber(arg))
         return 0;
-      lua_Number n =
-          (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
-      setfltvalue(s2v(ra),
-                  n * (l_mathop(180.0) / l_mathop(3.141592653589793)));
+      lua_Number n = (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
+      setfltvalue(s2v(ra), n * (l_mathop(180.0) / l_mathop(3.141592653589793)));
       break;
     }
     case FC_MATH_RAD: {
       TValue *arg = s2v(ra + 1);
       if (!ttisnumber(arg))
         return 0;
-      lua_Number n =
-          (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
-      setfltvalue(s2v(ra),
-                  n * (l_mathop(3.141592653589793) / l_mathop(180.0)));
+      lua_Number n = (ttisinteger(arg)) ? cast_num(ivalue(arg)) : fltvalue(arg);
+      setfltvalue(s2v(ra), n * (l_mathop(3.141592653589793) / l_mathop(180.0)));
       break;
     }
     case FC_MATH_FMOD: {
@@ -451,7 +435,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       if (ttisinteger(v1) && ttisinteger(v2)) {
         lua_Integer d = ivalue(v2);
         if (d == 0)
-          return 0; /* fall back for error */
+          return 0;                    /* fall back for error */
         if (l_castS2U(d) + 1u <= 1u) { /* d is -1 or 0 */
           setivalue(s2v(ra), 0);
         }
@@ -460,10 +444,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         }
       }
       else if (ttisnumber(v1) && ttisnumber(v2)) {
-        lua_Number n1 =
-            ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
-        lua_Number n2 =
-            ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
+        lua_Number n1 = ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
+        lua_Number n2 = ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
         setfltvalue(s2v(ra), l_mathop(fmod)(n1, n2));
       }
       else
@@ -517,8 +499,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *v1 = s2v(ra + 1), *v2 = s2v(ra + 2);
       if (!ttisnumber(v1) || !ttisinteger(v2))
         return 0;
-      lua_Number x =
-          (ttisinteger(v1)) ? cast_num(ivalue(v1)) : fltvalue(v1);
+      lua_Number x = (ttisinteger(v1)) ? cast_num(ivalue(v1)) : fltvalue(v1);
       setfltvalue(s2v(ra), l_mathop(ldexp)(x, (int)ivalue(v2)));
       break;
     }
@@ -547,8 +528,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           setsvalue2s(L, ra, ts);
         }
         else {
-          setsvalue2s(L, ra,
-                      luaS_newlstr(L, s + start, end - start));
+          setsvalue2s(L, ra, luaS_newlstr(L, s + start, end - start));
         }
       }
       else
@@ -568,8 +548,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           setsvalue2s(L, ra, ts);
         }
         else {
-          setsvalue2s(L, ra,
-                      luaS_newlstr(L, s + start, len - start));
+          setsvalue2s(L, ra, luaS_newlstr(L, s + start, len - start));
         }
       }
       else
@@ -622,10 +601,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           const char *pos = s;
           const char *end = s + ls;
           while (pos <= end) {
-            const char *found =
-                fc_memfind(pos, (size_t)(end - pos), delim, ld);
-            size_t seglen = found ? (size_t)(found - pos)
-                                  : (size_t)(end - pos);
+            const char *found = fc_memfind(pos, (size_t)(end - pos), delim, ld);
+            size_t seglen = found ? (size_t)(found - pos) : (size_t)(end - pos);
             TString *sub = luaS_newlstr(L, pos, seglen);
             setsvalue2s(L, L->top.p, sub); /* root on stack */
             L->top.p++;
@@ -712,8 +689,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       break;
     }
     case FC_STRING_SUB: {
-      TValue *arg1 = s2v(ra + 1), *arg2 = s2v(ra + 2),
-             *arg3 = s2v(ra + 3);
+      TValue *arg1 = s2v(ra + 1), *arg2 = s2v(ra + 2), *arg3 = s2v(ra + 3);
       if (l_likely(ttisstring(arg1) && ttisinteger(arg2) &&
                    ttisinteger(arg3))) {
         TString *ts = tsvalue(arg1);
@@ -722,21 +698,17 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         lua_Integer pi = ivalue(arg2);
         lua_Integer pj = ivalue(arg3);
         /* posrelatI for start (0 maps to 1) */
-        size_t start = (pi > 0)
-                           ? (size_t)pi
-                           : (pi == 0 || pi < -(lua_Integer)len)
-                                 ? 1
-                                 : len + (size_t)pi + 1;
+        size_t start = (pi > 0) ? (size_t)pi
+                       : (pi == 0 || pi < -(lua_Integer)len)
+                           ? 1
+                           : len + (size_t)pi + 1;
         /* getendpos for end */
-        size_t end = (pj > (lua_Integer)len)
-                         ? len
-                         : (pj >= 0) ? (size_t)pj
-                                     : (pj < -(lua_Integer)len)
-                                           ? 0
-                                           : len + (size_t)pj + 1;
+        size_t end = (pj > (lua_Integer)len)    ? len
+                     : (pj >= 0)                ? (size_t)pj
+                     : (pj < -(lua_Integer)len) ? 0
+                                                : len + (size_t)pj + 1;
         if (start <= end) {
-          setsvalue2s(L, ra,
-                      luaS_newlstr(L, s + start - 1, (end - start) + 1));
+          setsvalue2s(L, ra, luaS_newlstr(L, s + start - 1, (end - start) + 1));
         }
         else {
           setsvalue2s(L, ra, luaS_newlstr(L, "", 0));
@@ -753,11 +725,10 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         size_t len = tsslen(ts);
         lua_Integer pi = ivalue(arg2);
         /* posrelatI (0 maps to 1) */
-        size_t pos = (pi > 0)
-                         ? (size_t)pi
-                         : (pi == 0 || pi < -(lua_Integer)len)
-                               ? 1
-                               : len + (size_t)pi + 1;
+        size_t pos = (pi > 0) ? (size_t)pi
+                     : (pi == 0 || pi < -(lua_Integer)len)
+                         ? 1
+                         : len + (size_t)pi + 1;
         if (pos >= 1 && pos <= len) {
           setivalue(s2v(ra), cast_uchar(getstr(ts)[pos - 1]));
         }
@@ -925,8 +896,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         for (lua_Unsigned i = 1; i <= len; i++) {
           TValue val;
           lu_byte tag = luaH_getint(t, (lua_Integer)i, &val);
-          if (!tagisempty(tag) &&
-              (ttisinteger(&val) || ttisfloat(&val)))
+          if (!tagisempty(tag) && (ttisinteger(&val) || ttisfloat(&val)))
             count++;
         }
         if (count == 0) {
@@ -989,8 +959,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           setfltvalue(s2v(ra), (lua_Number)NAN);
           break;
         }
-        setfltvalue(s2v(ra),
-                    l_mathop(sqrt)(M2 / (lua_Number)count));
+        setfltvalue(s2v(ra), l_mathop(sqrt)(M2 / (lua_Number)count));
       }
       else
         return 0;
@@ -1038,8 +1007,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
             TValue oldrow;
             luaH_getint(outer, (lua_Integer)i, &oldrow);
             TValue elem;
-            lu_byte etag =
-                luaH_getint(hvalue(&oldrow), (lua_Integer)j, &elem);
+            lu_byte etag = luaH_getint(hvalue(&oldrow), (lua_Integer)j, &elem);
             if (tagisempty(etag))
               setnilvalue(&elem);
             luaH_setint(L, newrow, (lua_Integer)i, &elem);
@@ -1052,10 +1020,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       break;
     }
     case FC_TABLE_RESHAPE: {
-      TValue *arg1 = s2v(ra + 1), *arg2 = s2v(ra + 2),
-             *arg3 = s2v(ra + 3);
-      if (l_likely(ttistable(arg1) && ttisinteger(arg2) &&
-                   ttisinteger(arg3))) {
+      TValue *arg1 = s2v(ra + 1), *arg2 = s2v(ra + 2), *arg3 = s2v(ra + 3);
+      if (l_likely(ttistable(arg1) && ttisinteger(arg2) && ttisinteger(arg3))) {
         Table *t = hvalue(arg1);
         lua_Integer nrows = ivalue(arg2), ncols = ivalue(arg3);
         if (nrows <= 0 || ncols <= 0)
@@ -1079,8 +1045,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           /* Populate row (now reachable from result) */
           for (lua_Integer c = 1; c <= ncols; c++) {
             TValue elem;
-            lu_byte etag =
-                luaH_getint(t, (r - 1) * ncols + c, &elem);
+            lu_byte etag = luaH_getint(t, (r - 1) * ncols + c, &elem);
             if (tagisempty(etag))
               setnilvalue(&elem);
             luaH_setint(L, row, c, &elem);
@@ -1236,8 +1201,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         return 0; /* fall back */
       if (n == 0) {
         /* Find beginning of current byte sequence */
-        while (posi > 0 &&
-               ((unsigned char)s[posi] & 0xC0) == 0x80)
+        while (posi > 0 && ((unsigned char)s[posi] & 0xC0) == 0x80)
           posi--;
       }
       else if (n > 0) {
@@ -1254,18 +1218,16 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         while (n < 0 && posi > 0) {
           do {
             posi--;
-          } while (posi > 0 &&
-                   ((unsigned char)s[posi] & 0xC0) == 0x80);
+          } while (posi > 0 && ((unsigned char)s[posi] & 0xC0) == 0x80);
           n++;
         }
       }
       if (n != 0)
-        return 0; /* did not find given character */
+        return 0;                   /* did not find given character */
       setivalue(s2v(ra), posi + 1); /* 1-based */
       break;
     }
-    default:
-      return 0;
+    default: return 0;
   }
   return 1;
 }
@@ -1306,8 +1268,8 @@ void luaF_initfastcalls(lua_State *L) {
   }
 
 /* Helper macro to register one fastcall name entry */
-#define FC_INIT(id, mod, name)                  \
-  g->fastcall_table[id].module_name = (mod);    \
+#define FC_INIT(id, mod, name)               \
+  g->fastcall_table[id].module_name = (mod); \
   g->fastcall_table[id].func_name = fc_newfix(L, name)
 
   /* Base library functions (no module) */

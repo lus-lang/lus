@@ -53,8 +53,8 @@ static const char *progname = LUA_PROGNAME;
 static const char *astgraph_output = NULL; /* --ast-graph output file */
 static const char *astjson_output = NULL;  /* --ast-json output file */
 static int pedantic_warnings = 0;          /* -Wpedantic flag */
-static int no_fastcall = 0;               /* --no-fastcall flag */
-static int readonly_env = 0;              /* --readonly-env flag */
+static int no_fastcall = 0;                /* --no-fastcall flag */
+static int readonly_env = 0;               /* --readonly-env flag */
 static void mark_env_readonly(lua_State *L);
 
 /* Standalone bundle options */
@@ -1955,7 +1955,7 @@ static int pmain(lua_State *L) {
     lua_pushboolean(L, 1); /* signal for libraries to ignore env. vars. */
     lua_setfield(L, LUA_REGISTRYINDEX, "LUA_NOENV");
   }
-  luai_openlibs(L);                      /* open standard libraries */
+  luai_openlibs(L); /* open standard libraries */
   if (no_fastcall)
     G(L)->no_fastcall = 1;
   lus_onworker(L, worker_setup);         /* setup workers to get same libs */
@@ -1964,11 +1964,11 @@ static int pmain(lua_State *L) {
     G(L)->readonly_env = 1;
     mark_env_readonly(L);
   }
-  lua_gc(L, LUA_GCRESTART);              /* start GC... */
-  lua_gc(L, LUA_GCGEN);                  /* ...in generational mode */
-  if (!(args & has_E)) {                 /* no option '-E'? */
-    if (handle_luainit(L) != LUA_OK)     /* run LUA_INIT */
-      return 0;                          /* error running LUA_INIT */
+  lua_gc(L, LUA_GCRESTART);          /* start GC... */
+  lua_gc(L, LUA_GCGEN);              /* ...in generational mode */
+  if (!(args & has_E)) {             /* no option '-E'? */
+    if (handle_luainit(L) != LUA_OK) /* run LUA_INIT */
+      return 0;                      /* error running LUA_INIT */
   }
   if (!runargs(L, argv, optlim)) /* execute arguments -e and -l */
     return 0;                    /* something failed */
