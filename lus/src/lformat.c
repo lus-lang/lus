@@ -1084,8 +1084,8 @@ static void fmt_f_parse(lua_State *L, void *ud) {
     return;
   }
   LClosure *cl =
-      luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
-  lua_pop(L, 1);
+      luaY_parser(L, &z, NULL, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
+  lua_pop(L, 1); /* remove anchor table */
   (void)cl;
 }
 

@@ -296,7 +296,7 @@ int luaD_reallocstack(lua_State *L, int newsize, int raiseerror) {
   correctstack(L, oldstack); /* change offsets back to pointers */
   L->stack_last.p = L->stack.p + newsize;
   for (i = oldsize + EXTRA_STACK; i < newsize + EXTRA_STACK; i++)
-    setnilvalue(s2v(newstack + i)); /* erase new segment */
+    setnilvalue2s(newstack + i); /* erase new segment */
   return 1;
 }
 
@@ -509,7 +509,7 @@ l_sinline void genmoveresults(lua_State *L, StkId res, int nres, int wanted) {
   for (i = 0; i < nres; i++) /* move all results to correct place */
     setobjs2s(L, res + i, firstresult + i);
   for (; i < wanted; i++) /* complete wanted number of results */
-    setnilvalue(s2v(res + i));
+    setnilvalue2s(res + i);
   L->top.p = res + wanted; /* top points after the last result */
 }
 
@@ -526,7 +526,7 @@ l_sinline void moveresults(lua_State *L, StkId res, int nres,
     case 0 + 1: /* no values needed */ L->top.p = res; return;
     case 1 + 1:                             /* one value needed */
       if (nres == 0)                        /* no results? */
-        setnilvalue(s2v(res));              /* adjust with nil */
+        setnilvalue2s(res);              /* adjust with nil */
       else                                  /* at least one result */
         setobjs2s(L, res, L->top.p - nres); /* move it to proper place */
       L->top.p = res + 1;
@@ -639,7 +639,7 @@ retry:
         setobjs2s(L, ci->func.p + i, func + i);
       func = ci->func.p; /* moved-down function */
       for (; narg1 <= nfixparams; narg1++)
-        setnilvalue(s2v(func + narg1)); /* complete missing arguments */
+        setnilvalue2s(func + narg1); /* complete missing arguments */
       ci->top.p = func + 1 + fsize;     /* top for new function */
       lua_assert(ci->top.p <= L->stack_last.p);
       ci->u.l.savedpc = p->code;    /* starting point */
@@ -687,7 +687,7 @@ retry:
       ci->u.l.savedpc = p->code;    /* starting point */
       ci->u.l.catchinfo.active = 0; /* no active catch handler */
       for (; narg < nfixparams; narg++)
-        setnilvalue(s2v(L->top.p++)); /* complete missing arguments */
+        setnilvalue2s(L->top.p++); /* complete missing arguments */
       lua_assert(ci->top.p <= L->stack_last.p);
       return ci;
     }
@@ -1085,18 +1085,30 @@ static void checkmode(lua_State *L, const char *mode, const char *x) {
   }
 }
 
+/*
+** Before the first call to the reader function, Lua reserves a slot
+** with a table for anchoring stuff. This keeps the stack stable across
+** the reader calls (see 'lua_load').
+*/
 static void f_parser(lua_State *L, void *ud) {
   LClosure *cl;
   struct SParser *p = cast(struct SParser *, ud);
   const char *mode = p->mode ? p->mode : "bt";
-  int c = zgetc(p->z); /* read first character */
+  int c;
+  Table *anchor;
+  ptrdiff_t otop = savestack(L, L->top.p); /* original top */
+  luaD_checkstack(L, 2);
+  anchor = luaH_new(L);             /* create the anchor table */
+  sethvalue2s(L, L->top.p, anchor); /* anchor the anchor table */
+  luaD_inctop(L);
+  c = zgetc(p->z); /* read first character */
   if (c == LUA_SIGNATURE[0]) {
     int fixed = 0;
     if (strchr(mode, 'B') != NULL)
       fixed = 1;
     else
       checkmode(L, mode, "binary");
-    cl = luaU_undump(L, p->z, p->name, fixed);
+    cl = luaU_undump(L, p->z, anchor, p->name, fixed);
   }
   else {
     checkmode(L, mode, "text");
@@ -1104,16 +1116,31 @@ static void f_parser(lua_State *L, void *ud) {
     /* Check if pedantic mode is enabled */
     if (G(L)->pedantic) {
       LusAst *ast = lusA_new(L);
-      cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c, ast);
+      cl = luaY_parser(L, p->z, anchor, &p->buff, &p->dyd, p->name, c, ast);
       lusA_analyze(L, ast, p->name);
       lusA_free(L, ast);
     }
     else {
-      cl = luaY_parser(L, p->z, &p->buff, &p->dyd, p->name, c, NULL);
+      cl = luaY_parser(L, p->z, anchor, &p->buff, &p->dyd, p->name, c, NULL);
     }
   }
+  L->top.p = restorestack(L, otop); /* restore stack */
+  setclLvalue2s(L, L->top.p, cl);   /* push closure */
+  luaD_inctop(L);
   lua_assert(cl->nupvalues == cl->p->sizeupvalues);
   luaF_initupvals(L, cl);
+}
+
+/*
+** Anchor an object in a table in the stack. First, anchor the object
+** temporarily in the stack, as 'luaH_set' may call an emergency GC.
+** Then, add it in the table with itself as its key.
+*/
+void luaD_anchorobj(lua_State *L, Table *anchor, GCObject *obj) {
+  setgcovalue(L, s2v(L->top.p++), obj); /* temporary anchor in the stack */
+  luaH_set(L, anchor, s2v(L->top.p - 1), s2v(L->top.p - 1));
+  /* because this is a new key, 'luaH_set' calls the GC barrier for us */
+  L->top.p--;
 }
 
 TStatus luaD_protectedparser(lua_State *L, ZIO *z, const char *name,

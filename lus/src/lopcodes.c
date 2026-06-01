@@ -189,7 +189,7 @@ LUAI_DDEF const lu_byte luaP_opmodes[NUM_OPCODES] = {
     ,
     opmode(0, 0, 0, 0, 0, iABx) /* OP_ERRNNIL */
     ,
-    opmode(0, 0, 1, 0, 1, iABC) /* OP_VARARGPREP */
+    opmode(0, 0, 0, 0, 0, iABC) /* OP_VARARGPREP */
     ,
     opmode(0, 0, 0, 0, 1, iABC) /* OP_CATCH */
     ,

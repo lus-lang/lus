@@ -422,7 +422,7 @@ static int db_debug(lua_State *L) {
     if (fgets(buffer, sizeof(buffer), stdin) == NULL ||
         strcmp(buffer, "cont\n") == 0)
       return 0;
-    if (luaL_loadbuffer(L, buffer, strlen(buffer), "=(debug command)") ||
+    if (luaL_loadbufferx(L, buffer, strlen(buffer), "=(debug command)", "t") ||
         lua_pcall(L, 0, 0, 0))
       lua_writestringerror("%s\n", luaL_tolstring(L, -1, NULL));
     lua_settop(L, 0); /* remove eventual returns */
@@ -497,9 +497,9 @@ static void f_parse(lua_State *L, void *ud) {
 
   /* Parse with AST generation enabled */
   LClosure *cl =
-      luaY_parser(L, &z, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
+      luaY_parser(L, &z, NULL, pd->buff, pd->dyd, pd->chunkname, c, pd->ast);
 
-  /* Pop the closure from stack (we don't need it) */
+  /* Pop the private anchor table (we don't need the closure) */
   lua_pop(L, 1);
   (void)cl;
 }

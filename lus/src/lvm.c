@@ -265,7 +265,7 @@ static int forprep(lua_State *L, StkId ra) {
 ** true iff the loop must continue. (The integer case is
 ** written online with opcode OP_FORLOOP, for performance.)
 */
-static int floatforloop(StkId ra) {
+static int floatforloop(lua_State *L, StkId ra) {
   lua_Number step = fltvalue(s2v(ra + 1));
   lua_Number limit = fltvalue(s2v(ra));
   lua_Number idx = fltvalue(s2v(ra + 2)); /* control variable */
@@ -319,7 +319,7 @@ lu_byte luaV_finishget(lua_State *L, const TValue *t, TValue *key, StkId val,
     else {                                            /* 't' is a table */
       tm = fasttm(L, hvalue(t)->metatable, TM_INDEX); /* table's metamethod */
       if (tm == NULL) {                               /* no metamethod? */
-        setnilvalue(s2v(val));                        /* result is nil */
+        setnilvalue2s(val);                        /* result is nil */
         return LUA_VNIL;
       }
       /* else will try the metamethod */
@@ -1532,7 +1532,7 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
 
     /* Nil-fill remaining slots if nresults > 2 */
     for (j = 2; j < nresults; j++) {
-      setnilvalue(s2v(errorRa + j));
+      setnilvalue2s(errorRa + j);
     }
 
     /* Adjust stack top to include all expected results */
@@ -1639,7 +1639,7 @@ returning: /* trap already set */
         StkId ra = RA(i);
         int b = GETARG_B(i);
         do {
-          setnilvalue(s2v(ra++));
+          setnilvalue2s(ra++);
         } while (b--);
         vmbreak;
       }
@@ -2161,7 +2161,7 @@ returning: /* trap already set */
           L->ci = ci->previous; /* back to caller */
           L->top.p = base - 1;
           for (; l_unlikely(nres > 0); nres--)
-            setnilvalue(s2v(L->top.p++)); /* all results are nil */
+            setnilvalue2s(L->top.p++); /* all results are nil */
         }
         goto ret;
       }
@@ -2183,7 +2183,7 @@ returning: /* trap already set */
             setobjs2s(L, base - 1, ra); /* at least this result */
             L->top.p = base;
             for (; l_unlikely(nres > 1); nres--)
-              setnilvalue(s2v(L->top.p++)); /* complete missing results */
+              setnilvalue2s(L->top.p++); /* complete missing results */
           }
         }
       ret: /* return from a Lua function */
@@ -2207,7 +2207,7 @@ returning: /* trap already set */
             pc -= GETARG_Bx(i);          /* jump back */
           }
         }
-        else if (floatforloop(ra)) /* float loop */
+        else if (floatforloop(L, ra)) /* float loop */
           pc -= GETARG_Bx(i);      /* jump back */
         updatetrap(ci);            /* allows a signal to break the loop */
         vmbreak;
@@ -2426,7 +2426,7 @@ returning: /* trap already set */
           StkId target = ra + nresults;
           /* Nil-fill if needed */
           while (L->top.p < target) {
-            setnilvalue(s2v(L->top.p));
+            setnilvalue2s(L->top.p);
             L->top.p++;
           }
           /* Truncate if too many */

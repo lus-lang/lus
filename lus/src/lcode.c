@@ -660,11 +660,11 @@ static int boolT(FuncState *fs) {
 ** Add nil to list of constants and return its index.
 */
 int luaK_nilK(FuncState *fs) {
-  TValue k, v;
-  setnilvalue(&v);
+  lua_State *L = fs->ls->L;
+  TValue k;
   /* cannot use nil as key; instead use table itself */
-  sethvalue(fs->ls->L, &k, fs->kcache);
-  return k2proto(fs, &k, &v);
+  sethvalue(L, &k, fs->kcache);
+  return k2proto(fs, &k, &G(L)->nilvalue);
 }
 
 
@@ -1431,7 +1431,8 @@ void luaK_indexed(FuncState *fs, expdesc *t, expdesc *k) {
   }
   else {
     /* register index of the table */
-    t->u.ind.t = cast_byte((t->k == VLOCAL) ? t->u.var.ridx : t->u.info);
+    lu_byte temp = cast_byte((t->k == VLOCAL) ? t->u.var.ridx : t->u.info);
+    t->u.ind.t = temp; /* (avoid a direct assignment; values may overlap) */
     if (isKstr(fs, k))
       fillidxk(t, k->u.info, VINDEXSTR); /* literal short string */
     else if (isCint(k))                  /* int. constant in proper range? */

@@ -55,6 +55,8 @@ static const char *fc_utf8_decode(const char *s, l_uint32 *val, int strict) {
   l_uint32 res = 0;
   if (c < 0x80)
     res = c;
+  else if (c >= 0xfe) /* c >= 1111 1110b ? */
+    return NULL;      /* would need six or more continuation bytes */
   else {
     int count = 0;
     for (; c & 0x40; c <<= 1) {
@@ -63,8 +65,9 @@ static const char *fc_utf8_decode(const char *s, l_uint32 *val, int strict) {
         return NULL;
       res = (res << 6) | (cc & 0x3F);
     }
+    lua_assert(count <= 5);
     res |= ((l_uint32)(c & 0x7F) << (count * 5));
-    if (count > 5 || res > FC_MAXUTF || res < limits[count])
+    if (res > FC_MAXUTF || res < limits[count])
       return NULL;
     s += count;
   }
@@ -165,7 +168,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       if (l_likely(ttistable(t))) {
         lu_byte tag = luaH_get(hvalue(t), k, s2v(ra));
         if (tagisempty(tag))
-          setnilvalue(s2v(ra));
+          setnilvalue2s(ra);
       }
       else
         return 0;
@@ -207,7 +210,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       else
         mt = G(L)->mt[ttype(arg)];
       if (mt == NULL) {
-        setnilvalue(s2v(ra));
+        setnilvalue2s(ra);
       }
       else {
         TValue mmval;
@@ -262,14 +265,14 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           setobj2s(L, ra, &temp);
         }
         else {
-          setnilvalue(s2v(ra));
+          setnilvalue2s(ra);
         }
       }
       else if (ttisenum(arg)) {
         setivalue(s2v(ra), enumvalue(arg)->idx);
       }
       else {
-        setnilvalue(s2v(ra));
+        setnilvalue2s(ra);
       }
       break;
     }
@@ -475,11 +478,11 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           setivalue(s2v(ra), i);
         }
         else {
-          setnilvalue(s2v(ra)); /* fail */
+          setnilvalue2s(ra); /* fail */
         }
       }
       else {
-        setnilvalue(s2v(ra)); /* fail */
+        setnilvalue2s(ra); /* fail */
       }
       break;
     }
@@ -492,7 +495,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setsvalue2s(L, ra, fc_str_float);
       }
       else
-        setnilvalue(s2v(ra));
+        setnilvalue2s(ra);
       break;
     }
     case FC_MATH_LDEXP: {
@@ -733,7 +736,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           setivalue(s2v(ra), cast_uchar(getstr(ts)[pos - 1]));
         }
         else {
-          setnilvalue(s2v(ra));
+          setnilvalue2s(ra);
         }
       }
       else
@@ -1091,7 +1094,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       if (newsize < 0)
         return 0;
       luaV_resize(L, vecvalue(arg1), (size_t)newsize);
-      setnilvalue(s2v(ra));
+      setnilvalue2s(ra);
       break;
     }
     case FC_UTF8_LEN: {

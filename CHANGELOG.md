@@ -15,6 +15,24 @@
 - Fixed `fs.type` and `fs.follow` not checking `fs:read` permission.
 - Fixed JSON parser not handling `\b`, `\f`, `\/`, and `\uXXXX` escape sequences in object keys.
 - Fixed `msgqueue_push` crashing on allocation failure in the worker library.
+- Backport upstream Lua 5.5 fixes:
+  - https://github.com/lua/lua/commit/3360710bd3ea8da06fa5062f9d10c2719083097c
+  - https://github.com/lua/lua/commit/b60e2bcd7ca4c349bd6ee7a8e929f55e04f7ca87
+  - https://github.com/lua/lua/commit/10eb89d1141dc528806b32401e408e36fb2f3bf5
+  - https://github.com/lua/lua/commit/36d5d2b2847906aa3b66e020d5d894a14ba2bf90
+  - https://github.com/lua/lua/commit/377cbea61b2688b21c7d243fc0f42498851df794
+  - https://github.com/lua/lua/commit/51269bd783c9371252947b26cc865239dbb0153d
+  - https://github.com/lua/lua/commit/f1bb2773bba8b16f0f01c00e59a7be541ef88cb7
+  - https://github.com/lua/lua/commit/efddc2309c5ff8a1842bea8a9c0d7d4a5d6e1e60
+  - https://github.com/lua/lua/commit/c037162a1a657088d722f550e287015525bb2259
+  - https://github.com/lua/lua/commit/29cf284089d543408d726440a3f1acaecdf73636
+  - https://github.com/lua/lua/commit/d0bd25d2e7fb393a6d0a73645a099f9c3b9cc0a8
+  - https://github.com/lua/lua/commit/3228a97c6a953dcf397944161bb64b12f1ff5384
+  - https://github.com/lua/lua/commit/4c5d5063a54c0088729b16fb25a333f0f9f836b0
+  - https://github.com/lua/lua/commit/ae23e726018bd31a25c1279600328d90207ec81c
+  - https://github.com/lua/lua/commit/0da6d320f757bc9241a33df06f3597598845cf0a
+  - https://github.com/lua/lua/commit/36c1f6d949a4d3dfcbe898d80b1be1efe8e5325c
+  - https://github.com/lua/lua/commit/53b41d0cddd80bf33fdc631bdd32e3ba53842b89
 
 ### `table`
 

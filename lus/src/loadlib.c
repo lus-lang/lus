@@ -509,7 +509,7 @@ static int searcher_Lua(lua_State *L) {
     return luaL_error(L, "permission \"load\" denied");
   }
 
-  return checkload(L, (luaL_loadfile(L, filename) == LUA_OK), filename);
+  return checkload(L, (luaL_loadfilex(L, filename, "bt") == LUA_OK), filename);
 }
 
 /*
