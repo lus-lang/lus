@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.6.0 (**WIP**)
+## 1.6.0
 
-**Release date:** TBD
+**Release date:** June 10, 2026
 
 - Added `fromcsv` and `tocsv` to parse CSV files.
 - Added VM-intrinsified fastcalls for common standard library functions, reducing call overhead by ~31% (1.46x geometric mean speedup across 57 benchmarks).
