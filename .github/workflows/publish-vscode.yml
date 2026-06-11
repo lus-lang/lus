@@ -3,11 +3,21 @@ name: Publish VSCode Extension
 on:
   release:
     types: [published]
+  # Manual escape hatch: run the packaging from the current branch
+  # tree against an existing release tag (release-event runs check
+  # out the frozen tag tree, so a packaging fix on main can only be
+  # exercised via dispatch).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package and upload (e.g. v1.6.0)"
+        required: true
+        type: string
 
 jobs:
   publish-vscode:
     name: Publish Extension
-    if: "!github.event.release.prerelease"
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -38,7 +48,7 @@ jobs:
           [ -f lus.node.js ] && mv lus.node.js lus.js
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Prepare language server files
         run: cp -r lus-language lus-vscode/lus-language
@@ -49,7 +59,7 @@ jobs:
           cd lus-vscode
           npm version "$VERSION" --no-git-tag-version --allow-same-version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Build extension
         run: |
@@ -76,4 +86,4 @@ jobs:
             --repo "${{ github.repository }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}

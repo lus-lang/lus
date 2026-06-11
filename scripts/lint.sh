@@ -36,12 +36,16 @@ if should_run version-not-released; then
   VERSION="$MAJOR.$MINOR.$RELEASE"
 
   if git tag -l "v$VERSION" | grep -q "v$VERSION"; then
-    # A tag pointing at HEAD is the release build itself (CI runs
-    # this lint on v* tag pushes), not a forgotten version bump.
+    # The release tag itself (CI runs this lint on v* tag pushes) and
+    # post-release commits that leave the runtime untouched (site,
+    # docs, CI) are fine; new lus/ work under a released version is
+    # what must force a bump.
     if git tag --points-at HEAD 2>/dev/null | grep -qx "v$VERSION"; then
       pass version-not-released
+    elif git diff --quiet "v$VERSION" HEAD -- lus/ 2>/dev/null; then
+      pass version-not-released
     else
-      fail version-not-released "v$VERSION already tagged — bump version before committing"
+      fail version-not-released "v$VERSION already tagged — bump version before committing runtime changes"
     fi
   else
     pass version-not-released
