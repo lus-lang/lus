@@ -61,7 +61,14 @@ elif system == 'sunos'
   lus_deps += dl_dep
 elif system == 'windows'
   lus_c_args += ['-DLUS_PLATFORM_WINDOWS', '-DLUA_USE_WINDOWS']
-  ws2_dep = cc.find_library('ws2_32', required: true)
+  if cc.get_argument_syntax() == 'msvc'
+    # Same story as readline on macOS: under --prefer-static,
+    # find_library's filesystem search cannot see SDK import
+    # libraries. The linker resolves ws2_32.lib via %LIB% itself.
+    ws2_dep = declare_dependency(link_args: 'ws2_32.lib')
+  else
+    ws2_dep = cc.find_library('ws2_32', required: true)
+  endif
   lus_deps += ws2_dep
 else
   # Generic POSIX fallback

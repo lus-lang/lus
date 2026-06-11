@@ -20,19 +20,28 @@ jobs:
   # The strict end-to-end run targets the latest unstable release:
   # those binaries are self-contained from the moment the static-link
   # change lands on main, while stable releases only catch up at
-  # v1.6.0. Resolved here once so the matrix jobs (including the
-  # Alpine container) don't each need gh/jq.
+  # v1.6.0. Unstable releases are best-effort partial — the release
+  # job ships whatever platform builds succeeded — so resolve also
+  # reports which assets exist and each platform skips its strict run
+  # (loudly) when its binary is absent rather than 404-failing.
   resolve:
     name: Resolve unstable tag
     runs-on: ubuntu-latest
     outputs:
-      unstable_tag: ${{ steps.find.outputs.tag }}
+      tag: ${{ steps.find.outputs.tag }}
+      # comma-wrapped asset list (",a,b,c,") so contains() can match
+      # ",lus-linux," without also matching lus-linux-musl
+      assets: ${{ steps.find.outputs.assets }}
     steps:
       - id: find
         run: |
-          tag=$(gh api repos/lus-lang/lus/releases --jq '[.[] | select(.prerelease)][0].tag_name')
-          echo "unstable tag: $tag"
+          rel=$(gh api repos/lus-lang/lus/releases --jq '[.[] | select(.prerelease)][0]')
+          tag=$(jq -r '.tag_name // empty' <<<"$rel")
+          assets=$(jq -r '[.assets[].name] | join(",")' <<<"$rel")
+          echo "unstable tag: ${tag:-<none>}"
+          echo "assets: $assets"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "assets=,$assets," >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -47,11 +56,14 @@ jobs:
         include:
           - platform: linux-glibc
             runner: ubuntu-latest
+            asset: lus-linux
           - platform: linux-musl
             runner: ubuntu-latest
             container: alpine:latest
+            asset: lus-linux-musl
           - platform: macos
             runner: macos-14
+            asset: lus-macos
 
     steps:
       - name: Install curl (Alpine)
@@ -62,10 +74,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install latest unstable (strict)
+        if: needs.resolve.outputs.tag != '' && contains(needs.resolve.outputs.assets, format(',{0},', matrix.asset))
         shell: sh
         run: |
-          sh lus-install/install.sh --version "${{ needs.resolve.outputs.unstable_tag }}" --dir "$PWD/bin"
+          sh lus-install/install.sh --version "${{ needs.resolve.outputs.tag }}" --dir "$PWD/bin"
           "$PWD/bin/lus" -v
+
+      - name: Strict run skipped (partial unstable)
+        if: needs.resolve.outputs.tag == '' || !contains(needs.resolve.outputs.assets, format(',{0},', matrix.asset))
+        run: echo "::warning::${{ matrix.asset }} is not in the current unstable (${{ needs.resolve.outputs.tag || 'no unstable release' }}) — that platform's build was skipped on the last main push; strict E2E skipped"
 
       # v1.5.1 predates self-contained binaries and SHA256SUMS: this
       # exercises tag pinning, the checksum warn+continue path, and

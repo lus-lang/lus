@@ -1,6 +1,6 @@
 global print, require, assert, type, os, io, string, arg, tostring, package, pledge
 
-pledge("load", "fs", "exec", "seal")
+pledge("load", "fs", "exec", "env", "seal")
 
 local function find_container_engine()
     local engines = {"podman", "docker"}

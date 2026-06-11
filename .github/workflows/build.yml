@@ -44,7 +44,11 @@ jobs:
           fetch-depth: 0
       - run: bash scripts/lint.sh
 
-  # Platform-specific tests run in parallel
+  # Platform-specific tests run in parallel. h4 (benchmarks) is
+  # deliberately NOT run in CI: thresholds on shared runners against
+  # debug builds are noise, and the fastcall runner alone triples the
+  # wall time. Benchmarks stay a local/release-qualification tool:
+  # meson test --suite h4.
   test:
     name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -55,17 +59,17 @@ jobs:
         include:
           - platform: linux-glibc
             runner: ubuntu-latest
-            suites: "--suite h1 --suite h2 --suite h3-ci --suite h4"
+            suites: "--suite h1 --suite h2 --suite h3-ci"
           - platform: linux-musl
             runner: ubuntu-latest
             container: alpine:latest
-            suites: "--suite h1 --suite h2 --suite h4"
+            suites: "--suite h1 --suite h2"
           - platform: macos-silicon
             runner: macos-14
-            suites: "--suite h1 --suite h2 --suite h4"
+            suites: "--suite h1 --suite h2"
           - platform: windows
             runner: windows-latest
-            suites: "--suite h1 --suite h2 --suite h4"
+            suites: "--suite h1 --suite h2"
     outputs:
       linux-glibc: ${{ steps.result.outputs.linux-glibc }}
       linux-musl: ${{ steps.result.outputs.linux-musl }}
@@ -183,12 +187,14 @@ jobs:
             artifact_path: lus/build-linux-glibc/lus
             pgo: true
             setup_args: "--prefer-static"
+          # musl ships without PGO: gcc's profile-instrumented binary
+          # segfaults at startup when linked fully static (static-pie
+          # + libgcov don't get along). Plain static release + LTO.
           - platform: linux-musl
             runner: ubuntu-latest
             container: alpine:latest
             artifact: lus-linux-musl
             artifact_path: lus/build-linux-musl/lus
-            pgo: true
             setup_args: "--prefer-static -Dc_link_args=-static"
           - platform: macos-silicon
             runner: macos-14
@@ -358,12 +364,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download lus-windows artifact
+        id: dl
+        # Missing artifact means the windows build failed/was skipped —
+        # that job carries the real error; skip the wrap instead of
+        # failing twice (mirrors the release job's optional assets).
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: lus-windows
           path: lus-install
 
+      - name: Installer skipped (no lus-windows artifact)
+        if: steps.dl.outcome != 'success'
+        run: echo "::warning::lus-windows artifact not available (windows build failed or was skipped) — installer not built this run"
+
       - name: Read version
+        if: steps.dl.outcome == 'success'
         shell: bash
         # Trailing space in the patterns is load-bearing: without it
         # RELEASE_N also matches the LUA_VERSION_RELEASE_NUM define
@@ -371,11 +387,13 @@ jobs:
         run: echo "LUS_VER=$(awk '/^#define LUA_VERSION_MAJOR_N /{a=$3} /^#define LUA_VERSION_MINOR_N /{b=$3} /^#define LUA_VERSION_RELEASE_N /{c=$3} END{print a"."b"."c}' lus/src/lua.h)" >> "$GITHUB_ENV"
 
       - name: Compile installer
+        if: steps.dl.outcome == 'success'
         shell: pwsh
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVer="$env:LUS_VER" /Olus-install\out lus-install\lus.iss
 
       - name: Silent install smoke test
+        if: steps.dl.outcome == 'success'
         shell: pwsh
         run: |
           Start-Process -Wait lus-install\out\lus-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/LOG=setup.log'
@@ -386,6 +404,7 @@ jobs:
           if ($userPath -notlike "*\Programs\Lus*") { throw "user PATH not updated: $userPath" }
 
       - name: Silent uninstall test
+        if: steps.dl.outcome == 'success'
         shell: pwsh
         # The Inno uninstaller relaunches itself from TEMP so it can
         # delete its own exe; the original process exits immediately,
@@ -404,6 +423,7 @@ jobs:
           }
 
       - name: Upload artifact
+        if: steps.dl.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: lus-setup
