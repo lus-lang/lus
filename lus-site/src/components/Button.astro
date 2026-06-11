@@ -1,0 +1,101 @@
+---
+interface Props {
+  href?: string
+  variant?: "solid" | "outline"
+  color?: "lime" | "red"
+  size?: "sm" | "md"
+  disabled?: boolean
+  type?: "button" | "submit"
+  id?: string
+  class?: string
+  target?: string
+  rel?: string
+  ariaLabel?: string
+}
+
+const {
+  href,
+  variant = "solid",
+  color = "lime",
+  size = "md",
+  disabled = false,
+  type = "button",
+  id,
+  target,
+  rel,
+  ariaLabel,
+} = Astro.props
+
+const Tag = href && !disabled ? "a" : "button"
+---
+
+<Tag
+  class:list={["btn", Astro.props.class]}
+  data-variant={variant}
+  data-color={color}
+  data-size={size}
+  id={id}
+  href={href && !disabled ? href : undefined}
+  type={Tag === "button" ? type : undefined}
+  disabled={Tag === "button" && disabled ? true : undefined}
+  target={target}
+  rel={rel}
+  aria-label={ariaLabel}
+>
+  <slot />
+</Tag>
+
+<style>
+  @reference "../styles/global.css";
+
+  .btn {
+    @apply inline-flex items-center gap-2 border-2 border-ink bg-accent text-ink font-bold no-underline cursor-pointer select-none lus-shadow-sm lus-press;
+
+    &:hover {
+      @apply bg-ink text-accent no-underline;
+    }
+
+    &[data-variant="outline"] {
+      @apply bg-paper;
+
+      &:hover {
+        @apply bg-accent-soft text-ink;
+      }
+    }
+
+    &[data-size="sm"] {
+      @apply px-2 py-1 text-sm;
+    }
+
+    &[data-size="md"] {
+      @apply px-3 py-1.5;
+    }
+
+    &[data-color="red"] {
+      @apply border-ink-red bg-accent-red text-ink-red shadow-ink-red;
+
+      &:hover {
+        @apply bg-ink-red text-accent-red;
+      }
+
+      &[data-variant="outline"] {
+        @apply bg-paper;
+
+        &:hover {
+          @apply bg-accent-soft-red text-ink-red;
+        }
+      }
+    }
+
+    &:disabled,
+    &[aria-disabled="true"] {
+      @apply bg-paper text-ink/40 border-ink/30 cursor-not-allowed pointer-events-none;
+      box-shadow: none;
+      translate: none;
+    }
+
+    &[data-color="red"]:disabled {
+      @apply text-ink-red/40 border-ink-red/30;
+    }
+  }
+</style>

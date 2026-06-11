@@ -1,0 +1,177 @@
+---
+import ManualAPI from "./ManualAPI.astro"
+import { groupByKind, type ApiSection } from "../lib/api"
+
+interface Props {
+  sections: ApiSection[]
+}
+
+const { sections } = Astro.props
+const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
+---
+
+<script src="../scripts/api-search.ts"></script>
+<script src="../scripts/shortcuts.ts"></script>
+
+<div class="api-search">
+  <input
+    id="api-search"
+    type="search"
+    placeholder="filter: name, module, kind… ( / )"
+    aria-label="Filter API entries"
+    aria-describedby="api-search-hint"
+    data-count={entryCount}
+    autocomplete="off"
+  />
+  <span id="api-search-count" aria-live="polite"></span>
+</div>
+
+<details class="legend-wrap">
+  <summary>legend</summary>
+  <div class="legend">
+    <div>
+      <span class="api-badge api-badge-lus">lus</span> stable Lus addition
+    </div>
+    <div>
+      <span class="api-badge api-badge-unstable">unstable</span> unstable channel
+      only
+    </div>
+    <div>
+      <span class="api-badge api-badge-lua">lua</span> inherited from Lua
+    </div>
+    <div>
+      <span class="api-badge api-badge-deprecated">deprecated</span> deprecated in
+      Lus
+    </div>
+    <div>
+      <span class="api-badge api-badge-removed">removed</span> removed in Lus
+    </div>
+    <div>
+      <span class="api-badge api-badge-fastcall">fastcall</span> vm has special optimization
+    </div>
+  </div>
+</details>
+
+<nav class="api-modules" aria-label="Reference sections">
+  {sections.map((section) => <a href={`#${section.id}`}>{section.title}</a>)}
+</nav>
+
+<div class="api-index">
+  {
+    sections.map((section) => {
+      const groups = groupByKind(section.entries)
+      return (
+        <div class="api-index-section">
+          <p class="api-index-title">
+            <a href={`#${section.id}`}>{section.title}</a>
+          </p>
+          {groups.map((group) => (
+            <p>
+              {groups.length > 1 && <span class="api-kind">{group.kind}s</span>}
+              {group.entries.map(({ entry, from }) => (
+                <a href={`#${entry.data.name}`} data-from={from}>
+                  {entry.data.name}
+                </a>
+              ))}
+            </p>
+          ))}
+        </div>
+      )
+    })
+  }
+</div>
+
+<ManualAPI sections={sections} />
+
+<style>
+  @reference "../styles/global.css";
+
+  .api-search {
+    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2 border-b-2 border-ink/20;
+
+    input {
+      @apply border-2 border-ink bg-paper lus-shadow-sm px-3 py-2 w-full max-w-md font-mono text-sm;
+
+      &::placeholder {
+        @apply text-ink/70;
+      }
+    }
+
+    #api-search-count {
+      @apply text-sm text-ink/70 font-mono min-w-0;
+    }
+
+    .api-search-hint {
+      @apply basis-full font-mono text-xs text-ink/70;
+    }
+  }
+
+  .legend-wrap {
+    @apply mb-3;
+
+    summary {
+      @apply font-mono text-xs uppercase tracking-widest text-ink/70 cursor-pointer select-none py-1.5;
+    }
+  }
+
+  .legend {
+    @apply flex flex-wrap gap-x-4 gap-y-2 mt-1 text-sm;
+  }
+
+  .api-modules {
+    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs border-b-2 border-ink/20 pb-2 mb-4;
+
+    a {
+      @apply no-underline font-normal text-link hover:bg-accent-soft py-0.5;
+    }
+  }
+
+  .api-index {
+    @apply columns-1 md:columns-2 xl:columns-4 gap-6;
+
+    .api-index-section {
+      @apply mb-4;
+    }
+
+    .api-index-title {
+      @apply text-lg font-bold mb-2 mt-0;
+      break-after: avoid;
+
+      a {
+        @apply no-underline text-ink hover:bg-accent-soft;
+      }
+    }
+
+    .api-kind {
+      @apply block font-mono text-[10px] uppercase tracking-widest text-ink/70;
+    }
+
+    p {
+      @apply mb-2;
+    }
+
+    p a {
+      @apply font-mono text-xs no-underline block font-normal py-1;
+
+      &[data-from="lua"] {
+        @apply text-sky-900 hover:bg-sky-200;
+      }
+
+      &[data-from="removed"] {
+        @apply line-through text-neutral-600 hover:bg-neutral-200;
+      }
+
+      &[data-from="deprecated"] {
+        @apply text-yellow-900 hover:bg-yellow-200 italic;
+      }
+
+      &[data-from="lus"] {
+        @apply text-link font-black hover:bg-accent-soft;
+      }
+
+      &[data-from="lus-unstable"] {
+        @apply text-link-red font-black hover:bg-accent-soft-red;
+      }
+    }
+  }
+</style>

@@ -1,0 +1,75 @@
+--[[
+  Traceback parity: the `[C]: in <name>` native frame and the call-site-kind
+  naming of Lua frames. When an error propagates uncaught, the C runtime renders
+  a `stack traceback:` whose entries name each frame by how its caller invoked
+  it — a fast-called builtin as `function '<qualified>'`, other natives and Lua
+  functions by their call-site kind (`global 'g'`, `field 'rep'`, `local 'f'`,
+  `function <src:line>` when anonymous). These assertions check the Rust runtime
+  reproduces those names; they hold on both the C and Rust binaries.
+
+  Errors are caught with `catch`, whose error value carries the rendered
+  traceback, so the assertions match against that text.
+]]
+
+global print, assert, require, tostring, setmetatable, string, math, pledge, next
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("traceback")
+
+tests:it("a fast-called builtin shows function '<qualified>'", function()
+    local ok, e = catch math.floor({})
+    assert(not ok)
+    assert(tostring(e):find("%[C%]: in function 'math%.floor'"), tostring(e))
+end)
+
+tests:it("setmetatable (fast-called) shows function 'setmetatable'", function()
+    local ok, e = catch setmetatable(1, 2)
+    assert(tostring(e):find("%[C%]: in function 'setmetatable'"), tostring(e))
+end)
+
+tests:it("a non-fast-called global native shows global '<name>'", function()
+    local ok, e = catch next(5)
+    assert(tostring(e):find("%[C%]: in global 'next'"), tostring(e))
+end)
+
+tests:it("a non-fast-called field native shows field '<name>'", function()
+    local ok, e = catch string.rep("x", {})
+    assert(tostring(e):find("%[C%]: in field 'rep'"), tostring(e))
+end)
+
+tests:it("a Lua frame is named by its call-site kind", function()
+    local function boom() return setmetatable(1, 2) end
+    local ok, e = catch boom()
+    -- the native frame, then the Lua frame named as a local
+    assert(tostring(e):find("%[C%]: in function 'setmetatable'"), tostring(e))
+    assert(tostring(e):find("in local 'boom'"), tostring(e))
+end)
+
+tests:it("a tail-called builtin keeps its qualified name", function()
+    local function viatail() return math.floor({}) end
+    local ok, e = catch viatail()
+    assert(tostring(e):find("%[C%]: in function 'math%.floor'"), tostring(e))
+end)
+
+-- ---- proper tail calls ----
+
+tests:it("deep tail recursion runs in constant stack", function()
+    local function loop(n)
+        if n <= 0 then return "done" end
+        return loop(n - 1)
+    end
+    -- Would overflow if tail calls grew the stack.
+    assert(loop(1000000) == "done")
+end)
+
+tests:it("a tail-called frame shows the (...tail calls...) marker", function()
+    local function inner() return nil + 1 end
+    local function outer() return inner() end
+    local ok, e = catch outer()
+    assert(not ok)
+    assert(tostring(e):find("%(%.%.%.tail calls%.%.%.%)"), tostring(e))
+end)
+
+tests:finish()

@@ -1,0 +1,44 @@
+---
+import { Image } from "astro:assets"
+import Napoleon from "../assets/napoleon.jpg"
+---
+
+<aside class="dedication">
+  <Image
+    src={Napoleon}
+    alt="Napoléon Bonaparte"
+    width={160}
+    densities={[1, 2]}
+    loading="lazy"
+    class="dedication-image"
+  />
+  <div class="dedication-body">
+    <slot />
+  </div>
+</aside>
+
+<style>
+  @reference "../styles/global.css";
+
+  .dedication {
+    @apply border-2 border-ink bg-tint lus-shadow p-4 my-6 max-w-3xl;
+
+    .dedication-image {
+      @apply float-right ml-4 mb-2 border-2 border-ink lus-shadow-sm max-sm:float-none max-sm:ml-0 max-sm:mb-4;
+    }
+
+    .dedication-eyebrow {
+      @apply block font-mono text-xs tracking-widest uppercase text-ink/70 mb-2;
+    }
+
+    .dedication-body :global(p) {
+      @apply text-lg leading-relaxed;
+    }
+
+    &::after {
+      content: "";
+      display: block;
+      clear: both;
+    }
+  }
+</style>

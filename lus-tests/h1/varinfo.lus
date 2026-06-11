@@ -1,0 +1,119 @@
+--[[
+  Operand variable-name parity (`luaG_opinterror` / `luaG_concaterror` /
+  `luaG_tointerror`). When an arithmetic, bitwise, concat, length, or unary
+  operator faults on a value, the C runtime names the offending operand's
+  source variable — `(local 'x')`, `(field 'k')`, `(global 'g')`,
+  `(upvalue 'x')` — in the error message. These tests assert the Rust runtime
+  produces the identical suffix; they pass on both the C and Rust binaries.
+
+  `catch` yields the error with a traceback appended, so the assertions match
+  the suffix as a substring of the first line rather than anchoring to the end.
+]]
+
+global print, assert, require, tostring, setmetatable, pledge, undefined_global
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("varinfo")
+
+-- ---- arithmetic ----
+
+tests:it("arithmetic names a local operand on either side", function()
+    local x
+    local ok, e = catch (x + 1)
+    assert(not ok)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+    ok, e = catch (1 + x)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+end)
+
+tests:it("arithmetic names a table local (non-leaf operand)", function()
+    local x = {}
+    local ok, e = catch (x + 1)
+    assert(tostring(e):find("a table value %(local 'x'%)"), tostring(e))
+end)
+
+tests:it("arithmetic names a field operand", function()
+    local t = {}
+    local ok, e = catch (t.k + 1)
+    assert(tostring(e):find("a nil value %(field 'k'%)"), tostring(e))
+end)
+
+tests:it("arithmetic names a global operand", function()
+    local ok, e = catch (undefined_global + 1)
+    assert(tostring(e):find("a nil value %(global 'undefined_global'%)"), tostring(e))
+end)
+
+tests:it("arithmetic names an upvalue operand", function()
+    local x
+    local function f() return x + 1 end
+    local ok, e = catch f()
+    assert(tostring(e):find("a nil value %(upvalue 'x'%)"), tostring(e))
+end)
+
+tests:it("arithmetic with a string operand keeps the binary form (no var)", function()
+    local x = "abc"
+    local ok, e = catch (x + 1)
+    assert(tostring(e):find("attempt to add a 'string' with a 'number'"), tostring(e))
+end)
+
+-- ---- bitwise ----
+
+tests:it("bitwise names a local operand", function()
+    local x
+    local ok, e = catch (x & 1)
+    assert(tostring(e):find("bitwise operation on a nil value %(local 'x'%)"), tostring(e))
+end)
+
+tests:it("no-integer-representation names the operand mid-message", function()
+    local x = 1.5
+    local ok, e = catch (x & 1)
+    assert(tostring(e):find("number %(local 'x'%) has no integer representation"), tostring(e))
+    -- a bare non-integer constant carries no variable info
+    ok, e = catch (1.5 & 1)
+    assert(tostring(e):find("number has no integer representation"), tostring(e))
+end)
+
+-- ---- concatenation ----
+
+tests:it("concat names the offending operand on either side", function()
+    local x
+    local ok, e = catch (x .. "y")
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+    ok, e = catch ("y" .. x)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+end)
+
+-- ---- length ----
+
+tests:it("length names a local operand", function()
+    local x = true
+    local ok, e = catch (#x)
+    assert(tostring(e):find("a boolean value %(local 'x'%)"), tostring(e))
+end)
+
+-- ---- unary ----
+
+tests:it("unary minus names a local operand", function()
+    local x
+    local ok, e = catch (-x)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+end)
+
+tests:it("unary bnot names a local operand", function()
+    local x
+    local ok, e = catch (~x)
+    assert(tostring(e):find("bitwise operation on a nil value %(local 'x'%)"), tostring(e))
+end)
+
+-- ---- metamethods must not be re-annotated ----
+
+tests:it("an error raised inside a metamethod keeps its own variable name", function()
+    local t = setmetatable({}, {__add = function() local y; return y + 1 end})
+    local ok, e = catch (t + 1)
+    -- the inner 'y', not the outer 't'
+    assert(tostring(e):find("a nil value %(local 'y'%)"), tostring(e))
+end)
+
+tests:finish()

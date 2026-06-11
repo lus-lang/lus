@@ -1,84 +1,53 @@
 ---
-import { getCollection, render } from "astro:content"
+import { render } from "astro:content"
+import type { ApiSection, From } from "../lib/api"
 
-const stdlibEntries = await getCollection("stdlib")
-const capiEntries = await getCollection("capi")
-const allEntries = [...stdlibEntries, ...capiEntries]
-
-const rendered: { data: any; Content: any | null }[] = []
-for (const entry of allEntries) {
-  const body = entry.body?.trim()
-  if (body) {
-    const { Content } = await render(entry)
-    rendered.push({ data: entry.data, Content })
-  } else {
-    rendered.push({ data: entry.data, Content: null })
-  }
+interface Props {
+  sections: ApiSection[]
 }
 
-rendered.sort((a, b) => {
-  const aIsStdlib = !!a.data.module
-  const bIsStdlib = !!b.data.module
-  if (aIsStdlib !== bIsStdlib) return aIsStdlib ? -1 : 1
-  return a.data.name.localeCompare(b.data.name)
-})
+const { sections } = Astro.props
 
-type Section = { title: string; entries: typeof rendered }
-const sections: Section[] = []
-
-const sectionOrder = [
-  { title: "Environment Functions", filter: (d: any) => d.module === "base" },
-  { title: "Table Library", filter: (d: any) => d.module === "table" },
-  { title: "String Library", filter: (d: any) => d.module === "string" },
-  { title: "Math Library", filter: (d: any) => d.module === "math" },
-  { title: "IO Library", filter: (d: any) => d.module === "io" },
-  { title: "OS Library", filter: (d: any) => d.module === "os" },
-  { title: "Debug Library", filter: (d: any) => d.module === "debug" },
-  { title: "Coroutine Library", filter: (d: any) => d.module === "coroutine" },
-  { title: "Package Library", filter: (d: any) => d.module === "package" },
-  { title: "UTF-8 Library", filter: (d: any) => d.module === "utf8" },
-  {
-    title: "Filesystem Library",
-    filter: (d: any) => d.module === "fs" || d.module === "fs.path",
-  },
-  {
-    title: "Network Library",
-    filter: (d: any) =>
-      d.module === "network" ||
-      d.module === "network.tcp" ||
-      d.module === "network.udp",
-  },
-  { title: "Vector Library", filter: (d: any) => d.module === "vector" },
-  {
-    title: "Worker Library",
-    filter: (d: any) => d.module === "worker" && !d.header,
-  },
-  {
-    title: "Permission System — C API",
-    filter: (d: any) => d.header === "lpledge.h",
-  },
-  {
-    title: "Worker System — C API",
-    filter: (d: any) => d.header === "lworkerlib.h",
-  },
-  { title: "Library Openers", filter: (d: any) => d.header === "lualib.h" },
-  { title: "Core C API", filter: (d: any) => d.header === "lua.h" },
-  { title: "Auxiliary C API", filter: (d: any) => d.header === "lauxlib.h" },
-]
-
-const used = new Set<string>()
-for (const sec of sectionOrder) {
-  const entries = rendered.filter(
-    (e) => !used.has(e.data.name) && sec.filter(e.data),
-  )
-  for (const e of entries) used.add(e.data.name)
-  if (entries.length > 0) {
-    sections.push({ title: sec.title, entries })
-  }
+type Rendered = {
+  data: any
+  from: From
+  Content: any | null
 }
-const remaining = rendered.filter((e) => !used.has(e.data.name))
-if (remaining.length > 0) {
-  sections.push({ title: "Other", entries: remaining })
+
+const renderedSections: { title: string; id: string; entries: Rendered[] }[] =
+  []
+for (const section of sections) {
+  const entries: Rendered[] = []
+  for (const { entry, from } of section.entries) {
+    const body = entry.body?.trim()
+    if (body) {
+      const { Content } = await render(entry)
+      entries.push({ data: entry.data, from, Content })
+    }
+    else {
+      entries.push({ data: entry.data, from, Content: null })
+    }
+  }
+  renderedSections.push({ title: section.title, id: section.id, entries })
+}
+
+function fmtReturns(returns: string | { type: string; name?: string }[]) {
+  if (typeof returns === "string") return returns
+  return returns
+    .map((r) => (r.name ? `${r.name}: ${r.type}` : r.type))
+    .join(", ")
+}
+
+function haystack(d: any, from: From) {
+  return [
+    d.name,
+    d.module ?? d.header ?? "",
+    d.kind,
+    from,
+    d.fastcall ? "fastcall" : "",
+  ]
+    .join(" ")
+    .toLowerCase()
 }
 ---
 
@@ -86,7 +55,11 @@ if (remaining.length > 0) {
   @reference "../styles/global.css";
 
   .api-entry {
-    @apply mb-4;
+    @apply mb-3 scroll-mt-14;
+  }
+
+  .api-section {
+    @apply scroll-mt-12;
   }
 
   .api-heading {
@@ -94,103 +67,87 @@ if (remaining.length > 0) {
   }
 
   .api-name {
-    @apply font-mono font-bold text-lime-950;
+    @apply font-mono font-bold text-ink no-underline hover:bg-accent-soft;
   }
 
   .api-params {
-    @apply font-mono text-sm text-lime-800;
+    @apply font-mono text-sm text-link;
+  }
+
+  .api-returns {
+    @apply font-mono text-sm text-ink/70;
   }
 
   .api-param-optional {
-    @apply text-lime-600;
+    @apply text-ink/70;
   }
 
   .api-param-type {
-    @apply text-lime-600 text-xs;
+    @apply text-ink/70 text-xs;
   }
 
-  .api-badge {
-    @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 shrink-0;
-  }
-
-  .api-badge-lua {
-    @apply bg-sky-200 text-sky-600;
-  }
-
-  .api-badge-lus {
-    @apply bg-lime-200 text-lime-800;
-  }
-
-  .api-badge-deprecated {
-    @apply bg-yellow-200 text-yellow-800;
-  }
-
-  .api-badge-unstable {
-    @apply bg-red-200 text-red-800;
-  }
-
-  .api-badge-fastcall {
-    @apply bg-violet-200 text-violet-800;
+  .api-name-removed {
+    @apply line-through text-neutral-600;
   }
 
   .api-signature {
-    @apply font-mono text-sm bg-white border border-lime-300 px-3 py-2 mb-2 overflow-x-auto whitespace-pre;
+    @apply font-mono text-sm bg-tint border-2 border-ink px-3 py-2 mb-1 whitespace-pre-wrap break-words;
   }
 
   .api-meta {
-    @apply text-xs text-lime-700 font-mono mb-2;
+    @apply text-xs text-ink/70 font-mono mb-1;
+
+    a {
+      @apply font-mono;
+    }
   }
 
   .api-body {
-    @apply text-justify leading-tight;
+    @apply leading-snug;
   }
 
   .api-section-title {
-    @apply text-xl font-bold mt-12 pb-1 mb-4 border-b;
+    @apply text-xl font-bold mt-8 pb-1 mb-3 border-b-2 border-ink;
+  }
+
+  /* deep-link landing matches the global heading :target grammar */
+  .api-entry:target .api-heading {
+    background: var(--color-accent-soft);
   }
 </style>
 
 {
-  sections.map((section) => (
-    <Fragment>
+  renderedSections.map((section) => (
+    <section class="api-section" id={section.id}>
       <h2 class="api-section-title">{section.title}</h2>
       {section.entries.map((entry) => {
         const d = entry.data
+        const from = entry.from
         const isFunction = d.kind === "function"
         const isCapi = !!d.header
         const hasCSignature = isCapi && d.signature
-        const badge =
-          d.origin === "lus"
-            ? d.stability === "unstable"
-              ? "unstable"
-              : d.stability === "deprecated"
-                ? "deprecated"
-                : "lus"
-            : d.stability === "deprecated"
-              ? "deprecated"
-              : "lua"
+        const removed = from === "removed"
 
         return (
-          <div class="api-entry" id={d.name}>
+          <div class="api-entry" id={d.name} data-api={haystack(d, from)}>
             <div class="api-heading">
-              {badge === "lus" && (
-                <span class="api-badge api-badge-lus">lus</span>
-              )}
-              {badge === "unstable" && (
+              {from === "lus" && <span class="api-badge api-badge-lus">lus</span>}
+              {from === "lus-unstable" && (
                 <span class="api-badge api-badge-unstable">unstable</span>
               )}
-              {badge === "deprecated" && (
+              {from === "deprecated" && (
                 <span class="api-badge api-badge-deprecated">deprecated</span>
               )}
-              {badge === "lua" && (
-                <span class="api-badge api-badge-lua">lua</span>
+              {from === "removed" && (
+                <span class="api-badge api-badge-removed">removed</span>
               )}
+              {from === "lua" && <span class="api-badge api-badge-lua">lua</span>}
               {d.fastcall && (
                 <span class="api-badge api-badge-fastcall">fastcall</span>
               )}
-              {isFunction && !hasCSignature ? (
+              {isFunction && !hasCSignature && !removed ? (
                 <Fragment>
-                  <span class="api-name">{d.name}</span>
+                  <a class="api-name" href={`#${d.name}`}>{d.name}</a>
                   <!-- prettier-ignore -->
                   <span class="api-params">({d.params
                       ? d.params.map((p: any, i: number) => (
@@ -208,31 +165,45 @@ if (remaining.length > 0) {
                           </Fragment>
                         ))
                       : ""}{d.vararg ? (d.params?.length ? ", ..." : "...") : ""})</span>
+                  {d.returns && (
+                    <span class="api-returns">&nbsp;→ {fmtReturns(d.returns)}</span>
+                  )}
                 </Fragment>
               ) : (
-                <span class="api-name">{d.name}</span>
+                <a
+                  class:list={["api-name", { "api-name-removed": removed }]}
+                  href={`#${d.name}`}
+                >
+                  {d.name}
+                </a>
               )}
             </div>
 
-            {hasCSignature && (
-              <div class="api-signature">
-                {d.signature.replace(/^"|"$/g, "")}
-              </div>
+            {!removed && hasCSignature && (
+              <div class="api-signature">{d.signature.replace(/^"|"$/g, "")}</div>
             )}
 
-            {d.kind === "constant" && d.value !== undefined && (
+            {!removed && (
               <div class="api-meta">
-                Value: {d.value}
-                {d.type ? ` (${d.type})` : ""}
+                since {d.since}
+                {d.kind === "constant" && d.value !== undefined
+                  ? ` · value: ${d.value}${d.type ? ` (${d.type})` : ""}`
+                  : ""}
+                {(d.kind === "variable" || d.kind === "type") &&
+                !d.signature &&
+                d.type
+                  ? ` · type: ${d.type}`
+                  : ""}
+                {from === "deprecated" && d.deprecated_by ? (
+                  <Fragment>
+                    {" · use "}
+                    <a href={`#${d.deprecated_by}`}>{d.deprecated_by}</a>
+                  </Fragment>
+                ) : (
+                  ""
+                )}
+                {d.removed_in ? ` · removed in ${d.removed_in}` : ""}
               </div>
-            )}
-
-            {d.kind === "variable" && d.type && (
-              <div class="api-meta">Type: {d.type}</div>
-            )}
-
-            {d.kind === "type" && !d.signature && d.type && (
-              <div class="api-meta">Type: {d.type}</div>
             )}
 
             {entry.Content && (
@@ -243,6 +214,6 @@ if (remaining.length > 0) {
           </div>
         )
       })}
-    </Fragment>
+    </section>
   ))
 }

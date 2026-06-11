@@ -794,6 +794,32 @@ static void rehash(lua_State *L, Table *t, const TValue *ek) {
   luaH_resize(L, t, asize, nsize);
 }
 
+
+/*
+** Resize a table to fit its current contents exactly: like 'rehash',
+** but with no extra key and no deletion slack. Only ever triggered
+** explicitly (table.compact / lua_compacttable), so it cannot
+** reintroduce the resize thrashing that the slack exists to avoid.
+*/
+void luaH_compact(lua_State *L, Table *t) {
+  unsigned asize;
+  Counters ct;
+  unsigned i;
+  if (l_unlikely(isreadonly(t)))
+    luaG_runerror(L, "attempt to modify a readonly table");
+  /* reset counts */
+  for (i = 0; i <= MAXABITS; i++)
+    ct.nums[i] = 0;
+  ct.na = 0;
+  ct.deleted = 0;
+  ct.total = 0;
+  numusehash(t, &ct);        /* count keys in hash part */
+  numusearray(t, &ct);       /* count keys in array part */
+  asize = computesizes(&ct); /* best size for the array part */
+  /* all keys not in the array part go to the hash part */
+  luaH_resize(L, t, asize, ct.total - ct.na);
+}
+
 /*
 ** }=============================================================
 */

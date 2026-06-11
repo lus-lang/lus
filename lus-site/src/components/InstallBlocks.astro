@@ -1,0 +1,43 @@
+---
+import { Code } from "astro:components"
+import { INSTALL_LINUX, INSTALL_MACOS, INSTALL_WINDOWS } from "../lib/install"
+
+const blocks = [
+  { platform: "Linux", lang: "bash", code: INSTALL_LINUX },
+  { platform: "macOS", lang: "bash", code: INSTALL_MACOS },
+  { platform: "Windows", lang: "powershell", code: INSTALL_WINDOWS },
+] as const
+---
+
+<div class="install-grid">
+  {
+    blocks.map((block) => (
+      <div class="install-block">
+        <h3>{block.platform}</h3>
+        <Code lang={block.lang} theme="github-light" code={block.code} />
+      </div>
+    ))
+  }
+</div>
+
+<style>
+  @reference "../styles/global.css";
+
+  .install-grid {
+    @apply grid grid-cols-1 lg:grid-cols-3 gap-3 my-3;
+  }
+
+  .install-block {
+    h3 {
+      @apply mb-2 mt-0;
+    }
+
+    :global(pre) {
+      @apply my-0;
+    }
+
+    :global(pre code) {
+      @apply text-xs;
+    }
+  }
+</style>

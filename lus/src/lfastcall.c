@@ -1240,16 +1240,89 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
 ** Pre-register module/function name strings for all fastcall entries.
 ** Called from f_luaopen after luaS_init.
 */
+/*
+** Process-wide fastcall definitions: one entry per FastCallId, giving
+** the function name, its module, and the expected argument count.
+** Read-only and shared by all states; each state only interns the
+** names into its own string table (luaF_initfastcalls below).
+*/
+static const char *const fc_module_names[FC_NMODULES + 1] = {
+    NULL, "math", "string", "table", "vector", "utf8"};
+
+#define FC_MOD_BASE 0
+#define FC_MOD_MATH 1
+#define FC_MOD_STRING 2
+#define FC_MOD_TABLE 3
+#define FC_MOD_VECTOR 4
+#define FC_MOD_UTF8 5
+
+LUAI_DDEF const FCDef luaF_fc_defs[FC_COUNT] = {
+    [FC_TYPE] = {"type", FC_MOD_BASE, 1},
+    [FC_RAWLEN] = {"rawlen", FC_MOD_BASE, 1},
+    [FC_RAWGET] = {"rawget", FC_MOD_BASE, 2},
+    [FC_RAWSET] = {"rawset", FC_MOD_BASE, 3},
+    [FC_RAWEQUAL] = {"rawequal", FC_MOD_BASE, 2},
+    [FC_ASSERT] = {"assert", FC_MOD_BASE, 1},
+    [FC_GETMETATABLE] = {"getmetatable", FC_MOD_BASE, 1},
+    [FC_SETMETATABLE] = {"setmetatable", FC_MOD_BASE, 2},
+    [FC_TONUMBER] = {"tonumber", FC_MOD_BASE, 1},
+    [FC_TOSTRING] = {"tostring", FC_MOD_BASE, 1},
+    [FC_MATH_ABS] = {"abs", FC_MOD_MATH, 1},
+    [FC_MATH_MAX] = {"max", FC_MOD_MATH, 2},
+    [FC_MATH_MIN] = {"min", FC_MOD_MATH, 2},
+    [FC_MATH_CEIL] = {"ceil", FC_MOD_MATH, 1},
+    [FC_MATH_FLOOR] = {"floor", FC_MOD_MATH, 1},
+    [FC_MATH_SQRT] = {"sqrt", FC_MOD_MATH, 1},
+    [FC_MATH_SIN] = {"sin", FC_MOD_MATH, 1},
+    [FC_MATH_COS] = {"cos", FC_MOD_MATH, 1},
+    [FC_MATH_TAN] = {"tan", FC_MOD_MATH, 1},
+    [FC_MATH_ASIN] = {"asin", FC_MOD_MATH, 1},
+    [FC_MATH_ACOS] = {"acos", FC_MOD_MATH, 1},
+    [FC_MATH_ATAN] = {"atan", FC_MOD_MATH, 1},
+    [FC_MATH_EXP] = {"exp", FC_MOD_MATH, 1},
+    [FC_MATH_LOG] = {"log", FC_MOD_MATH, 1},
+    [FC_MATH_DEG] = {"deg", FC_MOD_MATH, 1},
+    [FC_MATH_RAD] = {"rad", FC_MOD_MATH, 1},
+    [FC_MATH_FMOD] = {"fmod", FC_MOD_MATH, 2},
+    [FC_MATH_ULT] = {"ult", FC_MOD_MATH, 2},
+    [FC_MATH_TOINTEGER] = {"tointeger", FC_MOD_MATH, 1},
+    [FC_MATH_TYPE] = {"type", FC_MOD_MATH, 1},
+    [FC_MATH_LDEXP] = {"ldexp", FC_MOD_MATH, 2},
+    [FC_STRING_LEN] = {"len", FC_MOD_STRING, 1},
+    [FC_STRING_TRIM] = {"trim", FC_MOD_STRING, 1},
+    [FC_STRING_LTRIM] = {"ltrim", FC_MOD_STRING, 1},
+    [FC_STRING_RTRIM] = {"rtrim", FC_MOD_STRING, 1},
+    [FC_STRING_SPLIT] = {"split", FC_MOD_STRING, 2},
+    [FC_STRING_JOIN] = {"join", FC_MOD_STRING, 2},
+    [FC_STRING_SUB] = {"sub", FC_MOD_STRING, 3},
+    [FC_STRING_BYTE] = {"byte", FC_MOD_STRING, 2},
+    [FC_STRING_CHAR] = {"char", FC_MOD_STRING, 1},
+    [FC_STRING_LOWER] = {"lower", FC_MOD_STRING, 1},
+    [FC_STRING_UPPER] = {"upper", FC_MOD_STRING, 1},
+    [FC_STRING_REVERSE] = {"reverse", FC_MOD_STRING, 1},
+    [FC_TABLE_SUM] = {"sum", FC_MOD_TABLE, 1},
+    [FC_TABLE_MEAN] = {"mean", FC_MOD_TABLE, 1},
+    [FC_TABLE_MEDIAN] = {"median", FC_MOD_TABLE, 1},
+    [FC_TABLE_STDEV] = {"stdev", FC_MOD_TABLE, 1},
+    [FC_TABLE_TRANSPOSE] = {"transpose", FC_MOD_TABLE, 1},
+    [FC_TABLE_RESHAPE] = {"reshape", FC_MOD_TABLE, 3},
+    [FC_VECTOR_CREATE] = {"create", FC_MOD_VECTOR, 1},
+    [FC_VECTOR_CLONE] = {"clone", FC_MOD_VECTOR, 1},
+    [FC_VECTOR_SIZE] = {"size", FC_MOD_VECTOR, 1},
+    [FC_VECTOR_RESIZE] = {"resize", FC_MOD_VECTOR, 2},
+    [FC_UTF8_LEN] = {"len", FC_MOD_UTF8, 1},
+    [FC_UTF8_CODEPOINT] = {"codepoint", FC_MOD_UTF8, 1},
+    [FC_UTF8_CHAR] = {"char", FC_MOD_UTF8, 1},
+    [FC_UTF8_OFFSET] = {"offset", FC_MOD_UTF8, 2},
+};
+
+/* Original C functions, set once at library open (see lfastcall.h). */
+LUAI_DDEF lua_CFunction luaF_fc_origs[FC_COUNT];
+
+
 void luaF_initfastcalls(lua_State *L) {
   global_State *g = G(L);
   int i;
-  /* Zero out the table */
-  for (i = 0; i < FC_COUNT; i++) {
-    g->fastcall_table[i].module_name = NULL;
-    g->fastcall_table[i].func_name = NULL;
-    g->fastcall_table[i].orig_func = NULL;
-    g->fastcall_table[i].nargs = 0;
-  }
   /*
   ** Pre-intern result strings. Use fc_newfix which safely skips
   ** luaC_fix for strings already on fixedgc (e.g., reserved words
@@ -1270,90 +1343,18 @@ void luaF_initfastcalls(lua_State *L) {
       fc_typenames[i] = NULL;
   }
 
-/* Helper macro to register one fastcall name entry */
-#define FC_INIT(id, mod, name)               \
-  g->fastcall_table[id].module_name = (mod); \
-  g->fastcall_table[id].func_name = fc_newfix(L, name)
-
-  /* Base library functions (no module) */
-  FC_INIT(FC_TYPE, NULL, "type");
-  FC_INIT(FC_RAWLEN, NULL, "rawlen");
-  FC_INIT(FC_RAWGET, NULL, "rawget");
-  FC_INIT(FC_RAWSET, NULL, "rawset");
-  FC_INIT(FC_RAWEQUAL, NULL, "rawequal");
-  FC_INIT(FC_ASSERT, NULL, "assert");
-  FC_INIT(FC_GETMETATABLE, NULL, "getmetatable");
-  FC_INIT(FC_SETMETATABLE, NULL, "setmetatable");
-  FC_INIT(FC_TONUMBER, NULL, "tonumber");
-  FC_INIT(FC_TOSTRING, NULL, "tostring");
-  /* Math library functions */
-  {
-    TString *mod = fc_newfix(L, "math");
-    FC_INIT(FC_MATH_ABS, mod, "abs");
-    FC_INIT(FC_MATH_MAX, mod, "max");
-    FC_INIT(FC_MATH_MIN, mod, "min");
-    FC_INIT(FC_MATH_CEIL, mod, "ceil");
-    FC_INIT(FC_MATH_FLOOR, mod, "floor");
-    FC_INIT(FC_MATH_SQRT, mod, "sqrt");
-    FC_INIT(FC_MATH_SIN, mod, "sin");
-    FC_INIT(FC_MATH_COS, mod, "cos");
-    FC_INIT(FC_MATH_TAN, mod, "tan");
-    FC_INIT(FC_MATH_ASIN, mod, "asin");
-    FC_INIT(FC_MATH_ACOS, mod, "acos");
-    FC_INIT(FC_MATH_ATAN, mod, "atan");
-    FC_INIT(FC_MATH_EXP, mod, "exp");
-    FC_INIT(FC_MATH_LOG, mod, "log");
-    FC_INIT(FC_MATH_DEG, mod, "deg");
-    FC_INIT(FC_MATH_RAD, mod, "rad");
-    FC_INIT(FC_MATH_FMOD, mod, "fmod");
-    FC_INIT(FC_MATH_ULT, mod, "ult");
-    FC_INIT(FC_MATH_TOINTEGER, mod, "tointeger");
-    FC_INIT(FC_MATH_TYPE, mod, "type");
-    FC_INIT(FC_MATH_LDEXP, mod, "ldexp");
+  /* Intern the fastcall module and function names for this state.
+  ** The name/arity definitions live in the process-wide read-only
+  ** 'luaF_fc_defs' table; each state only carries the interned
+  ** strings (the parser matches call sites by pointer identity) and
+  ** a per-entry readiness flag. */
+  for (i = 0; i <= FC_NMODULES; i++)
+    g->fc_modules[i] =
+        (fc_module_names[i] != NULL) ? fc_newfix(L, fc_module_names[i]) : NULL;
+  for (i = 0; i < FC_COUNT; i++) {
+    g->fc_names[i] = fc_newfix(L, luaF_fc_defs[i].func);
+    g->fc_ready[i] = 0;
   }
-  /* String library functions */
-  {
-    TString *mod = fc_newfix(L, "string");
-    FC_INIT(FC_STRING_LEN, mod, "len");
-    FC_INIT(FC_STRING_TRIM, mod, "trim");
-    FC_INIT(FC_STRING_LTRIM, mod, "ltrim");
-    FC_INIT(FC_STRING_RTRIM, mod, "rtrim");
-    FC_INIT(FC_STRING_SPLIT, mod, "split");
-    FC_INIT(FC_STRING_JOIN, mod, "join");
-    FC_INIT(FC_STRING_SUB, mod, "sub");
-    FC_INIT(FC_STRING_BYTE, mod, "byte");
-    FC_INIT(FC_STRING_CHAR, mod, "char");
-    FC_INIT(FC_STRING_LOWER, mod, "lower");
-    FC_INIT(FC_STRING_UPPER, mod, "upper");
-    FC_INIT(FC_STRING_REVERSE, mod, "reverse");
-  }
-  /* Table library functions */
-  {
-    TString *mod = fc_newfix(L, "table");
-    FC_INIT(FC_TABLE_SUM, mod, "sum");
-    FC_INIT(FC_TABLE_MEAN, mod, "mean");
-    FC_INIT(FC_TABLE_MEDIAN, mod, "median");
-    FC_INIT(FC_TABLE_STDEV, mod, "stdev");
-    FC_INIT(FC_TABLE_TRANSPOSE, mod, "transpose");
-    FC_INIT(FC_TABLE_RESHAPE, mod, "reshape");
-  }
-  /* Vector library functions */
-  {
-    TString *mod = fc_newfix(L, "vector");
-    FC_INIT(FC_VECTOR_CREATE, mod, "create");
-    FC_INIT(FC_VECTOR_CLONE, mod, "clone");
-    FC_INIT(FC_VECTOR_SIZE, mod, "size");
-    FC_INIT(FC_VECTOR_RESIZE, mod, "resize");
-  }
-  /* UTF-8 library functions */
-  {
-    TString *mod = fc_newfix(L, "utf8");
-    FC_INIT(FC_UTF8_LEN, mod, "len");
-    FC_INIT(FC_UTF8_CODEPOINT, mod, "codepoint");
-    FC_INIT(FC_UTF8_CHAR, mod, "char");
-    FC_INIT(FC_UTF8_OFFSET, mod, "offset");
-  }
-#undef FC_INIT
 }
 
 
@@ -1363,10 +1364,13 @@ void luaF_initfastcalls(lua_State *L) {
 */
 void luaF_registerfastcall(lua_State *L, int id, lua_CFunction func,
                            int nargs) {
-  global_State *g = G(L);
   lua_assert(id >= 0 && id < FC_COUNT);
-  g->fastcall_table[id].orig_func = func;
-  g->fastcall_table[id].nargs = nargs;
+  lua_assert(nargs == luaF_fc_defs[id].nargs);
+  (void)nargs; /* recorded in luaF_fc_defs; kept for the assertion */
+  /* The original function address is the same in every state, so it
+  ** is stored process-wide (write-once, idempotent across states). */
+  luaF_fc_origs[id] = func;
+  G(L)->fc_ready[id] = 1;
 }
 
 
@@ -1377,63 +1381,9 @@ void luaF_registerfastcall(lua_State *L, int id, lua_CFunction func,
 */
 void luaF_enablefastcalls(lua_State *L) {
   global_State *g = G(L);
-  g->fastcall_table[FC_TYPE].nargs = 1;
-  g->fastcall_table[FC_RAWLEN].nargs = 1;
-  g->fastcall_table[FC_RAWGET].nargs = 2;
-  g->fastcall_table[FC_RAWSET].nargs = 3;
-  g->fastcall_table[FC_RAWEQUAL].nargs = 2;
-  g->fastcall_table[FC_ASSERT].nargs = 1;
-  g->fastcall_table[FC_GETMETATABLE].nargs = 1;
-  g->fastcall_table[FC_SETMETATABLE].nargs = 2;
-  g->fastcall_table[FC_TONUMBER].nargs = 1;
-  g->fastcall_table[FC_TOSTRING].nargs = 1;
-  g->fastcall_table[FC_MATH_ABS].nargs = 1;
-  g->fastcall_table[FC_MATH_MAX].nargs = 2;
-  g->fastcall_table[FC_MATH_MIN].nargs = 2;
-  g->fastcall_table[FC_MATH_CEIL].nargs = 1;
-  g->fastcall_table[FC_MATH_FLOOR].nargs = 1;
-  g->fastcall_table[FC_MATH_SQRT].nargs = 1;
-  g->fastcall_table[FC_MATH_SIN].nargs = 1;
-  g->fastcall_table[FC_MATH_COS].nargs = 1;
-  g->fastcall_table[FC_MATH_TAN].nargs = 1;
-  g->fastcall_table[FC_MATH_ASIN].nargs = 1;
-  g->fastcall_table[FC_MATH_ACOS].nargs = 1;
-  g->fastcall_table[FC_MATH_ATAN].nargs = 1;
-  g->fastcall_table[FC_MATH_EXP].nargs = 1;
-  g->fastcall_table[FC_MATH_LOG].nargs = 1;
-  g->fastcall_table[FC_MATH_DEG].nargs = 1;
-  g->fastcall_table[FC_MATH_RAD].nargs = 1;
-  g->fastcall_table[FC_MATH_FMOD].nargs = 2;
-  g->fastcall_table[FC_MATH_ULT].nargs = 2;
-  g->fastcall_table[FC_MATH_TOINTEGER].nargs = 1;
-  g->fastcall_table[FC_MATH_TYPE].nargs = 1;
-  g->fastcall_table[FC_MATH_LDEXP].nargs = 2;
-  g->fastcall_table[FC_STRING_LEN].nargs = 1;
-  g->fastcall_table[FC_STRING_TRIM].nargs = 1;
-  g->fastcall_table[FC_STRING_LTRIM].nargs = 1;
-  g->fastcall_table[FC_STRING_RTRIM].nargs = 1;
-  g->fastcall_table[FC_STRING_SPLIT].nargs = 2;
-  g->fastcall_table[FC_STRING_JOIN].nargs = 2;
-  g->fastcall_table[FC_STRING_SUB].nargs = 3;
-  g->fastcall_table[FC_STRING_BYTE].nargs = 2;
-  g->fastcall_table[FC_STRING_CHAR].nargs = 1;
-  g->fastcall_table[FC_STRING_LOWER].nargs = 1;
-  g->fastcall_table[FC_STRING_UPPER].nargs = 1;
-  g->fastcall_table[FC_STRING_REVERSE].nargs = 1;
-  g->fastcall_table[FC_TABLE_SUM].nargs = 1;
-  g->fastcall_table[FC_TABLE_MEAN].nargs = 1;
-  g->fastcall_table[FC_TABLE_MEDIAN].nargs = 1;
-  g->fastcall_table[FC_TABLE_STDEV].nargs = 1;
-  g->fastcall_table[FC_TABLE_TRANSPOSE].nargs = 1;
-  g->fastcall_table[FC_TABLE_RESHAPE].nargs = 3;
-  g->fastcall_table[FC_VECTOR_CREATE].nargs = 1;
-  g->fastcall_table[FC_VECTOR_CLONE].nargs = 1;
-  g->fastcall_table[FC_VECTOR_SIZE].nargs = 1;
-  g->fastcall_table[FC_VECTOR_RESIZE].nargs = 2;
-  g->fastcall_table[FC_UTF8_LEN].nargs = 1;
-  g->fastcall_table[FC_UTF8_CODEPOINT].nargs = 1;
-  g->fastcall_table[FC_UTF8_CHAR].nargs = 1;
-  g->fastcall_table[FC_UTF8_OFFSET].nargs = 2;
+  int i;
+  for (i = 0; i < FC_COUNT; i++)
+    g->fc_ready[i] = 1;
 }
 
 
@@ -1446,17 +1396,18 @@ int luaF_findfastcall(global_State *g, TString *module, TString *func,
                       int nargs) {
   int i;
   for (i = 0; i < FC_COUNT; i++) {
-    FastCallEntry *fc = &g->fastcall_table[i];
-    if (fc->func_name == NULL)
+    const FCDef *def = &luaF_fc_defs[i];
+    /* Entry must be registered (or enabled for compile-only mode) */
+    if (!g->fc_ready[i])
       continue;
     /* Module must match (both NULL for base, or same pointer) */
-    if (fc->module_name != module)
+    if (g->fc_modules[def->module_idx] != module)
       continue;
     /* Function name must match (pointer equality for interned strings) */
-    if (fc->func_name != func)
+    if (g->fc_names[i] != func)
       continue;
     /* Argument count must match */
-    if (fc->nargs != nargs)
+    if (def->nargs != nargs)
       continue;
     return i;
   }

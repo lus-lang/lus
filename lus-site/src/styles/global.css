@@ -1,69 +1,216 @@
 @import "tailwindcss";
 
+/*
+** Lus design system — refined neobrutalism, light-only, ZERO MOTION, DENSE.
+**
+** Ground rules:
+**  - No animation, ever. No transition-*, duration-*, animate-*, @keyframes,
+**    smooth scroll, view transitions, or timer-driven repaints. State
+**    changes are instant repaints caused by user events.
+**  - Sharp corners everywhere. Never write `rounded-*`.
+**  - Hard shadows (0 blur), ink unless recolored via shadow-* (sets
+**    --tw-shadow-color, which lus-shadow-* consume):
+**      lus-shadow-sm (2px) = compact + pressable: buttons, card-links,
+**        active nav pills, inputs, small frames.
+**      lus-shadow (4px) = primary static containers: cards.
+**    Dark chrome (playground) is flat: no shadows off paper.
+**  - Interactive grammar: hover repaints, never moves — links/nav/outline
+**    fill bg-accent-soft; solid buttons invert (bg-ink text-accent).
+**    Pressables seat into their shadow on :active via lus-press
+**    (translate 2px 2px, shadow none). Focus = global outline.
+**    Hover-painted borders reserve space with border-2 border-transparent.
+**  - Structure borders are `border-2 border-ink`; hairlines `border-ink/20`.
+**    Every container is framed: cards, tables, code, inputs.
+**  - One frame per code block: the frame lives on `pre code`; never frame
+**    the outer pre as well.
+**  - DENSITY SCALE — spacing uses ONLY steps 0.5/1/1.5/2/3/4/6/8.
+**    Page shell: main px-4 md:px-6 py-6 space-y-8, capped at max-w-7xl;
+**    header/footer gutters mirror the shell. Chrome: header py-2,
+**    footer py-3. Headings: h2 mt-8, h3 mt-4. Blocks (pre, table,
+**    blockquote, hr): my-3. Code/input interiors: px-3 py-2 (pr-10 under
+**    a copy button). Cards: header px-3 py-1.5, body p-3; card-link
+**    tiles p-3. Tables: cells px-2 py-1. Lists: space-y-1. Buttons:
+**    md px-3 py-1.5, sm px-2 py-1; nav pills px-2 py-1 (24px box height
+**    is the hard floor for interactive rows). Grids: gap-3; column
+**    layouts gap-6. Section-scale margins (intros, jump navs): mb-4.
+**  - MEASURE: long-form prose (manual chapters, news articles) caps at
+**    80ch via `measured`; API reference pages opt out for full width.
+**  - Text sits on paper (white) or tint; lime-600/700 are banned for
+**    body-size text (contrast); informative text is text-ink/70 minimum,
+**    and /70 is also the floor for placeholders and functional links
+**    (heading anchors). On accent fills, use text-ink only.
+**  - Red exists solely for the unstable channel and errors. The red mirror
+**    covers what can render under html.unstable: global primitives, Layout
+**    chrome, ManualLayout, manual/[id], Button/Card data-color="red".
+**    Home, examples, news, playground never render unstable.
+**  - Dark chrome (playground) tokens: bg-ink surface, text-tint body,
+**    accent for controls/headers, accent/20–40 hairlines, text-accent-red
+**    errors. No raw lime- or red- scale colors anywhere.
+**  - Reference badge palette lives here as .api-badge-* (sanctioned
+**    exceptions): lus = bg-accent-soft text-ink; unstable =
+**    bg-accent-soft-red text-ink-red; lua = bg-sky-200 text-sky-900;
+**    deprecated = bg-yellow-200 text-yellow-900; removed = bg-neutral-200
+**    text-neutral-700 (names strike through); fastcall = bg-violet-200
+**    text-violet-900. The legend must render these exact chips.
+*/
+
 @theme {
   --font-sans: "Atkinson Hyperlegible Next Variable", sans-serif;
   --font-mono: "Atkinson Hyperlegible Mono Variable", monospace;
+
+  /* semantic palette (values from Tailwind lime/red) */
+  --color-ink: oklch(27.4% 0.072 132.109); /* lime-950 */
+  --color-paper: #ffffff;
+  --color-tint: oklch(98.6% 0.031 120.757); /* lime-50 */
+  --color-accent: oklch(84.1% 0.238 128.85); /* lime-400 */
+  --color-accent-soft: oklch(93.8% 0.127 124.321); /* lime-200 */
+  --color-link: oklch(45.3% 0.124 130.933); /* lime-800 */
+
+  --color-ink-red: oklch(25.8% 0.092 26.042); /* red-950 */
+  --color-tint-red: oklch(97.1% 0.013 17.38); /* red-50 */
+  --color-accent-red: oklch(80.8% 0.114 19.571); /* red-300 */
+  --color-accent-soft-red: oklch(93.6% 0.032 17.717); /* red-100 */
+  --color-link-red: oklch(44.4% 0.177 26.899); /* red-800 */
+}
+
+@utility lus-shadow-sm {
+  box-shadow: 2px 2px 0 0 var(--tw-shadow-color, var(--color-ink));
 }
 
 @utility lus-shadow {
-  box-shadow: 0.4rem 0.4rem 0px 0 var(--tw-shadow-color);
+  box-shadow: 4px 4px 0 0 var(--tw-shadow-color, var(--color-ink));
+}
+
+@utility lus-press {
+  &:active {
+    translate: 2px 2px;
+    box-shadow: none;
+  }
+}
+
+/* keyboard focus — visible, chunky, on-brand */
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+html.unstable :focus-visible {
+  outline-color: var(--color-ink-red);
+}
+
+.dark-chrome :focus-visible {
+  outline-color: var(--color-accent);
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-ink);
 }
 
 body {
-  @apply font-sans text-lime-950 bg-lime-50 min-h-screen flex flex-col antialiased;
+  @apply font-sans text-ink bg-paper min-h-screen flex flex-col antialiased;
 }
 
 main {
-  @apply container mx-auto px-8 py-12 space-y-12;
+  @apply max-w-7xl w-full mx-auto px-4 md:px-6 py-6 space-y-8;
 }
 
 a {
-  @apply underline hover:no-underline text-lime-700 font-bold;
+  @apply underline decoration-2 underline-offset-2 text-link font-bold hover:no-underline hover:bg-accent-soft;
+}
+
+.skip-link {
+  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-ink focus:border-2 focus:border-ink focus:px-4 focus:py-2 focus:font-bold focus:no-underline;
 }
 
 section {
-  @apply space-y-2;
+  @apply space-y-3;
 
   h1 {
-    @apply text-3xl font-bold tracking-tight;
+    @apply text-3xl font-extrabold tracking-tight text-balance;
   }
 
   h2 {
-    @apply text-2xl font-semibold tracking-tight;
+    @apply text-2xl font-bold tracking-tight;
   }
 
   h3 {
-    @apply text-xl;
+    @apply text-lg font-bold;
   }
 
-  p:has(+ h2),
-  ul:has(+ h2),
-  ol:has(+ h2),
-  pre:has(+ h2) {
-    @apply mb-8;
+  h4 {
+    @apply text-base font-bold;
   }
 
-  p:has(+ h3),
-  ul:has(+ h3),
-  ol:has(+ h3),
-  pre:has(+ h3) {
-    @apply mb-4;
+  /* margins live on the headings (adjacent margins collapse with space-y);
+     :where() keeps specificity at 0 so class-level overrides win */
+  h2:where(:not(:first-child)) {
+    @apply mt-8;
+  }
+
+  h3:where(:not(:first-child)) {
+    @apply mt-4;
+  }
+
+  h2[id],
+  h3[id],
+  h4[id] {
+    scroll-margin-top: 1rem;
   }
 
   pre {
-    @apply my-4;
-    code {
-      @apply block overflow-x-scroll bg-white p-4 border border-lime-300 leading-relaxed;
-    }
+    @apply my-3;
   }
 }
 
+pre {
+  @apply relative;
+
+  code {
+    @apply block overflow-x-auto bg-tint py-2 pl-3 pr-10 border-2 border-ink text-sm leading-snug;
+  }
+}
+
+/*
+** Shiki <Code> blocks (pre.astro-code) ship inline background and
+** overflow styles on the pre; neutralize both so the frame, tint, and
+** scroll context all live on the inner code element like every other
+** code block (keyboard focus lands on the actual scroll container and
+** the absolutely-positioned copy button no longer drifts on scroll).
+*/
+pre.astro-code {
+  background-color: transparent !important;
+  overflow-x: visible !important;
+}
+
+:not(pre) > code {
+  @apply font-mono text-[0.9em] bg-tint px-1 border border-ink/20;
+}
+
+/* self-link affordance on headings — always visible (touch parity) */
+.heading-anchor {
+  @apply font-mono font-normal no-underline text-ink/70 ml-2 hover:text-ink hover:bg-accent-soft;
+}
+
+/* deep-link landing indication */
+:is(h1, h2, h3, h4)[id]:target {
+  background: var(--color-accent-soft);
+}
+
+.copy-btn {
+  @apply absolute top-1.5 right-1.5 border-2 border-ink bg-paper p-1.5 cursor-pointer lus-shadow-sm lus-press hover:bg-accent-soft;
+}
+
+.copy-btn.copied {
+  @apply bg-accent;
+}
+
 ul {
-  @apply list-disc list-outside pl-4 space-y-2;
+  @apply list-disc list-outside pl-4 space-y-1;
 }
 
 ol {
-  @apply list-decimal list-outside pl-8 space-y-2;
+  @apply list-decimal list-outside pl-6 space-y-1;
 }
 
 li {
@@ -71,58 +218,156 @@ li {
 }
 
 blockquote {
-  @apply border-l-4 border-lime-400 bg-lime-100/60 p-4 text-lime-700;
+  @apply border-l-4 border-accent bg-tint px-3 py-2 text-ink;
+}
+
+.table-wrap {
+  @apply overflow-x-auto my-3;
+
+  table {
+    @apply my-0;
+  }
 }
 
 table {
-  @apply w-full border-collapse my-4;
+  @apply w-full border-collapse my-3 border-2 border-ink;
 
   th,
   td {
-    @apply border border-lime-300 px-4 py-2 text-left;
+    @apply border border-ink/20 px-2 py-1 text-left;
   }
 
   th {
-    @apply bg-lime-100 font-semibold text-sm uppercase tracking-wide text-lime-700;
+    @apply bg-tint font-bold text-xs uppercase tracking-wider text-ink border-b-2 border-b-ink;
   }
 
   tr:nth-child(even) td {
-    @apply bg-lime-50;
+    @apply bg-tint/60;
   }
 }
 
-html.unstable {
-  body {
-    @apply text-red-950 bg-red-50;
+/* reference badge palette — see grammar header; legend renders these chips */
+.api-badge {
+  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 shrink-0;
+}
+
+.api-badge-lus {
+  @apply bg-accent-soft text-ink;
+}
+
+.api-badge-unstable {
+  @apply bg-accent-soft-red text-ink-red;
+}
+
+.api-badge-lua {
+  @apply bg-sky-200 text-sky-900;
+}
+
+.api-badge-deprecated {
+  @apply bg-yellow-200 text-yellow-900;
+}
+
+.api-badge-removed {
+  @apply bg-neutral-200 text-neutral-700;
+}
+
+.api-badge-fastcall {
+  @apply bg-violet-200 text-violet-900;
+}
+
+/* print — make the manual PDF-able */
+@media print {
+  header,
+  footer,
+  aside,
+  nav,
+  .copy-btn,
+  .skip-link,
+  .heading-anchor,
+  .api-search,
+  .legend-wrap,
+  .toc,
+  .api-index,
+  .unstable-banner {
+    display: none !important;
+  }
+
+  * {
+    box-shadow: none !important;
+  }
+
+  pre code {
+    overflow: visible;
+    white-space: pre-wrap;
   }
 
   a {
-    @apply text-red-700;
+    text-decoration: underline;
   }
 
-  main {
-    @apply px-8 py-12 space-y-12;
+  article a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+  }
+}
+
+/* unstable channel — red mirror */
+html.unstable {
+  body {
+    @apply text-ink-red;
   }
 
-  section {
-    h1 {
-      @apply text-3xl tracking-tight;
-    }
+  a {
+    @apply text-link-red hover:bg-accent-soft-red;
+  }
 
-    h2 {
-      @apply tracking-tight;
-    }
+  ::selection {
+    background: var(--color-accent-red);
+    color: var(--color-ink-red);
+  }
 
-    pre code {
-      @apply border-red-300 leading-relaxed;
-    }
+  pre code {
+    @apply bg-tint-red border-ink-red;
+  }
+
+  :not(pre) > code {
+    @apply bg-tint-red border-ink-red/20;
+  }
+
+  .copy-btn {
+    @apply border-ink-red shadow-ink-red hover:bg-accent-soft-red;
+  }
+
+  .copy-btn.copied {
+    @apply bg-accent-red;
+  }
+
+  .heading-anchor {
+    @apply text-ink-red/70 hover:text-ink-red hover:bg-accent-soft-red;
+  }
+
+  :is(h1, h2, h3, h4)[id]:target {
+    background: var(--color-accent-soft-red);
   }
 
   blockquote {
-    @apply bg-red-100/60 border-l-4 border-red-400 text-red-700;
+    @apply border-accent-red bg-tint-red text-ink-red;
   }
 
-  table th {
-    @apply text-sm uppercase tracking-wide text-red-700;
+  table {
+    @apply border-ink-red;
+
+    th,
+    td {
+      @apply border-ink-red/20;
+    }
+
+    th {
+      @apply bg-tint-red text-ink-red border-b-ink-red;
+    }
+
+    tr:nth-child(even) td {
+      @apply bg-tint-red/60;
+    }
   }
 }

@@ -1,0 +1,118 @@
+--[[
+  Userdata parity tests for Lus.
+
+  Proves that io file handles and network sockets are real first-class
+  *userdata* (LUA_TUSERDATA) driven by per-type VM-level metatables — not
+  tables masquerading as userdata. Each behaviour below is dispatched through
+  the userdata's shared metatable (`__index` methods, `__name`, `__tostring`)
+  exactly as the C runtime does.
+
+  Note: io.stdin/stdout/stderr are pre-opened standard streams, so they need
+  no fs pledge. Sockets require the `network` pledge.
+]]
+
+global pledge, print, io, network, type, assert, require, tostring, tonumber, rawlen, setmetatable, error, string
+
+pledge("load", "fs:read=./lus-tests/*", "network", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("userdata")
+
+-- ============================================
+-- io file handles are userdata
+-- ============================================
+
+tests:it("standard streams are userdata", function()
+    assert(type(io.stdin) == "userdata", "io.stdin should be userdata")
+    assert(type(io.stdout) == "userdata", "io.stdout should be userdata")
+    assert(type(io.stderr) == "userdata", "io.stderr should be userdata")
+end)
+
+tests:it("file handles have stable identity", function()
+    assert(io.stdin == io.stdin, "same handle compares equal")
+    assert(io.stdin ~= io.stdout, "distinct handles compare unequal")
+end)
+
+tests:it("file methods come from the metatable __index", function()
+    assert(type(io.stdout.write) == "function", "write method via metatable")
+    assert(type(io.stdout.close) == "function", "close method via metatable")
+    assert(type(io.stdout.flush) == "function", "flush method via metatable")
+    assert(type(io.stdin.read) == "function", "read method via metatable")
+end)
+
+tests:it("file __tostring renders as a file", function()
+    local s = tostring(io.stdin)
+    assert(type(s) == "string", "tostring returns a string")
+    assert(s:find("^file"), "rendered as a file, got: " .. s)
+end)
+
+tests:it("setmetatable rejects a file with its __name", function()
+    local ok, err = catch setmetatable(io.stdin, {})
+    assert(not ok, "setmetatable on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end)
+
+tests:it("rawlen rejects a file with its __name", function()
+    local ok, err = catch rawlen(io.stdin)
+    assert(not ok, "rawlen on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end)
+
+tests:it("arithmetic on a file names the FILE* type", function()
+    local ok, err = catch (io.stdin + 1)
+    assert(not ok, "arithmetic on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end)
+
+tests:it("concatenation of a file names the FILE* type", function()
+    local ok, err = catch (io.stdin .. "x")
+    assert(not ok, "concat on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end)
+
+tests:it("length of a file names the FILE* type", function()
+    local ok, err = catch (#io.stdin)
+    assert(not ok, "length of userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end)
+
+tests:it("calling a file names the FILE* type", function()
+    local ok, err = catch io.stdin()
+    assert(not ok, "calling userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end)
+
+-- ============================================
+-- network sockets are userdata
+-- ============================================
+
+tests:it("a bound TCP server is userdata", function()
+    local server = network.tcp.bind("127.0.0.1", 19987)
+    assert(type(server) == "userdata", "server should be userdata")
+    assert(server == server, "server has stable identity")
+    assert(type(server.close) == "function", "close method via metatable")
+    assert(tostring(server):find("server"), "tostring tags it a server")
+end)
+
+tests:it("a closed socket still renders via __tostring", function()
+    local server = network.tcp.bind("127.0.0.1", 19988)
+    server:close()
+    local s = tostring(server)
+    assert(s:find("server"), "closed socket keeps its kind tag")
+    assert(s:find("closed"), "closed socket marked closed, got: " .. s)
+end)
+
+tests:it("setmetatable rejects a socket with its __name", function()
+    local server = network.tcp.bind("127.0.0.1", 19989)
+    local ok, err = catch setmetatable(server, {})
+    assert(not ok, "setmetatable on a socket must error")
+    assert(err:find("network%.server"), "error names the socket type, got: " .. tostring(err))
+end)
+
+tests:it("a UDP socket is userdata", function()
+    local sock = network.udp.open()
+    assert(type(sock) == "userdata", "udp socket should be userdata")
+    assert(tostring(sock):find("udpsocket"), "tostring tags it a udpsocket")
+end)
+
+tests:finish()

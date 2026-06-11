@@ -1,0 +1,93 @@
+--[[
+    H4 Micro Runner: VM hot-path benchmarks
+
+    Each bench_*.lus times its core loop with os.clock and prints
+    "TIME <seconds>". This runner captures that line and applies
+    thresholds with the same pass/fail matrix as runner.lus.
+]]
+
+global print, os, io, string, tonumber, ipairs, arg, pledge
+
+pledge("load", "fs", "exec", "env", "seal")
+
+local build_type = os.getenv("BUILD_TYPE") or "Unstable"
+print("H4 Micro Runner: Build Type = " .. build_type)
+
+local platform = os.platform()
+
+-- Thresholds are CPU-seconds of the bench's inner loop (not wall time
+-- of the process). "Acceptable"/"Bad" are calibrated against optimized
+-- local builds (medians run 0.2-0.8s); "Critical" is only a
+-- catastrophe tripwire and leaves headroom for the CI matrix, which
+-- runs these on -O0 debug builds on slow shared runners.
+local benches = {
+    {name = "field",       file = "bench_field.lus",       critical = 15.0, bad = 3.5, acceptable = 2.0},
+    {name = "method",      file = "bench_method.lus",      critical = 16.0, bad = 4.0, acceptable = 2.5},
+    {name = "iter_ipairs", file = "bench_iter_ipairs.lus", critical = 12.0, bad = 3.0, acceptable = 1.8},
+    {name = "iter_pairs",  file = "bench_iter_pairs.lus",  critical = 12.0, bad = 3.0, acceptable = 1.8},
+    {name = "strkey",      file = "bench_strkey.lus",      critical = 15.0, bad = 3.5, acceptable = 2.0},
+    {name = "interp",      file = "bench_interp.lus",      critical = 18.0, bad = 4.5, acceptable = 3.0},
+    {name = "global",      file = "bench_global.lus",      critical = 12.0, bad = 3.0, acceptable = 1.8},
+    {name = "gc_churn",    file = "bench_gc_churn.lus",    critical = 15.0, bad = 3.5, acceptable = 2.0},
+}
+
+local lus_cmd = arg[-1]
+
+local function run_bench(file)
+    local path = "lus-tests/h4/" .. file
+    if platform == "windows" then
+        path = string.gsub(path, "/", "\\")
+    end
+    local p = io.popen(lus_cmd .. " " .. path)
+    if not p then
+        return nil
+    end
+    local time = nil
+    for line in p:lines() do
+        local t = string.match(line, "^TIME ([%d%.]+)")
+        if t then
+            time = tonumber(t)
+        end
+    end
+    local ok = p:close()
+    if not ok then
+        return nil
+    end
+    return time
+end
+
+local function evaluate(b, time)
+    if time > b.critical then return "Critical" end
+    if time > b.bad then return "Bad" end
+    if time > b.acceptable then return "Acceptable" end
+    return "Good"
+end
+
+local function decide_pass_fail(status)
+    if status == "Critical" then return false end
+    if status == "Bad" and build_type == "Standard" then return false end
+    return true
+end
+
+local all_ok = true
+for _, b in ipairs(benches) do
+    local time = run_bench(b.file)
+    if not time then
+        print(string.format("  %-12s \27[31mExecution Failed\27[0m", b.name))
+        all_ok = false
+    else
+        local status = evaluate(b, time)
+        print(string.format("  %-12s %.4fs  %s", b.name, time, status))
+        if not decide_pass_fail(status) then
+            all_ok = false
+        end
+    end
+end
+
+if all_ok then
+    print("\27[32mH4 MICRO PASSED\27[0m")
+    os.exit(0)
+else
+    print("\27[31mH4 MICRO FAILED\27[0m")
+    os.exit(1)
+end

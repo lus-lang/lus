@@ -461,10 +461,21 @@ typedef struct TString {
 ** Get the actual string (array of bytes) from a 'TString'. (Generic
 ** version and specialized versions for long and short strings.)
 */
+/*
+** Short strings and regular (non-external) long strings store their
+** content inline, right after the header, overlaying the fields that
+** only external strings use ('contents'/'falloc'/'ud'). Short strings
+** have shrlen >= 0 and regular long strings have shrlen == LSTRREG
+** (-1), so one comparison covers both inline kinds. Only external
+** strings (LSTRFIX/LSTRMEM) carry a stored 'contents' pointer.
+*/
 #define rawgetshrstr(ts) (cast_charp(&(ts)->contents))
 #define getshrstr(ts) check_exp(strisshr(ts), rawgetshrstr(ts))
-#define getlngstr(ts) check_exp(!strisshr(ts), (ts)->contents)
-#define getstr(ts) (strisshr(ts) ? rawgetshrstr(ts) : (ts)->contents)
+#define getlngstr(ts)      \
+  check_exp(!strisshr(ts), \
+            ((ts)->shrlen == LSTRREG) ? rawgetshrstr(ts) : (ts)->contents)
+#define getstr(ts) \
+  (((ts)->shrlen >= LSTRREG) ? rawgetshrstr(ts) : (ts)->contents)
 
 
 /* get string length from 'TString *ts' */
@@ -475,7 +486,7 @@ typedef struct TString {
 #define getlstr(ts, len)                                                 \
   (strisshr(ts)                                                          \
        ? (cast_void((len) = cast_sizet((ts)->shrlen)), rawgetshrstr(ts)) \
-       : (cast_void((len) = (ts)->u.lnglen), (ts)->contents))
+       : (cast_void((len) = (ts)->u.lnglen), getlngstr(ts)))
 
 /* }================================================================== */
 

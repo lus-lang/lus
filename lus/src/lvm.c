@@ -25,6 +25,7 @@
 #include "lfastcall.h"
 #include "lfunc.h"
 #include "lgc.h"
+#include "lmem.h"
 #include "lobject.h"
 #include "lopcodes.h"
 #include "lstate.h"
@@ -858,10 +859,25 @@ void luaV_tostring(lua_State *L, StkId ra, const TValue *rb) {
 
 
 /*
-** Perform a slice operation: obj[start:end]
+** Resolve a slice bound to an integer. 'v' is the raw operand pushed by
+** codegen, which does NOT coerce it, so it may be any type. A nil bound
+** uses 'def'; an integer (or integral float) is used directly; anything
+** else raises -- never reinterpret a non-integer's payload as an index
+** (that would be type confusion, e.g. reading a GCObject pointer as int).
+*/
+static lua_Integer slice_index(lua_State *L, const TValue *v, lua_Integer def) {
+  lua_Integer i;
+  if (ttisnil(v))
+    return def;
+  if (l_likely(tointeger(v, &i)))
+    return i;
+  luaG_runerror(L, "slice index must be an integer");
+}
+
+
+/*
+** Perform a slice operation: obj[start, end]
 ** Handles strings, vectors, tables, and metamethods.
-** Note: callers must ensure vstart/vend are nil or integer.
-** The VM opcode handler guarantees this via codegen.
 */
 void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
                 const TValue *vend) {
@@ -870,8 +886,8 @@ void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
     TString *s = tsvalue(obj);
     size_t len;
     const char *str = getlstr(s, len);
-    lua_Integer istart = ttisnil(vstart) ? 1 : ivalue(vstart);
-    lua_Integer iend = ttisnil(vend) ? (lua_Integer)len : ivalue(vend);
+    lua_Integer istart = slice_index(L, vstart, 1);
+    lua_Integer iend = slice_index(L, vend, (lua_Integer)len);
     /* Clamp to valid range */
     if (istart < 1)
       istart = 1;
@@ -901,8 +917,8 @@ void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
   else if (ttisvector(obj)) {
     /* Built-in vector slice */
     Vector *v = vecvalue(obj);
-    lua_Integer istart = ttisnil(vstart) ? 1 : ivalue(vstart);
-    lua_Integer iend = ttisnil(vend) ? (lua_Integer)v->len : ivalue(vend);
+    lua_Integer istart = slice_index(L, vstart, 1);
+    lua_Integer iend = slice_index(L, vend, (lua_Integer)v->len);
     /* Clamp to valid range */
     if (istart < 1)
       istart = 1;
@@ -948,18 +964,30 @@ void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
       setobjs2s(L, ra, --L->top.p);
     }
     else {
-      /* Built-in table slice */
+      /* Built-in table slice. Indices are literal (a start <= 0 yields nil
+      ** "holes" at the front), so we do not clamp the start the way the
+      ** string/vector branches do. 'slice_index' guarantees integer bounds
+      ** (no type confusion); the span is computed in unsigned to avoid
+      ** signed-overflow UB on extreme bounds. */
       Table *t = hvalue(obj);
-      lua_Integer istart = ttisnil(vstart) ? 1 : ivalue(vstart);
-      lua_Integer iend =
-          ttisnil(vend) ? (lua_Integer)luaH_getn(L, t) : ivalue(vend);
+      lua_Integer istart = slice_index(L, vstart, 1);
+      lua_Integer iend = slice_index(L, vend, (lua_Integer)luaH_getn(L, t));
       int reverse = (istart > iend);
       lua_Integer step = reverse ? -1 : 1;
-      lua_Integer count = (reverse ? istart - iend : iend - istart) + 1;
-      /* Create result table */
-      L->top.p = ra + 1;
+      lua_Unsigned span = reverse ? (lua_Unsigned)istart - (lua_Unsigned)iend
+                                  : (lua_Unsigned)iend - (lua_Unsigned)istart;
+      lua_Integer count = (span >= (lua_Unsigned)LUA_MAXINTEGER)
+                              ? LUA_MAXINTEGER
+                              : (lua_Integer)(span + 1);
+      /* Build the result anchored on the stack top, and write it to 'ra' only
+      ** at the very end. 'ra' may alias the source table's register (e.g.
+      ** slicing an inline temporary, `({..})[a,b]`, where codegen makes
+      ** dest==table); overwriting it before the loop finishes reading 't'
+      ** could let the source table be collected mid-build. Keeping the source
+      ** at R[B] and the result at top keeps both anchored across the loop. */
       Table *result = luaH_new(L);
-      sethvalue2s(L, ra, result);
+      sethvalue2s(L, L->top.p, result);
+      L->top.p++;
       if (count > 0) {
         luaH_resize(L, result, cast_uint(count), 0);
         lua_Integer j = 1;
@@ -973,6 +1001,8 @@ void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
           j++;
         }
       }
+      L->top.p--;                 /* pop the temporary anchor */
+      sethvalue2s(L, ra, result); /* now safe: done reading the source */
     }
   }
   else {
@@ -1485,20 +1515,34 @@ static l_noinline int handleTrap(lua_State *L, CallInfo *ci,
 static l_noinline const Instruction *
 catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
                    StkId *pbase, int *ptrap) {
-  CallInfo *eci = L->ci;
-  CatchInfo *cinfo = &eci->u.l.catchinfo;
+  CatchInfo *cinfo = L->activeCatch; /* the catch that fired (innermost) */
+  CallInfo *eci = cinfo->ci;
   StkId ebase = restorestack(L, cinfo->baseoffset);
-  StkId func = ebase - 1;
-  LClosure *ecl = clLvalue(s2v(func));
+  StkId func;
+  LClosure *ecl;
   Instruction endcatch = *(cinfo->errorpc - 1);
   int b = GETARG_B(endcatch);
   int nresults = (b == 0) ? 2 : (b - 1);
   int j;
+  const Instruction *resumepc;
   ptrdiff_t errobjoffset = cinfo->erroffset; /* save error object offset */
 
-  /* Restore previous catch and deactivate this catch */
-  L->activeCatch = cinfo->prev_activeCatch; /* restore previous catch */
-  cinfo->active = 0;
+  /* Pop this catch off both lists (restoring the enclosing ones). The node is
+  ** freed at the end, after its remaining fields are consumed. */
+  L->activeCatch = cinfo->prev;
+  eci->u.l.catchlist = cinfo->frameprev;
+  L->ci = eci;
+
+  /* Close any to-be-closed variables opened during the catch body (e.g. a
+  ** grown luaL_Buffer's box, which is registered with lua_toclose) before
+  ** resuming -- exactly as pcall does on error. Otherwise their entries are
+  ** left dangling in L->tbclist and corrupt later stack operations. The error
+  ** object stays at L->top-1 across the close, so 'errobjoffset' remains valid.
+  ** The close may reallocate the stack, so recompute 'ebase' afterwards. */
+  luaF_close(L, ebase + cinfo->destreg, cinfo->status, 1);
+  ebase = restorestack(L, cinfo->baseoffset);
+  func = ebase - 1;
+  ecl = clLvalue(s2v(func));
 
   /* If a handler is set, call it to transform the error */
   if (ttisfunction(&cinfo->handler)) {
@@ -1546,7 +1590,9 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
   *pbase = ebase;
   *ptrap = eci->u.l.trap;
 
-  return cinfo->errorpc;
+  resumepc = cinfo->errorpc;
+  luaM_free(L, cinfo); /* all fields consumed; free the node */
+  return resumepc;
 }
 
 #define vmdispatch(o) switch (o)
@@ -1675,6 +1721,9 @@ returning: /* trap already set */
         if (ttisinteger(rc)) { /* fast track for integers? */
           luaV_fastgeti(rb, ivalue(rc), s2v(ra), tag);
         }
+        else if (ttisshrstring(rc)) { /* fast track for short strings? */
+          luaV_fastget(rb, tsvalue(rc), s2v(ra), luaH_getshortstr, tag);
+        }
         else
           luaV_fastget(rb, rc, s2v(ra), luaH_get, tag);
         if (tagisempty(tag))
@@ -1725,6 +1774,9 @@ returning: /* trap already set */
         TValue *rc = RKC(i);   /* value */
         if (ttisinteger(rb)) { /* fast track for integers? */
           luaV_fastseti(s2v(ra), ivalue(rb), rc, hres);
+        }
+        else if (ttisshrstring(rb)) { /* fast track for short strings? */
+          luaV_fastset(s2v(ra), tsvalue(rb), rc, hres, luaH_psetshortstr);
         }
         else {
           luaV_fastset(s2v(ra), rb, rc, hres, luaH_pset);
@@ -2247,6 +2299,52 @@ returning: /* trap already set */
            return will be the new value for the control variable.
         */
         StkId ra = RA(i);
+        TValue *iter = s2v(ra);
+        /* Fast path for the builtin iterators, identified by pointer:
+        ** 'pairs'/'next' walk the table with luaH_next directly and
+        ** 'ipairs' advances an integer cursor with a raw get, skipping
+        ** the call machinery. Custom iterators, __pairs results, and
+        ** non-table states take the generic call below. With active
+        ** hooks ('trap') the generic call preserves debug fidelity.
+        ** The ipairs path requires a metatable-less table because
+        ** ipairsaux indexes through __index.
+        */
+        if (ttislcf(iter) && ttistable(s2v(ra + 1)) && l_likely(!trap)) {
+          lua_CFunction f = fvalue(iter);
+          Table *t = hvalue(s2v(ra + 1));
+          int nres = GETARG_C(i);
+          int got = 0; /* results produced (0 = not a builtin iterator) */
+          if (f == G(L)->iter_next) { /* 'for k,v in pairs(t)' */
+            int more;
+            halfProtect(more = luaH_next(L, t, ra + 3));
+            if (more)
+              got = 2; /* luaH_next wrote key and value */
+            else {
+              setnilvalue(s2v(ra + 3)); /* end loop */
+              got = 1;
+            }
+          }
+          else if (f == G(L)->iter_ipairsaux && ttisinteger(s2v(ra + 3)) &&
+                   t->metatable == NULL) { /* 'for i,v in ipairs(t)' */
+            lua_Integer n = intop(+, ivalue(s2v(ra + 3)), 1);
+            lu_byte tag;
+            setivalue(s2v(ra + 3), n);
+            luaH_fastgeti(t, n, s2v(ra + 4), tag);
+            if (!tagisempty(tag))
+              got = 2;
+            else {
+              setnilvalue(s2v(ra + 3)); /* end loop */
+              got = 1;
+            }
+          }
+          if (got > 0) {
+            for (; got < nres; got++) /* complete missing results */
+              setnilvalue(s2v(ra + 3 + got));
+            i = *(pc++); /* go to next instruction */
+            lua_assert(GET_OPCODE(i) == OP_TFORLOOP && ra == RA(i));
+            goto l_tforloop;
+          }
+        }
         setobjs2s(L, ra + 5, ra + 3); /* copy the control variable */
         setobjs2s(L, ra + 4, ra + 1); /* copy state */
         setobjs2s(L, ra + 3, ra);     /* copy function */
@@ -2340,27 +2438,30 @@ returning: /* trap already set */
         **
         ** Implementation uses setjmp/longjmp directly within the VM to create
         ** an inline protected execution context. When an error is thrown,
-        ** luaD_throw will longjmp back here using the CatchInfo's jmpbuf.
-        ** The jmpbuf is stored in CatchInfo (part of CallInfo) so it persists
-        ** for the duration of the catch block.
+        ** luaD_throw will longjmp back here using the node's jmpbuf. Each
+        ** catch gets its OWN heap-allocated CatchInfo node (linked via
+        ** L->activeCatch), so catches nested in the same call frame do not
+        ** share -- and clobber -- one another's jmpbuf/previous-active link.
+        ** The node lives until its OP_ENDCATCH (success) or catchErrorRecovery
+        ** (error), guaranteeing a stable jmpbuf address across the body.
         */
         int a = GETARG_A(i);
         int b = GETARG_B(i);
         int offset = GETARG_C(i);
-        CatchInfo *catchinfo = &ci->u.l.catchinfo;
+        /* Allocate first: luaM_new may run GC / raise on OOM, but the node is
+        ** not yet linked, so a raise correctly unwinds to the enclosing catch
+        ** without leaking or leaving a half-initialized node in the list. */
+        CatchInfo *catchinfo = luaM_new(L, CatchInfo);
 
-        /* Save previous catch handler and set up catch */
-        catchinfo->prev_activeCatch = L->activeCatch; /* save previous catch */
+        catchinfo->ci = ci;
         catchinfo->status = LUA_OK;
         catchinfo->errorpc = pc + offset;
         catchinfo->destreg = cast_byte(a);
-        /* Use L->ci->func.p directly (from heap, not clobberable local) */
-        catchinfo->baseoffset = savestack(L, L->ci->func.p + 1);
-        catchinfo->active = 1;
-        L->activeCatch = ci; /* this CI is now the active catch handler */
+        catchinfo->nresults = 0; /* recovery derives count from ENDCATCH */
+        catchinfo->baseoffset = savestack(L, ci->func.p + 1);
 
-        /* If handler is present, copy it to CatchInfo.handler.
-        ** This survives stack reallocation and works for nested catches. */
+        /* Copy the handler (if any) into the node; the source is on the stack
+        ** (a GC root) during the copy, and the node is GC-marked once linked. */
         if (b != 0) {
           StkId handler = base + (b - 1); /* handler's original position */
           setobj(L, &catchinfo->handler, s2v(handler));
@@ -2368,6 +2469,14 @@ returning: /* trap already set */
         else {
           setnilvalue(&catchinfo->handler);
         }
+
+        /* Link only after full initialization: into the per-frame list
+        ** (found by ENDCATCH/recovery, survives a yield) and the global
+        ** throwable chain (consulted by luaD_throw). */
+        catchinfo->frameprev = ci->u.l.catchlist;
+        ci->u.l.catchlist = catchinfo;
+        catchinfo->prev = L->activeCatch;
+        L->activeCatch = catchinfo;
 
         /* Use setjmp to establish the recovery point */
         if (setjmp(catchinfo->jmpbuf) == 0) {
@@ -2399,14 +2508,15 @@ returning: /* trap already set */
         int b = GETARG_B(i);
         int offset = GETARG_C(i);
         StkId ra = base + a;
-        CatchInfo *catchinfo = &ci->u.l.catchinfo;
-
-        /* Restore previous catch handler */
-        L->activeCatch =
-            catchinfo->prev_activeCatch; /* restore previous catch */
-
-        /* Clear the catch handler */
-        catchinfo->active = 0;
+        /* This catch completed normally: it is the innermost catch of this
+        ** frame. Find it via the per-frame list (which, unlike the global
+        ** chain, survives a yield in the catch body), unlink it from both
+        ** lists, and free it. The result arrangement below uses only
+        ** instruction operands, not the node. */
+        CatchInfo *catchinfo = ci->u.l.catchlist;
+        ci->u.l.catchlist = catchinfo->frameprev;
+        L->activeCatch = catchinfo->prev;
+        luaM_free(L, catchinfo);
 
         /* Determine where inner expression results end.
         ** For multi-return: L->top is past last result
@@ -2454,17 +2564,20 @@ returning: /* trap already set */
         int nresults = GETARG_C(i) - 1;
         int fc_id = GETARG_Ax(*pc); /* peek at EXTRAARG */
         TValue *func = s2v(ra);
-        FastCallEntry *fc = &G(L)->fastcall_table[fc_id];
+        lua_CFunction orig = luaF_fc_origs[fc_id];
         pc++; /* always consume EXTRAARG */
         /* Validate: loaded function matches original, single-result.
         ** With readonly_env, the environment is frozen so the function
-        ** is guaranteed to be the original — skip pointer validation. */
-        if (l_likely(nresults == 1 &&
-                     (G(L)->readonly_env ||
-                      (fc->orig_func != NULL &&
-                       ((ttislcf(func) && fvalue(func) == fc->orig_func) ||
-                        (ttisCclosure(func) &&
-                         clCvalue(func)->f == fc->orig_func)))))) {
+        ** is guaranteed to be the original — skip pointer validation.
+        ** A NULL orig_func (library not opened) can never compare equal
+        ** to a real function, so it needs no separate check. Stdlib
+        ** functions are registered without upvalues, so the light-C-
+        ** function arm is the common case. */
+        if (l_likely(nresults == 1 && (G(L)->readonly_env ||
+                                       (l_likely(ttislcf(func))
+                                            ? fvalue(func) == orig
+                                            : (ttisCclosure(func) &&
+                                               clCvalue(func)->f == orig))))) {
           savestate(L, ci);
           if (luaV_dofastcall(L, fc_id, ra)) {
             updatetrap(ci);

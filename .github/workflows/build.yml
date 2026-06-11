@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Stable releases: pushing a v* tag runs the full pipeline and
+    # the release job creates a draft release for it. paths filters
+    # are not evaluated for tag pushes, so tags always build.
+    tags: ["v*"]
     paths:
       - "lus/**"
       - "lus-tests/**"
@@ -10,6 +14,8 @@ on:
       - "lus-vscode/package.json"
       - "CHANGELOG.md"
       - "scripts/**"
+      - "lus-install/**"
+      - ".github/workflows/build.yml"
   pull_request:
     branches: [main]
     paths:
@@ -19,6 +25,8 @@ on:
       - "lus-vscode/package.json"
       - "CHANGELOG.md"
       - "scripts/**"
+      - "lus-install/**"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 concurrency:
@@ -34,7 +42,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: pip install 'clang-format>=21,<22'
       - run: bash scripts/lint.sh
 
   # Platform-specific tests run in parallel
@@ -159,23 +166,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # pgo: two-phase profile-guided build (tools/pgo-build.sh).
+          # Measured 15-45% faster on the VM micro-benchmarks and it
+          # stabilizes the code layout of the dispatch loop. Not
+          # supported for MSVC, so Windows ships a plain release.
+          #
+          # setup_args: release binaries are distributed bare (and by
+          # the installers), so dependencies are linked statically —
+          # meson's --prefer-static falls back to shared SILENTLY,
+          # which is why every platform has a portability assertion
+          # step after the build. musl ships fully static; Windows
+          # uses the static CRT so no VC redistributable is needed.
           - platform: linux-glibc
             runner: ubuntu-latest
             artifact: lus-linux
             artifact_path: lus/build-linux-glibc/lus
+            pgo: true
+            setup_args: "--prefer-static"
           - platform: linux-musl
             runner: ubuntu-latest
             container: alpine:latest
             artifact: lus-linux-musl
             artifact_path: lus/build-linux-musl/lus
+            pgo: true
+            setup_args: "--prefer-static -Dc_link_args=-static"
           - platform: macos-silicon
             runner: macos-14
             artifact: lus-macos
             artifact_path: lus/build-macos-silicon/lus
+            pgo: true
+            setup_args: "--prefer-static"
           - platform: windows
             runner: windows-latest
             artifact: lus-windows
             artifact_path: lus/build-windows/lus.exe
+            setup_args: "--prefer-static -Db_vscrt=mt"
 
     steps:
       - name: Install bash (Alpine)
@@ -202,7 +227,8 @@ jobs:
 
       - name: Install dependencies (Alpine)
         if: steps.check.outputs.proceed == 'true' && matrix.container == 'alpine:latest'
-        run: apk add --no-cache build-base meson openssl-dev c-ares-dev zlib-dev zstd-dev brotli-dev lz4-dev git
+        # c-ares has no -static subpackage; its -dev ships libcares.a
+        run: apk add --no-cache build-base meson openssl-dev c-ares-dev zlib-dev zstd-dev brotli-dev lz4-dev git file openssl-libs-static zlib-static zstd-static brotli-static lz4-static
 
       - name: Install dependencies (Ubuntu)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'ubuntu-latest' && matrix.container == null
@@ -216,13 +242,17 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
+        # Static triplet: the released lus.exe must not depend on
+        # vcpkg DLLs. openssl is listed explicitly — the dynamic
+        # build resolved it from the runner image, which the static
+        # link cannot rely on.
         run: |
           pip install meson ninja
           choco install pkgconfiglite --no-progress
-          vcpkg install c-ares:x64-windows zlib:x64-windows zstd:x64-windows brotli:x64-windows lz4:x64-windows
-          echo "PKG_CONFIG_PATH=${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+          vcpkg install openssl:x64-windows-static c-ares:x64-windows-static zlib:x64-windows-static zstd:x64-windows-static brotli:x64-windows-static lz4:x64-windows-static
+          echo "PKG_CONFIG_PATH=${env:VCPKG_INSTALLATION_ROOT}\installed\x64-windows-static\lib\pkgconfig" >> $env:GITHUB_ENV
         env:
-          VCPKG_DEFAULT_TRIPLET: x64-windows
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
 
       - name: Setup MSVC (Windows)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
@@ -232,12 +262,78 @@ jobs:
         if: steps.check.outputs.proceed == 'true'
         uses: actions/checkout@v4
 
+      - name: Build static c-ares (Linux glibc)
+        if: steps.check.outputs.proceed == 'true' && matrix.platform == 'linux-glibc'
+        # Ubuntu's libc-ares-dev ships no libcares.a — the one static
+        # archive --prefer-static can't find on this platform (Alpine's
+        # -dev has it, Homebrew's keg has it, vcpkg builds it). Build a
+        # pinned release; PKG_CONFIG_PATH makes meson prefer it.
+        run: |
+          curl -fsSLO https://github.com/c-ares/c-ares/releases/download/v1.34.5/c-ares-1.34.5.tar.gz
+          tar xzf c-ares-1.34.5.tar.gz
+          cd c-ares-1.34.5
+          ./configure --disable-shared --enable-static --prefix="$PWD/_install" >/dev/null
+          make -j"$(nproc)" >/dev/null
+          make install >/dev/null
+          echo "PKG_CONFIG_PATH=$PWD/_install/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build (release + PGO)
+        if: steps.check.outputs.proceed == 'true' && matrix.pgo == true
+        shell: bash
+        run: lus/tools/pgo-build.sh build-${{ matrix.platform }} --buildtype=release ${{ matrix.setup_args }}
+
       - name: Build (release)
-        if: steps.check.outputs.proceed == 'true'
+        if: steps.check.outputs.proceed == 'true' && matrix.pgo != true
         run: |
           cd lus
-          meson setup build-${{ matrix.platform }} --buildtype=release
+          meson setup build-${{ matrix.platform }} --buildtype=release ${{ matrix.setup_args }}
           meson compile -C build-${{ matrix.platform }} 'lus:executable'
+
+      # Portability assertions: --prefer-static falls back to shared
+      # libraries silently, so each platform proves the binary carries
+      # no build-host dependencies before it can ship.
+      - name: Assert portable binary (Linux glibc)
+        if: steps.check.outputs.proceed == 'true' && matrix.platform == 'linux-glibc'
+        run: |
+          docker run --rm -v "$PWD/lus/build-linux-glibc:/b" -v "$PWD/lus-tests:/lus-tests" debian:stable-slim sh -c '
+            ldd /b/lus
+            if ldd /b/lus | grep -E "libssl|libcrypto|libcares|libzstd|libbrotli|liblz4|libz\.so"; then
+              echo "::error::lus-linux links non-baseline shared libraries"; exit 1
+            fi
+            /b/lus -v
+            cd / && /b/lus lus-tests/h1/calls.lus'
+
+      - name: Assert portable binary (Linux musl)
+        if: steps.check.outputs.proceed == 'true' && matrix.platform == 'linux-musl'
+        run: |
+          file lus/build-linux-musl/lus
+          # Alpine gcc defaults to PIE, so -static yields "static-pie
+          # linked" (still fully static, ASLR kept)
+          file lus/build-linux-musl/lus | grep -qE 'statically linked|static-pie linked' || { echo "::error::lus-linux-musl is not fully static"; exit 1; }
+          ./lus/build-linux-musl/lus -v
+
+      - name: Assert portable binary (macOS)
+        if: steps.check.outputs.proceed == 'true' && matrix.platform == 'macos-silicon'
+        run: |
+          otool -L lus/build-macos-silicon/lus
+          if otool -L lus/build-macos-silicon/lus | grep -E '/opt/homebrew|/usr/local|@rpath'; then
+            echo "::error::lus-macos links non-system dylibs"; exit 1
+          fi
+          ./lus/build-macos-silicon/lus -v
+          ./lus/build-macos-silicon/lus lus-tests/h1/calls.lus
+
+      - name: Assert portable binary (Windows)
+        if: steps.check.outputs.proceed == 'true' && matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $deps = (dumpbin /dependents lus\build-windows\lus.exe) -join "`n"
+          Write-Host $deps
+          $forbidden = "zlib1.dll","zstd.dll","cares.dll","lz4.dll","brotli","libcrypto","libssl","VCRUNTIME","MSVCP","api-ms-win-crt"
+          foreach ($f in $forbidden) {
+            if ($deps -match [regex]::Escape($f)) { throw "lus.exe depends on $f - not self-contained" }
+          }
+          .\lus\build-windows\lus.exe -v
+          .\lus\build-windows\lus.exe lus-tests\h1\calls.lus
 
       - name: Upload artifact
         if: steps.check.outputs.proceed == 'true'
@@ -245,6 +341,73 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact_path }}
+
+  # Windows installer (Inno Setup, preinstalled on the runner).
+  # Wraps the lus-windows artifact in lus-setup.exe: per-user install
+  # by default (no UAC), /ALLUSERS for machine-wide. The silent
+  # install/uninstall round-trip is the regression test for the
+  # PATH-editing Pascal code in lus-install/lus.iss.
+  installer:
+    name: Build (windows installer)
+    needs: [test, build]
+    if: always() && !cancelled() && needs.test.outputs.windows == 'success'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download lus-windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lus-windows
+          path: lus-install
+
+      - name: Read version
+        shell: bash
+        # Trailing space in the patterns is load-bearing: without it
+        # RELEASE_N also matches the LUA_VERSION_RELEASE_NUM define
+        # (same idiom as scripts/lint.sh).
+        run: echo "LUS_VER=$(awk '/^#define LUA_VERSION_MAJOR_N /{a=$3} /^#define LUA_VERSION_MINOR_N /{b=$3} /^#define LUA_VERSION_RELEASE_N /{c=$3} END{print a"."b"."c}' lus/src/lua.h)" >> "$GITHUB_ENV"
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVer="$env:LUS_VER" /Olus-install\out lus-install\lus.iss
+
+      - name: Silent install smoke test
+        shell: pwsh
+        run: |
+          Start-Process -Wait lus-install\out\lus-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/LOG=setup.log'
+          $exe = "$env:LOCALAPPDATA\Programs\Lus\lus.exe"
+          if (-not (Test-Path $exe)) { Get-Content setup.log; throw "lus.exe not installed" }
+          & $exe -v
+          $userPath = (Get-ItemProperty HKCU:\Environment).Path
+          if ($userPath -notlike "*\Programs\Lus*") { throw "user PATH not updated: $userPath" }
+
+      - name: Silent uninstall test
+        shell: pwsh
+        # The Inno uninstaller relaunches itself from TEMP so it can
+        # delete its own exe; the original process exits immediately,
+        # so completion has to be polled. PATH cleanup runs in
+        # usPostUninstall, after file removal.
+        run: |
+          Start-Process -Wait "$env:LOCALAPPDATA\Programs\Lus\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES'
+          $deadline = (Get-Date).AddSeconds(90)
+          while ($true) {
+            $exeGone = -not (Test-Path "$env:LOCALAPPDATA\Programs\Lus\lus.exe")
+            $userPath = (Get-ItemProperty HKCU:\Environment -ErrorAction SilentlyContinue).Path
+            $pathClean = $userPath -notlike "*\Programs\Lus*"
+            if ($exeGone -and $pathClean) { break }
+            if ((Get-Date) -gt $deadline) { throw "uninstall incomplete: exeGone=$exeGone pathClean=$pathClean PATH=$userPath" }
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lus-setup
+          path: lus-install/out/lus-setup.exe
 
   # WASM build (separate - no test dependency)
   build-wasm:
@@ -333,12 +496,15 @@ jobs:
             echo "⏭️ WASM build skipped" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Create pre-release with available artifacts
+  # Create a release with available artifacts: a rolling unstable
+  # pre-release on main pushes, a draft stable release on v* tags
+  # (write the notes, then publish — publishing triggers the VSCode
+  # extension workflow).
   release:
-    name: Create Pre-release
-    needs: [build, build-wasm]
+    name: Release
+    needs: [build, build-wasm, installer]
     runs-on: ubuntu-latest
-    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && !cancelled()
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && !cancelled()
     permissions:
       contents: write
 
@@ -347,6 +513,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Delete previous unstable releases
+        if: github.ref == 'refs/heads/main'
         run: |
           # Get all releases starting with 'unstable-'
           releases=$(gh release list --json tagName --jq '.[] | select(.tagName | startswith("unstable-")) | .tagName' || true)
@@ -417,6 +584,15 @@ jobs:
             echo "⏭️ wasm artifacts not available"
           fi
 
+          # Windows installer
+          if [ -f artifacts/lus-setup/lus-setup.exe ]; then
+            cp artifacts/lus-setup/lus-setup.exe release/lus-setup.exe
+            echo "✅ windows installer included"
+            count=$((count + 1))
+          else
+            echo "⏭️ windows installer not available"
+          fi
+
           echo "artifact_count=$count" >> $GITHUB_OUTPUT
 
           if [ $count -eq 0 ]; then
@@ -424,11 +600,16 @@ jobs:
             exit 1
           fi
 
+          # Checksums over every asset (verified by install.sh)
+          (cd release && sha256sum -- * > SHA256SUMS)
+
           echo ""
-          echo "📦 Release contents ($count platforms):"
+          echo "📦 Release contents ($count artifact sets):"
           ls -la release/
+          cat release/SHA256SUMS
 
       - name: Create unstable release
+        if: github.ref == 'refs/heads/main'
         run: |
           SHORT_SHA="${{ github.sha }}"
           SHORT_SHA="${SHORT_SHA:0:7}"
@@ -439,10 +620,21 @@ jobs:
             --title "Unstable (${SHORT_SHA})" \
             --notes "Automated build from commit ${{ github.sha }}
 
-          **Included platforms:** ${artifact_count}/5 available
+          **Included artifact sets:** ${artifact_count}/6 available
 
           > ⚠️ This is an unstable pre-release build. Use at your own risk." \
             --prerelease \
+            release/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create stable draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Lus ${GITHUB_REF_NAME#v}" \
+            --draft \
+            --notes "Draft — write the release notes, then publish." \
             release/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

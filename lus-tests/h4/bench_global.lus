@@ -1,0 +1,17 @@
+-- Global variable read benchmark (OP_GETTABUP on _ENV)
+
+global print, os, string, G, SINK
+
+G = 7
+local N = 100000000
+local s = 0
+
+local t0 = os.clock()
+for i = 1, N do
+    s = s + G
+end
+local elapsed = os.clock() - t0
+
+SINK = s
+print(string.format("TIME %.4f", elapsed))
+print("CHECK " .. SINK)

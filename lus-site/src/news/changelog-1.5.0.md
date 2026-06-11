@@ -1,9 +1,7 @@
 ---
 title: Lus 1.5.0
-date: 03-05-2026
+date: 2026-03-05
 ---
-
-# 1.5.0
 
 **A Visual Studio Code extension is now available.** It provides formatting, live diagnostics, and syntax highlighting for VSCode-based text editors, including VSCodium and Cursor. You can retrieve it from the [Open VSX Registry](https://open-vsx.org/extension/lus/lus). Those that use other LSP-capable text editors like Vim can take a look at the [language server](https://github.com/lus-lang/lus/tree/main/lus-language) for manual usage.
 

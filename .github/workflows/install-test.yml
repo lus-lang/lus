@@ -1,0 +1,81 @@
+name: Install script E2E
+
+# Runs install.sh against real GitHub releases, so it is deliberately
+# decoupled from the main CI: network flakiness or a half-published
+# release must not block unrelated pushes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lus-install/**"
+      - ".github/workflows/install-test.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "lus-install/**"
+      - ".github/workflows/install-test.yml"
+  workflow_dispatch:
+
+jobs:
+  # The strict end-to-end run targets the latest unstable release:
+  # those binaries are self-contained from the moment the static-link
+  # change lands on main, while stable releases only catch up at
+  # v1.6.0. Resolved here once so the matrix jobs (including the
+  # Alpine container) don't each need gh/jq.
+  resolve:
+    name: Resolve unstable tag
+    runs-on: ubuntu-latest
+    outputs:
+      unstable_tag: ${{ steps.find.outputs.tag }}
+    steps:
+      - id: find
+        run: |
+          tag=$(gh api repos/lus-lang/lus/releases --jq '[.[] | select(.prerelease)][0].tag_name')
+          echo "unstable tag: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  e2e:
+    name: E2E (${{ matrix.platform }})
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-glibc
+            runner: ubuntu-latest
+          - platform: linux-musl
+            runner: ubuntu-latest
+            container: alpine:latest
+          - platform: macos
+            runner: macos-14
+
+    steps:
+      - name: Install curl (Alpine)
+        if: matrix.container == 'alpine:latest'
+        run: apk add --no-cache curl
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install latest unstable (strict)
+        shell: sh
+        run: |
+          sh lus-install/install.sh --version "${{ needs.resolve.outputs.unstable_tag }}" --dir "$PWD/bin"
+          "$PWD/bin/lus" -v
+
+      # v1.5.1 predates self-contained binaries and SHA256SUMS: this
+      # exercises tag pinning, the checksum warn+continue path, and
+      # the install flow, but the binary itself may need shared libs
+      # the runner lacks. Bump the pin to v1.6.0 once released and
+      # drop the tolerance.
+      - name: Install pinned stable (mechanics)
+        shell: sh
+        run: |
+          sh lus-install/install.sh --version v1.5.1 --dir "$PWD/bin-pinned"
+          test -x "$PWD/bin-pinned/lus"
+          "$PWD/bin-pinned/lus" -v \
+            || echo "::notice::v1.5.1 binary predates static linking; install mechanics verified"

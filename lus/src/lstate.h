@@ -176,9 +176,30 @@ typedef struct stringtable {
 ** When a catch block is active, errors jump to the catch handler
 ** instead of propagating up.
 */
+/*
+** A CatchInfo is a heap-allocated node describing one active Lua 'catch'
+** block. Each node is allocated when its OP_CATCH executes and freed by its
+** matching OP_ENDCATCH (success) or by catchErrorRecovery (error). A separate
+** node per catch is required so that catches nested in the same call frame
+** (e.g. 'catch(catch(...))') do not share storage and clobber each other's
+** jmpbuf / links. The jmp_buf must keep a stable address from setjmp until
+** longjmp, which heap allocation guarantees.
+**
+** Nodes live on two lists:
+**  - the global throwable chain via 'prev', rooted at L->activeCatch, used by
+**    luaD_throw for O(1) lookup of the catch to longjmp into. lua_resume
+**    clears this root so a coroutine cannot longjmp into a pre-yield catch
+**    whose jmpbuf is now stale.
+**  - the per-frame chain via 'frameprev', rooted at ci->u.l.catchlist, used by
+**    OP_ENDCATCH/recovery to find the node being closed. This is reached
+**    through the CallInfo, so it survives a yield (which unwinds the C stack
+**    but keeps the CallInfo), letting a catch body that yielded complete.
+*/
 typedef struct CatchInfo {
   jmp_buf jmpbuf;             /* setjmp buffer for error recovery */
-  CallInfo *prev_activeCatch; /* saved previous active catch handler */
+  struct CatchInfo *prev;     /* enclosing throwable catch (global chain) */
+  struct CatchInfo *frameprev;/* enclosing catch in the same frame */
+  CallInfo *ci;               /* call frame this catch belongs to */
   volatile TStatus status;    /* error status (if error occurred) */
   const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
   ptrdiff_t erroffset;  /* stack offset of error object (survives realloc) */
@@ -186,7 +207,6 @@ typedef struct CatchInfo {
   TValue handler;       /* error handler function (nil if no handler) */
   lu_byte destreg;      /* destination register for status/error */
   lu_byte nresults;     /* expected number of results (for nil-filling) */
-  lu_byte active;       /* 1 if catch block is active */
 } CatchInfo;
 
 struct CallInfo {
@@ -196,9 +216,9 @@ struct CallInfo {
   union {
     struct { /* only for Lua functions */
       const Instruction *savedpc;
-      volatile l_signalT trap; /* function is tracing lines/counts */
-      int nextraargs;          /* # of extra arguments in vararg functions */
-      CatchInfo catchinfo;     /* catch block info (if any) */
+      volatile l_signalT trap;     /* function is tracing lines/counts */
+      int nextraargs;              /* # of extra arguments in vararg functions */
+      struct CatchInfo *catchlist; /* active catches in this frame (or NULL) */
     } l;
     struct {           /* only for C functions */
       lua_KFunction k; /* continuation in case of yields */
@@ -296,7 +316,7 @@ struct lua_State {
   GCObject *gclist;
   struct lua_State *twups; /* list of threads with open upvalues */
   CCatchInfo *cCatch;      /* C-level catch handler */
-  CallInfo *activeCatch;   /* deepest active catch handler (for O(1) lookup) */
+  CatchInfo *activeCatch;  /* innermost active Lua catch (head of linked list) */
   CallInfo base_ci;        /* CallInfo for first level (C host) */
   volatile lua_Hook hook;
   ptrdiff_t errfunc; /* current error handling function (stack index) */
@@ -371,15 +391,20 @@ typedef struct global_State {
   lu_byte pedantic;                          /* pedantic warnings enabled */
   lu_byte no_fastcall;                       /* disable fastcall emission */
   lu_byte readonly_env;                      /* environment is immutable */
-  FastCallEntry fastcall_table[FC_COUNT];    /* fastcall function table */
-  TString *fc_typenames[LUA_TOTALTYPES];     /* pre-interned type names */
-  TString *fc_str_integer;                   /* pre-interned "integer" */
-  TString *fc_str_float;                     /* pre-interned "float" */
-  TString *fc_str_nil;                       /* pre-interned "nil" */
-  TString *fc_str_true;                      /* pre-interned "true" */
-  TString *fc_str_false;                     /* pre-interned "false" */
-  TString *fc_str___metatable;               /* pre-interned "__metatable" */
-  LX mainth;                                 /* main thread of this state */
+  lu_byte stripdebug;          /* strip debug info from loaded prototypes */
+  TString *fc_names[FC_COUNT]; /* interned fastcall func names */
+  TString *fc_modules[FC_NMODULES + 1]; /* [0] = NULL (base library) */
+  lu_byte fc_ready[FC_COUNT];           /* entry registered/enabled here */
+  lua_CFunction iter_next;      /* baselib 'next' (OP_TFORCALL fast path) */
+  lua_CFunction iter_ipairsaux; /* baselib ipairs iterator (same) */
+  TString *fc_typenames[LUA_TOTALTYPES]; /* pre-interned type names */
+  TString *fc_str_integer;               /* pre-interned "integer" */
+  TString *fc_str_float;                 /* pre-interned "float" */
+  TString *fc_str_nil;                   /* pre-interned "nil" */
+  TString *fc_str_true;                  /* pre-interned "true" */
+  TString *fc_str_false;                 /* pre-interned "false" */
+  TString *fc_str___metatable;           /* pre-interned "__metatable" */
+  LX mainth;                             /* main thread of this state */
 } global_State;
 
 #define G(L) (L->l_G)
@@ -456,5 +481,7 @@ LUAI_FUNC void luaE_incCstack(lua_State *L);
 LUAI_FUNC void luaE_warning(lua_State *L, const char *msg, int tocont);
 LUAI_FUNC void luaE_warnerror(lua_State *L, const char *where);
 LUAI_FUNC TStatus luaE_resetthread(lua_State *L, TStatus status);
+/* Free any active Lua catch nodes (e.g. a coroutine abandoned mid-catch). */
+LUAI_FUNC void luaE_clearcatch(lua_State *L);
 
 #endif

@@ -197,6 +197,9 @@ LUAI_FUNC void luaP_initpledges(lua_State *L);
 /* Copy pledges from parent to child thread */
 LUAI_FUNC PledgeStore *luaP_copypledges(lua_State *L, PledgeStore *parent);
 
+/* Seal the state's pledge store (no further permission changes). */
+LUAI_FUNC void luaP_sealpledges(lua_State *L);
+
 /* Free pledges when thread is closed */
 LUAI_FUNC void luaP_freepledges(lua_State *L, PledgeStore *store);
 

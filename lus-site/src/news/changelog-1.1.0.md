@@ -1,9 +1,7 @@
 ---
 title: Lus 1.1.0
-date: 12-06-2025
+date: 2025-12-06
 ---
-
-# 1.1.0
 
 - Added `tojson` and `fromjson` functions for JSON serialization and deserialization.
 

@@ -421,7 +421,19 @@ static int sort(lua_State *L) {
 ** the table mapping source tables to their clones (for circular refs).
 ** Leaves the clone on top of the stack.
 */
-static void clone_deep(lua_State *L, int srcidx, int mapidx) {
+/* Bound on table.clone(deep) nesting, to keep this C recursion from
+** overflowing the C stack on a deeply nested (or maliciously crafted) table.
+** Each level nests several C calls (lua_next/settable/rawget), so keep this
+** comfortably below the C-stack limit -- on the order of LUAI_MAXCCALLS. */
+#define CLONE_MAXDEPTH 200
+
+static void clone_deep(lua_State *L, int srcidx, int mapidx, int depth) {
+  if (depth > CLONE_MAXDEPTH)
+    luaL_error(L, "table.clone: nesting too deep (max %d)", CLONE_MAXDEPTH);
+  /* Each level keeps several values live on the Lua stack and recurses; ensure
+  ** there is room (raw lua_push* assume space) so deep nesting grows the stack
+  ** instead of overflowing it. */
+  luaL_checkstack(L, 8, "table.clone");
   /* Convert relative indices to absolute */
   srcidx = lua_absindex(L, srcidx);
   mapidx = lua_absindex(L, mapidx);
@@ -452,7 +464,7 @@ static void clone_deep(lua_State *L, int srcidx, int mapidx) {
 
     /* Clone key if it's a table */
     if (lua_istable(L, keyidx)) {
-      clone_deep(L, keyidx, mapidx);
+      clone_deep(L, keyidx, mapidx, depth + 1);
       /* Stack: key, value, cloned_key */
     }
     else {
@@ -462,7 +474,7 @@ static void clone_deep(lua_State *L, int srcidx, int mapidx) {
 
     /* Clone value if it's a table */
     if (lua_istable(L, validx)) {
-      clone_deep(L, validx, mapidx);
+      clone_deep(L, validx, mapidx, depth + 1);
       /* Stack: key, value, new_key, cloned_value */
     }
     else {
@@ -499,7 +511,7 @@ static int tclone(lua_State *L) {
     /* Need a table to track cloned tables for circular references */
     lua_newtable(L); /* cloned_map at top of stack */
     int mapidx = lua_gettop(L);
-    clone_deep(L, 1, mapidx);
+    clone_deep(L, 1, mapidx, 0);
     /* Remove the map, keep only the result */
     lua_remove(L, mapidx);
   }
@@ -960,7 +972,9 @@ static int treshape(lua_State *L) {
   lua_Integer len = luaL_len(L, 1);
   luaL_argcheck(L, nrows > 0, 2, "rows must be positive");
   luaL_argcheck(L, ncols > 0, 3, "cols must be positive");
-  if (len != nrows * ncols)
+  /* Guard the product against signed-integer overflow (UB) before computing
+  ** it: if nrows*ncols would overflow it cannot equal a real array length. */
+  if (nrows > LUA_MAXINTEGER / ncols || len != nrows * ncols)
     return luaL_error(L, "array length %I does not match %I x %I",
                       (LUAI_UACINT)len, (LUAI_UACINT)nrows, (LUAI_UACINT)ncols);
   lua_createtable(L, (int)nrows, 0);
@@ -980,29 +994,33 @@ static int treshape(lua_State *L) {
 /* }====================================================== */
 
 
-static const luaL_Reg tab_funcs[] = {{"clone", tclone},
-                                     {"concat", tconcat},
-                                     {"create", tcreate},
-                                     {"filter", tfilter},
-                                     {"groupby", tgroupby},
-                                     {"insert", tinsert},
-                                     {"map", tmap},
-                                     {"mean", tmean},
-                                     {"median", tmedian},
-                                     {"move", tmove},
-                                     {"pack", tpack},
-                                     {"reduce", treduce},
-                                     {"remove", tremove},
-                                     {"reshape", treshape},
-                                     {"sort", sort},
-                                     {"sortby", tsortby},
-                                     {"stdev", tstdev},
-                                     {"sum", tsum},
-                                     {"transpose", ttranspose},
-                                     {"unpack", tunpack},
-                                     {"unzip", tunzip},
-                                     {"zip", tzip},
-                                     {NULL, NULL}};
+/*
+** Shrink a table's internal storage to fit its current contents.
+** Useful after building a large table and then clearing most of it:
+** deletions alone never shrink the array or hash parts. Returns the
+** table for chaining. Never automatic — explicit calls only.
+*/
+static int tcompact(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_compacttable(L, 1);
+  lua_settop(L, 1);
+  return 1; /* return the table */
+}
+
+
+static const luaL_Reg tab_funcs[] = {
+    {"clone", tclone},     {"compact", tcompact},
+    {"concat", tconcat},   {"create", tcreate},
+    {"filter", tfilter},   {"groupby", tgroupby},
+    {"insert", tinsert},   {"map", tmap},
+    {"mean", tmean},       {"median", tmedian},
+    {"move", tmove},       {"pack", tpack},
+    {"reduce", treduce},   {"remove", tremove},
+    {"reshape", treshape}, {"sort", sort},
+    {"sortby", tsortby},   {"stdev", tstdev},
+    {"sum", tsum},         {"transpose", ttranspose},
+    {"unpack", tunpack},   {"unzip", tunzip},
+    {"zip", tzip},         {NULL, NULL}};
 
 
 LUAMOD_API int luaopen_table(lua_State *L) {

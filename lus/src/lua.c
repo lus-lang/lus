@@ -55,6 +55,8 @@ static const char *astjson_output = NULL;  /* --ast-json output file */
 static int pedantic_warnings = 0;          /* -Wpedantic flag */
 static int no_fastcall = 0;                /* --no-fastcall flag */
 static int readonly_env = 0;               /* --readonly-env flag */
+static int gc_pause = 0;                   /* --gc-pause value (0 = default) */
+static int strip_debug = 0;                /* --strip-debug flag */
 static void mark_env_readonly(lua_State *L);
 
 /* Standalone bundle options */
@@ -76,6 +78,10 @@ static void worker_setup(lua_State *parent, lua_State *worker) {
     G(worker)->readonly_env = 1;
     mark_env_readonly(worker);
   }
+  if (gc_pause > 0)
+    lua_gc(worker, LUA_GCPARAM, LUA_GCPPAUSE, gc_pause);
+  if (strip_debug)
+    G(worker)->stripdebug = 1;
 }
 
 #if defined(LUA_USE_POSIX) /* { */
@@ -148,6 +154,12 @@ static void print_usage(const char *badoption) {
       "  --include path[:alias] include file/dir in standalone bundle\n"
       "  --no-fastcall  disable fastcall optimizations\n"
       "  --readonly-env freeze _ENV after init (enables fast dispatch)\n"
+      "  --gc-pause N   GC pause: heap may grow to N%% of its live size\n"
+      "                 before a new collection cycle (default 250;\n"
+      "                 lower trades CPU for lower peak memory)\n"
+      "  --strip-debug  drop debug info (line numbers, local/upvalue\n"
+      "                 names, source) from loaded code to save memory;\n"
+      "                 tracebacks and the debug library lose detail\n"
       "  --        stop handling options\n"
       "  -         stop handling options and execute stdin\n",
       progname);
@@ -1417,6 +1429,19 @@ static int collectargs(char **argv, int *first) {
             readonly_env = 1;
             break;
           }
+          if (strcmp(argv[i] + 2, "gc-pause") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            gc_pause = atoi(argv[i]);
+            if (gc_pause <= 0)
+              return has_error; /* not a positive number */
+            break;
+          }
+          if (strcmp(argv[i] + 2, "strip-debug") == 0) {
+            strip_debug = 1;
+            break;
+          }
           return has_error; /* invalid option */
         }
         /* if there is a script name, it comes after '--' */
@@ -1499,6 +1524,7 @@ static int collectargs(char **argv, int *first) {
 */
 static int runargs(lua_State *L, char **argv, int n) {
   int i;
+  int any_pledge = 0; /* did the command line specify any -P pledge? */
   for (i = 1; i < n; i++) {
     int option = argv[i][1];
     lua_assert(argv[i][0] == '-'); /* already checked */
@@ -1536,6 +1562,7 @@ static int runargs(lua_State *L, char **argv, int n) {
         break;
       case 'P': { /* pledge permission */
         char *pledge_str = argv[i] + 2;
+        any_pledge = 1;
         if (*pledge_str == '\0')
           pledge_str = argv[++i];
         lua_assert(pledge_str != NULL);
@@ -1599,6 +1626,12 @@ static int runargs(lua_State *L, char **argv, int n) {
       }
     }
   }
+  /* If the operator specified any pledge on the command line, seal the store
+  ** so the script cannot grant itself MORE permissions (which would make the
+  ** -P restriction a no-op). Scripts that configure their own pledges with no
+  ** -P are unaffected and still pledge-then-seal as usual. */
+  if (any_pledge && !lus_issealed(L))
+    luaP_sealpledges(L);
   return 1;
 }
 
@@ -1975,12 +2008,16 @@ static int pmain(lua_State *L) {
     G(L)->readonly_env = 1;
     mark_env_readonly(L);
   }
-  lua_gc(L, LUA_GCRESTART);          /* start GC... */
-  lua_gc(L, LUA_GCGEN);              /* ...in generational mode */
+  if (gc_pause > 0)
+    lua_gc(L, LUA_GCPARAM, LUA_GCPPAUSE, gc_pause);
+  if (strip_debug)
+    G(L)->stripdebug = 1;
+  lua_gc(L, LUA_GCRESTART);        /* start GC... */
+  lua_gc(L, LUA_GCGEN);            /* ...in generational mode */
   if (handle_luainit(L) != LUA_OK) /* run LUA_INIT */
     return 0;                      /* error running LUA_INIT */
-  if (!runargs(L, argv, optlim)) /* execute arguments -e and -l */
-    return 0;                    /* something failed */
+  if (!runargs(L, argv, optlim))   /* execute arguments -e and -l */
+    return 0;                      /* something failed */
 
   /* Handle --ast-graph option */
   if (astgraph_output != NULL && script > 0) {

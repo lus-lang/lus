@@ -18,6 +18,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lglob.h"
 #include "llimits.h"
 #include "lpledge.h"
 #include "lualib.h"
@@ -165,6 +166,9 @@ static int os_execute(lua_State *L) {
 static int os_tmpname(lua_State *L) {
   char buff[LUA_TMPNAMBUFSIZE];
   int err;
+  /* On POSIX this creates a file (mkstemp); treat it as a write. */
+  if (!lus_haspledge(L, "fs:write", NULL))
+    return luaL_error(L, "permission \"fs:write\" denied for os.tmpname");
   lua_tmpnam(buff, err);
   if (l_unlikely(err))
     return luaL_error(L, "unable to generate a unique filename");
@@ -172,8 +176,43 @@ static int os_tmpname(lua_State *L) {
   return 1;
 }
 
+/*
+** env granter: gates os.getenv. pledge("env") grants reading any variable;
+** pledge("env=NAME") (glob allowed, e.g. "env=LC_*") restricts to matching
+** variable names. The environment can hold secrets, so it is part of the
+** sandbox boundary.
+*/
+static void env_granter(lua_State *L, lus_PledgeRequest *p) {
+  if (p->status == LUS_PLEDGE_GRANT || p->status == LUS_PLEDGE_UPDATE) {
+    if (p->sub != NULL)
+      luaL_error(L, "unknown env subpermission: '%s'", p->sub);
+    lus_setpledge(L, p, NULL, p->value); /* value = variable name or NULL */
+    return;
+  }
+  if (p->status == LUS_PLEDGE_CHECK) {
+    const char *value = p->value;
+    if (value == NULL) { /* no specific variable: allowed if granted at all */
+      lus_setpledge(L, p, NULL, NULL);
+      return;
+    }
+    if (p->has_base && p->count == 0) { /* granted with no values = global */
+      lus_setpledge(L, p, NULL, NULL);
+      return;
+    }
+    while (lus_nextpledge(L, p)) {
+      if (p->current && lus_glob_match(p->current, value)) {
+        lus_setpledge(L, p, NULL, NULL);
+        return;
+      }
+    }
+  }
+}
+
 static int os_getenv(lua_State *L) {
-  lua_pushstring(L, getenv(luaL_checkstring(L, 1))); /* if NULL push nil */
+  const char *varname = luaL_checkstring(L, 1);
+  if (!lus_haspledge(L, "env", varname))
+    return luaL_error(L, "permission \"env\" denied for '%s'", varname);
+  lua_pushstring(L, getenv(varname)); /* if NULL push nil */
   return 1;
 }
 
@@ -422,6 +461,7 @@ static const luaL_Reg syslib[] = {{"clock", os_clock},
 /* }====================================================== */
 
 LUAMOD_API int luaopen_os(lua_State *L) {
+  lus_registerpledge(L, "env", env_granter); /* gate os.getenv */
   luaL_newlib(L, syslib);
   return 1;
 }

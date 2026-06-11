@@ -31,20 +31,36 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 ---
 
 <PlaygroundLayout>
-  <button slot="controls" id="run-btn" class="btn-run" disabled>Run</button>
+  <button
+    slot="controls"
+    id="run-btn"
+    class="btn-run"
+    disabled
+    aria-busy="true"
+    aria-keyshortcuts="Control+Enter Meta+Enter">Loading…</button
+  >
   <button slot="controls" id="clear-btn" class="btn-clear">Clear</button>
 
   <Fragment slot="version">
-    <select id="version-select" class="version-select" disabled>
-      <option value="">Loading...</option>
+    <select
+      id="version-select"
+      class="version-select"
+      aria-label="Lus version"
+      disabled
+    >
+      <option value="">Loading…</option>
     </select>
     <span id="version-tag"></span>
   </Fragment>
 
   <div class="pane editor-pane">
     <div class="pane-header">
-      <span>Code</span>
-      <select id="example-select" class="example-select">
+      <h2>Code</h2>
+      <select
+        id="example-select"
+        class="example-select"
+        aria-label="Load example"
+      >
         {
           examples.map((ex) => (
             <option
@@ -53,17 +69,34 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
               data-unstable={ex.unstable}
             >
               {ex.name}
-              {ex.unstable ? " *" : ""}
+              {ex.unstable ? " (unstable)" : ""}
             </option>
           ))
         }
       </select>
     </div>
-    <div id="code-editor"></div>
+    <p class="sr-only">
+      The editor traps Tab for indentation. Press Ctrl+M (Ctrl+Shift+M on
+      macOS) to toggle Tab trapping.
+    </p>
+    <div id="code-editor">
+      <p class="editor-loading">Loading editor…</p>
+    </div>
   </div>
   <div class="pane output-pane">
-    <div class="pane-header">Output</div>
-    <div class="output-content" id="output"></div>
+    <div class="pane-header">
+      <h2>Output</h2>
+      <span class="kbd-hint" aria-hidden="true">⌘/Ctrl + ↵ to run</span>
+    </div>
+    <div
+      class="output-content"
+      id="output"
+      role="log"
+      aria-live="polite"
+      aria-label="Program output"
+      tabindex="0"
+    >
+    </div>
   </div>
 </PlaygroundLayout>
 
@@ -108,6 +141,23 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   const defaultContent: string =
     window.__lusDefaultContent || 'print("Hello, Lus!")'
 
+  // Pre-filled code travels in the hash as base64url (see playground-link.ts)
+  const hashParams = new URLSearchParams(location.hash.slice(1))
+  const hashVersion = hashParams.get("v")
+
+  function decodeHashCode(): string | null {
+    const raw = hashParams.get("code")
+    if (!raw) return null
+    try {
+      const b64 = raw.replace(/-/g, "+").replace(/_/g, "/")
+      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4)
+      const bytes = Uint8Array.from(atob(padded), (c) => c.charCodeAt(0))
+      return new TextDecoder().decode(bytes)
+    } catch {
+      return null
+    }
+  }
+
   let currentModule: LusModule | null = null
   let releases: { stable: WasmRelease | null; unstable: WasmRelease | null }
   let editor: ReturnType<typeof monaco.editor.create>
@@ -119,7 +169,6 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   ) {
     const lines = text.split("\n")
     for (const lineText of lines) {
-      if (lineText === "" && type === "output") continue
       const line = document.createElement("div")
       line.className = `output-line ${type}`
       line.textContent = lineText
@@ -132,8 +181,15 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
     output.innerHTML = ""
   }
 
+  function setRunLoading(loading: boolean) {
+    runBtn.disabled = loading
+    runBtn.textContent = loading ? "Loading…" : "Run"
+    if (loading) runBtn.setAttribute("aria-busy", "true")
+    else runBtn.removeAttribute("aria-busy")
+  }
+
   async function loadVersion(release: WasmRelease) {
-    runBtn.disabled = true
+    setRunLoading(true)
     clearOutput()
     appendOutput("Loading...", "system")
 
@@ -145,10 +201,12 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
       currentModule = await loadLusWasm(release)
       clearOutput()
-      runBtn.disabled = false
+      setRunLoading(false)
       versionTag.textContent = release.isStable ? "stable" : "unstable"
       versionTag.className = release.isStable ? "tag stable" : "tag unstable"
     } catch (e) {
+      runBtn.textContent = "Run"
+      runBtn.removeAttribute("aria-busy")
       appendOutput(`Failed to load: ${e}`, "error")
     }
   }
@@ -180,13 +238,21 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
   async function initEditor() {
     monaco = await init({
-      defaultTheme: "dark-plus",
+      defaultTheme: "github-dark-default",
     })
 
+    editorContainer.textContent = ""
     editor = monaco.editor.create(editorContainer, {
       language: "lus",
       automaticLayout: true,
       minimap: { enabled: false },
+      // zero-motion mandate: pin every animatable option even where the
+      // current upstream default is off, so dependency bumps can't
+      // silently reintroduce motion
+      cursorBlinking: "solid",
+      smoothScrolling: false,
+      cursorSmoothCaretAnimation: "off",
+      stickyScroll: { enabled: false },
       fontSize: 14,
       fontFamily:
         "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
@@ -194,22 +260,36 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       scrollBeyondLastLine: false,
       wordWrap: "on",
       tabSize: 2,
-      padding: { top: 16, bottom: 16 },
+      padding: { top: 12, bottom: 12 },
     })
 
-    const model = monaco.editor.createModel(defaultContent, "lus")
+    const hashCode = decodeHashCode()
+    const model = monaco.editor.createModel(hashCode ?? defaultContent, "lus")
     editor.setModel(model)
+
+    if (hashCode !== null) {
+      // reflect that the editor holds shared code, not the "hello" example
+      const opt = document.createElement("option")
+      opt.value = "__shared__"
+      opt.textContent = "shared code"
+      opt.disabled = true
+      opt.selected = true
+      exampleSelect.prepend(opt)
+    }
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, runCode)
   }
 
   async function initWasm() {
     try {
+      appendOutput("Fetching releases…", "system")
       if (typeof SharedArrayBuffer === "undefined") {
         appendOutput(
           "SharedArrayBuffer not available. This is probably because you're running this site locally. This is a funny bug on both Firefox and Chromium:\nhttps://bugzilla.mozilla.org/show_bug.cgi?id=1984864\nhttps://issues.chromium.org/issues/386633375\n(let me know when this is fixed so I can remove this message)",
           "error",
         )
+        runBtn.textContent = "Run"
+        runBtn.removeAttribute("aria-busy")
         return
       }
 
@@ -233,13 +313,19 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
       if (!releases.stable && !releases.unstable) {
         appendOutput("No WASM builds available.", "error")
+        runBtn.textContent = "Run"
+        runBtn.removeAttribute("aria-busy")
         return
       }
 
       versionSelect.disabled = false
 
-      // Default to unstable if available, otherwise stable
-      const defaultRelease = releases.unstable || releases.stable
+      // Hash override first, then default to STABLE — the channel the
+      // site recommends for most users
+      const preferUnstable = hashVersion === "unstable"
+      const defaultRelease = preferUnstable
+        ? releases.unstable || releases.stable
+        : releases.stable || releases.unstable
       if (defaultRelease) {
         versionSelect.value =
           defaultRelease === releases.unstable ? "unstable" : "stable"
@@ -248,11 +334,21 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       }
     } catch (e) {
       appendOutput(`Failed to fetch releases: ${e}`, "error")
+      runBtn.textContent = "Run"
+      runBtn.removeAttribute("aria-busy")
     }
   }
 
   runBtn.addEventListener("click", runCode)
   clearBtn.addEventListener("click", clearOutput)
+
+  // run from anywhere on the page, not only while Monaco has focus
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault()
+      runCode()
+    }
+  })
 
   function updateExampleAvailability(isUnstable: boolean) {
     const options = exampleSelect.querySelectorAll("option")
@@ -260,13 +356,22 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       const requiresUnstable = opt.dataset.unstable === "true"
       opt.disabled = requiresUnstable && !isUnstable
     }
-    // If current selection is now disabled, switch to hello
+    // If current selection is now disabled, switch to hello — but never
+    // silently destroy code the user has edited
     const currentOpt = exampleSelect.querySelector(
       `option[value="${exampleSelect.value}"]`,
     ) as HTMLOptionElement
-    if (currentOpt?.disabled) {
+    if (currentOpt?.disabled && currentOpt.value !== "__shared__") {
+      const prev = examples.find((e) => e.name === exampleSelect.value)
       exampleSelect.value = "hello"
-      loadExample("hello")
+      if (editor && prev && editor.getValue() === prev.content) {
+        loadExample("hello")
+      } else if (editor) {
+        appendOutput(
+          `"${prev?.name ?? "this example"}" needs the unstable build — your code was kept.`,
+          "system",
+        )
+      }
     }
   }
 
@@ -290,71 +395,122 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 <style>
   @reference "../styles/global.css";
 
+  /* dark chrome is flat (nothing to seat into) — pressed states are
+     paint-only, per the zero-motion grammar */
   .btn-run {
-    @apply px-4 py-1.5 font-bold text-sm cursor-pointer bg-lime-500 text-lime-950 hover:bg-lime-400;
+    @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent bg-accent text-ink select-none;
+
+    &:hover {
+      @apply bg-ink text-accent;
+    }
+
+    &:active {
+      @apply bg-accent-soft border-accent-soft text-ink;
+    }
 
     &:disabled {
-      @apply opacity-50 cursor-not-allowed hover:bg-lime-500;
+      @apply bg-transparent text-accent/40 border-accent/30 cursor-not-allowed;
     }
   }
 
   .btn-clear {
-    @apply px-4 py-1.5 font-bold text-sm cursor-pointer bg-lime-800 text-lime-200 hover:bg-lime-700;
+    @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent/40 bg-transparent text-accent-soft select-none hover:bg-accent/10 hover:border-accent/70;
+
+    &:active {
+      @apply bg-accent/20 border-accent;
+    }
   }
 
   .version-select {
-    @apply bg-lime-800 text-lime-200 border border-lime-600 px-2 py-1.5 text-sm cursor-pointer;
+    @apply bg-ink text-tint border-2 border-accent/40 px-2 py-1 text-sm cursor-pointer;
 
     &:disabled {
-      @apply opacity-50 cursor-not-allowed;
+      @apply text-tint/40 border-accent/20 cursor-not-allowed;
     }
   }
 
   .example-select {
-    @apply bg-lime-800 text-lime-200 border border-lime-600 px-2 py-1 text-xs cursor-pointer ml-2;
+    @apply bg-ink text-tint border-2 border-accent/40 px-2 py-0.5 text-xs cursor-pointer ml-2;
   }
 
   .tag {
     @apply px-2 py-0.5 text-xs font-bold uppercase;
 
     &:global(.stable) {
-      @apply bg-lime-600 text-lime-950;
+      @apply bg-accent text-ink;
     }
 
     &:global(.unstable) {
-      @apply bg-red-600 text-red-100;
+      @apply bg-accent-red text-ink-red;
     }
   }
 
   .pane {
-    @apply flex-1 flex flex-col min-h-0 min-w-0;
+    /* my-0 defeats the page-shell space-y child margin, which has no
+       specificity but would otherwise knock the second pane out of
+       line with the first */
+    @apply flex-1 flex flex-col min-h-0 min-w-0 my-0;
+  }
+
+  .pane {
+    @apply max-md:min-h-[35dvh];
   }
 
   .pane-header {
-    @apply px-4 py-2 bg-lime-900 text-lime-400 text-sm font-bold uppercase tracking-wide border-b border-lime-700 shrink-0 flex items-center;
+    @apply px-3 py-1.5 bg-ink text-accent text-sm font-bold uppercase tracking-wide border-b-2 border-accent/20 shrink-0 flex items-center;
   }
 
   .editor-pane {
-    @apply border-r border-lime-700;
+    @apply border-b-2 md:border-b-0 md:border-r-2 border-accent/20;
+  }
+
+  .kbd-hint {
+    @apply ml-auto font-mono text-xs normal-case tracking-normal text-accent/80 border border-accent/30 px-1.5 py-0.5;
   }
 
   #code-editor {
     @apply flex-1 w-full;
+
+    .editor-loading {
+      @apply p-3 text-sm text-accent/80 italic;
+    }
+  }
+
+  /*
+  ** Zero-motion kill-switch for modern-monaco: its runtime-injected VS
+  ** Code stylesheet ships transitions (find widget slide, sticky scroll,
+  ** widget fades) and @keyframes (codicon-spin, progress, fadeIn/Out).
+  ** Nothing in the editor functionally depends on animation events, so
+  ** everything becomes an instant repaint.
+  */
+  :global(#code-editor *),
+  :global(#code-editor *::before),
+  :global(#code-editor *::after),
+  :global(.monaco-editor *),
+  :global(.monaco-editor *::before),
+  :global(.monaco-editor *::after) {
+    transition: none !important;
+    animation: none !important;
   }
 
   .output-content {
-    @apply flex-1 overflow-y-auto p-4 font-mono text-sm;
+    @apply flex-1 overflow-y-auto p-3 font-mono text-sm;
   }
 
   :global(.output-line) {
-    @apply whitespace-pre-wrap break-all text-lime-100;
+    @apply whitespace-pre-wrap break-all text-tint;
+
+    /* deliberate blank output lines keep their height */
+    &:global(:empty)::after {
+      content: "\00a0";
+    }
 
     &:global(.system) {
-      @apply text-lime-400 italic;
+      @apply text-accent italic;
     }
 
     &:global(.error) {
-      @apply text-red-400;
+      @apply text-accent-red;
     }
   }
 </style>

@@ -308,4 +308,19 @@ tests:it("slice with explicit start and nil end", function()
     assert(s[1] == 3 and s[2] == 4 and s[3] == 5)
 end)
 
+-- Regression: slicing an inline/parenthesized table (a temporary) must use
+-- the same register the result is assigned to. Previously the result landed
+-- one register too high, so the binding read the still-live source table.
+tests:it("slice of an inline table constructor", function()
+    local s = ({10, 20, 30, 40, 50})[4, 2] -- reverse
+    assert(s[1] == 40 and s[2] == 30 and s[3] == 20 and #s == 3)
+end)
+
+tests:it("slice of an inline table with preceding locals", function()
+    local a, b = 99, 88
+    local s = ({10, 20, 30, 40, 50})[2, 4] -- forward
+    assert(a == 99 and b == 88)
+    assert(s[1] == 20 and s[2] == 30 and s[3] == 40 and #s == 3)
+end)
+
 tests:finish()

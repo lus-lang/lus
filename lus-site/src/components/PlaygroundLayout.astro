@@ -7,23 +7,22 @@ import "@fontsource-variable/atkinson-hyperlegible-mono/wght-italic.css"
 
 import "../styles/global.css"
 import logo from "../assets/logo.svg"
+
+const description =
+  "Write and run Lus code directly in your browser — no install required."
 ---
 
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width" />
-    <meta
-      name="description"
-      content="A small, fast, and reliable programming language that is sovereign."
-    />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
     <meta name="author" content="Louka Ménard Blondin" />
     <meta property="og:title" content="Lus Playground" />
-    <meta
-      property="og:description"
-      content="A small, fast, and reliable programming language that is sovereign."
-    />
+    <meta property="og:description" content={description} />
     <meta property="og:image" content="https://lus.dev/banner.png" />
     <meta property="og:image:width" content="800" />
     <meta property="og:image:height" content="418" />
@@ -32,31 +31,33 @@ import logo from "../assets/logo.svg"
     <meta property="og:locale" content="en_US" />
     <meta property="og:site_name" content="Lus" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Lus" />
-    <meta
-      name="twitter:description"
-      content="A small, fast, and reliable programming language that is sovereign."
-    />
+    <meta name="twitter:title" content="Lus Playground" />
+    <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content="https://lus.dev/banner.png" />
+    <link rel="canonical" href="https://lus.dev/playground" />
     <title>Lus - Playground</title>
   </head>
-  <body class="playground-body">
-    <div class="toolbar">
+  <body class="playground-body dark-chrome">
+    <a href="#main" class="skip-link">Skip to editor</a>
+    <header class="toolbar">
+      <h1 class="sr-only">Lus playground</h1>
       <div class="toolbar-left">
-        <a href="/" class="logo-link">
+        <a href="/" class="logo-link" aria-label="Back to lus.dev">
           <Image src={logo} alt="Lus" width={32} height={32} />
         </a>
-        <a href="/" class="back-link">← Back</a>
+        <a href="/" class="back-link" aria-label="Back to the site"
+          >← <span class="back-label">Back</span></a
+        >
         <div class="separator"></div>
         <slot name="controls" />
       </div>
       <div class="toolbar-right">
         <slot name="version" />
       </div>
-    </div>
-    <div class="editor-container">
+    </header>
+    <main id="main" class="editor-container">
       <slot />
-    </div>
+    </main>
   </body>
 </html>
 
@@ -64,11 +65,13 @@ import logo from "../assets/logo.svg"
   @reference "../styles/global.css";
 
   .playground-body {
-    @apply h-screen w-screen overflow-hidden flex flex-col bg-lime-950 m-0 p-0;
+    @apply h-dvh w-full overflow-hidden flex flex-col bg-ink m-0 p-0;
+    /* native widgets (selects, scrollbars) match the dark chrome */
+    color-scheme: dark;
   }
 
   .toolbar {
-    @apply flex items-center justify-between px-4 py-2 bg-lime-900 border-b border-lime-700 shrink-0;
+    @apply flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-1.5 bg-ink border-b-2 border-accent/20 shrink-0;
   }
 
   .toolbar-left {
@@ -76,22 +79,29 @@ import logo from "../assets/logo.svg"
   }
 
   .toolbar-right {
-    @apply flex items-center gap-2;
+    @apply flex items-center gap-2 ml-auto;
   }
 
   .logo-link {
-    @apply flex items-center;
+    @apply flex items-center hover:bg-transparent;
   }
 
   .back-link {
-    @apply text-lime-300 text-sm font-normal no-underline hover:text-lime-100;
+    @apply text-accent text-sm font-normal no-underline hover:text-tint hover:bg-transparent;
+  }
+
+  .back-label {
+    @apply max-sm:hidden;
   }
 
   .separator {
-    @apply w-px h-6 bg-lime-700;
+    @apply w-px h-6 bg-accent/30 max-sm:hidden;
   }
 
   .editor-container {
-    @apply flex flex-1 min-h-0;
+    /* This <main> exists for the landmark/skip-link; opt back out of
+       the global `main` page shell (max-w-7xl mx-auto px py space-y) —
+       the work area fills the viewport edge-to-edge. */
+    @apply flex flex-col md:flex-row flex-1 min-h-0 max-w-none mx-0 px-0 py-0;
   }
 </style>

@@ -1,5 +1,6 @@
 -- Runtime Attributes: Hook into variable assignment for validation and observation.
 -- playground: true
+-- cookbook: true
 -- unstable: true
 
 global print, type, math, error, tostring, pairs

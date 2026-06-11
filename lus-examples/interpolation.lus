@@ -1,6 +1,7 @@
 -- String Interpolation: Build strings with embedded expressions.
 -- playground: true
 -- unstable: true
+-- cookbook: true
 
 global print, setmetatable, os, math, string, tostring
 

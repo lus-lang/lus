@@ -1,0 +1,16 @@
+-- String interpolation benchmark (concat + integer tostring coercion)
+
+global print, os, string
+
+local N = 6000000
+local total = 0
+
+local t0 = os.clock()
+for i = 1, N do
+    local s = `item $i of $N`
+    total = total + #s
+end
+local elapsed = os.clock() - t0
+
+print(string.format("TIME %.4f", elapsed))
+print("CHECK " .. total)

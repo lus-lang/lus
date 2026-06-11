@@ -128,4 +128,24 @@ tests:it("table as key deep copy", function()
   assert(x[newkey] == "value", "value should be accessible")
 end)
 
+-- Regression: a deeply nested table must not overflow the (Lua or C) stack.
+-- A moderate depth must clone correctly (previously crashed: no stack check);
+-- an extreme depth must raise a clean error, not segfault.
+tests:it("deep clone of a moderately nested table works", function()
+    local t = {}
+    local cur = t
+    for i = 1, 150 do cur.n = {v = i}; cur = cur.n end
+    local c = table.clone(t, true)
+    assert(type(c.n) == "table" and c.n.v == 1)
+    assert(c.n.n.v == 2)
+end)
+
+tests:it("deep clone of an extremely nested table errors cleanly", function()
+    local t = {}
+    local cur = t
+    for i = 1, 5000 do cur.n = {}; cur = cur.n end
+    local ok = catch(table.clone(t, true))
+    assert(ok == false, "excessive nesting should error, not crash")
+end)
+
 tests:finish()

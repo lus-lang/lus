@@ -1,0 +1,190 @@
+---
+import { Code } from "astro:components"
+// @ts-ignore
+import lusGrammar from "../../../lus-textmate/lus.tmLanguage.json"
+
+import Layout from "../components/Layout.astro"
+import Button from "../components/Button.astro"
+import { playgroundHref } from "../lib/playground-link"
+
+const exampleFiles = import.meta.glob("../../../lus-examples/*.lus", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>
+
+interface Example {
+  name: string
+  title: string
+  blurb: string
+  content: string
+  unstable: boolean
+  playground: boolean
+}
+
+const examples: Example[] = []
+for (const [path, content] of Object.entries(exampleFiles)) {
+  if (!content.includes("cookbook: true")) continue
+  const name = path.split("/").pop()!.replace(".lus", "")
+  const first = content.split("\n", 1)[0] ?? ""
+  const m = first.match(/^--\s*([^:]+):\s*(.+)$/)
+  examples.push({
+    name,
+    title: m?.[1]?.trim() ?? name,
+    blurb: m?.[2]?.trim() ?? "",
+    // strip the marker comment lines from the displayed source
+    content: content
+      .split("\n")
+      .filter(
+        (l) =>
+          !/^--\s*(playground|unstable|cookbook):\s*(true|false)\s*$/.test(l),
+      )
+      .join("\n")
+      .trim(),
+    unstable: content.includes("unstable: true"),
+    playground: content.includes("playground: true"),
+  })
+}
+
+examples.sort((a, b) => a.title.localeCompare(b.title))
+---
+
+<Layout
+  title="Examples"
+  description="Short, idiomatic Lus programs: errors as values, string interpolation, workers, permissions, JSON, CSV, and more."
+>
+  <main id="main">
+    <section>
+      <h1>Examples</h1>
+      <p class="examples-intro">
+        Short, idiomatic Lus programs. Each one is self-contained; examples
+        marked <span class="ex-badge ex-badge-play">playground</span> run in
+        your browser, the rest run locally because they need real sockets,
+        files, or threads. <span class="ex-badge ex-badge-unstable"
+          >unstable</span
+        > examples need the unstable release channel.
+      </p>
+      <nav class="examples-jump" aria-label="Examples">
+        {
+          examples.map((ex) => (
+            <a href={`#${ex.name}`}>{ex.title}</a>
+          ))
+        }
+      </nav>
+      <div class="examples-list">
+        {
+          examples.map((ex) => (
+            <article class="example" id={ex.name}>
+              <header>
+                <h2>
+                  {ex.title}
+                  <a
+                    class="heading-anchor"
+                    href={`#${ex.name}`}
+                    aria-label="Link to this example"
+                  >#</a>
+                </h2>
+                <span class="ex-file">{ex.name}.lus</span>
+                {ex.playground && (
+                  <span class="ex-badge ex-badge-play">playground</span>
+                )}
+                {ex.unstable && (
+                  <span class="ex-badge ex-badge-unstable">unstable</span>
+                )}
+              </header>
+              {ex.blurb && <p class="ex-blurb">{ex.blurb}</p>}
+              <Code lang={lusGrammar as any} theme="github-light" code={ex.content} />
+              <footer>
+                {ex.playground ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    color={ex.unstable ? "red" : "lime"}
+                    href={playgroundHref(
+                      ex.content,
+                      ex.unstable ? "unstable" : "stable",
+                    )}
+                  >
+                    Open in playground
+                  </Button>
+                ) : (
+                  <span class="ex-local">
+                    runs locally — needs real network, files, or threads
+                  </span>
+                )}
+              </footer>
+            </article>
+          ))
+        }
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<style>
+  @reference "../styles/global.css";
+
+  .examples-intro {
+    @apply text-ink/80 max-w-2xl mb-4;
+  }
+
+  .ex-badge {
+    @apply font-mono text-[10px] font-bold uppercase px-1.5 py-0.5;
+  }
+
+  .ex-badge-play {
+    @apply bg-accent-soft text-ink;
+  }
+
+  .ex-badge-unstable {
+    @apply bg-accent-soft-red text-ink-red;
+  }
+
+  .examples-jump {
+    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs border-y-2 border-ink/20 py-2 mb-4;
+
+    a {
+      @apply no-underline font-normal text-link hover:bg-accent-soft py-0.5;
+    }
+  }
+
+  .examples-list {
+    @apply grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-8 items-start;
+  }
+
+  .example:target h2 {
+    background: var(--color-accent-soft);
+  }
+
+  .example {
+    @apply min-w-0 scroll-mt-4;
+
+    header {
+      @apply flex flex-wrap items-baseline gap-x-3 gap-y-1;
+
+      h2 {
+        @apply text-xl font-bold tracking-tight;
+      }
+
+      .ex-file {
+        @apply font-mono text-xs text-ink/70;
+      }
+    }
+
+    .ex-blurb {
+      @apply text-ink/80 mt-1 mb-3;
+    }
+
+    :global(pre) {
+      @apply my-0;
+    }
+
+    footer {
+      @apply mt-3;
+
+      .ex-local {
+        @apply text-sm text-ink/70 italic;
+      }
+    }
+  }
+</style>

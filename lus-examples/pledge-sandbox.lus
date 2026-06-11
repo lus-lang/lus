@@ -1,0 +1,17 @@
+-- Pledge Sandbox: Deny-by-default permissions, enforced by the runtime.
+-- playground: false
+-- cookbook: true
+global os, string, pledge, print
+
+-- Grant nothing but the permission system itself, permanently deny
+-- command execution, and seal so nothing can be granted later.
+pledge("~exec")
+pledge("seal")
+
+-- Anything the script never pledged is refused at the call site —
+-- and the refusal is an ordinary error you can catch.
+local ok, err = catch os.execute("rm -rf /")
+print(ok and "uh oh" or `blocked: $(string.match(err, "[^\n]+"))`)
+
+local ok2, err2 = catch os.getenv("SECRET_TOKEN")
+print(ok2 and "uh oh" or `blocked: $(string.match(err2, "[^\n]+"))`)

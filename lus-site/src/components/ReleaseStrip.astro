@@ -1,0 +1,116 @@
+---
+/*
+** Dense two-row release surface: one row per channel with version,
+** date, and per-platform download links. Self-contained (fetches the
+** release data itself) so the homepage and /manual/releases cannot
+** drift. Renders a graceful row when a channel has no release.
+*/
+import { getAllReleases, type ReleaseInfo } from "../lib/release"
+
+const { stable, unstable } = await getAllReleases()
+
+const channels: { name: string; release: ReleaseInfo | null }[] = [
+  { name: "stable", release: stable },
+  { name: "unstable", release: unstable },
+]
+
+function downloads(release: ReleaseInfo) {
+  // installer/checksums only exist from 1.6.0 on; the filter hides
+  // them on older releases
+  return [
+    { label: "installer", href: release.links.windowsInstaller },
+    { label: "windows", href: release.links.windows },
+    { label: "macos", href: release.links.macos },
+    { label: "linux-glibc", href: release.links.linuxGlibc },
+    { label: "linux-musl", href: release.links.linuxMusl },
+    { label: "source", href: release.links.sourceTarball },
+    { label: "checksums", href: release.links.checksums },
+    { label: "notes", href: release.htmlUrl },
+  ].filter((d): d is { label: string; href: string } => !!d.href)
+}
+---
+
+<div class="release-strip">
+  {
+    channels.map(({ name, release }) => (
+      <div class="release-row" data-channel={name}>
+        <span class="rel-chip">{name}</span>
+        {release ? (
+          <>
+            <span class="rel-version">{release.version}</span>
+            <time class="rel-date" datetime={release.releaseDate}>
+              {release.releaseDate}
+            </time>
+            <span class="rel-links">
+              {downloads(release).map((d) => (
+                <a href={d.href}>{d.label}</a>
+              ))}
+            </span>
+          </>
+        ) : (
+          <span class="rel-none">no release available yet</span>
+        )}
+      </div>
+    ))
+  }
+</div>
+
+<style>
+  @reference "../styles/global.css";
+
+  .release-strip {
+    @apply border-2 border-ink bg-paper divide-y-2 divide-ink;
+  }
+
+  .release-row {
+    @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2;
+
+    .rel-chip {
+      @apply font-mono text-[10px] font-bold uppercase px-1.5 py-0.5;
+    }
+
+    &[data-channel="stable"] .rel-chip {
+      @apply bg-accent text-ink;
+    }
+
+    &[data-channel="unstable"] .rel-chip {
+      @apply bg-accent-red text-ink-red;
+    }
+
+    .rel-version {
+      @apply font-mono font-bold text-sm;
+    }
+
+    .rel-date {
+      @apply font-mono text-xs text-ink/70;
+    }
+
+    .rel-none {
+      @apply text-sm text-ink/70;
+    }
+
+    .rel-links {
+      @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-sm sm:ml-auto;
+
+      a {
+        @apply font-normal no-underline text-link hover:bg-accent-soft px-0.5 py-0.5;
+      }
+    }
+
+    &[data-channel="unstable"] {
+      .rel-version,
+      .rel-date,
+      .rel-none {
+        @apply text-ink-red/80;
+      }
+
+      .rel-version {
+        @apply text-ink-red;
+      }
+
+      .rel-links a {
+        @apply text-link-red hover:bg-accent-soft-red;
+      }
+    }
+  }
+</style>

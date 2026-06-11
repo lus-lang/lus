@@ -1,91 +1,87 @@
 ---
 import Layout from "./Layout.astro"
 import { getCollection } from "astro:content"
-// @ts-ignore
-import icons from "virtual:lucide-icons"
+import ManualNav from "./ManualNav.astro"
+import type { NavGroup, TocItem } from "./ManualNav.astro"
 
 interface Props {
   title: string
   unstable?: boolean
+  /** cap long-form prose at 80ch; API pages omit it for full width */
+  measure?: boolean
+  /** current page h2 headings, rendered under the active sidebar link */
+  toc?: TocItem[]
 }
-const { title, unstable } = Astro.props
+const { title, unstable, measure, toc } = Astro.props
 
 const manual = await getCollection("manual")
 
 const currentPath = Astro.url.pathname.replace(/\/$/, "")
+
+const groups: NavGroup[] = [
+  { key: "learn", label: "learn", links: [] },
+  { key: "use", label: "use", links: [] },
+  { key: "reference", label: "reference", links: [] },
+]
+
+for (const group of groups) {
+  group.links = manual
+    .filter((page) => !page.data.acquis && page.data.group === group.key)
+    .toSorted((a, b) => a.data.order - b.data.order)
+    .map((page) => ({
+      href: `/manual/${page.id}`,
+      title: page.data.title,
+      icon: page.data.icon,
+      // the acquis index owns every /manual/acquis-N page
+      active:
+        page.id === "acquis"
+          ? currentPath.startsWith("/manual/acquis")
+          : currentPath === `/manual/${page.id}`,
+      current: currentPath === `/manual/${page.id}`,
+    }))
+}
+
+// the API reference pages live outside the content collection; they lead
+// the reference group (most-consulted first)
+groups
+  .find((group) => group.key === "reference")!
+  .links.unshift(
+    {
+      href: "/manual/api",
+      title: "API",
+      icon: "library",
+      active: currentPath === "/manual/api",
+      current: currentPath === "/manual/api",
+    },
+    {
+      href: "/manual/api/c",
+      title: "C API",
+      icon: "braces",
+      active: currentPath === "/manual/api/c",
+      current: currentPath === "/manual/api/c",
+    },
+  )
 ---
 
 <Layout title={title} unstable={unstable}>
-  <main>
-    <section class="flex flex-col-reverse lg:flex-row gap-8">
-      <aside>
-        <nav class="sidebar">
-          {
-            manual
-              .filter((page) => !page.data.acquis)
-              .toSorted((a, b) => a.data.order - b.data.order)
-              .map((page) => (
-                <a
-                  class:list={[
-                    "sidebar-link",
-                    { active: currentPath === `/manual/${page.id}` },
-                  ]}
-                  href={`/manual/${page.id}`}
-                >
-                  {page.data.icon && (
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      {icons[page.data.icon].map(([tag, attrs]: any) => {
-                        const El = tag as any
-                        return <El {...attrs} />
-                      })}
-                    </svg>
-                  )}
-                  {page.data.title}
-                </a>
-              ))
-          }
-          <a
-            class:list={[
-              "sidebar-link",
-              { active: currentPath === "/manual/api" },
-            ]}
-            href="/manual/api"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              {
-                icons["library"].map(([tag, attrs]: any) => {
-                  const El = tag as any
-                  return <El {...attrs} />
-                })
-              }
-            </svg>
-            API
-          </a>
+  <main id="main">
+    <section class="manual-shell">
+      <article class:list={["flex-1 min-w-0", { measured: measure }]}>
+        <nav class="lg:hidden" aria-label="Manual">
+          <details class="manual-nav-mobile">
+            <summary>Manual — {title}</summary>
+            <div class="manual-nav-mobile-body">
+              <ManualNav groups={groups} />
+            </div>
+          </details>
         </nav>
-      </aside>
-      <article class="flex-1 min-w-0">
         <slot />
       </article>
+      <aside class="hidden lg:block">
+        <nav class="sidebar" aria-label="Manual">
+          <ManualNav groups={groups} toc={toc} />
+        </nav>
+      </aside>
     </section>
   </main>
 </Layout>
@@ -94,44 +90,51 @@ const currentPath = Astro.url.pathname.replace(/\/$/, "")
   @reference "../styles/global.css";
 
   :global(hr) {
-    @apply my-4 text-lime-800;
+    @apply my-3 border-t-2 border-ink/20;
+  }
+
+  .manual-shell {
+    @apply flex flex-col lg:flex-row-reverse gap-6;
   }
 
   article {
     @apply space-y-2;
   }
 
-  aside {
-    @apply min-w-48 w-1/6 sticky top-8 self-start;
+  /* dense-reference measure: cap the children, not the article box, so
+     the flex layout keeps its width and wide elements can opt out */
+  article.measured > :global(*) {
+    max-width: 80ch;
+  }
 
-    .sidebar-link {
-      @apply flex items-center gap-1.5 lg:-ml-1 py-0.5 no-underline text-lime-800 font-normal hover:underline;
+  /* hard structural rule under every chapter heading — scanning aid */
+  article :global(h2) {
+    @apply border-b-2 border-ink/20 pb-1;
+  }
 
-      svg {
-        @apply p-1 box-content;
-      }
+  .manual-nav-mobile {
+    @apply border-2 border-ink bg-tint lus-shadow-sm mb-4;
 
-      &.active {
-        @apply text-lime-900 font-bold;
+    summary {
+      @apply font-mono text-xs uppercase tracking-widest px-3 py-2 cursor-pointer select-none;
+    }
 
-        svg {
-          @apply text-lime-200;
-          background: linear-gradient(135deg, #a3e635, #4d7c0f);
-        }
-      }
+    .manual-nav-mobile-body {
+      @apply px-3 pb-2;
     }
   }
 
-  :global(html.unstable) aside .sidebar-link {
-    @apply text-red-800;
+  aside {
+    @apply min-w-48 w-1/6 sticky top-6 self-start;
+  }
 
-    &.active {
-      @apply text-red-900;
+  :global(html.unstable) {
+    article :global(h2) {
+      @apply border-ink-red/20;
+    }
 
-      svg {
-        @apply text-red-200;
-        background: linear-gradient(135deg, #fca5a5, #b91c1c);
-      }
+    .manual-nav-mobile {
+      @apply border-ink-red bg-tint-red shadow-ink-red;
     }
   }
 </style>

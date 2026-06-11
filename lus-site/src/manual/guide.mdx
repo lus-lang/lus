@@ -3,6 +3,8 @@ order: 4
 title: Guide to Lus
 draft: false
 icon: compass
+group: learn
+shortdesc: "The full language reference."
 ---
 
 ## Welcome!
@@ -97,7 +99,7 @@ global width, height from getDimensions()
 
 Local variables can carry _attributes_ that modify their behavior. There are two compile-time attributes and a runtime attribute system.
 
-The `<const>` attribute makes a variable immutable after initialization — any attempt to reassign it is a compile-time error:
+The `<const>` attribute makes a variable immutable after initialization, so any attempt to reassign it is a compile-time error:
 
 ```lus
 local MAX <const> = 100
@@ -140,7 +142,7 @@ print(pos.x)  --> 0
 pos.x = 10
 ```
 
-Groups are not first-class values — they cannot be passed to functions or stored in tables. You also cannot add new fields after initialization. However, you can perform partial reassignment to update only specific fields:
+Groups are not first-class values, so they cannot be passed to functions or stored in tables. You also cannot add new fields after initialization. However, you can perform partial reassignment to update only specific fields:
 
 ```lus
 pos = { x = 5 }  -- only updates x; y remains 0
@@ -179,7 +181,7 @@ Strings are immutable sequences of 8-bit characters. The runtime does not enforc
 
 While strings can theoretically be used as buffers, the [`vector`](#vector) type is more appropriate (and efficient!) for this purpose.
 
-String literals come in several forms. Single-quoted (`'hello'`) and double-quoted (`"hello"`) strings support escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\"`, `\'`, `\xNN` (hex byte), `\u{NNNN}` (Unicode codepoint), and `\z` (skip following whitespace). Long strings use `[[...]]` or `[=[...]=]` (with matching equals signs) and preserve their content verbatim — no escape processing:
+String literals come in several forms. Single-quoted (`'hello'`) and double-quoted (`"hello"`) strings support escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\"`, `\'`, `\xNN` (hex byte), `\u{NNNN}` (Unicode codepoint), and `\z` (skip following whitespace). Long strings use `[[...]]` or `[=[...]=]` (with matching equals signs) and preserve their content verbatim:
 
 ```lus
 local a = "line one\nline two"
@@ -274,7 +276,7 @@ local name = user?:getName()            -- method call
 local result = callback?()              -- function call
 ```
 
-If the value before `?` is falsy, the entire remaining chain is skipped and that falsy value is returned. `false` is preserved — it returns `false`, not `nil`. Multiple `?` operators can appear in a single chain. A common pattern combines optional chaining with `or` for fallbacks:
+If the value before `?` is falsy, the entire remaining chain is skipped and that falsy value is returned. `false` is preserved. Multiple `?` operators can appear in a single chain. A common pattern combines optional chaining with `or` for fallbacks:
 
 ```lus
 local timeout = config?.database?.timeout or 30
@@ -315,7 +317,7 @@ print(#"hello")       --> 5
 print(#{10, 20, 30})  --> 3
 ```
 
-For tables, `#t` returns the length of the _sequence_ — the contiguous integer keys starting from 1. If the array portion has holes (nil values between entries), the result is not well-defined. Custom behavior can be defined with the `__len` metamethod.
+For tables, `#t` returns the length of the _sequence_. If the array portion has holes (nil values between entries), the result is not well-defined. Custom behavior can be defined with the `__len` metamethod.
 
 ### Bitwise operators
 
@@ -376,7 +378,7 @@ elseif guest = findGuest(id) then
 end
 ```
 
-Multiple assignments work the same way — the branch is taken only when every assigned value is truthy: `if a, b = getTwoValues() then`.
+Multiple assignments work the same way, so the branch is taken only when every assigned value is truthy: `if a, b = getTwoValues() then`.
 
 ### while
 
@@ -611,7 +613,7 @@ local function find(node, target)
 end
 ```
 
-Only `return f(args)` is a proper tail call — wrapping the call in parentheses or adding operations after it breaks the optimization.
+Only `return f(args)` is a proper tail call, so wrapping the call in parentheses or adding operations after it breaks the optimization.
 
 ## Tables
 
@@ -640,8 +642,10 @@ print(#t)                --> 3
 table.insert(t, 40)      -- append: {10, 20, 30, 40}
 table.insert(t, 2, 15)   -- insert at index 2: {10, 15, 20, 30, 40}
 table.remove(t, 1)       -- remove index 1: {15, 20, 30, 40}
-table.sort(t)             -- in-place sort: {15, 20, 30, 40}
+table.sort(t)            -- in-place sort: {15, 20, 30, 40}
 ```
+
+Removing entries never shrinks a table's storage. After clearing a large table, [`table.compact`](/manual/api#table.compact) releases the unused capacity.
 
 ### Map operations
 
@@ -860,7 +864,7 @@ end
 
 ### Stateless iterators
 
-A stateless iterator relies only on the invariant state and the control variable — no closures or mutable state. This is the most efficient form:
+A stateless iterator relies only on the invariant state and the control variable, so no closures or mutable state. This is the most efficient form:
 
 ```lus
 local function range_iter(limit, current)
@@ -1044,7 +1048,7 @@ print(result)  --> HELLO WORLD
 
 ### Common patterns
 
-Patterns are _not_ regular expressions — they lack alternation (`|`), backreferences, and other regex features. However, they handle most practical tasks:
+Patterns are _not_ regular expressions, so they lack alternation (`|`), backreferences, and other regex features. However, they handle most practical tasks:
 
 ```lus
 -- Match a number (integer or float)
@@ -1080,7 +1084,7 @@ local chunk = load("print(math.sqrt(16))", "sandbox", "t", safe_env)
 chunk()  --> 4.0
 ```
 
-For security-critical sandboxing, the `pledge` function provides fine-grained capability-based access control. Permissions follow a hierarchical naming scheme — granting a base permission implicitly grants all sub-permissions:
+For security-critical sandboxing, the `pledge` function provides fine-grained capability-based access control. Permissions follow a hierarchical naming scheme, so granting a base permission implicitly grants all sub-permissions:
 
 ```lus
 pledge("fs:read")           -- allow reading files
@@ -1100,7 +1104,7 @@ Coroutines inherit a copy of the parent's permissions at the time of creation; c
 
 ### Using require
 
-[`require`](/manual/api#require) loads and caches modules. On the first call, it searches for the module, runs it, and stores the return value in `package.loaded`. Subsequent calls return the cached value:
+[`require`](/manual/api#require) loads and caches modules. On the first call, it searches for the module, runs it, and stores the return value in [`package.loaded`](/manual/api#package.loaded). Subsequent calls return the cached value:
 
 ```lus
 local json = require("json")
@@ -1129,14 +1133,14 @@ return M
 
 ### Search paths
 
-`require("name")` searches for files using the patterns in `package.path` (for Lus files) and `package.cpath` (for C libraries). The `?` placeholder is replaced with the module name:
+`require("name")` searches for files using the patterns in [`package.path`](/manual/api#package.path) (for Lus files) and [`package.cpath`](/manual/api#package.cpath) (for C libraries). The `?` placeholder is replaced with the module name:
 
 ```lus
 print(package.path)
 --> ./?.lus;./?/init.lus;/usr/local/share/lus/?.lus
 ```
 
-Custom searchers can be added to the `package.searchers` table. For distributing self-contained programs, the `--standalone` flag bundles a script and its dependencies into a single executable. Use `--include` to add files or directories; bundled modules take precedence over the filesystem. CLI flags like `-P` are baked into the binary:
+Custom searchers can be added to the [`package.searchers`](/manual/api#package.searchers) table. For distributing self-contained programs, the `--standalone` flag bundles a script and its dependencies into a single executable. Use `--include` to add files or directories; bundled modules take precedence over the filesystem. CLI flags like `-P` are baked into the binary:
 
 ```bash
 lus --standalone app.lus --include lib/
@@ -1221,7 +1225,7 @@ In addition to the core libraries (`math`, `string`, `table`, `io`, `os`, `utf8`
 
 ### Permissions
 
-The [`pledge`](/manual/api#pledge) function (covered in [Sandboxing](#sandboxing)) controls access to sensitive operations. All libraries below that perform I/O require appropriate permissions. Available permission categories include `fs`, `fs:read`, `fs:write`, `network`, `network:http`, `network:tcp`, `network:udp`, `exec`, and `load`.
+The [`pledge`](/manual/api#pledge) function (covered in [Sandboxing](#sandboxing)) controls access to sensitive operations. All libraries below that perform I/O require appropriate permissions. Available permission categories include `fs`, `fs:read`, `fs:write`, `network`, `network:http`, `network:tcp`, `network:udp`, `exec`, `env`, and `load`. The `io` library is gated by the `fs` permissions, and [`os.getenv`](/manual/api#os.getenv) by `env`.
 
 ### JSON
 
@@ -1235,7 +1239,9 @@ print(data.scores[1])  --> 95
 local json = tojson({name = "Bob", scores = {95, 87}})
 ```
 
-`tojson` accepts an optional filter function as a second argument for transforming or omitting fields during serialization. Tables with a `__json` metamethod (see [Other metamethods](#other-metamethods)) can customize their JSON representation. Special float values (`math.huge`, `-math.huge`, NaN) serialize as `null`; circular references produce an error.
+The [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) globals provide the same round trip for CSV data.
+
+`tojson` accepts an optional filter function as a second argument for transforming or omitting fields during serialization. Tables with a `__json` metamethod (see [Other metamethods](#other-metamethods)) can customize their JSON representation. Special float values ([`math.huge`](/manual/api#math.huge), `-math.huge`, NaN) serialize as `null`; circular references produce an error.
 
 ### Filesystem
 
@@ -1247,7 +1253,7 @@ fs.createdirectory("build", true)   -- true creates parent directories
 fs.copy("src/main.lus", "build/main.lus")
 ```
 
-Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whether it is a symlink), `fs.remove(path, recursive)`, and the `fs.path` utilities (`fs.path.join`, `fs.path.split`, `fs.path.name`, `fs.path.parent`).
+Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whether it is a symlink), `fs.remove(path, recursive)`, and the [`fs.path`](/manual/api#fs.path) utilities ([`fs.path.join`](/manual/api#fs.path.join), [`fs.path.split`](/manual/api#fs.path.split), [`fs.path.name`](/manual/api#fs.path.name), [`fs.path.parent`](/manual/api#fs.path.parent)).
 
 ### Networking
 
@@ -1258,11 +1264,11 @@ local status, body, headers = network.fetch("https://api.example.com/data")
 local sock = network.tcp.connect("example.com", 80)
 ```
 
-`network.fetch(url, method, headers, body)` performs HTTP requests and returns the status code, response body, and response headers. TCP sockets support `send`, `receive` (with patterns: a number for N bytes, `"*l"` for a line, `"*a"` for all available data), `settimeout`, and `close`. UDP sockets are available via `network.udp.open`.
+`network.fetch(url, method, headers, body)` performs HTTP requests and returns the status code, response body, and response headers. TCP sockets support `send`, `receive` (with patterns: a number for N bytes, `"*l"` for a line, `"*a"` for all available data), `settimeout`, and `close`. UDP sockets are available via [`network.udp.open`](/manual/api#network.udp.open).
 
 ### Workers
 
-[Workers](/manual/api#worker) are separate interpreter states running on a thread pool, providing true concurrency through message passing. Arguments passed to `worker.create` are deep-copied into the worker's state:
+[Workers](/manual/api#worker) are separate interpreter states running on a thread pool, providing true concurrency through message passing. Arguments passed to [`worker.create`](/manual/api#worker.create) are deep-copied into the worker's state:
 
 ```lus
 local w = worker.create("task.lus", {data = "input"})
@@ -1272,7 +1278,7 @@ while result = worker.receive(w) do
 end
 ```
 
-Inside a worker, `worker.message(data)` sends data back to the parent, and `worker.peek()` blocks until a message arrives. `worker.receive` can accept multiple workers and returns from whichever has a message first (select-like). Workers inherit the parent's permissions and require the `load` and `fs:read` permissions to load their script file.
+Inside a worker, `worker.message(data)` sends data back to the parent, and `worker.peek()` blocks until a message arrives. [`worker.receive`](/manual/api#worker.receive) can accept multiple workers and returns from whichever has a message first (select-like). Workers inherit the parent's permissions in sealed form, so a worker can never hold more permissions than its parent. Creating a worker requires the `load` and `fs:read` permissions to read its script file.
 
 ### Other libraries
 
@@ -1284,12 +1290,12 @@ The full standard library also includes [`math`](/manual/api#math) (mathematical
 
 Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and resembles traditional machine code.
 
-The Lus interpreter is a register-based virtual machine where the operands of each instruction either represents a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct; `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on.
+The Lus interpreter is a register-based virtual machine where the operands of each instruction either represents a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct; `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on. Calls to known standard-library functions compile to a dedicated fast-dispatch instruction that executes them inline; running with `--readonly-env` freezes `_ENV` and the module tables, letting that dispatch skip its runtime validation.
 
 ### Memory management
 
-Lus implements a mark-and-sweep generational garbage collector that detects and frees any unused memory. Objects allocated by the runtime are tracked by the collector. When memory pressure rises, the collector pauses execution to identify which objects are still reachable from the program's roots and reclaims everything else.
+Lus implements an incremental mark-and-sweep garbage collector with an optional generational mode. Objects allocated by the runtime are tracked by the collector; as allocations accumulate, it interleaves short marking and sweeping steps with program execution, reclaiming everything no longer reachable from the program's roots.
 
-The garbage collector can also operate _generationally_, meaning it can divide objects into generations based on their age. As most objects in programs die young, we can account for their rapid expiration and optimize accordingly. Newly created objects belong to the young generation and are collected frequently; objects that survive multiple collection cycles are promoted to the old generation, which is collected less often. Generational garbage collection is enabled by default.
+The garbage collector can also operate _generationally_, meaning it can divide objects into generations based on their age. As most objects in programs die young, we can account for their rapid expiration and optimize accordingly. Newly created objects belong to the young generation and are collected frequently; objects that survive multiple collection cycles are promoted to the old generation, which is collected less often. The standalone interpreter runs in generational mode by default; embedders start in incremental mode.
 
-You rarely need to think about garbage collection in practice. However, if you're working with performance-sensitive code or managing large amounts of data, Lus exposes the [`collectgarbage`](/manual/api#collectgarbage) function to let you interface with the garbage collector.
+You rarely need to think about garbage collection in practice. However, if you're working with performance-sensitive code or managing large amounts of data, Lus exposes the [`collectgarbage`](/manual/api#collectgarbage) function to let you interface with the garbage collector. Two interpreter flags also help memory-constrained deployments: `--gc-pause N` bounds how far the heap may grow past the live set (in percent) before an incremental collection cycle starts, trading CPU for a smaller peak footprint, and `--strip-debug` drops debug information from loaded code at the cost of source detail in tracebacks.

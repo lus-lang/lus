@@ -3,7 +3,7 @@ import { getCollection } from "astro:content"
 
 const manual = await getCollection("manual")
 const acquis = manual
-  .filter((p) => p.data.acquis && p.id !== "acquis-0")
+  .filter((p) => p.data.acquis)
   .toSorted((a, b) => a.data.order - b.data.order)
 
 const stable = acquis.filter((p) => !p.data.draft)
@@ -18,7 +18,7 @@ const unstable = acquis.filter((p) => p.data.draft)
         stable.map((p) => (
           <li>
             <a href={`/manual/${p.id}`}>{p.data.title}</a>
-            {p.data.shortdesc && ` ${p.data.shortdesc}`}
+            {p.data.shortdesc && `: ${p.data.shortdesc}`}
           </li>
         ))
       }
@@ -45,7 +45,7 @@ const unstable = acquis.filter((p) => p.data.draft)
   @reference "../styles/global.css";
 
   .acquis-columns {
-    @apply flex gap-8;
+    @apply flex gap-6;
 
     > div {
       @apply flex-1;

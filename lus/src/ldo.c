@@ -69,17 +69,17 @@ void luaD_seterrorobj(lua_State *L, TStatus errcode, StkId oldtop) {
 }
 
 l_noret luaD_throw(lua_State *L, TStatus errcode) {
-  /* O(1) check for active Lua catch block using L->activeCatch */
+  /* O(1) check for active Lua catch block: L->activeCatch is the innermost
+  ** active catch node (or NULL). */
   if (L->activeCatch != NULL) {
-    CallInfo *ci = L->activeCatch;
-    lua_assert(isLua(ci) && ci->u.l.catchinfo.active);
-    CatchInfo *cinfo = &ci->u.l.catchinfo;
+    CatchInfo *cinfo = L->activeCatch;
+    lua_assert(isLua(cinfo->ci));
     /* Save the error object by copying it to a safe location.
     ** We store the offset of where the error is, since pointers may be stale
     ** after stack reallocation. The error is currently at L->top.p - 1. */
     cinfo->erroffset = savestack(L, L->top.p - 1);
     /* Restore to catch frame */
-    L->ci = ci;
+    L->ci = cinfo->ci;
     /* Jump to catch handler's jmpbuf */
     cinfo->status = errcode;
     longjmp(cinfo->jmpbuf, 1);
@@ -132,7 +132,7 @@ l_noret luaD_throwbaselevel(lua_State *L, TStatus errcode) {
 */
 TStatus luaD_catchcall(lua_State *L, Pfunc f, void *ud) {
   CCatchInfo cinfo;
-  CallInfo *oldActiveCatch = L->activeCatch;
+  CatchInfo *oldActiveCatch = L->activeCatch;
   L->activeCatch = NULL; /* disable Lua catch blocks */
   CPROTECT_BEGIN(L, &cinfo)
   f(L, ud);
@@ -642,8 +642,8 @@ retry:
         setnilvalue2s(func + narg1); /* complete missing arguments */
       ci->top.p = func + 1 + fsize;     /* top for new function */
       lua_assert(ci->top.p <= L->stack_last.p);
-      ci->u.l.savedpc = p->code;    /* starting point */
-      ci->u.l.catchinfo.active = 0; /* no active catch handler */
+      ci->u.l.savedpc = p->code;  /* starting point */
+      ci->u.l.catchlist = NULL;   /* no active catch in this frame yet */
       ci->callstatus |= CIST_TAIL;
       L->top.p = func + narg1; /* set top */
       return -1;
@@ -684,8 +684,8 @@ retry:
       int fsize = p->maxstacksize; /* frame size */
       checkstackp(L, fsize, func);
       L->ci = ci = prepCallInfo(L, func, status, func + 1 + fsize);
-      ci->u.l.savedpc = p->code;    /* starting point */
-      ci->u.l.catchinfo.active = 0; /* no active catch handler */
+      ci->u.l.savedpc = p->code; /* starting point */
+      ci->u.l.catchlist = NULL;  /* no active catch in this frame yet */
       for (; narg < nfixparams; narg++)
         setnilvalue2s(L->top.p++); /* complete missing arguments */
       lua_assert(ci->top.p <= L->stack_last.p);
@@ -914,7 +914,7 @@ static TStatus precover(lua_State *L, TStatus status) {
 LUA_API int lua_resume(lua_State *L, lua_State *from, int nargs,
                        int *nresults) {
   TStatus status;
-  CallInfo *oldActiveCatch;
+  CatchInfo *oldActiveCatch;
   lua_lock(L);
   if (L->status == LUA_OK) {  /* may be starting a coroutine */
     if (L->ci != &L->base_ci) /* not in base level? */
@@ -1016,7 +1016,7 @@ static void closepaux(lua_State *L, void *ud) {
 TStatus luaD_closeprotected(lua_State *L, ptrdiff_t level, TStatus status) {
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
-  CallInfo *oldActiveCatch = L->activeCatch;
+  CatchInfo *oldActiveCatch = L->activeCatch;
   L->activeCatch = NULL; /* disable Lua catch during tbc close */
   for (;;) {             /* keep closing upvalues until no more errors */
     CCatchInfo cinfo;
@@ -1129,6 +1129,8 @@ static void f_parser(lua_State *L, void *ud) {
   luaD_inctop(L);
   lua_assert(cl->nupvalues == cl->p->sizeupvalues);
   luaF_initupvals(L, cl);
+  if (G(L)->stripdebug) /* opt-in: drop debug info from loaded chunks */
+    luaF_stripdebug(L, cl->p);
 }
 
 /*
@@ -1151,7 +1153,7 @@ TStatus luaD_protectedparser(lua_State *L, ZIO *z, const char *name,
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
   ptrdiff_t old_top = savestack(L, L->top.p);
-  CallInfo *oldActiveCatch = L->activeCatch;
+  CatchInfo *oldActiveCatch = L->activeCatch;
 
   incnny(L); /* cannot yield during parsing */
   p.z = z;

@@ -1,0 +1,134 @@
+---
+// @ts-ignore
+import icons from "virtual:lucide-icons"
+
+export interface NavLink {
+  href: string
+  title: string
+  icon?: string
+  /** highlight as the section the reader is in */
+  active: boolean
+  /** exactly this page (drives aria-current="page") */
+  current: boolean
+}
+
+export interface TocItem {
+  slug: string
+  text: string
+}
+
+export interface NavGroup {
+  key: string
+  label: string
+  links: NavLink[]
+}
+
+interface Props {
+  groups: NavGroup[]
+  /** current page h2 headings; rendered under the active link */
+  toc?: TocItem[]
+}
+
+const { groups, toc } = Astro.props
+---
+
+<div class="manual-nav">
+  {
+    groups.map(
+      (group) =>
+        group.links.length > 0 && (
+          <>
+            <span class="sidebar-label">{group.label}</span>
+            {group.links.map((link) => (
+              <>
+                <a
+                  class:list={["sidebar-link", { active: link.active }]}
+                  href={link.href}
+                  aria-current={
+                    link.current ? "page" : link.active ? "true" : undefined
+                  }
+                >
+                  {link.icon && icons[link.icon] && (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      {icons[link.icon].map(([tag, attrs]: any) => {
+                        const El = tag as any
+                        return <El {...attrs} />
+                      })}
+                    </svg>
+                  )}
+                  {link.title}
+                </a>
+                {link.current && toc && toc.length > 0 && (
+                  <ol class="sidebar-toc">
+                    {toc.map((item) => (
+                      <li>
+                        <a href={`#${item.slug}`}>{item.text}</a>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </>
+            ))}
+          </>
+        ),
+    )
+  }
+</div>
+
+<style>
+  @reference "../styles/global.css";
+
+  .manual-nav {
+    @apply flex flex-col gap-0.5;
+  }
+
+  .sidebar-label {
+    @apply font-mono text-xs uppercase tracking-widest text-ink/70 mb-1 mt-3 first:mt-0;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-1.5 px-2 py-1 -ml-2 no-underline text-ink/80 font-normal border-2 border-transparent hover:bg-accent-soft hover:text-ink;
+
+    &.active {
+      @apply bg-accent border-ink lus-shadow-sm font-bold text-ink;
+    }
+  }
+
+  /* in-page contents of the current chapter — instant jumps, no JS */
+  .sidebar-toc {
+    @apply list-none pl-3 my-1 space-y-0;
+
+    a {
+      @apply block font-mono text-xs font-normal no-underline text-ink/70 py-1 hover:bg-accent-soft hover:text-ink;
+    }
+  }
+
+  :global(html.unstable) {
+    .sidebar-label {
+      @apply text-ink-red/70;
+    }
+
+    .sidebar-link {
+      @apply text-ink-red/80 hover:bg-accent-soft-red hover:text-ink-red;
+
+      &.active {
+        @apply bg-accent-red border-ink-red lus-shadow-sm shadow-ink-red text-ink-red;
+      }
+    }
+
+    .sidebar-toc a {
+      @apply text-ink-red/70 hover:bg-accent-soft-red hover:text-ink-red;
+    }
+  }
+</style>

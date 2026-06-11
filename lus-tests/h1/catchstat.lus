@@ -468,4 +468,33 @@ tests:it("catch expression error handler", function()
     assert(string.find(val, "handled:"))
 end)
 
+-- Regression: catching an error thrown from a C function that grew a
+-- luaL_Buffer (registered as a to-be-closed box) must close that box, or the
+-- dangling tbc entry corrupts later operations (globals would read as nil).
+tests:it("catch of a large-buffer C error does not corrupt state", function()
+    local t = {}
+    for i = 1, 100000 do t[i] = "abcdefghij" end
+    t[100001] = {} -- non-string: table.concat errors after a big buffer
+    local ok = catch(table.concat(t))
+    assert(ok == false, "concat error should be caught")
+    -- if the tbc box was left dangling, this print/assert path would break:
+    assert(type(print) == "function", "globals must still resolve after catch")
+    assert(#t == 100001)
+end)
+
+-- Regression: to-be-closed variables in a catch body must be closed when the
+-- body errors and the error is caught.
+tests:it("to-be-closed variables are closed on caught error", function()
+    local closed = false
+    local function mk()
+        return setmetatable({}, {__close = function() closed = true end})
+    end
+    local ok = catch((function()
+        local x <close> = mk()
+        error("boom")
+    end)())
+    assert(ok == false, "error should be caught")
+    assert(closed == true, "__close must run during catch recovery")
+end)
+
 tests:finish()

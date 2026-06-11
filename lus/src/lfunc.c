@@ -283,6 +283,37 @@ lu_mem luaF_protosize(Proto *p) {
 }
 
 
+/*
+** Strip debug information (line info, local-variable info, upvalue
+** names, and the source name) from a loaded prototype and all its
+** nested prototypes; used by the opt-in strip-debug mode. The runtime
+** already tolerates prototypes without debug information (chunks
+** dumped with the strip option produce exactly that), so the only
+** observable effect is that error messages, tracebacks, and the debug
+** library lose source/line/name details. Fixed prototypes share their
+** arrays with an external buffer and are left untouched.
+*/
+void luaF_stripdebug(lua_State *L, Proto *f) {
+  int i;
+  if (f->flag & PF_FIXED)
+    return;
+  luaM_freearray(L, f->lineinfo, cast_sizet(f->sizelineinfo));
+  f->lineinfo = NULL;
+  f->sizelineinfo = 0;
+  luaM_freearray(L, f->abslineinfo, cast_sizet(f->sizeabslineinfo));
+  f->abslineinfo = NULL;
+  f->sizeabslineinfo = 0;
+  luaM_freearray(L, f->locvars, cast_sizet(f->sizelocvars));
+  f->locvars = NULL;
+  f->sizelocvars = 0;
+  for (i = 0; i < f->sizeupvalues; i++)
+    f->upvalues[i].name = NULL; /* names are GC strings; drop the refs */
+  f->source = NULL;
+  for (i = 0; i < f->sizep; i++)
+    luaF_stripdebug(L, f->p[i]);
+}
+
+
 void luaF_freeproto(lua_State *L, Proto *f) {
   if (!(f->flag & PF_FIXED)) {
     luaM_freearray(L, f->code, cast_sizet(f->sizecode));

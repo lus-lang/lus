@@ -2,22 +2,29 @@
 order: 1
 title: Introduction
 icon: book-open
+group: learn
+shortdesc: "What Lus is, the sovereignty thesis, and the project's dedication."
 ---
 
-import { Image } from "astro:assets"
-import Napoleon from "../assets/napoleon.jpg"
+import Dedication from "../components/Dedication.astro"
 
 Lus is a small, productive programming language designed to be picked up easily by programmers and put to good use right away.
 
-The language is [sovereign](/faq#sovereignty), meaning that you can use it for most tasks without having to depend on third-party libraries. The standard library should be fitted with everything that you need to develop competent programs; utilities common to networking, content transcoding, and data processing are built into the language.
+The language is [sovereign](#sovereignty), meaning that you can use it for most tasks without having to depend on third-party libraries. The standard library should be fitted with everything that you need to develop competent programs; utilities common to networking, content transcoding, and data processing are built into the language.
 
 ## Background
 
 Lus is a _superset_ of Lua that iterates on its minimalism and ease of use. Unlike other language supersets, it is a complete language with its own runtime; no transcompilation is involved and no dependence on the Lua runtime is required.
 
-This language was developed out of a need to bring Lua into the world of general-purpose programming. Lua focuses on embeddability first and runtime second, which has historically resulted in its limited standard library and programmer dependence on third-party packages for even the most basic of tasks. However, even as we depart from Lua's simple scope, we still wish to retain its consiceness.
+This language was developed out of a need to bring Lua into the world of general-purpose programming. Lua focuses on embeddability first and runtime second, which has historically meant a limited standard library and a reliance on third-party packages for even basic tasks. However, even as we depart from Lua's simple scope, we still wish to retain its conciseness.
 
 Lus is a personal project of [Louka Ménard Blondin](https://louka.sh) and is maintained on a best-effort basis.
+
+## Sovereignty
+
+_Language sovereignty_ is the agency a language expresses on three fronts: agency in its **implementation** (is the language limited by the environment it is embedded in?), agency in its **use** (do you need third-party libraries to do anything useful?), and agency in its **adoption** (does it take great mental effort to learn and use?).
+
+Lus optimizes for all three by offering a good, cross-platform standard library that covers real programs, combined with Lua's pretty simple, useable syntax.
 
 ## Goals
 
@@ -33,7 +40,7 @@ These are the design goals of Lus that drive the language's development.
 
 - **Minimalism.** Lus should retain Lua's ease of adoption, with concise and readable syntax involving the smallest possible number of keywords.
 
-- **Strong release enginering.** The language should have stable, well-tested releases and not be in a constant state of flux.
+- **Strong release engineering.** The language should have stable, well-tested releases and not be in a constant state of flux.
 
 - **Backwards _embeddability_.** Lua was engineered to be highly embeddable, and while we focus on the sovereignty of the runtime, we also want to preserve the ease of integration that we inherited.
 
@@ -49,10 +56,16 @@ The following are **non-goals** of Lus.
 
 - **Event loops (`async`/`await`).** Event loops are too often an overcomplicated solution to the problem of concurrency in GIL, single-threaded languages. Lus instead supplements the existing system of coroutines with multi-threaded state workers based on M:N hybrid threading and message-passing, which are entirely sufficient for most use cases, including I/O and networking.
 
-- **Bureaucracy.** Lus doesn't committee to approve changes to the language, does not have an organization to plan its development, and does not have a foundation to manage its funding. It is a single-repository project dedicated to the public domain and maintained with as little processes as possible. This is to the benefit of the language's quality, and not for the benefit of the author.
+- **Bureaucracy.** Lus doesn't committee to approve changes to the language, does not have an organization to plan its development, and does not have a foundation to manage its funding. It is a single-repository project dedicated to the public domain and maintained with as little processes as possible.
 
-## Dedication
+## Contributing
 
-This project is dedicated to Napoléon Bonaparte, Emperor of the French. Paraphrasing François-René de Chateaubriand's [Mémoires d’Outre-Tombe](https://www.gutenberg.org/files/18864/18864-h/18864-h.htm): _"The world belongs to Bonaparte; the living Napoleon has been buried under the glory of the dead Napoleon."_ I aspire to achieve at least one thousandth of this man's greatness, and at most one hundredth.
+Contributions are welcome where they make the language better at what it already is, so bugfixes, optimizations, and test cases are appreciated. Feature requests are scrutinized and most likely declined, as design decisions stay with the author so the language remains coherent and moves quickly. Contributors should have a working knowledge of C, Lua, and Lus, and an understanding of how an interpreter and a garbage collector work.
 
-<Image src={Napoleon} alt="Napoléon Bonaparte" width={200} />
+LLM use is permitted, with conditions. Whoever operates the model must know Lus, have good knowledge of the languages that compose it, and carefully review everything that gets pushed. Everything pushed to the repository must receive extensive human investigation; blind pushes, where the author does not know the extent of the modification beyond the summary provided by their agent, are impermissible.
+
+<Dedication>
+
+This project is dedicated to Napoléon Bonaparte, Emperor of the French. Paraphrasing François-René de Chateaubriand's [Mémoires d’Outre-Tombe](https://www.gutenberg.org/files/18864/18864-h/18864-h.htm): _"The world belongs to Bonaparte; the living Napoleon has been buried under the glory of the dead Napoleon."_
+
+</Dedication>

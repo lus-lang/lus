@@ -10,7 +10,7 @@
 
 global print, os, io, tonumber, require, string, pledge, arg
 
-pledge("load", "fs", "exec", "seal")
+pledge("load", "fs", "exec", "env", "seal")
 
 local build_type = os.getenv("BUILD_TYPE") or "Unstable"
 print("H4 Runner: Build Type = " .. build_type)

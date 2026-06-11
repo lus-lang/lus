@@ -1,7 +1,9 @@
 ---
-order: 5
+order: 6
 title: Compiling Lus
 icon: hammer
+group: use
+shortdesc: "Build the interpreter, compiler, and library from source with Meson."
 ---
 
 Compiling Lus is a straightforward process. The build produces three artifacts: the `lus` interpreter, the `lusc` bytecode compiler, and `liblus` (a static library for embedding).
@@ -48,7 +50,7 @@ meson setup build
 meson compile -C build
 ```
 
-The `lus` interpreter and `lusc` compiler will be placed in the `build` directory. The `lusc` compiler precompiles Lus source files to bytecode. Precompiled files load faster but are not portable across architectures.
+The `lus` interpreter and `lusc` compiler will be placed in the `build` directory. The `lusc` compiler precompiles Lus source files to bytecode.
 
 ### Build types
 
@@ -97,13 +99,3 @@ gcc -o myapp myapp.c $(pkg-config --cflags --libs lus) -lm -lpthread
 ```
 
 See [C API error handling](/manual/guide#c-api-error-handling) in the Guide for details on using the C API.
-
-## Platform notes
-
-| Platform | Notes |
-|---|---|
-| Linux | Default target. Uses `dl` for dynamic loading. |
-| macOS | Uses `readline` for the REPL. |
-| FreeBSD, NetBSD, OpenBSD | Uses `libedit` instead of `readline`. |
-| Windows | Links `ws2_32` (Winsock) for networking. |
-| SunOS/Solaris | POSIX APIs with `dlopen`. |

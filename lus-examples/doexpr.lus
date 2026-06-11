@@ -1,5 +1,6 @@
 -- Do Expressions: Inline blocks that evaluate to a value via `provide`.
 -- playground: true
+-- cookbook: true
 -- unstable: true
 
 global print, math, pairs

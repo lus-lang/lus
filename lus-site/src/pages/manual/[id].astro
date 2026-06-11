@@ -1,6 +1,6 @@
 ---
 import ManualLayout from "../../components/ManualLayout.astro"
-import { getCollection, getEntry, render } from "astro:content"
+import { getCollection, render } from "astro:content"
 
 export async function getStaticPaths() {
   const manual = await getCollection("manual")
@@ -11,51 +11,111 @@ export async function getStaticPaths() {
 }
 
 const manual = await getCollection("manual")
-const page = await getEntry("manual", Astro.params.id!)!
+const { page } = Astro.props
 const rendered = await render(page)
 
-// Find the next acquis if this page is an acquis
-const acquis = manual
-  .filter((p) => p.data.acquis)
-  .toSorted((a, b) => a.data.order - b.data.order)
-const currentIndex = page.data.acquis
-  ? acquis.findIndex((p) => p.id === page.id)
-  : -1
-const nextAcquis =
-  currentIndex >= 0 && currentIndex < acquis.length - 1
-    ? acquis[currentIndex + 1]
-    : null
+// prev/next follows the sidebar's visible order: group rank first
+// (learn → use → reference), then frontmatter `order`; acquis pages have
+// no group and high orders, so they trail the reference group
+const rank: Record<string, number> = { learn: 0, use: 1, reference: 2 }
+const all = manual.toSorted(
+  (a, b) =>
+    (rank[a.data.group ?? "reference"] - rank[b.data.group ?? "reference"]) ||
+    a.data.order - b.data.order,
+)
+const index = all.findIndex((p) => p.id === page.id)
+const prev = index > 0 ? all[index - 1] : null
+const next = index >= 0 && index < all.length - 1 ? all[index + 1] : null
+
+// fold h2/h3 headings into a tree for the contents box
+interface TocEntry {
+  slug: string
+  text: string
+  children: { slug: string; text: string }[]
+}
+const headings = rendered.headings.filter((h) => h.depth >= 2 && h.depth <= 3)
+const toc: TocEntry[] = []
+for (const h of headings) {
+  if (h.depth === 2 || toc.length === 0) {
+    toc.push({ slug: h.slug, text: h.text, children: [] })
+  }
+  else {
+    toc[toc.length - 1].children.push({ slug: h.slug, text: h.text })
+  }
+}
+
+// h2-level outline for the sticky sidebar (survives scrolling, unlike
+// the collapsible contents box)
+const sidebarToc = rendered.headings
+  .filter((h) => h.depth === 2)
+  .map((h) => ({ slug: h.slug, text: h.text }))
 ---
 
-<ManualLayout title={page.data.title} unstable={page.data.draft}>
+<ManualLayout
+  title={page.data.title}
+  unstable={page.data.draft}
+  measure
+  toc={sidebarToc}
+>
+  {
+    page.data.acquis && (
+      <nav aria-label="Breadcrumb" class="crumb">
+        <a href="/manual/acquis">acquis</a> / {page.data.title}
+      </nav>
+    )
+  }
   <h1>{page.data.title}</h1>
   {
-    rendered.headings.length > 0 && (
-      <div class="toc">
-        {rendered.headings
-          .filter((heading) => heading.depth <= 2)
-          .map((heading, i) => (
-            <>
-              {i > 0 ? "· " : ""}
-              <a href={`#${heading.slug}`}>{heading.text}</a>
-            </>
+    headings.length > 2 && (
+      <details class="toc" open={headings.length <= 24}>
+        <summary>Contents ({headings.length})</summary>
+        <ol>
+          {toc.map((section) => (
+            <li class="toc-h2">
+              <a href={`#${section.slug}`}>{section.text}</a>
+              {section.children.length > 0 && (
+                <ol>
+                  {section.children.map((child) => (
+                    <li class="toc-h3">
+                      <a href={`#${child.slug}`}>{child.text}</a>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </li>
           ))}
-      </div>
+        </ol>
+      </details>
     )
   }
   {
     page.data.draft && (
       <div class="draft-notice">
-        This manual page contains unstable information and its contents may
-        change at any time.
+        This manual page documents the <a href="/manual/releases">unstable
+        channel</a> and its contents may change at any time.
       </div>
     )
   }
   <rendered.Content />
   {
-    nextAcquis && (
-      <nav class="next-acquis">
-        <a href={`/manual/${nextAcquis.id}`}>{nextAcquis.data.title} →</a>
+    (prev || next) && (
+      <nav class="pager" aria-label="Manual pages">
+        {prev ? (
+          <a rel="prev" href={`/manual/${prev.id}`} class="pager-link">
+            <span class="pager-label">← previous</span>
+            <span class="pager-title">{prev.data.title}</span>
+          </a>
+        ) : (
+          <span />
+        )}
+        {next ? (
+          <a rel="next" href={`/manual/${next.id}`} class="pager-link pager-right">
+            <span class="pager-label">next →</span>
+            <span class="pager-title">{next.data.title}</span>
+          </a>
+        ) : (
+          <span />
+        )}
       </nav>
     )
   }
@@ -64,34 +124,105 @@ const nextAcquis =
 <style>
   @reference "../../styles/global.css";
 
-  .draft-notice {
-    @apply bg-red-100 border border-red-300 text-red-800 px-4 py-2 mb-4 text-sm;
-  }
+  .crumb {
+    @apply font-mono text-xs uppercase tracking-widest text-ink/70;
 
-  .toc {
-    @apply text-lime-700 mb-4;
     a {
-      @apply font-normal no-underline hover:bg-lime-200 lowercase;
+      @apply font-normal no-underline text-link hover:bg-accent-soft;
     }
   }
 
-  .next-acquis {
-    @apply font-mono;
+  .draft-notice {
+    @apply border-2 border-ink-red bg-tint-red text-ink-red font-bold px-3 py-1.5 mb-3 text-sm lus-shadow-sm shadow-ink-red;
+
     a {
-      @apply text-lime-700 hover:text-lime-900 no-underline hover:bg-lime-200;
+      @apply text-link-red hover:bg-accent-soft-red;
+    }
+  }
+
+  .toc {
+    @apply border-2 border-ink bg-tint lus-shadow-sm px-3 py-1.5 mb-4;
+
+    summary {
+      @apply font-mono text-xs uppercase tracking-widest text-ink/70 cursor-pointer select-none py-1.5;
+    }
+
+    ol {
+      @apply list-none pl-0 mt-1 mb-1.5 sm:columns-2 xl:columns-3 gap-x-6 space-y-0;
+    }
+
+    ol ol {
+      @apply mt-0 mb-0 columns-1;
+    }
+
+    li {
+      @apply break-inside-avoid py-0.5;
+    }
+
+    .toc-h2 > a {
+      @apply font-bold;
+    }
+
+    .toc-h3 {
+      @apply pl-4;
+    }
+
+    a {
+      @apply text-link font-normal no-underline hover:bg-accent-soft;
+    }
+  }
+
+  .pager {
+    @apply grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 pt-4 border-t-2 border-ink/20;
+
+    .pager-link {
+      @apply flex flex-col gap-0.5 border-2 border-ink bg-paper lus-shadow-sm lus-press p-3 no-underline hover:bg-accent-soft;
+    }
+
+    .pager-right {
+      @apply sm:text-right;
+    }
+
+    .pager-label {
+      @apply font-mono text-xs uppercase tracking-widest text-ink/70;
+    }
+
+    .pager-title {
+      @apply font-bold text-ink;
     }
   }
 
   :global(html.unstable) {
+    .crumb a {
+      @apply text-link-red hover:bg-accent-soft-red;
+    }
+
     .toc {
-      @apply text-red-700;
+      @apply border-ink-red bg-tint-red shadow-ink-red;
+
+      summary {
+        @apply text-ink-red/70;
+      }
+
       a {
-        @apply hover:bg-red-200;
+        @apply text-link-red hover:bg-accent-soft-red;
       }
     }
 
-    .next-acquis a {
-      @apply text-red-700 hover:text-red-900 hover:bg-red-200;
+    .pager {
+      @apply border-ink-red/20;
+
+      .pager-link {
+        @apply border-ink-red shadow-ink-red hover:bg-accent-soft-red;
+      }
+
+      .pager-label {
+        @apply text-ink-red/70;
+      }
+
+      .pager-title {
+        @apply text-ink-red;
+      }
     }
   }
 </style>

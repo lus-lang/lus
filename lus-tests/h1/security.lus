@@ -1,0 +1,62 @@
+-- security.lus - Regression tests for the pre-release security/hardening pass.
+-- Each case pins a specific fix so the holes cannot silently reopen.
+
+global require, assert, string, pledge, io, os, tostring, error
+
+-- Self-confine: only the test tree is readable, only one env var, then seal.
+pledge("load")
+pledge("fs:read=./lus-tests/*")
+pledge("env=LUS_TEST_ALLOWED")
+pledge("seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("security")
+
+-- P0-8: a catch nested in the same frame as another must not leave a dangling
+-- active-catch that hijacks a later error via a stale longjmp.
+tests:it("nested catch then error is caught (no stale longjmp)", function()
+    local _ = catch(catch(1 + 1))
+    local ok, err = catch(error("boom"))
+    assert(ok == false, "the later error must be caught")
+    assert(string.find(tostring(err), "boom") ~= nil, "error object preserved")
+end)
+
+-- P0-9: slice bounds must be integers; a non-integer must error, not be read
+-- as raw union bits (type confusion).
+tests:it("slice rejects a non-integer index", function()
+    local ok = catch(({1, 2, 3})["x", 2])
+    assert(ok == false, "non-integer slice index must error")
+end)
+
+tests:it("slice with integer indices still works", function()
+    local t = {10, 20, 30, 40}
+    local s = t[2, 3]
+    assert(s[1] == 20 and s[2] == 30 and #s == 2)
+end)
+
+-- P0-1: io.open is gated by fs pledges (it used to bypass them entirely).
+tests:it("io.open within fs:read pledge works", function()
+    local f = io.open("./lus-tests/h1/security.lus", "r")
+    assert(f ~= nil, "reading a pledged path should work")
+    f:close()
+end)
+
+tests:it("io.open outside fs:read pledge is denied", function()
+    local ok = catch(io.open("/etc/hostname", "r"))
+    assert(ok == false, "reading outside the pledge must be denied")
+end)
+
+-- P0-4: '..' traversal cannot escape the pledged subtree, even to a file that
+-- exists (the check canonicalizes and fails closed).
+tests:it("'..' traversal cannot escape the pledge", function()
+    local ok = catch(io.open("./lus-tests/h1/../../lus/meson.build", "r"))
+    assert(ok == false, "..-escape to a real file outside the pledge must be denied")
+end)
+
+-- P1-1: os.getenv is gated by the env pledge.
+tests:it("os.getenv denied for an unpledged variable", function()
+    local ok = catch(os.getenv("LUS_TEST_SECRET"))
+    assert(ok == false, "unpledged env var must be denied")
+end)
+
+tests:finish()

@@ -1,0 +1,17 @@
+-- Record field access benchmark (OP_GETFIELD / OP_SETFIELD)
+
+global print, os, string
+
+local obj = {x = 1, y = 2, z = 0, w = 4}
+local N = 60000000
+local s = 0
+
+local t0 = os.clock()
+for i = 1, N do
+    s = s + obj.x + obj.y
+    obj.z = s
+end
+local elapsed = os.clock() - t0
+
+print(string.format("TIME %.4f", elapsed))
+print("CHECK " .. s)

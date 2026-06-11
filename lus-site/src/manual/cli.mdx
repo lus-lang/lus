@@ -1,0 +1,83 @@
+---
+order: 4
+title: CLI
+icon: terminal
+group: use
+shortdesc: "Every lus and lusc command-line option, plus the format subcommand."
+---
+
+## lus
+
+```
+lus [command] [options] [script [args]]
+```
+
+Two commands exist; `run` is implied when none is given.
+
+| Command  | Purpose                     |
+| -------- | --------------------------- |
+| `run`    | Run a Lus script (default). |
+| `format` | Format Lus source files.    |
+
+### Options
+
+| Option                   | Effect                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-e stat`                | Execute the string `stat`.                                                                                                                 |
+| `-i`                     | Enter interactive mode after executing `script`.                                                                                           |
+| `-l mod`                 | Require library `mod` into global `mod`.                                                                                                   |
+| `-l g=mod`               | Require library `mod` into global `g`.                                                                                                     |
+| `-v`                     | Show version information.                                                                                                                  |
+| `-E`                     | Ignore environment variables.                                                                                                              |
+| `-W`                     | Turn warnings on.                                                                                                                          |
+| `-Wpedantic`             | Turn on [pedantic warnings](/manual/acquis-14), which flag superseded Lua idioms.                                                          |
+| `-P perm`                | Grant a [permission](/manual/acquis-10) (e.g. `-Pfs:read`, `-Pnetwork`).                                                                   |
+| `--pledge perm`          | Same as `-P`.                                                                                                                              |
+| `--ast-graph file`       | Dump the [AST](/manual/acquis-12) to a `.dot` file (does not run the script).                                                              |
+| `--ast-json file`        | Dump the [AST](/manual/acquis-12) to a JSON file (does not run the script).                                                                |
+| `--standalone file`      | Create a [standalone executable](/manual/acquis-19) from the script.                                                                       |
+| `--include path[:alias]` | Include a file or directory in the standalone bundle.                                                                                      |
+| `--no-fastcall`          | Disable [fastcall](/manual/acquis-27) optimizations.                                                                                       |
+| `--readonly-env`         | Freeze `_ENV` after init (enables fast dispatch).                                                                                          |
+| `--gc-pause N`           | GC pause: the heap may grow to N% of its live size before a new collection cycle (default 250; lower trades CPU for lower peak memory).    |
+| `--strip-debug`          | Drop debug info (line numbers, local/upvalue names, source) from loaded code to save memory; tracebacks and the debug library lose detail. |
+| `--`                     | Stop handling options.                                                                                                                     |
+| `-`                      | Stop handling options and execute stdin.                                                                                                   |
+
+## lus format
+
+```
+lus format [options] [file ...]
+```
+
+With no `--write` or `--check`, formatted output is printed to stdout.
+
+| Option       | Effect                                        |
+| ------------ | --------------------------------------------- |
+| `--check`    | Check if files are formatted (exit 1 if not). |
+| `--write`    | Format files in-place.                        |
+| `--stdin`    | Read from stdin, write to stdout.             |
+| `--indent N` | Set indent width (default: 4).                |
+| `--help`     | Show help.                                    |
+
+## lusc
+
+The bytecode compiler ships as its own binary. It compiles `.lus` sources to bytecode loadable by the interpreter and `liblus`.
+
+```
+lusc [options] [filenames]
+```
+
+| Option          | Effect                                          |
+| --------------- | ----------------------------------------------- |
+| `-f`            | Emit [fastcall](/manual/acquis-27) opcodes.     |
+| `-l`            | List bytecode (use `-l -l` for a full listing). |
+| `-o name`       | Output to file `name` (default `luac.out`).     |
+| `-p`            | Parse only.                                     |
+| `-s`            | Strip debug information.                        |
+| `-v`            | Show version information.                       |
+| `--no-fastcall` | Disable fastcall opcodes (overrides `-f`).      |
+| `--`            | Stop handling options.                          |
+| `-`             | Stop handling options and process stdin.        |
+
+Building the binaries themselves is covered in [Compiling Lus](/manual/compiling).

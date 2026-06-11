@@ -10,6 +10,10 @@ interface Props {
 
 const { name, size = 16, class: className } = Astro.props
 const paths = icons[name]
+if (!paths)
+  throw new Error(
+    `Icon "${name}" is not in virtual:lucide-icons — add it to the needed set in astro.config.mjs`,
+  )
 ---
 
 {
@@ -25,6 +29,7 @@ const paths = icons[name]
       stroke-linecap="round"
       stroke-linejoin="round"
       class={className}
+      aria-hidden="true"
     >
       {paths.map(([tag, attrs]: any) => {
         const El = tag as any

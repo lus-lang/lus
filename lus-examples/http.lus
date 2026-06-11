@@ -1,5 +1,6 @@
 -- Simple HTTP server in Lus.
 -- playground: false
+-- cookbook: true
 
 global network, pledge, print
 

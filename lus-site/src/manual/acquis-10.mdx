@@ -234,12 +234,13 @@ coroutine.resume(level1)
 | `fs:write`     | Creating, modifying, deleting files                               |
 | `load`         | Loading code at runtime (`load`, `loadfile`, `dofile`, `require`) |
 | `exec`         | Running external commands (`os.execute`, `io.popen`)              |
+| `env`          | Reading environment variables (`os.getenv`)                       |
 | `network`      | All network operations                                            |
 | `network:tcp`  | TCP socket connections                                            |
 | `network:udp`  | UDP socket operations                                             |
 | `network:http` | HTTP/HTTPS requests                                               |
 
-> The `loadfile`, `dofile`, and `require` functions require both `fs:read` (to read the file) and `load` (to execute the code). The `load` function requires only `load`.
+> The `loadfile`, `dofile`, and `require` functions require both `fs:read` (to read the file) and `load` (to execute the code). The `load` function requires only `load`. Loading native modules (`package.loadlib`, `require` of C modules) also requires both. The `io` library is gated by the `fs` permissions: `io.open` and friends need `fs:read`/`fs:write` as appropriate, and `io.tmpfile` and `os.tmpname` need `fs:write`.
 
 ---
 

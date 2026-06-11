@@ -765,6 +765,15 @@ LUA_API void lua_createtable(lua_State *L, int narray, int nrec) {
   lua_unlock(L);
 }
 
+LUA_API void lua_compacttable(lua_State *L, int idx) {
+  TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttistable(o), "table expected");
+  luaH_compact(L, hvalue(o));
+  lua_unlock(L);
+}
+
 LUA_API int lua_getmetatable(lua_State *L, int objindex) {
   const TValue *obj;
   Table *mt;

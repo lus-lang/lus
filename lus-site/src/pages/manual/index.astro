@@ -1,10 +1,91 @@
 ---
-import Layout from "../../components/Layout.astro"
+import ManualLayout from "../../components/ManualLayout.astro"
 import { getCollection } from "astro:content"
+
+const manual = await getCollection("manual")
+
+interface HubRow {
+  href: string
+  title: string
+  shortdesc: string
+}
+
+const groups: { label: string; rows: HubRow[] }[] = [
+  { label: "Learn", rows: [] },
+  { label: "Use", rows: [] },
+  { label: "Reference", rows: [] },
+]
+const byKey: Record<string, HubRow[]> = {
+  learn: groups[0].rows,
+  use: groups[1].rows,
+  reference: groups[2].rows,
+}
+
+for (const page of manual
+  .filter((p) => !p.data.acquis && p.data.group)
+  .toSorted((a, b) => a.data.order - b.data.order)) {
+  byKey[page.data.group!].push({
+    href: `/manual/${page.id}`,
+    title: page.data.title,
+    shortdesc: page.data.shortdesc ?? "",
+  })
+}
+
+// the API references lead the group — they are the most-consulted pages
+byKey.reference.unshift(
+  {
+    href: "/manual/api",
+    title: "API",
+    shortdesc: "Every stdlib function and constant, filterable.",
+  },
+  {
+    href: "/manual/api/c",
+    title: "C API",
+    shortdesc: "The embedding interface: core, auxiliary, workers, permissions.",
+  },
+)
 ---
 
-<Layout title="Manual" redirect="/manual/introduction">
-  <main>
-    <section>Redirecting to the introduction...</section>
-  </main>
-</Layout>
+<ManualLayout title="Manual" measure>
+  <h1>Manual</h1>
+  <p>
+    Everything Lus ships is documented here. New to the language? Start with
+    <a href="/manual/getting-started">Getting Started</a>; coming from Lua,
+    read <a href="/manual/adapting">Coming from Lua</a> first.
+  </p>
+  {
+    groups.map((group) => (
+      <>
+        <h2>{group.label}</h2>
+        <div class="hub-rows">
+          {group.rows.map((row) => (
+            <a class="hub-row" href={row.href}>
+              <span class="hub-title">{row.title}</span>
+              <span class="hub-desc">{row.shortdesc}</span>
+            </a>
+          ))}
+        </div>
+      </>
+    ))
+  }
+</ManualLayout>
+
+<style>
+  @reference "../../styles/global.css";
+
+  .hub-rows {
+    @apply flex flex-col gap-2 mb-6;
+  }
+
+  .hub-row {
+    @apply flex flex-col sm:flex-row sm:items-baseline gap-x-4 gap-y-0.5 border-2 border-ink bg-paper lus-shadow-sm lus-press p-3 no-underline hover:bg-accent-soft;
+
+    .hub-title {
+      @apply font-bold text-ink shrink-0 min-w-36;
+    }
+
+    .hub-desc {
+      @apply text-sm text-ink/80 font-normal;
+    }
+  }
+</style>

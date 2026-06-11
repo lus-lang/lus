@@ -9,6 +9,7 @@
 
 #include "lprefix.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include "lua.h"
@@ -73,6 +74,25 @@ static void archive_pushresult(lua_State *L, const char *data, size_t len,
 }
 
 
+/*
+** Cap on decompressed output, to bound "decompression bombs" (a few KB of
+** input can expand to many GB, exhausting memory). Defaults to
+** ARCHIVE_DEFAULT_MAXOUT and is overridable per call via an optional trailing
+** max-bytes argument (<= 0 selects the default).
+*/
+#define ARCHIVE_DEFAULT_MAXOUT ((size_t)512 * 1024 * 1024)
+
+static size_t archive_maxout(lua_State *L, int idx) {
+  lua_Integer m = luaL_optinteger(L, idx, 0);
+  return (m > 0) ? (size_t)m : ARCHIVE_DEFAULT_MAXOUT;
+}
+
+static int archive_toobig(lua_State *L, size_t maxout) {
+  return luaL_error(L, "decompressed size exceeds limit (%I bytes)",
+                    (LUAI_UACINT)maxout);
+}
+
+
 /* ===================================================================
 ** Gzip (via zlib, windowBits = 15+16 for gzip wrapper)
 ** =================================================================== */
@@ -127,6 +147,10 @@ static int archive_gzip_decompress(lua_State *L) {
   int is_vec;
   archive_getinput(L, 1, &input, &input_len, &is_vec);
 
+  size_t maxout = archive_maxout(L, 2);
+  if (input_len > UINT_MAX)
+    return luaL_error(L, "gzip decompress: input too large");
+
   z_stream strm;
   memset(&strm, 0, sizeof(strm));
   /* windowBits 15+32 = auto-detect gzip/zlib */
@@ -153,6 +177,10 @@ static int archive_gzip_decompress(lua_State *L) {
       return luaL_error(L, "gzip decompress failed (%d)", ret);
     }
     luaL_addsize(&buf, chunk - strm.avail_out);
+    if (luaL_bufflen(&buf) > maxout) {
+      inflateEnd(&strm);
+      return archive_toobig(L, maxout);
+    }
   } while (ret != Z_STREAM_END);
 
   size_t total = strm.total_out;
@@ -226,6 +254,10 @@ static int archive_deflate_decompress(lua_State *L) {
   int is_vec;
   archive_getinput(L, 1, &input, &input_len, &is_vec);
 
+  size_t maxout = archive_maxout(L, 2);
+  if (input_len > UINT_MAX)
+    return luaL_error(L, "deflate decompress: input too large");
+
   z_stream strm;
   memset(&strm, 0, sizeof(strm));
   int ret = inflateInit2(&strm, -15);
@@ -251,6 +283,10 @@ static int archive_deflate_decompress(lua_State *L) {
       return luaL_error(L, "deflate decompress failed (%d)", ret);
     }
     luaL_addsize(&buf, chunk - strm.avail_out);
+    if (luaL_bufflen(&buf) > maxout) {
+      inflateEnd(&strm);
+      return archive_toobig(L, maxout);
+    }
   } while (ret != Z_STREAM_END);
 
   inflateEnd(&strm);
@@ -308,15 +344,20 @@ static int archive_zstd_decompress(lua_State *L) {
   int is_vec;
   archive_getinput(L, 1, &input, &input_len, &is_vec);
 
+  size_t maxout = archive_maxout(L, 2);
   unsigned long long frame_size = ZSTD_getFrameContentSize(input, input_len);
 
   if (frame_size == ZSTD_CONTENTSIZE_ERROR)
     return luaL_error(L, "zstd decompress: not valid zstd data");
 
   if (frame_size != ZSTD_CONTENTSIZE_UNKNOWN) {
-    /* Known size: single-shot decompress */
+    /* Known size: single-shot decompress. Validate the (attacker-controlled)
+    ** declared size against the cap BEFORE allocating it. */
     luaL_Buffer buf;
-    char *out = luaL_buffinitsize(L, &buf, (size_t)frame_size);
+    char *out;
+    if (frame_size > (unsigned long long)maxout)
+      return archive_toobig(L, maxout);
+    out = luaL_buffinitsize(L, &buf, (size_t)frame_size);
     size_t result = ZSTD_decompress(out, (size_t)frame_size, input, input_len);
     if (ZSTD_isError(result))
       return luaL_error(L, "zstd decompress failed: %s",
@@ -352,6 +393,10 @@ static int archive_zstd_decompress(lua_State *L) {
                           ZSTD_getErrorName(ret));
       }
       luaL_addsize(&buf, zout.pos);
+      if (luaL_bufflen(&buf) > maxout) {
+        ZSTD_freeDCtx(dctx);
+        return archive_toobig(L, maxout);
+      }
     }
     ZSTD_freeDCtx(dctx);
 
@@ -419,6 +464,8 @@ static int archive_brotli_decompress(lua_State *L) {
   int is_vec;
   archive_getinput(L, 1, &input, &input_len, &is_vec);
 
+  size_t maxout = archive_maxout(L, 2);
+
   /* Start with input_len*4 or minimum 256 */
   size_t out_cap = (input_len > 0) ? input_len * 4 : 256;
   if (out_cap < 256)
@@ -445,6 +492,10 @@ static int archive_brotli_decompress(lua_State *L) {
     if (result == BROTLI_DECODER_RESULT_ERROR) {
       BrotliDecoderDestroyInstance(state);
       return luaL_error(L, "brotli decompress failed");
+    }
+    if (luaL_bufflen(&buf) > maxout) {
+      BrotliDecoderDestroyInstance(state);
+      return archive_toobig(L, maxout);
     }
   } while (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
 
@@ -510,6 +561,7 @@ static int archive_lz4_decompress_impl(lua_State *L) {
   int is_vec;
   archive_getinput(L, 1, &input, &input_len, &is_vec);
 
+  size_t maxout = archive_maxout(L, 2);
   LZ4F_dctx *dctx;
   LZ4F_errorCode_t err = LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION);
   if (LZ4F_isError(err))
@@ -534,6 +586,10 @@ static int archive_lz4_decompress_impl(lua_State *L) {
       return luaL_error(L, "lz4 decompress failed: %s", LZ4F_getErrorName(ret));
     }
     luaL_addsize(&buf, dst_size);
+    if (luaL_bufflen(&buf) > maxout) {
+      LZ4F_freeDecompressionContext(dctx);
+      return archive_toobig(L, maxout);
+    }
     src += src_size;
     src_remaining -= src_size;
     if (ret == 0)

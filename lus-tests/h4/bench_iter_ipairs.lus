@@ -1,0 +1,22 @@
+-- ipairs iteration benchmark (OP_TFORCALL with the ipairs builtin)
+
+global print, os, string, ipairs
+
+local arr = {}
+for i = 1, 1000 do
+    arr[i] = i
+end
+
+local OUTER = 40000
+local s = 0
+
+local t0 = os.clock()
+for _ = 1, OUTER do
+    for _, v in ipairs(arr) do
+        s = s + v
+    end
+end
+local elapsed = os.clock() - t0
+
+print(string.format("TIME %.4f", elapsed))
+print("CHECK " .. s)

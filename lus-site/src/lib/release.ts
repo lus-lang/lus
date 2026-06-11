@@ -2,11 +2,13 @@ const GITHUB_REPO = "lus-lang/lus"
 
 export interface ReleaseLinks {
   windows?: string
+  windowsInstaller?: string
   macos?: string
   linuxGlibc?: string
   linuxMusl?: string
   wasmJs?: string
   wasmBinary?: string
+  checksums?: string
   sourceZip?: string
   sourceTarball?: string
 }
@@ -35,11 +37,13 @@ interface GitHubRelease {
 
 const ASSET_NAMES = {
   windows: "lus-windows.exe",
+  windowsInstaller: "lus-setup.exe",
   macos: "lus-macos",
   linuxGlibc: "lus-linux",
   linuxMusl: "lus-linux-musl",
-  wasmJs: "lus.js",
+  wasmJs: "lus.web.js",
   wasmBinary: "lus.wasm",
+  checksums: "SHA256SUMS",
 }
 
 function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
@@ -49,11 +53,13 @@ function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
 
   return {
     windows: assetMap.get(ASSET_NAMES.windows),
+    windowsInstaller: assetMap.get(ASSET_NAMES.windowsInstaller),
     macos: assetMap.get(ASSET_NAMES.macos),
     linuxGlibc: assetMap.get(ASSET_NAMES.linuxGlibc),
     linuxMusl: assetMap.get(ASSET_NAMES.linuxMusl),
     wasmJs: assetMap.get(ASSET_NAMES.wasmJs),
     wasmBinary: assetMap.get(ASSET_NAMES.wasmBinary),
+    checksums: assetMap.get(ASSET_NAMES.checksums),
     sourceZip: release.zipball_url,
     sourceTarball: release.tarball_url,
   }
@@ -63,27 +69,36 @@ function formatReleaseDate(isoDate: string): string {
   return isoDate.split("T")[0]
 }
 
-async function fetchGitHubReleases(): Promise<GitHubRelease[] | null> {
-  try {
-    const response = await fetch(
-      `https://api.github.com/repos/${GITHUB_REPO}/releases`,
-      {
-        headers: {
-          Accept: "application/vnd.github.v3+json",
-        },
-      }
-    )
+/*
+** One fetch per build: Layout renders on every page, so the release
+** lookup is memoized at module level.
+*/
+let releasesPromise: Promise<GitHubRelease[] | null> | undefined
 
-    if (!response.ok) {
-      console.error(`GitHub API error: ${response.status}`)
+function fetchGitHubReleases(): Promise<GitHubRelease[] | null> {
+  releasesPromise ??= (async () => {
+    try {
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPO}/releases`,
+        {
+          headers: {
+            Accept: "application/vnd.github.v3+json",
+          },
+        }
+      )
+
+      if (!response.ok) {
+        console.error(`GitHub API error: ${response.status}`)
+        return null
+      }
+
+      return response.json()
+    } catch (error) {
+      console.error("Failed to fetch GitHub releases:", error)
       return null
     }
-
-    return response.json()
-  } catch (error) {
-    console.error("Failed to fetch GitHub releases:", error)
-    return null
-  }
+  })()
+  return releasesPromise
 }
 
 export async function getLatestStableRelease(): Promise<ReleaseInfo | null> {

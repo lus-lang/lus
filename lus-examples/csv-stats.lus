@@ -1,0 +1,30 @@
+-- CSV Statistics: Parse CSV data and crunch it with the table library.
+-- playground: true
+-- unstable: true
+-- cookbook: true
+global fromcsv, table, tonumber, ipairs, pairs, print
+
+local csv = [[city,quarter,revenue
+Paris,Q1,1200
+Paris,Q2,1450
+London,Q1,980
+London,Q2,1330
+Berlin,Q1,1110
+Berlin,Q2,1080]]
+
+-- fromcsv returns rows of fields; row 1 is the header
+local rows = fromcsv(csv)
+local sales = {}
+for i = 2, #rows do
+    sales[#sales + 1] = {
+        city = rows[i][1],
+        revenue = tonumber(rows[i][3]),
+    }
+end
+
+local by_city = table.groupby(sales, function(s) return s.city end)
+
+for city, entries in pairs(by_city) do
+    local revenues = table.map(entries, function(s) return s.revenue end)
+    print(`$city: total $(table.sum(revenues)), mean $(table.mean(revenues))`)
+end

@@ -512,6 +512,13 @@ LUA_API int lus_issealed(lua_State *L) {
   return store ? store->sealed : 0;
 }
 
+/* Seal the state's pledge store, if any, so no further permission changes are
+** allowed. Used to lock down inherited worker pledges. */
+void luaP_sealpledges(lua_State *L) {
+  if (L->pledges != NULL)
+    L->pledges->sealed = 1;
+}
+
 LUA_API int lus_checkfsperm(lua_State *L, const char *perm, const char *path) {
   if (!lus_haspledge(L, perm, path)) {
     return luaL_error(L, "permission \"%s\" denied for '%s'", perm, path);

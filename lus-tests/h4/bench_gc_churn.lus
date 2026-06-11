@@ -1,0 +1,21 @@
+-- GC churn benchmark: short-lived table allocation; reports peak heap
+
+global print, os, string, collectgarbage
+
+local N = 15000000
+local peak = 0
+
+local t0 = os.clock()
+for i = 1, N do
+    local t = {i, i + 1, i + 2}
+    if (i & 0xFFFF) == 0 then
+        local c = collectgarbage("count")
+        if c > peak then
+            peak = c
+        end
+    end
+end
+local elapsed = os.clock() - t0
+
+print(string.format("TIME %.4f", elapsed))
+print(string.format("PEAK_KB %.0f", peak))

@@ -1,0 +1,30 @@
+-- Workers: Spawn an interpreter on the thread pool and stream results back.
+-- playground: false
+-- cookbook: true
+global worker, io, fs, pledge, print
+
+pledge("fs", "load", "seal")
+
+-- A worker runs a script file in its own interpreter state. For a
+-- self-contained example we write the worker's body out first.
+local body = [[
+global worker, ipairs
+local args = ...
+for _, n in ipairs(args.numbers) do
+    worker.message(n * n)
+end
+worker.message("done")
+]]
+local f = io.open("square-worker.lus", "w")
+f:write(body)
+f:close()
+
+-- Arguments are deep-copied into the worker's state.
+local w = worker.create("square-worker.lus", { numbers = { 1, 2, 3, 4, 5 } })
+
+while msg = worker.receive(w) do
+    if msg == "done" then break end
+    print(`square: $msg`)
+end
+
+fs.remove("square-worker.lus")

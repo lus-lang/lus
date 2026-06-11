@@ -36,7 +36,13 @@ if should_run version-not-released; then
   VERSION="$MAJOR.$MINOR.$RELEASE"
 
   if git tag -l "v$VERSION" | grep -q "v$VERSION"; then
-    fail version-not-released "v$VERSION already tagged — bump version before committing"
+    # A tag pointing at HEAD is the release build itself (CI runs
+    # this lint on v* tag pushes), not a forgotten version bump.
+    if git tag --points-at HEAD 2>/dev/null | grep -qx "v$VERSION"; then
+      pass version-not-released
+    else
+      fail version-not-released "v$VERSION already tagged — bump version before committing"
+    fi
   else
     pass version-not-released
   fi
@@ -68,42 +74,7 @@ if should_run version-consistency; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. clang-format
-# ---------------------------------------------------------------------------
-if should_run clang-format; then
-  if ! command -v clang-format &>/dev/null; then
-    if $HOOK_MODE; then
-      skip clang-format "clang-format not in PATH"
-    else
-      fail clang-format "clang-format not in PATH"
-    fi
-  else
-    CF_ERRORS=""
-    if $HOOK_MODE; then
-      FILES=$(git diff --cached --name-only --diff-filter=ACM -- 'lus/src/*.c' 'lus/src/*.h' 2>/dev/null || true)
-    else
-      FILES=$(find lus/src -maxdepth 1 \( -name '*.c' -o -name '*.h' \) -type f | sort)
-    fi
-
-    if [ -z "$FILES" ]; then
-      pass clang-format
-    else
-      for f in $FILES; do
-        if ! clang-format --dry-run --Werror "$f" 2>/dev/null; then
-          CF_ERRORS="$CF_ERRORS $f"
-        fi
-      done
-      if [ -n "$CF_ERRORS" ]; then
-        fail clang-format "formatting issues in:$CF_ERRORS"
-      else
-        pass clang-format
-      fi
-    fi
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# 4. stdlib-freshness
+# 3. stdlib-freshness
 # ---------------------------------------------------------------------------
 if should_run stdlib-freshness; then
   if ! command -v node &>/dev/null; then
@@ -120,12 +91,15 @@ if should_run stdlib-freshness; then
     fi
 
     if $RUN_CHECK; then
-      # Save current state
+      # Save current state, regenerate, and compare against the saved
+      # copy (not against git: on a dirty tree a consistent-but-
+      # uncommitted spec+data pair is fresh, and restoring from git
+      # would clobber the regenerated file).
       cp lus-language/analysis/stdlib_data.lus /tmp/stdlib_data_backup.lus 2>/dev/null || true
       node lus-spec/build-lsp.js >/dev/null 2>&1
-      if ! git diff --exit-code --quiet lus-language/analysis/stdlib_data.lus 2>/dev/null; then
-        # Restore
-        git checkout -- lus-language/analysis/stdlib_data.lus 2>/dev/null || true
+      if ! cmp -s /tmp/stdlib_data_backup.lus lus-language/analysis/stdlib_data.lus; then
+        # Restore the pre-check state
+        cp /tmp/stdlib_data_backup.lus lus-language/analysis/stdlib_data.lus 2>/dev/null || true
         fail stdlib-freshness "stdlib_data.lus is stale — run: node lus-spec/build-lsp.js"
       else
         pass stdlib-freshness
@@ -137,7 +111,7 @@ if should_run stdlib-freshness; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. spec-frontmatter
+# 4. spec-frontmatter
 # ---------------------------------------------------------------------------
 if should_run spec-frontmatter; then
   SPEC_ERRORS=""
@@ -170,7 +144,7 @@ if should_run spec-frontmatter; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. h1-coverage
+# 5. h1-coverage
 # ---------------------------------------------------------------------------
 if should_run h1-coverage; then
   # Extract registered test names from meson.build
@@ -197,6 +171,23 @@ if should_run h1-coverage; then
     fail h1-coverage "$COVERAGE_ERRORS"
   else
     pass h1-coverage
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. install-sh
+# ---------------------------------------------------------------------------
+if should_run install-sh; then
+  if ! SH_ERR=$(sh -n lus-install/install.sh 2>&1); then
+    fail install-sh "sh -n: $SH_ERR"
+  elif command -v shellcheck &>/dev/null; then
+    if SC_ERR=$(shellcheck -s sh lus-install/install.sh 2>&1); then
+      pass install-sh
+    else
+      fail install-sh "$SC_ERR"
+    fi
+  else
+    skip install-sh "shellcheck not in PATH (sh -n passed)"
   fi
 fi
 

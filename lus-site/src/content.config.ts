@@ -4,7 +4,7 @@ import { glob } from "astro/loaders"
 const news = defineCollection({
   schema: z.object({
     title: z.string(),
-    date: z.string(),
+    date: z.coerce.date(),
   }),
   loader: glob({ base: "./src/news/", pattern: "*.md" }),
 })
@@ -17,6 +17,7 @@ const manual = defineCollection({
     draft: z.boolean().optional(),
     icon: z.string().optional(),
     shortdesc: z.string().optional(),
+    group: z.enum(["learn", "use", "reference"]).optional(),
   }),
   loader: glob({ base: "./src/manual/", pattern: "*.mdx" }),
 })

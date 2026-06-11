@@ -1,5 +1,6 @@
 -- Catch Expression: Handle errors without pcall/xpcall boilerplate.
 -- playground: true
+-- cookbook: true
 
 global print, error, tonumber, type, pairs, tostring
 

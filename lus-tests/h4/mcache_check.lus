@@ -1,0 +1,108 @@
+-- Method-resolution cache correctness checks (not a benchmark; used
+-- during development and handy as a quick regression script).
+
+global print, setmetatable, assert
+
+local Class = {}
+Class.__index = Class
+function Class.new(n)
+    return setmetatable({n = n}, Class)
+end
+function Class:get()
+    return self.n
+end
+
+local a, b = Class.new(1), Class.new(2)
+for _ = 1, 100 do
+    assert(a:get() == 1 and b:get() == 2)
+end
+
+-- shadowing: instance field beats cached class method
+local c = Class.new(3)
+c.get = function()
+    return 99
+end
+assert(c:get() == 99 and a:get() == 1)
+
+-- method replacement: cache must see the live value
+for _ = 1, 50 do
+    a:get()
+end
+function Class:get()
+    return self.n + 1000
+end
+assert(a:get() == 1001)
+
+-- method deletion: falls back (and errors on call of nil)
+Class.get = nil
+local ok = catch a:get()
+assert(not ok)
+function Class:get()
+    return self.n
+end
+assert(a:get() == 1)
+
+-- __index REASSIGNMENT of an existing key (the killer case)
+local Other = {
+    get = function(self)
+        return -self.n
+    end,
+}
+for _ = 1, 50 do
+    assert(a:get() == 1)
+end
+Class.__index = Other
+assert(a:get() == -1, "stale cache after __index reassignment")
+Class.__index = Class
+assert(a:get() == 1)
+
+-- metatable swap
+local M2 = {
+    __index = {
+        get = function()
+            return 777
+        end,
+    },
+}
+for _ = 1, 50 do
+    a:get()
+end
+setmetatable(a, M2)
+assert(a:get() == 777)
+setmetatable(a, Class)
+assert(a:get() == 1)
+
+-- class rehash: force node-array growth after the cache is warm
+for _ = 1, 50 do
+    a:get()
+end
+for i = 1, 100 do
+    Class["pad_" .. i] = i
+end
+assert(a:get() == 1)
+
+-- 2-level inheritance (never cached, must stay correct)
+local Base = {}
+Base.__index = Base
+function Base:hello()
+    return "base"
+end
+local Mid = setmetatable({}, Base)
+Mid.__index = Mid
+local obj = setmetatable({}, Mid)
+for _ = 1, 100 do
+    assert(obj:hello() == "base")
+end
+
+-- __index function receivers always take the generic path
+local F = setmetatable({}, {
+    __index = function(_, k)
+        return k .. "?"
+    end,
+})
+assert(F.foo == "foo?")
+
+-- non-table receiver through OP_SELF (string methods)
+assert(("ab"):upper() == "AB")
+
+print("method cache OK")

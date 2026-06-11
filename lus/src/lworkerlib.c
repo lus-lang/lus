@@ -16,6 +16,7 @@
 #include "larena.h"
 #include "lauxlib.h"
 #include "lpledge.h"
+#include "lstate.h"
 #include "lua.h"
 #include "lualib.h"
 #include "lworkerlib.h"
@@ -296,7 +297,10 @@ static int deserialize_table(lua_State *L, DeserBuffer *b, int depth) {
     return 0;
   if (count < 0 || count > 10000000)
     return 0;
-  lua_createtable(L, 0, (int)count);
+  /* Do not presize the hash part from the (untrusted) declared count: a tiny
+  ** message can claim millions of entries and force a huge upfront alloc. Cap
+  ** the size hint; the table grows naturally as entries are actually read. */
+  lua_createtable(L, 0, count < 1024 ? (int)count : 1024);
   for (lua_Integer i = 0; i < count; i++) {
     if (!deserialize_value(L, b, depth + 1))
       return 0; /* key */
@@ -552,6 +556,23 @@ static void worker_run(WorkerState *w) {
   if (g_worker_setup) {
     g_worker_setup(w->parent, L);
   }
+
+  /* Inherit the parent's pledges, then seal them. A worker must run with the
+  ** SAME permissions as its parent (it needs them e.g. to load its own script
+  ** file and to do whatever I/O the parent allowed) but must not be able to
+  ** grant itself MORE -- otherwise spawning a worker would be a sandbox escape
+  ** (the fresh state starts with an unsealed, empty store the worker could
+  ** pledge() itself out of). The copy uses the worker's own allocator. The
+  ** parent configures its pledges before spawning workers, so its store is
+  ** stable to read here. */
+  if (w->parent != NULL) {
+    PledgeStore *inherited = luaP_copypledges(L, w->parent->pledges);
+    if (inherited != NULL) {
+      luaP_freepledges(L, L->pledges); /* drop the fresh granter-only store */
+      L->pledges = inherited;
+    }
+  }
+  luaP_sealpledges(L); /* worker cannot escalate its own pledges */
 
   /* Store worker state pointer in registry */
   lua_pushlightuserdata(L, w);

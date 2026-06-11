@@ -1,6 +1,7 @@
 ---
 import Layout from "../../components/Layout.astro"
-import { getCollection, getEntry, render } from "astro:content"
+import { getCollection, render } from "astro:content"
+import { fmtDate } from "../../lib/date"
 
 export async function getStaticPaths() {
   const news = await getCollection("news")
@@ -10,16 +11,22 @@ export async function getStaticPaths() {
   }))
 }
 
-const page = await getEntry("news", Astro.params.id!)!
+const { page } = Astro.props
 const rendered = await render(page)
 ---
 
-<Layout title={page.data.title}>
-  <main>
+<Layout
+  title={page.data.title}
+  description={`Release notes for ${page.data.title}, published ${fmtDate(page.data.date)}.`}
+>
+  <main id="main">
     <section>
       <a href="/news" class="back-link">← Back to news</a>
       <article>
-        <p class="date">{page.data.date}</p>
+        <h1>{page.data.title}</h1>
+        <p class="date">
+          <time datetime={fmtDate(page.data.date)}>{fmtDate(page.data.date)}</time>
+        </p>
         <rendered.Content />
       </article>
     </section>
@@ -30,17 +37,14 @@ const rendered = await render(page)
   @reference "../../styles/global.css";
 
   .back-link {
-    @apply text-sm text-lime-600 font-normal no-underline hover:underline mb-4 inline-block;
+    @apply text-sm text-link font-normal no-underline hover:bg-accent-soft mb-3 inline-block;
   }
 
   article {
-    @apply space-y-4;
-    .date {
-      @apply text-sm text-lime-800;
-    }
-  }
+    @apply space-y-2 max-w-[80ch];
 
-  article :global(h1) {
-    @apply text-3xl font-bold text-lime-800 tracking-tight pb-4;
+    .date {
+      @apply text-sm text-ink/70 font-mono;
+    }
   }
 </style>

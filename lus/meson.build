@@ -33,7 +33,12 @@ if system == 'linux'
   lus_deps += dl_dep
 elif system == 'darwin'
   lus_c_args += ['-DLUA_USE_MACOSX', '-DLUA_USE_READLINE', '-DLUS_PLATFORM_DARWIN']
-  readline_dep = cc.find_library('readline', required: true)
+  # ld resolves -lreadline to the SDK's libreadline.tbd, a stub for
+  # system libedit. Linked by flag rather than find_library: no
+  # libreadline.a or .dylib exists on disk (only the .tbd), so the
+  # filesystem search find_library does under --prefer-static (or any
+  # explicit static: kwarg) cannot see it.
+  readline_dep = declare_dependency(link_args: '-lreadline')
   lus_deps += readline_dep
 elif system == 'freebsd'
   lus_c_args += ['-DLUA_USE_LINUX', '-DLUA_USE_READLINE', '-DLUS_PLATFORM_FREEBSD']
@@ -227,10 +232,14 @@ h1_tests = [
   'h1/cloning',
   'h1/archive',
   'h1/pledge',
+  'h1/security',
   'h1/runtime-attrs',
   'h1/doexpr',
   'h1/interp',
   'h1/fastcall',
+  'h1/traceback',
+  'h1/userdata',
+  'h1/varinfo',
   'h1/lsp-unit',
   'h1/lsp-integration',
   'h1/lsp-lint-h1',
@@ -299,6 +308,14 @@ test('h4/fastcall', lus_exe,
   args: ['lus-tests/h4/runner_fastcall.lus'],
   workdir: meson.project_source_root() / '..',
   suite: 'h4',
+  timeout: 600,
+)
+
+test('h4/micro', lus_exe,
+  args: ['lus-tests/h4/runner_micro.lus'],
+  workdir: meson.project_source_root() / '..',
+  suite: 'h4',
+  env: ['BUILD_TYPE=Unstable'],
   timeout: 600,
 )
 

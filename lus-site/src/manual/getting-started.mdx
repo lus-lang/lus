@@ -1,0 +1,58 @@
+---
+order: 2
+title: Getting Started
+icon: rocket
+group: learn
+shortdesc: "Install the binary and run your first program in five minutes."
+---
+
+import InstallBlocks from "../components/InstallBlocks.astro"
+
+This page takes you from install to your first running program.
+
+## Install automatically
+
+On Linux and macOS, run this command in your favorite terminal emulator:
+
+```bash
+curl -fsSL https://lus.dev/install.sh | sh
+```
+
+On Windows, download and run **[lus-setup.exe](https://github.com/lus-lang/lus/releases/latest/download/lus-setup.exe)**, then follow the prompts.
+
+On platforms without prebuilt binaries (the BSDs, illumos, Intel Macs), build from source with [Compiling Lus](/manual/compiling).
+
+## Install manually
+
+If you'd rather fetch the binary yourself:
+
+<InstallBlocks />
+
+Downloads can be checked against the release's `SHA256SUMS`, please see [Verifying a download](/manual/releases#verifying-a-download).
+
+## Hello, Lus
+
+Create a file named `hello.lus`:
+
+```lus
+global print
+
+local name = "Lus"
+print(`Hello, $name!`)
+```
+
+Run it:
+
+```bash
+lus hello.lus
+```
+
+## Where next
+
+- [Guide to Lus](/manual/guide) — the comprehensive language reference.
+- [Coming from Lua](/manual/adapting) — what changed, what was removed, and how `-Wpedantic` helps you port code.
+- [Examples](/examples) — short, idiomatic programs you can run or open in the playground.
+- [CLI](/manual/cli) — every interpreter and compiler option, plus `lus format`.
+- [IDE Setup](/manual/ide-setup) — editor support for VSCode, Neovim, Helix, Sublime, and Emacs.
+- [API reference](/manual/api) — every function in the standard library and C API.
+- [Playground](/playground) — run Lus in your browser without installing anything.

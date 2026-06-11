@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "lauxlib.h"
+#include "lglob.h"
 #include "lmem.h"
 #include "lpledge.h"
 #include "lua.h"
@@ -1719,22 +1720,16 @@ static void network_granter(lua_State *L, lus_PledgeRequest *p) {
       return;
     }
 
-    /* Iterate stored values and check for match */
+    /* Iterate stored values and check for a host-anchored match.
+    ** lus_glob_match_url matches the pattern against the URL/host:port's
+    ** *host* (a scheme-less pattern like "example.com" matches only that
+    ** host; "*.example.com" matches sub-domains). This replaces the old raw
+    ** byte-prefix match, under which "example.com*" also matched
+    ** "example.com.attacker.test" -- a network allowlist bypass. */
     while (lus_nextpledge(L, p)) {
-      if (p->current) {
-        /* Exact match */
-        if (strcmp(p->current, value) == 0) {
-          lus_setpledge(L, p, p->sub, NULL);
-          return;
-        }
-        /* Wildcard prefix match */
-        size_t plen = strlen(p->current);
-        if (plen > 0 && p->current[plen - 1] == '*') {
-          if (strncmp(p->current, value, plen - 1) == 0) {
-            lus_setpledge(L, p, p->sub, NULL);
-            return;
-          }
-        }
+      if (p->current && lus_glob_match_url(p->current, value)) {
+        lus_setpledge(L, p, p->sub, NULL);
+        return;
       }
     }
     /* No match = not processed = denied */

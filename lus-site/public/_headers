@@ -2,3 +2,7 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+# The installer script must read as plain text in browsers and curl
+/install.sh
+  Content-Type: text/x-shellscript; charset=utf-8

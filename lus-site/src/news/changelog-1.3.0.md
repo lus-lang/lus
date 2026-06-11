@@ -1,9 +1,7 @@
 ---
 title: Lus 1.3.0
-date: 01-16-2026
+date: 2026-01-16
 ---
-
-# 1.3.0
 
 - Added scoped assignments in `while` loops.
 - OpenBSD-inspired `pledge` mechanism to declare and restrict permissions.

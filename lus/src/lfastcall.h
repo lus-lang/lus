@@ -12,12 +12,21 @@
 /* Forward declaration (defined in lstate.h) */
 typedef struct global_State global_State;
 
-typedef struct FastCallEntry {
-  TString *module_name;    /* "math", "string", or NULL for base lib */
-  TString *func_name;      /* "max", "type", etc. */
-  lua_CFunction orig_func; /* original C function pointer (set at lib open) */
-  int nargs;               /* expected argument count */
-} FastCallEntry;
+/*
+** Static description of a fastcall entry: function name, module, and
+** expected argument count. This data is identical in every state, so
+** it lives in one process-wide read-only table ('luaF_fc_defs');
+** states only carry the interned name strings (the parser matches by
+** pointer identity) and a per-entry readiness flag (see lstate.h).
+*/
+typedef struct FCDef {
+  const char *func;   /* function name */
+  lu_byte module_idx; /* index into global_State.fc_modules */
+  lu_byte nargs;      /* expected argument count */
+} FCDef;
+
+/* number of named modules with fastcall entries (index 0 = base lib) */
+#define FC_NMODULES 5
 
 enum FastCallId {
   FC_TYPE,
@@ -79,6 +88,19 @@ enum FastCallId {
   FC_UTF8_OFFSET,
   FC_COUNT
 };
+
+/* process-wide read-only fastcall definitions (one per FastCallId) */
+LUAI_DDEC(const FCDef luaF_fc_defs[];)
+
+/*
+** Original C function for each entry. Written once at library open and
+** identical in every state of the process (library functions have fixed
+** addresses), so it is shared rather than stored per state. The VM
+** re-validates the actually-called function against this pointer on
+** every fastcall, so a host that registers a different function in some
+** state simply falls back to a regular call there.
+*/
+LUAI_DDEC(lua_CFunction luaF_fc_origs[];)
 
 LUAI_FUNC int luaV_dofastcall(lua_State *L, int fc_id, StkId ra);
 LUAI_FUNC void luaF_initfastcalls(lua_State *L);

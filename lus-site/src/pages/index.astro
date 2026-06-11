@@ -2,200 +2,274 @@
 import { getCollection } from "astro:content"
 
 import Layout from "../components/Layout.astro"
+import Button from "../components/Button.astro"
 import Card from "../components/Card.astro"
-import ReleaseCard from "../components/ReleaseCard.astro"
+import ReleaseStrip from "../components/ReleaseStrip.astro"
 import Icon from "../components/Icon.astro"
 
-import { getAllReleases } from "../lib/release"
+import { INSTALL_SH, WINDOWS_INSTALLER_URL } from "../lib/install"
+import { fmtDate } from "../lib/date"
 
-const { stable, unstable } = await getAllReleases()
 const allNews = await getCollection("news")
 const news = allNews
-  .toSorted(
-    (a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime(),
-  )
+  .toSorted((a, b) => b.data.date.getTime() - a.data.date.getTime())
   .slice(0, 5)
+
+// deep-links into the generated API reference (section ids are slugs of
+// the section titles in lib/api.ts)
+const stdlibMap = [
+  {
+    name: "base",
+    desc: "core globals · JSON · CSV",
+    href: "/manual/api#environment-functions",
+  },
+  {
+    name: "string",
+    desc: "patterns, formatting",
+    href: "/manual/api#string-library",
+  },
+  {
+    name: "table",
+    desc: "manipulation, clone, sort",
+    href: "/manual/api#table-library",
+  },
+  { name: "math", desc: "numerics", href: "/manual/api#math-library" },
+  {
+    name: "fs",
+    desc: "filesystem & paths",
+    href: "/manual/api#filesystem-library",
+  },
+  {
+    name: "network",
+    desc: "HTTP, TCP, UDP",
+    href: "/manual/api#network-library",
+  },
+  {
+    name: "worker",
+    desc: "threads & messages",
+    href: "/manual/api#worker-library",
+  },
+  {
+    name: "vector",
+    desc: "mutable byte buffers",
+    href: "/manual/api#vector-library",
+  },
+  {
+    name: "vector.archive",
+    desc: "gzip, zstd, brotli, lz4",
+    href: "/manual/api#archive-library",
+  },
+  { name: "io", desc: "streams & files", href: "/manual/api#io-library" },
+  { name: "os", desc: "environment, time", href: "/manual/api#os-library" },
+  { name: "utf8", desc: "Unicode helpers", href: "/manual/api#utf-8-library" },
+  {
+    name: "coroutine",
+    desc: "cooperative threads",
+    href: "/manual/api#coroutine-library",
+  },
+  {
+    name: "debug",
+    desc: "introspection, AST",
+    href: "/manual/api#debug-library",
+  },
+  {
+    name: "package",
+    desc: "module loading",
+    href: "/manual/api#package-library",
+  },
+  { name: "C API", desc: "embedding interface", href: "/manual/api/c" },
+]
 ---
 
 <Layout>
-  <main>
-    <div class="bento">
-      <div class="bento-hero">
-        <Card class="h-full">
-          <h2 slot="title">A simple, straightforward language.</h2>
-          <p>
-            You've reached the website of <b>Lus</b>, a small, fast, and
-            reliable programming language that is <a href="/faq#sovereignty"
-              >sovereign</a
-            >. Check out the <a href="/manual">manual</a> to learn more about the
-            language and how to get started.
+  <main id="main">
+    <section class="hero">
+      <div class="hero-grid">
+        <div class="hero-pitch">
+          <h1 class="hero-title">A sovereign scripting language.</h1>
+          <p class="hero-sub">
+            Lus is a small, productive programming language designed to be
+            picked up easily by programmers and put to good use right away.
           </p>
-        </Card>
-      </div>
-
-      <div class="bento-tryit">
-        <Card variant="feature" class="h-full">
-          <h2 slot="title">
-            <Icon name="terminal" size={16} class="inline-block" />
-            <a href="/playground">playground</a>
-          </h2>
-          <p>Write and run Lus code directly in your browser.</p>
-        </Card>
-      </div>
-
-      <div class="bento-learn">
-        <Card variant="feature" class="h-full">
-          <h2 slot="title">
-            <Icon name="book-open" size={16} class="inline-block" />
-            <a href="/manual">manual</a>
-          </h2>
-          <p>Read the language manual and API reference.</p>
-        </Card>
-      </div>
-
-      <div class="bento-stable">
-        {
-          stable ? (
-            <ReleaseCard
-              name="Stable"
-              version={stable.version}
-              releaseDate={stable.releaseDate}
-              links={stable.links}
-              color="lime"
-            >
-              This is the latest stable release of Lus and is recommended for
-              most users.
-            </ReleaseCard>
-          ) : (
-            <Card color="lime" class="flex-1">
-              <h2 slot="title">Stable</h2>
-              <p>No stable release available yet.</p>
-            </Card>
-          )
-        }
-      </div>
-
-      <div class="bento-unstable">
-        {
-          unstable ? (
-            <ReleaseCard
-              name="Unstable"
-              version={unstable.version}
-              releaseDate={unstable.releaseDate}
-              links={unstable.links}
-              color="red"
-            >
-              These builds are available for testing and previewing new
-              features.
-            </ReleaseCard>
-          ) : (
-            <Card color="red" class="flex-1">
-              <h2 slot="title">Unstable</h2>
-              <p>No unstable release available yet.</p>
-            </Card>
-          )
-        }
-      </div>
-
-      <div class="bento-news">
-        <Card variant="feature" class="h-full flex flex-col">
-          <h2 slot="title">
-            <Icon name="newspaper" size={16} class="inline-block" /> news
-          </h2>
-          <ul>
-            {
-              news.map((item) => (
-                <li>
-                  <span class="news-date">{item.data.date}</span>
-                  <a href={`/news/${item.id}`}>{item.data.title}</a>
-                </li>
-              ))
-            }
-          </ul>
-          <div slot="footer" class="px-4 pb-3 mt-auto">
-            <a href="/news" class="text-sm">All news →</a>
+          <div class="hero-install">
+            <div class="hero-install-meta">
+              <span id="install-platform">linux x64</span>
+              <a href="/manual/getting-started">other platforms</a>
+              <a href="/manual/compiling">build from source</a>
+            </div>
+            <pre id="install-shell"><code>{INSTALL_SH}</code></pre>
+            <p id="install-windows" hidden>
+              <a class="install-win-btn" href={WINDOWS_INSTALLER_URL}>
+                <Icon name="download" size={16} /> Download lus-setup.exe
+              </a>
+            </p>
           </div>
-        </Card>
+          <div class="hero-ctas">
+            <Button href="/manual/getting-started">
+              Get started <Icon name="arrow-right" size={16} />
+            </Button>
+            <Button variant="outline" href="/playground">
+              <Icon name="terminal" size={16} /> Open the playground
+            </Button>
+          </div>
+        </div>
+
+        <aside class="hero-news">
+          <Card variant="default" class="flex flex-col">
+            <h2 slot="title">
+              <Icon name="newspaper" size={16} class="inline-block" /> news
+            </h2>
+            <ul class="news-list">
+              {
+                news.map((item) => (
+                  <li>
+                    <time class="news-date" datetime={fmtDate(item.data.date)}>
+                      {fmtDate(item.data.date)}
+                    </time>
+                    <a href={`/news/${item.id}`}>{item.data.title}</a>
+                  </li>
+                ))
+              }
+            </ul>
+            <div slot="footer" class="px-3 pb-2 mt-auto">
+              <a href="/news" class="text-sm">All news →</a>
+            </div>
+          </Card>
+        </aside>
       </div>
-    </div>
+    </section>
+
+    <section>
+      <h2>What's in Lus?</h2>
+      <nav class="stdlib-map" aria-label="Standard library modules">
+        {
+          stdlibMap.map((mod) => (
+            <a href={mod.href}>
+              <span class="mod-name">{mod.name}</span>
+              <span class="mod-desc">{mod.desc}</span>
+            </a>
+          ))
+        }
+      </nav>
+    </section>
+
+    <section>
+      <h2>Releases</h2>
+      <ReleaseStrip />
+      <p class="release-note">
+        Stable is for production; unstable is the latest features, continuously
+        published. <a href="/manual/releases">About the channels.</a>
+      </p>
+    </section>
   </main>
 </Layout>
+
+<script is:inline>
+  // adjust the server-rendered linux install for the visitor's platform:
+  // macOS shares the same curl|sh line (label change only), Windows swaps
+  // the shell line for the installer download; no-JS readers keep the
+  // linux default plus the "other platforms" link
+  const plat = (
+    navigator.userAgentData?.platform ??
+    navigator.platform ??
+    ""
+  ).toLowerCase()
+  if (plat.includes("mac")) {
+    document.getElementById("install-platform").textContent =
+      "macos (apple silicon)"
+  } else if (plat.includes("win")) {
+    document.getElementById("install-platform").textContent = "windows x64"
+    document.getElementById("install-shell").hidden = true
+    document.getElementById("install-windows").hidden = false
+  }
+</script>
 
 <style>
   @reference "../styles/global.css";
 
-  .bento {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "hero"
-      "tryit"
-      "learn"
-      "stable"
-      "unstable"
-      "news";
-  }
+  .hero {
+    .hero-grid {
+      @apply flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_minmax(280px,340px)] lg:gap-x-8 lg:items-start;
+    }
 
-  @media (min-width: 768px) {
-    .bento {
-      grid-template-columns: 1fr 1fr;
-      grid-template-areas:
-        "hero    tryit"
-        "stable  learn"
-        "unstable news"
-        "news    news";
+    .hero-title {
+      @apply text-4xl sm:text-5xl font-extrabold tracking-tighter max-w-3xl text-balance;
+    }
+
+    .hero-sub {
+      @apply text-lg md:text-xl text-ink/80 max-w-2xl mt-3;
+    }
+
+    .hero-install {
+      @apply max-w-2xl mt-3;
+
+      .hero-install-meta {
+        @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs mb-1;
+
+        #install-platform {
+          @apply font-bold uppercase bg-accent-soft text-ink px-1.5 py-0.5;
+        }
+
+        a {
+          @apply font-normal no-underline text-link hover:bg-accent-soft;
+        }
+      }
+
+      pre {
+        @apply my-0;
+
+        code {
+          @apply text-[13px];
+        }
+      }
+
+      #install-windows {
+        @apply my-0;
+
+        .install-win-btn {
+          @apply inline-flex items-center gap-2 border-2 border-ink bg-accent text-ink font-bold no-underline px-3 py-1.5 lus-shadow-sm lus-press;
+        }
+      }
+    }
+
+    .hero-ctas {
+      @apply flex flex-wrap gap-3 mt-4;
+    }
+
+    .news-list {
+      @apply list-none pl-0 space-y-1.5;
+
+      li {
+        @apply flex items-baseline gap-3;
+      }
+
+      .news-date {
+        @apply text-xs text-ink/70 font-mono shrink-0;
+      }
+
+      a {
+        @apply font-normal;
+      }
     }
   }
 
-  @media (min-width: 1024px) {
-    .bento {
-      grid-template-columns: 1fr 1fr 1fr 1fr;
-      grid-template-areas:
-        "hero     hero     tryit  learn"
-        "stable   unstable news   news";
-    }
-  }
-
-  .bento-hero {
-    grid-area: hero;
-  }
-  .bento-tryit {
-    grid-area: tryit;
-  }
-  .bento-learn {
-    grid-area: learn;
-  }
-  .bento-stable {
-    grid-area: stable;
-  }
-  .bento-unstable {
-    grid-area: unstable;
-  }
-  .bento-news {
-    grid-area: news;
-  }
-
-  .bento-stable,
-  .bento-unstable {
-    :global(.card) {
-      @apply h-full;
-    }
-  }
-
-  ul {
-    @apply list-none p-0 px-4 space-y-1;
-  }
-
-  li {
-    @apply flex gap-3 items-baseline text-sm;
-
-    .news-date {
-      @apply text-xs text-lime-600 font-mono shrink-0;
-    }
+  .stdlib-map {
+    @apply grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2;
 
     a {
-      @apply font-normal text-lime-800 no-underline hover:underline;
+      @apply flex flex-col gap-0.5 border-2 border-ink bg-paper lus-shadow-sm lus-press p-2 no-underline hover:bg-accent-soft;
+
+      .mod-name {
+        @apply font-mono font-bold text-sm text-ink;
+      }
+
+      .mod-desc {
+        @apply text-xs text-ink/70 font-normal;
+      }
     }
+  }
+
+  .release-note {
+    @apply text-sm text-ink/80;
   }
 </style>

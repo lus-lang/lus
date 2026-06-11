@@ -237,8 +237,26 @@ static LStream *newfile(lua_State *L) {
   return p;
 }
 
+/*
+** Enforce filesystem pledges for opening 'filename' with 'mode'. A readable
+** mode ('r' or any update '+') requires fs:read; a writable mode ('w'/'a' or
+** '+') requires fs:write. This gates the classic io.* API the same way
+** lfslib gates fs.*, so io.open cannot bypass the filesystem sandbox.
+** Each lus_checkfsperm raises on denial.
+*/
+static void io_checkfsperm(lua_State *L, const char *filename,
+                           const char *mode) {
+  if (strchr(mode, 'r') != NULL || strchr(mode, '+') != NULL)
+    lus_checkfsperm(L, "fs:read", filename);
+  if (strchr(mode, 'w') != NULL || strchr(mode, 'a') != NULL ||
+      strchr(mode, '+') != NULL)
+    lus_checkfsperm(L, "fs:write", filename);
+}
+
 static void opencheck(lua_State *L, const char *fname, const char *mode) {
-  LStream *p = newfile(L);
+  LStream *p;
+  io_checkfsperm(L, fname, mode);
+  p = newfile(L);
   p->f = fopen(fname, mode);
   if (l_unlikely(p->f == NULL))
     luaL_error(L, "cannot open file '%s' (%s)", fname, strerror(errno));
@@ -247,9 +265,11 @@ static void opencheck(lua_State *L, const char *fname, const char *mode) {
 static int io_open(lua_State *L) {
   const char *filename = luaL_checkstring(L, 1);
   const char *mode = luaL_optstring(L, 2, "r");
-  LStream *p = newfile(L);
+  LStream *p;
   const char *md = mode; /* to traverse/check mode */
   luaL_argcheck(L, l_checkmode(md), 2, "invalid mode");
+  io_checkfsperm(L, filename, mode);
+  p = newfile(L);
   errno = 0;
   p->f = fopen(filename, mode);
   return (p->f == NULL) ? luaL_fileresult(L, 0, filename) : 1;
@@ -282,7 +302,11 @@ static int io_popen(lua_State *L) {
 }
 
 static int io_tmpfile(lua_State *L) {
-  LStream *p = newfile(L);
+  LStream *p;
+  /* tmpfile() creates a file in the system temp dir; gate as a write. */
+  if (!lus_haspledge(L, "fs:write", NULL))
+    return luaL_error(L, "permission \"fs:write\" denied for io.tmpfile");
+  p = newfile(L);
   errno = 0;
   p->f = tmpfile();
   return (p->f == NULL) ? luaL_fileresult(L, 0, NULL) : 1;

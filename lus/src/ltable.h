@@ -88,7 +88,12 @@
 #define HNOTFOUND 1
 #define HNOTATABLE 2
 #define HREADONLY 3
-#define HFIRSTNODE 3
+/* Base of the hash-node encoding returned by 'luaH_pset*'. It MUST be greater
+** than every other H* signal above: HREADONLY (a Lus addition) previously
+** shared the value 3 with HFIRSTNODE, so a key landing in hash node 0 encoded
+** as 3 and was mis-read by luaV_finishset as "readonly table" (intermittently,
+** depending on the hash seed). Keep these distinct. */
+#define HFIRSTNODE 4
 
 /*
 ** 'luaH_get*' operations set 'res', unless the value is absent, and
@@ -187,6 +192,7 @@ LUAI_FUNC void luaH_set(lua_State *L, Table *t, const TValue *key,
 LUAI_FUNC void luaH_finishset(lua_State *L, Table *t, const TValue *key,
                               TValue *value, int hres);
 LUAI_FUNC Table *luaH_new(lua_State *L);
+LUAI_FUNC void luaH_compact(lua_State *L, Table *t);
 LUAI_FUNC void luaH_resize(lua_State *L, Table *t, unsigned nasize,
                            unsigned nhsize);
 LUAI_FUNC void luaH_resizearray(lua_State *L, Table *t, unsigned nasize);

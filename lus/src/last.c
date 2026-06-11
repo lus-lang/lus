@@ -17,8 +17,10 @@
 
 #include "larena.h"
 #include "last.h"
+#include "ldo.h"
 #include "lmem.h"
 #include "lobject.h"
+#include "lstate.h"
 
 /*
 ** Node type names for debugging and Graphviz output
@@ -518,11 +520,16 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
 ** nodetotable, those strings can be collected, causing use-after-free.
 */
 void lusA_totable(lua_State *L, LusAst *ast) {
+  CCatchInfo cinfo;
   if (ast == NULL || ast->root == NULL) {
     lua_pushnil(L);
     return;
   }
   lua_gc(L, LUA_GCSTOP); /* prevent GC during AST traversal */
+  /* Build under C-level protection: if any allocation here throws (OOM),
+  ** we must still re-enable GC before propagating, or GC stays disabled
+  ** VM-wide. */
+  CPROTECT_BEGIN(L, &cinfo)
   nodetotable(L, ast->root);
   /* Add comments array if there are any comments */
   if (ast->comments != NULL) {
@@ -566,7 +573,10 @@ void lusA_totable(lua_State *L, LusAst *ast) {
     }
     lua_setfield(L, -2, "errors"); /* root.errors = errors_array */
   }
-  lua_gc(L, LUA_GCRESTART); /* resume GC */
+  CPROTECT_END(L, &cinfo);
+  lua_gc(L, LUA_GCRESTART); /* always resume GC, even if building threw */
+  if (cinfo.status != LUA_OK)
+    luaD_throw(L, cinfo.status); /* re-raise to the enclosing handler */
 }
 
 /*

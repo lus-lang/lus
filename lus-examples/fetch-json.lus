@@ -1,0 +1,21 @@
+-- Fetch and JSON: Call an HTTP API, parse the response, write a report.
+-- playground: false
+-- cookbook: true
+global network, fromjson, tojson, io, pledge, print
+
+-- Declare exactly what this script may touch, then lock it in.
+pledge("network:http", "fs:write", "seal")
+
+local status, body = network.fetch("https://api.github.com/repos/lus-lang/lus")
+local repo = fromjson(body)
+
+local report = {
+    name = repo.full_name,
+    stars = repo.stargazers_count,
+    issues = repo.open_issues_count,
+}
+
+local out = io.open("repo.json", "w")
+out:write(tojson(report))
+out:close()
+print(`saved $(repo.full_name) ($status)`)

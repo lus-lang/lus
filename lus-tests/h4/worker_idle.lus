@@ -1,0 +1,3 @@
+-- idle worker body for footprint measurement (blocks on receive)
+global worker
+worker.receive()

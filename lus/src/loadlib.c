@@ -352,7 +352,16 @@ static void addtoclib(lua_State *L, const char *path, void *plib) {
 ** errors, return an error code with an error message in the stack.
 */
 static int lookforfunc(lua_State *L, const char *path, const char *sym) {
-  void *reg = checkclib(L, path);          /* check loaded C libraries */
+  void *reg;
+  /* Loading native code (dlopen/LoadLibrary) is arbitrary code execution and
+  ** escapes the pledge sandbox entirely, so gate every native-load path
+  ** (package.loadlib, searcher_C, searcher_Croot) behind the same pledges as
+  ** the Lua loader: fs:read on the library file plus 'load'. Both raise on
+  ** denial. */
+  lus_checkfsperm(L, "fs:read", path);
+  if (!lus_haspledge(L, "load", NULL))
+    luaL_error(L, "permission \"load\" denied");
+  reg = checkclib(L, path);                /* check loaded C libraries */
   if (reg == NULL) {                       /* must load library? */
     reg = lsys_load(L, path, *sym == '*'); /* global symbols if 'sym'=='*' */
     if (reg == NULL)

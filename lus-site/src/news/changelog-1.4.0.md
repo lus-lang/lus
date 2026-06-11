@@ -1,9 +1,7 @@
 ---
 title: Lus 1.4.0
-date: 02-02-2026
+date: 2026-02-02
 ---
-
-# 1.4.0
 
 - **Completed phase-out of function-level protected execution.**
   - For software embedding Lus and _only_ making use of the front-facing C APIs like `lua_pcall`, this should _not_ impact you as the functions have been retrofit with compatibility layers interfacing with the new catch system.

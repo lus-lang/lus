@@ -73,6 +73,54 @@ int lus_glob_match(const char *pattern, const char *string) {
 #endif
 }
 
+#if !defined(LUS_PLATFORM_WINDOWS)
+/*
+** Canonicalize 'path' into 'out' (size PATH_MAX), resolving symlinks and
+** '..'/'.' segments. If the path itself does not exist (the normal case
+** when creating a new file via fs.write/fs.move/...), resolve its parent
+** directory and re-append the final component, so '..' is still resolved.
+** Returns 1 on success, 0 if it cannot be resolved. A 0 return MUST be
+** treated as "denied" by the caller -- we never fall back to matching the
+** raw, unresolved path, which would let '..' traversal escape a pledge.
+*/
+static int canon_path_posix(const char *path, char out[PATH_MAX]) {
+  char tmp[PATH_MAX];
+  char parent[PATH_MAX];
+  char *slash;
+  const char *base;
+  size_t len;
+  int n;
+  if (realpath(path, out) != NULL)
+    return 1; /* exists: fully resolved */
+  /* Leaf may not exist yet: resolve the parent directory instead. */
+  len = strlen(path);
+  if (len == 0 || len >= sizeof(tmp))
+    return 0;
+  memcpy(tmp, path, len + 1);
+  slash = strrchr(tmp, '/');
+  if (slash == NULL) { /* bare name, relative to CWD */
+    if (realpath(".", parent) == NULL)
+      return 0;
+    base = tmp;
+  }
+  else if (slash == tmp) { /* parent is the root directory */
+    parent[0] = '/';
+    parent[1] = '\0';
+    base = slash + 1;
+  }
+  else {
+    *slash = '\0';
+    base = slash + 1;
+    if (realpath(tmp, parent) == NULL)
+      return 0; /* a non-final component is missing: deny */
+  }
+  n = snprintf(out, PATH_MAX, "%s/%s", parent, base);
+  if (n < 0 || (size_t)n >= PATH_MAX)
+    return 0;
+  return 1;
+}
+#endif
+
 int lus_glob_match_path(const char *pattern, const char *path,
                         int canonicalize) {
   if (!canonicalize) {
@@ -81,96 +129,85 @@ int lus_glob_match_path(const char *pattern, const char *path,
 
 #if defined(LUS_PLATFORM_WINDOWS)
   /*
-  ** On Windows, use GetFullPathName for canonicalization.
-  ** Note: This doesn't resolve symlinks fully like realpath.
+  ** On Windows, use GetFullPathName for canonicalization (resolves '..' and
+  ** makes the path absolute). On failure -- including a path longer than the
+  ** buffer -- deny rather than copying the raw path into a fixed buffer
+  ** (which would overflow) or matching an unresolved path.
   */
-  char canon_path[MAX_PATH];
-  char canon_pattern[MAX_PATH];
+  {
+    char canon_path[MAX_PATH];
+    char canon_pattern[MAX_PATH];
+    DWORD path_len = GetFullPathNameA(path, MAX_PATH, canon_path, NULL);
+    if (path_len == 0 || path_len >= MAX_PATH)
+      return 0; /* cannot canonicalize -> deny (fail closed) */
 
-  DWORD path_len = GetFullPathNameA(path, MAX_PATH, canon_path, NULL);
-  if (path_len == 0 || path_len >= MAX_PATH) {
-    /* Path canonicalization failed, use raw path */
-    strcpy(canon_path, path);
-  }
-
-  /* Only canonicalize pattern if it looks like a path (no wildcards at start)
-   */
-  if (pattern[0] != '*' && pattern[0] != '?') {
-    DWORD pattern_len =
-        GetFullPathNameA(pattern, MAX_PATH, canon_pattern, NULL);
-    if (pattern_len == 0 || pattern_len >= MAX_PATH) {
-      /* Pattern canonicalization failed, use raw pattern */
-      strcpy(canon_pattern, pattern);
+    /* Canonicalize the pattern only if it looks like a path. */
+    if (pattern[0] != '*' && pattern[0] != '?') {
+      DWORD pattern_len =
+          GetFullPathNameA(pattern, MAX_PATH, canon_pattern, NULL);
+      if (pattern_len == 0 || pattern_len >= MAX_PATH)
+        return glob_match_internal(pattern, canon_path); /* keep raw pattern */
+      return glob_match_internal(canon_pattern, canon_path);
     }
-    return glob_match_internal(canon_pattern, canon_path);
+    return glob_match_internal(pattern, canon_path);
   }
-  return glob_match_internal(pattern, canon_path);
 #else
   /*
-  ** On POSIX, use realpath for canonicalization.
-  ** This resolves symlinks and .. segments.
+  ** On POSIX, resolve the checked path with realpath (resolving symlinks and
+  ** '..'). Fail closed if it cannot be resolved -- never match the raw path.
   */
-  char canon_path[PATH_MAX];
-  char canon_pattern[PATH_MAX];
-  const char *pattern_to_use = pattern;
+  {
+    char canon_path[PATH_MAX];
+    char canon_pattern[PATH_MAX];
+    const char *pattern_to_use = pattern;
 
-  /* Canonicalize the path being checked */
-  if (realpath(path, canon_path) == NULL) {
-    /* Path doesn't exist or error - use raw path */
-    strncpy(canon_path, path, PATH_MAX - 1);
-    canon_path[PATH_MAX - 1] = '\0';
-  }
+    if (!canon_path_posix(path, canon_path))
+      return 0; /* unresolvable -> deny (fail closed) */
 
-  /* Canonicalize the pattern if it looks like a path (starts with / or .) */
-  if (pattern[0] == '/' || pattern[0] == '.') {
-    /* Try to resolve the base part of the pattern (without wildcards) */
-    size_t len = strlen(pattern);
-    size_t i;
-
-    /* Find where wildcards start */
-    for (i = 0; i < len; i++) {
-      if (pattern[i] == '*' || pattern[i] == '?') {
-        break;
+    /* Canonicalize the pattern if it looks like a path (starts with / or .) */
+    if (pattern[0] == '/' || pattern[0] == '.') {
+      size_t len = strlen(pattern);
+      size_t i;
+      for (i = 0; i < len; i++) {
+        if (pattern[i] == '*' || pattern[i] == '?')
+          break;
       }
-    }
-
-    if (i == len) {
-      /* No wildcards - canonicalize the whole pattern */
-      if (realpath(pattern, canon_pattern) != NULL) {
-        pattern_to_use = canon_pattern;
-      }
-    }
-    else if (i > 0) {
-      /* Has wildcards - canonicalize the prefix */
-      char prefix[PATH_MAX];
-      strncpy(prefix, pattern, i);
-      prefix[i] = '\0';
-
-      /* Find last directory separator in prefix */
-      char *last_sep = strrchr(prefix, '/');
-      if (last_sep != NULL && last_sep != prefix) {
-        *last_sep = '\0';
-        char resolved_prefix[PATH_MAX];
-        if (realpath(prefix, resolved_prefix) != NULL) {
-          /* Rebuild pattern with resolved prefix */
-          snprintf(canon_pattern, PATH_MAX, "%s%s", resolved_prefix,
-                   pattern + (last_sep - prefix));
+      if (i == len) {
+        /* No wildcards - canonicalize the whole pattern */
+        if (canon_path_posix(pattern, canon_pattern))
           pattern_to_use = canon_pattern;
+      }
+      else if (i > 0 && i < PATH_MAX) {
+        /* Has wildcards - canonicalize the (bounded) prefix */
+        char prefix[PATH_MAX];
+        char resolved_prefix[PATH_MAX];
+        char *last_sep;
+        memcpy(prefix, pattern, i);
+        prefix[i] = '\0';
+        last_sep = strrchr(prefix, '/');
+        if (last_sep != NULL && last_sep != prefix) {
+          *last_sep = '\0';
+          if (realpath(prefix, resolved_prefix) != NULL) {
+            int n = snprintf(canon_pattern, PATH_MAX, "%s%s", resolved_prefix,
+                             pattern + (last_sep - prefix));
+            if (n > 0 && (size_t)n < PATH_MAX)
+              pattern_to_use = canon_pattern;
+          }
         }
-      }
-      else if (last_sep == NULL && i > 0) {
-        /* Pattern like "dir *" - try to resolve the prefix as a directory */
-        char resolved_prefix[PATH_MAX];
-        if (realpath(prefix, resolved_prefix) != NULL) {
-          snprintf(canon_pattern, PATH_MAX, "%s%s", resolved_prefix,
-                   pattern + i);
-          pattern_to_use = canon_pattern;
+        else if (last_sep == NULL) {
+          /* Pattern like "dir*" - resolve the prefix as a directory */
+          if (realpath(prefix, resolved_prefix) != NULL) {
+            int n = snprintf(canon_pattern, PATH_MAX, "%s%s", resolved_prefix,
+                             pattern + i);
+            if (n > 0 && (size_t)n < PATH_MAX)
+              pattern_to_use = canon_pattern;
+          }
         }
       }
     }
-  }
 
-  return lus_glob_match(pattern_to_use, canon_path);
+    return lus_glob_match(pattern_to_use, canon_path);
+  }
 #endif
 }
 

@@ -2,7 +2,11 @@
 order: 3
 title: Releases
 icon: package
+group: use
+shortdesc: "Downloads, release channels, versioning, and what stable promises."
 ---
+
+import ReleaseStrip from "../components/ReleaseStrip.astro"
 
 Lus releases are produced by a _release engineering_ process that divides into two channels:
 
@@ -11,9 +15,36 @@ Lus releases are produced by a _release engineering_ process that divides into t
 
 _Unstable_ does not necessarily mean that they are _literally_ unstable, but rather that they have not been sufficiently tested and are still open to breaking changes.
 
+## Downloads
+
+<ReleaseStrip />
+
+## Fully supported platforms
+
+| Platform | Architecture  | Asset             | Notes                                   |
+| -------- | ------------- | ----------------- | --------------------------------------- |
+| Windows  | x64           | `lus-setup.exe`   | Installer, recommended over bare binary |
+| Windows  | x64           | `lus-windows.exe` |                                         |
+| macOS    | Apple Silicon | `lus-macos`       |                                         |
+| Linux    | x64, glibc    | `lus-linux`       | Needs glibc 2.39+                       |
+| Linux    | x64, musl     | `lus-linux-musl`  |                                         |
+
+## Partially supported platforms
+
+Lus also supports FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, and SunOS, but their binaries must be [built from source](/manual/compiling) and they are not tested, meaning no stability or functionality guarantees. Help for porting Lus to these operating systems (especially CI/CD support), as well as any other operating system, is always appreciated.
+
+## Verifying a download
+
+Every release since 1.6.0 publishes a `SHA256SUMS` asset. The install script verifies downloads automatically; for manual downloads:
+
+```bash
+curl -LO https://github.com/lus-lang/lus/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS         # macOS: shasum -a 256 -c
+```
+
 ## Stable releases
 
-There is no timeline for stable releases, but they are typically released when all work-in-progress [acquis](/manual/acquis-0) have been completed and have received sufficient coverage in the test harnesses.
+There is no timeline for stable releases, but they are typically released when any work-in-progress [acquis](/manual/acquis-0) have been completed and have received sufficient coverage in the test harnesses.
 
 The attribution of acquis to a release is dependent on when the acquis is submitted. If the version X.0.0 release is being worked on, then any acquis submitted during this time will be slated for version X.**1**.0.
 
@@ -25,6 +56,6 @@ Even though semantic versioning is used, the patch number is expected to go unus
 
 Unstable releases are released more frequently than stable releases and contain the latest features. For all intents and purposes, the term _unstable_ is interchangeable with _canary_ or _nightly_ builds.
 
-There is no guarantee that the unstable release will be useable, compatible with code targeting the stable release, or free of platform-specific oddities. Unstable releases are not as thoroughly tested as stable releases and shouldn't be considered for production use.
+There is no guarantee that the unstable release will be usable, compatible with code targeting the stable release, or free of platform-specific oddities. Unstable releases are not as thoroughly tested as stable releases and shouldn't be considered for production use.
 
 That said, the use of unstable builds in a testing capacity is encouraged. If you are working on a program that already makes use of Lus, you should use the unstable build to test your program against the latest features and bug fixes to see if any breaking changes have been introduced.

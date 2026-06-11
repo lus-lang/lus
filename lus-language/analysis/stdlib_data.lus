@@ -168,6 +168,7 @@ M.members = {
   },
   ["table"] = {
     {n = "clone", k = 3},
+    {n = "compact", k = 3},
     {n = "concat", k = 3},
     {n = "create", k = 3},
     {n = "filter", k = 3},
@@ -397,6 +398,7 @@ M.fields = {
   },
   ["table"] = {
     ["clone"] = "function",
+    ["compact"] = "function",
     ["concat"] = "function",
     ["create"] = "function",
     ["filter"] = "function",
@@ -590,6 +592,7 @@ M.signatures = {
   ["string.unpack"] = {{n = "fmt", t = "string"}, {n = "s", t = "string"}, {n = "pos", t = "integer", opt = true}},
   ["string.upper"] = {{n = "s", t = "string"}},
   ["table.clone"] = {{n = "t", t = "T"}, {n = "deep", t = "boolean", opt = true}},
+  ["table.compact"] = {{n = "t", t = "T"}},
   ["table.concat"] = {{n = "list", t = "table"}, {n = "sep", t = "string", opt = true}, {n = "i", t = "integer", opt = true}, {n = "j", t = "integer", opt = true}},
   ["table.create"] = {{n = "narray", t = "integer"}, {n = "nhash", t = "integer", opt = true}},
   ["table.filter"] = {{n = "array", t = "table"}, {n = "predicate", t = "function"}},
@@ -774,6 +777,7 @@ M.returns = {
   ["string.unpack"] = "any",
   ["string.upper"] = "string",
   ["table.clone"] = "T",
+  ["table.compact"] = "T",
   ["table.concat"] = "string",
   ["table.create"] = "table",
   ["table.filter"] = "table",
@@ -829,6 +833,7 @@ M.generics = {
   ["rawset"] = "T",
   ["setmetatable"] = "T",
   ["table.clone"] = "T",
+  ["table.compact"] = "T",
 }
 
 -- Documentation from markdown body (for hover)
@@ -1163,6 +1168,14 @@ Creates a copy of the table `t`. If `deep` is true, nested tables are recursivel
 ```lus
 local x = table.clone(t)        -- shallow copy
 local y = table.clone(t, true)  -- deep copy
+```]],
+  ["table.compact"] = [[
+Shrinks the internal storage of `t` to fit its current contents and returns `t`. Removing keys from a table never shrinks its array or hash storage on its own, so a table that was once large keeps its capacity; `table.compact` releases that memory. Raises an error if `t` is readonly.
+
+```lus
+local cache = build_huge_table()
+prune(cache)            -- removes most entries
+table.compact(cache)    -- releases the now-unused capacity
 ```]],
   ["table.concat"] = [[
 Concatenate the string or number elements of table `list`, separated by `sep` (empty string by default), from index `i` to `j`.]],

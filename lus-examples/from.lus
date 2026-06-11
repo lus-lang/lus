@@ -1,5 +1,6 @@
 -- From Destructuring: Extract table fields into local variables.
 -- playground: true
+-- cookbook: true
 
 global print
 

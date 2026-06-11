@@ -1943,8 +1943,16 @@ static void suffixedexp(LexState *ls, expdesc *v) {
           /* Generate slice instruction with placeholder destination */
           /* Use 0 as dest, will be relocated later */
           int pc = luaK_codeABC(fs, OP_SLICE, 0, tblreg, startreg);
-          /* Free the temp registers for start/end */
-          fs->freereg = startreg;
+          /* Reclaim operand temporaries so the relocatable result lands at the
+          ** lowest freed register -- the slot a local/assignment expects it in.
+          ** When the table is itself a temporary immediately below the start
+          ** slot (e.g. an inline `(...)` table), reclaim it too; otherwise (a
+          ** named local/upvalue table) free only start/end. Mirrors how normal
+          ** indexing produces dest==table. */
+          if (tblreg == startreg - 1 && tblreg >= luaY_nvarstack(fs))
+            fs->freereg = cast_byte(tblreg);
+          else
+            fs->freereg = cast_byte(startreg);
           /* Mark as relocatable - dest register will be set when used */
           init_exp(v, VRELOC, pc);
           /* Create AST_SLICE node */

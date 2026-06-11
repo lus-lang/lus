@@ -1,0 +1,28 @@
+-- Method dispatch benchmark (OP_SELF + __index metatable resolution)
+
+global print, os, string, setmetatable
+
+local Class = {}
+Class.__index = Class
+
+function Class.new()
+    return setmetatable({n = 0}, Class)
+end
+
+function Class:step(k)
+    self.n = self.n + k
+    return self.n
+end
+
+local obj = Class.new()
+local N = 30000000
+local s = 0
+
+local t0 = os.clock()
+for i = 1, N do
+    s = s + obj:step(1)
+end
+local elapsed = os.clock() - t0
+
+print(string.format("TIME %.4f", elapsed))
+print("CHECK " .. s)

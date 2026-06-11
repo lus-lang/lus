@@ -1,4 +1,4 @@
-global print, require, assert, type, table, math, os, load, string, pairs, ipairs, select, pledge
+global print, require, assert, type, table, math, os, load, string, pairs, ipairs, select, pledge, collectgarbage, next
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -99,6 +99,52 @@ tests:it("table.move", function()
     local a = {1, 2, 3, 4, 5}
     table.move(a, 2, 4, 1)
     assert(a[1] == 2 and a[2] == 3 and a[3] == 4)
+end)
+
+tests:it("table.compact preserves contents and returns the table", function()
+    local t = {1, 2, 3, x = "a", y = "b"}
+    local r = table.compact(t)
+    assert(r == t)
+    assert(t[1] == 1 and t[2] == 2 and t[3] == 3)
+    assert(t.x == "a" and t.y == "b")
+end)
+
+tests:it("table.compact reclaims capacity after mass deletion", function()
+    local t = {}
+    for i = 1, 50000 do
+        t[i] = i
+        t["k" .. i] = i
+    end
+    for i = 11, 50000 do
+        t[i] = nil
+        t["k" .. i] = nil
+    end
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    table.compact(t)
+    collectgarbage("collect")
+    local after = collectgarbage("count")
+    assert(after < before / 4, "capacity should shrink substantially")
+    for i = 1, 10 do
+        assert(t[i] == i and t["k" .. i] == i)
+    end
+end)
+
+tests:it("table.compact on an emptied table", function()
+    local t = {}
+    t.x = 1
+    t.x = nil
+    table.compact(t)
+    assert(next(t) == nil)
+end)
+
+tests:it("table.compact migrates integer keys back to the array part", function()
+    local t = {}
+    t[3] = 3
+    t[1] = 1
+    t[2] = 2
+    table.compact(t)
+    assert(#t == 3 and t[1] == 1 and t[2] == 2 and t[3] == 3)
 end)
 
 tests:finish()

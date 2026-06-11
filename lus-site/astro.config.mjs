@@ -1,5 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config"
+import { rehypeHeadingIds } from "@astrojs/markdown-remark"
+import rehypeAutolinkHeadings from "rehype-autolink-headings"
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
@@ -10,6 +12,36 @@ import mdx from "@astrojs/mdx"
 import sitemap from "@astrojs/sitemap"
 
 import lusGrammar from "../lus-textmate/lus.tmLanguage.json"
+
+/**
+ * Wrap every table in a focusable horizontal-scroll container so wide
+ * tables don't overflow small viewports.
+ * @returns {(tree: any) => void}
+ */
+function rehypeTableWrap() {
+  /** @param {any} node */
+  const walk = (node) => {
+    if (!node.children) return
+    node.children = node.children.map((/** @type {any} */ child) => {
+      if (child.type === "element" && child.tagName === "table") {
+        return {
+          type: "element",
+          tagName: "div",
+          properties: {
+            className: ["table-wrap"],
+            tabIndex: 0,
+            role: "region",
+            "aria-label": "table",
+          },
+          children: [child],
+        }
+      }
+      walk(child)
+      return child
+    })
+  }
+  return walk
+}
 
 /** @returns {import("vite").Plugin} */
 function lucideIconData() {
@@ -23,11 +55,12 @@ function lucideIconData() {
     load(id) {
       if (id !== "\0virtual:lucide-icons") return
       const needed = new Set([
-        "library",
+        // Manual sidebar (API + C API)
+        "library", "braces",
         // Nav icons
-        "house", "terminal", "book-open", "circle-question-mark", "newspaper",
-        // Card icons
-        "download", "chevron-right",
+        "terminal", "book-open", "newspaper", "code-xml",
+        // Landing
+        "arrow-right", "download",
       ])
       for (const file of readdirSync(manualDir).filter((f) => f.endsWith(".mdx"))) {
         const match = readFileSync(join(manualDir, file), "utf-8").match(/^icon:\s*(.+)$/m)
@@ -49,6 +82,10 @@ export default defineConfig({
   output: "static",
   redirects: {
     "/manual/tldr": "/manual/acquis",
+    // deleted pages — the faq's load-bearing answers migrated into the
+    // manual; the only surviving search is the API filter
+    "/faq": "/manual/introduction",
+    "/search": "/manual/api",
   },
   site: "https://lus.dev",
   vite: {
@@ -58,14 +95,31 @@ export default defineConfig({
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp",
       },
+      fs: {
+        // install.sh.ts raw-imports lus-install/install.sh from the
+        // repo root, one level above the site project
+        allow: [".."],
+      },
     },
   },
   markdown: {
+    rehypePlugins: [
+      rehypeHeadingIds,
+      [
+        rehypeAutolinkHeadings,
+        {
+          behavior: "append",
+          properties: {
+            className: ["heading-anchor"],
+            ariaLabel: "Link to this section",
+          },
+          content: { type: "text", value: "#" },
+        },
+      ],
+      rehypeTableWrap,
+    ],
     shikiConfig: {
-      themes: {
-        light: "github-light",
-        dark: "github-light",
-      },
+      theme: "github-light",
       langs: [
         // @ts-ignore
         {

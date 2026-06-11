@@ -37,6 +37,15 @@
 #define MINSTRTABSIZE 128
 #endif
 
+/*
+** Grow the string table only once the number of strings exceeds
+** 1.5x the number of buckets. Average chains stay short (~1.5
+** entries) while the bucket array uses a third less memory than
+** growing at a 1.0 load factor. (MAXSTRTB is at most INT_MAX over
+** the size of a pointer, so the computation cannot overflow.)
+*/
+#define STRT_GROWLIMIT(size) ((size) + ((size) >> 1))
+
 
 /*
 ** generic equality for strings
@@ -51,42 +60,17 @@ int luaS_eqstr(TString *a, TString *b) {
 
 
 /*
-** Rotate left helper - compilers transform this into a single rotate
-** instruction.
-*/
-#define lus_rol(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
-
-
-/*
-** Sparse ARX string hash - O(1) constant time.
-** Samples 4 strategic positions using Bob Jenkins' lookup3 mixing.
+** String hash. Mixes every byte of the string: short strings (the only
+** ones interned through this path, bounded by LUAI_MAXSHORTLEN) are cheap
+** to hash in full, and a full-content hash is required for collision
+** resistance -- a position-sampling hash lets an attacker who controls
+** table keys (JSON keys, headers, ...) force unlimited same-bucket
+** collisions, degrading table operations to O(n) (hash flooding).
 */
 static unsigned luaS_hash(const char *str, size_t l, unsigned seed) {
-  l_uint32 a, b, h = cast_uint(l) ^ seed;
-  if (l == 0) {
-    return h; /* empty string: just return seed mixed with length (0) */
-  }
-  else if (l >= 4) {
-    a = lus_getu32(str);
-    h ^= lus_getu32(str + l - 4);
-    b = lus_getu32(str + (l >> 1) - 2);
-    h ^= b;
-    h -= lus_rol(b, 14);
-    b += lus_getu32(str + (l >> 2) - 1);
-  }
-  else {
-    a = *(const lu_byte *)str;
-    h ^= *(const lu_byte *)(str + l - 1);
-    b = *(const lu_byte *)(str + (l >> 1));
-    h ^= b;
-    h -= lus_rol(b, 14);
-  }
-  a ^= h;
-  a -= lus_rol(h, 11);
-  b ^= a;
-  b -= lus_rol(a, 25);
-  h ^= b;
-  h -= lus_rol(b, 16);
+  unsigned int h = seed ^ cast_uint(l);
+  for (; l > 0; l--)
+    h ^= ((h << 5) + (h >> 2) + cast_byte(str[l - 1]));
   return h;
 }
 
@@ -182,8 +166,9 @@ void luaS_init(lua_State *L) {
 size_t luaS_sizelngstr(size_t len, int kind) {
   switch (kind) {
     case LSTRREG: /* regular long string */
-      /* don't need 'falloc'/'ud', but need space for content */
-      return offsetof(TString, falloc) + (len + 1) * sizeof(char);
+      /* content is inline, overlaying 'contents'/'falloc'/'ud',
+      ** which only external strings need */
+      return offsetof(TString, contents) + (len + 1) * sizeof(char);
     case LSTRFIX: /* fixed external long string */
       /* don't need 'falloc'/'ud' */
       return offsetof(TString, falloc);
@@ -213,9 +198,8 @@ TString *luaS_createlngstrobj(lua_State *L, size_t l) {
   size_t totalsize = luaS_sizelngstr(l, LSTRREG);
   TString *ts = createstrobj(L, totalsize, LUA_VLNGSTR, G(L)->seed);
   ts->u.lnglen = l;
-  ts->shrlen = LSTRREG; /* signals that it is a regular long string */
-  ts->contents = cast_charp(ts) + offsetof(TString, falloc);
-  ts->contents[l] = '\0'; /* ending 0 */
+  ts->shrlen = LSTRREG;    /* signals that it is a regular long string */
+  getlngstr(ts)[l] = '\0'; /* ending 0 (content is inline) */
   return ts;
 }
 
@@ -261,7 +245,7 @@ static TString *internshrstr(lua_State *L, const char *str, size_t l) {
     }
   }
   /* else must create a new string */
-  if (tb->nuse >= tb->size) { /* need to grow string table? */
+  if (tb->nuse >= STRT_GROWLIMIT(tb->size)) { /* need to grow string table? */
     growstrtab(L, tb);
     list = &tb->hash[lmod(h, tb->size)]; /* rehash with new size */
   }

@@ -1,0 +1,27 @@
+---
+import Layout from "../components/Layout.astro"
+---
+
+<Layout
+  title="Page not found"
+  description="The page you requested does not exist."
+>
+  <main id="main">
+    <section>
+      <h1>404 — page not found</h1>
+      <p>This page doesn't exist.</p>
+      <ul>
+        <li><a href="/manual">Manual</a> — every documentation page</li>
+        <li>
+          <a href="/manual/api">API reference</a> — the standard library, filterable
+          (press <code>/</code>)
+        </li>
+        <li>
+          <a href="/manual/api/c">C API reference</a> — the embedding interface
+        </li>
+        <li><a href="/examples">Examples</a> — short, runnable programs</li>
+        <li><a href="/">Home</a></li>
+      </ul>
+    </section>
+  </main>
+</Layout>

@@ -1,5 +1,6 @@
 -- Optional Chaining: Safe navigation through potentially nil values.
 -- playground: true
+-- cookbook: true
 
 global print, pairs
 

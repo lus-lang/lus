@@ -23,69 +23,45 @@ const { color = "lime", variant = "default" } = Astro.props
   @reference "../styles/global.css";
 
   .card {
-    @apply border bg-linear-to-br;
+    @apply border-2 border-ink bg-paper text-ink;
 
     &[data-variant="default"] {
       @apply lus-shadow;
     }
 
     &[data-variant="feature"] {
-      @apply shadow-none;
+      @apply lus-shadow-sm;
     }
 
     h2 {
-      @apply font-semibold text-lg border-b border-dashed lowercase px-4 py-2;
+      @apply font-bold text-base lowercase px-3 py-1.5 border-b-2 border-ink;
+    }
+
+    &[data-variant="default"] h2 {
+      @apply bg-accent text-ink;
+    }
+
+    &[data-variant="feature"] h2 {
+      @apply bg-tint text-ink;
     }
 
     .card-body {
-      @apply p-4;
-    }
-
-    .card-body :global(p) {
-      @apply px-0 py-0;
-    }
-
-    button {
-      @apply inline-flex items-center gap-2 px-2 py-1 bg-linear-to-br cursor-pointer;
-
-      &:disabled {
-        @apply cursor-not-allowed pointer-events-none opacity-50;
-      }
-    }
-
-    &[data-color="lime"] {
-      &[data-variant="default"] {
-        @apply border-lime-500 from-lime-100 to-lime-400 lus-shadow shadow-lime-500/40 text-lime-950;
-      }
-
-      &[data-variant="feature"] {
-        @apply border-lime-300 from-white to-lime-50 text-lime-950 lus-shadow shadow-lime-500/40;
-      }
-
-      h2 {
-        @apply text-lime-800;
-      }
-
-      button {
-        @apply from-lime-400 to-lime-600 hover:from-lime-500 hover:to-lime-700;
-      }
+      @apply p-3;
     }
 
     &[data-color="red"] {
-      &[data-variant="default"] {
-        @apply border-red-500 from-red-100 to-red-400 lus-shadow shadow-red-500/40 text-red-950;
-      }
-
-      &[data-variant="feature"] {
-        @apply border-red-300 from-white to-red-50 text-red-950 lus-shadow shadow-red-500/40;
-      }
+      @apply border-ink-red shadow-ink-red text-ink-red;
 
       h2 {
-        @apply text-red-800;
+        @apply border-ink-red;
       }
 
-      button {
-        @apply from-red-400 to-red-600 hover:from-red-500 hover:to-red-700;
+      &[data-variant="default"] h2 {
+        @apply bg-accent-red text-ink-red;
+      }
+
+      &[data-variant="feature"] h2 {
+        @apply bg-tint-red text-ink-red;
       }
     }
   }

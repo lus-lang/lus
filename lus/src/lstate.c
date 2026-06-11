@@ -78,7 +78,7 @@ CallInfo *luaE_extendCI(lua_State *L, int err) {
   if (ci->next)
     ci->next->previous = ci;
   ci->u.l.trap = 0;
-  ci->u.l.catchinfo.active = 0; /* no active catch handler */
+  ci->u.l.catchlist = NULL; /* no active catch in this frame */
   L->nci++;
   return ci;
 }
@@ -164,9 +164,36 @@ static void stack_init(lua_State *L1, lua_State *L) {
   L1->top.p = L1->stack.p + 1; /* +1 for 'function' entry */
 }
 
+/*
+** Free any active Lua catch nodes still attached to L's call frames. Catch
+** nodes are normally freed by their OP_ENDCATCH (success) or catchErrorRecovery
+** (error), but a coroutine abandoned while suspended inside a catch body, or a
+** thread being reset/closed, can leave nodes behind; free them here so they
+** don't leak. Walking the per-frame lists across all CIs catches nodes even
+** when the global L->activeCatch root has been cleared (e.g. during resume).
+*/
+void luaE_clearcatch(lua_State *L) {
+  CallInfo *ci;
+  if (L->stack.p == NULL)
+    return; /* stack not built: no frames */
+  for (ci = &L->base_ci; ci != NULL; ci = ci->next) {
+    if (isLua(ci)) {
+      CatchInfo *node = ci->u.l.catchlist;
+      while (node != NULL) {
+        CatchInfo *fp = node->frameprev;
+        luaM_free(L, node);
+        node = fp;
+      }
+      ci->u.l.catchlist = NULL;
+    }
+  }
+  L->activeCatch = NULL;
+}
+
 static void freestack(lua_State *L) {
   if (L->stack.p == NULL)
-    return;            /* stack not completely built yet */
+    return;             /* stack not completely built yet */
+  luaE_clearcatch(L);   /* free leftover catch nodes before freeing CIs */
   L->ci = &L->base_ci; /* free the entire 'ci' list */
   freeCI(L);
   lua_assert(L->nci == 0);
@@ -300,6 +327,7 @@ void luaE_freethread(lua_State *L, lua_State *L1) {
 }
 
 TStatus luaE_resetthread(lua_State *L, TStatus status) {
+  luaE_clearcatch(L); /* discard catch nodes of the frames being reset */
   resetCI(L);
   if (status == LUA_YIELD)
     status = LUA_OK;
@@ -372,6 +400,9 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   g->no_fastcall = 0;
   g->readonly_env = 0;
   g->pedantic = 0;
+  g->stripdebug = 0;
+  g->iter_next = NULL;
+  g->iter_ipairsaux = NULL;
   for (i = 0; i < LUA_NUMTYPES; i++)
     g->mt[i] = NULL;
   /* Use CPROTECT for state initialization */

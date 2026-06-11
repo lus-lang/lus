@@ -1,0 +1,19 @@
+-- Field reads resolved through a metatable __index chain (OP_GETFIELD
+-- miss path), isolated from call overhead.
+
+global print, os, string, setmetatable
+
+local proto = {val = 7}
+proto.__index = proto
+local obj = setmetatable({}, proto)
+local N = 30000000
+local s = 0
+
+local t0 = os.clock()
+for i = 1, N do
+    s = s + obj.val
+end
+local elapsed = os.clock() - t0
+
+print(string.format("TIME %.4f", elapsed))
+print("CHECK " .. s)

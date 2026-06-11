@@ -746,10 +746,13 @@ static l_mem traversethread(global_State *g, lua_State *th) {
     markvalue(g, s2v(o));
   for (uv = th->openupval; uv != NULL; uv = uv->u.open.next)
     markobject(g, uv); /* open upvalues cannot be collected */
-  /* Mark handlers in active catch blocks (stored in CatchInfo, not on stack) */
+  /* Mark handlers held in active catch blocks. These live in heap CatchInfo
+  ** nodes (not on the stack), chained per frame via 'frameprev'. */
   for (ci = th->ci; ci != NULL; ci = ci->previous) {
-    if (isLua(ci) && ci->u.l.catchinfo.active) {
-      markvalue(g, &ci->u.l.catchinfo.handler);
+    if (isLua(ci)) {
+      CatchInfo *node;
+      for (node = ci->u.l.catchlist; node != NULL; node = node->frameprev)
+        markvalue(g, &node->handler);
     }
   }
   if (g->gcstate == GCSatomic) { /* final traversal? */

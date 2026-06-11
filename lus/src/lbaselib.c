@@ -542,6 +542,12 @@ LUAMOD_API int luaopen_base(lua_State *L) {
   luaF_registerfastcall(L, FC_TONUMBER, luaB_tonumber, 1);
   luaF_registerfastcall(L, FC_TOSTRING, luaB_tostring, 1);
 
+  /* Register the builtin iterators so OP_TFORCALL can recognize
+  ** 'for ... in pairs(t)'/'ipairs(t)'/'next, t' loops by pointer
+  ** identity and walk the table directly (see lvm.c). */
+  G(L)->iter_next = luaB_next;
+  G(L)->iter_ipairsaux = ipairsaux;
+
   /* Register base permission granters */
   lus_registerpledge(L, "exec", base_granter);
   lus_registerpledge(L, "load", base_granter);

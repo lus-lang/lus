@@ -1,0 +1,37 @@
+---
+import ManualLayout from "../../../components/ManualLayout.astro"
+import ApiReference from "../../../components/ApiReference.astro"
+import { getCapiSections } from "../../../lib/api"
+
+const sections = await getCapiSections()
+---
+
+<ManualLayout title="C API">
+  <h1>C API reference</h1>
+  <p class="api-crossnote">
+    The embedding interface of <code>liblus</code>. Writing Lus instead? See the <a
+      href="/manual/api">standard library reference</a
+    >.
+  </p>
+
+  <ApiReference sections={sections} />
+
+  <script is:inline>
+    // forward stdlib deep links that landed on the C page
+    if (
+      location.hash &&
+      !document.getElementById(decodeURIComponent(location.hash.slice(1))) &&
+      !/^#(lua_|luaL_|lus_|LUA_|LUAL_)/.test(location.hash)
+    ) {
+      location.replace("/manual/api" + location.search + location.hash)
+    }
+  </script>
+</ManualLayout>
+
+<style>
+  @reference "../../../styles/global.css";
+
+  .api-crossnote {
+    @apply text-ink/80 mb-4 max-w-3xl;
+  }
+</style>
