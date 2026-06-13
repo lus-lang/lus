@@ -205,6 +205,7 @@ typedef struct CatchInfo {
   ptrdiff_t erroffset;  /* stack offset of error object (survives realloc) */
   ptrdiff_t baseoffset; /* stack offset of base register (survives realloc) */
   TValue handler;       /* error handler function (nil if no handler) */
+  l_uint32 savednCcalls; /* L->nCcalls at catch entry, restored on recovery */
   lu_byte destreg;      /* destination register for status/error */
   lu_byte nresults;     /* expected number of results (for nil-filling) */
 } CatchInfo;

@@ -346,6 +346,17 @@ static const char *getMode(lua_State *L, int idx) {
     /* Lua code cannot use fixed buffers */
     luaL_argerror(L, idx, "invalid mode");
   }
+  /* In a sealed (sandboxed) state, refuse precompiled bytecode: luaU_undump
+  ** performs no verification, so a crafted binary chunk is an arbitrary-memory
+  ** primitive that would defeat the sealed pledge policy. Strip the 'b'
+  ** capability while preserving 't': a binary chunk then fails checkmode, and
+  ** an explicit binary-mode request on a text chunk still yields nil (mode ""
+  ** rejects both), rather than being silently upgraded to a text load. */
+  if (lus_issealed(L)) {
+    if (mode == NULL)
+      return "t"; /* default would be "bt"; drop binary */
+    return (strchr(mode, 't') != NULL) ? "t" : "";
+  }
   return mode;
 }
 
@@ -442,7 +453,9 @@ static int luaB_dofile(lua_State *L) {
   }
 
   lua_settop(L, 1);
-  if (l_unlikely(luaL_loadfilex(L, fname, "bt") != LUA_OK))
+  /* Sealed state: text-only (no unverified bytecode); see getMode(). */
+  if (l_unlikely(luaL_loadfilex(L, fname, lus_issealed(L) ? "t" : "bt") !=
+                 LUA_OK))
     return lua_error(L);
   lua_callk(L, 0, LUA_MULTRET, 0, dofilecont);
   return dofilecont(L, 0, 0);

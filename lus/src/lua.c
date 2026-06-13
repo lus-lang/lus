@@ -534,7 +534,7 @@ static int dochunk(lua_State *L, int status) {
 }
 
 static int dofile(lua_State *L, const char *name) {
-  return dochunk(L, luaL_loadfilex(L, name, "bt"));
+  return dochunk(L, luaL_loadfilex(L, name, lus_issealed(L) ? "t" : "bt"));
 }
 
 static int dostring(lua_State *L, const char *s, const char *name) {
@@ -589,7 +589,10 @@ static int handle_script(lua_State *L, char **argv) {
   const char *fname = argv[0];
   if (strcmp(fname, "-") == 0 && strcmp(argv[-1], "--") != 0)
     fname = NULL; /* stdin */
-  status = luaL_loadfilex(L, fname, "bt");
+  /* If the operator sandboxed the run (-P... seals the store), refuse a
+  ** precompiled binary entry file: the unverified loader would let an
+  ** attacker-supplied chunk corrupt memory and defeat the pledge policy. */
+  status = luaL_loadfilex(L, fname, lus_issealed(L) ? "t" : "bt");
   if (status == LUA_OK) {
     int n = pushargs(L); /* push arguments to script */
     status = docall(L, n, LUA_MULTRET);

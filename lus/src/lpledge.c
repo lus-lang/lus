@@ -117,6 +117,13 @@ static lus_PledgeGranter findgranter(PledgeStore *store, const char *name) {
 /* Add a new entry to the store */
 static PledgeEntry *addentry(lua_State *L, PledgeStore *store,
                              const char *name) {
+  /* A sealed store must never gain entries. Permission CHECKs route through the
+  ** granters, which call lus_setpledge()/lus_rejectrequest() -> addentry; left
+  ** unguarded, a read-only check (e.g. io.tmpfile()'s NULL-path fs:write probe)
+  ** could plant a zero-value sub-entry that the nvalues==0 "global access"
+  ** shortcut then treats as a grant, escalating a value-scoped pledge. */
+  if (store->sealed)
+    return NULL;
   if (store->nentries >= store->capacity) {
     int newcap = store->capacity == 0 ? 8 : store->capacity * 2;
     store->entries = luaM_reallocvector(L, store->entries, store->capacity,
@@ -255,6 +262,13 @@ LUA_API void lus_setpledge(lua_State *L, lus_PledgeRequest *p, const char *sub,
   PledgeEntry *entry = findentry(store, namebuf);
   if (entry == NULL) {
     entry = addentry(L, store, namebuf);
+    if (entry == NULL) {
+      /* Sealed store: do not mutate. Still answer the probe (a path-less CHECK
+      ** is "allowed" because the base/sub permission already exists), but never
+      ** create the entry that would widen later specific-path checks. */
+      p->_processed = 1;
+      return;
+    }
   }
 
   /* Add value if provided */
@@ -278,6 +292,8 @@ LUA_API void lus_rejectrequest(lua_State *L, lus_PledgeRequest *p) {
   PledgeEntry *entry = findentry(store, namebuf);
   if (entry == NULL) {
     entry = addentry(L, store, namebuf);
+    if (entry == NULL)
+      return; /* sealed: cannot add a rejection entry */
   }
 
   entry->rejected = 1;

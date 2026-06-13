@@ -271,8 +271,15 @@ lu_mem luaE_threadsize(lua_State *L) {
   return sz;
 }
 
+/* Join any worker-pool threads before tearing down the state. Declared here to
+** avoid a core->lib header dependency; it no-ops if the pool was never started.
+** Without this, abandoned pool threads read the freed parent PledgeStore (and
+** other freed state) -- a use-after-free and pledge escape. */
+LUA_API void lus_worker_pool_shutdown(void);
+
 static void close_state(lua_State *L) {
   global_State *g = G(L);
+  lus_worker_pool_shutdown(); /* join pool threads before freeing anything */
   if (!completestate(g))    /* closing a partially built state? */
     luaC_freeallobjects(L); /* just collect its objects */
   else {                    /* closing a fully built state */

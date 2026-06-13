@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.2 (**WIP**)
+
+**Release date:** TBD
+
+- Fixed sealed code being able to `load` unverified precompiled bytecode.
+- Fixed a read-only `fs:write` permission check being able to insert an entry into a sealed pledge store.
+- Fixed `network.udp` sockets being able to `sendto` any host and port regardless of the granted `network:udp`.
+- Fixed a use-after-free in which abandoned worker-pool threads could read a parent state's freed pledge store during interpreter shutdown.
+- Fixed `fs.createlink` pledge-checking only the link path and not the symlink target.
+- Fixed an unanchored `fs` pledge pattern beginning with a wildcard matching files anywhere on the filesystem.
+- Fixed `catch` leaking the interpreter's C-call counter when a caught error unwound across a C-call boundary.
+- Fixed a table slice with an enormous end index iterating for trillions of steps instead of failing.
+
 ## 1.6.1
 
 **Release date:** June 12, 2026

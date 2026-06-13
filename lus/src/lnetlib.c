@@ -931,6 +931,15 @@ static int udp_sendto(lua_State *L) {
   const char *address = luaL_checkstring(L, 3);
   int port = (int)luaL_checkinteger(L, 4);
 
+  /* Enforce network:udp per DESTINATION, mirroring tcp_connect. udp.open's
+  ** check uses a NULL value and so authorizes any host; without this check a
+  ** udp grant scoped to one resolver would permit datagrams to any host:port. */
+  char hostport[512];
+  snprintf(hostport, sizeof(hostport), "%s:%d", address, port);
+  if (!lus_haspledge(L, "network:udp", hostport)) {
+    return luaL_error(L, "permission \"network:udp\" denied for '%s'", hostport);
+  }
+
   struct sockaddr_storage addr;
   socklen_t addrlen;
 

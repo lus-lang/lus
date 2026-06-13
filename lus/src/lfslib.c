@@ -243,6 +243,16 @@ static int glob_match(const char *pattern, const char *string) {
 static void fs_granter(lua_State *L, lus_PledgeRequest *p) {
   /* Granting: accept read/write subpermissions or base fs */
   if (p->status == LUS_PLEDGE_GRANT || p->status == LUS_PLEDGE_UPDATE) {
+    /* Reject unanchored patterns: paths are matched (after canonicalization) as
+    ** absolute, and fnmatch('*', ...) spans '/', so a leading-wildcard pattern
+    ** like "*.pem" would match files anywhere on the filesystem. Require an
+    ** absolute, anchored pattern. */
+    if (p->value != NULL && (p->value[0] == '*' || p->value[0] == '?')) {
+      luaL_error(L,
+                 "fs pledge pattern must be an absolute path, not an unanchored "
+                 "wildcard: '%s'",
+                 p->value);
+    }
     if (p->sub == NULL) {
       /* Grant global fs permission */
       lus_setpledge(L, p, NULL, p->value);
@@ -734,6 +744,10 @@ static int fs_createlink(lua_State *L) {
   const char *at = luaL_checkstring(L, 1);
   const char *target = luaL_checkstring(L, 2);
   check_fs_permission(L, "fs:write", at);
+  /* Also gate the TARGET: a symlink that points outside the sandbox is the
+  ** primitive behind the check-vs-open (TOCTOU) escape. Requiring the target to
+  ** be within the writable scope prevents planting an out-of-sandbox link. */
+  check_fs_permission(L, "fs:write", target);
 
 #if defined(LUS_PLATFORM_WINDOWS)
   /* Determine if target is a directory to use correct flag */

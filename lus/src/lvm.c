@@ -979,6 +979,12 @@ void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
       lua_Integer count = (span >= (lua_Unsigned)LUA_MAXINTEGER)
                               ? LUA_MAXINTEGER
                               : (lua_Integer)(span + 1);
+      /* Bound the work: the loop below visits every literal index in the span,
+      ** so an enormous end index (e.g. t[1, 1<<40]) would spin for trillions of
+      ** iterations. cast_uint(count) in the resize also truncates such spans.
+      ** A dense slice this large is abuse, not a real request. */
+      if (count > (1 << 26))
+        luaG_runerror(L, "slice span too large");
       /* Build the result anchored on the stack top, and write it to 'ra' only
       ** at the very end. 'ra' may alias the source table's register (e.g.
       ** slicing an inline temporary, `({..})[a,b]`, where codegen makes
@@ -1532,6 +1538,9 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
   L->activeCatch = cinfo->prev;
   eci->u.l.catchlist = cinfo->frameprev;
   L->ci = eci;
+  /* Undo any C-call-count increments leaked by frames the error unwound past
+  ** (mirrors what CPROTECT restores on the C-level catch path). */
+  L->nCcalls = cinfo->savednCcalls;
 
   /* Close any to-be-closed variables opened during the catch body (e.g. a
   ** grown luaL_Buffer's box, which is registered with lua_toclose) before
@@ -2459,6 +2468,11 @@ returning: /* trap already set */
         catchinfo->destreg = cast_byte(a);
         catchinfo->nresults = 0; /* recovery derives count from ENDCATCH */
         catchinfo->baseoffset = savestack(L, ci->func.p + 1);
+        /* Snapshot the C-call counter: a caught error that unwinds across a
+        ** ccall frame (e.g. a metamethod) skips that frame's `nCcalls -= inc`,
+        ** so without this restore the count leaks and eventually trips a
+        ** spurious "C stack overflow" for the lifetime of the thread. */
+        catchinfo->savednCcalls = L->nCcalls;
 
         /* Copy the handler (if any) into the node; the source is on the stack
         ** (a GC root) during the copy, and the node is GC-marked once linked. */

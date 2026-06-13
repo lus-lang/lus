@@ -1,5 +1,5 @@
 project('lus', 'c',
-  version: '1.6.1',
+  version: '1.6.2',
   default_options: [
     'c_std=gnu11',
     'warning_level=3',
