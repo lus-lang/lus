@@ -3,8 +3,6 @@ title: Lus 1.6.0
 date: 2026-06-10
 ---
 
-**Lus now installs itself.** On Linux and macOS, `curl -fsSL https://lus.dev/install.sh | sh` downloads the right binary, verifies it, and puts `lus` on your `PATH`; on Windows, [lus-setup.exe](https://github.com/lus-lang/lus/releases/latest/download/lus-setup.exe) does the same with a per-user installer. Release binaries are now self-contained — statically linked, runnable on a clean machine — and every release publishes a `SHA256SUMS` asset. Under the hood, this release also makes the VM substantially faster through intrinsified standard-library fastcalls.
-
 - Added `fromcsv` and `tocsv` to parse CSV files.
 - Added VM-intrinsified fastcalls for common standard library functions, reducing call overhead by ~31% (1.46x geometric mean speedup across 57 benchmarks).
   - When the compiler detects a call to a known stdlib function with the expected argument count, it emits `OP_FASTCALL` instead of `OP_CALL`. The VM validates at runtime that the function hasn't been replaced and executes the operation inline, falling back to a normal call otherwise.
@@ -91,4 +89,3 @@ date: 2026-06-10
 - Added `vector.archive.zstd.compress` and `vector.archive.zstd.decompress` for Zstandard compression.
 - Added `vector.archive.brotli.compress` and `vector.archive.brotli.decompress` for Brotli compression.
 - Added `vector.archive.lz4.compress`, `vector.archive.lz4.decompress`, and `vector.archive.lz4.decompress_hc` for LZ4 compression.
-
