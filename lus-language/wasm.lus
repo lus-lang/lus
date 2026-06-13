@@ -79,14 +79,6 @@ handlers["textDocument/didChange"] = function(msg)
   local params = msg.params
   local td = params.textDocument
   document.change(td.uri, td.version, params.contentChanges)
-  -- Debug: log document state after change
-  local text = document.get_text(td.uri)
-  if text then
-    local lines = 1
-    for _ in string.gmatch(text, "\n") do lines = lines + 1 end
-    io.stderr:write("[lus-debug] didChange v" .. td.version
-      .. ": " .. lines .. " lines, " .. #text .. " chars\n")
-  end
   diagnostics.publish(td.uri)
   return nil
 end

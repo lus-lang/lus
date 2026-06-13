@@ -490,6 +490,7 @@ static int worker_lib_message(lua_State *L) {
   lus_mutex_lock(&w->mutex);
   if (!msgqueue_push(&w->outbox, buf.arena, buf.data, buf.size)) {
     lus_mutex_unlock(&w->mutex);
+    serbuf_free(&buf);
     return luaL_error(L, "out of memory");
   }
   lus_cond_signal(&w->outbox_cond);
@@ -546,8 +547,11 @@ static void worker_run(WorkerState *w) {
     lus_mutex_lock(&w->mutex);
     w->status = LUS_WORKER_ERROR;
     w->error_msg = strdup("failed to create Lua state");
+    if (!w->error_msg)
+      w->status = LUS_WORKER_DEAD;
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
     signal_recv_ctx(w);               /* wake multi-worker select */
+    lus_mutex_unlock(&w->mutex);
     return;
   }
   w->L = L;
@@ -609,8 +613,11 @@ static void worker_run(WorkerState *w) {
       lus_mutex_lock(&w->mutex);
       w->status = LUS_WORKER_ERROR;
       w->error_msg = strdup("failed to deserialize initial argument");
+      if (!w->error_msg)
+        w->status = LUS_WORKER_DEAD;
       lus_cond_signal(&w->outbox_cond);
       signal_recv_ctx(w); /* wake multi-worker select */
+      lus_mutex_unlock(&w->mutex);
       return;
     }
     luaA_freestandalone(arena);
@@ -622,8 +629,11 @@ static void worker_run(WorkerState *w) {
     w->status = LUS_WORKER_ERROR;
     const char *err = lua_tostring(L, -1);
     w->error_msg = strdup(err ? err : "unknown load error");
+    if (!w->error_msg)
+      w->status = LUS_WORKER_DEAD;
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
     signal_recv_ctx(w);               /* wake multi-worker select */
+    lus_mutex_unlock(&w->mutex);
     return;
   }
 
@@ -637,8 +647,11 @@ static void worker_run(WorkerState *w) {
     w->status = LUS_WORKER_ERROR;
     const char *err = lua_tostring(L, -1);
     w->error_msg = strdup(err ? err : "unknown runtime error");
+    if (!w->error_msg)
+      w->status = LUS_WORKER_DEAD;
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
     signal_recv_ctx(w);               /* wake multi-worker select */
+    lus_mutex_unlock(&w->mutex);
     return;
   }
 
@@ -771,6 +784,7 @@ static int lib_create(lua_State *L) {
     lus_mutex_lock(&w->mutex);
     if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
       lus_mutex_unlock(&w->mutex);
+      serbuf_free(&buf);
       worker_decref(w);
       return luaL_error(L, "out of memory");
     }
@@ -943,6 +957,7 @@ static int lib_send(lua_State *L) {
   lus_mutex_lock(&w->mutex);
   if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
     lus_mutex_unlock(&w->mutex);
+    serbuf_free(&buf);
     return luaL_error(L, "out of memory");
   }
   lus_cond_signal(&w->inbox_cond);
@@ -1007,6 +1022,8 @@ LUA_API WorkerState *lus_worker_create(lua_State *L, const char *path) {
 }
 
 LUA_API int lus_worker_send(lua_State *L, WorkerState *w, int idx) {
+  if (w == NULL)
+    return 0;
   SerBuffer buf;
   serbuf_init(&buf);
   if (!serialize_value(L, idx, &buf, 0)) {
@@ -1016,6 +1033,7 @@ LUA_API int lus_worker_send(lua_State *L, WorkerState *w, int idx) {
   lus_mutex_lock(&w->mutex);
   if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
     lus_mutex_unlock(&w->mutex);
+    serbuf_free(&buf);
     return 0;
   }
   lus_cond_signal(&w->inbox_cond);

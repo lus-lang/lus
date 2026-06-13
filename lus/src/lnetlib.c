@@ -476,8 +476,13 @@ static void sock_buffer_ensure(lua_State *L, LSocket *sock, size_t additional) {
   size_t needed = sock->buflen + additional;
   if (needed > sock->bufcap) {
     size_t newcap = sock->bufcap ? sock->bufcap * 2 : 4096;
-    while (newcap < needed)
+    while (newcap < needed) {
+      if (newcap > SIZE_MAX / 2) {
+        newcap = needed;
+        break;
+      }
       newcap *= 2;
+    }
     sock->buffer = luaM_reallocvchar(L, sock->buffer, sock->bufcap, newcap);
     sock->bufcap = newcap;
   }
@@ -1358,6 +1363,9 @@ static int net_fetch(lua_State *L) {
   size_t body_len = 0;
   const char *body = luaL_optlstring(L, 4, NULL, &body_len);
 
+  if (strpbrk(method, "\r\n"))
+    return luaL_error(L, "invalid characters in HTTP method");
+
   /* Check network:http permission */
   if (!lus_haspledge(L, "network:http", url)) {
     return luaL_error(L, "permission \"network:http\" denied for '%s'", url);
@@ -1447,6 +1455,10 @@ static int net_fetch(lua_State *L) {
       const char *key = lua_tostring(L, -2);
       const char *val = lua_tostring(L, -1);
       if (key && val) {
+        if (strpbrk(key, "\r\n") || strpbrk(val, "\r\n")) {
+          lua_pop(L, 1);
+          return luaL_error(L, "invalid characters in HTTP header");
+        }
         lua_pushfstring(L, "%s: %s\r\n", key, val);
         luaL_addvalue(&req);
       }

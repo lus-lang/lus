@@ -66,7 +66,7 @@ void luaE_setdebt(global_State *g, l_mem debt) {
 
 CallInfo *luaE_extendCI(lua_State *L, int err) {
   CallInfo *ci;
-  ci = cast(CallInfo *, luaM_saferealloc_(L, NULL, 0, sizeof(CallInfo)));
+  ci = cast(CallInfo *, luaM_realloc_(L, NULL, 0, sizeof(CallInfo)));
   if (l_unlikely(ci == NULL)) { /* allocation failed? */
     if (err)
       luaM_error(L); /* raise the error */

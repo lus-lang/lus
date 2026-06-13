@@ -412,8 +412,12 @@ static void parse_value_iterative(JsonParser *p) {
               }
               if (*p->json == '\\') {
                 p->json++;
-                if (p->json >= p->end)
-                  break;
+                if (p->json >= p->end) {
+                  luaM_freearray(L, kbuf, kcap);
+                  luaM_freearray(L, stack, stack_cap);
+                  lua_pop(L, 1);
+                  json_error(p, "unterminated string key");
+                }
                 switch (*p->json) {
                   case '"': kbuf[klen++] = '"'; break;
                   case '\\': kbuf[klen++] = '\\'; break;
@@ -495,7 +499,6 @@ static void parse_value_iterative(JsonParser *p) {
             }
             if (p->json < p->end)
               p->json++; /* skip closing quote */
-            expect(p, ':', "after object key");
 
             /* Create key string using public API */
             lua_pushlstring(L, kbuf, klen);
@@ -504,6 +507,8 @@ static void parse_value_iterative(JsonParser *p) {
             lua_rawseti(L, anchor_idx, next_anchor);
             next_anchor++;
             luaM_freearray(L, kbuf, kcap);
+
+            expect(p, ':', "after object key");
 
             /* Push container frame */
             if (stack_size >= stack_cap) {
@@ -658,7 +663,6 @@ static void parse_value_iterative(JsonParser *p) {
           }
           if (p->json < p->end)
             p->json++;
-          expect(p, ':', "after object key");
           /* Create new key using public API */
           lua_pushlstring(L, kbuf, klen);
           TString *newkey = tsvalue(s2v(L->top.p - 1));
@@ -667,6 +671,7 @@ static void parse_value_iterative(JsonParser *p) {
           next_anchor++;
           parent->key = newkey;
           luaM_freearray(L, kbuf, kcap);
+          expect(p, ':', "after object key");
           break; /* Parse value */
         }
         else {

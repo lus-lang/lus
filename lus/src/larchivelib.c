@@ -168,6 +168,8 @@ static int archive_gzip_decompress(lua_State *L) {
     size_t chunk = (input_len > 0) ? input_len * 4 : 256;
     if (chunk < 256)
       chunk = 256;
+    if (chunk > UINT_MAX)
+      chunk = UINT_MAX;
     char *out = luaL_prepbuffsize(&buf, chunk);
     strm.next_out = (Bytef *)out;
     strm.avail_out = (uInt)chunk;
@@ -183,7 +185,6 @@ static int archive_gzip_decompress(lua_State *L) {
     }
   } while (ret != Z_STREAM_END);
 
-  size_t total = strm.total_out;
   inflateEnd(&strm);
 
   if (is_vec) {
@@ -196,7 +197,6 @@ static int archive_gzip_decompress(lua_State *L) {
   else {
     luaL_pushresult(&buf);
   }
-  (void)total;
   return 1;
 }
 
@@ -274,6 +274,8 @@ static int archive_deflate_decompress(lua_State *L) {
     size_t chunk = (input_len > 0) ? input_len * 4 : 256;
     if (chunk < 256)
       chunk = 256;
+    if (chunk > UINT_MAX)
+      chunk = UINT_MAX;
     char *out = luaL_prepbuffsize(&buf, chunk);
     strm.next_out = (Bytef *)out;
     strm.avail_out = (uInt)chunk;

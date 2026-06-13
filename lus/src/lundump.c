@@ -396,7 +396,7 @@ LClosure *luaU_undump(lua_State *L, ZIO *Z, Table *anchor, const char *name,
   S.L = L;
   S.Z = Z;
   S.fixed = cast_byte(fixed);
-  S.offset = 1;  /* fist byte was already read */
+  S.offset = 1;  /* first byte was already read */
   checkHeader(&S);
   S.h = anchor;  /* table for saved strings */
   S.nstr = 0;

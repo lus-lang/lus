@@ -97,7 +97,8 @@ static int fs_path_join(lua_State *L) {
 
     /* If this component is absolute, it replaces everything before it */
     if (is_absolute(s, len)) {
-      /* Reset buffer by re-initializing */
+      luaL_pushresult(&b); /* flush and free any allocated buffer */
+      lua_pop(L, 1);
       luaL_buffinit(L, &b);
       result_len = 0;
       luaL_addlstring(&b, s, len);
