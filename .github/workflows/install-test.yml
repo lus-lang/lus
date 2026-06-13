@@ -84,15 +84,13 @@ jobs:
         if: needs.resolve.outputs.tag == '' || !contains(needs.resolve.outputs.assets, format(',{0},', matrix.asset))
         run: echo "::warning::${{ matrix.asset }} is not in the current unstable (${{ needs.resolve.outputs.tag || 'no unstable release' }}) — that platform's build was skipped on the last main push; strict E2E skipped"
 
-      # v1.5.1 predates self-contained binaries and SHA256SUMS: this
-      # exercises tag pinning, the checksum warn+continue path, and
-      # the install flow, but the binary itself may need shared libs
-      # the runner lacks. Bump the pin to v1.6.0 once released and
-      # drop the tolerance.
+      # v1.6.0 is the first stable release with self-contained binaries
+      # and a SHA256SUMS asset, so the pinned-stable run is fully strict:
+      # it exercises tag pinning, checksum verification, and runs the
+      # installed binary.
       - name: Install pinned stable (mechanics)
         shell: sh
         run: |
-          sh lus-install/install.sh --version v1.5.1 --dir "$PWD/bin-pinned"
+          sh lus-install/install.sh --version v1.6.0 --dir "$PWD/bin-pinned"
           test -x "$PWD/bin-pinned/lus"
-          "$PWD/bin-pinned/lus" -v \
-            || echo "::notice::v1.5.1 binary predates static linking; install mechanics verified"
+          "$PWD/bin-pinned/lus" -v
