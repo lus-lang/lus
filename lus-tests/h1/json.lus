@@ -140,6 +140,20 @@ tests:it("fromjson rejects control characters in string", function()
     assert(ok == false, "unescaped tab should error")
 end)
 
+tests:it("fromjson rejects out-of-range numbers", function()
+    local bad = {
+        "9223372036854775808",
+        "-9223372036854775809",
+        "1e309",
+        "-1e309",
+    }
+    for _, json in ipairs(bad) do
+        local ok, err = catch fromjson(json)
+        assert(ok == false, "out-of-range number should error: " .. json)
+        assert(tostring(err):find("number out of range"), "error should mention range")
+    end
+end)
+
 tests:it("tojson serializes nil as null", function()
     local result = tojson(nil)
     assert(result == "null", "nil should serialize to null")

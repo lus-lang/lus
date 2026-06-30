@@ -8,6 +8,8 @@
 
 #include "lprefix.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +60,19 @@ static int readonly_env = 0;               /* --readonly-env flag */
 static int gc_pause = 0;                   /* --gc-pause value (0 = default) */
 static int strip_debug = 0;                /* --strip-debug flag */
 static void mark_env_readonly(lua_State *L);
+
+static int parse_positive_int_arg(const char *s, int *result) {
+  char *endptr;
+  long value;
+  if (s == NULL || *s == '\0')
+    return 0;
+  errno = 0;
+  value = strtol(s, &endptr, 10);
+  if (*endptr != '\0' || errno == ERANGE || value <= 0 || value > INT_MAX)
+    return 0;
+  *result = (int)value;
+  return 1;
+}
 
 /* Standalone bundle options */
 static const char *standalone_entry = NULL; /* --standalone entry file */
@@ -300,9 +315,10 @@ static int cmd_format(lua_State *L, int argc, char **argv) {
     }
     else if (strcmp(argv[i], "--indent") == 0) {
       if (i + 1 < argc) {
-        indent_width = atoi(argv[++i]);
-        if (indent_width <= 0)
-          indent_width = 4;
+        if (!parse_positive_int_arg(argv[++i], &indent_width)) {
+          l_message(progname, "'--indent' needs a positive number argument");
+          return 0;
+        }
       }
       else {
         l_message(progname, "'--indent' needs a number argument");
@@ -1436,8 +1452,7 @@ static int collectargs(char **argv, int *first) {
             i++; /* skip to argument */
             if (argv[i] == NULL || argv[i][0] == '-')
               return has_error; /* no argument */
-            gc_pause = atoi(argv[i]);
-            if (gc_pause <= 0)
+            if (!parse_positive_int_arg(argv[i], &gc_pause))
               return has_error; /* not a positive number */
             break;
           }

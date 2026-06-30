@@ -100,6 +100,12 @@ tests:it("fromcsv errors on unterminated quote", function()
     assert(not ok, "should error on unterminated quote")
 end)
 
+tests:it("fromcsv errors on junk after quoted field", function()
+    local ok, err = catch fromcsv('"hello"x,world')
+    assert(not ok, "should error on junk after quoted field")
+    assert(tostring(err):find("unexpected character"), "error should mention unexpected character")
+end)
+
 -- ============================================================
 -- fromcsv headers mode
 -- ============================================================

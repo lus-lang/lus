@@ -68,6 +68,12 @@ typedef lpack_KOption KOption;
 ** =================================================================== */
 
 
+static const char *find_vector_zterm(Vector *v, size_t pos) {
+  lua_assert(pos <= v->len);
+  return (const char *)memchr(v->data + pos, '\0', v->len - pos);
+}
+
+
 /*
 ** Check that argument is a vector.
 */
@@ -266,8 +272,9 @@ static int vec_unpack(lua_State *L) {
         break;
       }
       case Kzstr: {
-        size_t len = strlen(v->data + pos);
-        luaL_argcheck(L, pos + len < v->len, 2, "unfinished string in vector");
+        const char *z = find_vector_zterm(v, pos);
+        luaL_argcheck(L, z != NULL, 2, "unfinished string in vector");
+        size_t len = (size_t)(z - (v->data + pos));
         lua_pushlstring(L, v->data + pos, len);
         pos += len + 1;
         size = 0;
@@ -316,16 +323,6 @@ static int vec_resize(lua_State *L) {
   luaV_resize(L, v, (size_t)newsize);
   return 0;
 }
-
-
-/*
-** Iterator state for vector.unpackmany
-*/
-typedef struct UnpackManyState {
-  int offset;
-  int count;
-  int maxcount;
-} UnpackManyState;
 
 
 /*
@@ -423,9 +420,10 @@ static int unpackmany_iter(lua_State *L) {
         break;
       }
       case Kzstr: {
-        size_t len = strlen(v->data + fmtpos);
-        if (fmtpos + len >= v->len)
+        const char *z = find_vector_zterm(v, fmtpos);
+        if (z == NULL)
           return luaL_error(L, "unfinished string in vector");
+        size_t len = (size_t)(z - (v->data + fmtpos));
         lua_pushlstring(L, v->data + fmtpos, len);
         fmtpos += len + 1;
         size = 0;
@@ -453,10 +451,13 @@ static int unpackmany_iter(lua_State *L) {
 ** vector.unpackmany(v, offset, fmt [, count])
 */
 static int vec_unpackmany(lua_State *L) {
-  checkvector(L, 1);       /* just validate */
-  luaL_checkinteger(L, 2); /* offset */
+  Vector *v = checkvector(L, 1);
+  lua_Integer offset = luaL_checkinteger(L, 2);
   luaL_checkstring(L, 3);  /* format */
   lua_Integer maxcount = luaL_optinteger(L, 4, 0);
+  luaL_argcheck(L, offset >= 0 && (size_t)offset <= v->len, 2,
+                "offset out of bounds");
+  luaL_argcheck(L, maxcount >= 0, 4, "count must be non-negative");
 
   /* Push the iterator function with upvalues:
    * 1: vector, 2: format, 3: current position, 4: count, 5: maxcount */

@@ -92,10 +92,15 @@ static int parse_row(CsvParser *p, int result_idx, lua_Integer rownum) {
   int row_idx = lua_gettop(L);
   for (;;) {
     /* parse one field */
-    if (p->csv < p->end && *p->csv == '"')
+    int quoted = p->csv < p->end && *p->csv == '"';
+    if (quoted)
       parse_quoted_field(p);
     else
       parse_unquoted_field(p);
+    if (quoted && p->csv < p->end && *p->csv != p->delim &&
+        *p->csv != '\n' && *p->csv != '\r') {
+      csv_error(p, "unexpected character after quoted field");
+    }
     /* field string is now on top of stack; store in row table */
     lua_rawseti(L, row_idx, fieldnum++);
     /* check what follows */

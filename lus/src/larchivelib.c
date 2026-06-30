@@ -105,6 +105,8 @@ static int archive_gzip_compress(lua_State *L) {
   int level = (int)luaL_optinteger(L, 2, 6);
   luaL_argcheck(L, level >= 0 && level <= 9, 2,
                 "compression level must be 0-9");
+  if (input_len > UINT_MAX)
+    return luaL_error(L, "gzip compress: input too large");
 
   z_stream strm;
   memset(&strm, 0, sizeof(strm));
@@ -114,6 +116,10 @@ static int archive_gzip_compress(lua_State *L) {
     return luaL_error(L, "gzip compress init failed (%d)", ret);
 
   size_t bound = deflateBound(&strm, (uLong)input_len);
+  if (bound > UINT_MAX) {
+    deflateEnd(&strm);
+    return luaL_error(L, "gzip compress: input too large");
+  }
   luaL_Buffer buf;
   char *out = luaL_buffinitsize(L, &buf, bound);
 
@@ -213,6 +219,8 @@ static int archive_deflate_compress(lua_State *L) {
   int level = (int)luaL_optinteger(L, 2, 6);
   luaL_argcheck(L, level >= 0 && level <= 9, 2,
                 "compression level must be 0-9");
+  if (input_len > UINT_MAX)
+    return luaL_error(L, "deflate compress: input too large");
 
   z_stream strm;
   memset(&strm, 0, sizeof(strm));
@@ -221,6 +229,10 @@ static int archive_deflate_compress(lua_State *L) {
     return luaL_error(L, "deflate compress init failed (%d)", ret);
 
   size_t bound = deflateBound(&strm, (uLong)input_len);
+  if (bound > UINT_MAX) {
+    deflateEnd(&strm);
+    return luaL_error(L, "deflate compress: input too large");
+  }
   luaL_Buffer buf;
   char *out = luaL_buffinitsize(L, &buf, bound);
 

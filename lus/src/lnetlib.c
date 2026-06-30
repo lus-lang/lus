@@ -11,6 +11,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +79,20 @@ typedef int socket_t;
 #define DEFAULT_RECV_SIZE 4096
 #define DEFAULT_UDP_SIZE 8192
 #define MAX_RECV_SIZE 1048576 /* 1MB max single read */
+
+static int check_port(lua_State *L, int arg, int allow_zero) {
+  lua_Integer port = luaL_checkinteger(L, arg);
+  int min = allow_zero ? 0 : 1;
+  luaL_argcheck(L, port >= min && port <= 65535, arg, "port out of range");
+  return (int)port;
+}
+
+static int opt_port(lua_State *L, int arg, int def, int allow_zero) {
+  lua_Integer port = luaL_optinteger(L, arg, def);
+  int min = allow_zero ? 0 : 1;
+  luaL_argcheck(L, port >= min && port <= 65535, arg, "port out of range");
+  return (int)port;
+}
 
 /* TCP Socket (client connection) */
 typedef struct {
@@ -428,6 +443,10 @@ static int socket_send(lua_State *L) {
   ssize_t sent;
 
   while (total < len) {
+    size_t chunk = len - total;
+    if (chunk > (size_t)INT_MAX)
+      chunk = (size_t)INT_MAX;
+
     if (sock->timeout_ms >= 0) {
       int ready = wait_socket(sock->fd, 1, sock->timeout_ms);
       if (ready <= 0) {
@@ -439,7 +458,7 @@ static int socket_send(lua_State *L) {
     }
 
     if (sock->ssl) {
-      sent = SSL_write(sock->ssl, data + total, (int)(len - total));
+      sent = SSL_write(sock->ssl, data + total, (int)chunk);
       if (sent <= 0) {
         int ssl_err = SSL_get_error(sock->ssl, (int)sent);
         if (ssl_err == SSL_ERROR_WANT_WRITE || ssl_err == SSL_ERROR_WANT_READ) {
@@ -449,7 +468,7 @@ static int socket_send(lua_State *L) {
       }
     }
     else {
-      sent = send(sock->fd, data + total, (int)(len - total), 0);
+      sent = send(sock->fd, data + total, (int)chunk, 0);
       if (sent == SOCKET_ERROR_VAL) {
         int err = SOCKET_ERRNO;
         if (err == SOCKET_EWOULDBLOCK || err == SOCKET_EINPROGRESS) {
@@ -929,7 +948,8 @@ static int udp_sendto(lua_State *L) {
   size_t len;
   const char *data = luaL_checklstring(L, 2, &len);
   const char *address = luaL_checkstring(L, 3);
-  int port = (int)luaL_checkinteger(L, 4);
+  int port = check_port(L, 4, 0);
+  luaL_argcheck(L, len <= (size_t)INT_MAX, 2, "datagram too large");
 
   /* Enforce network:udp per DESTINATION, mirroring tcp_connect. udp.open's
   ** check uses a NULL value and so authorizes any host; without this check a
@@ -1019,7 +1039,13 @@ static int udp_receive(lua_State *L) {
 static int udp_setsockname(lua_State *L) {
   LUDPSocket *sock = check_udpsocket(L, 1);
   const char *address = luaL_checkstring(L, 2);
-  int port = (int)luaL_checkinteger(L, 3);
+  int port = check_port(L, 3, 1);
+
+  char hostport[512];
+  snprintf(hostport, sizeof(hostport), "%s:%d", address, port);
+  if (!lus_haspledge(L, "network:udp", hostport)) {
+    return luaL_error(L, "permission \"network:udp\" denied for '%s'", hostport);
+  }
 
   struct sockaddr_storage addr;
   socklen_t addrlen;
@@ -1080,7 +1106,7 @@ static const luaL_Reg udpsocket_methods[] = {{"sendto", udp_sendto},
 
 static int tcp_connect(lua_State *L) {
   const char *address = luaL_checkstring(L, 1);
-  int port = (int)luaL_checkinteger(L, 2);
+  int port = check_port(L, 2, 0);
 
   /* Build host:port string for permission check */
   char hostport[512];
@@ -1120,7 +1146,7 @@ static int tcp_connect(lua_State *L) {
 
 static int tcp_bind(lua_State *L) {
   const char *address = luaL_checkstring(L, 1);
-  int port = (int)luaL_checkinteger(L, 2);
+  int port = check_port(L, 2, 1);
   int backlog = (int)luaL_optinteger(L, 3, DEFAULT_BACKLOG);
 
   /* Build host:port string for permission check */
@@ -1183,24 +1209,31 @@ static const luaL_Reg tcp_funcs[] = {
 */
 
 static int udp_open(lua_State *L) {
-  int port = (int)luaL_optinteger(L, 1, 0);
+  int port = opt_port(L, 1, 0, 1);
   const char *address = luaL_optstring(L, 2, NULL);
+  socket_t fd;
 
   /* Check network:udp permission */
-  if (!lus_haspledge(L, "network:udp", NULL)) {
+  if (port > 0 || address != NULL) {
+    char hostport[512];
+    snprintf(hostport, sizeof(hostport), "%s:%d", address ? address : "0.0.0.0",
+             port);
+    if (!lus_haspledge(L, "network:udp", hostport)) {
+      return luaL_error(L, "permission \"network:udp\" denied for '%s'",
+                        hostport);
+    }
+  }
+  else if (!lus_haspledge(L, "network:udp", NULL)) {
     return luaL_error(L, "permission \"network:udp\" denied");
   }
 
   init_winsock(L);
 
-  socket_t fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (fd == SOCKET_INVALID) {
     return luaL_error(L, "cannot create UDP socket: %s",
                       sock_strerror(SOCKET_ERRNO));
   }
-
-  LUDPSocket *sock = new_udpsocket(L);
-  sock->fd = fd;
 
   /* Bind if port specified */
   if (port > 0 || address != NULL) {
@@ -1224,8 +1257,11 @@ static int udp_open(lua_State *L) {
       sock_close(fd);
       return luaL_error(L, "cannot bind UDP socket: %s", sock_strerror(err));
     }
-    sock->bound = 1;
   }
+
+  LUDPSocket *sock = new_udpsocket(L);
+  sock->fd = fd;
+  sock->bound = (port > 0 || address != NULL);
 
   return 1;
 }
@@ -1290,7 +1326,14 @@ static int parse_url(const char *url, ParsedURL *parsed) {
 
   /* Check for port */
   if (*host_end == ':') {
-    parsed->port = atoi(host_end + 1);
+    char *endptr;
+    unsigned long port;
+    errno = 0;
+    port = strtoul(host_end + 1, &endptr, 10);
+    if (endptr == host_end + 1 || errno == ERANGE || port == 0 ||
+        port > 65535 || (*endptr != '\0' && *endptr != '/'))
+      return -1;
+    parsed->port = (int)port;
     while (*host_end && *host_end != '/')
       host_end++;
   }
@@ -1477,7 +1520,9 @@ static int net_fetch(lua_State *L) {
 
   /* Content-Length if body present */
   if (body && body_len > 0) {
-    lua_pushfstring(L, "Content-Length: %d\r\n", (int)body_len);
+    char lenhdr[64];
+    snprintf(lenhdr, sizeof(lenhdr), "Content-Length: %zu\r\n", body_len);
+    lua_pushstring(L, lenhdr);
     luaL_addvalue(&req);
   }
 
@@ -1497,11 +1542,14 @@ static int net_fetch(lua_State *L) {
   size_t sent = 0;
   while (sent < req_len) {
     ssize_t n;
+    size_t tosend = req_len - sent;
+    if (tosend > (size_t)INT_MAX)
+      tosend = (size_t)INT_MAX;
     if (sock.ssl) {
-      n = SSL_write(sock.ssl, req_data + sent, (int)(req_len - sent));
+      n = SSL_write(sock.ssl, req_data + sent, (int)tosend);
     }
     else {
-      n = send(fd, req_data + sent, (int)(req_len - sent), 0);
+      n = send(fd, req_data + sent, (int)tosend, 0);
     }
     if (n <= 0) {
       if (sock.ssl)

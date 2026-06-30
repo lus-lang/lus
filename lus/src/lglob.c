@@ -211,28 +211,61 @@ int lus_glob_match_path(const char *pattern, const char *path,
 #endif
 }
 
-/*
-** Helper: extract host from URL (handles http:// and https://)
-*/
-static const char *get_url_host(const char *url, size_t *host_len) {
+static const char *skip_url_scheme(const char *url) {
   const char *p = url;
-
-  /* Skip scheme */
   if (strncmp(p, "http://", 7) == 0) {
     p += 7;
   }
   else if (strncmp(p, "https://", 8) == 0) {
     p += 8;
   }
+  return p;
+}
+
+/*
+** Helper: extract authority from URL (host[:port], handles http:// and
+** https://). Scheme-less permission values use the whole leading authority.
+*/
+static const char *get_url_authority(const char *url, size_t *authority_len) {
+  const char *authority_start = skip_url_scheme(url);
+  const char *p = authority_start;
+  while (*p && *p != '/' && *p != '?') {
+    p++;
+  }
+
+  *authority_len = p - authority_start;
+  return authority_start;
+}
+
+/*
+** Helper: extract host from URL, excluding any port.
+*/
+static const char *get_url_host(const char *url, size_t *host_len) {
+  size_t authority_len;
+  const char *host_start = get_url_authority(url, &authority_len);
+  const char *p = host_start;
+  const char *authority_end = host_start + authority_len;
 
   /* Find end of host (port, path, or end of string) */
-  const char *host_start = p;
-  while (*p && *p != ':' && *p != '/' && *p != '?') {
+  while (p < authority_end && *p != ':') {
     p++;
   }
 
   *host_len = p - host_start;
   return host_start;
+}
+
+static int glob_match_part(const char *pattern, size_t pattern_len,
+                           const char *subject, size_t subject_len) {
+  char pattern_buf[256];
+  char subject_buf[256];
+  if (pattern_len >= sizeof(pattern_buf) || subject_len >= sizeof(subject_buf))
+    return 0;
+  memcpy(pattern_buf, pattern, pattern_len);
+  pattern_buf[pattern_len] = '\0';
+  memcpy(subject_buf, subject, subject_len);
+  subject_buf[subject_len] = '\0';
+  return glob_match_internal(pattern_buf, subject_buf);
 }
 
 int lus_glob_match_url(const char *pattern, const char *url) {
@@ -245,53 +278,32 @@ int lus_glob_match_url(const char *pattern, const char *url) {
   /* If pattern has no scheme, only match against host */
   if (strncmp(pattern, "http://", 7) != 0 &&
       strncmp(pattern, "https://", 8) != 0) {
-    /* Pattern is host-only (possibly with wildcards and path) */
+    /* Pattern is authority-only (possibly with wildcards and path). */
+    size_t url_authority_len;
     size_t url_host_len;
+    const char *url_authority = get_url_authority(url, &url_authority_len);
     const char *url_host = get_url_host(url, &url_host_len);
 
     /* Check if pattern has a path component */
     const char *pattern_slash = strchr(pattern, '/');
+    size_t pattern_authority_len =
+        pattern_slash ? (size_t)(pattern_slash - pattern) : strlen(pattern);
+    int pattern_has_port =
+        memchr(pattern, ':', pattern_authority_len) != NULL;
+    const char *subject = pattern_has_port ? url_authority : url_host;
+    size_t subject_len = pattern_has_port ? url_authority_len : url_host_len;
+
+    if (!glob_match_part(pattern, pattern_authority_len, subject, subject_len))
+      return 0;
+
     if (pattern_slash) {
-      /* Pattern has path: match host + path */
-      size_t pattern_host_len = pattern_slash - pattern;
-      char host_buf[256];
-      if (url_host_len >= sizeof(host_buf))
-        return 0;
-      memcpy(host_buf, url_host, url_host_len);
-      host_buf[url_host_len] = '\0';
-
-      /* Match host part */
-      char pattern_host[256];
-      if (pattern_host_len >= sizeof(pattern_host))
-        return 0;
-      memcpy(pattern_host, pattern, pattern_host_len);
-      pattern_host[pattern_host_len] = '\0';
-
-      if (!glob_match_internal(pattern_host, host_buf))
-        return 0;
-
-      /* Match path part */
-      const char *url_path = url_host + url_host_len;
-      if (*url_path == ':') {
-        /* Skip port */
-        while (*url_path && *url_path != '/')
-          url_path++;
-      }
-      if (*url_path == '\0')
+      const char *url_path = url_authority + url_authority_len;
+      if (*url_path == '\0' || *url_path == '?')
         url_path = "/";
-
       return glob_match_internal(pattern_slash, url_path);
     }
-    else {
-      /* Pattern is host only: match just the host */
-      char host_buf[256];
-      if (url_host_len >= sizeof(host_buf))
-        return 0;
-      memcpy(host_buf, url_host, url_host_len);
-      host_buf[url_host_len] = '\0';
 
-      return glob_match_internal(pattern, host_buf);
-    }
+    return 1;
   }
 
   /* Pattern has scheme: do full URL match */

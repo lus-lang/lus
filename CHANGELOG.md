@@ -12,6 +12,22 @@
 - Fixed an unanchored `fs` pledge pattern beginning with a wildcard matching files anywhere on the filesystem.
 - Fixed `catch` leaking the interpreter's C-call counter when a caught error unwound across a C-call boundary.
 - Fixed a table slice with an enormous end index iterating for trillions of steps instead of failing.
+- Fixed `vector.unpack` and `vector.unpackmany` reading past the end of a vector when unpacking an unterminated `z` string.
+- Fixed `network.udp.open(port, address)` not enforcing value-scoped `network:udp` pledges for bound sockets.
+- Fixed `network.fetch` truncating large HTTP request body lengths and send sizes through `int` casts.
+- Fixed `network.fetch` accepting malformed or out-of-range URL ports.
+- Fixed a stale `expdesc` initializer that caused a compiler warning after AST support was added.
+- Fixed `network.udp` sockets being able to bind with `setsockname` outside their value-scoped `network:udp` pledge.
+- Fixed `network:*` pledge values containing `host:port` never matching checks that included a port.
+- Fixed TCP and UDP socket APIs truncating out-of-range ports before binding, connecting, or sending.
+- Fixed `fromjson` accepting out-of-range integers and infinities instead of rejecting those numeric literals.
+- Fixed `fromjson` direct table writes so they perform the required GC write barrier.
+- Fixed `fromcsv` accepting junk after a quoted field and reinterpreting it as later CSV structure.
+- Fixed TCP socket `send` chunking so large writes are never narrowed through an oversized `int`.
+- Fixed gzip and deflate compression rejecting inputs and output bounds too large for zlib's single-shot `uInt` fields.
+- Fixed `vector.unpackmany` accepting negative offsets or counts as empty iterators.
+- Fixed numeric CLI options such as `format --indent` and `--gc-pause` accepting trailing garbage.
+- Removed a stale unused `vector.unpackmany` iterator-state typedef.
 
 ## 1.6.1
 

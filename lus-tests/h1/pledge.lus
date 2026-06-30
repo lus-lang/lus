@@ -205,6 +205,35 @@ tests:it("tcp.bind denied without pledge", function()
     tests:assert_true(tostring(err):find("permission") ~= nil)
 end)
 
+tests:it("network ports reject out-of-range values", function()
+    local ok, err = catch network.udp.open(70000)
+    tests:assert_true(not ok)
+    tests:assert_true(tostring(err):find("port out of range") ~= nil)
+end)
+
+tests:it("network host:port pledges match the checked port", function()
+    pledge("network:tcp=127.0.0.1:1")
+    local ok, sock_or_err = catch network.tcp.connect("127.0.0.1", 1)
+    if ok then
+        sock_or_err:close()
+    else
+        tests:assert_true(tostring(sock_or_err):find("permission") == nil)
+    end
+
+    local denied, err = catch network.tcp.connect("127.0.0.1", 2)
+    tests:assert_true(not denied)
+    tests:assert_true(tostring(err):find("permission") ~= nil)
+end)
+
+tests:it("udp setsockname honors value-scoped pledge", function()
+    pledge("network:udp=127.0.0.1:9")
+    local sock = network.udp.open()
+    local ok, err = catch sock:setsockname("127.0.0.1", 10)
+    sock:close()
+    tests:assert_true(not ok)
+    tests:assert_true(tostring(err):find("permission") ~= nil)
+end)
+
 -- Now seal to verify sealed state behavior
 -- This must be at the end because it affects all subsequent operations
 pledge("seal")

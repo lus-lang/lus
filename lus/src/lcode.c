@@ -1752,7 +1752,8 @@ static void codeeq(FuncState *fs, BinOpr opr, expdesc *e1, expdesc *e2) {
 ** Apply prefix operation 'op' to expression 'e'.
 */
 void luaK_prefix(FuncState *fs, UnOpr opr, expdesc *e, int line) {
-  static const expdesc ef = {VKINT, {0}, NO_JUMP, NO_JUMP};
+  static const expdesc ef = {
+      .k = VKINT, .u.ival = 0, .t = NO_JUMP, .f = NO_JUMP, .ast = NULL};
   luaK_dischargevars(fs, e);
   switch (opr) {
     case OPR_MINUS:

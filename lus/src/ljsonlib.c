@@ -322,11 +322,34 @@ static void parse_value_iterative(JsonParser *p) {
         memcpy(numbuf, start, numlen);
         numbuf[numlen] = '\0';
         if (is_float) {
-          lua_Number n = (lua_Number)strtod(numbuf, NULL);
+          char *endptr;
+          double d;
+          lua_Number n;
+          errno = 0;
+          d = strtod(numbuf, &endptr);
+          n = (lua_Number)d;
+          if (endptr != numbuf + numlen || errno == ERANGE || !isfinite(d) ||
+              !isfinite((double)n)) {
+            luaM_freearray(L, numbuf, numlen + 1);
+            luaM_freearray(L, stack, stack_cap);
+            json_error(p, "number out of range");
+          }
           setfltvalue(&value, n);
         }
         else {
-          lua_Integer n = (lua_Integer)strtoll(numbuf, NULL, 10);
+          char *endptr;
+          long long raw;
+          lua_Integer n;
+          errno = 0;
+          raw = strtoll(numbuf, &endptr, 10);
+          n = (lua_Integer)raw;
+          if (endptr != numbuf + numlen || errno == ERANGE ||
+              raw < (long long)LUA_MININTEGER ||
+              raw > (long long)LUA_MAXINTEGER) {
+            luaM_freearray(L, numbuf, numlen + 1);
+            luaM_freearray(L, stack, stack_cap);
+            json_error(p, "number out of range");
+          }
           setivalue(&value, n);
         }
         luaM_freearray(L, numbuf, numlen + 1);
@@ -543,6 +566,7 @@ static void parse_value_iterative(JsonParser *p) {
       if (parent->is_array) {
         /* Set array element directly */
         luaH_setint(L, parent->table, parent->idx, &value);
+        luaC_barrierback(L, obj2gco(parent->table), &value);
         parent->idx++;
 
         if (accept(p, ',')) {
@@ -560,6 +584,7 @@ static void parse_value_iterative(JsonParser *p) {
         TValue keyval;
         setsvalue(L, &keyval, parent->key);
         luaH_set(L, parent->table, &keyval, &value);
+        luaC_barrierback(L, obj2gco(parent->table), &value);
 
         if (accept(p, ',')) {
           /* Parse next key */
