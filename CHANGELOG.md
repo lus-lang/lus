@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.6.2 (**WIP**)
+## 1.6.2
 
-**Release date:** TBD
+**Release date:** July 1, 2026
 
 - Fixed sealed code being able to `load` unverified precompiled bytecode.
 - Fixed a read-only `fs:write` permission check being able to insert an entry into a sealed pledge store.

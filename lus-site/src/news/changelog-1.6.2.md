@@ -1,0 +1,45 @@
+---
+title: Lus 1.6.2
+date: 2026-07-01
+---
+
+- Fixed sealed code being able to `load` unverified precompiled bytecode.
+- Fixed a read-only `fs:write` permission check being able to insert an entry into a sealed pledge store.
+- Fixed `network.udp` sockets being able to `sendto` any host and port regardless of the granted `network:udp`.
+- Fixed a use-after-free in which abandoned worker-pool threads could read a parent state's freed pledge store during interpreter shutdown.
+- Fixed `fs.createlink` pledge-checking only the link path and not the symlink target.
+- Fixed an unanchored `fs` pledge pattern beginning with a wildcard matching files anywhere on the filesystem.
+- Fixed `catch` leaking the interpreter's C-call counter when a caught error unwound across a C-call boundary.
+- Fixed a table slice with an enormous end index iterating for trillions of steps instead of failing.
+- Fixed `vector.unpack` and `vector.unpackmany` reading past the end of a vector when unpacking an unterminated `z` string.
+- Fixed `network.udp.open(port, address)` not enforcing value-scoped `network:udp` pledges for bound sockets.
+- Fixed `network.fetch` truncating large HTTP request body lengths and send sizes through `int` casts.
+- Fixed `network.fetch` accepting malformed or out-of-range URL ports.
+- Fixed a stale `expdesc` initializer that caused a compiler warning after AST support was added.
+- Fixed `network.udp` sockets being able to bind with `setsockname` outside their value-scoped `network:udp` pledge.
+- Fixed `network:*` pledge values containing `host:port` never matching checks that included a port.
+- Fixed TCP and UDP socket APIs truncating out-of-range ports before binding, connecting, or sending.
+- Fixed `fromjson` accepting out-of-range integers and infinities instead of rejecting those numeric literals.
+- Fixed `fromjson` direct table writes so they perform the required GC write barrier.
+- Fixed `fromcsv` accepting junk after a quoted field and reinterpreting it as later CSV structure.
+- Fixed TCP socket `send` chunking so large writes are never narrowed through an oversized `int`.
+- Fixed gzip and deflate compression rejecting inputs and output bounds too large for zlib's single-shot `uInt` fields.
+- Fixed `vector.unpackmany` accepting negative offsets or counts as empty iterators.
+- Fixed numeric CLI options such as `format --indent` and `--gc-pause` accepting trailing garbage.
+- Fixed sealed `require` calls being able to load precompiled bytecode modules through `package.path`.
+- Fixed sealed workers being able to load precompiled bytecode scripts after inheriting parent pledges.
+- Fixed `network.fetch` accepting CA-trusted HTTPS certificates without verifying the requested hostname.
+- Fixed `network.fetch` allowing carriage-return or line-feed characters in URL paths to reach the HTTP request line.
+- Fixed gzip and deflate decompression looping forever on truncated no-progress input.
+- Fixed `package.searchpath` probing file existence before checking value-scoped `fs:read` pledges.
+- Fixed LZ4 and unknown-size zstd decompression accepting truncated frames as successful partial output.
+- Fixed vector-returning archive compression and zstd decompression paths copying from closed `luaL_Buffer` storage.
+- Fixed path-scoped `fs:write` pledges allowing pathless temp-file creation through `io.tmpfile` and `os.tmpname`.
+- Fixed command-line `-P`/`--pledge` restrictions being applied only after `LUA_INIT`, `-e`, and `-l` code could run.
+- Fixed `fromjson` accepting invalid object-key escapes and raw control characters, and rooted parsed strings across GC-capable table insertion.
+- Fixed vector and enum construction windows where partially initialized or unrooted GC objects could be collected during emergency allocation.
+- Fixed `network.fetch` response parsing for invalid or oversized lengths, truncated bodies, missing chunk terminators, and blocking read/write timeouts.
+- Fixed `vector.pack`, `vector.unpack`, and `vector.unpackmany` bounds checks that could wrap on very large `cN` format sizes.
+- Fixed `lus_revokepledge` turning scoped grants into global grants in the public C API.
+- Fixed worker error paths double-unlocking the worker mutex after signaling waiting receivers.
+- Removed a stale unused `vector.unpackmany` iterator-state typedef.
