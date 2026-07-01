@@ -38,8 +38,9 @@ PYTHON=$(find_python) || {
   exit 1
 }
 
-# Export so Emscripten uses the correct Python
+# Export so Emscripten wrappers use the correct Python.
 export EM_PYTHON="$PYTHON"
+export EMSDK_PYTHON="$PYTHON"
 echo "Using Python: $PYTHON ($($PYTHON --version 2>&1))"
 
 # --- Platform target ---

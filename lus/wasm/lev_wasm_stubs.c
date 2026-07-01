@@ -124,6 +124,10 @@ int luaopen_worker(lua_State *L) {
   return 0; /* Workers not available in WASM */
 }
 
+void lus_worker_pool_shutdown(void) {
+  /* No worker pool exists in WASM. */
+}
+
 /* Bundle stubs - bundles not supported in WASM */
 #include "lbundle.h"
 LusBundle *g_bundle = NULL;
