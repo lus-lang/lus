@@ -904,8 +904,8 @@ static void open_func(LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->bl = NULL;
   f->source = ls->source;
   luaC_objbarrier(L, f, f->source);
-  f->maxstacksize = 2;                  /* registers 0/1 are always valid */
-  fs->kcache = luaH_new(L);                      /* create table for function */
+  f->maxstacksize = 2;      /* registers 0/1 are always valid */
+  fs->kcache = luaH_new(L); /* create table for function */
   luaD_anchorobj(L, ls->h, obj2gco(fs->kcache)); /* anchor it */
   enterblock(fs, bl, 0);
 }
@@ -2102,8 +2102,13 @@ static void enumexpr(LexState *ls, expdesc *v) {
       root->names[i] = names[i];
     }
 
+    /* Anchor the root while allocating the first enum value. */
+    setgcovalue(L, s2v(L->top.p), obj2gco(root));
+    L->top.p++;
+
     /* Create the first enum value (index 1) */
     e = luaE_new(L, root, 1);
+    L->top.p--;
 
     /* Add the enum value as a constant */
     setenumvalue(L, &tv, e);

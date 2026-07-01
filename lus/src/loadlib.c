@@ -462,7 +462,8 @@ static const char *searchpath(lua_State *L, const char *name, const char *path,
   pathname = luaL_buffaddr(&buff); /* writable list of file names */
   endpathname = pathname + luaL_bufflen(&buff) - 1;
   while ((filename = getnextfilename(&pathname, endpathname)) != NULL) {
-    if (readable(filename))               /* does file exist and is readable? */
+    if (lus_haspledge(L, "fs:read", filename) &&
+        readable(filename))               /* does file exist and is readable? */
       return lua_pushstring(L, filename); /* save and return name */
   }
   luaL_pushresult(&buff); /* push path to create error message */
@@ -518,7 +519,9 @@ static int searcher_Lua(lua_State *L) {
     return luaL_error(L, "permission \"load\" denied");
   }
 
-  return checkload(L, (luaL_loadfilex(L, filename, "bt") == LUA_OK), filename);
+  return checkload(
+      L, (luaL_loadfilex(L, filename, lus_issealed(L) ? "t" : "bt") == LUA_OK),
+      filename);
 }
 
 /*

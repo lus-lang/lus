@@ -74,6 +74,14 @@ static const char *find_vector_zterm(Vector *v, size_t pos) {
 }
 
 
+static int vector_fits(Vector *v, size_t pos, size_t a, size_t b) {
+  if (pos > v->len || a > v->len - pos)
+    return 0;
+  pos += a;
+  return b <= v->len - pos;
+}
+
+
 /*
 ** Check that argument is a vector.
 */
@@ -120,7 +128,7 @@ static int vec_pack(lua_State *L) {
     unsigned ntoalign;
     size_t size;
     KOption opt = getdetails(&h, pos, &fmt, &size, &ntoalign);
-    luaL_argcheck(L, pos + ntoalign + size <= v->len, 2,
+    luaL_argcheck(L, vector_fits(v, pos, ntoalign, size), 2,
                   "pack would exceed vector bounds");
 
     /* Fill alignment padding */
@@ -180,7 +188,7 @@ static int vec_pack(lua_State *L) {
                       arg, "string length does not fit in given size");
         packint(v->data + pos, (lua_Unsigned)len, h.islittle, (unsigned)size,
                 0);
-        luaL_argcheck(L, pos + size + len <= v->len, 2,
+        luaL_argcheck(L, vector_fits(v, pos, size, len), 2,
                       "string would exceed vector bounds");
         memcpy(v->data + pos + size, s, len);
         pos += len;
@@ -190,7 +198,7 @@ static int vec_pack(lua_State *L) {
         size_t len;
         const char *s = luaL_checklstring(L, arg, &len);
         luaL_argcheck(L, strlen(s) == len, arg, "string contains zeros");
-        luaL_argcheck(L, pos + len + 1 <= v->len, 2,
+        luaL_argcheck(L, vector_fits(v, pos, len, 1), 2,
                       "string would exceed vector bounds");
         memcpy(v->data + pos, s, len);
         v->data[pos + len] = '\0';
@@ -229,7 +237,7 @@ static int vec_unpack(lua_State *L) {
     unsigned ntoalign;
     size_t size;
     KOption opt = getdetails(&h, pos, &fmt, &size, &ntoalign);
-    luaL_argcheck(L, pos + ntoalign + size <= v->len, 2, "data too short");
+    luaL_argcheck(L, vector_fits(v, pos, ntoalign, size), 2, "data too short");
     pos += ntoalign;
     luaL_checkstack(L, 2, "too many results");
     n++;
@@ -266,7 +274,8 @@ static int vec_unpack(lua_State *L) {
       case Kstring: {
         lua_Unsigned len =
             (lua_Unsigned)unpackint(L, v->data + pos, h.islittle, (int)size, 0);
-        luaL_argcheck(L, len <= v->len - pos - size, 2, "data too short");
+        luaL_argcheck(L, vector_fits(v, pos, size, (size_t)len), 2,
+                      "data too short");
         lua_pushlstring(L, v->data + pos + size, (size_t)len);
         pos += (size_t)len;
         break;
@@ -368,7 +377,7 @@ static int unpackmany_iter(lua_State *L) {
     size_t size;
     KOption opt = getdetails(&h, fmtpos, &fmtcopy, &size, &ntoalign);
 
-    if (fmtpos + ntoalign + size > v->len)
+    if (!vector_fits(v, fmtpos, ntoalign, size))
       return luaL_error(L, "unpack falls out of bounds");
 
     fmtpos += ntoalign;
@@ -412,7 +421,7 @@ static int unpackmany_iter(lua_State *L) {
       case Kstring: {
         lua_Unsigned len = (lua_Unsigned)unpackint(L, v->data + fmtpos,
                                                    h.islittle, (int)size, 0);
-        if (len > v->len - fmtpos - size)
+        if (!vector_fits(v, fmtpos, size, (size_t)len))
           return luaL_error(L, "data too short");
         lua_pushlstring(L, v->data + fmtpos + size, (size_t)len);
         fmtpos += (size_t)len;
@@ -453,7 +462,7 @@ static int unpackmany_iter(lua_State *L) {
 static int vec_unpackmany(lua_State *L) {
   Vector *v = checkvector(L, 1);
   lua_Integer offset = luaL_checkinteger(L, 2);
-  luaL_checkstring(L, 3);  /* format */
+  luaL_checkstring(L, 3); /* format */
   lua_Integer maxcount = luaL_optinteger(L, 4, 0);
   luaL_argcheck(L, offset >= 0 && (size_t)offset <= v->len, 2,
                 "offset out of bounds");

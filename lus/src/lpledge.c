@@ -496,14 +496,13 @@ LUA_API int lus_revokepledge(lua_State *L, const char *name) {
   if (entry == NULL)
     return 0;
 
-  /* Free the entry's values but keep the slot */
-  for (int i = 0; i < entry->nvalues; i++) {
-    if (entry->values[i]) {
-      luaM_freearray(L, entry->values[i], strlen(entry->values[i]) + 1);
-      entry->values[i] = NULL;
-    }
-  }
-  entry->nvalues = 0;
+  /* Free the entry and compact the store. Leaving an empty entry would mean
+  ** "global access" to lus_haspledge. */
+  freeentry(L, entry);
+  int idx = cast_int(entry - store->entries);
+  int last = --store->nentries;
+  if (idx != last)
+    store->entries[idx] = store->entries[last];
 
   return 1;
 }

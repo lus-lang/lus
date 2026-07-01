@@ -248,10 +248,11 @@ static void fs_granter(lua_State *L, lus_PledgeRequest *p) {
     ** like "*.pem" would match files anywhere on the filesystem. Require an
     ** absolute, anchored pattern. */
     if (p->value != NULL && (p->value[0] == '*' || p->value[0] == '?')) {
-      luaL_error(L,
-                 "fs pledge pattern must be an absolute path, not an unanchored "
-                 "wildcard: '%s'",
-                 p->value);
+      luaL_error(
+          L,
+          "fs pledge pattern must be an absolute path, not an unanchored "
+          "wildcard: '%s'",
+          p->value);
     }
     if (p->sub == NULL) {
       /* Grant global fs permission */
@@ -272,11 +273,9 @@ static void fs_granter(lua_State *L, lus_PledgeRequest *p) {
   if (p->status == LUS_PLEDGE_CHECK) {
     const char *path = p->value;
 
-    /* No path to check = allowed if permission exists */
-    if (path == NULL) {
-      lus_setpledge(L, p, p->sub, NULL);
+    /* Path-scoped grants cannot authorize operations without a concrete path. */
+    if (path == NULL)
       return;
-    }
 
     /* If has_base and no values, global access */
     if (p->has_base && p->count == 0) {

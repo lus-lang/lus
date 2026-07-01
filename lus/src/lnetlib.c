@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -79,6 +80,8 @@ typedef int socket_t;
 #define DEFAULT_RECV_SIZE 4096
 #define DEFAULT_UDP_SIZE 8192
 #define MAX_RECV_SIZE 1048576 /* 1MB max single read */
+#define FETCH_TIMEOUT_MS 30000
+#define FETCH_MAX_BODY ((size_t)64 * 1024 * 1024)
 
 static int check_port(lua_State *L, int arg, int allow_zero) {
   lua_Integer port = luaL_checkinteger(L, arg);
@@ -92,6 +95,58 @@ static int opt_port(lua_State *L, int arg, int def, int allow_zero) {
   int min = allow_zero ? 0 : 1;
   luaL_argcheck(L, port >= min && port <= 65535, arg, "port out of range");
   return (int)port;
+}
+
+static int set_socket_timeouts(socket_t fd, int timeout_ms) {
+#if defined(LUS_PLATFORM_WINDOWS)
+  DWORD timeout = (DWORD)timeout_ms;
+  return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout,
+                    sizeof(timeout)) == 0 &&
+         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout,
+                    sizeof(timeout)) == 0;
+#else
+  struct timeval timeout;
+  timeout.tv_sec = timeout_ms / 1000;
+  timeout.tv_usec = (timeout_ms % 1000) * 1000;
+  return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) ==
+             0 &&
+         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) ==
+             0;
+#endif
+}
+
+static int parse_content_length(const char *s, size_t *out) {
+  char *endptr;
+  unsigned long long v;
+  errno = 0;
+  while (*s == ' ' || *s == '\t')
+    s++;
+  v = strtoull(s, &endptr, 10);
+  if (endptr == s || errno == ERANGE || v > (unsigned long long)SIZE_MAX)
+    return 0;
+  while (*endptr == ' ' || *endptr == '\t')
+    endptr++;
+  if (*endptr != '\0')
+    return 0;
+  *out = (size_t)v;
+  return 1;
+}
+
+static int parse_chunk_size(const char *s, size_t *out) {
+  char *endptr;
+  unsigned long long v;
+  errno = 0;
+  while (*s == ' ' || *s == '\t')
+    s++;
+  v = strtoull(s, &endptr, 16);
+  if (endptr == s || errno == ERANGE || v > (unsigned long long)SIZE_MAX)
+    return 0;
+  while (*endptr == ' ' || *endptr == '\t')
+    endptr++;
+  if (*endptr != '\0' && *endptr != ';')
+    return 0;
+  *out = (size_t)v;
+  return 1;
 }
 
 /* TCP Socket (client connection) */
@@ -957,7 +1012,8 @@ static int udp_sendto(lua_State *L) {
   char hostport[512];
   snprintf(hostport, sizeof(hostport), "%s:%d", address, port);
   if (!lus_haspledge(L, "network:udp", hostport)) {
-    return luaL_error(L, "permission \"network:udp\" denied for '%s'", hostport);
+    return luaL_error(L, "permission \"network:udp\" denied for '%s'",
+                      hostport);
   }
 
   struct sockaddr_storage addr;
@@ -1044,7 +1100,8 @@ static int udp_setsockname(lua_State *L) {
   char hostport[512];
   snprintf(hostport, sizeof(hostport), "%s:%d", address, port);
   if (!lus_haspledge(L, "network:udp", hostport)) {
-    return luaL_error(L, "permission \"network:udp\" denied for '%s'", hostport);
+    return luaL_error(L, "permission \"network:udp\" denied for '%s'",
+                      hostport);
   }
 
   struct sockaddr_storage addr;
@@ -1417,6 +1474,8 @@ static int net_fetch(lua_State *L) {
 
   if (strpbrk(method, "\r\n"))
     return luaL_error(L, "invalid characters in HTTP method");
+  if (strpbrk(url, "\r\n"))
+    return luaL_error(L, "invalid characters in URL");
 
   /* Check network:http permission */
   if (!lus_haspledge(L, "network:http", url)) {
@@ -1441,6 +1500,11 @@ static int net_fetch(lua_State *L) {
     return luaL_error(L, "cannot create socket: %s",
                       sock_strerror(SOCKET_ERRNO));
   }
+  if (!set_socket_timeouts(fd, FETCH_TIMEOUT_MS)) {
+    int err = SOCKET_ERRNO;
+    sock_close(fd);
+    return luaL_error(L, "cannot set socket timeout: %s", sock_strerror(err));
+  }
 
   /* Connect */
   if (connect(fd, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR_VAL) {
@@ -1454,7 +1518,7 @@ static int net_fetch(lua_State *L) {
   LSocket sock;
   memset(&sock, 0, sizeof(sock));
   sock.fd = fd;
-  sock.timeout_ms = 30000; /* 30 second timeout */
+  sock.timeout_ms = FETCH_TIMEOUT_MS;
 
   /* SSL handshake for HTTPS */
   if (strcmp(parsed.scheme, "https") == 0) {
@@ -1467,13 +1531,30 @@ static int net_fetch(lua_State *L) {
     }
 
     SSL_set_fd(sock.ssl, (int)fd);
-    SSL_set_tlsext_host_name(sock.ssl, parsed.host);
+    if (SSL_set_tlsext_host_name(sock.ssl, parsed.host) != 1) {
+      SSL_free(sock.ssl);
+      sock_close(fd);
+      return luaL_error(L, "SSL SNI setup failed");
+    }
 
     if (SSL_connect(sock.ssl) != 1) {
       SSL_free(sock.ssl);
       sock_close(fd);
       return push_ssl_error(L, "SSL handshake failed");
     }
+
+    long verify = SSL_get_verify_result(sock.ssl);
+    X509 *cert = SSL_get_peer_certificate(sock.ssl);
+    if (verify != X509_V_OK || cert == NULL ||
+        X509_check_host(cert, parsed.host, 0, 0, NULL) != 1) {
+      if (cert != NULL)
+        X509_free(cert);
+      SSL_free(sock.ssl);
+      sock_close(fd);
+      return luaL_error(L, "SSL certificate verification failed for %s",
+                        parsed.host);
+    }
+    X509_free(cert);
   }
 
   /* Build request */
@@ -1582,10 +1663,12 @@ static int net_fetch(lua_State *L) {
   /* Read headers */
   lua_newtable(L);                 /* response headers table */
   int headers_idx = lua_gettop(L); /* save absolute index */
-  int content_length = -1;
+  size_t content_length = 0;
+  int has_content_length = 0;
   int chunked = 0;
 
-  while (read_http_line(&sock, line, sizeof(line)) > 0) {
+  int linelen;
+  while ((linelen = read_http_line(&sock, line, sizeof(line))) > 0) {
     char *colon = strchr(line, ':');
     if (colon) {
       *colon = '\0';
@@ -1601,7 +1684,14 @@ static int net_fetch(lua_State *L) {
 
       /* Check for Content-Length and Transfer-Encoding */
       if (strcmp(line, "content-length") == 0) {
-        content_length = atoi(value);
+        if (!parse_content_length(value, &content_length) ||
+            content_length > FETCH_MAX_BODY) {
+          if (sock.ssl)
+            SSL_free(sock.ssl);
+          sock_close(fd);
+          return luaL_error(L, "invalid Content-Length");
+        }
+        has_content_length = 1;
       }
       else if (strcmp(line, "transfer-encoding") == 0) {
         if (strstr(value, "chunked"))
@@ -1609,69 +1699,102 @@ static int net_fetch(lua_State *L) {
       }
     }
   }
+  if (linelen < 0) {
+    if (sock.ssl)
+      SSL_free(sock.ssl);
+    sock_close(fd);
+    return luaL_error(L, "failed to read response headers");
+  }
 
   /* Read body */
   luaL_Buffer resp_body;
   luaL_buffinit(L, &resp_body);
+  size_t body_total = 0;
 
   if (chunked) {
     /* Chunked transfer encoding */
     for (;;) {
-      if (read_http_line(&sock, line, sizeof(line)) < 0)
-        break;
+      if (read_http_line(&sock, line, sizeof(line)) < 0) {
+        if (sock.ssl)
+          SSL_free(sock.ssl);
+        sock_close(fd);
+        return luaL_error(L, "truncated chunked response");
+      }
 
-      int chunk_size = 0;
-      sscanf(line, "%x", &chunk_size);
+      size_t chunk_size;
+      if (!parse_chunk_size(line, &chunk_size) ||
+          chunk_size > FETCH_MAX_BODY - body_total) {
+        if (sock.ssl)
+          SSL_free(sock.ssl);
+        sock_close(fd);
+        return luaL_error(L, "invalid chunk size");
+      }
       if (chunk_size == 0)
         break;
 
       /* Read chunk data */
-      int remaining = chunk_size;
+      size_t remaining = chunk_size;
       char buf[4096];
       while (remaining > 0) {
-        int to_read = remaining;
-        if (to_read > (int)sizeof(buf))
-          to_read = (int)sizeof(buf);
+        size_t to_read = remaining;
+        if (to_read > sizeof(buf))
+          to_read = sizeof(buf);
 
         ssize_t got;
         if (sock.ssl) {
-          got = SSL_read(sock.ssl, buf, to_read);
+          got = SSL_read(sock.ssl, buf, (int)to_read);
         }
         else {
-          got = recv(fd, buf, to_read, 0);
+          got = recv(fd, buf, (int)to_read, 0);
         }
-        if (got <= 0)
-          break;
+        if (got <= 0) {
+          if (sock.ssl)
+            SSL_free(sock.ssl);
+          sock_close(fd);
+          return luaL_error(L, "truncated chunked response");
+        }
 
         luaL_addlstring(&resp_body, buf, (size_t)got);
-        remaining -= (int)got;
+        body_total += (size_t)got;
+        remaining -= (size_t)got;
       }
 
       /* Read trailing CRLF */
-      read_http_line(&sock, line, sizeof(line));
+      linelen = read_http_line(&sock, line, sizeof(line));
+      if (linelen != 0) {
+        if (sock.ssl)
+          SSL_free(sock.ssl);
+        sock_close(fd);
+        return luaL_error(L, "invalid chunk terminator");
+      }
     }
   }
-  else if (content_length >= 0) {
+  else if (has_content_length) {
     /* Fixed Content-Length */
-    int remaining = content_length;
+    size_t remaining = content_length;
     char buf[4096];
     while (remaining > 0) {
-      int to_read = remaining;
-      if (to_read > (int)sizeof(buf))
-        to_read = (int)sizeof(buf);
+      size_t to_read = remaining;
+      if (to_read > sizeof(buf))
+        to_read = sizeof(buf);
 
       ssize_t got;
       if (sock.ssl) {
-        got = SSL_read(sock.ssl, buf, to_read);
+        got = SSL_read(sock.ssl, buf, (int)to_read);
       }
       else {
-        got = recv(fd, buf, to_read, 0);
+        got = recv(fd, buf, (int)to_read, 0);
       }
-      if (got <= 0)
-        break;
+      if (got <= 0) {
+        if (sock.ssl)
+          SSL_free(sock.ssl);
+        sock_close(fd);
+        return luaL_error(L, "truncated response body");
+      }
 
       luaL_addlstring(&resp_body, buf, (size_t)got);
-      remaining -= (int)got;
+      body_total += (size_t)got;
+      remaining -= (size_t)got;
     }
   }
   else {
@@ -1695,7 +1818,14 @@ static int net_fetch(lua_State *L) {
           break;
       }
       if (got > 0) {
+        if ((size_t)got > FETCH_MAX_BODY - body_total) {
+          if (sock.ssl)
+            SSL_free(sock.ssl);
+          sock_close(fd);
+          return luaL_error(L, "response body too large");
+        }
         luaL_addlstring(&resp_body, buf, (size_t)got);
+        body_total += (size_t)got;
       }
     }
   }

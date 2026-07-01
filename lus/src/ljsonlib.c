@@ -237,6 +237,11 @@ static void parse_value_iterative(JsonParser *p) {
             p->json++;
           }
           else {
+            if ((unsigned char)*p->json < 0x20) {
+              luaM_freearray(L, buf, capacity);
+              luaM_freearray(L, stack, stack_cap);
+              json_error(p, "control character in string");
+            }
             buf[len++] = *p->json;
             p->json++;
           }
@@ -248,7 +253,10 @@ static void parse_value_iterative(JsonParser *p) {
         }
         p->json++; /* skip closing quote */
 
-        TString *str = luaS_newlstr(L, buf, len);
+        lua_pushlstring(L, buf, len);
+        TString *str = tsvalue(s2v(L->top.p - 1));
+        lua_rawseti(L, anchor_idx, next_anchor);
+        next_anchor++;
         setsvalue(L, &value, str);
         luaM_freearray(L, buf, capacity);
         break;
@@ -512,16 +520,31 @@ static void parse_value_iterative(JsonParser *p) {
                     klen += (size_t)utf8len;
                     break;
                   }
-                  default: kbuf[klen++] = *p->json; break;
+                  default:
+                    lua_pop(L, 1); /* pop anchor table */
+                    luaM_freearray(L, kbuf, kcap);
+                    luaM_freearray(L, stack, stack_cap);
+                    json_error(p, "invalid escape sequence");
                 }
               }
               else {
+                if ((unsigned char)*p->json < 0x20) {
+                  lua_pop(L, 1); /* pop anchor table */
+                  luaM_freearray(L, kbuf, kcap);
+                  luaM_freearray(L, stack, stack_cap);
+                  json_error(p, "control character in string");
+                }
                 kbuf[klen++] = *p->json;
               }
               p->json++;
             }
-            if (p->json < p->end)
-              p->json++; /* skip closing quote */
+            if (p->json >= p->end) {
+              lua_pop(L, 1); /* pop anchor table */
+              luaM_freearray(L, kbuf, kcap);
+              luaM_freearray(L, stack, stack_cap);
+              json_error(p, "unterminated string");
+            }
+            p->json++; /* skip closing quote */
 
             /* Create key string using public API */
             lua_pushlstring(L, kbuf, klen);
@@ -605,8 +628,12 @@ static void parse_value_iterative(JsonParser *p) {
             }
             if (*p->json == '\\') {
               p->json++;
-              if (p->json >= p->end)
-                break;
+              if (p->json >= p->end) {
+                lua_pop(L, 1); /* pop anchor table */
+                luaM_freearray(L, kbuf, kcap);
+                luaM_freearray(L, stack, stack_cap);
+                json_error(p, "unterminated string");
+              }
               switch (*p->json) {
                 case '"': kbuf[klen++] = '"'; break;
                 case '\\': kbuf[klen++] = '\\'; break;
@@ -678,16 +705,31 @@ static void parse_value_iterative(JsonParser *p) {
                   klen += (size_t)utf8len;
                   break;
                 }
-                default: kbuf[klen++] = *p->json; break;
+                default:
+                  lua_pop(L, 1); /* pop anchor table */
+                  luaM_freearray(L, kbuf, kcap);
+                  luaM_freearray(L, stack, stack_cap);
+                  json_error(p, "invalid escape sequence");
               }
             }
             else {
+              if ((unsigned char)*p->json < 0x20) {
+                lua_pop(L, 1); /* pop anchor table */
+                luaM_freearray(L, kbuf, kcap);
+                luaM_freearray(L, stack, stack_cap);
+                json_error(p, "control character in string");
+              }
               kbuf[klen++] = *p->json;
             }
             p->json++;
           }
-          if (p->json < p->end)
-            p->json++;
+          if (p->json >= p->end) {
+            lua_pop(L, 1); /* pop anchor table */
+            luaM_freearray(L, kbuf, kcap);
+            luaM_freearray(L, stack, stack_cap);
+            json_error(p, "unterminated string");
+          }
+          p->json++;
           /* Create new key using public API */
           lua_pushlstring(L, kbuf, klen);
           TString *newkey = tsvalue(s2v(L->top.p - 1));
@@ -714,10 +756,7 @@ static void parse_value_iterative(JsonParser *p) {
 
   luaM_freearray(L, stack, stack_cap);
 
-  /* Remove anchor table and push final result onto Lua stack */
-  lua_pop(L, 1); /* pop anchor table */
-
-  /* Push final result using proper API */
+  /* Push final result while the anchor table still protects GC objects. */
   if (ttisnil(&value)) {
     lua_pushnil(L);
   }
@@ -731,8 +770,8 @@ static void parse_value_iterative(JsonParser *p) {
     lua_pushnumber(L, fltvalue(&value));
   }
   else if (ttisstring(&value)) {
-    TString *ts = tsvalue(&value);
-    lua_pushlstring(L, getstr(ts), tsslen(ts));
+    setobj2s(L, L->top.p, &value);
+    api_incr_top(L);
   }
   else if (ttistable(&value)) {
     /* Push the table - it's still alive because it was in our anchor table */
@@ -742,6 +781,8 @@ static void parse_value_iterative(JsonParser *p) {
   else {
     lua_pushnil(L); /* fallback */
   }
+
+  lua_remove(L, anchor_idx); /* remove anchor table, leave result */
 }
 
 static int json_fromjson(lua_State *L) {

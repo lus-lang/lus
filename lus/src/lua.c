@@ -1535,6 +1535,90 @@ static int collectargs(char **argv, int *first) {
   return args;
 }
 
+static int process_pledge_arg(lua_State *L, const char *pledge_str) {
+  int rejected = 0;
+  const char *p = pledge_str;
+  const char *eq;
+  char namebuf[256];
+  const char *value = NULL;
+  if (*p == '~') {
+    rejected = 1;
+    p++;
+  }
+  eq = strchr(p, '=');
+  if (eq) {
+    size_t namelen = eq - p;
+    if (namelen >= sizeof(namebuf)) {
+      l_message(progname, "pledge name too long");
+      return 0;
+    }
+    memcpy(namebuf, p, namelen);
+    namebuf[namelen] = '\0';
+    value = eq + 1;
+  }
+  else {
+    size_t namelen = strlen(p);
+    if (namelen >= sizeof(namebuf)) {
+      l_message(progname, "pledge name too long");
+      return 0;
+    }
+    strcpy(namebuf, p);
+  }
+  if (strcmp(namebuf, "all") == 0 && !rejected) {
+    lus_pledge(L, "exec", NULL);
+    lus_pledge(L, "load", NULL);
+    lus_pledge(L, "fs", NULL);
+    lus_pledge(L, "network", NULL);
+  }
+  else if (strcmp(namebuf, "seal") == 0) {
+    lus_pledge(L, "seal", NULL);
+  }
+  else if (rejected) {
+    lus_rejectpledge(L, namebuf);
+  }
+  else if (!lus_pledge(L, namebuf, value)) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "failed to grant pledge '%s'", pledge_str);
+    l_message(progname, msg);
+    return 0;
+  }
+  return 1;
+}
+
+static int apply_pledge_args(lua_State *L, char **argv, int n) {
+  int any_pledge = 0;
+  for (int i = 1; i < n; i++) {
+    int option = argv[i][1];
+    lua_assert(argv[i][0] == '-'); /* already checked */
+    if (option == '-' && strcmp(argv[i] + 2, "pledge") == 0) {
+      any_pledge = 1;
+      if (!process_pledge_arg(L, argv[++i]))
+        return 0;
+    }
+    else if (option == 'P') {
+      const char *pledge_str = argv[i] + 2;
+      any_pledge = 1;
+      if (*pledge_str == '\0')
+        pledge_str = argv[++i];
+      lua_assert(pledge_str != NULL);
+      if (!process_pledge_arg(L, pledge_str))
+        return 0;
+    }
+    else if (option == '-' && (strcmp(argv[i] + 2, "standalone") == 0 ||
+                               strcmp(argv[i] + 2, "include") == 0 ||
+                               strcmp(argv[i] + 2, "ast-graph") == 0 ||
+                               strcmp(argv[i] + 2, "ast-json") == 0)) {
+      i++;
+    }
+    else if ((option == 'e' || option == 'l') && argv[i][2] == '\0') {
+      i++;
+    }
+  }
+  if (any_pledge && !lus_issealed(L))
+    luaP_sealpledges(L);
+  return 1;
+}
+
 /*
 ** Processes options 'e' and 'l', which involve running Lua code, and
 ** 'W', which also affects the state.
@@ -1542,7 +1626,6 @@ static int collectargs(char **argv, int *first) {
 */
 static int runargs(lua_State *L, char **argv, int n) {
   int i;
-  int any_pledge = 0; /* did the command line specify any -P pledge? */
   for (i = 1; i < n; i++) {
     int option = argv[i][1];
     lua_assert(argv[i][0] == '-'); /* already checked */
@@ -1578,78 +1661,12 @@ static int runargs(lua_State *L, char **argv, int n) {
           G(L)->pedantic = 1;
         }
         break;
-      case 'P': { /* pledge permission */
-        char *pledge_str = argv[i] + 2;
-        any_pledge = 1;
-        if (*pledge_str == '\0')
-          pledge_str = argv[++i];
-        lua_assert(pledge_str != NULL);
-        /* Parse and grant the pledge */
-        int rejected = 0;
-        const char *p = pledge_str;
-        if (*p == '~') {
-          rejected = 1;
-          p++;
-        }
-        /* Extract name and value */
-        const char *eq = strchr(p, '=');
-        char namebuf[256];
-        const char *value = NULL;
-        if (eq) {
-          size_t namelen = eq - p;
-          if (namelen >= sizeof(namebuf)) {
-            l_message(progname, "pledge name too long");
-            return 0;
-          }
-          memcpy(namebuf, p, namelen);
-          namebuf[namelen] = '\0';
-          value = eq + 1;
-        }
-        else {
-          size_t namelen = strlen(p);
-          if (namelen >= sizeof(namebuf)) {
-            l_message(progname, "pledge name too long");
-            return 0;
-          }
-          strcpy(namebuf, p);
-        }
-        /* Handle special permissions */
-        if (strcmp(namebuf, "all") == 0 && !rejected) {
-          /* Grant common permissions - all from CLI is allowed */
-          lus_pledge(L, "exec", NULL);
-          lus_pledge(L, "load", NULL);
-          lus_pledge(L, "fs", NULL);
-          lus_pledge(L, "network", NULL);
-        }
-        else if (strcmp(namebuf, "seal") == 0) {
-          /* Seal is handled after all pledges are processed */
-          /* Store it - we'll seal at the end */
-          /* For now, just grant it; the pledge system handles sealing */
-          lus_pledge(L, "seal", NULL);
-        }
-        else if (rejected) {
-          /* Mark as rejected */
-          lus_rejectpledge(L, namebuf);
-        }
-        else {
-          if (!lus_pledge(L, namebuf, value)) {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "failed to grant pledge '%s'",
-                     pledge_str);
-            l_message(progname, msg);
-            return 0;
-          }
-        }
+      case 'P':
+        if (argv[i][2] == '\0')
+          i++;
         break;
-      }
     }
   }
-  /* If the operator specified any pledge on the command line, seal the store
-  ** so the script cannot grant itself MORE permissions (which would make the
-  ** -P restriction a no-op). Scripts that configure their own pledges with no
-  ** -P are unaffected and still pledge-then-seal as usual. */
-  if (any_pledge && !lus_issealed(L))
-    luaP_sealpledges(L);
   return 1;
 }
 
@@ -2030,8 +2047,10 @@ static int pmain(lua_State *L) {
     lua_gc(L, LUA_GCPARAM, LUA_GCPPAUSE, gc_pause);
   if (strip_debug)
     G(L)->stripdebug = 1;
-  lua_gc(L, LUA_GCRESTART);        /* start GC... */
-  lua_gc(L, LUA_GCGEN);            /* ...in generational mode */
+  lua_gc(L, LUA_GCRESTART); /* start GC... */
+  lua_gc(L, LUA_GCGEN);     /* ...in generational mode */
+  if (!apply_pledge_args(L, argv, optlim))
+    return 0;
   if (handle_luainit(L) != LUA_OK) /* run LUA_INIT */
     return 0;                      /* error running LUA_INIT */
   if (!runargs(L, argv, optlim))   /* execute arguments -e and -l */

@@ -551,7 +551,6 @@ static void worker_run(WorkerState *w) {
       w->status = LUS_WORKER_DEAD;
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
     signal_recv_ctx(w);               /* wake multi-worker select */
-    lus_mutex_unlock(&w->mutex);
     return;
   }
   w->L = L;
@@ -617,14 +616,14 @@ static void worker_run(WorkerState *w) {
         w->status = LUS_WORKER_DEAD;
       lus_cond_signal(&w->outbox_cond);
       signal_recv_ctx(w); /* wake multi-worker select */
-      lus_mutex_unlock(&w->mutex);
       return;
     }
     luaA_freestandalone(arena);
   }
 
   /* Load and run the script */
-  if (luaL_loadfile(L, w->script_path) != LUA_OK) {
+  if (luaL_loadfilex(L, w->script_path, lus_issealed(L) ? "t" : "bt") !=
+      LUA_OK) {
     lus_mutex_lock(&w->mutex);
     w->status = LUS_WORKER_ERROR;
     const char *err = lua_tostring(L, -1);
@@ -633,7 +632,6 @@ static void worker_run(WorkerState *w) {
       w->status = LUS_WORKER_DEAD;
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
     signal_recv_ctx(w);               /* wake multi-worker select */
-    lus_mutex_unlock(&w->mutex);
     return;
   }
 
@@ -651,7 +649,6 @@ static void worker_run(WorkerState *w) {
       w->status = LUS_WORKER_DEAD;
     lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
     signal_recv_ctx(w);               /* wake multi-worker select */
-    lus_mutex_unlock(&w->mutex);
     return;
   }
 

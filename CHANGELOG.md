@@ -27,6 +27,22 @@
 - Fixed gzip and deflate compression rejecting inputs and output bounds too large for zlib's single-shot `uInt` fields.
 - Fixed `vector.unpackmany` accepting negative offsets or counts as empty iterators.
 - Fixed numeric CLI options such as `format --indent` and `--gc-pause` accepting trailing garbage.
+- Fixed sealed `require` calls being able to load precompiled bytecode modules through `package.path`.
+- Fixed sealed workers being able to load precompiled bytecode scripts after inheriting parent pledges.
+- Fixed `network.fetch` accepting CA-trusted HTTPS certificates without verifying the requested hostname.
+- Fixed `network.fetch` allowing carriage-return or line-feed characters in URL paths to reach the HTTP request line.
+- Fixed gzip and deflate decompression looping forever on truncated no-progress input.
+- Fixed `package.searchpath` probing file existence before checking value-scoped `fs:read` pledges.
+- Fixed LZ4 and unknown-size zstd decompression accepting truncated frames as successful partial output.
+- Fixed vector-returning archive compression and zstd decompression paths copying from closed `luaL_Buffer` storage.
+- Fixed path-scoped `fs:write` pledges allowing pathless temp-file creation through `io.tmpfile` and `os.tmpname`.
+- Fixed command-line `-P`/`--pledge` restrictions being applied only after `LUA_INIT`, `-e`, and `-l` code could run.
+- Fixed `fromjson` accepting invalid object-key escapes and raw control characters, and rooted parsed strings across GC-capable table insertion.
+- Fixed vector and enum construction windows where partially initialized or unrooted GC objects could be collected during emergency allocation.
+- Fixed `network.fetch` response parsing for invalid or oversized lengths, truncated bodies, missing chunk terminators, and blocking read/write timeouts.
+- Fixed `vector.pack`, `vector.unpack`, and `vector.unpackmany` bounds checks that could wrap on very large `cN` format sizes.
+- Fixed `lus_revokepledge` turning scoped grants into global grants in the public C API.
+- Fixed worker error paths double-unlocking the worker mutex after signaling waiting receivers.
 - Removed a stale unused `vector.unpackmany` iterator-state typedef.
 
 ## 1.6.1

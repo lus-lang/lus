@@ -628,12 +628,14 @@ LUA_API void lua_pushenum(lua_State *L, int npairs) {
     api_check(L, ttisstring(str), "enum name must be a string");
     root->names[i] = tsvalue(str);
   }
-  /* Pop the pairs from the stack */
-  L->top.p -= npairs * 2;
+  /* Replace the consumed pairs with an internal root anchor while creating the
+  ** first enum value. */
+  StkId rootslot = L->top.p - (npairs * 2);
+  setgcovalue(L, s2v(rootslot), obj2gco(root));
+  L->top.p = rootslot + 1;
   /* Create first enum value and push it */
   e = luaE_new(L, root, 1);
-  setenumvalue(L, s2v(L->top.p), e);
-  api_incr_top(L);
+  setenumvalue(L, s2v(rootslot), e);
   luaC_checkGC(L);
   lua_unlock(L);
 }

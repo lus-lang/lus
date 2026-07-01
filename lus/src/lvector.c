@@ -27,15 +27,16 @@
 Vector *luaV_newvec(lua_State *L, size_t len, int fast) {
   GCObject *o = luaC_newobj(L, LUA_VVECTOR, sizeof(Vector));
   Vector *v = gco2vec(o);
-  v->len = len;
-  v->alloc = len;
+  v->data = NULL;
+  v->len = 0;
+  v->alloc = 0;
   if (len > 0) {
-    v->data = luaM_newblock(L, len);
+    char *data = luaM_newblock(L, len);
     if (!fast)
-      memset(v->data, 0, len);
-  }
-  else {
-    v->data = NULL;
+      memset(data, 0, len);
+    v->data = data;
+    v->len = len;
+    v->alloc = len;
   }
   return v;
 }

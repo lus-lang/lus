@@ -74,6 +74,22 @@ static void archive_pushresult(lua_State *L, const char *data, size_t len,
 }
 
 
+static void archive_pushbufferresult(lua_State *L, luaL_Buffer *buf, size_t len,
+                                     int is_vec) {
+  if (is_vec) {
+    size_t slen;
+    const char *sdata;
+    luaL_pushresultsize(buf, len);
+    sdata = lua_tolstring(L, -1, &slen);
+    archive_pushresult(L, sdata, slen, 1);
+    lua_remove(L, -2);
+  }
+  else {
+    luaL_pushresultsize(buf, len);
+  }
+}
+
+
 /*
 ** Cap on decompressed output, to bound "decompression bombs" (a few KB of
 ** input can expand to many GB, exhausting memory). Defaults to
@@ -135,14 +151,7 @@ static int archive_gzip_compress(lua_State *L) {
   if (ret != Z_STREAM_END)
     return luaL_error(L, "gzip compress failed (%d)", ret);
 
-  if (is_vec) {
-    luaL_pushresultsize(&buf, 0); /* push empty string to balance buffer */
-    lua_pop(L, 1);
-    archive_pushresult(L, out, out_len, 1);
-  }
-  else {
-    luaL_pushresultsize(&buf, out_len);
-  }
+  archive_pushbufferresult(L, &buf, out_len, is_vec);
   return 1;
 }
 
@@ -177,6 +186,7 @@ static int archive_gzip_decompress(lua_State *L) {
     if (chunk > UINT_MAX)
       chunk = UINT_MAX;
     char *out = luaL_prepbuffsize(&buf, chunk);
+    size_t before_in = strm.total_in;
     strm.next_out = (Bytef *)out;
     strm.avail_out = (uInt)chunk;
     ret = inflate(&strm, Z_NO_FLUSH);
@@ -184,7 +194,13 @@ static int archive_gzip_decompress(lua_State *L) {
       inflateEnd(&strm);
       return luaL_error(L, "gzip decompress failed (%d)", ret);
     }
-    luaL_addsize(&buf, chunk - strm.avail_out);
+    size_t produced = chunk - strm.avail_out;
+    if ((ret == Z_BUF_ERROR && produced == 0) ||
+        (produced == 0 && strm.total_in == before_in && ret != Z_STREAM_END)) {
+      inflateEnd(&strm);
+      return luaL_error(L, "gzip decompress: incomplete data");
+    }
+    luaL_addsize(&buf, produced);
     if (luaL_bufflen(&buf) > maxout) {
       inflateEnd(&strm);
       return archive_toobig(L, maxout);
@@ -248,14 +264,7 @@ static int archive_deflate_compress(lua_State *L) {
   if (ret != Z_STREAM_END)
     return luaL_error(L, "deflate compress failed (%d)", ret);
 
-  if (is_vec) {
-    luaL_pushresultsize(&buf, 0);
-    lua_pop(L, 1);
-    archive_pushresult(L, out, out_len, 1);
-  }
-  else {
-    luaL_pushresultsize(&buf, out_len);
-  }
+  archive_pushbufferresult(L, &buf, out_len, is_vec);
   return 1;
 }
 
@@ -289,6 +298,7 @@ static int archive_deflate_decompress(lua_State *L) {
     if (chunk > UINT_MAX)
       chunk = UINT_MAX;
     char *out = luaL_prepbuffsize(&buf, chunk);
+    size_t before_in = strm.total_in;
     strm.next_out = (Bytef *)out;
     strm.avail_out = (uInt)chunk;
     ret = inflate(&strm, Z_NO_FLUSH);
@@ -296,7 +306,13 @@ static int archive_deflate_decompress(lua_State *L) {
       inflateEnd(&strm);
       return luaL_error(L, "deflate decompress failed (%d)", ret);
     }
-    luaL_addsize(&buf, chunk - strm.avail_out);
+    size_t produced = chunk - strm.avail_out;
+    if ((ret == Z_BUF_ERROR && produced == 0) ||
+        (produced == 0 && strm.total_in == before_in && ret != Z_STREAM_END)) {
+      inflateEnd(&strm);
+      return luaL_error(L, "deflate decompress: incomplete data");
+    }
+    luaL_addsize(&buf, produced);
     if (luaL_bufflen(&buf) > maxout) {
       inflateEnd(&strm);
       return archive_toobig(L, maxout);
@@ -340,14 +356,7 @@ static int archive_zstd_compress(lua_State *L) {
   if (ZSTD_isError(result))
     return luaL_error(L, "zstd compress failed: %s", ZSTD_getErrorName(result));
 
-  if (is_vec) {
-    luaL_pushresultsize(&buf, 0);
-    lua_pop(L, 1);
-    archive_pushresult(L, out, result, 1);
-  }
-  else {
-    luaL_pushresultsize(&buf, result);
-  }
+  archive_pushbufferresult(L, &buf, result, is_vec);
   return 1;
 }
 
@@ -377,14 +386,7 @@ static int archive_zstd_decompress(lua_State *L) {
       return luaL_error(L, "zstd decompress failed: %s",
                         ZSTD_getErrorName(result));
 
-    if (is_vec) {
-      luaL_pushresultsize(&buf, 0);
-      lua_pop(L, 1);
-      archive_pushresult(L, out, result, 1);
-    }
-    else {
-      luaL_pushresultsize(&buf, result);
-    }
+    archive_pushbufferresult(L, &buf, result, is_vec);
   }
   else {
     /* Unknown size: streaming decompress */
@@ -396,15 +398,21 @@ static int archive_zstd_decompress(lua_State *L) {
     luaL_buffinit(L, &buf);
 
     ZSTD_inBuffer zin = {input, input_len, 0};
+    size_t ret = 0;
     while (zin.pos < zin.size) {
       size_t chunk = ZSTD_DStreamOutSize();
       char *out = luaL_prepbuffsize(&buf, chunk);
       ZSTD_outBuffer zout = {out, chunk, 0};
-      size_t ret = ZSTD_decompressStream(dctx, &zout, &zin);
+      size_t before_in = zin.pos;
+      ret = ZSTD_decompressStream(dctx, &zout, &zin);
       if (ZSTD_isError(ret)) {
         ZSTD_freeDCtx(dctx);
         return luaL_error(L, "zstd decompress failed: %s",
                           ZSTD_getErrorName(ret));
+      }
+      if (zout.pos == 0 && zin.pos == before_in && ret != 0) {
+        ZSTD_freeDCtx(dctx);
+        return luaL_error(L, "zstd decompress: incomplete data");
       }
       luaL_addsize(&buf, zout.pos);
       if (luaL_bufflen(&buf) > maxout) {
@@ -413,6 +421,8 @@ static int archive_zstd_decompress(lua_State *L) {
       }
     }
     ZSTD_freeDCtx(dctx);
+    if (ret != 0)
+      return luaL_error(L, "zstd decompress: incomplete data");
 
     if (is_vec) {
       luaL_pushresult(&buf);
@@ -460,14 +470,7 @@ static int archive_brotli_compress(lua_State *L) {
   if (!ok)
     return luaL_error(L, "brotli compress failed");
 
-  if (is_vec) {
-    luaL_pushresultsize(&buf, 0);
-    lua_pop(L, 1);
-    archive_pushresult(L, out, out_len, 1);
-  }
-  else {
-    luaL_pushresultsize(&buf, out_len);
-  }
+  archive_pushbufferresult(L, &buf, out_len, is_vec);
   return 1;
 }
 
@@ -557,14 +560,7 @@ static int archive_lz4_compress(lua_State *L) {
   if (LZ4F_isError(result))
     return luaL_error(L, "lz4 compress failed: %s", LZ4F_getErrorName(result));
 
-  if (is_vec) {
-    luaL_pushresultsize(&buf, 0);
-    lua_pop(L, 1);
-    archive_pushresult(L, out, result, 1);
-  }
-  else {
-    luaL_pushresultsize(&buf, result);
-  }
+  archive_pushbufferresult(L, &buf, result, is_vec);
   return 1;
 }
 
@@ -586,6 +582,7 @@ static int archive_lz4_decompress_impl(lua_State *L) {
 
   const char *src = input;
   size_t src_remaining = input_len;
+  size_t ret = 1;
 
   while (src_remaining > 0) {
     size_t chunk = (input_len > 0) ? input_len * 4 : 256;
@@ -594,10 +591,14 @@ static int archive_lz4_decompress_impl(lua_State *L) {
     char *out = luaL_prepbuffsize(&buf, chunk);
     size_t dst_size = chunk;
     size_t src_size = src_remaining;
-    size_t ret = LZ4F_decompress(dctx, out, &dst_size, src, &src_size, NULL);
+    ret = LZ4F_decompress(dctx, out, &dst_size, src, &src_size, NULL);
     if (LZ4F_isError(ret)) {
       LZ4F_freeDecompressionContext(dctx);
       return luaL_error(L, "lz4 decompress failed: %s", LZ4F_getErrorName(ret));
+    }
+    if (dst_size == 0 && src_size == 0 && ret != 0) {
+      LZ4F_freeDecompressionContext(dctx);
+      return luaL_error(L, "lz4 decompress: incomplete data");
     }
     luaL_addsize(&buf, dst_size);
     if (luaL_bufflen(&buf) > maxout) {
@@ -611,6 +612,8 @@ static int archive_lz4_decompress_impl(lua_State *L) {
   }
 
   LZ4F_freeDecompressionContext(dctx);
+  if (ret != 0)
+    return luaL_error(L, "lz4 decompress: incomplete data");
 
   if (is_vec) {
     luaL_pushresult(&buf);
