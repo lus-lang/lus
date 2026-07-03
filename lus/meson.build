@@ -352,6 +352,13 @@ h2_sqlite = executable('test_sqlite', '../lus-tests/h2/test_sqlite.c',
 )
 test('h2/sqlite', h2_sqlite, suite: 'h2')
 
+h2_query = executable('test_query', '../lus-tests/h2/test_query.c',
+  include_directories: include_directories('src'),
+  link_with: liblus,
+  dependencies: lus_deps,
+)
+test('h2/query', h2_query, suite: 'h2')
+
 
 # H3: System Integration (Container Wrapper)
 # Runs the Lus runner script

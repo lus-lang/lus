@@ -270,3 +270,231 @@ void luaQ_free(lua_State *L, Query *q) {
     luaM_freemem(L, q->plan, q->plansize);
   luaM_freemem(L, q, sizequery(q->nsources + q->noperands));
 }
+
+
+/*
+** {==================================================================
+** The public C API: a read-only visitor over sources, clauses, and
+** nodes, plus native provider registration (see lua.h)
+** ===================================================================
+*/
+
+/* the public node kinds collapse the literal variants into one */
+static int publickind(const QNode *n) {
+  switch (n->kind) {
+    case QN_COLUMN: return LUS_QN_COLUMN;
+    case QN_ROWVAR: return LUS_QN_ROWVAR;
+    case QN_PARAM: return LUS_QN_PARAM;
+    case QN_CLOSURE: return LUS_QN_CLOSURE;
+    case QN_NAMEREF: return LUS_QN_NAMEREF;
+    case QN_LIT_NIL:
+    case QN_LIT_TRUE:
+    case QN_LIT_FALSE:
+    case QN_LIT_INT:
+    case QN_LIT_FLT:
+    case QN_LIT_STR: return LUS_QN_LIT;
+    case QN_AND: return LUS_QN_AND;
+    case QN_OR: return LUS_QN_OR;
+    case QN_NOT: return LUS_QN_NOT;
+    case QN_CMP: return LUS_QN_CMP;
+    case QN_ARITH: return LUS_QN_ARITH;
+    case QN_CONCAT: return LUS_QN_CONCAT;
+    default: return LUS_QN_AGG;
+  }
+}
+
+LUA_API lus_Query *lus_toquery(lua_State *L, int idx) {
+  const TValue *o;
+  if (idx > 0)
+    o = s2v(L->ci->func.p + idx);
+  else if (idx < 0 && idx > LUA_REGISTRYINDEX)
+    o = s2v(L->top.p + idx);
+  else
+    return NULL;
+  return ttisquery(o) ? queryvalue(o) : NULL;
+}
+
+LUA_API int lus_querysourcecount(const lus_Query *q) { return q->nsources; }
+
+LUA_API const char *lus_querysourcealias(const lus_Query *q, int i,
+                                         size_t *len) {
+  const QPlan *pl = queryplan(q);
+  if (i < 0 || i >= q->nsources)
+    return NULL;
+  if (len != NULL)
+    *len = pl->sources[i].alias.len;
+  return pl->pool + pl->sources[i].alias.off;
+}
+
+LUA_API void lus_querysource(lua_State *L, const lus_Query *q, int i) {
+  if (i < 0 || i >= q->nsources)
+    setnilvalue(s2v(L->top.p));
+  else
+    setobj2s(L, L->top.p, &q->vals[i]);
+  L->top.p++;
+}
+
+LUA_API int lus_querydistinct(const lus_Query *q) {
+  return (queryplan(q)->h.flags & QF_DISTINCT) != 0;
+}
+
+LUA_API int lus_queryclausecount(const lus_Query *q, int clause) {
+  const QPlan *pl = queryplan(q);
+  switch (clause) {
+    case LUS_QWHERE: return pl->h.where_root != QNODE_NONE;
+    case LUS_QSELECT: return pl->h.nselect;
+    case LUS_QGROUP: return pl->h.ngroup;
+    case LUS_QHAVING: return pl->h.having_root != QNODE_NONE;
+    case LUS_QORDER: return pl->h.norder;
+    case LUS_QLIMIT: return pl->h.limit_node != QNODE_NONE;
+    case LUS_QOFFSET: return pl->h.offset_node != QNODE_NONE;
+    default: return 0;
+  }
+}
+
+LUA_API const lus_QueryNode *lus_queryclause(const lus_Query *q, int clause,
+                                             int item) {
+  const QPlan *pl = queryplan(q);
+  unsigned short node = QNODE_NONE;
+  switch (clause) {
+    case LUS_QWHERE:
+      if (item == 0)
+        node = pl->h.where_root;
+      break;
+    case LUS_QSELECT:
+      if (item >= 0 && item < pl->h.nselect)
+        node = pl->sel[item].node;
+      break;
+    case LUS_QGROUP:
+      if (item >= 0 && item < pl->h.ngroup)
+        node = pl->group[item];
+      break;
+    case LUS_QHAVING:
+      if (item == 0)
+        node = pl->h.having_root;
+      break;
+    case LUS_QORDER:
+      if (item >= 0 && item < pl->h.norder)
+        node = pl->order[item].node;
+      break;
+    case LUS_QLIMIT:
+      if (item == 0)
+        node = pl->h.limit_node;
+      break;
+    case LUS_QOFFSET:
+      if (item == 0)
+        node = pl->h.offset_node;
+      break;
+    default:
+      break;
+  }
+  return (node == QNODE_NONE) ? NULL : &pl->nodes[node];
+}
+
+LUA_API const char *lus_queryselectname(const lus_Query *q, int item,
+                                        size_t *len) {
+  const QPlan *pl = queryplan(q);
+  if (item < 0 || item >= pl->h.nselect || pl->sel[item].name.len == 0)
+    return NULL;
+  if (len != NULL)
+    *len = pl->sel[item].name.len;
+  return pl->pool + pl->sel[item].name.off;
+}
+
+LUA_API int lus_queryorderdesc(const lus_Query *q, int item) {
+  const QPlan *pl = queryplan(q);
+  if (item < 0 || item >= pl->h.norder)
+    return 0;
+  return pl->order[item].desc;
+}
+
+LUA_API int lus_qnodekind(const lus_QueryNode *n) { return publickind(n); }
+
+LUA_API int lus_qnodeop(const lus_QueryNode *n) { return n->sub; }
+
+LUA_API const lus_QueryNode *lus_qnodechild(const lus_Query *q,
+                                            const lus_QueryNode *n, int i) {
+  const QPlan *pl = queryplan(q);
+  unsigned short child = QNODE_NONE;
+  switch (n->kind) {
+    case QN_AND:
+    case QN_OR:
+    case QN_CMP:
+    case QN_CONCAT:
+    case QN_ARITH:
+      child = (i == 0) ? n->a : (i == 1) ? n->b : QNODE_NONE;
+      break;
+    case QN_NOT:
+    case QN_AGG:
+      child = (i == 0) ? n->a : QNODE_NONE;
+      break;
+    default:
+      break;
+  }
+  return (child == QNODE_NONE) ? NULL : &pl->nodes[child];
+}
+
+LUA_API const char *lus_qnodename(const lus_Query *q, const lus_QueryNode *n,
+                                  size_t *len) {
+  const QPlan *pl = queryplan(q);
+  switch (n->kind) {
+    case QN_COLUMN:
+    case QN_NAMEREF:
+      if (len != NULL)
+        *len = n->u.s.len;
+      return pl->pool + n->u.s.off;
+    default:
+      return NULL;
+  }
+}
+
+LUA_API void lus_qnodevalue(lua_State *L, const lus_Query *q,
+                            const lus_QueryNode *n) {
+  switch (n->kind) {
+    case QN_LIT_NIL:
+      setnilvalue(s2v(L->top.p));
+      L->top.p++;
+      break;
+    case QN_LIT_TRUE:
+      setbtvalue(s2v(L->top.p));
+      L->top.p++;
+      break;
+    case QN_LIT_FALSE:
+      setbfvalue(s2v(L->top.p));
+      L->top.p++;
+      break;
+    case QN_LIT_INT:
+      setivalue(s2v(L->top.p), n->u.i);
+      L->top.p++;
+      break;
+    case QN_LIT_FLT:
+      setfltvalue(s2v(L->top.p), n->u.n);
+      L->top.p++;
+      break;
+    case QN_LIT_STR: {
+      const QPlan *pl = queryplan(q);
+      TString *s = luaS_newlstr(L, pl->pool + n->u.s.off, n->u.s.len);
+      setsvalue2s(L, L->top.p, s);
+      L->top.p++;
+      break;
+    }
+    case QN_PARAM:
+    case QN_CLOSURE:
+      setobj2s(L, L->top.p, &q->vals[q->nsources + n->a]);
+      L->top.p++;
+      break;
+    default:
+      setnilvalue(s2v(L->top.p));
+      L->top.p++;
+      break;
+  }
+}
+
+LUA_API void lus_setqueryprovider(lua_State *L, int mt_idx,
+                                  const lus_QueryProvider *p) {
+  mt_idx = lua_absindex(L, mt_idx);
+  lua_pushlightuserdata(L, (void *)p);
+  lua_setfield(L, mt_idx, "__queryprovider");
+}
+
+/* }================================================================== */

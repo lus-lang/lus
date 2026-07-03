@@ -54,6 +54,7 @@ typedef struct QConjuncts {
   int nodes[LUS_QMAXNODES];  /* conjunct root node indexes */
   unsigned int mask[LUS_QMAXNODES]; /* sources referenced by each */
   lu_byte opaque[LUS_QMAXNODES];    /* 1 when it holds a host closure */
+  lu_byte pushed[LUS_QMAXNODES];    /* 1 once a provider accepted it */
   int n;
 } QConjuncts;
 
@@ -112,6 +113,7 @@ static void splitconjuncts(const QPlan *pl, int node, QConjuncts *c) {
     c->nodes[c->n] = node;
     c->mask[c->n] = mask;
     c->opaque[c->n] = cast_byte(opaque);
+    c->pushed[c->n] = 0;
     c->n++;
   }
 }
@@ -487,8 +489,16 @@ static void eval(QExec *e, int node) {
 /* provider classification for one source value at 'srcidx' */
 #define QP_MEMORY 0
 #define QP_METAMETHOD 1
+#define QP_NATIVE 2
 
-static int classify_source(lua_State *L, int srcidx) {
+static int classify_source(lua_State *L, int srcidx,
+                           const lus_QueryProvider **pp) {
+  if (luaL_getmetafield(L, srcidx, "__queryprovider") != LUA_TNIL) {
+    if (pp != NULL)
+      *pp = (const lus_QueryProvider *)lua_touserdata(L, -1);
+    lua_pop(L, 1);
+    return QP_NATIVE;
+  }
   if (luaL_getmetafield(L, srcidx, "__query") != LUA_TNIL) {
     lua_pop(L, 1);
     return QP_METAMETHOD;
@@ -502,12 +512,50 @@ static int classify_source(lua_State *L, int srcidx) {
 ** carries __query supplies its own iterator: __query(source, q, i)
 ** must return a function yielding one row per call.
 */
-static void fetch_source(lua_State *L, Query *q, int i, int qidx) {
+static void fetch_source(lua_State *L, Query *q, int i, int qidx,
+                         QConjuncts *conj) {
   int srcidx, rowsidx;
+  int kind;
+  const lus_QueryProvider *provider = NULL;
   lua_Integer k;
   pushqval(L, q, i);
   srcidx = lua_gettop(L);
-  if (classify_source(L, srcidx) == QP_METAMETHOD) {
+  kind = classify_source(L, srcidx, &provider);
+  if (kind == QP_NATIVE) {
+    /* offer this source's own conjuncts; accepted ones push down and
+       never run again in memory */
+    const lus_QueryNode *pushed[LUS_QMAXNODES];
+    int npushed = 0;
+    int c;
+    QPlan *pl = queryplan(q);
+    for (c = 0; c < conj->n; c++) {
+      if (conj->mask[c] == (1u << i) && !conj->opaque[c]) {
+        const lus_QueryNode *node = &pl->nodes[conj->nodes[c]];
+        if (provider->accepts(L, q, node)) {
+          pushed[npushed++] = node;
+          conj->pushed[c] = 1;
+        }
+      }
+    }
+    provider->open(L, q, i + 1, pushed, npushed);
+    if (!lua_isfunction(L, -1))
+      luaL_error(L, "the query provider must push a row iterator");
+    lua_newtable(L);
+    rowsidx = lua_gettop(L);
+    for (k = 1;; k++) {
+      lua_pushvalue(L, rowsidx - 1); /* the iterator */
+      lua_call(L, 0, 1);
+      if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      lua_rawseti(L, rowsidx, k);
+    }
+    lua_remove(L, srcidx + 1); /* the iterator */
+    lua_remove(L, srcidx);     /* the source */
+    return;
+  }
+  if (kind == QP_METAMETHOD) {
     luaL_getmetafield(L, srcidx, "__query");
     lua_pushvalue(L, srcidx);
     lua_pushvalue(L, qidx);
@@ -767,7 +815,7 @@ static void execquery(lua_State *L, Query *q, int qidx) {
   lua_newtable(L);
   srcrows = lua_gettop(L);
   for (i = 0; i < nsrc; i++) {
-    fetch_source(L, q, i, qidx);
+    fetch_source(L, q, i, qidx, &conj);
     sizes[i] = (lua_Integer)lua_rawlen(L, -1);
     lua_rawseti(L, srcrows, i + 1);
     counters[i] = 1;
@@ -789,6 +837,8 @@ static void execquery(lua_State *L, Query *q, int qidx) {
     }
     e.tuple = lua_gettop(L);
     for (c = 0; c < conj.n && pass; c++) {
+      if (conj.pushed[c])
+        continue; /* a provider already applied it */
       eval(&e, conj.nodes[c]);
       pass = lua_toboolean(L, -1);
       lua_pop(L, 1);
@@ -1050,25 +1100,35 @@ static int lusQ_queryplan(lua_State *L) {
   for (i = 0; i < pl->h.nsources; i++) {
     int kind;
     int pushed = 0;
+    const lus_QueryProvider *provider = NULL;
+    const char *kindname;
     pushqval(L, q, i);
-    kind = classify_source(L, -1);
+    kind = classify_source(L, -1, &provider);
     lua_pop(L, 1);
     for (c = 0; c < conj.n; c++) {
-      if (conj.mask[c] == (1u << i) && !conj.opaque[c])
-        pushed++;
+      if (conj.mask[c] == (1u << i) && !conj.opaque[c]) {
+        if (kind == QP_NATIVE &&
+            provider->accepts(L, q, &pl->nodes[conj.nodes[c]])) {
+          pushed++;
+          conj.pushed[c] = 1;
+        }
+      }
     }
+    kindname = (kind == QP_NATIVE)       ? "native"
+               : (kind == QP_METAMETHOD) ? "__query"
+                                         : "memory";
     lua_pushlstring(L, pl->pool + pl->sources[i].alias.off,
                     pl->sources[i].alias.len);
-    lua_pushfstring(L, "  %s: %s, %d single-source conjunct(s)\n",
-                    lua_tostring(L, -1),
-                    kind == QP_METAMETHOD ? "__query" : "memory", pushed);
+    lua_pushfstring(L, "  %s: %s, %d pushed conjunct(s)\n",
+                    lua_tostring(L, -1), kindname, pushed);
     lua_remove(L, -2);
     luaL_addvalue(&b);
   }
   for (c = 0; c < conj.n; c++) {
     lua_pushfstring(L, "  conjunct %d: %s\n", c + 1,
-                    conj.opaque[c] ? "in memory (host closure)"
-                                   : "translatable");
+                    conj.pushed[c]   ? "pushed down"
+                    : conj.opaque[c] ? "in memory (host closure)"
+                                     : "in memory (translatable)");
     luaL_addvalue(&b);
   }
   luaL_pushresult(&b);

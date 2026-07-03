@@ -238,6 +238,100 @@ LUA_API void(lua_pushenum)(lua_State *L, int npairs);
 LUA_API void *(lus_tosqlite)(lua_State *L, int idx);
 
 /*
+** {==============================================================
+** Queries: a read-only visitor over a query value's sources,
+** clauses, and reified expression nodes, plus native provider
+** registration. See lus_isquery in the macro section below.
+** ===============================================================
+*/
+
+typedef struct Query lus_Query;     /* opaque */
+typedef struct QNode lus_QueryNode; /* opaque */
+
+/* clause identifiers */
+#define LUS_QWHERE 0
+#define LUS_QSELECT 1
+#define LUS_QGROUP 2
+#define LUS_QHAVING 3
+#define LUS_QORDER 4
+#define LUS_QLIMIT 5
+#define LUS_QOFFSET 6
+
+/* node kinds (lus_qnodekind) */
+#define LUS_QN_COLUMN 0  /* op = source index, name = column */
+#define LUS_QN_ROWVAR 1  /* op = source index */
+#define LUS_QN_PARAM 2   /* value = the captured parameter */
+#define LUS_QN_CLOSURE 3 /* value = the host closure */
+#define LUS_QN_NAMEREF 4 /* name = a projection alias */
+#define LUS_QN_LIT 5     /* value = the literal */
+#define LUS_QN_AND 6
+#define LUS_QN_OR 7
+#define LUS_QN_NOT 8
+#define LUS_QN_CMP 9    /* op = LUS_QCMP_* */
+#define LUS_QN_ARITH 10 /* op = LUS_QAR_* */
+#define LUS_QN_CONCAT 11
+#define LUS_QN_AGG 12 /* op = LUS_QAGG_*, child 0 may be absent */
+
+/* comparison, arithmetic, and aggregate subcodes (lus_qnodeop) */
+#define LUS_QCMP_EQ 0
+#define LUS_QCMP_NE 1
+#define LUS_QCMP_LT 2
+#define LUS_QCMP_LE 3
+#define LUS_QCMP_GT 4
+#define LUS_QCMP_GE 5
+#define LUS_QAR_ADD 0
+#define LUS_QAR_SUB 1
+#define LUS_QAR_MUL 2
+#define LUS_QAR_DIV 3
+#define LUS_QAR_IDIV 4
+#define LUS_QAR_MOD 5
+#define LUS_QAR_POW 6
+#define LUS_QAR_UNM 7
+#define LUS_QAGG_COUNT 0
+#define LUS_QAGG_SUM 1
+#define LUS_QAGG_AVG 2
+#define LUS_QAGG_MIN 3
+#define LUS_QAGG_MAX 4
+
+LUA_API lus_Query *(lus_toquery)(lua_State *L, int idx);
+LUA_API int(lus_querysourcecount)(const lus_Query *q);
+LUA_API const char *(lus_querysourcealias)(const lus_Query *q, int i,
+                                           size_t *len);
+LUA_API void(lus_querysource)(lua_State *L, const lus_Query *q, int i);
+LUA_API int(lus_querydistinct)(const lus_Query *q);
+LUA_API int(lus_queryclausecount)(const lus_Query *q, int clause);
+LUA_API const lus_QueryNode *(lus_queryclause)(const lus_Query *q, int clause,
+                                               int item);
+LUA_API const char *(lus_queryselectname)(const lus_Query *q, int item,
+                                          size_t *len);
+LUA_API int(lus_queryorderdesc)(const lus_Query *q, int item);
+LUA_API int(lus_qnodekind)(const lus_QueryNode *n);
+LUA_API int(lus_qnodeop)(const lus_QueryNode *n);
+LUA_API const lus_QueryNode *(lus_qnodechild)(const lus_Query *q,
+                                              const lus_QueryNode *n, int i);
+LUA_API const char *(lus_qnodename)(const lus_Query *q,
+                                    const lus_QueryNode *n, size_t *len);
+LUA_API void(lus_qnodevalue)(lua_State *L, const lus_Query *q,
+                             const lus_QueryNode *n);
+
+/*
+** A native query provider, registered on a metatable. The engine
+** offers each single-source conjunct to 'accepts'; the accepted ones
+** are handed to 'open', which must push a row iterator function, and
+** they never run again in memory. Everything else stays residual.
+*/
+typedef struct lus_QueryProvider {
+  int (*accepts)(lua_State *L, const lus_Query *q, const lus_QueryNode *n);
+  void (*open)(lua_State *L, const lus_Query *q, int srcindex,
+               const lus_QueryNode *const *pushed, int npushed);
+} lus_QueryProvider;
+
+LUA_API void(lus_setqueryprovider)(lua_State *L, int mt_idx,
+                                   const lus_QueryProvider *p);
+
+/* }============================================================== */
+
+/*
 ** get functions (Lua -> stack)
 */
 LUA_API int(lua_getglobal)(lua_State *L, const char *name);
