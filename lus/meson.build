@@ -146,6 +146,7 @@ core_sources = files(
   'src/lpack.c',
   'src/lparser.c',
   'src/lpledge.c',
+  'src/lquery.c',
   'src/lstate.c',
   'src/lstring.c',
   'src/ltable.c',

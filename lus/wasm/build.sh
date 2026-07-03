@@ -98,6 +98,7 @@ SOURCES=(
   "$SRC_DIR/lpack.c"
   "$SRC_DIR/lparser.c"
   "$SRC_DIR/lpledge.c"
+  "$SRC_DIR/lquery.c"
   "$SRC_DIR/lstate.c"
   "$SRC_DIR/lstring.c"
   "$SRC_DIR/lstrlib.c"

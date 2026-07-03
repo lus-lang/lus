@@ -61,8 +61,9 @@ typedef struct lua_State lua_State;
 #define LUA_TTHREAD 8
 #define LUA_TENUM 9
 #define LUA_TVECTOR 10
+#define LUA_TQUERY 11
 
-#define LUA_NUMTYPES 11
+#define LUA_NUMTYPES 12
 
 /* minimum Lua stack available to a C function */
 #define LUA_MINSTACK 20
@@ -380,6 +381,7 @@ LUA_API void(lua_closeslot)(lua_State *L, int idx);
 #define lua_isthread(L, n) (lua_type(L, (n)) == LUA_TTHREAD)
 #define lua_isenum(L, n) (lua_type(L, (n)) == LUA_TENUM)
 #define lua_isvector(L, n) (lua_type(L, (n)) == LUA_TVECTOR)
+#define lus_isquery(L, n) (lua_type(L, (n)) == LUA_TQUERY)
 #define lua_isnone(L, n) (lua_type(L, (n)) == LUA_TNONE)
 #define lua_isnoneornil(L, n) (lua_type(L, (n)) <= 0)
 

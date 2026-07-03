@@ -995,6 +995,52 @@ typedef struct Vector {
 
 
 /*
+** {==================================================================
+** Queries
+** ===================================================================
+*/
+
+/*
+** Query: A compiled, first-class query expression. The decoded clause
+** plan lives in one owned raw-memory block ('plan', see lquery.h) with
+** no GC references of its own; every collectable the query captures
+** (source values, bound parameters, host closures) lives in the
+** flexible 'vals' array, which is all the GC traverses.
+*/
+typedef struct Query {
+  CommonHeader;
+  lu_byte nsources;  /* vals[0..nsources-1] are the source values */
+  lu_byte noperands; /* then captured parameters and host closures */
+  GCObject *gclist;
+  void *plan;      /* decoded plan block, owned (see lquery.h) */
+  size_t plansize; /* bytes in 'plan', counted by objsize */
+  TValue vals[1];  /* flexible array: nsources + noperands slots */
+} Query;
+
+#define sizequery(n) \
+  (offsetof(Query, vals) + cast_sizet(n) * sizeof(TValue))
+
+#define LUA_VQUERY makevariant(LUA_TQUERY, 0)
+
+#define ttisquery(o) checktag((o), ctb(LUA_VQUERY))
+
+#define queryvalue(o) check_exp(ttisquery(o), gco2query(val_(o).gc))
+
+#define setqueryvalue(L, obj, x) \
+  {                              \
+    TValue *io = (obj);          \
+    Query *x_ = (x);             \
+    val_(io).gc = obj2gco(x_);   \
+    settt_(io, ctb(LUA_VQUERY)); \
+    checkliveness(L, io);        \
+  }
+
+#define setqueryvalue2s(L, o, q) setqueryvalue(L, s2v(o), q)
+
+/* }================================================================== */
+
+
+/*
 ** 'module' operation for hashing (size is always a power of 2)
 */
 #define lmod(s, size) \

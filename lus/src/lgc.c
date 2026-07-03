@@ -21,6 +21,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lobject.h"
+#include "lquery.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
@@ -186,6 +187,10 @@ static l_mem objsize(GCObject *o) {
       res = luaV_vecsize(v);
       break;
     }
+    case LUA_VQUERY: {
+      res = luaQ_size(gco2query(o));
+      break;
+    }
     default: res = 0; lua_assert(0);
   }
   return cast(l_mem, res);
@@ -205,6 +210,7 @@ static GCObject **getgclist(GCObject *o) {
       return &u->gclist;
     }
     case LUA_VENUMROOT: return &gco2enumroot(o)->gclist;
+    case LUA_VQUERY: return &gco2query(o)->gclist;
     default: lua_assert(0); return 0;
   }
 }
@@ -400,7 +406,8 @@ static void reallymarkobject(global_State *g, GCObject *o) {
     case LUA_VTABLE:
     case LUA_VTHREAD:
     case LUA_VPROTO:
-    case LUA_VENUMROOT: {
+    case LUA_VENUMROOT:
+    case LUA_VQUERY: {
       linkobjgclist(o, g->gray); /* to be visited later */
       break;
     }
@@ -773,6 +780,15 @@ static l_mem traversethread(global_State *g, lua_State *th) {
 /*
 ** Traverse an enum root: mark all name strings.
 */
+static l_mem traversequery(global_State *g, Query *q) {
+  int n = q->nsources + q->noperands;
+  int i;
+  for (i = 0; i < n; i++)
+    markvalue(g, &q->vals[i]);
+  return 1 + n;
+}
+
+
 static l_mem traverseenumroot(global_State *g, EnumRoot *root) {
   int i;
   for (i = 0; i < root->size; i++)
@@ -801,6 +817,7 @@ static l_mem propagatemark(global_State *g) {
     case LUA_VPROTO: return traverseproto(g, gco2p(o));
     case LUA_VTHREAD: return traversethread(g, gco2th(o));
     case LUA_VENUMROOT: return traverseenumroot(g, gco2enumroot(o));
+    case LUA_VQUERY: return traversequery(g, gco2query(o));
     default: lua_assert(0); return 0;
   }
 }
@@ -944,6 +961,10 @@ static void freeobj(lua_State *L, GCObject *o) {
     }
     case LUA_VVECTOR: {
       luaV_freevec(L, gco2vec(o));
+      break;
+    }
+    case LUA_VQUERY: {
+      luaQ_free(L, gco2query(o));
       break;
     }
     default: lua_assert(0);

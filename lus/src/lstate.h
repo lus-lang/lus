@@ -447,6 +447,7 @@ union GCUnion {
   struct Enum en;     /* enum value */
   struct EnumRoot er; /* enum root */
   struct Vector vec;  /* vector buffer */
+  struct Query q;     /* query value */
 };
 
 /*
@@ -471,6 +472,7 @@ union GCUnion {
 #define gco2enum(o) check_exp((o)->tt == LUA_VENUM, &((cast_u(o))->en))
 #define gco2enumroot(o) check_exp((o)->tt == LUA_VENUMROOT, &((cast_u(o))->er))
 #define gco2vec(o) check_exp((o)->tt == LUA_VVECTOR, &((cast_u(o))->vec))
+#define gco2query(o) check_exp((o)->tt == LUA_VQUERY, &((cast_u(o))->q))
 
 /*
 ** macro to convert a Lua object into a GCObject
