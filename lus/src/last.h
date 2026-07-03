@@ -69,7 +69,24 @@ typedef enum {
   /* Error recovery */
   AST_ERROR_EXPR, /* error placeholder in expression */
   AST_ERROR_STAT, /* error placeholder in statement */
+  /* Queries (appended after the error kinds so prior values stay stable) */
+  AST_QUERY,   /* @source query expression */
+  AST_QSOURCE, /* one query source with its row-variable alias */
+  AST_QCLAUSE, /* one query clause */
+  AST_QITEM,   /* one select or order item */
+  AST_QSTAR,   /* the '*' inside count(*) */
 } LusAstType;
+
+/*
+** Clause kinds for AST_QCLAUSE
+*/
+#define LUS_QCLAUSE_WHERE 0
+#define LUS_QCLAUSE_SELECT 1
+#define LUS_QCLAUSE_GROUP 2
+#define LUS_QCLAUSE_HAVING 3
+#define LUS_QCLAUSE_ORDER 4
+#define LUS_QCLAUSE_LIMIT 5
+#define LUS_QCLAUSE_OFFSET 6
 
 /*
 ** Binary operators (matches parser OPR_* values)
@@ -257,6 +274,30 @@ typedef struct LusAstNode {
     struct {
       TString *message; /* error message */
     } error;
+    /* AST_QUERY */
+    struct {
+      struct LusAstNode *sources; /* list of AST_QSOURCE */
+      struct LusAstNode *clauses; /* list of AST_QCLAUSE in source order */
+    } query;
+    /* AST_QSOURCE */
+    struct {
+      struct LusAstNode *expr; /* the source expression */
+      TString *alias;          /* the row variable name */
+      int hasas;               /* 1 when written with 'as' */
+    } qsource;
+    /* AST_QCLAUSE */
+    struct {
+      int kind;                 /* LUS_QCLAUSE_* */
+      int distinct;             /* select: 1 for 'select distinct' */
+      struct LusAstNode *items; /* AST_QITEM or expression list */
+    } qclause;
+    /* AST_QITEM */
+    struct {
+      struct LusAstNode *expr;
+      TString *name; /* projection or order name (NULL when auto-named) */
+      int hasas;     /* 1 when the name was written with 'as' */
+      int desc;      /* order: 1 for 'desc' */
+    } qitem;
   } u;
 } LusAstNode;
 

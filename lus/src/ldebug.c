@@ -466,8 +466,9 @@ static int findsetreg(const Proto *p, int lastpc, int reg) {
       case OP_CALL:
       case OP_TAILCALL:
       case OP_FASTCALL:
-      case OP_REQUIRE: { /* affect all registers above base */
-        if (op == OP_FASTCALL || op == OP_REQUIRE)
+      case OP_REQUIRE:
+      case OP_QUERY: { /* affect all registers above base */
+        if (op == OP_FASTCALL || op == OP_REQUIRE || op == OP_QUERY)
           pc++; /* skip EXTRAARG */
         change = (reg >= a);
         break;

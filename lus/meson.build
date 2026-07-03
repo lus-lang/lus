@@ -299,6 +299,7 @@ h1_tests = [
   'h1/lsp-e2e',
   'h1/preinclude',
   'h1/flags',
+  'h1/query_syntax',
 ]
 
 foreach t : h1_tests

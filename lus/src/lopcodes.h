@@ -355,6 +355,9 @@ typedef enum {
   OP_REQUIRE, /*	A B C	R[A] := require(preinclude); C=nresults+1
                         (next instruction is EXTRAARG = preinclude index) */
 
+  OP_QUERY, /*	A B C	R[A] := query(R[A..A+B+C-1]); B=sources C=operands
+                        (next instruction is EXTRAARG = plan blob k index) */
+
   OP_EXTRAARG /*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

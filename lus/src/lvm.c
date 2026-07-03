@@ -27,6 +27,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lobject.h"
+#include "lquery.h"
 #include "lopcodes.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -2717,6 +2718,18 @@ returning: /* trap already set */
         updatetrap(ci);
         if (nresults != LUA_MULTRET) /* luaV_require moved the top */
           L->top.p = ci->top.p;
+        vmbreak;
+      }
+      vmcase(OP_QUERY) {
+        StkId ra = RA(i);
+        int nsrc = GETARG_B(i);
+        int nops = GETARG_C(i);
+        int kidx = GETARG_Ax(*pc); /* peek at EXTRAARG */
+        TString *blob = tsvalue(k + kidx);
+        pc++; /* always consume EXTRAARG */
+        savestate(L, ci);
+        luaQ_build(L, ra, blob, ra, nsrc, nops); /* may raise and collect */
+        updatetrap(ci);
         vmbreak;
       }
       vmcase(OP_EXTRAARG) {

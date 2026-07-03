@@ -243,6 +243,7 @@ void luaX_setinput(lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->glbn->extra = 0;                     /* mark it as not reserved */
 #endif
   ls->interp_depth = 0;   /* not in interpolated string */
+  ls->inquery = 0;        /* not inside a query expression */
   ls->interp_name = NULL; /* no variable name */
   luaZ_resizebuffer(ls->L, ls->buff, LUA_MINBUFFER); /* initialize buffer */
 }

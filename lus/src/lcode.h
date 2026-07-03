@@ -106,6 +106,8 @@ LUAI_FUNC void luaK_setreturns(FuncState *fs, expdesc *e, int nresults);
 LUAI_FUNC void luaK_setoneret(FuncState *fs, expdesc *e);
 LUAI_FUNC int luaK_jump(FuncState *fs);
 LUAI_FUNC void luaK_ret(FuncState *fs, int first, int nret);
+LUAI_FUNC void luaK_query(FuncState *fs, int base, int nsrc, int nops,
+                          TString *blob);
 LUAI_FUNC void luaK_patchlist(FuncState *fs, int list, int target);
 LUAI_FUNC void luaK_patchtohere(FuncState *fs, int list);
 LUAI_FUNC void luaK_concat(FuncState *fs, int *l1, int l2);

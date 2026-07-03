@@ -1,0 +1,329 @@
+--[[
+  Query expression syntax and value semantics: contextual keywords stay
+  ordinary names, the '@' grammar and its error messages, query values
+  as first-class objects, bytecode round trips, GC behavior, and the
+  debug.parse and debug.format integration.
+
+  Execution semantics (the query() iterator) live in h1/query.lus.
+]]
+
+global io, print, assert, require, pledge, type, tostring, string, load,
+    collectgarbage, worker, debug, pairs, tojson, error, select
+
+-- no "seal": the bytecode round-trip tests load binary chunks, which a
+-- sealed state refuses by design
+pledge("load", "fs:read=./lus-tests/*")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("query_syntax")
+
+local people = {
+    { name = "Alice", age = 30 },
+    { name = "Bob",   age = 17 },
+}
+
+tests:describe("contextual keywords stay ordinary names")
+
+tests:it("clause words work as locals and functions", function()
+    local select = 1
+    local where = 2
+    local order = 3
+    local group = 4
+    local having = 5
+    local limit = 6
+    local offset = 7
+    local distinct = 8
+    local by = 9
+    local as = 10
+    tests:assert_equal(select + where + order + group + having + limit
+        + offset + distinct + by + as, 55)
+    local count = function(x) return x end
+    local sum = function(x) return x + 1 end
+    tests:assert_equal(count(1), 1)
+    tests:assert_equal(sum(1), 2)
+end)
+
+tests:it("clause words work as table fields and methods", function()
+    local t = { select = 1, where = 2 }
+    function t.order(x) return x end
+    function t:group() return self.select end
+    tests:assert_equal(t.select, 1)
+    tests:assert_equal(t.where, 2)
+    tests:assert_equal(t.order(3), 3)
+    tests:assert_equal(t:group(), 1)
+end)
+
+tests:it("'@' inside comments and strings is inert", function()
+    -- an '@' in this comment changes nothing: @not a query
+    local s = "an @ inside a string"
+    tests:assert_contains(s, "@")
+end)
+
+tests:describe("grammar acceptance")
+
+tests:it("queries appear in every expression position", function()
+    local q = @people as p select p.name
+    local function takes(x) return x end
+    tests:assert_equal(type(takes(@people as p select p.name)), "query")
+    local t = { @people as p select p.name }
+    tests:assert_equal(type(t[1]), "query")
+    local function gives()
+        return @people as p select p.name
+    end
+    tests:assert_equal(type(gives()), "query")
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:it("a query ends at the first unrelated name", function()
+    local q = @people as p where p.age > 1
+    local answer = 42
+    tests:assert_equal(type(q), "query")
+    tests:assert_equal(answer, 42)
+end)
+
+tests:it("clause order is free", function()
+    local q = @people as p
+        select p.name, count(*) as n
+        group by p.name
+        having count(*) > 0
+        order by n desc
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:it("a parenthesized source takes an explicit alias", function()
+    local q = @(people) as row where row.age > 1 select row.name
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:it("the implicit alias is the last name of the source chain",
+    function()
+    local db = { users = {} }
+    local q = @db.users where users.age > 1 select users.name
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:it("a literal bracket index works in a source", function()
+    local db = { ["odd table"] = {} }
+    local q = @db["odd table"] as t select t.a
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:describe("syntax errors")
+
+local function checkload(src, fragment)
+    local f, err = load(src)
+    assert(f == nil, "chunk must not compile: " .. src)
+    tests:assert_contains(tostring(err), fragment)
+end
+
+tests:it("bare and truncated queries fail", function()
+    checkload("return @", "expected")
+    checkload("local t = {} return @t as", "expected")
+end)
+
+tests:it("a source without a name needs 'as'", function()
+    checkload("local t = {} return @(t) select x.a",
+        "query source needs an 'as' name")
+end)
+
+tests:it("duplicate clauses and aliases fail", function()
+    checkload("local t = {} return @t as x where 1 where 2",
+        "duplicate 'where' clause")
+    checkload("local t = {} return @t as x select x.a select x.a",
+        "duplicate 'select' clause")
+    checkload("local t = {} return @t as x, t as x select x.a",
+        "duplicate row variable 'x'")
+end)
+
+tests:it("order and group require 'by'", function()
+    checkload("local t = {} return @t as x order x.a",
+        "'by' expected after 'order'")
+    checkload("local t = {} return @t as x group x.a",
+        "'by' expected after 'group'")
+end)
+
+tests:it("projections that need a name fail without 'as'", function()
+    checkload("local t = {} return @t as x select count(*)",
+        "'as' name expected for this projection")
+    checkload("local t = {} return @t as x select x.a + 1",
+        "'as' name expected for this projection")
+end)
+
+tests:it("a join requires a select clause", function()
+    checkload("local t = {} return @t as x, t as y",
+        "a join requires a 'select' clause")
+end)
+
+tests:it("aggregate placement rules", function()
+    checkload("local t = {} return @t as x where sum(x.a) > 1",
+        "only allowed in 'select' or 'having'")
+    checkload("local t = {} return @t as x select sum(*) as s",
+        "'%*' is only allowed in count")
+    checkload("local t = {} return @t as x select sum(count(x.a)) as s",
+        "aggregates cannot nest")
+end)
+
+tests:it("nested queries are rejected", function()
+    checkload("local t = {} return @t as x where (@t as y select y.a) == 1",
+        "nested queries are not supported")
+end)
+
+tests:it("unsupported operators in clauses fail", function()
+    checkload("local t = {} return @t as x where x.a & 1 == 1",
+        "operator not supported in a query clause")
+    checkload("local t = {} return @t as x where #x.a > 0",
+        "operator not supported in a query clause")
+end)
+
+tests:it("a suffixed parenthesized clause expression fails", function()
+    checkload("local t = {} return @t as x where (x.a)[1] == 1",
+        "parenthesized expression")
+end)
+
+tests:it("a non-literal source index fails", function()
+    checkload("local t = {} local k = 1 return @t[k] as x select x.a",
+        "query source index must be a literal")
+end)
+
+tests:it("too many sources fail", function()
+    checkload("local t = {} return @t as a, t as b, t as c, t as d, "
+        .. "t as e, t as f, t as g, t as h, t as i select a.x",
+        "too many sources")
+end)
+
+tests:describe("query values")
+
+tests:it("type and tostring", function()
+    local q = @people as p select p.name
+    tests:assert_equal(type(q), "query")
+    tests:assert_contains(tostring(q), "query")
+end)
+
+tests:it("identity equality", function()
+    local q = @people as p select p.name
+    local r = @people as p select p.name
+    assert(q == q, "a query equals itself")
+    assert(q ~= r, "two builds are distinct values")
+end)
+
+tests:it("queries work as table keys", function()
+    local q = @people as p select p.name
+    local t = { [q] = "here" }
+    tests:assert_equal(t[q], "here")
+end)
+
+tests:it("comparison, length, and arithmetic raise", function()
+    local q = @people as p select p.name
+    local r = @people as p select p.name
+    tests:assert_throws(function() return q < r end, "attempt to compare")
+    tests:assert_throws(function() return #q end, "attempt to get length")
+    tests:assert_throws(function() return q + 1 end,
+        "attempt to perform arithmetic")
+end)
+
+tests:it("tojson serializes a query as null", function()
+    local q = @people as p select p.name
+    tests:assert_equal(tojson(q), "null")
+end)
+
+tests:it("a query is not closable", function()
+    local ok, err = catch load([[
+        local people = {}
+        local q <close> = @people as p select p.name
+    ]])()
+    assert(not ok, "close on a query must fail")
+    tests:assert_contains(tostring(err), "non%-closable")
+end)
+
+tests:it("a query cannot cross a worker boundary", function()
+    local q = @people as p select p.name
+    local w = worker.create("lus-tests/h1/worker/echo.lus")
+    local ok, err = catch worker.send(w, q)
+    assert(not ok)
+    tests:assert_contains(tostring(err), "cannot serialize")
+    worker.send(w, "STOP")
+end)
+
+tests:describe("bytecode round trip")
+
+tests:it("string.dump preserves query-building functions", function()
+    local function maker(src, minimum)
+        return @src as r where r.age >= minimum select r.name
+    end
+    assert(type(maker(people, 18)) == "query")
+    local dumped = string.dump(maker)
+    local loaded = load(dumped, "maker", "b")
+    local q = loaded(people, 18)
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:describe("GC")
+
+tests:it("queries survive collection and keep sources alive", function()
+    local function build()
+        local hidden = { { n = 7 } }
+        return @hidden as h select h.n
+    end
+    local q = build()
+    collectgarbage("collect")
+    collectgarbage("collect")
+    tests:assert_equal(type(q), "query")
+end)
+
+tests:it("discarded queries do not leak", function()
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    for i = 1, 10000 do
+        local _ = @people as p where p.age > i select p.name
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local after = collectgarbage("count")
+    assert(after < before + 256,
+        "10000 discarded queries must not retain memory, grew from "
+        .. before .. " to " .. after)
+end)
+
+tests:describe("tooling round trip")
+
+tests:it("debug.parse exposes a structured query node", function()
+    local tree = debug.parse("local t = {} return @t as x "
+        .. "where x.a > 1 select x.a")
+    local function find(node, ty)
+        if type(node) ~= "table" then
+            return nil
+        end
+        if node.type == ty then
+            return node
+        end
+        for _, v in pairs(node) do
+            local r = find(v, ty)
+            if r then
+                return r
+            end
+        end
+    end
+    local qn = find(tree, "query")
+    assert(qn ~= nil, "query node present")
+    tests:assert_equal(qn.sources[1].alias, "x")
+    tests:assert_equal(qn.clauses[1].kind, "where")
+    tests:assert_equal(qn.clauses[2].kind, "select")
+end)
+
+tests:it("debug.format is idempotent on query chunks", function()
+    local src = "local t = {}\nlocal q = @t as x where x.a >= 1 "
+        .. "and probe(x.b) select distinct x.a, x.b * 2 as d "
+        .. "group by x.a having count(*) > 1 order by d desc limit 3\n"
+    local once = debug.format(src)
+    local twice = debug.format(once)
+    tests:assert_equal(twice, once)
+    tests:assert_contains(once, "@t as x")
+end)
+
+tests:it("debug.parse recovers on a broken query", function()
+    local tree = debug.parse("local t = {} return @t as x where ",
+        "broken", { recover = true })
+    assert(tree ~= nil, "recovery returns a tree")
+end)
+
+tests:finish()

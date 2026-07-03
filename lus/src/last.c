@@ -36,6 +36,7 @@ static const char *const ast_typenames[] = {
     "methodcall", "enum",      "optchain",   "doexpr",     "catchexpr",
     "slice",      "interp",    "param",      "namelist",   "explist",
     "elseif",     "else",      "tablefield", "error_expr", "error_stat",
+    "query",      "qsource",   "qclause",    "qitem",      "qstar",
     NULL};
 
 const char *lusA_typename(LusAstType type) {
@@ -196,6 +197,9 @@ static const char *unop_names[] = {"-", "~", "not", "#"};
 /*
 ** Forward declaration
 */
+static const char *const qclause_kindnames[] = {
+    "where", "select", "group", "having", "order", "limit", "offset"};
+
 static void nodetotable(lua_State *L, LusAstNode *node);
 
 /*
@@ -493,6 +497,48 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
       if (node->u.error.message != NULL) {
         lua_pushstring(L, getstr(node->u.error.message));
         lua_setfield(L, -2, "message");
+      }
+      break;
+
+    case AST_QUERY:
+      listtoarray(L, node->u.query.sources);
+      lua_setfield(L, -2, "sources");
+      listtoarray(L, node->u.query.clauses);
+      lua_setfield(L, -2, "clauses");
+      break;
+
+    case AST_QSOURCE:
+      nodetotable(L, node->u.qsource.expr);
+      lua_setfield(L, -2, "expr");
+      if (node->u.qsource.alias != NULL) {
+        lua_pushstring(L, getstr(node->u.qsource.alias));
+        lua_setfield(L, -2, "alias");
+      }
+      lua_pushboolean(L, node->u.qsource.hasas);
+      lua_setfield(L, -2, "hasas");
+      break;
+
+    case AST_QCLAUSE:
+      lua_pushstring(L, qclause_kindnames[node->u.qclause.kind]);
+      lua_setfield(L, -2, "kind");
+      if (node->u.qclause.distinct) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "distinct");
+      }
+      listtoarray(L, node->u.qclause.items);
+      lua_setfield(L, -2, "items");
+      break;
+
+    case AST_QITEM:
+      nodetotable(L, node->u.qitem.expr);
+      lua_setfield(L, -2, "expr");
+      if (node->u.qitem.name != NULL) {
+        lua_pushstring(L, getstr(node->u.qitem.name));
+        lua_setfield(L, -2, "name");
+      }
+      if (node->u.qitem.desc) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "desc");
       }
       break;
 
@@ -972,6 +1018,48 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
         emit_json_children(f, node->u.interp.parts, indent + 2);
       }
       fprintf(f, ",\n%*s\"nparts\": %d", indent + 2, "", node->u.interp.nparts);
+      break;
+
+    case AST_QUERY:
+      if (node->u.query.sources) {
+        fprintf(f, ",\n%*s\"sources\": ", indent + 2, "");
+        emit_json_children(f, node->u.query.sources, indent + 2);
+      }
+      if (node->u.query.clauses) {
+        fprintf(f, ",\n%*s\"clauses\": ", indent + 2, "");
+        emit_json_children(f, node->u.query.clauses, indent + 2);
+      }
+      break;
+
+    case AST_QSOURCE:
+      if (node->u.qsource.expr) {
+        fprintf(f, ",\n%*s\"expr\": ", indent + 2, "");
+        emit_json_node(f, node->u.qsource.expr, 0);
+      }
+      if (node->u.qsource.alias) {
+        fprintf(f, ",\n%*s\"alias\": ", indent + 2, "");
+        json_escape_string(f, getstr(node->u.qsource.alias));
+      }
+      break;
+
+    case AST_QCLAUSE:
+      fprintf(f, ",\n%*s\"kind\": ", indent + 2, "");
+      json_escape_string(f, qclause_kindnames[node->u.qclause.kind]);
+      if (node->u.qclause.items) {
+        fprintf(f, ",\n%*s\"items\": ", indent + 2, "");
+        emit_json_children(f, node->u.qclause.items, indent + 2);
+      }
+      break;
+
+    case AST_QITEM:
+      if (node->u.qitem.expr) {
+        fprintf(f, ",\n%*s\"expr\": ", indent + 2, "");
+        emit_json_node(f, node->u.qitem.expr, 0);
+      }
+      if (node->u.qitem.name) {
+        fprintf(f, ",\n%*s\"name\": ", indent + 2, "");
+        json_escape_string(f, getstr(node->u.qitem.name));
+      }
       break;
 
     default: break;

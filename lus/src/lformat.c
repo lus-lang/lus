@@ -602,6 +602,62 @@ static void emit_interp(FmtState *F, LusAstNode *n) {
 ** Main expression dispatcher
 ** ====================================================================== */
 
+/*
+** Emit a query expression on one line: '@' sources, then each clause
+** in source order. Clause bodies are ordinary expression nodes.
+*/
+static void emit_query(FmtState *F, LusAstNode *n) {
+  static const char *const qwords[] = {"where",    "select", "group by",
+                                       "having",   "order by", "limit",
+                                       "offset"};
+  LusAstNode *s;
+  LusAstNode *c;
+  buf_addc(&F->buf, '@');
+  for (s = n->u.query.sources; s != NULL; s = s->next) {
+    if (s != n->u.query.sources)
+      buf_adds(&F->buf, ", ");
+    emit_expr(F, s->u.qsource.expr);
+    if (s->u.qsource.hasas && s->u.qsource.alias != NULL) {
+      buf_adds(&F->buf, " as ");
+      buf_addlstr(&F->buf, getstr(s->u.qsource.alias),
+                  tsslen(s->u.qsource.alias));
+    }
+  }
+  for (c = n->u.query.clauses; c != NULL; c = c->next) {
+    int kind = c->u.qclause.kind;
+    buf_addc(&F->buf, ' ');
+    buf_adds(&F->buf, qwords[kind]);
+    if (kind == LUS_QCLAUSE_SELECT && c->u.qclause.distinct)
+      buf_adds(&F->buf, " distinct");
+    buf_addc(&F->buf, ' ');
+    if (kind == LUS_QCLAUSE_SELECT || kind == LUS_QCLAUSE_ORDER) {
+      LusAstNode *it;
+      for (it = c->u.qclause.items; it != NULL; it = it->next) {
+        if (it != c->u.qclause.items)
+          buf_adds(&F->buf, ", ");
+        emit_expr(F, it->u.qitem.expr);
+        if (it->u.qitem.hasas && it->u.qitem.name != NULL) {
+          buf_adds(&F->buf, " as ");
+          buf_addlstr(&F->buf, getstr(it->u.qitem.name),
+                      tsslen(it->u.qitem.name));
+        }
+        if (it->u.qitem.desc)
+          buf_adds(&F->buf, " desc");
+      }
+    }
+    else if (kind == LUS_QCLAUSE_GROUP) {
+      LusAstNode *it;
+      for (it = c->u.qclause.items; it != NULL; it = it->next) {
+        if (it != c->u.qclause.items)
+          buf_adds(&F->buf, ", ");
+        emit_expr(F, it);
+      }
+    }
+    else
+      emit_expr(F, c->u.qclause.items);
+  }
+}
+
 static void emit_expr(FmtState *F, LusAstNode *n) {
   if (n == NULL) {
     buf_adds(&F->buf, "nil");
@@ -699,6 +755,10 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
       buf_addc(&F->buf, '?');
       emit_expr(F, n->u.optchain.suffix);
       break;
+
+    case AST_QUERY: emit_query(F, n); break;
+
+    case AST_QSTAR: buf_addc(&F->buf, '*'); break;
 
     default: buf_adds(&F->buf, "--[[unknown expr]]"); break;
   }

@@ -27,6 +27,7 @@
 #include "lopcodes.h"
 #include "lfastcall.h"
 #include "lparser.h"
+#include "lquery.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
@@ -85,6 +86,7 @@ typedef struct BlockCnt {
 static void statement(LexState *ls);
 static void expr(LexState *ls, expdesc *v);
 static BinOpr subexpr(LexState *ls, expdesc *v, int limit);
+static void queryexpr(LexState *ls, expdesc *v);
 static void interpexp(LexState *ls, expdesc *v);
 static void catchexpr(LexState *ls, expdesc *v);
 static void catchstat(LexState *ls, int line);
@@ -1830,113 +1832,16 @@ static void discharge2basereg(FuncState *fs, expdesc *e, int basereg) {
   fs->freereg = cast_byte(basereg + 1);
 }
 
-static void suffixedexp(LexState *ls, expdesc *v) {
-  /* suffixedexp ->
-       primaryexp { '?' | '.' NAME | '[' exp ']' | ':' NAME funcargs | funcargs
-     } The '?' operator enables optional chaining: if the value is nil/false,
-     all subsequent suffix operations short-circuit and return nil.
-
-     Key: all operations in an optional chain write to the SAME register
-     (basereg). When we jump (value is nil), the register already contains nil,
-     so the result is correct without needing to explicitly load nil. */
+/*
+** Parse the suffix chain following an already-parsed prefix expression:
+** '?' | '.' NAME | '[' exp ']' | ':' NAME funcargs | funcargs. Shared
+** by suffixedexp and by query host-closure bodies, whose consumed
+** prefix is re-synthesized before the chain continues here.
+*/
+static void suffixchain(LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   int niljumps = NO_JUMP; /* list of jumps for nil short-circuit */
   int basereg = -1; /* base register for optional chain (-1 = not in chain) */
-  primaryexp(ls, v);
-
-  /* Handle local groups: resolve group.field to field register */
-  GroupDesc *curgroup = NULL; /* track current group context for subgroups */
-
-  while (1) {
-    /* Check if we're in a group context */
-    if (curgroup == NULL && v->k == VLOCAL) {
-      Vardesc *vd = getlocalvardesc(fs, v->u.var.vidx);
-      if (vd->vd.kind != RDKGROUP)
-        break; /* not a group, continue normally */
-
-      /* It's a group - get its GroupDesc */
-      curgroup = findgroup(ls, vd->vd.name);
-      if (curgroup == NULL) {
-        luaK_semerror(ls, "internal error: group '%s' not found",
-                      getstr(vd->vd.name));
-      }
-    }
-
-    if (curgroup == NULL)
-      break; /* not in group context */
-
-    /* Must be followed by '.' for field access, or '=' for group overwrite */
-    if (ls->t.token != '.') {
-      if (ls->t.token == '=') {
-        /* Group overwrite: z = { ... } - leave v as-is, handled by exprstat */
-        break;
-      }
-      luaK_semerror(ls, "cannot pass local group");
-    }
-
-    /* Parse the field access: '.' NAME */
-    {
-      int dotline = ls->linenumber;
-      int dotcol = ls->tokencolumn;
-      LusAstNode *table_ast = v->ast; /* save group AST before overwrite */
-      luaX_next(ls);                  /* skip '.' */
-      int fnameline = ls->linenumber;
-      int fnamecol = ls->tokencolumn;
-      TString *fieldname = str_checkname(ls);
-
-      GroupField *field = findgroupfield(curgroup, fieldname);
-      if (field == NULL) {
-        luaK_semerror(ls, "'%s' is not a field of group '%s'",
-                      getstr(fieldname), getstr(curgroup->name));
-      }
-
-      /* If field is a subgroup, update curgroup and continue */
-      if (field->kind == RDKGROUP && field->subgroup != NULL) {
-        /* Build AST_FIELD for the intermediate group path */
-        if (AST_ACTIVE(ls)) {
-          LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, dotline, dotcol);
-          fnode->u.index.table = table_ast;
-          LusAstNode *knode =
-              lusA_newnode(ls->ast, AST_STRING, fnameline, fnamecol);
-          knode->u.str = fieldname;
-          fnode->u.index.key = knode;
-          v->ast = fnode;
-        }
-        curgroup = field->subgroup;
-        /* Continue loop to handle parent.c.d */
-      }
-      else {
-        /* Regular field: find the variable and create assignable expr */
-        int i;
-        int found = 0;
-        for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {
-          Vardesc *fvd = getlocalvardesc(fs, i);
-          if (strcmp(getstr(fvd->vd.name), getstr(fieldname)) == 0 &&
-              fvd->vd.ridx == field->ridx) {
-            init_var(fs, v, i);
-            found = 1;
-            break;
-          }
-        }
-        if (!found) {
-          /* Fallback to VNONRELOC if variable not found */
-          init_exp(v, VNONRELOC, field->ridx);
-        }
-        /* Build AST_FIELD for the final field access */
-        if (AST_ACTIVE(ls)) {
-          LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, dotline, dotcol);
-          fnode->u.index.table = table_ast;
-          LusAstNode *knode =
-              lusA_newnode(ls->ast, AST_STRING, fnameline, fnamecol);
-          knode->u.str = fieldname;
-          fnode->u.index.key = knode;
-          v->ast = fnode;
-        }
-        break; /* exit loop */
-      }
-    }
-  }
-
   for (;;) {
     switch (ls->t.token) {
       case '?': {      /* optional chaining marker */
@@ -2113,6 +2018,115 @@ static void suffixedexp(LexState *ls, expdesc *v) {
       }
     }
   }
+}
+
+static void suffixedexp(LexState *ls, expdesc *v) {
+  /* suffixedexp ->
+       primaryexp { '?' | '.' NAME | '[' exp ']' | ':' NAME funcargs | funcargs
+     } The '?' operator enables optional chaining: if the value is nil/false,
+     all subsequent suffix operations short-circuit and return nil.
+
+     Key: all operations in an optional chain write to the SAME register
+     (basereg). When we jump (value is nil), the register already contains nil,
+     so the result is correct without needing to explicitly load nil (see
+     suffixchain, which parses the chain itself). */
+  FuncState *fs = ls->fs;
+  primaryexp(ls, v);
+
+  /* Handle local groups: resolve group.field to field register */
+  GroupDesc *curgroup = NULL; /* track current group context for subgroups */
+
+  while (1) {
+    /* Check if we're in a group context */
+    if (curgroup == NULL && v->k == VLOCAL) {
+      Vardesc *vd = getlocalvardesc(fs, v->u.var.vidx);
+      if (vd->vd.kind != RDKGROUP)
+        break; /* not a group, continue normally */
+
+      /* It's a group - get its GroupDesc */
+      curgroup = findgroup(ls, vd->vd.name);
+      if (curgroup == NULL) {
+        luaK_semerror(ls, "internal error: group '%s' not found",
+                      getstr(vd->vd.name));
+      }
+    }
+
+    if (curgroup == NULL)
+      break; /* not in group context */
+
+    /* Must be followed by '.' for field access, or '=' for group overwrite */
+    if (ls->t.token != '.') {
+      if (ls->t.token == '=') {
+        /* Group overwrite: z = { ... } - leave v as-is, handled by exprstat */
+        break;
+      }
+      luaK_semerror(ls, "cannot pass local group");
+    }
+
+    /* Parse the field access: '.' NAME */
+    {
+      int dotline = ls->linenumber;
+      int dotcol = ls->tokencolumn;
+      LusAstNode *table_ast = v->ast; /* save group AST before overwrite */
+      luaX_next(ls);                  /* skip '.' */
+      int fnameline = ls->linenumber;
+      int fnamecol = ls->tokencolumn;
+      TString *fieldname = str_checkname(ls);
+
+      GroupField *field = findgroupfield(curgroup, fieldname);
+      if (field == NULL) {
+        luaK_semerror(ls, "'%s' is not a field of group '%s'",
+                      getstr(fieldname), getstr(curgroup->name));
+      }
+
+      /* If field is a subgroup, update curgroup and continue */
+      if (field->kind == RDKGROUP && field->subgroup != NULL) {
+        /* Build AST_FIELD for the intermediate group path */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, dotline, dotcol);
+          fnode->u.index.table = table_ast;
+          LusAstNode *knode =
+              lusA_newnode(ls->ast, AST_STRING, fnameline, fnamecol);
+          knode->u.str = fieldname;
+          fnode->u.index.key = knode;
+          v->ast = fnode;
+        }
+        curgroup = field->subgroup;
+        /* Continue loop to handle parent.c.d */
+      }
+      else {
+        /* Regular field: find the variable and create assignable expr */
+        int i;
+        int found = 0;
+        for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {
+          Vardesc *fvd = getlocalvardesc(fs, i);
+          if (strcmp(getstr(fvd->vd.name), getstr(fieldname)) == 0 &&
+              fvd->vd.ridx == field->ridx) {
+            init_var(fs, v, i);
+            found = 1;
+            break;
+          }
+        }
+        if (!found) {
+          /* Fallback to VNONRELOC if variable not found */
+          init_exp(v, VNONRELOC, field->ridx);
+        }
+        /* Build AST_FIELD for the final field access */
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, dotline, dotcol);
+          fnode->u.index.table = table_ast;
+          LusAstNode *knode =
+              lusA_newnode(ls->ast, AST_STRING, fnameline, fnamecol);
+          knode->u.str = fieldname;
+          fnode->u.index.key = knode;
+          v->ast = fnode;
+        }
+        break; /* exit loop */
+      }
+    }
+  }
+
+  suffixchain(ls, v);
 }
 
 /*
@@ -2437,6 +2451,9 @@ static void simpleexp(LexState *ls, expdesc *v) {
     case TK_DO: { /* do expression */ doexpr(ls, v); return;
     }
     case TK_ENUM: { /* enum expression */ enumexpr(ls, v); return;
+    }
+    case '@': { /* query expression */ queryexpr(ls, v);
+      return;
     }
     default: {
       suffixedexp(ls, v);
@@ -2914,6 +2931,915 @@ static const struct {
 ** subexpr -> (simpleexp | unop subexpr) { binop subexpr }
 ** where 'binop' is any binary operator with a priority higher than 'limit'
 */
+/*
+** {======================================================================
+** Query expressions
+** =======================================================================
+**
+** An '@' query compiles into a plan blob (an ordinary string constant,
+** see lquery.h) plus a run of consecutive registers holding the live
+** source values, captured parameters, and host closures, assembled at
+** runtime by OP_QUERY. Clause keywords are contextual: they are plain
+** names everywhere else, and row variables never enter the enclosing
+** scope, so existing programs keep compiling unchanged.
+**
+** Inside a clause the reifier owns the grammar. Literals, row-variable
+** columns, scope-name chains, comparisons, boolean logic, arithmetic,
+** concatenation, and aggregates become plan nodes. A scope-name chain
+** is compiled once in the enclosing scope and captured as a bound
+** parameter. Anything else (a call, a method call, a deep row chain, a
+** constructor) lifts into a host closure: a child function whose
+** parameters are the row variables, compiled with the normal
+** expression machinery, so upvalues and full suffix syntax keep
+** working inside it.
+*/
+
+/* per-builder caps (the wire format caps in lquery.h are larger) */
+#define QB_MAXNODES 256
+#define QB_MAXPOOL 2048
+#define QB_MAXSEL 32
+#define QB_MAXGROUP 16
+#define QB_MAXORDER 16
+#define QB_MAXCHAIN 10
+#define QB_WIREMAX 8192
+
+typedef struct QueryBuilder {
+  LexState *ls;
+  FuncState *fs; /* the enclosing function */
+  int base;      /* first source register */
+  int nsrc;
+  int nops;
+  int inagg;      /* aggregates are legal (select or having) */
+  int agg_active; /* inside an aggregate argument right now */
+  int inorder;    /* parsing an 'order by' item (bare names are alias
+                     references, resolved projection-alias first) */
+  TString *alias[LUS_QMAXSOURCES];
+  QSource srcs[LUS_QMAXSOURCES];
+  QNode nodes[QB_MAXNODES];
+  int nnodes;
+  char pool[QB_MAXPOOL];
+  int npool;
+  QSelItem sel[QB_MAXSEL];
+  int nsel;
+  unsigned short group[QB_MAXGROUP];
+  int ngroup;
+  QOrderItem order[QB_MAXORDER];
+  int norder;
+  lu_byte flags;
+  unsigned short where_root, having_root, limit_node, offset_node;
+} QueryBuilder;
+
+/* does the current token match the contextual word 'w'? */
+static int qwordis(LexState *ls, const char *w) {
+  return ls->t.token == TK_NAME &&
+         strcmp(getstr(ls->t.seminfo.ts), w) == 0;
+}
+
+static int qtestword(LexState *ls, const char *w) {
+  if (qwordis(ls, w)) {
+    luaX_next(ls);
+    return 1;
+  }
+  return 0;
+}
+
+static int qb_addnode(QueryBuilder *qb, int kind, int sub, int a, int b) {
+  QNode *n;
+  if (qb->nnodes >= QB_MAXNODES)
+    luaK_semerror(qb->ls, "query too complex");
+  n = &qb->nodes[qb->nnodes];
+  memset(n, 0, sizeof(QNode)); /* deterministic padding for dumps */
+  n->kind = cast_byte(kind);
+  n->sub = cast_byte(sub);
+  n->a = (unsigned short)a;
+  n->b = (unsigned short)b;
+  return qb->nnodes++;
+}
+
+static QStr qb_addstr(QueryBuilder *qb, TString *s) {
+  QStr r;
+  size_t len = tsslen(s);
+  if (cast_sizet(qb->npool) + len > QB_MAXPOOL)
+    luaK_semerror(qb->ls, "query too complex");
+  memcpy(qb->pool + qb->npool, getstr(s), len);
+  r.off = (unsigned int)qb->npool;
+  r.len = (unsigned int)len;
+  qb->npool += (int)len;
+  return r;
+}
+
+static int qb_rowvar(QueryBuilder *qb, TString *name) {
+  int i;
+  for (i = 0; i < qb->nsrc; i++) {
+    if (strcmp(getstr(qb->alias[i]), getstr(name)) == 0)
+      return i;
+  }
+  return -1;
+}
+
+static int qaggname(TString *s) {
+  const char *n = getstr(s);
+  if (strcmp(n, "count") == 0)
+    return QAGG_COUNT;
+  if (strcmp(n, "sum") == 0)
+    return QAGG_SUM;
+  if (strcmp(n, "avg") == 0)
+    return QAGG_AVG;
+  if (strcmp(n, "min") == 0)
+    return QAGG_MIN;
+  if (strcmp(n, "max") == 0)
+    return QAGG_MAX;
+  return -1;
+}
+
+static int qexpr(LexState *ls, QueryBuilder *qb, int limit,
+                 LusAstNode **past);
+
+/* build the AST for a NAME('.'NAME)* chain */
+static LusAstNode *qchainast(LexState *ls, TString **chain, int nchain,
+                             int line, int column) {
+  LusAstNode *node;
+  int j;
+  if (!AST_ACTIVE(ls))
+    return NULL;
+  node = lusA_newnode(ls->ast, AST_NAME, line, column);
+  node->u.var.name = chain[0];
+  node->u.var.attrkind = 0;
+  node->u.var.runtimeattrs = NULL;
+  for (j = 1; j < nchain; j++) {
+    LusAstNode *fnode = lusA_newnode(ls->ast, AST_FIELD, line, column);
+    LusAstNode *knode = lusA_newnode(ls->ast, AST_STRING, line, column);
+    knode->u.str = chain[j];
+    fnode->u.index.table = node;
+    fnode->u.index.key = knode;
+    node = fnode;
+  }
+  return node;
+}
+
+/*
+** Lift the rest of the current primary into a host closure: a child
+** function with one parameter per row variable. The already-consumed
+** prefix (a pure dot chain, possibly empty) is re-synthesized inside
+** the child, where row-variable names resolve to the parameters and
+** every other name resolves through the normal upvalue machinery, and
+** the remaining suffixes and arguments compile with the ordinary
+** expression parser. The closure lands in the next operand register.
+*/
+static int qclosure(LexState *ls, QueryBuilder *qb, TString **chain,
+                    int nchain, LusAstNode **past) {
+  FuncState new_fs;
+  BlockCnt bl;
+  expdesc e, bodye;
+  int i;
+  int line = ls->linenumber;
+  if (qb->nops >= LUS_QMAXOPERANDS)
+    luaK_semerror(ls, "query too complex");
+  new_fs.f = addprototype(ls);
+  new_fs.f->linedefined = line;
+  open_func(ls, &new_fs, &bl);
+  for (i = 0; i < qb->nsrc; i++)
+    new_localvar(ls, qb->alias[i]);
+  adjustlocalvars(ls, qb->nsrc);
+  new_fs.f->numparams = cast_byte(new_fs.nactvar);
+  luaK_reserveregs(&new_fs, new_fs.nactvar);
+  if (nchain > 0) {
+    buildvar(ls, chain[0], &bodye);
+    if (AST_ACTIVE(ls))
+      bodye.ast = qchainast(ls, chain, 1, line, ls->tokencolumn);
+    for (i = 1; i < nchain; i++) {
+      expdesc key;
+      luaK_exp2anyregup(&new_fs, &bodye);
+      codestring(&key, chain[i]);
+      luaK_indexed(&new_fs, &bodye, &key);
+      if (AST_ACTIVE(ls)) {
+        LusAstNode *fnode =
+            lusA_newnode(ls->ast, AST_FIELD, line, ls->tokencolumn);
+        LusAstNode *knode =
+            lusA_newnode(ls->ast, AST_STRING, line, ls->tokencolumn);
+        knode->u.str = chain[i];
+        fnode->u.index.table = bodye.ast;
+        fnode->u.index.key = knode;
+        bodye.ast = fnode;
+      }
+    }
+    suffixchain(ls, &bodye);
+  }
+  else
+    simpleexp(ls, &bodye); /* constructors and literals are terminal */
+  luaK_exp2nextreg(&new_fs, &bodye);
+  luaK_ret(&new_fs, bodye.u.info, 1);
+  new_fs.f->lastlinedefined = ls->linenumber;
+  if (past != NULL)
+    *past = bodye.ast;
+  codeclosure(ls, &e); /* lands in the enclosing next register */
+  close_func(ls);
+  return qb_addnode(qb, QN_CLOSURE, 0, qb->nops++, QNODE_NONE);
+}
+
+/*
+** Capture a scope-name chain as a bound parameter: compile it once in
+** the enclosing scope and load it into the next operand register.
+*/
+static int qparam(LexState *ls, QueryBuilder *qb, TString **chain,
+                  int nchain, LusAstNode **past) {
+  expdesc e;
+  int i;
+  if (qb->nops >= LUS_QMAXOPERANDS)
+    luaK_semerror(ls, "query too complex");
+  buildvar(ls, chain[0], &e);
+  for (i = 1; i < nchain; i++) {
+    expdesc key;
+    luaK_exp2anyregup(qb->fs, &e);
+    codestring(&key, chain[i]);
+    luaK_indexed(qb->fs, &e, &key);
+  }
+  luaK_exp2nextreg(qb->fs, &e);
+  if (past != NULL)
+    *past = qchainast(ls, chain, nchain, ls->linenumber, ls->tokencolumn);
+  return qb_addnode(qb, QN_PARAM, 0, qb->nops++, QNODE_NONE);
+}
+
+/* parse an aggregate: NAME has been identified, current token is '(' */
+static int qaggregate(LexState *ls, QueryBuilder *qb, TString *name, int agg,
+                      LusAstNode **past) {
+  int child = QNODE_NONE;
+  LusAstNode *argast = NULL;
+  int line = ls->linenumber;
+  int column = ls->tokencolumn;
+  if (qb->agg_active)
+    luaK_semerror(ls, "aggregates cannot nest");
+  luaX_next(ls); /* skip '(' */
+  if (ls->t.token == '*') {
+    if (agg != QAGG_COUNT)
+      luaK_semerror(ls, "'*' is only allowed in count");
+    luaX_next(ls);
+    if (AST_ACTIVE(ls))
+      argast = lusA_newnode(ls->ast, AST_QSTAR, line, column);
+  }
+  else {
+    qb->agg_active = 1;
+    child = qexpr(ls, qb, 0, &argast);
+    qb->agg_active = 0;
+  }
+  checknext(ls, ')');
+  if (past != NULL && AST_ACTIVE(ls)) {
+    LusAstNode *call = lusA_newnode(ls->ast, AST_CALLEXPR, line, column);
+    LusAstNode *fn = lusA_newnode(ls->ast, AST_NAME, line, column);
+    fn->u.var.name = name;
+    fn->u.var.attrkind = 0;
+    fn->u.var.runtimeattrs = NULL;
+    call->u.call.func = fn;
+    call->u.call.args = argast;
+    call->u.call.method = NULL;
+    call->u.call.callstyle = 0;
+    *past = call;
+  }
+  return qb_addnode(qb, QN_AGG, agg, child, QNODE_NONE);
+}
+
+/* is the current token one that continues a primary as a suffix? */
+static int qsuffixstart(LexState *ls) {
+  switch (ls->t.token) {
+    case '(':
+    case '[':
+    case ':':
+    case '?':
+    case '{':
+    case TK_STRING:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/* parse a primary expression inside a clause */
+static int qsimple(LexState *ls, QueryBuilder *qb, LusAstNode **past) {
+  int line = ls->linenumber;
+  int column = ls->tokencolumn;
+  if (past != NULL)
+    *past = NULL;
+  switch (ls->t.token) {
+    case TK_INT: {
+      int n = qb_addnode(qb, QN_LIT_INT, 0, 0, 0);
+      qb->nodes[n].u.i = ls->t.seminfo.i;
+      if (AST_ACTIVE(ls) && past != NULL) {
+        LusAstNode *a = lusA_newnode(ls->ast, AST_NUMBER, line, column);
+        a->u.num.isint = 1;
+        a->u.num.val.i = ls->t.seminfo.i;
+        *past = a;
+      }
+      luaX_next(ls);
+      return n;
+    }
+    case TK_FLT: {
+      int n = qb_addnode(qb, QN_LIT_FLT, 0, 0, 0);
+      qb->nodes[n].u.n = ls->t.seminfo.r;
+      if (AST_ACTIVE(ls) && past != NULL) {
+        LusAstNode *a = lusA_newnode(ls->ast, AST_NUMBER, line, column);
+        a->u.num.isint = 0;
+        a->u.num.val.n = ls->t.seminfo.r;
+        *past = a;
+      }
+      luaX_next(ls);
+      return n;
+    }
+    case TK_STRING: {
+      TString *s = ls->t.seminfo.ts;
+      int n = qb_addnode(qb, QN_LIT_STR, 0, 0, 0);
+      qb->nodes[n].u.s = qb_addstr(qb, s);
+      if (AST_ACTIVE(ls) && past != NULL) {
+        LusAstNode *a = lusA_newnode(ls->ast, AST_STRING, line, column);
+        a->u.str = s;
+        a->quote = ls->strquote;
+        *past = a;
+      }
+      luaX_next(ls);
+      return n;
+    }
+    case TK_NIL: {
+      int n = qb_addnode(qb, QN_LIT_NIL, 0, 0, 0);
+      if (AST_ACTIVE(ls) && past != NULL)
+        *past = lusA_newnode(ls->ast, AST_NIL, line, column);
+      luaX_next(ls);
+      return n;
+    }
+    case TK_TRUE: {
+      int n = qb_addnode(qb, QN_LIT_TRUE, 0, 0, 0);
+      if (AST_ACTIVE(ls) && past != NULL)
+        *past = lusA_newnode(ls->ast, AST_TRUE, line, column);
+      luaX_next(ls);
+      return n;
+    }
+    case TK_FALSE: {
+      int n = qb_addnode(qb, QN_LIT_FALSE, 0, 0, 0);
+      if (AST_ACTIVE(ls) && past != NULL)
+        *past = lusA_newnode(ls->ast, AST_FALSE, line, column);
+      luaX_next(ls);
+      return n;
+    }
+    case '(': {
+      int n;
+      luaX_next(ls);
+      n = qexpr(ls, qb, 0, past);
+      check_match(ls, ')', '(', line);
+      if (qsuffixstart(ls))
+        luaK_semerror(ls, "a suffix on a parenthesized expression is not "
+                          "supported in a query clause");
+      if (past != NULL && *past != NULL)
+        (*past)->paren = 1;
+      return n;
+    }
+    case '@':
+      luaK_semerror(ls, "nested queries are not supported");
+      return 0; /* unreachable */
+    case TK_NAME: {
+      TString *chain[QB_MAXCHAIN];
+      int nchain = 0;
+      int srcidx;
+      chain[nchain++] = str_checkname(ls);
+      /* an aggregate call, in a clause that allows one? */
+      if (ls->t.token == '(' && nchain == 1) {
+        int agg = qaggname(chain[0]);
+        if (agg >= 0) {
+          if (!qb->inagg)
+            luaK_semerror(
+                ls, "aggregate '%s' is only allowed in 'select' or 'having'",
+                getstr(chain[0]));
+          return qaggregate(ls, qb, chain[0], agg, past);
+        }
+      }
+      while (ls->t.token == '.') {
+        luaX_next(ls);
+        if (nchain >= QB_MAXCHAIN)
+          luaK_semerror(ls, "query too complex");
+        chain[nchain++] = str_checkname(ls);
+      }
+      if (qsuffixstart(ls)) /* a call, index, or method: lift it */
+        return qclosure(ls, qb, chain, nchain, past);
+      srcidx = qb_rowvar(qb, chain[0]);
+      if (srcidx < 0 && qb->inorder && nchain == 1) {
+        /* a bare name in 'order by' names a projection alias */
+        int n = qb_addnode(qb, QN_NAMEREF, 0, 0, 0);
+        qb->nodes[n].u.s = qb_addstr(qb, chain[0]);
+        if (past != NULL)
+          *past = qchainast(ls, chain, 1, line, column);
+        return n;
+      }
+      if (srcidx >= 0) {
+        if (nchain == 1) {
+          if (past != NULL)
+            *past = qchainast(ls, chain, 1, line, column);
+          return qb_addnode(qb, QN_ROWVAR, srcidx, 0, 0);
+        }
+        if (nchain == 2) {
+          int n = qb_addnode(qb, QN_COLUMN, srcidx, 0, 0);
+          qb->nodes[n].u.s = qb_addstr(qb, chain[1]);
+          if (past != NULL)
+            *past = qchainast(ls, chain, 2, line, column);
+          return n;
+        }
+        /* a deeper row chain runs in memory */
+        return qclosure(ls, qb, chain, nchain, past);
+      }
+      return qparam(ls, qb, chain, nchain, past);
+    }
+    default:
+      /* constructors, function literals, interpolation, and the rest
+         lift into a host closure evaluated per row */
+      return qclosure(ls, qb, NULL, 0, past);
+  }
+}
+
+/*
+** Reify one clause expression, mirroring subexpr's precedence climb.
+** Returns the plan node index and, when the AST is active, the
+** expression's AST through 'past'.
+*/
+static int qexpr(LexState *ls, QueryBuilder *qb, int limit,
+                 LusAstNode **past) {
+  int node;
+  BinOpr op;
+  UnOpr uop;
+  LusAstNode *last = NULL;
+  enterlevel(ls);
+  uop = getunopr(ls->t.token);
+  if (uop != OPR_NOUNOPR) {
+    int line = ls->linenumber;
+    int column = ls->tokencolumn;
+    int operand;
+    LusAstNode *oast = NULL;
+    if (uop != OPR_MINUS && uop != OPR_NOT)
+      luaK_semerror(ls, "operator not supported in a query clause");
+    luaX_next(ls);
+    operand = qexpr(ls, qb, UNARY_PRIORITY, &oast);
+    if (uop == OPR_MINUS)
+      node = qb_addnode(qb, QN_ARITH, QAR_UNM, operand, QNODE_NONE);
+    else
+      node = qb_addnode(qb, QN_NOT, 0, operand, QNODE_NONE);
+    if (AST_ACTIVE(ls)) {
+      LusAstNode *un = lusA_newnode(ls->ast, AST_UNOP, line, column);
+      un->u.unop.op = (int)uop;
+      un->u.unop.operand = oast;
+      last = un;
+    }
+  }
+  else
+    node = qsimple(ls, qb, &last);
+  op = getbinopr(ls->t.token);
+  while (op != OPR_NOBINOPR && priority[op].left > limit) {
+    int line = ls->linenumber;
+    int column = ls->tokencolumn;
+    int right;
+    int kind = -1, sub = 0;
+    LusAstNode *rast = NULL;
+    switch (op) {
+      case OPR_ADD: kind = QN_ARITH; sub = QAR_ADD; break;
+      case OPR_SUB: kind = QN_ARITH; sub = QAR_SUB; break;
+      case OPR_MUL: kind = QN_ARITH; sub = QAR_MUL; break;
+      case OPR_MOD: kind = QN_ARITH; sub = QAR_MOD; break;
+      case OPR_POW: kind = QN_ARITH; sub = QAR_POW; break;
+      case OPR_DIV: kind = QN_ARITH; sub = QAR_DIV; break;
+      case OPR_IDIV: kind = QN_ARITH; sub = QAR_IDIV; break;
+      case OPR_CONCAT: kind = QN_CONCAT; break;
+      case OPR_EQ: kind = QN_CMP; sub = QCMP_EQ; break;
+      case OPR_NE: kind = QN_CMP; sub = QCMP_NE; break;
+      case OPR_LT: kind = QN_CMP; sub = QCMP_LT; break;
+      case OPR_LE: kind = QN_CMP; sub = QCMP_LE; break;
+      case OPR_GT: kind = QN_CMP; sub = QCMP_GT; break;
+      case OPR_GE: kind = QN_CMP; sub = QCMP_GE; break;
+      case OPR_AND: kind = QN_AND; break;
+      case OPR_OR: kind = QN_OR; break;
+      default:
+        luaK_semerror(ls, "operator not supported in a query clause");
+    }
+    luaX_next(ls);
+    right = qexpr(ls, qb, priority[op].right, &rast);
+    node = qb_addnode(qb, kind, sub, node, right);
+    if (AST_ACTIVE(ls)) {
+      LusAstNode *bn = lusA_newnode(ls->ast, AST_BINOP, line, column);
+      bn->u.binop.op = (int)op;
+      bn->u.binop.left = last;
+      bn->u.binop.right = rast;
+      last = bn;
+    }
+    op = getbinopr(ls->t.token);
+  }
+  leavelevel(ls);
+  if (past != NULL)
+    *past = last;
+  return node;
+}
+
+/*
+** Parse one query source: NAME { '.' NAME | '[' <literal> ']' } or a
+** parenthesized expression, followed by an optional 'as' alias. The
+** implicit alias is the last plain name of the chain.
+*/
+static LusAstNode *querysource(LexState *ls, QueryBuilder *qb) {
+  FuncState *fs = qb->fs;
+  expdesc e;
+  TString *lastname = NULL;
+  TString *alias;
+  int hasas = 0;
+  int i;
+  int line = ls->linenumber;
+  int column = ls->tokencolumn;
+  LusAstNode *srcexp = NULL;
+  LusAstNode *srcnode = NULL;
+  if (qb->nsrc >= LUS_QMAXSOURCES)
+    luaK_semerror(ls, "too many sources in query");
+  if (ls->t.token == '(') {
+    luaX_next(ls);
+    expr(ls, &e);
+    check_match(ls, ')', '(', line);
+    srcexp = e.ast;
+    if (srcexp != NULL)
+      srcexp->paren = 1;
+  }
+  else {
+    TString *name = str_checkname(ls);
+    buildvar(ls, name, &e);
+    lastname = name;
+    if (AST_ACTIVE(ls)) {
+      srcexp = lusA_newnode(ls->ast, AST_NAME, line, column);
+      srcexp->u.var.name = name;
+      srcexp->u.var.attrkind = 0;
+      srcexp->u.var.runtimeattrs = NULL;
+    }
+    for (;;) {
+      if (ls->t.token == '.') {
+        expdesc key;
+        TString *fname;
+        luaX_next(ls);
+        fname = str_checkname(ls);
+        luaK_exp2anyregup(fs, &e);
+        codestring(&key, fname);
+        luaK_indexed(fs, &e, &key);
+        lastname = fname;
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *fnode =
+              lusA_newnode(ls->ast, AST_FIELD, ls->linenumber, column);
+          LusAstNode *knode =
+              lusA_newnode(ls->ast, AST_STRING, ls->linenumber, column);
+          knode->u.str = fname;
+          fnode->u.index.table = srcexp;
+          fnode->u.index.key = knode;
+          srcexp = fnode;
+        }
+      }
+      else if (ls->t.token == '[') {
+        expdesc key;
+        LusAstNode *knode = NULL;
+        luaX_next(ls);
+        if (ls->t.token == TK_STRING) {
+          codestring(&key, ls->t.seminfo.ts);
+          if (AST_ACTIVE(ls)) {
+            knode = lusA_newnode(ls->ast, AST_STRING, ls->linenumber, column);
+            knode->u.str = ls->t.seminfo.ts;
+            knode->quote = ls->strquote;
+          }
+        }
+        else if (ls->t.token == TK_INT) {
+          init_exp(&key, VKINT, 0);
+          key.u.ival = ls->t.seminfo.i;
+          if (AST_ACTIVE(ls)) {
+            knode = lusA_newnode(ls->ast, AST_NUMBER, ls->linenumber, column);
+            knode->u.num.isint = 1;
+            knode->u.num.val.i = ls->t.seminfo.i;
+          }
+        }
+        else
+          luaK_semerror(ls, "query source index must be a literal");
+        luaX_next(ls);
+        checknext(ls, ']');
+        luaK_exp2anyregup(fs, &e);
+        luaK_indexed(fs, &e, &key);
+        lastname = NULL;
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *inode =
+              lusA_newnode(ls->ast, AST_INDEX, ls->linenumber, column);
+          inode->u.index.table = srcexp;
+          inode->u.index.key = knode;
+          srcexp = inode;
+        }
+      }
+      else
+        break;
+    }
+  }
+  luaK_exp2nextreg(fs, &e);
+  if (qtestword(ls, "as")) {
+    alias = str_checkname(ls);
+    hasas = 1;
+  }
+  else if (lastname != NULL)
+    alias = lastname;
+  else {
+    luaK_semerror(ls, "query source needs an 'as' name");
+    return NULL; /* unreachable */
+  }
+  for (i = 0; i < qb->nsrc; i++) {
+    if (strcmp(getstr(qb->alias[i]), getstr(alias)) == 0)
+      luaK_semerror(ls, "duplicate row variable '%s' in query",
+                    getstr(alias));
+  }
+  qb->alias[qb->nsrc] = alias;
+  qb->srcs[qb->nsrc].alias = qb_addstr(qb, alias);
+  qb->nsrc++;
+  if (AST_ACTIVE(ls)) {
+    srcnode = lusA_newnode(ls->ast, AST_QSOURCE, line, column);
+    srcnode->u.qsource.expr = srcexp;
+    srcnode->u.qsource.alias = alias;
+    srcnode->u.qsource.hasas = hasas;
+  }
+  return srcnode;
+}
+
+/* append an AST_QCLAUSE to the clause list when the AST is active */
+static LusAstNode *qclausenode(LexState *ls, int kind, LusAstNode *items,
+                               int distinct, int line, int column) {
+  LusAstNode *cl;
+  if (!AST_ACTIVE(ls))
+    return NULL;
+  cl = lusA_newnode(ls->ast, AST_QCLAUSE, line, column);
+  cl->u.qclause.kind = kind;
+  cl->u.qclause.distinct = distinct;
+  cl->u.qclause.items = items;
+  return cl;
+}
+
+static LusAstNode *qitemnode(LexState *ls, LusAstNode *expr, TString *name,
+                             int hasas, int desc, int line, int column) {
+  LusAstNode *it;
+  if (!AST_ACTIVE(ls))
+    return NULL;
+  it = lusA_newnode(ls->ast, AST_QITEM, line, column);
+  it->u.qitem.expr = expr;
+  it->u.qitem.name = name;
+  it->u.qitem.hasas = hasas;
+  it->u.qitem.desc = desc;
+  return it;
+}
+
+/*
+** Serialize the builder into the wire blob (layout shared with the
+** decoder through luaQ_wirelayout) and intern it as a string constant.
+*/
+static TString *qb_serialize(LexState *ls, QueryBuilder *qb) {
+  QPlanHeader h;
+  QWireLayout w;
+  char wire[QB_WIREMAX];
+  memset(&h, 0, sizeof(h));
+  h.version = LUS_QPLAN_VERSION;
+  h.nsources = cast_byte(qb->nsrc);
+  h.noperands = cast_byte(qb->nops);
+  h.flags = qb->flags;
+  h.nnodes = (unsigned short)qb->nnodes;
+  h.nselect = (unsigned short)qb->nsel;
+  h.ngroup = (unsigned short)qb->ngroup;
+  h.norder = (unsigned short)qb->norder;
+  h.where_root = qb->where_root;
+  h.having_root = qb->having_root;
+  h.limit_node = qb->limit_node;
+  h.offset_node = qb->offset_node;
+  h.poolsize = (unsigned int)qb->npool;
+  luaQ_wirelayout(&h, &w);
+  lua_assert(w.total <= QB_WIREMAX);
+  memset(wire, 0, w.total);
+  memcpy(wire, &h, sizeof(h));
+  memcpy(wire + w.sources, qb->srcs, qb->nsrc * sizeof(QSource));
+  memcpy(wire + w.nodes, qb->nodes, qb->nnodes * sizeof(QNode));
+  memcpy(wire + w.sel, qb->sel, qb->nsel * sizeof(QSelItem));
+  memcpy(wire + w.group, qb->group, qb->ngroup * sizeof(unsigned short));
+  memcpy(wire + w.order, qb->order, qb->norder * sizeof(QOrderItem));
+  memcpy(wire + w.pool, qb->pool, qb->npool);
+  return luaX_newstring(ls, wire, w.total);
+}
+
+/*
+** queryexpr -> '@' source { ',' source } { clause }
+** where a clause is one of: where, select [distinct], group by,
+** having, order by, limit, offset, each introduced by a contextual
+** name. The first name that is not a clause keyword ends the query.
+*/
+static void queryexpr(LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  QueryBuilder qb;
+  TString *blob;
+  int line = ls->linenumber;
+  int column = ls->tokencolumn;
+  int base = fs->freereg;
+  LusAstNode *sources = NULL, *lastsrc = NULL;
+  LusAstNode *clauses = NULL, *lastcl = NULL;
+  if (ls->inquery)
+    luaK_semerror(ls, "nested queries are not supported");
+  ls->inquery = 1;
+  luaX_next(ls); /* skip '@' */
+  memset(&qb, 0, sizeof(QueryBuilder));
+  qb.ls = ls;
+  qb.fs = fs;
+  qb.base = base;
+  qb.where_root = QNODE_NONE;
+  qb.having_root = QNODE_NONE;
+  qb.limit_node = QNODE_NONE;
+  qb.offset_node = QNODE_NONE;
+  do {
+    LusAstNode *sn = querysource(ls, &qb);
+    if (sn != NULL) {
+      if (lastsrc == NULL)
+        sources = sn;
+      else
+        lastsrc->next = sn;
+      lastsrc = sn;
+    }
+  } while (testnext(ls, ','));
+  for (;;) {
+    int clline = ls->linenumber;
+    int clcolumn = ls->tokencolumn;
+    LusAstNode *clnode = NULL;
+    if (ls->t.token != TK_NAME)
+      break;
+    if (qwordis(ls, "where")) {
+      LusAstNode *east = NULL;
+      if (qb.where_root != QNODE_NONE)
+        luaK_semerror(ls, "duplicate 'where' clause in query");
+      luaX_next(ls);
+      qb.where_root = (unsigned short)qexpr(ls, &qb, 0, &east);
+      clnode = qclausenode(ls, LUS_QCLAUSE_WHERE, east, 0, clline, clcolumn);
+    }
+    else if (qwordis(ls, "select")) {
+      int distinct = 0;
+      LusAstNode *items = NULL, *lastitem = NULL;
+      if (qb.nsel > 0 || (qb.flags & QF_DISTINCT))
+        luaK_semerror(ls, "duplicate 'select' clause in query");
+      luaX_next(ls);
+      if (qtestword(ls, "distinct")) {
+        distinct = 1;
+        qb.flags |= QF_DISTINCT;
+      }
+      qb.inagg = 1;
+      do {
+        int itline = ls->linenumber;
+        int itcolumn = ls->tokencolumn;
+        LusAstNode *east = NULL;
+        int nd;
+        QSelItem *item;
+        TString *nm = NULL;
+        int hasas = 0;
+        if (qb.nsel >= QB_MAXSEL)
+          luaK_semerror(ls, "query too complex");
+        nd = qexpr(ls, &qb, 0, &east);
+        item = &qb.sel[qb.nsel];
+        memset(item, 0, sizeof(QSelItem));
+        item->node = (unsigned short)nd;
+        if (qtestword(ls, "as")) {
+          nm = str_checkname(ls);
+          item->name = qb_addstr(&qb, nm);
+          hasas = 1;
+        }
+        else if (qb.nodes[nd].kind == QN_ROWVAR)
+          item->rowvar = 1;
+        else if (qb.nodes[nd].kind == QN_COLUMN)
+          item->name = qb.nodes[nd].u.s;
+        else
+          luaK_semerror(ls, "'as' name expected for this projection");
+        qb.nsel++;
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *it =
+              qitemnode(ls, east, nm, hasas, 0, itline, itcolumn);
+          if (lastitem == NULL)
+            items = it;
+          else
+            lastitem->next = it;
+          lastitem = it;
+        }
+      } while (testnext(ls, ','));
+      qb.inagg = 0;
+      /* a select with only 'distinct' and no items is not a thing */
+      if (qb.nsel == 0)
+        luaK_semerror(ls, "'select' needs at least one projection");
+      clnode =
+          qclausenode(ls, LUS_QCLAUSE_SELECT, items, distinct, clline,
+                      clcolumn);
+    }
+    else if (qwordis(ls, "group")) {
+      LusAstNode *items = NULL, *lastitem = NULL;
+      if (qb.ngroup > 0)
+        luaK_semerror(ls, "duplicate 'group' clause in query");
+      luaX_next(ls);
+      if (!qtestword(ls, "by"))
+        luaK_semerror(ls, "'by' expected after 'group'");
+      do {
+        LusAstNode *east = NULL;
+        int nd;
+        if (qb.ngroup >= QB_MAXGROUP)
+          luaK_semerror(ls, "query too complex");
+        nd = qexpr(ls, &qb, 0, &east);
+        qb.group[qb.ngroup++] = (unsigned short)nd;
+        if (AST_ACTIVE(ls) && east != NULL) {
+          if (lastitem == NULL)
+            items = east;
+          else
+            lastitem->next = east;
+          lastitem = east;
+        }
+      } while (testnext(ls, ','));
+      clnode = qclausenode(ls, LUS_QCLAUSE_GROUP, items, 0, clline, clcolumn);
+    }
+    else if (qwordis(ls, "having")) {
+      LusAstNode *east = NULL;
+      if (qb.having_root != QNODE_NONE)
+        luaK_semerror(ls, "duplicate 'having' clause in query");
+      luaX_next(ls);
+      qb.inagg = 1;
+      qb.having_root = (unsigned short)qexpr(ls, &qb, 0, &east);
+      qb.inagg = 0;
+      clnode = qclausenode(ls, LUS_QCLAUSE_HAVING, east, 0, clline, clcolumn);
+    }
+    else if (qwordis(ls, "order")) {
+      LusAstNode *items = NULL, *lastitem = NULL;
+      if (qb.norder > 0)
+        luaK_semerror(ls, "duplicate 'order' clause in query");
+      luaX_next(ls);
+      if (!qtestword(ls, "by"))
+        luaK_semerror(ls, "'by' expected after 'order'");
+      do {
+        int itline = ls->linenumber;
+        int itcolumn = ls->tokencolumn;
+        LusAstNode *east = NULL;
+        int nd;
+        int desc = 0;
+        if (qb.norder >= QB_MAXORDER)
+          luaK_semerror(ls, "query too complex");
+        qb.inorder = 1;
+        nd = qexpr(ls, &qb, 0, &east);
+        qb.inorder = 0;
+        if (qtestword(ls, "desc"))
+          desc = 1;
+        else
+          qtestword(ls, "asc");
+        qb.order[qb.norder].node = (unsigned short)nd;
+        qb.order[qb.norder].desc = (unsigned short)desc;
+        qb.norder++;
+        if (AST_ACTIVE(ls)) {
+          LusAstNode *it = qitemnode(ls, east, NULL, 0, desc, itline,
+                                     itcolumn);
+          if (lastitem == NULL)
+            items = it;
+          else
+            lastitem->next = it;
+          lastitem = it;
+        }
+      } while (testnext(ls, ','));
+      clnode = qclausenode(ls, LUS_QCLAUSE_ORDER, items, 0, clline, clcolumn);
+    }
+    else if (qwordis(ls, "limit")) {
+      LusAstNode *east = NULL;
+      if (qb.limit_node != QNODE_NONE)
+        luaK_semerror(ls, "duplicate 'limit' clause in query");
+      luaX_next(ls);
+      qb.limit_node = (unsigned short)qexpr(ls, &qb, 0, &east);
+      clnode = qclausenode(ls, LUS_QCLAUSE_LIMIT, east, 0, clline, clcolumn);
+    }
+    else if (qwordis(ls, "offset")) {
+      LusAstNode *east = NULL;
+      if (qb.offset_node != QNODE_NONE)
+        luaK_semerror(ls, "duplicate 'offset' clause in query");
+      luaX_next(ls);
+      qb.offset_node = (unsigned short)qexpr(ls, &qb, 0, &east);
+      clnode = qclausenode(ls, LUS_QCLAUSE_OFFSET, east, 0, clline, clcolumn);
+    }
+    else
+      break; /* an unrelated name ends the query */
+    if (clnode != NULL) {
+      if (lastcl == NULL)
+        clauses = clnode;
+      else
+        lastcl->next = clnode;
+      lastcl = clnode;
+    }
+  }
+  if (qb.nsrc > 1 && qb.nsel == 0)
+    luaK_semerror(ls, "a join requires a 'select' clause");
+  blob = qb_serialize(ls, &qb);
+  luaK_query(fs, base, qb.nsrc, qb.nops, blob);
+  luaK_fixline(fs, line);
+  fs->freereg = cast_byte(base + 1); /* the query value sits at 'base' */
+  init_exp(v, VNONRELOC, base);
+  ls->inquery = 0;
+  if (AST_ACTIVE(ls)) {
+    LusAstNode *qnode = lusA_newnode(ls->ast, AST_QUERY, line, column);
+    qnode->u.query.sources = sources;
+    qnode->u.query.clauses = clauses;
+    AST_SETEND_LAST(qnode, ls);
+    v->ast = qnode;
+  }
+}
+
+/* }====================================================================== */
+
+
 static BinOpr subexpr(LexState *ls, expdesc *v, int limit) {
   BinOpr op;
   UnOpr uop;

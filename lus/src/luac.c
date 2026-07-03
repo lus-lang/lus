@@ -605,6 +605,11 @@ static void PrintCode(const Proto *f) {
         else
           printf(" %d out", c - 1);
         break;
+      case OP_QUERY:
+        printf("%d %d %d", a, b, c);
+        printf(COMMENT "query %d sources %d operands plan k[%d]", b, c,
+               EXTRAARG);
+        break;
       case OP_FASTCALL:
         printf("%d %d %d", a, b, c);
         printf(COMMENT "fastcall id=%d", EXTRAARG);

@@ -28,6 +28,7 @@ static const char *const opnames[] = {
     "RETURN0",    "RETURN1",  "FORLOOP",  "FORPREP",  "TFORPREP", "TFORCALL",
     "TFORLOOP",   "SETLIST",  "CLOSURE",  "VARARG",   "GETVARG",  "ERRNNIL",
     "VARARGPREP", "CATCH",    "ENDCATCH", "SLICE",    "FASTCALL", "REQUIRE",
+    "QUERY",
     "EXTRAARG",   NULL};
 
 #endif

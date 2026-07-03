@@ -450,6 +450,20 @@ static int codeextraarg(FuncState *fs, int A) {
 }
 
 
+static int stringK(FuncState *fs, TString *s);
+
+/*
+** Emit an OP_QUERY assembling a query value at 'base' from 'nsrc'
+** source registers and 'nops' operand registers, with the plan blob
+** interned as an ordinary string constant carried by the EXTRAARG.
+*/
+void luaK_query(FuncState *fs, int base, int nsrc, int nops, TString *blob) {
+  int kidx = stringK(fs, blob);
+  luaK_codeABCk(fs, OP_QUERY, base, nsrc, nops, 0);
+  codeextraarg(fs, kidx);
+}
+
+
 /*
 ** Emit a "load constant" instruction, using either 'OP_LOADK'
 ** (if constant index 'k' fits in 18 bits) or an 'OP_LOADKX'
@@ -2040,7 +2054,8 @@ void luaK_finish(FuncState *fs) {
         break;
       }
       case OP_FASTCALL:
-      case OP_REQUIRE: {
+      case OP_REQUIRE:
+      case OP_QUERY: {
         i++; /* skip EXTRAARG (breaks OT/IT chain, assertion not applicable) */
         break;
       }

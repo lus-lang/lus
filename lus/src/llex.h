@@ -127,6 +127,7 @@ typedef struct LexState {
       interp_name; /* variable name for $name interpolation (NULL if $(expr)) */
   int interp_name_line;   /* line of $name variable */
   int interp_name_column; /* column of $name variable (first letter, after $) */
+  int inquery; /* 1 while parsing an '@' query expression (no nesting) */
 } LexState;
 
 LUAI_FUNC void luaX_init(lua_State *L);
