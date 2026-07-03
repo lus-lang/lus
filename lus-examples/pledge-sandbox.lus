@@ -8,7 +8,7 @@ global os, string, pledge, print
 pledge("~exec")
 pledge("seal")
 
--- Anything the script never pledged is refused at the call site —
+-- Anything the script never pledged is refused at the call site,
 -- and the refusal is an ordinary error you can catch.
 local ok, err = catch os.execute("rm -rf /")
 print(ok and "uh oh" or `blocked: $(string.match(err, "[^\n]+"))`)

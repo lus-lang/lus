@@ -176,7 +176,7 @@ jobs:
           # supported for MSVC, so Windows ships a plain release.
           #
           # setup_args: release binaries are distributed bare (and by
-          # the installers), so dependencies are linked statically —
+          # the installers), so dependencies are linked statically.
           # meson's --prefer-static falls back to shared SILENTLY,
           # which is why every platform has a portability assertion
           # step after the build. musl ships fully static; Windows
@@ -249,7 +249,7 @@ jobs:
       - name: Install dependencies (Windows)
         if: steps.check.outputs.proceed == 'true' && matrix.runner == 'windows-latest'
         # Static triplet: the released lus.exe must not depend on
-        # vcpkg DLLs. openssl is listed explicitly — the dynamic
+        # vcpkg DLLs. openssl is listed explicitly because the dynamic
         # build resolved it from the runner image, which the static
         # link cannot rely on.
         run: |
@@ -270,7 +270,7 @@ jobs:
 
       - name: Build static c-ares (Linux glibc)
         if: steps.check.outputs.proceed == 'true' && matrix.platform == 'linux-glibc'
-        # Ubuntu's libc-ares-dev ships no libcares.a — the one static
+        # Ubuntu's libc-ares-dev ships no libcares.a, the one static
         # archive --prefer-static can't find on this platform (Alpine's
         # -dev has it, Homebrew's keg has it, vcpkg builds it). Build a
         # pinned release; PKG_CONFIG_PATH makes meson prefer it.
@@ -365,7 +365,7 @@ jobs:
 
       - name: Download lus-windows artifact
         id: dl
-        # Missing artifact means the windows build failed/was skipped —
+        # Missing artifact means the windows build failed/was skipped;
         # that job carries the real error; skip the wrap instead of
         # failing twice (mirrors the release job's optional assets).
         continue-on-error: true
@@ -376,7 +376,7 @@ jobs:
 
       - name: Installer skipped (no lus-windows artifact)
         if: steps.dl.outcome != 'success'
-        run: echo "::warning::lus-windows artifact not available (windows build failed or was skipped) — installer not built this run"
+        run: echo "::warning::lus-windows artifact not available (windows build failed or was skipped); installer not built this run"
 
       - name: Read version
         if: steps.dl.outcome == 'success'
@@ -518,7 +518,7 @@ jobs:
 
   # Create a release with available artifacts: a rolling unstable
   # pre-release on main pushes, a draft stable release on v* tags
-  # (write the notes, then publish — publishing triggers the VSCode
+  # (write the notes, then publish, since publishing triggers the VSCode
   # extension workflow).
   release:
     name: Release
@@ -654,7 +654,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "Lus ${GITHUB_REF_NAME#v}" \
             --draft \
-            --notes "Draft — write the release notes, then publish." \
+            --notes "Draft: write the release notes, then publish." \
             release/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

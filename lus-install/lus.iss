@@ -5,7 +5,7 @@
 ; with the release lus.exe placed next to this file beforehand.
 ;
 ; Per-user by default: installs to {localappdata}\Programs\Lus and
-; edits the user PATH — no admin rights, no UAC prompt. Run with
+; edits the user PATH, with no admin rights and no UAC prompt. Run with
 ; /ALLUSERS from an elevated prompt for a machine-wide install
 ; (Program Files + system PATH). Standard silent flags apply:
 ; /VERYSILENT /SUPPRESSMSGBOXES.

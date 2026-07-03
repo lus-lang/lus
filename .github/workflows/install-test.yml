@@ -20,8 +20,8 @@ jobs:
   # The strict end-to-end run targets the latest unstable release:
   # those binaries are self-contained from the moment the static-link
   # change lands on main, while stable releases only catch up at
-  # v1.6.0. Unstable releases are best-effort partial — the release
-  # job ships whatever platform builds succeeded — so resolve also
+  # v1.6.0. Unstable releases are best-effort partial (the release
+  # job ships whatever platform builds succeeded), so resolve also
   # reports which assets exist and each platform skips its strict run
   # (loudly) when its binary is absent rather than 404-failing.
   resolve:
@@ -82,7 +82,7 @@ jobs:
 
       - name: Strict run skipped (partial unstable)
         if: needs.resolve.outputs.tag == '' || !contains(needs.resolve.outputs.assets, format(',{0},', matrix.asset))
-        run: echo "::warning::${{ matrix.asset }} is not in the current unstable (${{ needs.resolve.outputs.tag || 'no unstable release' }}) — that platform's build was skipped on the last main push; strict E2E skipped"
+        run: echo "::warning::${{ matrix.asset }} is not in the current unstable (${{ needs.resolve.outputs.tag || 'no unstable release' }}); that platform's build was skipped on the last main push; strict E2E skipped"
 
       # v1.6.0 is the first stable release with self-contained binaries
       # and a SHA256SUMS asset, so the pinned-stable run is fully strict:

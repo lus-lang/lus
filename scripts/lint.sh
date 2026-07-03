@@ -45,7 +45,7 @@ if should_run version-not-released; then
     elif git diff --quiet "v$VERSION" HEAD -- lus/ 2>/dev/null; then
       pass version-not-released
     else
-      fail version-not-released "v$VERSION already tagged — bump version before committing runtime changes"
+      fail version-not-released "v$VERSION already tagged; bump version before committing runtime changes"
     fi
   else
     pass version-not-released
@@ -104,7 +104,7 @@ if should_run stdlib-freshness; then
       if ! cmp -s /tmp/stdlib_data_backup.lus lus-language/analysis/stdlib_data.lus; then
         # Restore the pre-check state
         cp /tmp/stdlib_data_backup.lus lus-language/analysis/stdlib_data.lus 2>/dev/null || true
-        fail stdlib-freshness "stdlib_data.lus is stale — run: node lus-spec/build-lsp.js"
+        fail stdlib-freshness "stdlib_data.lus is stale; run: node lus-spec/build-lsp.js"
       else
         pass stdlib-freshness
       fi

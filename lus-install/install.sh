@@ -1,5 +1,5 @@
 #!/bin/sh
-# The Lus installer — served at https://lus.dev/install.sh
+# The Lus installer, served at https://lus.dev/install.sh
 #
 # Downloads the prebuilt binary for this machine from a GitHub
 # release of lus-lang/lus and installs it as `lus`.
@@ -44,7 +44,7 @@ When piping to sh, pass options as environment variables:
 EOF
 }
 
-# fetch URL DEST — curl preferred, wget fallback. Both fail on HTTP
+# fetch URL DEST: curl preferred, wget fallback. Both fail on HTTP
 # errors so a 404 page can't masquerade as a binary.
 fetch() {
   if need curl; then
@@ -114,18 +114,18 @@ detect_platform() {
   esac
 }
 
-# verify_checksum FILE ASSET URLBASE — check FILE against the
+# verify_checksum FILE ASSET URLBASE: check FILE against the
 # release's SHA256SUMS. Missing checksums (releases before 1.6.0)
 # warn and continue; a mismatch is fatal.
 verify_checksum() {
   if ! fetch "$3/SHA256SUMS" "$WORKDIR/SHA256SUMS" 2>/dev/null; then
-    warn "this release publishes no SHA256SUMS (added in 1.6.0) — skipping verification"
+    warn "this release publishes no SHA256SUMS (added in 1.6.0); skipping verification"
     return 0
   fi
 
   expected=$(awk -v name="$2" '$2 == name || $2 == "*" name { print $1; exit }' "$WORKDIR/SHA256SUMS")
   if [ -z "$expected" ]; then
-    warn "no SHA256SUMS entry for $2 — skipping verification"
+    warn "no SHA256SUMS entry for $2; skipping verification"
     return 0
   fi
 
@@ -134,7 +134,7 @@ verify_checksum() {
   elif need shasum; then
     actual=$(shasum -a 256 "$1" | awk '{ print $1 }')
   else
-    warn "no sha256sum or shasum on this system — skipping verification"
+    warn "no sha256sum or shasum on this system; skipping verification"
     return 0
   fi
 
@@ -157,7 +157,7 @@ run() {
 }
 
 # Place the downloaded binary as $INSTALL_DIR/lus (copy to a
-# temporary name, then atomic rename — safe over a running lus).
+# temporary name, then atomic rename, which is safe over a running lus).
 install_binary() {
   SUDO=""
   if ! mkdir -p "$INSTALL_DIR" 2>/dev/null || [ ! -w "$INSTALL_DIR" ]; then
@@ -223,7 +223,7 @@ main() {
 
   case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
-    *) warn "$INSTALL_DIR is not on your PATH — add it to your shell profile" ;;
+    *) warn "$INSTALL_DIR is not on your PATH; add it to your shell profile" ;;
   esac
 }
 

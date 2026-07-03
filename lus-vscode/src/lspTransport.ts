@@ -44,7 +44,7 @@ function parseLspMessages(raw: string): any[] {
       } else if (code <= 0x7ff) {
         bytesConsumed += 2;
       } else if (code >= 0xd800 && code <= 0xdbff) {
-        // High surrogate — together with the next low surrogate = 4 UTF-8 bytes
+        // High surrogate: together with the next low surrogate = 4 UTF-8 bytes
         bytesConsumed += 4;
         bodyEndChar++; // skip low surrogate
       } else {
