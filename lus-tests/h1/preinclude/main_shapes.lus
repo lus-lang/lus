@@ -1,0 +1,18 @@
+global require, assert, type, print, package
+local function fetch() return require("hello") end
+local a = fetch()
+assert(type(a) == "table")
+-- OP_REQUIRE must validate its callee at runtime: an and/or expression
+-- whose textually-last writer is the global 'require' can still hold a
+-- different function when it runs
+local function mock(name) return "MOCKED:" .. name end
+local use_mock = true
+local got = (use_mock and mock or require)("hello")
+assert(got == "MOCKED:hello", "mock callee must be honored, got: " .. type(got))
+local real = (false and mock or require)("hello")
+assert(real == a, "require callee must still hit the preinclude cache")
+local dyn = "hel" .. "lo"
+local b = require(dyn) -- dynamic name: searcher path
+assert(b == a, "dynamic and literal require must share the cache")
+assert(package.loaded["hello"] == a, "package.loaded interop")
+print("SHAPES-OK")

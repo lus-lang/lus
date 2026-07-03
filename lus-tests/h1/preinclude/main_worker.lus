@@ -1,0 +1,9 @@
+global require, worker, assert, print, pledge, tostring
+-- worker.create itself reads the script file, so it needs load+fs pledges;
+-- the pledge-free part under test is the require() INSIDE the worker,
+-- whose fresh state inherits these pledges but reads from retained memory.
+pledge("load", "fs:read=./lus-tests/*", "seal")
+local w = worker.create("lus-tests/h1/preinclude/worker_child.lus")
+local msg = worker.receive(w)
+assert(msg == "worker got: hello from preinclude", "worker preinclude, got: " .. tostring(msg))
+print("WORKER-OK")

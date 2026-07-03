@@ -225,6 +225,8 @@ struct CallInfo {
       lua_KFunction k; /* continuation in case of yields */
       ptrdiff_t old_errfunc;
       lua_KContext ctx; /* context info. in case of yields */
+      struct CatchInfo *old_activecatch; /* suspended Lua catch chain for a
+                                            yieldable protected call */
     } c;
   } u;
   union {
@@ -405,6 +407,13 @@ typedef struct global_State {
   TString *fc_str_true;                  /* pre-interned "true" */
   TString *fc_str_false;                 /* pre-interned "false" */
   TString *fc_str___metatable;           /* pre-interned "__metatable" */
+  /* (kept at the tail so the VM-hot fields above keep their offsets) */
+  struct Table *flagstable; /* readonly CLI flags for compile-time branch
+                               folding (NULL: no folding); anchored by
+                               registry["LUS_FLAGS"] */
+  struct Table *preinctab;  /* preincluded modules ([i]=name, [name]=loader);
+                               anchored by registry["_PREINCLUDE"]; NULL if
+                               nothing was preincluded */
   LX mainth;                             /* main thread of this state */
 } global_State;
 

@@ -117,6 +117,8 @@ void luaX_init(lua_State *L) {
   int i;
   TString *e = luaS_newliteral(L, LUA_ENV); /* create env name */
   luaC_fix(L, obj2gco(e));                  /* never collect this name */
+  e = luaS_newliteral(L, LUA_FLAGSNAME);    /* create flags name */
+  luaC_fix(L, obj2gco(e));                  /* never collect this name */
   for (i = 0; i < NUM_RESERVED; i++) {
     TString *ts = luaS_new(L, luaX_tokens[i]);
     luaC_fix(L, obj2gco(ts));     /* reserved words are never collected */
@@ -234,6 +236,7 @@ void luaX_setinput(lua_State *L, LexState *ls, ZIO *z, TString *source,
      so they cannot be collected */
   ls->envn = luaS_newliteral(L, LUA_ENV); /* get env string */
   ls->brkn = luaS_newliteral(L, "break"); /* get "break" string */
+  ls->flagsn = luaS_newliteral(L, LUA_FLAGSNAME); /* get "flags" string */
 #if defined(LUA_COMPAT_GLOBAL)
   /* compatibility mode: "global" is not a reserved word */
   ls->glbn = luaS_newliteral(L, "global"); /* get "global" string */

@@ -228,4 +228,73 @@ t:it("non-existent script propagates error via receive", function()
     t:assert_equal(worker.status(w), "dead", "worker should be dead")
 end)
 
+t:describe("snow leopard regressions")
+
+t:it("send rejects non-serializable values with an error", function()
+    local w = worker.create("lus-tests/h1/worker/processor.lus")
+    local ok, err = catch worker.send(w, function() end)
+    t:assert_true(not ok, "sending a function should fail")
+    t:assert_true(tostring(err):find("cannot serialize") ~= nil,
+        "error should mention serialization")
+    -- the worker must still be usable after a failed send
+    worker.send(w, "still alive")
+    worker.send(w, "STOP")
+    local messages = {}
+    while true do
+        local msg = worker.receive(w)
+        if msg == nil then break end
+        table.insert(messages, msg)
+    end
+    t:assert_equal(messages[#messages], "STOPPED",
+        "worker should still work after failed send")
+end)
+
+t:it("many workers with message churn", function()
+    local pool = {}
+    for i = 1, 8 do
+        pool[i] = worker.create("lus-tests/h1/worker/processor.lus")
+        for j = 1, 20 do
+            worker.send(pool[i], "w" .. i .. "-" .. j)
+        end
+        worker.send(pool[i], "STOP")
+    end
+    for i = 1, 8 do
+        local messages = {}
+        while true do
+            local msg = worker.receive(pool[i])
+            if msg == nil then break end
+            table.insert(messages, msg)
+        end
+        t:assert_equal(#messages, 21, "worker " .. i .. " should answer all messages")
+        t:assert_equal(messages[1], "GOT: w" .. i .. "-1", "responses stay ordered")
+        t:assert_equal(messages[21], "STOPPED", "worker " .. i .. " stops cleanly")
+    end
+end)
+
+-- Regression: a worker blocked in worker.peek() with an empty inbox used to
+-- hang interpreter exit forever (pool shutdown only woke the queue condvar,
+-- never the per-worker inbox condvars, so pthread_join never returned). The
+-- real assertion is the test process exiting at all: if the bug comes back,
+-- this suite times out. Keep this the LAST test so the worker is still
+-- parked in peek when the interpreter shuts down.
+t:it("worker blocked in peek does not hang interpreter exit", function()
+    local w = worker.create("lus-tests/h1/worker/peekforever.lus")
+    t:assert_true(w ~= nil, "worker created")
+end)
+
+-- Regression: the shutdown wakeup must not be catchable; a worker that
+-- retries peek inside 'catch' would otherwise spin forever and hang exit.
+t:it("catch-peek retry loop does not hang interpreter exit", function()
+    local w = worker.create("lus-tests/h1/worker/catchpeek.lus")
+    t:assert_true(w ~= nil, "worker created")
+end)
+
+-- Regression: the shutdown unwind must also bypass intermediate C-level
+-- protections (load's reader runs under an internal pcall) without
+-- corrupting the suspended catch state.
+t:it("catch+load-reader peek loop does not hang interpreter exit", function()
+    local w = worker.create("lus-tests/h1/worker/catchloadpeek.lus")
+    t:assert_true(w ~= nil, "worker created")
+end)
+
 t:finish()

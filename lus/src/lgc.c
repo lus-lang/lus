@@ -777,7 +777,11 @@ static l_mem traverseenumroot(global_State *g, EnumRoot *root) {
   int i;
   for (i = 0; i < root->size; i++)
     markobjectN(g, root->names[i]);
-  return 1 + root->size;
+  if (root->cache != NULL) { /* keep interned values alive with the root */
+    for (i = 0; i < root->size; i++)
+      markobjectN(g, root->cache[i]);
+  }
+  return 1 + 2 * root->size;
 }
 
 

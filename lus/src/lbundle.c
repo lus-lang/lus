@@ -9,6 +9,7 @@
 
 #include "lprefix.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -364,14 +365,23 @@ LusBundle *lusB_load(void) {
   ** We need to calculate total bytecode size from file entries
   */
   {
-    size_t total_bytecode = 0;
+    /* 64-bit accumulation: offset/size are attacker-controlled u32s from
+       the index; their sum must not wrap on 32-bit size_t, and the blob
+       plus index and footer must actually fit inside the file */
+    uint64_t total_bytecode = 0;
     for (i = 0; i < bundle->num_files; i++) {
-      size_t end = bundle->files[i].offset + bundle->files[i].size;
+      uint64_t end =
+          (uint64_t)bundle->files[i].offset + bundle->files[i].size;
       if (end > total_bytecode)
         total_bytecode = end;
     }
+    if (total_bytecode + index_size + 8 > (uint64_t)filesize) {
+      lusB_free(bundle);
+      fclose(f);
+      return NULL;
+    }
     bundle->data_offset =
-        (size_t)(filesize - 8 - (long)index_size - (long)total_bytecode);
+        (size_t)((uint64_t)filesize - 8 - index_size - total_bytecode);
   }
 
   fclose(f);

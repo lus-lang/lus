@@ -281,6 +281,8 @@ static int new_varkind_attrs(LexState *ls, TString *name, lu_byte kind,
   FuncState *fs = ls->fs;
   Dyndata *dyd = ls->dyd;
   Vardesc *var;
+  if (name == ls->flagsn && kind >= GDKREG) /* locals may still shadow */
+    luaK_semerror(ls, "cannot declare '%s' (reserved name)", LUA_FLAGSNAME);
   growarray_arena(L, dyd->arena, dyd->actvar.arr, dyd->actvar.n,
                   dyd->actvar.size, Vardesc, SHRT_MAX, "variable declarations");
   var = &dyd->actvar.arr[dyd->actvar.n++];
@@ -603,6 +605,14 @@ static void buildvar(LexState *ls, TString *varname, expdesc *var) {
   singlevaraux(fs, varname, var, 1);
   if (var->k == VGLOBAL) { /* global name? */
     int info = var->u.info;
+    if (varname == ls->flagsn) { /* reserved pseudo-global 'flags' */
+      /* usable without a 'global' declaration, and assigning to it is a
+         parse-time const error; field writes hit the runtime readonly
+         table (luaK_indexed clears 'ind.ro' on the derived expression) */
+      buildglobal(ls, varname, var);
+      var->u.ind.ro = 1;
+      return;
+    }
     /* global by default in the scope of a global declaration? */
     if (info == -2)
       luaK_semerror(ls, "variable '%s' not declared", getstr(varname));
@@ -1580,6 +1590,55 @@ static int check_fastcall(FuncState *fs, int base, int nparams) {
 }
 
 
+/*
+** Check whether the 1-argument call at register 'base' is a STRICT
+** 'require("literal")' pattern naming a preincluded module (Acquis:
+** preinclusion): exactly OP_GETTABUP base,_ENV,K["require"] immediately
+** followed by OP_LOADK base+1,K[string] as the last two emitted
+** instructions. OP_REQUIRE replaces this pair entirely -- the require
+** function is never materialized -- so anything looser (and/or callee
+** expressions, local aliases, computed names, LOADKX-sized constants)
+** must NOT match and stays an ordinary call. Returns the 1-based
+** preinclude index, or -1.
+*/
+static int check_require(FuncState *fs, int base) {
+  Proto *f = fs->f;
+  Table *pt = G(fs->ls->L)->preinctab;
+  TString *modname;
+  Instruction gt, ld;
+  if (fs->pc < 2)
+    return -1;
+  /* No jump may target the pair being replaced (or anything after it):
+     an and/or callee expression, e.g. '(cond and mock or require)(...)',
+     leaves its 'or' arm's GETTABUP textually adjacent to the LOADK with
+     jump labels landing inside the window -- replacing those slots would
+     corrupt the control flow. Same safety condition the peephole
+     optimizer uses. */
+  if (fs->lasttarget >= fs->pc - 2)
+    return -1;
+  ld = f->code[fs->pc - 1]; /* the argument literal */
+  gt = f->code[fs->pc - 2]; /* the callee */
+  if (GET_OPCODE(ld) != OP_LOADK || GETARG_A(ld) != base + 1 ||
+      !ttisstring(&f->k[GETARG_Bx(ld)]))
+    return -1;
+  modname = tsvalue(&f->k[GETARG_Bx(ld)]);
+  if (GET_OPCODE(gt) != OP_GETTABUP || GETARG_A(gt) != base ||
+      GETARG_B(gt) != 0 || !ttisstring(&f->k[GETARG_C(gt)]) ||
+      strcmp(getstr(tsvalue(&f->k[GETARG_C(gt)])), "require") != 0)
+    return -1;
+  { /* resolve the module name to its preinclude index */
+    int i;
+    for (i = 1;; i++) {
+      TValue v;
+      if (tagisempty(luaH_getint(pt, i, &v)) || !ttisstring(&v))
+        break;
+      if (luaS_eqstr(tsvalue(&v), modname))
+        return i;
+    }
+  }
+  return -1;
+}
+
 static void funcargs(LexState *ls, expdesc *f, int fc_eligible) {
   FuncState *fs = ls->fs;
   expdesc args;
@@ -1639,12 +1698,30 @@ static void funcargs(LexState *ls, expdesc *f, int fc_eligible) {
   }
   {
     int fc_id = -1;
-    /* Check if this call can be fastcalled */
-    if (fc_eligible && nparams != LUA_MULTRET && fs->nups > 0 &&
-        fs->f->upvalues[0].name == ls->envn && !G(fs->ls->L)->no_fastcall) {
-      fc_id = check_fastcall(fs, base, nparams);
+    int req_idx = -1;
+    if (fc_eligible && fs->nups > 0 && fs->f->upvalues[0].name == ls->envn) {
+      /* Preincluded require("literal")? Only under readonly environments,
+         where the global 'require' is guaranteed to stay the original. */
+      if (nparams == 1 && G(fs->ls->L)->readonly_env &&
+          G(fs->ls->L)->preinctab != NULL)
+        req_idx = check_require(fs, base);
+      /* Check if this call can be fastcalled */
+      if (req_idx < 0 && nparams != LUA_MULTRET &&
+          !G(fs->ls->L)->no_fastcall)
+        fc_id = check_fastcall(fs, base, nparams);
     }
-    if (fc_id >= 0) {
+    if (req_idx >= 1) {
+      /* Strip the call entirely: overwrite the GETTABUP+LOADK pair in
+         place with REQUIRE+EXTRAARG. Neither the require function nor
+         the literal is ever materialized on the stack. In-place
+         patching keeps the line info attributed to the same source
+         spot, and the strict adjacency check guarantees no jump can
+         target the overwritten slots. B is unused. */
+      fs->f->code[fs->pc - 2] = CREATE_ABCk(OP_REQUIRE, base, 0, 2, 0);
+      fs->f->code[fs->pc - 1] = CREATE_Ax(OP_EXTRAARG, req_idx);
+      init_exp(f, VCALL, fs->pc - 2);
+    }
+    else if (fc_id >= 0) {
       init_exp(f, VCALL, luaK_codeABC(fs, OP_FASTCALL, base, nparams + 1, 2));
       luaK_code(fs, CREATE_Ax(OP_EXTRAARG, fc_id));
     }
@@ -3763,11 +3840,191 @@ static int assigncond(LexState *ls) {
   return falsejump;
 }
 
-static void test_then_block(LexState *ls, int *escapelist) {
+/*
+** {======================================================================
+** Compile-time folding of 'flags' conditions (Acquis: flags)
+**
+** 'if flags.NAME then' (and 'if not flags.NAME then') conditions are
+** resolved at parse time from the CLI flags table. The winning branch is
+** compiled normally; losing branches are still fully parsed (so their
+** syntax stays checked with or without any given flag) but their emitted
+** state is rewound. Folding is disabled while an AST is being built:
+** the formatter/LSP consumers must see the complete source tree.
+**
+** Known limitation (by design): 'flags' is a reserved name whose values
+** are fixed by the CLI for the whole process, so folding always reads
+** the CLI table. A chunk loaded with a custom environment that defines
+** its own 'flags' table sees the custom table in non-folded shapes but
+** the CLI values in foldable conditions. Redefining the reserved name
+** through a custom environment is unsupported.
+** =======================================================================
+*/
+
+#define FOLD_NONE 0  /* condition not resolvable: normal codegen */
+#define FOLD_TRUE 1  /* condition is compile-time true */
+#define FOLD_FALSE 2 /* condition is compile-time false */
+
+/*
+** Snapshot of everything a rewound (dead) region may have touched.
+** Deliberately NOT rewound: 'nk'/'kcache' (the value->index cache would
+** go stale and corrupt later constants; dead constants are only bloat),
+** 'nups' (indices must stay consistent), 'needclose' (conservative
+** flag). 'nactvar'/'dyd->actvar.n' are restored by the block scoping
+** that every rewound region is wrapped in.
+*/
+typedef struct CodeSnap {
+  int pc;            /* discard instructions */
+  int lasttarget;    /* jump targets recorded inside the region */
+  int previousline;  /* delta-encoded lineinfo cursor */
+  int nabslineinfo;  /* absolute lineinfo entries for rewound pcs */
+  int np;            /* nested prototypes from dead closures */
+  int ngt;           /* pending gotos/breaks (dyd->gt.n) */
+  int nlabel;        /* labels (dyd->label.n) */
+  short ndebugvars;  /* local-variable debug entries */
+  lu_byte freereg;   /* registers used by the rewound code */
+  lu_byte iwthabs;   /* absolute-lineinfo cadence counter */
+} CodeSnap;
+
+static void savecode(LexState *ls, CodeSnap *s) {
+  FuncState *fs = ls->fs;
+  s->pc = fs->pc;
+  s->lasttarget = fs->lasttarget;
+  s->previousline = fs->previousline;
+  s->nabslineinfo = fs->nabslineinfo;
+  s->np = fs->np;
+  s->ndebugvars = fs->ndebugvars;
+  s->freereg = fs->freereg;
+  s->iwthabs = fs->iwthabs;
+  s->ngt = ls->dyd->gt.n;
+  s->nlabel = ls->dyd->label.n;
+}
+
+static void restorecode(LexState *ls, CodeSnap *s) {
+  FuncState *fs = ls->fs;
+  fs->pc = s->pc;
+  fs->lasttarget = s->lasttarget;
+  fs->previousline = s->previousline;
+  fs->nabslineinfo = s->nabslineinfo;
+  fs->np = s->np;
+  fs->ndebugvars = s->ndebugvars;
+  fs->freereg = s->freereg;
+  fs->iwthabs = s->iwthabs;
+  ls->dyd->gt.n = s->ngt;
+  ls->dyd->label.n = s->nlabel;
+}
+
+/*
+** Try to resolve a just-parsed condition expression as a 'flags' lookup.
+** 'pc0' is fs->pc from before the expression was parsed. Matches the
+** exact bytecode shape the free name 'flags' compiles to (a GETTABUP
+** through the function's _ENV upvalue with the interned "flags"
+** constant), so a shadowed 'flags' (local/upvalue) or any other
+** expression shape conservatively does not fold.
+*/
+static int foldflagcond(LexState *ls, expdesc *v, int pc0) {
+  FuncState *fs = ls->fs;
+  Proto *f = fs->f;
+  global_State *g = G(ls->L);
+  TString *field = NULL;
+  int neg = 0;
+  if (AST_ACTIVE(ls) || g->flagstable == NULL)
+    return FOLD_NONE;
+  if (v->t != NO_JUMP || v->f != NO_JUMP)
+    return FOLD_NONE;
+  if (v->k == VINDEXSTR && fs->pc == pc0 + 1) {
+    /* bare 'flags.NAME': one GETTABUP loading 'flags', key pending */
+    Instruction i0 = f->code[pc0];
+    if (GET_OPCODE(i0) != OP_GETTABUP || GETARG_A(i0) != v->u.ind.t)
+      return FOLD_NONE;
+    if (fs->nups == 0 || f->upvalues[GETARG_B(i0)].name != ls->envn)
+      return FOLD_NONE;
+    if (!ttisstring(&f->k[GETARG_C(i0)]) ||
+        tsvalue(&f->k[GETARG_C(i0)]) != ls->flagsn)
+      return FOLD_NONE;
+    if (!ttisstring(&f->k[v->u.ind.idx]))
+      return FOLD_NONE;
+    field = tsvalue(&f->k[v->u.ind.idx]);
+  }
+  else if (v->k == VRELOC && fs->pc == pc0 + 3 && v->u.info == pc0 + 2) {
+    /* 'not flags.NAME': GETTABUP / GETFIELD / NOT */
+    Instruction i0 = f->code[pc0];
+    Instruction i1 = f->code[pc0 + 1];
+    Instruction i2 = f->code[pc0 + 2];
+    if (GET_OPCODE(i0) != OP_GETTABUP || GET_OPCODE(i1) != OP_GETFIELD ||
+        GET_OPCODE(i2) != OP_NOT)
+      return FOLD_NONE;
+    if (GETARG_B(i1) != GETARG_A(i0) || GETARG_B(i2) != GETARG_A(i1))
+      return FOLD_NONE;
+    if (fs->nups == 0 || f->upvalues[GETARG_B(i0)].name != ls->envn)
+      return FOLD_NONE;
+    if (!ttisstring(&f->k[GETARG_C(i0)]) ||
+        tsvalue(&f->k[GETARG_C(i0)]) != ls->flagsn)
+      return FOLD_NONE;
+    if (!ttisstring(&f->k[GETARG_C(i1)]))
+      return FOLD_NONE;
+    field = tsvalue(&f->k[GETARG_C(i1)]);
+    neg = 1;
+  }
+  else
+    return FOLD_NONE;
+  {
+    TValue val;
+    int truthy;
+    lu_byte tag = luaH_getstr(g->flagstable, field, &val);
+    if (tagisempty(tag))
+      truthy = 0; /* absent flag reads as nil: constant false */
+    else
+      truthy = !l_isfalse(&val);
+    if (neg)
+      truthy = !truthy;
+    return truthy ? FOLD_TRUE : FOLD_FALSE;
+  }
+}
+
+/*
+** Parse a block whose code must be discarded (the losing side of a
+** folded condition). The block is fully parsed -- syntax and semantic
+** errors still fire -- but everything it emitted is rewound.
+*/
+static void deadblock(LexState *ls) {
+  CodeSnap snap;
+  savecode(ls, &snap);
+  block(ls);
+  restorecode(ls, &snap);
+}
+
+/*
+** Skip a dead 'elseif cond then block' clause after an earlier clause
+** folded true. The extra enclosing block scopes locals that an
+** assignment condition would otherwise declare into the outer 'if'
+** block. restorecode runs after leaveblock so a possible OP_CLOSE is
+** rewound as well.
+*/
+static void skipdeadclause(LexState *ls) {
+  FuncState *fs = ls->fs;
+  CodeSnap snap;
+  BlockCnt bl;
+  savecode(ls, &snap);
+  enterblock(fs, &bl, 0);
+  luaX_next(ls); /* skip ELSEIF */
+  if (isassigncond(ls))
+    assigncond(ls);
+  else
+    cond(ls, NULL);
+  checknext(ls, TK_THEN);
+  block(ls);
+  leaveblock(fs);
+  restorecode(ls, &snap);
+}
+
+/* }====================================================================== */
+
+static int test_then_block(LexState *ls, int *escapelist) {
   /* test_then_block -> [IF | ELSEIF] cond THEN block */
   /* cond can be: expr | NAME {',' NAME} '=' explist (assignment condition) */
   FuncState *fs = ls->fs;
   int condexit;
+  int verdict = FOLD_NONE;
   LusAstNode *condast = NULL;
   luaX_next(ls); /* skip IF or ELSEIF */
 
@@ -3776,7 +4033,23 @@ static void test_then_block(LexState *ls, int *escapelist) {
     condexit = assigncond(ls); /* parse assignment and generate tests */
   }
   else {
-    condexit = cond(ls, &condast); /* read normal condition */
+    /* inline 'cond()' with a folding attempt for 'flags' conditions */
+    CodeSnap snap;
+    expdesc v;
+    savecode(ls, &snap);
+    expr(ls, &v); /* read condition */
+    verdict = foldflagcond(ls, &v, snap.pc);
+    if (verdict != FOLD_NONE) {
+      restorecode(ls, &snap); /* drop the condition's code */
+      condexit = NO_JUMP;
+    }
+    else {
+      condast = v.ast;
+      if (v.k == VNIL)
+        v.k = VFALSE; /* 'falses' are all equal here */
+      luaK_goiftrue(ls->fs, &v);
+      condexit = v.f;
+    }
   }
 
   /* Store condition in current if/elseif AST node.
@@ -3787,11 +4060,18 @@ static void test_then_block(LexState *ls, int *escapelist) {
   }
 
   checknext(ls, TK_THEN);
+  if (verdict == FOLD_FALSE) {
+    deadblock(ls); /* 'then' part can never run: parse and discard */
+    return verdict; /* no escape jump, nothing to patch */
+  }
   block(ls); /* 'then' part */
+  if (verdict == FOLD_TRUE)
+    return verdict; /* rest of the chain is dead: no escape jump needed */
   if (ls->t.token == TK_ELSE ||
       ls->t.token == TK_ELSEIF) /* followed by 'else'/'elseif'? */
     luaK_concat(fs, escapelist, luaK_jump(fs)); /* must jump over it */
   luaK_patchtohere(fs, condexit);
+  return verdict;
 }
 
 static void ifstat(LexState *ls, int line) {
@@ -3816,8 +4096,9 @@ static void ifstat(LexState *ls, int line) {
   {
     /* Save curnode so it survives inner statement() calls which set it to NULL */
     LusAstNode *ifnode = AST_ACTIVE(ls) ? ls->ast->curnode : NULL;
-
-    test_then_block(ls, &escapelist); /* IF cond THEN block */
+    /* verdict of the chain so far: FOLD_TRUE once any clause was taken at
+       compile time (folding never happens while an AST is being built) */
+    int verdict = test_then_block(ls, &escapelist); /* IF cond THEN block */
 
     /* Restore curnode after test_then_block (inner statements clear it) */
     if (AST_ACTIVE(ls))
@@ -3835,8 +4116,12 @@ static void ifstat(LexState *ls, int line) {
         ls->ast->curnode = ifnode;
         ls->ast->curblock = ifnode;
       }
+      else if (verdict == FOLD_TRUE) {
+        skipdeadclause(ls); /* an earlier clause already won */
+      }
       else {
-        test_then_block(ls, &escapelist);
+        if (test_then_block(ls, &escapelist) == FOLD_TRUE)
+          verdict = FOLD_TRUE;
       }
     }
     if (testnext(ls, TK_ELSE)) {
@@ -3848,6 +4133,9 @@ static void ifstat(LexState *ls, int line) {
         ls->ast->curblock = elsenode;
         block(ls);
         ls->ast->curblock = ifnode;
+      }
+      else if (verdict == FOLD_TRUE) {
+        deadblock(ls); /* an earlier clause already won */
       }
       else {
         block(ls);
@@ -5061,6 +5349,11 @@ static void retstat(LexState *ls) {
           /* Fastcalls produce exactly 1 result and are faster than C tail
              calls. Undo setmultret and let OP_RETURN1 handle it. */
           SETARG_C(*pc, 2);
+        }
+        else if (GET_OPCODE(*pc) == OP_REQUIRE) {
+          /* No tail-call form (an EXTRAARG follows); keep the open call
+             and return all of its results. */
+          nret = LUA_MULTRET;
         }
         else {
           SET_OPCODE(*pc, OP_TAILCALL);

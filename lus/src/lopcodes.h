@@ -352,6 +352,9 @@ typedef enum {
 
   OP_FASTCALL, /*	A B C	fastcall: intrinsified stdlib (next is EXTRAARG) */
 
+  OP_REQUIRE, /*	A B C	R[A] := require(preinclude); C=nresults+1
+                        (next instruction is EXTRAARG = preinclude index) */
+
   OP_EXTRAARG /*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

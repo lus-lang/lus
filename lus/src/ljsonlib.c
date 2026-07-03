@@ -104,9 +104,16 @@ typedef struct {
 static void parse_value_iterative(JsonParser *p) {
   lua_State *L = p->L;
 
-  /* Use malloc for container stack to avoid Lua stack entirely */
+  /* The container stack lives in a stack-anchored userdata so that ANY
+     error during parsing -- json_error from any helper, or an OOM inside
+     a Lua allocation -- unwinds without leaking it. It used to be a raw
+     luaM vector freed by hand before each json_error call, which leaked
+     on every error path raised outside this function (e.g. bad literals
+     via parse_literal). */
   size_t stack_cap = 32;
-  ContainerFrame *stack = luaM_newvector(L, stack_cap, ContainerFrame);
+  ContainerFrame *stack = (ContainerFrame *)lua_newuserdatauv(
+      L, stack_cap * sizeof(ContainerFrame), 0);
+  int stack_ud_idx = lua_gettop(L);
   size_t stack_size = 0;
   int depth = 0;
 
@@ -143,7 +150,6 @@ static void parse_value_iterative(JsonParser *p) {
 
           if ((unsigned char)*p->json < 0x20) {
             luaM_freearray(L, buf, capacity);
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "control character in string");
           }
 
@@ -151,7 +157,6 @@ static void parse_value_iterative(JsonParser *p) {
             p->json++;
             if (p->json >= p->end) {
               luaM_freearray(L, buf, capacity);
-              luaM_freearray(L, stack, stack_cap);
               json_error(p, "unexpected end after backslash");
             }
             switch (*p->json) {
@@ -169,7 +174,6 @@ static void parse_value_iterative(JsonParser *p) {
                 for (int i = 0; i < 4; i++) {
                   if (p->json >= p->end) {
                     luaM_freearray(L, buf, capacity);
-                    luaM_freearray(L, stack, stack_cap);
                     json_error(p, "incomplete \\uXXXX escape");
                   }
                   char uc = *p->json;
@@ -182,7 +186,6 @@ static void parse_value_iterative(JsonParser *p) {
                     codepoint |= (unsigned)(uc - 'A' + 10);
                   else {
                     luaM_freearray(L, buf, capacity);
-                    luaM_freearray(L, stack, stack_cap);
                     json_error(p, "invalid hex digit");
                   }
                   p->json++;
@@ -231,7 +234,6 @@ static void parse_value_iterative(JsonParser *p) {
               }
               default:
                 luaM_freearray(L, buf, capacity);
-                luaM_freearray(L, stack, stack_cap);
                 json_error(p, "invalid escape sequence");
             }
             p->json++;
@@ -239,7 +241,6 @@ static void parse_value_iterative(JsonParser *p) {
           else {
             if ((unsigned char)*p->json < 0x20) {
               luaM_freearray(L, buf, capacity);
-              luaM_freearray(L, stack, stack_cap);
               json_error(p, "control character in string");
             }
             buf[len++] = *p->json;
@@ -248,7 +249,6 @@ static void parse_value_iterative(JsonParser *p) {
         }
         if (p->json >= p->end || *p->json != '"') {
           luaM_freearray(L, buf, capacity);
-          luaM_freearray(L, stack, stack_cap);
           json_error(p, "unterminated string");
         }
         p->json++; /* skip closing quote */
@@ -288,13 +288,11 @@ static void parse_value_iterative(JsonParser *p) {
         if (*p->json == '-')
           p->json++;
         if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
-          luaM_freearray(L, stack, stack_cap);
           json_error(p, "invalid number");
         }
         if (*p->json == '0') {
           p->json++;
           if (p->json < p->end && isdigit((unsigned char)*p->json)) {
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "leading zeros not allowed");
           }
         }
@@ -307,7 +305,6 @@ static void parse_value_iterative(JsonParser *p) {
           is_float = 1;
           p->json++;
           if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "digit expected after decimal");
           }
           while (p->json < p->end && isdigit((unsigned char)*p->json))
@@ -319,7 +316,6 @@ static void parse_value_iterative(JsonParser *p) {
           if (p->json < p->end && (*p->json == '+' || *p->json == '-'))
             p->json++;
           if (p->json >= p->end || !isdigit((unsigned char)*p->json)) {
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "digit expected in exponent");
           }
           while (p->json < p->end && isdigit((unsigned char)*p->json))
@@ -339,7 +335,6 @@ static void parse_value_iterative(JsonParser *p) {
           if (endptr != numbuf + numlen || errno == ERANGE || !isfinite(d) ||
               !isfinite((double)n)) {
             luaM_freearray(L, numbuf, numlen + 1);
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "number out of range");
           }
           setfltvalue(&value, n);
@@ -355,7 +350,6 @@ static void parse_value_iterative(JsonParser *p) {
               raw < (long long)LUA_MININTEGER ||
               raw > (long long)LUA_MAXINTEGER) {
             luaM_freearray(L, numbuf, numlen + 1);
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "number out of range");
           }
           setivalue(&value, n);
@@ -367,7 +361,6 @@ static void parse_value_iterative(JsonParser *p) {
       case '[':
         if (++depth > JSON_MAX_DEPTH) {
           lua_pop(L, 1); /* pop anchor table */
-          luaM_freearray(L, stack, stack_cap);
           json_error(p, "maximum nesting depth exceeded");
         }
         p->json++;
@@ -389,8 +382,11 @@ static void parse_value_iterative(JsonParser *p) {
             /* Push container frame */
             if (stack_size >= stack_cap) {
               size_t newcap = stack_cap * 2;
-              stack = luaM_reallocvector(L, stack, stack_cap, newcap,
-                                         ContainerFrame);
+              ContainerFrame *ns = (ContainerFrame *)lua_newuserdatauv(
+                  L, newcap * sizeof(ContainerFrame), 0);
+              memcpy(ns, stack, stack_size * sizeof(ContainerFrame));
+              lua_replace(L, stack_ud_idx); /* old stack becomes garbage */
+              stack = ns;
               stack_cap = newcap;
             }
             stack[stack_size].table = t;
@@ -406,7 +402,6 @@ static void parse_value_iterative(JsonParser *p) {
       case '{':
         if (++depth > JSON_MAX_DEPTH) {
           lua_pop(L, 1); /* pop anchor table */
-          luaM_freearray(L, stack, stack_cap);
           json_error(p, "maximum nesting depth exceeded");
         }
         p->json++;
@@ -428,7 +423,6 @@ static void parse_value_iterative(JsonParser *p) {
             /* Parse key */
             if (peek(p) != '"') {
               lua_pop(L, 1); /* pop anchor table */
-              luaM_freearray(L, stack, stack_cap);
               json_error(p, "expected string key in object");
             }
             /* Parse key string inline */
@@ -445,7 +439,6 @@ static void parse_value_iterative(JsonParser *p) {
                 p->json++;
                 if (p->json >= p->end) {
                   luaM_freearray(L, kbuf, kcap);
-                  luaM_freearray(L, stack, stack_cap);
                   lua_pop(L, 1);
                   json_error(p, "unterminated string key");
                 }
@@ -464,7 +457,6 @@ static void parse_value_iterative(JsonParser *p) {
                     for (int i = 0; i < 4; i++) {
                       if (p->json >= p->end) {
                         luaM_freearray(L, kbuf, kcap);
-                        luaM_freearray(L, stack, stack_cap);
                         json_error(p, "incomplete \\uXXXX escape");
                       }
                       char uc = *p->json;
@@ -477,7 +469,6 @@ static void parse_value_iterative(JsonParser *p) {
                         codepoint |= (unsigned)(uc - 'A' + 10);
                       else {
                         luaM_freearray(L, kbuf, kcap);
-                        luaM_freearray(L, stack, stack_cap);
                         json_error(p, "invalid hex digit");
                       }
                       p->json++;
@@ -523,7 +514,6 @@ static void parse_value_iterative(JsonParser *p) {
                   default:
                     lua_pop(L, 1); /* pop anchor table */
                     luaM_freearray(L, kbuf, kcap);
-                    luaM_freearray(L, stack, stack_cap);
                     json_error(p, "invalid escape sequence");
                 }
               }
@@ -531,7 +521,6 @@ static void parse_value_iterative(JsonParser *p) {
                 if ((unsigned char)*p->json < 0x20) {
                   lua_pop(L, 1); /* pop anchor table */
                   luaM_freearray(L, kbuf, kcap);
-                  luaM_freearray(L, stack, stack_cap);
                   json_error(p, "control character in string");
                 }
                 kbuf[klen++] = *p->json;
@@ -541,7 +530,6 @@ static void parse_value_iterative(JsonParser *p) {
             if (p->json >= p->end) {
               lua_pop(L, 1); /* pop anchor table */
               luaM_freearray(L, kbuf, kcap);
-              luaM_freearray(L, stack, stack_cap);
               json_error(p, "unterminated string");
             }
             p->json++; /* skip closing quote */
@@ -559,8 +547,11 @@ static void parse_value_iterative(JsonParser *p) {
             /* Push container frame */
             if (stack_size >= stack_cap) {
               size_t newcap = stack_cap * 2;
-              stack = luaM_reallocvector(L, stack, stack_cap, newcap,
-                                         ContainerFrame);
+              ContainerFrame *ns = (ContainerFrame *)lua_newuserdatauv(
+                  L, newcap * sizeof(ContainerFrame), 0);
+              memcpy(ns, stack, stack_size * sizeof(ContainerFrame));
+              lua_replace(L, stack_ud_idx); /* old stack becomes garbage */
+              stack = ns;
               stack_cap = newcap;
             }
             stack[stack_size].table = t;
@@ -574,11 +565,9 @@ static void parse_value_iterative(JsonParser *p) {
         }
         break;
       case -1:
-        luaM_freearray(L, stack, stack_cap);
         json_error(p, "unexpected end of input");
         break;
       default:
-        luaM_freearray(L, stack, stack_cap);
         json_error(p, "unexpected character");
     }
 
@@ -613,7 +602,6 @@ static void parse_value_iterative(JsonParser *p) {
           /* Parse next key */
           if (peek(p) != '"') {
             lua_pop(L, 1); /* pop anchor table */
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "expected string key");
           }
           /* Parse key inline */
@@ -631,7 +619,6 @@ static void parse_value_iterative(JsonParser *p) {
               if (p->json >= p->end) {
                 lua_pop(L, 1); /* pop anchor table */
                 luaM_freearray(L, kbuf, kcap);
-                luaM_freearray(L, stack, stack_cap);
                 json_error(p, "unterminated string");
               }
               switch (*p->json) {
@@ -649,7 +636,6 @@ static void parse_value_iterative(JsonParser *p) {
                   for (int i = 0; i < 4; i++) {
                     if (p->json >= p->end) {
                       luaM_freearray(L, kbuf, kcap);
-                      luaM_freearray(L, stack, stack_cap);
                       json_error(p, "incomplete \\uXXXX escape");
                     }
                     char uc = *p->json;
@@ -662,7 +648,6 @@ static void parse_value_iterative(JsonParser *p) {
                       codepoint |= (unsigned)(uc - 'A' + 10);
                     else {
                       luaM_freearray(L, kbuf, kcap);
-                      luaM_freearray(L, stack, stack_cap);
                       json_error(p, "invalid hex digit");
                     }
                     p->json++;
@@ -708,7 +693,6 @@ static void parse_value_iterative(JsonParser *p) {
                 default:
                   lua_pop(L, 1); /* pop anchor table */
                   luaM_freearray(L, kbuf, kcap);
-                  luaM_freearray(L, stack, stack_cap);
                   json_error(p, "invalid escape sequence");
               }
             }
@@ -716,7 +700,6 @@ static void parse_value_iterative(JsonParser *p) {
               if ((unsigned char)*p->json < 0x20) {
                 lua_pop(L, 1); /* pop anchor table */
                 luaM_freearray(L, kbuf, kcap);
-                luaM_freearray(L, stack, stack_cap);
                 json_error(p, "control character in string");
               }
               kbuf[klen++] = *p->json;
@@ -726,7 +709,6 @@ static void parse_value_iterative(JsonParser *p) {
           if (p->json >= p->end) {
             lua_pop(L, 1); /* pop anchor table */
             luaM_freearray(L, kbuf, kcap);
-            luaM_freearray(L, stack, stack_cap);
             json_error(p, "unterminated string");
           }
           p->json++;
@@ -754,7 +736,6 @@ static void parse_value_iterative(JsonParser *p) {
       break;
   }
 
-  luaM_freearray(L, stack, stack_cap);
 
   /* Push final result while the anchor table still protects GC objects. */
   if (ttisnil(&value)) {
@@ -782,7 +763,8 @@ static void parse_value_iterative(JsonParser *p) {
     lua_pushnil(L); /* fallback */
   }
 
-  lua_remove(L, anchor_idx); /* remove anchor table, leave result */
+  lua_remove(L, anchor_idx);    /* remove anchor table */
+  lua_remove(L, stack_ud_idx);  /* remove container-stack userdata */
 }
 
 static int json_fromjson(lua_State *L) {
@@ -809,74 +791,106 @@ static int json_fromjson(lua_State *L) {
 ** JSON Serializer (tojson)
 ** ============================================================ */
 
+/*
+** Serializer output buffer: contiguous bytes backed by a userdata pinned
+** at a fixed stack slot ('out_idx'), so a Lua error anywhere during
+** serialization (filter callbacks, cycle/depth errors, OOM) unwinds
+** without leaking it. A luaL_Buffer cannot be used here: its operations
+** require balanced stack use in between, and the writer interleaves
+** lua_next/filter pushes with output. Appends are plain memcpy -- the
+** previous parts-table approach allocated one Lua string plus a table
+** insertion (with an O(1)-amortized but costly rawlen) per output piece,
+** including every single structural byte.
+*/
 typedef struct {
   lua_State *L;
-  int parts_idx;   /* stack index of parts table (array of strings) */
+  char *out;       /* output bytes (owned by userdata at out_idx) */
+  size_t len;      /* bytes written */
+  size_t cap;      /* capacity of 'out' */
+  int out_idx;     /* fixed stack index of the buffer userdata */
   int filter_idx;  /* stack index of filter function (0 if none) */
   int depth;       /* current nesting depth */
   int visited_idx; /* stack index of visited table (for cycle detection) */
 } JsonWriter;
 
+#define JSON_WRITER_INITCAP 1024
+
 static void write_value(JsonWriter *w, int idx);
+
+static void writer_grow(JsonWriter *w, size_t need) {
+  lua_State *L = w->L;
+  size_t newcap = w->cap;
+  if (need > MAX_SIZE - w->len)
+    luaL_error(L, "JSON output too large");
+  while (newcap - w->len < need) {
+    if (newcap > MAX_SIZE / 2) {
+      newcap = w->len + need;
+      break;
+    }
+    newcap *= 2;
+  }
+  char *nb = (char *)lua_newuserdatauv(L, newcap, 0);
+  memcpy(nb, w->out, w->len);
+  lua_replace(L, w->out_idx); /* old buffer becomes garbage */
+  w->out = nb;
+  w->cap = newcap;
+}
+
+/* Add raw bytes to output */
+static void write_raw(JsonWriter *w, const char *s, size_t len) {
+  if (len > w->cap - w->len)
+    writer_grow(w, len);
+  memcpy(w->out + w->len, s, len);
+  w->len += len;
+}
 
 /* Add a single character to output */
 static void write_char(JsonWriter *w, char c) {
-  lua_State *L = w->L;
-  char buf[2] = {c, '\0'};
-  lua_pushstring(L, buf);
-  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
-}
-
-/* Add raw string to output */
-static void write_string_raw(JsonWriter *w, const char *s, size_t len) {
-  lua_State *L = w->L;
-  lua_pushlstring(L, s, len);
-  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
+  if (w->len >= w->cap)
+    writer_grow(w, 1);
+  w->out[w->len++] = c;
 }
 
 /* Add literal string to output */
 static void write_literal(JsonWriter *w, const char *s) {
-  lua_State *L = w->L;
-  lua_pushstring(L, s);
-  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
+  write_raw(w, s, strlen(s));
 }
 
-/* Write a JSON string (with escaping) - builds complete string then adds to parts */
+/* Write a JSON string (with escaping), copying unescaped runs in bulk */
 static void write_json_string(JsonWriter *w, const char *s, size_t len) {
-  lua_State *L = w->L;
-  luaL_Buffer b;
-  luaL_buffinit(L, &b);
-
-  luaL_addchar(&b, '"');
-
-  for (size_t i = 0; i < len; i++) {
+  size_t i, start = 0;
+  write_char(w, '"');
+  for (i = 0; i < len; i++) {
     unsigned char c = (unsigned char)s[i];
+    const char *esc = NULL;
+    size_t esclen = 2;
+    char ubuf[8];
     switch (c) {
-      case '"': luaL_addlstring(&b, "\\\"", 2); break;
-      case '\\': luaL_addlstring(&b, "\\\\", 2); break;
-      case '\b': luaL_addlstring(&b, "\\b", 2); break;
-      case '\f': luaL_addlstring(&b, "\\f", 2); break;
-      case '\n': luaL_addlstring(&b, "\\n", 2); break;
-      case '\r': luaL_addlstring(&b, "\\r", 2); break;
-      case '\t': luaL_addlstring(&b, "\\t", 2); break;
+      case '"': esc = "\\\""; break;
+      case '\\': esc = "\\\\"; break;
+      case '\b': esc = "\\b"; break;
+      case '\f': esc = "\\f"; break;
+      case '\n': esc = "\\n"; break;
+      case '\r': esc = "\\r"; break;
+      case '\t': esc = "\\t"; break;
       default:
         if (c < 0x20) {
           /* Control character - use \u00XX escape */
-          char buf[8];
-          snprintf(buf, sizeof(buf), "\\u%04x", c);
-          luaL_addlstring(&b, buf, 6);
-        }
-        else {
-          luaL_addchar(&b, (char)c);
+          snprintf(ubuf, sizeof(ubuf), "\\u%04x", c);
+          esc = ubuf;
+          esclen = 6;
         }
     }
+    if (esc != NULL) {
+      if (i > start)
+        write_raw(w, s + start, i - start);
+      write_raw(w, esc, esclen);
+      start = i + 1;
+    }
   }
-
-  luaL_addchar(&b, '"');
-  luaL_pushresult(&b);
-
-  /* Add result to parts table */
-  lua_rawseti(L, w->parts_idx, (int)lua_rawlen(L, w->parts_idx) + 1);
+  if (i > start)
+    write_raw(w, s + start, i - start);
+  write_char(w, '"');
 }
 
 /* Check if a value type can be serialized to JSON */
@@ -943,7 +957,7 @@ static void write_number(JsonWriter *w, lua_State *L, int idx) {
     lua_Integer n = lua_tointeger(L, idx);
     char buf[32];
     int len = snprintf(buf, sizeof(buf), LUA_INTEGER_FMT, (LUAI_UACINT)n);
-    write_string_raw(w, buf, (size_t)len);
+    write_raw(w, buf, (size_t)len);
   }
   else {
     lua_Number n = lua_tonumber(L, idx);
@@ -956,7 +970,7 @@ static void write_number(JsonWriter *w, lua_State *L, int idx) {
 
     char buf[64];
     int len = snprintf(buf, sizeof(buf), "%.17g", n);
-    write_string_raw(w, buf, (size_t)len);
+    write_raw(w, buf, (size_t)len);
   }
 }
 
@@ -1163,6 +1177,17 @@ static void write_table(JsonWriter *w, int idx) {
 
   if (++w->depth > JSON_MAX_DEPTH)
     luaL_error(L, "maximum nesting depth exceeded");
+  /* The writer recurses in C, and JSON_MAX_DEPTH alone is far more than
+     the native stack can hold -- account each level against the
+     interpreter's C-call budget so deep nesting raises "C stack
+     overflow" instead of crashing the process. Balanced on the normal
+     exit below; error unwinds rebalance nCcalls like any C call. */
+  luaE_incCstack(L);
+  /* Each level also holds Lua stack slots (lua_next key/value, lua_geti
+     results, filter copies). Without this reservation, recursion past
+     the frame's preallocated slots silently corrupts adjacent stack
+     memory (globals/metatable corruption, then a crash). */
+  luaL_checkstack(L, 8, "nested JSON");
 
   mark_visited(w, idx);
 
@@ -1181,6 +1206,7 @@ static void write_table(JsonWriter *w, int idx) {
 
   unmark_visited(w, idx);
   w->depth--;
+  L->nCcalls--;
 }
 
 static void write_value(JsonWriter *w, int idx) {
@@ -1241,9 +1267,11 @@ static int json_tojson(lua_State *L) {
   lua_newtable(L);
   w.visited_idx = lua_gettop(L);
 
-  /* Create parts table to collect string pieces */
-  lua_newtable(L);
-  w.parts_idx = lua_gettop(L);
+  /* Create the output buffer, pinned on the stack */
+  w.out = (char *)lua_newuserdatauv(L, JSON_WRITER_INITCAP, 0);
+  w.out_idx = lua_gettop(L);
+  w.len = 0;
+  w.cap = JSON_WRITER_INITCAP;
 
   /* If filter is provided and top-level value needs filtering */
   if (w.filter_idx != 0) {
@@ -1265,12 +1293,7 @@ static int json_tojson(lua_State *L) {
     write_value(&w, 1);
   }
 
-  /* Concatenate all parts using table.concat */
-  lua_getglobal(L, "table");
-  lua_getfield(L, -1, "concat");
-  lua_pushvalue(L, w.parts_idx);
-  lua_call(L, 1, 1);
-
+  lua_pushlstring(L, w.out, w.len);
   return 1;
 }
 

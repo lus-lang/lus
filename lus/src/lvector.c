@@ -31,7 +31,14 @@ Vector *luaV_newvec(lua_State *L, size_t len, int fast) {
   v->len = 0;
   v->alloc = 0;
   if (len > 0) {
-    char *data = luaM_newblock(L, len);
+    char *data;
+    /* anchor v on the stack: an emergency collection triggered by the
+       data allocation would otherwise sweep the still-unreachable
+       vector, leaving 'v' dangling */
+    setvecvalue2s(L, L->top.p, v);
+    L->top.p++;
+    data = luaM_newblock(L, len);
+    L->top.p--;
     if (!fast)
       memset(data, 0, len);
     v->data = data;
@@ -58,9 +65,13 @@ Vector *luaV_clone(lua_State *L, Vector *src) {
 */
 void luaV_resize(lua_State *L, Vector *v, size_t newlen) {
   if (newlen > v->alloc) {
-    /* Need to grow allocation */
-    v->data = luaM_reallocvchar(L, v->data, v->alloc, newlen);
-    v->alloc = newlen;
+    /* Grow geometrically (1.5x) so grow-by-one resize loops are O(n)
+       amortized instead of O(n^2); large jumps get their exact size */
+    size_t newalloc = v->alloc + (v->alloc >> 1);
+    if (newalloc < newlen || newalloc < v->alloc) /* too small or wrapped? */
+      newalloc = newlen;
+    v->data = luaM_reallocvchar(L, v->data, v->alloc, newalloc);
+    v->alloc = newalloc;
   }
   if (newlen > v->len) {
     /* Zero-initialize new bytes */

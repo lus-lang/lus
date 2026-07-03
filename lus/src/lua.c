@@ -60,6 +60,8 @@ static int readonly_env = 0;               /* --readonly-env flag */
 static int gc_pause = 0;                   /* --gc-pause value (0 = default) */
 static int strip_debug = 0;                /* --strip-debug flag */
 static void mark_env_readonly(lua_State *L);
+static void create_flags_table(lua_State *L);
+static int install_preincludes(lua_State *L);
 
 static int parse_positive_int_arg(const char *s, int *result) {
   char *endptr;
@@ -83,15 +85,40 @@ static int num_includes = 0;
 static const char *preserved_args[MAX_PRESERVED_ARGS]; /* --args values */
 static int num_preserved_args = 0;
 
+/* Compile-time flags (--flag/-F). The raw CLI strings are retained so
+** worker states can rebuild the same table without touching the parent
+** state from another thread. */
+#define MAX_FLAGS 256
+static const char *cli_flags[MAX_FLAGS]; /* raw "name[=value]" strings */
+static int num_cli_flags = 0;
+
+/* Preincluded module sources (--include without --standalone). Read once
+** at startup under full CLI authority and retained in memory, so pledged
+** code and worker states never touch the filesystem to require them. */
+typedef struct PreincSource {
+  char *name; /* dotted module name (require key) */
+  char *path; /* on-disk path (for chunk names and diagnostics) */
+  char *src;  /* retained file contents */
+  size_t len; /* length of 'src' */
+} PreincSource;
+
+static PreincSource preinc_sources[LUSB_MAX_FILES];
+static int num_preinc_sources = 0;
+
 /*
 ** Worker setup callback - gives workers the same libraries as main state
 */
 static void worker_setup(lua_State *parent, lua_State *worker) {
   (void)parent;
   luaL_openselectedlibs(worker, ~0, 0); /* open all standard libraries */
+  create_flags_table(worker); /* before the environment may be frozen */
   if (readonly_env) {
     G(worker)->readonly_env = 1;
     mark_env_readonly(worker);
+  }
+  if (num_preinc_sources > 0) {
+    if (!install_preincludes(worker)) /* from retained memory: no fs access */
+      lua_warning(worker, "preinclude installation failed in worker", 0);
   }
   if (gc_pause > 0)
     lua_gc(worker, LUA_GCPARAM, LUA_GCPPAUSE, gc_pause);
@@ -163,10 +190,14 @@ static void print_usage(const char *badoption) {
       "  -Wpedantic turn on pedantic warnings\n"
       "  -P perm   grant permission (e.g., -Pfs:read, -Pnetwork)\n"
       "  --pledge perm  same as -P\n"
+      "  -F name[=value]  define readonly compile-time flag (no value =\n"
+      "                 true; numeric value = number; else string)\n"
+      "  --flag name[=value]  same as -F\n"
       "  --ast-graph file  dump AST to .dot file (does not run script)\n"
       "  --ast-json file   dump AST to JSON file (does not run script)\n"
       "  --standalone file create standalone executable from script\n"
-      "  --include path[:alias] include file/dir in standalone bundle\n"
+      "  --include path[:alias] preinclude module for require() without\n"
+      "                 load/fs pledges (with --standalone: bundle it)\n"
       "  --no-fastcall  disable fastcall optimizations\n"
       "  --readonly-env freeze _ENV after init (enables fast dispatch)\n"
       "  --gc-pause N   GC pause: heap may grow to N%% of its live size\n"
@@ -509,6 +540,15 @@ static void print_version(void) {
 ** Two levels deep to cover sub-modules (e.g. network.tcp).
 */
 static void mark_env_readonly(lua_State *L) {
+  Table *loadedtab = NULL;
+  /* The module cache (package.loaded == registry._LOADED) must stay
+  ** writable: 'require' stores every loaded module there, so freezing it
+  ** would make requiring anything new fail under --readonly-env. Its
+  ** mutability does not weaken the frozen-globals guarantee the fast
+  ** dispatch relies on (global BINDINGS stay immutable). */
+  if (lua_getfield(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE) == LUA_TTABLE)
+    loadedtab = hvalue(s2v(L->top.p - 1));
+  lua_pop(L, 1);
   lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
   Table *g = hvalue(s2v(L->top.p - 1));
   setreadonly(g);
@@ -516,12 +556,15 @@ static void mark_env_readonly(lua_State *L) {
   while (lua_next(L, -2) != 0) {
     if (lua_type(L, -1) == LUA_TTABLE) {
       Table *t = hvalue(s2v(L->top.p - 1));
-      setreadonly(t);
+      if (t != loadedtab)
+        setreadonly(t);
       /* Mark sub-tables (network.tcp, network.udp, etc.) */
       lua_pushnil(L);
       while (lua_next(L, -2) != 0) {
         if (lua_type(L, -1) == LUA_TTABLE) {
-          setreadonly(hvalue(s2v(L->top.p - 1)));
+          Table *st = hvalue(s2v(L->top.p - 1));
+          if (st != loadedtab)
+            setreadonly(st);
         }
         lua_pop(L, 1);
       }
@@ -531,6 +574,41 @@ static void mark_env_readonly(lua_State *L) {
   lua_pop(L, 1);
 }
 
+
+/*
+** Create the readonly 'flags' table from the retained --flag/-F CLI
+** strings and expose it three ways: as the global 'flags' (normal
+** runtime reads), in the registry (GC anchor that survives a rawset
+** clobber of the global), and as G(L)->flagstable (the parser's
+** compile-time lookup for branch folding). Values: no '=' -> true;
+** numeric text -> number; anything else (including empty) -> string.
+** Must run before the environment is frozen by mark_env_readonly.
+*/
+static void create_flags_table(lua_State *L) {
+  int i;
+  lua_createtable(L, 0, num_cli_flags);
+  for (i = 0; i < num_cli_flags; i++) {
+    const char *s = cli_flags[i];
+    const char *eq = strchr(s, '=');
+    if (eq == NULL) {
+      lua_pushlstring(L, s, strlen(s));
+      lua_pushboolean(L, 1);
+    }
+    else {
+      lua_pushlstring(L, s, (size_t)(eq - s));
+      if (eq[1] != '\0' && lua_stringtonumber(L, eq + 1) != 0)
+        ; /* number value pushed */
+      else
+        lua_pushstring(L, eq + 1); /* string value (possibly empty) */
+    }
+    lua_settable(L, -3); /* duplicates: last one wins */
+  }
+  setreadonly(hvalue(s2v(L->top.p - 1)));
+  G(L)->flagstable = hvalue(s2v(L->top.p - 1));
+  lua_pushvalue(L, -1);
+  lua_setfield(L, LUA_REGISTRYINDEX, "LUS_FLAGS");
+  lua_setglobal(L, "flags");
+}
 
 static void createargtable(lua_State *L, char **argv, int argc, int script) {
   int i, narg;
@@ -1052,6 +1130,139 @@ static int include_directory(const char *dirpath, const char *prefix,
 }
 
 /*
+** {======================================================
+** Preinclusion (Acquis: preinclusion)
+** =======================================================
+*/
+
+static char *dupstring(const char *s) {
+  size_t n = strlen(s) + 1;
+  char *r = (char *)malloc(n);
+  if (r != NULL)
+    memcpy(r, s, n);
+  return r;
+}
+
+/* Read one include spec ("path[:alias]") into the retained-source list */
+static int add_preinc_source(const char *spec) {
+  char msg[1024];
+  char modname[LUSB_MAX_NAME];
+  char pathbuf[4096];
+  char *src;
+  size_t len;
+  int i;
+  if (num_preinc_sources >= LUSB_MAX_FILES) {
+    l_message(progname, "too many --include files");
+    return 0;
+  }
+  /* get_file_path returns a static buffer: copy before it is reused */
+  snprintf(pathbuf, sizeof(pathbuf), "%s", get_file_path(spec));
+  get_module_name(spec, modname, sizeof(modname));
+  for (i = 0; i < num_preinc_sources; i++) {
+    if (strcmp(preinc_sources[i].name, modname) == 0) {
+      snprintf(msg, sizeof(msg), "duplicate preincluded module '%s' (%s)",
+               modname, pathbuf);
+      l_message(progname, msg);
+      return 0;
+    }
+  }
+  src = read_file_contents(pathbuf, &len);
+  if (src == NULL) {
+    snprintf(msg, sizeof(msg), "cannot read include file '%s'", pathbuf);
+    l_message(progname, msg);
+    return 0;
+  }
+  preinc_sources[num_preinc_sources].name = dupstring(modname);
+  preinc_sources[num_preinc_sources].path = dupstring(pathbuf);
+  preinc_sources[num_preinc_sources].src = src;
+  preinc_sources[num_preinc_sources].len = len;
+  if (preinc_sources[num_preinc_sources].name == NULL ||
+      preinc_sources[num_preinc_sources].path == NULL) {
+    l_message(progname, "not enough memory for preinclusion");
+    return 0;
+  }
+  num_preinc_sources++;
+  return 1;
+}
+
+/* Expand the --include list (files and directories) into retained sources */
+static int collect_preinc_sources(void) {
+  int i;
+  for (i = 0; i < num_includes; i++) {
+    const char *filepath = get_file_path(includes[i]);
+    if (is_directory(filepath)) {
+      const char *expanded[LUSB_MAX_FILES];
+      int count = 0;
+      int j, ok = 1;
+      /* directory base name becomes the module prefix (as in bundles) */
+      const char *dirbase = filepath;
+      const char *p;
+      for (p = filepath; *p; p++) {
+        if (*p == '/' || *p == '\\')
+          dirbase = p + 1;
+      }
+      if (include_directory(filepath, dirbase, expanded, &count,
+                            LUSB_MAX_FILES) < 0) {
+        char msg[1024];
+        snprintf(msg, sizeof(msg), "failed to include directory '%s'",
+                 filepath);
+        l_message(progname, msg);
+        return 0;
+      }
+      for (j = 0; j < count; j++) {
+        if (ok)
+          ok = add_preinc_source(expanded[j]);
+        free((void *)(uintptr_t)expanded[j]); /* entries are heap-allocated */
+      }
+      if (!ok)
+        return 0;
+    }
+    else {
+      if (!add_preinc_source(includes[i]))
+        return 0;
+    }
+  }
+  return 1;
+}
+
+/*
+** Install the preincluded modules into a state: registry
+** ["_PREINCLUDE"][i] = module name (the OP_REQUIRE operand space) and
+** [name] = loader closure built from the retained source. Two passes,
+** so preincluded modules can require each other through OP_REQUIRE
+** regardless of their order on the command line. The registry entry is
+** the GC anchor; G(L)->preinctab is the parser/VM's direct pointer.
+*/
+static int install_preincludes(lua_State *L) {
+  int i;
+  if (num_preinc_sources == 0)
+    return 1;
+  luaL_getsubtable(L, LUA_REGISTRYINDEX, LUS_PREINCLUDE_TABLE);
+  for (i = 0; i < num_preinc_sources; i++) { /* pass 1: declare names */
+    lua_pushstring(L, preinc_sources[i].name);
+    lua_rawseti(L, -2, (lua_Integer)i + 1);
+  }
+  G(L)->preinctab = hvalue(s2v(L->top.p - 1));
+  for (i = 0; i < num_preinc_sources; i++) { /* pass 2: parse sources */
+    char chunkname[4352];
+    snprintf(chunkname, sizeof(chunkname), "@%s", preinc_sources[i].path);
+    if (luaL_loadbuffer(L, preinc_sources[i].src, preinc_sources[i].len,
+                        chunkname) != LUA_OK) {
+      l_message(progname, lua_tostring(L, -1));
+      lua_pop(L, 2); /* error message and table */
+      G(L)->preinctab = NULL;
+      return 0;
+    }
+    lua_setfield(L, -2, preinc_sources[i].name);
+  }
+  lua_pop(L, 1); /* the registry keeps the table anchored */
+  return 1;
+}
+
+/* }====================================================== */
+
+
+/*
 ** Create standalone executable with bundled scripts
 */
 static int create_standalone(lua_State *L) {
@@ -1289,6 +1500,20 @@ static int create_standalone(lua_State *L) {
     }
   }
 
+  /* Preserve every -F/--flag value in the bundle, regardless of where it
+     appeared relative to --standalone on the command line */
+  {
+    int fi;
+    for (fi = 0; fi < num_cli_flags; fi++) {
+      if (num_preserved_args >= MAX_PRESERVED_ARGS - 1) {
+        l_message(progname, "too many preserved arguments; flags dropped");
+        break;
+      }
+      preserved_args[num_preserved_args++] = "--flag";
+      preserved_args[num_preserved_args++] = cli_flags[fi];
+    }
+  }
+
   /* Build index with preserved CLI args */
   index_data = lusB_buildindex(LUSB_VERSION, entryname, num_preserved_args,
                                (char **)preserved_args, file_count, names,
@@ -1440,6 +1665,19 @@ static int collectargs(char **argv, int *first) {
             includes[num_includes++] = argv[i];
             break;
           }
+          if (strcmp(argv[i] + 2, "flag") == 0) {
+            i++; /* skip to argument */
+            if (argv[i] == NULL || argv[i][0] == '-')
+              return has_error; /* no argument */
+            if (num_cli_flags >= MAX_FLAGS) {
+              l_message(progname, "too many --flag arguments");
+              return has_error;
+            }
+            /* bundle preservation happens in create_standalone, from
+               cli_flags[], so CLI order vs --standalone is irrelevant */
+            cli_flags[num_cli_flags++] = argv[i];
+            break;
+          }
           if (strcmp(argv[i] + 2, "no-fastcall") == 0) {
             no_fastcall = 1;
             break;
@@ -1528,6 +1766,23 @@ static int collectargs(char **argv, int *first) {
             preserved_args[num_preserved_args++] = argv[i];
         }
         break;
+      case 'F': { /* compile-time flag */
+        const char *flag_str = argv[i] + 2;
+        if (*flag_str == '\0') { /* no concatenated argument? */
+          i++;                   /* try next 'argv' */
+          if (argv[i] == NULL || argv[i][0] == '-')
+            return has_error; /* no next argument or it is another option */
+          flag_str = argv[i];
+        }
+        if (num_cli_flags >= MAX_FLAGS) {
+          l_message(progname, "too many -F arguments");
+          return has_error;
+        }
+        /* bundle preservation happens in create_standalone, from
+           cli_flags[], so CLI order vs --standalone is irrelevant */
+        cli_flags[num_cli_flags++] = flag_str;
+        break;
+      }
       default: /* invalid option */ return has_error;
     }
   }
@@ -1606,11 +1861,13 @@ static int apply_pledge_args(lua_State *L, char **argv, int n) {
     }
     else if (option == '-' && (strcmp(argv[i] + 2, "standalone") == 0 ||
                                strcmp(argv[i] + 2, "include") == 0 ||
+                               strcmp(argv[i] + 2, "flag") == 0 ||
                                strcmp(argv[i] + 2, "ast-graph") == 0 ||
                                strcmp(argv[i] + 2, "ast-json") == 0)) {
       i++;
     }
-    else if ((option == 'e' || option == 'l') && argv[i][2] == '\0') {
+    else if ((option == 'e' || option == 'l' || option == 'F') &&
+             argv[i][2] == '\0') {
       i++;
     }
   }
@@ -1635,6 +1892,7 @@ static int runargs(lua_State *L, char **argv, int n) {
         if (strcmp(argv[i] + 2, "standalone") == 0 ||
             strcmp(argv[i] + 2, "include") == 0 ||
             strcmp(argv[i] + 2, "pledge") == 0 ||
+            strcmp(argv[i] + 2, "flag") == 0 ||
             strcmp(argv[i] + 2, "ast-graph") == 0 ||
             strcmp(argv[i] + 2, "ast-json") == 0) {
           i++; /* skip the argument */
@@ -1662,6 +1920,7 @@ static int runargs(lua_State *L, char **argv, int n) {
         }
         break;
       case 'P':
+      case 'F':
         if (argv[i][2] == '\0')
           i++;
         break;
@@ -2039,6 +2298,8 @@ static int pmain(lua_State *L) {
     G(L)->no_fastcall = 1;
   lus_onworker(L, worker_setup);         /* setup workers to get same libs */
   createargtable(L, argv, argc, script); /* create table 'arg' */
+  create_flags_table(L); /* before the environment may be frozen; all
+                            later parses see G(L)->flagstable */
   if (readonly_env) {
     G(L)->readonly_env = 1;
     mark_env_readonly(L);
@@ -2047,6 +2308,15 @@ static int pmain(lua_State *L) {
     lua_gc(L, LUA_GCPARAM, LUA_GCPPAUSE, gc_pause);
   if (strip_debug)
     G(L)->stripdebug = 1;
+  /* Preinclusion: read and parse --include modules now, under full CLI
+  ** authority -- before any pledge restrictions apply and before any
+  ** chunk (LUA_INIT, -e, script) is parsed, so require() and OP_REQUIRE
+  ** emission see them. With --standalone, --include feeds the bundle
+  ** instead (legacy behavior). */
+  if (num_includes > 0 && standalone_entry == NULL) {
+    if (!collect_preinc_sources() || !install_preincludes(L))
+      return 0;
+  }
   lua_gc(L, LUA_GCRESTART); /* start GC... */
   lua_gc(L, LUA_GCGEN);     /* ...in generational mode */
   if (!apply_pledge_args(L, argv, optlim))

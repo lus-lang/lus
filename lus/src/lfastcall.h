@@ -102,6 +102,26 @@ LUAI_DDEC(const FCDef luaF_fc_defs[];)
 */
 LUAI_DDEC(lua_CFunction luaF_fc_origs[];)
 
+/*
+** Atomic access to luaF_fc_origs: worker states open their libraries on
+** pool threads, so registration can race with another thread's
+** registration or with the VM's revalidation load. The stored value for
+** a given id is always identical, but the accesses themselves must be
+** atomic to be defined behavior. Relaxed ordering suffices (the reader
+** only compares against a value it also derived itself) and compiles to
+** plain moves on all supported targets.
+*/
+#if defined(_MSC_VER) && !defined(__clang__)
+#define luaF_fc_origs_store(id, f)                                            \
+  (*(lua_CFunction volatile *)&luaF_fc_origs[id] = (f))
+#define luaF_fc_origs_load(id) (*(lua_CFunction volatile *)&luaF_fc_origs[id])
+#else
+#define luaF_fc_origs_store(id, f)                                            \
+  __atomic_store_n(&luaF_fc_origs[id], (f), __ATOMIC_RELAXED)
+#define luaF_fc_origs_load(id)                                                \
+  __atomic_load_n(&luaF_fc_origs[id], __ATOMIC_RELAXED)
+#endif
+
 LUAI_FUNC int luaV_dofastcall(lua_State *L, int fc_id, StkId ra);
 LUAI_FUNC void luaF_initfastcalls(lua_State *L);
 LUAI_FUNC void luaF_registerfastcall(lua_State *L, int id, lua_CFunction func,

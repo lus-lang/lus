@@ -34,6 +34,9 @@ typedef struct luaL_Buffer luaL_Buffer;
 /* key, in the registry, for table of preloaded loaders */
 #define LUA_PRELOAD_TABLE "_PRELOAD"
 
+/* key, in the registry, for table of preincluded modules (--include) */
+#define LUS_PREINCLUDE_TABLE "_PREINCLUDE"
+
 
 typedef struct luaL_Reg {
   const char *name;

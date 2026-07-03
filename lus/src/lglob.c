@@ -29,40 +29,33 @@
 static int glob_match_internal(const char *pattern, const char *string) {
   const char *p = pattern;
   const char *s = string;
+  const char *star_p = NULL; /* pattern position after the last '*' */
+  const char *star_s = NULL; /* string position that '*' has consumed to */
 
-  while (*p) {
+  /* Greedy iterative matcher: each '*' first matches the empty sequence;
+     on a later mismatch, back up and let the most recent '*' consume one
+     more character. O(|s|*|p|) worst case -- subjects are untrusted
+     (URLs, hostnames, paths in pledge checks), so the classic recursive
+     matcher's exponential backtracking was a DoS vector. */
+  while (*s) {
     if (*p == '*') {
-      /* Skip consecutive asterisks */
-      while (*(p + 1) == '*')
-        p++;
-      /* If * is at end, it matches everything remaining */
-      if (*(p + 1) == '\0')
-        return 1;
-      /* Try matching the rest of pattern against each suffix of string */
-      const char *next = p + 1;
-      while (*s) {
-        if (glob_match_internal(next, s))
-          return 1;
-        s++;
-      }
+      star_p = ++p;
+      star_s = s;
+    }
+    else if (*p == '?' || *p == *s) {
+      p++;
+      s++;
+    }
+    else if (star_p != NULL) {
+      p = star_p;
+      s = ++star_s;
+    }
+    else
       return 0;
-    }
-    else if (*p == '?') {
-      /* ? matches exactly one character */
-      if (*s == '\0')
-        return 0;
-      p++;
-      s++;
-    }
-    else {
-      /* Literal character match */
-      if (*p != *s)
-        return 0;
-      p++;
-      s++;
-    }
   }
-  return *s == '\0';
+  while (*p == '*')
+    p++;
+  return *p == '\0';
 }
 
 int lus_glob_match(const char *pattern, const char *string) {

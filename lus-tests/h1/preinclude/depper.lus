@@ -1,0 +1,4 @@
+-- preinclude fixture: requires another preincluded module by literal
+global require
+local hello = require("hello")
+return { doubled = hello.add(21, 21) }

@@ -102,6 +102,8 @@ static int vec_create(lua_State *L) {
   lua_Integer cap = luaL_checkinteger(L, 1);
   int fast = lua_toboolean(L, 2);
   luaL_argcheck(L, cap >= 0, 1, "capacity must be non-negative");
+  /* guard the lua_Integer -> size_t cast on 32-bit size_t */
+  luaL_argcheck(L, (lua_Unsigned)cap <= MAX_SIZE, 1, "capacity too large");
   Vector *v = luaV_newvec(L, (size_t)cap, fast);
   setvecvalue(L, s2v(L->top.p), v);
   L->top.p++;
@@ -329,6 +331,8 @@ static int vec_resize(lua_State *L) {
   Vector *v = checkvector(L, 1);
   lua_Integer newsize = luaL_checkinteger(L, 2);
   luaL_argcheck(L, newsize >= 0, 2, "size must be non-negative");
+  /* guard the lua_Integer -> size_t cast on 32-bit size_t */
+  luaL_argcheck(L, (lua_Unsigned)newsize <= MAX_SIZE, 2, "size too large");
   luaV_resize(L, v, (size_t)newsize);
   return 0;
 }

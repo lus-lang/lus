@@ -1,0 +1,94 @@
+--[[
+    Test suite for preinclusion (Acquis: preinclusion).
+
+    --include path[:alias] parses modules at interpreter startup so that
+    require() can load them without load/fs pledges. With --readonly-env,
+    literal require calls compile to OP_REQUIRE; without it, a searcher
+    resolves them. Every scenario runs as a subprocess in both modes.
+]]
+
+global assert, type, require, pledge, string, tostring, io, os, arg, print, ipairs
+
+pledge("load", "fs:read=./lus-tests/*", "exec", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("preinclude")
+
+-- locate the interpreter: most-negative arg index
+local lus_cmd
+do
+    local i = -1
+    while arg[i - 1] ~= nil do i = i - 1 end
+    lus_cmd = arg[i]
+end
+
+local FIX = "lus-tests/h1/preinclude/"
+
+local function run(cmdline)
+    local f = io.popen(cmdline .. " 2>&1")
+    local out = f:read("a")
+    local ok = f:close()
+    return (ok == true or ok == 0), out
+end
+
+-- run one driver in both modes; expect the given marker on success
+local function bothmodes(includes, driver, marker)
+    for _, mode in ipairs({"", " --readonly-env"}) do
+        local cmd = lus_cmd .. mode .. " " .. includes .. " " .. FIX .. driver
+        local ok, out = run(cmd)
+        assert(ok, driver .. " failed (mode '" .. mode .. "'): " .. out)
+        assert(out:find(marker, 1, true) ~= nil,
+            driver .. " missing marker (mode '" .. mode .. "'): " .. out)
+    end
+end
+
+tests:it("pledge-free require of a preincluded module (both modes)", function()
+    bothmodes("--include " .. FIX .. "hello.lus", "main_basic.lus", "BASIC-OK")
+end)
+
+tests:it("control: without --include the same driver fails", function()
+    local ok, out = run(lus_cmd .. " " .. FIX .. "main_basic.lus")
+    assert(not ok, "driver must fail without preinclusion: " .. out)
+    assert(out:find("not found") ~= nil or out:find("permission") ~= nil, out)
+end)
+
+tests:it("call shapes, dynamic names and package.loaded interop", function()
+    bothmodes("--include " .. FIX .. "hello.lus", "main_shapes.lus", "SHAPES-OK")
+end)
+
+tests:it("cross-module requires, directory includes and aliases", function()
+    local incs = "--include " .. FIX .. "depper.lus"
+        .. " --include " .. FIX .. "hello.lus"
+        .. " --include " .. FIX .. "mods"
+        .. " --include " .. FIX .. "hello.lus:greetings"
+    -- NOTE: hello.lus twice (plain + alias) registers two module names
+    bothmodes(incs, "main_dep.lus", "DEP-OK")
+end)
+
+tests:it("workers see preincluded modules without pledges", function()
+    bothmodes("--include " .. FIX .. "hello.lus", "main_worker.lus", "WORKER-OK")
+end)
+
+tests:it("missing include file fails startup", function()
+    local ok, out = run(lus_cmd .. " --include " .. FIX .. "nope.lus " ..
+                        FIX .. "main_basic.lus")
+    assert(not ok, "startup must fail: " .. out)
+    assert(out:find("cannot read include file") ~= nil, out)
+end)
+
+tests:it("unparsable include file fails startup naming the file", function()
+    local ok, out = run(lus_cmd .. " --include " .. FIX .. "broken.lus " ..
+                        FIX .. "main_basic.lus")
+    assert(not ok, "startup must fail: " .. out)
+    assert(out:find("broken.lus") ~= nil, "error should name the file: " .. out)
+end)
+
+tests:it("duplicate module names fail startup", function()
+    local ok, out = run(lus_cmd .. " --include " .. FIX .. "hello.lus" ..
+                        " --include " .. FIX .. "hello.lus " ..
+                        FIX .. "main_basic.lus")
+    assert(not ok, "duplicate include must fail: " .. out)
+    assert(out:find("duplicate preincluded module") ~= nil, out)
+end)
+
+tests:finish()

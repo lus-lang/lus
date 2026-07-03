@@ -1,0 +1,5 @@
+-- preinclude fixture: a simple module
+local M = {}
+M.greeting = "hello from preinclude"
+function M.add(a, b) return a + b end
+return M

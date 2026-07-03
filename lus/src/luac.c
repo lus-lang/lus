@@ -597,6 +597,14 @@ static void PrintCode(const Proto *f) {
         printf("%d %d %d", a, b, c);
         printf(COMMENT "R[%d] := slice(R[%d], R[%d], R[%d])", a, b, c, c + 1);
         break;
+      case OP_REQUIRE:
+        printf("%d %d %d", a, b, c);
+        printf(COMMENT "require preinclude[%d]", EXTRAARG);
+        if (c == 0)
+          printf(" all out");
+        else
+          printf(" %d out", c - 1);
+        break;
       case OP_FASTCALL:
         printf("%d %d %d", a, b, c);
         printf(COMMENT "fastcall id=%d", EXTRAARG);

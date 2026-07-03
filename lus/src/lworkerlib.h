@@ -96,7 +96,9 @@ struct WorkerState {
   char *script_path;        /* path to worker script */
   int nargs;                /* number of arguments (for initial varargs) */
   int refcount;             /* reference count */
+  int shutdown;             /* 1 = pool is shutting down; abort blocking waits */
   ReceiveContext *recv_ctx; /* context for multi-worker select (NULL if none) */
+  struct WorkerState *active_next; /* pool's list of currently running workers */
 };
 
 /*
@@ -109,6 +111,7 @@ struct WorkerPool {
   lus_cond_t queue_cond;      /* signal when work available */
   WorkerState *runnable_head; /* queue of runnable workers */
   WorkerState *runnable_tail;
+  WorkerState *active_head; /* workers currently running on pool threads */
   int shutdown;    /* 1 = shutting down */
   int initialized; /* 1 = pool is ready */
 };

@@ -659,4 +659,24 @@ tests:it("duplicate keys behavior", function()
     assert(type(result) == "table")
 end)
 
+-- Regression: the recursive serializer used to overflow the Lua stack
+-- (silent memory corruption) and the C stack (crash) on deep nesting.
+-- Moderate depth must round-trip; extreme depth must raise a catchable
+-- error, never crash or corrupt the interpreter.
+tests:it("deeply nested tables serialize or fail cleanly", function()
+    local t = {v = 1}
+    for i = 1, 150 do t = {v = t} end
+    local s = tojson(t)
+    local back = fromjson(s)
+    for i = 1, 150 do back = back.v end
+    assert(back.v == 1, "deep round-trip must preserve the leaf")
+
+    for i = 1, 500 do t = {v = t} end
+    local ok, err = catch tojson(t)
+    assert(ok == false, "extreme nesting must raise, not crash")
+    assert(type(err) == "string")
+    -- interpreter must be fully intact afterwards
+    assert(tojson({a = 1}) == '{"a":1}')
+end)
+
 tests:finish()

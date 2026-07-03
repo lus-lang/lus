@@ -258,4 +258,24 @@ tests:describe("edge cases", function()
     end)
 end)
 
+tests:it("interned enum values stay identical across GC cycles", function()
+    local e = enum alpha, beta, gamma end
+    local a1 = e.alpha
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(a1 == e.alpha, "value identity must survive full collections")
+    assert(tonumber(e.gamma) == 3)
+    assert(e[2] == e.beta)
+end)
+
+tests:it("repeated enum access under GC steps", function()
+    local e = enum red, green, blue end
+    local count = 0
+    for i = 1, 10000 do
+        if e.red == e[1] and e.blue == e[3] then count = count + 1 end
+        if i % 1000 == 0 then collectgarbage("step") end
+    end
+    assert(count == 10000)
+end)
+
 tests:finish()

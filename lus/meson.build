@@ -1,5 +1,5 @@
 project('lus', 'c',
-  version: '1.6.2',
+  version: '1.7.0',
   default_options: [
     'c_std=gnu11',
     'warning_level=3',
@@ -251,6 +251,8 @@ h1_tests = [
   'h1/lsp-integration',
   'h1/lsp-lint-h1',
   'h1/lsp-e2e',
+  'h1/preinclude',
+  'h1/flags',
 ]
 
 foreach t : h1_tests
@@ -261,6 +263,14 @@ foreach t : h1_tests
       workdir: meson.project_source_root() / '..',
       suite: 'h1',
       timeout: 120,
+    )
+  elif t == 'h1/flags'
+    # Flags feature test: needs --flag/-F arguments on the command line
+    test('h1/' + fs.name(t), lus_exe,
+      args: ['-Fdebug', '-Fversion=1.5', '-Fcount=3', '-Fname=alpha',
+             '--flag', 'empty=', 'lus-tests' / t + '.lus'],
+      workdir: meson.project_source_root() / '..',
+      suite: 'h1',
     )
   else
     test('h1/' + fs.name(t), lus_exe,

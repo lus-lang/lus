@@ -408,6 +408,8 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   g->readonly_env = 0;
   g->pedantic = 0;
   g->stripdebug = 0;
+  g->flagstable = NULL;
+  g->preinctab = NULL;
   g->iter_next = NULL;
   g->iter_ipairsaux = NULL;
   for (i = 0; i < LUA_NUMTYPES; i++)

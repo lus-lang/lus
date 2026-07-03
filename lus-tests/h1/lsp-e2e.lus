@@ -637,7 +637,7 @@ end)
 
 tests:it("edit after multi-byte char applies correctly", function()
   local uri = "file:///test/e2e-utf8-2.lus"
-  -- "local x = 'é'\nlocal y = 1" — 'é' is 2 bytes but 1 UTF-16 code unit
+  -- "local x = 'é'\nlocal y = 1": 'é' is 2 bytes but 1 UTF-16 code unit
   open_doc(uri, "local x = '\xC3\xA9'\nlocal y = 1")
   -- Edit line 1: replace "1" with "2" (position should be correct despite
   -- line 0 having multi-byte chars)
@@ -653,7 +653,7 @@ tests:it("edit on same line after multi-byte string", function()
   -- Bytes:  l(1)o(2)c(3)a(4)l(5) (6)x(7) (8)=(9) (10)'(11)c(12)a(13)f(14)é(15-16)'(17)
   -- UTF-16: l(0)o(1)c(2)a(3)l(4) (5)x(6) (7)=(8) (9)'(10)c(11)a(12)f(13)é(14)'(15)
   open_doc(uri, "local x = 'caf\xC3\xA9'\nlocal y = 1")
-  -- Edit "1" on line 1 — line 1 is ASCII-only so no encoding issue
+  -- Edit "1" on line 1; line 1 is ASCII-only so no encoding issue
   local diags = edit_doc(uri, make_range(1, 10, 1, 11), "42")
   local errors = get_errors(diags)
   tests:assert_equal(#errors, 0, "edit after line with multi-byte string should work")

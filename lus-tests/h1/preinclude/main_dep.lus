@@ -1,0 +1,8 @@
+global require, assert, print
+local d = require("depper")
+assert(d.doubled == 42, "cross-module preinclude require")
+local u = require("mods.util.math")
+assert(u.square(7) == 49, "directory-included module")
+local ali = require("greetings")
+assert(ali.greeting == "hello from preinclude", "aliased include")
+print("DEP-OK")

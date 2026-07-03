@@ -2,8 +2,8 @@
   Operand variable-name parity (`luaG_opinterror` / `luaG_concaterror` /
   `luaG_tointerror`). When an arithmetic, bitwise, concat, length, or unary
   operator faults on a value, the C runtime names the offending operand's
-  source variable — `(local 'x')`, `(field 'k')`, `(global 'g')`,
-  `(upvalue 'x')` — in the error message. These tests assert the Rust runtime
+  source variable, such as `(local 'x')`, `(field 'k')`, `(global 'g')`, or
+  `(upvalue 'x')`, in the error message. These tests assert the Rust runtime
   produces the identical suffix; they pass on both the C and Rust binaries.
 
   `catch` yields the error with a traceback appended, so the assertions match

@@ -90,7 +90,7 @@ static TString *fc_newfix(lua_State *L, const char *str) {
   TString *s = luaS_new(L, str);
   if (g->allgc == obj2gco(s))
     luaC_fix(L, obj2gco(s));
-  /* else: string already interned/fixed (e.g. reserved word) — skip */
+  /* else: string already interned/fixed (e.g. reserved word), skip */
   return s;
 }
 
@@ -1065,8 +1065,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       if (!ttisinteger(arg))
         return 0;
       lua_Integer cap = ivalue(arg);
-      if (cap < 0)
-        return 0;
+      if (cap < 0 || (lua_Unsigned)cap > MAX_SIZE) /* cast must not truncate */
+        return 0; /* fall back to vector.create for the error message */
       Vector *v = luaV_newvec(L, (size_t)cap, 0);
       setvecvalue2s(L, ra, v);
       break;
@@ -1091,8 +1091,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       if (!ttisvector(arg1) || !ttisinteger(arg2))
         return 0;
       lua_Integer newsize = ivalue(arg2);
-      if (newsize < 0)
-        return 0;
+      if (newsize < 0 || (lua_Unsigned)newsize > MAX_SIZE)
+        return 0; /* fall back to vector.resize for the error message */
       luaV_resize(L, vecvalue(arg1), (size_t)newsize);
       setnilvalue2s(ra);
       break;
@@ -1369,7 +1369,7 @@ void luaF_registerfastcall(lua_State *L, int id, lua_CFunction func,
   (void)nargs; /* recorded in luaF_fc_defs; kept for the assertion */
   /* The original function address is the same in every state, so it
   ** is stored process-wide (write-once, idempotent across states). */
-  luaF_fc_origs[id] = func;
+  luaF_fc_origs_store(id, func);
   G(L)->fc_ready[id] = 1;
 }
 

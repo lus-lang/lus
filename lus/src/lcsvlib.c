@@ -13,6 +13,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "llimits.h"
 #include "lualib.h"
 
 
@@ -208,40 +209,83 @@ static int needs_quoting(const char *s, size_t len, char delim) {
 
 
 /*
-** Push a field string onto the stack, quoting if necessary.
-** Uses luaL_Buffer locally (no interleaved stack operations).
+** Writer output buffer: contiguous bytes backed by a userdata pinned at
+** a fixed stack slot, so an error while iterating rows (bad row type,
+** __tostring raising, OOM) unwinds without leaking. A luaL_Buffer cannot
+** be used across the row loop: its operations require the internal box
+** to sit at the stack top, and the loop keeps rows/fields pushed while
+** writing. Replaces the old parts-table (one Lua string per field,
+** delimiter and newline, plus a luaL_len per piece).
 */
-static void push_field(lua_State *L, const char *s, size_t len, char delim) {
-  if (needs_quoting(s, len, delim)) {
-    luaL_Buffer b;
-    luaL_buffinit(L, &b);
-    luaL_addchar(&b, '"');
-    for (size_t i = 0; i < len; i++) {
-      if (s[i] == '"')
-        luaL_addchar(&b, '"'); /* double the quote */
-      luaL_addchar(&b, s[i]);
+typedef struct {
+  lua_State *L;
+  char *out;   /* output bytes (owned by userdata at out_idx) */
+  size_t len;  /* bytes written */
+  size_t cap;  /* capacity of 'out' */
+  int out_idx; /* fixed stack index of the buffer userdata */
+} CsvWriter;
+
+#define CSV_WRITER_INITCAP 1024
+
+static void csvw_grow(CsvWriter *w, size_t need) {
+  lua_State *L = w->L;
+  size_t newcap = w->cap;
+  if (need > MAX_SIZE - w->len)
+    luaL_error(L, "CSV output too large");
+  while (newcap - w->len < need) {
+    if (newcap > MAX_SIZE / 2) {
+      newcap = w->len + need;
+      break;
     }
-    luaL_addchar(&b, '"');
-    luaL_pushresult(&b);
+    newcap *= 2;
   }
-  else {
-    lua_pushlstring(L, s, len);
-  }
+  char *nb = (char *)lua_newuserdatauv(L, newcap, 0);
+  memcpy(nb, w->out, w->len);
+  lua_replace(L, w->out_idx); /* old buffer becomes garbage */
+  w->out = nb;
+  w->cap = newcap;
 }
 
+static void csvw_raw(CsvWriter *w, const char *s, size_t len) {
+  if (len > w->cap - w->len)
+    csvw_grow(w, len);
+  memcpy(w->out + w->len, s, len);
+  w->len += len;
+}
+
+static void csvw_char(CsvWriter *w, char c) {
+  if (w->len >= w->cap)
+    csvw_grow(w, 1);
+  w->out[w->len++] = c;
+}
 
 /*
-** Append a string to the parts table.
+** Write a field, quoting if necessary.
 */
-static void parts_add(lua_State *L, int parts_idx) {
-  lua_rawseti(L, parts_idx, (lua_Integer)luaL_len(L, parts_idx) + 1);
+static void write_field(CsvWriter *w, const char *s, size_t len, char delim) {
+  if (needs_quoting(s, len, delim)) {
+    size_t i, start = 0;
+    csvw_char(w, '"');
+    for (i = 0; i < len; i++) {
+      if (s[i] == '"') { /* double the quote */
+        csvw_raw(w, s + start, i - start + 1);
+        start = i + 1;
+        csvw_char(w, '"');
+      }
+    }
+    if (i > start)
+      csvw_raw(w, s + start, i - start);
+    csvw_char(w, '"');
+  }
+  else {
+    csvw_raw(w, s, len);
+  }
 }
 
 
 static int csv_tocsv(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   char delim = ',';
-  char delim_str[2] = {',', '\0'};
 
   if (!lua_isnoneornil(L, 2)) {
     size_t dlen;
@@ -249,12 +293,15 @@ static int csv_tocsv(lua_State *L) {
     if (dlen != 1)
       return luaL_argerror(L, 2, "delimiter must be a single character");
     delim = ds[0];
-    delim_str[0] = delim;
   }
 
-  /* parts table to collect string pieces */
-  lua_newtable(L);
-  int parts_idx = lua_gettop(L);
+  /* output buffer, pinned on the stack */
+  CsvWriter w;
+  w.L = L;
+  w.out = (char *)lua_newuserdatauv(L, CSV_WRITER_INITCAP, 0);
+  w.out_idx = lua_gettop(L);
+  w.len = 0;
+  w.cap = CSV_WRITER_INITCAP;
 
   lua_Integer nrows = luaL_len(L, 1);
   for (lua_Integer i = 1; i <= nrows; i++) {
@@ -265,10 +312,8 @@ static int csv_tocsv(lua_State *L) {
     }
     lua_Integer ncols = luaL_len(L, row_idx);
     for (lua_Integer j = 1; j <= ncols; j++) {
-      if (j > 1) {
-        lua_pushlstring(L, delim_str, 1);
-        parts_add(L, parts_idx);
-      }
+      if (j > 1)
+        csvw_char(&w, delim);
       lua_geti(L, row_idx, j);
       if (lua_isnil(L, -1)) {
         /* nil → empty field */
@@ -276,25 +321,16 @@ static int csv_tocsv(lua_State *L) {
       }
       else {
         size_t flen;
-        luaL_tolstring(L, -1, &flen); /* stack: orig strep */
-        lua_remove(L, -2);            /* stack: strep (remove orig) */
-        /* strep is now on top; get pointer from it */
-        const char *field = lua_tolstring(L, -1, &flen);
-        push_field(L, field, flen, delim); /* stack: strep quoted */
-        lua_remove(L, -2);                 /* stack: quoted */
-        parts_add(L, parts_idx);
+        const char *field = luaL_tolstring(L, -1, &flen); /* stack: orig strep */
+        write_field(&w, field, flen, delim); /* 'strep' stays anchored */
+        lua_pop(L, 2); /* pop strep and original value */
       }
     }
-    lua_pushliteral(L, "\n");
-    parts_add(L, parts_idx);
+    csvw_char(&w, '\n');
     lua_pop(L, 1); /* pop row table */
   }
 
-  /* concatenate all parts */
-  lua_getglobal(L, "table");
-  lua_getfield(L, -1, "concat");
-  lua_pushvalue(L, parts_idx);
-  lua_call(L, 1, 1);
+  lua_pushlstring(L, w.out, w.len);
   return 1;
 }
 

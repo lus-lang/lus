@@ -141,6 +141,7 @@ LUAI_FUNC lua_Number luaV_modf(lua_State *L, lua_Number x, lua_Number y);
 LUAI_FUNC lua_Integer luaV_shiftl(lua_Integer x, lua_Integer y);
 LUAI_FUNC void luaV_objlen(lua_State *L, StkId ra, const TValue *rb);
 LUAI_FUNC void luaV_tostring(lua_State *L, StkId ra, const TValue *rb);
+LUAI_FUNC void luaV_require(lua_State *L, StkId ra, int idx, int nresults);
 LUAI_FUNC void luaV_slice(lua_State *L, StkId ra, const TValue *obj,
                           const TValue *vstart, const TValue *vend);
 

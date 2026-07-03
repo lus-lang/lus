@@ -1054,11 +1054,19 @@ LUA_API int lua_pcallk(lua_State *L, int nargs, int nresults, int errfunc,
     ci->u2.funcidx = cast_int(savestack(L, c.func));
     ci->u.c.old_errfunc = L->errfunc;
     L->errfunc = func;
+    /* Suspend Lua catch blocks like luaD_pcall does: luaD_throw prefers
+    ** L->activeCatch, so an enclosing 'catch' would otherwise intercept
+    ** errors that belong to this protected call. Saved in the CallInfo
+    ** because on errors or yields this C frame is abandoned and the
+    ** restore happens in 'finishpcallk'. */
+    ci->u.c.old_activecatch = L->activeCatch;
+    L->activeCatch = NULL;
     setoah(ci, L->allowhook);       /* save value of 'allowhook' */
     ci->callstatus |= CIST_YPCALL;  /* function can do error recovery */
     luaD_call(L, c.func, nresults); /* do the call */
     ci->callstatus &= ~CIST_YPCALL;
     L->errfunc = ci->u.c.old_errfunc;
+    L->activeCatch = ci->u.c.old_activecatch;
     status = LUA_OK; /* if it is here, there were no errors */
   }
   adjustresults(L, nresults);

@@ -55,34 +55,27 @@ static void archive_getinput(lua_State *L, int idx, const char **data,
 
 
 /*
-** Push the result as the same type as the input.
-** If is_vec, creates a new vector and copies data into it.
-** Otherwise pushes a string.
+** Push the accumulated buffer content ('len' pending uncommitted bytes)
+** with the same type as the input. Vector results copy straight from the
+** buffer's storage into a new vector and then close the buffer's box:
+** the old path interned the whole output as a temporary Lua string
+** first, costing an extra full-size copy in peak memory (significant for
+** large decompressed outputs).
 */
-static void archive_pushresult(lua_State *L, const char *data, size_t len,
-                               int is_vec) {
-  if (is_vec) {
-    Vector *v = luaV_newvec(L, len, 1);
-    if (len > 0)
-      memcpy(v->data, data, len);
-    setvecvalue(L, s2v(L->top.p), v);
-    L->top.p++;
-  }
-  else {
-    lua_pushlstring(L, data, len);
-  }
-}
-
-
 static void archive_pushbufferresult(lua_State *L, luaL_Buffer *buf, size_t len,
                                      int is_vec) {
   if (is_vec) {
-    size_t slen;
-    const char *sdata;
-    luaL_pushresultsize(buf, len);
-    sdata = lua_tolstring(L, -1, &slen);
-    archive_pushresult(L, sdata, slen, 1);
-    lua_remove(L, -2);
+    luaL_addsize(buf, len);
+    size_t total = luaL_bufflen(buf);
+    int spilled = (luaL_buffaddr(buf) != buf->init.b);
+    Vector *v = luaV_newvec(L, total, 1);
+    if (total > 0) /* no allocation between the vector's creation and here */
+      memcpy(v->data, luaL_buffaddr(buf), total);
+    setvecvalue(L, s2v(L->top.p), v);
+    L->top.p++;
+    if (spilled) /* buffer spilled to a to-be-closed box on the stack */
+      lua_closeslot(L, lua_absindex(L, -2));
+    lua_remove(L, -2); /* remove the closed box (nil) or the placeholder */
   }
   else {
     luaL_pushresultsize(buf, len);
@@ -180,7 +173,10 @@ static int archive_gzip_decompress(lua_State *L) {
   strm.avail_in = (uInt)input_len;
 
   do {
-    size_t chunk = (input_len > 0) ? input_len * 4 : 256;
+    /* guard the multiply: input_len * 4 can wrap on 32-bit size_t */
+    size_t chunk = (input_len > 0 && input_len <= MAX_SIZET / 4)
+                       ? input_len * 4
+                       : (input_len > 0 ? MAX_SIZET : 256);
     if (chunk < 256)
       chunk = 256;
     if (chunk > UINT_MAX)
@@ -209,16 +205,7 @@ static int archive_gzip_decompress(lua_State *L) {
 
   inflateEnd(&strm);
 
-  if (is_vec) {
-    luaL_pushresult(&buf);
-    size_t slen;
-    const char *sdata = lua_tolstring(L, -1, &slen);
-    archive_pushresult(L, sdata, slen, 1);
-    lua_remove(L, -2); /* remove temporary string */
-  }
-  else {
-    luaL_pushresult(&buf);
-  }
+  archive_pushbufferresult(L, &buf, 0, is_vec);
   return 1;
 }
 
@@ -292,7 +279,10 @@ static int archive_deflate_decompress(lua_State *L) {
   strm.avail_in = (uInt)input_len;
 
   do {
-    size_t chunk = (input_len > 0) ? input_len * 4 : 256;
+    /* guard the multiply: input_len * 4 can wrap on 32-bit size_t */
+    size_t chunk = (input_len > 0 && input_len <= MAX_SIZET / 4)
+                       ? input_len * 4
+                       : (input_len > 0 ? MAX_SIZET : 256);
     if (chunk < 256)
       chunk = 256;
     if (chunk > UINT_MAX)
@@ -321,16 +311,7 @@ static int archive_deflate_decompress(lua_State *L) {
 
   inflateEnd(&strm);
 
-  if (is_vec) {
-    luaL_pushresult(&buf);
-    size_t slen;
-    const char *sdata = lua_tolstring(L, -1, &slen);
-    archive_pushresult(L, sdata, slen, 1);
-    lua_remove(L, -2);
-  }
-  else {
-    luaL_pushresult(&buf);
-  }
+  archive_pushbufferresult(L, &buf, 0, is_vec);
   return 1;
 }
 
@@ -424,16 +405,7 @@ static int archive_zstd_decompress(lua_State *L) {
     if (ret != 0)
       return luaL_error(L, "zstd decompress: incomplete data");
 
-    if (is_vec) {
-      luaL_pushresult(&buf);
-      size_t slen;
-      const char *sdata = lua_tolstring(L, -1, &slen);
-      archive_pushresult(L, sdata, slen, 1);
-      lua_remove(L, -2);
-    }
-    else {
-      luaL_pushresult(&buf);
-    }
+    archive_pushbufferresult(L, &buf, 0, is_vec);
   }
   return 1;
 }
@@ -483,8 +455,11 @@ static int archive_brotli_decompress(lua_State *L) {
 
   size_t maxout = archive_maxout(L, 2);
 
-  /* Start with input_len*4 or minimum 256 */
-  size_t out_cap = (input_len > 0) ? input_len * 4 : 256;
+  /* Start with input_len*4 or minimum 256 (guarding the multiply,
+     which can wrap on 32-bit size_t) */
+  size_t out_cap = (input_len > 0 && input_len <= MAX_SIZET / 4)
+                       ? input_len * 4
+                       : (input_len > 0 ? MAX_SIZET : 256);
   if (out_cap < 256)
     out_cap = 256;
 
@@ -521,16 +496,7 @@ static int archive_brotli_decompress(lua_State *L) {
   if (result != BROTLI_DECODER_RESULT_SUCCESS)
     return luaL_error(L, "brotli decompress: incomplete data");
 
-  if (is_vec) {
-    luaL_pushresult(&buf);
-    size_t slen;
-    const char *sdata = lua_tolstring(L, -1, &slen);
-    archive_pushresult(L, sdata, slen, 1);
-    lua_remove(L, -2);
-  }
-  else {
-    luaL_pushresult(&buf);
-  }
+  archive_pushbufferresult(L, &buf, 0, is_vec);
   return 1;
 }
 
@@ -585,7 +551,10 @@ static int archive_lz4_decompress_impl(lua_State *L) {
   size_t ret = 1;
 
   while (src_remaining > 0) {
-    size_t chunk = (input_len > 0) ? input_len * 4 : 256;
+    /* guard the multiply: input_len * 4 can wrap on 32-bit size_t */
+    size_t chunk = (input_len > 0 && input_len <= MAX_SIZET / 4)
+                       ? input_len * 4
+                       : (input_len > 0 ? MAX_SIZET : 256);
     if (chunk < 256)
       chunk = 256;
     char *out = luaL_prepbuffsize(&buf, chunk);
@@ -615,16 +584,7 @@ static int archive_lz4_decompress_impl(lua_State *L) {
   if (ret != 0)
     return luaL_error(L, "lz4 decompress: incomplete data");
 
-  if (is_vec) {
-    luaL_pushresult(&buf);
-    size_t slen;
-    const char *sdata = lua_tolstring(L, -1, &slen);
-    archive_pushresult(L, sdata, slen, 1);
-    lua_remove(L, -2);
-  }
-  else {
-    luaL_pushresult(&buf);
-  }
+  archive_pushbufferresult(L, &buf, 0, is_vec);
   return 1;
 }
 

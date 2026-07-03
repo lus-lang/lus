@@ -22,6 +22,11 @@
 #define LUA_ENV "_ENV"
 #endif
 
+/* reserved pseudo-global for CLI compile-time flags */
+#if !defined(LUA_FLAGSNAME)
+#define LUA_FLAGSNAME "flags"
+#endif
+
 /*
  * WARNING: if you change the order of this enumeration,
  * grep "ORDER RESERVED"
@@ -113,6 +118,7 @@ typedef struct LexState {
   TString *envn;       /* environment variable name */
   TString *brkn;       /* "break" name (used as a label) */
   TString *glbn;       /* "global" name (when not a reserved word) */
+  TString *flagsn;     /* "flags" name (reserved pseudo-global) */
   struct LusAst *ast;  /* optional AST being built (NULL if not building) */
   lu_byte strquote;    /* quote character of last string token (' or ") */
   /* string interpolation state */

@@ -10,7 +10,7 @@
     Some tests verify permission denials which require specific setup.
 ]]
 
-global require, assert, type, pledge, io, load, error, tostring, string, fs, network
+global require, assert, type, pledge, io, load, error, tostring, string, fs, network, os
 
 -- Start with just load permission (don't seal yet so we can test pledge behavior)
 pledge("load")
@@ -232,6 +232,38 @@ tests:it("udp setsockname honors value-scoped pledge", function()
     sock:close()
     tests:assert_true(not ok)
     tests:assert_true(tostring(err):find("permission") ~= nil)
+end)
+
+tests:describe("glob matching (snow leopard regressions)")
+
+-- Regression: the recursive glob matcher backtracked exponentially on
+-- wildcard-heavy patterns, so a pledge check against a long non-matching
+-- subject could take effectively forever (a DoS via any attacker-influenced
+-- path or URL). The rewritten matcher is linear; these must return quickly.
+tests:it("wildcard-heavy fs pattern is checked in linear time", function()
+    -- NOTE: on POSIX the fs path check delegates to fnmatch (linear in
+    -- glibc/musl), so this guards the overall pledge-check path; the
+    -- rewritten internal matcher (used for URL checks everywhere and for
+    -- path checks on Windows) is guarded by the URL test below.
+    -- subject must live outside ./lus-tests/* (granted at the top of this
+    -- file), so the only candidate pattern is the wildcard-heavy one
+    pledge("fs:read=./a*a*a*a*a*a*a*a*a*b")
+    local subject = "./" .. string.rep("a", 200)
+    local t0 = os.clock()
+    local ok = catch io.open(subject, "r")
+    local elapsed = os.clock() - t0
+    tests:assert_true(not ok, "non-matching path must be denied")
+    tests:assert_true(elapsed < 2.0, "fs glob check must not backtrack exponentially")
+end)
+
+tests:it("wildcard-heavy url pattern is checked in linear time", function()
+    pledge("network:http=http://a*a*a*a*a*a*a*b/*")
+    local url = "http://" .. string.rep("a", 200) .. "/"
+    local t0 = os.clock()
+    local ok = catch network.fetch(url)
+    local elapsed = os.clock() - t0
+    tests:assert_true(not ok, "non-matching url must be denied")
+    tests:assert_true(elapsed < 2.0, "url glob check must not backtrack exponentially")
 end)
 
 -- Now seal to verify sealed state behavior

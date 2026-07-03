@@ -930,6 +930,8 @@ typedef struct EnumRoot {
   CommonHeader;
   int size;          /* number of enum values */
   GCObject *gclist;  /* for GC traversal */
+  struct Enum **cache; /* interned values, one per index (lazily created);
+                          traverseenumroot keeps them alive with the root */
   TString *names[1]; /* flexible array: names[0..size-1] */
 } EnumRoot;
 

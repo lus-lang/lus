@@ -1,0 +1,11 @@
+-- catchloadpeek.lus - retries worker.peek through BOTH a catch block and
+-- load()'s internal C protection. The pool-shutdown unwind must bypass
+-- both (luaD_throwbaselevel) or this loop spins and hangs interpreter
+-- exit (regression test for the review finding on luaE_clearcatch).
+global worker, load
+
+while true do
+    catch (function()
+        local f = load(function() return worker.peek() end)
+    end)()
+end

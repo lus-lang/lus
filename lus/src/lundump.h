@@ -26,7 +26,9 @@
 */
 #define LUAC_VERSION (LUA_VERSION_MAJOR_N * 16 + LUA_VERSION_MINOR_N)
 
-#define LUAC_FORMAT 0 /* this is the official format */
+/* Format 1: OP_REQUIRE inserted before OP_EXTRAARG (1.7.0) renumbered
+** the opcode set; chunks dumped by older versions must be rejected. */
+#define LUAC_FORMAT 1 /* this is the official format */
 
 
 /* load one chunk; from lundump.c */

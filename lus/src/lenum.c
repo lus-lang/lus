@@ -13,6 +13,7 @@
 
 #include "lua.h"
 
+#include "ldebug.h"
 #include "lenum.h"
 #include "lgc.h"
 #include "lmem.h"
@@ -26,11 +27,20 @@
 ** The names array is uninitialized and should be filled by the caller.
 */
 EnumRoot *luaE_newroot(lua_State *L, int size) {
-  size_t sz = sizeenumroot(size);
+  size_t sz;
+  if (size < 1) /* real check: api_check vanishes in release builds, and a
+                   zero-size root would make luaE_new's value cache a
+                   zero-length (NULL) vector that luaE_new writes into */
+    luaG_runerror(L, "enum must have at least one member");
+  if ((size_t)size >
+      (MAX_SIZE - offsetof(EnumRoot, names)) / sizeof(TString *))
+    luaM_toobig(L); /* sizeenumroot would overflow */
+  sz = sizeenumroot(size);
   GCObject *o = luaC_newobjdt(L, LUA_VENUMROOT, sz, 0);
   EnumRoot *root = gco2enumroot(o);
   root->size = size;
   root->gclist = NULL;
+  root->cache = NULL; /* created lazily on first value access */
   /* Initialize names to NULL (caller will fill them in) */
   for (int i = 0; i < size; i++)
     root->names[i] = NULL;
@@ -39,13 +49,32 @@ EnumRoot *luaE_newroot(lua_State *L, int size) {
 
 
 /*
-** Create a new Enum value with the given root and 1-based index.
+** Get the Enum value for (root, idx), creating and interning it on first
+** access. Enums are immutable and compare by (root, idx), so one object
+** per index is enough; interning removes an allocation from every enum
+** access in the VM. Callers must have 'root' reachable by the GC (all do:
+** it is anchored on the stack or referenced by the value being indexed),
+** so the allocations below cannot collect it.
 */
 Enum *luaE_new(lua_State *L, EnumRoot *root, int idx) {
-  GCObject *o = luaC_newobj(L, LUA_VENUM, sizeenum);
-  Enum *e = gco2enum(o);
+  GCObject *o;
+  Enum *e;
+  if (root->cache == NULL) {
+    int i;
+    Enum **cache = luaM_newvector(L, root->size, Enum *);
+    for (i = 0; i < root->size; i++)
+      cache[i] = NULL;
+    root->cache = cache;
+  }
+  else if ((e = root->cache[idx - 1]) != NULL)
+    return e; /* already interned */
+  o = luaC_newobj(L, LUA_VENUM, sizeenum);
+  e = gco2enum(o);
   e->root = root;
   e->idx = idx;
+  root->cache[idx - 1] = e;
+  /* 'root' may be black and 'e' is white: keep the invariant */
+  luaC_objbarrier(L, obj2gco(root), o);
   return e;
 }
 
@@ -91,6 +120,8 @@ Enum *luaE_getbyidx(lua_State *L, EnumRoot *root, int idx) {
 ** Free an EnumRoot.
 */
 void luaE_freeroot(lua_State *L, EnumRoot *root) {
+  if (root->cache != NULL)
+    luaM_freearray(L, root->cache, root->size);
   luaM_freemem(L, root, sizeenumroot(root->size));
 }
 
@@ -107,5 +138,8 @@ void luaE_free(lua_State *L, Enum *e) {
 ** Get the size (in bytes) of an EnumRoot.
 */
 lu_mem luaE_rootsize(EnumRoot *root) {
-  return cast(lu_mem, sizeenumroot(root->size));
+  lu_mem sz = cast(lu_mem, sizeenumroot(root->size));
+  if (root->cache != NULL) /* must match what luaE_freeroot releases */
+    sz += cast(lu_mem, root->size * sizeof(Enum *));
+  return sz;
 }

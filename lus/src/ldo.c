@@ -765,6 +765,9 @@ static TStatus finishpcallk(lua_State *L, CallInfo *ci) {
   }
   ci->callstatus &= ~CIST_YPCALL;
   L->errfunc = ci->u.c.old_errfunc;
+  /* restore the Lua catch chain suspended by 'lua_pcallk' (the C frame
+     that saved it was abandoned by the error or yield) */
+  L->activeCatch = ci->u.c.old_activecatch;
   /* if it is here, there were errors or yields; unlike 'lua_pcallk',
      do not change status */
   return status;
@@ -1051,10 +1054,20 @@ TStatus luaD_pcall(lua_State *L, Pfunc func, void *u, ptrdiff_t old_top,
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
   ptrdiff_t old_errfunc = L->errfunc;
+  /* Disable Lua catch blocks for the duration of the protected call:
+  ** luaD_throw prefers L->activeCatch over the C-level protection, so an
+  ** enclosing 'catch' statement would otherwise intercept errors that
+  ** belong to this pcall (breaking pcall/load/debug.parse semantics
+  ** inside catch blocks and leaking their internal resources). Every
+  ** other CPROTECT site (resume, tbc close, catchcall) already does
+  ** this. */
+  CatchInfo *oldActiveCatch = L->activeCatch;
+  L->activeCatch = NULL;
   L->errfunc = ef;
   CPROTECT_BEGIN(L, &cinfo)
   func(L, u);
   CPROTECT_END(L, &cinfo);
+  L->activeCatch = oldActiveCatch; /* restore Lua catch blocks */
   status = cinfo.status;
   if (l_unlikely(status != LUA_OK)) { /* an error occurred? */
     L->ci = old_ci;

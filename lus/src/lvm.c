@@ -1032,6 +1032,100 @@ void luaV_slice(lua_State *L, StkId ra, const TValue *obj, const TValue *vstart,
 
 
 /*
+** Execute a preincluded 'require' (OP_REQUIRE). 'idx' is the 1-based
+** index into G(L)->preinctab's array part. The compiler emits this
+** opcode only for the strict 'require("literal")' pattern under a
+** readonly environment and strips the call entirely, so neither the
+** require function nor the literal exists at runtime: the operand is
+** authoritative. Results are written to R[A]... per 'nresults'
+** (LUA_MULTRET sets L->top). A chunk whose operand cannot be resolved
+** in this state (foreign or stale bytecode) raises an error.
+** Mirrors ll_require: the registry _LOADED table is the single cache
+** (interop with plain require), fresh loads yield the module value and
+** ":preinclude:", cached hits yield only the value, and a module that
+** returns nil is cached as 'true' unless it registered itself.
+*/
+void luaV_require(lua_State *L, StkId ra, int idx, int nresults) {
+  global_State *g = G(L);
+  Table *pt = g->preinctab;
+  Table *loadedtab;
+  TValue namev, loadedv, cached, closure;
+  TValue results[2];
+  TString *name;
+  int nret;
+  int wanted = (nresults == LUA_MULTRET) ? 2 : nresults;
+  int j;
+  if (pt == NULL || tagisempty(luaH_getint(pt, idx, &namev)) ||
+      !ttisstring(&namev))
+    luaG_runerror(L, "preincluded module #%d is not available in this state",
+                  idx);
+  name = tsvalue(&namev);
+  { /* locate registry._LOADED (LUA_LOADED_TABLE; lauxlib-owned name,
+       so the VM spells it out) */
+    TString *lk = luaS_newliteral(L, "_LOADED");
+    Table *reg = hvalue(&g->l_registry);
+    if (tagisempty(luaH_getstr(reg, lk, &loadedv)) || !ttistable(&loadedv))
+      luaG_runerror(L, "preincluded require: package library not opened");
+    loadedtab = hvalue(&loadedv);
+  }
+  if (!tagisempty(luaH_getstr(loadedtab, name, &cached)) &&
+      !l_isfalse(&cached)) {
+    setobj(L, &results[0], &cached); /* cached: one result, like require */
+    nret = 1;
+  }
+  else {
+    ptrdiff_t rasave = savestack(L, ra);
+    StkId func;
+    if (tagisempty(luaH_getstr(pt, name, &closure)) || !ttisfunction(&closure))
+      luaG_runerror(L, "preincluded module '%s' has no loader in this state",
+                    getstr(name));
+    /* establish the call top: R[A] and everything above it is dead for
+       this frame (the compiler stripped the whole call expression) */
+    L->top.p = ra;
+    luaD_checkstack(L, 4);
+    func = L->top.p;
+    setobj2s(L, func, &closure); /* anchored: preinctab keeps it alive */
+    setsvalue2s(L, func + 1, name);
+    L->top.p = func + 2; /* anchor both before allocating the literal */
+    setsvalue2s(L, func + 2, luaS_newliteral(L, ":preinclude:"));
+    L->top.p = func + 3;
+    luaD_call(L, func, 1); /* run the module: loader(name, ":preinclude:") */
+    ra = restorestack(L, rasave);
+    if (!ttisnil(s2v(L->top.p - 1))) {
+      setobj(L, &results[0], s2v(L->top.p - 1));
+    }
+    else { /* module returned nothing: it may have registered itself */
+      if (tagisempty(luaH_getstr(loadedtab, name, &cached)) ||
+          ttisnil(&cached))
+        setbtvalue(&results[0]); /* cache and return 'true' */
+      else
+        setobj(L, &results[0], &cached);
+    }
+    { /* _LOADED[name] = result, while the returned value is still
+         stack-anchored (luaH_set may allocate on rehash) */
+      TValue key;
+      setsvalue(L, &key, name);
+      luaH_set(L, loadedtab, &key, &results[0]);
+      luaC_barrierback(L, obj2gco(loadedtab), &results[0]);
+    }
+    L->top.p--; /* pop the call result: now anchored by _LOADED */
+    setsvalue(L, &results[1], luaS_newliteral(L, ":preinclude:"));
+    nret = 2;
+  }
+  if (wanted > nret)
+    wanted = nret;
+  for (j = 0; j < wanted; j++)
+    setobj2s(L, ra + j, &results[j]);
+  if (nresults == LUA_MULTRET)
+    L->top.p = ra + wanted; /* open call: expose all results */
+  else {
+    for (; j < nresults; j++) /* complete missing results */
+      setnilvalue(s2v(ra + j));
+  }
+}
+
+
+/*
 ** Integer division; return 'm // n', that is, floor(m/n).
 ** C division truncates its result (rounds towards zero).
 ** 'floor(q) == trunc(q)' when 'q >= 0' or when 'q' is integer,
@@ -2578,11 +2672,11 @@ returning: /* trap already set */
         int nresults = GETARG_C(i) - 1;
         int fc_id = GETARG_Ax(*pc); /* peek at EXTRAARG */
         TValue *func = s2v(ra);
-        lua_CFunction orig = luaF_fc_origs[fc_id];
+        lua_CFunction orig = luaF_fc_origs_load(fc_id);
         pc++; /* always consume EXTRAARG */
         /* Validate: loaded function matches original, single-result.
         ** With readonly_env, the environment is frozen so the function
-        ** is guaranteed to be the original — skip pointer validation.
+        ** is guaranteed to be the original, so skip pointer validation.
         ** A NULL orig_func (library not opened) can never compare equal
         ** to a real function, so it needs no separate check. Stdlib
         ** functions are registered without upvalues, so the light-C-
@@ -2612,6 +2706,18 @@ returning: /* trap already set */
           }
           vmbreak;
         }
+      }
+      vmcase(OP_REQUIRE) {
+        StkId ra = RA(i);
+        int nresults = GETARG_C(i) - 1;
+        int pidx = GETARG_Ax(*pc); /* peek at EXTRAARG */
+        pc++;                      /* always consume EXTRAARG */
+        savestate(L, ci);
+        luaV_require(L, ra, pidx, nresults);
+        updatetrap(ci);
+        if (nresults != LUA_MULTRET) /* luaV_require moved the top */
+          L->top.p = ci->top.p;
+        vmbreak;
       }
       vmcase(OP_EXTRAARG) {
         lua_assert(0);

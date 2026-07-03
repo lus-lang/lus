@@ -595,6 +595,27 @@ static int searcher_preload(lua_State *L) {
 }
 
 /*
+** Preinclude searcher - looks for a module parsed at startup from
+** --include (Acquis: preinclusion). Like the preload and bundle
+** searchers, this deliberately performs NO load/fs pledge checks: the
+** module was authorized and read at interpreter startup, and requiring
+** it touches nothing outside the interpreter state.
+*/
+static int searcher_preinclude(lua_State *L) {
+  const char *name = luaL_checkstring(L, 1);
+  lua_getfield(L, LUA_REGISTRYINDEX, LUS_PREINCLUDE_TABLE);
+  if (!lua_istable(L, -1) ||
+      lua_getfield(L, -1, name) != LUA_TFUNCTION) { /* not preincluded? */
+    lua_pushfstring(L, "no preincluded module '%s'", name);
+    return 1;
+  }
+  else {
+    lua_pushliteral(L, ":preinclude:");
+    return 2;
+  }
+}
+
+/*
 ** Bundle searcher - looks for module in embedded bundle (if present)
 */
 static int searcher_bundle(lua_State *L) {
@@ -700,9 +721,9 @@ static const luaL_Reg ll_funcs[] = {{"require", ll_require}, {NULL, NULL}};
 
 static void createsearcherstable(lua_State *L) {
   static const lua_CFunction searchers[] = {
-      searcher_preload, searcher_bundle, /* bundle searcher before file
-                                            searchers */
-      searcher_Lua,     searcher_C,      searcher_Croot, NULL};
+      searcher_preload, searcher_preinclude,
+      searcher_bundle, /* in-memory searchers before file searchers */
+      searcher_Lua,     searcher_C,          searcher_Croot, NULL};
   int i;
   /* create 'searchers' table */
   lua_createtable(L, sizeof(searchers) / sizeof(searchers[0]) - 1, 0);

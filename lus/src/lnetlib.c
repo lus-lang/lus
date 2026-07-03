@@ -1407,62 +1407,111 @@ static int parse_url(const char *url, ParsedURL *parsed) {
 }
 
 /* Read HTTP response line by line */
-static int read_http_line(LSocket *sock, char *buf, size_t bufsize) {
+/*
+** Read one LF-terminated line into 'buf' (CR stripped). The socket is
+** read in chunks into sock->buffer; bytes past the newline stay buffered
+** and are drained by later line or body reads (fetch_read). This
+** replaces a one-byte-per-recv/SSL_read loop that also shifted the
+** buffered data with a memmove per consumed byte. If the line exceeds
+** 'bufsize'-1 bytes, the filled prefix is returned and the remainder
+** stays buffered (matching the old reader's behavior).
+** Returns the line length, or -1 on read error.
+*/
+static int read_http_line(lua_State *L, LSocket *sock, char *buf,
+                          size_t bufsize) {
   size_t pos = 0;
-
-  /* First check buffered data */
-  while (sock->buflen > 0 && pos < bufsize - 1) {
-    char c = sock->buffer[0];
-
-    /* Shift buffer */
-    sock->buflen--;
+  for (;;) {
     if (sock->buflen > 0) {
-      memmove(sock->buffer, sock->buffer + 1, sock->buflen);
-    }
-
-    if (c == '\n') {
-      /* Strip trailing \r if present */
-      if (pos > 0 && buf[pos - 1] == '\r') {
-        pos--;
+      char *nl = (char *)memchr(sock->buffer, '\n', sock->buflen);
+      size_t avail = bufsize - 1 - pos;
+      size_t linelen = (nl != NULL) ? (size_t)(nl - sock->buffer)
+                                    : sock->buflen;
+      size_t copy = (linelen < avail) ? linelen : avail;
+      size_t consume = copy;
+      int gotline = 0;
+      if (nl != NULL && copy == linelen) {
+        consume = linelen + 1; /* also consume the '\n' */
+        gotline = 1;
       }
-      buf[pos] = '\0';
-      return (int)pos;
+      memcpy(buf + pos, sock->buffer, copy);
+      pos += copy;
+      sock->buflen -= consume;
+      if (sock->buflen > 0)
+        memmove(sock->buffer, sock->buffer + consume, sock->buflen);
+      if (gotline) {
+        if (pos > 0 && buf[pos - 1] == '\r')
+          pos--; /* strip trailing CR */
+        buf[pos] = '\0';
+        return (int)pos;
+      }
+      if (pos >= bufsize - 1) { /* caller's buffer is full */
+        buf[pos] = '\0';
+        return (int)pos;
+      }
     }
-    buf[pos++] = c;
-  }
-
-  /* Continue reading from socket */
-  while (pos < bufsize - 1) {
-    char c;
-    ssize_t got;
-
-    if (sock->ssl) {
-      got = SSL_read(sock->ssl, &c, 1);
+    /* refill from the socket */
+    {
+      char tmp[1024];
+      ssize_t got;
+      if (sock->ssl)
+        got = SSL_read(sock->ssl, tmp, sizeof(tmp));
+      else
+        got = recv(sock->fd, tmp, sizeof(tmp), 0);
       if (got <= 0) {
         buf[pos] = '\0';
         return (got == 0) ? (int)pos : -1;
       }
-    }
-    else {
-      got = recv(sock->fd, &c, 1, 0);
-      if (got <= 0) {
-        buf[pos] = '\0';
-        return (got == 0) ? (int)pos : -1;
+      if ((size_t)got > sock->bufcap - sock->buflen) {
+        size_t newcap = sock->buflen + (size_t)got;
+        sock->buffer =
+            luaM_reallocvchar(L, sock->buffer, sock->bufcap, newcap);
+        sock->bufcap = newcap;
       }
+      memcpy(sock->buffer + sock->buflen, tmp, (size_t)got);
+      sock->buflen += (size_t)got;
     }
-
-    if (c == '\n') {
-      if (pos > 0 && buf[pos - 1] == '\r') {
-        pos--;
-      }
-      buf[pos] = '\0';
-      return (int)pos;
-    }
-    buf[pos++] = c;
   }
+}
 
-  buf[pos] = '\0';
-  return (int)pos;
+/*
+** Read up to 'n' body bytes: drain the line reader's leftover buffer
+** first, then read from the socket directly.
+*/
+static ssize_t fetch_read(LSocket *sock, char *out, size_t n) {
+  if (sock->buflen > 0) {
+    size_t take = (n < sock->buflen) ? n : sock->buflen;
+    memcpy(out, sock->buffer, take);
+    sock->buflen -= take;
+    if (sock->buflen > 0)
+      memmove(sock->buffer, sock->buffer + take, sock->buflen);
+    return (ssize_t)take;
+  }
+  if (sock->ssl)
+    return SSL_read(sock->ssl, out, (int)n);
+  return recv(sock->fd, out, (int)n, 0);
+}
+
+/*
+** Eagerly release a fetch socket's resources. Idempotent, and marks the
+** userdata closed so socket_gc/__close become no-ops afterwards.
+*/
+static void fetch_cleanup(lua_State *L, LSocket *sock) {
+  if (sock->ssl) {
+    SSL_free(sock->ssl);
+    sock->ssl = NULL;
+  }
+  if (sock->fd != SOCKET_INVALID) {
+    sock_close(sock->fd);
+    sock->fd = SOCKET_INVALID;
+  }
+  if (sock->buffer != NULL) { /* socket_close skips closed sockets, so the
+                                 line-read buffer must be freed here */
+    luaM_freemem(L, sock->buffer, sock->bufcap);
+    sock->buffer = NULL;
+    sock->buflen = 0;
+    sock->bufcap = 0;
+  }
+  sock->closed = 1;
 }
 
 static int net_fetch(lua_State *L) {
@@ -1494,63 +1543,63 @@ static int net_fetch(lua_State *L) {
   socklen_t addrlen;
   resolve_hostname(L, parsed.host, parsed.port, &addr, &addrlen);
 
+  /* GC-managed socket userdata, created before the fd exists: the Lua
+     API calls below (buffers, pushfstring, header-table stores) can
+     raise, and an unwinding error must still close the fd and free the
+     SSL handle via __gc. Known error paths clean up eagerly with
+     fetch_cleanup; the userdata covers the rest. */
+  LSocket *sock = new_socket(L);
+  sock->timeout_ms = FETCH_TIMEOUT_MS;
+
   /* Create socket */
   socket_t fd = socket(addr.ss_family, SOCK_STREAM, IPPROTO_TCP);
   if (fd == SOCKET_INVALID) {
     return luaL_error(L, "cannot create socket: %s",
                       sock_strerror(SOCKET_ERRNO));
   }
+  sock->fd = fd;
   if (!set_socket_timeouts(fd, FETCH_TIMEOUT_MS)) {
     int err = SOCKET_ERRNO;
-    sock_close(fd);
+    fetch_cleanup(L, sock);
     return luaL_error(L, "cannot set socket timeout: %s", sock_strerror(err));
   }
 
   /* Connect */
   if (connect(fd, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR_VAL) {
     int err = SOCKET_ERRNO;
-    sock_close(fd);
+    fetch_cleanup(L, sock);
     return luaL_error(L, "cannot connect to %s:%d: %s", parsed.host,
                       parsed.port, sock_strerror(err));
   }
-
-  /* Create socket userdata for cleanup */
-  LSocket sock;
-  memset(&sock, 0, sizeof(sock));
-  sock.fd = fd;
-  sock.timeout_ms = FETCH_TIMEOUT_MS;
 
   /* SSL handshake for HTTPS */
   if (strcmp(parsed.scheme, "https") == 0) {
     init_ssl(L);
 
-    sock.ssl = SSL_new(ssl_ctx);
-    if (!sock.ssl) {
-      sock_close(fd);
+    sock->ssl = SSL_new(ssl_ctx);
+    if (!sock->ssl) {
+      fetch_cleanup(L, sock);
       return luaL_error(L, "SSL_new failed");
     }
 
-    SSL_set_fd(sock.ssl, (int)fd);
-    if (SSL_set_tlsext_host_name(sock.ssl, parsed.host) != 1) {
-      SSL_free(sock.ssl);
-      sock_close(fd);
+    SSL_set_fd(sock->ssl, (int)fd);
+    if (SSL_set_tlsext_host_name(sock->ssl, parsed.host) != 1) {
+      fetch_cleanup(L, sock);
       return luaL_error(L, "SSL SNI setup failed");
     }
 
-    if (SSL_connect(sock.ssl) != 1) {
-      SSL_free(sock.ssl);
-      sock_close(fd);
+    if (SSL_connect(sock->ssl) != 1) {
+      fetch_cleanup(L, sock);
       return push_ssl_error(L, "SSL handshake failed");
     }
 
-    long verify = SSL_get_verify_result(sock.ssl);
-    X509 *cert = SSL_get_peer_certificate(sock.ssl);
+    long verify = SSL_get_verify_result(sock->ssl);
+    X509 *cert = SSL_get_peer_certificate(sock->ssl);
     if (verify != X509_V_OK || cert == NULL ||
         X509_check_host(cert, parsed.host, 0, 0, NULL) != 1) {
       if (cert != NULL)
         X509_free(cert);
-      SSL_free(sock.ssl);
-      sock_close(fd);
+      fetch_cleanup(L, sock);
       return luaL_error(L, "SSL certificate verification failed for %s",
                         parsed.host);
     }
@@ -1590,6 +1639,7 @@ static int net_fetch(lua_State *L) {
       if (key && val) {
         if (strpbrk(key, "\r\n") || strpbrk(val, "\r\n")) {
           lua_pop(L, 1);
+          fetch_cleanup(L, sock);
           return luaL_error(L, "invalid characters in HTTP header");
         }
         lua_pushfstring(L, "%s: %s\r\n", key, val);
@@ -1626,16 +1676,14 @@ static int net_fetch(lua_State *L) {
     size_t tosend = req_len - sent;
     if (tosend > (size_t)INT_MAX)
       tosend = (size_t)INT_MAX;
-    if (sock.ssl) {
-      n = SSL_write(sock.ssl, req_data + sent, (int)tosend);
+    if (sock->ssl) {
+      n = SSL_write(sock->ssl, req_data + sent, (int)tosend);
     }
     else {
       n = send(fd, req_data + sent, (int)tosend, 0);
     }
     if (n <= 0) {
-      if (sock.ssl)
-        SSL_free(sock.ssl);
-      sock_close(fd);
+      fetch_cleanup(L, sock);
       return luaL_error(L, "failed to send request");
     }
     sent += (size_t)n;
@@ -1644,19 +1692,15 @@ static int net_fetch(lua_State *L) {
 
   /* Read status line */
   char line[4096];
-  if (read_http_line(&sock, line, sizeof(line)) < 0) {
-    if (sock.ssl)
-      SSL_free(sock.ssl);
-    sock_close(fd);
+  if (read_http_line(L, sock, line, sizeof(line)) < 0) {
+    fetch_cleanup(L, sock);
     return luaL_error(L, "failed to read response");
   }
 
   /* Parse status code */
   int status = 0;
   if (sscanf(line, "HTTP/%*d.%*d %d", &status) != 1) {
-    if (sock.ssl)
-      SSL_free(sock.ssl);
-    sock_close(fd);
+    fetch_cleanup(L, sock);
     return luaL_error(L, "invalid HTTP response: %s", line);
   }
 
@@ -1668,7 +1712,7 @@ static int net_fetch(lua_State *L) {
   int chunked = 0;
 
   int linelen;
-  while ((linelen = read_http_line(&sock, line, sizeof(line))) > 0) {
+  while ((linelen = read_http_line(L, sock, line, sizeof(line))) > 0) {
     char *colon = strchr(line, ':');
     if (colon) {
       *colon = '\0';
@@ -1686,9 +1730,7 @@ static int net_fetch(lua_State *L) {
       if (strcmp(line, "content-length") == 0) {
         if (!parse_content_length(value, &content_length) ||
             content_length > FETCH_MAX_BODY) {
-          if (sock.ssl)
-            SSL_free(sock.ssl);
-          sock_close(fd);
+          fetch_cleanup(L, sock);
           return luaL_error(L, "invalid Content-Length");
         }
         has_content_length = 1;
@@ -1700,9 +1742,7 @@ static int net_fetch(lua_State *L) {
     }
   }
   if (linelen < 0) {
-    if (sock.ssl)
-      SSL_free(sock.ssl);
-    sock_close(fd);
+    fetch_cleanup(L, sock);
     return luaL_error(L, "failed to read response headers");
   }
 
@@ -1714,19 +1754,15 @@ static int net_fetch(lua_State *L) {
   if (chunked) {
     /* Chunked transfer encoding */
     for (;;) {
-      if (read_http_line(&sock, line, sizeof(line)) < 0) {
-        if (sock.ssl)
-          SSL_free(sock.ssl);
-        sock_close(fd);
+      if (read_http_line(L, sock, line, sizeof(line)) < 0) {
+        fetch_cleanup(L, sock);
         return luaL_error(L, "truncated chunked response");
       }
 
       size_t chunk_size;
       if (!parse_chunk_size(line, &chunk_size) ||
           chunk_size > FETCH_MAX_BODY - body_total) {
-        if (sock.ssl)
-          SSL_free(sock.ssl);
-        sock_close(fd);
+        fetch_cleanup(L, sock);
         return luaL_error(L, "invalid chunk size");
       }
       if (chunk_size == 0)
@@ -1740,17 +1776,9 @@ static int net_fetch(lua_State *L) {
         if (to_read > sizeof(buf))
           to_read = sizeof(buf);
 
-        ssize_t got;
-        if (sock.ssl) {
-          got = SSL_read(sock.ssl, buf, (int)to_read);
-        }
-        else {
-          got = recv(fd, buf, (int)to_read, 0);
-        }
+        ssize_t got = fetch_read(sock, buf, to_read);
         if (got <= 0) {
-          if (sock.ssl)
-            SSL_free(sock.ssl);
-          sock_close(fd);
+          fetch_cleanup(L, sock);
           return luaL_error(L, "truncated chunked response");
         }
 
@@ -1760,11 +1788,9 @@ static int net_fetch(lua_State *L) {
       }
 
       /* Read trailing CRLF */
-      linelen = read_http_line(&sock, line, sizeof(line));
+      linelen = read_http_line(L, sock, line, sizeof(line));
       if (linelen != 0) {
-        if (sock.ssl)
-          SSL_free(sock.ssl);
-        sock_close(fd);
+        fetch_cleanup(L, sock);
         return luaL_error(L, "invalid chunk terminator");
       }
     }
@@ -1778,17 +1804,9 @@ static int net_fetch(lua_State *L) {
       if (to_read > sizeof(buf))
         to_read = sizeof(buf);
 
-      ssize_t got;
-      if (sock.ssl) {
-        got = SSL_read(sock.ssl, buf, (int)to_read);
-      }
-      else {
-        got = recv(fd, buf, (int)to_read, 0);
-      }
+      ssize_t got = fetch_read(sock, buf, to_read);
       if (got <= 0) {
-        if (sock.ssl)
-          SSL_free(sock.ssl);
-        sock_close(fd);
+        fetch_cleanup(L, sock);
         return luaL_error(L, "truncated response body");
       }
 
@@ -1801,27 +1819,21 @@ static int net_fetch(lua_State *L) {
     /* Read until connection close */
     char buf[4096];
     for (;;) {
-      ssize_t got;
-      if (sock.ssl) {
-        got = SSL_read(sock.ssl, buf, sizeof(buf));
-        if (got <= 0) {
-          int ssl_err = SSL_get_error(sock.ssl, (int)got);
+      ssize_t got = fetch_read(sock, buf, sizeof(buf));
+      if (got <= 0) {
+        if (sock->ssl) {
+          int ssl_err = SSL_get_error(sock->ssl, (int)got);
           if (ssl_err == SSL_ERROR_ZERO_RETURN)
             break;
           if (got < 0)
             break;
         }
-      }
-      else {
-        got = recv(fd, buf, sizeof(buf), 0);
-        if (got <= 0)
+        else
           break;
       }
       if (got > 0) {
         if ((size_t)got > FETCH_MAX_BODY - body_total) {
-          if (sock.ssl)
-            SSL_free(sock.ssl);
-          sock_close(fd);
+          fetch_cleanup(L, sock);
           return luaL_error(L, "response body too large");
         }
         luaL_addlstring(&resp_body, buf, (size_t)got);
@@ -1831,11 +1843,9 @@ static int net_fetch(lua_State *L) {
   }
 
   /* Cleanup */
-  if (sock.ssl) {
-    SSL_shutdown(sock.ssl);
-    SSL_free(sock.ssl);
-  }
-  sock_close(fd);
+  if (sock->ssl)
+    SSL_shutdown(sock->ssl);
+  fetch_cleanup(L, sock);
 
   /* Push the result body string */
   luaL_pushresult(&resp_body); /* body is now at top, headers at headers_idx */

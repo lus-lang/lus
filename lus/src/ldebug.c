@@ -465,8 +465,9 @@ static int findsetreg(const Proto *p, int lastpc, int reg) {
       }
       case OP_CALL:
       case OP_TAILCALL:
-      case OP_FASTCALL: { /* affect all registers above base */
-        if (op == OP_FASTCALL)
+      case OP_FASTCALL:
+      case OP_REQUIRE: { /* affect all registers above base */
+        if (op == OP_FASTCALL || op == OP_REQUIRE)
           pc++; /* skip EXTRAARG */
         change = (reg >= a);
         break;
@@ -626,6 +627,7 @@ static const char *funcnamefromcode(lua_State *L, const Proto *p, int pc,
     case OP_CALL:
     case OP_TAILCALL:
     case OP_FASTCALL:
+    case OP_REQUIRE:
       return getobjname(p, pc, GETARG_A(i), name); /* get function name */
     case OP_TFORCALL: {                            /* for iterator */
       *name = "for iterator";

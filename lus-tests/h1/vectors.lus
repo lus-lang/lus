@@ -341,6 +341,31 @@ tests:it("unpackmany on empty vector", function()
   assert(count == 0, "should have 0 iterations on empty vector")
 end)
 
+tests:it("incremental resize growth loop", function()
+  -- exercises the amortized growth path: grow-by-one used to realloc+copy
+  -- the whole buffer on every step
+  local v = vector.create(0)
+  for i = 1, 5000 do
+    vector.resize(v, i)
+    vector.pack(v, i - 1, "B", i % 256)
+  end
+  assert(vector.size(v) == 5000)
+  assert(vector.unpack(v, 0, "B") == 1)
+  assert(vector.unpack(v, 4999, "B") == 5000 % 256)
+end)
+
+tests:it("resize down truncates and resize up zero-fills", function()
+  local v = vector.create(4)
+  vector.pack(v, 0, "I4", 0xDEADBEEF)
+  vector.resize(v, 2)
+  assert(vector.size(v) == 2)
+  vector.resize(v, 8)
+  assert(vector.size(v) == 8)
+  -- re-exposed and new bytes must be zero even when capacity was retained
+  assert(vector.unpack(v, 2, "H") == 0, "re-exposed bytes must be zeroed")
+  assert(vector.unpack(v, 4, "I4") == 0, "new bytes must be zeroed")
+end)
+
 tests:it("unpackmany with offset", function()
   local v = vector.create(16)
   vector.pack(v, 0, "I4", 1)

@@ -1,4 +1,4 @@
-global print, assert, error, type, tostring, setmetatable, coroutine, table, select, require, pledge, string
+global print, assert, error, type, tostring, setmetatable, coroutine, table, select, require, pledge, string, load, debug
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -480,6 +480,90 @@ tests:it("catch of a large-buffer C error does not corrupt state", function()
     -- if the tbc box was left dangling, this print/assert path would break:
     assert(type(print) == "function", "globals must still resolve after catch")
     assert(#t == 100001)
+end)
+
+-- ============================================================================
+-- Stress: catch machinery under stack reallocation, coroutines, C boundaries
+-- ============================================================================
+
+tests:it("catch inside deep recursion with stack growth", function()
+    local function deep(n)
+        if n == 0 then
+            local ok = catch error("bottom")
+            assert(ok == false)
+            return 1
+        end
+        return deep(n - 1) + 1
+    end
+    assert(deep(3000) == 3001)
+end)
+
+tests:it("deeply nested active catch frames", function()
+    local function grow(n)
+        local ok = catch (function()
+            if n > 0 then
+                grow(n - 1)
+            else
+                error("deep boom")
+            end
+        end)()
+        if n == 0 then
+            assert(ok == false, "innermost catch must see the error")
+        end
+        return n
+    end
+    grow(500)
+end)
+
+tests:it("catch across coroutine boundaries", function()
+    local co = coroutine.create(function()
+        local ok, err = catch error("inside coroutine")
+        assert(ok == false and tostring(err):find("inside coroutine") ~= nil)
+        coroutine.yield("caught")
+        local ok2 = catch error("second")
+        assert(ok2 == false)
+        return "done"
+    end)
+    local succ, val = coroutine.resume(co)
+    assert(succ and val == "caught")
+    succ, val = coroutine.resume(co)
+    assert(succ and val == "done")
+end)
+
+-- Regression (1.6.2): errors unwinding across a C-call boundary used to leak
+-- the interpreter's C-call counter; enough repetitions then produced a bogus
+-- "C stack overflow".
+tests:it("repeated errors across C boundaries keep nCcalls balanced", function()
+    for i = 1, 200 do
+        local ok = catch table.sort({3, 1, 2}, function() error("cmp") end)
+        assert(ok == false)
+    end
+    local t = {3, 1, 2}
+    table.sort(t)
+    assert(t[1] == 1 and t[2] == 2 and t[3] == 3, "sort must still work")
+end)
+
+-- Regression: luaD_pcall did not suspend the active Lua catch block, so an
+-- error inside a C function's internal protected call (load, debug.parse,
+-- lua_pcall from C) was intercepted by an enclosing 'catch' statement --
+-- bypassing the C-level protection, breaking those functions' documented
+-- return values, and leaking their internal resources.
+tests:it("load reports errors normally inside a catch block", function()
+    local ok = catch (function()
+        local f, err = load("local x = ((")
+        assert(f == nil, "load must return nil for bad syntax")
+        assert(type(err) == "string", "load must return the error message")
+    end)()
+    assert(ok == true, "the catch body must complete without a caught error")
+end)
+
+tests:it("debug.parse reports errors normally inside a catch block", function()
+    local ok = catch (function()
+        local ast, err = debug.parse("local x = ((", "bad", {recover = false})
+        assert(ast == nil, "debug.parse must return nil for bad syntax")
+        assert(type(err) == "string", "debug.parse must return the error message")
+    end)()
+    assert(ok == true, "the catch body must complete without a caught error")
 end)
 
 -- Regression: to-be-closed variables in a catch body must be closed when the

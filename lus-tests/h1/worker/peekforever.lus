@@ -1,0 +1,6 @@
+-- peekforever.lus - blocks in worker.peek with an empty inbox forever.
+-- Used to verify that interpreter shutdown wakes workers parked in peek
+-- instead of deadlocking pthread_join (snow leopard regression test).
+global worker
+
+worker.peek()

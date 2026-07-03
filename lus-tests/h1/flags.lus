@@ -1,0 +1,244 @@
+--[[
+    Test suite for the flags feature (Acquis: flags).
+
+    Run by meson with: -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty=
+    - flags is a readonly table populated from --flag/-F CLI arguments
+    - `if flags.x then` conditions fold at compile time when resolvable
+    - assigning to flags is a parse error; writing fields is a runtime error
+]]
+
+global assert, type, require, pledge, load, string, tostring, pairs, worker, table, io, os, arg, next
+
+pledge("load", "fs:read=./lus-tests/*", "exec")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("flags")
+
+-- ============================================
+-- Values and types
+-- ============================================
+
+tests:it("boolean flag defaults to true", function()
+    assert(flags.debug == true)
+    assert(type(flags.debug) == "boolean")
+end)
+
+tests:it("numeric values become numbers", function()
+    assert(flags.version == 1.5)
+    assert(type(flags.version) == "number")
+    assert(flags.count == 3)
+    assert(flags.count % 1 == 0, "integer text should stay integral")
+end)
+
+tests:it("non-numeric values become strings", function()
+    assert(flags.name == "alpha")
+    assert(type(flags.name) == "string")
+end)
+
+tests:it("empty value is the empty string", function()
+    assert(flags.empty == "")
+end)
+
+tests:it("absent flags read as nil", function()
+    assert(flags.absent == nil)
+end)
+
+tests:it("flags is a table and iterable", function()
+    assert(type(flags) == "table")
+    local n = 0
+    for k, v in pairs(flags) do n = n + 1 end
+    assert(n == 5, "should hold exactly the five CLI flags, got " .. n)
+end)
+
+-- ============================================
+-- Branch folding
+-- ============================================
+
+tests:it("set flag selects then-branch", function()
+    local r
+    if flags.debug then r = "then" else r = "else" end
+    assert(r == "then")
+end)
+
+tests:it("absent flag selects else-chain", function()
+    local r
+    if flags.absent then r = "then"
+    elseif flags.debug then r = "elseif"
+    else r = "else" end
+    assert(r == "elseif")
+end)
+
+tests:it("not-form folds both polarities", function()
+    local r
+    if not flags.absent then r = "A" end
+    assert(r == "A")
+    if not flags.debug then r = "B" else r = "C" end
+    assert(r == "C")
+end)
+
+tests:it("string and number flags are truthy in conditions", function()
+    local n = 0
+    if flags.name then n = n + 1 end
+    if flags.version then n = n + 1 end
+    if flags.empty then n = n + 1 end -- empty string is truthy
+    assert(n == 3)
+end)
+
+tests:it("non-foldable shapes still evaluate correctly", function()
+    local r
+    if (flags.debug) then r = "paren" end
+    assert(r == "paren")
+    if flags.name == "alpha" then r = "eq" end
+    assert(r == "eq")
+    if flags.debug and flags.absent then r = "and" else r = "noand" end
+    assert(r == "noand")
+end)
+
+tests:it("shadowed flags does not fold", function()
+    local flags = {debug = false}
+    local r
+    if flags.debug then r = "then" else r = "shadow" end
+    assert(r == "shadow")
+end)
+
+tests:it("folding eliminates the dead branch from generated code", function()
+    local dead = "if flags.debug then return 1 else " ..
+                 string.rep("tostring(1) ", 200) .. "end"
+    local folded = load(dead)
+    local control = load("if NOTAFLAGTABLE then return 1 else " ..
+                         string.rep("tostring(1) ", 200) .. "end")
+    assert(#string.dump(folded) * 2 < #string.dump(control),
+        "folded chunk should be much smaller than unfolded control")
+end)
+
+tests:it("dead branches are still syntax-checked", function()
+    local f, err = load("if flags.debug then return 1 else this is nonsense end")
+    assert(f == nil and type(err) == "string")
+end)
+
+-- ============================================
+-- Rewind integrity
+-- ============================================
+
+tests:it("line numbers stay correct after folded branches", function()
+    local g = load("if flags.debug then\nlocal a\nlocal b\nelse\nlocal c\nend\nerror('mark')")
+    local ok, err = catch g()
+    assert(ok == false)
+    assert(tostring(err):find(":7:") ~= nil, "error should be on line 7: " .. tostring(err))
+end)
+
+tests:it("break inside dead branch does not leak into the loop", function()
+    local n = 0
+    for i = 1, 3 do
+        if flags.debug then n = n + 1 else break end
+    end
+    assert(n == 3)
+    local m = 0
+    for i = 1, 3 do
+        if flags.absent then m = m + 100 else m = m + 1 end
+    end
+    assert(m == 3)
+end)
+
+tests:it("closures and to-be-closed locals in dead branches", function()
+    if flags.absent then
+        local x <close> = nil
+        local fn = function() return x end
+        fn()
+    end
+    assert(true)
+end)
+
+tests:it("goto in dead branch", function()
+    local reached = false
+    do
+        if flags.absent then goto skip end
+        reached = true
+        ::skip::
+    end
+    assert(reached)
+end)
+
+tests:it("nested folds", function()
+    local r
+    if flags.debug then
+        if flags.absent then r = "inner-then" else r = "inner-else" end
+    else
+        r = "outer-else"
+    end
+    assert(r == "inner-else")
+end)
+
+-- ============================================
+-- Reserved-name errors
+-- ============================================
+
+tests:it("assigning to flags is a parse error", function()
+    local f, err = load("flags = 1")
+    assert(f == nil)
+    assert(tostring(err):find("attempt to assign to const variable 'flags'") ~= nil)
+end)
+
+tests:it("function flags() is a parse error", function()
+    local f, err = load("function flags() end")
+    assert(f == nil)
+    assert(tostring(err):find("const variable 'flags'") ~= nil)
+end)
+
+tests:it("declaring global flags is a parse error", function()
+    local f, err = load("global flags")
+    assert(f == nil)
+    assert(tostring(err):find("reserved name") ~= nil)
+end)
+
+tests:it("writing a field is a runtime readonly error", function()
+    local ok, err = catch do flags.newfield = 1 end
+    assert(ok == false)
+    assert(tostring(err):find("readonly") ~= nil)
+end)
+
+-- ============================================
+-- load() and workers see the same flags
+-- ============================================
+
+tests:it("runtime load() folds and reads consistently", function()
+    local f = load("if flags.debug then return 'folded' else return 'not' end")
+    assert(f() == "folded")
+    local g = load("return flags.version")
+    assert(g() == 1.5)
+end)
+
+tests:it("workers see the same flags", function()
+    local w = worker.create("lus-tests/h1/worker/flagscheck.lus")
+    local messages = {}
+    while true do
+        local msg = worker.receive(w)
+        if msg == nil then break end
+        table.insert(messages, msg)
+    end
+    assert(messages[1] == true, "worker flags.debug")
+    assert(messages[2] == 1.5, "worker flags.version")
+    assert(messages[3] == "folded", "worker folding")
+end)
+
+-- ============================================
+-- No-flags subprocess: empty table default
+-- ============================================
+
+tests:it("interpreter without -F still has an empty flags table", function()
+    -- the interpreter is at the most-negative arg index (CLI options
+    -- occupy the indices between it and the script at arg[0])
+    local i = -1
+    while arg[i - 1] ~= nil do i = i - 1 end
+    local lus_cmd = arg[i]
+    if lus_cmd == nil then
+        return -- cannot locate interpreter; soft-skip
+    end
+    local script = "global os; if type(flags) == 'table' and next(flags) == nil "
+        .. "and not flags.debug then os.exit(0) end os.exit(1)"
+    local cmd = lus_cmd .. " -Pload -e \"global type, next; " .. script .. "\""
+    local ok = os.execute(cmd)
+    assert(ok == true or ok == 0, "no-flags interpreter check failed")
+end)
+
+tests:finish()

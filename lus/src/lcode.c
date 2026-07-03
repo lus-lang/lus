@@ -2039,7 +2039,8 @@ void luaK_finish(FuncState *fs) {
           SETARG_k(*pc, 1);     /* must get vararg there */
         break;
       }
-      case OP_FASTCALL: {
+      case OP_FASTCALL:
+      case OP_REQUIRE: {
         i++; /* skip EXTRAARG (breaks OT/IT chain, assertion not applicable) */
         break;
       }

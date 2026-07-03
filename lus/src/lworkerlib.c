@@ -15,8 +15,11 @@
 
 #include "larena.h"
 #include "lauxlib.h"
+#include "ldo.h"
+#include "lobject.h"
 #include "lpledge.h"
 #include "lstate.h"
+#include "ltable.h"
 #include "lua.h"
 #include "lualib.h"
 #include "lworkerlib.h"
@@ -140,6 +143,8 @@ typedef struct {
   char *data;             /* contiguous buffer in arena */
   size_t size;            /* bytes written */
   size_t cap;             /* buffer capacity */
+  const char *err;        /* static error format (NULL if no error) */
+  const char *errarg;     /* optional argument for 'err' (may be NULL) */
 } SerBuffer;
 
 /* Default arena block size for serialization (4KB) */
@@ -149,10 +154,17 @@ typedef struct {
 
 static void serbuf_init(SerBuffer *b) {
   b->arena = luaA_newstandalone(SERBUF_ARENA_SIZE);
+  b->data = NULL;
+  b->size = 0;
+  b->cap = 0;
+  b->err = NULL;
+  b->errarg = NULL;
+  if (b->arena == NULL)
+    return; /* first write will report out of memory */
   /* Pre-allocate initial buffer from arena */
   b->data = (char *)luaA_allocstandalone(b->arena, SERBUF_INIT_SIZE);
-  b->size = 0;
-  b->cap = SERBUF_INIT_SIZE;
+  if (b->data != NULL)
+    b->cap = SERBUF_INIT_SIZE;
 }
 
 static void serbuf_free(SerBuffer *b) {
@@ -165,7 +177,18 @@ static void serbuf_free(SerBuffer *b) {
   }
 }
 
+/* record a serialization failure; always returns 0 */
+static int serbuf_fail(SerBuffer *b, const char *err, const char *errarg) {
+  if (b->err == NULL) { /* keep the first error */
+    b->err = err;
+    b->errarg = errarg;
+  }
+  return 0;
+}
+
 static int serbuf_ensure(SerBuffer *b, size_t need) {
+  if (b->arena == NULL)
+    return 0; /* initial arena allocation failed */
   if (b->size + need > b->cap) {
     if (b->size > SIZE_MAX - need)
       return 0; /* overflow */
@@ -186,15 +209,21 @@ static int serbuf_ensure(SerBuffer *b, size_t need) {
   return 1;
 }
 
-static void serbuf_write(lua_State *L, SerBuffer *b, const void *p, size_t n) {
+/*
+** Serialization must not raise Lua errors: a longjmp would skip the
+** caller's serbuf_free and leak the arena. Failures are recorded in the
+** buffer and reported by the caller after cleanup.
+*/
+static int serbuf_write(SerBuffer *b, const void *p, size_t n) {
   if (!serbuf_ensure(b, n))
-    luaL_error(L, "out of memory in worker serialization");
+    return serbuf_fail(b, "out of memory in worker serialization", NULL);
   memcpy(b->data + b->size, p, n);
   b->size += n;
+  return 1;
 }
 
-static void serbuf_write_byte(lua_State *L, SerBuffer *b, unsigned char c) {
-  serbuf_write(L, b, &c, 1);
+static int serbuf_write_byte(SerBuffer *b, unsigned char c) {
+  return serbuf_write(b, &c, 1);
 }
 
 /* Forward declaration for recursive serialization */
@@ -202,10 +231,11 @@ static int serialize_value(lua_State *L, int idx, SerBuffer *b, int depth);
 
 static int serialize_table(lua_State *L, int idx, SerBuffer *b, int depth) {
   if (depth > 100) {
-    return luaL_error(L, "table nesting too deep for serialization");
+    return serbuf_fail(b, "table nesting too deep for serialization", NULL);
   }
   idx = lua_absindex(L, idx);
-  serbuf_write_byte(L, b, SER_TABLE);
+  if (!serbuf_write_byte(b, SER_TABLE))
+    return 0;
 
   /* Count entries first */
   lua_Integer count = 0;
@@ -214,7 +244,8 @@ static int serialize_table(lua_State *L, int idx, SerBuffer *b, int depth) {
     count++;
     lua_pop(L, 1);
   }
-  serbuf_write(L, b, &count, sizeof(count));
+  if (!serbuf_write(b, &count, sizeof(count)))
+    return 0;
 
   /* Serialize each key-value pair */
   lua_pushnil(L);
@@ -232,38 +263,33 @@ static int serialize_table(lua_State *L, int idx, SerBuffer *b, int depth) {
 static int serialize_value(lua_State *L, int idx, SerBuffer *b, int depth) {
   int t = lua_type(L, idx);
   switch (t) {
-    case LUA_TNIL: serbuf_write_byte(L, b, SER_NIL); break;
+    case LUA_TNIL: return serbuf_write_byte(b, SER_NIL);
     case LUA_TBOOLEAN: {
-      serbuf_write_byte(L, b, SER_BOOL);
       unsigned char v = lua_toboolean(L, idx) ? 1 : 0;
-      serbuf_write_byte(L, b, v);
-      break;
+      return serbuf_write_byte(b, SER_BOOL) && serbuf_write_byte(b, v);
     }
     case LUA_TNUMBER:
       if (lua_isinteger(L, idx)) {
-        serbuf_write_byte(L, b, SER_INT);
         lua_Integer i = lua_tointeger(L, idx);
-        serbuf_write(L, b, &i, sizeof(i));
+        return serbuf_write_byte(b, SER_INT) &&
+               serbuf_write(b, &i, sizeof(i));
       }
       else {
-        serbuf_write_byte(L, b, SER_NUM);
         lua_Number n = lua_tonumber(L, idx);
-        serbuf_write(L, b, &n, sizeof(n));
+        return serbuf_write_byte(b, SER_NUM) &&
+               serbuf_write(b, &n, sizeof(n));
       }
-      break;
     case LUA_TSTRING: {
       size_t len;
       const char *s = lua_tolstring(L, idx, &len);
-      serbuf_write_byte(L, b, SER_STRING);
-      serbuf_write(L, b, &len, sizeof(len));
-      serbuf_write(L, b, s, len);
-      break;
+      return serbuf_write_byte(b, SER_STRING) &&
+             serbuf_write(b, &len, sizeof(len)) && serbuf_write(b, s, len);
     }
     case LUA_TTABLE: return serialize_table(L, idx, b, depth);
     default:
-      return luaL_error(L, "cannot serialize %s to worker", lua_typename(L, t));
+      return serbuf_fail(b, "cannot serialize %s to worker",
+                         lua_typename(L, t));
   }
-  return 1;
 }
 
 /* Deserialization */
@@ -371,6 +397,10 @@ static WorkerState *worker_new(lua_State *parent, const char *path) {
   memset(w, 0, sizeof(WorkerState));
   w->parent = parent;
   w->script_path = strdup(path);
+  if (w->script_path == NULL) {
+    free(w);
+    return NULL;
+  }
   w->status = LUS_WORKER_RUNNING;
   w->refcount = 1;
   w->recv_ctx = NULL;
@@ -451,6 +481,35 @@ static void pool_enqueue(WorkerState *w) {
   lus_mutex_unlock(&g_pool.queue_mutex);
 }
 
+/*
+** Track workers currently running on pool threads so shutdown can wake
+** any of them blocked in worker.peek. If shutdown already started when a
+** worker registers (dequeued just before the flag flipped), mark it
+** immediately: it would otherwise miss the shutdown broadcast.
+*/
+static void pool_register_active(WorkerState *w) {
+  lus_mutex_lock(&g_pool.queue_mutex);
+  w->active_next = g_pool.active_head;
+  g_pool.active_head = w;
+  if (g_pool.shutdown) {
+    lus_mutex_lock(&w->mutex);
+    w->shutdown = 1;
+    lus_mutex_unlock(&w->mutex);
+  }
+  lus_mutex_unlock(&g_pool.queue_mutex);
+}
+
+static void pool_unregister_active(WorkerState *w) {
+  lus_mutex_lock(&g_pool.queue_mutex);
+  WorkerState **p = &g_pool.active_head;
+  while (*p && *p != w)
+    p = &(*p)->active_next;
+  if (*p)
+    *p = w->active_next;
+  w->active_next = NULL;
+  lus_mutex_unlock(&g_pool.queue_mutex);
+}
+
 static WorkerState *pool_dequeue(void) {
   lus_mutex_lock(&g_pool.queue_mutex);
   while (!g_pool.runnable_head && !g_pool.shutdown) {
@@ -482,8 +541,9 @@ static int worker_lib_message(lua_State *L) {
   SerBuffer buf;
   serbuf_init(&buf);
   if (!serialize_value(L, 1, &buf, 0)) {
-    serbuf_free(&buf);
-    return lua_error(L);
+    serbuf_free(&buf); /* 'err'/'errarg' are static strings; safe after free */
+    return luaL_error(L, buf.err ? buf.err : "worker serialization failed",
+                      buf.errarg);
   }
 
   /* Push to outbox - ownership of arena transfers to message queue */
@@ -523,9 +583,24 @@ static int worker_lib_peek(lua_State *L) {
   size_t size;
 
   lus_mutex_lock(&w->mutex);
-  while (w->inbox.count == 0) {
+  while (w->inbox.count == 0 && !w->shutdown) {
     /* Block until message arrives */
     lus_cond_wait(&w->inbox_cond, &w->mutex);
+  }
+  if (w->inbox.count == 0) { /* woken by pool shutdown */
+    lus_mutex_unlock(&w->mutex);
+    /* This unwind must not be interceptable by ANYTHING in the worker
+    ** script -- neither a 'catch' retry loop nor an intermediate C
+    ** protection (e.g. worker.peek called from a load() reader): either
+    ** would keep the pool thread from reaching pool_dequeue and hang
+    ** interpreter exit in pthread_join. Free the script's catch chain
+    ** and longjmp directly to the BASE C protection (worker_run's
+    ** pcall). Intermediate luaD_pcall frames are skipped entirely, so
+    ** their C-local saved catch pointers are never restored -- which is
+    ** exactly why the freed nodes cannot be observed afterwards. */
+    lua_pushliteral(L, "worker.peek interrupted: interpreter shutting down");
+    luaE_clearcatch(L);
+    luaD_throwbaselevel(L, LUA_ERRRUN);
   }
   msgqueue_pop(&w->inbox, &arena, &data, &size);
   lus_mutex_unlock(&w->mutex);
@@ -541,6 +616,21 @@ static int worker_lib_peek(lua_State *L) {
 }
 
 /* Run worker script in its own Lua state */
+/*
+** Protected pledge inheritance: luaP_copypledges allocates with the
+** throwing luaM_* functions, and worker_run has no active protected
+** frame -- an unprotected memory error would abort the process.
+*/
+static int copy_pledges_protected(lua_State *L) {
+  lua_State *parent = (lua_State *)lua_touserdata(L, 1);
+  PledgeStore *inherited = luaP_copypledges(L, parent->pledges);
+  if (inherited != NULL) {
+    luaP_freepledges(L, L->pledges); /* drop the fresh granter-only store */
+    L->pledges = inherited;
+  }
+  return 0;
+}
+
 static void worker_run(WorkerState *w) {
   lua_State *L = luaL_newstate();
   if (!L) {
@@ -569,10 +659,17 @@ static void worker_run(WorkerState *w) {
   ** parent configures its pledges before spawning workers, so its store is
   ** stable to read here. */
   if (w->parent != NULL) {
-    PledgeStore *inherited = luaP_copypledges(L, w->parent->pledges);
-    if (inherited != NULL) {
-      luaP_freepledges(L, L->pledges); /* drop the fresh granter-only store */
-      L->pledges = inherited;
+    lua_pushcfunction(L, copy_pledges_protected);
+    lua_pushlightuserdata(L, w->parent);
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+      lus_mutex_lock(&w->mutex);
+      w->status = LUS_WORKER_ERROR;
+      w->error_msg = strdup("failed to inherit pledges (out of memory)");
+      if (!w->error_msg)
+        w->status = LUS_WORKER_DEAD;
+      lus_cond_signal(&w->outbox_cond); /* wake blocked receive */
+      signal_recv_ctx(w);               /* wake multi-worker select */
+      return;
     }
   }
   luaP_sealpledges(L); /* worker cannot escalate its own pledges */
@@ -581,7 +678,10 @@ static void worker_run(WorkerState *w) {
   lua_pushlightuserdata(L, w);
   lua_setfield(L, LUA_REGISTRYINDEX, "_WORKER_STATE");
 
-  /* Register worker.message and worker.peek in the worker table */
+  /* Register worker.message and worker.peek in the worker table. Under
+  ** --readonly-env the setup callback has already frozen the module
+  ** tables, so lift the readonly bit for this runtime-internal setup
+  ** step and restore it (user code never observes the table mutable). */
   lua_getglobal(L, "worker");
   if (!lua_istable(L, -1)) {
     lua_pop(L, 1);
@@ -589,10 +689,18 @@ static void worker_run(WorkerState *w) {
     lua_setglobal(L, "worker");
     lua_getglobal(L, "worker");
   }
-  lua_pushcfunction(L, worker_lib_message);
-  lua_setfield(L, -2, "message");
-  lua_pushcfunction(L, worker_lib_peek);
-  lua_setfield(L, -2, "peek");
+  {
+    Table *wt = hvalue(s2v(L->top.p - 1));
+    int was_readonly = isreadonly(wt);
+    if (was_readonly)
+      wt->flags = cast_byte(wt->flags & ~BITREADONLY);
+    lua_pushcfunction(L, worker_lib_message);
+    lua_setfield(L, -2, "message");
+    lua_pushcfunction(L, worker_lib_peek);
+    lua_setfield(L, -2, "peek");
+    if (was_readonly)
+      setreadonly(wt);
+  }
   lua_pop(L, 1);
 
   /* Deserialize and push initial arguments from inbox */
@@ -669,7 +777,9 @@ static void *pool_thread_func(void *arg) {
     WorkerState *w = pool_dequeue();
     if (!w)
       break; /* shutdown */
+    pool_register_active(w);
     worker_run(w);
+    pool_unregister_active(w);
     worker_decref(w);
   }
 #if defined(LUS_PLATFORM_WINDOWS)
@@ -692,18 +802,36 @@ LUA_API void lus_worker_pool_init(lua_State *L) {
 
   g_pool.threads =
       (lus_thread_t *)malloc(sizeof(lus_thread_t) * g_pool.nthreads);
+  if (g_pool.threads == NULL)
+    return; /* stays uninitialized; creation sites report the failure */
   lus_mutex_init(&g_pool.queue_mutex);
   lus_cond_init(&g_pool.queue_cond);
   g_pool.runnable_head = NULL;
   g_pool.runnable_tail = NULL;
+  g_pool.active_head = NULL;
   g_pool.shutdown = 0;
 
+  /* a partially started pool still works with fewer threads; only join
+     the threads that actually started */
+  int started = 0;
   for (int i = 0; i < g_pool.nthreads; i++) {
 #if defined(LUS_PLATFORM_WINDOWS)
     g_pool.threads[i] = CreateThread(NULL, 0, pool_thread_func, NULL, 0, NULL);
+    if (g_pool.threads[i] == NULL)
+      break;
 #else
-    pthread_create(&g_pool.threads[i], NULL, pool_thread_func, NULL);
+    if (pthread_create(&g_pool.threads[i], NULL, pool_thread_func, NULL) != 0)
+      break;
 #endif
+    started++;
+  }
+  g_pool.nthreads = started;
+  if (started == 0) {
+    free(g_pool.threads);
+    g_pool.threads = NULL;
+    lus_cond_destroy(&g_pool.queue_cond);
+    lus_mutex_destroy(&g_pool.queue_mutex);
+    return;
   }
 
   g_pool.initialized = 1;
@@ -716,6 +844,14 @@ LUA_API void lus_worker_pool_shutdown(void) {
   lus_mutex_lock(&g_pool.queue_mutex);
   g_pool.shutdown = 1;
   lus_cond_broadcast(&g_pool.queue_cond);
+  /* wake running workers blocked in worker.peek so their threads can
+     unwind and reach the shutdown check in pool_dequeue */
+  for (WorkerState *w = g_pool.active_head; w != NULL; w = w->active_next) {
+    lus_mutex_lock(&w->mutex);
+    w->shutdown = 1;
+    lus_cond_broadcast(&w->inbox_cond);
+    lus_mutex_unlock(&w->mutex);
+  }
   lus_mutex_unlock(&g_pool.queue_mutex);
 
   for (int i = 0; i < g_pool.nthreads; i++) {
@@ -762,6 +898,8 @@ static int lib_create(lua_State *L) {
 
   /* Initialize pool if needed */
   lus_worker_pool_init(L);
+  if (!g_pool.initialized)
+    return luaL_error(L, "failed to start worker thread pool");
 
   /* Create worker state */
   WorkerState *w = worker_new(L, path);
@@ -776,7 +914,8 @@ static int lib_create(lua_State *L) {
     if (!serialize_value(L, i, &buf, 0)) {
       worker_decref(w);
       serbuf_free(&buf);
-      return lua_error(L);
+      return luaL_error(L, buf.err ? buf.err : "worker serialization failed",
+                        buf.errarg);
     }
     lus_mutex_lock(&w->mutex);
     if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
@@ -823,10 +962,17 @@ static int lib_receive(lua_State *L) {
   if (nworkers == 0)
     return luaL_error(L, "expected at least one worker");
 
+  /* validate all arguments before malloc: check_worker raises on bad
+     arguments and would leak the array */
+  for (int i = 0; i < nworkers; i++) {
+    check_worker(L, i + 1);
+  }
   WorkerState **workers =
       (WorkerState **)malloc(sizeof(WorkerState *) * nworkers);
+  if (workers == NULL)
+    return luaL_error(L, "out of memory");
   for (int i = 0; i < nworkers; i++) {
-    workers[i] = check_worker(L, i + 1);
+    workers[i] = *(WorkerState **)lua_touserdata(L, i + 1);
   }
 
   /* Create shared receive context for multi-worker select */
@@ -865,7 +1011,7 @@ static int lib_receive(lua_State *L) {
         lus_cond_destroy(&ctx.cond);
         lus_mutex_destroy(&ctx.mutex);
         free(workers);
-        lua_pushstring(L, errmsg);
+        lua_pushstring(L, errmsg ? errmsg : "worker error");
         free(errmsg);
         return lua_error(L);
       }
@@ -947,7 +1093,8 @@ static int lib_send(lua_State *L) {
   serbuf_init(&buf);
   if (!serialize_value(L, 2, &buf, 0)) {
     serbuf_free(&buf);
-    return lua_error(L);
+    return luaL_error(L, buf.err ? buf.err : "worker serialization failed",
+                      buf.errarg);
   }
 
   /* Push to inbox - ownership of arena transfers to message queue */
@@ -1012,6 +1159,8 @@ LUAMOD_API int luaopen_worker(lua_State *L) {
 
 LUA_API WorkerState *lus_worker_create(lua_State *L, const char *path) {
   lus_worker_pool_init(L);
+  if (!g_pool.initialized)
+    return NULL;
   WorkerState *w = worker_new(L, path);
   if (w)
     pool_enqueue(w);

@@ -1,0 +1,11 @@
+-- flagscheck.lus - reports the flags values visible inside a worker.
+global worker
+
+worker.message(flags.debug)
+worker.message(flags.version)
+
+if flags.debug then
+    worker.message("folded")
+else
+    worker.message("not-folded")
+end

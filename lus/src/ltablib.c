@@ -998,7 +998,7 @@ static int treshape(lua_State *L) {
 ** Shrink a table's internal storage to fit its current contents.
 ** Useful after building a large table and then clearing most of it:
 ** deletions alone never shrink the array or hash parts. Returns the
-** table for chaining. Never automatic — explicit calls only.
+** table for chaining. Never automatic (explicit calls only).
 */
 static int tcompact(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);

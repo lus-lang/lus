@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.7.0 (**WIP**)
+
+**Release date:** TBD
+
+- `--include path[:alias]` now compiles modules at startup so `require` loads them without `load` or `fs` pledges.
+- Preincluded module requires are optimized to the new `OP_REQUIRE` instruction in most circumstances under a readonly environment.
+- Added the readonly `flags` table, populated from `--flag`/`-F name[=value]` arguments and resolved at compile time in `if flags.x then` conditions.
+- Made `tojson` ~4x faster on large documents by serializing into a single contiguous buffer instead of one Lua string per output piece.
+- Made `tocsv` serialize into a single contiguous buffer instead of one Lua string per field, delimiter, and newline.
+- Enum value accesses are now interned and no longer allocate a new object every time.
+- `vector.resize` now grows capacity geometrically, making grow-by-one append loops O(n) amortized instead of O(n²).
+- `network.fetch` now reads response headers in buffered chunks instead of one byte per system call.
+- Vector-returning archive compression and decompression no longer copy the whole output through a temporary Lua string, reducing peak memory.
+- Fixed `load`, `debug.parse`, and other internally-protected C calls having their errors hijacked by an enclosing `catch` block, which broke their return values and leaked their internal resources.
+- Fixed the JSON parser leaking its container stack on parse errors raised from helper functions.
+- Fixed a worker blocked in `worker.peek()` on an empty inbox hanging interpreter shutdown forever.
+- Fixed `worker.send`, `worker.message`, and `worker.create` leaking their serialization arena and raising a garbage error value when given a non-serializable value.
+- Fixed a use-after-free window where an emergency collection during vector creation could sweep the still-unreachable vector.
+- Fixed `network.fetch` leaking the socket and TLS handle when a Lua error unwound mid-request.
+- Fixed pledge glob matching backtracking exponentially on wildcard-heavy patterns, a denial-of-service vector through attacker-influenced paths, hosts, and URLs.
+- Fixed an out-of-memory during worker pledge inheritance aborting the whole process.
+- Fixed unchecked allocations in the worker library and a leaked array when `worker.receive` is passed an invalid handle.
+- Fixed fastcall registration racing on a process-wide table when worker threads open libraries concurrently.
+- Fixed bundle loading trusting crafted executable offsets that could underflow the data-offset computation.
+- Fixed 32-bit size overflows in archive buffer sizing, `vector.create`/`vector.resize` capacity casts, and enum-root allocation.
+- Fixed the `worker.peek` shutdown wakeup being swallowed by a `catch` retry loop, which could still hang interpreter exit at 100% CPU.
+- Fixed `lua_pcallk` continuations having their errors intercepted by an enclosing `catch` block, the same defect previously fixed for `lua_pcall`.
+- Fixed `tojson` corrupting interpreter memory or crashing on deeply nested tables; extreme nesting now raises a catchable error.
+- Fixed a NULL write when an embedder creates a zero-member enum via `lua_pushenum`; such enums are now rejected with an error.
+- Fixed `require` failing to cache modules under `--readonly-env` because the environment freeze wrongly included `package.loaded`.
+- Fixed workers crashing at startup under `--readonly-env` when the runtime registered `worker.message`/`worker.peek` into the frozen module table.
+
 ## 1.6.2
 
 **Release date:** July 1, 2026
@@ -51,7 +83,7 @@
 
 - `network.fetch` now rejects carriage-return and line-feed characters in the HTTP method and in custom header keys and values, preventing header injection and request smuggling.
 - Fixed an out-of-bounds read in `vector.archive` gzip and deflate decompression that could append uninitialized memory to the output when decompressing inputs larger than 1 GB.
-- Fixed a worker thread leaving its mutex locked after an error — including a worker script that fails to load or raises at runtime — which could deadlock a parent waiting on it.
+- Fixed a worker thread leaving its mutex locked after an error (including a worker script that fails to load or raises at runtime), which could deadlock a parent waiting on it.
 - Fixed running out of memory while growing the call stack being thrown from inside the garbage collector instead of being handled gracefully.
 - Fixed a memory leak in the JSON parser when decoding a malformed object key (such as one missing its `:`).
 - Fixed a memory leak in the worker library when a message could not be enqueued under memory pressure.

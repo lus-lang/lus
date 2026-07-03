@@ -1,7 +1,7 @@
 --[[
     H4 Runner: Fastcall Performance Comparison
 
-    Runs bench_fastcall.lus twice — with and without --no-fastcall — then
+    Runs bench_fastcall.lus twice (with and without --no-fastcall), then
     computes per-benchmark and per-category speedups. Exits with failure
     only if fastcalls are slower than baseline (geometric mean < 1.0).
 ]]
