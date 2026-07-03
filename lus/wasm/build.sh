@@ -103,6 +103,7 @@ SOURCES=(
   "$SRC_DIR/lstrlib.c"
   "$SRC_DIR/ltable.c"
   "$SRC_DIR/ltablib.c"
+  "$SRC_DIR/ltimelib.c"
   "$SRC_DIR/ltm.c"
   "$SRC_DIR/lundump.c"
   "$SRC_DIR/lutf8lib.c"

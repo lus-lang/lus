@@ -28,11 +28,19 @@
 #include <string.h>
 #include <time.h>
 
+/* Named-zone support depends on the zstd archive library to decompress the
+** embedded tzdata blob. Builds without it (e.g. the WASM target, which passes
+** -DLUS_NO_ARCHIVE) still provide instants, durations, fixed-offset zones,
+** parsing, formatting, and the enums; only IANA named zones are unavailable. */
+#ifndef LUS_NO_ARCHIVE
 #include <zstd.h>
+#endif
 
 #include "lauxlib.h"
 #include "lobject.h" /* Enum struct, for reading an enum argument's index */
+#ifndef LUS_NO_ARCHIVE
 #include "ltzdata.h"
+#endif
 #include "lua.h"
 #include "lualib.h"
 #include "lwinzones.h"
@@ -240,8 +248,12 @@ static l_zone *check_zone(lua_State *L, int arg) {
 
 /* Forward declarations: the POSIX footer parser is called from parse_tzif and
 ** its evaluator from zone_offset_at, both defined before their bodies. */
+#ifndef LUS_NO_ARCHIVE
 static int parse_posix_tz(const char *s, size_t len, l_zone *z);
+#endif
 static int posix_offset(l_zone *z, lua_Integer t);
+
+#ifndef LUS_NO_ARCHIVE
 
 /* Big-endian readers for TZif fields. */
 static uint32_t be32(const unsigned char *p) {
@@ -440,6 +452,16 @@ static int lookup_zone(lua_State *L, const char *name) {
   return 1;
 }
 
+#else /* LUS_NO_ARCHIVE: named IANA zones are unavailable without zstd. */
+
+static int lookup_zone(lua_State *L, const char *name) {
+  (void)L;
+  (void)name;
+  return 0; /* callers fall back (time.zone errors, time.localzone -> UTC) */
+}
+
+#endif
+
 static void push_fixed_zone(lua_State *L, int offset, const char *name) {
   l_zone *z = (l_zone *)lua_newuserdatauv(L, sizeof(l_zone), 1);
   z->fixed = 1;
@@ -502,6 +524,7 @@ static int days_in_month(lua_Integer y, int m) {
 }
 
 /* --- POSIX TZ footer parsing (RFC 8536 §3.3.1, POSIX.1 "TZ" grammar) --- */
+#ifndef LUS_NO_ARCHIVE
 
 /* Consume a zone abbreviation: <quoted> or a run of non-offset characters. */
 static int tz_name(const char **p, const char *e) {
@@ -652,6 +675,8 @@ static int parse_posix_tz(const char *s, size_t len, l_zone *z) {
   z->has_tz = 1;
   return 1;
 }
+
+#endif /* !LUS_NO_ARCHIVE */
 
 /* Day count (relative to 1970-01-01) of a transition rule within `year`. */
 static lua_Integer rule_day_count(tzrule *r, lua_Integer year) {
@@ -1166,7 +1191,11 @@ static int time_localzone(lua_State *L) {
 }
 
 static int time_tzdata_version(lua_State *L) {
+#ifdef LUS_NO_ARCHIVE
+  lua_pushliteral(L, "unavailable");
+#else
   lua_pushstring(L, lus_tzdata_version);
+#endif
   return 1;
 }
 
