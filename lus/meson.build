@@ -302,6 +302,7 @@ h1_tests = [
   'h1/flags',
   'h1/query_syntax',
   'h1/query',
+  'h1/query_sqlite',
 ]
 
 foreach t : h1_tests

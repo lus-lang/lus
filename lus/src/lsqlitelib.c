@@ -48,6 +48,7 @@
 #define SQLITE_DB_METATABLE "sqlite.db"
 #define SQLITE_STMT_METATABLE "sqlite.stmt"
 #define SQLITE_CURSOR_METATABLE "sqlite.cursor"
+#define SQLITE_TABLEREF_METATABLE "sqlite.tableref"
 
 typedef struct LSqliteDB {
   sqlite3 *db; /* NULL means closed, io-style */
@@ -65,6 +66,10 @@ typedef struct LSqliteCursor {
   int generation;    /* snapshot taken when the iteration began */
   int owns;          /* 1: finalize on completion, 0: reset */
 } LSqliteCursor;
+
+typedef struct LSqliteTableRef {
+  LSqliteDB *db; /* backing struct, kept valid by uservalue 1 */
+} LSqliteTableRef; /* uservalue 1: the db userdata, 2: the table name */
 
 /* ===================================================================
 ** Handle checking
@@ -661,6 +666,240 @@ static int stmt_tostring(lua_State *L) {
 }
 
 /* ===================================================================
+** Table references and the query provider
+**
+** Indexing a database handle with a key that is not a method yields a
+** table reference, the query source for that table. The provider
+** below translates accepted conjuncts into a parameterized SELECT and
+** streams the rows back through the shared cursor machinery, so every
+** value still travels as a bound parameter.
+**
+** The provider only accepts shapes whose semantics are identical in
+** SQL and in the in-memory engine: comparisons over columns, nil,
+** numeric and string operands, combined with and/or, plus +, -, *,
+** unary minus, and concatenation. Booleans, not, division, and host
+** closures stay residual, since their SQL semantics would diverge.
+** =================================================================== */
+
+static int sqlite_expr_ok(lua_State *L, const lus_Query *q,
+                          const lus_QueryNode *n) {
+  switch (lus_qnodekind(n)) {
+    case LUS_QN_COLUMN:
+      return 1;
+    case LUS_QN_LIT:
+    case LUS_QN_PARAM: {
+      int t;
+      lus_qnodevalue(L, q, n);
+      t = lua_type(L, -1);
+      lua_pop(L, 1);
+      return t == LUA_TNIL || t == LUA_TNUMBER || t == LUA_TSTRING;
+    }
+    case LUS_QN_ARITH: {
+      int op = lus_qnodeop(n);
+      if (op != LUS_QAR_ADD && op != LUS_QAR_SUB && op != LUS_QAR_MUL &&
+          op != LUS_QAR_UNM)
+        return 0; /* SQL integer division and friends diverge */
+      if (!sqlite_expr_ok(L, q, lus_qnodechild(q, n, 0)))
+        return 0;
+      return op == LUS_QAR_UNM ||
+             sqlite_expr_ok(L, q, lus_qnodechild(q, n, 1));
+    }
+    case LUS_QN_CONCAT:
+      return sqlite_expr_ok(L, q, lus_qnodechild(q, n, 0)) &&
+             sqlite_expr_ok(L, q, lus_qnodechild(q, n, 1));
+    default:
+      return 0;
+  }
+}
+
+static int sqlite_bool_ok(lua_State *L, const lus_Query *q,
+                          const lus_QueryNode *n) {
+  switch (lus_qnodekind(n)) {
+    case LUS_QN_CMP:
+      return sqlite_expr_ok(L, q, lus_qnodechild(q, n, 0)) &&
+             sqlite_expr_ok(L, q, lus_qnodechild(q, n, 1));
+    case LUS_QN_AND:
+    case LUS_QN_OR:
+      return sqlite_bool_ok(L, q, lus_qnodechild(q, n, 0)) &&
+             sqlite_bool_ok(L, q, lus_qnodechild(q, n, 1));
+    default:
+      return 0;
+  }
+}
+
+static int sqlite_accepts(lua_State *L, const lus_Query *q,
+                          const lus_QueryNode *n) {
+  return sqlite_bool_ok(L, q, n);
+}
+
+/* append a double-quoted SQL identifier, doubling interior quotes */
+static void addident(luaL_Buffer *b, const char *s, size_t len) {
+  size_t i;
+  luaL_addchar(b, '"');
+  for (i = 0; i < len; i++) {
+    if (s[i] == '"')
+      luaL_addchar(b, '"');
+    luaL_addchar(b, s[i]);
+  }
+  luaL_addchar(b, '"');
+}
+
+#define SQLITE_MAXBINDS 200
+
+typedef struct SqliteGen {
+  const lus_QueryNode *binds[SQLITE_MAXBINDS];
+  int nbinds;
+} SqliteGen;
+
+static void gen_expr(lua_State *L, luaL_Buffer *b, const lus_Query *q,
+                     const lus_QueryNode *n, SqliteGen *g) {
+  switch (lus_qnodekind(n)) {
+    case LUS_QN_COLUMN: {
+      size_t len;
+      const char *s = lus_qnodename(q, n, &len);
+      addident(b, s, len);
+      break;
+    }
+    case LUS_QN_LIT:
+    case LUS_QN_PARAM:
+      if (g->nbinds >= SQLITE_MAXBINDS)
+        luaL_error(L, "query too complex");
+      g->binds[g->nbinds++] = n;
+      luaL_addchar(b, '?');
+      break;
+    case LUS_QN_CMP: {
+      static const char *const ops[] = {" = ",  " <> ", " < ",
+                                        " <= ", " > ",  " >= "};
+      luaL_addchar(b, '(');
+      gen_expr(L, b, q, lus_qnodechild(q, n, 0), g);
+      luaL_addstring(b, ops[lus_qnodeop(n)]);
+      gen_expr(L, b, q, lus_qnodechild(q, n, 1), g);
+      luaL_addchar(b, ')');
+      break;
+    }
+    case LUS_QN_AND:
+    case LUS_QN_OR:
+      luaL_addchar(b, '(');
+      gen_expr(L, b, q, lus_qnodechild(q, n, 0), g);
+      luaL_addstring(b, lus_qnodekind(n) == LUS_QN_AND ? " AND " : " OR ");
+      gen_expr(L, b, q, lus_qnodechild(q, n, 1), g);
+      luaL_addchar(b, ')');
+      break;
+    case LUS_QN_ARITH: {
+      int op = lus_qnodeop(n);
+      luaL_addchar(b, '(');
+      if (op == LUS_QAR_UNM) {
+        luaL_addchar(b, '-');
+        gen_expr(L, b, q, lus_qnodechild(q, n, 0), g);
+      }
+      else {
+        gen_expr(L, b, q, lus_qnodechild(q, n, 0), g);
+        luaL_addstring(b, op == LUS_QAR_ADD   ? " + "
+                          : op == LUS_QAR_SUB ? " - "
+                                              : " * ");
+        gen_expr(L, b, q, lus_qnodechild(q, n, 1), g);
+      }
+      luaL_addchar(b, ')');
+      break;
+    }
+    case LUS_QN_CONCAT:
+      luaL_addchar(b, '(');
+      gen_expr(L, b, q, lus_qnodechild(q, n, 0), g);
+      luaL_addstring(b, " || ");
+      gen_expr(L, b, q, lus_qnodechild(q, n, 1), g);
+      luaL_addchar(b, ')');
+      break;
+    default:
+      luaL_error(L, "unsupported node in a pushed conjunct");
+  }
+}
+
+static void sqlite_open(lua_State *L, const lus_Query *q, int srcindex,
+                        const lus_QueryNode *const *pushed, int npushed) {
+  LSqliteTableRef *t;
+  LSqliteStmt *s;
+  SqliteGen g;
+  luaL_Buffer b;
+  const char *sql;
+  int refidx, dbidx;
+  int i;
+  g.nbinds = 0;
+  lus_querysource(L, q, srcindex - 1);
+  refidx = lua_gettop(L);
+  t = (LSqliteTableRef *)luaL_checkudata(L, refidx,
+                                         SQLITE_TABLEREF_METATABLE);
+  if (t->db->db == NULL)
+    luaL_error(L, "attempt to use a closed database");
+  lua_getiuservalue(L, refidx, 1); /* the db userdata, for anchoring */
+  dbidx = lua_gettop(L);
+  luaL_buffinit(L, &b);
+  luaL_addstring(&b, "SELECT * FROM ");
+  lua_getiuservalue(L, refidx, 2); /* the table name */
+  {
+    size_t len;
+    const char *name = lua_tolstring(L, -1, &len);
+    addident(&b, name, len);
+    lua_pop(L, 1);
+  }
+  for (i = 0; i < npushed; i++) {
+    luaL_addstring(&b, i == 0 ? " WHERE " : " AND ");
+    gen_expr(L, &b, q, pushed[i], &g);
+  }
+  luaL_pushresult(&b);
+  sql = lua_tostring(L, -1);
+  s = prepare_single(L, t->db, sql, dbidx);
+  for (i = 0; i < g.nbinds; i++) {
+    lus_qnodevalue(L, (lus_Query *)q, g.binds[i]);
+    bind_one(L, s, i + 1, lua_gettop(L));
+    lua_pop(L, 1);
+  }
+  make_query(L, lua_gettop(L), 1); /* (iter, nil, nil, cursor) */
+  lua_pop(L, 3);                   /* only the iterator is needed */
+  /* clear everything below it off the stack */
+  lua_replace(L, refidx);
+  lua_settop(L, refidx);
+}
+
+static const lus_QueryProvider sqlite_provider = {sqlite_accepts,
+                                                  sqlite_open};
+
+static int tableref_tostring(lua_State *L) {
+  luaL_checkudata(L, 1, SQLITE_TABLEREF_METATABLE);
+  lua_getiuservalue(L, 1, 2);
+  lua_pushfstring(L, "table reference (%s)", lua_tostring(L, -1));
+  return 1;
+}
+
+/*
+** __index of the database handle: methods win, and any other string
+** key yields a table reference for use as a query source.
+*/
+static int db_index(lua_State *L) {
+  LSqliteDB *d;
+  LSqliteTableRef *t;
+  lua_pushvalue(L, 2);
+  lua_rawget(L, lua_upvalueindex(1)); /* the method table */
+  if (!lua_isnil(L, -1))
+    return 1;
+  lua_pop(L, 1);
+  d = (LSqliteDB *)luaL_checkudata(L, 1, SQLITE_DB_METATABLE);
+  if (lua_type(L, 2) != LUA_TSTRING) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (d->db == NULL)
+    luaL_error(L, "attempt to use a closed database");
+  t = (LSqliteTableRef *)lua_newuserdatauv(L, sizeof(LSqliteTableRef), 2);
+  t->db = d;
+  luaL_setmetatable(L, SQLITE_TABLEREF_METATABLE);
+  lua_pushvalue(L, 1);
+  lua_setiuservalue(L, -2, 1);
+  lua_pushvalue(L, 2);
+  lua_setiuservalue(L, -2, 2);
+  return 1;
+}
+
+/* ===================================================================
 ** Registration
 ** =================================================================== */
 
@@ -718,9 +957,26 @@ static void make_meta(lua_State *L, const char *name, const luaL_Reg *methods,
 void lus_sqlite_register(lua_State *L) {
   if (sqlite3_initialize() != SQLITE_OK) /* required by SQLITE_OMIT_AUTOINIT */
     luaL_error(L, "cannot initialize sqlite");
-  make_meta(L, SQLITE_DB_METATABLE, db_meth, db_metameth);
+  /* the db metatable indexes methods first and table references after */
+  luaL_newmetatable(L, SQLITE_DB_METATABLE);
+  luaL_setfuncs(L, db_metameth, 0);
+  lua_newtable(L);
+  luaL_setfuncs(L, db_meth, 0);
+  lua_pushcclosure(L, db_index, 1);
+  lua_setfield(L, -2, "__index");
+  lua_pushboolean(L, 0);
+  lua_setfield(L, -2, "__metatable"); /* hide the metatable */
+  lua_pop(L, 1);
   make_meta(L, SQLITE_STMT_METATABLE, stmt_meth, stmt_metameth);
   make_meta(L, SQLITE_CURSOR_METATABLE, NULL, cursor_metameth);
+  /* table references carry the native query provider */
+  luaL_newmetatable(L, SQLITE_TABLEREF_METATABLE);
+  lua_pushcfunction(L, tableref_tostring);
+  lua_setfield(L, -2, "__tostring");
+  lus_setqueryprovider(L, -1, &sqlite_provider);
+  lua_pushboolean(L, 0);
+  lua_setfield(L, -2, "__metatable");
+  lua_pop(L, 1);
   lua_pushcfunction(L, io_sqlite);
   lua_setfield(L, -2, "sqlite");
 }

@@ -1,0 +1,332 @@
+--[[
+  Queries over SQLite: table references, automatic push-down and the
+  in-memory split, provider parity with plain tables, injection safety,
+  identifier quoting, the type map, and handle lifetimes. Everything
+  runs on ":memory:" databases under the standard sealed pledge.
+]]
+
+global io, print, assert, require, pledge, type, tostring, string, table,
+    collectgarbage, debug, pairs, query, math, vector
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("query_sqlite")
+
+local function freshdb()
+    local db = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);
+        INSERT INTO users (name, age) VALUES
+            ('Alice', 30), ('Bob', 17), ('Carol', 42), ('Dave', 30);
+    ]])
+    return db
+end
+
+local function collect(q)
+    local out = {}
+    for row in query(q) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+tests:describe("table references")
+
+tests:it("indexing a db with a non-method key yields a table reference",
+    function()
+    local db <close> = freshdb()
+    tests:assert_equal(type(db.users), "userdata")
+    tests:assert_contains(tostring(db.users), "table reference")
+    tests:assert_equal(type(db.exec), "function", "methods still win")
+    tests:assert_equal(db[1], nil, "non-string keys yield nothing")
+end)
+
+tests:it("a table reference on a closed db raises", function()
+    local db = io.sqlite(":memory:")
+    db:close()
+    tests:assert_throws(function() return db.users end,
+        "attempt to use a closed database")
+end)
+
+tests:describe("push-down")
+
+tests:it("a pushed comparison filters in SQL", function()
+    local db <close> = freshdb()
+    local rows = collect(@db.users as u where u.age >= 18
+        select u.name order by u.name)
+    tests:assert_equal(#rows, 3)
+    tests:assert_equal(rows[1].name, "Alice")
+end)
+
+tests:it("the plan shows the native provider and the pushed conjunct",
+    function()
+    local db <close> = freshdb()
+    local minage = 18
+    local plan = debug.queryplan(@db.users as u where u.age >= minage
+        select u.name)
+    tests:assert_contains(plan, "native")
+    tests:assert_contains(plan, "pushed down")
+end)
+
+tests:it("probe counting proves the split", function()
+    local db <close> = freshdb()
+    local calls = 0
+    local function probe(u)
+        calls = calls + 1
+        return true
+    end
+    local rows = collect(@db.users as u
+        where u.age >= 18 and probe(u) select u.name)
+    tests:assert_equal(#rows, 3)
+    tests:assert_equal(calls, 3,
+        "the probe sees only rows the pushed conjunct passed")
+end)
+
+tests:it("a fully opaque where fetches every row", function()
+    local db <close> = freshdb()
+    local calls = 0
+    local function probe(u)
+        calls = calls + 1
+        return false
+    end
+    collect(@db.users as u where probe(u) select u.name)
+    tests:assert_equal(calls, 4, "nothing pushed, all rows fetched")
+end)
+
+tests:it("arithmetic and concatenation push down", function()
+    local db <close> = freshdb()
+    local rows = collect(@db.users as u
+        where u.age * 2 >= 60 and u.name .. "!" == "Alice!"
+        select u.name)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].name, "Alice")
+end)
+
+tests:it("division stays residual for parity", function()
+    local db <close> = freshdb()
+    -- 17 / 2 is 8.5 in Lus and 8 in SQL, so the engine keeps it
+    local rows = collect(@db.users as u where u.age / 2 > 8.4
+        select u.name order by u.name)
+    tests:assert_equal(#rows, 4, "float division semantics hold")
+    local plan = debug.queryplan(@db.users as u where u.age / 2 > 8.4
+        select u.name)
+    tests:assert_contains(plan, "0 pushed")
+end)
+
+tests:it("an enum parameter stays residual instead of failing to bind",
+    function()
+    local db <close> = freshdb()
+    local color = enum red, green end
+    local rows = collect(@db.users as u
+        where u.age > 18 and u.name ~= color.red select u.name)
+    tests:assert_equal(#rows, 3, "enum comparisons run in memory")
+end)
+
+tests:describe("provider parity")
+
+tests:it("identical data gives identical results through both providers",
+    function()
+    local db <close> = freshdb()
+    local mem = {
+        { name = "Alice", age = 30 }, { name = "Bob", age = 17 },
+        { name = "Carol", age = 42 }, { name = "Dave", age = 30 },
+    }
+    local function run(src)
+        local out = {}
+        for r in query(@(src) as u
+            where u.age >= 17 and u.age * 2 < 80
+            select u.name, u.age
+            order by u.age desc, u.name) do
+            out[#out + 1] = r.name .. "=" .. r.age
+        end
+        return table.concat(out, ",")
+    end
+    tests:assert_equal(run(mem), run(db.users))
+end)
+
+tests:it("nil and NULL predicates agree", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (a INTEGER);
+        INSERT INTO t (a) VALUES (1), (NULL), (3);
+    ]])
+    local mem = { { a = 1 }, {}, { a = 3 } }
+    local function run(src)
+        local out = {}
+        for r in query(@(src) as s where s.a > 0 select s.a order by s.a) do
+            out[#out + 1] = r.a
+        end
+        return table.concat(out, ",")
+    end
+    tests:assert_equal(run(mem), run(db.t))
+    tests:assert_equal(run(db.t), "1,3")
+end)
+
+tests:it("empty-input aggregates agree", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (a INTEGER)")
+    local mem = {}
+    local function run(src)
+        for r in query(@(src) as s select count(*) as n, sum(s.a) as total) do
+            return r.n, r.total
+        end
+    end
+    local n1, t1 = run(mem)
+    local n2, t2 = run(db.t)
+    tests:assert_equal(n1, n2)
+    tests:assert_equal(t1, t2)
+    tests:assert_equal(n1, 0)
+end)
+
+tests:describe("injection safety")
+
+tests:it("a hostile bound value stays data", function()
+    local db <close> = freshdb()
+    local hostile = "'; DROP TABLE users; --"
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", hostile, 1)
+    local found = collect(@db.users as u where u.name == hostile
+        select u.name)
+    tests:assert_equal(#found, 1)
+    tests:assert_equal(found[1].name, hostile)
+    for r in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(r.n, 5, "the table survived")
+    end
+end)
+
+tests:it("wildcard characters in parameters stay literal", function()
+    local db <close> = freshdb()
+    local tricky = [[100% _certain_ "quoted" \slashed]]
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", tricky, 1)
+    local found = collect(@db.users as u where u.name == tricky
+        select u.name)
+    tests:assert_equal(#found, 1)
+end)
+
+tests:it("hostile table names round-trip through identifier quoting",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec('CREATE TABLE "my ""weird"" table" (v INTEGER)')
+    db:exec('INSERT INTO "my ""weird"" table" VALUES (7)')
+    local rows = collect(@db["my \"weird\" table"] as t select t.v)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].v, 7)
+end)
+
+tests:describe("the type map through queries")
+
+tests:it("every SQLite type arrives as its Lus counterpart", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (i INTEGER, f REAL, s TEXT, b BLOB, n INTEGER);
+        INSERT INTO t VALUES (9223372036854775807, 1.5, 'x', X'0102', NULL);
+    ]])
+    local rows = collect(@db.t as r select r)
+    local r = rows[1]
+    tests:assert_equal(r.i, math.maxinteger)
+    tests:assert_equal(math.type(r.f), "float")
+    tests:assert_equal(r.s, "x")
+    tests:assert_equal(type(r.b), "vector")
+    tests:assert_equal(vector.size(r.b), 2)
+    tests:assert_equal(r.n, nil, "NULL is an absent field")
+end)
+
+tests:it("bound parameters cover the numeric boundaries", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    local needle = math.mininteger
+    local rows = collect(@db.t as r where r.v == needle select r.v)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].v, math.mininteger)
+end)
+
+tests:describe("joins across providers")
+
+tests:it("a SQLite table joins an in-memory table", function()
+    local db <close> = freshdb()
+    local notes = {
+        { who = "Alice", note = "vip" },
+        { who = "Carol", note = "new" },
+    }
+    local rows = collect(@db.users as u, notes as n
+        where u.name == n.who select u.name, n.note order by u.name)
+    tests:assert_equal(#rows, 2)
+    tests:assert_equal(rows[1].name, "Alice")
+    tests:assert_equal(rows[1].note, "vip")
+end)
+
+tests:it("two tables of one database join in memory", function()
+    local db <close> = freshdb()
+    db:exec([[
+        CREATE TABLE pets (owner TEXT, pet TEXT);
+        INSERT INTO pets VALUES ('Alice', 'cat'), ('Bob', 'dog');
+    ]])
+    local rows = collect(@db.users as u, db.pets as p
+        where u.name == p.owner select u.name, p.pet order by u.name)
+    tests:assert_equal(#rows, 2)
+    tests:assert_equal(rows[2].pet, "dog")
+end)
+
+tests:it("per-source conjuncts push while the join runs in memory",
+    function()
+    local db <close> = freshdb()
+    local calls = 0
+    local notes = { { who = "Alice" }, { who = "Bob" } }
+    local function probe(u, n)
+        calls = calls + 1
+        return true
+    end
+    local rows = collect(@db.users as u, notes as n
+        where u.age >= 18 and u.name == n.who and probe(u, n)
+        select u.name)
+    tests:assert_equal(#rows, 1, "only adult Alice matches")
+    tests:assert_equal(calls, 1,
+        "earlier conjuncts short-circuit before the probe")
+end)
+
+tests:describe("lifetimes")
+
+tests:it("a table reference keeps its database alive", function()
+    local ref
+    do
+        local db = io.sqlite(":memory:")
+        db:exec("CREATE TABLE t (n INTEGER)")
+        db:run("INSERT INTO t VALUES (5)")
+        ref = db.t
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local rows = collect(@(ref) as t select t.n)
+    tests:assert_equal(rows[1].n, 5)
+end)
+
+tests:it("querying through a closed database raises", function()
+    local db = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    local ref = db.t
+    db:close()
+    tests:assert_throws(function()
+        return query(@(ref) as t select t.n)
+    end, "attempt to use a closed database")
+end)
+
+tests:it("an unknown table errors at execution, not at build", function()
+    local db <close> = freshdb()
+    local q = @db.nosuch as t select t.v
+    tests:assert_equal(type(q), "query")
+    tests:assert_throws(function() return query(q) end, "no such table")
+end)
+
+tests:it("an abandoned result set does not block later queries",
+    function()
+    local db <close> = freshdb()
+    local iter = query(@db.users as u select u.name)
+    assert(iter() ~= nil, "half consumed")
+    collectgarbage("collect")
+    local rows = collect(@db.users as u select u.name)
+    tests:assert_equal(#rows, 4)
+    tests:assert_equal(db:close(), true)
+end)
+
+tests:finish()
