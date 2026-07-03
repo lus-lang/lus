@@ -115,7 +115,7 @@ Rankings are higher = better. Cost reflects what the maintainer actually pays (O
 | model    | cost | intelligence | taste |
 | -------- | :--: | :----------: | :---: |
 | gpt-5.5  |  9   |      8       |   5   |
-| sonnet-5 |  6   |      5       |   7   |
+| sonnet-5 |  5   |      5       |   7   |
 | opus-4.8 |  4   |      8       |   8   |
 | fable-5  |  2   |      9       |   9   |
 
