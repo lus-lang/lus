@@ -18,7 +18,7 @@ local h1_files = {
   "cstack", "gengc", "memerr", "json", "network", "worker",
   "parse", "slices", "groups", "vectors", "cloning", "pledge",
   "runtime-attrs", "doexpr", "interp", "lsp-unit", "lsp-integration",
-  "sqlite",
+  "sqlite", "sqlite_fs",
 }
 
 tests:describe("No false 'Undefined global' warnings")

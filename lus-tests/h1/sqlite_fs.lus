@@ -1,0 +1,214 @@
+--[[
+  File-backed io.sqlite tests: persistence, WAL journaling, read-only
+  mode, sidecar pledge coverage, and pledge denial.
+
+  The suite runs inside per-run sandbox paths at the repository root.
+  The pledge preamble grants value-scoped access to those paths only,
+  so the denial tests exercise real pledge boundaries:
+
+    sqlite_fs_*   : the sandbox directory, read and write
+    sqlite_ro_*   : a read-only glob covering the db and its sidecars
+    exactdb_*.db  : an exact-shape grant that covers no sidecars
+]]
+
+global io, fs, os, print, assert, require, pledge, type, tostring,
+    string, vector, collectgarbage, error
+
+pledge("load", "fs:read=./lus-tests/*",
+    "fs:read=./sqlite_fs_*", "fs:write=./sqlite_fs_*",
+    "fs:read=./sqlite_ro_*",
+    "fs:read=./exactdb_*.db", "fs:write=./exactdb_*.db",
+    "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("sqlite_fs")
+
+local RUN = tostring(os.time())
+local SANDBOX = "sqlite_fs_" .. RUN
+
+catch fs.remove(SANDBOX, true)
+fs.createdirectory(SANDBOX)
+
+local function dbpath(name)
+    return SANDBOX .. "/" .. name
+end
+
+tests:describe("persistence")
+
+tests:it("data persists across close and reopen", function()
+    local path = dbpath("persist.db")
+    do
+        local db <close> = io.sqlite(path)
+        db:exec("CREATE TABLE t (n INTEGER, s TEXT)")
+        db:run("INSERT INTO t VALUES (?, ?)", 7, "seven")
+    end
+    local db <close> = io.sqlite(path)
+    for row in db:query("SELECT n, s FROM t") do
+        tests:assert_equal(row.n, 7)
+        tests:assert_equal(row.s, "seven")
+    end
+end)
+
+tests:it("file-backed databases run in WAL mode", function()
+    local db <close> = io.sqlite(dbpath("wal.db"))
+    for row in db:query("PRAGMA journal_mode") do
+        tests:assert_equal(row.journal_mode, "wal")
+    end
+end)
+
+tests:it("a write leaves the -wal sidecar on disk", function()
+    local path = dbpath("sidecar.db")
+    local db <close> = io.sqlite(path)
+    db:exec("CREATE TABLE t (n INTEGER)")
+    db:run("INSERT INTO t VALUES (1)")
+    tests:assert_equal(fs.type(path .. "-wal"), "file")
+end)
+
+tests:it("blobs and large text persist across reopen", function()
+    local path = dbpath("blob.db")
+    local big = string.rep("y", 256 * 1024)
+    local v = vector.create(4)
+    vector.pack(v, 0, "BBBB", 9, 8, 7, 6)
+    do
+        local db <close> = io.sqlite(path)
+        db:exec("CREATE TABLE t (s TEXT, b BLOB)")
+        db:run("INSERT INTO t VALUES (?, ?)", big, v)
+    end
+    local db <close> = io.sqlite(path)
+    for row in db:query("SELECT s, b FROM t") do
+        tests:assert_equal(row.s, big)
+        tests:assert_equal(vector.size(row.b), 4)
+        tests:assert_equal(vector.unpack(row.b, 3, "B"), 6)
+    end
+end)
+
+tests:it("rollback persists across reopen", function()
+    local path = dbpath("rollback.db")
+    do
+        local db <close> = io.sqlite(path)
+        db:exec("CREATE TABLE t (n INTEGER)")
+        catch db:transaction(function()
+            db:run("INSERT INTO t VALUES (1)")
+            error("abort")
+        end)
+    end
+    local db <close> = io.sqlite(path)
+    for row in db:query("SELECT count(*) AS n FROM t") do
+        tests:assert_equal(row.n, 0)
+    end
+end)
+
+tests:it("a reader handle sees a writer's committed rows", function()
+    local path = dbpath("two.db")
+    local writer <close> = io.sqlite(path)
+    writer:exec("CREATE TABLE t (n INTEGER)")
+    local reader <close> = io.sqlite(path)
+    writer:run("INSERT INTO t VALUES (42)")
+    for row in reader:query("SELECT n FROM t") do
+        tests:assert_equal(row.n, 42)
+    end
+end)
+
+tests:describe("read-only mode")
+
+tests:it("mode 'r' reads and refuses writes", function()
+    local path = dbpath("readonly.db")
+    do
+        local db <close> = io.sqlite(path)
+        db:exec("CREATE TABLE t (n INTEGER)")
+        db:run("INSERT INTO t VALUES (5)")
+    end
+    local db <close> = io.sqlite(path, "r")
+    for row in db:query("SELECT n FROM t") do
+        tests:assert_equal(row.n, 5)
+    end
+    tests:assert_throws(function() db:run("INSERT INTO t VALUES (6)") end,
+        "readonly database")
+end)
+
+tests:it("mode 'r' skips the write pledge and surfaces SQLite's error",
+    function()
+    -- sqlite_ro_* paths carry a read grant only, and the file does not
+    -- exist, so the failure is SQLite's and never a permission denial
+    local ok, err = catch io.sqlite("./sqlite_ro_" .. RUN .. ".db", "r")
+    assert(not ok, "opening a missing file read-only fails")
+    tests:assert_contains(tostring(err), "unable to open")
+    assert(not tostring(err):find("permission"),
+        "the pledge sweep passed on the read grant alone")
+end)
+
+tests:describe("pledge gating")
+
+tests:it("an ungranted path is denied at open", function()
+    local ok, err = catch io.sqlite("./elsewhere_" .. RUN .. "/x.db")
+    assert(not ok)
+    tests:assert_contains(tostring(err), 'permission "fs:read" denied')
+end)
+
+tests:it("a read-only grant denies the default writable mode", function()
+    local ok, err = catch io.sqlite("./sqlite_ro_" .. RUN .. ".db")
+    assert(not ok)
+    tests:assert_contains(tostring(err), 'permission "fs:write" denied')
+end)
+
+tests:it("a grant that misses the sidecars is denied at open", function()
+    -- exactdb_*.db covers the database file itself but no -journal,
+    -- -wal, or -shm path, so the sidecar sweep rejects the open
+    local ok, err = catch io.sqlite("./exactdb_" .. RUN .. ".db")
+    assert(not ok)
+    tests:assert_contains(tostring(err), "permission")
+    tests:assert_contains(tostring(err), "%-journal")
+end)
+
+tests:describe("hostile and odd files")
+
+tests:it("a garbage file raises at open in writable mode", function()
+    local path = dbpath("garbage.db")
+    local f = io.open(path, "wb")
+    f:write("this is definitely not a sqlite file at all")
+    f:close()
+    local ok, err = catch io.sqlite(path)
+    assert(not ok, "the WAL pragma reads the header at open")
+    tests:assert_contains(tostring(err), "not a database")
+end)
+
+tests:it("a garbage file in mode 'r' raises at first query", function()
+    local path = dbpath("garbage2.db")
+    local f = io.open(path, "wb")
+    f:write("still not a sqlite file")
+    f:close()
+    local db <close> = io.sqlite(path, "r")
+    tests:assert_throws(function()
+        for _ in db:query("SELECT * FROM sqlite_schema") do
+        end
+    end, "not a database")
+end)
+
+tests:it("opening a directory fails cleanly", function()
+    local ok, err = catch io.sqlite(SANDBOX)
+    assert(not ok)
+    tests:assert_contains(tostring(err), "cannot open database")
+end)
+
+tests:describe("lifetime")
+
+tests:it("GC releases a file-backed handle", function()
+    local path = dbpath("gcfile.db")
+    do
+        local db = io.sqlite(path)
+        db:exec("CREATE TABLE t (n INTEGER)")
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local db <close> = io.sqlite(path)
+    db:run("INSERT INTO t VALUES (1)")
+    for row in db:query("SELECT count(*) AS n FROM t") do
+        tests:assert_equal(row.n, 1)
+    end
+end)
+
+catch fs.remove(SANDBOX, true)
+local sandbox_left = catch fs.type(SANDBOX)
+assert(not sandbox_left, "sandbox cleanup")
+
+tests:finish()

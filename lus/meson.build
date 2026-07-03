@@ -281,6 +281,7 @@ h1_tests = [
   'h1/cloning',
   'h1/datetime',
   'h1/sqlite',
+  'h1/sqlite_fs',
   'h1/archive',
   'h1/pledge',
   'h1/security',
@@ -339,6 +340,13 @@ h2_call = executable('test_call', '../lus-tests/h2/test_call.c',
   dependencies: lus_deps,
 )
 test('h2/call', h2_call, suite: 'h2')
+
+h2_sqlite = executable('test_sqlite', '../lus-tests/h2/test_sqlite.c',
+  include_directories: [include_directories('src'), sqlite_inc],
+  link_with: liblus,
+  dependencies: lus_deps,
+)
+test('h2/sqlite', h2_sqlite, suite: 'h2')
 
 
 # H3: System Integration (Container Wrapper)
