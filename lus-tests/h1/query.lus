@@ -1,0 +1,552 @@
+--[[
+  Query execution semantics: the query() iterator over the in-memory
+  provider, projections, where evaluation, ordering, grouping,
+  aggregates, distinct, joins, laziness, the __query metamethod, and
+  debug.queryplan. Syntax and value semantics live in
+  h1/query_syntax.lus.
+]]
+
+global io, print, assert, require, pledge, type, tostring, string, load,
+    collectgarbage, debug, pairs, setmetatable, math, query, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("query")
+
+local function collect(q)
+    local out = {}
+    for row in query(q) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+local function people()
+    return {
+        { name = "Alice", age = 30, region = "east" },
+        { name = "Bob",   age = 17, region = "west" },
+        { name = "Carol", age = 42, region = "east" },
+        { name = "Dave",  age = 30, region = "west" },
+    }
+end
+
+tests:describe("select and projection")
+
+tests:it("select one column yields records keyed by field", function()
+    local t = people()
+    local rows = collect(@t as p select p.name order by p.name)
+    tests:assert_equal(#rows, 4)
+    tests:assert_equal(rows[1].name, "Alice")
+    tests:assert_equal(rows[1].age, nil, "only the projected key exists")
+end)
+
+tests:it("multi-column select carries both keys", function()
+    local t = people()
+    local rows = collect(@t as p where p.name == "Bob" select p.name, p.age)
+    tests:assert_equal(rows[1].name, "Bob")
+    tests:assert_equal(rows[1].age, 17)
+end)
+
+tests:it("whole-row select passes the source record through", function()
+    local t = people()
+    local rows = collect(@t as p where p.name == "Bob" select p)
+    assert(rows[1] == t[2], "identity, not a copy")
+end)
+
+tests:it("no select at all passes rows through", function()
+    local t = people()
+    local rows = collect(@t as p where p.age > 18)
+    tests:assert_equal(#rows, 3)
+    assert(rows[1] == t[1])
+end)
+
+tests:it("computed projections need and use their name", function()
+    local t = people()
+    local rows = collect(@t as p where p.name == "Bob" select p.age * 2 as double)
+    tests:assert_equal(rows[1].double, 34)
+end)
+
+tests:it("a missing column projects to an absent field", function()
+    local t = people()
+    local rows = collect(@t as p select p.missing as m limit 1)
+    tests:assert_equal(rows[1].m, nil)
+    local keys = 0
+    for _ in pairs(rows[1]) do
+        keys = keys + 1
+    end
+    tests:assert_equal(keys, 0, "nil never becomes a record field")
+end)
+
+tests:describe("where")
+
+tests:each("every comparison operator filters", {
+    { "==", 2 }, { "~=", 2 }, { "<", 1 }, { "<=", 3 }, { ">", 1 },
+    { ">=", 3 },
+}, function(op, expected)
+    local t = people()
+    local q = load("local t = ... return @t as p where p.age " .. op ..
+        " 30 select p.name")(t)
+    tests:assert_equal(#collect(q), expected, "operator " .. op)
+end)
+
+tests:it("boolean logic and parentheses", function()
+    local t = people()
+    local rows = collect(@t as p
+        where (p.region == "east" or p.age < 20) and not (p.name == "Bob")
+        select p.name)
+    tests:assert_equal(#rows, 2)
+end)
+
+tests:it("arithmetic and concatenation in predicates", function()
+    local t = people()
+    local rows = collect(@t as p
+        where p.age + 10 > 40 and p.name .. "!" == "Carol!"
+        select p.name)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].name, "Carol")
+end)
+
+tests:it("bound parameters capture at build time", function()
+    local t = people()
+    local minimum = 18
+    local q = @t as p where p.age >= minimum select p.name
+    minimum = 100
+    tests:assert_equal(#collect(q), 3, "the old value stays captured")
+end)
+
+tests:it("parameter chains resolve through tables", function()
+    local t = people()
+    local limits = { adult = 18 }
+    local rows = collect(@t as p where p.age >= limits.adult select p.name)
+    tests:assert_equal(#rows, 3)
+end)
+
+tests:it("host closures run once per row with the row", function()
+    local t = people()
+    local calls = 0
+    local function probe(row)
+        calls = calls + 1
+        assert(type(row) == "table" and row.name ~= nil)
+        return row.age > 18
+    end
+    local rows = collect(@t as p where probe(p) select p.name)
+    tests:assert_equal(calls, 4, "probe sees every row")
+    tests:assert_equal(#rows, 3)
+end)
+
+tests:it("host closures capture upvalues live", function()
+    local t = people()
+    local cutoff = 18
+    local function pass(row)
+        return row.age >= cutoff
+    end
+    local q = @t as p where pass(p) select p.name
+    tests:assert_equal(#collect(q), 3)
+    cutoff = 40
+    tests:assert_equal(#collect(q), 1, "upvalues stay live in closures")
+end)
+
+tests:it("method calls lift and run in memory", function()
+    local t = people()
+    local rows = collect(@t as p where p.name:find("^A") select p.name)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].name, "Alice")
+end)
+
+tests:it("row against row comparisons work", function()
+    local t = { { a = 2, b = 1 }, { a = 1, b = 2 } }
+    local rows = collect(@t as r where r.a > r.b select r.a)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].a, 2)
+end)
+
+tests:it("a comparison with nil is false", function()
+    local t = { { a = 1 }, { b = 2 } }
+    tests:assert_equal(#collect(@t as s where s.a > 0 select s), 1)
+    tests:assert_equal(#collect(@t as s where s.a == nil select s), 0,
+        "even equality with nil is false")
+end)
+
+tests:it("a raising host closure propagates catchably", function()
+    local t = people()
+    local q = @t as p where error("boom") select p.name
+    local ok, err = catch (function()
+        for _ in query(q) do
+        end
+    end)()
+    assert(not ok)
+    tests:assert_contains(tostring(err), "boom")
+end)
+
+tests:describe("order, limit, offset")
+
+tests:it("ascending is the default and desc flips", function()
+    local t = people()
+    local up = collect(@t as p select p.age order by p.age)
+    local down = collect(@t as p select p.age order by p.age desc)
+    tests:assert_equal(up[1].age, 17)
+    tests:assert_equal(down[1].age, 42)
+end)
+
+tests:it("multiple keys with mixed directions", function()
+    local t = people()
+    local rows = collect(@t as p select p.age, p.name
+        order by p.age desc, p.name)
+    tests:assert_equal(rows[1].age, 42)
+    tests:assert_equal(rows[2].name, "Alice", "ties break by name")
+    tests:assert_equal(rows[3].name, "Dave")
+end)
+
+tests:it("order by a projection alias", function()
+    local t = people()
+    local rows = collect(@t as p select p.name, p.age * 2 as double
+        order by double desc)
+    tests:assert_equal(rows[1].name, "Carol")
+end)
+
+tests:it("nil orders first ascending", function()
+    local t = { { a = 2 }, {}, { a = 1 } }
+    local rows = collect(@t as r select r order by r.a)
+    tests:assert_equal(rows[1].a, nil)
+    tests:assert_equal(rows[2].a, 1)
+end)
+
+tests:it("NaN orders with nil", function()
+    local t = { { a = 2 }, { a = 0 / 0 }, { a = 1 } }
+    local rows = collect(@t as r select r order by r.a)
+    assert(rows[1].a ~= rows[1].a, "the NaN row comes first")
+end)
+
+tests:it("ordering across types raises", function()
+    local t = { { a = 1 }, { a = "x" } }
+    tests:assert_throws(function()
+        collect(@t as r select r order by r.a)
+    end, "cannot order rows on a")
+end)
+
+tests:it("limit and offset window the results", function()
+    local t = people()
+    tests:assert_equal(#collect(@t as p select p.name limit 0), 0)
+    tests:assert_equal(#collect(@t as p select p.name limit 100), 4)
+    tests:assert_equal(#collect(@t as p select p.name offset 100), 0)
+    local w = collect(@t as p select p.name order by p.name limit 2 offset 1)
+    tests:assert_equal(#w, 2)
+    tests:assert_equal(w[1].name, "Bob")
+    local nrows = 3
+    tests:assert_equal(#collect(@t as p select p.name limit nrows), 3,
+        "a bound parameter works as a limit")
+end)
+
+tests:it("negative and non-numeric limits raise", function()
+    local t = people()
+    tests:assert_throws(function()
+        collect(@t as p select p.name limit -1)
+    end, "nonnegative")
+    local bad = "x"
+    tests:assert_throws(function()
+        collect(@t as p select p.name limit bad)
+    end, "query limit must be a number")
+end)
+
+tests:describe("group, having, aggregates, distinct")
+
+tests:it("every aggregate over groups", function()
+    local sales = {
+        { region = "east", amount = 100 },
+        { region = "west", amount = 50 },
+        { region = "east", amount = 26 },
+    }
+    local rows = collect(@sales as s
+        select s.region, sum(s.amount) as total, count(*) as n,
+            avg(s.amount) as mean, min(s.amount) as lo, max(s.amount) as hi
+        group by s.region
+        order by total desc)
+    tests:assert_equal(#rows, 2)
+    tests:assert_equal(rows[1].region, "east")
+    tests:assert_equal(rows[1].total, 126)
+    tests:assert_equal(rows[1].n, 2)
+    tests:assert_equal(rows[1].mean, 63.0)
+    tests:assert_equal(rows[1].lo, 26)
+    tests:assert_equal(rows[1].hi, 100)
+end)
+
+tests:it("count(col) skips nils and count(*) does not", function()
+    local t = { { a = 1 }, {}, { a = 3 } }
+    local rows = collect(@t as r select count(*) as all, count(r.a) as some)
+    tests:assert_equal(rows[1].all, 3)
+    tests:assert_equal(rows[1].some, 2)
+end)
+
+tests:it("min and max work over strings", function()
+    local t = people()
+    local rows = collect(@t as p select min(p.name) as lo, max(p.name) as hi)
+    tests:assert_equal(rows[1].lo, "Alice")
+    tests:assert_equal(rows[1].hi, "Dave")
+end)
+
+tests:it("grouping by two keys", function()
+    local t = people()
+    local rows = collect(@t as p select p.region, p.age, count(*) as n
+        group by p.region, p.age)
+    tests:assert_equal(#rows, 4)
+end)
+
+tests:it("having filters groups with aggregates not in select", function()
+    local t = people()
+    local rows = collect(@t as p select p.region
+        group by p.region having count(*) > 1 and max(p.age) > 40)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].region, "east")
+end)
+
+tests:it("aggregates without group by yield one record", function()
+    local t = people()
+    local rows = collect(@t as p select count(*) as n, sum(p.age) as total)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].n, 4)
+    tests:assert_equal(rows[1].total, 119)
+end)
+
+tests:it("aggregates over an empty source", function()
+    local empty = {}
+    local rows = collect(@empty as t
+        select count(*) as n, sum(t.x) as s, min(t.x) as lo)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].n, 0)
+    tests:assert_equal(rows[1].s, nil)
+    tests:assert_equal(rows[1].lo, nil)
+end)
+
+tests:it("integer sums overflow loudly and floats mix in", function()
+    local big = { { v = math.maxinteger }, { v = 1 } }
+    tests:assert_throws(function()
+        collect(@big as b select sum(b.v) as s)
+    end, "integer overflow in sum")
+    local mixed = { { v = 1 }, { v = 0.5 } }
+    local rows = collect(@mixed as m select sum(m.v) as s)
+    tests:assert_equal(rows[1].s, 1.5)
+end)
+
+tests:it("a non-key non-aggregate projection raises", function()
+    local t = people()
+    tests:assert_throws(function()
+        collect(@t as p select p.region, p.age group by p.region)
+    end, "must be an aggregate or a group key")
+end)
+
+tests:it("group keys must be primitives", function()
+    local t = { { k = {} } }
+    tests:assert_throws(function()
+        collect(@t as r select count(*) as n group by r.k)
+    end, "primitive")
+end)
+
+tests:it("integer and float group keys unify", function()
+    local t = { { k = 1 }, { k = 1.0 }, { k = 2 } }
+    local rows = collect(@t as r select r.k, count(*) as n group by r.k)
+    tests:assert_equal(#rows, 2)
+end)
+
+tests:it("nil and NaN group together", function()
+    local t = { {}, { k = 0 / 0 }, { k = 1 } }
+    local rows = collect(@t as r select count(*) as n group by r.k
+        order by n desc)
+    tests:assert_equal(#rows, 2)
+    tests:assert_equal(rows[1].n, 2)
+end)
+
+tests:it("enums group and compare", function()
+    local color = enum red, green end
+    local t = { { c = color.red }, { c = color.red }, { c = color.green } }
+    local reds = collect(@t as r where r.c == color.red select r)
+    tests:assert_equal(#reds, 2)
+    local grouped = collect(@t as r select count(*) as n group by r.c
+        order by n desc)
+    tests:assert_equal(#grouped, 2)
+    tests:assert_equal(grouped[1].n, 2)
+end)
+
+tests:it("distinct dedupes single and multi column projections", function()
+    local t = people()
+    tests:assert_equal(#collect(@t as p select distinct p.region), 2)
+    tests:assert_equal(#collect(@t as p select distinct p.region, p.age), 4)
+    tests:assert_equal(#collect(@t as p select distinct p.age), 3)
+end)
+
+tests:describe("joins")
+
+tests:it("no condition means a cross product", function()
+    local a = { { x = 1 }, { x = 2 } }
+    local b = { { y = 1 }, { y = 2 }, { y = 3 } }
+    local rows = collect(@a as l, b as r select l.x, r.y)
+    tests:assert_equal(#rows, 6)
+end)
+
+tests:it("equality joins filter", function()
+    local t = people()
+    local orders = {
+        { who = "Alice", total = 5 },
+        { who = "Carol", total = 9 },
+        { who = "Nobody", total = 1 },
+    }
+    local rows = collect(@t as p, orders as o
+        where p.name == o.who select p.name, o.total order by o.total)
+    tests:assert_equal(#rows, 2)
+    tests:assert_equal(rows[1].total, 5)
+end)
+
+tests:it("non-equality join conditions work", function()
+    local a = { { x = 1 }, { x = 3 } }
+    local b = { { y = 2 } }
+    local rows = collect(@a as l, b as r where l.x > r.y select l.x)
+    tests:assert_equal(#rows, 1)
+    tests:assert_equal(rows[1].x, 3)
+end)
+
+tests:it("three-way and self joins", function()
+    local t = { { n = 1 }, { n = 2 } }
+    local rows = collect(@t as a, t as b, t as c
+        where a.n == b.n and b.n == c.n select a.n)
+    tests:assert_equal(#rows, 2)
+    local pairs_ = collect(@t as a, t as b where a.n < b.n select a.n, b.n as m)
+    tests:assert_equal(#pairs_, 1)
+end)
+
+tests:describe("laziness and re-execution")
+
+tests:it("a stored query runs fresh on every loop", function()
+    local src = { { v = 1 } }
+    local q = @src as s select s.v
+    tests:assert_equal(#collect(q), 1)
+    src[2] = { v = 2 }
+    tests:assert_equal(#collect(q), 2, "the mutation is visible")
+end)
+
+tests:it("two iterators over one query are independent", function()
+    local t = people()
+    local q = @t as p select p.name order by p.name
+    local a = query(q)
+    local b = query(q)
+    tests:assert_equal(a().name, "Alice")
+    tests:assert_equal(b().name, "Alice")
+    tests:assert_equal(a().name, "Bob")
+end)
+
+tests:it("an exhausted iterator keeps returning nil", function()
+    local one = { { v = 1 } }
+    local iter = query(@one as s select s.v)
+    assert(iter() ~= nil)
+    tests:assert_equal(iter(), nil)
+    tests:assert_equal(iter(), nil)
+end)
+
+tests:it("an empty source yields zero iterations", function()
+    local empty = {}
+    local ran = false
+    for _ in query(@empty as e select e.x) do
+        ran = true
+    end
+    tests:assert_equal(ran, false)
+end)
+
+tests:describe("sources and providers")
+
+tests:it("a non-record row raises at execution", function()
+    local bad = { "notatable" }
+    local q = @bad as x select x.a
+    tests:assert_throws(function() return query(q) end, "not a record")
+end)
+
+tests:it("a non-queryable source raises at execution, not build",
+    function()
+    local n = 42
+    local q = @(n) as x select x.a
+    tests:assert_equal(type(q), "query", "building is fine")
+    tests:assert_throws(function() return query(q) end, "not queryable")
+end)
+
+tests:it("__query supplies rows and residual work stays in memory",
+    function()
+    local seen
+    local custom = setmetatable({}, {
+        __query = function(self, q, idx)
+            seen = { qtype = type(q), idx = idx }
+            local i = 0
+            return function()
+                i = i + 1
+                if i <= 4 then
+                    return { v = i * 10 }
+                end
+            end
+        end,
+    })
+    local total = 0
+    for r in query(@custom as c where c.v > 10 select c.v) do
+        total = total + r.v
+    end
+    tests:assert_equal(total, 90, "the where still filtered in memory")
+    tests:assert_equal(seen.qtype, "query")
+    tests:assert_equal(seen.idx, 1)
+end)
+
+tests:it("__query returning a non-function raises", function()
+    local bad = setmetatable({}, { __query = function() return 42 end })
+    local q = @bad as b select b.a
+    tests:assert_throws(function() return query(q) end,
+        "'__query' must return a function")
+end)
+
+tests:it("query() rejects non-queries", function()
+    tests:assert_throws(function() return query(42) end, "query expected")
+    tests:assert_throws(function() return query() end)
+    tests:assert_throws(function() return query({}) end, "query expected")
+end)
+
+tests:describe("debug.queryplan")
+
+tests:it("the plan names providers and conjunct shapes", function()
+    local t = people()
+    local function opaque(p) return true end
+    local plan = debug.queryplan(@t as p
+        where p.age > 1 and opaque(p) select p.name)
+    tests:assert_contains(plan, "memory")
+    tests:assert_contains(plan, "host closure")
+    tests:assert_contains(plan, "translatable")
+end)
+
+tests:it("the plan is stable across calls", function()
+    local t = people()
+    local q = @t as p where p.age > 1 select p.name
+    tests:assert_equal(debug.queryplan(q), debug.queryplan(q))
+end)
+
+tests:it("queryplan rejects non-queries", function()
+    tests:assert_throws(function() return debug.queryplan(1) end,
+        "query expected")
+end)
+
+tests:describe("GC under execution")
+
+tests:it("collection during a paused iteration is safe", function()
+    local t = people()
+    local iter = query(@t as p select p.name order by p.name)
+    assert(iter() ~= nil)
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(iter() ~= nil, "the iterator survives collection")
+end)
+
+tests:it("a query keeps an otherwise dead source alive", function()
+    local q
+    do
+        local hidden = { { n = 7 } }
+        q = @hidden as h select h.n
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local rows = collect(q)
+    tests:assert_equal(rows[1].n, 7)
+end)
+
+tests:finish()

@@ -180,6 +180,7 @@ lib_sources = files(
   'src/larchivelib.c',
   'src/ltimelib.c',
   'src/lsqlitelib.c',
+  'src/lquerylib.c',
   'src/ltzdata.c',
   'src/lwinzones.c',
   'src/linit.c',
@@ -300,6 +301,7 @@ h1_tests = [
   'h1/preinclude',
   'h1/flags',
   'h1/query_syntax',
+  'h1/query',
 ]
 
 foreach t : h1_tests
