@@ -1,0 +1,131 @@
+---
+order: 130
+title: "Acquis 30 - Time"
+acquis: true
+shortdesc: "The time module: immutable instant, duration, and zoned types with an embedded IANA tzdata database."
+draft: true
+---
+
+_Time_ adds a first-class `time` module for date, time, and duration handling. Lua inherits only `os.time`, `os.date`, and `os.difftime`, which work in raw integer epochs and route timezone handling through the C library's global, non-reentrant `localtime`/`mktime`. That is too little for real programs and unsafe in the presence of workers. The `time` module replaces it with immutable value types, exact arithmetic, and a self-contained timezone database.
+
+## The three types
+
+The single most common date/time bug is conflating three genuinely different things: an absolute point on the timeline, a set of wall-clock fields, and a span. `time` keeps them apart.
+
+- An **`instant`** is an absolute point on the UTC timeline, to nanosecond precision.
+- A **`zoned`** is a civil (wall-clock) date and time observed in some `zone`.
+- A **`duration`** is a signed span of time.
+
+All three are immutable: every operation returns a new value, so they are safe to alias and to hand to workers.
+
+```lus
+global print, time
+
+local now = time.now()              -- instant
+print(now:iso())                    -- 2026-07-02T13:15:00Z
+print(now:epoch())                  -- 1782998100
+```
+
+## Exact versus calendar arithmetic
+
+Because the types are distinct, the _kind_ of arithmetic you get is unambiguous. Adding a `duration` to an `instant` is exact SI-seconds. Calendar arithmetic is a separate operation on a `zoned`: asking for "the same wall-clock time tomorrow" may land 23 or 25 hours later across a DST transition. The value you hold tells you which one applies, so the two can never be silently confused.
+
+```lus
+local i = time.instant(1782998100)
+local later = i + time.hours(72)    -- exactly 259200 seconds later
+print((later - i):seconds())        -- 259200.0
+
+local span = later - i              -- instant - instant is a duration
+```
+
+Durations compose with the usual operators and offer readable constructors:
+
+```lus
+local d = time.duration{ hours = 1, minutes = 30 }
+print(d:seconds())                  -- 5400.0
+
+local timeout = time.seconds(30)
+local total = time.hours(2) + time.minutes(15)
+local parts = (-time.seconds(90)):parts()
+print(parts.negative, parts.minutes, parts.seconds)   -- true 1 30
+```
+
+## Zones and the embedded tzdata database
+
+A `zone` is either a named IANA zone, a fixed offset, or the system's local zone. Crucially, named zones resolve from an IANA tzdata database **compiled into the runtime** rather than from the operating system. That database is a zstd-compressed blob decompressed on first use. This means:
+
+- no filesystem access or `fs` pledge is needed to use zones;
+- behaviour is identical on every platform, including Windows, which has no IANA database of its own;
+- offsets honour the full history of DST transitions.
+
+```lus
+local ny = time.zone("America/New_York")
+
+local summer = time.instant(1782998100)   -- July
+local winter = time.instant(1767355200)   -- January
+print(summer:at(ny):iso())   -- 2026-07-02T09:15:00-04:00  (EDT)
+print(winter:at(ny):iso())   -- 2026-01-02T07:00:00-05:00  (EST)
+```
+
+Wall-clock fields are interpreted through a zone with `time.zoned`, which resolves them back to the correct UTC instant:
+
+```lus
+local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                       minute = 15 }, ny)
+print(z:instant():iso())              -- 2026-07-02T13:15:00Z
+print(z.weekday == time.weekday.thursday, z.yearday)   -- true  183
+```
+
+Days of the week and months are first-class enums, `time.weekday` (`monday`-`sunday`, ISO numbering) and `time.month` (`january`-`december`). The `weekday` field returns a `time.weekday` value; `month` stays a plain integer for arithmetic, but a `time.month` value may be passed anywhere a month is expected:
+
+```lus
+local d = time.zoned{ year = 2026, month = time.month.december, day = 25 }
+print(tonumber(d.weekday))            -- 5  (a Friday)
+```
+
+Calendar arithmetic lives on `zoned`, distinct from the exact instant arithmetic above. `z:with{...}` replaces fields and `z:add{...}` advances by calendar amounts; both re-resolve the offset through the zone, so they cross DST boundaries correctly and clamp overflowing days:
+
+```lus
+local w = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+print(w:add{ days = 1 }:iso())     -- 2026-03-08T12:00:00-04:00  (noon stays noon)
+local jan31 = time.zoned({ year = 2026, month = 1, day = 31 }, ny)
+print(jan31:add{ months = 1 }:iso())  -- 2026-02-28T00:00:00-05:00
+```
+
+Fixed offsets and the local zone round out the set:
+
+```lus
+local utc_minus_5 = time.offset(-5 * 3600)
+local here = time.localzone()             -- detected from the environment
+print(time.now():at(here):iso())
+print(time.tzdata_version())              -- e.g. "2026b"
+```
+
+`time.localzone()` inspects `$TZ`, then `/etc/localtime`/`/etc/timezone` on Unix, or the current Windows time zone mapped to its IANA name, and falls back to UTC when detection fails.
+
+## Formatting
+
+Formatting uses the familiar `strftime` specifiers, consistent with `os.date`, plus an ISO 8601 shortcut. The bridge to the legacy API is explicit: `time.instant(os.time())` lifts an epoch into an `instant`, and `instant:epoch()` returns to one.
+
+```lus
+print(time.now():format("%Y-%m-%d %H:%M"))
+```
+
+`time.parse` reads ISO 8601 the other way, yielding a `zoned` when the text carries an explicit offset and an `instant` when it is in UTC or offset-free:
+
+```lus
+local i = time.parse("2026-07-02T13:15:00Z")       -- instant
+local z = time.parse("2026-07-02T09:15:00-04:00")  -- zoned
+```
+
+## Design notes
+
+- **Worker-safe by construction.** All civil arithmetic uses branch-free day-count algorithms rather than `localtime`/`mktime`, and the tzdata database is decompressed per interpreter state, so no global timezone state is ever shared between threads.
+- **Monotonic clock is separate.** `time.monotonic()` returns an `instant` from a monotonic clock for measuring elapsed time; it is immune to wall-clock adjustments, and subtracting two readings yields a `duration`. It has no calendar meaning, so formatting one or calling `:epoch()` is an error.
+- **Public-domain data.** The IANA tzdata database is public domain and is embedded directly; `scripts/update-tzdata.sh` regenerates the compiled blob from a system or freshly-built zoneinfo tree.
+
+## Not yet specified
+
+The following are planned but not part of this acquis:
+
+- `time.parse` of relative or locale-dependent formats beyond ISO 8601 and explicit `strftime` patterns.

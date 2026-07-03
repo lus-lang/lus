@@ -142,6 +142,9 @@ lib_sources = files(
   'src/lworkerlib.c',
   'src/lvectorlib.c',
   'src/larchivelib.c',
+  'src/ltimelib.c',
+  'src/ltzdata.c',
+  'src/lwinzones.c',
   'src/linit.c',
 )
 
@@ -237,6 +240,7 @@ h1_tests = [
   'h1/groups',
   'h1/vectors',
   'h1/cloning',
+  'h1/datetime',
   'h1/archive',
   'h1/pledge',
   'h1/security',

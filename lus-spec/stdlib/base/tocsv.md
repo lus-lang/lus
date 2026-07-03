@@ -3,7 +3,7 @@ name: tocsv
 module: base
 kind: function
 since: 1.6.0
-stability: unstable
+stability: stable
 origin: lus
 params:
   - name: t

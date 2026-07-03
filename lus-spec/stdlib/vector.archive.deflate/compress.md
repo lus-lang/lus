@@ -3,7 +3,7 @@ name: vector.archive.deflate.compress
 module: vector.archive.deflate
 kind: function
 since: 1.6.0
-stability: unstable
+stability: stable
 origin: lus
 params:
   - name: data

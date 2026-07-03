@@ -7,7 +7,7 @@ local M = {}
 M.globals = { "_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "fromcsv", "fromjson", "getmetatable", "ipairs", "load", "loadfile", "next", "pairs", "pledge", "print", "rawequal", "rawget", "rawlen", "rawset", "require", "select", "setmetatable", "tocsv", "tojson", "tonumber", "tostring", "type", "warn", "_ENV" }
 
 -- Stdlib table names
-M.tables = { "string", "table", "math", "io", "os", "debug", "coroutine", "utf8", "fs", "network", "worker", "vector", "package" }
+M.tables = { "string", "table", "math", "io", "os", "debug", "coroutine", "utf8", "fs", "network", "worker", "vector", "package", "time" }
 
 -- Members per library (for completion/hover)
 M.members = {
@@ -190,6 +190,25 @@ M.members = {
     {n = "unpack", k = 3},
     {n = "unzip", k = 3},
     {n = "zip", k = 3},
+  },
+  ["time"] = {
+    {n = "days", k = 3},
+    {n = "duration", k = 3},
+    {n = "hours", k = 3},
+    {n = "instant", k = 3},
+    {n = "localzone", k = 3},
+    {n = "millis", k = 3},
+    {n = "minutes", k = 3},
+    {n = "monotonic", k = 3},
+    {n = "month", k = 21},
+    {n = "now", k = 3},
+    {n = "offset", k = 3},
+    {n = "parse", k = 3},
+    {n = "seconds", k = 3},
+    {n = "tzdata_version", k = 3},
+    {n = "weekday", k = 21},
+    {n = "zone", k = 3},
+    {n = "zoned", k = 3},
   },
   ["utf8"] = {
     {n = "char", k = 3},
@@ -421,6 +440,25 @@ M.fields = {
     ["unzip"] = "function",
     ["zip"] = "function",
   },
+  ["time"] = {
+    ["days"] = "function",
+    ["duration"] = "function",
+    ["hours"] = "function",
+    ["instant"] = "function",
+    ["localzone"] = "function",
+    ["millis"] = "function",
+    ["minutes"] = "function",
+    ["monotonic"] = "function",
+    ["month"] = "constant",
+    ["now"] = "function",
+    ["offset"] = "function",
+    ["parse"] = "function",
+    ["seconds"] = "function",
+    ["tzdata_version"] = "function",
+    ["weekday"] = "constant",
+    ["zone"] = "function",
+    ["zoned"] = "function",
+  },
   ["utf8"] = {
     ["char"] = "function",
     ["charpattern"] = "constant",
@@ -612,6 +650,17 @@ M.signatures = {
   ["table.transpose"] = {{n = "matrix", t = "table"}},
   ["table.unpack"] = {{n = "list", t = "table"}, {n = "i", t = "integer", opt = true}, {n = "j", t = "integer", opt = true}},
   ["table.unzip"] = {{n = "array_of_tuples", t = "table"}},
+  ["time.days"] = {{n = "n", t = "integer"}},
+  ["time.duration"] = {{n = "fields", t = "table"}},
+  ["time.hours"] = {{n = "n", t = "integer"}},
+  ["time.instant"] = {{n = "epoch_seconds", t = "integer"}, {n = "nanos", t = "integer", opt = true}},
+  ["time.millis"] = {{n = "n", t = "integer"}},
+  ["time.minutes"] = {{n = "n", t = "integer"}},
+  ["time.offset"] = {{n = "seconds", t = "integer"}},
+  ["time.parse"] = {{n = "s", t = "string"}, {n = "format", t = "string", opt = true}},
+  ["time.seconds"] = {{n = "n", t = "integer"}},
+  ["time.zone"] = {{n = "name", t = "string"}},
+  ["time.zoned"] = {{n = "fields", t = "table"}, {n = "zone", t = "zone|integer", opt = true}},
   ["tocsv"] = {{n = "t", t = "table"}, {n = "delimiter", t = "string", opt = true}},
   ["tojson"] = {{n = "value", t = "any"}, {n = "filter", t = "function", opt = true}},
   ["tonumber"] = {{n = "e", t = "any"}, {n = "base", t = "integer", opt = true}},
@@ -796,6 +845,21 @@ M.returns = {
   ["table.unpack"] = "any",
   ["table.unzip"] = "table",
   ["table.zip"] = "table",
+  ["time.days"] = "duration",
+  ["time.duration"] = "duration",
+  ["time.hours"] = "duration",
+  ["time.instant"] = "instant",
+  ["time.localzone"] = "zone",
+  ["time.millis"] = "duration",
+  ["time.minutes"] = "duration",
+  ["time.monotonic"] = "instant",
+  ["time.now"] = "instant",
+  ["time.offset"] = "zone",
+  ["time.parse"] = "instant|zoned",
+  ["time.seconds"] = "duration",
+  ["time.tzdata_version"] = "string",
+  ["time.zone"] = "zone",
+  ["time.zoned"] = "zoned",
   ["tocsv"] = "string",
   ["tojson"] = "string",
   ["tonumber"] = "number|nil",
@@ -1265,6 +1329,122 @@ Return the elements from table `list` from index `i` to `j`. Defaults to `i = 1`
 Splits a table of tuples into separate tables (inverse of `table.zip`). Returns multiple tables, one per position in the tuples. All tuples must have the same length.]],
   ["table.zip"] = [[
 Combines multiple tables element-wise into a table of tuples. The result length equals the length of the shortest input table. Each tuple is a table `{table1[i], table2[i], ...}`.]],
+  ["time.days"] = [[
+Returns a `duration` of `n` days. A concise alternative to `time.duration{ days = n }` for single-unit spans.
+
+```lus
+local timeout = time.days(5)
+```]],
+  ["time.duration"] = [[
+Constructs a `duration` from a table summing any of `days`, `hours`, `minutes`, `seconds`, `millis`, `micros`, `nanos` (each optional, may be negative).
+
+A `duration` supports `d:seconds()`, `d:millis()`, `d:parts()` (a normalized `{negative, days, hours, minutes, seconds, nanos}` breakdown), the operators `+`, `-`, unary `-`, and `duration * integer`, and the comparisons `==`, `<`, `<=`. See also the scalar helpers `time.days`, `time.hours`, `time.minutes`, `time.seconds`, `time.millis`.]],
+  ["time.hours"] = [[
+Returns a `duration` of `n` hours. A concise alternative to `time.duration{ hours = n }` for single-unit spans.
+
+```lus
+local timeout = time.hours(5)
+```]],
+  ["time.instant"] = [[
+Constructs an `instant` from `epoch_seconds` (Unix seconds since 1970-01-01 UTC) and an optional `nanos` fraction. Use this to lift an `os.time()` value into the `time` type system.
+
+An `instant` supports: `i:epoch()`, `i:nanos()`, `i:format(fmt)`, `i:iso()`, `i:at(zone)` (render as a `zoned` in a `zone` or a fixed offset in seconds), the operators `i + duration`, `i - duration`, `i - instant` (a `duration`), and the comparisons `==`, `<`, `<=`.]],
+  ["time.localzone"] = [[
+Returns the system's local `zone`, detected from the environment: `$TZ`, then `/etc/localtime`/`/etc/timezone` on Unix, or the current Windows time-zone mapped to its IANA name. Falls back to UTC when detection fails. The resolved zone is looked up in the embedded tzdata, so it carries full DST history.
+
+```lus
+print(time.now():at(time.localzone()):iso())
+```]],
+  ["time.millis"] = [[
+Returns a `duration` of `n` millis. A concise alternative to `time.duration{ millis = n }` for single-unit spans.
+
+```lus
+local timeout = time.millis(5)
+```]],
+  ["time.minutes"] = [[
+Returns a `duration` of `n` minutes. A concise alternative to `time.duration{ minutes = n }` for single-unit spans.
+
+```lus
+local timeout = time.minutes(5)
+```]],
+  ["time.monotonic"] = [[
+Returns a monotonic `instant` for timing durations. Monotonic instants never move backwards and are immune to wall-clock adjustments (NTP, DST), but they have no calendar meaning: they may only be subtracted from another monotonic reading to yield a `duration`. Formatting one or calling `:epoch()` raises an error.
+
+```lus
+local start = time.monotonic()
+do_work()
+print(`took {time.monotonic() - start}`)
+```]],
+  ["time.month"] = [[
+A first-class enum of the months, `january` = 1 through `december` = 12. It may be used wherever a month integer is expected (e.g. the `month` field of `time.zoned`, `zoned:with`, and `zoned:add`), taking its 1-based index. The `month` field of a `zoned` returns a plain integer, for arithmetic and parity with `os.date`.
+
+```lus
+local z = time.zoned{ year = 2026, month = time.month.july, day = 2 }
+print(z.month)                      -- 7
+```]],
+  ["time.now"] = [[
+Returns an `instant` for the current point in time, read from the system wall clock (UTC).
+
+```lus
+local n = time.now()
+print(n:iso())          -- "2026-07-02T15:04:05Z"
+print(n:epoch())        -- integer Unix seconds
+```]],
+  ["time.offset"] = [[
+Returns a fixed-offset `zone` at `seconds` east of UTC (negative for west), for cases where a full IANA zone is unnecessary or unavailable. Its `:name()` is the formatted offset, e.g. `"-04:00"`. Unlike a named zone, a fixed offset never varies with the instant.
+
+```lus
+local z = time.offset(-5 * 3600)   -- UTC-05:00
+```]],
+  ["time.parse"] = [[
+Parses a date/time string `s`. Returns a `zoned` when the input carries an explicit numeric offset (e.g. `-04:00` or `-0400`), or an `instant` when it is in UTC (`Z`) or offset-free (assumed UTC).
+
+Without a `format`, `s` is read as ISO 8601: a date alone (`2026-07-02`, midnight UTC), a date and time separated by `T` or a space, optional seconds, and fractional seconds to nanosecond precision.
+
+With a `format`, `s` is matched against an explicit pattern using the specifiers `%Y` `%y` `%m` `%d` `%e` `%H` `%M` `%S` `%z` and `%%`. A space in the pattern matches a run of whitespace; any other literal must match exactly. Parsing is portable and does not depend on the platform's `strptime`.
+
+```lus
+local i = time.parse("2026-07-02T13:15:00Z")            -- ISO -> instant
+local z = time.parse("02/07/2026 09:15 -0400",
+                     "%d/%m/%Y %H:%M %z")               -- pattern -> zoned
+```]],
+  ["time.seconds"] = [[
+Returns a `duration` of `n` seconds. A concise alternative to `time.duration{ seconds = n }` for single-unit spans.
+
+```lus
+local timeout = time.seconds(5)
+```]],
+  ["time.tzdata_version"] = [[
+Returns the IANA tzdata release string embedded in this build, e.g. `"2026b"`. Regenerate the embedded database with `scripts/update-tzdata.sh`.]],
+  ["time.weekday"] = [[
+A first-class enum of the days of the week, following ISO 8601 numbering: `monday` = 1 through `sunday` = 7. The `weekday` field of a `zoned` returns one of these values.
+
+```lus
+local z = time.zoned{ year = 2026, month = 7, day = 2 }
+assert(z.weekday == time.weekday.thursday)
+print(tonumber(z.weekday))          -- 4
+```]],
+  ["time.zone"] = [[
+Returns a `zone` for an IANA name such as `"America/New_York"` or `"Europe/Paris"`, resolved from an embedded, zstd-compressed copy of the IANA tzdata database (`time.tzdata_version()` reports the release). Raises if the name is unknown. No filesystem access or `fs` pledge is required: the database is compiled into the runtime, so named zones behave identically on every platform, including ones without a system tz database.
+
+A `zone` supports `z:name()` and `z:offset(instant)` (the offset east of UTC, in seconds, that the zone observes at that instant, honouring historical DST transitions). Pass a zone to `instant:at(zone)` to render a civil time, or to `time.zoned(fields, zone)` to interpret wall-clock fields.
+
+```lus
+local ny = time.zone("America/New_York")
+print(time.now():at(ny):iso())   -- current time as New York wall clock
+```]],
+  ["time.zoned"] = [[
+Constructs a `zoned` civil datetime from a table of `fields` (`year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`; missing fields default to the start of 1970-01-01). The second argument selects how the wall-clock fields are interpreted: pass a `zone` (from `time.zone`, `time.offset`, or `time.localzone`) for a DST-aware resolution, an integer for a fixed offset east of UTC, or omit it for UTC.
+
+A `zoned` exposes read-only fields `year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`, `weekday`, `yearday`, and `offset`, plus the methods `z:instant()`, `z:format(fmt)`, and `z:iso()`. `month` is an integer (1-12); `weekday` is a [`time.weekday`](/manual/api#time.weekday) enum value (`monday`-`sunday`).
+
+`z:with{...}` returns a copy with the named civil fields replaced, and `z:add{...}` returns a copy advanced by calendar amounts (`years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, `nanos`; negative allowed). Both operate on the wall clock and re-resolve the offset through the originating zone, so `z:add{days = 1}` keeps the same wall-clock time the next day even across a DST transition, and adding months clamps the day to the target month's length (Jan 31 + 1 month is Feb 28 or 29).
+
+```lus
+local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9 }, -4 * 3600)
+print(z:iso())          -- "2026-07-02T09:00:00-04:00"
+print(z.weekday)        -- 4  (Thursday)
+```]],
   ["tocsv"] = [[
 Converts a table of rows `t` to a CSV string. Each row must be a sequential table of values. Non-string values are converted via `tostring`; `nil` values produce empty fields. Fields containing the delimiter, newlines, or double quotes are automatically quoted. The optional `delimiter` defaults to `","`.]],
   ["tojson"] = [[

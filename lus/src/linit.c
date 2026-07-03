@@ -35,6 +35,7 @@ static const luaL_Reg stdlibs[] = {{LUA_GNAME, luaopen_base},
                                    {LUA_NETLIBNAME, luaopen_network},
                                    {LUA_WORKERLIBNAME, luaopen_worker},
                                    {LUA_VECLIBNAME, luaopen_vector},
+                                   {LUA_TIMELIBNAME, luaopen_time},
                                    {NULL, NULL}};
 
 /*
@@ -54,7 +55,7 @@ LUALIB_API void luaL_openselectedlibs(lua_State *L, int load, int preload) {
       lua_setfield(L, -2, lib->name); /* add library to PRELOAD table */
     }
   }
-  lua_assert((mask >> 1) == LUA_VECLIBK);
+  lua_assert((mask >> 1) == LUA_TIMELIBK);
   lua_pop(L, 1); /* remove PRELOAD table */
 
   /* Register JSON global functions (tojson, fromjson) */

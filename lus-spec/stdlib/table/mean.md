@@ -3,7 +3,7 @@ name: table.mean
 module: table
 kind: function
 since: 1.6.0
-stability: unstable
+stability: stable
 origin: lus
 fastcall: true
 params:

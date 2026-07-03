@@ -1280,6 +1280,19 @@ end
 
 Inside a worker, `worker.message(data)` sends data back to the parent, and `worker.peek()` blocks until a message arrives. [`worker.receive`](/manual/api#worker.receive) can accept multiple workers and returns from whichever has a message first (select-like). Workers inherit the parent's permissions in sealed form, so a worker can never hold more permissions than its parent. Creating a worker requires the `load` and `fs:read` permissions to read its script file.
 
+### Time
+
+The [`time`](/manual/api#time) library provides date, time, and duration handling through three immutable types: an `instant` (an absolute point on the UTC timeline), a `zoned` (a civil date and time in some zone), and a `duration` (a signed span). Keeping them distinct means arithmetic is never ambiguous: adding a `duration` to an `instant` is exact SI-seconds, while calendar arithmetic is a separate operation on a `zoned`.
+
+```lus
+local now = time.now()                 -- instant
+local later = now + time.hours(72)     -- exact
+local ny = time.zone("America/New_York")
+print(later:at(ny):iso())              -- civil wall clock, DST-aware
+```
+
+Named zones resolve from an IANA tzdata database embedded in the runtime, so `time.zone` and `time.localzone` need no filesystem access and behave identically across platforms. `time.offset(seconds)` builds a fixed-offset zone, and `time.tzdata_version()` reports the embedded release. Formatting uses `strftime` specifiers (as in `os.date`), with `:iso()` as an ISO 8601 shortcut; bridge to the legacy epoch API with `time.instant(os.time())` and `instant:epoch()`. `time.monotonic()` returns a separate monotonic reading for measuring elapsed time. This library is described in full in [Acquis 30](/manual/acquis-30).
+
 ### Other libraries
 
 The full standard library also includes [`math`](/manual/api#math) (mathematical functions), [`string`](/manual/api#string) (string manipulation and patterns), [`table`](/manual/api#table) (table manipulation), [`io`](/manual/api#io) (file I/O), [`os`](/manual/api#os) (operating system facilities), [`utf8`](/manual/api#utf8) (UTF-8 support), [`debug`](/manual/api#debug) (debugging facilities), [`vector`](/manual/api#vector) (byte buffers), [`coroutine`](/manual/api#coroutine) (coroutine control), and [`package`](/manual/api#package) (module loading). See the [API reference](/manual/api) for complete documentation.

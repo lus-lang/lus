@@ -67,6 +67,10 @@ LUAMOD_API int(luaopen_worker)(lua_State *L);
 #define LUA_VECLIBK (LUA_WORKERLIBK << 1)
 LUAMOD_API int(luaopen_vector)(lua_State *L);
 
+#define LUA_TIMELIBNAME "time"
+#define LUA_TIMELIBK (LUA_VECLIBK << 1)
+LUAMOD_API int(luaopen_time)(lua_State *L);
+
 /* JSON global functions (tojson, fromjson) */
 LUAMOD_API int(luaopen_json)(lua_State *L);
 

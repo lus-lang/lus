@@ -208,7 +208,7 @@ for (const mod of Object.keys(members)) {
 // Add the top-level module names to tables array
 const TOP_MODULES = [
   "string", "table", "math", "io", "os", "debug",
-  "coroutine", "utf8", "fs", "network", "worker", "vector", "package",
+  "coroutine", "utf8", "fs", "network", "worker", "vector", "package", "time",
 ];
 
 for (const mod of TOP_MODULES) {

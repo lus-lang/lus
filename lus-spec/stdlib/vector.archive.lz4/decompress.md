@@ -3,7 +3,7 @@ name: vector.archive.lz4.decompress
 module: vector.archive.lz4
 kind: function
 since: 1.6.0
-stability: unstable
+stability: stable
 origin: lus
 params:
   - name: data

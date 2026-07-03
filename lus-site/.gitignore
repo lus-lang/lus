@@ -24,3 +24,7 @@ pnpm-debug.log*
 
 # jetbrains setting folder
 .idea/
+
+# stray lockfile/scaffold from local builds (project uses pnpm-lock.yaml)
+package-lock.json
+pnpm-workspace.yaml

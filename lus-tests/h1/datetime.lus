@@ -1,0 +1,319 @@
+--[[
+  Tests for the `time` module: instant, duration, and zoned datetime types.
+
+  Covers construction, exact vs. calendar identity, arithmetic and comparison
+  metamethods, civil-field extraction across a leap year and a pre-1970 epoch,
+  formatting/ISO output, and monotonic clock behaviour.
+]]
+
+global print, assert, require, time, pledge, type, tostring, tonumber
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("datetime")
+
+-- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
+local REF = 1782998100
+
+tests:it("instant construction and epoch round-trip", function()
+    local i = time.instant(REF)
+    assert(i:epoch() == REF, "epoch should round-trip")
+    assert(i:iso() == "2026-07-02T13:15:00Z", "iso mismatch: " .. i:iso())
+end)
+
+tests:it("instant + duration is exact seconds", function()
+    local i = time.instant(REF)
+    local later = i + time.hours(72)
+    assert(later:epoch() == REF + 72 * 3600, "72h must be exactly 259200s")
+    assert((later - i):seconds() == 259200.0, "delta seconds")
+end)
+
+tests:it("instant - instant yields a duration", function()
+    local a = time.instant(100)
+    local b = time.instant(250)
+    assert((b - a):seconds() == 150.0, "difference should be 150s")
+end)
+
+tests:it("instant comparisons", function()
+    local a = time.instant(100)
+    local b = time.instant(200)
+    assert(a < b, "a < b")
+    assert(a <= a, "a <= a")
+    assert(a == time.instant(100), "value equality")
+    assert(not (b < a), "not b < a")
+end)
+
+tests:it("duration constructor sums fields", function()
+    local d = time.duration{ hours = 1, minutes = 30 }
+    assert(d:seconds() == 5400.0, "1h30m = 5400s")
+end)
+
+tests:it("duration scalar helpers", function()
+    assert(time.days(1):seconds() == 86400.0, "1 day")
+    assert(time.minutes(2):seconds() == 120.0, "2 min")
+    assert(time.millis(1500):millis() == 1500.0, "1500 ms")
+end)
+
+tests:it("duration arithmetic and scaling", function()
+    local d = time.minutes(30) + time.minutes(30)
+    assert(d:seconds() == 3600.0, "30m + 30m = 1h")
+    assert((time.seconds(10) * 3):seconds() == 30.0, "10s * 3")
+    assert((-time.seconds(5)):seconds() == -5.0, "unary minus")
+end)
+
+tests:it("positive duration parts", function()
+    local p = time.minutes(90):parts()
+    assert(p.negative == false, "not negative")
+    assert(p.hours == 1 and p.minutes == 30, "1h30m breakdown")
+end)
+
+tests:it("negative duration parts", function()
+    local p = time.seconds(-90):parts()
+    assert(p.negative == true, "negative flag")
+    assert(p.minutes == 1 and p.seconds == 30, "abs 1m30s")
+end)
+
+tests:it("zoned fields and offset", function()
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                           minute = 15 }, -4 * 3600)
+    assert(z.year == 2026 and z.month == 7 and z.day == 2, "date fields")
+    assert(z.hour == 9 and z.minute == 15, "time fields")
+    assert(z.weekday == time.weekday.thursday, "2026-07-02 is a Thursday")
+    assert(z.yearday == 183, "day-of-year")
+    assert(z.offset == -4 * 3600, "offset preserved")
+    assert(z:iso() == "2026-07-02T09:15:00-04:00", "zoned iso: " .. z:iso())
+end)
+
+tests:it("zoned collapses to the correct UTC instant", function()
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                           minute = 15 }, -4 * 3600)
+    assert(z:instant():iso() == "2026-07-02T13:15:00Z", "wall+offset = UTC")
+end)
+
+tests:it("leap year Feb 29 civil round-trip", function()
+    local z = time.zoned{ year = 2024, month = 2, day = 29 }
+    assert(z.year == 2024 and z.month == 2 and z.day == 29, "2024 is a leap year")
+end)
+
+tests:it("pre-1970 (negative epoch) fields", function()
+    local i = time.instant(-1)  -- 1969-12-31T23:59:59Z
+    assert(i:iso() == "1969-12-31T23:59:59Z", "negative epoch iso: " .. i:iso())
+end)
+
+tests:it("strftime formatting", function()
+    local i = time.instant(REF)
+    assert(i:format("%Y-%m-%d") == "2026-07-02", "date format")
+end)
+
+tests:it("monotonic clock is non-decreasing and calendar-free", function()
+    local a = time.monotonic()
+    local b = time.monotonic()
+    assert((b - a):seconds() >= 0, "monotonic never goes backwards")
+    -- a monotonic instant must refuse calendar extraction
+    local ok = catch a:epoch()
+    assert(not ok, "monotonic :epoch must error")
+end)
+
+-- ============================================================================
+-- Time zones (embedded IANA tzdata)
+-- ============================================================================
+
+tests:it("embedded tzdata version is reported", function()
+    local v = time.tzdata_version()
+    assert(type(v) == "string" and #v > 0, "tzdata version should be a string")
+end)
+
+tests:it("named zone lookup and name", function()
+    local ny = time.zone("America/New_York")
+    assert(ny:name() == "America/New_York", "zone name")
+    assert(tostring(ny) == "America/New_York", "zone tostring is its name")
+end)
+
+tests:it("unknown zone raises", function()
+    local ok = catch time.zone("Nowhere/Nope")
+    assert(not ok, "unknown zone must error")
+end)
+
+tests:it("DST is applied from the transition table", function()
+    local ny = time.zone("America/New_York")
+    -- New York observes EDT (-4h) in July and EST (-5h) in January.
+    assert(ny:offset(time.instant(REF)) == -4 * 3600, "July is EDT (-4h)")
+    local jan = time.instant(1767355200)  -- 2026-01-02T12:00:00Z
+    assert(ny:offset(jan) == -5 * 3600, "January is EST (-5h)")
+end)
+
+tests:it("instant:at(zone) renders local wall clock", function()
+    local ny = time.zone("America/New_York")
+    -- REF = 2026-07-02T13:15:00Z, EDT is -4h -> 09:15 local
+    assert(time.instant(REF):at(ny):iso() == "2026-07-02T09:15:00-04:00",
+        "wall clock in NY")
+end)
+
+tests:it("wall-clock through a zone round-trips to UTC", function()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                           minute = 15 }, ny)
+    assert(z:instant():iso() == "2026-07-02T13:15:00Z", "09:15 EDT = 13:15 UTC")
+end)
+
+tests:it("fixed-offset zone", function()
+    local off = time.offset(-4 * 3600)
+    assert(off:name() == "-04:00", "fixed zone name")
+    assert(time.instant(REF):at(off):iso() == "2026-07-02T09:15:00-04:00",
+        "fixed offset render")
+end)
+
+tests:it("localzone returns a usable zone", function()
+    local lz = time.localzone()
+    assert(type(lz:name()) == "string", "local zone has a name")
+    -- It must resolve an offset for any instant without error.
+    assert(type(lz:offset(time.instant(REF))) == "number", "local offset")
+end)
+
+-- ============================================================================
+-- ISO 8601 parsing
+-- ============================================================================
+
+tests:it("parse UTC instant", function()
+    local i = time.parse("2026-07-02T13:15:00Z")
+    assert(i:epoch() == REF, "Z parses to the right epoch")
+end)
+
+tests:it("parse with explicit offset yields a zoned", function()
+    local z = time.parse("2026-07-02T09:15:00-04:00")
+    assert(z:iso() == "2026-07-02T09:15:00-04:00", "offset preserved")
+    assert(z:instant():epoch() == REF, "resolves to the same UTC instant")
+end)
+
+tests:it("parse date-only defaults to midnight UTC", function()
+    assert(time.parse("2026-07-02"):iso() == "2026-07-02T00:00:00Z", "midnight")
+end)
+
+tests:it("parse compact offset and fractional seconds", function()
+    assert(time.parse("2026-07-02 09:15:00.5-0400"):iso() ==
+        "2026-07-02T09:15:00-04:00", "space, frac, compact offset")
+    assert(time.parse("2026-07-02T00:00:00.25Z"):nanos() == 250000000,
+        "quarter-second fraction")
+end)
+
+tests:it("parse rejects malformed input", function()
+    assert(not (catch time.parse("not a date")), "garbage rejected")
+    assert(not (catch time.parse("2026-13-02")), "bad month rejected")
+    assert(not (catch time.parse("2026-07-02T13:15:00Z extra")), "trailing junk")
+end)
+
+tests:it("parse with an explicit pattern", function()
+    assert(time.parse("02/07/2026 09:15", "%d/%m/%Y %H:%M"):iso() ==
+        "2026-07-02T09:15:00Z", "day-first pattern")
+    local z = time.parse("2026-07-02 09:15:00 -0400", "%Y-%m-%d %H:%M:%S %z")
+    assert(z:iso() == "2026-07-02T09:15:00-04:00", "pattern with %z offset")
+    assert(time.parse("07 26", "%m %y"):iso() == "2026-07-01T00:00:00Z",
+        "two-digit year and defaults")
+end)
+
+tests:it("parse pattern rejects mismatches and bad specifiers", function()
+    assert(not (catch time.parse("nope", "%Y-%m-%d")), "mismatch rejected")
+    assert(not (catch time.parse("2026", "%Q")), "unknown specifier rejected")
+end)
+
+-- ============================================================================
+-- Calendar arithmetic: zoned:with and zoned:add
+-- ============================================================================
+
+tests:it("with replaces fields immutably", function()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    local w = z:with{ hour = 6 }
+    assert(w:iso() == "2026-03-07T06:00:00-05:00", "hour replaced")
+    assert(z:iso() == "2026-03-07T12:00:00-05:00", "original unchanged")
+end)
+
+tests:it("with re-resolves DST across a date change", function()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    -- March 8 2026 is after the spring-forward: same wall time, EDT now.
+    assert(z:with{ day = 8 }:iso() == "2026-03-08T12:00:00-04:00", "EST->EDT")
+end)
+
+tests:it("add days keeps wall time across spring-forward", function()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    assert(z:add{ days = 1 }:iso() == "2026-03-08T12:00:00-04:00",
+        "noon stays noon, offset flips to -04:00")
+end)
+
+tests:it("add months clamps the day", function()
+    local ny = time.zone("America/New_York")
+    local jan31 = time.zoned({ year = 2026, month = 1, day = 31, hour = 9 }, ny)
+    assert(jan31:add{ months = 1 }:iso() == "2026-02-28T09:00:00-05:00",
+        "Jan 31 + 1 month = Feb 28")
+end)
+
+tests:it("add normalizes negative and overflowing months", function()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    assert(z:add{ months = -2 }:iso() == "2026-01-07T12:00:00-05:00", "back to Jan")
+    assert(z:add{ months = 11 }:iso() == "2027-02-07T12:00:00-05:00", "rolls year")
+end)
+
+tests:it("add on a fixed-offset zoned keeps the offset", function()
+    local f = time.zoned({ year = 2026, month = 1, day = 1, hour = 0 }, -5 * 3600)
+    assert(f:add{ days = 1 }:iso() == "2026-01-02T00:00:00-05:00", "fixed offset")
+end)
+
+-- ============================================================================
+-- POSIX TZ footer: DST beyond the explicit transition table (~2037)
+-- ============================================================================
+
+tests:it("far-future DST follows the POSIX rule (northern)", function()
+    local ny = time.zone("America/New_York")
+    assert(ny:offset(time.parse("2050-07-15T12:00:00Z")) == -4 * 3600, "2050 EDT")
+    assert(ny:offset(time.parse("2050-01-15T12:00:00Z")) == -5 * 3600, "2050 EST")
+    -- Exact spring-forward boundary: 2050-03-13 07:00:00Z.
+    assert(ny:offset(time.parse("2050-03-13T06:59:00Z")) == -5 * 3600, "before")
+    assert(ny:offset(time.parse("2050-03-13T07:00:00Z")) == -4 * 3600, "after")
+end)
+
+tests:it("far-future DST follows the POSIX rule (southern)", function()
+    local syd = time.zone("Australia/Sydney")
+    -- Southern hemisphere: summer (DST) spans the new year.
+    assert(syd:offset(time.parse("2050-01-15T00:00:00Z")) == 11 * 3600, "AEDT")
+    assert(syd:offset(time.parse("2050-07-15T00:00:00Z")) == 10 * 3600, "AEST")
+end)
+
+tests:it("far-future no-DST zone stays constant", function()
+    local tokyo = time.zone("Asia/Tokyo")
+    assert(tokyo:offset(time.parse("2050-07-15T12:00:00Z")) == 9 * 3600, "JST")
+end)
+
+-- ============================================================================
+-- weekday and month enums
+-- ============================================================================
+
+tests:it("weekday and month are first-class enums", function()
+    assert(tonumber(time.weekday.monday) == 1, "Monday = 1 (ISO)")
+    assert(tonumber(time.weekday.sunday) == 7, "Sunday = 7")
+    assert(tonumber(time.month.january) == 1, "January = 1")
+    assert(tonumber(time.month.december) == 12, "December = 12")
+    assert(time.weekday.monday < time.weekday.sunday, "ordered by index")
+    -- Distinct enums are never equal.
+    assert(time.weekday.monday ~= time.month.january, "different enum roots")
+end)
+
+tests:it("zoned.weekday returns the weekday enum", function()
+    local z = time.zoned{ year = 2026, month = 7, day = 2 }  -- a Thursday
+    assert(z.weekday == time.weekday.thursday, "enum value")
+    assert(tonumber(z.weekday) == 4, "Thursday = 4")
+    -- month stays numeric for arithmetic and os.* parity
+    assert(z.month == 7, "month is an integer")
+end)
+
+tests:it("constructors accept a month enum", function()
+    local m = time.zoned{ year = 2026, month = time.month.july, day = 2 }
+    assert(m:iso() == "2026-07-02T00:00:00Z", "enum month in time.zoned")
+    local z = time.zoned{ year = 2026, month = 1, day = 15 }
+    assert(z:with{ month = time.month.december }.month == 12, "enum in :with")
+end)
+
+tests:finish()

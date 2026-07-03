@@ -4,6 +4,11 @@
 
 **Release date:** TBD
 
+- Added the `time` module with immutable `instant`, `duration`, and `zoned` types, keeping exact instant arithmetic separate from calendar arithmetic.
+- Added DST-aware time zones to the `time` module, resolved from an IANA tzdata database embedded in the runtime, with named zones (`time.zone`), fixed offsets (`time.offset`), and system-local detection (`time.localzone`) requiring no filesystem access; the trailing POSIX rule keeps offsets correct past the last explicit transition.
+- Added DST-correct calendar arithmetic to the `time` module through `zoned:with{}` (field replacement) and `zoned:add{}` (calendar amounts with day clamping).
+- Added `time.parse` for ISO 8601 strings and explicit `strftime`-style patterns.
+- Added first-class `time.weekday` and `time.month` enums; `zoned.weekday` returns a weekday enum value, and a month enum is accepted anywhere a month integer is.
 - `--include path[:alias]` now compiles modules at startup so `require` loads them without `load` or `fs` pledges.
 - Preincluded module requires are optimized to the new `OP_REQUIRE` instruction in most circumstances under a readonly environment.
 - Added the readonly `flags` table, populated from `--flag`/`-F name[=value]` arguments and resolved at compile time in `if flags.x then` conditions.
