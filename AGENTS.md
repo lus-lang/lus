@@ -7,7 +7,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 Monorepository for the Lus programming language (a Lua 5.5 derivative). Key directories:
 
 - **`/lus`**: C runtime (interpreter `lus`, compiler `lusc`, static library `liblus`)
-- **`/lus-tests`**: Four test harnesses (H1–H4)
+- **`/lus-tests`**: Four test harnesses (H1-H4)
 - **`/lus-language`**: Language server written in Lus
 - **`/lus-vscode`**: VSCode extension (TypeScript + WASM)
 - **`/lus-site`**: Website (Astro + MDX)
@@ -89,7 +89,18 @@ Platform-specific build directories (`build-<platform>`) prevent race conditions
 
 ### Website Content
 
-Manual pages are MDX files in `lus-site/src/manual/`. Cross-references use `/manual/guide#section-slug` and `/manual/acquis-N` formats. The acquis pages (0–23) document individual language features. The guide is the comprehensive reference.
+Manual pages are MDX files in `lus-site/src/manual/`. Cross-references use `/manual/guide#section-slug` and `/manual/acquis-N` formats. The acquis pages (0 to 30) document individual language features. The guide is the comprehensive reference.
+
+### Writing Acquis and Documentation
+
+Acquis are tracked both as GitHub issues (label `📗 acquis`, assigned to a version milestone) and as MDX pages. Whenever you write an acquis, or any project prose (docs, changelog, spec `.md`, comments), follow these rules:
+
+- **Frame everything positively.** Describe what the design is and does. Never describe it in terms of an alternative the reader has not seen. Phrasing like "there is no `tolist` method", "instead of a new global", "not an object", or "clauses rather than methods" implies an earlier proposal that exists only in your head, and the reader has no context for it. State the actual behavior instead ("the only way to run a query is the `query` iterator"). Comparisons to features that already ship, or to concepts every reader knows, are fine.
+- **No em dashes or en dashes.** Rewrite the sentence so the dash is unnecessary rather than swapping it for a hyphen. The repository is kept free of both.
+- **No semicolons.** Write separate full sentences.
+- **Use full sentences and flowing paragraphs**, including complete-sentence lead-ins before code blocks.
+
+Before posting an issue or committing prose, grep for em dashes, en dashes, and semicolons, and reread for any wording that presumes a rejected alternative.
 
 ### Lus-spec → Language Server Pipeline
 
