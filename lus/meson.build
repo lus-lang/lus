@@ -87,6 +87,41 @@ lus_deps += [zlib_dep, zstd_dep, brotlienc_dep, brotlidec_dep, lz4_dep]
 thread_dep = dependency('threads', required: true)
 lus_deps += thread_dep
 
+# Vendored SQLite amalgamation, compiled into liblus. THREADSAFE=2 matches
+# the worker model (each connection is confined to one interpreter state).
+# TEMP_STORE=3 keeps statement journals and temp b-trees in memory so SQLite
+# never writes to paths outside the pledge sweep. OMIT_LOAD_EXTENSION keeps
+# the static musl link free of a dl requirement.
+sqlite_args = [
+  '-DSQLITE_THREADSAFE=2',
+  '-DSQLITE_TEMP_STORE=3',
+  '-DSQLITE_DQS=0',
+  '-DSQLITE_OMIT_LOAD_EXTENSION',
+  '-DSQLITE_OMIT_DEPRECATED',
+  '-DSQLITE_OMIT_SHARED_CACHE',
+  '-DSQLITE_OMIT_DECLTYPE',
+  '-DSQLITE_OMIT_AUTOINIT',
+  '-DSQLITE_DEFAULT_MEMSTATUS=0',
+  '-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1',
+  '-DSQLITE_LIKE_DOESNT_MATCH_BLOBS',
+  '-DSQLITE_MAX_EXPR_DEPTH=0',
+  '-DSQLITE_ENABLE_MATH_FUNCTIONS',
+]
+sqlite_inc = include_directories('vendor/sqlite')
+libsqlite = static_library('sqlite3',
+  'vendor/sqlite/sqlite3.c',
+  c_args: sqlite_args,
+  override_options: ['warning_level=0', 'optimization=s', 'b_lto=false'],
+)
+# Defines that alter the sqlite3.h API surface must be visible to the
+# binding translation unit as well.
+lus_c_args += [
+  '-DSQLITE_OMIT_LOAD_EXTENSION',
+  '-DSQLITE_OMIT_DEPRECATED',
+  '-DSQLITE_OMIT_DECLTYPE',
+  '-DSQLITE_OMIT_AUTOINIT',
+]
+
 
 # Core source files
 core_sources = files(
@@ -155,13 +190,16 @@ install_headers(
   'src/lualib.h',
   'src/lauxlib.h',
   'src/lua.hpp',
+  'vendor/sqlite/sqlite3.h',
 )
 
 # Static library
 liblus = static_library('lus',
   core_sources + lib_sources,
   c_args: lus_c_args,
+  include_directories: sqlite_inc,
   dependencies: lus_deps,
+  link_whole: libsqlite,
   install: true,
 )
 
