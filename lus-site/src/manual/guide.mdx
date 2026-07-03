@@ -1293,6 +1293,20 @@ print(later:at(ny):iso())              -- civil wall clock, DST-aware
 
 Named zones resolve from an IANA tzdata database embedded in the runtime, so `time.zone` and `time.localzone` need no filesystem access and behave identically across platforms. `time.offset(seconds)` builds a fixed-offset zone, and `time.tzdata_version()` reports the embedded release. Formatting uses `strftime` specifiers (as in `os.date`), with `:iso()` as an ISO 8601 shortcut; bridge to the legacy epoch API with `time.instant(os.time())` and `instant:epoch()`. `time.monotonic()` returns a separate monotonic reading for measuring elapsed time. This library is described in full in [Acquis 30](/manual/acquis-30).
 
+### SQLite
+
+The runtime embeds SQLite for local, file-backed and in-memory databases. [`io.sqlite(path)`](/manual/api#io.sqlite) returns a database handle whose methods run statements (`db:exec`), single writes (`db:run`), queries (`db:query`, an iterator over rows keyed by column name), reusable prepared statements (`db:prepare`), and transactions (`db:transaction`). Values always travel through `?` or named placeholders, and handles close through `<close>`, `__gc`, or an explicit `db:close()`, just like `io.open` file objects.
+
+```lus
+local db <close> = io.sqlite("app.db")
+db:run("INSERT INTO users (name) VALUES (?)", name)
+for row in db:query("SELECT id, name FROM users WHERE age >= ?", 18) do
+  print(row.id, row.name)
+end
+```
+
+File-backed databases are gated by the same value-scoped `fs:read` and `fs:write` pledges as `io.open`, covering the database path and its sidecar files, while `":memory:"` needs no pledge at all. This library is described in full in [Acquis 33](/manual/acquis-33).
+
 ### Other libraries
 
 The full standard library also includes [`math`](/manual/api#math) (mathematical functions), [`string`](/manual/api#string) (string manipulation and patterns), [`table`](/manual/api#table) (table manipulation), [`io`](/manual/api#io) (file I/O), [`os`](/manual/api#os) (operating system facilities), [`utf8`](/manual/api#utf8) (UTF-8 support), [`debug`](/manual/api#debug) (debugging facilities), [`vector`](/manual/api#vector) (byte buffers), [`coroutine`](/manual/api#coroutine) (coroutine control), and [`package`](/manual/api#package) (module loading). See the [API reference](/manual/api) for complete documentation.

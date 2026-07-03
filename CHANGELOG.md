@@ -12,6 +12,7 @@
 - `--include path[:alias]` now compiles modules at startup so `require` loads them without `load` or `fs` pledges.
 - Preincluded module requires are optimized to the new `OP_REQUIRE` instruction in most circumstances under a readonly environment.
 - Added the readonly `flags` table, populated from `--flag`/`-F name[=value]` arguments and resolved at compile time in `if flags.x then` conditions.
+- Added `io.sqlite`, an embedded SQLite database with prepared statements, placeholder-only parameter binding, transactions, WAL journaling, and pledge-gated file access covering the sidecar files.
 - Made `tojson` ~4x faster on large documents by serializing into a single contiguous buffer instead of one Lua string per output piece.
 - Made `tocsv` serialize into a single contiguous buffer instead of one Lua string per field, delimiter, and newline.
 - Enum value accesses are now interned and no longer allocate a new object every time.
@@ -113,7 +114,7 @@
 - `for ... in pairs(t)`/`ipairs(t)`/`next, t` loops over tables now walk the table directly in the VM instead of calling the iterator function each step (pairs ~1.8x, ipairs ~2.3x faster).
 - Indexing tables with string variables (`t[k]`) now takes the same short-string fast path as constant fields, ~15% faster.
 - Integer-to-string conversion uses a direct conversion loop instead of `snprintf` (~20% faster interpolation-heavy code).
-- Release binaries for Linux and macOS are now built with profile-guided optimization (`tools/pgo-build.sh`), 15–45% faster across VM micro-benchmarks than a plain release build.
+- Release binaries for Linux and macOS are now built with profile-guided optimization (`tools/pgo-build.sh`), 15 to 45% faster across VM micro-benchmarks than a plain release build.
 - The worker library no longer pre-allocates a table from an untrusted declared size while deserializing messages.
 - Workers now inherit their parent's pledges (sealed).
 - `fs` permission checks now canonicalize paths and fail closed.

@@ -1,0 +1,87 @@
+---
+order: 133
+title: "Acquis 33 - SQLite"
+acquis: true
+shortdesc: "Embedded SQLite: file-backed and in-memory databases with prepared statements, transactions, and pledge-gated file access."
+draft: true
+---
+
+_SQLite_ embeds the SQLite database engine directly in the runtime for local, file-backed and in-memory databases. The amalgamation is public domain and is compiled into `liblus` the same way the [`time`](/manual/api#time) module bundles its tz database, so a program needs no external library or system package and behaves the same across platforms.
+
+## Opening a database
+
+A database is opened through the existing [`io`](/manual/api#io) library with `io.sqlite(path)`, which returns a database handle. SQLite has a single entry point, so it lives alongside `io.open` in the `io` library. Passing `":memory:"` opens a private in-memory database. The optional second argument selects the mode: `"rw"` (the default) reads, writes, and creates, while `"r"` opens read-only.
+
+```lus
+global io, pledge
+
+pledge("fs:read=./app.db*", "fs:write=./app.db*", "seal")
+
+local db <close> = io.sqlite("app.db")
+```
+
+## Statements and queries
+
+The handle runs statements and queries. `db:exec(sql)` runs one or more statements for their side effects. `db:run(sql, ...)` runs a single statement and returns the number of affected rows together with the last inserted row id. `db:query(sql, ...)` runs a query and returns an iterator over the result rows, where each row is a table keyed by column name. `db:prepare(sql)` compiles a reusable statement, whose `stmt:run(...)` and `stmt:query(...)` execute it with bound parameters. `db:transaction(fn)` runs `fn` inside a transaction, commits when it returns, and rolls back when it raises.
+
+```lus
+global io, pledge, ipairs, print
+
+pledge("fs:read=./app.db*", "fs:write=./app.db*", "seal")
+
+local db <close> = io.sqlite("app.db")
+
+db:exec([[
+    CREATE TABLE IF NOT EXISTS users (
+        id   INTEGER PRIMARY KEY,
+        name TEXT NOT NULL
+    )
+]])
+
+local insert = db:prepare("INSERT INTO users (name) VALUES (?)")
+db:transaction(function()
+    for _, name in ipairs({ "Alice", "Bob", "Carol" }) do
+        insert:run(name)
+    end
+end)
+
+for row in db:query("SELECT id, name FROM users WHERE name = ?", "Alice") do
+    print(row.id, row.name)
+end
+```
+
+## Binding and the type map
+
+Placeholders carry every value into a statement. A positional `?` placeholder binds from the extra arguments in order, and a named `:name`, `@name`, or `$name` placeholder binds from a single table argument, so values that come from string interpolation or concatenation reach the database as data. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles.
+
+SQLite types map to Lus types, with `INTEGER` becoming an integer, `REAL` a float, `TEXT` a string, `BLOB` a [`vector`](/manual/api#vector), and `NULL` an absent row field. Binding runs the same map in reverse, with booleans stored as `1` and `0` and NaN stored as `NULL`, following SQLite.
+
+## Lifetime
+
+The database handle manages its native resources the same way the file objects from `io.open` do. It carries a `__close` metamethod, so a to-be-closed variable written as `local db <close> = io.sqlite(path)` closes the database when its block exits, including when the block exits through an error. It also carries a `__gc` finalizer that closes any handle a program leaves open, so a forgotten database is still released. An explicit `db:close()` remains available for a handle held beyond a single block, and closing a database finalizes its live statements first. Prepared statements follow the same lifetime rules through `stmt:close()`, their own `__close` metamethod, and GC finalization. A query iteration holds a cursor that is itself a to-be-closed value, so breaking out of a loop releases the statement immediately.
+
+An in-memory database opens with no filesystem pledge, which makes `":memory:"` a natural fit for sealed programs and tests.
+
+```lus
+global io
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE t (n INTEGER)")
+db:run("INSERT INTO t VALUES (?)", 42)
+```
+
+## Security and permissions
+
+Because `io.sqlite` opens files through the `io` library, it is gated by the same pledges as `io.open`. A file-backed database requires a value-scoped `fs:read` pledge, and a writable one also requires `fs:write`, each covering the database path together with SQLite's `-journal`, `-wal`, and `-shm` sidecar files. The sweep runs at open time, so a grant that misses a sidecar is denied up front instead of failing inside a transaction.
+
+The runtime confines SQLite to the pledged set. Temp structures such as statement journals and sort trees live in memory and never touch the filesystem. `ATTACH` and `VACUUM INTO` are denied, since either could reach a path the pledge sweep never saw, and URI filenames are rejected at open. A plain `VACUUM` keeps working.
+
+SQLite calls are synchronous C, and database work that should run alongside other computation can be handed to a [worker](/manual/api#worker). A database handle lives in the interpreter state that opened it and cannot be serialized to a worker, so a worker uses a database by opening the same path itself. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
+
+## Embedding
+
+The C API gains `lus_tosqlite(L, idx)`, which returns the underlying `sqlite3*` connection of an open database handle and `NULL` otherwise, so an embedder can drive the same connection from C. The vendored `sqlite3.h` is installed alongside the Lus headers. Builds compiled with `LUS_NO_SQLITE`, such as the playground's WASM target, omit the binding entirely.
+
+## Not yet specified
+
+User-defined SQL functions, the online backup API, an explicit WAL checkpoint call, and the FTS5 full-text extension are not part of this acquis. Each can be added compatibly later.
