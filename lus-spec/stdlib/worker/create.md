@@ -4,6 +4,7 @@ module: worker
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["load", "fs:read"]
 origin: lus
 params:
   - name: path

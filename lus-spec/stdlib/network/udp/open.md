@@ -4,6 +4,7 @@ module: network
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["network:udp"]
 origin: lus
 params:
   - name: port
@@ -15,4 +16,4 @@ params:
 returns: userdata
 ---
 
-Opens a UDP socket, optionally bound to `port` and `address`. Returns a socket object for sending and receiving datagrams. Requires `network` pledge.
+Opens a UDP socket, optionally bound to `port` and `address`. Returns a socket object for sending and receiving datagrams.

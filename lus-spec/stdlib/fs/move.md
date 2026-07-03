@@ -4,6 +4,7 @@ module: fs
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["fs:write"]
 origin: lus
 params:
   - name: source
@@ -13,4 +14,4 @@ params:
 returns: boolean
 ---
 
-Moves (renames) the file or directory at `source` to `dest`. Returns `true` on success, or `nil` plus an error message on failure. Requires `fs:write` pledge.
+Moves (renames) the file or directory at `source` to `dest`. Returns `true` on success, or `nil` plus an error message on failure.

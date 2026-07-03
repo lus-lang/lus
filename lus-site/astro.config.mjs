@@ -82,7 +82,7 @@ export default defineConfig({
   output: "static",
   redirects: {
     "/manual/tldr": "/manual/acquis",
-    // deleted pages — the faq's load-bearing answers migrated into the
+    // deleted pages; the faq's load-bearing answers migrated into the
     // manual; the only surviving search is the API filter
     "/faq": "/manual/introduction",
     "/search": "/manual/api",

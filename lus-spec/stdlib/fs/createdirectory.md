@@ -4,6 +4,7 @@ module: fs
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["fs:write"]
 origin: lus
 params:
   - name: path
@@ -11,4 +12,4 @@ params:
 returns: boolean
 ---
 
-Creates a directory at `path`. Returns `true` on success, or `nil` plus an error message on failure. Requires `fs:write` pledge.
+Creates a directory at `path`. Returns `true` on success, or `nil` plus an error message on failure.

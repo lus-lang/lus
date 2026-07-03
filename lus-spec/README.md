@@ -6,9 +6,9 @@ Centralized specification for the Lus standard library and C API. One `.md` file
 
 ```
 lus-spec/
-├── stdlib/           — Lus standard library
-│   ├── base/         — Global functions (print, error, assert, ...)
-│   ├── string/       — string.find, string.format, ...
+├── stdlib/           # Lus standard library
+│   ├── base/         # Global functions (print, error, assert, ...)
+│   ├── string/       # string.find, string.format, ...
 │   ├── table/
 │   ├── math/
 │   ├── io/
@@ -16,21 +16,21 @@ lus-spec/
 │   ├── debug/
 │   ├── coroutine/
 │   ├── utf8/
-│   ├── fs/           — Lus-specific filesystem library
+│   ├── fs/           # Lus-specific filesystem library
 │   │   └── path/
-│   ├── network/      — Lus-specific networking library
+│   ├── network/      # Lus-specific networking library
 │   │   ├── tcp/
 │   │   └── udp/
-│   ├── worker/       — Lus-specific concurrency library
-│   ├── vector/       — Lus-specific byte buffer library
+│   ├── worker/       # Lus-specific concurrency library
+│   ├── vector/       # Lus-specific byte buffer library
 │   ├── package/
-│   └── json/         — tojson / fromjson globals
-└── capi/             — C embedding API
-    ├── core/         — lua_* functions (lua.h)
-    ├── auxiliary/     — luaL_* functions (lauxlib.h)
-    ├── pledge/       — lus_pledge* (lpledge.h)
-    ├── worker/       — lus_worker* (lworkerlib.h)
-    └── library/      — luaopen_* entry points (lualib.h)
+│   └── json/         # tojson / fromjson globals
+└── capi/             # C embedding API
+    ├── core/         # lua_* functions (lua.h)
+    ├── auxiliary/     # luaL_* functions (lauxlib.h)
+    ├── pledge/       # lus_pledge* (lpledge.h)
+    ├── worker/       # lus_worker* (lworkerlib.h)
+    └── library/      # luaopen_* entry points (lualib.h)
 ```
 
 Filename is the bare name (e.g., `stdlib/string/find.md`, `capi/core/lua_pushstring.md`).

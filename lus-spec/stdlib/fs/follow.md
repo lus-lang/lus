@@ -4,6 +4,7 @@ module: fs
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["fs:read"]
 origin: lus
 params:
   - name: path
@@ -11,4 +12,4 @@ params:
 returns: string
 ---
 
-Resolves a symbolic link at `path` and returns the target path. Returns `nil` plus an error message on failure. Requires `fs:read` pledge.
+Resolves a symbolic link at `path` and returns the target path. Returns `nil` plus an error message on failure.

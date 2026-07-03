@@ -947,7 +947,7 @@ for (const m of AUX_MACROS) {
   }, m.body);
 }
 
-// ─── lualib.h — Library openers ───
+// ─── lualib.h: Library openers ───
 
 const LIBRARY_OPENERS = [
   { name: "luaopen_base", lib: "base" },

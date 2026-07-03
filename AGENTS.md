@@ -6,13 +6,13 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 Monorepository for the Lus programming language (a Lua 5.5 derivative). Key directories:
 
-- **`/lus`** — C runtime (interpreter `lus`, compiler `lusc`, static library `liblus`)
-- **`/lus-tests`** — Four test harnesses (H1–H4)
-- **`/lus-language`** — Language server written in Lus
-- **`/lus-vscode`** — VSCode extension (TypeScript + WASM)
-- **`/lus-site`** — Website (Astro + MDX)
-- **`/lus-spec`** — Stdlib specification (YAML frontmatter `.md` files)
-- **`/lus-textmate`** — TextMate grammar (shared by site and extension)
+- **`/lus`**: C runtime (interpreter `lus`, compiler `lusc`, static library `liblus`)
+- **`/lus-tests`**: Four test harnesses (H1–H4)
+- **`/lus-language`**: Language server written in Lus
+- **`/lus-vscode`**: VSCode extension (TypeScript + WASM)
+- **`/lus-site`**: Website (Astro + MDX)
+- **`/lus-spec`**: Stdlib specification (YAML frontmatter `.md` files)
+- **`/lus-textmate`**: TextMate grammar (shared by site and extension)
 
 ## Build Commands
 
@@ -67,8 +67,8 @@ All Lus source files use `.lus` extension. Code blocks in documentation use ` ``
 ### C Runtime Internals
 
 The runtime is a modified Lua 5.5 codebase. New types added to the GC system:
-- `LUA_TENUM` / `LUA_TENUMROOT` — first-class enums (`lenum.c`, `lenum.h`)
-- `LUA_TVECTOR` — mutable byte buffers (`lvector.c`)
+- `LUA_TENUM` / `LUA_TENUMROOT`: first-class enums (`lenum.c`, `lenum.h`)
+- `LUA_TVECTOR`: mutable byte buffers (`lvector.c`)
 
 New libraries: `ljsonlib.c`, `lfslib.c`, `lnetlib.c`, `lworkerlib.c`, `lvectorlib.c`. Permissions: `lpledge.c`. AST: `last.c`. Bundling: `lbundle.c`.
 
@@ -76,16 +76,16 @@ When adding GC-managed types or constants, always initialize new array slots to 
 
 ### Test Harnesses
 
-- **H1** — Pure Lus tests using `lus-tests/framework.lus`. Each file is a self-contained test suite.
-- **H2** — Compiled C programs linking against `liblus` (tests C API embedding).
-- **H3** — System integration: `runner_local.lus` (containerized) and `runner_direct.lus` (CI-only).
-- **H4** — Benchmarks with pass/fail thresholds. `BUILD_TYPE` env controls strictness.
+- **H1**: Pure Lus tests using `lus-tests/framework.lus`. Each file is a self-contained test suite.
+- **H2**: Compiled C programs linking against `liblus` (tests C API embedding).
+- **H3**: System integration: `runner_local.lus` (containerized) and `runner_direct.lus` (CI-only).
+- **H4**: Benchmarks with pass/fail thresholds. `BUILD_TYPE` env controls strictness.
 
 Tests run from the repo root as working directory. The test binary path is the meson-built executable; runners use `arg[-1]` to find it.
 
 ### CI Workflow
 
-Platform-specific build directories (`build-<platform>`) prevent race conditions when `act` runs matrix jobs in parallel on a shared filesystem. The sanitizer job uses ASAN+UBSAN. Windows and macOS matrix entries will fail under `act` (Docker limitation) — only linux-glibc and linux-musl run locally.
+Platform-specific build directories (`build-<platform>`) prevent race conditions when `act` runs matrix jobs in parallel on a shared filesystem. The sanitizer job uses ASAN+UBSAN. Windows and macOS matrix entries will fail under `act` (Docker limitation); only linux-glibc and linux-musl run locally.
 
 ### Website Content
 

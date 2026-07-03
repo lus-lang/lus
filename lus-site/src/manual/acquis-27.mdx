@@ -3,7 +3,6 @@ order: 127
 title: "Acquis 27 - Readonly Environment"
 acquis: true
 shortdesc: "The --readonly-env flag freezes _ENV and module tables, enabling fast-dispatch fastcalls."
-draft: true
 ---
 
 The `--readonly-env` flag freezes the global environment (`_ENV`) and all standard library module tables after initialization. This guarantees that no stdlib function can be replaced at runtime, allowing the VM to skip function-pointer validation on fastcalls and dispatch directly.
@@ -38,6 +37,8 @@ The flag freezes tables two levels deep from `_ENV`:
 - All table-valued entries within those modules (`network.tcp`, `network.udp`, etc.)
 
 User-created tables are not affected. Local variables, function-scoped tables, and tables created after initialization remain fully mutable.
+
+One module table is deliberately exempted: `package.loaded`, the module cache. `require` stores every loaded module there, so freezing it would make requiring anything new impossible. Its mutability does not weaken the frozen-globals guarantee that fast dispatch relies on, since global bindings themselves stay immutable.
 
 ```lus
 -- User tables are unaffected

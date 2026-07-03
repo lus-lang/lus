@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
-** Lus design system — refined neobrutalism, light-only, ZERO MOTION, DENSE.
+** Lus design system: refined neobrutalism, light-only, ZERO MOTION, DENSE.
 **
 ** Ground rules:
 **  - No animation, ever. No transition-*, duration-*, animate-*, @keyframes,
@@ -14,7 +14,7 @@
 **        active nav pills, inputs, small frames.
 **      lus-shadow (4px) = primary static containers: cards.
 **    Dark chrome (playground) is flat: no shadows off paper.
-**  - Interactive grammar: hover repaints, never moves — links/nav/outline
+**  - Interactive grammar: hover repaints, never moves. Links/nav/outline
 **    fill bg-accent-soft; solid buttons invert (bg-ink text-accent).
 **    Pressables seat into their shadow on :active via lus-press
 **    (translate 2px 2px, shadow none). Focus = global outline.
@@ -23,7 +23,7 @@
 **    Every container is framed: cards, tables, code, inputs.
 **  - One frame per code block: the frame lives on `pre code`; never frame
 **    the outer pre as well.
-**  - DENSITY SCALE — spacing uses ONLY steps 0.5/1/1.5/2/3/4/6/8.
+**  - DENSITY SCALE: spacing uses ONLY steps 0.5/1/1.5/2/3/4/6/8.
 **    Page shell: main px-4 md:px-6 py-6 space-y-8, capped at max-w-7xl;
 **    header/footer gutters mirror the shell. Chrome: header py-2,
 **    footer py-3. Headings: h2 mt-8, h3 mt-4. Blocks (pre, table,
@@ -88,7 +88,7 @@
   }
 }
 
-/* keyboard focus — visible, chunky, on-brand */
+/* keyboard focus: visible, chunky, on-brand */
 :focus-visible {
   outline: 2px solid var(--color-ink);
   outline-offset: 2px;
@@ -187,7 +187,7 @@ pre.astro-code {
   @apply font-mono text-[0.9em] bg-tint px-1 border border-ink/20;
 }
 
-/* self-link affordance on headings — always visible (touch parity) */
+/* self-link affordance on headings: always visible (touch parity) */
 .heading-anchor {
   @apply font-mono font-normal no-underline text-ink/70 ml-2 hover:text-ink hover:bg-accent-soft;
 }
@@ -246,7 +246,7 @@ table {
   }
 }
 
-/* reference badge palette — see grammar header; legend renders these chips */
+/* reference badge palette; see grammar header; legend renders these chips */
 .api-badge {
   @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 shrink-0;
 }
@@ -275,7 +275,7 @@ table {
   @apply bg-violet-200 text-violet-900;
 }
 
-/* print — make the manual PDF-able */
+/* print: make the manual PDF-able */
 @media print {
   header,
   footer,
@@ -311,7 +311,7 @@ table {
   }
 }
 
-/* unstable channel — red mirror */
+/* unstable channel: red mirror */
 html.unstable {
   body {
     @apply text-ink-red;

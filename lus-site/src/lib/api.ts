@@ -1,7 +1,7 @@
 /*
 ** Single source of truth for the API reference: section ordering, entry
 ** provenance (`from`), and the grouped views the index and the entry
-** renderer both consume. The index page is generated from this — never
+** renderer both consume. The index page is generated from this, so never
 ** hand-maintain API link lists.
 */
 
@@ -80,11 +80,11 @@ const stdlibOrder: SectionSpec[] = [
 
 const capiOrder: SectionSpec[] = [
   {
-    title: "Permission System — C API",
+    title: "Permission System (C API)",
     filter: (d) => d.header === "lpledge.h",
   },
   {
-    title: "Worker System — C API",
+    title: "Worker System (C API)",
     filter: (d) => d.header === "lworkerlib.h",
   },
   { title: "Library Openers", filter: (d) => d.header === "lualib.h" },

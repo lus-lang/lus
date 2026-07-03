@@ -4,6 +4,7 @@ module: os
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["fs:write"]
 origin: lua
 returns: string
 ---

@@ -12,4 +12,4 @@ params:
     type: string
 ---
 
-Removed — use `fs.move` instead.
+Removed. Use `fs.move` instead.

@@ -13,4 +13,4 @@ params:
 vararg: true
 ---
 
-Removed — use the `catch` expression instead; pair it with `debug.traceback` when a traceback is needed.
+Removed. Use the `catch` expression instead, pairing it with `debug.traceback` when a traceback is needed.

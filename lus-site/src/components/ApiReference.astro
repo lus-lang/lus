@@ -24,6 +24,10 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     autocomplete="off"
   />
   <span id="api-search-count" aria-live="polite"></span>
+  <span id="api-search-hint" class="api-search-hint">
+    AND-matches on name, module, kind, and pledge, e.g. <code>fs:write</code> or
+    <code>network unstable</code>. Press <kbd>/</kbd> to focus, <kbd>Esc</kbd> to clear.
+  </span>
 </div>
 
 <details class="legend-wrap">
@@ -48,6 +52,9 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     </div>
     <div>
       <span class="api-badge api-badge-fastcall">fastcall</span> vm has special optimization
+    </div>
+    <div>
+      <span class="pledge-chip-legend">pledge</span> requires this permission at runtime
     </div>
   </div>
 </details>
@@ -103,7 +110,20 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
 
     .api-search-hint {
       @apply basis-full font-mono text-xs text-ink/70;
+
+      code {
+        @apply bg-tint px-1;
+      }
+
+      kbd {
+        @apply border border-ink/40 px-1 rounded-sm not-italic;
+      }
     }
+  }
+
+  .pledge-chip-legend {
+    @apply font-mono text-[11px] font-bold px-1.5 py-0.5 mr-2 shrink-0
+      bg-emerald-100 text-emerald-900 border border-emerald-900/30;
   }
 
   .legend-wrap {

@@ -4,6 +4,7 @@ module: network
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["network:http"]
 origin: lus
 params:
   - name: url
@@ -14,4 +15,4 @@ params:
 returns: table
 ---
 
-Performs an HTTP(S) request to `url`. The optional `options` table may specify method, headers, and body. Returns the response body as a string, plus the HTTP status code and a response headers table. Requires `network` pledge.
+Performs an HTTP(S) request to `url`. The optional `options` table may specify method, headers, and body. Returns the response body as a string, plus the HTTP status code and a response headers table.

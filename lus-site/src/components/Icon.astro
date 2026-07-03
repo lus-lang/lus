@@ -12,7 +12,7 @@ const { name, size = 16, class: className } = Astro.props
 const paths = icons[name]
 if (!paths)
   throw new Error(
-    `Icon "${name}" is not in virtual:lucide-icons — add it to the needed set in astro.config.mjs`,
+    `Icon "${name}" is not in virtual:lucide-icons; add it to the needed set in astro.config.mjs`,
   )
 ---
 

@@ -4,6 +4,7 @@ module: network
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["network:tcp"]
 origin: lus
 params:
   - name: host
@@ -13,4 +14,4 @@ params:
 returns: userdata
 ---
 
-Connects to a TCP server at `host` and `port`. Returns a connection object for reading and writing. Requires `network` pledge.
+Connects to a TCP server at `host` and `port`. Returns a connection object for reading and writing.

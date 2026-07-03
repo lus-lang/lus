@@ -320,7 +320,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
       versionSelect.disabled = false
 
-      // Hash override first, then default to STABLE — the channel the
+      // Hash override first, then default to STABLE, the channel the
       // site recommends for most users
       const preferUnstable = hashVersion === "unstable"
       const defaultRelease = preferUnstable
@@ -356,7 +356,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       const requiresUnstable = opt.dataset.unstable === "true"
       opt.disabled = requiresUnstable && !isUnstable
     }
-    // If current selection is now disabled, switch to hello — but never
+    // If current selection is now disabled, switch to hello, but never
     // silently destroy code the user has edited
     const currentOpt = exampleSelect.querySelector(
       `option[value="${exampleSelect.value}"]`,
@@ -368,7 +368,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
         loadExample("hello")
       } else if (editor) {
         appendOutput(
-          `"${prev?.name ?? "this example"}" needs the unstable build — your code was kept.`,
+          `"${prev?.name ?? "this example"}" needs the unstable build. Your code was kept.`,
           "system",
         )
       }
@@ -395,7 +395,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 <style>
   @reference "../styles/global.css";
 
-  /* dark chrome is flat (nothing to seat into) — pressed states are
+  /* dark chrome is flat (nothing to seat into); pressed states are
      paint-only, per the zero-motion grammar */
   .btn-run {
     @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent bg-accent text-ink select-none;

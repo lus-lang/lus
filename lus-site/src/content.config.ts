@@ -50,6 +50,9 @@ const specSchema = z.object({
   deprecated_by: z.string().optional(),
   removed_in: z.string().optional(),
   fastcall: z.boolean().optional(),
+  /* pledges the call requires at runtime, e.g. ["fs:read", "load"];
+     value-scoped checks keep their base name here, details in prose */
+  pledges: z.array(z.string()).optional(),
 })
 
 const stdlib = defineCollection({

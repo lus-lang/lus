@@ -10,4 +10,4 @@ params:
     type: string
 ---
 
-Removed — use `fs.remove` instead.
+Removed. Use `fs.remove` instead.

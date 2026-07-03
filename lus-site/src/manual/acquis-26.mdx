@@ -3,7 +3,6 @@ order: 126
 title: "Acquis 26 - Compression"
 acquis: true
 shortdesc: "Compression and decompression via the vector.archive module, supporting gzip, deflate, zstd, brotli, and lz4."
-draft: true
 ---
 
 The `vector.archive` module provides compression and decompression using five industry-standard algorithms. All functions accept strings or vector buffers as input and return the matching type.
@@ -18,7 +17,8 @@ local original = vector.archive.gzip.decompress(compressed)
 assert(original == "hello world")
 
 -- Vector buffers
-local buf = vector.create("hello world")
+local buf = vector.create(11)
+vector.pack(buf, 0, "c11", "hello world")
 local cbuf = vector.archive.gzip.compress(buf)
 local obuf = vector.archive.gzip.decompress(cbuf)
 ```
@@ -89,7 +89,9 @@ All functions preserve the input type. Passing a string returns a string; passin
 local s = vector.archive.gzip.compress("string input")
 assert(type(s) == "string")
 
-local v = vector.archive.gzip.compress(vector.create("vector input"))
+local buf = vector.create(12)
+vector.pack(buf, 0, "c12", "vector input")
+local v = vector.archive.gzip.compress(buf)
 assert(type(v) == "vector")
 ```
 

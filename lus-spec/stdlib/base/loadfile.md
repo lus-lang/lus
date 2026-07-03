@@ -4,6 +4,7 @@ module: base
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["load", "fs:read"]
 origin: lua
 params:
   - name: filename
@@ -18,4 +19,4 @@ params:
 returns: function|nil
 ---
 
-Loads a chunk from `filename` (or standard input if absent) without executing it. Returns the compiled chunk as a function, or `nil` plus an error message on failure. See `load` for the meaning of `mode` and `env`. Requires `load` and `fs:read` pledges.
+Loads a chunk from `filename` (or standard input if absent) without executing it. Returns the compiled chunk as a function, or `nil` plus an error message on failure. See `load` for the meaning of `mode` and `env`.

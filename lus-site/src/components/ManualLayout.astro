@@ -69,7 +69,7 @@ groups
       <article class:list={["flex-1 min-w-0", { measured: measure }]}>
         <nav class="lg:hidden" aria-label="Manual">
           <details class="manual-nav-mobile">
-            <summary>Manual — {title}</summary>
+            <summary>Manual: {title}</summary>
             <div class="manual-nav-mobile-body">
               <ManualNav groups={groups} />
             </div>
@@ -107,7 +107,7 @@ groups
     max-width: 80ch;
   }
 
-  /* hard structural rule under every chapter heading — scanning aid */
+  /* hard structural rule under every chapter heading: scanning aid */
   article :global(h2) {
     @apply border-b-2 border-ink/20 pb-1;
   }

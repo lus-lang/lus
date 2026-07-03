@@ -364,7 +364,7 @@ function types.infer_expr(node)
 
   elseif ntype == "callexpr" or ntype == "callstat" then
     if node.func then
-      -- require("module") — special case (depends on argument value, not type)
+      -- require("module") is a special case (depends on argument value, not type)
       if node.func.type == "name" and node.func.value == "require" then
         if node.args and node.args[1] and node.args[1].type == "string" then
           return types.module(node.args[1].value)

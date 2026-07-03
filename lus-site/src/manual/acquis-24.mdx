@@ -3,7 +3,6 @@ order: 124
 title: Acquis 24 - CSV
 acquis: true
 shortdesc: "Built-in fromcsv and tocsv functions for parsing and serializing CSV data."
-draft: true
 ---
 
 The `fromcsv` and `tocsv` functions provide built-in CSV serialization and deserialization, following the same pattern as the existing `fromjson` and `tojson` functions.
@@ -83,12 +82,20 @@ assert(csv == '"hello, world","say ""hi"""\n')
 
 ### Non-string values
 
-Non-string values are converted to their string representation via `tostring` before serialization. `nil` values produce an empty field.
+Non-string values are converted to their string representation via `tostring` before serialization.
 
 ```lus
-local csv = tocsv({{1, true, nil, 3.14}})
+local csv = tocsv({{1, true, 3.14}})
 
-assert(csv == "1,true,,3.14\n")
+assert(csv == "1,true,3.14\n")
+```
+
+Row length follows the `#` operator, so an embedded `nil` may truncate the row at the border. Use empty strings for empty fields:
+
+```lus
+local csv = tocsv({{"a", "", "c"}})
+
+assert(csv == "a,,c\n")
 ```
 
 ### Custom delimiter
@@ -106,7 +113,7 @@ assert(csv == "a\tb\nc\td\n")
 Both functions raise errors on malformed input:
 
 ```lus
-local ok, err = catch fromcsv(42)         -- not a string
+local ok, err = catch fromcsv(true)       -- not a string
 assert(not ok)
 
 local ok, err = catch fromcsv('"unterminated') -- unclosed quote
@@ -116,6 +123,8 @@ local ok, err = catch tocsv("not a table") -- not a table
 assert(not ok)
 ```
 
+Note that numbers are accepted wherever strings are: `fromcsv(42)` parses the string `"42"`, following the standard string coercion rules.
+
 ---
 
 ## Motivation
@@ -124,7 +133,7 @@ CSV is one of the most common data interchange formats. Like JSON, it appears fr
 
 ### Consistency with JSON
 
-Lus already provides `fromjson` and `tojson` as global functions for the most common serialization format. CSV is the natural complement — it covers the tabular data use case that JSON handles awkwardly.
+Lus already provides `fromjson` and `tojson` as global functions for the most common serialization format. CSV is the natural complement: it covers the tabular data use case that JSON handles awkwardly.
 
 ```lus
 -- Reading a CSV file is as simple as reading JSON
@@ -136,4 +145,4 @@ end
 
 ### No external dependencies
 
-Without built-in support, CSV parsing requires either pulling in a library or writing a parser manually — both of which are error-prone, especially around edge cases like quoted fields with embedded newlines and escaped quotes. A built-in implementation following RFC 4180 handles these correctly.
+Without built-in support, CSV parsing requires either pulling in a library or writing a parser manually, both of which are error-prone, especially around edge cases like quoted fields with embedded newlines and escaped quotes. A built-in implementation following RFC 4180 handles these correctly.

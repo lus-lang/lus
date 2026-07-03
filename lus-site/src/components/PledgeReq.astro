@@ -1,0 +1,45 @@
+---
+/*
+** Pledge-requirement chips for API reference entries. Reads the entry's
+** `pledges` frontmatter (lus-spec) and renders one linked chip per
+** required pledge, so permission needs are scannable instead of buried
+** in prose. Value-scoped nuances (e.g. which paths an fs:read check
+** covers) stay in the entry body.
+*/
+interface Props {
+  pledges?: string[]
+}
+
+const { pledges } = Astro.props
+---
+
+{
+  pledges && pledges.length > 0 && (
+    <div class="pledge-req" aria-label="Required pledges">
+      <span class="pledge-req-label">requires</span>
+      {pledges.map((p) => (
+        <a class="pledge-chip" href="/manual/guide#sandboxing" title={`This call is denied unless the "${p}" pledge is granted`}>
+          {p}
+        </a>
+      ))}
+    </div>
+  )
+}
+
+<style>
+  @reference "../styles/global.css";
+
+  .pledge-req {
+    @apply flex flex-wrap items-baseline gap-x-1.5 gap-y-1 mb-1;
+  }
+
+  .pledge-req-label {
+    @apply font-mono text-[10px] uppercase tracking-widest text-ink/60;
+  }
+
+  .pledge-chip {
+    @apply font-mono text-[11px] font-bold no-underline px-1.5 py-0.5
+      bg-emerald-100 text-emerald-900 border border-emerald-900/30
+      hover:bg-emerald-200;
+  }
+</style>

@@ -11,4 +11,4 @@ params:
 vararg: true
 ---
 
-Removed — use the `catch` expression instead: `local ok, result = catch f(...)`.
+Removed. Use the `catch` expression instead: `local ok, result = catch f(...)`.

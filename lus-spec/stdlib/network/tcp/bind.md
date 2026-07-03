@@ -4,6 +4,7 @@ module: network
 kind: function
 since: 0.1.0
 stability: stable
+pledges: ["network:tcp"]
 origin: lus
 params:
   - name: host
@@ -13,4 +14,4 @@ params:
 returns: userdata
 ---
 
-Binds a TCP server to `host` and `port`. Returns a server object that can accept incoming connections. Requires `network` pledge.
+Binds a TCP server to `host` and `port`. Returns a server object that can accept incoming connections.

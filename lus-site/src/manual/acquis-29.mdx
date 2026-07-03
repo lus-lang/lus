@@ -1,0 +1,87 @@
+---
+order: 129
+title: "Acquis 29 - Preinclusion"
+acquis: true
+shortdesc: "The --include flag parses modules at startup so require loads them without load or fs pledges."
+draft: true
+---
+
+_Preinclusion_ is a redesign of `--include` that compiles Lus dependencies ahead of time. Each `--include` argument is parsed when the interpreter starts, and the resulting module loader is stored inside the interpreter state. `require` then resolves preincluded modules from memory, **without needing `load` or `fs` pledges**.
+
+This replaces the legacy `--include` behavior, which was only meaningful together with `--standalone`. That combination is unchanged: with `--standalone`, `--include` still bundles the module into the produced executable.
+
+## Usage
+
+```sh
+lus --include a.lus script.lus
+```
+
+```lus
+global require, pledge
+
+-- Allow no further permissions.
+pledge("seal")
+
+-- Normally, you need load and fs pledges to require modules,
+-- so this errors:
+assert(not catch require("b"))
+
+-- "a" was parsed at startup and is loaded from memory, no
+-- pledges required:
+local mod = require("a")
+```
+
+The argument keeps the same syntax as before:
+
+- `--include path/to/mod.lus`: module name derived from the file name (`mod`)
+- `--include path/to/mod.lus:alias`: module name `alias`
+- `--include path/to/dir`: every `.lus`/`.lua` file in the directory, recursively, named `dir.sub.file`
+
+Files are read once, before any pledge restriction applies and before any code runs. A missing or unparsable include fails startup with an error naming the file, as does a duplicate module name.
+
+## Runtime behavior
+
+Preincluded modules participate in the normal module system: a searcher between `package.preload` and the bundle searcher resolves them, results are cached in `package.loaded`, and repeated requires return the same value. Preincluded modules may `require` each other, and workers see the same preincluded modules as the parent interpreter (re-materialized from memory, never from disk).
+
+### The OP_REQUIRE instruction
+
+Under [readonly environments](/manual/acquis-27), calls that match the strict `require("literal")` pattern (where the literal names a preincluded module) are compiled to `OP_REQUIRE`, a new instruction whose operand indexes the preincluded module directly. The entire call is stripped from the generated code: neither the `require` function nor the module name is ever loaded at run time. The instruction checks `package.loaded` and otherwise instantiates the stored loader.
+
+Only the exact pattern is optimized. Anything looser (an aliased `local r = require`, a computed name, a conditional callee like `(mock or require)("a")`) compiles to an ordinary call and goes through the searcher:
+
+```lus
+-- Run with: lus --readonly-env --include a.lus script.lus
+local m1 = require("a")   -- compiled to OP_REQUIRE
+
+local name = "a"
+local m2 = require(name)  -- ordinary call, resolved by the searcher
+assert(m1 == m2)          -- same module either way (shared cache)
+```
+
+In non-readonly environments, no calls are rewritten; every `require` goes through the searcher.
+
+## Security model
+
+Preinclusion moves the authority to load code from run time to launch time. The operator who constructs the command line decides exactly which modules exist; the program itself needs no filesystem or load capability to use them. A sealed program cannot use preinclusion to reach anything beyond the modules that were explicitly listed.
+
+```sh
+# The script can require exactly these two modules and nothing else,
+# even though it holds no pledges at all.
+lus --include json_helpers.lus --include config.lus:cfg app.lus
+```
+
+## Compatibility
+
+The bytecode format number was bumped alongside this acquis: `OP_REQUIRE` changed the instruction set, so chunks compiled by older versions are rejected with a format mismatch instead of being misread. Recompile `.luac` artifacts and rebuild standalone executables when upgrading.
+
+---
+
+## Motivation
+
+### Pledge-friendly dependencies
+
+Before preinclusion, any program that used modules needed `load` and `fs:read` pledges, capabilities far broader than "use these two known files". Preinclusion lets dependency loading happen under the launcher's authority, so the program itself can run fully sealed. The trusted-code surface becomes an explicit command-line list.
+
+### Ahead-of-time compilation
+
+Modules are parsed once at startup rather than at first `require`, moving parse errors to launch time and removing parse latency from the program's critical path. Under readonly environments, the strict-pattern rewrite goes further and removes the call machinery altogether.

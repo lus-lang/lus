@@ -1,5 +1,5 @@
 /*
-** Canonical install commands — imported by the homepage and
+** Canonical install commands, imported by the homepage and
 ** getting-started.mdx so the surfaces can never drift.
 */
 
@@ -20,7 +20,7 @@ export const WINDOWS_INSTALLER_URL =
   "https://github.com/lus-lang/lus/releases/latest/download/lus-setup.exe"
 
 /*
-** Manual downloads — the bare binary, no installer.
+** Manual downloads: the bare binary, no installer.
 */
 export const INSTALL_LINUX = `# glibc; use lus-linux-musl on Alpine
 curl -LO https://github.com/lus-lang/lus/releases/latest/download/lus-linux

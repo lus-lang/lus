@@ -768,16 +768,16 @@ The `__eq` metamethod defines equality for tables and userdata. The `__lt` (less
 
 Lus supports many other metamethods:
 
-- `__concat(a, b)` — the `..` operator
-- `__len(t)` — the `#` operator
-- `__call(t, ...)` — calling a table as a function
-- `__tostring(t)` — string conversion (used by [`tostring`](/manual/api#tostring) and [`print`](/manual/api#print))
-- `__gc(t)` — finalizer, called when the object is garbage collected
-- `__close(t)` — called when a to-be-closed variable goes out of scope
-- `__slice(t, start, finish)` — the slice syntax `t[i, j]`; receives `nil` for omitted bounds
-- `__json(t)` — custom JSON serialization via [`tojson`](/manual/api#tojson); should return a table representing the desired JSON output
-- `__pairs(t)` — custom iterator for [`pairs`](/manual/api#pairs)
-- `__mode` — not a function; a string (`"k"`, `"v"`, or `"kv"`) that makes the table's keys and/or values _weak_, allowing the garbage collector to reclaim them
+- `__concat(a, b)`: the `..` operator
+- `__len(t)`: the `#` operator
+- `__call(t, ...)`: calling a table as a function
+- `__tostring(t)`: string conversion (used by [`tostring`](/manual/api#tostring) and [`print`](/manual/api#print))
+- `__gc(t)`: finalizer, called when the object is garbage collected
+- `__close(t)`: called when a to-be-closed variable goes out of scope
+- `__slice(t, start, finish)`: the slice syntax `t[i, j]`; receives `nil` for omitted bounds
+- `__json(t)`: custom JSON serialization via [`tojson`](/manual/api#tojson); should return a table representing the desired JSON output
+- `__pairs(t)`: custom iterator for [`pairs`](/manual/api#pairs)
+- `__mode`: not a function, but a string (`"k"`, `"v"`, or `"kv"`) that makes the table's keys and/or values _weak_, allowing the garbage collector to reclaim them
 
 ```lus
 -- __call: make a table callable
@@ -948,10 +948,10 @@ local ok, b = coroutine.resume(co, 20)   -- ok=true, b=30
 
 [`coroutine.status`](/manual/api#coroutine.status) returns one of four states:
 
-- `"suspended"` — created but not yet started, or yielded
-- `"running"` — currently executing
-- `"normal"` — resumed another coroutine (waiting for it to yield)
-- `"dead"` — finished or stopped with an error
+- `"suspended"`: created but not yet started, or yielded
+- `"running"`: currently executing
+- `"normal"`: resumed another coroutine (waiting for it to yield)
+- `"dead"`: finished or stopped with an error
 
 [`coroutine.running`](/manual/api#coroutine.running) returns the currently running coroutine and a boolean indicating whether it is the main thread.
 

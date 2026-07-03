@@ -32,7 +32,7 @@ function attachCopyButtons() {
     btn.append(icon, announce)
 
     // feedback persists while the pointer/focus stays on the button and
-    // reverts on the user's way out — no timer-driven repaints
+    // reverts on the user's way out; no timer-driven repaints
     const restore = () => {
       icon.innerHTML = COPY_SVG
       announce.textContent = ""

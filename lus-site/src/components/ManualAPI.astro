@@ -1,6 +1,7 @@
 ---
 import { render } from "astro:content"
 import type { ApiSection, From } from "../lib/api"
+import PledgeReq from "./PledgeReq.astro"
 
 interface Props {
   sections: ApiSection[]
@@ -45,6 +46,7 @@ function haystack(d: any, from: From) {
     d.kind,
     from,
     d.fastcall ? "fastcall" : "",
+    ...(d.pledges ?? []),
   ]
     .join(" ")
     .toLowerCase()
@@ -55,7 +57,11 @@ function haystack(d: any, from: From) {
   @reference "../styles/global.css";
 
   .api-entry {
-    @apply mb-3 scroll-mt-14;
+    @apply mb-5 pb-4 scroll-mt-14 border-b border-ink/10;
+  }
+
+  .api-entry:last-child {
+    @apply border-b-0;
   }
 
   .api-section {
@@ -205,6 +211,8 @@ function haystack(d: any, from: From) {
                 {d.removed_in ? ` · removed in ${d.removed_in}` : ""}
               </div>
             )}
+
+            {!removed && d.pledges && <PledgeReq pledges={d.pledges} />}
 
             {entry.Content && (
               <div class="api-body">
