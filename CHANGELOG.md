@@ -13,6 +13,9 @@
 - Preincluded module requires are optimized to the new `OP_REQUIRE` instruction in most circumstances under a readonly environment.
 - Added the readonly `flags` table, populated from `--flag`/`-F name[=value]` arguments and resolved at compile time in `if flags.x then` conditions.
 - Added `io.sqlite`, an embedded SQLite database with prepared statements, placeholder-only parameter binding, transactions, WAL journaling, and pledge-gated file access covering the sidecar files.
+- Added queries: the new `@` expression builds a first-class lazy query value with contextual `where`, `select distinct`, `group by`, `having`, `order by`, `limit`, and `offset` clauses, runs over plain tables in memory or pushes down to SQLite as parameterized SQL, and is consumed with the new `query` iterator.
+- Added `debug.queryplan`, which renders a query's provider and push-down decisions as a string.
+- The C API gains `LUA_TQUERY` with `lus_toquery`, `lus_isquery`, a visitor over query sources, clauses, and expression nodes, and `lus_setqueryprovider` for registering native query providers, plus `lus_tosqlite` for the embedded SQLite connection.
 - Made `tojson` ~4x faster on large documents by serializing into a single contiguous buffer instead of one Lua string per output piece.
 - Made `tocsv` serialize into a single contiguous buffer instead of one Lua string per field, delimiter, and newline.
 - Enum value accesses are now interned and no longer allocate a new object every time.

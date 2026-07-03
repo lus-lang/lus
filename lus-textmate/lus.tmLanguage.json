@@ -68,6 +68,40 @@
       ]
     },
     {
+      "begin": "(@)(?=[a-zA-Z_(])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.query.lus"
+        }
+      },
+      "end": "(?=[;)\\]}])|(?=^\\s*$)|(?=\\b(?:local|global|function|return|if|elseif|else|for|while|repeat|until|do|end|then|break|goto|catch|provide)\\b)",
+      "name": "meta.query.lus",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "match": "\\b(where|select|distinct|group|having|order|by|limit|offset|as|asc|desc)\\b",
+          "name": "keyword.control.query.lus"
+        },
+        {
+          "match": "\\b(count|sum|avg|min|max)\\b(?=\\s*\\()",
+          "name": "support.function.query.lus"
+        },
+        {
+          "match": "(?<![\\w\\d.])\\d+(\\.\\d*)?([eE]-?\\d*)?",
+          "name": "constant.numeric.float.lus"
+        },
+        {
+          "match": "\\b(and|or|not|nil|true|false)\\b",
+          "name": "keyword.operator.query.lus"
+        }
+      ]
+    },
+    {
       "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(\\.[0-9A-Fa-f]*)?([eE]-?\\d*)?([pP][-+]\\d+)?",
       "name": "constant.numeric.float.hexadecimal.lus"
     },

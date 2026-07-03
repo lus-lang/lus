@@ -161,7 +161,7 @@ player.name = "Bob"  -- ERROR: const field
 
 ## Values
 
-There are ten types of values in Lus: `nil`, `boolean`, `number`, `string`, `table`, `function`, `thread`, `userdata`, `enum`, and `vector`.
+There are eleven types of values in Lus: `nil`, `boolean`, `number`, `string`, `table`, `function`, `thread`, `userdata`, `enum`, `vector`, and `query`.
 
 ### `nil`
 
@@ -243,6 +243,10 @@ Enum values are comparable only within the same root; `Color.Red == Color.Red` i
 ### `vector`
 
 Vectors are resizable byte buffers for working with raw binary data. They let you read and write values of various sizes at specific positions within the buffer, making them useful for file formats, network protocols, and performance-critical code. They are similar to userdata, but userdata are opaque, not resizable, and managed exclusively by the runtime or the embedding program.
+
+### `query`
+
+Query values are compiled `@` query expressions: first-class, immutable descriptions of a filter, projection, and ordering over one or more sources. A query captures its sources and any values it references when it is built, and nothing runs until the [`query`](/manual/api#query) iterator consumes it, so queries can be stored, passed around, and rerun. Two query values are equal only when they are the same object. This feature is described in full in [Acquis 34](/manual/acquis-34).
 
 ## Operators
 
@@ -1305,7 +1309,7 @@ for row in db:query("SELECT id, name FROM users WHERE age >= ?", 18) do
 end
 ```
 
-File-backed databases are gated by the same value-scoped `fs:read` and `fs:write` pledges as `io.open`, covering the database path and its sidecar files, while `":memory:"` needs no pledge at all. This library is described in full in [Acquis 33](/manual/acquis-33).
+File-backed databases are gated by the same value-scoped `fs:read` and `fs:write` pledges as `io.open`, covering the database path and its sidecar files, while `":memory:"` needs no pledge at all. Indexing a handle with a table name yields a query source, so `@db.users as u where u.age >= 18 select u.name` pushes down as a parameterized SELECT. This library is described in full in [Acquis 33](/manual/acquis-33).
 
 ### Other libraries
 

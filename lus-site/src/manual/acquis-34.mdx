@@ -1,0 +1,92 @@
+---
+order: 134
+title: "Acquis 34 - Queries"
+acquis: true
+shortdesc: "An in-syntax query language: lazy first-class query values with automatic provider push-down."
+draft: true
+---
+
+_Queries_ add an in-syntax, LINQ-style query language. A query is written with the `@` sigil in front of a source and reads like SQL. It is a first-class lazy value that the runtime can evaluate in memory over a plain table or push down to a backend such as the bundled [SQLite](/manual/acquis-33). The same query text works against any source that supplies a query provider, and the runtime pushes down whatever a backend accepts while evaluating the rest in memory on its own.
+
+## The query expression
+
+The `@source` form begins a query and binds a row variable named after the last name of the source, or after an `as` alias. A source is a name, a dot chain like `db.users`, a chain with a literal bracket index, or any parenthesized expression, which then requires `as`. Clauses follow as contextual keywords.
+
+```lus
+local adults =
+  @people as p
+   where p.age > 18
+   select p.name, p.age
+   order by p.age desc
+   limit 100
+```
+
+The clause keywords, which include `where`, `select`, `order`, `by`, `limit`, `offset`, `group`, `having`, `as`, `distinct`, `asc`, `desc`, and the aggregate names, are contextual. They act as keywords only inside an `@` query, so existing code that uses `select` or `count` as an ordinary name keeps working. Row variables never enter the enclosing scope. Clauses may appear in any order, each clause appears at most once, and the first name that is not a clause keyword ends the query.
+
+The `select` clause always produces a record. Writing `select p.name` yields a record `{ name = ... }` keyed by the field name. An expression or an aggregate takes a name with `as`, as in `select count(*) as n`. Writing `select p` alone passes the whole source record through unchanged, and a query with no `select` does the same. Writing `select distinct` de-duplicates the projection.
+
+Several sources separated by commas form a join whose condition is written in the `where` clause. A join requires a `select` clause.
+
+```lus
+@orders as o, customers as c
+  where o.cust_id == c.id and o.total > 100
+  select c.name, o.total
+```
+
+Grouping, aggregation, and de-duplication are expressed as clauses. The supported aggregates are `count`, `sum`, `avg`, `min`, and `max`, and `count(*)` counts rows while `count(expr)` counts non-nil values. In a grouped query every projection must be an aggregate or a group key, which keeps results deterministic and identical across providers.
+
+```lus
+@sales as s
+  select s.region, sum(s.amount) as total
+  group by s.region
+  having sum(s.amount) > 1000
+  order by total desc
+```
+
+An `order by` item is an expression with an optional `asc` or `desc`, and a bare name in `order by` refers to a projection alias, so the example above orders by the computed `total`.
+
+## What a clause captures
+
+Inside a clause, literals, row-variable columns, comparisons, boolean logic, arithmetic, string concatenation, and the aggregates become structural nodes that a backend can translate. A scope name, alone or as a dot chain like `limits.adult`, is captured as a bound parameter whose value is read once, when the query value is built, so later mutation of the local is invisible to an already-built query.
+
+Everything else lifts into a host closure that runs in memory: a call, a method call, a row chain deeper than one field, or a constructor. Host closures see their upvalues live, like any Lus closure, and receive the current row of every source.
+
+```lus
+@db.users as u
+  where u.age >= 18 and matches(u.name, "^A")
+  select u.name
+-- the comparison pushes down to SQL, and matches() runs in memory
+-- on each returned row
+```
+
+## Running a query
+
+A query is lazy and read-only. It is run with the `query` iterator, which is used like `pairs`. Each call to `query(q)` produces a fresh iterator, so a stored query runs again on each loop and observes source changes. Every result comes from the query itself and the loop that consumes it: a count is expressed with `select count(*) as n`, a single row with `limit 1`, and a list is built inside the loop. Because iteration is the whole surface, the query value stays opaque and its evaluation stays entirely inside the provider.
+
+```lus
+for row in query(adults) do
+    print(row.name, row.age)
+end
+```
+
+The logical pipeline is fixed: fetch each source, join, `where`, `group by`, `having`, `select` and `distinct`, `order by`, then `limit` and `offset`. Every provider follows SQL-flavored semantics so the same query text returns the same rows wherever it runs. A comparison with a nil operand is false. Nil orders first ascending, and NaN keys order and group with nil. Integer and float keys unify. Aggregates skip nil values and yield an absent field over zero rows, except `count`, which yields `0`. A nil value never becomes a record field. Group and distinct keys must be primitives, and an integer `sum` raises on overflow.
+
+## Sources and providers
+
+A plain table, meaning an array of records, is queryable through the built-in in-memory provider that implements every clause. A database opened with [`io.sqlite`](/manual/acquis-33) exposes its tables by indexing the handle, so `db.users` is a query source, and any other value can become a source by supplying a `__query` metamethod that returns a row iterator.
+
+At execution time the engine splits the `where` clause at its top-level `and` into conjuncts and offers each single-source, closure-free conjunct to that source's provider. The SQLite provider translates accepted conjuncts into a parameterized SELECT with quoted identifiers, so `@db.users as u where u.age > 18 select u.name` fetches only matching rows, and because every literal and captured value travels as a bound parameter, push-down is injection-safe by construction, the same guarantee the [SQLite](/manual/acquis-33) binding makes for hand-written statements. The SQLite provider only accepts shapes whose SQL semantics match the in-memory engine exactly, so division, booleans in SQL positions, and `not` stay residual. A join whose sources use different providers is served by fetching each side with its own pushed conjuncts and joining in memory. The split is automatic, and `debug.queryplan(q)` renders it as a string, naming each source's provider and the disposition of every conjunct.
+
+## The query value
+
+A query is a garbage-collected value of the new type `query`, alongside `enum` and `vector`. It holds its sources, captured parameters, and host closures, so a query keeps an otherwise dead source alive. Two query values are equal only when they are the same object, a query works as a table key, and `tostring` prints an address. Comparison, length, and arithmetic raise, and a query cannot be serialized to a worker. Query-building functions survive `string.dump`: the clause plan travels as an ordinary string constant that the loader validates before use.
+
+The C API exposes the value to embedders and providers: `lus_isquery` and `lus_toquery`, a read-only visitor over sources, clauses, and reified expression nodes down to the captured values, and `lus_setqueryprovider`, which registers a native provider on a metatable through two callbacks, `accepts` for the per-conjunct offer and `open` for producing the row iterator.
+
+## Limits
+
+A query holds at most 8 sources and 200 captured operands, and clause expressions nest at most 64 levels deep. Aggregates appear only in `select` and `having` and cannot nest. Bare boolean columns, bitwise operators, and length in clauses are compile-time errors, as is a suffix on a parenthesized clause expression.
+
+## Not yet specified
+
+Nested queries inside a clause are rejected for now. Two tables of the same SQLite database joined in one query are fetched separately and joined in memory rather than fused into one SQL join, and `order by`, `limit`, and grouping always run in memory even when a source could translate them. Each can be added compatibly later.

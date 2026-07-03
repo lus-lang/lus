@@ -4,7 +4,7 @@
 local M = {}
 
 -- Global names (functions + variables + tables) for linting/rename/semantic_tokens
-M.globals = { "_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "fromcsv", "fromjson", "getmetatable", "ipairs", "load", "loadfile", "next", "pairs", "pledge", "print", "rawequal", "rawget", "rawlen", "rawset", "require", "select", "setmetatable", "tocsv", "tojson", "tonumber", "tostring", "type", "warn", "_ENV" }
+M.globals = { "_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "fromcsv", "fromjson", "getmetatable", "ipairs", "load", "loadfile", "next", "pairs", "pledge", "print", "query", "rawequal", "rawget", "rawlen", "rawset", "require", "select", "setmetatable", "tocsv", "tojson", "tonumber", "tostring", "type", "warn", "_ENV" }
 
 -- Stdlib table names
 M.tables = { "string", "table", "math", "io", "os", "debug", "coroutine", "utf8", "fs", "network", "worker", "vector", "package", "time" }
@@ -32,6 +32,7 @@ M.members = {
     {n = "getupvalue", k = 3},
     {n = "getuservalue", k = 3},
     {n = "parse", k = 3},
+    {n = "queryplan", k = 3},
     {n = "sethook", k = 3},
     {n = "setlocal", k = 3},
     {n = "setmetatable", k = 3},
@@ -282,6 +283,7 @@ M.fields = {
     ["getupvalue"] = "function",
     ["getuservalue"] = "function",
     ["parse"] = "function",
+    ["queryplan"] = "function",
     ["sethook"] = "function",
     ["setlocal"] = "function",
     ["setmetatable"] = "function",
@@ -527,6 +529,7 @@ M.signatures = {
   ["debug.getupvalue"] = {{n = "f", t = "function"}, {n = "up", t = "integer"}},
   ["debug.getuservalue"] = {{n = "u", t = "userdata"}, {n = "n", t = "integer", opt = true}},
   ["debug.parse"] = {{n = "code", t = "string"}, {n = "chunkname", t = "string", opt = true}, {n = "options", t = "table", opt = true}},
+  ["debug.queryplan"] = {{n = "q", t = "query"}},
   ["debug.sethook"] = {{n = "hook", t = "function"}, {n = "mask", t = "string"}, {n = "count", t = "integer", opt = true}},
   ["debug.setlocal"] = {{n = "level", t = "integer"}, {n = "local_", t = "integer"}, {n = "value", t = "any"}},
   ["debug.setmetatable"] = {{n = "value", t = "any"}, {n = "t", t = "table|nil"}},
@@ -603,6 +606,7 @@ M.signatures = {
   ["package.searchpath"] = {{n = "name", t = "string"}, {n = "path", t = "string"}, {n = "sep", t = "string", opt = true}, {n = "rep", t = "string", opt = true}},
   ["pairs"] = {{n = "t", t = "table"}},
   ["pledge"] = {{n = "name...", t = "string"}},
+  ["query"] = {{n = "q", t = "query"}},
   ["rawequal"] = {{n = "v1", t = "any"}, {n = "v2", t = "any"}},
   ["rawget"] = {{n = "t", t = "table"}, {n = "k", t = "any"}},
   ["rawlen"] = {{n = "v", t = "table|string"}},
@@ -720,6 +724,7 @@ M.returns = {
   ["debug.getupvalue"] = "string|nil",
   ["debug.getuservalue"] = "any",
   ["debug.parse"] = "table|nil",
+  ["debug.queryplan"] = "string",
   ["debug.setlocal"] = "string|nil",
   ["debug.setmetatable"] = "any",
   ["debug.setupvalue"] = "string|nil",
@@ -799,6 +804,7 @@ M.returns = {
   ["package.searchpath"] = "string|nil",
   ["pairs"] = "function",
   ["pledge"] = "boolean",
+  ["query"] = "function",
   ["rawequal"] = "boolean",
   ["rawget"] = "any",
   ["rawlen"] = "integer",
@@ -961,6 +967,8 @@ local ast = debug.parse("local x = 1 + 2")
 ```
 
 Each AST node is a table with at minimum `type` (node type string) and `line` (source line number).]],
+  ["debug.queryplan"] = [[
+Renders the execution plan of the query `q` as a human-readable string without running it: each source with its provider (in-memory, `__query`, or native) and the number of conjuncts pushed down to it, followed by the disposition of every `where` conjunct (pushed down, in memory as a host closure, or in memory as a translatable expression). The string gives tests and programs a direct observable for push-down decisions.]],
   ["debug.sethook"] = [[
 Sets the given function as a debug hook. The `mask` string may contain `"c"` (call), `"r"` (return), `"l"` (line). The `count` argument sets a count hook. Call with no arguments to remove the hook.]],
   ["debug.setlocal"] = [[
@@ -1063,6 +1071,8 @@ The handle runs statements and queries. `db:exec(sql)` runs one or more statemen
 Placeholders carry every value into a statement, so interpolated or concatenated text reaches the database as data. Positional `?` placeholders bind from the extra arguments in order, and named placeholders (`:name`, `@name`, or `$name`) bind from a single table argument keyed by the bare name. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles. Bindable values map as nil to `NULL`, boolean to `1` or `0`, integer to `INTEGER`, float to `REAL`, string to `TEXT`, and `vector` to `BLOB`. Reading maps `INTEGER` to an integer, `REAL` to a float, `TEXT` to a string, `BLOB` to a `vector`, and `NULL` to an absent row field. Binding NaN stores `NULL`, following SQLite.
 
 The handle manages its native resources the same way `io.open` file objects do. It carries a `__close` metamethod, so `local db <close> = io.sqlite(path)` closes the database when its block exits, including through an error, and a `__gc` finalizer releases any handle a program leaves open. Closing a database finalizes its live statements first. Prepared statements and query iterations follow the same lifetime rules with their own `__close` and `__gc`.
+
+Indexing the handle with a key that is not a method yields a table reference for use as a [query](/manual/api#query) source, so `@db.users as u where u.age > 18 select u.name` pushes down as a parameterized SELECT. The reference anchors its database, and the push-down makes the same injection-safety guarantee as a hand-written statement.
 
 SQLite never touches a path outside the pledged set: temp structures live in memory, `ATTACH` and `VACUUM INTO` are denied, and URI filenames are rejected at open. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
 
@@ -1242,6 +1252,23 @@ pledge("seal")         -- lock permissions
 ```]],
   ["print"] = [[
 Prints its arguments to standard output, converting each to a string with `tostring`. Arguments are separated by tabs, followed by a newline.]],
+  ["query"] = [[
+Evaluates the query `q` and returns a fresh iterator over its result records, for use in a generic `for`. Each call to `query(q)` runs the query again, so a stored query value observes source changes on its next loop. Every result is a record: a projected field table, or the source row itself for a whole-row projection.
+
+The logical pipeline is fixed: fetch each source, join, `where`, `group by`, `having`, `select` and `distinct`, `order by`, then `limit` and `offset`. A plain table serves as an array of records through the built-in in-memory provider, a value whose metatable carries `__query` supplies its own row iterator, and native sources such as [`io.sqlite`](/manual/api#io.sqlite) table references push accepted conjuncts down as parameterized SQL. All providers share the same semantics, so the same query text returns the same rows wherever it runs.
+
+```lus
+global query, print
+
+local people = {
+    { name = "Alice", age = 30 },
+    { name = "Bob",   age = 17 },
+}
+
+for row in query(@people as p where p.age >= 18 select p.name) do
+    print(row.name)
+end
+```]],
   ["rawequal"] = [[
 Checks equality of `v1` and `v2` without invoking the `__eq` metamethod. Returns `true` if they are primitively equal.]],
   ["rawget"] = [[
@@ -1484,7 +1511,7 @@ Converts `e` to a number. If `e` is already a number, returns it. If `e` is a st
   ["tostring"] = [[
 Converts `v` to a human-readable string. If `v` has a `__tostring` metamethod, calls it with `v` as argument and returns the result.]],
   ["type"] = [[
-Returns the type of `v` as a string: `"nil"`, `"number"`, `"string"`, `"boolean"`, `"table"`, `"function"`, `"thread"`, `"userdata"`, `"vector"`, or `"enum"`.]],
+Returns the type of `v` as a string: `"nil"`, `"number"`, `"string"`, `"boolean"`, `"table"`, `"function"`, `"thread"`, `"userdata"`, `"vector"`, `"enum"`, or `"query"`.]],
   ["utf8.char"] = [[
 Return a string containing the UTF-8 encoding of the given codepoints.]],
   ["utf8.charpattern"] = [[

@@ -23,6 +23,8 @@ Placeholders carry every value into a statement, so interpolated or concatenated
 
 The handle manages its native resources the same way `io.open` file objects do. It carries a `__close` metamethod, so `local db <close> = io.sqlite(path)` closes the database when its block exits, including through an error, and a `__gc` finalizer releases any handle a program leaves open. Closing a database finalizes its live statements first. Prepared statements and query iterations follow the same lifetime rules with their own `__close` and `__gc`.
 
+Indexing the handle with a key that is not a method yields a table reference for use as a [query](/manual/api#query) source, so `@db.users as u where u.age > 18 select u.name` pushes down as a parameterized SELECT. The reference anchors its database, and the push-down makes the same injection-safety guarantee as a hand-written statement.
+
 SQLite never touches a path outside the pledged set: temp structures live in memory, `ATTACH` and `VACUUM INTO` are denied, and URI filenames are rejected at open. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
 
 ```lus

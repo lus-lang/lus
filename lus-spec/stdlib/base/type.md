@@ -12,4 +12,4 @@ params:
 returns: string
 ---
 
-Returns the type of `v` as a string: `"nil"`, `"number"`, `"string"`, `"boolean"`, `"table"`, `"function"`, `"thread"`, `"userdata"`, `"vector"`, or `"enum"`.
+Returns the type of `v` as a string: `"nil"`, `"number"`, `"string"`, `"boolean"`, `"table"`, `"function"`, `"thread"`, `"userdata"`, `"vector"`, `"enum"`, or `"query"`.
