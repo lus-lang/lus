@@ -360,6 +360,14 @@ h2_query = executable('test_query', '../lus-tests/h2/test_query.c',
 )
 test('h2/query', h2_query, suite: 'h2')
 
+h2_query_hostile = executable('test_query_hostile',
+  '../lus-tests/h2/test_query_hostile.c',
+  include_directories: [include_directories('src'), sqlite_inc],
+  link_with: liblus,
+  dependencies: lus_deps,
+)
+test('h2/query_hostile', h2_query_hostile, suite: 'h2')
+
 
 # H3: System Integration (Container Wrapper)
 # Runs the Lus runner script

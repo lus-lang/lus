@@ -25,7 +25,10 @@
 /* limits enforced by both the compiler and the decoder */
 #define LUS_QMAXSOURCES 8
 #define LUS_QMAXOPERANDS 200
-#define LUS_QMAXNODES 2048
+#define LUS_QMAXNODES 256
+#define LUS_QMAXSELECT 32
+#define LUS_QMAXGROUP 16
+#define LUS_QMAXORDER 16
 #define LUS_QMAXDEPTH 64
 
 /* absent child or clause */

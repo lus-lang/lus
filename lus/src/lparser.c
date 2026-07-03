@@ -2954,12 +2954,13 @@ static const struct {
 ** working inside it.
 */
 
-/* per-builder caps (the wire format caps in lquery.h are larger) */
-#define QB_MAXNODES 256
+/* per-builder caps, shared with the decoder's validation in lquery.h so
+   the compiler and a loaded chunk agree on the same limits */
+#define QB_MAXNODES LUS_QMAXNODES
 #define QB_MAXPOOL 2048
-#define QB_MAXSEL 32
-#define QB_MAXGROUP 16
-#define QB_MAXORDER 16
+#define QB_MAXSEL LUS_QMAXSELECT
+#define QB_MAXGROUP LUS_QMAXGROUP
+#define QB_MAXORDER LUS_QMAXORDER
 #define QB_MAXCHAIN 10
 #define QB_WIREMAX 8192
 

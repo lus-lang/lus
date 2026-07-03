@@ -109,6 +109,8 @@ static void splitconjuncts(const QPlan *pl, int node, QConjuncts *c) {
   else {
     unsigned int mask = 0;
     int opaque = 0;
+    if (c->n >= LUS_QMAXNODES) /* a validated forest cannot reach this */
+      return;
     nodeshape(pl, node, &mask, &opaque);
     c->nodes[c->n] = node;
     c->mask[c->n] = mask;
@@ -790,7 +792,11 @@ static void execquery(lua_State *L, Query *q, int qidx) {
   lua_Integer ntuples = 0, nrecords = 0;
   lua_Integer counters[LUS_QMAXSOURCES];
   lua_Integer sizes[LUS_QMAXSOURCES];
-  luaL_checkstack(L, 3 * LUS_QMAXDEPTH + 40, "query too deep");
+  /* eval recurses to LUS_QMAXDEPTH, and the grouping and distinct
+     phases hold one live table per group key and per projection */
+  luaL_checkstack(L,
+                  3 * LUS_QMAXDEPTH + 2 * (pl->h.ngroup + pl->h.nselect) + 40,
+                  "query too complex");
   memset(&e, 0, sizeof(e));
   e.L = L;
   e.q = q;

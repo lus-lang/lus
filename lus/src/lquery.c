@@ -74,8 +74,8 @@ static int validateplan(lua_State *L, QPlan *pl) {
     return 0;
   if (h->nsources < 1 || h->nsources > LUS_QMAXSOURCES ||
       h->noperands > LUS_QMAXOPERANDS || h->nnodes > LUS_QMAXNODES ||
-      h->nselect > h->nnodes || h->ngroup > h->nnodes ||
-      h->norder > h->nnodes)
+      h->nselect > LUS_QMAXSELECT || h->ngroup > LUS_QMAXGROUP ||
+      h->norder > LUS_QMAXORDER)
     return 0;
   for (i = 0; i < h->nsources; i++) {
     if (!okstr(h, pl->sources[i].alias))
@@ -175,6 +175,67 @@ static int validateplan(lua_State *L, QPlan *pl) {
       luaM_freearray(L, depth, h->nnodes ? h->nnodes : 1);
       return 0;
     }
+  }
+  /*
+  ** The node array must be a forest: every node is referenced at most
+  ** once, by one parent's child edge or one clause root. The compiler
+  ** only ever produces this shape, since each node is built once and
+  ** referenced once. Rejecting shared children is what keeps a plan
+  ** from a dumped chunk from expanding exponentially during the
+  ** conjunct split and the recursive plan walkers, where the traversal
+  ** count is the number of root-to-leaf paths rather than the node
+  ** count. Reuse the 'depth' buffer as a reference counter.
+  */
+  memset(depth, 0, cast_sizet(h->nnodes ? h->nnodes : 1));
+  {
+    int j;
+#define QREF(idx)                                       \
+  do {                                                  \
+    unsigned short qref_ = (idx);                       \
+    if (qref_ != QNODE_NONE) {                          \
+      if (++depth[qref_] > 1) {                         \
+        luaM_freearray(L, depth, h->nnodes ? h->nnodes : 1); \
+        return 0;                                       \
+      }                                                 \
+    }                                                   \
+  } while (0)
+    QREF(h->where_root);
+    QREF(h->having_root);
+    QREF(h->limit_node);
+    QREF(h->offset_node);
+    for (j = 0; j < h->nselect; j++)
+      QREF(pl->sel[j].node);
+    for (j = 0; j < h->ngroup; j++)
+      QREF(pl->group[j]);
+    for (j = 0; j < h->norder; j++)
+      QREF(pl->order[j].node);
+    for (j = 0; j < h->nnodes; j++) {
+      const QNode *n = &pl->nodes[j];
+      switch (n->kind) {
+        case QN_AND:
+        case QN_OR:
+        case QN_CONCAT:
+        case QN_CMP:
+          QREF(n->a);
+          QREF(n->b);
+          break;
+        case QN_ARITH:
+          QREF(n->a);
+          if (n->b != QNODE_NONE)
+            QREF(n->b);
+          break;
+        case QN_NOT:
+          QREF(n->a);
+          break;
+        case QN_AGG:
+          if (n->a != QNODE_NONE)
+            QREF(n->a);
+          break;
+        default:
+          break;
+      }
+    }
+#undef QREF
   }
   luaM_freearray(L, depth, h->nnodes ? h->nnodes : 1);
   return 1;
