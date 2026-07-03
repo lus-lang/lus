@@ -789,9 +789,16 @@ static void createstdfile(lua_State *L, FILE *f, const char *k,
   lua_setfield(L, -2, fname); /* add file to module */
 }
 
+#ifndef LUS_NO_SQLITE
+extern void lus_sqlite_register(lua_State *L);
+#endif
+
 LUAMOD_API int luaopen_io(lua_State *L) {
   luaL_newlib(L, iolib); /* new module */
   createmeta(L);
+#ifndef LUS_NO_SQLITE
+  lus_sqlite_register(L); /* adds io.sqlite and its metatables */
+#endif
   /* create (and set) default files */
   createstdfile(L, stdin, IO_INPUT, "stdin");
   createstdfile(L, stdout, IO_OUTPUT, "stdout");

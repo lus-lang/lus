@@ -1,0 +1,861 @@
+--[[
+  Tests for io.sqlite: opening, exec/run/query, parameter binding, the
+  type map, prepared statements, transactions, and handle lifetimes.
+
+  Everything here runs on ":memory:" databases. The sealed read-only
+  pledge below doubles as a live proof that in-memory databases need no
+  filesystem pledge at all. File-backed behavior and pledge denial live
+  in h1/sqlite_fs.lus.
+]]
+
+global io, print, assert, require, pledge, type, tostring, tonumber,
+    math, string, vector, worker, collectgarbage, select, next, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("sqlite")
+
+-- Open a fresh in-memory database with a standard users table.
+local function fresh()
+    local db = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE users (
+            id   INTEGER PRIMARY KEY,
+            name TEXT,
+            age  INTEGER
+        )
+    ]])
+    return db
+end
+
+local function seed(db)
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Bob", 17)
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Carol", 42)
+end
+
+tests:describe("opening and handle basics")
+
+tests:it("io.sqlite(':memory:') returns a database userdata", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_type(db, "userdata")
+    tests:assert_contains(tostring(db), "database")
+end)
+
+tests:it("io.sqlite with a number argument raises", function()
+    tests:assert_throws(function() return io.sqlite(42) end, "bad argument")
+end)
+
+tests:it("empty path raises", function()
+    tests:assert_throws(function() return io.sqlite("") end,
+        "empty database path")
+end)
+
+tests:it("invalid mode raises", function()
+    tests:assert_throws(function() return io.sqlite(":memory:", "x") end,
+        "invalid mode")
+end)
+
+tests:it("URI filenames are rejected", function()
+    tests:assert_throws(function() return io.sqlite("file::memory:") end,
+        "URI filenames are not supported")
+end)
+
+tests:it("read-only mode opens :memory: as an empty frozen database",
+    function()
+    local db <close> = io.sqlite(":memory:", "r")
+    tests:assert_throws(function() db:exec("CREATE TABLE t (n INTEGER)") end,
+        "readonly database")
+end)
+
+tests:it(":memory: opens under a sealed pledge with no fs grants for it",
+    function()
+    -- the suite pledge grants fs:read only under ./lus-tests
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_contains(tostring(db), "database")
+end)
+
+tests:describe("db:exec")
+
+tests:it("exec creates a table and returns no values", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_equal(select("#", db:exec("CREATE TABLE t (n INTEGER)")), 0)
+end)
+
+tests:it("one exec string may hold several statements", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (n INTEGER);
+        INSERT INTO t VALUES (1);
+        INSERT INTO t VALUES (2);
+    ]])
+    for row in db:query("SELECT count(*) AS n FROM t") do
+        tests:assert_equal(row.n, 2)
+    end
+end)
+
+tests:it("exec with a syntax error raises", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:exec("CREATE TABEL t (n)") end,
+        "syntax error")
+end)
+
+tests:it("exec with a non-string argument raises", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:exec(42) end, "bad argument")
+end)
+
+tests:it("exec applies statements before the failing one", function()
+    local db <close> = io.sqlite(":memory:")
+    local ok = catch db:exec([[
+        CREATE TABLE t (n INTEGER);
+        INSERT INTO t VALUES (7);
+        INSERT INTO nosuch VALUES (1);
+    ]])
+    assert(not ok, "the third statement must fail")
+    for row in db:query("SELECT count(*) AS n FROM t") do
+        tests:assert_equal(row.n, 1, "the first two statements applied")
+    end
+end)
+
+tests:it("exec on a closed db raises", function()
+    local db = io.sqlite(":memory:")
+    db:close()
+    tests:assert_throws(function() db:exec("SELECT 1") end,
+        "attempt to use a closed database")
+end)
+
+tests:describe("db:run")
+
+tests:it("INSERT returns changes and rowid as integers", function()
+    local db <close> = fresh()
+    local changes, rowid = db:run(
+        "INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+    tests:assert_equal(changes, 1)
+    tests:assert_equal(rowid, 1)
+    tests:assert_equal(math.type(changes), "integer")
+    tests:assert_equal(math.type(rowid), "integer")
+end)
+
+tests:it("UPDATE returns the touched row count", function()
+    local db <close> = fresh()
+    seed(db)
+    local changes = db:run("UPDATE users SET age = age + 1")
+    tests:assert_equal(changes, 3)
+end)
+
+tests:it("DELETE returns the deleted count", function()
+    local db <close> = fresh()
+    seed(db)
+    local changes = db:run("DELETE FROM users WHERE age >= ?", 30)
+    tests:assert_equal(changes, 2)
+end)
+
+tests:it("positional binding accepts every bindable type", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (i INTEGER, f REAL, s TEXT, b INTEGER, n TEXT, v BLOB)")
+    local blob = vector.create(3)
+    vector.pack(blob, 0, "BBB", 1, 2, 3)
+    local changes = db:run("INSERT INTO t VALUES (?, ?, ?, ?, ?, ?)",
+        7, 1.5, "hi", true, nil, blob)
+    tests:assert_equal(changes, 1)
+end)
+
+tests:it("too few positional values raises", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x")
+    end, "statement has 2 parameters, but 1 values were given")
+end)
+
+tests:it("too many positional values raises", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name) VALUES (?)", "x", "y")
+    end, "statement has 1 parameters, but 2 values were given")
+end)
+
+tests:it("named binding takes values from a table", function()
+    local db <close> = fresh()
+    db:run("INSERT INTO users (name, age) VALUES (:name, :age)",
+        { name = "Dora", age = 25 })
+    for row in db:query("SELECT age FROM users WHERE name = 'Dora'") do
+        tests:assert_equal(row.age, 25)
+    end
+end)
+
+tests:each("@name and $name placeholders bind too", { { "@" }, { "$" } },
+    function(sigil)
+    local db <close> = fresh()
+    db:run("INSERT INTO users (name, age) VALUES (" .. sigil .. "name, "
+        .. sigil .. "age)", { name = "Eve", age = 33 })
+    for row in db:query("SELECT age FROM users WHERE name = 'Eve'") do
+        tests:assert_equal(row.age, 33)
+    end
+end)
+
+tests:it("a missing named key raises", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name, age) VALUES (:name, :age)",
+            { name = "x" })
+    end, "no value for parameter ':age'")
+end)
+
+tests:it("a repeated named parameter binds its one value everywhere",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT :v + :v AS s", { v = 21 }) do
+        tests:assert_equal(row.s, 42)
+    end
+end)
+
+tests:it("extra keys in the named table are ignored", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT :v AS v", { v = 1, unused = 2 }) do
+        tests:assert_equal(row.v, 1)
+    end
+end)
+
+tests:it("a table against a positional statement raises", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name) VALUES (?)", { name = "x" })
+    end, "statement uses positional parameters, but a table was given")
+end)
+
+tests:it("varargs against a named statement raise", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name) VALUES (:name)", "x")
+    end, "statement uses named parameters, but no table was given")
+end)
+
+tests:it("numbered ?NNN parameters are rejected", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:run("SELECT ?1", 1) end,
+        "numbered parameters are not supported")
+end)
+
+tests:it("binding a function value raises", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x",
+            function() end)
+    end, "cannot bind function value to parameter 2")
+end)
+
+tests:it("binding a table value raises", function()
+    local db <close> = fresh()
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x", {})
+    end, "cannot bind table value to parameter 2")
+end)
+
+tests:it("binding an enum value raises", function()
+    local db <close> = fresh()
+    local e = enum red, green end
+    tests:assert_throws(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x", e.red)
+    end, "cannot bind enum value to parameter 2")
+end)
+
+tests:it("run with two statements in one string raises", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:run("SELECT 1; SELECT 2") end,
+        "sql contains more than one statement")
+end)
+
+tests:it("a trailing comment after the statement is fine", function()
+    local db <close> = io.sqlite(":memory:")
+    local changes = db:run("SELECT 1; -- trailing comment\n  ")
+    tests:assert_equal(math.type(changes), "integer")
+end)
+
+tests:it("comment-only sql raises", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:run("-- nothing here") end,
+        "sql contains no statement")
+end)
+
+tests:it("run with a SELECT executes and returns integers", function()
+    local db <close> = fresh()
+    local changes, rowid = db:run("SELECT * FROM users")
+    tests:assert_equal(math.type(changes), "integer")
+    tests:assert_equal(math.type(rowid), "integer")
+end)
+
+tests:describe("db:query and the type map")
+
+tests:it("query yields rows keyed by column name, in order", function()
+    local db <close> = fresh()
+    seed(db)
+    local names = {}
+    for row in db:query("SELECT name, age FROM users ORDER BY age") do
+        names[#names + 1] = row.name
+    end
+    tests:assert_equal(#names, 3)
+    tests:assert_equal(names[1], "Bob")
+    tests:assert_equal(names[2], "Alice")
+    tests:assert_equal(names[3], "Carol")
+end)
+
+tests:it("an empty result set never runs the loop body", function()
+    local db <close> = fresh()
+    local ran = false
+    for _ in db:query("SELECT * FROM users") do
+        ran = true
+    end
+    tests:assert_equal(ran, false)
+end)
+
+tests:it("an exhausted iterator keeps returning nil", function()
+    local db <close> = io.sqlite(":memory:")
+    local iter = db:query("SELECT 1 AS n")
+    assert(iter() ~= nil, "first call yields the row")
+    tests:assert_equal(iter(), nil)
+    tests:assert_equal(iter(), nil)
+end)
+
+tests:it("SQLite types map to Lus types", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1 AS i, 1.5 AS f, 'x' AS s, X'0102' AS b, NULL AS n") do
+        tests:assert_equal(math.type(row.i), "integer")
+        tests:assert_equal(math.type(row.f), "float")
+        tests:assert_equal(row.s, "x")
+        tests:assert_equal(type(row.b), "vector")
+        tests:assert_equal(vector.size(row.b), 2)
+        tests:assert_equal(vector.unpack(row.b, 0, "B"), 1)
+        tests:assert_equal(row.n, nil)
+    end
+end)
+
+tests:it("a NULL column is absent from the row entirely", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1 AS a, NULL AS x") do
+        tests:assert_equal(row.x, nil)
+        local keys = 0
+        for _ in next, row do
+            keys = keys + 1
+        end
+        tests:assert_equal(keys, 1, "only 'a' is present")
+    end
+end)
+
+tests:it("int64 boundaries round-trip exactly", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT ? AS hi, ? AS lo",
+        math.maxinteger, math.mininteger) do
+        tests:assert_equal(row.hi, math.maxinteger)
+        tests:assert_equal(row.lo, math.mininteger)
+    end
+end)
+
+tests:it("NaN binds to NULL and infinity round-trips as REAL", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT ? AS nan, ? AS inf", 0 / 0, math.huge) do
+        tests:assert_equal(row.nan, nil)
+        tests:assert_equal(row.inf, math.huge)
+    end
+end)
+
+tests:it("booleans bind as integers 1 and 0", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT ? AS t, ? AS f", true, false) do
+        tests:assert_equal(row.t, 1)
+        tests:assert_equal(row.f, 0)
+    end
+end)
+
+tests:it("embedded NUL bytes survive TEXT round-trips", function()
+    local db <close> = io.sqlite(":memory:")
+    local s = "a\0b\0c"
+    for row in db:query("SELECT ? AS s", s) do
+        tests:assert_equal(#row.s, 5)
+        tests:assert_equal(row.s, s)
+    end
+end)
+
+tests:it("embedded NUL bytes survive BLOB round-trips", function()
+    local db <close> = io.sqlite(":memory:")
+    local v = vector.create(3)
+    vector.pack(v, 0, "BBB", 65, 0, 66)
+    for row in db:query("SELECT ? AS b", v) do
+        tests:assert_equal(vector.size(row.b), 3)
+        tests:assert_equal(vector.unpack(row.b, 1, "B"), 0)
+    end
+end)
+
+tests:it("a 1 MB string round-trips intact", function()
+    local db <close> = io.sqlite(":memory:")
+    local big = string.rep("x", 1024 * 1024)
+    for row in db:query("SELECT ? AS s", big) do
+        tests:assert_equal(#row.s, #big)
+        tests:assert_equal(row.s, big)
+    end
+end)
+
+tests:it("a 1 MB blob round-trips intact", function()
+    local db <close> = io.sqlite(":memory:")
+    local n = 1024 * 1024
+    local v = vector.create(n)
+    vector.pack(v, 0, "B", 255)
+    vector.pack(v, n - 1, "B", 128)
+    for row in db:query("SELECT ? AS b", v) do
+        tests:assert_equal(vector.size(row.b), n)
+        tests:assert_equal(vector.unpack(row.b, 0, "B"), 255)
+        tests:assert_equal(vector.unpack(row.b, n - 1, "B"), 128)
+    end
+end)
+
+tests:it("empty string and zero-length blob are distinct from NULL",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    local empty = vector.create(0)
+    for row in db:query("SELECT ? AS s, ? AS b, NULL AS n", "", empty) do
+        tests:assert_equal(row.s, "")
+        tests:assert_equal(type(row.b), "vector")
+        tests:assert_equal(vector.size(row.b), 0)
+        tests:assert_equal(row.n, nil)
+    end
+end)
+
+tests:it("UTF-8 text round-trips byte-identically", function()
+    local db <close> = io.sqlite(":memory:")
+    local s = "h\u{00E9}llo w\u{00F6}rld \u{2603}"
+    for row in db:query("SELECT ? AS s", s) do
+        tests:assert_equal(row.s, s)
+    end
+end)
+
+tests:it("duplicate column names keep the last column", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1 AS a, 2 AS a") do
+        tests:assert_equal(row.a, 2)
+    end
+end)
+
+tests:it("unaliased expression columns use SQLite's default names",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1+1") do
+        tests:assert_equal(row["1+1"], 2)
+    end
+end)
+
+tests:it("a bound WHERE parameter filters", function()
+    local db <close> = fresh()
+    seed(db)
+    local count = 0
+    for _ in db:query("SELECT * FROM users WHERE age >= ?", 18) do
+        count = count + 1
+    end
+    tests:assert_equal(count, 2)
+end)
+
+tests:it("query error paths raise", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() return db:query("SELECT 1; SELECT 2") end,
+        "more than one statement")
+    tests:assert_throws(function() return db:query("SELEKT 1") end,
+        "syntax error")
+    local closed = io.sqlite(":memory:")
+    closed:close()
+    tests:assert_throws(function() return closed:query("SELECT 1") end,
+        "attempt to use a closed database")
+end)
+
+tests:it("a bound injection payload stays data", function()
+    local db <close> = fresh()
+    seed(db)
+    local payload = "'; DROP TABLE users; --"
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", payload, 1)
+    local found = 0
+    for row in db:query("SELECT name FROM users WHERE name = ?", payload) do
+        tests:assert_equal(row.name, payload)
+        found = found + 1
+    end
+    tests:assert_equal(found, 1)
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(row.n, 4, "the table survived")
+    end
+end)
+
+tests:it("interpolated hostile values reach the database as data", function()
+    local db <close> = io.sqlite(":memory:")
+    local fragment = [[quo"te, back\slash, per%cent and 'single']]
+    local hostile = `built by interpolation: {fragment} #{1 + 1}`
+    for row in db:query("SELECT ? AS s", hostile) do
+        tests:assert_equal(row.s, hostile)
+    end
+end)
+
+tests:it("nested iteration over one database works", function()
+    local db <close> = fresh()
+    seed(db)
+    local pairs_seen = 0
+    for a in db:query("SELECT name FROM users") do
+        for b in db:query("SELECT name FROM users") do
+            pairs_seen = pairs_seen + 1
+        end
+    end
+    tests:assert_equal(pairs_seen, 9)
+end)
+
+tests:it("breaking out of a query loop releases the statement", function()
+    local db <close> = fresh()
+    seed(db)
+    for row in db:query("SELECT * FROM users") do
+        break
+    end
+    local count = 0
+    for _ in db:query("SELECT * FROM users") do
+        count = count + 1
+    end
+    tests:assert_equal(count, 3)
+    db:close()
+end)
+
+tests:it("a captured iterator raises after the db closes", function()
+    local db = fresh()
+    seed(db)
+    local iter = db:query("SELECT * FROM users")
+    db:close()
+    tests:assert_throws(function() return iter() end, "closed")
+end)
+
+tests:it("PRAGMA queries work", function()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("PRAGMA journal_mode") do
+        tests:assert_equal(row.journal_mode, "memory")
+    end
+end)
+
+tests:it("ATTACH with a filename is denied", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:exec("ATTACH 'x.db' AS other") end,
+        "not authorized")
+end)
+
+tests:it("VACUUM INTO is denied and plain VACUUM works", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    tests:assert_throws(function() db:exec("VACUUM INTO 'out.db'") end,
+        "authorization denied")
+    db:exec("VACUUM")
+end)
+
+tests:it("query with an INSERT executes it and yields no rows", function()
+    local db <close> = fresh()
+    local ran = false
+    for _ in db:query("INSERT INTO users (name, age) VALUES ('x', 1)") do
+        ran = true
+    end
+    tests:assert_equal(ran, false)
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(row.n, 1, "the insert executed")
+    end
+end)
+
+tests:it("manual BEGIN and COMMIT through exec work", function()
+    local db <close> = fresh()
+    db:exec("BEGIN")
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x", 1)
+    db:exec("COMMIT")
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(row.n, 1)
+    end
+end)
+
+tests:describe("prepared statements")
+
+tests:it("prepare returns a statement", function()
+    local db <close> = fresh()
+    local stmt = db:prepare("SELECT * FROM users")
+    tests:assert_type(stmt, "userdata")
+    tests:assert_contains(tostring(stmt), "statement")
+end)
+
+tests:it("prepare error paths raise", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() return db:prepare("SELEKT") end,
+        "syntax error")
+    tests:assert_throws(function() return db:prepare("SELECT 1; SELECT 2") end,
+        "more than one statement")
+end)
+
+tests:it("stmt:run re-executes with fresh bindings", function()
+    local db <close> = fresh()
+    local insert = db:prepare("INSERT INTO users (name, age) VALUES (?, ?)")
+    for i = 1, 100 do
+        insert:run("user" .. i, i)
+    end
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(row.n, 100)
+    end
+end)
+
+tests:it("stmt:query runs twice and yields the full set both times",
+    function()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT * FROM users")
+    local first, second = 0, 0
+    for _ in stmt:query() do
+        first = first + 1
+    end
+    for _ in stmt:query() do
+        second = second + 1
+    end
+    tests:assert_equal(first, 3)
+    tests:assert_equal(second, 3)
+end)
+
+tests:it("stepping is lazy: rows inserted before the first call are seen",
+    function()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT count(*) AS n FROM users")
+    local iter = stmt:query()
+    db:run("INSERT INTO users (name, age) VALUES ('late', 1)")
+    local row = iter()
+    tests:assert_equal(row.n, 4, "the late row is visible")
+end)
+
+tests:it("re-running a statement invalidates its live iterator", function()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT * FROM users")
+    local stale = stmt:query()
+    assert(stale() ~= nil, "the first iterator started")
+    local fresh_iter = stmt:query()
+    tests:assert_throws(function() return stale() end,
+        "statement was reset during iteration")
+    assert(fresh_iter() ~= nil, "the new iterator works")
+end)
+
+tests:it("stmt:run after an abandoned iteration self-heals", function()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT * FROM users")
+    local iter = stmt:query()
+    assert(iter() ~= nil, "half-consumed")
+    local changes = db:run("DELETE FROM users WHERE name = 'Bob'")
+    tests:assert_equal(changes, 1)
+    local count = 0
+    for _ in stmt:query() do
+        count = count + 1
+    end
+    tests:assert_equal(count, 2)
+end)
+
+tests:it("stmt:close semantics", function()
+    local db <close> = fresh()
+    local stmt = db:prepare("SELECT 1")
+    tests:assert_equal(stmt:close(), true)
+    tests:assert_throws(function() return stmt:close() end,
+        "attempt to use a closed statement")
+    tests:assert_throws(function() return stmt:run() end,
+        "attempt to use a closed statement")
+    tests:assert_equal(tostring(stmt), "statement (closed)")
+end)
+
+tests:it("named binding works through statements", function()
+    local db <close> = fresh()
+    local insert = db:prepare(
+        "INSERT INTO users (name, age) VALUES (:name, :age)")
+    insert:run{ name = "Nia", age = 28 }
+    local stmt = db:prepare("SELECT age FROM users WHERE name = :name")
+    for row in stmt:query{ name = "Nia" } do
+        tests:assert_equal(row.age, 28)
+    end
+end)
+
+tests:it("db:close finalizes live statements first", function()
+    local db = fresh()
+    local stmt = db:prepare("SELECT * FROM users")
+    db:close()
+    tests:assert_throws(function() return stmt:run() end,
+        "attempt to use a closed statement")
+end)
+
+tests:describe("transactions")
+
+tests:it("a transaction commits on return", function()
+    local db <close> = fresh()
+    db:transaction(function()
+        db:run("INSERT INTO users (name, age) VALUES ('a', 1)")
+        db:run("INSERT INTO users (name, age) VALUES ('b', 2)")
+    end)
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(row.n, 2)
+    end
+end)
+
+tests:it("an error rolls back and rethrows", function()
+    local db <close> = fresh()
+    local ok, err = catch db:transaction(function()
+        db:run("INSERT INTO users (name, age) VALUES ('a', 1)")
+        error("boom")
+    end)
+    assert(not ok, "the transaction failed")
+    tests:assert_contains(tostring(err), "boom")
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        tests:assert_equal(row.n, 0, "nothing persisted")
+    end
+end)
+
+tests:it("a table error value follows catch's conversion rules", function()
+    -- catch converts non-string error values to strings by design, and
+    -- the transaction rethrows the original value into that machinery
+    local db <close> = fresh()
+    local ok, err = catch db:transaction(function()
+        error({ reason = "custom" })
+    end)
+    assert(not ok)
+    tests:assert_equal(type(err), "string")
+end)
+
+tests:it("the transaction returns everything fn returns", function()
+    local db <close> = io.sqlite(":memory:")
+    local a, b, c = db:transaction(function()
+        return 1, "two", nil
+    end)
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, "two")
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("nesting transactions raises", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function()
+        db:transaction(function()
+            db:transaction(function() end)
+        end)
+    end, "within a transaction")
+end)
+
+tests:it("transaction with a non-function raises", function()
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_throws(function() db:transaction(42) end, "bad argument")
+end)
+
+tests:it("closing the db inside the transaction raises", function()
+    local db = fresh()
+    tests:assert_throws(function()
+        db:transaction(function()
+            db:close()
+        end)
+    end, "database closed during transaction")
+end)
+
+tests:it("a failing COMMIT rolls back and raises", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE parent (id INTEGER PRIMARY KEY);
+        CREATE TABLE child (
+            pid INTEGER REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED
+        );
+    ]])
+    local ok, err = catch db:transaction(function()
+        db:run("INSERT INTO child VALUES (99)")
+    end)
+    assert(not ok, "the deferred constraint fails at COMMIT")
+    tests:assert_contains(tostring(err), "FOREIGN KEY")
+    for row in db:query("SELECT count(*) AS n FROM child") do
+        tests:assert_equal(row.n, 0, "the orphan row rolled back")
+    end
+end)
+
+tests:describe("lifetime, GC, and close")
+
+tests:it("db:close returns true and closing twice raises", function()
+    local db = io.sqlite(":memory:")
+    tests:assert_equal(db:close(), true)
+    tests:assert_throws(function() return db:close() end,
+        "attempt to use a closed database")
+end)
+
+tests:it("tostring reflects the closed state", function()
+    local db = io.sqlite(":memory:")
+    db:close()
+    tests:assert_equal(tostring(db), "database (closed)")
+end)
+
+tests:it("a <close> handle closes at block exit", function()
+    local captured
+    do
+        local db <close> = io.sqlite(":memory:")
+        captured = db
+    end
+    tests:assert_throws(function() captured:exec("SELECT 1") end,
+        "attempt to use a closed database")
+end)
+
+tests:it("<close> after a manual close is a quiet no-op", function()
+    do
+        local db <close> = io.sqlite(":memory:")
+        db:close()
+    end
+end)
+
+tests:it("an error unwinding a block still closes the handle", function()
+    local captured
+    local ok = catch (function()
+        local db <close> = io.sqlite(":memory:")
+        captured = db
+        error("unwind")
+    end)()
+    assert(not ok)
+    tests:assert_throws(function() captured:exec("SELECT 1") end,
+        "attempt to use a closed database")
+end)
+
+tests:it("a statement keeps its database alive through GC", function()
+    local stmt
+    do
+        local db = fresh()
+        db:run("INSERT INTO users (name, age) VALUES ('kept', 1)")
+        stmt = db:prepare("SELECT count(*) AS n FROM users")
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    for row in stmt:query() do
+        tests:assert_equal(row.n, 1, "the anchored db still answers")
+    end
+end)
+
+tests:it("the weak registry does not retain dropped statements", function()
+    local db = io.sqlite(":memory:")
+    do
+        local stmt = db:prepare("SELECT 1")
+        stmt = nil
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    tests:assert_equal(db:close(), true)
+end)
+
+tests:it("GC finalizes an unreferenced open database", function()
+    do
+        local db = io.sqlite(":memory:")
+        db:exec("CREATE TABLE t (n INTEGER)")
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local db <close> = io.sqlite(":memory:")
+    tests:assert_contains(tostring(db), "database")
+end)
+
+tests:it("a database handle cannot cross a worker boundary", function()
+    local db <close> = io.sqlite(":memory:")
+    local w = worker.create("lus-tests/h1/worker/echo.lus")
+    local ok, err = catch worker.send(w, db)
+    assert(not ok, "sending a database must fail")
+    tests:assert_contains(tostring(err), "cannot serialize")
+    worker.send(w, "STOP")
+end)
+
+tests:finish()

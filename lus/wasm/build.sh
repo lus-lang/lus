@@ -132,6 +132,7 @@ COMMON_FLAGS=(
   -O2
   -DLUA_USE_C89
   -DLUS_NO_ARCHIVE
+  -DLUS_NO_SQLITE
 )
 
 build_target() {

@@ -230,6 +230,13 @@ LUA_API int(lua_pushthread)(lua_State *L);
 LUA_API void(lua_pushenum)(lua_State *L, int npairs);
 
 /*
+** Returns the sqlite3 connection behind an open io.sqlite database
+** handle, or NULL for a closed handle or any other value. Provided by
+** the sqlite binding, so the symbol is absent in LUS_NO_SQLITE builds.
+*/
+LUA_API void *(lus_tosqlite)(lua_State *L, int idx);
+
+/*
 ** get functions (Lua -> stack)
 */
 LUA_API int(lua_getglobal)(lua_State *L, const char *name);
