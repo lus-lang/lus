@@ -15,4 +15,6 @@ params:
 returns: string|table
 ---
 
-Returns a string or table with the date and time, formatted according to `format`. If `format` starts with `"!"`, uses UTC. If `format` is `"*t"`, returns a table with fields `year`, `month`, `day`, `hour`, `min`, `sec`, `wday`, `yday`, `isdst`. The optional `time` argument specifies the time to format (defaults to current time).
+Returns a string or table with the date and time, formatted according to `format`. If `format` starts with `"!"`, the time is formatted in UTC. If `format` is `"*t"`, the result is a table with fields `year`, `month`, `day`, `hour`, `min`, `sec`, `wday`, `yday`, and `isdst`.
+
+The optional `time` argument specifies the time to format and defaults to the current time.

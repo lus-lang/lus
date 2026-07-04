@@ -1295,11 +1295,21 @@ local ny = time.zone("America/New_York")
 print(later:at(ny):iso())              -- civil wall clock, DST-aware
 ```
 
-Named zones resolve from an IANA tzdata database embedded in the runtime, so `time.zone` and `time.localzone` need no filesystem access and behave identically across platforms. `time.offset(seconds)` builds a fixed-offset zone, and `time.tzdata_version()` reports the embedded release. Formatting uses `strftime` specifiers (as in `os.date`), with `:iso()` as an ISO 8601 shortcut; bridge to the legacy epoch API with `time.instant(os.time())` and `instant:epoch()`. `time.monotonic()` returns a separate monotonic reading for measuring elapsed time. This library is described in full in [Acquis 30](/manual/acquis-30).
+Named zones resolve from an IANA tzdata database embedded in the runtime, so `time.zone` and `time.localzone` need no filesystem access and behave identically across platforms. `time.offset(seconds)` builds a fixed-offset zone, and `time.tzdata_version()` reports the embedded release.
+
+Formatting uses `strftime` specifiers (as in `os.date`), with `:iso()` as an ISO 8601 shortcut. Bridge to the legacy epoch API with `time.instant(os.time())` and `instant:epoch()`. `time.monotonic()` returns a separate monotonic reading for measuring elapsed time. This library is described in full in [Acquis 30](/manual/acquis-30).
 
 ### SQLite
 
-The runtime embeds SQLite for local, file-backed and in-memory databases. [`io.sqlite(path)`](/manual/api#io.sqlite) returns a database handle whose methods run statements (`db:exec`), single writes (`db:run`), queries (`db:query`, an iterator over rows keyed by column name), reusable prepared statements (`db:prepare`), and transactions (`db:transaction`). Values always travel through `?` or named placeholders, and handles close through `<close>`, `__gc`, or an explicit `db:close()`, just like `io.open` file objects.
+The runtime embeds SQLite for local, file-backed and in-memory databases. [`io.sqlite(path)`](/manual/api#io.sqlite) returns a database handle with a small method set:
+
+- `db:exec` runs statements for their side effects.
+- `db:run` runs a single write and reports the affected rows.
+- `db:query` returns an iterator over rows keyed by column name.
+- `db:prepare` compiles a reusable statement.
+- `db:transaction` wraps a function in a commit-or-rollback transaction.
+
+Values always travel through `?` or named placeholders, and handles close through `<close>`, `__gc`, or an explicit `db:close()`, just like `io.open` file objects.
 
 ```lus
 local db <close> = io.sqlite("app.db")
@@ -1309,11 +1319,26 @@ for row in db:query("SELECT id, name FROM users WHERE age >= ?", 18) do
 end
 ```
 
-File-backed databases are gated by the same value-scoped `fs:read` and `fs:write` pledges as `io.open`, covering the database path and its sidecar files, while `":memory:"` needs no pledge at all. Indexing a handle with a table name yields a query source, so `@db.users as u where u.age >= 18 select u.name` pushes down as a parameterized SELECT. This library is described in full in [Acquis 33](/manual/acquis-33).
+File-backed databases are gated by the same value-scoped `fs:read` and `fs:write` pledges as `io.open`, covering the database path and its sidecar files. A `":memory:"` database needs no pledge at all.
+
+Indexing a handle with a table name yields a query source, so `@db.users as u where u.age >= 18 select u.name` pushes down as a parameterized SELECT. This library is described in full in [Acquis 33](/manual/acquis-33).
 
 ### Other libraries
 
-The full standard library also includes [`math`](/manual/api#math) (mathematical functions), [`string`](/manual/api#string) (string manipulation and patterns), [`table`](/manual/api#table) (table manipulation), [`io`](/manual/api#io) (file I/O), [`os`](/manual/api#os) (operating system facilities), [`utf8`](/manual/api#utf8) (UTF-8 support), [`debug`](/manual/api#debug) (debugging facilities), [`vector`](/manual/api#vector) (byte buffers), [`coroutine`](/manual/api#coroutine) (coroutine control), and [`package`](/manual/api#package) (module loading). See the [API reference](/manual/api) for complete documentation.
+The full standard library also includes:
+
+- [`math`](/manual/api#math) for mathematical functions.
+- [`string`](/manual/api#string) for string manipulation and patterns.
+- [`table`](/manual/api#table) for table manipulation.
+- [`io`](/manual/api#io) for file I/O.
+- [`os`](/manual/api#os) for operating system facilities.
+- [`utf8`](/manual/api#utf8) for UTF-8 support.
+- [`debug`](/manual/api#debug) for debugging facilities.
+- [`vector`](/manual/api#vector) for byte buffers.
+- [`coroutine`](/manual/api#coroutine) for coroutine control.
+- [`package`](/manual/api#package) for module loading.
+
+See the [API reference](/manual/api) for complete documentation.
 
 ## Internals
 
@@ -1321,12 +1346,16 @@ The full standard library also includes [`math`](/manual/api#math) (mathematical
 
 Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and resembles traditional machine code.
 
-The Lus interpreter is a register-based virtual machine where the operands of each instruction either represents a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct; `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on. Calls to known standard-library functions compile to a dedicated fast-dispatch instruction that executes them inline; running with `--readonly-env` freezes `_ENV` and the module tables, letting that dispatch skip its runtime validation.
+The Lus interpreter is a register-based virtual machine where the operands of each instruction represent either a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct: `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on.
+
+Calls to known standard-library functions compile to a dedicated fast-dispatch instruction that executes them inline. Running with `--readonly-env` freezes `_ENV` and the module tables, letting that dispatch skip its runtime validation.
 
 ### Memory management
 
-Lus implements an incremental mark-and-sweep garbage collector with an optional generational mode. Objects allocated by the runtime are tracked by the collector; as allocations accumulate, it interleaves short marking and sweeping steps with program execution, reclaiming everything no longer reachable from the program's roots.
+Lus implements an incremental mark-and-sweep garbage collector with an optional generational mode. Objects allocated by the runtime are tracked by the collector. As allocations accumulate, it interleaves short marking and sweeping steps with program execution, reclaiming everything no longer reachable from the program's roots.
 
-The garbage collector can also operate _generationally_, meaning it can divide objects into generations based on their age. As most objects in programs die young, we can account for their rapid expiration and optimize accordingly. Newly created objects belong to the young generation and are collected frequently; objects that survive multiple collection cycles are promoted to the old generation, which is collected less often. The standalone interpreter runs in generational mode by default; embedders start in incremental mode.
+The garbage collector can also operate _generationally_, meaning it can divide objects into generations based on their age. As most objects in programs die young, we can account for their rapid expiration and optimize accordingly. Newly created objects belong to the young generation and are collected frequently. Objects that survive multiple collection cycles are promoted to the old generation, which is collected less often. The standalone interpreter runs in generational mode by default, and embedders start in incremental mode.
 
-You rarely need to think about garbage collection in practice. However, if you're working with performance-sensitive code or managing large amounts of data, Lus exposes the [`collectgarbage`](/manual/api#collectgarbage) function to let you interface with the garbage collector. Two interpreter flags also help memory-constrained deployments: `--gc-pause N` bounds how far the heap may grow past the live set (in percent) before an incremental collection cycle starts, trading CPU for a smaller peak footprint, and `--strip-debug` drops debug information from loaded code at the cost of source detail in tracebacks.
+You rarely need to think about garbage collection in practice. However, if you're working with performance-sensitive code or managing large amounts of data, Lus exposes the [`collectgarbage`](/manual/api#collectgarbage) function to let you interface with the garbage collector.
+
+Two interpreter flags also help memory-constrained deployments. `--gc-pause N` bounds how far the heap may grow past the live set (in percent) before an incremental collection cycle starts, trading CPU for a smaller peak footprint. `--strip-debug` drops debug information from loaded code at the cost of source detail in tracebacks.

@@ -12,7 +12,7 @@ shortdesc: "Every lus and lusc command-line option, plus the format subcommand."
 lus [command] [options] [script [args]]
 ```
 
-Two commands exist; `run` is implied when none is given.
+Two commands exist, and `run` is implied when none is given.
 
 | Command  | Purpose                     |
 | -------- | --------------------------- |
@@ -33,14 +33,16 @@ Two commands exist; `run` is implied when none is given.
 | `-Wpedantic`             | Turn on [pedantic warnings](/manual/acquis-14), which flag superseded Lua idioms.                                                          |
 | `-P perm`                | Grant a [permission](/manual/acquis-10) (e.g. `-Pfs:read`, `-Pnetwork`).                                                                   |
 | `--pledge perm`          | Same as `-P`.                                                                                                                              |
+| `-F name[=value]`        | Define a readonly [compile-time flag](/manual/acquis-28): no value means `true`, a numeric value is a number, anything else is a string.   |
+| `--flag name[=value]`    | Same as `-F`.                                                                                                                              |
 | `--ast-graph file`       | Dump the [AST](/manual/acquis-12) to a `.dot` file (does not run the script).                                                              |
 | `--ast-json file`        | Dump the [AST](/manual/acquis-12) to a JSON file (does not run the script).                                                                |
 | `--standalone file`      | Create a [standalone executable](/manual/acquis-19) from the script.                                                                       |
-| `--include path[:alias]` | Include a file or directory in the standalone bundle.                                                                                      |
+| `--include path[:alias]` | [Preinclude](/manual/acquis-29) a module so `require` finds it without load or fs pledges. With `--standalone`, also bundle it.            |
 | `--no-fastcall`          | Disable [fastcall](/manual/acquis-27) optimizations.                                                                                       |
 | `--readonly-env`         | Freeze `_ENV` after init (enables fast dispatch).                                                                                          |
-| `--gc-pause N`           | GC pause: the heap may grow to N% of its live size before a new collection cycle (default 250; lower trades CPU for lower peak memory).    |
-| `--strip-debug`          | Drop debug info (line numbers, local/upvalue names, source) from loaded code to save memory; tracebacks and the debug library lose detail. |
+| `--gc-pause N`           | GC pause: the heap may grow to N% of its live size before a new collection cycle (default 250, lower trades CPU for lower peak memory).    |
+| `--strip-debug`          | Drop debug info (line numbers, local/upvalue names, source) from loaded code to save memory. Tracebacks and the debug library lose detail. |
 | `--`                     | Stop handling options.                                                                                                                     |
 | `-`                      | Stop handling options and execute stdin.                                                                                                   |
 

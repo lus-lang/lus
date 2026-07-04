@@ -15,4 +15,6 @@ params:
 returns: userdata|nil
 ---
 
-Opens `filename` in the given `mode` and returns a file handle, or `nil` plus an error message on failure. Modes follow C `fopen` conventions: `"r"` (read, default), `"w"` (write), `"a"` (append), plus optional `"b"` for binary. A read mode requires only `fs:read`; any write or append mode requires `fs:write`.
+Opens `filename` in the given `mode` and returns a file handle, or `nil` plus an error message on failure.
+
+Modes follow C `fopen` conventions: `"r"` (read, the default), `"w"` (write), `"a"` (append), plus an optional `"b"` suffix for binary. A read mode requires only `fs:read`. Any write or append mode requires `fs:write`.

@@ -12,7 +12,7 @@ const unstable = acquis.filter((p) => p.data.draft)
 
 <div class="acquis-columns">
   <div>
-    {unstable.length > 0 && <h3>Stable</h3>}
+    {stable.length > 0 && <h3>Stable</h3>}
     <ul>
       {
         stable.map((p) => (

@@ -15,17 +15,37 @@ params:
 returns: database
 ---
 
-Opens the SQLite database at `path` and returns a database handle. SQLite is embedded in the runtime, so no external library or system package is involved. Passing `":memory:"` opens a private in-memory database that needs no filesystem pledge at all. The optional `mode` is `"rw"` (the default, which reads, writes, and creates) or `"r"` (read-only). A file-backed open pledge-checks the database path together with its `-journal`, `-wal`, and `-shm` sidecar files: `fs:read` always, and `fs:write` too under `"rw"`. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
+Opens the SQLite database at `path` and returns a database handle. SQLite is embedded in the runtime, so no external library or system package is involved. Passing `":memory:"` opens a private in-memory database that needs no filesystem pledge at all. The optional `mode` is `"rw"` (the default, which reads, writes, and creates) or `"r"` (read-only).
 
-The handle runs statements and queries. `db:exec(sql)` runs one or more statements for their side effects. `db:run(sql, ...)` runs a single statement with bound parameters and returns the affected row count and the last inserted row id. `db:query(sql, ...)` runs a single statement and returns an iterator over the result rows, where each row is a table keyed by column name. `db:prepare(sql)` compiles a reusable statement whose `stmt:run(...)` and `stmt:query(...)` execute it with fresh bindings, and `stmt:close()` releases it early. `db:transaction(fn)` runs `fn` inside a transaction, commits when it returns (passing through all of `fn`'s return values), and rolls back when it raises. `db:close()` closes the handle.
+A file-backed open pledge-checks the database path together with its `-journal`, `-wal`, and `-shm` sidecar files: `fs:read` always, and `fs:write` too under `"rw"`. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
 
-Placeholders carry every value into a statement, so interpolated or concatenated text reaches the database as data. Positional `?` placeholders bind from the extra arguments in order, and named placeholders (`:name`, `@name`, or `$name`) bind from a single table argument keyed by the bare name. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles. Bindable values map as nil to `NULL`, boolean to `1` or `0`, integer to `INTEGER`, float to `REAL`, string to `TEXT`, and `vector` to `BLOB`. Reading maps `INTEGER` to an integer, `REAL` to a float, `TEXT` to a string, `BLOB` to a `vector`, and `NULL` to an absent row field. Binding NaN stores `NULL`, following SQLite.
+The handle runs statements and queries through six methods:
+
+- `db:exec(sql)` runs one or more statements for their side effects.
+- `db:run(sql, ...)` runs a single statement with bound parameters and returns the affected row count and the last inserted row id.
+- `db:query(sql, ...)` runs a single statement and returns an iterator over the result rows, where each row is a table keyed by column name.
+- `db:prepare(sql)` compiles a reusable statement. The statement's `stmt:run(...)` and `stmt:query(...)` execute it with fresh bindings, and `stmt:close()` releases it early.
+- `db:transaction(fn)` runs `fn` inside a transaction. It commits when `fn` returns, passing through all of `fn`'s return values, and rolls back when `fn` raises.
+- `db:close()` closes the handle.
+
+Placeholders carry every value into a statement, so interpolated or concatenated text reaches the database as data. Positional `?` placeholders bind from the extra arguments in order. Named placeholders (`:name`, `@name`, or `$name`) bind from a single table argument keyed by the bare name. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles.
+
+Values map between Lus and SQLite types in both directions:
+
+- nil binds as `NULL`, and `NULL` reads back as an absent row field.
+- boolean binds as `1` or `0`.
+- integer binds as `INTEGER`, and `INTEGER` reads back as an integer.
+- float binds as `REAL`, and `REAL` reads back as a float. Binding NaN stores `NULL`, following SQLite.
+- string binds as `TEXT`, and `TEXT` reads back as a string.
+- `vector` binds as `BLOB`, and `BLOB` reads back as a `vector`.
 
 The handle manages its native resources the same way `io.open` file objects do. It carries a `__close` metamethod, so `local db <close> = io.sqlite(path)` closes the database when its block exits, including through an error, and a `__gc` finalizer releases any handle a program leaves open. Closing a database finalizes its live statements first. Prepared statements and query iterations follow the same lifetime rules with their own `__close` and `__gc`.
 
 Indexing the handle with a key that is not a method yields a table reference for use as a [query](/manual/api#query) source, so `@db.users as u where u.age > 18 select u.name` pushes down as a parameterized SELECT. The reference anchors its database, and the push-down makes the same injection-safety guarantee as a hand-written statement.
 
 SQLite never touches a path outside the pledged set: temp structures live in memory, `ATTACH` and `VACUUM INTO` are denied, and URI filenames are rejected at open. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
+
+The following example pledges the database files, creates a table, and reads matching rows back with a named placeholder.
 
 ```lus
 global io, pledge

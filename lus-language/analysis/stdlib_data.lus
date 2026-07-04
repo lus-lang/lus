@@ -919,7 +919,15 @@ A global variable containing the running Lus version string.]],
   ["assert"] = [[
 Checks whether `v` is truthy. If so, returns all its arguments. Otherwise, raises an error with `message` (defaults to `"assertion failed!"`).]],
   ["collectgarbage"] = [[
-Controls the garbage collector. The `opt` argument selects the operation: `"collect"` (default) performs a full collection, `"stop"` and `"restart"` control the collector, `"count"` returns memory in use (in KB), `"step"` performs a collection step, `"isrunning"` returns whether the collector is running, `"incremental"` and `"generational"` set the GC mode, and `"param"` queries or sets a GC parameter.]],
+Controls the garbage collector. The `opt` argument selects the operation:
+
+- `"collect"` (the default) performs a full collection.
+- `"stop"` and `"restart"` control the collector.
+- `"count"` returns the memory in use, in kilobytes.
+- `"step"` performs a collection step.
+- `"isrunning"` returns whether the collector is running.
+- `"incremental"` and `"generational"` set the GC mode.
+- `"param"` queries or sets a GC parameter.]],
   ["coroutine.close"] = [[
 Closes coroutine `co`, putting it in a dead state. If the coroutine was suspended with pending to-be-closed variables, those variables are closed. Returns `true` on success, or `false` plus an error message if closing a variable raises an error.]],
   ["coroutine.create"] = [[
@@ -927,7 +935,9 @@ Creates a new coroutine from function `f` and returns it. Does not start executi
   ["coroutine.isyieldable"] = [[
 Returns `true` if the running coroutine can yield. A coroutine is not yieldable when it is the main thread or inside a non-yieldable C function.]],
   ["coroutine.resume"] = [[
-Starts or resumes execution of coroutine `co`. On the first resume, the extra arguments are passed to the coroutine body function. On subsequent resumes, the extra arguments become the results of the yield that suspended the coroutine. Returns `true` plus any values passed to `yield` or returned by the body, or `false` plus an error message on failure.]],
+Starts or resumes execution of coroutine `co`. On the first resume, the extra arguments are passed to the coroutine body function. On subsequent resumes, the extra arguments become the results of the yield that suspended the coroutine.
+
+Returns `true` plus any values passed to `yield` or returned by the body, or `false` plus an error message on failure.]],
   ["coroutine.running"] = [[
 Returns the running coroutine and a boolean. The boolean is `true` if the running coroutine is the main thread.]],
   ["coroutine.status"] = [[
@@ -968,7 +978,9 @@ local ast = debug.parse("local x = 1 + 2")
 
 Each AST node is a table with at minimum `type` (node type string) and `line` (source line number).]],
   ["debug.queryplan"] = [[
-Renders the execution plan of the query `q` as a human-readable string without running it: each source with its provider (in-memory, `__query`, or native) and the number of conjuncts pushed down to it, followed by the disposition of every `where` conjunct (pushed down, in memory as a host closure, or in memory as a translatable expression). The string gives tests and programs a direct observable for push-down decisions.]],
+Renders the execution plan of the query `q` as a human-readable string without running it. The string gives tests and programs a direct observable for push-down decisions.
+
+The plan lists each source with its provider (in-memory, `__query`, or native) and the number of conjuncts pushed down to it. It then reports the disposition of every `where` conjunct: pushed down, kept in memory as a host closure, or kept in memory as a translatable expression.]],
   ["debug.sethook"] = [[
 Sets the given function as a debug hook. The `mask` string may contain `"c"` (call), `"r"` (return), `"l"` (line). The `count` argument sets a count hook. Call with no arguments to remove the hook.]],
   ["debug.setlocal"] = [[
@@ -1052,7 +1064,9 @@ Returns an iterator function that reads from `filename` (or the default input if
 
 **Requires pledge:** `fs:read`]],
   ["io.open"] = [[
-Opens `filename` in the given `mode` and returns a file handle, or `nil` plus an error message on failure. Modes follow C `fopen` conventions: `"r"` (read, default), `"w"` (write), `"a"` (append), plus optional `"b"` for binary. A read mode requires only `fs:read`; any write or append mode requires `fs:write`.
+Opens `filename` in the given `mode` and returns a file handle, or `nil` plus an error message on failure.
+
+Modes follow C `fopen` conventions: `"r"` (read, the default), `"w"` (write), `"a"` (append), plus an optional `"b"` suffix for binary. A read mode requires only `fs:read`. Any write or append mode requires `fs:write`.
 
 **Requires pledges:** `fs:read`, `fs:write`]],
   ["io.output"] = [[
@@ -1064,17 +1078,37 @@ Starts the program `prog` in a separated process and returns a file handle for r
   ["io.read"] = [[
 Reads from the default input file according to the given formats. Formats: `"n"` reads a number, `"a"` reads the whole file, `"l"` reads a line (default, strips newline), `"L"` reads a line keeping the newline, or an integer *n* reads *n* bytes.]],
   ["io.sqlite"] = [[
-Opens the SQLite database at `path` and returns a database handle. SQLite is embedded in the runtime, so no external library or system package is involved. Passing `":memory:"` opens a private in-memory database that needs no filesystem pledge at all. The optional `mode` is `"rw"` (the default, which reads, writes, and creates) or `"r"` (read-only). A file-backed open pledge-checks the database path together with its `-journal`, `-wal`, and `-shm` sidecar files: `fs:read` always, and `fs:write` too under `"rw"`. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
+Opens the SQLite database at `path` and returns a database handle. SQLite is embedded in the runtime, so no external library or system package is involved. Passing `":memory:"` opens a private in-memory database that needs no filesystem pledge at all. The optional `mode` is `"rw"` (the default, which reads, writes, and creates) or `"r"` (read-only).
 
-The handle runs statements and queries. `db:exec(sql)` runs one or more statements for their side effects. `db:run(sql, ...)` runs a single statement with bound parameters and returns the affected row count and the last inserted row id. `db:query(sql, ...)` runs a single statement and returns an iterator over the result rows, where each row is a table keyed by column name. `db:prepare(sql)` compiles a reusable statement whose `stmt:run(...)` and `stmt:query(...)` execute it with fresh bindings, and `stmt:close()` releases it early. `db:transaction(fn)` runs `fn` inside a transaction, commits when it returns (passing through all of `fn`'s return values), and rolls back when it raises. `db:close()` closes the handle.
+A file-backed open pledge-checks the database path together with its `-journal`, `-wal`, and `-shm` sidecar files: `fs:read` always, and `fs:write` too under `"rw"`. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
 
-Placeholders carry every value into a statement, so interpolated or concatenated text reaches the database as data. Positional `?` placeholders bind from the extra arguments in order, and named placeholders (`:name`, `@name`, or `$name`) bind from a single table argument keyed by the bare name. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles. Bindable values map as nil to `NULL`, boolean to `1` or `0`, integer to `INTEGER`, float to `REAL`, string to `TEXT`, and `vector` to `BLOB`. Reading maps `INTEGER` to an integer, `REAL` to a float, `TEXT` to a string, `BLOB` to a `vector`, and `NULL` to an absent row field. Binding NaN stores `NULL`, following SQLite.
+The handle runs statements and queries through six methods:
+
+- `db:exec(sql)` runs one or more statements for their side effects.
+- `db:run(sql, ...)` runs a single statement with bound parameters and returns the affected row count and the last inserted row id.
+- `db:query(sql, ...)` runs a single statement and returns an iterator over the result rows, where each row is a table keyed by column name.
+- `db:prepare(sql)` compiles a reusable statement. The statement's `stmt:run(...)` and `stmt:query(...)` execute it with fresh bindings, and `stmt:close()` releases it early.
+- `db:transaction(fn)` runs `fn` inside a transaction. It commits when `fn` returns, passing through all of `fn`'s return values, and rolls back when `fn` raises.
+- `db:close()` closes the handle.
+
+Placeholders carry every value into a statement, so interpolated or concatenated text reaches the database as data. Positional `?` placeholders bind from the extra arguments in order. Named placeholders (`:name`, `@name`, or `$name`) bind from a single table argument keyed by the bare name. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles.
+
+Values map between Lus and SQLite types in both directions:
+
+- nil binds as `NULL`, and `NULL` reads back as an absent row field.
+- boolean binds as `1` or `0`.
+- integer binds as `INTEGER`, and `INTEGER` reads back as an integer.
+- float binds as `REAL`, and `REAL` reads back as a float. Binding NaN stores `NULL`, following SQLite.
+- string binds as `TEXT`, and `TEXT` reads back as a string.
+- `vector` binds as `BLOB`, and `BLOB` reads back as a `vector`.
 
 The handle manages its native resources the same way `io.open` file objects do. It carries a `__close` metamethod, so `local db <close> = io.sqlite(path)` closes the database when its block exits, including through an error, and a `__gc` finalizer releases any handle a program leaves open. Closing a database finalizes its live statements first. Prepared statements and query iterations follow the same lifetime rules with their own `__close` and `__gc`.
 
 Indexing the handle with a key that is not a method yields a table reference for use as a [query](/manual/api#query) source, so `@db.users as u where u.age > 18 select u.name` pushes down as a parameterized SELECT. The reference anchors its database, and the push-down makes the same injection-safety guarantee as a hand-written statement.
 
 SQLite never touches a path outside the pledged set: temp structures live in memory, `ATTACH` and `VACUUM INTO` are denied, and URI filenames are rejected at open. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
+
+The following example pledges the database files, creates a table, and reads matching rows back with a named placeholder.
 
 ```lus
 global io, pledge
@@ -1108,7 +1142,13 @@ Writes each argument to the default output file. Arguments must be strings or nu
   ["ipairs"] = [[
 Returns an iterator function that traverses the integer keys of `t` in order, from `t[1]` up to the first absent index. Intended for use in `for` loops.]],
   ["load"] = [[
-Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure. The optional `chunkname` names the chunk for error messages, `mode` controls whether text (`"t"`), binary (`"b"`), or both (`"bt"`, default) are allowed, and `env` sets the first upvalue as the chunk's environment.
+Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure.
+
+The optional arguments refine the load:
+
+- `chunkname` names the chunk for error messages.
+- `mode` controls whether text (`"t"`), binary (`"b"`), or both (`"bt"`, the default) are allowed.
+- `env` sets the first upvalue as the chunk's environment.
 
 **Requires pledge:** `load`]],
   ["loadfile"] = [[
@@ -1194,7 +1234,9 @@ Returns the next key--value pair after key `k` in table `t`. When called with `n
   ["os.clock"] = [[
 Returns the CPU time used by the program, in seconds.]],
   ["os.date"] = [[
-Returns a string or table with the date and time, formatted according to `format`. If `format` starts with `"!"`, uses UTC. If `format` is `"*t"`, returns a table with fields `year`, `month`, `day`, `hour`, `min`, `sec`, `wday`, `yday`, `isdst`. The optional `time` argument specifies the time to format (defaults to current time).]],
+Returns a string or table with the date and time, formatted according to `format`. If `format` starts with `"!"`, the time is formatted in UTC. If `format` is `"*t"`, the result is a table with fields `year`, `month`, `day`, `hour`, `min`, `sec`, `wday`, `yday`, and `isdst`.
+
+The optional `time` argument specifies the time to format and defaults to the current time.]],
   ["os.difftime"] = [[
 Returns the difference `t2 - t1` in seconds, where `t1` and `t2` are values returned by `os.time`.]],
   ["os.execute"] = [[
@@ -1255,7 +1297,19 @@ Prints its arguments to standard output, converting each to a string with `tostr
   ["query"] = [[
 Evaluates the query `q` and returns a fresh iterator over its result records, for use in a generic `for`. Each call to `query(q)` runs the query again, so a stored query value observes source changes on its next loop. Every result is a record: a projected field table, or the source row itself for a whole-row projection.
 
-The logical pipeline is fixed: fetch each source, join, `where`, `group by`, `having`, `select` and `distinct`, `order by`, then `limit` and `offset`. A plain table serves as an array of records through the built-in in-memory provider, a value whose metatable carries `__query` supplies its own row iterator, and native sources such as [`io.sqlite`](/manual/api#io.sqlite) table references push accepted conjuncts down as parameterized SQL. All providers share the same semantics, so the same query text returns the same rows wherever it runs.
+The logical pipeline is fixed. Every query runs these stages in order:
+
+1. Fetch each source.
+2. Join the sources.
+3. Filter with `where`.
+4. Group with `group by`, then filter groups with `having`.
+5. Project with `select`, applying `distinct`.
+6. Sort with `order by`.
+7. Cut with `limit` and `offset`.
+
+Sources come in three shapes. A plain table serves as an array of records through the built-in in-memory provider. A value whose metatable carries `__query` supplies its own row iterator. Native sources such as [`io.sqlite`](/manual/api#io.sqlite) table references push accepted conjuncts down as parameterized SQL. All providers share the same semantics, so the same query text returns the same rows wherever it runs.
+
+The following example filters an in-memory table and projects one field.
 
 ```lus
 global query, print
@@ -1482,20 +1536,31 @@ assert(z.weekday == time.weekday.thursday)
 print(tonumber(z.weekday))          -- 4
 ```]],
   ["time.zone"] = [[
-Returns a `zone` for an IANA name such as `"America/New_York"` or `"Europe/Paris"`, resolved from an embedded, zstd-compressed copy of the IANA tzdata database (`time.tzdata_version()` reports the release). Raises if the name is unknown. No filesystem access or `fs` pledge is required: the database is compiled into the runtime, so named zones behave identically on every platform, including ones without a system tz database.
+Returns a `zone` for an IANA name such as `"America/New_York"` or `"Europe/Paris"`. Raises if the name is unknown.
 
-A `zone` supports `z:name()` and `z:offset(instant)` (the offset east of UTC, in seconds, that the zone observes at that instant, honouring historical DST transitions). Pass a zone to `instant:at(zone)` to render a civil time, or to `time.zoned(fields, zone)` to interpret wall-clock fields.
+Names resolve from an embedded, zstd-compressed copy of the IANA tzdata database, and `time.tzdata_version()` reports the release. No filesystem access or `fs` pledge is required: the database is compiled into the runtime, so named zones behave identically on every platform, including ones without a system tz database.
+
+A `zone` supports `z:name()` and `z:offset(instant)`, which returns the offset east of UTC, in seconds, that the zone observes at that instant, honouring historical DST transitions. Pass a zone to `instant:at(zone)` to render a civil time, or to `time.zoned(fields, zone)` to interpret wall-clock fields.
+
+The following example renders the current time on the New York wall clock.
 
 ```lus
 local ny = time.zone("America/New_York")
 print(time.now():at(ny):iso())   -- current time as New York wall clock
 ```]],
   ["time.zoned"] = [[
-Constructs a `zoned` civil datetime from a table of `fields` (`year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`; missing fields default to the start of 1970-01-01). The second argument selects how the wall-clock fields are interpreted: pass a `zone` (from `time.zone`, `time.offset`, or `time.localzone`) for a DST-aware resolution, an integer for a fixed offset east of UTC, or omit it for UTC.
+Constructs a `zoned` civil datetime from a table of `fields` (`year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`). Missing fields default to the start of 1970-01-01. The second argument selects how the wall-clock fields are interpreted: pass a `zone` (from `time.zone`, `time.offset`, or `time.localzone`) for a DST-aware resolution, an integer for a fixed offset east of UTC, or omit it for UTC.
 
-A `zoned` exposes read-only fields `year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`, `weekday`, `yearday`, and `offset`, plus the methods `z:instant()`, `z:format(fmt)`, and `z:iso()`. `month` is an integer (1-12); `weekday` is a [`time.weekday`](/manual/api#time.weekday) enum value (`monday`-`sunday`).
+A `zoned` exposes read-only fields `year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`, `weekday`, `yearday`, and `offset`, plus the methods `z:instant()`, `z:format(fmt)`, and `z:iso()`. `month` is an integer (1-12). `weekday` is a [`time.weekday`](/manual/api#time.weekday) enum value (`monday` through `sunday`).
 
-`z:with{...}` returns a copy with the named civil fields replaced, and `z:add{...}` returns a copy advanced by calendar amounts (`years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, `nanos`; negative allowed). Both operate on the wall clock and re-resolve the offset through the originating zone, so `z:add{days = 1}` keeps the same wall-clock time the next day even across a DST transition, and adding months clamps the day to the target month's length (Jan 31 + 1 month is Feb 28 or 29).
+Two methods derive new values:
+
+- `z:with{...}` returns a copy with the named civil fields replaced.
+- `z:add{...}` returns a copy advanced by calendar amounts (`years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, `nanos`, negative allowed).
+
+Both operate on the wall clock and re-resolve the offset through the originating zone. `z:add{days = 1}` keeps the same wall-clock time the next day even across a DST transition, and adding months clamps the day to the target month's length (Jan 31 plus one month is Feb 28 or 29).
+
+The following example builds a fixed-offset civil time and reads it back.
 
 ```lus
 local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9 }, -4 * 3600)

@@ -21,4 +21,10 @@ params:
 returns: function|nil
 ---
 
-Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure. The optional `chunkname` names the chunk for error messages, `mode` controls whether text (`"t"`), binary (`"b"`), or both (`"bt"`, default) are allowed, and `env` sets the first upvalue as the chunk's environment.
+Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure.
+
+The optional arguments refine the load:
+
+- `chunkname` names the chunk for error messages.
+- `mode` controls whether text (`"t"`), binary (`"b"`), or both (`"bt"`, the default) are allowed.
+- `env` sets the first upvalue as the chunk's environment.

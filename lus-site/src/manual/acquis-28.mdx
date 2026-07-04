@@ -2,7 +2,7 @@
 order: 128
 title: "Acquis 28 - Flags"
 acquis: true
-shortdesc: "The readonly flags table, populated from --flag/-F arguments and folded into conditionals at compile time."
+shortdesc: "A readonly flags table populated from --flag/-F arguments and folded into conditionals at compile time."
 draft: true
 ---
 
@@ -56,7 +56,7 @@ end
 
 ## Reserved name
 
-`flags` is a reserved name, usable without a `global` declaration. Assigning to it is a compile-time error, declaring it is rejected, and writing fields fails at run time; locals may still shadow it:
+`flags` is a reserved name, usable without a `global` declaration. Assigning to it is a compile-time error, declaring it is rejected, and writing fields fails at run time. Locals may still shadow it:
 
 ```lus
 local f1 = load("flags = 1")

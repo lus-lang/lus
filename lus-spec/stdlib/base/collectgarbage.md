@@ -15,4 +15,12 @@ params:
 returns: any
 ---
 
-Controls the garbage collector. The `opt` argument selects the operation: `"collect"` (default) performs a full collection, `"stop"` and `"restart"` control the collector, `"count"` returns memory in use (in KB), `"step"` performs a collection step, `"isrunning"` returns whether the collector is running, `"incremental"` and `"generational"` set the GC mode, and `"param"` queries or sets a GC parameter.
+Controls the garbage collector. The `opt` argument selects the operation:
+
+- `"collect"` (the default) performs a full collection.
+- `"stop"` and `"restart"` control the collector.
+- `"count"` returns the memory in use, in kilobytes.
+- `"step"` performs a collection step.
+- `"isrunning"` returns whether the collector is running.
+- `"incremental"` and `"generational"` set the GC mode.
+- `"param"` queries or sets a GC parameter.

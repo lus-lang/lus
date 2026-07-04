@@ -76,6 +76,7 @@ const stdlibOrder: SectionSpec[] = [
     title: "Worker Library",
     filter: (d) => d.module === "worker" && !d.header,
   },
+  { title: "Time Library", filter: (d) => d.module === "time" },
 ]
 
 const capiOrder: SectionSpec[] = [
