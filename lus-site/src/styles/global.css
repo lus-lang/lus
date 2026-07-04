@@ -1,42 +1,62 @@
 @import "tailwindcss";
 
 /*
-** Lus design system: refined neobrutalism, light-only, ZERO MOTION, DENSE.
+** Lus design system: flat, hairline, light-only, ZERO MOTION, DENSE.
 **
 ** Ground rules:
 **  - No animation, ever. No transition-*, duration-*, animate-*, @keyframes,
 **    smooth scroll, view transitions, or timer-driven repaints. State
 **    changes are instant repaints caused by user events.
-**  - Sharp corners everywhere. Never write `rounded-*`.
-**  - Hard shadows (0 blur), ink unless recolored via shadow-* (sets
-**    --tw-shadow-color, which lus-shadow-* consume):
-**      lus-shadow-sm (2px) = compact + pressable: buttons, card-links,
-**        active nav pills, inputs, small frames.
-**      lus-shadow (4px) = primary static containers: cards.
-**    Dark chrome (playground) is flat: no shadows off paper.
-**  - Interactive grammar: hover repaints, never moves. Links/nav/outline
-**    fill bg-accent-soft; solid buttons invert (bg-ink text-accent).
-**    Pressables seat into their shadow on :active via lus-press
-**    (translate 2px 2px, shadow none). Focus = global outline.
-**    Hover-painted borders reserve space with border-2 border-transparent.
-**  - Structure borders are `border-2 border-ink`; hairlines `border-ink/20`.
-**    Every container is framed: cards, tables, code, inputs.
-**  - One frame per code block: the frame lives on `pre code`; never frame
-**    the outer pre as well.
+**  - No box-shadows anywhere. Depth comes from tint surfaces and hairline
+**    borders, never from elevation.
+**  - Radius scale, exactly three steps:
+**      rounded-sm (4px): inline code, api-badges, rel-chips, small chips.
+**      rounded-md (6px): buttons, nav pills, sidebar links, inputs,
+**        copy-btn, api-signature.
+**      rounded-lg (8px): cards, pre code, table-wrap, toc and mobile nav
+**        panels, release strip, news list, tiles, notices.
+**  - Hairline ladder on ink (mirrors to ink-red under html.unstable):
+**    border-ink/10 for inner cells and dividers, border-ink/15 for
+**    structural frames, border-ink/25 for control borders, border-ink/40
+**    for strong hover borders.
+**  - Code is frameless: the tint surface is the frame (pre code, inline
+**    code, api-signature). The tint and scroll context live on the inner
+**    code element, never on the outer pre.
+**  - Accent budget: bg-accent appears only on small meaningful surfaces
+**    (solid buttons, active nav pill, active sidebar link, copied
+**    copy-btn, selection, stable rel-chip, install chip). accent-strong
+**    (lime-500) is the hover and pressed state of accent fills.
+**    accent-soft (lime-100) is the hover wash and chip fill. Large
+**    containers stay paper or tint.
+**  - Interactive grammar: hover repaints, never moves. Nav pills, sidebar
+**    links, tiles, and outline controls fill bg-accent-soft on hover.
+**    Solid buttons fill bg-accent-strong on hover and stay there while
+**    pressed. Prose links darken to text-ink and keep their accent
+**    underline. Focus = global outline.
+**  - Type stack: Atkinson Hyperlegible Next (body), Intel One Mono
+**    (all code, no ligatures by design), Bricolage Grotesque via
+**    font-display on the hero, h1, h2, and wordmarks ONLY. h3/h4 and
+**    everything else stay in the body face.
+**  - Weight ladder: font-bold for display text (hero, h1, wordmarks),
+**    font-semibold for headings, nav, and controls, font-medium for
+**    links. Never write font-extrabold or font-black.
+**  - Homepage exception: the hp-* classes in pages/index.astro are the
+**    sole sanctioned use of gradients, background patterns, and layered
+**    panels. Nothing else may use them. The rest of the site stays flat.
 **  - DENSITY SCALE: spacing uses ONLY steps 0.5/1/1.5/2/3/4/6/8.
-**    Page shell: main px-4 md:px-6 py-6 space-y-8, capped at max-w-7xl;
-**    header/footer gutters mirror the shell. Chrome: header py-2,
+**    Page shell: main px-4 md:px-6 py-6 space-y-8, capped at max-w-7xl.
+**    Header/footer gutters mirror the shell. Chrome: header py-2,
 **    footer py-3. Headings: h2 mt-8, h3 mt-4. Blocks (pre, table,
 **    blockquote, hr): my-3. Code/input interiors: px-3 py-2 (pr-10 under
-**    a copy button). Cards: header px-3 py-1.5, body p-3; card-link
+**    a copy button). Cards: header px-3 py-1.5, body p-3. Card-link
 **    tiles p-3. Tables: cells px-2 py-1. Lists: space-y-1. Buttons:
-**    md px-3 py-1.5, sm px-2 py-1; nav pills px-2 py-1 (24px box height
-**    is the hard floor for interactive rows). Grids: gap-3; column
+**    md px-3 py-1.5, sm px-2 py-1. Nav pills px-2 py-1 (24px box height
+**    is the hard floor for interactive rows). Grids: gap-3. Column
 **    layouts gap-6. Section-scale margins (intros, jump navs): mb-4.
 **  - MEASURE: long-form prose (manual chapters, news articles) caps at
-**    80ch via `measured`; API reference pages opt out for full width.
-**  - Text sits on paper (white) or tint; lime-600/700 are banned for
-**    body-size text (contrast); informative text is text-ink/70 minimum,
+**    80ch via `measured`. API reference pages opt out for full width.
+**  - Text sits on paper (white) or tint. lime-600/700 are banned for
+**    body-size text (contrast). Informative text is text-ink/70 minimum,
 **    and /70 is also the floor for placeholders and functional links
 **    (heading anchors). On accent fills, use text-ink only.
 **  - Red exists solely for the unstable channel and errors. The red mirror
@@ -44,7 +64,7 @@
 **    chrome, ManualLayout, manual/[id], Button/Card data-color="red".
 **    Home, examples, news, playground never render unstable.
 **  - Dark chrome (playground) tokens: bg-ink surface, text-tint body,
-**    accent for controls/headers, accent/20–40 hairlines, text-accent-red
+**    accent for controls/headers, accent/20-40 hairlines, text-accent-red
 **    errors. No raw lime- or red- scale colors anywhere.
 **  - Reference badge palette lives here as .api-badge-* (sanctioned
 **    exceptions): lus = bg-accent-soft text-ink; unstable =
@@ -56,36 +76,24 @@
 
 @theme {
   --font-sans: "Atkinson Hyperlegible Next Variable", sans-serif;
-  --font-mono: "Atkinson Hyperlegible Mono Variable", monospace;
+  --font-mono: "Intel One Mono Variable", monospace;
+  --font-display: "Bricolage Grotesque Variable", sans-serif;
 
   /* semantic palette (values from Tailwind lime/red) */
   --color-ink: oklch(27.4% 0.072 132.109); /* lime-950 */
   --color-paper: #ffffff;
   --color-tint: oklch(98.6% 0.031 120.757); /* lime-50 */
   --color-accent: oklch(84.1% 0.238 128.85); /* lime-400 */
-  --color-accent-soft: oklch(93.8% 0.127 124.321); /* lime-200 */
+  --color-accent-strong: oklch(76.8% 0.233 130.85); /* lime-500 */
+  --color-accent-soft: oklch(96.7% 0.067 122.328); /* lime-100 */
   --color-link: oklch(45.3% 0.124 130.933); /* lime-800 */
 
   --color-ink-red: oklch(25.8% 0.092 26.042); /* red-950 */
   --color-tint-red: oklch(97.1% 0.013 17.38); /* red-50 */
   --color-accent-red: oklch(80.8% 0.114 19.571); /* red-300 */
+  --color-accent-strong-red: oklch(70.4% 0.191 22.216); /* red-400 */
   --color-accent-soft-red: oklch(93.6% 0.032 17.717); /* red-100 */
   --color-link-red: oklch(44.4% 0.177 26.899); /* red-800 */
-}
-
-@utility lus-shadow-sm {
-  box-shadow: 2px 2px 0 0 var(--tw-shadow-color, var(--color-ink));
-}
-
-@utility lus-shadow {
-  box-shadow: 4px 4px 0 0 var(--tw-shadow-color, var(--color-ink));
-}
-
-@utility lus-press {
-  &:active {
-    translate: 2px 2px;
-    box-shadow: none;
-  }
 }
 
 /* keyboard focus: visible, chunky, on-brand */
@@ -116,30 +124,30 @@ main {
 }
 
 a {
-  @apply underline decoration-2 underline-offset-2 text-link font-bold hover:no-underline hover:bg-accent-soft;
+  @apply underline decoration-2 decoration-accent underline-offset-2 text-link font-medium hover:text-ink;
 }
 
 .skip-link {
-  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-ink focus:border-2 focus:border-ink focus:px-4 focus:py-2 focus:font-bold focus:no-underline;
+  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-ink focus:rounded-md focus:px-4 focus:py-2 focus:font-semibold focus:no-underline;
 }
 
 section {
   @apply space-y-3;
 
   h1 {
-    @apply text-3xl font-extrabold tracking-tight text-balance;
+    @apply font-display text-3xl font-bold tracking-tight text-balance;
   }
 
   h2 {
-    @apply text-2xl font-bold tracking-tight;
+    @apply font-display text-2xl font-semibold tracking-tight;
   }
 
   h3 {
-    @apply text-lg font-bold;
+    @apply text-lg font-semibold;
   }
 
   h4 {
-    @apply text-base font-bold;
+    @apply text-base font-semibold;
   }
 
   /* margins live on the headings (adjacent margins collapse with space-y);
@@ -167,16 +175,16 @@ pre {
   @apply relative;
 
   code {
-    @apply block overflow-x-auto bg-tint py-2 pl-3 pr-10 border-2 border-ink text-sm leading-snug;
+    @apply block overflow-x-auto bg-tint py-2 pl-3 pr-10 rounded-lg text-sm leading-snug;
   }
 }
 
 /*
 ** Shiki <Code> blocks (pre.astro-code) ship inline background and
-** overflow styles on the pre; neutralize both so the frame, tint, and
-** scroll context all live on the inner code element like every other
-** code block (keyboard focus lands on the actual scroll container and
-** the absolutely-positioned copy button no longer drifts on scroll).
+** overflow styles on the pre; neutralize both so the tint and scroll
+** context all live on the inner code element like every other code
+** block (keyboard focus lands on the actual scroll container and the
+** absolutely-positioned copy button no longer drifts on scroll).
 */
 pre.astro-code {
   background-color: transparent !important;
@@ -184,7 +192,7 @@ pre.astro-code {
 }
 
 :not(pre) > code {
-  @apply font-mono text-[0.9em] bg-tint px-1 border border-ink/20;
+  @apply font-mono text-[0.9em] bg-tint px-1 rounded-sm;
 }
 
 /* self-link affordance on headings: always visible (touch parity) */
@@ -198,7 +206,7 @@ pre.astro-code {
 }
 
 .copy-btn {
-  @apply absolute top-1.5 right-1.5 border-2 border-ink bg-paper p-1.5 cursor-pointer lus-shadow-sm lus-press hover:bg-accent-soft;
+  @apply absolute top-1.5 right-1.5 border border-ink/15 rounded-md bg-paper p-1.5 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
 }
 
 .copy-btn.copied {
@@ -218,11 +226,11 @@ li {
 }
 
 blockquote {
-  @apply border-l-4 border-accent bg-tint px-3 py-2 text-ink;
+  @apply border-l-4 border-accent bg-tint px-3 py-2 rounded-r-md text-ink;
 }
 
 .table-wrap {
-  @apply overflow-x-auto my-3;
+  @apply overflow-hidden overflow-x-auto my-3 border border-ink/15 rounded-lg;
 
   table {
     @apply my-0;
@@ -230,15 +238,15 @@ blockquote {
 }
 
 table {
-  @apply w-full border-collapse my-3 border-2 border-ink;
+  @apply w-full border-collapse my-3;
 
   th,
   td {
-    @apply border border-ink/20 px-2 py-1 text-left;
+    @apply border border-ink/10 px-2 py-1 text-left;
   }
 
   th {
-    @apply bg-tint font-bold text-xs uppercase tracking-wider text-ink border-b-2 border-b-ink;
+    @apply bg-tint font-semibold text-xs uppercase tracking-wider text-ink border-b border-b-ink/15;
   }
 
   tr:nth-child(even) td {
@@ -248,7 +256,7 @@ table {
 
 /* reference badge palette; see grammar header; legend renders these chips */
 .api-badge {
-  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 shrink-0;
+  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 rounded-sm shrink-0;
 }
 
 .api-badge-lus {
@@ -292,10 +300,6 @@ table {
     display: none !important;
   }
 
-  * {
-    box-shadow: none !important;
-  }
-
   pre code {
     overflow: visible;
     white-space: pre-wrap;
@@ -318,7 +322,7 @@ html.unstable {
   }
 
   a {
-    @apply text-link-red hover:bg-accent-soft-red;
+    @apply text-link-red decoration-accent-red hover:text-ink-red;
   }
 
   ::selection {
@@ -327,15 +331,15 @@ html.unstable {
   }
 
   pre code {
-    @apply bg-tint-red border-ink-red;
+    @apply bg-tint-red;
   }
 
   :not(pre) > code {
-    @apply bg-tint-red border-ink-red/20;
+    @apply bg-tint-red;
   }
 
   .copy-btn {
-    @apply border-ink-red shadow-ink-red hover:bg-accent-soft-red;
+    @apply border-ink-red/15 hover:bg-accent-soft-red active:bg-accent-soft-red;
   }
 
   .copy-btn.copied {
@@ -354,16 +358,18 @@ html.unstable {
     @apply border-accent-red bg-tint-red text-ink-red;
   }
 
-  table {
-    @apply border-ink-red;
+  .table-wrap {
+    @apply border-ink-red/15;
+  }
 
+  table {
     th,
     td {
-      @apply border-ink-red/20;
+      @apply border-ink-red/10;
     }
 
     th {
-      @apply bg-tint-red text-ink-red border-b-ink-red;
+      @apply bg-tint-red text-ink-red border-b-ink-red/15;
     }
 
     tr:nth-child(even) td {

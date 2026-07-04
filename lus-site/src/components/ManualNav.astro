@@ -98,10 +98,10 @@ const { groups, toc } = Astro.props
   }
 
   .sidebar-link {
-    @apply flex items-center gap-1.5 px-2 py-1 -ml-2 no-underline text-ink/80 font-normal border-2 border-transparent hover:bg-accent-soft hover:text-ink;
+    @apply flex items-center gap-1.5 px-2 py-1 -ml-2 no-underline text-ink/80 font-normal rounded-md hover:bg-accent-soft hover:text-ink;
 
     &.active {
-      @apply bg-accent border-ink lus-shadow-sm font-bold text-ink;
+      @apply bg-accent font-semibold text-ink;
     }
   }
 
@@ -123,7 +123,7 @@ const { groups, toc } = Astro.props
       @apply text-ink-red/80 hover:bg-accent-soft-red hover:text-ink-red;
 
       &.active {
-        @apply bg-accent-red border-ink-red lus-shadow-sm shadow-ink-red text-ink-red;
+        @apply bg-accent-red text-ink-red;
       }
     }
 

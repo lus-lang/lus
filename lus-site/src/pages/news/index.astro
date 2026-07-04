@@ -44,7 +44,7 @@ const sorted = news.toSorted(
 
     /* strict reverse chronology: one framed column, no card grid */
     .news-list {
-        @apply border-2 border-ink bg-paper divide-y-2 divide-ink max-w-3xl;
+        @apply border border-ink/15 rounded-lg overflow-hidden bg-paper divide-y divide-ink/10 max-w-3xl;
     }
 
     .news-row {
@@ -55,7 +55,7 @@ const sorted = news.toSorted(
         }
 
         .title {
-            @apply font-bold text-ink;
+            @apply font-semibold text-ink;
         }
     }
 </style>

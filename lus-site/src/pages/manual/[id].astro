@@ -133,7 +133,7 @@ const sidebarToc = rendered.headings
   }
 
   .draft-notice {
-    @apply border-2 border-ink-red bg-tint-red text-ink-red font-bold px-3 py-1.5 mb-3 text-sm lus-shadow-sm shadow-ink-red;
+    @apply border border-ink-red/30 rounded-lg bg-tint-red text-ink-red font-semibold px-3 py-1.5 mb-3 text-sm;
 
     a {
       @apply text-link-red hover:bg-accent-soft-red;
@@ -141,7 +141,7 @@ const sidebarToc = rendered.headings
   }
 
   .toc {
-    @apply border-2 border-ink bg-tint lus-shadow-sm px-3 py-1.5 mb-4;
+    @apply border border-ink/15 rounded-lg bg-tint px-3 py-1.5 mb-4;
 
     summary {
       @apply font-mono text-xs uppercase tracking-widest text-ink/70 cursor-pointer select-none py-1.5;
@@ -160,7 +160,7 @@ const sidebarToc = rendered.headings
     }
 
     .toc-h2 > a {
-      @apply font-bold;
+      @apply font-semibold;
     }
 
     .toc-h3 {
@@ -173,10 +173,10 @@ const sidebarToc = rendered.headings
   }
 
   .pager {
-    @apply grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 pt-4 border-t-2 border-ink/20;
+    @apply grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 pt-4 border-t border-ink/15;
 
     .pager-link {
-      @apply flex flex-col gap-0.5 border-2 border-ink bg-paper lus-shadow-sm lus-press p-3 no-underline hover:bg-accent-soft;
+      @apply flex flex-col gap-0.5 border border-ink/15 rounded-lg bg-paper p-3 no-underline hover:bg-accent-soft active:bg-accent-soft;
     }
 
     .pager-right {
@@ -188,7 +188,7 @@ const sidebarToc = rendered.headings
     }
 
     .pager-title {
-      @apply font-bold text-ink;
+      @apply font-semibold text-ink;
     }
   }
 
@@ -198,7 +198,7 @@ const sidebarToc = rendered.headings
     }
 
     .toc {
-      @apply border-ink-red bg-tint-red shadow-ink-red;
+      @apply border-ink-red/15 bg-tint-red;
 
       summary {
         @apply text-ink-red/70;
@@ -210,10 +210,10 @@ const sidebarToc = rendered.headings
     }
 
     .pager {
-      @apply border-ink-red/20;
+      @apply border-ink-red/15;
 
       .pager-link {
-        @apply border-ink-red shadow-ink-red hover:bg-accent-soft-red;
+        @apply border-ink-red/15 hover:bg-accent-soft-red active:bg-accent-soft-red;
       }
 
       .pager-label {

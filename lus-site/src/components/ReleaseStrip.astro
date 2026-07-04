@@ -59,14 +59,14 @@ function downloads(release: ReleaseInfo) {
   @reference "../styles/global.css";
 
   .release-strip {
-    @apply border-2 border-ink bg-paper divide-y-2 divide-ink;
+    @apply border border-ink/15 rounded-lg overflow-hidden bg-paper divide-y divide-ink/10;
   }
 
   .release-row {
     @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2;
 
     .rel-chip {
-      @apply font-mono text-[10px] font-bold uppercase px-1.5 py-0.5;
+      @apply font-mono text-[10px] font-bold uppercase rounded-sm px-1.5 py-0.5;
     }
 
     &[data-channel="stable"] .rel-chip {

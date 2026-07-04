@@ -1,11 +1,16 @@
 ---
 import { getCollection } from "astro:content"
+import { Code } from "astro:components"
+// @ts-ignore
+import lusGrammar from "../../../lus-textmate/lus.tmLanguage.json"
+import { Image } from "astro:assets"
 
 import Layout from "../components/Layout.astro"
 import Button from "../components/Button.astro"
 import Card from "../components/Card.astro"
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 import Icon from "../components/Icon.astro"
+import logo from "../assets/logo.svg"
 
 import { INSTALL_SH, WINDOWS_INSTALLER_URL } from "../lib/install"
 import { fmtDate } from "../lib/date"
@@ -14,6 +19,92 @@ const allNews = await getCollection("news")
 const news = allNews
   .toSorted((a, b) => b.data.date.getTime() - a.data.date.getTime())
   .slice(0, 5)
+
+// six facets of the language, each linking into the guide; blurbs are
+// factual descriptions (see the copy rules in the site memory: objective,
+// standalone, distinctive facets only)
+const features = [
+  {
+    name: "permissions",
+    href: "/manual/guide#permissions",
+    unstable: false,
+    blurb:
+      "Scripts run under deny-by-default permissions. pledge grants capabilities at runtime and can seal the set.",
+    code: `pledge("fs:read=/var/log/*")   -- read access to logs only
+pledge("network:http")
+pledge("seal")                 -- lock the permission set
+
+local ok = catch fs.list("/home")
+-- ok == false: outside the pledged set`,
+  },
+  {
+    name: "queries",
+    href: "/manual/guide#query",
+    unstable: true,
+    blurb:
+      "An @ expression builds a first-class query with a fixed logical pipeline. It is evaluated each time it is iterated.",
+    code: `local adults =
+    @people as p
+     where p.age > 18
+     select p.name, p.age
+     order by p.age desc
+
+for row in query(adults) do
+    print(row.name, row.age)
+end`,
+  },
+  {
+    name: "sqlite",
+    href: "/manual/guide#sqlite",
+    unstable: true,
+    blurb:
+      "io.sqlite opens file-backed or in-memory databases. A database table serves as a query source and receives the query as parameterized SQL.",
+    code: `local db <close> = io.sqlite("app.db")
+
+db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+
+for u in query(@db.users as u where u.age >= 18 select u.name) do
+    print(u.name)
+end`,
+  },
+  {
+    name: "concurrency",
+    href: "/manual/guide#workers",
+    unstable: false,
+    blurb:
+      "A worker runs a script in a separate interpreter state on the thread pool and exchanges messages with its parent.",
+    code: `local w = worker.create("crunch.lus", { data = "input" })
+worker.send(w, "start")
+
+while result = worker.receive(w) do
+    print(result)
+end`,
+  },
+  {
+    name: "time",
+    href: "/manual/guide#time",
+    unstable: true,
+    blurb:
+      "The time library separates absolute instants, civil datetimes, and durations. Named zones resolve from tzdata embedded in the runtime.",
+    code: `local now = time.now()                    -- instant
+local later = now + time.hours(72)
+local ny = time.zone("America/New_York")
+
+print(later:at(ny):iso())                 -- wall clock in New York`,
+  },
+  {
+    name: "binary data",
+    href: "/manual/guide#vector",
+    unstable: false,
+    blurb:
+      "A vector is a mutable byte buffer. vector.archive reads and writes gzip, zstd, brotli, and lz4.",
+    code: `local v = vector.create(16)
+vector.pack(v, 0, "I4I4I4I4", 1, 2, 3, 4)
+
+local packed = vector.archive.zstd.compress(v)
+local restored = vector.archive.zstd.decompress(packed)`,
+  },
+]
 
 // deep-links into the generated API reference (section ids are slugs of
 // the section titles in lib/api.ts)
@@ -83,15 +174,23 @@ const stdlibMap = [
 
 <Layout>
   <main id="main">
-    <section class="hero">
-      <div class="hero-grid">
+    <section class="hp-hero">
+      <Image
+        src={logo}
+        alt=""
+        aria-hidden="true"
+        class="hp-hero-mark"
+        width={352}
+        height={402}
+      />
+      <div class="hp-hero-grid">
         <div class="hero-pitch">
-          <h1 class="hero-title">A sovereign scripting language.</h1>
+          <h1 class="hero-title">Lus</h1>
           <p class="hero-sub">
-            Lus is a small, productive programming language designed to be
+            A small, productive programming language designed to be
             picked up easily by programmers and put to good use right away.
           </p>
-          <div class="hero-install">
+          <div class="hp-install-panel">
             <div class="hero-install-meta">
               <span id="install-platform">linux x64</span>
               <a href="/manual/getting-started">other platforms</a>
@@ -114,7 +213,7 @@ const stdlibMap = [
           </div>
         </div>
 
-        <aside class="hero-news">
+        <aside class="hero-news mt-auto">
           <Card variant="default" class="flex flex-col">
             <h2 slot="title">
               <Icon name="newspaper" size={16} class="inline-block" /> news
@@ -139,9 +238,12 @@ const stdlibMap = [
       </div>
     </section>
 
+        <section>
+      <ReleaseStrip />
+    </section>
+
     <section>
-      <h2>What's in Lus?</h2>
-      <nav class="stdlib-map" aria-label="Standard library modules">
+      <nav class="hp-stdlib" aria-label="Standard library modules">
         {
           stdlibMap.map((mod) => (
             <a href={mod.href}>
@@ -154,12 +256,25 @@ const stdlibMap = [
     </section>
 
     <section>
-      <h2>Releases</h2>
-      <ReleaseStrip />
-      <p class="release-note">
-        Stable is for production; unstable is the latest features, continuously
-        published. <a href="/manual/releases">About the channels.</a>
-      </p>
+      <h2>Lus at a glance</h2>
+      <div class="hp-features">
+        {
+          features.map((f) => (
+            <article class="hp-feature">
+              <header class="hp-feature-head">
+                <a href={f.href} class="hp-feature-name">
+                  {f.name}
+                </a>
+                {f.unstable && <span class="hp-feature-chip">unstable</span>}
+              </header>
+              <p class="hp-feature-blurb">{f.blurb}</p>
+              <div class="hp-feature-code">
+                <Code lang={lusGrammar as any} theme="github-light" code={f.code} />
+              </div>
+            </article>
+          ))
+        }
+      </div>
     </section>
   </main>
 </Layout>
@@ -187,80 +302,158 @@ const stdlibMap = [
 <style>
   @reference "../styles/global.css";
 
-  .hero {
-    .hero-grid {
-      @apply flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_minmax(280px,340px)] lg:gap-x-8 lg:items-start;
-    }
+  /*
+  ** HOMEPAGE DEPTH EXCEPTION (sanctioned): the hp-* classes below are the
+  ** ONLY place in the site allowed gradients, background patterns, and
+  ** layered panels, a deliberate softening of the flat grammar scoped to
+  ** this file. Do not promote hp-* into global.css or imitate elsewhere.
+  ** Everything else here still obeys the grammar: hairlines, tint
+  ** surfaces, instant-repaint hovers, ZERO MOTION.
+  */
 
-    .hero-title {
-      @apply text-4xl sm:text-5xl font-extrabold tracking-tighter max-w-3xl text-balance;
-    }
+  .hp-hero {
+    @apply relative overflow-hidden rounded-lg border border-ink/15 p-4 md:p-6;
+    /* dot grid (ink at 5%) layered over the identity gradient */
+    background-image:
+      radial-gradient(
+        color-mix(in oklab, var(--color-ink) 5%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        135deg,
+        var(--color-accent-soft) 0%,
+        var(--color-tint) 45%,
+        var(--color-paper) 100%
+      );
+    background-size:
+      16px 16px,
+      100% 100%;
+  }
 
-    .hero-sub {
-      @apply text-lg md:text-xl text-ink/80 max-w-2xl mt-3;
-    }
+  .hp-hero-mark {
+    @apply hidden md:block absolute pointer-events-none select-none;
+    right: -3rem;
+    bottom: -4rem;
+    width: 22rem;
+    height: auto;
+    opacity: 0.08;
+    z-index: 0;
+  }
 
-    .hero-install {
-      @apply max-w-2xl mt-3;
+  .hp-hero-grid {
+    @apply relative z-10 flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_minmax(280px,340px)] lg:gap-x-8 lg:items-start;
+  }
 
-      .hero-install-meta {
-        @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs mb-1;
+  .hero-title {
+    @apply font-display text-4xl sm:text-5xl font-bold tracking-tight max-w-3xl text-balance;
+  }
 
-        #install-platform {
-          @apply font-bold uppercase bg-accent-soft text-ink px-1.5 py-0.5;
-        }
+  .hero-sub {
+    @apply text-lg md:text-xl text-ink/80 max-w-2xl mt-3 lg:mb-25;
+  }
 
-        a {
-          @apply font-normal no-underline text-link hover:bg-accent-soft;
-        }
-      }
+  .hp-install-panel {
+    @apply border border-ink/15 rounded-lg bg-paper p-3 mt-3 max-w-2xl space-y-1;
 
-      pre {
-        @apply my-0;
+    .hero-install-meta {
+      @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs mb-1;
 
-        code {
-          @apply text-[13px];
-        }
-      }
-
-      #install-windows {
-        @apply my-0;
-
-        .install-win-btn {
-          @apply inline-flex items-center gap-2 border-2 border-ink bg-accent text-ink font-bold no-underline px-3 py-1.5 lus-shadow-sm lus-press;
-        }
-      }
-    }
-
-    .hero-ctas {
-      @apply flex flex-wrap gap-3 mt-4;
-    }
-
-    .news-list {
-      @apply list-none pl-0 space-y-1.5;
-
-      li {
-        @apply flex items-baseline gap-3;
-      }
-
-      .news-date {
-        @apply text-xs text-ink/70 font-mono shrink-0;
+      #install-platform {
+        @apply font-semibold uppercase bg-accent-soft text-ink rounded-sm px-1.5 py-0.5;
       }
 
       a {
-        @apply font-normal;
+        @apply font-normal no-underline text-link hover:bg-accent-soft;
+      }
+    }
+
+    pre {
+      @apply my-0;
+
+      code {
+        @apply text-[13px];
+      }
+    }
+
+    #install-windows {
+      @apply my-0;
+
+      .install-win-btn {
+        @apply inline-flex items-center gap-2 rounded-md bg-accent text-ink font-semibold no-underline px-3 py-1.5 hover:bg-accent-strong active:bg-accent-strong;
       }
     }
   }
 
-  .stdlib-map {
-    @apply grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2;
+  .hero-ctas {
+    @apply flex flex-wrap gap-3 mt-4;
+  }
+
+  .news-list {
+    @apply list-none pl-0 space-y-1.5;
+
+    li {
+      @apply flex items-baseline gap-3;
+    }
+
+    .news-date {
+      @apply text-xs text-ink/70 font-mono shrink-0;
+    }
 
     a {
-      @apply flex flex-col gap-0.5 border-2 border-ink bg-paper lus-shadow-sm lus-press p-2 no-underline hover:bg-accent-soft;
+      @apply font-normal;
+    }
+  }
+
+  .hp-features {
+    @apply grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-stretch;
+  }
+
+  .hp-feature {
+    @apply flex flex-col border border-ink/15 rounded-lg overflow-hidden bg-paper;
+  }
+
+  .hp-feature-head {
+    @apply flex items-baseline gap-2 px-3 py-1.5 border-b border-ink/10;
+    background: linear-gradient(
+      to right,
+      var(--color-accent-soft),
+      var(--color-tint)
+    );
+  }
+
+  .hp-feature-name {
+    @apply font-mono font-semibold text-sm lowercase no-underline text-ink hover:bg-accent-soft;
+  }
+
+  .hp-feature-chip {
+    @apply font-mono text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-sm bg-accent-soft-red text-ink-red ml-auto;
+  }
+
+  .hp-feature-blurb {
+    @apply text-sm text-ink/70 px-3 py-2;
+  }
+
+  .hp-feature-code {
+    @apply mt-auto;
+  }
+
+  .hp-feature-code :global(pre) {
+    @apply my-0;
+  }
+
+  .hp-feature-code :global(pre code) {
+    @apply rounded-none text-[13px];
+  }
+
+  /* stdlib board: gap-px over an ink/10 backdrop = hairline seams */
+  .hp-stdlib {
+    @apply grid grid-cols-2 md:grid-cols-4 gap-px bg-ink/10 border border-ink/15 rounded-lg overflow-hidden;
+
+    a {
+      @apply flex flex-col gap-0.5 bg-paper p-2 no-underline hover:bg-accent-soft active:bg-accent-soft;
 
       .mod-name {
-        @apply font-mono font-bold text-sm text-ink;
+        @apply font-mono font-semibold text-sm text-ink;
       }
 
       .mod-desc {

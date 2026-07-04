@@ -2,8 +2,9 @@
 import { Image } from "astro:assets"
 import "@fontsource-variable/atkinson-hyperlegible-next"
 import "@fontsource-variable/atkinson-hyperlegible-next/wght-italic.css"
-import "@fontsource-variable/atkinson-hyperlegible-mono"
-import "@fontsource-variable/atkinson-hyperlegible-mono/wght-italic.css"
+import "@fontsource-variable/bricolage-grotesque/opsz.css"
+import "@fontsource-variable/intel-one-mono"
+import "@fontsource-variable/intel-one-mono/wght-italic.css"
 
 import "../styles/global.css"
 import logo from "../assets/logo.svg"
@@ -79,7 +80,6 @@ function isActive(href: string) {
             width={32}
             height={32}
           />
-          <span class="wordmark">lus</span>
         </a>
 
         <nav aria-label="Main">
@@ -121,39 +121,8 @@ function isActive(href: string) {
         </nav>
       </div>
     </header>
-    {
-      Astro.props.unstable && (
-        <div class="unstable-banner">
-          unstable-channel documentation: describes pre-release builds.{" "}
-          <a href="/manual/releases">about channels</a>
-        </div>
-      )
-    }
     <slot />
-    <footer>
-      <div class="footer-inner">
-        <span class="footer-wordmark">Lus</span>
-        <nav class="footer-links" aria-label="Footer">
-          <a href="/manual">manual</a>
-          <a href="/manual/api">api</a>
-          <a href="/examples">examples</a>
-          <a href="/playground">playground</a>
-          <a href="/news">news</a>
-          <a
-            href="https://github.com/lus-lang/lus"
-            target="_blank"
-            rel="noopener">github</a
-          >
-          <a href="/manual/license">license</a>
-          <a href="mailto:hello@louka.sh">contact</a>
-        </nav>
-        <p>
-          © 2025–2026 <a href="https://louka.sh" target="_blank" rel="noopener"
-            >Louka Ménard Blondin</a
-          >. Licensed under the 0-clause BSD license.
-        </p>
-      </div>
-    </footer>
+    
   </body>
 </html>
 
@@ -161,7 +130,7 @@ function isActive(href: string) {
   @reference "../styles/global.css";
 
   header {
-    @apply bg-tint;
+    @apply bg-tint border-b border-ink/10;
 
     .header-inner {
       @apply max-w-7xl mx-auto px-4 md:px-6 py-2 flex items-center gap-3;
@@ -170,22 +139,22 @@ function isActive(href: string) {
         @apply flex items-center gap-2 no-underline shrink-0 hover:bg-transparent;
 
         .wordmark {
-          @apply font-extrabold text-lg tracking-tight text-ink lowercase;
+          @apply font-display font-bold text-lg tracking-tight text-ink lowercase;
         }
       }
 
       .version-badge {
-        @apply font-mono text-xs font-normal no-underline text-ink/70 border border-ink/20 bg-paper px-1.5 py-0.5 hover:bg-accent-soft hover:text-ink;
+        @apply font-mono text-xs font-normal no-underline text-ink/70 border border-ink/25 bg-paper rounded-sm px-1.5 py-0.5 hover:bg-accent-soft hover:text-ink;
       }
 
       nav {
         @apply ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1;
 
         a {
-          @apply flex items-center gap-1.5 text-sm font-bold lowercase no-underline text-ink/80 px-2 py-1 border-2 border-transparent hover:border-ink hover:bg-accent-soft hover:text-ink;
+          @apply flex items-center gap-1.5 text-sm font-semibold lowercase no-underline text-ink/80 px-2 py-1 rounded-md hover:bg-accent-soft hover:text-ink;
 
           &.active {
-            @apply bg-accent border-ink lus-shadow-sm text-ink;
+            @apply bg-accent text-ink;
           }
         }
       }
@@ -193,7 +162,7 @@ function isActive(href: string) {
   }
 
   .unstable-banner {
-    @apply bg-accent-red text-ink-red text-sm font-bold text-center px-4 py-1;
+    @apply bg-accent-red text-ink-red text-sm font-semibold text-center px-4 py-1;
 
     a {
       @apply text-ink-red hover:bg-accent-soft-red;
@@ -201,20 +170,20 @@ function isActive(href: string) {
   }
 
   footer {
-    @apply py-3 text-xs text-ink/80 bg-tint border-t-2 border-ink mt-auto;
+    @apply py-3 text-xs text-ink/80 bg-tint border-t border-ink/15 mt-auto;
 
     .footer-inner {
       @apply flex flex-wrap items-center justify-between px-4 md:px-6 gap-x-6 gap-y-1 max-w-7xl mx-auto;
 
       .footer-wordmark {
-        @apply font-extrabold text-sm tracking-tight text-ink;
+        @apply font-display font-bold text-sm tracking-tight text-ink;
       }
 
       .footer-links {
         @apply flex flex-wrap items-center gap-x-2 gap-y-2;
 
         a {
-          @apply font-bold lowercase no-underline text-ink/80 hover:bg-accent-soft hover:text-ink inline-block px-1 py-1;
+          @apply font-semibold lowercase no-underline text-ink/80 rounded-md hover:bg-accent-soft hover:text-ink inline-block px-1 py-1;
         }
       }
 
@@ -230,27 +199,27 @@ function isActive(href: string) {
 
   :global(html.unstable) {
     header {
-      @apply bg-tint-red;
+      @apply bg-tint-red border-ink-red/10;
 
       .header-inner .brand .wordmark {
         @apply text-ink-red;
       }
 
       .header-inner .version-badge {
-        @apply text-ink-red/70 border-ink-red/20 hover:bg-accent-soft-red hover:text-ink-red;
+        @apply text-ink-red/70 border-ink-red/25 hover:bg-accent-soft-red hover:text-ink-red;
       }
 
       .header-inner nav a {
-        @apply text-ink-red/80 hover:border-ink-red hover:bg-accent-soft-red hover:text-ink-red;
+        @apply text-ink-red/80 hover:bg-accent-soft-red hover:text-ink-red;
 
         &.active {
-          @apply bg-accent-red border-ink-red lus-shadow-sm shadow-ink-red text-ink-red;
+          @apply bg-accent-red text-ink-red;
         }
       }
     }
 
     footer {
-      @apply text-ink-red/80 bg-tint-red border-ink-red;
+      @apply text-ink-red/80 bg-tint-red border-ink-red/15;
 
       .footer-inner {
         .footer-wordmark {

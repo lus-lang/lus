@@ -23,26 +23,10 @@ const { color = "lime", variant = "default" } = Astro.props
   @reference "../styles/global.css";
 
   .card {
-    @apply border-2 border-ink bg-paper text-ink;
-
-    &[data-variant="default"] {
-      @apply lus-shadow;
-    }
-
-    &[data-variant="feature"] {
-      @apply lus-shadow-sm;
-    }
+    @apply border border-ink/15 rounded-lg overflow-hidden bg-paper text-ink;
 
     h2 {
-      @apply font-bold text-base lowercase px-3 py-1.5 border-b-2 border-ink;
-    }
-
-    &[data-variant="default"] h2 {
-      @apply bg-accent text-ink;
-    }
-
-    &[data-variant="feature"] h2 {
-      @apply bg-tint text-ink;
+      @apply font-semibold text-base lowercase px-3 py-1.5 border-b border-ink/10 bg-tint text-ink;
     }
 
     .card-body {
@@ -50,18 +34,10 @@ const { color = "lime", variant = "default" } = Astro.props
     }
 
     &[data-color="red"] {
-      @apply border-ink-red shadow-ink-red text-ink-red;
+      @apply border-ink-red/15 text-ink-red;
 
       h2 {
-        @apply border-ink-red;
-      }
-
-      &[data-variant="default"] h2 {
-        @apply bg-accent-red text-ink-red;
-      }
-
-      &[data-variant="feature"] h2 {
-        @apply bg-tint-red text-ink-red;
+        @apply border-ink-red/10 bg-tint-red text-ink-red;
       }
     }
   }

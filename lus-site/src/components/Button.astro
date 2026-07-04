@@ -49,17 +49,19 @@ const Tag = href && !disabled ? "a" : "button"
   @reference "../styles/global.css";
 
   .btn {
-    @apply inline-flex items-center gap-2 border-2 border-ink bg-accent text-ink font-bold no-underline cursor-pointer select-none lus-shadow-sm lus-press;
+    @apply inline-flex items-center gap-2 rounded-md bg-accent text-ink font-semibold no-underline cursor-pointer select-none;
 
-    &:hover {
-      @apply bg-ink text-accent no-underline;
+    &:hover,
+    &:active {
+      @apply bg-accent-strong no-underline;
     }
 
     &[data-variant="outline"] {
-      @apply bg-paper;
+      @apply bg-paper border border-ink/25;
 
-      &:hover {
-        @apply bg-accent-soft text-ink;
+      &:hover,
+      &:active {
+        @apply bg-accent-soft border-ink/40 text-ink;
       }
     }
 
@@ -72,30 +74,30 @@ const Tag = href && !disabled ? "a" : "button"
     }
 
     &[data-color="red"] {
-      @apply border-ink-red bg-accent-red text-ink-red shadow-ink-red;
+      @apply bg-accent-red text-ink-red;
 
-      &:hover {
-        @apply bg-ink-red text-accent-red;
+      &:hover,
+      &:active {
+        @apply bg-accent-strong-red;
       }
 
       &[data-variant="outline"] {
-        @apply bg-paper;
+        @apply bg-paper border-ink-red/25;
 
-        &:hover {
-          @apply bg-accent-soft-red text-ink-red;
+        &:hover,
+        &:active {
+          @apply bg-accent-soft-red border-ink-red/40 text-ink-red;
         }
       }
     }
 
     &:disabled,
     &[aria-disabled="true"] {
-      @apply bg-paper text-ink/40 border-ink/30 cursor-not-allowed pointer-events-none;
-      box-shadow: none;
-      translate: none;
+      @apply bg-tint text-ink/40 border-ink/15 cursor-not-allowed pointer-events-none;
     }
 
     &[data-color="red"]:disabled {
-      @apply text-ink-red/40 border-ink-red/30;
+      @apply bg-tint-red text-ink-red/40 border-ink-red/15;
     }
   }
 </style>

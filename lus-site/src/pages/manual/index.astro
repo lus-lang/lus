@@ -48,11 +48,6 @@ byKey.reference.unshift(
 
 <ManualLayout title="Manual" measure>
   <h1>Manual</h1>
-  <p>
-    Everything Lus ships is documented here. New to the language? Start with
-    <a href="/manual/getting-started">Getting Started</a>; coming from Lua,
-    read <a href="/manual/adapting">Coming from Lua</a> first.
-  </p>
   {
     groups.map((group) => (
       <>
@@ -78,10 +73,10 @@ byKey.reference.unshift(
   }
 
   .hub-row {
-    @apply flex flex-col sm:flex-row sm:items-baseline gap-x-4 gap-y-0.5 border-2 border-ink bg-paper lus-shadow-sm lus-press p-3 no-underline hover:bg-accent-soft;
+    @apply flex flex-col sm:flex-row sm:items-baseline gap-x-4 gap-y-0.5 border border-ink/15 rounded-lg bg-paper p-3 no-underline hover:bg-accent-soft active:bg-accent-soft;
 
     .hub-title {
-      @apply font-bold text-ink shrink-0 min-w-36;
+      @apply font-semibold text-ink shrink-0 min-w-36;
     }
 
     .hub-desc {

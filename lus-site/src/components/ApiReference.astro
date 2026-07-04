@@ -94,10 +94,10 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   @reference "../styles/global.css";
 
   .api-search {
-    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2 border-b-2 border-ink/20;
+    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2 border-b border-ink/10;
 
     input {
-      @apply border-2 border-ink bg-paper lus-shadow-sm px-3 py-2 w-full max-w-md font-mono text-sm;
+      @apply border border-ink/25 rounded-md bg-paper px-3 py-1.5 w-full max-w-md font-mono text-sm;
 
       &::placeholder {
         @apply text-ink/70;
@@ -122,8 +122,8 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   }
 
   .pledge-chip-legend {
-    @apply font-mono text-[11px] font-bold px-1.5 py-0.5 mr-2 shrink-0
-      bg-emerald-100 text-emerald-900 border border-emerald-900/30;
+    @apply font-mono text-[11px] font-bold px-1.5 py-0.5 mr-2 rounded-sm shrink-0
+      bg-emerald-100 text-emerald-900;
   }
 
   .legend-wrap {
@@ -139,7 +139,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   }
 
   .api-modules {
-    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs border-b-2 border-ink/20 pb-2 mb-4;
+    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs border-b border-ink/10 pb-2 mb-4;
 
     a {
       @apply no-underline font-normal text-link hover:bg-accent-soft py-0.5;
@@ -154,7 +154,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     }
 
     .api-index-title {
-      @apply text-lg font-bold mb-2 mt-0;
+      @apply text-lg font-semibold mb-2 mt-0;
       break-after: avoid;
 
       a {
@@ -186,11 +186,11 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
       }
 
       &[data-from="lus"] {
-        @apply text-link font-black hover:bg-accent-soft;
+        @apply text-link font-semibold hover:bg-accent-soft;
       }
 
       &[data-from="lus-unstable"] {
-        @apply text-link-red font-black hover:bg-accent-soft-red;
+        @apply text-link-red font-semibold hover:bg-accent-soft-red;
       }
     }
   }

@@ -57,12 +57,18 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
     <section>
       <h1>Examples</h1>
       <p class="examples-intro">
-        Short, idiomatic Lus programs. Each one is self-contained; examples
+        Short, idiomatic Lus programs. Each one is self-contained. Examples
         marked <span class="ex-badge ex-badge-play">playground</span> run in
         your browser, the rest run locally because they need real sockets,
-        files, or threads. <span class="ex-badge ex-badge-unstable"
-          >unstable</span
-        > examples need the unstable release channel.
+        files, or threads.{" "}
+        {
+          examples.some((ex) => ex.unstable) && (
+            <>
+              <span class="ex-badge ex-badge-unstable">unstable</span> examples
+              need the unstable release channel.
+            </>
+          )
+        }
       </p>
       <nav class="examples-jump" aria-label="Examples">
         {

@@ -90,7 +90,7 @@ groups
   @reference "../styles/global.css";
 
   :global(hr) {
-    @apply my-3 border-t-2 border-ink/20;
+    @apply my-3 border-t border-ink/15;
   }
 
   .manual-shell {
@@ -109,11 +109,11 @@ groups
 
   /* hard structural rule under every chapter heading: scanning aid */
   article :global(h2) {
-    @apply border-b-2 border-ink/20 pb-1;
+    @apply border-b border-ink/15 pb-1;
   }
 
   .manual-nav-mobile {
-    @apply border-2 border-ink bg-tint lus-shadow-sm mb-4;
+    @apply border border-ink/15 rounded-lg bg-tint mb-4;
 
     summary {
       @apply font-mono text-xs uppercase tracking-widest px-3 py-2 cursor-pointer select-none;
@@ -130,11 +130,11 @@ groups
 
   :global(html.unstable) {
     article :global(h2) {
-      @apply border-ink-red/20;
+      @apply border-ink-red/15;
     }
 
     .manual-nav-mobile {
-      @apply border-ink-red bg-tint-red shadow-ink-red;
+      @apply border-ink-red/15 bg-tint-red;
     }
   }
 </style>
