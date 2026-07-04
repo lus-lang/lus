@@ -1,6 +1,5 @@
 -- CSV Statistics: Parse CSV data and crunch it with the table library.
 -- playground: true
--- unstable: true
 -- cookbook: true
 global fromcsv, table, tonumber, ipairs, pairs, print
 
