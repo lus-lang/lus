@@ -408,6 +408,8 @@ typedef struct global_State {
   TString *fc_str_true;                  /* pre-interned "true" */
   TString *fc_str_false;                 /* pre-interned "false" */
   TString *fc_str___metatable;           /* pre-interned "__metatable" */
+  TString *fc_str_time_duration;         /* pre-interned "time.duration" */
+  TString *fc_str_time_instant;          /* pre-interned "time.instant" */
   /* (kept at the tail so the VM-hot fields above keep their offsets) */
   struct Table *flagstable; /* readonly CLI flags for compile-time branch
                                folding (NULL: no folding); anchored by

@@ -486,8 +486,12 @@ tests:each("float tostring formatting is pinned", {
     tests:assert_equal(tostring(f), expected)
 end)
 
-tests:it("tostring of NaN is nan", function()
-    tests:assert_equal(tostring(0/0), "nan")
+tests:it("tostring of NaN carries a nan marker", function()
+    -- The sign and suffix of a rendered NaN are platform dependent: macOS
+    -- prints "nan", glibc x86-64 prints "-nan", and MSVC prints "-nan(ind)".
+    local rendered = tostring(0/0)
+    tests:assert_true(string.find(rendered, "nan", 1, true) ~= nil,
+        "NaN must render with a nan marker, got " .. rendered)
 end)
 
 tests:it("integer tostring has no decimal point", function()

@@ -9,7 +9,7 @@
 -- Emission is proven with framework.get_fastcalls so the fast form really is
 -- fast and the alias form really is not.
 
-global print, require, string, math, table, utf8, vector, type, tostring, tonumber, rawlen, rawget, rawset, rawequal, setmetatable, getmetatable, assert, select, pledge, next, pairs, ipairs, coroutine, error, os, _G
+global print, require, string, math, table, utf8, vector, type, tostring, tonumber, rawlen, rawget, rawset, rawequal, setmetatable, getmetatable, assert, select, pledge, next, pairs, ipairs, coroutine, error, os, time, _G
 
 pledge("load", "fs:read=./lus-tests/*", "env=ASAN_OPTIONS", "seal")
 
@@ -93,6 +93,13 @@ local function fast_ucodepoint(a) return utf8.codepoint(a) end
 local function fast_uchar(a) return utf8.char(a) end
 local function fast_uoffset(a, b) return utf8.offset(a, b) end
 
+local function fast_tdays(a) return time.days(a) end
+local function fast_thours(a) return time.hours(a) end
+local function fast_tminutes(a) return time.minutes(a) end
+local function fast_tseconds(a) return time.seconds(a) end
+local function fast_tmillis(a) return time.millis(a) end
+local function fast_tinstant(a) return time.instant(a) end
+
 -- ==== Slow aliases ====
 -- Calling through a table field on a local can never compile to OP_FASTCALL,
 -- so these bindings force the plain C dispatch path.
@@ -117,6 +124,8 @@ local s = {
     vresize = vector.resize,
     ulen = utf8.len, ucodepoint = utf8.codepoint, uchar = utf8.char,
     uoffset = utf8.offset,
+    tdays = time.days, thours = time.hours, tminutes = time.minutes,
+    tseconds = time.seconds, tmillis = time.millis, tinstant = time.instant,
 }
 
 -- Alias wrappers used for the multi-return comparison. They mirror the shape
@@ -290,6 +299,12 @@ local emission_list = {
     {"utf8.codepoint", fast_ucodepoint, FC.UTF8_CODEPOINT},
     {"utf8.char", fast_uchar, FC.UTF8_CHAR},
     {"utf8.offset", fast_uoffset, FC.UTF8_OFFSET},
+    {"time.days", fast_tdays, FC.TIME_DAYS},
+    {"time.hours", fast_thours, FC.TIME_HOURS},
+    {"time.minutes", fast_tminutes, FC.TIME_MINUTES},
+    {"time.seconds", fast_tseconds, FC.TIME_SECONDS},
+    {"time.millis", fast_tmillis, FC.TIME_MILLIS},
+    {"time.instant", fast_tinstant, FC.TIME_INSTANT},
 }
 
 tests:it("every fast-form helper compiles to OP_FASTCALL", function()
@@ -1232,6 +1247,114 @@ tests:it("catch pads missing results with nil", function()
 end)
 
 -- ==== Error-name pinning ====
+tests:describe("time scalar constructor parity")
+
+-- Durations and instants are userdata, so first-result identity cannot be
+-- compared structurally. Value parity goes through __eq here and through the
+-- accessor methods below. The corpus routes coercions (integral floats and
+-- numeric strings), errors, and overflow boundaries through both dispatch
+-- paths, which must agree everywhere.
+local dur_corpus = {
+    {"zero", 0},
+    {"one", 1},
+    {"neg one", -1},
+    {"typical", 37},
+    {"maxinteger", math.maxinteger},
+    {"mininteger", math.mininteger},
+    {"integral float", 2.0},
+    {"fractional float", 2.5},
+    {"numeric string", "5"},
+    {"junk string", "x"},
+    {"nil", nil},
+    {"false", false},
+    {"table", EMPTY_T},
+}
+
+-- Appends the overflow boundary rows for one unit: the largest magnitudes
+-- the intrinsic handles inline and the first magnitudes it declines, which
+-- both forms must then route through the C path identically.
+local function with_boundaries(unit)
+    local corpus = {}
+    for _, case in ipairs(dur_corpus) do
+        corpus[#corpus + 1] = case
+    end
+    local hi = math.maxinteger // unit
+    local lo = math.mininteger // unit
+    corpus[#corpus + 1] = {"pos boundary", hi}
+    corpus[#corpus + 1] = {"pos boundary + 1", hi + 1}
+    corpus[#corpus + 1] = {"neg boundary", lo}
+    corpus[#corpus + 1] = {"neg boundary + 1", lo + 1}
+    return corpus
+end
+
+tests:it("time.days agrees across dispatch paths", function()
+    parity_over(fast_tdays, s.tdays, 1, with_boundaries(86400), "time.days")
+end)
+
+tests:it("time.hours agrees across dispatch paths", function()
+    parity_over(fast_thours, s.thours, 1, with_boundaries(3600), "time.hours")
+end)
+
+tests:it("time.minutes agrees across dispatch paths", function()
+    parity_over(fast_tminutes, s.tminutes, 1, with_boundaries(60), "time.minutes")
+end)
+
+tests:it("time.seconds agrees across dispatch paths", function()
+    parity_over(fast_tseconds, s.tseconds, 1, dur_corpus, "time.seconds")
+end)
+
+tests:it("time.millis agrees across dispatch paths", function()
+    parity_over(fast_tmillis, s.tmillis, 1, with_boundaries(1000000), "time.millis")
+end)
+
+tests:it("time.instant agrees across dispatch paths", function()
+    parity_over(fast_tinstant, s.tinstant, 1, dur_corpus, "time.instant")
+end)
+
+tests:it("getmetatable over time userdata honors the protection marker", function()
+    -- Time metatables set __metatable = false, so both dispatch paths must
+    -- return the protection marker, not the metatable and not nil.
+    local d = s.tseconds(1)
+    tests:assert_equal(fast_getmetatable(d), false,
+        "fastcall getmetatable must read the userdata's own metatable")
+    tests:assert_equal(s.getmetatable(d), false,
+        "C getmetatable must read the userdata's own metatable")
+end)
+
+tests:it("duration accessors and tostring agree across dispatch paths", function()
+    for _, n in ipairs({0, 1, -1, 999, -999, 86399, -86401, 123456789}) do
+        local f = fast_tmillis(n)
+        local g = s.tmillis(n)
+        tests:assert_true(f == g, "millis(" .. n .. ") __eq mismatch")
+        tests:assert_equal(f:seconds(), g:seconds(), "millis(" .. n .. ") :seconds()")
+        tests:assert_equal(f:millis(), g:millis(), "millis(" .. n .. ") :millis()")
+        tests:assert_equal(tostring(f), tostring(g), "millis(" .. n .. ") tostring")
+        local fd = fast_tdays(n)
+        local gd = s.tdays(n)
+        tests:assert_true(fd == gd, "days(" .. n .. ") __eq mismatch")
+        tests:assert_equal(tostring(fd), tostring(gd), "days(" .. n .. ") tostring")
+    end
+end)
+
+tests:it("instants built fast interoperate with the two argument C form", function()
+    for _, n in ipairs({0, 1, -1, 1000000000, -1000000000}) do
+        local f = fast_tinstant(n)
+        local g = time.instant(n, 0)
+        tests:assert_true(f == g, "instant(" .. n .. ") differs from instant(n, 0)")
+        tests:assert_equal(f:epoch(), g:epoch(), "instant(" .. n .. ") :epoch()")
+        tests:assert_equal(tostring(f), tostring(g), "instant(" .. n .. ") tostring")
+    end
+end)
+
+tests:it("fast durations compose with duration arithmetic", function()
+    tests:assert_true(fast_tdays(1) == fast_thours(24), "days(1) ~= hours(24)")
+    tests:assert_true(fast_thours(1) == fast_tminutes(60), "hours(1) ~= minutes(60)")
+    tests:assert_true(fast_tminutes(1) == fast_tseconds(60), "minutes(1) ~= seconds(60)")
+    tests:assert_true(fast_tseconds(1) == fast_tmillis(1000), "seconds(1) ~= millis(1000)")
+    local sum = fast_tseconds(30) + fast_tseconds(30)
+    tests:assert_true(sum == fast_tminutes(1), "30s + 30s ~= 1min")
+end)
+
 tests:describe("error-name pinning")
 
 local function caught_name(fn)
@@ -1264,6 +1387,9 @@ tests:each("fast-form fallback errors carry qualified names", {
     {"utf8.char", function() return utf8.char(-1) end, "utf8.char", 1, "value out of range"},
     {"utf8.codepoint", function() return utf8.codepoint("") end, "utf8.codepoint", 3, "out of bounds"},
     {"utf8.offset", function() return utf8.offset(true, 1) end, "utf8.offset", 1, "string expected, got boolean"},
+    {"time.seconds", function() return time.seconds("x") end, "time.seconds", 1, "number expected, got string"},
+    {"time.millis", function() return time.millis(2.5) end, "time.millis", 1, "number has no integer representation"},
+    {"time.instant", function() return time.instant(false) end, "time.instant", 1, "number expected, got boolean"},
 }, function(label, fn, want_name, want_argn, want_reason)
     local name, argn, full = caught_name(fn)
     tests:assert_equal(name, want_name, label .. ": got name " .. tostring(name) .. " in " .. tostring(full))
@@ -1291,6 +1417,7 @@ tests:each("non-fastcall arity errors keep the call-site field name", {
     {"sub with two args", function() return string.sub("a", true) end, "sub", 2},
     {"byte with one arg", function() return string.byte(true) end, "byte", 1},
     {"log with two args", function() return math.log(true, 10) end, "log", 1},
+    {"instant with two args", function() return time.instant(5, "x") end, "instant", 2},
 }, function(label, fn, want_name, want_argn)
     local name, argn, full = caught_name(fn)
     tests:assert_equal(name, want_name, label .. ": got name " .. tostring(name) .. " in " .. tostring(full))

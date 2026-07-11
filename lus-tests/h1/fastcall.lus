@@ -1,4 +1,4 @@
-global print, require, string, math, assert, type, rawequal, rawget, rawset, rawlen, _G, table, tostring, tonumber, select, error, pledge, setmetatable, getmetatable, collectgarbage, load, vector, utf8, coroutine
+global print, require, string, math, assert, type, rawequal, rawget, rawset, rawlen, _G, table, tostring, tonumber, select, error, pledge, setmetatable, getmetatable, collectgarbage, load, vector, utf8, coroutine, time
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -1240,6 +1240,15 @@ tests:it("emits OP_FASTCALL for utf8.codepoint()", function()
     tests:assert_fastcall(function(s) return utf8.codepoint(s) end, FC.UTF8_CODEPOINT)
 end)
 
+tests:it("emits OP_FASTCALL for the six time scalar constructors", function()
+    tests:assert_fastcall(function(n) return time.days(n) end, FC.TIME_DAYS)
+    tests:assert_fastcall(function(n) return time.hours(n) end, FC.TIME_HOURS)
+    tests:assert_fastcall(function(n) return time.minutes(n) end, FC.TIME_MINUTES)
+    tests:assert_fastcall(function(n) return time.seconds(n) end, FC.TIME_SECONDS)
+    tests:assert_fastcall(function(n) return time.millis(n) end, FC.TIME_MILLIS)
+    tests:assert_fastcall(function(n) return time.instant(n) end, FC.TIME_INSTANT)
+end)
+
 -- ==== Negative emission cases ====
 tests:describe("OP_FASTCALL non-emission")
 
@@ -1265,6 +1274,19 @@ end)
 
 tests:it("does not emit OP_FASTCALL for math.log with 2 args", function()
     tests:assert_no_fastcall(function(x) return math.log(x, 10) end, FC.MATH_LOG)
+end)
+
+tests:it("does not emit OP_FASTCALL for time.instant with 2 args", function()
+    tests:assert_no_fastcall(function(x) return time.instant(x, 500) end, FC.TIME_INSTANT)
+end)
+
+tests:it("does not emit OP_FASTCALL for time.seconds with 0 args", function()
+    tests:assert_no_fastcall(function() return time.seconds() end, FC.TIME_SECONDS)
+end)
+
+tests:it("does not emit OP_FASTCALL for a time.seconds alias", function()
+    local f = time.seconds
+    tests:assert_no_fastcall(function(n) return f(n) end, FC.TIME_SECONDS)
 end)
 
 tests:it("does not emit OP_FASTCALL when _ENV is rebound", function()
@@ -1311,6 +1333,34 @@ tests:it("table.reshape rejects overflow dimensions", function()
     tests:assert_throws(function()
         table.reshape(t, math.maxinteger, math.maxinteger)
     end)
+end)
+
+-- ==== Time scalar constructor correctness ====
+tests:describe("time constructors")
+
+tests:it("fast time constructors build correct durations and instants", function()
+    assert(time.days(1) == time.hours(24))
+    assert(time.hours(1) == time.minutes(60))
+    assert(time.minutes(1) == time.seconds(60))
+    assert(time.seconds(1) == time.millis(1000))
+    assert(time.seconds(90):seconds() == 90.0)
+    assert(time.millis(1500):millis() == 1500.0)
+    assert(time.instant(1000):epoch() == 1000)
+    local alias = time.millis
+    assert(tostring(time.millis(-1)) == tostring(alias(-1)))
+    assert(time.instant(5) == time.instant(5, 0))
+end)
+
+tests:it("allocating fastcalls give the collector a step", function()
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    for i = 1, 200000 do
+        local d = time.seconds(i)
+        local s = string.sub("hello world", 1, 5)
+    end
+    local after = collectgarbage("count")
+    tests:assert_true(after - before < 8192,
+        "fastcall loop retained " .. (after - before) .. " KB")
 end)
 
 tests:finish()

@@ -1229,10 +1229,19 @@ static int tcp_bind(lua_State *L) {
                       sock_strerror(SOCKET_ERRNO));
   }
 
-  /* Allow address reuse */
+  /* Allow quick rebinding after close. Windows SO_REUSEADDR instead lets a
+  ** second socket bind a port that is still actively bound, a hijacking
+  ** primitive, so the exclusive flag is used there. It still permits
+  ** rebinding after a proper close and restores the POSIX address-in-use
+  ** failure for a second live bind. */
   int optval = 1;
+#if defined(LUS_PLATFORM_WINDOWS)
+  setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&optval,
+             sizeof(optval));
+#else
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval,
              sizeof(optval));
+#endif
 
   if (bind(fd, (struct sockaddr *)&addr, addrlen) == SOCKET_ERROR_VAL) {
     int err = SOCKET_ERRNO;

@@ -31,8 +31,10 @@ do
     LUS = arg[i]
 end
 
+local DEVNULL = os.platform() == "windows" and "NUL" or "/dev/null"
+
 local function run_snippet(snippet)
-    local cmd = LUS .. " -e \"" .. snippet .. "\" 2>/dev/null"
+    local cmd = LUS .. " -e \"" .. snippet .. "\" 2>" .. DEVNULL
     local res = os.execute(cmd)
     return res == true or res == 0
 end

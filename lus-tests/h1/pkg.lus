@@ -206,7 +206,9 @@ tests:it("dots in the module name map to the directory separator", function()
         package.loaded["h1.preinclude.hello"] = nil
         local mod, where = require("h1.preinclude.hello")
         tests:assert_type(mod, "table")
-        tests:assert_equal(where, "lus-tests/h1/preinclude/hello.lus")
+        local dirsep = string.sub(package.config, 1, 1)
+        tests:assert_equal(where,
+            "lus-tests/h1" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
         package.loaded["h1.preinclude.hello"] = nil
     end)
 end)
@@ -357,7 +359,9 @@ end)
 
 tests:it("the default separator rewrites dots to the directory separator", function()
     local found = package.searchpath("h1.preinclude.hello", "lus-tests/?.lus")
-    tests:assert_equal(found, "lus-tests/h1/preinclude/hello.lus")
+    local dirsep = string.sub(package.config, 1, 1)
+    tests:assert_equal(found,
+        "lus-tests/h1" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
 end)
 
 tests:it("explicit sep and rep control the substitution", function()

@@ -24,6 +24,7 @@
 #if defined(LUS_PLATFORM_WINDOWS)
 #include <direct.h>
 #include <windows.h>
+#include <winioctl.h> /* FSCTL_GET_REPARSE_POINT for fs.follow */
 #define mkdir(p) _mkdir(p)
 #else
 #include <dirent.h>
@@ -680,8 +681,17 @@ static int fs_follow(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
   check_fs_permission(L, "fs:read", path);
 #if defined(LUS_PLATFORM_WINDOWS)
-  HANDLE hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  /* Read the reparse data so the stored target comes back verbatim, the
+  ** contract readlink gives on POSIX. Opening with the reparse flag keeps
+  ** the link itself readable even when its target is missing, and lets a
+  ** regular file be rejected instead of silently resolving to itself. */
+  HANDLE hFile = CreateFile(path, GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                FILE_SHARE_DELETE,
+                            NULL, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS |
+                                FILE_FLAG_OPEN_REPARSE_POINT,
+                            NULL);
   if (hFile == INVALID_HANDLE_VALUE) {
     DWORD err = GetLastError();
     if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
@@ -689,28 +699,67 @@ static int fs_follow(lua_State *L) {
     return luaL_error(L, "cannot open '%s': error %lu", path,
                       (unsigned long)err);
   }
-  char buf[MAX_PATH];
-  /* VOLUME_NAME_DOS returns path with drive letter, usually prefixed with
-   * \\?\  */
-  DWORD len = GetFinalPathNameByHandle(hFile, buf, MAX_PATH, VOLUME_NAME_DOS);
-  if (len == 0) {
+  /* 16384 is MAXIMUM_REPARSE_DATA_BUFFER_SIZE, which only the driver kit
+  ** headers define. The union keeps the payload aligned for the header
+  ** fields. */
+  union {
+    unsigned char raw[16384];
+    ULONG align;
+  } rb;
+  DWORD got = 0;
+  if (!DeviceIoControl(hFile, FSCTL_GET_REPARSE_POINT, NULL, 0, rb.raw,
+                       sizeof(rb.raw), &got, NULL)) {
     DWORD err = GetLastError();
     CloseHandle(hFile);
-    return luaL_error(L, "failed to resolve path '%s': error %lu", path,
+    if (err == ERROR_NOT_A_REPARSE_POINT)
+      return luaL_error(L, "'%s' is not a symbolic link", path);
+    return luaL_error(L, "cannot read link '%s': error %lu", path,
                       (unsigned long)err);
   }
-  if (len >= MAX_PATH) {
-    CloseHandle(hFile);
-    return luaL_error(L, "resolved path too long for '%s'", path);
-  }
   CloseHandle(hFile);
-
-  /* Strip \\?\ prefix if present */
-  const char *res = buf;
-  if (strncmp(buf, "\\\\?\\", 4) == 0) {
-    res = buf + 4;
+  /* Minimal layout of the symlink reparse payload. The official
+  ** REPARSE_DATA_BUFFER lives in the driver kit headers, so the needed
+  ** fields are declared here. */
+  typedef struct {
+    ULONG ReparseTag;
+    USHORT ReparseDataLength;
+    USHORT Reserved;
+    USHORT SubstituteNameOffset;
+    USHORT SubstituteNameLength;
+    USHORT PrintNameOffset;
+    USHORT PrintNameLength;
+    ULONG Flags;
+    WCHAR PathBuffer[1];
+  } lus_symlink_reparse;
+  const lus_symlink_reparse *r = (const lus_symlink_reparse *)(void *)rb.raw;
+  if (r->ReparseTag != IO_REPARSE_TAG_SYMLINK)
+    return luaL_error(L, "'%s' is not a symbolic link", path);
+  /* Prefer the print name, which holds the target exactly as it was given
+  ** to createlink. Fall back to the substitute name and strip its NT
+  ** namespace prefix. */
+  const WCHAR *wtarget;
+  int wchars;
+  int substitute = 0;
+  if (r->PrintNameLength > 0) {
+    wtarget = r->PathBuffer + r->PrintNameOffset / sizeof(WCHAR);
+    wchars = (int)(r->PrintNameLength / sizeof(WCHAR));
   }
-  lua_pushstring(L, res);
+  else {
+    wtarget = r->PathBuffer + r->SubstituteNameOffset / sizeof(WCHAR);
+    wchars = (int)(r->SubstituteNameLength / sizeof(WCHAR));
+    substitute = 1;
+  }
+  char buf[MAX_PATH * 4];
+  int blen = WideCharToMultiByte(CP_ACP, 0, wtarget, wchars, buf,
+                                 (int)sizeof(buf), NULL, NULL);
+  if (blen <= 0)
+    return luaL_error(L, "cannot decode link target for '%s'", path);
+  const char *res = buf;
+  if (substitute && blen >= 4 && strncmp(buf, "\\??\\", 4) == 0) {
+    res = buf + 4;
+    blen -= 4;
+  }
+  lua_pushlstring(L, res, (size_t)blen);
   return 1;
 #else
   /* First check if it's actually a symlink */

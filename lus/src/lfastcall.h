@@ -32,7 +32,7 @@ typedef struct FCDef {
 } FCDef;
 
 /* number of named modules with fastcall entries (index 0 = base lib) */
-#define FC_NMODULES 5
+#define FC_NMODULES 6
 
 enum FastCallId {
   FC_TYPE,
@@ -92,6 +92,14 @@ enum FastCallId {
   FC_UTF8_CODEPOINT,
   FC_UTF8_CHAR,
   FC_UTF8_OFFSET,
+  /* Ids ride verbatim in dumped OP_EXTRAARG operands, so new entries
+     must always be appended here, never inserted. */
+  FC_TIME_DAYS,
+  FC_TIME_HOURS,
+  FC_TIME_MINUTES,
+  FC_TIME_SECONDS,
+  FC_TIME_MILLIS,
+  FC_TIME_INSTANT,
   FC_COUNT
 };
 

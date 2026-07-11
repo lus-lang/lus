@@ -22,6 +22,7 @@
 - `vector.resize` now grows capacity geometrically, making grow-by-one append loops O(n) amortized instead of O(n²).
 - `network.fetch` now reads response headers in buffered chunks instead of one byte per system call.
 - Vector-returning archive compression and decompression no longer copy the whole output through a temporary Lua string, reducing peak memory.
+- Allocating fastcalls now give the garbage collector a step, so tight loops that allocate only through fastcall builtins no longer defer collection indefinitely.
 - Gave do-expressions a runtime multi-value protocol through the new `OP_PROVIDE` and `OP_ENDDO` instructions, fixing dropped table constructor entries, duplicated and shifted `provide` values, empty multi-value returns, and internal stack slots leaking into user code.
 - Fixed `load`, `debug.parse`, and other internally-protected C calls having their errors hijacked by an enclosing `catch` block, which broke their return values and leaked their internal resources.
 - Fixed the JSON parser leaking its container stack on parse errors raised from helper functions.
@@ -66,6 +67,9 @@
 - Fixed `debug.format` emitting the minimum integer as a decimal literal that reparses as a float.
 - Fixed the language server's selection ranges never producing a chain of enclosing parents and ordering nodes arbitrarily on single-line documents.
 - Fixed the `os.platform` documentation using `macos` as the Apple identifier when the function returns the uname-style `darwin`.
+- Fixed the `getmetatable` fastcall reading the type-wide metatable slot for userdata instead of the object's own metatable.
+- Fixed a second `network.tcp.bind` on a live port succeeding on Windows instead of reporting the address in use by binding with the exclusive-use socket option there.
+- Fixed `fs.follow` on Windows resolving the link and returning an absolute final path instead of the stored target, failing on dangling links, and accepting regular files.
 
 ## 1.6.2
 

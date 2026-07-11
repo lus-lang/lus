@@ -24,6 +24,7 @@
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
+#include "ltimecore.h"
 #include "ltm.h"
 #include "lvm.h"
 #include "lvector.h"
@@ -40,7 +41,23 @@
 #define fc_str_true (G(L)->fc_str_true)
 #define fc_str_false (G(L)->fc_str_false)
 #define fc_str___metatable (G(L)->fc_str___metatable)
+#define fc_str_time_duration (G(L)->fc_str_time_duration)
+#define fc_str_time_instant (G(L)->fc_str_time_instant)
 #define fc_typenames (G(L)->fc_typenames)
+
+
+/*
+** GC step for intrinsics that allocate. The OP_FASTCALL dispatcher ran
+** savestate before calling luaV_dofastcall, so the saved pc and stack
+** top already frame a valid collection point, and its success arm runs
+** updatetrap after we return, which observes the trap a stack
+** reallocation during the step sets in every call frame. Use this as
+** the last statement of a case, after the result is rooted in s2v(ra),
+** because the step can move the stack and leave local StkId values
+** dangling. Without it a loop whose body allocates only through
+** fastcalls would never give the collector a step.
+*/
+#define fc_checkGC(L) luaC_checkGC(L)
 
 
 /*
@@ -92,6 +109,23 @@ static TString *fc_newfix(lua_State *L, const char *str) {
     luaC_fix(L, obj2gco(s));
   /* else: string already interned/fixed (e.g. reserved word), skip */
   return s;
+}
+
+
+/*
+** Fetch a time metatable from the registry by its pre-interned name.
+** Returns NULL when the slot is absent or not a table, which sends the
+** call down the C path. luaopen_time writes these slots through
+** luaL_newmetatable, so a state that never opened the library simply
+** declines here.
+*/
+static Table *fc_gettimemt(lua_State *L, TString *name) {
+  Table *reg = hvalue(&G(L)->l_registry);
+  TValue slot;
+  lu_byte tag = luaH_getshortstr(reg, name, &slot);
+  if (tagisempty(tag) || !ttistable(&slot))
+    return NULL;
+  return hvalue(&slot);
 }
 
 
@@ -207,6 +241,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       Table *mt;
       if (ttistable(arg))
         mt = hvalue(arg)->metatable;
+      else if (ttisfulluserdata(arg))
+        mt = uvalue(arg)->metatable;
       else
         mt = G(L)->mt[ttype(arg)];
       if (mt == NULL) {
@@ -292,6 +328,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setobj(L, &temp, arg);
         luaO_tostring(L, &temp);
         setobj2s(L, ra, &temp);
+        fc_checkGC(L);
       }
       else
         return 0; /* table/func/userdata may have __tostring */
@@ -538,6 +575,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         }
         else {
           setsvalue2s(L, ra, luaS_newlstr(L, s + start, end - start));
+          fc_checkGC(L);
         }
       }
       else
@@ -558,6 +596,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         }
         else {
           setsvalue2s(L, ra, luaS_newlstr(L, s + start, len - start));
+          fc_checkGC(L);
         }
       }
       else
@@ -578,6 +617,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         }
         else {
           setsvalue2s(L, ra, luaS_newlstr(L, s, end));
+          fc_checkGC(L);
         }
       }
       else
@@ -626,6 +666,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
               break;
           }
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -640,6 +681,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         lua_Unsigned len = luaH_getn(L, t);
         if (len == 0) {
           setsvalue2s(L, ra, luaS_newlstr(L, "", 0));
+          fc_checkGC(L);
           break;
         }
         /* Pre-validate: all elements must be strings */
@@ -692,6 +734,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           }
           buf[total] = '\0';
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -722,6 +765,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         else {
           setsvalue2s(L, ra, luaS_newlstr(L, "", 0));
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -765,6 +809,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           char buf[1];
           buf[0] = cast_char(cast_uchar(c));
           setsvalue2s(L, ra, luaS_newlstr(L, buf, 1));
+          fc_checkGC(L);
         }
         else
           return 0; /* out of range, fall back for error */
@@ -793,6 +838,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
             buf[i] = cast_char(tolower(cast_uchar(s[i])));
           buf[len] = '\0';
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -818,6 +864,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
             buf[i] = cast_char(toupper(cast_uchar(s[i])));
           buf[len] = '\0';
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -843,6 +890,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
             buf[i] = s[len - 1 - i];
           buf[len] = '\0';
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -1024,6 +1072,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         if (rows == 0) {
           Table *res = luaH_new(L);
           sethvalue2s(L, ra, res);
+          fc_checkGC(L);
           break;
         }
         /* Get first row, verify it's a table */
@@ -1065,6 +1114,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
             luaC_barrierback(L, obj2gco(newrow), &elem);
           }
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -1103,6 +1153,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
             luaC_barrierback(L, obj2gco(row), &elem);
           }
         }
+        fc_checkGC(L);
       }
       else
         return 0;
@@ -1117,6 +1168,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         return 0; /* fall back to vector.create for the error message */
       Vector *v = luaV_newvec(L, (size_t)cap, 0);
       setvecvalue2s(L, ra, v);
+      fc_checkGC(L);
       break;
     }
     case FC_VECTOR_CLONE: {
@@ -1125,6 +1177,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         return 0;
       Vector *clone = luaV_clone(L, vecvalue(arg));
       setvecvalue2s(L, ra, clone);
+      fc_checkGC(L);
       break;
     }
     case FC_VECTOR_SIZE: {
@@ -1143,6 +1196,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         return 0; /* fall back to vector.resize for the error message */
       luaV_resize(L, vecvalue(arg1), (size_t)newsize);
       setnilvalue2s(ra);
+      fc_checkGC(L);
       break;
     }
     case FC_UTF8_LEN: {
@@ -1230,6 +1284,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         len = 6;
       }
       setsvalue2s(L, ra, luaS_newlstr(L, buf, (size_t)len));
+      fc_checkGC(L);
       break;
     }
     case FC_UTF8_OFFSET: {
@@ -1278,6 +1333,78 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       setivalue(s2v(ra), posi + 1); /* 1-based */
       break;
     }
+      /*
+      ** Shared body for the scalar duration fastcalls. Only integer
+      ** arguments within the unit's overflow-free range are handled, so
+      ** the C function keeps sole ownership of coercions, of error
+      ** reporting, and of the wraparound behavior on out-of-range
+      ** inputs. The division guards truncate toward zero, which admits
+      ** exactly the values whose product stays representable. Metatable
+      ** wiring mirrors the userdata arm of lua_setmetatable so the
+      ** result is bit-identical to what push_duration builds.
+      */
+#define FC_TIME_DUR(unit_sec, unit_ns)                                         \
+  {                                                                            \
+    TValue *arg = s2v(ra + 1);                                                 \
+    Table *mt;                                                                 \
+    Udata *u;                                                                  \
+    l_duration *d;                                                             \
+    lua_Integer n, sec;                                                        \
+    int nsec;                                                                  \
+    if (!ttisinteger(arg))                                                     \
+      return 0;                                                                \
+    n = ivalue(arg);                                                           \
+    if ((unit_sec) > 1 && (n > LUA_MAXINTEGER / (unit_sec) ||                  \
+                           n < LUA_MININTEGER / (unit_sec)))                   \
+      return 0;                                                                \
+    if ((unit_ns) > 1 &&                                                       \
+        (n > LUA_MAXINTEGER / (unit_ns) || n < LUA_MININTEGER / (unit_ns)))    \
+      return 0;                                                                \
+    mt = fc_gettimemt(L, fc_str_time_duration);                                \
+    if (mt == NULL)                                                            \
+      return 0;                                                                \
+    u = luaS_newudata(L, sizeof(l_duration), 0);                               \
+    setuvalue(L, s2v(ra), u); /* root the result immediately */                \
+    lus_dur_compute(n, unit_sec, unit_ns, &sec, &nsec);                        \
+    d = (l_duration *)getudatamem(u);                                          \
+    d->sec = sec;                                                              \
+    d->nsec = nsec;                                                            \
+    u->metatable = mt;                                                         \
+    luaC_objbarrier(L, u, mt);                                                 \
+    luaC_checkfinalizer(L, obj2gco(u), mt);                                    \
+    fc_checkGC(L);                                                             \
+    break;                                                                     \
+  }
+    case FC_TIME_DAYS: FC_TIME_DUR(86400, 0)
+    case FC_TIME_HOURS: FC_TIME_DUR(3600, 0)
+    case FC_TIME_MINUTES: FC_TIME_DUR(60, 0)
+    case FC_TIME_SECONDS: FC_TIME_DUR(1, 0)
+    case FC_TIME_MILLIS: FC_TIME_DUR(0, 1000000)
+    case FC_TIME_INSTANT: {
+      /* Mirrors time_instant at its registered arity of one, where the
+         optional nanos argument defaults to zero and normalization is
+         the identity, so no overflow guard is needed. */
+      TValue *arg = s2v(ra + 1);
+      Table *mt;
+      Udata *u;
+      l_instant *ins;
+      if (!ttisinteger(arg))
+        return 0;
+      mt = fc_gettimemt(L, fc_str_time_instant);
+      if (mt == NULL)
+        return 0;
+      u = luaS_newudata(L, sizeof(l_instant), 0);
+      setuvalue(L, s2v(ra), u); /* root the result immediately */
+      ins = (l_instant *)getudatamem(u);
+      ins->sec = ivalue(arg);
+      ins->nsec = 0;
+      ins->mono = 0;
+      u->metatable = mt;
+      luaC_objbarrier(L, u, mt);
+      luaC_checkfinalizer(L, obj2gco(u), mt);
+      fc_checkGC(L);
+      break;
+    }
     default: return 0;
   }
   return 1;
@@ -1295,7 +1422,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
 ** names into its own string table (luaF_initfastcalls below).
 */
 static const char *const fc_module_names[FC_NMODULES + 1] = {
-    NULL, "math", "string", "table", "vector", "utf8"};
+    NULL, "math", "string", "table", "vector", "utf8", "time"};
 
 #define FC_MOD_BASE 0
 #define FC_MOD_MATH 1
@@ -1303,7 +1430,22 @@ static const char *const fc_module_names[FC_NMODULES + 1] = {
 #define FC_MOD_TABLE 3
 #define FC_MOD_VECTOR 4
 #define FC_MOD_UTF8 5
+#define FC_MOD_TIME 6
 
+/*
+** 1.7.0 fastcall assessment for the module additions of that release.
+** The six scalar time constructors are intrinsified below. The other
+** candidates were declined. time.now and time.monotonic are dominated
+** by the clock syscall. time.tzdata_version is cold. time.duration and
+** time.zoned take a table argument whose field reads are metamethod
+** visible. time.parse, time.zone, time.offset, and time.localzone are
+** cold constructors. Query execution runs Lua predicates.
+** debug.queryplan is a cold diagnostic. io.sqlite is bound by input
+** and output and by pledge checks. Methods and metamethods are
+** structurally ineligible because the emitter only recognizes module
+** function call shapes. Every intrinsic case that allocates must end
+** with fc_checkGC.
+*/
 LUAI_DDEF const FCDef luaF_fc_defs[FC_COUNT] = {
     [FC_TYPE] = {"type", FC_MOD_BASE, 1},
     [FC_RAWLEN] = {"rawlen", FC_MOD_BASE, 1},
@@ -1362,6 +1504,12 @@ LUAI_DDEF const FCDef luaF_fc_defs[FC_COUNT] = {
     [FC_UTF8_CODEPOINT] = {"codepoint", FC_MOD_UTF8, 1},
     [FC_UTF8_CHAR] = {"char", FC_MOD_UTF8, 1},
     [FC_UTF8_OFFSET] = {"offset", FC_MOD_UTF8, 2, 1},
+    [FC_TIME_DAYS] = {"days", FC_MOD_TIME, 1},
+    [FC_TIME_HOURS] = {"hours", FC_MOD_TIME, 1},
+    [FC_TIME_MINUTES] = {"minutes", FC_MOD_TIME, 1},
+    [FC_TIME_SECONDS] = {"seconds", FC_MOD_TIME, 1},
+    [FC_TIME_MILLIS] = {"millis", FC_MOD_TIME, 1},
+    [FC_TIME_INSTANT] = {"instant", FC_MOD_TIME, 1},
 };
 
 /* Original C functions, set once at library open (see lfastcall.h). */
@@ -1383,6 +1531,8 @@ void luaF_initfastcalls(lua_State *L) {
   fc_str_true = fc_newfix(L, "true");
   fc_str_false = fc_newfix(L, "false");
   fc_str___metatable = fc_newfix(L, "__metatable");
+  fc_str_time_duration = fc_newfix(L, LUS_DURATION_MT);
+  fc_str_time_instant = fc_newfix(L, LUS_INSTANT_MT);
   /* Pre-intern type name strings for FC_TYPE */
   for (i = 0; i < LUA_TOTALTYPES; i++) {
     if (luaT_typenames_[i] != NULL)

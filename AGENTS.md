@@ -74,6 +74,15 @@ New libraries: `ljsonlib.c`, `lfslib.c`, `lnetlib.c`, `lworkerlib.c`, `lvectorli
 
 When adding GC-managed types or constants, always initialize new array slots to nil (see `addk` in `lcode.c` for the pattern). The GC's `markvalue` macro will dereference garbage type tags if `BIT_ISCOLLECTABLE` happens to be set.
 
+### Stdlib Fastcall Parity
+
+The VM intrinsifies common stdlib calls as `OP_FASTCALL` (`lfastcall.c`, `lfastcall.h`), so a fastcalled builtin has two implementations: the intrinsic case in `luaV_dofastcall` and the registered C function. Which one runs depends on the call shape (single-result sites take the fast path, multret sites such as the last argument of a call or a `return` take the C path), so any divergence surfaces as position-dependent behavior. A whole class of 1.7.0 bugs came from the two paths disagreeing. Treat parity as a hard requirement whenever you touch the stdlib:
+
+1. **Adding a stdlib function**: assess it for fastcall eligibility (hot, fixed arity, and implementable on the fast path without allocation, metamethods, or Lua calls). If eligible, add the intrinsic in the same change: an `FC_*` id, an `FCDef` entry with correct `nargs`, registration via `luaF_registerfastcall`, and the `multret` flag when the builtin can return other than exactly one value at the registered arity (otherwise return-position calls truncate it). If not eligible, state why in the PR or commit message.
+2. **Changing either side of an existing fastcall** (the `luaV_dofastcall` case or the C function in the library file): re-verify behavioral parity on every axis that has produced real bugs: numeric-string coercion, NaN and signed-zero handling, integer versus float subtype of results, position clamping and out-of-range behavior, metatable and metamethod interaction, error messages and error object types, and result counts including zero results.
+3. **Fall back instead of approximating.** For any input outside the intrinsic's exact competence, `return 0` from `luaV_dofastcall` so the plain call runs. The C function is the single source of truth for coercions, metamethods, and error reporting. The fast path may only ever duplicate its behavior bit for bit or decline.
+4. **Prove parity with tests.** Extend `lus-tests/h1/fastcall-parity.lus` for every new or changed fastcall. It drives an `OP_FASTCALL` call site and an aliased `OP_CALL` site over the same adversarial corpus and asserts identical results, subtypes, and error reasons, using `framework.get_fastcalls` to prove the fast form really compiled to `OP_FASTCALL`. For manual differential checks, run the same script with and without `--no-fastcall`. Casual `print(f(...))` repros hide divergences because the multret argument position never emits `OP_FASTCALL`.
+
 ### Test Harnesses
 
 - **H1**: Pure Lus tests using `lus-tests/framework.lus`. Each file is a self-contained test suite.
@@ -81,11 +90,11 @@ When adding GC-managed types or constants, always initialize new array slots to 
 - **H3**: System integration: `runner_local.lus` (containerized) and `runner_direct.lus` (CI-only).
 - **H4**: Benchmarks with pass/fail thresholds. `BUILD_TYPE` env controls strictness.
 
-Tests run from the repo root as working directory. The test binary path is the meson-built executable; runners use `arg[-1]` to find it.
+Tests run from the repo root as working directory. The test binary path is the meson-built executable, and runners use `arg[-1]` to find it.
 
 ### CI Workflow
 
-Platform-specific build directories (`build-<platform>`) prevent race conditions when `act` runs matrix jobs in parallel on a shared filesystem. The sanitizer job uses ASAN+UBSAN. Windows and macOS matrix entries will fail under `act` (Docker limitation); only linux-glibc and linux-musl run locally.
+Platform-specific build directories (`build-<platform>`) prevent race conditions when `act` runs matrix jobs in parallel on a shared filesystem. The sanitizer job uses ASAN+UBSAN. Windows and macOS matrix entries will fail under `act` (Docker limitation). Only linux-glibc and linux-musl run locally.
 
 ### Website Content
 

@@ -37,7 +37,9 @@
 #endif
 
 #include "lauxlib.h"
+#include "lfastcall.h" /* FC_TIME_* registration of the scalar constructors */
 #include "lobject.h" /* Enum struct, for reading an enum argument's index */
+#include "ltimecore.h" /* value layout shared with the fastcall intrinsics */
 #ifndef LUS_NO_ARCHIVE
 #include "ltzdata.h"
 #endif
@@ -57,12 +59,12 @@
 ** =======================================================
 */
 
-#define INSTANT_METATABLE "time.instant"
-#define DURATION_METATABLE "time.duration"
+#define INSTANT_METATABLE LUS_INSTANT_MT
+#define DURATION_METATABLE LUS_DURATION_MT
 #define ZONED_METATABLE "time.zoned"
 #define ZONE_METATABLE "time.zone"
 
-#define NANOS_PER_SEC 1000000000
+#define NANOS_PER_SEC LUS_NANOS_PER_SEC
 
 /* Registry keys for the lazily-decompressed tzdata (one copy per lua_State,
 ** so worker threads never share it and no locking is needed). */
@@ -70,21 +72,8 @@
 #define TZINDEX_KEY "lus.time.tzindex" /* Lua table: zone name -> byte offset */
 #define WEEKDAY_KEY "lus.time.weekday" /* Enum value: monday..sunday */
 
-/* Absolute point on the timeline. When `mono` is set the value comes from a
-** monotonic clock and is only meaningful when subtracted from another reading
-** of the same clock; formatting or epoch extraction is rejected. */
-typedef struct {
-  lua_Integer sec; /* seconds since the Unix epoch (or since an arbitrary
-                      monotonic origin when mono != 0) */
-  int nsec;        /* normalized: 0 <= nsec < NANOS_PER_SEC */
-  int mono;        /* 1 if read from a monotonic clock */
-} l_instant;
-
-/* A signed span. Sign lives in `sec`; `nsec` is always in [0, NANOS_PER_SEC). */
-typedef struct {
-  lua_Integer sec;
-  int nsec;
-} l_duration;
+/* The l_instant and l_duration layouts live in ltimecore.h so the fastcall
+** intrinsics construct bit-identical values. */
 
 /* A civil datetime. `sec`/`nsec` hold the underlying UTC instant; `offset` is
 ** the zone's offset east of UTC in seconds, so wall-clock = sec + offset. */
@@ -182,20 +171,10 @@ static int weekday_from_days(lua_Integer z) {
 ** =======================================================
 */
 
-static void norm(lua_Integer *sec, int *nsec) {
-  /* Fold overflow/underflow so 0 <= nsec < NANOS_PER_SEC. */
-  *sec += *nsec / NANOS_PER_SEC;
-  *nsec %= NANOS_PER_SEC;
-  if (*nsec < 0) {
-    *nsec += NANOS_PER_SEC;
-    *sec -= 1;
-  }
-}
-
 static l_instant *push_instant(lua_State *L, lua_Integer sec, int nsec,
                                int mono) {
   l_instant *i = (l_instant *)lua_newuserdatauv(L, sizeof(l_instant), 0);
-  norm(&sec, &nsec);
+  lus_time_norm(&sec, &nsec);
   i->sec = sec;
   i->nsec = nsec;
   i->mono = mono;
@@ -205,7 +184,7 @@ static l_instant *push_instant(lua_State *L, lua_Integer sec, int nsec,
 
 static l_duration *push_duration(lua_State *L, lua_Integer sec, int nsec) {
   l_duration *d = (l_duration *)lua_newuserdatauv(L, sizeof(l_duration), 0);
-  norm(&sec, &nsec);
+  lus_time_norm(&sec, &nsec);
   d->sec = sec;
   d->nsec = nsec;
   luaL_setmetatable(L, DURATION_METATABLE);
@@ -216,7 +195,7 @@ static l_duration *push_duration(lua_State *L, lua_Integer sec, int nsec) {
 ** value 1, so calendar operations can re-resolve the offset across DST. */
 static l_zoned *push_zoned(lua_State *L, lua_Integer sec, int nsec, int offset) {
   l_zoned *z = (l_zoned *)lua_newuserdatauv(L, sizeof(l_zoned), 1);
-  norm(&sec, &nsec);
+  lus_time_norm(&sec, &nsec);
   z->sec = sec;
   z->nsec = nsec;
   z->offset = offset;
@@ -871,9 +850,10 @@ static int time_duration(lua_State *L) {
 /* Scalar duration helpers: time.seconds(n), time.minutes(n), ... */
 static int dur_helper(lua_State *L, lua_Integer unit_sec, lua_Integer unit_ns) {
   lua_Integer n = luaL_checkinteger(L, 1);
-  lua_Integer total_ns = n * unit_ns;
-  push_duration(L, n * unit_sec + total_ns / NANOS_PER_SEC,
-                (int)(total_ns % NANOS_PER_SEC));
+  lua_Integer sec;
+  int nsec;
+  lus_dur_compute(n, unit_sec, unit_ns, &sec, &nsec);
+  push_duration(L, sec, nsec);
   return 1;
 }
 static int time_days(lua_State *L) { return dur_helper(L, 86400, 0); }
@@ -1228,10 +1208,13 @@ static int format_wall(lua_State *L, lua_Integer wall_sec, int nsec,
   tm.tm_sec = (int)(rem % 60);
   tm.tm_wday = weekday_from_days(days) % 7; /* strftime wants 0 = Sunday */
   tm.tm_yday = (int)(days - days_from_civil(y, 1, 1));
-  /* Rewrite the format, replacing every %z with the offset as signed HHMM. A
-  ** %% pair is copied as a unit so an escaped %%z stays a literal "%z" and is
-  ** never mistaken for the offset directive. Every other specifier is left for
-  ** strftime, so %Y, %m, %d, %H, %M, %S and the rest are unchanged. */
+  /* Rewrite the format, replacing every %z with the offset as signed HHMM
+  ** and every %Y with the year zero padded to four digits, because C
+  ** libraries disagree on %Y padding for years below 1000 and ISO 8601
+  ** output must be identical on every platform. A %% pair is copied as a
+  ** unit so an escaped %%z stays a literal "%z" and is never mistaken for
+  ** a rewritten directive. Every other specifier is left for strftime, so
+  ** %m, %d, %H, %M, %S and the rest are unchanged. */
   luaL_Buffer b;
   luaL_buffinit(L, &b);
   for (const char *s = fmt; *s != '\0';) {
@@ -1241,6 +1224,16 @@ static int format_wall(lua_State *L, lua_Integer wall_sec, int nsec,
       int m = snprintf(off, sizeof(off), "%c%02d%02d", offset < 0 ? '-' : '+',
                        a / 3600, (a % 3600) / 60);
       luaL_addlstring(&b, off, (size_t)m);
+      s += 2;
+    }
+    else if (s[0] == '%' && s[1] == 'Y') {
+      char yb[24];
+      int m;
+      if (y < 0)
+        m = snprintf(yb, sizeof(yb), "-%04lld", -(long long)y);
+      else
+        m = snprintf(yb, sizeof(yb), "%04lld", (long long)y);
+      luaL_addlstring(&b, yb, (size_t)m);
       s += 2;
     }
     else if (s[0] == '%' && s[1] != '\0') {
@@ -1796,5 +1789,12 @@ LUAMOD_API int luaopen_time(lua_State *L) {
   lua_setfield(L, -2, "weekday");
   build_enum(L, mo, 12);
   lua_setfield(L, -2, "month");
+
+  luaF_registerfastcall(L, FC_TIME_DAYS, time_days, 1);
+  luaF_registerfastcall(L, FC_TIME_HOURS, time_hours, 1);
+  luaF_registerfastcall(L, FC_TIME_MINUTES, time_minutes, 1);
+  luaF_registerfastcall(L, FC_TIME_SECONDS, time_seconds, 1);
+  luaF_registerfastcall(L, FC_TIME_MILLIS, time_millis, 1);
+  luaF_registerfastcall(L, FC_TIME_INSTANT, time_instant, 1);
   return 1;
 }
