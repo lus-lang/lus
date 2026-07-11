@@ -279,11 +279,20 @@ tests:it("slice with negative indices returns empty", function()
 end)
 
 tests:it("resize larger preserves data", function()
-  local v = vector.create(4)
-  vector.pack(v, 0, "I4", 0x12345678)
-  vector.resize(v, 16)
-  assert(#v == 16, "size should be 16")
-  assert(vector.unpack(v, 0, "I4") == 0x12345678, "original data preserved")
+  -- fill every byte with a distinct value, then grow far past the old
+  -- size so the copy path runs, and verify the whole payload byte by
+  -- byte (a partial copy would keep the first word intact but not these)
+  local v = vector.create(64)
+  for i = 0, 63 do
+    vector.pack(v, i, "B", (i * 7 + 3) % 256)
+  end
+  vector.resize(v, 1024)
+  assert(#v == 1024, "size should be 1024")
+  for i = 0, 63 do
+    assert(vector.unpack(v, i, "B") == (i * 7 + 3) % 256,
+      "byte " .. i .. " should survive the grow")
+  end
+  assert(vector.unpack(v, 64, "B") == 0, "first grown byte should be zero")
 end)
 
 tests:it("resize smaller truncates", function()

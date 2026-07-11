@@ -28,10 +28,19 @@ tests:it("catch statement works with function calls", function()
 end)
 
 tests:it("catch statement ignores return values", function()
-    local function f() return 1, 2, 3, 4, 5 end
+    local calls = 0
+    local function f()
+        calls = calls + 1
+        return 1, 2, 3, 4, 5
+    end
+    local a, b = 10, 20
     catch f()
-    -- No way to access return values - that's the point
-    assert(true)
+    local c = 30
+    -- the call must still happen, and the discarded multret values must
+    -- not disturb locals living below or allocated after the statement
+    assert(calls == 1, "the call must still run")
+    assert(a == 10 and b == 20 and c == 30,
+        "discarded return values must not corrupt surrounding locals")
 end)
 
 -- ============================================================================
@@ -128,8 +137,15 @@ tests:it("catch suppresses nil call", function()
 end)
 
 tests:it("catch suppresses explicit error()", function()
-    catch error("this should be suppressed")
-    assert(true)
+    local reached_error = false
+    local after_error = false
+    catch (function()
+        reached_error = true
+        error("this should be suppressed")
+        after_error = true
+    end)()
+    assert(reached_error, "the body must run up to the error() call")
+    assert(not after_error, "error() must abort the body immediately")
 end)
 
 tests:it("catch suppresses assert failure", function()
@@ -411,9 +427,11 @@ tests:it("catch expression returns ok and value", function()
 end)
 
 tests:it("catch expression returns false and error on failure", function()
-    local ok, val = catch error("msg")
-    assert(ok == false)
-    assert(type(val) == "string")
+    -- a failing catch must yield exactly two values: false plus the error
+    local results = { catch error("msg") }
+    assert(#results == 2, "a failing catch must yield exactly two values")
+    assert(results[1] == false, "the first value must be exactly false")
+    assert(type(results[2]) == "string")
 end)
 
 tests:it("catch expression with successful function call", function()
@@ -448,8 +466,10 @@ end)
 tests:it("catch expression with table error", function()
     local ok, err = catch error({code = 404, msg = "not found"})
     assert(ok == false)
-    -- Error object may be the table or a string representation
-    assert(err ~= nil)
+    -- catch delivers the error object exactly as raised
+    assert(type(err) == "table", "table error value must pass through raw")
+    assert(err.code == 404 and err.msg == "not found",
+        "expected the original table payload")
 end)
 
 tests:it("nested catch expressions", function()

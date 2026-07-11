@@ -71,9 +71,22 @@ end)
 
 tests:it(":memory: opens under a sealed pledge with no fs grants for it",
     function()
-    -- the suite pledge grants fs:read only under ./lus-tests
+    -- The suite pledge grants fs:read only under ./lus-tests. The same
+    -- sealed pledge that denies file-backed databases must leave
+    -- :memory: fully usable, proving the exemption is real rather than
+    -- the pledge being inert.
+    tests:assert_throws(function()
+        return io.sqlite("./sqlite-pledge-probe.db")
+    end, 'permission "fs:read" denied')
+    tests:assert_throws(function()
+        return io.sqlite("lus-tests/h1/sqlite-pledge-probe.db")
+    end, 'permission "fs:write" denied')
     local db <close> = io.sqlite(":memory:")
-    tests:assert_contains(tostring(db), "database")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", 5)
+    for row in db:query("SELECT n FROM t") do
+        tests:assert_equal(row.n, 5)
+    end
 end)
 
 tests:describe("db:exec")
@@ -641,13 +654,17 @@ tests:it("stmt:run after an abandoned iteration self-heals", function()
     local stmt = db:prepare("SELECT * FROM users")
     local iter = stmt:query()
     assert(iter() ~= nil, "half-consumed")
-    local changes = db:run("DELETE FROM users WHERE name = 'Bob'")
-    tests:assert_equal(changes, 1)
+    -- run on the same statement must reset it and execute cleanly
+    stmt:run()
+    -- the abandoned iterator is now stale
+    tests:assert_throws(function() return iter() end,
+        "statement was reset during iteration")
+    -- and the statement remains fully usable afterwards
     local count = 0
     for _ in stmt:query() do
         count = count + 1
     end
-    tests:assert_equal(count, 2)
+    tests:assert_equal(count, 3)
 end)
 
 tests:it("stmt:close semantics", function()
@@ -706,15 +723,16 @@ tests:it("an error rolls back and rethrows", function()
     end
 end)
 
-tests:it("a table error value follows catch's conversion rules", function()
-    -- catch converts non-string error values to strings by design, and
-    -- the transaction rethrows the original value into that machinery
+tests:it("a table error value survives the transaction rethrow raw", function()
+    -- catch delivers error objects exactly as raised, and the transaction
+    -- rethrows the original value into that machinery
     local db <close> = fresh()
     local ok, err = catch db:transaction(function()
         error({ reason = "custom" })
     end)
     assert(not ok)
-    tests:assert_equal(type(err), "string")
+    tests:assert_equal(type(err), "table")
+    tests:assert_equal(err.reason, "custom")
 end)
 
 tests:it("the transaction returns everything fn returns", function()

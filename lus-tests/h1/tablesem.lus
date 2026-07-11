@@ -1,0 +1,645 @@
+-- Table semantic invariants: border definitions with holes, float key
+-- normalization, NaN and nil key validation, integer-limit keys, next
+-- traversal rules, table.create, rehash shrink and regrow cycles, and the
+-- __len metamethod boundary. The baseline contract is Lua 5.5 semantics as
+-- adjusted by the Lus spec in lus-spec/stdlib.
+global print, require, assert, type, pairs, ipairs, next, table, math, string, error, tostring, tonumber, setmetatable, rawget, rawset, rawequal, rawlen, select, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("tablesem")
+
+-- A border of table t is a non-negative integer n such that t[n + 1] is nil
+-- and either n is zero or t[n] is not nil. The length operator may return
+-- any border, so tests on tables with holes assert border membership rather
+-- than one particular value.
+local function is_border(t, n)
+    if type(n) ~= "number" or math.type(n) ~= "integer" or n < 0 then
+        return false
+    end
+    if t[n + 1] ~= nil then
+        return false
+    end
+    return n == 0 or t[n] ~= nil
+end
+
+-- ============================================================
+-- Length operator and borders
+-- ============================================================
+
+tests:it("length of an empty table is zero", function()
+    tests:assert_equal(#{}, 0)
+end)
+
+tests:it("length of {1, nil, 3} is one of its valid borders", function()
+    local t = {1, nil, 3}
+    tests:assert_true(is_border(t, #t), "#t = " .. tostring(#t) .. " is not a border")
+    tests:assert_true(#t == 1 or #t == 3, "#t must be 1 or 3, got " .. tostring(#t))
+end)
+
+tests:it("length of a constructor with a trailing nil is the unique border", function()
+    -- The only border of {1, 2, nil} is 2, because a border position other
+    -- than zero must itself hold a non-nil value.
+    local t = {1, 2, nil}
+    tests:assert_equal(#t, 2)
+    tests:assert_true(is_border(t, #t))
+end)
+
+tests:it("clearing the last element moves the border down", function()
+    local t = {1, 2, 3}
+    t[3] = nil
+    tests:assert_equal(#t, 2)
+    tests:assert_true(is_border(t, #t))
+end)
+
+tests:it("length of a sparse table is a valid border", function()
+    local t = {}
+    t[1] = "low"
+    t[1 << 30] = "high"
+    local n = #t
+    tests:assert_true(is_border(t, n), "#t = " .. tostring(n) .. " is not a border")
+    tests:assert_true(n == 1 or n == (1 << 30), "#t must be 1 or 2^30, got " .. tostring(n))
+end)
+
+tests:it("appending at the length grows it by exactly one each time", function()
+    local t = {}
+    for i = 1, 50 do
+        t[#t + 1] = i * 3
+        tests:assert_equal(#t, i)
+    end
+    tests:assert_equal(t[50], 150)
+end)
+
+tests:it("a hash-only table has length zero", function()
+    local t = {alpha = 1, beta = 2, gamma = 3}
+    tests:assert_equal(#t, 0)
+    tests:assert_true(is_border(t, 0))
+end)
+
+-- ============================================================
+-- Float keys normalize to integer keys
+-- ============================================================
+
+tests:each("a float key with an integral value aliases the integer key", {
+    {2.0, 2},
+    {0.0, 0},
+    {-0.0, 0},
+    {7.0, 7},
+    {-3.0, -3},
+    {2.0 ^ 53, 9007199254740992},
+}, function(fkey, ikey)
+    local t = {}
+    t[fkey] = "stored"
+    tests:assert_equal(t[ikey], "stored")
+    tests:assert_equal(rawget(t, ikey), "stored")
+end)
+
+tests:it("writing an integer key and reading its float form aliases", function()
+    local t = {}
+    t[3] = "x"
+    tests:assert_equal(t[3.0], "x")
+end)
+
+tests:it("traversal reports the normalized integer key after a float write", function()
+    local t = {}
+    t[7.0] = true
+    local k = next(t)
+    tests:assert_equal(k, 7)
+    tests:assert_equal(math.type(k), "integer")
+end)
+
+tests:it("a minus zero write produces the integer key zero", function()
+    local t = {}
+    t[-0.0] = "mz"
+    local k = next(t)
+    tests:assert_equal(k, 0)
+    tests:assert_equal(math.type(k), "integer")
+    tests:assert_equal(t[0], "mz")
+end)
+
+tests:it("a non-integral float key stays a float key", function()
+    local t = {}
+    t[2.5] = "half"
+    tests:assert_nil(t[2])
+    tests:assert_nil(t[3])
+    tests:assert_equal(t[2.5], "half")
+    tests:assert_equal(math.type((next(t))), "float")
+end)
+
+tests:it("the string key '2' is distinct from the number key 2", function()
+    local t = {}
+    t["2"] = "str"
+    t[2] = "num"
+    tests:assert_equal(t["2"], "str")
+    tests:assert_equal(t[2], "num")
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    tests:assert_equal(count, 2)
+end)
+
+tests:it("the float form of mininteger aliases the mininteger key", function()
+    -- mininteger is exactly representable as a float, so the float form
+    -- converts back and lands on the same key.
+    local t = {}
+    t[math.mininteger] = "min"
+    tests:assert_equal(t[math.mininteger + 0.0], "min")
+end)
+
+tests:it("the float form of maxinteger is a distinct key", function()
+    -- maxinteger + 0.0 rounds up to 2^63, which has no integer
+    -- representation, so it remains a separate float key.
+    local t = {}
+    t[math.maxinteger] = "imax"
+    tests:assert_nil(t[math.maxinteger + 0.0])
+    t[math.maxinteger + 0.0] = "fmax"
+    tests:assert_equal(t[math.maxinteger], "imax")
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    tests:assert_equal(count, 2)
+end)
+
+-- ============================================================
+-- NaN and nil keys
+-- ============================================================
+
+tests:it("assigning through a NaN key raises with position info", function()
+    local ok, err = catch (function()
+        local t = {}
+        t[0 / 0] = 1
+    end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), ":%d+: table index is NaN")
+end)
+
+tests:it("assigning through a nil key raises with position info", function()
+    local ok, err = catch (function()
+        local t = {}
+        t[nil] = 1
+    end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), ":%d+: table index is nil")
+end)
+
+tests:it("a computed NaN key raises the same error", function()
+    tests:assert_throws(function()
+        local t = {}
+        t[math.huge - math.huge] = 1
+    end, "table index is NaN")
+end)
+
+tests:it("rawset with a NaN key raises without position info", function()
+    local ok, err = catch rawset({}, 0 / 0, 1)
+    tests:assert_false(ok)
+    local msg = tostring(err)
+    tests:assert_contains(msg, "table index is NaN")
+    tests:assert_false(string.find(msg, ":%d+: table index is NaN"),
+        "rawset error should come from C without a chunk position")
+end)
+
+tests:it("rawset with a nil key raises without position info", function()
+    local ok, err = catch rawset({}, nil, 1)
+    tests:assert_false(ok)
+    local msg = tostring(err)
+    tests:assert_contains(msg, "table index is nil")
+    tests:assert_false(string.find(msg, ":%d+: table index is nil"),
+        "rawset error should come from C without a chunk position")
+end)
+
+tests:it("rawset validates keys even when a __newindex metamethod exists", function()
+    local t = setmetatable({}, {__newindex = function() end})
+    tests:assert_throws(function() rawset(t, nil, 1) end, "table index is nil")
+    tests:assert_throws(function() rawset(t, 0 / 0, 1) end, "table index is NaN")
+end)
+
+tests:it("reading through a NaN key returns nil", function()
+    local t = {1, 2}
+    tests:assert_nil(t[0 / 0])
+end)
+
+tests:it("rawget with a NaN key returns nil", function()
+    tests:assert_nil(rawget({1, 2}, 0 / 0))
+end)
+
+tests:it("reading through a nil key returns nil", function()
+    local t = {a = 1}
+    local k = nil
+    tests:assert_nil(t[k])
+end)
+
+tests:it("assigning nil to an absent key is a legal no-op", function()
+    local t = {}
+    t.absent = nil
+    tests:assert_nil(next(t))
+end)
+
+tests:it("a __newindex function receives nil keys instead of erroring", function()
+    -- Key validation applies to the raw store only. When a metamethod
+    -- handles the assignment, the invalid key reaches it untouched.
+    local got = "unset"
+    local t = setmetatable({}, {__newindex = function(_, k, v)
+        got = tostring(k) .. "=" .. tostring(v)
+    end})
+    t[nil] = 5
+    tests:assert_equal(got, "nil=5")
+end)
+
+tests:it("a __newindex function receives NaN keys instead of erroring", function()
+    local got_key = nil
+    local t = setmetatable({}, {__newindex = function(_, k, _)
+        got_key = k
+    end})
+    t[0 / 0] = 1
+    tests:assert_type(got_key, "number")
+    tests:assert_true(got_key ~= got_key, "the key should still be NaN")
+end)
+
+tests:it("an __index function receives nil keys on reads", function()
+    local t = setmetatable({}, {__index = function(_, k)
+        return "via:" .. tostring(k)
+    end})
+    local k = nil
+    tests:assert_equal(t[k], "via:nil")
+end)
+
+-- ============================================================
+-- Integer-limit keys
+-- ============================================================
+
+tests:it("maxinteger and mininteger keys store and retrieve", function()
+    local t = {}
+    t[math.maxinteger] = "max"
+    t[math.mininteger] = "min"
+    tests:assert_equal(t[math.maxinteger], "max")
+    tests:assert_equal(t[math.mininteger], "min")
+end)
+
+tests:it("limit keys traverse exactly once alongside the array part", function()
+    local t = {10, 20, 30}
+    t[math.maxinteger] = "max"
+    t[math.mininteger] = "min"
+    local seen = {}
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        tests:assert_nil(seen[k], "key visited twice: " .. tostring(k))
+        seen[k] = v
+    end
+    tests:assert_equal(count, 5)
+    tests:assert_equal(seen[math.maxinteger], "max")
+    tests:assert_equal(seen[math.mininteger], "min")
+    tests:assert_equal(seen[2], 20)
+end)
+
+tests:it("deleting limit keys removes them completely", function()
+    local t = {}
+    t[math.maxinteger] = 1
+    t[math.mininteger] = 2
+    t[math.maxinteger] = nil
+    t[math.mininteger] = nil
+    tests:assert_nil(t[math.maxinteger])
+    tests:assert_nil(t[math.mininteger])
+    tests:assert_nil(next(t))
+end)
+
+-- ============================================================
+-- next semantics
+-- ============================================================
+
+tests:it("next on an empty table returns nil", function()
+    tests:assert_nil(next({}))
+end)
+
+tests:it("next with a nil key returns the first pair", function()
+    local t = {only = 42}
+    local k, v = next(t, nil)
+    tests:assert_equal(k, "only")
+    tests:assert_equal(v, 42)
+end)
+
+tests:it("next with an absent string key raises invalid key", function()
+    tests:assert_throws(function()
+        next({a = 1, b = 2}, "zz")
+    end, "invalid key to 'next'")
+end)
+
+tests:it("next with an absent float key raises invalid key", function()
+    tests:assert_throws(function()
+        next({a = 1}, 2.5)
+    end, "invalid key to 'next'")
+end)
+
+tests:it("next on a non-table raises a type error naming next", function()
+    tests:assert_throws(function()
+        next(nil)
+    end, "bad argument #1 to 'next'")
+end)
+
+tests:it("manual traversal may delete the current key and continue", function()
+    -- Clearing the field the cursor sits on is explicitly legal, and every
+    -- other key must still be visited exactly once.
+    local t = {}
+    for i = 1, 30 do t["k" .. i] = i end
+    local count = 0
+    local k = next(t)
+    while k ~= nil do
+        local dead = k
+        t[dead] = nil
+        count = count + 1
+        k = next(t, dead)
+    end
+    tests:assert_equal(count, 30)
+    tests:assert_nil(next(t))
+end)
+
+tests:it("a pairs loop may delete the current key", function()
+    local t = {}
+    for i = 1, 25 do t["field" .. i] = i end
+    local visited = 0
+    for k in pairs(t) do
+        visited = visited + 1
+        t[k] = nil
+    end
+    tests:assert_equal(visited, 25)
+    tests:assert_nil(next(t))
+end)
+
+tests:it("delete-as-you-go works across array and hash parts", function()
+    local t = {1, 2, 3, 4, 5}
+    for i = 1, 10 do t["h" .. i] = i end
+    local visited = 0
+    for k in pairs(t) do
+        visited = visited + 1
+        t[k] = nil
+    end
+    tests:assert_equal(visited, 15)
+    tests:assert_nil(next(t))
+    tests:assert_equal(#t, 0)
+end)
+
+tests:it("changing values during traversal is fully legal", function()
+    local t = {a = 1, b = 2, c = 3, d = 4}
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        t[k] = v * 10
+    end
+    tests:assert_equal(count, 4)
+    tests:assert_equal(t.a, 10)
+    tests:assert_equal(t.d, 40)
+end)
+
+-- ============================================================
+-- Mixed key type traversal completeness
+-- ============================================================
+
+tests:it("pairs visits every key type exactly once", function()
+    local tab_key = {}
+    local fn_key = function() end
+    local t = {
+        [true] = "T",
+        [false] = "F",
+        [tab_key] = "tab",
+        [fn_key] = "fn",
+        [42] = "int",
+        [2.5] = "float",
+        s = "str",
+    }
+    local counts = {}
+    local total = 0
+    for k in pairs(t) do
+        total = total + 1
+        counts[k] = (counts[k] or 0) + 1
+    end
+    tests:assert_equal(total, 7)
+    for _, k in ipairs({true, false, tab_key, fn_key, 42, 2.5, "s"}) do
+        tests:assert_equal(counts[k], 1, "key not visited exactly once: " .. tostring(k))
+    end
+end)
+
+tests:it("mixed array and hash traversal collects the complete pair set", function()
+    local t = {}
+    local expected = {}
+    for i = 1, 8 do
+        t[i] = i * 100
+        expected[i] = i * 100
+    end
+    for _, name in ipairs({"a", "b", "c", "d", "e"}) do
+        t[name] = name .. "!"
+        expected[name] = name .. "!"
+    end
+    local collected = {}
+    for k, v in pairs(t) do
+        tests:assert_nil(collected[k], "key visited twice: " .. tostring(k))
+        collected[k] = v
+    end
+    tests:assert_deep_equal(collected, expected)
+end)
+
+-- ============================================================
+-- table.create
+-- ============================================================
+
+tests:it("table.create returns an empty usable table", function()
+    local t = table.create(10, 5)
+    tests:assert_type(t, "table")
+    tests:assert_equal(#t, 0)
+    tests:assert_nil(next(t))
+    t[1] = "works"
+    tests:assert_equal(t[1], "works")
+end)
+
+tests:it("a preallocated array accepts full population", function()
+    local t = table.create(1000)
+    for i = 1, 1000 do t[i] = i * 2 end
+    tests:assert_equal(#t, 1000)
+    tests:assert_equal(t[1], 2)
+    tests:assert_equal(t[500], 1000)
+    tests:assert_equal(t[1000], 2000)
+end)
+
+tests:it("table.create accepts the single-argument form", function()
+    local t = table.create(8)
+    tests:assert_nil(next(t))
+    for i = 1, 8 do t[i] = i end
+    tests:assert_equal(#t, 8)
+end)
+
+tests:it("table.create accepts zero sizes", function()
+    local t = table.create(0, 0)
+    tests:assert_nil(next(t))
+    t.k = 1
+    t[1] = 2
+    tests:assert_equal(t.k, 1)
+    tests:assert_equal(t[1], 2)
+end)
+
+tests:it("hash preallocation accepts hash population", function()
+    local t = table.create(0, 32)
+    for i = 1, 32 do t["key" .. i] = i end
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    tests:assert_equal(count, 32)
+    tests:assert_equal(t.key17, 17)
+end)
+
+tests:each("table.create rejects invalid narray values", {
+    {-1, "out of range"},
+    {1.5, "no integer representation"},
+    {"x", "number expected"},
+    {math.maxinteger, "out of range"},
+}, function(narray, pattern)
+    local ok, err = catch table.create(narray)
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "bad argument #1 to 'create'")
+    tests:assert_contains(tostring(err), pattern)
+end)
+
+tests:it("table.create rejects a negative nhash on argument two", function()
+    local ok, err = catch table.create(4, -1)
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "bad argument #2 to 'create'")
+end)
+
+tests:it("table.create with no arguments raises", function()
+    tests:assert_throws(function()
+        table.create()
+    end, "bad argument #1 to 'create'")
+end)
+
+-- ============================================================
+-- Rehash shrink and regrow
+-- ============================================================
+
+tests:it("mass deletion leaves no stale entries behind", function()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    for i = 1, 1000 do t[i] = nil end
+    tests:assert_equal(#t, 0)
+    tests:assert_nil(next(t))
+end)
+
+tests:it("hash keys added after an array clear are counted exactly", function()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    for i = 1, 1000 do t[i] = nil end
+    for i = 1, 5 do t["s" .. i] = i * 10 end
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    tests:assert_equal(count, 5)
+    tests:assert_equal(t.s3, 30)
+end)
+
+tests:it("reinsertion after a clear restores exact contents", function()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    for i = 1, 1000 do t[i] = nil end
+    for i = 1, 5 do t["s" .. i] = i end
+    for i = 1, 100 do t[i] = i * 2 end
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    tests:assert_equal(count, 105)
+    tests:assert_equal(t[50], 100)
+    tests:assert_equal(t[100], 200)
+    tests:assert_equal(t.s5, 5)
+    tests:assert_nil(t[101])
+end)
+
+tests:it("repeated fill and clear cycles stay consistent", function()
+    local t = {}
+    for cycle = 1, 3 do
+        for i = 1, 200 do t[i] = i + cycle end
+        for i = 1, 200 do t[i] = nil end
+        tests:assert_nil(next(t), "cycle " .. cycle .. " left residue")
+    end
+    for i = 1, 200 do t[i] = i end
+    tests:assert_equal(#t, 200)
+    tests:assert_equal(t[123], 123)
+end)
+
+tests:it("hash-part mass insert delete and reinsert is exact", function()
+    local t = {}
+    for i = 1, 500 do t["k" .. i] = i end
+    for i = 1, 500 do t["k" .. i] = nil end
+    tests:assert_nil(next(t))
+    for i = 1, 50 do t["r" .. i] = i end
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        tests:assert_equal(v, tonumber(string.sub(k, 2)))
+    end
+    tests:assert_equal(count, 50)
+end)
+
+-- ============================================================
+-- __len metamethod boundary
+-- ============================================================
+
+tests:it("the length operator returns the __len result unchecked", function()
+    -- The raw operator hands back whatever the metamethod produced. Only
+    -- library functions that need an integer length reject other values.
+    local t = setmetatable({}, {__len = function() return 2.5 end})
+    tests:assert_equal(#t, 2.5)
+end)
+
+tests:it("the length operator passes through non-number __len results", function()
+    local t = setmetatable({}, {__len = function() return "surprise" end})
+    tests:assert_equal(#t, "surprise")
+end)
+
+tests:it("table.insert requires an integer length from __len", function()
+    local t = setmetatable({}, {__len = function() return 2.5 end})
+    tests:assert_throws(function()
+        table.insert(t, "v")
+    end, "object length is not an integer")
+end)
+
+tests:it("table.remove requires an integer length from __len", function()
+    local t = setmetatable({}, {__len = function() return 2.5 end})
+    tests:assert_throws(function()
+        table.remove(t)
+    end, "object length is not an integer")
+end)
+
+tests:it("errors raised inside __len propagate to the caller", function()
+    local t = setmetatable({}, {__len = function() error("boom") end})
+    tests:assert_throws(function()
+        return #t
+    end, "boom")
+end)
+
+-- ============================================================
+-- rawset and rawget extras
+-- ============================================================
+
+tests:it("rawset returns the table it modified", function()
+    local t = {}
+    local r = rawset(t, "k", 1)
+    tests:assert_true(rawequal(r, t))
+    tests:assert_equal(t.k, 1)
+end)
+
+tests:it("rawset normalizes integral float keys", function()
+    local t = {}
+    rawset(t, 2.0, "v")
+    tests:assert_equal(rawget(t, 2), "v")
+    tests:assert_equal(t[2], "v")
+end)
+
+tests:it("rawget on a non-table raises", function()
+    tests:assert_throws(function()
+        rawget(5, 1)
+    end, "table expected")
+end)
+
+tests:it("rawset on a non-table raises", function()
+    tests:assert_throws(function()
+        rawset(5, 1, 1)
+    end, "table expected")
+end)
+
+tests:it("rawequal treats NaN operands as unequal", function()
+    tests:assert_false(rawequal(0 / 0, 0 / 0))
+end)
+
+tests:finish()

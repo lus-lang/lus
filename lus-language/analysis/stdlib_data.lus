@@ -1208,7 +1208,7 @@ Returns the square root of `x`.]],
   ["math.tan"] = [[
 Returns the tangent of angle `x` (in radians).]],
   ["math.tointeger"] = [[
-Converts `x` to an integer if it is a number with an integer value. Returns `nil` if `x` is not an integer or not a number.]],
+Converts `x` to an integer if its value is convertible to one, meaning a number with an integer value or a string naming such a number. Returns `nil` when `x` cannot be converted.]],
   ["math.type"] = [[
 Returns `"integer"` if `x` is an integer, `"float"` if it is a float, or `nil` if `x` is not a number.]],
   ["math.ult"] = [[
@@ -1252,7 +1252,7 @@ The `env` pledge can be scoped to individual variables, e.g. `pledge("env=HOME")
 
 **Requires pledge:** `env`]],
   ["os.platform"] = [[
-Returns a string identifying the current platform (e.g., `"macos"`, `"linux"`, `"windows"`).]],
+Returns a string identifying the current platform (e.g., `"linux"`, `"darwin"`, `"windows"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `"darwin"`.]],
   ["os.setlocale"] = [[
 Sets the program's current locale. The `category` selects which category to set (e.g., `"all"`, `"collate"`, `"ctype"`, `"monetary"`, `"numeric"`, `"time"`). If `locale` is `nil`, returns the current locale for the given category. Returns the locale name, or `nil` on failure.]],
   ["os.time"] = [[
@@ -1411,9 +1411,9 @@ Insert `value` at position `pos` in `list`, shifting up subsequent elements. If 
   ["table.map"] = [[
 Applies `func` to each element of `array`, returning a new table of results. The function receives `(element, index)` as arguments. The original table is not modified.]],
   ["table.mean"] = [[
-Computes the arithmetic mean of numeric values in `array`. Non-numeric values are skipped. Returns NaN if no numeric values exist.]],
+Computes the arithmetic mean of numeric values in `array`. Strings naming a number count as numeric values and are coerced. Other non-numeric values are skipped. Returns NaN if no numeric values exist.]],
   ["table.median"] = [[
-Computes the median of numeric values in `array`. Returns the middle value for odd-length arrays, or the average of the two middle values for even-length arrays. Non-numeric values are skipped. Does not modify the original table. Returns NaN if no numeric values exist.]],
+Computes the median of numeric values in `array`. Returns the middle value for odd-length arrays, or the average of the two middle values for even-length arrays. Strings naming a number count as numeric values and are coerced. Other non-numeric values are skipped. Does not modify the original table. Returns NaN if no numeric values exist.]],
   ["table.move"] = [[
 Copy elements from table `a1` positions `f` through `e` into table `a2` (defaults to `a1`) starting at position `t`. Returns `a2`.]],
   ["table.pack"] = [[
@@ -1429,9 +1429,9 @@ Sort `list` elements in place. If `comp` is given, it must be a function that ta
   ["table.sortby"] = [[
 Sorts `array` in-place by the key returned by `keyfunc(element)`. When `asc` is `false`, sorts in descending order. Default is ascending. Returns nothing.]],
   ["table.stdev"] = [[
-Computes the standard deviation of numeric values in `array`. When `sample` is `true`, divides by n-1 (sample standard deviation); otherwise divides by n (population standard deviation). Non-numeric values are skipped. Returns NaN if no numeric values exist.]],
+Computes the standard deviation of numeric values in `array`. When `sample` is `true`, divides by n-1 (sample standard deviation). Otherwise divides by n (population standard deviation). Strings naming a number count as numeric values and are coerced. Other non-numeric values are skipped. Returns NaN if no numeric values exist.]],
   ["table.sum"] = [[
-Computes the sum of numeric values in `array`. Non-numeric values are skipped. Returns `0` for an empty table.]],
+Computes the sum of numeric values in `array`. Strings naming a number count as numeric values and are coerced. Other non-numeric values are skipped. Returns `0` for an empty table.]],
   ["table.transpose"] = [[
 Transposes a 2D table (matrix) so that `result[i][j] == matrix[j][i]`. All rows must have the same length. Raises an error for non-rectangular matrices.]],
   ["table.unpack"] = [[
@@ -1606,7 +1606,7 @@ Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1)
   ["vector.archive.lz4.decompress"] = [[
 Decompresses LZ4 frame-compressed `data`. Validates the frame header and optional checksum. Returns the same type as the input.]],
   ["vector.archive.lz4.decompress_hc"] = [[
-Decompresses LZ4 HC (legacy high-compression) format `data`. Provided for backward compatibility with older LZ4 HC implementations. Prefer `decompress` for new code. Returns the same type as the input.]],
+Decompresses `data` written in the legacy LZ4 frame format, identified by the magic number `0x184C2102`. Older LZ4 tools produced this format, so `decompress_hc` reads archives written by them. New code should compress with `compress` and decompress with `decompress`, which use the current LZ4 frame format. Returns the same type as the input.]],
   ["vector.archive.zstd.compress"] = [[
 Compresses `data` using Zstandard format (RFC 8878). The optional `level` (-7 to 22, default 3) controls the speed-ratio trade-off. Returns the same type as the input.]],
   ["vector.archive.zstd.decompress"] = [[

@@ -570,19 +570,38 @@ tests:it("many single-char inserts produce valid final state", function()
   local uri = "file:///test/e2e-rapid-1.lus"
   open_doc(uri, "")
 
-  -- Type a valid statement character by character
+  -- Type a valid statement character by character, keeping the
+  -- diagnostics each keystroke produced
   local text = "local abc = 123"
   local col = 0
+  local diags = {}
   for i = 1, #text do
     local ch = string.sub(text, i, i)
-    insert_at(uri, 0, col, ch)
+    diags = insert_at(uri, 0, col, ch)
     col = col + 1
   end
 
-  -- Verify final state by replacing with known-good text
-  local diags = edit_doc(uri, make_range(0, 0, 0, col), text)
+  -- Judge the state the keystrokes actually built: the last insert's
+  -- diagnostics describe the incrementally typed document itself, with
+  -- no repair edit in between
   local errors = get_errors(diags)
-  tests:assert_equal(#errors, 0, "final state after char-by-char should be valid")
+  tests:assert_equal(#errors, 0, "char-by-char built document should be valid")
+
+  -- Cross-check with a reference to the typed local: a garbled document
+  -- surfaces here as a syntax error or an undefined-global warning, and
+  -- a crashed server surfaces as a missing diagnostics notification
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {uri = uri, version = next_version(uri)},
+    contentChanges = {{
+      range = make_range(0, #text, 0, #text),
+      text = "\nlocal use = abc",
+    }},
+  })
+  tests:assert_contains(raw, "publishDiagnostics",
+    "server must publish diagnostics for the verification edit")
+  local vdiags = get_diagnostics(raw)
+  tests:assert_equal(#get_errors(vdiags), 0, "reference to the typed local should be clean")
+  assert_no_var_not_declared(vdiags, "char-by-char verify: ")
   close_doc(uri)
 end)
 
@@ -605,18 +624,32 @@ tests:it("interleaved insert and delete operations", function()
   open_doc(uri, "local x = 1")
 
   -- Replace the value a few times (stay within single-digit to keep ranges simple)
+  local diags = {}
   for i = 2, 5 do
     delete_range(uri, 0, 10, 0, 11)
-    insert_at(uri, 0, 10, tostring(i))
+    diags = insert_at(uri, 0, 10, tostring(i))
   end
 
-  -- The final state should be "local x = 5", check diagnostics
-  -- Use a full document replace to verify
-  local diags = edit_doc(uri,
-    make_range(0, 0, 0, 11),
-    "local x = 5")
+  -- The last insert's diagnostics describe the interleaved-edit state
+  -- itself ("local x = 5"), with no repair edit in between
   local errors = get_errors(diags)
-  tests:assert_equal(#errors, 0, "interleaved edits should produce valid result")
+  tests:assert_equal(#errors, 0, "interleaved edits should leave a valid document")
+
+  -- Cross-check by appending a reference to x at the exact column the
+  -- edits should have produced; a corrupted line surfaces here, and a
+  -- crashed server surfaces as a missing diagnostics notification
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {uri = uri, version = next_version(uri)},
+    contentChanges = {{
+      range = make_range(0, 11, 0, 11),
+      text = "\nlocal use = x",
+    }},
+  })
+  tests:assert_contains(raw, "publishDiagnostics",
+    "server must publish diagnostics for the verification edit")
+  local vdiags = get_diagnostics(raw)
+  tests:assert_equal(#get_errors(vdiags), 0, "reference to x should be clean")
+  assert_no_var_not_declared(vdiags, "interleaved verify: ")
   close_doc(uri)
 end)
 

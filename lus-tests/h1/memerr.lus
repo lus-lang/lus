@@ -122,9 +122,12 @@ tests:it("using coroutines", function()
 end)
 
 tests:it("growing stack", function()
+    -- Deep enough non-tail recursion to force several stack reallocations
     local function foo(n)
         if n == 0 then return 1 else return 1 + foo(n - 1) end
     end
+    assert(foo(15000) == 15001)
+    -- the grown stack must remain fully usable afterwards
     assert(foo(100) == 101)
 end)
 

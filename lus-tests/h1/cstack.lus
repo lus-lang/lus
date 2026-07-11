@@ -36,16 +36,21 @@ tests:it("recursion in pattern matching", function()
 end)
 
 tests:it("stack overflow in gsub", function()
+    -- Unbounded gsub reentrancy: every replacement call enters the C
+    -- function again, so this must exhaust the call budget and raise a
+    -- catchable overflow error instead of crashing the process.
     local count = 0
     local function foo()
         count = count + 1
-        if count < 1000 then
-            string.gsub("a", ".", foo)
-        end
+        string.gsub("a", ".", foo)
     end
-    local ok = catch foo()
-    -- Either it runs to completion (count limit) or stack overflows
-    assert(ok or count > 0)
+    local ok, err = catch foo()
+    assert(not ok, "unbounded gsub reentrancy must fail with an error")
+    assert(string.find(err, "stack overflow"),
+        "the error should mention stack overflow, got: " .. err)
+    assert(count > 1, "the recursion must actually have reentered gsub")
+    -- the VM must remain usable after recovering from the overflow
+    assert(string.gsub("abc", "b", "x") == "axc")
 end)
 
 tests:finish()

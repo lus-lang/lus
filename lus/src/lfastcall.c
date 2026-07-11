@@ -319,9 +319,13 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setivalue(s2v(ra), (i1 > i2) ? i1 : i2);
       }
       else if (ttisnumber(v1) && ttisnumber(v2)) {
-        lua_Number n1 = ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
-        lua_Number n2 = ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
-        setfltvalue(s2v(ra), (n1 > n2) ? n1 : n2);
+        /* Copy the winning operand verbatim so the result keeps its
+        ** subtype and math_max's first-operand-wins choice on NaN and
+        ** signed-zero ties is preserved. For two numbers luaV_lessthan
+        ** dispatches straight to LTnum, so it cannot call metamethods,
+        ** allocate, or raise errors, and it compares mixed int/float
+        ** pairs exactly (no lossy float conversion above 2^53). */
+        setobj2s(L, ra, luaV_lessthan(L, v1, v2) ? v2 : v1);
       }
       else {
         return 0;
@@ -335,9 +339,9 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         setivalue(s2v(ra), (i1 < i2) ? i1 : i2);
       }
       else if (ttisnumber(v1) && ttisnumber(v2)) {
-        lua_Number n1 = ttisinteger(v1) ? cast_num(ivalue(v1)) : fltvalue(v1);
-        lua_Number n2 = ttisinteger(v2) ? cast_num(ivalue(v2)) : fltvalue(v2);
-        setfltvalue(s2v(ra), (n1 < n2) ? n1 : n2);
+        /* Mirror of FC_MATH_MAX: keep the first operand unless the
+        ** second compares strictly smaller, matching math_min. */
+        setobj2s(L, ra, luaV_lessthan(L, v2, v1) ? v2 : v1);
       }
       else {
         return 0;
@@ -482,7 +486,9 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         }
       }
       else {
-        setnilvalue2s(ra); /* fail */
+        /* Non-numbers must take the C path: math_toint coerces
+        ** integer-valued numeric strings through lua_tointegerx. */
+        return 0;
       }
       break;
     }
@@ -727,16 +733,24 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         TString *ts = tsvalue(arg1);
         size_t len = tsslen(ts);
         lua_Integer pi = ivalue(arg2);
-        /* posrelatI (0 maps to 1) */
-        size_t pos = (pi > 0) ? (size_t)pi
-                     : (pi == 0 || pi < -(lua_Integer)len)
-                         ? 1
-                         : len + (size_t)pi + 1;
-        if (pos >= 1 && pos <= len) {
-          setivalue(s2v(ra), cast_uchar(getstr(ts)[pos - 1]));
+        /* posrelatI for the start (0 maps to 1) */
+        size_t posi = (pi > 0) ? (size_t)pi
+                      : (pi == 0 || pi < -(lua_Integer)len)
+                          ? 1
+                          : len + (size_t)pi + 1;
+        /* getendpos for the end, whose default j is the raw start
+        ** argument, so pi of 0 or below -#s gives an empty interval
+        ** and no value, exactly like str_byte */
+        size_t pose = (pi > (lua_Integer)len)    ? len
+                      : (pi >= 0)                ? (size_t)pi
+                      : (pi < -(lua_Integer)len) ? 0
+                                                 : len + (size_t)pi + 1;
+        if (posi > pose) {
+          setnilvalue2s(ra); /* empty interval, no value */
         }
         else {
-          setnilvalue2s(ra);
+          /* posi <= pose implies posi == pose with 1 <= posi <= len */
+          setivalue(s2v(ra), cast_uchar(getstr(ts)[posi - 1]));
         }
       }
       else
@@ -839,6 +853,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (l_likely(ttistable(arg))) {
         Table *t = hvalue(arg);
+        if (t->metatable != NULL)
+          return 0; /* the C path honors __len and __index */
         lua_Unsigned len = luaH_getn(L, t);
         lua_Number sum = 0;
         for (lua_Unsigned i = 1; i <= len; i++) {
@@ -849,6 +865,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
               sum += cast_num(ivalue(&val));
             else if (ttisfloat(&val))
               sum += fltvalue(&val);
+            else if (ttisstring(&val))
+              return 0; /* the C path coerces numeric strings */
           }
         }
         setfltvalue(s2v(ra), sum);
@@ -861,6 +879,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (l_likely(ttistable(arg))) {
         Table *t = hvalue(arg);
+        if (t->metatable != NULL)
+          return 0; /* the C path honors __len and __index */
         lua_Unsigned len = luaH_getn(L, t);
         lua_Number sum = 0;
         lua_Integer count = 0;
@@ -876,6 +896,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
               sum += fltvalue(&val);
               count++;
             }
+            else if (ttisstring(&val))
+              return 0; /* the C path coerces numeric strings */
           }
         }
         if (count == 0) {
@@ -893,14 +915,22 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (l_likely(ttistable(arg))) {
         Table *t = hvalue(arg);
+        if (t->metatable != NULL)
+          return 0; /* the C path honors __len and __index */
         lua_Unsigned len = luaH_getn(L, t);
-        /* First pass: count numeric values */
+        /* First pass: count numeric values. Strings bail out here,
+        ** before the temp array is allocated, so the C path can
+        ** coerce numeric strings. */
         lua_Integer count = 0;
         for (lua_Unsigned i = 1; i <= len; i++) {
           TValue val;
           lu_byte tag = luaH_getint(t, (lua_Integer)i, &val);
-          if (!tagisempty(tag) && (ttisinteger(&val) || ttisfloat(&val)))
-            count++;
+          if (!tagisempty(tag)) {
+            if (ttisinteger(&val) || ttisfloat(&val))
+              count++;
+            else if (ttisstring(&val))
+              return 0;
+          }
         }
         if (count == 0) {
           setfltvalue(s2v(ra), (lua_Number)NAN);
@@ -936,10 +966,35 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (l_likely(ttistable(arg))) {
         Table *t = hvalue(arg);
+        if (t->metatable != NULL)
+          return 0; /* the C path honors __len and __index */
         lua_Unsigned len = luaH_getn(L, t);
-        /* Welford's online algorithm: single pass */
-        lua_Number mean = 0, M2 = 0;
+        /* Two-pass algorithm, kept in step with tstdev in ltablib.c
+        ** so both dispatch paths produce bit-identical results. */
+        lua_Number sum = 0;
         lua_Integer count = 0;
+        for (lua_Unsigned i = 1; i <= len; i++) {
+          TValue val;
+          lu_byte tag = luaH_getint(t, (lua_Integer)i, &val);
+          if (!tagisempty(tag)) {
+            if (ttisinteger(&val)) {
+              sum += cast_num(ivalue(&val));
+              count++;
+            }
+            else if (ttisfloat(&val)) {
+              sum += fltvalue(&val);
+              count++;
+            }
+            else if (ttisstring(&val))
+              return 0; /* the C path coerces numeric strings */
+          }
+        }
+        if (count == 0) {
+          setfltvalue(s2v(ra), (lua_Number)NAN);
+          break;
+        }
+        lua_Number mean = sum / (lua_Number)count;
+        lua_Number sumsq = 0;
         for (lua_Unsigned i = 1; i <= len; i++) {
           TValue val;
           lu_byte tag = luaH_getint(t, (lua_Integer)i, &val);
@@ -951,18 +1006,11 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
               x = fltvalue(&val);
             else
               continue;
-            count++;
-            lua_Number delta = x - mean;
-            mean += delta / (lua_Number)count;
-            lua_Number delta2 = x - mean;
-            M2 += delta * delta2;
+            lua_Number diff = x - mean;
+            sumsq += diff * diff;
           }
         }
-        if (count == 0) {
-          setfltvalue(s2v(ra), (lua_Number)NAN);
-          break;
-        }
-        setfltvalue(s2v(ra), l_mathop(sqrt)(M2 / (lua_Number)count));
+        setfltvalue(s2v(ra), l_mathop(sqrt)(sumsq / (lua_Number)count));
       }
       else
         return 0;
@@ -1295,7 +1343,7 @@ LUAI_DDEF const FCDef luaF_fc_defs[FC_COUNT] = {
     [FC_STRING_SPLIT] = {"split", FC_MOD_STRING, 2},
     [FC_STRING_JOIN] = {"join", FC_MOD_STRING, 2},
     [FC_STRING_SUB] = {"sub", FC_MOD_STRING, 3},
-    [FC_STRING_BYTE] = {"byte", FC_MOD_STRING, 2},
+    [FC_STRING_BYTE] = {"byte", FC_MOD_STRING, 2, 1},
     [FC_STRING_CHAR] = {"char", FC_MOD_STRING, 1},
     [FC_STRING_LOWER] = {"lower", FC_MOD_STRING, 1},
     [FC_STRING_UPPER] = {"upper", FC_MOD_STRING, 1},
@@ -1309,11 +1357,11 @@ LUAI_DDEF const FCDef luaF_fc_defs[FC_COUNT] = {
     [FC_VECTOR_CREATE] = {"create", FC_MOD_VECTOR, 1},
     [FC_VECTOR_CLONE] = {"clone", FC_MOD_VECTOR, 1},
     [FC_VECTOR_SIZE] = {"size", FC_MOD_VECTOR, 1},
-    [FC_VECTOR_RESIZE] = {"resize", FC_MOD_VECTOR, 2},
-    [FC_UTF8_LEN] = {"len", FC_MOD_UTF8, 1},
+    [FC_VECTOR_RESIZE] = {"resize", FC_MOD_VECTOR, 2, 1},
+    [FC_UTF8_LEN] = {"len", FC_MOD_UTF8, 1, 1},
     [FC_UTF8_CODEPOINT] = {"codepoint", FC_MOD_UTF8, 1},
     [FC_UTF8_CHAR] = {"char", FC_MOD_UTF8, 1},
-    [FC_UTF8_OFFSET] = {"offset", FC_MOD_UTF8, 2},
+    [FC_UTF8_OFFSET] = {"offset", FC_MOD_UTF8, 2, 1},
 };
 
 /* Original C functions, set once at library open (see lfastcall.h). */

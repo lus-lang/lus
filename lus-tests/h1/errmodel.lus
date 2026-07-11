@@ -1,0 +1,588 @@
+--[[
+  Error-object model and catch handler tests for Lus.
+
+  This suite pins the raw error-object model of catch: the caught value is
+  the error object exactly as raised, whatever its type, with no traceback
+  text appended and no string conversion. A nil payload is the single
+  exception and is replaced by the "<no error object>" message. The suite
+  also pins the position prefix rules for each error() level using loaded
+  chunks with controlled names and line numbers, rethrow idempotence at
+  level 0, assert() message pass-through, and the bracketed catch[handler]
+  form from acquis 20.
+]]
+
+global print, error, assert, type, tostring, setmetatable, string, select, table, require, pledge, load, vector, coroutine, rawequal
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("errmodel")
+
+-- Helper that returns only the first line of an error string. Caught errors
+-- carry no traceback, so for strings raised by this suite it is the whole
+-- text, but it keeps assertions robust against future multi-line messages.
+local function firstline(err)
+    return tostring(err):match("^[^\n]*")
+end
+
+-- Helper that counts how many traceback sections a caught error carries.
+local function tbcount(err)
+    local _, n = tostring(err):gsub("stack traceback:", "")
+    return n
+end
+
+-- ============================================================================
+-- Error payloads pass through catch unconverted
+-- ============================================================================
+
+tests:each("non-string payloads are caught as the raw value", {
+    {"true", function() return true end},
+    {"false", function() return false end},
+    {"table", function() return {code = 500} end},
+    {"function", function() return print end},
+    {"thread", function() return coroutine.create(function() end) end},
+    {"vector", function() return vector.create(4) end},
+}, function(label, make)
+    local value = make()
+    local ok, err = catch error(value)
+    tests:assert_false(ok, label .. " payload must fail")
+    tests:assert_true(rawequal(err, value),
+        label .. " payload must pass through catch unconverted")
+end)
+
+tests:it("a nil payload becomes the no-error-object message", function()
+    local ok, err = catch error(nil)
+    tests:assert_false(ok)
+    tests:assert_equal(err, "<no error object>")
+end)
+
+tests:it("error with no arguments behaves like error(nil)", function()
+    local ok, err = catch error()
+    tests:assert_false(ok)
+    tests:assert_equal(err, "<no error object>")
+end)
+
+tests:it("enum value payload is caught as the enum value", function()
+    local E = enum red, green end
+    local ok, err = catch error(E.red)
+    tests:assert_false(ok)
+    tests:assert_true(err == E.red, "caught value must be the enum value")
+end)
+
+tests:it("integer payload stays a number with no position prefix", function()
+    local ok, err = catch error(42)
+    tests:assert_false(ok)
+    tests:assert_equal(err, 42)
+end)
+
+tests:it("float payload stays a float", function()
+    local ok, err = catch error(1.5)
+    tests:assert_false(ok)
+    tests:assert_equal(err, 1.5)
+end)
+
+tests:it("integer payload keeps no prefix even at explicit level 1", function()
+    local ok, err = catch error(42, 1)
+    tests:assert_false(ok)
+    tests:assert_equal(err, 42)
+end)
+
+tests:it("table payload identity is preserved through catch", function()
+    local t = {code = 500}
+    local ok, err = catch error(t)
+    tests:assert_false(ok)
+    tests:assert_true(rawequal(err, t), "caught value must be the original table")
+    tests:assert_equal(err.code, 500)
+end)
+
+tests:it("string error carries no traceback text", function()
+    local ok, err = catch error("fresh")
+    tests:assert_false(ok)
+    tests:assert_equal(tbcount(err), 0)
+end)
+
+tests:it("a level 0 string error is caught byte for byte", function()
+    local ok, err = catch error("exact text", 0)
+    tests:assert_false(ok)
+    tests:assert_equal(err, "exact text")
+end)
+
+tests:it("an object with __tostring passes through unconverted", function()
+    local obj = setmetatable({}, {__tostring = function() return "custom repr" end})
+    local ok, err = catch error(obj)
+    tests:assert_false(ok)
+    tests:assert_true(rawequal(err, obj), "caught value must be the original object")
+    tests:assert_equal(tostring(err), "custom repr")
+end)
+
+tests:it("catch does not consult __tostring at all", function()
+    local calls = 0
+    local obj = setmetatable({}, {__tostring = function() calls = calls + 1 return "x" end})
+    local ok, err = catch error(obj)
+    tests:assert_false(ok)
+    tests:assert_equal(calls, 0)
+    tests:assert_true(rawequal(err, obj))
+end)
+
+tests:it("a one-megabyte message survives catch intact", function()
+    local big = string.rep("x", 1000000)
+    local ok, err = catch error(big, 0)
+    tests:assert_false(ok)
+    tests:assert_equal(#err, 1000000)
+    tests:assert_equal(err, big)
+end)
+
+-- ============================================================================
+-- Position prefix per error() level, using loaded chunks so the chunk name
+-- and line numbers in the prefix are fully controlled.
+-- ============================================================================
+
+tests:it("default level prefixes the erroring line of the chunk", function()
+    local f = load("\n\nerror('boom')", "=errchunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "errchunk:3: boom")
+end)
+
+tests:it("explicit level 1 matches the default", function()
+    local f = load("error('boom', 1)", "=onechunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "onechunk:1: boom")
+end)
+
+tests:it("level 2 prefixes the caller's line", function()
+    local f = load("local function inner() error('e2', 2) end\ninner()", "=lv2chunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "lv2chunk:2: e2")
+end)
+
+tests:it("level 3 prefixes the caller's caller", function()
+    local src = "local function a() error('e3', 3) end\nlocal function b() a() end\nb()"
+    local f = load(src, "=lv3chunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "lv3chunk:3: e3")
+end)
+
+tests:it("level 0 omits the position prefix entirely", function()
+    local f = load("error('e0', 0)", "=lv0chunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "e0")
+end)
+
+tests:it("a level beyond the stack depth omits the prefix", function()
+    local f = load("error('hi', 10)", "=deepchunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "hi")
+end)
+
+tests:it("the prefix names the error call line, not the definition line", function()
+    local src = "local function f()\n\nerror('late') end\nf()"
+    local f = load(src, "=defchunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "defchunk:3: late")
+end)
+
+tests:it("errors raised in this file are prefixed with this file's name", function()
+    local ok, err = catch error("here")
+    tests:assert_false(ok)
+    tests:assert_true(firstline(err):match("errmodel%.lus:%d+: here$") ~= nil,
+        "expected an errmodel.lus:line: prefix, got: " .. firstline(err))
+end)
+
+tests:it("the level argument is type checked", function()
+    local ok, err = catch error("x", true)
+    tests:assert_false(ok)
+    tests:assert_contains(err, "bad argument #2 to 'error' %(number expected, got boolean%)")
+end)
+
+-- ============================================================================
+-- Rethrow idempotence
+-- ============================================================================
+
+tests:it("rethrowing a prefixed first line at level 0 keeps it unchanged", function()
+    local f = load("error('base')", "=rchunk")
+    local ok, err = catch f()
+    local first = firstline(err)
+    tests:assert_equal(first, "rchunk:1: base")
+    local ok2, err2 = catch error(first, 0)
+    tests:assert_false(ok2)
+    tests:assert_equal(firstline(err2), "rchunk:1: base")
+end)
+
+tests:it("rethrowing the full caught text at level 0 does not double the prefix", function()
+    local f = load("error('base')", "=r2chunk")
+    local ok, err = catch f()
+    local ok2, err2 = catch error(err, 0)
+    tests:assert_false(ok2)
+    tests:assert_equal(firstline(err2), "r2chunk:1: base")
+end)
+
+-- The caught text carries no traceback, so a level 0 rethrow reproduces it
+-- byte for byte and repeated catch/rethrow cycles are stable.
+tests:it("a caught error rethrown at level 0 is byte identical", function()
+    local f = load("error('base')", "=r3chunk")
+    local ok, err = catch f()
+    tests:assert_equal(tbcount(err), 0)
+    local ok2, err2 = catch error(err, 0)
+    tests:assert_false(ok2)
+    tests:assert_equal(err2, err)
+    tests:assert_equal(tbcount(err2), 0)
+end)
+
+tests:it("rethrowing at level 1 prepends a fresh position prefix", function()
+    local f = load("error('base')", "=r4chunk")
+    local ok, err = catch f()
+    local first = firstline(err)
+    local ok2, err2 = catch error(first)
+    tests:assert_false(ok2)
+    tests:assert_true(firstline(err2):match("errmodel%.lus:%d+: rchunk") == nil,
+        "sanity: the rethrown prefix must reference r4chunk")
+    tests:assert_true(firstline(err2):match("errmodel%.lus:%d+: r4chunk:1: base$") ~= nil,
+        "expected a stacked prefix, got: " .. firstline(err2))
+end)
+
+-- ============================================================================
+-- assert() message conversion
+-- ============================================================================
+
+tests:it("assert(false) raises the prefixed default message", function()
+    local f = load("assert(false)", "=achunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "achunk:1: assertion failed!")
+end)
+
+tests:it("assert with a custom string message gets a position prefix", function()
+    local f = load("assert(false, 'custom')", "=bchunk")
+    local ok, err = catch f()
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "bchunk:1: custom")
+end)
+
+tests:it("assert with a number message keeps the number without a prefix", function()
+    local ok, err = catch assert(false, 42)
+    tests:assert_false(ok)
+    tests:assert_equal(err, 42)
+end)
+
+tests:it("assert with a table message passes the table through", function()
+    local t = {code = 1}
+    local ok, err = catch assert(false, t)
+    tests:assert_false(ok)
+    tests:assert_true(rawequal(err, t), "caught value must be the original table")
+    tests:assert_equal(err.code, 1)
+end)
+
+tests:it("assert with a __tostring message passes the object through", function()
+    local obj = setmetatable({}, {__tostring = function() return "assert repr" end})
+    local ok, err = catch assert(false, obj)
+    tests:assert_false(ok)
+    tests:assert_true(rawequal(err, obj), "caught value must be the original object")
+    tests:assert_equal(tostring(err), "assert repr")
+end)
+
+tests:it("assert with an enum message passes the enum value through", function()
+    local E = enum alpha, beta end
+    local ok, err = catch assert(false, E.alpha)
+    tests:assert_false(ok)
+    tests:assert_true(err == E.alpha, "caught value must be the enum value")
+end)
+
+tests:it("assert with no arguments raises a catchable bad-argument error", function()
+    local ok, err = catch assert()
+    tests:assert_false(ok)
+    tests:assert_contains(err, "bad argument #1 to 'assert' %(value expected%)")
+end)
+
+-- ============================================================================
+-- Catch expression result arity in statement and expression positions
+-- ============================================================================
+
+tests:it("success in tail position yields ok plus every return value", function()
+    local function multi() return 1, 2, 3 end
+    tests:assert_equal(select("#", catch multi()), 4)
+end)
+
+tests:it("success with zero returns leaves a nil value slot", function()
+    local function nothing() end
+    local ok, extra = catch nothing()
+    tests:assert_true(ok)
+    tests:assert_true(extra ~= nothing, "the value slot leaked the callee")
+    tests:assert_nil(extra)
+end)
+
+tests:it("failure in tail position yields exactly two values", function()
+    tests:assert_equal(select("#", catch error("x")), 2)
+end)
+
+tests:it("parenthesizing a catch truncates it to the ok boolean", function()
+    local function multi() return 1, 2, 3 end
+    tests:assert_equal(select("#", (catch multi())), 1)
+    tests:assert_equal((catch multi()), true)
+    tests:assert_equal((catch error("x")), false)
+end)
+
+tests:it("a catch before the last expression truncates to one value", function()
+    local function multi() return 1, 2, 3 end
+    local a, b = catch multi(), 10
+    tests:assert_equal(a, true)
+    tests:assert_equal(b, 10)
+end)
+
+tests:it("a failing catch before the last expression truncates too", function()
+    local a, b = catch error("x"), 5
+    tests:assert_equal(a, false)
+    tests:assert_equal(b, 5)
+end)
+
+-- ============================================================================
+-- catch[handler]: transformation basics
+-- ============================================================================
+
+tests:it("the handler transforms the error and ok stays false", function()
+    local ok, err = catch[function(e) return "H:" .. firstline(e) end] error("oops", 0)
+    tests:assert_false(ok)
+    tests:assert_equal(err, "H:oops")
+end)
+
+tests:it("the handler is not called on success and values pass through", function()
+    local called = false
+    local handler = function(e) called = true return e end
+    local function multi() return "a", "b" end
+    local ok, x, y = catch[handler] multi()
+    tests:assert_true(ok)
+    tests:assert_equal(x, "a")
+    tests:assert_equal(y, "b")
+    tests:assert_false(called)
+end)
+
+tests:it("success under a handler keeps full multret arity", function()
+    local function multi() return 1, 2, 3 end
+    tests:assert_equal(select("#", catch[function(e) return e end] multi()), 4)
+end)
+
+tests:it("a handler works on a plain value expression", function()
+    local ok, val = catch[function(e) return e end] (1 + 2)
+    tests:assert_true(ok)
+    tests:assert_equal(val, 3)
+end)
+
+tests:it("the handler receives exactly one argument", function()
+    local nargs
+    local handler = function(...)
+        nargs = select("#", ...)
+        return "done"
+    end
+    local ok, err = catch[handler] error("solo")
+    tests:assert_false(ok)
+    tests:assert_equal(nargs, 1)
+    tests:assert_equal(err, "done")
+end)
+
+tests:it("the handler runs exactly once per error", function()
+    local calls = 0
+    local ok, err = catch[function(e) calls = calls + 1 return calls end] error("once")
+    tests:assert_false(ok)
+    tests:assert_equal(calls, 1)
+    tests:assert_equal(err, 1)
+end)
+
+tests:it("a handler referenced through a local variable works", function()
+    local myh = function(e) return "local-h" end
+    local ok, err = catch[myh] error("q")
+    tests:assert_false(ok)
+    tests:assert_equal(err, "local-h")
+end)
+
+tests:it("the handler may return a non-string replacement", function()
+    local wrap = function(e) return {message = firstline(e)} end
+    local ok, res = catch[wrap] error("db down", 0)
+    tests:assert_false(ok)
+    tests:assert_type(res, "table")
+    tests:assert_equal(res.message, "db down")
+end)
+
+-- ============================================================================
+-- catch[handler]: what the handler receives
+-- ============================================================================
+
+-- The handler receives the raw error object exactly as raised, so table
+-- payloads and other rich error objects arrive intact.
+tests:it("the handler receives the raw table payload", function()
+    local t = {code = 7}
+    local seen
+    local ok = catch[function(e) seen = e return "r" end] error(t)
+    tests:assert_false(ok)
+    tests:assert_true(rawequal(seen, t), "handler must receive the original table")
+    tests:assert_equal(seen.code, 7)
+end)
+
+tests:it("the handler input keeps the exact message at level 0", function()
+    local seen
+    catch[function(e) seen = e return 1 end] error("cc", 0)
+    tests:assert_equal(firstline(seen), "cc")
+end)
+
+tests:it("the handler input carries the position prefix at level 1", function()
+    local seen
+    catch[function(e) seen = e return 1 end] error("hmsg")
+    tests:assert_true(firstline(seen):match("errmodel%.lus:%d+: hmsg$") ~= nil,
+        "expected a prefixed message, got: " .. firstline(seen))
+end)
+
+tests:it("the handler input carries no traceback text", function()
+    local seen
+    catch[function(e) seen = e return 1 end] error("tb", 0)
+    tests:assert_equal(seen, "tb")
+end)
+
+tests:it("the handler receives runtime fault text too", function()
+    local x = nil
+    local ok, err = catch[function(e) return "F:" .. firstline(e) end] (x + 1)
+    tests:assert_false(ok)
+    tests:assert_contains(err, "attempt to perform arithmetic")
+end)
+
+tests:it("the handler can transform a stack overflow error", function()
+    local function nontail(n)
+        n = n + 1
+        nontail(n)
+        return n
+    end
+    local ok, err = catch[function(e) return "OV:" .. firstline(e) end] nontail(0)
+    tests:assert_false(ok)
+    tests:assert_contains(err, "^OV:")
+    tests:assert_contains(err, "stack overflow")
+end)
+
+-- ============================================================================
+-- catch[handler]: result arity
+-- ============================================================================
+
+tests:it("a handler returning nothing leaves a nil error slot", function()
+    local ok, err = catch[function(e) end] error("z")
+    tests:assert_false(ok)
+    tests:assert_nil(err)
+    tests:assert_equal(select("#", catch[function(e) end] error("z")), 2)
+end)
+
+tests:it("only the handler's first return value is kept", function()
+    tests:assert_equal(select("#", catch[function(e) return 1, 2, 3 end] error("m")), 2)
+    local ok, first = catch[function(e) return "x", "y", "z" end] error("m")
+    tests:assert_false(ok)
+    tests:assert_equal(first, "x")
+end)
+
+tests:it("extra assignment targets are nil filled on a handled error", function()
+    local a, b, c, d = catch[function(e) return "only" end] error("m")
+    tests:assert_equal(a, false)
+    tests:assert_equal(b, "only")
+    tests:assert_nil(c)
+    tests:assert_nil(d)
+end)
+
+tests:it("a handled error expands to two values in a table constructor", function()
+    local t = {catch[function(e) return "r" end] error("x", 0)}
+    tests:assert_equal(#t, 2)
+    tests:assert_equal(t[1], false)
+    tests:assert_equal(t[2], "r")
+end)
+
+-- ============================================================================
+-- catch[handler]: handler failures, statement form, nesting
+-- ============================================================================
+
+tests:it("an error inside the handler propagates to an outer catch", function()
+    local ok, err = catch (catch[function(e) error("handler boom", 0) end] error("orig"))
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "handler boom")
+end)
+
+tests:it("statement form runs the handler and suppresses the error", function()
+    local seen = nil
+    catch[function(e) seen = firstline(e) return "ignored" end] error("stmt", 0)
+    tests:assert_equal(seen, "stmt")
+end)
+
+tests:it("statement form does not run the handler on success", function()
+    local called = false
+    catch[function(e) called = true return e end] (1 + 1)
+    tests:assert_false(called)
+end)
+
+tests:it("handler statements in a loop keep registers intact", function()
+    local hits = 0
+    local a, b = 1, 2
+    for i = 1, 50 do
+        catch[function(e) hits = hits + 1 return e end] error("r" .. i, 0)
+    end
+    local c = 3
+    tests:assert_equal(hits, 50)
+    tests:assert_true(a == 1 and b == 2 and c == 3, "locals must survive handler loops")
+end)
+
+tests:it("nested handlers transform their own errors independently", function()
+    local inner_h = function(e) return "inner<" .. firstline(e) .. ">" end
+    local outer_h = function(e) return "outer<" .. firstline(e) .. ">" end
+    local inner_seen
+    local ok, err = catch[outer_h] (function()
+        local iok, ierr = catch[inner_h] error("deep", 0)
+        inner_seen = {iok, ierr}
+        error("shallow", 0)
+    end)()
+    tests:assert_false(ok)
+    tests:assert_equal(err, "outer<shallow>")
+    tests:assert_equal(inner_seen[1], false)
+    tests:assert_equal(inner_seen[2], "inner<deep>")
+end)
+
+tests:it("an inner handled catch does not trip the outer handler", function()
+    local outer_called = false
+    local ok, val = catch[function(e) outer_called = true return e end] (function()
+        catch[function(e) return e end] error("swallowed")
+        return "survived"
+    end)()
+    tests:assert_true(ok)
+    tests:assert_equal(val, "survived")
+    tests:assert_false(outer_called)
+end)
+
+-- ============================================================================
+-- Handler argument and validation contract
+-- ============================================================================
+
+tests:it("the documented simplify example yields the bare message", function()
+    local function simplify(err)
+        return err:match("^[^:]+:[^:]+: (.+)") or err
+    end
+    local ok, err = catch[simplify] error("something went wrong")
+    tests:assert_false(ok)
+    tests:assert_equal(err, "something went wrong")
+end)
+
+tests:it("a __call table handler is rejected like a plain table", function()
+    local callable = setmetatable({}, {__call = function(self, e) return "callable" end})
+    local ok, err = catch (function()
+        catch[callable] error("cc", 0)
+        return "no rejection happened"
+    end)()
+    tests:assert_false(ok)
+    tests:assert_contains(err, "attempt to use a table value as a catch handler")
+end)
+
+tests:it("a non-callable handler value raises an error", function()
+    local ok, err = catch (function()
+        catch[42] error("nc", 0)
+        return "no rejection happened"
+    end)()
+    tests:assert_false(ok, "expected catch[42] to raise, got: " .. tostring(err))
+    tests:assert_contains(err, "attempt to use a number value as a catch handler")
+end)
+
+tests:finish()

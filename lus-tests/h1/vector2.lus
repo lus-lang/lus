@@ -1,0 +1,574 @@
+-- Vector module completion suite.
+-- This file complements lus-tests/h1/vectors.lus by pinning the spec
+-- behaviors that file leaves open. It focuses on vector.unpack's next-offset
+-- return value, the unpackmany count parameter and multi-value iteration,
+-- clone independence, create and resize argument validation, the full
+-- integer width and endianness matrix with sign extension, variable-length
+-- and zero-terminated string formats, float NaN and infinity round-trips,
+-- embedded NUL round-trips, slice aliasing, and tostring and equality.
+global print, require, assert, type, string, table, vector, pledge, math, tostring
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("vector2")
+
+-- ============================================================
+-- vector.create argument validation and zero-initialization
+-- ============================================================
+
+tests:it("create zero-initializes every byte", function()
+    -- The spec promises a non-fast create returns all-zero bytes.
+    local v = vector.create(64)
+    for i = 0, 63 do
+        tests:assert_equal(vector.unpack(v, i, "B"), 0,
+            "byte " .. i .. " should be zero")
+    end
+end)
+
+tests:it("create with negative capacity errors", function()
+    tests:assert_throws(function() vector.create(-1) end,
+        "capacity must be non%-negative")
+end)
+
+tests:it("create with fractional capacity errors", function()
+    tests:assert_throws(function() vector.create(1.5) end,
+        "no integer representation")
+end)
+
+tests:it("create with no argument errors", function()
+    tests:assert_throws(function() vector.create() end, "number expected")
+end)
+
+tests:it("create coerces a numeric string capacity", function()
+    -- luaL_checkinteger accepts numeric strings, so "8" yields eight bytes.
+    local v = vector.create("8")
+    tests:assert_equal(#v, 8, "numeric string should coerce to length 8")
+end)
+
+tests:it("create rejects a non-numeric string capacity", function()
+    tests:assert_throws(function() vector.create("hello") end,
+        "number expected")
+end)
+
+-- ============================================================
+-- vector.size type checking
+-- ============================================================
+
+tests:each("size and length agree", {
+    {0}, {1}, {7}, {256}, {1000},
+}, function(n)
+    local v = vector.create(n)
+    tests:assert_equal(vector.size(v), n, "size should equal " .. n)
+    tests:assert_equal(#v, n, "length operator should equal " .. n)
+end)
+
+tests:it("size on a non-vector errors", function()
+    tests:assert_throws(function() vector.size("x") end, "vector expected")
+end)
+
+-- ============================================================
+-- vector.clone independence and content equality
+-- ============================================================
+
+tests:it("mutating the original leaves the clone unchanged", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "I4", 5)
+    local c = vector.clone(v)
+    vector.pack(v, 0, "I4", 9)
+    tests:assert_equal(vector.unpack(c, 0, "I4"), 5,
+        "clone must keep its own copy of the data")
+    tests:assert_equal(vector.unpack(v, 0, "I4"), 9,
+        "original should reflect the later write")
+end)
+
+tests:it("mutating the clone leaves the original unchanged", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "I4", 5)
+    local c = vector.clone(v)
+    vector.pack(c, 0, "I4", 77)
+    tests:assert_equal(vector.unpack(v, 0, "I4"), 5,
+        "original must be isolated from clone writes")
+end)
+
+tests:it("clone reproduces every byte of a distinct pattern", function()
+    local v = vector.create(32)
+    for i = 0, 31 do
+        vector.pack(v, i, "B", (i * 7 + 3) % 256)
+    end
+    local c = vector.clone(v)
+    tests:assert_equal(#c, 32, "clone length should match")
+    for i = 0, 31 do
+        tests:assert_equal(vector.unpack(c, i, "B"), (i * 7 + 3) % 256,
+            "clone byte " .. i .. " should match the pattern")
+    end
+end)
+
+tests:it("clone of a string argument errors", function()
+    tests:assert_throws(function() vector.clone("abc") end, "vector expected")
+end)
+
+tests:it("clone of nil errors", function()
+    tests:assert_throws(function() vector.clone(nil) end, "vector expected")
+end)
+
+-- ============================================================
+-- vector.resize argument validation and byte-exact behavior
+-- ============================================================
+
+tests:it("resize to a negative size errors", function()
+    local v = vector.create(4)
+    tests:assert_throws(function() vector.resize(v, -1) end,
+        "size must be non%-negative")
+end)
+
+tests:it("resize to a fractional size errors", function()
+    local v = vector.create(4)
+    tests:assert_throws(function() vector.resize(v, 1.5) end,
+        "no integer representation")
+end)
+
+tests:it("resize of a non-vector errors", function()
+    tests:assert_throws(function() vector.resize(nil, 4) end, "vector expected")
+end)
+
+tests:it("growth preserves the prefix and zero-fills the new bytes", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "BBBB", 1, 2, 3, 4)
+    vector.resize(v, 8)
+    tests:assert_equal(#v, 8, "length should be 8 after growth")
+    for i = 0, 3 do
+        tests:assert_equal(vector.unpack(v, i, "B"), i + 1,
+            "prefix byte " .. i .. " must be preserved")
+    end
+    for i = 4, 7 do
+        tests:assert_equal(vector.unpack(v, i, "B"), 0,
+            "new byte " .. i .. " must be zero")
+    end
+end)
+
+tests:it("shrink then grow zero-fills the re-exposed region", function()
+    local v = vector.create(8)
+    for i = 0, 7 do
+        vector.pack(v, i, "B", i + 10)
+    end
+    vector.resize(v, 4)
+    vector.resize(v, 8)
+    tests:assert_equal(vector.unpack(v, 0, "B"), 10, "prefix byte 0 preserved")
+    tests:assert_equal(vector.unpack(v, 3, "B"), 13, "prefix byte 3 preserved")
+    for i = 4, 7 do
+        tests:assert_equal(vector.unpack(v, i, "B"), 0,
+            "re-exposed byte " .. i .. " must be zeroed")
+    end
+end)
+
+-- ============================================================
+-- Integer width matrix with sign extension and 64-bit widths
+-- ============================================================
+
+tests:each("integer width round-trips", {
+    {"b",  1, "b",    -5,             -5},
+    {"B",  1, "B",    250,            250},
+    {"h",  2, "<i2",  -1000,          -1000},
+    {"H",  2, "H",    60000,          60000},
+    {"i4", 4, "i4",   -123456,        -123456},
+    {"I4", 4, "I4",   4000000000,     4000000000},
+    {"i8", 8, "i8",   -9000000000000, -9000000000000},
+    {"I8", 8, "I8",   9000000000000,  9000000000000},
+    {"j",  8, "j",    -5,             -5},
+    {"J",  8, "J",    5,              5},
+    {"l",  8, "l",    -7,             -7},
+    {"L",  8, "L",    7,              7},
+}, function(_, size, fmt, value, expected)
+    local v = vector.create(size)
+    vector.pack(v, 0, fmt, value)
+    local got, nextpos = vector.unpack(v, 0, fmt)
+    tests:assert_equal(got, expected, "round-trip value for " .. fmt)
+    tests:assert_equal(nextpos, size, "next offset should equal width " .. size)
+end)
+
+tests:it("narrow signed unpack sign-extends", function()
+    local v = vector.create(2)
+    vector.pack(v, 0, "<i2", -1)
+    tests:assert_equal(vector.unpack(v, 0, "i2"), -1,
+        "signed read must sign-extend to -1")
+    tests:assert_equal(vector.unpack(v, 0, "I2"), 65535,
+        "unsigned read of the same bytes must be 65535")
+end)
+
+tests:it("unsigned 64-bit above 2^63 wraps to a negative Lua integer", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "I8", 0xFFFFFFFFFFFFFFFF)
+    tests:assert_equal(vector.unpack(v, 0, "I8"), -1,
+        "all-ones I8 reads back as -1 under Lua integer wraparound")
+end)
+
+tests:it("packing beyond a small width range errors", function()
+    local v = vector.create(4)
+    tests:assert_throws(function() vector.pack(v, 0, "B", 256) end,
+        "unsigned overflow")
+    tests:assert_throws(function() vector.pack(v, 0, "b", -200) end,
+        "integer overflow")
+end)
+
+-- ============================================================
+-- Endianness completeness
+-- ============================================================
+
+tests:it("little-endian layout places the least significant byte first", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "<I4", 0x12345678)
+    local b0, b1, b2, b3 = vector.unpack(v, 0, "BBBB")
+    tests:assert_equal(b0, 0x78, "byte 0")
+    tests:assert_equal(b1, 0x56, "byte 1")
+    tests:assert_equal(b2, 0x34, "byte 2")
+    tests:assert_equal(b3, 0x12, "byte 3")
+end)
+
+tests:it("big-endian layout places the most significant byte first", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, ">I4", 0x12345678)
+    local b0, b1, b2, b3 = vector.unpack(v, 0, "BBBB")
+    tests:assert_equal(b0, 0x12, "byte 0")
+    tests:assert_equal(b1, 0x34, "byte 1")
+    tests:assert_equal(b2, 0x56, "byte 2")
+    tests:assert_equal(b3, 0x78, "byte 3")
+end)
+
+tests:it("native endianness round-trips a 32-bit value", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "=I4", 0x11223344)
+    tests:assert_equal(vector.unpack(v, 0, "=I4"), 0x11223344,
+        "native prefix should round-trip")
+end)
+
+-- ============================================================
+-- Float and double special values
+-- ============================================================
+
+tests:it("double round-trips NaN", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "d", 0 / 0)
+    local n = vector.unpack(v, 0, "d")
+    tests:assert_true(n ~= n, "unpacked NaN must be unequal to itself")
+end)
+
+tests:it("float round-trips NaN", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "f", 0 / 0)
+    local n = vector.unpack(v, 0, "f")
+    tests:assert_true(n ~= n, "unpacked float NaN must be unequal to itself")
+end)
+
+tests:it("double round-trips positive and negative infinity", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "d", 1 / 0)
+    tests:assert_equal(vector.unpack(v, 0, "d"), math.huge, "positive infinity")
+    vector.pack(v, 0, "d", -1 / 0)
+    tests:assert_equal(vector.unpack(v, 0, "d"), -math.huge, "negative infinity")
+end)
+
+tests:it("double preserves the sign of negative zero", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "d", -0.0)
+    local n = vector.unpack(v, 0, "d")
+    tests:assert_equal(n, 0, "negative zero compares equal to zero")
+    tests:assert_equal(1 / n, -math.huge,
+        "the sign bit must survive so 1/n is negative infinity")
+end)
+
+tests:it("float round-trips a fractional value approximately", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "f", 3.5)
+    tests:assert_near(vector.unpack(v, 0, "f"), 3.5, 0.0001)
+end)
+
+-- ============================================================
+-- String formats: fixed, zero-terminated, length-prefixed, NUL round-trips
+-- ============================================================
+
+tests:it("fixed-size string keeps trailing NUL padding", function()
+    local v = vector.create(5)
+    vector.pack(v, 0, "c5", "hi")
+    local s = vector.unpack(v, 0, "c5")
+    tests:assert_equal(#s, 5, "fixed field length should be 5")
+    tests:assert_equal(s, "hi\0\0\0", "padding NULs must be returned verbatim")
+end)
+
+tests:it("fixed-size string longer than its field errors", function()
+    local v = vector.create(10)
+    tests:assert_throws(function() vector.pack(v, 0, "c3", "hello") end,
+        "longer than given size")
+end)
+
+tests:it("zero-terminated string round-trips and reports the next offset", function()
+    local v = vector.create(10)
+    vector.pack(v, 0, "z", "abc")
+    local s, nextpos = vector.unpack(v, 0, "z")
+    tests:assert_equal(s, "abc", "z value should round-trip")
+    tests:assert_equal(nextpos, 4, "next offset is past the terminator")
+end)
+
+tests:it("zero-terminated unpack without a terminator errors", function()
+    local v = vector.create(3)
+    vector.pack(v, 0, "BBB", 65, 66, 67)
+    tests:assert_throws(function() vector.unpack(v, 0, "z") end,
+        "unfinished string in vector")
+end)
+
+tests:it("packing a NUL-bearing string as z errors", function()
+    local v = vector.create(10)
+    tests:assert_throws(function() vector.pack(v, 0, "z", "a\0b") end,
+        "string contains zeros")
+end)
+
+tests:it("length-prefixed string round-trips and reports the next offset", function()
+    local v = vector.create(10)
+    vector.pack(v, 0, "s1", "abcd")
+    local s, nextpos = vector.unpack(v, 0, "s1")
+    tests:assert_equal(s, "abcd", "s1 value should round-trip")
+    tests:assert_equal(nextpos, 5, "next offset covers the prefix plus data")
+end)
+
+tests:it("length-prefixed unpack with an oversized prefix errors", function()
+    -- A prefix byte of 250 claims far more data than the vector holds.
+    local v = vector.create(3)
+    vector.pack(v, 0, "BBB", 250, 65, 66)
+    tests:assert_throws(function() vector.unpack(v, 0, "s1") end,
+        "data too short")
+end)
+
+tests:it("a string with embedded NULs round-trips through a fixed field", function()
+    local original = "a\0b\0c"
+    local v = vector.create(#original)
+    vector.pack(v, 0, "c" .. #original, original)
+    local out = vector.unpack(v, 0, "c" .. #original)
+    tests:assert_equal(out, original, "embedded NULs must survive the round-trip")
+    tests:assert_equal(#out, 5, "length must include the embedded NULs")
+end)
+
+-- ============================================================
+-- Next-offset return value and padding formats
+-- ============================================================
+
+tests:it("unpack returns the next offset after the values", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "I4I4", 5, 6)
+    local a, b, nextpos = vector.unpack(v, 0, "I4I4")
+    tests:assert_equal(a, 5, "first value")
+    tests:assert_equal(b, 6, "second value")
+    tests:assert_equal(nextpos, 8, "next offset should be 8")
+end)
+
+tests:it("an empty format returns only the next offset", function()
+    local v = vector.create(8)
+    local a, b = vector.unpack(v, 3, "")
+    tests:assert_equal(a, 3, "the sole result is the unchanged offset")
+    tests:assert_nil(b, "there is no second result")
+end)
+
+tests:it("padding bytes produce no values but advance the offset", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "BxB", 7, 9)
+    local a, b, nextpos = vector.unpack(v, 0, "BxB")
+    tests:assert_equal(a, 7, "first byte")
+    tests:assert_equal(b, 9, "second byte, pad skipped")
+    tests:assert_equal(nextpos, 3, "offset advances across the pad byte")
+end)
+
+tests:it("empty format on a zero-length vector returns offset zero", function()
+    local v = vector.create(0)
+    local a = vector.unpack(v, 0, "")
+    tests:assert_equal(a, 0, "next offset of an empty read is zero")
+end)
+
+-- ============================================================
+-- Boundary offsets
+-- ============================================================
+
+tests:it("packing at the exact end offset succeeds", function()
+    -- offset + width == length is the last legal position.
+    local v = vector.create(8)
+    vector.pack(v, 4, "I4", 7)
+    tests:assert_equal(vector.unpack(v, 4, "I4"), 7,
+        "the final aligned slot must be writable")
+end)
+
+tests:it("unpacking one past the end errors", function()
+    local v = vector.create(8)
+    tests:assert_throws(function() vector.unpack(v, 6, "I4") end,
+        "data too short")
+end)
+
+tests:it("packing at a negative offset errors", function()
+    local v = vector.create(8)
+    tests:assert_throws(function() vector.pack(v, -1, "I4", 1) end,
+        "offset out of bounds")
+end)
+
+tests:it("unpacking at a negative offset errors", function()
+    local v = vector.create(8)
+    tests:assert_throws(function() vector.unpack(v, -1, "B") end,
+        "offset out of bounds")
+end)
+
+tests:it("first and last single bytes are individually addressable", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "B", 200)
+    vector.pack(v, 3, "B", 201)
+    tests:assert_equal(vector.unpack(v, 0, "B"), 200, "first byte")
+    tests:assert_equal(vector.unpack(v, 3, "B"), 201, "last byte")
+end)
+
+tests:it("packing into a zero-size vector errors", function()
+    local v = vector.create(0)
+    tests:assert_throws(function() vector.pack(v, 0, "B", 1) end,
+        "exceed vector bounds")
+end)
+
+-- ============================================================
+-- Slice aliasing: slices are independent copies
+-- ============================================================
+
+tests:it("writing the original after slicing does not change the slice", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "BBBB", 1, 2, 3, 4)
+    local s = v[1, 2]  -- 1-based inclusive, bytes with values 1 and 2
+    vector.pack(v, 0, "B", 99)
+    tests:assert_equal(vector.unpack(s, 0, "B"), 1,
+        "slice must be a snapshot copy of the original")
+end)
+
+tests:it("writing a slice does not change the original", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "BBBB", 1, 2, 3, 4)
+    local s = v[1, 2]
+    vector.pack(s, 0, "B", 99)
+    tests:assert_equal(vector.unpack(v, 0, "B"), 1,
+        "the original must be isolated from slice writes")
+end)
+
+-- ============================================================
+-- unpackmany count, multi-value iteration, and error paths
+-- ============================================================
+
+tests:it("unpackmany count limits the iterations", function()
+    local v = vector.create(12)
+    vector.pack(v, 0, "I4I4I4", 1, 2, 3)
+    local count = 0
+    for x in vector.unpackmany(v, 0, "I4", 2) do
+        count = count + 1
+    end
+    tests:assert_equal(count, 2, "count of 2 must stop after two iterations")
+end)
+
+tests:it("unpackmany count of zero means unlimited", function()
+    local v = vector.create(12)
+    vector.pack(v, 0, "I4I4I4", 1, 2, 3)
+    local count = 0
+    for x in vector.unpackmany(v, 0, "I4", 0) do
+        count = count + 1
+    end
+    tests:assert_equal(count, 3, "count 0 must not cap the iteration")
+end)
+
+tests:it("unpackmany yields every value of a multi-value format", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "I4I4", 10, 20)
+    local first, second
+    for a, b in vector.unpackmany(v, 0, "I4I4") do
+        first, second = a, b
+    end
+    tests:assert_equal(first, 10, "first loop variable")
+    tests:assert_equal(second, 20, "second loop variable")
+end)
+
+tests:it("unpackmany count applies per record for multi-value formats", function()
+    local v = vector.create(6)
+    vector.pack(v, 0, "BBBBBB", 1, 2, 3, 4, 5, 6)
+    local rows = 0
+    for a, b in vector.unpackmany(v, 0, "BB", 2) do
+        rows = rows + 1
+    end
+    tests:assert_equal(rows, 2, "two records of two bytes each")
+end)
+
+tests:it("unpackmany starting at the end yields no iterations", function()
+    local v = vector.create(8)
+    local count = 0
+    for x in vector.unpackmany(v, 8, "I4") do
+        count = count + 1
+    end
+    tests:assert_equal(count, 0, "offset equal to length terminates immediately")
+end)
+
+tests:it("unpackmany raises on a trailing partial record", function()
+    -- A 10-byte vector read as I4 has two full records and two leftover bytes.
+    local v = vector.create(10)
+    tests:assert_throws(function()
+        for x in vector.unpackmany(v, 0, "I4") do end
+    end, "falls out of bounds")
+end)
+
+tests:it("unpackmany raises on an unterminated z string mid-loop", function()
+    local v = vector.create(3)
+    vector.pack(v, 0, "BBB", 1, 2, 3)
+    tests:assert_throws(function()
+        for s in vector.unpackmany(v, 0, "z") do end
+    end, "unfinished string in vector")
+end)
+
+tests:it("unpackmany raises on an oversized length prefix mid-loop", function()
+    local v = vector.create(3)
+    vector.pack(v, 0, "BBB", 250, 65, 66)
+    tests:assert_throws(function()
+        for s in vector.unpackmany(v, 0, "s1") do end
+    end, "data too short")
+end)
+
+tests:it("unpackmany rejects a negative offset", function()
+    local v = vector.create(8)
+    tests:assert_throws(function() vector.unpackmany(v, -1, "I4") end,
+        "offset out of bounds")
+end)
+
+tests:it("unpackmany rejects a negative count", function()
+    local v = vector.create(8)
+    tests:assert_throws(function() vector.unpackmany(v, 0, "I4", -1) end,
+        "count must be non%-negative")
+end)
+
+tests:it("resizing to zero inside an unpackmany loop terminates cleanly", function()
+    -- Shrinking the buffer mid-iteration must end the loop rather than
+    -- reading freed memory.
+    local v = vector.create(12)
+    vector.pack(v, 0, "I4I4I4", 1, 2, 3)
+    local count = 0
+    for x in vector.unpackmany(v, 0, "I4") do
+        count = count + 1
+        vector.resize(v, 0)
+    end
+    tests:assert_equal(count, 1,
+        "the loop must stop once the vector is emptied")
+end)
+
+-- ============================================================
+-- tostring and equality
+-- ============================================================
+
+tests:it("tostring labels the value as a vector", function()
+    local v = vector.create(4)
+    tests:assert_contains(tostring(v), "^vector:",
+        "tostring should carry the vector tag")
+end)
+
+tests:it("equality is by identity, not by content", function()
+    local v = vector.create(4)
+    vector.pack(v, 0, "I4", 42)
+    local c = vector.clone(v)
+    tests:assert_true(v == v, "a vector is equal to itself")
+    tests:assert_false(v == c,
+        "a content-identical clone is a distinct value")
+end)
+
+tests:finish()

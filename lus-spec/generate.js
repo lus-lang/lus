@@ -354,7 +354,7 @@ const PROSE = {
   "vector.unpackmany": "Returns an iterator that repeatedly unpacks values from `v` using the format `fmt`. Optional `count` limits the number of iterations.\n\n```lus\nfor a, b in vector.unpackmany(v, 0, \"I4I4\") do\n  print(a, b)\nend\n```",
   "table.clone": "Creates a copy of the table `t`. If `deep` is true, nested tables are recursively cloned. Deep copies preserve circular references.\n\n```lus\nlocal x = table.clone(t)        -- shallow copy\nlocal y = table.clone(t, true)  -- deep copy\n```",
   "string.transcode": "Transcodes string `s` from encoding `from` to encoding `to`. Supported encodings depend on the platform.",
-  "os.platform": "Returns a string identifying the current platform (e.g., `\"macos\"`, `\"linux\"`, `\"windows\"`).",
+  "os.platform": "Returns a string identifying the current platform (e.g., `\"linux\"`, `\"darwin\"`, `\"windows\"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `\"darwin\"`.",
   "fromjson": "Parses a JSON string `s` and returns the corresponding Lus value. Tables become Lus tables, JSON null becomes `nil`.",
   "tojson": "Converts a Lus value to a JSON string. The optional `filter` argument controls serialization. Objects with a `__json` metamethod use it for custom serialization.",
 };

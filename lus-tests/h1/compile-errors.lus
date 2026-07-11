@@ -1,0 +1,467 @@
+--[[
+    Compile-error rejection suite for Lus-specific syntax.
+
+    Every Lus feature suite proves its grammar accepts valid input. This file
+    proves the compiler rejects invalid input, and with which diagnostic.
+    Each case loads a small source string and pins a stable fragment of the
+    error message plus the chunkname prefix, so a regression that swaps a
+    clean diagnostic for a generic one (or silently accepts bad input) fails.
+
+    Covered: the global declaration contract, const and close attributes,
+    group field checking, malformed enum declarations, provide placement,
+    slices as assignment targets, from destructuring, optional chaining on
+    the left of assignments, if/while assignment forms, backtick
+    interpolation, and reserved words.
+]]
+
+global print, require, assert, type, load, string, tostring, select, pledge, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("compile_errors")
+
+-- Compile src and require failure whose message contains the given fragment.
+-- The fragment match is plain text, not a pattern, so quotes and brackets in
+-- compiler messages can be pinned verbatim. The chunkname must also appear.
+local function checkfail(src, fragment)
+    local f, err = load(src, "=cerr")
+    if f ~= nil then
+        error("expected compile failure but chunk compiled: " .. src)
+    end
+    if type(err) ~= "string" then
+        error("expected a string error message, got " .. type(err))
+    end
+    if not string.find(err, "cerr:", 1, true) then
+        error("error message lacks the chunkname prefix: " .. err)
+    end
+    if not string.find(err, fragment, 1, true) then
+        error("expected fragment '" .. fragment .. "' in message: " .. err)
+    end
+end
+
+-- Compile src and require success, returning the chunk for optional running.
+local function checkok(src)
+    local f, err = load(src, "=cerr")
+    if not f then
+        error("expected chunk to compile but got: " .. tostring(err))
+    end
+    return f
+end
+
+-- =============================================================================
+-- Harness sanity
+-- =============================================================================
+
+tests:it("helper accepts a valid chunk", function()
+    local f = checkok("return 1")
+    tests:assert_equal(f(), 1)
+end)
+
+tests:it("load returns nil plus message rather than raising", function()
+    local f, err = load("local = 1", "=cerr")
+    tests:assert_nil(f)
+    tests:assert_type(err, "string")
+end)
+
+tests:it("prefixed chunkname appears verbatim in the message", function()
+    local _, err = load("local a <const> = 1 a = 2", "=cerrname")
+    tests:assert_contains(tostring(err), "cerrname:1:")
+end)
+
+tests:it("plain chunkname is wrapped in string brackets", function()
+    local _, err = load("local a <const> = 1 a = 2", "mychunk")
+    tests:assert_true(string.find(tostring(err), '[string "mychunk"]', 1, true) ~= nil,
+        "expected [string \"mychunk\"] in: " .. tostring(err))
+end)
+
+tests:it("error line number tracks the offending line", function()
+    local _, err = load("\n\nlocal a <const> = 1\na = 2", "=cerr")
+    tests:assert_contains(tostring(err), "cerr:4:")
+end)
+
+-- =============================================================================
+-- Global declaration contract
+-- =============================================================================
+
+tests:it("chunk without global statement reads undeclared names freely", function()
+    local f = checkok("return ce_never_defined_anywhere")
+    tests:assert_nil(f())
+end)
+
+tests:it("chunk without global statement writes undeclared names freely", function()
+    local f = checkok("ce_compat_write_1 = 41 return ce_compat_write_1")
+    tests:assert_equal(f(), 41)
+end)
+
+tests:it("global statement turns undeclared reads into compile errors", function()
+    checkfail("global ce_g1 = 1 return someUndeclaredName",
+        "variable 'someUndeclaredName' not declared")
+end)
+
+tests:it("global statement turns undeclared writes into compile errors", function()
+    checkfail("global ce_g2 = 1 someUndeclaredTarget = 5",
+        "variable 'someUndeclaredTarget' not declared")
+end)
+
+tests:it("declared global compiles and initializes", function()
+    local f = checkok("global ce_g3 = 7 return ce_g3")
+    tests:assert_equal(f(), 7)
+end)
+
+tests:it("uses before the global statement are not checked", function()
+    -- Declaration checking is positional. It begins at the global statement,
+    -- so earlier code keeps the compatible unchecked behavior while later
+    -- references to the same undeclared name would fail.
+    local f = checkok("ce_g4_early = 1 global ce_g4 return 1")
+    tests:assert_equal(f(), 1)
+    local g = checkok("return ce_g4_early")
+    tests:assert_equal(g(), 1)
+end)
+
+tests:it("names written before the global statement stay checked after it", function()
+    checkfail("ce_g4b_early = 1 global ce_g4b return ce_g4b_early",
+        "variable 'ce_g4b_early' not declared")
+end)
+
+tests:each("global statement rejects non-name declarations", {
+    {"number instead of name", "global 42", "<name> expected"},
+    {"dotted name", "global x.y", "unexpected symbol near '.'"},
+    {"string instead of name", "global \"x\"", "<name> expected"},
+}, function(label, src, fragment)
+    checkfail(src, fragment)
+end)
+
+tests:it("global variables cannot be to-be-closed", function()
+    checkfail("global ce_g5 <close> = nil", "global variables cannot be to-be-closed")
+end)
+
+tests:it("assignment to a const global is a compile error", function()
+    checkfail("global ce_g6 <const> = 1 ce_g6 = 2",
+        "attempt to assign to const variable 'ce_g6'")
+end)
+
+tests:it("interpolation of an undeclared name obeys strict mode", function()
+    checkfail("global ce_g7 return `value $missingInterpName`",
+        "variable 'missingInterpName' not declared")
+end)
+
+-- =============================================================================
+-- Const and close attributes
+-- =============================================================================
+
+tests:it("assignment to a const local is a compile error", function()
+    checkfail("local a <const> = 1 a = 2", "attempt to assign to const variable 'a'")
+end)
+
+tests:it("assignment to a const upvalue is a compile error", function()
+    checkfail("local a <const> = 1 local f = function() a = 2 end",
+        "attempt to assign to const variable 'a'")
+end)
+
+tests:it("const without initializer still rejects assignment", function()
+    checkfail("local x <const> x = 1", "attempt to assign to const variable 'x'")
+end)
+
+tests:it("attribute binds to its own variable in a list", function()
+    checkfail("local a, b <const> = 1, 2 b = 3", "attempt to assign to const variable 'b'")
+end)
+
+tests:it("non-attributed variable in a list stays assignable", function()
+    local f = checkok("local a <const>, b = 1, 2 b = 3 return b")
+    tests:assert_equal(f(), 3)
+end)
+
+tests:each("duplicate or stacked attributes are rejected", {
+    {"double const", "local x <const> <const> = 1"},
+    {"double close", "local x <close> <close> = nil"},
+    {"close then const", "local x <close> <const> = nil"},
+}, function(label, src)
+    checkfail(src, "unexpected symbol near '<'")
+end)
+
+tests:it("numeric for control variable is const", function()
+    checkfail("for i = 1, 3 do i = 5 end", "attempt to assign to const variable 'i'")
+end)
+
+tests:it("generic for control variable is const", function()
+    checkfail("for k, v in pairs({}) do k = 1 end",
+        "attempt to assign to const variable 'k'")
+end)
+
+-- =============================================================================
+-- Groups
+-- =============================================================================
+
+tests:it("assignment to a const group field is a compile error", function()
+    checkfail("local z <group> = { a = 1, b <const> = 2 } z.b = 3",
+        "attempt to assign to const variable 'b'")
+end)
+
+tests:it("reading an undeclared group field is a compile error", function()
+    checkfail("local z <group> = { a = 1 } return z.missing",
+        "'missing' is not a field of group 'z'")
+end)
+
+tests:it("writing an undeclared group field is a compile error", function()
+    checkfail("local z <group> = { a = 1 } z.newfield = 5",
+        "'newfield' is not a field of group 'z'")
+end)
+
+tests:it("group overwrite constructor cannot invent fields", function()
+    checkfail("local z <group> = { a = 1 } z = { d = 4 }",
+        "'d' is not a field of group 'z'")
+end)
+
+tests:each("group overwrite must be a constructor or group", {
+    {"scalar", "local z <group> = { a = 1 } z = 5"},
+    {"function call", "local ff = function() return { a = 2 } end local z <group> = { a = 1 } z = ff()"},
+}, function(label, src)
+    checkfail(src, "group can only be assigned a constructor or another group")
+end)
+
+tests:each("group constructors require name keys", {
+    {"bracketed key", "local z <group> = { [1] = 2 }", "<name> expected near '['"},
+    {"array part", "local z <group> = { 1, 2 }", "<name> expected near '1'"},
+}, function(label, src, fragment)
+    checkfail(src, fragment)
+end)
+
+-- Groups are stack-allocated local constructs, so declaring one with the
+-- global statement is rejected at parse time with a clean diagnostic rather
+-- than compiling into an unusable variable.
+tests:it("global group declarations are rejected cleanly", function()
+    checkfail("global ce_ggroup <group> = { a = 1 } return ce_ggroup.a",
+        "global variables cannot be groups")
+end)
+
+-- =============================================================================
+-- Enum declarations
+-- =============================================================================
+
+tests:each("malformed enum declarations are rejected", {
+    {"empty enum", "local e = enum end", "<name> expected near 'end'"},
+    {"trailing comma", "local e = enum a, b, end", "<name> expected near 'end'"},
+    {"lone comma", "local e = enum , end", "<name> expected near ','"},
+    {"missing comma", "local e = enum a b end", "'end' expected near 'b'"},
+    {"numeric member", "local e = enum 1, 2 end", "<name> expected near '1'"},
+    {"string member", "local e = enum \"a\" end", "<name> expected"},
+    {"keyword member", "local e = enum while end", "<name> expected near 'while'"},
+    {"nil member", "local e = enum nil end", "<name> expected near 'nil'"},
+}, function(label, src, fragment)
+    checkfail(src, fragment)
+end)
+
+tests:it("enum is an expression and not a statement", function()
+    checkfail("enum a, b end", "unexpected symbol near 'enum'")
+end)
+
+tests:it("enum expression compiles in return position", function()
+    local f = checkok("return enum a, b end")
+    tests:assert_not_nil(f())
+end)
+
+-- Acquis 5 says values from the same enum with the same name are equal, so a
+-- declaration with duplicate member names is rejected at compile time rather
+-- than producing two distinct members that share a name.
+tests:it("duplicate enum member names are rejected", function()
+    checkfail("local e = enum a, a end", "duplicate enum member 'a'")
+end)
+
+-- =============================================================================
+-- Provide placement
+-- =============================================================================
+
+tests:each("provide outside a do expression is rejected", {
+    {"top level", "provide 1"},
+    {"plain do statement", "do provide 1 end"},
+    {"function nested in do expression", "local x = do local f = function() provide 1 end provide 2 end"},
+}, function(label, src)
+    checkfail(src, "'provide' outside do expression")
+end)
+
+tests:it("provide terminates the block so trailing statements fail", function()
+    checkfail("local x = do provide 1 local y = 2 end", "'end' expected near 'local'")
+end)
+
+tests:it("a second provide after the first is unreachable", function()
+    checkfail("local x = do provide 1 provide 2 end", "'end' expected near 'provide'")
+end)
+
+tests:it("provide inside a loop inside the do expression compiles", function()
+    local f = checkok("local x = do for i = 1, 2 do provide i end end return x")
+    tests:assert_equal(f(), 1)
+end)
+
+-- =============================================================================
+-- Slices as assignment targets
+-- =============================================================================
+
+tests:each("slices cannot be assigned to", {
+    {"two bounds", "local t = {1, 2, 3} t[1, 2] = {9, 9}", "syntax error near '='"},
+    {"empty bounds", "local t = {1} t[,] = 5", "syntax error near '='"},
+    {"open end bound in multi-assignment", "local t = {1} t[1,], x = 1, 2", "syntax error near ','"},
+    {"slice of a call result", "local f = function() return {1} end f()[1,] = 2", "syntax error near '='"},
+}, function(label, src, fragment)
+    checkfail(src, fragment)
+end)
+
+tests:it("brackets take at most two slice bounds", function()
+    checkfail("local t = {1, 2, 3} return t[1, 2, 3]", "']' expected near ','")
+end)
+
+-- =============================================================================
+-- From destructuring
+-- =============================================================================
+
+tests:it("from requires simple variable names as targets", function()
+    checkfail("local s = { x = 1 } local t = {} t.x from s",
+        "'from' requires simple variable names")
+end)
+
+tests:it("from without a source expression is rejected", function()
+    checkfail("local a from", "unexpected symbol near <eof>")
+end)
+
+tests:it("local from without names is rejected", function()
+    checkfail("local from t", "<name> expected near 'from'")
+end)
+
+tests:it("from cannot begin a statement", function()
+    checkfail("from x", "unexpected symbol near 'from'")
+end)
+
+tests:it("trailing comma in a from name list is rejected", function()
+    checkfail("local a, from { a = 1 }", "<name> expected near 'from'")
+end)
+
+tests:it("from rejects to-be-closed variables", function()
+    checkfail("local a <close> from { a = nil }",
+        "cannot use 'from' with to-be-closed variables")
+end)
+
+tests:it("from with const makes the target const", function()
+    checkfail("local a <const> from { a = 1 } a = 2",
+        "attempt to assign to const variable 'a'")
+end)
+
+tests:it("bare from into predeclared locals compiles", function()
+    local f = checkok("local a local b local s = { a = 1, b = 2 } a, b from s return a + b")
+    tests:assert_equal(f(), 3)
+end)
+
+-- =============================================================================
+-- Optional chaining on the left of assignments
+-- =============================================================================
+
+tests:each("optional chains are not assignment targets", {
+    {"dot form", "local t = {} t?.a = 1"},
+    {"bracket form", "local t = {} t?[1] = 1"},
+    {"chain continuing after ?", "local t = {} t?.a.b = 1"},
+    {"optional call result", "local h = function() return {} end h?() = 1"},
+    {"multi-assignment", "local t = {} t?.x = 1, 2"},
+}, function(label, src)
+    checkfail(src, "syntax error near '='")
+end)
+
+tests:it("optional chain is not an expression statement", function()
+    checkfail("local t = {} t?.a", "syntax error near <eof>")
+end)
+
+-- =============================================================================
+-- If and while assignment forms
+-- =============================================================================
+
+tests:each("malformed if assignments are rejected", {
+    {"missing expression", "if x = then end", "unexpected symbol near 'then'"},
+    {"missing variable list", "if = f() then end", "unexpected symbol near '='"},
+    {"missing then", "if x = 1 end", "'then' expected near 'end'"},
+    {"trailing comma in variable list", "if x, = 1 then end", "<name> expected near '='"},
+}, function(label, src, fragment)
+    checkfail(src, fragment)
+end)
+
+tests:it("while assignment with missing expression consumes do as an expression", function()
+    -- The do end after = parses as a do expression value, so the while
+    -- statement then reaches end of input still looking for its own do.
+    checkfail("while x = do end", "'do' expected near <eof>")
+end)
+
+tests:it("trailing comma in a while assignment variable list is rejected", function()
+    checkfail("while x, = f() do end", "<name> expected near '='")
+end)
+
+tests:it("well formed if assignment compiles and binds", function()
+    local f = checkok("if a, b = 1, 2 then return a + b end")
+    tests:assert_equal(f(), 3)
+end)
+
+-- =============================================================================
+-- Backtick interpolation
+-- =============================================================================
+
+tests:each("unterminated interpolated strings are rejected", {
+    {"unclosed backtick", "local s = `abc", "unfinished interpolated string near <eof>"},
+    {"unclosed expression at eof", "local s = `abc $(", "unexpected symbol near <eof>"},
+    {"backtick inside unclosed expression", "local s = `abc $( 1 + 2`", "unfinished interpolated string near <eof>"},
+    {"unbalanced parens in expression", "return `x $( (1 + 2 `", "unfinished interpolated string near <eof>"},
+}, function(label, src, fragment)
+    checkfail(src, fragment)
+end)
+
+tests:it("empty interpolation expression is rejected", function()
+    checkfail("return `x $()`", "unexpected symbol near <interp_end>")
+end)
+
+tests:each("dollar must introduce a name or parenthesized expression", {
+    {"dollar at end of string", "return `100$`"},
+    {"dollar before space", "return `a $ b`"},
+    {"dollar before digit", "return `$1`"},
+}, function(label, src)
+    checkfail(src, "invalid interpolation after '$'")
+end)
+
+tests:it("nested backtick string inside an interpolation compiles", function()
+    local f = checkok("return `o $( `i` ) o`")
+    tests:assert_equal(f(), "o i o")
+end)
+
+tests:it("doubled dollar is a literal dollar", function()
+    local f = checkok("return `$$`")
+    tests:assert_equal(f(), "$")
+end)
+
+-- =============================================================================
+-- Reserved words
+-- =============================================================================
+
+tests:each("Lus keywords cannot be local variable names", {
+    {"from"},
+    {"provide"},
+    {"enum"},
+    {"global"},
+    {"catch"},
+}, function(kw)
+    checkfail("local " .. kw .. " = 1", "<name> expected near '" .. kw .. "'")
+end)
+
+-- =============================================================================
+-- Catch results used by this harness
+-- =============================================================================
+
+tests:it("catch of a zero-result call does not leak the callee", function()
+    local function noop() end
+    local ok, second = catch noop()
+    tests:assert_true(ok)
+    tests:assert_nil(second,
+        "catch returned a spurious extra result: " .. tostring(second))
+end)
+
+tests:it("catch of a one-result call returns the result", function()
+    local function one() return 7 end
+    local ok, v = catch one()
+    tests:assert_true(ok)
+    tests:assert_equal(v, 7)
+end)
+
+tests:finish()

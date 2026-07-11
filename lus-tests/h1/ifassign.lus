@@ -193,13 +193,15 @@ tests:it("variables from if visible in elseif (from docs example)", function()
 end)
 
 tests:it("variables from if visible in else", function()
-    local captured_a = nil
-    if a = nil then
-        -- Should not enter
+    -- A false condition value proves both that the assignment happened
+    -- and that the variable is readable in the else block
+    local captured = "sentinel"
+    if a = false then
+        captured = "if-branch"
     else
-        captured_a = a
+        captured = a
     end
-    assert(captured_a == nil, "a should be nil in else block")
+    assert(captured == false, "a should be false and visible in the else block")
 end)
 
 tests:it("variables accumulate across conditions", function()
@@ -227,13 +229,16 @@ tests:it("nested if statements with assignments", function()
 end)
 
 tests:it("inner assignment variables don't leak out", function()
+    local inner = "outer"
     local result = "not set"
     if outer = 1 then
         if inner = 2 then
             result = inner
         end
+        assert(inner == "outer", "condition variable is scoped to its own if")
     end
-    assert(result == 2, "inner was 2")
+    assert(result == 2, "inner was 2 inside its own block")
+    assert(inner == "outer", "outer local unchanged after the statement")
 end)
 
 tests:it("if-assignment with else", function()
@@ -339,10 +344,13 @@ tests:it("condition variable not visible outside if", function()
 end)
 
 tests:it("condition variables are local, not global", function()
-    if test_global_var = 999 then
-        assert(test_global_var == 999)
+    local v = "outer"
+    if v = 1 then
+        v = v + 1
+        assert(v == 2, "reassignment writes the block-local binding")
     end
-    assert(_G.test_global_var == nil, "should not create global variable")
+    assert(v == "outer", "outer local untouched by the block-local write")
+    assert(_G.v == nil, "no global was created by declaration or write")
 end)
 
 tests:finish()

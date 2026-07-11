@@ -7,50 +7,70 @@
   `function <src:line>` when anonymous). These assertions check the Rust runtime
   reproduces those names; they hold on both the C and Rust binaries.
 
-  Errors are caught with `catch`, whose error value carries the rendered
-  traceback, so the assertions match against that text.
+  Caught errors carry the raw error object with no traceback attached, so
+  rendering is observed by running the fixture driver in a subprocess and
+  letting each case error escape uncaught. The assertions match the captured
+  stderr text.
 ]]
 
-global print, assert, require, tostring, setmetatable, string, math, pledge, next
+global print, assert, require, tostring, string, math, pledge, io, os, arg
 
-pledge("load", "fs:read=./lus-tests/*", "seal")
+pledge("load", "fs:read=./lus-tests/*", "exec", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("traceback")
 
+-- The interpreter binary sits at the most negative arg index.
+local LUS
+do
+    local i = -1
+    while arg[i - 1] ~= nil do i = i - 1 end
+    LUS = arg[i]
+end
+
+local CASES = "lus-tests/h1/traceback/cases.lus"
+
+-- Run one fixture case in a subprocess and capture its rendered traceback.
+local run_cache = {}
+local function run_case(name)
+    if run_cache[name] == nil then
+        local f = io.popen(LUS .. " " .. CASES .. " " .. name .. " 2>&1")
+        run_cache[name] = f:read("a")
+        f:close()
+    end
+    return run_cache[name]
+end
+
 tests:it("a fast-called builtin shows function '<qualified>'", function()
-    local ok, e = catch math.floor({})
-    assert(not ok)
-    assert(tostring(e):find("%[C%]: in function 'math%.floor'"), tostring(e))
+    local e = run_case("floor")
+    assert(e:find("%[C%]: in function 'math%.floor'"), e)
 end)
 
 tests:it("setmetatable (fast-called) shows function 'setmetatable'", function()
-    local ok, e = catch setmetatable(1, 2)
-    assert(tostring(e):find("%[C%]: in function 'setmetatable'"), tostring(e))
+    local e = run_case("setmeta")
+    assert(e:find("%[C%]: in function 'setmetatable'"), e)
 end)
 
 tests:it("a non-fast-called global native shows global '<name>'", function()
-    local ok, e = catch next(5)
-    assert(tostring(e):find("%[C%]: in global 'next'"), tostring(e))
+    local e = run_case("next")
+    assert(e:find("%[C%]: in global 'next'"), e)
 end)
 
 tests:it("a non-fast-called field native shows field '<name>'", function()
-    local ok, e = catch string.rep("x", {})
-    assert(tostring(e):find("%[C%]: in field 'rep'"), tostring(e))
+    local e = run_case("rep")
+    assert(e:find("%[C%]: in field 'rep'"), e)
 end)
 
 tests:it("a Lua frame is named by its call-site kind", function()
-    local function boom() return setmetatable(1, 2) end
-    local ok, e = catch boom()
+    local e = run_case("localboom")
     -- the native frame, then the Lua frame named as a local
-    assert(tostring(e):find("%[C%]: in function 'setmetatable'"), tostring(e))
-    assert(tostring(e):find("in local 'boom'"), tostring(e))
+    assert(e:find("%[C%]: in function 'setmetatable'"), e)
+    assert(e:find("in local 'boom'"), e)
 end)
 
 tests:it("a tail-called builtin keeps its qualified name", function()
-    local function viatail() return math.floor({}) end
-    local ok, e = catch viatail()
-    assert(tostring(e):find("%[C%]: in function 'math%.floor'"), tostring(e))
+    local e = run_case("viatail")
+    assert(e:find("%[C%]: in function 'math%.floor'"), e)
 end)
 
 -- ---- proper tail calls ----
@@ -65,11 +85,8 @@ tests:it("deep tail recursion runs in constant stack", function()
 end)
 
 tests:it("a tail-called frame shows the (...tail calls...) marker", function()
-    local function inner() return nil + 1 end
-    local function outer() return inner() end
-    local ok, e = catch outer()
-    assert(not ok)
-    assert(tostring(e):find("%(%.%.%.tail calls%.%.%.%)"), tostring(e))
+    local e = run_case("tailmarker")
+    assert(e:find("%(%.%.%.tail calls%.%.%.%)"), e)
 end)
 
 tests:finish()

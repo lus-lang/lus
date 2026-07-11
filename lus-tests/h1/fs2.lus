@@ -1,0 +1,344 @@
+--[[
+    Test suite for the fs module in the H1 loop (Acquis: filesystem).
+
+    The thorough fs coverage lives in the containerized H3 suite, so the
+    day-to-day H1 loop leaves fs unguarded. This file mirrors the portable
+    parts against a namespaced temporary tree: directory iteration on empty
+    and nested directories, the two return values of fs.type, error returns
+    on missing paths, path edge cases including trailing separators and dot
+    components, symbolic link creation and resolution, and the pledge gates
+    on both grant and deny paths.
+
+    The pledge preamble grants read and write on the ./fs2_x* sandbox, read
+    only on the ./fs2_ro_* namespace so write denials are assertable, and
+    read on the test tree for framework loading. Paths outside every grant
+    exercise the fs:read boundary. A one-time probe decides whether symlink
+    creation is available so the link tests fail loudly where they can run
+    and are skipped where the platform forbids them.
+]]
+
+global print, fs, io, os, pledge, type, tostring, string, table,
+    require, error, assert, ipairs
+
+pledge("load", "fs:read=./lus-tests/*",
+    "fs:read=./fs2_x*", "fs:write=./fs2_x*",
+    "fs:read=./fs2_ro_*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("fs2")
+
+local SEP = fs.path.separator
+local RUN = tostring(os.time())
+local SANDBOX = "fs2_x" .. RUN
+
+catch fs.remove(SANDBOX, true)
+fs.createdirectory(SANDBOX)
+
+local function spath(...)
+    return fs.path.join(SANDBOX, ...)
+end
+
+local function write_file(path, content)
+    local f = io.open(path, "wb")
+    f:write(content)
+    f:close()
+end
+
+-- One-time probe: can this platform create symbolic links in the sandbox?
+-- The dual fs:write pledge gate checks the target string relative to the
+-- working directory, so every link target below is a sandbox-relative path.
+local SYMLINKS_OK
+do
+    local probe_target = spath("symprobe_target")
+    local probe_link = spath("symprobe_link")
+    write_file(probe_target, "x")
+    local ok = catch fs.createlink(probe_link, probe_target)
+    SYMLINKS_OK = (ok ~= false)
+    catch fs.remove(probe_link)
+    catch fs.remove(probe_target)
+end
+
+tests:describe("fs.type")
+
+tests:it("returns file and a false link flag for a regular file", function()
+    local path = spath("plain.txt")
+    write_file(path, "data")
+    local t, is_link = fs.type(path)
+    tests:assert_equal(t, "file")
+    tests:assert_equal(is_link, false, "a regular file is not a link")
+    fs.remove(path)
+end)
+
+tests:it("returns directory and a false link flag for a directory", function()
+    local dir = spath("adir")
+    fs.createdirectory(dir)
+    local t, is_link = fs.type(dir)
+    tests:assert_equal(t, "directory")
+    tests:assert_equal(is_link, false)
+    fs.remove(dir)
+end)
+
+tests:it("a trailing separator on a directory still reports directory", function()
+    local dir = spath("traildir")
+    fs.createdirectory(dir)
+    tests:assert_equal(fs.type(dir .. SEP), "directory")
+    fs.remove(dir)
+end)
+
+tests:it("a missing path raises rather than returning nil", function()
+    local ok, err = catch fs.type(spath("does_not_exist_here"))
+    tests:assert_false(ok, "fs.type raises on a missing path")
+    tests:assert_contains(tostring(err), "does not exist")
+end)
+
+tests:describe("fs.list")
+
+tests:it("returns an empty table for an empty directory", function()
+    local dir = spath("emptydir")
+    fs.createdirectory(dir)
+    local entries = fs.list(dir)
+    tests:assert_type(entries, "table")
+    tests:assert_equal(#entries, 0)
+    fs.remove(dir)
+end)
+
+tests:it("lists exactly the entries of a populated directory", function()
+    local dir = spath("populated")
+    fs.createdirectory(dir)
+    write_file(fs.path.join(dir, "a.txt"), "a")
+    write_file(fs.path.join(dir, "b.txt"), "b")
+    fs.createdirectory(fs.path.join(dir, "child"))
+    local entries = fs.list(dir)
+    tests:assert_equal(#entries, 3)
+    local seen = {}
+    for _, name in ipairs(entries) do seen[name] = true end
+    tests:assert_true(seen["a.txt"] and seen["b.txt"] and seen["child"],
+        "all three entries appear")
+    fs.remove(dir, true)
+end)
+
+tests:it("never includes the . and .. pseudo-entries", function()
+    local dir = spath("noselfparent")
+    fs.createdirectory(dir)
+    write_file(fs.path.join(dir, "only.txt"), "x")
+    for _, name in ipairs(fs.list(dir)) do
+        tests:assert_true(name ~= "." and name ~= "..",
+            "list omits . and .., saw " .. name)
+    end
+    fs.remove(dir, true)
+end)
+
+tests:it("only the top level of a nested tree is returned", function()
+    local dir = spath("nested")
+    fs.createdirectory(dir)
+    fs.createdirectory(fs.path.join(dir, "sub"))
+    write_file(fs.path.join(dir, "sub", "deep.txt"), "deep")
+    write_file(fs.path.join(dir, "top.txt"), "top")
+    local entries = fs.list(dir)
+    -- Only "sub" and "top.txt" are direct children, not "deep.txt".
+    tests:assert_equal(#entries, 2)
+    for _, name in ipairs(entries) do
+        tests:assert_true(name ~= "deep.txt", "list is not recursive")
+    end
+    fs.remove(dir, true)
+end)
+
+tests:it("listing a missing directory raises", function()
+    local ok, err = catch fs.list(spath("no_such_dir"))
+    tests:assert_false(ok)
+    tests:assert_type(tostring(err), "string")
+end)
+
+tests:it("listing a regular file raises", function()
+    local path = spath("regular_for_list.txt")
+    write_file(path, "x")
+    local ok = catch fs.list(path)
+    tests:assert_false(ok, "a file is not a directory to iterate")
+    fs.remove(path)
+end)
+
+tests:it("a dot component in the path lists the same directory", function()
+    local dir = spath("dotcomp")
+    fs.createdirectory(dir)
+    write_file(fs.path.join(dir, "one.txt"), "1")
+    local viadot = fs.path.join(SANDBOX, ".", "dotcomp")
+    tests:assert_equal(#fs.list(viadot), 1)
+    fs.remove(dir, true)
+end)
+
+tests:describe("fs.path.join")
+
+-- The separator is a single-character constant, so table-driven expectations
+-- can be built from it directly.
+tests:each("join produces the expected path", {
+    { { "a", "b" }, "a" .. SEP .. "b" },
+    { { "a", "b", "c", "d.txt" }, "a" .. SEP .. "b" .. SEP .. "c" .. SEP .. "d.txt" },
+    { { "only" }, "only" },
+    -- A trailing separator on the left is not doubled.
+    { { "a" .. SEP, "b" }, "a" .. SEP .. "b" },
+    -- An empty component is skipped rather than producing a doubled separator.
+    { { "", "b" }, "b" },
+    { { "a", "", "b" }, "a" .. SEP .. "b" },
+    { { "", "" }, "" },
+    -- An absolute component discards everything before it.
+    { { "a", SEP .. "b" }, SEP .. "b" },
+    { { "a", "b", SEP .. "root" }, SEP .. "root" },
+    -- A number argument is coerced through the string rules.
+    { { "a", 5 }, "a" .. SEP .. "5" },
+}, function(args, expected)
+    local got = fs.path.join(table.unpack(args))
+    tests:assert_equal(got, expected)
+end)
+
+tests:it("join with no arguments is the empty string", function()
+    tests:assert_equal(fs.path.join(), "")
+end)
+
+tests:it("a table argument raises a bad-argument error", function()
+    local ok, err = catch fs.path.join("a", {})
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "bad argument")
+end)
+
+tests:describe("fs.path.name and fs.path.parent")
+
+tests:each("name extracts the final component", {
+    { "a" .. SEP .. "b" .. SEP .. "file.txt", "file.txt" },
+    { "file.txt", "file.txt" },
+    { SEP .. "home" .. SEP .. ".bashrc", ".bashrc" },
+    { "archive.tar.gz", "archive.tar.gz" },
+}, function(input, expected)
+    tests:assert_equal(fs.path.name(input), expected)
+end)
+
+tests:each("parent extracts the containing directory", {
+    { "a" .. SEP .. "b" .. SEP .. "file.txt", "a" .. SEP .. "b" },
+    { "file.txt", "." },
+    { SEP .. "file.txt", SEP },
+    { ".." .. SEP .. "file.txt", ".." },
+}, function(input, expected)
+    tests:assert_equal(fs.path.parent(input), expected)
+end)
+
+tests:describe("fs.path.split")
+
+tests:it("splits a relative path into its components", function()
+    local parts = fs.path.split("a" .. SEP .. "b" .. SEP .. "c.txt")
+    tests:assert_equal(#parts, 3)
+    tests:assert_equal(parts[1], "a")
+    tests:assert_equal(parts[2], "b")
+    tests:assert_equal(parts[3], "c.txt")
+end)
+
+tests:it("an absolute path leads with an empty root component", function()
+    local parts = fs.path.split(SEP .. "a" .. SEP .. "b")
+    tests:assert_equal(parts[1], "")
+    tests:assert_equal(parts[2], "a")
+    tests:assert_equal(parts[3], "b")
+end)
+
+tests:describe("fs.createlink and fs.follow")
+
+if SYMLINKS_OK then
+    tests:it("a link reports its target's type with the link flag set", function()
+        local target = spath("link_target.txt")
+        local link = spath("the_link.txt")
+        write_file(target, "content")
+        fs.createlink(link, target)
+        local t, is_link = fs.type(link)
+        tests:assert_equal(t, "file", "type follows the link to its target")
+        tests:assert_equal(is_link, true, "the second value flags the symlink")
+        fs.remove(link)
+        fs.remove(target)
+    end)
+
+    tests:it("follow returns the raw stored target string", function()
+        local target = spath("raw_target.txt")
+        local link = spath("raw_link.txt")
+        write_file(target, "content")
+        fs.createlink(link, target)
+        tests:assert_equal(fs.follow(link), target,
+            "follow returns the target exactly as stored")
+        fs.remove(link)
+        fs.remove(target)
+    end)
+
+    tests:it("a dangling link is created and its target is preserved", function()
+        -- The target does not exist, which POSIX permits.
+        local missing = spath("no_such_target.txt")
+        local link = spath("dead_link.txt")
+        fs.createlink(link, missing)
+        local t, is_link = fs.type(link)
+        tests:assert_equal(is_link, true, "the dangling entry is still a link")
+        tests:assert_equal(fs.follow(link), missing,
+            "follow reports the stored target even when it is absent")
+        fs.remove(link)
+    end)
+
+    tests:it("the two arguments are link first, then target", function()
+        -- fs.createlink(link, target): follow of the link yields the target,
+        -- which pins the argument order against the reversed spec text.
+        local target = spath("realfile.txt")
+        local link = spath("alias.txt")
+        write_file(target, "x")
+        fs.createlink(link, target)
+        tests:assert_equal(fs.follow(link), target)
+        fs.remove(link)
+        fs.remove(target)
+    end)
+
+    tests:it("follow on a regular file raises with a clear message", function()
+        local path = spath("plainfollow.txt")
+        write_file(path, "not a link")
+        local ok, err = catch fs.follow(path)
+        tests:assert_false(ok, "a non-symlink cannot be followed")
+        tests:assert_contains(tostring(err), "not a symbolic link")
+        fs.remove(path)
+    end)
+else
+    tests:skip("a link reports its target's type with the link flag set", "no symlink support")
+    tests:skip("follow returns the raw stored target string", "no symlink support")
+    tests:skip("a dangling link is created and its target is resolvable", "no symlink support")
+    tests:skip("the two arguments are link first, then target", "no symlink support")
+    tests:skip("follow on a regular file raises with a clear message", "no symlink support")
+end
+
+tests:it("follow on a missing path raises", function()
+    local ok = catch fs.follow(spath("no_link_here"))
+    tests:assert_false(ok)
+end)
+
+tests:describe("pledge gating")
+
+tests:it("fs.type on an ungranted path is denied for reading", function()
+    local ok, err = catch fs.type("./fs2_denied_area_" .. RUN .. "/x")
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), 'permission "fs:read" denied')
+end)
+
+tests:it("fs.createdirectory on an ungranted path is denied for writing", function()
+    local ok, err = catch fs.createdirectory("./fs2_denied_area_" .. RUN)
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), 'permission "fs:write" denied')
+end)
+
+tests:it("a read-only grant reads but refuses to create", function()
+    -- The ./fs2_ro_* namespace carries read but not write. A read probe on a
+    -- missing path passes the pledge and fails only at the syscall, while a
+    -- create is stopped by the pledge itself.
+    local ro = "./fs2_ro_" .. RUN
+    local ok_read, err_read = catch fs.type(ro)
+    tests:assert_false(ok_read)
+    tests:assert_contains(tostring(err_read), "does not exist")
+    assert(not string.find(tostring(err_read), "permission", 1, true),
+        "the read grant carried the fs.type call past the pledge")
+    local ok_write, err_write = catch fs.createdirectory(ro)
+    tests:assert_false(ok_write)
+    tests:assert_contains(tostring(err_write), 'permission "fs:write" denied')
+end)
+
+catch fs.remove(SANDBOX, true)
+local leftover = catch fs.type(SANDBOX)
+assert(leftover == false, "the sandbox is cleaned up")
+
+tests:finish()

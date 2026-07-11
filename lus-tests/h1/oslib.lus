@@ -1,0 +1,401 @@
+--[[
+  Tests for the `os` module: clock, time, date, difftime, platform, getenv,
+  tmpname, and the removed remove/rename entries.
+
+  Coverage centres on contracts that no other harness pins: the three-value
+  and table shapes of os.date and os.time, field normalization and required
+  fields, the float return type of os.clock and os.difftime, the pledge
+  boundary of os.getenv, and the pin that os.remove and os.rename stay gone.
+
+  All calendar assertions use a fixed epoch through the UTC "!" prefix so the
+  suite is timezone-independent, except where a "*t" round-trip is compared
+  against itself in local time. REF matches the constant used in datetime.lus.
+]]
+
+global os, print, pledge, type, tostring, tonumber, math, require, ipairs,
+    assert, io, fs, rawget, string
+
+pledge("load", "fs:read=./lus-tests/*", "fs:read=/tmp/lua_*", "fs:write",
+    "env=LC_*", "env=PATH", "env=LUS_TEST_*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("oslib")
+
+-- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
+local REF = 1782998100
+
+-- ============================================================================
+-- os.clock
+-- ============================================================================
+
+tests:describe("os.clock")
+
+tests:it("returns a non-negative float", function()
+    local c = os.clock()
+    tests:assert_type(c, "number")
+    tests:assert_equal(math.type(c), "float", "clock pushes lua_Number")
+    tests:assert_true(c >= 0, "CPU time is never negative")
+end)
+
+tests:it("is non-decreasing across two successive calls", function()
+    local a = os.clock()
+    local b = os.clock()
+    tests:assert_true(b >= a, "clock must not run backwards")
+end)
+
+tests:it("measures CPU time consumed by a busy loop", function()
+    local before = os.clock()
+    local s = 0.0
+    for i = 1, 10000000 do
+        s = s + i * 0.5
+    end
+    local after = os.clock()
+    tests:assert_true(after > before,
+        "a ten-million iteration loop must register CPU time")
+    -- Reference the accumulator so the loop cannot be optimized away.
+    tests:assert_true(s > 0, "accumulator was computed")
+end)
+
+tests:it("ignores extra arguments", function()
+    -- Lua convention accepts and discards surplus arguments to os.clock.
+    tests:assert_type(os.clock("ignored", 1, 2), "number")
+end)
+
+-- ============================================================================
+-- os.time
+-- ============================================================================
+
+tests:describe("os.time")
+
+tests:it("with no argument returns a plausible current integer", function()
+    local now = os.time()
+    tests:assert_equal(math.type(now), "integer", "epoch seconds are integer")
+    tests:assert_true(now > 1700000000, "clock is past November 2023")
+end)
+
+tests:it("with no argument is non-decreasing across two calls", function()
+    local a = os.time()
+    local b = os.time()
+    tests:assert_true(b >= a, "wall clock must not run backwards")
+end)
+
+tests:it("table form returns an integer", function()
+    local t = os.time{ year = 2026, month = 7, day = 2, hour = 13, min = 15,
+                       sec = 0 }
+    tests:assert_equal(math.type(t), "integer", "table form yields an integer")
+end)
+
+tests:it("table form round-trips through os.date local fields", function()
+    local t = os.time{ year = 2026, month = 7, day = 2, hour = 13, min = 15,
+                       sec = 0 }
+    local d = os.date("*t", t)
+    tests:assert_equal(d.year, 2026)
+    tests:assert_equal(d.month, 7)
+    tests:assert_equal(d.day, 2)
+    tests:assert_equal(d.hour, 13)
+    tests:assert_equal(d.min, 15)
+    tests:assert_equal(d.sec, 0)
+end)
+
+tests:it("hour defaults to noon, minute and second to zero", function()
+    -- The implementation defaults hour to 12, so an all-default call equals
+    -- an explicit noon call.
+    local implicit = os.time{ year = 2026, month = 7, day = 2 }
+    local explicit = os.time{ year = 2026, month = 7, day = 2, hour = 12,
+                              min = 0, sec = 0 }
+    tests:assert_equal(implicit, explicit, "hour default is 12, not 0")
+end)
+
+tests:each("a missing required field names that field", {
+    { { month = 7, day = 2 }, "year" },
+    { { year = 2026, day = 2 }, "month" },
+    { { year = 2026, month = 7 }, "day" },
+}, function(tbl, field)
+    tests:assert_throws(function() os.time(tbl) end,
+        "field '" .. field .. "' missing in date table")
+end)
+
+tests:it("a non-integer field raises 'is not an integer'", function()
+    tests:assert_throws(function()
+        os.time{ year = 2026, month = "x", day = 1 }
+    end, "field 'month' is not an integer")
+end)
+
+tests:it("a fractional field raises 'is not an integer'", function()
+    -- A float with a fractional part is not accepted as an integer field.
+    tests:assert_throws(function()
+        os.time{ year = 2026, month = 1.5, day = 1 }
+    end, "field 'month' is not an integer")
+end)
+
+tests:it("an out-of-bound field raises 'is out-of-bound'", function()
+    tests:assert_throws(function()
+        os.time{ year = 2026, month = math.maxinteger, day = 1 }
+    end, "field 'month' is out%-of%-bound")
+end)
+
+tests:it("normalization writes overflowing fields back into the table",
+    function()
+    -- setallfields updates the argument table in place, so month 13 rolls to
+    -- January of the following year.
+    local tbl = { year = 2026, month = 13, day = 1 }
+    os.time(tbl)
+    tests:assert_equal(tbl.month, 1, "month 13 normalizes to 1")
+    tests:assert_equal(tbl.year, 2027, "the year is carried")
+end)
+
+tests:it("normalization carries an out-of-range day", function()
+    local tbl = { year = 2026, month = 1, day = 32 }
+    os.time(tbl)
+    tests:assert_equal(tbl.month, 2, "January 32 rolls into February")
+    tests:assert_equal(tbl.day, 1, "day normalizes to 1")
+end)
+
+tests:each("a non-table argument raises 'table expected'", {
+    { 42 }, { "x" }, { true },
+}, function(arg)
+    tests:assert_throws(function() os.time(arg) end, "table expected")
+end)
+
+-- ============================================================================
+-- os.date
+-- ============================================================================
+
+tests:describe("os.date")
+
+tests:it("'!*t' on epoch zero returns the Unix epoch fields", function()
+    local t = os.date("!*t", 0)
+    tests:assert_type(t, "table")
+    tests:assert_equal(t.year, 1970)
+    tests:assert_equal(t.month, 1)
+    tests:assert_equal(t.day, 1)
+    tests:assert_equal(t.hour, 0)
+    tests:assert_equal(t.min, 0)
+    tests:assert_equal(t.sec, 0)
+    tests:assert_equal(t.wday, 5, "1970-01-01 is a Thursday, Sunday=1")
+    tests:assert_equal(t.yday, 1, "first day of the year")
+    tests:assert_type(t.isdst, "boolean")
+end)
+
+tests:it("every numeric field of a '*t' table is an integer", function()
+    local t = os.date("*t", REF)
+    for _, key in ipairs({ "year", "month", "day", "hour", "min", "sec",
+                           "wday", "yday" }) do
+        tests:assert_equal(math.type(t[key]), "integer",
+            "field " .. key .. " must be an integer")
+    end
+end)
+
+tests:it("formats an explicit UTC time into a string", function()
+    tests:assert_equal(os.date("!%Y-%m-%d %H:%M:%S", REF),
+        "2026-07-02 13:15:00")
+end)
+
+tests:it("with no argument returns a non-empty string", function()
+    local s = os.date()
+    tests:assert_type(s, "string")
+    tests:assert_true(#s > 0, "default format %c yields text")
+end)
+
+tests:it("copies non-directive characters verbatim", function()
+    tests:assert_equal(os.date("!x%Yx", 0), "x1970x")
+end)
+
+tests:each("common directives render the reference instant", {
+    { "%Y", "2026" }, { "%m", "07" }, { "%d", "02" },
+    { "%H", "13" }, { "%M", "15" }, { "%S", "00" },
+    { "%j", "183" }, { "%y", "26" },
+    { "%A", "Thursday" }, { "%B", "July" },
+    { "%a", "Thu" }, { "%b", "Jul" }, { "%p", "PM" },
+    { "%%", "%" },
+}, function(directive, expected)
+    tests:assert_equal(os.date("!" .. directive, REF), expected,
+        "directive " .. directive)
+end)
+
+tests:it("an invalid conversion specifier raises", function()
+    tests:assert_throws(function() os.date("%Q") end,
+        "invalid conversion specifier '%%Q'")
+end)
+
+tests:it("a table format argument raises 'string expected'", function()
+    tests:assert_throws(function() os.date({}) end, "string expected")
+end)
+
+tests:it("a non-number time argument raises 'number expected'", function()
+    tests:assert_throws(function() os.date("!%Y", "x") end,
+        "number expected")
+end)
+
+tests:it("an unrepresentable time raises", function()
+    tests:assert_throws(function() os.date("*t", math.maxinteger) end,
+        "cannot be represented")
+end)
+
+tests:it("round-trips a fixed instant through os.time", function()
+    -- Both directions read local time, so the composition is self-consistent.
+    tests:assert_equal(os.time(os.date("*t", REF)), REF)
+end)
+
+-- ============================================================================
+-- os.difftime
+-- ============================================================================
+
+tests:describe("os.difftime")
+
+tests:it("returns the first argument minus the second as a float", function()
+    local d = os.difftime(250, 100)
+    tests:assert_equal(d, 150.0)
+    tests:assert_equal(math.type(d), "float", "difftime pushes lua_Number")
+end)
+
+tests:it("is negative when the second argument is larger", function()
+    tests:assert_equal(os.difftime(100, 250), -150.0)
+end)
+
+tests:it("is zero for equal arguments", function()
+    tests:assert_equal(os.difftime(REF, REF), 0.0)
+end)
+
+tests:each("rejects wrong argument arity and type", {
+    { function() os.difftime() end },
+    { function() os.difftime(1) end },
+    { function() os.difftime("a", "b") end },
+}, function(fn)
+    tests:assert_throws(fn, "number expected")
+end)
+
+-- ============================================================================
+-- os.platform
+-- ============================================================================
+
+tests:describe("os.platform")
+
+tests:it("returns a string that is stable across calls", function()
+    local a = os.platform()
+    tests:assert_type(a, "string")
+    tests:assert_equal(os.platform(), a, "platform does not change at runtime")
+end)
+
+tests:it("returns one of the implemented identifiers", function()
+    local known = {
+        linux = true, darwin = true, freebsd = true, netbsd = true,
+        openbsd = true, sunos = true, windows = true, posix = true,
+        unknown = true,
+    }
+    tests:assert_true(known[os.platform()],
+        "unexpected platform string: " .. tostring(os.platform()))
+end)
+
+tests:it("ignores extra arguments", function()
+    tests:assert_type(os.platform("ignored"), "string")
+end)
+
+-- The spec documents lowercase uname-style identifiers, and os.platform()
+-- reports the same names. On Apple platforms it returns "darwin", the value
+-- uname -s prints and the one the spec lists, so the runtime string and the
+-- documentation agree on every platform.
+tests:it("matches the platform name documented in the spec", function()
+    local documented = {
+        linux = true, darwin = true, windows = true, freebsd = true,
+        netbsd = true, openbsd = true, sunos = true, posix = true,
+    }
+    local p = os.platform()
+    tests:assert_true(documented[p] or p == "unknown",
+        "platform '" .. tostring(p) .. "' is not one the spec documents")
+end)
+
+-- ============================================================================
+-- os.getenv
+-- ============================================================================
+
+tests:describe("os.getenv")
+
+tests:it("returns a string for a granted, defined variable", function()
+    -- PATH is present in every process the harness runs in, and the pledge
+    -- grants it explicitly.
+    local v = os.getenv("PATH")
+    tests:assert_type(v, "string")
+    tests:assert_true(#v > 0, "PATH is non-empty")
+end)
+
+tests:it("returns nil for a granted but undefined variable", function()
+    -- The LUS_TEST_* glob grants this name even though it is unset, so the
+    -- result is nil rather than a permission error.
+    tests:assert_nil(os.getenv("LUS_TEST_UNSET_9999"),
+        "an undefined variable reads as nil")
+end)
+
+tests:it("allows a variable matched by a glob-scoped pledge", function()
+    -- LC_ALL matches the env=LC_* grant, so the read is permitted even if the
+    -- variable itself is unset (result may be a string or nil).
+    local ok = catch os.getenv("LC_ALL")
+    tests:assert_true(ok, "LC_ALL is inside the env=LC_* grant")
+end)
+
+tests:it("denies a variable outside every grant", function()
+    -- HOME matches none of the granted globs, so the read is refused.
+    tests:assert_throws(function() os.getenv("HOME") end,
+        'permission "env" denied for')
+end)
+
+tests:it("requires a variable name argument", function()
+    tests:assert_throws(function() os.getenv() end,
+        "string expected")
+end)
+
+tests:it("rejects a non-string, non-coercible argument", function()
+    tests:assert_throws(function() os.getenv({}) end,
+        "string expected")
+end)
+
+-- ============================================================================
+-- os.tmpname
+-- ============================================================================
+
+tests:describe("os.tmpname")
+
+tests:it("returns a non-empty string", function()
+    local name = os.tmpname()
+    tests:assert_type(name, "string")
+    tests:assert_true(#name > 0, "a temporary name is non-empty")
+    catch fs.remove(name)
+end)
+
+tests:it("returns a distinct name on each call", function()
+    local a = os.tmpname()
+    local b = os.tmpname()
+    tests:assert_true(a ~= b, "consecutive names differ")
+    catch fs.remove(a)
+    catch fs.remove(b)
+end)
+
+tests:it("creates the file so it can be reopened immediately", function()
+    -- On POSIX the implementation uses mkstemp, which creates the file. The
+    -- Windows tmpnam path does not, so gate the existence check.
+    local name = os.tmpname()
+    if os.platform() ~= "windows" then
+        local f = io.open(name, "r")
+        tests:assert_not_nil(f, "mkstemp leaves the file on disk")
+        if f then f:close() end
+    end
+    catch fs.remove(name)
+end)
+
+-- ============================================================================
+-- os.remove and os.rename are removed in favour of fs.remove and fs.move
+-- ============================================================================
+
+tests:describe("removed entries")
+
+tests:it("os.remove is absent", function()
+    tests:assert_nil(os.remove, "os.remove was removed in favour of fs.remove")
+    tests:assert_nil(rawget(os, "remove"), "no metatable fallback")
+end)
+
+tests:it("os.rename is absent", function()
+    tests:assert_nil(os.rename, "os.rename was removed in favour of fs.move")
+    tests:assert_nil(rawget(os, "rename"), "no metatable fallback")
+end)
+
+tests:finish()

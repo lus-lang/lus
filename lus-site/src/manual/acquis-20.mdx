@@ -165,9 +165,22 @@ local ok, result = catch (catch[badHandler] error("original"))
 Anonymous functions work directly in the handler position:
 
 ```lua
-local ok, err = catch[function(e) return e:upper() end] error("oops")
+local ok, err = catch[function(e) return e:upper() end] error("oops", 0)
 assert(err == "OOPS")
 ```
+
+## Handler validation
+
+The bracketed expression must evaluate to a function. Any other value raises an error at the catch site, so a misspelled handler name is reported instead of being silently ignored:
+
+```lua
+local ok, err = catch (function()
+    catch[42] error("x")
+end)()
+assert(err:find("attempt to use a number value as a catch handler"))
+```
+
+Only true functions are accepted, matching the `xpcall` baseline. A table with a `__call` metamethod is rejected the same way.
 
 ## Comparison with xpcall
 

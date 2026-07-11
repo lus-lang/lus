@@ -1,0 +1,1307 @@
+-- Fastcall parity suite.
+-- Every builtin registered in the fastcall table must behave identically
+-- whether a call site compiles to OP_FASTCALL (a direct global call with the
+-- registered argument count) or to a plain OP_CALL through a local alias.
+-- This file drives both forms over a shared corpus of adversarial inputs and
+-- asserts identical results, identical result subtypes, and identical error
+-- reasons. It also pins the qualified-versus-plain error-name behavior of
+-- fastcall fallbacks so future changes to name derivation are deliberate.
+-- Emission is proven with framework.get_fastcalls so the fast form really is
+-- fast and the alias form really is not.
+
+global print, require, string, math, table, utf8, vector, type, tostring, tonumber, rawlen, rawget, rawset, rawequal, setmetatable, getmetatable, assert, select, pledge, next, pairs, ipairs, coroutine, error, os, _G
+
+pledge("load", "fs:read=./lus-tests/*", "env=ASAN_OPTIONS", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("fastcall-parity")
+local FC = framework.FC
+
+local nan = 0 / 0
+local inf = math.huge
+
+-- Shared junk values so error messages are identical across the two calls.
+local EMPTY_T = {}
+local SHARED_T = {}
+local VEC = vector.create(4)
+local color = enum RED, GREEN, BLUE end
+
+-- ==== Fast-form helpers ====
+-- Each helper contains exactly one direct global call with the registered
+-- fastcall argument count, so the call inside compiles to OP_FASTCALL.
+
+local function fast_type(a) return type(a) end
+local function fast_rawlen(a) return rawlen(a) end
+local function fast_rawget(a, b) return rawget(a, b) end
+local function fast_rawset(a, b, c) return rawset(a, b, c) end
+local function fast_rawequal(a, b) return rawequal(a, b) end
+local function fast_assert(a) return assert(a) end
+local function fast_getmetatable(a) return getmetatable(a) end
+local function fast_setmetatable(a, b) return setmetatable(a, b) end
+local function fast_tonumber(a) return tonumber(a) end
+local function fast_tostring(a) return tostring(a) end
+
+local function fast_abs(a) return math.abs(a) end
+local function fast_max(a, b) return math.max(a, b) end
+local function fast_min(a, b) return math.min(a, b) end
+local function fast_ceil(a) return math.ceil(a) end
+local function fast_floor(a) return math.floor(a) end
+local function fast_sqrt(a) return math.sqrt(a) end
+local function fast_sin(a) return math.sin(a) end
+local function fast_cos(a) return math.cos(a) end
+local function fast_tan(a) return math.tan(a) end
+local function fast_asin(a) return math.asin(a) end
+local function fast_acos(a) return math.acos(a) end
+local function fast_atan(a) return math.atan(a) end
+local function fast_exp(a) return math.exp(a) end
+local function fast_log(a) return math.log(a) end
+local function fast_deg(a) return math.deg(a) end
+local function fast_rad(a) return math.rad(a) end
+local function fast_fmod(a, b) return math.fmod(a, b) end
+local function fast_ult(a, b) return math.ult(a, b) end
+local function fast_tointeger(a) return math.tointeger(a) end
+local function fast_mathtype(a) return math.type(a) end
+local function fast_ldexp(a, b) return math.ldexp(a, b) end
+
+local function fast_len(a) return string.len(a) end
+local function fast_trim(a) return string.trim(a) end
+local function fast_ltrim(a) return string.ltrim(a) end
+local function fast_rtrim(a) return string.rtrim(a) end
+local function fast_split(a, b) return string.split(a, b) end
+local function fast_join(a, b) return string.join(a, b) end
+local function fast_sub(a, b, c) return string.sub(a, b, c) end
+local function fast_byte(a, b) return string.byte(a, b) end
+local function fast_char(a) return string.char(a) end
+local function fast_lower(a) return string.lower(a) end
+local function fast_upper(a) return string.upper(a) end
+local function fast_reverse(a) return string.reverse(a) end
+
+local function fast_sum(a) return table.sum(a) end
+local function fast_mean(a) return table.mean(a) end
+local function fast_median(a) return table.median(a) end
+local function fast_stdev(a) return table.stdev(a) end
+local function fast_transpose(a) return table.transpose(a) end
+local function fast_reshape(a, b, c) return table.reshape(a, b, c) end
+
+local function fast_vcreate(a) return vector.create(a) end
+local function fast_vclone(a) return vector.clone(a) end
+local function fast_vsize(a) return vector.size(a) end
+local function fast_vresize(a, b) return vector.resize(a, b) end
+
+local function fast_ulen(a) return utf8.len(a) end
+local function fast_ucodepoint(a) return utf8.codepoint(a) end
+local function fast_uchar(a) return utf8.char(a) end
+local function fast_uoffset(a, b) return utf8.offset(a, b) end
+
+-- ==== Slow aliases ====
+-- Calling through a table field on a local can never compile to OP_FASTCALL,
+-- so these bindings force the plain C dispatch path.
+
+local s = {
+    type = type, rawlen = rawlen, rawget = rawget, rawset = rawset,
+    rawequal = rawequal, assert = assert, getmetatable = getmetatable,
+    setmetatable = setmetatable, tonumber = tonumber, tostring = tostring,
+    abs = math.abs, max = math.max, min = math.min, ceil = math.ceil,
+    floor = math.floor, sqrt = math.sqrt, sin = math.sin, cos = math.cos,
+    tan = math.tan, asin = math.asin, acos = math.acos, atan = math.atan,
+    exp = math.exp, log = math.log, deg = math.deg, rad = math.rad,
+    fmod = math.fmod, ult = math.ult, tointeger = math.tointeger,
+    mathtype = math.type, ldexp = math.ldexp,
+    len = string.len, trim = string.trim, ltrim = string.ltrim,
+    rtrim = string.rtrim, split = string.split, join = string.join,
+    sub = string.sub, byte = string.byte, char = string.char,
+    lower = string.lower, upper = string.upper, reverse = string.reverse,
+    sum = table.sum, mean = table.mean, median = table.median,
+    stdev = table.stdev, transpose = table.transpose, reshape = table.reshape,
+    vcreate = vector.create, vclone = vector.clone, vsize = vector.size,
+    vresize = vector.resize,
+    ulen = utf8.len, ucodepoint = utf8.codepoint, uchar = utf8.char,
+    uoffset = utf8.offset,
+}
+
+-- Alias wrappers used for the multi-return comparison. They mirror the shape
+-- of the fast helpers exactly, but the callee is an alias.
+local function slow_uoffset_wrap(a, b) return s.uoffset(a, b) end
+local function slow_ulen_wrap(a) return s.ulen(a) end
+
+-- ==== Comparison machinery ====
+
+-- Structural equality that also distinguishes number subtypes, treats two
+-- NaNs as equal, and separates -0.0 from 0.0 through tostring.
+local function deep_same(a, b)
+    if type(a) ~= type(b) then
+        return false
+    end
+    if type(a) == "number" then
+        if a ~= a and b ~= b then
+            return true
+        end
+        if math.type(a) ~= math.type(b) then
+            return false
+        end
+        return a == b and tostring(a) == tostring(b)
+    end
+    if type(a) ~= "table" then
+        return a == b
+    end
+    if a == b then
+        return true
+    end
+    local extra = 0
+    for k, v in pairs(a) do
+        extra = extra + 1
+        if not deep_same(v, b[k]) then
+            return false
+        end
+    end
+    for _ in pairs(b) do
+        extra = extra - 1
+    end
+    return extra == 0
+end
+
+-- Normalizes an error value down to its comparable core. The location prefix
+-- and the function name inside an argument error depend on the call site by
+-- design, so both are removed before comparison.
+local function err_core(e)
+    local line = string.match(tostring(e), "([^\n]*)") or ""
+    local stripped = string.match(line, "^.-:%d+: (.*)$") or line
+    local prefix, reason = string.match(stripped, "^(bad%s.-argument%s#%-?%d+)%s+to%s+'[^']*'%s+(%(.*%))$")
+    if prefix then
+        return prefix .. " " .. reason
+    end
+    return stripped
+end
+
+-- Calls f with the exact case argument count and captures the first result
+-- in a single-value context, where the VM pads missing results with nil.
+-- The wrapper always returns exactly two values so that catch never has to
+-- pad, which sidesteps the zero-result catch bug covered by a soft test
+-- below.
+local function call_one(f, nargs, case)
+    local r
+    if nargs == 1 then
+        r = f(case[2])
+    elseif nargs == 2 then
+        r = f(case[2], case[3])
+    else
+        r = f(case[2], case[3], case[4])
+    end
+    return true, r
+end
+
+-- Runs one corpus case through the fast form and the alias form, asserting
+-- identical outcome, identical first result, and identical error core.
+local function run_pair(fastf, slowf, nargs, case, name)
+    local label = name .. " [" .. tostring(case[1]) .. "]"
+    -- On success catch yields (true, true, result) because call_one always
+    -- returns two values. On failure it yields (false, error) and the third
+    -- receiver is never read.
+    local okf, ef, rf = catch call_one(fastf, nargs, case)
+    local oks, es, rs = catch call_one(slowf, nargs, case)
+    if not okf then
+        rf = ef
+    end
+    if not oks then
+        rs = es
+    end
+    if okf ~= oks then
+        error(label .. ": fast ok=" .. tostring(okf) .. " slow ok=" .. tostring(oks)
+            .. " fast result=" .. tostring(rf) .. " slow result=" .. tostring(rs))
+    end
+    if okf then
+        if not deep_same(rf, rs) then
+            error(label .. ": fast=" .. tostring(rf) .. " (" .. tostring(math.type(rf))
+                .. ") slow=" .. tostring(rs) .. " (" .. tostring(math.type(rs)) .. ")")
+        end
+    else
+        local cf = err_core(rf)
+        local cs = err_core(rs)
+        if cf ~= cs then
+            error(label .. ": fast error [" .. cf .. "] slow error [" .. cs .. "]")
+        end
+    end
+end
+
+local function parity_over(fastf, slowf, nargs, corpus, name)
+    for _, case in ipairs(corpus) do
+        run_pair(fastf, slowf, nargs, case, name)
+    end
+end
+
+-- ==== Emission proofs ====
+tests:describe("emission proofs")
+
+local emission_list = {
+    {"type", fast_type, FC.TYPE},
+    {"rawlen", fast_rawlen, FC.RAWLEN},
+    {"rawget", fast_rawget, FC.RAWGET},
+    {"rawset", fast_rawset, FC.RAWSET},
+    {"rawequal", fast_rawequal, FC.RAWEQUAL},
+    {"assert", fast_assert, FC.ASSERT},
+    {"getmetatable", fast_getmetatable, FC.GETMETATABLE},
+    {"setmetatable", fast_setmetatable, FC.SETMETATABLE},
+    {"tonumber", fast_tonumber, FC.TONUMBER},
+    {"tostring", fast_tostring, FC.TOSTRING},
+    {"math.abs", fast_abs, FC.MATH_ABS},
+    {"math.max", fast_max, FC.MATH_MAX},
+    {"math.min", fast_min, FC.MATH_MIN},
+    {"math.ceil", fast_ceil, FC.MATH_CEIL},
+    {"math.floor", fast_floor, FC.MATH_FLOOR},
+    {"math.sqrt", fast_sqrt, FC.MATH_SQRT},
+    {"math.sin", fast_sin, FC.MATH_SIN},
+    {"math.cos", fast_cos, FC.MATH_COS},
+    {"math.tan", fast_tan, FC.MATH_TAN},
+    {"math.asin", fast_asin, FC.MATH_ASIN},
+    {"math.acos", fast_acos, FC.MATH_ACOS},
+    {"math.atan", fast_atan, FC.MATH_ATAN},
+    {"math.exp", fast_exp, FC.MATH_EXP},
+    {"math.log", fast_log, FC.MATH_LOG},
+    {"math.deg", fast_deg, FC.MATH_DEG},
+    {"math.rad", fast_rad, FC.MATH_RAD},
+    {"math.fmod", fast_fmod, FC.MATH_FMOD},
+    {"math.ult", fast_ult, FC.MATH_ULT},
+    {"math.tointeger", fast_tointeger, FC.MATH_TOINTEGER},
+    {"math.type", fast_mathtype, FC.MATH_TYPE},
+    {"math.ldexp", fast_ldexp, FC.MATH_LDEXP},
+    {"string.len", fast_len, FC.STRING_LEN},
+    {"string.trim", fast_trim, FC.STRING_TRIM},
+    {"string.ltrim", fast_ltrim, FC.STRING_LTRIM},
+    {"string.rtrim", fast_rtrim, FC.STRING_RTRIM},
+    {"string.split", fast_split, FC.STRING_SPLIT},
+    {"string.join", fast_join, FC.STRING_JOIN},
+    {"string.sub", fast_sub, FC.STRING_SUB},
+    {"string.byte", fast_byte, FC.STRING_BYTE},
+    {"string.char", fast_char, FC.STRING_CHAR},
+    {"string.lower", fast_lower, FC.STRING_LOWER},
+    {"string.upper", fast_upper, FC.STRING_UPPER},
+    {"string.reverse", fast_reverse, FC.STRING_REVERSE},
+    {"table.sum", fast_sum, FC.TABLE_SUM},
+    {"table.mean", fast_mean, FC.TABLE_MEAN},
+    {"table.median", fast_median, FC.TABLE_MEDIAN},
+    {"table.stdev", fast_stdev, FC.TABLE_STDEV},
+    {"table.transpose", fast_transpose, FC.TABLE_TRANSPOSE},
+    {"table.reshape", fast_reshape, FC.TABLE_RESHAPE},
+    {"vector.create", fast_vcreate, FC.VECTOR_CREATE},
+    {"vector.clone", fast_vclone, FC.VECTOR_CLONE},
+    {"vector.size", fast_vsize, FC.VECTOR_SIZE},
+    {"vector.resize", fast_vresize, FC.VECTOR_RESIZE},
+    {"utf8.len", fast_ulen, FC.UTF8_LEN},
+    {"utf8.codepoint", fast_ucodepoint, FC.UTF8_CODEPOINT},
+    {"utf8.char", fast_uchar, FC.UTF8_CHAR},
+    {"utf8.offset", fast_uoffset, FC.UTF8_OFFSET},
+}
+
+tests:it("every fast-form helper compiles to OP_FASTCALL", function()
+    for _, e in ipairs(emission_list) do
+        tests:assert_fastcall(e[2], e[3], "helper for " .. e[1] .. " did not emit OP_FASTCALL")
+    end
+end)
+
+tests:it("alias-form call sites emit no OP_FASTCALL at all", function()
+    local function alias_probe(a, b, c)
+        local r = s.abs(a)
+        r = s.max(a, b)
+        r = s.sub(a, b, c)
+        r = s.type(a)
+        r = s.sum(a)
+        r = s.uoffset(a, b)
+        r = s.vcreate(a)
+        return r
+    end
+    local fcs = framework.get_fastcalls(alias_probe)
+    tests:assert_true(next(fcs) == nil, "alias probe unexpectedly contains OP_FASTCALL")
+    local fcs2 = framework.get_fastcalls(slow_uoffset_wrap)
+    tests:assert_true(next(fcs2) == nil, "slow utf8.offset wrapper unexpectedly contains OP_FASTCALL")
+end)
+
+tests:it("_G-indexed and method-call forms emit no OP_FASTCALL", function()
+    local function g_probe() return _G.type(42) end
+    tests:assert_no_fastcall(g_probe, FC.TYPE)
+    local function m_probe(str) return str:sub(2, 4) end
+    tests:assert_no_fastcall(m_probe, FC.STRING_SUB)
+end)
+
+-- ==== Math unary parity ====
+tests:describe("math unary parity")
+
+local unary_math = {
+    {"int zero", 0},
+    {"neg zero float", -0.0},
+    {"one", 1},
+    {"neg int", -7},
+    {"float", 2.5},
+    {"neg float", -2.5},
+    {"tiny", 1e-300},
+    {"nan", nan},
+    {"inf", inf},
+    {"neg inf", -inf},
+    {"maxinteger", math.maxinteger},
+    {"mininteger", math.mininteger},
+    {"big float", 1e308},
+    {"2^53", 2.0 ^ 53},
+    {"2^63 float", 2.0 ^ 63},
+    {"numeric string", "12"},
+    {"junk string", "x"},
+    {"boolean", true},
+    {"nil", nil},
+    {"table", EMPTY_T},
+}
+
+tests:it("math.abs parity over the numeric corpus", function()
+    parity_over(fast_abs, s.abs, 1, unary_math, "abs")
+end)
+
+tests:it("math.ceil parity over the numeric corpus", function()
+    parity_over(fast_ceil, s.ceil, 1, unary_math, "ceil")
+end)
+
+tests:it("math.floor parity over the numeric corpus", function()
+    parity_over(fast_floor, s.floor, 1, unary_math, "floor")
+end)
+
+tests:it("math.sqrt parity over the numeric corpus", function()
+    parity_over(fast_sqrt, s.sqrt, 1, unary_math, "sqrt")
+end)
+
+tests:it("math.exp parity over the numeric corpus", function()
+    parity_over(fast_exp, s.exp, 1, unary_math, "exp")
+end)
+
+tests:it("math.log parity over the numeric corpus", function()
+    parity_over(fast_log, s.log, 1, unary_math, "log")
+end)
+
+tests:it("math.deg parity over the numeric corpus", function()
+    parity_over(fast_deg, s.deg, 1, unary_math, "deg")
+end)
+
+tests:it("math.rad parity over the numeric corpus", function()
+    parity_over(fast_rad, s.rad, 1, unary_math, "rad")
+end)
+
+tests:it("trig function parity over the numeric corpus", function()
+    local pairs_list = {
+        {fast_sin, s.sin, "sin"},
+        {fast_cos, s.cos, "cos"},
+        {fast_tan, s.tan, "tan"},
+        {fast_asin, s.asin, "asin"},
+        {fast_acos, s.acos, "acos"},
+        {fast_atan, s.atan, "atan"},
+    }
+    for _, p in ipairs(pairs_list) do
+        parity_over(p[1], p[2], 1, unary_math, p[3])
+    end
+end)
+
+tests:it("math.tointeger parity over the numeric corpus", function()
+    -- The numeric-string case lives in a dedicated soft test below.
+    local corpus = {
+        {"int", 5}, {"float integral", 5.0}, {"float frac", 5.5},
+        {"neg zero", -0.0}, {"nan", nan}, {"inf", inf},
+        {"maxinteger", math.maxinteger}, {"mininteger", math.mininteger},
+        {"2^63 float", 2.0 ^ 63}, {"junk string", "x"}, {"boolean", true},
+        {"nil", nil}, {"table", EMPTY_T},
+    }
+    parity_over(fast_tointeger, s.tointeger, 1, corpus, "tointeger")
+end)
+
+tests:it("math.type parity over the numeric corpus", function()
+    local corpus = {
+        {"int", 5}, {"float", 5.5}, {"nan", nan}, {"inf", inf},
+        {"maxinteger", math.maxinteger}, {"numeric string", "12"},
+        {"junk string", "x"}, {"boolean", true}, {"nil", nil},
+        {"table", EMPTY_T}, {"enum", color.RED},
+    }
+    parity_over(fast_mathtype, s.mathtype, 1, corpus, "math.type")
+end)
+
+-- ==== Math binary parity ====
+tests:describe("math binary parity")
+
+tests:it("math.max parity over safe pairs", function()
+    -- NaN operands, mixed-subtype winners, and signed-zero ties are known
+    -- divergences covered by the soft tests below.
+    local corpus = {
+        {"int pair", 1, 2},
+        {"int swapped", 9, -3},
+        {"equal ints", 4, 4},
+        {"extremes", math.mininteger, math.maxinteger},
+        {"float pair", 1.5, 2.5},
+        {"float negatives", -1.5, -2.5},
+        {"equal floats", 3.5, 3.5},
+        {"inf pair", inf, -inf},
+        {"float winner", 1, 2.5},
+        {"string arg", "8", 3},
+        {"boolean", true, 1},
+        {"nil second", 5, nil},
+    }
+    parity_over(fast_max, s.max, 2, corpus, "max")
+end)
+
+tests:it("math.min parity over safe pairs", function()
+    local corpus = {
+        {"int pair", 1, 2},
+        {"int swapped", 9, -3},
+        {"equal ints", 4, 4},
+        {"extremes", math.mininteger, math.maxinteger},
+        {"float pair", 1.5, 2.5},
+        {"float negatives", -1.5, -2.5},
+        {"equal floats", 3.5, 3.5},
+        {"inf pair", inf, -inf},
+        {"float winner", 3, 2.5},
+        {"string arg", "8", 3},
+        {"boolean", true, 1},
+        {"nil second", 5, nil},
+    }
+    parity_over(fast_min, s.min, 2, corpus, "min")
+end)
+
+tests:it("math.fmod parity over pairs", function()
+    local corpus = {
+        {"int basic", 7, 3},
+        {"neg dividend", -7, 3},
+        {"neg divisor", 7, -3},
+        {"both neg", -7, -3},
+        {"mininteger by -1", math.mininteger, -1},
+        {"maxinteger by 2", math.maxinteger, 2},
+        {"float", 7.5, 2},
+        {"float by zero", 7.5, 0},
+        {"neg zero result", -6, 3.0},
+        {"nan operand", nan, 3},
+        {"int by zero", 7, 0},
+        {"numeric strings", "8", "3"},
+        {"junk", "x", 3},
+        {"nil divisor", 7, nil},
+    }
+    parity_over(fast_fmod, s.fmod, 2, corpus, "fmod")
+end)
+
+tests:it("math.ult parity over pairs", function()
+    local corpus = {
+        {"basic", 1, 2},
+        {"swapped", 2, 1},
+        {"neg as unsigned", -1, 1},
+        {"neg vs neg", -2, -1},
+        {"zero zero", 0, 0},
+        {"min max", math.mininteger, math.maxinteger},
+        {"float integral", 1.0, 2},
+        {"float frac", 1.5, 2},
+        {"junk", "x", 1},
+        {"nil", 1, nil},
+    }
+    parity_over(fast_ult, s.ult, 2, corpus, "ult")
+end)
+
+tests:it("math.ldexp parity over pairs", function()
+    local corpus = {
+        {"basic", 1, 10},
+        {"half", 0.5, 1},
+        {"zero exp", 3, 0},
+        {"denormal", 1, -1074},
+        {"overflow", 1, 5000},
+        {"underflow", 1, -5000},
+        {"float mantissa", 1.5, 2},
+        {"nan mantissa", nan, 2},
+        {"frac exp", 1, 1.5},
+        {"junk mantissa", "x", 1},
+        {"nil exp", 1, nil},
+    }
+    parity_over(fast_ldexp, s.ldexp, 2, corpus, "ldexp")
+end)
+
+-- ==== String parity ====
+tests:describe("string parity")
+
+local LONG_MIXED = string.rep(" Ab\0Yz\255\128\200 \t", 9)
+
+local str_corpus = {
+    {"empty", ""},
+    {"single", "a"},
+    {"spaces", "  hello  "},
+    {"only ws", " \t\r\n "},
+    {"vertical ws", "\v\f x \v\f"},
+    {"embedded nul", "a\0b"},
+    {"leading nul", "\0ab"},
+    {"trailing nul", "ab\0"},
+    {"high bytes", "\128\200\255"},
+    {"utf8 text", "caf\195\169 \195\128\195\137"},
+    {"long mixed", LONG_MIXED},
+    {"ws around nul", " \0 "},
+    {"number coercion", 42},
+    {"float coercion", 2.5},
+    {"boolean", true},
+    {"table", EMPTY_T},
+    {"nil", nil},
+}
+
+tests:it("string.len parity over the string corpus", function()
+    parity_over(fast_len, s.len, 1, str_corpus, "len")
+end)
+
+tests:it("string.trim parity over the string corpus", function()
+    parity_over(fast_trim, s.trim, 1, str_corpus, "trim")
+end)
+
+tests:it("string.ltrim parity over the string corpus", function()
+    parity_over(fast_ltrim, s.ltrim, 1, str_corpus, "ltrim")
+end)
+
+tests:it("string.rtrim parity over the string corpus", function()
+    parity_over(fast_rtrim, s.rtrim, 1, str_corpus, "rtrim")
+end)
+
+tests:it("string.lower parity over the string corpus", function()
+    parity_over(fast_lower, s.lower, 1, str_corpus, "lower")
+end)
+
+tests:it("string.upper parity over the string corpus", function()
+    parity_over(fast_upper, s.upper, 1, str_corpus, "upper")
+end)
+
+tests:it("string.reverse parity over the string corpus", function()
+    parity_over(fast_reverse, s.reverse, 1, str_corpus, "reverse")
+end)
+
+tests:it("string.sub parity over boundary triples", function()
+    local corpus = {
+        {"mid", "hello", 2, 4},
+        {"full", "hello", 1, 5},
+        {"neg range", "hello", -3, -1},
+        {"clamp end", "hello", 1, 100},
+        {"clamp start", "hello", -100, 2},
+        {"zero start", "hello", 0, 2},
+        {"reversed", "hello", 3, 2},
+        {"empty subject", "", 1, 1},
+        {"minint start", "hello", math.mininteger, 2},
+        {"maxint end", "hello", 2, math.maxinteger},
+        {"minint end", "hello", 1, math.mininteger},
+        {"float indices", "hello", 1.0, 3.0},
+        {"frac index", "hello", 1.5, 3},
+        {"nul subject", "a\0b\0c", 2, 4},
+        {"number subject", 12345, 2, 3},
+        {"table subject", EMPTY_T, 1, 2},
+        {"nil end", "hello", 2, nil},
+    }
+    parity_over(fast_sub, s.sub, 3, corpus, "sub")
+end)
+
+tests:it("string.byte parity over safe positions", function()
+    -- Start positions of zero or below -#s are a known divergence covered by
+    -- the soft test below.
+    local corpus = {
+        {"first", "hello", 1},
+        {"last", "hello", 5},
+        {"past end", "hello", 6},
+        {"neg last", "hello", -1},
+        {"neg first", "hello", -5},
+        {"empty subject", "", 1},
+        {"maxint", "hello", math.maxinteger},
+        {"nul byte", "\0", 1},
+        {"high byte", "\255", 1},
+        {"float index", "hello", 2.0},
+        {"frac index", "hello", 1.5},
+        {"junk subject", true, 1},
+        {"nil index", "hello", nil},
+    }
+    parity_over(fast_byte, s.byte, 2, corpus, "byte")
+end)
+
+tests:it("string.char parity over codes", function()
+    local corpus = {
+        {"zero", 0},
+        {"A", 65},
+        {"7F", 127},
+        {"80", 128},
+        {"FF", 255},
+        {"one past", 256},
+        {"negative", -1},
+        {"maxinteger", math.maxinteger},
+        {"mininteger", math.mininteger},
+        {"float integral", 65.0},
+        {"frac", 1.5},
+        {"numeric string", "66"},
+        {"junk", "x"},
+        {"nil", nil},
+    }
+    parity_over(fast_char, s.char, 1, corpus, "char")
+end)
+
+tests:it("string.split parity over subjects and delimiters", function()
+    local corpus = {
+        {"basic", "a,b,c", ","},
+        {"leading delim", ",a", ","},
+        {"trailing delim", "a,", ","},
+        {"only delim", ",", ","},
+        {"empty subject", "", ","},
+        {"empty delim", "abc", ""},
+        {"both empty", "", ""},
+        {"multichar", "a::b::c", "::"},
+        {"overlapping", "aaa", "aa"},
+        {"nul delim", "a\0b\0c", "\0"},
+        {"nul in subject", "a\0b", ","},
+        {"delim longer", "x", "xyz"},
+        {"delim equals subject", "ab", "ab"},
+        {"long subject", LONG_MIXED, "\0"},
+        {"table subject", EMPTY_T, ","},
+        {"table delim", "a", EMPTY_T},
+    }
+    parity_over(fast_split, s.split, 2, corpus, "split")
+end)
+
+tests:it("string.join parity over element lists", function()
+    local corpus = {
+        {"empty list", {}, ","},
+        {"single", {"a"}, "-"},
+        {"basic", {"a", "b", "c"}, ","},
+        {"empty sep", {"a", "b"}, ""},
+        {"nul sep", {"a", "b"}, "\0"},
+        {"nul elements", {"a\0", "\0b"}, ","},
+        {"long elements", {LONG_MIXED, LONG_MIXED}, " | "},
+        {"numbers", {1, 2.5, -3}, ","},
+        {"booleans", {true, false}, ","},
+        {"nil hole", {1, nil, 3}, ","},
+        {"string subject", "x", ","},
+        {"table sep", {}, EMPTY_T},
+    }
+    parity_over(fast_join, s.join, 2, corpus, "join")
+end)
+
+tests:it("method-call syntax matches the fast-form results", function()
+    local str = "Hello"
+    tests:assert_equal(str:sub(2, 4), fast_sub(str, 2, 4))
+    tests:assert_equal(str:len(), fast_len(str))
+    tests:assert_equal(str:byte(2), fast_byte(str, 2))
+    tests:assert_equal(str:upper(), fast_upper(str))
+    tests:assert_equal(str:reverse(), fast_reverse(str))
+end)
+
+-- ==== Base library parity ====
+tests:describe("base library parity")
+
+tests:it("type parity over every value kind", function()
+    local co = coroutine.create(function() end)
+    local corpus = {
+        {"nil", nil},
+        {"true", true},
+        {"false", false},
+        {"int", 0},
+        {"float", 2.5},
+        {"string", ""},
+        {"table", EMPTY_T},
+        {"function", fast_abs},
+        {"vector", VEC},
+        {"enum root", color},
+        {"enum member", color.RED},
+        {"thread", co},
+    }
+    parity_over(fast_type, s.type, 1, corpus, "type")
+end)
+
+tests:it("tostring parity over scalar values", function()
+    local corpus = {
+        {"int", 42},
+        {"neg int", -42},
+        {"float", 2.5},
+        {"integral float", 3.0},
+        {"neg zero", -0.0},
+        {"nan", nan},
+        {"inf", inf},
+        {"neg inf", -inf},
+        {"maxinteger", math.maxinteger},
+        {"mininteger", math.mininteger},
+        {"big float", 1e308},
+        {"small float", 1e-300},
+        {"large int float", 1e15},
+        {"true", true},
+        {"false", false},
+        {"nil", nil},
+        {"string", "abc"},
+        {"nul string", "a\0b"},
+    }
+    parity_over(fast_tostring, s.tostring, 1, corpus, "tostring")
+end)
+
+tests:it("tonumber parity over conversions", function()
+    local corpus = {
+        {"int", 42},
+        {"float", 2.5},
+        {"neg zero", -0.0},
+        {"nan", nan},
+        {"int string", "42"},
+        {"padded string", " 42 "},
+        {"hex", "0x10"},
+        {"hex float", "0x1p4"},
+        {"overflow exp", "1e999"},
+        {"decimal", "3.14"},
+        {"neg string", "-7"},
+        {"empty string", ""},
+        {"ws only", "  "},
+        {"junk", "x"},
+        {"partial", "10e"},
+        {"hex prefix only", "0x"},
+        {"inf word", "inf"},
+        {"nan word", "nan"},
+        {"boolean", true},
+        {"nil", nil},
+        {"table", EMPTY_T},
+        {"enum member", color.GREEN},
+    }
+    parity_over(fast_tonumber, s.tonumber, 1, corpus, "tonumber")
+end)
+
+tests:it("rawequal parity over value pairs", function()
+    local corpus = {
+        {"nan nan", nan, nan},
+        {"zero negzero", 0.0, -0.0},
+        {"int float", 1, 1.0},
+        {"equal strings", "a", "a"},
+        {"different strings", "a", "b"},
+        {"distinct tables", EMPTY_T, SHARED_T},
+        {"same table", SHARED_T, SHARED_T},
+        {"nil false", nil, false},
+        {"nil nil", nil, nil},
+        {"enum self", color.RED, color.RED},
+        {"enum other", color.RED, color.BLUE},
+        {"vector self", VEC, VEC},
+    }
+    parity_over(fast_rawequal, s.rawequal, 2, corpus, "rawequal")
+end)
+
+tests:it("rawlen parity over lengths and errors", function()
+    local corpus = {
+        {"empty table", {}},
+        {"array", {1, 2, 3}},
+        {"string", "abc"},
+        {"nul string", "a\0b"},
+        {"empty string", ""},
+        {"number", 42},
+        {"boolean", true},
+        {"vector", VEC},
+        {"nil", nil},
+    }
+    parity_over(fast_rawlen, s.rawlen, 1, corpus, "rawlen")
+end)
+
+tests:it("rawlen ignores __len on both paths", function()
+    local t = setmetatable({1, 2}, {__len = function() return 99 end})
+    tests:assert_equal(fast_rawlen(t), 2)
+    tests:assert_equal(s.rawlen(t), 2)
+end)
+
+tests:it("rawget parity over keys", function()
+    local rt = setmetatable({a = 1, [3] = "three", [2.5] = "half"},
+        {__index = function() return "meta" end})
+    local corpus = {
+        {"string hit", rt, "a"},
+        {"int hit", rt, 3},
+        {"normalized float key", rt, 3.0},
+        {"float key", rt, 2.5},
+        {"miss bypasses __index", rt, "zz"},
+        {"nil key", rt, nil},
+        {"nan key", rt, nan},
+        {"boolean key", rt, true},
+        {"non-table", 42, 1},
+        {"vector subject", VEC, 1},
+    }
+    parity_over(fast_rawget, s.rawget, 2, corpus, "rawget")
+end)
+
+tests:it("rawset value behavior matches between paths", function()
+    local t1 = {}
+    local t2 = {}
+    tests:assert_equal(fast_rawset(t1, "k", "v"), t1, "fast rawset must return its table")
+    tests:assert_equal(s.rawset(t2, "k", "v"), t2, "slow rawset must return its table")
+    fast_rawset(t1, 2.0, "two")
+    s.rawset(t2, 2.0, "two")
+    tests:assert_equal(t1[2], "two", "fast rawset must normalize integral float keys")
+    tests:assert_equal(t2[2], "two", "slow rawset must normalize integral float keys")
+    fast_rawset(t1, 1.5, "frac")
+    s.rawset(t2, 1.5, "frac")
+    tests:assert_equal(t1[1.5], t2[1.5])
+    fast_rawset(t1, "k", nil)
+    s.rawset(t2, "k", nil)
+    tests:assert_equal(t1.k, nil)
+    tests:assert_equal(t2.k, nil)
+end)
+
+tests:it("rawset error parity over bad keys", function()
+    local corpus = {
+        {"nil key", SHARED_T, nil, 1},
+        {"nan key", SHARED_T, nan, 1},
+        {"non-table", 5, 1, 1},
+        {"vector subject", VEC, 1, 1},
+    }
+    parity_over(fast_rawset, s.rawset, 3, corpus, "rawset")
+end)
+
+tests:it("getmetatable parity over values", function()
+    local mt = {}
+    local plain = setmetatable({}, mt)
+    local locked = setmetatable({}, {__metatable = "locked"})
+    local falsy = setmetatable({}, {__metatable = false})
+    local corpus = {
+        {"no metatable", {}},
+        {"with metatable", plain},
+        {"protected string", locked},
+        {"protected false", falsy},
+        {"string", "x"},
+        {"number", 5},
+        {"nil", nil},
+        {"boolean", true},
+    }
+    parity_over(fast_getmetatable, s.getmetatable, 1, corpus, "getmetatable")
+    tests:assert_equal(fast_getmetatable(plain), mt, "fast getmetatable must return the metatable object")
+    tests:assert_equal(fast_getmetatable("x"), s.getmetatable("x"), "string metatable must be the same object on both paths")
+end)
+
+tests:it("setmetatable success behavior matches between paths", function()
+    local mt = {}
+    local t1 = {}
+    local t2 = {}
+    tests:assert_equal(fast_setmetatable(t1, mt), t1, "fast setmetatable must return its table")
+    tests:assert_equal(s.setmetatable(t2, mt), t2, "slow setmetatable must return its table")
+    tests:assert_equal(getmetatable(t1), mt)
+    tests:assert_equal(getmetatable(t2), mt)
+    fast_setmetatable(t1, nil)
+    s.setmetatable(t2, nil)
+    tests:assert_equal(getmetatable(t1), nil)
+    tests:assert_equal(getmetatable(t2), nil)
+end)
+
+tests:it("setmetatable error parity", function()
+    local prot1 = setmetatable({}, {__metatable = "locked"})
+    local corpus = {
+        {"string mt", SHARED_T, "x"},
+        {"number mt", SHARED_T, 5},
+        {"number subject", 42, EMPTY_T},
+        {"string subject", "x", EMPTY_T},
+        {"protected", prot1, EMPTY_T},
+    }
+    parity_over(fast_setmetatable, s.setmetatable, 2, corpus, "setmetatable")
+end)
+
+tests:it("assert parity over truthy and falsy values", function()
+    local corpus = {
+        {"int", 42},
+        {"string", "x"},
+        {"true", true},
+        {"zero", 0},
+        {"table", EMPTY_T},
+        {"false", false},
+        {"nil", nil},
+    }
+    parity_over(fast_assert, s.assert, 1, corpus, "assert")
+end)
+
+-- ==== Table statistics parity ====
+tests:describe("table statistics parity")
+
+local stats_corpus = {
+    {"empty", {}},
+    {"ints", {1, 2, 3, 4, 5}},
+    {"floats", {2.5, -2.5, 0.5}},
+    {"mixed", {1, 2.5, -3}},
+    {"single int", {42}},
+    {"single float", {0.25}},
+    {"maxint twice", {math.maxinteger, math.maxinteger}},
+    {"signed zeros", {-0.0, 0.0}},
+    {"even count", {1, 2, 3, 4}},
+    {"unsorted", {9, -1, 4, 0}},
+    {"hole", {1, nil, 3}},
+    {"boolean elements", {true, false}},
+    {"table element", {EMPTY_T, 1}},
+    {"string subject", "x"},
+    {"nil subject", nil},
+}
+
+tests:it("table.sum parity over the stats corpus", function()
+    parity_over(fast_sum, s.sum, 1, stats_corpus, "sum")
+    run_pair(fast_sum, s.sum, 1, {"inf element", {inf, 1}}, "sum")
+    run_pair(fast_sum, s.sum, 1, {"nan element", {nan, 1}}, "sum")
+end)
+
+tests:it("table.mean parity over the stats corpus", function()
+    parity_over(fast_mean, s.mean, 1, stats_corpus, "mean")
+    run_pair(fast_mean, s.mean, 1, {"nan element", {nan, 1}}, "mean")
+end)
+
+tests:it("table.median parity over the stats corpus", function()
+    parity_over(fast_median, s.median, 1, stats_corpus, "median")
+end)
+
+tests:it("table.stdev parity over the stats corpus", function()
+    -- The fast path uses Welford accumulation and the slow path is two-pass,
+    -- so results are compared with a tolerance on exact-friendly data and the
+    -- corpus avoids values where the algorithms legitimately drift.
+    for _, case in ipairs(stats_corpus) do
+        local okf, rf = catch fast_stdev(case[2])
+        local oks, rs = catch s.stdev(case[2])
+        tests:assert_equal(okf, oks, "stdev [" .. case[1] .. "]: outcome mismatch")
+        if okf then
+            if rf ~= rf or rs ~= rs then
+                tests:assert_true(rf ~= rf and rs ~= rs, "stdev [" .. case[1] .. "]: NaN on one path only")
+            else
+                tests:assert_near(rf, rs, 1e-12, "stdev [" .. case[1] .. "]: fast " .. tostring(rf) .. " slow " .. tostring(rs))
+            end
+        else
+            tests:assert_equal(err_core(rf), err_core(rs), "stdev [" .. case[1] .. "]: error mismatch")
+        end
+    end
+end)
+
+tests:it("table.transpose parity over matrices", function()
+    local corpus = {
+        {"square", {{1, 2}, {3, 4}}},
+        {"wide", {{1, 2, 3}}},
+        {"tall", {{1}, {2}, {3}}},
+        {"empty", {}},
+        {"empty rows", {{}, {}}},
+        {"string subject", "x"},
+        {"nil subject", nil},
+    }
+    parity_over(fast_transpose, s.transpose, 1, corpus, "transpose")
+end)
+
+tests:it("table.transpose error parity on malformed matrices", function()
+    local corpus = {
+        {"ragged", {{1, 2}, {3}}},
+        {"scalar rows", {1, 2}},
+        {"mixed rows", {{1}, 2}},
+    }
+    parity_over(fast_transpose, s.transpose, 1, corpus, "transpose")
+end)
+
+tests:it("table.reshape parity over shapes", function()
+    local six = {1, 2, 3, 4, 5, 6}
+    local corpus = {
+        {"2x3", six, 2, 3},
+        {"3x2", six, 3, 2},
+        {"6x1", six, 6, 1},
+        {"1x6", six, 1, 6},
+    }
+    parity_over(fast_reshape, s.reshape, 3, corpus, "reshape")
+end)
+
+tests:it("table.reshape error parity on bad shapes", function()
+    local four = {1, 2, 3, 4}
+    local corpus = {
+        {"mismatch", {1, 2, 3}, 2, 2},
+        {"zero rows", four, 0, 3},
+        {"negative rows", four, -1, 3},
+        {"zero cols", four, 1, 0},
+        {"overflow", four, math.maxinteger, math.maxinteger},
+        {"float dims", four, 2.0, 2.5},
+        {"string subject", "x", 2, 2},
+    }
+    parity_over(fast_reshape, s.reshape, 3, corpus, "reshape")
+end)
+
+-- ==== Vector parity ====
+tests:describe("vector parity")
+
+tests:it("vector.create and vector.size parity", function()
+    for _, n in ipairs({0, 1, 8, 100}) do
+        local vf = fast_vcreate(n)
+        local vs = s.vcreate(n)
+        tests:assert_equal(fast_vsize(vf), n, "fast create size " .. n)
+        tests:assert_equal(s.vsize(vs), n, "slow create size " .. n)
+        tests:assert_equal(fast_vsize(vs), s.vsize(vf), "cross path size " .. n)
+    end
+    local corpus = {
+        {"negative", -1},
+        {"float", 2.5},
+        {"junk", "x"},
+        {"nil", nil},
+        {"table", EMPTY_T},
+    }
+    parity_over(fast_vcreate, s.vcreate, 1, corpus, "vector.create")
+    parity_over(fast_vsize, s.vsize, 1, {{"non-vector", 42}, {"table", EMPTY_T}, {"nil", nil}}, "vector.size")
+end)
+
+tests:it("vector.clone content parity", function()
+    local src = vector.create(4)
+    vector.pack(src, 0, "BBBB", 1, 2, 3, 254)
+    local cf = fast_vclone(src)
+    local cs = s.vclone(src)
+    tests:assert_equal(vector.size(cf), 4)
+    tests:assert_equal(vector.size(cs), 4)
+    local f1, f2, f3, f4 = vector.unpack(cf, 0, "BBBB")
+    local s1, s2, s3, s4 = vector.unpack(cs, 0, "BBBB")
+    tests:assert_equal(f1, s1)
+    tests:assert_equal(f2, s2)
+    tests:assert_equal(f3, s3)
+    tests:assert_equal(f4, s4)
+    tests:assert_true(cf ~= src and cs ~= src, "clones must be new objects")
+    parity_over(fast_vclone, s.vclone, 1, {{"non-vector", 42}, {"string", "x"}, {"nil", nil}}, "vector.clone")
+end)
+
+tests:it("vector.resize parity and content preservation", function()
+    local v1 = vector.create(4)
+    local v2 = vector.create(4)
+    vector.pack(v1, 0, "BBBB", 9, 8, 7, 6)
+    vector.pack(v2, 0, "BBBB", 9, 8, 7, 6)
+    tests:assert_equal(fast_vresize(v1, 8), s.vresize(v2, 8), "resize return values must match")
+    tests:assert_equal(vector.size(v1), 8)
+    tests:assert_equal(vector.size(v2), 8)
+    local a1, a2, a3, a4, a5 = vector.unpack(v1, 0, "BBBBB")
+    local b1, b2, b3, b4, b5 = vector.unpack(v2, 0, "BBBBB")
+    tests:assert_true(a1 == b1 and a2 == b2 and a3 == b3 and a4 == b4 and a5 == b5,
+        "grown contents must match between paths")
+    fast_vresize(v1, 0)
+    s.vresize(v2, 0)
+    tests:assert_equal(vector.size(v1), 0)
+    tests:assert_equal(vector.size(v2), 0)
+    local corpus = {
+        {"negative", VEC, -1},
+        {"float", VEC, 2.5},
+        {"junk size", VEC, "x"},
+        {"non-vector", 42, 4},
+        {"nil size", VEC, nil},
+    }
+    parity_over(fast_vresize, s.vresize, 2, corpus, "vector.resize")
+end)
+
+-- Requesting maxinteger bytes makes malloc return NULL on a plain build,
+-- but the ASAN allocator aborts the whole process on such a request, so the
+-- assertion is skipped when the sanitizer environment is detected (the CI
+-- sanitize job always exports ASAN_OPTIONS).
+if os.getenv("ASAN_OPTIONS") ~= nil then
+    tests:skip("vector allocation failure delivers a string error value",
+        "allocating maxinteger bytes aborts under the ASAN allocator")
+else
+    tests:it("vector allocation failure delivers a string error value", function()
+        local ok, err = catch vector.create(math.maxinteger)
+        tests:assert_false(ok)
+        tests:assert_equal(err, "not enough memory")
+        local v = vector.create(2)
+        local ok2, err2 = catch vector.resize(v, math.maxinteger)
+        tests:assert_false(ok2)
+        tests:assert_equal(err2, "not enough memory")
+    end)
+end
+
+-- ==== UTF-8 parity ====
+tests:describe("utf8 parity")
+
+tests:it("utf8.len parity over encodings", function()
+    local corpus = {
+        {"empty", ""},
+        {"ascii", "abc"},
+        {"two byte", "caf\195\169"},
+        {"three byte", "\226\130\172"},
+        {"four byte", "\240\159\146\169"},
+        {"max scalar", "\244\143\191\191"},
+        {"lone continuation", "\128"},
+        {"invalid tail", "ab\128"},
+        {"overlong", "\192\128"},
+        {"truncated", "\226\130"},
+        {"beyond max", "\244\144\128\128"},
+        {"boolean", true},
+        {"nil", nil},
+        {"table", EMPTY_T},
+    }
+    parity_over(fast_ulen, s.ulen, 1, corpus, "utf8.len")
+end)
+
+tests:it("utf8.codepoint parity over first characters", function()
+    local corpus = {
+        {"ascii", "A"},
+        {"two byte", "\195\169"},
+        {"three byte", "\226\130\172"},
+        {"four byte", "\240\159\146\169"},
+        {"max scalar", "\244\143\191\191"},
+        {"ascii prefix", "abc"},
+        {"empty", ""},
+        {"lone continuation", "\128"},
+        {"truncated", "\195"},
+        {"boolean", true},
+        {"nil", nil},
+    }
+    parity_over(fast_ucodepoint, s.ucodepoint, 1, corpus, "utf8.codepoint")
+end)
+
+tests:it("utf8.char parity over code points", function()
+    local corpus = {
+        {"zero", 0},
+        {"ascii", 65},
+        {"edge 7F", 0x7F},
+        {"edge 80", 0x80},
+        {"edge 7FF", 0x7FF},
+        {"edge 800", 0x800},
+        {"edge FFFF", 0xFFFF},
+        {"edge 10000", 0x10000},
+        {"max unicode", 0x10FFFF},
+        {"surrogate", 0xD800},
+        {"beyond unicode", 0x110000},
+        {"max utf", 0x7FFFFFFF},
+        {"one past max", 0x80000000},
+        {"negative", -1},
+        {"mininteger", math.mininteger},
+        {"frac", 1.5},
+        {"junk", "x"},
+        {"nil", nil},
+    }
+    parity_over(fast_uchar, s.uchar, 1, corpus, "utf8.char")
+end)
+
+tests:it("utf8.offset parity over positions", function()
+    local subject = "h\195\169llo"
+    local corpus = {
+        {"first", subject, 1},
+        {"second", subject, 2},
+        {"last", subject, 5},
+        {"one past", subject, 6},
+        {"way past", subject, 9},
+        {"zero", subject, 0},
+        {"neg one", subject, -1},
+        {"neg all", subject, -5},
+        {"neg past", subject, -6},
+        {"empty first", "", 1},
+        {"empty neg", "", -1},
+        {"junk subject", true, 1},
+        {"nil n", subject, nil},
+    }
+    parity_over(fast_uoffset, s.uoffset, 2, corpus, "utf8.offset")
+end)
+
+-- ==== Regression pins for once-divergent cases ====
+tests:describe("regression pins for once-divergent cases")
+
+tests:it("math.max NaN operands agree between paths", function()
+    run_pair(fast_max, s.max, 2, {"nan first", nan, 1}, "max")
+    run_pair(fast_max, s.max, 2, {"nan second", 1, nan}, "max")
+end)
+
+tests:it("math.min NaN operands agree between paths", function()
+    run_pair(fast_min, s.min, 2, {"nan first", nan, 1}, "min")
+    run_pair(fast_min, s.min, 2, {"nan second", 1, nan}, "min")
+end)
+
+tests:it("math.max and math.min preserve subtype and tie choice", function()
+    run_pair(fast_max, s.max, 2, {"int winner", 3, 2.5}, "max")
+    run_pair(fast_min, s.min, 2, {"int winner", 2, 3.5}, "min")
+    run_pair(fast_max, s.max, 2, {"mixed tie", 2, 2.0}, "max")
+    run_pair(fast_max, s.max, 2, {"signed zero tie", -0.0, 0.0}, "max")
+end)
+
+tests:it("string.byte start-position clamping agrees between paths", function()
+    run_pair(fast_byte, s.byte, 2, {"zero index", "hello", 0}, "byte")
+    run_pair(fast_byte, s.byte, 2, {"mininteger index", "hello", math.mininteger}, "byte")
+    run_pair(fast_byte, s.byte, 2, {"below -len", "hello", -100}, "byte")
+end)
+
+tests:it("table stats treat numeric strings identically on both paths", function()
+    local data = {1, "10", 2}
+    run_pair(fast_sum, s.sum, 1, {"numeric strings", data}, "sum")
+    run_pair(fast_mean, s.mean, 1, {"numeric strings", data}, "mean")
+    run_pair(fast_median, s.median, 1, {"numeric strings", data}, "median")
+    run_pair(fast_stdev, s.stdev, 1, {"numeric strings", data}, "stdev")
+end)
+
+tests:it("table.sum reads metamethod-backed tables identically on both paths", function()
+    local backing = {10, 20, 30}
+    local proxy = setmetatable({}, {
+        __index = function(_, k) return backing[k] end,
+        __len = function() return 3 end,
+    })
+    run_pair(fast_sum, s.sum, 1, {"proxy table", proxy}, "sum")
+end)
+
+tests:it("math.tointeger numeric string agrees between paths", function()
+    run_pair(fast_tointeger, s.tointeger, 1, {"numeric string", "10"}, "tointeger")
+end)
+
+tests:it("fastcall sites preserve multi-return value counts", function()
+    local subject = "h\195\169llo"
+    local fast_n = select("#", fast_uoffset(subject, -1))
+    local slow_n = select("#", slow_uoffset_wrap(subject, -1))
+    tests:assert_equal(fast_n, slow_n,
+        "utf8.offset return count: fast " .. fast_n .. " slow " .. slow_n)
+    local fast_len_n = select("#", fast_ulen("ab\128"))
+    local slow_len_n = select("#", slow_ulen_wrap("ab\128"))
+    tests:assert_equal(fast_len_n, slow_len_n,
+        "utf8.len invalid return count: fast " .. fast_len_n .. " slow " .. slow_len_n)
+end)
+
+tests:it("catch pads missing results with nil", function()
+    local ok, r = catch (function() return end)()
+    tests:assert_true(ok, "the empty function must not fail")
+    tests:assert_equal(type(r), "nil",
+        "expected nil for the missing result, got " .. type(r))
+end)
+
+-- ==== Error-name pinning ====
+tests:describe("error-name pinning")
+
+local function caught_name(fn)
+    local ok, err = catch fn()
+    if ok then
+        return nil, nil, "call unexpectedly succeeded"
+    end
+    local argn, name = string.match(tostring(err), "bad argument #(%d+) to '([^']+)'")
+    return name, tonumber(argn), tostring(err)
+end
+
+-- A fastcall site that falls back for its error loses the call-site name, so
+-- the runtime derives a qualified module name for the message. These cases
+-- pin that behavior per module function.
+tests:each("fast-form fallback errors carry qualified names", {
+    {"math.sqrt", function() return math.sqrt("x") end, "math.sqrt", 1, "number expected, got string"},
+    {"math.fmod", function() return math.fmod(7, 0) end, "math.fmod", 2, "zero"},
+    {"math.ult", function() return math.ult(1.5, 2) end, "math.ult", 1, "number has no integer representation"},
+    {"string.len", function() return string.len(true) end, "string.len", 1, "string expected, got boolean"},
+    {"string.sub", function() return string.sub("a", true, 2) end, "string.sub", 2, "number expected, got boolean"},
+    {"string.byte", function() return string.byte(true, 1) end, "string.byte", 1, "string expected, got boolean"},
+    {"string.char", function() return string.char(256) end, "string.char", 1, "value out of range"},
+    {"string.split", function() return string.split(EMPTY_T, ",") end, "string.split", 1, "string expected, got table"},
+    {"string.join", function() return string.join("x", ",") end, "string.join", 1, "table expected, got string"},
+    {"table.sum", function() return table.sum("x") end, "table.sum", 1, "table expected, got string"},
+    {"table.transpose", function() return table.transpose(5) end, "table.transpose", 1, "table expected, got number"},
+    {"table.reshape", function() return table.reshape(EMPTY_T, 0, 0) end, "table.reshape", 2, "rows must be positive"},
+    {"vector.create", function() return vector.create(-1) end, "vector.create", 1, "capacity must be non"},
+    {"vector.resize", function() return vector.resize(VEC, -1) end, "vector.resize", 2, "size must be non"},
+    {"utf8.char", function() return utf8.char(-1) end, "utf8.char", 1, "value out of range"},
+    {"utf8.codepoint", function() return utf8.codepoint("") end, "utf8.codepoint", 3, "out of bounds"},
+    {"utf8.offset", function() return utf8.offset(true, 1) end, "utf8.offset", 1, "string expected, got boolean"},
+}, function(label, fn, want_name, want_argn, want_reason)
+    local name, argn, full = caught_name(fn)
+    tests:assert_equal(name, want_name, label .. ": got name " .. tostring(name) .. " in " .. tostring(full))
+    tests:assert_equal(argn, want_argn, label .. ": got arg #" .. tostring(argn))
+    tests:assert_contains(tostring(full), want_reason, label .. ": reason mismatch in " .. tostring(full))
+end)
+
+-- Base-library fastcalls resolve to their plain global name because the
+-- global table lookup strips the _G prefix.
+tests:each("base-library fallback errors carry plain names", {
+    {"setmetatable", function() return setmetatable(EMPTY_T, "x") end, "setmetatable", 2},
+    {"rawlen", function() return rawlen(true) end, "rawlen", 1},
+    {"rawget", function() return rawget(5, 1) end, "rawget", 1},
+    {"rawset", function() return rawset(5, 1, 1) end, "rawset", 1},
+}, function(label, fn, want_name, want_argn)
+    local name, argn, full = caught_name(fn)
+    tests:assert_equal(name, want_name, label .. ": got name " .. tostring(name) .. " in " .. tostring(full))
+    tests:assert_equal(argn, want_argn, label .. ": got arg #" .. tostring(argn))
+end)
+
+-- A call whose argument count does not match the registered fastcall arity
+-- compiles to a normal call, so the error name comes from the call site
+-- field and stays unqualified.
+tests:each("non-fastcall arity errors keep the call-site field name", {
+    {"sub with two args", function() return string.sub("a", true) end, "sub", 2},
+    {"byte with one arg", function() return string.byte(true) end, "byte", 1},
+    {"log with two args", function() return math.log(true, 10) end, "log", 1},
+}, function(label, fn, want_name, want_argn)
+    local name, argn, full = caught_name(fn)
+    tests:assert_equal(name, want_name, label .. ": got name " .. tostring(name) .. " in " .. tostring(full))
+    tests:assert_equal(argn, want_argn, label .. ": got arg #" .. tostring(argn))
+end)
+
+tests:it("alias calls report the variable name instead", function()
+    local mysqrt = math.sqrt
+    local ok, err = catch mysqrt("x")
+    tests:assert_false(ok, "alias sqrt on a string must error")
+    tests:assert_contains(tostring(err), "bad argument #1 to 'mysqrt'")
+end)
+
+tests:finish()

@@ -8,7 +8,7 @@
 ]]
 
 global io, print, assert, require, pledge, type, tostring, string, load,
-    collectgarbage, worker, debug, pairs, tojson, error, select
+    collectgarbage, worker, debug, pairs, tojson, error, select, query
 
 -- no "seal": the bytecode round-trip tests load binary chunks, which a
 -- sealed state refuses by design
@@ -54,9 +54,17 @@ tests:it("clause words work as table fields and methods", function()
 end)
 
 tests:it("'@' inside comments and strings is inert", function()
-    -- an '@' in this comment changes nothing: @not a query
-    local s = "an @ inside a string"
-    tests:assert_contains(s, "@")
+    -- Compile fresh chunks so this test itself observes the parse
+    -- succeeding, rather than relying on the enclosing file loading.
+    local f = load("-- a comment with a query shape: @people as p select p.name\n"
+        .. "return 'an @ inside a string'")
+    assert(f ~= nil, "'@' in a comment and a string must compile")
+    local v = f()
+    tests:assert_equal(type(v), "string", "the string stays a plain string")
+    tests:assert_contains(v, "@")
+    local g = load("--[[ @people as p\nselect p.name ]] return 7")
+    assert(g ~= nil, "'@' spanning a long comment must compile")
+    tests:assert_equal(g(), 7)
 end)
 
 tests:describe("grammar acceptance")
@@ -265,9 +273,17 @@ tests:it("queries survive collection and keep sources alive", function()
         return @hidden as h select h.n
     end
     local q = build()
+    -- the only reference to the source table is now inside the query
     collectgarbage("collect")
     collectgarbage("collect")
     tests:assert_equal(type(q), "query")
+    -- executing the query proves the source was kept alive
+    local rows = 0
+    for row in query(q) do
+        rows = rows + 1
+        tests:assert_equal(row.n, 7, "the anchored source row is intact")
+    end
+    tests:assert_equal(rows, 1, "the source survived collection")
 end)
 
 tests:it("discarded queries do not leak", function()

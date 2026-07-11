@@ -29,8 +29,11 @@
 /* Format 1: OP_REQUIRE inserted before OP_EXTRAARG (1.7.0) renumbered
 ** the opcode set; chunks dumped by older versions must be rejected.
 ** Format 2: OP_QUERY inserted before OP_EXTRAARG and the type tag
-** LUA_TQUERY added (1.7.0); the opcode set is renumbered again. */
-#define LUAC_FORMAT 2 /* this is the official format */
+** LUA_TQUERY added (1.7.0); the opcode set is renumbered again.
+** Format 3: OP_PROVIDE and OP_ENDDO inserted before OP_EXTRAARG (1.7.0),
+** giving do-expressions a runtime multi-value protocol. The opcode set
+** is renumbered again. */
+#define LUAC_FORMAT 3 /* this is the official format */
 
 
 /* load one chunk; from lundump.c */

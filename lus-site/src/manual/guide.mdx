@@ -1172,9 +1172,11 @@ local ok, result = catch divide(10, 0)
 if ok then
   print("Result:", result)
 else
-  print("Error:", result)  --> Error: division by zero
+  print("Error:", result)  --> Error: script.lus:3: division by zero
 end
 ```
+
+The message carries a `file:line:` position prefix because `error` adds one to string messages by default. Pass a level of `0` to `error` to raise the message without a prefix.
 
 If an error is not caught, it propagates up to the host program, which can handle it appropriately (for example, by printing a message and exiting).
 
@@ -1195,7 +1197,7 @@ local ok, err = catch[simplify] divide(10, 0)
 -- err is now just "division by zero" without file/line prefix
 ```
 
-When an error occurs, the handler is called with the error object and its return value replaces the original error. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates uncaught.
+When an error occurs, the handler is called with the error object and its return value replaces the original error. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates uncaught. The bracketed expression must evaluate to a function. Any other value raises an error at the catch site, so a misspelled handler name is reported instead of being silently ignored.
 
 ### C API error handling
 

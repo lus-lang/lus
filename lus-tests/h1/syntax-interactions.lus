@@ -1,0 +1,774 @@
+--[[
+    Cross-feature composition test suite.
+
+    Every test in this file combines at least two Lus syntax features:
+    do expressions, backtick interpolation, slices, optional chaining,
+    from destructuring, enums, groups, catch, if-assignment,
+    while-assignment, and coroutines. Single-feature behavior is covered
+    by the per-feature suites. This file pins how the features compose.
+]]
+
+global print, require, assert, type, tostring, tonumber, table, string,
+    setmetatable, error, coroutine, collectgarbage, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("syntax_interactions")
+
+-- =============================================================================
+-- Do expressions inside interpolation
+-- =============================================================================
+
+tests:it("do expression providing an outer local inside interpolation", function()
+    local name = "lus"
+    local s = `a $( do provide name end ) b`
+    assert(s == "a lus b", "got " .. tostring(s))
+end)
+
+tests:it("do expression computing on an outer local inside interpolation", function()
+    local x = 5
+    local s = `v $( do provide x + 1 end )`
+    assert(s == "v 6", "got " .. tostring(s))
+end)
+
+tests:it("multiline do expression inside interpolation", function()
+    local name = "lus"
+    local s = `a $( do
+        provide name
+    end ) b`
+    assert(s == "a lus b", "got " .. tostring(s))
+end)
+
+tests:it("do expression branching on an outer local inside interpolation", function()
+    local flag = true
+    local s = `r=$( do if flag then provide "yes" else provide "no" end end )`
+    assert(s == "r=yes", "got " .. tostring(s))
+end)
+
+tests:it("do expression providing two values inside interpolation keeps the first", function()
+    local s = `v=$( do provide 1, 2 end )`
+    assert(s == "v=1", "got " .. tostring(s))
+end)
+
+tests:it("do expression without provide inside interpolation renders nil", function()
+    local s = `v=$( do end )`
+    assert(s == "v=nil", "got " .. tostring(s))
+end)
+
+tests:it("do expression with a block local inside interpolation", function()
+    local s = `v=$( do local q = 5 provide q end )`
+    assert(s == "v=5", "got " .. tostring(s))
+end)
+
+tests:it("do expression branching on a block local inside interpolation", function()
+    local ok, s = catch `r=$( do local q = 3 if q > 1 then provide "big" else provide "small" end end )`
+    assert(ok == true, "should not raise, got " .. tostring(s))
+    assert(s == "r=big", "got " .. tostring(s))
+end)
+
+tests:it("interpolation with a dollar name inside a do expression body", function()
+    local r = do
+        local w = 5
+        provide `w=$w`
+    end
+    assert(r == "w=5", "got " .. tostring(r))
+end)
+
+tests:it("catch expression used inside interpolation", function()
+    local ok, s = catch `x $( catch error("boom") )`
+    assert(ok == true, "outer string build should succeed")
+    assert(s == "x false", "got " .. tostring(s))
+end)
+
+-- =============================================================================
+-- Slices of optional chains
+-- =============================================================================
+
+tests:it("slice after optional field access on a non-nil base", function()
+    local t = { list = {10, 20, 30, 40} }
+    local s = t?.list[2,]
+    assert(type(s) == "table", "expected table, got " .. type(s))
+    assert(#s == 3 and s[1] == 20 and s[3] == 40)
+end)
+
+tests:it("slice after optional field access short-circuits on nil base", function()
+    local n = nil
+    local s = n?.list[2,]
+    assert(s == nil, "got " .. tostring(s))
+end)
+
+tests:it("slice after optional field access short-circuits on false base", function()
+    local f = false
+    local s = f?.list[2,]
+    assert(s == false, "got " .. tostring(s))
+end)
+
+tests:each("optional slice form base matrix", {
+    {"table"}, {"nil"}, {"false"},
+}, function(kind)
+    if kind == "table" then
+        local t = {1, 2, 3, 4}
+        local s = t?[2,3]
+        assert(type(s) == "table" and #s == 2 and s[1] == 2 and s[2] == 3)
+    elseif kind == "nil" then
+        local t = nil
+        assert(t?[2,3] == nil)
+    else
+        local t = false
+        assert(t?[2,3] == false)
+    end
+end)
+
+tests:it("optional chain string slice on non-nil base", function()
+    local t = { s = "abcdef" }
+    assert(t?.s[2,4] == "bcd")
+end)
+
+tests:it("optional chain string slice on nil base", function()
+    local t = nil
+    assert(t?.s[2,4] == nil)
+end)
+
+tests:it("nil field then unguarded slice raises", function()
+    local t = {}
+    tests:assert_throws(function()
+        local _ = t?.list[2,]
+    end, "attempt to slice a nil value")
+end)
+
+tests:it("nil field then guarded slice short-circuits", function()
+    local t = {}
+    local s = t?.list?[2,]
+    assert(s == nil, "got " .. tostring(s))
+end)
+
+tests:it("optional index continues after a plain slice", function()
+    local t = { list = {10, 20, 30, 40} }
+    local v = t.list[2,4]?[1]
+    assert(v == 20, "got " .. tostring(v))
+end)
+
+-- =============================================================================
+-- From destructuring composed with do expressions and chains
+-- =============================================================================
+
+tests:it("from destructuring inside a do expression body", function()
+    local qt = { first = "f", second = "s" }
+    local r = do
+        local first, second from qt
+        provide second .. first
+    end
+    assert(r == "sf", "got " .. tostring(r))
+end)
+
+tests:it("do expression as the source of a from destructuring", function()
+    local a, b from do provide { a = 1, b = 2 } end
+    assert(a == 1 and b == 2)
+end)
+
+tests:it("from destructuring over an optional chain source", function()
+    local t = { inner = { a = 1, b = 2 } }
+    local a, b from t?.inner
+    assert(a == 1 and b == 2)
+end)
+
+tests:it("from over a nil optional chain raises under catch", function()
+    local n = nil
+    local ok, err = catch (function()
+        local q from n?.inner
+        return q
+    end)()
+    assert(ok == false, "should fail")
+    tests:assert_contains(tostring(err), "attempt to index a nil value")
+end)
+
+tests:it("while-from drains a table field until it goes nil", function()
+    local t = { a = 3 }
+    local log = {}
+    while a from t do
+        table.insert(log, a)
+        t.a = t.a - 1
+        if t.a == 0 then t.a = nil end
+    end
+    assert(#log == 3 and log[1] == 3 and log[2] == 2 and log[3] == 1)
+end)
+
+-- =============================================================================
+-- Enums composed with interpolation, groups, and keys
+-- =============================================================================
+
+tests:it("enum value interpolates like tostring", function()
+    local e = enum apple, orange end
+    local s = `$(e.orange)`
+    assert(s == tostring(e.orange), "got " .. tostring(s))
+    tests:assert_contains(s, "enum")
+end)
+
+tests:it("enum comparison result inside interpolation", function()
+    local e = enum low, high end
+    local s = `cmp $(e.low < e.high)`
+    assert(s == "cmp true", "got " .. tostring(s))
+end)
+
+tests:it("enum values as keys in a table held by a group field", function()
+    local e = enum red, green, blue end
+    local g <group> = { map = {} }
+    g.map[e.green] = "middle"
+    assert(g.map[e.green] == "middle")
+    assert(g.map[e.red] == nil)
+end)
+
+tests:it("enum key in a table constructor provided by a do expression", function()
+    local e = enum red, green end
+    local t = do provide { [e.red] = "r" } end
+    assert(t[e.red] == "r")
+    assert(t[e.green] == nil)
+end)
+
+tests:it("enum value in an if-assignment condition is truthy and keeps identity", function()
+    local e = enum low, mid, high end
+    local seen = nil
+    if lvl = e.mid then
+        seen = lvl
+    end
+    assert(seen == e.mid)
+    assert(tonumber(seen) == 2)
+end)
+
+tests:it("enum indices precomputed into locals work as slice bounds", function()
+    local e = enum low, mid, high end
+    local t = {"a", "b", "c", "d"}
+    local lo, hi = tonumber(e.low), tonumber(e.high)
+    local s = t[lo, hi]
+    assert(#s == 3 and s[1] == "a" and s[3] == "c")
+end)
+
+tests:it("enum indices via direct tonumber calls as slice bounds", function()
+    local e = enum low, mid, high end
+    local t = {"a", "b", "c", "d"}
+    local s = t[tonumber(e.low), tonumber(e.high)]
+    assert(type(s) == "table", "expected table, got " .. type(s) .. " (" .. tostring(s) .. ")")
+    assert(#s == 3 and s[1] == "a" and s[3] == "c")
+end)
+
+-- =============================================================================
+-- Catch wrapped around each construct's failing form
+-- =============================================================================
+
+tests:it("optional chain on a boolean true base raises", function()
+    local b = true
+    local ok, err = catch b?.x
+    assert(ok == false, "true?.x must raise since only nil and false short-circuit")
+    tests:assert_contains(tostring(err), "attempt to index a boolean value")
+end)
+
+tests:it("optional chain on a number base raises", function()
+    local n = 5
+    local ok, err = catch n?.x
+    assert(ok == false)
+    tests:assert_contains(tostring(err), "attempt to index a number value")
+end)
+
+tests:it("optional chain on a string base indexes the string library", function()
+    local s = "str"
+    local ok, v = catch s?.x
+    assert(ok == true, "strings are indexable so this must not raise")
+    assert(v == nil)
+    local ok2, rep = catch s?.rep
+    assert(ok2 == true and type(rep) == "function")
+end)
+
+tests:each("slice of a non-sliceable value raises", {
+    {"number", "attempt to slice a number value"},
+    {"boolean", "attempt to slice a boolean value"},
+    {"nil", "attempt to slice a nil value"},
+}, function(kind, pattern)
+    local value
+    if kind == "number" then value = 42 end
+    if kind == "boolean" then value = true end
+    local ok, err = catch value[1,2]
+    assert(ok == false, "slicing " .. kind .. " must raise")
+    tests:assert_contains(tostring(err), pattern)
+end)
+
+tests:it("from of nil raises under catch", function()
+    local ok, err = catch (function()
+        local a from nil
+        return a
+    end)()
+    assert(ok == false)
+    tests:assert_contains(tostring(err), "attempt to index a nil value")
+end)
+
+tests:it("from of a number raises under catch", function()
+    local ok, err = catch (function()
+        local a from 42
+        return a
+    end)()
+    assert(ok == false)
+    tests:assert_contains(tostring(err), "attempt to index a number value")
+end)
+
+tests:it("catch around a do expression whose body errors", function()
+    local ok, err = catch do error("boom") end
+    assert(ok == false)
+    tests:assert_contains(tostring(err), "boom")
+end)
+
+tests:it("catch around an interpolation whose expression errors", function()
+    local ok, err = catch `bad $(error("interr"))`
+    assert(ok == false)
+    tests:assert_contains(tostring(err), "interr")
+end)
+
+tests:it("missing method on a non-nil optional chain base raises", function()
+    local t = {}
+    local ok, err = catch t?:nosuch()
+    assert(ok == false, "the base is non-nil so the call must be attempted")
+    tests:assert_contains(tostring(err), "attempt to call a nil value")
+end)
+
+tests:it("error raised inside __slice propagates through catch", function()
+    local x = setmetatable({}, {
+        __slice = function() error("slicefail") end
+    })
+    local ok, err = catch x[1,2]
+    assert(ok == false)
+    tests:assert_contains(tostring(err), "slicefail")
+end)
+
+-- =============================================================================
+-- Group fields composed with slices and interpolation
+-- =============================================================================
+
+tests:it("group const fields as table slice bounds", function()
+    local g <group> = { lo <const> = 2, hi <const> = 4 }
+    local t = {"a", "b", "c", "d", "e"}
+    local s = t[g.lo, g.hi]
+    assert(#s == 3 and s[1] == "b" and s[3] == "d")
+end)
+
+tests:it("group const fields as string slice bounds", function()
+    local g <group> = { lo <const> = 2, hi <const> = 4 }
+    assert(("hello")[g.lo, g.hi] == "ell")
+end)
+
+tests:it("mutated group field used as a slice bound", function()
+    local g <group> = { hi = 3 }
+    local t = {10, 20, 30, 40, 50}
+    g.hi = 5
+    local s = t[2, g.hi]
+    assert(#s == 4 and s[1] == 20 and s[4] == 50)
+end)
+
+tests:it("group field arithmetic inside interpolation", function()
+    local g <group> = { lo <const> = 2, hi <const> = 4 }
+    local s = `sum $(g.lo + g.hi)`
+    assert(s == "sum 6", "got " .. tostring(s))
+end)
+
+-- =============================================================================
+-- Nested do expressions and do expressions in condition positions
+-- =============================================================================
+
+tests:it("three inline nested do expressions provide outward", function()
+    local v = do provide do provide do provide 7 end end end
+    assert(v == 7, "got " .. tostring(v))
+end)
+
+tests:it("do expression in an if-assignment condition", function()
+    local seen = nil
+    if v = do provide 5 end then
+        seen = v
+    end
+    assert(seen == 5)
+end)
+
+tests:it("falsy do expression in an if-assignment condition takes else", function()
+    local branch = nil
+    if v = do provide false end then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+end)
+
+tests:it("do expression as a while-assignment condition re-evaluates", function()
+    local n = 0
+    local total = 0
+    while v = do
+        n = n + 1
+        if n <= 3 then provide n * 10 end
+    end do
+        total = total + v
+    end
+    assert(total == 60, "10+20+30 should be 60, got " .. tostring(total))
+    assert(n == 4, "condition body must run once more to observe the exit")
+end)
+
+tests:it("do expression as an optional method call argument", function()
+    local obj = { m = function(self, x) return x * 2 end }
+    assert(obj?:m(do provide 21 end) == 42)
+end)
+
+tests:it("nil base suppresses a side-effecting do expression argument", function()
+    local count = 0
+    local nilobj = nil
+    local r = nilobj?:m(do count = count + 1 provide 1 end)
+    assert(r == nil)
+    assert(count == 0, "argument must not be evaluated when the chain short-circuits")
+end)
+
+-- =============================================================================
+-- Closures capturing if-assignment and while-assignment condition variables
+-- =============================================================================
+
+tests:it("closure captures an if-assignment condition variable", function()
+    local capture
+    if c = 42 then
+        capture = function() return c end
+    end
+    assert(capture() == 42)
+end)
+
+tests:it("closure in the else branch captures the false condition value", function()
+    local capture
+    if c = false then
+        error("unreachable branch")
+    else
+        capture = function() return c end
+    end
+    assert(capture() == false)
+end)
+
+tests:it("consecutive if-assignments with one name bind independently", function()
+    local first, second
+    if c = 10 then
+        first = function() return c end
+    end
+    if c = 20 then
+        second = function() return c end
+    end
+    assert(first() == 10, "first binding must be untouched by the second if")
+    assert(second() == 20)
+end)
+
+tests:it("if-assignment condition variable shadows an outer local", function()
+    local x = 1
+    local inner = nil
+    if x = 2 then
+        inner = x
+    end
+    assert(inner == 2)
+    assert(x == 1, "outer local must be unchanged after the if")
+end)
+
+-- The while-assignment condition variable is one shared binding, matching
+-- the documented equivalent Lua pattern of assigning a single local before
+-- and inside the loop. All closures therefore observe the same variable.
+tests:it("while-assignment closures share one binding across iterations", function()
+    local fns = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 5 and i or nil
+    end
+    while v = nextv() do
+        table.insert(fns, function() return v end)
+        if v == 2 then break end
+    end
+    assert(#fns == 2)
+    assert(fns[1]() == 2, "shared binding holds the value at break time")
+    assert(fns[2]() == 2)
+end)
+
+tests:it("after normal exit while-assignment closures observe the falsy value", function()
+    local fns = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = nextv() do
+        table.insert(fns, function() return v end)
+    end
+    assert(#fns == 3)
+    -- The final condition evaluation assigned nil to the shared binding.
+    assert(fns[1]() == nil and fns[2]() == nil and fns[3]() == nil)
+end)
+
+tests:it("explicit body local restores per-iteration capture", function()
+    local fns = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = nextv() do
+        local copy = v
+        table.insert(fns, function() return copy end)
+    end
+    assert(fns[1]() == 1 and fns[2]() == 2 and fns[3]() == 3)
+end)
+
+tests:it("closure made in the first iteration reads later iteration values", function()
+    local reader
+    local vals = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = nextv() do
+        if not reader then
+            reader = function() return v end
+        end
+        table.insert(vals, reader())
+    end
+    assert(vals[1] == 1 and vals[2] == 2 and vals[3] == 3)
+end)
+
+tests:it("closure can write the shared while-assignment binding", function()
+    local setter
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 2 and i or nil
+    end
+    while v = nextv() do
+        if not setter then
+            setter = function(nv) v = nv return v end
+        end
+    end
+    assert(setter(99) == 99, "assignment through the captured binding must stick")
+end)
+
+-- =============================================================================
+-- Coroutine suspension points inside each construct
+-- =============================================================================
+
+tests:it("yield inside an interpolation segment", function()
+    local co = coroutine.create(function()
+        local s = `a $(coroutine.yield(1)) b`
+        return s
+    end)
+    local ok, v = coroutine.resume(co)
+    assert(ok and v == 1)
+    local ok2, s = coroutine.resume(co, "mid")
+    assert(ok2 and s == "a mid b", "got " .. tostring(s))
+    assert(coroutine.status(co) == "dead")
+end)
+
+tests:it("two yields inside one interpolation resumed in order", function()
+    local gen = coroutine.wrap(function()
+        local s = `$(coroutine.yield(1)) and $(coroutine.yield(2))`
+        coroutine.yield(s)
+    end)
+    assert(gen() == 1)
+    assert(gen("x") == 2)
+    assert(gen("y") == "x and y")
+end)
+
+tests:it("yield inside a do expression body", function()
+    local co = coroutine.create(function()
+        local x = do
+            local got = coroutine.yield("ask")
+            provide got * 2
+        end
+        return x
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "ask")
+    local ok2, v = coroutine.resume(co, 21)
+    assert(ok2 and v == 42, "got " .. tostring(v))
+end)
+
+tests:it("yield inside an if-assignment condition taking the then branch", function()
+    local co = coroutine.create(function()
+        if v = coroutine.yield("cond?") then
+            return "then:" .. tostring(v)
+        else
+            return "else:" .. tostring(v)
+        end
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "cond?")
+    local ok2, r = coroutine.resume(co, 7)
+    assert(ok2 and r == "then:7", "got " .. tostring(r))
+end)
+
+tests:it("yield inside an if-assignment condition taking the else branch", function()
+    local co = coroutine.create(function()
+        if v = coroutine.yield("cond?") then
+            return "then:" .. tostring(v)
+        else
+            return "else:" .. tostring(v)
+        end
+    end)
+    coroutine.resume(co)
+    local ok, r = coroutine.resume(co, false)
+    assert(ok and r == "else:false", "got " .. tostring(r))
+end)
+
+tests:it("yield inside a while-assignment condition drives the loop", function()
+    local co = coroutine.create(function()
+        local sum = 0
+        while v = coroutine.yield("more?") do
+            sum = sum + v
+        end
+        return sum
+    end)
+    local ok1, q1 = coroutine.resume(co)
+    assert(ok1 and q1 == "more?")
+    local ok2, q2 = coroutine.resume(co, 10)
+    assert(ok2 and q2 == "more?")
+    local ok3, q3 = coroutine.resume(co, 5)
+    assert(ok3 and q3 == "more?")
+    local ok4, total = coroutine.resume(co, nil)
+    assert(ok4 and total == 15, "got " .. tostring(total))
+    assert(coroutine.status(co) == "dead")
+end)
+
+tests:it("yield inside an optional chain method call", function()
+    local obj = {
+        m = function(self, x)
+            return coroutine.yield("in-m") + x
+        end
+    }
+    local co = coroutine.create(function()
+        return obj?:m(100)
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "in-m")
+    local ok2, v = coroutine.resume(co, 5)
+    assert(ok2 and v == 105, "got " .. tostring(v))
+end)
+
+tests:it("nil base never reaches a yield in optional call arguments", function()
+    local co = coroutine.create(function()
+        local base = nil
+        local r = base?:m(coroutine.yield("should not appear"))
+        return "finished", r
+    end)
+    local ok, a, b = coroutine.resume(co)
+    assert(ok and a == "finished" and b == nil,
+        "coroutine must complete in one resume without suspending")
+    assert(coroutine.status(co) == "dead")
+end)
+
+tests:it("yield as the source expression of a from destructuring", function()
+    local co = coroutine.create(function()
+        local a, b from coroutine.yield("table?")
+        return a, b
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "table?")
+    local ok2, a, b = coroutine.resume(co, { a = 11, b = 22 })
+    assert(ok2 and a == 11 and b == 22)
+end)
+
+tests:it("from source table built across a yield boundary", function()
+    local co = coroutine.create(function()
+        local src = { x = coroutine.yield("need x") }
+        local x from src
+        return x
+    end)
+    coroutine.resume(co)
+    local ok, v = coroutine.resume(co, 77)
+    assert(ok and v == 77)
+end)
+
+tests:it("yield expressions as slice bounds across two resumes", function()
+    local co = coroutine.create(function()
+        local t = {10, 20, 30, 40, 50}
+        local s = t[coroutine.yield("lo?"), coroutine.yield("hi?")]
+        return type(s), #s, s[1]
+    end)
+    local ok1, q1 = coroutine.resume(co)
+    assert(ok1 and q1 == "lo?")
+    local ok2, q2 = coroutine.resume(co, 2)
+    assert(ok2 and q2 == "hi?")
+    local ok3, ty, len, first = coroutine.resume(co, 4)
+    assert(ok3, "final resume failed: " .. tostring(ty))
+    assert(ty == "table" and len == 3 and first == 20)
+end)
+
+tests:it("group field assigned from a resumed value inside a coroutine", function()
+    local co = coroutine.create(function()
+        local cfg <group> = { n = 0 }
+        cfg.n = coroutine.yield("give n")
+        return cfg.n * 3
+    end)
+    coroutine.resume(co)
+    local ok, v = coroutine.resume(co, 14)
+    assert(ok and v == 42)
+end)
+
+-- =============================================================================
+-- Enum identity across coroutine boundaries
+-- =============================================================================
+
+tests:it("enum value yielded out of a coroutine keeps identity", function()
+    local e = enum red, green, blue end
+    local co = coroutine.create(function()
+        local back = coroutine.yield(e.green)
+        return back == e.red, e.blue
+    end)
+    local ok, out = coroutine.resume(co)
+    assert(ok and out == e.green, "yielded value must be the same enum value")
+    assert(type(out) == "enum")
+    local ok2, same, last = coroutine.resume(co, e.red)
+    assert(ok2 and same == true, "resumed enum must compare equal inside")
+    assert(last == e.blue)
+end)
+
+tests:it("enum identity across coroutine boundary survives a GC cycle", function()
+    local e = enum alpha, beta end
+    local co = coroutine.create(function()
+        local got = coroutine.yield(e.beta)
+        return got == e.alpha
+    end)
+    local ok, out = coroutine.resume(co)
+    assert(ok and out == e.beta)
+    collectgarbage("collect")
+    local ok2, same = coroutine.resume(co, e.alpha)
+    assert(ok2 and same == true)
+end)
+
+-- =============================================================================
+-- Remaining condition-position compositions
+-- =============================================================================
+
+tests:it("slice result as an if-assignment condition", function()
+    local t = {1, 2, 3}
+    local got = nil
+    if s = t[2,3] then
+        got = s
+    end
+    assert(type(got) == "table" and #got == 2 and got[1] == 2)
+end)
+
+tests:it("optional chain inside a while-assignment condition", function()
+    local data = { queue = {5, 6, 7} }
+    local out = {}
+    while item = data?.queue and table.remove(data.queue, 1) do
+        table.insert(out, item)
+    end
+    assert(#out == 3 and out[1] == 5 and out[3] == 7)
+end)
+
+tests:it("string slice result inside interpolation", function()
+    local s = "hello"
+    local r = `mid: $(s[2,4])`
+    assert(r == "mid: ell", "got " .. tostring(r))
+end)
+
+tests:it("table slice length inside interpolation", function()
+    local t = {1, 2, 3, 4, 5}
+    local r = `len $(#t[2,4])`
+    assert(r == "len 3", "got " .. tostring(r))
+end)
+
+tests:finish()

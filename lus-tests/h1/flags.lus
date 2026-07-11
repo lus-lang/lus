@@ -7,7 +7,7 @@
     - assigning to flags is a parse error; writing fields is a runtime error
 ]]
 
-global assert, type, require, pledge, load, string, tostring, pairs, worker, table, io, os, arg, next
+global assert, type, require, pledge, load, string, tostring, pairs, worker, table, io, os, arg, next, setmetatable
 
 pledge("load", "fs:read=./lus-tests/*", "exec")
 
@@ -141,12 +141,26 @@ tests:it("break inside dead branch does not leak into the loop", function()
 end)
 
 tests:it("closures and to-be-closed locals in dead branches", function()
-    if flags.absent then
-        local x <close> = nil
-        local fn = function() return x end
-        fn()
+    -- the dead branch contains a <close> local and a closure; discarding
+    -- it must not disturb the close and upvalue bookkeeping of the LIVE
+    -- code sharing the same function
+    local closed = false
+    local live = 0
+    do
+        local guard <close> = setmetatable({}, {__close = function()
+            closed = true
+        end})
+        if flags.absent then
+            local x <close> = nil
+            local fn = function() return x end
+            fn()
+        end
+        local bump = function() live = live + 1 end
+        bump()
+        assert(not closed, "guard must not close before scope exit")
     end
-    assert(true)
+    assert(live == 1, "live closure should have run")
+    assert(closed, "live <close> variable should be closed on scope exit")
 end)
 
 tests:it("goto in dead branch", function()

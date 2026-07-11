@@ -1,0 +1,806 @@
+--[[
+    Multiple-return semantics test suite.
+
+    Pins how value-producing expressions behave in final versus non-final
+    positions across expression lists, table constructors, call arguments,
+    and return statements. The baseline is Lua 5.5 adjustment rules. A call
+    or vararg expression expands to all its values only in the final position
+    of a list. Anywhere else it is adjusted to exactly one value, and wrapping
+    it in parentheses forces that adjustment even in final position.
+
+    Also covers the Lus constructs that produce or consume value lists.
+    Do expressions with provide, optional chain calls, if and while
+    assignment conditions, from destructuring, string interpolation,
+    named varargs, and the catch expression.
+]]
+
+global print, require, assert, type, tostring, select, table, error, math, next, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("multret")
+
+-- Shared helper functions used throughout the suite.
+local function f2() return 1, 2 end
+local function f3() return 10, 20, 30 end
+local function zero() end
+local function nils3() return nil, nil, nil end
+local function count(...) return select("#", ...) end
+
+-- =============================================================================
+-- Expression lists in local declarations and assignments
+-- =============================================================================
+
+tests:it("call in non-final position truncates to one value", function()
+    local a, b, c = f2(), 9
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, 9)
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("call in final position expands to all values", function()
+    local a, b, c = 9, f2()
+    tests:assert_equal(a, 9)
+    tests:assert_equal(b, 1)
+    tests:assert_equal(c, 2)
+end)
+
+tests:it("parenthesized call truncates to exactly one value", function()
+    local a, b = (f2())
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, nil)
+end)
+
+tests:it("parenthesized call truncates even in final position", function()
+    local a, b, c = 9, (f3())
+    tests:assert_equal(a, 9)
+    tests:assert_equal(b, 10)
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("zero-result call in non-final position yields one nil", function()
+    local a, b = zero(), 5
+    tests:assert_equal(a, nil)
+    tests:assert_equal(b, 5)
+end)
+
+tests:it("zero-result call in final position pads with nils", function()
+    local a, b = zero()
+    tests:assert_equal(a, nil)
+    tests:assert_equal(b, nil)
+    tests:assert_equal(select("#", zero()), 0)
+end)
+
+tests:it("plain assignment expands in final and truncates in non-final position", function()
+    local a, b, c
+    a, b, c = f3()
+    tests:assert_equal(a, 10)
+    tests:assert_equal(b, 20)
+    tests:assert_equal(c, 30)
+    a, b, c = f3(), 7
+    tests:assert_equal(a, 10)
+    tests:assert_equal(b, 7)
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("string method returning two values expands into locals", function()
+    local s, e = ("hello"):find("ll")
+    tests:assert_equal(s, 3)
+    tests:assert_equal(e, 4)
+end)
+
+-- =============================================================================
+-- Table constructors
+-- =============================================================================
+
+tests:it("constructor with single final call expands", function()
+    local t = {f3()}
+    tests:assert_equal(#t, 3)
+    tests:assert_equal(t[1], 10)
+    tests:assert_equal(t[2], 20)
+    tests:assert_equal(t[3], 30)
+end)
+
+tests:it("constructor call in non-final position truncates", function()
+    local t = {f3(), 9}
+    tests:assert_equal(#t, 2)
+    tests:assert_equal(t[1], 10)
+    tests:assert_equal(t[2], 9)
+end)
+
+tests:it("constructor call after scalar expands", function()
+    local t = {9, f3()}
+    tests:assert_equal(#t, 4)
+    tests:assert_equal(t[1], 9)
+    tests:assert_equal(t[4], 30)
+end)
+
+tests:it("two calls in constructor truncate then expand", function()
+    local t = {f3(), f3()}
+    tests:assert_equal(#t, 4)
+    tests:assert_equal(t[1], 10)
+    tests:assert_equal(t[2], 10)
+    tests:assert_equal(t[3], 20)
+    tests:assert_equal(t[4], 30)
+end)
+
+tests:it("parenthesized call in constructor yields one element", function()
+    local t = {(f3())}
+    tests:assert_equal(#t, 1)
+    tests:assert_equal(t[1], 10)
+end)
+
+tests:it("record field plus positional call fills the array part", function()
+    local t = {x = 1, f2()}
+    tests:assert_equal(#t, 2)
+    tests:assert_equal(t[1], 1)
+    tests:assert_equal(t[2], 2)
+    tests:assert_equal(t.x, 1)
+end)
+
+tests:it("vararg in non-final constructor position truncates", function()
+    local function build(...)
+        return {..., 99}
+    end
+    local t = build(1, 2, 3)
+    tests:assert_equal(#t, 2)
+    tests:assert_equal(t[1], 1)
+    tests:assert_equal(t[2], 99)
+end)
+
+-- =============================================================================
+-- Call arguments
+-- =============================================================================
+
+tests:it("final call argument expands", function()
+    tests:assert_equal(count(f3()), 3)
+end)
+
+tests:it("non-final call argument truncates", function()
+    local function pair(a, b)
+        return a, b
+    end
+    local x, y = pair(f3(), 5)
+    tests:assert_equal(count(f3(), 5), 2)
+    tests:assert_equal(x, 10)
+    tests:assert_equal(y, 5)
+end)
+
+tests:it("parenthesized call argument passes one value", function()
+    tests:assert_equal(count((f3())), 1)
+end)
+
+tests:it("scalar then final call expands after it", function()
+    tests:assert_equal(count(5, f3()), 4)
+end)
+
+tests:it("method call arguments follow the same rules", function()
+    local obj = {}
+    function obj:m(...)
+        return select("#", ...)
+    end
+    tests:assert_equal(obj:m(f3()), 3)
+    tests:assert_equal(obj:m(f3(), 5), 2)
+end)
+
+-- =============================================================================
+-- Return statements
+-- =============================================================================
+
+tests:it("return of a call propagates all values", function()
+    local function r() return f3() end
+    tests:assert_equal(select("#", r()), 3)
+    local a, b, c = r()
+    tests:assert_equal(a + b + c, 60)
+end)
+
+tests:it("return of a parenthesized call yields one value", function()
+    local function r() return (f3()) end
+    tests:assert_equal(select("#", r()), 1)
+    tests:assert_equal(r(), 10)
+end)
+
+tests:it("call before another return value truncates", function()
+    local function r() return f3(), 5 end
+    tests:assert_equal(select("#", r()), 2)
+    local a, b = r()
+    tests:assert_equal(a, 10)
+    tests:assert_equal(b, 5)
+end)
+
+tests:it("scalar before final call expands the call", function()
+    local function r() return 5, f3() end
+    tests:assert_equal(select("#", r()), 4)
+end)
+
+tests:it("bare return and tail call of zero results yield zero values", function()
+    local function r1() return end
+    local function r2() return zero() end
+    tests:assert_equal(select("#", r1()), 0)
+    tests:assert_equal(select("#", r2()), 0)
+end)
+
+tests:it("returning varargs preserves trailing nils", function()
+    local function id(...) return ... end
+    tests:assert_equal(select("#", id(nil, nil)), 2)
+    tests:assert_equal(select("#", id()), 0)
+end)
+
+-- =============================================================================
+-- select counting and slicing
+-- =============================================================================
+
+tests:it("select counts explicit trailing nils", function()
+    tests:assert_equal(select("#", 1, nil, nil), 3)
+    tests:assert_equal(select("#", nils3()), 3)
+end)
+
+tests:it("select count sees adjusted argument lists", function()
+    tests:assert_equal(select("#", f3()), 3)
+    tests:assert_equal(select("#", (f3())), 1)
+end)
+
+tests:it("positive select index returns the tail", function()
+    local a, b = select(2, f3())
+    tests:assert_equal(a, 20)
+    tests:assert_equal(b, 30)
+    tests:assert_equal(select("#", select(2, f3())), 2)
+end)
+
+tests:it("negative select index counts from the end", function()
+    tests:assert_equal(select(-1, f3()), 30)
+    tests:assert_equal(select("#", select(-3, f3())), 3)
+end)
+
+tests:it("select index at the last argument returns one value", function()
+    tests:assert_equal(select("#", select(3, "a", "b", "c")), 1)
+    tests:assert_equal(select(3, "a", "b", "c"), "c")
+end)
+
+tests:it("select index past the end returns zero values", function()
+    tests:assert_equal(select("#", select(5, "a", "b")), 0)
+end)
+
+tests:it("select accepts a float with an integral value", function()
+    tests:assert_equal(select(2.0, "a", "b", "c"), "b")
+end)
+
+tests:each("select rejects invalid indices", {
+    {0, "index out of range"},
+    {-4, "index out of range"},
+    {"x", "number expected"},
+    {1.5, "no integer representation"},
+}, function(idx, pattern)
+    tests:assert_throws(function()
+        return select(idx, 1, 2, 3)
+    end, pattern)
+end)
+
+-- =============================================================================
+-- table.pack and table.unpack round trips
+-- =============================================================================
+
+tests:it("table.pack records the exact argument count", function()
+    tests:assert_equal(table.pack().n, 0)
+    tests:assert_equal(table.pack(nil).n, 1)
+    tests:assert_equal(table.pack(f3()).n, 3)
+    tests:assert_equal(table.pack(f3(), f3()).n, 4)
+end)
+
+tests:it("unpack with default range returns all sequence values", function()
+    tests:assert_equal(select("#", table.unpack({1, 2, 3})), 3)
+end)
+
+-- The fixed table is {1, nil, 3} so ranges cross a nil hole.
+tests:each("unpack explicit range value counts", {
+    {1, 3, 3},
+    {3, 1, 0},
+    {2, 2, 1},
+    {1, 5, 5},
+    {-1, 1, 3},
+}, function(i, j, expected)
+    local t = {1, nil, 3}
+    tests:assert_equal(select("#", table.unpack(t, i, j)), expected)
+end)
+
+tests:it("unpack preserves nil holes positionally", function()
+    local a, b, c = table.unpack({1, nil, 3}, 1, 3)
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, nil)
+    tests:assert_equal(c, 3)
+end)
+
+tests:it("unpack works over negative indices", function()
+    local t = {[-1] = "a", [0] = "b", [1] = "c"}
+    local a, b, c = table.unpack(t, -1, 1)
+    tests:assert_equal(a, "a")
+    tests:assert_equal(b, "b")
+    tests:assert_equal(c, "c")
+end)
+
+tests:it("unpack range past the border pads with nils", function()
+    local t = {1, 2}
+    tests:assert_equal(select("#", table.unpack(t, 1, 4)), 4)
+    local _, _, x, y = table.unpack(t, 1, 4)
+    tests:assert_equal(x, nil)
+    tests:assert_equal(y, nil)
+end)
+
+tests:it("unpack rejects a range that is too large", function()
+    tests:assert_throws(function()
+        return table.unpack({}, 1, math.maxinteger)
+    end, "too many results")
+end)
+
+tests:it("pack and unpack round trip preserves count and holes", function()
+    local t = table.pack(1, nil, 3)
+    local rt = table.pack(table.unpack(t, 1, t.n))
+    tests:assert_equal(rt.n, 3)
+    tests:assert_equal(rt[1], 1)
+    tests:assert_equal(rt[2], nil)
+    tests:assert_equal(rt[3], 3)
+end)
+
+tests:it("unpack in non-final argument position truncates", function()
+    tests:assert_equal(count(table.unpack({1, 2, 3}), 9), 2)
+end)
+
+-- =============================================================================
+-- Do expressions and provide
+-- =============================================================================
+
+tests:it("do expression in non-final position truncates to one value", function()
+    local a, b, c = do provide 1, 2 end, 9
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, 9)
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("do expression in final position of a local list expands", function()
+    local a, b, c = 9, do provide 1, 2 end
+    tests:assert_equal(a, 9)
+    tests:assert_equal(b, 1)
+    tests:assert_equal(c, 2)
+end)
+
+tests:it("provide preserves an explicit leading nil", function()
+    local a, b = do provide nil, 5 end
+    tests:assert_equal(a, nil)
+    tests:assert_equal(b, 5)
+end)
+
+tests:it("parenthesized do expression truncates to one value", function()
+    local p = table.pack((do provide 7, 8 end))
+    tests:assert_equal(p.n, 1)
+    tests:assert_equal(p[1], 7)
+end)
+
+tests:it("do expression in non-final constructor position truncates", function()
+    local t = {do provide 1, 2, 3 end, 9}
+    tests:assert_equal(#t, 2)
+    tests:assert_equal(t[1], 1)
+    tests:assert_equal(t[2], 9)
+end)
+
+tests:it("call in non-final provide position truncates", function()
+    local a, b, c = do provide f3(), 5 end
+    tests:assert_equal(a, 10)
+    tests:assert_equal(b, 5)
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("parenthesized call in provide truncates", function()
+    local a, b = do provide (f3()) end
+    tests:assert_equal(a, 10)
+    tests:assert_equal(b, nil)
+end)
+
+tests:it("do expression argument count with literal values", function()
+    tests:assert_equal(count(do provide 7, 8, 9 end), 3)
+end)
+
+tests:it("do expression as final constructor element expands", function()
+    local t1 = {do provide 5 end}
+    tests:assert_equal(#t1, 1, "single provided value should land in the table, got length " .. tostring(#t1))
+    tests:assert_equal(t1[1], 5)
+    local t2 = {9, do provide 1, 2 end}
+    tests:assert_equal(#t2, 3, "constructor should hold 9, 1, 2 but has length " .. tostring(#t2))
+    tests:assert_equal(t2[1], 9)
+    tests:assert_equal(t2[2], 1)
+    tests:assert_equal(t2[3], 2)
+end)
+
+tests:it("do expression as final call argument passes the provided values", function()
+    local p = table.pack(do provide 7, 8 end)
+    tests:assert_equal(p.n, 2)
+    tests:assert_equal(p[1], 7)
+    tests:assert_equal(p[2], 8, "second provided value should be 8, got " .. tostring(p[2]))
+end)
+
+tests:it("return of a do expression propagates provided values", function()
+    local function r() return do provide 41, 42 end end
+    tests:assert_equal(select("#", r()), 2, "return should yield the two provided values")
+    local a, b = r()
+    tests:assert_equal(a, 41)
+    tests:assert_equal(b, 42)
+end)
+
+tests:it("return of a do expression in non-final position truncates", function()
+    local function r() return do provide 41, 42 end, 5 end
+    tests:assert_equal(select("#", r()), 2)
+    local a, b = r()
+    tests:assert_equal(a, 41)
+    tests:assert_equal(b, 5)
+end)
+
+tests:it("provide propagates a trailing call's values", function()
+    local a, b, c = do provide f3() end
+    tests:assert_equal(a, 10)
+    tests:assert_equal(b, 20, "second value should be 20, got " .. tostring(b))
+    tests:assert_equal(c, 30, "third value should be 30, got " .. tostring(c))
+end)
+
+tests:it("provide of a zero-result call yields nil", function()
+    local x = do provide zero() end
+    tests:assert_equal(x, nil, "expected nil, got a value of type " .. type(x))
+end)
+
+tests:it("provide of a zero-result call yields zero values in multret position", function()
+    tests:assert_equal(count(do provide zero() end), 0)
+end)
+
+tests:it("nested do expressions propagate through each window", function()
+    local a, b = do provide do provide 1, 2 end end
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, 2)
+    tests:assert_equal(count(do provide do provide 1, 2 end end), 2)
+end)
+
+tests:it("provide with a closure capturing a block local", function()
+    local fns = table.pack(do
+        local shared = 100
+        provide function() shared = shared + 1 end, function() return shared end
+    end)
+    fns[1]()
+    fns[1]()
+    tests:assert_equal(fns[2](), 102)
+end)
+
+tests:it("catch over a multi-value do expression fills all receivers", function()
+    local ok, a, b = catch do provide 1, 2 end
+    tests:assert_equal(ok, true)
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, 2)
+    tests:assert_equal(count(catch do provide 1, 2 end), 3)
+end)
+
+tests:it("catch over a zero-value provide pads with nil", function()
+    local ok, v = catch do provide zero() end
+    tests:assert_equal(ok, true)
+    tests:assert_equal(v, nil)
+    tests:assert_equal(count(catch do provide zero() end), 1)
+end)
+
+tests:it("mixed-count provides follow the taken branch", function()
+    local function mix(c)
+        return do
+            if c then provide 1 end
+            provide 1, 2
+        end
+    end
+    tests:assert_equal(count(mix(true)), 1)
+    tests:assert_equal(count(mix(false)), 2)
+    local a, b = mix(true)
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, nil)
+end)
+
+tests:it("do expression as non-final expression list element truncates", function()
+    local a, b, c = do provide 5, 6 end, 9
+    tests:assert_equal(a, 5)
+    tests:assert_equal(b, 9)
+    tests:assert_equal(c, nil)
+end)
+
+tests:it("provide of a scalar before a trailing call keeps the whole window", function()
+    local w, x, y, z = do provide 99, f3() end
+    tests:assert_equal(w, 99)
+    tests:assert_equal(x, 10)
+    tests:assert_equal(y, 20)
+    tests:assert_equal(z, 30)
+end)
+
+tests:it("do expression without provide yields exactly one nil value", function()
+    tests:assert_equal(count(do end), 1)
+    tests:assert_equal((do end), nil)
+end)
+
+-- =============================================================================
+-- Optional chain calls always adjust to one value
+-- =============================================================================
+
+local obj = {
+    m = function(self) return 1, 2, 3 end
+}
+
+tests:it("optional method call yields exactly one value in final position", function()
+    local a, b = obj?:m()
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, nil)
+    tests:assert_equal(select("#", obj?:m()), 1)
+end)
+
+tests:it("optional method call in non-final position truncates", function()
+    local a, b = obj?:m(), 9
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, 9)
+end)
+
+tests:it("optional method call in return position yields one value", function()
+    local function r()
+        return obj?:m()
+    end
+    tests:assert_equal(select("#", r()), 1)
+    tests:assert_equal(r(), 1)
+end)
+
+tests:it("optional method call on nil yields exactly one nil", function()
+    local n = nil
+    tests:assert_equal(select("#", n?:m()), 1)
+    local p = table.pack(n?:m())
+    tests:assert_equal(p.n, 1)
+    tests:assert_equal(p[1], nil)
+end)
+
+tests:it("optional method call on nil contributes one hole to a constructor", function()
+    local n = nil
+    local t = {n?:m()}
+    tests:assert_equal(#t, 0)
+    tests:assert_equal(t[1], nil)
+end)
+
+tests:it("optional method call on false yields exactly one false", function()
+    local fb = false
+    tests:assert_equal(select("#", fb?:m()), 1)
+    tests:assert_equal(fb?:m(), false)
+end)
+
+tests:it("optional call of a function yields one value", function()
+    local fn = function() return 4, 5 end
+    local a, b = fn?()
+    tests:assert_equal(a, 4)
+    tests:assert_equal(b, nil)
+    tests:assert_equal(select("#", fn?()), 1)
+end)
+
+tests:it("optional call of nil yields one nil", function()
+    local fn = nil
+    tests:assert_equal(select("#", fn?()), 1)
+    tests:assert_equal(fn?(), nil)
+end)
+
+tests:it("optional index key from a multi-return call truncates", function()
+    local t = {[10] = "ten"}
+    tests:assert_equal(t?[f3()], "ten")
+end)
+
+-- =============================================================================
+-- if and while assignment conditions
+-- =============================================================================
+
+tests:it("if assignment binds only the listed variables", function()
+    local seen
+    if a = f2() then
+        seen = a
+    end
+    tests:assert_equal(seen, 1)
+end)
+
+tests:it("if assignment ignores a truthy second value when the first is nil", function()
+    local function niltrue() return nil, true end
+    local entered = false
+    if a = niltrue() then
+        entered = true
+    end
+    tests:assert_equal(entered, false)
+end)
+
+tests:it("if assignment discards values beyond the variable list", function()
+    local sum
+    if a, b = f3() then
+        sum = a + b
+    end
+    tests:assert_equal(sum, 30)
+end)
+
+tests:it("while assignment ignores extra returned values", function()
+    local calls = 0
+    local function wf()
+        calls = calls + 1
+        if calls <= 2 then
+            return calls, "junk"
+        end
+        return nil, "still junk"
+    end
+    local iters = 0
+    while v = wf() do
+        iters = iters + 1
+    end
+    tests:assert_equal(iters, 2)
+    tests:assert_equal(calls, 3)
+end)
+
+tests:it("while assignment exits when a listed variable is nil on entry", function()
+    local function firstnil() return 1, nil end
+    local iters = 0
+    while a, b = firstnil() do
+        iters = iters + 1
+        if iters > 3 then
+            break
+        end
+    end
+    tests:assert_equal(iters, 0)
+end)
+
+-- =============================================================================
+-- from destructuring
+-- =============================================================================
+
+tests:it("from uses only the first value of a multi-return source", function()
+    local function two_tables()
+        return {a = 1}, {a = 99}
+    end
+    local a from two_tables()
+    tests:assert_equal(a, 1)
+end)
+
+tests:it("from yields nil for a missing field alongside a present one", function()
+    local t = {x = 5}
+    local x, missing from t
+    tests:assert_equal(x, 5)
+    tests:assert_equal(missing, nil)
+end)
+
+-- =============================================================================
+-- String interpolation
+-- =============================================================================
+
+tests:it("interpolation uses only the first value of a multi-return call", function()
+    local s = `got $(f2())`
+    tests:assert_equal(s, "got 1")
+end)
+
+tests:it("interpolation of a zero-result call renders nil", function()
+    local s = `v=$(zero())`
+    tests:assert_equal(s, "v=nil")
+end)
+
+tests:it("interpolation of a select tail uses its first value", function()
+    local s = `second $(select(2, f3()))`
+    tests:assert_equal(s, "second 20")
+end)
+
+-- =============================================================================
+-- Named varargs
+-- =============================================================================
+
+tests:it("named vararg packs extras into a table with a count field", function()
+    local function named(a, ...b)
+        return b
+    end
+    local b = named(1, 2, 3)
+    tests:assert_type(b, "table")
+    tests:assert_equal(b.n, 2)
+    tests:assert_equal(b[1], 2)
+    tests:assert_equal(b[2], 3)
+end)
+
+tests:it("named vararg counts trailing nils", function()
+    local function named(a, ...b)
+        return b
+    end
+    local b = named(1, nil, nil)
+    tests:assert_equal(b.n, 2)
+    tests:assert_equal(b[1], nil)
+    tests:assert_equal(b[2], nil)
+end)
+
+tests:it("named vararg captures a final call's expansion", function()
+    local function named(a, ...b)
+        return b
+    end
+    local b = named(1, f3())
+    tests:assert_equal(b.n, 3)
+    tests:assert_equal(b[1], 10)
+    tests:assert_equal(b[2], 20)
+    tests:assert_equal(b[3], 30)
+end)
+
+tests:it("named vararg with no extras has count zero", function()
+    local function named(a, ...b)
+        return b
+    end
+    tests:assert_equal(named(1).n, 0)
+end)
+
+tests:it("named vararg round trips through unpack", function()
+    local function named(...b)
+        return table.unpack(b, 1, b.n)
+    end
+    tests:assert_equal(select("#", named(1, nil, 3)), 3)
+    local x, y, z = named(1, nil, 3)
+    tests:assert_equal(x, 1)
+    tests:assert_equal(y, nil)
+    tests:assert_equal(z, 3)
+end)
+
+-- =============================================================================
+-- catch expressions and value lists
+-- =============================================================================
+
+tests:it("catch of a multi-return call yields the flag plus all values", function()
+    tests:assert_equal(select("#", catch f3()), 4)
+    local ok, a, b, c = catch f3()
+    tests:assert_equal(ok, true)
+    tests:assert_equal(a + b + c, 60)
+end)
+
+tests:it("catch of a failing call yields the flag plus the error", function()
+    tests:assert_equal(select("#", catch error("kaboom")), 2)
+end)
+
+tests:it("catch in non-final position truncates to the flag", function()
+    local a, b = catch error("x"), 9
+    tests:assert_equal(a, false)
+    tests:assert_equal(b, 9)
+    local c, d = catch f3(), 9
+    tests:assert_equal(c, true)
+    tests:assert_equal(d, 9)
+end)
+
+tests:it("catch of a zero-result call yields only the flag", function()
+    tests:assert_equal(select("#", catch zero()), 1, "catch of zero results should yield just true")
+    local ok, x = catch zero()
+    tests:assert_equal(ok, true)
+    tests:assert_equal(x, nil, "expected nil, got a value of type " .. type(x))
+end)
+
+-- =============================================================================
+-- Other consumers adjust to one value
+-- =============================================================================
+
+tests:it("numeric for adjusts each control expression to one value", function()
+    local last = 0
+    for i = f2(), 3 do
+        last = i
+    end
+    tests:assert_equal(last, 3)
+end)
+
+tests:it("generic for takes its iterator triple from one call", function()
+    local function make()
+        return next, {only = 7}, nil
+    end
+    local gotk, gotv
+    for k, v in make() do
+        gotk, gotv = k, v
+    end
+    tests:assert_equal(gotk, "only")
+    tests:assert_equal(gotv, 7)
+end)
+
+tests:it("concatenation uses only the first value", function()
+    tests:assert_equal("x" .. f2(), "x1")
+end)
+
+tests:it("arithmetic uses only the first value", function()
+    tests:assert_equal(100 + f2(), 101)
+end)
+
+tests:it("table indexing uses only the first value as the key", function()
+    local t = {"a", "b", "c"}
+    tests:assert_equal(t[f2()], "a")
+end)
+
+tests:finish()

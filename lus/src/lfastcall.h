@@ -23,6 +23,12 @@ typedef struct FCDef {
   const char *func;   /* function name */
   lu_byte module_idx; /* index into global_State.fc_modules */
   lu_byte nargs;      /* expected argument count */
+  lu_byte multret;    /* the builtin can return other than exactly one
+                         value at the registered arity, so a return-
+                         position call site must stay an open call
+                         instead of taking the OP_RETURN1 shortcut.
+                         Any new fastcall registration whose builtin is
+                         not strictly single-result must set this flag */
 } FCDef;
 
 /* number of named modules with fastcall entries (index 0 = base lib) */

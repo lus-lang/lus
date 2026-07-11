@@ -1,4 +1,15 @@
-global print, tonumber, type, getmetatable, rawget, error, string, math, require, pledge
+--[[
+    Bitwise string-coercion shim and its test suite.
+
+    The top of this file installs __band/__bor/__bxor/__shl/__shr/__bnot
+    metamethods on the shared string metatable so that numerical strings
+    coerce for the bitwise operators. bitwise.lus requires this file as a
+    fixture, in which case only the shim is installed. When executed
+    directly as the registered test h1/bwcoercion, the suite below asserts
+    the shim's own behavior.
+]]
+
+global print, tonumber, type, getmetatable, rawget, error, string, math, require, pledge, assert, load
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -72,3 +83,74 @@ smt.__bnot = function (x)
   local x, y = checkargs(x, x, "__bnot")
   return y and ~x or x
 end
+
+-- When this file is loaded through require, the varargs carry the module
+-- name and the shim installation above is the whole job. The suite below
+-- runs only when the file is executed directly as a test.
+local modname = ...
+if modname then
+    return
+end
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("bwcoercion")
+
+tests:it("both string operands coerce for every operator", function()
+    assert(("10" & "6") == 2)
+    assert(("10" | "6") == 14)
+    assert(("10" ~ "6") == 12)
+    assert(("10" << "2") == 40)
+    assert(("40" >> "2") == 10)
+    assert((~"10") == -11)
+end)
+
+tests:it("string floats with an integral value are accepted", function()
+    assert(("3.0" | 0) == 3)
+    assert((0 | "3.0") == 3)
+    assert(("3.0" & "1.0") == 1)
+    assert(("2.0" << 1) == 4)
+    assert((~"3.0") == -4)
+end)
+
+tests:it("string floats without an integer representation are rejected", function()
+    local ok, err = catch ("3.5" | 0)
+    assert(not ok, "'3.5' | 0 must raise")
+    assert(string.find(err, "attempt to 'bor' a string with a number", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch (0 & "3.5")
+    assert(not ok, "0 & '3.5' must raise")
+    assert(string.find(err, "attempt to 'band' a number with a string", 1, true),
+        "unexpected message: " .. err)
+end)
+
+tests:it("non-coercible operands report both operand orders", function()
+    local ok, err = catch (4 & "a")
+    assert(not ok)
+    assert(string.find(err, "attempt to 'band' a number with a string", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch ("a" & 4)
+    assert(not ok)
+    assert(string.find(err, "attempt to 'band' a string with a number", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch ("a" & {})
+    assert(not ok)
+    assert(string.find(err, "attempt to 'band' a string with a table", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch (~"zz")
+    assert(not ok)
+    assert(string.find(err, "attempt to 'bnot' a string with a string", 1, true),
+        "unexpected message: " .. err)
+end)
+
+tests:it("coercion errors blame the caller's line", function()
+    -- trymt raises at level 4, which climbs out of the shim's three frames
+    -- (trymt, checkargs, the metamethod) and lands on the line performing
+    -- the bitwise operation. The loaded chunk pins that line exactly.
+    local f = assert(load("local a = ...\nreturn a & 'x'", "=shimtest"))
+    local ok, err = catch f(7)
+    assert(not ok)
+    assert(string.find(err, "^shimtest:2: attempt to 'band' a number with a string"),
+        "the error must blame the caller's line, got: " .. err)
+end)
+
+tests:finish()

@@ -5,10 +5,10 @@
 **Release date:** TBD
 
 - Added the `time` module with immutable `instant`, `duration`, and `zoned` types, keeping exact instant arithmetic separate from calendar arithmetic.
-- Added DST-aware time zones to the `time` module, resolved from an IANA tzdata database embedded in the runtime, with named zones (`time.zone`), fixed offsets (`time.offset`), and system-local detection (`time.localzone`) requiring no filesystem access; the trailing POSIX rule keeps offsets correct past the last explicit transition.
+- Added DST-aware time zones to the `time` module, resolved from an IANA tzdata database embedded in the runtime, with named zones (`time.zone`), fixed offsets (`time.offset`), and system-local detection (`time.localzone`) requiring no filesystem access. The trailing POSIX rule keeps offsets correct past the last explicit transition.
 - Added DST-correct calendar arithmetic to the `time` module through `zoned:with{}` (field replacement) and `zoned:add{}` (calendar amounts with day clamping).
 - Added `time.parse` for ISO 8601 strings and explicit `strftime`-style patterns.
-- Added first-class `time.weekday` and `time.month` enums; `zoned.weekday` returns a weekday enum value, and a month enum is accepted anywhere a month integer is.
+- Added first-class `time.weekday` and `time.month` enums. `zoned.weekday` returns a weekday enum value, and a month enum is accepted anywhere a month integer is.
 - `--include path[:alias]` now compiles modules at startup so `require` loads them without `load` or `fs` pledges.
 - Preincluded module requires are optimized to the new `OP_REQUIRE` instruction in most circumstances under a readonly environment.
 - Added the readonly `flags` table, populated from `--flag`/`-F name[=value]` arguments and resolved at compile time in `if flags.x then` conditions.
@@ -22,6 +22,7 @@
 - `vector.resize` now grows capacity geometrically, making grow-by-one append loops O(n) amortized instead of O(n²).
 - `network.fetch` now reads response headers in buffered chunks instead of one byte per system call.
 - Vector-returning archive compression and decompression no longer copy the whole output through a temporary Lua string, reducing peak memory.
+- Gave do-expressions a runtime multi-value protocol through the new `OP_PROVIDE` and `OP_ENDDO` instructions, fixing dropped table constructor entries, duplicated and shifted `provide` values, empty multi-value returns, and internal stack slots leaking into user code.
 - Fixed `load`, `debug.parse`, and other internally-protected C calls having their errors hijacked by an enclosing `catch` block, which broke their return values and leaked their internal resources.
 - Fixed the JSON parser leaking its container stack on parse errors raised from helper functions.
 - Fixed a worker blocked in `worker.peek()` on an empty inbox hanging interpreter shutdown forever.
@@ -36,10 +37,35 @@
 - Fixed 32-bit size overflows in archive buffer sizing, `vector.create`/`vector.resize` capacity casts, and enum-root allocation.
 - Fixed the `worker.peek` shutdown wakeup being swallowed by a `catch` retry loop, which could still hang interpreter exit at 100% CPU.
 - Fixed `lua_pcallk` continuations having their errors intercepted by an enclosing `catch` block, the same defect previously fixed for `lua_pcall`.
-- Fixed `tojson` corrupting interpreter memory or crashing on deeply nested tables; extreme nesting now raises a catchable error.
-- Fixed a NULL write when an embedder creates a zero-member enum via `lua_pushenum`; such enums are now rejected with an error.
+- Fixed `tojson` corrupting interpreter memory or crashing on deeply nested tables. Extreme nesting now raises a catchable error.
+- Fixed a NULL write when an embedder creates a zero-member enum via `lua_pushenum`. Such enums are now rejected with an error.
 - Fixed `require` failing to cache modules under `--readonly-env` because the environment freeze wrongly included `package.loaded`.
 - Fixed workers crashing at startup under `--readonly-env` when the runtime registered `worker.message`/`worker.peek` into the frozen module table.
+- Fixed `catch` over a call returning zero results leaking a stale stack slot, often the called function itself, as a caught value instead of nil.
+- Fixed an error raised by a `__close` handler while `catch` unwound to-be-closed variables escaping the catch and aborting the process.
+- Fixed `catch` reporting a `__close` method or the closed object instead of the original error when to-be-closed variables ran during unwinding.
+- Fixed `coroutine.yield` inside a `catch` block being swallowed as a caught error, which corrupted the coroutine and crashed the interpreter on a later resume.
+- Fixed `catch` in the main thread receiving traceback-decorated strings instead of the raw error value.
+- Fixed out-of-memory errors caught by `catch` delivering a garbage stack value instead of the "not enough memory" message.
+- Fixed locals declared inside a do-expression reading as nil or as unrelated values when the expression appears inside string interpolation, call arguments, or other positions with live temporaries below it.
+- Fixed a function call used as a slice bound miscompiling the slice.
+- Fixed duplicate enum member names being silently accepted instead of raising a compile error.
+- Fixed `global` declarations with a `<group>` attribute producing an internal error instead of a proper diagnostic.
+- Fixed runtime attribute handlers never running on `<const>` locals initialized with compile-time constants.
+- Fixed the `math.max` and `math.min` fastcalls inverting NaN handling, losing the integer subtype of the winning operand, and picking the wrong operand on signed-zero ties and values past 2^53.
+- Fixed the `string.byte` fastcall returning a clamped first byte where the C function returns nothing for out-of-range positions.
+- Fixed the `math.tointeger` fastcall returning nil for integer-valued numeric strings instead of coercing them like the C function.
+- Fixed the `table.sum`, `table.mean`, `table.median`, and `table.stdev` fastcalls skipping numeric strings and ignoring metatables instead of deferring to the C path.
+- Fixed `return f(x)` truncating fastcall builtins that can return other than one value, such as `utf8.offset`, `utf8.len`, out-of-range `string.byte`, and `vector.resize`.
+- Fixed deeply nested and cyclic tables sent to a worker crashing the process on either side of the transfer instead of failing cleanly at the documented nesting cap.
+- Fixed closing a worker's interpreter state tearing down the process-wide worker pool, which crashed or hung interpreter exit when a worker handle was collected while its worker was still running.
+- Fixed `%z` in time formatting printing the host's UTC offset instead of the formatted value's own offset.
+- Fixed `vector.archive.lz4.decompress_hc` sharing the modern-frame decoder and rejecting every legacy LZ4 frame.
+- Fixed `debug.format` dropping the `...` from named vararg parameters.
+- Fixed `debug.format` rendering floats with too few digits and re-emitting whole-number floats as integer literals.
+- Fixed `debug.format` emitting the minimum integer as a decimal literal that reparses as a float.
+- Fixed the language server's selection ranges never producing a chain of enclosing parents and ordering nodes arbitrarily on single-line documents.
+- Fixed the `os.platform` documentation using `macos` as the Apple identifier when the function returns the uname-style `darwin`.
 
 ## 1.6.2
 
@@ -292,7 +318,7 @@
 **Release date:** December 5, 2025
 
 > [!NOTE]
-> This changelog denotes differences between Lus and Lua 5.5 RC 2. Lua 5.5 most (in)famously introduces the `global` assignment statement; it is not a Lus-specific feature.
+> This changelog denotes differences between Lus and Lua 5.5 RC 2. Lua 5.5 most (in)famously introduces the `global` assignment statement, which is not a Lus-specific feature.
 
 - Added table deconstruction with `from` assignment.
 - Added scoped assignments in `if`/`elseif` conditionals.

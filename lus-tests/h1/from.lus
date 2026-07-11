@@ -117,10 +117,13 @@ tests:it("bare assignment from single local", function()
     assert(val == 42)
 end)
 
-tests:it("first assignment from t1", function()
+tests:it("reassignment with missing field sets nil", function()
     local t1 = { x = 1, y = 2 }
+    local t2 = { x = 10 }
     local x, y from t1
-    assert(x == 1 and y == 2)
+    x, y from t2
+    assert(x == 10)
+    assert(y == nil, "from is not a merge, a missing field overwrites with nil")
 end)
 
 tests:it("reassignment from t2", function()
@@ -137,10 +140,11 @@ tests:it("from ignores array part", function()
     assert(a == "hash")
 end)
 
-tests:it("from with long variable name", function()
-    local t = { longVariableName = 123 }
-    local longVariableName from t
-    assert(longVariableName == 123)
+tests:it("from copies values, not references", function()
+    local t = { v = 1 }
+    local v from t
+    t.v = 99
+    assert(v == 1, "v holds the value read when from executed")
 end)
 
 tests:it("from with 5 variables", function()
@@ -159,10 +163,10 @@ tests:it("table expression evaluated once", function()
     assert(call_count == 1 and a == 1 and b == 1)
 end)
 
-tests:it("from on nested table", function()
-    local outer = { inner = { x = 42 } }
-    local x from outer.inner
-    assert(x == 42)
+tests:it("from with indexed source expression", function()
+    local list = { { x = 1 }, { x = 2 } }
+    local x from list[2]
+    assert(x == 2)
 end)
 
 tests:it("from inside if block", function()

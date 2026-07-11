@@ -1,0 +1,593 @@
+--[[
+  Base library coverage for Lus.
+
+  Fills the gaps left by errors.lus and nextvar.lus: dofile and loadfile
+  against real fixture files, warn call safety, the _VERSION string, select
+  index edge cases, the raw family boundaries, next and pairs contracts
+  including the __pairs metamethod, collectgarbage parameter and running
+  state control, and the position prefix produced at each error level.
+
+  The suite writes its fixtures under a per-run sandbox directory at the
+  repository root named baselib_<run>. The pledge preamble scopes read and
+  write to that directory only, so the dofile and loadfile denial tests
+  exercise a real permission boundary against a path outside the grant.
+]]
+
+global print, require, assert, type, pairs, ipairs, next, table, math,
+    string, error, tostring, collectgarbage, rawget, rawset, rawequal,
+    rawlen, setmetatable, getmetatable, select, warn, dofile, loadfile,
+    pledge, io, os, fs, debug, tonumber, _G, _VERSION
+
+pledge("load", "fs:read=./lus-tests/*",
+    "fs:read=./baselib_*", "fs:write=./baselib_*",
+    "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("baselib")
+
+-- Per-run sandbox so concurrent suites never collide on the same path.
+local RUN = tostring(os.time()) .. "_" .. tostring(math.random(1, 1000000))
+local DIR = "baselib_" .. RUN
+fs.createdirectory(DIR)
+
+-- Writes a fixture file into the sandbox and returns its path.
+local function fixture(name, content)
+    local path = DIR .. "/" .. name
+    local f = io.open(path, "w")
+    f:write(content)
+    f:close()
+    return path
+end
+
+local multi_path = fixture("multi.lus", "return 1, 'two', true\n")
+local side_path = fixture("side.lus",
+    "_G.__baselib_side = (_G.__baselib_side or 0) + 1\nreturn 99\n")
+local syntax_path = fixture("syntax.lus", "return 1 +\n")
+local rterr_path = fixture("rterr.lus", "error('chunk runtime failure')\n")
+local env_path = fixture("env.lus", "return GREETING\n")
+
+-- Returns just the first line of an error string, dropping the traceback
+-- that catch appends after the message.
+local function firstline(err)
+    return tostring(err):match("^[^\n]+")
+end
+
+-- ============================================================
+tests:describe("_VERSION")
+-- ============================================================
+
+tests:it("_VERSION is a string", function()
+    tests:assert_type(_VERSION, "string")
+end)
+
+tests:it("_VERSION carries the Lus brand and a numeric version", function()
+    tests:assert_true(string.find(_VERSION, "^Lus %d+%.%d+") ~= nil,
+        "expected a 'Lus <major>.<minor>' shape, got: " .. _VERSION)
+end)
+
+-- ============================================================
+tests:describe("select")
+-- ============================================================
+
+tests:each("select('#', ...) counts the extra arguments", {
+    {0, {}},
+    {1, {"a"}},
+    {3, {"a", "b", "c"}},
+    {3, {nil, nil, nil}},
+}, function(expected, args)
+    tests:assert_equal(select("#", table.unpack(args, 1, expected)), expected)
+end)
+
+tests:it("select(n) returns arguments from n onward", function()
+    local a, b = select(2, "x", "y", "z")
+    tests:assert_equal(a, "y")
+    tests:assert_equal(b, "z")
+    tests:assert_equal(select("#", select(2, "x", "y", "z")), 2)
+end)
+
+tests:it("select(1) returns every argument", function()
+    tests:assert_equal(select("#", select(1, 10, 20, 30)), 3)
+end)
+
+tests:each("select with a negative index counts from the end", {
+    {-1, "c"},
+    {-2, "b"},
+    {-3, "a"},
+}, function(idx, expected)
+    tests:assert_equal((select(idx, "a", "b", "c")), expected)
+end)
+
+tests:it("select past the argument count returns nothing", function()
+    tests:assert_equal(select("#", select(5, "a", "b", "c")), 0)
+end)
+
+tests:it("select(0) is out of range", function()
+    tests:assert_throws(function() return select(0, "a") end,
+        "index out of range")
+end)
+
+tests:it("select with a negative index past the start is out of range",
+    function()
+        tests:assert_throws(function() return select(-4, "a", "b", "c") end,
+            "index out of range")
+    end)
+
+-- ============================================================
+tests:describe("raw family")
+-- ============================================================
+
+tests:it("rawset writes past __newindex and returns the table", function()
+    local guard = setmetatable({}, {
+        __newindex = function() error("__newindex should not fire") end,
+    })
+    local returned = rawset(guard, "k", 42)
+    tests:assert_true(returned == guard, "rawset must return its table")
+    tests:assert_equal(rawget(guard, "k"), 42)
+end)
+
+tests:it("rawget reads past __index", function()
+    local t = setmetatable({}, {__index = function() return "meta" end})
+    tests:assert_equal(t.missing, "meta")
+    tests:assert_nil(rawget(t, "missing"))
+end)
+
+tests:it("rawset with a nil key is rejected", function()
+    tests:assert_throws(function() rawset({}, nil, 1) end, "table index is nil")
+end)
+
+tests:it("rawset with a NaN key is rejected", function()
+    tests:assert_throws(function() rawset({}, 0 / 0, 1) end,
+        "table index is NaN")
+end)
+
+tests:it("rawequal ignores __eq", function()
+    local mt = {__eq = function() return true end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    tests:assert_true(a == b, "__eq should make them compare equal")
+    tests:assert_false(rawequal(a, b), "rawequal must bypass __eq")
+    tests:assert_true(rawequal(a, a), "identity is primitively equal")
+end)
+
+tests:each("rawequal on primitives", {
+    {1, 1.0, true},
+    {1, 2, false},
+    {"1", 1, false},
+    {"lus", "lus", true},
+    {true, true, true},
+    {true, false, false},
+}, function(x, y, expected)
+    tests:assert_equal(rawequal(x, y), expected)
+end)
+
+tests:it("rawequal treats two nils as primitively equal", function()
+    tests:assert_true(rawequal(nil, nil))
+end)
+
+tests:it("rawequal with a single argument is rejected", function()
+    tests:assert_throws(function() return rawequal(1) end)
+end)
+
+tests:it("rawlen measures strings and tables past __len", function()
+    tests:assert_equal(rawlen("hello"), 5)
+    local t = setmetatable({1, 2, 3}, {__len = function() return 99 end})
+    tests:assert_equal(#t, 99)
+    tests:assert_equal(rawlen(t), 3)
+end)
+
+tests:it("rawlen rejects values that are neither table nor string", function()
+    tests:assert_throws(function() return rawlen(5) end,
+        "table or string expected")
+end)
+
+-- ============================================================
+tests:describe("next")
+-- ============================================================
+
+tests:it("next on an empty table returns nil", function()
+    tests:assert_nil(next({}))
+end)
+
+tests:it("next with a nil control returns the first pair", function()
+    local k, v = next({only = 7})
+    tests:assert_equal(k, "only")
+    tests:assert_equal(v, 7)
+end)
+
+tests:it("next walks every pair exactly once", function()
+    local t = {a = 1, b = 2, c = 3, d = 4}
+    local seen = {}
+    local k, v = next(t)
+    local count = 0
+    while k ~= nil do
+        tests:assert_false(seen[k], "next repeated a key")
+        seen[k] = true
+        count = count + 1
+        k, v = next(t, k)
+    end
+    tests:assert_equal(count, 4)
+end)
+
+tests:it("next with a key absent from the table is rejected", function()
+    tests:assert_throws(function() return next({a = 1}, "ghost") end,
+        "invalid key to 'next'")
+end)
+
+tests:it("next on a non-table is rejected", function()
+    tests:assert_throws(function() return next(5) end, "table expected")
+end)
+
+-- ============================================================
+tests:describe("pairs")
+-- ============================================================
+
+tests:it("pairs returns the iterator, the table, and nil", function()
+    local t = {x = 1}
+    local iter, state, control = pairs(t)
+    tests:assert_type(iter, "function")
+    tests:assert_true(state == t, "the state must be the table itself")
+    tests:assert_nil(control)
+end)
+
+tests:it("pairs visits all key value pairs", function()
+    local t = {a = 10, b = 20, c = 30}
+    local total = 0
+    local keys = 0
+    for k, v in pairs(t) do
+        total = total + v
+        keys = keys + 1
+    end
+    tests:assert_equal(total, 60)
+    tests:assert_equal(keys, 3)
+end)
+
+tests:it("pairs honors a __pairs metamethod", function()
+    local backing = {"first", "second"}
+    local proxy = setmetatable({}, {
+        __pairs = function(self)
+            local function step(_, i)
+                i = i + 1
+                if backing[i] then return i, backing[i] end
+            end
+            return step, self, 0
+        end,
+    })
+    local collected = {}
+    for k, v in pairs(proxy) do
+        collected[k] = v
+    end
+    tests:assert_deep_equal(collected, {"first", "second"})
+end)
+
+tests:it("pairs on a non-table raises when the iterator advances", function()
+    tests:assert_throws(function()
+        for _ in pairs(5) do end
+    end, "table expected")
+end)
+
+-- ============================================================
+tests:describe("ipairs")
+-- ============================================================
+
+tests:it("ipairs returns an iterator, the table, and the zero seed",
+    function()
+        local t = {7, 8, 9}
+        local iter, state, control = ipairs(t)
+        tests:assert_type(iter, "function")
+        tests:assert_true(state == t)
+        tests:assert_equal(control, 0)
+    end)
+
+tests:it("the ipairs iterator can be driven by hand", function()
+    local iter, state = ipairs({7, 8, 9})
+    local i, v = iter(state, 0)
+    tests:assert_equal(i, 1)
+    tests:assert_equal(v, 7)
+    i, v = iter(state, 1)
+    tests:assert_equal(i, 2)
+    tests:assert_equal(v, 8)
+end)
+
+tests:it("ipairs over an empty table yields nothing", function()
+    local count = 0
+    for _ in ipairs({}) do count = count + 1 end
+    tests:assert_equal(count, 0)
+end)
+
+-- ============================================================
+tests:describe("assert")
+-- ============================================================
+
+tests:it("assert with no message uses the default wording", function()
+    local ok, err = catch assert(false)
+    tests:assert_false(ok)
+    tests:assert_true(string.find(err, "assertion failed!") ~= nil,
+        "expected the default wording, got: " .. firstline(err))
+end)
+
+tests:it("assert forwards a string message", function()
+    tests:assert_throws(function() assert(nil, "custom boom") end,
+        "custom boom")
+end)
+
+tests:it("assert keeps a numeric message as a number", function()
+    local ok, err = catch assert(false, 4242)
+    tests:assert_false(ok)
+    tests:assert_equal(err, 4242)
+end)
+
+tests:it("assert passes a table message through raw", function()
+    local obj = setmetatable({}, {
+        __tostring = function() return "SENTINEL_ASSERT" end,
+    })
+    local ok, err = catch assert(false, obj)
+    tests:assert_false(ok)
+    tests:assert_equal(err, obj, "table assert message must pass through raw")
+    tests:assert_equal(tostring(err), "SENTINEL_ASSERT")
+end)
+
+-- ============================================================
+tests:describe("error levels")
+-- ============================================================
+
+tests:it("level 1 prefixes the error call site", function()
+    local ok, err = catch error("boom", 1)
+    tests:assert_false(ok)
+    local first = firstline(err)
+    tests:assert_true(
+        string.find(first, "^lus%-tests/h1/baselib%.lus:%d+: boom$") ~= nil,
+        "expected a file:line: boom prefix, got: " .. first)
+end)
+
+tests:it("level 1 reports the exact line of the error call", function()
+    -- The debug.getinfo call and the error call share one source line, so
+    -- the reported line must equal that current line.
+    local expected = debug.getinfo(1, "l").currentline; local ok, err = catch error("here", 1)
+    local reported = tonumber(firstline(err):match("baselib%.lus:(%d+):"))
+    tests:assert_equal(reported, expected)
+end)
+
+tests:it("level 2 blames the caller of the raising function", function()
+    local function thrower() error("up", 2) end
+    -- thrower is invoked on this next line, so level 2 must point here.
+    local callsite = debug.getinfo(1, "l").currentline; local ok, err = catch thrower()
+    local reported = tonumber(firstline(err):match("baselib%.lus:(%d+):"))
+    tests:assert_equal(reported, callsite)
+end)
+
+tests:it("level 2 differs from the line inside the raising function",
+    function()
+        local function thrower(lvl) error("x", lvl) end
+        local inside = firstline(select(2, catch thrower(1)))
+            :match("baselib%.lus:(%d+):")
+        local caller = firstline(select(2, catch thrower(2)))
+            :match("baselib%.lus:(%d+):")
+        tests:assert_true(inside ~= caller,
+            "level 1 and level 2 must point at different lines")
+    end)
+
+tests:it("level 0 omits any position prefix", function()
+    local ok, err = catch error("plain message", 0)
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "plain message")
+end)
+
+tests:it("a numeric message carries no position prefix", function()
+    local ok, err = catch error(42, 1)
+    tests:assert_false(ok)
+    tests:assert_equal(firstline(err), "42")
+end)
+
+tests:it("error with no arguments raises the no-error-object message", function()
+    local ok, err = catch error()
+    tests:assert_false(ok)
+    tests:assert_equal(err, "<no error object>")
+end)
+
+-- ============================================================
+tests:describe("collectgarbage")
+-- ============================================================
+
+tests:each("collectgarbage('param', name) returns a numeric value", {
+    {"pause"},
+    {"stepmul"},
+    {"stepsize"},
+    {"minormul"},
+}, function(name)
+    tests:assert_type(collectgarbage("param", name), "number")
+end)
+
+tests:it("collectgarbage('param', name, n) sets and returns the prior value",
+    function()
+        local original = collectgarbage("param", "pause")
+        -- Setting a parameter returns the value that was in effect before.
+        local previous = collectgarbage("param", "pause", 500)
+        tests:assert_equal(previous, original,
+            "setting a parameter returns the previous value")
+        tests:assert_equal(collectgarbage("param", "pause"), 500,
+            "the new value takes effect")
+        -- Restore the collector to its prior tuning.
+        collectgarbage("param", "pause", original)
+        tests:assert_equal(collectgarbage("param", "pause"), original)
+    end)
+
+tests:it("collectgarbage('param') rejects an unknown parameter", function()
+    tests:assert_throws(function()
+        return collectgarbage("param", "notaparameter")
+    end, "invalid option")
+end)
+
+tests:it("collectgarbage rejects an unknown option", function()
+    tests:assert_throws(function() return collectgarbage("bogus") end,
+        "invalid option 'bogus'")
+end)
+
+tests:it("isrunning tracks stop and restart", function()
+    collectgarbage("stop")
+    tests:assert_false(collectgarbage("isrunning"),
+        "collector should report stopped after stop")
+    collectgarbage("restart")
+    tests:assert_true(collectgarbage("isrunning"),
+        "collector should report running after restart")
+end)
+
+tests:it("count returns a number and step returns a boolean", function()
+    tests:assert_type(collectgarbage("count"), "number")
+    tests:assert_type(collectgarbage("step"), "boolean")
+end)
+
+-- ============================================================
+tests:describe("warn")
+-- ============================================================
+
+tests:it("warn is a callable global", function()
+    tests:assert_type(warn, "function")
+end)
+
+tests:each("warn accepts string payloads and control messages", {
+    {"@off"},
+    {"@on"},
+    {"a plain warning"},
+    {"@off"},
+}, function(msg)
+    local ok = catch warn(msg)
+    tests:assert_true(ok, "warn(" .. msg .. ") should not raise")
+end)
+
+tests:it("warn concatenates several string arguments safely", function()
+    local ok = catch warn("piece-a", "piece-b", "piece-c")
+    tests:assert_true(ok)
+    warn("@off")
+end)
+
+tests:it("warn coerces a numeric argument", function()
+    local ok = catch warn(123)
+    tests:assert_true(ok, "a number should coerce to its string form")
+    warn("@off")
+end)
+
+tests:it("warn rejects a nil argument", function()
+    tests:assert_throws(function() warn(nil) end, "string expected")
+end)
+
+tests:it("warn with no arguments is rejected", function()
+    tests:assert_throws(function() warn() end, "string expected")
+end)
+
+-- ============================================================
+tests:describe("dofile")
+-- ============================================================
+
+tests:it("dofile returns every value the chunk returns", function()
+    local a, b, c = dofile(multi_path)
+    tests:assert_equal(a, 1)
+    tests:assert_equal(b, "two")
+    tests:assert_equal(c, true)
+end)
+
+tests:it("dofile executes the chunk immediately", function()
+    _G.__baselib_side = nil
+    dofile(side_path)
+    tests:assert_equal(_G.__baselib_side, 1)
+    dofile(side_path)
+    tests:assert_equal(_G.__baselib_side, 2)
+    _G.__baselib_side = nil
+end)
+
+tests:it("a runtime error inside dofile propagates", function()
+    tests:assert_throws(function() dofile(rterr_path) end,
+        "chunk runtime failure")
+end)
+
+tests:it("dofile on a missing file raises and names it", function()
+    local ok, err = catch dofile(DIR .. "/does_not_exist.lus")
+    tests:assert_false(ok)
+    tests:assert_true(string.find(err, "does_not_exist%.lus") ~= nil,
+        "the error should name the missing file")
+end)
+
+tests:it("dofile on a syntax error raises rather than returning", function()
+    tests:assert_throws(function() dofile(syntax_path) end,
+        "syntax%.lus")
+end)
+
+tests:it("dofile on a path outside the pledge is denied", function()
+    local ok, err = catch dofile("./denied_probe_outside_baselib.lus")
+    tests:assert_false(ok)
+    tests:assert_true(string.find(err, 'permission "fs:read" denied') ~= nil,
+        "reading an ungranted path must be denied, got: " .. firstline(err))
+end)
+
+-- ============================================================
+tests:describe("loadfile")
+-- ============================================================
+
+tests:it("loadfile compiles without running the chunk", function()
+    _G.__baselib_side = nil
+    local chunk = loadfile(side_path)
+    tests:assert_type(chunk, "function")
+    tests:assert_nil(_G.__baselib_side,
+        "loadfile must not execute the chunk")
+    local r = chunk()
+    tests:assert_equal(r, 99)
+    tests:assert_equal(_G.__baselib_side, 1,
+        "calling the chunk runs its side effect")
+    _G.__baselib_side = nil
+end)
+
+tests:it("loadfile returns the chunk's own return values when called",
+    function()
+        local chunk = loadfile(multi_path)
+        local a, b, c = chunk()
+        tests:assert_equal(a, 1)
+        tests:assert_equal(b, "two")
+        tests:assert_equal(c, true)
+    end)
+
+tests:it("loadfile on a missing file returns nil and a message", function()
+    local chunk, err = loadfile(DIR .. "/missing_for_load.lus")
+    tests:assert_nil(chunk)
+    tests:assert_type(err, "string")
+    tests:assert_true(string.find(err, "missing_for_load%.lus") ~= nil,
+        "the message should name the missing file")
+end)
+
+tests:it("loadfile on a syntax error returns nil and names the file",
+    function()
+        local chunk, err = loadfile(syntax_path)
+        tests:assert_nil(chunk)
+        tests:assert_type(err, "string")
+        tests:assert_true(string.find(err, "syntax%.lus") ~= nil,
+            "the message should name the offending file")
+    end)
+
+tests:it("loadfile accepts text mode for a text chunk", function()
+    local chunk = loadfile(multi_path, "t")
+    tests:assert_type(chunk, "function")
+    tests:assert_equal((chunk()), 1)
+end)
+
+tests:it("loadfile rejects a text chunk under binary mode", function()
+    local chunk, err = loadfile(multi_path, "b")
+    tests:assert_nil(chunk)
+    tests:assert_type(err, "string")
+    tests:assert_true(string.find(err, "text chunk") ~= nil,
+        "binary mode on text should complain about a text chunk")
+end)
+
+tests:it("loadfile binds globals to a custom environment", function()
+    local chunk = loadfile(env_path, "t", {GREETING = "scoped-hello"})
+    tests:assert_equal(chunk(), "scoped-hello")
+end)
+
+tests:it("loadfile on a path outside the pledge is denied", function()
+    local ok, err = catch loadfile("./denied_load_outside_baselib.lus")
+    tests:assert_false(ok)
+    tests:assert_true(string.find(err, 'permission "fs:read" denied') ~= nil,
+        "an ungranted path must be denied, got: " .. firstline(err))
+end)
+
+-- Clean up the sandbox before reporting so concurrent suites leave no trace.
+catch fs.remove(DIR, true)
+
+tests:finish()

@@ -1,0 +1,709 @@
+-- H1 suite for ephemeron and weak table semantics.
+-- It pins the Lua 5.5 derived contracts for weak keys, weak values, ephemeron
+-- convergence, __mode mutation between cycles, finalizer visibility rules,
+-- resurrection interactions, and behavior under both collector modes.
+-- Full cycles are forced with repeated collectgarbage("collect") calls.
+
+global print, require, assert, type, collectgarbage, setmetatable, tostring, pairs, ipairs, next, string, coroutine, vector, error, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("weak2")
+
+-- Two full collections guarantee that a complete mark and sweep cycle has
+-- finished regardless of where the collector was when the test started.
+local function full_collect()
+    collectgarbage("collect")
+    collectgarbage("collect")
+end
+
+local function count_entries(t)
+    local n = 0
+    for k in pairs(t) do
+        n = n + 1
+    end
+    return n
+end
+
+-- Runs a body under an explicit collector mode and always restores the
+-- previous mode, even when the body raises an error.
+local function with_mode(mode, body)
+    local prev = collectgarbage(mode)
+    local ok, err = catch body()
+    collectgarbage(prev)
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- Builds a fresh closure whose only upvalue is the given object. Using a
+-- factory keeps the upvalue distinct from any local in the calling test.
+local function make_closure(obj)
+    return function()
+        return obj
+    end
+end
+
+-- Seeds one table-key table-value entry and returns only the requested
+-- holders. Creating the key and value inside a helper keeps their stack
+-- slots out of the caller frame once the helper returns.
+local function seed_pair(t, hold_key, hold_value)
+    local k = {}
+    local v = {}
+    t[k] = v
+    local hk = nil
+    local hv = nil
+    if hold_key then
+        hk = k
+    end
+    if hold_value then
+        hv = v
+    end
+    return hk, hv
+end
+
+-- Stores a value under a key that no caller frame ever references.
+local function seed_anonymous_key(t, v)
+    local k = {tag = "strongkey"}
+    t[k] = v
+end
+
+-- ============================================================
+-- Survival matrix for the three weakness modes
+-- ============================================================
+
+tests:describe("weak mode survival matrix")
+
+tests:each("entry survival by mode and holders", {
+    {"k", true, true, true},
+    {"k", true, false, true},
+    {"k", false, true, false},
+    {"k", false, false, false},
+    {"v", true, true, true},
+    {"v", true, false, false},
+    {"v", false, true, true},
+    {"v", false, false, false},
+    {"kv", true, true, true},
+    {"kv", true, false, false},
+    {"kv", false, true, false},
+    {"kv", false, false, false},
+}, function(mode, hold_key, hold_value, present)
+    local t = setmetatable({}, {__mode = mode})
+    local kept_k, kept_v = seed_pair(t, hold_key, hold_value)
+    full_collect()
+    if present then
+        tests:assert_equal(count_entries(t), 1, "expected the entry to survive")
+        if kept_k ~= nil then
+            tests:assert_not_nil(t[kept_k], "the held key should still map to its value")
+        end
+    else
+        tests:assert_equal(count_entries(t), 0, "expected the entry to be cleared")
+    end
+    -- Touching the holders here keeps them live across the collection above.
+    if hold_key then
+        tests:assert_type(kept_k, "table")
+    end
+    if hold_value then
+        tests:assert_type(kept_v, "table")
+    end
+end)
+
+-- ============================================================
+-- True ephemeron behavior in weak keyed tables
+-- ============================================================
+
+tests:describe("ephemeron basics")
+
+tests:it("pair collects when the key is only referenced by its own value", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    t[k] = {ref = k}
+    k = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("pair survives while the key is externally held", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    t[k] = {ref = k, marker = 42}
+    full_collect()
+    tests:assert_equal(count_entries(t), 1)
+    tests:assert_equal(t[k].marker, 42)
+    tests:assert_equal(t[k].ref, k)
+end)
+
+tests:it("entry whose value is the key itself collects when dropped", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    t[k] = k
+    k = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("entry whose value is the key itself survives while held", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    t[k] = k
+    full_collect()
+    tests:assert_equal(t[k], k)
+end)
+
+tests:it("deeply nested value reference to the key still collects", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    t[k] = {a = {b = {c = {d = k}}}}
+    k = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("closure value capturing its own key still collects", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    t[k] = make_closure(k)
+    k = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("closure value capturing a held key stays callable", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {tag = "key"}
+    t[k] = make_closure(k)
+    full_collect()
+    tests:assert_equal(t[k]().tag, "key")
+end)
+
+-- ============================================================
+-- Ephemeron chains and cycles
+-- ============================================================
+
+tests:describe("ephemeron chains")
+
+tests:it("cascade across two tables follows the live head and dies with it", function()
+    local t1 = setmetatable({}, {__mode = "k"})
+    local t2 = setmetatable({}, {__mode = "k"})
+    local k1 = {}
+    local k2 = {}
+    t1[k1] = {link = k2}
+    t2[k2] = {marker = "v2"}
+    k2 = nil
+    full_collect()
+    -- The second key stays alive because the first entry's value holds it.
+    tests:assert_equal(count_entries(t2), 1)
+    tests:assert_equal(t2[t1[k1].link].marker, "v2")
+    k1 = nil
+    full_collect()
+    tests:assert_equal(count_entries(t1), 0)
+    tests:assert_equal(count_entries(t2), 0)
+end)
+
+tests:it("mutual ephemeron cycle survives one live key and collects with none", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k1 = {}
+    local k2 = {}
+    t[k1] = {peer = k2}
+    t[k2] = {peer = k1}
+    k2 = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 2, "one live key must keep the mutual pair")
+    k1 = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("ten link chain inserted deepest first converges both ways", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local keys = {}
+    for i = 1, 10 do
+        keys[i] = {id = i}
+    end
+    -- Inserting the deepest link first forces the marker to revisit entries,
+    -- which exercises the ephemeron convergence loop.
+    for i = 10, 1, -1 do
+        t[keys[i]] = {next_key = keys[i + 1]}
+    end
+    local head = keys[1]
+    keys = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 10, "the head must keep the whole chain")
+    local node = head
+    local steps = 0
+    while node do
+        steps = steps + 1
+        node = t[node].next_key
+    end
+    tests:assert_equal(steps, 10)
+    head = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0, "dropping the head must cascade")
+end)
+
+tests:it("ephemeron sweep keeps exactly the held keys", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local held = {}
+    for i = 1, 90 do
+        local k = {}
+        t[k] = {ref = k, id = i}
+        if i % 3 == 0 then
+            held[#held + 1] = k
+        end
+    end
+    full_collect()
+    tests:assert_equal(count_entries(t), 30)
+    for _, k in ipairs(held) do
+        tests:assert_equal(t[k].ref, k)
+    end
+end)
+
+tests:it("ephemeron value memory is reclaimed when its key dies", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local k = {}
+    -- The concatenation forces a flat unique string, since plain string.rep
+    -- results use a compact representation that barely counts toward memory.
+    -- The helper keeps the string temporary out of this frame's registers.
+    local function attach(key)
+        t[key] = string.rep("x", 512 * 1024) .. "weak2-tail"
+    end
+    attach(k)
+    full_collect()
+    local before = collectgarbage("count")
+    k = nil
+    full_collect()
+    local after = collectgarbage("count")
+    local reclaimed = before - after
+    tests:assert_true(reclaimed > 400,
+        "expected at least 400 KB reclaimed, got " .. tostring(reclaimed))
+end)
+
+-- ============================================================
+-- Weak values are not ephemerons and keys stay strong
+-- ============================================================
+
+tests:describe("weak value semantics")
+
+tests:it("weak value tables hold their keys strongly", function()
+    local t = setmetatable({}, {__mode = "v"})
+    local v = {payload = 1}
+    seed_anonymous_key(t, v)
+    full_collect()
+    local found = nil
+    for k, val in pairs(t) do
+        found = k
+        tests:assert_equal(val, v)
+    end
+    tests:assert_not_nil(found, "the entry must survive while its value is held")
+    tests:assert_equal(found.tag, "strongkey")
+end)
+
+tests:it("value weakness wins even when the value references its live key", function()
+    local t = setmetatable({}, {__mode = "v"})
+    local k = {}
+    t[k] = {ref = k}
+    full_collect()
+    tests:assert_nil(t[k], "an unheld value is cleared even if it points at the key")
+    tests:assert_type(k, "table")
+end)
+
+tests:it("kv weakness does not act as an ephemeron", function()
+    local t = setmetatable({}, {__mode = "kv"})
+    local k = {}
+    t[k] = {ref = k}
+    k = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("kv entry dies with its value even when the key is held", function()
+    local t = setmetatable({}, {__mode = "kv"})
+    local k = {}
+    t[k] = {}
+    full_collect()
+    tests:assert_nil(t[k])
+    tests:assert_type(k, "table")
+end)
+
+tests:each("non collectable weak values are never cleared", {
+    {42},
+    {2.5},
+    {true},
+    {false},
+    {"payload string"},
+}, function(v)
+    local t = setmetatable({}, {__mode = "v"})
+    t.slot = v
+    full_collect()
+    tests:assert_equal(t.slot, v)
+end)
+
+-- ============================================================
+-- Value type keys are never removed from weak tables
+-- ============================================================
+
+tests:describe("value type keys")
+
+tests:each("value type keys survive in weak keyed tables", {
+    {"k", "weak2-string-key-" .. string.rep("x", 40)},
+    {"k", 7},
+    {"k", 2.5},
+    {"k", true},
+    {"k", false},
+    {"kv", "weak2-string-key-" .. string.rep("y", 40)},
+    {"kv", 7},
+    {"kv", 2.5},
+    {"kv", true},
+    {"kv", false},
+}, function(mode, key)
+    local t = setmetatable({}, {__mode = mode})
+    t[key] = "payload"
+    full_collect()
+    tests:assert_equal(t[key], "payload")
+    tests:assert_equal(count_entries(t), 1)
+end)
+
+-- ============================================================
+-- __mode is read again on every collection cycle
+-- ============================================================
+
+tests:describe("__mode mutation between cycles")
+
+tests:it("adding __mode k to a live metatable takes effect on the next cycle", function()
+    local mt = {}
+    local t = setmetatable({}, mt)
+    for i = 1, 4 do
+        t[{}] = i
+    end
+    full_collect()
+    tests:assert_equal(count_entries(t), 4, "a strong table keeps anonymous keys")
+    mt.__mode = "k"
+    full_collect()
+    tests:assert_equal(count_entries(t), 0, "weakness must apply on the next cycle")
+end)
+
+tests:it("removing and restoring __mode toggles weakness across cycles", function()
+    local mt = {__mode = "k"}
+    local t = setmetatable({}, mt)
+    local k = {}
+    t[k] = "kept"
+    mt.__mode = nil
+    k = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 1, "the table must be strong after __mode is removed")
+    mt.__mode = "k"
+    full_collect()
+    tests:assert_equal(count_entries(t), 0, "restoring __mode must clear the dead key")
+end)
+
+tests:it("replacing the whole metatable changes weakness", function()
+    local t = setmetatable({}, {})
+    t[{}] = "a"
+    full_collect()
+    tests:assert_equal(count_entries(t), 1)
+    setmetatable(t, {__mode = "k"})
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("switching __mode from k to v flips which side is weak", function()
+    local mt = {__mode = "k"}
+    local t = setmetatable({}, mt)
+    local k = {}
+    t[k] = {}
+    full_collect()
+    tests:assert_equal(count_entries(t), 1, "the ephemeron keeps the value while the key lives")
+    mt.__mode = "v"
+    full_collect()
+    tests:assert_nil(t[k], "value weakness must clear the entry despite the live key")
+end)
+
+-- ============================================================
+-- Weak tables and finalization
+-- ============================================================
+
+tests:describe("weak tables and finalizers")
+
+tests:it("weak value entry is cleared and finalized within one full collection", function()
+    local finalized = false
+    local t = setmetatable({}, {__mode = "v"})
+    t[1] = setmetatable({}, {__gc = function()
+        finalized = true
+    end})
+    collectgarbage("collect")
+    tests:assert_true(finalized, "the finalizer must run during the full collection")
+    tests:assert_nil(t[1])
+end)
+
+tests:it("weak value entry is already cleared when its finalizer runs", function()
+    local observed = nil
+    local t = setmetatable({}, {__mode = "v"})
+    t[1] = setmetatable({}, {__gc = function()
+        observed = (t[1] == nil)
+    end})
+    collectgarbage("collect")
+    tests:assert_equal(observed, true,
+        "weak values must be cleared before finalizers run")
+end)
+
+tests:it("weak key entry stays visible until the collection after finalization", function()
+    local observed = nil
+    local t = setmetatable({}, {__mode = "k"})
+    local obj = setmetatable({}, {__gc = function(self)
+        observed = (t[self] == "data")
+    end})
+    t[obj] = "data"
+    obj = nil
+    collectgarbage("collect")
+    tests:assert_equal(observed, true,
+        "the entry must still be visible inside the key's own finalizer")
+    tests:assert_equal(count_entries(t), 1,
+        "the entry must survive the cycle that ran the finalizer")
+    collectgarbage("collect")
+    tests:assert_equal(count_entries(t), 0,
+        "the entry must vanish on the next collection")
+end)
+
+tests:it("kv weak entry with a finalizable key follows the same two phase rule", function()
+    local finalized = false
+    local t = setmetatable({}, {__mode = "kv"})
+    local obj = setmetatable({}, {__gc = function()
+        finalized = true
+    end})
+    t[obj] = "data"
+    obj = nil
+    collectgarbage("collect")
+    tests:assert_true(finalized)
+    tests:assert_equal(count_entries(t), 1)
+    collectgarbage("collect")
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("a resurrected key keeps its weak table entry alive", function()
+    local resurrected = nil
+    local fin_count = 0
+    local t = setmetatable({}, {__mode = "k"})
+    local obj = setmetatable({}, {__gc = function(self)
+        fin_count = fin_count + 1
+        resurrected = self
+    end})
+    t[obj] = "marker"
+    obj = nil
+    full_collect()
+    tests:assert_equal(fin_count, 1)
+    tests:assert_not_nil(resurrected, "the finalizer must have resurrected the key")
+    tests:assert_equal(t[resurrected], "marker",
+        "the entry must be reachable again through the resurrected key")
+    resurrected = nil
+    full_collect()
+    tests:assert_equal(fin_count, 1, "an already finalized object is not finalized again")
+    tests:assert_equal(count_entries(t), 0,
+        "dropping the resurrected key must finally clear the entry")
+end)
+
+tests:it("resurrection does not restore an already cleared weak value entry", function()
+    local resurrected = nil
+    local t = setmetatable({}, {__mode = "v"})
+    t[1] = setmetatable({marker = 9}, {__gc = function(self)
+        resurrected = self
+    end})
+    collectgarbage("collect")
+    tests:assert_not_nil(resurrected)
+    tests:assert_equal(resurrected.marker, 9)
+    tests:assert_nil(t[1], "the cleared entry must stay cleared after resurrection")
+    resurrected = nil
+    full_collect()
+end)
+
+tests:it("a table can be both weak and finalizable", function()
+    local cleared = nil
+    local finalized = false
+    local t = setmetatable({}, {__mode = "k", __gc = function()
+        finalized = true
+    end})
+    t[{}] = "gone"
+    full_collect()
+    cleared = count_entries(t)
+    t = nil
+    full_collect()
+    tests:assert_equal(cleared, 0, "weakness must work on a finalizable table")
+    tests:assert_true(finalized, "the weak table's own finalizer must run")
+end)
+
+-- ============================================================
+-- Explicit collector modes
+-- ============================================================
+
+tests:describe("collector modes")
+
+tests:each("ephemeron pair collects under an explicit gc mode", {
+    {"incremental"},
+    {"generational"},
+}, function(mode)
+    with_mode(mode, function()
+        local t = setmetatable({}, {__mode = "k"})
+        local k = {}
+        t[k] = {ref = k}
+        k = nil
+        full_collect()
+        tests:assert_equal(count_entries(t), 0)
+    end)
+end)
+
+tests:each("ephemeron pair survives a full cycle under an explicit gc mode", {
+    {"incremental"},
+    {"generational"},
+}, function(mode)
+    with_mode(mode, function()
+        local t = setmetatable({}, {__mode = "k"})
+        local k = {}
+        t[k] = {ref = k, marker = mode}
+        full_collect()
+        tests:assert_equal(t[k].marker, mode)
+        tests:assert_equal(t[k].ref, k)
+    end)
+end)
+
+tests:it("old weak value table drops young garbage after a major collection", function()
+    with_mode("generational", function()
+        local t = setmetatable({}, {__mode = "v"})
+        collectgarbage("collect")
+        t[1] = {10}
+        collectgarbage("step")
+        collectgarbage("step")
+        collectgarbage("collect")
+        tests:assert_nil(t[1], "the unreferenced young value must be cleared")
+    end)
+end)
+
+tests:it("old ephemeron table with a young key works across minor collections", function()
+    with_mode("generational", function()
+        local t = setmetatable({}, {__mode = "k"})
+        collectgarbage("collect")
+        local k = {}
+        t[k] = {ref = k}
+        collectgarbage("step")
+        collectgarbage("step")
+        tests:assert_equal(t[k].ref, k, "the held pair must survive minor collections")
+        k = nil
+        full_collect()
+        tests:assert_equal(count_entries(t), 0)
+    end)
+end)
+
+tests:it("ephemeron cascade works under generational mode", function()
+    with_mode("generational", function()
+        local t = setmetatable({}, {__mode = "k"})
+        local keys = {}
+        for i = 1, 5 do
+            keys[i] = {}
+        end
+        for i = 5, 1, -1 do
+            t[keys[i]] = {next_key = keys[i + 1]}
+        end
+        local head = keys[1]
+        keys = nil
+        collectgarbage("collect")
+        tests:assert_equal(count_entries(t), 5)
+        head = nil
+        full_collect()
+        tests:assert_equal(count_entries(t), 0)
+    end)
+end)
+
+tests:it("weak table state survives switching collector modes mid life", function()
+    with_mode("incremental", function()
+        local t = setmetatable({}, {__mode = "k"})
+        local k = {marker = 1}
+        t[k] = {ref = k, data = "x"}
+        collectgarbage("collect")
+        collectgarbage("generational")
+        collectgarbage("collect")
+        tests:assert_equal(t[k].data, "x", "the held pair must survive the mode switch")
+        k = nil
+        full_collect()
+        tests:assert_equal(count_entries(t), 0,
+            "the pair must collect in the new mode once dropped")
+    end)
+end)
+
+-- ============================================================
+-- Other collectable types in weak tables
+-- ============================================================
+
+tests:describe("other collectable types")
+
+tests:it("function keys are weak", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local f = make_closure({})
+    t[f] = "fn-data"
+    tests:assert_equal(t[f], "fn-data")
+    f = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("coroutine keys are weak", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local co = coroutine.create(function() end)
+    t[co] = "thread-data"
+    tests:assert_equal(t[co], "thread-data")
+    co = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+tests:it("coroutine values are weak", function()
+    local t = setmetatable({}, {__mode = "v"})
+    t.co = coroutine.create(function() end)
+    tests:assert_type(t.co, "thread")
+    full_collect()
+    tests:assert_nil(t.co)
+end)
+
+tests:it("vector values are weak", function()
+    local t = setmetatable({}, {__mode = "v"})
+    t.vec = vector.create(64)
+    tests:assert_equal(#t.vec, 64)
+    full_collect()
+    tests:assert_nil(t.vec)
+end)
+
+tests:it("held vectors survive as weak values", function()
+    local t = setmetatable({}, {__mode = "v"})
+    local v = vector.create(32)
+    t.vec = v
+    full_collect()
+    tests:assert_equal(t.vec, v)
+    tests:assert_equal(#t.vec, 32)
+end)
+
+tests:it("vector keys are weak", function()
+    local t = setmetatable({}, {__mode = "k"})
+    local v = vector.create(16)
+    t[v] = "vec-data"
+    tests:assert_equal(t[v], "vec-data")
+    v = nil
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+end)
+
+-- ============================================================
+-- Housekeeping behavior
+-- ============================================================
+
+tests:describe("housekeeping")
+
+tests:it("a weak table stays usable after its entries are cleared", function()
+    local t = setmetatable({}, {__mode = "k"})
+    t[{}] = 1
+    full_collect()
+    tests:assert_equal(count_entries(t), 0)
+    local k = {}
+    t[k] = "fresh"
+    full_collect()
+    tests:assert_equal(t[k], "fresh")
+end)
+
+tests:finish()

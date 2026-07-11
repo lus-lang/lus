@@ -1,4 +1,4 @@
-global print, require, assert, type, string, table, setmetatable, pledge
+global print, require, assert, type, string, table, setmetatable, pledge, load
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -66,7 +66,10 @@ tests:it("const field", function()
     assert(z.b == 2)
     z.a = 100  -- allowed
     assert(z.a == 100)
-    -- z.b = 100  -- would error: attempt to assign to const variable
+    -- Assigning to the const field is rejected at compile time
+    local bad, err = load("local z <group> = { a = 1, b <const> = 2 } z.b = 100")
+    assert(bad == nil, "assignment to a const group field should not compile")
+    assert(string.find(err, "attempt to assign to const variable") ~= nil)
 end)
 
 tests:it("subgroups", function()

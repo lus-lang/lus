@@ -1,0 +1,585 @@
+-- Math module completion tests.
+--
+-- This suite fills the gaps around the math library that the ported Lua suite
+-- in math.lus leaves open. It pins the two return values of math.frexp, the
+-- round trip between frexp and ldexp, the full contract of math.random and
+-- math.randomseed including every documented error path, the integer subtype
+-- of floor and ceil, tointeger edge cases, the integer limit matrix around
+-- mininteger, and the semantics of the numeric for loop under Lus rules.
+global print, require, string, math, assert, table, load, tostring, select, pledge, type, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("mathx")
+local math = math
+
+local minint, maxint = math.mininteger, math.maxinteger
+
+local function isNaN(x)
+    return x ~= x
+end
+
+-- ============================================================
+-- math.frexp
+-- ============================================================
+
+tests:describe("math.frexp")
+
+-- The decomposition returns a mantissa and an integer exponent so that
+-- x equals mantissa times two raised to the exponent.
+tests:each("frexp decomposes x into mantissa and exponent", {
+    {8.0, 0.5, 4},
+    {1.0, 0.5, 1},
+    {2.0, 0.5, 2},
+    {0.5, 0.5, 0},
+    {0.25, 0.5, -1},
+    {-8.0, -0.5, 4},
+    {3.0, 0.75, 2},
+    {1024.0, 0.5, 11},
+}, function(x, m, e)
+    local am, ae = math.frexp(x)
+    tests:assert_equal(am, m, "mantissa of frexp(" .. tostring(x) .. ")")
+    tests:assert_equal(ae, e, "exponent of frexp(" .. tostring(x) .. ")")
+end)
+
+-- The exponent return is always an integer subtype and the mantissa is a float.
+tests:it("frexp returns integer exponent and float mantissa", function()
+    local m, e = math.frexp(8.0)
+    tests:assert_equal(math.type(m), "float")
+    tests:assert_equal(math.type(e), "integer")
+    -- select confirms the second return value directly.
+    tests:assert_equal(math.type(select(2, math.frexp(8.0))), "integer")
+end)
+
+-- The reconstruction invariant must hold across positive, negative, and
+-- fractional magnitudes, including a subnormal input.
+tests:each("frexp reconstruction invariant holds", {
+    {123.456},
+    {-8.0},
+    {0.001},
+    {7.0},
+    {1e300},
+    {-1e-200},
+    {2.0 ^ -1074},
+}, function(x)
+    local m, e = math.frexp(x)
+    tests:assert_equal(m * 2.0 ^ e, x, "reconstruction of " .. tostring(x))
+end)
+
+-- Every normal nonzero input yields a mantissa whose magnitude is in [0.5, 1).
+tests:each("frexp mantissa magnitude is in half-open unit interval", {
+    {1.0}, {1000000.0}, {-0.001}, {7.0}, {maxint + 0.0}, {2.0 ^ -1074},
+}, function(x)
+    local m = math.frexp(x)
+    local mag = math.abs(m)
+    tests:assert_true(mag >= 0.5 and mag < 1.0,
+        "mantissa magnitude " .. tostring(mag) .. " of " .. tostring(x))
+end)
+
+-- Zero decomposes to a zero mantissa and a zero exponent, and the sign of a
+-- negative zero mantissa is preserved.
+tests:it("frexp of zero preserves sign and yields zero exponent", function()
+    local m, e = math.frexp(0.0)
+    tests:assert_equal(m, 0.0)
+    tests:assert_equal(e, 0)
+    local mn, en = math.frexp(-0.0)
+    tests:assert_equal(en, 0)
+    -- A negative zero divides to negative infinity, which distinguishes it.
+    tests:assert_equal(1.0 / mn, -math.huge, "sign of negative zero mantissa")
+end)
+
+-- An integer argument is accepted and behaves like its float value.
+tests:it("frexp accepts an integer argument", function()
+    local m, e = math.frexp(3)
+    tests:assert_equal(m, 0.75)
+    tests:assert_equal(e, 2)
+end)
+
+-- Infinite and not-a-number inputs propagate through the mantissa.
+tests:it("frexp propagates infinity and nan through the mantissa", function()
+    local m = math.frexp(math.huge)
+    tests:assert_equal(m, math.huge)
+    local mn = math.frexp(-math.huge)
+    tests:assert_equal(mn, -math.huge)
+    local mnan = math.frexp(0 / 0)
+    tests:assert_true(isNaN(mnan), "nan mantissa")
+end)
+
+-- A non-number argument raises an error.
+tests:it("frexp rejects a non-number argument", function()
+    tests:assert_throws(function() return math.frexp({}) end)
+    tests:assert_throws(function() return math.frexp(nil) end)
+end)
+
+-- ============================================================
+-- math.ldexp
+-- ============================================================
+
+tests:describe("math.ldexp")
+
+-- ldexp multiplies the mantissa by two raised to the exponent.
+tests:each("ldexp scales the mantissa by a power of two", {
+    {1.0, 10, 1024.0},
+    {1.0, 1, 2.0},
+    {1.0, 0, 1.0},
+    {1.0, -1, 0.5},
+    {3.0, 4, 48.0},
+    {-1.0, 3, -8.0},
+    {0.5, 2, 2.0},
+}, function(m, e, expected)
+    tests:assert_equal(math.ldexp(m, e), expected,
+        "ldexp(" .. tostring(m) .. ", " .. tostring(e) .. ")")
+end)
+
+-- The result is always a float, even when the mantissa is an integer.
+tests:it("ldexp always returns a float", function()
+    tests:assert_equal(math.type(math.ldexp(3, 0)), "float")
+    tests:assert_equal(math.type(math.ldexp(1, 10)), "float")
+end)
+
+-- A very large exponent overflows to infinity and a very small one flushes
+-- the result to zero.
+tests:it("ldexp overflows and underflows to infinity and zero", function()
+    tests:assert_equal(math.ldexp(1, 10000), math.huge)
+    tests:assert_equal(math.ldexp(-1, 10000), -math.huge)
+    tests:assert_equal(math.ldexp(1, -10000), 0.0)
+end)
+
+-- A float exponent with an exact integer value is accepted.
+tests:it("ldexp accepts a float exponent with an integer value", function()
+    tests:assert_equal(math.ldexp(1, 10.0), 1024.0)
+end)
+
+-- A fractional exponent has no integer representation and raises an error.
+tests:it("ldexp rejects a fractional exponent", function()
+    tests:assert_throws(function() return math.ldexp(1, 1.5) end,
+        "no integer representation")
+end)
+
+-- Infinite and not-a-number mantissas propagate through the result.
+tests:it("ldexp propagates infinity and nan through the mantissa", function()
+    tests:assert_equal(math.ldexp(math.huge, 0), math.huge)
+    tests:assert_equal(math.ldexp(-math.huge, 5), -math.huge)
+    tests:assert_true(isNaN(math.ldexp(0 / 0, 3)), "nan mantissa")
+end)
+
+-- A non-number first argument raises an error.
+tests:it("ldexp rejects a non-number mantissa", function()
+    tests:assert_throws(function() return math.ldexp({}, 1) end)
+end)
+
+-- The round trip through frexp and ldexp reconstructs the original value.
+tests:each("ldexp inverts frexp", {
+    {123.456}, {-8.0}, {0.0}, {7.0}, {1e-200}, {maxint + 0.0},
+}, function(x)
+    local m, e = math.frexp(x)
+    tests:assert_equal(math.ldexp(m, e), x, "round trip of " .. tostring(x))
+end)
+
+-- ============================================================
+-- math.random
+-- ============================================================
+
+tests:describe("math.random")
+
+-- The no-argument form returns a float in the half-open interval from zero
+-- up to but not including one.
+tests:it("random with no argument returns a float in [0, 1)", function()
+    for i = 1, 200 do
+        local r = math.random()
+        tests:assert_equal(math.type(r), "float")
+        tests:assert_true(r >= 0.0 and r < 1.0, "float out of range: " .. tostring(r))
+    end
+end)
+
+-- The single-argument form returns an integer in the inclusive range from one
+-- to the bound, and observes both endpoints over enough draws.
+tests:it("random with one bound returns an integer in [1, m]", function()
+    local saw_low, saw_high = false, false
+    for i = 1, 400 do
+        local r = math.random(4)
+        tests:assert_equal(math.type(r), "integer")
+        tests:assert_true(r >= 1 and r <= 4, "single bound out of range: " .. tostring(r))
+        if r == 1 then saw_low = true end
+        if r == 4 then saw_high = true end
+    end
+    tests:assert_true(saw_low, "never observed the low endpoint")
+    tests:assert_true(saw_high, "never observed the high endpoint")
+end)
+
+-- The two-argument form returns an integer in the inclusive range, including
+-- for negative intervals.
+tests:each("random with two bounds stays inside the inclusive interval", {
+    {5, 10},
+    {-10, -5},
+    {-3, 3},
+    {0, 1},
+}, function(lo, hi)
+    for i = 1, 200 do
+        local r = math.random(lo, hi)
+        tests:assert_equal(math.type(r), "integer")
+        tests:assert_true(r >= lo and r <= hi,
+            "value " .. tostring(r) .. " outside [" .. tostring(lo) .. ", " .. tostring(hi) .. "]")
+    end
+end)
+
+-- A degenerate interval whose bounds are equal always returns that value.
+tests:it("random of a single-point interval returns that point", function()
+    for i = 1, 20 do
+        tests:assert_equal(math.random(7, 7), 7)
+    end
+end)
+
+-- The full-range special case of a single zero argument returns an integer
+-- drawn from the entire integer domain, so it may be negative.
+tests:it("random of zero draws from the full integer range", function()
+    local saw_negative = false
+    for i = 1, 400 do
+        local r = math.random(0)
+        tests:assert_equal(math.type(r), "integer")
+        if r < 0 then saw_negative = true end
+    end
+    tests:assert_true(saw_negative, "full-range draw never produced a negative value")
+end)
+
+-- The extreme interval spanning the whole integer range succeeds and returns
+-- an integer, exercising the unsigned projection path.
+tests:it("random over the whole integer range returns an integer", function()
+    for i = 1, 50 do
+        local r = math.random(minint, maxint)
+        tests:assert_equal(math.type(r), "integer")
+    end
+end)
+
+-- An empty interval where the low bound exceeds the high bound raises.
+tests:it("random of an empty interval raises", function()
+    tests:assert_throws(function() return math.random(5, 2) end, "interval is empty")
+    tests:assert_throws(function() return math.random(1, 0) end, "interval is empty")
+end)
+
+-- More than two arguments raises a wrong-number-of-arguments error.
+tests:it("random rejects more than two arguments", function()
+    tests:assert_throws(function() return math.random(1, 2, 3) end, "wrong number of arguments")
+end)
+
+-- Non-integer numeric bounds have no integer representation and raise.
+tests:it("random rejects fractional bounds", function()
+    tests:assert_throws(function() return math.random(1.5) end, "no integer representation")
+    tests:assert_throws(function() return math.random(1, 2.5) end, "no integer representation")
+end)
+
+-- A non-numeric bound raises a bad-argument error.
+tests:it("random rejects a non-numeric bound", function()
+    tests:assert_throws(function() return math.random({}) end)
+end)
+
+-- ============================================================
+-- math.randomseed
+-- ============================================================
+
+tests:describe("math.randomseed")
+
+-- Seeding with an explicit value returns the two seed components as integers,
+-- and the second defaults to zero.
+tests:it("randomseed returns the two seed components as integers", function()
+    local a, b = math.randomseed(100)
+    tests:assert_equal(math.type(a), "integer")
+    tests:assert_equal(math.type(b), "integer")
+    tests:assert_equal(a, 100)
+    tests:assert_equal(b, 0)
+end)
+
+-- Equal explicit seeds produce equal sequences.
+tests:it("equal seeds produce equal sequences", function()
+    math.randomseed(4242)
+    local first = {}
+    for i = 1, 8 do first[i] = math.random(1, 1000000000) end
+    math.randomseed(4242)
+    for i = 1, 8 do
+        tests:assert_equal(math.random(1, 1000000000), first[i],
+            "sequence diverged at index " .. tostring(i))
+    end
+end)
+
+-- Reseeding with the pair returned by a no-argument call reproduces the
+-- sequence that follows it.
+tests:it("reseeding with the returned pair reproduces the sequence", function()
+    local a, b = math.randomseed()
+    local first = {}
+    for i = 1, 8 do first[i] = math.random(1, 1000000000) end
+    math.randomseed(a, b)
+    for i = 1, 8 do
+        tests:assert_equal(math.random(1, 1000000000), first[i],
+            "reproduced sequence diverged at index " .. tostring(i))
+    end
+end)
+
+-- The two-argument form is deterministic and a different second component
+-- yields a different sequence than seeding with the first alone.
+tests:it("the two-argument seed is deterministic and the second component matters", function()
+    math.randomseed(100, 200)
+    local a1 = math.random(1, 1000000000)
+    math.randomseed(100, 200)
+    local a2 = math.random(1, 1000000000)
+    tests:assert_equal(a1, a2, "two-argument seeding was not deterministic")
+
+    math.randomseed(100, 0)
+    local b1 = math.random(1, 1000000000)
+    math.randomseed(100, 999)
+    local b2 = math.random(1, 1000000000)
+    tests:assert_true(b1 ~= b2, "distinct second components produced the same value")
+end)
+
+-- A float seed with an exact integer value is accepted, and a fractional seed
+-- has no integer representation and raises.
+tests:it("randomseed accepts an integer-valued float and rejects a fractional one", function()
+    local a, b = math.randomseed(100.0)
+    tests:assert_equal(a, 100)
+    tests:assert_throws(function() return math.randomseed(1.5) end, "no integer representation")
+end)
+
+-- ============================================================
+-- floor and ceil subtypes and huge floats
+-- ============================================================
+
+tests:describe("math.floor and math.ceil")
+
+-- On values that fit in an integer, floor and ceil return the integer subtype.
+tests:each("floor and ceil return the integer subtype for representable results", {
+    {3.4, 3, 4},
+    {-3.4, -4, -3},
+    {0.0, 0, 0},
+    {2.0 ^ 50, 2 ^ 50 // 1, 2 ^ 50 // 1},
+}, function(x, fl, ce)
+    local f, c = math.floor(x), math.ceil(x)
+    tests:assert_equal(f, fl, "floor value")
+    tests:assert_equal(c, ce, "ceil value")
+    tests:assert_equal(math.type(f), "integer", "floor subtype")
+    tests:assert_equal(math.type(c), "integer", "ceil subtype")
+end)
+
+-- An integer argument keeps its integer subtype.
+tests:it("floor and ceil of an integer keep the integer subtype", function()
+    tests:assert_equal(math.type(math.floor(7)), "integer")
+    tests:assert_equal(math.type(math.ceil(7)), "integer")
+    tests:assert_equal(math.floor(minint), minint)
+    tests:assert_equal(math.ceil(maxint), maxint)
+end)
+
+-- A float too large to fit in an integer stays a float rather than erroring or
+-- saturating.
+tests:each("floor and ceil of a huge float return the float unchanged", {
+    {1e300}, {-1e300}, {math.huge}, {-math.huge},
+}, function(x)
+    local f, c = math.floor(x), math.ceil(x)
+    tests:assert_equal(f, x, "floor of huge float")
+    tests:assert_equal(c, x, "ceil of huge float")
+    tests:assert_equal(math.type(f), "float", "floor stays float")
+    tests:assert_equal(math.type(c), "float", "ceil stays float")
+end)
+
+-- ============================================================
+-- math.tointeger edge cases
+-- ============================================================
+
+tests:describe("math.tointeger")
+
+-- Integers and integer-valued floats convert, while fractional and
+-- non-representable inputs return nothing.
+tests:each("tointeger converts only integral numbers", {
+    {3.0, 3},
+    {-7.0, -7},
+    {minint + 0.0, minint},
+    {3.5, nil},
+    {0.1, nil},
+    {math.huge, nil},
+    {-math.huge, nil},
+    {0 / 0, nil},
+    {2.0 ^ 63, nil},
+}, function(x, expected)
+    local got = math.tointeger(x)
+    if expected == nil then
+        tests:assert_nil(got, "expected nil for " .. tostring(x))
+    else
+        tests:assert_equal(got, expected)
+        tests:assert_equal(math.type(got), "integer", "result subtype for " .. tostring(x))
+    end
+end)
+
+-- The integer limits round-trip through tointeger unchanged.
+tests:it("tointeger preserves the integer limits", function()
+    tests:assert_equal(math.tointeger(minint), minint)
+    tests:assert_equal(math.tointeger(maxint), maxint)
+    -- The negation of mininteger as a float overflows the integer range.
+    tests:assert_nil(math.tointeger(0.0 - minint), "overflow above the range")
+end)
+
+-- A numeric string that names an integer is coerced, matching reference Lua.
+tests:it("tointeger coerces an integer-valued string", function()
+    tests:assert_equal(math.tointeger("3"), 3)
+    tests:assert_nil(math.tointeger("3.5"), "fractional string does not convert")
+    tests:assert_nil(math.tointeger("abc"), "non-numeric string does not convert")
+end)
+
+-- ============================================================
+-- integer limit matrix around mininteger
+-- ============================================================
+
+tests:describe("integer limits")
+
+-- Wraparound arithmetic behaves as two's complement across the limits.
+tests:it("addition, subtraction, and multiplication wrap around the limits", function()
+    tests:assert_equal(maxint + 1, minint, "maxint + 1 wraps to minint")
+    tests:assert_equal(minint - 1, maxint, "minint - 1 wraps to maxint")
+    tests:assert_equal(maxint * 2, -2, "maxint times two wraps")
+    tests:assert_equal(math.type(maxint + 1), "integer", "wrap keeps the integer subtype")
+end)
+
+-- Unary minus of mininteger wraps back to itself because it has no positive
+-- counterpart.
+tests:it("unary minus and abs of mininteger return mininteger", function()
+    tests:assert_equal(-minint, minint)
+    tests:assert_equal(math.abs(minint), minint)
+    tests:assert_equal(math.type(math.abs(minint)), "integer")
+end)
+
+-- Floor division and modulo of mininteger by negative one avoid the overflow
+-- trap and return well-defined integer results.
+tests:it("mininteger divided and moduloed by negative one is defined", function()
+    tests:assert_equal(minint // -1, minint, "mininteger floor divided by -1 wraps to itself")
+    tests:assert_equal(math.type(minint // -1), "integer")
+    tests:assert_equal(minint % -1, 0, "mininteger modulo -1 is zero")
+    tests:assert_equal(math.type(minint % -1), "integer")
+end)
+
+-- math.fmod of mininteger by negative one returns zero rather than trapping.
+tests:it("fmod of mininteger by negative one is zero", function()
+    tests:assert_equal(math.fmod(minint, -1), 0)
+    tests:assert_equal(math.type(math.fmod(minint, -1)), "integer")
+    -- fmod by zero on integers still raises.
+    tests:assert_throws(function() return math.fmod(3, 0) end, "zero")
+end)
+
+-- math.ult compares operands as unsigned across all sign quadrants.
+tests:each("ult compares operands as unsigned integers", {
+    {0, 1, true},
+    {1, 0, false},
+    {-1, 0, false},
+    {0, -1, true},
+    {minint, maxint, false},
+    {maxint, minint, true},
+    {-1, -2, false},
+    {-2, -1, true},
+}, function(a, b, expected)
+    tests:assert_equal(math.ult(a, b), expected,
+        "ult(" .. tostring(a) .. ", " .. tostring(b) .. ")")
+end)
+
+-- ============================================================
+-- numeric for loop semantics
+-- ============================================================
+
+tests:describe("numeric for")
+
+-- A loop that ends exactly at maxinteger terminates rather than overflowing
+-- into an endless cycle.
+tests:it("an integer loop ending at maxinteger terminates", function()
+    local count = 0
+    for i = maxint - 2, maxint do
+        count = count + 1
+    end
+    tests:assert_equal(count, 3)
+end)
+
+-- A zero step raises a dedicated error.
+tests:it("a zero step raises", function()
+    tests:assert_throws(function()
+        for i = 1, 10, 0 do end
+    end, "'for' step is zero")
+end)
+
+-- The final value of an integer loop is the limit itself and keeps its subtype.
+tests:it("the last value of an integer loop is the limit", function()
+    local last
+    for i = 1, 5 do last = i end
+    tests:assert_equal(last, 5)
+    tests:assert_equal(math.type(last), "integer")
+end)
+
+-- Backward loops with a negative step count down and stop at the limit.
+tests:it("a backward loop counts down to the limit", function()
+    local seen = {}
+    for i = 5, 1, -1 do seen[#seen + 1] = i end
+    tests:assert_equal(#seen, 5)
+    tests:assert_equal(seen[1], 5)
+    tests:assert_equal(seen[5], 1)
+end)
+
+-- A negative step whose start is below the limit runs zero times.
+tests:it("a negative step with an ascending range runs zero times", function()
+    local count = 0
+    for i = 1, 5, -1 do count = count + 1 end
+    tests:assert_equal(count, 0)
+end)
+
+-- A positive step whose start is above the limit runs zero times.
+tests:it("a positive step with a descending range runs zero times", function()
+    local count = 0
+    for i = 5, 1, 1 do count = count + 1 end
+    tests:assert_equal(count, 0)
+end)
+
+-- A float loop accumulates the step and produces float control values.
+tests:it("a float loop accumulates its step", function()
+    local vals = {}
+    for i = 0.0, 1.0, 0.25 do vals[#vals + 1] = i end
+    tests:assert_equal(#vals, 5)
+    tests:assert_equal(vals[1], 0.0)
+    tests:assert_equal(vals[5], 1.0)
+    tests:assert_equal(math.type(vals[1]), "float")
+end)
+
+-- With an integer start and step, a float limit converts by truncation toward
+-- the limit as reference Lua specifies.
+tests:each("a float limit with an integer start converts per Lua rules", {
+    {1, 3.5, 1, 3},
+    {1, 3.9, 1, 3},
+    {5, 1.5, -1, 4},
+    {5, 1.1, -1, 4},
+}, function(start, limit, step, expected)
+    local count = 0
+    for i = start, limit, step do count = count + 1 end
+    tests:assert_equal(count, expected,
+        "loop from " .. tostring(start) .. " to " .. tostring(limit) .. " by " .. tostring(step))
+end)
+
+-- A float start with an integer limit runs as a float loop.
+tests:it("a float start makes the loop run over floats", function()
+    local vals = {}
+    for i = 1.5, 5 do vals[#vals + 1] = i end
+    tests:assert_equal(#vals, 4)
+    tests:assert_equal(math.type(vals[1]), "float")
+    tests:assert_equal(vals[1], 1.5)
+end)
+
+-- The loop control variable is immutable, so assigning to it is a compile
+-- error under Lus.
+tests:it("the loop control variable is immutable", function()
+    local fn, err = load("for i = 1, 3 do i = i + 1 end")
+    tests:assert_nil(fn, "assigning to the loop variable should not compile")
+    tests:assert_contains(tostring(err), "const")
+end)
+
+-- An unbounded float limit of infinity lets the loop run until an explicit
+-- break, confirming the limit is honored rather than converted to an integer.
+tests:it("a loop with an infinite float limit is bounded only by break", function()
+    local count = 0
+    for i = 1, math.huge do
+        count = count + 1
+        if count >= 3 then break end
+    end
+    tests:assert_equal(count, 3)
+end)
+
+tests:finish()

@@ -200,11 +200,14 @@ end)
 tests:it("cross-root equality returns false", function()
     local e1 = enum a, b, c end
     local e2 = enum a, b, c end
-    -- Same names/positions but different roots: never equal
-    assert(e1.a ~= e2.a)
-    assert(e1.b ~= e2.b)
-    assert(e1.c ~= e2.c)
-    assert(not (e1.a == e2.a))
+    -- Unlike the ordering operators, equality across roots is not an
+    -- error. It evaluates normally and yields false.
+    local ok, res = catch (e1.a == e2.a)
+    assert(ok == true)
+    assert(res == false)
+    local ok2, res2 = catch (e1.c == e2.c)
+    assert(ok2 == true)
+    assert(res2 == false)
 end)
 
 tests:it("single-member enum ordering", function()
@@ -236,6 +239,12 @@ tests:describe("edge cases", function()
         local e = enum apple, orange end
         local s = tostring(e.apple)
         tests:assert_type(s, "string")
+        -- The format is "enum: 0x..." like other reference types
+        tests:assert_equal(s:sub(1, 6), "enum: ")
+        assert(#s > 6, "tostring should carry an identity after the prefix")
+        -- Distinct members stringify differently, interned values identically
+        assert(tostring(e.apple) ~= tostring(e.orange))
+        assert(tostring(e.apple) == tostring(e.apple))
     end)
 
     tests:it("enum as table key", function()

@@ -1,0 +1,508 @@
+-- Argument-validation and callback-misbehavior matrix for the dataproc surface.
+-- This suite complements h1/dataproc.lus, which covers the happy paths, by
+-- exercising wrong-typed arguments, empty and degenerate inputs, callbacks that
+-- raise or yield across the C boundary, pattern-magic characters treated
+-- literally, numeric coercion rules, and integer-overflow promotion. Every
+-- expectation here was pinned against the actual runtime and cross-checked
+-- against lus-spec/stdlib and reference Lua 5.5 semantics.
+
+global assert, type, table, string, require, tostring, pledge, math, select, coroutine, error, setmetatable, pairs
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("dataproc2")
+
+-- A coroutine callback that yields must surface a catchable boundary error when
+-- the surrounding C iteration cannot suspend. This helper wraps such an attempt.
+local function run_yielding(fn)
+    local co = coroutine.wrap(fn)
+    return co()
+end
+
+-- ============================================================
+-- Non-table first argument is rejected across the whole surface
+-- ============================================================
+
+tests:each("rejects a non-table first argument with a table-expected error", {
+    {function() return table.sum(42) end},
+    {function() return table.mean("x") end},
+    {function() return table.median(42) end},
+    {function() return table.stdev(42) end},
+    {function() return table.map(42, function(x) return x end) end},
+    {function() return table.filter(42, function() return true end) end},
+    {function() return table.reduce(42, function(a, b) return a end, 0) end},
+    {function() return table.groupby(42, function(x) return x end) end},
+    {function() return table.sortby(42, function(x) return x end) end},
+    {function() return table.transpose("nope") end},
+    {function() return table.reshape("nope", 1, 1) end},
+    {function() return table.zip({1}, "ab") end},
+    {function() return table.unzip(42) end},
+    {function() return string.join("x", ",") end},
+}, function(thunk)
+    tests:assert_throws(thunk, "table expected")
+end)
+
+tests:it("table.sum rejects a nil argument", function()
+    tests:assert_throws(function() return table.sum(nil) end, "table expected")
+end)
+
+-- ============================================================
+-- Non-function callback is rejected by the higher-order functions
+-- ============================================================
+
+tests:each("rejects a non-function callback with a function-expected error", {
+    {function() return table.map({1}, "nope") end},
+    {function() return table.filter({1}, 5) end},
+    {function() return table.reduce({1, 2}, 42, 0) end},
+    {function() return table.groupby({1}, 5) end},
+    {function() return table.sortby({1}, 5) end},
+}, function(thunk)
+    tests:assert_throws(thunk, "function expected")
+end)
+
+-- ============================================================
+-- Callbacks that raise propagate the original error uncorrupted
+-- ============================================================
+
+tests:each("propagates a callback error through the C iteration", {
+    {function() return table.map({1, 2}, function() error("map_boom") end) end, "map_boom"},
+    {function() return table.filter({1, 2}, function() error("filter_boom") end) end, "filter_boom"},
+    {function() return table.reduce({1, 2}, function() error("reduce_boom") end, 0) end, "reduce_boom"},
+    {function() return table.groupby({1, 2}, function() error("group_boom") end) end, "group_boom"},
+    {function() return table.sortby({{v = 1}, {v = 2}}, function() error("sort_boom") end) end, "sort_boom"},
+}, function(thunk, fragment)
+    tests:assert_throws(thunk, fragment)
+end)
+
+tests:it("the interpreter keeps working after a callback error", function()
+    local ok = catch(table.map({1}, function() error("x") end))
+    assert(not ok)
+    assert(table.sum({1, 2, 3}) == 6, "runtime intact after propagated callback error")
+end)
+
+-- ============================================================
+-- Callbacks that yield across the C boundary raise cleanly
+-- ============================================================
+
+tests:each("raises a catchable boundary error when a callback yields", {
+    {function()
+        return run_yielding(function()
+            return table.map({1, 2}, function(x) coroutine.yield(x) return x end)
+        end)
+    end},
+    {function()
+        return run_yielding(function()
+            return table.filter({1, 2}, function(x) coroutine.yield(x) return true end)
+        end)
+    end},
+    {function()
+        return run_yielding(function()
+            return table.reduce({1, 2}, function(a, x) coroutine.yield(x) return a end, 0)
+        end)
+    end},
+    {function()
+        return run_yielding(function()
+            return table.groupby({1, 2}, function(x) coroutine.yield(x) return "k" end)
+        end)
+    end},
+}, function(thunk)
+    tests:assert_throws(thunk, "yield across")
+end)
+
+-- ============================================================
+-- table.sum: empty, coercion, holes, overflow, non-finite values
+-- ============================================================
+
+tests:it("table.sum of an empty table is 0", function()
+    assert(table.sum({}) == 0)
+end)
+
+tests:it("table.sum always returns a float subtype", function()
+    assert(math.type(table.sum({1, 2, 3})) == "float", "sum promotes to float")
+    assert(table.sum({1, 2, 3}) == 6, "float 6.0 still compares equal to 6")
+end)
+
+tests:it("table.sum coerces numeric strings on the fastcall path", function()
+    -- Called directly inside a function body the compiler emits OP_FASTCALL,
+    -- whose implementation delegates tables containing strings to the C
+    -- function, which coerces numeric strings into the aggregate.
+    assert(table.sum({1, "10", 2}) == 13, "numeric strings are coerced when fastcalled")
+end)
+
+tests:it("table.sum is consistent between fastcall and dynamic dispatch", function()
+    local dispatched = table.sum
+    local via_fastcall = table.sum({1, "10", 2})
+    local via_dispatch = dispatched({1, "10", 2})
+    assert(via_fastcall == via_dispatch,
+        "fastcall gave " .. tostring(via_fastcall) .. " but dispatch gave " .. tostring(via_dispatch))
+end)
+
+tests:it("table.sum skips genuinely non-numeric values", function()
+    assert(table.sum({1, "skip", 2, true, 3, false}) == 6, "words and booleans are skipped")
+end)
+
+tests:it("table.sum of maxinteger and 1 promotes to float instead of wrapping", function()
+    local r = table.sum({math.maxinteger, 1})
+    assert(math.type(r) == "float", "overflowing integer sum becomes a float")
+    assert(r > 9.2e18, "the promoted float is near 2^63")
+end)
+
+tests:it("table.sum with math.huge yields infinity", function()
+    assert(table.sum({1, math.huge}) == math.huge)
+end)
+
+tests:it("table.sum with a NaN element yields NaN", function()
+    local r = table.sum({1, 0 / 0})
+    assert(r ~= r, "any NaN element poisons the sum")
+end)
+
+tests:it("table.sum tolerates a hole in the sequence", function()
+    local r = table.sum({1, nil, 3})
+    assert(type(r) == "number", "a hole does not crash the sum")
+    assert(r == 1.0 or r == 4.0, "the result depends only on the chosen length border")
+end)
+
+-- ============================================================
+-- table.mean / median / stdev degenerate inputs
+-- ============================================================
+
+tests:it("table.mean coerces numeric strings on the fastcall path", function()
+    local r = table.mean({"10", "20"})
+    assert(r == 15.0, "numeric strings are coerced when fastcalled")
+end)
+
+tests:it("table.mean is consistent between fastcall and dynamic dispatch", function()
+    local dispatched = table.mean
+    local via_fastcall = table.mean({"10", "20"})
+    local via_dispatch = dispatched({"10", "20"})
+    -- Both should be NaN, or both should be 15. They are not both the same.
+    local both_nan = (via_fastcall ~= via_fastcall) and (via_dispatch ~= via_dispatch)
+    assert(both_nan or via_fastcall == via_dispatch,
+        "fastcall gave " .. tostring(via_fastcall) .. " but dispatch gave " .. tostring(via_dispatch))
+end)
+
+tests:it("table.mean of an all-non-numeric table is NaN", function()
+    local r = table.mean({"a", "b", true})
+    assert(r ~= r, "no numeric values means NaN")
+end)
+
+tests:it("table.median skips non-numeric values", function()
+    assert(table.median({1, "skip", 3, 2}) == 2, "the skipped word does not shift the middle")
+end)
+
+tests:it("table.median parity ignores skipped values", function()
+    assert(table.median({1, "x", 2, 3, 4}) == 2.5, "four numerics average the two middle values")
+end)
+
+tests:it("table.median of all-non-numeric input is NaN", function()
+    local r = table.median({"a", "b"})
+    assert(r ~= r)
+end)
+
+tests:it("table.median averages middle floats exactly", function()
+    assert(table.median({1.5, 2.5, 3.5, 4.5}) == 3.0)
+end)
+
+tests:it("table.stdev sample variant matches the known value", function()
+    tests:assert_near(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, true), math.sqrt(32 / 7))
+end)
+
+tests:it("table.stdev sample=false equals the population result", function()
+    assert(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, false) == 2.0)
+end)
+
+tests:it("table.stdev treats any truthy sample flag as the sample variant", function()
+    tests:assert_near(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, 1), math.sqrt(32 / 7))
+end)
+
+tests:it("table.stdev skips non-numeric values without inflating n", function()
+    tests:assert_near(table.stdev({2, "x", 4, 4, 4, 5, 5, 7, 9}), 2.0)
+end)
+
+tests:it("table.stdev sample divisor counts only numeric values", function()
+    tests:assert_near(table.stdev({2, "x", 4, 4, 4, 5, 5, 7, 9}, true), math.sqrt(32 / 7))
+end)
+
+tests:it("table.stdev of a single element is 0 for the population variant", function()
+    assert(table.stdev({5}) == 0.0)
+end)
+
+tests:it("table.stdev of a single element is NaN for the sample variant", function()
+    local r = table.stdev({5}, true)
+    assert(r ~= r, "a sample of one has an undefined spread")
+end)
+
+tests:it("table.stdev of all-non-numeric input is NaN", function()
+    local r = table.stdev({"a", "b"})
+    assert(r ~= r)
+end)
+
+-- ============================================================
+-- table.transpose: rectangular validation
+-- ============================================================
+
+tests:each("table.transpose rejects a ragged matrix", {
+    {function() return table.transpose({{1, 2}, {3}}) end},
+    {function() return table.transpose({{1}, {2, 3}}) end},
+    {function() return table.transpose({{1, 2, 3}, {4}}) end},
+}, function(thunk)
+    tests:assert_throws(thunk, "rectangular")
+end)
+
+tests:it("table.transpose rejects a row that is not a table", function()
+    tests:assert_throws(function() return table.transpose({{1, 2}, "row"}) end)
+end)
+
+tests:it("table.transpose of a single empty row has zero columns", function()
+    local r = table.transpose({{}})
+    assert(#r == 0)
+end)
+
+tests:it("table.transpose applied twice reproduces the original", function()
+    local m = {{1, 2, 3}, {4, 5, 6}}
+    tests:assert_deep_equal(table.transpose(table.transpose(m)), m)
+end)
+
+-- ============================================================
+-- table.reshape: dimension validation and cardinality
+-- ============================================================
+
+tests:it("table.reshape rejects a length that does not match rows times cols", function()
+    tests:assert_throws(function() return table.reshape({1, 2, 3}, 2, 2) end, "does not match")
+end)
+
+tests:each("table.reshape rejects a non-positive dimension", {
+    {function() return table.reshape({}, 0, 0) end},
+    {function() return table.reshape({1, 2}, -1, 2) end},
+    {function() return table.reshape({1, 2}, 1, -2) end},
+    {function() return table.reshape({}, 1, 0) end},
+}, function(thunk)
+    tests:assert_throws(thunk, "must be positive")
+end)
+
+tests:it("table.reshape rejects a fractional dimension", function()
+    tests:assert_throws(function() return table.reshape({1, 2, 3, 4}, 2.5, 2) end, "integer representation")
+end)
+
+tests:it("table.reshape accepts integral float dimensions", function()
+    local m = table.reshape({1, 2, 3, 4}, 2.0, 2.0)
+    assert(m[1][1] == 1 and m[2][2] == 4)
+end)
+
+-- ============================================================
+-- table.reduce: empty, single, index without initial
+-- ============================================================
+
+tests:it("table.reduce of an empty table without an initial value raises", function()
+    tests:assert_throws(function()
+        return table.reduce({}, function(a, x) return a + x end)
+    end, "no initial value")
+end)
+
+tests:it("table.reduce of a single element without an initial value skips the callback", function()
+    local calls = 0
+    local r = table.reduce({7}, function(a, x) calls = calls + 1 return a + x end)
+    assert(r == 7, "the lone element is returned unchanged")
+    assert(calls == 0, "the reducer is never invoked")
+end)
+
+tests:it("table.reduce without an initial value starts indexing at the second element", function()
+    local first
+    table.reduce({10, 20, 30}, function(a, x, i)
+        if not first then first = i end
+        return a
+    end)
+    assert(first == 2, "the first index seen is 2 when no initial value is given")
+end)
+
+-- ============================================================
+-- table.map / filter callback contracts
+-- ============================================================
+
+tests:it("table.map receiving nil from the callback stores a hole positionally", function()
+    local r = table.map({1, 2, 3}, function(x) if x == 2 then return nil end return x end)
+    assert(r[1] == 1, "the first result survives")
+    assert(r[3] == 3, "the third result is stored past the hole")
+    assert(r[2] == nil, "the nil result leaves a hole")
+end)
+
+tests:it("table.filter predicate receives only the element", function()
+    local second
+    table.filter({10, 20, 30}, function(x, i)
+        if x == 20 then second = i end
+        return true
+    end)
+    assert(second == nil, "the predicate is called with a single argument")
+end)
+
+-- ============================================================
+-- table.groupby / sortby key-function behavior
+-- ============================================================
+
+tests:it("table.groupby with a nil key raises", function()
+    tests:assert_throws(function() return table.groupby({1, 2}, function() return nil end) end, "index is nil")
+end)
+
+tests:it("table.groupby accepts numeric keys", function()
+    local g = table.groupby({1, 2, 3, 4}, function(x) return x % 2 end)
+    assert(#g[0] == 2 and #g[1] == 2, "even and odd buckets are populated by number keys")
+end)
+
+tests:it("table.groupby accepts boolean keys", function()
+    local g = table.groupby({1, 2, 3}, function(x) return x > 1 end)
+    assert(#g[true] == 2 and #g[false] == 1)
+end)
+
+tests:it("table.sortby with mixed-type keys raises like table.sort", function()
+    tests:assert_throws(function()
+        return table.sortby({{v = 1}, {v = "a"}}, function(x) return x.v end)
+    end, "attempt to compare")
+end)
+
+tests:it("table.sortby of an empty table is a no-op", function()
+    local t = {}
+    table.sortby(t, function(x) return x end)
+    assert(#t == 0)
+end)
+
+-- ============================================================
+-- table.zip / unzip degenerate inputs
+-- ============================================================
+
+tests:it("table.zip rejects a non-table argument", function()
+    tests:assert_throws(function() return table.zip({1, 2}, "ab") end, "table expected")
+end)
+
+tests:it("table.unzip of an empty table returns nothing", function()
+    assert(select("#", table.unzip({})) == 0)
+end)
+
+tests:it("table.unzip round-trips through table.zip", function()
+    local a = {1, 2, 3}
+    local b = {"x", "y", "z"}
+    local ra, rb = table.unzip(table.zip(a, b))
+    tests:assert_deep_equal(ra, a)
+    tests:assert_deep_equal(rb, b)
+end)
+
+tests:it("table.unzip of ragged tuples uses the first tuple width", function()
+    -- The runtime does not error on ragged tuples. It emits one column per
+    -- position in the first tuple and leaves holes where later tuples are short.
+    local a, b = table.unzip({{1, 2}, {3}})
+    assert(select("#", table.unzip({{1, 2}, {3}})) == 2, "column count follows the first tuple")
+    assert(a[1] == 1 and a[2] == 3, "the first column gathers every leading value")
+    assert(b[1] == 2 and b[2] == nil, "the missing value becomes a hole")
+end)
+
+-- ============================================================
+-- string.split: pattern-magic delimiters are literal
+-- ============================================================
+
+tests:each("string.split treats magic delimiter characters literally", {
+    {"a.b.c", ".", 3, "a"},
+    {"a%b%c", "%", 3, "a"},
+    {"a(b(c", "(", 3, "a"},
+    {"a[b[c", "[", 3, "a"},
+    {"a-b-c", "-", 3, "a"},
+    {"a+b+c", "+", 3, "a"},
+    {"a*b*c", "*", 3, "a"},
+    {"a$b$c", "$", 3, "a"},
+}, function(input, delim, count, first)
+    local parts = string.split(input, delim)
+    tests:assert_equal(#parts, count, "literal split should yield " .. count .. " parts")
+    tests:assert_equal(parts[1], first)
+end)
+
+tests:it("string.split keeps leading and trailing empty fields", function()
+    local parts = string.split(",a,", ",")
+    assert(#parts == 3, "surrounding delimiters produce empty edges")
+    assert(parts[1] == "" and parts[2] == "a" and parts[3] == "")
+end)
+
+tests:it("string.split of a lone trailing delimiter yields a final empty field", function()
+    local parts = string.split("a,", ",")
+    assert(#parts == 2 and parts[1] == "a" and parts[2] == "")
+end)
+
+tests:it("string.split of an empty string with an empty delimiter yields nothing", function()
+    assert(#string.split("", "") == 0)
+end)
+
+tests:it("string.split coerces a number subject to its string form", function()
+    local parts = string.split(42, ",")
+    assert(#parts == 1 and parts[1] == "42" and type(parts[1]) == "string")
+end)
+
+tests:it("string.split rejects a nil delimiter", function()
+    tests:assert_throws(function() return string.split("abc", nil) end, "string expected")
+end)
+
+-- ============================================================
+-- string.join: coercion and holes
+-- ============================================================
+
+tests:it("string.join converts values through tostring", function()
+    assert(string.join({1, 2, 3}, ",") == "1,2,3")
+end)
+
+tests:it("string.join honors a __tostring metamethod", function()
+    local obj = setmetatable({}, {__tostring = function() return "OBJ" end})
+    assert(string.join({"a", obj, "b"}, ",") == "a,OBJ,b")
+end)
+
+tests:it("string.join renders float subtype in its tostring form", function()
+    assert(string.join({1.5, 2.0}, ",") == "1.5,2.0")
+end)
+
+tests:it("string.join coerces a numeric delimiter", function()
+    assert(string.join({"a", "b"}, 42) == "a42b")
+end)
+
+tests:it("string.join stops at a hole in the sequence", function()
+    -- The join walks the # border, so a hole ends the joined range early.
+    local r = string.join({"a", nil, "c"}, ",")
+    assert(type(r) == "string", "a hole does not crash the join")
+    assert(r == "a" or r == "a,,c", "the result depends only on the chosen length border")
+end)
+
+-- ============================================================
+-- string.trim / ltrim / rtrim: literal custom characters
+-- ============================================================
+
+tests:each("trim variants treat custom characters literally", {
+    {"a-b-", "-", "a-b"},
+    {"[x]", "[]", "x"},
+    {"a%", "%", "a"},
+    {"++mid++", "+", "mid"},
+    {"..mid..", ".", "mid"},
+}, function(input, chars, expected)
+    tests:assert_equal(string.trim(input, chars), expected)
+end)
+
+tests:it("string.ltrim as a method removes only leading characters", function()
+    assert(("..x"):ltrim(".") == "x")
+end)
+
+tests:it("string.rtrim as a method removes only trailing characters", function()
+    assert(("x.."):rtrim(".") == "x")
+end)
+
+tests:it("string.trim coerces a number subject to its string form", function()
+    local r = string.trim(42)
+    assert(r == "42" and type(r) == "string")
+end)
+
+tests:it("string.ltrim of an all-trim string collapses to empty", function()
+    assert(string.ltrim("----", "-") == "")
+end)
+
+tests:it("string.rtrim of an all-trim string collapses to empty", function()
+    assert(string.rtrim("----", "-") == "")
+end)
+
+-- ============================================================
+-- Done
+-- ============================================================
+
+tests:finish()

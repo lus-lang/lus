@@ -1,0 +1,435 @@
+--[[
+    Runtime Attributes: Failure and Interaction Semantics (attrs2)
+
+    This suite complements runtime-attrs.lus (which covers the happy path of
+    acquis-22) by driving the failure paths and cross-feature interactions:
+    erroring handlers on init, on assignment, and mid-chain with the observed
+    variable state after a caught error, non-callable attribute expressions,
+    callable tables as handlers, unusual handler return values, coroutine
+    yields inside handlers, rejected declaration forms, compile-time attribute
+    combinations, and group edge cases.
+
+    Compile-time rejections and runtime errors are exercised through load so
+    that a failure at declaration does not abort the whole suite, and so that
+    the attributed variable lives inside the loaded chunk rather than being
+    captured as an upvalue of a wrapper closure (an upvalue capture changes
+    both group access and handler dispatch, which we pin separately).
+]]
+
+global print, require, assert, type, pledge, ipairs, setmetatable, error, load, tostring, coroutine, table
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("runtime_attributes_failures")
+
+-- Compile a source string and return the function or nil plus the message.
+local function try_load(src)
+    return load(src, "attrs2_chunk")
+end
+
+-- Load a chunk whose text is "return function(shared) ... end" and hand back
+-- the runner. The runner receives a shared table so the chunk can publish a
+-- read-back closure and observed state without touching real globals.
+local function runner_of(body)
+    local fn, err = load("return function(shared)\n" .. body .. "\nend", "attrs2_runner")
+    assert(fn ~= nil, "runner chunk failed to compile: " .. tostring(err))
+    return fn()
+end
+
+-- =============================================================================
+-- Non-callable attribute expressions
+-- =============================================================================
+
+-- The attribute expression is accepted at compile time and only fails when the
+-- runtime tries to call it at the declaration point.
+tests:each("non-callable attribute errors at declaration", {
+    { "number", "local x <(5)> = 1", "attempt to call a number value" },
+    { "string", "local x <('hi')> = 1", "attempt to call a string value" },
+    { "boolean", "local x <(true)> = 1", "attempt to call a boolean value" },
+    { "plain table", "local t = {}\nlocal x <t> = 1", "attempt to call a table value" },
+    { "absent key", "local t = {}\nlocal x <t.missing> = 1", "attempt to call a nil value" },
+}, function(label, src, pattern)
+    local fn, cerr = try_load(src)
+    tests:assert_not_nil(fn, "should compile, got: " .. tostring(cerr))
+    tests:assert_throws(function() fn() end, pattern)
+end)
+
+-- The message identifies the attribute slot rather than a user variable name.
+tests:it("non-callable attribute names the attribute slot", function()
+    local fn = try_load("local x <(5)> = 1")
+    tests:assert_throws(function() fn() end, "%(attr%)")
+end)
+
+-- =============================================================================
+-- Callable tables as handlers
+-- =============================================================================
+
+tests:it("__call table used as handler fires on init and assignment", function()
+    local count = 0
+    local ct = setmetatable({}, {
+        __call = function(self, name, value)
+            count = count + 1
+            return value + 100
+        end,
+    })
+    local x <ct> = 1
+    tests:assert_equal(x, 101, "init should route through __call")
+    tests:assert_equal(count, 1, "one call on init")
+    x = 2
+    tests:assert_equal(x, 102, "assignment should route through __call")
+    tests:assert_equal(count, 2, "two calls after one assignment")
+end)
+
+tests:it("__call table receives the variable name", function()
+    local seen_name = nil
+    local ct = setmetatable({}, {
+        __call = function(self, name, value)
+            seen_name = name
+            return value
+        end,
+    })
+    local y <ct> = 7
+    tests:assert_equal(seen_name, "y", "name argument should be 'y'")
+end)
+
+-- =============================================================================
+-- Erroring handlers: init, assignment, mid-chain
+-- =============================================================================
+
+tests:it("erroring handler on init propagates and stops the declaration", function()
+    local run = runner_of([[
+        local function boom(name, value) error("initfail") end
+        shared.touched = false
+        local x <boom> = 7
+        shared.touched = true
+    ]])
+    local shared = { touched = false }
+    tests:assert_throws(function() run(shared) end, "initfail")
+    tests:assert_false(shared.touched, "code after the failed declaration must not run")
+end)
+
+tests:it("erroring handler on assignment keeps the prior value", function()
+    local run = runner_of([[
+        local function guard(name, value)
+            if value == "bad" then error("reject") end
+            return value
+        end
+        local x <guard> = 5
+        shared.read = function() return x end
+        x = "bad"
+    ]])
+    local shared = {}
+    tests:assert_throws(function() run(shared) end, "reject")
+    tests:assert_equal(shared.read(), 5, "x must retain its previous value after a rejected assignment")
+end)
+
+tests:it("mid-chain error skips later attributes and propagates", function()
+    local run = runner_of([[
+        local log = shared.log
+        local function first(name, value) log[#log + 1] = "first"; return value + 1 end
+        local function boom(name, value) log[#log + 1] = "boom"; error("mid") end
+        local function third(name, value) log[#log + 1] = "third"; return value end
+        local x <first, boom, third> = 100
+    ]])
+    local shared = { log = {} }
+    tests:assert_throws(function() run(shared) end, "mid")
+    tests:assert_equal(table.concat(shared.log, ","), "first,boom",
+        "third must not be called once boom errors")
+end)
+
+tests:it("handler raising a table error is catchable and honors __tostring", function()
+    local run = runner_of([[
+        local marker = setmetatable({ code = 42 }, {
+            __tostring = function() return "ERRCODE42" end,
+        })
+        local function thrower(name, value) error(marker) end
+        local x <thrower> = 1
+    ]])
+    -- catch reports the stringified error, so the __tostring text must survive.
+    tests:assert_throws(function() run({}) end, "ERRCODE42")
+end)
+
+-- =============================================================================
+-- Handler return-value semantics
+-- =============================================================================
+
+tests:it("handler returning false sets the variable to false", function()
+    local function retfalse(name, value) return false end
+    local x <retfalse> = 10
+    tests:assert_equal(x, false, "false is a real value, not a nil-keep")
+    tests:assert_type(x, "boolean", "x should be boolean false")
+    x = 20
+    tests:assert_equal(x, false, "assignment should also become false")
+end)
+
+tests:it("handler with no return statement keeps the incoming value", function()
+    local function noret(name, value) end
+    local x <noret> = 42
+    tests:assert_equal(x, 42, "absent return behaves like an explicit nil return")
+    x = 99
+    tests:assert_equal(x, 99, "incoming value is kept on assignment too")
+end)
+
+tests:it("handler returning multiple values uses only the first", function()
+    local function multi(name, value) return value + 1, "extra", 999 end
+    local x <multi> = 5
+    tests:assert_equal(x, 6, "only the first return value is used")
+end)
+
+tests:it("nil return uses the incoming value, not the stored one", function()
+    local function keep(name, value)
+        if value == 99 then return nil end
+        return value
+    end
+    local x <keep> = 5
+    tests:assert_equal(x, 5, "init passes through")
+    x = 99
+    tests:assert_equal(x, 99, "nil return keeps the incoming 99, not the prior 5")
+end)
+
+-- =============================================================================
+-- Attribute expression evaluation and ordering
+-- =============================================================================
+
+tests:it("attribute expression is evaluated exactly once at declaration", function()
+    local factory_calls = 0
+    local function make()
+        factory_calls = factory_calls + 1
+        return function(name, value) return value end
+    end
+    local x <make()> = 1
+    x = 2
+    x = 3
+    tests:assert_equal(factory_calls, 1, "the factory must not run per assignment")
+end)
+
+tests:it("attribute expression runs before the initializer expression", function()
+    local order = {}
+    local function make_attr()
+        order[#order + 1] = "attr"
+        return function(name, value) return value end
+    end
+    local function make_init()
+        order[#order + 1] = "init"
+        return 5
+    end
+    local w <make_attr()> = make_init()
+    tests:assert_equal(w, 5, "value threads through")
+    tests:assert_equal(table.concat(order, ","), "attr,init",
+        "the attribute expression is evaluated first")
+end)
+
+-- =============================================================================
+-- Coroutine interaction
+-- =============================================================================
+
+tests:it("coroutine.yield inside a handler is resumable and threads the value", function()
+    local function yhandler(name, value)
+        local extra = coroutine.yield(value)
+        return value + extra
+    end
+    local co = coroutine.wrap(function()
+        local z <yhandler> = 5
+        return z
+    end)
+    local yielded = co()
+    tests:assert_equal(yielded, 5, "the handler should yield the incoming value")
+    local final = co(100)
+    tests:assert_equal(final, 105, "resume value should thread back through the handler")
+end)
+
+tests:it("assignment to an attributed local inside a coroutine transforms normally", function()
+    local function inc(name, value) return value + 1 end
+    local result = coroutine.wrap(function()
+        local x <inc> = 10
+        x = 20
+        return x
+    end)()
+    tests:assert_equal(result, 21, "handler applies inside a coroutine body")
+end)
+
+-- =============================================================================
+-- Rejected declaration forms (compile-time)
+-- =============================================================================
+
+tests:each("attributes are rejected in unsupported declaration forms", {
+    { "multiple locals", "local a <h>, b = 1, 2", "multiple variables" },
+    { "if-assignment", "if x <h> = 5 then end", "in this context" },
+    { "while-assignment", "while x <h> = f() do end", "in this context" },
+    { "from destructuring", "local x <h> from { x = 1 }", "with 'from'" },
+}, function(label, src, pattern)
+    local fn, err = try_load("local function h(n, v) return v end\n" .. src)
+    tests:assert_nil(fn, "form should be a compile error")
+    tests:assert_contains(tostring(err), pattern)
+end)
+
+-- =============================================================================
+-- Compile-time attribute combinations
+-- =============================================================================
+
+tests:each("compile-time attributes must precede runtime attributes", {
+    { "handler then const", "local x <h, const> = 1", "'const' must come before" },
+    { "handler then close", "local x <h, close> = 1", "'close' must come before" },
+}, function(label, src, pattern)
+    local fn, err = try_load("local function h(n, v) return v end\n" .. src)
+    tests:assert_nil(fn, "wrong ordering should be a compile error")
+    tests:assert_contains(tostring(err), pattern)
+end)
+
+tests:it("close before handler still invokes the handler and runs __close", function()
+    local log = {}
+    local function h(name, value) log[#log + 1] = "handler"; return value end
+    do
+        local c <close, h> = setmetatable({}, {
+            __close = function() log[#log + 1] = "closed" end,
+        })
+    end
+    tests:assert_equal(table.concat(log, ","), "handler,closed",
+        "the handler fires on init and __close runs at scope exit")
+end)
+
+-- A runtime handler combined with <const> runs on the single initializing
+-- assignment, so it validates and transforms the constant's initial value.
+tests:it("const before handler invokes the handler on init", function()
+    local fired = false
+    local function h(name, value) fired = true; return value + 1 end
+    local x <const, h> = 10
+    tests:assert_true(fired, "handler should fire on the const initializer")
+    tests:assert_equal(x, 11, "handler transform should apply to the constant")
+end)
+
+-- =============================================================================
+-- Declaration without an initializer
+-- =============================================================================
+
+tests:it("attribute with no initializer skips the handler and yields nil", function()
+    local called = false
+    local function h(name, value) called = true; return value end
+    local x <h>
+    tests:assert_false(called, "an implicit nil must not invoke the handler")
+    tests:assert_nil(x, "x should be nil")
+end)
+
+-- =============================================================================
+-- Shadowing and name argument
+-- =============================================================================
+
+tests:it("shadowed attributed locals each dispatch to their own handler", function()
+    local log = {}
+    local function outer(name, value) log[#log + 1] = "outer"; return value end
+    local function inner(name, value) log[#log + 1] = "inner"; return value end
+    local s <outer> = 1
+    do
+        local s <inner> = 2
+        s = 3
+    end
+    s = 4
+    tests:assert_equal(table.concat(log, ","), "outer,inner,inner,outer",
+        "the inner binding never triggers the outer handler and vice versa")
+end)
+
+-- =============================================================================
+-- Reentrancy and upvalue interaction
+-- =============================================================================
+
+tests:it("handler can read the attributed variable as an upvalue", function()
+    local run = runner_of([[
+        local snapshots = shared.snapshots
+        local x
+        local function h(name, value)
+            snapshots[#snapshots + 1] = x
+            return value
+        end
+        local y <h> = 5
+        y = 6
+        shared.final = y
+    ]])
+    local shared = { snapshots = {} }
+    run(shared)
+    tests:assert_equal(shared.final, 6, "final assignment applies")
+end)
+
+-- The handler runs on assignments within the scope where the variable is
+-- declared. A value captured by a nested closure is written directly, so an
+-- upvalue write from that closure updates the variable without re-invoking the
+-- handler. This is the documented contract in acquis-22.
+tests:it("an upvalue write from a closure updates without re-invoking the handler", function()
+    local seen = 0
+    local function h(name, value) seen = seen + 1; return value end
+    local x <h> = 1
+    local setter = function(v) x = v end
+    setter(2)
+    tests:assert_equal(seen, 1, "the upvalue write does not re-invoke the handler")
+    tests:assert_equal(x, 2, "x should reflect the closure write")
+end)
+
+-- =============================================================================
+-- Group variable edge cases
+-- =============================================================================
+
+tests:it("group init requires named fields, rejecting array entries", function()
+    local fn, err = try_load(
+        "local function h(n, v) return v end\nlocal z <group, h> = { \"a\", \"b\" }")
+    tests:assert_nil(fn, "positional entries should be a parse error")
+end)
+
+tests:it("group init rejects integer-literal keys", function()
+    local fn, err = try_load(
+        "local function h(n, v) return v end\nlocal z <group, h> = { [1] = \"a\" }")
+    tests:assert_nil(fn, "integer-literal keys should be a parse error")
+end)
+
+tests:it("writing a field absent from the group init is a compile error", function()
+    local fn, err = try_load(
+        "local function h(n, v) return v end\nlocal z <group, h> = { a = 1 }\nz.c = 2")
+    tests:assert_nil(fn, "new dotted fields are statically rejected")
+    tests:assert_contains(tostring(err), "not a field of group")
+end)
+
+tests:it("bracket-indexing a group with a new key is a compile error", function()
+    local fn, err = try_load(
+        "local function h(n, v) return v end\nlocal z <group, h> = { a = 1 }\nz[\"c\"] = 2")
+    tests:assert_nil(fn, "bracket writes of new keys are statically rejected")
+end)
+
+tests:it("group handler dotted names cover every named init field", function()
+    local names = {}
+    local function h(name, value) names[#names + 1] = name; return value end
+    local z <group, h> = { x = 10, nested = { p = 1 } }
+    table.sort(names)
+    tests:assert_equal(table.concat(names, ","), "z.nested,z.x",
+        "each top-level field is announced with its dotted name")
+end)
+
+tests:it("group handler transforms values on init and on field assignment", function()
+    local function inc(name, value)
+        if type(value) == "number" then return value + 1 end
+        return value
+    end
+    local z <group, inc> = { a = 10 }
+    tests:assert_equal(z.a, 11, "init transform applies to the field")
+    z.a = 100
+    tests:assert_equal(z.a, 101, "assignment transform applies to the field")
+end)
+
+tests:it("assigning nil to a group field skips the handler", function()
+    local calls = 0
+    local function h(name, value) calls = calls + 1; return value end
+    local z <group, h> = { x = 5 }
+    calls = 0
+    z.x = nil
+    tests:assert_equal(calls, 0, "nil write must not invoke the group handler")
+end)
+
+tests:it("writing into a nested table under a group field does not fire the handler", function()
+    local calls = 0
+    local function h(name, value) calls = calls + 1; return value end
+    local z <group, h> = { nested = { p = 1 } }
+    calls = 0
+    z.nested.p = 5
+    tests:assert_equal(calls, 0, "deep writes bypass the top-level group handler")
+    tests:assert_equal(z.nested.p, 5, "the nested write still lands")
+end)
+
+tests:finish()

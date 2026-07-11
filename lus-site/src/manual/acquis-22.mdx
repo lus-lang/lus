@@ -9,7 +9,7 @@ In addition to the compile time attributes, local variables can also be given ru
 
 ## Basic usage
 
-Runtime attributes are declared as functions and inserted prior to the `local` keyword and the variable name. The function will be called with the variable name and value as arguments when initialized and assigned.
+Runtime attributes are declared as functions and inserted prior to the `local` keyword and the variable name. The function is called with the variable name and value as arguments each time the variable is initialized or assigned within the scope where it is declared.
 
 ```lus
 local function printvar(name, value)
@@ -70,6 +70,20 @@ end
 
 local x <first, const> = 10 -- error: compile-time attributes must be provided first
 local y <const, first> = 10 -- ok
+```
+
+## Scope of dispatch
+
+The handler runs on assignments to the variable within the scope where it is declared. When the variable is captured by a nested closure, an assignment through that closure writes the value directly, and the value is used as written.
+
+```lus
+local function h(name, value)
+    return value
+end
+
+local x <h> = 1 -- handler runs on the initializer
+local setter = function(v) x = v end
+setter(2) -- writes x directly, so x is now 2
 ```
 
 ## Attribute lifetime

@@ -75,15 +75,22 @@ tests:it("coroutine with closures", function()
 end)
 
 tests:it("weak table in generational mode", function()
+    local oldmode = collectgarbage("generational")
     local t = setmetatable({}, {__mode = "kv"})
+    collectgarbage()  -- make the weak table old
+    t[1] = {10}       -- unreferenced young value
+    local keep = {20}
+    t[2] = keep       -- value with a live strong reference
+    collectgarbage("step")
+    collectgarbage("step")
+    -- a full (major) collection must clear the unreferenced value while
+    -- keeping the referenced one
     collectgarbage()
-    t[1] = {10}
-    collectgarbage("step")
-    collectgarbage("step")
-    collectgarbage("step")
-    -- weak table should clear unreferenced values
-    collectgarbage()
-    assert(t[1] == nil or t[1][1] == 10)
+    local cleared = (t[1] == nil)
+    local survived = (t[2] == keep)
+    collectgarbage(oldmode)
+    assert(cleared, "the unreferenced weak value was cleared")
+    assert(survived, "the strongly referenced value survived")
 end)
 
 tests:it("gc is running", function()

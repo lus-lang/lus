@@ -346,7 +346,8 @@ typedef enum {
   OP_VARARGPREP, /* 	(adjust varargs)				*/
 
   OP_CATCH, /*	A B C	begin catch: B=handler+1 (0=none); C=offset to error path */
-  OP_ENDCATCH, /*	A B C	end catch: R[A]:=true; B=nresults; C=jump offset */
+  OP_ENDCATCH, /*	A B C k	end catch: R[A]:=true; B=nresults; C=jump offset;
+                        k=1 when the inner expression maintains L->top */
 
   OP_SLICE, /*	A B C	R[A] := slice(R[B], R[C], R[C+1])		*/
 
@@ -357,6 +358,13 @@ typedef enum {
 
   OP_QUERY, /*	A B C	R[A] := query(R[A..A+B+C-1]); B=sources C=operands
                         (next instruction is EXTRAARG = plan blob k index) */
+
+  OP_PROVIDE, /*	A B C k	R[A..A+n-1] := R[C..C+n-1] where n is B-1 or is
+                        taken from 'top' when B is 0. Sets 'top'. With k,
+                        first closes variables at or above R[A+1]	*/
+
+  OP_ENDDO, /*	A B	end do-expression. B=nresults+1 adjusts the window
+                        at R[A] and B=0 keeps 'top' for the consumer	*/
 
   OP_EXTRAARG /*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
@@ -421,6 +429,16 @@ typedef enum {
   (*) In comparisons with an immediate operand, C signals whether the
   original operand was a float. (It must be corrected in case of
   metamethods.)
+
+  (*) In OP_PROVIDE, if (B == 0) the previous instruction set 'top'
+  (an open call or vararg) and the value count is top - R[C]. The
+  instruction always sets 'top' to R[A] + n. If k, upvalues and
+  to-be-closed variables at or above R[A+1] are closed before the move,
+  with the closing call frames pushed above the frame top so the source
+  window survives. OP_ENDDO is the join point that every provide path
+  reaches. If (B == 0) it leaves 'top' for the consuming open
+  instruction that follows. Otherwise it nil-fills or truncates the
+  window at R[A] to exactly B - 1 values.
 
 ===========================================================================*/
 

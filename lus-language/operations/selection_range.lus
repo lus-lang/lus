@@ -1,15 +1,25 @@
-global require, ipairs, type, table
+global require, ipairs, type
 
 local ast_mod = require("lus-language.analysis.ast")
 
 local selection_range = {}
 
--- Check if a node contains the given 1-based position
+-- Check if a node contains the given 1-based position, using column data.
+-- A node that records no end data is treated as unbounded past its start,
+-- which covers the root chunk and any node lacking end coordinates.
 local function node_contains(node, line, col)
   if not node then return false end
-  local start_line = node.line or 0
-  local end_line = node.endline or start_line
-  if line < start_line or line > end_line then return false end
+  local sl = node.line or 0
+  local sc = node.column or 0
+  if line < sl then return false end
+  if line == sl and col < sc then return false end
+  local el = node.endline
+  if el then
+    if line > el then return false end
+    if line == el and node.endcolumn and col > node.endcolumn then
+      return false
+    end
+  end
   return true
 end
 
@@ -29,7 +39,24 @@ local function node_range(node)
   }
 end
 
--- Collect all nodes that contain the given position, sorted innermost first
+-- Return the earlier of two 0-based positions.
+local function pos_min(a, b)
+  if b.line < a.line or (b.line == a.line and b.character < a.character) then
+    return b
+  end
+  return a
+end
+
+-- Return the later of two 0-based positions.
+local function pos_max(a, b)
+  if b.line > a.line or (b.line == a.line and b.character > a.character) then
+    return b
+  end
+  return a
+end
+
+-- Collect all nodes that contain the given position, in pre-order (each
+-- ancestor before its descendants), giving an outermost-to-innermost list.
 local function collect_enclosing(node, line, col, result)
   if not node or type(node) ~= "table" then return end
   if not node.type then
@@ -90,13 +117,6 @@ local function collect_enclosing(node, line, col, result)
   end
 end
 
--- Compare two nodes by range size (smaller range = more specific)
-local function range_size(node)
-  local start_line = node.line or 0
-  local end_line = node.endline or start_line
-  return end_line - start_line
-end
-
 -- Compute selection ranges for an array of positions.
 -- positions are 0-based (LSP). Returns an array of SelectionRange.
 function selection_range.compute(uri, positions)
@@ -113,16 +133,26 @@ function selection_range.compute(uri, positions)
     local nodes = {}
     collect_enclosing(tree, line, col, nodes)
 
-    -- Sort by range size ascending (innermost first)
-    table.sort(nodes, function(a, b)
-      return range_size(a) < range_size(b)
-    end)
+    -- collect_enclosing appends in pre-order, so nodes[1] is the outermost
+    -- node and nodes[#nodes] is the innermost along a single containment path.
+    local ranges = {}
+    for i = 1, #nodes do
+      ranges[i] = node_range(nodes[i])
+    end
 
-    -- Build linked list from innermost to outermost
+    -- Expand each ancestor to cover its descendant so every parent fully
+    -- contains its child even when a node records no end coordinates.
+    for i = #nodes - 1, 1, -1 do
+      ranges[i].start = pos_min(ranges[i].start, ranges[i + 1].start)
+      ranges[i]["end"] = pos_max(ranges[i]["end"], ranges[i + 1]["end"])
+    end
+
+    -- Build the parent chain from outermost to innermost so the final
+    -- node is the innermost range whose .parent links up to the chunk.
     local current = nil
-    for i = #nodes, 1, -1 do
+    for i = 1, #nodes do
       current = {
-        range = node_range(nodes[i]),
+        range = ranges[i],
         parent = current,
       }
     end

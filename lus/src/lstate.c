@@ -279,7 +279,12 @@ LUA_API void lus_worker_pool_shutdown(void);
 
 static void close_state(lua_State *L) {
   global_State *g = G(L);
-  lus_worker_pool_shutdown(); /* join pool threads before freeing anything */
+  /* Only the owning interpreter tears the shared pool down. A worker's own
+  ** state closes on a pool thread when its last handle is dropped, and letting
+  ** that reenter the shutdown would double free the pool and make a thread join
+  ** itself. The main interpreter still shuts the pool down exactly once. */
+  if (!g->isworker)
+    lus_worker_pool_shutdown(); /* join pool threads before freeing anything */
   if (!completestate(g))    /* closing a partially built state? */
     luaC_freeallobjects(L); /* just collect its objects */
   else {                    /* closing a fully built state */
@@ -408,6 +413,7 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   g->readonly_env = 0;
   g->pedantic = 0;
   g->stripdebug = 0;
+  g->isworker = 0;
   g->flagstable = NULL;
   g->preinctab = NULL;
   g->iter_next = NULL;

@@ -48,16 +48,23 @@ tests:it("debug.getlocal / setlocal in coroutine", function()
         local a = 1
         local b = 2
         coroutine.yield()
+        return a + b
     end)
     coroutine.resume(co)
-    
+
     local n, v = debug.getlocal(co, 1, 1)
     assert(n == "a")
     assert(v == 1)
-    
-    debug.setlocal(co, 1, 1, 10)
-    local n2, v2 = debug.getlocal(co, 1, 1)
-    assert(v2 == 10)
+    local n2, v2 = debug.getlocal(co, 1, 2)
+    assert(n2 == "b")
+    assert(v2 == 2)
+
+    assert(debug.setlocal(co, 1, 1, 10) == "a")
+    local ok, result = coroutine.resume(co)
+    assert(ok)
+    -- the resumed function itself computes with the mutated local
+    assert(result == 12, "the coroutine observes the new value, got "
+        .. tostring(result))
 end)
 
 tests:it("parameter names", function()

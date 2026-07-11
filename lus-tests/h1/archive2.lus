@@ -1,0 +1,391 @@
+-- Archive robustness suite for vector.archive.{gzip,deflate,zstd,brotli,lz4}.
+-- The existing archive.lus covers clean-input happy paths. This file attacks
+-- the codecs with hostile and boundary inputs: truncated streams, single bit
+-- flips in header and body regions, trailing garbage, cross-format confusion,
+-- multi-member gzip, incompressible data, decompression bombs, level bounds,
+-- full 256-value binary roundtrips, and input immutability. Every corruption
+-- case must resolve to a catchable error or wrong data and must never crash
+-- the process, which is what makes these tests able to fail.
+
+global print, require, assert, type, string, table, vector, pledge, tostring, math, ipairs
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("archive2")
+
+-- A compressible sample with enough redundancy that every codec shrinks it.
+local sample = "Hello, World! This is a test of the compression library. " ..
+               "We need enough data to make compression meaningful. " ..
+               string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+
+-- The full set of codec names for table-driven matrices.
+local all_codecs = {"gzip", "deflate", "zstd", "brotli", "lz4"}
+
+-- Flip a single bit at a 1-based byte position, returning a new string. Used to
+-- inject deterministic corruption rather than relying on randomness.
+local function flip_bit(s, pos, bit)
+    local b = string.byte(s, pos)
+    b = b ~ (1 << bit)
+    return string.sub(s, 1, pos - 1) .. string.char(b) .. string.sub(s, pos + 1)
+end
+
+-- Build a string containing every one of the 256 byte values, repeated so the
+-- window has cross-references to exercise. This includes embedded NUL bytes.
+local function all_bytes_string()
+    local parts = {}
+    for i = 0, 255 do
+        parts[i + 1] = string.char(i)
+    end
+    return string.rep(table.concat(parts), 4)
+end
+
+local all_bytes = all_bytes_string()
+
+-- ===================================================================
+-- Full 256-value binary roundtrips
+-- ===================================================================
+
+tests:describe("binary roundtrips")
+
+tests:each("all 256 byte values roundtrip", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local comp = vector.archive[codec].compress(all_bytes)
+    local dec = vector.archive[codec].decompress(comp)
+    tests:assert_equal(#dec, #all_bytes, codec .. " length must be preserved")
+    assert(dec == all_bytes, codec .. " must preserve every byte value exactly")
+end)
+
+tests:each("embedded NUL bytes survive the string path", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    -- A C-string truncation bug in the string path would drop everything after
+    -- the first NUL, so the recovered length is the discriminating assertion.
+    local payload = "start\0middle\0\0\0tail\0"
+    local comp = vector.archive[codec].compress(payload)
+    local dec = vector.archive[codec].decompress(comp)
+    tests:assert_equal(#dec, #payload, codec .. " must not truncate at a NUL byte")
+    assert(dec == payload, codec .. " must preserve NUL-bearing data")
+end)
+
+-- ===================================================================
+-- Empty input handling
+-- ===================================================================
+
+tests:describe("empty input")
+
+tests:each("empty string compresses to a valid decompressible stream", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local comp = vector.archive[codec].compress("")
+    tests:assert_type(comp, "string", codec .. " string input yields string output")
+    assert(#comp > 0, codec .. " empty input still produces a framed stream")
+    local dec = vector.archive[codec].decompress(comp)
+    assert(dec == "", codec .. " empty roundtrip must return the empty string")
+end)
+
+tests:each("empty vector roundtrips preserving type and zero length", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local ev = vector.create(0, true)
+    local comp = vector.archive[codec].compress(ev)
+    tests:assert_type(comp, "vector", codec .. " vector input yields vector output")
+    local dec = vector.archive[codec].decompress(comp)
+    tests:assert_type(dec, "vector", codec .. " decompress preserves vector type")
+    tests:assert_equal(#dec, 0, codec .. " empty vector roundtrip stays length zero")
+end)
+
+tests:each("decompressing an empty input errors", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    -- An empty string is not a valid framed stream for any codec.
+    tests:assert_throws(function()
+        vector.archive[codec].decompress("")
+    end)
+end)
+
+-- ===================================================================
+-- Truncated streams
+-- ===================================================================
+
+tests:describe("truncation")
+
+-- Cut a valid stream at several fractions and require a clean catchable error
+-- rather than a crash or a silent partial result. Truncation is the most common
+-- real-world corruption.
+tests:each("truncated stream errors cleanly", {
+    {"gzip", 0.25}, {"gzip", 0.5}, {"gzip", 0.75},
+    {"deflate", 0.25}, {"deflate", 0.5}, {"deflate", 0.75},
+    {"zstd", 0.25}, {"zstd", 0.5}, {"zstd", 0.75},
+    {"brotli", 0.25}, {"brotli", 0.5}, {"brotli", 0.75},
+    {"lz4", 0.25}, {"lz4", 0.5}, {"lz4", 0.75},
+}, function(codec, frac)
+    local comp = vector.archive[codec].compress(sample)
+    local cut = math.floor(#comp * frac)
+    local trunc = string.sub(comp, 1, cut)
+    tests:assert_throws(function()
+        vector.archive[codec].decompress(trunc)
+    end)
+end)
+
+-- ===================================================================
+-- Trailing garbage after a valid stream (behavior pinned per codec)
+-- ===================================================================
+
+tests:describe("trailing garbage")
+
+-- gzip, deflate, brotli, and lz4 decode the complete stream and ignore any
+-- bytes past its end, returning the original payload.
+tests:each("trailing garbage is ignored, payload recovered", {
+    {"gzip"}, {"deflate"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local comp = vector.archive[codec].compress(sample)
+    local dec = vector.archive[codec].decompress(comp .. "GARBAGE!!")
+    assert(dec == sample, codec .. " must ignore trailing bytes and return the payload")
+end)
+
+tests:it("zstd rejects trailing garbage after a complete frame", function()
+    -- The zstd decoder consumes the whole input and treats leftover bytes as a
+    -- malformed second frame.
+    local comp = vector.archive.zstd.compress(sample)
+    tests:assert_throws(function()
+        vector.archive.zstd.decompress(comp .. "GARBAGE!!")
+    end)
+end)
+
+-- ===================================================================
+-- Multi-member gzip
+-- ===================================================================
+
+tests:describe("multi-member gzip")
+
+tests:it("two concatenated gzip members decode to the first member", function()
+    -- RFC 1952 permits concatenated members. This runtime returns the first
+    -- member and stops, so the recovered payload equals a single sample.
+    local member = vector.archive.gzip.compress(sample)
+    local dec = vector.archive.gzip.decompress(member .. member)
+    tests:assert_equal(#dec, #sample, "multi-member gzip returns one member length")
+    assert(dec == sample, "multi-member gzip returns the first member payload")
+end)
+
+-- ===================================================================
+-- Cross-format confusion
+-- ===================================================================
+
+tests:describe("cross-format confusion")
+
+-- Feeding a stream from one codec to another decoder must error, never
+-- half-succeed. gzip is deflate plus a header and trailer, so the deflate and
+-- gzip pairing is the sharpest case.
+tests:each("wrong decoder for a valid stream errors", {
+    {"deflate", "gzip"}, {"gzip", "deflate"},
+    {"zstd", "gzip"}, {"brotli", "gzip"}, {"lz4", "gzip"},
+    {"gzip", "zstd"}, {"deflate", "brotli"}, {"brotli", "lz4"},
+}, function(decoder, producer)
+    local data = vector.archive[producer].compress(sample)
+    tests:assert_throws(function()
+        vector.archive[decoder].decompress(data)
+    end)
+end)
+
+-- ===================================================================
+-- Single bit flips (must never crash)
+-- ===================================================================
+
+tests:describe("bit flips")
+
+-- Flip one bit in header, body, and tail regions. The only hard invariant for
+-- all codecs is non-crash: decompress either raises or returns a string. A
+-- segfault would take down the whole test process and fail the suite.
+tests:each("a single bit flip never crashes the decoder", {
+    {"gzip", "header"}, {"gzip", "body"}, {"gzip", "tail"},
+    {"deflate", "header"}, {"deflate", "body"}, {"deflate", "tail"},
+    {"zstd", "header"}, {"zstd", "body"}, {"zstd", "tail"},
+    {"brotli", "header"}, {"brotli", "body"}, {"brotli", "tail"},
+    {"lz4", "header"}, {"lz4", "body"}, {"lz4", "tail"},
+}, function(codec, region)
+    local comp = vector.archive[codec].compress(sample)
+    local n = #comp
+    local pos
+    if region == "header" then
+        pos = 2
+    elseif region == "body" then
+        pos = math.floor(n / 2)
+    else
+        pos = n
+    end
+    if pos < 1 then pos = 1 end
+    local corrupt = flip_bit(comp, pos, 3)
+    local ok, res = catch vector.archive[codec].decompress(corrupt)
+    if ok then
+        tests:assert_type(res, "string",
+            codec .. " " .. region .. " flip that decoded must yield a string")
+    end
+end)
+
+-- Codecs that carry magic bytes must reject a corrupted magic. deflate has no
+-- header magic and brotli has no fixed magic byte, so only these three qualify.
+tests:each("corrupted magic byte is rejected", {
+    {"gzip"}, {"zstd"}, {"lz4"},
+}, function(codec)
+    local comp = vector.archive[codec].compress(sample)
+    local corrupt = flip_bit(comp, 1, 3)
+    tests:assert_throws(function()
+        vector.archive[codec].decompress(corrupt)
+    end)
+end)
+
+tests:it("gzip CRC32 rejects a corrupted body byte", function()
+    -- The gzip spec validates the CRC32 checksum, so a flipped deflate-body byte
+    -- must be caught even though the byte still decodes to some data.
+    local comp = vector.archive.gzip.compress(sample)
+    local corrupt = flip_bit(comp, math.floor(#comp / 2), 3)
+    tests:assert_throws(function()
+        vector.archive.gzip.decompress(corrupt)
+    end)
+end)
+
+-- ===================================================================
+-- Incompressible input
+-- ===================================================================
+
+tests:describe("incompressible input")
+
+-- Already-compressed high-entropy bytes exercise the output-larger-than-input
+-- buffer path that the shrink-only happy path never touches.
+tests:each("incompressible input roundtrips", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local incompressible = vector.archive.zstd.compress(all_bytes, 19)
+    local comp = vector.archive[codec].compress(incompressible)
+    local dec = vector.archive[codec].decompress(comp)
+    assert(dec == incompressible, codec .. " must roundtrip incompressible data")
+end)
+
+-- ===================================================================
+-- Decompression bomb (bounded expansion)
+-- ===================================================================
+
+tests:describe("decompression bomb")
+
+-- A few kilobytes of compressed zeros expand to four megabytes. Each codec must
+-- either succeed with the exact expanded size or fail cleanly, never crash.
+tests:each("highly compressible input expands to the correct size", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local zeros = string.rep("\0", 4 * 1024 * 1024)
+    local comp = vector.archive[codec].compress(zeros)
+    assert(#comp < #zeros, codec .. " should compress a run of zeros tightly")
+    local ok, dec = catch vector.archive[codec].decompress(comp)
+    if ok then
+        tests:assert_equal(#dec, #zeros, codec .. " bomb must expand to the exact size")
+        tests:assert_equal(string.byte(dec, 1), 0, codec .. " first expanded byte is zero")
+        tests:assert_equal(string.byte(dec, #dec), 0, codec .. " last expanded byte is zero")
+    end
+end)
+
+-- ===================================================================
+-- Compression level bounds
+-- ===================================================================
+
+tests:describe("level bounds")
+
+-- Documented boundary levels must compress and roundtrip.
+tests:each("boundary levels roundtrip", {
+    {"gzip", 0}, {"gzip", 9},
+    {"deflate", 0}, {"deflate", 9},
+    {"zstd", -7}, {"zstd", 22},
+    {"brotli", 0}, {"brotli", 11},
+    {"lz4", 1}, {"lz4", 12},
+}, function(codec, level)
+    local comp = vector.archive[codec].compress(sample, level)
+    local dec = vector.archive[codec].decompress(comp)
+    assert(dec == sample, codec .. " level " .. tostring(level) .. " must roundtrip")
+end)
+
+tests:it("brotli window boundaries roundtrip", function()
+    local lo = vector.archive.brotli.compress(sample, 6, 10)
+    local hi = vector.archive.brotli.compress(sample, 6, 24)
+    assert(vector.archive.brotli.decompress(lo) == sample, "lgwin 10 must roundtrip")
+    assert(vector.archive.brotli.decompress(hi) == sample, "lgwin 24 must roundtrip")
+end)
+
+-- Out-of-range levels must be rejected rather than silently clamped.
+tests:each("out-of-range levels error", {
+    {"gzip", -1}, {"gzip", 10},
+    {"deflate", -1}, {"deflate", 10},
+    {"zstd", 23}, {"zstd", 100},
+    {"brotli", -1}, {"brotli", 12},
+    {"lz4", 0}, {"lz4", 13}, {"lz4", -1},
+}, function(codec, level)
+    tests:assert_throws(function()
+        vector.archive[codec].compress(sample, level)
+    end)
+end)
+
+tests:each("out-of-range brotli window sizes error", {
+    {9}, {25},
+}, function(lgwin)
+    tests:assert_throws(function()
+        vector.archive.brotli.compress(sample, 6, lgwin)
+    end)
+end)
+
+tests:it("a non-numeric string level errors", function()
+    tests:assert_throws(function()
+        vector.archive.gzip.compress(sample, "notanumber")
+    end)
+end)
+
+-- ===================================================================
+-- Argument type validation
+-- ===================================================================
+
+tests:describe("argument validation")
+
+tests:each("compressing an uncoercible value errors", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    -- Booleans, nil, and tables cannot be read as bytes.
+    tests:assert_throws(function()
+        vector.archive[codec].compress(true)
+    end)
+    tests:assert_throws(function()
+        vector.archive[codec].compress(nil)
+    end)
+    tests:assert_throws(function()
+        vector.archive[codec].compress({})
+    end)
+end)
+
+tests:each("decompressing a non-byte value errors", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    tests:assert_throws(function()
+        vector.archive[codec].decompress(true)
+    end)
+    tests:assert_throws(function()
+        vector.archive[codec].decompress(nil)
+    end)
+end)
+
+-- ===================================================================
+-- Input immutability
+-- ===================================================================
+
+tests:describe("input immutability")
+
+-- Compressing a vector must read it without mutating its bytes.
+tests:each("compress does not mutate the input vector", {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}, function(codec)
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local before = vector.unpack(v, 0, "c" .. #sample)
+    vector.archive[codec].compress(v)
+    local after = vector.unpack(v, 0, "c" .. #sample)
+    assert(before == after, codec .. " compress must not alter the input vector")
+end)
+
+tests:finish()

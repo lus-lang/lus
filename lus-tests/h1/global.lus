@@ -1,82 +1,230 @@
 --[[
     Test suite for the global statement in Lus.
 
-    Syntax:
-    - global name1, name2, ...     (declare globals)
-    - global name = expr           (declare and initialize)
-    - Globals must be declared before use (enforced by convention)
-    - local variables shadow globals
+    Contract:
+    - global name1, name2, ...      declares globals without defining them
+    - global name = expr            declares and initializes
+    - global function name() end    declares and defines a function
+    - global <const> name = expr    declares a read-only global
+    - global *                      restores implicit global declarations
+
+    Every chunk starts with an implicit "global *" that lets undeclared
+    names act as globals. From the first explicit global declaration to
+    the end of its enclosing block, that implicit declaration is voided
+    and using an undeclared name is a compile-time error.
+
+    Initializing a global whose current value is non-nil raises
+    "global 'x' already defined" at runtime. Declaring without an
+    initializer never raises and can be repeated across chunks.
+
+    Local variables shadow globals.
 ]]
 
-global assert, type, require, pledge, tostring, error
+global assert, type, require, pledge, tostring, error, load, _G, string
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("global")
 
-tests:it("basic global declaration", function()
-    -- assert is already declared global above and usable
-    assert(true)
+-- =========================================================================
+-- Declaration and initialization
+-- =========================================================================
+
+tests:it("global name = expr declares and initializes", function()
+    local f = load("global g_t1 = 42 return g_t1")
+    assert(f ~= nil)
+    assert(f() == 42)
+    assert(_G.g_t1 == 42, "the initialized value must land in the global table")
 end)
 
-tests:it("global variables are accessible", function()
+tests:it("declaration without initializer reads nil", function()
+    local f = load("global g_t2 return g_t2")
+    assert(f ~= nil)
+    assert(f() == nil)
+    assert(_G.g_t2 == nil, "declaring alone must not create a value")
+end)
+
+tests:it("declared global is assignable after declaration", function()
+    local f = load("global g_t3 g_t3 = 10 return g_t3")
+    assert(f() == 10)
+    assert(_G.g_t3 == 10)
+end)
+
+tests:it("multiple names declared and initialized in one statement", function()
+    local f = load("global g_t4a, g_t4b, g_t4c = 1, 2, 3 return g_t4a, g_t4b, g_t4c")
+    local a, b, c = f()
+    assert(a == 1 and b == 2 and c == 3)
+    assert(_G.g_t4a == 1 and _G.g_t4b == 2 and _G.g_t4c == 3)
+end)
+
+tests:it("extra declared names pad with nil", function()
+    local f = load("global g_t5a, g_t5b, g_t5c = 1, 2 return g_t5a, g_t5b, g_t5c")
+    local a, b, c = f()
+    assert(a == 1 and b == 2)
+    assert(c == nil, "the third name received no value")
+end)
+
+-- =========================================================================
+-- Visibility of new globals
+-- =========================================================================
+
+tests:it("new global is visible through _G", function()
+    local f = load("global g_t6 = 11")
+    f()
+    assert(_G.g_t6 == 11)
+end)
+
+tests:it("new global is visible to a later chunk", function()
+    load("global g_t7 = 12")()
+    local reader = load("global g_t7 return g_t7")
+    assert(reader() == 12, "a second chunk redeclares the name and reads the value")
+end)
+
+tests:it("assignment from an inner function is visible in the chunk", function()
+    local f = load("global g_t8 local function set() g_t8 = 5 end set() return g_t8")
+    assert(f() == 5)
+    assert(_G.g_t8 == 5)
+end)
+
+tests:it("writing through _G defines a declared global", function()
+    local f = load("global _G, g_t9 _G.g_t9 = 77 return g_t9")
+    assert(f() == 77, "globals are entries of the global table")
+end)
+
+-- =========================================================================
+-- Declared-before-use enforcement
+-- =========================================================================
+
+tests:it("undeclared read is a compile error after a declaration", function()
+    local f, err = load("global g_t10 = 1 return g_t10_undeclared_name")
+    assert(f == nil, "reading an undeclared name should not compile")
+    tests:assert_contains(err, "not declared")
+end)
+
+tests:it("undeclared assignment is a compile error after a declaration", function()
+    local f, err = load("global g_t11 = 1 g_t11_undeclared_name = 5")
+    assert(f == nil, "writing an undeclared name should not compile")
+    tests:assert_contains(err, "not declared")
+end)
+
+tests:it("enforcement begins at the declaration", function()
+    -- Uses before the first global statement fall under the implicit
+    -- declaration and stay legal. The read is captured into a local
+    -- because after the declaration the same name would not compile.
+    local f = load("g_t12_early = 1 local r = g_t12_early global g_t12 = 2 return r")
+    assert(f ~= nil, "uses before the declaration compile")
+    assert(f() == 1)
+    assert(_G.g_t12_early == 1)
+    -- The very same read placed after the declaration is rejected
+    local bad, err = load("g_t12b_early = 1 global g_t12b = 2 return g_t12b_early")
+    assert(bad == nil)
+    tests:assert_contains(err, "not declared")
+end)
+
+tests:it("enforcement ends with the enclosing block", function()
+    local f = load("do global g_t13 = 1 end g_t13_after = 5 return g_t13_after")
+    assert(f ~= nil, "after the block the implicit declaration applies again")
+    assert(f() == 5)
+end)
+
+tests:it("declared name leaves scope with its block but the value persists", function()
+    local f = load("do global g_t14 = 7 end return g_t14")
+    assert(f ~= nil, "the read after the block is an implicit global")
+    assert(f() == 7, "the value stored during the block persists in _G")
+end)
+
+tests:it("global * restores implicit declarations", function()
+    local f = load("global g_t15 = 1 global * g_t15_anything = 9 return g_t15_anything")
+    assert(f ~= nil, "global * lifts the enforcement for the rest of the block")
+    assert(f() == 9)
+end)
+
+-- =========================================================================
+-- Redefinition rules
+-- =========================================================================
+
+tests:it("initializing an already defined global raises at runtime", function()
+    load("global g_t16 = 1")()
+    local f = load("global g_t16 = 2")
+    assert(f ~= nil, "the redefinition compiles, the check happens at runtime")
+    local ok, msg = catch f()
+    assert(ok == false)
+    tests:assert_contains(tostring(msg), "already defined")
+    assert(_G.g_t16 == 1, "the original value survives the failed redefinition")
+end)
+
+tests:it("redeclaring without initializer never raises", function()
+    load("global g_t17 = 3")()
+    local f = load("global g_t17 return g_t17")
+    assert(f() == 3)
+end)
+
+tests:it("clearing the value allows a later initialization", function()
+    load("global g_t18 = 1")()
+    _G.g_t18 = nil
+    local f = load("global g_t18 = 2 return g_t18")
+    local ok, v = catch f()
+    assert(ok == true, "the check tests the current value, not history")
+    assert(v == 2)
+end)
+
+-- =========================================================================
+-- Other declaration forms
+-- =========================================================================
+
+tests:it("global function declares and defines", function()
+    local f = load("global function g_t19() return 99 end return g_t19()")
+    assert(f() == 99)
+    assert(type(_G.g_t19) == "function")
+end)
+
+tests:it("const global is readable", function()
+    local f = load("global <const> g_t20 = 5 return g_t20")
+    assert(f() == 5)
+end)
+
+tests:it("const global rejects assignment at compile time", function()
+    local f, err = load("global <const> g_t21 = 5 g_t21 = 6")
+    assert(f == nil, "assigning a const global should not compile")
+    tests:assert_contains(err, "attempt to assign to const variable")
+end)
+
+tests:it("globals cannot be to-be-closed", function()
+    local f, err = load("global g_t22 <close> = nil")
+    assert(f == nil, "a close attribute on a global should not compile")
+    assert(string.find(err, "cannot be to-be-closed", 1, true) ~= nil)
+end)
+
+-- =========================================================================
+-- Interaction with locals and builtins
+-- =========================================================================
+
+tests:it("declared builtins are usable", function()
     assert(type(assert) == "function")
-    assert(type(type) == "function")
-    assert(type(tostring) == "function")
-end)
-
-tests:it("tostring global works correctly", function()
+    assert(type(load) == "function")
     assert(tostring(42) == "42")
-    assert(tostring(true) == "true")
     assert(tostring(nil) == "nil")
 end)
 
 tests:it("local shadows global", function()
-    local assert = function() return "shadowed" end
-    assert(assert() == "shadowed")
-end)
-
-tests:it("global is visible after declaration", function()
-    -- error was declared global at the top
-    local ok, err = catch error("test error")
-    assert(ok == false)
-    assert(type(err) == "string")
-end)
-
-tests:it("multiple globals in one statement", function()
-    -- All declared in the first global statement
-    assert(type(assert) == "function")
-    assert(type(type) == "function")
-    assert(type(require) == "function")
-    assert(type(pledge) == "function")
-    assert(type(tostring) == "function")
-    assert(type(error) == "function")
-end)
-
-tests:it("global used in nested scope", function()
-    do
-        do
-            assert(type(tostring) == "function")
-            assert(tostring(123) == "123")
-        end
-    end
-end)
-
-tests:it("global used in function body", function()
-    local function check()
-        return type(assert) == "function"
-    end
-    assert(check())
+    local tostring = function() return "shadowed" end
+    local r = tostring(42)
+    assert(r == "shadowed", "the local must win over the global tostring")
 end)
 
 tests:it("local unshadows after block", function()
     do
         local tostring = function() return "shadow" end
-        assert(tostring() == "shadow")
+        assert(tostring(99) == "shadow")
     end
-    -- After block, global tostring is visible again
-    assert(tostring(99) == "99")
+    assert(tostring(99) == "99", "the global tostring is visible again")
+end)
+
+tests:it("global read from a nested function", function()
+    load("global g_t23 = 21")()
+    local f = load("global g_t23 local function get() return g_t23 end return get()")
+    assert(f() == 21)
 end)
 
 tests:finish()

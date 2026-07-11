@@ -1,0 +1,470 @@
+--[[
+  Coverage for the corners of the debug library that h1/db.lus, h1/events.lus,
+  and h1/closure.lus leave open. The focus here is the introspection surface
+  that those files touch only lightly: debug.getmetatable and setmetatable on
+  non-table values and around __metatable protection, debug.getregistry,
+  debug.getuservalue and setuservalue on stdlib userdata, the hook event
+  arguments and masks delivered by sethook and reflected by gethook, the field
+  completeness of getinfo, the documented return values of getlocal and
+  setlocal including negative vararg indices, upvalueid and upvaluejoin
+  observable identity, and traceback with message and level arguments.
+
+  Every test either exercises a value the reference Lua 5.5 semantics pin down
+  or a Lus stdlib contract from lus-spec/stdlib/debug. The io file handle is
+  used as a userdata that carries zero user values, which is the reachable
+  pure-Lus fixture for the getuservalue and setuservalue failure paths.
+]]
+
+global print, require, assert, type, debug, table, math, string, tostring,
+    pairs, ipairs, error, next, load, collectgarbage, coroutine, _G, select,
+    getmetatable, setmetatable, pledge, io, myglobalfn
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("debuglib")
+
+-- The main chunk describes itself as "main" only at file top level, so the
+-- observation is captured here rather than inside a nested test closure.
+local main_chunk_what = debug.getinfo(1, "S").what
+
+-- A userdata carrying zero user values, reachable from pure Lus.
+local function open_fixture()
+    return io.open("./lus-tests/framework.lus", "r")
+end
+
+-- ---- debug.getmetatable ----
+
+tests:it("getmetatable returns nil for a table with no metatable", function()
+    tests:assert_nil(debug.getmetatable({}))
+end)
+
+-- The function accepts any type without raising and reports no metatable when
+-- the value carries none.
+tests:each("getmetatable accepts a bare primitive without raising", {
+    {true}, {false}, {nil}, {42}, {"" .. math.pi},
+}, function(v)
+    -- The call must not raise. Booleans and nil have no default metatable.
+    local ok = catch debug.getmetatable(v)
+    tests:assert_true(ok, "getmetatable must accept any argument type")
+end)
+
+tests:it("getmetatable bypasses __metatable protection", function()
+    local t = setmetatable({}, {__metatable = "locked"})
+    -- The public accessor is deflected by the __metatable field.
+    tests:assert_equal(getmetatable(t), "locked")
+    -- The debug accessor sees the real metatable table instead.
+    local real = debug.getmetatable(t)
+    tests:assert_type(real, "table")
+    tests:assert_equal(real.__metatable, "locked")
+end)
+
+tests:it("all strings share one metatable whose __index is the string library", function()
+    local mt = debug.getmetatable("a")
+    tests:assert_type(mt, "table")
+    tests:assert_true(mt == debug.getmetatable("b"), "string metatable is shared")
+    tests:assert_true(mt.__index == string, "string metatable __index is the string library")
+end)
+
+tests:it("getmetatable observes a metatable installed on a primitive by setmetatable", function()
+    local mt = {__name = "num"}
+    debug.setmetatable(10, mt)
+    -- Numbers share a single metatable across integers and floats.
+    tests:assert_true(debug.getmetatable(7) == mt, "another integer sees the shared metatable")
+    tests:assert_true(debug.getmetatable(3.5) == mt, "a float sees the same shared metatable")
+    debug.setmetatable(10, nil)
+    tests:assert_nil(debug.getmetatable(7), "number metatable cleared")
+    tests:assert_nil(debug.getmetatable(3.5))
+end)
+
+-- ---- debug.setmetatable ----
+
+tests:it("setmetatable returns the value it was given (table)", function()
+    local t = {}
+    local mt = {}
+    tests:assert_true(debug.setmetatable(t, mt) == t, "returns the same table")
+    tests:assert_true(getmetatable(t) == mt)
+end)
+
+tests:it("setmetatable returns the value it was given (number)", function()
+    tests:assert_equal(debug.setmetatable(10, {}), 10)
+    debug.setmetatable(10, nil)
+end)
+
+tests:it("setmetatable bypasses __metatable protection on a locked table", function()
+    local t = setmetatable({}, {__metatable = "locked"})
+    -- The public setmetatable refuses a protected metatable.
+    tests:assert_throws(function() setmetatable(t, {}) end, "protected")
+    -- The debug variant replaces it and returns the table.
+    local mt2 = {tag = "replaced"}
+    tests:assert_true(debug.setmetatable(t, mt2) == t)
+    tests:assert_true(debug.getmetatable(t) == mt2)
+end)
+
+tests:it("setmetatable accepts a boolean value and clears it again", function()
+    local mt = {__name = "boolmt"}
+    debug.setmetatable(true, mt)
+    -- Both boolean values share the boolean metatable.
+    tests:assert_true(debug.getmetatable(false) == mt)
+    debug.setmetatable(true, nil)
+    tests:assert_nil(debug.getmetatable(false))
+end)
+
+tests:it("setmetatable accepts nil as the value and clears it again", function()
+    local mt = {__name = "nilmt"}
+    debug.setmetatable(nil, mt)
+    tests:assert_true(debug.getmetatable(nil) == mt)
+    debug.setmetatable(nil, nil)
+    tests:assert_nil(debug.getmetatable(nil))
+end)
+
+tests:it("setmetatable with nil clears a table metatable", function()
+    local t = setmetatable({}, {})
+    tests:assert_not_nil(getmetatable(t))
+    tests:assert_true(debug.setmetatable(t, nil) == t)
+    tests:assert_nil(getmetatable(t))
+end)
+
+tests:it("setmetatable raises when the second argument is neither table nor nil", function()
+    tests:assert_throws(function() debug.setmetatable({}, 42) end)
+    tests:assert_throws(function() debug.setmetatable({}, "x") end)
+end)
+
+-- ---- debug.getregistry ----
+
+tests:it("getregistry returns a table", function()
+    tests:assert_type(debug.getregistry(), "table")
+end)
+
+tests:it("getregistry identity is stable across calls", function()
+    tests:assert_true(debug.getregistry() == debug.getregistry())
+end)
+
+tests:it("a write into the registry persists to a fresh getregistry call", function()
+    local key = "debuglib_probe_key"
+    local reg = debug.getregistry()
+    tests:assert_nil(reg[key], "the namespaced probe key starts absent")
+    reg[key] = {marker = 123}
+    local reg2 = debug.getregistry()
+    tests:assert_equal(reg2[key].marker, 123)
+    -- Clean up so the shared registry is left as it was found.
+    reg[key] = nil
+    tests:assert_nil(debug.getregistry()[key])
+end)
+
+-- ---- debug.getuservalue ----
+
+tests:it("getuservalue on a zero-slot userdata reports no value", function()
+    local f = open_fixture()
+    local v, present = debug.getuservalue(f, 1)
+    f:close()
+    -- An io file allocates no user values, so slot 1 is absent.
+    tests:assert_nil(v)
+    tests:assert_true(present == nil or present == false, "no present flag for an absent slot")
+end)
+
+tests:each("getuservalue returns fail for a non-userdata first argument", {
+    {42}, {"hello"}, {true}, {{}},
+}, function(v)
+    -- The call reports failure rather than raising.
+    local ok, res = catch debug.getuservalue(v, 1)
+    tests:assert_true(ok, "non-userdata argument does not raise")
+    tests:assert_nil(res)
+end)
+
+tests:each("getuservalue returns fail for an out-of-range slot index", {
+    {0}, {-1}, {100},
+}, function(n)
+    local f = open_fixture()
+    local v = debug.getuservalue(f, n)
+    f:close()
+    tests:assert_nil(v)
+end)
+
+tests:it("getuservalue defaults the slot index to 1", function()
+    local f = open_fixture()
+    -- Omitting n behaves like passing 1, which is absent for an io file.
+    local a = debug.getuservalue(f)
+    local b = debug.getuservalue(f, 1)
+    f:close()
+    tests:assert_nil(a)
+    tests:assert_nil(b)
+end)
+
+-- ---- debug.setuservalue ----
+
+tests:it("setuservalue returns fail when the slot is out of range", function()
+    local f = open_fixture()
+    -- The io file has zero slots, so writing slot 1 fails.
+    local res = debug.setuservalue(f, "x", 1)
+    f:close()
+    tests:assert_nil(res)
+end)
+
+tests:it("setuservalue raises when the first argument is not full userdata", function()
+    tests:assert_throws(function() debug.setuservalue({}, 1) end)
+    tests:assert_throws(function() debug.setuservalue(42, 1) end)
+end)
+
+tests:it("setuservalue raises when the value argument is missing", function()
+    local f = open_fixture()
+    -- The value is mandatory, so calling with only the userdata raises.
+    local ok = catch debug.setuservalue(f)
+    f:close()
+    tests:assert_false(ok, "a missing value argument raises")
+end)
+
+-- ---- debug.sethook / gethook ----
+
+tests:it("gethook round-trips the installed function, mask, and count", function()
+    local function h() end
+    debug.sethook(h, "cr")
+    local fn, mask, count = debug.gethook()
+    debug.sethook()
+    tests:assert_true(fn == h, "gethook returns the installed function identity")
+    tests:assert_true(string.find(mask, "c") ~= nil, "mask keeps the call flag")
+    tests:assert_true(string.find(mask, "r") ~= nil, "mask keeps the return flag")
+    tests:assert_equal(count, 0, "a non-count hook reports count 0")
+end)
+
+tests:it("a bare sethook clears the hook and gethook then reports nil", function()
+    debug.sethook(function() end, "l")
+    tests:assert_not_nil(debug.gethook())
+    debug.sethook()
+    tests:assert_nil(debug.gethook())
+end)
+
+tests:it("a return-mask hook fires and reports the return event", function()
+    local saw = {}
+    debug.sethook(function(ev) saw[ev] = true end, "r")
+    local function inner() return 1 end
+    inner()
+    debug.sethook()
+    tests:assert_true(saw["return"] == true, "the return hook fired")
+end)
+
+tests:it("a call-and-return mask delivers both event kinds", function()
+    local saw = {}
+    debug.sethook(function(ev) saw[ev] = true end, "cr")
+    local function inner() return 1 end
+    inner()
+    debug.sethook()
+    tests:assert_true(saw.call == true, "saw a call event")
+    tests:assert_true(saw["return"] == true, "saw a return event")
+end)
+
+tests:it("a line-mask hook receives the current line number as its second argument", function()
+    local kind = nil
+    debug.sethook(function(ev, ln)
+        if ev == "line" and kind == nil then
+            kind = type(ln)
+        end
+    end, "l")
+    local a = 1
+    local b = a + 1
+    debug.sethook()
+    tests:assert_equal(kind, "number", "line hooks pass an integer line number")
+end)
+
+tests:it("a count hook reports the count and the count event", function()
+    local n = 0
+    local sawcount = false
+    debug.sethook(function(ev) n = n + 1 if ev == "count" then sawcount = true end end, "", 1)
+    for i = 1, 50 do end
+    local _, mask, count = debug.gethook()
+    debug.sethook()
+    tests:assert_equal(count, 1, "gethook reports the installed count")
+    tests:assert_true(n > 0, "the count hook fired")
+    tests:assert_true(sawcount, "the hook received a count event")
+end)
+
+tests:it("a hook installed on a coroutine fires during resume and leaves the main thread bare", function()
+    local events = {}
+    local co = coroutine.create(function() local y = 1 return y end)
+    debug.sethook(co, function(ev) events[#events + 1] = ev end, "c")
+    -- The main thread still has no hook of its own.
+    tests:assert_nil(debug.gethook(), "the main thread hook stays nil")
+    coroutine.resume(co)
+    tests:assert_true(#events > 0, "the coroutine hook fired during resume")
+    -- The coroutine reports its own hook and mask.
+    local fn, mask = debug.gethook(co)
+    tests:assert_type(fn, "function")
+    tests:assert_true(string.find(mask, "c") ~= nil)
+end)
+
+-- ---- debug.getinfo ----
+
+tests:it("getinfo fills every documented field for a Lua function", function()
+    local function subject(a, b) return a + b end
+    local info = debug.getinfo(subject)
+    for _, field in ipairs({
+        "source", "short_src", "currentline", "what", "nups", "nparams",
+        "isvararg", "func", "linedefined", "lastlinedefined",
+    }) do
+        tests:assert_not_nil(info[field], "getinfo fills the '" .. field .. "' field")
+    end
+    tests:assert_equal(info.what, "Lua")
+    tests:assert_equal(info.nparams, 2)
+    tests:assert_equal(info.isvararg, false)
+    tests:assert_true(info.func == subject, "the func field is the subject itself")
+end)
+
+tests:it("getinfo reports the main chunk as what == 'main'", function()
+    tests:assert_equal(main_chunk_what, "main")
+    -- A nested Lua function at this call site is instead what == 'Lua'.
+    tests:assert_equal(debug.getinfo(1, "S").what, "Lua")
+end)
+
+tests:it("getinfo names a global call site as namewhat 'global'", function()
+    -- A bare global call site is described by namewhat 'global'.
+    function myglobalfn() return debug.getinfo(1, "n").namewhat end
+    tests:assert_equal(myglobalfn(), "global")
+    myglobalfn = nil
+end)
+
+tests:it("getinfo currentline tracks the executing line of a running level", function()
+    local first = debug.getinfo(1, "l").currentline
+    local second = debug.getinfo(1, "l").currentline
+    -- The two probes are on adjacent source lines.
+    tests:assert_equal(second, first + 1)
+end)
+
+tests:it("getinfo with L returns an activelines table keyed by line number", function()
+    local function subject()
+        return 1
+    end
+    local info = debug.getinfo(subject, "L")
+    tests:assert_type(info.activelines, "table")
+    -- The definition body spans real lines, so at least one is active.
+    local any = false
+    for _ in pairs(info.activelines) do any = true break end
+    tests:assert_true(any, "the activelines table has at least one entry")
+end)
+
+-- ---- debug.getlocal / setlocal ----
+
+tests:it("setlocal returns the name of the variable it wrote", function()
+    local co = coroutine.create(function()
+        local a = 1
+        local b = 2
+        coroutine.yield()
+    end)
+    coroutine.resume(co)
+    tests:assert_equal(debug.setlocal(co, 1, 1, 10), "a")
+    tests:assert_equal(debug.setlocal(co, 1, 2, 20), "b")
+    local _, v = debug.getlocal(co, 1, 1)
+    tests:assert_equal(v, 10)
+end)
+
+tests:each("out-of-range positive local indices return nil", {
+    {50}, {99}, {1000},
+}, function(idx)
+    local co = coroutine.create(function()
+        local a = 1
+        coroutine.yield()
+    end)
+    coroutine.resume(co)
+    tests:assert_nil(debug.getlocal(co, 1, idx))
+    tests:assert_nil(debug.setlocal(co, 1, idx, 0))
+end)
+
+tests:it("level-based setlocal in the running thread is observed by the code", function()
+    local x = 5
+    -- Rewrite this frame's own first local, then read it back normally.
+    local name = debug.setlocal(1, 1, 42)
+    tests:assert_equal(name, "x")
+    tests:assert_equal(x, 42)
+end)
+
+tests:it("a negative local index writes and reads a vararg slot", function()
+    local function foo(...)
+        local before = select(1, ...)
+        tests:assert_equal(before, 7)
+        local name = debug.setlocal(1, -1, 99)
+        tests:assert_equal(name, "(vararg)")
+        local rn, rv = debug.getlocal(1, -1)
+        tests:assert_equal(rn, "(vararg)")
+        tests:assert_equal(rv, 99)
+    end
+    foo(7, 8, 9)
+end)
+
+tests:it("type-changing local writes round-trip through getlocal", function()
+    local function bar()
+        local x = 5
+        debug.setlocal(1, 1, nil)
+        local _, after_nil = debug.getlocal(1, 1)
+        tests:assert_nil(after_nil)
+        debug.setlocal(1, 1, {tag = "t"})
+        local _, after_tab = debug.getlocal(1, 1)
+        tests:assert_type(after_tab, "table")
+        tests:assert_equal(after_tab.tag, "t")
+    end
+    bar()
+end)
+
+-- ---- debug.upvalueid / upvaluejoin ----
+
+tests:it("upvalueid returns a userdata identity distinct per upvalue", function()
+    local a, b = 1, 2
+    local function f() return a + b end
+    local ida = debug.upvalueid(f, 1)
+    local idb = debug.upvalueid(f, 2)
+    tests:assert_type(ida, "userdata")
+    tests:assert_true(ida ~= idb, "distinct upvalues carry distinct identities")
+    -- Repeated queries return the same identity for the same slot.
+    tests:assert_true(debug.upvalueid(f, 1) == ida)
+end)
+
+tests:it("closures sharing an upvalue report the same upvalueid", function()
+    local shared = 10
+    local function f() return shared end
+    local function g() shared = shared + 1 return shared end
+    tests:assert_true(debug.upvalueid(f, 1) == debug.upvalueid(g, 1),
+        "closures over one variable share an upvalue identity")
+end)
+
+tests:it("upvaluejoin makes one closure observe another closure's upvalue", function()
+    local x, y = 1, 2
+    local function f1() return x end
+    local function f2() return y end
+    tests:assert_equal(f1(), 1)
+    -- After joining, f1's first upvalue aliases f2's first upvalue.
+    debug.upvaluejoin(f1, 1, f2, 1)
+    y = 99
+    tests:assert_equal(f1(), 99, "f1 now reads through f2's upvalue")
+    tests:assert_true(debug.upvalueid(f1, 1) == debug.upvalueid(f2, 1),
+        "the joined upvalues share an identity")
+end)
+
+-- ---- debug.traceback ----
+
+tests:it("traceback prepends the message and includes the traceback header", function()
+    local tb = debug.traceback("my marker message")
+    tests:assert_true(string.find(tb, "^my marker message\n") ~= nil,
+        "the message leads the traceback")
+    tests:assert_contains(tb, "stack traceback")
+end)
+
+tests:it("traceback with a deeper level starts higher up the stack", function()
+    local function deepest()
+        -- Level 2 skips this frame and reports the caller instead.
+        return debug.traceback("marker", 2)
+    end
+    local function caller()
+        return deepest()
+    end
+    local tb = caller()
+    tests:assert_true(string.find(tb, "^marker\n") ~= nil)
+    -- The 'deepest' frame is skipped by the level-2 request.
+    tests:assert_true(string.find(tb, "deepest") == nil,
+        "level 2 omits the frame that called traceback")
+end)
+
+tests:it("traceback returns a non-string message argument unchanged", function()
+    local marker = {}
+    tests:assert_true(debug.traceback(marker) == marker)
+    tests:assert_true(debug.traceback(marker, 3) == marker)
+end)
+
+tests:finish()

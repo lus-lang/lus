@@ -113,12 +113,26 @@ end)
 -- ==== NaN handling for math.max/min ====
 tests:it("math.max/min NaN", function()
     local nan = 0/0
-    -- NaN comparisons are false, so behavior depends on order
-    local r1 = math.max(nan, 1)
-    local r2 = math.max(1, nan)
-    -- Both should produce consistent results with the C function
-    assert(type(r1) == "number")
-    assert(type(r2) == "number")
+    local smax = math.max
+    local smin = math.min
+    local function isnan(x) return x ~= x end
+    local function check(fast, slow, label)
+        assert(isnan(fast) == isnan(slow),
+            label .. ": fast path NaN-ness should match the C function")
+        if not isnan(slow) then
+            assert(fast == slow, label .. ": values should match")
+        end
+    end
+    -- the direct calls take the fast path, the local aliases force the
+    -- C function, and both must agree for every argument order
+    local f_max_a = math.max(nan, 1)
+    local f_max_b = math.max(1, nan)
+    local f_min_a = math.min(nan, 1)
+    local f_min_b = math.min(1, nan)
+    check(f_max_a, smax(nan, 1), "max(nan, 1)")
+    check(f_max_b, smax(1, nan), "max(1, nan)")
+    check(f_min_a, smin(nan, 1), "min(nan, 1)")
+    check(f_min_b, smin(1, nan), "min(1, nan)")
 end)
 
 -- ==== Environment tainting: type ====
@@ -444,7 +458,8 @@ tests:it("string.byte correctness", function()
     assert(string.byte("hello", 5) == string.byte("o", 1))
     assert(string.byte("hello", -1) == string.byte("o", 1))  -- negative index
     assert(string.byte("hello", 6) == nil)  -- out of bounds
-    assert(string.byte("hello", 0) == string.byte("h", 1))  -- 0 maps to 1 via posrelatI
+    assert(string.byte("hello", 0) == nil)  -- the default end j = i gives an empty interval
+    assert(string.byte("hello", -100) == nil)  -- start below -#s is empty as well
     assert(string.byte("a", 1) == 97)
 end)
 
@@ -633,9 +648,11 @@ end)
 
 -- ==== table.stdev 2-arg (sample) falls back ====
 tests:it("table.stdev sample fallback", function()
-    -- 2-arg variant should NOT be fastcalled (nargs mismatch)
+    -- 2-arg variant is not fastcalled (nargs mismatch) and must compute
+    -- the SAMPLE stdev, not the population stdev (2.0) of the same data
     local r = table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, true)
-    assert(type(r) == "number")
+    assert(math.abs(r - 2.1380899352994) < 1e-9,
+        "sample stdev should be ~2.1381, got " .. tostring(r))
 end)
 
 -- ==== Correctness: table.transpose() ====

@@ -1205,9 +1205,13 @@ static int time_tzdata_version(lua_State *L) {
 ** =======================================================
 */
 
-/* Format the wall-clock seconds (already offset-adjusted) with strftime. */
+/* Format the wall-clock seconds (already offset-adjusted) with strftime. The
+** value's own UTC offset seconds are rendered for %z by hand rather than left
+** to strftime. strftime derives %z from tm_gmtoff, which is zero on the struct
+** built here, and BSD and macOS libc then substitute the host machine's local
+** offset, so the output would otherwise depend on where the program runs. */
 static int format_wall(lua_State *L, lua_Integer wall_sec, int nsec,
-                       const char *fmt) {
+                       const char *fmt, int offset) {
   lua_Integer days =
       wall_sec >= 0 ? wall_sec / 86400 : (wall_sec - 86399) / 86400;
   lua_Integer rem = wall_sec - days * 86400;
@@ -1224,12 +1228,40 @@ static int format_wall(lua_State *L, lua_Integer wall_sec, int nsec,
   tm.tm_sec = (int)(rem % 60);
   tm.tm_wday = weekday_from_days(days) % 7; /* strftime wants 0 = Sunday */
   tm.tm_yday = (int)(days - days_from_civil(y, 1, 1));
+  /* Rewrite the format, replacing every %z with the offset as signed HHMM. A
+  ** %% pair is copied as a unit so an escaped %%z stays a literal "%z" and is
+  ** never mistaken for the offset directive. Every other specifier is left for
+  ** strftime, so %Y, %m, %d, %H, %M, %S and the rest are unchanged. */
+  luaL_Buffer b;
+  luaL_buffinit(L, &b);
+  for (const char *s = fmt; *s != '\0';) {
+    if (s[0] == '%' && s[1] == 'z') {
+      int a = offset < 0 ? -offset : offset;
+      char off[16];
+      int m = snprintf(off, sizeof(off), "%c%02d%02d", offset < 0 ? '-' : '+',
+                       a / 3600, (a % 3600) / 60);
+      luaL_addlstring(&b, off, (size_t)m);
+      s += 2;
+    }
+    else if (s[0] == '%' && s[1] != '\0') {
+      luaL_addchar(&b, s[0]);
+      luaL_addchar(&b, s[1]);
+      s += 2;
+    }
+    else {
+      luaL_addchar(&b, *s);
+      s++;
+    }
+  }
+  luaL_pushresult(&b);
+  const char *rfmt = lua_tostring(L, -1);
   char buf[256];
-  size_t n = strftime(buf, sizeof(buf), fmt, &tm);
-  if (n == 0 && fmt[0] != '\0') {
+  size_t n = strftime(buf, sizeof(buf), rfmt, &tm);
+  if (n == 0 && rfmt[0] != '\0') {
     /* Output did not fit; report rather than silently truncate. */
     return luaL_error(L, "formatted time exceeds buffer");
   }
+  lua_pop(L, 1); /* the rewritten format string */
   (void)nsec;
   lua_pushlstring(L, buf, n);
   return 1;
@@ -1264,13 +1296,13 @@ static int inst_format(lua_State *L) {
   l_instant *i = check_instant(L, 1);
   const char *fmt = luaL_optstring(L, 2, "%Y-%m-%dT%H:%M:%SZ");
   inst_reject_mono(L, i);
-  return format_wall(L, i->sec, i->nsec, fmt);
+  return format_wall(L, i->sec, i->nsec, fmt, 0);
 }
 
 static int inst_iso(lua_State *L) {
   l_instant *i = check_instant(L, 1);
   inst_reject_mono(L, i);
-  return format_wall(L, i->sec, i->nsec, "%Y-%m-%dT%H:%M:%SZ");
+  return format_wall(L, i->sec, i->nsec, "%Y-%m-%dT%H:%M:%SZ", 0);
 }
 
 static int inst_in(lua_State *L) {
@@ -1347,7 +1379,7 @@ static int inst_meta_tostring(lua_State *L) {
     lua_pushfstring(L, "time.instant(monotonic %I s + %d ns)", i->sec, i->nsec);
     return 1;
   }
-  return format_wall(L, i->sec, i->nsec, "%Y-%m-%dT%H:%M:%SZ");
+  return format_wall(L, i->sec, i->nsec, "%Y-%m-%dT%H:%M:%SZ", 0);
 }
 
 /*
@@ -1483,12 +1515,13 @@ static int zoned_instant(lua_State *L) {
 static int zoned_format(lua_State *L) {
   l_zoned *z = check_zoned(L, 1);
   const char *fmt = luaL_optstring(L, 2, "%Y-%m-%dT%H:%M:%S");
-  return format_wall(L, z->sec + z->offset, z->nsec, fmt);
+  return format_wall(L, z->sec + z->offset, z->nsec, fmt, z->offset);
 }
 
 static int zoned_iso(lua_State *L) {
   l_zoned *z = check_zoned(L, 1);
-  format_wall(L, z->sec + z->offset, z->nsec, "%Y-%m-%dT%H:%M:%S"); /* pushes */
+  format_wall(L, z->sec + z->offset, z->nsec, "%Y-%m-%dT%H:%M:%S",
+              z->offset); /* pushes */
   int off = z->offset;
   if (off == 0) {
     lua_pushliteral(L, "Z");

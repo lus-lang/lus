@@ -1,0 +1,506 @@
+--[[
+    JSON serializer and parser semantics beyond plain syntax.
+
+    The existing json.lus suite covers value equality in both directions and a
+    large RFC 8259 corpus. This file pins the semantic contracts that value
+    equality alone cannot catch: the integer versus float subtype that survives
+    (or is deliberately lost) through tojson and fromjson, how the serializer
+    treats sequences with holes and tables that mix array and hash parts, that
+    shared non-circular references serialize by value more than once while true
+    cycles raise, the filter callback protocol including the key it receives and
+    its recursion into nested tables, the __json metamethod on nested values,
+    how Lus vectors and enum values render, the parser depth limit, integer and
+    float boundary values, and the exact bytes produced for unicode escapes
+    including embedded NUL and lone surrogates.
+]]
+
+global tojson, fromjson, math, string, tostring, type, setmetatable, load, vector, coroutine, ipairs, table, assert, require, pledge, error, tonumber
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("json2")
+
+-- Build a fresh enum root through the compiler, since enums are declared
+-- statically. The expression form takes members with no name.
+local function make_enum(members)
+    return assert(load("return enum " .. members .. " end"))()
+end
+
+-- ============================================================
+-- Number subtype preservation, fromjson direction
+-- ============================================================
+
+tests:describe("fromjson number subtype")
+
+-- A parser that returned every number as a float would pass all pure value
+-- comparisons, so we pin math.type on the parsed result directly.
+tests:each("fromjson keeps the integer or float subtype", {
+    {"1", "integer"},
+    {"100", "integer"},
+    {"-7", "integer"},
+    {"0", "integer"},
+    {"-0", "integer"},
+    {"1.0", "float"},
+    {"3.14", "float"},
+    {"-0.0", "float"},
+    {"1e2", "float"},
+    {"1E2", "float"},
+    {"1.5e-3", "float"},
+}, function(json, expected_type)
+    local v = fromjson(json)
+    tests:assert_equal(math.type(v), expected_type,
+        "fromjson(" .. json .. ") should have math.type " .. expected_type)
+end)
+
+tests:it("fromjson of an integer literal equals the integer and not a float only by value", function()
+    local v = fromjson("42")
+    tests:assert_equal(v, 42)
+    tests:assert_equal(math.type(v), "integer")
+end)
+
+-- ============================================================
+-- Number subtype, tojson direction
+-- ============================================================
+
+tests:describe("tojson number subtype")
+
+-- An integer prints with no fractional part, and a whole-valued float collapses
+-- to the same digits (its float subtype is not preserved in the text).
+tests:each("tojson renders numbers by subtype", {
+    {1, "1"},
+    {-123, "-123"},
+    {0, "0"},
+    {1.5, "1.5"},
+    {-2.5, "-2.5"},
+    {1.0, "1"},
+    {2.0, "2"},
+    {100.0, "100"},
+}, function(value, expected)
+    tests:assert_equal(tojson(value), expected,
+        "tojson of " .. tostring(value) .. " should be " .. expected)
+end)
+
+tests:it("tojson of 0.1 keeps enough digits to round-trip", function()
+    local s = tojson(0.1)
+    -- The exact textual form is the shortest %.17g rendering.
+    tests:assert_equal(s, "0.10000000000000001")
+    tests:assert_equal(fromjson(s), 0.1)
+end)
+
+-- ============================================================
+-- Subtype round-trip semantics
+-- ============================================================
+
+tests:describe("subtype round-trip")
+
+tests:it("a whole float loses its float subtype after a round-trip", function()
+    -- tojson(1.0) is "1", which fromjson reads back as an integer.
+    tests:assert_equal(tojson(1.0), "1")
+    tests:assert_equal(math.type(fromjson(tojson(1.0))), "integer")
+end)
+
+tests:it("an integer keeps its subtype through a round-trip", function()
+    tests:assert_equal(math.type(fromjson(tojson(7))), "integer")
+end)
+
+tests:it("a non-whole float keeps its subtype and value through a round-trip", function()
+    tests:assert_equal(math.type(fromjson(tojson(1.5))), "float")
+    tests:assert_equal(fromjson(tojson(1.5)), 1.5)
+end)
+
+tests:it("negative zero integer and negative zero float are distinguishable", function()
+    local zi = fromjson("-0")
+    local zf = fromjson("-0.0")
+    tests:assert_equal(math.type(zi), "integer")
+    tests:assert_equal(math.type(zf), "float")
+    -- Dividing by an integer zero yields positive infinity, while the float
+    -- carries its sign so 1 over negative zero float is negative infinity.
+    tests:assert_equal(1 / zi, math.huge)
+    tests:assert_equal(1 / zf, -math.huge)
+end)
+
+-- ============================================================
+-- Integer and float boundaries
+-- ============================================================
+
+tests:describe("numeric boundaries")
+
+tests:it("math.maxinteger round-trips exactly", function()
+    tests:assert_equal(tojson(math.maxinteger), "9223372036854775807")
+    tests:assert_equal(fromjson("9223372036854775807"), math.maxinteger)
+    tests:assert_equal(math.type(fromjson("9223372036854775807")), "integer")
+end)
+
+tests:it("math.mininteger round-trips exactly", function()
+    tests:assert_equal(tojson(math.mininteger), "-9223372036854775808")
+    tests:assert_equal(fromjson("-9223372036854775808"), math.mininteger)
+end)
+
+tests:it("2^53+1 survives exactly as an integer", function()
+    local n = 9007199254740993
+    tests:assert_equal(fromjson(tojson(n)), n)
+    tests:assert_equal(math.type(fromjson(tojson(n))), "integer")
+end)
+
+tests:each("out-of-range numbers raise with a range message", {
+    {"9223372036854775808"},   -- 2^63, one past the max integer
+    {"-9223372036854775809"},  -- one below the min integer
+    {"1e400"},                 -- overflows a double to infinity
+    {"-1e400"},
+}, function(json)
+    local ok, err = catch fromjson(json)
+    tests:assert_false(ok, "should reject " .. json)
+    tests:assert_contains(tostring(err), "number out of range")
+end)
+
+-- ============================================================
+-- Holes and mixed keys through tojson
+-- ============================================================
+
+tests:describe("holes and mixed keys")
+
+-- A hole makes the key set non-contiguous, so the table serializes as an
+-- object, and because its remaining keys are integers they are all dropped,
+-- leaving an empty object. A pure trailing nil leaves a contiguous 1..n range
+-- and stays an array.
+tests:each("tojson representation for holes and mixed keys", {
+    {{1, nil, 3}, "{}"},
+    {{[1] = 1, [2] = 2, [4] = 4}, "{}"},
+    {{1, 2, nil}, "[1,2]"},
+    {{[2] = "a"}, "{}"},
+    {{[0] = "z"}, "{}"},
+    {{[-1] = "n"}, "{}"},
+    {{[1.5] = "x"}, "{}"},
+    {{[true] = "x"}, "{}"},
+    {{}, "[]"},
+}, function(input, expected)
+    tests:assert_equal(tojson(input), expected)
+end)
+
+tests:it("a table mixing an array part and a string key keeps only the string keys", function()
+    -- The integer indices are dropped because the presence of a string key
+    -- forces object form, in which non-string keys are skipped.
+    tests:assert_equal(tojson({1, 2, x = 3}), '{"x":3}')
+end)
+
+-- ============================================================
+-- Shared references versus true cycles
+-- ============================================================
+
+tests:describe("shared references and cycles")
+
+tests:it("a shared child in an array serializes by value twice", function()
+    local child = {x = 1}
+    tests:assert_equal(tojson({child, child}), '[{"x":1},{"x":1}]')
+end)
+
+tests:it("a shared child under two object keys serializes twice", function()
+    local child = {v = 9}
+    local result = fromjson(tojson({a = child, b = child}))
+    tests:assert_equal(result.a.v, 9)
+    tests:assert_equal(result.b.v, 9)
+    -- The two decoded copies are independent tables, not the same reference.
+    result.a.v = 100
+    tests:assert_equal(result.b.v, 9)
+end)
+
+tests:it("a direct self-reference raises a circular error", function()
+    local a = {}
+    a.self = a
+    local ok, err = catch tojson(a)
+    tests:assert_false(ok, "self reference must raise")
+    tests:assert_contains(tostring(err), "circular")
+end)
+
+tests:it("an indirect cycle raises a circular error", function()
+    local a = {}
+    a.b = {}
+    a.b.back = a
+    local ok, err = catch tojson(a)
+    tests:assert_false(ok, "indirect cycle must raise")
+    tests:assert_contains(tostring(err), "circular")
+end)
+
+-- ============================================================
+-- Filter callback protocol
+-- ============================================================
+
+tests:describe("filter protocol")
+
+tests:it("the filter is invoked for the root with a nil key", function()
+    local first_key = "unset"
+    local seen = false
+    tojson({a = 1}, function(k, v)
+        if not seen then
+            first_key = k
+            seen = true
+        end
+        return v
+    end)
+    tests:assert_true(seen, "filter must be called at least once")
+    tests:assert_nil(first_key, "the first filter call is the root, keyed by nil")
+end)
+
+tests:it("array elements are filtered with integer keys", function()
+    local keys = {}
+    tojson({10, 20, 30}, function(k, v)
+        if math.type(k) == "integer" then
+            keys[#keys + 1] = k
+        end
+        return v
+    end)
+    tests:assert_equal(#keys, 3, "each array element should be filtered by index")
+    tests:assert_equal(keys[1], 1)
+    tests:assert_equal(keys[3], 3)
+end)
+
+tests:it("object entries are filtered with their string key", function()
+    local seen_key = nil
+    tojson({name = "x"}, function(k, v)
+        if type(k) == "string" then
+            seen_key = k
+        end
+        return v
+    end)
+    tests:assert_equal(seen_key, "name")
+end)
+
+tests:it("returning nil from the filter omits the entry", function()
+    local result = tojson({a = 1, b = 2, c = 3}, function(k, v)
+        if k == "b" then return nil end
+        return v
+    end)
+    tests:assert_false(result:find('"b"'), "b should be omitted")
+    tests:assert_true(result:find('"a"') ~= nil, "a should remain")
+end)
+
+tests:it("a filter that always returns nil collapses the whole value to null", function()
+    tests:assert_equal(tojson({a = 1, b = 2}, function() return nil end), "null")
+end)
+
+tests:it("the filter recurses into nested tables", function()
+    local result = tojson({a = "x", b = {c = "y"}}, function(k, v)
+        if type(v) == "string" then return string.upper(v) end
+        return v
+    end)
+    tests:assert_true(result:find('"X"') ~= nil, "top-level string should be transformed")
+    tests:assert_true(result:find('"Y"') ~= nil, "nested string should be transformed")
+end)
+
+tests:it("a filter may replace a scalar with a table that is then serialized", function()
+    local result = tojson({x = 1}, function(k, v)
+        if v == 1 then return {wrapped = true} end
+        return v
+    end)
+    tests:assert_equal(result, '{"x":{"wrapped":true}}')
+end)
+
+tests:it("an error raised inside the filter propagates out of tojson", function()
+    local ok, err = catch tojson({a = 1}, function() error("filter boom") end)
+    tests:assert_false(ok, "filter error must propagate")
+    tests:assert_contains(tostring(err), "filter boom")
+end)
+
+tests:it("yielding across the serializer from a filter raises a boundary error", function()
+    local co = coroutine.create(function()
+        return tojson({1, 2}, function(k, v)
+            coroutine.yield(v)
+            return v
+        end)
+    end)
+    local ok, err = coroutine.resume(co)
+    tests:assert_false(ok, "yield across the C serializer must fail")
+    tests:assert_contains(tostring(err), "yield")
+end)
+
+-- ============================================================
+-- __json metamethod
+-- ============================================================
+
+tests:describe("__json metamethod")
+
+tests:it("__json is honored on a nested value, not only the root", function()
+    local mt = {__json = function(self) return {id = self.n} end}
+    local inner = setmetatable({n = 7, hidden = "x"}, mt)
+    tests:assert_equal(tojson({wrap = inner}), '{"wrap":{"id":7}}')
+end)
+
+tests:it("__json returning a value whose metatable also has __json chains", function()
+    local leaf = {__json = function(self) return 99 end}
+    local outer = {__json = function(self) return setmetatable({}, leaf) end}
+    tests:assert_equal(tojson(setmetatable({}, outer)), "99")
+end)
+
+tests:it("__json returning nil serializes as null", function()
+    tests:assert_equal(tojson(setmetatable({}, {__json = function() return nil end})), "null")
+end)
+
+tests:it("an error raised inside __json propagates out of tojson", function()
+    local ok, err = catch tojson(setmetatable({}, {__json = function() error("mjson boom") end}))
+    tests:assert_false(ok, "__json error must propagate")
+    tests:assert_contains(tostring(err), "mjson boom")
+end)
+
+-- ============================================================
+-- Lus-specific value types
+-- ============================================================
+
+tests:describe("lus value types")
+
+tests:it("a bare vector serializes as null", function()
+    tests:assert_equal(tojson(vector.create(4)), "null")
+end)
+
+tests:it("a vector inside an array becomes null", function()
+    tests:assert_equal(tojson({vector.create(4)}), "[null]")
+end)
+
+tests:it("a vector under a string key is skipped, leaving an empty object", function()
+    tests:assert_equal(tojson({buf = vector.create(4)}), "{}")
+end)
+
+tests:it("a bare enum value serializes as null", function()
+    local e = make_enum("red, green")
+    tests:assert_equal(tojson(e.red), "null")
+end)
+
+tests:it("an enum value inside an array becomes null", function()
+    local e = make_enum("red, green")
+    tests:assert_equal(tojson({e.green}), "[null]")
+end)
+
+tests:it("an enum value under a string key is skipped", function()
+    local e = make_enum("red, green")
+    tests:assert_equal(tojson({color = e.red}), "{}")
+end)
+
+-- ============================================================
+-- Unicode escapes: exact byte contracts
+-- ============================================================
+
+tests:describe("unicode escape bytes")
+
+tests:it("a \\u0000 escape produces a one-byte string holding an embedded NUL", function()
+    local s = fromjson('"\\u0000"')
+    tests:assert_equal(#s, 1, "the NUL string has length one")
+    tests:assert_equal(string.byte(s, 1), 0)
+end)
+
+tests:it("a valid surrogate pair decodes to the four-byte UTF-8 codepoint", function()
+    -- U+1F600 grinning face.
+    local s = fromjson('"\\uD83D\\uDE00"')
+    tests:assert_equal(#s, 4)
+    tests:assert_equal(s, "\xF0\x9F\x98\x80")
+end)
+
+tests:it("a lone high surrogate encodes to its three-byte WTF-8 form", function()
+    -- U+D83D on its own is not paired, so it is encoded directly.
+    local s = fromjson('"\\uD83D"')
+    tests:assert_equal(#s, 3)
+    tests:assert_equal(string.byte(s, 1), 0xED)
+    tests:assert_equal(string.byte(s, 2), 0xA0)
+    tests:assert_equal(string.byte(s, 3), 0xBD)
+end)
+
+tests:it("a low surrogate followed by a high surrogate encodes each separately", function()
+    -- The order is reversed, so neither forms a pair and both are encoded as
+    -- their own three-byte sequences.
+    local s = fromjson('"\\uDE00\\uD83D"')
+    tests:assert_equal(#s, 6)
+end)
+
+-- ============================================================
+-- Duplicate keys: last value wins
+-- ============================================================
+
+tests:describe("duplicate keys")
+
+tests:it("a duplicated object key keeps the last value", function()
+    tests:assert_equal(fromjson('{"a":1,"a":2}').a, 2)
+end)
+
+tests:it("a duplicated key surrounded by others still keeps the last", function()
+    local r = fromjson('{"a":1,"b":2,"a":3}')
+    tests:assert_equal(r.a, 3)
+    tests:assert_equal(r.b, 2)
+end)
+
+-- ============================================================
+-- Parser depth limit
+-- ============================================================
+
+tests:describe("parser depth")
+
+tests:it("nesting far beyond the limit raises a catchable error and leaves the parser usable", function()
+    local deep = string.rep("[", 100000) .. "1" .. string.rep("]", 100000)
+    local ok, err = catch fromjson(deep)
+    tests:assert_false(ok, "extreme nesting must raise, not crash")
+    tests:assert_contains(tostring(err), "maximum nesting depth")
+    -- The interpreter and parser stay intact afterwards.
+    tests:assert_equal(fromjson("[1,2]")[2], 2)
+end)
+
+tests:it("exactly one thousand levels parse but one more raises", function()
+    local ok_at_limit = catch fromjson(string.rep("[", 1000) .. "1" .. string.rep("]", 1000))
+    tests:assert_true(ok_at_limit, "one thousand levels should parse")
+    local ok_over = catch fromjson(string.rep("[", 1001) .. "1" .. string.rep("]", 1001))
+    tests:assert_false(ok_over, "one thousand and one levels should raise")
+end)
+
+-- ============================================================
+-- fromjson argument type handling
+-- ============================================================
+
+tests:describe("fromjson argument type")
+
+tests:it("fromjson coerces a number argument to its textual JSON form", function()
+    -- A number is accepted like most string-taking stdlib functions and parses
+    -- as its own decimal text.
+    local v = fromjson(42)
+    tests:assert_equal(v, 42)
+    tests:assert_equal(math.type(v), "integer")
+end)
+
+tests:each("fromjson rejects non-stringable arguments", {
+    {function() return fromjson(nil) end},
+    {function() return fromjson(true) end},
+    {function() return fromjson({}) end},
+}, function(fn)
+    local ok, err = catch fn()
+    tests:assert_false(ok, "non-stringable argument must raise")
+    tests:assert_contains(tostring(err), "string expected")
+end)
+
+-- ============================================================
+-- Parse errors carry position information
+-- ============================================================
+
+tests:describe("parse error position")
+
+tests:each("parse errors report a position", {
+    {"[1,2,]"},
+    {"{bad"},
+    {'{"a":1} extra'},
+    {"[1 2]"},
+}, function(json)
+    local ok, err = catch fromjson(json)
+    tests:assert_false(ok, "should reject " .. json)
+    tests:assert_contains(tostring(err), "position")
+end)
+
+-- ============================================================
+-- Key escaping on the serialize side
+-- ============================================================
+
+tests:describe("serialize key escaping")
+
+tests:it("a key containing a quote and backslash is escaped", function()
+    tests:assert_equal(tojson({['a"b\\c'] = 1}), '{"a\\"b\\\\c":1}')
+end)
+
+tests:it("a key containing a newline is escaped", function()
+    tests:assert_equal(tojson({["x\ny"] = 1}), '{"x\\ny":1}')
+end)
+
+tests:finish()

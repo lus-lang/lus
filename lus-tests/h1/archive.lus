@@ -242,10 +242,16 @@ tests:it("lz4 compression levels", function()
     assert(vector.archive.lz4.decompress(c12) == sample)
 end)
 
-tests:it("lz4 decompress_hc roundtrip", function()
-    local compressed = vector.archive.lz4.compress(sample)
-    local decompressed = vector.archive.lz4.decompress_hc(compressed)
-    assert(decompressed == sample, "decompress_hc roundtrip should preserve data")
+tests:it("lz4 decompress_hc decodes the legacy frame format", function()
+    -- Hand-built legacy frame: magic 0x184C2102 little endian, one block
+    -- (4-byte little-endian size) holding an LZ4 block of pure literals
+    local payload = "Hello legacy"
+    local block = string.char(#payload << 4) .. payload
+    local legacy = string.char(0x02, 0x21, 0x4C, 0x18)
+        .. string.char(#block, 0x00, 0x00, 0x00)
+        .. block
+    local decompressed = vector.archive.lz4.decompress_hc(legacy)
+    assert(decompressed == payload, "legacy frame should decode to the payload")
 end)
 
 tests:it("lz4 invalid data", function()

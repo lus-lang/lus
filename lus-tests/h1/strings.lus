@@ -84,15 +84,24 @@ tests:it("string.reverse", function()
     assert(string.reverse("ab") == "ba")
 end)
 
-tests:it("string.unicode", function()
-    -- string.char / string.byte
+tests:it("string.byte and string.char round-trips", function()
     assert(string.byte("a") == 97)
     assert(string.char(97) == "a")
     assert(string.byte("abc", 2) == 98)
-    assert(string.byte("abc", 2, 3) == 98) -- returns multiple?
 
-    local a, b = string.byte("abc", 1, 2)
-    assert(a == 97 and b == 98)
+    -- a range returns one value per byte
+    local a, b = string.byte("abc", 2, 3)
+    assert(a == 98 and b == 99)
+    assert(select("#", string.byte("abc", 2, 3)) == 2)
+    assert(select("#", string.byte("abc", 1, 3)) == 3)
+
+    -- multi-argument char builds the whole string
+    assert(string.char(97, 98, 99) == "abc")
+    assert(string.char(104, 101, 108, 108, 111) == "hello")
+
+    -- bytes above 127 round-trip through char and byte unchanged
+    local s = string.char(0xC3, 0xA9)
+    assert(string.byte(s, 1) == 0xC3 and string.byte(s, 2) == 0xA9)
 end)
 
 tests:it("string.format", function()

@@ -18,10 +18,55 @@ tests:it("basic vararg", function()
 end)
 
 tests:it("named vararg", function()
+    -- '...b' binds the extra arguments as a packed table with an 'n' count
     local function f(a, ...b)
-        assert(b)
+        return a, b
     end
-    f(10, 20, 30)
+    local a, b = f(10, 20, 30)
+    assert(a == 10)
+    assert(type(b) == "table")
+    assert(b[1] == 20 and b[2] == 30)
+    assert(b.n == 2)
+    assert(#b == 2)
+end)
+
+tests:it("named vararg with zero extra arguments", function()
+    local function f(a, ...b)
+        return b
+    end
+    local b = f(10)
+    assert(type(b) == "table")
+    assert(b.n == 0)
+    assert(b[1] == nil)
+end)
+
+tests:it("named vararg preserves nil holes via n", function()
+    local function f(...b)
+        return b
+    end
+    local b = f(nil, 2, nil)
+    assert(b.n == 3)
+    assert(b[1] == nil and b[2] == 2 and b[3] == nil)
+end)
+
+tests:it("named vararg keeps ... usable in the same function", function()
+    local function f(...b)
+        return select("#", ...), b.n
+    end
+    local dots_count, packed_count = f(7, 8, 9)
+    assert(dots_count == 3)
+    assert(packed_count == 3)
+end)
+
+tests:it("named vararg binds a fresh table per call", function()
+    local function f(...b)
+        return b
+    end
+    local t1 = f(1, 2)
+    local t2 = f(1, 2)
+    assert(t1 ~= t2)
+    t1[1] = 99
+    assert(t2[1] == 1)
 end)
 
 tests:it("select basics", function()

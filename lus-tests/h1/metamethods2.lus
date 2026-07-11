@@ -1,0 +1,555 @@
+--[[
+  Metamethod coverage beyond events.lus.
+
+  This suite pins the metamethod surface that events.lus omits: the bitwise
+  family (__band, __bor, __bxor, __shl, __shr, __bnot) in both operand orders
+  and with float or string operands falling back to handlers, __mod and __idiv
+  dispatch including string coercion non-interference, __eq dispatch rules and
+  boolean coercion, order comparison dispatch and its Lua 5.5 error behavior,
+  raw* bypass properties, deep __index and __newindex chains, __call argument
+  order, metamethods that yield across coroutines, and __metatable protection.
+]]
+
+global print, require, assert, type, setmetatable, getmetatable, rawget, rawset, rawequal, rawlen, coroutine, table, string, math, io, tostring, error, select, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("metamethods2")
+
+-- Builds an object whose metatable defines a single named metamethod that
+-- records its arguments and call count, then returns the string "handled".
+local function capture(mmname)
+    local rec = {called = 0}
+    local obj = setmetatable({}, {
+        [mmname] = function(a, b)
+            rec.called = rec.called + 1
+            rec.a = a
+            rec.b = b
+            return "handled"
+        end,
+    })
+    return obj, rec
+end
+
+local bitwise_ops = {
+    {"__band", function(a, b) return a & b end},
+    {"__bor",  function(a, b) return a | b end},
+    {"__bxor", function(a, b) return a ~ b end},
+    {"__shl",  function(a, b) return a << b end},
+    {"__shr",  function(a, b) return a >> b end},
+}
+
+-- Bitwise metamethods with the table as the left operand.
+tests:each("bitwise metamethod fires for table left operand", bitwise_ops, function(mm, op)
+    local obj, rec = capture(mm)
+    local r = op(obj, 7)
+    tests:assert_equal(r, "handled")
+    tests:assert_equal(rec.called, 1)
+    tests:assert_true(rec.a == obj, "first handler argument must be the table")
+    tests:assert_equal(rec.b, 7)
+end)
+
+-- Bitwise metamethods with the table as the right operand keep original order.
+tests:each("bitwise metamethod fires for table right operand in original order", bitwise_ops, function(mm, op)
+    local obj, rec = capture(mm)
+    local r = op(7, obj)
+    tests:assert_equal(r, "handled")
+    tests:assert_equal(rec.a, 7, "left number must stay the first argument")
+    tests:assert_true(rec.b == obj, "table must stay the second argument")
+end)
+
+-- A float with a fractional part cannot convert to an integer, so the other
+-- operand's bitwise handler must receive the raw float instead of an error.
+tests:each("bitwise metamethod receives raw fractional float", bitwise_ops, function(mm, op)
+    local obj, rec = capture(mm)
+    local r = op(2.5, obj)
+    tests:assert_equal(r, "handled")
+    tests:assert_equal(rec.a, 2.5)
+    local r2 = op(obj, 0.75)
+    tests:assert_equal(r2, "handled")
+    tests:assert_equal(rec.b, 0.75)
+end)
+
+tests:it("numeric string operand reaches bitwise handler uncoerced", function()
+    local obj, rec = capture("__shl")
+    local r = "3" << obj
+    tests:assert_equal(r, "handled")
+    tests:assert_equal(rec.a, "3")
+    tests:assert_type(rec.a, "string", "coercible string must not be converted before dispatch")
+end)
+
+tests:it("non numeric string operand still dispatches to the table handler", function()
+    local obj, rec = capture("__band")
+    local r = "xyz" & obj
+    tests:assert_equal(r, "handled")
+    tests:assert_equal(rec.a, "xyz")
+    tests:assert_true(rec.b == obj)
+end)
+
+tests:it("__bnot receives the operand twice", function()
+    local rec = {}
+    local obj = setmetatable({}, {__bnot = function(a, b)
+        rec.a = a
+        rec.b = b
+        return "negated"
+    end})
+    tests:assert_equal(~obj, "negated")
+    tests:assert_true(rec.a == obj, "first argument must be the operand")
+    tests:assert_true(rec.b == obj, "second argument must duplicate the operand")
+end)
+
+tests:it("__unm receives the operand twice", function()
+    local rec = {}
+    local obj = setmetatable({}, {__unm = function(a, b)
+        rec.a = a
+        rec.b = b
+        return 42
+    end})
+    tests:assert_equal(-obj, 42)
+    tests:assert_true(rec.a == obj and rec.b == obj)
+end)
+
+tests:it("bitwise handler selection prefers the left operand", function()
+    local sel = nil
+    local a = setmetatable({}, {__bor = function() sel = "left" return 1 end})
+    local b = setmetatable({}, {__bor = function() sel = "right" return 2 end})
+    tests:assert_equal(a | b, 1)
+    tests:assert_equal(sel, "left")
+    tests:assert_equal(b | a, 2)
+    tests:assert_equal(sel, "right")
+end)
+
+tests:each("bitwise operation without handler raises the bitwise error", {
+    {function() return {} & 1 end},
+    {function() return 1 | {} end},
+    {function() return {} ~ {} end},
+}, function(fn)
+    tests:assert_throws(fn, "attempt to perform bitwise operation on a table value")
+end)
+
+tests:it("fractional float bitwise without handler reports no integer representation", function()
+    tests:assert_throws(function() return 2.5 & 3 end, "number has no integer representation")
+end)
+
+-- __mod and __idiv dispatch, both operand orders.
+tests:each("__mod and __idiv fire in both operand orders", {
+    {"__mod",  function(a, b) return a % b end},
+    {"__idiv", function(a, b) return a // b end},
+}, function(mm, op)
+    local obj, rec = capture(mm)
+    tests:assert_equal(op(obj, 4), "handled")
+    tests:assert_true(rec.a == obj)
+    tests:assert_equal(rec.b, 4)
+    tests:assert_equal(op(9, obj), "handled")
+    tests:assert_equal(rec.a, 9, "number stays first when the table is on the right")
+    tests:assert_true(rec.b == obj)
+end)
+
+tests:it("string arithmetic coercion works without invoking any metamethod", function()
+    tests:assert_equal("7" % 3, 1)
+    tests:assert_equal(math.type("7" % 3), "integer")
+    tests:assert_equal("9" // 2, 4)
+    tests:assert_equal(math.type("9" // 2), "integer")
+end)
+
+tests:each("coercible string reaches __mod and __idiv handlers raw", {
+    {"__mod",  function(a, b) return a % b end},
+    {"__idiv", function(a, b) return a // b end},
+}, function(mm, op)
+    local obj, rec = capture(mm)
+    tests:assert_equal(op("10", obj), "handled")
+    tests:assert_type(rec.a, "string", "string operand must not be coerced before dispatch")
+    tests:assert_equal(rec.a, "10")
+end)
+
+tests:it("arithmetic without handler names the offending type", function()
+    tests:assert_throws(function() return {} % 2 end, "attempt to perform arithmetic on a table value")
+    tests:assert_throws(function() return 2 // {} end, "attempt to perform arithmetic on a table value")
+end)
+
+tests:it("arithmetic handler selection prefers the left operand", function()
+    local sel = nil
+    local a = setmetatable({}, {__add = function() sel = "left" return 1 end})
+    local b = setmetatable({}, {__add = function() sel = "right" return 2 end})
+    tests:assert_equal(a + b, 1)
+    tests:assert_equal(sel, "left")
+    tests:assert_equal(b + a, 2)
+    tests:assert_equal(sel, "right")
+end)
+
+tests:it("right operand handler runs when only the right side has one", function()
+    local rec = nil
+    local obj = setmetatable({}, {__add = function(a, b) rec = {a, b} return "sum" end})
+    tests:assert_equal(10 + obj, "sum")
+    tests:assert_equal(rec[1], 10, "original operand order must be preserved")
+    tests:assert_true(rec[2] == obj)
+end)
+
+-- __eq dispatch rules.
+tests:it("__eq result is coerced to boolean", function()
+    local mt = {__eq = function() return "truthy string" end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    local r = (a == b)
+    tests:assert_type(r, "boolean")
+    tests:assert_equal(r, true)
+end)
+
+tests:it("__eq returning nil coerces to false", function()
+    local mt = {__eq = function() return nil end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    tests:assert_equal(a == b, false)
+    tests:assert_equal(a ~= b, true)
+end)
+
+tests:it("__eq is not called for the same reference", function()
+    local calls = 0
+    local a = setmetatable({}, {__eq = function() calls = calls + 1 return false end})
+    tests:assert_equal(a == a, true, "identical references must compare equal primitively")
+    tests:assert_equal(calls, 0, "handler must not run for a same reference comparison")
+end)
+
+tests:it("__eq handler comes from the first operand when both have one", function()
+    local which = nil
+    local a = setmetatable({}, {__eq = function() which = "first" return true end})
+    local b = setmetatable({}, {__eq = function() which = "second" return true end})
+    tests:assert_equal(a == b, true)
+    tests:assert_equal(which, "first")
+    which = nil
+    tests:assert_equal(b == a, true)
+    tests:assert_equal(which, "second")
+end)
+
+tests:it("__eq falls back to the second operand when the first has no metatable", function()
+    local which = nil
+    local b = setmetatable({}, {__eq = function() which = "second" return true end})
+    tests:assert_equal({} == b, true)
+    tests:assert_equal(which, "second")
+end)
+
+tests:it("__eq does not fire for a table compared with userdata", function()
+    local calls = 0
+    local t = setmetatable({}, {__eq = function() calls = calls + 1 return true end})
+    tests:assert_equal(t == io.stdin, false)
+    tests:assert_equal(io.stdin == t, false)
+    tests:assert_equal(calls, 0, "mixed table and userdata comparison must skip __eq")
+end)
+
+tests:it("__eq does not fire against primitive values", function()
+    local calls = 0
+    local t = setmetatable({}, {__eq = function() calls = calls + 1 return true end})
+    tests:assert_equal(t == 5, false)
+    tests:assert_equal(t == "5", false)
+    tests:assert_equal(t == nil, false)
+    tests:assert_equal(t == true, false)
+    tests:assert_equal(calls, 0)
+end)
+
+tests:it("distinct full userdata without __eq compare unequal without error", function()
+    tests:assert_equal(io.stdin == io.stdout, false)
+    tests:assert_equal(io.stdin == io.stdin, true)
+end)
+
+tests:it("rawequal bypasses __eq", function()
+    local mt = {__eq = function() return true end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    tests:assert_equal(a == b, true, "sanity check that __eq makes them equal")
+    tests:assert_equal(rawequal(a, b), false)
+    tests:assert_equal(rawequal(a, a), true)
+end)
+
+-- Order comparison dispatch.
+tests:it("__lt fires for mixed number and table operands in original order", function()
+    local rec = nil
+    local mt = {__lt = function(a, b) rec = {a, b} return true end}
+    local obj = setmetatable({}, mt)
+    tests:assert_equal(1 < obj, true)
+    tests:assert_equal(rec[1], 1)
+    tests:assert_true(rec[2] == obj)
+    rec = nil
+    tests:assert_equal(obj < 9, true)
+    tests:assert_true(rec[1] == obj)
+    tests:assert_equal(rec[2], 9)
+end)
+
+tests:it("greater than swaps operands into __lt", function()
+    local rec = nil
+    local mt = {__lt = function(a, b) rec = {a, b} return true end}
+    local a = setmetatable({name = "a"}, mt)
+    local b = setmetatable({name = "b"}, mt)
+    tests:assert_equal(a > b, true)
+    tests:assert_true(rec[1] == b, "a > b must call the handler as lt(b, a)")
+    tests:assert_true(rec[2] == a)
+end)
+
+tests:it("greater or equal swaps operands into __le", function()
+    local rec = nil
+    local mt = {__le = function(a, b) rec = {a, b} return true end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    tests:assert_equal(a >= b, true)
+    tests:assert_true(rec[1] == b, "a >= b must call the handler as le(b, a)")
+    tests:assert_true(rec[2] == a)
+    rec = nil
+    tests:assert_equal(a <= b, true)
+    tests:assert_true(rec[1] == a, "a <= b must keep the original order")
+    tests:assert_true(rec[2] == b)
+end)
+
+tests:it("order comparison results are coerced to boolean", function()
+    local mt = {
+        __lt = function() return "truthy" end,
+        __le = function() return nil end,
+    }
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    local lt = (a < b)
+    tests:assert_type(lt, "boolean")
+    tests:assert_equal(lt, true)
+    local le = (a <= b)
+    tests:assert_type(le, "boolean")
+    tests:assert_equal(le, false)
+end)
+
+-- Lua 5.5 no longer synthesizes <= from __lt, so a metatable with only __lt
+-- must raise the plain comparison error for <=.
+tests:it("missing __le is not synthesized from __lt", function()
+    local mt = {__lt = function() return true end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    tests:assert_equal(a < b, true, "sanity check that __lt itself works")
+    tests:assert_throws(function() return a <= b end, "attempt to compare two table values")
+    tests:assert_throws(function() return a >= b end, "attempt to compare two table values")
+end)
+
+tests:it("order handler falls back to the second operand", function()
+    local which = nil
+    local b = setmetatable({}, {__lt = function() which = "second" return true end})
+    tests:assert_equal({} < b, true)
+    tests:assert_equal(which, "second")
+end)
+
+tests:each("comparison errors name both operand types", {
+    {function() return 1 < {} end, "attempt to compare number with table"},
+    {function() return {} < 1 end, "attempt to compare table with number"},
+    {function() return {} < {} end, "attempt to compare two table values"},
+    {function() return {} <= "s" end, "attempt to compare table with string"},
+    {function() return true < false end, "attempt to compare two boolean values"},
+}, function(fn, pattern)
+    tests:assert_throws(fn, pattern)
+end)
+
+-- Raw accessor bypass properties.
+tests:it("rawget bypasses __index", function()
+    local calls = 0
+    local t = setmetatable({}, {__index = function() calls = calls + 1 return "phantom" end})
+    tests:assert_equal(t.missing, "phantom", "sanity check that __index fires for normal access")
+    tests:assert_equal(calls, 1)
+    tests:assert_nil(rawget(t, "missing"))
+    tests:assert_equal(calls, 1, "rawget must not invoke __index")
+end)
+
+tests:it("rawset bypasses __newindex and returns the table", function()
+    local calls = 0
+    local t = setmetatable({}, {__newindex = function() calls = calls + 1 end})
+    local ret = rawset(t, "k", "v")
+    tests:assert_true(ret == t, "rawset must return its table argument")
+    tests:assert_equal(rawget(t, "k"), "v")
+    tests:assert_equal(calls, 0, "rawset must not invoke __newindex")
+    t.other = 1
+    tests:assert_equal(calls, 1, "sanity check that __newindex fires for normal stores")
+end)
+
+tests:it("rawlen bypasses __len while # honors it", function()
+    local calls = 0
+    local t = setmetatable({10, 20, 30, 40}, {__len = function() calls = calls + 1 return 99 end})
+    tests:assert_equal(#t, 99)
+    tests:assert_equal(calls, 1)
+    tests:assert_equal(rawlen(t), 4)
+    tests:assert_equal(calls, 1, "rawlen must not invoke __len")
+end)
+
+-- __index and __newindex chains.
+tests:it("__index chain three deep with mixed table and function hops", function()
+    local level3 = {deep = "found", shadow = "L3"}
+    local level2 = setmetatable({mid = "L2", shadow = "L2"}, {
+        __index = function(t, k) return level3[k] end,
+    })
+    local level1 = setmetatable({top = "L1"}, {__index = level2})
+    tests:assert_equal(level1.top, "L1", "raw fields must not consult the chain")
+    tests:assert_equal(level1.mid, "L2", "one hop through the table __index")
+    tests:assert_equal(level1.deep, "found", "two hops ending in the function __index")
+    tests:assert_equal(level1.shadow, "L2", "a nearer level must shadow a deeper one")
+    tests:assert_nil(level1.absent, "a key missing everywhere must yield nil")
+end)
+
+tests:it("__newindex chain forwards the store to the final plain table", function()
+    local sink = {}
+    local hop = setmetatable({}, {__newindex = sink})
+    local front = setmetatable({}, {__newindex = hop})
+    front.k = "v"
+    tests:assert_nil(rawget(front, "k"), "the front table must stay empty")
+    tests:assert_nil(rawget(hop, "k"), "the intermediate table must stay empty")
+    tests:assert_equal(rawget(sink, "k"), "v", "the store must land raw in the sink")
+end)
+
+tests:it("reading an existing raw key does not invoke __index", function()
+    local calls = 0
+    local t = setmetatable({present = 1}, {__index = function() calls = calls + 1 return "phantom" end})
+    tests:assert_equal(t.present, 1)
+    tests:assert_equal(calls, 0)
+end)
+
+tests:it("writing an existing raw key does not invoke __newindex", function()
+    local calls = 0
+    local t = setmetatable({present = 1}, {__newindex = function() calls = calls + 1 end})
+    t.present = 2
+    tests:assert_equal(rawget(t, "present"), 2)
+    tests:assert_equal(calls, 0)
+end)
+
+-- __call argument handling.
+tests:it("__call receives the callable object before the arguments", function()
+    local obj = setmetatable({}, {__call = function(...) return {n = select("#", ...), ...} end})
+    local got = obj(1, "two", 3)
+    tests:assert_equal(got.n, 4)
+    tests:assert_true(got[1] == obj, "the object itself must be the leading argument")
+    tests:assert_equal(got[2], 1)
+    tests:assert_equal(got[3], "two")
+    tests:assert_equal(got[4], 3)
+end)
+
+tests:it("__call preserves nil holes in the argument list", function()
+    local obj = setmetatable({}, {__call = function(...) return select("#", ...), select(3, ...) end})
+    local n, second = obj(nil, "tail")
+    tests:assert_equal(n, 3, "the object plus two arguments including the nil hole")
+    tests:assert_equal(second, "tail")
+end)
+
+tests:it("calling a table without __call raises the call error", function()
+    tests:assert_throws(function()
+        local t = {}
+        return t()
+    end, "attempt to call a table value")
+end)
+
+-- Metamethods yielding across coroutines.
+tests:it("__add can yield and be resumed to completion", function()
+    local obj = setmetatable({}, {__add = function(a, b)
+        local extra = coroutine.yield("in-add")
+        return b + extra
+    end})
+    local co = coroutine.create(function(o)
+        return "done", o + 10
+    end)
+    local ok, tag = coroutine.resume(co, obj)
+    tests:assert_true(ok)
+    tests:assert_equal(tag, "in-add")
+    tests:assert_equal(coroutine.status(co), "suspended")
+    local ok2, word, sum = coroutine.resume(co, 5)
+    tests:assert_true(ok2)
+    tests:assert_equal(word, "done")
+    tests:assert_equal(sum, 15)
+    tests:assert_equal(coroutine.status(co), "dead")
+end)
+
+tests:it("__index can yield and be resumed to completion", function()
+    local obj = setmetatable({}, {__index = function(t, k)
+        local injected = coroutine.yield("in-index", k)
+        return injected .. k
+    end})
+    local co = coroutine.create(function(o)
+        return o.foo
+    end)
+    local ok, tag, key = coroutine.resume(co, obj)
+    tests:assert_true(ok)
+    tests:assert_equal(tag, "in-index")
+    tests:assert_equal(key, "foo")
+    local ok2, result = coroutine.resume(co, "got-")
+    tests:assert_true(ok2)
+    tests:assert_equal(result, "got-foo")
+end)
+
+tests:it("__lt can yield once per comparison and be resumed", function()
+    local mt = {__lt = function(a, b)
+        coroutine.yield("in-lt")
+        return a.v < b.v
+    end}
+    local small = setmetatable({v = 1}, mt)
+    local big = setmetatable({v = 2}, mt)
+    local co = coroutine.create(function()
+        return small < big, big < small
+    end)
+    local ok1, tag1 = coroutine.resume(co)
+    tests:assert_true(ok1)
+    tests:assert_equal(tag1, "in-lt")
+    local ok2, tag2 = coroutine.resume(co)
+    tests:assert_true(ok2)
+    tests:assert_equal(tag2, "in-lt")
+    local ok3, first, second = coroutine.resume(co)
+    tests:assert_true(ok3)
+    tests:assert_equal(first, true)
+    tests:assert_equal(second, false)
+    tests:assert_equal(coroutine.status(co), "dead")
+end)
+
+tests:it("__newindex can yield and complete the store after resume", function()
+    local obj = setmetatable({store = {}}, {__newindex = function(t, k, v)
+        local suffix = coroutine.yield("in-newindex", k, v)
+        rawget(t, "store")[k] = v .. suffix
+    end})
+    local co = coroutine.create(function()
+        obj.color = "blue"
+        return "stored"
+    end)
+    local ok, tag, key, value = coroutine.resume(co)
+    tests:assert_true(ok)
+    tests:assert_equal(tag, "in-newindex")
+    tests:assert_equal(key, "color")
+    tests:assert_equal(value, "blue")
+    local ok2, word = coroutine.resume(co, "!")
+    tests:assert_true(ok2)
+    tests:assert_equal(word, "stored")
+    tests:assert_equal(obj.store.color, "blue!")
+end)
+
+-- __metatable protection.
+tests:it("string __metatable masks getmetatable and blocks setmetatable", function()
+    local t = setmetatable({}, {__metatable = "hidden"})
+    tests:assert_equal(getmetatable(t), "hidden")
+    tests:assert_throws(function() setmetatable(t, {}) end, "cannot change a protected metatable")
+    tests:assert_throws(function() setmetatable(t, nil) end, "cannot change a protected metatable")
+end)
+
+tests:it("false __metatable is returned as is and still protects", function()
+    local t = setmetatable({}, {__metatable = false})
+    tests:assert_equal(getmetatable(t), false)
+    tests:assert_throws(function() setmetatable(t, {}) end, "cannot change a protected metatable")
+end)
+
+tests:it("table valued __metatable is returned instead of the real metatable", function()
+    local fake = {tag = "fake"}
+    local real = {__metatable = fake, __index = function() return "via-real" end}
+    local t = setmetatable({}, real)
+    tests:assert_true(getmetatable(t) == fake)
+    tests:assert_equal(t.anything, "via-real", "the real metatable must keep driving behavior")
+    tests:assert_throws(function() setmetatable(t, fake) end, "cannot change a protected metatable")
+end)
+
+-- __len behavior beyond the rawlen basics in events.lus.
+tests:it("__len results pass through the length operator unchanged", function()
+    local s = setmetatable({}, {__len = function() return "notnum" end})
+    tests:assert_equal(#s, "notnum")
+    local f = setmetatable({}, {__len = function() return 2.5 end})
+    tests:assert_equal(#f, 2.5)
+end)
+
+tests:it("an error raised inside __len propagates through #", function()
+    local t = setmetatable({}, {__len = function() error("boom-len") end})
+    tests:assert_throws(function() return #t end, "boom%-len")
+end)
+
+tests:finish()

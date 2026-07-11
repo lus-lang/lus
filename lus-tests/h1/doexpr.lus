@@ -3,7 +3,7 @@
     Tests for do expressions feature (acquis-23)
 ]]
 
-global print, require, assert, type, pledge, tostring, select
+global print, require, assert, type, pledge, tostring, select, load
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -155,11 +155,14 @@ tests:it("provide in conditional (else branch)", function()
 end)
 
 tests:it("provide terminates block", function()
-    local x = do
-        provide 42
-        -- anything after provide is unreachable
-    end
-    assert(x == 42, "x should be 42, got " .. tostring(x))
+    -- provide must be the last statement in its block, like return
+    local bad, err = load("local x = do provide 42 local y = 1 end return x")
+    assert(bad == nil, "a statement after provide should fail to compile")
+    tests:assert_contains(err, "'end' expected")
+    -- The same block compiles and yields the value once provide is last
+    local good = load("local x = do provide 42 end return x")
+    assert(good ~= nil)
+    assert(good() == 42)
 end)
 
 tests:it("early provide in loop", function()
@@ -189,13 +192,18 @@ tests:it("access outer variables", function()
 end)
 
 tests:it("inner variables don't leak", function()
-    local y
-    local x = do
-        local inner_var = 123
-        provide inner_var
-    end
-    -- inner_var is not accessible here (would be compile error)
-    assert(x == 123, "x should be 123, got " .. tostring(x))
+    -- The loaded chunk declares a global, so every undeclared name in it
+    -- is a compile error. Reading the block local after the do expression
+    -- must therefore fail to compile.
+    local bad, err = load(
+        "global assert local x = do local iv = 1 provide iv end return iv")
+    assert(bad == nil, "the block local should be out of scope after end")
+    tests:assert_contains(err, "not declared")
+    -- The same chunk compiles when it reads the do expression result instead
+    local good = load(
+        "global assert local x = do local iv = 1 provide iv end return x")
+    assert(good ~= nil)
+    assert(good() == 1)
 end)
 
 tests:it("shadowing outer variable", function()

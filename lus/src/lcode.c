@@ -776,27 +776,13 @@ void luaK_setreturns(FuncState *fs, expdesc *e, int nresults) {
     SETARG_B(*endcatch, nresults + 1); /* B = nresults + 1 (like CALL) */
   }
   else if (e->k == VDOEXPR) {
-    /* Do-expression: values are already in registers starting at base.
-    ** e->u.info encodes: base | (nvalues << 8)
-    ** where nvalues is how many values the provide statement gave.
-    ** Only nil-fill if nresults > nvalues. */
-    int base = e->u.info & 0xFF;
-    int nvalues = (e->u.info >> 8) & 0xFF;
-    if (nresults == LUA_MULTRET) {
-      /* Multi-return context (like function call's last argument).
-      ** Leave freereg at base + nvalues (the values provided).
-      ** No nil-fill needed - the caller will handle variable args. */
-      fs->freereg = cast_byte(base + nvalues);
-    }
-    else {
-      if (nresults > nvalues) {
-        /* Nil-fill the extra slots beyond what provide gave */
-        luaK_nil(fs, base + nvalues, nresults - nvalues);
-      }
-      fs->freereg = cast_byte(base + nresults);
-    }
-    e->u.info = base; /* restore to just base for subsequent handling */
-    e->k = VNONRELOC; /* now treated as fixed position */
+    /* Do-expression: e->u.info points to the ENDDO instruction. Set its
+    ** B field to the requested count: the runtime protocol (each provide
+    ** sets L->top past its last value, ENDDO nil-fills or truncates)
+    ** delivers the values at the window base. Callers reserve registers,
+    ** exactly as for VCALL. */
+    Instruction *enddo = &getinstruction(fs, e);
+    SETARG_B(*enddo, nresults + 1); /* B = nresults + 1 (like CALL's C) */
   }
   else {
     lua_assert(e->k == VVARARG);
@@ -840,10 +826,12 @@ void luaK_setoneret(FuncState *fs, expdesc *e) {
     e->k = VRELOC; /* can relocate its simple result */
   }
   else if (e->k == VDOEXPR) {
-    /* Do-expression: first result is at base register.
-    ** e->u.info encodes base | (nvalues << 8), extract just base. */
-    e->u.info = e->u.info & 0xFF; /* extract base register */
-    e->k = VNONRELOC;             /* result has fixed position */
+    /* Do-expression: e->u.info points to the ENDDO instruction. Fix it
+    ** to one result (the window base register, from its A field). */
+    Instruction *inst = &getinstruction(fs, e);
+    SETARG_B(*inst, 2); /* exactly one value */
+    e->k = VNONRELOC;   /* result has fixed position */
+    e->u.info = GETARG_A(*inst);
   }
   else if (e->k == VCATCH) {
     /* Catch expression returns (status, result...) - first value is status.
@@ -2026,7 +2014,13 @@ void luaK_finish(FuncState *fs) {
     /* avoid "not used" warnings when assert is off (for 'onelua.c') */
     (void)luaP_isOT;
     (void)luaP_isIT;
-    lua_assert(i == 0 || luaP_isOT(*(pc - 1)) == luaP_isIT(*pc));
+    /* An open FASTCALL, REQUIRE, or QUERY carries its EXTRAARG between
+    ** itself and the consuming instruction, so the adjacency check must
+    ** look through a preceding EXTRAARG to find the real producer. */
+    lua_assert(i == 0 ||
+               luaP_isOT((i >= 2 && GET_OPCODE(*(pc - 1)) == OP_EXTRAARG)
+                             ? *(pc - 2)
+                             : *(pc - 1)) == luaP_isIT(*pc));
     switch (GET_OPCODE(*pc)) {
       case OP_RETURN0:
       case OP_RETURN1: {

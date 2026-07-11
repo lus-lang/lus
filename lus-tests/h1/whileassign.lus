@@ -186,15 +186,20 @@ tests:it("reading from queue pattern", function()
     assert(results[1] == 1 and results[5] == 5, "order should be preserved")
 end)
 
-tests:it("single iteration when first call returns nil", function()
+tests:it("single iteration when second call returns nil", function()
     local count = 0
-    local function always_nil()
+    local calls = 0
+    local function once()
+        calls = calls + 1
+        if calls == 1 then return "value" end
         return nil
     end
-    while x = always_nil() do
+    while x = once() do
         count = count + 1
+        assert(x == "value")
     end
-    assert(count == 0, "should never enter loop")
+    assert(count == 1, "loop body should run exactly once")
+    assert(calls == 2, "condition evaluated twice, the second returned nil")
 end)
 
 tests:it("expression re-evaluated each iteration", function()

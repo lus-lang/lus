@@ -1638,21 +1638,45 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
   L->nCcalls = cinfo->savednCcalls;
 
   /* Close any to-be-closed variables opened during the catch body (e.g. a
-  ** grown luaL_Buffer's box, which is registered with lua_toclose) before
-  ** resuming -- exactly as pcall does on error. Otherwise their entries are
-  ** left dangling in L->tbclist and corrupt later stack operations. The error
-  ** object stays at L->top-1 across the close, so 'errobjoffset' remains valid.
-  ** The close may reallocate the stack, so recompute 'ebase' afterwards. */
-  luaF_close(L, ebase + cinfo->destreg, cinfo->status, 1);
+  ** <close> local, or a grown luaL_Buffer's box registered with
+  ** lua_toclose) before resuming -- exactly as pcall does on error. The
+  ** close runs protected, so an error raised by a __close handler is
+  ** contained here (the last raised error becomes the caught value)
+  ** instead of escaping the catch that is unwinding. Closing relocates
+  ** the error object (each close call receives it just above its
+  ** variable), so re-anchor it afterwards: luaF_close leaves the current
+  ** error object at L->top-1 in every branch, including when a handler
+  ** replaced it. The close may also reallocate the stack, so recompute
+  ** 'ebase' as well. The host's message handler is suppressed for the
+  ** close, the same way it is for any error a catch intercepts: a close
+  ** error is delivered to this catch, never to the errfunc's protected
+  ** call, so the catch must see the raw error object. */
+  {
+    ptrdiff_t old_errfunc = L->errfunc;
+    L->errfunc = 0;
+    luaD_closeprotected(L, savestack(L, ebase + cinfo->destreg), cinfo->status);
+    L->errfunc = old_errfunc;
+  }
   ebase = restorestack(L, cinfo->baseoffset);
+  errobjoffset = savestack(L, L->top.p - 1);
   func = ebase - 1;
   ecl = clLvalue(s2v(func));
 
   /* If a handler is set, call it to transform the error */
   if (ttisfunction(&cinfo->handler)) {
-    StkId errobj = restorestack(L, errobjoffset);
+    StkId errobj;
+    StkId callbase;
+    /* Make sure there is room to push and run the handler without raising.
+    ** After a stack-overflow error the regular limit is exhausted (a GC
+    ** step may even have reclaimed the overflow slack), so a raising check
+    ** here would replace the caught error with a fresh "stack overflow".
+    ** The non-raising grow restores the extra error-handling slack instead,
+    ** giving the handler the same budget a message handler gets. */
+    if (l_unlikely(L->stack_last.p - L->top.p <= 2 + LUA_MINSTACK))
+      luaD_growstack(L, 2 + LUA_MINSTACK, 0);
+    errobj = restorestack(L, errobjoffset);
     /* Set up call: push handler and error object */
-    StkId callbase = L->top.p;
+    callbase = L->top.p;
     setobj2s(L, callbase, &cinfo->handler); /* push handler from CatchInfo */
     setobjs2s(L, callbase + 1, errobj);     /* push error object */
     L->top.p = callbase + 2;
@@ -2552,10 +2576,25 @@ returning: /* trap already set */
         int a = GETARG_A(i);
         int b = GETARG_B(i);
         int offset = GETARG_C(i);
+        CatchInfo *catchinfo;
+        /* Validate the handler eagerly: a non-function in the brackets is a
+        ** programming error, and the parser encodes B=0 only when brackets
+        ** are absent, so a non-function here can only come from the handler
+        ** expression. Nothing is allocated or linked yet, so the raise
+        ** unwinds to the enclosing protection. Like xpcall, only true
+        ** functions are accepted (a __call table is rejected too). */
+        if (b != 0) {
+          TValue *h = s2v(base + (b - 1));
+          if (l_unlikely(!ttisfunction(h))) {
+            savestate(L, ci); /* so the error carries the source line */
+            luaG_runerror(L, "attempt to use a %s value as a catch handler",
+                          luaT_objtypename(L, h));
+          }
+        }
         /* Allocate first: luaM_new may run GC / raise on OOM, but the node is
         ** not yet linked, so a raise correctly unwinds to the enclosing catch
         ** without leaking or leaving a half-initialized node in the list. */
-        CatchInfo *catchinfo = luaM_new(L, CatchInfo);
+        catchinfo = luaM_new(L, CatchInfo);
 
         catchinfo->ci = ci;
         catchinfo->status = LUA_OK;
@@ -2607,11 +2646,12 @@ returning: /* trap already set */
         ** B = nresults + 1 (expected number of results including status)
         **     B=0 means LUA_MULTRET (return all values)
         ** C = jump offset to skip past error handler
+        ** k = 1 when the inner expression maintained L->top at runtime
         ** Restore the previous error handler from CatchInfo.
         **
         ** Layout: R[A] = status, R[A+1...] = expression results
-        ** For multi-return inner expressions, L->top is already set.
-        ** For single-value expressions, L->top might not be valid.
+        ** For multi-return inner expressions (k=1), L->top is already set.
+        ** For single-value expressions (k=0), L->top is not valid.
         */
         int a = GETARG_A(i);
         int b = GETARG_B(i);
@@ -2624,14 +2664,24 @@ returning: /* trap already set */
         ** instruction operands, not the node. */
         CatchInfo *catchinfo = ci->u.l.catchlist;
         ci->u.l.catchlist = catchinfo->frameprev;
-        L->activeCatch = catchinfo->prev;
+        /* Unlink from the throwable chain only when the node is still its
+        ** head. After a yield in the catch body, 'lua_resume' already
+        ** replaced the chain (the pre-yield nodes have stale jmpbufs), so
+        ** restoring this node's saved 'prev' pointer would re-arm a stale
+        ** node and a later error would longjmp into an unwound frame. */
+        if (L->activeCatch == catchinfo)
+          L->activeCatch = catchinfo->prev;
         luaM_free(L, catchinfo);
 
-        /* Determine where inner expression results end.
-        ** For multi-return: L->top is past last result
-        ** For single-value: result is at ra+1, so end is ra+2 */
-        if (L->top.p <= ra + 1)
-          L->top.p = ra + 2; /* ensure at least status + 1 result */
+        /* Determine where the inner expression results end. The k bit says
+        ** whether the inner expression maintained L->top at runtime (open
+        ** call, vararg, or nested catch). When it did, L->top already sits
+        ** just past the last result, so a zero-result call leaves it at
+        ** ra+1 and the fixed-count loop below nil-fills extra receivers.
+        ** When it did not, exactly one value was materialized at ra+1 and
+        ** L->top is meaningless, so force it to ra+2. */
+        if (!GETARG_k(i))
+          L->top.p = ra + 2; /* status plus the single value at ra+1 */
 
         /* Now set the status (at ra, before the results) */
         setbtvalue(s2v(ra));
@@ -2730,6 +2780,72 @@ returning: /* trap already set */
         savestate(L, ci);
         luaQ_build(L, ra, blob, ra, nsrc, nops); /* may raise and collect */
         updatetrap(ci);
+        vmbreak;
+      }
+      vmcase(OP_PROVIDE) {
+        /*
+        ** Materialize a do-expression's provided values.
+        ** A = window base (the do-expression's result register)
+        ** B = value count + 1. B=0 means the directly preceding open call
+        **     or vararg set L->top past the last value, as OP_CALL does.
+        ** C = source register of the first value (A <= C)
+        ** k = 1 when the block may hold upvalues or to-be-closed
+        **     variables. They are closed at level A+1 before the move, so
+        **     captures and __close handlers see the original locals. The
+        **     closing call frames are pushed above the frame top
+        **     (CLOSEKTOP), which preserves the source window. The handlers
+        **     run non-yieldably, since this instruction has no restart
+        **     protocol for a yield in the middle of a close.
+        ** Copies R[C..C+n-1] down to R[A..A+n-1] and sets L->top just past
+        ** the last value, giving do-expressions the same runtime
+        ** multi-value protocol as open calls. Every provide path then
+        ** reaches the matching OP_ENDDO, the join point that adjusts the
+        ** value count for the consumer.
+        */
+        StkId ra = RA(i);
+        int b = GETARG_B(i);
+        int n = (b == 0) ? cast_int(L->top.p - RC(i)) : b - 1;
+        if (TESTARG_k(i)) {
+          savepc(ci); /* a __close handler can raise */
+          if (L->top.p < ci->top.p)
+            L->top.p = ci->top.p; /* close calls go above the frame */
+          luaF_close(L, ra + 1, CLOSEKTOP, 0);
+          updatetrap(ci); /* close can change hooks */
+          updatestack(ci); /* and reallocate the stack */
+        }
+        {
+          StkId rc = RC(i);
+          int j;
+          for (j = 0; j < n; j++) /* forward copy: A <= C */
+            setobjs2s(L, ra + j, rc + j);
+          L->top.p = ra + n;
+        }
+        vmbreak;
+      }
+      vmcase(OP_ENDDO) {
+        /*
+        ** End of a do-expression: the join point for the fall-through
+        ** path and every provide exit.
+        ** A = window base
+        ** B = nresults + 1. B=0 keeps all values: L->top stays where the
+        **     provide left it, for the consuming open instruction that
+        **     directly follows.
+        ** Each path here ran an OP_PROVIDE that set L->top just past its
+        ** last value, so a fixed count nil-fills or truncates from there.
+        ** Like OP_ENDCATCH, this trusts L->top best-effort under debug
+        ** hooks: a line or count hook between a provide's exit jump and
+        ** this instruction can reset it.
+        */
+        int b = GETARG_B(i);
+        if (b != 0) { /* fixed number of results: nil-fill or truncate */
+          StkId ra = RA(i);
+          StkId target = ra + (b - 1);
+          while (L->top.p < target) {
+            setnilvalue2s(L->top.p);
+            L->top.p++;
+          }
+          L->top.p = target;
+        }
         vmbreak;
       }
       vmcase(OP_EXTRAARG) {

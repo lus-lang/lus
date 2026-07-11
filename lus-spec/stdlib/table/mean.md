@@ -12,4 +12,4 @@ params:
 returns: number
 ---
 
-Computes the arithmetic mean of numeric values in `array`. Non-numeric values are skipped. Returns NaN if no numeric values exist.
+Computes the arithmetic mean of numeric values in `array`. Strings naming a number count as numeric values and are coerced. Other non-numeric values are skipped. Returns NaN if no numeric values exist.

@@ -77,7 +77,6 @@ typedef struct BlockCnt {
   lu_byte isdoexpr;    /* true if this is a do-expression block */
   int doexpr_base;     /* base register for do-expression results */
   int doexpr_exitjump; /* jump list for provide statements */
-  int doexpr_nvalues;  /* number of values provided (0 if no provide yet) */
 } BlockCnt;
 
 /*
@@ -807,7 +806,6 @@ static void enterblock(FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->isdoexpr = 0;
   bl->doexpr_base = 0;
   bl->doexpr_exitjump = NO_JUMP;
-  bl->doexpr_nvalues = 0;
   bl->previous = fs->bl; /* link block in function's block list */
   fs->bl = bl;
   lua_assert(fs->freereg == luaY_nvarstack(fs));
@@ -841,7 +839,12 @@ static void leaveblock(FuncState *fs) {
   LexState *ls = fs->ls;
   lu_byte stklevel = reglevel(fs, bl->nactvar); /* level outside block */
   lu_byte minreg;
-  if (bl->previous && bl->upval) /* need a 'close'? */
+  /* Do-expression blocks handle their own closes: every exit path runs
+  ** an OP_PROVIDE whose k bit closes the block's upvalues and
+  ** to-be-closed variables before the value window overwrites their
+  ** slots, so no close may run at the join point (it would also clobber
+  ** the L->top the provide protocol relies on). */
+  if (bl->previous && bl->upval && !bl->isdoexpr) /* need a 'close'? */
     luaK_codeABC(fs, OP_CLOSE, stklevel, 0, 0);
   /* When inside a do-expression, don't free registers below the result slot.
   ** Inner blocks (like if-then-else) shouldn't clobber the do-expr's result. */
@@ -1453,6 +1456,7 @@ static void parlist(LexState *ls) {
   /* Store params in the function AST node (curblock is the function node) */
   if (AST_ACTIVE(ls) && ls->ast->curblock != NULL) {
     ls->ast->curblock->u.func.params = params_head;
+    ls->ast->curblock->u.func.isvararg = varargk;
   }
 }
 
@@ -1883,11 +1887,16 @@ static void suffixchain(LexState *ls, expdesc *v) {
         /* Check for slice: starts with ',' or has ',' after first expr */
         expdesc start, end;
         int is_slice = 0;
+        int startreg = -1;
 
         if (ls->t.token == ',') {
           /* [, expr] - start omitted */
           is_slice = 1;
           init_exp(&start, VNIL, 0);
+          /* Discharge each bound to its register in parse order so a call
+          ** bound lands in the right slot before the next bound is parsed. */
+          luaK_exp2nextreg(fs, &start);
+          startreg = fs->freereg - 1;
           luaX_next(ls); /* skip ',' */
           if (ls->t.token == ']') {
             /* [,] - both omitted */
@@ -1896,6 +1905,7 @@ static void suffixchain(LexState *ls, expdesc *v) {
           else {
             expr(ls, &end);
           }
+          luaK_exp2nextreg(fs, &end);
         }
         else {
           /* Parse first expression */
@@ -1903,6 +1913,10 @@ static void suffixchain(LexState *ls, expdesc *v) {
           if (ls->t.token == ',') {
             /* [expr, expr?] - this is a slice */
             is_slice = 1;
+            /* Discharge the start bound before parsing the end bound so a
+            ** call in start position lands in its own register first. */
+            luaK_exp2nextreg(fs, &start);
+            startreg = fs->freereg - 1;
             luaX_next(ls); /* skip ',' */
             if (ls->t.token == ']') {
               /* [expr,] - end omitted */
@@ -1911,6 +1925,7 @@ static void suffixchain(LexState *ls, expdesc *v) {
             else {
               expr(ls, &end);
             }
+            luaK_exp2nextreg(fs, &end);
           }
         }
 
@@ -1918,10 +1933,7 @@ static void suffixchain(LexState *ls, expdesc *v) {
 
         if (is_slice) {
           /* Generate OP_SLICE: R[A] := slice(R[B], R[C], R[C+1]) */
-          /* Put start and end into consecutive registers */
-          int startreg = fs->freereg;
-          luaK_exp2nextreg(fs, &start);
-          luaK_exp2nextreg(fs, &end);
+          /* Bounds were discharged to consecutive registers in parse order. */
           /* Generate slice instruction with placeholder destination */
           /* Use 0 as dest, will be relocated later */
           int pc = luaK_codeABC(fs, OP_SLICE, 0, tblreg, startreg);
@@ -2157,7 +2169,13 @@ static void enumexpr(LexState *ls, expdesc *v) {
   do {
     if (nnames >= MAXENUMNAMES)
       luaX_syntaxerror(ls, "too many names in enum");
-    names[nnames++] = str_checkname(ls);
+    TString *nm = str_checkname(ls);
+    /* Reject duplicate member names. Identifiers are interned short strings,
+    ** so pointer equality is the same identity check luaE_findname uses. */
+    for (int i = 0; i < nnames; i++)
+      if (names[i] == nm)
+        luaK_semerror(ls, "duplicate enum member '%s'", getstr(nm));
+    names[nnames++] = nm;
   } while (testnext(ls, ','));
 
   /* expect 'end' */
@@ -2508,6 +2526,7 @@ static void catchexpr(LexState *ls, expdesc *v) {
       fs->freereg; /* base register for result - MUST be set BEFORE handler */
   int catchpc;
   int endcatchpc;
+  int toptracked;
   int line = ls->linenumber;
   int column = ls->tokencolumn;
   expdesc innerexp;
@@ -2560,10 +2579,17 @@ static void catchexpr(LexState *ls, expdesc *v) {
     luaK_exp2nextreg(fs, &innerexp);
   }
 
+  /* The k bit of OP_ENDCATCH records whether the inner expression maintains
+  ** L->top at runtime. Recomputed after the discharge above: open calls,
+  ** varargs, nested catches, and do-expressions stay multiret kinds and do
+  ** set L->top (a do-expression through its OP_PROVIDE and OP_ENDDO
+  ** protocol), while single-value expressions leave it untouched. */
+  toptracked = hasmultret(innerexp.k);
+
   /* Emit OP_ENDCATCH: A=base, B=nresults (default 2), C=jump offset
    *(placeholder)
    ** The B field (nresults) will be updated by luaK_setreturns if needed. */
-  endcatchpc = luaK_codeABC(fs, OP_ENDCATCH, base, 2, 0);
+  endcatchpc = luaK_codeABCk(fs, OP_ENDCATCH, base, 2, 0, toptracked);
 
   /* Fix the OP_CATCH's C field (offset to error path) */
   {
@@ -2660,8 +2686,13 @@ static void catchstat(LexState *ls, int line) {
     luaK_exp2nextreg(fs, &innerexp);
   }
 
-  /* Emit OP_ENDCATCH: A=base, B=1 (0 results), C=jump offset (placeholder) */
-  luaK_codeABC(fs, OP_ENDCATCH, base, 1, 0);
+  /* Emit OP_ENDCATCH: A=base, B=1 (0 results), C=jump offset (placeholder).
+  ** The k bit is always 0 here: the discharge above fixes the inner
+  ** expression to a count of zero results, and fixed-count discharges do
+  ** not maintain L->top at runtime (a fixed-count OP_VARARG leaves it
+  ** wherever it was, possibly below live locals). k=0 makes the VM ignore
+  ** L->top entirely, and B=1 then truncates every result. */
+  luaK_codeABCk(fs, OP_ENDCATCH, base, 1, 0, 0);
 
   /* Fix the OP_CATCH's C field (offset to error path) */
   {
@@ -2680,7 +2711,14 @@ static void catchstat(LexState *ls, int line) {
 /*
 ** Parse a do expression: do <statements> [provide <explist>] end
 ** Returns the value(s) from the provide statement, or nil if no provide.
-** The result is placed in a register.
+**
+** Codegen protocol: the result register at 'base' is reserved and
+** nil-initialized, every provide statement (and the fall-through path)
+** emits an OP_PROVIDE that materializes its values at 'base' and sets
+** L->top just past them, and all paths join at a single OP_ENDDO. The
+** expression is a genuine multi-value kind (VDOEXPR, info = the ENDDO
+** pc), so consumers patch the ENDDO's B field through luaK_setreturns
+** and luaK_setoneret exactly as they patch an open call's C field.
 **
 ** CRITICAL ISSUE: The Lua parser's vardesc array ordering conflicts with
 ** do-expressions when used as initializers. In `local x = do local y...`,
@@ -2689,14 +2727,21 @@ static void catchstat(LexState *ls, int line) {
 ** indexing which retrieves x's vardesc instead of y's!
 **
 ** SOLUTION: Keep nactvar "elevated" to account for pending vardesc entries
-** during the entire parsing of the block. Additionally, we must pre-assign
-** ridx values to pending variables so that reglevel() returns correct values
-** when computing register allocation for variables inside the do-block.
+** during the entire parsing of the block. We also pre-assign placeholder
+** ridx values to pending variables so that by-name references to them
+** inside the block keep resolving. The register level itself is pinned by
+** a hidden anchor vardesc occupying the result register (the same
+** technique as the "(for state)" internals): it makes luaY_nvarstack
+** equal fs->freereg inside the block in every context (declaration,
+** call argument, table constructor, interpolation, catch), so block
+** locals get their true registers regardless of how many temporaries
+** live below the do-expression.
 */
 static void doexpr(LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   BlockCnt bl;
   int base = fs->freereg;
+  int enddopc;
   int line = ls->linenumber;
   int column = ls->tokencolumn;
   LusAstNode *donode = NULL;
@@ -2743,6 +2788,23 @@ static void doexpr(LexState *ls, expdesc *v) {
   ** KEEP it elevated during all of statlist(). */
   fs->nactvar += pending;
 
+  /* Anchor vardesc: a hidden active variable occupying the result
+  ** register. It pins reglevel over the elevated nactvar to base + 1, so
+  ** luaY_nvarstack matches fs->freereg inside the block whatever
+  ** temporaries or pending variables sit below the do-expression. Its
+  ** parenthesized name can never match a user identifier in searchvar.
+  ** It is activated by hand because adjustlocalvars would derive its
+  ** register from the pending placeholders, which is the very
+  ** misalignment the anchor exists to prevent. */
+  new_localvarliteral(ls, "(do expr)");
+  {
+    Vardesc *anchor = getlocalvardesc(fs, fs->nactvar);
+    luaY_checklimit(fs, fs->nactvar + 1, MAXVARS, "local variables");
+    anchor->vd.ridx = cast_byte(base);
+    anchor->vd.pidx = registerlocalvar(ls, fs, anchor->vd.name);
+    fs->nactvar++;
+  }
+
   /* Enter block with elevated nactvar */
   enterblock(fs, &bl, 0);
   bl.isdoexpr = 1;
@@ -2752,14 +2814,28 @@ static void doexpr(LexState *ls, expdesc *v) {
   /* Parse block contents - nactvar stays elevated */
   statlist(ls);
 
-  /* Patch all provide jumps to here */
+  /* Fall-through path: provide the single nil placed at 'base' when the
+  ** block was entered. The k bit closes the block's upvalues and
+  ** to-be-closed variables, since leaveblock emits no close for
+  ** do-expression blocks. */
+  luaK_codeABCk(fs, OP_PROVIDE, base, 2, base,
+                (bl.upval || bl.insidetbc) ? 1 : 0);
+
+  /* Patch all provide exit jumps to the join point (the ENDDO below) */
   luaK_patchtohere(fs, bl.doexpr_exitjump);
 
   check_match(ls, TK_END, TK_DO, line);
 
-  /* leaveblock will use bl.nactvar (which includes pending) to clean up.
-  ** After leaveblock, nactvar is reset to bl.nactvar. */
+  /* leaveblock will use bl.nactvar (which includes pending and the
+  ** anchor) to clean up. After leaveblock, nactvar is reset to
+  ** bl.nactvar. */
   leaveblock(fs);
+
+  /* Drop the anchor: it is the top active entry now that leaveblock
+  ** removed the block's own variables. This closes its debug range and
+  ** makes the pending entries the array tail again, as the enclosing
+  ** local statement's adjustlocalvars expects. */
+  removevars(fs, fs->nactvar - 1);
 
   /* Restore the real nactvar (without the pending vars) */
   fs->nactvar = real_nactvar;
@@ -2784,20 +2860,15 @@ static void doexpr(LexState *ls, expdesc *v) {
   /* After leaveblock, freereg is reset. Set it to base+1 to keep result. */
   fs->freereg = cast_byte(base + 1);
 
-  /* Result is a do-expression (multi-return).
-  ** Like VCALL, the actual number of results depends on context.
-  ** Encode both base register and number of values provided in info:
-  ** info = base | (nvalues << 8), where nvalues comes from the block.
-  ** If nvalues is 0 (no provide), treat as 1 (the nil default).
-  ** If nvalues is -1 (inner multi-return), we can't know, so be conservative. */
-  {
-    int nvalues = bl.doexpr_nvalues;
-    if (nvalues == 0)
-      nvalues = 1; /* no provide = 1 nil */
-    if (nvalues < 0)
-      nvalues = 255; /* unknown = assume many (won't nil-fill) */
-    init_exp(v, VDOEXPR, base | (nvalues << 8));
-  }
+  /* Emit the join point. Every path reaches it with L->top set by its
+  ** OP_PROVIDE, so the count adjustment is a runtime concern: consumers
+  ** patch the B field (default 2, one value) through luaK_setreturns or
+  ** luaK_setoneret, exactly as they patch an open call. */
+  enddopc = luaK_codeABC(fs, OP_ENDDO, base, 2, 0);
+
+  /* Result is a do-expression (multi-return). Like VCALL, the actual
+  ** number of results depends on context. info points to the ENDDO. */
+  init_exp(v, VDOEXPR, enddopc);
 
   /* Set AST after init_exp (which clears v->ast) */
   if (AST_ACTIVE(ls))
@@ -2805,9 +2876,34 @@ static void doexpr(LexState *ls, expdesc *v) {
 }
 
 /*
+** Does any block from 'fs->bl' up to and including the do-expression
+** block 'bl' hold upvalues or to-be-closed variables? Then a provide
+** exit must close them (over their original slots) before the window
+** move overwrites those slots, via the k bit of OP_PROVIDE. Inner
+** blocks close their own variables when control leaves them normally,
+** so this is conservative only for enclosing scopes, where the extra
+** close finds nothing to do. Must be evaluated after the provide's
+** expression list is parsed: a closure in the list marks its captures
+** on the block flags during parsing.
+*/
+static int provideneedsclose(FuncState *fs, BlockCnt *bl) {
+  BlockCnt *b2;
+  for (b2 = fs->bl;; b2 = b2->previous) {
+    if (b2->upval || b2->insidetbc)
+      return 1;
+    if (b2 == bl)
+      return 0;
+  }
+}
+
+/*
 ** Handle the 'provide' statement inside a do-expression.
-** Evaluates the expression list and moves results to the do-expr's base register.
-** Then jumps to the end of the do-expression.
+** Evaluates the expression list into temporaries and emits an OP_PROVIDE
+** that moves the values down to the do-expression's base register and
+** sets L->top just past them, then jumps to the join point (OP_ENDDO).
+** A trailing open call or vararg stays open: the OP_PROVIDE is emitted
+** directly after it with B=0 and takes the count from L->top, so all of
+** its results (including zero of them) are propagated faithfully.
 */
 static void providestat(LexState *ls) {
   FuncState *fs = ls->fs;
@@ -2828,53 +2924,35 @@ found:
 
   if (block_follow(ls, 1) || ls->t.token == ';') {
     /* provide with no values = provide nil (already set at do-expr start) */
-    bl->doexpr_nvalues = 1; /* counts as 1 nil value */
+    luaK_codeABCk(fs, OP_PROVIDE, base, 2, base, provideneedsclose(fs, bl));
   }
   else {
-    /* Parse expression list into temporary registers, then move to base.
-    ** We can't directly put results at 'base' because it's a local variable
-    ** slot that might conflict with the expression evaluation. */
+    /* Parse expression list into temporary registers starting at src.
+    ** The values cannot be built directly at 'base' because the block's
+    ** own locals live between 'base' and the temporaries. */
+    int src = fs->freereg;
     int nexps = explist(ls, &e);
     /* Capture values in AST_PROVIDE node */
     if (AST_ACTIVE(ls) && ls->ast->curnode &&
         ls->ast->curnode->type == AST_PROVIDE) {
       ls->ast->curnode->u.ret.values = e.ast;
     }
-    bl->doexpr_nvalues = nexps; /* track how many values were provided */
     if (hasmultret(e.k)) {
-      /* Multi-return: let it fill in starting at freereg */
+      /* Keep the trailing call or vararg open. The OP_PROVIDE directly
+      ** follows it and reads the value count from L->top. */
       luaK_setmultret(fs, &e);
-      /* Move first result to base */
-      luaK_exp2anyreg(fs, &e);
-      if (e.u.info != base) {
-        luaK_codeABC(fs, OP_MOVE, base, e.u.info, 0);
-      }
-      /* For multi-return, we don't know exact count, assume needs may vary */
-      bl->doexpr_nvalues = -1; /* -1 means "unknown/multi-return" */
-    }
-    else if (nexps == 1) {
-      /* Single expression: move to base */
-      luaK_exp2anyreg(fs, &e);
-      if (e.u.info != base) {
-        luaK_codeABC(fs, OP_MOVE, base, e.u.info, 0);
-      }
+      luaK_codeABCk(fs, OP_PROVIDE, base, 0, src, provideneedsclose(fs, bl));
     }
     else {
-      /* Multiple expressions: they're already in consecutive registers.
-      ** Move them to base. */
-      luaK_exp2nextreg(fs, &e); /* close last expression */
-      /* Results are in [freereg - nexps, freereg).
-      ** Move to [base, base + nexps). */
-      int src = fs->freereg - nexps;
-      if (src != base) {
-        for (int i = 0; i < nexps; i++) {
-          luaK_codeABC(fs, OP_MOVE, base + i, src + i, 0);
-        }
-      }
+      /* Fixed count: close the last expression so all values sit in
+      ** consecutive registers at [src, src + nexps). */
+      luaK_exp2nextreg(fs, &e);
+      luaK_codeABCk(fs, OP_PROVIDE, base, nexps + 1, src,
+                    provideneedsclose(fs, bl));
     }
   }
 
-  /* Jump to end of do-expression */
+  /* Jump to the join point (the do-expression's OP_ENDDO) */
   luaK_concat(fs, &bl->doexpr_exitjump, luaK_jump(fs));
 }
 
@@ -5852,9 +5930,12 @@ static void localstat(LexState *ls) {
       ls->ast->curnode->u.decl.values = e.ast;
       ls->ast->curnode->u.decl.isfrom = 0;
     }
-    var = getlocalvardesc(fs, vidx);       /* retrieve last variable */
-    if (nvars == nexps &&                  /* no adjustments? */
-        var->vd.kind == RDKCONST &&        /* last variable is const? */
+    var = getlocalvardesc(fs, vidx); /* retrieve last variable */
+    if (nvars == nexps &&            /* no adjustments? */
+        var->vd.nattrs == 0 &&       /* no runtime attrs (must run on init)? */
+        var->vd.kind == RDKCONST &&  /* last variable is const? */
+        /* nattrs is read before luaK_exp2const, which writes var->k over the
+        ** vd struct that shares the union. */
         luaK_exp2const(fs, &e, &var->k)) { /* compile-time constant? */
       var->vd.kind = RDKCTC;          /* variable is a compile-time constant */
       adjustlocalvars(ls, nvars - 1); /* exclude last variable */
@@ -5896,6 +5977,9 @@ static lu_byte getglobalattribute(LexState *ls, lu_byte df) {
   switch (kind) {
     case RDKTOCLOSE:
       luaK_semerror(ls, "global variables cannot be to-be-closed");
+      return kind; /* to avoid warnings */
+    case RDKGROUP:
+      luaK_semerror(ls, "global variables cannot be groups");
       return kind;                  /* to avoid warnings */
     case RDKCONST: return GDKCONST; /* adjust kind for global variable */
     default: return kind;
@@ -6273,9 +6357,20 @@ static void retstat(LexState *ls) {
       if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc) { /* tail call? */
         Instruction *pc = &getinstruction(fs, &e);
         if (GET_OPCODE(*pc) == OP_FASTCALL) {
-          /* Fastcalls produce exactly 1 result and are faster than C tail
-             calls. Undo setmultret and let OP_RETURN1 handle it. */
-          SETARG_C(*pc, 2);
+          /* funcargs always emits the EXTRAARG right after the FASTCALL */
+          int fcid = GETARG_Ax(pc[1]);
+          if (luaF_fc_defs[fcid].multret) {
+            /* The builtin may return other than exactly one value at
+               this arity, so keep the open call (there is no tail-call
+               form because of the trailing EXTRAARG) and return all of
+               its results, as the OP_REQUIRE branch below does. */
+            nret = LUA_MULTRET;
+          }
+          else {
+            /* Single-result fastcalls are faster than C tail calls.
+               Undo setmultret and let OP_RETURN1 handle it. */
+            SETARG_C(*pc, 2);
+          }
         }
         else if (GET_OPCODE(*pc) == OP_REQUIRE) {
           /* No tail-call form (an EXTRAARG follows); keep the open call

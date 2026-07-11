@@ -29,8 +29,18 @@ tests:it("standard streams are userdata", function()
 end)
 
 tests:it("file handles have stable identity", function()
-    assert(io.stdin == io.stdin, "same handle compares equal")
+    -- Two independent lookups of the same underlying stream must yield
+    -- the very same userdata object.
+    assert(io.input() == io.stdin, "io.input() returns the io.stdin object")
+    assert(io.output() == io.stdout, "io.output() returns the io.stdout object")
     assert(io.stdin ~= io.stdout, "distinct handles compare unequal")
+    -- Two opens of the same file are distinct userdata values.
+    local f1 = io.open("lus-tests/framework.lus", "r")
+    local f2 = io.open("lus-tests/framework.lus", "r")
+    assert(f1 and f2, "the pledged test file opens for reading")
+    assert(f1 ~= f2, "two opens of the same file are distinct handles")
+    f1:close()
+    f2:close()
 end)
 
 tests:it("file methods come from the metatable __index", function()
@@ -89,9 +99,9 @@ end)
 tests:it("a bound TCP server is userdata", function()
     local server = network.tcp.bind("127.0.0.1", 19987)
     assert(type(server) == "userdata", "server should be userdata")
-    assert(server == server, "server has stable identity")
     assert(type(server.close) == "function", "close method via metatable")
     assert(tostring(server):find("server"), "tostring tags it a server")
+    server:close()
 end)
 
 tests:it("a closed socket still renders via __tostring", function()

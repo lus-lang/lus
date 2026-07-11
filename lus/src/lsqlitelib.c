@@ -40,6 +40,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lgc.h"
 #include "lobject.h"
 #include "lpledge.h"
 #include "lstate.h"

@@ -15,6 +15,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lgc.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lvector.h"
@@ -24,6 +25,7 @@
 #include <brotli/encode.h>
 #include <brotli/decode.h>
 #include <lz4frame.h>
+#include <lz4.h>
 
 
 /* ===================================================================
@@ -594,8 +596,69 @@ static int archive_lz4_decompress(lua_State *L) {
 }
 
 
+/*
+** Legacy LZ4 frame layout, used by archive_lz4_decompress_hc. A legacy
+** frame is the 4-byte little-endian magic 0x184C2102 followed by one or
+** more blocks. Each block is a 4-byte little-endian compressed size and
+** that many bytes of a raw LZ4 block. Every legacy block decodes to at
+** most LZ4_LEGACY_BLOCKSIZE bytes, so a fixed output window of that size
+** is a safe capacity for LZ4_decompress_safe on each block. A size field
+** that carries a modern or skippable frame magic marks the end of the
+** legacy content, since no legacy block ever decodes to that many bytes.
+*/
+#define LZ4_LEGACY_MAGIC 0x184C2102u
+#define LZ4_MODERN_MAGIC 0x184D2204u
+#define LZ4_SKIPPABLE_MIN 0x184D2A50u
+#define LZ4_SKIPPABLE_MAX 0x184D2A5Fu
+#define LZ4_LEGACY_BLOCKSIZE (8 * 1024 * 1024)
+
+static unsigned archive_read_le32(const unsigned char *p) {
+  return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) |
+         ((unsigned)p[3] << 24);
+}
+
+
 static int archive_lz4_decompress_hc(lua_State *L) {
-  return archive_lz4_decompress_impl(L);
+  const char *input;
+  size_t input_len;
+  int is_vec;
+  archive_getinput(L, 1, &input, &input_len, &is_vec);
+  size_t maxout = archive_maxout(L, 2);
+
+  const unsigned char *p = (const unsigned char *)input;
+  if (input_len < 4 || archive_read_le32(p) != LZ4_LEGACY_MAGIC)
+    return luaL_error(L, "lz4 decompress_hc: not a legacy LZ4 frame");
+
+  luaL_Buffer buf;
+  luaL_buffinit(L, &buf);
+
+  p += 4;
+  size_t remaining = input_len - 4;
+  while (remaining >= 4) {
+    unsigned block_size = archive_read_le32(p);
+    p += 4;
+    remaining -= 4;
+    if (block_size == LZ4_MODERN_MAGIC ||
+        (block_size >= LZ4_SKIPPABLE_MIN && block_size <= LZ4_SKIPPABLE_MAX))
+      break; /* a following frame begins here, legacy content ends */
+    if (block_size > remaining)
+      return luaL_error(L, "lz4 decompress_hc: truncated block");
+    if (block_size > (unsigned)INT_MAX)
+      return luaL_error(L, "lz4 decompress_hc: block too large");
+    char *out = luaL_prepbuffsize(&buf, LZ4_LEGACY_BLOCKSIZE);
+    int dsz = LZ4_decompress_safe((const char *)p, out, (int)block_size,
+                                  LZ4_LEGACY_BLOCKSIZE);
+    if (dsz < 0)
+      return luaL_error(L, "lz4 decompress_hc: corrupt block");
+    luaL_addsize(&buf, (size_t)dsz);
+    if (luaL_bufflen(&buf) > maxout)
+      return archive_toobig(L, maxout);
+    p += block_size;
+    remaining -= block_size;
+  }
+
+  archive_pushbufferresult(L, &buf, 0, is_vec);
+  return 1;
 }
 
 

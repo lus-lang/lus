@@ -213,9 +213,19 @@ tests:it("nil orders first ascending", function()
 end)
 
 tests:it("NaN orders with nil", function()
-    local t = { { a = 2 }, { a = 0 / 0 }, { a = 1 } }
+    -- NaN keys sort in the same leading band as nil keys: both come
+    -- before every number ascending, in unpinned order between them.
+    local t = { { a = 2 }, {}, { a = 0 / 0 }, { a = 1 } }
     local rows = collect(@t as r select r order by r.a)
-    assert(rows[1].a ~= rows[1].a, "the NaN row comes first")
+    local function unordered(v)
+        return v == nil or v ~= v
+    end
+    assert(unordered(rows[1].a), "a non-value row comes first")
+    assert(unordered(rows[2].a), "the other non-value row comes second")
+    assert((rows[1].a == nil) ~= (rows[2].a == nil),
+        "the leading band holds exactly the nil row and the NaN row")
+    tests:assert_equal(rows[3].a, 1)
+    tests:assert_equal(rows[4].a, 2)
 end)
 
 tests:it("ordering across types raises", function()

@@ -503,12 +503,18 @@ static void emit_methodcall(FmtState *F, LusAstNode *n) {
 }
 
 /* Emit function parameters (linked list of AST_NAME) */
-static void emit_params(FmtState *F, LusAstNode *params) {
+static void emit_params(FmtState *F, LusAstNode *params, int isvararg) {
   for (LusAstNode *p = params; p != NULL; p = p->next) {
     if (p != params)
       buf_adds(&F->buf, ", ");
-    if (p->type == AST_NAME && p->u.var.name)
+    if (p->type == AST_NAME && p->u.var.name) {
+      /* A named vararg (`...name`) parses to a trailing AST_NAME. When the */
+      /* function is variadic, the final param node is that vararg, so */
+      /* restore the "..." marker the parser folded away. */
+      if (isvararg && p->next == NULL)
+        buf_adds(&F->buf, "...");
       buf_addlstr(&F->buf, getstr(p->u.var.name), tsslen(p->u.var.name));
+    }
     else if (p->type == AST_VARARG)
       buf_adds(&F->buf, "...");
   }
@@ -553,7 +559,7 @@ static void emit_funcbody(FmtState *F, LusAstNode *n, const char *prefix) {
   }
 
   buf_addc(&F->buf, '(');
-  emit_params(F, n->u.func.params);
+  emit_params(F, n->u.func.params, n->u.func.isvararg);
   buf_addc(&F->buf, ')');
   emit_trailing_comment(F, n->line);
   emit_nl(F);
@@ -676,10 +682,27 @@ static void emit_expr(FmtState *F, LusAstNode *n) {
     case AST_VARARG: buf_adds(&F->buf, "..."); break;
 
     case AST_NUMBER:
-      if (n->u.num.isint)
-        buf_addfmt(&F->buf, "%lld", (long long)n->u.num.val.i);
-      else
-        buf_addfmt(&F->buf, "%.14g", n->u.num.val.n);
+      if (n->u.num.isint) {
+        /* The decimal spelling of every integer reparses as the same */
+        /* integer except LUA_MININTEGER, whose magnitude overflows the */
+        /* decimal integer range and reparses as a float. Emit that one */
+        /* value in hex, which wraps back to the identical integer. */
+        if (n->u.num.val.i == LUA_MININTEGER)
+          buf_adds(&F->buf, "0x8000000000000000");
+        else
+          buf_addfmt(&F->buf, "%lld", (long long)n->u.num.val.i);
+      }
+      else {
+        /* Reconstruct a round-trip-exact float spelling. The core converter */
+        /* escalates precision until the value reparses identically and keeps */
+        /* a float marker, so an integral-valued float stays a float. */
+        TValue tv;
+        char nbuf[LUA_N2SBUFFSZ];
+        unsigned nlen;
+        setfltvalue(&tv, n->u.num.val.n);
+        nlen = luaO_tostringbuff(&tv, nbuf);
+        buf_addlstr(&F->buf, nbuf, nlen);
+      }
       break;
 
     case AST_STRING: emit_string_lit(F, n); break;

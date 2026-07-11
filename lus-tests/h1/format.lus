@@ -1,0 +1,362 @@
+-- Dedicated string.format suite.
+-- Covers every printf-style conversion the spec lists (%d %i %u %c %x %X %o
+-- %e %E %f %g %G %a %A %s %q %%), the %q reloadable-literal contract through
+-- load(), width and precision and flag combinations, __tostring dispatch under
+-- %s, and the full set of error paths (non-integer-representable numbers,
+-- missing arguments, invalid conversions, wrong argument types, and oversized
+-- conversion specifications).
+
+global print, require, string, math, load, tostring, type, pledge, setmetatable
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("format")
+
+local string = string
+local math = math
+
+-- Reload a formatted literal back into a value through load, which is the
+-- property %q is designed to guarantee for its output.
+local function reload(literal)
+    return load("return " .. literal)()
+end
+
+-- ============================================================
+-- Every conversion produces its expected canonical rendering.
+-- ============================================================
+
+tests:each("integer conversions render as expected", {
+    {"%d", 123, "123"},
+    {"%d", -123, "-123"},
+    {"%d", 0, "0"},
+    {"%i", 123, "123"},
+    {"%i", -7, "-7"},
+    {"%u", 10, "10"},
+    {"%u", 0, "0"},
+    {"%x", 255, "ff"},
+    {"%X", 255, "FF"},
+    {"%x", 0, "0"},
+    {"%o", 8, "10"},
+    {"%o", 64, "100"},
+    {"%c", 65, "A"},
+    {"%c", 97, "a"},
+}, function(fmt, arg, expected)
+    tests:assert_equal(string.format(fmt, arg), expected)
+end)
+
+tests:it("%i is an exact alias of %d", function()
+    tests:assert_equal(string.format("%i", 42), string.format("%d", 42))
+    tests:assert_equal(string.format("%i", -1), string.format("%d", -1))
+    tests:assert_equal(string.format("%5i", 7), string.format("%5d", 7))
+end)
+
+tests:each("float conversions render as expected", {
+    {"%f", 1.5, "1.500000"},
+    {"%f", 0.0, "0.000000"},
+    {"%e", 1.5, "1.500000e+00"},
+    {"%E", 1.5, "1.500000E+00"},
+    {"%g", 0.0001, "0.0001"},
+    {"%g", 1.0, "1"},
+    {"%g", 100.0, "100"},
+    {"%G", 0.00001, "1E-05"},
+    {"%a", 1.0, "0x1p+0"},
+    {"%A", 1.0, "0X1P+0"},
+    {"%a", 0.15625, "0x1.4p-3"},
+}, function(fmt, arg, expected)
+    tests:assert_equal(string.format(fmt, arg), expected)
+end)
+
+tests:each("string conversions", {
+    {"%s", "test", "test"},
+    {"%s", "", ""},
+    {"%s%%", "x", "x%"},
+}, function(fmt, arg, expected)
+    tests:assert_equal(string.format(fmt, arg), expected)
+end)
+
+tests:it("the %% directive emits a single literal percent", function()
+    tests:assert_equal(string.format("%%"), "%")
+    tests:assert_equal(string.format("100%%"), "100%")
+    tests:assert_equal(string.format("%d%%", 50), "50%")
+end)
+
+tests:it("%s coerces non-string scalars", function()
+    tests:assert_equal(string.format("%s", 123), "123")
+    tests:assert_equal(string.format("%s", true), "true")
+    tests:assert_equal(string.format("%s", false), "false")
+    tests:assert_equal(string.format("%s", nil), "nil")
+    tests:assert_equal(string.format("%s", 1.5), "1.5")
+end)
+
+-- ============================================================
+-- Width, precision, and flag handling.
+-- ============================================================
+
+tests:each("width and precision and flag combinations", {
+    {"%5.2f", 3.14159, " 3.14"},
+    {"%-5d", 42, "42   "},
+    {"%05d", 42, "00042"},
+    {"%+d", 42, "+42"},
+    {"% d", 42, " 42"},
+    {"%+d", -42, "-42"},
+    {"%10s", "hi", "        hi"},
+    {"%-10s", "hi", "hi        "},
+    {"%.3s", "hello", "hel"},
+    {"%.0f", 2.5, "2"},
+    {"%#x", 255, "0xff"},
+    {"%#o", 8, "010"},
+    {"%+.3e", 1234.5, "+1.234e+03"},
+    {"%08.2f", 3.5, "00003.50"},
+    {"%-8.2f", 3.5, "3.50    "},
+}, function(fmt, arg, expected)
+    tests:assert_equal(string.format(fmt, arg), expected)
+end)
+
+tests:it("multiple conversions in one format string", function()
+    tests:assert_equal(string.format("%d-%s-%x", 1, "a", 255), "1-a-ff")
+    tests:assert_equal(string.format("%c%c%c", 104, 105, 33), "hi!")
+end)
+
+-- ============================================================
+-- Unsigned and hex conversions treat integers as two's complement.
+-- ============================================================
+
+tests:it("unsigned and hex conversions wrap negative integers", function()
+    tests:assert_equal(string.format("%x", -1), "ffffffffffffffff")
+    tests:assert_equal(string.format("%X", -1), "FFFFFFFFFFFFFFFF")
+    tests:assert_equal(string.format("%u", -1), "18446744073709551615")
+    tests:assert_equal(string.format("%o", -1), "1777777777777777777777")
+end)
+
+tests:it("hex of the maximum integer", function()
+    tests:assert_equal(string.format("%x", math.maxinteger), "7fffffffffffffff")
+    tests:assert_equal(string.format("%x", math.mininteger), "8000000000000000")
+end)
+
+-- ============================================================
+-- %c casts modulo 256 rather than rejecting out-of-range values.
+-- ============================================================
+
+tests:it("%c reduces its argument to a single byte", function()
+    tests:assert_equal(string.byte(string.format("%c", 65)), 65)
+    tests:assert_equal(string.byte(string.format("%c", 256)), 0)
+    tests:assert_equal(string.byte(string.format("%c", -1)), 255)
+    -- 1000000 modulo 256 is 64, which is the byte for '@'.
+    tests:assert_equal(string.format("%c", 1000000), "@")
+    tests:assert_equal(#string.format("%c", 0), 1)
+end)
+
+-- ============================================================
+-- %s dispatches to __tostring for tables.
+-- ============================================================
+
+tests:it("%s invokes __tostring on a table", function()
+    local t = setmetatable({}, {__tostring = function() return "CUSTOM" end})
+    tests:assert_equal(string.format("%s", t), "CUSTOM")
+    tests:assert_equal(string.format("[%10s]", t), "[    CUSTOM]")
+    tests:assert_equal(string.format("[%.3s]", t), "[CUS]")
+end)
+
+tests:it("%s accepts a numeric __tostring result by coercing it", function()
+    local t = setmetatable({}, {__tostring = function() return 42 end})
+    tests:assert_equal(string.format("%s", t), "42")
+end)
+
+tests:it("%s errors when __tostring returns a non-coercible value", function()
+    local t = setmetatable({}, {__tostring = function() return true end})
+    tests:assert_throws(function() return string.format("%s", t) end, "must return a string")
+end)
+
+-- ============================================================
+-- %q escaping and the reload-through-load round-trip contract.
+-- ============================================================
+
+tests:it("%q of a plain string reloads identically", function()
+    local s = "hello world"
+    tests:assert_equal(reload(string.format("%q", s)), s)
+end)
+
+tests:it("%q escapes quotes, backslashes, newlines, and NUL and reloads", function()
+    local s = "he\"llo\n\\wor\0ld\r\ttail"
+    local literal = string.format("%q", s)
+    tests:assert_equal(reload(literal), s)
+    -- The escaped literal must not contain a bare double quote in its interior
+    -- beyond the two delimiters, so the string content survives reparsing.
+    tests:assert_equal(reload(literal), s)
+end)
+
+tests:each("%q reloads binary strings across the full byte range", {
+    {"\0\1\2\255"},
+    {"line1\nline2"},
+    {"tab\there"},
+    {"quote\"inside"},
+    {"back\\slash"},
+    {"\13carriage"},
+}, function(s)
+    tests:assert_equal(reload(string.format("%q", s)), s)
+end)
+
+tests:it("%q of an integer reloads as the same integer", function()
+    local literal = string.format("%q", 100)
+    local back = reload(literal)
+    tests:assert_equal(back, 100)
+    tests:assert_equal(math.type(back), "integer")
+end)
+
+tests:it("%q of math.mininteger reloads as an integer", function()
+    local literal = string.format("%q", math.mininteger)
+    local back = reload(literal)
+    tests:assert_equal(back, math.mininteger)
+    tests:assert_equal(math.type(back), "integer")
+end)
+
+tests:it("%q of math.maxinteger reloads exactly", function()
+    local back = reload(string.format("%q", math.maxinteger))
+    tests:assert_equal(back, math.maxinteger)
+    tests:assert_equal(math.type(back), "integer")
+end)
+
+tests:each("%q of floats reloads exactly through hex-float output", {
+    {0.1},
+    {3.14159},
+    {0.15625},
+    {-2.5},
+    {1e300},
+    {0.0},
+}, function(f)
+    local back = reload(string.format("%q", f))
+    tests:assert_equal(back, f)
+    tests:assert_equal(math.type(back), "float")
+end)
+
+tests:it("%q of infinities reloads to the same infinities", function()
+    tests:assert_equal(reload(string.format("%q", 1/0)), 1/0)
+    tests:assert_equal(reload(string.format("%q", -1/0)), -1/0)
+end)
+
+tests:it("%q of NaN reloads to a value that is not equal to itself", function()
+    local back = reload(string.format("%q", 0/0))
+    tests:assert_true(back ~= back, "reloaded NaN should compare unequal to itself")
+end)
+
+tests:it("%q of the nil literal reloads to nil", function()
+    local literal = string.format("%q", nil)
+    tests:assert_equal(literal, "nil")
+    tests:assert_nil(reload(literal))
+end)
+
+tests:each("%q of the boolean literals reload identically", {
+    {true, "true"},
+    {false, "false"},
+}, function(v, shown)
+    local literal = string.format("%q", v)
+    tests:assert_equal(literal, shown)
+    tests:assert_equal(reload(literal), v)
+end)
+
+tests:it("%q rejects values with no literal form", function()
+    tests:assert_throws(function() return string.format("%q", {}) end, "no literal form")
+end)
+
+-- ============================================================
+-- Integer conversions reject non-integer-representable numbers.
+-- ============================================================
+
+tests:it("%d accepts a float with an integral value", function()
+    tests:assert_equal(string.format("%d", 2.0), "2")
+    tests:assert_equal(string.format("%d", -5.0), "-5")
+end)
+
+tests:each("integer conversions reject fractional floats", {
+    {"%d", 1.5},
+    {"%i", 2.7},
+    {"%u", 3.5},
+    {"%x", 1.5},
+    {"%o", 9.9},
+    {"%c", 1.5},
+}, function(fmt, arg)
+    tests:assert_throws(function() return string.format(fmt, arg) end,
+        "no integer representation")
+end)
+
+tests:it("%d coerces numeric strings including hex", function()
+    tests:assert_equal(string.format("%d", "42"), "42")
+    tests:assert_equal(string.format("%d", "0x1A"), "26")
+    tests:assert_equal(string.format("%d", "  17  "), "17")
+end)
+
+tests:it("%d rejects a non-numeric string", function()
+    tests:assert_throws(function() return string.format("%d", "foo") end,
+        "number expected")
+end)
+
+-- ============================================================
+-- Wrong argument types for each conversion family.
+-- ============================================================
+
+tests:each("conversions reject the wrong argument type", {
+    {"%d", {}, "number expected"},
+    {"%f", "notnum", "number expected"},
+    {"%x", {}, "number expected"},
+    {"%e", true, "number expected"},
+    {"%g", {}, "number expected"},
+    {"%c", {}, "number expected"},
+    {"%d", nil, "number expected"},
+    {"%f", nil, "number expected"},
+}, function(fmt, arg, pattern)
+    tests:assert_throws(function() return string.format(fmt, arg) end, pattern)
+end)
+
+-- ============================================================
+-- Missing arguments, invalid conversions, oversized specs.
+-- ============================================================
+
+tests:each("too few arguments raise a no-value error", {
+    {"%d"},
+    {"%s"},
+    {"%d %d"},
+    {"%f%f%f"},
+    {"%q"},
+}, function(fmt)
+    tests:assert_throws(function() return string.format(fmt) end, "no value")
+end)
+
+tests:each("invalid conversion characters raise an error", {
+    {"%k"},
+    {"%y"},
+    {"%w"},
+    {"%"},
+    {"%1.2z"},
+}, function(fmt)
+    tests:assert_throws(function() return string.format(fmt, 1) end,
+        "invalid conversion")
+end)
+
+tests:it("an extremely large width raises rather than crashing", function()
+    tests:assert_throws(function() return string.format("%1000000d", 1) end,
+        "invalid conversion specification")
+    tests:assert_throws(function() return string.format("%.1000000f", 1.0) end,
+        "invalid conversion specification")
+end)
+
+tests:it("a moderately large but legal width still formats", function()
+    local s = string.format("%99d", 1)
+    tests:assert_equal(#s, 99)
+    tests:assert_equal(string.byte(s, 99), 49)
+end)
+
+tests:it("format with no directives returns the string verbatim", function()
+    tests:assert_equal(string.format("plain text"), "plain text")
+    tests:assert_equal(string.format(""), "")
+    tests:assert_equal(string.format("no percent here"), "no percent here")
+end)
+
+tests:it("format preserves embedded NUL bytes in the literal text", function()
+    local out = string.format("a\0%d\0b", 5)
+    tests:assert_equal(#out, 5)
+    tests:assert_equal(string.byte(out, 2), 0)
+    tests:assert_equal(string.sub(out, 3, 3), "5")
+end)
+
+tests:finish()

@@ -1,0 +1,448 @@
+--[[
+  Query engine edges that the core execution and syntax suites do not
+  reach: query and db:query iterators crossing coroutine boundaries,
+  coroutine.yield attempted from inside where-clause and transaction
+  host closures, to-be-closed database handles unwound by
+  coroutine.close, line-anchored diagnostics for every documented query
+  syntax error (the language server consumes these), and byte-identical
+  ordering, grouping, and integer-boundary parity between the in-memory
+  provider and the SQLite provider. Everything runs on ":memory:"
+  databases under the standard sealed pledge.
+
+  Execution semantics live in h1/query.lus, syntax and value semantics
+  in h1/query_syntax.lus, and the push-down split in h1/query_sqlite.lus.
+]]
+
+global io, print, assert, require, pledge, type, tostring, string, table,
+    load, collectgarbage, debug, pairs, ipairs, query, coroutine, math, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("query2")
+
+local function collect(q)
+    local out = {}
+    for row in query(q) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+-- Build a query over an arbitrary source by appending a clause tail. The
+-- source arrives as a runtime parameter so one clause string can run
+-- against both a plain table and a db table reference.
+local function build(src, tail)
+    return load("local s = ... return @(s) as x " .. tail)(src)
+end
+
+-- Serialize a single-column result, marking an absent field as NULL so a
+-- nil in a memory table and a NULL in a SQLite column compare identically.
+local function serialize_col(src, tail, col)
+    local out = {}
+    for r in query(build(src, tail)) do
+        local v = r[col]
+        out[#out + 1] = (v == nil) and "NULL" or tostring(v)
+    end
+    return table.concat(out, ",")
+end
+
+tests:describe("iterators across coroutines")
+
+tests:it("a query iterator built in a coroutine drives from the outside",
+    function()
+    local t = { { a = 1 }, { a = 2 }, { a = 3 } }
+    local iter
+    local co = coroutine.create(function()
+        iter = query(@t as r select r.a order by r.a)
+        coroutine.yield(iter().a)
+    end)
+    local ok, first = coroutine.resume(co)
+    tests:assert_equal(ok, true)
+    tests:assert_equal(first, 1)
+    tests:assert_equal(coroutine.status(co), "suspended")
+    -- The coroutine that made the iterator is still alive but the handle
+    -- keeps producing rows when pulled from the main thread.
+    tests:assert_equal(iter().a, 2)
+    tests:assert_equal(iter().a, 3)
+    tests:assert_equal(iter(), nil)
+end)
+
+tests:it("a query iterator survives its creating coroutine dying",
+    function()
+    local t = { { a = 10 }, { a = 20 } }
+    local iter
+    local co = coroutine.create(function()
+        iter = query(@t as r select r.a order by r.a)
+    end)
+    assert(coroutine.resume(co))
+    tests:assert_equal(coroutine.status(co), "dead")
+    collectgarbage("collect")
+    tests:assert_equal(iter().a, 10, "the dead coroutine's iterator lives")
+    tests:assert_equal(iter().a, 20)
+end)
+
+tests:it("a query iterator built outside drives inside a coroutine",
+    function()
+    local t = { { a = 1 }, { a = 2 }, { a = 3 } }
+    local iter = query(@t as r select r.a order by r.a)
+    local co = coroutine.create(function()
+        local acc = {}
+        while true do
+            local r = iter()
+            if r == nil then break end
+            acc[#acc + 1] = r.a
+        end
+        return table.concat(acc, ",")
+    end)
+    local ok, joined = coroutine.resume(co)
+    tests:assert_equal(ok, true)
+    tests:assert_equal(joined, "1,2,3")
+end)
+
+tests:it("a db:query iterator built in a coroutine drives from outside",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1),(2),(3)")
+    local iter
+    local co = coroutine.create(function()
+        iter = db:query("SELECT n FROM t ORDER BY n")
+        coroutine.yield(iter().n)
+    end)
+    local ok, first = coroutine.resume(co)
+    tests:assert_equal(ok, true)
+    tests:assert_equal(first, 1)
+    tests:assert_equal(iter().n, 2)
+    tests:assert_equal(iter().n, 3)
+    tests:assert_equal(iter(), nil)
+end)
+
+tests:describe("yielding across query host closures")
+
+tests:it("yield inside a where host closure hits the C-call boundary",
+    function()
+    local t = { { a = 1 }, { a = 2 } }
+    local function pred(r)
+        coroutine.yield("mid-where")
+        return r.a > 1
+    end
+    local co = coroutine.create(function()
+        for _ in query(@t as r where pred(r) select r.a) do
+        end
+    end)
+    local ok, err = coroutine.resume(co)
+    tests:assert_equal(ok, false, "the yield must not succeed")
+    tests:assert_contains(tostring(err), "yield across a C%-call boundary")
+    tests:assert_equal(coroutine.status(co), "dead")
+end)
+
+tests:it("coroutine.wrap surfaces the boundary error as a raise", function()
+    local t = { { a = 1 } }
+    local function pred(r)
+        coroutine.yield("mid-where")
+        return true
+    end
+    local w = coroutine.wrap(function()
+        for _ in query(@t as r where pred(r) select r.a) do
+        end
+    end)
+    tests:assert_throws(function() return w() end,
+        "yield across a C%-call boundary")
+end)
+
+tests:it("yield inside a db:transaction body hits the C-call boundary",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    local co = coroutine.create(function()
+        db:transaction(function()
+            coroutine.yield("mid-txn")
+        end)
+    end)
+    local ok, err = coroutine.resume(co)
+    tests:assert_equal(ok, false)
+    tests:assert_contains(tostring(err), "yield across a C%-call boundary")
+end)
+
+tests:describe("coroutine.close unwinds handles")
+
+tests:it("coroutine.close closes a to-be-closed database handle", function()
+    local captured
+    local co = coroutine.create(function()
+        local db <close> = io.sqlite(":memory:")
+        db:exec("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)")
+        captured = db
+        coroutine.yield("open")
+        error("this line is never reached")
+    end)
+    assert(coroutine.resume(co))
+    -- While suspended the handle is still live.
+    local seen
+    for r in captured:query("SELECT n FROM t") do seen = r.n end
+    tests:assert_equal(seen, 1)
+    tests:assert_equal(coroutine.close(co), true)
+    tests:assert_equal(coroutine.status(co), "dead")
+    tests:assert_throws(function() captured:exec("SELECT 1") end,
+        "attempt to use a closed database")
+end)
+
+tests:it("coroutine.close unwinds several handles at once", function()
+    local a, b
+    local co = coroutine.create(function()
+        local first <close> = io.sqlite(":memory:")
+        local second <close> = io.sqlite(":memory:")
+        first:exec("CREATE TABLE t (n INTEGER)")
+        second:exec("CREATE TABLE t (n INTEGER)")
+        a, b = first, second
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    tests:assert_equal(coroutine.close(co), true)
+    tests:assert_throws(function() a:exec("SELECT 1") end,
+        "attempt to use a closed database")
+    tests:assert_throws(function() b:exec("SELECT 1") end,
+        "attempt to use a closed database")
+end)
+
+tests:describe("line-anchored syntax diagnostics")
+
+-- Place a chunk so the query begins on a chosen line, keeping the source
+-- table declared on line 1. Distinct lines per case prove the reporter
+-- tracks the offending position rather than emitting a constant.
+local function at_line(atline, q)
+    local src = "local t = {}"
+    for _ = 2, atline - 1 do
+        src = src .. "\n"
+    end
+    return src .. "\n" .. q
+end
+
+local function checkdiag(atline, q, fragment)
+    local f, err = load(at_line(atline, q))
+    assert(f == nil, "chunk must not compile: " .. q)
+    local msg = tostring(err)
+    tests:assert_contains(msg, fragment)
+    tests:assert_contains(msg, ":" .. atline .. ":",
+        "diagnostic must anchor to line " .. atline .. ", got: " .. msg)
+end
+
+-- Each documented query syntax error, pinned by message fragment and by a
+-- distinct source line, so drift in either breaks a test.
+tests:each("every documented syntax error reports a fragment and a line", {
+    { 2, "return @t as x where 1 where 2", "duplicate 'where' clause" },
+    { 3, "return @t as x select x.a select x.a", "duplicate 'select' clause" },
+    { 4, "return @t as x, t as x select x.a", "duplicate row variable 'x'" },
+    { 5, "return @(t) select x.a", "query source needs an 'as' name" },
+    { 6, "return @t as x order x.a", "'by' expected after 'order'" },
+    { 7, "return @t as x group x.a", "'by' expected after 'group'" },
+    { 8, "return @t as x select count(*)",
+        "'as' name expected for this projection" },
+    { 9, "return @t as x, t as y", "a join requires a 'select' clause" },
+    { 10, "return @t as x where sum(x.a) > 1",
+        "only allowed in 'select' or 'having'" },
+    { 11, "return @t as x select sum(*) as s", "'%*' is only allowed in count" },
+    { 12, "return @t as x select sum(count(x.a)) as s",
+        "aggregates cannot nest" },
+    { 13, "return @t as x where (@t as y select y.a) == 1",
+        "nested queries are not supported" },
+    { 14, "return @t as x where x.a & 1 == 1",
+        "operator not supported in a query clause" },
+    { 15, "return @t as x where (x.a)[1] == 1", "parenthesized expression" },
+    { 16, "local k = 1 return @t[k] as x select x.a",
+        "query source index must be a literal" },
+    { 17, "return @t as a, t as b, t as c, t as d, t as e, t as f, t as g, "
+        .. "t as h, t as i select a.x", "too many sources" },
+}, function(atline, q, fragment)
+    checkdiag(atline, q, fragment)
+end)
+
+tests:it("a valid query compiles at the same anchoring depth", function()
+    -- A control proving checkdiag rejects for the syntax, not the depth.
+    local f = load(at_line(9, "return @t as x where x.a > 1 select x.a"))
+    tests:assert_type(f, "function")
+end)
+
+tests:describe("NULL and nil ordering parity")
+
+-- Identical logical data: two absent values plus 1, 2, 3 in a fixed order.
+local function null_pair()
+    local db = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (a INTEGER);
+        INSERT INTO t (a) VALUES (3), (NULL), (1), (NULL), (2);
+    ]])
+    local mem = { { a = 3 }, {}, { a = 1 }, {}, { a = 2 } }
+    return mem, db
+end
+
+tests:each("order by over NULLs is byte-identical across providers", {
+    { "order by x.a" },
+    { "order by x.a asc" },
+    { "order by x.a desc" },
+    { "order by x.a limit 2 offset 1" },
+    { "order by x.a desc limit 3" },
+    { "order by x.a limit 4 offset 2" },
+    { "order by x.a asc limit 10 offset 3" },
+}, function(tail)
+    local mem, db = null_pair()
+    local memr = serialize_col(mem, tail, "a")
+    local dbr = serialize_col(db.t, tail, "a")
+    tests:assert_equal(memr, dbr, "clause: " .. tail)
+    db:close()
+end)
+
+tests:it("the NULL ordering harness has real values to compare", function()
+    -- Guards against a harness that trivially agrees on empty strings.
+    local mem, db = null_pair()
+    tests:assert_equal(serialize_col(mem, "order by x.a", "a"),
+        "NULL,NULL,1,2,3")
+    tests:assert_equal(serialize_col(db.t, "order by x.a desc", "a"),
+        "3,2,1,NULL,NULL")
+    db:close()
+end)
+
+tests:describe("NaN ordering parity")
+
+tests:it("a NaN in memory sorts to the ascending front like a NULL",
+    function()
+    local nan = 0 / 0
+    local mem = { { a = 2 }, { a = nan }, { a = 1 } }
+    local rows = collect(@mem as x select x.a order by x.a)
+    assert(rows[1].a ~= rows[1].a, "the NaN row leads ascending")
+    tests:assert_equal(rows[2].a, 1)
+    tests:assert_equal(rows[3].a, 2)
+    local down = collect(@mem as x select x.a order by x.a desc)
+    assert(down[3].a ~= down[3].a, "the NaN row trails descending")
+    tests:assert_equal(down[1].a, 2)
+end)
+
+tests:it("SQLite folds a bound NaN to NULL and it leads ascending",
+    function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (a REAL)")
+    db:run("INSERT INTO t VALUES (?)", 2.0)
+    db:run("INSERT INTO t VALUES (?)", 0 / 0)
+    db:run("INSERT INTO t VALUES (?)", 1.0)
+    -- Ascending order must place the folded NULL first, then 1.0, 2.0.
+    local out = {}
+    for r in query(@db.t as x select x.a order by x.a) do
+        out[#out + 1] = (r.a == nil) and "NULL" or tostring(r.a)
+    end
+    tests:assert_equal(out[1], "NULL", "the NaN-turned-NULL row leads")
+    tests:assert_equal(out[2], "1.0")
+    tests:assert_equal(out[3], "2.0")
+end)
+
+tests:describe("group by and distinct string parity")
+
+-- Mixed-case and non-ASCII strings exercise the byte-wise key comparison
+-- that both providers use by default.
+local function strings_pair()
+    local rows = {
+        { c = "Foo" }, { c = "foo" }, { c = "FOO" },
+        { c = "café" }, { c = "cafe" }, { c = "café" },
+    }
+    local db = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (c TEXT)")
+    for _, r in ipairs(rows) do
+        db:run("INSERT INTO t VALUES (?)", r.c)
+    end
+    return rows, db
+end
+
+local function serialize_groups(src)
+    local out = {}
+    for r in query(@(src) as x select x.c, count(*) as n
+        group by x.c order by x.c, n) do
+        out[#out + 1] = r.c .. "=" .. r.n
+    end
+    return table.concat(out, ",")
+end
+
+tests:it("group by over mixed-case and non-ASCII agrees across providers",
+    function()
+    local mem, db = strings_pair()
+    local expected = "FOO=1,Foo=1,cafe=1,café=2,foo=1"
+    tests:assert_equal(serialize_groups(mem), expected)
+    tests:assert_equal(serialize_groups(db.t), expected)
+    db:close()
+end)
+
+tests:it("distinct over mixed-case and non-ASCII agrees across providers",
+    function()
+    local mem, db = strings_pair()
+    local function ser(src)
+        local out = {}
+        for r in query(@(src) as x select distinct x.c order by x.c) do
+            out[#out + 1] = r.c
+        end
+        return table.concat(out, ",")
+    end
+    local expected = "FOO,Foo,cafe,café,foo"
+    tests:assert_equal(ser(mem), expected)
+    tests:assert_equal(ser(db.t), expected)
+    db:close()
+end)
+
+tests:it("case folding is not applied: upper and lower stay separate keys",
+    function()
+    -- A default case-insensitive collation would collapse these to fewer
+    -- than three groups, so this pins the byte-wise default.
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (c TEXT)")
+    db:run("INSERT INTO t VALUES (?)", "A")
+    db:run("INSERT INTO t VALUES (?)", "a")
+    local rows = collect(@db.t as x select x.c, count(*) as n group by x.c)
+    tests:assert_equal(#rows, 2, "'A' and 'a' are distinct groups")
+end)
+
+tests:describe("integer boundary round-trips")
+
+tests:it("maxinteger and mininteger survive the SQLite provider", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    db:run("INSERT INTO t VALUES (?)", 0)
+    local rows = collect(@db.t as x select x.v order by x.v)
+    tests:assert_equal(#rows, 3)
+    tests:assert_equal(rows[1].v, math.mininteger)
+    tests:assert_equal(math.type(rows[1].v), "integer", "no float coercion")
+    tests:assert_equal(rows[2].v, 0)
+    tests:assert_equal(rows[3].v, math.maxinteger)
+    tests:assert_equal(math.type(rows[3].v), "integer")
+end)
+
+tests:it("boundary equality pushes down and matches exactly", function()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    local hi = math.maxinteger
+    local lo = math.mininteger
+    local hits = collect(@db.t as x where x.v == hi select x.v)
+    tests:assert_equal(#hits, 1)
+    tests:assert_equal(hits[1].v, math.maxinteger)
+    local lows = collect(@db.t as x where x.v == lo select x.v)
+    tests:assert_equal(#lows, 1)
+    tests:assert_equal(lows[1].v, math.mininteger)
+end)
+
+tests:it("a boundary integer groups against its own float parity", function()
+    -- math.maxinteger and its group key must not silently split by
+    -- representation the way a lossy float cast would.
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    local rows = collect(@db.t as x select x.v, count(*) as n
+        group by x.v order by x.v)
+    tests:assert_equal(#rows, 2)
+    tests:assert_equal(rows[1].v, math.mininteger)
+    tests:assert_equal(rows[1].n, 1)
+    tests:assert_equal(rows[2].v, math.maxinteger)
+    tests:assert_equal(rows[2].n, 2)
+end)
+
+tests:finish()

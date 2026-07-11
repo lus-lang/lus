@@ -214,10 +214,13 @@ tests:it("integer overflow wraps", function()
 end)
 
 tests:it("integer multiplication overflow", function()
-    local big = maxint // 2
+    local big = maxint // 2   -- 2^62 - 1
     local result = big * 3
-    -- Should overflow/wrap
     assert(math.type(result) == "integer")
+    -- 3 * (2^62 - 1) is 3 * 2^62 - 3, which wraps modulo 2^64 to -2^62 - 3
+    assert(result == -(1 << 62) - 3, "product must wrap around modulo 2^64")
+    -- wrapping multiplication must agree with wrapping repeated addition
+    assert(result == big + big + big)
 end)
 
 tests:it("division edge cases", function()

@@ -1,0 +1,466 @@
+-- =====================================================================
+-- stringx: extended coverage for the string module.
+--
+-- This suite completes the partial-coverage gaps identified in the
+-- module-string audit that are not owned by other writers. It focuses on
+-- string.rep with a separator, the full negative and out-of-range index
+-- matrices for sub and byte, locale-independent upper and lower on
+-- non-ASCII bytes, len versus the length operator on embedded NUL bytes,
+-- string.char range and type errors, plain and magic-character find,
+-- reverse and comparison on strings with embedded NUL bytes, string
+-- methods dispatched through the shared string metatable, and the Lus
+-- trim, ltrim, rtrim, split, and join additions beyond what dataproc
+-- already covers. string.format is deliberately excluded because another
+-- writer owns it.
+-- =====================================================================
+
+global print, require, string, table, math, assert, pledge, tostring, select, type
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("stringx")
+
+-- =====================================================================
+-- string.rep with a separator and count boundaries.
+-- =====================================================================
+
+tests:each("string.rep with separator", {
+    {"ab", 3, "-", "ab-ab-ab"},
+    {"ab", 1, "-", "ab"},
+    {"ab", 2, "", "abab"},
+    {"x", 4, ", ", "x, x, x, x"},
+    {"ab", 0, "-", ""},
+    {"ab", -3, "-", ""},
+    {"", 3, "-", "--"},
+    {"a", 1, "sep-ignored-when-single", "a"},
+}, function(s, n, sep, expected)
+    tests:assert_equal(string.rep(s, n, sep), expected)
+end)
+
+tests:it("string.rep separator only appears between copies", function()
+    -- With n copies there are exactly n minus one separators, so counting
+    -- the separator occurrences pins down the placement.
+    local out = string.rep("z", 5, "|")
+    local count = select(2, string.gsub(out, "%|", ""))
+    tests:assert_equal(count, 4)
+    tests:assert_equal(out, "z|z|z|z|z")
+end)
+
+tests:it("string.rep zero count with separator yields empty string", function()
+    tests:assert_equal(string.rep("anything", 0, "-"), "")
+end)
+
+tests:it("string.rep overflow raises resulting string too large", function()
+    tests:assert_throws(function()
+        return string.rep("abcdefgh", 0x7fffffffffffffff)
+    end, "resulting string too large")
+end)
+
+-- =====================================================================
+-- string.sub full negative-index and out-of-range matrix.
+-- =====================================================================
+
+tests:each("string.sub index matrix on abcde", {
+    {2, 4, "bcd"},
+    {-2, -1, "de"},
+    {-3, -1, "cde"},
+    {1, -1, "abcde"},
+    {-100, 100, "abcde"},
+    {-100, -50, ""},
+    {3, 100, "cde"},
+    {6, 10, ""},
+    {4, 2, ""},
+    {0, 0, ""},
+    {0, 3, "abc"},
+    {-1, -1, "e"},
+    {-5, -5, "a"},
+    {5, 5, "e"},
+}, function(i, j, expected)
+    tests:assert_equal(string.sub("abcde", i, j), expected)
+end)
+
+tests:it("string.sub with only i defaults j to end", function()
+    tests:assert_equal(string.sub("abcde", 3), "cde")
+    tests:assert_equal(string.sub("abcde", -2), "de")
+    tests:assert_equal(string.sub("abcde", 0), "abcde")
+end)
+
+-- =====================================================================
+-- string.byte full negative-index and out-of-range matrix.
+-- =====================================================================
+
+tests:each("string.byte single index matrix on abc", {
+    {1, 97},
+    {2, 98},
+    {3, 99},
+    {-1, 99},
+    {-2, 98},
+    {-3, 97},
+}, function(i, expected)
+    tests:assert_equal(string.byte("abc", i), expected)
+end)
+
+tests:each("string.byte out-of-range single index returns nil", {
+    {0},
+    {4},
+    {-4},
+    {100},
+    {-100},
+}, function(i)
+    tests:assert_nil(string.byte("abc", i))
+end)
+
+tests:it("string.byte range clamps to available bytes", function()
+    local a, b, c, d = string.byte("abc", 2, 10)
+    tests:assert_equal(a, 98)
+    tests:assert_equal(b, 99)
+    tests:assert_nil(c)
+    tests:assert_nil(d)
+end)
+
+tests:it("string.byte with i greater than j returns nothing", function()
+    tests:assert_equal(select("#", string.byte("abc", 3, 1)), 0)
+end)
+
+tests:it("string.byte negative range spans from the end", function()
+    local a, b = string.byte("abcde", -2, -1)
+    tests:assert_equal(a, 100)
+    tests:assert_equal(b, 101)
+end)
+
+-- =====================================================================
+-- string.char vararg contract, range errors, and byte roundtrip.
+-- =====================================================================
+
+tests:it("string.char builds a string from many byte values", function()
+    tests:assert_equal(string.char(104, 101, 108, 108, 111), "hello")
+end)
+
+tests:it("string.char accepts boundary byte values", function()
+    tests:assert_equal(string.byte(string.char(0)), 0)
+    tests:assert_equal(string.byte(string.char(255)), 255)
+end)
+
+tests:it("string.char accepts floats with integral value", function()
+    tests:assert_equal(string.char(65.0), "A")
+end)
+
+tests:each("string.char rejects out-of-range codes", {
+    {256},
+    {-1},
+    {1000},
+}, function(code)
+    tests:assert_throws(function()
+        return string.char(code)
+    end, "value out of range")
+end)
+
+tests:it("string.char rejects a non-number argument", function()
+    tests:assert_throws(function()
+        return string.char("x")
+    end, "number expected")
+end)
+
+tests:it("string.char rejects a fractional number", function()
+    tests:assert_throws(function()
+        return string.char(1.5)
+    end, "number has no integer representation")
+end)
+
+tests:it("string.char and string.byte roundtrip on binary data", function()
+    -- Build a string that includes both boundary bytes and an interior NUL.
+    local s = string.char(0, 1, 65, 127, 128, 200, 255)
+    tests:assert_equal(string.char(string.byte(s, 1, #s)), s)
+end)
+
+-- =====================================================================
+-- string.upper and string.lower touch only ASCII letters, so high bytes
+-- pass through unchanged regardless of any locale.
+-- =====================================================================
+
+tests:each("string.upper only maps ASCII lowercase letters", {
+    {"aZ9!", "AZ9!"},
+    {"hello", "HELLO"},
+    {"already UP", "ALREADY UP"},
+    {"", ""},
+}, function(s, expected)
+    tests:assert_equal(string.upper(s), expected)
+end)
+
+tests:each("string.lower only maps ASCII uppercase letters", {
+    {"Az9!", "az9!"},
+    {"WORLD", "world"},
+    {"already low", "already low"},
+    {"", ""},
+}, function(s, expected)
+    tests:assert_equal(string.lower(s), expected)
+end)
+
+tests:it("string.upper leaves high non-ASCII bytes untouched", function()
+    -- Bytes 200 and 255 are letters in some legacy locales but the
+    -- transformation must remain ASCII-only, so they stay put while the
+    -- interleaved ASCII letter is uppercased.
+    local s = string.char(200, 97, 255)
+    local up = string.upper(s)
+    tests:assert_equal(string.byte(up, 1), 200)
+    tests:assert_equal(string.byte(up, 2), 65)
+    tests:assert_equal(string.byte(up, 3), 255)
+end)
+
+tests:it("string.lower leaves high non-ASCII bytes untouched", function()
+    local s = string.char(200, 65, 255)
+    local low = string.lower(s)
+    tests:assert_equal(string.byte(low, 1), 200)
+    tests:assert_equal(string.byte(low, 2), 97)
+    tests:assert_equal(string.byte(low, 3), 255)
+end)
+
+-- =====================================================================
+-- string.len and the length operator both count bytes, so embedded NUL
+-- bytes do not terminate the string the way a C string would.
+-- =====================================================================
+
+tests:it("string.len counts embedded NUL bytes", function()
+    local s = "a\0b\0c"
+    tests:assert_equal(string.len(s), 5)
+    tests:assert_equal(#s, 5)
+    tests:assert_equal(string.len(s), #s)
+end)
+
+tests:it("string.len matches length operator for a NUL-only string", function()
+    local s = string.char(0, 0, 0)
+    tests:assert_equal(string.len(s), 3)
+    tests:assert_equal(#s, 3)
+end)
+
+tests:it("string.byte reaches bytes after an embedded NUL", function()
+    local s = "a\0b"
+    tests:assert_equal(string.byte(s, 2), 0)
+    tests:assert_equal(string.byte(s, 3), 98)
+end)
+
+-- =====================================================================
+-- string.reverse preserves and reorders embedded NUL bytes.
+-- =====================================================================
+
+tests:it("string.reverse reorders bytes across an embedded NUL", function()
+    local r = string.reverse("a\0b")
+    tests:assert_equal(string.byte(r, 1), 98)
+    tests:assert_equal(string.byte(r, 2), 0)
+    tests:assert_equal(string.byte(r, 3), 97)
+end)
+
+tests:it("string.reverse is its own inverse on binary data", function()
+    local s = string.char(0, 200, 1, 255, 0)
+    tests:assert_equal(string.reverse(string.reverse(s)), s)
+end)
+
+-- =====================================================================
+-- Comparison operators order strings byte by byte, including the NUL
+-- byte which sorts below every printable character.
+-- =====================================================================
+
+tests:each("string comparison respects embedded NUL bytes", {
+    {"a\0b", "a\0c", true},
+    {"a\0", "a\0b", true},
+    {"a\0b", "a\0b", false},
+    {"a\0b", "ab", true},
+}, function(left, right, expected)
+    tests:assert_equal(left < right, expected)
+end)
+
+tests:it("strings with embedded NUL compare equal only when identical", function()
+    tests:assert_true("a\0b" == "a\0b")
+    tests:assert_true("a\0b" ~= "a\0c")
+    tests:assert_false("a\0b" == "a\0")
+end)
+
+-- =====================================================================
+-- string.find plain search, magic characters, init offsets, captures,
+-- and malformed patterns.
+-- =====================================================================
+
+tests:it("string.find plain search treats magic characters literally", function()
+    -- The dot is a magic character in patterns but a literal when plain
+    -- is true, so it must match the actual dot rather than any byte.
+    tests:assert_equal(string.find("hello.world", ".", 1, true), 6)
+    tests:assert_equal(string.find("a+b*c?d", "+", 1, true), 2)
+    tests:assert_equal(string.find("a+b*c?d", "*", 1, true), 4)
+end)
+
+tests:it("string.find plain search honors a nonzero init offset", function()
+    -- The first literal dot at position 2 is skipped when the search
+    -- starts later, so the next dot is reported instead.
+    tests:assert_equal(string.find("a.b.c", ".", 3, true), 4)
+    tests:assert_nil(string.find("a.b", ".", 4, true))
+end)
+
+tests:it("string.find returns captures after the two indices", function()
+    local i, e, cap = string.find("abc123", "(%d+)")
+    tests:assert_equal(i, 4)
+    tests:assert_equal(e, 6)
+    tests:assert_equal(cap, "123")
+end)
+
+tests:it("string.find accepts a negative init counting from the end", function()
+    tests:assert_equal(string.find("hello", "l", -2), 4)
+    tests:assert_equal(string.find("hello", "h", -100), 1)
+end)
+
+tests:it("string.find with an empty pattern honors init at the boundary", function()
+    -- An init one past the last byte still matches the empty string, but
+    -- an init beyond that returns nil.
+    tests:assert_equal(string.find("abc", "", 4), 4)
+    tests:assert_nil(string.find("abc", "", 5))
+end)
+
+tests:each("string.find raises on a malformed pattern", {
+    {"(", "unfinished capture"},
+    {"%", "malformed pattern"},
+    {"[a", "malformed pattern"},
+}, function(pattern, needle)
+    tests:assert_throws(function()
+        return string.find("x", pattern)
+    end, needle)
+end)
+
+-- =====================================================================
+-- String methods dispatch through the shared string metatable, so a
+-- literal can call any string.* function with colon syntax.
+-- =====================================================================
+
+tests:it("methods on a string literal reach the string library", function()
+    tests:assert_equal(("x"):rep(3), "xxx")
+    tests:assert_equal(("x"):rep(3, "-"), "x-x-x")
+    tests:assert_equal(("abc"):reverse(), "cba")
+    tests:assert_equal(("aBc"):upper(), "ABC")
+    tests:assert_equal(("aBc"):lower(), "abc")
+    tests:assert_equal(("abcde"):sub(2, 4), "bcd")
+    tests:assert_equal(("abc"):byte(2), 98)
+    tests:assert_equal(("abc"):len(), 3)
+end)
+
+tests:it("method dispatch works on a string-valued variable", function()
+    local s = "Hello, World"
+    tests:assert_equal(s:lower(), "hello, world")
+    tests:assert_equal(s:sub(1, 5), "Hello")
+    tests:assert_equal(s:find("World"), 8)
+end)
+
+tests:it("chained string methods compose left to right", function()
+    tests:assert_equal(("  Hi  "):trim():upper(), "HI")
+    tests:assert_equal(("abcabc"):reverse():sub(1, 3), "cba")
+end)
+
+-- =====================================================================
+-- Lus trim, ltrim, and rtrim edge cases beyond dataproc coverage.
+-- =====================================================================
+
+tests:each("string.trim with a character set removes any listed byte", {
+    {"xyabcyx", "xy", "abc"},
+    {"yxyxabcxyxy", "xy", "abc"},
+    {"aaabaaa", "a", "b"},
+    {"...mid.point...", ".", "mid.point"},
+}, function(s, chars, expected)
+    tests:assert_equal(string.trim(s, chars), expected)
+end)
+
+tests:it("string.trim with an empty character set removes nothing", function()
+    tests:assert_equal(string.trim("  a  ", ""), "  a  ")
+end)
+
+tests:it("string.trim never removes interior characters", function()
+    tests:assert_equal(string.trim("a b a", "a"), " b ")
+    tests:assert_equal(string.trim("ababXab", "ab"), "X")
+end)
+
+tests:it("string.trim reduces an all-trim-char string to empty", function()
+    tests:assert_equal(string.trim("xxxx", "x"), "")
+    tests:assert_equal(string.trim("   "), "")
+end)
+
+-- A false chars entry means the default whitespace behavior is exercised,
+-- which avoids a nil hole in the case table that table.unpack would treat
+-- as a truncation point.
+tests:each("string.ltrim and string.rtrim strip only their own side", {
+    {"ltrim", "xyabc", "yx", "abc"},
+    {"rtrim", "abcxy", "yx", "abc"},
+    {"ltrim", "  abc  ", false, "abc  "},
+    {"rtrim", "  abc  ", false, "  abc"},
+    {"ltrim", "abcxy", "yx", "abcxy"},
+    {"rtrim", "xyabc", "yx", "xyabc"},
+}, function(which, s, chars, expected)
+    local out
+    if which == "ltrim" then
+        out = chars and string.ltrim(s, chars) or string.ltrim(s)
+    else
+        out = chars and string.rtrim(s, chars) or string.rtrim(s)
+    end
+    tests:assert_equal(out, expected)
+end)
+
+tests:it("string.trim handles all four default whitespace bytes", function()
+    tests:assert_equal(string.trim(" \t\r\nhi \t\r\n"), "hi")
+end)
+
+-- =====================================================================
+-- Lus split and join edge cases beyond dataproc coverage.
+-- =====================================================================
+
+tests:it("string.split keeps a trailing empty field", function()
+    local p = string.split("a,b,", ",")
+    tests:assert_equal(#p, 3)
+    tests:assert_equal(p[1], "a")
+    tests:assert_equal(p[2], "b")
+    tests:assert_equal(p[3], "")
+end)
+
+tests:it("string.split keeps a leading empty field", function()
+    local p = string.split(",a", ",")
+    tests:assert_equal(#p, 2)
+    tests:assert_equal(p[1], "")
+    tests:assert_equal(p[2], "a")
+end)
+
+tests:it("string.split treats the delimiter literally", function()
+    -- A dot is not a wildcard here, so only the actual dots split.
+    local p = string.split("a.b.c", ".")
+    tests:assert_equal(#p, 3)
+    tests:assert_equal(p[2], "b")
+end)
+
+tests:it("string.split works around embedded NUL bytes", function()
+    local p = string.split("a\0b\0c", "\0")
+    tests:assert_equal(#p, 3)
+    tests:assert_equal(p[1], "a")
+    tests:assert_equal(p[3], "c")
+end)
+
+tests:it("string.split of only delimiters yields all empty fields", function()
+    local p = string.split(",,", ",")
+    tests:assert_equal(#p, 3)
+    tests:assert_equal(p[1], "")
+    tests:assert_equal(p[2], "")
+    tests:assert_equal(p[3], "")
+end)
+
+tests:it("string.join converts numbers and booleans via tostring", function()
+    tests:assert_equal(string.join({1, true, "x"}, "|"), "1|true|x")
+    tests:assert_equal(string.join({1.5, 2}, ","), "1.5,2")
+end)
+
+tests:it("string.join with an empty delimiter concatenates elements", function()
+    tests:assert_equal(string.join({"a", "b", "c"}, ""), "abc")
+end)
+
+tests:it("string.join round-trips a plain split", function()
+    local s = "one,two,three"
+    tests:assert_equal(string.join(string.split(s, ","), ","), s)
+end)
+
+tests:it("string.split and string.join compose through method syntax", function()
+    tests:assert_equal(("a-b-c"):split("-")[2], "b")
+end)
+
+tests:finish()

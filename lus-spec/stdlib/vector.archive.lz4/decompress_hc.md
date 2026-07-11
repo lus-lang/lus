@@ -11,4 +11,4 @@ params:
 returns: string|vector
 ---
 
-Decompresses LZ4 HC (legacy high-compression) format `data`. Provided for backward compatibility with older LZ4 HC implementations. Prefer `decompress` for new code. Returns the same type as the input.
+Decompresses `data` written in the legacy LZ4 frame format, identified by the magic number `0x184C2102`. Older LZ4 tools produced this format, so `decompress_hc` reads archives written by them. New code should compress with `compress` and decompress with `decompress`, which use the current LZ4 frame format. Returns the same type as the input.

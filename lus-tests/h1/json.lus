@@ -373,6 +373,18 @@ end
 
 local json_files = get_json_test_files()
 
+-- Guard: the corpus expansion below is data-driven, so a missing or
+-- unreadable lus-tests/h1/json directory would silently drop hundreds
+-- of conformance tests. Fail loudly instead.
+tests:it("RFC8259 corpus directory is present and yields fixture files",
+    function()
+    assert(json_files ~= nil,
+        "lus-tests/h1/json is missing, unreadable, or empty: "
+        .. "the RFC 8259 conformance tests were not generated")
+    assert(#json_files.y > 0, "no y_ (must-accept) fixture files found")
+    assert(#json_files.n > 0, "no n_ (must-reject) fixture files found")
+end)
+
 if json_files then
     -- y_* files (must parse successfully)
     for i = 1, #json_files.y do
@@ -572,16 +584,24 @@ tests:it("mixed nested structure", function()
 end)
 
 tests:it("tojson with many repeated keys", function()
+    -- The same key names recur in every element of a 100-object array,
+    -- so the serializer emits each shared key string 100 times over.
     local data = {}
     for i = 1, 100 do
-        data["repeated_key_name_" .. i] = i
+        data[i] = { id = i, name = "row" .. i, even = (i % 2 == 0) }
     end
-    
+
     local json_str = tojson(data)
+    local _, id_count = string.gsub(json_str, '"id":', "")
+    assert(id_count == 100, "the repeated key appears once per object, found "
+        .. id_count)
+
     local result = fromjson(json_str)
-    
+    assert(#result == 100)
     for i = 1, 100 do
-        assert(result["repeated_key_name_" .. i] == i)
+        assert(result[i].id == i)
+        assert(result[i].name == "row" .. i)
+        assert(result[i].even == (i % 2 == 0))
     end
 end)
 
@@ -651,12 +671,16 @@ tests:it("empty structures", function()
 end)
 
 tests:it("duplicate keys behavior", function()
-    -- JSON spec says behavior is implementation-defined
-    -- Most implementations use the last value
+    -- RFC 8259 leaves duplicate keys implementation-defined.
+    -- Lus parses them without error and the last value wins.
     local json_str = '{"a":1, "a":2}'
     local result = fromjson(json_str)
-    -- Just verify it parses without error
     assert(type(result) == "table")
+    assert(result.a == 2, "the last duplicate wins, got " .. tostring(result.a))
+    -- The rule holds when other keys sit between the duplicates.
+    local spread = fromjson('{"a":1, "b":true, "a":3}')
+    assert(spread.a == 3, "the last duplicate wins across gaps")
+    assert(spread.b == true)
 end)
 
 -- Regression: the recursive serializer used to overflow the Lua stack

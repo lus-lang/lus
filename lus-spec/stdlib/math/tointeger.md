@@ -12,4 +12,4 @@ params:
 returns: integer|nil
 ---
 
-Converts `x` to an integer if it is a number with an integer value. Returns `nil` if `x` is not an integer or not a number.
+Converts `x` to an integer if its value is convertible to one, meaning a number with an integer value or a string naming such a number. Returns `nil` when `x` cannot be converted.

@@ -19,11 +19,15 @@ end)
 t:describe("worker.status")
 
 t:it("returns 'running' for active worker", function()
-  local w = worker.create("lus-tests/h1/worker/counter.lus")
-  local status = worker.status(w)
-  -- Status could be running or dead depending on timing
-  t:assert_true(status == "running" or status == "dead", 
-    "status should be 'running' or 'dead'")
+  -- The processor worker blocks in peek until it receives STOP, so it
+  -- cannot have finished when this status call observes it
+  local w = worker.create("lus-tests/h1/worker/processor.lus")
+  t:assert_equal(worker.status(w), "running",
+    "worker parked in peek should report 'running'")
+  -- Shut the worker down cleanly so it is not parked at interpreter exit
+  worker.send(w, "STOP")
+  while worker.receive(w) ~= nil do end
+  t:assert_equal(worker.status(w), "dead", "worker should be dead after STOP")
 end)
 
 t:describe("worker.message and worker.receive")
@@ -167,12 +171,12 @@ t:describe("error handling")
 t:it("propagates worker errors via receive", function()
   local w = worker.create("lus-tests/h1/worker/error.lus")
 
-  -- Worker should error
-  local err, result = catch worker.receive(w)
-
-  -- Either we get an error or nil (worker died before we could receive)
-  t:assert_true(not err or result == nil,
-    "should get error or nil when worker errors")
+  -- receive on an errored worker must raise, carrying the worker's own
+  -- error message so callers can identify what failed
+  local ok, err = catch worker.receive(w)
+  t:assert_false(ok, "receive should raise when the worker errored")
+  t:assert_contains(tostring(err), "intentional worker error",
+    "propagated error should carry the worker's message")
 end)
 
 t:it("error worker becomes dead", function()

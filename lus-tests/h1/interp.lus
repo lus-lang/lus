@@ -88,8 +88,10 @@ end)
 
 tests:it("table interpolation without __tostring", function()
     local t = {}
-    local s = `table: $t`
-    assert(string.find(s, "table:") ~= nil)
+    local s = `$t`
+    assert(s == tostring(t), "interpolation should match the default tostring")
+    assert(string.sub(s, 1, 7) == "table: ")
+    assert(#s > 7, "the address part should follow the prefix")
 end)
 
 -- ============================================

@@ -857,7 +857,14 @@ const char *luaG_addinfo(lua_State *L, const char *msg, TString *src,
 
 
 l_noret luaG_errormsg(lua_State *L) {
-  if (L->errfunc != 0) { /* is there an error handling function? */
+  /* Run the message handler only when no Lua-level catch is active. Every
+  ** errfunc installer ('luaD_pcall' and the yieldable 'lua_pcallk' path)
+  ** nulls 'L->activeCatch' for its duration, so a non-NULL 'activeCatch'
+  ** here means the innermost protection is a catch nested inside the
+  ** errfunc's protected call: the errfunc's frame never sees this error,
+  ** and the catch must receive the raw error object. */
+  if (L->errfunc != 0 && L->activeCatch == NULL) {
+    /* is there an error handling function? */
     StkId errfunc = restorestack(L, L->errfunc);
     lua_assert(ttisfunction(s2v(errfunc)));
     setobjs2s(L, L->top.p, L->top.p - 1); /* move argument */

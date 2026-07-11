@@ -395,6 +395,7 @@ typedef struct global_State {
   lu_byte no_fastcall;                       /* disable fastcall emission */
   lu_byte readonly_env;                      /* environment is immutable */
   lu_byte stripdebug;          /* strip debug info from loaded prototypes */
+  lu_byte isworker;            /* state runs a worker body on a pool thread */
   TString *fc_names[FC_COUNT]; /* interned fastcall func names */
   TString *fc_modules[FC_NMODULES + 1]; /* [0] = NULL (base library) */
   lu_byte fc_ready[FC_COUNT];           /* entry registered/enabled here */

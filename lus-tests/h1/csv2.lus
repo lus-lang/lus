@@ -1,0 +1,440 @@
+-- csv2.lus
+-- Hostile CSV suite covering RFC 4180 pathologies and byte-level edge cases.
+-- These tests complement csv.lus, which covers well-formed rectangular data.
+-- Here the focus is BOM handling, mixed line endings, ragged rows, quoting
+-- policy round-trips, headers-mode corner cases, and byte fidelity through
+-- fromcsv and tocsv. Behaviors are pinned against the C implementation in
+-- lus/src/lcsvlib.c and the contracts in lus-spec/stdlib/base.
+
+global assert, type, fromcsv, tocsv, require, string, tostring, pledge, math, setmetatable
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("csv2")
+
+-- ============================================================
+-- BOM handling: no stripping, becomes part of the first field
+-- ============================================================
+
+tests:it("UTF-8 BOM becomes part of the first field", function()
+    -- The parser does no BOM stripping, so the three BOM bytes lead field one.
+    local d = fromcsv("\239\187\191a,b")
+    assert(d[1][1] == "\239\187\191a", "BOM prefixes the first field")
+    assert(d[1][2] == "b")
+end)
+
+tests:it("UTF-8 BOM taints the first header name in headers mode", function()
+    local d = fromcsv("\239\187\191name,age\nAlice,30", true)
+    assert(d[1].name == nil, "plain 'name' key is absent because the BOM is glued on")
+    assert(d[1]["\239\187\191name"] == "Alice", "the header key carries the BOM bytes")
+    assert(d[1].age == "30")
+end)
+
+-- ============================================================
+-- Line ending varieties: LF, CRLF, CR-only, and mixtures
+-- ============================================================
+
+tests:it("CR-only record separators split rows", function()
+    local d = fromcsv("a,b\rc,d")
+    assert(#d == 2, "a lone carriage return ends a record")
+    assert(d[1][1] == "a" and d[1][2] == "b")
+    assert(d[2][1] == "c" and d[2][2] == "d")
+end)
+
+tests:it("mixed LF, CRLF, and CR endings all separate records", function()
+    local d = fromcsv("a\r\nb\nc\rd")
+    assert(#d == 4, "each ending style closes one record")
+    assert(d[1][1] == "a")
+    assert(d[2][1] == "b")
+    assert(d[3][1] == "c")
+    assert(d[4][1] == "d")
+end)
+
+tests:it("trailing CRLF does not create an extra record", function()
+    local d = fromcsv("a,b\r\n")
+    assert(#d == 1, "a final CRLF closes the last row without adding one")
+    assert(d[1][2] == "b")
+end)
+
+tests:it("trailing CR-only does not create an extra record", function()
+    local d = fromcsv("a,b\r")
+    assert(#d == 1)
+    assert(d[1][1] == "a")
+end)
+
+-- ============================================================
+-- Empty lines versus empty fields versus trailing newline
+-- ============================================================
+
+tests:it("an interior blank line becomes a single-empty-field row", function()
+    -- A blank line has no delimiter, so it parses as one empty unquoted field.
+    local d = fromcsv("a\n\nb")
+    assert(#d == 3, "the blank line is its own record")
+    assert(d[1][1] == "a")
+    assert(#d[2] == 1 and d[2][1] == "", "the blank record holds one empty field")
+    assert(d[3][1] == "b")
+end)
+
+tests:it("a row of only delimiters yields all empty fields", function()
+    local d = fromcsv(",,")
+    assert(#d == 1)
+    assert(#d[1] == 3, "two commas delimit three empty fields")
+    assert(d[1][1] == "" and d[1][2] == "" and d[1][3] == "")
+end)
+
+tests:it("two trailing newlines add one blank-field record", function()
+    local d = fromcsv("a,b\n\n")
+    assert(#d == 2, "the second newline opens a trailing blank record")
+    assert(d[2][1] == "")
+end)
+
+-- ============================================================
+-- Ragged positional rows: widths are preserved as-is
+-- ============================================================
+
+tests:it("ragged rows keep their own individual widths", function()
+    local d = fromcsv("a,b,c\nd\ne,f")
+    assert(#d == 3)
+    assert(#d[1] == 3, "first row has three fields")
+    assert(#d[2] == 1, "second row has one field")
+    assert(#d[3] == 2, "third row has two fields")
+    assert(d[2][1] == "d")
+    assert(d[3][2] == "f")
+end)
+
+-- ============================================================
+-- Single-column input
+-- ============================================================
+
+tests:it("single-column input yields one field per row", function()
+    local d = fromcsv("alpha\nbeta\ngamma")
+    assert(#d == 3)
+    assert(#d[1] == 1 and #d[2] == 1 and #d[3] == 1)
+    assert(d[1][1] == "alpha" and d[3][1] == "gamma")
+end)
+
+-- ============================================================
+-- Whitespace fidelity in unquoted fields
+-- ============================================================
+
+tests:it("leading and trailing spaces in unquoted fields are preserved", function()
+    -- RFC 4180 treats spaces as ordinary field bytes, and the parser agrees.
+    local d = fromcsv(" a , b ")
+    assert(d[1][1] == " a ", "the first field keeps its surrounding spaces")
+    assert(d[1][2] == " b ", "the second field keeps its surrounding spaces")
+end)
+
+tests:it("a field of only whitespace survives intact", function()
+    local d = fromcsv("   ,x")
+    assert(d[1][1] == "   ", "three spaces are a valid field value")
+    assert(d[1][2] == "x")
+end)
+
+tests:it("a tab inside an unquoted comma field stays literal", function()
+    local d = fromcsv("a\tb,c")
+    assert(d[1][1] == "a\tb", "a tab is an ordinary byte under comma delimiting")
+    assert(d[1][2] == "c")
+end)
+
+-- ============================================================
+-- Quoted field pathologies
+-- ============================================================
+
+tests:it("a quoted field may hold a CRLF sequence", function()
+    local d = fromcsv('"line1\r\nline2",b')
+    assert(d[1][1] == "line1\r\nline2", "both CR and LF are preserved inside quotes")
+    assert(d[1][2] == "b")
+end)
+
+tests:it("a quoted field may hold a bare CR", function()
+    local d = fromcsv('"a\rb",c')
+    assert(d[1][1] == "a\rb")
+    assert(d[1][2] == "c")
+end)
+
+tests:it("a doubled quote inside a quoted field decodes to one quote", function()
+    local d = fromcsv('"he said ""go""",end')
+    assert(d[1][1] == 'he said "go"')
+    assert(d[1][2] == "end")
+end)
+
+tests:it("a field of only a doubled quote decodes to a single quote", function()
+    local d = fromcsv('""""')
+    assert(d[1][1] == '"', "four quotes is an escaped quote inside a quoted field")
+end)
+
+tests:it("a quoted empty field followed by delimiter stays empty", function()
+    local d = fromcsv('"",x')
+    assert(d[1][1] == "")
+    assert(d[1][2] == "x")
+end)
+
+tests:it("a quoted field holding just a delimiter keeps it literal", function()
+    local d = fromcsv('",",x')
+    assert(d[1][1] == ",", "the quoted comma is data, not a separator")
+    assert(d[1][2] == "x")
+end)
+
+-- ============================================================
+-- Unterminated and malformed quoting: error paths
+-- ============================================================
+
+tests:each("unterminated or malformed quotes raise a parse error", {
+    { '"unterminated' },        -- no closing quote before EOF
+    { 'a,"b' },                 -- second field opens a quote that never closes
+    { '"a\nb' },                -- quote spanning a newline with no close
+}, function(input)
+    local ok, err = catch fromcsv(input)
+    assert(not ok, "malformed quoting must fail")
+    assert(string.find(tostring(err), "CSV parse error"), "error is a CSV parse error")
+end)
+
+tests:it("unterminated quote reports the unterminated message", function()
+    local ok, err = catch fromcsv('"open')
+    assert(not ok)
+    assert(string.find(tostring(err), "unterminated quoted field"), "message names the cause")
+end)
+
+tests:each("junk after a closing quote raises regardless of position", {
+    { 'a,"b"x' },       -- junk mid record
+    { '"a"b,c' },       -- junk at start of record
+    { '"a"b' },         -- junk at end of input
+}, function(input)
+    local ok, err = catch fromcsv(input)
+    assert(not ok, "a closing quote must be followed by a delimiter or line ending")
+    assert(string.find(tostring(err), "unexpected character after quoted field"),
+        "message names the unexpected trailing character")
+end)
+
+tests:it("a quoted field directly at end of input is accepted", function()
+    local d = fromcsv('"a"')
+    assert(d[1][1] == "a", "a well-closed quote at EOF is fine")
+end)
+
+-- ============================================================
+-- Headers mode edge cases
+-- ============================================================
+
+tests:it("duplicate header names resolve to the last column", function()
+    local d = fromcsv("a,a\n1,2", true)
+    assert(d[1].a == "2", "the rightmost duplicate header wins")
+end)
+
+tests:it("a quoted header may contain the delimiter", function()
+    local d = fromcsv('"first,name",age\nBob,30', true)
+    assert(d[1]["first,name"] == "Bob", "the comma lives inside the header key")
+    assert(d[1].age == "30")
+end)
+
+tests:it("a quoted header may contain a newline", function()
+    local d = fromcsv('"two\nline",age\nBob,30', true)
+    assert(d[1]["two\nline"] == "Bob")
+    assert(d[1].age == "30")
+end)
+
+tests:it("an empty header field becomes the empty-string key", function()
+    local d = fromcsv(",b\n1,2", true)
+    assert(d[1][""] == "1", "the blank header maps to the empty-string key")
+    assert(d[1].b == "2")
+end)
+
+tests:it("data rows shorter than the header have absent trailing keys", function()
+    local d = fromcsv("x,y,z\n1,2", true)
+    assert(d[1].x == "1")
+    assert(d[1].y == "2")
+    assert(d[1].z == nil, "the missing third column is absent")
+end)
+
+tests:it("data rows longer than the header drop the extra columns", function()
+    local d = fromcsv("x,y\n1,2,3,4", true)
+    assert(d[1].x == "1")
+    assert(d[1].y == "2")
+    assert(d[1][3] == nil, "surplus columns beyond the header are not kept")
+    assert(d[1][4] == nil)
+end)
+
+tests:it("a lone header row with no trailing newline yields no data rows", function()
+    local d = fromcsv("x,y", true)
+    assert(#d == 0, "there are no records after the header")
+end)
+
+tests:it("headers mode over empty input yields an empty table", function()
+    local d = fromcsv("", true)
+    assert(#d == 0)
+end)
+
+-- ============================================================
+-- Delimiter parameter and its validation
+-- ============================================================
+
+tests:each("assorted single-character delimiters parse correctly", {
+    { "a;b;c", ";", 3 },
+    { "a|b|c", "|", 3 },
+    { "a\tb", "\t", 2 },
+    { "a b c", " ", 3 },
+}, function(input, delim, ncols)
+    local d = fromcsv(input, false, delim)
+    assert(#d[1] == ncols, "field count matches the delimiter split")
+end)
+
+tests:each("delimiters that are not exactly one byte are rejected", {
+    { "" },      -- empty string has length zero
+    { ",," },    -- two bytes
+    { "ab" },    -- two bytes
+}, function(delim)
+    local ok, err = catch fromcsv("a,b", false, delim)
+    assert(not ok, "the delimiter must be a single character")
+    assert(string.find(tostring(err), "single character"), "message names the constraint")
+end)
+
+tests:it("a non-comma delimiter leaves commas as ordinary field bytes", function()
+    local d = fromcsv("a,b;c,d", false, ";")
+    assert(d[1][1] == "a,b", "commas are literal when the delimiter is a semicolon")
+    assert(d[1][2] == "c,d")
+end)
+
+-- ============================================================
+-- fromcsv argument coercion
+-- ============================================================
+
+tests:it("fromcsv coerces a number argument to its string form", function()
+    -- String-accepting stdlib functions coerce numbers, so 42 parses as "42".
+    local d = fromcsv(42)
+    assert(d[1][1] == "42", "the number is stringified before parsing")
+end)
+
+tests:each("fromcsv rejects non-string, non-number arguments", {
+    { true },
+    { false },
+    { {} },
+}, function(arg)
+    local ok = catch fromcsv(arg)
+    assert(not ok, "only strings and numbers are acceptable input")
+end)
+
+-- ============================================================
+-- tocsv quoting policy honors a custom delimiter
+-- ============================================================
+
+tests:it("tocsv quotes a field containing the custom delimiter", function()
+    -- The needs-quoting check tracks the active delimiter, not a hardcoded comma.
+    local csv = tocsv({{"a;b"}}, ";")
+    assert(csv == '"a;b"\n', "the semicolon forces quoting")
+end)
+
+tests:it("tocsv leaves a comma unquoted when the delimiter is a semicolon", function()
+    local csv = tocsv({{"a,b"}}, ";")
+    assert(csv == "a,b\n", "a comma is not special under semicolon delimiting")
+end)
+
+tests:it("tocsv still quotes newlines and quotes under a custom delimiter", function()
+    local csv = tocsv({{'x"y', "p\nq"}}, ";")
+    assert(csv == '"x""y";"p\nq"\n', "quotes and newlines always force quoting")
+end)
+
+-- ============================================================
+-- tocsv value conversion
+-- ============================================================
+
+tests:it("tocsv renders a float distinctly from the same-valued integer", function()
+    -- luaL_tolstring preserves the float subtype, so 1.0 keeps its decimal form.
+    assert(tocsv({{1.0}}) == "1.0\n", "the float writes as 1.0")
+    assert(tocsv({{1}}) == "1\n", "the integer writes as 1")
+end)
+
+tests:it("tocsv honors a __tostring metamethod", function()
+    local v = setmetatable({}, { __tostring = function() return "CUSTOM" end })
+    assert(tocsv({{v}}) == "CUSTOM\n", "the metamethod supplies the field text")
+end)
+
+tests:it("tocsv quotes a __tostring result that contains a comma", function()
+    local v = setmetatable({}, { __tostring = function() return "a,b" end })
+    assert(tocsv({{v}}) == '"a,b"\n', "the produced text is quoted like any field")
+end)
+
+tests:it("tocsv writes a nil field as empty when the row length spans it", function()
+    -- Forcing __len exposes the interior nil, which the spec says is an empty field.
+    local row = setmetatable({"a", nil, "c"}, { __len = function() return 3 end })
+    assert(tocsv({row}) == "a,,c\n", "the interior nil becomes an empty field")
+end)
+
+tests:it("tocsv errors when a row is not a table", function()
+    local ok, err = catch tocsv({ "a", {"b"} })
+    assert(not ok, "a string row is rejected")
+    assert(string.find(tostring(err), "row 1 is not a table"), "message names the offending row")
+end)
+
+-- ============================================================
+-- Round-trip fidelity through tocsv then fromcsv
+-- ============================================================
+
+tests:each("hostile field values round-trip through tocsv and fromcsv", {
+    { "plain" },
+    { "with,comma" },
+    { 'with"quote' },
+    { "with\nnewline" },
+    { "with\r\nCRLF" },
+    { "with\rCR" },
+    { 'all,"\r\n at once' },
+    { "" },
+    { "   spaces   " },
+    { '""""' },
+}, function(value)
+    local csv = tocsv({{ value }})
+    local back = fromcsv(csv)
+    assert(back[1][1] == value, "the value survives the round trip unchanged")
+end)
+
+tests:it("a NUL byte round-trips through tocsv and fromcsv", function()
+    local value = "x\0y"
+    local back = fromcsv(tocsv({{ value }}))
+    assert(back[1][1] == value, "the embedded NUL is preserved")
+    assert(#back[1][1] == 3, "length is preserved across the NUL")
+end)
+
+tests:it("a field of only whitespace round-trips exactly", function()
+    local back = fromcsv(tocsv({{ "\t \t" }}))
+    assert(back[1][1] == "\t \t")
+end)
+
+tests:it("a custom-delimiter round trip preserves embedded delimiters", function()
+    local original = {{"a;b", "c;d"}, {"e", "f"}}
+    local csv = tocsv(original, ";")
+    local back = fromcsv(csv, false, ";")
+    assert(back[1][1] == "a;b" and back[1][2] == "c;d")
+    assert(back[2][1] == "e" and back[2][2] == "f")
+end)
+
+tests:it("headers mode round-trips a header carrying a comma", function()
+    local original = {{"first,name", "age"}, {"Bob", "30"}}
+    local csv = tocsv(original)
+    local back = fromcsv(csv, true)
+    assert(back[1]["first,name"] == "Bob")
+    assert(back[1].age == "30")
+end)
+
+-- ============================================================
+-- Large field and volume stress
+-- ============================================================
+
+tests:it("a very large quoted field round-trips intact", function()
+    -- Build a field that mixes commas and quotes to force escaping across growth.
+    local chunk = string.rep('a,b"c', 5000)
+    local back = fromcsv(tocsv({{ chunk }}))
+    assert(back[1][1] == chunk, "the escaped megafield decodes to the original")
+    assert(#back[1][1] == #chunk)
+end)
+
+tests:it("many single-column rows survive a round trip", function()
+    local rows = {}
+    for i = 1, 500 do
+        rows[i] = { "v" .. tostring(i) }
+    end
+    local back = fromcsv(tocsv(rows))
+    assert(#back == 500)
+    assert(back[1][1] == "v1")
+    assert(back[500][1] == "v500")
+end)
+
+tests:finish()

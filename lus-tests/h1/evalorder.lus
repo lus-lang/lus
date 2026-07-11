@@ -1,0 +1,1065 @@
+--[[
+  Order-of-evaluation tests for Lus.
+
+  Every test observes evaluation order or evaluation count through
+  side-effect counters, call logs, or __index/__newindex proxies.
+  Covered areas: callee versus argument order in calls, method self
+  expressions, index-assignment sequencing, multiple assignment,
+  and/or short-circuiting, concat chains with __concat, comparison
+  operands, optional chaining suppression, from destructuring,
+  slice bounds, if/while assignment, elseif chains, and string
+  interpolation segments.
+]]
+
+global print, require, assert, type, table, setmetatable, getmetatable, tostring, error, string, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("evalorder")
+
+-- Build a fresh call log per test. mark records an event and joined
+-- renders the log for exact order assertions.
+local function recorder()
+    local log = {}
+    local function mark(name)
+        table.insert(log, name)
+    end
+    local function joined()
+        return table.concat(log, ",")
+    end
+    return mark, joined
+end
+
+-- ============================================
+-- Calls: callee, self, and argument order
+-- ============================================
+
+tests:it("callee expression evaluated before arguments", function()
+    local mark, joined = recorder()
+    local function getf()
+        mark("callee")
+        return function(a, b)
+            mark("body")
+            return a + b
+        end
+    end
+    local function a1() mark("arg1") return 1 end
+    local function a2() mark("arg2") return 2 end
+    local r = getf()(a1(), a2())
+    tests:assert_equal(joined(), "callee,arg1,arg2,body")
+    tests:assert_equal(r, 3)
+end)
+
+tests:it("callee index expression evaluated before arguments", function()
+    local mark, joined = recorder()
+    local tbl = {
+        fn = function(x)
+            mark("body")
+            return x
+        end,
+    }
+    local function kf() mark("key") return "fn" end
+    local function af() mark("arg") return 7 end
+    local r = tbl[kf()](af())
+    tests:assert_equal(joined(), "key,arg,body")
+    tests:assert_equal(r, 7)
+end)
+
+tests:it("arguments evaluated left to right", function()
+    local mark, joined = recorder()
+    local function a1() mark("a1") return 1 end
+    local function a2() mark("a2") return 2 end
+    local function a3() mark("a3") return 3 end
+    local function f(x, y, z) return x * 100 + y * 10 + z end
+    tests:assert_equal(f(a1(), a2(), a3()), 123)
+    tests:assert_equal(joined(), "a1,a2,a3")
+end)
+
+tests:it("nested call arguments evaluated within their slot in order", function()
+    local mark, joined = recorder()
+    local function g() mark("g") return 1 end
+    local function i() mark("i") return 2 end
+    local function h(x) mark("h") return x + 1 end
+    local function f(x, y) mark("f") return x + y end
+    tests:assert_equal(f(g(), h(i())), 4)
+    tests:assert_equal(joined(), "g,i,h,f")
+end)
+
+tests:it("each argument evaluated exactly once", function()
+    local n1, n2 = 0, 0
+    local function a1() n1 = n1 + 1 return 1 end
+    local function a2() n2 = n2 + 1 return 2 end
+    local function f(x, y) return x + y end
+    tests:assert_equal(f(a1(), a2()), 3)
+    tests:assert_equal(n1, 1)
+    tests:assert_equal(n2, 1)
+end)
+
+tests:it("method self expression evaluated exactly once", function()
+    local n = 0
+    local obj = {
+        m = function(self, x)
+            return x * 2
+        end,
+    }
+    local function getobj()
+        n = n + 1
+        return obj
+    end
+    tests:assert_equal(getobj():m(21), 42)
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("method self evaluated before arguments", function()
+    local mark, joined = recorder()
+    local obj = {
+        m = function(self, x)
+            mark("method")
+            return x
+        end,
+    }
+    local function getobj() mark("self") return obj end
+    local function af() mark("arg") return 5 end
+    tests:assert_equal(getobj():m(af()), 5)
+    tests:assert_equal(joined(), "self,arg,method")
+end)
+
+tests:it("method name looked up exactly once through __index", function()
+    local lookups = 0
+    local target = {
+        m = function(self, x)
+            return x * 2
+        end,
+    }
+    local prox = setmetatable({}, {
+        __index = function(t, k)
+            lookups = lookups + 1
+            return target[k]
+        end,
+    })
+    tests:assert_equal(prox:m(21), 42)
+    tests:assert_equal(lookups, 1)
+end)
+
+tests:it("method arguments evaluated left to right", function()
+    local mark, joined = recorder()
+    local obj = {
+        m = function(self, x, y)
+            return x * 10 + y
+        end,
+    }
+    local function a1() mark("a1") return 1 end
+    local function a2() mark("a2") return 2 end
+    tests:assert_equal(obj:m(a1(), a2()), 12)
+    tests:assert_equal(joined(), "a1,a2")
+end)
+
+tests:it("arguments evaluated before a non-callable callee raises", function()
+    local mark, joined = recorder()
+    local notf = nil
+    local function g() mark("g") return 1 end
+    local ok, err = catch (function() return notf(g()) end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "attempt to call a nil value")
+    tests:assert_equal(joined(), "g", "argument runs before the call-time error")
+end)
+
+tests:it("method self indexing error raised before arguments run", function()
+    local mark, joined = recorder()
+    local nils = nil
+    local function af() mark("arg") return 1 end
+    local ok, err = catch (function() return nils:m(af()) end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "attempt to index a nil value")
+    tests:assert_equal(joined(), "", "self lookup fails before arguments are evaluated")
+end)
+
+-- ============================================
+-- Assignment sequencing
+-- ============================================
+
+tests:it("index assignment evaluates key before value", function()
+    local mark, joined = recorder()
+    local a = {}
+    local function keyf() mark("key") return 3 end
+    local function valf() mark("val") return "v" end
+    a[keyf()] = valf()
+    tests:assert_equal(joined(), "key,val")
+    tests:assert_equal(a[3], "v")
+end)
+
+tests:it("index assignment evaluates table then key then value", function()
+    local mark, joined = recorder()
+    local a = {}
+    local function tabf() mark("tab") return a end
+    local function keyf() mark("key") return 1 end
+    local function valf() mark("val") return "w" end
+    tabf()[keyf()] = valf()
+    tests:assert_equal(joined(), "tab,key,val")
+    tests:assert_equal(a[1], "w")
+end)
+
+tests:it("swap works because the RHS is fully read before any store", function()
+    local x, y = 1, 2
+    x, y = y, x
+    tests:assert_equal(x, 2)
+    tests:assert_equal(y, 1)
+end)
+
+tests:it("proxy swap reads left to right then stores with the old values", function()
+    local mark, joined = recorder()
+    local proxy = setmetatable({}, {
+        __index = function(t, k)
+            mark("get:" .. tostring(k))
+            return k .. "V"
+        end,
+        __newindex = function(t, k, v)
+            mark("set:" .. tostring(k) .. "=" .. tostring(v))
+        end,
+    })
+    proxy.p, proxy.q = proxy.q, proxy.p
+    tests:assert_equal(joined(), "get:q,get:p,set:q=pV,set:p=qV")
+end)
+
+tests:it("multiple assignment stores happen right to left", function()
+    local mark, joined = recorder()
+    local t = setmetatable({}, {
+        __newindex = function(tb, k, v)
+            mark("store:" .. tostring(k))
+        end,
+    })
+    t.a, t.b = 1, 2
+    tests:assert_equal(joined(), "store:b,store:a")
+end)
+
+tests:it("LHS index expressions evaluated before RHS values", function()
+    local mark, joined = recorder()
+    local a, b = {}, {}
+    local function k1() mark("k1") return 1 end
+    local function k2() mark("k2") return 2 end
+    local function v1() mark("v1") return "x" end
+    local function v2() mark("v2") return "y" end
+    a[k1()], b[k2()] = v1(), v2()
+    tests:assert_equal(joined(), "k1,k2,v1,v2")
+    tests:assert_equal(a[1], "x")
+    tests:assert_equal(b[2], "y")
+end)
+
+tests:it("__newindex fires exactly once per store", function()
+    local n = 0
+    local t = setmetatable({}, {
+        __newindex = function(tb, k, v)
+            n = n + 1
+        end,
+    })
+    t.solo = 1
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("key and value evaluated before a nil-target store raises", function()
+    local mark, joined = recorder()
+    local nilt = nil
+    local function kf() mark("k") return 1 end
+    local function vf() mark("v") return 2 end
+    local ok, err = catch (function() nilt[kf()] = vf() end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "attempt to index a nil value")
+    tests:assert_equal(joined(), "k,v", "both operands run before the store error")
+end)
+
+tests:it("multi-value RHS call evaluated exactly once", function()
+    local n = 0
+    local function f()
+        n = n + 1
+        return 10, 20
+    end
+    local x, y = f()
+    tests:assert_equal(n, 1)
+    tests:assert_equal(x, 10)
+    tests:assert_equal(y, 20)
+end)
+
+-- ============================================
+-- and/or short-circuiting
+-- ============================================
+
+tests:each("short-circuit suppresses the right operand", {
+    {"false-and"}, {"nil-and"}, {"true-or"}, {"zero-or"}, {"empty-string-or"},
+}, function(which)
+    local n = 0
+    local function eff()
+        n = n + 1
+        return "E"
+    end
+    local r
+    if which == "false-and" then
+        r = false and eff()
+        tests:assert_equal(r, false)
+    elseif which == "nil-and" then
+        r = nil and eff()
+        tests:assert_equal(r, nil)
+    elseif which == "true-or" then
+        r = true or eff()
+        tests:assert_equal(r, true)
+    elseif which == "zero-or" then
+        r = 0 or eff()
+        tests:assert_equal(r, 0)
+    else
+        r = "" or eff()
+        tests:assert_equal(r, "")
+    end
+    tests:assert_equal(n, 0, "right operand must not run")
+end)
+
+tests:it("taken right operand of and evaluated exactly once", function()
+    local n = 0
+    local function eff()
+        n = n + 1
+        return "yes"
+    end
+    tests:assert_equal(true and eff(), "yes")
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("taken right operand of or evaluated exactly once", function()
+    local n = 0
+    local function eff()
+        n = n + 1
+        return "also"
+    end
+    tests:assert_equal(false or eff(), "also")
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("a and b or c evaluates only b when a is true", function()
+    local nb, nc = 0, 0
+    local function bv() nb = nb + 1 return "B" end
+    local function cv() nc = nc + 1 return "C" end
+    tests:assert_equal(true and bv() or cv(), "B")
+    tests:assert_equal(nb, 1)
+    tests:assert_equal(nc, 0)
+end)
+
+tests:it("a and b or c evaluates only c when a is false", function()
+    local nb, nc = 0, 0
+    local function bv() nb = nb + 1 return "B" end
+    local function cv() nc = nc + 1 return "C" end
+    tests:assert_equal(false and bv() or cv(), "C")
+    tests:assert_equal(nb, 0)
+    tests:assert_equal(nc, 1)
+end)
+
+-- ============================================
+-- Concatenation
+-- ============================================
+
+-- Build tagged operands whose __concat logs each combination it is
+-- asked to perform, so both operand order and application order are
+-- observable in the same chain.
+local function concat_kit(mark)
+    local mt
+    mt = {
+        __concat = function(l, r)
+            local ln = type(l) == "table" and l.name or tostring(l)
+            local rn = type(r) == "table" and r.name or tostring(r)
+            mark("concat(" .. ln .. "," .. rn .. ")")
+            return setmetatable({ name = "(" .. ln .. rn .. ")" }, mt)
+        end,
+    }
+    return function(name)
+        return setmetatable({ name = name }, mt)
+    end
+end
+
+tests:it("concat operands evaluated left to right", function()
+    local mark, joined = recorder()
+    local co = concat_kit(function() end)
+    local ca, cb, cc = co("A"), co("B"), co("C")
+    local function fA() mark("fA") return ca end
+    local function fB() mark("fB") return cb end
+    local function fC() mark("fC") return cc end
+    local r = fA() .. fB() .. fC()
+    tests:assert_equal(joined(), "fA,fB,fC")
+    tests:assert_equal(r.name, "(A(BC))")
+end)
+
+tests:it("__concat applied right to left across a chain", function()
+    local mark, joined = recorder()
+    local co = concat_kit(mark)
+    local r = co("A") .. co("B") .. co("C")
+    tests:assert_equal(joined(), "concat(B,C),concat(A,(BC))")
+    tests:assert_equal(r.name, "(A(BC))")
+end)
+
+tests:it("each concat operand evaluated exactly once", function()
+    local n1, n2 = 0, 0
+    local function f1() n1 = n1 + 1 return "a" end
+    local function f2() n2 = n2 + 1 return "b" end
+    tests:assert_equal(f1() .. f2(), "ab")
+    tests:assert_equal(n1, 1)
+    tests:assert_equal(n2, 1)
+end)
+
+-- ============================================
+-- Comparisons
+-- ============================================
+
+tests:each("comparison operands evaluated left to right", {
+    {"lt"}, {"le"}, {"eq"},
+}, function(op)
+    local mark, joined = recorder()
+    local function lhs() mark("lhs") return 1 end
+    local function rhs() mark("rhs") return 2 end
+    local r
+    if op == "lt" then
+        r = lhs() < rhs()
+        tests:assert_equal(r, true)
+    elseif op == "le" then
+        r = lhs() <= rhs()
+        tests:assert_equal(r, true)
+    else
+        r = lhs() == rhs()
+        tests:assert_equal(r, false)
+    end
+    tests:assert_equal(joined(), "lhs,rhs")
+end)
+
+tests:it("greater-than calls __lt with swapped operands", function()
+    local rec = {}
+    local mt = {
+        __lt = function(a, b)
+            rec.first = a.tag
+            rec.second = b.tag
+            rec.n = (rec.n or 0) + 1
+            return true
+        end,
+    }
+    local ga = setmetatable({ tag = "ga" }, mt)
+    local gb = setmetatable({ tag = "gb" }, mt)
+    tests:assert_equal(ga > gb, true)
+    tests:assert_equal(rec.first, "gb")
+    tests:assert_equal(rec.second, "ga")
+    tests:assert_equal(rec.n, 1)
+end)
+
+tests:it("greater-equal calls __le with swapped operands", function()
+    local rec = {}
+    local mt = {
+        __le = function(a, b)
+            rec.first = a.tag
+            rec.second = b.tag
+            rec.n = (rec.n or 0) + 1
+            return true
+        end,
+    }
+    local ga = setmetatable({ tag = "ga" }, mt)
+    local gb = setmetatable({ tag = "gb" }, mt)
+    tests:assert_equal(ga >= gb, true)
+    tests:assert_equal(rec.first, "gb")
+    tests:assert_equal(rec.second, "ga")
+    tests:assert_equal(rec.n, 1)
+end)
+
+tests:it("inequality invokes __eq once and negates the result", function()
+    local n = 0
+    local mt = {
+        __eq = function(a, b)
+            n = n + 1
+            return true
+        end,
+    }
+    local ea = setmetatable({}, mt)
+    local eb = setmetatable({}, mt)
+    tests:assert_equal(ea ~= eb, false)
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("comparison RHS not evaluated when LHS raises", function()
+    local mark, joined = recorder()
+    local function boom() mark("boom") error("x") end
+    local function rhs() mark("rhs") return 1 end
+    local ok = catch (function() return boom() < rhs() end)()
+    tests:assert_false(ok)
+    tests:assert_equal(joined(), "boom")
+end)
+
+-- ============================================
+-- Optional chaining suppression
+-- ============================================
+
+tests:each("nil base suppresses key and argument expressions", {
+    {"field-call"}, {"index"}, {"method"}, {"call"},
+}, function(form)
+    local n = 0
+    local function sf()
+        n = n + 1
+        return 1
+    end
+    local base = nil
+    local r
+    if form == "field-call" then
+        r = base?.b(sf())
+    elseif form == "index" then
+        r = base?[sf()]
+    elseif form == "method" then
+        r = base?:m(sf())
+    else
+        r = base?(sf())
+    end
+    tests:assert_equal(r, nil)
+    tests:assert_equal(n, 0, "suppressed expression must not run")
+end)
+
+tests:it("false base suppresses evaluation in every form and yields false", function()
+    local n = 0
+    local function sf()
+        n = n + 1
+        return 1
+    end
+    local fb = false
+    tests:assert_equal(fb?[sf()], false)
+    tests:assert_equal(fb?:m(sf()), false)
+    tests:assert_equal(fb?(sf()), false)
+    tests:assert_equal(n, 0)
+end)
+
+tests:it("mid-chain nil suppresses later index expressions", function()
+    local n = 0
+    local function key()
+        n = n + 1
+        return "k"
+    end
+    local mc = { a = nil }
+    tests:assert_equal(mc?.a?[key()], nil)
+    tests:assert_equal(n, 0)
+end)
+
+tests:it("mid-chain nil suppresses later method arguments", function()
+    local n = 0
+    local function af()
+        n = n + 1
+        return 1
+    end
+    local mc = { a = nil }
+    tests:assert_equal(mc?.a?:m(af()), nil)
+    tests:assert_equal(n, 0)
+end)
+
+tests:it("live chain base evaluated exactly once", function()
+    local n = 0
+    local obj = {
+        b = function(x)
+            return x
+        end,
+    }
+    local function getbase()
+        n = n + 1
+        return obj
+    end
+    tests:assert_equal(getbase()?.b(9), 9)
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("nil chain base evaluated exactly once with a long chain", function()
+    local n = 0
+    local sfn = 0
+    local function getnil()
+        n = n + 1
+        return nil
+    end
+    local function sf()
+        sfn = sfn + 1
+        return 1
+    end
+    local r = getnil()?.a?.b?[sf()]?:m(sf())
+    tests:assert_equal(r, nil)
+    tests:assert_equal(n, 1)
+    tests:assert_equal(sfn, 0)
+end)
+
+tests:it("live optional index evaluates the key exactly once", function()
+    local n = 0
+    local t = { arr = { 10, 20 } }
+    local function key()
+        n = n + 1
+        return "arr"
+    end
+    local r = t?[key()]
+    tests:assert_equal(r, t.arr)
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("live optional field call evaluates the argument once and calls once", function()
+    local an, cn = 0, 0
+    local t = {
+        b = function(x)
+            cn = cn + 1
+            return x
+        end,
+    }
+    local function af()
+        an = an + 1
+        return 5
+    end
+    tests:assert_equal(t?.b(af()), 5)
+    tests:assert_equal(an, 1)
+    tests:assert_equal(cn, 1)
+end)
+
+tests:it("live optional method call evaluates the argument once", function()
+    local n = 0
+    local o = {
+        m = function(self, x)
+            return x
+        end,
+    }
+    local function af()
+        n = n + 1
+        return 5
+    end
+    tests:assert_equal(o?:m(af()), 5)
+    tests:assert_equal(n, 1)
+end)
+
+tests:it("live optional call form evaluates the argument once", function()
+    local n = 0
+    local f = function(x)
+        return x
+    end
+    local function af()
+        n = n + 1
+        return 5
+    end
+    tests:assert_equal(f?(af()), 5)
+    tests:assert_equal(n, 1)
+end)
+
+-- ============================================
+-- from destructuring
+-- ============================================
+
+tests:it("from reads fields in declaration order", function()
+    local mark, joined = recorder()
+    local proxy = setmetatable({}, {
+        __index = function(t, k)
+            mark("get:" .. tostring(k))
+            return k
+        end,
+    })
+    local aa, bb, cc from proxy
+    tests:assert_equal(joined(), "get:aa,get:bb,get:cc")
+    tests:assert_equal(aa, "aa")
+    tests:assert_equal(bb, "bb")
+    tests:assert_equal(cc, "cc")
+end)
+
+tests:it("from reads each field exactly once", function()
+    local counts = {}
+    local proxy = setmetatable({}, {
+        __index = function(t, k)
+            counts[k] = (counts[k] or 0) + 1
+            return 1
+        end,
+    })
+    local fa, fb from proxy
+    tests:assert_equal(counts.fa, 1)
+    tests:assert_equal(counts.fb, 1)
+    tests:assert_equal(fa, 1)
+    tests:assert_equal(fb, 1)
+end)
+
+tests:it("from consults the __index metamethod", function()
+    local backing = { hidden = 42 }
+    local proxy = setmetatable({}, { __index = backing })
+    local hidden from proxy
+    tests:assert_equal(hidden, 42)
+end)
+
+-- ============================================
+-- Slice bounds
+-- ============================================
+
+-- Wrap a bound in an object whose __add reports when the bound is
+-- computed. t[blo + 0, bhi + 0] then exposes bound evaluation order.
+local function bound(mark, name, v)
+    return setmetatable({ v = v }, {
+        __add = function(a, b)
+            mark(name)
+            return a.v + b
+        end,
+    })
+end
+
+tests:it("slice bounds evaluated start then end", function()
+    local mark, joined = recorder()
+    local t = { 10, 20, 30, 40, 50 }
+    local blo = bound(mark, "lo", 2)
+    local bhi = bound(mark, "hi", 4)
+    local s = t[blo + 0, bhi + 0]
+    tests:assert_equal(joined(), "lo,hi")
+    tests:assert_equal(#s, 3)
+    tests:assert_equal(s[1], 20)
+    tests:assert_equal(s[3], 40)
+end)
+
+tests:it("slice bounds each evaluated exactly once", function()
+    local nlo, nhi = 0, 0
+    local t = { 10, 20, 30, 40, 50 }
+    local blo = setmetatable({}, { __add = function(a, b) nlo = nlo + 1 return 2 + b end })
+    local bhi = setmetatable({}, { __add = function(a, b) nhi = nhi + 1 return 4 + b end })
+    local s = t[blo + 0, bhi + 0]
+    tests:assert_equal(nlo, 1)
+    tests:assert_equal(nhi, 1)
+    tests:assert_equal(s[1], 20)
+end)
+
+tests:it("vararg expression as a slice bound", function()
+    local t = { 10, 20, 30, 40, 50 }
+    local function vf(...)
+        return t[..., 4]
+    end
+    local s = vf(2)
+    tests:assert_equal(#s, 3)
+    tests:assert_equal(s[1], 20)
+    tests:assert_equal(s[3], 40)
+end)
+
+tests:it("call expression as the slice start bound", function()
+    local t = { 10, 20, 30, 40, 50 }
+    local function lo() return 2 end
+    local s = t[lo(), 4]
+    tests:assert_type(s, "table")
+    tests:assert_equal(#s, 3)
+    tests:assert_equal(s[1], 20)
+    tests:assert_equal(s[2], 30)
+    tests:assert_equal(s[3], 40)
+end)
+
+tests:it("call expressions as both slice bounds", function()
+    local t = { 10, 20, 30, 40, 50 }
+    local function lo() return 2 end
+    local function hi() return 4 end
+    local s = t[lo(), hi()]
+    tests:assert_type(s, "table")
+    tests:assert_equal(#s, 3)
+    tests:assert_equal(s[1], 20)
+    tests:assert_equal(s[3], 40)
+end)
+
+tests:it("string slice with call expression bounds", function()
+    local function lo() return 2 end
+    local function hi() return 4 end
+    local s = ("hello")[lo(), hi()]
+    tests:assert_equal(s, "ell")
+end)
+
+tests:it("__slice metamethod receives call-bound values", function()
+    local function lo() return 2 end
+    local function hi() return 4 end
+    local x = setmetatable({}, {
+        __slice = function(self, a, b)
+            return { a = a, b = b }
+        end,
+    })
+    local r = x[lo(), hi()]
+    tests:assert_equal(r.a, 2)
+    tests:assert_equal(r.b, 4)
+end)
+
+-- ============================================
+-- if-assignment, while-assignment, elseif chains
+-- ============================================
+
+tests:it("if-assignment right side evaluated exactly once when truthy", function()
+    local n = 0
+    local function cond()
+        n = n + 1
+        return 42
+    end
+    local seen = nil
+    if v = cond() then
+        seen = v
+    end
+    tests:assert_equal(n, 1)
+    tests:assert_equal(seen, 42)
+end)
+
+tests:it("if-assignment right side evaluated exactly once when falsy", function()
+    local n = 0
+    local function cond()
+        n = n + 1
+        return nil
+    end
+    local entered = false
+    if v = cond() then
+        entered = true
+    end
+    tests:assert_equal(n, 1)
+    tests:assert_false(entered)
+end)
+
+tests:it("if-assignment multi expressions each evaluated once", function()
+    local na, nb = 0, 0
+    local function ea() na = na + 1 return 1 end
+    local function eb() nb = nb + 1 return 2 end
+    local sum = 0
+    if p, q = ea(), eb() then
+        sum = p + q
+    end
+    tests:assert_equal(na, 1)
+    tests:assert_equal(nb, 1)
+    tests:assert_equal(sum, 3)
+end)
+
+tests:it("while-assignment evaluated once per check including the final falsy one", function()
+    local n = 0
+    local function cond()
+        n = n + 1
+        return n <= 3 and n or nil
+    end
+    local iters = 0
+    while v = cond() do
+        iters = iters + 1
+    end
+    tests:assert_equal(iters, 3)
+    tests:assert_equal(n, 4, "three truthy checks plus the terminating one")
+end)
+
+tests:it("while-assignment with an immediately false condition evaluated exactly once", function()
+    local n = 0
+    local function cond()
+        n = n + 1
+        return false
+    end
+    local entered = false
+    while v = cond() do
+        entered = true
+    end
+    tests:assert_equal(n, 1)
+    tests:assert_false(entered)
+end)
+
+tests:it("elseif conditions skipped after the first branch matches", function()
+    local n1, n2, n3 = 0, 0, 0
+    local function c1() n1 = n1 + 1 return true end
+    local function c2() n2 = n2 + 1 return true end
+    local function c3() n3 = n3 + 1 return true end
+    local taken = nil
+    if c1() then
+        taken = 1
+    elseif c2() then
+        taken = 2
+    elseif c3() then
+        taken = 3
+    end
+    tests:assert_equal(taken, 1)
+    tests:assert_equal(n1, 1)
+    tests:assert_equal(n2, 0)
+    tests:assert_equal(n3, 0)
+end)
+
+tests:it("later elseif conditions skipped after a middle branch matches", function()
+    local n1, n2, n3 = 0, 0, 0
+    local function c1() n1 = n1 + 1 return false end
+    local function c2() n2 = n2 + 1 return true end
+    local function c3() n3 = n3 + 1 return true end
+    local taken = nil
+    if c1() then
+        taken = 1
+    elseif c2() then
+        taken = 2
+    elseif c3() then
+        taken = 3
+    end
+    tests:assert_equal(taken, 2)
+    tests:assert_equal(n1, 1)
+    tests:assert_equal(n2, 1)
+    tests:assert_equal(n3, 0)
+end)
+
+tests:it("every condition evaluated once each when all fail and else runs", function()
+    local n1, n2, n3 = 0, 0, 0
+    local function c1() n1 = n1 + 1 return nil end
+    local function c2() n2 = n2 + 1 return false end
+    local function c3() n3 = n3 + 1 return nil end
+    local taken = nil
+    if c1() then
+        taken = 1
+    elseif c2() then
+        taken = 2
+    elseif c3() then
+        taken = 3
+    else
+        taken = 4
+    end
+    tests:assert_equal(taken, 4)
+    tests:assert_equal(n1, 1)
+    tests:assert_equal(n2, 1)
+    tests:assert_equal(n3, 1)
+end)
+
+tests:it("elseif with assignment conditions short-circuits after a match", function()
+    local n1, n2, n3 = 0, 0, 0
+    local function c1() n1 = n1 + 1 return nil end
+    local function c2() n2 = n2 + 1 return 7 end
+    local function c3() n3 = n3 + 1 return 8 end
+    local seen = nil
+    if x = c1() then
+        seen = x
+    elseif y = c2() then
+        seen = y
+    elseif z = c3() then
+        seen = z
+    end
+    tests:assert_equal(seen, 7)
+    tests:assert_equal(n1, 1)
+    tests:assert_equal(n2, 1)
+    tests:assert_equal(n3, 0)
+end)
+
+-- ============================================
+-- String interpolation segments
+-- ============================================
+
+tests:it("interpolation segments evaluated left to right", function()
+    local mark, joined = recorder()
+    local function i1() mark("i1") return "a" end
+    local function i2() mark("i2") return "b" end
+    local function i3() mark("i3") return "c" end
+    local s = `x$(i1())y$(i2())z$(i3())`
+    tests:assert_equal(s, "xaybzc")
+    tests:assert_equal(joined(), "i1,i2,i3")
+end)
+
+tests:it("interpolation segments each evaluated exactly once", function()
+    local na, nb = 0, 0
+    local function ia() na = na + 1 return "A" end
+    local function ib() nb = nb + 1 return "B" end
+    local s = `$(ia())$(ib())$(ia())`
+    tests:assert_equal(s, "ABA")
+    tests:assert_equal(na, 2)
+    tests:assert_equal(nb, 1)
+end)
+
+tests:it("dollar-name segments converted in order through __tostring", function()
+    local mark, joined = recorder()
+    local function obj(name)
+        return setmetatable({}, {
+            __tostring = function()
+                mark(name)
+                return name
+            end,
+        })
+    end
+    local x1 = obj("one")
+    local x2 = obj("two")
+    local s = `$x1-$x2`
+    tests:assert_equal(s, "one-two")
+    tests:assert_equal(joined(), "one,two")
+end)
+
+tests:it("error in an interpolation segment suppresses later segments", function()
+    local na, nb = 0, 0
+    local function bad()
+        na = na + 1
+        error("boom")
+    end
+    local function fine()
+        nb = nb + 1
+        return "ok"
+    end
+    local ok, err = catch (function() return `$(bad())$(fine())` end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "boom")
+    tests:assert_equal(na, 1)
+    tests:assert_equal(nb, 0)
+end)
+
+-- ============================================
+-- Adjacent constructs
+-- ============================================
+
+tests:it("numeric for bounds evaluated exactly once each", function()
+    local nlo, nhi, nst = 0, 0, 0
+    local function flo() nlo = nlo + 1 return 1 end
+    local function fhi() nhi = nhi + 1 return 3 end
+    local function fst() nst = nst + 1 return 1 end
+    local iters = 0
+    for i = flo(), fhi(), fst() do
+        iters = iters + 1
+    end
+    tests:assert_equal(iters, 3)
+    tests:assert_equal(nlo, 1)
+    tests:assert_equal(nhi, 1)
+    tests:assert_equal(nst, 1)
+end)
+
+tests:it("generic for expression list evaluated once", function()
+    local n = 0
+    local function gen()
+        n = n + 1
+        local i = 0
+        return function()
+            i = i + 1
+            if i <= 3 then
+                return i
+            end
+        end
+    end
+    local sum = 0
+    for v in gen() do
+        sum = sum + v
+    end
+    tests:assert_equal(n, 1)
+    tests:assert_equal(sum, 6)
+end)
+
+tests:it("repeat-until condition evaluated once per iteration", function()
+    local checks = 0
+    local iters = 0
+    repeat
+        iters = iters + 1
+    until (function() checks = checks + 1 return iters >= 3 end)()
+    tests:assert_equal(iters, 3)
+    tests:assert_equal(checks, 3)
+end)
+
+tests:it("table constructor items evaluated in written order", function()
+    local mark, joined = recorder()
+    local function item(name, v)
+        mark(name)
+        return v
+    end
+    local built = {
+        item("first", 1),
+        k = item("second", 2),
+        item("third", 3),
+        [item("keyexpr", "kk")] = item("keyval", 4),
+    }
+    tests:assert_equal(joined(), "first,second,third,keyexpr,keyval")
+    tests:assert_equal(built[1], 1)
+    tests:assert_equal(built.k, 2)
+    tests:assert_equal(built[2], 3)
+    tests:assert_equal(built.kk, 4)
+end)
+
+tests:it("unary metamethods invoked exactly once", function()
+    local nu, nl = 0, 0
+    local u = setmetatable({}, {
+        __unm = function()
+            nu = nu + 1
+            return 7
+        end,
+        __len = function()
+            nl = nl + 1
+            return 9
+        end,
+    })
+    tests:assert_equal(-u, 7)
+    tests:assert_equal(#u, 9)
+    tests:assert_equal(nu, 1)
+    tests:assert_equal(nl, 1)
+end)
+
+tests:finish()

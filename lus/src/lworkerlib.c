@@ -233,6 +233,14 @@ static int serialize_table(lua_State *L, int idx, SerBuffer *b, int depth) {
   if (depth > 100) {
     return serbuf_fail(b, "table nesting too deep for serialization", NULL);
   }
+  /* Each nesting level keeps a key and value live on the value stack across
+  ** the recursion. Reserve room without raising, since a longjmp here would
+  ** skip the caller's serbuf_free and leak the arena. lua_checkstack grows the
+  ** stack incrementally, so the depth cap above fires with a clean error long
+  ** before a cyclic or very deep table could overflow the stack. */
+  if (!lua_checkstack(L, 4)) {
+    return serbuf_fail(b, "table nesting too deep for serialization", NULL);
+  }
   idx = lua_absindex(L, idx);
   if (!serbuf_write_byte(b, SER_TABLE))
     return 0;
@@ -644,6 +652,10 @@ static void worker_run(WorkerState *w) {
     return;
   }
   w->L = L;
+  /* Mark this state as a worker body. When its last handle is dropped the
+  ** state closes on a pool thread, and close_state must not let that reenter
+  ** the pool shutdown that only the owning interpreter performs. */
+  G(L)->isworker = 1;
 
   /* Call the setup callback if registered */
   if (g_worker_setup) {
@@ -789,6 +801,15 @@ static void *pool_thread_func(void *arg) {
 #endif
 }
 
+/*
+** Pool threads deserialize incoming messages with the recursive deserializer,
+** which permits table nesting up to the same depth the serializer allows. The
+** platform default thread stack (about 512KB on macOS) overflows well before
+** that cap, crashing the process instead of reporting a clean error. Give pool
+** threads a stack large enough that the documented depth is actually safe.
+*/
+#define LUS_WORKER_STACK_SIZE (8 * 1024 * 1024)
+
 LUA_API void lus_worker_pool_init(lua_State *L) {
   (void)L;
   if (g_pool.initialized)
@@ -813,18 +834,30 @@ LUA_API void lus_worker_pool_init(lua_State *L) {
 
   /* a partially started pool still works with fewer threads; only join
      the threads that actually started */
+#if !defined(LUS_PLATFORM_WINDOWS)
+  pthread_attr_t attr;
+  int have_attr = (pthread_attr_init(&attr) == 0);
+  if (have_attr)
+    pthread_attr_setstacksize(&attr, LUS_WORKER_STACK_SIZE);
+#endif
   int started = 0;
   for (int i = 0; i < g_pool.nthreads; i++) {
 #if defined(LUS_PLATFORM_WINDOWS)
-    g_pool.threads[i] = CreateThread(NULL, 0, pool_thread_func, NULL, 0, NULL);
+    g_pool.threads[i] = CreateThread(NULL, LUS_WORKER_STACK_SIZE,
+                                     pool_thread_func, NULL, 0, NULL);
     if (g_pool.threads[i] == NULL)
       break;
 #else
-    if (pthread_create(&g_pool.threads[i], NULL, pool_thread_func, NULL) != 0)
+    if (pthread_create(&g_pool.threads[i], have_attr ? &attr : NULL,
+                       pool_thread_func, NULL) != 0)
       break;
 #endif
     started++;
   }
+#if !defined(LUS_PLATFORM_WINDOWS)
+  if (have_attr)
+    pthread_attr_destroy(&attr);
+#endif
   g_pool.nthreads = started;
   if (started == 0) {
     free(g_pool.threads);

@@ -132,12 +132,17 @@ end)
 tests:it("invalidates AST on content change", function()
   local uri = open_doc("local x = 1")
   local tree1 = ast_mod.get(uri)
+  tests:assert_equal(#tree1.children, 1, "old AST should have one statement")
   document.change(uri, 2, {
-    {range = make_range(0, 10, 0, 11), text = "2"},
+    {range = make_range(0, 11, 0, 11), text = "\nlocal y = 2"},
   })
   ast_mod.parse(uri)
-  -- After change, a new AST is generated
-  tests:assert_not_nil(ast_mod.get(uri))
+  -- The stale pre-edit tree must not be served back, and the fresh tree
+  -- must reflect the edited content
+  local tree2 = ast_mod.get(uri)
+  tests:assert_not_nil(tree2)
+  tests:assert_true(tree1 ~= tree2, "stale AST must not be returned after a change")
+  tests:assert_equal(#tree2.children, 2, "new AST should contain the added statement")
   close_doc(uri)
 end)
 
@@ -372,12 +377,13 @@ tests:it("returns errors for syntax errors", function()
 end)
 
 tests:it("uses 0-based ranges", function()
-  local uri = open_doc("local = = =")
+  -- the syntax error sits on the SECOND line, so a 0-based range reports
+  -- line 1 and a 1-based implementation reports line 2
+  local uri = open_doc("local x = 1\nlocal = = =")
   local diags = diagnostics.compute(uri)
-  if #diags > 0 then
-    tests:assert_true(diags[1].range.start.line >= 0, "line should be 0-based")
-    tests:assert_true(diags[1].range.start.character >= 0, "character should be 0-based")
-  end
+  tests:assert_true(#diags > 0, "expected a diagnostic for the syntax error")
+  tests:assert_equal(diags[1].range.start.line, 1, "line should be 0-based")
+  tests:assert_true(diags[1].range.start.character >= 0, "character should be 0-based")
   close_doc(uri)
 end)
 
@@ -483,8 +489,14 @@ tests:it("returns scope variables", function()
   local uri = open_doc("local myVar = 1\nlocal x = my")
   local result = completion.compute(uri, {line = 1, character = 12})
   tests:assert_not_nil(result)
-  -- Result should be a table (CompletionList or array)
   tests:assert_type(result, "table")
+  -- the in-scope variable matching the typed prefix must be offered
+  local items = result.items or result
+  local found = false
+  for _, item in ipairs(items) do
+    if item.label == "myVar" then found = true end
+  end
+  tests:assert_true(found, "completion should offer the scope variable myVar")
   close_doc(uri)
 end)
 
@@ -492,6 +504,13 @@ tests:it("returns keywords", function()
   local uri = open_doc("lo")
   local result = completion.compute(uri, {line = 0, character = 2})
   tests:assert_not_nil(result)
+  -- the keyword matching the typed prefix must be offered
+  local items = result.items or result
+  local found = false
+  for _, item in ipairs(items) do
+    if item.label == "local" then found = true end
+  end
+  tests:assert_true(found, "completion should offer the keyword local")
   close_doc(uri)
 end)
 
@@ -1007,12 +1026,15 @@ end)
 tests:describe("operations/signature")
 
 tests:it("returns signature for stdlib function", function()
-  local uri = open_doc("print(")
-  local result = signature.compute(uri, {line = 0, character = 6})
-  -- Should find print's signature
-  if result then
-    tests:assert_not_nil(result.signatures)
-  end
+  -- string.sub has a params entry in stdlib_data, so signature help must
+  -- resolve it (print is vararg-only and has no signature entry)
+  local uri = open_doc("string.sub(")
+  local result = signature.compute(uri, {line = 0, character = 11})
+  tests:assert_not_nil(result, "expected signature help inside the call")
+  tests:assert_not_nil(result.signatures)
+  tests:assert_true(#result.signatures >= 1, "expected at least one signature")
+  tests:assert_contains(result.signatures[1].label, "string%.sub")
+  tests:assert_equal(result.activeParameter, 0, "first argument should be active")
   close_doc(uri)
 end)
 
@@ -1216,9 +1238,24 @@ end)
 tests:it("chains parent ranges", function()
   local uri = open_doc("local function foo()\n  local x = 1\nend")
   local result = selection_range.compute(uri, {{line = 1, character = 8}})
-  -- The innermost range should have a parent
-  if result[1] and result[1].parent then
-    tests:assert_not_nil(result[1].parent.range)
+  -- The innermost range must chain through .parent to progressively larger
+  -- ranges, and every parent must fully contain its child (LSP 3.17 contract).
+  tests:assert_not_nil(result[1], "expected a selection range")
+  tests:assert_not_nil(result[1].parent, "innermost range must have a parent")
+
+  local function pos_leq(a, b)
+    return a.line < b.line or (a.line == b.line and a.character <= b.character)
+  end
+
+  local node = result[1]
+  while node.parent do
+    local child = node.range
+    local parent = node.parent.range
+    tests:assert_true(pos_leq(parent.start, child.start),
+      "parent start must be at or before child start")
+    tests:assert_true(pos_leq(child["end"], parent["end"]),
+      "parent end must be at or after child end")
+    node = node.parent
   end
   close_doc(uri)
 end)

@@ -1,0 +1,360 @@
+-- Pattern matching error and reentrancy suite.
+-- This file focuses on the malformed pattern error surface of the pattern
+-- compiler, the matcher recursion guard, and the reentrant behavior of gsub
+-- and gmatch replacement callbacks. Happy path matching lives in pm.lus, so
+-- everything here exercises error paths, boundary values, and the interaction
+-- between the C matcher state and Lus level callbacks.
+
+global print, require, string, table, math, collectgarbage, tostring, error, tonumber, pledge, setmetatable
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("pm2")
+
+-- Malformed pattern errors. Each row is a subject, the pattern that should be
+-- rejected, and a safe message fragment that contains no pattern magic so it
+-- can be handed straight to assert_throws.
+tests:each("malformed patterns raise the documented message", {
+    {"hello", "(", "unfinished capture"},
+    {"abc", "abc(", "unfinished capture"},
+    {"x", "%", "ends with "},
+    {"ab", "ab%", "ends with "},
+    {"x", "[abc", "missing ']'"},
+    {"x", "[^abc", "missing ']'"},
+    {"x", "%b", "missing arguments"},
+    {"x", "%b(", "missing arguments"},
+    {"x", "%f", "after '%%f' in pattern"},
+    {"x", "%fa", "after '%%f' in pattern"},
+    {"abc", "%9", "invalid capture index"},
+    {"abc", "%1", "invalid capture index"},
+    {"x", ")", "invalid pattern capture"},
+}, function(subject, pattern, fragment)
+    tests:assert_throws(function()
+        return string.match(subject, pattern)
+    end, fragment)
+end)
+
+-- A '%b' construct needs exactly two following characters. With them present it
+-- is a valid pattern and simply fails to match rather than raising.
+tests:it("%b with both delimiters is valid and can fail to match", function()
+    tests:assert_nil(string.match("(((", "%b()"))
+    tests:assert_equal(string.match("(a(b)c)", "%b()"), "(a(b)c)")
+end)
+
+-- Exactly LUA_MAXCAPTURES capture groups are allowed, one more is not.
+tests:it("32 capture groups are accepted", function()
+    local pat = string.rep("()", 32)
+    local first = (string.match("x", pat))
+    tests:assert_equal(first, 1)
+end)
+
+tests:it("33 capture groups raise 'too many captures'", function()
+    tests:assert_throws(function()
+        return string.match("x", string.rep("()", 33))
+    end, "too many captures")
+end)
+
+-- The matcher has a fixed recursion budget so that pathological patterns fail
+-- cleanly instead of overflowing the C stack. The inputs are kept small so the
+-- guard trips well under a second.
+tests:each("pathological backtracking raises 'pattern too complex'", {
+    {string.rep("a", 300), string.rep("a?", 300) .. "b"},
+    {string.rep("a", 220), string.rep("a?", 220)},
+    {string.rep("a", 250), string.rep("a-", 250) .. "x"},
+}, function(subject, pattern)
+    tests:assert_throws(function()
+        return string.match(subject, pattern)
+    end, "too complex")
+end)
+
+-- An error raised inside a gsub replacement function propagates unchanged so
+-- callers see the original message and not a wrapper.
+tests:it("gsub replacement error propagates its message", function()
+    tests:assert_throws(function()
+        return string.gsub("abc", "%w", function(c)
+            error("boom:" .. c)
+        end)
+    end, "boom:a")
+end)
+
+-- A non string error object raised inside the callback still propagates. The
+-- catch statement renders it through its __tostring metamethod, so the custom
+-- text reaches the caller rather than being swallowed by gsub.
+tests:it("gsub replacement error propagates a non string error object", function()
+    local ok, err = catch string.gsub("abc", "%w", function()
+        error(setmetatable({}, {__tostring = function()
+            return "customObjectError"
+        end}))
+    end)
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "customObjectError")
+end)
+
+-- A replacement callback or table lookup must yield a string, number, false, or
+-- nil. Any other type is rejected with 'invalid replacement value'.
+tests:each("gsub rejects invalid replacement values", {
+    {function() return string.gsub("abc", "%w", function() return {} end) end},
+    {function() return string.gsub("abc", "%w", function() return true end) end},
+    {function() return string.gsub("abc", "%w", function() return print end) end},
+    {function() return string.gsub("abc", "%w", {a = {}}) end},
+    {function() return string.gsub("abc", "%w", {a = true}) end},
+}, function(thunk)
+    tests:assert_throws(thunk, "invalid replacement value")
+end)
+
+-- A callback returning nil or false leaves the matched text untouched while
+-- still counting as a visited match.
+tests:it("gsub callback returning nil keeps the original text", function()
+    local res, n = string.gsub("abc", "%w", function(c)
+        if c == "b" then return "B" end
+    end)
+    tests:assert_equal(res, "aBc")
+    tests:assert_equal(n, 3)
+end)
+
+tests:it("gsub callback returning false keeps the original text", function()
+    local res, n = string.gsub("abc", "%w", function()
+        return false
+    end)
+    tests:assert_equal(res, "abc")
+    tests:assert_equal(n, 3)
+end)
+
+-- A table replacement whose lookup misses (nil) also keeps the original text.
+tests:it("gsub table miss keeps the original text", function()
+    local res, n = string.gsub("abc", "%w", {b = "B"})
+    tests:assert_equal(res, "aBc")
+    tests:assert_equal(n, 3)
+end)
+
+-- A callback may legally return a number, which is coerced to its string form.
+tests:it("gsub callback returning a number is coerced", function()
+    local res = string.gsub("aaa", "a", function() return 7 end)
+    tests:assert_equal(res, "777")
+end)
+
+-- Replacement string escapes. '%0' is the whole match, '%n' is capture n, and
+-- '%%' is a literal percent. Any other escape or a trailing percent is invalid,
+-- and a capture index with no matching group is rejected.
+tests:each("gsub replacement string escapes raise on misuse", {
+    {function() return string.gsub("abc", "(%w)", "%2") end, "invalid capture index"},
+    {function() return string.gsub("abc", "%w", "%y") end, "in replacement string"},
+    {function() return string.gsub("abc", "%w", "%") end, "in replacement string"},
+    {function() return string.gsub("abc", "%w", "a%") end, "in replacement string"},
+}, function(thunk, fragment)
+    tests:assert_throws(thunk, fragment)
+end)
+
+tests:it("gsub replacement string honors %0, %n and %%", function()
+    tests:assert_equal((string.gsub("abc", "%w", "[%0]")), "[a][b][c]")
+    tests:assert_equal((string.gsub("hello world", "%w+", "<%0>")), "<hello> <world>")
+    tests:assert_equal((string.gsub("x=1;y=2", "(%w+)=(%w+)", "%2=%1")), "1=x;2=y")
+    tests:assert_equal((string.gsub("abc", "b", "100%%")), "a100%c")
+end)
+
+-- Reentrancy: a replacement function may itself run gsub over the same subject.
+-- The inner call gets a fresh matcher state so both results are correct.
+tests:it("gsub can be called recursively on the same subject", function()
+    local subject = "abcabc"
+    local res, n = string.gsub(subject, "a(b)c", function()
+        return (string.gsub(subject, "b", "B"))
+    end)
+    tests:assert_equal(res, "aBcaBcaBcaBc")
+    tests:assert_equal(n, 2)
+end)
+
+-- A gmatch iterator run from inside a gsub callback keeps its own state.
+tests:it("gmatch nested inside a gsub callback iterates independently", function()
+    local res = string.gsub("one two", "%w+", function(word)
+        local count = 0
+        for _ in string.gmatch(word, "%a") do
+            count = count + 1
+        end
+        return tostring(count)
+    end)
+    tests:assert_equal(res, "3 3")
+end)
+
+-- The gmatch closure keeps its subject and pattern alive, so collecting the
+-- outer references does not disturb an in flight iteration.
+tests:it("gmatch survives collection of the subject reference", function()
+    local function make()
+        local s = string.rep("x", 5) .. " y z"
+        return string.gmatch(s, "%a+")
+    end
+    local iter = make()
+    collectgarbage()
+    collectgarbage()
+    local a = iter()
+    local b = iter()
+    local c = iter()
+    local d = iter()
+    tests:assert_equal(a, "xxxxx")
+    tests:assert_equal(b, "y")
+    tests:assert_equal(c, "z")
+    tests:assert_nil(d)
+end)
+
+-- In gmatch a leading '^' is an ordinary character rather than an anchor, since
+-- an anchor would stop the iteration after the first position.
+tests:it("gmatch treats a leading caret as a literal", function()
+    local count = 0
+    for _ in string.gmatch("aaa", "^a") do
+        count = count + 1
+    end
+    tests:assert_equal(count, 0)
+    local literal = 0
+    for _ in string.gmatch("^a^a", "^a") do
+        literal = literal + 1
+    end
+    tests:assert_equal(literal, 2)
+end)
+
+-- Empty matches advance the scan by one position so the iteration terminates.
+tests:it("gmatch advances past empty matches", function()
+    local acc = {}
+    for x in string.gmatch("ab", "a*") do
+        table.insert(acc, "[" .. x .. "]")
+    end
+    tests:assert_equal(table.concat(acc), "[a][]")
+
+    local n = 0
+    for _ in string.gmatch("hello", "") do
+        n = n + 1
+    end
+    tests:assert_equal(n, 6)
+
+    local m = 0
+    for _ in string.gmatch("", "") do
+        m = m + 1
+    end
+    tests:assert_equal(m, 1)
+end)
+
+-- The gmatch init argument skips a prefix of the subject.
+tests:each("gmatch honors an init position", {
+    {"hello world", "%w+", 7, "world"},
+    {"hello world", "%w+", 1, "hello"},
+    {"abcdef", "%a", 4, "d"},
+}, function(subject, pattern, init, expected)
+    local iter = string.gmatch(subject, pattern, init)
+    tests:assert_equal(iter(), expected)
+end)
+
+-- Position captures record a one based offset and are valid at the very start
+-- and very end of a pattern.
+tests:it("position captures work at pattern edges", function()
+    tests:assert_equal(string.match("abc", "()abc"), 1)
+    tests:assert_equal(string.match("abc", "abc()"), 4)
+    local a, b = string.match("abc", "a()b()c")
+    tests:assert_equal(a, 2)
+    tests:assert_equal(b, 3)
+    local p1, p2, p3 = string.match("hello", "()l()l()")
+    tests:assert_equal(p1, 3)
+    tests:assert_equal(p2, 4)
+    tests:assert_equal(p3, 5)
+end)
+
+-- A position capture used in a gsub replacement inserts its numeric value.
+tests:it("gsub emits position captures as numbers", function()
+    local res = string.gsub("abc", "()b", "%1")
+    tests:assert_equal(res, "a2c")
+end)
+
+-- Anchored find only tries the init position, so the anchor is relative to init
+-- rather than to the start of the subject.
+tests:each("anchored find is relative to the init position", {
+    {"aaa", "^a", 2, 2, 2},
+    {"xaaa", "^a", 2, 2, 2},
+    {"hello", "^e", 2, 2, 2},
+    {"hello", "^h", 2, false, false},
+    {"hello", "^l", 3, 3, 3},
+}, function(subject, pattern, init, exp_start, exp_end)
+    local i, e = string.find(subject, pattern, init)
+    if exp_start == false then
+        tests:assert_nil(i)
+    else
+        tests:assert_equal(i, exp_start)
+        tests:assert_equal(e, exp_end)
+    end
+end)
+
+-- Init position boundaries for find. Negative init counts from the end and an
+-- init beyond the subject length reports no match.
+tests:it("find honors negative and out of range init", function()
+    tests:assert_equal(string.find("hello", "l", -2), 4)
+    tests:assert_nil(string.find("abc", "b", 10))
+    tests:assert_nil(string.find("abc", "", 10))
+    tests:assert_equal(string.find("abc", "", 4), 4)
+end)
+
+-- In pattern mode find returns the captures after the two index values.
+tests:it("find returns captures after the match bounds", function()
+    local i, e, cap = string.find("abc", "(b)")
+    tests:assert_equal(i, 2)
+    tests:assert_equal(e, 2)
+    tests:assert_equal(cap, "b")
+    local s1, s2, k, v = string.find("a=1", "(%a)=(%d)")
+    tests:assert_equal(s1, 1)
+    tests:assert_equal(s2, 3)
+    tests:assert_equal(k, "a")
+    tests:assert_equal(v, "1")
+end)
+
+-- Backreferences in the pattern match the text a prior capture recorded.
+tests:each("backreferences match repeated text", {
+    {"abc abc", "(%a+) %1", "abc"},
+    {"abc def", "(%a+) %1", false},
+    {"55x55", "(%d+)x%1", "55"},
+}, function(subject, pattern, expected)
+    local res = string.match(subject, pattern)
+    if expected == false then
+        tests:assert_nil(res)
+    else
+        tests:assert_equal(res, expected)
+    end
+end)
+
+-- Set and range syntax including negation, a literal dash at the edge, and an
+-- escaped closing bracket inside the set.
+tests:each("set and range syntax", {
+    {"Hello123", "[a-z]+", "ello"},
+    {"  hi  ", "[^%s]+", "hi"},
+    {"a-b", "[-ab]+", "a-b"},
+    {"a]b", "[%]]", "]"},
+    {"1af9", "[0-9a-f]+", "1af9"},
+    {"xyzABC", "[^a-z]+", "ABC"},
+}, function(subject, pattern, expected)
+    tests:assert_equal(string.match(subject, pattern), expected)
+end)
+
+-- Lazy and greedy quantifiers differ in how much they consume.
+tests:it("lazy and greedy quantifiers consume differently", function()
+    tests:assert_equal(string.match("<a><b>", "<(.-)>"), "a")
+    tests:assert_equal(string.match("<a><b>", "<(.*)>"), "a><b")
+    tests:assert_equal(string.match("aXbXc", "(.-)X"), "a")
+    tests:assert_equal(string.match("aXbXc", "(.*)X"), "aXb")
+end)
+
+-- The optional quantifier accepts zero or one occurrence of the class.
+tests:each("optional quantifier matches with and without the class", {
+    {"heo", "^hel?o$", "heo"},
+    {"helo", "^hel?o$", "helo"},
+    {"hello", "^hel?o$", false},
+}, function(subject, pattern, expected)
+    local res = string.match(subject, pattern)
+    if expected == false then
+        tests:assert_nil(res)
+    else
+        tests:assert_equal(res, expected)
+    end
+end)
+
+-- A caret that is not the first pattern character is an ordinary literal.
+tests:it("a caret is literal when not leading", function()
+    tests:assert_equal(string.find("a^b", "a^b"), 1)
+    tests:assert_equal(string.match("2^8", "%d^%d"), "2^8")
+end)
+
+tests:finish()

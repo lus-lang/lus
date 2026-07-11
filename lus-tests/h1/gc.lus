@@ -76,11 +76,19 @@ tests:it("gc finalizers (__gc)", function()
 end)
 
 tests:it("gc recursive structures", function()
+    -- A weak-value table witnesses that both members of the cycle
+    -- are actually reclaimed, not just that collection survives.
+    local witness = setmetatable({}, {__mode = 'v'})
     local a = {}
     a.b = {c = a} -- cycle
+    a.b.back = a.b -- self-reference inside the cycle
+    witness.outer = a
+    witness.inner = a.b
     a = nil
     collectgarbage()
-    -- Simple test is just that it runs without crash
+    collectgarbage()
+    assert(witness.outer == nil, "the outer table of the cycle was collected")
+    assert(witness.inner == nil, "the inner table of the cycle was collected")
 end)
 
 tests:it("clearing tables", function()
@@ -203,18 +211,30 @@ tests:it("resurrection in finalizer", function()
     -- Should finalize again (or may not depending on implementation)
 end)
 
-tests:it("finalizer basic functionality", function()
-    -- Test basic finalizer functionality
-    local finalized = false
-    local mt = {__gc = function() finalized = true end}
-    local obj = setmetatable({}, mt)
-    obj = nil
-    
+tests:it("finalizer receives the dying object and runs exactly once", function()
+    -- The finalizer is called with the object itself, with its data and
+    -- metatable intact at finalization time.
+    local received = nil
+    local runs = 0
+    local mt = {__gc = function(o)
+        received = o
+        runs = runs + 1
+    end}
+    setmetatable({tag = "victim"}, mt)
+
     collectgarbage()
     collectgarbage()
+
+    assert(runs == 1, "finalizer should have run once, ran " .. runs .. " times")
+    assert(received ~= nil, "finalizer receives the object as its argument")
+    assert(received.tag == "victim", "the object's data is intact when finalized")
+    assert(getmetatable(received) == mt, "the metatable is intact when finalized")
+
+    -- Dropping the resurrected object again must not re-finalize it.
+    received = nil
     collectgarbage()
-    
-    assert(finalized == true, "finalizer should have run after collectgarbage")
+    collectgarbage()
+    assert(runs == 1, "a plain finalizer runs exactly once")
 end)
 
 tests:it("weak table creation and collection", function()
@@ -388,25 +408,30 @@ tests:it("gc operations return expected values", function()
 end)
 
 tests:it("weak key table collects unreferenced keys", function()
-    -- Test that weak key tables collect entries when keys become unreferenced
+    -- Partial retention: in the same table, an entry whose key is still
+    -- referenced must survive the exact collection that clears an entry
+    -- whose key is not.
     local weak = setmetatable({}, {__mode = 'k'})
-    
-    local key = {}
-    weak[key] = "value"
-    
-    -- Key is still referenced, should exist
-    assert(weak[key] == "value", "value should exist while key is referenced")
-    
-    -- Remove reference and collect
-    key = nil
+
+    local live = {}
+    weak[live] = "kept"
+    weak[{}] = "dropped"
+
     collectgarbage()
     collectgarbage()
-    collectgarbage()
-    
-    -- Table should be empty after collection
+
+    assert(weak[live] == "kept", "the entry with a live key survives")
     local count = 0
     for k, v in pairs(weak) do count = count + 1 end
-    assert(count == 0, "weak key table should be empty after key is unreferenced")
+    assert(count == 1, "only the unreferenced key was collected, found " .. count)
+
+    -- Dropping the last key empties the table.
+    live = nil
+    collectgarbage()
+    collectgarbage()
+    count = 0
+    for k, v in pairs(weak) do count = count + 1 end
+    assert(count == 0, "weak key table should be empty after all keys are unreferenced")
 end)
 
 tests:it("gc with coroutines", function()

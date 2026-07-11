@@ -6,7 +6,7 @@
   All protected execution is done via the 'catch' expression.
 ]]
 
-global print, setmetatable, assert, error, type, _G, coroutine, require, pcall, xpcall, os, pledge, collectgarbage
+global print, setmetatable, assert, error, type, _G, coroutine, require, pcall, xpcall, os, pledge, collectgarbage, tonumber
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -22,14 +22,14 @@ end)
 tests:it("error() with number message", function()
     local ok, err = catch error(42)
     assert(not ok)
-    assert(type(err) == "string", "Error should be converted to string")
+    assert(err == 42, "the number payload must pass through raw")
 end)
 
 tests:it("error() with table message", function()
     local t = {code = 500, msg = "Internal error"}
     local ok, err = catch error(t)
     assert(not ok)
-    assert(type(err) == "string", "Error should be converted to string")
+    assert(err == t, "the table payload must pass through raw")
 end)
 
 tests:it("error() with level 0", function()
@@ -103,9 +103,19 @@ tests:it("catch with failing function call", function()
 end)
 
 tests:it("catch with error() directly", function()
-    local ok, err = catch error("direct error")
-    assert(ok == false)
-    assert(err:find("direct error"))
+    -- Default level 1 must prefix the message with the position of the
+    -- error() call itself. The two calls sit on consecutive lines, so the
+    -- extracted line numbers must differ by exactly one.
+    local function fail_a() error("direct error A") end
+    local function fail_b() error("direct error B") end
+    local ok_a, err_a = catch fail_a()
+    local ok_b, err_b = catch fail_b()
+    assert(ok_a == false and ok_b == false)
+    local line_a = tonumber(err_a:match("errors%.lus:(%d+): direct error A"))
+    local line_b = tonumber(err_b:match("errors%.lus:(%d+): direct error B"))
+    assert(line_a, "message must carry a 'file:line:' prefix for the error() call")
+    assert(line_b == line_a + 1,
+        "the prefix must point at each error() call's own line")
 end)
 
 tests:it("catch with nested function error", function()
@@ -276,7 +286,7 @@ tests:it("catch handles table errors", function()
     local function throw_obj() error(err_obj) end
     local ok, err = catch throw_obj()
     assert(ok == false)
-    assert(type(err) == "string")
+    assert(err == err_obj, "the table payload must pass through raw")
 end)
 
 tests:it("catch with metamethod error (__add)", function()
@@ -317,7 +327,10 @@ end)
 tests:it("catch with assert failure", function()
     local ok, err = catch assert(false, "assert failed")
     assert(ok == false)
-    assert(err:find("assert failed"))
+    -- the custom message must be prefixed with the position of the
+    -- assert call itself, not appear bare or blame another frame
+    assert(err:match("errors%.lus:%d+: assert failed"),
+        "assert message should carry the caller's position prefix, got: " .. err)
 end)
 
 -- ============================================
@@ -412,8 +425,8 @@ end)
 tests:it("catch with boolean error", function()
     local ok, err = catch error(true)
     assert(not ok)
-    -- Error messages may remain as booleans or be converted to strings
-    assert(err == true or type(err) == "string", "error should be boolean or string")
+    -- catch delivers the error object exactly as raised
+    assert(err == true, "boolean error value must pass through raw")
 end)
 
 tests:it("catch in coroutine", function()
@@ -429,18 +442,17 @@ tests:it("catch in coroutine", function()
     assert(result == "coro done")
 end)
 
-tests:it("error from tostring in error message", function()
+tests:it("an object with a throwing __tostring passes through untouched", function()
     local mt = {
         __tostring = function() error("tostring error") end
     }
     local obj = setmetatable({}, mt)
-    
-    -- When error() is called with an object whose __tostring throws,
-    -- the tostring error propagates as the error message
+
+    -- catch never consults __tostring, so the object is delivered raw and
+    -- its throwing metamethod is never invoked.
     local ok, err = catch error(obj)
     assert(not ok, "error should be caught")
-    assert(type(err) == "string", "error should be a string")
-    assert(err:find("tostring error"), "error should contain tostring error message")
+    assert(err == obj, "the object must pass through raw")
 end)
 
 tests:it("catch catches stack overflow", function()
@@ -458,11 +470,17 @@ tests:it("catch catches stack overflow", function()
 end)
 
 tests:it("catch with multiple sequential errors", function()
-    -- Multiple errors in sequence should all be caught properly
+    -- Failures interleaved with successes must not leak state between
+    -- catches. Each caught error must carry its own message and the
+    -- success immediately after it must be unaffected.
     for i = 1, 10 do
         local ok, err = catch error("error " .. i)
         assert(not ok)
-        assert(err:find("error " .. i))
+        assert(err:find("error " .. i, 1, true),
+            "iteration " .. i .. " saw the wrong message: " .. err)
+        local ok2, val = catch (i * 2)
+        assert(ok2 == true and val == i * 2,
+            "a success right after a caught error must be unaffected")
     end
 end)
 

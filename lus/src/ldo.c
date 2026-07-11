@@ -70,10 +70,23 @@ void luaD_seterrorobj(lua_State *L, TStatus errcode, StkId oldtop) {
 
 l_noret luaD_throw(lua_State *L, TStatus errcode) {
   /* O(1) check for active Lua catch block: L->activeCatch is the innermost
-  ** active catch node (or NULL). */
-  if (L->activeCatch != NULL) {
+  ** active catch node (or NULL). Only real errors are catchable: a
+  ** LUA_YIELD throw (from 'lua_yieldk' or a yielding hook) must pass
+  ** through catch nodes and unwind to 'lua_resume', so the coroutine
+  ** suspends normally and the catch body continues on the next resume. */
+  if (errorstatus(errcode) && L->activeCatch != NULL) {
     CatchInfo *cinfo = L->activeCatch;
     lua_assert(isLua(cinfo->ci));
+    if (errcode == LUA_ERRMEM) {
+      /* Memory errors are raised without pushing an error object (see
+      ** 'luaM_error'), so deliver the preregistered message instead of
+      ** whatever occupies the stack top. The message string is created at
+      ** state initialization and fixed, so this push allocates nothing.
+      ** The raw push relies on the EXTRA_STACK slack, the same convention
+      ** 'luaD_errerr' uses. */
+      setsvalue2s(L, L->top.p, G(L)->memerrmsg);
+      L->top.p++;
+    }
     /* Save the error object by copying it to a safe location.
     ** We store the offset of where the error is, since pointers may be stale
     ** after stack reallocation. The error is currently at L->top.p - 1. */

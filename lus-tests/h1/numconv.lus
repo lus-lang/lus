@@ -1,0 +1,533 @@
+--[[
+    Test suite for number literals and conversions in Lus.
+
+    Covers:
+    - hex float literals (0x1p4, 0x.8p1) and hex integer wrap-around
+    - malformed numeral syntax errors
+    - decimal literals and strings overflowing to float
+    - tonumber with explicit bases 2 through 36, including invalid digits and bad bases
+    - plain tonumber whitespace and rejection rules
+    - string arithmetic coercion and its error paths
+    - minus zero semantics (division, tostring, table key aliasing)
+    - integer and float comparisons at the 2^53 and 2^63 boundaries
+    - math.type and math.tointeger across every value class
+    - tostring round trips and float formatting fidelity
+    - float to integer coercion errors in integer-only contexts
+]]
+
+global require, assert, string, math, table, tostring, tonumber, load, next, pairs, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("numconv")
+
+local minint, maxint = math.mininteger, math.maxinteger
+local inf = math.huge
+
+-- ============================================
+-- Hex float literals
+-- ============================================
+
+tests:each("hex float literal value and type", {
+    {0x1p4, 16.0},
+    {0x.8p1, 1.0},
+    {0x1p-2, 0.25},
+    {0xA.8p0, 10.5},
+    {0x1.8, 1.5},
+    {0X1P4, 16.0},
+    {0x1.fp0, 1.9375},
+}, function(value, expected)
+    tests:assert_equal(value, expected)
+    tests:assert_equal(math.type(value), "float")
+end)
+
+tests:it("hex float literal with a huge exponent overflows to infinity", function()
+    tests:assert_equal(0x1p1024, inf)
+    tests:assert_equal(math.type(0x1p1024), "float")
+end)
+
+tests:it("hex integer literals wrap modulo 2^64 and stay integers", function()
+    tests:assert_equal(0xFFFFFFFFFFFFFFFF, -1)
+    tests:assert_equal(0x10000000000000000, 0)
+    tests:assert_equal(0x8000000000000000, minint)
+    tests:assert_equal(math.type(0xFFFFFFFFFFFFFFFF), "integer")
+    tests:assert_equal(math.type(0x10000000000000000), "integer")
+end)
+
+-- ============================================
+-- Malformed numeral syntax
+-- ============================================
+
+tests:each("malformed numeral is a compile error", {
+    {"return 0x"},
+    {"return 1e"},
+    {"return 1e+"},
+    {"return 0xp4"},
+    {"return 0x1pz"},
+    {"return 1..2"},
+}, function(src)
+    local chunk, msg = load(src)
+    tests:assert_nil(chunk, "expected load to reject " .. src)
+    tests:assert_contains(msg, "malformed number")
+end)
+
+-- ============================================
+-- Overflow to float
+-- ============================================
+
+tests:it("decimal integer literal above maxinteger becomes a float", function()
+    local v = 9223372036854775808
+    tests:assert_equal(math.type(v), "float")
+    tests:assert_equal(v, 2.0^63)
+    tests:assert_equal(math.type(9223372036854775807), "integer")
+    tests:assert_equal(9223372036854775807, maxint)
+    tests:assert_equal(math.type(12345678901234567890123), "float")
+end)
+
+tests:it("huge exponent literals become infinity", function()
+    tests:assert_equal(1e999, inf)
+    tests:assert_equal(-1e999, -inf)
+    tests:assert_equal(math.type(1e999), "float")
+end)
+
+tests:it("huge decimal strings convert to float through tonumber", function()
+    local giant = tonumber(string.rep("9", 400))
+    tests:assert_equal(giant, inf)
+    tests:assert_equal(math.type(giant), "float")
+    local wide = tonumber("123456789012345678901234567890")
+    tests:assert_equal(math.type(wide), "float")
+    tests:assert_equal(wide, 123456789012345678901234567890)
+    local just_over = tonumber("9223372036854775808")
+    tests:assert_equal(math.type(just_over), "float")
+    tests:assert_equal(just_over, 2.0^63)
+end)
+
+-- ============================================
+-- tonumber with an explicit base
+-- ============================================
+
+tests:each("tonumber with base parses valid digits", {
+    {"10", 2, 2},
+    {"1111111", 2, 127},
+    {"+10", 2, 2},
+    {"777", 8, 511},
+    {"ff", 16, 255},
+    {"FF", 16, 255},
+    {"-ff", 16, -255},
+    {"1e2", 16, 482},
+    {"z", 36, 35},
+    {"zz", 36, 1295},
+    {"10", 36, 36},
+    {" 42 ", 10, 42},
+}, function(str, base, expected)
+    tests:assert_equal(tonumber(str, base), expected)
+    tests:assert_equal(math.type(tonumber(str, base)), "integer")
+end)
+
+tests:each("tonumber with base returns nil for invalid input", {
+    {"2", 2},
+    {"z", 35},
+    {"g", 16},
+    {"zz", 10},
+    {"0x10", 16},
+    {"", 16},
+    {"   ", 8},
+    {"-", 10},
+    {"10.5", 10},
+    {"1e2", 10},
+    {"10\0", 10},
+}, function(str, base)
+    tests:assert_nil(tonumber(str, base))
+end)
+
+tests:each("tonumber with an out of range base raises", {
+    {0},
+    {1},
+    {37},
+    {-16},
+}, function(base)
+    tests:assert_throws(function() return tonumber("10", base) end, "base out of range")
+end)
+
+tests:it("tonumber with base requires a string subject", function()
+    tests:assert_throws(function() return tonumber(10, 16) end, "string expected, got number")
+end)
+
+tests:it("tonumber with base rejects an enum subject", function()
+    local e = enum red, green end
+    tests:assert_throws(function() return tonumber(e.red, 10) end, "string expected, got enum")
+end)
+
+tests:it("tonumber base must have an integer representation", function()
+    tests:assert_throws(function() return tonumber("10", 2.5) end, "no integer representation")
+    tests:assert_equal(tonumber("10", 16.0), 16)
+end)
+
+tests:it("tonumber with base 16 wraps around like unsigned accumulation", function()
+    tests:assert_equal(tonumber(string.rep("f", 16), 16), -1)
+    tests:assert_equal(tonumber("8000000000000000", 16), minint)
+end)
+
+-- ============================================
+-- Plain tonumber string rules
+-- ============================================
+
+tests:each("tonumber accepts numerals with surrounding whitespace and prefixes", {
+    {" 10 ", 10, "integer"},
+    {"\t10\n", 10, "integer"},
+    {"\f10\v", 10, "integer"},
+    {".5", 0.5, "float"},
+    {"5.", 5.0, "float"},
+    {"0x1p4", 16.0, "float"},
+    {"0x.8p1", 1.0, "float"},
+    {" -0x10 ", -16, "integer"},
+    {"-0", 0, "integer"},
+    {"0X10", 16, "integer"},
+}, function(str, expected, ntype)
+    local n = tonumber(str)
+    tests:assert_equal(n, expected)
+    tests:assert_equal(math.type(n), ntype)
+end)
+
+tests:each("tonumber returns nil for non-numerals", {
+    {"0x"},
+    {"10 x"},
+    {"- 10"},
+    {"1e"},
+    {"1e+"},
+    {"0b101"},
+    {"1_000"},
+    {"1,5"},
+    {"inf"},
+    {"nan"},
+    {"10\0"},
+}, function(str)
+    tests:assert_nil(tonumber(str))
+end)
+
+tests:it("tonumber of the string -0.0 preserves the sign of zero", function()
+    local mz = tonumber("-0.0")
+    tests:assert_equal(math.type(mz), "float")
+    tests:assert_equal(1 / mz, -inf)
+end)
+
+tests:it("tonumber of non-string non-number values returns nil", function()
+    tests:assert_nil(tonumber(nil))
+    tests:assert_nil(tonumber(true))
+    tests:assert_nil(tonumber({}))
+end)
+
+tests:it("tonumber with no argument raises", function()
+    tests:assert_throws(tonumber, "value expected")
+end)
+
+-- ============================================
+-- String arithmetic coercion
+-- ============================================
+
+tests:each("string operands coerce in arithmetic with the numeral's own type", {
+    {"10" + 5, 15, "integer"},
+    {"0x10" + 0, 16, "integer"},
+    {"1e2" * 1, 100.0, "float"},
+    {" 0x10 " + 0, 16, "integer"},
+    {"0x1p4" + 0, 16.0, "float"},
+    {"10" + "20", 30, "integer"},
+    {"10" / "2", 5.0, "float"},
+    {"10" // "3", 3, "integer"},
+    {"3.5" % 2, 1.5, "float"},
+    {"2" ^ "3", 8.0, "float"},
+}, function(value, expected, ntype)
+    tests:assert_equal(value, expected)
+    tests:assert_equal(math.type(value), ntype)
+end)
+
+tests:it("non-numeric string in arithmetic raises", function()
+    tests:assert_throws(function() return "a" + 1 end, "attempt to add a 'string' with a 'number'")
+end)
+
+tests:it("relational comparison never coerces strings", function()
+    tests:assert_throws(function() return "10" < 5 end, "attempt to compare string with number")
+    tests:assert_throws(function() return 5 < "10" end, "attempt to compare number with string")
+end)
+
+tests:it("bitwise operators never coerce strings", function()
+    tests:assert_throws(function() return "10" & 1 end, "bitwise operation on a string value")
+end)
+
+tests:it("equality never coerces between strings and numbers", function()
+    tests:assert_false("10" == 10)
+    tests:assert_false(10 == "10")
+    tests:assert_true("10" ~= 10)
+end)
+
+tests:it("concatenation converts numbers with their tostring form", function()
+    tests:assert_equal(12 .. "", "12")
+    tests:assert_equal(1.5 .. "", "1.5")
+    tests:assert_equal((1.0) .. "", "1.0")
+    tests:assert_equal(12 .. 34, "1234")
+end)
+
+tests:it("unary minus on a numeric string preserves the sign of zero", function()
+    local s = "0.0"
+    tests:assert_equal(1 / -s, -inf)
+end)
+
+-- ============================================
+-- Minus zero semantics
+-- ============================================
+
+tests:it("minus zero literal folds without losing its sign", function()
+    local mz = -0.0
+    tests:assert_equal(1 / mz, -inf)
+    tests:assert_equal(math.type(mz), "float")
+end)
+
+tests:it("minus zero computed at runtime keeps its sign", function()
+    local x = -1
+    local mz = 0 / x
+    tests:assert_equal(1 / mz, -inf)
+end)
+
+tests:it("tostring of minus zero shows the sign", function()
+    tests:assert_equal(tostring(-0.0), "-0.0")
+end)
+
+tests:it("minus zero compares equal to plus zero", function()
+    tests:assert_true(-0.0 == 0.0)
+    tests:assert_false(-0.0 < 0.0)
+    tests:assert_false(0.0 < -0.0)
+end)
+
+tests:it("signed zero arithmetic follows IEEE 754", function()
+    tests:assert_equal(1 / (0.0 + -0.0), inf)
+    tests:assert_equal(1 / (-0.0 + -0.0), -inf)
+    tests:assert_equal(1 / ((-0.0) * -1), inf)
+end)
+
+tests:it("minus zero as a table key aliases the integer key zero", function()
+    local t = {}
+    t[0] = "a"
+    tests:assert_equal(t[-0.0], "a")
+    tests:assert_equal(t[0.0], "a")
+    t[-0.0] = "b"
+    tests:assert_equal(t[0], "b")
+    local count = 0
+    for _ in pairs(t) do
+        count = count + 1
+    end
+    tests:assert_equal(count, 1)
+    tests:assert_equal(math.type(next(t)), "integer")
+end)
+
+-- ============================================
+-- Integer and float comparison boundaries
+-- ============================================
+
+tests:it("maxinteger is strictly below its float conversion", function()
+    -- The float conversion of maxinteger rounds up to exactly 2^63.
+    tests:assert_true(maxint < maxint + 0.0)
+    tests:assert_equal(maxint + 0.0, 2.0^63)
+    tests:assert_false(maxint == maxint + 0.0)
+end)
+
+tests:it("mininteger converts to float exactly", function()
+    tests:assert_true(minint == minint + 0.0)
+    tests:assert_true(minint <= minint + 0.0)
+    tests:assert_false(minint < minint + 0.0)
+end)
+
+tests:it("mixed comparison near 2^63 is exact", function()
+    -- The largest double below 2^63 is 2^63 - 1024.
+    tests:assert_true(maxint > 9223372036854774784.0)
+    tests:assert_true(2.0^63 > maxint)
+end)
+
+tests:it("mixed comparison at the 2^53 float precision limit is exact", function()
+    local p53 = 1 << 53
+    tests:assert_equal(math.type(p53), "integer")
+    tests:assert_true(p53 + 0.0 == p53)
+    tests:assert_true(p53 + 1 > p53 + 0.0)
+    tests:assert_true((p53 + 1) + 0.0 == p53 + 0.0)
+end)
+
+tests:it("math.ult treats mininteger as a huge unsigned value", function()
+    tests:assert_false(math.ult(minint, maxint))
+    tests:assert_true(math.ult(maxint, minint))
+end)
+
+tests:each("math.tointeger converts exact float values", {
+    {3.0, 3},
+    {-3.0, -3},
+    {-0.0, 0},
+    {2.0^62, 4611686018427387904},
+    {-2.0^63, math.mininteger},
+}, function(x, expected)
+    tests:assert_equal(math.tointeger(x), expected)
+    tests:assert_equal(math.type(math.tointeger(x)), "integer")
+end)
+
+tests:each("math.tointeger returns nil for unconvertible values", {
+    {3.5},
+    {2.0^63},
+    {math.huge},
+    {-math.huge},
+    {0/0},
+    {true},
+}, function(x)
+    tests:assert_nil(math.tointeger(x))
+end)
+
+tests:it("math.tointeger coerces numeric strings on the fastcall path", function()
+    -- Numeric strings naming an exact integer are converted, matching
+    -- reference Lua, and the compiled fastcall form of this call agrees
+    -- with the plain C function.
+    local function probe(x)
+        return math.tointeger(x)
+    end
+    tests:assert_equal(probe("3"), 3)
+    tests:assert_equal(probe("3.0"), 3)
+end)
+
+tests:it("math.tointeger coerces numeric strings on the C call path", function()
+    local alias = math.tointeger
+    tests:assert_equal(alias("3"), 3)
+    tests:assert_equal(alias("3.0"), 3)
+end)
+
+-- ============================================
+-- math.type across value classes
+-- ============================================
+
+tests:each("math.type reports integer", {
+    {0},
+    {maxint},
+    {minint},
+    {0xFF},
+    {1 << 62},
+}, function(v)
+    tests:assert_equal(math.type(v), "integer")
+end)
+
+tests:each("math.type reports float", {
+    {0.0},
+    {-0.0},
+    {3.5},
+    {math.huge},
+    {0/0},
+    {1e999},
+    {0x1p4},
+    {maxint + 0.0},
+}, function(v)
+    tests:assert_equal(math.type(v), "float")
+end)
+
+tests:it("math.type is nil for every non-number", function()
+    tests:assert_nil(math.type("3.5"))
+    tests:assert_nil(math.type(nil))
+    tests:assert_nil(math.type(true))
+    tests:assert_nil(math.type({}))
+    tests:assert_nil(math.type(tostring))
+end)
+
+tests:it("math.type with no argument raises", function()
+    tests:assert_throws(math.type, "value expected")
+end)
+
+-- ============================================
+-- tostring and tonumber round trips
+-- ============================================
+
+tests:it("maxinteger round trips through tostring", function()
+    tests:assert_equal(tostring(maxint), "9223372036854775807")
+    local back = tonumber(tostring(maxint))
+    tests:assert_equal(back, maxint)
+    tests:assert_equal(math.type(back), "integer")
+end)
+
+tests:it("mininteger round trips through tostring", function()
+    tests:assert_equal(tostring(minint), "-9223372036854775808")
+    local back = tonumber(tostring(minint))
+    tests:assert_equal(back, minint)
+    tests:assert_equal(math.type(back), "integer")
+end)
+
+tests:each("floats round trip through tostring exactly", {
+    {0.1},
+    {1/3},
+    {math.pi},
+    {5e-324},
+    {1.7976931348623157e308},
+    {0.30000000000000004},
+    {123.456},
+}, function(f)
+    local back = tonumber(tostring(f))
+    tests:assert_equal(back, f)
+    tests:assert_equal(math.type(back), "float")
+end)
+
+tests:it("minus zero round trips through tostring", function()
+    local back = tonumber(tostring(-0.0))
+    tests:assert_equal(1 / back, -inf)
+end)
+
+tests:each("float tostring formatting is pinned", {
+    {1.0, "1.0"},
+    {100.0, "100.0"},
+    {0.5, "0.5"},
+    {0.1, "0.1"},
+    {1/3, "0.33333333333333331"},
+    {1e15, "1e+15"},
+    {2.0^53, "9007199254740992.0"},
+    {math.pi, "3.1415926535897931"},
+    {math.huge, "inf"},
+    {-math.huge, "-inf"},
+}, function(f, expected)
+    tests:assert_equal(tostring(f), expected)
+end)
+
+tests:it("tostring of NaN is nan", function()
+    tests:assert_equal(tostring(0/0), "nan")
+end)
+
+tests:it("integer tostring has no decimal point", function()
+    tests:assert_equal(tostring(3), "3")
+    tests:assert_equal(tostring(-3), "-3")
+    tests:assert_equal(tostring(0), "0")
+end)
+
+-- ============================================
+-- Float to integer coercion in integer-only contexts
+-- ============================================
+
+tests:each("fractional float in a bitwise operator names the variable", {
+    {function(x) return x | 1 end},
+    {function(x) return x & 1 end},
+    {function(x) return x ~ 1 end},
+    {function(x) return x << 1 end},
+    {function(x) return x >> 1 end},
+    {function(x) return ~x end},
+}, function(op)
+    tests:assert_throws(function() return op(2.5) end,
+        "number %(local 'x'%) has no integer representation")
+end)
+
+tests:each("fractional float in stdlib integer arguments raises", {
+    {function() return string.rep("a", 2.5) end},
+    {function() return ("abc"):sub(1.5) end},
+    {function() return table.insert({}, 1.5, "v") end},
+    {function() return math.random(1.5) end},
+}, function(f)
+    tests:assert_throws(f, "no integer representation")
+end)
+
+tests:it("floats with exact integer values are accepted in integer contexts", function()
+    tests:assert_equal(1 << 2.0, 4)
+    tests:assert_equal(3.0 | 0, 3)
+    tests:assert_equal(math.type(3.0 | 0), "integer")
+    tests:assert_equal(~(-0.0), -1)
+    tests:assert_equal(string.rep("a", 3.0), "aaa")
+    tests:assert_equal(("abc"):sub(2.0), "bc")
+end)
+
+tests:finish()

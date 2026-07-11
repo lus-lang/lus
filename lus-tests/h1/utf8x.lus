@@ -1,0 +1,408 @@
+-- utf8x: invalid-UTF8 matrix and edge-case suite for the utf8 module.
+-- This file complements utf8.lus by drilling into the error surface. It
+-- covers truncated sequences, overlong encodings, surrogates, out-of-range
+-- code points, lax-mode acceptance, and the exact byte positions reported by
+-- utf8.len. Semantics follow stock Lua 5.5 as implemented in lutf8lib.c where
+-- MAXUTF is 0x7FFFFFFF and MAXUNICODE is 0x10FFFF.
+
+global print, require, assert, type, string, table, utf8, math, error, ipairs, pairs, tostring, pledge, select
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("utf8x")
+
+-- === utf8.charpattern ===
+
+tests:it("charpattern exact value and type", function()
+    tests:assert_type(utf8.charpattern, "string")
+    tests:assert_equal(utf8.charpattern, "[\0-\x7F\xC2-\xFD][\x80-\xBF]*")
+end)
+
+tests:it("charpattern matches exactly one well-formed sequence", function()
+    -- The euro sign occupies three bytes and the pattern must consume all of
+    -- them but stop before the following ASCII character.
+    local euro = utf8.char(0x20AC)
+    tests:assert_equal(string.match(euro .. "xyz", "^" .. utf8.charpattern), euro)
+    tests:assert_equal(string.match("A" .. euro, "^" .. utf8.charpattern), "A")
+end)
+
+tests:it("charpattern over mixed text yields one match per character", function()
+    local mixed = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
+    local count = 0
+    local rebuilt = ""
+    for m in string.gmatch(mixed, utf8.charpattern) do
+        count = count + 1
+        rebuilt = rebuilt .. m
+    end
+    tests:assert_equal(count, 4)
+    tests:assert_equal(count, utf8.len(mixed))
+    -- Concatenating the individual matches reproduces the original string.
+    tests:assert_equal(rebuilt, mixed)
+end)
+
+-- Bytes that never begin a well-formed sequence must not anchor a match.
+local exclusion_cases = {
+    {"\xC0\xAF"},  -- overlong lead 0xC0 is excluded from the class
+    {"\xC1\xBF"},  -- overlong lead 0xC1 is excluded from the class
+    {"\xFE"},      -- 0xFE is above the class ceiling 0xFD
+    {"\xFF"},      -- 0xFF is above the class ceiling 0xFD
+    {"\x80abc"},   -- a bare continuation byte cannot start a character
+    {"\xBFabc"},   -- another bare continuation byte
+}
+tests:each("charpattern rejects excluded lead byte at start", exclusion_cases, function(s)
+    tests:assert_nil(string.match(s, "^" .. utf8.charpattern .. "$"))
+end)
+
+-- === utf8.len invalid-sequence matrix ===
+
+-- Each case pairs a malformed byte string with the exact one-based position of
+-- the first byte where decoding fails, which utf8.len returns as its second
+-- value. A leading valid character shifts the reported position.
+local invalid_len_cases = {
+    -- Bare continuation bytes with no lead byte.
+    {"\x80", 1},
+    {"\xBF", 1},
+    {"A\x80", 2},
+    {"ab\xBF", 3},
+    -- Truncated two-byte sequence: lead present, continuation missing.
+    {"\xC2", 1},
+    {"A\xC2", 2},
+    -- Truncated three-byte sequences.
+    {"\xE2", 1},
+    {"\xE2\x82", 1},
+    {"A\xE2\x82", 2},
+    -- Truncated four-byte sequences.
+    {"\xF0", 1},
+    {"\xF0\x9F", 1},
+    {"\xF0\x9F\x98", 1},
+    -- Overlong encodings at each boundary.
+    {"\xC0\xAF", 1},        -- overlong encoding of U+002F
+    {"\xC1\xBF", 1},        -- overlong encoding of U+007F
+    {"\xE0\x80\x80", 1},    -- overlong encoding of U+0000
+    {"\xE0\x9F\xBF", 1},    -- overlong three-byte encoding of U+07FF
+    {"\xF0\x80\x80\x80", 1},-- overlong four-byte encoding of U+0000
+    {"\xF0\x8F\xBF\xBF", 1},-- overlong four-byte encoding of U+FFFF
+    -- CESU-style surrogate halves are rejected in strict mode.
+    {"\xED\xA0\x80", 1},    -- encoded U+D800
+    {"\xED\xBF\xBF", 1},    -- encoded U+DFFF
+    -- Code points above U+10FFFF.
+    {"\xF4\x90\x80\x80", 1},-- would be U+110000
+    {"\xF7\xBF\xBF\xBF", 1},-- would be U+1FFFFF
+    -- Lead bytes that need six or more continuation bytes.
+    {"\xFE", 1},
+    {"\xFF", 1},
+    -- Invalid byte after a run of valid ones.
+    {"hello\xFFworld", 6},
+}
+tests:each("utf8.len reports nil and first bad position", invalid_len_cases, function(s, pos)
+    local n, p = utf8.len(s)
+    tests:assert_nil(n)
+    tests:assert_equal(p, pos)
+end)
+
+tests:it("utf8.len on i pointing at a continuation byte", function()
+    -- Decoding restarts at byte 2 of the euro, which is a continuation byte,
+    -- so the scan fails immediately at that position.
+    local n, p = utf8.len(utf8.char(0x20AC), 2)
+    tests:assert_nil(n)
+    tests:assert_equal(p, 2)
+end)
+
+-- === utf8.len lax mode ===
+
+-- Lax mode accepts surrogates and code points up to MAXUTF, but overlong and
+-- truncated sequences remain invalid because they are structurally malformed.
+local lax_accept_cases = {
+    {"\xED\xA0\x80"},        -- surrogate U+D800
+    {"\xED\xBF\xBF"},        -- surrogate U+DFFF
+    {"\xF4\x90\x80\x80"},    -- U+110000, above Unicode but within MAXUTF
+    {"\xF7\xBF\xBF\xBF"},    -- U+1FFFFF, above Unicode but within MAXUTF
+}
+tests:each("utf8.len lax accepts what strict rejects", lax_accept_cases, function(s)
+    tests:assert_nil((utf8.len(s)))
+    tests:assert_equal(utf8.len(s, 1, -1, true), 1)
+end)
+
+local lax_still_invalid_cases = {
+    {"\xC0\xAF"},        -- overlong stays invalid even in lax mode
+    {"\xE0\x80\x80"},    -- overlong stays invalid even in lax mode
+    {"\xC2"},            -- truncated stays invalid even in lax mode
+    {"\xF0\x9F\x98"},    -- truncated four-byte stays invalid even in lax mode
+}
+tests:each("utf8.len lax still rejects overlong and truncated", lax_still_invalid_cases, function(s)
+    tests:assert_nil((utf8.len(s, 1, -1, true)))
+end)
+
+-- === utf8.len bounds and empty ranges ===
+
+local len_bounds_cases = {
+    {function() return utf8.len("abc", 0) end, "initial position out of bounds"},
+    {function() return utf8.len("abc", 5) end, "initial position out of bounds"},
+    {function() return utf8.len("abc", 1, 4) end, "final position out of bounds"},
+}
+tests:each("utf8.len out-of-bounds argcheck", len_bounds_cases, function(fn, pat)
+    tests:assert_throws(fn, pat)
+end)
+
+tests:it("utf8.len empty-range edges count zero", function()
+    tests:assert_equal(utf8.len("abc", 4), 0)      -- i at #s + 1 is legal
+    tests:assert_equal(utf8.len("abc", 3, 2), 0)   -- reversed range counts none
+    tests:assert_equal(utf8.len("", 1), 0)          -- empty string, i at #s + 1
+end)
+
+tests:it("utf8.len negative indices resolve from the end", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    tests:assert_equal(utf8.len(s, -1), 1)      -- just the trailing B
+    tests:assert_equal(utf8.len(s, 1, -1), 3)   -- whole string
+    tests:assert_equal(utf8.len(s, -4, -1), 2)  -- euro plus B
+end)
+
+-- === utf8.codepoint ===
+
+tests:it("utf8.codepoint negative indices", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    tests:assert_equal(utf8.codepoint(s, -1), 66)       -- trailing B
+    tests:assert_equal(utf8.codepoint(s, -4), 0x20AC)   -- euro lead byte
+    local a, b, c = utf8.codepoint(s, -5, -1)
+    tests:assert_equal(a, 65)
+    tests:assert_equal(b, 0x20AC)
+    tests:assert_equal(c, 66)
+end)
+
+tests:it("utf8.codepoint default j equals i", function()
+    -- With only i given, exactly one code point comes back even mid-string.
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    tests:assert_equal(select("#", utf8.codepoint(s, 2)), 1)
+    tests:assert_equal(utf8.codepoint(s, 2), 0x20AC)
+end)
+
+tests:it("utf8.codepoint explicit range spans multi-byte characters", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local a, b, c = utf8.codepoint(s, 1, 5)
+    tests:assert_equal(a, 65)
+    tests:assert_equal(b, 0x20AC)
+    tests:assert_equal(c, 66)
+end)
+
+local codepoint_bounds_cases = {
+    {function() return utf8.codepoint("abc", 0) end, "out of bounds"},
+    {function() return utf8.codepoint("abc", 5) end, "out of bounds"},
+    {function() return utf8.codepoint("abc", 1, 4) end, "out of bounds"},
+    {function() return utf8.codepoint("") end, "out of bounds"},
+}
+tests:each("utf8.codepoint out-of-bounds argcheck", codepoint_bounds_cases, function(fn, pat)
+    tests:assert_throws(fn, pat)
+end)
+
+tests:it("utf8.codepoint on a continuation byte raises", function()
+    tests:assert_throws(function()
+        return utf8.codepoint(utf8.char(0x20AC), 2)
+    end, "invalid UTF%-8 code")
+end)
+
+tests:it("utf8.codepoint on invalid input reports the invalid message", function()
+    local ok, err = catch utf8.codepoint("\xFF")
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "invalid UTF%-8 code")
+end)
+
+tests:it("utf8.codepoint rejects surrogates strictly and accepts them in lax mode", function()
+    tests:assert_throws(function() return utf8.codepoint("\xED\xA0\x80") end, "invalid UTF%-8 code")
+    tests:assert_equal(utf8.codepoint("\xED\xA0\x80", 1, 3, true), 0xD800)
+end)
+
+tests:it("utf8.codepoint rejects above-range code points strictly", function()
+    tests:assert_throws(function() return utf8.codepoint("\xF4\x90\x80\x80") end, "invalid UTF%-8 code")
+    tests:assert_equal(utf8.codepoint("\xF4\x90\x80\x80", 1, 4, true), 0x110000)
+end)
+
+-- === utf8.codes ===
+
+tests:it("utf8.codes over an empty string never iterates", function()
+    local count = 0
+    for _ in utf8.codes("") do
+        count = count + 1
+    end
+    tests:assert_equal(count, 0)
+end)
+
+tests:it("utf8.codes reports byte positions across a 1/2/3/4-byte mix", function()
+    local s = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
+    local positions = {}
+    local codes = {}
+    for p, c in utf8.codes(s) do
+        positions[#positions + 1] = p
+        codes[#codes + 1] = c
+    end
+    tests:assert_deep_equal(positions, {1, 2, 4, 7})
+    tests:assert_deep_equal(codes, {65, 0xE9, 0x20AC, 0x1F600})
+end)
+
+tests:it("utf8.codes raises on invalid input mid-iteration", function()
+    local ok, err = catch (function()
+        local last
+        for p, c in utf8.codes("A\xFFb") do
+            last = p
+        end
+        return last
+    end)()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "invalid UTF%-8 code")
+end)
+
+tests:it("utf8.codes rejects a leading continuation byte at the call", function()
+    -- The argcheck fires before any iteration begins.
+    tests:assert_throws(function() return utf8.codes("\x80abc") end, "invalid UTF%-8 code")
+end)
+
+tests:it("utf8.codes raises on a truncated final sequence", function()
+    tests:assert_throws(function()
+        for _ in utf8.codes("A\xE2\x82") do end
+    end, "invalid UTF%-8 code")
+end)
+
+tests:it("utf8.codes lax mode yields a surrogate without error", function()
+    local seen = {}
+    for p, c in utf8.codes("\xED\xA0\x80", true) do
+        seen[#seen + 1] = {p, c}
+    end
+    tests:assert_equal(#seen, 1)
+    tests:assert_equal(seen[1][1], 1)
+    tests:assert_equal(seen[1][2], 0xD800)
+end)
+
+-- A number coerces to a string here, matching luaL_checkstring, so only
+-- non-coercible types raise.
+local codes_type_cases = {
+    {function() return utf8.codes(nil) end},
+    {function() return utf8.codes({}) end},
+    {function() return utf8.codes(true) end},
+}
+tests:each("utf8.codes rejects non-string argument", codes_type_cases, function(fn)
+    tests:assert_throws(fn)
+end)
+
+-- === utf8.char ===
+
+tests:it("utf8.char with no arguments is the empty string", function()
+    tests:assert_equal(utf8.char(), "")
+end)
+
+tests:it("utf8.char encodes the NUL code point as one byte", function()
+    tests:assert_equal(utf8.char(0), "\0")
+    tests:assert_equal(#utf8.char(0), 1)
+end)
+
+local char_range_cases = {
+    {function() return utf8.char(0x80000000) end},  -- above MAXUTF
+    {function() return utf8.char(-1) end},          -- wraps to a huge unsigned
+    {function() return utf8.char(0x100000000) end}, -- far above MAXUTF
+}
+tests:each("utf8.char out-of-range raises value out of range", char_range_cases, function(fn)
+    tests:assert_throws(fn, "value out of range")
+end)
+
+tests:it("utf8.char accepts beyond-Unicode values that strict len rejects", function()
+    -- The encoder allows up to MAXUTF, so 0x110000 does not error, but the
+    -- resulting sequence exceeds MAXUNICODE and strict decoding fails.
+    local s = utf8.char(0x110000)
+    tests:assert_equal(type(s), "string")
+    tests:assert_nil((utf8.len(s)))
+    tests:assert_equal(utf8.len(s, 1, -1, true), 1)
+end)
+
+tests:it("utf8.char coerces integral values and rejects fractional ones", function()
+    tests:assert_equal(utf8.char(65.0), "A")
+    tests:assert_equal(utf8.char("65"), "A")  -- numeric string coerces
+    tests:assert_throws(function() return utf8.char(65.5) end, "number has no integer representation")
+end)
+
+local char_type_cases = {
+    {function() return utf8.char("A") end},
+    {function() return utf8.char({}) end},
+    {function() return utf8.char(true) end},
+}
+tests:each("utf8.char rejects non-number arguments", char_type_cases, function(fn)
+    tests:assert_throws(fn, "number expected")
+end)
+
+-- Direct byte-level assertions prove the encoder independently of the decoder.
+-- A matched encoder/decoder bug pair would still pass a pure round-trip check.
+local char_bytes_cases = {
+    {0x7F, "\x7F"},
+    {0x80, "\xC2\x80"},
+    {0x7FF, "\xDF\xBF"},
+    {0x800, "\xE0\xA0\x80"},
+    {0xFFFF, "\xEF\xBF\xBF"},
+    {0x10000, "\xF0\x90\x80\x80"},
+    {0x10FFFF, "\xF4\x8F\xBF\xBF"},
+    {0x1F600, "\xF0\x9F\x98\x80"},
+}
+tests:each("utf8.char produces the exact byte encoding", char_bytes_cases, function(cp, bytes)
+    tests:assert_equal(utf8.char(cp), bytes)
+    -- And the encoding decodes back to the same code point.
+    tests:assert_equal(utf8.codepoint(bytes), cp)
+end)
+
+-- === utf8.offset ===
+
+tests:it("utf8.offset returns both the start and end byte of a character", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    tests:assert_equal(select("#", utf8.offset(s, 2)), 2)
+    local a, b = utf8.offset(s, 2)
+    tests:assert_equal(a, 2)  -- euro starts at byte 2
+    tests:assert_equal(b, 4)  -- euro ends at byte 4
+end)
+
+tests:it("utf8.offset with n=0 finds the start of the enclosing character", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"  -- euro occupies bytes 2, 3, 4
+    tests:assert_equal(utf8.offset(s, 0, 2), 2)  -- on the lead byte itself
+    tests:assert_equal(utf8.offset(s, 0, 3), 2)  -- second byte resolves back
+    tests:assert_equal(utf8.offset(s, 0, 4), 2)  -- third byte resolves back
+    tests:assert_equal(utf8.offset(s, 0, 1), 1)  -- ASCII resolves to itself
+end)
+
+tests:it("utf8.offset counts from an explicit position i with positive n", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    tests:assert_equal(utf8.offset(s, 1, 2), 2)  -- character starting at byte 2
+    tests:assert_equal(utf8.offset(s, 2, 2), 5)  -- second character from byte 2 is B
+end)
+
+tests:it("utf8.offset counts backward from an explicit position i", function()
+    local s = "A" .. utf8.char(0x20AC) .. "B"
+    tests:assert_equal(utf8.offset(s, -1, 5), 2)  -- one character back from B is the euro
+end)
+
+tests:it("utf8.offset returns nil when the character does not exist", function()
+    tests:assert_nil(utf8.offset("ABC", 5))    -- past the end going forward
+    tests:assert_nil(utf8.offset("ABC", -4))   -- past the start going backward
+    tests:assert_equal(utf8.offset("ABC", 4), 4)  -- just past the end is legal
+end)
+
+tests:it("utf8.offset raises when a nonzero n starts on a continuation byte", function()
+    tests:assert_throws(function()
+        return utf8.offset(utf8.char(0x20AC), 1, 2)
+    end, "initial position is a continuation byte")
+end)
+
+local offset_bounds_cases = {
+    {function() return utf8.offset("abc", 1, 0) end},
+    {function() return utf8.offset("abc", 1, 5) end},
+}
+tests:each("utf8.offset position out-of-bounds argcheck", offset_bounds_cases, function(fn)
+    tests:assert_throws(fn, "position out of bounds")
+end)
+
+tests:it("utf8.offset over the empty string", function()
+    tests:assert_equal(utf8.offset("", 1), 1)   -- one-past-end is byte 1
+    tests:assert_nil(utf8.offset("", -1))        -- no character before the start
+end)
+
+tests:it("utf8.offset rejects a non-integer n", function()
+    tests:assert_throws(function()
+        return utf8.offset("abc", 1.5)
+    end, "number has no integer representation")
+end)
+
+tests:finish()

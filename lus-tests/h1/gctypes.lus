@@ -1,0 +1,599 @@
+--[[
+    GC coverage for the Lus-specific collectable types, LUA_TVECTOR byte
+    buffers and LUA_TENUM/LUA_TENUMROOT first-class enums.
+
+    These tests prove the collector treats vectors and enums like every other
+    GC-managed object. Allocate-and-drop loops must not grow the reported heap,
+    vectors and enum values must work as weak-table keys and values and be
+    cleared once unreferenced, enum value identity must survive major
+    collections, and both types must stay readable from inside a __gc
+    finalizer. Enums can only be declared statically with the enum block, so
+    dynamically created enums are compiled through load.
+]]
+
+global print, require, assert, type, tonumber, tostring, collectgarbage, vector, load, setmetatable, pairs, next, pledge, math, coroutine
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("gctypes")
+
+-- Compute a simple additive checksum over the bytes of a vector so that
+-- corruption anywhere in the buffer changes the result.
+local function checksum(v)
+    local sum = 0
+    for i = 0, vector.size(v) - 1 do
+        sum = (sum + vector.unpack(v, i, "B")) % 4294967296
+    end
+    return sum
+end
+
+-- Build a fresh enum root at runtime through the compiler.
+local function make_enum(src)
+    local chunk = assert(load("return enum " .. src .. " end"))
+    return chunk()
+end
+
+-- Count entries still present in a table.
+local function count(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+-- ============================================================
+-- Vector allocation leak bounds
+-- ============================================================
+
+tests:each("allocate and drop vectors does not grow the heap", {
+    { 64, 4000 },
+    { 1024, 1000 },
+    { 8192, 200 },
+}, function(size, iters)
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, iters do
+        local v = vector.create(size)
+        vector.pack(v, 0, "I4", i)
+        -- v goes out of scope every iteration and becomes collectable.
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    -- A leak of one buffer per iteration would be size*iters bytes. Allow a
+    -- generous fixed slack so the bound stays well clear of interning noise.
+    assert(after - before < 128,
+        "dropped vectors leaked " .. (after - before) .. " KB for size " .. size)
+end)
+
+tests:it("uninitialized fast vectors also drop cleanly", function()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 3000 do
+        local v = vector.create(512, true)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "fast vectors leaked " .. (after - before) .. " KB")
+end)
+
+tests:it("cloned vectors drop cleanly", function()
+    local seed = vector.create(1024)
+    vector.pack(seed, 0, "I4", 0x11223344)
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 2000 do
+        local c = vector.clone(seed)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "cloned vectors leaked " .. (after - before) .. " KB")
+    -- The retained seed must be untouched by all that churn.
+    assert(vector.unpack(seed, 0, "I4") == 0x11223344)
+end)
+
+-- ============================================================
+-- Enum allocation leak bounds
+-- ============================================================
+
+tests:it("allocate and drop enum roots does not grow the heap", function()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 2000 do
+        local e = make_enum("alpha, beta, gamma, delta")
+        -- Touch a member so the root is genuinely built, then drop it.
+        assert(tonumber(e.delta) == 4)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "dropped enums leaked " .. (after - before) .. " KB")
+end)
+
+-- ============================================================
+-- Vectors as weak-table keys and values
+-- ============================================================
+
+tests:it("vector weak key is cleared once unreferenced", function()
+    local w = setmetatable({}, { __mode = "k" })
+    local v = vector.create(16)
+    w[v] = "payload"
+    assert(w[v] == "payload", "entry must be present while the vector is held")
+    v = nil
+    collectgarbage()
+    collectgarbage()
+    assert(count(w) == 0, "weak key entry must clear after the vector is dropped")
+end)
+
+tests:it("vector weak key is retained while referenced", function()
+    local w = setmetatable({}, { __mode = "k" })
+    local v = vector.create(16)
+    w[v] = "payload"
+    collectgarbage()
+    collectgarbage()
+    assert(w[v] == "payload", "held vector key must survive collection")
+    assert(count(w) == 1)
+end)
+
+tests:it("vector weak value is cleared once unreferenced", function()
+    local w = setmetatable({}, { __mode = "v" })
+    w[1] = vector.create(64)
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "weak value vector must clear when nothing else holds it")
+end)
+
+tests:it("vector weak value is retained while referenced", function()
+    local w = setmetatable({}, { __mode = "v" })
+    local keep = vector.create(64)
+    vector.pack(keep, 0, "I4", 4242)
+    w[1] = keep
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == keep, "held vector value must survive collection")
+    assert(vector.unpack(w[1], 0, "I4") == 4242)
+end)
+
+tests:it("many vector weak keys clear in bulk", function()
+    local w = setmetatable({}, { __mode = "k" })
+    local anchor = {}
+    for i = 1, 200 do
+        local v = vector.create(8)
+        anchor[i] = v
+        w[v] = i
+    end
+    -- Strong references in anchor keep every weak key alive for now.
+    assert(count(w) == 200, "all fresh vector keys present while anchored")
+    anchor = nil
+    collectgarbage()
+    collectgarbage()
+    assert(count(w) == 0, "all unreferenced vector keys must clear")
+end)
+
+tests:it("vectors nested in a dropped table tree do not leak", function()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 1000 do
+        local tree = { left = { buf = vector.create(128) }, right = { buf = vector.create(128) } }
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "nested vectors leaked " .. (after - before) .. " KB")
+end)
+
+tests:it("dropping a coroutine collects vectors reachable only from its stack", function()
+    local w = setmetatable({}, { __mode = "v" })
+    do
+        local co = coroutine.create(function()
+            local v = vector.create(256)
+            w[1] = v
+            coroutine.yield()
+        end)
+        coroutine.resume(co)
+        assert(w[1] ~= nil, "vector must be live while the coroutine holds it")
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "vector must clear once the suspended coroutine is dropped")
+end)
+
+tests:it("vectors do not leak in generational mode", function()
+    local prev = collectgarbage("generational")
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 3000 do
+        local v = vector.create(256)
+        vector.pack(v, 0, "I4", i)
+    end
+    collectgarbage()
+    local after = collectgarbage("count")
+    collectgarbage(prev)
+    assert(after - before < 128, "vectors leaked in generational mode: " .. (after - before) .. " KB")
+end)
+
+tests:it("single basic step and a huge step leave vectors intact", function()
+    local v = vector.create(1024)
+    vector.pack(v, 0, "I8", 0x0102030405060708)
+    -- step with size 0 performs one basic step, a very large size completes a cycle.
+    collectgarbage("step", 0)
+    collectgarbage("step", 1000000)
+    assert(vector.unpack(v, 0, "I8") == 0x0102030405060708, "held vector must survive explicit steps")
+end)
+
+-- ============================================================
+-- Enum values as weak-table keys and values
+-- ============================================================
+
+tests:it("enum value weak key is retained while referenced", function()
+    local e = make_enum("red, green, blue")
+    local w = setmetatable({}, { __mode = "k" })
+    local held = e.green
+    w[held] = "verdant"
+    collectgarbage()
+    collectgarbage()
+    assert(w[held] == "verdant", "held enum key must survive collection")
+    assert(count(w) == 1)
+end)
+
+tests:it("enum value weak key clears once nothing holds it", function()
+    local w = setmetatable({}, { __mode = "k" })
+    do
+        local e = make_enum("one, two, three")
+        w[e.one] = true
+        assert(count(w) == 1)
+    end
+    collectgarbage()
+    collectgarbage()
+    -- With the root and every member reference gone, the weak entry clears.
+    assert(count(w) == 0, "enum weak key must clear after its root is dropped")
+end)
+
+tests:it("enum value weak value clears once unreferenced", function()
+    local w = setmetatable({}, { __mode = "v" })
+    do
+        local e = make_enum("a, b, c")
+        w[1] = e.b
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "weak enum value must clear when its root is gone")
+end)
+
+tests:it("enum value weak value retained while root and value held", function()
+    local e = make_enum("north, south, east, west")
+    local w = setmetatable({}, { __mode = "v" })
+    local held = e.east
+    w[1] = held
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == held, "held enum value must survive collection")
+    assert(tonumber(w[1]) == 3)
+end)
+
+tests:it("enum root value weak reference clears when the root is dropped", function()
+    local w = setmetatable({}, { __mode = "v" })
+    do
+        local e = make_enum("a, b, c")
+        -- The root object itself equals its first member and is a value too.
+        w[1] = e
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "the enum root must clear once no strong reference remains")
+end)
+
+tests:it("many enum values clear in bulk once their roots are dropped", function()
+    local w = setmetatable({}, { __mode = "k" })
+    local anchor = {}
+    for i = 1, 100 do
+        local e = make_enum("x, y, z")
+        local val = e.y
+        anchor[i] = val
+        w[val] = i
+    end
+    assert(count(w) == 100, "all enum keys present while anchored")
+    anchor = nil
+    collectgarbage()
+    collectgarbage()
+    assert(count(w) == 0, "all unreferenced enum keys must clear")
+end)
+
+tests:it("enum with many members allocates and drops without leaking", function()
+    local names = "m1"
+    for i = 2, 60 do names = names .. ", m" .. i end
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 500 do
+        local e = make_enum(names)
+        assert(tonumber(e.m60) == 60)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "wide enums leaked " .. (after - before) .. " KB")
+end)
+
+-- ============================================================
+-- Mixed vector and enum weak tables
+-- ============================================================
+
+tests:it("kv weak table retains anchored vectors and enums, clears the rest", function()
+    local e = make_enum("keep, gone")
+    local w = setmetatable({}, { __mode = "kv" })
+    local kept_vec = vector.create(16)
+    local kept_enum = e.keep
+    -- Anchored pair survives, unanchored entries clear.
+    w[kept_vec] = kept_enum
+    w[vector.create(16)] = "dropme"
+    w["dropme"] = vector.create(16)
+    collectgarbage()
+    collectgarbage()
+    assert(w[kept_vec] == kept_enum, "anchored vector key and enum value must survive")
+    assert(count(w) == 1, "only the anchored pair should remain")
+end)
+
+tests:it("enum value works as a stable strong table key across collections", function()
+    local e = make_enum("red, green, blue")
+    local t = {}
+    t[e.red] = "R"
+    t[e.green] = "G"
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(t[e.red] == "R", "enum key lookup must still resolve after collection")
+    assert(t[e.green] == "G")
+    assert(t[e.blue] == nil, "an unset enum key must stay absent")
+end)
+
+-- ============================================================
+-- Enum identity and tostring stability across collections
+-- ============================================================
+
+tests:it("enum value identity is stable across major collections", function()
+    local e = make_enum("alpha, beta, gamma")
+    local first = e.beta
+    local label = tostring(e.beta)
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(first == e.beta, "value fetched before and after collect must be equal")
+    assert(e.beta == e[2], "name and index lookups must agree after collection")
+    assert(tostring(e.beta) == label, "tostring rendering must stay stable")
+    assert(tonumber(e.beta) == 2)
+end)
+
+tests:it("held enum value keeps its root alive across collections", function()
+    local held
+    do
+        local e = make_enum("mercury, venus, earth")
+        held = e.earth
+    end
+    -- Only the single value keeps the whole enum root reachable.
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(tonumber(held) == 3, "value must remain usable after its root falls out of scope")
+    assert(held == held, "value must remain self-consistent")
+end)
+
+tests:it("enum comparisons stay valid under repeated collection", function()
+    local e = make_enum("low, mid, high")
+    local ok = 0
+    for i = 1, 5000 do
+        if e.low < e.high and e.mid <= e.high then ok = ok + 1 end
+        if i % 500 == 0 then collectgarbage("step") end
+    end
+    assert(ok == 5000, "ordering must hold on every iteration through GC steps")
+end)
+
+-- ============================================================
+-- Vectors surviving churn, checksums, and resize under GC
+-- ============================================================
+
+tests:it("large held vector survives small-garbage churn intact", function()
+    local big = vector.create(65536)
+    for i = 0, vector.size(big) - 1 do
+        vector.pack(big, i, "B", (i * 7 + 3) % 256)
+    end
+    local want = checksum(big)
+    -- Churn a lot of small collectable garbage, forcing collections while the
+    -- large buffer is held live.
+    for i = 1, 20000 do
+        local junk = { i, tostring(i), vector.create(16) }
+        if i % 2000 == 0 then collectgarbage("step", 20) end
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(checksum(big) == want, "held vector contents must be unchanged after churn")
+    assert(vector.size(big) == 65536)
+end)
+
+tests:it("vector resize under GC churn preserves data", function()
+    local v = vector.create(8)
+    vector.pack(v, 0, "I4", 0xDEADBEEF)
+    for i = 1, 2000 do
+        vector.resize(v, 8 + (i % 4096))
+        -- Allocate throwaway garbage between resizes to drive collections.
+        local junk = vector.create(128)
+        if i % 200 == 0 then collectgarbage("step", 10) end
+    end
+    -- The head of the buffer, always within range, must be intact.
+    assert(vector.unpack(v, 0, "I4") == 0xDEADBEEF, "resize churn must preserve leading bytes")
+end)
+
+tests:it("resize down then up under churn zero-fills re-exposed bytes", function()
+    local v = vector.create(64)
+    vector.pack(v, 0, "I4", 0x5A5A5A5A)
+    for i = 1, 500 do
+        vector.resize(v, 8)
+        local junk = vector.create(256)
+        vector.resize(v, 64)
+        if i % 100 == 0 then collectgarbage("step", 10) end
+    end
+    -- Bytes above offset 8 were dropped and re-added, so they must read as zero.
+    assert(vector.unpack(v, 8, "I4") == 0, "re-exposed bytes must be zero after churned resize")
+    -- The retained head must still hold its value.
+    assert(vector.unpack(v, 0, "I4") == 0x5A5A5A5A, "leading bytes must be preserved")
+end)
+
+tests:it("a vector resurrected inside a finalizer keeps its data", function()
+    local saved = {}
+    do
+        local v = vector.create(4)
+        vector.pack(v, 0, "I4", 0x600DF00D)
+        setmetatable({ buf = v }, {
+            __gc = function(self)
+                saved.buf = self.buf
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(saved.buf ~= nil, "finalizer must be able to resurrect the vector")
+    assert(vector.unpack(saved.buf, 0, "I4") == 0x600DF00D, "resurrected vector data must be intact")
+    -- The resurrected vector must remain fully usable.
+    vector.pack(saved.buf, 0, "I4", 1)
+    assert(vector.unpack(saved.buf, 0, "I4") == 1)
+end)
+
+tests:it("checksum detects corruption so the test can fail", function()
+    -- Guard against a tautological checksum: mutating one byte must change it.
+    local v = vector.create(32)
+    for i = 0, 31 do vector.pack(v, i, "B", i) end
+    local a = checksum(v)
+    vector.pack(v, 5, "B", 200)
+    assert(checksum(v) ~= a, "checksum must change when a byte changes")
+end)
+
+-- ============================================================
+-- Vectors and enums reachable from __gc finalizers
+-- ============================================================
+
+tests:it("slice results are vectors that drop without leaking", function()
+    local base = vector.create(1024)
+    for i = 0, 1023 do vector.pack(base, i, "B", i % 256) end
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 3000 do
+        local s = base[1, 512]
+        assert(type(s) == "vector")
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "slice copies leaked " .. (after - before) .. " KB")
+    -- The base buffer must be untouched by all the slicing.
+    assert(vector.unpack(base, 100, "B") == 100)
+end)
+
+tests:it("vector tostring rendering is stable across collections", function()
+    local v = vector.create(32)
+    local label = tostring(v)
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(tostring(v) == label, "vector identity string must not change across GC")
+end)
+
+tests:it("unpackmany iteration stays correct with interleaved GC steps", function()
+    local v = vector.create(4000)
+    for i = 0, 999 do vector.pack(v, i * 4, "I4", i) end
+    local sum = 0
+    local n = 0
+    for val in vector.unpackmany(v, 0, "I4") do
+        sum = sum + val
+        n = n + 1
+        if n % 100 == 0 then collectgarbage("step", 5) end
+    end
+    assert(n == 1000, "must iterate every element, got " .. n)
+    -- Sum of 0..999 is 499500.
+    assert(sum == 499500, "iteration values must be intact under GC, got " .. sum)
+end)
+
+tests:it("distinct enum roots never collide as keys after collection", function()
+    local e1 = make_enum("a, b, c")
+    local e2 = make_enum("a, b, c")
+    local t = {}
+    t[e1.a] = "first"
+    t[e2.a] = "second"
+    collectgarbage("collect")
+    collectgarbage("collect")
+    -- Same names and positions but different roots must remain separate keys.
+    assert(t[e1.a] == "first", "first root key must be preserved")
+    assert(t[e2.a] == "second", "second root key must be preserved")
+    assert(e1.a ~= e2.a, "values from distinct roots must never be equal")
+end)
+
+tests:it("a held enum member keeps every other member reachable after GC", function()
+    local held
+    do
+        local e = make_enum("spring, summer, autumn, winter")
+        held = e.summer
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    -- Reaching sibling members through the held value keeps the whole root live.
+    assert(tonumber(held.winter) == 4, "sibling lookup through a held member must work")
+    assert(held.spring < held.winter, "ordering across recovered members must hold")
+    assert(held == held.summer, "the held member must equal its own re-lookup")
+end)
+
+tests:it("finalizer can read a vector still owned by the dying object", function()
+    local seen = {}
+    do
+        local v = vector.create(8)
+        vector.pack(v, 0, "I4", 0xABCD1234)
+        setmetatable({ buf = v }, {
+            __gc = function(self)
+                seen.value = vector.unpack(self.buf, 0, "I4")
+                seen.size = vector.size(self.buf)
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(seen.value == 0xABCD1234, "finalizer must read the vector payload")
+    assert(seen.size == 8, "finalizer must see the vector size")
+end)
+
+tests:it("finalizer can read an enum value still owned by the dying object", function()
+    local seen = {}
+    do
+        local e = make_enum("draft, review, done")
+        setmetatable({ state = e.done }, {
+            __gc = function(self)
+                seen.index = tonumber(self.state)
+                seen.same = (self.state == self.state)
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(seen.index == 3, "finalizer must read the enum index")
+    assert(seen.same == true, "enum value must stay coherent during finalization")
+end)
+
+tests:it("all finalizers holding vectors run and read their own data", function()
+    local total = 0
+    for i = 1, 8 do
+        local v = vector.create(4)
+        vector.pack(v, 0, "I4", i * 100)
+        setmetatable({ buf = v }, {
+            __gc = function(self)
+                total = total + vector.unpack(self.buf, 0, "I4")
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    -- 100 + 200 + ... + 800 = 3600
+    assert(total == 3600, "every vector finalizer must run and read its payload, got " .. total)
+end)
+
+tests:finish()

@@ -112,16 +112,34 @@ tests:it("large table iteration", function()
 end)
 
 tests:it("nested large tables", function()
+    -- 256 x 256 grid: both the outer and the inner arrays cross several
+    -- array-part growth boundaries while being filled
+    local n = 256
     local t = {}
-    for i = 1, 100 do
-        t[i] = {}
-        for j = 1, 100 do
-            t[i][j] = i * j
+    for i = 1, n do
+        local row = {}
+        for j = 1, n do
+            row[j] = i * j
         end
+        t[i] = row
     end
-    
-    assert(t[50][50] == 2500)
-    assert(t[100][100] == 10000)
+
+    -- every entry must survive construction, verified by a full traversal
+    local rows, total = 0, 0
+    for i, row in pairs(t) do
+        rows = rows + 1
+        local cols = 0
+        for j, v in pairs(row) do
+            cols = cols + 1
+            assert(v == i * j, "corrupted entry at " .. i .. "," .. j)
+            total = total + v
+        end
+        assert(cols == n, "row " .. i .. " lost entries")
+    end
+    assert(rows == n)
+    local expect = n * (n + 1) // 2
+    expect = expect * expect
+    assert(total == expect, "grid checksum mismatch")
 end)
 
 tests:finish()

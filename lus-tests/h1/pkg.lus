@@ -1,0 +1,438 @@
+--[[
+    Test suite for the package module (Acquis: modules and require).
+
+    This exercises the caching semantics of package.loaded, the priority
+    of package.preload, on-disk module resolution through package.path with
+    a namespaced temporary module directory, the structure and order of
+    package.searchers, custom searcher end-to-end behavior, require error
+    messages, the propagation of load-time errors, circular require, and
+    the Lus-specific pledge gating and return arity of package.loadlib.
+
+    The pledge preamble grants load plus read access to the test tree so
+    require can resolve framework and fixture modules, and read and write
+    access to the ./pkg_* namespace for the temporary module directory.
+    loadlib denial tests probe a path outside every grant so the failure
+    is a real fs:read boundary rather than a missing file.
+]]
+
+global print, package, require, pledge, fs, io, os, type, tostring,
+    string, table, error, _G, ipairs, assert, math, rawequal
+
+pledge("load", "fs:read=./lus-tests/*",
+    "fs:read=./pkg_*", "fs:write=./pkg_*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("pkg")
+
+local RUN = tostring(os.time()) .. "_" .. tostring(math and math.random(1, 999999) or 0)
+local MODDIR = "./pkg_" .. RUN
+
+-- A single fixture module that already ships in the tree. Every path test
+-- below points package.path at this directory and requires "hello".
+local FIXPATH = "lus-tests/h1/preinclude/?.lus"
+
+-- Save and restore the mutable package globals around a test body so the
+-- shared interpreter state stays clean between tests.
+local function with_saved(body)
+    local old_path = package.path
+    local old_cpath = package.cpath
+    -- Snapshot the searcher list by value so a test that appends to the
+    -- shared table in place is fully undone, not just rebound.
+    local old_searchers = {}
+    for i, v in ipairs(package.searchers) do old_searchers[i] = v end
+    local ok, err = catch body()
+    package.path = old_path
+    package.cpath = old_cpath
+    package.searchers = old_searchers
+    if not ok then error(err) end
+end
+
+-- Plain (non-pattern) substring assertion, for messages that carry the
+-- magic characters that string.find would otherwise interpret.
+local function assert_has(haystack, needle)
+    assert(string.find(tostring(haystack), needle, 1, true) ~= nil,
+        "expected to find '" .. needle .. "' in: " .. tostring(haystack))
+end
+
+tests:describe("package.config")
+
+tests:it("config is five newline-terminated fields", function()
+    tests:assert_type(package.config, "string")
+    local lines = {}
+    for line in string.gmatch(package.config, "([^\n]*)\n") do
+        lines[#lines + 1] = line
+    end
+    tests:assert_equal(#lines, 5, "config must hold five newline-terminated lines")
+    -- Line one is the directory separator, either POSIX or Windows.
+    assert(lines[1] == "/" or lines[1] == "\\",
+        "line 1 is the directory separator, got " .. tostring(lines[1]))
+    tests:assert_equal(lines[2], ";", "line 2 is the template separator")
+    tests:assert_equal(lines[3], "?", "line 3 is the substitution mark")
+    tests:assert_equal(lines[4], "!", "line 4 is the executable-dir mark")
+    tests:assert_equal(lines[5], "-", "line 5 is the ignore mark")
+end)
+
+tests:it("the config separators are the ones searchpath honors", function()
+    -- Build a two-template path joined by config's line-2 separator, each
+    -- template carrying config's line-3 substitution mark, and confirm
+    -- searchpath resolves the fixture through it.
+    local tmpl_sep = ";"
+    local sub = "?"
+    local path = "lus-tests/none/" .. sub .. ".lus" .. tmpl_sep ..
+        "lus-tests/h1/preinclude/" .. sub .. ".lus"
+    local found = package.searchpath("hello", path)
+    tests:assert_equal(found, "lus-tests/h1/preinclude/hello.lus")
+end)
+
+tests:describe("package.loaded caching")
+
+tests:it("a second require returns the identical value", function()
+    with_saved(function()
+        package.path = FIXPATH
+        package.loaded["hello"] = nil
+        local first = require("hello")
+        local second = require("hello")
+        tests:assert_true(rawequal(first, second),
+            "require must return the cached identical table")
+    end)
+end)
+
+tests:it("mutating package.loaded changes what require returns", function()
+    package.loaded["pkg_swap_" .. RUN] = { tag = "one" }
+    tests:assert_equal(require("pkg_swap_" .. RUN).tag, "one")
+    package.loaded["pkg_swap_" .. RUN] = { tag = "two" }
+    tests:assert_equal(require("pkg_swap_" .. RUN).tag, "two")
+    package.loaded["pkg_swap_" .. RUN] = nil
+end)
+
+tests:it("a pre-seeded entry short-circuits every searcher", function()
+    -- A tripwire searcher records if it ever runs. A pre-seeded loaded
+    -- entry must be returned without any searcher being consulted.
+    with_saved(function()
+        local tripped = false
+        table.insert(package.searchers, function(name) tripped = true end)
+        local sentinel = { seeded = true }
+        package.loaded["pkg_seed_" .. RUN] = sentinel
+        local got = require("pkg_seed_" .. RUN)
+        tests:assert_true(rawequal(got, sentinel), "require returned the seeded table")
+        tests:assert_false(tripped, "no searcher should run for a loaded module")
+        package.loaded["pkg_seed_" .. RUN] = nil
+    end)
+end)
+
+tests:it("clearing package.loaded forces the loader to run again", function()
+    local calls = 0
+    package.preload["pkg_reload_" .. RUN] = function()
+        calls = calls + 1
+        return { n = calls }
+    end
+    local a = require("pkg_reload_" .. RUN)
+    tests:assert_equal(a.n, 1)
+    -- Repeat without clearing: cached, loader not rerun.
+    tests:assert_equal(require("pkg_reload_" .. RUN).n, 1)
+    package.loaded["pkg_reload_" .. RUN] = nil
+    local b = require("pkg_reload_" .. RUN)
+    tests:assert_equal(b.n, 2, "the loader must run again after clearing loaded")
+    package.preload["pkg_reload_" .. RUN] = nil
+    package.loaded["pkg_reload_" .. RUN] = nil
+end)
+
+tests:it("a loader returning no value marks loaded true", function()
+    package.preload["pkg_novalue_" .. RUN] = function() end
+    local r = require("pkg_novalue_" .. RUN)
+    tests:assert_equal(r, true, "require returns true when the loader returns nothing")
+    tests:assert_equal(package.loaded["pkg_novalue_" .. RUN], true)
+    package.preload["pkg_novalue_" .. RUN] = nil
+    package.loaded["pkg_novalue_" .. RUN] = nil
+end)
+
+tests:it("a false value in package.loaded is treated as not loaded", function()
+    package.preload["pkg_false_" .. RUN] = function() return { real = true } end
+    package.loaded["pkg_false_" .. RUN] = false
+    local r = require("pkg_false_" .. RUN)
+    tests:assert_type(r, "table")
+    tests:assert_true(r.real, "the loader runs when the cached value is false")
+    package.preload["pkg_false_" .. RUN] = nil
+    package.loaded["pkg_false_" .. RUN] = nil
+end)
+
+tests:it("stdlib modules resolve to their own tables", function()
+    tests:assert_true(rawequal(package.loaded["package"], package),
+        "package.loaded.package is the package table")
+    tests:assert_true(rawequal(package.loaded["_G"], _G),
+        "package.loaded._G is the global table")
+    tests:assert_true(rawequal(package.loaded["string"], string))
+end)
+
+tests:describe("package.preload")
+
+tests:it("preload takes priority over the path searcher", function()
+    with_saved(function()
+        -- Point the path at the on-disk hello fixture, but also register a
+        -- preload loader under the same name. Preload is searcher one, so
+        -- it must win.
+        package.path = FIXPATH
+        package.loaded["hello"] = nil
+        package.preload["hello"] = function(name)
+            return { origin = "preload", who = name }
+        end
+        local mod, where = require("hello")
+        tests:assert_equal(mod.origin, "preload")
+        tests:assert_equal(mod.who, "hello")
+        tests:assert_equal(where, ":preload:",
+            "the second return value marks a preload load")
+        package.preload["hello"] = nil
+        package.loaded["hello"] = nil
+    end)
+end)
+
+tests:describe("package.path resolution")
+
+tests:it("require resolves an on-disk module and returns the filename", function()
+    with_saved(function()
+        package.path = FIXPATH
+        package.loaded["hello"] = nil
+        local mod, where = require("hello")
+        tests:assert_type(mod, "table")
+        tests:assert_equal(where, "lus-tests/h1/preinclude/hello.lus",
+            "the second return value is the resolved filename")
+        package.loaded["hello"] = nil
+    end)
+end)
+
+tests:it("dots in the module name map to the directory separator", function()
+    with_saved(function()
+        package.path = "lus-tests/?.lus"
+        package.loaded["h1.preinclude.hello"] = nil
+        local mod, where = require("h1.preinclude.hello")
+        tests:assert_type(mod, "table")
+        tests:assert_equal(where, "lus-tests/h1/preinclude/hello.lus")
+        package.loaded["h1.preinclude.hello"] = nil
+    end)
+end)
+
+tests:it("a table package.path fails with the exact wording", function()
+    with_saved(function()
+        package.path = {}
+        local ok, err = catch require("pkg_nofile_" .. RUN)
+        tests:assert_false(ok)
+        tests:assert_contains(tostring(err), "'package.path' must be a string")
+    end)
+end)
+
+tests:it("a table package.cpath fails with the exact wording", function()
+    with_saved(function()
+        package.path = "?.lua"
+        package.cpath = {}
+        local ok, err = catch require("pkg_nocfile_" .. RUN)
+        tests:assert_false(ok)
+        tests:assert_contains(tostring(err), "'package.cpath' must be a string")
+    end)
+end)
+
+tests:it("a freshly written module resolves through package.path", function()
+    -- Build a namespaced temp module directory, drop a .lus module in it,
+    -- point package.path there, and require it end to end.
+    with_saved(function()
+        catch fs.remove(MODDIR, true)
+        fs.createdirectory(MODDIR)
+        local w = io.open(MODDIR .. "/tempmod.lus", "wb")
+        w:write("return { value = 1234 }")
+        w:close()
+        package.path = MODDIR .. "/?.lus"
+        package.loaded["tempmod"] = nil
+        local mod, where = require("tempmod")
+        tests:assert_equal(mod.value, 1234)
+        tests:assert_equal(where, MODDIR .. "/tempmod.lus",
+            "the second return value is the on-disk filename")
+        -- A second require serves the cached table without touching disk.
+        tests:assert_true(rawequal(require("tempmod"), mod))
+        package.loaded["tempmod"] = nil
+        fs.remove(MODDIR, true)
+    end)
+end)
+
+tests:describe("require error messages")
+
+tests:it("the not-found message lists every searched candidate", function()
+    with_saved(function()
+        package.path = "?.lua;?/?"
+        package.cpath = "?.so;?/init"
+        local ok, msg = catch require("XXX")
+        tests:assert_false(ok)
+        msg = tostring(msg)
+        tests:assert_contains(msg, "module 'XXX' not found")
+        tests:assert_contains(msg, "no field package.preload%['XXX'%]")
+        tests:assert_contains(msg, "no file 'XXX.lua'")
+        -- cpath-derived lines must appear too.
+        tests:assert_contains(msg, "no file 'XXX.so'")
+        tests:assert_contains(msg, "no file 'XXX/init'")
+    end)
+end)
+
+tests:it("a load-time error propagates and does not cache the module", function()
+    package.preload["pkg_boom_" .. RUN] = function()
+        error("boom during load")
+    end
+    local ok, err = catch require("pkg_boom_" .. RUN)
+    tests:assert_false(ok, "the load error must surface to the caller")
+    tests:assert_contains(tostring(err), "boom during load")
+    tests:assert_nil(package.loaded["pkg_boom_" .. RUN],
+        "a failed load must not leave a cached entry")
+    package.preload["pkg_boom_" .. RUN] = nil
+end)
+
+tests:describe("circular require")
+
+tests:it("a module required mid-load resolves to its finished value", function()
+    package.preload["pkg_circA_" .. RUN] = function()
+        local b = require("pkg_circB_" .. RUN)
+        return { name = "A", dep = b.name }
+    end
+    package.preload["pkg_circB_" .. RUN] = function()
+        return { name = "B" }
+    end
+    local a = require("pkg_circA_" .. RUN)
+    tests:assert_equal(a.name, "A")
+    tests:assert_equal(a.dep, "B", "A saw B's completed value during its own load")
+    package.preload["pkg_circA_" .. RUN] = nil
+    package.preload["pkg_circB_" .. RUN] = nil
+    package.loaded["pkg_circA_" .. RUN] = nil
+    package.loaded["pkg_circB_" .. RUN] = nil
+end)
+
+tests:describe("package.searchers")
+
+tests:it("the default searcher list has six entries", function()
+    tests:assert_type(package.searchers, "table")
+    tests:assert_equal(#package.searchers, 6,
+        "Lus ships preload, preinclude, bundle, Lua, C, and C-root searchers")
+end)
+
+tests:it("a custom searcher runs its loader with its own data", function()
+    with_saved(function()
+        local DATA = { marker = "custom-data" }
+        table.insert(package.searchers, function(name)
+            if name == "pkg_custom_" .. RUN then
+                return function(n, extra)
+                    return { got = n, extra = extra }
+                end, DATA
+            end
+        end)
+        local mod, where = require("pkg_custom_" .. RUN)
+        tests:assert_equal(mod.got, "pkg_custom_" .. RUN,
+            "the loader receives the module name")
+        tests:assert_true(rawequal(mod.extra, DATA),
+            "the loader receives the searcher's second value")
+        tests:assert_true(rawequal(where, DATA),
+            "require's second return value is the searcher data")
+        package.loaded["pkg_custom_" .. RUN] = nil
+    end)
+end)
+
+tests:it("an empty searcher table still raises a clean not-found error", function()
+    with_saved(function()
+        package.searchers = {}
+        local ok, msg = catch require("pkg_empty_" .. RUN)
+        tests:assert_false(ok, "require must fail rather than crash")
+        tests:assert_contains(tostring(msg), "module 'pkg_empty_" .. RUN .. "' not found")
+    end)
+end)
+
+tests:it("setting searchers to a non-table fails require", function()
+    with_saved(function()
+        package.searchers = 3
+        local ok, msg = catch require("pkg_notable_" .. RUN)
+        tests:assert_false(ok)
+        tests:assert_contains(tostring(msg), "must be a table")
+    end)
+end)
+
+tests:describe("package.searchpath")
+
+tests:it("a positive search returns the existing file", function()
+    local found = package.searchpath("hello", FIXPATH)
+    tests:assert_equal(found, "lus-tests/h1/preinclude/hello.lus")
+end)
+
+tests:it("the default separator rewrites dots to the directory separator", function()
+    local found = package.searchpath("h1.preinclude.hello", "lus-tests/?.lus")
+    tests:assert_equal(found, "lus-tests/h1/preinclude/hello.lus")
+end)
+
+tests:it("explicit sep and rep control the substitution", function()
+    -- With sep and rep both "/", no rewriting happens and the slashed name
+    -- is substituted verbatim.
+    local found = package.searchpath("h1/preinclude/hello", "lus-tests/?.lus", "/", "/")
+    tests:assert_equal(found, "lus-tests/h1/preinclude/hello.lus")
+end)
+
+tests:it("a name without a separator takes the no-substitution path", function()
+    -- A bare name yields the same result with and without a sep argument.
+    local a = package.searchpath("hello", FIXPATH)
+    local b = package.searchpath("hello", FIXPATH, ".")
+    tests:assert_equal(a, b)
+    tests:assert_equal(a, "lus-tests/h1/preinclude/hello.lus")
+end)
+
+tests:it("a failed search lists every tried candidate", function()
+    local found, msg = package.searchpath("nope", "lus-tests/a/?.lus;lus-tests/b/?.lus")
+    tests:assert_nil(found)
+    assert_has(msg, "no file 'lus-tests/a/nope.lus'")
+    assert_has(msg, "no file 'lus-tests/b/nope.lus'")
+end)
+
+tests:it("an empty path yields a single empty candidate", function()
+    local found, msg = package.searchpath("n", "")
+    tests:assert_nil(found)
+    tests:assert_contains(tostring(msg), "no file ''")
+end)
+
+-- searchpath silently skips files outside the fs:read pledge. The fixture
+-- under lus-tests is granted, so a template pointing at an ungranted tree
+-- for the same basename must return nil even though the granted copy exists.
+tests:it("searchpath skips a file the pledge does not cover", function()
+    local found = package.searchpath("hello", "./pkg_denied_area/?.lus")
+    tests:assert_nil(found, "an ungranted directory contributes no match")
+end)
+
+tests:each("searchpath argument type errors raise", {
+    { function() return package.searchpath(nil, "?") end, 1 },
+    { function() return package.searchpath("n", nil) end, 2 },
+}, function(call, argno)
+    local ok, err = catch call()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "bad argument #" .. argno)
+end)
+
+tests:describe("package.loadlib")
+
+tests:it("a missing library returns fail, a message, and 'open'", function()
+    -- The path sits under the granted fs:read scope, so the failure is
+    -- the dynamic loader's, not a pledge denial. loadlib yields three
+    -- values, and the third is the failure phase.
+    local ok, msg, phase = package.loadlib("./lus-tests/no_such_pkg_lib.so", "f")
+    tests:assert_false(ok, "a missing library is a failure value")
+    tests:assert_type(msg, "string")
+    tests:assert_true(#msg > 0, "the failure carries a message")
+    tests:assert_equal(phase, "open", "the third value names the open phase")
+end)
+
+tests:it("loadlib raises fs:read denial for an ungranted path", function()
+    -- This path is covered by no grant in the pledge preamble, so the Lus
+    -- gate raises rather than returning a failure value.
+    local ok, err = catch package.loadlib("/opt/pkg_denied_lib_" .. RUN .. ".so", "f")
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), 'permission "fs:read" denied')
+end)
+
+tests:each("loadlib rejects non-string arguments", {
+    { function() return package.loadlib(nil, "f") end, 1 },
+    { function() return package.loadlib("./lus-tests/x.so", nil) end, 2 },
+}, function(call, argno)
+    local ok, err = catch call()
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "bad argument #" .. argno)
+end)
+
+tests:finish()

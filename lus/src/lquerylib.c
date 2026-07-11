@@ -26,6 +26,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lgc.h"
 #include "lobject.h"
 #include "lquery.h"
 #include "lstate.h"

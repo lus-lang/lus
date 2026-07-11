@@ -1,0 +1,323 @@
+--[[
+    pledge2.lus - In-process pledge semantics, second suite.
+
+    This suite pins the parts of the capability system that pledge.lus and
+    security.lus leave unpinned. The focus is the exact contract of pledge()
+    itself: the "~" reject prefix, the refusal of the "all" permission from a
+    script, argument and value validation, glob boundary precision on the deny
+    side, the fact that a valueless re-pledge of a value-scoped grant does not
+    broaden it, and the precise return-value behaviour once the store is sealed.
+
+    Everything here asserts a denial or an exact return value. The suite never
+    uses the network. It creates two sibling scratch directories under
+    ./lus-tests namespaced with the suite name and removes them before sealing.
+    The seal section is last because sealing is irreversible.
+]]
+
+global require, assert, type, pledge, io, error, tostring, string, fs, network, os, print, ipairs
+
+-- Grant exactly what the suite needs and defer the seal to the very end.
+pledge("load")
+pledge("fs:read=./lus-tests/framework.lus")
+pledge("fs:read=./lus-tests/tmp-pledge2/*")
+pledge("fs:write=./lus-tests/tmp-pledge2")
+pledge("fs:write=./lus-tests/tmp-pledge2/*")
+pledge("fs:write=./lus-tests/tmp-pledge2x")
+pledge("env=LUS_PLEDGE2_OK")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("pledge2")
+
+-- ============================================================
+-- Argument and value validation
+-- ============================================================
+
+tests:describe("argument validation")
+
+-- Each malformed permission string must raise a specific, informative error
+-- rather than silently succeeding or crashing the parser.
+tests:each("malformed permission string raises", {
+    {"", "unknown permission"},
+    {"notapermission", "unknown permission"},
+    {"net", "unknown permission"},
+    {":read", "unknown permission"},
+    {"=value", "unknown permission"},
+    {"fs:", "fs subpermission"},
+    {"fs:bogus", "fs subpermission"},
+    {"env:read=x", "env subpermission"},
+}, function(perm, pattern)
+    tests:assert_throws(function() pledge(perm) end, pattern)
+end)
+
+-- The fs granter refuses an unanchored wildcard because "*" spans path
+-- separators and would otherwise match files anywhere on the disk.
+tests:each("unanchored fs wildcard pattern is refused", {
+    {"fs:read=*.pem"},
+    {"fs:read=?secret"},
+    {"fs:write=*"},
+}, function(perm)
+    tests:assert_throws(function() pledge(perm) end, "absolute path")
+end)
+
+tests:it("overlong permission name is refused", function()
+    local huge = string.rep("a", 300)
+    tests:assert_throws(function() pledge(huge) end, "too long")
+end)
+
+-- A number argument is coerced to its decimal string by the argument checker,
+-- so it surfaces as an unknown permission rather than a type error.
+tests:it("numeric argument is coerced to a string then rejected as unknown", function()
+    tests:assert_throws(function() pledge(42) end, "unknown permission")
+end)
+
+-- A value that cannot be coerced to a string must raise a type error and must
+-- not corrupt the store or crash.
+tests:each("non-coercible argument raises", {
+    {"table", {}},
+    {"boolean", true},
+}, function(_, badarg)
+    tests:assert_throws(function() pledge(badarg) end)
+end)
+
+tests:it("a nil argument raises", function()
+    tests:assert_throws(function() pledge(nil) end)
+end)
+
+-- ============================================================
+-- The "all" permission is CLI-only
+-- ============================================================
+
+tests:describe("all is refused from a script")
+
+tests:it("pledge('all') always raises when called from a script", function()
+    tests:assert_throws(function() pledge("all") end, "cannot be requested from scripts")
+end)
+
+-- ============================================================
+-- The "~" reject prefix
+-- ============================================================
+
+tests:describe("reject prefix")
+
+tests:it("rejecting a fresh permission returns true", function()
+    tests:assert_equal(pledge("~exec"), true)
+end)
+
+-- Once a permission is rejected, asking to grant it again is a hard error, not
+-- a silent false, because the program declared it never wants that capability.
+tests:it("granting a rejected permission raises 'was rejected'", function()
+    tests:assert_throws(function() pledge("exec") end, "was rejected")
+end)
+
+tests:it("rejecting a subpermission form returns true", function()
+    tests:assert_equal(pledge("~network:tcp"), true)
+end)
+
+tests:it("rejecting the network base returns true", function()
+    tests:assert_equal(pledge("~network"), true)
+end)
+
+tests:it("re-granting the rejected network base raises 'was rejected'", function()
+    tests:assert_throws(function() pledge("network") end, "was rejected")
+end)
+
+-- The rejection also denies the underlying capability at use time.
+tests:it("network use is denied after the base is rejected", function()
+    tests:assert_throws(function() network.tcp.connect("127.0.0.1", 1) end, "denied")
+end)
+
+-- ============================================================
+-- Filesystem scratch fixtures
+-- ============================================================
+
+tests:describe("filesystem gating")
+
+local dir_ok = "./lus-tests/tmp-pledge2"
+local dir_sibling = "./lus-tests/tmp-pledge2x"
+local file_inside = dir_ok .. "/w_inside.txt"
+local file_dotted = dir_ok .. "/dotted.txt"
+
+tests:it("scratch directories can be created inside their write grants", function()
+    -- Tolerate a directory left over from an interrupted previous run.
+    catch fs.createdirectory(dir_ok)
+    catch fs.createdirectory(dir_sibling)
+    -- The directories must now exist and be usable, proven by the writes below.
+    local f = io.open(file_inside, "w")
+    tests:assert_not_nil(f, "writing inside the granted glob should succeed")
+    f:write("inside")
+    f:close()
+end)
+
+-- Glob boundary precision: the grant covers ./lus-tests/tmp-pledge2/* and must
+-- not leak to the lexically adjacent directory ./lus-tests/tmp-pledge2x, whose
+-- name shares the grant's prefix. A prefix matcher would wrongly allow this.
+tests:it("write to a prefix-sharing sibling directory is denied", function()
+    tests:assert_throws(function()
+        io.open(dir_sibling .. "/b.txt", "w")
+    end, "denied")
+end)
+
+-- Write mode under a read-only grant must be gated separately from read mode.
+tests:it("write mode is denied under a read-only grant", function()
+    tests:assert_throws(function()
+        io.open("./lus-tests/framework.lus", "w")
+    end, "fs:write")
+end)
+
+-- Creating a directory whose parent carries no write grant is denied.
+tests:it("createdirectory outside any write grant is denied", function()
+    tests:assert_throws(function()
+        fs.createdirectory("./lus-tests/tmp-pledge2-unpledged/child")
+    end, "denied")
+end)
+
+-- Reading a prefix-sharing sibling that is outside the read grant is denied.
+tests:it("read of a prefix-sharing sibling directory is denied", function()
+    tests:assert_throws(function()
+        io.open(dir_sibling .. "/anything.txt", "r")
+    end, "denied")
+end)
+
+-- A dotted, non-canonical path that normalizes back into the grant is allowed,
+-- proving the check canonicalizes both sides rather than comparing raw strings.
+tests:it("a non-canonical path inside the grant is allowed", function()
+    local f = io.open(file_dotted, "w")
+    tests:assert_not_nil(f)
+    f:write("dotted")
+    f:close()
+    local g = io.open("./lus-tests/./tmp-pledge2/dotted.txt", "r")
+    tests:assert_not_nil(g, "a path that canonicalizes into the grant must open")
+    g:close()
+end)
+
+-- ============================================================
+-- Valueless re-pledge does not broaden a value-scoped grant
+-- ============================================================
+
+tests:describe("scoped grants do not widen")
+
+-- fs:read is already scoped to specific paths by the header. Re-pledging it
+-- without a value returns true but must leave the existing scope intact, never
+-- upgrading to global read access.
+tests:it("valueless fs:read re-pledge returns true", function()
+    tests:assert_equal(pledge("fs:read"), true)
+end)
+
+tests:it("valueless re-pledge does not grant an out-of-scope read", function()
+    tests:assert_throws(function() io.open("/etc/hostname", "r") end, "denied")
+end)
+
+tests:it("in-scope reads still work after the valueless re-pledge", function()
+    local f = io.open("./lus-tests/framework.lus", "r")
+    tests:assert_not_nil(f)
+    f:close()
+end)
+
+-- An empty value string carries no path, so it likewise cannot widen an
+-- already-scoped grant.
+tests:it("empty-value fs:read re-pledge returns true", function()
+    tests:assert_equal(pledge("fs:read="), true)
+end)
+
+tests:it("empty-value re-pledge still denies an out-of-scope read", function()
+    tests:assert_throws(function() io.open("/etc/passwd", "r") end, "denied")
+end)
+
+-- ============================================================
+-- Environment gating
+-- ============================================================
+
+tests:describe("env gating")
+
+-- The env pledge is scoped to a single variable name in the header. Reading the
+-- pledged name is permitted (the value itself may legitimately be nil).
+tests:it("reading the pledged env variable is permitted", function()
+    local ok = catch os.getenv("LUS_PLEDGE2_OK")
+    tests:assert_true(ok, "getenv on the pledged variable must not be denied")
+end)
+
+-- Reading any other variable is denied because the pledge is name-scoped.
+tests:each("reading an unpledged env variable is denied", {
+    {"LUS_PLEDGE2_SECRET"},
+    {"HOME"},
+    {"PATH"},
+}, function(name)
+    tests:assert_throws(function() os.getenv(name) end, "denied")
+end)
+
+-- ============================================================
+-- Seal behaviour (must be last: sealing is irreversible)
+-- ============================================================
+
+tests:describe("seal")
+
+-- A grant and a seal can be requested in one call. The already-granted env
+-- permission returns true and the seal returns true, in that order.
+tests:it("grant and seal in a single call both return true", function()
+    local granted, sealed = pledge("env=LUS_PLEDGE2_OK", "seal")
+    tests:assert_equal(granted, true)
+    tests:assert_equal(sealed, true)
+end)
+
+tests:it("sealing again is idempotent and returns true", function()
+    tests:assert_equal(pledge("seal"), true)
+end)
+
+-- After sealing, a new grant returns false and must NOT raise: the sealed
+-- check happens before any unknown-permission or rejection handling.
+tests:it("a new grant after seal returns false without raising", function()
+    local ok, result = catch pledge("fs:read=./lus-tests/tmp-pledge2/deep/*")
+    tests:assert_true(ok, "pledge after seal must not raise")
+    tests:assert_equal(result, false)
+end)
+
+-- The sealed check even short-circuits ahead of the "was rejected" error, so
+-- re-granting the earlier-rejected network base now returns false silently.
+tests:it("granting a rejected permission after seal returns false without raising", function()
+    local ok, result = catch pledge("network")
+    tests:assert_true(ok, "sealed store must answer false rather than raising")
+    tests:assert_equal(result, false)
+end)
+
+tests:it("a reject request after seal returns false without raising", function()
+    local ok, result = catch pledge("~load")
+    tests:assert_true(ok, "sealed reject must not raise")
+    tests:assert_equal(result, false)
+end)
+
+-- Capabilities granted before the seal keep working afterwards.
+tests:it("a granted read still works after seal", function()
+    local f = io.open("./lus-tests/framework.lus", "r")
+    tests:assert_not_nil(f)
+    f:close()
+end)
+
+tests:it("the granted env variable still reads after seal", function()
+    local ok = catch os.getenv("LUS_PLEDGE2_OK")
+    tests:assert_true(ok)
+end)
+
+-- Denials granted before the seal stay denied afterwards.
+tests:it("an out-of-scope read stays denied after seal", function()
+    tests:assert_throws(function() io.open("/etc/hostname", "r") end, "denied")
+end)
+
+tests:it("network stays denied after seal", function()
+    tests:assert_throws(function() network.tcp.connect("127.0.0.1", 1) end, "denied")
+end)
+
+-- Remove the scratch fixtures. The write grants survive the seal, so cleanup
+-- works here at the end of the run.
+tests:it("scratch fixtures are removed", function()
+    catch fs.remove(file_inside)
+    catch fs.remove(file_dotted)
+    -- With the parent directory still present, reading remains permitted, so a
+    -- nil result means the file is genuinely gone rather than merely denied.
+    local f = io.open(file_inside, "r")
+    tests:assert_nil(f, "the removed file must no longer open")
+    -- Now drop the directories themselves.
+    catch fs.remove(dir_ok)
+    catch fs.remove(dir_sibling)
+end)
+
+tests:finish()

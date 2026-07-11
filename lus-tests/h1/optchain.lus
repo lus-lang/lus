@@ -8,7 +8,7 @@
   Syntax: expr?.field, expr?[key], expr?:method(), expr?()
 ]]
 
-global print, setmetatable, assert, require, os, pledge
+global print, setmetatable, assert, require, os, pledge, load
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -167,10 +167,13 @@ tests:it("nested parentheses", function()
     assert(x == 5, "nested parens should work")
 end)
 
-tests:it("doc example: t? equals t", function()
-    local t = { a = {} }
-    local x = t?
-    assert(x == t, "t? should equal t")
+tests:it("bare ? passes through non-table values", function()
+    local n = 42
+    assert(n? == 42, "number? should pass the number through")
+    local s = "text"
+    assert(s? == "text", "string? should pass the string through")
+    local b = true
+    assert(b? == true, "true? should pass true through")
 end)
 
 tests:it("doc example: t?.a equals t.a", function()
@@ -185,10 +188,12 @@ tests:it("doc example: long chain with nil", function()
     assert(z == nil, "chain should return nil when intermediate is nil")
 end)
 
-tests:it("doc example: nil from conditional", function()
+tests:it("optional chain as index key", function()
+    local u = { k = 5 }
+    local t = { [5] = "found" }
+    assert(t?[u?.k] == "found", "inner chain should produce the key")
     local w = nil
-    local k = (w and {} or nil)?.op
-    assert(k == nil, "should return nil")
+    assert(t?[w?.k] == nil, "nil key from the inner chain should read as nil")
 end)
 
 tests:it("zero is truthy", function()
@@ -296,16 +301,22 @@ tests:it("? in if-assignment with nil chain", function()
     assert(result == "else", "should go to else when chain is nil")
 end)
 
-tests:it("accessing method on nil", function()
-    local obj = nil
-    local result = obj?:someMethod()
-    assert(result == nil, "should not error on nil:method()")
+tests:it("optional call is an expression, not a statement", function()
+    -- A bare optional call cannot stand alone as a statement
+    local f1 = load("local obj = nil obj?:m()")
+    assert(f1 == nil, "optional method call statement should not parse")
+    local f2 = load("local fn = nil fn?()")
+    assert(f2 == nil, "optional function call statement should not parse")
+    -- The same calls parse fine as the source of an assignment
+    local f3 = load("local obj = nil local r = obj?:m() return r")
+    assert(f3 ~= nil, "optional method call should parse in expression position")
+    assert(f3() == nil)
 end)
 
-tests:it("indexing nil with number", function()
-    local arr = nil
-    local result = arr?[1]
-    assert(result == nil, "should not error on nil[1]")
+tests:it("pure bracket optional chain", function()
+    local m = { { 10, 20 } }
+    assert(m?[1]?[2] == 20, "all-bracket chain should navigate")
+    assert(m?[2]?[1] == nil, "nil at the first bracket level short-circuits")
 end)
 
 tests:it("calling nil", function()

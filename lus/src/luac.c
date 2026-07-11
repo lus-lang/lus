@@ -590,7 +590,7 @@ static void PrintCode(const Proto *f) {
                pc + c + 2);
         break;
       case OP_ENDCATCH:
-        printf("%d %d %d", a, b, c);
+        printf("%d %d %d%s", a, b, c, ISK);
         printf(COMMENT "%d out; to %d", b - 1, pc + c + 2);
         break;
       case OP_SLICE:
@@ -609,6 +609,24 @@ static void PrintCode(const Proto *f) {
         printf("%d %d %d", a, b, c);
         printf(COMMENT "query %d sources %d operands plan k[%d]", b, c,
                EXTRAARG);
+        break;
+      case OP_PROVIDE:
+        printf("%d %d %d%s", a, b, c, ISK);
+        printf(COMMENT);
+        if (b == 0)
+          printf("all in");
+        else
+          printf("%d in", b - 1);
+        if (isk)
+          printf("; close");
+        break;
+      case OP_ENDDO:
+        printf("%d %d", a, b);
+        printf(COMMENT);
+        if (b == 0)
+          printf("all out");
+        else
+          printf("%d out", b - 1);
         break;
       case OP_FASTCALL:
         printf("%d %d %d", a, b, c);

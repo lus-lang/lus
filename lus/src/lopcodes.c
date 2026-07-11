@@ -189,7 +189,7 @@ LUAI_DDEF const lu_byte luaP_opmodes[NUM_OPCODES] = {
     ,
     opmode(0, 0, 0, 0, 0, iABx) /* OP_ERRNNIL */
     ,
-    opmode(0, 0, 0, 0, 0, iABC) /* OP_VARARGPREP */
+    opmode(0, 0, 1, 0, 1, iABC) /* OP_VARARGPREP */
     ,
     opmode(0, 0, 0, 0, 1, iABC) /* OP_CATCH */
     ,
@@ -197,11 +197,15 @@ LUAI_DDEF const lu_byte luaP_opmodes[NUM_OPCODES] = {
     ,
     opmode(0, 0, 0, 0, 1, iABC) /* OP_SLICE */
     ,
-    opmode(0, 0, 0, 0, 1, iABC) /* OP_FASTCALL */
+    opmode(0, 1, 0, 0, 1, iABC) /* OP_FASTCALL */
     ,
     opmode(0, 1, 0, 0, 1, iABC) /* OP_REQUIRE */
     ,
     opmode(0, 0, 0, 0, 1, iABC) /* OP_QUERY */
+    ,
+    opmode(0, 0, 0, 0, 1, iABC) /* OP_PROVIDE */
+    ,
+    opmode(0, 0, 0, 0, 0, iABC) /* OP_ENDDO */
     ,
     opmode(0, 0, 0, 0, 0, iAx) /* OP_EXTRAARG */
 };
@@ -215,6 +219,10 @@ int luaP_isOT(Instruction i) {
   OpCode op = GET_OPCODE(i);
   switch (op) {
     case OP_TAILCALL: return 1;
+    /* these two encode "all results" in B rather than C, and set 'top'
+    ** for the consuming open instruction that directly follows */
+    case OP_ENDCATCH:
+    case OP_ENDDO: return GETARG_B(i) == 0;
     default: return testOTMode(op) && GETARG_C(i) == 0;
   }
 }
@@ -228,6 +236,11 @@ int luaP_isIT(Instruction i) {
   OpCode op = GET_OPCODE(i);
   switch (op) {
     case OP_SETLIST: return testITMode(GET_OPCODE(i)) && GETARG_vB(i) == 0;
+    /* an open provide reads its value count from the 'top' set by the
+    ** open call or vararg that directly precedes it */
+    case OP_PROVIDE: return GETARG_B(i) == 0;
+    /* the k bit records that the inner expression maintained 'top' */
+    case OP_ENDCATCH: return GETARG_k(i);
     default: return testITMode(GET_OPCODE(i)) && GETARG_B(i) == 0;
   }
 }

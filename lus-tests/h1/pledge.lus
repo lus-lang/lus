@@ -34,9 +34,15 @@ tests:it("pledge returns true on success", function()
 end)
 
 tests:it("can grant fs:read permission", function()
-    -- Grant a new read permission
-    local result = pledge("fs:read=./lus-tests/framework.lus")
-    -- Should succeed (may return true or nil)
+    -- README.md lies outside every value granted so far, so the grant
+    -- must observably flip the file from denied to readable
+    local denied = catch io.open("README.md", "r")
+    assert(not denied, "file should be denied before the grant")
+    local result = pledge("fs:read=./README.md")
+    assert(result == true, "pledge should return true on success")
+    local f = io.open("README.md", "r")
+    assert(f ~= nil, "granted file should now be readable")
+    f:close()
 end)
 
 tests:it("require works with load permission", function()
@@ -68,21 +74,41 @@ tests:describe("seal behavior")
 tests:describe("permission string formats")
 
 tests:it("base permission without value", function()
-    -- "load" is a base permission without subpermission or value
-    local result = pledge("load")
-    -- Should succeed
+    -- "env" is a base permission with no subpermission or value, and it
+    -- has not been granted yet, so the grant must observably take effect
+    local denied = catch os.getenv("PATH")
+    assert(not denied, "getenv should be denied before the env grant")
+    local result = pledge("env")
+    assert(result == true, "pledge should return true on success")
+    local ok, value = catch os.getenv("PATH")
+    assert(ok, "getenv should succeed after the env grant")
+    assert(type(value) == "string", "PATH should be readable")
 end)
 
 tests:it("permission with subpermission", function()
-    -- "fs:read" has base "fs" and subpermission "read"
-    local result = pledge("fs:read=./test-dir/*")
-    -- Should succeed
+    -- "fs:read" has base "fs" and subpermission "read": granting the read
+    -- sub must allow reading the value and must NOT allow writable modes
+    local result = pledge("fs:read=./CHANGELOG.md")
+    assert(result == true, "pledge should return true on success")
+    local f = io.open("CHANGELOG.md", "r")
+    assert(f ~= nil, "read should be allowed after the fs:read grant")
+    f:close()
+    local ok = catch io.open("CHANGELOG.md", "r+")
+    assert(not ok, "fs:read grant must not allow a writable open mode")
 end)
 
 tests:it("permission with glob pattern", function()
-    -- Glob patterns in permission values
-    local result = pledge("fs:read=./lus-tests/**/*.lus")
-    -- Should succeed
+    -- The glob value must admit matching paths and keep rejecting
+    -- non-matching paths in the same directory
+    local denied = catch io.open("lus/src/lapi.h", "r")
+    assert(not denied, "header should be denied before the glob grant")
+    local result = pledge("fs:read=./lus/src/*.h")
+    assert(result == true, "pledge should return true on success")
+    local f = io.open("lus/src/lapi.h", "r")
+    assert(f ~= nil, "path matching the glob should be readable")
+    f:close()
+    local still_denied = catch io.open("lus/src/lapi.c", "r")
+    assert(not still_denied, "path not matching the glob must stay denied")
 end)
 
 -- ============================================
@@ -168,17 +194,31 @@ end)
 tests:describe("integration")
 
 tests:it("framework loads correctly with pledges", function()
-    -- The fact we got here means the framework loaded
-    assert(framework ~= nil, "framework should be loaded")
-    assert(type(framework.new) == "function", "framework.new should exist")
+    -- Load the framework from disk again under the active pledges,
+    -- proving fs:read and load cooperate to produce a working module
+    local f = io.open("lus-tests/framework.lus", "r")
+    assert(f ~= nil, "framework source should be readable under fs:read")
+    local src = f:read("a")
+    f:close()
+    assert(type(src) == "string" and #src > 0, "framework source should be non-empty")
+    local chunk = load(src, "@lus-tests/framework.lus")
+    assert(chunk ~= nil, "framework source should compile under the load pledge")
+    local fresh = chunk()
+    assert(type(fresh) == "table", "framework chunk should return a module table")
+    assert(type(fresh.new) == "function", "freshly loaded framework should expose new")
 end)
 
 tests:it("test file can use all framework features", function()
-    -- Verify framework features work under pledge
-    assert(type(tests.it) == "function")
-    assert(type(tests.describe) == "function")
-    assert(type(tests.skip) == "function")
-    assert(type(tests.soft) == "function")
+    -- Drive the framework's catch-based helpers against a live pledge
+    -- denial raised from C, so a broken helper or a vanished denial
+    -- both fail here
+    tests:assert_type(pledge, "function")
+    tests:assert_throws(function()
+        io.open("/etc/passwd", "r")
+    end, "denied")
+    local ok, err = catch io.open("/etc/passwd", "r")
+    tests:assert_false(ok)
+    tests:assert_contains(tostring(err), "fs:read")
 end)
 
 -- ============================================

@@ -1,0 +1,466 @@
+-- tpack2: error-and-limits coverage for string.pack, string.packsize and
+-- string.unpack. This suite ports the failure-mode half of PUC Lua's tpack
+-- test. It concentrates on integer width limits and sign extension, packing
+-- overflow diagnostics, size-prefixed and zero-terminated strings, padding
+-- and alignment options, endianness prefixes verified against the packed
+-- bytes, packsize rejecting variable-size formats, unpack position bounds,
+-- and float round trips including infinities, NaN and negative zero.
+-- The happy-path smoke tests live in tpack.lus and are not repeated here.
+
+global print, require, string, math, table, pledge
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local framework = require("lus-tests.framework")
+local tests = framework.new("tpack2")
+
+local pack = string.pack
+local packsize = string.packsize
+local unpack = string.unpack
+local rep = string.rep
+local byte = string.byte
+
+-- Whether the running platform packs "=" (native) integers little-endian.
+-- The first byte of the native encoding of 1 is 1 exactly when little-endian.
+local native_le = (byte(pack("=i2", 1), 1) == 1)
+
+------------------------------------------------------------------------
+-- Integer sizes i1 through i16 and their packsize
+------------------------------------------------------------------------
+
+tests:describe("integer sizes i1..i16")
+
+do
+    local size_cases = {}
+    for n = 1, 16 do
+        size_cases[n] = { n }
+    end
+    -- The packed size of iN and IN is exactly N bytes for every legal width.
+    tests:each("packsize of iN and IN equals N", size_cases, function(n)
+        tests:assert_equal(packsize("i" .. n), n)
+        tests:assert_equal(packsize("I" .. n), n)
+    end)
+end
+
+do
+    -- Unpacking an all-ones big-endian integer of any width yields -1 because
+    -- the top bit is set and the value sign extends into a Lua integer.
+    local signext_cases = {}
+    for n = 1, 16 do
+        signext_cases[n] = { n }
+    end
+    tests:each("all-ones iN sign extends to -1", signext_cases, function(n)
+        tests:assert_equal(unpack(">i" .. n, rep("\xFF", n)), -1)
+        tests:assert_equal(unpack("<i" .. n, rep("\xFF", n)), -1)
+    end)
+end
+
+do
+    -- Wide integers i9 through i16 round trip a value that needs more than
+    -- eight bytes of storage yet fits in a Lua integer.
+    local wide_cases = {}
+    for n = 9, 16 do
+        wide_cases[#wide_cases + 1] = { n }
+    end
+    tests:each("wide iN round trips a positive value", wide_cases, function(n)
+        local v = 0x0102030405
+        tests:assert_equal(unpack(">i" .. n, pack(">i" .. n, v)), v)
+        tests:assert_equal(unpack("<i" .. n, pack("<i" .. n, v)), v)
+    end)
+end
+
+tests:it("i0 width is out of limits", function()
+    tests:assert_throws(function() return pack("i0", 0) end, "out of limits")
+end)
+
+tests:it("i17 width is out of limits", function()
+    tests:assert_throws(function() return pack("i17", 0) end, "out of limits")
+    tests:assert_throws(function() return packsize("i17") end, "out of limits")
+end)
+
+tests:it("wide integer that does not fit reports the failure", function()
+    -- A 16-byte big-endian value with significant high bytes cannot be held in
+    -- a Lua integer, so unpack refuses it rather than truncating.
+    tests:assert_throws(function() return unpack(">i16", rep("\x7F", 16)) end,
+        "does not fit into Lua Integer")
+end)
+
+------------------------------------------------------------------------
+-- Packing overflow for each width
+------------------------------------------------------------------------
+
+tests:describe("packing overflow")
+
+do
+    -- Signed integer formats report "integer overflow" once the value no
+    -- longer fits in the requested width, on either side of the range.
+    local signed_overflow = {
+        { "b", 128 },
+        { "b", -129 },
+        { "i1", 200 },
+        { "h", 0x8000 },
+        { "i2", -0x8001 },
+        { "i3", 0x800000 },
+        { "i4", 0x80000000 },
+        { "i7", 1 << 55 },
+    }
+    tests:each("signed width overflow", signed_overflow, function(fmt, v)
+        tests:assert_throws(function() return pack(fmt, v) end, "integer overflow")
+    end)
+end
+
+do
+    -- Unsigned formats report "unsigned overflow" for values above the width
+    -- ceiling and for any negative value narrower than the full integer.
+    local unsigned_overflow = {
+        { "B", 256 },
+        { "B", -1 },
+        { "H", 65536 },
+        { "H", -1 },
+        { "I1", -1 },
+        { "I2", 0x10000 },
+        { "I4", 0x100000000 },
+        { "I7", -1 },
+    }
+    tests:each("unsigned width overflow", unsigned_overflow, function(fmt, v)
+        tests:assert_throws(function() return pack(fmt, v) end, "unsigned overflow")
+    end)
+end
+
+tests:it("non-integer value to an integer format is rejected", function()
+    tests:assert_throws(function() return pack("i", 1.5) end,
+        "no integer representation")
+end)
+
+tests:it("numeric string coerces into an integer format", function()
+    -- A string that names an integer is accepted through the usual coercion.
+    tests:assert_equal(unpack("i", pack("i", "37")), 37)
+end)
+
+------------------------------------------------------------------------
+-- Unsigned wraparound at the full integer width
+------------------------------------------------------------------------
+
+tests:describe("full-width unsigned wraparound")
+
+tests:it("J of -1 wraps and round trips", function()
+    -- The full-width unsigned formats represent -1 as all ones and read it
+    -- back as -1 through two's complement wraparound at 2^64.
+    tests:assert_equal(unpack("J", pack("J", -1)), -1)
+    tests:assert_equal(unpack("I8", pack("I8", -1)), -1)
+end)
+
+tests:it("J of -1 stores eight 0xFF bytes", function()
+    local s = pack("J", -1)
+    tests:assert_equal(#s, 8)
+    tests:assert_deep_equal({ byte(s, 1, 8) },
+        { 255, 255, 255, 255, 255, 255, 255, 255 })
+end)
+
+------------------------------------------------------------------------
+-- Size-prefixed strings s and sN
+------------------------------------------------------------------------
+
+tests:describe("size-prefixed strings")
+
+do
+    -- Every prefix width round trips a payload and reports the position past
+    -- the prefix plus the payload bytes.
+    tests:each("sN round trip", { { "s1", "hi", 4 }, { "s2", "hello", 8 },
+        { "s4", "hello", 10 }, { "s8", "abc", 12 } }, function(fmt, payload, endpos)
+        local packed = pack(fmt, payload)
+        local got, pos = unpack(fmt, packed)
+        tests:assert_equal(got, payload)
+        tests:assert_equal(pos, endpos)
+    end)
+end
+
+tests:it("bare s uses a native-size prefix and round trips", function()
+    local got = unpack("s", pack("s", "world"))
+    tests:assert_equal(got, "world")
+end)
+
+tests:it("s1 prefix byte records the payload length", function()
+    tests:assert_equal(byte(pack("s1", "abc"), 1), 3)
+end)
+
+tests:it("payload too large for the size prefix is rejected", function()
+    -- A 300-byte payload cannot be described by a single-byte length prefix.
+    tests:assert_throws(function() return pack("s1", rep("x", 300)) end,
+        "does not fit in given size")
+end)
+
+tests:it("missing prefix bytes report a short string", function()
+    tests:assert_throws(function() return unpack("s8", "ab") end,
+        "data string too short")
+end)
+
+tests:it("truncated s payload reports a short string", function()
+    -- A four-byte prefix that announces two bytes of payload backed by none.
+    tests:assert_throws(function() return unpack("s4", "\x00\x00") end,
+        "data string too short")
+end)
+
+------------------------------------------------------------------------
+-- Zero-terminated strings z
+------------------------------------------------------------------------
+
+tests:describe("zero-terminated strings")
+
+tests:it("z round trips and stores a terminator", function()
+    local s = pack("z", "hi")
+    tests:assert_equal(s, "hi\0")
+    tests:assert_equal(unpack("z", s), "hi")
+end)
+
+tests:it("embedded NUL in a z payload is rejected", function()
+    tests:assert_throws(function() return pack("z", "a\0b") end,
+        "string contains zeros")
+end)
+
+tests:it("z without a terminator is unfinished", function()
+    tests:assert_throws(function() return unpack("z", "abc") end,
+        "unfinished string")
+end)
+
+------------------------------------------------------------------------
+-- Fixed-size strings c
+------------------------------------------------------------------------
+
+tests:describe("fixed-size strings")
+
+tests:it("c payload longer than the size is rejected", function()
+    tests:assert_throws(function() return pack("c5", "toolong") end,
+        "longer than given size")
+end)
+
+tests:it("c without a size reports the missing size", function()
+    tests:assert_throws(function() return pack("c", "x") end, "missing size")
+end)
+
+tests:it("c0 packs and unpacks the empty string", function()
+    tests:assert_equal(pack("c0", ""), "")
+    tests:assert_equal(packsize("c0"), 0)
+end)
+
+------------------------------------------------------------------------
+-- Padding x and alignment X
+------------------------------------------------------------------------
+
+tests:describe("padding and alignment")
+
+tests:it("x emits zero padding bytes", function()
+    local s = pack("xxx")
+    tests:assert_equal(#s, 3)
+    tests:assert_deep_equal({ byte(s, 1, 3) }, { 0, 0, 0 })
+end)
+
+tests:it("X aligns the following item to eight bytes", function()
+    -- Under !8 the X option pads to the alignment of the i8 that names it,
+    -- so i1 then Xi8 then i2 occupies one plus seven padding plus two bytes.
+    tests:assert_equal(#pack("!8 i1 Xi8 i2", 7, 3), 10)
+    -- Without the X the i2 only needs two-byte alignment.
+    tests:assert_equal(#pack("!8 i1 i2", 7, 3), 4)
+end)
+
+tests:it("X with no following option is invalid", function()
+    tests:assert_throws(function() return pack("i1X", 7) end,
+        "invalid next option")
+end)
+
+tests:it("maximal alignment pads to the widest item", function()
+    -- A bare ! sets alignment to the widest native type, so a double after a
+    -- single byte lands on an eight-byte boundary.
+    tests:assert_equal(#pack("!i1 d", 1, 1.0), 16)
+    tests:assert_equal(packsize("!i1 d"), 16)
+end)
+
+tests:it("alignment that is not a power of two is rejected", function()
+    tests:assert_throws(function() return pack("!4 i3", 0) end,
+        "not power of 2")
+end)
+
+tests:it("alignment above the maximum is out of limits", function()
+    tests:assert_throws(function() return pack("!17", 1) end, "out of limits")
+    tests:assert_throws(function() return pack("!0", 1) end, "out of limits")
+end)
+
+------------------------------------------------------------------------
+-- Endianness prefixes verified against the packed bytes
+------------------------------------------------------------------------
+
+tests:describe("endianness")
+
+tests:it("little-endian writes least significant byte first", function()
+    tests:assert_deep_equal({ byte(pack("<i4", 0x01020304), 1, 4) },
+        { 4, 3, 2, 1 })
+end)
+
+tests:it("big-endian writes most significant byte first", function()
+    tests:assert_deep_equal({ byte(pack(">i4", 0x01020304), 1, 4) },
+        { 1, 2, 3, 4 })
+end)
+
+tests:it("native endianness matches the platform order", function()
+    local nat = pack("=i4", 0x01020304)
+    if native_le then
+        tests:assert_equal(nat, pack("<i4", 0x01020304))
+    else
+        tests:assert_equal(nat, pack(">i4", 0x01020304))
+    end
+end)
+
+tests:it("endianness switches per item within one format", function()
+    -- The first pair is little-endian and the second big-endian, so the four
+    -- bytes read 02 01 03 04.
+    tests:assert_deep_equal({ byte(pack("<i2>i2", 0x0102, 0x0304), 1, 4) },
+        { 2, 1, 3, 4 })
+end)
+
+------------------------------------------------------------------------
+-- packsize rejects variable-size formats and bad options
+------------------------------------------------------------------------
+
+tests:describe("packsize limits")
+
+do
+    -- Any variable-length option has no statically known size, so packsize
+    -- refuses the whole format.
+    local variable_formats = { { "z" }, { "s" }, { "s4" }, { "i4 s2" }, { "c3 z" } }
+    tests:each("packsize rejects variable-length option", variable_formats, function(fmt)
+        tests:assert_throws(function() return packsize(fmt) end,
+            "variable%-length format")
+    end)
+end
+
+tests:it("packsize rejects an unknown option", function()
+    tests:assert_throws(function() return packsize("y") end,
+        "invalid format option")
+end)
+
+------------------------------------------------------------------------
+-- Malformed format strings across all three entry points
+------------------------------------------------------------------------
+
+tests:describe("malformed formats")
+
+do
+    -- An unknown option letter is diagnosed identically by pack, unpack and
+    -- packsize so that a typo cannot slip through one entry point.
+    local bad_option = {
+        { function() return pack("y", 1) end },
+        { function() return unpack("y", "abcd") end },
+        { function() return packsize("y") end },
+    }
+    tests:each("invalid option letter is rejected", bad_option, function(fn)
+        tests:assert_throws(fn, "invalid format option")
+    end)
+end
+
+------------------------------------------------------------------------
+-- Unpack position bounds
+------------------------------------------------------------------------
+
+tests:describe("unpack position bounds")
+
+tests:it("a negative position counts back from the end", function()
+    -- Position -1 selects the final byte of the data.
+    tests:assert_equal(unpack("B", "abcde", -1), 101)
+end)
+
+tests:it("a position past the end is out of string", function()
+    tests:assert_throws(function() return unpack("B", "abcd", 6) end,
+        "initial position out of string")
+    tests:assert_throws(function() return unpack("i", "abcd", 10) end,
+        "initial position out of string")
+end)
+
+tests:it("reading beyond the data reports a short string", function()
+    -- Position five is the byte after the last, so a one-byte read runs off.
+    tests:assert_throws(function() return unpack("B", "abcd", 5) end,
+        "data string too short")
+    tests:assert_throws(function() return unpack("i8", "abc") end,
+        "data string too short")
+end)
+
+-- Reference Lua resolves the initial position through posrelat, which clamps
+-- position 0 up to position 1. Lus matches it, so position 0 reads from the
+-- first byte and returns the little-endian i4 value of "abcd" with a next
+-- position of 5.
+tests:it("initial position zero clamps to the first byte", function()
+    local value, nextpos = unpack("i4", "abcd", 0)
+    tests:assert_equal(value, 1684234849)
+    tests:assert_equal(nextpos, 5)
+end)
+
+-- A negative position whose magnitude exceeds the length also clamps to the
+-- start, again matching reference Lua's posrelat, so a far-negative position
+-- reads from the first byte just like position 1.
+tests:it("far negative position clamps to the first byte", function()
+    local value, nextpos = unpack("i4", "abcd", -100)
+    tests:assert_equal(value, 1684234849)
+    tests:assert_equal(nextpos, 5)
+end)
+
+------------------------------------------------------------------------
+-- Empty format
+------------------------------------------------------------------------
+
+tests:describe("empty format")
+
+tests:it("packing an empty format yields the empty string", function()
+    tests:assert_equal(pack(""), "")
+end)
+
+tests:it("unpacking an empty format returns the starting position", function()
+    -- With no options to read, unpack returns only the unchanged position.
+    tests:assert_equal(unpack("", "hello"), 1)
+    tests:assert_equal(unpack("", "hello", 3), 3)
+end)
+
+tests:it("empty format still validates its position", function()
+    -- Position two beyond the last byte is rejected even with nothing to read.
+    tests:assert_throws(function() return unpack("", "ab", 4) end,
+        "initial position out of string")
+end)
+
+------------------------------------------------------------------------
+-- Float formats f, d and n
+------------------------------------------------------------------------
+
+tests:describe("float round trips")
+
+do
+    local finite = {
+        { "f", 0.5 },
+        { "f", -1.25 },
+        { "d", 3.14159265358979 },
+        { "d", -2.5e300 },
+        { "n", 2.5 },
+    }
+    tests:each("finite float round trip", finite, function(fmt, v)
+        tests:assert_near(unpack(fmt, pack(fmt, v)), v, 1e-6 * (v < 0 and -v or v) + 1e-9)
+    end)
+end
+
+tests:it("positive and negative infinity round trip", function()
+    local inf = 1 / 0
+    tests:assert_true(unpack("d", pack("d", inf)) == inf)
+    tests:assert_true(unpack("d", pack("d", -inf)) == -inf)
+    tests:assert_true(unpack("f", pack("f", inf)) == inf)
+end)
+
+tests:it("NaN round trips as a value unequal to itself", function()
+    local nan = unpack("d", pack("d", 0 / 0))
+    tests:assert_true(nan ~= nan)
+end)
+
+tests:it("negative zero preserves its sign", function()
+    -- Negative zero compares equal to zero yet its reciprocal is negative
+    -- infinity, which is how the preserved sign bit becomes observable.
+    local nz = unpack("d", pack("d", -0.0))
+    tests:assert_equal(nz, 0.0)
+    tests:assert_true(1 / nz == -1 / 0)
+end)
+
+tests:finish()
