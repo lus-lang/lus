@@ -38,23 +38,23 @@ The table has one column per configuration.
 
 ## Results
 
-Wall times in seconds, best of fifteen runs that alternate between the configurations, ReleaseFast on an Apple silicon Mac, at the commit that inlined table accesses in native code (`spec/design/jit.md`). The legacy runtime was not built for this run.
+Wall times in seconds, best of fifteen runs that alternate between the configurations, ReleaseFast on an Apple silicon Mac, at the commit that sized small hash parts exactly and gave natives frameless leaves (`spec/design/tables.md`, `spec/design/jit.md`). The legacy runtime was not built for this run.
 
 | benchmark | lus | lus off | luajit -joff | luajit |
 |---|---:|---:|---:|---:|
-| arrays | 0.152 | 0.235 | 0.247 | 0.039 |
-| closures | 0.071 | 0.095 | 0.133 | 0.125 |
-| data | 0.032 | 0.034 | 0.273 | 0.051 |
-| fib | 0.028 | 0.061 | 0.036 | 0.010 |
-| gcpause | 0.398 | 0.410 | 0.458 | 0.409 |
-| interp | 1.010 | 1.021 | 2.001 | 1.280 |
-| loop | 0.143 | 0.220 | 0.250 | 0.092 |
-| methods | 0.184 | 0.294 | 0.241 | 0.007 |
-| patterns | 0.202 | 0.205 | 0.261 | 0.256 |
-| strings | 0.178 | 0.178 | 0.249 | 0.205 |
-| tables | 0.170 | 0.189 | 0.163 | 0.125 |
-| unicode | 0.065 | 0.079 | 0.032 | 0.005 |
+| arrays | 0.155 | 0.235 | 0.252 | 0.040 |
+| closures | 0.079 | 0.095 | 0.147 | 0.136 |
+| data | 0.036 | 0.041 | 0.303 | 0.058 |
+| fib | 0.032 | 0.066 | 0.038 | 0.011 |
+| gcpause | 0.410 | 0.421 | 0.497 | 0.432 |
+| interp | 0.948 | 0.938 | 2.031 | 1.296 |
+| loop | 0.149 | 0.225 | 0.253 | 0.093 |
+| methods | 0.184 | 0.242 | 0.247 | 0.005 |
+| patterns | 0.208 | 0.208 | 0.264 | 0.257 |
+| strings | 0.163 | 0.159 | 0.311 | 0.246 |
+| tables | 0.152 | 0.157 | 0.162 | 0.124 |
+| unicode | 0.040 | 0.049 | 0.032 | 0.004 |
 
-Native code runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. Those are the instructions that `methods`, `arrays`, `tables`, and `fib` spend their time in. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their two Lus columns agree. `unicode` measures `string.sub` on a long non-ASCII string, where Lus finds character positions and LuaJIT slices bytes. `tables` keeps three million tables alive, and the collector takes half of its time.
+Native code runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. Those are the instructions that `methods`, `arrays`, `tables`, and `fib` spend their time in. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their two Lus columns agree. `unicode` measures `string.sub` on a long non-ASCII string, where Lus finds character positions and interns each result, and LuaJIT slices bytes. It is the one row where the interpreter alone stays behind LuaJIT's interpreter. `tables` keeps three million tables alive, so its time goes to allocating and marking them.
 
 The `lus off` column moves by a few percent between builds with the code layout of the interpreter loop. Compare the two Lus columns of one build with each other.

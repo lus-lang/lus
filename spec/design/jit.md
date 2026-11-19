@@ -152,7 +152,7 @@ Every row runs at least as fast in native code as interpreted. The three rows th
 
 `unicode` gains in both Lus columns. A method call on a string used to look the method up through the generic index path, and the string fast path of the interpreter now covers it, which took the interpreter from 0.096 to 0.079. The rest of that row is the string library: finding a character position in a long non-ASCII string, and interning the result. It stays behind LuaJIT, which slices bytes.
 
-`tables` spends half its time in the collector, which marks three million tables that stay alive, and most of the rest in the allocation of those tables. That is where the distance to LuaJIT's interpreter on that row lies.
+`tables` spends half its time in the collector, which marks three million tables that stay alive, and most of the rest in the allocation of those tables. That is where the distance to LuaJIT's interpreter on that row lay. Exact hash parts for small records (`tables.md`), prefetching in the marker, and leaving the heap to the exit of the process (`gc.md`) later closed it, and frameless natives with inline method lookups took `methods` ahead of LuaJIT's interpreter as well. The table in `tests/bench/README.md` has the current numbers.
 
 The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`, `strings`) run the same in both tiers. Their two Lus columns differ by less than the noise of the measurement, which is about one percent, and over 31 alternating runs the medians of `strings` are 0.1794 interpreted and 0.1796 in native code.
 
