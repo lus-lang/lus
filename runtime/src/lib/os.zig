@@ -66,7 +66,7 @@ fn getenv(l: *Thread) Error!u32 {
 
 /// Makes a string from bytes that may not be valid UTF-8, replacing each
 /// invalid sequence with U+FFFD.
-fn lossyString(l: *Thread, bytes: []const u8) Error!Value {
+pub fn lossyString(l: *Thread, bytes: []const u8) Error!Value {
     if (wtf8.analyze(bytes).valid) return l.newStringValue(bytes);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(l.g.gpa);
@@ -143,7 +143,7 @@ fn fileError(l: *Thread, name: ?[]const u8, e: anyerror) Error!u32 {
 
 const ErrInfo = struct { msg: []const u8, errno: i64 };
 
-fn errnoOf(e: anyerror) ErrInfo {
+pub fn errnoOf(e: anyerror) ErrInfo {
     return switch (e) {
         error.FileNotFound => .{ .msg = "No such file or directory", .errno = 2 },
         error.AccessDenied, error.PermissionDenied => .{ .msg = "Permission denied", .errno = 13 },

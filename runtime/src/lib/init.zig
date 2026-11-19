@@ -18,6 +18,8 @@ pub fn openAll(l: *Thread) Error!void {
     try @import("json.zig").open(l);
     try @import("../vm/ext.zig").openEnums(l);
     try @import("vector.zig").registerString(l);
+    try @import("transcode.zig").register(l);
+    try @import("fs.zig").open(l);
     // package last, so it registers the libraries above as loaded.
     try @import("package.zig").open(l);
 }
@@ -30,4 +32,6 @@ test {
     _ = @import("utf8.zig");
     _ = @import("json.zig");
     _ = @import("pack.zig");
+    _ = @import("fs.zig");
+    _ = @import("transcode.zig");
 }
