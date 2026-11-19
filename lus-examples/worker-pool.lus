@@ -5,8 +5,8 @@ global worker, io, fs, pledge, print
 
 pledge("fs", "load", "seal")
 
--- A worker runs a script file in its own interpreter state. For a
--- self-contained example we write the worker's body out first.
+-- A worker runs a script file in its own interpreter state on the shared
+-- process pool. For a self-contained example we write its body out first.
 local body = [[
 global worker, ipairs
 local args = ...

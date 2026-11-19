@@ -6,7 +6,7 @@ If you _do_ make a PR, make sure to:
 
 - [**Have read the project goals.**](https://lus.dev/manual/introduction/#goals) It is possible that your suggestion is a _non-goal_ of the project and therefore barred from being accepted. Likewise, it is possible for your suggestion to go _against_ the goals, which will result in the same.
 - **Test, test, test.** Please follow our [testing protocol](/lus-tests/README.md) to ensure your changes aren't breaking anything and that you're not introducing a massive _performance_ regression as well. If you are introducing a new language feature, please also add a test for it.
-- **Document, document, document.** Please document your changes in the [CHANGELOG](/CHANGELOG.md). Changes should be simple one-line summaries; additional details can be added in the body of the PR.
+- **Document, document, document.** Please document your changes in the [CHANGELOG](/CHANGELOG.md). Changes should be simple one-line summaries. Additional details can be added in the body of the PR.
 - **Format your code.** There is a `.clang-format` file that dictates code formatting. Please pair it with an extension in your editor to automatically format your code when saving. [`clangd`](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd) is a good choice. No formatting, no merging.
 
 If you haven't done any of the above, either submit a draft PR until you have or simply don't submit a PR at all. When all else fails, [Louka Ménard Blondin](https://louka.sh) is the BDFL of the project and has the final say on whether or not your contribution will be accepted.
@@ -26,7 +26,7 @@ If you are using large language models to write code, or is suspected of doing s
 - **Can you _explain_ the code that you are submitting?**
   - Explaining is often a prerequisite of _understanding_. If you think that you can understand the code, but then you find yourself unable to explain it in moderate detail, you may not understand it as well as you think you do. Your PR will be rejected.
 
-If you pass, then your PR may be merged. I believe it acceptable to use LLMs to write code as long as it's used in an assistive capacity, not a replacement capacity. If you are using LLMs to be more productive, then you are welcome to do so, but please be transparent about it. As the old 1979 IBM adage goes, a computer can never be held accountable, therefore a computer must never make a management decision; in this case, the PR is a management decision.
+If you pass, then your PR may be merged. I believe it acceptable to use LLMs to write code as long as it's used in an assistive capacity, not a replacement capacity. If you are using LLMs to be more productive, then you are welcome to do so, but please be transparent about it. A 1979 IBM adage observes that a computer cannot be held accountable and therefore cannot make a management decision. A PR is a management decision.
 
 ## Code of Conduct
 

@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "node": "24.7.0",
+  "pnpm": "10.18.0",
+  "ovsx": "0.10.9",
+  "devcontainersCli": "0.88.0",
+  "devcontainerImage": "emscripten/emsdk@sha256:af45409f3199d88db4b1b03af0098532c8fb33a375ac257463eeb0a622870d06",
+  "alpineImage": "alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1",
+  "debianSmokeImage": "debian:12-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+  "wasmStackBytes": 1048576,
+  "meson": "1.11.2",
+  "ninja": "1.13.0",
+  "shellcheck": "0.9.0",
+  "pkgconfiglite": "0.28",
+  "innoSetup": "6.7.1",
+  "emscripten": "3.1.74",
+  "caresSource": {
+    "version": "1.34.8",
+    "url": "https://github.com/c-ares/c-ares/releases/download/v1.34.8/c-ares-1.34.8.tar.gz",
+    "sha256": "c222b6d681096f9444d2c4863d2c1174019e27cacca0a4a5c114d36dd7d7bf78"
+  },
+  "generatedData": {
+    "cldr": "48.2.1",
+    "cldrSourceSha256": "fa1ee8731ff106b66c003b55af19313a2498bd34ab4ae6261fb937c0b34f21d1",
+    "cldrGeneratedSha256": "33e49a5a3af5dd643c1fa22ac256f7e8dea9fed923e014bf98a96b9a6170b7d2",
+    "sqlite": {
+      "version": "3.53.4",
+      "release": "3530400",
+      "sourceSha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+      "cSha256": "9197bba4d4801d12edbf33be1bc697f134aa291c43c9513e44a25ca05db03e2c",
+      "headerSha256": "a398d9a0b477bfe89ad7c0e6657cddd961cace0b74e23189b3eab3a29bd792ce",
+      "patchSha256": "8773c8de30ceb37b0cf414d53fd0b1e2deb64a5ec7e27ae8943be8318a4e4c46"
+    },
+    "tzdata": "2026c",
+    "tzdataSourceSha256": "e4a178a4477f3d0ea77cc31828ff72aa38feff8d61aa13e7e99e142e9d902be4",
+    "tzcodeSourceSha256": "b1cffc3ace4c4c7cd0efba2f7add86ec3d0b79da48bcf03582671fd3c8feace8",
+    "tzdataGeneratedSha256": "29d6727fd182d766190d537d594651a36db024e9a7c9c30a2311c50e09aa3dcf"
+  },
+  "githubActions": {
+    "actions/checkout": {
+      "version": "4.2.2",
+      "sha": "11bd71901bbe5b1630ceea73d27597364c9af683"
+    },
+    "actions/download-artifact": {
+      "version": "4.3.0",
+      "sha": "d3f86a106a0bac45b974a628896c90dbdf5c8093"
+    },
+    "actions/setup-node": {
+      "version": "4.4.0",
+      "sha": "49933ea5288caeca8642d1e84afbd3f7d6820020"
+    },
+    "actions/upload-artifact": {
+      "version": "4.6.2",
+      "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02"
+    },
+    "ilammy/msvc-dev-cmd": {
+      "version": "1.13.0",
+      "sha": "0b201ec74fa43914dc39ae48a89fd1d8cb592756"
+    },
+    "mymindstorm/setup-emsdk": {
+      "version": "14",
+      "sha": "6ab9eb1bda2574c4ddb79809fc9247783eaf9021"
+    }
+  },
+  "vcpkgBaseline": "194964eec5d5601aef90b456d553412f0b2b0ea5"
+}

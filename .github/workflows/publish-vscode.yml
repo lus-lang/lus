@@ -3,87 +3,99 @@ name: Publish VSCode Extension
 on:
   release:
     types: [published]
-  # Manual escape hatch: run the packaging from the current branch
-  # tree against an existing release tag (release-event runs check
-  # out the frozen tag tree, so a packaging fix on main can only be
-  # exercised via dispatch).
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to package and upload (e.g. v1.6.0)"
+        description: "Stable release tag to publish, such as v1.7.0"
         required: true
         type: string
 
+env:
+  NODE_VERSION: "24.7.0"
+  OVSX_VERSION: "0.10.9"
+
 jobs:
   publish-vscode:
-    name: Publish Extension
+    name: Publish exact release VSIX
     if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write
-
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
-
-      - name: Install publishing tools
-        run: npm install -g @vscode/vsce ovsx
-
-      - name: Download WASM from release
-        run: |
-          mkdir -p lus-vscode/wasm
-          cd lus-vscode/wasm
-          gh release download "$TAG" \
-            --pattern "lus.node.js" --pattern "lus.wasm" \
-            --repo "${{ github.repository }}" || {
-            echo "WASM assets not found in release, building from source..."
-            cd ../../lus/wasm
-            ./build.sh node
-            cp dist/lus.node.js ../../lus-vscode/wasm/lus.node.js
-            cp dist/lus.wasm ../../lus-vscode/wasm/lus.wasm
-          }
-          [ -f lus.node.js ] && mv lus.node.js lus.js
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Download and verify release publication inputs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
-
-      - name: Prepare language server files
-        run: cp -r lus-language lus-vscode/lus-language
-
-      - name: Set version from release tag
         run: |
-          VERSION="${TAG#v}"
-          cd lus-vscode
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-        env:
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
-
-      - name: Build extension
-        run: |
-          cd lus-vscode
-          npm install
-          npm run prebuild
-          npm run build
-
-      - name: Package extension
-        run: |
-          cd lus-vscode
-          vsce package
-          echo "VSIX=$(ls *.vsix)" >> $GITHUB_ENV
-
-      - name: Publish to Open VSX
-        run: ovsx publish "lus-vscode/${{ env.VSIX }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid stable release tag: $TAG" >&2
+            exit 1
+          fi
+          version=${TAG#v}
+          vsix="lus-$version.vsix"
+          publisher="lus-$version-open-vsx-publisher.cjs"
+          mkdir anchor candidate
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/contents/release/manifest.json?ref=$TAG" \
+            --jq .content | base64 --decode > anchor/release-manifest.json
+          test -s anchor/release-manifest.json
+          expected_publisher_sha=$(node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const publisher = value.components?.vscodePublisher;
+            if (
+              value.schemaVersion !== 1 ||
+              publisher?.asset !== "lus-{version}-open-vsx-publisher.cjs" ||
+              !/^[0-9a-f]{64}$/.test(publisher?.sha256 ?? "")
+            ) throw new Error("tagged publisher anchor is invalid");
+            process.stdout.write(publisher.sha256);
+          ' anchor/release-manifest.json)
+          gh release download "$TAG" \
+            --repo "${{ github.repository }}" \
+            --pattern "$vsix" \
+            --pattern "$publisher" \
+            --pattern SHA256SUMS \
+            --dir candidate
+          cd candidate
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 3
+          test -s SHA256SUMS
+          test -s "$vsix"
+          test -s "$publisher"
+          test ! -L "$vsix"
+          test ! -L "$publisher"
+          : > PUBLISH-SUMS
+          for name in "$vsix" "$publisher"; do
+            awk -v name="$name" '$2 == name { print }' SHA256SUMS > INPUT-SUM
+            test "$(wc -l < INPUT-SUM)" -eq 1
+            grep -Eq "^[0-9a-f]{64}  ${name//./[.]}$" INPUT-SUM
+            cat INPUT-SUM >> PUBLISH-SUMS
+          done
+          sha256sum --check --strict PUBLISH-SUMS
+          test "$(sha256sum "$publisher" | awk '{ print $1 }')" = "$expected_publisher_sha"
+          chmod 0444 "$vsix" "$publisher" PUBLISH-SUMS
+          test "$(stat -c '%a' "$vsix")" = 444
+          test "$(stat -c '%a' "$publisher")" = 444
+          publisher_path="$PWD/$publisher"
+          test "$(node "$publisher_path" --version)" = "$OVSX_VERSION"
+          sha256sum --check --strict PUBLISH-SUMS
+          test "$(sha256sum "$publisher" | awk '{ print $1 }')" = "$expected_publisher_sha"
+          echo "VSIX_PATH=$PWD/$vsix" >> "$GITHUB_ENV"
+          echo "PUBLISHER_PATH=$publisher_path" >> "$GITHUB_ENV"
+          echo "PUBLISH_INPUTS_DIR=$PWD" >> "$GITHUB_ENV"
+          echo "EXPECTED_PUBLISHER_SHA256=$expected_publisher_sha" >> "$GITHUB_ENV"
+          echo "VSIX_SHA256=$(sha256sum "$vsix" | awk '{ print $1 }')" >> "$GITHUB_ENV"
+          echo "PUBLISHER_SHA256=$(sha256sum "$publisher" | awk '{ print $1 }')" >> "$GITHUB_ENV"
+      - name: Publish the verified bytes to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-
-      - name: Upload .vsix to release
+        run: node "$PUBLISHER_PATH" "$VSIX_PATH"
+      - name: Record published digest
         run: |
-          gh release upload "$TAG" \
-            "lus-vscode/${{ env.VSIX }}" \
-            --repo "${{ github.repository }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          cd "$PUBLISH_INPUTS_DIR"
+          sha256sum --check --strict PUBLISH-SUMS
+          test "$(sha256sum "$PUBLISHER_PATH" | awk '{ print $1 }')" = "$EXPECTED_PUBLISHER_SHA256"
+          echo "Published Open VSX artifact SHA-256 $VSIX_SHA256 with publisher $PUBLISHER_SHA256" >> "$GITHUB_STEP_SUMMARY"

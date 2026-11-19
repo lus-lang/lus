@@ -24,6 +24,10 @@ This is a monorepository containing the following projects:
 - [**`/lus-spec`**](https://github.com/lus-lang/lus/tree/main/lus-spec): Lus language specification
 - [**`/lus-install`**](https://github.com/lus-lang/lus/tree/main/lus-install): Install scripts for Lus
 
+## Examples
+
+[Browse the runnable examples](https://lus.dev/examples/) for focused language and standard library recipes. Browser-compatible examples open directly in the playground.
+
 ## License
 
 These works are licensed under the 0-clause BSD license. They may be used for any purpose, including commercial purposes, at no cost. [For more details, consult the license here.](/LICENSE.md)

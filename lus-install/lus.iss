@@ -1,8 +1,8 @@
 ; Inno Setup script for the Lus Windows installer (lus-setup.exe).
 ;
 ; Compiled in CI (see the installer job in .github/workflows/build.yml):
-;   ISCC.exe /DAppVer=1.6.0 /O<outdir> lus.iss
-; with the release lus.exe placed next to this file beforehand.
+;   ISCC.exe /DAppVer=1.7.0 /O<outdir> lus.iss
+; with the release lus.exe and lusc.exe placed next to this file beforehand.
 ;
 ; Per-user by default: installs to {localappdata}\Programs\Lus and
 ; edits the user PATH, with no admin rights and no UAC prompt. Run with
@@ -40,6 +40,10 @@ UninstallDisplayIcon={app}\lus.exe
 
 [Files]
 Source: "lus.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "lusc.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\*.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 ; Append {app} to PATH in the hive matching the install mode. The
 ; NeedsAddPath gate keeps reinstalls/upgrades from duplicating the

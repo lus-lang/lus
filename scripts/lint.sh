@@ -30,12 +30,14 @@ should_run() {
 # 1. version-not-released
 # ---------------------------------------------------------------------------
 if should_run version-not-released; then
-  MAJOR=$(awk '/^#define LUA_VERSION_MAJOR_N / {print $3}' lus/src/lua.h)
-  MINOR=$(awk '/^#define LUA_VERSION_MINOR_N / {print $3}' lus/src/lua.h)
-  RELEASE=$(awk '/^#define LUA_VERSION_RELEASE_N / {print $3}' lus/src/lua.h)
-  VERSION="$MAJOR.$MINOR.$RELEASE"
+  if ! VERSION=$(python3 scripts/release.py version 2>/dev/null); then
+    fail version-not-released "lua.h does not contain one canonical numeric version"
+    VERSION="invalid"
+  fi
 
-  if git tag -l "v$VERSION" | grep -q "v$VERSION"; then
+  if [ "$VERSION" = "invalid" ]; then
+    :
+  elif git tag -l "v$VERSION" | grep -q "v$VERSION"; then
     # The release tag itself (CI runs this lint on v* tag pushes) and
     # post-release commits that leave the runtime untouched (site,
     # docs, CI) are fine; new lus/ work under a released version is
@@ -56,10 +58,10 @@ fi
 # 2. version-consistency
 # ---------------------------------------------------------------------------
 if should_run version-consistency; then
-  MAJOR=$(awk '/^#define LUA_VERSION_MAJOR_N / {print $3}' lus/src/lua.h)
-  MINOR=$(awk '/^#define LUA_VERSION_MINOR_N / {print $3}' lus/src/lua.h)
-  RELEASE=$(awk '/^#define LUA_VERSION_RELEASE_N / {print $3}' lus/src/lua.h)
-  CANONICAL="$MAJOR.$MINOR.$RELEASE"
+  if ! CANONICAL=$(python3 scripts/release.py version 2>/dev/null); then
+    fail version-consistency "lua.h does not contain one canonical numeric version"
+    CANONICAL="invalid"
+  fi
 
   MESON_VER=$(sed -n "s/.*version: *'\([0-9]*\.[0-9]*\.[0-9]*\)'.*/\1/p" lus/meson.build)
   PKG_VER=$(sed -n 's/.*"version": *"\([0-9]*\.[0-9]*\.[0-9]*\)".*/\1/p' lus-vscode/package.json)
@@ -70,7 +72,9 @@ if should_run version-consistency; then
   [ "$PKG_VER" != "$CANONICAL" ] && MISMATCH="$MISMATCH package.json($PKG_VER)"
   [ "$CHANGELOG_VER" != "$CANONICAL" ] && MISMATCH="$MISMATCH CHANGELOG.md($CHANGELOG_VER)"
 
-  if [ -n "$MISMATCH" ]; then
+  if [ "$CANONICAL" = "invalid" ]; then
+    :
+  elif [ -n "$MISMATCH" ]; then
     fail version-consistency "lua.h=$CANONICAL but$MISMATCH"
   else
     pass version-consistency
@@ -95,15 +99,7 @@ if should_run stdlib-freshness; then
     fi
 
     if $RUN_CHECK; then
-      # Save current state, regenerate, and compare against the saved
-      # copy (not against git: on a dirty tree a consistent-but-
-      # uncommitted spec+data pair is fresh, and restoring from git
-      # would clobber the regenerated file).
-      cp lus-language/analysis/stdlib_data.lus /tmp/stdlib_data_backup.lus 2>/dev/null || true
-      node lus-spec/build-lsp.js >/dev/null 2>&1
-      if ! cmp -s /tmp/stdlib_data_backup.lus lus-language/analysis/stdlib_data.lus; then
-        # Restore the pre-check state
-        cp /tmp/stdlib_data_backup.lus lus-language/analysis/stdlib_data.lus 2>/dev/null || true
+      if ! node lus-spec/build-lsp.js --check >/dev/null 2>&1; then
         fail stdlib-freshness "stdlib_data.lus is stale; run: node lus-spec/build-lsp.js"
       else
         pass stdlib-freshness
@@ -115,7 +111,40 @@ if should_run stdlib-freshness; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. spec-frontmatter
+# 4. grammar-freshness
+# ---------------------------------------------------------------------------
+if should_run grammar-freshness; then
+  if ! command -v node &>/dev/null; then
+    if $HOOK_MODE; then
+      skip grammar-freshness "node not in PATH"
+    else
+      fail grammar-freshness "node not in PATH"
+    fi
+  else
+    RUN_CHECK=true
+    if $HOOK_MODE; then
+      STAGED_GRAMMAR=$(git diff --cached --name-only -- \
+        'lus-spec/stdlib/' \
+        'lus-textmate/' \
+        'lus-vscode/syntaxes/lus.tmLanguage.json' 2>/dev/null || true)
+      [ -z "$STAGED_GRAMMAR" ] && RUN_CHECK=false
+    fi
+
+    if $RUN_CHECK; then
+      if ! node lus-textmate/build-grammar.test.js >/dev/null 2>&1 \
+          || ! node lus-textmate/build-grammar.js --check >/dev/null 2>&1; then
+        fail grammar-freshness "TextMate grammars are stale. Run: node lus-textmate/build-grammar.js"
+      else
+        pass grammar-freshness
+      fi
+    else
+      skip grammar-freshness "no grammar inputs staged"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. spec-frontmatter
 # ---------------------------------------------------------------------------
 if should_run spec-frontmatter; then
   SPEC_ERRORS=""
@@ -148,7 +177,7 @@ if should_run spec-frontmatter; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. h1-coverage
+# 6. h1-coverage
 # ---------------------------------------------------------------------------
 if should_run h1-coverage; then
   # Extract registered test names from meson.build
@@ -179,7 +208,7 @@ if should_run h1-coverage; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. install-sh
+# 7. install-sh
 # ---------------------------------------------------------------------------
 if should_run install-sh; then
   if ! SH_ERR=$(sh -n lus-install/install.sh 2>&1); then
@@ -191,7 +220,59 @@ if should_run install-sh; then
       fail install-sh "$SC_ERR"
     fi
   else
-    skip install-sh "shellcheck not in PATH (sh -n passed)"
+    if $HOOK_MODE; then
+      skip install-sh "shellcheck not in PATH (sh -n passed)"
+    else
+      fail install-sh "shellcheck not in PATH"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8. release-metadata
+# ---------------------------------------------------------------------------
+if should_run release-metadata; then
+  if RELEASE_ERR=$(python3 scripts/release.py check 2>&1); then
+    pass release-metadata
+  else
+    fail release-metadata "$RELEASE_ERR"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 9. documentation
+# ---------------------------------------------------------------------------
+if should_run documentation; then
+  if DOC_ERR=$(python3 scripts/validate-docs.py 2>&1); then
+    pass documentation
+  else
+    fail documentation "$DOC_ERR"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 10. workflow-fail-closed
+# ---------------------------------------------------------------------------
+if should_run workflow-fail-closed; then
+  WORKFLOW_ALWAYS=$(grep -R -n -E 'always[[:space:]]*\(' \
+    --include='*.yml' --include='*.yaml' .github/workflows 2>/dev/null || true)
+  if [ -n "$WORKFLOW_ALWAYS" ]; then
+    fail workflow-fail-closed "workflow conditions use always():
+$WORKFLOW_ALWAYS"
+  else
+    pass workflow-fail-closed
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 11. release-self-tests
+# ---------------------------------------------------------------------------
+if should_run release-self-tests; then
+  if RELEASE_TEST_ERR=$(PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/lus-pycache" \
+      python3 scripts/test_release.py 2>&1); then
+    pass release-self-tests
+  else
+    fail release-self-tests "$RELEASE_TEST_ERR"
   fi
 fi
 

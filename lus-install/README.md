@@ -11,25 +11,27 @@ Sources for the official Lus installers (shipped since 1.6.0).
   ```
 
   POSIX sh only, because it must run on every platform Lus supports,
-  including the BSDs (where it prints build-from-source guidance
-  instead of installing). `scripts/lint.sh` shellchecks it; the
-  `install-test.yml` workflow runs it end-to-end against real
-  releases on Linux (glibc + musl) and macOS.
+  including the BSDs, where it prints build-from-source guidance.
+  `scripts/lint.sh` shellchecks it. The
+  `install-test.yml` workflow resolves a published unstable release
+  containing both tools and runs it end-to-end on Linux with glibc,
+  Linux with musl, and macOS.
 
 - **`lus.iss`**: Inno Setup script for `lus-setup.exe`, the Windows
-  installer. Compiled by the `installer` job in
-  `.github/workflows/build.yml`, which drops the release `lus.exe`
-  next to it, runs ISCC, and round-trips a silent install/uninstall
-  as a smoke test. Per-user by default; `/ALLUSERS` installs
-  machine-wide.
+  installer. Compiled by the `windows-installer` job in
+  `.github/workflows/build.yml`, which supplies the release `lus.exe`
+  and `lusc.exe`, license notices, and supporting files. The job runs
+  ISCC and round-trips a silent install and uninstall as a smoke test.
+  Installation is per-user by default. `/ALLUSERS` selects a
+  machine-wide installation.
 
 Local testing:
 
 ```sh
-sh lus-install/install.sh --dir /tmp/lus-bin              # latest stable
-sh lus-install/install.sh --version v1.5.1 --dir /tmp/b   # pinned tag
+sh lus-install/install.sh --help
+sh -n lus-install/install.sh
 shellcheck -s sh lus-install/install.sh
 ```
 
-The Windows installer can only be compiled on Windows (or in CI);
-`lus.iss` changes are exercised by the installer job's smoke tests.
+The Windows installer is compiled on Windows or in CI. The installer
+job exercises `lus.iss` changes with its smoke tests.

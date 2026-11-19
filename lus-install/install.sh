@@ -2,14 +2,13 @@
 # The Lus installer, served at https://lus.dev/install.sh
 #
 # Downloads the prebuilt binary for this machine from a GitHub
-# release of lus-lang/lus and installs it as `lus`.
+# release of lus-lang/lus and installs `lus` and `lusc`.
 #
 #   curl -fsSL https://lus.dev/install.sh | sh
 #
-# The script writes exactly one file: $INSTALL_DIR/lus. sudo is used
-# only for that copy, and only when the directory isn't writable.
-# Downloads are verified against the release's SHA256SUMS asset
-# (published since 1.6.0).
+# The script writes $INSTALL_DIR/lus and $INSTALL_DIR/lusc. sudo is
+# used only for those copies, and only when the directory is not writable.
+# Every download must have an entry in the release SHA256SUMS asset.
 #
 # Platforms without prebuilt binaries (BSDs, illumos, Intel Macs,
 # non-x86_64 Linux) get pointed at the build-from-source manual.
@@ -33,14 +32,16 @@ Usage:
   sh install.sh [--version TAG] [--dir DIR]
 
 Options:
-  --version TAG   install a specific release: v1.6.0, 1.6.0, or an
+  --version TAG   install a specific release: v1.7.0, 1.7.0, or an
                   unstable-<sha> pre-release tag (env: LUS_VERSION)
   --dir DIR       install directory, default /usr/local/bin
                   (env: LUS_INSTALL_DIR)
+  LUS_RELEASE_BASE_URL selects an HTTPS release mirror for qualification
+                  and managed distribution environments
   -h, --help      show this help
 
 When piping to sh, pass options as environment variables:
-  LUS_VERSION=v1.6.0 curl -fsSL https://lus.dev/install.sh | sh
+  LUS_VERSION=v1.7.0 curl -fsSL https://lus.dev/install.sh | sh
 EOF
 }
 
@@ -68,7 +69,7 @@ unsupported() {
   exit 1
 }
 
-# Sets OS and ASSET for this machine, or exits with guidance.
+# Sets OS, LUS_ASSET, and LUSC_ASSET for this machine, or exits with guidance.
 detect_platform() {
   OS=$(uname -s)
   ARCH=$(uname -m)
@@ -78,9 +79,11 @@ detect_platform() {
       case "$ARCH" in
         x86_64)
           if [ -e /lib/ld-musl-x86_64.so.1 ] || ldd --version 2>&1 | grep -qi musl; then
-            ASSET="lus-linux-musl"
+            LUS_ASSET="lus-linux-musl"
+            LUSC_ASSET="lusc-linux-musl"
           else
-            ASSET="lus-linux"
+            LUS_ASSET="lus-linux"
+            LUSC_ASSET="lusc-linux"
           fi
           ;;
         *) unsupported "Linux on $ARCH" ;;
@@ -88,12 +91,16 @@ detect_platform() {
       ;;
     Darwin)
       case "$ARCH" in
-        arm64) ASSET="lus-macos" ;;
+        arm64)
+          LUS_ASSET="lus-macos"
+          LUSC_ASSET="lusc-macos"
+          ;;
         x86_64)
           # An x86_64 shell under Rosetta is still an Apple Silicon
           # machine; the arm64 binary is the right one.
           if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
-            ASSET="lus-macos"
+            LUS_ASSET="lus-macos"
+            LUSC_ASSET="lusc-macos"
           else
             unsupported "Intel Macs (prebuilt lus-macos is Apple Silicon only)"
           fi
@@ -114,28 +121,23 @@ detect_platform() {
   esac
 }
 
-# verify_checksum FILE ASSET URLBASE: check FILE against the
-# release's SHA256SUMS. Missing checksums (releases before 1.6.0)
-# warn and continue; a mismatch is fatal.
+# verify_checksum FILE ASSET: check FILE against the downloaded
+# release SHA256SUMS. Missing or ambiguous entries are fatal.
 verify_checksum() {
-  if ! fetch "$3/SHA256SUMS" "$WORKDIR/SHA256SUMS" 2>/dev/null; then
-    warn "this release publishes no SHA256SUMS (added in 1.6.0); skipping verification"
-    return 0
-  fi
-
-  expected=$(awk -v name="$2" '$2 == name || $2 == "*" name { print $1; exit }' "$WORKDIR/SHA256SUMS")
-  if [ -z "$expected" ]; then
-    warn "no SHA256SUMS entry for $2; skipping verification"
-    return 0
-  fi
+  matches=$(awk -v name="$2" '$2 == name || $2 == "*" name { print $1 }' "$WORKDIR/SHA256SUMS")
+  count=$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$count" -eq 1 ] || die "SHA256SUMS must contain exactly one entry for $2"
+  expected=$matches
+  printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' ||
+    die "SHA256SUMS contains an invalid digest for $2"
+  expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
 
   if need sha256sum; then
     actual=$(sha256sum "$1" | awk '{ print $1 }')
   elif need shasum; then
     actual=$(shasum -a 256 "$1" | awk '{ print $1 }')
   else
-    warn "no sha256sum or shasum on this system; skipping verification"
-    return 0
+    die "sha256sum or shasum is required to verify the release"
   fi
 
   if [ "$actual" != "$expected" ]; then
@@ -156,9 +158,8 @@ run() {
   fi
 }
 
-# Place the downloaded binary as $INSTALL_DIR/lus (copy to a
-# temporary name, then atomic rename, which is safe over a running lus).
-install_binary() {
+# Place the downloaded binaries using temporary names and atomic renames.
+install_binaries() {
   SUDO=""
   if ! mkdir -p "$INSTALL_DIR" 2>/dev/null || [ ! -w "$INSTALL_DIR" ]; then
     if [ "$(id -u)" = "0" ]; then
@@ -173,9 +174,16 @@ Re-run with --dir DIR (or LUS_INSTALL_DIR=DIR) pointing at a writable directory.
     run mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
   fi
 
-  tmp="$INSTALL_DIR/.lus.tmp.$$"
-  if ! { run cp "$1" "$tmp" && run chmod 755 "$tmp" && run mv "$tmp" "$INSTALL_DIR/lus"; }; then
-    run rm -f "$tmp" 2>/dev/null
+  lus_tmp="$INSTALL_DIR/.lus.tmp.$$"
+  lusc_tmp="$INSTALL_DIR/.lusc.tmp.$$"
+  if ! {
+    run cp "$1" "$lus_tmp" &&
+    run cp "$2" "$lusc_tmp" &&
+    run chmod 755 "$lus_tmp" "$lusc_tmp" &&
+    run mv "$lus_tmp" "$INSTALL_DIR/lus" &&
+    run mv "$lusc_tmp" "$INSTALL_DIR/lusc"
+  }; then
+    run rm -f "$lus_tmp" "$lusc_tmp" 2>/dev/null
     die "failed to install to $INSTALL_DIR/lus"
   fi
 }
@@ -196,30 +204,46 @@ main() {
   detect_platform
 
   case "$VERSION" in
-    "")     URLBASE="https://github.com/$REPO/releases/latest/download" ;;
-    [0-9]*) VERSION="v$VERSION"
-            URLBASE="https://github.com/$REPO/releases/download/$VERSION" ;;
-    *)      URLBASE="https://github.com/$REPO/releases/download/$VERSION" ;;
+    [0-9]*) VERSION="v$VERSION" ;;
   esac
+
+  if [ -n "${LUS_RELEASE_BASE_URL:-}" ]; then
+    case "$LUS_RELEASE_BASE_URL" in
+      https://*) URLBASE=${LUS_RELEASE_BASE_URL%/} ;;
+      *) die "LUS_RELEASE_BASE_URL must use HTTPS" ;;
+    esac
+  else
+    case "$VERSION" in
+      "") URLBASE="https://github.com/$REPO/releases/latest/download" ;;
+      *)  URLBASE="https://github.com/$REPO/releases/download/$VERSION" ;;
+    esac
+  fi
 
   WORKDIR=$(mktemp -d) || die "failed to create a temporary directory"
   trap 'rm -rf "$WORKDIR"' EXIT
   trap 'exit 1' INT TERM HUP
 
-  info "downloading $ASSET (${VERSION:-latest release}) ..."
-  fetch "$URLBASE/$ASSET" "$WORKDIR/$ASSET" || die "download failed: $URLBASE/$ASSET"
-  verify_checksum "$WORKDIR/$ASSET" "$ASSET" "$URLBASE"
+  info "downloading Lus tools (${VERSION:-latest release}) ..."
+  fetch "$URLBASE/SHA256SUMS" "$WORKDIR/SHA256SUMS" ||
+    die "release checksum manifest is unavailable: $URLBASE/SHA256SUMS"
+  fetch "$URLBASE/$LUS_ASSET" "$WORKDIR/$LUS_ASSET" ||
+    die "download failed: $URLBASE/$LUS_ASSET"
+  fetch "$URLBASE/$LUSC_ASSET" "$WORKDIR/$LUSC_ASSET" ||
+    die "download failed: $URLBASE/$LUSC_ASSET"
+  verify_checksum "$WORKDIR/$LUS_ASSET" "$LUS_ASSET"
+  verify_checksum "$WORKDIR/$LUSC_ASSET" "$LUSC_ASSET"
 
   if [ "$OS" = "Darwin" ]; then
     # Defensive: curl downloads carry no quarantine attribute, but a
     # re-used browser download might.
-    xattr -c "$WORKDIR/$ASSET" 2>/dev/null || true
+    xattr -c "$WORKDIR/$LUS_ASSET" "$WORKDIR/$LUSC_ASSET" 2>/dev/null || true
   fi
 
-  install_binary "$WORKDIR/$ASSET"
+  install_binaries "$WORKDIR/$LUS_ASSET" "$WORKDIR/$LUSC_ASSET"
 
-  info "installed: $INSTALL_DIR/lus"
-  "$INSTALL_DIR/lus" -v 2>/dev/null || true
+  info "installed: $INSTALL_DIR/lus and $INSTALL_DIR/lusc"
+  "$INSTALL_DIR/lus" -v
+  "$INSTALL_DIR/lusc" -v
 
   case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;

@@ -16,6 +16,11 @@
 - Added queries: the new `@` expression builds a first-class lazy query value with contextual `where`, `select distinct`, `group by`, `having`, `order by`, `limit`, and `offset` clauses, runs over plain tables in memory or pushes down to SQLite as parameterized SQL, and is consumed with the new `query` iterator.
 - Added `debug.queryplan`, which renders a query's provider and push-down decisions as a string.
 - The C API gains `LUA_TQUERY` with `lus_toquery`, `lus_isquery`, a visitor over query sources, clauses, and expression nodes, and `lus_setqueryprovider` for registering native query providers, plus `lus_tosqlite` for the embedded SQLite connection.
+- The worker C API now exposes `WorkerState` as an opaque handle in `lua.h`, with explicit `lus_worker_retain` and `lus_worker_release` ownership.
+- Added `getsockname` to TCP servers and UDP sockets so code that binds port `0` can discover the selected address and port.
+- Added bounded TCP line and all-data receives. Lines default to 1 MiB, all-data reads default to 64 MiB, and either limit can be set per call.
+- The browser playground now runs programs in a dedicated Web Worker with a five-second execution limit and a 256 KiB output limit.
+- Release CI now assembles a canonical asset inventory with test and toolchain evidence, creates unstable prereleases from complete `main` builds, and creates draft candidates from version tags for maintainer review.
 - Made `tojson` ~4x faster on large documents by serializing into a single contiguous buffer instead of one Lua string per output piece.
 - Made `tocsv` serialize into a single contiguous buffer instead of one Lua string per field, delimiter, and newline.
 - Enum value accesses are now interned and no longer allocate a new object every time.

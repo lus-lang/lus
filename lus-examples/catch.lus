@@ -4,13 +4,13 @@
 
 global print, error, tonumber, type, pairs, tostring
 
--- Basic catch: returns (ok, result) or (nil, error_message)
+-- Basic catch returns (true, results...) or (false, error_object).
 local ok, value = catch (1 + 2)
 print("1 + 2:", ok, value)  --> true    3
 
 -- Catch an error
 local ok, err = catch error("Something went wrong!")
-print("Error caught:", ok, err)  --> nil    Something went wrong!
+print("Error caught:", ok, err)  --> false    Something went wrong!
 
 -- Practical: safe number parsing
 local function parse_number(str)

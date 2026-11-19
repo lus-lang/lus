@@ -1,3 +1,7 @@
 .ignore/
 *.out
-.pnpm-store
+.pnpm-store/
+.DS_Store
+__pycache__/
+*.pyc
+*.vsix
