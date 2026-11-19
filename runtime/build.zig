@@ -88,8 +88,17 @@ pub fn build(b: *std.Build) void {
     const shared_lib = embedLibrary(b, target, optimize, .dynamic, options, features);
     const lib_step = b.step("lib", "Build the C embedding libraries and install lus.h");
     const header = b.addInstallHeaderFile(b.path("include/lus.h"), "lus.h");
-    lib_step.dependOn(&b.addInstallArtifact(static_lib, .{}).step);
-    lib_step.dependOn(&b.addInstallArtifact(shared_lib, .{}).step);
+    // On Windows the static library and the import library of the DLL
+    // would share the name lus.lib, so the static one is lus_static.lib.
+    // The DLL keeps its debug info out of bin, where lus.pdb belongs to
+    // the interpreter.
+    const windows = target.result.os.tag == .windows;
+    lib_step.dependOn(&b.addInstallArtifact(static_lib, .{
+        .dest_sub_path = if (windows) "lus_static.lib" else null,
+    }).step);
+    lib_step.dependOn(&b.addInstallArtifact(shared_lib, .{
+        .pdb_dir = if (windows) .disabled else .default,
+    }).step);
     lib_step.dependOn(&header.step);
 
     // Small C hosts that exercise every part of the embedding interface.

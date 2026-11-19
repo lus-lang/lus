@@ -34,29 +34,43 @@ interface GitHubRelease {
   tarball_url: string
 }
 
-const ASSET_NAMES = {
+/*
+** Releases from 2.0 on publish one archive per target, named
+** lus-<tag>-<target>.tar.gz or .zip. Releases before 2.0 published one
+** binary per platform under the names in LEGACY_ASSET_NAMES.
+*/
+const TARGET_ASSETS = {
+  windows: "x86_64-windows.zip",
+  macos: "aarch64-macos.tar.gz",
+  linuxMusl: "x86_64-linux-musl.tar.gz",
+}
+
+const LEGACY_ASSET_NAMES = {
   windows: "lus-windows.exe",
   windowsInstaller: "lus-setup.exe",
   macos: "lus-macos",
   linuxGlibc: "lus-linux",
   linuxMusl: "lus-linux-musl",
-  wasmBinary: "lus.wasm",
-  checksums: "SHA256SUMS",
 }
 
 function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
   const assetMap = new Map(
     release.assets.map((a) => [a.name, a.browser_download_url])
   )
+  const target = (suffix: string) =>
+    assetMap.get(`lus-${release.tag_name}-${suffix}`)
 
   return {
-    windows: assetMap.get(ASSET_NAMES.windows),
-    windowsInstaller: assetMap.get(ASSET_NAMES.windowsInstaller),
-    macos: assetMap.get(ASSET_NAMES.macos),
-    linuxGlibc: assetMap.get(ASSET_NAMES.linuxGlibc),
-    linuxMusl: assetMap.get(ASSET_NAMES.linuxMusl),
-    wasmBinary: assetMap.get(ASSET_NAMES.wasmBinary),
-    checksums: assetMap.get(ASSET_NAMES.checksums),
+    windows:
+      target(TARGET_ASSETS.windows) ?? assetMap.get(LEGACY_ASSET_NAMES.windows),
+    windowsInstaller: assetMap.get(LEGACY_ASSET_NAMES.windowsInstaller),
+    macos: target(TARGET_ASSETS.macos) ?? assetMap.get(LEGACY_ASSET_NAMES.macos),
+    linuxGlibc: assetMap.get(LEGACY_ASSET_NAMES.linuxGlibc),
+    linuxMusl:
+      target(TARGET_ASSETS.linuxMusl) ??
+      assetMap.get(LEGACY_ASSET_NAMES.linuxMusl),
+    wasmBinary: assetMap.get("lus.wasm"),
+    checksums: assetMap.get("SHA256SUMS"),
     sourceZip: release.zipball_url,
     sourceTarball: release.tarball_url,
   }

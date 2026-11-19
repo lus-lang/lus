@@ -156,14 +156,21 @@ A state starts with no permissions. The host decides what scripts may do before 
 Once the host grants anything, scripts can pledge only what those grants cover. A host that wants to decide pledges interactively installs a request hook with `lus_onrequest`. The hook runs when a script pledges a capability that the host has neither granted nor rejected, and it returns 1 to allow the grant.
 
 ```c
+#include <stdio.h>
+#include "lus.h"
+
 static int ask(void *ud, lus_State *L, const char *capability, const char *value) {
+  (void)ud;
+  (void)L;
   printf("allow %s=%s? ", capability, value ? value : "");
   return getchar() == 'y';
 }
 
-lus_grant(L, "fs:read=/srv/data/*");
-lus_reject(L, "exec");
-lus_onrequest(L, ask, NULL);
+void configure(lus_State *L) {
+  lus_grant(L, "fs:read=/srv/data/*");
+  lus_reject(L, "exec");
+  lus_onrequest(L, ask, NULL);
+}
 ```
 
 An extension declares its own capabilities with `lus_defcapability`, and its C functions check them with `lus_require`, which pushes the standard permission error on failure, or `lus_allowed`, which only answers. Scripts then pledge the new capability like any built-in one. The value kind of a capability decides how a granted value matches a requested one: `LUS_CAP_NONE` takes no value, `LUS_CAP_PATH` matches canonical path globs, `LUS_CAP_HOST` matches hosts with an optional port and path, `LUS_CAP_PATTERN` matches a glob over an opaque string, and `LUS_CAP_CUSTOM` calls a matcher function.

@@ -32,7 +32,7 @@ The Linux builds link musl statically, so the same `lus` binary runs on any Linu
 An archive unpacks into three directories.
 
 - `bin/lus` is the interpreter. On Windows it is `bin/lus.exe`, and `bin/` also holds the shared library `lus.dll`.
-- `lib/` holds the static and the shared embedding library. On Linux these are `liblus.a` and `liblus.so`, on macOS `liblus.a` and `liblus.dylib`, and on Windows `lus.lib`.
+- `lib/` holds the static and the shared embedding library. On Linux these are `liblus.a` and `liblus.so`, on macOS `liblus.a` and `liblus.dylib`, and on Windows the static `lus_static.lib` and `lus.lib`, the import library for `bin/lus.dll`.
 - `include/lus.h` is the header of the [C API](/manual/api/c).
 
 A host program on Linux or macOS builds against an unpacked archive like this.

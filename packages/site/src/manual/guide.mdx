@@ -1256,6 +1256,8 @@ Every function of `lus.h` that can fail returns a status code, and an error neve
 ```c
 #include "lus.h"
 
+void report_error(const char *message);
+
 int run_work(lus_State *L) {
   int status;
   lus_getglobal(L, "work");
