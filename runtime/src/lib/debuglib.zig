@@ -8,6 +8,8 @@ const table = @import("../vm/table.zig");
 const ops = @import("../vm/ops.zig");
 const debug = @import("../vm/debug.zig");
 const aux = @import("aux.zig");
+const astexport = @import("../syntax/astexport.zig");
+const codegen = @import("../compile/codegen.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -29,6 +31,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "getregistry", .func = getregistry },
     .{ .name = "gethook", .func = gethook },
     .{ .name = "sethook", .func = sethook },
+    .{ .name = "parse", .func = parse },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -306,4 +309,109 @@ fn sethook(l: *Thread) Error!u32 {
     // Hooks arrive with the debugger interpreter loop (lus debug).
     _ = l;
     return 0;
+}
+
+// ---------------------------------------------------------------------
+// debug.parse
+
+/// `debug.parse(code [, chunkname [, options]])` returns the syntax tree
+/// of `code` as nested tables and nil, or nil and an error message. The
+/// options table takes `comments` and `recover`, both true by default.
+/// With `recover`, a parse that stops at an error still returns the tree
+/// read so far, with the errors listed in its `errors` array.
+fn parse(l: *Thread) Error!u32 {
+    // Source read in binary mode arrives as a vector.
+    const code = if (l.arg(1).tag == .vector) (try @import("vector.zig").checkVector(l, 1)).bytes.items else try aux.checkBytes(l, 1);
+    const chunkname = (try aux.optString(l, 2, "=(parse)")).?;
+    var opts: astexport.Options = .{ .chunkname = chunkname };
+    const o = l.arg(3);
+    if (o.tag == .table) {
+        const c = try aux.getField(l, o.as(Table), "comments");
+        if (!c.isNil()) opts.comments = c.truthy();
+        const r = try aux.getField(l, o.as(Table), "recover");
+        if (!r.isNil()) opts.recover = r.truthy();
+    }
+    var arena_state = std.heap.ArenaAllocator.init(l.g.gpa);
+    defer arena_state.deinit();
+    const checker: astexport.Checker = .{ .ctx = l.g, .check = checkChunk };
+    const res = astexport.run(l.g.gpa, arena_state.allocator(), code, opts, checker) catch return l.raiseMem();
+    switch (res) {
+        .fail => |msg| return aux.retFail(l, msg),
+        .tree => |root| {
+            // The tables are built with the collector paused, so that a
+            // table is safe before it is linked into its parent.
+            const g = l.g;
+            const was_stopped = g.gc_stopped;
+            g.gc_stopped = true;
+            defer g.gc_stopped = was_stopped;
+            const t = try nodeTable(l, root);
+            try l.push(Value.obj(.table, t));
+            try l.push(.nil);
+            return 2;
+        },
+    }
+}
+
+/// Compiles the parsed chunk to report the errors the reference parser
+/// raises while parsing (assignment to a constant, a missing label).
+fn checkChunk(ctx: *anyopaque, arena: std.mem.Allocator, chunk: @import("../syntax/ast.zig").Chunk, chunkname: []const u8) std.mem.Allocator.Error!?[]const u8 {
+    const g: *state.Global = @ptrCast(@alignCast(ctx));
+    const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname });
+    switch (r) {
+        .ok => return null,
+        .err => |m| {
+            defer g.gpa.free(m);
+            return try arena.dupe(u8, m);
+        },
+    }
+}
+
+fn astString(l: *Thread, s: []const u8) Error!Value {
+    const str = state.newStringIn(l.g, s) catch |e| switch (e) {
+        error.OutOfMemory => return l.raiseMem(),
+        error.InvalidUtf8 => blk: {
+            // A string literal of raw bytes: strings hold WTF-8, so each
+            // invalid sequence becomes U+FFFD.
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(l.g.gpa);
+            @import("../vm/wtf8.zig").appendLossy(l.g.gpa, &buf, s) catch return l.raiseMem();
+            break :blk state.newStringIn(l.g, buf.items) catch return l.raiseMem();
+        },
+    };
+    return Value.obj(.string, str);
+}
+
+fn astValue(l: *Thread, v: astexport.Val) Error!Value {
+    return switch (v) {
+        .int => |i| Value.int(i),
+        .float => |f| Value.float(f),
+        .str => |s| try astString(l, s),
+        .boolean => |b| Value.boolean(b),
+        .node => |n| Value.obj(.table, try nodeTable(l, n)),
+        .list => |list| Value.obj(.table, try listTable(l, list)),
+    };
+}
+
+fn listTable(l: *Thread, list: []const *astexport.Node) Error!*Table {
+    const t = try l.newTable(list.len, 0);
+    for (list, 0..) |n, i| {
+        try ops.rawSet(l, t, Value.int(@intCast(i + 1)), Value.obj(.table, try nodeTable(l, n)));
+    }
+    return t;
+}
+
+fn nodeTable(l: *Thread, n: *const astexport.Node) Error!*Table {
+    const t = try l.newTable(0, n.fields.items.len + 6);
+    if (n.type) |ty| try aux.setField(l, t, "type", try astString(l, ty));
+    try aux.setField(l, t, "line", Value.int(n.line));
+    try aux.setField(l, t, "column", Value.int(n.column));
+    if (n.endline > 0) {
+        try aux.setField(l, t, "endline", Value.int(n.endline));
+        try aux.setField(l, t, "endcolumn", Value.int(n.endcolumn));
+    }
+    for (n.fields.items) |f| try aux.setField(l, t, f.key, try astValue(l, f.val));
+    if (n.children.items.len > 0) {
+        try aux.setField(l, t, "children", Value.obj(.table, try listTable(l, n.children.items)));
+    }
+    return t;
 }

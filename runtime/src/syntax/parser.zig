@@ -17,6 +17,8 @@ pub const Diagnostic = struct {
     message: []const u8,
     line: u32,
     span: Span,
+    /// Index of the current token when the error was raised.
+    tok: u32 = 0,
 };
 
 pub const Options = struct {
@@ -35,9 +37,21 @@ pub const Parser = struct {
     depth: u32 = 0,
     /// Nesting of do-expressions in the current function, for `provide`.
     do_depth: u32 = 0,
+    /// Nesting of loops in the current function, for `break`.
+    loop_depth: u32 = 0,
     in_query: bool = false,
     diag: ?Diagnostic = null,
     chunkname: []const u8,
+    /// Error recovery for the tooling (`debug.parse`). A token that
+    /// cannot start a statement becomes a `recovered` statement and the
+    /// parser skips to the next synchronization token. A block closer
+    /// with no open block at the top level is recovered the same way.
+    recover: bool = false,
+    /// Statements of the main chunk, kept here so that they survive a
+    /// syntax error and the tooling can report a partial tree.
+    top: std.ArrayList(*ast.Stat) = .empty,
+    /// Every recovered statement, in the order the parser created them.
+    recovered: std.ArrayList(*ast.Stat) = .empty,
 
     // -----------------------------------------------------------------
     // Token helpers
@@ -79,8 +93,16 @@ pub const Parser = struct {
             .interp_end => "<interp_end>",
             .interp_simple => "<interp_simple>",
             .name, .string, .integer, .float, .bigint, .decimal => try std.fmt.allocPrint(p.arena, "'{s}'", .{p.src[t.span.start..t.span.end]}),
+            .unknown => try p.unknownDesc(t),
             else => try std.fmt.allocPrint(p.arena, "'{s}'", .{token.describe(t.tag)}),
         };
+    }
+
+    /// An unrecognized byte in quotes, or its code when not printable.
+    fn unknownDesc(p: *Parser, t: Token) ![]const u8 {
+        const c = p.src[t.span.start];
+        if (std.ascii.isPrint(c)) return std.fmt.allocPrint(p.arena, "'{c}'", .{c});
+        return std.fmt.allocPrint(p.arena, "'<\\{d}>'", .{c});
     }
 
     /// Syntax error near the current token.
@@ -88,7 +110,7 @@ pub const Parser = struct {
         const t = p.cur();
         const near = try p.tokenDesc(t);
         const msg = try std.fmt.allocPrint(p.arena, fmt ++ " near {s}", args ++ .{near});
-        p.diag = .{ .message = msg, .line = t.line, .span = t.span };
+        p.diag = .{ .message = msg, .line = t.line, .span = t.span, .tok = p.pos };
         return error.SyntaxError;
     }
 
@@ -96,7 +118,7 @@ pub const Parser = struct {
     pub fn errSem(p: *Parser, comptime fmt: []const u8, args: anytype) Error {
         const msg = try std.fmt.allocPrint(p.arena, fmt, args);
         const t = if (p.pos == 0) p.cur() else p.toks[p.pos - 1];
-        p.diag = .{ .message = msg, .line = t.line, .span = t.span };
+        p.diag = .{ .message = msg, .line = t.line, .span = t.span, .tok = p.pos };
         return error.SyntaxError;
     }
 
@@ -162,21 +184,102 @@ pub const Parser = struct {
     }
 
     fn block(p: *Parser) Error!*ast.Block {
+        return p.blockIn(false);
+    }
+
+    /// The body of a loop, where `break` is allowed.
+    fn loopBody(p: *Parser) Error!*ast.Block {
+        p.loop_depth += 1;
+        defer p.loop_depth -= 1;
+        return p.blockIn(false);
+    }
+
+    /// Parses a statement list. The main chunk (`top`) collects its
+    /// statements in `p.top`.
+    fn blockIn(p: *Parser, top: bool) Error!*ast.Block {
         const start = p.cur().span;
-        var stats: std.ArrayList(*ast.Stat) = .empty;
-        while (!p.blockFollow(true)) {
+        var local: std.ArrayList(*ast.Stat) = .empty;
+        const stats = if (top) &p.top else &local;
+        while (true) {
+            if (p.blockFollow(true)) {
+                if (top and p.recover) switch (p.tag()) {
+                    .kw_end, .kw_else, .kw_elseif, .kw_until => {
+                        try stats.append(p.arena, try p.recoveredStat(" (no matching block)"));
+                        _ = p.advance();
+                        continue;
+                    },
+                    else => {},
+                };
+                break;
+            }
             if (p.tag() == .kw_return or p.tag() == .kw_provide) {
                 try stats.append(p.arena, try p.statement());
                 break; // last statement
+            }
+            if (p.recover and !canStartStatement(p.tag())) {
+                try stats.append(p.arena, try p.recoveredStat(""));
+                while (!isSyncToken(p.tag())) _ = p.advance();
+                _ = p.accept(.semicolon);
+                continue;
             }
             try stats.append(p.arena, try p.statement());
         }
         const end_span = if (p.pos == 0) start else p.toks[p.pos - 1].span;
         return p.new(ast.Block, .{
-            .stats = try stats.toOwnedSlice(p.arena),
+            .stats = if (top) try p.arena.dupe(*ast.Stat, stats.items) else try stats.toOwnedSlice(p.arena),
             .span = .{ .start = start.start, .end = @max(start.start, end_span.end) },
             .end_line = p.cur().line,
         });
+    }
+
+    // -----------------------------------------------------------------
+    // Error recovery
+
+    fn canStartStatement(t: Tag) bool {
+        return switch (t) {
+            .semicolon, .kw_if, .kw_while, .kw_do, .kw_for, .kw_repeat, .kw_function, .kw_local, .kw_global, .dbcolon, .kw_return, .kw_provide, .kw_break, .kw_continue, .kw_catch, .kw_goto, .name, .lparen => true,
+            else => false,
+        };
+    }
+
+    fn isSyncToken(t: Tag) bool {
+        return switch (t) {
+            .semicolon, .kw_end, .kw_else, .kw_elseif, .kw_until, .kw_return, .kw_local, .kw_function, .kw_if, .kw_while, .kw_for, .kw_repeat, .kw_do, .kw_break, .kw_goto, .eof => true,
+            else => false,
+        };
+    }
+
+    /// Records a recovered statement for the current token. The message
+    /// reads "unexpected 'X'", where X names the token the way the
+    /// reference parser does: symbols and keywords keep their own quotes
+    /// and other tokens are named by their class.
+    fn recoveredStat(p: *Parser, suffix: []const u8) Error!*ast.Stat {
+        const t = p.cur();
+        const name: []const u8 = switch (t.tag) {
+            .name => "<name>",
+            .string => "<string>",
+            .integer => "<integer>",
+            .float, .bigint, .decimal => "<number>",
+            .interp_begin => "<interp_begin>",
+            .interp_mid => "<interp_mid>",
+            .interp_end => "<interp_end>",
+            .interp_simple => "<interp_simple>",
+            .eof => "<eof>",
+            .unknown => try p.unknownDesc(t),
+            else => try std.fmt.allocPrint(p.arena, "'{s}'", .{token.describe(t.tag)}),
+        };
+        const msg = try std.fmt.allocPrint(p.arena, "unexpected '{s}'{s}", .{ name, suffix });
+        const s = try p.new(ast.Stat, .{ .span = t.span, .line = t.line, .kind = .{ .recovered = msg } });
+        try p.recovered.append(p.arena, s);
+        return s;
+    }
+
+    fn setPartial(p: *Parser, partial: *Partial, chunkname: []const u8) void {
+        partial.stats = p.top.items;
+        partial.recovered = p.recovered.items;
+        var d = p.diag.?;
+        d.message = std.fmt.allocPrint(p.arena, "{s}:{d}: {s}", .{ chunkDisplay(p.arena, chunkname), d.line, d.message }) catch d.message;
+        partial.diag = d;
     }
 
     // -----------------------------------------------------------------
@@ -203,7 +306,7 @@ pub const Parser = struct {
             .kw_for => return p.forStat(),
             .kw_repeat => {
                 _ = p.advance();
-                const b = try p.block();
+                const b = try p.loopBody();
                 _ = try p.expectMatch(.kw_until, .kw_repeat, line);
                 const cond = try p.expr();
                 return p.mkStat(t.span, line, .{ .repeat_ = .{ .body = b, .cond = cond } });
@@ -238,18 +341,19 @@ pub const Parser = struct {
                 var vals: []*ast.Expr = &.{};
                 if (!p.blockFollow(true) and p.tag() != .semicolon) vals = try p.exprList();
                 _ = p.accept(.semicolon);
-                if (!p.blockFollow(true)) return p.errNear("'end' expected", .{});
+                // The block ends here. Whatever follows is reported by
+                // the construct that encloses the block.
                 return p.mkStat(t.span, line, .{ .return_ = vals });
             },
             .kw_provide => {
+                if (p.do_depth == 0) return p.errNear("'provide' outside do expression", .{});
                 _ = p.advance();
-                if (p.do_depth == 0) return p.errSem("'provide' outside do expression", .{});
                 var vals: []*ast.Expr = &.{};
-                if (!p.blockFollow(true)) vals = try p.exprList();
-                if (!p.blockFollow(true)) return p.errNear("'end' expected", .{});
+                if (!p.blockFollow(true) and p.tag() != .semicolon) vals = try p.exprList();
                 return p.mkStat(t.span, line, .{ .provide = vals });
             },
             .kw_break => {
+                if (p.loop_depth == 0) return p.errNear("break outside loop", .{});
                 _ = p.advance();
                 return p.mkStat(t.span, line, .break_);
             },
@@ -336,7 +440,7 @@ pub const Parser = struct {
         _ = p.advance();
         const cond = try p.condition();
         _ = try p.expect(.kw_do);
-        const b = try p.block();
+        const b = try p.loopBody();
         _ = try p.expectMatch(.kw_end, .kw_while, line);
         return p.mkStat(start, line, .{ .while_ = .{ .cond = cond, .body = b } });
     }
@@ -390,7 +494,7 @@ pub const Parser = struct {
             var step: ?*ast.Expr = null;
             if (p.accept(.comma)) step = try p.expr();
             _ = try p.expect(.kw_do);
-            const b = try p.block();
+            const b = try p.loopBody();
             _ = try p.expectMatch(.kw_end, .kw_for, line);
             return p.mkStat(start, line, .{ .numeric_for = .{ .name = n1, .start = s, .limit = lim, .step = step, .body = b } });
         }
@@ -401,7 +505,7 @@ pub const Parser = struct {
         _ = try p.expect(.kw_in);
         const exprs = try p.exprList();
         _ = try p.expect(.kw_do);
-        const b = try p.block();
+        const b = try p.loopBody();
         _ = try p.expectMatch(.kw_end, .kw_for, line);
         return p.mkStat(start, line, .{ .generic_for = .{ .names = try names.toOwnedSlice(p.arena), .exprs = exprs, .body = b } });
     }
@@ -581,6 +685,9 @@ pub const Parser = struct {
         const saved_do = p.do_depth;
         p.do_depth = 0;
         defer p.do_depth = saved_do;
+        const saved_loop = p.loop_depth;
+        p.loop_depth = 0;
+        defer p.loop_depth = saved_loop;
         const b = try p.block();
         const end_line = p.cur().line;
         _ = try p.expectMatch(.kw_end, .kw_function, line);
@@ -970,6 +1077,8 @@ pub const Parser = struct {
                     if (p.isName("as")) {
                         _ = p.advance();
                         alias = try p.expectName();
+                    } else if (!namesItself(e, q.sources)) {
+                        return p.errSem("'as' name expected for this projection", .{});
                     }
                     try items.append(p.arena, .{ .expr = e, .alias = alias });
                     if (items.items.len > 32) return p.errSem("query too complex", .{});
@@ -1020,6 +1129,22 @@ pub const Parser = struct {
         if (q.sources.len > 1 and q.select == null) return p.errSem("a join requires a 'select' clause", .{});
         q.span = .{ .start = start.span.start, .end = p.toks[p.pos - 1].span.end };
         return p.mkExpr(start.span, start.line, .{ .query = q });
+    }
+
+    /// A projection without `as` must name itself: a row variable or a
+    /// column of one (`p` or `p.name`).
+    fn namesItself(e: *ast.QExpr, sources: []const ast.QSource) bool {
+        switch (e.kind) {
+            .paren => |inner| return namesItself(inner, sources),
+            .chain => |names| {
+                if (names.len > 2) return false;
+                for (sources) |s| {
+                    if (std.mem.eql(u8, s.alias.text, names[0].text)) return true;
+                }
+                return false;
+            },
+            else => return false,
+        }
     }
 
     fn querySource(p: *Parser) Error!ast.QSource {
@@ -1174,6 +1299,43 @@ pub const Result = struct {
     chunk: ast.Chunk,
 };
 
+/// What a parse for the tooling leaves behind, including when it stops
+/// at a syntax error.
+pub const Partial = struct {
+    /// Completed statements of the main chunk.
+    stats: []*ast.Stat = &.{},
+    /// Recovered statements, in the order they were created.
+    recovered: []*ast.Stat = &.{},
+    /// The error, with the message formatted as "chunk:line: message".
+    diag: ?Diagnostic = null,
+};
+
+/// Parses an already lexed token stream for the tooling. With `recover`
+/// set, invalid statement starts become `recovered` statements. On a
+/// syntax error `partial` describes what was parsed before it.
+pub fn parseLexed(arena: Allocator, src: []const u8, lexed: lexer.Result, opts: Options, recover: bool, partial: *Partial) Error!ast.Chunk {
+    var p = Parser{
+        .arena = arena,
+        .src = src,
+        .toks = lexed.tokens,
+        .payloads = lexed.payloads,
+        .chunkname = opts.chunkname,
+        .recover = recover,
+    };
+    const b = p.blockIn(true) catch |e| {
+        if (e == error.SyntaxError) p.setPartial(partial, opts.chunkname);
+        return e;
+    };
+    if (p.tag() != .eof) {
+        _ = p.errNear("<eof> expected", .{}) catch {};
+        p.setPartial(partial, opts.chunkname);
+        return error.SyntaxError;
+    }
+    partial.stats = b.stats;
+    partial.recovered = p.recovered.items;
+    return .{ .block = b, .source = src, .comments = lexed.comments };
+}
+
 /// Parses a whole chunk. On failure `diag` holds a message already
 /// formatted as "chunk:line: message".
 pub fn parse(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, diag: *?[]const u8) Error!ast.Chunk {
@@ -1201,7 +1363,7 @@ pub fn parse(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, d
         return e;
     };
     if (p.tag() != .eof) {
-        _ = p.errNear("'<eof>' expected", .{}) catch {};
+        _ = p.errNear("<eof> expected", .{}) catch {};
         const d = p.diag.?;
         diag.* = try std.fmt.allocPrint(arena, "{s}:{d}: {s}", .{ chunkDisplay(arena, opts.chunkname), d.line, d.message });
         return error.SyntaxError;

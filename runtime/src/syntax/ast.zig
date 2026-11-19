@@ -233,6 +233,10 @@ pub const Stat = struct {
         goto_: Name,
         label: Name,
         catch_: Catch,
+        /// A token the recovering parser could not start a statement
+        /// with, and the message describing it. Only the tooling parse
+        /// (`debug.parse`) produces it, and the compiler skips it.
+        recovered: []const u8,
     };
 };
 

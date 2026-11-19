@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lus.dev/schema/ast.schema.json",
+  "title": "Lus syntax tree",
+  "description": "The syntax tree that debug.parse returns as nested tables and that lus ast prints as JSON. Lines and columns are 1-based. A column counts bytes. A node starts on the line where the lexer stood after reading the token that opens the node, at the column where that token begins. An end position, when present, is the line and start column of the last token of the node, or the line and column of the last byte for a literal. A list field is absent when the list is empty.",
+  "$ref": "#/$defs/chunk",
+  "$defs": {
+    "position": {
+      "type": "object",
+      "properties": {
+        "line": {"type": "integer", "minimum": 1},
+        "column": {"type": "integer", "minimum": 1},
+        "endline": {"type": "integer", "minimum": 1},
+        "endcolumn": {"type": "integer", "minimum": 0}
+      },
+      "required": ["line", "column"]
+    },
+    "chunk": {
+      "description": "The root. Its children are the statements of the main chunk.",
+      "allOf": [{"$ref": "#/$defs/node"}],
+      "properties": {
+        "type": {"const": "chunk"},
+        "comments": {
+          "description": "Every comment, in source order. Present when the comments option is on and the source has comments.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/comment"}
+        },
+        "errors": {
+          "description": "Parse errors, present only when there are some. Recovered statements come first, in source order. When parsing stopped at an error, that error comes last with column 1 and the full message, and the tree holds the statements finished before it.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/error"}
+        }
+      }
+    },
+    "comment": {
+      "allOf": [{"$ref": "#/$defs/position"}],
+      "properties": {
+        "islong": {"type": "boolean", "description": "True for a long bracket comment."},
+        "text": {"type": "string", "description": "The text after the `--` marker, or the content between the long brackets."}
+      },
+      "required": ["endline", "endcolumn", "islong", "text"]
+    },
+    "error": {
+      "allOf": [{"$ref": "#/$defs/position"}],
+      "properties": {
+        "message": {"type": "string"}
+      },
+      "required": ["message"]
+    },
+    "nodeList": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "node": {
+      "allOf": [{"$ref": "#/$defs/position"}],
+      "properties": {
+        "type": {
+          "enum": [
+            "chunk", "local", "global", "assign", "if", "elseif", "else", "while", "repeat",
+            "fornum", "forgen", "funcstat", "localfunc", "return", "callstat", "break",
+            "continue", "goto", "label", "catchstat", "provide", "do", "error_stat",
+            "nil", "true", "false", "number", "string", "vararg", "name", "index", "field",
+            "binop", "unop", "table", "tablefield", "funcexpr", "callexpr", "methodcall",
+            "enum", "doexpr", "catchexpr", "slice", "interp",
+            "query", "qsource", "qclause", "qitem", "qstar"
+          ]
+        },
+        "children": {
+          "description": "Statements of a block (chunk, do, while, repeat, if, elseif, else, fornum, forgen, function nodes, doexpr), elseif and else nodes of an if, or the fields of a table.",
+          "$ref": "#/$defs/nodeList"
+        },
+        "value": {
+          "description": "The value of a number, string, name, goto, or label. A number written with a bigint or decimal suffix carries its digits as a string and a kind.",
+          "type": ["string", "number"]
+        },
+        "kind": {
+          "description": "bigint or decimal for such a number literal. The clause keyword for a qclause.",
+          "type": "string"
+        },
+        "op": {
+          "description": "The operator of a binop or unop.",
+          "enum": ["+", "-", "*", "/", "//", "%", "^", "..", "==", "~=", "<", "<=", ">", ">=", "and", "or", "&", "|", "~", "<<", ">>", "not", "#"]
+        },
+        "left": {"$ref": "#/$defs/node"},
+        "right": {"$ref": "#/$defs/node"},
+        "operand": {"$ref": "#/$defs/node"},
+        "table": {"description": "The indexed value of an index, field, or slice.", "$ref": "#/$defs/node"},
+        "key": {"description": "The key of an index, field, or tablefield. A field key is a string node.", "$ref": "#/$defs/node"},
+        "start": {"$ref": "#/$defs/node"},
+        "finish": {"$ref": "#/$defs/node"},
+        "func": {"description": "The called value of a call, or the object of a method call.", "$ref": "#/$defs/node"},
+        "args": {"$ref": "#/$defs/nodeList"},
+        "method": {"description": "The method name of a methodcall.", "type": "string"},
+        "names": {"description": "Declared names of local, global, forgen, and enum nodes.", "$ref": "#/$defs/nodeList"},
+        "values": {"description": "Values of local, global, return, and provide nodes. With isfrom, the single source expression.", "$ref": "#/$defs/nodeList"},
+        "lhs": {"$ref": "#/$defs/nodeList"},
+        "rhs": {"$ref": "#/$defs/nodeList"},
+        "isfrom": {"description": "True for the `from` form of a declaration or assignment.", "type": "boolean"},
+        "attr": {"description": "The compile-time attribute of a declared local name.", "enum": ["const", "close", "group", "runtime"]},
+        "runtimeattrs": {"description": "Runtime attribute expressions of a declared local name.", "$ref": "#/$defs/nodeList"},
+        "cond": {"description": "Condition of if, elseif, while, or repeat. An assignment condition is an assign node.", "$ref": "#/$defs/node"},
+        "var": {"$ref": "#/$defs/node"},
+        "init": {"$ref": "#/$defs/node"},
+        "limit": {"$ref": "#/$defs/node"},
+        "step": {"$ref": "#/$defs/node"},
+        "explist": {"$ref": "#/$defs/nodeList"},
+        "params": {"description": "Parameter names. A trailing `...` is a vararg node.", "$ref": "#/$defs/nodeList"},
+        "isvararg": {"type": "boolean"},
+        "ismethod": {"type": "boolean"},
+        "name": {"description": "The name of a localfunc, or the alias of a qitem written with `as`.", "type": "string"},
+        "nameline": {"type": "integer"},
+        "namecolumn": {"type": "integer"},
+        "nameexpr": {"description": "The name path of a funcstat, built from name and field nodes.", "$ref": "#/$defs/node"},
+        "expr": {"description": "The protected expression of a catch, or the expression of a qsource or qitem.", "$ref": "#/$defs/node"},
+        "handler": {"$ref": "#/$defs/node"},
+        "parts": {"description": "Literal string parts and interpolated expressions of an interp, in order.", "$ref": "#/$defs/nodeList"},
+        "nparts": {"type": "integer"},
+        "message": {"description": "The message of an error_stat.", "type": "string"},
+        "sources": {"$ref": "#/$defs/nodeList"},
+        "clauses": {"description": "Clauses of a query in source order.", "$ref": "#/$defs/nodeList"},
+        "alias": {"description": "The row variable of a qsource.", "type": "string"},
+        "hasas": {"description": "True when the row variable is written with `as`.", "type": "boolean"},
+        "items": {"description": "Items of a qclause: qitem nodes for select and order, expressions otherwise.", "$ref": "#/$defs/nodeList"},
+        "distinct": {"type": "boolean"},
+        "desc": {"type": "boolean"}
+      },
+      "required": ["type", "line", "column"]
+    }
+  }
+}

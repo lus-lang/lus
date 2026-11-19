@@ -61,6 +61,9 @@ pub const Lexer = struct {
     modes: std.ArrayList(Mode) = .empty,
     buf: std.ArrayList(u8) = .empty,
     diag: ?Diagnostic = null,
+    /// Emit an `unknown` token for a byte that starts no token, instead
+    /// of failing, as the reference lexer does. Used by the tooling.
+    tolerant: bool = false,
 
     pub fn init(gpa: Allocator, arena: Allocator, src: []const u8) Lexer {
         return .{ .gpa = gpa, .arena = arena, .src = src };
@@ -293,6 +296,10 @@ pub const Lexer = struct {
                         return false;
                     }
                     lx.pos += 1;
+                    if (lx.tolerant) {
+                        try lx.push(.unknown, start, lx.line, .none);
+                        return false;
+                    }
                     return lx.fail(start, "unexpected symbol near '{s}'", .{lx.nearText(start)});
                 },
             }
@@ -337,13 +344,14 @@ pub const Lexer = struct {
     }
 
     fn longString(lx: *Lexer, level: u32, start: u32, is_comment: bool) Error![]const u8 {
+        const start_line = lx.line;
         lx.pos += level + 2; // skip `[`, `=`*level, `[`
         // A newline right after the opening bracket is skipped.
         if (lx.cur() == '\n' or lx.cur() == '\r') lx.newline();
         lx.buf.clearRetainingCapacity();
         while (true) {
             if (lx.atEnd()) {
-                return lx.fail(start, "unfinished long {s} near <eof>", .{if (is_comment) "comment" else "string"});
+                return lx.fail(start, "unfinished long {s} (starting at line {d}) near <eof>", .{ if (is_comment) "comment" else "string", start_line });
             }
             const c = lx.cur();
             if (c == ']') {
