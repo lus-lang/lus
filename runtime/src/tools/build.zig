@@ -10,6 +10,10 @@
 //!   --include path[:alias] bundle a module file, or every module below a
 //!                          directory, even when no literal `require`
 //!                          names it
+//!   --profile              run the program once, with the arguments after
+//!                          `--`, and store the functions that became hot
+//!                          in each module it loaded, so that the
+//!                          executable starts warm (`compile/feedback.zig`)
 //!
 //! The command compiles the script, finds every `require` call whose
 //! argument is a string literal, resolves those names through the default
@@ -30,6 +34,8 @@ const bundle = @import("../bundle.zig");
 const api = lus.api;
 const codegen = lus.compile.codegen;
 const dump = @import("../compile/dump.zig");
+const feedback = @import("../compile/feedback.zig");
+const tools = @import("../tools.zig");
 const lexer = lus.syntax.lexer;
 const package = lus.lib.package;
 const Allocator = std.mem.Allocator;
@@ -42,6 +48,8 @@ const usage =
     \\  -P perm                 grant a permission at every run (also --pledge)
     \\  -F name[=value]         define a compile-time flag (also --flag)
     \\  --include path[:alias]  bundle a module file or directory
+    \\  --profile               run the program once with the arguments after
+    \\                          --, and store the functions that became hot
     \\
 ;
 
@@ -51,6 +59,9 @@ const Options = struct {
     pledges: std.ArrayList([]const u8) = .empty,
     flags: std.ArrayList([]const u8) = .empty,
     includes: std.ArrayList([]const u8) = .empty,
+    profile: bool = false,
+    /// Arguments after `--`, for the profiling run.
+    run_args: []const []const u8 = &.{},
 
     fn deinit(o: *Options, gpa: Allocator) void {
         o.pledges.deinit(gpa);
@@ -66,6 +77,14 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
+        if (std.mem.eql(u8, a, "--")) {
+            o.run_args = args[i + 1 ..];
+            break;
+        }
+        if (std.mem.eql(u8, a, "--profile")) {
+            o.profile = true;
+            continue;
+        }
         const Kind = enum { output, pledge, flag, include };
         const kind: ?Kind = if (std.mem.eql(u8, a, "-o"))
             .output
@@ -110,6 +129,10 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
     }
     if (o.script == null) {
         std.debug.print("{s}", .{usage});
+        return null;
+    }
+    if (!o.profile and o.run_args.len > 0) {
+        std.debug.print("lus build: arguments after -- apply only to --profile\n{s}", .{usage});
         return null;
     }
     return o;
@@ -306,7 +329,7 @@ fn defaultOutput(gpa: Allocator, script: []const u8) ![]u8 {
     return gpa.dupe(u8, stem);
 }
 
-pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
+pub fn run(init: std.process.Init, args: []const []const u8, host: tools.Host) !u8 {
     const gpa = init.gpa;
     const io = init.io;
     var opts = (try parseOptions(gpa, args)) orelse return 2;
@@ -336,6 +359,33 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             if (e == error.Reported) return 1;
             return e;
         };
+    }
+
+    const out_path = if (opts.output) |o| try gpa.dupe(u8, o) else try defaultOutput(gpa, script);
+    defer gpa.free(out_path);
+
+    var profiled: usize = 0;
+    if (opts.profile) {
+        var prof: feedback.Profile = .{ .gpa = gpa };
+        defer prof.deinit();
+        const compile = @import("compile.zig");
+        const status = try compile.profileRun(init, host, c.modules.items, opts.pledges.items, opts.flags.items, out_path, opts.run_args, &prof);
+        if (status != 0) {
+            std.debug.print("lus build: the profiling run failed, so nothing was written\n", .{});
+            return status;
+        }
+        // Each module the run loaded carries its feedback from now on.
+        for (c.modules.items) |*m| {
+            const flags = prof.get(m.chunkname) orelse continue;
+            var data: std.ArrayList(u8) = .empty;
+            errdefer data.deinit(gpa);
+            try data.appendSlice(gpa, m.data);
+            try feedback.appendSection(gpa, &data, m.data, flags);
+            const owned = try data.toOwnedSlice(gpa);
+            gpa.free(m.data);
+            m.data = owned;
+            profiled += 1;
+        }
     }
 
     // The preserved options, applied before the program runs.
@@ -368,8 +418,6 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     }
     try bundle.write(gpa, &image, preserved.items, c.modules.items, 0);
 
-    const out_path = if (opts.output) |o| try gpa.dupe(u8, o) else try defaultOutput(gpa, script);
-    defer gpa.free(out_path);
     const cwd = std.Io.Dir.cwd();
     const file = cwd.createFile(io, out_path, .{ .permissions = .executable_file }) catch |e| {
         std.debug.print("lus build: cannot create {s} ({s})\n", .{ out_path, @errorName(e) });
@@ -380,7 +428,10 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         std.debug.print("lus build: cannot write {s} ({s})\n", .{ out_path, @errorName(e) });
         return 1;
     };
-    const note = try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules)\n", .{ out_path, c.modules.items.len });
+    const note = if (opts.profile)
+        try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules, {d} with feedback)\n", .{ out_path, c.modules.items.len, profiled })
+    else
+        try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules)\n", .{ out_path, c.modules.items.len });
     defer gpa.free(note);
     std.Io.File.stdout().writeStreamingAll(io, note) catch {};
     return 0;

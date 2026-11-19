@@ -70,6 +70,7 @@ test {
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = compile.feedback;
+    _ = @import("tools/compile.zig");
     _ = api;
     _ = bundle;
     _ = @import("tools/build.zig");

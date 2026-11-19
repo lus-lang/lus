@@ -1,0 +1,240 @@
+--[[
+  Tests for warm starts: binary chunks that carry the feedback of a
+  profiling run (`lus compile --profile`, `lus build --profile`).
+
+  With the JIT in its default mode, a function that valid feedback marks
+  hot has native code as soon as its chunk loads. Every other mode loads
+  the same chunk cold. Feedback that is stale or damaged is ignored, and
+  the chunk then loads and runs exactly as a chunk without feedback.
+]]
+
+pledge("load", "fs", "exec", "env")
+
+local windows = package.config:sub(1, 1) == "\\"
+local mode = debug.jit()
+local warm_expected = mode == "on"
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function shell_quote(value)
+    if windows then
+        return '"' .. value .. '"'
+    end
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+local lus_cmd = shell_quote(lus_bin)
+
+local function run_command(command)
+    local h = io.popen(command .. " 2>&1")
+    assert(h, "could not start command: " .. command)
+    local out = h:read("a")
+    local ok = h:close()
+    return ok == true or ok == 0, out
+end
+
+local function write_file(filename, contents)
+    local file = assert(io.open(filename, "wb"))
+    assert(file:write(contents))
+    assert(file:close())
+end
+
+local function read_bytes(filename)
+    local file = assert(io.open(filename, "rb"))
+    local bytes = file:read("a")
+    file:close()
+    return bytes
+end
+
+-- Bytes [first, stop) of a vector, counted from zero.
+local function slice(v, first, stop)
+    local out = vector.create(stop - first)
+    for i = first, stop - 1 do
+        vector.set(out, i - first, vector.get(v, i))
+    end
+    return out
+end
+
+local function join(a, b)
+    local out = vector.create(#a + #b)
+    for i = 0, #a - 1 do vector.set(out, i, vector.get(a, i)) end
+    for i = 0, #b - 1 do vector.set(out, #a + i, vector.get(b, i)) end
+    return out
+end
+
+local function same_bytes(a, b)
+    if #a ~= #b then return false end
+    for i = 0, #a - 1 do
+        if vector.get(a, i) ~= vector.get(b, i) then return false end
+    end
+    return true
+end
+
+-- A chunk with a hot function, a function that never runs, and a total
+-- that tells whether it ran correctly. Run with any argument, it prints
+-- nothing.
+local function program(limit, extra)
+    return (extra or "") .. [[
+local quiet = ...
+local function square(x) return x * x end
+local function unused(x) return x + 1 end
+local total = 0
+for i = 1, ]] .. limit .. [[ do total = total + square(i) end
+if not quiet then print("total " .. total) end
+return total, square, unused
+]]
+end
+
+local function total_for(limit)
+    local total = 0
+    for i = 1, limit do total = total + i * i end
+    return total
+end
+
+local fixture_number = 0
+
+local function new_fixture()
+    fixture_number = fixture_number + 1
+    local root = "warmstart" .. tostring(fixture_number)
+    catch fs.remove(root, true)
+    fs.createdirectory(root)
+    return root
+end
+
+-- Compiles `source` cold and warm. Returns both chunks as vectors.
+local function compile_both(root, name, source)
+    local script = fs.path.join(root, name .. ".lus")
+    local cold = fs.path.join(root, name .. ".lusc")
+    local warm = fs.path.join(root, name .. "-warm.lusc")
+    write_file(script, source)
+    local ok, out = run_command(lus_cmd .. " compile " .. shell_quote(script))
+    assert(ok, out)
+    ok, out = run_command(lus_cmd .. " compile --profile -o " .. shell_quote(warm) .. " " .. shell_quote(script))
+    assert(ok, out)
+    assert(out:find("functions hot", 1, true), out)
+    return read_bytes(cold), read_bytes(warm), cold, warm
+end
+
+-- Loads a chunk without running it and reports whether its main function
+-- already has native code, then runs it and checks its results.
+local function load_and_run(bytes, limit)
+    local f, err = load(bytes, "=warmstart", "b")
+    if not f then error(err) end
+    local compiled = debug.jit(f)
+    local total, square, unused = f(true)
+    assert(total == total_for(limit), "wrong total " .. tostring(total))
+    assert(square(12) == 144)
+    assert(unused(1) == 2)
+    return compiled, square
+end
+
+local function plain_compile_writes_a_runnable_chunk_test()
+    local root = new_fixture()
+    local cold, warm, cold_path, warm_path = compile_both(root, "p", program(1000))
+    local ok, out = run_command(lus_cmd .. " " .. shell_quote(cold_path))
+    assert(ok, out)
+    assert(out:find("total " .. total_for(1000), 1, true), out)
+    ok, out = run_command(lus_cmd .. " " .. shell_quote(warm_path))
+    assert(ok, out)
+    assert(out:find("total " .. total_for(1000), 1, true), out)
+    -- The warm chunk is the cold chunk followed by its feedback.
+    assert(#warm > #cold)
+    assert(same_bytes(slice(warm, 0, #cold), cold))
+    catch fs.remove(root, true)
+end
+
+local function warm_chunk_has_native_code_at_load_test()
+    local root = new_fixture()
+    local cold, warm = compile_both(root, "w", program(1000))
+    local compiled, square = load_and_run(warm, 1000)
+    assert(compiled == warm_expected, "main function warm: " .. tostring(compiled))
+    if mode ~= "off" then assert(debug.jit(square)) end
+    compiled = load_and_run(cold, 1000)
+    assert(compiled == false, "a cold chunk has native code at load")
+    catch fs.remove(root, true)
+end
+
+local function feedback_of_another_chunk_is_ignored_test()
+    local root = new_fixture()
+    local _, warm_a, cold_a_path = compile_both(root, "a", program(1000))
+    local cold_a = read_bytes(cold_a_path)
+    local section = slice(warm_a, #cold_a, #warm_a)
+    -- The same shape with another constant, and another shape.
+    local cold_b = compile_both(root, "b", program(1500))
+    local cold_c = compile_both(root, "c", program(1000, "local function extra() end\n"))
+    assert(load_and_run(join(cold_b, section), 1500) == false)
+    local f = assert(load(join(cold_c, section), "=warmstart", "b"))
+    assert(debug.jit(f) == false)
+    assert(f(true) == total_for(1000))
+    catch fs.remove(root, true)
+end
+
+local function damaged_feedback_is_ignored_test()
+    local root = new_fixture()
+    local cold, warm, _, warm_path = compile_both(root, "d", program(1000))
+    -- Every single byte of the section, changed in turn, makes it cold.
+    for at = #cold, #warm - 1 do
+        local damaged = vector.clone(warm)
+        vector.set(damaged, at, (vector.get(damaged, at) + 1) & 0xff)
+        local ok, compiled = catch load_and_run(damaged, 1000)
+        if at < #cold + 7 then
+            -- Without the magic the bytes are not a section, and the
+            -- chunk itself is malformed.
+            assert(not ok, "trailing garbage was accepted")
+            assert(tostring(compiled):find("bad binary format", 1, true), tostring(compiled))
+        else
+            assert(ok, compiled)
+            assert(compiled == false, "damaged feedback was used at byte " .. at)
+        end
+    end
+    -- Truncated feedback is ignored too.
+    for keep = #cold + 7, #warm - 1, 3 do
+        assert(load_and_run(slice(warm, 0, keep), 1000) == false)
+    end
+    -- The command line runs a damaged chunk correctly.
+    local damaged = vector.clone(warm)
+    vector.set(damaged, #warm - 1, (vector.get(damaged, #warm - 1) + 1) & 0xff)
+    write_file(warm_path, damaged)
+    local ok, out = run_command(lus_cmd .. " " .. shell_quote(warm_path))
+    assert(ok, out)
+    assert(out:find("total " .. total_for(1000), 1, true), out)
+    catch fs.remove(root, true)
+end
+
+local function profiling_run_failure_writes_nothing_test()
+    local root = new_fixture()
+    local script = fs.path.join(root, "fails.lus")
+    local chunk = fs.path.join(root, "fails.lusc")
+    write_file(script, "error('profiled failure')\n")
+    local ok, out = run_command(lus_cmd .. " compile --profile " .. shell_quote(script))
+    assert(not ok, "a failed profiling run succeeded")
+    assert(out:find("profiled failure", 1, true), out)
+    assert(not (catch fs.type(chunk)), "a failed profiling run wrote a chunk")
+    -- Arguments after -- reach the script.
+    write_file(script, "assert(select('#', ...) == 2 and arg[2] == 'y')\n")
+    ok, out = run_command(lus_cmd .. " compile --profile " .. shell_quote(script) .. " -- x y")
+    assert(ok, out)
+    ok, out = run_command(lus_cmd .. " compile " .. shell_quote(script) .. " -- x y")
+    assert(not ok, "arguments without --profile were accepted")
+    catch fs.remove(root, true)
+end
+
+local function profiled_bundle_runs_test()
+    local root = new_fixture()
+    local entry = fs.path.join(root, "app.lus")
+    local output = fs.path.join(root, "app" .. (windows and ".exe" or ""))
+    write_file(entry, [[
+local helper = require("warmhelper")
+local total = 0
+for i = 1, 3000 do total = total + helper.f(i) end
+print("bundle " .. total)
+]])
+    write_file(fs.path.join(root, "warmhelper.lus"), "return { f = function(x) return x % 7 end }\n")
+    local env = windows and "" or ("LUS_PATH=" .. shell_quote(root .. "/?.lus") .. " ")
+    local ok, out = run_command(env .. lus_cmd .. " build --profile -o " .. shell_quote(output) .. " " .. shell_quote(entry))
+    assert(ok, out)
+    assert(out:find("2 modules, 2 with feedback", 1, true), out)
+    ok, out = run_command(shell_quote(output))
+    assert(ok, out)
+    assert(out:find("bundle 8998", 1, true), out)
+    catch fs.remove(root, true)
+end
