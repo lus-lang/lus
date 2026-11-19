@@ -39,23 +39,23 @@ The table has one column per configuration.
 
 ## Results
 
-Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the commit that added the optimizing tier (`spec/design/opt.md`). The legacy runtime was not built for this run.
+Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the commit that made the collector mark objects as they pop from the gray stack and double its goal while the heap grows (`spec/design/gc.md`). The legacy runtime was not built for this run. The machine ran a few percent slower than for earlier tables, LuaJIT included, so compare the columns of this table with each other.
 
 | benchmark | lus | lus baseline | lus off | luajit -joff | luajit |
 |---|---:|---:|---:|---:|---:|
-| arrays | 0.034 | 0.153 | 0.241 | 0.246 | 0.038 |
-| closures | 0.068 | 0.074 | 0.091 | 0.134 | 0.127 |
-| data | 0.027 | 0.033 | 0.034 | 0.277 | 0.050 |
-| fib | 0.029 | 0.029 | 0.062 | 0.036 | 0.010 |
-| gcpause | 0.409 | 0.409 | 0.407 | 0.460 | 0.432 |
-| interp | 0.942 | 0.920 | 0.936 | 2.069 | 1.326 |
-| loop | 0.059 | 0.149 | 0.228 | 0.256 | 0.095 |
-| methods | 0.006 | 0.188 | 0.250 | 0.251 | 0.006 |
-| patterns | 0.204 | 0.202 | 0.203 | 0.263 | 0.257 |
-| strings | 0.145 | 0.145 | 0.146 | 0.252 | 0.221 |
-| tables | 0.151 | 0.156 | 0.166 | 0.167 | 0.128 |
-| unicode | 0.007 | 0.042 | 0.051 | 0.034 | 0.005 |
+| arrays | 0.037 | 0.167 | 0.250 | 0.264 | 0.044 |
+| closures | 0.076 | 0.082 | 0.101 | 0.149 | 0.139 |
+| data | 0.031 | 0.037 | 0.037 | 0.296 | 0.057 |
+| fib | 0.032 | 0.032 | 0.066 | 0.040 | 0.011 |
+| gcpause | 0.457 | 0.452 | 0.422 | 0.474 | 0.436 |
+| interp | 1.026 | 1.038 | 1.074 | 2.307 | 1.446 |
+| loop | 0.061 | 0.150 | 0.227 | 0.259 | 0.094 |
+| methods | 0.006 | 0.186 | 0.227 | 0.252 | 0.006 |
+| patterns | 0.204 | 0.206 | 0.207 | 0.273 | 0.260 |
+| strings | 0.161 | 0.180 | 0.178 | 0.272 | 0.221 |
+| tables | 0.109 | 0.111 | 0.115 | 0.177 | 0.136 |
+| unicode | 0.007 | 0.038 | 0.044 | 0.034 | 0.005 |
 
-The baseline tier runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. The optimizing tier adds typed values in machine registers, checks moved in front of loops, calls compiled inline, and tables that are never allocated. `methods`, `arrays`, `loop`, and `unicode` are where it shows. `methods` builds a new object on every iteration through a method and a constructor, and its optimized loop adds two numbers. `unicode` takes the length of `string.sub` on a long non-ASCII string, which the optimizing tier computes from the positions. `fib` is all calls, which both tiers make the same way. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their three Lus columns agree. `tables` keeps three million tables alive, so its time goes to allocating and marking them.
+The baseline tier runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. The optimizing tier adds typed values in machine registers, checks moved in front of loops, calls compiled inline, and tables that are never allocated. `methods`, `arrays`, `loop`, and `unicode` are where it shows. `methods` builds a new object on every iteration through a method and a constructor, and its optimized loop adds two numbers. `unicode` takes the length of `string.sub` on a long non-ASCII string, which the optimizing tier computes from the positions. `fib` is all calls, which both tiers make the same way. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their three Lus columns agree. `tables` keeps three million tables alive, so its time goes to allocating and marking them. The collector reads each of them once, when it traces it, and waits for twice the usual growth while the heap only grows, which puts every Lus column ahead of LuaJIT with its JIT. `unicode` with the JIT off finds both ends of each substring from where the previous one ended.
 
 The `lus off` column moves by a few percent between builds with the code layout of the interpreter loop. Compare the Lus columns of one build with each other.
