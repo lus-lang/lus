@@ -491,7 +491,9 @@ pub const Emitter = struct {
                 a.load64(A.t0, slot(rb));
                 a.load64(A.t1, slot(rc));
                 a.addImm(A.t1, -1);
-                e.arrayGet(ra, miss, done);
+                // The helper reads only the array part, so a key outside
+                // it takes the step routine at once.
+                e.arrayGet(ra, e.coldStep(pc), miss, done);
                 a.bind(done);
             },
             .getindex => {
@@ -504,7 +506,7 @@ pub const Emitter = struct {
                     a.jumpIfByte(.ne, tagOf(rb), tag_table, miss);
                     a.load64(A.t0, slot(rb));
                     a.movImm(A.t1, rc - 1);
-                    e.arrayGet(ra, miss, done);
+                    e.arrayGet(ra, miss, miss, done);
                 }
                 a.bind(done);
             },
@@ -517,7 +519,7 @@ pub const Emitter = struct {
                 a.load64(A.t0, slot(ra));
                 a.load64(A.t1, slot(rb));
                 a.addImm(A.t1, -1);
-                e.arraySet(pc, rc, miss, done);
+                e.arraySet(pc, rc, e.coldStep(pc), miss, done);
                 a.bind(done);
             },
             .len => {
@@ -1099,13 +1101,14 @@ pub const Emitter = struct {
     }
 
     /// R[dst] = the array slot t1 (zero-based) of the table in t0.
-    /// Branches to `miss` for an index outside the array part and for a
-    /// slot that holds nil, which may have an `__index` to follow.
-    fn arrayGet(e: *Emitter, dst: u32, miss: Label, done: Label) void {
+    /// Branches to `outside` for an index outside the array part, and to
+    /// `miss` for a slot that holds nil, which may have an `__index` to
+    /// follow.
+    fn arrayGet(e: *Emitter, dst: u32, outside: Label, miss: Label, done: Label) void {
         const a = &e.a;
         const boxed = a.newLabel();
         // An index below one wrapped around to a large unsigned number.
-        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, miss);
+        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, outside);
         a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
         a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
@@ -1126,12 +1129,13 @@ pub const Emitter = struct {
 
     /// Stores R[v] into the array slot t1 (zero-based) of the table in
     /// t0, as `table.arrayStoreFast` does when the value fits the kind of
-    /// the array part. Branches to `miss` for an index outside the array
-    /// part, a table that is not plain, and a value of another kind.
-    fn arraySet(e: *Emitter, pc: u32, v: u32, miss: Label, done: Label) void {
+    /// the array part. Branches to `outside` for an index outside the
+    /// array part, and to `miss` for a table that is not plain and for a
+    /// value of another kind.
+    fn arraySet(e: *Emitter, pc: u32, v: u32, outside: Label, miss: Label, done: Label) void {
         const a = &e.a;
         const boxed = a.newLabel();
-        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, miss);
+        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, outside);
         e.guardRawStore(A.t0, A.t2, miss);
         a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
