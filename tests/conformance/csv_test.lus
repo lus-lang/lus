@@ -1,0 +1,800 @@
+
+pledge("load")
+
+
+-- ============================================================
+-- fromcsv tests
+-- ============================================================
+
+local function fromcsv_parses_single_row_test()
+    local d = fromcsv("a,b,c")
+    assert(#d == 1)
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "c")
+end
+
+local function fromcsv_parses_multiple_rows_test()
+    local d = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London")
+    assert(#d == 3)
+    assert(d[1][1] == "name")
+    assert(d[2][1] == "Alice")
+    assert(d[2][2] == "30")
+    assert(d[3][1] == "Bob")
+    assert(d[3][3] == "London")
+end
+
+local function fromcsv_parses_empty_string_test()
+    local d = fromcsv("")
+    assert(#d == 0)
+end
+
+local function fromcsv_parses_empty_fields_test()
+    local d = fromcsv(",b,\n,,")
+    assert(d[1][1] == "")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "")
+    assert(d[2][1] == "")
+    assert(d[2][2] == "")
+    assert(d[2][3] == "")
+end
+
+local function fromcsv_parses_single_field_test()
+    local d = fromcsv("hello")
+    assert(#d == 1)
+    assert(d[1][1] == "hello")
+end
+
+local function fromcsv_handles_crlf_line_endings_test()
+    local d = fromcsv("a,b\r\nc,d\r\n")
+    assert(#d == 2)
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[2][1] == "c")
+    assert(d[2][2] == "d")
+end
+
+local function fromcsv_handles_trailing_newline_test()
+    local d = fromcsv("a,b\nc,d\n")
+    assert(#d == 2)
+end
+
+-- ============================================================
+-- fromcsv quoted fields
+-- ============================================================
+
+local function fromcsv_parses_quoted_field_test()
+    local d = fromcsv('"hello"')
+    assert(d[1][1] == "hello")
+end
+
+local function fromcsv_parses_quoted_field_with_comma_test()
+    local d = fromcsv('"hello, world",test')
+    assert(d[1][1] == "hello, world")
+    assert(d[1][2] == "test")
+end
+
+local function fromcsv_parses_quoted_field_with_newline_test()
+    local d = fromcsv('"line1\nline2",b')
+    assert(d[1][1] == "line1\nline2")
+    assert(d[1][2] == "b")
+end
+
+local function fromcsv_parses_escaped_double_quotes_test()
+    local d = fromcsv('"she said ""hi""",other')
+    assert(d[1][1] == 'she said "hi"')
+    assert(d[1][2] == "other")
+end
+
+local function fromcsv_parses_empty_quoted_field_test()
+    local d = fromcsv('"",b')
+    assert(d[1][1] == "")
+    assert(d[1][2] == "b")
+end
+
+local function fromcsv_errors_on_unterminated_quote_test()
+    local ok, err = catch fromcsv('"unterminated')
+    assert(not ok, "should error on unterminated quote")
+end
+
+local function fromcsv_errors_on_junk_after_quoted_field_test()
+    local ok, err = catch fromcsv('"hello"x,world')
+    assert(not ok, "should error on junk after quoted field")
+    assert(tostring(err):find("unexpected character"), "error should mention unexpected character")
+end
+
+-- ============================================================
+-- fromcsv headers mode
+-- ============================================================
+
+local function fromcsv_headers_mode_test()
+    local d = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London", true)
+    assert(#d == 2)
+    assert(d[1].name == "Alice")
+    assert(d[1].age == "30")
+    assert(d[1].city == "Paris")
+    assert(d[2].name == "Bob")
+    assert(d[2].age == "25")
+    assert(d[2].city == "London")
+end
+
+local function fromcsv_headers_mode_with_single_data_row_test()
+    local d = fromcsv("x,y\n1,2", true)
+    assert(#d == 1)
+    assert(d[1].x == "1")
+    assert(d[1].y == "2")
+end
+
+local function fromcsv_headers_mode_with_no_data_rows_test()
+    local d = fromcsv("x,y\n", true)
+    assert(#d == 0)
+end
+
+-- ============================================================
+-- fromcsv custom delimiter
+-- ============================================================
+
+local function fromcsv_with_tab_delimiter_test()
+    local d = fromcsv("a\tb\n1\t2", false, "\t")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[2][1] == "1")
+    assert(d[2][2] == "2")
+end
+
+local function fromcsv_with_semicolon_delimiter_test()
+    local d = fromcsv("a;b;c", false, ";")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "c")
+end
+
+local function fromcsv_with_pipe_delimiter_test()
+    local d = fromcsv("a|b|c", false, "|")
+    assert(d[1][1] == "a")
+    assert(d[1][2] == "b")
+    assert(d[1][3] == "c")
+end
+
+local function fromcsv_delimiter_must_be_single_char_test()
+    local ok = catch fromcsv("a,b", false, ",,")
+    assert(not ok, "multi-char delimiter should error")
+end
+
+-- ============================================================
+-- fromcsv error handling
+-- ============================================================
+
+local function fromcsv_errors_on_non_string_test()
+    local ok = catch fromcsv(true)
+    assert(not ok, "boolean should error")
+end
+
+-- ============================================================
+-- tocsv tests
+-- ============================================================
+
+local function tocsv_serializes_single_row_test()
+    local csv = tocsv({{"a", "b", "c"}})
+    assert(csv == "a,b,c\n")
+end
+
+local function tocsv_serializes_multiple_rows_test()
+    local csv = tocsv({
+        {"name", "age", "city"},
+        {"Alice", "30", "Paris"},
+        {"Bob", "25", "London"},
+    })
+    assert(csv == "name,age,city\nAlice,30,Paris\nBob,25,London\n")
+end
+
+local function tocsv_serializes_empty_table_test()
+    local csv = tocsv({})
+    assert(csv == "")
+end
+
+local function tocsv_serializes_empty_row_test()
+    local csv = tocsv({{}})
+    assert(csv == "\n")
+end
+
+-- ============================================================
+-- tocsv auto-quoting
+-- ============================================================
+
+local function tocsv_quotes_field_with_comma_test()
+    local csv = tocsv({{"hello, world"}})
+    assert(csv == '"hello, world"\n')
+end
+
+local function tocsv_quotes_field_with_newline_test()
+    local csv = tocsv({{"line1\nline2"}})
+    assert(csv == '"line1\nline2"\n')
+end
+
+local function tocsv_escapes_double_quotes_test()
+    local csv = tocsv({{'say "hi"'}})
+    assert(csv == '"say ""hi"""\n')
+end
+
+local function tocsv_quotes_field_with_carriage_return_test()
+    local csv = tocsv({{"a\rb"}})
+    assert(csv == '"a\rb"\n')
+end
+
+-- ============================================================
+-- tocsv non-string values
+-- ============================================================
+
+local function tocsv_converts_numbers_test()
+    local csv = tocsv({{1, 2, 3}})
+    assert(csv == "1,2,3\n")
+end
+
+local function tocsv_converts_booleans_test()
+    local csv = tocsv({{true, false}})
+    assert(csv == "true,false\n")
+end
+
+local function tocsv_converts_floats_test()
+    local csv = tocsv({{3.14}})
+    assert(csv == "3.14\n")
+end
+
+-- ============================================================
+-- tocsv custom delimiter
+-- ============================================================
+
+local function tocsv_with_tab_delimiter_test()
+    local csv = tocsv({{"a", "b"}, {"c", "d"}}, "\t")
+    assert(csv == "a\tb\nc\td\n")
+end
+
+local function tocsv_with_semicolon_delimiter_test()
+    local csv = tocsv({{"a", "b", "c"}}, ";")
+    assert(csv == "a;b;c\n")
+end
+
+local function tocsv_delimiter_must_be_single_char_test()
+    local ok = catch tocsv({{"a"}}, ",,")
+    assert(not ok, "multi-char delimiter should error")
+end
+
+-- ============================================================
+-- tocsv error handling
+-- ============================================================
+
+local function tocsv_errors_on_non_table_test()
+    local ok = catch tocsv("not a table")
+    assert(not ok, "string should error")
+end
+
+local function tocsv_errors_on_non_table_row_test()
+    local ok = catch tocsv({"not a table"})
+    assert(not ok, "string row should error")
+end
+
+-- ============================================================
+-- roundtrip tests
+-- ============================================================
+
+local function roundtrip_preserves_simple_data_test()
+    local original = {{"name", "age"}, {"Alice", "30"}, {"Bob", "25"}}
+    local csv = tocsv(original)
+    local parsed = fromcsv(csv)
+    assert(#parsed == 3)
+    assert(parsed[1][1] == "name")
+    assert(parsed[2][1] == "Alice")
+    assert(parsed[3][2] == "25")
+end
+
+local function roundtrip_preserves_quoted_fields_test()
+    local original = {{"hello, world", 'say "hi"'}}
+    local csv = tocsv(original)
+    local parsed = fromcsv(csv)
+    assert(parsed[1][1] == "hello, world")
+    assert(parsed[1][2] == 'say "hi"')
+end
+
+local function roundtrip_preserves_fields_with_newlines_test()
+    local original = {{"line1\nline2", "normal"}}
+    local csv = tocsv(original)
+    local parsed = fromcsv(csv)
+    assert(parsed[1][1] == "line1\nline2")
+    assert(parsed[1][2] == "normal")
+end
+
+local function roundtrip_with_custom_delimiter_test()
+    local original = {{"a", "b"}, {"c", "d"}}
+    local csv = tocsv(original, "\t")
+    local parsed = fromcsv(csv, false, "\t")
+    assert(parsed[1][1] == "a")
+    assert(parsed[2][2] == "d")
+end
+
+-- ============================================================
+-- stress tests
+-- ============================================================
+
+local function large_number_of_rows_test()
+    local rows = {}
+    for i = 1, 1000 do
+        rows[i] = {tostring(i), "value" .. tostring(i)}
+    end
+    local csv = tocsv(rows)
+    local parsed = fromcsv(csv)
+    assert(#parsed == 1000)
+    assert(parsed[1][1] == "1")
+    assert(parsed[500][2] == "value500")
+    assert(parsed[1000][1] == "1000")
+end
+
+local function large_number_of_columns_test()
+    local row = {}
+    for i = 1, 200 do
+        row[i] = "col" .. tostring(i)
+    end
+    local csv = tocsv({row})
+    local parsed = fromcsv(csv)
+    assert(#parsed == 1)
+    assert(#parsed[1] == 200)
+    assert(parsed[1][1] == "col1")
+    assert(parsed[1][200] == "col200")
+end
+
+local function long_field_value_test()
+    local long = string.rep("x", 10000)
+    local csv = tocsv({{long}})
+    local parsed = fromcsv(csv)
+    assert(parsed[1][1] == long)
+    assert(#parsed[1][1] == 10000)
+end
+
+
+-- csv2.lus
+-- Hostile CSV suite covering RFC 4180 pathologies and byte-level edge cases.
+-- These tests complement csv.lus, which covers well-formed rectangular data.
+-- Here the focus is BOM handling, mixed line endings, ragged rows, quoting
+-- policy round-trips, headers-mode corner cases, and byte fidelity through
+-- fromcsv and tocsv. Behaviors are pinned against the C implementation in
+-- lus/src/lcsvlib.c and the contracts in lus-spec/stdlib/base.
+
+
+
+
+-- ============================================================
+-- BOM handling: no stripping, becomes part of the first field
+-- ============================================================
+
+local function utf_8_bom_becomes_part_of_the_first_field_test()
+    -- The parser does no BOM stripping, so the three BOM bytes lead field one.
+    local d = fromcsv("\239\187\191a,b")
+    assert(d[1][1] == "\239\187\191a")
+    assert(d[1][2] == "b")
+end
+
+local function utf_8_bom_taints_the_first_header_name_in_headers_mode_test()
+    local d = fromcsv("\239\187\191name,age\nAlice,30", true)
+    assert(d[1].name == nil)
+    assert(d[1]["\239\187\191name"] == "Alice")
+    assert(d[1].age == "30")
+end
+
+-- ============================================================
+-- Line ending varieties: LF, CRLF, CR-only, and mixtures
+-- ============================================================
+
+local function cr_only_record_separators_split_rows_test()
+    local d = fromcsv("a,b\rc,d")
+    assert(#d == 2)
+    assert(d[1][1] == "a" and d[1][2] == "b")
+    assert(d[2][1] == "c" and d[2][2] == "d")
+end
+
+local function mixed_lf_crlf_and_cr_endings_all_separate_records_test()
+    local d = fromcsv("a\r\nb\nc\rd")
+    assert(#d == 4)
+    assert(d[1][1] == "a")
+    assert(d[2][1] == "b")
+    assert(d[3][1] == "c")
+    assert(d[4][1] == "d")
+end
+
+local function trailing_crlf_does_not_create_an_extra_record_test()
+    local d = fromcsv("a,b\r\n")
+    assert(#d == 1)
+    assert(d[1][2] == "b")
+end
+
+local function trailing_cr_only_does_not_create_an_extra_record_test()
+    local d = fromcsv("a,b\r")
+    assert(#d == 1)
+    assert(d[1][1] == "a")
+end
+
+-- ============================================================
+-- Empty lines versus empty fields versus trailing newline
+-- ============================================================
+
+local function an_interior_blank_line_becomes_a_single_empty_field_row_test()
+    -- A blank line has no delimiter, so it parses as one empty unquoted field.
+    local d = fromcsv("a\n\nb")
+    assert(#d == 3)
+    assert(d[1][1] == "a")
+    assert(#d[2] == 1 and d[2][1] == "")
+    assert(d[3][1] == "b")
+end
+
+local function a_row_of_only_delimiters_yields_all_empty_fields_test()
+    local d = fromcsv(",,")
+    assert(#d == 1)
+    assert(#d[1] == 3)
+    assert(d[1][1] == "" and d[1][2] == "" and d[1][3] == "")
+end
+
+local function two_trailing_newlines_add_one_blank_field_record_test()
+    local d = fromcsv("a,b\n\n")
+    assert(#d == 2)
+    assert(d[2][1] == "")
+end
+
+-- ============================================================
+-- Ragged positional rows: widths are preserved as-is
+-- ============================================================
+
+local function ragged_rows_keep_their_own_individual_widths_test()
+    local d = fromcsv("a,b,c\nd\ne,f")
+    assert(#d == 3)
+    assert(#d[1] == 3)
+    assert(#d[2] == 1)
+    assert(#d[3] == 2)
+    assert(d[2][1] == "d")
+    assert(d[3][2] == "f")
+end
+
+-- ============================================================
+-- Single-column input
+-- ============================================================
+
+local function single_column_input_yields_one_field_per_row_test()
+    local d = fromcsv("alpha\nbeta\ngamma")
+    assert(#d == 3)
+    assert(#d[1] == 1 and #d[2] == 1 and #d[3] == 1)
+    assert(d[1][1] == "alpha" and d[3][1] == "gamma")
+end
+
+-- ============================================================
+-- Whitespace fidelity in unquoted fields
+-- ============================================================
+
+local function leading_and_trailing_spaces_in_unquoted_fields_are_preserved_test()
+    -- RFC 4180 treats spaces as ordinary field bytes, and the parser agrees.
+    local d = fromcsv(" a , b ")
+    assert(d[1][1] == " a ")
+    assert(d[1][2] == " b ")
+end
+
+local function a_field_of_only_whitespace_survives_intact_test()
+    local d = fromcsv("   ,x")
+    assert(d[1][1] == "   ")
+    assert(d[1][2] == "x")
+end
+
+local function a_tab_inside_an_unquoted_comma_field_stays_literal_test()
+    local d = fromcsv("a\tb,c")
+    assert(d[1][1] == "a\tb")
+    assert(d[1][2] == "c")
+end
+
+-- ============================================================
+-- Quoted field pathologies
+-- ============================================================
+
+local function a_quoted_field_may_hold_a_crlf_sequence_test()
+    local d = fromcsv('"line1\r\nline2",b')
+    assert(d[1][1] == "line1\r\nline2")
+    assert(d[1][2] == "b")
+end
+
+local function a_quoted_field_may_hold_a_bare_cr_test()
+    local d = fromcsv('"a\rb",c')
+    assert(d[1][1] == "a\rb")
+    assert(d[1][2] == "c")
+end
+
+local function a_doubled_quote_inside_a_quoted_field_decodes_to_one_quote_test()
+    local d = fromcsv('"he said ""go""",end')
+    assert(d[1][1] == 'he said "go"')
+    assert(d[1][2] == "end")
+end
+
+local function a_field_of_only_a_doubled_quote_decodes_to_a_single_quote_test()
+    local d = fromcsv('""""')
+    assert(d[1][1] == '"')
+end
+
+local function a_quoted_empty_field_followed_by_delimiter_stays_empty_test()
+    local d = fromcsv('"",x')
+    assert(d[1][1] == "")
+    assert(d[1][2] == "x")
+end
+
+local function a_quoted_field_holding_just_a_delimiter_keeps_it_literal_test()
+    local d = fromcsv('",",x')
+    assert(d[1][1] == ",")
+    assert(d[1][2] == "x")
+end
+
+-- ============================================================
+-- Unterminated and malformed quoting: error paths
+-- ============================================================
+
+local unterminated_or_malformed_quotes_raise_a_parse_error_cases = {
+    { '"unterminated' },        -- no closing quote before EOF
+    { 'a,"b' },                 -- second field opens a quote that never closes
+    { '"a\nb' },                -- quote spanning a newline with no close
+}
+
+local function unterminated_or_malformed_quotes_raise_a_parse_error_test(input)
+    local ok, err = catch fromcsv(input)
+    assert(not ok, "malformed quoting must fail")
+    assert(string.find(tostring(err), "CSV parse error"), "error is a CSV parse error")
+end
+
+local function unterminated_quote_reports_the_unterminated_message_test()
+    local ok, err = catch fromcsv('"open')
+    assert(not ok)
+    assert(string.find(tostring(err), "unterminated quoted field"), "message names the cause")
+end
+
+local junk_after_a_closing_quote_raises_regardless_of_position_cases = {
+    { 'a,"b"x' },       -- junk mid record
+    { '"a"b,c' },       -- junk at start of record
+    { '"a"b' },         -- junk at end of input
+}
+
+local function junk_after_a_closing_quote_raises_regardless_of_position_test(input)
+    local ok, err = catch fromcsv(input)
+    assert(not ok, "a closing quote must be followed by a delimiter or line ending")
+    assert(string.find(tostring(err), "unexpected character after quoted field"),
+        "message names the unexpected trailing character")
+end
+
+local function a_quoted_field_directly_at_end_of_input_is_accepted_test()
+    local d = fromcsv('"a"')
+    assert(d[1][1] == "a")
+end
+
+-- ============================================================
+-- Headers mode edge cases
+-- ============================================================
+
+local function duplicate_header_names_resolve_to_the_last_column_test()
+    local d = fromcsv("a,a\n1,2", true)
+    assert(d[1].a == "2")
+end
+
+local function a_quoted_header_may_contain_the_delimiter_test()
+    local d = fromcsv('"first,name",age\nBob,30', true)
+    assert(d[1]["first,name"] == "Bob")
+    assert(d[1].age == "30")
+end
+
+local function a_quoted_header_may_contain_a_newline_test()
+    local d = fromcsv('"two\nline",age\nBob,30', true)
+    assert(d[1]["two\nline"] == "Bob")
+    assert(d[1].age == "30")
+end
+
+local function an_empty_header_field_becomes_the_empty_string_key_test()
+    local d = fromcsv(",b\n1,2", true)
+    assert(d[1][""] == "1")
+    assert(d[1].b == "2")
+end
+
+local function data_rows_shorter_than_the_header_have_absent_trailing_keys_test()
+    local d = fromcsv("x,y,z\n1,2", true)
+    assert(d[1].x == "1")
+    assert(d[1].y == "2")
+    assert(d[1].z == nil)
+end
+
+local function data_rows_longer_than_the_header_drop_the_extra_columns_test()
+    local d = fromcsv("x,y\n1,2,3,4", true)
+    assert(d[1].x == "1")
+    assert(d[1].y == "2")
+    assert(d[1][3] == nil)
+    assert(d[1][4] == nil)
+end
+
+local function a_lone_header_row_with_no_trailing_newline_yields_no_data_ro_test()
+    local d = fromcsv("x,y", true)
+    assert(#d == 0)
+end
+
+local function headers_mode_over_empty_input_yields_an_empty_table_test()
+    local d = fromcsv("", true)
+    assert(#d == 0)
+end
+
+-- ============================================================
+-- Delimiter parameter and its validation
+-- ============================================================
+
+local assorted_single_character_delimiters_parse_correctly_cases = {
+    { "a;b;c", ";", 3 },
+    { "a|b|c", "|", 3 },
+    { "a\tb", "\t", 2 },
+    { "a b c", " ", 3 },
+}
+
+local function assorted_single_character_delimiters_parse_correctly_test(input, delim, ncols)
+    local d = fromcsv(input, false, delim)
+    assert(#d[1] == ncols)
+end
+
+local delimiters_that_are_not_exactly_one_byte_are_rejected_cases = {
+    { "" },      -- empty string has length zero
+    { ",," },    -- two bytes
+    { "ab" },    -- two bytes
+}
+
+local function delimiters_that_are_not_exactly_one_byte_are_rejected_test(delim)
+    local ok, err = catch fromcsv("a,b", false, delim)
+    assert(not ok, "the delimiter must be a single character")
+    assert(string.find(tostring(err), "single character"), "message names the constraint")
+end
+
+local function a_non_comma_delimiter_leaves_commas_as_ordinary_field_bytes_test()
+    local d = fromcsv("a,b;c,d", false, ";")
+    assert(d[1][1] == "a,b")
+    assert(d[1][2] == "c,d")
+end
+
+-- ============================================================
+-- fromcsv argument coercion
+-- ============================================================
+
+local function fromcsv_coerces_a_number_argument_to_its_string_form_test()
+    -- String-accepting stdlib functions coerce numbers, so 42 parses as "42".
+    local d = fromcsv(42)
+    assert(d[1][1] == "42")
+end
+
+local fromcsv_rejects_non_string_non_number_arguments_cases = {
+    { true },
+    { false },
+    { {} },
+}
+
+local function fromcsv_rejects_non_string_non_number_arguments_test(arg)
+    local ok = catch fromcsv(arg)
+    assert(not ok, "only strings and numbers are acceptable input")
+end
+
+-- ============================================================
+-- tocsv quoting policy honors a custom delimiter
+-- ============================================================
+
+local function tocsv_quotes_a_field_containing_the_custom_delimiter_test()
+    -- The needs-quoting check tracks the active delimiter, not a hardcoded comma.
+    local csv = tocsv({{"a;b"}}, ";")
+    assert(csv == '"a;b"\n')
+end
+
+local function tocsv_leaves_a_comma_unquoted_when_the_delimiter_is_a_semico_test()
+    local csv = tocsv({{"a,b"}}, ";")
+    assert(csv == "a,b\n")
+end
+
+local function tocsv_still_quotes_newlines_and_quotes_under_a_custom_delimi_test()
+    local csv = tocsv({{'x"y', "p\nq"}}, ";")
+    assert(csv == '"x""y";"p\nq"\n')
+end
+
+-- ============================================================
+-- tocsv value conversion
+-- ============================================================
+
+local function tocsv_renders_a_float_distinctly_from_the_same_valued_intege_test()
+    -- luaL_tolstring preserves the float subtype, so 1.0 keeps its decimal form.
+    assert(tocsv({{1.0}}) == "1.0\n")
+    assert(tocsv({{1}}) == "1\n")
+end
+
+local function tocsv_honors_a_tostring_metamethod_test()
+    local v = setmetatable({}, { __tostring = function() return "CUSTOM" end })
+    assert(tocsv({{v}}) == "CUSTOM\n")
+end
+
+local function tocsv_quotes_a_tostring_result_that_contains_a_comma_test()
+    local v = setmetatable({}, { __tostring = function() return "a,b" end })
+    assert(tocsv({{v}}) == '"a,b"\n')
+end
+
+local function tocsv_writes_a_nil_field_as_empty_when_the_row_length_spans_test()
+    -- Forcing __len exposes the interior nil, which the spec says is an empty field.
+    local row = setmetatable({"a", nil, "c"}, { __len = function() return 3 end })
+    assert(tocsv({row}) == "a,,c\n")
+end
+
+local function tocsv_errors_when_a_row_is_not_a_table_test()
+    local ok, err = catch tocsv({ "a", {"b"} })
+    assert(not ok, "a string row is rejected")
+    assert(string.find(tostring(err), "row 1 is not a table"), "message names the offending row")
+end
+
+-- ============================================================
+-- Round-trip fidelity through tocsv then fromcsv
+-- ============================================================
+
+local hostile_field_values_round_trip_through_tocsv_and_fromcsv_cases = {
+    { "plain" },
+    { "with,comma" },
+    { 'with"quote' },
+    { "with\nnewline" },
+    { "with\r\nCRLF" },
+    { "with\rCR" },
+    { 'all,"\r\n at once' },
+    { "" },
+    { "   spaces   " },
+    { '""""' },
+}
+
+local function hostile_field_values_round_trip_through_tocsv_and_fromcsv_test(value)
+    local csv = tocsv({{ value }})
+    local back = fromcsv(csv)
+    assert(back[1][1] == value)
+end
+
+local function a_nul_byte_round_trips_through_tocsv_and_fromcsv_test()
+    local value = "x\0y"
+    local back = fromcsv(tocsv({{ value }}))
+    assert(back[1][1] == value)
+    assert(#back[1][1] == 3)
+end
+
+local function a_field_of_only_whitespace_round_trips_exactly_test()
+    local back = fromcsv(tocsv({{ "\t \t" }}))
+    assert(back[1][1] == "\t \t")
+end
+
+local function a_custom_delimiter_round_trip_preserves_embedded_delimiters_test()
+    local original = {{"a;b", "c;d"}, {"e", "f"}}
+    local csv = tocsv(original, ";")
+    local back = fromcsv(csv, false, ";")
+    assert(back[1][1] == "a;b" and back[1][2] == "c;d")
+    assert(back[2][1] == "e" and back[2][2] == "f")
+end
+
+local function headers_mode_round_trips_a_header_carrying_a_comma_test()
+    local original = {{"first,name", "age"}, {"Bob", "30"}}
+    local csv = tocsv(original)
+    local back = fromcsv(csv, true)
+    assert(back[1]["first,name"] == "Bob")
+    assert(back[1].age == "30")
+end
+
+-- ============================================================
+-- Large field and volume stress
+-- ============================================================
+
+local function a_very_large_quoted_field_round_trips_intact_test()
+    -- Build a field that mixes commas and quotes to force escaping across growth.
+    local chunk = string.rep('a,b"c', 5000)
+    local back = fromcsv(tocsv({{ chunk }}))
+    assert(back[1][1] == chunk)
+    assert(#back[1][1] == #chunk)
+end
+
+local function many_single_column_rows_survive_a_round_trip_test()
+    local rows = {}
+    for i = 1, 500 do
+        rows[i] = { "v" .. tostring(i) }
+    end
+    local back = fromcsv(tocsv(rows))
+    assert(#back == 500)
+    assert(back[1][1] == "v1")
+    assert(back[500][1] == "v500")
+end
+

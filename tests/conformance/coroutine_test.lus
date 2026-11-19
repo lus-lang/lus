@@ -1,0 +1,838 @@
+
+pledge("load")
+
+local debug = require'debug'
+
+local function eqtab (t1, t2)
+  assert(#t1 == #t2)
+  for i = 1, #t1 do
+    local v = t1[i]
+    assert(t2[i] == v)
+  end
+end
+
+local function func2close (f)
+  return setmetatable({}, {__close = f})
+end
+
+local function basics_test()
+    local main, ismain = coroutine.running()
+    assert(type(main) == "thread" and ismain)
+    assert(not coroutine.resume(main))
+    assert(not coroutine.isyieldable(main) and not coroutine.isyieldable())
+    assert(not (catch coroutine.yield()))
+end
+
+local function trivial_errors_test()
+    assert(not (catch coroutine.resume(0)))
+    assert(not (catch coroutine.status(0)))
+end
+
+local function multiple_yield_resume_args_test()
+    _G.x = nil
+    _G.f = nil
+    local function foo (a, ...)
+      local x, y = coroutine.running()
+      assert(x == _G.f and y == false)
+      assert(coroutine.resume(_G.f) == false)
+      assert(coroutine.status(_G.f) == "running")
+      local arg = {...}
+      assert(coroutine.isyieldable(x))
+      for i=1,#arg do
+        _G.x = {coroutine.yield(table.unpack(arg[i]))}
+      end
+      return table.unpack(a)
+    end
+    
+    _G.f = coroutine.create(foo)
+    assert(coroutine.isyieldable(_G.f))
+    assert(type(_G.f) == "thread" and coroutine.status(_G.f) == "suspended")
+    assert(string.find(tostring(_G.f), "thread"))
+    local s,a,b,c,d
+    s,a,b,c,d = coroutine.resume(_G.f, {1,2,3}, {}, {1}, {'a', 'b', 'c'})
+    assert(coroutine.isyieldable(_G.f))
+    assert(s and a == nil and coroutine.status(_G.f) == "suspended")
+    s,a,b,c,d = coroutine.resume(_G.f)
+    eqtab(_G.x, {})
+    assert(s and a == 1 and b == nil)
+    assert(coroutine.isyieldable(_G.f))
+    s,a,b,c,d = coroutine.resume(_G.f, 1, 2, 3)
+    eqtab(_G.x, {1, 2, 3})
+    assert(s and a == 'a' and b == 'b' and c == 'c' and d == nil)
+    s,a,b,c,d = coroutine.resume(_G.f, "xuxu")
+    eqtab(_G.x, {"xuxu"})
+    assert(s and a == 1 and b == 2 and c == 3 and d == nil)
+    assert(coroutine.status(_G.f) == "dead")
+    s, a = coroutine.resume(_G.f, "xuxu")
+    assert(not s and string.find(a, "dead") and coroutine.status(_G.f) == "dead")
+    
+    _G.f = nil
+    _G.x = nil
+end
+
+local function yields_in_tail_calls_test()
+    _G.x = nil
+    local function foo (i) return coroutine.yield(i) end
+    local f = coroutine.wrap(function ()
+      for i=1,10 do
+        assert(foo(i) == _G.x)
+      end
+      return 'a'
+    end)
+    for i=1,10 do _G.x = i; assert(f(i) == i) end
+    _G.x = 'xuxu'; assert(f('xuxu') == 'a')
+    _G.x = nil
+end
+
+local function recursive_coroutines_test()
+    local function pf (n, i)
+      coroutine.yield(n)
+      pf(n*i, i+1)
+    end
+    
+    local f = coroutine.wrap(pf)
+    local s=1
+    for i=1,10 do
+      assert(f(1, 1) == s)
+      s = s*i
+    end
+end
+
+local function sieve_of_eratosthenes_test()
+    local function gen (n)
+      return coroutine.wrap(function ()
+        for i=2,n do coroutine.yield(i) end
+      end)
+    end
+
+    local function filter (p, g)
+      return coroutine.wrap(function ()
+        while 1 do
+          local n = g()
+          if n == nil then return end
+          if math.fmod(n, p) ~= 0 then coroutine.yield(n) end
+        end
+      end)
+    end
+
+    local x = gen(80)
+    local a = {}
+    while 1 do
+      local n = x()
+      if n == nil then break end
+      table.insert(a, n)
+      x = filter(n, x)
+    end
+
+    assert(#a == 22 and a[#a] == 79)
+end
+
+local function stack_overflow_in_coroutine_test()
+    local function foo () foo () end    -- just create a stack overflow
+    local co = coroutine.create(foo)
+    local st, msg = coroutine.resume(co)
+    assert(string.find(msg, "stack overflow"))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function close_dead_coroutine_test()
+    local co = coroutine.create(print)
+    assert(coroutine.resume(co, "testing 'coroutine.close'"))
+    assert(coroutine.status(co) == "dead")
+    local st, msg = coroutine.close(co)
+    assert(st and msg == nil)
+    -- also ok to close it again
+    st, msg = coroutine.close(co)
+    assert(st and msg == nil)
+end
+
+local function cannot_close_main_coroutine_test()
+    local main = coroutine.running()
+    local st, msg = catch coroutine.close(main)
+    assert(not st and string.find(msg, "main"))
+end
+
+local function to_be_closed_in_coroutines_test()
+    local X
+    
+    local co = coroutine.create(function ()
+      local x <close> = func2close(function (self, err)
+        assert(err == nil); X = false
+      end)
+      X = true
+      coroutine.yield()
+    end)
+    coroutine.resume(co)
+    assert(X)
+    assert(coroutine.close(co))
+    assert(not X and coroutine.status(co) == "dead")
+end
+
+local function closing_coroutine_after_error_test()
+    local co = coroutine.create(error)
+    local st, msg = coroutine.resume(co, 100)
+    assert(not st and msg == 100)
+    st, msg = coroutine.close(co)
+    assert(not st and msg == 100)
+    -- after closing, no more errors
+    st, msg = coroutine.close(co)
+    assert(st and msg == nil)
+end
+
+local function coroutines_x_for_loop_test()
+    local function all (a, n, k)
+      if k == 0 then coroutine.yield(a)
+      else
+        for i=1,n do
+          a[k] = i
+          all(a, n, k-1)
+        end
+      end
+    end
+    
+    local a = 0
+    for t in coroutine.wrap(function () all({}, 5, 4) end) do
+      a = a+1
+    end
+    assert(a == 5^4)
+end
+
+local function old_bug_attempt_to_resume_itself_test()
+    local function co_func (current_co)
+      assert(coroutine.running() == current_co)
+      assert(coroutine.resume(current_co) == false)
+      coroutine.yield(10, 20)
+      assert(coroutine.resume(current_co) == false)
+      coroutine.yield(23)
+      return 10
+    end
+    
+    local co = coroutine.create(co_func)
+    local a,b,c = coroutine.resume(co, co)
+    assert(a == true and b == 10 and c == 20)
+    a,b = coroutine.resume(co, co)
+    assert(a == true and b == 23)
+    a,b = coroutine.resume(co, co)
+    assert(a == true and b == 10)
+    assert(coroutine.resume(co, co) == false)
+    assert(coroutine.resume(co, co) == false)
+end
+
+local function attempt_to_resume_normal_coroutine_test()
+    local co1, co2
+    co1 = coroutine.create(function () return co2() end)
+    co2 = coroutine.wrap(function ()
+            assert(coroutine.status(co1) == 'normal')
+            assert(not coroutine.resume(co1))
+            coroutine.yield(3)
+          end)
+    
+    local a,b = coroutine.resume(co1)
+    assert(a and b == 3)
+    assert(coroutine.status(co1) == 'dead')
+end
+
+local function infinite_recursion_of_coroutines_test()
+    local a = function(a) coroutine.wrap(a)(a) end
+    assert(not (catch a(a)))
+end
+
+local function errors_in_coroutines_test()
+    local function foo ()
+      coroutine.yield(3)
+      error("foo error")
+    end
+    
+    local function goo() foo() end
+    local x = coroutine.wrap(goo)
+    assert(x() == 3)
+    local a,b = catch x()
+    assert(not a)
+    
+    x = coroutine.create(goo)
+    local a,b = coroutine.resume(x)
+    assert(a and b == 3)
+    a,b = coroutine.resume(x)
+    assert(not a and coroutine.status(x) == "dead")
+end
+
+local function access_to_locals_of_collected_coroutine_test()
+    local C = {}; setmetatable(C, {__mode = "kv"})
+    local x = coroutine.wrap (function ()
+                local a = 10
+                local function f () a = a+10; return a end
+                while true do
+                  a = a+1
+                  coroutine.yield(f)
+                end
+              end)
+    
+    C[1] = x;
+    
+    local f = x()
+    assert(f() == 21 and x()() == 32 and x() == f)
+    x = nil
+    collectgarbage()
+    assert(C[1] == nil)
+    assert(f() == 43 and f() == 53)
+end
+
+
+--[[
+  Coroutine error boundaries and module completion.
+  This suite complements the first half of this file with the error-path surface of the
+  module: argument validation messages for every entry point, error object
+  preservation through resume, the close matrix over suspended, dead, errored,
+  normal, running, and fresh coroutines, to-be-closed variable handling on
+  both the close and the wrap paths, the full status transition matrix seen
+  from three vantage points, isyieldable across C-call boundaries, wrap error
+  propagation per Lua 5.5, stack overflow isolation, and debug.traceback over
+  suspended and errored coroutine stacks.
+]]
+
+
+
+
+local function func2close(f)
+    return setmetatable({}, {__close = f})
+end
+
+-- ============================================================================
+-- Argument validation
+-- ============================================================================
+
+local callable = setmetatable({}, {__call = function() end})
+
+local bad_argument_1_raises_with_the_expected_type_words_cases = {
+    {"create", 0, "function expected, got number"},
+    {"create", "x", "function expected, got string"},
+    {"create", callable, "function expected, got table"},
+    {"wrap", 0, "function expected, got number"},
+    {"close", 0, "thread expected, got number"},
+    {"isyieldable", 0, "thread expected, got number"},
+    {"resume", 0, "thread expected, got number"},
+    {"status", false, "thread expected, got boolean"},
+}
+
+local function bad_argument_1_raises_with_the_expected_type_words_test(name, arg, expected)
+    -- The call goes through a register-indexed function value, so the
+    -- message names the callee '?', which is why the name is not asserted.
+    local ok, err = catch coroutine[name](arg)
+    assert(ok == false)
+    assert(tostring(err):find("bad argument #1"))
+    assert(tostring(err):find(expected))
+end
+
+local function create_rejects_a_nil_argument_and_names_itself_test()
+    local ok, err = catch coroutine.create(nil)
+    assert(ok == false)
+    assert(tostring(err):find("bad argument #1 to 'create'"))
+    assert(tostring(err):find("function expected, got nil"))
+end
+
+local function status_with_no_argument_reports_a_missing_value_test()
+    local ok, err = catch coroutine.status()
+    assert(ok == false)
+    assert(tostring(err):find("bad argument #1 to 'status'"))
+    assert(tostring(err):find("thread expected, got no value"))
+end
+
+-- ============================================================================
+-- Error propagation through resume
+-- ============================================================================
+
+local function resume_preserves_a_non_string_error_object_untouched_test()
+    local obj = setmetatable({}, {__tostring = function() return "OBJ" end})
+    local co = coroutine.create(function() error(obj) end)
+    local s, e = coroutine.resume(co)
+    assert(s == false)
+    assert(rawequal(e, obj), "error object must round-trip through resume")
+    assert(tostring(e) == "OBJ")
+    assert(coroutine.status(co) == "dead")
+end
+
+local function resume_preserves_a_numeric_error_value_and_its_type_test()
+    local co = coroutine.create(function() error(12345) end)
+    local s, e = coroutine.resume(co)
+    assert(s == false)
+    assert(type(e) == "number")
+    assert(e == 12345)
+end
+
+local function a_string_error_thrown_in_a_coroutine_carries_its_source_loca_test()
+    local co = coroutine.create(function() error("located boom") end)
+    local s, e = coroutine.resume(co)
+    assert(s == false)
+    assert(e:find("coroutine_test"))
+    assert(e:find(":%d+: located boom"))
+end
+
+-- Lus deliberately normalizes a nil error object to a descriptive string in
+-- luaG_errormsg, so the boundary must deliver exactly that string.
+local function error_nil_in_a_coroutine_surfaces_the_no_error_object_string_test()
+    local co = coroutine.create(function() error(nil) end)
+    local s, e = coroutine.resume(co)
+    assert(s == false)
+    assert(e == "<no error object>")
+end
+
+local function a_runtime_error_in_a_coroutine_reports_the_operation_and_loc_test()
+    local co = coroutine.create(function()
+        local x = nil
+        return x + 1
+    end)
+    local s, e = coroutine.resume(co)
+    assert(s == false)
+    assert(e:find("attempt to perform arithmetic"))
+    assert(e:find("coroutine_test"))
+end
+
+local function resuming_a_dead_coroutine_reports_a_bare_unprefixed_message_test()
+    local co = coroutine.create(function() return 1 end)
+    assert(coroutine.resume(co))
+    local s, m = coroutine.resume(co)
+    assert(s == false)
+    assert(m == "cannot resume dead coroutine")
+end
+
+local function resuming_the_main_thread_from_itself_fails_as_non_suspended_test()
+    local main = coroutine.running()
+    local s, m = coroutine.resume(main)
+    assert(s == false)
+    assert(m == "cannot resume non-suspended coroutine")
+end
+
+local function a_coroutine_resuming_itself_gets_the_non_suspended_message_test()
+    local co
+    co = coroutine.create(function()
+        local s, m = coroutine.resume(co)
+        return s, m
+    end)
+    local ok, s, m = coroutine.resume(co)
+    assert(ok == true)
+    assert(s == false)
+    assert(m == "cannot resume non-suspended coroutine")
+end
+
+local function catch_around_resume_sees_resume_succeed_with_false_plus_mess_test()
+    local co = coroutine.create(function() error("swallowed by resume") end)
+    local ok, s, m = catch coroutine.resume(co)
+    assert(ok == true)
+    assert(s == false)
+    assert(tostring(m):find("swallowed by resume"))
+end
+
+local function resume_leaves_pending_close_variables_open_after_a_body_erro_test()
+    local closed = false
+    local co = coroutine.create(function()
+        local x <close> = func2close(function() closed = true end)
+        error("erred with tbc pending")
+    end)
+    local s = coroutine.resume(co)
+    assert(s == false)
+    assert(closed == false)
+    local cs, cm = coroutine.close(co)
+    assert(cs == false)
+    assert(tostring(cm):find("erred with tbc pending"))
+    assert(closed == true)
+end
+
+-- ============================================================================
+-- coroutine.close matrix
+-- ============================================================================
+
+local function close_on_a_suspended_coroutine_reports_an_erroring_close_test()
+    local co = coroutine.create(function()
+        local x <close> = func2close(function() error("tbc boom") end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local st, msg = coroutine.close(co)
+    assert(st == false)
+    assert(tostring(msg):find("tbc boom"))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function close_runs_pending_close_vars_in_reverse_order_and_surfaces_test()
+    local order = {}
+    local co = coroutine.create(function()
+        local outer <close> = func2close(function(_, e)
+            order[#order + 1] = "outer:" .. tostring(e)
+        end)
+        local inner <close> = func2close(function(_, e)
+            order[#order + 1] = "inner:" .. tostring(e)
+            error("inner close error")
+        end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local st, msg = coroutine.close(co)
+    assert(st == false)
+    assert(tostring(msg):find("inner close error"))
+    assert(#order == 2)
+    assert(order[1] == "inner:nil")
+    assert(order[2]:find("^outer:"))
+    assert(order[2]:find("inner close error"))
+end
+
+local function close_on_a_fresh_coroutine_kills_it_before_it_ever_runs_test()
+    local ran = false
+    local co = coroutine.create(function() ran = true end)
+    local st, msg = coroutine.close(co)
+    assert(st == true and msg == nil)
+    assert(coroutine.status(co) == "dead")
+    assert(ran == false)
+    local s, m = coroutine.resume(co)
+    assert(s == false)
+    assert(m == "cannot resume dead coroutine")
+end
+
+local function closing_a_normal_coroutine_raises_test()
+    local outer
+    local result
+    outer = coroutine.create(function()
+        local inner = coroutine.create(function()
+            local ok, e = catch coroutine.close(outer)
+            result = {ok, tostring(e)}
+        end)
+        assert(coroutine.resume(inner))
+    end)
+    assert(coroutine.resume(outer))
+    assert(result ~= nil)
+    assert(result[1] == false)
+    assert(result[2]:find("cannot close a normal coroutine"))
+end
+
+local function closing_the_running_coroutine_ends_it_immediately_test()
+    local reached = false
+    local closed = false
+    local co = coroutine.create(function()
+        local x <close> = func2close(function() closed = true end)
+        coroutine.close(coroutine.running())
+        reached = true
+    end)
+    local ok, extra = coroutine.resume(co)
+    assert(ok == true and extra == nil)
+    assert(reached == false)
+    assert(closed == true)
+    assert(coroutine.status(co) == "dead")
+end
+
+local function close_with_no_argument_in_the_main_thread_raises_test()
+    local ok, e = catch coroutine.close()
+    assert(ok == false)
+    assert(tostring(e):find("cannot close main thread"))
+end
+
+local function close_returns_the_pending_error_object_unconverted_test()
+    local t = {tag = "errobj"}
+    local co = coroutine.create(function() error(t) end)
+    local s, e = coroutine.resume(co)
+    assert(s == false and rawequal(e, t))
+    local cs, ce = coroutine.close(co)
+    assert(cs == false)
+    assert(rawequal(ce, t), "close must hand back the very same error object")
+    cs, ce = coroutine.close(co)
+    assert(cs == true and ce == nil)
+end
+
+local function a_close_that_yields_during_close_fails_with_a_boundary_error_test()
+    local co = coroutine.create(function()
+        local x <close> = func2close(function() coroutine.yield("escape") end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local st, msg = coroutine.close(co)
+    assert(st == false)
+    assert(tostring(msg):find("attempt to yield"))
+    assert(coroutine.status(co) == "dead")
+end
+
+-- ============================================================================
+-- Status transition matrix
+-- ============================================================================
+
+local function status_matrix_across_main_outer_and_inner_vantage_points_test()
+    local statuses = {}
+    local main = coroutine.running()
+    local A, B
+    B = coroutine.create(function()
+        statuses.B_self = coroutine.status(B)
+        statuses.A_from_B = coroutine.status(A)
+        statuses.main_from_B = coroutine.status(main)
+        coroutine.yield()
+    end)
+    A = coroutine.create(function()
+        statuses.B_before = coroutine.status(B)
+        assert(coroutine.resume(B))
+        statuses.B_after_yield = coroutine.status(B)
+        coroutine.yield()
+    end)
+    statuses.A_initial = coroutine.status(A)
+    assert(coroutine.resume(A))
+    statuses.A_suspended = coroutine.status(A)
+    statuses.B_from_main = coroutine.status(B)
+    assert(coroutine.resume(A))
+    statuses.A_dead = coroutine.status(A)
+
+    assert(statuses.A_initial == "suspended")
+    assert(statuses.B_before == "suspended")
+    assert(statuses.B_self == "running")
+    assert(statuses.A_from_B == "normal")
+    assert(statuses.main_from_B == "normal")
+    assert(statuses.B_after_yield == "suspended")
+    assert(statuses.A_suspended == "suspended")
+    assert(statuses.B_from_main == "suspended")
+    assert(statuses.A_dead == "dead")
+end
+
+-- ============================================================================
+-- coroutine.running identity
+-- ============================================================================
+
+local function running_inside_a_coroutine_returns_that_coroutine_and_false_test()
+    local main = coroutine.running()
+    local co
+    co = coroutine.create(function()
+        local me, ismain = coroutine.running()
+        coroutine.yield(me == co, ismain, me == main)
+    end)
+    local s, isself, ismain, ismainthread = coroutine.resume(co)
+    assert(s == true)
+    assert(isself == true)
+    assert(ismain == false)
+    assert(ismainthread == false)
+end
+
+local function running_in_a_nested_coroutine_returns_the_innermost_thread_test()
+    local inner_seen
+    local inner
+    local outer = coroutine.create(function()
+        inner = coroutine.create(function()
+            inner_seen = coroutine.running()
+        end)
+        assert(coroutine.resume(inner))
+    end)
+    assert(coroutine.resume(outer))
+    assert(inner_seen == inner)
+    assert(inner_seen ~= outer)
+end
+
+-- ============================================================================
+-- isyieldable across C-call boundaries
+-- ============================================================================
+
+local function isyieldable_is_true_inside_a_metamethod_invoked_from_a_corou_test()
+    local witness = {}
+    local proxy = setmetatable({}, {__index = function(_, k)
+        witness.mm = coroutine.isyieldable()
+        return k
+    end})
+    local co = coroutine.create(function()
+        witness.body = coroutine.isyieldable()
+        return proxy.field
+    end)
+    local s, v = coroutine.resume(co)
+    assert(s == true and v == "field")
+    assert(witness.body == true)
+    assert(witness.mm == true)
+end
+
+local function isyieldable_is_false_inside_a_gsub_callback_called_from_a_co_test()
+    local witness
+    local co = coroutine.create(function()
+        string.gsub("x", "x", function()
+            witness = coroutine.isyieldable()
+            return ""
+        end)
+    end)
+    assert(coroutine.resume(co))
+    assert(witness == false)
+end
+
+local function isyieldable_on_the_main_thread_queried_from_a_coroutine_is_f_test()
+    local main = coroutine.running()
+    local co = coroutine.create(function()
+        coroutine.yield(coroutine.isyieldable(main))
+    end)
+    local s, v = coroutine.resume(co)
+    assert(s == true)
+    assert(v == false)
+end
+
+local function yield_inside_a_gsub_callback_raises_a_boundary_error_test()
+    local co = coroutine.create(function()
+        string.gsub("x", "x", function()
+            coroutine.yield("nope")
+            return ""
+        end)
+        return "unreached"
+    end)
+    local s, m = coroutine.resume(co)
+    assert(s == false)
+    assert(tostring(m):find("attempt to yield across a C%-call boundary"))
+    assert(coroutine.status(co) == "dead")
+end
+
+-- ============================================================================
+-- wrap error propagation
+-- ============================================================================
+
+local function wrap_adds_the_call_site_location_to_a_string_error_test()
+    local w = coroutine.wrap(function() error("wrap boom") end)
+    local ok, e = catch w()
+    assert(ok == false)
+    local first = tostring(e):match("^[^\n]*")
+    local _, count = string.gsub(first, "coroutine_test%.lus:%d+:", "")
+    assert(count == 2)
+    assert(first:find("wrap boom$"))
+end
+
+local function wrap_closes_the_coroutine_when_it_propagates_an_error_test()
+    local closed = false
+    local w = coroutine.wrap(function()
+        local x <close> = func2close(function() closed = true end)
+        coroutine.yield(1)
+        error("late failure")
+    end)
+    assert(w() == 1)
+    assert(closed == false)
+    local ok, e = catch w()
+    assert(ok == false)
+    assert(tostring(e):find("late failure"))
+    assert(closed == true)
+    local ok2, e2 = catch w()
+    assert(ok2 == false)
+    assert(tostring(e2):find("cannot resume dead coroutine"))
+end
+
+local function calling_a_wrapper_after_normal_completion_raises_dead_test()
+    local w = coroutine.wrap(function() return "once" end)
+    assert(w() == "once")
+    local ok, e = catch w()
+    assert(ok == false)
+    assert(tostring(e):find("cannot resume dead coroutine"))
+end
+
+local function wrap_propagates_a_numeric_error_without_a_location_prefix_test()
+    local w = coroutine.wrap(function() error(404) end)
+    local ok, e = catch w()
+    assert(ok == false)
+    assert(tostring(e):sub(1, 3) == "404")
+end
+
+local function wrap_propagates_a_table_error_object_to_catch_as_a_table_test()
+    local t = {code = 9}
+    local w = coroutine.wrap(function() error(t) end)
+    local ok, e = catch w()
+    assert(ok == false)
+    assert(type(e) == "table")
+    assert(e.code == 9)
+end
+
+-- ============================================================================
+-- Yield inside catch
+-- ============================================================================
+
+local function catch_containing_coroutine_yield_suspends_like_pcall_test()
+    local co = coroutine.create(function(a)
+        local ok, v1, v2 = catch coroutine.yield(a + 1)
+        return "finished", ok, v1, v2
+    end)
+    local s, y = coroutine.resume(co, 10)
+    assert(s == true)
+    assert(y == 11, "coroutine must suspend at the yield inside catch, resume returned " .. tostring(y))
+    local s2, r1, r2, r3, r4 = coroutine.resume(co, "a", "b")
+    assert(s2 == true)
+    assert(r1 == "finished")
+    assert(r2 == true)
+    assert(r3 == "a" and r4 == "b")
+    assert(coroutine.status(co) == "dead")
+end
+
+local function a_coroutine_that_caught_a_yield_ends_dead_after_completing_test()
+    local co = coroutine.create(function()
+        catch coroutine.yield("Y")
+        return "R"
+    end)
+    local s, v = coroutine.resume(co)
+    assert(s == true)
+    if v == "Y" then
+        s, v = coroutine.resume(co)
+        assert(s == true and v == "R")
+    else
+        assert(v == "R", "unexpected first resume result " .. tostring(v))
+    end
+    assert(coroutine.status(co) == "dead")
+end
+
+-- ============================================================================
+-- Stack overflow isolation
+-- ============================================================================
+
+local function stack_overflow_in_a_coroutine_is_contained_and_closable_test()
+    local function rec()
+        rec()
+        return 1
+    end
+    local co = coroutine.create(rec)
+    local s, m = coroutine.resume(co)
+    assert(s == false)
+    assert(tostring(m):find("stack overflow"))
+    assert(coroutine.status(co) == "dead")
+    local cs, cm = coroutine.close(co)
+    assert(cs == false)
+    assert(tostring(cm):find("stack overflow"))
+    cs, cm = coroutine.close(co)
+    assert(cs == true and cm == nil)
+    local function depth(n)
+        if n == 0 then return 0 end
+        return 1 + depth(n - 1)
+    end
+    assert(depth(1000) == 1000)
+    assert(coroutine.wrap(function() return "alive" end)() == "alive")
+end
+
+-- ============================================================================
+-- debug.traceback over coroutine stacks
+-- ============================================================================
+
+local function traceback_of_a_suspended_coroutine_renders_its_frames_test()
+    local function leaf() coroutine.yield() end
+    local function stem() leaf() end
+    local co = coroutine.create(function() stem() end)
+    assert(coroutine.resume(co))
+    local tb = debug.traceback(co)
+    assert(tb:find("stack traceback:"))
+    assert(tb:find("yield"))
+    assert(tb:find("leaf"))
+    assert(tb:find("stem"))
+    assert(coroutine.status(co) == "suspended")
+    assert(coroutine.resume(co))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function traceback_accepts_a_message_that_leads_the_output_test()
+    local co = coroutine.create(function() coroutine.yield() end)
+    assert(coroutine.resume(co))
+    local msg = "leading message"
+    local tb = debug.traceback(co, msg)
+    assert(tb:sub(1, #msg) == msg)
+    assert(tb:find("stack traceback:"))
+end
+
+local function an_errored_coroutine_keeps_its_stack_for_traceback_until_clo_test()
+    local co = coroutine.create(function()
+        local function boomer() error("kept for post mortem") end
+        boomer()
+    end)
+    local s = coroutine.resume(co)
+    assert(s == false)
+    assert(coroutine.status(co) == "dead")
+    local tb = debug.traceback(co)
+    assert(tb:find("boomer"))
+    coroutine.close(co)
+    local tb2 = debug.traceback(co)
+    assert(not tb2:find("boomer"), "a closed coroutine must have an empty stack")
+end
+

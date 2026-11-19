@@ -1,0 +1,585 @@
+--[[
+  Error-object model and catch handler tests for Lus.
+
+  This suite pins the raw error-object model of catch: the caught value is
+  the error object exactly as raised, whatever its type, with no traceback
+  text appended and no string conversion. A nil payload is the single
+  exception and is replaced by the "<no error object>" message. The suite
+  also pins the position prefix rules for each error() level using loaded
+  chunks with controlled names and line numbers, rethrow idempotence at
+  level 0, assert() message pass-through, and the bracketed catch[handler]
+  form from acquis 20.
+]]
+
+
+pledge("load")
+
+-- The runner rewrites calls named assert into power asserts, so the tests of
+-- the real assert builtin call it through this alias.
+local raw_assert = assert
+
+
+-- Helper that returns only the first line of an error string. Caught errors
+-- carry no traceback, so for strings raised by this suite it is the whole
+-- text, but it keeps assertions robust against future multi-line messages.
+local function firstline(err)
+    return tostring(err):match("^[^\n]*")
+end
+
+-- Helper that counts how many traceback sections a caught error carries.
+local function tbcount(err)
+    local _, n = tostring(err):gsub("stack traceback:", "")
+    return n
+end
+
+-- ============================================================================
+-- Error payloads pass through catch unconverted
+-- ============================================================================
+
+local non_string_payloads_are_caught_as_the_raw_value_cases = {
+    {"true", function() return true end},
+    {"false", function() return false end},
+    {"table", function() return {code = 500} end},
+    {"function", function() return print end},
+    {"thread", function() return coroutine.create(function() end) end},
+    {"vector", function() return vector.create(4) end},
+}
+
+local function non_string_payloads_are_caught_as_the_raw_value_test(label, make)
+    local value = make()
+    local ok, err = catch error(value)
+    assert(not ok)
+    assert(rawequal(err, value))
+end
+
+local function a_nil_payload_becomes_the_no_error_object_message_test()
+    local ok, err = catch error(nil)
+    assert(not ok)
+    assert(err == "<no error object>")
+end
+
+local function error_with_no_arguments_behaves_like_error_nil_test()
+    local ok, err = catch error()
+    assert(not ok)
+    assert(err == "<no error object>")
+end
+
+local function enum_value_payload_is_caught_as_the_enum_value_test()
+    local E = enum red, green end
+    local ok, err = catch error(E.red)
+    assert(not ok)
+    assert(err == E.red)
+end
+
+local function integer_payload_stays_a_number_with_no_position_prefix_test()
+    local ok, err = catch error(42)
+    assert(not ok)
+    assert(err == 42)
+end
+
+local function float_payload_stays_a_float_test()
+    local ok, err = catch error(1.5)
+    assert(not ok)
+    assert(err == 1.5)
+end
+
+local function integer_payload_keeps_no_prefix_even_at_explicit_level_1_test()
+    local ok, err = catch error(42, 1)
+    assert(not ok)
+    assert(err == 42)
+end
+
+local function table_payload_identity_is_preserved_through_catch_test()
+    local t = {code = 500}
+    local ok, err = catch error(t)
+    assert(not ok)
+    assert(rawequal(err, t))
+    assert(err.code == 500)
+end
+
+local function string_error_carries_no_traceback_text_test()
+    local ok, err = catch error("fresh")
+    assert(not ok)
+    assert(tbcount(err) == 0)
+end
+
+local function a_level_0_string_error_is_caught_byte_for_byte_test()
+    local ok, err = catch error("exact text", 0)
+    assert(not ok)
+    assert(err == "exact text")
+end
+
+local function an_object_with_tostring_passes_through_unconverted_test()
+    local obj = setmetatable({}, {__tostring = function() return "custom repr" end})
+    local ok, err = catch error(obj)
+    assert(not ok)
+    assert(rawequal(err, obj))
+    assert(tostring(err) == "custom repr")
+end
+
+local function catch_does_not_consult_tostring_at_all_test()
+    local calls = 0
+    local obj = setmetatable({}, {__tostring = function() calls = calls + 1 return "x" end})
+    local ok, err = catch error(obj)
+    assert(not ok)
+    assert(calls == 0)
+    assert(rawequal(err, obj))
+end
+
+local function a_one_megabyte_message_survives_catch_intact_test()
+    local big = string.rep("x", 1000000)
+    local ok, err = catch error(big, 0)
+    assert(not ok)
+    assert(#err == 1000000)
+    assert(err == big)
+end
+
+-- ============================================================================
+-- Position prefix per error() level, using loaded chunks so the chunk name
+-- and line numbers in the prefix are fully controlled.
+-- ============================================================================
+
+local function default_level_prefixes_the_erroring_line_of_the_chunk_test()
+    local f = load("\n\nerror('boom')", "=errchunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "errchunk:3: boom")
+end
+
+local function explicit_level_1_matches_the_default_test()
+    local f = load("error('boom', 1)", "=onechunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "onechunk:1: boom")
+end
+
+local function level_2_prefixes_the_caller_s_line_test()
+    local f = load("local function inner() error('e2', 2) end\ninner()", "=lv2chunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "lv2chunk:2: e2")
+end
+
+local function level_3_prefixes_the_caller_s_caller_test()
+    local src = "local function a() error('e3', 3) end\nlocal function b() a() end\nb()"
+    local f = load(src, "=lv3chunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "lv3chunk:3: e3")
+end
+
+local function level_0_omits_the_position_prefix_entirely_test()
+    local f = load("error('e0', 0)", "=lv0chunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "e0")
+end
+
+local function a_level_beyond_the_stack_depth_omits_the_prefix_test()
+    local f = load("error('hi', 10)", "=deepchunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "hi")
+end
+
+local function the_prefix_names_the_error_call_line_not_the_definition_line_test()
+    local src = "local function f()\n\nerror('late') end\nf()"
+    local f = load(src, "=defchunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "defchunk:3: late")
+end
+
+local function errors_raised_in_this_file_are_prefixed_with_this_file_s_nam_test()
+    local ok, err = catch error("here")
+    assert(not ok)
+    assert(firstline(err):match("errmodel_test%.lus:%d+: here$") ~= nil)
+end
+
+local function the_level_argument_is_type_checked_test()
+    local ok, err = catch error("x", true)
+    assert(not ok)
+    assert(err:find("bad argument #2 to 'error' %(number expected, got boolean%)"))
+end
+
+-- ============================================================================
+-- Rethrow idempotence
+-- ============================================================================
+
+local function rethrowing_a_prefixed_first_line_at_level_0_keeps_it_unchang_test()
+    local f = load("error('base')", "=rchunk")
+    local ok, err = catch f()
+    local first = firstline(err)
+    assert(first == "rchunk:1: base")
+    local ok2, err2 = catch error(first, 0)
+    assert(not ok2)
+    assert(firstline(err2) == "rchunk:1: base")
+end
+
+local function rethrowing_the_full_caught_text_at_level_0_does_not_double_t_test()
+    local f = load("error('base')", "=r2chunk")
+    local ok, err = catch f()
+    local ok2, err2 = catch error(err, 0)
+    assert(not ok2)
+    assert(firstline(err2) == "r2chunk:1: base")
+end
+
+-- The caught text carries no traceback, so a level 0 rethrow reproduces it
+-- byte for byte and repeated catch/rethrow cycles are stable.
+local function a_caught_error_rethrown_at_level_0_is_byte_identical_test()
+    local f = load("error('base')", "=r3chunk")
+    local ok, err = catch f()
+    assert(tbcount(err) == 0)
+    local ok2, err2 = catch error(err, 0)
+    assert(not ok2)
+    assert(err2 == err)
+    assert(tbcount(err2) == 0)
+end
+
+local function rethrowing_at_level_1_prepends_a_fresh_position_prefix_test()
+    local f = load("error('base')", "=r4chunk")
+    local ok, err = catch f()
+    local first = firstline(err)
+    local ok2, err2 = catch error(first)
+    assert(not ok2)
+    assert(firstline(err2):match("errmodel_test%.lus:%d+: rchunk") == nil)
+    assert(firstline(err2):match("errmodel_test%.lus:%d+: r4chunk:1: base$") ~= nil)
+end
+
+-- ============================================================================
+-- assert() message conversion
+-- ============================================================================
+
+local function assert_false_raises_the_prefixed_default_message_test()
+    local f = load("assert(false)", "=achunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "achunk:1: assertion failed!")
+end
+
+local function assert_with_a_custom_string_message_gets_a_position_prefix_test()
+    local f = load("assert(false, 'custom')", "=bchunk")
+    local ok, err = catch f()
+    assert(not ok)
+    assert(firstline(err) == "bchunk:1: custom")
+end
+
+local function assert_with_a_number_message_keeps_the_number_without_a_pref_test()
+    local ok, err = catch raw_assert(false, 42)
+    assert(not ok)
+    assert(err == 42)
+end
+
+local function assert_with_a_table_message_passes_the_table_through_test()
+    local t = {code = 1}
+    local ok, err = catch raw_assert(false, t)
+    assert(not ok)
+    assert(rawequal(err, t))
+    assert(err.code == 1)
+end
+
+local function assert_with_a_tostring_message_passes_the_object_through_test()
+    local obj = setmetatable({}, {__tostring = function() return "assert repr" end})
+    local ok, err = catch raw_assert(false, obj)
+    assert(not ok)
+    assert(rawequal(err, obj))
+    assert(tostring(err) == "assert repr")
+end
+
+local function assert_with_an_enum_message_passes_the_enum_value_through_test()
+    local E = enum alpha, beta end
+    local ok, err = catch raw_assert(false, E.alpha)
+    assert(not ok)
+    assert(err == E.alpha)
+end
+
+local function assert_with_no_arguments_raises_a_catchable_bad_argument_err_test()
+    local ok, err = catch raw_assert()
+    assert(not ok)
+    assert(err:find("bad argument #1 to 'assert' %(value expected%)"))
+end
+
+-- ============================================================================
+-- Catch expression result arity in statement and expression positions
+-- ============================================================================
+
+local function success_in_tail_position_yields_ok_plus_every_return_value_test()
+    local function multi() return 1, 2, 3 end
+    assert(select("#", catch multi()) == 4)
+end
+
+local function success_with_zero_returns_leaves_a_nil_value_slot_test()
+    local function nothing() end
+    local ok, extra = catch nothing()
+    assert(ok)
+    assert(extra ~= nothing)
+    assert(extra == nil)
+end
+
+local function failure_in_tail_position_yields_exactly_two_values_test()
+    assert(select("#", catch error("x")) == 2)
+end
+
+local function parenthesizing_a_catch_truncates_it_to_the_ok_boolean_test()
+    local function multi() return 1, 2, 3 end
+    assert(select("#", (catch multi())) == 1)
+    assert((catch multi()) == true)
+    assert((catch error("x")) == false)
+end
+
+local function a_catch_before_the_last_expression_truncates_to_one_value_test()
+    local function multi() return 1, 2, 3 end
+    local a, b = catch multi(), 10
+    assert(a == true)
+    assert(b == 10)
+end
+
+local function a_failing_catch_before_the_last_expression_truncates_too_test()
+    local a, b = catch error("x"), 5
+    assert(a == false)
+    assert(b == 5)
+end
+
+-- ============================================================================
+-- catch[handler]: transformation basics
+-- ============================================================================
+
+local function the_handler_transforms_the_error_and_ok_stays_false_test()
+    local ok, err = catch[function(e) return "H:" .. firstline(e) end] error("oops", 0)
+    assert(not ok)
+    assert(err == "H:oops")
+end
+
+local function the_handler_is_not_called_on_success_and_values_pass_through_test()
+    local called = false
+    local handler = function(e) called = true return e end
+    local function multi() return "a", "b" end
+    local ok, x, y = catch[handler] multi()
+    assert(ok)
+    assert(x == "a")
+    assert(y == "b")
+    assert(not called)
+end
+
+local function success_under_a_handler_keeps_full_multret_arity_test()
+    local function multi() return 1, 2, 3 end
+    assert(select("#", catch[function(e) return e end] multi()) == 4)
+end
+
+local function a_handler_works_on_a_plain_value_expression_test()
+    local ok, val = catch[function(e) return e end] (1 + 2)
+    assert(ok)
+    assert(val == 3)
+end
+
+local function the_handler_receives_exactly_one_argument_test()
+    local nargs
+    local handler = function(...)
+        nargs = select("#", ...)
+        return "done"
+    end
+    local ok, err = catch[handler] error("solo")
+    assert(not ok)
+    assert(nargs == 1)
+    assert(err == "done")
+end
+
+local function the_handler_runs_exactly_once_per_error_test()
+    local calls = 0
+    local ok, err = catch[function(e) calls = calls + 1 return calls end] error("once")
+    assert(not ok)
+    assert(calls == 1)
+    assert(err == 1)
+end
+
+local function a_handler_referenced_through_a_local_variable_works_test()
+    local myh = function(e) return "local-h" end
+    local ok, err = catch[myh] error("q")
+    assert(not ok)
+    assert(err == "local-h")
+end
+
+local function the_handler_may_return_a_non_string_replacement_test()
+    local wrap = function(e) return {message = firstline(e)} end
+    local ok, res = catch[wrap] error("db down", 0)
+    assert(not ok)
+    assert(type(res) == "table")
+    assert(res.message == "db down")
+end
+
+-- ============================================================================
+-- catch[handler]: what the handler receives
+-- ============================================================================
+
+-- The handler receives the raw error object exactly as raised, so table
+-- payloads and other rich error objects arrive intact.
+local function the_handler_receives_the_raw_table_payload_test()
+    local t = {code = 7}
+    local seen
+    local ok = catch[function(e) seen = e return "r" end] error(t)
+    assert(not ok)
+    assert(rawequal(seen, t))
+    assert(seen.code == 7)
+end
+
+local function the_handler_input_keeps_the_exact_message_at_level_0_test()
+    local seen
+    catch[function(e) seen = e return 1 end] error("cc", 0)
+    assert(firstline(seen) == "cc")
+end
+
+local function the_handler_input_carries_the_position_prefix_at_level_1_test()
+    local seen
+    catch[function(e) seen = e return 1 end] error("hmsg")
+    assert(firstline(seen):match("errmodel_test%.lus:%d+: hmsg$") ~= nil)
+end
+
+local function the_handler_input_carries_no_traceback_text_test()
+    local seen
+    catch[function(e) seen = e return 1 end] error("tb", 0)
+    assert(seen == "tb")
+end
+
+local function the_handler_receives_runtime_fault_text_too_test()
+    local x = nil
+    local ok, err = catch[function(e) return "F:" .. firstline(e) end] (x + 1)
+    assert(not ok)
+    assert(err:find("attempt to perform arithmetic"))
+end
+
+local function the_handler_can_transform_a_stack_overflow_error_test()
+    local function nontail(n)
+        n = n + 1
+        nontail(n)
+        return n
+    end
+    local ok, err = catch[function(e) return "OV:" .. firstline(e) end] nontail(0)
+    assert(not ok)
+    assert(err:find("^OV:"))
+    assert(err:find("stack overflow"))
+end
+
+-- ============================================================================
+-- catch[handler]: result arity
+-- ============================================================================
+
+local function a_handler_returning_nothing_leaves_a_nil_error_slot_test()
+    local ok, err = catch[function(e) end] error("z")
+    assert(not ok)
+    assert(err == nil)
+    assert(select("#", catch[function(e) end] error("z")) == 2)
+end
+
+local function only_the_handler_s_first_return_value_is_kept_test()
+    assert(select("#", catch[function(e) return 1, 2, 3 end] error("m")) == 2)
+    local ok, first = catch[function(e) return "x", "y", "z" end] error("m")
+    assert(not ok)
+    assert(first == "x")
+end
+
+local function extra_assignment_targets_are_nil_filled_on_a_handled_error_test()
+    local a, b, c, d = catch[function(e) return "only" end] error("m")
+    assert(a == false)
+    assert(b == "only")
+    assert(c == nil)
+    assert(d == nil)
+end
+
+local function a_handled_error_expands_to_two_values_in_a_table_constructor_test()
+    local t = {catch[function(e) return "r" end] error("x", 0)}
+    assert(#t == 2)
+    assert(t[1] == false)
+    assert(t[2] == "r")
+end
+
+-- ============================================================================
+-- catch[handler]: handler failures, statement form, nesting
+-- ============================================================================
+
+local function an_error_inside_the_handler_propagates_to_an_outer_catch_test()
+    local ok, err = catch (catch[function(e) error("handler boom", 0) end] error("orig"))
+    assert(not ok)
+    assert(firstline(err) == "handler boom")
+end
+
+local function statement_form_runs_the_handler_and_suppresses_the_error_test()
+    local seen = nil
+    catch[function(e) seen = firstline(e) return "ignored" end] error("stmt", 0)
+    assert(seen == "stmt")
+end
+
+local function statement_form_does_not_run_the_handler_on_success_test()
+    local called = false
+    catch[function(e) called = true return e end] (1 + 1)
+    assert(not called)
+end
+
+local function handler_statements_in_a_loop_keep_registers_intact_test()
+    local hits = 0
+    local a, b = 1, 2
+    for i = 1, 50 do
+        catch[function(e) hits = hits + 1 return e end] error("r" .. i, 0)
+    end
+    local c = 3
+    assert(hits == 50)
+    assert(a == 1 and b == 2 and c == 3)
+end
+
+local function nested_handlers_transform_their_own_errors_independently_test()
+    local inner_h = function(e) return "inner<" .. firstline(e) .. ">" end
+    local outer_h = function(e) return "outer<" .. firstline(e) .. ">" end
+    local inner_seen
+    local ok, err = catch[outer_h] (function()
+        local iok, ierr = catch[inner_h] error("deep", 0)
+        inner_seen = {iok, ierr}
+        error("shallow", 0)
+    end)()
+    assert(not ok)
+    assert(err == "outer<shallow>")
+    assert(inner_seen[1] == false)
+    assert(inner_seen[2] == "inner<deep>")
+end
+
+local function an_inner_handled_catch_does_not_trip_the_outer_handler_test()
+    local outer_called = false
+    local ok, val = catch[function(e) outer_called = true return e end] (function()
+        catch[function(e) return e end] error("swallowed")
+        return "survived"
+    end)()
+    assert(ok)
+    assert(val == "survived")
+    assert(not outer_called)
+end
+
+-- ============================================================================
+-- Handler argument and validation contract
+-- ============================================================================
+
+local function the_documented_simplify_example_yields_the_bare_message_test()
+    local function simplify(err)
+        return err:match("^[^:]+:[^:]+: (.+)") or err
+    end
+    local ok, err = catch[simplify] error("something went wrong")
+    assert(not ok)
+    assert(err == "something went wrong")
+end
+
+local function a_call_table_handler_is_rejected_like_a_plain_table_test()
+    local callable = setmetatable({}, {__call = function(self, e) return "callable" end})
+    local ok, err = catch (function()
+        catch[callable] error("cc", 0)
+        return "no rejection happened"
+    end)()
+    assert(not ok)
+    assert(err:find("attempt to use a table value as a catch handler"))
+end
+
+local function a_non_callable_handler_value_raises_an_error_test()
+    local ok, err = catch (function()
+        catch[42] error("nc", 0)
+        return "no rejection happened"
+    end)()
+    assert(not ok)
+    assert(err:find("attempt to use a number value as a catch handler"))
+end
+

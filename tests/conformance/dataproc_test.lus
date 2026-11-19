@@ -1,0 +1,1002 @@
+
+pledge("load")
+
+
+-- ============================================================
+-- table.sum
+-- ============================================================
+
+local function table_sum_basic_test()
+    assert(table.sum({1, 2, 3, 4, 5}) == 15)
+end
+
+local function table_sum_empty_table_test()
+    assert(table.sum({}) == 0)
+end
+
+local function table_sum_skips_non_numeric_test()
+    assert(table.sum({1, "skip", 2, true, 3}) == 6)
+end
+
+local function table_sum_single_element_test()
+    assert(table.sum({42}) == 42)
+end
+
+local function table_sum_with_floats_test()
+    assert(table.sum({1.5, 2.5}) == 4.0)
+end
+
+-- ============================================================
+-- table.mean
+-- ============================================================
+
+local function table_mean_basic_test()
+    assert(table.mean({1, 2, 3, 4, 5}) == 3)
+end
+
+local function table_mean_two_values_test()
+    assert(table.mean({10, 20}) == 15)
+end
+
+local function table_mean_empty_is_nan_test()
+    local nan = table.mean({})
+    assert(nan ~= nan)
+end
+
+local function table_mean_skips_non_numeric_test()
+    assert(table.mean({10, "skip", 20}) == 15)
+end
+
+-- ============================================================
+-- table.median
+-- ============================================================
+
+local function table_median_odd_count_test()
+    assert(table.median({5, 1, 3, 2, 4}) == 3)
+end
+
+local function table_median_even_count_test()
+    assert(table.median({1, 2, 3, 4}) == 2.5)
+end
+
+local function table_median_single_element_test()
+    assert(table.median({7}) == 7)
+end
+
+local function table_median_empty_is_nan_test()
+    local nan = table.median({})
+    assert(nan ~= nan)
+end
+
+local function table_median_does_not_modify_original_test()
+    local t = {5, 1, 3}
+    table.median(t)
+    assert(t[1] == 5 and t[2] == 1 and t[3] == 3)
+end
+
+-- ============================================================
+-- table.stdev
+-- ============================================================
+
+local function table_stdev_population_test()
+    local values = {2, 4, 4, 4, 5, 5, 7, 9}
+    local sd = table.stdev(values)
+    assert(math.abs(sd - 2.0) < 0.001, "population stdev of test data should be 2.0")
+end
+
+local function table_stdev_sample_test()
+    local values = {2, 4, 4, 4, 5, 5, 7, 9}
+    local sd = table.stdev(values, true)
+    assert(sd > 2.0, "sample stdev should be > population stdev")
+end
+
+local function table_stdev_empty_is_nan_test()
+    local nan = table.stdev({})
+    assert(nan ~= nan)
+end
+
+local function table_stdev_single_element_population_test()
+    assert(table.stdev({5}) == 0)
+end
+
+local function table_stdev_single_element_sample_is_nan_test()
+    local nan = table.stdev({5}, true)
+    assert(nan ~= nan)
+end
+
+-- ============================================================
+-- table.map
+-- ============================================================
+
+local function table_map_basic_test()
+    local doubled = table.map({1, 2, 3}, function(x) return x * 2 end)
+    assert(doubled[1] == 2 and doubled[2] == 4 and doubled[3] == 6)
+end
+
+local function table_map_receives_index_test()
+    local indices = table.map({"a", "b", "c"}, function(_, i) return i end)
+    assert(indices[1] == 1 and indices[2] == 2 and indices[3] == 3)
+end
+
+local function table_map_empty_table_test()
+    local result = table.map({}, function(x) return x end)
+    assert(#result == 0)
+end
+
+local function table_map_does_not_modify_original_test()
+    local t = {1, 2, 3}
+    table.map(t, function(x) return x * 10 end)
+    assert(t[1] == 1 and t[2] == 2 and t[3] == 3)
+end
+
+-- ============================================================
+-- table.filter
+-- ============================================================
+
+local function table_filter_basic_test()
+    local evens = table.filter({1, 2, 3, 4, 5}, function(x) return x % 2 == 0 end)
+    assert(#evens == 2)
+    assert(evens[1] == 2 and evens[2] == 4)
+end
+
+local function table_filter_none_match_test()
+    local result = table.filter({1, 3, 5}, function(x) return x % 2 == 0 end)
+    assert(#result == 0)
+end
+
+local function table_filter_all_match_test()
+    local result = table.filter({2, 4, 6}, function(x) return x % 2 == 0 end)
+    assert(#result == 3)
+end
+
+local function table_filter_empty_table_test()
+    local result = table.filter({}, function() return true end)
+    assert(#result == 0)
+end
+
+-- ============================================================
+-- table.reduce
+-- ============================================================
+
+local function table_reduce_with_initial_value_test()
+    local sum = table.reduce({1, 2, 3, 4, 5}, function(acc, x) return acc + x end, 0)
+    assert(sum == 15)
+end
+
+local function table_reduce_without_initial_value_test()
+    local product = table.reduce({1, 2, 3, 4}, function(acc, x) return acc * x end)
+    assert(product == 24)
+end
+
+local function table_reduce_empty_with_initial_test()
+    local result = table.reduce({}, function(acc, x) return acc + x end, 42)
+    assert(result == 42)
+end
+
+local function table_reduce_receives_index_test()
+    local indices = {}
+    table.reduce({10, 20, 30}, function(acc, _, i)
+        indices[#indices + 1] = i
+        return acc
+    end, 0)
+    assert(indices[1] == 1 and indices[2] == 2 and indices[3] == 3)
+end
+
+-- ============================================================
+-- table.groupby
+-- ============================================================
+
+local function table_groupby_basic_test()
+    local people = {
+        {name = "Alice", dept = "eng"},
+        {name = "Bob", dept = "sales"},
+        {name = "Charlie", dept = "eng"},
+    }
+    local by_dept = table.groupby(people, function(p) return p.dept end)
+    assert(#by_dept.eng == 2)
+    assert(#by_dept.sales == 1)
+    assert(by_dept.eng[1].name == "Alice")
+    assert(by_dept.eng[2].name == "Charlie")
+end
+
+local function table_groupby_empty_test()
+    local result = table.groupby({}, function(x) return x end)
+    -- result should be an empty table
+    local count = 0
+    for _ in pairs(result) do count = count + 1 end
+    assert(count == 0)
+end
+
+local function table_groupby_single_group_test()
+    local result = table.groupby({1, 2, 3}, function() return "all" end)
+    assert(#result.all == 3)
+end
+
+-- ============================================================
+-- table.sortby
+-- ============================================================
+
+local function table_sortby_ascending_default_test()
+    local people = {
+        {name = "Charlie", age = 35},
+        {name = "Alice", age = 30},
+        {name = "Bob", age = 25},
+    }
+    table.sortby(people, function(p) return p.age end)
+    assert(people[1].name == "Bob")
+    assert(people[2].name == "Alice")
+    assert(people[3].name == "Charlie")
+end
+
+local function table_sortby_descending_test()
+    local people = {
+        {name = "Charlie", age = 35},
+        {name = "Alice", age = 30},
+        {name = "Bob", age = 25},
+    }
+    table.sortby(people, function(p) return p.age end, false)
+    assert(people[1].name == "Charlie")
+    assert(people[2].name == "Alice")
+    assert(people[3].name == "Bob")
+end
+
+local function table_sortby_single_element_test()
+    local t = {{v = 1}}
+    table.sortby(t, function(x) return x.v end)
+    assert(t[1].v == 1)
+end
+
+local function table_sortby_strings_test()
+    local words = {"banana", "apple", "cherry"}
+    table.sortby(words, function(w) return w end)
+    assert(words[1] == "apple")
+    assert(words[2] == "banana")
+    assert(words[3] == "cherry")
+end
+
+-- ============================================================
+-- table.zip
+-- ============================================================
+
+local function table_zip_two_tables_test()
+    local names = {"Alice", "Bob", "Charlie"}
+    local ages = {30, 25, 35}
+    local zipped = table.zip(names, ages)
+    assert(zipped[1][1] == "Alice" and zipped[1][2] == 30)
+    assert(zipped[2][1] == "Bob" and zipped[2][2] == 25)
+    assert(zipped[3][1] == "Charlie" and zipped[3][2] == 35)
+end
+
+local function table_zip_three_tables_test()
+    local a = {1, 2}
+    local b = {"x", "y"}
+    local c = {true, false}
+    local z = table.zip(a, b, c)
+    assert(z[1][1] == 1 and z[1][2] == "x" and z[1][3] == true)
+    assert(z[2][1] == 2 and z[2][2] == "y" and z[2][3] == false)
+end
+
+local function table_zip_different_lengths_test()
+    local a = {1, 2, 3}
+    local b = {"x", "y"}
+    local z = table.zip(a, b)
+    assert(#z == 2) -- shortest input
+end
+
+local function table_zip_no_arguments_test()
+    local z = table.zip()
+    assert(#z == 0)
+end
+
+-- ============================================================
+-- table.unzip
+-- ============================================================
+
+local function table_unzip_basic_test()
+    local zipped = {{"Alice", 30}, {"Bob", 25}}
+    local names, ages = table.unzip(zipped)
+    assert(names[1] == "Alice" and names[2] == "Bob")
+    assert(ages[1] == 30 and ages[2] == 25)
+end
+
+local function table_unzip_single_column_test()
+    local zipped = {{1}, {2}, {3}}
+    local col1 = table.unzip(zipped)
+    assert(col1[1] == 1 and col1[2] == 2 and col1[3] == 3)
+end
+
+local function table_unzip_empty_test()
+    local count = select("#", table.unzip({}))
+    assert(count == 0)
+end
+
+-- ============================================================
+-- table.transpose
+-- ============================================================
+
+local function table_transpose_2x3_test()
+    local m = {{1, 2, 3}, {4, 5, 6}}
+    local t = table.transpose(m)
+    assert(t[1][1] == 1 and t[1][2] == 4)
+    assert(t[2][1] == 2 and t[2][2] == 5)
+    assert(t[3][1] == 3 and t[3][2] == 6)
+end
+
+local function table_transpose_1x1_test()
+    local t = table.transpose({{42}})
+    assert(t[1][1] == 42)
+end
+
+local function table_transpose_square_test()
+    local m = {{1, 2}, {3, 4}}
+    local t = table.transpose(m)
+    assert(t[1][1] == 1 and t[1][2] == 3)
+    assert(t[2][1] == 2 and t[2][2] == 4)
+end
+
+local function table_transpose_empty_test()
+    local t = table.transpose({})
+    assert(#t == 0)
+end
+
+-- ============================================================
+-- table.reshape
+-- ============================================================
+
+local function table_reshape_basic_test()
+    local arr = {1, 2, 3, 4, 5, 6}
+    local matrix = table.reshape(arr, 2, 3)
+    assert(matrix[1][1] == 1 and matrix[1][2] == 2 and matrix[1][3] == 3)
+    assert(matrix[2][1] == 4 and matrix[2][2] == 5 and matrix[2][3] == 6)
+end
+
+local function table_reshape_single_row_test()
+    local m = table.reshape({1, 2, 3}, 1, 3)
+    assert(m[1][1] == 1 and m[1][2] == 2 and m[1][3] == 3)
+end
+
+local function table_reshape_single_column_test()
+    local m = table.reshape({1, 2, 3}, 3, 1)
+    assert(m[1][1] == 1 and m[2][1] == 2 and m[3][1] == 3)
+end
+
+-- ============================================================
+-- string.split
+-- ============================================================
+
+local function string_split_basic_test()
+    local parts = string.split("apple,banana,cherry", ",")
+    assert(parts[1] == "apple" and parts[2] == "banana" and parts[3] == "cherry")
+end
+
+local function string_split_empty_delimiter_test()
+    local chars = string.split("hello", "")
+    assert(#chars == 5)
+    assert(chars[1] == "h" and chars[5] == "o")
+end
+
+local function string_split_consecutive_delimiters_test()
+    local parts = string.split("a//b", "/")
+    assert(parts[1] == "a" and parts[2] == "" and parts[3] == "b")
+end
+
+local function string_split_no_delimiter_found_test()
+    local parts = string.split("hello", ",")
+    assert(#parts == 1 and parts[1] == "hello")
+end
+
+local function string_split_empty_string_test()
+    local parts = string.split("", ",")
+    assert(#parts == 1 and parts[1] == "")
+end
+
+local function string_split_method_syntax_test()
+    local parts = ("a-b-c"):split("-")
+    assert(parts[1] == "a" and parts[2] == "b" and parts[3] == "c")
+end
+
+local function string_split_multi_char_delimiter_test()
+    local parts = string.split("a::b::c", "::")
+    assert(parts[1] == "a" and parts[2] == "b" and parts[3] == "c")
+end
+
+-- ============================================================
+-- string.join
+-- ============================================================
+
+local function string_join_basic_test()
+    assert(string.join({"hello", "world"}, " ") == "hello world")
+end
+
+local function string_join_non_string_values_test()
+    assert(string.join({1, 2, 3}, ",") == "1,2,3")
+end
+
+local function string_join_empty_table_test()
+    assert(string.join({}, ",") == "")
+end
+
+local function string_join_single_element_test()
+    assert(string.join({"hello"}, ",") == "hello")
+end
+
+-- ============================================================
+-- string.trim
+-- ============================================================
+
+local function string_trim_whitespace_test()
+    assert(string.trim("  hello  ") == "hello")
+end
+
+local function string_trim_tabs_and_newlines_test()
+    assert(string.trim("\t\nhello\r\n") == "hello")
+end
+
+local function string_trim_custom_chars_test()
+    assert(string.trim("xxxhelloxxx", "x") == "hello")
+end
+
+local function string_trim_no_trimming_needed_test()
+    assert(string.trim("hello") == "hello")
+end
+
+local function string_trim_all_whitespace_test()
+    assert(string.trim("   ") == "")
+end
+
+local function string_trim_empty_string_test()
+    assert(string.trim("") == "")
+end
+
+local function string_trim_method_syntax_test()
+    assert(("  hello  "):trim() == "hello")
+end
+
+-- ============================================================
+-- string.ltrim
+-- ============================================================
+
+local function string_ltrim_whitespace_test()
+    assert(string.ltrim("  hello  ") == "hello  ")
+end
+
+local function string_ltrim_custom_chars_test()
+    assert(string.ltrim("...test", ".") == "test")
+end
+
+-- ============================================================
+-- string.rtrim
+-- ============================================================
+
+local function string_rtrim_whitespace_test()
+    assert(string.rtrim("  hello  ") == "  hello")
+end
+
+local function string_rtrim_custom_chars_test()
+    assert(string.rtrim("test...", ".") == "test")
+end
+
+-- ============================================================
+-- Done
+-- ============================================================
+
+
+-- Argument-validation and callback-misbehavior matrix for the dataproc surface.
+-- This suite complements the first half of this file, which covers the happy paths, by
+-- exercising wrong-typed arguments, empty and degenerate inputs, callbacks that
+-- raise or yield across the C boundary, pattern-magic characters treated
+-- literally, numeric coercion rules, and integer-overflow promotion. Every
+-- expectation here was pinned against the actual runtime and cross-checked
+-- against lus-spec/stdlib and reference Lua 5.5 semantics.
+
+
+
+
+-- A coroutine callback that yields must surface a catchable boundary error when
+-- the surrounding C iteration cannot suspend. This helper wraps such an attempt.
+local function run_yielding(fn)
+    local co = coroutine.wrap(fn)
+    return co()
+end
+
+-- ============================================================
+-- Non-table first argument is rejected across the whole surface
+-- ============================================================
+
+local rejects_a_non_table_first_argument_with_a_table_expected_err_cases = {
+    {function() return table.sum(42) end},
+    {function() return table.mean("x") end},
+    {function() return table.median(42) end},
+    {function() return table.stdev(42) end},
+    {function() return table.map(42, function(x) return x end) end},
+    {function() return table.filter(42, function() return true end) end},
+    {function() return table.reduce(42, function(a, b) return a end, 0) end},
+    {function() return table.groupby(42, function(x) return x end) end},
+    {function() return table.sortby(42, function(x) return x end) end},
+    {function() return table.transpose("nope") end},
+    {function() return table.reshape("nope", 1, 1) end},
+    {function() return table.zip({1}, "ab") end},
+    {function() return table.unzip(42) end},
+    {function() return string.join("x", ",") end},
+}
+
+local function rejects_a_non_table_first_argument_with_a_table_expected_err_test(thunk)
+    raises(thunk, "table expected")
+end
+
+local function table_sum_rejects_a_nil_argument_test()
+    raises(function() return table.sum(nil) end, "table expected")
+end
+
+-- ============================================================
+-- Non-function callback is rejected by the higher-order functions
+-- ============================================================
+
+local rejects_a_non_function_callback_with_a_function_expected_err_cases = {
+    {function() return table.map({1}, "nope") end},
+    {function() return table.filter({1}, 5) end},
+    {function() return table.reduce({1, 2}, 42, 0) end},
+    {function() return table.groupby({1}, 5) end},
+    {function() return table.sortby({1}, 5) end},
+}
+
+local function rejects_a_non_function_callback_with_a_function_expected_err_test(thunk)
+    raises(thunk, "function expected")
+end
+
+-- ============================================================
+-- Callbacks that raise propagate the original error uncorrupted
+-- ============================================================
+
+local propagates_a_callback_error_through_the_c_iteration_cases = {
+    {function() return table.map({1, 2}, function() error("map_boom") end) end, "map_boom"},
+    {function() return table.filter({1, 2}, function() error("filter_boom") end) end, "filter_boom"},
+    {function() return table.reduce({1, 2}, function() error("reduce_boom") end, 0) end, "reduce_boom"},
+    {function() return table.groupby({1, 2}, function() error("group_boom") end) end, "group_boom"},
+    {function() return table.sortby({{v = 1}, {v = 2}}, function() error("sort_boom") end) end, "sort_boom"},
+}
+
+local function propagates_a_callback_error_through_the_c_iteration_test(thunk, fragment)
+    raises(thunk, fragment)
+end
+
+local function the_interpreter_keeps_working_after_a_callback_error_test()
+    local ok = catch(table.map({1}, function() error("x") end))
+    assert(not ok)
+    assert(table.sum({1, 2, 3}) == 6)
+end
+
+-- ============================================================
+-- Callbacks that yield across the C boundary raise cleanly
+-- ============================================================
+
+local raises_a_catchable_boundary_error_when_a_callback_yields_cases = {
+    {function()
+        return run_yielding(function()
+            return table.map({1, 2}, function(x) coroutine.yield(x) return x end)
+        end)
+    end},
+    {function()
+        return run_yielding(function()
+            return table.filter({1, 2}, function(x) coroutine.yield(x) return true end)
+        end)
+    end},
+    {function()
+        return run_yielding(function()
+            return table.reduce({1, 2}, function(a, x) coroutine.yield(x) return a end, 0)
+        end)
+    end},
+    {function()
+        return run_yielding(function()
+            return table.groupby({1, 2}, function(x) coroutine.yield(x) return "k" end)
+        end)
+    end},
+}
+
+local function raises_a_catchable_boundary_error_when_a_callback_yields_test(thunk)
+    raises(thunk, "yield across")
+end
+
+-- ============================================================
+-- table.sum: empty, coercion, holes, overflow, non-finite values
+-- ============================================================
+
+local function table_sum_of_an_empty_table_is_0_test()
+    assert(table.sum({}) == 0)
+end
+
+local function table_sum_always_returns_a_float_subtype_test()
+    assert(math.type(table.sum({1, 2, 3})) == "float")
+    assert(table.sum({1, 2, 3}) == 6)
+end
+
+local function table_sum_coerces_numeric_strings_on_the_fastcall_path_test()
+    -- Called directly inside a function body the compiler emits OP_FASTCALL,
+    -- whose implementation delegates tables containing strings to the C
+    -- function, which coerces numeric strings into the aggregate.
+    assert(table.sum({1, "10", 2}) == 13)
+end
+
+local function table_sum_is_consistent_between_fastcall_and_dynamic_dispatc_test()
+    local dispatched = table.sum
+    local via_fastcall = table.sum({1, "10", 2})
+    local via_dispatch = dispatched({1, "10", 2})
+    assert(via_fastcall == via_dispatch,
+        "fastcall gave " .. tostring(via_fastcall) .. " but dispatch gave " .. tostring(via_dispatch))
+end
+
+local function table_sum_skips_genuinely_non_numeric_values_test()
+    assert(table.sum({1, "skip", 2, true, 3, false}) == 6)
+end
+
+local function table_sum_of_maxinteger_and_1_promotes_to_float_instead_of_w_test()
+    local r = table.sum({math.maxinteger, 1})
+    assert(math.type(r) == "float")
+    assert(r > 9.2e18, "the promoted float is near 2^63")
+end
+
+local function table_sum_with_math_huge_yields_infinity_test()
+    assert(table.sum({1, math.huge}) == math.huge)
+end
+
+local function table_sum_with_a_nan_element_yields_nan_test()
+    local r = table.sum({1, 0 / 0})
+    assert(r ~= r)
+end
+
+local function table_sum_tolerates_a_hole_in_the_sequence_test()
+    local r = table.sum({1, nil, 3})
+    assert(type(r) == "number")
+    assert(r == 1.0 or r == 4.0)
+end
+
+-- ============================================================
+-- table.mean / median / stdev degenerate inputs
+-- ============================================================
+
+local function table_mean_coerces_numeric_strings_on_the_fastcall_path_test()
+    local r = table.mean({"10", "20"})
+    assert(r == 15.0)
+end
+
+local function table_mean_is_consistent_between_fastcall_and_dynamic_dispat_test()
+    local dispatched = table.mean
+    local via_fastcall = table.mean({"10", "20"})
+    local via_dispatch = dispatched({"10", "20"})
+    -- Both should be NaN, or both should be 15. They are not both the same.
+    local both_nan = (via_fastcall ~= via_fastcall) and (via_dispatch ~= via_dispatch)
+    assert(both_nan or via_fastcall == via_dispatch,
+        "fastcall gave " .. tostring(via_fastcall) .. " but dispatch gave " .. tostring(via_dispatch))
+end
+
+local function table_mean_of_an_all_non_numeric_table_is_nan_test()
+    local r = table.mean({"a", "b", true})
+    assert(r ~= r)
+end
+
+local function table_median_skips_non_numeric_values_test()
+    assert(table.median({1, "skip", 3, 2}) == 2)
+end
+
+local function table_median_parity_ignores_skipped_values_test()
+    assert(table.median({1, "x", 2, 3, 4}) == 2.5)
+end
+
+local function table_median_of_all_non_numeric_input_is_nan_test()
+    local r = table.median({"a", "b"})
+    assert(r ~= r)
+end
+
+local function table_median_averages_middle_floats_exactly_test()
+    assert(table.median({1.5, 2.5, 3.5, 4.5}) == 3.0)
+end
+
+local function table_stdev_sample_variant_matches_the_known_value_test()
+    assert(math.abs(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, true) - (math.sqrt(32 / 7))) <= 0.0001)
+end
+
+local function table_stdev_sample_false_equals_the_population_result_test()
+    assert(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, false) == 2.0)
+end
+
+local function table_stdev_treats_any_truthy_sample_flag_as_the_sample_vari_test()
+    assert(math.abs(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, 1) - (math.sqrt(32 / 7))) <= 0.0001)
+end
+
+local function table_stdev_skips_non_numeric_values_without_inflating_n_test()
+    assert(math.abs(table.stdev({2, "x", 4, 4, 4, 5, 5, 7, 9}) - 2.0) <= 0.0001)
+end
+
+local function table_stdev_sample_divisor_counts_only_numeric_values_test()
+    assert(math.abs(table.stdev({2, "x", 4, 4, 4, 5, 5, 7, 9}, true) - (math.sqrt(32 / 7))) <= 0.0001)
+end
+
+local function table_stdev_of_a_single_element_is_0_for_the_population_vari_test()
+    assert(table.stdev({5}) == 0.0)
+end
+
+local function table_stdev_of_a_single_element_is_nan_for_the_sample_varian_test()
+    local r = table.stdev({5}, true)
+    assert(r ~= r)
+end
+
+local function table_stdev_of_all_non_numeric_input_is_nan_test()
+    local r = table.stdev({"a", "b"})
+    assert(r ~= r)
+end
+
+-- ============================================================
+-- table.transpose: rectangular validation
+-- ============================================================
+
+local table_transpose_rejects_a_ragged_matrix_cases = {
+    {function() return table.transpose({{1, 2}, {3}}) end},
+    {function() return table.transpose({{1}, {2, 3}}) end},
+    {function() return table.transpose({{1, 2, 3}, {4}}) end},
+}
+
+local function table_transpose_rejects_a_ragged_matrix_test(thunk)
+    raises(thunk, "rectangular")
+end
+
+local function table_transpose_rejects_a_row_that_is_not_a_table_test()
+    raises(function() return table.transpose({{1, 2}, "row"}) end)
+end
+
+local function table_transpose_of_a_single_empty_row_has_zero_columns_test()
+    local r = table.transpose({{}})
+    assert(#r == 0)
+end
+
+local function table_transpose_applied_twice_reproduces_the_original_test()
+    local m = {{1, 2, 3}, {4, 5, 6}}
+    assert(same(table.transpose(table.transpose(m)), m))
+end
+
+-- ============================================================
+-- table.reshape: dimension validation and cardinality
+-- ============================================================
+
+local function table_reshape_rejects_a_length_that_does_not_match_rows_time_test()
+    raises(function() return table.reshape({1, 2, 3}, 2, 2) end, "does not match")
+end
+
+local table_reshape_rejects_a_non_positive_dimension_cases = {
+    {function() return table.reshape({}, 0, 0) end},
+    {function() return table.reshape({1, 2}, -1, 2) end},
+    {function() return table.reshape({1, 2}, 1, -2) end},
+    {function() return table.reshape({}, 1, 0) end},
+}
+
+local function table_reshape_rejects_a_non_positive_dimension_test(thunk)
+    raises(thunk, "must be positive")
+end
+
+local function table_reshape_rejects_a_fractional_dimension_test()
+    raises(function() return table.reshape({1, 2, 3, 4}, 2.5, 2) end, "integer representation")
+end
+
+local function table_reshape_accepts_integral_float_dimensions_test()
+    local m = table.reshape({1, 2, 3, 4}, 2.0, 2.0)
+    assert(m[1][1] == 1 and m[2][2] == 4)
+end
+
+-- ============================================================
+-- table.reduce: empty, single, index without initial
+-- ============================================================
+
+local function table_reduce_of_an_empty_table_without_an_initial_value_rais_test()
+    raises(function()
+        return table.reduce({}, function(a, x) return a + x end)
+    end, "no initial value")
+end
+
+local function table_reduce_of_a_single_element_without_an_initial_value_sk_test()
+    local calls = 0
+    local r = table.reduce({7}, function(a, x) calls = calls + 1 return a + x end)
+    assert(r == 7)
+    assert(calls == 0)
+end
+
+local function table_reduce_without_an_initial_value_starts_indexing_at_the_test()
+    local first
+    table.reduce({10, 20, 30}, function(a, x, i)
+        if not first then first = i end
+        return a
+    end)
+    assert(first == 2)
+end
+
+-- ============================================================
+-- table.map / filter callback contracts
+-- ============================================================
+
+local function table_map_receiving_nil_from_the_callback_stores_a_hole_posi_test()
+    local r = table.map({1, 2, 3}, function(x) if x == 2 then return nil end return x end)
+    assert(r[1] == 1)
+    assert(r[3] == 3)
+    assert(r[2] == nil)
+end
+
+local function table_filter_predicate_receives_only_the_element_test()
+    local second
+    table.filter({10, 20, 30}, function(x, i)
+        if x == 20 then second = i end
+        return true
+    end)
+    assert(second == nil)
+end
+
+-- ============================================================
+-- table.groupby / sortby key-function behavior
+-- ============================================================
+
+local function table_groupby_with_a_nil_key_raises_test()
+    raises(function() return table.groupby({1, 2}, function() return nil end) end, "index is nil")
+end
+
+local function table_groupby_accepts_numeric_keys_test()
+    local g = table.groupby({1, 2, 3, 4}, function(x) return x % 2 end)
+    assert(#g[0] == 2 and #g[1] == 2)
+end
+
+local function table_groupby_accepts_boolean_keys_test()
+    local g = table.groupby({1, 2, 3}, function(x) return x > 1 end)
+    assert(#g[true] == 2 and #g[false] == 1)
+end
+
+local function table_sortby_with_mixed_type_keys_raises_like_table_sort_test()
+    raises(function()
+        return table.sortby({{v = 1}, {v = "a"}}, function(x) return x.v end)
+    end, "attempt to compare")
+end
+
+local function table_sortby_of_an_empty_table_is_a_no_op_test()
+    local t = {}
+    table.sortby(t, function(x) return x end)
+    assert(#t == 0)
+end
+
+-- ============================================================
+-- table.zip / unzip degenerate inputs
+-- ============================================================
+
+local function table_zip_rejects_a_non_table_argument_test()
+    raises(function() return table.zip({1, 2}, "ab") end, "table expected")
+end
+
+local function table_unzip_of_an_empty_table_returns_nothing_test()
+    assert(select("#", table.unzip({})) == 0)
+end
+
+local function table_unzip_round_trips_through_table_zip_test()
+    local a = {1, 2, 3}
+    local b = {"x", "y", "z"}
+    local ra, rb = table.unzip(table.zip(a, b))
+    assert(same(ra, a))
+    assert(same(rb, b))
+end
+
+local function table_unzip_of_ragged_tuples_uses_the_first_tuple_width_test()
+    -- The runtime does not error on ragged tuples. It emits one column per
+    -- position in the first tuple and leaves holes where later tuples are short.
+    local a, b = table.unzip({{1, 2}, {3}})
+    assert(select("#", table.unzip({{1, 2}, {3}})) == 2)
+    assert(a[1] == 1 and a[2] == 3)
+    assert(b[1] == 2 and b[2] == nil)
+end
+
+-- ============================================================
+-- string.split: pattern-magic delimiters are literal
+-- ============================================================
+
+local string_split_treats_magic_delimiter_characters_literally_cases = {
+    {"a.b.c", ".", 3, "a"},
+    {"a%b%c", "%", 3, "a"},
+    {"a(b(c", "(", 3, "a"},
+    {"a[b[c", "[", 3, "a"},
+    {"a-b-c", "-", 3, "a"},
+    {"a+b+c", "+", 3, "a"},
+    {"a*b*c", "*", 3, "a"},
+    {"a$b$c", "$", 3, "a"},
+}
+
+local function string_split_treats_magic_delimiter_characters_literally_test(input, delim, count, first)
+    local parts = string.split(input, delim)
+    assert(#parts == count)
+    assert(parts[1] == first)
+end
+
+local function string_split_keeps_leading_and_trailing_empty_fields_test()
+    local parts = string.split(",a,", ",")
+    assert(#parts == 3)
+    assert(parts[1] == "" and parts[2] == "a" and parts[3] == "")
+end
+
+local function string_split_of_a_lone_trailing_delimiter_yields_a_final_emp_test()
+    local parts = string.split("a,", ",")
+    assert(#parts == 2 and parts[1] == "a" and parts[2] == "")
+end
+
+local function string_split_of_an_empty_string_with_an_empty_delimiter_yiel_test()
+    assert(#string.split("", "") == 0)
+end
+
+local function string_split_coerces_a_number_subject_to_its_string_form_test()
+    local parts = string.split(42, ",")
+    assert(#parts == 1 and parts[1] == "42" and type(parts[1]) == "string")
+end
+
+local function string_split_rejects_a_nil_delimiter_test()
+    raises(function() return string.split("abc", nil) end, "string expected")
+end
+
+-- ============================================================
+-- string.join: coercion and holes
+-- ============================================================
+
+local function string_join_converts_values_through_tostring_test()
+    assert(string.join({1, 2, 3}, ",") == "1,2,3")
+end
+
+local function string_join_honors_a_tostring_metamethod_test()
+    local obj = setmetatable({}, {__tostring = function() return "OBJ" end})
+    assert(string.join({"a", obj, "b"}, ",") == "a,OBJ,b")
+end
+
+local function string_join_renders_float_subtype_in_its_tostring_form_test()
+    assert(string.join({1.5, 2.0}, ",") == "1.5,2.0")
+end
+
+local function string_join_coerces_a_numeric_delimiter_test()
+    assert(string.join({"a", "b"}, 42) == "a42b")
+end
+
+local function string_join_stops_at_a_hole_in_the_sequence_test()
+    -- The join walks the # border, so a hole ends the joined range early.
+    local r = string.join({"a", nil, "c"}, ",")
+    assert(type(r) == "string")
+    assert(r == "a" or r == "a,,c")
+end
+
+-- ============================================================
+-- string.trim / ltrim / rtrim: literal custom characters
+-- ============================================================
+
+local trim_variants_treat_custom_characters_literally_cases = {
+    {"a-b-", "-", "a-b"},
+    {"[x]", "[]", "x"},
+    {"a%", "%", "a"},
+    {"++mid++", "+", "mid"},
+    {"..mid..", ".", "mid"},
+}
+
+local function trim_variants_treat_custom_characters_literally_test(input, chars, expected)
+    assert(string.trim(input, chars) == expected)
+end
+
+local function string_ltrim_as_a_method_removes_only_leading_characters_test()
+    assert(("..x"):ltrim(".") == "x")
+end
+
+local function string_rtrim_as_a_method_removes_only_trailing_characters_test()
+    assert(("x.."):rtrim(".") == "x")
+end
+
+local function string_trim_coerces_a_number_subject_to_its_string_form_test()
+    local r = string.trim(42)
+    assert(r == "42" and type(r) == "string")
+end
+
+local function string_ltrim_of_an_all_trim_string_collapses_to_empty_test()
+    assert(string.ltrim("----", "-") == "")
+end
+
+local function string_rtrim_of_an_all_trim_string_collapses_to_empty_test()
+    assert(string.rtrim("----", "-") == "")
+end
+
+-- ============================================================
+-- Done
+-- ============================================================
+

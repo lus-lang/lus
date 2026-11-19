@@ -1,0 +1,286 @@
+--[[
+    Test suite for the enum feature in Lus.
+    
+    Syntax:
+    - local e = enum name1, name2, ... end
+    - Enums are symbols: only equal to themselves
+    - Index by name: e.name1, e.name2
+    - Index by number: e[1], e[2] (1-based)
+    - tonumber(e.name1) returns the 1-based index
+    - Ordering comparison by index: e.name1 < e.name2
+]]
+
+
+pledge("load")
+
+
+local function basic_enum_declaration_test()
+    local e = enum
+        apple, orange, celery
+    end
+    assert(e ~= nil)
+end
+
+local function enum_equals_first_value_test()
+    local e = enum
+        apple, orange, celery
+    end
+    assert(e == e.apple)
+end
+
+local function different_values_not_equal_test()
+    local e = enum
+        apple, orange, celery
+    end
+    assert(e.apple ~= e.orange)
+    assert(e.orange ~= e.celery)
+    assert(e.apple ~= e.celery)
+end
+
+local function different_enums_never_equal_test()
+    local e1 = enum a, b, c end
+    local e2 = enum a, b, c end
+    assert(e1.a ~= e2.a)
+    assert(e1.b ~= e2.b)
+end
+
+local function same_enum_values_are_equal_test()
+    local e = enum x, y, z end
+    assert(e.x == e.x)
+    assert(e.y == e.y)
+    assert(e[1] == e.x)
+    assert(e[2] == e.y)
+end
+
+local function tonumber_returns_1_based_index_test()
+    local e = enum
+        first, second, third, fourth
+    end
+    assert(tonumber(e.first) == 1)
+    assert(tonumber(e.second) == 2)
+    assert(tonumber(e.third) == 3)
+    assert(tonumber(e.fourth) == 4)
+end
+
+local function index_by_number_test()
+    local e = enum a, b, c, d end
+    assert(e[1] == e.a)
+    assert(e[2] == e.b)
+    assert(e[3] == e.c)
+    assert(e[4] == e.d)
+end
+
+local function chained_indexing_test()
+    local e = enum x, y, z end
+    assert(e.x.y == e.y)
+    assert(e.x.z == e.z)
+    assert(e.y.x == e.x)
+    assert(e.z.y.x == e.x)
+end
+
+local function chained_numeric_indexing_test()
+    local e = enum a, b, c end
+    assert(e[1][2] == e.b)
+    assert(e[3][1] == e.a)
+end
+
+local function less_than_comparison_test()
+    local e = enum first, second, third end
+    assert(e.first < e.second)
+    assert(e.second < e.third)
+    assert(e.first < e.third)
+end
+
+local function less_than_or_equal_comparison_test()
+    local e = enum a, b, c end
+    assert(e.a <= e.a)
+    assert(e.a <= e.b)
+    assert(e.b <= e.c)
+end
+
+local function greater_than_comparison_test()
+    local e = enum x, y, z end
+    assert(e.z > e.y)
+    assert(e.y > e.x)
+    assert(e.z > e.x)
+end
+
+local function greater_than_or_equal_comparison_test()
+    local e = enum a, b, c end
+    assert(e.c >= e.c)
+    assert(e.c >= e.b)
+    assert(e.b >= e.a)
+end
+
+local function type_returns_enum_test()
+    local e = enum val end
+    assert(type(e) == "enum")
+    assert(type(e.val) == "enum")
+end
+
+local function type_of_indexed_value_test()
+    local e = enum a, b, c end
+    assert(type(e[1]) == "enum")
+    assert(type(e.b) == "enum")
+end
+
+local function single_value_enum_test()
+    local e = enum only end
+    assert(e == e.only)
+    assert(tonumber(e.only) == 1)
+end
+
+local function enum_in_table_test()
+    local e = enum red, green, blue end
+    local t = { color = e.green }
+    assert(t.color == e.green)
+    assert(t.color ~= e.red)
+end
+
+local function enum_as_function_argument_test()
+    local e = enum on, off end
+    local function check(val)
+        return val == e.on
+    end
+    assert(check(e.on) == true)
+    assert(check(e.off) == false)
+end
+
+local function enum_as_function_return_test()
+    local e = enum success, failure end
+    local function getStatus()
+        return e.success
+    end
+    assert(getStatus() == e.success)
+end
+
+local function cross_enum_index_comparison_test()
+    local e1 = enum a, b, c end
+    local e2 = enum x, y, z end
+    -- Same positions but different enums
+    assert(tonumber(e1.a) == tonumber(e2.x))
+    assert(tonumber(e1.b) == tonumber(e2.y))
+    -- But values themselves are not equal
+    assert(e1.a ~= e2.x)
+end
+
+local function cross_root_less_than_raises_error_test()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.a < e2.x)
+    assert(ok == false)
+    assert(type(err) == "string")
+end
+
+local function cross_root_less_equal_raises_error_test()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.a <= e2.x)
+    assert(ok == false)
+    assert(type(err) == "string")
+end
+
+local function cross_root_greater_than_raises_error_test()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.b > e2.x)
+    assert(ok == false)
+end
+
+local function cross_root_greater_equal_raises_error_test()
+    local e1 = enum a, b end
+    local e2 = enum x, y end
+    local ok, err = catch (e1.b >= e2.x)
+    assert(ok == false)
+end
+
+local function cross_root_equality_returns_false_test()
+    local e1 = enum a, b, c end
+    local e2 = enum a, b, c end
+    -- Unlike the ordering operators, equality across roots is not an
+    -- error. It evaluates normally and yields false.
+    local ok, res = catch (e1.a == e2.a)
+    assert(ok == true)
+    assert(res == false)
+    local ok2, res2 = catch (e1.c == e2.c)
+    assert(ok2 == true)
+    assert(res2 == false)
+end
+
+local function single_member_enum_ordering_test()
+    local e = enum only end
+    assert(e.only <= e.only)
+    assert(not (e.only < e.only))
+end
+
+local function first_and_last_member_ordering_test()
+    local e = enum a, b, c, d, e end
+    assert(e.a < e.e)
+    assert(e.e > e.a)
+    assert(e.a <= e.a)
+    assert(e.e >= e.e)
+end
+
+local function enum_with_many_values_test()
+    local e = enum
+        v1, v2, v3, v4, v5,
+        v6, v7, v8, v9, v10
+    end
+    assert(tonumber(e.v1) == 1)
+    assert(tonumber(e.v10) == 10)
+    assert(e[5] == e.v5)
+end
+
+-- Group: edge cases.
+
+local function tostring_on_enum_value_test()
+    local e = enum apple, orange end
+    local s = tostring(e.apple)
+    assert(type(s) == "string")
+    -- The format is "enum: 0x..." like other reference types.
+    assert(s:sub(1, 6) == "enum: ")
+    assert(#s > 6)
+    -- Distinct members stringify differently, interned values identically.
+    assert(tostring(e.apple) ~= tostring(e.orange))
+    assert(tostring(e.apple) == tostring(e.apple))
+end
+
+local function enum_as_table_key_test()
+    local e = enum red, green, blue end
+    local t = {}
+    t[e.red] = "red"
+    t[e.green] = "green"
+    assert(t[e.red] == "red")
+    assert(t[e.green] == "green")
+    assert(t[e.blue] == nil)
+end
+
+local function enum_survives_gc_test()
+    local e = enum a, b, c end
+    local val = e.b
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(val == e.b)
+    assert(tonumber(val) == 2)
+end
+
+local function interned_enum_values_stay_identical_across_gc_cycles_test()
+    local e = enum alpha, beta, gamma end
+    local a1 = e.alpha
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(a1 == e.alpha)
+    assert(tonumber(e.gamma) == 3)
+    assert(e[2] == e.beta)
+end
+
+local function repeated_enum_access_under_gc_steps_test()
+    local e = enum red, green, blue end
+    local count = 0
+    for i = 1, 10000 do
+        if e.red == e[1] and e.blue == e[3] then count = count + 1 end
+        if i % 1000 == 0 then collectgarbage("step") end
+    end
+    assert(count == 10000)
+end
+

@@ -1,0 +1,141 @@
+--[[
+    Big table tests - tests behavior with large tables and programs.
+    Uses smaller sizes than original (2^14 instead of 2^18) for faster execution
+    while still testing the same code paths.
+]]
+
+pledge("load") 
+
+local debug = require"debug"
+
+-- Helper to create a large table program
+-- Uses 2^14 (16384) elements - large enough to test behavior, small enough to be fast
+local function make_large_table_prog(lim)
+    lim = lim or (2^14 + 100)
+    local prog = { "local y = {0" }
+    for i = 1, lim do prog[#prog + 1] = i end
+    prog[#prog + 1] = "}\n"
+    prog[#prog + 1] = "X = y\n"
+    prog[#prog + 1] = ("assert(X[%d] == %d)"):format(lim - 1, lim - 2)
+    prog[#prog + 1] = "return 0"
+    return table.concat(prog, ";"), lim
+end
+
+local function large_table_construction_via_load_test()
+    local prog, lim = make_large_table_prog()
+    
+    local env = {string = string, assert = assert}
+    local f = assert(load(prog, nil, nil, env))
+
+    f()
+    assert(env.X[lim] == lim - 1 and env.X[lim + 1] == lim)
+    for k in pairs(env) do env[k] = nil end
+end
+
+local function metamethod_access_on_large_table_env_test()
+    local prog, lim = make_large_table_prog()
+    
+    local env = {string = string, assert = assert}
+    local f = assert(load(prog, nil, nil, env))
+    
+    -- Test that metamethods are triggered on env
+    local accesses = {}
+    setmetatable(env, {
+      __index = function (t, n) 
+        accesses[#accesses+1] = {"index", n}
+        return _G[n] 
+      end,
+      __newindex = function (t, n, v) 
+        accesses[#accesses+1] = {"newindex", n}
+        _G[n] = v 
+      end,
+    })
+
+    X = nil
+    f()
+    
+    -- Verify we had accesses through metamethods
+    assert(#accesses > 0)
+    assert(X[lim] == lim - 1 and X[lim + 1] == lim)
+end
+
+local function errors_in_accesses_larger_than_k_test()
+    local prog, lim = make_large_table_prog()
+    
+    local env = {string = string, assert = assert}
+    local f = assert(load(prog, nil, nil, env))
+
+    setmetatable(env, {
+        __index = function () end,
+        __newindex = function () end,
+    })
+    
+    local e, m = catch f()
+    assert(not e and m:find("global 'X'"))
+end
+
+local function errors_in_metamethods_propagate_test()
+    local prog, lim = make_large_table_prog()
+    
+    local env = {string = string, assert = assert}
+    local f = assert(load(prog, nil, nil, env))
+
+    setmetatable(env, {
+        __newindex = function () error("hi") end,
+    })
+    
+    local e, m = catch f()
+    assert(not e and m:find("hi"))
+end
+
+local function string_rep_for_reasonable_sizes_test()
+    local s = string.rep("a", 10000)
+    assert(#s == 10000)
+end
+
+local function large_table_iteration_test()
+    local t = {}
+    for i = 1, 10000 do t[i] = i end
+    
+    local count = 0
+    local sum = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        sum = sum + v
+    end
+    
+    assert(count == 10000)
+    assert(sum == 50005000) -- sum of 1..10000
+end
+
+local function nested_large_tables_test()
+    -- 256 x 256 grid: both the outer and the inner arrays cross several
+    -- array-part growth boundaries while being filled
+    local n = 256
+    local t = {}
+    for i = 1, n do
+        local row = {}
+        for j = 1, n do
+            row[j] = i * j
+        end
+        t[i] = row
+    end
+
+    -- every entry must survive construction, verified by a full traversal
+    local rows, total = 0, 0
+    for i, row in pairs(t) do
+        rows = rows + 1
+        local cols = 0
+        for j, v in pairs(row) do
+            cols = cols + 1
+            assert(v == i * j, "corrupted entry at " .. i .. "," .. j)
+            total = total + v
+        end
+        assert(cols == n, "row " .. i .. " lost entries")
+    end
+    assert(rows == n)
+    local expect = n * (n + 1) // 2
+    expect = expect * expect
+    assert(total == expect)
+end
+

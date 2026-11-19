@@ -1,0 +1,66 @@
+-- Bitwise string-coercion shim and its test suite. The shim lives in a fixture
+-- because bitwise_test.lus loads it as well.
+
+
+pledge("load", "fs:read=" .. TEST_DIR .. "/fixtures/bwcoercion/*")
+
+dofile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus")
+
+local function both_string_operands_coerce_for_every_operator_test()
+    assert(("10" & "6") == 2)
+    assert(("10" | "6") == 14)
+    assert(("10" ~ "6") == 12)
+    assert(("10" << "2") == 40)
+    assert(("40" >> "2") == 10)
+    assert((~"10") == -11)
+end
+
+local function string_floats_with_an_integral_value_are_accepted_test()
+    assert(("3.0" | 0) == 3)
+    assert((0 | "3.0") == 3)
+    assert(("3.0" & "1.0") == 1)
+    assert(("2.0" << 1) == 4)
+    assert((~"3.0") == -4)
+end
+
+local function string_floats_without_an_integer_representation_are_rejected_test()
+    local ok, err = catch ("3.5" | 0)
+    assert(not ok, "'3.5' | 0 must raise")
+    assert(string.find(err, "attempt to 'bor' a string with a number", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch (0 & "3.5")
+    assert(not ok, "0 & '3.5' must raise")
+    assert(string.find(err, "attempt to 'band' a number with a string", 1, true),
+        "unexpected message: " .. err)
+end
+
+local function non_coercible_operands_report_both_operand_orders_test()
+    local ok, err = catch (4 & "a")
+    assert(not ok)
+    assert(string.find(err, "attempt to 'band' a number with a string", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch ("a" & 4)
+    assert(not ok)
+    assert(string.find(err, "attempt to 'band' a string with a number", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch ("a" & {})
+    assert(not ok)
+    assert(string.find(err, "attempt to 'band' a string with a table", 1, true),
+        "unexpected message: " .. err)
+    ok, err = catch (~"zz")
+    assert(not ok)
+    assert(string.find(err, "attempt to 'bnot' a string with a string", 1, true),
+        "unexpected message: " .. err)
+end
+
+local function coercion_errors_blame_the_caller_s_line_test()
+    -- trymt raises at level 4, which climbs out of the shim's three frames
+    -- (trymt, checkargs, the metamethod) and lands on the line performing
+    -- the bitwise operation. The loaded chunk pins that line exactly.
+    local f = assert(load("local a = ...\nreturn a & 'x'", "=shimtest"))
+    local ok, err = catch f(7)
+    assert(not ok)
+    assert(string.find(err, "^shimtest:2: attempt to 'band' a number with a string"),
+        "the error must blame the caller's line, got: " .. err)
+end
+
