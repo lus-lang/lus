@@ -20,6 +20,7 @@ const Closure = object.Closure;
 
 pub const funcs = [_]aux.Reg{
     .{ .name = "traceback", .func = traceback },
+    .{ .name = "debug", .func = debugRepl },
     .{ .name = "getinfo", .func = getinfo },
     .{ .name = "getlocal", .func = getlocal },
     .{ .name = "setlocal", .func = setlocal },
@@ -625,3 +626,51 @@ fn nodeTable(l: *Thread, n: *const astexport.Node) Error!*Table {
     }
     return t;
 }
+
+// ---------------------------------------------------------------------
+// debug.debug
+
+/// debug.debug(): reads lines from standard input and runs each as a
+/// chunk, until end of input or a line that reads `cont`. Errors are
+/// printed and the loop goes on. Running the lines needs the `load`
+/// permission, like any other code loaded at run time.
+fn debugRepl(l: *Thread) Error!u32 {
+    try @import("../vm/pledge.zig").require(l, "load", null);
+    const out = @import("out.zig");
+    const api = @import("../api.zig");
+    const io = l.g.io;
+    const stdin = std.Io.File.stdin();
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(l.g.gpa);
+    while (true) {
+        out.stderr(l.g, "lus_debug> ");
+        line.clearRetainingCapacity();
+        var eof = false;
+        while (true) {
+            var byte: [1]u8 = undefined;
+            var bufs = [_][]u8{&byte};
+            const n = stdin.readStreaming(io, &bufs) catch 0;
+            if (n == 0) {
+                eof = true;
+                break;
+            }
+            if (byte[0] == '\n') break;
+            line.append(l.g.gpa, byte[0]) catch return l.raiseMem();
+        }
+        if (eof and line.items.len == 0) return 0;
+        if (std.mem.eql(u8, std.mem.trimEnd(u8, line.items, "\r"), "cont")) return 0;
+        const base = l.top;
+        const ok = blk: {
+            api.load(l, line.items, "=(debug command)") catch break :blk false;
+            break :blk api.pcall(l, 0, 0);
+        };
+        if (!ok) {
+            const msg = api.errorMessage(l, l.stack[l.top - 1]);
+            out.stderr(l.g, msg);
+            out.stderr(l.g, "\n");
+        }
+        l.top = base;
+        if (eof) return 0;
+    }
+}
+
