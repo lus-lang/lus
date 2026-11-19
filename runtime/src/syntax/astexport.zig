@@ -2,8 +2,8 @@
 //!
 //! The exported tree is the one the language server consumes. Its shape
 //! (node types, field names, positions, error reporting) follows the
-//! reference implementation in `legacy/lus/src/last.c` and the AST
-//! building code of `legacy/lus/src/lparser.c`. The export walks the
+//! 1.7 reference implementation, `lus/src/last.c` and the AST building
+//! code of `lus/src/lparser.c` at the `v1.7-legacy` tag. The export walks the
 //! syntax tree of `parser.zig` and recovers every position from the
 //! token stream, because the reference positions are token positions:
 //! a node sits on the line where the lexer stood after reading the token

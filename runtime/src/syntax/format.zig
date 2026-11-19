@@ -1,12 +1,12 @@
 //! The source formatter behind `debug.format` and `lus fmt`.
 //!
-//! The output follows the reference formatter in `legacy/lus/src/lformat.c`
-//! byte for byte on valid input, so that the language server and the
-//! idempotence tests see the same text. The formatter walks the syntax tree
-//! of `parser.zig` and takes every line number from the token stream, the
-//! way the reference parser records them: a statement sits on the line
-//! where the lexer stood after reading its first token, and it ends on the
-//! line of its last token.
+//! The output follows the 1.7 reference formatter (`lus/src/lformat.c` at
+//! the `v1.7-legacy` tag) byte for byte on valid input, so that the
+//! language server and the idempotence tests see the same text. The
+//! formatter walks the syntax tree of `parser.zig` and takes every line
+//! number from the token stream, the way the reference parser records
+//! them: a statement sits on the line where the lexer stood after reading
+//! its first token, and it ends on the line of its last token.
 //!
 //! Layout rules, all inherited from the reference:
 //!
