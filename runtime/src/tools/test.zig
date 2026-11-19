@@ -5,7 +5,9 @@
 //! top-level `NAME_cases` table runs `NAME_test` once per entry. In test
 //! files `assert` reports the failing expression and the values of its
 //! operands, `skip(reason)` skips the current test, and `snapshot(value)`
-//! compares a value against `__snapshots__/FILE.snap`.
+//! compares a value against `__snapshots__/FILE.snap`. `raises(f, pattern)`
+//! expects `f` to raise and returns the error, and `same(a, b)` compares
+//! two values structurally.
 //!
 //! Each file runs in its own child process inside a fresh temporary
 //! directory, with a timeout, and files run in parallel.
@@ -586,7 +588,42 @@ fn installHelpers(l: *Thread, snap: *Snapshots) !void {
     try aux.setGlobal(l, "skip", try aux.native(l, skipFn, "skip"));
     try g.ext.put(g.gpa, "test.snapshots", snap);
     try aux.setGlobal(l, "snapshot", try aux.native(l, snapshotFn, "snapshot"));
+    // `raises` and `same` are written in Lus, so they behave exactly like
+    // the code under test.
+    api.load(l, helpers_src, "=(lus test)") catch return error.LusError;
+    if (!api.pcall(l, 0, 0)) return error.LusError;
 }
+
+/// raises(f, pattern, ...): calls f(...), fails the test unless it raises,
+/// checks the message against the optional Lus pattern and returns the
+/// error value. same(a, b): deep structural equality of two values.
+const helpers_src =
+    \\local catchfn = function(f, ...) return catch f(...) end
+    \\local function raises(f, pattern, ...)
+    \\    local ok, err = catchfn(f, ...)
+    \\    if ok then error("expected an error, but the call succeeded", 2) end
+    \\    if pattern ~= nil and not tostring(err):find(pattern) then
+    \\        error(`expected an error matching '{pattern}', got: {tostring(err)}`, 2)
+    \\    end
+    \\    return err
+    \\end
+    \\local function same(a, b, seen)
+    \\    if a == b then return true end
+    \\    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    \\    seen = seen or {}
+    \\    if seen[a] == b then return true end
+    \\    seen[a] = b
+    \\    for k, v in pairs(a) do
+    \\        if not same(v, b[k], seen) then return false end
+    \\    end
+    \\    for k in pairs(b) do
+    \\        if a[k] == nil then return false end
+    \\    end
+    \\    return true
+    \\end
+    \\_G.raises = raises
+    \\_G.same = same
+;
 
 fn repr(l: *Thread, buf: *std.ArrayList(u8), v: Value, depth: u32) Error!void {
     const gpa = l.g.gpa;
