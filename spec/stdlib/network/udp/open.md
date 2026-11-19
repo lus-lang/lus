@@ -1,6 +1,6 @@
 ---
 name: network.udp.open
-module: network
+module: network.udp
 kind: function
 since: 0.1.0
 stability: stable

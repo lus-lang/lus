@@ -357,6 +357,7 @@ Suspends the running coroutine. Arguments to `yield` become the extra return val
   },
   ["debug"] = {
     children = {
+      "debug.debug",
       "debug.format",
       "debug.gethook",
       "debug.getinfo",
@@ -382,6 +383,22 @@ Suspends the running coroutine. Arguments to `yield` become the extra return val
     parent = nil,
     short_name = "debug",
     synthetic = true,
+  },
+  ["debug.debug"] = {
+    children = {},
+    description = [[
+Enters interactive debugging mode. Prompts for commands from standard input. Not available in all environments.]],
+    kind = "function",
+    module = "debug",
+    name = "debug.debug",
+    origin = "lua",
+    params = {},
+    parent = "debug",
+    returns = {},
+    short_name = "debug",
+    since = "0.1.0",
+    source = "stdlib/debug/debug.md",
+    stability = "stable",
   },
   ["debug.format"] = {
     children = {},
@@ -1339,7 +1356,7 @@ The `fs.path` sub-module.]],
     description = [[
 The platform path list delimiter (`:` on POSIX, `;` on Windows).]],
     kind = "constant",
-    module = "fs",
+    module = "fs.path",
     name = "fs.path.delimiter",
     origin = "lus",
     parent = "fs.path",
@@ -1354,7 +1371,7 @@ The platform path list delimiter (`:` on POSIX, `;` on Windows).]],
     description = [[
 Joins path components into a single path using the platform path separator.]],
     kind = "function",
-    module = "fs",
+    module = "fs.path",
     name = "fs.path.join",
     origin = "lus",
     params = {},
@@ -1375,7 +1392,7 @@ Joins path components into a single path using the platform path separator.]],
     description = [[
 Returns the final component (filename) of `path`.]],
     kind = "function",
-    module = "fs",
+    module = "fs.path",
     name = "fs.path.name",
     origin = "lus",
     params = {
@@ -1400,7 +1417,7 @@ Returns the final component (filename) of `path`.]],
     description = [[
 Returns the parent directory of `path`, or `nil` if `path` has no parent.]],
     kind = "function",
-    module = "fs",
+    module = "fs.path",
     name = "fs.path.parent",
     origin = "lus",
     params = {
@@ -1425,7 +1442,7 @@ Returns the parent directory of `path`, or `nil` if `path` has no parent.]],
     description = [[
 The platform path separator (`/` on POSIX, `\` on Windows).]],
     kind = "constant",
-    module = "fs",
+    module = "fs.path",
     name = "fs.path.separator",
     origin = "lus",
     parent = "fs.path",
@@ -1440,7 +1457,7 @@ The platform path separator (`/` on POSIX, `\` on Windows).]],
     description = [[
 Splits `path` into a table of its components.]],
     kind = "function",
-    module = "fs",
+    module = "fs.path",
     name = "fs.path.split",
     origin = "lus",
     params = {
@@ -2996,7 +3013,7 @@ Binds a TCP server to `host` and `port` with an optional accept `backlog`. Port 
 
 **Requires pledge:** `network:tcp`]],
     kind = "function",
-    module = "network",
+    module = "network.tcp",
     name = "network.tcp.bind",
     origin = "lus",
     params = {
@@ -3035,7 +3052,7 @@ Connects to a TCP server at `host` and `port`. Returns a TCP socket for reading 
 
 **Requires pledge:** `network:tcp`]],
     kind = "function",
-    module = "network",
+    module = "network.tcp",
     name = "network.tcp.connect",
     origin = "lus",
     params = {
@@ -3085,7 +3102,7 @@ Opens a UDP socket, optionally bound to `port` and `address`. Port `0` lets the 
 
 **Requires pledge:** `network:udp`]],
     kind = "function",
-    module = "network",
+    module = "network.udp",
     name = "network.udp.open",
     origin = "lus",
     params = {
