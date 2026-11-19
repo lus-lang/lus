@@ -5,7 +5,7 @@
   Note: Uses 'catch' expression for protected execution.
 ]]
 
-global pledge, print, network, type, assert, require, tostring, coroutine, string, error
+global pledge, print, network, type, assert, require, tostring, coroutine, string, error, worker
 
 pledge("load", "fs:read=./lus-tests/*", "network", "seal")
 
@@ -40,7 +40,7 @@ end)
 -- ============================================
 
 tests:it("TCP server bind and close", function()
-  local server = network.tcp.bind("127.0.0.1", 19999)
+  local server = network.tcp.bind("127.0.0.1", 0)
   assert(server ~= nil, "server should be created")
   assert(tostring(server):find("server"), "tostring should indicate server")
   server:close()
@@ -48,13 +48,16 @@ tests:it("TCP server bind and close", function()
 end)
 
 tests:it("TCP connection refused error", function()
-  local ok, err = catch network.tcp.connect("127.0.0.1", 19997)
+  local server = network.tcp.bind("127.0.0.1", 0)
+  local _, port = server:getsockname()
+  server:close()
+  local ok, err = catch network.tcp.connect("127.0.0.1", port)
   assert(not ok, "should fail to connect to closed port")
   assert(type(err) == "string", "error should be string")
 end)
 
 tests:it("TCP server has expected methods", function()
-  local server = network.tcp.bind("127.0.0.1", 19995)
+  local server = network.tcp.bind("127.0.0.1", 0)
   assert(type(server.accept) == "function", "should have accept")
   assert(type(server.close) == "function", "should have close")
   assert(type(server.settimeout) == "function", "should have settimeout")
@@ -83,7 +86,7 @@ tests:it("UDP socket has expected methods", function()
 end)
 
 tests:it("UDP socket bind to port", function()
-  local sock = network.udp.open(19994, "127.0.0.1")
+  local sock = network.udp.open(0, "127.0.0.1")
   assert(sock ~= nil, "bound UDP socket should be created")
   sock:close()
 end)
@@ -97,61 +100,64 @@ tests:it("using closed UDP socket raises error", function()
 end)
 
 -- ============================================
--- HTTP/HTTPS Tests
+-- HTTP response tests
 -- ============================================
 
--- Using httpstat.us as a reliable HTTP testing service
--- These are soft tests because they depend on external network access
+local function local_fetch(status, location, body)
+  local probe = network.tcp.bind("127.0.0.1", 0)
+  local _, port = probe:getsockname()
+  probe:close()
 
-tests:soft("HTTPS GET request returns 200", function()
-  -- httpstat.us/200 always returns status 200
-  local status, body, headers = network.fetch("https://httpstat.us/200")
-  
+  local fixture = worker.create("lus-tests/h1/worker/http_server.lus")
+  worker.send(fixture, {status = status, location = location, body = body, port = port})
+  assert(worker.receive(fixture) == "ready", "local HTTP fixture should bind")
+  local got_status, got_body, got_headers =
+      network.fetch("http://127.0.0.1:" .. tostring(port) .. "/fixture")
+  assert(worker.receive(fixture) == "done", "local HTTP fixture should finish")
+  return got_status, got_body, got_headers
+end
+
+tests:it("HTTP GET returns status, body, and headers", function()
+  local status, body, headers = local_fetch(200, nil, "OK")
   assert(status == 200, "status should be 200, got: " .. tostring(status))
+  assert(body == "OK", "response body should be preserved")
   assert(type(headers) == "table", "headers should be a table")
 end)
 
-tests:soft("HTTPS GET with different status codes", function()
-  -- Test 201 Created
-  local status201 = network.fetch("https://httpstat.us/201")
+tests:it("HTTP GET exposes different success status codes", function()
+  local status201 = local_fetch(201, nil, "created")
   assert(status201 == 201, "should get 201, got: " .. tostring(status201))
-  
-  -- Test 204 No Content
-  local status204 = network.fetch("https://httpstat.us/204")
+  local status204 = local_fetch(204, nil, "")
   assert(status204 == 204, "should get 204, got: " .. tostring(status204))
 end)
 
-tests:soft("HTTPS returns redirect status to the caller", function()
-  -- network.fetch performs a single request and does not follow redirects,
-  -- so a redirecting URL must surface the raw 3xx status plus a location
-  -- header (response header keys are lowercased) for the caller to act on
-  local status, body, headers = network.fetch("https://httpstat.us/301")
+tests:it("HTTP returns redirect status to the caller", function()
+  local status, _, headers = local_fetch(301, "/next", "")
   assert(status == 301, "redirect must not be followed, got: " .. tostring(status))
   assert(type(headers) == "table", "headers should be a table")
-  assert(type(headers.location) == "string", "location header should be exposed")
+  assert(headers.location == "/next", "location header should be exposed")
 end)
 
-tests:soft("HTTPS client error status", function()
-  -- Test 404 Not Found
-  local status404 = network.fetch("https://httpstat.us/404")
+tests:it("HTTP exposes client error status codes", function()
+  local status404 = local_fetch(404, nil, "missing")
   assert(status404 == 404, "should get 404, got: " .. tostring(status404))
-  
-  -- Test 400 Bad Request
-  local status400 = network.fetch("https://httpstat.us/400")
+  local status400 = local_fetch(400, nil, "bad request")
   assert(status400 == 400, "should get 400, got: " .. tostring(status400))
 end)
 
-tests:soft("HTTPS server error status", function()
-  -- Test 500 Internal Server Error
-  local status500 = network.fetch("https://httpstat.us/500")
+tests:it("HTTP exposes server error status codes", function()
+  local status500 = local_fetch(500, nil, "failure")
   assert(status500 == 500, "should get 500, got: " .. tostring(status500))
 end)
 
-tests:it("DNS resolution failure", function()
-  local ok, err = catch network.fetch("https://invalid.hostname.that.does.not.exist.example/")
-  assert(not ok, "should fail for invalid hostname")
+tests:it("a closed local endpoint reports a fetch error", function()
+  local server = network.tcp.bind("127.0.0.1", 0)
+  local _, port = server:getsockname()
+  server:close()
+  local ok, err = catch network.fetch(
+      "https://127.0.0.1:" .. tostring(port) .. "/")
+  assert(not ok, "should fail for a closed local endpoint")
   assert(type(err) == "string", "error should be string")
 end)
 
 tests:finish()
-

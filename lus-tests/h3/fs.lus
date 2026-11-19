@@ -383,14 +383,10 @@ tests:it("identifies symlinks", function()
     local link = sandbox_path("link.txt")
     write_file(target, "target content")
     
-    local ok = catch fs.createlink(link, target)
-    if ok == false then
-        -- Symlinks may require elevated privileges on some systems
-        print("        (skipped: symlink creation failed)")
-    else
-        local t, is_link = fs.type(link)
-        assert(is_link == true, "Should identify as symlink")
-    end
+    local ok, err = catch fs.createlink(link, target)
+    assert(ok, "Could not create symlink: " .. tostring(err))
+    local t, is_link = fs.type(link)
+    assert(is_link == true, "Should identify as symlink")
     cleanup_sandbox()
 end)
 
@@ -830,14 +826,11 @@ tests:it("creates symbolic link to file", function()
     
     write_file(target, "target content")
     
-    local ok = catch fs.createlink(link, target)
-    if ok == false then
-        print("        (skipped: symlink creation requires privileges)")
-    else
-        assert(file_exists(link))
-        local t, is_link = fs.type(link)
-        assert(is_link == true, "Should be a symlink")
-    end
+    local ok, err = catch fs.createlink(link, target)
+    assert(ok, "Could not create symlink: " .. tostring(err))
+    assert(file_exists(link))
+    local t, is_link = fs.type(link)
+    assert(is_link == true, "Should be a symlink")
     cleanup_sandbox()
 end)
 
@@ -849,18 +842,10 @@ tests:it("creates symbolic link to directory", function()
     fs.createdirectory(target)
     write_file(fs.path.join(target, "inside.txt"), "inside")
     
-    local ok = catch fs.createlink(link, target)
-    if ok == false then
-        print("        (skipped: symlink creation requires privileges)")
-    else
-        local t, is_link = fs.type(link)
-        assert(is_link == true)
-        -- Can we traverse the link?
-        local entries = catch fs.list(link)
-        if type(entries) == "table" then
-            assert(#entries == 1)
-        end
-    end
+    local ok, err = catch fs.createlink(link, target)
+    assert(ok, "Could not create symlink: " .. tostring(err))
+    local t, is_link = fs.type(link)
+    assert(is_link == true)
     cleanup_sandbox()
 end)
 
@@ -874,16 +859,12 @@ tests:it("resolves symbolic link", function()
     write_file(target, "content")
     
     -- Use simple filename for symlink target (relative to symlink's directory)
-    local ok = catch fs.createlink(link, "follow_target.txt")
-    if ok == false then
-        print("        (skipped: symlink creation requires privileges)")
-    else
-        local resolved = fs.follow(link)
-        assert(type(resolved) == "string")
-        -- The resolved path should contain the target name
-        assert(resolved:find("follow_target"), 
-               "Resolved path should reference target")
-    end
+    local ok, err = catch fs.createlink(link, "follow_target.txt")
+    assert(ok, "Could not create symlink: " .. tostring(err))
+    local resolved = fs.follow(link)
+    assert(type(resolved) == "string")
+    assert(resolved:find("follow_target"),
+           "Resolved path should reference target")
     cleanup_sandbox()
 end)
 

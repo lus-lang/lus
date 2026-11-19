@@ -171,6 +171,21 @@ global worker
 worker.message(function() end)
 ]==]
 
+-- Catches os.exit inside a worker and proves execution can continue.
+scripts["exitcaught"] = [==[
+global worker, os, tostring
+local ok, err = catch os.exit(37, true)
+worker.message(ok)
+worker.message(tostring(err))
+worker.message("alive")
+]==]
+
+-- Leaves a worker os.exit error uncaught so the parent observes it.
+scripts["exituncaught"] = [==[
+global os
+os.exit(37)
+]==]
+
 -- Sends a value, then an explicit nil, then another value. Pins how the parent
 -- observes a genuine nil message versus the drain sentinel.
 scripts["nilmid"] = [==[
@@ -461,6 +476,24 @@ tests:it("worker.message of a function errors and propagates", function()
     tests:assert_true(not ok, "the worker-side serialization failure must propagate")
     tests:assert_contains(tostring(err), "cannot serialize",
         "the propagated error names the serialization failure")
+end)
+
+tests:it("os.exit is catchable inside a worker", function()
+    local w = worker.create(gen("exitcaught"))
+    local msgs = drain(w)
+    tests:assert_equal(msgs[1], false, "the worker catches os.exit")
+    tests:assert_true(string.find(msgs[2], "os.exit", 1, true) ~= nil,
+        "the caught error names os.exit")
+    tests:assert_equal(msgs[3], "alive",
+        "the worker continues after catching os.exit")
+end)
+
+tests:it("an uncaught worker os.exit propagates as a worker error", function()
+    local w = worker.create(gen("exituncaught"))
+    local ok, err = catch worker.receive(w)
+    tests:assert_false(ok, "the parent receives an error")
+    tests:assert_true(string.find(tostring(err), "os.exit", 1, true) ~= nil,
+        "the propagated error names os.exit")
 end)
 
 ------------------------------------------------------------------------------

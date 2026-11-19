@@ -1,0 +1,39 @@
+-- Buffered TCP line receive experiment over loopback.
+
+global print, os, string, network, pledge, tonumber, arg
+
+pledge("network", "seal")
+
+local port = tonumber(arg[1])
+local server
+if port then
+    server = network.tcp.bind("127.0.0.1", port)
+else
+    server = network.tcp.bind("127.0.0.1", 0)
+    local _, selected_port = server:getsockname()
+    port = selected_port
+end
+local sender = network.tcp.connect("127.0.0.1", port)
+local receiver = server:accept()
+
+local line = string.rep("x", 63)
+local lines_per_round = 1000
+local rounds = 3000
+local payload = string.rep(line .. "\n", lines_per_round)
+local checksum = 0
+
+local start = os.clock()
+for _ = 1, rounds do
+    sender:send(payload)
+    for _ = 1, lines_per_round do
+        checksum = checksum + #receiver:receive("*l")
+    end
+end
+local elapsed = os.clock() - start
+
+receiver:close()
+sender:close()
+server:close()
+
+print(string.format("TIME %.9f", elapsed))
+print("CHECK " .. checksum)

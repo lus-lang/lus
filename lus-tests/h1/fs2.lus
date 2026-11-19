@@ -296,11 +296,12 @@ if SYMLINKS_OK then
         fs.remove(path)
     end)
 else
-    tests:skip("a link reports its target's type with the link flag set", "no symlink support")
-    tests:skip("follow returns the raw stored target string", "no symlink support")
-    tests:skip("a dangling link is created and its target is resolvable", "no symlink support")
-    tests:skip("the two arguments are link first, then target", "no symlink support")
-    tests:skip("follow on a regular file raises with a clear message", "no symlink support")
+    local reason = "runner lacks symbolic link creation privilege"
+    tests:skip("a link reports its target's type with the link flag set", reason)
+    tests:skip("follow returns the raw stored target string", reason)
+    tests:skip("a dangling link is created and its target is resolvable", reason)
+    tests:skip("the two arguments are link first, then target", reason)
+    tests:skip("follow on a regular file raises with a clear message", reason)
 end
 
 tests:it("follow on a missing path raises", function()
@@ -311,13 +312,17 @@ end)
 tests:describe("pledge gating")
 
 tests:it("fs.type on an ungranted path is denied for reading", function()
-    local ok, err = catch fs.type("./fs2_denied_area_" .. RUN .. "/x")
+    -- Use an existing path so path resolution reaches the pledge check on
+    -- every platform before the filesystem can report a missing component.
+    local ok, err = catch fs.type("./lus/meson.build")
     tests:assert_false(ok)
     tests:assert_contains(tostring(err), 'permission "fs:read" denied')
 end)
 
 tests:it("fs.createdirectory on an ungranted path is denied for writing", function()
-    local ok, err = catch fs.createdirectory("./fs2_denied_area_" .. RUN)
+    -- The existing parent makes the authorization boundary the only reason
+    -- this new child path is rejected.
+    local ok, err = catch fs.createdirectory("./lus/fs2_denied_area_" .. RUN)
     tests:assert_false(ok)
     tests:assert_contains(tostring(err), 'permission "fs:write" denied')
 end)

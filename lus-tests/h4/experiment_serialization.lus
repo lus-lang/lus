@@ -1,0 +1,27 @@
+-- JSON serialization and parsing experiment.
+
+global print, os, string, tojson, fromjson
+
+local rows = {}
+for i = 1, 100 do
+    rows[i] = {
+        id = i,
+        name = "row-" .. i,
+        active = (i & 1) == 0,
+        values = {i, i + 1, i + 2, i + 3},
+    }
+end
+local payload = {version = 1, rows = rows, source = "h4"}
+local iterations = 4000
+local checksum = 0
+
+local start = os.clock()
+for _ = 1, iterations do
+    local encoded = tojson(payload)
+    local decoded = fromjson(encoded)
+    checksum = checksum + #encoded + #decoded.rows
+end
+local elapsed = os.clock() - start
+
+print(string.format("TIME %.9f", elapsed))
+print("CHECK " .. checksum)

@@ -7,7 +7,7 @@
 ]]
 
 global io, print, assert, require, pledge, type, tostring, string, load,
-    collectgarbage, debug, pairs, setmetatable, math, query, error
+    collectgarbage, debug, pairs, ipairs, setmetatable, math, query, error
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -248,6 +248,33 @@ tests:it("limit and offset window the results", function()
         "a bound parameter works as a limit")
 end)
 
+tests:it("limit and offset clamp before integer arithmetic", function()
+    local t = people()
+    local remaining = collect(@t as p select p.name
+        limit math.maxinteger offset 1)
+    tests:assert_equal(#remaining, 3,
+        "a maximum limit returns every row after the offset")
+    tests:assert_equal(#collect(@t as p select p.name
+        offset math.maxinteger), 0,
+        "a maximum offset returns promptly with no rows")
+    tests:assert_equal(#collect(@t as p select p.name
+        limit 0 offset math.maxinteger), 0,
+        "a zero limit remains empty at a maximum offset")
+end)
+
+tests:it("limit and offset expressions are row-independent", function()
+    local limitfn, limiterr =
+        load("local t = ... return @t as r limit r.n")
+    tests:assert_equal(limitfn, nil)
+    tests:assert_contains(tostring(limiterr),
+        "query limit must be row%-independent")
+    local offsetfn, offseterr =
+        load("local t = ... return @t as r offset r.n")
+    tests:assert_equal(offsetfn, nil)
+    tests:assert_contains(tostring(offseterr),
+        "query offset must be row%-independent")
+end)
+
 tests:it("negative and non-numeric limits raise", function()
     local t = people()
     tests:assert_throws(function()
@@ -293,6 +320,33 @@ tests:it("min and max work over strings", function()
     local rows = collect(@t as p select min(p.name) as lo, max(p.name) as hi)
     tests:assert_equal(rows[1].lo, "Alice")
     tests:assert_equal(rows[1].hi, "Dave")
+end)
+
+tests:it("min and max validate every non-nil value", function()
+    for _, name in ipairs({ "min", "max" }) do
+        local one_boolean = { { v = true } }
+        local one_table = { { v = {} } }
+        tests:assert_throws(function()
+            local make = load("local t = ... return @t as r select " ..
+                name .. "(r.v) as value")
+            collect(make(one_boolean))
+        end, "cannot aggregate a boolean value")
+        tests:assert_throws(function()
+            local make = load("local t = ... return @t as r select " ..
+                name .. "(r.v) as value")
+            collect(make(one_table))
+        end, "cannot aggregate a table value")
+        for _, values in ipairs({
+            { { v = 1 }, { v = "1" } },
+            { { v = "1" }, { v = 1 } },
+        }) do
+            tests:assert_throws(function()
+                local make = load("local t = ... return @t as r select " ..
+                    name .. "(r.v) as value")
+                collect(make(values))
+            end, "cannot aggregate")
+        end
+    end
 end)
 
 tests:it("grouping by two keys", function()

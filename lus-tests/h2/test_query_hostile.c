@@ -65,18 +65,112 @@ static int build_exploit(lua_State *L) {
   return 0;
 }
 
-int main(void) {
-  lua_State *L = luaL_newstate();
+static int build_bad_unary(lua_State *L) {
+  QPlanHeader h;
+  QWireLayout w;
+  char *wire;
+  QSource src;
+  QNode *nodes;
+  TString *blob;
+  StkId base, ra;
+  memset(&h, 0, sizeof(h));
+  h.version = LUS_QPLAN_VERSION;
+  h.nsources = 1;
+  h.nnodes = 3;
+  h.where_root = 2;
+  h.having_root = QNODE_NONE;
+  h.limit_node = QNODE_NONE;
+  h.offset_node = QNODE_NONE;
+  h.poolsize = 2;
+  luaQ_wirelayout(&h, &w);
+  wire = calloc(1, w.total);
+  memcpy(wire, &h, sizeof(h));
+  memset(&src, 0, sizeof(src));
+  src.alias.len = 1;
+  memcpy(wire + w.sources, &src, sizeof(src));
+  nodes = (QNode *)(wire + w.nodes);
+  nodes[0].kind = QN_LIT_INT;
+  nodes[0].u.i = 1;
+  nodes[1].kind = QN_LIT_INT;
+  nodes[1].u.i = 2;
+  nodes[2].kind = QN_ARITH;
+  nodes[2].sub = QAR_UNM;
+  nodes[2].a = 0;
+  nodes[2].b = 1; /* unary plans must not carry a second operand */
+  wire[w.pool] = 's';
+  blob = luaS_newlstr(L, wire, w.total);
+  free(wire);
+  lua_newtable(L);
+  base = L->top.p - 1;
+  ra = L->top.p;
+  L->top.p++;
+  luaQ_build(L, ra, blob, base, 1, 0);
+  return 0;
+}
+
+static int build_row_limit(lua_State *L) {
+  QPlanHeader h;
+  QWireLayout w;
+  char *wire;
+  QSource src;
+  QNode *nodes;
+  TString *blob;
+  StkId base, ra;
+  memset(&h, 0, sizeof(h));
+  h.version = LUS_QPLAN_VERSION;
+  h.nsources = 1;
+  h.nnodes = 1;
+  h.where_root = QNODE_NONE;
+  h.having_root = QNODE_NONE;
+  h.limit_node = 0;
+  h.offset_node = QNODE_NONE;
+  h.poolsize = 2;
+  luaQ_wirelayout(&h, &w);
+  wire = calloc(1, w.total);
+  memcpy(wire, &h, sizeof(h));
+  memset(&src, 0, sizeof(src));
+  src.alias.len = 1;
+  memcpy(wire + w.sources, &src, sizeof(src));
+  nodes = (QNode *)(wire + w.nodes);
+  nodes[0].kind = QN_ROWVAR;
+  nodes[0].sub = 0;
+  wire[w.pool] = 's';
+  blob = luaS_newlstr(L, wire, w.total);
+  free(wire);
+  lua_newtable(L);
+  base = L->top.p - 1;
+  ra = L->top.p;
+  L->top.p++;
+  luaQ_build(L, ra, blob, base, 1, 0);
+  return 0;
+}
+
+static int expect_rejected(lua_State *L, lua_CFunction build,
+                           const char *label) {
   int st;
-  luaL_openlibs(L);
-  lua_pushcfunction(L, build_exploit);
+  lua_settop(L, 0);
+  lua_pushcfunction(L, build);
   st = lua_pcall(L, 0, 0, 0);
-  if (st != LUA_OK) {
-    printf("REJECTED: %s\n", lua_tostring(L, -1));
-    lua_close(L);
+  if (st == LUA_OK) {
+    fprintf(stderr, "ACCEPTED %s (FIX FAILED)\n", label);
     return 0;
   }
-  printf("ACCEPTED the doubling DAG (FIX FAILED)\n");
-  lua_close(L);
+  if (strstr(lua_tostring(L, -1), "corrupt query plan in bytecode") == NULL) {
+    fprintf(stderr, "WRONG ERROR for %s: %s\n", label,
+            lua_tostring(L, -1));
+    return 0;
+  }
+  printf("REJECTED %s\n", label);
   return 1;
+}
+
+int main(void) {
+  lua_State *L = luaL_newstate();
+  int ok;
+  luaL_openlibs(L);
+  ok = expect_rejected(L, build_exploit, "the doubling DAG");
+  ok &= expect_rejected(L, build_bad_unary, "a two-operand unary node");
+  ok &= expect_rejected(L, build_row_limit, "a row-dependent limit");
+  lua_close(L);
+  return ok ? 0 : 1;
 }

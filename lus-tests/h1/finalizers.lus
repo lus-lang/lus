@@ -60,6 +60,32 @@ local function quietly(fn)
     end
 end
 
+-- Runs fn with collection parameters that make allocation-driven cycles start
+-- promptly, then restores every parameter even when fn raises.
+local function with_prompt_automatic_gc(mode, fn)
+    local names
+    local values
+    if mode == "incremental" then
+        names = {"pause", "stepmul", "stepsize"}
+        values = {100, 1000, 0}
+    else
+        names = {"minormul", "majorminor", "minormajor"}
+        values = {1, 1, 1}
+    end
+
+    local old = {}
+    for i = 1, #names do
+        old[i] = collectgarbage("param", names[i], values[i])
+    end
+    local ok, err = catch fn()
+    for i = 1, #names do
+        collectgarbage("param", names[i], old[i])
+    end
+    if not ok then
+        error(err, 0)
+    end
+end
+
 local modes = {{"incremental"}, {"generational"}}
 
 -- ==========================================================
@@ -395,6 +421,64 @@ tests:it("catch works inside a finalizer and contains the error", function()
     tests:assert_contains(caught_msg, "inner_fail",
         "the caught message should carry the raised text")
 end)
+
+tests:each("automatic collection restores state after a finalizer error", modes,
+    function(mode)
+        with_mode(mode, function()
+            full()
+            with_prompt_automatic_gc(mode, function()
+                quietly(function()
+                    local finalized = false
+                    local inner_caught = false
+                    local closed = false
+
+                    local function abandon_finalizer()
+                        local o = setmetatable({}, {__gc = function()
+                            local guard <close> = setmetatable({}, {
+                                __close = function() closed = true end,
+                            })
+                            local ok, err = catch error("inner finalizer error", 0)
+                            inner_caught = not ok
+                                and string.find(tostring(err),
+                                    "inner finalizer error", 1, true) ~= nil
+                            finalized = true
+                            error("unhandled finalizer error", 0)
+                        end})
+                        o = nil
+                    end
+                    abandon_finalizer()
+
+                    local function allocate_until_finalized()
+                        for i = 1, 200000 do
+                            local churn = {i, i, i}
+                            if finalized then
+                                return
+                            end
+                        end
+                    end
+
+                    local ok = catch allocate_until_finalized()
+                    tests:assert_true(ok,
+                        "an outer catch must not intercept a finalizer error")
+                    tests:assert_true(finalized,
+                        "automatic collection should run the finalizer in "
+                            .. mode .. " mode")
+                    tests:assert_true(inner_caught,
+                        "a catch created inside the finalizer should keep working")
+                    tests:assert_true(closed,
+                        "unwinding should close finalizer to-be-closed values")
+
+                    local call_ok, call_err =
+                        catch error("post-finalizer error", 0)
+                    tests:assert_false(call_ok,
+                        "later error handling should still enter its catch")
+                    tests:assert_true(string.find(tostring(call_err),
+                        "post-finalizer error", 1, true) ~= nil,
+                        "later errors should retain their message")
+                end)
+            end)
+        end)
+    end)
 
 -- ==========================================================
 -- Finalizer callable and argument contract

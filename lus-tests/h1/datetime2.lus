@@ -129,6 +129,15 @@ tests:it("instant argument contract", function()
     assert(time.instant("100"):epoch() == 100, "a numeric string is accepted")
 end)
 
+tests:it("instant normalization rejects values outside the timeline", function()
+    assert(not (catch time.instant(math.maxinteger, 1000000000)),
+        "a carry beyond the maximum raises")
+    assert(not (catch time.instant(math.mininteger, -1)),
+        "a borrow below the minimum raises")
+    assert(time.instant(math.maxinteger - 1, 1000000000):epoch() == math.maxinteger,
+        "an in-range carry remains valid")
+end)
+
 -- ============================================================================
 -- Scalar duration helpers: negatives, coercion, argument errors
 -- ============================================================================
@@ -174,6 +183,13 @@ tests:it("scalar helper coerces an integral decimal string", function()
     assert(time.days("5"):seconds() == 432000.0, "\"5\" days")
 end)
 
+tests:it("scalar helpers reject overflowing durations", function()
+    assert(not (catch time.days(math.maxinteger)), "maximum days overflow")
+    assert(not (catch time.hours(math.mininteger)), "minimum hours overflow")
+    assert(time.millis(math.maxinteger):parts().days > 0,
+        "large milliseconds normalize without an intermediate overflow")
+end)
+
 -- ============================================================================
 -- time.duration: units, comparisons, subtraction, parts, tostring
 -- ============================================================================
@@ -208,6 +224,43 @@ tests:it("duration scales by an integer and rejects a fractional factor", functi
     assert((time.seconds(10) * 3):seconds() == 30.0, "integer factor")
     assert((time.seconds(10) * "3"):seconds() == 30.0, "integral string factor")
     assert(not (catch (time.seconds(10) * 1.5)), "fractional factor raises")
+end)
+
+tests:it("duration arithmetic rejects timeline overflow", function()
+    assert(not (catch (time.seconds(math.maxinteger) + time.seconds(1))),
+        "addition above the maximum raises")
+    assert(not (catch (time.seconds(math.mininteger) - time.seconds(1))),
+        "subtraction below the minimum raises")
+    assert(not (catch (time.seconds(math.maxinteger) * 2)),
+        "multiplication above the maximum raises")
+    assert(not (catch (-time.seconds(math.mininteger))),
+        "negating the minimum whole-second duration raises")
+end)
+
+tests:it("duration arithmetic keeps representable boundary cancellation", function()
+    local half_before_zero = time.duration{ seconds = -1, nanos = 500000000 }
+    local positive = half_before_zero * math.mininteger
+    assert(positive:parts().negative == false, "the product is positive")
+    local edge = time.duration{ seconds = math.mininteger, nanos = 500000000 }
+    local negated = -edge
+    assert(negated:parts().negative == false, "fractional minimum negates safely")
+end)
+
+tests:it("parts handles the minimum duration without signed negation", function()
+    local p = time.seconds(math.mininteger):parts()
+    assert(p.negative == true, "minimum duration is negative")
+    assert(p.days > 0, "minimum duration exposes a positive magnitude")
+end)
+
+tests:it("instant arithmetic rejects overflow and keeps a boundary result", function()
+    assert(not (catch (time.instant(math.maxinteger) + time.seconds(1))),
+        "instant addition above the maximum raises")
+    assert(not (catch (time.instant(math.mininteger) - time.seconds(1))),
+        "instant subtraction below the minimum raises")
+    assert(not (catch (time.instant(math.maxinteger) - time.instant(math.mininteger))),
+        "instant difference above the maximum raises")
+    local d = time.instant(math.maxinteger) - time.instant(-1, 500000000)
+    assert(d:parts().negative == false, "boundary cancellation remains valid")
 end)
 
 tests:it("duration parts expose a days field for long spans", function()
@@ -257,6 +310,15 @@ end)
 tests:it("offset argument contract", function()
     assert(not (catch time.offset()), "no argument raises")
     assert(not (catch time.offset(1.5)), "a fractional second raises")
+end)
+
+tests:it("every fixed-offset entry point enforces the same range", function()
+    assert(not (catch time.instant(0):at(math.maxinteger)),
+        "instant fixed offset rejects a huge value")
+    assert(not (catch time.zoned({}, math.maxinteger)),
+        "zoned fixed offset rejects a huge value")
+    assert(not (catch time.offset(math.maxinteger)),
+        "offset constructor rejects a huge value")
 end)
 
 -- ============================================================================
@@ -346,6 +408,22 @@ tests:it("with normalizes a rolled-over day and rejects a bad field", function()
         "several fields replace at once")
     assert(not (catch time.zoned{ year = 2026, month = 1, day = 1 }:with{ month = 13 }),
         "an out-of-range replacement raises")
+end)
+
+tests:it("zoned constructors and calendar arithmetic reject overflow", function()
+    assert(not (catch time.zoned{ year = math.maxinteger }),
+        "an unrepresentable civil year raises")
+    local base = time.zoned{ year = 2026, month = 1, day = 1 }
+    assert(not (catch base:with{ year = math.maxinteger }),
+        "with rejects an unrepresentable year")
+    assert(not (catch base:add{ years = math.maxinteger }),
+        "year arithmetic rejects overflow")
+    assert(not (catch base:add{ weeks = math.maxinteger }),
+        "week arithmetic rejects overflow")
+    assert(not (catch base:add{ hours = math.maxinteger }),
+        "hour arithmetic rejects overflow")
+    assert(base:add{ nanos = math.maxinteger }.year > 2026,
+        "large nanoseconds normalize when the result fits")
 end)
 
 -- ============================================================================
@@ -458,6 +536,31 @@ end)
 tests:it("half-hour offset parses to the right instant", function()
     assert(time.parse("2026-07-02T18:45:00+05:30"):instant():epoch() == REF,
         "18:45 at +05:30 is 13:15 UTC")
+end)
+
+tests:each("invalid fixed-offset components are rejected", {
+    { "2026-07-02T13:15:00+01:60" },
+    { "2026-07-02T13:15:00+24:01" },
+    { "2026-07-02T13:15:00+25:00" },
+}, function(value)
+    assert(not (catch time.parse(value)), value .. " must raise")
+end)
+
+tests:it("the exact full-day offset remains valid", function()
+    local z = time.parse("2026-07-02T13:15:00+24:00")
+    assert(z:iso() == "2026-07-02T13:15:00+24:00", "ISO parser keeps +24:00")
+    assert(time.parse("2026-07-02T13:15:00+24:00",
+        "%Y-%m-%dT%H:%M:%S%z"):iso() ==
+        "2026-07-02T13:15:00+24:00", "pattern parser keeps +24:00")
+end)
+
+tests:each("pattern parsing rejects invalid fixed-offset components", {
+    { "2026-07-02T13:15:00+01:60" },
+    { "2026-07-02T13:15:00+24:01" },
+    { "2026-07-02T13:15:00+25:00" },
+}, function(value)
+    assert(not (catch time.parse(value, "%Y-%m-%dT%H:%M:%S%z")),
+        value .. " must raise")
 end)
 
 -- Parsing is portable and independent of the platform strptime, and every

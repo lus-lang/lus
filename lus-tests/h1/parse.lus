@@ -5,6 +5,23 @@ pledge("load", "fs:read=./lus-tests/*", "seal")
 local framework = require("lus-tests.framework")
 local tests = framework.new("parse")
 
+tests:it("serializes deeply nested calls", function()
+    local depth = 64
+    local source = "return " .. string.rep("f(", depth) .. "31337"
+        .. string.rep(")", depth)
+    local ast = debug.parse(source, "nested-calls.lus")
+    local node = ast.children[1].values[1]
+
+    for _ = 1, depth do
+        assert(node.type == "callexpr", "expected a nested call expression")
+        assert(#node.args == 1, "expected one nested call argument")
+        node = node.args[1]
+    end
+
+    assert(node.type == "number", "expected the innermost literal")
+    assert(node.value == 31337, "expected the innermost literal value")
+end)
+
 -- Helper to read a file
 local function readfile(path)
     local f = io.open(path, "rb")

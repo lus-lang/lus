@@ -10,6 +10,7 @@ local document = require("lus-language.document")
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
 local types_mod = require("lus-language.analysis.types")
+local stdlib_data = require("lus-language.analysis.stdlib_data")
 local diagnostics = require("lus-language.analysis.diagnostics")
 local linting = require("lus-language.analysis.linting")
 local symbols = require("lus-language.operations.symbols")
@@ -304,6 +305,84 @@ tests:it("infers tostring() as string", function()
   tests:assert_equal(t.tag, "string")
 end)
 
+tests:it("infers nominal standard library return types", function()
+  local instant = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "time"},
+      key = {value = "now"}},
+    args = {},
+  })
+  tests:assert_equal(instant.tag, "nominal")
+  tests:assert_equal(instant.name, "instant")
+
+  local database = types_mod.infer_expr({
+    type = "callexpr",
+    func = {type = "field",
+      table = {type = "name", value = "io"},
+      key = {value = "sqlite"}},
+    args = {{type = "string", value = ":memory:"}},
+  })
+  tests:assert_equal(database.tag, "nominal")
+  tests:assert_equal(database.name, "database")
+end)
+
+tests:it("infers arbitrary-depth standard library constants", function()
+  local t = types_mod.infer_expr({
+    type = "field",
+    table = {type = "field",
+      table = {type = "name", value = "fs"},
+      key = {value = "path"}},
+    key = {value = "separator"},
+  })
+  tests:assert_equal(t.tag, "string")
+end)
+
+tests:it("infers standard library receiver method returns", function()
+  local uri = open_doc("local s = 'value'\nlocal tail = s:sub(2)")
+  local analysis = scope_mod.analyze(uri)
+  local tail
+  for _, decl in ipairs(analysis.declarations) do
+    if decl.name == "tail" then tail = decl end
+  end
+  tests:assert_not_nil(tail)
+  tests:assert_not_nil(tail.type_info)
+  tests:assert_equal(tail.type_info.tag, "string")
+  close_doc(uri)
+end)
+
+tests:it("infers nominal receiver method returns through the symbol graph", function()
+  local uri = open_doc(table.concat({
+    "local socket = network.tcp.connect('127.0.0.1', 80)",
+    "local line = socket:receive('*l')",
+  }, "\n"))
+  local analysis = scope_mod.analyze(uri)
+  local line_decl
+  for _, decl in ipairs(analysis.declarations) do
+    if decl.name == "line" then line_decl = decl end
+  end
+  tests:assert_not_nil(line_decl)
+  tests:assert_not_nil(line_decl.type_info)
+  tests:assert_equal(line_decl.type_info.tag, "string")
+  close_doc(uri)
+end)
+
+tests:it("keeps one qualified standard library symbol graph", function()
+  local path_module = stdlib_data.resolve("fs.path")
+  tests:assert_not_nil(path_module)
+  tests:assert_equal(path_module.source, "stdlib/fs/path/_module.md")
+  tests:assert_contains(path_module.description, "sub%-module")
+
+  local unzip = stdlib_data.resolve("table.unzip")
+  tests:assert_equal(#unzip.returns, 1)
+  tests:assert_equal(unzip.returns[1].name, "...")
+  tests:assert_equal(unzip.returns[1].type, "table")
+
+  local pi = stdlib_data.resolve("math.pi")
+  tests:assert_equal(pi.kind, "constant")
+  tests:assert_equal(pi.type, "number")
+end)
+
 tests:it("displays union types", function()
   local u = types_mod.union({types_mod.str(), types_mod.null()})
   local display = types_mod.display(u)
@@ -514,6 +593,64 @@ tests:it("returns keywords", function()
   close_doc(uri)
 end)
 
+tests:it("completes arbitrary-depth standard library modules", function()
+  local uri = open_doc("vector.archive.gzip.")
+  local result = completion.compute(uri, {line = 0, character = 20})
+  local found = false
+  for _, item in ipairs(result.items or result) do
+    if item.label == "compress" then found = true end
+  end
+  tests:assert_true(found, "expected vector.archive.gzip.compress")
+  close_doc(uri)
+end)
+
+tests:it("completes standard library receiver methods", function()
+  local uri = open_doc("local s = 'value'\ns:")
+  local result = completion.compute(uri, {line = 1, character = 2})
+  local found = false
+  for _, item in ipairs(result.items or result) do
+    if item.label == "sub" then found = true end
+  end
+  tests:assert_true(found, "expected string receiver methods")
+  close_doc(uri)
+end)
+
+tests:it("completes nominal receiver methods", function()
+  local uri = open_doc(table.concat({
+    "local socket = network.tcp.connect('127.0.0.1', 80)",
+    "socket:",
+  }, "\n"))
+  local result = completion.compute(uri, {line = 1, character = 7})
+  local found = false
+  for _, item in ipairs(result.items or result) do
+    if item.label == "receive" and item.detail == "tcp_socket:receive" then
+      found = true
+    end
+  end
+  tests:assert_true(found, "expected tcp_socket:receive")
+  close_doc(uri)
+end)
+
+tests:it("includes flags and from in their language contexts", function()
+  local flags_uri = open_doc("fl")
+  local flags_result = completion.compute(flags_uri, {line = 0, character = 2})
+  local found_flags = false
+  for _, item in ipairs(flags_result.items or flags_result) do
+    if item.label == "flags" and item.kind == 6 then found_flags = true end
+  end
+  tests:assert_true(found_flags, "expected flags global variable")
+  close_doc(flags_uri)
+
+  local from_uri = open_doc("fr")
+  local from_result = completion.compute(from_uri, {line = 0, character = 2})
+  local found_from = false
+  for _, item in ipairs(from_result.items or from_result) do
+    if item.label == "from" and item.kind == 14 then found_from = true end
+  end
+  tests:assert_true(found_from, "expected from keyword")
+  close_doc(from_uri)
+end)
+
 -- =========================================================================
 -- Hover
 -- =========================================================================
@@ -534,6 +671,15 @@ tests:it("shows hover for functions", function()
   local result = hover.compute(uri, {line = 3, character = 0})
   tests:assert_not_nil(result)
   tests:assert_contains(result.contents.value, "foo")
+  close_doc(uri)
+end)
+
+tests:it("shows hover for arbitrary-depth standard library symbols", function()
+  local uri = open_doc("local join = fs.path.join")
+  local result = hover.compute(uri, {line = 0, character = 23})
+  tests:assert_not_nil(result)
+  tests:assert_contains(result.contents.value, "function fs.path.join")
+  tests:assert_contains(result.contents.value, "%.%.%.%)")
   close_doc(uri)
 end)
 
@@ -1035,6 +1181,29 @@ tests:it("returns signature for stdlib function", function()
   tests:assert_true(#result.signatures >= 1, "expected at least one signature")
   tests:assert_contains(result.signatures[1].label, "string%.sub")
   tests:assert_equal(result.activeParameter, 0, "first argument should be active")
+  close_doc(uri)
+end)
+
+tests:it("preserves zero-argument standard library signatures", function()
+  local uri = open_doc("io.flush(")
+  local result = signature.compute(uri, {line = 0, character = 9})
+  tests:assert_not_nil(result)
+  tests:assert_equal(string.sub(result.signatures[1].label, 1, 10), "io.flush()")
+  tests:assert_contains(result.signatures[1].label, "boolean|nil")
+  tests:assert_equal(#result.signatures[1].parameters, 0)
+  close_doc(uri)
+end)
+
+tests:it("resolves method signatures from nominal receiver types", function()
+  local uri = open_doc(table.concat({
+    "local socket = network.tcp.connect('127.0.0.1', 80)",
+    "socket:receive(",
+  }, "\n"))
+  local result = signature.compute(uri, {line = 1, character = 15})
+  tests:assert_not_nil(result)
+  tests:assert_contains(result.signatures[1].label, "socket:receive")
+  tests:assert_contains(result.signatures[1].label, "max_bytes: integer%?")
+  tests:assert_equal(#result.signatures[1].parameters, 2)
   close_doc(uri)
 end)
 

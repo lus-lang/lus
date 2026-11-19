@@ -9,7 +9,7 @@
 ]]
 
 global io, print, assert, require, pledge, type, tostring, tonumber,
-    math, string, vector, worker, collectgarbage, select, next, error
+    math, string, vector, worker, collectgarbage, select, next, error, ipairs
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -542,6 +542,17 @@ tests:it("PRAGMA queries work", function()
     local db <close> = io.sqlite(":memory:")
     for row in db:query("PRAGMA journal_mode") do
         tests:assert_equal(row.journal_mode, "memory")
+    end
+end)
+
+tests:it("path-changing PRAGMAs are denied case-insensitively", function()
+    local db <close> = io.sqlite(":memory:")
+    for _, sql in ipairs({
+        "PRAGMA data_store_directory = '.'",
+        "PRAGMA TEMP_STORE_DIRECTORY = '.'",
+        "PRAGMA LoCk_PrOxY_FiLe = '.'",
+    }) do
+        tests:assert_throws(function() db:exec(sql) end, "not authorized")
     end
 end)
 

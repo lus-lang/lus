@@ -1,48 +1,52 @@
 # Lus tests
 
-One of Lus' design goals is to be thoroughly tested, both for stability and performance. To this end, there is a suite of tests that are run as part of the build process. The tests are divided into four harnesses:
+The repository uses four harnesses to qualify correctness, integration, embedding, and performance.
 
-- The first harness (H1) covers syntax, parser, and standard library logic.
-- The second harness (H2) tests the embeddability of the language via the C API.
-- The third harness (H3) runs the runtime within a container to test for OS-specific issues.
-- The fourth harness (H4) runs various benchmarks to test for performance regressions.
+- H1 runs language, parser, virtual machine, and standard library suites written in Lus.
+- H2 runs C programs against the embedding API and static library.
+- H3 exercises independent system integration cases from `h3/manifest.json`. Local runs use the containerized `h3-local` suite, while CI uses the direct `h3-ci` suite in its prepared runner. Each case receives an isolated temporary directory. The HTTPS case uses a checked-in localhost certificate and an ephemeral loopback port.
+- H4 produces paired performance evidence. Its inventory, stability rules, thresholds, and focused commands are documented in [the H4 guide](h4/README.md).
 
-H1, H2, and H3 are blocking; if they fail, the build will not pass and an unstable build won't be produced. H4 is conditional, where failure blocks stable releases but may not block unstable releases depending on the severity of the failure.
+Release qualification requires the configured H1, H2, and H3 suites on each supported test platform. Main and tag builds also require the focused H4 benchmark job. Pull requests can omit that benchmark job while still running correctness, sanitizer, and platform checks. The release evidence records each required result, and the release bundle is assembled only after its quality gate passes.
 
-H4 scores each test and ranks them as "critical", "bad", "acceptable", and "good". The ranges for each are test-specific. If _any_ test are scored critical, the build will fail. If a test is scored bad, the build will fail if the build type is Standard, but pass if the build type is Unstable or if we're releasing a security hotfix. If a test is scored acceptable or good, the build will pass; _good_ is an arbitrary threshold that we _wish_ to attain.
+## Running tests locally
 
-**It is recommended to run the tests locally before submitting _any_ pull requests.** This saves precious GitHub Actions minutes, allows for faster iteration on your end, and reduces PR clutter. It is quite easy to run the tests locally, so even if it's boring, please do it.
-
-Each test suite can be ran on either your host operating system or within a container. It is definitely safer and more consistent (and good practice) to run the tests within a container, but H1 and H2 can be reliably ran on your host operating system without too much risk. An additional benefit of running the tests in a container (using our method below) is you will also subject Lus to additional memory sanitization tests, which Meson does not do.
-
-## Running the tests locally
-
-### Testing on your host operating system
-
-Use the `meson test` command, which will run ALL tests on your host operating system. You _probably_ don't want to do all tests there (especially H3), so you should probably pick and choose which tests you want to run, as such:
+Configure and compile from the `lus` directory.
 
 ```sh
-# Test a specific suite, e.g. H1.
-meson test --suite h1
-
-# Test a specific test.
-meson test h1/optchain
+cd lus
+meson setup build
+meson compile -C build
 ```
 
-You can list all available tests with `meson test --list`.
+Run all configured suites or select the surface relevant to a change.
 
-### Testing within a container
+```sh
+meson test -C build
+meson test -C build --suite h1
+meson test -C build --suite h2
+meson test -C build --suite h3-local
+meson test -C build --suite h4
+meson test -C build h1/optchain
+```
 
-The best way to run the tests in a container is to execute the `sanitize` CI workflow locally. First, make sure to have these programs installed on your computer:
+`meson test -C build --list` lists every registered test. Focused runs provide fast feedback, while a complete qualification run covers interactions across the repository.
 
-- [Docker](https://www.docker.com/) (macOS, Windows) or [Podman](https://podman.io/) (Linux)
-- [`act`](https://nektosact.com/)
+## Sanitizer workflow
 
-Then, run the tests while in the root directory of the repository:
+The CI sanitizer job qualifies every registered H1 and H2 case with Clang AddressSanitizer and UndefinedBehaviorSanitizer. Linux runs require LeakSanitizer with halt-on-error behavior. A separate ThreadSanitizer build runs the worker lifecycle, multi-state, embedding, and idle-worker cases. Both runs validate their exact test inventory before producing combined release evidence.
+
+Run the focused sanitizer qualifiers from the repository root.
+
+```sh
+bash lus-tests/qualify-sanitizers.sh
+bash lus-tests/qualify-tsan.sh
+```
+
+Docker or Podman together with [`act`](https://nektosact.com/) can run the full CI job locally.
 
 ```sh
 act -j sanitize
 ```
 
-> [!NOTE]
-> If `act` asks which kind of image you want to install, choose the medium one.
+Linux jobs run locally through `act`. The macOS and Windows matrix jobs require their native GitHub runners.

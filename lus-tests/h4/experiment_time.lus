@@ -1,0 +1,20 @@
+-- Scalar time constructor experiment.
+
+global print, os, string, time
+
+local iterations = 1200000
+local checksum = 0
+
+local start = os.clock()
+for i = 1, iterations do
+    checksum = checksum + time.days(i & 31):seconds()
+    checksum = checksum + time.hours(i & 31):seconds()
+    checksum = checksum + time.minutes(i & 31):seconds()
+    checksum = checksum + time.seconds(i & 31):seconds()
+    checksum = checksum + time.millis(i & 31):millis()
+    checksum = checksum + time.instant(i):epoch()
+end
+local elapsed = os.clock() - start
+
+print(string.format("TIME %.9f", elapsed))
+print("CHECK " .. checksum)

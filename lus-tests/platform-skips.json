@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "skips": [],
+  "sanitizer_limitations": {
+    "darwin": {
+      "leak_detection": {
+        "requested": true,
+        "runtime_status": "unavailable",
+        "reason": "Apple Clang AddressSanitizer does not provide the LeakSanitizer runtime"
+      }
+    }
+  }
+}

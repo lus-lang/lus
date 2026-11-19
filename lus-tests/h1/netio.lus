@@ -15,22 +15,43 @@
   locally.
 ]]
 
-global network, pledge, type, assert, tostring, string, require, print
+global network, worker, pledge, type, assert, tostring, string, require, print
 
 pledge("load", "fs:read=./lus-tests/*", "network", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("netio")
 
--- Establish a connected loopback pair on the given port. The bind is the first
--- fallible call so a sandbox EPERM surfaces here and nowhere else. On loopback
--- the connect lands in the listen backlog and completes before accept runs, so
--- accept returns the queued connection without blocking.
-local function make_pair(port)
-    local server = network.tcp.bind("127.0.0.1", port)
+-- Establish a connected loopback pair on an ephemeral port. The bind is the
+-- first fallible call so a sandbox EPERM surfaces here and nowhere else. On
+-- loopback the connect lands in the listen backlog and completes before accept
+-- runs, so accept returns the queued connection without blocking.
+local function make_pair()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
     local client = network.tcp.connect("127.0.0.1", port)
     local conn = server:accept()
     return server, client, conn
+end
+
+local function make_sender(bytes, suffix)
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local sender = worker.create("lus-tests/h1/worker/net_sender.lus")
+    worker.send(sender, { port = port, bytes = bytes, suffix = suffix })
+    return server, server:accept(), sender
+end
+
+local function finish_sender(sender)
+    tests:assert_equal(worker.receive(sender), "done")
+    tests:assert_equal(worker.receive(sender), nil)
+end
+
+local function closed_tcp_port()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    server:close()
+    return port
 end
 
 -- ============================================================
@@ -38,7 +59,7 @@ end
 -- ============================================================
 
 tests:it("TCP send then receive delivers the exact bytes", function()
-    local server, client, conn = make_pair(34870)
+    local server, client, conn = make_pair()
     local n = client:send("hello")
     tests:assert_equal(n, 5, "send should report five bytes written")
     tests:assert_equal(conn:receive(5), "hello", "peer should read the sent bytes")
@@ -48,7 +69,7 @@ tests:it("TCP send then receive delivers the exact bytes", function()
 end)
 
 tests:it("TCP data flows in both directions", function()
-    local server, client, conn = make_pair(34871)
+    local server, client, conn = make_pair()
     client:send("ping")
     tests:assert_equal(conn:receive(4), "ping", "server side reads client bytes")
     conn:send("pong")
@@ -59,7 +80,7 @@ tests:it("TCP data flows in both directions", function()
 end)
 
 tests:it("TCP receive with a size splits a payload into chunks", function()
-    local server, client, conn = make_pair(34872)
+    local server, client, conn = make_pair()
     client:send("hello world")
     tests:assert_equal(conn:receive(5), "hello", "first chunk is the requested size")
     tests:assert_equal(conn:receive(6), " world", "second chunk is the remainder")
@@ -69,7 +90,7 @@ tests:it("TCP receive with a size splits a payload into chunks", function()
 end)
 
 tests:it("TCP receive coalesces bytes from multiple sends", function()
-    local server, client, conn = make_pair(34873)
+    local server, client, conn = make_pair()
     client:send("ab")
     client:send("cd")
     tests:assert_equal(conn:receive(4), "abcd", "a single sized read spans two sends")
@@ -79,7 +100,7 @@ tests:it("TCP receive coalesces bytes from multiple sends", function()
 end)
 
 tests:it("TCP receive '*a' returns all bytes up to peer close", function()
-    local server, client, conn = make_pair(34874)
+    local server, client, conn = make_pair()
     client:send("goodbye")
     client:close()
     tests:assert_equal(conn:receive("*a"), "goodbye", "read-all yields the full payload at EOF")
@@ -88,7 +109,7 @@ tests:it("TCP receive '*a' returns all bytes up to peer close", function()
 end)
 
 tests:it("TCP receive '*l' returns one line without the newline", function()
-    local server, client, conn = make_pair(34875)
+    local server, client, conn = make_pair()
     client:send("first\nsecond\n")
     tests:assert_equal(conn:receive("*l"), "first", "line read strips the trailing newline")
     tests:assert_equal(conn:receive("*l"), "second", "the next line reads the buffered remainder")
@@ -98,7 +119,7 @@ tests:it("TCP receive '*l' returns one line without the newline", function()
 end)
 
 tests:it("TCP receive strips a trailing carriage return on '*l'", function()
-    local server, client, conn = make_pair(34876)
+    local server, client, conn = make_pair()
     client:send("crlf\r\nrest")
     tests:assert_equal(conn:receive("*l"), "crlf", "CR before LF is stripped from the line")
     conn:close()
@@ -106,8 +127,131 @@ tests:it("TCP receive strips a trailing carriage return on '*l'", function()
     server:close()
 end)
 
+tests:it("TCP line receive accepts its exact limit and buffered next line", function()
+    local server, client, conn = make_pair()
+    client:send("abcd\r\nnext\n")
+    tests:assert_equal(conn:receive("*l", 4), "abcd",
+        "a CRLF line at the limit succeeds")
+    tests:assert_equal(conn:receive("*l", 4), "next",
+        "bytes buffered after the first line remain available")
+    conn:close()
+    client:close()
+    server:close()
+end)
+
+tests:it("TCP line receive closes the socket when its limit is exceeded", function()
+    local server, client, conn = make_pair()
+    client:send("abcde\n")
+    client:close()
+    local ok, err = catch conn:receive("*l", 4)
+    tests:assert_false(ok, "a line above the limit fails")
+    tests:assert_true(string.find(tostring(err),
+        "receive limit exceeded", 1, true) ~= nil,
+        "the error reports the receive limit")
+    tests:assert_contains(tostring(conn), "closed",
+        "overflow closes the connection")
+    tests:assert_throws(function() conn:receive("*l", 4) end, "closed",
+        "the closed connection cannot be reused")
+    conn:close()
+    server:close()
+end)
+
+tests:it("TCP line receive counts an unterminated carriage return", function()
+    local server, client, conn = make_pair()
+    client:send("abc\r")
+    client:close()
+    tests:assert_equal(conn:receive("*l", 4), "abc\r",
+        "an unterminated carriage return is payload at the exact limit")
+    conn:close()
+    server:close()
+
+    server, client, conn = make_pair()
+    client:send("abcd\r")
+    client:close()
+    local ok, err = catch conn:receive("*l", 4)
+    tests:assert_false(ok, "a trailing carriage return counts above the limit")
+    tests:assert_contains(tostring(err), "receive limit exceeded")
+    tests:assert_contains(tostring(conn), "closed")
+    conn:close()
+    server:close()
+end)
+
+tests:it("TCP all-data receive enforces an explicit limit", function()
+    local server, client, conn = make_pair()
+    client:send("abcd")
+    client:close()
+    tests:assert_equal(conn:receive("*a", 4), "abcd",
+        "all-data receive accepts its exact limit")
+    conn:close()
+    server:close()
+
+    server, client, conn = make_pair()
+    client:send("abcde")
+    client:close()
+    local ok, err = catch conn:receive("*a", 4)
+    tests:assert_false(ok, "all-data receive rejects limit plus one")
+    tests:assert_true(string.find(tostring(err),
+        "receive limit exceeded", 1, true) ~= nil,
+        "all-data overflow reports the receive limit")
+    tests:assert_contains(tostring(conn), "closed",
+        "all-data overflow closes the connection")
+    server:close()
+end)
+
+tests:it("TCP pattern receive requires a positive integer limit", function()
+    local server, client, conn = make_pair()
+    tests:assert_throws(function() conn:receive("*l", 0) end,
+        "positive", "zero is not a receive limit")
+    tests:assert_throws(function() conn:receive("*a", -1) end,
+        "positive", "negative values are not receive limits")
+    tests:assert_throws(function() conn:receive("*l", 0.5) end,
+        "integer", "fractional values are not receive limits")
+    client:send("ping")
+    tests:assert_equal(conn:receive(4, -1), "ping",
+        "numeric receive ignores the pattern limit argument")
+    conn:close()
+    client:close()
+    server:close()
+end)
+
+tests:it("TCP line receive enforces its default one MiB limit", function()
+    local mib = 1024 * 1024
+    local server, conn, sender = make_sender(mib, "\n")
+    tests:assert_equal(#conn:receive("*l"), mib,
+        "the exact default line limit succeeds")
+    finish_sender(sender)
+    conn:close()
+    server:close()
+
+    server, conn, sender = make_sender(mib + 1, "\n")
+    local ok, err = catch conn:receive("*l")
+    tests:assert_false(ok, "default line limit plus one fails")
+    tests:assert_contains(tostring(err), "receive limit exceeded")
+    catch worker.receive(sender)
+    conn:close()
+    server:close()
+end)
+
+tests:it("TCP all-data receive enforces its default 64 MiB limit", function()
+    local limit = 64 * 1024 * 1024
+    local server, conn, sender = make_sender(limit)
+    tests:assert_equal(#conn:receive("*a"), limit,
+        "the exact default all-data limit succeeds")
+    finish_sender(sender)
+    conn:close()
+    server:close()
+
+    server, conn, sender = make_sender(limit + 1)
+    local ok, err = catch conn:receive("*a")
+    tests:assert_false(ok, "default all-data limit plus one fails")
+    tests:assert_contains(tostring(err), "receive limit exceeded")
+    catch worker.receive(sender)
+    conn:close()
+    server:close()
+end)
+
 tests:it("TCP receive times out cleanly when no data is pending", function()
-    local server, client, conn = make_pair(34877)
+    local server, client, conn = make_pair()
     conn:settimeout(0.05)
     tests:assert_throws(function()
         conn:receive(4)
@@ -118,7 +262,7 @@ tests:it("TCP receive times out cleanly when no data is pending", function()
 end)
 
 tests:it("TCP accept times out cleanly on an idle server", function()
-    local server = network.tcp.bind("127.0.0.1", 34878)
+    local server = network.tcp.bind("127.0.0.1", 0)
     server:settimeout(0.05)
     tests:assert_throws(function()
         server:accept()
@@ -127,7 +271,7 @@ tests:it("TCP accept times out cleanly on an idle server", function()
 end)
 
 tests:it("TCP send on a closed connection errors about the closed socket", function()
-    local server, client, conn = make_pair(34879)
+    local server, client, conn = make_pair()
     client:close()
     tests:assert_throws(function()
         client:send("nope")
@@ -137,7 +281,7 @@ tests:it("TCP send on a closed connection errors about the closed socket", funct
 end)
 
 tests:it("TCP receive on a closed connection errors about the closed socket", function()
-    local server, client, conn = make_pair(34880)
+    local server, client, conn = make_pair()
     conn:close()
     tests:assert_throws(function()
         conn:receive(1)
@@ -151,7 +295,7 @@ end)
 -- ============================================================
 
 tests:it("TCP double close on a server is a clean no-op", function()
-    local server = network.tcp.bind("127.0.0.1", 34881)
+    local server = network.tcp.bind("127.0.0.1", 0)
     server:close()
     -- A second close must neither throw nor crash.
     server:close()
@@ -159,7 +303,7 @@ tests:it("TCP double close on a server is a clean no-op", function()
 end)
 
 tests:it("TCP accept after close errors about the closed server", function()
-    local server = network.tcp.bind("127.0.0.1", 34882)
+    local server = network.tcp.bind("127.0.0.1", 0)
     server:close()
     tests:assert_throws(function()
         server:accept()
@@ -167,7 +311,7 @@ tests:it("TCP accept after close errors about the closed server", function()
 end)
 
 tests:it("TCP settimeout after close errors about the closed server", function()
-    local server = network.tcp.bind("127.0.0.1", 34883)
+    local server = network.tcp.bind("127.0.0.1", 0)
     server:close()
     tests:assert_throws(function()
         server:settimeout(1)
@@ -175,16 +319,18 @@ tests:it("TCP settimeout after close errors about the closed server", function()
 end)
 
 tests:it("TCP binding the same port twice reports address in use", function()
-    local server = network.tcp.bind("127.0.0.1", 34884)
-    local ok, err = catch network.tcp.bind("127.0.0.1", 34884)
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local ok, err = catch network.tcp.bind("127.0.0.1", port)
     tests:assert_false(ok, "the second bind on a live port must fail")
-    tests:assert_contains(tostring(err), "cannot bind to 127.0.0.1:34884",
+    tests:assert_contains(tostring(err),
+        "cannot bind to 127.0.0.1:" .. tostring(port),
         "the error names the host and port that could not be bound")
     server:close()
 end)
 
 tests:it("TCP bind accepts an explicit backlog argument", function()
-    local server = network.tcp.bind("127.0.0.1", 34885, 16)
+    local server = network.tcp.bind("127.0.0.1", 0, 16)
     tests:assert_contains(tostring(server), "server", "a backlog-configured bind still yields a server")
     server:close()
 end)
@@ -193,6 +339,9 @@ tests:it("TCP bind to port 0 assigns an ephemeral port", function()
     local server = network.tcp.bind("127.0.0.1", 0)
     tests:assert_not_nil(server, "binding to port 0 succeeds")
     tests:assert_contains(tostring(server), "server", "port 0 still yields a server object")
+    local address, port = server:getsockname()
+    tests:assert_equal(address, "127.0.0.1")
+    assert(port > 0 and port <= 65535, "the kernel assigned a usable port")
     server:close()
 end)
 
@@ -201,10 +350,11 @@ end)
 -- ============================================================
 
 tests:it("TCP connect to a closed port is refused with a clear message", function()
-    -- Nothing listens on 34899, so loopback refuses the connection immediately.
-    local ok, err = catch network.tcp.connect("127.0.0.1", 34899)
+    local port = closed_tcp_port()
+    local ok, err = catch network.tcp.connect("127.0.0.1", port)
     tests:assert_false(ok, "connecting to a closed port must fail")
-    tests:assert_contains(tostring(err), "cannot connect to 127.0.0.1:34899",
+    tests:assert_contains(tostring(err),
+        "cannot connect to 127.0.0.1:" .. tostring(port),
         "the refusal names the host and port")
 end)
 
@@ -270,25 +420,29 @@ end)
 
 tests:it("UDP delivers a datagram with the sender address", function()
     -- The receiver binds first so a sandbox EPERM surfaces on this line.
-    local receiver = network.udp.open(34886, "127.0.0.1")
-    local sender = network.udp.open(34887, "127.0.0.1")
-    local n = sender:sendto("ping", "127.0.0.1", 34886)
+    local receiver = network.udp.open(0, "127.0.0.1")
+    local _, receiver_port = receiver:getsockname()
+    local sender = network.udp.open(0, "127.0.0.1")
+    local _, sender_port = sender:getsockname()
+    local n = sender:sendto("ping", "127.0.0.1", receiver_port)
     tests:assert_equal(n, 4, "sendto reports the datagram length")
     local data, ip, port = receiver:receive()
     tests:assert_equal(data, "ping", "the payload arrives byte for byte")
     tests:assert_equal(ip, "127.0.0.1", "the sender IP is reported")
-    tests:assert_equal(port, 34887, "the sender's bound port is reported")
+    tests:assert_equal(port, sender_port, "the sender's bound port is reported")
     sender:close()
     receiver:close()
 end)
 
 tests:it("UDP round trips a second datagram in the other direction", function()
-    local a = network.udp.open(34888, "127.0.0.1")
-    local b = network.udp.open(34889, "127.0.0.1")
-    a:sendto("from-a", "127.0.0.1", 34889)
+    local a = network.udp.open(0, "127.0.0.1")
+    local _, aport = a:getsockname()
+    local b = network.udp.open(0, "127.0.0.1")
+    local _, bport = b:getsockname()
+    a:sendto("from-a", "127.0.0.1", bport)
     local data, ip, port = b:receive()
     tests:assert_equal(data, "from-a", "b receives a's datagram")
-    tests:assert_equal(port, 34888, "the reported port is a's bound port")
+    tests:assert_equal(port, aport, "the reported port is a's bound port")
     b:sendto("from-b", ip, port)
     local reply = a:receive()
     tests:assert_equal(reply, "from-b", "a receives b's reply using the reported address")
@@ -297,7 +451,7 @@ tests:it("UDP round trips a second datagram in the other direction", function()
 end)
 
 tests:it("UDP open with a port only binds to all interfaces", function()
-    local sock = network.udp.open(34890)
+    local sock = network.udp.open(0)
     tests:assert_contains(tostring(sock), "udpsocket", "a port-only open yields a udp socket")
     sock:close()
 end)
@@ -395,10 +549,12 @@ tests:it("fetch rejects carriage returns embedded in the method", function()
 end)
 
 tests:it("fetch to a closed local port reports it cannot connect", function()
-    -- No listener on 34898, so the plaintext connect is refused immediately.
-    local ok, err = catch network.fetch("http://127.0.0.1:34898/")
+    local port = closed_tcp_port()
+    local url = "http://127.0.0.1:" .. tostring(port) .. "/"
+    local ok, err = catch network.fetch(url)
     tests:assert_false(ok, "fetch to a closed port must fail")
-    tests:assert_contains(tostring(err), "cannot connect to 127.0.0.1:34898",
+    tests:assert_contains(tostring(err),
+        "cannot connect to 127.0.0.1:" .. tostring(port),
         "the connect failure names the host and port")
 end)
 

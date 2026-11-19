@@ -1,0 +1,25 @@
+-- Worker request and response experiment.
+
+global print, os, string, worker, pledge, error
+
+pledge("load", "fs:read=./lus-tests/*", "seal")
+
+local handle = worker.create("lus-tests/h4/worker_echo.lus")
+local iterations = 50000
+local checksum = 0
+
+local start = os.clock()
+for i = 1, iterations do
+    worker.send(handle, i)
+    checksum = checksum + worker.receive(handle)
+end
+local elapsed = os.clock() - start
+
+worker.send(handle, "STOP")
+local stopped = worker.receive(handle)
+if stopped ~= "STOPPED" then
+    error("worker did not stop cleanly")
+end
+
+print(string.format("TIME %.9f", elapsed))
+print("CHECK " .. checksum)

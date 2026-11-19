@@ -8,16 +8,16 @@
 
     sqlite_fs_*   : the sandbox directory, read and write
     sqlite_ro_*   : a read-only glob covering the db and its sidecars
-    exactdb_*.db  : an exact-shape grant that covers no sidecars
+    exactdb_*     : reads cover sidecars while writes cover the db only
 ]]
 
 global io, fs, os, print, assert, require, pledge, type, tostring,
-    string, vector, collectgarbage, error
+    string, vector, collectgarbage, error, coroutine
 
 pledge("load", "fs:read=./lus-tests/*",
     "fs:read=./sqlite_fs_*", "fs:write=./sqlite_fs_*",
     "fs:read=./sqlite_ro_*",
-    "fs:read=./exactdb_*.db", "fs:write=./exactdb_*.db",
+    "fs:read=./exactdb_*", "fs:write=./exactdb_*.db",
     "seal")
 
 local framework = require("lus-tests.framework")
@@ -113,11 +113,10 @@ tests:describe("read-only mode")
 
 tests:it("mode 'r' reads and refuses writes", function()
     local path = dbpath("readonly.db")
-    do
-        local db <close> = io.sqlite(path)
-        db:exec("CREATE TABLE t (n INTEGER)")
-        db:run("INSERT INTO t VALUES (5)")
-    end
+    local writer <close> = io.sqlite(path)
+    writer:exec("CREATE TABLE t (n INTEGER)")
+    writer:run("INSERT INTO t VALUES (5)")
+    tests:assert_equal(fs.type(path .. "-shm"), "file")
     local db <close> = io.sqlite(path, "r")
     for row in db:query("SELECT n FROM t") do
         tests:assert_equal(row.n, 5)
@@ -151,13 +150,13 @@ tests:it("a read-only grant denies the default writable mode", function()
     tests:assert_contains(tostring(err), 'permission "fs:write" denied')
 end)
 
-tests:it("a grant that misses the sidecars is denied at open", function()
-    -- exactdb_*.db covers the database file itself but no -journal,
-    -- -wal, or -shm path, so the sidecar sweep rejects the open
+tests:it("sidecar creation requires a matching write grant", function()
+    -- Reads cover the database and every sidecar. Writes cover only the
+    -- database, so the VFS rejects the first writable sidecar operation.
     local ok, err = catch io.sqlite("./exactdb_" .. RUN .. ".db")
     assert(not ok)
-    tests:assert_contains(tostring(err), "permission")
-    tests:assert_contains(tostring(err), "%-journal")
+    tests:assert_contains(tostring(err), 'permission "fs:write" denied')
+    tests:assert_contains(tostring(err), "exactdb_")
 end)
 
 tests:describe("hostile and odd files")
@@ -192,6 +191,21 @@ end)
 
 tests:describe("lifetime")
 
+tests:it("a database retains the thread that owns its pledge store", function()
+    local path = dbpath("thread-owner.db")
+    local co = coroutine.create(function()
+        return io.sqlite(path)
+    end)
+    local ok, db = coroutine.resume(co)
+    assert(ok, tostring(db))
+    co = nil
+    collectgarbage("collect")
+    collectgarbage("collect")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    db:run("INSERT INTO t VALUES (9)")
+    db:close()
+end)
+
 tests:it("GC releases a file-backed handle", function()
     local path = dbpath("gcfile.db")
     do
@@ -208,6 +222,7 @@ tests:it("GC releases a file-backed handle", function()
 end)
 
 catch fs.remove(SANDBOX, true)
+catch fs.remove("./exactdb_" .. RUN .. ".db")
 local sandbox_left = catch fs.type(SANDBOX)
 assert(not sandbox_left, "sandbox cleanup")
 

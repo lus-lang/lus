@@ -14,7 +14,7 @@
     including embedded NUL and lone surrogates.
 ]]
 
-global tojson, fromjson, math, string, tostring, type, setmetatable, load, vector, coroutine, ipairs, table, assert, require, pledge, error, tonumber
+global tojson, fromjson, math, string, tostring, type, setmetatable, load, vector, coroutine, ipairs, table, assert, require, pledge, error, tonumber, os
 
 pledge("load", "fs:read=./lus-tests/*", "seal")
 
@@ -86,6 +86,28 @@ tests:it("tojson of 0.1 keeps enough digits to round-trip", function()
     -- The exact textual form is the shortest %.17g rendering.
     tests:assert_equal(s, "0.10000000000000001")
     tests:assert_equal(fromjson(s), 0.1)
+end)
+
+tests:it("JSON numbers keep a dot radix under a comma locale", function()
+    local original = os.setlocale(nil, "numeric")
+    local selected = os.setlocale("fr_FR.UTF-8", "numeric") or
+                     os.setlocale("fr_FR", "numeric") or
+                     os.setlocale("de_DE.UTF-8", "numeric") or
+                     os.setlocale("de_DE", "numeric") or
+                     os.setlocale("pt_BR.UTF-8", "numeric") or
+                     os.setlocale("pt_BR", "numeric")
+    if selected and string.format("%.1f", 1.5):find(",", 1, true) then
+        local ok, err = catch (function()
+            tests:assert_equal(tojson(1.5), "1.5")
+            tests:assert_equal(tojson(0.1), "0.10000000000000001")
+            tests:assert_equal(fromjson("1.5"), 1.5)
+            tests:assert_equal(fromjson("1.5e2"), 150.0)
+        end)()
+        os.setlocale(original or "C", "numeric")
+        assert(ok, err)
+    elseif original then
+        os.setlocale(original, "numeric")
+    end
 end)
 
 -- ============================================================

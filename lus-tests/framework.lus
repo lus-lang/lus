@@ -1,4 +1,4 @@
-global print, tostring, type, string, table, io, os, setmetatable, error, collectgarbage, ipairs, pairs, math
+global print, tostring, type, string, table, io, os, setmetatable, error, collectgarbage, ipairs, pairs, math, tojson
 
 local framework = {}
 framework.__index = framework
@@ -156,6 +156,13 @@ function framework:after(fn)
     self._after = fn
 end
 
+local function run_after(self)
+    if self._after then
+        return catch self._after()
+    end
+    return true
+end
+
 function framework:it(desc, fn)
     self.tests = self.tests + 1
     
@@ -163,27 +170,32 @@ function framework:it(desc, fn)
     if self._before then
         local before_ok, before_err = catch self._before()
         if not before_ok then
+            local after_ok, after_err = run_after(self)
             self.failed = self.failed + 1
             print("    " .. red .. "✗" .. reset .. " " .. desc)
             print("      Error in before hook: " .. tostring(before_err))
+            if not after_ok then
+                print("      Error in after hook: " .. tostring(after_err))
+            end
             return
         end
     end
     
     local status, err = catch fn()
+    local after_ok, after_err = run_after(self)
     
-    -- Run after hook if set (even on failure)
-    if self._after then
-        catch self._after()
-    end
-    
-    if status then
+    if status and after_ok then
         self.passed = self.passed + 1
         print("    " .. green .. "✓" .. reset .. " " .. desc)
     else
         self.failed = self.failed + 1
         print("    " .. red .. "✗" .. reset .. " " .. desc)
-        print("      Error: " .. tostring(err))
+        if not status then
+            print("      Error: " .. tostring(err))
+        end
+        if not after_ok then
+            print("      Error in after hook: " .. tostring(after_err))
+        end
     end
 end
 
@@ -195,27 +207,32 @@ function framework:soft(desc, fn)
     if self._before then
         local before_ok, before_err = catch self._before()
         if not before_ok then
+            local after_ok, after_err = run_after(self)
             self.soft_failed = self.soft_failed + 1
             print("    " .. yellow .. "⚠" .. reset .. " " .. desc .. " (soft fail)")
             print("      Error in before hook: " .. tostring(before_err))
+            if not after_ok then
+                print("      Error in after hook: " .. tostring(after_err))
+            end
             return
         end
     end
     
     local status, err = catch fn()
+    local after_ok, after_err = run_after(self)
     
-    -- Run after hook if set (even on failure)
-    if self._after then
-        catch self._after()
-    end
-    
-    if status then
+    if status and after_ok then
         self.passed = self.passed + 1
         print("    " .. green .. "✓" .. reset .. " " .. desc)
     else
         self.soft_failed = self.soft_failed + 1
         print("    " .. yellow .. "⚠" .. reset .. " " .. desc .. " (soft fail)")
-        print("      Warning: " .. tostring(err))
+        if not status then
+            print("      Warning: " .. tostring(err))
+        end
+        if not after_ok then
+            print("      Error in after hook: " .. tostring(after_err))
+        end
     end
 end
 
@@ -228,6 +245,11 @@ function framework:skip(desc, reason)
     end
     msg = msg .. ")"
     print(msg)
+    print("LUS_TEST_EVENT " .. tojson({
+        kind = "skip",
+        description = desc,
+        reason = reason or "",
+    }))
 end
 
 -- Parameterized tests: run the same test with multiple sets of data
@@ -394,12 +416,17 @@ function framework:finish()
         result_str = result_str .. string.format(" (%d skipped)", self.skipped)
     end
     print(result_str)
-    if self.failed > 0 then
+    print("LUS_TEST_RESULT " .. tojson({
+        name = self.name,
+        tests = self.tests,
+        passed = self.passed,
+        failed = self.failed,
+        soft_failed = self.soft_failed,
+        skipped = self.skipped,
+    }))
+    if self.failed > 0 or self.soft_failed > 0 then
         print(red .. "FAILED" .. reset)
         os.exit(1)
-    elseif self.soft_failed > 0 then
-        print(yellow .. "PASSED (with warnings)" .. reset)
-        os.exit(0)  -- Still passes, but warns
     else
         print(green .. "PASSED" .. reset)
         os.exit(0)
@@ -407,4 +434,3 @@ function framework:finish()
 end
 
 return framework
-

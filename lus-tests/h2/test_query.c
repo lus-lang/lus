@@ -66,6 +66,12 @@ static void canned_open(lua_State *L, const lus_Query *q, int srcindex,
 static const lus_QueryProvider canned_provider = {canned_accepts,
                                                   canned_open};
 
+static int check_query_upvalue(lua_State *L) {
+    CHECK(lus_toquery(L, lua_upvalueindex(1)) != NULL,
+          "lus_toquery accepts a query-valued upvalue index");
+    return 0;
+}
+
 int main(void) {
     lua_State *L = luaL_newstate();
     size_t len;
@@ -151,8 +157,13 @@ int main(void) {
     lua_newtable(L); /* the source userdata's stand-in table */
     lua_newtable(L); /* its metatable */
     lus_setqueryprovider(L, -1, &canned_provider);
+    lua_getfield(L, -1, "__queryprovider");
+    CHECK(lua_isnil(L, -1), "native provider authority is not script-visible");
+    lua_pop(L, 1);
     lua_setmetatable(L, -2);
     lua_setglobal(L, "src");
+    lua_gc(L, LUA_GCCOLLECT);
+    lua_gc(L, LUA_GCCOLLECT);
     if (luaL_dostring(L,
             "local probe_calls = 0\n"
             "local function probe(r)\n"
@@ -174,6 +185,29 @@ int main(void) {
     CHECK(open_called == 1, "open received the 1-based source index");
     CHECK(open_npushed == 1, "the comparison conjunct was pushed");
     CHECK(accepts_offered >= 1, "accepts was consulted");
+    lua_settop(L, 0);
+
+    /* Native provider authority comes only from host registration. */
+    lua_getglobal(L, "src");
+    CHECK(lua_getmetatable(L, -1), "registered source has a metatable");
+    lus_setqueryprovider(L, -1, NULL);
+    lua_pushlightuserdata(L, (void *)&canned_provider);
+    lua_setfield(L, -2, "__queryprovider");
+    lua_pop(L, 2);
+    accepts_offered = 0;
+    open_called = 0;
+    if (luaL_dostring(L,
+            "local rows = 0\n"
+            "for _ in query(@src as s select s.v) do rows = rows + 1 end\n"
+            "return rows") != LUA_OK) {
+        fprintf(stderr, "unregistered provider run: %s\n",
+                lua_tostring(L, -1));
+        return 1;
+    }
+    CHECK(lua_tointeger(L, -1) == 0,
+          "unregistered table falls back to the memory provider");
+    CHECK(accepts_offered == 0 && open_called == 0,
+          "script metadata cannot restore native provider authority");
     lua_settop(L, 0);
 
     /* 7: bytecode round trip through lua_dump/load from C */
@@ -208,6 +242,17 @@ int main(void) {
     CHECK(node != NULL && lus_qnodekind(node) == LUS_QN_CMP,
           "the plan survives collection");
     CHECK(lus_queryclausecount(q, LUS_QSELECT) == 1, "select intact");
+
+    lua_getfield(L, LUA_REGISTRYINDEX, "h2query");
+    lua_pushcclosure(L, check_query_upvalue, 1);
+    lua_call(L, 0, 0);
+
+    lua_getfield(L, LUA_REGISTRYINDEX, "h2query");
+    CHECK(lua_type(L, 1) == LUA_TQUERY, "query occupies the first stack slot");
+    lua_settop(L, 0);
+    CHECK(lua_type(L, 1) == LUA_TNONE, "popped positive index is invalid");
+    CHECK(lus_toquery(L, 1) == NULL,
+          "lus_toquery does not read a stale positive stack slot");
 
     lua_close(L);
     if (failures > 0) {

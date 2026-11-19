@@ -19,10 +19,14 @@ global require, assert, type, pledge, io, error, tostring, string, fs, network, 
 -- Grant exactly what the suite needs and defer the seal to the very end.
 pledge("load")
 pledge("fs:read=./lus-tests/framework.lus")
+pledge("fs:read=./lus-tests/h1/enum.lus*")
 pledge("fs:read=./lus-tests/tmp-pledge2/*")
 pledge("fs:write=./lus-tests/tmp-pledge2")
 pledge("fs:write=./lus-tests/tmp-pledge2/*")
 pledge("fs:write=./lus-tests/tmp-pledge2x")
+pledge("fs:read=./lus-tests/tmp-pledge2x/missing-prefix*")
+pledge("fs:write=./lus-tests/tmp-pledge2x/missing-prefix*")
+pledge("fs:write=./retargeted_pledge2_link")
 pledge("env=LUS_PLEDGE2_OK")
 
 local framework = require("lus-tests.framework")
@@ -157,6 +161,23 @@ tests:it("write to a prefix-sharing sibling directory is denied", function()
     end, "denied")
 end)
 
+tests:it("a wildcard suffix stays attached to an existing filename", function()
+    local f = io.open("./lus-tests/h1/enum.lus", "r")
+    tests:assert_not_nil(f,
+        "the filename prefix and wildcard must remain in one path component")
+    f:close()
+end)
+
+tests:it("a wildcard prefix granted before its leaf exists stays attached", function()
+    local filename = dir_sibling .. "/missing-prefix-one.txt"
+    local written = assert(io.open(filename, "w"))
+    assert(written:write("missing prefix"))
+    assert(written:close())
+    local readback = assert(io.open(filename, "r"))
+    tests:assert_equal(readback:read("a"), "missing prefix")
+    readback:close()
+end)
+
 -- Write mode under a read-only grant must be gated separately from read mode.
 tests:it("write mode is denied under a read-only grant", function()
     tests:assert_throws(function()
@@ -188,6 +209,34 @@ tests:it("a non-canonical path inside the grant is allowed", function()
     local g = io.open("./lus-tests/./tmp-pledge2/dotted.txt", "r")
     tests:assert_not_nil(g, "a path that canonicalizes into the grant must open")
     g:close()
+end)
+
+tests:it("a granted symbolic link stays bound to its original target", function()
+    local original = dir_ok .. "/link_original.txt"
+    local outside = dir_sibling .. "/link_outside.txt"
+    local link = "./retargeted_pledge2_link"
+    tests:assert_equal(pledge("fs:write=" .. original), true)
+    tests:assert_equal(pledge("fs:write=" .. outside), true)
+    local first = io.open(original, "w")
+    first:write("original")
+    first:close()
+    local second = io.open(outside, "w")
+    second:write("outside")
+    second:close()
+    catch fs.remove(link)
+    local linked = catch fs.createlink(link, original)
+    if linked then
+        tests:assert_equal(pledge("fs:read=" .. link), true)
+        local readable = io.open(link, "r")
+        tests:assert_equal(readable:read("a"), "original")
+        readable:close()
+        fs.remove(link)
+        fs.createlink(link, outside)
+        tests:assert_throws(function() io.open(link, "r") end, "denied")
+        fs.remove(link)
+    end
+    fs.remove(original)
+    fs.remove(outside)
 end)
 
 -- ============================================================
@@ -311,6 +360,7 @@ end)
 tests:it("scratch fixtures are removed", function()
     catch fs.remove(file_inside)
     catch fs.remove(file_dotted)
+    catch fs.remove(dir_sibling .. "/missing-prefix-one.txt")
     -- With the parent directory still present, reading remains permitted, so a
     -- nil result means the file is genuinely gone rather than merely denied.
     local f = io.open(file_inside, "r")

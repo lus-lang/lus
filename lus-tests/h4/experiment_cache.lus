@@ -1,0 +1,23 @@
+-- Method resolution cache experiment.
+
+global print, os, string, setmetatable
+
+local Class = {}
+Class.__index = Class
+
+function Class:read()
+    return self.value
+end
+
+local object = setmetatable({value = 7}, Class)
+local iterations = 30000000
+local checksum = 0
+
+local start = os.clock()
+for _ = 1, iterations do
+    checksum = checksum + object:read()
+end
+local elapsed = os.clock() - start
+
+print(string.format("TIME %.9f", elapsed))
+print("CHECK " .. checksum)

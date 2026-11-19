@@ -9,9 +9,9 @@
 -- Emission is proven with framework.get_fastcalls so the fast form really is
 -- fast and the alias form really is not.
 
-global print, require, string, math, table, utf8, vector, type, tostring, tonumber, rawlen, rawget, rawset, rawequal, setmetatable, getmetatable, assert, select, pledge, next, pairs, ipairs, coroutine, error, os, time, _G
+global print, require, string, math, table, utf8, vector, type, tostring, tonumber, rawlen, rawget, rawset, rawequal, setmetatable, getmetatable, assert, select, pledge, next, pairs, ipairs, coroutine, error, time, debug, _G
 
-pledge("load", "fs:read=./lus-tests/*", "env=ASAN_OPTIONS", "seal")
+pledge("load", "fs:read=./lus-tests/*", "seal")
 
 local framework = require("lus-tests.framework")
 local tests = framework.new("fastcall-parity")
@@ -99,6 +99,8 @@ local function fast_tminutes(a) return time.minutes(a) end
 local function fast_tseconds(a) return time.seconds(a) end
 local function fast_tmillis(a) return time.millis(a) end
 local function fast_tinstant(a) return time.instant(a) end
+
+local fastcalls_enabled = next(framework.get_fastcalls(fast_type)) ~= nil
 
 -- ==== Slow aliases ====
 -- Calling through a table field on a local can never compile to OP_FASTCALL,
@@ -307,9 +309,22 @@ local emission_list = {
     {"time.instant", fast_tinstant, FC.TIME_INSTANT},
 }
 
-tests:it("every fast-form helper compiles to OP_FASTCALL", function()
+tests:it("every fast-form helper matches the compiler fastcall mode", function()
     for _, e in ipairs(emission_list) do
-        tests:assert_fastcall(e[2], e[3], "helper for " .. e[1] .. " did not emit OP_FASTCALL")
+        local fcs = framework.get_fastcalls(e[2])
+        local count = 0
+        for _, n in pairs(fcs) do
+            count = count + n
+        end
+        if fastcalls_enabled then
+            tests:assert_equal(fcs[e[3]], 1,
+                "helper for " .. e[1] .. " must emit its OP_FASTCALL exactly once")
+            tests:assert_equal(count, 1,
+                "helper for " .. e[1] .. " must contain exactly one OP_FASTCALL")
+        else
+            tests:assert_equal(count, 0,
+                "helper for " .. e[1] .. " must honor --no-fastcall")
+        end
     end
 end)
 
@@ -682,6 +697,39 @@ tests:it("string.join parity over element lists", function()
     parity_over(fast_join, s.join, 2, corpus, "join")
 end)
 
+tests:it("string.join honors table length and indexing metamethods", function()
+    local computed = setmetatable({}, {
+        __len = function() return 2 end,
+        __index = function(_, i) return "item" .. i end,
+    })
+    run_pair(fast_join, s.join, 2, {"computed", computed, ","}, "join")
+
+    local hole = {"a", "b", "c", "d", "e", "f", "g", "h",
+        "i", "j", "k", "l", "m", "n", "o", "p"}
+    hole[2] = nil
+    setmetatable(hole, {
+        __index = function(_, i)
+            if i == 2 then return "b" end
+        end,
+    })
+    run_pair(fast_join, s.join, 2, {"indexed hole", hole, ","}, "join")
+end)
+
+tests:it("string.join honors element tostring metamethods", function()
+    local old = debug.getmetatable("")
+    debug.setmetatable("", {
+        __index = string,
+        __tostring = function(v) return "<" .. v .. ">" end,
+    })
+    local okf, rf = catch fast_join({"a", "b"}, ",")
+    local oks, rs = catch s.join({"a", "b"}, ",")
+    debug.setmetatable("", old)
+    tests:assert_true(okf, "fast string.join must accept string elements")
+    tests:assert_true(oks, "alias string.join must accept string elements")
+    tests:assert_equal(rf, rs)
+    tests:assert_equal(rf, "<a>,<b>")
+end)
+
 tests:it("method-call syntax matches the fast-form results", function()
     local str = "Hello"
     tests:assert_equal(str:sub(2, 4), fast_sub(str, 2, 4))
@@ -735,6 +783,31 @@ tests:it("tostring parity over scalar values", function()
         {"nul string", "a\0b"},
     }
     parity_over(fast_tostring, s.tostring, 1, corpus, "tostring")
+end)
+
+tests:it("tostring honors primitive type metatables", function()
+    local old = debug.getmetatable(0)
+    debug.setmetatable(0, {
+        __tostring = function(n) return "number(" .. n .. ")" end,
+    })
+    local okf, rf = catch fast_tostring(7)
+    local oks, rs = catch s.tostring(7)
+    debug.setmetatable(0, old)
+    tests:assert_true(okf, "fast tostring must accept the numeric value")
+    tests:assert_true(oks, "alias tostring must accept the numeric value")
+    tests:assert_equal(rf, rs)
+    tests:assert_equal(rf, "number(7)")
+end)
+
+tests:it("tostring preserves primitive metamethod errors", function()
+    local old = debug.getmetatable(false)
+    debug.setmetatable(false, {__tostring = true})
+    local okf, rf = catch fast_tostring(false)
+    local oks, rs = catch s.tostring(false)
+    debug.setmetatable(false, old)
+    tests:assert_equal(okf, oks)
+    tests:assert_false(okf, "a non-callable __tostring value must raise")
+    tests:assert_equal(err_core(rf), err_core(rs))
 end)
 
 tests:it("tonumber parity over conversions", function()
@@ -987,6 +1060,39 @@ tests:it("table.transpose error parity on malformed matrices", function()
     parity_over(fast_transpose, s.transpose, 1, corpus, "transpose")
 end)
 
+tests:it("table.transpose honors matrix access metamethods", function()
+    local computed_row = setmetatable({}, {
+        __len = function() return 1 end,
+        __index = function() return 7 end,
+    })
+    local computed_outer = setmetatable({}, {
+        __len = function() return 1 end,
+        __index = function() return computed_row end,
+    })
+    run_pair(fast_transpose, s.transpose, 1,
+        {"computed matrix", computed_outer}, "transpose")
+
+    local wider_second = setmetatable({3}, {
+        __len = function() return 2 end,
+        __index = function(_, i)
+            if i == 2 then return 4 end
+        end,
+    })
+    run_pair(fast_transpose, s.transpose, 1,
+        {"row length", {{1}, wider_second}}, "transpose")
+
+    local indexed_row = {1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16}
+    indexed_row[2] = nil
+    setmetatable(indexed_row, {
+        __index = function(_, i)
+            if i == 2 then return 2 end
+        end,
+    })
+    run_pair(fast_transpose, s.transpose, 1,
+        {"indexed row", {indexed_row}}, "transpose")
+end)
+
 tests:it("table.reshape parity over shapes", function()
     local six = {1, 2, 3, 4, 5, 6}
     local corpus = {
@@ -1010,6 +1116,25 @@ tests:it("table.reshape error parity on bad shapes", function()
         {"string subject", "x", 2, 2},
     }
     parity_over(fast_reshape, s.reshape, 3, corpus, "reshape")
+end)
+
+tests:it("table.reshape honors source access metamethods", function()
+    local reported_longer = setmetatable({9}, {
+        __len = function() return 2 end,
+    })
+    run_pair(fast_reshape, s.reshape, 3,
+        {"metatable length", reported_longer, 1, 1}, "reshape")
+
+    local indexed_hole = {1, 2, 3, 4, 5, 6, 7, 8,
+        9, 10, 11, 12, 13, 14, 15, 16}
+    indexed_hole[2] = nil
+    setmetatable(indexed_hole, {
+        __index = function(_, i)
+            if i == 2 then return 2 end
+        end,
+    })
+    run_pair(fast_reshape, s.reshape, 3,
+        {"indexed hole", indexed_hole, 4, 4}, "reshape")
 end)
 
 -- ==== Vector parity ====
@@ -1077,24 +1202,17 @@ tests:it("vector.resize parity and content preservation", function()
     parity_over(fast_vresize, s.vresize, 2, corpus, "vector.resize")
 end)
 
--- Requesting maxinteger bytes makes malloc return NULL on a plain build,
--- but the ASAN allocator aborts the whole process on such a request, so the
--- assertion is skipped when the sanitizer environment is detected (the CI
--- sanitize job always exports ASAN_OPTIONS).
-if os.getenv("ASAN_OPTIONS") ~= nil then
-    tests:skip("vector allocation failure delivers a string error value",
-        "allocating maxinteger bytes aborts under the ASAN allocator")
-else
-    tests:it("vector allocation failure delivers a string error value", function()
-        local ok, err = catch vector.create(math.maxinteger)
-        tests:assert_false(ok)
-        tests:assert_equal(err, "not enough memory")
-        local v = vector.create(2)
-        local ok2, err2 = catch vector.resize(v, math.maxinteger)
-        tests:assert_false(ok2)
-        tests:assert_equal(err2, "not enough memory")
-    end)
-end
+-- The sanitizer qualifier enables allocator_may_return_null so this exercises
+-- the same catchable allocation error in normal and instrumented builds.
+tests:it("vector allocation failure delivers a string error value", function()
+    local ok, err = catch vector.create(math.maxinteger)
+    tests:assert_false(ok)
+    tests:assert_equal(err, "not enough memory")
+    local v = vector.create(2)
+    local ok2, err2 = catch vector.resize(v, math.maxinteger)
+    tests:assert_false(ok2)
+    tests:assert_equal(err2, "not enough memory")
+end)
 
 -- ==== UTF-8 parity ====
 tests:describe("utf8 parity")
@@ -1246,7 +1364,7 @@ tests:it("catch pads missing results with nil", function()
         "expected nil for the missing result, got " .. type(r))
 end)
 
--- ==== Error-name pinning ====
+-- ==== Time scalar constructor parity ====
 tests:describe("time scalar constructor parity")
 
 -- Durations and instants are userdata, so first-result identity cannot be
@@ -1270,9 +1388,9 @@ local dur_corpus = {
     {"table", EMPTY_T},
 }
 
--- Appends the overflow boundary rows for one unit: the largest magnitudes
--- the intrinsic handles inline and the first magnitudes it declines, which
--- both forms must then route through the C path identically.
+-- Appends values around each seconds multiplication boundary. The checked
+-- intrinsic accepts representable results and routes range errors through the
+-- C implementation.
 local function with_boundaries(unit)
     local corpus = {}
     for _, case in ipairs(dur_corpus) do
@@ -1304,11 +1422,28 @@ tests:it("time.seconds agrees across dispatch paths", function()
 end)
 
 tests:it("time.millis agrees across dispatch paths", function()
-    parity_over(fast_tmillis, s.tmillis, 1, with_boundaries(1000000), "time.millis")
+    parity_over(fast_tmillis, s.tmillis, 1, dur_corpus, "time.millis")
 end)
 
 tests:it("time.instant agrees across dispatch paths", function()
     parity_over(fast_tinstant, s.tinstant, 1, dur_corpus, "time.instant")
+end)
+
+tests:it("time scalar constructors return exactly one value", function()
+    local cases = {
+        {"days", fast_tdays, s.tdays},
+        {"hours", fast_thours, s.thours},
+        {"minutes", fast_tminutes, s.tminutes},
+        {"seconds", fast_tseconds, s.tseconds},
+        {"millis", fast_tmillis, s.tmillis},
+        {"instant", fast_tinstant, s.tinstant},
+    }
+    for _, case in ipairs(cases) do
+        tests:assert_equal(select("#", case[2](1)), 1,
+            "fast time." .. case[1] .. " result count")
+        tests:assert_equal(select("#", case[3](1)), 1,
+            "alias time." .. case[1] .. " result count")
+    end
 end)
 
 tests:it("getmetatable over time userdata honors the protection marker", function()
@@ -1366,10 +1501,10 @@ local function caught_name(fn)
     return name, tonumber(argn), tostring(err)
 end
 
--- A fastcall site that falls back for its error loses the call-site name, so
--- the runtime derives a qualified module name for the message. These cases
--- pin that behavior per module function.
-tests:each("fast-form fallback errors carry qualified names", {
+-- An enabled fastcall that falls back derives a qualified module name. The
+-- plain compiler mode retains the call-site field name. These cases pin both
+-- forms for every module function with adversarial arguments.
+tests:each("direct-form fallback errors carry compiler-mode names", {
     {"math.sqrt", function() return math.sqrt("x") end, "math.sqrt", 1, "number expected, got string"},
     {"math.fmod", function() return math.fmod(7, 0) end, "math.fmod", 2, "zero"},
     {"math.ult", function() return math.ult(1.5, 2) end, "math.ult", 1, "number has no integer representation"},
@@ -1392,6 +1527,9 @@ tests:each("fast-form fallback errors carry qualified names", {
     {"time.instant", function() return time.instant(false) end, "time.instant", 1, "number expected, got boolean"},
 }, function(label, fn, want_name, want_argn, want_reason)
     local name, argn, full = caught_name(fn)
+    if not fastcalls_enabled then
+        want_name = string.match(want_name, "[^.]+$")
+    end
     tests:assert_equal(name, want_name, label .. ": got name " .. tostring(name) .. " in " .. tostring(full))
     tests:assert_equal(argn, want_argn, label .. ": got arg #" .. tostring(argn))
     tests:assert_contains(tostring(full), want_reason, label .. ": reason mismatch in " .. tostring(full))

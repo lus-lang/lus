@@ -531,10 +531,16 @@ end)
 
 tests:describe("pledge gating")
 
-tests:each("a write or append mode on a read-only path is denied",
-    {{"w"}, {"a"}}, function(mode)
+tests:each("every writable mode on a read-only path is denied",
+    {{"w"}, {"a"}, {"w+"}, {"a+"}}, function(mode)
     local ok, err = catch io.open("./ioro_" .. RUN .. "_x.txt", mode)
     assert(not ok, "the write grant is withheld for ioro_ paths")
+    tests:assert_contains(tostring(err), 'permission "fs:write" denied')
+end)
+
+tests:it("an update mode on an existing read-only file is denied", function()
+    local ok, err = catch io.open("./lus-tests/framework.lus", "r+")
+    assert(not ok, "the write grant is withheld for framework.lus")
     tests:assert_contains(tostring(err), 'permission "fs:write" denied')
 end)
 
