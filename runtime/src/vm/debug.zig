@@ -92,6 +92,7 @@ pub fn getObjName(p: *Proto, lastpc: u32, reg: u32) ?ObjName {
             return .{ .kind = "field", .name = k };
         },
         .getupval => return .{ .kind = "upvalue", .name = upvalName(p, opc.b(i)) },
+        .getindex => return .{ .kind = "field", .name = "integer index" },
         .loadk => {
             if (kString(p, opc.bx(i))) |s| return .{ .kind = "constant", .name = s };
         },
@@ -118,7 +119,8 @@ pub fn varInfo(l: *Thread, v: Value) ?ObjName {
     var cands: [3]u32 = undefined;
     var n: usize = 0;
     switch (opc.op(i)) {
-        .call, .tailcall, .tforcall => {
+        .tforcall => return .{ .kind = "for iterator", .name = "for iterator" },
+        .call, .tailcall => {
             cands[0] = opc.a(i);
             n = 1;
         },
@@ -165,6 +167,8 @@ pub fn varInfo(l: *Thread, v: Value) ?ObjName {
 /// Name of the function running in frame `fi` as seen from its caller.
 pub fn funcName(l: *Thread, fi: usize) ?ObjName {
     if (fi == 0) return null;
+    // A tail call replaced the frame that knew the call site.
+    if (l.frames.items[fi].tail) return null;
     const caller = l.frames.items[fi - 1];
     const cl = caller.closure orelse return null;
     if (caller.pc == 0) return null;
@@ -173,8 +177,107 @@ pub fn funcName(l: *Thread, fi: usize) ?ObjName {
     return switch (opc.op(i)) {
         .call, .tailcall => getObjName(cl.proto, pc, opc.a(i)),
         .tforcall => .{ .kind = "for iterator", .name = "for iterator" },
+        else => if (metaEvent(opc.op(i))) |ev| .{ .kind = "metamethod", .name = ev } else null,
+    };
+}
+
+/// The metamethod event an instruction can trigger, for naming the frame
+/// of a metamethod it called.
+fn metaEvent(o: opc.Op) ?[]const u8 {
+    return switch (o) {
+        .add, .addk, .addi => "add",
+        .sub, .subk => "sub",
+        .mul, .mulk => "mul",
+        .div, .divk => "div",
+        .mod, .modk => "mod",
+        .pow, .powk => "pow",
+        .idiv, .idivk => "idiv",
+        .band => "band",
+        .bor => "bor",
+        .bxor => "bxor",
+        .shl => "shl",
+        .shr => "shr",
+        .unm => "unm",
+        .bnot => "bnot",
+        .len => "len",
+        .concat => "concat",
+        .eq => "eq",
+        .lt => "lt",
+        .le => "le",
+        .gettable, .getfield, .getindex, .gettabup, .self => "index",
+        .settable, .setfield, .setindex, .settabup => "newindex",
+        .close, .ret, .ret0, .ret1 => "close",
         else => null,
     };
+}
+
+/// Finds `f` among the loaded modules and returns its qualified name
+/// ("math.floor", or "next" for a function of the global table), written
+/// into `buf`.
+pub fn globalName(l: *Thread, f: Value, buf: []u8) ?[]const u8 {
+    const table = @import("table.zig");
+    const reg = l.g.registry;
+    if (reg.tag != .table) return null;
+    const loaded = table.getStr(reg.as(object.Table), state.newStringKnown(l.g, "_LOADED", true, 7) catch return null);
+    if (loaded.tag != .table) return null;
+    var found: ?[]const u8 = null;
+    var key: Value = .nil;
+    while (table.next(loaded.as(object.Table), key) catch null) |mod| : (key = mod.key) {
+        if (mod.key.tag != .string or mod.val.tag != .table) continue;
+        var k2: Value = .nil;
+        while (table.next(mod.val.as(object.Table), k2) catch null) |e| : (k2 = e.key) {
+            if (e.key.tag != .string or !rawSame(e.val, f)) continue;
+            const m = mod.key.as(object.String).bytes();
+            const n = e.key.as(object.String).bytes();
+            // Prefer a library name over the same function in _G.
+            if (std.mem.eql(u8, m, "_G")) {
+                if (found == null) found = std.fmt.bufPrint(buf, "{s}", .{n}) catch null;
+            } else {
+                return std.fmt.bufPrint(buf, "{s}.{s}", .{ m, n }) catch null;
+            }
+        }
+    }
+    return found;
+}
+
+/// Builtins that call sites name by their qualified name, as in
+/// "function 'math.floor'". These are the builtins the compiler treats as
+/// intrinsics.
+const intrinsics = std.StaticStringMap(void).initComptime(.{
+    .{"type"},           .{"rawlen"},         .{"rawget"},           .{"rawset"},
+    .{"rawequal"},       .{"assert"},         .{"getmetatable"},     .{"setmetatable"},
+    .{"tonumber"},       .{"tostring"},       .{"math.abs"},         .{"math.max"},
+    .{"math.min"},       .{"math.ceil"},      .{"math.floor"},       .{"math.sqrt"},
+    .{"math.sin"},       .{"math.cos"},       .{"math.tan"},         .{"math.asin"},
+    .{"math.acos"},      .{"math.atan"},      .{"math.exp"},         .{"math.log"},
+    .{"math.deg"},       .{"math.rad"},       .{"math.fmod"},        .{"math.ult"},
+    .{"math.tointeger"}, .{"math.type"},      .{"math.ldexp"},       .{"string.len"},
+    .{"string.trim"},    .{"string.ltrim"},   .{"string.rtrim"},     .{"string.split"},
+    .{"string.join"},    .{"string.sub"},     .{"string.byte"},      .{"string.char"},
+    .{"string.lower"},   .{"string.upper"},   .{"string.reverse"},   .{"table.sum"},
+    .{"table.mean"},     .{"table.median"},   .{"table.stdev"},      .{"table.transpose"},
+    .{"table.reshape"},  .{"vector.create"},  .{"vector.clone"},     .{"vector.size"},
+    .{"vector.resize"},  .{"utf8.len"},       .{"utf8.codepoint"},   .{"utf8.char"},
+    .{"utf8.offset"},    .{"time.days"},      .{"time.hours"},       .{"time.minutes"},
+    .{"time.seconds"},   .{"time.millis"},    .{"time.instant"},
+});
+
+/// The qualified name of `f` when it is an intrinsic builtin.
+pub fn intrinsicName(l: *Thread, f: Value, buf: []u8) ?[]const u8 {
+    if (f.tag != .native) return null;
+    const g = globalName(l, f, buf) orelse return null;
+    return if (intrinsics.has(g)) g else null;
+}
+
+/// How the function running in frame `fi` is named in messages: the
+/// intrinsic name, then the name at its call site.
+pub fn calleeName(l: *Thread, fi: usize, buf: []u8) ?ObjName {
+    if (intrinsicName(l, l.stack[l.frames.items[fi].func], buf)) |q| return .{ .kind = "function", .name = q };
+    return funcName(l, fi);
+}
+
+fn rawSame(a: Value, b: Value) bool {
+    return a.tag == b.tag and a.payload == b.payload;
 }
 
 /// Appends a Lua-style traceback of `l`'s frames, innermost first,
@@ -186,44 +289,43 @@ pub fn traceback(l: *Thread, buf: *std.ArrayList(u8), level: usize) !void {
     if (frames.len == 0) return;
     var fi: usize = frames.len - 1 - @min(level, frames.len - 1);
     var shown: usize = 0;
-    const total = fi + 1;
+    // The host call below the main chunk counts as one more level.
+    const host: usize = if (l == l.g.main_thread) 1 else 0;
+    const total = fi + 1 + host;
+    var namebuf: [256]u8 = undefined;
     while (true) {
-        // Long tracebacks keep the first 10 and last 11 frames.
+        // Long tracebacks keep the first 10 and last 11 levels. As in the
+        // reference implementation, the reported count is one less than
+        // the number of levels left out.
         if (total > 22 and shown == 10) {
-            try buf.print(gpa, "\n\t...\t(skipping {d} levels)", .{total - 21});
-            fi = 10;
+            try buf.print(gpa, "\n\t...\t(skipping {d} levels)", .{total - 22});
+            fi = 10 - host;
         }
         const f = frames[fi];
         try buf.appendSlice(gpa, "\n\t");
         if (f.closure) |cl| {
             const p = cl.proto;
             try buf.print(gpa, "{s}:{d}: in ", .{ state.shortSource(p), state.currentLine(p, f.pc) });
-            if (fi == 0 and p.line_defined == 0) {
-                try buf.appendSlice(gpa, "main chunk");
-            } else if (funcName(l, fi)) |n| {
-                if (std.mem.eql(u8, n.kind, "global")) {
-                    try buf.print(gpa, "function '{s}'", .{n.name});
-                } else if (std.mem.eql(u8, n.kind, "for iterator")) {
-                    try buf.appendSlice(gpa, "for iterator 'for iterator'");
-                } else {
-                    try buf.print(gpa, "{s} '{s}'", .{ n.kind, n.name });
-                }
-            } else if (p.line_defined == 0) {
-                try buf.appendSlice(gpa, "main chunk");
-            } else {
-                try buf.print(gpa, "function <{s}:{d}>", .{ state.shortSource(p), p.line_defined });
-            }
-        } else if (f.native) |n| {
-            const name = if (n.name) |s| s.bytes() else "?";
-            if (funcName(l, fi)) |fnm| {
-                try buf.print(gpa, "[C]: in {s} '{s}'", .{ if (std.mem.eql(u8, fnm.kind, "global")) "function" else fnm.kind, fnm.name });
-            } else {
-                try buf.print(gpa, "[C]: in function '{s}'", .{name});
-            }
+        } else {
+            try buf.appendSlice(gpa, "[C]: in ");
+        }
+        const fval = l.stack[f.func];
+        if (calleeName(l, fi, &namebuf)) |n| {
+            try buf.print(gpa, "{s} '{s}'", .{ n.kind, n.name });
+        } else if (f.closure != null and f.closure.?.proto.line_defined == 0) {
+            try buf.appendSlice(gpa, "main chunk");
+        } else if (globalName(l, fval, &namebuf)) |g| {
+            try buf.print(gpa, "function '{s}'", .{g});
+        } else if (f.closure) |cl| {
+            try buf.print(gpa, "function <{s}:{d}>", .{ state.shortSource(cl.proto), cl.proto.line_defined });
+        } else {
+            try buf.appendSlice(gpa, "?");
         }
         if (f.tail) try buf.appendSlice(gpa, "\n\t(...tail calls...)");
         shown += 1;
         if (fi == 0) break;
         fi -= 1;
     }
+    // The main thread was entered from the host.
+    if (l == l.g.main_thread) try buf.appendSlice(gpa, "\n\t[C]: in ?");
 }

@@ -30,8 +30,24 @@ pub fn fnName(l: *Thread) []const u8 {
 pub fn argError(l: *Thread, i: u32, comptime fmt: []const u8, args: anytype) Error {
     var buf: [256]u8 = undefined;
     const extra = std.fmt.bufPrint(&buf, fmt, args) catch "?";
-    // Method calls report the receiver as "self" and shift indices.
-    return l.raiseFmt("bad argument #{d} to '{s}' ({s})", .{ i, fnName(l), extra });
+    const debug = @import("../vm/debug.zig");
+    var namebuf: [256]u8 = undefined;
+    var idx = i;
+    var name = fnName(l);
+    if (l.frames.items.len > 0) {
+        if (debug.calleeName(l, l.frames.items.len - 1, &namebuf)) |n| {
+            name = n.name;
+            // A method call passes the receiver as argument 1, which the
+            // caller did not write: shift indices and name it "self".
+            if (std.mem.eql(u8, n.kind, "method")) {
+                idx -= 1;
+                if (idx == 0) return l.raiseFmt("calling '{s}' on bad self ({s})", .{ name, extra });
+            }
+        } else if (debug.globalName(l, l.stack[l.frame().func], &namebuf)) |g| {
+            name = g;
+        }
+    }
+    return l.raiseFmt("bad argument #{d} to '{s}' ({s})", .{ idx, name, extra });
 }
 
 pub fn typeError(l: *Thread, i: u32, expected: []const u8) Error {
