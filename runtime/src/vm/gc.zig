@@ -124,8 +124,10 @@ fn barrierSlow(g: *Global, h: *Header) void {
 // ---------------------------------------------------------------------
 // Collection
 
+const stress = @import("build_options").gc_stress;
+
 pub fn maybeCollect(g: *Global) void {
-    if (g.counter.bytes >= g.threshold and !g.gc_stopped and g.gc_depth == 0) fullCollect(g);
+    if ((stress or g.counter.bytes >= g.threshold) and !g.gc_stopped and g.gc_depth == 0) fullCollect(g);
 }
 
 pub fn fullCollect(g: *Global) void {

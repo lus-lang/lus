@@ -4,12 +4,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const options = b.addOptions();
+    options.addOption(bool, "gc_stress", b.option(bool, "gc-stress", "Collect at every allocation point (finds missing roots)") orelse false);
+
     const lus_mod = b.createModule(.{
         .root_source_file = b.path("src/lus.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    lus_mod.addOptions("build_options", options);
     lus_mod.linkLibrary(compressionLibrary(b, target));
     lus_mod.linkLibrary(sqliteLibrary(b, target));
 

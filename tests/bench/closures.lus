@@ -1,0 +1,4 @@
+local function make(n) local c = 0 return function() c = c + n return c end end
+local total = 0
+for i = 1, 2000000 do local f = make(i) total = total + f() + f() end
+print(total)

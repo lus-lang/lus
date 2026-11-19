@@ -716,10 +716,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             },
             .closure => {
                 const p = c.cl.proto.protos[opc.bx(ins)];
+                // Collect only once the closure is rooted in its register,
+                // with the registers above it treated as dead.
+                R.reg(l, c.base, ra).* = Value.obj(.closure, try makeClosure(l, p, c.cl, c.base));
                 l.top = c.base + ra + 1;
-                const nc = makeClosure(l, p, c.cl, c.base);
+                gc.maybeCollect(l.g);
                 l.top = c.base + c.cl.proto.max_stack;
-                R.reg(l, c.base, ra).* = Value.obj(.closure, try nc);
             },
             .vararg => {
                 const want: i32 = @as(i32, opc.c(ins)) - 1;
@@ -884,7 +886,6 @@ pub fn makeClosure(l: *Thread, p: *Proto, parent: *Closure, base: u32) Error!*Cl
             ups[i] = parent.upvals()[d.index];
         }
     }
-    gc.maybeCollect(l.g);
     return cl;
 }
 

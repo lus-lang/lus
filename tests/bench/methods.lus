@@ -1,0 +1,8 @@
+local Point = {}
+Point.__index = Point
+function Point.new(x, y) return setmetatable({x = x, y = y}, Point) end
+function Point:add(o) return Point.new(self.x + o.x, self.y + o.y) end
+local p = Point.new(0, 0)
+local d = Point.new(1, 2)
+for i = 1, 5000000 do p = p:add(d) end
+print(p.x, p.y)
