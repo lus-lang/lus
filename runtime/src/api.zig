@@ -222,10 +222,12 @@ pub fn grantPledges(l: *Thread, specs: []const []const u8) Error!void {
 
 /// Makes the global table, and every library table up to two levels below
 /// it, read-only (`--readonly-env`). The module cache stays writable so
-/// `require` keeps working.
+/// `require` keeps working. Workers started from this state afterward
+/// freeze their environment as well.
 pub fn freezeEnv(l: *Thread) void {
     const table = @import("vm/table.zig");
     const g = l.g;
+    g.env_frozen = true;
     const reg = g.registry.as(object.Table);
     const loaded_key = state.newStringKnown(g, "_LOADED", true, 7) catch return;
     const loaded = table.getStr(reg, loaded_key);

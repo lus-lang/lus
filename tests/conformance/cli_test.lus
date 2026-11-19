@@ -377,3 +377,22 @@ local function a_syntax_error_at_a_letter_outside_ascii_reads_as_text_test()
     assert(string.find(checked, "nonascii_name.lus:1:7: error: unexpected symbol near 'é'", 1, true), checked)
     fs.remove(tmp)
 end
+
+local function workers_inherit_the_readonly_environment_test()
+    write_file("readonly_worker.lus", [[
+local ok, err = catch do created = 1 end
+local replaced = catch do math.abs = nil end
+worker.message({ ok = ok, err = tostring(err), replaced = replaced })
+]])
+    write_file("readonly_main.lus", [[
+local w = worker.create("readonly_worker.lus")
+local m = worker.receive(w)
+print(m.ok, m.replaced, m.err)
+]])
+    local _, frozen = run_command(lus_cmd .. " -P load -P fs:read --readonly-env readonly_main.lus")
+    assert(string.find(frozen, "false\tfalse\treadonly_worker.lus:1: attempt to modify a readonly table", 1, true), frozen)
+    local _, open = run_command(lus_cmd .. " -P load -P fs:read readonly_main.lus")
+    assert(string.find(open, "true\ttrue\tnil", 1, true), open)
+    fs.remove("readonly_worker.lus")
+    fs.remove("readonly_main.lus")
+end
