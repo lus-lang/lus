@@ -1,0 +1,904 @@
+pledge("load")
+
+-- ===== ported from h1/multret.lus =====
+--[[
+    Multiple-return semantics test suite.
+
+    Pins how value-producing expressions behave in final versus non-final
+    positions across expression lists, table constructors, call arguments,
+    and return statements. The baseline is Lua 5.5 adjustment rules. A call
+    or vararg expression expands to all its values only in the final position
+    of a list. Anywhere else it is adjusted to exactly one value, and wrapping
+    it in parentheses forces that adjustment even in final position.
+
+    Also covers the Lus constructs that produce or consume value lists.
+    Do expressions with provide, optional chain calls, if and while
+    assignment conditions, from destructuring, string interpolation,
+    named varargs, and the catch expression.
+]]
+
+
+-- Shared helper functions used throughout the suite.
+local function f2() return 1, 2 end
+local function f3() return 10, 20, 30 end
+local function zero() end
+local function nils3() return nil, nil, nil end
+local function count(...) return select("#", ...) end
+
+-- =============================================================================
+-- Expression lists in local declarations and assignments
+-- =============================================================================
+
+-- call in non-final position truncates to one value
+local function call_in_non_final_position_truncates_to_one_value_test()
+    local a, b, c = f2(), 9
+    assert(a == 1)
+    assert(b == 9)
+    assert(c == nil)
+end
+
+-- call in final position expands to all values
+local function call_in_final_position_expands_to_all_values_test()
+    local a, b, c = 9, f2()
+    assert(a == 9)
+    assert(b == 1)
+    assert(c == 2)
+end
+
+-- parenthesized call truncates to exactly one value
+local function parenthesized_call_truncates_to_exactly_one_value_test()
+    local a, b = (f2())
+    assert(a == 1)
+    assert(b == nil)
+end
+
+-- parenthesized call truncates even in final position
+local function parenthesized_call_truncates_even_in_final_position_test()
+    local a, b, c = 9, (f3())
+    assert(a == 9)
+    assert(b == 10)
+    assert(c == nil)
+end
+
+-- zero-result call in non-final position yields one nil
+local function zero_result_call_in_non_final_position_yields_one_nil_test()
+    local a, b = zero(), 5
+    assert(a == nil)
+    assert(b == 5)
+end
+
+-- zero-result call in final position pads with nils
+local function zero_result_call_in_final_position_pads_with_nils_test()
+    local a, b = zero()
+    assert(a == nil)
+    assert(b == nil)
+    assert(select("#", zero()) == 0)
+end
+
+-- plain assignment expands in final and truncates in non-final position
+local function plain_assignment_expands_in_final_and_truncates_in_non_final_position_test()
+    local a, b, c
+    a, b, c = f3()
+    assert(a == 10)
+    assert(b == 20)
+    assert(c == 30)
+    a, b, c = f3(), 7
+    assert(a == 10)
+    assert(b == 7)
+    assert(c == nil)
+end
+
+-- string method returning two values expands into locals
+local function string_method_returning_two_values_expands_into_locals_test()
+    local s, e = ("hello"):find("ll")
+    assert(s == 3)
+    assert(e == 4)
+end
+
+-- =============================================================================
+-- Table constructors
+-- =============================================================================
+
+-- constructor with single final call expands
+local function constructor_with_single_final_call_expands_test()
+    local t = {f3()}
+    assert(#t == 3)
+    assert(t[1] == 10)
+    assert(t[2] == 20)
+    assert(t[3] == 30)
+end
+
+-- constructor call in non-final position truncates
+local function constructor_call_in_non_final_position_truncates_test()
+    local t = {f3(), 9}
+    assert(#t == 2)
+    assert(t[1] == 10)
+    assert(t[2] == 9)
+end
+
+-- constructor call after scalar expands
+local function constructor_call_after_scalar_expands_test()
+    local t = {9, f3()}
+    assert(#t == 4)
+    assert(t[1] == 9)
+    assert(t[4] == 30)
+end
+
+-- two calls in constructor truncate then expand
+local function two_calls_in_constructor_truncate_then_expand_test()
+    local t = {f3(), f3()}
+    assert(#t == 4)
+    assert(t[1] == 10)
+    assert(t[2] == 10)
+    assert(t[3] == 20)
+    assert(t[4] == 30)
+end
+
+-- parenthesized call in constructor yields one element
+local function parenthesized_call_in_constructor_yields_one_element_test()
+    local t = {(f3())}
+    assert(#t == 1)
+    assert(t[1] == 10)
+end
+
+-- record field plus positional call fills the array part
+local function record_field_plus_positional_call_fills_the_array_part_test()
+    local t = {x = 1, f2()}
+    assert(#t == 2)
+    assert(t[1] == 1)
+    assert(t[2] == 2)
+    assert(t.x == 1)
+end
+
+-- vararg in non-final constructor position truncates
+local function vararg_in_non_final_constructor_position_truncates_test()
+    local function build(...)
+        return {..., 99}
+    end
+    local t = build(1, 2, 3)
+    assert(#t == 2)
+    assert(t[1] == 1)
+    assert(t[2] == 99)
+end
+
+-- =============================================================================
+-- Call arguments
+-- =============================================================================
+
+-- final call argument expands
+local function final_call_argument_expands_test()
+    assert(count(f3()) == 3)
+end
+
+-- non-final call argument truncates
+local function non_final_call_argument_truncates_test()
+    local function pair(a, b)
+        return a, b
+    end
+    local x, y = pair(f3(), 5)
+    assert(count(f3(), 5) == 2)
+    assert(x == 10)
+    assert(y == 5)
+end
+
+-- parenthesized call argument passes one value
+local function parenthesized_call_argument_passes_one_value_test()
+    assert(count((f3())) == 1)
+end
+
+-- scalar then final call expands after it
+local function scalar_then_final_call_expands_after_it_test()
+    assert(count(5, f3()) == 4)
+end
+
+-- method call arguments follow the same rules
+local function method_call_arguments_follow_the_same_rules_test()
+    local obj = {}
+    function obj:m(...)
+        return select("#", ...)
+    end
+    assert(obj:m(f3()) == 3)
+    assert(obj:m(f3(), 5) == 2)
+end
+
+-- =============================================================================
+-- Return statements
+-- =============================================================================
+
+-- return of a call propagates all values
+local function return_of_a_call_propagates_all_values_test()
+    local function r() return f3() end
+    assert(select("#", r()) == 3)
+    local a, b, c = r()
+    assert(a + b + c == 60)
+end
+
+-- return of a parenthesized call yields one value
+local function return_of_a_parenthesized_call_yields_one_value_test()
+    local function r() return (f3()) end
+    assert(select("#", r()) == 1)
+    assert(r() == 10)
+end
+
+-- call before another return value truncates
+local function call_before_another_return_value_truncates_test()
+    local function r() return f3(), 5 end
+    assert(select("#", r()) == 2)
+    local a, b = r()
+    assert(a == 10)
+    assert(b == 5)
+end
+
+-- scalar before final call expands the call
+local function scalar_before_final_call_expands_the_call_test()
+    local function r() return 5, f3() end
+    assert(select("#", r()) == 4)
+end
+
+-- bare return and tail call of zero results yield zero values
+local function bare_return_and_tail_call_of_zero_results_yield_zero_values_test()
+    local function r1() return end
+    local function r2() return zero() end
+    assert(select("#", r1()) == 0)
+    assert(select("#", r2()) == 0)
+end
+
+-- returning varargs preserves trailing nils
+local function returning_varargs_preserves_trailing_nils_test()
+    local function id(...) return ... end
+    assert(select("#", id(nil, nil)) == 2)
+    assert(select("#", id()) == 0)
+end
+
+-- =============================================================================
+-- select counting and slicing
+-- =============================================================================
+
+-- select counts explicit trailing nils
+local function select_counts_explicit_trailing_nils_test()
+    assert(select("#", 1, nil, nil) == 3)
+    assert(select("#", nils3()) == 3)
+end
+
+-- select count sees adjusted argument lists
+local function select_count_sees_adjusted_argument_lists_test()
+    assert(select("#", f3()) == 3)
+    assert(select("#", (f3())) == 1)
+end
+
+-- positive select index returns the tail
+local function positive_select_index_returns_the_tail_test()
+    local a, b = select(2, f3())
+    assert(a == 20)
+    assert(b == 30)
+    assert(select("#", select(2, f3())) == 2)
+end
+
+-- negative select index counts from the end
+local function negative_select_index_counts_from_the_end_test()
+    assert(select(-1, f3()) == 30)
+    assert(select("#", select(-3, f3())) == 3)
+end
+
+-- select index at the last argument returns one value
+local function select_index_at_the_last_argument_returns_one_value_test()
+    assert(select("#", select(3, "a", "b", "c")) == 1)
+    assert(select(3, "a", "b", "c") == "c")
+end
+
+-- select index past the end returns zero values
+local function select_index_past_the_end_returns_zero_values_test()
+    assert(select("#", select(5, "a", "b")) == 0)
+end
+
+-- select accepts a float with an integral value
+local function select_accepts_a_float_with_an_integral_value_test()
+    assert(select(2.0, "a", "b", "c") == "b")
+end
+
+-- select rejects invalid indices
+local select_rejects_invalid_indices_cases = {
+    {0, "index out of range"},
+    {-4, "index out of range"},
+    {"x", "number expected"},
+    {1.5, "no integer representation"},
+}
+
+local function select_rejects_invalid_indices_test(idx, pattern)
+    raises(function()
+        return select(idx, 1, 2, 3)
+    end, pattern)
+end
+
+-- =============================================================================
+-- table.pack and table.unpack round trips
+-- =============================================================================
+
+-- table.pack records the exact argument count
+local function table_pack_records_the_exact_argument_count_test()
+    assert(table.pack().n == 0)
+    assert(table.pack(nil).n == 1)
+    assert(table.pack(f3()).n == 3)
+    assert(table.pack(f3(), f3()).n == 4)
+end
+
+-- unpack with default range returns all sequence values
+local function unpack_with_default_range_returns_all_sequence_values_test()
+    assert(select("#", table.unpack({1, 2, 3})) == 3)
+end
+
+-- The fixed table is {1, nil, 3} so ranges cross a nil hole.
+-- unpack explicit range value counts
+local unpack_explicit_range_value_counts_cases = {
+    {1, 3, 3},
+    {3, 1, 0},
+    {2, 2, 1},
+    {1, 5, 5},
+    {-1, 1, 3},
+}
+
+local function unpack_explicit_range_value_counts_test(i, j, expected)
+    local t = {1, nil, 3}
+    assert(select("#", table.unpack(t, i, j)) == expected)
+end
+
+-- unpack preserves nil holes positionally
+local function unpack_preserves_nil_holes_positionally_test()
+    local a, b, c = table.unpack({1, nil, 3}, 1, 3)
+    assert(a == 1)
+    assert(b == nil)
+    assert(c == 3)
+end
+
+-- unpack works over negative indices
+local function unpack_works_over_negative_indices_test()
+    local t = {[-1] = "a", [0] = "b", [1] = "c"}
+    local a, b, c = table.unpack(t, -1, 1)
+    assert(a == "a")
+    assert(b == "b")
+    assert(c == "c")
+end
+
+-- unpack range past the border pads with nils
+local function unpack_range_past_the_border_pads_with_nils_test()
+    local t = {1, 2}
+    assert(select("#", table.unpack(t, 1, 4)) == 4)
+    local _, _, x, y = table.unpack(t, 1, 4)
+    assert(x == nil)
+    assert(y == nil)
+end
+
+-- unpack rejects a range that is too large
+local function unpack_rejects_a_range_that_is_too_large_test()
+    raises(function()
+        return table.unpack({}, 1, math.maxinteger)
+    end, "too many results")
+end
+
+-- pack and unpack round trip preserves count and holes
+local function pack_and_unpack_round_trip_preserves_count_and_holes_test()
+    local t = table.pack(1, nil, 3)
+    local rt = table.pack(table.unpack(t, 1, t.n))
+    assert(rt.n == 3)
+    assert(rt[1] == 1)
+    assert(rt[2] == nil)
+    assert(rt[3] == 3)
+end
+
+-- unpack in non-final argument position truncates
+local function unpack_in_non_final_argument_position_truncates_test()
+    assert(count(table.unpack({1, 2, 3}), 9) == 2)
+end
+
+-- =============================================================================
+-- Do expressions and provide
+-- =============================================================================
+
+-- do expression in non-final position truncates to one value
+local function do_expression_in_non_final_position_truncates_to_one_value_test()
+    local a, b, c = do provide 1, 2 end, 9
+    assert(a == 1)
+    assert(b == 9)
+    assert(c == nil)
+end
+
+-- do expression in final position of a local list expands
+local function do_expression_in_final_position_of_a_local_list_expands_test()
+    local a, b, c = 9, do provide 1, 2 end
+    assert(a == 9)
+    assert(b == 1)
+    assert(c == 2)
+end
+
+-- provide preserves an explicit leading nil
+local function provide_preserves_an_explicit_leading_nil_test()
+    local a, b = do provide nil, 5 end
+    assert(a == nil)
+    assert(b == 5)
+end
+
+-- parenthesized do expression truncates to one value
+local function parenthesized_do_expression_truncates_to_one_value_test()
+    local p = table.pack((do provide 7, 8 end))
+    assert(p.n == 1)
+    assert(p[1] == 7)
+end
+
+-- do expression in non-final constructor position truncates
+local function do_expression_in_non_final_constructor_position_truncates_test()
+    local t = {do provide 1, 2, 3 end, 9}
+    assert(#t == 2)
+    assert(t[1] == 1)
+    assert(t[2] == 9)
+end
+
+-- call in non-final provide position truncates
+local function call_in_non_final_provide_position_truncates_test()
+    local a, b, c = do provide f3(), 5 end
+    assert(a == 10)
+    assert(b == 5)
+    assert(c == nil)
+end
+
+-- parenthesized call in provide truncates
+local function parenthesized_call_in_provide_truncates_test()
+    local a, b = do provide (f3()) end
+    assert(a == 10)
+    assert(b == nil)
+end
+
+-- do expression argument count with literal values
+local function do_expression_argument_count_with_literal_values_test()
+    assert(count(do provide 7, 8, 9 end) == 3)
+end
+
+-- do expression as final constructor element expands
+local function do_expression_as_final_constructor_element_expands_test()
+    local t1 = {do provide 5 end}
+    assert(#t1 == 1)
+    assert(t1[1] == 5)
+    local t2 = {9, do provide 1, 2 end}
+    assert(#t2 == 3)
+    assert(t2[1] == 9)
+    assert(t2[2] == 1)
+    assert(t2[3] == 2)
+end
+
+-- do expression as final call argument passes the provided values
+local function do_expression_as_final_call_argument_passes_the_provided_values_test()
+    local p = table.pack(do provide 7, 8 end)
+    assert(p.n == 2)
+    assert(p[1] == 7)
+    assert(p[2] == 8)
+end
+
+-- return of a do expression propagates provided values
+local function return_of_a_do_expression_propagates_provided_values_test()
+    local function r() return do provide 41, 42 end end
+    assert(select("#", r()) == 2)
+    local a, b = r()
+    assert(a == 41)
+    assert(b == 42)
+end
+
+-- return of a do expression in non-final position truncates
+local function return_of_a_do_expression_in_non_final_position_truncates_test()
+    local function r() return do provide 41, 42 end, 5 end
+    assert(select("#", r()) == 2)
+    local a, b = r()
+    assert(a == 41)
+    assert(b == 5)
+end
+
+-- provide propagates a trailing call's values
+local function provide_propagates_a_trailing_call_s_values_test()
+    local a, b, c = do provide f3() end
+    assert(a == 10)
+    assert(b == 20)
+    assert(c == 30)
+end
+
+-- provide of a zero-result call yields nil
+local function provide_of_a_zero_result_call_yields_nil_test()
+    local x = do provide zero() end
+    assert(x == nil)
+end
+
+-- provide of a zero-result call yields zero values in multret position
+local function provide_of_a_zero_result_call_yields_zero_values_in_multret_position_test()
+    assert(count(do provide zero() end) == 0)
+end
+
+-- nested do expressions propagate through each window
+local function nested_do_expressions_propagate_through_each_window_test()
+    local a, b = do provide do provide 1, 2 end end
+    assert(a == 1)
+    assert(b == 2)
+    assert(count(do provide do provide 1, 2 end end) == 2)
+end
+
+-- provide with a closure capturing a block local
+local function provide_with_a_closure_capturing_a_block_local_test()
+    local fns = table.pack(do
+        local shared = 100
+        provide function() shared = shared + 1 end, function() return shared end
+    end)
+    fns[1]()
+    fns[1]()
+    assert(fns[2]() == 102)
+end
+
+-- catch over a multi-value do expression fills all receivers
+local function catch_over_a_multi_value_do_expression_fills_all_receivers_test()
+    local ok, a, b = catch do provide 1, 2 end
+    assert(ok == true)
+    assert(a == 1)
+    assert(b == 2)
+    assert(count(catch do provide 1, 2 end) == 3)
+end
+
+-- catch over a zero-value provide pads with nil
+local function catch_over_a_zero_value_provide_pads_with_nil_test()
+    local ok, v = catch do provide zero() end
+    assert(ok == true)
+    assert(v == nil)
+    assert(count(catch do provide zero() end) == 1)
+end
+
+-- mixed-count provides follow the taken branch
+local function mixed_count_provides_follow_the_taken_branch_test()
+    local function mix(c)
+        return do
+            if c then provide 1 end
+            provide 1, 2
+        end
+    end
+    assert(count(mix(true)) == 1)
+    assert(count(mix(false)) == 2)
+    local a, b = mix(true)
+    assert(a == 1)
+    assert(b == nil)
+end
+
+-- do expression as non-final expression list element truncates
+local function do_expression_as_non_final_expression_list_element_truncates_test()
+    local a, b, c = do provide 5, 6 end, 9
+    assert(a == 5)
+    assert(b == 9)
+    assert(c == nil)
+end
+
+-- provide of a scalar before a trailing call keeps the whole window
+local function provide_of_a_scalar_before_a_trailing_call_keeps_the_whole_window_test()
+    local w, x, y, z = do provide 99, f3() end
+    assert(w == 99)
+    assert(x == 10)
+    assert(y == 20)
+    assert(z == 30)
+end
+
+-- do expression without provide yields exactly one nil value
+local function do_expression_without_provide_yields_exactly_one_nil_value_test()
+    assert(count(do end) == 1)
+    assert((do end) == nil)
+end
+
+-- =============================================================================
+-- Optional chain calls always adjust to one value
+-- =============================================================================
+
+local obj = {
+    m = function(self) return 1, 2, 3 end
+}
+
+-- optional method call yields exactly one value in final position
+local function optional_method_call_yields_exactly_one_value_in_final_position_test()
+    local a, b = obj?:m()
+    assert(a == 1)
+    assert(b == nil)
+    assert(select("#", obj?:m()) == 1)
+end
+
+-- optional method call in non-final position truncates
+local function optional_method_call_in_non_final_position_truncates_test()
+    local a, b = obj?:m(), 9
+    assert(a == 1)
+    assert(b == 9)
+end
+
+-- optional method call in return position yields one value
+local function optional_method_call_in_return_position_yields_one_value_test()
+    local function r()
+        return obj?:m()
+    end
+    assert(select("#", r()) == 1)
+    assert(r() == 1)
+end
+
+-- optional method call on nil yields exactly one nil
+local function optional_method_call_on_nil_yields_exactly_one_nil_test()
+    local n = nil
+    assert(select("#", n?:m()) == 1)
+    local p = table.pack(n?:m())
+    assert(p.n == 1)
+    assert(p[1] == nil)
+end
+
+-- optional method call on nil contributes one hole to a constructor
+local function optional_method_call_on_nil_contributes_one_hole_to_a_constructor_test()
+    local n = nil
+    local t = {n?:m()}
+    assert(#t == 0)
+    assert(t[1] == nil)
+end
+
+-- optional method call on false yields exactly one false
+local function optional_method_call_on_false_yields_exactly_one_false_test()
+    local fb = false
+    assert(select("#", fb?:m()) == 1)
+    assert(fb?:m() == false)
+end
+
+-- optional call of a function yields one value
+local function optional_call_of_a_function_yields_one_value_test()
+    local fn = function() return 4, 5 end
+    local a, b = fn?()
+    assert(a == 4)
+    assert(b == nil)
+    assert(select("#", fn?()) == 1)
+end
+
+-- optional call of nil yields one nil
+local function optional_call_of_nil_yields_one_nil_test()
+    local fn = nil
+    assert(select("#", fn?()) == 1)
+    assert(fn?() == nil)
+end
+
+-- optional index key from a multi-return call truncates
+local function optional_index_key_from_a_multi_return_call_truncates_test()
+    local t = {[10] = "ten"}
+    assert(t?[f3()] == "ten")
+end
+
+-- =============================================================================
+-- if and while assignment conditions
+-- =============================================================================
+
+-- if assignment binds only the listed variables
+local function if_assignment_binds_only_the_listed_variables_test()
+    local seen
+    if a = f2() then
+        seen = a
+    end
+    assert(seen == 1)
+end
+
+-- if assignment ignores a truthy second value when the first is nil
+local function if_assignment_ignores_a_truthy_second_value_when_the_first_is_nil_test()
+    local function niltrue() return nil, true end
+    local entered = false
+    if a = niltrue() then
+        entered = true
+    end
+    assert(entered == false)
+end
+
+-- if assignment discards values beyond the variable list
+local function if_assignment_discards_values_beyond_the_variable_list_test()
+    local sum
+    if a, b = f3() then
+        sum = a + b
+    end
+    assert(sum == 30)
+end
+
+-- while assignment ignores extra returned values
+local function while_assignment_ignores_extra_returned_values_test()
+    local calls = 0
+    local function wf()
+        calls = calls + 1
+        if calls <= 2 then
+            return calls, "junk"
+        end
+        return nil, "still junk"
+    end
+    local iters = 0
+    while v = wf() do
+        iters = iters + 1
+    end
+    assert(iters == 2)
+    assert(calls == 3)
+end
+
+-- while assignment exits when a listed variable is nil on entry
+local function while_assignment_exits_when_a_listed_variable_is_nil_on_entry_test()
+    local function firstnil() return 1, nil end
+    local iters = 0
+    while a, b = firstnil() do
+        iters = iters + 1
+        if iters > 3 then
+            break
+        end
+    end
+    assert(iters == 0)
+end
+
+-- =============================================================================
+-- from destructuring
+-- =============================================================================
+
+-- from uses only the first value of a multi-return source
+local function from_uses_only_the_first_value_of_a_multi_return_source_test()
+    local function two_tables()
+        return {a = 1}, {a = 99}
+    end
+    local a from two_tables()
+    assert(a == 1)
+end
+
+-- from yields nil for a missing field alongside a present one
+local function from_yields_nil_for_a_missing_field_alongside_a_present_one_test()
+    local t = {x = 5}
+    local x, missing from t
+    assert(x == 5)
+    assert(missing == nil)
+end
+
+-- =============================================================================
+-- String interpolation
+-- =============================================================================
+
+-- interpolation uses only the first value of a multi-return call
+local function interpolation_uses_only_the_first_value_of_a_multi_return_call_test()
+    local s = `got $(f2())`
+    assert(s == "got 1")
+end
+
+-- interpolation of a zero-result call renders nil
+local function interpolation_of_a_zero_result_call_renders_nil_test()
+    local s = `v=$(zero())`
+    assert(s == "v=nil")
+end
+
+-- interpolation of a select tail uses its first value
+local function interpolation_of_a_select_tail_uses_its_first_value_test()
+    local s = `second $(select(2, f3()))`
+    assert(s == "second 20")
+end
+
+-- =============================================================================
+-- Named varargs
+-- =============================================================================
+
+-- named vararg packs extras into a table with a count field
+local function named_vararg_packs_extras_into_a_table_with_a_count_field_test()
+    local function named(a, ...b)
+        return b
+    end
+    local b = named(1, 2, 3)
+    assert(type(b) == "table")
+    assert(b.n == 2)
+    assert(b[1] == 2)
+    assert(b[2] == 3)
+end
+
+-- named vararg counts trailing nils
+local function named_vararg_counts_trailing_nils_test()
+    local function named(a, ...b)
+        return b
+    end
+    local b = named(1, nil, nil)
+    assert(b.n == 2)
+    assert(b[1] == nil)
+    assert(b[2] == nil)
+end
+
+-- named vararg captures a final call's expansion
+local function named_vararg_captures_a_final_call_s_expansion_test()
+    local function named(a, ...b)
+        return b
+    end
+    local b = named(1, f3())
+    assert(b.n == 3)
+    assert(b[1] == 10)
+    assert(b[2] == 20)
+    assert(b[3] == 30)
+end
+
+-- named vararg with no extras has count zero
+local function named_vararg_with_no_extras_has_count_zero_test()
+    local function named(a, ...b)
+        return b
+    end
+    assert(named(1).n == 0)
+end
+
+-- named vararg round trips through unpack
+local function named_vararg_round_trips_through_unpack_test()
+    local function named(...b)
+        return table.unpack(b, 1, b.n)
+    end
+    assert(select("#", named(1, nil, 3)) == 3)
+    local x, y, z = named(1, nil, 3)
+    assert(x == 1)
+    assert(y == nil)
+    assert(z == 3)
+end
+
+-- =============================================================================
+-- catch expressions and value lists
+-- =============================================================================
+
+-- catch of a multi-return call yields the flag plus all values
+local function catch_of_a_multi_return_call_yields_the_flag_plus_all_values_test()
+    assert(select("#", catch f3()) == 4)
+    local ok, a, b, c = catch f3()
+    assert(ok == true)
+    assert(a + b + c == 60)
+end
+
+-- catch of a failing call yields the flag plus the error
+local function catch_of_a_failing_call_yields_the_flag_plus_the_error_test()
+    assert(select("#", catch error("kaboom")) == 2)
+end
+
+-- catch in non-final position truncates to the flag
+local function catch_in_non_final_position_truncates_to_the_flag_test()
+    local a, b = catch error("x"), 9
+    assert(a == false)
+    assert(b == 9)
+    local c, d = catch f3(), 9
+    assert(c == true)
+    assert(d == 9)
+end
+
+-- catch of a zero-result call yields only the flag
+local function catch_of_a_zero_result_call_yields_only_the_flag_test()
+    assert(select("#", catch zero()) == 1)
+    local ok, x = catch zero()
+    assert(ok == true)
+    assert(x == nil)
+end
+
+-- =============================================================================
+-- Other consumers adjust to one value
+-- =============================================================================
+
+-- numeric for adjusts each control expression to one value
+local function numeric_for_adjusts_each_control_expression_to_one_value_test()
+    local last = 0
+    for i = f2(), 3 do
+        last = i
+    end
+    assert(last == 3)
+end
+
+-- generic for takes its iterator triple from one call
+local function generic_for_takes_its_iterator_triple_from_one_call_test()
+    local function make()
+        return next, {only = 7}, nil
+    end
+    local gotk, gotv
+    for k, v in make() do
+        gotk, gotv = k, v
+    end
+    assert(gotk == "only")
+    assert(gotv == 7)
+end
+
+-- concatenation uses only the first value
+local function concatenation_uses_only_the_first_value_test()
+    assert("x" .. f2() == "x1")
+end
+
+-- arithmetic uses only the first value
+local function arithmetic_uses_only_the_first_value_test()
+    assert(100 + f2() == 101)
+end
+
+-- table indexing uses only the first value as the key
+local function table_indexing_uses_only_the_first_value_as_the_key_test()
+    local t = {"a", "b", "c"}
+    assert(t[f2()] == "a")
+end

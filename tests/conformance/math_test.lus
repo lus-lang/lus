@@ -1,0 +1,1095 @@
+pledge("load")
+
+-- ===== ported from h1/math.lus =====
+local math = math
+local string = string
+
+-- Helper variables and functions from original test
+local minint, maxint = math.mininteger, math.maxinteger
+local intbits = math.floor(math.log(maxint, 2) + 0.5) + 1
+local floatbits = 24
+do
+  local p = 2.0^floatbits
+  while p < p + 1.0 do
+    p = p * 2.0
+    floatbits = floatbits + 1
+  end
+end
+
+local maxexp = 0
+do
+  local p = 2.0
+  while p < math.huge do
+    maxexp = maxexp + 1
+    p = p + p
+  end
+end
+
+local function isNaN (x)
+  return (x ~= x)
+end
+
+local function checkerror (msg, f, ...)
+  -- Use catch with closure
+  local args = {...}
+  local success, err = catch (function() return f(table.unpack(args)) end)()
+  assert(not success and string.find(err, msg))
+end
+
+local msgf2i = "number.* has no integer representation"
+
+local function eq (a,b,limit)
+  if not limit then
+    if floatbits >= 50 then limit = 1E-11
+    else limit = 1E-5
+    end
+  end
+  return a == b or math.abs(a-b) <= limit
+end
+
+local function eqT (a,b)
+  return a == b and math.type(a) == math.type(b)
+end
+
+-- Tests wrapped in it blocks
+-- basic limits and types
+local function basic_limits_and_types_test()
+    assert((1 << intbits) == 0)
+    assert(minint == 1 << (intbits - 1))
+    assert(maxint == minint - 1)
+
+    assert(isNaN(0/0))
+    assert(not isNaN(1/0))
+
+    local x = 2.0^floatbits
+    assert(x > x - 1.0 and x == x + 1.0)
+
+    assert(math.type(0) == "integer" and math.type(0.0) == "float"
+           and not math.type("10"))
+end
+
+-- basic float notation and equality
+local function basic_float_notation_and_equality_test()
+    assert(0e12 == 0 and .0 == 0 and 0. == 0 and .2e2 == 20 and 2.E-1 == 0.2)
+    local a,b,c = "2", " 3e0 ", " 10  "
+    assert(a+b == 5 and -b == -3 and b+"2" == 5 and "10"-c == 0)
+    assert(type(a) == 'string' and type(b) == 'string' and type(c) == 'string')
+    assert(a == "2" and b == " 3e0 " and c == " 10  " and -c == -"  10 ")
+    assert(c%a == 0 and a^b == 08)
+    a = 0
+    assert(a == -a and 0 == -0)
+
+    local x = -1
+    local mz = 0/x   -- minus zero
+end
+
+-- math.modf
+local function math_modf_test()
+  local a,b = math.modf(3.5)
+  assert(a == 3.0 and b == 0.5)
+  a,b = math.modf(-2.5)
+  assert(a == -2.0 and b == -0.5)
+  a,b = math.modf(-3e23)
+  assert(a == -3e23 and b == 0.0)
+  a,b = math.modf(3e35)
+  assert(a == 3e35 and b == 0.0)
+  a,b = math.modf(-1/0)   -- -inf
+  assert(a == -1/0 and b == 0.0)
+  a,b = math.modf(1/0)   -- inf
+  assert(a == 1/0 and b == 0.0)
+  a,b = math.modf(0/0)   -- NaN
+  assert(isNaN(a) and isNaN(b))
+  a,b = math.modf(3)  -- integer argument
+  assert(eqT(a, 3) and eqT(b, 0.0))
+  a,b = math.modf(minint)
+  assert(eqT(a, minint) and eqT(b, 0.0))
+end
+
+-- floor division and conversions
+local function floor_division_and_conversions_test()
+    assert(1//0.0 == 1/0)
+    assert(-1 // 0.0 == -1/0)
+    assert(eqT(3.5 // 1.5, 2.0))
+    assert(eqT(3.5 // -1.5, -3.0))
+
+    local x, y
+    x = 1; assert(x // 0.0 == 1/0)
+    x = 1.0; assert(x // 0 == 1/0)
+    x = 3.5; assert(eqT(x // 1, 3.0))
+    assert(eqT(x // -1, -4.0))
+
+    assert(maxint // maxint == 1)
+    assert(maxint // 1 == maxint)
+    assert(minint // minint == 1)
+
+    assert(minint // -1 == -minint)
+    assert(maxint // -1 == -maxint)
+end
+
+-- comparison floats and integers
+local function comparison_floats_and_integers_test()
+    assert(maxint + 0.0 == 2.0^(intbits - 1) - 1.0)
+    assert(minint + 0.0 == minint)
+
+    assert(1 < 1.1); assert(not (1 < 0.9))
+    assert(1 <= 1.1); assert(not (1 <= 0.9))
+    assert(minint <= minint + 0.0)
+
+    local NaN = 0/0
+    assert(not (NaN < 0))
+    assert(not (NaN > minint))
+    assert(not (NaN < NaN))
+end
+
+-- compile time errors (load)
+local function compile_time_errors_load_test()
+    local function checkcompt (msg, code)
+      checkerror(msg, assert(load(code)))
+    end
+    checkcompt("divide by zero", "return 2 // 0")
+    checkcompt(msgf2i, "return 2.3 >> 0")
+end
+
+-- tonumber tests
+local function tonumber_tests_test()
+    assert(tonumber(3.4) == 3.4)
+    assert(eqT(tonumber(3), 3))
+    assert(tonumber("0") == 0)
+    assert(not tonumber(""))
+    assert(not tonumber("  "))
+    assert(tonumber("0xff") == 255)
+
+    assert(0x10 == 16)
+    assert(tonumber('  -10  ', 36) == -36)
+end
+
+-- math functions
+local function math_functions_test()
+    assert(math.abs(-10.43) == 10.43)
+    assert(eq(math.sqrt(10)^2, 10))
+    assert(eq(math.log(2, 2), 1))
+    assert(eq(math.exp(0), 1))
+
+    assert(eqT(math.floor(3.4), 3))
+    assert(eqT(math.ceil(3.4), 4))
+    assert(eqT(math.floor(-3.4), -4))
+
+    assert(eqT(math.max(3, 5, 9, 1), 9))
+    assert(eqT(math.min(3, 5, 9, 1), 1))
+end
+
+-- fmod
+local function fmod_test()
+    assert(eqT(math.fmod(minint, minint), 0))
+    checkerror("zero", math.fmod, 3, 0)
+end
+
+-- tointeger
+local function tointeger_test()
+    assert(eqT(math.tointeger(minint), minint))
+    assert(eqT(math.tointeger(maxint), maxint))
+    assert(not math.tointeger(0.0 - minint)) -- overflow
+end
+
+-- random
+local function random_test()
+    -- Basic random checks
+    local r = math.random()
+    assert(r >= 0 and r < 1)
+
+    local r2 = math.random(10)
+    assert(r2 >= 1 and r2 <= 10)
+
+    math.randomseed(100)
+    local a = math.random()
+    math.randomseed(100)
+    local b = math.random()
+    assert(a == b)
+end
+
+-- ============================================
+-- Edge Case Tests
+-- ============================================
+
+-- integer overflow wraps
+local function integer_overflow_wraps_test()
+    -- Adding to maxint should wrap
+    local result = maxint + 1
+    assert(result == minint, "maxint + 1 should wrap to minint")
+
+    -- Subtracting from minint should wrap
+    result = minint - 1
+    assert(result == maxint, "minint - 1 should wrap to maxint")
+end
+
+-- integer multiplication overflow
+local function integer_multiplication_overflow_test()
+    local big = maxint // 2   -- 2^62 - 1
+    local result = big * 3
+    assert(math.type(result) == "integer")
+    -- 3 * (2^62 - 1) is 3 * 2^62 - 3, which wraps modulo 2^64 to -2^62 - 3
+    assert(result == -(1 << 62) - 3, "product must wrap around modulo 2^64")
+    -- wrapping multiplication must agree with wrapping repeated addition
+    assert(result == big + big + big)
+end
+
+-- division edge cases
+local function division_edge_cases_test()
+    -- Division by zero float
+    assert(1.0 / 0.0 == math.huge)
+    assert(-1.0 / 0.0 == -math.huge)
+
+    -- Integer division by zero errors
+    local ok1, err1 = catch (function() return 1 // 0 end)()
+    assert(not ok1, "integer division by zero should error")
+
+    local ok2, err2 = catch (function() return 1 % 0 end)()
+    assert(not ok2, "modulo by zero should error")
+end
+
+-- NaN propagation
+local function nan_propagation_test()
+    local nan = 0/0
+
+    -- NaN in arithmetic produces NaN
+    assert(isNaN(nan + 1))
+    assert(isNaN(nan - 1))
+    assert(isNaN(nan * 2))
+    assert(isNaN(nan / 2))
+    assert(isNaN(nan ^ 2))
+    assert(isNaN(-nan))
+
+    -- NaN in math functions
+    assert(isNaN(math.sin(nan)))
+    assert(isNaN(math.cos(nan)))
+    assert(isNaN(math.sqrt(nan)))
+    assert(isNaN(math.log(nan)))
+    assert(isNaN(math.floor(nan)))
+    assert(isNaN(math.ceil(nan)))
+end
+
+-- infinity arithmetic
+local function infinity_arithmetic_test()
+    local inf = math.huge
+    local ninf = -math.huge
+
+    assert(inf + 1 == inf)
+    assert(inf - 1 == inf)
+    assert(inf * 2 == inf)
+    assert(inf * -1 == ninf)
+    assert(ninf + ninf == ninf)
+
+    -- inf - inf is NaN
+    assert(isNaN(inf - inf))
+    assert(isNaN(inf + ninf))
+
+    -- inf * 0 is NaN
+    assert(isNaN(inf * 0))
+end
+
+-- infinity comparisons
+local function infinity_comparisons_test()
+    local inf = math.huge
+    assert(inf > maxint)
+    assert(inf > 1e308)
+    assert(-inf < minint)
+    assert(inf == inf)
+    assert(-inf == -inf)
+    assert(inf ~= -inf)
+end
+
+-- math.abs edge cases
+local function math_abs_edge_cases_test()
+    assert(math.abs(0) == 0)
+    assert(math.abs(-0.0) == 0)
+    assert(math.abs(minint) == minint)  -- minint has no positive equivalent
+    assert(math.abs(math.huge) == math.huge)
+    assert(math.abs(-math.huge) == math.huge)
+    assert(isNaN(math.abs(0/0)))
+end
+
+-- math.floor and ceil with large numbers
+local function math_floor_and_ceil_with_large_numbers_test()
+    assert(math.floor(1e15) == 1e15)
+    assert(math.ceil(1e15) == 1e15)
+    assert(math.floor(1e15 + 0.5) == 1e15)
+    assert(math.ceil(1e15 + 0.5) == 1e15 + 1)
+
+    -- With infinity
+    assert(math.floor(math.huge) == math.huge)
+    assert(math.ceil(-math.huge) == -math.huge)
+end
+
+-- math.min and max edge cases
+local function math_min_and_max_edge_cases_test()
+    -- Single argument
+    assert(math.min(5) == 5)
+    assert(math.max(5) == 5)
+
+    -- With infinity
+    assert(math.min(1, 2, math.huge) == 1)
+    assert(math.max(1, 2, -math.huge) == 2)
+
+    -- NaN comparison
+    local nan = 0/0
+    -- min/max with NaN should return NaN
+    assert(isNaN(math.min(nan, 1)))
+    assert(isNaN(math.max(nan, 1)))
+end
+
+-- math.sqrt edge cases
+local function math_sqrt_edge_cases_test()
+    assert(math.sqrt(0) == 0)
+    assert(math.sqrt(1) == 1)
+    assert(math.sqrt(math.huge) == math.huge)
+
+    -- sqrt of negative is NaN
+    assert(isNaN(math.sqrt(-1)))
+    assert(isNaN(math.sqrt(-math.huge)))
+end
+
+-- math.log edge cases
+local function math_log_edge_cases_test()
+    assert(math.log(1) == 0)
+    assert(math.log(math.exp(1)) == 1)
+    assert(math.log(math.huge) == math.huge)
+
+    -- log of negative is NaN
+    assert(isNaN(math.log(-1)))
+
+    -- log of 0 is -inf
+    assert(math.log(0) == -math.huge)
+
+    -- log with base
+    assert(eq(math.log(8, 2), 3))
+    assert(eq(math.log(1000, 10), 3))
+end
+
+-- math.exp edge cases
+local function math_exp_edge_cases_test()
+    assert(math.exp(0) == 1)
+    assert(math.exp(math.huge) == math.huge)
+    assert(math.exp(-math.huge) == 0)
+    assert(isNaN(math.exp(0/0)))
+end
+
+-- math.atan with two arguments
+local function math_atan_with_two_arguments_test()
+    assert(eq(math.atan(0, 1), 0))
+    assert(eq(math.atan(1, 0), math.pi / 2))
+    assert(eq(math.atan(-1, 0), -math.pi / 2))
+    assert(eq(math.atan(0, -1), math.pi))
+end
+
+-- math.random range validation
+local function math_random_range_validation_test()
+    -- Random with range
+    for i = 1, 100 do
+        local r = math.random(5, 10)
+        assert(r >= 5 and r <= 10)
+    end
+
+    -- Single bound
+    for i = 1, 100 do
+        local r = math.random(100)
+        assert(r >= 1 and r <= 100)
+    end
+end
+
+-- math.fmod edge cases
+local function math_fmod_edge_cases_test()
+    assert(math.fmod(5, 3) == 2)
+    assert(math.fmod(-5, 3) == -2)
+    assert(math.fmod(5, -3) == 2)
+    assert(math.fmod(-5, -3) == -2)
+
+    -- With float
+    assert(eq(math.fmod(5.5, 2), 1.5))
+
+    -- Large values
+    assert(math.fmod(maxint, 3) == maxint % 3)
+end
+
+-- integer to float conversion at boundaries
+local function integer_to_float_conversion_at_boundaries_test()
+    -- When integer is exactly representable as float
+    local n = 2^50  -- well within double precision range
+    local as_float = n + 0.0
+    assert(math.type(as_float) == "float")
+
+    -- Basic conversion works
+    assert(math.type(123) == "integer")
+    assert(math.type(123.0) == "float")
+    assert(math.type(123 + 0.0) == "float")
+end
+
+-- bitwise operations at boundaries
+local function bitwise_operations_at_boundaries_test()
+    -- Basic bitwise not
+    assert(~0 == -1)
+
+    -- Shift right
+    assert(maxint >> 1 == maxint // 2)
+
+    -- Bitwise operations preserve type
+    assert(math.type(maxint & maxint) == "integer")
+    assert(math.type(maxint | 0) == "integer")
+    assert(math.type(~0) == "integer")
+end
+
+-- ult (unsigned less than)
+local function ult_unsigned_less_than_test()
+    assert(math.ult(0, 1))
+    assert(not math.ult(1, 0))
+    assert(math.ult(-1, 0) == false)  -- -1 as unsigned is maxuint
+    assert(math.ult(0, -1))  -- 0 < maxuint
+end
+
+
+-- ===== ported from h1/mathx.lus =====
+-- Math module completion tests.
+--
+-- This suite fills the gaps around the math library that the ported Lua suite
+-- in math.lus leaves open. It pins the two return values of math.frexp, the
+-- round trip between frexp and ldexp, the full contract of math.random and
+-- math.randomseed including every documented error path, the integer subtype
+-- of floor and ceil, tointeger edge cases, the integer limit matrix around
+-- mininteger, and the semantics of the numeric for loop under Lus rules.
+
+
+local math = math
+
+local minint, maxint = math.mininteger, math.maxinteger
+
+local function isNaN(x)
+    return x ~= x
+end
+
+-- ============================================================
+-- math.frexp
+-- ============================================================
+
+-- math.frexp.
+
+-- The decomposition returns a mantissa and an integer exponent so that
+-- x equals mantissa times two raised to the exponent.
+-- frexp decomposes x into mantissa and exponent
+local frexp_decomposes_x_into_mantissa_and_exponent_cases = {
+    {8.0, 0.5, 4},
+    {1.0, 0.5, 1},
+    {2.0, 0.5, 2},
+    {0.5, 0.5, 0},
+    {0.25, 0.5, -1},
+    {-8.0, -0.5, 4},
+    {3.0, 0.75, 2},
+    {1024.0, 0.5, 11},
+}
+
+local function frexp_decomposes_x_into_mantissa_and_exponent_test(x, m, e)
+    local am, ae = math.frexp(x)
+    assert(am == m)
+    assert(ae == e)
+end
+
+-- The exponent return is always an integer subtype and the mantissa is a float.
+-- frexp returns integer exponent and float mantissa
+local function frexp_returns_integer_exponent_and_float_mantissa_test()
+    local m, e = math.frexp(8.0)
+    assert(math.type(m) == "float")
+    assert(math.type(e) == "integer")
+    -- select confirms the second return value directly.
+    assert(math.type(select(2, math.frexp(8.0))) == "integer")
+end
+
+-- The reconstruction invariant must hold across positive, negative, and
+-- fractional magnitudes, including a subnormal input.
+-- frexp reconstruction invariant holds
+local frexp_reconstruction_invariant_holds_cases = {
+    {123.456},
+    {-8.0},
+    {0.001},
+    {7.0},
+    {1e300},
+    {-1e-200},
+    {2.0 ^ -1074},
+}
+
+local function frexp_reconstruction_invariant_holds_test(x)
+    local m, e = math.frexp(x)
+    assert(m * 2.0 ^ e == x)
+end
+
+-- Every normal nonzero input yields a mantissa whose magnitude is in [0.5, 1).
+-- frexp mantissa magnitude is in half-open unit interval
+local frexp_mantissa_magnitude_is_in_half_open_unit_interval_cases = {
+    {1.0}, {1000000.0}, {-0.001}, {7.0}, {maxint + 0.0}, {2.0 ^ -1074},
+}
+
+local function frexp_mantissa_magnitude_is_in_half_open_unit_interval_test(x)
+    local m = math.frexp(x)
+    local mag = math.abs(m)
+    assert(mag >= 0.5 and mag < 1.0)
+end
+
+-- Zero decomposes to a zero mantissa and a zero exponent, and the sign of a
+-- negative zero mantissa is preserved.
+-- frexp of zero preserves sign and yields zero exponent
+local function frexp_of_zero_preserves_sign_and_yields_zero_exponent_test()
+    local m, e = math.frexp(0.0)
+    assert(m == 0.0)
+    assert(e == 0)
+    local mn, en = math.frexp(-0.0)
+    assert(en == 0)
+    -- A negative zero divides to negative infinity, which distinguishes it.
+    assert(1.0 / mn == -math.huge)
+end
+
+-- An integer argument is accepted and behaves like its float value.
+-- frexp accepts an integer argument
+local function frexp_accepts_an_integer_argument_test()
+    local m, e = math.frexp(3)
+    assert(m == 0.75)
+    assert(e == 2)
+end
+
+-- Infinite and not-a-number inputs propagate through the mantissa.
+-- frexp propagates infinity and nan through the mantissa
+local function frexp_propagates_infinity_and_nan_through_the_mantissa_test()
+    local m = math.frexp(math.huge)
+    assert(m == math.huge)
+    local mn = math.frexp(-math.huge)
+    assert(mn == -math.huge)
+    local mnan = math.frexp(0 / 0)
+    assert(isNaN(mnan))
+end
+
+-- A non-number argument raises an error.
+-- frexp rejects a non-number argument
+local function frexp_rejects_a_non_number_argument_test()
+    raises(function() return math.frexp({}) end)
+    raises(function() return math.frexp(nil) end)
+end
+
+-- ============================================================
+-- math.ldexp
+-- ============================================================
+
+-- math.ldexp.
+
+-- ldexp multiplies the mantissa by two raised to the exponent.
+-- ldexp scales the mantissa by a power of two
+local ldexp_scales_the_mantissa_by_a_power_of_two_cases = {
+    {1.0, 10, 1024.0},
+    {1.0, 1, 2.0},
+    {1.0, 0, 1.0},
+    {1.0, -1, 0.5},
+    {3.0, 4, 48.0},
+    {-1.0, 3, -8.0},
+    {0.5, 2, 2.0},
+}
+
+local function ldexp_scales_the_mantissa_by_a_power_of_two_test(m, e, expected)
+    assert(math.ldexp(m, e) == expected)
+end
+
+-- The result is always a float, even when the mantissa is an integer.
+-- ldexp always returns a float
+local function ldexp_always_returns_a_float_test()
+    assert(math.type(math.ldexp(3, 0)) == "float")
+    assert(math.type(math.ldexp(1, 10)) == "float")
+end
+
+-- A very large exponent overflows to infinity and a very small one flushes
+-- the result to zero.
+-- ldexp overflows and underflows to infinity and zero
+local function ldexp_overflows_and_underflows_to_infinity_and_zero_test()
+    assert(math.ldexp(1, 10000) == math.huge)
+    assert(math.ldexp(-1, 10000) == -math.huge)
+    assert(math.ldexp(1, -10000) == 0.0)
+end
+
+-- A float exponent with an exact integer value is accepted.
+-- ldexp accepts a float exponent with an integer value
+local function ldexp_accepts_a_float_exponent_with_an_integer_value_test()
+    assert(math.ldexp(1, 10.0) == 1024.0)
+end
+
+-- A fractional exponent has no integer representation and raises an error.
+-- ldexp rejects a fractional exponent
+local function ldexp_rejects_a_fractional_exponent_test()
+    raises(function() return math.ldexp(1, 1.5) end, "no integer representation")
+end
+
+-- Infinite and not-a-number mantissas propagate through the result.
+-- ldexp propagates infinity and nan through the mantissa
+local function ldexp_propagates_infinity_and_nan_through_the_mantissa_test()
+    assert(math.ldexp(math.huge, 0) == math.huge)
+    assert(math.ldexp(-math.huge, 5) == -math.huge)
+    assert(isNaN(math.ldexp(0 / 0, 3)))
+end
+
+-- A non-number first argument raises an error.
+-- ldexp rejects a non-number mantissa
+local function ldexp_rejects_a_non_number_mantissa_test()
+    raises(function() return math.ldexp({}, 1) end)
+end
+
+-- The round trip through frexp and ldexp reconstructs the original value.
+-- ldexp inverts frexp
+local ldexp_inverts_frexp_cases = {
+    {123.456}, {-8.0}, {0.0}, {7.0}, {1e-200}, {maxint + 0.0},
+}
+
+local function ldexp_inverts_frexp_test(x)
+    local m, e = math.frexp(x)
+    assert(math.ldexp(m, e) == x)
+end
+
+-- ============================================================
+-- math.random
+-- ============================================================
+
+-- math.random.
+
+-- The no-argument form returns a float in the half-open interval from zero
+-- up to but not including one.
+-- random with no argument returns a float in [0, 1)
+local function random_with_no_argument_returns_a_float_in_0_1_test()
+    for i = 1, 200 do
+        local r = math.random()
+        assert(math.type(r) == "float")
+        assert(r >= 0.0 and r < 1.0)
+    end
+end
+
+-- The single-argument form returns an integer in the inclusive range from one
+-- to the bound, and observes both endpoints over enough draws.
+-- random with one bound returns an integer in [1, m]
+local function random_with_one_bound_returns_an_integer_in_1_m_test()
+    local saw_low, saw_high = false, false
+    for i = 1, 400 do
+        local r = math.random(4)
+        assert(math.type(r) == "integer")
+        assert(r >= 1 and r <= 4)
+        if r == 1 then saw_low = true end
+        if r == 4 then saw_high = true end
+    end
+    assert(saw_low)
+    assert(saw_high)
+end
+
+-- The two-argument form returns an integer in the inclusive range, including
+-- for negative intervals.
+-- random with two bounds stays inside the inclusive interval
+local random_with_two_bounds_stays_inside_the_inclusive_interval_cases = {
+    {5, 10},
+    {-10, -5},
+    {-3, 3},
+    {0, 1},
+}
+
+local function random_with_two_bounds_stays_inside_the_inclusive_interval_test(lo, hi)
+    for i = 1, 200 do
+        local r = math.random(lo, hi)
+        assert(math.type(r) == "integer")
+        assert(r >= lo and r <= hi)
+    end
+end
+
+-- A degenerate interval whose bounds are equal always returns that value.
+-- random of a single-point interval returns that point
+local function random_of_a_single_point_interval_returns_that_point_test()
+    for i = 1, 20 do
+        assert(math.random(7, 7) == 7)
+    end
+end
+
+-- The full-range special case of a single zero argument returns an integer
+-- drawn from the entire integer domain, so it may be negative.
+-- random of zero draws from the full integer range
+local function random_of_zero_draws_from_the_full_integer_range_test()
+    local saw_negative = false
+    for i = 1, 400 do
+        local r = math.random(0)
+        assert(math.type(r) == "integer")
+        if r < 0 then saw_negative = true end
+    end
+    assert(saw_negative)
+end
+
+-- The extreme interval spanning the whole integer range succeeds and returns
+-- an integer, exercising the unsigned projection path.
+-- random over the whole integer range returns an integer
+local function random_over_the_whole_integer_range_returns_an_integer_test()
+    for i = 1, 50 do
+        local r = math.random(minint, maxint)
+        assert(math.type(r) == "integer")
+    end
+end
+
+-- An empty interval where the low bound exceeds the high bound raises.
+-- random of an empty interval raises
+local function random_of_an_empty_interval_raises_test()
+    raises(function() return math.random(5, 2) end, "interval is empty")
+    raises(function() return math.random(1, 0) end, "interval is empty")
+end
+
+-- More than two arguments raises a wrong-number-of-arguments error.
+-- random rejects more than two arguments
+local function random_rejects_more_than_two_arguments_test()
+    raises(function() return math.random(1, 2, 3) end, "wrong number of arguments")
+end
+
+-- Non-integer numeric bounds have no integer representation and raise.
+-- random rejects fractional bounds
+local function random_rejects_fractional_bounds_test()
+    raises(function() return math.random(1.5) end, "no integer representation")
+    raises(function() return math.random(1, 2.5) end, "no integer representation")
+end
+
+-- A non-numeric bound raises a bad-argument error.
+-- random rejects a non-numeric bound
+local function random_rejects_a_non_numeric_bound_test()
+    raises(function() return math.random({}) end)
+end
+
+-- ============================================================
+-- math.randomseed
+-- ============================================================
+
+-- math.randomseed.
+
+-- Seeding with an explicit value returns the two seed components as integers,
+-- and the second defaults to zero.
+-- randomseed returns the two seed components as integers
+local function randomseed_returns_the_two_seed_components_as_integers_test()
+    local a, b = math.randomseed(100)
+    assert(math.type(a) == "integer")
+    assert(math.type(b) == "integer")
+    assert(a == 100)
+    assert(b == 0)
+end
+
+-- Equal explicit seeds produce equal sequences.
+-- equal seeds produce equal sequences
+local function equal_seeds_produce_equal_sequences_test()
+    math.randomseed(4242)
+    local first = {}
+    for i = 1, 8 do first[i] = math.random(1, 1000000000) end
+    math.randomseed(4242)
+    for i = 1, 8 do
+        assert(math.random(1, 1000000000) == first[i])
+    end
+end
+
+-- Reseeding with the pair returned by a no-argument call reproduces the
+-- sequence that follows it.
+-- reseeding with the returned pair reproduces the sequence
+local function reseeding_with_the_returned_pair_reproduces_the_sequence_test()
+    local a, b = math.randomseed()
+    local first = {}
+    for i = 1, 8 do first[i] = math.random(1, 1000000000) end
+    math.randomseed(a, b)
+    for i = 1, 8 do
+        assert(math.random(1, 1000000000) == first[i])
+    end
+end
+
+-- The two-argument form is deterministic and a different second component
+-- yields a different sequence than seeding with the first alone.
+-- the two-argument seed is deterministic and the second component matters
+local function the_two_argument_seed_is_deterministic_and_the_second_component_matter_test()
+    math.randomseed(100, 200)
+    local a1 = math.random(1, 1000000000)
+    math.randomseed(100, 200)
+    local a2 = math.random(1, 1000000000)
+    assert(a1 == a2)
+
+    math.randomseed(100, 0)
+    local b1 = math.random(1, 1000000000)
+    math.randomseed(100, 999)
+    local b2 = math.random(1, 1000000000)
+    assert(b1 ~= b2)
+end
+
+-- A float seed with an exact integer value is accepted, and a fractional seed
+-- has no integer representation and raises.
+-- randomseed accepts an integer-valued float and rejects a fractional one
+local function randomseed_accepts_an_integer_valued_float_and_rejects_a_fractional_on_test()
+    local a, b = math.randomseed(100.0)
+    assert(a == 100)
+    raises(function() return math.randomseed(1.5) end, "no integer representation")
+end
+
+-- ============================================================
+-- floor and ceil subtypes and huge floats
+-- ============================================================
+
+-- math.floor and math.ceil.
+
+-- On values that fit in an integer, floor and ceil return the integer subtype.
+-- floor and ceil return the integer subtype for representable results
+local floor_and_ceil_return_the_integer_subtype_for_representable_results_cases = {
+    {3.4, 3, 4},
+    {-3.4, -4, -3},
+    {0.0, 0, 0},
+    {2.0 ^ 50, 2 ^ 50 // 1, 2 ^ 50 // 1},
+}
+
+local function floor_and_ceil_return_the_integer_subtype_for_representable_results_test(x, fl, ce)
+    local f, c = math.floor(x), math.ceil(x)
+    assert(f == fl)
+    assert(c == ce)
+    assert(math.type(f) == "integer")
+    assert(math.type(c) == "integer")
+end
+
+-- An integer argument keeps its integer subtype.
+-- floor and ceil of an integer keep the integer subtype
+local function floor_and_ceil_of_an_integer_keep_the_integer_subtype_test()
+    assert(math.type(math.floor(7)) == "integer")
+    assert(math.type(math.ceil(7)) == "integer")
+    assert(math.floor(minint) == minint)
+    assert(math.ceil(maxint) == maxint)
+end
+
+-- A float too large to fit in an integer stays a float rather than erroring or
+-- saturating.
+-- floor and ceil of a huge float return the float unchanged
+local floor_and_ceil_of_a_huge_float_return_the_float_unchanged_cases = {
+    {1e300}, {-1e300}, {math.huge}, {-math.huge},
+}
+
+local function floor_and_ceil_of_a_huge_float_return_the_float_unchanged_test(x)
+    local f, c = math.floor(x), math.ceil(x)
+    assert(f == x)
+    assert(c == x)
+    assert(math.type(f) == "float")
+    assert(math.type(c) == "float")
+end
+
+-- ============================================================
+-- math.tointeger edge cases
+-- ============================================================
+
+-- math.tointeger.
+
+-- Integers and integer-valued floats convert, while fractional and
+-- non-representable inputs return nothing.
+-- tointeger converts only integral numbers
+local tointeger_converts_only_integral_numbers_cases = {
+    {3.0, 3},
+    {-7.0, -7},
+    {minint + 0.0, minint},
+    {3.5, nil},
+    {0.1, nil},
+    {math.huge, nil},
+    {-math.huge, nil},
+    {0 / 0, nil},
+    {2.0 ^ 63, nil},
+}
+
+local function tointeger_converts_only_integral_numbers_test(x, expected)
+    local got = math.tointeger(x)
+    if expected == nil then
+        assert(got == nil)
+    else
+        assert(got == expected)
+        assert(math.type(got) == "integer")
+    end
+end
+
+-- The integer limits round-trip through tointeger unchanged.
+-- tointeger preserves the integer limits
+local function tointeger_preserves_the_integer_limits_test()
+    assert(math.tointeger(minint) == minint)
+    assert(math.tointeger(maxint) == maxint)
+    -- The negation of mininteger as a float overflows the integer range.
+    assert(math.tointeger(0.0 - minint) == nil)
+end
+
+-- A numeric string that names an integer is coerced, matching reference Lua.
+-- tointeger coerces an integer-valued string
+local function tointeger_coerces_an_integer_valued_string_test()
+    assert(math.tointeger("3") == 3)
+    assert(math.tointeger("3.5") == nil)
+    assert(math.tointeger("abc") == nil)
+end
+
+-- ============================================================
+-- integer limit matrix around mininteger
+-- ============================================================
+
+-- integer limits.
+
+-- Wraparound arithmetic behaves as two's complement across the limits.
+-- addition, subtraction, and multiplication wrap around the limits
+local function addition_subtraction_and_multiplication_wrap_around_the_limits_test()
+    assert(maxint + 1 == minint)
+    assert(minint - 1 == maxint)
+    assert(maxint * 2 == -2)
+    assert(math.type(maxint + 1) == "integer")
+end
+
+-- Unary minus of mininteger wraps back to itself because it has no positive
+-- counterpart.
+-- unary minus and abs of mininteger return mininteger
+local function unary_minus_and_abs_of_mininteger_return_mininteger_test()
+    assert(-minint == minint)
+    assert(math.abs(minint) == minint)
+    assert(math.type(math.abs(minint)) == "integer")
+end
+
+-- Floor division and modulo of mininteger by negative one avoid the overflow
+-- trap and return well-defined integer results.
+-- mininteger divided and moduloed by negative one is defined
+local function mininteger_divided_and_moduloed_by_negative_one_is_defined_test()
+    assert(minint // -1 == minint)
+    assert(math.type(minint // -1) == "integer")
+    assert(minint % -1 == 0)
+    assert(math.type(minint % -1) == "integer")
+end
+
+-- math.fmod of mininteger by negative one returns zero rather than trapping.
+-- fmod of mininteger by negative one is zero
+local function fmod_of_mininteger_by_negative_one_is_zero_test()
+    assert(math.fmod(minint, -1) == 0)
+    assert(math.type(math.fmod(minint, -1)) == "integer")
+    -- fmod by zero on integers still raises.
+    raises(function() return math.fmod(3, 0) end, "zero")
+end
+
+-- math.ult compares operands as unsigned across all sign quadrants.
+-- ult compares operands as unsigned integers
+local ult_compares_operands_as_unsigned_integers_cases = {
+    {0, 1, true},
+    {1, 0, false},
+    {-1, 0, false},
+    {0, -1, true},
+    {minint, maxint, false},
+    {maxint, minint, true},
+    {-1, -2, false},
+    {-2, -1, true},
+}
+
+local function ult_compares_operands_as_unsigned_integers_test(a, b, expected)
+    assert(math.ult(a, b) == expected)
+end
+
+-- ============================================================
+-- numeric for loop semantics
+-- ============================================================
+
+-- numeric for.
+
+-- A loop that ends exactly at maxinteger terminates rather than overflowing
+-- into an endless cycle.
+-- an integer loop ending at maxinteger terminates
+local function an_integer_loop_ending_at_maxinteger_terminates_test()
+    local count = 0
+    for i = maxint - 2, maxint do
+        count = count + 1
+    end
+    assert(count == 3)
+end
+
+-- A zero step raises a dedicated error.
+-- a zero step raises
+local function a_zero_step_raises_test()
+    raises(function()
+        for i = 1, 10, 0 do end
+    end, "'for' step is zero")
+end
+
+-- The final value of an integer loop is the limit itself and keeps its subtype.
+-- the last value of an integer loop is the limit
+local function the_last_value_of_an_integer_loop_is_the_limit_test()
+    local last
+    for i = 1, 5 do last = i end
+    assert(last == 5)
+    assert(math.type(last) == "integer")
+end
+
+-- Backward loops with a negative step count down and stop at the limit.
+-- a backward loop counts down to the limit
+local function a_backward_loop_counts_down_to_the_limit_test()
+    local seen = {}
+    for i = 5, 1, -1 do seen[#seen + 1] = i end
+    assert(#seen == 5)
+    assert(seen[1] == 5)
+    assert(seen[5] == 1)
+end
+
+-- A negative step whose start is below the limit runs zero times.
+-- a negative step with an ascending range runs zero times
+local function a_negative_step_with_an_ascending_range_runs_zero_times_test()
+    local count = 0
+    for i = 1, 5, -1 do count = count + 1 end
+    assert(count == 0)
+end
+
+-- A positive step whose start is above the limit runs zero times.
+-- a positive step with a descending range runs zero times
+local function a_positive_step_with_a_descending_range_runs_zero_times_test()
+    local count = 0
+    for i = 5, 1, 1 do count = count + 1 end
+    assert(count == 0)
+end
+
+-- A float loop accumulates the step and produces float control values.
+-- a float loop accumulates its step
+local function a_float_loop_accumulates_its_step_test()
+    local vals = {}
+    for i = 0.0, 1.0, 0.25 do vals[#vals + 1] = i end
+    assert(#vals == 5)
+    assert(vals[1] == 0.0)
+    assert(vals[5] == 1.0)
+    assert(math.type(vals[1]) == "float")
+end
+
+-- With an integer start and step, a float limit converts by truncation toward
+-- the limit as reference Lua specifies.
+-- a float limit with an integer start converts per Lua rules
+local a_float_limit_with_an_integer_start_converts_per_lua_rules_cases = {
+    {1, 3.5, 1, 3},
+    {1, 3.9, 1, 3},
+    {5, 1.5, -1, 4},
+    {5, 1.1, -1, 4},
+}
+
+local function a_float_limit_with_an_integer_start_converts_per_lua_rules_test(start, limit, step, expected)
+    local count = 0
+    for i = start, limit, step do count = count + 1 end
+    assert(count == expected)
+end
+
+-- A float start with an integer limit runs as a float loop.
+-- a float start makes the loop run over floats
+local function a_float_start_makes_the_loop_run_over_floats_test()
+    local vals = {}
+    for i = 1.5, 5 do vals[#vals + 1] = i end
+    assert(#vals == 4)
+    assert(math.type(vals[1]) == "float")
+    assert(vals[1] == 1.5)
+end
+
+-- The loop control variable is immutable, so assigning to it is a compile
+-- error under Lus.
+-- the loop control variable is immutable
+local function the_loop_control_variable_is_immutable_test()
+    local fn, err = load("for i = 1, 3 do i = i + 1 end")
+    assert(fn == nil)
+    assert(string.find(tostring(err), "const"))
+end
+
+-- An unbounded float limit of infinity lets the loop run until an explicit
+-- break, confirming the limit is honored rather than converted to an integer.
+-- a loop with an infinite float limit is bounded only by break
+local function a_loop_with_an_infinite_float_limit_is_bounded_only_by_break_test()
+    local count = 0
+    for i = 1, math.huge do
+        count = count + 1
+        if count >= 3 then break end
+    end
+    assert(count == 3)
+end

@@ -1,0 +1,1360 @@
+pledge("load", "fs:read=" .. TEST_DIR .. "/fixtures/json", "fs:read=" .. TEST_DIR .. "/fixtures/json/*")
+
+-- ===== ported from h1/json.lus =====
+-- fromjson parses null as nil
+local function fromjson_parses_null_as_nil_test()
+    local result = fromjson("null")
+    assert(result == nil, "null should parse to nil")
+end
+
+-- fromjson parses true
+local function fromjson_parses_true_test()
+    local result = fromjson("true")
+    assert(result == true, "true should parse to true")
+end
+
+-- fromjson parses false
+local function fromjson_parses_false_test()
+    local result = fromjson("false")
+    assert(result == false, "false should parse to false")
+end
+
+-- fromjson parses integer
+local function fromjson_parses_integer_test()
+    local result = fromjson("42")
+    assert(result == 42, "42 should parse to 42")
+end
+
+-- fromjson parses negative integer
+local function fromjson_parses_negative_integer_test()
+    local result = fromjson("-123")
+    assert(result == -123, "-123 should parse to -123")
+end
+
+-- fromjson parses float
+local function fromjson_parses_float_test()
+    local result = fromjson("-3.14")
+    assert(result == -3.14, "-3.14 should parse to -3.14")
+end
+
+-- fromjson parses exponential notation
+local function fromjson_parses_exponential_notation_test()
+    local result = fromjson("1.5e10")
+    assert(result == 1.5e10, "1.5e10 should parse correctly")
+end
+
+-- fromjson parses simple string
+local function fromjson_parses_simple_string_test()
+    local result = fromjson('"hello"')
+    assert(result == "hello", '"hello" should parse to hello')
+end
+
+-- fromjson parses empty string
+local function fromjson_parses_empty_string_test()
+    local result = fromjson('""')
+    assert(result == "", '"" should parse to empty string')
+end
+
+-- fromjson parses escape sequences
+local function fromjson_parses_escape_sequences_test()
+    assert(fromjson('"a\\nb"') == "a\nb", "\\n should become newline")
+    assert(fromjson('"a\\tb"') == "a\tb", "\\t should become tab")
+    assert(fromjson('"a\\\\b"') == "a\\b", "\\\\ should become backslash")
+    assert(fromjson('"a\\"b"') == 'a"b', '\\" should become quote')
+end
+
+-- fromjson parses unicode escape
+local function fromjson_parses_unicode_escape_test()
+    local result = fromjson('"\\u0041"')
+    assert(result == "A", "\\u0041 should be A")
+end
+
+-- fromjson parses surrogate pairs
+local function fromjson_parses_surrogate_pairs_test()
+    -- U+1F600 (grinning face) = \uD83D\uDE00
+    local result = fromjson('"\\uD83D\\uDE00"')
+    assert(result == "\xF0\x9F\x98\x80", "surrogate pair should decode correctly")
+end
+
+-- fromjson parses empty array
+local function fromjson_parses_empty_array_test()
+    local result = fromjson("[]")
+    assert(type(result) == "table", "[] should be table")
+    assert(#result == 0, "[] should be empty")
+end
+
+-- fromjson parses array with values
+local function fromjson_parses_array_with_values_test()
+    local result = fromjson("[1, 2, 3]")
+    assert(type(result) == "table", "[1,2,3] should be table")
+    assert(result[1] == 1, "first element should be 1")
+    assert(result[2] == 2, "second element should be 2")
+    assert(result[3] == 3, "third element should be 3")
+end
+
+-- fromjson parses nested array
+local function fromjson_parses_nested_array_test()
+    local result = fromjson("[[1, 2], [3, 4]]")
+    assert(result[1][1] == 1, "nested access failed")
+    assert(result[2][2] == 4, "nested access failed")
+end
+
+-- fromjson parses empty object
+local function fromjson_parses_empty_object_test()
+    local result = fromjson("{}")
+    assert(type(result) == "table", "{} should be table")
+end
+
+-- fromjson parses object with values
+local function fromjson_parses_object_with_values_test()
+    local result = fromjson('{"name":"test","value":123}')
+    assert(result.name == "test", "name should be test")
+    assert(result.value == 123, "value should be 123")
+end
+
+-- fromjson parses nested object
+local function fromjson_parses_nested_object_test()
+    local result = fromjson('{"a":{"b":{"c":42}}}')
+    assert(result.a.b.c == 42, "nested access should work")
+end
+
+-- fromjson parses mixed nested structure
+local function fromjson_parses_mixed_nested_structure_test()
+    local result = fromjson('{"arr":[1,2],"obj":{"x":true}}')
+    assert(result.arr[1] == 1, "array in object failed")
+    assert(result.obj.x == true, "object in object failed")
+end
+
+-- fromjson handles whitespace
+local function fromjson_handles_whitespace_test()
+    local result = fromjson('  { "a" : 1 }  ')
+    assert(result.a == 1, "whitespace should be ignored")
+end
+
+-- fromjson rejects invalid JSON
+local function fromjson_rejects_invalid_json_test()
+    local ok, err = catch fromjson("not json")
+    assert(ok == false, "invalid JSON should error")
+end
+
+-- fromjson rejects trailing comma in array
+local function fromjson_rejects_trailing_comma_in_array_test()
+    local ok, err = catch fromjson("[1, 2,]")
+    assert(ok == false, "trailing comma should error")
+end
+
+-- fromjson rejects unquoted keys
+local function fromjson_rejects_unquoted_keys_test()
+    local ok, err = catch fromjson("{key: 1}")
+    assert(ok == false, "unquoted keys should error")
+end
+
+-- fromjson rejects single quotes
+local function fromjson_rejects_single_quotes_test()
+    local ok, err = catch fromjson("'hello'")
+    assert(ok == false, "single quotes should error")
+end
+
+-- fromjson rejects control characters in string
+local function fromjson_rejects_control_characters_in_string_test()
+    local ok, err = catch fromjson('"hello\tworld"')
+    assert(ok == false, "unescaped tab should error")
+end
+
+-- fromjson rejects out-of-range numbers
+local function fromjson_rejects_out_of_range_numbers_test()
+    local bad = {
+        "9223372036854775808",
+        "-9223372036854775809",
+        "1e309",
+        "-1e309",
+    }
+    for _, json in ipairs(bad) do
+        local ok, err = catch fromjson(json)
+        assert(ok == false, "out-of-range number should error: " .. json)
+        assert(tostring(err):find("number out of range"), "error should mention range")
+    end
+end
+
+-- tojson serializes nil as null
+local function tojson_serializes_nil_as_null_test()
+    local result = tojson(nil)
+    assert(result == "null", "nil should serialize to null")
+end
+
+-- tojson serializes true
+local function tojson_serializes_true_test()
+    local result = tojson(true)
+    assert(result == "true", "true should serialize to true")
+end
+
+-- tojson serializes false
+local function tojson_serializes_false_test()
+    local result = tojson(false)
+    assert(result == "false", "false should serialize to false")
+end
+
+-- tojson serializes integer
+local function tojson_serializes_integer_test()
+    local result = tojson(42)
+    assert(result == "42", "42 should serialize to 42")
+end
+
+-- tojson serializes negative integer
+local function tojson_serializes_negative_integer_test()
+    local result = tojson(-123)
+    assert(result == "-123", "-123 should serialize to -123")
+end
+
+-- tojson serializes simple string
+local function tojson_serializes_simple_string_test()
+    local result = tojson("hello")
+    assert(result == '"hello"', "hello should serialize to \"hello\"")
+end
+
+-- tojson escapes special characters
+local function tojson_escapes_special_characters_test()
+    assert(tojson("a\nb") == '"a\\nb"', "newline should be escaped")
+    assert(tojson("a\tb") == '"a\\tb"', "tab should be escaped")
+    assert(tojson("a\\b") == '"a\\\\b"', "backslash should be escaped")
+    assert(tojson('a"b') == '"a\\"b"', "quote should be escaped")
+end
+
+-- tojson serializes empty table as empty array
+local function tojson_serializes_empty_table_as_empty_array_test()
+    local result = tojson({})
+    assert(result == "[]", "empty table should be []")
+end
+
+-- tojson serializes array
+local function tojson_serializes_array_test()
+    local result = tojson({1, 2, 3})
+    assert(result == "[1,2,3]", "array should serialize correctly")
+end
+
+-- tojson serializes object
+local function tojson_serializes_object_test()
+    local result = tojson({a = 1})
+    assert(result == '{"a":1}', "object should serialize correctly")
+end
+
+-- tojson serializes nested structure
+local function tojson_serializes_nested_structure_test()
+    local data = {arr = {1, 2}, obj = {x = true}}
+    local result = tojson(data)
+    -- Order of keys is not guaranteed, so check for presence
+    assert(result:find('"arr"'), "should contain arr key")
+    assert(result:find('%[1,2%]'), "should contain array value")
+end
+
+-- tojson handles inf as null
+local function tojson_handles_inf_as_null_test()
+    local result = tojson(1/0)
+    assert(result == "null", "inf should serialize as null")
+end
+
+-- tojson handles -inf as null
+local function tojson_handles_inf_as_null_2_test()
+    local result = tojson(-1/0)
+    assert(result == "null", "-inf should serialize as null")
+end
+
+-- tojson handles nan as null
+local function tojson_handles_nan_as_null_test()
+    local result = tojson(0/0)
+    assert(result == "null", "nan should serialize as null")
+end
+
+-- tojson calls __json metamethod
+local function tojson_calls_json_metamethod_test()
+    local mt = {
+        __json = function(self)
+            return {id = self.secret}
+        end
+    }
+    local obj = setmetatable({secret = 42, private = "hidden"}, mt)
+    local result = tojson(obj)
+    assert(result == '{"id":42}', "__json should transform value")
+end
+
+-- tojson filter can omit properties
+local function tojson_filter_can_omit_properties_test()
+    local data = {a = 1, b = 2, c = 3}
+    local result = tojson(data, function(k, v)
+        if k == "b" then return nil end
+        return v
+    end)
+    assert(not result:find('"b"'), "b should be omitted")
+    assert(result:find('"a"'), "a should be present")
+    assert(result:find('"c"'), "c should be present")
+end
+
+-- tojson filter can transform values
+local function tojson_filter_can_transform_values_test()
+    local data = {x = "original"}
+    local result = tojson(data, function(k, v)
+        if k == "x" then return "transformed" end
+        return v
+    end)
+    assert(result == '{"x":"transformed"}', "filter should transform value")
+end
+
+-- tojson skips functions
+local function tojson_skips_functions_test()
+    local data = {a = 1, fn = function() end}
+    local result = tojson(data)
+    assert(not result:find("fn"), "functions should be skipped")
+end
+
+-- tojson detects circular references
+local function tojson_detects_circular_references_test()
+    local a = {}
+    a.self = a
+    local ok, err = catch tojson(a)
+    assert(ok == false, "circular reference should error")
+end
+
+-- ============================================================
+-- roundtrip tests
+-- ============================================================
+
+-- roundtrip preserves string
+local function roundtrip_preserves_string_test()
+    local original = "hello world"
+    local result = fromjson(tojson(original))
+    assert(result == original, "string roundtrip failed")
+end
+
+-- roundtrip preserves number
+local function roundtrip_preserves_number_test()
+    local original = 123.456
+    local result = fromjson(tojson(original))
+    assert(result == original, "number roundtrip failed")
+end
+
+-- roundtrip preserves boolean
+local function roundtrip_preserves_boolean_test()
+    assert(fromjson(tojson(true)) == true, "true roundtrip failed")
+    assert(fromjson(tojson(false)) == false, "false roundtrip failed")
+end
+
+-- roundtrip preserves nil
+local function roundtrip_preserves_nil_test()
+    local result = fromjson(tojson(nil))
+    assert(result == nil, "nil roundtrip failed")
+end
+
+-- roundtrip preserves simple object
+local function roundtrip_preserves_simple_object_test()
+    local original = {name = "test", value = 123, active = true}
+    local json = tojson(original)
+    local parsed = fromjson(json)
+    assert(parsed.name == "test", "name mismatch")
+    assert(parsed.value == 123, "value mismatch")
+    assert(parsed.active == true, "active mismatch")
+end
+
+-- roundtrip preserves nested structure
+local function roundtrip_preserves_nested_structure_test()
+    local original = {
+        level1 = {
+            level2 = {
+                data = "deep"
+            }
+        }
+    }
+    local json = tojson(original)
+    local parsed = fromjson(json)
+    assert(parsed.level1.level2.data == "deep", "nested roundtrip failed")
+end
+
+-- roundtrip preserves array
+local function roundtrip_preserves_array_test()
+    local original = {1, 2, 3, 4, 5}
+    local json = tojson(original)
+    local parsed = fromjson(json)
+    assert(#parsed == 5, "array length mismatch")
+    assert(parsed[3] == 3, "array value mismatch")
+end
+
+-- RFC 8259 Test Suite (if h1/json folder exists)
+local function readfile(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+local function get_json_test_files()
+    local json_dir = TEST_DIR .. "/fixtures/json"
+
+    -- Check if directory exists using fs.type
+    local ok = catch fs.type(json_dir)
+    if not ok then return nil end
+
+    -- Use fs.list to get JSON files
+    local list_ok, all_files = catch fs.list(json_dir, "*.json")
+    if not list_ok then return nil end
+
+    local files = {y = {}, n = {}, i = {}}
+
+    for idx = 1, #all_files do
+        local basename = all_files[idx]
+        local prefix = string.sub(basename, 1, 1)
+        local path = fs.path.join(json_dir, basename)
+
+        if prefix == "y" then
+            files.y[#files.y + 1] = {path = path, name = basename}
+        elseif prefix == "n" then
+            files.n[#files.n + 1] = {path = path, name = basename}
+        elseif prefix == "i" then
+            files.i[#files.i + 1] = {path = path, name = basename}
+        end
+    end
+
+    if #files.y == 0 and #files.n == 0 and #files.i == 0 then
+        return nil
+    end
+    return files
+end
+
+local json_files = get_json_test_files()
+
+-- Guard: the corpus expansion below is data-driven, so a missing or
+-- unreadable lus-tests/h1/json directory would silently drop hundreds
+-- of conformance tests. Fail loudly instead.
+-- RFC8259 corpus directory is present and yields fixture files
+local function rfc8259_corpus_directory_is_present_and_yields_fixture_files_test()
+    assert(json_files ~= nil,
+        "fixtures/json is missing, unreadable, or empty: "
+        .. "the RFC 8259 conformance tests were not generated")
+    assert(#json_files.y > 0, "no y_ (must-accept) fixture files found")
+    assert(#json_files.n > 0, "no n_ (must-reject) fixture files found")
+end
+
+local function must_read(path)
+    local content = readfile(path)
+    assert(content, "Failed to read file: " .. path)
+    return content
+end
+
+-- Corpus files are raw bytes, so some of them are not valid UTF-8. The reader
+-- hands the parser a vector and the parser accepts byte input.
+-- y_* files must parse successfully
+local y_files_parse_cases = {}
+-- n_* files must fail to parse
+local n_files_fail_cases = {}
+-- i_* files are implementation defined, so either outcome is acceptable
+local i_files_never_crash_cases = {}
+if json_files then
+    for _, file in ipairs(json_files.y) do y_files_parse_cases[#y_files_parse_cases + 1] = {file.path} end
+    for _, file in ipairs(json_files.n) do n_files_fail_cases[#n_files_fail_cases + 1] = {file.path} end
+    for _, file in ipairs(json_files.i) do i_files_never_crash_cases[#i_files_never_crash_cases + 1] = {file.path} end
+end
+
+local function y_files_parse_test(path)
+    fromjson(must_read(path))
+end
+
+local function n_files_fail_test(path)
+    local ok = catch fromjson(must_read(path))
+    assert(not ok, "Expected parse error but got success")
+end
+
+local function i_files_never_crash_test(path)
+    catch fromjson(must_read(path))
+end
+
+-- ============================================
+-- Key Escape Sequence Tests
+-- ============================================
+
+-- key escape sequences.
+
+-- parses \\/  \\b  \\f in object keys
+local function parses_b_f_in_object_keys_test()
+    local r = fromjson('{"a\\/b": 1}')
+    assert(r["a/b"] == 1)
+
+    r = fromjson('{"a\\bb": 2}')
+    assert(r["a\bb"] == 2)
+
+    r = fromjson('{"a\\fb": 3}')
+    assert(r["a\fb"] == 3)
+end
+
+-- parses \\uXXXX in object keys
+local function parses_uxxxx_in_object_keys_test()
+    local r = fromjson('{"\\u0041": 1}')
+    assert(r["A"] == 1)
+
+    r = fromjson('{"\\u00E9": 2}')
+    assert(r["\xC3\xA9"] == 2)  -- e-acute UTF-8
+end
+
+-- parses escapes in continuation object keys
+local function parses_escapes_in_continuation_object_keys_test()
+    local r = fromjson('{"first": 1, "a\\fb": 2, "\\u0042": 3}')
+    assert(r.first == 1)
+    assert(r["a\fb"] == 2)
+    assert(r["B"] == 3)
+end
+
+-- parses surrogate pairs in object keys
+local function parses_surrogate_pairs_in_object_keys_test()
+    local r = fromjson('{"\\uD83D\\uDE00": 1}')
+    local emoji = "\xF0\x9F\x98\x80"
+    assert(r[emoji] == 1)
+end
+
+-- ============================================
+-- Stress Tests
+-- ============================================
+
+-- deeply nested objects
+local function deeply_nested_objects_test()
+    -- Create deeply nested structure
+    local depth = 50
+    local json_str = string.rep('{"a":', depth) .. '1' .. string.rep('}', depth)
+
+    local result = fromjson(json_str)
+
+    -- Verify nesting
+    local current = result
+    for i = 1, depth do
+        assert(type(current) == "table", "level " .. i .. " should be table")
+        current = current.a
+    end
+    assert(current == 1, "innermost value should be 1")
+end
+
+-- deeply nested arrays
+local function deeply_nested_arrays_test()
+    local depth = 50
+    local json_str = string.rep('[', depth) .. '42' .. string.rep(']', depth)
+
+    local result = fromjson(json_str)
+
+    local current = result
+    for i = 1, depth do
+        assert(type(current) == "table", "level " .. i .. " should be table")
+        current = current[1]
+    end
+    assert(current == 42, "innermost value should be 42")
+end
+
+-- large array
+local function large_array_test()
+    local parts = {}
+    for i = 1, 1000 do
+        parts[i] = tostring(i)
+    end
+    local json_str = '[' .. table.concat(parts, ',') .. ']'
+
+    local result = fromjson(json_str)
+
+    assert(#result == 1000, "should have 1000 elements")
+    assert(result[1] == 1, "first element")
+    assert(result[500] == 500, "middle element")
+    assert(result[1000] == 1000, "last element")
+end
+
+-- large object
+local function large_object_test()
+    local parts = {}
+    for i = 1, 500 do
+        parts[i] = string.format('"key%d":%d', i, i)
+    end
+    local json_str = '{' .. table.concat(parts, ',') .. '}'
+
+    local result = fromjson(json_str)
+
+    assert(result.key1 == 1)
+    assert(result.key250 == 250)
+    assert(result.key500 == 500)
+end
+
+-- long string value
+local function long_string_value_test()
+    local long_str = string.rep("x", 10000)
+    local json_str = tojson(long_str)
+    local result = fromjson(json_str)
+
+    assert(result == long_str, "long string should roundtrip")
+    assert(#result == 10000, "length should be preserved")
+end
+
+-- string with many escapes
+local function string_with_many_escapes_test()
+    local str_with_escapes = ""
+    for i = 1, 100 do
+        str_with_escapes = str_with_escapes .. "\n\t\r\\\""
+    end
+
+    local json_str = tojson(str_with_escapes)
+    local result = fromjson(json_str)
+
+    assert(result == str_with_escapes, "escaped string should roundtrip")
+end
+
+-- unicode strings
+local function unicode_strings_test()
+    local tests_data = {
+        "Hello, 世界!",          -- Chinese
+        "Привет мир",            -- Russian
+        "مرحبا بالعالم",         -- Arabic
+        "🎉🎊🎁",                 -- Emoji
+        "∑∏∫∂",                  -- Math symbols
+        "\u{1F600}\u{1F601}",    -- More emoji via escape
+    }
+
+    for _, str in ipairs(tests_data) do
+        local json_str = tojson(str)
+        local result = fromjson(json_str)
+        assert(result == str, "unicode string should roundtrip: " .. str)
+    end
+end
+
+-- mixed nested structure
+local function mixed_nested_structure_test()
+    local data = {
+        name = "test",
+        values = {1, 2, 3, {nested = true}},
+        metadata = {
+            created = "2024-01-01",
+            tags = {"a", "b", "c"},
+            config = {
+                enabled = true,
+                count = 42,
+                ratio = 3.14
+            }
+        }
+    }
+
+    local json_str = tojson(data)
+    local result = fromjson(json_str)
+
+    assert(result.name == "test")
+    assert(result.values[1] == 1)
+    assert(result.values[4].nested == true)
+    assert(result.metadata.config.enabled == true)
+    assert(result.metadata.config.count == 42)
+end
+
+-- tojson with many repeated keys
+local function tojson_with_many_repeated_keys_test()
+    -- The same key names recur in every element of a 100-object array,
+    -- so the serializer emits each shared key string 100 times over.
+    local data = {}
+    for i = 1, 100 do
+        data[i] = { id = i, name = "row" .. i, even = (i % 2 == 0) }
+    end
+
+    local json_str = tojson(data)
+    local _, id_count = string.gsub(json_str, '"id":', "")
+    assert(id_count == 100, "the repeated key appears once per object, found "
+        .. id_count)
+
+    local result = fromjson(json_str)
+    assert(#result == 100)
+    for i = 1, 100 do
+        assert(result[i].id == i)
+        assert(result[i].name == "row" .. i)
+        assert(result[i].even == (i % 2 == 0))
+    end
+end
+
+-- numeric precision
+local function numeric_precision_test()
+    local numbers = {
+        0,
+        1,
+        -1,
+        0.5,
+        -0.5,
+        1e10,
+        1e-10,
+        123456789,
+        -123456789,
+        3.141592653589793,
+    }
+
+    for _, n in ipairs(numbers) do
+        local json_str = tojson(n)
+        local result = fromjson(json_str)
+        -- Allow small floating point differences
+        local diff = math.abs(result - n)
+        local tolerance = math.abs(n) * 1e-10
+        if tolerance < 1e-15 then tolerance = 1e-15 end
+        assert(diff <= tolerance, "number " .. n .. " should roundtrip, got " .. result)
+    end
+end
+
+-- whitespace handling variations
+local function whitespace_handling_variations_test()
+    -- Various whitespace combinations that are valid JSON
+    local test_cases = {
+        '  {"a":1}  ',
+        '\n\t{\n\t"a"\n:\n1\n}\n',
+        '{"a" : 1}',
+        '{ "a" : 1 }',
+        '[  1  ,  2  ,  3  ]',
+    }
+
+    for _, json_str in ipairs(test_cases) do
+        local ok, result = catch fromjson(json_str)
+        assert(ok, "should parse: " .. json_str)
+    end
+end
+
+-- boolean and null edge cases
+local function boolean_and_null_edge_cases_test()
+    -- Array of booleans and nulls
+    local json_str = '[true, false, null, true, null, false]'
+    local result = fromjson(json_str)
+
+    assert(result[1] == true)
+    assert(result[2] == false)
+    assert(result[3] == nil)
+    assert(result[4] == true)
+    assert(result[5] == nil)
+    assert(result[6] == false)
+end
+
+-- empty structures
+local function empty_structures_test()
+    assert(type(fromjson('{}')) == "table")
+    assert(type(fromjson('[]')) == "table")
+    assert(#fromjson('[]') == 0)
+
+    -- Nested empty
+    local result = fromjson('{"a":{}, "b":[]}')
+    assert(type(result.a) == "table")
+    assert(type(result.b) == "table")
+end
+
+-- duplicate keys behavior
+local function duplicate_keys_behavior_test()
+    -- RFC 8259 leaves duplicate keys implementation-defined.
+    -- Lus parses them without error and the last value wins.
+    local json_str = '{"a":1, "a":2}'
+    local result = fromjson(json_str)
+    assert(type(result) == "table")
+    assert(result.a == 2, "the last duplicate wins, got " .. tostring(result.a))
+    -- The rule holds when other keys sit between the duplicates.
+    local spread = fromjson('{"a":1, "b":true, "a":3}')
+    assert(spread.a == 3, "the last duplicate wins across gaps")
+    assert(spread.b == true)
+end
+
+-- Regression: the recursive serializer used to overflow the Lua stack
+-- (silent memory corruption) and the C stack (crash) on deep nesting.
+-- Moderate depth must round-trip, and extreme depth must raise a catchable
+-- error, never crash or corrupt the interpreter.
+-- deeply nested tables serialize or fail cleanly
+local function deeply_nested_tables_serialize_or_fail_cleanly_test()
+    local t = {v = 1}
+    for i = 1, 150 do t = {v = t} end
+    local s = tojson(t)
+    local back = fromjson(s)
+    for i = 1, 150 do back = back.v end
+    assert(back.v == 1, "deep round-trip must preserve the leaf")
+
+    for i = 1, 500 do t = {v = t} end
+    local ok, err = catch tojson(t)
+    assert(ok == false, "extreme nesting must raise, not crash")
+    assert(type(err) == "string")
+    -- interpreter must be fully intact afterwards
+    assert(tojson({a = 1}) == '{"a":1}')
+end
+
+
+-- ===== ported from h1/json2.lus =====
+--[[
+    JSON serializer and parser semantics beyond plain syntax.
+
+    The existing json.lus suite covers value equality in both directions and a
+    large RFC 8259 corpus. This file pins the semantic contracts that value
+    equality alone cannot catch: the integer versus float subtype that survives
+    (or is deliberately lost) through tojson and fromjson, how the serializer
+    treats sequences with holes and tables that mix array and hash parts, that
+    shared non-circular references serialize by value more than once while true
+    cycles raise, the filter callback protocol including the key it receives and
+    its recursion into nested tables, the __json metamethod on nested values,
+    how Lus vectors and enum values render, the parser depth limit, integer and
+    float boundary values, and the exact bytes produced for unicode escapes
+    including embedded NUL and lone surrogates.
+]]
+
+
+-- Build a fresh enum root through the compiler, since enums are declared
+-- statically. The expression form takes members with no name.
+local function make_enum(members)
+    return assert(load("return enum " .. members .. " end"))()
+end
+
+-- ============================================================
+-- Number subtype preservation, fromjson direction
+-- ============================================================
+
+-- fromjson number subtype.
+
+-- A parser that returned every number as a float would pass all pure value
+-- comparisons, so we pin math.type on the parsed result directly.
+-- fromjson keeps the integer or float subtype
+local fromjson_keeps_the_integer_or_float_subtype_cases = {
+    {"1", "integer"},
+    {"100", "integer"},
+    {"-7", "integer"},
+    {"0", "integer"},
+    {"-0", "integer"},
+    {"1.0", "float"},
+    {"3.14", "float"},
+    {"-0.0", "float"},
+    {"1e2", "float"},
+    {"1E2", "float"},
+    {"1.5e-3", "float"},
+}
+
+local function fromjson_keeps_the_integer_or_float_subtype_test(json, expected_type)
+    local v = fromjson(json)
+    assert(math.type(v) == expected_type)
+end
+
+-- fromjson of an integer literal equals the integer and not a float only by value
+local function fromjson_of_an_integer_literal_equals_the_integer_and_not_a_float_only_test()
+    local v = fromjson("42")
+    assert(v == 42)
+    assert(math.type(v) == "integer")
+end
+
+-- ============================================================
+-- Number subtype, tojson direction
+-- ============================================================
+
+-- tojson number subtype.
+
+-- An integer prints with no fractional part, and a whole-valued float collapses
+-- to the same digits (its float subtype is not preserved in the text).
+-- tojson renders numbers by subtype
+local tojson_renders_numbers_by_subtype_cases = {
+    {1, "1"},
+    {-123, "-123"},
+    {0, "0"},
+    {1.5, "1.5"},
+    {-2.5, "-2.5"},
+    {1.0, "1"},
+    {2.0, "2"},
+    {100.0, "100"},
+}
+
+local function tojson_renders_numbers_by_subtype_test(value, expected)
+    assert(tojson(value) == expected)
+end
+
+-- tojson of 0.1 keeps enough digits to round-trip
+local function tojson_of_0_1_keeps_enough_digits_to_round_trip_test()
+    local s = tojson(0.1)
+    -- The exact textual form is the shortest %.17g rendering.
+    assert(s == "0.10000000000000001")
+    assert(fromjson(s) == 0.1)
+end
+
+-- JSON numbers keep a dot radix under a comma locale
+local function json_numbers_keep_a_dot_radix_under_a_comma_locale_test()
+    local original = os.setlocale(nil, "numeric")
+    local selected = os.setlocale("fr_FR.UTF-8", "numeric") or
+                     os.setlocale("fr_FR", "numeric") or
+                     os.setlocale("de_DE.UTF-8", "numeric") or
+                     os.setlocale("de_DE", "numeric") or
+                     os.setlocale("pt_BR.UTF-8", "numeric") or
+                     os.setlocale("pt_BR", "numeric")
+    if selected and string.format("%.1f", 1.5):find(",", 1, true) then
+        local ok, err = catch (function()
+            assert(tojson(1.5) == "1.5")
+            assert(tojson(0.1) == "0.10000000000000001")
+            assert(fromjson("1.5") == 1.5)
+            assert(fromjson("1.5e2") == 150.0)
+        end)()
+        os.setlocale(original or "C", "numeric")
+        assert(ok, err)
+    elseif original then
+        os.setlocale(original, "numeric")
+    end
+end
+
+-- ============================================================
+-- Subtype round-trip semantics
+-- ============================================================
+
+-- subtype round-trip.
+
+-- a whole float loses its float subtype after a round-trip
+local function a_whole_float_loses_its_float_subtype_after_a_round_trip_test()
+    -- tojson(1.0) is "1", which fromjson reads back as an integer.
+    assert(tojson(1.0) == "1")
+    assert(math.type(fromjson(tojson(1.0))) == "integer")
+end
+
+-- an integer keeps its subtype through a round-trip
+local function an_integer_keeps_its_subtype_through_a_round_trip_test()
+    assert(math.type(fromjson(tojson(7))) == "integer")
+end
+
+-- a non-whole float keeps its subtype and value through a round-trip
+local function a_non_whole_float_keeps_its_subtype_and_value_through_a_round_trip_test()
+    assert(math.type(fromjson(tojson(1.5))) == "float")
+    assert(fromjson(tojson(1.5)) == 1.5)
+end
+
+-- negative zero integer and negative zero float are distinguishable
+local function negative_zero_integer_and_negative_zero_float_are_distinguishable_test()
+    local zi = fromjson("-0")
+    local zf = fromjson("-0.0")
+    assert(math.type(zi) == "integer")
+    assert(math.type(zf) == "float")
+    -- Dividing by an integer zero yields positive infinity, while the float
+    -- carries its sign so 1 over negative zero float is negative infinity.
+    assert(1 / zi == math.huge)
+    assert(1 / zf == -math.huge)
+end
+
+-- ============================================================
+-- Integer and float boundaries
+-- ============================================================
+
+-- numeric boundaries.
+
+-- math.maxinteger round-trips exactly
+local function math_maxinteger_round_trips_exactly_test()
+    assert(tojson(math.maxinteger) == "9223372036854775807")
+    assert(fromjson("9223372036854775807") == math.maxinteger)
+    assert(math.type(fromjson("9223372036854775807")) == "integer")
+end
+
+-- math.mininteger round-trips exactly
+local function math_mininteger_round_trips_exactly_test()
+    assert(tojson(math.mininteger) == "-9223372036854775808")
+    assert(fromjson("-9223372036854775808") == math.mininteger)
+end
+
+-- 2^53+1 survives exactly as an integer
+local function t_2_53_1_survives_exactly_as_an_integer_test()
+    local n = 9007199254740993
+    assert(fromjson(tojson(n)) == n)
+    assert(math.type(fromjson(tojson(n))) == "integer")
+end
+
+-- out-of-range numbers raise with a range message
+local out_of_range_numbers_raise_with_a_range_message_cases = {
+    {"9223372036854775808"},   -- 2^63, one past the max integer
+    {"-9223372036854775809"},  -- one below the min integer
+    {"1e400"},                 -- overflows a double to infinity
+    {"-1e400"},
+}
+
+local function out_of_range_numbers_raise_with_a_range_message_test(json)
+    local ok, err = catch fromjson(json)
+    assert(not ok)
+    assert(string.find(tostring(err), "number out of range"))
+end
+
+-- ============================================================
+-- Holes and mixed keys through tojson
+-- ============================================================
+
+-- holes and mixed keys.
+
+-- A hole makes the key set non-contiguous, so the table serializes as an
+-- object, and because its remaining keys are integers they are all dropped,
+-- leaving an empty object. A pure trailing nil leaves a contiguous 1..n range
+-- and stays an array.
+-- tojson representation for holes and mixed keys
+local tojson_representation_for_holes_and_mixed_keys_cases = {
+    {{1, nil, 3}, "{}"},
+    {{[1] = 1, [2] = 2, [4] = 4}, "{}"},
+    {{1, 2, nil}, "[1,2]"},
+    {{[2] = "a"}, "{}"},
+    {{[0] = "z"}, "{}"},
+    {{[-1] = "n"}, "{}"},
+    {{[1.5] = "x"}, "{}"},
+    {{[true] = "x"}, "{}"},
+    {{}, "[]"},
+}
+
+local function tojson_representation_for_holes_and_mixed_keys_test(input, expected)
+    assert(tojson(input) == expected)
+end
+
+-- a table mixing an array part and a string key keeps only the string keys
+local function a_table_mixing_an_array_part_and_a_string_key_keeps_only_the_string_ke_test()
+    -- The integer indices are dropped because the presence of a string key
+    -- forces object form, in which non-string keys are skipped.
+    assert(tojson({1, 2, x = 3}) == '{"x":3}')
+end
+
+-- ============================================================
+-- Shared references versus true cycles
+-- ============================================================
+
+-- shared references and cycles.
+
+-- a shared child in an array serializes by value twice
+local function a_shared_child_in_an_array_serializes_by_value_twice_test()
+    local child = {x = 1}
+    assert(tojson({child, child}) == '[{"x":1},{"x":1}]')
+end
+
+-- a shared child under two object keys serializes twice
+local function a_shared_child_under_two_object_keys_serializes_twice_test()
+    local child = {v = 9}
+    local result = fromjson(tojson({a = child, b = child}))
+    assert(result.a.v == 9)
+    assert(result.b.v == 9)
+    -- The two decoded copies are independent tables, not the same reference.
+    result.a.v = 100
+    assert(result.b.v == 9)
+end
+
+-- a direct self-reference raises a circular error
+local function a_direct_self_reference_raises_a_circular_error_test()
+    local a = {}
+    a.self = a
+    local ok, err = catch tojson(a)
+    assert(not ok)
+    assert(string.find(tostring(err), "circular"))
+end
+
+-- an indirect cycle raises a circular error
+local function an_indirect_cycle_raises_a_circular_error_test()
+    local a = {}
+    a.b = {}
+    a.b.back = a
+    local ok, err = catch tojson(a)
+    assert(not ok)
+    assert(string.find(tostring(err), "circular"))
+end
+
+-- ============================================================
+-- Filter callback protocol
+-- ============================================================
+
+-- filter protocol.
+
+-- the filter is invoked for the root with a nil key
+local function the_filter_is_invoked_for_the_root_with_a_nil_key_test()
+    local first_key = "unset"
+    local seen = false
+    tojson({a = 1}, function(k, v)
+        if not seen then
+            first_key = k
+            seen = true
+        end
+        return v
+    end)
+    assert(seen)
+    assert(first_key == nil)
+end
+
+-- array elements are filtered with integer keys
+local function array_elements_are_filtered_with_integer_keys_test()
+    local keys = {}
+    tojson({10, 20, 30}, function(k, v)
+        if math.type(k) == "integer" then
+            keys[#keys + 1] = k
+        end
+        return v
+    end)
+    assert(#keys == 3)
+    assert(keys[1] == 1)
+    assert(keys[3] == 3)
+end
+
+-- object entries are filtered with their string key
+local function object_entries_are_filtered_with_their_string_key_test()
+    local seen_key = nil
+    tojson({name = "x"}, function(k, v)
+        if type(k) == "string" then
+            seen_key = k
+        end
+        return v
+    end)
+    assert(seen_key == "name")
+end
+
+-- returning nil from the filter omits the entry
+local function returning_nil_from_the_filter_omits_the_entry_test()
+    local result = tojson({a = 1, b = 2, c = 3}, function(k, v)
+        if k == "b" then return nil end
+        return v
+    end)
+    assert(not result:find('"b"'))
+    assert(result:find('"a"') ~= nil)
+end
+
+-- a filter that always returns nil collapses the whole value to null
+local function a_filter_that_always_returns_nil_collapses_the_whole_value_to_null_test()
+    assert(tojson({a = 1, b = 2}, function() return nil end) == "null")
+end
+
+-- the filter recurses into nested tables
+local function the_filter_recurses_into_nested_tables_test()
+    local result = tojson({a = "x", b = {c = "y"}}, function(k, v)
+        if type(v) == "string" then return string.upper(v) end
+        return v
+    end)
+    assert(result:find('"X"') ~= nil)
+    assert(result:find('"Y"') ~= nil)
+end
+
+-- a filter may replace a scalar with a table that is then serialized
+local function a_filter_may_replace_a_scalar_with_a_table_that_is_then_serialized_test()
+    local result = tojson({x = 1}, function(k, v)
+        if v == 1 then return {wrapped = true} end
+        return v
+    end)
+    assert(result == '{"x":{"wrapped":true}}')
+end
+
+-- an error raised inside the filter propagates out of tojson
+local function an_error_raised_inside_the_filter_propagates_out_of_tojson_test()
+    local ok, err = catch tojson({a = 1}, function() error("filter boom") end)
+    assert(not ok)
+    assert(string.find(tostring(err), "filter boom"))
+end
+
+-- yielding across the serializer from a filter raises a boundary error
+local function yielding_across_the_serializer_from_a_filter_raises_a_boundary_error_test()
+    local co = coroutine.create(function()
+        return tojson({1, 2}, function(k, v)
+            coroutine.yield(v)
+            return v
+        end)
+    end)
+    local ok, err = coroutine.resume(co)
+    assert(not ok)
+    assert(string.find(tostring(err), "yield"))
+end
+
+-- ============================================================
+-- __json metamethod
+-- ============================================================
+
+-- __json metamethod.
+
+-- __json is honored on a nested value, not only the root
+local function json_is_honored_on_a_nested_value_not_only_the_root_test()
+    local mt = {__json = function(self) return {id = self.n} end}
+    local inner = setmetatable({n = 7, hidden = "x"}, mt)
+    assert(tojson({wrap = inner}) == '{"wrap":{"id":7}}')
+end
+
+-- __json returning a value whose metatable also has __json chains
+local function json_returning_a_value_whose_metatable_also_has_json_chains_test()
+    local leaf = {__json = function(self) return 99 end}
+    local outer = {__json = function(self) return setmetatable({}, leaf) end}
+    assert(tojson(setmetatable({}, outer)) == "99")
+end
+
+-- __json returning nil serializes as null
+local function json_returning_nil_serializes_as_null_test()
+    assert(tojson(setmetatable({}, {__json = function() return nil end})) == "null")
+end
+
+-- an error raised inside __json propagates out of tojson
+local function an_error_raised_inside_json_propagates_out_of_tojson_test()
+    local ok, err = catch tojson(setmetatable({}, {__json = function() error("mjson boom") end}))
+    assert(not ok)
+    assert(string.find(tostring(err), "mjson boom"))
+end
+
+-- ============================================================
+-- Lus-specific value types
+-- ============================================================
+
+-- lus value types.
+
+-- a bare vector serializes as null
+local function a_bare_vector_serializes_as_null_test()
+    assert(tojson(vector.create(4)) == "null")
+end
+
+-- a vector inside an array becomes null
+local function a_vector_inside_an_array_becomes_null_test()
+    assert(tojson({vector.create(4)}) == "[null]")
+end
+
+-- a vector under a string key is skipped, leaving an empty object
+local function a_vector_under_a_string_key_is_skipped_leaving_an_empty_object_test()
+    assert(tojson({buf = vector.create(4)}) == "{}")
+end
+
+-- a bare enum value serializes as null
+local function a_bare_enum_value_serializes_as_null_test()
+    local e = make_enum("red, green")
+    assert(tojson(e.red) == "null")
+end
+
+-- an enum value inside an array becomes null
+local function an_enum_value_inside_an_array_becomes_null_test()
+    local e = make_enum("red, green")
+    assert(tojson({e.green}) == "[null]")
+end
+
+-- an enum value under a string key is skipped
+local function an_enum_value_under_a_string_key_is_skipped_test()
+    local e = make_enum("red, green")
+    assert(tojson({color = e.red}) == "{}")
+end
+
+-- ============================================================
+-- Unicode escapes: exact byte contracts
+-- ============================================================
+
+-- unicode escape bytes.
+
+-- a \\u0000 escape produces a one-byte string holding an embedded NUL
+local function a_u0000_escape_produces_a_one_byte_string_holding_an_embedded_nul_test()
+    local s = fromjson('"\\u0000"')
+    assert(#s == 1)
+    assert(string.byte(s, 1) == 0)
+end
+
+-- a valid surrogate pair decodes to the four-byte UTF-8 codepoint
+local function a_valid_surrogate_pair_decodes_to_the_four_byte_utf_8_codepoint_test()
+    -- U+1F600 grinning face.
+    local s = fromjson('"\\uD83D\\uDE00"')
+    -- Strings count characters in 2.0, so the pair is one character of four bytes.
+    assert(#s == 1)
+    assert(#vector.fromstring(s) == 4)
+    assert(s == "\u{1F600}")
+end
+
+-- a lone high surrogate encodes to its three-byte WTF-8 form
+local function a_lone_high_surrogate_encodes_to_its_three_byte_wtf_8_form_test()
+    -- U+D83D on its own is not paired, so it is encoded directly.
+    local s = fromjson('"\\uD83D"')
+    assert(#s == 1)
+    assert(string.byte(s, 1) == 0xD83D)
+    local raw = vector.fromstring(s)
+    assert(#raw == 3)
+    assert(vector.get(raw, 0) == 0xED)
+    assert(vector.get(raw, 1) == 0xA0)
+    assert(vector.get(raw, 2) == 0xBD)
+end
+
+-- a low surrogate followed by a high surrogate encodes each separately
+local function a_low_surrogate_followed_by_a_high_surrogate_encodes_each_separately_test()
+    -- The order is reversed, so neither forms a pair and both are encoded as
+    -- their own three-byte sequences.
+    local s = fromjson('"\\uDE00\\uD83D"')
+    assert(#s == 2)
+    assert(#vector.fromstring(s) == 6)
+end
+
+-- ============================================================
+-- Duplicate keys: last value wins
+-- ============================================================
+
+-- duplicate keys.
+
+-- a duplicated object key keeps the last value
+local function a_duplicated_object_key_keeps_the_last_value_test()
+    assert(fromjson('{"a":1,"a":2}').a == 2)
+end
+
+-- a duplicated key surrounded by others still keeps the last
+local function a_duplicated_key_surrounded_by_others_still_keeps_the_last_test()
+    local r = fromjson('{"a":1,"b":2,"a":3}')
+    assert(r.a == 3)
+    assert(r.b == 2)
+end
+
+-- ============================================================
+-- Parser depth limit
+-- ============================================================
+
+-- parser depth.
+
+-- nesting far beyond the limit raises a catchable error and leaves the parser usable
+local function nesting_far_beyond_the_limit_raises_a_catchable_error_and_leaves_the_p_test()
+    local deep = string.rep("[", 100000) .. "1" .. string.rep("]", 100000)
+    local ok, err = catch fromjson(deep)
+    assert(not ok)
+    assert(string.find(tostring(err), "maximum nesting depth"))
+    -- The interpreter and parser stay intact afterwards.
+    assert(fromjson("[1,2]")[2] == 2)
+end
+
+-- exactly one thousand levels parse but one more raises
+local function exactly_one_thousand_levels_parse_but_one_more_raises_test()
+    local ok_at_limit = catch fromjson(string.rep("[", 1000) .. "1" .. string.rep("]", 1000))
+    assert(ok_at_limit)
+    local ok_over = catch fromjson(string.rep("[", 1001) .. "1" .. string.rep("]", 1001))
+    assert(not ok_over)
+end
+
+-- ============================================================
+-- fromjson argument type handling
+-- ============================================================
+
+-- fromjson argument type.
+
+-- fromjson coerces a number argument to its textual JSON form
+local function fromjson_coerces_a_number_argument_to_its_textual_json_form_test()
+    -- A number is accepted like most string-taking stdlib functions and parses
+    -- as its own decimal text.
+    local v = fromjson(42)
+    assert(v == 42)
+    assert(math.type(v) == "integer")
+end
+
+-- fromjson rejects non-stringable arguments
+local fromjson_rejects_non_stringable_arguments_cases = {
+    {function() return fromjson(nil) end},
+    {function() return fromjson(true) end},
+    {function() return fromjson({}) end},
+}
+
+local function fromjson_rejects_non_stringable_arguments_test(fn)
+    local ok, err = catch fn()
+    assert(not ok)
+    assert(string.find(tostring(err), "string expected"))
+end
+
+-- ============================================================
+-- Parse errors carry position information
+-- ============================================================
+
+-- parse error position.
+
+-- parse errors report a position
+local parse_errors_report_a_position_cases = {
+    {"[1,2,]"},
+    {"{bad"},
+    {'{"a":1} extra'},
+    {"[1 2]"},
+}
+
+local function parse_errors_report_a_position_test(json)
+    local ok, err = catch fromjson(json)
+    assert(not ok)
+    assert(string.find(tostring(err), "position"))
+end
+
+-- ============================================================
+-- Key escaping on the serialize side
+-- ============================================================
+
+-- serialize key escaping.
+
+-- a key containing a quote and backslash is escaped
+local function a_key_containing_a_quote_and_backslash_is_escaped_test()
+    assert(tojson({['a"b\\c'] = 1}) == '{"a\\"b\\\\c":1}')
+end
+
+-- a key containing a newline is escaped
+local function a_key_containing_a_newline_is_escaped_test()
+    assert(tojson({["x\ny"] = 1}) == '{"x\\ny":1}')
+end

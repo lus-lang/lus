@@ -1,0 +1,836 @@
+pledge("load", "fs:read=./finalizer_probe*", "fs:write=./finalizer_probe*")
+
+-- ===== ported from h1/finalizers.lus =====
+--[[
+  Finalizer lifecycle tests: the full __gc contract for tables and for
+  userdata-like values, pinned to Lua 5.5 semantics.
+
+  Covers the marking rule (an object is marked for finalization only when
+  setmetatable runs with __gc already present, and re-running setmetatable
+  after adding __gc marks it), the lookup rule (the __gc actually called is
+  whatever the metatable holds at collection time), reverse-of-marking
+  finalization order under full and step-driven collection, error tolerance
+  inside finalizers with the warning system silenced, resurrection with no
+  rerun unless the finalizer re-marks the object, chains of finalizers that
+  allocate new finalizable objects, the collectgarbage lockout while a
+  finalizer runs, both GC modes and mode switches between marking and
+  collection, and weak-value clearance parity between finalizable tables
+  and dropped file-handle userdata.
+
+  Every test forces determinism with explicit full collections and every
+  test that changes the GC mode or stops the collector restores the state
+  it found, even when its assertions fail.
+]]
+
+
+-- The ambient mode is captured once so mode-changing tests can restore it.
+local initial_mode = collectgarbage("incremental")
+collectgarbage(initial_mode)
+
+-- Two full collections make finalization deterministic in every mode.
+local function full()
+    collectgarbage("collect")
+    collectgarbage("collect")
+end
+
+-- Runs fn in the given GC mode and restores the ambient mode afterwards,
+-- even if fn raises, so one failing test cannot poison the rest.
+local function with_mode(mode, fn)
+    collectgarbage(mode)
+    local ok, err = catch fn()
+    collectgarbage(initial_mode)
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- Runs fn with warnings disabled so expected finalizer errors stay quiet,
+-- then re-enables them, rethrowing any failure from fn.
+local function quietly(fn)
+    warn("@off")
+    local ok, err = catch fn()
+    warn("@on")
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- Runs fn with collection parameters that make allocation-driven cycles start
+-- promptly, then restores every parameter even when fn raises.
+local function with_prompt_automatic_gc(mode, fn)
+    local names
+    local values
+    if mode == "incremental" then
+        names = {"pause", "stepmul", "stepsize"}
+        values = {100, 1000, 0}
+    else
+        names = {"minormul", "majorminor", "minormajor"}
+        values = {1, 1, 1}
+    end
+
+    local old = {}
+    for i = 1, #names do
+        old[i] = collectgarbage("param", names[i], values[i])
+    end
+    local ok, err = catch fn()
+    for i = 1, #names do
+        collectgarbage("param", names[i], old[i])
+    end
+    if not ok then
+        error(err, 0)
+    end
+end
+
+local modes = {{"incremental"}, {"generational"}}
+
+-- ==========================================================
+-- Marking rule: __gc must be present at setmetatable time
+-- ==========================================================
+
+-- basic finalizer runs after drop
+local basic_finalizer_runs_after_drop_cases = modes
+
+local function basic_finalizer_runs_after_drop_test(mode)
+    with_mode(mode, function()
+        local ran = false
+        do
+            local o = setmetatable({}, {__gc = function() ran = true end})
+            o = nil
+        end
+        full()
+        assert(ran)
+    end)
+end
+
+-- __gc added after setmetatable is inert
+local gc_added_after_setmetatable_is_inert_cases = modes
+
+local function gc_added_after_setmetatable_is_inert_test(mode)
+    with_mode(mode, function()
+        local ran = false
+        do
+            local mt = {}
+            local o = setmetatable({}, mt)
+            mt.__gc = function() ran = true end
+            o = nil
+        end
+        full()
+        assert(not ran)
+    end)
+end
+
+-- re-running setmetatable after adding __gc marks the object
+local function re_running_setmetatable_after_adding_gc_marks_the_object_test()
+    local ran = false
+    do
+        local mt = {}
+        local o = setmetatable({}, mt)
+        mt.__gc = function() ran = true end
+        setmetatable(o, mt)
+        o = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- setmetatable twice with the same __gc metatable finalizes once
+local function setmetatable_twice_with_the_same_gc_metatable_finalizes_once_test()
+    local count = 0
+    do
+        local mt = {__gc = function() count = count + 1 end}
+        local o = setmetatable({}, mt)
+        setmetatable(o, mt)
+        o = nil
+    end
+    full()
+    full()
+    assert(count == 1)
+end
+
+-- __gc replaced before collection runs the replacement
+local function gc_replaced_before_collection_runs_the_replacement_test()
+    local which = nil
+    do
+        local mt = {__gc = function() which = "original" end}
+        local o = setmetatable({}, mt)
+        mt.__gc = function() which = "replacement" end
+        o = nil
+    end
+    full()
+    assert(which == "replacement")
+end
+
+-- __gc removed from the metatable before collection runs nothing
+local function gc_removed_from_the_metatable_before_collection_runs_nothing_test()
+    local ran = false
+    do
+        local mt = {__gc = function() ran = true end}
+        local o = setmetatable({}, mt)
+        mt.__gc = nil
+        o = nil
+    end
+    full()
+    assert(not ran)
+end
+
+-- metatable removed entirely after marking runs nothing
+local function metatable_removed_entirely_after_marking_runs_nothing_test()
+    local ran = false
+    do
+        local mt = {__gc = function() ran = true end}
+        local o = setmetatable({}, mt)
+        setmetatable(o, nil)
+        o = nil
+    end
+    full()
+    assert(not ran)
+end
+
+-- metatable swapped to one without __gc after marking runs nothing
+local function metatable_swapped_to_one_without_gc_after_marking_runs_nothing_test()
+    local ran = false
+    do
+        local o = setmetatable({}, {__gc = function() ran = true end})
+        setmetatable(o, {})
+        o = nil
+    end
+    full()
+    assert(not ran)
+end
+
+-- anonymous finalizable object is finalized
+local function anonymous_finalizable_object_is_finalized_test()
+    local ran = false
+    local mt = {__gc = function() ran = true end}
+    local function make()
+        setmetatable({}, mt)
+    end
+    make()
+    full()
+    assert(ran)
+end
+
+-- finalizable object reachable only through a dropped container
+local function finalizable_object_reachable_only_through_a_dropped_container_test()
+    local ran = false
+    do
+        local holder = {inner = setmetatable({}, {__gc = function() ran = true end})}
+        holder = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- ==========================================================
+-- Finalization order
+-- ==========================================================
+
+-- finalization order is reverse of marking order
+local finalization_order_is_reverse_of_marking_order_cases = modes
+
+local function finalization_order_is_reverse_of_marking_order_test(mode)
+    with_mode(mode, function()
+        local order = {}
+        do
+            local function tag(id)
+                return {__gc = function() order[#order + 1] = id end}
+            end
+            local a = setmetatable({}, tag(1))
+            local b = setmetatable({}, tag(2))
+            local c = setmetatable({}, tag(3))
+            a, b, c = nil, nil, nil
+        end
+        full()
+        assert(same(order, {3, 2, 1}))
+    end)
+end
+
+-- twenty objects sharing one metatable finalize once each in reverse order
+local function twenty_objects_sharing_one_metatable_finalize_once_each_in_reverse_ord_test()
+    local order = {}
+    do
+        local mt = {__gc = function(self) order[#order + 1] = self.id end}
+        for i = 1, 20 do
+            local o = setmetatable({id = i}, mt)
+            o = nil
+        end
+    end
+    full()
+    assert(#order == 20)
+    for i = 1, 20 do
+        assert(order[i] == 21 - i)
+    end
+end
+
+-- step-driven collection also finalizes in reverse marking order
+local function step_driven_collection_also_finalizes_in_reverse_marking_order_test()
+    local order = {}
+    do
+        local mt = {__gc = function(self) order[#order + 1] = self.id end}
+        for i = 1, 5 do
+            local o = setmetatable({id = i}, mt)
+            o = nil
+        end
+    end
+    local steps = 0
+    while #order < 5 and steps < 10000 do
+        collectgarbage("step")
+        steps = steps + 1
+    end
+    assert(same(order, {5, 4, 3, 2, 1}))
+end
+
+-- two collection batches each finalize in their own reverse order
+local function two_collection_batches_each_finalize_in_their_own_reverse_order_test()
+    local order = {}
+    local function tag(id)
+        return {__gc = function() order[#order + 1] = id end}
+    end
+    do
+        local a = setmetatable({}, tag(1))
+        local b = setmetatable({}, tag(2))
+        a, b = nil, nil
+    end
+    full()
+    do
+        local c = setmetatable({}, tag(3))
+        local d = setmetatable({}, tag(4))
+        c, d = nil, nil
+    end
+    full()
+    assert(same(order, {2, 1, 4, 3}))
+end
+
+-- an erroring finalizer does not disturb the order of the others
+local function an_erroring_finalizer_does_not_disturb_the_order_of_the_others_test()
+    quietly(function()
+        local order = {}
+        do
+            local a = setmetatable({}, {__gc = function() order[#order + 1] = "a" end})
+            local b = setmetatable({}, {__gc = function() error("mid finalizer failure") end})
+            local c = setmetatable({}, {__gc = function() order[#order + 1] = "c" end})
+            a, b, c = nil, nil, nil
+        end
+        full()
+        assert(same(order, {"c", "a"}))
+    end)
+end
+
+-- ==========================================================
+-- Errors inside finalizers
+-- ==========================================================
+
+-- a finalizer error does not propagate to the collectgarbage caller
+local function a_finalizer_error_does_not_propagate_to_the_collectgarbage_caller_test()
+    quietly(function()
+        do
+            local o = setmetatable({}, {__gc = function() error("finalizer boom") end})
+            o = nil
+        end
+        local ok = catch collectgarbage("collect")
+        assert(ok)
+        collectgarbage("collect")
+    end)
+end
+
+-- other pending finalizers still run after one errors
+local function other_pending_finalizers_still_run_after_one_errors_test()
+    quietly(function()
+        local survivors = 0
+        do
+            for i = 1, 3 do
+                local good = setmetatable({}, {__gc = function() survivors = survivors + 1 end})
+                local bad = setmetatable({}, {__gc = function() error("bad " .. i) end})
+                good, bad = nil, nil
+            end
+        end
+        full()
+        assert(survivors == 3)
+    end)
+end
+
+-- allocation and collection keep working after a finalizer error
+local function allocation_and_collection_keep_working_after_a_finalizer_error_test()
+    quietly(function()
+        do
+            local o = setmetatable({}, {__gc = function() error("earlier failure") end})
+            o = nil
+        end
+        full()
+    end)
+    local t = {}
+    for i = 1, 200 do
+        t[i] = {value = i}
+    end
+    assert(t[200].value == 200)
+    local ran = false
+    do
+        local o = setmetatable({}, {__gc = function() ran = true end})
+        o = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- a finalizer error carrying a table value is tolerated
+local function a_finalizer_error_carrying_a_table_value_is_tolerated_test()
+    quietly(function()
+        do
+            local o = setmetatable({}, {__gc = function() error({code = 42}) end})
+            o = nil
+        end
+        full()
+    end)
+    assert(true)
+end
+
+-- a non-callable __gc value is tolerated at collection time
+local function a_non_callable_gc_value_is_tolerated_at_collection_time_test()
+    quietly(function()
+        do
+            local o = setmetatable({}, {__gc = 42})
+            o = nil
+        end
+        full()
+    end)
+    local ran = false
+    do
+        local o = setmetatable({}, {__gc = function() ran = true end})
+        o = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- __gc set to false marks the object and the failed call is tolerated
+local function gc_set_to_false_marks_the_object_and_the_failed_call_is_tolerated_test()
+    quietly(function()
+        do
+            local o = setmetatable({}, {__gc = false})
+            o = nil
+        end
+        full()
+    end)
+    local ran = false
+    do
+        local o = setmetatable({}, {__gc = function() ran = true end})
+        o = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- catch works inside a finalizer and contains the error
+local function catch_works_inside_a_finalizer_and_contains_the_error_test()
+    local caught_ok = nil
+    local caught_msg = nil
+    do
+        local o = setmetatable({}, {__gc = function()
+            local ok, err = catch error("inner_fail")
+            caught_ok = ok
+            caught_msg = tostring(err)
+        end})
+        o = nil
+    end
+    full()
+    assert(not caught_ok)
+    assert(string.find(caught_msg, "inner_fail"))
+end
+
+-- automatic collection restores state after a finalizer error
+local automatic_collection_restores_state_after_a_finalizer_error_cases = modes
+
+local function automatic_collection_restores_state_after_a_finalizer_error_test(mode)
+        with_mode(mode, function()
+            full()
+            with_prompt_automatic_gc(mode, function()
+                quietly(function()
+                    local finalized = false
+                    local inner_caught = false
+                    local closed = false
+
+                    local function abandon_finalizer()
+                        local o = setmetatable({}, {__gc = function()
+                            local guard <close> = setmetatable({}, {
+                                __close = function() closed = true end,
+                            })
+                            local ok, err = catch error("inner finalizer error", 0)
+                            inner_caught = not ok
+                                and string.find(tostring(err),
+                                    "inner finalizer error", 1, true) ~= nil
+                            finalized = true
+                            error("unhandled finalizer error", 0)
+                        end})
+                        o = nil
+                    end
+                    abandon_finalizer()
+
+                    local function allocate_until_finalized()
+                        for i = 1, 200000 do
+                            local churn = {i, i, i}
+                            if finalized then
+                                return
+                            end
+                        end
+                    end
+
+                    local ok = catch allocate_until_finalized()
+                    assert(ok)
+                    assert(finalized)
+                    assert(inner_caught)
+                    assert(closed)
+
+                    local call_ok, call_err =
+                        catch error("post-finalizer error", 0)
+                    assert(not call_ok)
+                    assert(string.find(tostring(call_err),
+                        "post-finalizer error", 1, true) ~= nil)
+                end)
+            end)
+        end)
+    end
+
+-- ==========================================================
+-- Finalizer callable and argument contract
+-- ==========================================================
+
+-- a callable table works as __gc
+local function a_callable_table_works_as_gc_test()
+    local ran = false
+    do
+        local handler = setmetatable({}, {__call = function() ran = true end})
+        local o = setmetatable({}, {__gc = handler})
+        o = nil
+        handler = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- the finalizer receives exactly one argument, the object itself
+local function the_finalizer_receives_exactly_one_argument_the_object_itself_test()
+    local nargs = nil
+    local marker = nil
+    do
+        local o = setmetatable({marker = "self-check"}, {__gc = function(...)
+            nargs = select("#", ...)
+            local self = select(1, ...)
+            if type(self) == "table" then
+                marker = self.marker
+            end
+        end})
+        o = nil
+    end
+    full()
+    assert(nargs == 1)
+    assert(marker == "self-check")
+end
+
+-- ==========================================================
+-- Resurrection and the once-only guarantee
+-- ==========================================================
+
+-- a resurrected object stays fully usable
+local function a_resurrected_object_stays_fully_usable_test()
+    local saved = nil
+    do
+        local o = setmetatable({answer = 42, list = {1, 2, 3}}, {__gc = function(self)
+            saved = self
+        end})
+        o = nil
+    end
+    full()
+    assert(saved ~= nil)
+    assert(saved.answer == 42)
+    assert(saved.list[3] == 3)
+    saved.answer = 43
+    assert(saved.answer == 43)
+    saved = nil
+    full()
+end
+
+-- a resurrected object keeps its metatable
+local function a_resurrected_object_keeps_its_metatable_test()
+    local saved = nil
+    local mt = {__gc = function(self) saved = self end}
+    do
+        local o = setmetatable({}, mt)
+        o = nil
+    end
+    full()
+    assert(saved ~= nil)
+    assert(getmetatable(saved) == mt)
+    saved = nil
+    full()
+end
+
+-- dropping a resurrected object does not rerun its finalizer
+local dropping_a_resurrected_object_does_not_rerun_its_finalizer_cases = modes
+
+local function dropping_a_resurrected_object_does_not_rerun_its_finalizer_test(mode)
+    with_mode(mode, function()
+        local saved = nil
+        local count = 0
+        do
+            local o = setmetatable({}, {__gc = function(self)
+                count = count + 1
+                saved = self
+            end})
+            o = nil
+        end
+        full()
+        assert(count == 1)
+        assert(saved ~= nil)
+        saved = nil
+        full()
+        full()
+        assert(count == 1)
+    end)
+end
+
+-- re-marking inside the finalizer runs it again and terminates
+local function re_marking_inside_the_finalizer_runs_it_again_and_terminates_test()
+    local count = 0
+    local mt
+    mt = {__gc = function(self)
+        count = count + 1
+        if count < 3 then
+            setmetatable(self, mt)
+        end
+    end}
+    do
+        local o = setmetatable({}, mt)
+        o = nil
+    end
+    for i = 1, 10 do
+        collectgarbage("collect")
+    end
+    assert(count == 3)
+end
+
+-- finalization counts stay stable across later collections and mode changes
+local function finalization_counts_stay_stable_across_later_collections_and_mode_chan_test()
+    local count = 0
+    do
+        local mt = {__gc = function() count = count + 1 end}
+        for i = 1, 3 do
+            local o = setmetatable({}, mt)
+            o = nil
+        end
+    end
+    full()
+    assert(count == 3)
+    with_mode("generational", function()
+        full()
+    end)
+    with_mode("incremental", function()
+        full()
+    end)
+    assert(count == 3)
+end
+
+-- ==========================================================
+-- Finalizers that allocate
+-- ==========================================================
+
+-- a finalizer chain that spawns finalizable objects terminates
+local function a_finalizer_chain_that_spawns_finalizable_objects_terminates_test()
+    local finalized = 0
+    local function spawn(n)
+        if n > 0 then
+            setmetatable({}, {__gc = function()
+                finalized = finalized + 1
+                spawn(n - 1)
+            end})
+        end
+    end
+    spawn(4)
+    for i = 1, 20 do
+        collectgarbage("collect")
+        if finalized == 4 then
+            break
+        end
+    end
+    assert(finalized == 4)
+    full()
+    assert(finalized == 4)
+end
+
+-- a finalizer can allocate plain data and call stdlib functions
+local function a_finalizer_can_allocate_plain_data_and_call_stdlib_functions_test()
+    local built = nil
+    local rendered = nil
+    do
+        local o = setmetatable({}, {__gc = function()
+            local t = {}
+            for i = 1, 100 do
+                t[i] = i * 2
+            end
+            built = t
+            rendered = string.format("%d/%d", t[1], t[100])
+        end})
+        o = nil
+    end
+    full()
+    assert(built ~= nil)
+    assert(#built == 100)
+    assert(rendered == "2/200")
+end
+
+-- ==========================================================
+-- collectgarbage from inside a finalizer
+-- ==========================================================
+
+-- collectgarbage is locked out inside a finalizer
+local collectgarbage_is_locked_out_inside_a_finalizer_cases = {{"count"}, {"isrunning"}, {"step"}}
+
+local function collectgarbage_is_locked_out_inside_a_finalizer_test(opt)
+    local result = "unset"
+    do
+        local o = setmetatable({}, {__gc = function()
+            result = collectgarbage(opt)
+        end})
+        o = nil
+    end
+    full()
+    assert(result == nil)
+end
+
+-- ==========================================================
+-- Collector control and mode interplay
+-- ==========================================================
+
+-- explicit collection finalizes while the collector is stopped
+local function explicit_collection_finalizes_while_the_collector_is_stopped_test()
+    collectgarbage("stop")
+    local ok, err = catch (function()
+        assert(not collectgarbage("isrunning"))
+        local ran = false
+        do
+            local o = setmetatable({}, {__gc = function() ran = true end})
+            o = nil
+        end
+        collectgarbage("collect")
+        assert(ran)
+        assert(not collectgarbage("isrunning"))
+    end)()
+    collectgarbage("restart")
+    if not ok then
+        error(err, 0)
+    end
+    assert(collectgarbage("isrunning"))
+end
+
+-- mode switch between marking and collection still finalizes
+local mode_switch_between_marking_and_collection_still_finalizes_cases = {{"incremental", "generational"}, {"generational", "incremental"}}
+
+local function mode_switch_between_marking_and_collection_still_finalizes_test(mark_mode, collect_mode)
+    collectgarbage(mark_mode)
+    local ok, err = catch (function()
+        local ran = false
+        do
+            local o = setmetatable({}, {__gc = function() ran = true end})
+            o = nil
+        end
+        collectgarbage(collect_mode)
+        full()
+        assert(ran)
+    end)()
+    collectgarbage(initial_mode)
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- ==========================================================
+-- Reachability boundaries
+-- ==========================================================
+
+-- a reachable object is never finalized prematurely
+local function a_reachable_object_is_never_finalized_prematurely_test()
+    local ran = false
+    local keep = setmetatable({}, {__gc = function() ran = true end})
+    full()
+    assert(not ran)
+    assert(type(keep) == "table")
+    keep = nil
+    full()
+    assert(ran)
+end
+
+-- a finalizer can read a sibling finalizable object it references
+local function a_finalizer_can_read_a_sibling_finalizable_object_it_references_test()
+    local seen = nil
+    do
+        local b = setmetatable({value = 55}, {__gc = function() end})
+        local a = setmetatable({ref = b}, {__gc = function(self)
+            seen = self.ref.value
+        end})
+        a, b = nil, nil
+    end
+    full()
+    assert(seen == 55)
+end
+
+-- data referenced by a resurrected object survives with it
+local function data_referenced_by_a_resurrected_object_survives_with_it_test()
+    local saved = nil
+    do
+        local payload = {data = "kept alive"}
+        local o = setmetatable({ref = payload}, {__gc = function(self)
+            saved = self
+        end})
+        o, payload = nil, nil
+    end
+    full()
+    assert(saved ~= nil)
+    assert(saved.ref.data == "kept alive")
+    saved = nil
+    full()
+end
+
+-- an object created inside a dead coroutine is finalized
+local function an_object_created_inside_a_dead_coroutine_is_finalized_test()
+    local ran = false
+    do
+        local co = coroutine.create(function()
+            local o = setmetatable({}, {__gc = function() ran = true end})
+            o = nil
+        end)
+        coroutine.resume(co)
+        co = nil
+    end
+    full()
+    assert(ran)
+end
+
+-- ==========================================================
+-- Tables versus userdata-like values
+-- ==========================================================
+
+-- a finalizable table vanishes from a weak-value table after collection
+local function a_finalizable_table_vanishes_from_a_weak_value_table_after_collection_test()
+    local wv = setmetatable({}, {__mode = "v"})
+    do
+        wv.entry = setmetatable({}, {__gc = function() end})
+    end
+    assert(wv.entry ~= nil)
+    full()
+    assert(wv.entry == nil)
+end
+
+-- a dropped file handle userdata vanishes from a weak-value table
+local function a_dropped_file_handle_userdata_vanishes_from_a_weak_value_table_test()
+    local wv = setmetatable({}, {__mode = "v"})
+    do
+        local w = io.open("./finalizer_probe.txt", "w")
+        w:write("probe")
+        w:close()
+        local f = io.open("./finalizer_probe.txt", "r")
+        assert(type(f) == "userdata")
+        wv.entry = f
+        f = nil
+    end
+    full()
+    assert(wv.entry == nil)
+end

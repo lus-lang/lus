@@ -1,0 +1,220 @@
+pledge("load")
+
+-- ===== ported from h1/groups.lus =====
+-- basic group declaration and access
+local function basic_group_declaration_and_access_test()
+    local z <group> = {
+        a = 1,
+        b = 2,
+        c = 3
+    }
+    assert(z.a == 1)
+    assert(z.b == 2)
+    assert(z.c == 3)
+end
+
+-- group with arithmetic on fields
+local function group_with_arithmetic_on_fields_test()
+    local z <group> = { a = 10, b = 20 }
+    assert(z.a + z.b == 30)
+    assert(z.a * z.b == 200)
+end
+
+-- group with function values
+local function group_with_function_values_test()
+    local utils <group> = {
+        add = function(x, y) return x + y end,
+        sub = function(x, y) return x - y end
+    }
+    assert(utils.add(5, 3) == 8)
+    assert(utils.sub(5, 3) == 2)
+end
+
+-- group with mixed value types
+local function group_with_mixed_value_types_test()
+    local mixed <group> = {
+        num = 42,
+        str = "hello",
+        bool = true,
+        tbl = {1, 2, 3}
+    }
+    assert(mixed.num == 42)
+    assert(mixed.str == "hello")
+    assert(mixed.bool == true)
+    assert(mixed.tbl[1] == 1)
+end
+
+-- multiple groups in same scope
+local function multiple_groups_in_same_scope_test()
+    local a <group> = { x = 1, y = 2 }
+    local b <group> = { x = 10, y = 20 }
+    assert(a.x == 1)
+    assert(b.x == 10)
+    assert(a.y + b.y == 22)
+end
+
+-- field mutation
+local function field_mutation_test()
+    local z <group> = { a = 1, b = 2 }
+    z.a = 100
+    z.b = 200
+    assert(z.a == 100)
+    assert(z.b == 200)
+end
+
+-- const field
+local function const_field_test()
+    local z <group> = { a = 1, b <const> = 2 }
+    assert(z.a == 1)
+    assert(z.b == 2)
+    z.a = 100  -- allowed
+    assert(z.a == 100)
+    -- Assigning to the const field is rejected at compile time
+    local bad, err = load("local z <group> = { a = 1, b <const> = 2 } z.b = 100")
+    assert(bad == nil, "assignment to a const group field should not compile")
+    assert(string.find(err, "attempt to assign to const variable") ~= nil)
+end
+
+-- subgroups
+local function subgroups_test()
+    local parent <group> = {
+        a = 1,
+        b = 2,
+        c <group> = {
+            d = 3,
+            e = 4
+        }
+    }
+    assert(parent.a == 1)
+    assert(parent.b == 2)
+    assert(parent.c.d == 3)
+    assert(parent.c.e == 4)
+end
+
+-- subgroup field mutation
+local function subgroup_field_mutation_test()
+    local parent <group> = {
+        a = 1,
+        c <group> = {
+            d = 10
+        }
+    }
+    parent.c.d = 100
+    assert(parent.c.d == 100)
+end
+
+-- deeply nested subgroups
+local function deeply_nested_subgroups_test()
+    local root <group> = {
+        a <group> = {
+            b <group> = {
+                c = 42
+            }
+        }
+    }
+    assert(root.a.b.c == 42)
+end
+
+-- multiple sibling subgroups
+local function multiple_sibling_subgroups_test()
+    local parent <group> = {
+        a = 1,
+        first <group> = {
+            x = 10,
+            y = 20
+        },
+        second <group> = {
+            x = 100,
+            y = 200
+        },
+        b = 2
+    }
+    assert(parent.a == 1)
+    assert(parent.b == 2)
+    assert(parent.first.x == 10)
+    assert(parent.first.y == 20)
+    assert(parent.second.x == 100)
+    assert(parent.second.y == 200)
+end
+
+-- deeply nested sibling subgroups
+local function deeply_nested_sibling_subgroups_test()
+    local root <group> = {
+        left <group> = {
+            inner <group> = {
+                val = 1
+            }
+        },
+        right <group> = {
+            inner <group> = {
+                val = 2
+            }
+        }
+    }
+    assert(root.left.inner.val == 1)
+    assert(root.right.inner.val == 2)
+end
+
+-- group copying
+local function group_copying_test()
+    local z <group> = { a = 1, b = 2 }
+    local y <group> = z
+    assert(y.a == 1)
+    assert(y.b == 2)
+    -- Copies are independent
+    z.a = 100
+    assert(z.a == 100)
+    assert(y.a == 1)  -- y unchanged
+end
+
+-- group overwriting
+local function group_overwriting_test()
+    local z <group> = { a = 1, b = 2 }
+    z = { a = 10 }  -- partial overwrite
+    assert(z.a == 10)
+    assert(z.b == 2)  -- unchanged
+end
+
+-- group overwriting multiple fields
+local function group_overwriting_multiple_fields_test()
+    local z <group> = { a = 1, b = 2, c = 3 }
+    z = { a = 100, c = 300 }
+    assert(z.a == 100)
+    assert(z.b == 2)  -- unchanged
+    assert(z.c == 300)
+end
+
+-- from deconstruction on group
+
+-- from deconstruction on group
+local function from_deconstruction_on_group_test()
+    local player <group> = {
+        name = "Hero",
+        health = 100,
+        position <group> = { x = 0, y = 0 }
+    }
+    local name from player
+    assert(name == "Hero")
+end
+
+-- from multiple fields from group
+local function from_multiple_fields_from_group_test()
+    local player <group> = {
+        name = "Hero",
+        health = 100
+    }
+    local name, health from player
+    assert(name == "Hero" and health == 100)
+end
+
+-- if-from with group
+local function if_from_with_group_test()
+    local player <group> = {
+        name = "Hero",
+        health = 100
+    }
+    if name, health from player then
+        assert(name == "Hero")
+        assert(health == 100)
+    end
+end

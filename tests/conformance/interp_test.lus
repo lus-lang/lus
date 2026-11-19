@@ -1,0 +1,291 @@
+pledge("load")
+
+-- ===== ported from h1/interp.lus =====
+local string = string
+
+-- ============================================
+-- Basic String Interpolation Tests
+-- ============================================
+
+-- simple literal string
+local function simple_literal_string_test()
+    local s = `hello`
+    assert(s == "hello")
+end
+
+-- empty interpolated string
+local function empty_interpolated_string_test()
+    local s = ``
+    assert(s == "")
+end
+
+-- variable interpolation with $name
+local function variable_interpolation_with_name_test()
+    local name = "world"
+    local s = `hello $name`
+    assert(s == "hello world")
+end
+
+-- expression interpolation with $(expr)
+local function expression_interpolation_with_expr_test()
+    local s = `the answer is $(40 + 2)`
+    assert(s == "the answer is 42")
+end
+
+-- multiple interpolations
+local function multiple_interpolations_test()
+    local a = "foo"
+    local b = "bar"
+    local s = `$a and $b`
+    assert(s == "foo and bar")
+end
+
+-- mixed variables and expressions
+local function mixed_variables_and_expressions_test()
+    local x = 10
+    local s = `x is $x, double is $(x * 2)`
+    assert(s == "x is 10, double is 20")
+end
+
+-- adjacent interpolations
+local function adjacent_interpolations_test()
+    local a = "hello"
+    local b = "world"
+    local s = `$a$b`
+    assert(s == "helloworld")
+end
+
+-- ============================================
+-- Type Conversion Tests
+-- ============================================
+
+-- number interpolation
+local function number_interpolation_test()
+    local n = 42
+    local s = `value: $n`
+    assert(s == "value: 42")
+end
+
+-- float interpolation
+local function float_interpolation_test()
+    local f = 3.14
+    local s = `pi is approximately $f`
+    assert(string.find(s, "3.14") ~= nil)
+end
+
+-- boolean interpolation true
+local function boolean_interpolation_true_test()
+    local t = true
+    local s = `value: $t`
+    assert(s == "value: true")
+end
+
+-- boolean interpolation false
+local function boolean_interpolation_false_test()
+    local f = false
+    local s = `value: $f`
+    assert(s == "value: false")
+end
+
+-- nil interpolation
+local function nil_interpolation_test()
+    local n = nil
+    local s = `value is $n`
+    assert(s == "value is nil")
+end
+
+-- table interpolation without __tostring
+local function table_interpolation_without_tostring_test()
+    local t = {}
+    local s = `$t`
+    assert(s == tostring(t), "interpolation should match the default tostring")
+    assert(string.sub(s, 1, 7) == "table: ")
+    assert(#s > 7, "the address part should follow the prefix")
+end
+
+-- ============================================
+-- __tostring Metamethod Tests
+-- ============================================
+
+-- __tostring metamethod is called
+local function tostring_metamethod_is_called_test()
+    local mt = {
+        __tostring = function(self)
+            return "custom:" .. self.value
+        end
+    }
+    local obj = setmetatable({value = 42}, mt)
+    local s = `object is $obj`
+    assert(s == "object is custom:42")
+end
+
+-- __tostring with expression
+local function tostring_with_expression_test()
+    local mt = {
+        __tostring = function(self)
+            return "point(" .. self.x .. "," .. self.y .. ")"
+        end
+    }
+    local p = setmetatable({x = 10, y = 20}, mt)
+    local s = `location: $(p)`
+    assert(s == "location: point(10,20)")
+end
+
+-- ============================================
+-- Escape Sequence Tests
+-- ============================================
+
+-- escaped dollar sign $$
+local function escaped_dollar_sign_test()
+    local s = `price: $$100`
+    assert(s == "price: $100")
+end
+
+-- escaped backtick
+local function escaped_backtick_test()
+    local s = `code: \`example\``
+    assert(s == "code: `example`")
+end
+
+-- newline escape
+local function newline_escape_test()
+    local s = `line1\nline2`
+    assert(s == "line1\nline2")
+end
+
+-- tab escape
+local function tab_escape_test()
+    local s = `col1\tcol2`
+    assert(s == "col1\tcol2")
+end
+
+-- backslash escape
+local function backslash_escape_test()
+    local s = `path: C:\\Users`
+    assert(s == "path: C:\\Users")
+end
+
+-- ============================================
+-- Multiline Interpolated Strings
+-- ============================================
+
+-- multiline string
+local function multiline_string_test()
+    local s = `line1
+line2
+line3`
+    assert(string.find(s, "\n") ~= nil)
+end
+
+-- multiline with interpolation
+local function multiline_with_interpolation_test()
+    local name = "world"
+    local s = `hello
+$name`
+    assert(s == "hello\nworld")
+end
+
+-- ============================================
+-- Complex Expression Tests
+-- ============================================
+
+-- function call in expression
+local function function_call_in_expression_test()
+    local function double(x) return x * 2 end
+    local s = `result: $(double(21))`
+    assert(s == "result: 42")
+end
+
+-- nested parentheses in expression
+local function nested_parentheses_in_expression_test()
+    local s = `result: $(((1 + 2) * 3))`
+    assert(s == "result: 9")
+end
+
+-- table access in expression
+local function table_access_in_expression_test()
+    local t = {value = 100}
+    local s = `value: $(t.value)`
+    assert(s == "value: 100")
+end
+
+-- method call in expression
+local function method_call_in_expression_test()
+    local obj = {
+        getValue = function(self)
+            return "test"
+        end
+    }
+    local s = `value: $(obj:getValue())`
+    assert(s == "value: test")
+end
+
+-- string concat in expression
+local function string_concat_in_expression_test()
+    local a = "hello"
+    local b = "world"
+    local s = `$(a .. " " .. b)`
+    assert(s == "hello world")
+end
+
+-- ============================================
+-- Edge Cases
+-- ============================================
+
+-- only expression, no literal
+local function only_expression_no_literal_test()
+    local x = 42
+    local s = `$x`
+    assert(s == "42")
+end
+
+-- empty parts between interpolations
+local function empty_parts_between_interpolations_test()
+    local a = 1
+    local b = 2
+    local s = `$(a)$(b)`
+    assert(s == "12")
+end
+
+-- trailing interpolation
+local function trailing_interpolation_test()
+    local x = "end"
+    local s = `the $x`
+    assert(s == "the end")
+end
+
+-- leading interpolation
+local function leading_interpolation_test()
+    local x = "start"
+    local s = `$x here`
+    assert(s == "start here")
+end
+
+-- ============================================
+-- Independence from Global tostring
+-- ============================================
+
+-- works when tostring is nil
+local function works_when_tostring_is_nil_test()
+    local original_tostring = tostring
+    _G.tostring = nil
+
+    local x = 42
+    local result = `value: $x`
+
+    _G.tostring = original_tostring
+    assert(result == "value: 42")
+end
+
+-- works when tostring is shadowed
+local function works_when_tostring_is_shadowed_test()
+    local original_tostring = tostring
+    _G.tostring = function() return "shadowed" end
+
+    local x = 100
+    local result = `number: $x`
+
+    _G.tostring = original_tostring
+    -- Should use internal conversion, not the shadowed tostring
+    assert(result == "number: 100")
+end

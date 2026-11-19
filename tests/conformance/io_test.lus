@@ -1,0 +1,687 @@
+pledge("load")
+
+-- ===== ported from h1/iolib.lus =====
+--[[
+  io module tests: the classic default-stream and file-handle layer.
+
+  Covers io.open in every mode including its nil plus message plus errno
+  failure return, the read formats l, L, n, a, and byte counts, io.write
+  with chaining and number formatting, io.input and io.output redirection
+  with restoration, io.close and io.flush, io.type across all three return
+  values, seek and setvbuf, io.lines with formats and auto-close, and GC
+  finalization flushing a dropped handle to disk.
+
+  All work happens inside a per-run sandbox directory whose name matches
+  the write grant. Two extra prefixes carry a read-only grant and no grant
+  at all so the pledge-denial tests exercise real permission boundaries:
+
+    iorw_<run>   : the sandbox directory, read and write
+    ioro_*       : read granted, write withheld
+    ionope_*     : no grant at all
+]]
+
+
+-- The fixture file is readable but never writable.
+local READONLY_FIXTURE = TEST_DIR .. "/fixtures/io/readonly.txt"
+
+pledge("fs:read=./iorw_*", "fs:write=./iorw_*",
+    "fs:read=./ioro_*", "fs:read=" .. READONLY_FIXTURE)
+
+
+local RUN = tostring(os.time())
+local SB = "./iorw_" .. RUN
+
+catch fs.remove(SB, true)
+fs.createdirectory(SB)
+
+local function path(name)
+    return SB .. "/" .. name
+end
+
+local function writefile(name, content)
+    local f = io.open(path(name), "wb")
+    f:write(content)
+    f:close()
+    return path(name)
+end
+
+local function readfile(name)
+    local f = io.open(path(name), "r")
+    local data = f:read("a")
+    f:close()
+    return data
+end
+
+-- Any test that redirects the default streams could wedge the rest of the
+-- suite by failing partway through, so every test starts from the standard
+-- streams.
+local function reset_streams()
+    catch io.input(io.stdin)
+    catch io.output(io.stdout)
+end
+
+-- ============================================
+-- io.open modes and failure contract
+-- ============================================
+
+-- io.open.
+
+-- write then read round-trips content in h1
+local function write_then_read_round_trips_content_in_h1_test()
+    reset_streams()
+    writefile("rt.txt", "hello world")
+    assert(readfile("rt.txt") == "hello world")
+end
+
+-- failure returns nil, a message string, and an errno
+local function failure_returns_nil_a_message_string_and_an_errno_test()
+    reset_streams()
+    local f, msg, errno = io.open(path("does_not_exist.txt"), "r")
+    assert(f == nil)
+    assert(type(msg) == "string")
+    assert(string.find(msg, "does_not_exist.txt"))
+    assert(type(errno) == "number")
+end
+
+-- an invalid mode string raises a bad-argument error
+local function an_invalid_mode_string_raises_a_bad_argument_error_test()
+    reset_streams()
+    raises(function() io.open(path("x.txt"), "z") end, "invalid mode")
+end
+
+-- the mode defaults to read
+local function the_mode_defaults_to_read_test()
+    reset_streams()
+    writefile("def.txt", "content")
+    local f = io.open(path("def.txt"))
+    assert(io.type(f) == "file")
+    assert(f:read("a") == "content")
+    f:close()
+    -- With the default read mode a missing file still returns nil.
+    assert((io.open(path("missing_default.txt"))) == nil)
+end
+
+-- append mode preserves existing content and adds after it
+local function append_mode_preserves_existing_content_and_adds_after_it_test()
+    reset_streams()
+    writefile("app.txt", "first")
+    local a = io.open(path("app.txt"), "a")
+    a:write("second")
+    a:close()
+    assert(readfile("app.txt") == "firstsecond")
+end
+
+-- binary mode round-trips embedded NUL and CRLF bytes
+local function binary_mode_round_trips_embedded_nul_and_crlf_bytes_test()
+    reset_streams()
+    local raw = "a\0b\r\nc"
+    local p = writefile("bin.dat", raw)
+    local f = io.open(p, "rb")
+    local back = f:read("a")
+    f:close()
+    -- Binary reads return vectors in 2.0 (spec/design/strings.md).
+    assert(type(back) == "vector")
+    assert(#back == 6)
+    assert(vector.tostring(back) == raw)
+    assert(vector.get(back, 1) == 0)
+    assert(vector.get(back, 3) == 13)
+end
+
+-- ============================================
+-- read formats
+-- ============================================
+
+-- io.read and file:read formats.
+
+-- A fixture with two text lines, then numbers, then a trailing line
+-- with no newline so the last-line boundary is exercised too.
+local function open_lines_fixture()
+    writefile("fmt.txt", "alpha\nbeta\n")
+    return io.open(path("fmt.txt"), "r")
+end
+
+-- default read strips the trailing newline
+local function default_read_strips_the_trailing_newline_test()
+    reset_streams()
+    local f = open_lines_fixture()
+    assert(f:read() == "alpha")
+    f:close()
+end
+
+-- the l format matches the default and strips the newline
+local function the_l_format_matches_the_default_and_strips_the_newline_test()
+    reset_streams()
+    local f = open_lines_fixture()
+    assert(f:read("l") == "alpha")
+    f:close()
+end
+
+-- the L format keeps the trailing newline
+local function the_l_format_keeps_the_trailing_newline_test()
+    reset_streams()
+    local f = open_lines_fixture()
+    assert(f:read("L") == "alpha\n")
+    f:close()
+end
+
+-- the a format returns the remainder and empty string at EOF
+local function the_a_format_returns_the_remainder_and_empty_string_at_eof_test()
+    reset_streams()
+    writefile("all.txt", "abc")
+    local f = io.open(path("all.txt"), "r")
+    assert(f:read("a") == "abc")
+    assert(f:read("a") == "")
+    f:close()
+end
+
+-- the a format on an empty file returns empty string
+local function the_a_format_on_an_empty_file_returns_empty_string_test()
+    reset_streams()
+    writefile("empty.txt", "")
+    local f = io.open(path("empty.txt"), "r")
+    assert(f:read("a") == "")
+    f:close()
+end
+
+-- the n format reads integers, floats, and exponents by type
+local function the_n_format_reads_integers_floats_and_exponents_by_type_test()
+    reset_streams()
+    writefile("nums.txt", "10 3.5 2e3")
+    local f = io.open(path("nums.txt"), "r")
+    local a = f:read("n")
+    local b = f:read("n")
+    local c = f:read("n")
+    f:close()
+    assert(a == 10)
+    assert(math.type(a) == "integer")
+    assert(b == 3.5)
+    assert(math.type(b) == "float")
+    assert(math.type(c) == "float")
+    assert(c == 2000.0)
+end
+
+-- the n format returns nil on non-numeric text
+local function the_n_format_returns_nil_on_non_numeric_text_test()
+    reset_streams()
+    writefile("notnum.txt", "banana")
+    local f = io.open(path("notnum.txt"), "r")
+    assert(f:read("n") == nil)
+    f:close()
+end
+
+-- an integer count reads exactly that many bytes
+local function an_integer_count_reads_exactly_that_many_bytes_test()
+    reset_streams()
+    writefile("bytes.txt", "abcdef")
+    local f = io.open(path("bytes.txt"), "r")
+    assert(f:read(4) == "abcd")
+    f:close()
+end
+
+-- a byte count near EOF returns the short remainder
+local function a_byte_count_near_eof_returns_the_short_remainder_test()
+    reset_streams()
+    writefile("short.txt", "abcdef")
+    local f = io.open(path("short.txt"), "r")
+    assert(f:read(100) == "abcdef")
+    f:close()
+end
+
+-- a byte count at EOF returns nil, and zero probes it
+local function a_byte_count_at_eof_returns_nil_and_zero_probes_it_test()
+    reset_streams()
+    writefile("eof.txt", "ab")
+    local f = io.open(path("eof.txt"), "r")
+    -- Not at EOF yet, so the zero-byte probe returns an empty string.
+    assert(f:read(0) == "")
+    f:read(2)
+    -- Now at EOF, the zero-byte probe and a real read both return nil.
+    assert(f:read(0) == nil)
+    assert(f:read(1) == nil)
+    f:close()
+end
+
+-- multiple formats in one call return multiple values
+local function multiple_formats_in_one_call_return_multiple_values_test()
+    reset_streams()
+    writefile("multi.txt", "one\ntwo\n")
+    local f = io.open(path("multi.txt"), "r")
+    local a, b = f:read("l", "l")
+    f:close()
+    assert(a == "one")
+    assert(b == "two")
+end
+
+-- an invalid format string raises a bad-argument error
+local function an_invalid_format_string_raises_a_bad_argument_error_test()
+    reset_streams()
+    writefile("badfmt.txt", "x")
+    local f = io.open(path("badfmt.txt"), "r")
+    raises(function() f:read("x") end, "bad argument")
+    f:close()
+end
+
+-- ============================================
+-- io.write, io.output, io.input redirection
+-- ============================================
+
+-- io.write and default output.
+
+-- io.output and io.input start on the standard streams
+local function io_output_and_io_input_start_on_the_standard_streams_test()
+    reset_streams()
+    assert(io.output() == io.stdout)
+    assert(io.input() == io.stdin)
+end
+
+-- redirecting output writes concatenated arguments verbatim
+local function redirecting_output_writes_concatenated_arguments_verbatim_test()
+    reset_streams()
+    io.output(path("out.txt"))
+    io.write("a", "b", "c")
+    io.close()
+    io.output(io.stdout)
+    assert(readfile("out.txt") == "abc")
+end
+
+-- io.write returns the handle so writes chain
+local function io_write_returns_the_handle_so_writes_chain_test()
+    reset_streams()
+    io.output(path("chain.txt"))
+    local ret = io.write("x")
+    assert(ret == io.output())
+    ret:write("y"):write("z")
+    io.close()
+    io.output(io.stdout)
+    assert(readfile("chain.txt") == "xyz")
+end
+
+-- numbers keep their integer and float spellings
+local function numbers_keep_their_integer_and_float_spellings_test()
+    reset_streams()
+    io.output(path("nums_out.txt"))
+    io.write(1, " ", 1.5, " ", 1.0)
+    io.close()
+    io.output(io.stdout)
+    assert(readfile("nums_out.txt") == "1 1.5 1.0")
+end
+
+-- io.write rejects a non string or number argument
+local io_write_rejects_a_non_string_or_number_argument_cases = {{true}, {{}}, {nil}}
+
+local function io_write_rejects_a_non_string_or_number_argument_test(value)
+    reset_streams()
+    io.output(path("reject.txt"))
+    local ok = catch io.write(value)
+    io.output(io.stdout)
+    assert(not ok)
+end
+
+-- io.output with a handle sets it and returns the same handle
+local function io_output_with_a_handle_sets_it_and_returns_the_same_handle_test()
+    reset_streams()
+    local h = io.open(path("handle_out.txt"), "w")
+    io.output(h)
+    assert(io.output() == h)
+    io.write("via handle")
+    io.output(io.stdout)
+    h:close()
+    assert(readfile("handle_out.txt") == "via handle")
+end
+
+-- io.input with a filename reads the file's first line
+local function io_input_with_a_filename_reads_the_file_s_first_line_test()
+    reset_streams()
+    writefile("in.txt", "one\ntwo\n")
+    io.input(path("in.txt"))
+    assert(io.read("l") == "one")
+    assert(io.read("l") == "two")
+    io.input(io.stdin)
+    assert(io.input() == io.stdin)
+end
+
+-- io.input with a handle sets it and returns the same handle
+local function io_input_with_a_handle_sets_it_and_returns_the_same_handle_test()
+    reset_streams()
+    writefile("inh.txt", "handle line")
+    local h = io.open(path("inh.txt"), "r")
+    io.input(h)
+    assert(io.input() == h)
+    assert(io.read("l") == "handle line")
+    io.input(io.stdin)
+    h:close()
+end
+
+-- io.input on a missing file raises rather than returning nil
+local function io_input_on_a_missing_file_raises_rather_than_returning_nil_test()
+    reset_streams()
+    raises(function() io.input(path("no_such_input.txt")) end)
+    io.input(io.stdin)
+end
+
+-- io.input with a bad argument type raises
+local function io_input_with_a_bad_argument_type_raises_test()
+    reset_streams()
+    raises(function() io.input(true) end, "FILE%*")
+    io.input(io.stdin)
+end
+
+-- ============================================
+-- io.close and io.flush
+-- ============================================
+
+-- io.close and io.flush.
+
+-- io.close on a handle returns true and marks it closed
+local function io_close_on_a_handle_returns_true_and_marks_it_closed_test()
+    reset_streams()
+    local f = io.open(path("close1.txt"), "w")
+    assert(io.close(f))
+    assert(io.type(f) == "closed file")
+end
+
+-- io.close with no argument closes the default output
+local function io_close_with_no_argument_closes_the_default_output_test()
+    reset_streams()
+    io.output(path("close2.txt"))
+    local out = io.output()
+    io.write("bye")
+    assert(io.close())
+    io.output(io.stdout)
+    assert(io.type(out) == "closed file")
+    assert(readfile("close2.txt") == "bye")
+end
+
+-- io.close on a non-file argument raises a bad-argument error
+local function io_close_on_a_non_file_argument_raises_a_bad_argument_error_test()
+    reset_streams()
+    raises(function() io.close(42) end, "FILE%* expected")
+end
+
+-- closing an already-closed file raises the closed-file error
+local function closing_an_already_closed_file_raises_the_closed_file_error_test()
+    reset_streams()
+    local f = io.open(path("dbl.txt"), "w")
+    f:close()
+    raises(function() f:close() end, "closed file")
+end
+
+-- a method call on a closed handle raises the closed-file error
+local function a_method_call_on_a_closed_handle_raises_the_closed_file_error_test()
+    reset_streams()
+    local f = io.open(path("closedread.txt"), "w")
+    f:close()
+    raises(function() f:read("l") end, "closed file")
+end
+
+-- io.flush makes buffered bytes visible to a second reader
+local function io_flush_makes_buffered_bytes_visible_to_a_second_reader_test()
+    reset_streams()
+    io.output(path("flush.txt"))
+    io.write("flushed before close")
+    assert(io.flush())
+    -- A separate read handle sees the bytes although the writer is still open.
+    local r = io.open(path("flush.txt"), "r")
+    assert(r:read("a") == "flushed before close")
+    r:close()
+    io.close()
+    io.output(io.stdout)
+end
+
+-- ============================================
+-- io.type across all three return values
+-- ============================================
+
+-- io.type.
+
+-- io.type reports open and closed file handles
+local function io_type_reports_open_and_closed_file_handles_test()
+    reset_streams()
+    local f = io.open(path("typ.txt"), "w")
+    assert(io.type(f) == "file")
+    f:close()
+    assert(io.type(f) == "closed file")
+end
+
+-- io.type returns nil for a non-file value
+local io_type_returns_nil_for_a_non_file_value_cases = {{42}, {"x"}, {{}}, {nil}, {true}}
+
+local function io_type_returns_nil_for_a_non_file_value_test(value)
+    reset_streams()
+    assert(io.type(value) == nil)
+end
+
+-- io.type returns nil for a non-file userdata
+local function io_type_returns_nil_for_a_non_file_userdata_test()
+    reset_streams()
+    assert(io.type(vector.create(4)) == nil)
+end
+
+-- io.type reports the standard streams as files
+local io_type_reports_the_standard_streams_as_files_cases = {{io.stdin}, {io.stdout}, {io.stderr}}
+
+local function io_type_reports_the_standard_streams_as_files_test(stream)
+    reset_streams()
+    assert(io.type(stream) == "file")
+end
+
+-- ============================================
+-- seek and setvbuf
+-- ============================================
+
+-- file:seek and file:setvbuf.
+
+-- seek returns positions for set, cur, and end
+local function seek_returns_positions_for_set_cur_and_end_test()
+    reset_streams()
+    writefile("seek.txt", "0123456789")
+    local f = io.open(path("seek.txt"), "rb")
+    assert(f:seek("set", 3) == 3)
+    assert(f:seek() == 3)
+    assert(f:seek("cur", 2) == 5)
+    assert(f:seek("end") == 10)
+    f:close()
+end
+
+-- seeking then reading returns bytes from the new position
+local function seeking_then_reading_returns_bytes_from_the_new_position_test()
+    reset_streams()
+    writefile("seekread.txt", "0123456789")
+    local f = io.open(path("seekread.txt"), "r")
+    f:seek("set", 4)
+    assert(f:read(3) == "456")
+    f:close()
+end
+
+-- an invalid whence raises an invalid-option error
+local function an_invalid_whence_raises_an_invalid_option_error_test()
+    reset_streams()
+    writefile("seekbad.txt", "abc")
+    local f = io.open(path("seekbad.txt"), "rb")
+    raises(function() f:seek("bogus") end, "invalid option")
+    f:close()
+end
+
+-- setvbuf accepts each buffering mode
+local setvbuf_accepts_each_buffering_mode_cases = {{"full"}, {"line"}, {"no"}}
+
+local function setvbuf_accepts_each_buffering_mode_test(mode)
+    reset_streams()
+    local f = io.open(path("vbuf.txt"), "w")
+    assert(f:setvbuf(mode))
+    f:close()
+end
+
+-- ============================================
+-- io.lines and file:lines
+-- ============================================
+
+-- io.lines.
+
+-- io.lines yields each line with the newline stripped
+local function io_lines_yields_each_line_with_the_newline_stripped_test()
+    reset_streams()
+    writefile("lines.txt", "alpha\nbeta\ngamma")
+    local out = {}
+    for ln in io.lines(path("lines.txt")) do
+        out[#out + 1] = ln
+    end
+    assert(#out == 3)
+    assert(out[1] == "alpha")
+    assert(out[2] == "beta")
+    -- The final line has no trailing newline yet is still yielded.
+    assert(out[3] == "gamma")
+end
+
+-- io.lines with the L format keeps the newline
+local function io_lines_with_the_l_format_keeps_the_newline_test()
+    reset_streams()
+    writefile("linesL.txt", "one\ntwo\n")
+    local first
+    for ln in io.lines(path("linesL.txt"), "L") do
+        first = ln
+        break
+    end
+    assert(first == "one\n")
+end
+
+-- io.lines with the n format yields numbers
+local function io_lines_with_the_n_format_yields_numbers_test()
+    reset_streams()
+    writefile("linesN.txt", "12\n34\n")
+    local out = {}
+    for n in io.lines(path("linesN.txt"), "n") do
+        out[#out + 1] = n
+    end
+    assert(#out == 2)
+    assert(out[1] == 12)
+    assert(out[2] == 34)
+end
+
+-- io.lines with a byte count yields fixed-size chunks
+local function io_lines_with_a_byte_count_yields_fixed_size_chunks_test()
+    reset_streams()
+    writefile("linesC.txt", "abcdefg")
+    local out = {}
+    for c in io.lines(path("linesC.txt"), 3) do
+        out[#out + 1] = c
+    end
+    assert(out[1] == "abc")
+    assert(out[2] == "def")
+    assert(out[3] == "g")
+end
+
+-- io.lines with multiple formats yields multiple values per step
+local function io_lines_with_multiple_formats_yields_multiple_values_per_step_test()
+    reset_streams()
+    writefile("linesM.txt", "one\ntwo\n")
+    local it = io.lines(path("linesM.txt"), "l", "l")
+    local a, b = it()
+    assert(a == "one")
+    assert(b == "two")
+end
+
+-- the io.lines iterator closes the file when it finishes
+local function the_io_lines_iterator_closes_the_file_when_it_finishes_test()
+    reset_streams()
+    writefile("linesclose.txt", "x\ny\n")
+    local it = io.lines(path("linesclose.txt"))
+    for _ in it do end
+    -- Draining the iterator auto-closes the handle, so a further call raises.
+    raises(function() it() end, "closed")
+end
+
+-- io.lines with no filename reads the default input
+local function io_lines_with_no_filename_reads_the_default_input_test()
+    reset_streams()
+    writefile("defin.txt", "line one\nline two\n")
+    io.input(path("defin.txt"))
+    local out = {}
+    for ln in io.lines() do
+        out[#out + 1] = ln
+    end
+    io.input(io.stdin)
+    assert(#out == 2)
+    assert(out[1] == "line one")
+end
+
+-- io.lines on a missing file raises rather than returning nil
+local function io_lines_on_a_missing_file_raises_rather_than_returning_nil_test()
+    reset_streams()
+    raises(function()
+        for _ in io.lines(path("no_such_lines.txt")) do end
+    end)
+end
+
+-- ============================================
+-- pledge gating
+-- ============================================
+
+-- pledge gating.
+
+-- every writable mode on a read-only path is denied
+local every_writable_mode_on_a_read_only_path_is_denied_cases = {{"w"}, {"a"}, {"w+"}, {"a+"}}
+
+local function every_writable_mode_on_a_read_only_path_is_denied_test(mode)
+    reset_streams()
+    local ok, err = catch io.open("./ioro_" .. RUN .. "_x.txt", mode)
+    assert(not ok, "the write grant is withheld for ioro_ paths")
+    assert(string.find(tostring(err), 'permission "fs:write" denied'))
+end
+
+-- an update mode on an existing read-only file is denied
+local function an_update_mode_on_an_existing_read_only_file_is_denied_test()
+    reset_streams()
+    local ok, err = catch io.open(READONLY_FIXTURE, "r+")
+    assert(not ok)
+    assert(string.find(tostring(err), 'permission "fs:write" denied'))
+end
+
+-- a read mode on a read-only path passes the pledge sweep
+local function a_read_mode_on_a_read_only_path_passes_the_pledge_sweep_test()
+    reset_streams()
+    -- The file does not exist, so the failure is the ordinary nil-plus-message
+    -- return and never a permission denial.
+    local f, msg = io.open("./ioro_" .. RUN .. "_y.txt", "r")
+    assert(f == nil)
+    assert(not tostring(msg):find("permission"),
+        "the read grant alone satisfies the sweep")
+end
+
+-- io.lines on an ungranted path is denied
+local function io_lines_on_an_ungranted_path_is_denied_test()
+    reset_streams()
+    local ok, err = catch (function()
+        for _ in io.lines("./ionope_" .. RUN .. ".txt") do end
+    end)()
+    assert(not ok, "no grant covers the ionope_ prefix")
+    assert(string.find(tostring(err), 'permission "fs:read" denied'))
+end
+
+-- ============================================
+-- GC finalization
+-- ============================================
+
+-- garbage collection.
+
+-- a dropped write handle is flushed to disk when collected
+local function a_dropped_write_handle_is_flushed_to_disk_when_collected_test()
+    reset_streams()
+    local name = "gc.txt"
+    do
+        local g = io.open(path(name), "w")
+        g:write("written then dropped")
+        -- The handle goes out of scope without an explicit close.
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    -- Reopening proves finalization flushed and closed the underlying file.
+    assert(readfile(name) == "written then dropped")
+end
+
+-- the sandbox is cleaned up
+local function z_the_sandbox_is_cleaned_up_test()
+    catch fs.remove(SB, true)
+    local left = catch fs.type(SB)
+    assert(not left)
+end
