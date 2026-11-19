@@ -12,7 +12,6 @@ const lus = @import("lus");
 const api = lus.api;
 const out = lus.lib.out;
 const package = lus.lib.package;
-const feedback = lus.compile.feedback;
 const Value = lus.vm.value.Value;
 const Thread = lus.vm.state.Thread;
 
@@ -31,7 +30,7 @@ const usage =
     \\  doc       generate API documentation from doc comments
     \\  debug     run a script under the debug adapter protocol
     \\  build     bundle a script into a standalone executable
-    \\  compile   compile a script to a binary chunk, optionally warm
+    \\  compile   compile a script to a binary chunk
     \\
     \\Options:
     \\  -e stat          execute string 'stat'
@@ -234,23 +233,17 @@ pub fn main(init: std.process.Init) !u8 {
         const cmd = args[1];
         const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile" };
         for (tools) |t| {
-            if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..], .{ .run_bundle = runBundleProfiled });
+            if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
         }
-        if (std.mem.eql(u8, cmd, "run")) return runMain(init, args, 2, null, null);
+        if (std.mem.eql(u8, cmd, "run")) return runMain(init, args, 2, null);
     }
-    return runMain(init, args, 1, null, null);
+    return runMain(init, args, 1, null);
 }
 
 /// Runs the entry module of a bundle. The options preserved at build time
 /// come first, then the executable path takes the place of the script, so
 /// every user argument reaches the script and none is read as an option.
 fn runBundle(init: std.process.Init, b: *const lus.bundle.Bundle, args: []const []const u8) !u8 {
-    return runBundleProfiled(init, b, args, null);
-}
-
-/// Runs a bundle, recording the feedback of the run in `profile` when one
-/// is given (`lus compile --profile` and `lus build --profile`).
-fn runBundleProfiled(init: std.process.Init, b: *const lus.bundle.Bundle, args: []const []const u8, profile: ?*feedback.Profile) anyerror!u8 {
     const gpa = init.gpa;
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
@@ -261,10 +254,10 @@ fn runBundleProfiled(init: std.process.Init, b: *const lus.bundle.Bundle, args: 
     if (args.len > 1) try argv.appendSlice(gpa, args[1..]);
     package.bundle = b;
     defer package.bundle = null;
-    return runMain(init, argv.items, 1, b.entryModule(), profile);
+    return runMain(init, argv.items, 1, b.entryModule());
 }
 
-fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry: ?lus.bundle.Module, profile: ?*feedback.Profile) !u8 {
+fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry: ?lus.bundle.Module) !u8 {
     const gpa = init.gpa;
     const io = init.io;
     var cli = (try parseArgs(gpa, args, start)) orelse return 1;
@@ -301,7 +294,6 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     l.g.args = args;
     l.g.warn_on = cli.warnings;
     if (cli.gc_pause) |p| l.g.pause = p;
-    if (profile) |p| try feedback.start(l, p);
     try api.setFlags(l, cli.flags.items);
     api.openLibs(l) catch {
         std.debug.print("lus: cannot open libraries\n", .{});
@@ -336,7 +328,6 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
 
     if (entry) |m| {
         if (!runChunk(l, m.data, m.chunkname, args[cli.script_index + 1 ..])) return 1;
-        if (profile) |p| try feedback.harvest(l, p);
     } else if (cli.script) |path| {
         if (cli.dis) return disassemble(l, path);
         // When the host limits file reads with -P, the entry script itself

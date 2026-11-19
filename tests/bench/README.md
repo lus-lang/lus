@@ -28,12 +28,3 @@ tests/bench/run.sh 5      # five runs per benchmark
 The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LEGACY` is the 1.7 binary and defaults to `legacy/lus/build/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. LuaJIT runs with `-joff`, so its column is its interpreter. Lus runs as it does by default, with its baseline JIT on. Set `LUS_JIT=off` in the environment to time the Lus interpreter alone. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash.
 
 The last column is the Lus time divided by the legacy time. Numbers below one mean the new runtime is faster.
-
-## Warm starts
-
-`warm/run.sh` measures warm starts (`spec/design/warmstart.md`). `warm/gen.lus` writes a program of many small functions that each turn hot after a few calls, and the script compiles it once cold and once with `lus compile --profile`. It prints the best wall time of each chunk, of the cold chunk under `LUS_JIT=off`, and of an empty script, and then one in-program timeline of each, which compares the first ten rounds with ten rounds at steady speed.
-
-```sh
-tests/bench/warm/run.sh            # 10 runs, 600 functions, 100 rounds
-tests/bench/warm/run.sh 20 2000 30 # 20 runs, 2000 functions, 30 rounds
-```

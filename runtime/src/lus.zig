@@ -42,7 +42,6 @@ pub const compile = struct {
     pub const opcodes = @import("compile/opcodes.zig");
     pub const disasm = @import("compile/disasm.zig");
     pub const dump = @import("compile/dump.zig");
-    pub const feedback = @import("compile/feedback.zig");
 };
 
 test {
@@ -69,7 +68,6 @@ test {
     _ = @import("fuzz.zig");
     _ = compile.opcodes;
     _ = compile.codegen;
-    _ = compile.feedback;
     _ = @import("tools/compile.zig");
     _ = api;
     _ = bundle;

@@ -4,7 +4,6 @@
 
 const std = @import("std");
 const dump = @import("compile/dump.zig");
-const feedback = @import("compile/feedback.zig");
 const value = @import("vm/value.zig");
 const object = @import("vm/object.zig");
 const state = @import("vm/state.zig");
@@ -67,7 +66,7 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
         const was_stopped = g.gc_stopped;
         g.gc_stopped = true;
         defer g.gc_stopped = was_stopped;
-        const loaded = dump.undumpWarm(g, src, chunkname) catch |e| switch (e) {
+        const p = dump.undump(g, src, chunkname) catch |e| switch (e) {
             error.OutOfMemory => return l.raiseMem(),
             error.Malformed => {
                 const s = try l.newString("bad binary format (truncated or corrupted chunk)");
@@ -76,10 +75,9 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
                 return error.LusError;
             },
         };
-        feedback.apply(l, loaded.proto, loaded.feedback);
-        const cl = try newMainClosure(l, loaded.proto, g.globals);
+        const cl = try newMainClosure(l, p, g.globals);
         try l.push(Value.obj(.closure, cl));
-        return feedback.record(l, chunkname);
+        return;
     }
     const r = codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flagsTable(g), .debug = g.debugger != null }) catch return l.raiseMem();
     switch (r) {
@@ -93,7 +91,6 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
         .ok => |p| {
             const cl = try newMainClosure(l, p, g.globals);
             try l.push(Value.obj(.closure, cl));
-            try feedback.record(l, chunkname);
         },
     }
 }

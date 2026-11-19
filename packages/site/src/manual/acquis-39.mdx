@@ -14,7 +14,7 @@ lus check   check source files for errors and lint warnings
 lus doc     generate API documentation from doc comments
 lus ast     print the syntax tree of a file as JSON
 lus build   bundle a script into a standalone executable
-lus compile compile a script to a binary chunk, optionally warm
+lus compile compile a script to a binary chunk
 ```
 
 The tools that read source accept file names, and with no file, or with the file `-`, they read standard input. Their exit status is 0 on success, 1 when they report a problem in the input, and 2 for a usage or I/O error.
@@ -103,22 +103,17 @@ lus build -o app main.lus
 | `-P perm`, `--pledge perm` | Grant a permission every time the program runs. |
 | `-F name[=value]`, `--flag name[=value]` | Define a [compile-time flag](/manual/acquis-28). |
 | `--include path[:alias]` | Bundle a module file, or every module below a directory, even when no literal `require` names it. |
-| `--profile` | Run the program once, with the arguments after `--`, and make the executable start warm (see below). |
 
 The executable is a copy of the running `lus` with the compiled chunks appended. It grants nothing implicitly, so the program runs with exactly the permissions it pledges plus those given with `-P` at build time. Bundled modules are part of the program, so `require` loads them with no permission, as it does for preincluded modules. Every command line argument goes to the script, which reads them from `arg` and `...` as usual.
 
-## Binary chunks and warm starts
+## Binary chunks
 
-`lus compile SCRIPT` writes the compiled script to `SCRIPT.lusc`, or to the file named by `-o`. `-s` leaves out debug information, and `-F` defines compile-time flags as for `lus build`. `lus` runs the chunk directly, and `load` reads it in binary mode.
-
-With `--profile`, the command first runs the script, with the arguments after `--` and the permissions given with `-P`, and then writes the chunk together with the feedback of that run: the functions that the JIT compiled because they were hot. When the chunk loads again, those functions compile at once, so the program runs at full speed from its first instruction instead of after the warmup. `lus build --profile` does the same for every module of a standalone executable that the profiling run loaded.
+`lus compile SCRIPT` writes the compiled script to `SCRIPT.lusc`, or to the file named by `-o`. The chunk is the one [`string.dump`](/manual/api#string.dump) writes for the compiled script. `-s` leaves out debug information, and `-F` defines compile-time flags as for `lus build`, so their branches fold into the chunk. `lus` runs the chunk directly, and `load` reads it in binary mode.
 
 ```sh
-lus compile --profile -o report.lusc report.lus -- sample.csv
+lus compile -o report.lusc report.lus
 lus report.lusc data.csv
 ```
-
-Feedback only ever decides when a function compiles. A chunk whose feedback belongs to another chunk or another version of Lus, or is damaged, loads exactly as one without feedback, and an interpreted run ignores it. The design note `spec/design/warmstart.md` in the repository gives the format and the measurements.
 
 ---
 

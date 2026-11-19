@@ -20,11 +20,11 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 ## Layout
 
 - `src/syntax`: lexer, syntax tree, parser, tree walker.
-- `src/compile`: code generator, bytecode format, disassembler, binary chunks (`dump.zig`), and the feedback that makes a chunk start warm (`feedback.zig`, `../spec/design/warmstart.md`).
+- `src/compile`: code generator, bytecode format, disassembler, binary chunks (`dump.zig`).
 - `src/vm`: values, objects, strings (WTF-8), tables, the collector, the interpreter, generic operations (`ops.zig`), debug information, pledge.
 - `src/jit`: the baseline JIT. `jit.zig` holds the tier-up policy and the hand-over between the tiers, `emit.zig` the templates, `a64.zig` and `x64.zig` the assemblers, `helpers.zig` the routines native code calls, and `mem.zig` the executable memory.
 - `src/lib`: the standard library, one file per module, opened from `lib/init.zig`.
-- `src/tools`: `lus test` and the other developer tools. `lus build` and `lus compile` run a profiling run through `tools.Host`, which `main.zig` provides.
+- `src/tools`: `lus test` and the other developer tools, including `lus compile`, which writes a script as a binary chunk.
 - `src/api.zig`: the embedding interface used from Zig. `src/capi.zig`: the C interface declared in `include/lus.h`. `src/main.zig`: the CLI. `src/wasm.zig`: the root of the WebAssembly build, which exports the C interface.
 - `src/bundle.zig`: the payload format of standalone executables made by `lus build` (`src/tools/build.zig`).
 

@@ -94,7 +94,6 @@ Code is position independent. Addresses of runtime routines and of constants are
 - `LUS_JIT=off` interprets everything. `LUS_JIT=eager` compiles every function on its first call, which is what the test suites use. `LUS_JIT=on` is the default.
 - `LUS_JIT_THRESHOLD=N` sets the number of events before a function compiles.
 - `debug.jit()` returns the setting, and `debug.jit(f)` tells whether `f` has native code.
-- A binary chunk written by `lus compile --profile` or `lus build --profile` names the functions that were hot in a profiling run, and loading it compiles them at once (`warmstart.md`).
 - A host written in Zig calls `jit.configure`.
 
 ## Measurements
@@ -132,4 +131,5 @@ The numbers of the `rewrite` branch when this work started, before the array ele
 - A leaner frame for calls between compiled functions.
 - Windows. The emitter follows the System V convention on x86-64, and the arena uses `mmap`.
 - Systems that forbid writable and executable mappings run interpreted. Mapping the code twice, once writable and once executable, would lift that.
+- Warm starts, binary chunks that compile the functions a profiling run found hot, were built and measured and are kept out (`warmstart.md`).
 - The embedding interface in C has no JIT control yet. A state created through it uses the default setting, and a host written in Zig calls `jit.configure`.

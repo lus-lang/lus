@@ -7,9 +7,6 @@
 //! fields, code, constants, upvalue descriptors, nested prototypes,
 //! exception table and (unless stripped) its debug information.
 //! Integers are little endian. Lengths are unsigned LEB128.
-//!
-//! A chunk may be followed by a feedback section (`feedback.zig`), which
-//! warm starts read. Any other bytes after the chunk make it malformed.
 
 const std = @import("std");
 const vm = struct {
@@ -20,7 +17,6 @@ const vm = struct {
     const numeric = @import("../vm/numeric.zig");
 };
 const object = vm.object;
-const feedback = @import("feedback.zig");
 const Value = vm.value.Value;
 const Global = vm.state.Global;
 const Proto = object.Proto;
@@ -185,18 +181,6 @@ pub const UndumpError = Allocator.Error || error{Malformed};
 /// the caller while the prototypes are built. `chunkname` names stripped
 /// chunks.
 pub fn undump(g: *Global, src: []const u8, chunkname: []const u8) UndumpError!*Proto {
-    return (try undumpWarm(g, src, chunkname)).proto;
-}
-
-pub const Loaded = struct {
-    proto: *Proto,
-    /// The feedback section after the chunk, checked against it.
-    feedback: feedback.Feedback,
-};
-
-/// Reads a binary chunk and checks the feedback section that may follow
-/// it. Feedback that fails its checks never fails the load.
-pub fn undumpWarm(g: *Global, src: []const u8, chunkname: []const u8) UndumpError!Loaded {
     var r: Reader = .{ .g = g, .src = src };
     if (!isBinary(src)) return error.Malformed;
     r.pos = signature.len;
@@ -207,9 +191,8 @@ pub fn undumpWarm(g: *Global, src: []const u8, chunkname: []const u8) UndumpErro
         error.InvalidUtf8 => return error.Malformed,
     };
     const p = try r.proto();
-    const rest = src[r.pos..];
-    if (rest.len != 0 and !feedback.startsSection(rest)) return error.Malformed;
-    return .{ .proto = p, .feedback = feedback.check(src[0..r.pos], rest, p) };
+    if (r.pos != src.len) return error.Malformed;
+    return p;
 }
 
 const Reader = struct {

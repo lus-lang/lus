@@ -1,0 +1,162 @@
+--[[
+  Tests for `lus compile`, which writes a script as a binary chunk. They
+  run the lus binary that sits in the runtime build directory, or the one
+  named by the LUS_BIN environment variable.
+]]
+
+pledge("load", "fs", "exec", "env")
+
+local windows = package.config:sub(1, 1) == "\\"
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function shell_quote(value)
+    if windows then
+        return '"' .. value .. '"'
+    end
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+local lus_cmd = shell_quote(lus_bin)
+
+local function run_command(command)
+    local h = io.popen(command .. " 2>&1")
+    assert(h, "could not start command: " .. command)
+    local out = h:read("a")
+    local ok = h:close()
+    return ok == true or ok == 0, out
+end
+
+local function write_file(filename, contents)
+    local file = assert(io.open(filename, "wb"))
+    assert(file:write(contents))
+    assert(file:close())
+end
+
+local function read_bytes(filename)
+    local file = assert(io.open(filename, "rb"))
+    local bytes = file:read("a")
+    file:close()
+    return bytes
+end
+
+local function same_bytes(a, b)
+    if #a ~= #b then return false end
+    for i = 0, #a - 1 do
+        if vector.get(a, i) ~= vector.get(b, i) then return false end
+    end
+    return true
+end
+
+-- Returns a copy of `v` with `extra` appended.
+local function with_trailing(v, extra)
+    local out = vector.create(#v + #extra)
+    for i = 0, #v - 1 do vector.set(out, i, vector.get(v, i)) end
+    for i = 1, #extra do vector.set(out, #v + i - 1, extra:byte(i)) end
+    return out
+end
+
+local program = [[
+local quiet = ...
+local function square(x) return x * x end
+local total = 0
+for i = 1, 1000 do total = total + square(i) end
+if not quiet then print("total " .. total) end
+local folded = false
+if flags.answer then folded = true end
+return total, folded
+]]
+
+local fixture_number = 0
+
+local function new_fixture()
+    fixture_number = fixture_number + 1
+    local root = "compiletest" .. tostring(fixture_number)
+    catch fs.remove(root, true)
+    fs.createdirectory(root)
+    return root
+end
+
+local function compile(args)
+    return run_command(lus_cmd .. " compile " .. args)
+end
+
+local function compiled_chunk_runs_test()
+    local root = new_fixture()
+    local script = fs.path.join(root, "p.lus")
+    write_file(script, program)
+    local ok, out = compile(shell_quote(script))
+    assert(ok, out)
+    local chunk = fs.path.join(root, "p.lusc")
+    ok, out = run_command(lus_cmd .. " " .. shell_quote(chunk))
+    assert(ok, out)
+    assert(out:find("total 333833500", 1, true), out)
+    local f = assert(load(read_bytes(chunk), "=compiled", "b"))
+    assert(f(true) == 333833500)
+    catch fs.remove(root, true)
+end
+
+local function chunk_matches_string_dump_test()
+    local root = new_fixture()
+    local script = fs.path.join(root, "m.lus")
+    local chunk = fs.path.join(root, "out.lusc")
+    write_file(script, program)
+    local ok, out = compile("-o " .. shell_quote(chunk) .. " " .. shell_quote(script))
+    assert(ok, out)
+    local dumped = string.dump(assert(load(program, "@" .. script)))
+    assert(same_bytes(read_bytes(chunk), dumped), "lus compile and string.dump disagree")
+    catch fs.remove(root, true)
+end
+
+local function strip_and_flags_test()
+    local root = new_fixture()
+    local script = fs.path.join(root, "s.lus")
+    local full = fs.path.join(root, "full.lusc")
+    local stripped = fs.path.join(root, "stripped.lusc")
+    write_file(script, program)
+    local ok, out = compile("-o " .. shell_quote(full) .. " -Fanswer=42 " .. shell_quote(script))
+    assert(ok, out)
+    ok, out = compile("-s -o " .. shell_quote(stripped) .. " " .. shell_quote(script))
+    assert(ok, out)
+    assert(#read_bytes(stripped) < #read_bytes(full))
+    local f = assert(load(read_bytes(stripped), "=stripped", "b"))
+    assert(f(true) == 333833500)
+    -- The flag folds into the chunk at compile time, so the chunk keeps
+    -- the branch where the running state has no such flag.
+    local g = assert(load(read_bytes(full), "=full", "b"))
+    local total, folded = g(true)
+    assert(total == 333833500 and folded == true)
+    assert(select(2, f(true)) == false)
+    catch fs.remove(root, true)
+end
+
+local function trailing_bytes_are_malformed_test()
+    local root = new_fixture()
+    local script = fs.path.join(root, "t.lus")
+    write_file(script, program)
+    local ok, out = compile(shell_quote(script))
+    assert(ok, out)
+    local bytes = read_bytes(fs.path.join(root, "t.lusc"))
+    local f, err = load(with_trailing(bytes, "x"), "=trailing", "b")
+    assert(f == nil, "trailing bytes were accepted")
+    assert(err:find("bad binary format", 1, true), err)
+    catch fs.remove(root, true)
+end
+
+local function bad_input_is_reported_test()
+    local root = new_fixture()
+    local script = fs.path.join(root, "bad.lus")
+    write_file(script, "local = 1\n")
+    local ok, out = compile(shell_quote(script))
+    assert(not ok, "a syntax error compiled")
+    assert(out:find("bad.lus:1", 1, true), out)
+    assert(not (catch fs.type(fs.path.join(root, "bad.lusc"))), "a failed compile wrote a chunk")
+    -- A binary chunk is not compiled again.
+    write_file(script, program)
+    ok, out = compile(shell_quote(script))
+    assert(ok, out)
+    ok, out = compile(shell_quote(fs.path.join(root, "bad.lusc")))
+    assert(not ok and out:find("already a binary chunk", 1, true), out)
+    ok, out = compile("")
+    assert(not ok and out:find("usage: lus compile", 1, true), out)
+    catch fs.remove(root, true)
+end
