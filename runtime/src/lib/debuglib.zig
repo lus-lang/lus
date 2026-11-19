@@ -29,6 +29,8 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "getregistry", .func = getregistry },
     .{ .name = "gethook", .func = gethook },
     .{ .name = "sethook", .func = sethook },
+    .{ .name = "getuservalue", .func = getuservalue },
+    .{ .name = "setuservalue", .func = setuservalue },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -74,6 +76,7 @@ fn getinfo(l: *Thread) Error!u32 {
     const co = ta[0];
     const a = ta[1];
     const what = (try aux.optString(l, a + 1, "flnSrtu")).?;
+    if (what.len > 0 and what[0] == '>') return aux.argError(l, a + 1, "invalid option '>'", .{});
     const target = l.arg(a);
     var func: Value = .nil;
     var fi: ?usize = null;
@@ -95,7 +98,8 @@ fn getinfo(l: *Thread) Error!u32 {
                 const p = c.proto;
                 const src = if (p.source) |s| s.bytes() else "=?";
                 try aux.setField(l, t, "source", try l.newStringValue(src));
-                try aux.setField(l, t, "short_src", try l.newStringValue(state.shortSource(p)));
+                var sbuf: [id_size]u8 = undefined;
+                try aux.setField(l, t, "short_src", try l.newStringValue(chunkId(&sbuf, src)));
                 try aux.setField(l, t, "linedefined", Value.int(p.line_defined));
                 try aux.setField(l, t, "lastlinedefined", Value.int(p.last_line_defined));
                 try aux.setField(l, t, "what", try l.newStringValue(if (p.line_defined == 0) "main" else "Lua"));
@@ -150,7 +154,6 @@ fn getinfo(l: *Thread) Error!u32 {
                 try aux.setField(l, t, "activelines", Value.obj(.table, lines));
             }
         },
-        '>' => {},
         else => return aux.argError(l, a + 1, "invalid option", .{}),
     };
     return 1;
@@ -182,6 +185,8 @@ fn getlocal(l: *Thread) Error!u32 {
     const co = ta[0];
     const a = ta[1];
     const n = try aux.checkInt(l, a + 1);
+    // A native function has no named parameters.
+    if (l.arg(a).tag == .native) return aux.retNil(l);
     if (l.arg(a).tag == .closure) {
         // Parameter names of a function.
         const p = l.arg(a).as(Closure).proto;
@@ -298,12 +303,152 @@ fn getregistry(l: *Thread) Error!u32 {
     return aux.ret(l, l.g.registry);
 }
 
-fn gethook(l: *Thread) Error!u32 {
-    return aux.retNil(l);
+// ---------------------------------------------------------------------
+// Hooks
+//
+// The installed hook of each thread is recorded in a weak-keyed registry
+// table, as `{ hook, mask, count }`. The table is the single record of
+// installed hooks, so `gethook` reports exactly what `sethook` installed.
+
+const hook_key = "_HOOKKEY";
+
+fn hookTable(l: *Thread) Error!*Table {
+    const reg = l.g.registry.as(Table);
+    const cur = try aux.getField(l, reg, hook_key);
+    if (cur.tag == .table) return cur.as(Table);
+    const t = try l.newTable(0, 1);
+    try aux.setField(l, reg, hook_key, Value.obj(.table, t));
+    try aux.setField(l, t, "__mode", try l.newStringValue("k"));
+    t.metatable = t;
+    return t;
 }
 
+fn gethook(l: *Thread) Error!u32 {
+    const co = threadArg(l)[0];
+    const t = try hookTable(l);
+    const rec = table.get(t, Value.obj(.thread, co));
+    if (rec.tag != .table) return aux.retNil(l);
+    const r = rec.as(Table);
+    try l.push(table.getInt(r, 1));
+    try l.push(table.getInt(r, 2));
+    try l.push(table.getInt(r, 3));
+    return 3;
+}
+
+/// debug.sethook([thread,] hook, mask [, count]). With no hook, the
+/// thread's hook is removed.
 fn sethook(l: *Thread) Error!u32 {
-    // Hooks arrive with the debugger interpreter loop (lus debug).
-    _ = l;
+    const ta = threadArg(l);
+    const co = ta[0];
+    const a = ta[1];
+    const t = try hookTable(l);
+    const key = Value.obj(.thread, co);
+    if (l.arg(a).isNil()) {
+        try ops.rawSet(l, t, key, .nil);
+        return 0;
+    }
+    const smask = try aux.checkBytes(l, a + 1);
+    _ = try aux.checkFunction(l, a);
+    const count = try aux.optInt(l, a + 2, 0);
+    // The mask keeps the call, return, and line flags in that order.
+    var buf: [3]u8 = undefined;
+    var n: usize = 0;
+    for ("crl") |ch| if (std.mem.indexOfScalar(u8, smask, ch) != null) {
+        buf[n] = ch;
+        n += 1;
+    };
+    if (n == 0 and count <= 0) {
+        try ops.rawSet(l, t, key, .nil);
+        return 0;
+    }
+    const rec = try l.newTable(3, 0);
+    try l.push(Value.obj(.table, rec));
+    try ops.rawSet(l, rec, Value.int(1), l.arg(a));
+    try ops.rawSet(l, rec, Value.int(2), try l.newStringValue(buf[0..n]));
+    try ops.rawSet(l, rec, Value.int(3), Value.int(@max(count, 0)));
+    try ops.rawSet(l, t, key, Value.obj(.table, rec));
     return 0;
+}
+
+// ---------------------------------------------------------------------
+// User values
+
+/// debug.getuservalue(u [, n]): the n-th user value of a full userdata and
+/// true, or fail when `u` is not a full userdata or has no such slot.
+fn getuservalue(l: *Thread) Error!u32 {
+    const n = try aux.optInt(l, 2, 1);
+    const v = l.arg(1);
+    if (v.tag != .userdata) return aux.retNil(l);
+    const vals = v.as(object.Userdata).userValues();
+    if (n < 1 or n > vals.len) return aux.retNil(l);
+    try l.push(vals[@intCast(n - 1)]);
+    try l.push(.true);
+    return 2;
+}
+
+/// debug.setuservalue(u, value [, n]): stores `value` in the n-th user
+/// value of `u` and returns `u`, or fail when the slot does not exist.
+fn setuservalue(l: *Thread) Error!u32 {
+    const n = try aux.optInt(l, 3, 1);
+    if (l.arg(1).tag != .userdata) return aux.typeError(l, 1, "userdata");
+    const v = try aux.checkAny(l, 2);
+    const vals = l.arg(1).as(object.Userdata).userValues();
+    if (n < 1 or n > vals.len) return aux.retNil(l);
+    vals[@intCast(n - 1)] = v;
+    return aux.ret(l, l.arg(1));
+}
+
+// ---------------------------------------------------------------------
+// Chunk names
+
+/// The size of a `short_src` buffer, including room for a terminator.
+const id_size = 60;
+
+/// Formats a chunk name for `short_src`: "=name" keeps the name, "@file"
+/// keeps the file name and shortens it from the front, and source text
+/// becomes `[string "first line"]`, shortened with "...". The result is
+/// cut on character boundaries so it stays valid text.
+fn chunkId(buf: *[id_size]u8, src: []const u8) []const u8 {
+    const max = id_size - 1;
+    if (src.len > 0 and src[0] == '=') {
+        return copyPrefix(buf, src[1..], max);
+    }
+    if (src.len > 0 and src[0] == '@') {
+        const name = src[1..];
+        if (name.len <= max) return copyPrefix(buf, name, max);
+        var start = name.len - (max - 3);
+        while (start < name.len and (name[start] & 0xC0) == 0x80) start += 1;
+        @memcpy(buf[0..3], "...");
+        @memcpy(buf[3 .. 3 + name.len - start], name[start..]);
+        return buf[0 .. 3 + name.len - start];
+    }
+    const pre = "[string \"";
+    const rets = "...";
+    const pos = "\"]";
+    const room = id_size - (pre.len + rets.len + pos.len) - 1;
+    var len: usize = 0;
+    @memcpy(buf[0..pre.len], pre);
+    len = pre.len;
+    const nl = std.mem.indexOfScalar(u8, src, '\n');
+    if (src.len < room and nl == null) {
+        @memcpy(buf[len .. len + src.len], src);
+        len += src.len;
+    } else {
+        var n = nl orelse src.len;
+        if (n > room) n = room;
+        while (n > 0 and n < src.len and (src[n] & 0xC0) == 0x80) n -= 1;
+        @memcpy(buf[len .. len + n], src[0..n]);
+        len += n;
+        @memcpy(buf[len .. len + rets.len], rets);
+        len += rets.len;
+    }
+    @memcpy(buf[len .. len + pos.len], pos);
+    return buf[0 .. len + pos.len];
+}
+
+fn copyPrefix(buf: *[id_size]u8, s: []const u8, max: usize) []const u8 {
+    var n = @min(s.len, max);
+    while (n > 0 and n < s.len and (s[n] & 0xC0) == 0x80) n -= 1;
+    @memcpy(buf[0..n], s[0..n]);
+    return buf[0..n];
 }
