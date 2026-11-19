@@ -424,7 +424,10 @@ fn writeBack(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, tables: ?[]con
     for (frames) |fm| {
         for (u.entries[fm.entries..][0..fm.count]) |e| {
             if (e.val.kind == .virt) {
-                if (tables) |t| l.stack[base + e.slot] = Value.obj(.table, t[e.val.bits]);
+                // Without the tables, the slot holds nil rather than what
+                // it held before, which the program may have dropped and
+                // which the collector must then be free to collect.
+                l.stack[base + e.slot] = if (tables) |t| Value.obj(.table, t[e.val.bits]) else .nil;
                 continue;
             }
             l.stack[base + e.slot] = valueOf(e.val, regs);
@@ -442,7 +445,7 @@ fn materialize(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, out: *[max_v
     const g = l.g;
     const s = u.snaps[snap];
     for (u.virts[s.virts..][0..s.nvirts], 0..) |v, i| {
-        const t = rt.newTable(l, 0, v.nc) orelse return null;
+        const t = rt.newVirtualTable(l, 0, v.nc) orelse return null;
         for (u.vfields[v.fields..][0..v.count]) |x| {
             t.hash[x.node] = .{ .key = Value.make(x.key, .string), .val = valueOf(x.val, regs) };
         }
@@ -484,6 +487,9 @@ pub const rt = struct {
     pub fn deopt(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(.c) jit.Target {
         const g = l.g;
         if (g.jit.opt_dump) std.debug.print("  exit: snapshot {d} of the unit at {d}, pc {d}\n", .{ snap, u.entry_pc, u.frames[u.snaps[snap].frames + u.snaps[snap].nframes - 1].pc });
+        // Read before the tables of the snapshot are allocated, which
+        // gives their share of the count back.
+        const sunk_exit = g.jit.sunk >= g.jit.sunk_limit;
         var tbuf: [max_virts]*Table = undefined;
         const tables = materialize(l, u, @intCast(snap), regs, &tbuf) orelse {
             // Memory ran out. The root frame raises the error at the
@@ -518,7 +524,7 @@ pub const rt = struct {
         // collector. When enough of them went by, the exit runs a
         // collection, as the allocations would have, and counts as no
         // failure of the code.
-        if (g.jit.sunk >= g.jit.sunk_limit) {
+        if (sunk_exit) {
             g.jit.sunk = 0;
             // The instruction is a table constructor, and the registers
             // above its target are dead, as they are when the
@@ -618,6 +624,15 @@ pub const rt = struct {
             table.resize(g.gpa, t, narr, nhash) catch return null;
         }
         return t;
+    }
+
+    /// `newTable` for a record that optimized code kept unallocated
+    /// until now. Its constructor already counted the table as sunk, so
+    /// the count gives that back, and the allocation is charged once.
+    pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(.c) ?*Table {
+        const g = l.g;
+        g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * 16;
+        return newTable(l, narr, nhash);
     }
 
     pub fn tableLength(t: *Table) callconv(.c) i64 {

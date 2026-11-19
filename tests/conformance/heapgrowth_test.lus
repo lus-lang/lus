@@ -1,0 +1,121 @@
+-- The collector while the heap grows: marking large structures, the
+-- pacing of a growing heap, the major collections of generational mode,
+-- and array parts that grow in place.
+
+-- Records kept alive by one large array survive many collections intact.
+local function records_in_a_growing_array_survive_test()
+    local list = {}
+    for i = 1, 200000 do
+        list[i] = { x = i, y = i * 2, name = "r" }
+    end
+    collectgarbage()
+    collectgarbage()
+    for i = 1, 200000, 997 do
+        local r = list[i]
+        assert(r.x == i and r.y == i * 2 and r.name == "r")
+    end
+    local s = 0
+    for i = 1, #list do s = s + list[i].x end
+    assert(s == 200000 * 200001 // 2)
+end
+
+-- An object reachable both from a large array and from a weak table
+-- stays in the weak table while the array holds it, and leaves it after.
+local function weak_entries_reachable_from_a_large_array_test()
+    local weak = setmetatable({}, { __mode = "v" })
+    local eph = setmetatable({}, { __mode = "k" })
+    local list = {}
+    for i = 1, 50000 do
+        local r = { i }
+        list[i] = r
+        if i % 1000 == 0 then
+            weak[i] = r
+            eph[r] = { i }
+        end
+    end
+    collectgarbage()
+    for i = 1000, 50000, 1000 do
+        assert(weak[i] == list[i] and eph[list[i]][1] == i)
+    end
+    list = nil
+    collectgarbage()
+    collectgarbage()
+    assert(next(weak) == nil)
+    assert(next(eph) == nil)
+end
+
+-- Finalizers of objects held by a large array run once the array goes,
+-- in the reverse order of their registration.
+local function finalizers_after_a_large_array_dies_test()
+    local order = {}
+    local list = {}
+    for i = 1, 20000 do list[i] = { i } end
+    for i = 1, 5 do
+        list[i * 1000] = setmetatable({ i }, { __gc = function(o) order[#order + 1] = o[1] end })
+    end
+    collectgarbage()
+    assert(#order == 0)
+    list = nil
+    collectgarbage()
+    assert(#order == 5)
+    for i = 1, 5 do assert(order[i] == 6 - i) end
+end
+
+-- An old object that becomes garbage while the program allocates only
+-- short-lived objects is still collected in generational mode.
+local function old_garbage_is_collected_in_generational_mode_test()
+    local old = collectgarbage("generational")
+    local done = false
+    local u = setmetatable({}, { __gc = function() done = true end })
+    collectgarbage()
+    collectgarbage("step")
+    u = nil
+    local n = 0
+    while not done and n < 20000000 do
+        local t = { n }
+        n = n + 1
+    end
+    collectgarbage(old)
+    assert(done)
+end
+
+-- A heap that only grows keeps every object and every value.
+local function a_heap_that_only_grows_test()
+    local old = collectgarbage("incremental")
+    local keep = {}
+    for round = 1, 4 do
+        for i = 1, 30000 do keep[#keep + 1] = { round, i } end
+        collectgarbage("step", 0)
+    end
+    local before = collectgarbage("count")
+    assert(#keep == 120000)
+    for i = 1, #keep, 1111 do
+        local e = keep[i]
+        assert(e[2] == (i - 1) % 30000 + 1 and e[1] == (i - 1) // 30000 + 1)
+    end
+    keep = nil
+    collectgarbage()
+    assert(collectgarbage("count") < before)
+    collectgarbage(old)
+end
+
+-- Array parts of every kind keep their values while they grow.
+local function array_parts_grow_in_place_test()
+    local ints, floats, boxed = {}, {}, {}
+    for i = 1, 100000 do
+        ints[#ints + 1] = i
+        floats[#floats + 1] = i + 0.5
+        boxed[#boxed + 1] = (i % 3 == 0) and tostring(i) or i
+    end
+    assert(#ints == 100000 and #floats == 100000 and #boxed == 100000)
+    for i = 1, 100000, 777 do
+        assert(ints[i] == i and math.type(ints[i]) == "integer")
+        assert(floats[i] == i + 0.5)
+        assert(boxed[i] == ((i % 3 == 0) and tostring(i) or i))
+    end
+    -- A part that grows after it boxed in place keeps its values too.
+    local t = { 1, 2, 3 }
+    t[2] = "two"
+    for i = 4, 5000 do t[i] = i end
+    assert(t[1] == 1 and t[2] == "two" and t[3] == 3 and t[5000] == 5000 and #t == 5000)
+end

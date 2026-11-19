@@ -298,6 +298,8 @@ pub const State = struct {
     live: usize = 0,
     /// Bytes the sweep of the current cycle freed.
     swept: usize = 0,
+    /// Minor collections since the last major one.
+    minors: u32 = 0,
     stepmul: usize = 200,
     stepsize: usize = 200 * @sizeOf(object.Table),
     minormul: usize = 20,
@@ -665,10 +667,18 @@ fn finishSweep(g: *Global) void {
         const freed = s.heap_at_mark -| live;
         s.major_pending = s.gen_base != 0 and @as(u64, freed) * 100 < @as(u64, allocated) * s.majorminor;
         s.gen_base = live;
+        s.minors = 0;
     } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
         // The old generation grew too much since the last major
         // collection.
         s.major_pending = true;
+    } else {
+        // Old objects die only in major collections. A program sees
+        // that through finalizers and weak tables, so while it has
+        // either, a major collection runs after a bounded number of
+        // minor ones even when the old generation stays the same size.
+        s.minors += 1;
+        if (s.minors >= max_minors and (g.finobj.items.len > 0 or s.all_weak.items.len > 0)) s.major_pending = true;
     }
     if (s.major_pending) return setThreshold(g);
     setMinorThreshold(g);
@@ -683,6 +693,9 @@ fn setMinorThreshold(g: *Global) void {
     g.threshold = @intCast(@min(t, std.math.maxInt(usize)));
     s.next_check = g.threshold;
 }
+
+/// The most minor collections between two major ones.
+const max_minors = 100;
 
 /// The least allocation between two minor collections.
 const min_young = 1024 * 1024;

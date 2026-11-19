@@ -79,7 +79,9 @@ When such a table gets a metatable inside a loop that carries a table with a met
 
 An allocation in optimized code first checks, inline, whether a collection is due. If so, an out-of-line stub writes the live values to their slots, where the collector finds them, and runs the step. What an unallocated table refers to lives only in machine registers, so the stub parks those values in stack slots above the live registers while the collector runs. Values that a block read from memory as objects are read again after such a point, because the collector clears entries of weak tables.
 
-Tables that are never allocated put no pressure on the collector, and a program may wait for a finalizer while making only such tables. So every unallocated table adds its size to a counter of the state. When 4 MB went by, or as many bytes as the heap holds if that is more, optimized code leaves through the usual exit, and the exit runs a full collection.
+Tables that are never allocated put no pressure on the collector, and a program may wait for a finalizer while making only such tables. So every unallocated table adds its size to a counter of the state. When 4 MB went by, or as many bytes as the heap holds if that is more, optimized code leaves through the usual exit, and the exit runs a full collection. A table that is allocated after all gives its size back to the counter, since its allocation counts toward the heap like any other, and the allocation checks for pending finalizers as a constructor does. On `tables.lus`, where every record ends up in a list, counting the records twice had made the exits run a full collection each time the heap doubled, on top of the collector's own cycles.
+
+While the stub of an allocation runs the collector, a slot whose snapshot value is an unallocated table holds nil. The value that slot held before belongs to the past of the program, which may have dropped it, so the collector must be free to collect it.
 
 A metatable with `__gc` keeps `setmetatable` a real call, which allocates the table and registers its finalizer.
 

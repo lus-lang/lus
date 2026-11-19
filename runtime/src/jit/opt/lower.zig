@@ -2527,6 +2527,10 @@ pub const Lower = struct {
                 if (b.fr.flow.live[b.pc].has(@intCast(i))) live_top = @intCast(i + 1);
             }
         } else live_top = b.fr.proto.max_stack;
+        // The allocation counts as one and may run the collector, so the
+        // finalizers it queued run in baseline code, as after a plain
+        // constructor.
+        _ = try b.emit(.{ .op = .gpending, .cls = .pending, .snap = snap_id });
         _ = try b.emit(.{ .op = .gccheck, .snap = snap_id, .aux = b.fr.off + live_top });
         b.gcPoint();
         const t = try b.emit(.{
@@ -2534,7 +2538,7 @@ pub const Lower = struct {
             .ty = .table,
             .a = try b.kint(0),
             .b = try b.kint(v.nc),
-            .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newTable))),
+            .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newVirtualTable))),
             .flags = .{ .thread = true },
         });
         _ = try b.emit(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = t, .imm = 0, .snap = snap_id });
