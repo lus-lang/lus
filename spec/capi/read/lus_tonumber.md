@@ -17,6 +17,6 @@ returns:
   - type: "lus_Number"
 ---
 
-Returns the value at `idx` as a float. Integers, floats, and strings holding a numeral convert. A bigint or a decimal does not convert.
+Returns the value at `idx` as a float. Integers, floats, and strings holding a numeral convert. A bigint or a decimal converts to the nearest float.
 
 When `isnum` is not `NULL`, it receives 1 when the conversion succeeded and 0 otherwise. A failed conversion returns 0.

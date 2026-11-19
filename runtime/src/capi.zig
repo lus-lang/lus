@@ -308,7 +308,13 @@ export fn lus_tointeger(l: *Thread, idx: c_int, isnum: ?*c_int) i64 {
 }
 
 export fn lus_tonumber(l: *Thread, idx: c_int, isnum: ?*c_int) f64 {
-    const n = ops.toNumberCoerce(at(l, idx));
+    const v = at(l, idx);
+    // Bigints and decimals convert to the nearest float, as `tonumber` does.
+    if (v.tag == .bigint or v.tag == .decimal) {
+        if (isnum) |p| p.* = 1;
+        return @import("vm/numeric.zig").toFloat(l.g.gpa, v);
+    }
+    const n = ops.toNumberCoerce(v);
     const ok = n != null and (n.?.tag == .integer or n.?.tag == .float);
     if (isnum) |p| p.* = @intFromBool(ok);
     return if (ok) ops.toFloat(n.?) else 0;
@@ -630,8 +636,12 @@ export fn lus_next(l: *Thread, idx: c_int) c_int {
         return LUS_ERROR;
     };
     const pair = r orelse return 0;
-    l.push(pair.key) catch return LUS_ERROR;
-    l.push(pair.val) catch return LUS_ERROR;
+    l.ensure(2) catch {
+        pushErr(l);
+        return errStatus(l);
+    };
+    l.push(pair.key) catch unreachable;
+    l.push(pair.val) catch unreachable;
     return 1;
 }
 
@@ -839,7 +849,7 @@ export fn lus_load(l: *Thread, buf: ?[*]const u8, len: usize, chunkname: ?[*:0]c
 export fn lus_loadfile(l: *Thread, path: [*:0]const u8) c_int {
     const p = std.mem.span(path);
     const src = std.Io.Dir.cwd().readFileAlloc(l.g.io, p, l.g.gpa, .unlimited) catch |e| {
-        const msg = std.fmt.allocPrint(l.g.gpa, "cannot open {s} ({s})", .{ p, @errorName(e) }) catch {
+        const msg = std.fmt.allocPrint(l.g.gpa, "cannot open {s}: {s}", .{ p, @import("lib/os.zig").errnoOf(e).msg }) catch {
             l.push(Value.obj(.string, l.g.memerr)) catch {};
             return LUS_ERRMEM;
         };

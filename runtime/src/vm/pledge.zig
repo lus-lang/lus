@@ -513,19 +513,35 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
             }
         }
     }
-    const set = try writable(l);
+    try record(l, try writable(l), name, val, reject);
+    if (from_host) {
+        // The ceiling holds host decisions only, so script pledges made
+        // earlier never widen what later script pledges may reach.
+        const r = registry(g);
+        if (r.ceiling == null and !reject) {
+            const n = gpa.create(Set) catch return l.raiseMem();
+            n.* = .{};
+            r.ceiling = n;
+        }
+        if (r.ceiling) |ceil| try record(l, ceil, name, val, reject);
+    }
+    return .granted;
+}
+
+/// Adds one grant or rejection to `set`.
+fn record(l: *Thread, set: *Set, name: []const u8, val: ?[]const u8, reject: bool) Error!void {
+    const g = l.g;
+    const gpa = g.gpa;
     const e = set.find(name) orelse blk: {
         set.entries.append(gpa, .{ .name = gpa.dupe(u8, name) catch return l.raiseMem() }) catch return l.raiseMem();
         break :blk &set.entries.items[set.entries.items.len - 1];
     };
     if (reject) {
         e.rejected = true;
-        return .granted;
+        return;
     }
-    if (val == null and e.values.items.len > 0) {
-        // A valueless re-pledge keeps an existing scoped grant as it is.
-        return .granted;
-    }
+    // A valueless re-pledge keeps an existing scoped grant as it is.
+    if (val == null and e.values.items.len > 0) return;
     if (val) |v| {
         const cap = findCap(g, split(name)[0]);
         const is_path = cap != null and cap.?.kind == .path;
@@ -533,33 +549,21 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         e.values.append(gpa, stored) catch return l.raiseMem();
         if (is_path) e.link_values.append(gpa, canonicalPattern(g, v, true)) catch return l.raiseMem();
     } else e.unrestricted = true;
-    return .granted;
 }
 
 /// One host policy change from the embedding interface: a grant, a
-/// rejection, or "seal". A grant also refreshes the ceiling for script
-/// pledges, as command line grants do. A rejection alone sets no ceiling,
-/// so it never limits what scripts may pledge otherwise.
+/// rejection, or "seal". Grants and rejections also update the ceiling for
+/// script pledges, as command line grants do. A rejection made before any
+/// grant sets no ceiling, so it never limits what scripts may pledge
+/// otherwise.
 pub fn hostApply(l: *Thread, spec: []const u8) Error!GrantResult {
-    const r = try apply(l, spec, true);
-    const reg = registry(l.g);
-    const is_grant = spec.len > 0 and spec[0] != '~' and !std.mem.eql(u8, spec, "seal");
-    if (r == .granted and (is_grant or reg.ceiling != null)) {
-        const n = setOf(l).?.clone(l.g.gpa) catch return l.raiseMem();
-        if (reg.ceiling) |old| old.destroy(l.g.gpa);
-        reg.ceiling = n;
-    }
-    return r;
+    return apply(l, spec, true);
 }
 
 /// Host grants from the command line: applied to the main thread and
 /// recorded as the ceiling for script pledges.
 pub fn hostGrant(l: *Thread, specs: []const []const u8) Error!void {
-    if (specs.len == 0) return;
     for (specs) |spec| _ = try apply(l, spec, true);
-    const s = setOf(l).?;
-    const r = registry(l.g);
-    r.ceiling = s.clone(l.g.gpa) catch return l.raiseMem();
 }
 
 test "host" {

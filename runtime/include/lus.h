@@ -212,7 +212,7 @@ void lus_pushnumber(lus_State *L, lus_Number n);
 void lus_pushlight(lus_State *L, void *p);
 
 /* Pushes a copy of the zero terminated string s, or nil when s is NULL.
-   Fails when s is not well formed UTF-8. */
+   Fails when s is not well formed WTF-8. */
 int lus_pushstring(lus_State *L, const char *s);
 
 /* Pushes a copy of the first len bytes of s as a string. */

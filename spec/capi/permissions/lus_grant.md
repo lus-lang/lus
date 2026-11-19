@@ -20,7 +20,7 @@ Applies one host permission with the syntax of [`pledge`](/manual/acquis-10) and
 
 Grants accumulate. A grant without a value allows every value of the capability, and each grant with a value adds one more allowed pattern. A grant of a base capability covers its subcapabilities, so `"network=example.com"` also allows `network:http` for that host. Values of path capabilities must be absolute or start with `.`, and they are resolved to canonical paths when they are granted.
 
-After every grant, the permission set as it then stands becomes the ceiling for script pledges. Once the host has granted anything, a script can only pledge what that ceiling covers, unless a [request hook](#lus_onrequest) decides otherwise.
+Every grant is also added to the ceiling for script pledges. The ceiling holds only what the host decided, so what a script pledged earlier never widens it. Once the host has granted anything, a script can only pledge what that ceiling covers, unless a [request hook](#lus_onrequest) decides otherwise.
 
 On failure the call returns `LUS_ERRRUN` and pushes the error value. A grant fails for an unknown capability or subcapability, an invalid value, a capability that was rejected, and a sealed set. On success the stack is unchanged.
 

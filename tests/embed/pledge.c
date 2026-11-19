@@ -216,11 +216,18 @@ static void request_hook(void) {
   CHECK(requests == 3);
   lus_settop(L, 0);
 
+  /* What the script pledged earlier stays out of the host ceiling, so the
+     hook still decides it. */
+  CHECK_OK(L, lus_dostring(L, "return pledge('myext:write=tmp/c')"));
+  CHECK(lus_toboolean(L, -1) == 1);
+  CHECK(requests == 4);
+  lus_settop(L, 0);
+
   /* Without the hook, the ceiling alone decides again. */
   lus_onrequest(L, NULL, NULL);
   CHECK_OK(L, lus_dostring(L, "return pledge('myext:write=var/b')"));
   CHECK(lus_toboolean(L, -1) == 0);
-  CHECK(requests == 3);
+  CHECK(requests == 4);
   lus_close(L);
 }
 
