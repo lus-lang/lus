@@ -100,6 +100,9 @@ pub const Class = enum(u8) {
     gc,
     /// The count of pending finalizers.
     pending,
+    /// The word that names the direct entry of a piece of optimized
+    /// code, which retiring the code clears.
+    code,
 };
 
 pub const Cond = enum(u8) { eq, ne, lt, le, gt, ge, lo, ls, hi, hs };
@@ -215,6 +218,25 @@ pub const Op = enum(u8) {
     generic,
     exit,
     phi,
+    // Direct calls. A piece of optimized code that is entered directly
+    // takes its closure and its parameters in machine registers and
+    // returns its result in two, the payload and the tag.
+    /// Parameter `imm` of a directly entered function. Zero is the
+    /// closure, and the fixed parameters follow.
+    param,
+    /// Leaves optimized code when the native stack runs short.
+    dlimit,
+    /// Argument `imm` of the direct call that follows.
+    darg,
+    /// Calls optimized code at its direct entry with the closure `a`.
+    /// `imm` is the address of the entry, or zero for the entry of the
+    /// code being built. `aux` indexes the call sites of the function.
+    dcall,
+    /// The result of the direct call `a` as a value of the static type.
+    /// It leaves optimized code when the callee returned another type.
+    dres,
+    /// Returns `a` from a directly entered function, or nothing.
+    dret,
 };
 
 pub const Inst = struct {
@@ -256,13 +278,13 @@ pub const Inst = struct {
     }
     pub fn isGuard(i: *const Inst) bool {
         return switch (i.op) {
-            .gslot, .guard, .guardi, .gfcmp, .gtag, .gbit, .gnokey, .gpending, .gdebt => true,
+            .gslot, .guard, .guardi, .gfcmp, .gtag, .gbit, .gnokey, .gpending, .gdebt, .dlimit, .dres => true,
             else => false,
         };
     }
     pub fn isTerminator(i: *const Inst) bool {
         return switch (i.op) {
-            .jmp, .br, .bri, .fbr, .brtruthy, .brtag, .generic, .exit => true,
+            .jmp, .br, .bri, .fbr, .brtruthy, .brtag, .generic, .exit, .dret => true,
             else => false,
         };
     }
@@ -317,7 +339,30 @@ pub const Snap = struct {
     /// The tables of the snapshot that no code allocated yet.
     virts: u32 = 0,
     nvirts: u32 = 0,
+    /// Leaving through the snapshot says nothing about the predictions
+    /// of the code, so the exit is left out of the records.
+    quiet: bool = false,
+    /// The snapshot continues after a call whose result had another
+    /// type than predicted. The exit is recorded against the call.
+    after_call: bool = false,
 };
+
+/// A direct call of a function: where the caller continues, and what a
+/// frame for the callee needs when leaving optimized code builds one.
+pub const Site = struct {
+    /// The snapshot of the caller while the callee runs.
+    snap: u32,
+    /// Slot of the called function, counted from register zero of the
+    /// root.
+    slot: u32,
+    nargs: u32,
+    want: i32,
+    /// Offset in the code of the instruction after the call.
+    ret_off: u32 = 0,
+};
+
+/// Most fixed parameters of a function that is entered directly.
+pub const max_direct_params = 4;
 
 /// A table that a snapshot describes field by field. Leaving optimized
 /// code through the snapshot allocates it.
@@ -368,6 +413,22 @@ pub const Func = struct {
     /// (start) and `b` (count).
     gen_targets: std.ArrayList(GenTarget) = .empty,
     entry: BlockId = 0,
+    /// The function is entered directly: its registers live in machine
+    /// registers alone, and its frame exists only once optimized code
+    /// is left.
+    direct: bool = false,
+    /// The types of the fixed parameters of a directly entered function,
+    /// and the type every return of it yields, when there is one.
+    sig: [max_direct_params]Ty = @splat(.nil),
+    ret_ty: ?Ty = null,
+    /// The snapshot that continues the function at its first
+    /// instruction with every register in its slot.
+    entry_snap: u32 = no_snap,
+    /// The direct calls of the function.
+    sites: std.ArrayList(Site) = .empty,
+    /// The memory classes the function writes, as a set of bits, and
+    /// whether it writes anything the builder cannot name.
+    writes: u32 = 0,
     /// Slots that the frames of the function cover, counted from
     /// register zero of the root.
     extent: u32 = 0,

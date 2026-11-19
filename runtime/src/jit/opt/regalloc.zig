@@ -183,7 +183,7 @@ pub fn run(f: *ir.Func, ngpr: u8, nfpr: u8) !Result {
         const list = f.blocks.items[b].insts.items;
         var has_call = false;
         for (list) |r| {
-            if (f.at(r).op == .callc) has_call = true;
+            if (f.at(r).op == .callc or f.at(r).op == .dcall) has_call = true;
         }
         if (!has_call) continue;
         @memcpy(tmp, live_out[b * words ..][0..words]);
@@ -193,7 +193,7 @@ pub fn run(f: *ir.Func, ngpr: u8, nfpr: u8) !Result {
             const r = list[k];
             const inst = f.at(r);
             tmp[r / 64] &= ~(@as(u64, 1) << @intCast(r % 64));
-            if (inst.op == .callc) {
+            if (inst.op == .callc or inst.op == .dcall) {
                 for (tmp, 0..) |w, wi| {
                     var bits = w;
                     while (bits != 0) {
@@ -207,6 +207,11 @@ pub fn run(f: *ir.Func, ngpr: u8, nfpr: u8) !Result {
             used.clearRetainingCapacity();
             try uses(f, inst, &used);
             for (used.items) |u| setBit(tmp, u);
+            // What the snapshot of a direct call names is read from the
+            // native frame of the caller while the callee runs.
+            if (inst.op == .dcall) {
+                for (used.items) |u| crossing[u] = true;
+            }
         }
     }
 

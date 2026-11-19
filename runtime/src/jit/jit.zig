@@ -78,6 +78,15 @@ pub const State = if (enabled) struct {
     /// last collection it asked for, and the count at which it asks.
     sunk: u64 = 0,
     sunk_limit: u64 = opt.sunk_step,
+    /// Whether optimized code calls optimized code at its direct entry.
+    direct: bool = true,
+    /// The units that make direct calls.
+    callers: std.ArrayList(*opt.Unit) = .empty,
+    /// The lowest address of the native stack that a chain of direct
+    /// calls may reach, and the native stack pointer that code leaving
+    /// such a chain continues with.
+    stack_floor: usize = 0,
+    exit_sp: usize = 0,
 } else struct {};
 
 /// The native code of one function.
@@ -139,6 +148,7 @@ fn setup(g: *Global) void {
         js.opt_threshold = @max(std.fmt.parseInt(u32, v, 10) catch opt.default_threshold, 1);
     };
     js.opt_dump = env.get("LUS_JIT_DUMP") != null;
+    if (env.get("LUS_JIT_DIRECT")) |v| js.direct = !(std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0"));
 }
 
 /// Sets the JIT of a state from the host, in place of the environment.
@@ -369,6 +379,12 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
     if (is_wasm) return wasm.run(l, stop);
     const t = dispatch(l);
     if (t.addr == 0) return error.SwitchLoop;
+    if (has_opt) {
+        // Chains of direct calls share a budget of native stack below
+        // the outermost entry into Lus code on this stack.
+        const js = &l.g.jit;
+        if (l.g.native_depth <= 1 or js.stack_floor == 0) js.stack_floor = @frameAddress() -| opt.direct_stack_budget;
+    }
     const code: *Code = @ptrCast(@alignCast(l.frame().closure.?.proto.jit_code.?));
     const enter: Enter = @ptrFromInt(code.base);
     return switch (enter(l, stop, t.addr, t.base)) {
@@ -458,6 +474,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
 /// Releases the executable memory of a state that is closing.
 pub fn deinit(g: *Global) void {
     if (!enabled or is_wasm) return;
+    g.jit.callers.deinit(g.gpa);
     g.jit.arena.deinit(g.gpa);
 }
 

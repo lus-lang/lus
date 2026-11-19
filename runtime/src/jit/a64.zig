@@ -740,6 +740,27 @@ pub const Assembler = struct {
     pub fn dropLink(a: *Assembler) void {
         _ = a;
     }
+    /// Opens a native frame of `size` bytes whose top word holds the
+    /// return address of the running routine.
+    pub fn saveLink(a: *Assembler, size: i32) void {
+        a.addImm(.sp, -size);
+        a.store64(.x30, .{ .base = .sp, .disp = size - 8 });
+    }
+    /// Closes a frame that `saveLink` opened. The return address is
+    /// where a call left it.
+    pub fn unsaveLink(a: *Assembler, size: i32) void {
+        a.load64(.x30, .{ .base = .sp, .disp = size - 8 });
+        a.addImm(.sp, size);
+    }
+    /// Closes a frame that `saveLink` opened and returns.
+    pub fn leaveLink(a: *Assembler, size: i32) void {
+        a.unsaveLink(size);
+        a.word(0xD65F03C0);
+    }
+    /// Sets the native stack pointer.
+    pub fn setSp(a: *Assembler, src: Reg) void {
+        a.word(0x9100001F | src.n() << 5);
+    }
     /// Branches when the register compares as `c` with a 64-bit word in
     /// memory.
     pub fn jumpIfMem(a: *Assembler, c: Cond, x: Reg, m: Mem, l: Label) void {
