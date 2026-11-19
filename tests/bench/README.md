@@ -13,6 +13,9 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `unicode.lus`: `string.sub` and `#` on a long string of mixed one to four byte characters. Lus counts characters, while LuaJIT counts bytes, so this benchmark measures the cost of character indexing against plain byte slicing.
 - `arrays.lus`: reading and writing arrays of integers and of floats from Lus code.
 - `data.lus`: `table.sum`, `table.mean`, and `table.stdev` over large arrays of integers and floats. LuaJIT runs the same computation written as Lua loops in `lua/data.lua`.
+- `messages.lus`: sends a 1 MB string 2,000 times and a table of 10,000 strings of 100 bytes 300 times to a worker, which replies with the length of each message. Strings over 64 bytes travel as shared blobs (`spec/design/workers.md`).
+- `startup.lus`: creates 2,000 workers with an empty body one after the other. Each worker starts a state and opens the standard library, so this measures how fast a state starts (`spec/design/snapshot.md`).
+- `fullgc.lus`: builds a graph of a million live tables and collects it in full ten times, which measures marking while the program waits. On native targets those collections mark on several threads (`spec/design/gc.md`).
 - `gcpause.lus`: builds and drops a 50 MB object graph four times. Besides its run time, it prints the longest gap between two loop iterations, which bounds the longest collector pause. Run it directly to see that number.
 
 The runner times every benchmark under each runtime it finds and prints the best wall time of several runs. Build the runtime with ReleaseFast before measuring.
@@ -25,7 +28,7 @@ tests/bench/run.sh        # three runs per benchmark
 tests/bench/run.sh 5      # five runs per benchmark
 ```
 
-The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash.
+The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash. `messages` and `startup` use workers, which LuaJIT does not have, so its columns show dashes for them.
 
 The table has one column per configuration.
 
@@ -49,8 +52,10 @@ Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, a
 | gcpause | 0.391 | 0.396 | 0.392 | 0.451 | 0.413 |
 | interp | 0.914 | 0.906 | 0.898 | 2.011 | 1.285 |
 | loop | 0.057 | 0.144 | 0.213 | 0.250 | 0.091 |
+| messages | 0.171 | 0.179 | 0.178 | - | - |
 | methods | 0.006 | 0.162 | 0.193 | 0.247 | 0.006 |
 | patterns | 0.199 | 0.202 | 0.202 | 0.262 | 0.258 |
+| startup | 0.130 | 0.123 | 0.122 | - | - |
 | strings | 0.146 | 0.141 | 0.139 | 0.252 | 0.209 |
 | tables | 0.102 | 0.099 | 0.099 | 0.162 | 0.122 |
 | unicode | 0.007 | 0.029 | 0.033 | 0.031 | 0.004 |
@@ -58,5 +63,7 @@ Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, a
 The baseline tier runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. The optimizing tier adds typed values in machine registers, checks moved in front of loops, calls compiled inline, direct calls between optimized functions, and tables that are never allocated. `methods`, `arrays`, `loop`, and `unicode` are where it shows. `methods` builds a new object on every iteration through a method and a constructor, and its optimized loop adds two numbers. `unicode` takes the length of `string.sub` on a long non-ASCII string, which the optimizing tier computes from the positions. `fib` is all calls. The optimizing tier makes them as direct calls: an activation takes its argument in a machine register, calls itself with a native call, and gets a frame only when optimized code is left. That takes `fib` from 0.029 s to 0.008 s, level with LuaJIT. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their three Lus columns agree. `tables` keeps three million tables alive, so its time goes to allocating and marking them. The collector reads each of them once, when it traces it, and waits for twice the usual growth while the heap only grows, which puts every Lus column ahead of LuaJIT with its JIT.
 
 With the JIT off, the interpreter is ahead of the interpreter of LuaJIT on eleven of the twelve benchmarks. `fib` shows the call and the return of the interpreter, which went from 0.062 s to 0.047 s and then to 0.034 s. It runs about 1130 million machine instructions against 880 million for LuaJIT, at more of them per cycle. `unicode` went from 0.042 s to 0.033 s, mostly because each `string.sub` now finds its start from where the previous one started. LuaJIT, which slices bytes there, takes 0.031 s to 0.033 s from one set of runs to the next, so the two are level within the noise and Lus is the one behind when they differ. `spec/design/interp.md` has the instruction and cycle counts behind both, and the measurements of the designs that were tried and kept out.
+
+The `messages` and `startup` rows were measured when they were added, with shared string blobs for worker messages (`spec/design/workers.md`). Before blobs, `messages` took 0.40 s.
 
 The `lus off` column moves by a few percent between builds with the code layout of the interpreter loop. Compare the Lus columns of one build with each other, and read instruction counts for a change to the loop (`runtime/HACKING.md`).

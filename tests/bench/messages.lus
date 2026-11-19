@@ -1,0 +1,29 @@
+-- Sends large strings and tables of strings to a worker, which replies
+-- with the length of each message. Each round trip waits for the reply,
+-- so at most one message is in flight. The first part sends one 1 MB
+-- string 2,000 times. The second sends a table of 10,000 strings of 100
+-- bytes 300 times.
+pledge("load", "fs:read")
+local dir = arg[0]:match("^(.*)/") or "."
+local part = arg[1]
+local w = worker.create(dir .. "/workers/echo.lus")
+
+if part == nil or part == "big" then
+    local big = string.rep("0123456789abcdef", 65536)
+    for i = 1, tonumber(arg[2]) or 2000 do
+        worker.send(w, big)
+        assert(worker.receive(w) == #big)
+    end
+end
+
+if part == nil or part == "table" then
+    local t = {}
+    for i = 1, 10000 do t[i] = string.format("%099d", i) .. "x" end
+    for i = 1, tonumber(arg[2]) or 300 do
+        worker.send(w, t)
+        assert(worker.receive(w) == #t)
+    end
+end
+
+worker.send(w, false)
+while worker.receive(w) ~= nil do end

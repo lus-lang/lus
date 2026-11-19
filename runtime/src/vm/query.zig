@@ -85,7 +85,7 @@ pub const Query = struct {
             q.plan = null;
         }
     }
-    pub fn traverse(m: *gc.MarkerApi, h: *gc.Header) void {
+    pub fn traverse(m: anytype, h: *gc.Header) void {
         const q = h.as(Query);
         m.mark(q.plan_str);
         for (q.vals()) |v| m.mark(v);

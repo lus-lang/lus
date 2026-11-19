@@ -14,6 +14,7 @@ const value = @import("value.zig");
 const object = @import("object.zig");
 const state_mod = @import("state.zig");
 const heap = @import("heap.zig");
+const gcpar = @import("gcpar.zig");
 const Value = value.Value;
 const Tag = value.Tag;
 const Global = state_mod.Global;
@@ -91,7 +92,7 @@ inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usiz
 
 pub fn objectSize(h: *Header) usize {
     return switch (h.tag) {
-        .string => object.String.allocSize(h.as(object.String).len),
+        .string => h.as(object.String).cellSize(),
         .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).inline_units) * 16,
         .closure => object.Closure.allocSize(h.as(object.Closure).nupvals),
         .native => state_mod.Native.allocSize(h.as(state_mod.Native).nupvals),
@@ -112,6 +113,7 @@ pub fn releaseObject(g: *Global, h: *Header) void {
         .string => {
             const s = h.as(object.String);
             if (s.flags.interned) g.strings.remove(s);
+            if (s.flags.shared or s.flags.cached) @import("blob.zig").drop(g, s);
             s.freeExtra(gpa);
         },
         .table => {
@@ -280,6 +282,11 @@ pub const State = struct {
     /// Every thread, so that the atomic phase rescans the stacks and dead
     /// threads close their upvalues before their stacks go away.
     threads: std.ArrayList(*Thread) = .empty,
+    /// Set while the gray stack holds what was the gray-again list, which
+    /// may name an object twice. A parallel drain would then trace it on
+    /// two threads at once, so the stack drains on one thread until it
+    /// runs empty.
+    gray_repeats: bool = false,
     /// Set when the barrier could not record an object. The atomic phase
     /// then traces every marked object again.
     overflow: bool = false,
@@ -374,7 +381,7 @@ fn setThreshold(g: *Global) void {
 // ---------------------------------------------------------------------
 // Collection
 
-const stress = @import("build_options").gc_stress;
+pub const stress = @import("build_options").gc_stress;
 const verify = @import("build_options").gc_verify;
 
 pub inline fn maybeCollect(g: *Global) void {
@@ -454,6 +461,7 @@ fn startCycle(g: *Global) void {
     std.debug.assert(s.phase == .pause);
     heap.clearMarks(g);
     s.gray.clearRetainingCapacity();
+    s.gray_repeats = false;
     s.grayagain.clearRetainingCapacity();
     s.weak.clearRetainingCapacity();
     s.ephemerons.clearRetainingCapacity();
@@ -466,7 +474,7 @@ fn startCycle(g: *Global) void {
         s.goal = @intCast(@min(goal + s.stepsize, std.math.maxInt(usize)));
     }
     s.phase = .propagate;
-    var m = Marker{ .g = g };
+    var m = Marker.init(g);
     m.markRoots();
     s.marked += m.work;
 }
@@ -475,17 +483,26 @@ fn startCycle(g: *Global) void {
 /// the atomic phase when no gray object is left.
 fn propagate(g: *Global, budget: usize) void {
     const s = &g.gcs;
-    var m = Marker{ .g = g };
+    var m = Marker.init(g);
+    // A mark phase that runs to its end, as in a full collection, may
+    // drain on several threads.
+    const whole = budget == std.math.maxInt(usize);
     while (m.work < budget) {
-        if (popGray(&s.gray)) |h| {
+        if (whole) {
+            m.drainGray();
+        } else if (popGray(&s.gray)) |h| {
             m.visit(h);
             continue;
         }
+        s.gray_repeats = false;
         // Objects that stores turned gray again are traced a couple of
         // times while the program runs, so the atomic phase finds few.
-        if (s.grayagain.items.len > 0 and s.again_rounds < 2) {
+        // The atomic phase traces them at once when the mark phase runs
+        // to its end.
+        if (!whole and s.grayagain.items.len > 0 and s.again_rounds < 2) {
             s.again_rounds += 1;
             std.mem.swap(GrayList, &s.gray, &s.grayagain);
+            s.gray_repeats = true;
             continue;
         }
         s.marked += m.work;
@@ -517,7 +534,7 @@ fn minorCollect(g: *Global) void {
     s.gray.clearRetainingCapacity();
     s.weak.clearRetainingCapacity();
     s.ephemerons.clearRetainingCapacity();
-    var m = Marker{ .g = g };
+    var m = Marker.init(g);
     m.markRoots();
     // The remembered set: old objects stored into since the last
     // collection, and young objects promoted by large tables.
@@ -841,7 +858,7 @@ pub const GrayList = std.ArrayList(*align(1) Header);
 
 /// The gray stack capacity, in entries, that survives the end of a mark
 /// phase (512 KB on 64-bit targets).
-const gray_keep = 64 * 1024;
+pub const gray_keep = 64 * 1024;
 
 /// Set in a gray stack entry whose object was not marked when it was
 /// pushed (`Marker.markValue`).
@@ -853,7 +870,7 @@ const unmarked_bit: usize = 1;
 /// elements, so the object being traced is rarely in the cache. The
 /// prefetch covers the first two cache lines, which hold the header and
 /// the parts that a small table keeps in its own cell.
-inline fn popGray(gray: *GrayList) ?*align(1) Header {
+pub inline fn popGray(gray: *GrayList) ?*align(1) Header {
     const n = gray.items.len;
     if (n == 0) return null;
     if (n > prefetch_distance) {
@@ -866,266 +883,370 @@ inline fn popGray(gray: *GrayList) ?*align(1) Header {
     return h;
 }
 
-const Marker = struct {
-    g: *Global,
-    /// Bytes of objects marked and traced by this marker.
-    work: usize = 0,
-    /// Set while the heap verifier walks the heap. Marking then checks
-    /// marks instead of setting them.
-    verifying: bool = false,
-    /// The object the verifier is checking.
-    parent: ?*Header = null,
+const Marker = MarkerOf(false);
 
-    /// Marks a value. An object that the marker traces goes on the gray
-    /// stack unmarked, with the low bit of its address set, so that its
-    /// header is read only when it pops, after `popGray` prefetched it.
-    /// `visit` marks it then.
-    fn markValue(m: *Marker, v: Value) void {
-        if (!v.tag.isCollectable()) return;
-        if (m.verifying or isLeaf(v.tag)) return m.markObject(v.header());
-        const h: *align(1) Header = @ptrFromInt(@intFromPtr(v.header()) | unmarked_bit);
-        const gray = &m.g.gcs.gray;
-        // Runs of references to one object, such as an array filled with
-        // the same table, push it once.
-        if (gray.items.len > 0 and gray.items[gray.items.len - 1] == h) return;
-        if (gray.items.len < gray.capacity) {
-            gray.appendAssumeCapacity(h);
-        } else {
-            gray.append(m.g.gpa, h) catch m.markObject(v.header());
+/// The marker of a helper thread in a parallel drain (`gcpar.zig`).
+pub const ParMarker = MarkerOf(true);
+
+/// A marker. The sequential one keeps its gray objects on the gray stack
+/// of the state. A parallel one keeps them on the stack of its thread,
+/// claims objects by setting their marks atomically, and takes a lock to
+/// append to the lists of the collector.
+fn MarkerOf(comptime par: bool) type {
+    return struct {
+        const M = @This();
+
+        g: *Global,
+        /// Bytes of objects marked and traced by this marker.
+        work: usize = 0,
+        /// Set while the heap verifier walks the heap. Marking then checks
+        /// marks instead of setting them.
+        verifying: bool = false,
+        /// The object the verifier is checking.
+        parent: ?*Header = null,
+        /// The gray stack this marker pushes to.
+        gray: *GrayList,
+        /// The parallel drain of a parallel marker.
+        drain: if (par) *gcpar.Drain else void = if (par) undefined else {},
+
+        fn init(g: *Global) M {
+            return .{ .g = g, .gray = &g.gcs.gray };
         }
-    }
 
-    /// Traces an object that popped from the gray stack. An entry with
-    /// the low bit set is an object that was not marked when it was
-    /// pushed. It is traced only if it is still unmarked, because whoever
-    /// marked it meanwhile also queued it, or it is old.
-    fn visit(m: *Marker, e: *align(1) Header) void {
-        const a = @intFromPtr(e);
-        if (a & unmarked_bit == 0) return m.traverse(@alignCast(e));
-        const h: *Header = @ptrFromInt(a & ~unmarked_bit);
-        if (h.flags.large) {
-            if (h.flags.mark) return;
-            h.flags.mark = true;
-            m.work += objectSize(h);
-        } else {
-            if (!heap.setMarkSmall(h)) return;
-            m.work += heap.pageOf(h).cell;
+        pub fn initPar(d: *gcpar.Drain, stack: *GrayList) M {
+            return .{ .g = d.g, .gray = stack, .drain = d };
         }
-        m.traverse(h);
-    }
 
-    fn markObject(m: *Marker, h: *Header) void {
-        if (m.verifying) return m.check(h);
-        if (h.flags.large) {
-            if (h.flags.mark) return;
-            h.flags.mark = true;
-            m.work += objectSize(h);
-        } else {
-            const p = heap.pageOf(h);
-            if (!heap.setMarkSmall(h)) return;
-            m.work += p.cell;
+        /// The allocator of the gray stack.
+        inline fn grayAlloc(m: *M) Allocator {
+            return if (par) gcpar.stack_alloc else m.g.gpa;
         }
-        // Leaf objects have no references to trace.
-        if (isLeaf(h.tag)) return;
-        const gray = &m.g.gcs.gray;
-        // Runs of references to one object, such as an array filled with
-        // the same table, push it once.
-        if (gray.items.len > 0 and gray.items[gray.items.len - 1] == h) return;
-        if (gray.items.len < gray.capacity) {
-            gray.appendAssumeCapacity(h);
-        } else {
-            gray.append(m.g.gpa, h) catch m.traverse(h);
+
+        inline fn isMarkedM(h: *const Header) bool {
+            return if (par) isMarkedAtomic(h) else isMarked(h);
         }
-    }
 
-    fn markRoots(m: *Marker) void {
-        const g = m.g;
-        m.markObject(&g.main_thread.hdr);
-        m.markValue(g.registry);
-        m.markValue(g.globals);
-        for (g.type_metatables) |mt| if (mt) |t| m.markObject(&t.hdr);
-        for (g.tm_names) |s| if (s) |p| m.markObject(&p.hdr);
-        for (g.fixed.items) |h| m.markObject(h);
-        // Objects waiting in the finalizer queue stay alive.
-        for (g.tobefnz.items) |h| m.markObject(h);
-    }
+        /// Sets the mark of an object and returns the bytes it adds to
+        /// the work, or zero when it was marked already.
+        inline fn claim(h: *Header) usize {
+            if (par) {
+                const f = flagsOf(h);
+                if (@atomicLoad(u8, f, .monotonic) & large_mask != 0) {
+                    if (@atomicRmw(u8, f, .Or, mark_mask, .monotonic) & mark_mask != 0) return 0;
+                    return objectSize(h);
+                }
+                if (!heap.setMarkSmallAtomic(h)) return 0;
+                return heap.pageOf(h).cell;
+            }
+            if (h.flags.large) {
+                if (h.flags.mark) return 0;
+                h.flags.mark = true;
+                return objectSize(h);
+            }
+            if (!heap.setMarkSmall(h)) return 0;
+            return heap.pageOf(h).cell;
+        }
 
-    /// Traces gray objects, including those that stores turned gray
-    /// again, until none is left.
-    fn drainAll(m: *Marker) void {
-        const s = &m.g.gcs;
-        while (true) {
-            if (popGray(&s.gray)) |h| {
+        inline fn push(m: *M, h: *align(1) Header) bool {
+            const gray = m.gray;
+            // Runs of references to one object, such as an array filled
+            // with the same table, push it once.
+            if (gray.items.len > 0 and gray.items[gray.items.len - 1] == h) return true;
+            if (gray.items.len < gray.capacity) {
+                gray.appendAssumeCapacity(h);
+                return true;
+            }
+            gray.append(m.grayAlloc(), h) catch return false;
+            return true;
+        }
+
+        /// Marks a value. An object that the marker traces goes on the
+        /// gray stack unmarked, with the low bit of its address set, so
+        /// that its header is read only when it pops, after `popGray`
+        /// prefetched it. `visit` marks it then.
+        fn markValue(m: *M, v: Value) void {
+            if (!v.tag.isCollectable()) return;
+            if (m.verifying or isLeaf(v.tag)) return m.markObject(v.header());
+            const h: *align(1) Header = @ptrFromInt(@intFromPtr(v.header()) | unmarked_bit);
+            if (!m.push(h)) m.markObject(v.header());
+        }
+
+        /// Traces an object that popped from the gray stack. An entry
+        /// with the low bit set is an object that was not marked when it
+        /// was pushed. It is traced only if it is still unmarked, because
+        /// whoever marked it meanwhile also queued it, or it is old.
+        pub fn visit(m: *M, e: *align(1) Header) void {
+            const a = @intFromPtr(e);
+            if (a & unmarked_bit == 0) return m.traverse(@alignCast(e));
+            const h: *Header = @ptrFromInt(a & ~unmarked_bit);
+            const bytes = claim(h);
+            if (bytes == 0) return;
+            m.work += bytes;
+            m.traverse(h);
+        }
+
+        fn markObject(m: *M, h: *Header) void {
+            if (m.verifying) return m.check(h);
+            const bytes = claim(h);
+            if (bytes == 0) return;
+            m.work += bytes;
+            // Leaf objects have no references to trace.
+            if (isLeaf(h.tag)) return;
+            if (!m.push(h)) m.traverse(h);
+        }
+
+        fn markRoots(m: *M) void {
+            const g = m.g;
+            m.markObject(&g.main_thread.hdr);
+            m.markValue(g.registry);
+            m.markValue(g.globals);
+            for (g.type_metatables) |mt| if (mt) |t| m.markObject(&t.hdr);
+            for (g.tm_names) |s| if (s) |p| m.markObject(&p.hdr);
+            for (g.fixed.items) |h| m.markObject(h);
+            // Objects waiting in the finalizer queue stay alive.
+            for (g.tobefnz.items) |h| m.markObject(h);
+        }
+
+        /// Traces the gray stack until it is empty, on several threads
+        /// when it holds enough work.
+        fn drainGray(m: *M) void {
+            const s = &m.g.gcs;
+            var n: u32 = 0;
+            while (popGray(&s.gray)) |h| {
                 m.visit(h);
-            } else if (s.grayagain.pop()) |h| {
+                n +%= 1;
+                if (gcpar.enabled and n % gcpar.check_interval == 0 and s.gray.items.len >= gcpar.min_entries and !s.gray_repeats) {
+                    if (gcpar.drain(m.g, &m.work)) return;
+                }
+            }
+            s.gray_repeats = false;
+        }
+
+        /// Traces gray objects, including those that stores turned gray
+        /// again, until none is left. Objects that stores turned gray
+        /// again may appear twice, so they are traced by this thread
+        /// alone, while no parallel drain runs.
+        fn drainAll(m: *M) void {
+            const s = &m.g.gcs;
+            while (true) {
+                m.drainGray();
+                const h = s.grayagain.pop() orelse break;
                 m.traverse(@alignCast(h));
-            } else break;
+            }
         }
-    }
 
-    fn traverse(m: *Marker, h: *Header) void {
-        // The object turns black. A later store into it takes the slow
-        // path of the barrier.
-        if (!m.verifying) h.flags.barrier = true;
-        switch (h.tag) {
-            .table => m.traverseTable(h.as(object.Table)),
-            .closure => {
-                const c = h.as(object.Closure);
-                m.markObject(&c.proto.hdr);
-                for (c.upvals()) |u| m.markObject(&u.hdr);
-            },
-            .native => {
-                const n = h.as(state_mod.Native);
-                if (n.name) |s| m.markObject(&s.hdr);
-                for (n.upvalues()) |v| m.markValue(v);
-            },
-            .userdata => {
-                const u = h.as(object.Userdata);
-                if (u.metatable) |mt| m.markObject(&mt.hdr);
-                for (u.userValues()) |v| m.markValue(v);
-            },
-            .thread => {
-                const t = h.as(Thread);
-                m.work += t.stack.len * @sizeOf(Value);
-                t.traverse(m);
-            },
-            .enum_root => {
-                const r = h.as(object.EnumRoot);
-                for (r.names) |s| m.markObject(&s.hdr);
-                for (r.values) |ev| if (ev) |e| m.markObject(&e.hdr);
-            },
-            .enum_value => m.markObject(&h.as(object.EnumValue).root.hdr),
-            else => state_mod.traverseExtra(m, h),
+        /// Ends a parallel marker: its work counts for the drain.
+        pub fn flush(m: *M) void {
+            if (par) {
+                _ = m.drain.work.fetchAdd(m.work, .monotonic);
+                m.work = 0;
+            }
         }
-    }
 
-    pub fn mark(m: *Marker, v: Value) void {
-        m.markValue(v);
-    }
-    pub fn markHeader(m: *Marker, h: *Header) void {
-        m.markObject(h);
-    }
-
-    fn traverseTable(m: *Marker, t: *object.Table) void {
-        const gpa = m.g.gpa;
-        const s = &m.g.gcs;
-        // An unboxed array part holds only numbers, so tracing skips it.
-        const arr: []const Value = if (t.kind == .boxed) t.values() else &.{};
-        m.work += arr.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
-        if (t.metatable) |mt| m.markObject(&mt.hdr);
-        const mode = weakModeOf(m.g, t);
-        if (!m.verifying) t.weak_mode = mode;
-        switch (mode) {
-            .none => {
-                for (arr) |v| m.markValue(v);
-                for (t.hash) |n| {
-                    if (n.val.isNil()) continue;
-                    m.markValue(n.key);
-                    m.markValue(n.val);
-                }
-            },
-            .values => {
-                // Keys are strong, values are weak.
-                for (arr) |v| m.markIfValueLike(v);
-                for (t.hash) |n| {
-                    if (n.val.isNil()) continue;
-                    m.markValue(n.key);
-                    m.markIfValueLike(n.val);
-                }
-                if (!m.verifying) s.weak.append(gpa, t) catch {};
-            },
-            .keys => {
-                // Ephemeron: a value is reachable only through its key.
-                for (arr) |v| m.markValue(v);
-                for (t.hash) |n| {
-                    if (n.val.isNil()) continue;
-                    m.markIfValueLike(n.key);
-                    if (m.verifying and isMarkedOrNotCollectable(n.key)) m.markValue(n.val);
-                }
-                if (!m.verifying) {
-                    s.ephemerons.append(gpa, t) catch {};
-                    s.weak.append(gpa, t) catch {};
-                }
-            },
-            .both => {
-                for (arr) |v| m.markIfValueLike(v);
-                for (t.hash) |n| {
-                    if (n.val.isNil()) continue;
-                    m.markIfValueLike(n.key);
-                    m.markIfValueLike(n.val);
-                }
-                if (!m.verifying) s.weak.append(gpa, t) catch {};
-            },
+        fn traverse(m: *M, h: *Header) void {
+            // The object turns black. A later store into it takes the
+            // slow path of the barrier.
+            if (!m.verifying) {
+                if (par) {
+                    // Only the thread that claimed the object writes its
+                    // flags, and the mark of a large object is already
+                    // set, so a plain store loses nothing.
+                    const f = flagsOf(h);
+                    const old = @atomicLoad(u8, f, .monotonic);
+                    if (old & barrier_mask == 0) @atomicStore(u8, f, old | barrier_mask, .monotonic);
+                } else h.flags.barrier = true;
+            }
+            switch (h.tag) {
+                .table => m.traverseTable(h.as(object.Table)),
+                .closure => {
+                    const c = h.as(object.Closure);
+                    m.markObject(&c.proto.hdr);
+                    for (c.upvals()) |u| m.markObject(&u.hdr);
+                },
+                .native => {
+                    const n = h.as(state_mod.Native);
+                    if (n.name) |s| m.markObject(&s.hdr);
+                    for (n.upvalues()) |v| m.markValue(v);
+                },
+                .userdata => {
+                    const u = h.as(object.Userdata);
+                    if (u.metatable) |mt| m.markObject(&mt.hdr);
+                    for (u.userValues()) |v| m.markValue(v);
+                },
+                .thread => {
+                    const t = h.as(Thread);
+                    m.work += t.stack.len * @sizeOf(Value);
+                    t.traverse(m);
+                },
+                .enum_root => {
+                    const r = h.as(object.EnumRoot);
+                    for (r.names) |s| m.markObject(&s.hdr);
+                    for (r.values) |ev| if (ev) |e| m.markObject(&e.hdr);
+                },
+                .enum_value => m.markObject(&h.as(object.EnumValue).root.hdr),
+                else => state_mod.traverseExtra(m, h),
+            }
         }
-    }
 
-    /// Strings and arbitrary-precision numbers are values, not objects,
-    /// for weak tables: they are never cleared, so they must stay alive.
-    fn markIfValueLike(m: *Marker, v: Value) void {
-        if (isValueLike(v)) m.markValue(v);
-    }
+        pub fn mark(m: *M, v: Value) void {
+            m.markValue(v);
+        }
+        pub fn markHeader(m: *M, h: *Header) void {
+            m.markObject(h);
+        }
 
-    fn convergeEphemerons(m: *Marker) void {
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (m.g.gcs.ephemerons.items) |t| {
-                for (t.hash) |n| {
-                    if (n.val.isNil()) continue;
-                    if (isMarkedOrNotCollectable(n.key) and n.val.tag.isCollectable() and !isMarked(n.val.header())) {
+        /// Appends a weak table to a list of the collector.
+        fn remember(m: *M, list: *std.ArrayList(*object.Table), t: *object.Table) void {
+            if (par) m.drain.lock.lock();
+            defer if (par) m.drain.lock.unlock();
+            list.append(m.g.gpa, t) catch {};
+        }
+
+        fn traverseTable(m: *M, t: *object.Table) void {
+            const s = &m.g.gcs;
+            // An unboxed array part holds only numbers, so tracing skips it.
+            const arr: []const Value = if (t.kind == .boxed) t.values() else &.{};
+            m.work += arr.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
+            if (t.metatable) |mt| m.markObject(&mt.hdr);
+            const mode = weakModeOf(m.g, t);
+            if (!m.verifying) t.weak_mode = mode;
+            switch (mode) {
+                .none => {
+                    for (arr) |v| m.markValue(v);
+                    for (t.hash) |n| {
+                        if (n.val.isNil()) continue;
+                        m.markValue(n.key);
                         m.markValue(n.val);
-                        changed = true;
+                    }
+                },
+                .values => {
+                    // Keys are strong, values are weak.
+                    for (arr) |v| m.markIfValueLike(v);
+                    for (t.hash) |n| {
+                        if (n.val.isNil()) continue;
+                        m.markValue(n.key);
+                        m.markIfValueLike(n.val);
+                    }
+                    if (!m.verifying) m.remember(&s.weak, t);
+                },
+                .keys => {
+                    // Ephemeron: a value is reachable only through its key.
+                    for (arr) |v| m.markValue(v);
+                    for (t.hash) |n| {
+                        if (n.val.isNil()) continue;
+                        m.markIfValueLike(n.key);
+                        if (m.verifying and isMarkedOrNotCollectable(n.key)) m.markValue(n.val);
+                    }
+                    if (!m.verifying) {
+                        m.remember(&s.ephemerons, t);
+                        m.remember(&s.weak, t);
+                    }
+                },
+                .both => {
+                    for (arr) |v| m.markIfValueLike(v);
+                    for (t.hash) |n| {
+                        if (n.val.isNil()) continue;
+                        m.markIfValueLike(n.key);
+                        m.markIfValueLike(n.val);
+                    }
+                    if (!m.verifying) m.remember(&s.weak, t);
+                },
+            }
+        }
+
+        /// Strings and arbitrary-precision numbers are values, not
+        /// objects, for weak tables: they are never cleared, so they must
+        /// stay alive.
+        fn markIfValueLike(m: *M, v: Value) void {
+            if (isValueLike(v)) m.markValue(v);
+        }
+
+        fn convergeEphemerons(m: *M) void {
+            var changed = true;
+            while (changed) {
+                changed = false;
+                for (m.g.gcs.ephemerons.items) |t| {
+                    for (t.hash) |n| {
+                        if (n.val.isNil()) continue;
+                        if (isMarkedOrNotCollectable(n.key) and n.val.tag.isCollectable() and !isMarked(n.val.header())) {
+                            m.markValue(n.val);
+                            changed = true;
+                        }
                     }
                 }
-            }
-            if (changed) m.drainAll();
-        }
-    }
-
-    /// Moves unreachable objects with finalizers to the finalizer queue,
-    /// keeping registration order. The queue runs from its end, so the
-    /// most recently registered object is finalized first.
-    fn separateFinalizable(m: *Marker) void {
-        const g = m.g;
-        var keep: usize = 0;
-        for (g.finobj.items) |h| {
-            if (!isMarked(h)) {
-                g.tobefnz.append(g.gpa, h) catch {};
-                m.markObject(h);
-            } else {
-                g.finobj.items[keep] = h;
-                keep += 1;
+                if (changed) m.drainAll();
             }
         }
-        g.finobj.items.len = keep;
-    }
 
-    fn clearWeak(m: *Marker) void {
-        for (m.g.gcs.weak.items) |t| {
-            if ((t.weak_mode == .values or t.weak_mode == .both) and t.kind == .boxed) {
-                for (t.values()) |*v| {
-                    if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
+        /// Moves unreachable objects with finalizers to the finalizer
+        /// queue, keeping registration order. The queue runs from its
+        /// end, so the most recently registered object is finalized
+        /// first.
+        fn separateFinalizable(m: *M) void {
+            const g = m.g;
+            var keep: usize = 0;
+            for (g.finobj.items) |h| {
+                if (!isMarked(h)) {
+                    g.tobefnz.append(g.gpa, h) catch {};
+                    m.markObject(h);
+                } else {
+                    g.finobj.items[keep] = h;
+                    keep += 1;
                 }
             }
-            for (t.hash) |*n| {
-                if (n.val.isNil()) continue;
-                const key_dead = (t.weak_mode == .keys or t.weak_mode == .both) and !isMarkedOrNotCollectable(n.key);
-                const val_dead = (t.weak_mode == .values or t.weak_mode == .both) and (!isMarkedOrNotCollectable(n.val) or isFinalizedObject(n.val));
-                if (key_dead or val_dead) n.val = .nil;
+            g.finobj.items.len = keep;
+        }
+
+        fn clearWeak(m: *M) void {
+            for (m.g.gcs.weak.items) |t| {
+                if ((t.weak_mode == .values or t.weak_mode == .both) and t.kind == .boxed) {
+                    for (t.values()) |*v| {
+                        if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
+                    }
+                }
+                for (t.hash) |*n| {
+                    if (n.val.isNil()) continue;
+                    const key_dead = (t.weak_mode == .keys or t.weak_mode == .both) and !isMarkedOrNotCollectable(n.key);
+                    const val_dead = (t.weak_mode == .values or t.weak_mode == .both) and (!isMarkedOrNotCollectable(n.val) or isFinalizedObject(n.val));
+                    if (key_dead or val_dead) n.val = .nil;
+                }
             }
         }
-    }
 
-    /// Verifier: a marked object references an unmarked one.
-    fn check(m: *Marker, h: *Header) void {
-        if (isMarked(h)) return;
-        const p = m.parent.?;
-        std.debug.print("gc verify: marked {s} at {*} references unmarked {s} at {*}\n", .{ @tagName(p.tag), p, @tagName(h.tag), h });
-        @panic("gc verify: tri-color invariant violated");
-    }
-};
+        /// Verifier: a marked object references an unmarked one.
+        fn check(m: *M, h: *Header) void {
+            if (isMarkedM(h)) return;
+            const p = m.parent.?;
+            std.debug.print("gc verify: marked {s} at {*} references unmarked {s} at {*}\n", .{ @tagName(p.tag), p, @tagName(h.tag), h });
+            @panic("gc verify: tri-color invariant violated");
+        }
+    };
+}
 
 pub const MarkerApi = Marker;
+
+const flag_bits = struct {
+    fn mask(comptime name: []const u8) u8 {
+        var f: Header.Flags = .{};
+        @field(f, name) = true;
+        return @bitCast(f);
+    }
+};
+const barrier_mask = flag_bits.mask("barrier");
+const large_mask = flag_bits.mask("large");
+const mark_mask = flag_bits.mask("mark");
+
+inline fn flagsOf(h: *Header) *u8 {
+    return @ptrCast(&h.flags);
+}
+
+/// `isMarked` for parallel markers, whose threads set marks while others
+/// read them.
+inline fn isMarkedAtomic(h: *const Header) bool {
+    const f = @atomicLoad(u8, @as(*const u8, @ptrCast(&h.flags)), .monotonic);
+    if (f & large_mask != 0) return f & mark_mask != 0;
+    return heap.isMarkedSmallAtomic(h);
+}
 
 // ---------------------------------------------------------------------
 // Heap verifier, enabled with -Dgc-verify. At the end of every mark
@@ -1134,7 +1255,8 @@ pub const MarkerApi = Marker;
 // failure means a missing barrier or a missing root.
 
 fn verifyHeap(g: *Global) void {
-    var m = Marker{ .g = g, .verifying = true };
+    var m = Marker.init(g);
+    m.verifying = true;
     std.debug.assert(g.gcs.gray.items.len == 0 and g.gcs.grayagain.items.len == 0);
     heap.forEachObject(g, &m, struct {
         fn f(mm: *Marker, h: *Header) void {

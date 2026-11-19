@@ -1,0 +1,13 @@
+-- Builds a graph of a million tables that stay alive, then runs ten full
+-- collections. Each collection marks the whole graph while the program
+-- waits, which is the work that parallel marking spreads over several
+-- threads.
+local nodes = {}
+for i = 1, 500000 do
+    local prev = nodes[i - 1]
+    nodes[i] = {id = i, prev = prev, kids = {prev, i}}
+end
+for _ = 1, 10 do
+    collectgarbage()
+end
+print(#nodes)

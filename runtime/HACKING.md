@@ -82,6 +82,10 @@ The WebAssembly build compiles hot functions to WebAssembly modules that the Jav
 
 Native code reads tables, inline cache entries, and frames directly. Every offset and constant it uses comes from `table.layout` in `vm/table.zig`, `interp.layout` in `vm/interp.zig`, or `@offsetOf` on `state.Frame`, so a field that moves takes native code with it, and a change that breaks an assumption of the templates fails a compile-time assertion next to those declarations. A change to what the interpreter's fast paths do (`interp.fast`, `lookupIc`, `indexChain`, `table.storeStr`, `table.arrayStoreFast`) needs the matching change in the inline paths of `jit/emit.zig`. Run a `-Dgc-stress=97 -Dgc-verify=true` build over the conformance suite with `LUS_JIT=eager` after touching a store, because the verifier finds a missing barrier.
 
+## The collector
+
+Marking runs on several threads on native targets when a collection that stops the program has enough work (`gcpar.zig`, `../spec/design/gc.md`). The parallel marker is the same code as the sequential one, instantiated with atomic marks, so a change to tracing reaches both. `LUS_GC_THREADS=1` marks on one thread. A `-Dgc-stress=97` build drains in parallel at almost every collection, and `-Dsanitize-thread=true` adds ThreadSanitizer. After a change to marking, run the conformance suite several times in a stress build and once in a stress build with ThreadSanitizer. The executable of that build finds the ThreadSanitizer library through `DYLD_LIBRARY_PATH` on macOS, set to the directory under `.zig-cache` that holds it, and the tests that start a fresh `lus` process fail there because the process does not inherit that setting.
+
 ## Fuzzing
 
 `src/fuzz.zig` holds fuzz targets for the lexer, the parser, the compiler, formatter idempotence, and the binary chunk loader. `zig build test` runs each target once over its seed corpus. `mise run fuzz` (or `zig build test --fuzz=1M`) mutates inputs for a million iterations, and `zig build test --fuzz` alone runs until stopped and serves a coverage view in the browser. A crashing input is saved under `.zig-cache/f/crash`.

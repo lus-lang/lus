@@ -16,12 +16,15 @@ pub fn build(b: *std.Build) void {
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
+    // ThreadSanitizer, for the parallel marker of the collector.
+    const tsan = b.option(bool, "sanitize-thread", "Build the lus executable with ThreadSanitizer (default: false)") orelse false;
 
     const lus_mod = b.createModule(.{
         .root_source_file = b.path("src/lus.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = if (tsan) true else null,
     });
     lus_mod.addOptions("build_options", options);
     if (features.archive) lus_mod.linkLibrary(compressionLibrary(b, target));
@@ -34,6 +37,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{.{ .name = "lus", .module = lus_mod }},
+            .sanitize_thread = if (tsan) true else null,
         }),
     });
     b.installArtifact(exe);
