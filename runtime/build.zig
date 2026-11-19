@@ -67,6 +67,16 @@ pub fn build(b: *std.Build) void {
     const doc_step = b.step("test-doc", "Run lus doc on the fixtures in tests/doc");
     fixtureSuite(b, exe, doc_step, "doc", &.{ ".md", ".json" });
 
+    // `lus debug` driven by the scripted DAP client in tests/debug.
+    const debug_step = b.step("test-debug", "Drive lus debug with the scripted DAP client in ../tests/debug");
+    const debug_run = b.addSystemCommand(&.{"node"});
+    debug_run.setName("lus debug (DAP client)");
+    debug_run.addFileArg(b.path("../tests/debug/run.mjs"));
+    debug_run.addArtifactArg(exe);
+    debug_run.addFileInput(b.path("../tests/debug/fixture.lus"));
+    debug_run.addFileInput(b.path("../tests/debug/coroutine.lus"));
+    debug_step.dependOn(&debug_run.step);
+
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);

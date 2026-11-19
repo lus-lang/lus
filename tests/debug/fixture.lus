@@ -1,0 +1,20 @@
+global print, error
+
+local function add(a, b)
+    local sum = a + b
+    return sum
+end
+
+local function compute(n)
+    local total <const> = 10
+    local result = add(n, total)
+    return result
+end
+
+local items = {1, 2, 3, name = "fixture"}
+for i = 1, 5 do
+    local value = compute(i)
+    print("value", value, items.name)
+end
+
+error("boom")
