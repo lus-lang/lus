@@ -1079,7 +1079,7 @@ local a, b from z                   -- group source
 - A group overwrite `g = { ... }` accepts only a constructor (`group can only be assigned a constructor or another group`), and every listed field must already exist (`'d' is not a field of group 'z'`). Subgroups cannot be overwritten (`cannot overwrite subgroups`). Fields are separated by `,` or `;`, so `z = { a = 1 a = 2 }` fails with `'}' expected near 'a'`.
 - Groups are always local. `global g <group>` raises `global variables cannot be groups`.
 - Group names resolve lexically to the innermost group in scope. In `local g <group> = {a=1} do local g <group> = {b=2} end print(g.a)`, the last `g.a` names the field of the outer group.
-- A field path through a group declared in an enclosing function is outside the language. The compiler carries the error `group fields cannot be captured through the group name in nested functions yet` for it, but the current build stops with an internal integer overflow before reaching that check, which is a known defect. A nested function reaches such a field through an ordinary local that holds its value.
+- A nested function reaches the fields of a group declared in an enclosing function through the same group paths. Each field it names becomes an upvalue of the nested function that refers to the field local, so reads and writes on either side see one variable, exactly as for a captured ordinary local. Overwrites, copies, and `from` sources work the same way inside the nested function. **Tested** (`groups_test.lus`): a closure created in each loop iteration captures that iteration's field.
 - A field declared `<close>` is read-only and is never closed. A value that needs closing belongs in an ordinary `<close>` local.
 
 #### Dynamic semantics
@@ -1288,7 +1288,6 @@ A chunk that fails to compile produces a single string message. `load` returns `
 | `cannot use <close> with <group> variables` | semantic | `compile/codegen.zig` |
 | `group can only be copied from another group` | semantic | `compile/codegen.zig` |
 | `group can only be assigned a constructor or another group` | semantic | `compile/codegen.zig` |
-| `group fields cannot be captured through the group name in nested functions yet` | semantic | `compile/codegen.zig` |
 | `cannot pass local group` | semantic | `compile/codegen.zig` |
 | `'X' is not a field of group 'G'` | semantic | `compile/codegen.zig` |
 | `cannot deconstruct subgroup 'X' with 'from'` | semantic | `compile/codegen.zig` |
