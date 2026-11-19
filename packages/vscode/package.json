@@ -36,7 +36,7 @@
     "licenses/LICENSE.LUALS.txt",
     "out/extension.js",
     "syntaxes/lus.tmLanguage.json",
-    "wasm/lus.mjs",
+    "language-server/**/*.lus",
     "wasm/lus.wasm"
   ],
   "contributes": {
@@ -90,6 +90,7 @@
     "@types/vscode": "1.100.0",
     "@vscode/vsce": "3.9.2",
     "esbuild": "0.27.3",
+    "lus-wasm": "workspace:*",
     "ovsx": "0.10.9",
     "typescript": "5.9.3"
   },

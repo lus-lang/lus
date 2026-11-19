@@ -8,8 +8,6 @@
   },
   "include": [
     "src/lspFrames.ts",
-    "src/wasmAsset.ts",
-    "src/wasmUtf8.ts",
     "src/workspaceProtocol.ts"
   ]
 }
