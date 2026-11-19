@@ -643,13 +643,17 @@ pub fn rawToBuf(l: *Thread, buf: *std.ArrayList(u8), v: Value) !void {
 
 /// Full `tostring`, honoring `__tostring` and `__name`.
 pub fn toString(l: *Thread, v: Value) Error!*String {
-    if (v.tag == .string) return v.as(String);
+    // __tostring applies to every type, strings included, as in the
+    // reference runtime. The absence cache keeps the common case cheap.
     const tm = l.metamethod(v, .tostring);
     if (!tm.isNil()) {
         const r = try call1(l, tm, &.{v});
-        if (r.tag != .string) return l.raiseFmt("'__tostring' must return a string", .{});
-        return r.as(String);
+        if (r.tag == .string) return r.as(String);
+        // A numeric result reads as its numeral.
+        if (r.isNumber()) return toString(l, r);
+        return l.raiseFmt("'__tostring' must return a string", .{});
     }
+    if (v.tag == .string) return v.as(String);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(l.g.gpa);
     rawToBuf(l, &buf, v) catch return l.raiseMem();

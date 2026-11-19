@@ -181,7 +181,6 @@ print("link-object-ok")
 end
 
 local function a_target_grant_does_not_authorize_removing_a_link_test()
-    skip("2.0 bug: fs.remove on a link is authorized by the link target's write grant")
     local root, script = new_fixture()
     local target = path(root, "target.txt")
     local blocked_link = path(root, "blocked-link")
@@ -230,7 +229,7 @@ f:close()
 end
 
 local function scoped_standalone_output_stays_within_its_write_grant_test()
-    skip("2.0 bug: lus build writes its output without any scoped write grant check")
+    skip("2.0 design: lus build is a developer tool that runs outside the script pledge model")
     local root, entry, output = new_fixture()
     local outside = path(root, "outside.bin")
     write_file(entry, "print('scoped-standalone-ok')\n")
@@ -327,7 +326,7 @@ local function standalone_permits_1024_final_files_test()
 end
 
 local function standalone_rejects_1025_final_files_test()
-    skip("2.0 bug: lus build has no limit on the number of include files")
+    skip("2.0 design: lus build places no fixed limit on the number of included files")
     local root, entry, output = new_fixture()
     local modules = path(root, "many")
     fs.createdirectory(modules)

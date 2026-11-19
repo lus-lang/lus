@@ -72,7 +72,6 @@ local function a_granted_entry_script_runs_test()
 end
 
 local function sealed_entry_scripts_use_their_authorized_file_object_test()
-    skip("2.0 bug: the entry script is read without checking the fs:read grant")
     local root = fixture()
     local allowed = fs.path.join(root, "allowed-entry.lus")
     local outside = fs.path.join(root, "outside-entry.lus")

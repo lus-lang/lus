@@ -8,7 +8,8 @@
 //! compares a value against `__snapshots__/FILE.snap`. `raises(f, pattern)`
 //! expects `f` to raise and returns the error, and `same(a, b)` compares
 //! two values structurally. `TEST_DIR` names the directory of the test
-//! file, for fixtures.
+//! file, for fixtures, and the environment variable `LUS_EXE` names the
+//! interpreter running the tests.
 //!
 //! Each file runs in its own child process inside a fresh temporary
 //! directory, with a timeout, and files run in parallel.
@@ -345,6 +346,13 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     const l = try api.newState(gpa, io);
     defer api.close(l);
     defer out.deinit(l.g);
+    // Tests that start the interpreter find it through LUS_EXE.
+    if (init.environ_map.get("LUS_EXE") == null) {
+        if (std.process.executablePathAlloc(io, gpa)) |exe| {
+            defer gpa.free(exe);
+            init.environ_map.put("LUS_EXE", exe) catch {};
+        } else |_| {}
+    }
     l.g.environ = init.environ_map;
     try api.setFlags(l, &.{});
     api.openLibs(l) catch return 2;

@@ -75,7 +75,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setGlobal(l, "require", try withPackage(l, require, "require", pkg));
     // Every library opened so far is registered as loaded.
     const globals = l.g.globals.as(Table);
-    for ([_][]const u8{ "string", "table", "math", "os", "io", "coroutine", "utf8", "debug", "package" }) |name| {
+    for ([_][]const u8{ "string", "table", "math", "os", "io", "coroutine", "utf8", "debug", "package", "vector", "fs", "network", "time", "worker" }) |name| {
         const v = try aux.getField(l, globals, name);
         if (!v.isNil()) try aux.setField(l, loaded, name, v);
     }

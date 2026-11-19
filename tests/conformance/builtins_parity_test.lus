@@ -638,7 +638,6 @@ end
 
 -- string.join honors element tostring metamethods
 local function string_join_honors_element_tostring_metamethods_test()
-    skip("2.0 bug: string.join ignores a __tostring on the string metatable, the legacy runtime applied it to every element")
     local old = debug.getmetatable("")
     debug.setmetatable("", {
         __index = string,
@@ -1498,15 +1497,8 @@ local direct_form_fallback_errors_carry_compiler_mode_names_cases = {
     {"time.instant", function() return time.instant(false) end, "time.instant", 1, "number expected, got boolean"},
 }
 
--- The vector and time constructors report their bare field name where every
--- other module reports the qualified name.
-local bare_named = {["vector.create"] = true, ["vector.resize"] = true,
-    ["time.seconds"] = true, ["time.millis"] = true, ["time.instant"] = true}
 
 local function direct_form_fallback_errors_carry_compiler_mode_names_test(label, fn, want_name, want_argn, want_reason)
-    if bare_named[label] then
-        skip("2.0 bug: " .. label .. " reports its error under a bare name instead of the qualified one")
-    end
     local name, argn, full = caught_name(fn)
     assert(name == want_name)
     assert(argn == want_argn)
@@ -1540,9 +1532,6 @@ local arity_variations_report_the_qualified_name_cases = {
 }
 
 local function arity_variations_report_the_qualified_name_test(label, fn, want_name, want_argn)
-    if label == "instant with two args" then
-        skip("2.0 bug: time.instant reports its error under a bare name instead of the qualified one")
-    end
     local name, argn, full = caught_name(fn)
     assert(name == want_name)
     assert(argn == want_argn)

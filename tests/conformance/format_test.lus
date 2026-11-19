@@ -180,7 +180,6 @@ end
 
 -- %s accepts a numeric __tostring result by coercing it
 local function s_accepts_a_numeric_tostring_result_by_coercing_it_test()
-    skip("2.0 bug: __tostring returning a number is rejected, the legacy runtime coerced it")
     local t = setmetatable({}, {__tostring = function() return 42 end})
     assert(string.format("%s", t) == "42")
 end
