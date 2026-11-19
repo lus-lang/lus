@@ -54,8 +54,24 @@ pub const String = struct {
         if (ci >= s.chars) return s.len;
         if (s.chars <= crumb_step) return wtf8.advance(s.bytes(), 0, ci);
         const cr = s.crumbs orelse return s.firstOffset(gpa, ci);
+        // A range that starts a few characters after the last one, as
+        // every step of a scan through a string does, is found from
+        // where that one started, with no look at the breadcrumbs.
+        const n = crumbCount(s.chars);
+        const ahead = ci -% cr[n];
+        if (ahead < near) {
+            const off = wtf8.advance(s.bytes(), cr[n + 1], ahead);
+            cr[n] = @intCast(ci);
+            cr[n + 1] = @intCast(off);
+            return off;
+        }
         return s.crumbOffset(cr, ci, 0, 0, 0);
     }
+
+    /// How many characters past a remembered position `byteOffset` looks
+    /// before it asks the breadcrumbs. `wtf8.advance` scans that far
+    /// inline.
+    const near = 16;
 
     /// The byte offset of the character `ci` that ends a range, given
     /// that the character `from_ci` at or before it starts at byte

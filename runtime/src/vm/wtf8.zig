@@ -146,6 +146,9 @@ pub fn countChars(bytes: []const u8) usize {
 /// character within a word is unpredictable and a mispredicted branch
 /// costs more than the arithmetic.
 pub inline fn advance(bytes: []const u8, off: usize, count: usize) usize {
+    // One character ahead is the length of the character at `off`,
+    // which its lead byte tells.
+    if (count == 1 and off < bytes.len) return off + leadLen(bytes[off]);
     // A short distance inside the text takes one or two words, inline.
     if (count < 16 and off + 16 <= bytes.len) {
         const p0 = leadPrefix(std.mem.readInt(u64, bytes[off..][0..8], .little));
@@ -157,6 +160,13 @@ pub inline fn advance(bytes: []const u8, off: usize, count: usize) usize {
         return advanceLong(bytes, off + 16, count - k0 - k1);
     }
     return advanceLong(bytes, off, count);
+}
+
+/// The length in bytes of the character that starts with the lead byte
+/// `b` in valid WTF-8: one more for each of the three thresholds the
+/// byte reaches.
+inline fn leadLen(b: u8) usize {
+    return @as(usize, 1) + @intFromBool(b >= 0xC0) + @intFromBool(b >= 0xE0) + @intFromBool(b >= 0xF0);
 }
 
 /// Running counts of the lead bytes of `w`: byte j holds the number of
