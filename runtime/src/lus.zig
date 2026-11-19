@@ -63,6 +63,7 @@ test {
     _ = vm.interp;
     _ = vm.pledge;
     _ = @import("vm/heapcount.zig");
+    _ = @import("fuzz.zig");
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = api;

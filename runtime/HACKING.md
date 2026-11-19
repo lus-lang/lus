@@ -53,3 +53,8 @@ C functions never see a Zig error. Every exported function that can fail returns
 - Match the semantics and error messages of the legacy C runtime in `../legacy/lus/src` and of the specification in `../spec/stdlib`, unless a design note in `../spec/design` changes them.
 - Prose and comments follow the repository rules in `../AGENTS.md`: full sentences, no em or en dashes, no semicolons.
 - Tests for a module are Lus files run with `lus test` or plain scripts run with `lus`. Run the legacy corpus from a scratch copy of `../legacy/lus-tests`, never from the repository, because some tests write files.
+
+## Fuzzing
+
+`src/fuzz.zig` holds fuzz targets for the lexer, the parser, the compiler, formatter idempotence, and the binary chunk loader. `zig build test` runs each target once over its seed corpus. `mise run fuzz` (or `zig build test --fuzz=1M`) mutates inputs for a million iterations, and `zig build test --fuzz` alone runs until stopped and serves a coverage view in the browser. A crashing input is saved under `.zig-cache/f/crash`.
+

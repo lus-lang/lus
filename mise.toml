@@ -21,6 +21,11 @@ run = [
   "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
 ]
 
+[tasks.fuzz]
+description = "Fuzz the lexer, parser, compiler, formatter, and chunk loader"
+dir = "runtime"
+run = "zig build test --fuzz=1M -Doptimize=ReleaseSafe"
+
 [tasks.wasm]
 description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"
 dir = "runtime"

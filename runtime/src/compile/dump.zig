@@ -268,14 +268,15 @@ const Reader = struct {
             u.by_value = try r.byte() != 0;
             u.name = try r.str();
         }
+        // Nested prototypes are collected objects of their own, so a
+        // failure part way only has to free this list.
         const np = try r.len();
-        p.protos = try gpa.alloc(*Proto, np);
-        var built: usize = 0;
-        errdefer p.protos = p.protos[0..built];
-        for (p.protos) |*q| {
-            q.* = try r.proto();
-            built += 1;
-        }
+        const protos = try gpa.alloc(*Proto, np);
+        var protos_owned = true;
+        errdefer if (protos_owned) gpa.free(protos);
+        for (protos) |*q| q.* = try r.proto();
+        p.protos = protos;
+        protos_owned = false;
         const nh = try r.len();
         p.handlers = try gpa.alloc(object.Handler, nh);
         for (p.handlers) |*h| h.* = .{
