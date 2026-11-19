@@ -311,7 +311,7 @@ end
 local function returns_one_of_the_implemented_identifiers_test()
     local known = {
         linux = true, darwin = true, freebsd = true, netbsd = true,
-        openbsd = true, sunos = true, windows = true, posix = true,
+        openbsd = true, sunos = true, windows = true, posix = true, wasi = true,
         unknown = true,
     }
     assert(known[os.platform()])
@@ -330,7 +330,7 @@ end
 local function matches_the_platform_name_documented_in_the_spec_test()
     local documented = {
         linux = true, darwin = true, windows = true, freebsd = true,
-        netbsd = true, openbsd = true, sunos = true, posix = true,
+        netbsd = true, openbsd = true, sunos = true, posix = true, wasi = true,
     }
     local p = os.platform()
     assert(documented[p] or p == "unknown")
