@@ -1021,8 +1021,11 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             } else {
                 _ = try precall(l, dst, nargs, fr.want);
             }
+            // The new frame returns in place of the old one, so it takes
+            // over what the old one owed its caller.
             const nf = l.frame();
             nf.boundary = fr.boundary;
+            nf.finish = fr.finish;
             nf.tail = true;
             c = load(l);
             pc = 0;
