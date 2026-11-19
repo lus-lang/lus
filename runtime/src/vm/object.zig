@@ -290,6 +290,12 @@ pub const Proto = struct {
     /// Address that native code calls to enter the function by a tail
     /// call, under the same conditions.
     jit_tail: usize = 0,
+    /// Counts down the calls and loop iterations that baseline code
+    /// runs. At zero the optimizing tier looks at the function.
+    opt_hot: u32 = 0,
+    /// What the optimizing tier keeps about the function (a
+    /// `jit.opt.Info`), or null.
+    opt: ?*anyopaque = null,
 
     pub const JitState = enum(u8) {
         /// Not yet seen by the JIT.

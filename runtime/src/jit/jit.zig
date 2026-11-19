@@ -36,10 +36,15 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
 /// Whether the backend emits WebAssembly modules rather than machine code.
 pub const is_wasm = builtin.cpu.arch == .wasm32;
 
+/// Whether this build has the optimizing tier, which emits machine code.
+pub const has_opt = enabled and !is_wasm;
+
 const mem = @import("mem.zig");
 const emit = @import("emit.zig");
 const wasm = @import("wasm.zig");
 pub const helpers = @import("helpers.zig");
+/// The optimizing tier, which compiles what stays hot in baseline code.
+pub const opt = @import("opt/opt.zig");
 
 pub const default_threshold = 60;
 /// Functions with more instructions than this stay in the interpreter,
@@ -61,6 +66,18 @@ pub const State = if (enabled) struct {
     live: usize = 0,
     /// Functions compiled since the state started.
     compiled: usize = 0,
+    /// The optimizing tier: its setting, the events in baseline code
+    /// before it compiles, and its counters.
+    opt: opt.Setting = if (is_wasm) .off else .on,
+    opt_threshold: u32 = opt.default_threshold,
+    optimized: usize = 0,
+    exits: usize = 0,
+    /// Lists the intermediate representation of every compilation.
+    opt_dump: bool = false,
+    /// Bytes of tables that optimized code did not allocate since the
+    /// last collection it asked for, and the count at which it asks.
+    sunk: u64 = 0,
+    sunk_limit: u64 = opt.sunk_step,
 } else struct {};
 
 /// The native code of one function.
@@ -74,11 +91,20 @@ pub const Code = extern struct {
     size: usize,
     /// Entries in `offs`.
     count: usize,
+    /// Offsets of the call entry, of the call entry behind its counter,
+    /// and of the tail entry, or zero.
+    call_entry: usize = 0,
+    call_entry_plain: usize = 0,
+    tail_entry: usize = 0,
 };
 
 /// Reads the settings from the environment the host gave the state.
-/// `LUS_JIT` is `off`, `on`, or `eager`, and `LUS_JIT_THRESHOLD` is the
-/// number of events before a function compiles.
+/// `LUS_JIT` is `off`, `on`, `baseline`, `eager`, or `opt-eager`.
+/// `baseline` and `eager` keep the optimizing tier off, and `opt-eager`
+/// sends every function through both tiers at once.
+/// `LUS_JIT_THRESHOLD` is the number of events before a function
+/// compiles, and `LUS_JIT_OPT_THRESHOLD` the number of events in
+/// baseline code before the optimizing tier compiles it.
 fn setup(g: *Global) void {
     const js = &g.jit;
     js.ready = true;
@@ -92,17 +118,31 @@ fn setup(g: *Global) void {
     if (env.get("LUS_JIT")) |v| {
         if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
             js.setting = .off;
+            js.opt = .off;
         } else if (std.mem.eql(u8, v, "eager")) {
             js.setting = .eager;
             js.threshold = 1;
+            js.opt = .off;
+        } else if (std.mem.eql(u8, v, "baseline")) {
+            js.opt = .off;
+        } else if (std.mem.eql(u8, v, "opt-eager")) {
+            js.setting = .eager;
+            js.threshold = 1;
+            js.opt = if (is_wasm) .off else .eager;
+            js.opt_threshold = 1;
         }
     }
     if (js.setting == .on) if (env.get("LUS_JIT_THRESHOLD")) |v| {
         js.threshold = @max(std.fmt.parseInt(u32, v, 10) catch default_threshold, 1);
     };
+    if (js.opt == .on) if (env.get("LUS_JIT_OPT_THRESHOLD")) |v| {
+        js.opt_threshold = @max(std.fmt.parseInt(u32, v, 10) catch opt.default_threshold, 1);
+    };
+    js.opt_dump = env.get("LUS_JIT_DUMP") != null;
 }
 
 /// Sets the JIT of a state from the host, in place of the environment.
+/// The optimizing tier stays off until `configureOpt` turns it on.
 pub fn configure(g: *Global, how: Setting, threshold: u32) void {
     if (!enabled) return;
     const js = &g.jit;
@@ -110,6 +150,34 @@ pub fn configure(g: *Global, how: Setting, threshold: u32) void {
     js.setting = if (is_wasm and !wasm.available()) .off else how;
     js.threshold = if (how == .eager) 1 else @max(threshold, 1);
     js.period = 1;
+    js.opt = .off;
+}
+
+/// Sets the optimizing tier of a state from the host.
+pub fn configureOpt(g: *Global, how: opt.Setting, threshold: u32) void {
+    if (!has_opt) return;
+    const js = &g.jit;
+    js.opt = if (js.setting == .off) .off else how;
+    js.opt_threshold = if (how == .eager) 1 else @max(threshold, 1);
+}
+
+/// The setting of the optimizing tier, for `debug.jit`.
+pub fn optSetting(g: *Global) opt.Setting {
+    if (!has_opt) return .off;
+    if (!g.jit.ready) setup(g);
+    return if (g.jit.setting == .off) .off else g.jit.opt;
+}
+
+/// How many pieces of optimized code the state compiled, and how often
+/// optimized code left through a guard.
+pub fn counters(g: *Global) [2]usize {
+    if (!has_opt) return .{ 0, 0 };
+    return .{ g.jit.optimized, g.jit.exits };
+}
+
+/// Whether the function has optimized code in use.
+pub fn isOptimized(p: *Proto) bool {
+    return has_opt and opt.isOptimized(p);
 }
 
 /// The setting of the state, for `debug.jit`.
@@ -282,6 +350,12 @@ pub fn dispatch(l: *Thread) callconv(.c) Target {
         p.hot -%= 1;
         if (p.hot != 0 or !expire(l, p)) return none;
     }
+    // A function entered at its first instruction runs its optimized
+    // code when it has some, and counts toward getting some otherwise.
+    if (has_opt and fr.pc == 0 and l.g.jit.opt != .off) {
+        const addr = opt.entry(l, p);
+        if (addr != 0) return .{ .addr = addr, .base = fr.base };
+    }
     const code: *Code = @ptrCast(@alignCast(p.jit_code.?));
     return .{ .addr = code.base + code.offs[fr.pc], .base = fr.base };
 }
@@ -339,7 +413,16 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
         return false;
     };
     mem.install(block, bytes);
-    code.* = .{ .base = @intFromPtr(block.ptr), .offs = offs.ptr, .size = block.len, .count = offs.len };
+    code.* = .{
+        .base = @intFromPtr(block.ptr),
+        .offs = offs.ptr,
+        .size = block.len,
+        .count = offs.len,
+        .call_entry = e.call_entry,
+        .call_entry_plain = e.call_entry_plain,
+        .tail_entry = e.tail_entry,
+    };
+    p.opt_hot = g.jit.opt_threshold;
     p.jit_code = code;
     p.jit_entry = if (e.call_entry != 0) code.base + e.call_entry else 0;
     p.jit_tail = if (e.tail_entry != 0) code.base + e.tail_entry else 0;
@@ -352,6 +435,7 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
 /// Frees the native code of a function that is being collected.
 pub fn freeProto(g: *Global, p: *Proto) void {
     if (!enabled) return;
+    if (has_opt) opt.freeProto(g, p);
     if (is_wasm) {
         if (p.jit_code == null) return;
         wasm.release(p);

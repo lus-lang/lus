@@ -466,7 +466,7 @@ fn hashSizeFor(hcount: usize) usize {
 /// `hcount` keys, as a constructor creates its table. A small part is
 /// sized to fill completely, which keeps records such as `{x = 1, y = 2}`
 /// compact. Parts that grow later use `hashSizeFor`.
-fn hashSizeExact(hcount: usize) usize {
+pub fn hashSizeExact(hcount: usize) usize {
     if (hcount == 0) return 0;
     if (hcount <= full_max) return std.math.ceilPowerOfTwoAssert(usize, hcount);
     return hashSizeFor(hcount);

@@ -841,6 +841,8 @@ pub fn traverseExtra(m: *gc.MarkerApi, h: *gc.Header) void {
             for (p.locvars) |lv| m.markHeader(&lv.name.hdr);
             if (p.source) |s| m.markHeader(&s.hdr);
             if (p.name) |s| m.markHeader(&s.hdr);
+            const jit = @import("../jit/jit.zig");
+            if (jit.has_opt) jit.opt.traverse(m, p);
         },
         .upvalue => {
             const u = h.as(object.Upvalue);

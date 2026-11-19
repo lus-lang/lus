@@ -220,3 +220,54 @@ test "every instruction gets an offset in increasing order" {
     while (i < code.count) : (i += 1) try std.testing.expect(code.offs[i] > code.offs[i - 1]);
     try std.testing.expect(code.offs[code.count - 1] < code.size);
 }
+
+/// Runs `src` interpreted and with every function sent through both
+/// tiers on its first call, and expects the same text and at least one
+/// piece of optimized code.
+fn expectSameOptimized(src: []const u8) !void {
+    if (!jit.has_opt) return;
+    const plain = try newState(.off);
+    defer api.close(plain);
+    const native = try newState(.eager);
+    defer api.close(native);
+    jit.configureOpt(native.g, .eager, 1);
+    const want = try evaluate(plain, src);
+    defer gpa.free(want);
+    const got = try evaluate(native, src);
+    defer gpa.free(got);
+    try std.testing.expectEqualStrings(want, got);
+    try std.testing.expect(native.g.jit.optimized > 0);
+}
+
+test "optimized code agrees with the interpreter and leaves through its guards" {
+    try expectSameOptimized(
+        \\local out = {}
+        \\local function f(a, b, t)
+        \\    local s = 0
+        \\    for i = 1, #t do s = s + t[i] * a end
+        \\    return s + b, a % 7, a // 3, a / b
+        \\end
+        \\local ints, floats = {}, {}
+        \\for i = 1, 40 do ints[i] = i floats[i] = i + 0.5 end
+        \\for _, a in ipairs({ 3, -3, 2.5, math.maxinteger }) do
+        \\    for _, t in ipairs({ ints, floats }) do
+        \\        for _, v in ipairs({ f(a, 2, t) }) do out[#out + 1] = tostring(v) end
+        \\    end
+        \\end
+        \\return table.concat(out, " ")
+    );
+    try expectSameOptimized(
+        \\local P = {}
+        \\P.__index = P
+        \\local function new(x, y) return setmetatable({ x = x, y = y }, P) end
+        \\function P:add(o) return new(self.x + o.x, self.y + o.y) end
+        \\local function walk(n, d)
+        \\    local p = new(0, 0)
+        \\    for _ = 1, n do p = p:add(d) end
+        \\    return p
+        \\end
+        \\local a = walk(100, new(1, 2))
+        \\local b = walk(100, new(0.5, "3"))
+        \\return a.x .. " " .. a.y .. " " .. b.x .. " " .. b.y .. " " .. tostring(getmetatable(b) == P)
+    );
+}
