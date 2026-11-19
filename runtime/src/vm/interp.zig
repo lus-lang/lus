@@ -952,8 +952,9 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             if (nb != 0) l.top = func + nb;
             const callee = &l.stack[func];
             if (callee.tag == .closure and callee.as(Closure).proto.plain_call) {
-                try enterLus(l, callee.as(Closure), func, nargs, want);
-                c = load(l);
+                const cl = callee.as(Closure);
+                try enterLus(l, cl, func, nargs, want);
+                c = entered(l, cl, func + 1);
                 pc = 0;
                 if (hooked and l.hook_mask & Thread.hook_call != 0) {
                     try callHook(l, "call", null);
@@ -1003,31 +1004,42 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
                 c.refresh(l);
-                if (try doReturn(l, &c, &pc, func, l.top - func, stop)) return finished(mode);
+                const n = l.top - func;
+                if (!hooked and n <= 1 and leanReturn(l, c, stop)) {
+                    c = fast.finishLean(l, c, func, n);
+                    pc = c.fr.pc;
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
+                if (try doReturn(l, &c, &pc, func, n, stop)) return finished(mode);
                 try tierReturn(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             // Reuse the current frame: close upvalues, move the callee
             // and arguments down to the frame's return slot.
-            closeUpvals(l, c.base);
-            const fr = l.frames.pop().?;
-            const dst = fr.ret;
+            if (l.open_upvals) |u| {
+                if (u.level >= c.base) closeUpvals(l, c.base);
+            }
+            const tcl = callee.as(Closure);
+            const dst = c.fr.ret;
             var i: u32 = 0;
             while (i <= nargs) : (i += 1) l.stack[dst + i] = l.stack[func + i];
             l.top = dst + 1 + nargs;
-            const tcl = callee.as(Closure);
             if (!tcl.proto.is_vararg) {
-                try enterLus(l, tcl, dst, nargs, fr.want);
+                // A callee with fixed parameters takes over the frame in
+                // place.
+                try enterTail(l, c.fr, tcl, dst, nargs);
+                c = entered(l, tcl, dst + 1);
             } else {
+                const fr = l.frames.pop().?;
                 _ = try precall(l, dst, nargs, fr.want);
+                // The new frame returns in place of the old one, so it
+                // takes over what the old one owed its caller.
+                const nf = l.frame();
+                nf.boundary = fr.boundary;
+                nf.finish = fr.finish;
+                nf.tail = true;
+                c = load(l);
             }
-            // The new frame returns in place of the old one, so it takes
-            // over what the old one owed its caller.
-            const nf = l.frame();
-            nf.boundary = fr.boundary;
-            nf.finish = fr.finish;
-            nf.tail = true;
-            c = load(l);
             pc = 0;
             if (hooked and l.hook_mask & Thread.hook_call != 0) {
                 try callHook(l, "tail call", null);
@@ -1354,6 +1366,55 @@ pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i3
     l.top = top;
 }
 
+/// Turns the running frame `fr` into the frame of a tail call to `cl`,
+/// a Lus function with fixed parameters whose `nargs` arguments are
+/// above `func`. The new frame returns in place of the old one, so it
+/// takes over what the old one owed its caller.
+inline fn enterTail(l: *Thread, fr: *Frame, cl: *Closure, func: u32, nargs: u32) Error!void {
+    const p = cl.proto;
+    const base = func + 1;
+    const top = base + p.max_stack;
+    if (@as(usize, top) + nargs + 8 > l.stack.len) {
+        // An error here unwinds from the caller, as if the frame had
+        // already returned.
+        l.ensure(@as(usize, p.max_stack) + nargs + 8) catch |e| {
+            l.frames.items.len -= 1;
+            return e;
+        };
+    }
+    var r = base + @min(nargs, @as(u32, p.num_params));
+    while (r < top) : (r += 1) l.stack[r] = .nil;
+    fr.* = .{
+        .func = func,
+        .base = base,
+        .closure = cl,
+        .want = fr.want,
+        .ret = func,
+        .boundary = fr.boundary,
+        .finish = fr.finish,
+        .tail = true,
+    };
+    l.top = top;
+}
+
+/// The frame state of the Lus frame just pushed for `cl` with its first
+/// register at `base`. The caller knows all of it, so nothing is read
+/// back from the frame.
+inline fn entered(l: *Thread, cl: *Closure, base: u32) Ctx {
+    const fi = l.frames.items.len - 1;
+    const p = cl.proto;
+    return .{
+        .fi = fi,
+        .fr = &l.frames.items[fi],
+        .cl = cl,
+        .code = p.code.ptr,
+        .k = p.constants.ptr,
+        .ic = p.ic.ptr,
+        .base = base,
+        .bp = l.stack.ptr + base,
+    };
+}
+
 /// True when the running frame can return without hooks, closing, a
 /// finish action, or leaving the loop: its caller is a Lus frame above
 /// `stop` and no open upvalue or to-be-closed variable lives in it.
@@ -1596,12 +1657,33 @@ pub const layout = struct {
 pub const fast = struct {
     /// out = t[key] for a string key, when the lookup ends in a table.
     pub inline fn getStr(l: *Thread, ic: *object.IcEntry, t: *const Value, key: *const Value, out: *Value) bool {
-        if (t.tag != .table) return t.tag == .string and stringMethod(l, ic, key.as(String), out);
+        if (t.tag != .table) {
+            if (t.tag != .string) return false;
+            if (l.g.type_metatables[value.typeSlot(.string)]) |mt| {
+                if (inheritedHit(l, mt, key.as(String), ic, out)) return true;
+            }
+            return stringMethod(l, ic, key.as(String), out);
+        }
         const tab = t.as(Table);
+        // The predicted node holds the key with a value: copy the value
+        // straight from the node. Testing the node in place keeps the
+        // value out of a temporary, which the general path below needs
+        // because its value may also be nil.
+        const i: usize = ic.own;
+        if (i < tab.hash.len) {
+            const n = &tab.hash[i];
+            if (n.key.payload == key.payload and n.key.tag == .string and n.val.tag != .nil) {
+                out.* = n.val;
+                return true;
+            }
+        }
         const v = lookupIc(tab, key.as(String), &ic.own);
         if (!v.isNil() or noIndexMeta(tab)) {
             out.* = v;
             return true;
+        }
+        if (tab.metatable) |mt| {
+            if (inheritedHit(l, mt, key.as(String), ic, out)) return true;
         }
         return indexChain(l, tab, key.as(String), ic, out);
     }
@@ -1694,6 +1776,26 @@ pub const fast = struct {
         return caller;
     }
 };
+
+/// The first step of `indexChain` when both of its slot predictions
+/// hold: `__index` in the metatable `mt` is a table, and that table holds
+/// `key` with a value in the predicted node. This is the lookup of a
+/// method that an object inherits from its class, or that a string finds
+/// in the string library, which runs inline without a call.
+inline fn inheritedHit(l: *Thread, mt: *Table, key: *String, ic: *object.IcEntry, out: *Value) bool {
+    const i: usize = ic.index;
+    if (i >= mt.hash.len) return false;
+    const hn = &mt.hash[i];
+    const name = l.g.tm_names[@backingInt(state.TM.index)].?;
+    if (hn.key.payload != @intFromPtr(name) or hn.key.tag != .string or hn.val.tag != .table) return false;
+    const h = hn.val.as(Table);
+    const j: usize = ic.holder;
+    if (j >= h.hash.len) return false;
+    const n = &h.hash[j];
+    if (n.key.payload != @intFromPtr(key) or n.key.tag != .string or n.val.tag == .nil) return false;
+    out.* = n.val;
+    return true;
+}
 
 /// Follows `__index` tables from `tab`, whose own lookup missed and whose
 /// metatable may have `__index`. Stores the result and returns true when
