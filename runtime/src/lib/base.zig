@@ -174,22 +174,23 @@ fn getmetatable(l: *Thread) Error!u32 {
 
 fn setmetatable(l: *Thread) Error!u32 {
     const b = l.base();
-    if (setmetatableLeaf(l, l.stack.ptr + b, l.top - b)) |r| return aux.ret(l, r);
+    const r = setmetatableLeaf(l, l.stack.ptr + b, l.top - b);
+    if (r.tag != state.leaf_miss.tag) return aux.ret(l, r);
     return setmetatableSlow(l);
 }
 
 /// The common call of `setmetatable` (`state.LeafFn`): a table without a
 /// metatable gets a metatable that is known to lack `__gc`, which needs
 /// no check beyond the types.
-fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) ?Value {
-    if (nargs != 2) return null;
+fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) Value {
+    if (nargs != 2) return state.leaf_miss;
     const tv = args[0];
     const mv = args[1];
-    if (tv.tag != .table or mv.tag != .table) return null;
+    if (tv.tag != .table or mv.tag != .table) return state.leaf_miss;
     const t = tv.as(Table);
     const mt = mv.as(Table);
     const gc_bit = @as(u16, 1) << @backingInt(state.TM.gc);
-    if (t.metatable != null or mt.tm_absent & gc_bit == 0) return null;
+    if (t.metatable != null or mt.tm_absent & gc_bit == 0) return state.leaf_miss;
     t.metatable = mt;
     gc.barrierBack(l.g, &t.hdr);
     return tv;

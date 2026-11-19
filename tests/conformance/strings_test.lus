@@ -921,3 +921,43 @@ end
 local function string_split_and_string_join_compose_through_method_syntax_test()
     assert(("a-b-c"):split("-")[2] == "b")
 end
+
+-- Substrings of a long non-ASCII string agree with a list of its
+-- characters, whatever the order of the positions: windows that move
+-- forward, backward, and by jumps, which reuse the positions that
+-- earlier calls found.
+local function string_sub_windows_on_long_non_ascii_strings_test()
+    local base = "héllo wörld, ünïcödé ταχύτητα 速度 𝄞 "
+    local s = string.rep(base, 40)
+    local chars = {}
+    for _, c in utf8.codes(s) do chars[#chars + 1] = utf8.char(c) end
+    local n = #chars
+    assert(#s == n)
+    local function expect(i, j)
+        local lo = math.max(i, 1)
+        local hi = math.min(j, n)
+        if lo > hi then return "" end
+        return table.concat(chars, "", lo, hi)
+    end
+    local function check(i, j)
+        local got = s:sub(i, j)
+        assert(got == expect(i, j), string.format("sub(%d, %d)", i, j))
+        assert(#got == math.max(0, math.min(j, n) - math.max(i, 1) + 1))
+    end
+    for i = 1, n do check(i, i + 8) end
+    for i = n, 1, -1 do check(i, i + 3) end
+    for i = 1, n, 61 do check(i, i + 70) end
+    for i = 1, n, 7 do check(n - i + 1, n) end
+    local x = 1
+    for _ = 1, 500 do
+        x = (x * 37 + 11) % n + 1
+        check(x, x + (x % 13))
+        check(x, x)
+    end
+    -- Multiple results and adjustments to the call.
+    local a, b = s:sub(2, 3)
+    assert(a == "él" and b == nil)
+    assert(select("#", s:sub(2, 3)) == 1)
+    local t = { s:sub(1, 1), s:sub(2, 2) }
+    assert(t[1] == "h" and t[2] == "é" and #t == 2)
+end
