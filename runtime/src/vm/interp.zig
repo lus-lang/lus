@@ -15,6 +15,7 @@ const state = @import("state.zig");
 const table = @import("table.zig");
 const ops = @import("ops.zig");
 const gc = @import("gc.zig");
+const jit = @import("../jit/jit.zig");
 const numeric = @import("numeric.zig");
 const opc = @import("../compile/opcodes.zig");
 const Value = value.Value;
@@ -30,8 +31,42 @@ const Op = opc.Op;
 
 /// Error variant used internally to unwind a coroutine back to `resume`.
 pub const YieldError = error{Yield};
-/// Internal: hooks were set or cleared, so the interpreter changes loops.
-const LoopError = error{SwitchLoop};
+/// Internal: the running frame continues in another loop. `SwitchLoop`
+/// means that hooks were set or cleared, or that native code handed a
+/// frame back to the interpreter. `EnterJit` means that the running
+/// function has native code.
+pub const LoopError = error{ SwitchLoop, EnterJit };
+
+/// How the dispatch loop is instantiated. `fast` and `hooked` are the two
+/// interpreter loops. `step` runs the body of one opcode and returns, which
+/// gives the JIT an out-of-line routine for every opcode that is the
+/// interpreter's own definition of it.
+pub const Mode = union(enum) { fast, hooked, step: Op };
+
+/// What a step returns to native code.
+pub const Step = struct {
+    /// Continue with the next instruction.
+    pub const next: u32 = 0;
+    /// Continue after the next instruction. The frame's pc is saved.
+    pub const skip: u32 = 1;
+    /// Continue at the saved pc of the top frame, which may be another
+    /// frame than the one that ran the step.
+    pub const dispatch: u32 = 2;
+    /// The frame count dropped to `stop`, or a boundary frame returned.
+    pub const done: u32 = 3;
+    pub const failed: u32 = 4;
+    pub const yielded: u32 = 5;
+    /// The interpreter loop continues the top frame.
+    pub const interpret: u32 = 6;
+};
+
+fn RunResult(comptime mode: Mode) type {
+    return if (mode == .step) u32 else void;
+}
+
+inline fn finished(comptime mode: Mode) RunResult(mode) {
+    return if (mode == .step) Step.done else {};
+}
 
 // ---------------------------------------------------------------------
 // Upvalues
@@ -300,19 +335,34 @@ inline fn load(l: *Thread) Ctx {
 
 /// Runs Lus frames until the frame count drops to `stop`.
 pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
+    // Native code runs a frame whenever its function has some and no hook
+    // is set. Every frame lives on the Lus stack whatever runs it, so the
+    // tiers hand frames to each other at any instruction boundary.
+    var native = jit.enabled and jit.entryCheck(l);
     while (true) {
         // The hooked loop is a second instantiation of the same code, so
         // threads without hooks pay nothing for them.
-        const r = if (l.hook_mask != 0) run(l, stop, true) else run(l, stop, false);
+        const r = if (l.hook_mask != 0)
+            run(l, stop, .hooked)
+        else if (jit.enabled and native)
+            jit.run(l, stop)
+        else
+            run(l, stop, .fast);
+        native = false;
         r catch |e| {
             l.meta_finish = null;
             switch (e) {
                 // A metamethod frame was pushed, or the hooks changed.
                 error.MetaCall, error.SwitchLoop => continue,
+                error.EnterJit => {
+                    native = true;
+                    continue;
+                },
                 error.Yield => return error.Yield,
                 error.LusError => {
                     if (l.g.debugger) |d| d.raised(d.ctx, l);
                     if (!handleError(l, stop)) return error.LusError;
+                    native = jit.enabled and jit.hasCode(l);
                     continue;
                 },
             }
@@ -360,29 +410,88 @@ fn handleError(l: *Thread, stop: usize) bool {
     return false;
 }
 
-/// Fetches the next instruction. The frame's saved pc is written only
-/// before operations that can raise, call, or allocate, because errors,
-/// tracebacks, and returns read it from the frame.
-inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool) Error!Op {
-    if (hooked) {
-        try hookStep(l, c.fi, c.cl, pc.*);
-        c.refresh(l);
-    }
-    ins.* = c.code[pc.*];
-    pc.* += 1;
-    return opc.op(ins.*);
+/// The parts of the dispatch loop that differ between its instantiations.
+fn Loop(comptime mode: Mode) type {
+    return struct {
+        /// Fetches the next instruction. The frame's saved pc is written
+        /// only before operations that can raise, call, or allocate,
+        /// because errors, tracebacks, and returns read it from the frame.
+        /// A step ends here: it dispatches to the `extraarg` case, which
+        /// reports where execution continues.
+        inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool) Error!Op {
+            if (mode == .step) return .extraarg;
+            if (hooked) {
+                try hookStep(l, c.fi, c.cl, pc.*);
+                c.refresh(l);
+            }
+            ins.* = c.code[pc.*];
+            pc.* += 1;
+            return opc.op(ins.*);
+        }
+
+        /// Finishes a test instruction. The compiler always follows a test
+        /// with a jump. When the test fails the jump is skipped. Otherwise
+        /// the jump runs here without another dispatch, except under
+        /// hooks, which see it as its own instruction.
+        inline fn condJump(l: *Thread, c: *Ctx, pc: *u32, skip: bool, comptime hooked: bool) (Error || LoopError)!void {
+            if (skip) {
+                pc.* += 1;
+                return;
+            }
+            if (hooked) return;
+            const j = c.code[pc.*];
+            const off = opc.sj(j);
+            pc.* = @intCast(@as(i64, pc.*) + 1 + off);
+            if (off < 0) {
+                // Loops are safe points for pending finalizers.
+                if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                    c.fr.pc = pc.*;
+                    try runPendingFinalizers(l);
+                    c.refresh(l);
+                }
+                try tier(l, c, pc.*);
+            }
+        }
+
+        /// Counts a call, a loop iteration, or a return into the running
+        /// function, whose next instruction is `pc`. A function that is
+        /// hot enough gets native code, and the loop then hands the frame
+        /// over. A function with native code keeps its counter at one, so
+        /// that every event reaches the hand-over.
+        inline fn tier(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
+            if (comptime !(jit.enabled and mode == .fast)) return;
+            const p = c.cl.proto;
+            p.hot -%= 1;
+            if (p.hot == 0) {
+                @branchHint(.unlikely);
+                c.fr.pc = pc;
+                if (jit.tick(l, p)) return error.EnterJit;
+            }
+        }
+    };
 }
 
-fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || LoopError)!void {
+pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError || LoopError)!RunResult(mode) {
     // The dispatch loop inlines many fast paths, which needs more
     // semantic analysis than the default quota allows.
     @setEvalBranchQuota(10_000);
+    const hooked = mode == .hooked;
+    const fetch = Loop(mode).fetch;
+    const condJump = Loop(mode).condJump;
+    const tier = Loop(mode).tier;
     var c = load(l);
     var pc: u32 = c.fr.pc;
     var ins: u32 = undefined;
+    // A step runs the instruction before the saved pc, which its caller
+    // set as the instruction itself would.
+    const fi0 = c.fi;
+    const pc0 = pc;
+    if (mode == .step) {
+        ins = c.code[pc - 1];
+    }
     // Every case ends by dispatching the next instruction directly, which
     // gives each opcode its own indirect branch.
-    sw: switch (try fetch(l, &c, &pc, &ins, hooked)) {
+    sw: switch (if (mode == .step) mode.step else try fetch(l, &c, &pc, &ins, hooked)) {
         .move => {
             c.bp[opc.a(ins)] = c.bp[opc.b(ins)];
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -679,10 +788,13 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             const off = opc.sj(ins);
             pc = @intCast(@as(i64, pc) + off);
             // Loops are safe points for pending finalizers.
-            if (off < 0 and l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
-                c.fr.pc = pc;
-                try runPendingFinalizers(l);
-                c.refresh(l);
+            if (off < 0) {
+                if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                    c.fr.pc = pc;
+                    try runPendingFinalizers(l);
+                    c.refresh(l);
+                }
+                try tier(l, &c, pc);
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -804,6 +916,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     try callHook(l, "call", null);
                     c.refresh(l);
                 }
+                try tier(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             const kind: CallKind = if (callee.tag == .native) blk: {
@@ -817,6 +930,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     try callHook(l, "call", null);
                     c.refresh(l);
                 }
+                try tier(l, &c, pc);
             } else {
                 c.refresh(l);
                 if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
@@ -842,10 +956,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 if (kind == .lus) {
                     c = load(l);
                     pc = 0;
+                    try tier(l, &c, pc);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
                 c.refresh(l);
-                if (try doReturn(l, &c, &pc, func, l.top - func, stop)) return;
+                if (try doReturn(l, &c, &pc, func, l.top - func, stop)) return finished(mode);
+                try tier(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             // Reuse the current frame: close upvalues, move the callee
@@ -871,6 +987,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 try callHook(l, "tail call", null);
                 c.refresh(l);
             }
+            try tier(l, &c, pc);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .ret => {
@@ -878,7 +995,8 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             const first = c.base + opc.a(ins);
             const n: u32 = if (nb != 0) nb - 1 else l.top - first;
             c.fr.pc = pc;
-            if (try doReturn(l, &c, &pc, first, n, stop)) return;
+            if (try doReturn(l, &c, &pc, first, n, stop)) return finished(mode);
+            try tier(l, &c, pc);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         inline .ret0, .ret1 => |o| {
@@ -900,10 +1018,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 c = load(l);
                 pc = c.fr.pc;
                 if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
+                try tier(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
-            if (try doReturn(l, &c, &pc, first, n, stop)) return;
+            if (try doReturn(l, &c, &pc, first, n, stop)) return finished(mode);
+            try tier(l, &c, pc);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -923,6 +1043,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     r[0] = Value.int(idx);
                     r[3] = Value.int(idx);
                     pc -= opc.bx(ins);
+                    try tier(l, &c, pc);
                 }
             } else if (r[0].tag == .float) {
                 const step = r[2].asFloat();
@@ -932,12 +1053,16 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     r[0] = Value.float(ni);
                     r[3] = Value.float(ni);
                     pc -= opc.bx(ins);
+                    try tier(l, &c, pc);
                 }
             } else {
                 c.fr.pc = pc;
                 const more = try exactForStep(l, r);
                 c.refresh(l);
-                if (more) pc -= opc.bx(ins);
+                if (more) {
+                    pc -= opc.bx(ins);
+                    try tier(l, &c, pc);
+                }
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -968,6 +1093,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             if (kind == .lus) {
                 c = load(l);
                 pc = 0;
+                try tier(l, &c, pc);
             } else {
                 c.refresh(l);
                 l.top = c.base + c.cl.proto.max_stack;
@@ -979,6 +1105,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             if (!r[4].isNil()) {
                 r[2] = r[4];
                 pc -= opc.bx(ins);
+                try tier(l, &c, pc);
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -1137,28 +1264,14 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             l.top = dst + n;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
-        .extraarg => unreachable,
-    }
-}
-
-/// Finishes a test instruction. The compiler always follows a test with a
-/// jump. When the test fails the jump is skipped. Otherwise the jump runs
-/// here without another dispatch, except under hooks, which see it as its
-/// own instruction.
-inline fn condJump(l: *Thread, c: *Ctx, pc: *u32, skip: bool, comptime hooked: bool) Error!void {
-    if (skip) {
-        pc.* += 1;
-        return;
-    }
-    if (hooked) return;
-    const j = c.code[pc.*];
-    const off = opc.sj(j);
-    pc.* = @intCast(@as(i64, pc.*) + 1 + off);
-    // Loops are safe points for pending finalizers.
-    if (off < 0 and l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
-        c.fr.pc = pc.*;
-        try runPendingFinalizers(l);
-        c.refresh(l);
+        .extraarg => {
+            // A step ends here and reports where execution continues.
+            if (mode == .step) {
+                if (c.fi == fi0 and pc == pc0) return Step.next;
+                c.fr.pc = pc;
+                return if (c.fi == fi0 and pc == pc0 + 1) Step.skip else Step.dispatch;
+            } else unreachable;
+        },
     }
 }
 

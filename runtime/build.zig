@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
         .sqlite = b.option(bool, "sqlite", "Include SQLite (default: true)"),
         .workers = b.option(bool, "workers", "Include the worker library (default: true, false on WebAssembly)"),
         .archive = b.option(bool, "archive", "Include vector.archive compression (default: true)"),
+        .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -216,6 +217,7 @@ const Features = struct {
     sqlite: ?bool = null,
     workers: ?bool = null,
     archive: ?bool = null,
+    jit: bool = true,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -238,6 +240,7 @@ const Features = struct {
         options.addOption(bool, "sqlite", r.sqlite);
         options.addOption(bool, "workers", r.workers);
         options.addOption(bool, "archive", r.archive);
+        options.addOption(bool, "jit", f.jit);
         return options;
     }
 };

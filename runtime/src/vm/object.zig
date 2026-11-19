@@ -169,6 +169,23 @@ pub const Proto = struct {
     /// Inline caches, one entry per instruction, indexed by pc. Only
     /// string-keyed table accesses use them.
     ic: []IcEntry = &.{},
+    /// Counts down the calls, loop iterations, and returns the function
+    /// sees. At zero the interpreter asks the JIT what to do with the
+    /// function. A function with native code keeps the counter at one.
+    hot: u32 = 1,
+    jit_state: JitState = .fresh,
+    /// The native code of the function (a `jit.Code`), or null.
+    jit_code: ?*anyopaque = null,
+
+    pub const JitState = enum(u8) {
+        /// Not yet seen by the JIT.
+        fresh,
+        /// Counting toward the threshold.
+        counting,
+        compiled,
+        /// The function stays in the interpreter.
+        declined,
+    };
 
     /// Allocates the inline caches for the code, all empty.
     pub fn initIc(p: *Proto, gpa: std.mem.Allocator) !void {

@@ -222,6 +222,8 @@ pub const Global = struct {
     /// `debug.sethook`. Code compiles with optimizations that hide locals
     /// turned off while it is attached.
     debugger: ?*const Debugger = null,
+    /// The JIT of this state: its settings and its executable memory.
+    jit: @import("../jit/jit.zig").State = .{},
 };
 
 /// The native hook entry point used by `lus debug`. Every thread created
@@ -634,6 +636,7 @@ pub fn freeExtra(g: *Global, h: *gc.Header) void {
     switch (h.tag) {
         .proto => {
             const p = h.as(object.Proto);
+            @import("../jit/jit.zig").freeProto(g, p);
             gpa.free(p.code);
             gpa.free(p.ic);
             gpa.free(p.constants);
@@ -704,6 +707,7 @@ pub fn create(gpa: Allocator, io: std.Io) !*Global {
 pub fn destroy(g: *Global) void {
     const gpa = g.gpa;
     gc.freeAll(g);
+    @import("../jit/jit.zig").deinit(g);
     g.strings.deinit(gpa);
     g.fixed.deinit(gpa);
     g.finobj.deinit(gpa);

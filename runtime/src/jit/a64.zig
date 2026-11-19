@@ -1,0 +1,597 @@
+//! The aarch64 backend of the JIT assembler. It encodes the small set of
+//! instructions the template emitter needs and resolves branches between
+//! labels. `x64.zig` offers the same interface, so `emit.zig` describes
+//! each opcode once for both architectures.
+
+const std = @import("std");
+
+pub const Reg = enum(u5) {
+    x0,
+    x1,
+    x2,
+    x3,
+    x4,
+    x5,
+    x6,
+    x7,
+    x8,
+    x9,
+    x10,
+    x11,
+    x12,
+    x13,
+    x14,
+    x15,
+    x16,
+    x17,
+    x18,
+    x19,
+    x20,
+    x21,
+    x22,
+    x23,
+    x24,
+    x25,
+    x26,
+    x27,
+    x28,
+    x29,
+    x30,
+    /// Register 31 is the stack pointer or the zero register, depending on
+    /// the instruction.
+    sp,
+
+    inline fn n(r: Reg) u32 {
+        return @backingInt(r);
+    }
+};
+
+pub const FReg = enum(u5) {
+    v0,
+    v1,
+    v2,
+    v3,
+
+    inline fn n(r: FReg) u32 {
+        return @backingInt(r);
+    }
+};
+
+// The registers the emitter uses. Pinned registers are callee-saved, so
+// they survive calls into the runtime.
+pub const thread: Reg = .x19;
+pub const bp: Reg = .x20;
+pub const base: Reg = .x21;
+pub const stop: Reg = .x22;
+pub const t0: Reg = .x9;
+pub const t1: Reg = .x10;
+pub const t2: Reg = .x11;
+pub const t3: Reg = .x12;
+pub const t4: Reg = .x13;
+pub const t5: Reg = .x14;
+pub const args = [_]Reg{ .x0, .x1, .x2, .x3, .x4, .x5 };
+pub const ret0: Reg = .x0;
+pub const ret1: Reg = .x1;
+/// Holds the address to continue at after the entry sequence.
+pub const entry_target: Reg = .x2;
+pub const f0: FReg = .v0;
+pub const f1: FReg = .v1;
+/// Scratch registers of the assembler itself.
+const s0: Reg = .x16;
+const s1: Reg = .x17;
+const zr: Reg = .sp;
+
+/// Bytes of native stack the entry sequence reserves.
+const frame_size = 64;
+/// Offset of the slot where a shared routine keeps its return address.
+const link_slot = 48;
+
+pub const Cond = enum(u4) {
+    eq = 0,
+    ne = 1,
+    /// Unsigned higher or same.
+    hs = 2,
+    /// Unsigned lower.
+    lo = 3,
+    mi = 4,
+    pl = 5,
+    hi = 8,
+    ls = 9,
+    ge = 10,
+    lt = 11,
+    gt = 12,
+    le = 13,
+
+    pub fn invert(c: Cond) Cond {
+        return @fromBackingInt(@backingInt(c) ^ 1);
+    }
+};
+
+/// A float comparison that is false when either operand is NaN, or the
+/// negation of one, which is then true for NaN.
+pub const FCond = enum { lt, le, eq, nlt, nle, ne };
+
+pub const Mem = struct {
+    base: Reg,
+    disp: i32 = 0,
+};
+
+pub const Label = u32;
+
+const Fixup = struct {
+    at: u32,
+    label: Label,
+    kind: enum { b26, b19, b14 },
+};
+
+pub const Assembler = struct {
+    gpa: std.mem.Allocator,
+    buf: std.ArrayList(u8) = .empty,
+    /// Offset of each label, or `unbound`.
+    labels: std.ArrayList(u32) = .empty,
+    fixups: std.ArrayList(Fixup) = .empty,
+    oom: bool = false,
+    /// Set when a branch cannot reach its label.
+    overflow: bool = false,
+
+    const unbound: u32 = 0xFFFF_FFFF;
+
+    pub fn init(gpa: std.mem.Allocator) Assembler {
+        return .{ .gpa = gpa };
+    }
+
+    pub fn deinit(a: *Assembler) void {
+        a.buf.deinit(a.gpa);
+        a.labels.deinit(a.gpa);
+        a.fixups.deinit(a.gpa);
+    }
+
+    pub fn offset(a: *const Assembler) u32 {
+        return @intCast(a.buf.items.len);
+    }
+
+    pub fn newLabel(a: *Assembler) Label {
+        a.labels.append(a.gpa, unbound) catch {
+            a.oom = true;
+            return 0;
+        };
+        return @intCast(a.labels.items.len - 1);
+    }
+
+    pub fn newLabels(a: *Assembler, count: usize) Label {
+        const first: Label = @intCast(a.labels.items.len);
+        a.labels.appendNTimes(a.gpa, unbound, count) catch {
+            a.oom = true;
+        };
+        return first;
+    }
+
+    pub fn bind(a: *Assembler, l: Label) void {
+        if (l < a.labels.items.len) a.labels.items[l] = a.offset();
+    }
+
+    pub fn labelOffset(a: *const Assembler, l: Label) u32 {
+        return a.labels.items[l];
+    }
+
+    fn word(a: *Assembler, w: u32) void {
+        a.buf.appendSlice(a.gpa, std.mem.asBytes(&std.mem.nativeToLittle(u32, w))) catch {
+            a.oom = true;
+        };
+    }
+
+    fn fix(a: *Assembler, l: Label, kind: @FieldType(Fixup, "kind")) void {
+        a.fixups.append(a.gpa, .{ .at = a.offset(), .label = l, .kind = kind }) catch {
+            a.oom = true;
+        };
+    }
+
+    /// Resolves every branch. Returns false when the code is unusable.
+    pub fn finish(a: *Assembler) bool {
+        if (a.oom) return false;
+        for (a.fixups.items) |f| {
+            const target = a.labels.items[f.label];
+            if (target == unbound) return false;
+            const delta = @divExact(@as(i64, target) - @as(i64, f.at), 4);
+            const p: *align(1) u32 = @ptrCast(a.buf.items[f.at..].ptr);
+            var w = std.mem.littleToNative(u32, p.*);
+            switch (f.kind) {
+                .b26 => {
+                    if (delta < -(1 << 25) or delta >= (1 << 25)) a.overflow = true;
+                    w |= @as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x03FF_FFFF;
+                },
+                .b19 => {
+                    if (delta < -(1 << 18) or delta >= (1 << 18)) a.overflow = true;
+                    w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x7FFFF) << 5;
+                },
+                .b14 => {
+                    if (delta < -(1 << 13) or delta >= (1 << 13)) a.overflow = true;
+                    w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x3FFF) << 5;
+                },
+            }
+            p.* = std.mem.nativeToLittle(u32, w);
+        }
+        return !a.overflow;
+    }
+
+    // -----------------------------------------------------------------
+    // Moves and immediates
+
+    pub fn mov(a: *Assembler, dst: Reg, src: Reg) void {
+        if (dst == src) return;
+        a.word(0xAA0003E0 | src.n() << 16 | dst.n());
+    }
+
+    /// Loads a 64-bit constant with the shortest move sequence.
+    pub fn movImm(a: *Assembler, dst: Reg, v: u64) void {
+        if (v == 0) return a.word(0xD2800000 | dst.n());
+        // A value with mostly set halves starts from an inverted move.
+        var ones: u32 = 0;
+        var zeros: u32 = 0;
+        for (0..4) |i| {
+            const h: u16 = @truncate(v >> @intCast(16 * i));
+            if (h == 0xFFFF) ones += 1;
+            if (h == 0) zeros += 1;
+        }
+        if (ones > zeros) {
+            var first = true;
+            for (0..4) |i| {
+                const h: u16 = @truncate(v >> @intCast(16 * i));
+                if (h == 0xFFFF) continue;
+                const hw: u32 = @intCast(i);
+                if (first) {
+                    a.word(0x92800000 | hw << 21 | @as(u32, ~h) << 5 | dst.n());
+                    first = false;
+                } else a.word(0xF2800000 | hw << 21 | @as(u32, h) << 5 | dst.n());
+            }
+            if (first) a.word(0x92800000 | dst.n());
+            return;
+        }
+        var first = true;
+        for (0..4) |i| {
+            const h: u16 = @truncate(v >> @intCast(16 * i));
+            if (h == 0) continue;
+            const hw: u32 = @intCast(i);
+            if (first) {
+                a.word(0xD2800000 | hw << 21 | @as(u32, h) << 5 | dst.n());
+                first = false;
+            } else a.word(0xF2800000 | hw << 21 | @as(u32, h) << 5 | dst.n());
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Memory
+
+    /// Encodes a load or store. `size_log2` is the access size, `opc_u`
+    /// the opcode with a scaled unsigned offset, and `opc_s` the opcode
+    /// with an unscaled signed offset.
+    fn mem(a: *Assembler, rt: u32, m: Mem, size_log2: u5, opc_u: u32, opc_s: u32) void {
+        const scale = @as(i32, 1) << size_log2;
+        if (m.disp >= 0 and @mod(m.disp, scale) == 0 and @divExact(m.disp, scale) < 4096) {
+            a.word(opc_u | @as(u32, @intCast(@divExact(m.disp, scale))) << 10 | m.base.n() << 5 | rt);
+        } else if (m.disp >= -256 and m.disp < 256) {
+            a.word(opc_s | (@as(u32, @bitCast(m.disp)) & 0x1FF) << 12 | m.base.n() << 5 | rt);
+        } else {
+            // The address does not fit an offset form.
+            a.movImm(s1, @bitCast(@as(i64, m.disp)));
+            a.word(0x8B000000 | s1.n() << 16 | m.base.n() << 5 | s1.n());
+            a.word(opc_u | s1.n() << 5 | rt);
+        }
+    }
+
+    pub fn load64(a: *Assembler, dst: Reg, m: Mem) void {
+        a.mem(dst.n(), m, 3, 0xF9400000, 0xF8400000);
+    }
+    pub fn store64(a: *Assembler, src: Reg, m: Mem) void {
+        a.mem(src.n(), m, 3, 0xF9000000, 0xF8000000);
+    }
+    /// Loads 32 bits, zero-extended.
+    pub fn load32(a: *Assembler, dst: Reg, m: Mem) void {
+        a.mem(dst.n(), m, 2, 0xB9400000, 0xB8400000);
+    }
+    pub fn store32(a: *Assembler, src: Reg, m: Mem) void {
+        a.mem(src.n(), m, 2, 0xB9000000, 0xB8000000);
+    }
+    /// Loads one byte, zero-extended.
+    pub fn load8(a: *Assembler, dst: Reg, m: Mem) void {
+        a.mem(dst.n(), m, 0, 0x39400000, 0x38400000);
+    }
+    pub fn store8(a: *Assembler, src: Reg, m: Mem) void {
+        a.mem(src.n(), m, 0, 0x39000000, 0x38000000);
+    }
+    pub fn loadF(a: *Assembler, dst: FReg, m: Mem) void {
+        a.mem(dst.n(), m, 3, 0xFD400000, 0xFC400000);
+    }
+    pub fn storeF(a: *Assembler, src: FReg, m: Mem) void {
+        a.mem(src.n(), m, 3, 0xFD000000, 0xFC000000);
+    }
+    /// Stores a 64-bit constant.
+    pub fn storeImm64(a: *Assembler, m: Mem, v: u64) void {
+        if (v == 0) return a.store64(zr, m);
+        a.movImm(s0, v);
+        a.store64(s0, m);
+    }
+    pub fn storeImm32(a: *Assembler, m: Mem, v: u32) void {
+        if (v == 0) return a.store32(zr, m);
+        a.movImm(s0, v);
+        a.store32(s0, m);
+    }
+    /// Copies 16 bytes.
+    pub fn copy16(a: *Assembler, dst: Mem, src: Mem) void {
+        a.mem(31, src, 4, 0x3DC00000, 0x3CC00000);
+        a.mem(31, dst, 4, 0x3D800000, 0x3C800000);
+    }
+    /// dst = base + disp.
+    pub fn lea(a: *Assembler, dst: Reg, m: Mem) void {
+        if (m.disp >= 0 and m.disp < 4096) {
+            a.word(0x91000000 | @as(u32, @intCast(m.disp)) << 10 | m.base.n() << 5 | dst.n());
+        } else if (m.disp < 0 and m.disp > -4096) {
+            a.word(0xD1000000 | @as(u32, @intCast(-m.disp)) << 10 | m.base.n() << 5 | dst.n());
+        } else {
+            a.movImm(s1, @bitCast(@as(i64, m.disp)));
+            a.word(0x8B000000 | s1.n() << 16 | m.base.n() << 5 | dst.n());
+        }
+    }
+    /// dst = b + (index << shift).
+    pub fn addScaled(a: *Assembler, dst: Reg, b: Reg, index: Reg, shift: u6) void {
+        a.word(0x8B000000 | index.n() << 16 | @as(u32, shift) << 10 | b.n() << 5 | dst.n());
+    }
+
+    // -----------------------------------------------------------------
+    // Integer arithmetic. Each operation computes dst = dst op src.
+
+    pub fn add(a: *Assembler, dst: Reg, src: Reg) void {
+        a.word(0x8B000000 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn sub(a: *Assembler, dst: Reg, src: Reg) void {
+        a.word(0xCB000000 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn mul(a: *Assembler, dst: Reg, src: Reg) void {
+        a.word(0x9B007C00 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn @"and"(a: *Assembler, dst: Reg, src: Reg) void {
+        a.word(0x8A000000 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn @"or"(a: *Assembler, dst: Reg, src: Reg) void {
+        a.word(0xAA000000 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn xor(a: *Assembler, dst: Reg, src: Reg) void {
+        a.word(0xCA000000 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn neg(a: *Assembler, dst: Reg) void {
+        a.word(0xCB0003E0 | dst.n() << 16 | dst.n());
+    }
+    pub fn not(a: *Assembler, dst: Reg) void {
+        a.word(0xAA2003E0 | dst.n() << 16 | dst.n());
+    }
+    pub fn addImm(a: *Assembler, dst: Reg, v: i32) void {
+        if (v == 0) return;
+        const m: u32 = @abs(v);
+        if (m < 4096) {
+            a.word((if (v > 0) @as(u32, 0x91000000) else 0xD1000000) | m << 10 | dst.n() << 5 | dst.n());
+        } else {
+            a.movImm(s1, @bitCast(@as(i64, v)));
+            a.add(dst, s1);
+        }
+    }
+    /// Signed division and remainder that truncate toward zero. The
+    /// divisor is neither zero nor minus one.
+    pub fn divRem(a: *Assembler, quot: Reg, rem: Reg, x: Reg, y: Reg) void {
+        a.word(0x9AC00C00 | y.n() << 16 | x.n() << 5 | s0.n());
+        // rem = x - quot * y
+        a.word(0x9B008000 | y.n() << 16 | x.n() << 10 | s0.n() << 5 | rem.n());
+        a.mov(quot, s0);
+    }
+
+    // -----------------------------------------------------------------
+    // Floats
+
+    pub fn fadd(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E602800 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn fsub(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E603800 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn fmul(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E600800 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    pub fn fdiv(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E601800 | src.n() << 16 | dst.n() << 5 | dst.n());
+    }
+    /// Converts a signed integer to a float.
+    pub fn intToFloat(a: *Assembler, dst: FReg, src: Reg) void {
+        a.word(0x9E620000 | src.n() << 5 | dst.n());
+    }
+    /// Moves the bits of an integer register into a float register.
+    pub fn bitsToFloat(a: *Assembler, dst: FReg, src: Reg) void {
+        a.word(0x9E670000 | src.n() << 5 | dst.n());
+    }
+    pub fn floatToBits(a: *Assembler, dst: Reg, src: FReg) void {
+        a.word(0x9E660000 | src.n() << 5 | dst.n());
+    }
+
+    // -----------------------------------------------------------------
+    // Control flow
+
+    pub fn jmp(a: *Assembler, l: Label) void {
+        a.fix(l, .b26);
+        a.word(0x14000000);
+    }
+    pub fn jmpReg(a: *Assembler, r: Reg) void {
+        a.word(0xD61F0000 | r.n() << 5);
+    }
+    fn bcond(a: *Assembler, c: Cond, l: Label) void {
+        a.fix(l, .b19);
+        a.word(0x54000000 | @as(u32, @backingInt(c)));
+    }
+    /// Branches when the two registers compare as `c`.
+    pub fn jumpIf(a: *Assembler, c: Cond, x: Reg, y: Reg, l: Label) void {
+        a.word(0xEB00001F | y.n() << 16 | x.n() << 5);
+        a.bcond(c, l);
+    }
+    /// Branches when the register compares as `c` with a constant.
+    pub fn jumpIfImm(a: *Assembler, c: Cond, x: Reg, v: i32, l: Label) void {
+        if (v == 0 and (c == .eq or c == .ne)) {
+            a.fix(l, .b19);
+            return a.word((if (c == .eq) @as(u32, 0xB4000000) else 0xB5000000) | x.n());
+        }
+        if (v >= 0 and v < 4096) {
+            a.word(0xF100001F | @as(u32, @intCast(v)) << 10 | x.n() << 5);
+        } else if (v < 0 and v > -4096) {
+            a.word(0xB100001F | @as(u32, @intCast(-v)) << 10 | x.n() << 5);
+        } else {
+            a.movImm(s1, @bitCast(@as(i64, v)));
+            a.word(0xEB00001F | s1.n() << 16 | x.n() << 5);
+        }
+        a.bcond(c, l);
+    }
+    /// Branches when the low 32 bits of the register are zero or not.
+    pub fn jumpIfZero32(a: *Assembler, x: Reg, zero: bool, l: Label) void {
+        a.fix(l, .b19);
+        a.word((if (zero) @as(u32, 0x34000000) else 0x35000000) | x.n());
+    }
+    /// Branches when the byte in memory compares as `c` with a constant.
+    pub fn jumpIfByte(a: *Assembler, c: Cond, m: Mem, v: u8, l: Label) void {
+        a.load8(s0, m);
+        if (v == 0 and (c == .eq or c == .ne)) return a.jumpIfZero32(s0, c == .eq, l);
+        a.word(0x7100001F | @as(u32, v) << 10 | s0.n() << 5);
+        a.bcond(c, l);
+    }
+    /// Branches when bit `bit` of the byte in memory is set or clear.
+    pub fn jumpIfBit(a: *Assembler, m: Mem, bit: u3, set: bool, l: Label) void {
+        a.load8(s0, m);
+        a.fix(l, .b14);
+        a.word((if (set) @as(u32, 0x37000000) else 0x36000000) | @as(u32, bit) << 19 | s0.n());
+    }
+    /// Branches when the floats compare as `c`.
+    pub fn jumpIfFloat(a: *Assembler, c: FCond, x: FReg, y: FReg, l: Label) void {
+        a.word(0x1E602000 | y.n() << 16 | x.n() << 5);
+        a.bcond(switch (c) {
+            .lt => .mi,
+            .le => .ls,
+            .eq => .eq,
+            .nlt => .pl,
+            .nle => .hi,
+            .ne => .ne,
+        }, l);
+    }
+
+    /// Calls a function at an absolute address.
+    pub fn call(a: *Assembler, addr: usize) void {
+        a.movImm(s0, addr);
+        a.word(0xD63F0000 | s0.n() << 5);
+    }
+    /// Calls a routine in the same code, which ends with `leave`.
+    pub fn callLocal(a: *Assembler, l: Label) void {
+        a.fix(l, .b26);
+        a.word(0x94000000);
+    }
+    /// Opens a routine entered by `callLocal` that calls other functions.
+    pub fn enterLocal(a: *Assembler) void {
+        a.store64(.x30, .{ .base = .sp, .disp = link_slot });
+    }
+    /// Returns from a routine opened by `enterLocal`.
+    pub fn leaveLocal(a: *Assembler) void {
+        a.load64(.x30, .{ .base = .sp, .disp = link_slot });
+        a.word(0xD65F03C0);
+    }
+    pub fn trap(a: *Assembler) void {
+        a.word(0xD4200000);
+    }
+
+    /// The entry sequence, called as a C function with the thread, the
+    /// stop depth, the address to continue at, and the frame base. It
+    /// saves the pinned registers and loads them.
+    pub fn prologue(a: *Assembler) void {
+        a.word(0xA9BC7BFD); // stp x29, x30, [sp, #-64]!
+        a.word(0x910003FD); // mov x29, sp
+        a.word(0xA90153F3); // stp x19, x20, [sp, #16]
+        a.word(0xA9025BF5); // stp x21, x22, [sp, #32]
+        a.mov(thread, .x0);
+        a.mov(stop, .x1);
+        a.mov(base, .x3);
+    }
+    /// Returns to the caller of the entry sequence with the status in the
+    /// first result register.
+    pub fn epilogue(a: *Assembler) void {
+        a.word(0xA94153F3); // ldp x19, x20, [sp, #16]
+        a.word(0xA9425BF5); // ldp x21, x22, [sp, #32]
+        a.word(0xA8C47BFD); // ldp x29, x30, [sp], #64
+        a.word(0xD65F03C0); // ret
+    }
+};
+
+comptime {
+    std.debug.assert(frame_size == 64);
+}
+
+fn expectWords(a: *Assembler, expected: []const u32) !void {
+    const got = std.mem.bytesAsSlice(u32, a.buf.items);
+    try std.testing.expectEqual(expected.len, got.len);
+    for (expected, 0..) |w, i| try std.testing.expectEqual(w, std.mem.littleToNative(u32, got[i]));
+}
+
+test "aarch64 moves and immediates" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.mov(.x0, .x19); // mov x0, x19
+    a.movImm(.x1, 0); // mov x1, #0
+    a.movImm(.x9, 0x1234); // mov x9, #0x1234
+    a.movImm(.x9, 0x1_0000_0001); // movz x9, #1; movk x9, #1, lsl #32
+    a.movImm(.x9, @bitCast(@as(i64, -2))); // movn x9, #1
+    try expectWords(&a, &.{ 0xAA1303E0, 0xD2800001, 0xD2824689, 0xD2800029, 0xF2C00029, 0x92800029 });
+}
+
+test "aarch64 memory forms" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.load64(.x9, .{ .base = .x20, .disp = 16 }); // ldr x9, [x20, #16]
+    a.store64(.x9, .{ .base = .x20, .disp = 24 }); // str x9, [x20, #24]
+    a.load64(.x9, .{ .base = .x20, .disp = -16 }); // ldur x9, [x20, #-16]
+    a.load8(.x10, .{ .base = .x20, .disp = 8 }); // ldrb w10, [x20, #8]
+    a.load32(.x10, .{ .base = .x19, .disp = 4 }); // ldr w10, [x19, #4]
+    a.copy16(.{ .base = .x20, .disp = 32 }, .{ .base = .x20, .disp = 48 }); // ldr q31, [x20, #48]; str q31, [x20, #32]
+    a.loadF(.v0, .{ .base = .x20, .disp = 0 }); // ldr d0, [x20]
+    try expectWords(&a, &.{ 0xF9400A89, 0xF9000E89, 0xF85F0289, 0x3940228A, 0xB940066A, 0x3DC00E9F, 0x3D800A9F, 0xFD400280 });
+}
+
+test "aarch64 arithmetic" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.add(.x9, .x10); // add x9, x9, x10
+    a.sub(.x9, .x10); // sub x9, x9, x10
+    a.mul(.x9, .x10); // mul x9, x9, x10
+    a.addImm(.x9, 5); // add x9, x9, #5
+    a.addImm(.x9, -5); // sub x9, x9, #5
+    a.neg(.x9); // neg x9, x9
+    a.fadd(.v0, .v1); // fadd d0, d0, d1
+    a.intToFloat(.v0, .x9); // scvtf d0, x9
+    a.addScaled(.x20, .x9, .x21, 4); // add x20, x9, x21, lsl #4
+    try expectWords(&a, &.{ 0x8B0A0129, 0xCB0A0129, 0x9B0A7D29, 0x91001529, 0xD1001529, 0xCB0903E9, 0x1E612800, 0x9E620120, 0x8B151134 });
+}
+
+test "aarch64 branches resolve in both directions" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    const top = a.newLabel();
+    const end = a.newLabel();
+    a.bind(top);
+    a.jumpIf(.lt, .x9, .x10, end); // cmp x9, x10; b.lt end
+    a.jumpIfImm(.eq, .x9, 0, top); // cbz x9, top
+    a.jmp(top); // b top
+    a.bind(end);
+    a.epilogue();
+    try std.testing.expect(a.finish());
+    const w = std.mem.bytesAsSlice(u32, a.buf.items);
+    try std.testing.expectEqual(@as(u32, 0xEB0A013F), w[0]);
+    try std.testing.expectEqual(@as(u32, 0x5400006B), w[1]); // b.lt +3
+    try std.testing.expectEqual(@as(u32, 0xB4FFFFC9), w[2]); // cbz x9, -2
+    try std.testing.expectEqual(@as(u32, 0x17FFFFFD), w[3]); // b -3
+}
+
+test "aarch64 unbound label fails" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.jmp(a.newLabel());
+    try std.testing.expect(!a.finish());
+}
