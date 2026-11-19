@@ -24,6 +24,7 @@ pub const vm = struct {
 };
 
 pub const api = @import("api.zig");
+pub const bundle = @import("bundle.zig");
 pub const tools = @import("tools.zig");
 
 pub const lib = struct {
@@ -59,5 +60,7 @@ test {
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = api;
+    _ = bundle;
+    _ = @import("tools/build.zig");
     _ = @import("lib/init.zig");
 }

@@ -12,13 +12,27 @@ const Allocator = std.mem.Allocator;
 
 pub const Kind = enum { none, path, host, pattern, custom };
 
-pub const Matcher = *const fn (granted: []const u8, requested: []const u8) bool;
+/// Decides whether a granted value covers a requested value for a
+/// `custom` capability. `ctx` is the context given at registration.
+pub const Matcher = *const fn (ctx: ?*anyopaque, granted: []const u8, requested: []const u8) bool;
 
 pub const Capability = struct {
     name: []const u8,
     subs: []const []const u8 = &.{},
     kind: Kind,
     match: ?Matcher = null,
+    ctx: ?*anyopaque = null,
+    /// Set when the registry owns `name` and `subs` and frees them with
+    /// the state.
+    owned: bool = false,
+};
+
+/// A host hook that decides script pledges the host has neither granted
+/// nor rejected. It receives the capability name (such as "fs:read") and
+/// the requested value, and returns whether to allow the grant.
+pub const RequestHook = struct {
+    func: *const fn (ctx: ?*anyopaque, l: *Thread, name: []const u8, val: ?[]const u8) bool,
+    ctx: ?*anyopaque = null,
 };
 
 /// Capabilities the runtime declares. Extensions add theirs with
@@ -80,6 +94,7 @@ const Registry = struct {
     /// When the host granted capabilities (`-P`), scripts may only pledge
     /// what the ceiling allows.
     ceiling: ?*Set = null,
+    on_request: ?RequestHook = null,
 };
 
 fn registry(g: *Global) *Registry {
@@ -95,6 +110,11 @@ pub fn deinit(g: *Global) void {
     const p = g.ext.get("pledge.registry") orelse return;
     const r: *Registry = @ptrCast(@alignCast(p));
     if (r.ceiling) |c| c.destroy(g.gpa);
+    for (r.caps.items) |c| if (c.owned) {
+        for (c.subs) |sub| g.gpa.free(sub);
+        g.gpa.free(c.subs);
+        g.gpa.free(c.name);
+    };
     r.caps.deinit(g.gpa);
     g.gpa.destroy(r);
 }
@@ -102,6 +122,16 @@ pub fn deinit(g: *Global) void {
 /// Declares a capability. Extension modules call this once per state.
 pub fn define(g: *Global, cap: Capability) !void {
     try registry(g).caps.append(g.gpa, cap);
+}
+
+/// Whether a capability named `base` is declared.
+pub fn isDefined(g: *Global, base: []const u8) bool {
+    return findCap(g, base) != null;
+}
+
+/// Installs the host request hook, or removes it when null.
+pub fn setRequestHook(g: *Global, hook: ?RequestHook) void {
+    registry(g).on_request = hook;
 }
 
 fn findCap(g: *Global, base: []const u8) ?Capability {
@@ -294,7 +324,7 @@ fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, can
         .path => if (canon_req) |c| globMatch(granted, c) else false,
         .host => hostMatch(granted, requested),
         .pattern => globMatch(granted, requested),
-        .custom => if (cap.match) |m| m(granted, requested) else false,
+        .custom => if (cap.match) |m| m(cap.ctx, granted, requested) else false,
     };
 }
 
@@ -394,10 +424,16 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
     if (setOf(l)) |s| if (s.sealed) return .refused;
     if (!reject) {
         if (setOf(l)) |s| if (s.find(name)) |e| if (e.rejected) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
-        // The host ceiling bounds what scripts may grant.
+        // The host ceiling bounds what scripts may grant. With a request
+        // hook installed, the hook decides every script pledge the ceiling
+        // does not already cover.
         if (!from_host) {
-            if (registry(g).ceiling) |ceil| {
-                if (!setAllows(g, ceil, name, val)) return .refused;
+            const r = registry(g);
+            const covered = if (r.ceiling) |ceil| setAllows(g, ceil, name, val) else false;
+            if (!covered) {
+                if (r.on_request) |hook| {
+                    if (!hook.func(hook.ctx, l, name, val)) return .refused;
+                } else if (r.ceiling != null) return .refused;
             }
         }
     }
@@ -420,6 +456,22 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         e.values.append(gpa, stored) catch return l.raiseMem();
     } else e.unrestricted = true;
     return .granted;
+}
+
+/// One host policy change from the embedding interface: a grant, a
+/// rejection, or "seal". A grant also refreshes the ceiling for script
+/// pledges, as command line grants do. A rejection alone sets no ceiling,
+/// so it never limits what scripts may pledge otherwise.
+pub fn hostApply(l: *Thread, spec: []const u8) Error!GrantResult {
+    const r = try apply(l, spec, true);
+    const reg = registry(l.g);
+    const is_grant = spec.len > 0 and spec[0] != '~' and !std.mem.eql(u8, spec, "seal");
+    if (r == .granted and (is_grant or reg.ceiling != null)) {
+        const n = setOf(l).?.clone(l.g.gpa) catch return l.raiseMem();
+        if (reg.ceiling) |old| old.destroy(l.g.gpa);
+        reg.ceiling = n;
+    }
+    return r;
 }
 
 /// Host grants from the command line: applied to the main thread and
