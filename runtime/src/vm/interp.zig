@@ -873,14 +873,29 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             if (try doReturn(l, &c, &pc, first, n, stop)) return;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
-        .ret0 => {
+        inline .ret0, .ret1 => |o| {
+            const n: u32 = if (o == .ret1) 1 else 0;
+            const first = c.base + opc.a(ins);
+            if (!hooked and leanReturn(l, c, stop)) {
+                // Return to a Lus caller with nothing to close.
+                const fr = c.fr;
+                const dst = fr.ret;
+                const want = fr.want;
+                if (n == 1) l.stack[dst] = l.stack[first];
+                if (want < 0) {
+                    l.top = dst + n;
+                } else {
+                    var i: u32 = n;
+                    while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[dst + i] = .nil;
+                }
+                l.frames.items.len -= 1;
+                c = load(l);
+                pc = c.fr.pc;
+                if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
             c.fr.pc = pc;
-            if (try doReturn(l, &c, &pc, c.base, 0, stop)) return;
-            continue :sw try fetch(l, &c, &pc, &ins, hooked);
-        },
-        .ret1 => {
-            c.fr.pc = pc;
-            if (try doReturn(l, &c, &pc, c.base + opc.a(ins), 1, stop)) return;
+            if (try doReturn(l, &c, &pc, first, n, stop)) return;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -1136,11 +1151,13 @@ inline fn condJump(l: *Thread, c: *Ctx, pc: *u32, skip: bool, comptime hooked: b
 
 /// Appends a frame, growing the list only when it is full.
 inline fn pushFrame(l: *Thread, f: Frame) Error!void {
-    if (l.frames.items.len == l.frames.capacity) {
-        @branchHint(.cold);
-        l.frames.ensureUnusedCapacity(l.g.gpa, 1) catch return l.raiseMem();
-    }
+    if (l.frames.items.len == l.frames.capacity) try growFrames(l);
     l.frames.appendAssumeCapacity(f);
+}
+
+noinline fn growFrames(l: *Thread) Error!void {
+    @branchHint(.cold);
+    l.frames.ensureUnusedCapacity(l.g.gpa, 1) catch return l.raiseMem();
 }
 
 /// Runs a native function called from the interpreter with its `nargs`
@@ -1172,6 +1189,18 @@ inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) E
     while (r < top) : (r += 1) l.stack[r] = .nil;
     try pushFrame(l, .{ .func = func, .base = base, .closure = cl, .want = want, .ret = func });
     l.top = top;
+}
+
+/// True when the running frame can return without hooks, closing, a
+/// finish action, or leaving the loop: its caller is a Lus frame above
+/// `stop` and no open upvalue or to-be-closed variable lives in it.
+inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
+    const fr = c.fr;
+    if (fr.finish != .none or fr.boundary or l.hook_mask != 0) return false;
+    if (c.fi <= stop or l.frames.items[c.fi - 1].closure == null) return false;
+    if (l.open_upvals) |u| if (u.level >= c.base) return false;
+    if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= c.base) return false;
+    return true;
 }
 
 /// Returns `n` values starting at `first` from the current frame. Returns
