@@ -646,6 +646,7 @@ fn sweepLarge(g: *Global) bool {
 fn finishSweep(g: *Global) void {
     const s = &g.gcs;
     heap.releaseSegments(g);
+    g.strings.shrink(g.gpa);
     s.phase = .pause;
     s.live = s.heap_at_mark -| s.swept;
     if (s.mode != .generational) return setThreshold(g);

@@ -100,14 +100,9 @@ fn substringKnown(l: *Thread, s: *String, from: usize, to: usize, chars: usize) 
 }
 
 /// Byte offset of the character at zero-based index `ci` of `s`, where
-/// `ci` may equal the character count. Long non-ASCII strings start from
-/// the nearest breadcrumb at or before `ci` and skip the remaining
-/// characters with the vectorized `wtf8.advance`.
-fn charOffset(l: *Thread, s: *String, ci: usize) usize {
-    if (s.flags.ascii) return ci;
-    if (ci >= s.chars) return s.len;
-    const k = ci - ci % String.crumb_step;
-    return wtf8.advance(s.bytes(), s.byteOffset(l.g.gpa, k), ci - k);
+/// `ci` may equal the character count (`String.byteOffset`).
+inline fn charOffset(l: *Thread, s: *String, ci: usize) usize {
+    return s.byteOffset(l.g.gpa, ci);
 }
 
 /// Translates a relative initial position (negative counts back from the

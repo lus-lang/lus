@@ -77,7 +77,14 @@ pub fn checkTable(l: *Thread, i: u32) Error!*Table {
     return v.as(Table);
 }
 
-pub fn checkInt(l: *Thread, i: u32) Error!i64 {
+pub inline fn checkInt(l: *Thread, i: u32) Error!i64 {
+    const v = l.arg(i);
+    if (v.tag == .integer) return v.asInt();
+    return checkIntSlow(l, i);
+}
+
+/// `checkInt` for every argument that is not an integer already.
+noinline fn checkIntSlow(l: *Thread, i: u32) Error!i64 {
     const v = l.arg(i);
     switch (v.tag) {
         .integer => return v.asInt(),
