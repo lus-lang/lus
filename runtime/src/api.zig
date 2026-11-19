@@ -40,8 +40,12 @@ pub fn openLibs(l: *Thread) Error!void {
 
 pub fn close(l: *Thread) void {
     const g = l.g;
-    // Workers created by this state stop before anything is freed.
+    // Finalizers run first, while worker handles still reach their domain.
+    // Then workers created by this state stop before anything is freed.
+    finalizeAll(g);
     if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
+    // Finalizers may print, so standard output flushes after them.
+    @import("lib/out.zig").deinit(g);
     if (g.ext.get("flags.compile")) |p| {
         const map: *std.StringHashMapUnmanaged(Value) = @ptrCast(@alignCast(p));
         map.deinit(g.gpa);
@@ -222,3 +226,18 @@ fn freezeTable(t: *object.Table, skip: ?*object.Table, depth: u32) void {
         if (e.val.tag == .table and !e.val.as(object.Table).readonly) freezeTable(e.val.as(object.Table), skip, depth - 1);
     }
 }
+
+/// Runs the finalizer of every object that still has one, as a closing
+/// state does, so resources held by tables and userdata are released. The
+/// most recently registered object is finalized first.
+fn finalizeAll(g: *state.Global) void {
+    const main = g.main_thread;
+    main.top = 0;
+    main.frames.items.len = 0;
+    main.tbc.items.len = 0;
+    for (g.finobj.items) |hdr| g.tobefnz.append(g.gpa, hdr) catch break;
+    g.finobj.items.len = 0;
+    g.gc_stopped = true;
+    @import("lib/base.zig").runFinalizers(main) catch {};
+}
+

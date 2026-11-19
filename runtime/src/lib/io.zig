@@ -143,10 +143,10 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
         const dst = h.rbuf.unusedCapacitySlice();
         var bufs = [_][]u8{dst};
         const got = switch (h.kind) {
-            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch return ioError(l),
+            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return ioError(l, e),
             else => h.file.readStreaming(l.g.io, &bufs) catch |e| switch (e) {
                 error.EndOfStream => 0,
-                else => return ioError(l),
+                else => |x| return ioError(l, x),
             },
         };
         if (got == 0) h.eof = true;
@@ -164,8 +164,8 @@ fn pending(h: *Handle) []const u8 {
     return h.rbuf.items[h.rstart..];
 }
 
-fn ioError(l: *Thread) Error {
-    return l.raiseFmt("input/output error", .{});
+fn ioError(l: *Thread, e: anyerror) Error {
+    return l.raiseFmt("{s}", .{@import("os.zig").errnoOf(e).msg});
 }
 
 /// Wraps read bytes as a string (text mode, validated) or vector.
@@ -341,14 +341,14 @@ fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
         .stderr => out.stderr(l.g, bytes),
         .file => {
             if (h.append) h.pos = h.file.length(l.g.io) catch h.pos;
-            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch return ioError(l);
+            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch |e| return ioError(l, e);
             h.pos += bytes.len;
             // Buffered read-ahead is stale after a write.
             h.rbuf.clearRetainingCapacity();
             h.rstart = 0;
             h.eof = false;
         },
-        else => h.file.writeStreamingAll(l.g.io, bytes) catch return ioError(l),
+        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return ioError(l, e),
     }
 }
 
@@ -566,7 +566,7 @@ fn fSeek(l: *Thread) Error!u32 {
     const base: i64 = switch (whence) {
         0 => 0,
         1 => @intCast(h.pos),
-        else => @intCast(h.file.length(l.g.io) catch return ioError(l)),
+        else => @intCast(h.file.length(l.g.io) catch |e| return ioError(l, e)),
     };
     const np = base + off;
     if (np < 0) return failResult(l, "Invalid argument");

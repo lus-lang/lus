@@ -83,15 +83,8 @@ export fn lus_newstate() ?*Thread {
 export fn lus_close(l: *Thread) void {
     const g = l.g;
     const main = g.main_thread;
-    // Every object that still has a finalizer gets it run before the
-    // state goes away, so C resources held by userdata are released.
-    main.top = 0;
-    main.frames.items.len = 0;
-    for (g.finobj.items) |hdr| g.tobefnz.append(g.gpa, hdr) catch break;
-    g.finobj.items.len = 0;
-    std.mem.reverse(*gc.Header, g.tobefnz.items);
-    base_lib.runFinalizers(main) catch {};
-    out.deinit(g);
+    // api.close runs every pending finalizer, so C resources held by
+    // userdata are released, then flushes output and frees the state.
     const h = host(g);
     api.close(main);
     h.free_refs.deinit(gpa);
