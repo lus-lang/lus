@@ -1195,6 +1195,8 @@ Rejected forms: unary `#` and `~`, and binary `&`, `|`, `~`, `<<`, `>>` raise `o
 
 Complexity limits raise `query too complex`. The parser checks 32 select items, 16 group keys, 16 order items, and 10 names per chain at compile time. Building the query value checks the limit of 200 operands (parameters plus host closures).
 
+A `where` clause may hold any number of top-level `and` conjuncts. The plan lists the first 255 separately and joins the rest into one final conjunct, and only the first 63 may be pushed down to a provider. Both bounds keep the condition and its evaluation order. **Tested** (`query_test.lus`): `where` clauses of 63 to 1000 conjuncts filter tables and SQLite sources alike.
+
 The parser also bounds the nesting depth of clause expressions. A clause expression nested too deeply raises `query too complex` at compile time.
 
 A bare column is a valid clause expression. `where r.active` keeps the rows whose `active` field is truthy.

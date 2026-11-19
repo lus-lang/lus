@@ -589,6 +589,14 @@ fn aggCode(a: Agg) i64 {
 // ---------------------------------------------------------------------
 // Entry point
 
+/// The number of conjuncts a plan lists. `vm/query.zig` rejects a plan with
+/// more.
+pub const max_conjuncts = 256;
+
+/// The number of conjuncts the skip mask covers. `vm/query.zig` sets the bit
+/// of conjunct `i` only when `i` is below this.
+pub const max_skip_bits = 63;
+
 pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     const line = fs.line;
     var c: Ctx = .{
@@ -606,6 +614,15 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     if (q.where) |w| {
         c.clause = .where;
         try splitConjuncts(&c, try c.lower(w), &conjuncts);
+        // The plan lists at most `max_conjuncts` conjuncts. The rest join
+        // the last one, which keeps the condition and its evaluation order.
+        if (conjuncts.items.len > max_conjuncts) {
+            const tail = conjuncts.items[max_conjuncts - 1 ..];
+            var merged = tail[0];
+            for (tail[1..]) |n| merged = try c.newNode(n.line, .{ .and_ = .{ merged, n } });
+            conjuncts.shrinkRetainingCapacity(max_conjuncts - 1);
+            try conjuncts.append(c.arena, merged);
+        }
     }
     var items: std.ArrayList(Item) = .empty;
     if (q.select) |sel| {
@@ -676,12 +693,15 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     // Classify the conjuncts.
     const Conj = struct { node: *Node, mask: u32, opaque_: bool, sql: bool };
     const conj = try c.arena.alloc(Conj, conjuncts.items.len);
-    for (conjuncts.items, conj) |n, *cj| {
+    for (conjuncts.items, conj, 0..) |n, *cj, i| {
         var mask: u32 = 0;
         var opq = false;
         shape(n, &mask, &opq);
         const single = mask != 0 and (mask & (mask - 1)) == 0;
-        cj.* = .{ .node = n, .mask = mask, .opaque_ = opq, .sql = !opq and single and sqlBool(n) };
+        // The skip mask of the step function is an integer with one bit for
+        // each of the first 63 conjuncts, so only those may move into SQL.
+        const skippable = i < max_skip_bits;
+        cj.* = .{ .node = n, .mask = mask, .opaque_ = opq, .sql = !opq and single and skippable and sqlBool(n) };
     }
 
     // Synthesize the clause functions.
