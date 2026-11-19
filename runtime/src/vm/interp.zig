@@ -689,6 +689,16 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 }
             },
             .varargprep => {},
+            .varargtab => {
+                const vfr = l.frames.items[c.fi];
+                const nv = vfr.nvarargs;
+                const src = vfr.func - nv;
+                const t = try l.newTable(nv, 1);
+                var i: u32 = 0;
+                while (i < nv) : (i += 1) t.array[i] = l.stack[src + i];
+                R.reg(l, c.base, ra).* = Value.obj(.table, t);
+                try ops.rawSet(l, t, try l.newStringValue("n"), Value.int(nv));
+            },
             .close => {
                 const level = c.base + ra;
                 closeUpvals(l, level);

@@ -96,6 +96,7 @@ pub const Op = enum(u8) {
     closure, // R[A] = closure(KPROTO[Bx])
     vararg, // R[A], ..., R[A+C-2] = vararg
     varargprep, // adjust varargs on entry (A = number of fixed params)
+    varargtab, // R[A] = { vararg..., n = #vararg }
     close, // close upvalues and tbc variables >= R[A]
     tbc, // mark R[A] as to-be-closed
 

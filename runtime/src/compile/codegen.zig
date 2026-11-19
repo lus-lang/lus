@@ -206,6 +206,10 @@ pub const Compiler = struct {
     diag: ?[]const u8 = null,
     source: *vm.object.String = undefined,
     env_name: []const u8 = "_ENV",
+    /// Global declaration state of the current name lookup: -1 when no
+    /// declaration applies, -2 when a named declaration excludes the name,
+    /// or the absolute index of the collective `global *` that covers it.
+    ginfo: i32 = -1,
 
     pub fn err(c: *Compiler, line: u32, comptime fmt: []const u8, args: anytype) Error {
         const name = @import("../syntax/parser.zig").chunkDisplay(c.arena, c.opts.chunkname);
@@ -1265,7 +1269,10 @@ const SearchResult = union(enum) {
     none: bool, // true if a named declaration was passed
 };
 
-fn searchVar(fs: *FuncState, name: []const u8, passed_named: *bool) ?u32 {
+/// Finds `name` among the active variables of `fs`. A collective
+/// `global *` does not end the search: it records itself in `ginfo` so an
+/// outer local of the same name (such as `_ENV`) still resolves.
+fn searchVar(fs: *FuncState, name: []const u8, ginfo: *i32) ?u32 {
     var i = fs.nactvar;
     while (i > 0) {
         i -= 1;
@@ -1273,9 +1280,11 @@ fn searchVar(fs: *FuncState, name: []const u8, passed_named: *bool) ?u32 {
         switch (v.kind) {
             .global_named => {
                 if (std.mem.eql(u8, v.name, name)) return i;
-                passed_named.* = true;
+                if (ginfo.* == -1) ginfo.* = -2;
             },
-            .global_star => return i,
+            .global_star => if (ginfo.* < 0) {
+                ginfo.* = @intCast(fs.first_local + i);
+            },
             else => if (std.mem.eql(u8, v.name, name)) return i,
         }
     }
@@ -1316,8 +1325,7 @@ fn newUpvalue(fs: *FuncState, name: []const u8, v: *const ExpDesc) Error!u32 {
 /// Resolves `name` in function `fs`. Sets `var` to a local, upvalue,
 /// compile-time constant, or void (global).
 fn singleVarAux(fs: *FuncState, name: []const u8, v: *ExpDesc, base: bool) Error!void {
-    var passed = false;
-    if (searchVar(fs, name, &passed)) |vidx| {
+    if (searchVar(fs, name, &fs.c.ginfo)) |vidx| {
         const vd = getLocalVar(fs, vidx);
         switch (vd.kind) {
             .ctc => {
@@ -1356,21 +1364,24 @@ fn singleVarAux(fs: *FuncState, name: []const u8, v: *ExpDesc, base: bool) Error
         return;
     }
     // Global, or undeclared.
-    v.* = .{ .kind = .void_, .info = if (passed) -1 else 0 };
+    v.* = .{ .kind = .void_, .info = 0 };
 }
 
 /// Builds the descriptor for a variable reference, including `_ENV.name`
 /// for globals.
 fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!void {
+    fs.c.ginfo = -1;
     try singleVarAux(fs, name, v, true);
     if (v.kind != .void_) return;
     if (v.info == -3) return; // group: handled by the caller
-    if (v.info == -1 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
+    const ginfo = fs.c.ginfo;
+    if (v.info != -2 and ginfo == -2 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
         return fs.c.err(line, "variable '{s}' not declared", .{name});
     }
-    const readonly = v.info == -2 and v.aux != 0;
+    const readonly = if (v.info == -2) v.aux != 0 else if (ginfo >= 0) fs.c.actvars.items[@intCast(ginfo)].readonly else false;
     // _ENV.name
     var env: ExpDesc = .{};
+    fs.c.ginfo = -1;
     try singleVarAux(fs, fs.c.env_name, &env, true);
     if (env.kind == .void_) return fs.c.err(line, "_ENV is global when accessing variable '{s}'", .{name});
     try exp2anyregup(fs, &env);
@@ -1614,12 +1625,7 @@ fn compileFunction(c: *Compiler, f: *ast.Function) Error!*Proto {
             _ = vidx;
             const reg = fs.freereg;
             try reserveRegs(&fs, 1);
-            try codeABC(&fs, .newtable, reg, 0, 0);
-            try reserveRegs(&fs, 1);
-            _ = try emitABC(&fs, .vararg, reg + 1, 0, 0);
-            try codeABC(&fs, .setlist, reg, 0, 0);
-            _ = try emit(&fs, opc.iax(.extraarg, 0));
-            fs.freereg = reg + 1;
+            try codeABC(&fs, .varargtab, reg, 0, 0);
             try adjustLocalVars(&fs, 1);
         }
     }
@@ -1916,11 +1922,22 @@ fn provideStat(fs: *FuncState, vals: []*ast.Expr, line: u32) Error!void {
         if (i + 1 == vals.len and e.isMulti() and ctx.nresults < 0) {
             try setReturns(fs, &e, -1);
             multi = true;
+        } else if (i + 1 == vals.len and e.isMulti() and ctx.nresults > n) {
+            // A trailing call fills every remaining fixed result.
+            const extra = ctx.nresults - n;
+            try setReturns(fs, &e, extra);
+            if (e.kind == .call) e = ExpDesc.init(.nonreloc, opc.a(fs.code.items[@intCast(e.info)]));
+            if (extra > 1) try reserveRegs(fs, @intCast(extra - 1));
+            n += extra;
         } else {
             try exp2nextreg(fs, &e);
             n += 1;
         }
     }
+    // Close upvalues and tbc variables of the do body while the provided
+    // values still sit above them, then move the values into place.
+    const level = blockLevel(fs, ctx.nactvar);
+    if (level < first) try codeABC(fs, .close, @max(level, ctx.base + 1), 0, 0);
     const want = ctx.nresults;
     if (want < 0) {
         if (multi) {
@@ -1939,9 +1956,6 @@ fn provideStat(fs: *FuncState, vals: []*ast.Expr, line: u32) Error!void {
             if (i < n) try codeABC(fs, .move, ctx.base + i, first + i, 0) else try loadNil(fs, ctx.base + i, 1);
         }
     }
-    // Close upvalues and tbc variables of the do body.
-    const level = blockLevel(fs, ctx.nactvar);
-    try codeABC(fs, .close, @max(level, ctx.base + 1), 0, 0);
     const j = try jump(fs);
     try concatJumps(fs, &ctx.exits, j);
     fs.freereg = saved;
@@ -2681,8 +2695,8 @@ fn foldFlag(fs: *FuncState, cond: ast.Cond) ?bool {
     if (ix.obj.kind != .name or !std.mem.eql(u8, ix.obj.kind.name.text, "flags")) return null;
     if (ix.key.kind != .string) return null;
     // `flags` must be the free reserved name, not a local.
-    var passed = false;
-    if (searchVar(fs, "flags", &passed)) |vidx| {
+    var gi: i32 = -1;
+    if (searchVar(fs, "flags", &gi)) |vidx| {
         const vd = getLocalVar(fs, vidx);
         if (vd.kind != .global_star and vd.kind != .global_named) return null;
     }
@@ -2690,7 +2704,7 @@ fn foldFlag(fs: *FuncState, cond: ast.Cond) ?bool {
         // Locals in enclosing functions also shadow it.
         var p = fs.parent;
         while (p) |pf| : (p = pf.parent) {
-            var pp = false;
+            var pp: i32 = -1;
             if (searchVar(pf, "flags", &pp)) |vidx| {
                 const vd = getLocalVar(pf, vidx);
                 if (vd.kind != .global_star and vd.kind != .global_named) return null;

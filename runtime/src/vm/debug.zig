@@ -24,7 +24,9 @@ pub fn localName(p: *Proto, reg: u32, pc: u32) ?[]const u8 {
         if (lv.end_pc != 0 and lv.end_pc <= pc) continue;
         if (lv.reg == reg) found = lv.name.bytes();
     }
-    if (found) |n| if (n.len > 0 and n[0] == '(') return null;
+    // Loop control slots are reported through the instruction that uses
+    // them. Other internal names, such as "(attr)", read well as is.
+    if (found) |n| if (std.mem.eql(u8, n, "(for state)")) return null;
     return found;
 }
 
