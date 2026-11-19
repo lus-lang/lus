@@ -28,6 +28,13 @@ pub fn newState(gpa: std.mem.Allocator, io: std.Io) !*Thread {
 }
 
 pub fn openLibs(l: *Thread) Error!void {
+    // Opening the libraries is bounded startup work that builds many
+    // tables before they are reachable, so the collector waits until it
+    // is done.
+    const g = l.g;
+    const was_stopped = g.gc_stopped;
+    g.gc_stopped = true;
+    defer g.gc_stopped = was_stopped;
     try @import("lib/init.zig").openAll(l);
 }
 
