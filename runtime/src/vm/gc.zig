@@ -298,7 +298,7 @@ pub const State = struct {
     live: usize = 0,
     /// Bytes the sweep of the current cycle freed.
     swept: usize = 0,
-    /// Set when the last major collection freed less than a quarter of
+    /// Set when the last major collection freed less than a sixteenth of
     /// what the program allocated since the collection before it. The
     /// heap is then growing, and the next cycle waits for twice the
     /// usual growth.
@@ -668,7 +668,7 @@ fn finishSweep(g: *Global) void {
         // otherwise the previous cycle left `before`.
         const allocated = s.heap_at_mark -| (if (s.mode == .generational) s.gen_base else before);
         const freed = s.heap_at_mark -| s.live;
-        s.growing = @as(u64, freed) * 4 < allocated;
+        s.growing = @as(u64, freed) * 16 < allocated;
     }
     if (s.mode != .generational) return setThreshold(g);
     const live = s.live;
