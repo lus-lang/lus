@@ -70,6 +70,20 @@ export fn lus_wasm_flush(l: *Thread) void {
     @import("lib/out.zig").flushAll(l.g);
 }
 
+/// Registers the compile function of the host, an entry of the exported
+/// function table, so that hot functions compile to WebAssembly. A host
+/// that never calls this keeps every state interpreted. See
+/// `spec/design/wasmjit.md`.
+export fn lus_wasm_jit_host(index: u32) void {
+    @import("jit/wasm.zig").setHost(index);
+}
+
+/// The address of the JIT statistics: four 32-bit counts of functions
+/// compiled, modules that failed, modules deferred, and bytes emitted.
+export fn lus_wasm_jit_stats() *const anyopaque {
+    return &@import("jit/wasm.zig").stats;
+}
+
 /// Closes a state like `lus_close` and frees the environment that
 /// `lus_wasm_environ` gave it.
 export fn lus_wasm_close(l: *Thread) void {
