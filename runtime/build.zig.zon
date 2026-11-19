@@ -3,5 +3,15 @@
     .version = "2.0.0-dev",
     .fingerprint = 0x25c84663b2127d3a,
     .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .brotli = .{
+            .url = "https://codeload.github.com/google/brotli/tar.gz/refs/tags/v1.1.0",
+            .hash = "N-V-__8AAF_gIQDX2wVzXI-r96NyCgKuDj9W_Gab-TU7Qzoi",
+        },
+        .zstd = .{
+            .url = "https://codeload.github.com/facebook/zstd/tar.gz/refs/tags/v1.5.7",
+            .hash = "N-V-__8AAPZ7fwBg4JoCzM_0o2A8wxH2hsUUeiU1iuZv53L5",
+        },
+    },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

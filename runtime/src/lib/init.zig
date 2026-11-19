@@ -14,6 +14,7 @@ pub fn openAll(l: *Thread) Error!void {
     try @import("coroutine.zig").open(l);
     try @import("debuglib.zig").open(l);
     try @import("vector.zig").open(l);
+    try @import("archive.zig").open(l);
     try @import("io.zig").open(l);
     try @import("json.zig").open(l);
     try @import("../vm/ext.zig").openEnums(l);
@@ -34,4 +35,5 @@ test {
     _ = @import("pack.zig");
     _ = @import("fs.zig");
     _ = @import("transcode.zig");
+    _ = @import("archive.zig");
 }
