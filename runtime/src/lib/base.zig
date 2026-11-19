@@ -216,7 +216,7 @@ fn rawlen(l: *Thread) Error!u32 {
     return switch (v.tag) {
         .table => aux.retInt(l, table.length(v.as(Table))),
         .string => aux.retInt(l, v.as(String).chars),
-        else => aux.argError(l, 1, "table or string expected", .{}),
+        else => aux.typeError(l, 1, "table or string"),
     };
 }
 
@@ -360,7 +360,7 @@ fn decimal(l: *Thread) Error!u32 {
 }
 
 fn collectgarbage(l: *Thread) Error!u32 {
-    const opts = [_][]const u8{ "collect", "stop", "restart", "count", "step", "isrunning", "generational", "incremental" };
+    const opts = [_][]const u8{ "collect", "stop", "restart", "count", "step", "isrunning", "generational", "incremental", "param" };
     const o = try aux.checkOption(l, 1, "collect", &opts);
     const g = l.g;
     switch (o) {
@@ -385,6 +385,11 @@ fn collectgarbage(l: *Thread) Error!u32 {
         },
         5 => return aux.retBool(l, !g.gc_stopped),
         6, 7 => return aux.retStr(l, "incremental"),
+        8 => {
+            const p = try aux.checkOption(l, 2, null, std.meta.fieldNames(gc.Param));
+            const v = try aux.optInt(l, 3, -1);
+            return aux.retInt(l, gc.setParam(g, @enumFromInt(p), v));
+        },
         else => unreachable,
     }
 }
@@ -459,6 +464,7 @@ fn load(l: *Thread) Error!u32 {
     defer l.g.gpa.free(name_copy);
     const env_given = l.hasArg(4);
     const env = l.arg(4);
+    if (try modeRejects(l, src, (try aux.optString(l, 3, "bt")).?)) return 2;
     api.load(l, src, name_copy) catch {
         const msg = l.stack[l.top - 1];
         l.top -= 1;
@@ -480,6 +486,19 @@ pub fn readFile(l: *Thread, path: []const u8) Error![]u8 {
     };
 }
 
+/// Checks a chunk against a load mode such as "b", "t", or "bt". When
+/// the mode rejects the chunk, pushes the conventional failure and
+/// returns true.
+fn modeRejects(l: *Thread, src: []const u8, mode: []const u8) Error!bool {
+    const binary = std.mem.startsWith(u8, src, "\x1bLus");
+    const want: u8 = if (binary) 'b' else 't';
+    if (std.mem.indexOfScalar(u8, mode, want) != null) return false;
+    const msg = std.fmt.allocPrint(l.g.gpa, "attempt to load a {s} chunk (mode is '{s}')", .{ if (binary) "binary" else "text", mode }) catch return l.raiseMem();
+    defer l.g.gpa.free(msg);
+    _ = try aux.retFail(l, msg);
+    return true;
+}
+
 fn loadfile(l: *Thread) Error!u32 {
     const path = try aux.checkBytes(l, 1);
     try requireLoad(l);
@@ -493,6 +512,7 @@ fn loadfile(l: *Thread) Error!u32 {
     defer l.g.gpa.free(src);
     const name = std.fmt.allocPrint(l.g.gpa, "@{s}", .{path}) catch return l.raiseMem();
     defer l.g.gpa.free(name);
+    if (try modeRejects(l, src, (try aux.optString(l, 2, "bt")).?)) return 2;
     api.load(l, src, name) catch {
         const msg = l.stack[l.top - 1];
         l.top -= 1;
