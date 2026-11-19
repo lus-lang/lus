@@ -799,6 +799,18 @@ local function field_cache_test()
     assert(not ok and string.find(err, "attempt to index a nil value"), err)
     ok, err = catch set("s", 1)
     assert(not ok)
+    -- A table that rejects every store, at a site trained on a table
+    -- with the same key.
+    local key = next(flags)
+    if type(key) == "string" and string.find(key, "^[%a_][%w_]*$") then
+        local store = load("local t, v = ... t." .. key .. " = v return t." .. key)
+        local normal = { [key] = 1 }
+        for _ = 1, 300 do assert(store(normal, 2) == 2) end
+        ok, err = catch store(flags, 3)
+        assert(not ok and string.find(err, "readonly"), err)
+    end
+    ok, err = catch set(flags, 1)
+    assert(not ok and string.find(err, "readonly"), err)
 end
 
 local function constructor_test()
@@ -881,6 +893,19 @@ local function method_cache_test()
     local dynamic = setmetatable({}, { __index = function(_, k) return function() return k end end })
     assert(call(dynamic) == "get")
     assert(call(o) == 3)
+    -- Receivers with no hash part, and with hash parts of every small
+    -- size, where the probe for the method passes other keys.
+    assert(call(setmetatable({ 1, 2, 3 }, Other)) == "other")
+    assert(call(setmetatable({}, Class)) == nil)
+    for n = 1, 40 do
+        local obj = Class.new(n)
+        for i = 1, n do obj["f" .. i] = i end
+        assert(call(obj) == n)
+        if n % 5 == 0 then
+            obj.get = function() return -n end
+            assert(call(obj) == -n)
+        end
+    end
     -- The metatable changes while the site is hot.
     local function swap(n)
         local obj = Class.new(1)
@@ -1343,6 +1368,34 @@ local function tail_calls_test()
     assert(hot(count, 1, nil, 3, nil) == 4 and count() == 0)
     local ok, err = catch failing("flat")
     assert(not ok and err == "flat")
+    -- A yield in tail position, and a tail call whose arguments need a
+    -- larger stack.
+    local function relay(v) return coroutine.yield(v) end
+    local function pump(n)
+        local co = coroutine.wrap(function()
+            local got = 0
+            for i = 1, n do got = got + relay(i) end
+            return got
+        end)
+        local v = co()
+        local sent = 0
+        while sent < n do
+            sent = sent + 1
+            v = co(v * 3)
+        end
+        return v
+    end
+    assert(hot(pump, 10) == 3 * 55)
+    local wide = {}
+    for i = 1, 250 do wide[i] = i end
+    local function widest(...) return select("#", ...), (select(250, ...)) end
+    local function forward(...) return widest(...) end
+    local function narrow() return forward(table.unpack(wide)) end
+    local argc, lastarg = hot(narrow)
+    assert(argc == 250 and lastarg == 250)
+    local fresh = coroutine.wrap(function() return target(table.unpack(wide)) end)
+    a, b, c = fresh()
+    assert(a == 1 and b == 2 and c == 3)
     local function wrapped(t, mt) return setmetatable(t, mt) end
     local mt = {}
     local w = hot(wrapped, {}, mt)
@@ -1375,6 +1428,30 @@ local function tail_calls_test()
     end
     local i, lt, branch, sum, len, cat = hot(through)
     assert(i == "name!" and lt == true and branch == "yes" and sum == "sum!" and len == 3 and cat == "CAT")
+end
+
+local function long_functions_test()
+    -- A function of some twenty thousand instructions compiles, and its
+    -- code far from the start runs like the code near it.
+    local parts = { "local t, o = ... local s = 0 " }
+    for i = 1, 2500 do
+        parts[#parts + 1] = "t.x = t.x + 1 s = s + t.x + o:get() "
+        if i % 500 == 0 then parts[#parts + 1] = "if s < 0 then error('negative') end " end
+    end
+    parts[#parts + 1] = "return s + t[1] + #t"
+    local f = load(table.concat(parts), "=long")
+    local Class = {}
+    Class.__index = Class
+    function Class:get() return 1 end
+    local o = setmetatable({}, Class)
+    local r
+    for _ = 1, 80 do r = f({ 5, x = 0 }, o) end
+    assert(r == 2500 * 2501 // 2 + 2500 + 5 + 1)
+    if mode ~= "off" then assert(debug.jit(f)) end
+    local ok, err = catch f({ 5, x = 0 }, {})
+    assert(not ok and string.find(err, "attempt to call a nil value"), err)
+    ok, err = catch f({ 5, x = {} }, o)
+    assert(not ok and string.find(err, "attempt to perform arithmetic"), err)
 end
 
 local function strings_test()
