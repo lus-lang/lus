@@ -179,6 +179,41 @@ pub fn globMatch(pattern: []const u8, s: []const u8) bool {
     return p == pattern.len;
 }
 
+fn skipScheme(url: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, url, "http://")) return url[7..];
+    if (std.mem.startsWith(u8, url, "https://")) return url[8..];
+    return url;
+}
+
+/// Matches a `host` capability value. A granted value without a scheme is
+/// `host[:port][/path]`. Its host part is matched against the host of the
+/// requested value (a URL or `host:port`), and against the whole authority
+/// when the granted value names a port. A path in the granted value is
+/// matched against the requested path. A granted value with a scheme is
+/// matched against the whole requested URL. Anchoring the match on the
+/// host keeps a grant such as `example.com` from matching a different
+/// host like `example.com.attacker.test`.
+pub fn hostMatch(granted: []const u8, requested: []const u8) bool {
+    if (std.mem.startsWith(u8, granted, "http://") or std.mem.startsWith(u8, granted, "https://"))
+        return globMatch(granted, requested);
+    const rest = skipScheme(requested);
+    const auth_end = std.mem.indexOfAny(u8, rest, "/?") orelse rest.len;
+    const authority = rest[0..auth_end];
+    const host = authority[0 .. std.mem.indexOfScalar(u8, authority, ':') orelse authority.len];
+    const slash = std.mem.indexOfScalar(u8, granted, '/');
+    const g_auth = granted[0 .. slash orelse granted.len];
+    const subject = if (std.mem.indexOfScalar(u8, g_auth, ':') != null) authority else host;
+    // Authorities longer than any valid host name never match.
+    if (g_auth.len >= 256 or subject.len >= 256) return false;
+    if (!globMatch(g_auth, subject)) return false;
+    if (slash) |sl| {
+        var path = rest[auth_end..];
+        if (path.len == 0 or path[0] == '?') path = "/";
+        return globMatch(granted[sl..], path);
+    }
+    return true;
+}
+
 /// Canonical absolute path: realpath when the file exists, otherwise the
 /// realpath of its parent plus the final component. Returns null when the
 /// path cannot be resolved (which callers treat as denied).
@@ -230,7 +265,8 @@ fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, can
     return switch (cap.kind) {
         .none => true,
         .path => if (canon_req) |c| globMatch(granted, c) else false,
-        .host, .pattern => globMatch(granted, requested),
+        .host => hostMatch(granted, requested),
+        .pattern => globMatch(granted, requested),
         .custom => if (cap.match) |m| m(granted, requested) else false,
     };
 }
@@ -367,6 +403,22 @@ pub fn hostGrant(l: *Thread, specs: []const []const u8) Error!void {
     const s = setOf(l).?;
     const r = registry(l.g);
     r.ceiling = s.clone(l.g.gpa) catch return l.raiseMem();
+}
+
+test "host" {
+    try std.testing.expect(hostMatch("example.com", "https://example.com/a"));
+    try std.testing.expect(hostMatch("example.com", "example.com:443"));
+    try std.testing.expect(!hostMatch("example.com", "example.com.attacker.test:80"));
+    try std.testing.expect(!hostMatch("example.com", "http://example.com.attacker.test/"));
+    try std.testing.expect(hostMatch("*.example.com", "http://api.example.com/x"));
+    try std.testing.expect(!hostMatch("*.example.com", "http://example.com/x"));
+    try std.testing.expect(hostMatch("127.0.0.1:8080", "127.0.0.1:8080"));
+    try std.testing.expect(!hostMatch("127.0.0.1:8080", "127.0.0.1:9090"));
+    try std.testing.expect(hostMatch("example.com/api/*", "https://example.com/api/v1"));
+    try std.testing.expect(!hostMatch("example.com/api/*", "https://example.com/other"));
+    try std.testing.expect(hostMatch("example.com/", "https://example.com"));
+    try std.testing.expect(hostMatch("https://example.com/*", "https://example.com/x"));
+    try std.testing.expect(!hostMatch("https://example.com/*", "http://example.com/x"));
 }
 
 test "glob" {
