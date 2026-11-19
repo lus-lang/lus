@@ -358,8 +358,10 @@ fn canonicalPattern(g: *Global, pattern: []const u8, keep_last: bool) []u8 {
         const dir = if (dir_end == 0) "/" else pattern[0..dir_end];
         if (realPath(g, dir)) |rp| {
             defer gpa.free(rp);
-            const rest = pattern[dir_end..];
-            if (rest.len > 0 and rest[0] != '/') return std.mem.concat(gpa, u8, &.{ rp, "/", rest }) catch @panic("oom");
+            var rest = pattern[dir_end..];
+            // The root resolves to "/", which already ends in a separator.
+            if (std.mem.endsWith(u8, rp, "/") and rest.len > 0 and rest[0] == '/') rest = rest[1..];
+            if (rest.len > 0 and rest[0] != '/' and !std.mem.endsWith(u8, rp, "/")) return std.mem.concat(gpa, u8, &.{ rp, "/", rest }) catch @panic("oom");
             return std.mem.concat(gpa, u8, &.{ rp, rest }) catch @panic("oom");
         } else |_| {}
         const up = std.mem.lastIndexOfScalar(u8, pattern[0..dir_end], '/') orelse return gpa.dupe(u8, pattern) catch @panic("oom");
