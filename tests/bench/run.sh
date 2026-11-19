@@ -7,9 +7,10 @@
 # Runtimes come from the environment. LUS is the Lus 2.0 binary (default
 # runtime/zig-out/bin/lus), LEGACY is the 1.7 binary (default
 # legacy/lus/build/lus), and LUAJIT is a LuaJIT binary (default luajit on
-# the PATH). Lus runs twice, with its JIT on and with LUS_JIT=off, and
-# LuaJIT runs twice, with -joff and with its JIT. A runtime that is
-# missing, or that fails on a benchmark, shows a dash.
+# the PATH). Lus runs three times: with both JIT tiers, with
+# LUS_JIT=baseline, and with LUS_JIT=off. LuaJIT runs twice, with -joff
+# and with its JIT. A runtime that is missing, or that fails on a
+# benchmark, shows a dash.
 
 dir=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$dir/../.." && pwd)
@@ -43,14 +44,16 @@ best() {
     ' "$runs" "$@"
 }
 
-printf "%-10s %10s %10s %10s %14s %10s %10s\n" benchmark lus "lus off" legacy "luajit -joff" luajit lus/legacy
+printf "%-10s %10s %14s %10s %10s %14s %10s %10s\n" benchmark lus "lus baseline" "lus off" legacy "luajit -joff" luajit lus/legacy
 for f in "$dir"/*.lus; do
     name=$(basename "$f" .lus)
     if [ -x "$LUS" ]; then
         a=$(best default "$LUS" "$f")
+        s=$(best baseline "$LUS" "$f")
         o=$(best off "$LUS" "$f")
     else
         a=-
+        s=-
         o=-
     fi
     if [ -x "$LEGACY" ]; then b=$(best default "$LEGACY" "$f"); else b=-; fi
@@ -70,5 +73,5 @@ for f in "$dir"/*.lus; do
     else
         r=-
     fi
-    printf "%-10s %10s %10s %10s %14s %10s %10s\n" "$name" "$a" "$o" "$b" "$c" "$j" "$r"
+    printf "%-10s %10s %14s %10s %10s %14s %10s %10s\n" "$name" "$a" "$s" "$o" "$b" "$c" "$j" "$r"
 done

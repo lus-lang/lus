@@ -53,6 +53,8 @@ A function has a counter that starts at the threshold, 60 events by default. The
 - The `warm` interpreter loop samples. Calls and backward jumps decrement a budget held in a machine register. When it reaches zero, the running function is charged for the whole period, and the next period gets a different length between 5 and 12, so a regular program cannot hide a function from the samples.
 - A numeric `for` or `range` loop of 16 or more iterations charges its function for the whole count when it starts. A long loop therefore compiles before its first iteration, and its loop instruction counts nothing.
 
+Baseline code counts in turn. Its call entries and backward branches decrement a second counter of the function, and at zero the optimizing tier looks at the function or at the loop (`opt.md`).
+
 A function that reaches zero is compiled at once. The interpreter then leaves its loop with the frame at an instruction boundary, and native code picks it up there. This covers the program that is one long top-level loop.
 
 Counting in memory at every call and loop iteration cost the interpreter up to 17 percent, and any counting in the plain loop changed its register allocation enough to cost several percent. That is why the counters live in a separate instantiation: a state whose JIT is off runs the `fast` loop, which is the same code as a build without the JIT.
@@ -124,9 +126,9 @@ Code is position independent. Addresses of runtime routines and of constants are
 ## Controls
 
 - `zig build -Djit=false` builds without the JIT. The WebAssembly build compiles to WebAssembly modules that its host instantiates (`wasmjit.md`). Every target other than aarch64 and x86-64 on macOS and Linux and WebAssembly has none.
-- `LUS_JIT=off` interprets everything. `LUS_JIT=eager` compiles every function on its first call, which is what the test suites use. `LUS_JIT=on` is the default.
+- `LUS_JIT=off` interprets everything. `LUS_JIT=eager` compiles every function on its first call, which is what the test suites use. `LUS_JIT=on` is the default, and it also runs the optimizing tier on top of this one (`opt.md`). `LUS_JIT=baseline` runs this tier alone, as `eager` does.
 - `LUS_JIT_THRESHOLD=N` sets the number of events before a function compiles.
-- `debug.jit()` returns the setting, and `debug.jit(f)` tells whether `f` has native code.
+- `debug.jit()` returns the setting first, and `debug.jit(f)` tells first whether `f` has native code. The further results describe the optimizing tier.
 - A host written in Zig calls `jit.configure`.
 
 ## Measurements
@@ -158,7 +160,7 @@ The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`
 
 The "off" column moves by a few percent between builds with the code layout of the interpreter loop, which shifts whenever the loop changes. `closures`, `fib`, and `methods` moved by up to 5 percent that way during this work, in both directions.
 
-LuaJIT's tracing JIT remains several times faster on `fib`, `methods`, `arrays`, and `unicode`. Closing that distance takes what a baseline tier leaves out by design: values kept in machine registers across instructions, type feedback, and allocation sinking.
+LuaJIT's tracing JIT remains several times faster than this tier alone on `fib`, `methods`, `arrays`, and `unicode`. Closing that distance takes what a baseline tier leaves out by design: values kept in machine registers across instructions, type feedback, and allocation sinking. The optimizing tier adds them for code that stays hot, and `opt.md` has the numbers with both tiers.
 
 ## Open ends
 
