@@ -2,7 +2,7 @@
     .name = .lus,
     .version = "2.0.0-dev",
     .fingerprint = 0x25c84663b2127d3a,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .brotli = .{
             .url = "https://codeload.github.com/google/brotli/tar.gz/refs/tags/v1.1.0",

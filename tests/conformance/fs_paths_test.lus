@@ -1,12 +1,9 @@
 pledge("load")
 
--- ===== ported from h1/fs2.lus =====
+-- ===== fs2 =====
 --[[
-    Test suite for the fs module in the H1 loop (Acquis: filesystem).
-
-    The thorough fs coverage lives in the containerized H3 suite, so the
-    day-to-day H1 loop leaves fs unguarded. This file mirrors the portable
-    parts against a namespaced temporary tree: directory iteration on empty
+    Tests for the fs module (Acquis: filesystem), run against a namespaced
+    temporary tree: directory iteration on empty
     and nested directories, the two return values of fs.type, error returns
     on missing paths, path edge cases including trailing separators and dot
     components, symbolic link creation and resolution, and the pledge gates
@@ -14,7 +11,7 @@ pledge("load")
 
     The pledge preamble grants read and write on the ./fs2_x* sandbox, read
     only on the ./fs2_ro_* namespace so write denials are assertable, and
-    read on the test tree for framework loading. Paths outside every grant
+    read on the test tree for loading the runner. Paths outside every grant
     exercise the fs:read boundary. A one-time probe decides whether symlink
     creation is available so the link tests fail loudly where they can run
     and are skipped where the platform forbids them.
@@ -335,7 +332,7 @@ end
 local function fs_type_on_an_ungranted_path_is_denied_for_reading_test()
     -- Use an existing path so path resolution reaches the pledge check on
     -- every platform before the filesystem can report a missing component.
-    local ok, err = catch fs.type("./lus/meson.build")
+    local ok, err = catch fs.type("./outside/secret.txt")
     assert(not ok)
     assert(string.find(tostring(err), 'permission "fs:read" denied'))
 end
@@ -344,7 +341,7 @@ end
 local function fs_createdirectory_on_an_ungranted_path_is_denied_for_writing_test()
     -- The existing parent makes the authorization boundary the only reason
     -- this new child path is rejected.
-    local ok, err = catch fs.createdirectory("./lus/fs2_denied_area_" .. RUN)
+    local ok, err = catch fs.createdirectory("./outside/fs2_denied_area_" .. RUN)
     assert(not ok)
     assert(string.find(tostring(err), 'permission "fs:write" denied'))
 end

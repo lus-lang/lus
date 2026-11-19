@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/metamethods2.lus =====
+-- ===== metamethods2 =====
 --[[
   Metamethod coverage beyond events.lus.
 

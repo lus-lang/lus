@@ -4,7 +4,7 @@ pledge("load")
 -- the names the tests use are declared once here.
 global print, setmetatable, assert, type, os, pledge, load, string, table, ipairs, pairs, tostring, tonumber, select
 
--- ===== ported from h1/from.lus =====
+-- ===== from =====
 --[[
     Test suite for the 'from' table deconstruction feature in Lus.
 

@@ -2,7 +2,7 @@ local FIXTURES = TEST_DIR .. "/fixtures/network"
 
 pledge("load", "network", "fs:read=" .. FIXTURES .. "/*")
 
--- ===== ported from h1/netio.lus =====
+-- ===== netio =====
 --[[
   Network data-path tests for Lus (netio suite)
 
@@ -591,7 +591,7 @@ local function fetch_to_a_closed_local_port_reports_it_cannot_connect_test()
 end
 
 
--- ===== ported from h1/network.lus =====
+-- ===== network =====
 --[[
   Network Library Tests for Lus
   Tests: TCP, UDP, and HTTP/HTTPS functionality

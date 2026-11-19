@@ -6,21 +6,21 @@
 -- write grant lives in a coroutine, so it stays local to the setup.
 local setup = coroutine.create(function()
     pledge("fs:write=./*")
-    fs.createdirectory("lus-tests")
-    fs.createdirectory("lus-tests/h1")
-    local f = assert(io.open("lus-tests/h1/security.lus", "w"))
+    fs.createdirectory("tree")
+    fs.createdirectory("tree/suite")
+    local f = assert(io.open("tree/suite/security.lus", "w"))
     f:write("-- security fixture\n")
     f:close()
     -- A file outside the pledged subtree that the traversal test tries to reach.
-    fs.createdirectory("lus")
-    local outside = assert(io.open("lus/meson.build", "w"))
+    fs.createdirectory("outside")
+    local outside = assert(io.open("outside/secret.txt", "w"))
     outside:write("project('fixture')\n")
     outside:close()
 end)
 assert(coroutine.resume(setup))
 
 pledge("load")
-pledge("fs:read=./lus-tests/*")
+pledge("fs:read=./tree/*")
 pledge("env=LUS_TEST_ALLOWED")
 pledge("seal")
 
@@ -48,7 +48,7 @@ end
 
 -- P0-1: io.open is gated by fs pledges (it used to bypass them entirely).
 local function io_open_within_fs_read_pledge_works_test()
-    local f = io.open("./lus-tests/h1/security.lus", "r")
+    local f = io.open("./tree/suite/security.lus", "r")
     assert(f ~= nil, "reading a pledged path should work")
     f:close()
 end
@@ -61,7 +61,7 @@ end
 -- P0-4: '..' traversal cannot escape the pledged subtree, even to a file that
 -- exists (the check canonicalizes and fails closed).
 local function traversal_cannot_escape_the_pledge_test()
-    local ok = catch(io.open("./lus-tests/h1/../../lus/meson.build", "r"))
+    local ok = catch(io.open("./tree/suite/../../outside/secret.txt", "r"))
     assert(ok == false, "..-escape to a real file outside the pledge must be denied")
 end
 

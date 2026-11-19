@@ -1,6 +1,6 @@
 pledge("load", "fs:read=" .. TEST_DIR, "fs:read=" .. TEST_DIR .. "/*")
 
--- ===== ported from h1/parse.lus =====
+-- ===== parse =====
 -- serializes deeply nested calls
 local function serializes_deeply_nested_calls_test()
     local depth = 64

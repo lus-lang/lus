@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/format.lus =====
+-- ===== format =====
 -- Dedicated string.format suite.
 -- Covers every printf-style conversion the spec lists (%d %i %u %c %x %X %o
 -- %e %E %f %g %G %a %A %s %q %%), the %q reloadable-literal contract through
@@ -150,9 +150,8 @@ local function hex_of_the_maximum_integer_test()
 end
 
 -- ============================================================
--- %c builds a character from a code point (spec/design/strings.md).
--- The legacy runtime cast modulo 256 to a byte, 2.0 rejects values outside
--- the code point range instead.
+-- %c builds a character from a code point (spec/design/strings.md) and
+-- rejects values outside the code point range.
 -- ============================================================
 
 -- %c builds one character from a code point

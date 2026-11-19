@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/gc.lus =====
+-- ===== gc =====
 -- collectgarbage basics
 local function collectgarbage_basics_test()
     assert(collectgarbage("isrunning"))
@@ -492,7 +492,7 @@ local function gc_with_coroutines_test()
 end
 
 
--- ===== ported from h1/gctypes.lus =====
+-- ===== gctypes =====
 --[[
     GC coverage for the Lus-specific collectable types, LUA_TVECTOR byte
     buffers and LUA_TENUM/LUA_TENUMROOT first-class enums.
@@ -1126,7 +1126,7 @@ local function all_finalizers_holding_vectors_run_and_read_their_own_data_test()
 end
 
 
--- ===== ported from h1/gengc.lus =====
+-- ===== gengc =====
 local debug = require"debug"
 
 -- gc mode switching

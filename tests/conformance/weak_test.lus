@@ -1,4 +1,4 @@
--- H1 suite for ephemeron and weak table semantics.
+-- Tests for ephemeron and weak table semantics.
 -- It pins the Lua 5.5 derived contracts for weak keys, weak values, ephemeron
 -- convergence, __mode mutation between cycles, finalizer visibility rules,
 -- resurrection interactions, and behavior under both collector modes.

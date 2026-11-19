@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/events.lus =====
+-- ===== events =====
 local debug = require'debug'
 
 -- metatable basics

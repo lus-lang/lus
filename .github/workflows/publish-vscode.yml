@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Stable release tag to publish, such as v1.7.0"
+        description: "Stable release tag to publish, such as v2.0.0"
         required: true
         type: string
 

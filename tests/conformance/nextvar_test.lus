@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/nextvar.lus =====
+-- ===== nextvar =====
 -- next traversal
 local function next_traversal_test()
     local a = {}

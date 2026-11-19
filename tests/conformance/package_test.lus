@@ -15,10 +15,10 @@
     is a real fs:read boundary rather than a missing file.
 ]]
 
-pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./lus-tests/*", "fs:write=./*",
+pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./tree/*", "fs:write=./*",
     "fs:read=./pkg_*", "fs:write=./pkg_*")
 
--- The legacy paths below name the fixture modules under lus-tests/h1/preinclude,
+-- The paths below name the fixture modules under tree/suite/preinclude,
 -- so the fixtures are copied into the temporary working directory under that name.
 local function copy_tree(src, dst)
     fs.createdirectory(dst)
@@ -31,9 +31,9 @@ local function copy_tree(src, dst)
         end
     end
 end
-fs.createdirectory("lus-tests")
-fs.createdirectory("lus-tests/h1")
-copy_tree(TEST_DIR .. "/fixtures/preinclude", "lus-tests/h1/preinclude")
+fs.createdirectory("tree")
+fs.createdirectory("tree/suite")
+copy_tree(TEST_DIR .. "/fixtures/preinclude", "tree/suite/preinclude")
 pledge("seal")
 
 local RUN = tostring(os.time()) .. "_" .. tostring(math and math.random(1, 999999) or 0)
@@ -41,7 +41,7 @@ local MODDIR = "./pkg_" .. RUN
 
 -- A single fixture module that already ships in the tree. Every path test
 -- below points package.path at this directory and requires "hello".
-local FIXPATH = "lus-tests/h1/preinclude/?.lus"
+local FIXPATH = "tree/suite/preinclude/?.lus"
 
 -- Save and restore the mutable package globals around a test body so the
 -- shared interpreter state stays clean between tests.
@@ -90,10 +90,10 @@ local function the_config_separators_are_the_ones_searchpath_honors_test()
     -- searchpath resolves the fixture through it.
     local tmpl_sep = ";"
     local sub = "?"
-    local path = "lus-tests/none/" .. sub .. ".lus" .. tmpl_sep ..
-        "lus-tests/h1/preinclude/" .. sub .. ".lus"
+    local path = "tree/none/" .. sub .. ".lus" .. tmpl_sep ..
+        "tree/suite/preinclude/" .. sub .. ".lus"
     local found = package.searchpath("hello", path)
-    assert(found == "lus-tests/h1/preinclude/hello.lus")
+    assert(found == "tree/suite/preinclude/hello.lus")
 end
 
 -- Group: package.loaded caching
@@ -202,20 +202,20 @@ local function require_resolves_an_on_disk_module_and_returns_the_filename_test(
         package.loaded["hello"] = nil
         local mod, where = require("hello")
         assert(type(mod) == "table")
-        assert(where == "lus-tests/h1/preinclude/hello.lus")
+        assert(where == "tree/suite/preinclude/hello.lus")
         package.loaded["hello"] = nil
     end)
 end
 
 local function dots_in_the_module_name_map_to_the_directory_separator_test()
     with_saved(function()
-        package.path = "lus-tests/?.lus"
-        package.loaded["h1.preinclude.hello"] = nil
-        local mod, where = require("h1.preinclude.hello")
+        package.path = "tree/?.lus"
+        package.loaded["suite.preinclude.hello"] = nil
+        local mod, where = require("suite.preinclude.hello")
         assert(type(mod) == "table")
         local dirsep = string.sub(package.config, 1, 1)
-        assert(where == "lus-tests/h1" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
-        package.loaded["h1.preinclude.hello"] = nil
+        assert(where == "tree/suite" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
+        package.loaded["suite.preinclude.hello"] = nil
     end)
 end
 
@@ -354,20 +354,20 @@ end
 
 local function a_positive_search_returns_the_existing_file_test()
     local found = package.searchpath("hello", FIXPATH)
-    assert(found == "lus-tests/h1/preinclude/hello.lus")
+    assert(found == "tree/suite/preinclude/hello.lus")
 end
 
 local function the_default_separator_rewrites_dots_to_the_directory_separator_test()
-    local found = package.searchpath("h1.preinclude.hello", "lus-tests/?.lus")
+    local found = package.searchpath("suite.preinclude.hello", "tree/?.lus")
     local dirsep = string.sub(package.config, 1, 1)
-    assert(found == "lus-tests/h1" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
+    assert(found == "tree/suite" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
 end
 
 local function explicit_sep_and_rep_control_the_substitution_test()
     -- With sep and rep both "/", no rewriting happens and the slashed name
     -- is substituted verbatim.
-    local found = package.searchpath("h1/preinclude/hello", "lus-tests/?.lus", "/", "/")
-    assert(found == "lus-tests/h1/preinclude/hello.lus")
+    local found = package.searchpath("suite/preinclude/hello", "tree/?.lus", "/", "/")
+    assert(found == "tree/suite/preinclude/hello.lus")
 end
 
 local function a_name_without_a_separator_takes_the_no_substitution_path_test()
@@ -375,14 +375,14 @@ local function a_name_without_a_separator_takes_the_no_substitution_path_test()
     local a = package.searchpath("hello", FIXPATH)
     local b = package.searchpath("hello", FIXPATH, ".")
     assert(a == b)
-    assert(a == "lus-tests/h1/preinclude/hello.lus")
+    assert(a == "tree/suite/preinclude/hello.lus")
 end
 
 local function a_failed_search_lists_every_tried_candidate_test()
-    local found, msg = package.searchpath("nope", "lus-tests/a/?.lus;lus-tests/b/?.lus")
+    local found, msg = package.searchpath("nope", "tree/a/?.lus;tree/b/?.lus")
     assert(found == nil)
-    assert_has(msg, "no file 'lus-tests/a/nope.lus'")
-    assert_has(msg, "no file 'lus-tests/b/nope.lus'")
+    assert_has(msg, "no file 'tree/a/nope.lus'")
+    assert_has(msg, "no file 'tree/b/nope.lus'")
 end
 
 local function an_empty_path_yields_a_single_empty_candidate_test()
@@ -392,7 +392,7 @@ local function an_empty_path_yields_a_single_empty_candidate_test()
 end
 
 -- searchpath silently skips files outside the fs:read pledge. The fixture
--- under lus-tests is granted, so a template pointing at an ungranted tree
+-- under tree is granted, so a template pointing at an ungranted tree
 -- for the same basename must return nil even though the granted copy exists.
 local function searchpath_skips_a_file_the_pledge_does_not_cover_test()
     local found = package.searchpath("hello", "./pkg_denied_area/?.lus")
@@ -416,7 +416,7 @@ local function a_missing_library_returns_fail_a_message_and_open_test()
     -- The path sits under the granted fs:read scope, so the failure is
     -- the dynamic loader's, not a pledge denial. loadlib yields three
     -- values, and the third is the failure phase.
-    local ok, msg, phase = package.loadlib("./lus-tests/no_such_pkg_lib.so", "f")
+    local ok, msg, phase = package.loadlib("./tree/no_such_pkg_lib.so", "f")
     assert(not ok)
     assert(type(msg) == "string")
     assert(#msg > 0)
@@ -433,7 +433,7 @@ end
 
 local loadlib_rejects_non_string_arguments_cases = {
     { function() return package.loadlib(nil, "f") end, 1 },
-    { function() return package.loadlib("./lus-tests/x.so", nil) end, 2 },
+    { function() return package.loadlib("./tree/x.so", nil) end, 2 },
 }
 
 local function loadlib_rejects_non_string_arguments_test(call, argno)

@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/memerr.lus =====
+-- ===== memerr =====
 -- collect garbage
 local function collect_garbage_test()
     collectgarbage()

@@ -18,7 +18,7 @@ Monorepository for the Lus programming language, a Lua 5.5 derivative. The runti
 - **`/packaging`**: Install scripts, release anchors, third-party notices, and dependency licenses
 - **`/tools`**: Generators (spec to LSP data, spec to grammar) and the repository lint
 
-The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. Run `mise tasks` to list the tasks.
+The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. In a fresh clone, run `mise trust` once so mise reads `mise.toml`, then `mise install` for the toolchain. Run `mise tasks` to list the tasks.
 
 ## Build Commands
 

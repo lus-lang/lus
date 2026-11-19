@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/lexer-errors.lus =====
+-- ===== lexer-errors =====
 -- Lexer rejection tests: the error half of the lexer that literals.lus skips.
 -- Every case drives the lexer through load() and inspects the diagnostic it
 -- produces. We check escape-sequence failures and boundaries, malformed number

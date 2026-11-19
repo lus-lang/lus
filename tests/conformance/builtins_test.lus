@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/fastcall.lus =====
+-- ===== fastcall =====
 -- The fastcall layer is gone in 2.0, so the emission checks are dropped and the
 -- value checks remain: builtins must agree in every call position.
 -- ==== Correctness: type() ====

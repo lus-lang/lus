@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/groups.lus =====
+-- ===== groups =====
 -- basic group declaration and access
 local function basic_group_declaration_and_access_test()
     local z <group> = {

@@ -26,7 +26,7 @@ This is a monorepository containing the following projects:
 - [**`/packaging`**](packaging): Install scripts, notices, and dependency licenses
 - [**`/tools`**](tools): Generators and repository checks
 
-Tasks run through [mise](https://mise.jdx.dev). Run `mise tasks` to list them.
+Tasks run through [mise](https://mise.jdx.dev). In a fresh clone, run `mise trust` and `mise install` once, then `mise tasks` to list them.
 
 ## Examples
 

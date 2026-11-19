@@ -1,6 +1,6 @@
 pledge("load", "fs:read=./finalizer_probe*", "fs:write=./finalizer_probe*")
 
--- ===== ported from h1/finalizers.lus =====
+-- ===== finalizers =====
 --[[
   Finalizer lifecycle tests: the full __gc contract for tables and for
   userdata-like values, pinned to Lua 5.5 semantics.

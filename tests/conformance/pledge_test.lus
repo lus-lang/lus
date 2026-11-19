@@ -10,26 +10,25 @@
     Some tests verify permission denials which require specific setup.
 ]]
 
--- The legacy suites ran against one process-wide permission store that grew over the
--- run. Here every test starts from its own baseline inside a fresh coroutine, because
--- permission changes made in a coroutine stay local to it.
+-- Every test starts from its own baseline inside a fresh coroutine, because permission
+-- changes made in a coroutine stay local to it.
 local function isolated(body)
     local co = coroutine.create(body)
     local ok, err = coroutine.resume(co)
     if not ok then error(err, 0) end
 end
 
-local BASE_A = { "load", "fs:read=./lus-tests/*" }
+local BASE_A = { "load", "fs:read=./tree/*" }
 local BASE_B = {
     "load",
-    "fs:read=./lus-tests/framework.lus",
-    "fs:read=./lus-tests/h1/enum.lus*",
-    "fs:read=./lus-tests/tmp-pledge2/*",
-    "fs:write=./lus-tests/tmp-pledge2",
-    "fs:write=./lus-tests/tmp-pledge2/*",
-    "fs:write=./lus-tests/tmp-pledge2x",
-    "fs:read=./lus-tests/tmp-pledge2x/missing-prefix*",
-    "fs:write=./lus-tests/tmp-pledge2x/missing-prefix*",
+    "fs:read=./tree/runner.lus",
+    "fs:read=./tree/suite/enum.lus*",
+    "fs:read=./tree/tmp-pledge2/*",
+    "fs:write=./tree/tmp-pledge2",
+    "fs:write=./tree/tmp-pledge2/*",
+    "fs:write=./tree/tmp-pledge2x",
+    "fs:read=./tree/tmp-pledge2x/missing-prefix*",
+    "fs:write=./tree/tmp-pledge2x/missing-prefix*",
     "fs:write=./retargeted_pledge2_link",
     "env=LUS_PLEDGE2_OK",
 }
@@ -44,16 +43,16 @@ end
 -- The files the permission tests read are created in the temporary working directory.
 isolated(function()
     pledge("fs:write=./*")
-    for _, dir in ipairs({ "lus-tests", "lus-tests/h1", "lus", "lus/src", "lus-tests/tmp-pledge2", "lus-tests/tmp-pledge2x" }) do
+    for _, dir in ipairs({ "tree", "tree/suite", "lib", "lib/src", "tree/tmp-pledge2", "tree/tmp-pledge2x" }) do
         fs.createdirectory(dir)
     end
     local files = {
         ["README.md"] = "readme\n",
-        ["lus-tests/README.md"] = "tests readme\n",
-        ["lus-tests/framework.lus"] = "return { new = function(name) return { name = name } end }\n",
-        ["lus-tests/h1/enum.lus"] = "-- enum fixture\n" .. string.rep("-- padding line\n", 10),
-        ["lus/src/lapi.h"] = "/* header */\n",
-        ["lus/src/lapi.c"] = "/* source */\n",
+        ["tree/README.md"] = "tests readme\n",
+        ["tree/runner.lus"] = "return { new = function(name) return { name = name } end }\n",
+        ["tree/suite/enum.lus"] = "-- enum fixture\n" .. string.rep("-- padding line\n", 10),
+        ["lib/src/api.h"] = "/* header */\n",
+        ["lib/src/api.c"] = "/* source */\n",
     }
     for name, content in pairs(files) do
         local f = assert(io.open(name, "w"))
@@ -99,15 +98,15 @@ end
 local function require_works_with_load_permission_test()
     with_baseline(BASE_A, function()
         -- We have load permission, so require should work
-        local ok, mod = catch require("lus-tests.framework")
+        local ok, mod = catch require("tree.runner")
         assert(ok, "require should work with load permission")
     end)
 end
 
 local function io_open_works_with_matching_fs_read_permission_test()
     with_baseline(BASE_A, function()
-        -- We have fs:read=./lus-tests/*, so reading framework.lus should work
-        local f = io.open("lus-tests/framework.lus", "r")
+        -- We have fs:read=./tree/*, so reading runner.lus should work
+        local f = io.open("tree/runner.lus", "r")
         assert(f ~= nil, "should be able to open file within permitted path")
         f:close()
     end)
@@ -146,12 +145,12 @@ local function permission_with_subpermission_test()
     with_baseline(BASE_A, function()
         -- "fs:read" has base "fs" and subpermission "read": granting the read
         -- sub must allow reading the value and must NOT allow writable modes
-        local result = pledge("fs:read=./lus-tests/README.md")
+        local result = pledge("fs:read=./tree/README.md")
         assert(result == true, "pledge should return true on success")
-        local f = io.open("lus-tests/README.md", "r")
+        local f = io.open("tree/README.md", "r")
         assert(f ~= nil, "read should be allowed after the fs:read grant")
         f:close()
-        local ok = catch io.open("lus-tests/README.md", "r+")
+        local ok = catch io.open("tree/README.md", "r+")
         assert(not ok, "fs:read grant must not allow a writable open mode")
     end)
 end
@@ -160,14 +159,14 @@ local function permission_with_glob_pattern_test()
     with_baseline(BASE_A, function()
         -- The glob value must admit matching paths and keep rejecting
         -- non-matching paths in the same directory
-        local denied = catch io.open("lus/src/lapi.h", "r")
+        local denied = catch io.open("lib/src/api.h", "r")
         assert(not denied, "header should be denied before the glob grant")
-        local result = pledge("fs:read=./lus/src/*.h")
+        local result = pledge("fs:read=./lib/src/*.h")
         assert(result == true, "pledge should return true on success")
-        local f = io.open("lus/src/lapi.h", "r")
+        local f = io.open("lib/src/api.h", "r")
         assert(f ~= nil, "path matching the glob should be readable")
         f:close()
-        local still_denied = catch io.open("lus/src/lapi.c", "r")
+        local still_denied = catch io.open("lib/src/api.c", "r")
         assert(not still_denied, "path not matching the glob must stay denied")
     end)
 end
@@ -180,7 +179,7 @@ end
 
 local function file_access_within_permitted_path_succeeds_test()
     with_baseline(BASE_A, function()
-        local f = io.open("lus-tests/h1/enum.lus", "r")
+        local f = io.open("tree/suite/enum.lus", "r")
         if f then
             local content = f:read(100)
             f:close()
@@ -249,7 +248,7 @@ end
 local function pledge_with_special_characters_in_path_succeeds_test()
     with_baseline(BASE_A, function()
         -- Paths with glob patterns (* and ?)
-        local ok, result = catch pledge("fs:read=./lus-tests/h1/*.lus")
+        local ok, result = catch pledge("fs:read=./tree/suite/*.lus")
         assert(ok, "pledge with glob pattern should succeed")
         assert(result == true, "pledge should return true")
     end)
@@ -258,7 +257,7 @@ end
 local function pledge_path_with_dots_succeeds_test()
     with_baseline(BASE_A, function()
         -- Paths with . and .. components
-        local ok, result = catch pledge("fs:read=./lus-tests/./h1/../h1/*.lus")
+        local ok, result = catch pledge("fs:read=./tree/./suite/../suite/*.lus")
         assert(ok, "pledge with dot components should succeed")
         assert(result == true, "pledge should return true")
     end)
@@ -270,26 +269,26 @@ end
 
 -- Group: integration
 
-local function framework_loads_correctly_with_pledges_test()
+local function runner_loads_correctly_with_pledges_test()
     with_baseline(BASE_A, function()
-        -- Load the framework from disk again under the active pledges,
+        -- Load the runner from disk again under the active pledges,
         -- proving fs:read and load cooperate to produce a working module
-        local f = io.open("lus-tests/framework.lus", "r")
-        assert(f ~= nil, "framework source should be readable under fs:read")
+        local f = io.open("tree/runner.lus", "r")
+        assert(f ~= nil, "runner source should be readable under fs:read")
         local src = f:read("a")
         f:close()
-        assert(type(src) == "string" and #src > 0, "framework source should be non-empty")
-        local chunk = load(src, "@lus-tests/framework.lus")
-        assert(chunk ~= nil, "framework source should compile under the load pledge")
+        assert(type(src) == "string" and #src > 0, "runner source should be non-empty")
+        local chunk = load(src, "@tree/runner.lus")
+        assert(chunk ~= nil, "runner source should compile under the load pledge")
         local fresh = chunk()
-        assert(type(fresh) == "table", "framework chunk should return a module table")
-        assert(type(fresh.new) == "function", "freshly loaded framework should expose new")
+        assert(type(fresh) == "table", "runner chunk should return a module table")
+        assert(type(fresh.new) == "function", "freshly loaded runner should expose new")
     end)
 end
 
-local function test_file_can_use_all_framework_features_test()
+local function test_file_can_use_all_runner_features_test()
     with_baseline(BASE_A, function()
-        -- Drive the framework's catch-based helpers against a live pledge
+        -- Drive the runner's catch-based helpers against a live pledge
         -- denial raised from C, so a broken helper or a vanished denial
         -- both fail here
         assert(type(pledge) == "function")
@@ -379,7 +378,7 @@ local function wildcard_heavy_fs_pattern_is_checked_in_linear_time_test()
         -- glibc/musl), so this guards the overall pledge-check path; the
         -- rewritten internal matcher (used for URL checks everywhere and for
         -- path checks on Windows) is guarded by the URL test below.
-        -- subject must live outside ./lus-tests/* (granted at the top of this
+        -- subject must live outside ./tree/* (granted at the top of this
         -- file), so the only candidate pattern is the wildcard-heavy one
         pledge("fs:read=./a*a*a*a*a*a*a*a*a*b")
         local subject = "./" .. string.rep("a", 200)
@@ -429,7 +428,7 @@ end
 local function file_reading_still_works_after_seal_with_granted_permission_test()
     with_baseline(BASE_A, function()
         pledge("seal")
-        local f = io.open("lus-tests/framework.lus", "r")
+        local f = io.open("tree/runner.lus", "r")
         if f then
             local content = f:read(10)
             f:close()
@@ -451,7 +450,7 @@ end
 
     Everything here asserts a denial or an exact return value. The suite never
     uses the network. It creates two sibling scratch directories under
-    ./lus-tests namespaced with the suite name and removes them before sealing.
+    ./tree namespaced with the suite name and removes them before sealing.
     The seal section is last because sealing is irreversible.
 ]]
 
@@ -596,8 +595,8 @@ end
 
 -- Group: filesystem gating
 
-local dir_ok = "./lus-tests/tmp-pledge2"
-local dir_sibling = "./lus-tests/tmp-pledge2x"
+local dir_ok = "./tree/tmp-pledge2"
+local dir_sibling = "./tree/tmp-pledge2x"
 local file_inside = dir_ok .. "/w_inside.txt"
 local file_dotted = dir_ok .. "/dotted.txt"
 
@@ -614,8 +613,8 @@ local function scratch_directories_can_be_created_inside_their_write_grants_test
     end)
 end
 
--- Glob boundary precision: the grant covers ./lus-tests/tmp-pledge2/* and must
--- not leak to the lexically adjacent directory ./lus-tests/tmp-pledge2x, whose
+-- Glob boundary precision: the grant covers ./tree/tmp-pledge2/* and must
+-- not leak to the lexically adjacent directory ./tree/tmp-pledge2x, whose
 -- name shares the grant's prefix. A prefix matcher would wrongly allow this.
 local function write_to_a_prefix_sharing_sibling_directory_is_denied_test()
     with_baseline(BASE_B, function()
@@ -627,7 +626,7 @@ end
 
 local function a_wildcard_suffix_stays_attached_to_an_existing_filename_test()
     with_baseline(BASE_B, function()
-        local f = io.open("./lus-tests/h1/enum.lus", "r")
+        local f = io.open("./tree/suite/enum.lus", "r")
         assert(f ~= nil)
         f:close()
     end)
@@ -649,7 +648,7 @@ end
 local function write_mode_is_denied_under_a_read_only_grant_test()
     with_baseline(BASE_B, function()
         raises(function()
-            io.open("./lus-tests/framework.lus", "w")
+            io.open("./tree/runner.lus", "w")
         end, "fs:write")
     end)
 end
@@ -658,7 +657,7 @@ end
 local function createdirectory_outside_any_write_grant_is_denied_test()
     with_baseline(BASE_B, function()
         raises(function()
-            fs.createdirectory("./lus-tests/tmp-pledge2-unpledged/child")
+            fs.createdirectory("./tree/tmp-pledge2-unpledged/child")
         end, "denied")
     end)
 end
@@ -680,7 +679,7 @@ local function a_non_canonical_path_inside_the_grant_is_allowed_test()
         assert(f ~= nil)
         f:write("dotted")
         f:close()
-        local g = io.open("./lus-tests/./tmp-pledge2/dotted.txt", "r")
+        local g = io.open("./tree/./tmp-pledge2/dotted.txt", "r")
         assert(g ~= nil)
         g:close()
     end)
@@ -739,7 +738,7 @@ end
 
 local function in_scope_reads_still_work_after_the_valueless_re_pledge_test()
     with_baseline(BASE_B, function()
-        local f = io.open("./lus-tests/framework.lus", "r")
+        local f = io.open("./tree/runner.lus", "r")
         assert(f ~= nil)
         f:close()
     end)
@@ -815,7 +814,7 @@ end
 local function a_new_grant_after_seal_returns_false_without_raising_test()
     with_baseline(BASE_B, function()
         pledge("seal")
-        local ok, result = catch pledge("fs:read=./lus-tests/tmp-pledge2/deep/*")
+        local ok, result = catch pledge("fs:read=./tree/tmp-pledge2/deep/*")
         assert(ok)
         assert(result == false)
     end)
@@ -846,7 +845,7 @@ end
 local function a_granted_read_still_works_after_seal_test()
     with_baseline(BASE_B, function()
         pledge("seal")
-        local f = io.open("./lus-tests/framework.lus", "r")
+        local f = io.open("./tree/runner.lus", "r")
         assert(f ~= nil)
         f:close()
     end)

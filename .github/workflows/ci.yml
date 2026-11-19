@@ -75,6 +75,10 @@ jobs:
       - name: Unit, embedding, and tool tests
         working-directory: runtime
         run: zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
+      - name: Debugger tests
+        if: runner.os != 'Windows'
+        working-directory: runtime
+        run: zig build test-debug -Doptimize=ReleaseSafe
       - name: Build
         working-directory: runtime
         run: zig build -Doptimize=ReleaseSafe
@@ -87,6 +91,17 @@ jobs:
         working-directory: runtime
         env:
           LUS_JIT: eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests interpreted
+        working-directory: runtime
+        env:
+          LUS_JIT: "off"
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in optimized code
+        # Every function goes through both JIT tiers on its first call.
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
         run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
       - name: Documentation examples
         working-directory: runtime

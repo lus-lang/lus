@@ -1,6 +1,6 @@
 pledge("load", "fs:read=" .. TEST_DIR .. "/fixtures/json", "fs:read=" .. TEST_DIR .. "/fixtures/json/*")
 
--- ===== ported from h1/json.lus =====
+-- ===== json =====
 -- fromjson parses null as nil
 local function fromjson_parses_null_as_nil_test()
     local result = fromjson("null")
@@ -770,7 +770,7 @@ local function deeply_nested_tables_serialize_or_fail_cleanly_test()
 end
 
 
--- ===== ported from h1/json2.lus =====
+-- ===== json2 =====
 --[[
     JSON serializer and parser semantics beyond plain syntax.
 

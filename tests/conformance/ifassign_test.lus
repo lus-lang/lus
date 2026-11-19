@@ -1,6 +1,6 @@
 pledge("load")
 
--- ===== ported from h1/ifassign.lus =====
+-- ===== ifassign =====
 --[[
   Tests for if/elseif assignment conditions in Lus
 
