@@ -180,6 +180,7 @@ pub const Global = struct {
     args: []const []const u8 = &.{},
     environ: ?*std.process.Environ.Map = null,
     warn_on: bool = false,
+    running_finalizers: bool = false,
 };
 
 // ---------------------------------------------------------------------
@@ -340,7 +341,10 @@ pub const Thread = struct {
     pub fn raiseFmt(l: *Thread, comptime fmt: []const u8, args: anytype) Error {
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(l.g.gpa);
-        l.where(&buf, 1) catch return l.raiseMem();
+        // Natives report the position of their caller. Errors raised by the
+        // interpreter itself report the running Lus function.
+        const level: usize = if (l.frames.items.len > 0 and l.frame().closure != null) 0 else 1;
+        l.where(&buf, level) catch return l.raiseMem();
         buf.print(l.g.gpa, fmt, args) catch return l.raiseMem();
         return l.raiseMsg(buf.items);
     }
@@ -361,6 +365,9 @@ pub const Thread = struct {
     }
 
     pub fn typeError(l: *Thread, v: Value, op: []const u8) Error {
+        if (@import("debug.zig").varInfo(l, v)) |vi| {
+            return l.raiseFmt("attempt to {s} a {s} value ({s} '{s}')", .{ op, l.typeNameOf(v), vi.kind, vi.name });
+        }
         return l.raiseFmt("attempt to {s} a {s} value", .{ op, l.typeNameOf(v) });
     }
 

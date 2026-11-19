@@ -51,9 +51,7 @@ pub fn index(l: *Thread, obj: Value, key: Value) Error!Value {
 }
 
 fn indexError(l: *Thread, t: Value, key: Value) Error {
-    if (key.tag == .string) {
-        return l.raiseFmt("attempt to index a {s} value (field '{s}')", .{ l.typeNameOf(t), key.as(String).bytes() });
-    }
+    _ = key;
     return l.typeError(t, "index");
 }
 

@@ -489,6 +489,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             },
 
             .call => {
+                if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) try runPendingFinalizers(l);
                 const nb = opc.b(ins);
                 const want: i32 = @as(i32, opc.c(ins)) - 1;
                 const func = c.base + ra;
@@ -916,4 +917,11 @@ fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {
     const cur = try ops.index(l, env, name);
     if (!cur.isNil()) return l.raiseFmt("global '{s}' already defined", .{name.as(String).bytes()});
     try ops.setIndex(l, env, name, v);
+}
+
+/// Runs queued `__gc` finalizers at a safe point (a call instruction).
+fn runPendingFinalizers(l: *Thread) Error!void {
+    l.g.running_finalizers = true;
+    defer l.g.running_finalizers = false;
+    try @import("../lib/base.zig").runFinalizers(l);
 }
