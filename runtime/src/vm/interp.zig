@@ -304,33 +304,35 @@ pub fn unwindTo(l: *Thread, depth: usize) void {
 /// grows by reallocation too, so `fr` and `bp` are refreshed after every
 /// operation that may run other code.
 pub const Ctx = struct {
-    fi: usize,
     fr: *Frame,
-    cl: *Closure,
+    /// The code of the running function. Its constants and its inline
+    /// caches are named by the links in front of it.
     code: [*]const u32,
-    k: [*]const Value,
-    ic: [*]object.IcEntry,
     base: u32,
     /// Pointer to register 0 of the running frame.
     bp: [*]Value,
 
     inline fn refresh(c: *Ctx, l: *Thread) void {
-        c.fr = &l.frames.items[c.fi];
+        c.fr = &l.frames.items[l.frames.items.len - 1];
         c.bp = l.stack.ptr + c.base;
+    }
+
+    pub inline fn cl(c: *const Ctx) *Closure {
+        return c.fr.closure.?;
+    }
+    pub inline fn k(c: *const Ctx) [*]const Value {
+        return object.Proto.linksOf(c.code).constants;
+    }
+    pub inline fn ic(c: *const Ctx) [*]object.IcEntry {
+        return object.Proto.linksOf(c.code).ic;
     }
 };
 
 pub inline fn load(l: *Thread) Ctx {
-    const fi = l.frames.items.len - 1;
-    const fr = &l.frames.items[fi];
-    const cl = fr.closure.?;
+    const fr = &l.frames.items[l.frames.items.len - 1];
     return .{
-        .fi = fi,
         .fr = fr,
-        .cl = cl,
-        .code = cl.proto.code.ptr,
-        .k = cl.proto.constants.ptr,
-        .ic = cl.proto.ic.ptr,
+        .code = fr.closure.?.proto.code.ptr,
         .base = fr.base,
         .bp = l.stack.ptr + fr.base,
     };
@@ -426,7 +428,7 @@ fn Loop(comptime mode: Mode) type {
         inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool) Error!Op {
             if (mode == .step) return .extraarg;
             if (hooked) {
-                try hookStep(l, c.fi, c.cl, pc.*);
+                try hookStep(l, l.frames.items.len - 1, c.cl(), pc.*);
                 c.refresh(l);
             }
             ins.* = c.code[pc.*];
@@ -465,7 +467,7 @@ fn Loop(comptime mode: Mode) type {
         /// because the counter is a store on every event.
         inline fn tier(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
             if (comptime !(jit.enabled and mode == .warm)) return;
-            const p = c.cl.proto;
+            const p = c.cl().proto;
             p.hot -%= 1;
             if (p.hot == 0) {
                 @branchHint(.unlikely);
@@ -497,7 +499,7 @@ fn Loop(comptime mode: Mode) type {
         /// over at once. Any other counts on the sampling budget.
         inline fn tierCall(l: *Thread, c: *Ctx, pc: *u32, budget: *u32) LoopError!void {
             if (comptime !(jit.enabled and mode == .warm)) return;
-            if (c.cl.proto.jit_code != null) {
+            if (c.cl().proto.jit_code != null) {
                 @branchHint(.unlikely);
                 c.fr.pc = pc.*;
                 return error.EnterJit;
@@ -510,7 +512,7 @@ fn Loop(comptime mode: Mode) type {
         inline fn tierReturn(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
             _ = l;
             if (comptime !(jit.enabled and mode == .warm)) return;
-            if (c.cl.proto.jit_code != null) {
+            if (c.cl().proto.jit_code != null) {
                 @branchHint(.unlikely);
                 c.fr.pc = pc;
                 return error.EnterJit;
@@ -524,7 +526,7 @@ fn Loop(comptime mode: Mode) type {
             if (comptime !(jit.enabled and mode == .warm)) return;
             if (count >= jit.loop_weight_min) {
                 c.fr.pc = pc;
-                if (jit.charge(l, c.cl.proto, count)) return error.EnterJit;
+                if (jit.charge(l, c.cl().proto, count)) return error.EnterJit;
             }
         }
     };
@@ -556,7 +558,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
     var ins: u32 = undefined;
     // A step runs the instruction before the saved pc, which its caller
     // set as the instruction itself would.
-    const fi0 = c.fi;
+    const fi0 = l.frames.items.len;
     const pc0 = pc;
     if (mode == .step) ins = step_ins;
     // Every case ends by dispatching the next instruction directly, which
@@ -567,7 +569,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .loadk => {
-            c.bp[opc.a(ins)] = c.k[opc.bx(ins)];
+            c.bp[opc.a(ins)] = c.k()[opc.bx(ins)];
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .loadi => {
@@ -594,23 +596,23 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
 
         .getupval => {
-            c.bp[opc.a(ins)] = c.cl.upvals()[opc.b(ins)].loc.*;
+            c.bp[opc.a(ins)] = c.cl().upvals()[opc.b(ins)].loc.*;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setupval => {
-            const u = c.cl.upvals()[opc.b(ins)];
+            const u = c.cl().upvals()[opc.b(ins)];
             u.loc.* = c.bp[opc.a(ins)];
             gc.barrierBack(l.g, &u.hdr);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .gettabup => {
-            const t = c.cl.upvals()[opc.b(ins)].loc;
-            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), t, &c.k[opc.c(ins)]);
+            const t = c.cl().upvals()[opc.b(ins)].loc;
+            try getStrOp(l, &c, pc, &c.ic()[pc - 1], opc.a(ins), t, &c.k()[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .settabup => {
-            const t = c.cl.upvals()[opc.a(ins)].loc;
-            try setStrOp(l, &c, pc, &c.ic[pc - 1], t, &c.k[opc.b(ins)], &c.bp[opc.c(ins)]);
+            const t = c.cl().upvals()[opc.a(ins)].loc;
+            try setStrOp(l, &c, pc, &c.ic()[pc - 1], t, &c.k()[opc.b(ins)], &c.bp[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .gettable => {
@@ -622,7 +624,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             if (t.tag == .table and key.tag == .integer) {
                 if (fast.getArray(t.as(Table), key.asInt(), &c.bp[a])) continue :sw try fetch(l, &c, &pc, &ins, hooked);
             } else if (key.tag == .string) {
-                try getStrOp(l, &c, pc, &c.ic[pc - 1], a, t, key);
+                try getStrOp(l, &c, pc, &c.ic()[pc - 1], a, t, key);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
@@ -632,7 +634,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .getfield => {
-            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), &c.bp[opc.b(ins)], &c.k[opc.c(ins)]);
+            try getStrOp(l, &c, pc, &c.ic()[pc - 1], opc.a(ins), &c.bp[opc.b(ins)], &c.k()[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .getindex => {
@@ -653,7 +655,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             if (t.tag == .table and key.tag == .integer) {
                 if (fast.setArray(l, t.as(Table), key.asInt(), v)) continue :sw try fetch(l, &c, &pc, &ins, hooked);
             } else if (key.tag == .string) {
-                try setStrOp(l, &c, pc, &c.ic[pc - 1], t, key, v);
+                try setStrOp(l, &c, pc, &c.ic()[pc - 1], t, key, v);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
@@ -662,7 +664,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setfield => {
-            try setStrOp(l, &c, pc, &c.ic[pc - 1], &c.bp[opc.a(ins)], &c.k[opc.b(ins)], &c.bp[opc.c(ins)]);
+            try setStrOp(l, &c, pc, &c.ic()[pc - 1], &c.bp[opc.a(ins)], &c.k()[opc.b(ins)], &c.bp[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setindex => {
@@ -684,14 +686,14 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             // triggered by this allocation must not keep their values.
             l.top = c.base + a + 1;
             const t = l.newTable(nb, nc);
-            l.top = c.base + c.cl.proto.max_stack;
+            l.top = c.base + c.cl().proto.max_stack;
             c.bp[a] = Value.obj(.table, try t);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .self => {
             const a = opc.a(ins);
             c.bp[a + 1] = c.bp[opc.b(ins)];
-            try getStrOp(l, &c, pc, &c.ic[pc - 1], a, &c.bp[a + 1], &c.k[opc.c(ins)]);
+            try getStrOp(l, &c, pc, &c.ic()[pc - 1], a, &c.bp[a + 1], &c.k()[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -727,7 +729,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             const op = comptime arithOf(o);
             const a = opc.a(ins);
             const x = &c.bp[opc.b(ins)];
-            const y = &c.k[opc.c(ins)];
+            const y = &c.k()[opc.c(ins)];
             if (x.tag == .integer and y.tag == .integer) {
                 if (op == .div) {
                     c.bp[a] = Value.float(@as(f64, @floatFromInt(x.asInt())) / @as(f64, @floatFromInt(y.asInt())));
@@ -910,7 +912,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .eqk => {
             const x = &c.bp[opc.a(ins)];
-            const y = &c.k[opc.b(ins)];
+            const y = &c.k()[opc.b(ins)];
             const r = if (x.tag == .integer and y.tag == .integer)
                 x.payload == y.payload
             else if (x.tag == .string and y.tag == .string and x.payload == y.payload)
@@ -949,12 +951,10 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 c.refresh(l);
             }
             const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
-            if (nb != 0) l.top = func + nb;
-            const callee = &l.stack[func];
-            if (callee.tag == .closure and callee.as(Closure).proto.plain_call) {
-                const cl = callee.as(Closure);
-                try enterLus(l, cl, func, nargs, want);
-                c = entered(l, cl, func + 1);
+            const callee: [*]Value = c.bp + opc.a(ins);
+            if (callee[0].tag == .closure and callee[0].as(Closure).proto.plain_call) {
+                const cl = callee[0].as(Closure);
+                c = try enterPlain(l, cl, callee, func, nargs, want);
                 pc = 0;
                 if (hooked and l.hook_mask & Thread.hook_call != 0) {
                     try callHook(l, "call", null);
@@ -963,12 +963,14 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 try tierLoop(l, &c, &pc, &budget);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
-            const kind: CallKind = if (callee.tag == .native) blk: {
-                try callNative(l, callee.as(state.Native), func, nargs, want);
+            if (nb != 0) l.top = func + nb;
+            const kind: CallKind = if (callee[0].tag == .native) blk: {
+                try callNative(l, callee[0].as(state.Native), func, nargs, want);
                 break :blk .done;
             } else try precall(l, func, nargs, want);
             if (kind == .lus) {
                 c = load(l);
+                c.fr.plain = true;
                 pc = 0;
                 if (hooked and l.hook_mask & Thread.hook_call != 0) {
                     try callHook(l, "call", null);
@@ -977,7 +979,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 try tierCall(l, &c, &pc, &budget);
             } else {
                 c.refresh(l);
-                if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
+                if (want >= 0) l.top = c.base + c.cl().proto.max_stack;
                 // A native may have set or cleared the hooks.
                 if ((l.hook_mask != 0) != hooked) return error.SwitchLoop;
             }
@@ -999,6 +1001,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 } else try precall(l, func, nargs, -1);
                 if (kind == .lus) {
                     c = load(l);
+                    c.fr.plain = true;
                     pc = 0;
                     try tierCall(l, &c, &pc, &budget);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -1037,6 +1040,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 const nf = l.frame();
                 nf.boundary = fr.boundary;
                 nf.finish = fr.finish;
+                nf.plain = fr.plain;
                 nf.tail = true;
                 c = load(l);
             }
@@ -1140,11 +1144,12 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             } else try precall(l, r + 4, 2, want);
             if (kind == .lus) {
                 c = load(l);
+                c.fr.plain = true;
                 pc = 0;
                 try tierCall(l, &c, &pc, &budget);
             } else {
                 c.refresh(l);
-                l.top = c.base + c.cl.proto.max_stack;
+                l.top = c.base + c.cl().proto.max_stack;
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -1189,21 +1194,21 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             c.fr.pc = pc;
             table.storeList(l.g.gpa, t, start, l.stack[first..][0..n]) catch return l.raiseMem();
             gc.barrierBack(l.g, &t.hdr);
-            l.top = c.base + c.cl.proto.max_stack;
+            l.top = c.base + c.cl().proto.max_stack;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .closure => {
             const a = opc.a(ins);
-            const p = c.cl.proto.protos[opc.bx(ins)];
+            const p = c.cl().proto.protos[opc.bx(ins)];
             c.fr.pc = pc;
             // Collect only once the closure is rooted in its register,
             // with the registers above it treated as dead.
-            const ncl = try makeClosure(l, p, c.cl, c.base);
+            const ncl = try makeClosure(l, p, c.cl(), c.base);
             c.refresh(l);
             c.bp[a] = Value.obj(.closure, ncl);
             l.top = c.base + a + 1;
             gc.maybeCollect(l.g);
-            l.top = c.base + c.cl.proto.max_stack;
+            l.top = c.base + c.cl().proto.max_stack;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .vararg => {
@@ -1266,7 +1271,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .newenum => {
             c.fr.pc = pc;
-            const v = try @import("ext.zig").newEnum(l, c.k[opc.bx(ins)]);
+            const v = try @import("ext.zig").newEnum(l, c.k()[opc.bx(ins)]);
             c.refresh(l);
             c.bp[opc.a(ins)] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -1274,21 +1279,21 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .query => {
             const a = opc.a(ins);
             c.fr.pc = pc;
-            const v = try @import("ext.zig").newQuery(l, c.k[opc.bx(ins)], c.base + a + 1);
+            const v = try @import("ext.zig").newQuery(l, c.k()[opc.bx(ins)], c.base + a + 1);
             c.refresh(l);
             c.bp[a] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .globaldef => {
-            const env = c.cl.upvals()[opc.a(ins)].loc.*;
+            const env = c.cl().upvals()[opc.a(ins)].loc.*;
             c.fr.pc = pc;
-            try globalDefine(l, env, c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            try globalDefine(l, env, c.k()[opc.b(ins)], c.bp[opc.c(ins)]);
             c.refresh(l);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .globaldefr => {
             c.fr.pc = pc;
-            try globalDefine(l, c.bp[opc.a(ins)], c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            try globalDefine(l, c.bp[opc.a(ins)], c.k()[opc.b(ins)], c.bp[opc.c(ins)]);
             c.refresh(l);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -1316,9 +1321,9 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .extraarg => {
             // A step ends here and reports where execution continues.
             if (mode == .step) {
-                if (c.fi == fi0 and pc == pc0) return Step.next;
+                if (l.frames.items.len == fi0 and pc == pc0) return Step.next;
                 c.fr.pc = pc;
-                return if (c.fi == fi0 and pc == pc0 + 1) Step.skip else Step.dispatch;
+                return if (l.frames.items.len == fi0 and pc == pc0 + 1) Step.skip else Step.dispatch;
             } else unreachable;
         },
     }
@@ -1383,6 +1388,49 @@ pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i3
     l.top = top;
 }
 
+/// Pushes the frame of a plain call that the `call` instruction makes to
+/// `cl`, a Lus function with fixed parameters, and returns the frame
+/// state of the callee. `slot` is the stack slot of the callee, whose
+/// index is `func`, and its `nargs` arguments follow it. Everything the
+/// push needs is read once into locals, so that the stores into the stack
+/// and the frame list force no second read.
+inline fn enterPlain(l: *Thread, cl: *Closure, slot: [*]Value, func: u32, nargs: u32, want: i32) Error!Ctx {
+    const p = cl.proto;
+    const nregs: u32 = p.max_stack;
+    const base = func + 1;
+    const top = base + nregs;
+    var regs = slot + 1;
+    if (@as(usize, top) + nargs + 8 > l.stack.len) {
+        l.top = base + nargs;
+        try l.ensure(@as(usize, nregs) + nargs + 8);
+        regs = l.stack.ptr + base;
+    }
+    var fi = l.frames.items.len;
+    if (fi == l.frames.capacity) {
+        try growFrames(l);
+        fi = l.frames.items.len;
+    }
+    // Missing parameters and the registers above the parameters start nil.
+    var r = regs + @min(nargs, @as(u32, p.num_params));
+    const end = regs + nregs;
+    while (r != end) : (r += 1) r[0] = .nil;
+    const fr: *Frame = &l.frames.items.ptr[fi];
+    // The fields a plain frame reads, written as five stores. The
+    // address a lean frame continues at stays as it is, because only a
+    // lean frame reads it.
+    fr.closure = cl;
+    fr.native = null;
+    fr.func = func;
+    fr.base = base;
+    fr.ret = func;
+    fr.want = want;
+    fr.pcWord().* = 0;
+    fr.flagsWordPtr().* = Frame.plain_flags;
+    l.frames.items.len = fi + 1;
+    l.top = top;
+    return .{ .fr = fr, .code = p.code.ptr, .base = base, .bp = regs };
+}
+
 /// Turns the running frame `fr` into the frame of a tail call to `cl`,
 /// a Lus function with fixed parameters whose `nargs` arguments are
 /// above `func`. The new frame returns in place of the old one, so it
@@ -1409,6 +1457,7 @@ inline fn enterTail(l: *Thread, fr: *Frame, cl: *Closure, func: u32, nargs: u32)
         .ret = func,
         .boundary = fr.boundary,
         .finish = fr.finish,
+        .plain = fr.plain,
         .tail = true,
     };
     l.top = top;
@@ -1418,27 +1467,24 @@ inline fn enterTail(l: *Thread, fr: *Frame, cl: *Closure, func: u32, nargs: u32)
 /// register at `base`. The caller knows all of it, so nothing is read
 /// back from the frame.
 inline fn entered(l: *Thread, cl: *Closure, base: u32) Ctx {
-    const fi = l.frames.items.len - 1;
-    const p = cl.proto;
     return .{
-        .fi = fi,
-        .fr = &l.frames.items[fi],
-        .cl = cl,
-        .code = p.code.ptr,
-        .k = p.constants.ptr,
-        .ic = p.ic.ptr,
+        .fr = &l.frames.items[l.frames.items.len - 1],
+        .code = cl.proto.code.ptr,
         .base = base,
         .bp = l.stack.ptr + base,
     };
 }
 
 /// True when the running frame can return without hooks, closing, a
-/// finish action, or leaving the loop: its caller is a Lus frame above
-/// `stop` and no open upvalue or to-be-closed variable lives in it.
+/// finish action, or leaving the loop: it is a lean or a plain frame, so
+/// its caller is a Lus frame of the same run, and no open upvalue or
+/// to-be-closed variable lives in it.
 pub inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
-    const fr = c.fr;
-    if (fr.finish.kind != .none or fr.boundary or l.hook_mask != 0) return false;
-    if (c.fi <= stop or l.frames.items[c.fi - 1].closure == null) return false;
+    _ = stop;
+    // A lean or a plain frame is no boundary, has no finish action, and
+    // returns to a Lus frame of the same run.
+    const flags = c.fr.flagsWord();
+    if (flags & Frame.short_clear != 0 or flags & Frame.short_any == 0 or l.hook_mask != 0) return false;
     if (l.open_upvals) |u| if (u.level >= c.base) return false;
     if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= c.base) return false;
     return true;
@@ -1482,7 +1528,7 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     pc.* = c.fr.pc;
     if (l.hook_mask != 0) {
         // Returning into the caller is not a new line.
-        l.hook_oldfi = c.fi;
+        l.hook_oldfi = l.frames.items.len - 1;
         l.hook_oldpc = if (pc.* > 0) pc.* - 1 else 0;
     }
     switch (fr.finish.unpack()) {
@@ -1499,7 +1545,7 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
         },
     }
     // Fixed result counts restore the caller's register window top.
-    if (fr.want >= 0) l.top = c.base + c.cl.proto.max_stack;
+    if (fr.want >= 0) l.top = c.base + c.cl().proto.max_stack;
     return false;
 }
 
@@ -1778,19 +1824,22 @@ pub const fast = struct {
     /// close. The result is the caller's frame state.
     pub inline fn finishLean(l: *Thread, c: Ctx, first: u32, n: u32) Ctx {
         const fr = c.fr;
+        // The stack and the frame list stay where they are, so the
+        // addresses the frame state holds serve for the caller as well.
+        const stack = c.bp - c.base;
         const dst = fr.ret;
         const want = fr.want;
-        if (n == 1) l.stack[dst] = l.stack[first];
-        if (want < 0) {
-            l.top = dst + n;
-        } else {
+        if (n == 1) stack[dst] = stack[first];
+        if (want > 0) {
             var i: u32 = n;
-            while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[dst + i] = .nil;
+            while (i < @as(u32, @intCast(want))) : (i += 1) stack[dst + i] = .nil;
         }
         l.frames.items.len -= 1;
-        const caller = load(l);
-        if (want >= 0) l.top = caller.base + caller.cl.proto.max_stack;
-        return caller;
+        const caller: *Frame = &(@as([*]Frame, @ptrCast(fr)) - 1)[0];
+        const p = caller.closure.?.proto;
+        const base = caller.base;
+        l.top = if (want < 0) dst + n else base + p.max_stack;
+        return .{ .fr = caller, .code = p.code.ptr, .base = base, .bp = stack + base };
     }
 };
 

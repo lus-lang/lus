@@ -255,11 +255,12 @@ const Reader = struct {
         p.plain_call = !p.is_vararg;
         p.max_stack = try r.byte();
         const ncode = try r.len();
-        p.code = try gpa.alloc(u32, ncode);
+        p.code = try object.Proto.allocCode(gpa, ncode);
         for (p.code) |*ins| ins.* = try r.fixed(u32);
         try p.initIc(gpa);
         const nk = try r.len();
         p.constants = try gpa.alloc(Value, nk);
+        p.link();
         @memset(p.constants, .nil);
         for (p.constants) |*k| k.* = try r.constant();
         const nup = try r.len();
