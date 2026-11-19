@@ -122,7 +122,7 @@ A numeral may also start with `.` when the `.` is directly followed by a digit (
 
 An underscore is a digit separator. It must sit between two digits, so `1_000_000` and `0xff_ff` are valid, while `1__0`, `1_`, and `0x_1` are malformed. Separators are removed before the value is read.
 
-A trailing `n` makes the numeral a bigint, and a trailing `d` makes it a decimal. The `n` suffix applies only to integer numerals, decimal or hexadecimal, so `1.5n`, `1e3n`, and `0x1.8n` are malformed. The `d` suffix applies only to decimal notation. In a hexadecimal numeral `d` is a digit, so `0x10d` is the integer 269. A decimal keeps exactly the digits it was written with.
+A trailing `n` makes the numeral a bigint, and a trailing `d` makes it a decimal. The `n` suffix applies only to integer numerals, decimal or hexadecimal, so `1.5n`, `1e3n`, and `0x1.8n` are malformed. The `d` suffix applies only to decimal notation. In a hexadecimal numeral `d` is a digit, so `0x10d` is the integer 269. A decimal keeps exactly the digits it was written with. Its exponent must fit in 32 bits, so `1e2147483647d` and `1e-2147483648d` are valid while `1e2147483648d` is malformed. **Tested** (`exact_literals_test.lus`): the bigint and decimal forms of the table below, digit separators in both, `0xffd` as an integer, the malformed forms `1.5n`, `1e3n`, `.5n`, `0x1.8n`, `0x1p4n`, `0x1p4d`, `1nn`, `1nd`, `1dn`, `1N`, `1.5D`, `1d5`, `1_n`, `1_d`, and `1ed`, and a round trip through `string.dump`.
 
 The accepted forms after validation are:
 

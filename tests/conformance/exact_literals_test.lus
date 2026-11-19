@@ -1,0 +1,141 @@
+-- Bigint and decimal literals (spec/language/grammar.md section 1.5 and
+-- acquis 36). Each case goes through load so that a malformed literal is
+-- a compile error the test can inspect.
+pledge("load")
+
+local function eval(src)
+    local f, err = load("return " .. src)
+    assert(f, err)
+    return f()
+end
+
+local function malformed(src)
+    local f, err = load("return " .. src, "=lit")
+    assert(f == nil, src .. " should not compile")
+    assert(err == "lit:1: malformed number near '" .. src .. "'", err)
+end
+
+-- Group: bigint literals
+
+local function an_n_suffix_makes_a_bigint_test()
+    local cases = {
+        { "123n", "123" },
+        { "0n", "0" },
+        { "007n", "7" },
+        { "0xffn", "255" },
+        { "0XFFn", "255" },
+        { "0xff_ffn", "65535" },
+        { "1_000n", "1000" },
+        { "12345678901234567890123n", "12345678901234567890123" },
+        { "9223372036854775808n", "9223372036854775808" },
+        { "0x10000000000000000n", "18446744073709551616" },
+    }
+    for _, c in ipairs(cases) do
+        local v = eval(c[1])
+        assert(math.type(v) == "bigint", c[1])
+        assert(tostring(v) == c[2], c[1] .. " printed " .. tostring(v))
+    end
+end
+
+local function bigint_literals_compare_by_value_test()
+    assert(123n == 123)
+    assert(0xffn == 255)
+    assert(1n == 1.0)
+    assert(-5n == -5)
+    assert(tostring(-9223372036854775808n) == "-9223372036854775808")
+    assert(tostring(2n ^ 100) == "1267650600228229401496703205376")
+    -- An unsuffixed literal past 64 bits is a float, as in Lua.
+    assert(math.type(9223372036854775808) == "float")
+end
+
+-- Group: decimal literals
+
+local function a_d_suffix_makes_a_decimal_that_keeps_its_digits_test()
+    local cases = {
+        { "1.50d", "1.50" },
+        { "1e-2d", "0.01" },
+        { "3d", "3" },
+        { "1.d", "1" },
+        { ".5d", "0.5" },
+        { "0.0d", "0.0" },
+        { "1e3d", "1000" },
+        { "1E+3d", "1000" },
+        { "1.e5d", "100000" },
+        { "1_000.000_1d", "1000.0001" },
+        { "123456789012345678901234567890.123456789d", "123456789012345678901234567890.123456789" },
+    }
+    for _, c in ipairs(cases) do
+        local v = eval(c[1])
+        assert(math.type(v) == "decimal", c[1])
+        assert(tostring(v) == c[2], c[1] .. " printed " .. tostring(v))
+    end
+end
+
+local function decimal_literals_compare_by_value_test()
+    assert(1.50d == 1.5d)
+    assert(1.0d == 1n)
+    assert(0.1d + 0.2d == 0.3d)
+    assert(0.5d == 0.5)
+    assert(0.1d ~= 0.1)
+    local t = {}
+    t[1] = "one"
+    assert(t[1d] == "one" and t[1.00d] == "one" and t[1n] == "one")
+end
+
+local function decimal_exponents_reach_the_32_bit_range_test()
+    assert(tostring(eval("1e2147483647d")) == "1e+2147483647")
+    assert(tostring(eval("1e-2147483648d")) == "1e-2147483648")
+    malformed("1e2147483648d")
+    malformed("1e-2147483649d")
+end
+
+-- Group: suffix rules
+
+-- In a hexadecimal numeral `d` is a digit, so a hexadecimal decimal does
+-- not exist and the letter extends the integer.
+local function d_is_a_hexadecimal_digit_test()
+    assert(math.type(0xffd) == "integer" and 0xffd == 4093)
+    assert(0x10d == 269)
+end
+
+local function invalid_suffixed_forms_are_malformed_test()
+    local forms = {
+        -- `n` applies only to integer numerals.
+        "1.5n", "1e3n", ".5n", "0x1.8n", "0x1p4n",
+        -- `d` applies only to decimal notation, and a hexadecimal float takes
+        -- no suffix.
+        "0x1p4d",
+        -- One suffix, lowercase, at the very end.
+        "1nn", "1nd", "1dn", "1.5dd", "1N", "1.5D", "1d5", "1n5", "0n1",
+        -- Separators sit between two digits.
+        "1__0n", "1_n", "1n_", "0x_1n", "1_d", "1._5d", "1_.5d",
+        -- An exponent needs digits.
+        "1ed",
+    }
+    for _, src in ipairs(forms) do
+        malformed(src)
+    end
+end
+
+-- Group: literals in compiled code
+
+local function literals_survive_a_binary_chunk_round_trip_test()
+    local f = assert(load("return 1.50d, 0xffn, 12345678901234567890123n, 1e-2d, -7n"))
+    local g = assert(load(string.dump(f)))
+    local a, b, c, d, e = g()
+    assert(tostring(a) == "1.50" and math.type(a) == "decimal")
+    assert(tostring(b) == "255" and math.type(b) == "bigint")
+    assert(tostring(c) == "12345678901234567890123")
+    assert(tostring(d) == "0.01")
+    assert(e == -7 and math.type(e) == "bigint")
+end
+
+local function literals_in_a_hot_loop_keep_their_subtype_test()
+    local sum, total = 0n, 0d
+    for _ = 1, 200 do
+        sum = sum + 0xffn
+        total = total + 0.05d
+    end
+    assert(math.type(sum) == "bigint" and sum == 51000)
+    assert(math.type(total) == "decimal" and tostring(total) == "10.00")
+end

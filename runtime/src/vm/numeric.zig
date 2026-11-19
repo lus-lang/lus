@@ -254,7 +254,7 @@ pub fn decimalToString(gpa: Allocator, d: *const Decimal) ![]u8 {
             try out.appendNTimes(gpa, '0', @intCast(e));
         }
     } else {
-        const frac: usize = @intCast(-e);
+        const frac: usize = @intCast(-@as(i64, e));
         if (frac > 40 and frac > digits.len + 20) {
             try out.print(gpa, "{s}e{d}", .{ digits, e });
         } else if (digits.len > frac) {
