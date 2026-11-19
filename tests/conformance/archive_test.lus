@@ -1,0 +1,742 @@
+
+pledge("load")
+
+-- The compressors return vectors in Lus 2.0 (spec/design/strings.md), so these
+-- helpers turn byte data into vectors and compare vectors through hex text.
+local function bytes(x)
+    if type(x) == "string" then return vector.fromstring(x) end
+    return x
+end
+
+local function hex(x)
+    return string.transcode(bytes(x), "binary", "hex")
+end
+
+-- The first n bytes of a vector as a new vector.
+local function head(v, n)
+    local c = vector.clone(v)
+    vector.resize(c, n)
+    return c
+end
+
+-- A new vector holding the bytes of every argument in order.
+local function join(...)
+    local parts = {...}
+    local total = 0
+    for i, p in ipairs(parts) do
+        parts[i] = bytes(p)
+        total = total + #parts[i]
+    end
+    local out = vector.create(total)
+    local at = 0
+    for _, p in ipairs(parts) do
+        for i = 0, #p - 1 do
+            vector.set(out, at + i, vector.get(p, i))
+        end
+        at = at + #p
+    end
+    return out
+end
+
+
+local sample = "Hello, World! This is a test of the compression library. " ..
+               "We need enough data to make compression meaningful. " ..
+               string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+
+local empty = ""
+
+-- ===================================================================
+-- Gzip
+-- ===================================================================
+
+-- Group: vector.archive.gzip.
+
+local function gzip_roundtrip_string_test()
+    local compressed = vector.archive.gzip.compress(sample)
+    assert(type(compressed) == "vector")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.gzip.decompress(compressed)
+    assert(vector.tostring(decompressed) == sample)
+end
+
+local function gzip_roundtrip_vector_test()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.gzip.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.gzip.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample)
+end
+
+local function gzip_empty_data_test()
+    local compressed = vector.archive.gzip.compress(empty)
+    local decompressed = vector.archive.gzip.decompress(compressed)
+    assert(vector.tostring(decompressed) == empty)
+end
+
+local function gzip_compression_levels_test()
+    local c0 = vector.archive.gzip.compress(sample, 0)
+    local c9 = vector.archive.gzip.compress(sample, 9)
+    -- Both should decompress correctly
+    assert(vector.tostring(vector.archive.gzip.decompress(c0)) == sample)
+    assert(vector.tostring(vector.archive.gzip.decompress(c9)) == sample)
+    -- Level 9 should be at least as small as level 0
+    assert(#c9 <= #c0)
+end
+
+local function gzip_invalid_data_test()
+    raises(function()
+        vector.archive.gzip.decompress("not valid gzip data!!")
+    end)
+end
+
+local function gzip_invalid_level_test()
+    raises(function()
+        vector.archive.gzip.compress(sample, 10)
+    end)
+end
+
+-- ===================================================================
+-- Deflate
+-- ===================================================================
+
+-- Group: vector.archive.deflate.
+
+local function deflate_roundtrip_string_test()
+    local compressed = vector.archive.deflate.compress(sample)
+    assert(type(compressed) == "vector")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.deflate.decompress(compressed)
+    assert(vector.tostring(decompressed) == sample)
+end
+
+local function deflate_roundtrip_vector_test()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.deflate.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.deflate.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample)
+end
+
+local function deflate_empty_data_test()
+    local compressed = vector.archive.deflate.compress(empty)
+    local decompressed = vector.archive.deflate.decompress(compressed)
+    assert(vector.tostring(decompressed) == empty)
+end
+
+local function deflate_compression_levels_test()
+    local c1 = vector.archive.deflate.compress(sample, 1)
+    local c9 = vector.archive.deflate.compress(sample, 9)
+    assert(vector.tostring(vector.archive.deflate.decompress(c1)) == sample)
+    assert(vector.tostring(vector.archive.deflate.decompress(c9)) == sample)
+    assert(#c9 <= #c1)
+end
+
+-- ===================================================================
+-- Zstandard
+-- ===================================================================
+
+-- Group: vector.archive.zstd.
+
+local function zstd_roundtrip_string_test()
+    local compressed = vector.archive.zstd.compress(sample)
+    assert(type(compressed) == "vector")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.zstd.decompress(compressed)
+    assert(vector.tostring(decompressed) == sample)
+end
+
+local function zstd_roundtrip_vector_test()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.zstd.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.zstd.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample)
+end
+
+local function zstd_empty_data_test()
+    local compressed = vector.archive.zstd.compress(empty)
+    local decompressed = vector.archive.zstd.decompress(compressed)
+    assert(vector.tostring(decompressed) == empty)
+end
+
+local function zstd_compression_levels_test()
+    local c1 = vector.archive.zstd.compress(sample, 1)
+    local c19 = vector.archive.zstd.compress(sample, 19)
+    assert(vector.tostring(vector.archive.zstd.decompress(c1)) == sample)
+    assert(vector.tostring(vector.archive.zstd.decompress(c19)) == sample)
+    assert(#c19 <= #c1)
+end
+
+local function zstd_invalid_data_test()
+    raises(function()
+        vector.archive.zstd.decompress("not valid zstd data!!")
+    end)
+end
+
+-- ===================================================================
+-- Brotli
+-- ===================================================================
+
+-- Group: vector.archive.brotli.
+
+local function brotli_roundtrip_string_test()
+    local compressed = vector.archive.brotli.compress(sample)
+    assert(type(compressed) == "vector")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(vector.tostring(decompressed) == sample)
+end
+
+local function brotli_roundtrip_vector_test()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.brotli.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample)
+end
+
+local function brotli_empty_data_test()
+    local compressed = vector.archive.brotli.compress(empty)
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(vector.tostring(decompressed) == empty)
+end
+
+local function brotli_quality_levels_test()
+    local c0 = vector.archive.brotli.compress(sample, 0)
+    local c11 = vector.archive.brotli.compress(sample, 11)
+    assert(vector.tostring(vector.archive.brotli.decompress(c0)) == sample)
+    assert(vector.tostring(vector.archive.brotli.decompress(c11)) == sample)
+    assert(#c11 <= #c0)
+end
+
+local function brotli_lgwin_parameter_test()
+    local compressed = vector.archive.brotli.compress(sample, 6, 10)
+    local decompressed = vector.archive.brotli.decompress(compressed)
+    assert(vector.tostring(decompressed) == sample)
+end
+
+local function brotli_invalid_data_test()
+    raises(function()
+        vector.archive.brotli.decompress("not valid brotli data!!")
+    end)
+end
+
+-- ===================================================================
+-- LZ4
+-- ===================================================================
+
+-- Group: vector.archive.lz4.
+
+local function lz4_roundtrip_string_test()
+    local compressed = vector.archive.lz4.compress(sample)
+    assert(type(compressed) == "vector")
+    assert(#compressed < #sample, "compressed should be smaller")
+    local decompressed = vector.archive.lz4.decompress(compressed)
+    assert(vector.tostring(decompressed) == sample)
+end
+
+local function lz4_roundtrip_vector_test()
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local compressed = vector.archive.lz4.compress(v)
+    assert(type(compressed) == "vector")
+    local decompressed = vector.archive.lz4.decompress(compressed)
+    assert(type(decompressed) == "vector")
+    assert(#decompressed == #sample)
+    local result = vector.unpack(decompressed, 0, "c" .. #sample)
+    assert(result == sample)
+end
+
+local function lz4_empty_data_test()
+    local compressed = vector.archive.lz4.compress(empty)
+    local decompressed = vector.archive.lz4.decompress(compressed)
+    assert(vector.tostring(decompressed) == empty)
+end
+
+local function lz4_compression_levels_test()
+    local c1 = vector.archive.lz4.compress(sample, 1)
+    local c12 = vector.archive.lz4.compress(sample, 12)
+    assert(vector.tostring(vector.archive.lz4.decompress(c1)) == sample)
+    assert(vector.tostring(vector.archive.lz4.decompress(c12)) == sample)
+end
+
+local function lz4_decompress_hc_decodes_the_legacy_frame_format_test()
+    -- Hand-built legacy frame: magic 0x184C2102 little endian, one block
+    -- (4-byte little-endian size) holding an LZ4 block of pure literals
+    local payload = "Hello legacy"
+    local block = join(string.pack("B", #payload << 4), payload)
+    local legacy = join(string.pack("<I4", 0x184C2102), string.pack("<I4", #block), block)
+    local decompressed = vector.archive.lz4.decompress_hc(bytes(legacy))
+    assert(vector.tostring(decompressed) == payload)
+end
+
+local function lz4_invalid_data_test()
+    raises(function()
+        vector.archive.lz4.decompress("not valid lz4 data!!")
+    end)
+end
+
+-- ===================================================================
+-- Cross-format checks
+-- ===================================================================
+
+-- Group: cross-format.
+
+local function different_formats_produce_different_output_test()
+    local gz = vector.archive.gzip.compress(sample)
+    local df = vector.archive.deflate.compress(sample)
+    local zs = vector.archive.zstd.compress(sample)
+    local br = vector.archive.brotli.compress(sample)
+    local lz = vector.archive.lz4.compress(sample)
+    -- All should be different from each other (different headers/formats)
+    assert(gz ~= df)
+    assert(gz ~= zs)
+    assert(zs ~= br)
+    assert(br ~= lz)
+end
+
+local function type_argument_validation_test()
+    raises(function()
+        vector.archive.gzip.compress(true)
+    end)
+end
+
+
+-- Archive robustness suite for vector.archive.{gzip,deflate,zstd,brotli,lz4}.
+-- The existing archive.lus covers clean-input happy paths. This file attacks
+-- the codecs with hostile and boundary inputs: truncated streams, single bit
+-- flips in header and body regions, trailing garbage, cross-format confusion,
+-- multi-member gzip, incompressible data, decompression bombs, level bounds,
+-- full 256-value binary roundtrips, and input immutability. Every corruption
+-- case must resolve to a catchable error or wrong data and must never crash
+-- the process, which is what makes these tests able to fail.
+
+
+
+
+-- A compressible sample with enough redundancy that every codec shrinks it.
+local sample = "Hello, World! This is a test of the compression library. " ..
+               "We need enough data to make compression meaningful. " ..
+               string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+
+-- The full set of codec names for table-driven matrices.
+local all_codecs = {"gzip", "deflate", "zstd", "brotli", "lz4"}
+
+-- Flip a single bit at a 1-based byte position, returning a new vector. Used to
+-- inject deterministic corruption rather than relying on randomness.
+local function flip_bit(v, pos, bit)
+    local c = vector.clone(v)
+    vector.set(c, pos - 1, vector.get(c, pos - 1) ~ (1 << bit))
+    return c
+end
+
+-- Build a vector containing every one of the 256 byte values, repeated so the
+-- window has cross-references to exercise. This includes embedded NUL bytes.
+local function all_bytes_vector()
+    local v = vector.create(1024)
+    for i = 0, 1023 do
+        vector.set(v, i, i % 256)
+    end
+    return v
+end
+
+local all_bytes = all_bytes_vector()
+
+-- ===================================================================
+-- Full 256-value binary roundtrips
+-- ===================================================================
+
+-- Group: binary roundtrips.
+
+local all_256_byte_values_roundtrip_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function all_256_byte_values_roundtrip_test(codec)
+    local comp = vector.archive[codec].compress(all_bytes)
+    local dec = vector.archive[codec].decompress(comp)
+    assert(#dec == #all_bytes)
+    assert(hex(dec) == hex(all_bytes))
+end
+
+local embedded_nul_bytes_survive_the_string_path_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function embedded_nul_bytes_survive_the_string_path_test(codec)
+    -- A C-string truncation bug in the string path would drop everything after
+    -- the first NUL, so the recovered length is the discriminating assertion.
+    local payload = "start\0middle\0\0\0tail\0"
+    local comp = vector.archive[codec].compress(payload)
+    local dec = vector.archive[codec].decompress(comp)
+    assert(#dec == #payload)
+    assert(hex(dec) == hex(payload))
+end
+
+-- ===================================================================
+-- Empty input handling
+-- ===================================================================
+
+-- Group: empty input.
+
+local empty_string_compresses_to_a_valid_decompressible_stream_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function empty_string_compresses_to_a_valid_decompressible_stream_test(codec)
+    local comp = vector.archive[codec].compress("")
+    assert(type(comp) == "vector")
+    assert(#comp > 0, codec .. " empty input still produces a framed stream")
+    local dec = vector.archive[codec].decompress(comp)
+    assert(#dec == 0)
+    assert(vector.tostring(dec) == "")
+end
+
+local empty_vector_roundtrips_preserving_type_and_zero_length_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function empty_vector_roundtrips_preserving_type_and_zero_length_test(codec)
+    local ev = vector.create(0, true)
+    local comp = vector.archive[codec].compress(ev)
+    assert(type(comp) == "vector")
+    local dec = vector.archive[codec].decompress(comp)
+    assert(type(dec) == "vector")
+    assert(#dec == 0)
+end
+
+local decompressing_an_empty_input_errors_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function decompressing_an_empty_input_errors_test(codec)
+    -- An empty string is not a valid framed stream for any codec.
+    raises(function()
+        vector.archive[codec].decompress("")
+    end)
+end
+
+-- ===================================================================
+-- Truncated streams
+-- ===================================================================
+
+-- Group: truncation.
+
+-- Cut a valid stream at several fractions and require a clean catchable error
+-- rather than a crash or a silent partial result. Truncation is the most common
+-- real-world corruption.
+local truncated_stream_errors_cleanly_cases = {
+    {"gzip", 0.25}, {"gzip", 0.5}, {"gzip", 0.75},
+    {"deflate", 0.25}, {"deflate", 0.5}, {"deflate", 0.75},
+    {"zstd", 0.25}, {"zstd", 0.5}, {"zstd", 0.75},
+    {"brotli", 0.25}, {"brotli", 0.5}, {"brotli", 0.75},
+    {"lz4", 0.25}, {"lz4", 0.5}, {"lz4", 0.75},
+}
+
+local function truncated_stream_errors_cleanly_test(codec, frac)
+    local comp = vector.archive[codec].compress(sample)
+    local cut = math.floor(#comp * frac)
+    local trunc = head(comp, cut)
+    raises(function()
+        vector.archive[codec].decompress(trunc)
+    end)
+end
+
+-- ===================================================================
+-- Trailing garbage after a valid stream (behavior pinned per codec)
+-- ===================================================================
+
+-- Group: trailing garbage.
+
+-- gzip, deflate, brotli, and lz4 decode the complete stream and ignore any
+-- bytes past its end, returning the original payload.
+local trailing_garbage_is_ignored_payload_recovered_cases = {
+    {"gzip"}, {"deflate"}, {"brotli"}, {"lz4"},
+}
+
+local function trailing_garbage_is_ignored_payload_recovered_test(codec)
+    local comp = vector.archive[codec].compress(sample)
+    local dec = vector.archive[codec].decompress(join(comp, "GARBAGE!!"))
+    assert(vector.tostring(dec) == sample)
+end
+
+local function zstd_rejects_trailing_garbage_after_a_complete_frame_test()
+    -- The zstd decoder consumes the whole input and treats leftover bytes as a
+    -- malformed second frame.
+    local comp = vector.archive.zstd.compress(sample)
+    raises(function()
+        vector.archive.zstd.decompress(join(comp, "GARBAGE!!"))
+    end)
+end
+
+-- ===================================================================
+-- Multi-member gzip
+-- ===================================================================
+
+-- Group: multi-member gzip.
+
+local function two_concatenated_gzip_members_decode_to_the_first_member_test()
+    -- RFC 1952 permits concatenated members. This runtime returns the first
+    -- member and stops, so the recovered payload equals a single sample.
+    local member = vector.archive.gzip.compress(sample)
+    local dec = vector.archive.gzip.decompress(join(member, member))
+    assert(#dec == #sample)
+    assert(vector.tostring(dec) == sample)
+end
+
+-- ===================================================================
+-- Cross-format confusion
+-- ===================================================================
+
+-- Group: cross-format confusion.
+
+-- Feeding a stream from one codec to another decoder must error, never
+-- half-succeed. gzip is deflate plus a header and trailer, so the deflate and
+-- gzip pairing is the sharpest case.
+local wrong_decoder_for_a_valid_stream_errors_cases = {
+    {"deflate", "gzip"}, {"gzip", "deflate"},
+    {"zstd", "gzip"}, {"brotli", "gzip"}, {"lz4", "gzip"},
+    {"gzip", "zstd"}, {"deflate", "brotli"}, {"brotli", "lz4"},
+}
+
+local function wrong_decoder_for_a_valid_stream_errors_test(decoder, producer)
+    local data = vector.archive[producer].compress(sample)
+    raises(function()
+        vector.archive[decoder].decompress(data)
+    end)
+end
+
+-- ===================================================================
+-- Single bit flips (must never crash)
+-- ===================================================================
+
+-- Group: bit flips.
+
+-- Flip one bit in header, body, and tail regions. The only hard invariant for
+-- all codecs is non-crash: decompress either raises or returns a string. A
+-- segfault would take down the whole test process and fail the suite.
+local a_single_bit_flip_never_crashes_the_decoder_cases = {
+    {"gzip", "header"}, {"gzip", "body"}, {"gzip", "tail"},
+    {"deflate", "header"}, {"deflate", "body"}, {"deflate", "tail"},
+    {"zstd", "header"}, {"zstd", "body"}, {"zstd", "tail"},
+    {"brotli", "header"}, {"brotli", "body"}, {"brotli", "tail"},
+    {"lz4", "header"}, {"lz4", "body"}, {"lz4", "tail"},
+}
+
+local function a_single_bit_flip_never_crashes_the_decoder_test(codec, region)
+    local comp = vector.archive[codec].compress(sample)
+    local n = #comp
+    local pos
+    if region == "header" then
+        pos = 2
+    elseif region == "body" then
+        pos = math.floor(n / 2)
+    else
+        pos = n
+    end
+    if pos < 1 then pos = 1 end
+    local corrupt = flip_bit(comp, pos, 3)
+    local ok, res = catch vector.archive[codec].decompress(corrupt)
+    if ok then
+        assert(type(res) == "vector")
+    end
+end
+
+-- Codecs that carry magic bytes must reject a corrupted magic. deflate has no
+-- header magic and brotli has no fixed magic byte, so only these three qualify.
+local corrupted_magic_byte_is_rejected_cases = {
+    {"gzip"}, {"zstd"}, {"lz4"},
+}
+
+local function corrupted_magic_byte_is_rejected_test(codec)
+    local comp = vector.archive[codec].compress(sample)
+    local corrupt = flip_bit(comp, 1, 3)
+    raises(function()
+        vector.archive[codec].decompress(corrupt)
+    end)
+end
+
+local function gzip_crc32_rejects_a_corrupted_body_byte_test()
+    -- The gzip spec validates the CRC32 checksum, so a flipped deflate-body byte
+    -- must be caught even though the byte still decodes to some data.
+    local comp = vector.archive.gzip.compress(sample)
+    local corrupt = flip_bit(comp, math.floor(#comp / 2), 3)
+    raises(function()
+        vector.archive.gzip.decompress(corrupt)
+    end)
+end
+
+-- ===================================================================
+-- Incompressible input
+-- ===================================================================
+
+-- Group: incompressible input.
+
+-- Already-compressed high-entropy bytes exercise the output-larger-than-input
+-- buffer path that the shrink-only happy path never touches.
+local incompressible_input_roundtrips_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function incompressible_input_roundtrips_test(codec)
+    local incompressible = vector.archive.zstd.compress(all_bytes, 19)
+    local comp = vector.archive[codec].compress(incompressible)
+    local dec = vector.archive[codec].decompress(comp)
+    assert(hex(dec) == hex(incompressible))
+end
+
+-- ===================================================================
+-- Decompression bomb (bounded expansion)
+-- ===================================================================
+
+-- Group: decompression bomb.
+
+-- A few kilobytes of compressed zeros expand to four megabytes. Each codec must
+-- either succeed with the exact expanded size or fail cleanly, never crash.
+local highly_compressible_input_expands_to_the_correct_size_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function highly_compressible_input_expands_to_the_correct_size_test(codec)
+    local zeros = string.rep("\0", 4 * 1024 * 1024)
+    local comp = vector.archive[codec].compress(zeros)
+    assert(#comp < #zeros, codec .. " should compress a run of zeros tightly")
+    local ok, dec = catch vector.archive[codec].decompress(comp)
+    if ok then
+        assert(#dec == #zeros)
+        assert(vector.get(dec, 0) == 0)
+        assert(vector.get(dec, #dec - 1) == 0)
+    end
+end
+
+-- ===================================================================
+-- Compression level bounds
+-- ===================================================================
+
+-- Group: level bounds.
+
+-- Documented boundary levels must compress and roundtrip.
+local boundary_levels_roundtrip_cases = {
+    {"gzip", 0}, {"gzip", 9},
+    {"deflate", 0}, {"deflate", 9},
+    {"zstd", -7}, {"zstd", 22},
+    {"brotli", 0}, {"brotli", 11},
+    {"lz4", 1}, {"lz4", 12},
+}
+
+local function boundary_levels_roundtrip_test(codec, level)
+    local comp = vector.archive[codec].compress(sample, level)
+    local dec = vector.archive[codec].decompress(comp)
+    assert(vector.tostring(dec) == sample)
+end
+
+local function brotli_window_boundaries_roundtrip_test()
+    local lo = vector.archive.brotli.compress(sample, 6, 10)
+    local hi = vector.archive.brotli.compress(sample, 6, 24)
+    assert(vector.tostring(vector.archive.brotli.decompress(lo)) == sample)
+    assert(vector.tostring(vector.archive.brotli.decompress(hi)) == sample)
+end
+
+-- Out-of-range levels must be rejected rather than silently clamped.
+local out_of_range_levels_error_cases = {
+    {"gzip", -1}, {"gzip", 10},
+    {"deflate", -1}, {"deflate", 10},
+    {"zstd", 23}, {"zstd", 100},
+    {"brotli", -1}, {"brotli", 12},
+    {"lz4", 0}, {"lz4", 13}, {"lz4", -1},
+}
+
+local function out_of_range_levels_error_test(codec, level)
+    raises(function()
+        vector.archive[codec].compress(sample, level)
+    end)
+end
+
+local out_of_range_brotli_window_sizes_error_cases = {
+    {9}, {25},
+}
+
+local function out_of_range_brotli_window_sizes_error_test(lgwin)
+    raises(function()
+        vector.archive.brotli.compress(sample, 6, lgwin)
+    end)
+end
+
+local function a_non_numeric_string_level_errors_test()
+    raises(function()
+        vector.archive.gzip.compress(sample, "notanumber")
+    end)
+end
+
+-- ===================================================================
+-- Argument type validation
+-- ===================================================================
+
+-- Group: argument validation.
+
+local compressing_an_uncoercible_value_errors_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function compressing_an_uncoercible_value_errors_test(codec)
+    -- Booleans, nil, and tables cannot be read as bytes.
+    raises(function()
+        vector.archive[codec].compress(true)
+    end)
+    raises(function()
+        vector.archive[codec].compress(nil)
+    end)
+    raises(function()
+        vector.archive[codec].compress({})
+    end)
+end
+
+local decompressing_a_non_byte_value_errors_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function decompressing_a_non_byte_value_errors_test(codec)
+    raises(function()
+        vector.archive[codec].decompress(true)
+    end)
+    raises(function()
+        vector.archive[codec].decompress(nil)
+    end)
+end
+
+-- ===================================================================
+-- Input immutability
+-- ===================================================================
+
+-- Group: input immutability.
+
+-- Compressing a vector must read it without mutating its bytes.
+local compress_does_not_mutate_the_input_vector_cases = {
+    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+}
+
+local function compress_does_not_mutate_the_input_vector_test(codec)
+    local v = vector.create(#sample, true)
+    vector.pack(v, 0, "c" .. #sample, sample)
+    local before = vector.unpack(v, 0, "c" .. #sample)
+    vector.archive[codec].compress(v)
+    local after = vector.unpack(v, 0, "c" .. #sample)
+    assert(before == after, codec .. " compress must not alter the input vector")
+end
+

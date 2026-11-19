@@ -1,0 +1,913 @@
+--[[
+  Tests for the `time` module: instant, duration, and zoned datetime types.
+
+  Covers construction, exact vs. calendar identity, arithmetic and comparison
+  metamethods, civil-field extraction across a leap year and a pre-1970 epoch,
+  formatting/ISO output, and monotonic clock behaviour.
+]]
+
+
+pledge("load")
+
+
+-- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
+local REF = 1782998100
+
+local function instant_construction_and_epoch_round_trip_test()
+    local i = time.instant(REF)
+    assert(i:epoch() == REF)
+    assert(i:iso() == "2026-07-02T13:15:00Z", "iso mismatch: " .. i:iso())
+end
+
+local function instant_duration_is_exact_seconds_test()
+    local i = time.instant(REF)
+    local later = i + time.hours(72)
+    assert(later:epoch() == REF + 72 * 3600)
+    assert((later - i):seconds() == 259200.0)
+end
+
+local function instant_instant_yields_a_duration_test()
+    local a = time.instant(100)
+    local b = time.instant(250)
+    assert((b - a):seconds() == 150.0)
+end
+
+local function instant_comparisons_test()
+    local a = time.instant(100)
+    local b = time.instant(200)
+    assert(a < b, "a < b")
+    assert(a <= a)
+    assert(a == time.instant(100))
+    assert(not (b < a), "not b < a")
+end
+
+local function duration_constructor_sums_fields_test()
+    local d = time.duration{ hours = 1, minutes = 30 }
+    assert(d:seconds() == 5400.0)
+end
+
+local function duration_scalar_helpers_test()
+    assert(time.days(1):seconds() == 86400.0)
+    assert(time.minutes(2):seconds() == 120.0)
+    assert(time.millis(1500):millis() == 1500.0)
+end
+
+local function duration_arithmetic_and_scaling_test()
+    local d = time.minutes(30) + time.minutes(30)
+    assert(d:seconds() == 3600.0)
+    assert((time.seconds(10) * 3):seconds() == 30.0)
+    assert((-time.seconds(5)):seconds() == -5.0)
+end
+
+local function positive_duration_parts_test()
+    local p = time.minutes(90):parts()
+    assert(p.negative == false)
+    assert(p.hours == 1 and p.minutes == 30)
+end
+
+local function negative_duration_parts_test()
+    local p = time.seconds(-90):parts()
+    assert(p.negative == true)
+    assert(p.minutes == 1 and p.seconds == 30)
+end
+
+local function zoned_fields_and_offset_test()
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                           minute = 15 }, -4 * 3600)
+    assert(z.year == 2026 and z.month == 7 and z.day == 2)
+    assert(z.hour == 9 and z.minute == 15)
+    assert(z.weekday == time.weekday.thursday)
+    assert(z.yearday == 183)
+    assert(z.offset == -4 * 3600)
+    assert(z:iso() == "2026-07-02T09:15:00-04:00", "zoned iso: " .. z:iso())
+end
+
+local function zoned_collapses_to_the_correct_utc_instant_test()
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                           minute = 15 }, -4 * 3600)
+    assert(z:instant():iso() == "2026-07-02T13:15:00Z")
+end
+
+local function leap_year_feb_29_civil_round_trip_test()
+    local z = time.zoned{ year = 2024, month = 2, day = 29 }
+    assert(z.year == 2024 and z.month == 2 and z.day == 29)
+end
+
+local function pre_1970_negative_epoch_fields_test()
+    local i = time.instant(-1)  -- 1969-12-31T23:59:59Z
+    assert(i:iso() == "1969-12-31T23:59:59Z", "negative epoch iso: " .. i:iso())
+end
+
+local function strftime_formatting_test()
+    local i = time.instant(REF)
+    assert(i:format("%Y-%m-%d") == "2026-07-02")
+end
+
+local function monotonic_clock_is_non_decreasing_and_calendar_free_test()
+    local a = time.monotonic()
+    local b = time.monotonic()
+    assert((b - a):seconds() >= 0)
+    -- a monotonic instant must refuse calendar extraction
+    local ok = catch a:epoch()
+    assert(not ok, "monotonic :epoch must error")
+end
+
+-- ============================================================================
+-- Time zones (embedded IANA tzdata)
+-- ============================================================================
+
+local function embedded_tzdata_version_is_reported_test()
+    local v = time.tzdata_version()
+    assert(type(v) == "string" and #v > 0)
+end
+
+local function named_zone_lookup_and_name_test()
+    local ny = time.zone("America/New_York")
+    assert(ny:name() == "America/New_York")
+    assert(tostring(ny) == "America/New_York")
+end
+
+local function unknown_zone_raises_test()
+    local ok = catch time.zone("Nowhere/Nope")
+    assert(not ok, "unknown zone must error")
+end
+
+local function dst_is_applied_from_the_transition_table_test()
+    local ny = time.zone("America/New_York")
+    -- New York observes EDT (-4h) in July and EST (-5h) in January.
+    assert(ny:offset(time.instant(REF)) == -4 * 3600)
+    local jan = time.instant(1767355200)  -- 2026-01-02T12:00:00Z
+    assert(ny:offset(jan) == -5 * 3600)
+end
+
+local function instant_at_zone_renders_local_wall_clock_test()
+    local ny = time.zone("America/New_York")
+    -- REF = 2026-07-02T13:15:00Z, EDT is -4h -> 09:15 local
+    assert(time.instant(REF):at(ny):iso() == "2026-07-02T09:15:00-04:00")
+end
+
+local function wall_clock_through_a_zone_round_trips_to_utc_test()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
+                           minute = 15 }, ny)
+    assert(z:instant():iso() == "2026-07-02T13:15:00Z")
+end
+
+local function fixed_offset_zone_test()
+    local off = time.offset(-4 * 3600)
+    assert(off:name() == "-04:00")
+    assert(time.instant(REF):at(off):iso() == "2026-07-02T09:15:00-04:00")
+end
+
+local function localzone_returns_a_usable_zone_test()
+    local lz = time.localzone()
+    assert(type(lz:name()) == "string")
+    -- It must resolve an offset for any instant without error.
+    assert(type(lz:offset(time.instant(REF))) == "number")
+end
+
+-- ============================================================================
+-- ISO 8601 parsing
+-- ============================================================================
+
+local function parse_utc_instant_test()
+    local i = time.parse("2026-07-02T13:15:00Z")
+    assert(i:epoch() == REF)
+end
+
+local function parse_with_explicit_offset_yields_a_zoned_test()
+    local z = time.parse("2026-07-02T09:15:00-04:00")
+    assert(z:iso() == "2026-07-02T09:15:00-04:00")
+    assert(z:instant():epoch() == REF)
+end
+
+local function parse_date_only_defaults_to_midnight_utc_test()
+    assert(time.parse("2026-07-02"):iso() == "2026-07-02T00:00:00Z")
+end
+
+local function parse_compact_offset_and_fractional_seconds_test()
+    assert(time.parse("2026-07-02 09:15:00.5-0400"):iso() ==
+        "2026-07-02T09:15:00-04:00")
+    assert(time.parse("2026-07-02T00:00:00.25Z"):nanos() == 250000000)
+end
+
+local function parse_rejects_malformed_input_test()
+    assert(not (catch time.parse("not a date")), "garbage rejected")
+    assert(not (catch time.parse("2026-13-02")), "bad month rejected")
+    assert(not (catch time.parse("2026-07-02T13:15:00Z extra")), "trailing junk")
+end
+
+local function parse_with_an_explicit_pattern_test()
+    assert(time.parse("02/07/2026 09:15", "%d/%m/%Y %H:%M"):iso() ==
+        "2026-07-02T09:15:00Z")
+    local z = time.parse("2026-07-02 09:15:00 -0400", "%Y-%m-%d %H:%M:%S %z")
+    assert(z:iso() == "2026-07-02T09:15:00-04:00")
+    assert(time.parse("07 26", "%m %y"):iso() == "2026-07-01T00:00:00Z")
+end
+
+local function parse_pattern_rejects_mismatches_and_bad_specifiers_test()
+    assert(not (catch time.parse("nope", "%Y-%m-%d")), "mismatch rejected")
+    assert(not (catch time.parse("2026", "%Q")), "unknown specifier rejected")
+end
+
+-- ============================================================================
+-- Calendar arithmetic: zoned:with and zoned:add
+-- ============================================================================
+
+local function with_replaces_fields_immutably_test()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    local w = z:with{ hour = 6 }
+    assert(w:iso() == "2026-03-07T06:00:00-05:00")
+    assert(z:iso() == "2026-03-07T12:00:00-05:00")
+end
+
+local function with_re_resolves_dst_across_a_date_change_test()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    -- March 8 2026 is after the spring-forward: same wall time, EDT now.
+    assert(z:with{ day = 8 }:iso() == "2026-03-08T12:00:00-04:00")
+end
+
+local function add_days_keeps_wall_time_across_spring_forward_test()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    assert(z:add{ days = 1 }:iso() == "2026-03-08T12:00:00-04:00")
+end
+
+local function add_months_clamps_the_day_test()
+    local ny = time.zone("America/New_York")
+    local jan31 = time.zoned({ year = 2026, month = 1, day = 31, hour = 9 }, ny)
+    assert(jan31:add{ months = 1 }:iso() == "2026-02-28T09:00:00-05:00")
+end
+
+local function add_normalizes_negative_and_overflowing_months_test()
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+    assert(z:add{ months = -2 }:iso() == "2026-01-07T12:00:00-05:00")
+    assert(z:add{ months = 11 }:iso() == "2027-02-07T12:00:00-05:00")
+end
+
+local function add_on_a_fixed_offset_zoned_keeps_the_offset_test()
+    local f = time.zoned({ year = 2026, month = 1, day = 1, hour = 0 }, -5 * 3600)
+    assert(f:add{ days = 1 }:iso() == "2026-01-02T00:00:00-05:00")
+end
+
+-- ============================================================================
+-- POSIX TZ footer: DST beyond the explicit transition table (~2037)
+-- ============================================================================
+
+local function far_future_dst_follows_the_posix_rule_northern_test()
+    local ny = time.zone("America/New_York")
+    assert(ny:offset(time.parse("2050-07-15T12:00:00Z")) == -4 * 3600)
+    assert(ny:offset(time.parse("2050-01-15T12:00:00Z")) == -5 * 3600)
+    -- Exact spring-forward boundary: 2050-03-13 07:00:00Z.
+    assert(ny:offset(time.parse("2050-03-13T06:59:00Z")) == -5 * 3600)
+    assert(ny:offset(time.parse("2050-03-13T07:00:00Z")) == -4 * 3600)
+end
+
+local function far_future_dst_follows_the_posix_rule_southern_test()
+    local syd = time.zone("Australia/Sydney")
+    -- Southern hemisphere: summer (DST) spans the new year.
+    assert(syd:offset(time.parse("2050-01-15T00:00:00Z")) == 11 * 3600)
+    assert(syd:offset(time.parse("2050-07-15T00:00:00Z")) == 10 * 3600)
+end
+
+local function far_future_no_dst_zone_stays_constant_test()
+    local tokyo = time.zone("Asia/Tokyo")
+    assert(tokyo:offset(time.parse("2050-07-15T12:00:00Z")) == 9 * 3600)
+end
+
+-- ============================================================================
+-- weekday and month enums
+-- ============================================================================
+
+local function weekday_and_month_are_first_class_enums_test()
+    assert(tonumber(time.weekday.monday) == 1)
+    assert(tonumber(time.weekday.sunday) == 7)
+    assert(tonumber(time.month.january) == 1)
+    assert(tonumber(time.month.december) == 12)
+    assert(time.weekday.monday < time.weekday.sunday, "ordered by index")
+    -- Distinct enums are never equal.
+    assert(time.weekday.monday ~= time.month.january)
+end
+
+local function zoned_weekday_returns_the_weekday_enum_test()
+    local z = time.zoned{ year = 2026, month = 7, day = 2 }  -- a Thursday
+    assert(z.weekday == time.weekday.thursday)
+    assert(tonumber(z.weekday) == 4)
+    -- month stays numeric for arithmetic and os.* parity
+    assert(z.month == 7)
+end
+
+local function constructors_accept_a_month_enum_test()
+    local m = time.zoned{ year = 2026, month = time.month.july, day = 2 }
+    assert(m:iso() == "2026-07-02T00:00:00Z")
+    local z = time.zoned{ year = 2026, month = 1, day = 15 }
+    assert(z:with{ month = time.month.december }.month == 12)
+end
+
+
+--[[
+  Time module completion and DST pathologies.
+
+  This file complements datetime.lus. It exercises the corners that the first
+  file leaves open: time.now, monotonic clock rules, the two-argument instant
+  form and instant subtraction, the scalar-helper and constructor argument
+  contracts, duration comparisons and sub-second parts, fixed-offset name
+  formatting across half-hour and 45-minute zones, zoned field validation and
+  normalization, the full zoned:add and zoned:with unit set, and the daylight
+  saving pathologies: the spring-forward nonexistent wall time, the fall-back
+  ambiguous wall time, and absolute-time linearity across a fall-back boundary.
+
+  Named zones come from the embedded tzdata, so they resolve on every platform.
+  A guard still skips the zone-dependent cases if a build ever ships without it,
+  which keeps the suite portable.
+]]
+
+
+
+
+-- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
+local REF = 1782998100
+
+-- The embedded tzdata makes named zones portable, but a build without it should
+-- degrade gracefully rather than fail every zone case, so probe once up front.
+local zone_ok = catch time.zone("America/New_York")
+local HAVE_ZONES = zone_ok and true or false
+
+-- ============================================================================
+-- time.now
+-- ============================================================================
+
+local function now_returns_a_calendar_instant_test()
+    local n = time.now()
+    assert(math.type(n:epoch()) == "integer")
+    assert(type(n:iso()) == "string")
+    assert(n:iso():sub(-1) == "Z")
+end
+
+local function now_round_trips_through_parse_test()
+    local n = time.now()
+    local back = time.parse(n:iso())
+    -- iso() truncates below the second, so the reparse lands within one second.
+    assert(math.abs(back:epoch() - n:epoch()) <= 1)
+end
+
+-- The wall clock may be stepped by NTP, so tolerate skew and keep this soft.
+local function now_tracks_the_os_clock_within_a_couple_of_seconds_test()
+    assert(math.abs(time.now():epoch() - os.time()) <= 2)
+end
+
+-- ============================================================================
+-- time.monotonic
+-- ============================================================================
+
+local function monotonic_refuses_every_calendar_operation_test()
+    local m = time.monotonic()
+    assert(not (catch m:epoch()), "epoch must raise")
+    assert(not (catch m:iso()), "iso must raise")
+    assert(not (catch m:format("%Y")), "format must raise")
+end
+
+local function monotonic_readings_subtract_to_a_duration_and_compose_with_a_test()
+    local a = time.monotonic()
+    local b = time.monotonic()
+    assert(a <= b)
+    assert((b - a):seconds() >= 0)
+    -- A monotonic instant plus a duration is still monotonic and stays linear.
+    assert(((a + time.seconds(5)) - a):seconds() == 5.0)
+end
+
+local function mixing_monotonic_and_wall_clocks_cannot_subtract_test()
+    local m = time.monotonic()
+    assert(not (catch (m - time.instant(REF))), "monotonic minus wall raises")
+    assert(not (catch (time.instant(REF) - m)), "wall minus monotonic raises")
+end
+
+-- ============================================================================
+-- time.instant: two-argument form, subtraction, fixed-offset at()
+-- ============================================================================
+
+local function two_argument_instant_carries_a_nanosecond_fraction_test()
+    local i = time.instant(REF, 250000000)
+    assert(i:epoch() == REF)
+    assert(i:nanos() == 250000000)
+    -- iso() renders to whole seconds, so the fraction is dropped there.
+    assert(i:iso() == "2026-07-02T13:15:00Z")
+end
+
+local function a_bare_instant_reports_zero_nanos_as_an_integer_test()
+    local i = time.instant(100)
+    assert(i:nanos() == 0)
+    assert(math.type(i:nanos()) == "integer")
+end
+
+local function instant_minus_a_duration_moves_backwards_in_exact_seconds_test()
+    assert((time.instant(REF) - time.hours(1)):epoch() == REF - 3600)
+    assert((time.instant(100) + time.seconds(-200)):epoch() == -100)
+end
+
+local function two_instants_at_the_same_second_but_different_nanos_are_uneq_test()
+    assert(time.instant(100, 0) ~= time.instant(100, 500000000))
+    assert(time.instant(100, 5) == time.instant(100, 5))
+end
+
+local function instant_at_accepts_a_fixed_offset_in_seconds_test()
+    assert(time.instant(REF):at(-4 * 3600):iso() == "2026-07-02T09:15:00-04:00")
+    assert(time.instant(0):at(-5 * 3600):iso() == "1969-12-31T19:00:00-05:00")
+end
+
+local function instant_format_honours_several_specifiers_and_negative_epoch_test()
+    local i = time.instant(REF)
+    assert(i:format("%H:%M:%S") == "13:15:00")
+    assert(i:format("%j") == "183")
+    assert(i:format("100%%") == "100%")
+    assert(time.instant(-1):format("%Y-%m-%d %H:%M:%S") == "1969-12-31 23:59:59")
+end
+
+local function instant_argument_contract_test()
+    assert(not (catch time.instant()), "no argument raises")
+    assert(not (catch time.instant(1.5)), "a fractional second raises")
+    assert(time.instant("100"):epoch() == 100)
+end
+
+local function instant_normalization_rejects_values_outside_the_timeline_test()
+    assert(not (catch time.instant(math.maxinteger, 1000000000)),
+        "a carry beyond the maximum raises")
+    assert(not (catch time.instant(math.mininteger, -1)),
+        "a borrow below the minimum raises")
+    assert(time.instant(math.maxinteger - 1, 1000000000):epoch() == math.maxinteger)
+end
+
+-- ============================================================================
+-- Scalar duration helpers: negatives, coercion, argument errors
+-- ============================================================================
+
+local function scalar_helpers_convert_to_the_right_number_of_seconds_test()
+    assert(time.hours(1):seconds() == 3600.0)
+    assert(time.days(1):seconds() == 86400.0)
+    assert(time.minutes(1):seconds() == 60.0)
+    assert(time.millis(1500):seconds() == 1.5)
+end
+
+local negative_scalar_helper_keeps_magnitude_and_sets_the_flag_cases = {
+    { time.days(-2), 2, "days" },
+    { time.hours(-3), 3, "hours" },
+    { time.minutes(-4), 4, "minutes" },
+    { time.seconds(-5), 5, "seconds" },
+}
+
+local function negative_scalar_helper_keeps_magnitude_and_sets_the_flag_test(d, mag, field)
+    local p = d:parts()
+    assert(p.negative == true, field .. " is negative")
+    assert(p[field] == mag, field .. " magnitude is " .. mag)
+end
+
+local function negative_millis_normalizes_into_the_nanos_part_test()
+    local p = time.millis(-1500):parts()
+    assert(p.negative == true)
+    assert(p.seconds == 1)
+    assert(p.nanos == 500000000)
+end
+
+-- Each helper types n as an integer. A fractional literal has no integer
+-- representation and must raise. A decimal string coerces like other stdlib.
+local scalar_helper_rejects_a_fractional_argument_cases = {
+    { function() return time.days(1.5) end },
+    { function() return time.hours(1.5) end },
+    { function() return time.minutes(1.5) end },
+    { function() return time.seconds(1.5) end },
+    { function() return time.millis(1.5) end },
+}
+
+local function scalar_helper_rejects_a_fractional_argument_test(f)
+    assert(not (catch f()), "fractional argument must raise")
+end
+
+local function scalar_helper_coerces_an_integral_decimal_string_test()
+    assert(time.days("5"):seconds() == 432000.0)
+end
+
+local function scalar_helpers_reject_overflowing_durations_test()
+    assert(not (catch time.days(math.maxinteger)), "maximum days overflow")
+    assert(not (catch time.hours(math.mininteger)), "minimum hours overflow")
+    assert(time.millis(math.maxinteger):parts().days > 0,
+        "large milliseconds normalize without an intermediate overflow")
+end
+
+-- ============================================================================
+-- time.duration: units, comparisons, subtraction, parts, tostring
+-- ============================================================================
+
+local function duration_sums_every_documented_unit_test()
+    local d = time.duration{ days = 1, hours = 1, minutes = 1, seconds = 1,
+                             millis = 1, micros = 1, nanos = 1 }
+    assert(d:seconds() == 90061.001001001)
+end
+
+local function duration_fields_may_be_negative_and_cancel_test()
+    assert(time.duration{ hours = 1, minutes = -30 }:seconds() == 1800.0)
+end
+
+local function an_empty_duration_is_zero_and_non_negative_test()
+    local d = time.duration{}
+    assert(d:seconds() == 0.0)
+    assert(d:parts().negative == false)
+end
+
+local function durations_subtract_and_compare_test()
+    assert((time.minutes(2) - time.seconds(30)):seconds() == 90.0)
+    assert((time.seconds(30) - time.minutes(2)):seconds() == -90.0)
+    assert(time.seconds(60) == time.minutes(1))
+    assert(time.seconds(30) < time.minutes(1), "shorter is less")
+    assert(time.seconds(60) <= time.minutes(1))
+    assert((-time.seconds(5)) == time.seconds(-5))
+end
+
+local function duration_scales_by_an_integer_and_rejects_a_fractional_facto_test()
+    assert((time.seconds(10) * 3):seconds() == 30.0)
+    assert((time.seconds(10) * "3"):seconds() == 30.0)
+    assert(not (catch (time.seconds(10) * 1.5)), "fractional factor raises")
+end
+
+local function duration_arithmetic_rejects_timeline_overflow_test()
+    assert(not (catch (time.seconds(math.maxinteger) + time.seconds(1))),
+        "addition above the maximum raises")
+    assert(not (catch (time.seconds(math.mininteger) - time.seconds(1))),
+        "subtraction below the minimum raises")
+    assert(not (catch (time.seconds(math.maxinteger) * 2)),
+        "multiplication above the maximum raises")
+    assert(not (catch (-time.seconds(math.mininteger))),
+        "negating the minimum whole-second duration raises")
+end
+
+local function duration_arithmetic_keeps_representable_boundary_cancellatio_test()
+    local half_before_zero = time.duration{ seconds = -1, nanos = 500000000 }
+    local positive = half_before_zero * math.mininteger
+    assert(positive:parts().negative == false)
+    local edge = time.duration{ seconds = math.mininteger, nanos = 500000000 }
+    local negated = -edge
+    assert(negated:parts().negative == false)
+end
+
+local function parts_handles_the_minimum_duration_without_signed_negation_test()
+    local p = time.seconds(math.mininteger):parts()
+    assert(p.negative == true)
+    assert(p.days > 0, "minimum duration exposes a positive magnitude")
+end
+
+local function instant_arithmetic_rejects_overflow_and_keeps_a_boundary_res_test()
+    assert(not (catch (time.instant(math.maxinteger) + time.seconds(1))),
+        "instant addition above the maximum raises")
+    assert(not (catch (time.instant(math.mininteger) - time.seconds(1))),
+        "instant subtraction below the minimum raises")
+    assert(not (catch (time.instant(math.maxinteger) - time.instant(math.mininteger))),
+        "instant difference above the maximum raises")
+    local d = time.instant(math.maxinteger) - time.instant(-1, 500000000)
+    assert(d:parts().negative == false)
+end
+
+local function duration_parts_expose_a_days_field_for_long_spans_test()
+    local p = time.hours(50):parts()
+    assert(p.days == 2)
+    assert(p.hours == 2)
+end
+
+local function duration_constructor_rejects_a_non_table_argument_test()
+    assert(not (catch time.duration(5)), "a bare number must raise")
+end
+
+local function duration_tostring_names_the_type_and_its_seconds_test()
+    local s = tostring(time.minutes(90))
+    assert(type(s) == "string" and #s > 0)
+    assert(s:find("5400") ~= nil, "shows the 5400 second span: " .. s)
+end
+
+-- ============================================================================
+-- time.offset: name formatting, boundaries, argument errors
+-- ============================================================================
+
+local fixed_offset_formats_its_name_cases = {
+    { 0, "+00:00" },
+    { -4 * 3600, "-04:00" },
+    { 5 * 3600 + 30 * 60, "+05:30" },
+    { 5 * 3600 + 45 * 60, "+05:45" },
+    { -18 * 3600, "-18:00" },
+    { 24 * 3600, "+24:00" },
+    { 90, "+00:01" },
+}
+
+local function fixed_offset_formats_its_name_test(secs, name)
+    assert(time.offset(secs):name() == name, "offset " .. secs .. " is " .. name)
+end
+
+local function a_fixed_offset_never_varies_with_the_instant_test()
+    local off = time.offset(-4 * 3600)
+    assert(off:offset(time.instant(0)) == -4 * 3600)
+    assert(off:offset(time.instant(4000000000)) == -4 * 3600)
+end
+
+local function offset_beyond_a_full_day_is_rejected_test()
+    assert(time.offset(24 * 3600):name() == "+24:00")
+    assert(not (catch time.offset(24 * 3600 + 1)), "one second past a day raises")
+    assert(not (catch time.offset(100 * 3600)), "a hundred hours raises")
+end
+
+local function offset_argument_contract_test()
+    assert(not (catch time.offset()), "no argument raises")
+    assert(not (catch time.offset(1.5)), "a fractional second raises")
+end
+
+local function every_fixed_offset_entry_point_enforces_the_same_range_test()
+    assert(not (catch time.instant(0):at(math.maxinteger)),
+        "instant fixed offset rejects a huge value")
+    assert(not (catch time.zoned({}, math.maxinteger)),
+        "zoned fixed offset rejects a huge value")
+    assert(not (catch time.offset(math.maxinteger)),
+        "offset constructor rejects a huge value")
+end
+
+-- ============================================================================
+-- time.zoned: field validation, normalization, immutability
+-- ============================================================================
+
+local function an_empty_field_table_is_the_start_of_1970_test()
+    assert(time.zoned{}:iso() == "1970-01-01T00:00:00Z")
+end
+
+local function out_of_range_month_and_day_are_rejected_test()
+    assert(not (catch time.zoned{ year = 2026, month = 13, day = 1 }), "month 13")
+    assert(not (catch time.zoned{ year = 2026, month = 0, day = 1 }), "month 0")
+    assert(not (catch time.zoned{ year = 2026, month = 1, day = 32 }), "day 32")
+    assert(not (catch time.zoned{ year = 2026, month = 1, day = 0 }), "day 0")
+end
+
+local function an_in_range_but_overlong_day_rolls_into_the_next_month_test()
+    -- Feb 29 of a common year is within the 1..31 day range, so it normalizes
+    -- forward one day rather than raising.
+    assert(time.zoned{ year = 2025, month = 2, day = 29 }:iso() ==
+        "2025-03-01T00:00:00Z")
+    assert(time.zoned{ year = 2026, month = 1, day = 1, hour = 24 }:iso() ==
+        "2026-01-02T00:00:00Z")
+end
+
+local function second_and_nanosecond_fields_are_readable_test()
+    local z = time.zoned{ year = 2026, month = 7, day = 2, second = 42,
+                          nanosecond = 250000000 }
+    assert(z.second == 42)
+    assert(z.nanosecond == 250000000)
+    -- iso() renders whole seconds, so the fraction is not shown.
+    assert(z:iso() == "2026-07-02T00:00:42Z")
+end
+
+local function zoned_fields_are_read_only_test()
+    local z = time.zoned{ year = 2026, month = 1, day = 1 }
+    local function mutate() z.year = 2000 end
+    assert(not (catch mutate()), "assignment raises")
+end
+
+local function zoned_has_no_ordering_comparison_and_equality_is_by_identity_test()
+    -- Two zoneds that denote the same instant through different offsets are not
+    -- equal, and zoneds do not define an ordering at all.
+    local a = time.zoned({ year = 2026, month = 7, day = 2, hour = 9 }, -4 * 3600)
+    local b = time.zoned({ year = 2026, month = 7, day = 2, hour = 13 }, 0)
+    assert(not (a == b), "same instant, different wall clock, not equal")
+    assert(not (catch (a < b)), "ordering two zoneds raises")
+end
+
+local function tostring_on_instant_and_zoned_yields_their_iso_form_test()
+    assert(tostring(time.instant(REF)) == "2026-07-02T13:15:00Z")
+    assert(tostring(time.zoned{ year = 2026, month = 7, day = 2 }) ==
+        "2026-07-02T00:00:00Z")
+end
+
+-- ============================================================================
+-- zoned:add and zoned:with across the full unit set
+-- ============================================================================
+
+local function add_advances_weeks_hours_minutes_and_seconds_on_the_wall_clo_test()
+    local base = time.zoned{ year = 2026, month = 1, day = 1, hour = 0 }
+    assert(base:add{ weeks = 2 }:iso() == "2026-01-15T00:00:00Z")
+    assert(base:add{ minutes = 90 }:iso() == "2026-01-01T01:30:00Z")
+    assert(base:add{ seconds = 3600 }:iso() == "2026-01-01T01:00:00Z")
+end
+
+local function add_days_accepts_negative_amounts_test()
+    assert(time.zoned{ year = 2026, month = 3, day = 1 }:add{ days = -1 }:iso() ==
+        "2026-02-28T00:00:00Z")
+end
+
+local function add_years_clamps_a_leap_day_to_the_target_february_test()
+    local leap = time.zoned{ year = 2024, month = 2, day = 29 }
+    assert(leap:add{ years = 1 }:iso() == "2025-02-28T00:00:00Z")
+    assert(leap:add{ years = -1 }:iso() == "2023-02-28T00:00:00Z")
+    assert(leap:add{ years = 4 }:iso() == "2028-02-29T00:00:00Z")
+end
+
+local function with_normalizes_a_rolled_over_day_and_rejects_a_bad_field_test()
+    -- Replacing the month with one that is too short for the current day rolls
+    -- the day forward through the following month.
+    assert(time.zoned{ year = 2026, month = 1, day = 31 }:with{ month = 2 }:iso() ==
+        "2026-03-03T00:00:00Z")
+    assert(time.zoned{ year = 2026, month = 6, day = 15 }
+        :with{ month = 12, day = 25, hour = 8 }:iso() == "2026-12-25T08:00:00Z")
+    assert(not (catch time.zoned{ year = 2026, month = 1, day = 1 }:with{ month = 13 }),
+        "an out-of-range replacement raises")
+end
+
+local function zoned_constructors_and_calendar_arithmetic_reject_overflow_test()
+    assert(not (catch time.zoned{ year = math.maxinteger }),
+        "an unrepresentable civil year raises")
+    local base = time.zoned{ year = 2026, month = 1, day = 1 }
+    assert(not (catch base:with{ year = math.maxinteger }),
+        "with rejects an unrepresentable year")
+    assert(not (catch base:add{ years = math.maxinteger }),
+        "year arithmetic rejects overflow")
+    assert(not (catch base:add{ weeks = math.maxinteger }),
+        "week arithmetic rejects overflow")
+    assert(not (catch base:add{ hours = math.maxinteger }),
+        "hour arithmetic rejects overflow")
+    assert(base:add{ nanos = math.maxinteger }.year > 2026,
+        "large nanoseconds normalize when the result fits")
+end
+
+-- ============================================================================
+-- Daylight saving pathologies (America/New_York, embedded tzdata)
+-- ============================================================================
+
+local function spring_forward_nonexistent_wall_time_resolves_to_the_summer_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local ny = time.zone("America/New_York")
+    -- 2026-03-08 02:30 never occurs: the clock jumps 02:00 EST to 03:00 EDT.
+    -- The constructor resolves it with the after-gap offset (EDT, -04:00).
+    local z = time.zoned({ year = 2026, month = 3, day = 8, hour = 2,
+                           minute = 30 }, ny)
+    assert(z.offset == -4 * 3600)
+    assert(z:instant():iso() == "2026-03-08T06:30:00Z")
+end
+
+local function fall_back_ambiguous_wall_time_resolves_to_the_earlier_offset_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local ny = time.zone("America/New_York")
+    -- 2026-11-01 01:30 happens twice: first as EDT (-04:00), then as EST.
+    -- The constructor pins the earlier occurrence (EDT).
+    local z = time.zoned({ year = 2026, month = 11, day = 1, hour = 1,
+                           minute = 30 }, ny)
+    assert(z.offset == -4 * 3600)
+end
+
+local function instant_arithmetic_across_fall_back_stays_linear_in_absolute_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local ny = time.zone("America/New_York")
+    -- 05:00Z is 01:00 EDT, one hour before the fall-back moment (06:00Z).
+    local fb = time.parse("2026-11-01T05:00:00Z")
+    assert(fb:at(ny):iso() == "2026-11-01T01:00:00-04:00")
+    local after = fb + time.hours(1)
+    assert(after:epoch() - fb:epoch() == 3600)
+    -- The wall clock repeats 01:00, but the offset has switched to EST.
+    assert(after:at(ny):iso() == "2026-11-01T01:00:00-05:00")
+end
+
+local function add_keeps_the_wall_clock_across_the_spring_forward_gap_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local ny = time.zone("America/New_York")
+    -- 01:30 EST plus one wall hour lands on 02:30, inside the gap, and the
+    -- gap resolves to EDT, so the offset flips rather than staying EST.
+    local pre = time.zoned({ year = 2026, month = 3, day = 8, hour = 1,
+                             minute = 30 }, ny)
+    assert(pre:add{ hours = 1 }:iso() == "2026-03-08T02:30:00-04:00")
+end
+
+local function add_days_across_the_fall_back_keeps_the_wall_time_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local ny = time.zone("America/New_York")
+    local z = time.zoned({ year = 2026, month = 10, day = 31, hour = 1,
+                           minute = 30 }, ny)
+    assert(z:add{ days = 1 }:iso() == "2026-11-01T01:30:00-04:00")
+end
+
+-- ============================================================================
+-- Non-whole-hour zones
+-- ============================================================================
+
+local function half_hour_zone_renders_and_round_trips_asia_kolkata_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local kol = time.zone("Asia/Kolkata")
+    assert(kol:offset(time.instant(REF)) == 5 * 3600 + 30 * 60)
+    assert(time.instant(REF):at(kol):iso() == "2026-07-02T18:45:00+05:30")
+    -- Interpreting that same wall time collapses back to the reference.
+    assert(time.zoned({ year = 2026, month = 7, day = 2, hour = 18,
+                        minute = 45 }, kol):instant():epoch() == REF)
+end
+
+local function t_45_minute_zone_renders_and_round_trips_asia_kathmandu_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    local ktm = time.zone("Asia/Kathmandu")
+    assert(ktm:offset(time.instant(REF)) == 5 * 3600 + 45 * 60)
+    assert(time.instant(REF):at(ktm):iso() == "2026-07-02T19:00:00+05:45")
+end
+
+local function named_zone_lookups_are_distinct_objects_test()
+    if not HAVE_ZONES then skip("no embedded tzdata") end
+    assert(time.zone("America/New_York") ~= time.zone("America/New_York"))
+end
+
+-- ============================================================================
+-- Parsing strictness and round-trips
+-- ============================================================================
+
+local function parse_normalizes_overflowing_civil_fields_test()
+    assert(time.parse("2025-02-29"):iso() == "2025-03-01T00:00:00Z")
+    assert(time.parse("2026-07-02T24:00:00Z"):iso() == "2026-07-03T00:00:00Z")
+    assert(time.parse("2026-07-02T23:59:60Z"):iso() == "2026-07-03T00:00:00Z")
+end
+
+local function explicit_00_00_offset_resolves_to_the_utc_instant_test()
+    assert(time.parse("2026-07-02T13:15:00+00:00"):instant():epoch() == REF)
+end
+
+local function half_hour_offset_parses_to_the_right_instant_test()
+    assert(time.parse("2026-07-02T18:45:00+05:30"):instant():epoch() == REF)
+end
+
+local invalid_fixed_offset_components_are_rejected_cases = {
+    { "2026-07-02T13:15:00+01:60" },
+    { "2026-07-02T13:15:00+24:01" },
+    { "2026-07-02T13:15:00+25:00" },
+}
+
+local function invalid_fixed_offset_components_are_rejected_test(value)
+    assert(not (catch time.parse(value)), value .. " must raise")
+end
+
+local function the_exact_full_day_offset_remains_valid_test()
+    local z = time.parse("2026-07-02T13:15:00+24:00")
+    assert(z:iso() == "2026-07-02T13:15:00+24:00")
+    assert(time.parse("2026-07-02T13:15:00+24:00",
+        "%Y-%m-%dT%H:%M:%S%z"):iso() ==
+        "2026-07-02T13:15:00+24:00")
+end
+
+local pattern_parsing_rejects_invalid_fixed_offset_components_cases = {
+    { "2026-07-02T13:15:00+01:60" },
+    { "2026-07-02T13:15:00+24:01" },
+    { "2026-07-02T13:15:00+25:00" },
+}
+
+local function pattern_parsing_rejects_invalid_fixed_offset_components_test(value)
+    assert(not (catch time.parse(value, "%Y-%m-%dT%H:%M:%S%z")),
+        value .. " must raise")
+end
+
+-- Parsing is portable and independent of the platform strptime, and every
+-- two-digit year maps into the 2000s with no 1900s pivot.
+local two_digit_year_always_resolves_into_the_2000s_cases = {
+    { "00", "2000" },
+    { "26", "2026" },
+    { "69", "2069" },
+    { "70", "2070" },
+    { "99", "2099" },
+}
+
+local function two_digit_year_always_resolves_into_the_2000s_test(yy, full)
+    assert(time.parse(yy, "%y"):iso():sub(1, 4) == full, yy .. " -> " .. full)
+end
+
+local function pattern_parsing_matches_a_literal_percent_and_a_z_of_z_test()
+    assert(time.parse("% 2026", "%% %Y"):iso() == "2026-01-01T00:00:00Z")
+    assert(time.parse("2026-07-02T13:15:00Z", "%Y-%m-%dT%H:%M:%S%z"):iso() ==
+        "2026-07-02T13:15:00Z")
+end
+
+-- ============================================================================
+-- Extreme civil range
+-- ============================================================================
+
+local function civil_conversion_spans_the_four_digit_year_range_test()
+    assert(time.zoned{ year = 1, month = 1, day = 1 }:iso() ==
+        "0001-01-01T00:00:00Z")
+    assert(time.zoned{ year = 9999, month = 12, day = 31 }:iso() ==
+        "9999-12-31T00:00:00Z")
+    -- A huge epoch still converts without raising, well past year 9999.
+    assert(type(time.instant(math.maxinteger):iso()) == "string")
+end
+
+local function yearday_counts_the_leap_day_on_dec_31_test()
+    assert(time.zoned{ year = 2024, month = 12, day = 31 }.yearday == 366)
+    assert(time.zoned{ year = 2025, month = 12, day = 31 }.yearday == 365)
+end
+
+-- ============================================================================
+-- format %z renders the value's own offset
+-- ============================================================================
+
+-- The %z specifier renders the offset of the value being formatted. A UTC
+-- instant reports +0000 and a zoned reports its stored offset, so the output
+-- stays portable and reflects the value's own zone on every host.
+local function format_z_reflects_the_value_s_own_offset_test()
+    assert(time.instant(REF):format("%z") == "+0000")
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9 }, -4 * 3600)
+    assert(z:format("%z") == "-0400")
+end
+

@@ -1,0 +1,690 @@
+--[[
+    Test suite for to-be-closed variables (the <close> attribute).
+
+    Covers the control-flow matrix that locals.lus leaves open: reverse-order
+    closing, closing on break, goto, return, and error unwinding, the pending
+    error passed to __close handlers, failing handlers, coroutine.close, the
+    generic-for closing state, and declaration-time validation of close values.
+    The baseline contract is Lua 5.5, adjusted for the Lus catch statement,
+    which carries the error object exactly as raised.
+]]
+
+
+pledge("load")
+
+
+local debug = require("debug")
+
+local function func2close(f)
+    return setmetatable({}, {__close = f})
+end
+
+-- The snippets contain a failure mode that would abort the process if the
+-- runtime regressed, so each runs inside a coroutine and reports a boolean.
+local function run_snippet(snippet)
+    local chunk = assert(load(snippet))
+    local co = coroutine.create(chunk)
+    local ok, res = coroutine.resume(co)
+    return ok and res == true
+end
+
+-- ============================================
+-- Declaration-time validation
+-- ============================================
+
+local non_closable_declaration_values_error_at_declaration_time_cases = {
+    {"number", function() return 42 end},
+    {"string", function() return "s" end},
+    {"boolean true", function() return true end},
+    {"table with an empty metatable", function() return setmetatable({}, {}) end},
+    {"table whose metatable only has __gc", function()
+        return setmetatable({}, {__gc = function() end})
+    end},
+}
+
+local function non_closable_declaration_values_error_at_declaration_time_test(label, maker)
+    local v = maker()
+    local function decl()
+        local x <close> = v
+    end
+    local ok, err = catch decl()
+    assert(ok == false, label .. " must be rejected")
+    assert(string.find(tostring(err), "non%-closable"), label .. ": " .. tostring(err))
+end
+
+local function the_non_closable_error_names_the_variable_test()
+    local function decl()
+        local myvar <close> = 42
+    end
+    local ok, err = catch decl()
+    assert(ok == false)
+    assert(string.find(tostring(err), "variable 'myvar'"), tostring(err))
+    assert(string.find(tostring(err), "got a non%-closable value"), tostring(err))
+end
+
+local function a_rejected_declaration_stops_execution_before_the_next_state_test()
+    local ran = false
+    local function foo()
+        local x <close> = 42
+        ran = true
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(ran == false)
+end
+
+local function a_rejected_declaration_still_closes_earlier_pending_variable_test()
+    local seen = "unset"
+    local function foo()
+        local a <close> = func2close(function(_, m) seen = tostring(m) end)
+        local b <close> = 42
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(string.find(seen, "non%-closable"), "a's handler must receive the declaration error, got " .. seen)
+    assert(string.find(seen, "variable 'b'"), seen)
+end
+
+local function nil_and_false_are_valid_no_op_close_values_test()
+    local reached = false
+    do
+        local a <close> = nil
+        local b <close> = false
+        assert(a == nil and b == false)
+        reached = true
+    end
+    assert(reached)
+end
+
+local function a_close_declaration_without_an_initializer_defaults_to_a_nil_test()
+    local f = load("local x <close>")
+    assert(f ~= nil)
+    f()
+end
+
+local function a_callable_table_works_as_a_close_metamethod_test()
+    local called = false
+    local ct = setmetatable({}, {__call = function() called = true end})
+    do
+        local x <close> = setmetatable({}, {__close = ct})
+    end
+    assert(called, "the __close value must be invoked through its own __call")
+end
+
+-- ============================================
+-- Compile-time rules
+-- ============================================
+
+local function multiple_to_be_closed_variables_in_one_local_list_are_reject_test()
+    local f, err = load("local x <close>, y <close> = nil, nil")
+    assert(f == nil)
+    assert(string.find(tostring(err), "multiple to%-be%-closed"), tostring(err))
+end
+
+local function stacked_const_and_close_attribute_brackets_are_a_syntax_erro_test()
+    local f, err = load("local x <const> <close> = nil")
+    assert(f == nil)
+    assert(type(err) == "string")
+end
+
+-- ============================================
+-- Basic closing mechanics
+-- ============================================
+
+local function the_handler_receives_the_object_itself_and_a_nil_error_test()
+    local got_self = nil
+    local got_err = "sentinel"
+    local obj = setmetatable({}, {__close = function(self, e)
+        got_self = self
+        got_err = e
+    end})
+    do
+        local x <close> = obj
+    end
+    assert(rawequal(got_self, obj), "first argument must be the closed object")
+    assert(got_err == nil)
+end
+
+local function three_variables_close_in_reverse_declaration_order_test()
+    local log = {}
+    do
+        local a <close> = func2close(function() log[#log + 1] = "a" end)
+        local b <close> = func2close(function() log[#log + 1] = "b" end)
+        local c <close> = func2close(function() log[#log + 1] = "c" end)
+    end
+    assert(table.concat(log) == "cba", table.concat(log))
+end
+
+local function closing_does_not_change_the_variable_value_seen_by_closures_test()
+    local obj = func2close(function() end)
+    local f
+    do
+        local x <close> = obj
+        f = function() return x end
+    end
+    assert(rawequal(f(), obj), "the captured variable must still hold the object after closing")
+end
+
+local function a_loaded_chunk_closes_its_to_be_closed_locals_when_it_finish_test()
+    local flag = false
+    local chunk = load("local x = ... local y <close> = x return 7")
+    assert(chunk ~= nil)
+    local r = chunk(func2close(function() flag = true end))
+    assert(r == 7)
+    assert(flag, "the chunk-level variable must be closed after the chunk returns")
+end
+
+local function a_numeric_for_closes_its_variable_at_the_end_of_every_iterat_test()
+    local log = {}
+    for i = 1, 3 do
+        local x <close> = func2close(function() log[#log + 1] = i end)
+    end
+    assert(#log == 3)
+    assert(log[1] == 1 and log[2] == 2 and log[3] == 3)
+end
+
+local function nested_blocks_close_their_own_variables_at_their_own_boundar_test()
+    local log = {}
+    do
+        local outer <close> = func2close(function() log[#log + 1] = "outer" end)
+        do
+            local inner <close> = func2close(function() log[#log + 1] = "inner" end)
+        end
+        log[#log + 1] = "mid"
+    end
+    assert(log[1] == "inner" and log[2] == "mid" and log[3] == "outer")
+end
+
+-- ============================================
+-- Control-flow exits
+-- ============================================
+
+local function break_in_a_numeric_for_closes_the_pending_variable_test()
+    local log = {}
+    for i = 1, 3 do
+        local x <close> = func2close(function() log[#log + 1] = i end)
+        if i == 2 then break end
+    end
+    assert(#log == 2 and log[1] == 1 and log[2] == 2)
+end
+
+local function break_in_a_while_loop_closes_the_pending_variable_test()
+    local closed = false
+    local i = 0
+    while true do
+        i = i + 1
+        local x <close> = func2close(function(_, e) closed = (e == nil) end)
+        if i == 1 then break end
+    end
+    assert(closed, "break must close with a nil error argument")
+end
+
+local function break_out_of_an_inner_loop_closes_only_the_inner_variable_test()
+    local log = {}
+    for i = 1, 1 do
+        local outer <close> = func2close(function() log[#log + 1] = "outer" end)
+        for j = 1, 5 do
+            local inner <close> = func2close(function() log[#log + 1] = "inner" .. j end)
+            break
+        end
+        log[#log + 1] = "between"
+    end
+    assert(log[1] == "inner1" and log[2] == "between" and log[3] == "outer")
+end
+
+local function goto_jumping_forward_out_of_a_block_closes_the_variable_test()
+    local closed = false
+    do
+        local x <close> = func2close(function(_, e) closed = (e == nil) end)
+        goto out
+    end
+    ::out::
+    assert(closed, "the jump must close with a nil error argument")
+end
+
+local function goto_jumping_backward_out_of_a_block_closes_on_every_pass_test()
+    local log = {}
+    local count = 0
+    do
+        ::top::
+        count = count + 1
+        do
+            local x <close> = func2close(function() log[#log + 1] = count end)
+            if count < 3 then goto top end
+        end
+    end
+    assert(count == 3)
+    assert(#log == 3 and log[1] == 1 and log[2] == 2 and log[3] == 3)
+end
+
+local function goto_within_the_same_block_does_not_close_early_test()
+    local log = {}
+    do
+        local x <close> = func2close(function() log[#log + 1] = "close" end)
+        goto fwd
+        ::fwd::
+        log[#log + 1] = "after"
+    end
+    assert(log[1] == "after" and log[2] == "close", table.concat(log, ","))
+end
+
+local function return_computes_the_call_before_closing_the_variable_test()
+    local order = {}
+    local function inner()
+        order[#order + 1] = "call"
+        return 7
+    end
+    local function outer()
+        local x <close> = func2close(function() order[#order + 1] = "close" end)
+        return inner()
+    end
+    assert(outer() == 7)
+    assert(order[1] == "call" and order[2] == "close")
+end
+
+local function a_to_be_closed_variable_in_scope_suppresses_tail_calls_test()
+    local function probe()
+        return debug.getinfo(1, "t").istailcall
+    end
+    local function plain()
+        return probe()
+    end
+    local function guarded()
+        local x <close> = func2close(function() end)
+        return probe()
+    end
+    assert(plain() == true)
+    assert(guarded() == false)
+end
+
+local function recursive_returns_close_each_frame_after_the_deeper_call_fin_test()
+    local log = {}
+    local function rec(n)
+        local x <close> = func2close(function() log[#log + 1] = n end)
+        if n > 1 then return rec(n - 1) end
+        return 0
+    end
+    assert(rec(4) == 0)
+    assert(#log == 4)
+    assert(log[1] == 1 and log[2] == 2 and log[3] == 3 and log[4] == 4)
+end
+
+-- ============================================
+-- Error unwinding through catch
+-- ============================================
+
+local function the_handler_receives_the_in_flight_error_as_its_second_argum_test()
+    local seen
+    local function foo()
+        local x <close> = func2close(function(_, m) seen = m end)
+        error("@boom")
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(type(seen) == "string", "expected an error message, got " .. type(seen))
+    assert(string.find(seen, "@boom"), seen)
+end
+
+local function a_level_zero_error_arrives_at_the_handler_unprefixed_test()
+    local seen
+    local function foo()
+        local x <close> = func2close(function(_, m) seen = m end)
+        error("@raw", 0)
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(string.find(tostring(seen), "^@raw"), tostring(seen))
+end
+
+local function all_pending_handlers_receive_the_same_error_in_reverse_order_test()
+    local log = {}
+    local function foo()
+        local a <close> = func2close(function(_, m) log[#log + 1] = "a:" .. tostring(m) end)
+        local b <close> = func2close(function(_, m) log[#log + 1] = "b:" .. tostring(m) end)
+        error("@five", 0)
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(#log == 2)
+    assert(string.find(log[1], "^b:@five"), log[1])
+    assert(string.find(log[2], "^a:@five"), log[2])
+end
+
+local function false_and_nil_slots_are_skipped_during_error_unwinding_test()
+    local seen
+    local function foo()
+        local a <close> = func2close(function(_, m) seen = m end)
+        local b <close> = false
+        local c <close> = nil
+        error("@skip", 0)
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(string.find(tostring(seen), "^@skip"), tostring(seen))
+end
+
+local function one_error_closes_nested_scopes_from_the_inside_out_test()
+    local log = {}
+    local function foo()
+        local outer <close> = func2close(function(_, m) log[#log + 1] = "outer:" .. tostring(m) end)
+        do
+            local inner <close> = func2close(function(_, m) log[#log + 1] = "inner:" .. tostring(m) end)
+            error("@deep", 0)
+        end
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(string.find(log[1], "^inner:@deep"), tostring(log[1]))
+    assert(string.find(log[2], "^outer:@deep"), tostring(log[2]))
+end
+
+local function a_runtime_error_also_reaches_the_handler_test()
+    local seen
+    local function foo()
+        local x <close> = func2close(function(_, m) seen = m end)
+        local n = nil
+        return n + 1
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(string.find(tostring(seen), "arithmetic"), tostring(seen))
+end
+
+local function a_table_error_reaches_the_handler_as_the_raw_object_test()
+    -- Errors carry their raw object, so the handler observes the same value
+    -- that catch reports.
+    local payload = {code = 7}
+    local seen
+    local function foo()
+        local x <close> = func2close(function(_, m) seen = m end)
+        error(payload)
+    end
+    local ok = catch foo()
+    assert(ok == false)
+    assert(seen == payload, "expected the raw error object, got " .. type(seen))
+end
+
+local function an_error_caught_inside_the_block_leaves_the_close_argument_n_test()
+    local seen = "sentinel"
+    do
+        local x <close> = func2close(function(_, m) seen = m end)
+        local iok = catch error("@swallowed")
+        assert(iok == false)
+    end
+    assert(seen == nil)
+end
+
+local function catch_reports_the_original_error_after_a_successful_close_test()
+    local zobj = func2close(function() end)
+    local function foo()
+        local z <close> = zobj
+        error("@body", 0)
+    end
+    local ok, err = catch foo()
+    assert(ok == false)
+    assert(not rawequal(err, zobj),
+        "catch returned the closed object itself instead of the error")
+    assert(type(err) == "string" and string.find(err, "@body"),
+        "expected the '@body' message, got a " .. type(err) .. ": " .. tostring(err))
+end
+
+-- ============================================
+-- Errors raised by __close handlers
+-- ============================================
+
+local function a_failing_close_still_lets_remaining_handlers_run_with_the_n_test()
+    local log = {}
+    local function foo()
+        local a <close> = func2close(function(_, m) log[#log + 1] = "a:" .. tostring(m) end)
+        local b <close> = func2close(function(_, m)
+            log[#log + 1] = "b:" .. tostring(m)
+            error("@b", 0)
+        end)
+        return 1
+    end
+    local ok, err = catch foo()
+    assert(ok == false)
+    assert(string.find(log[1], "^b:nil"), tostring(log[1]))
+    assert(string.find(log[2], "^a:@b"), "a must receive b's error, got " .. tostring(log[2]))
+    assert(string.find(tostring(err), "@b"), tostring(err))
+end
+
+local function a_close_handler_can_contain_its_own_error_with_catch_test()
+    local function foo()
+        local x <close> = func2close(function()
+            local iok = catch error("@internal")
+            assert(iok == false)
+        end)
+        return 5
+    end
+    local ok, v = catch foo()
+    assert(ok == true)
+    assert(v == 5)
+end
+
+local function snippet_control_a_lone_failing_close_is_containable_by_ca_test()
+    -- This proves the snippet harness reports success where the runtime
+    -- already behaves, so the soft tests below fail only on the real defect.
+    local snippet = "global setmetatable, error, os, string, tostring "
+        .. "local function f() "
+        .. "local a <close> = setmetatable({}, {__close = function() error('@a', 0) end}) "
+        .. "return 1 end "
+        .. "local ok, err = catch f() "
+        .. "return (ok == false and string.find(tostring(err), '@a') ~= nil)"
+    assert(run_snippet(snippet), "the containable case must exit 0")
+end
+
+-- The repro runs through run_snippet so the failure is reported as a boolean.
+local function a_close_error_during_unwinding_is_still_containable_by_catch_test()
+    local snippet = "global setmetatable, error, os, string, tostring "
+        .. "local function f() "
+        .. "local a <close> = setmetatable({}, {__close = function() error('@ca', 0) end}) "
+        .. "error('@body', 0) end "
+        .. "local ok, err = catch f() "
+        .. "return (ok == false and string.find(tostring(err), '@ca') ~= nil)"
+    assert(run_snippet(snippet),
+        "catch must contain the close error raised during unwinding and report it")
+end
+
+-- With two failing handlers the body's normal exit turns into an error and
+-- the handler raising last wins, matching Lua 5.5 protected closing.
+local function with_two_failing_handlers_the_last_raised_error_wins_in_catc_test()
+    local snippet = "global setmetatable, error, os, string, tostring "
+        .. "local function f() "
+        .. "local a <close> = setmetatable({}, {__close = function() error('@a2', 0) end}) "
+        .. "local b <close> = setmetatable({}, {__close = function() error('@b2', 0) end}) "
+        .. "return 1 end "
+        .. "local ok, err = catch f() "
+        .. "return (ok == false and string.find(tostring(err), '@a2') ~= nil)"
+    assert(run_snippet(snippet),
+        "catch must survive both close errors and report the last one")
+end
+
+-- ============================================
+-- Coroutines
+-- ============================================
+
+local function coroutine_close_runs_pending_handlers_in_reverse_order_and_r_test()
+    local log = {}
+    local co = coroutine.create(function()
+        local a <close> = func2close(function(_, m) log[#log + 1] = "a:" .. tostring(m) end)
+        local b <close> = func2close(function(_, m) log[#log + 1] = "b:" .. tostring(m) end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local ok, err = coroutine.close(co)
+    assert(ok == true and err == nil)
+    assert(log[1] == "b:nil" and log[2] == "a:nil", table.concat(log, ","))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function coroutine_close_returns_false_plus_the_error_when_a_handler_test()
+    local co = coroutine.create(function()
+        local x <close> = func2close(function() error("@cc", 0) end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local ok, err = coroutine.close(co)
+    assert(ok == false)
+    assert(string.find(tostring(err), "@cc"), tostring(err))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function coroutine_close_keeps_closing_after_a_failure_and_forwards_t_test()
+    local outer_got
+    local co = coroutine.create(function()
+        local outer <close> = func2close(function(_, m) outer_got = m end)
+        local inner <close> = func2close(function() error("@in", 0) end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local ok, err = coroutine.close(co)
+    assert(ok == false)
+    assert(string.find(tostring(err), "@in"), tostring(err))
+    assert(string.find(tostring(outer_got), "@in"),
+        "the outer handler must receive the inner failure, got " .. tostring(outer_got))
+end
+
+local function coroutine_close_reports_the_last_error_when_two_handlers_fai_test()
+    local co = coroutine.create(function()
+        local a <close> = func2close(function() error("@ca", 0) end)
+        local b <close> = func2close(function() error("@cb", 0) end)
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    local ok, err = coroutine.close(co)
+    assert(ok == false)
+    assert(string.find(tostring(err), "@ca"),
+        "the error from the last-run handler must win, got " .. tostring(err))
+end
+
+local function a_resume_error_leaves_variables_pending_until_coroutine_clos_test()
+    local seen = "unset"
+    local co = coroutine.create(function()
+        local x <close> = func2close(function(_, m) seen = m end)
+        error("@dead", 0)
+    end)
+    local rok, rerr = coroutine.resume(co)
+    assert(rok == false)
+    assert(string.find(tostring(rerr), "^@dead"), tostring(rerr))
+    assert(seen == "unset")
+    local cok, cerr = coroutine.close(co)
+    assert(cok == false)
+    assert(string.find(tostring(cerr), "^@dead"), tostring(cerr))
+    assert(string.find(tostring(seen), "^@dead"),
+        "the handler must receive the coroutine's original error, got " .. tostring(seen))
+end
+
+local function finishing_a_coroutine_normally_closes_its_variables_during_t_test()
+    local flag = "unset"
+    local co = coroutine.create(function()
+        local x <close> = func2close(function(_, m) flag = (m == nil) end)
+        coroutine.yield("mid")
+        return "done"
+    end)
+    local ok1, v1 = coroutine.resume(co)
+    assert(ok1 and v1 == "mid")
+    assert(flag == "unset")
+    local ok2, v2 = coroutine.resume(co)
+    assert(ok2 and v2 == "done")
+    assert(flag == true)
+    assert(coroutine.status(co) == "dead")
+end
+
+local function a_handler_may_yield_when_closing_happens_inside_a_running_co_test()
+    local co = coroutine.create(function()
+        do
+            local x <close> = func2close(function() coroutine.yield("fromclose") end)
+        end
+        return "done"
+    end)
+    local ok1, v1 = coroutine.resume(co)
+    assert(ok1 and v1 == "fromclose")
+    local ok2, v2 = coroutine.resume(co)
+    assert(ok2 and v2 == "done")
+end
+
+-- ============================================
+-- The generic-for closing state
+-- ============================================
+
+local function the_fourth_for_list_value_is_closed_when_the_loop_ends_test()
+    local closed = false
+    local function iter(s, c)
+        if c < 2 then return c + 1 end
+    end
+    for i in iter, nil, 0, func2close(function(_, e) closed = (e == nil) end) do
+    end
+    assert(closed, "the loop's closing state must be closed at the natural end")
+end
+
+local function the_fourth_for_list_value_is_closed_on_break_test()
+    local closed = false
+    local function iter(s, c)
+        if c < 10 then return c + 1 end
+    end
+    for i in iter, nil, 0, func2close(function(_, e) closed = (e == nil) end) do
+        if i == 2 then break end
+    end
+    assert(closed, "break must close the loop's closing state")
+end
+
+local function a_non_closable_fourth_for_list_value_errors_at_loop_entry_test()
+    local function iter(s, c)
+        if c < 2 then return c + 1 end
+    end
+    local entered = false
+    local function run()
+        for i in iter, nil, 0, 42 do
+            entered = true
+        end
+    end
+    local ok, err = catch run()
+    assert(ok == false)
+    assert(entered == false)
+    assert(string.find(tostring(err), "non%-closable"), tostring(err))
+end
+
+local function an_error_in_the_loop_body_closes_the_closing_state_with_that_test()
+    local seen = "unset"
+    local function iter(s, c)
+        if c < 5 then return c + 1 end
+    end
+    local function body()
+        for i in iter, nil, 0, func2close(function(_, m) seen = m end) do
+            error("@loop", 0)
+        end
+    end
+    local ok = catch body()
+    assert(ok == false)
+    assert(string.find(tostring(seen), "^@loop"), tostring(seen))
+end
+
+-- ============================================
+-- catch do-expressions
+-- ============================================
+
+local function a_catch_do_expression_closes_its_variables_on_normal_exit_test()
+    local seen = "sentinel"
+    local ok = catch do
+        local x <close> = func2close(function(_, m) seen = m end)
+    end
+    assert(ok == true)
+    assert(seen == nil)
+end
+
+local function a_catch_do_expression_closes_its_variables_when_an_error_unw_test()
+    local hit = false
+    local seen
+    local ok = catch do
+        local x <close> = func2close(function(_, m)
+            hit = true
+            seen = m
+        end)
+        error("@inblock", 0)
+    end
+    assert(ok == false)
+    assert(hit, "the close handler must run when the error leaves the block")
+    assert(string.find(tostring(seen), "^@inblock"), tostring(seen))
+end
+

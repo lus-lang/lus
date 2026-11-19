@@ -1,0 +1,566 @@
+--[[
+  Base library coverage for Lus.
+
+  Fills the gaps left by errors.lus and nextvar.lus: dofile and loadfile
+  against real fixture files, warn call safety, the _VERSION string, select
+  index edge cases, the raw family boundaries, next and pairs contracts
+  including the __pairs metamethod, collectgarbage parameter and running
+  state control, and the position prefix produced at each error level.
+
+  The suite writes its fixtures under a per-run sandbox directory at the
+  repository root named baselib_<run>. The pledge preamble scopes read and
+  write to that directory only, so the dofile and loadfile denial tests
+  exercise a real permission boundary against a path outside the grant.
+]]
+
+
+pledge("load", "fs:read=./baselib_*", "fs:write=./baselib_*")
+
+
+-- The runner rewrites calls named assert into power asserts, so the tests of
+-- the real assert builtin call it through this alias.
+local raw_assert = assert
+
+-- Per-run sandbox so concurrent suites never collide on the same path.
+local RUN = tostring(os.time()) .. "_" .. tostring(math.random(1, 1000000))
+local DIR = "baselib_" .. RUN
+fs.createdirectory(DIR)
+
+-- Writes a fixture file into the sandbox and returns its path.
+local function fixture(name, content)
+    local path = DIR .. "/" .. name
+    local f = io.open(path, "w")
+    f:write(content)
+    f:close()
+    return path
+end
+
+local multi_path = fixture("multi.lus", "return 1, 'two', true\n")
+local side_path = fixture("side.lus",
+    "_G.__baselib_side = (_G.__baselib_side or 0) + 1\nreturn 99\n")
+local syntax_path = fixture("syntax.lus", "return 1 +\n")
+local rterr_path = fixture("rterr.lus", "error('chunk runtime failure')\n")
+local env_path = fixture("env.lus", "return GREETING\n")
+
+-- Returns just the first line of an error string, dropping the traceback
+-- that catch appends after the message.
+local function firstline(err)
+    return tostring(err):match("^[^\n]+")
+end
+
+-- ============================================================
+-- Group: _VERSION.
+-- ============================================================
+
+local function version_is_a_string_test()
+    assert(type(_VERSION) == "string")
+end
+
+local function version_carries_the_lus_brand_and_a_numeric_version_test()
+    assert(string.find(_VERSION, "^Lus %d+%.%d+") ~= nil)
+end
+
+-- ============================================================
+-- Group: select.
+-- ============================================================
+
+local select_counts_the_extra_arguments_cases = {
+    {0, {}},
+    {1, {"a"}},
+    {3, {"a", "b", "c"}},
+    {3, {nil, nil, nil}},
+}
+
+local function select_counts_the_extra_arguments_test(expected, args)
+    assert(select("#", table.unpack(args, 1, expected)) == expected)
+end
+
+local function select_n_returns_arguments_from_n_onward_test()
+    local a, b = select(2, "x", "y", "z")
+    assert(a == "y")
+    assert(b == "z")
+    assert(select("#", select(2, "x", "y", "z")) == 2)
+end
+
+local function select_1_returns_every_argument_test()
+    assert(select("#", select(1, 10, 20, 30)) == 3)
+end
+
+local select_with_a_negative_index_counts_from_the_end_cases = {
+    {-1, "c"},
+    {-2, "b"},
+    {-3, "a"},
+}
+
+local function select_with_a_negative_index_counts_from_the_end_test(idx, expected)
+    assert((select(idx, "a", "b", "c")) == expected)
+end
+
+local function select_past_the_argument_count_returns_nothing_test()
+    assert(select("#", select(5, "a", "b", "c")) == 0)
+end
+
+local function select_0_is_out_of_range_test()
+    raises(function() return select(0, "a") end, "index out of range")
+end
+
+local function select_with_a_negative_index_past_the_start_is_out_of_range_test()
+        raises(function() return select(-4, "a", "b", "c") end, "index out of range")
+end
+
+-- ============================================================
+-- Group: raw family.
+-- ============================================================
+
+local function rawset_writes_past_newindex_and_returns_the_table_test()
+    local guard = setmetatable({}, {
+        __newindex = function() error("__newindex should not fire") end,
+    })
+    local returned = rawset(guard, "k", 42)
+    assert(returned == guard)
+    assert(rawget(guard, "k") == 42)
+end
+
+local function rawget_reads_past_index_test()
+    local t = setmetatable({}, {__index = function() return "meta" end})
+    assert(t.missing == "meta")
+    assert(rawget(t, "missing") == nil)
+end
+
+local function rawset_with_a_nil_key_is_rejected_test()
+    raises(function() rawset({}, nil, 1) end, "table index is nil")
+end
+
+local function rawset_with_a_nan_key_is_rejected_test()
+    raises(function() rawset({}, 0 / 0, 1) end, "table index is NaN")
+end
+
+local function rawequal_ignores_eq_test()
+    local mt = {__eq = function() return true end}
+    local a = setmetatable({}, mt)
+    local b = setmetatable({}, mt)
+    assert(a == b)
+    assert(not rawequal(a, b))
+    assert(rawequal(a, a))
+end
+
+local rawequal_on_primitives_cases = {
+    {1, 1.0, true},
+    {1, 2, false},
+    {"1", 1, false},
+    {"lus", "lus", true},
+    {true, true, true},
+    {true, false, false},
+}
+
+local function rawequal_on_primitives_test(x, y, expected)
+    assert(rawequal(x, y) == expected)
+end
+
+local function rawequal_treats_two_nils_as_primitively_equal_test()
+    assert(rawequal(nil, nil))
+end
+
+local function rawequal_with_a_single_argument_is_rejected_test()
+    raises(function() return rawequal(1) end)
+end
+
+local function rawlen_measures_strings_and_tables_past_len_test()
+    assert(rawlen("hello") == 5)
+    local t = setmetatable({1, 2, 3}, {__len = function() return 99 end})
+    assert(#t == 99)
+    assert(rawlen(t) == 3)
+end
+
+local function rawlen_rejects_values_that_are_neither_table_nor_string_test()
+    raises(function() return rawlen(5) end, "table or string expected")
+end
+
+-- ============================================================
+-- Group: next.
+-- ============================================================
+
+local function next_on_an_empty_table_returns_nil_test()
+    assert(next({}) == nil)
+end
+
+local function next_with_a_nil_control_returns_the_first_pair_test()
+    local k, v = next({only = 7})
+    assert(k == "only")
+    assert(v == 7)
+end
+
+local function next_walks_every_pair_exactly_once_test()
+    local t = {a = 1, b = 2, c = 3, d = 4}
+    local seen = {}
+    local k, v = next(t)
+    local count = 0
+    while k ~= nil do
+        assert(not seen[k])
+        seen[k] = true
+        count = count + 1
+        k, v = next(t, k)
+    end
+    assert(count == 4)
+end
+
+local function next_with_a_key_absent_from_the_table_is_rejected_test()
+    raises(function() return next({a = 1}, "ghost") end, "invalid key to 'next'")
+end
+
+local function next_on_a_non_table_is_rejected_test()
+    raises(function() return next(5) end, "table expected")
+end
+
+-- ============================================================
+-- Group: pairs.
+-- ============================================================
+
+local function pairs_returns_the_iterator_the_table_and_nil_test()
+    local t = {x = 1}
+    local iter, state, control = pairs(t)
+    assert(type(iter) == "function")
+    assert(state == t)
+    assert(control == nil)
+end
+
+local function pairs_visits_all_key_value_pairs_test()
+    local t = {a = 10, b = 20, c = 30}
+    local total = 0
+    local keys = 0
+    for k, v in pairs(t) do
+        total = total + v
+        keys = keys + 1
+    end
+    assert(total == 60)
+    assert(keys == 3)
+end
+
+local function pairs_honors_a_pairs_metamethod_test()
+    local backing = {"first", "second"}
+    local proxy = setmetatable({}, {
+        __pairs = function(self)
+            local function step(_, i)
+                i = i + 1
+                if backing[i] then return i, backing[i] end
+            end
+            return step, self, 0
+        end,
+    })
+    local collected = {}
+    for k, v in pairs(proxy) do
+        collected[k] = v
+    end
+    assert(same(collected, {"first", "second"}))
+end
+
+local function pairs_on_a_non_table_raises_when_the_iterator_advances_test()
+    raises(function()
+        for _ in pairs(5) do end
+    end, "table expected")
+end
+
+-- ============================================================
+-- Group: ipairs.
+-- ============================================================
+
+local function ipairs_returns_an_iterator_the_table_and_the_zero_seed_test()
+        local t = {7, 8, 9}
+        local iter, state, control = ipairs(t)
+        assert(type(iter) == "function")
+        assert(state == t)
+        assert(control == 0)
+end
+
+local function the_ipairs_iterator_can_be_driven_by_hand_test()
+    local iter, state = ipairs({7, 8, 9})
+    local i, v = iter(state, 0)
+    assert(i == 1)
+    assert(v == 7)
+    i, v = iter(state, 1)
+    assert(i == 2)
+    assert(v == 8)
+end
+
+local function ipairs_over_an_empty_table_yields_nothing_test()
+    local count = 0
+    for _ in ipairs({}) do count = count + 1 end
+    assert(count == 0)
+end
+
+-- ============================================================
+-- Group: assert.
+-- ============================================================
+
+local function assert_with_no_message_uses_the_default_wording_test()
+    local ok, err = catch raw_assert(false)
+    assert(not ok)
+    assert(string.find(err, "assertion failed!") ~= nil)
+end
+
+local function assert_forwards_a_string_message_test()
+    raises(function() raw_assert(nil, "custom boom") end, "custom boom")
+end
+
+local function assert_keeps_a_numeric_message_as_a_number_test()
+    local ok, err = catch raw_assert(false, 4242)
+    assert(not ok)
+    assert(err == 4242)
+end
+
+local function assert_passes_a_table_message_through_raw_test()
+    local obj = setmetatable({}, {
+        __tostring = function() return "SENTINEL_ASSERT" end,
+    })
+    local ok, err = catch raw_assert(false, obj)
+    assert(not ok)
+    assert(err == obj)
+    assert(tostring(err) == "SENTINEL_ASSERT")
+end
+
+-- ============================================================
+-- Group: error levels.
+-- ============================================================
+
+local function level_1_prefixes_the_error_call_site_test()
+    local ok, err = catch error("boom", 1)
+    assert(not ok)
+    local first = firstline(err)
+    assert(string.find(first, "^baselib_test%.lus:%d+: boom$") ~= nil)
+end
+
+local function level_1_reports_the_exact_line_of_the_error_call_test()
+    -- The debug.getinfo call and the error call share one source line, so
+    -- the reported line must equal that current line.
+    local expected = debug.getinfo(1, "l").currentline; local ok, err = catch error("here", 1)
+    local reported = tonumber(firstline(err):match("baselib_test%.lus:(%d+):"))
+    assert(reported == expected)
+end
+
+local function level_2_blames_the_caller_of_the_raising_function_test()
+    local function thrower() error("up", 2) end
+    -- thrower is invoked on this next line, so level 2 must point here.
+    local callsite = debug.getinfo(1, "l").currentline; local ok, err = catch thrower()
+    local reported = tonumber(firstline(err):match("baselib_test%.lus:(%d+):"))
+    assert(reported == callsite)
+end
+
+local function level_2_differs_from_the_line_inside_the_raising_function_test()
+        local function thrower(lvl) error("x", lvl) end
+        local inside = firstline(select(2, catch thrower(1)))
+            :match("baselib_test%.lus:(%d+):")
+        local caller = firstline(select(2, catch thrower(2)))
+            :match("baselib_test%.lus:(%d+):")
+        assert(inside ~= caller)
+end
+
+local function level_0_omits_any_position_prefix_test()
+    local ok, err = catch error("plain message", 0)
+    assert(not ok)
+    assert(firstline(err) == "plain message")
+end
+
+local function a_numeric_message_carries_no_position_prefix_test()
+    local ok, err = catch error(42, 1)
+    assert(not ok)
+    assert(firstline(err) == "42")
+end
+
+local function error_with_no_arguments_raises_the_no_error_object_message_test()
+    local ok, err = catch error()
+    assert(not ok)
+    assert(err == "<no error object>")
+end
+
+-- ============================================================
+-- Group: collectgarbage.
+-- ============================================================
+
+local collectgarbage_param_name_returns_a_numeric_value_cases = {
+    {"pause"},
+    {"stepmul"},
+    {"stepsize"},
+    {"minormul"},
+}
+
+local function collectgarbage_param_name_returns_a_numeric_value_test(name)
+    assert(type(collectgarbage("param", name)) == "number")
+end
+
+local function collectgarbage_param_name_n_sets_and_returns_the_prior_value_test()
+        local original = collectgarbage("param", "pause")
+        -- Setting a parameter returns the value that was in effect before.
+        local previous = collectgarbage("param", "pause", 500)
+        assert(previous == original)
+        assert(collectgarbage("param", "pause") == 500)
+        -- Restore the collector to its prior tuning.
+        collectgarbage("param", "pause", original)
+        assert(collectgarbage("param", "pause") == original)
+end
+
+local function collectgarbage_param_rejects_an_unknown_parameter_test()
+    raises(function()
+        return collectgarbage("param", "notaparameter")
+    end, "invalid option")
+end
+
+local function collectgarbage_rejects_an_unknown_option_test()
+    raises(function() return collectgarbage("bogus") end, "invalid option 'bogus'")
+end
+
+local function isrunning_tracks_stop_and_restart_test()
+    collectgarbage("stop")
+    assert(not collectgarbage("isrunning"))
+    collectgarbage("restart")
+    assert(collectgarbage("isrunning"))
+end
+
+local function count_returns_a_number_and_step_returns_a_boolean_test()
+    assert(type(collectgarbage("count")) == "number")
+    assert(type(collectgarbage("step")) == "boolean")
+end
+
+-- ============================================================
+-- Group: warn.
+-- ============================================================
+
+local function warn_is_a_callable_global_test()
+    assert(type(warn) == "function")
+end
+
+local warn_accepts_string_payloads_and_control_messages_cases = {
+    {"@off"},
+    {"@on"},
+    {"a plain warning"},
+    {"@off"},
+}
+
+local function warn_accepts_string_payloads_and_control_messages_test(msg)
+    local ok = catch warn(msg)
+    assert(ok)
+end
+
+local function warn_concatenates_several_string_arguments_safely_test()
+    local ok = catch warn("piece-a", "piece-b", "piece-c")
+    assert(ok)
+    warn("@off")
+end
+
+local function warn_coerces_a_numeric_argument_test()
+    local ok = catch warn(123)
+    assert(ok)
+    warn("@off")
+end
+
+local function warn_rejects_a_nil_argument_test()
+    raises(function() warn(nil) end, "string expected")
+end
+
+local function warn_with_no_arguments_is_rejected_test()
+    raises(function() warn() end, "string expected")
+end
+
+-- ============================================================
+-- Group: dofile.
+-- ============================================================
+
+local function dofile_returns_every_value_the_chunk_returns_test()
+    local a, b, c = dofile(multi_path)
+    assert(a == 1)
+    assert(b == "two")
+    assert(c == true)
+end
+
+local function dofile_executes_the_chunk_immediately_test()
+    _G.__baselib_side = nil
+    dofile(side_path)
+    assert(_G.__baselib_side == 1)
+    dofile(side_path)
+    assert(_G.__baselib_side == 2)
+    _G.__baselib_side = nil
+end
+
+local function a_runtime_error_inside_dofile_propagates_test()
+    raises(function() dofile(rterr_path) end, "chunk runtime failure")
+end
+
+local function dofile_on_a_missing_file_raises_and_names_it_test()
+    local ok, err = catch dofile(DIR .. "/does_not_exist.lus")
+    assert(not ok)
+    assert(string.find(err, "does_not_exist%.lus") ~= nil)
+end
+
+local function dofile_on_a_syntax_error_raises_rather_than_returning_test()
+    raises(function() dofile(syntax_path) end, "syntax%.lus")
+end
+
+local function dofile_on_a_path_outside_the_pledge_is_denied_test()
+    local ok, err = catch dofile("./denied_probe_outside_baselib.lus")
+    assert(not ok)
+    assert(string.find(err, 'permission "fs:read" denied') ~= nil)
+end
+
+-- ============================================================
+-- Group: loadfile.
+-- ============================================================
+
+local function loadfile_compiles_without_running_the_chunk_test()
+    _G.__baselib_side = nil
+    local chunk = loadfile(side_path)
+    assert(type(chunk) == "function")
+    assert(_G.__baselib_side == nil)
+    local r = chunk()
+    assert(r == 99)
+    assert(_G.__baselib_side == 1)
+    _G.__baselib_side = nil
+end
+
+local function loadfile_returns_the_chunk_s_own_return_values_when_called_test()
+        local chunk = loadfile(multi_path)
+        local a, b, c = chunk()
+        assert(a == 1)
+        assert(b == "two")
+        assert(c == true)
+end
+
+local function loadfile_on_a_missing_file_returns_nil_and_a_message_test()
+    local chunk, err = loadfile(DIR .. "/missing_for_load.lus")
+    assert(chunk == nil)
+    assert(type(err) == "string")
+    assert(string.find(err, "missing_for_load%.lus") ~= nil)
+end
+
+local function loadfile_on_a_syntax_error_returns_nil_and_names_the_file_test()
+        local chunk, err = loadfile(syntax_path)
+        assert(chunk == nil)
+        assert(type(err) == "string")
+        assert(string.find(err, "syntax%.lus") ~= nil)
+end
+
+local function loadfile_accepts_text_mode_for_a_text_chunk_test()
+    local chunk = loadfile(multi_path, "t")
+    assert(type(chunk) == "function")
+    assert((chunk()) == 1)
+end
+
+local function loadfile_rejects_a_text_chunk_under_binary_mode_test()
+    local chunk, err = loadfile(multi_path, "b")
+    assert(chunk == nil)
+    assert(type(err) == "string")
+    assert(string.find(err, "text chunk") ~= nil)
+end
+
+local function loadfile_binds_globals_to_a_custom_environment_test()
+    local chunk = loadfile(env_path, "t", {GREETING = "scoped-hello"})
+    assert(chunk() == "scoped-hello")
+end
+
+local function loadfile_on_a_path_outside_the_pledge_is_denied_test()
+    local ok, err = catch loadfile("./denied_load_outside_baselib.lus")
+    assert(not ok)
+    assert(string.find(err, 'permission "fs:read" denied') ~= nil)
+end
+
+-- The runner gives this file a temporary working directory, so the sandbox
+-- needs no cleanup.
+

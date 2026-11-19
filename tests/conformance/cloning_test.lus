@@ -1,0 +1,147 @@
+
+pledge("load")
+
+
+-- Shallow copy basic
+local function shallow_copy_basic_test()
+  local t = {1, 2, 3}
+  local x = table.clone(t)
+  assert(x ~= t)
+  assert(x[1] == 1 and x[2] == 2 and x[3] == 3)
+end
+
+-- Shallow copy preserves nested references
+local function shallow_copy_nested_reference_test()
+  local inner = {4, 5}
+  local t = {1, 2, 3, inner}
+  local x = table.clone(t)
+  assert(x ~= t)
+  assert(x[4] == t[4])
+end
+
+-- Deep copy basic
+local function deep_copy_basic_test()
+  local t = {1, 2, 3}
+  local x = table.clone(t, true)
+  assert(x ~= t)
+  assert(x[1] == 1 and x[2] == 2 and x[3] == 3)
+end
+
+-- Deep copy creates new nested tables
+local function deep_copy_nested_test()
+  local inner = {4, 5}
+  local t = {1, 2, 3, inner}
+  local x = table.clone(t, true)
+  assert(x ~= t)
+  assert(x[4] ~= t[4])
+  assert(x[4][1] == 4 and x[4][2] == 5)
+end
+
+-- Deep copy multiple levels
+local function deep_copy_multiple_levels_test()
+  local t = {a = {b = {c = 1}}}
+  local x = table.clone(t, true)
+  assert(x.a ~= t.a)
+  assert(x.a.b ~= t.a.b)
+  assert(x.a.b.c == 1)
+end
+
+-- Circular reference
+local function circular_reference_test()
+  local t = {}
+  t.a = t
+  local x = table.clone(t, true)
+  assert(x ~= t)
+  assert(x.a == x)
+  assert(x.a ~= t.a)
+end
+
+-- Complex circular reference
+local function complex_circular_reference_test()
+  local a = {}
+  local b = {}
+  a.b = b
+  b.a = a
+  local x = table.clone(a, true)
+  assert(x ~= a)
+  assert(x.b ~= b)
+  assert(x.b.a == x)
+end
+
+-- Metatable preserved (shared in shallow)
+local function metatable_preserved_shallow_test()
+  local mt = {__index = function() return 42 end}
+  local t = setmetatable({}, mt)
+  local x = table.clone(t)
+  assert(x.anything == 42)
+end
+
+-- Metatable preserved (shared in deep)
+local function metatable_preserved_deep_test()
+  local mt = {__index = function() return 42 end}
+  local t = setmetatable({}, mt)
+  local x = table.clone(t, true)
+  assert(x.anything == 42)
+end
+
+-- Hash table keys
+local function hash_table_keys_test()
+  local t = {a = 1, b = 2, c = 3}
+  local x = table.clone(t)
+  assert(x.a == 1 and x.b == 2 and x.c == 3)
+end
+
+-- Mixed array and hash
+local function mixed_array_and_hash_test()
+  local t = {1, 2, 3, x = "a", y = "b"}
+  local x = table.clone(t)
+  assert(x[1] == 1 and x[2] == 2 and x[3] == 3)
+  assert(x.x == "a" and x.y == "b")
+end
+
+-- Empty table
+local function empty_table_test()
+  local t = {}
+  local x = table.clone(t)
+  assert(x ~= t)
+  assert(next(x) == nil)
+end
+
+-- Table as key (deep copy)
+local function table_as_key_deep_copy_test()
+  local key = {1}
+  local t = {[key] = "value"}
+  local x = table.clone(t, true)
+  -- Find the key in the clone
+  local newkey = nil
+  for k in pairs(x) do
+    if type(k) == "table" then
+      newkey = k
+      break
+    end
+  end
+  assert(newkey ~= nil)
+  assert(newkey ~= key)
+  assert(x[newkey] == "value")
+end
+
+-- Regression: a deeply nested table must not overflow the (Lua or C) stack.
+-- A moderate depth must clone correctly (it once crashed for lack of a stack check).
+-- An extreme depth must raise a clean error, not segfault.
+local function deep_clone_of_a_moderately_nested_table_works_test()
+    local t = {}
+    local cur = t
+    for i = 1, 150 do cur.n = {v = i}; cur = cur.n end
+    local c = table.clone(t, true)
+    assert(type(c.n) == "table" and c.n.v == 1)
+    assert(c.n.n.v == 2)
+end
+
+local function deep_clone_of_an_extremely_nested_table_errors_cleanly_test()
+    local t = {}
+    local cur = t
+    for i = 1, 5000 do cur.n = {}; cur = cur.n end
+    local ok = catch(table.clone(t, true))
+    assert(ok == false)
+end
+
