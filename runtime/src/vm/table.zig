@@ -85,6 +85,33 @@ pub inline fn findStr(t: *Table, s: *object.String) ?usize {
     }
 }
 
+/// Stores `val` under the string key `key` when that needs no rehash:
+/// the key is present, or it is absent, `val` is not nil, and the hash
+/// part has room. Returns false otherwise, leaving the table unchanged.
+/// The caller resets the metamethod cache and runs the write barrier.
+pub inline fn storeStr(t: *Table, key: Value, val: Value) bool {
+    if (t.hash.len == 0) return false;
+    const s = key.as(object.String);
+    const mask = t.hash.len - 1;
+    var i: usize = s.hash & mask;
+    while (true) : (i = (i + 1) & mask) {
+        const n = &t.hash[i];
+        if (n.key.tag == .string) {
+            if (n.key.payload == @intFromPtr(s)) break;
+            if (!s.flags.interned) return false;
+        } else if (n.key.tag == .nil) {
+            // Absent. Linear probing inserts a new key at the first free
+            // slot of its probe sequence, which is this one.
+            if (val.isNil() or (t.hash_used + 1) * 4 > t.hash.len * 3) return false;
+            n.key = key;
+            t.hash_used += 1;
+            break;
+        }
+    }
+    t.hash[i].val = val;
+    return true;
+}
+
 pub fn get(t: *Table, key: Value) Value {
     const k = normalizeKey(key);
     switch (k.tag) {

@@ -162,18 +162,7 @@ pub fn precall(l: *Thread, func: u32, nargs: u32, want: i32) (Error || YieldErro
                 return .lus;
             },
             .native => {
-                const nat = callee.as(state.Native);
-                try l.ensure(32);
-                l.frames.append(l.g.gpa, .{ .func = f, .base = f + 1, .native = nat, .want = want, .ret = f }) catch return l.raiseMem();
-                l.top = f + 1 + n;
-                const nres = nat.func(l) catch |e| {
-                    // Yields keep the native frame so resume can finish it.
-                    if (e == error.LusError) {
-                        if (l.status == .suspended and l.yielding) return error.Yield;
-                    }
-                    return e;
-                };
-                try poscall(l, nres);
+                try callNative(l, callee.as(state.Native), f, n, want);
                 return .done;
             },
             else => {
@@ -382,6 +371,9 @@ inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool)
 }
 
 fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || LoopError)!void {
+    // The dispatch loop inlines many fast paths, which needs more
+    // semantic analysis than the default quota allows.
+    @setEvalBranchQuota(10_000);
     var c = load(l);
     var pc: u32 = c.fr.pc;
     var ins: u32 = undefined;
@@ -704,7 +696,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 c.refresh(l);
                 break :blk r;
             };
-            if (r != k) pc += 1;
+            try condJump(l, &c, &pc, r != k, hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         inline .lt, .le => |o| {
@@ -721,27 +713,64 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 c.refresh(l);
                 break :blk r;
             };
-            if (r != k) pc += 1;
+            try condJump(l, &c, &pc, r != k, hooked);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        inline .lti, .lei, .gti, .gei => |o| {
+            const x = &c.bp[opc.a(ins)];
+            const imm = opc.sb(ins);
+            const k = opc.c(ins) != 0;
+            const r = if (x.tag == .integer) switch (o) {
+                .lti => x.asInt() < imm,
+                .lei => x.asInt() <= imm,
+                .gti => x.asInt() > imm,
+                .gei => x.asInt() >= imm,
+                else => unreachable,
+            } else if (x.tag == .float) switch (o) {
+                .lti => x.asFloat() < @as(f64, @floatFromInt(imm)),
+                .lei => x.asFloat() <= @as(f64, @floatFromInt(imm)),
+                .gti => x.asFloat() > @as(f64, @floatFromInt(imm)),
+                .gei => x.asFloat() >= @as(f64, @floatFromInt(imm)),
+                else => unreachable,
+            } else blk: {
+                c.fr.pc = pc;
+                const iv = Value.int(imm);
+                const r = try switch (o) {
+                    .lti => metaCompare(l, .lt, x.*, iv, k),
+                    .lei => metaCompare(l, .le, x.*, iv, k),
+                    .gti => metaCompare(l, .lt, iv, x.*, k),
+                    .gei => metaCompare(l, .le, iv, x.*, k),
+                    else => unreachable,
+                };
+                c.refresh(l);
+                break :blk r;
+            };
+            try condJump(l, &c, &pc, r != k, hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .eqk => {
             const x = c.bp[opc.a(ins)];
             const y = c.k[opc.b(ins)];
             const r = if (x.tag == y.tag and (x.tag == .integer or x.tag == .string)) x.payload == y.payload or ops.rawEqual(l, x, y) else ops.rawEqual(l, x, y);
-            if (r != (opc.c(ins) != 0)) pc += 1;
+            try condJump(l, &c, &pc, r != (opc.c(ins) != 0), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .test_ => {
-            if (c.bp[opc.a(ins)].truthy() != (opc.c(ins) != 0)) pc += 1;
+            try condJump(l, &c, &pc, c.bp[opc.a(ins)].truthy() != (opc.c(ins) != 0), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .testset => {
             const v = c.bp[opc.b(ins)];
-            if (v.truthy() != (opc.c(ins) != 0)) pc += 1 else c.bp[opc.a(ins)] = v;
+            if (v.truthy() != (opc.c(ins) != 0)) {
+                pc += 1;
+            } else {
+                c.bp[opc.a(ins)] = v;
+                try condJump(l, &c, &pc, false, hooked);
+            }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .testnil => {
-            if (c.bp[opc.a(ins)].isNil() != (opc.c(ins) != 0)) pc += 1;
+            try condJump(l, &c, &pc, c.bp[opc.a(ins)].isNil() != (opc.c(ins) != 0), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -767,7 +796,10 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 }
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
-            const kind = try precall(l, func, nargs, want);
+            const kind: CallKind = if (callee.tag == .native) blk: {
+                try callNative(l, callee.as(state.Native), func, nargs, want);
+                break :blk .done;
+            } else try precall(l, func, nargs, want);
             if (kind == .lus) {
                 c = load(l);
                 pc = 0;
@@ -793,7 +825,10 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 // Natives and __call targets run as a plain call
                 // followed by a return of all results.
                 if (nb != 0) l.top = func + nb;
-                const kind = try precall(l, func, nargs, -1);
+                const kind: CallKind = if (callee.tag == .native) blk: {
+                    try callNative(l, callee.as(state.Native), func, nargs, -1);
+                    break :blk .done;
+                } else try precall(l, func, nargs, -1);
                 if (kind == .lus) {
                     c = load(l);
                     pc = 0;
@@ -811,7 +846,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             var i: u32 = 0;
             while (i <= nargs) : (i += 1) l.stack[dst + i] = l.stack[func + i];
             l.top = dst + 1 + nargs;
-            _ = try precall(l, dst, nargs, fr.want);
+            const tcl = callee.as(Closure);
+            if (!tcl.proto.is_vararg) {
+                try enterLus(l, tcl, dst, nargs, fr.want);
+            } else {
+                _ = try precall(l, dst, nargs, fr.want);
+            }
             const nf = l.frame();
             nf.boundary = fr.boundary;
             nf.tail = true;
@@ -1067,6 +1107,53 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
     }
 }
 
+/// Finishes a test instruction. The compiler always follows a test with a
+/// jump. When the test fails the jump is skipped. Otherwise the jump runs
+/// here without another dispatch, except under hooks, which see it as its
+/// own instruction.
+inline fn condJump(l: *Thread, c: *Ctx, pc: *u32, skip: bool, comptime hooked: bool) Error!void {
+    if (skip) {
+        pc.* += 1;
+        return;
+    }
+    if (hooked) return;
+    const j = c.code[pc.*];
+    const off = opc.sj(j);
+    pc.* = @intCast(@as(i64, pc.*) + 1 + off);
+    // Loops are safe points for pending finalizers.
+    if (off < 0 and l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+        c.fr.pc = pc.*;
+        try runPendingFinalizers(l);
+        c.refresh(l);
+    }
+}
+
+/// Appends a frame, growing the list only when it is full.
+inline fn pushFrame(l: *Thread, f: Frame) Error!void {
+    if (l.frames.items.len == l.frames.capacity) {
+        @branchHint(.cold);
+        l.frames.ensureUnusedCapacity(l.g.gpa, 1) catch return l.raiseMem();
+    }
+    l.frames.appendAssumeCapacity(f);
+}
+
+/// Runs a native function called from the interpreter with its `nargs`
+/// arguments above `func`, leaving its results at `func` adjusted to
+/// `want`.
+inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32) (Error || YieldError)!void {
+    if (@as(usize, func) + 1 + nargs + 32 > l.stack.len) try l.ensure(32);
+    try pushFrame(l, .{ .func = func, .base = func + 1, .native = nat, .want = want, .ret = func });
+    l.top = func + 1 + nargs;
+    const nres = nat.func(l) catch |e| {
+        // Yields keep the native frame so resume can finish it.
+        if (e == error.LusError) {
+            if (l.status == .suspended and l.yielding) return error.Yield;
+        }
+        return e;
+    };
+    try poscall(l, nres);
+}
+
 /// Pushes a frame for a call to a Lus function with fixed parameters. The
 /// callee and its `nargs` arguments are at `func`.
 inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {
@@ -1077,7 +1164,7 @@ inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) E
     // Missing parameters and the registers above the parameters start nil.
     var r = base + @min(nargs, @as(u32, p.num_params));
     while (r < top) : (r += 1) l.stack[r] = .nil;
-    l.frames.append(l.g.gpa, .{ .func = func, .base = base, .closure = cl, .want = want, .ret = func }) catch return l.raiseMem();
+    try pushFrame(l, .{ .func = func, .base = base, .closure = cl, .want = want, .ret = func });
     l.top = top;
 }
 
@@ -1247,6 +1334,7 @@ inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, a: u8, t: Value, key: Value) Er
             c.bp[a] = v;
             return;
         }
+        if (indexChain(l, tab, key.as(String), &c.bp[a])) return;
     }
     c.fr.pc = pc;
     const v = try metaIndex(l, t, key, a);
@@ -1260,8 +1348,7 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, t: Value, key: Value, v: Value)
     if (t.tag == .table) {
         const tab = t.as(Table);
         if (!tab.readonly and noNewindexMeta(tab)) {
-            if (table.findStr(tab, key.as(String))) |idx| {
-                tab.hash[idx].val = v;
+            if (table.storeStr(tab, key, v)) {
                 tab.tm_absent = 0;
                 if (v.tag.isCollectable()) gc.barrierBack(l.g, &tab.hdr);
                 return;
@@ -1271,6 +1358,34 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, t: Value, key: Value, v: Value)
     c.fr.pc = pc;
     try setSlow(l, t, key, v);
     c.refresh(l);
+}
+
+/// Follows `__index` tables from `tab`, whose own lookup missed and whose
+/// metatable may have `__index`. Stores the result and returns true when
+/// the chain ends in a table lookup. Returns false when a function
+/// metamethod or a non-table must run through the generic path.
+fn indexChain(l: *Thread, start: *Table, key: *String, out: *Value) bool {
+    var tab = start;
+    var depth: u32 = 0;
+    while (depth < 8) : (depth += 1) {
+        const mt = tab.metatable orelse {
+            out.* = .nil;
+            return true;
+        };
+        const h = state.tmLookup(l.g, mt, .index);
+        if (h.tag != .table) {
+            if (!h.isNil()) return false;
+            out.* = .nil;
+            return true;
+        }
+        tab = h.as(Table);
+        const v = table.getStr(tab, key);
+        if (!v.isNil() or noIndexMeta(tab)) {
+            out.* = v;
+            return true;
+        }
+    }
+    return false;
 }
 
 fn getSlow(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {

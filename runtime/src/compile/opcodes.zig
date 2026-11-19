@@ -73,6 +73,11 @@ pub const Op = enum(u8) {
     lt, // if ((R[A] <  R[B]) ~= C) then pc++
     le, // if ((R[A] <= R[B]) ~= C) then pc++
     eqk, // if ((R[A] == K[B]) ~= C) then pc++
+    // Comparisons with an integer immediate sB (B is excess-127 signed)
+    lti, // if ((R[A] <  sB) ~= C) then pc++
+    lei, // if ((R[A] <= sB) ~= C) then pc++
+    gti, // if ((R[A] >  sB) ~= C) then pc++
+    gei, // if ((R[A] >= sB) ~= C) then pc++
     test_, // if (truthy(R[A]) ~= C) then pc++
     testset, // if (truthy(R[B]) ~= C) then pc++ else R[A] = R[B]
     testnil, // if ((R[A] == nil) ~= C) then pc++ (optional chaining)
@@ -122,7 +127,7 @@ pub const offset_sj = max_arg_sj >> 1;
 pub const offset_sc = 127;
 
 pub inline fn op(i: Instruction) Op {
-    return @enumFromInt(@as(u8, @truncate(i)));
+    return @fromBackingInt(@intCast(@as(u8, @truncate(i))));
 }
 pub inline fn a(i: Instruction) u8 {
     return @truncate(i >> 8);
@@ -145,28 +150,31 @@ pub inline fn sj(i: Instruction) i32 {
 pub inline fn sc(i: Instruction) i32 {
     return @as(i32, c(i)) - offset_sc;
 }
+pub inline fn sb(i: Instruction) i32 {
+    return @as(i32, b(i)) - offset_sc;
+}
 pub inline fn ax(i: Instruction) u32 {
     return i >> 8;
 }
 
 pub inline fn abc(o: Op, ra: u8, rb: u8, rc: u8) Instruction {
-    return @as(u32, @intFromEnum(o)) | (@as(u32, ra) << 8) | (@as(u32, rb) << 16) | (@as(u32, rc) << 24);
+    return @as(u32, @backingInt(o)) | (@as(u32, ra) << 8) | (@as(u32, rb) << 16) | (@as(u32, rc) << 24);
 }
 pub inline fn abx(o: Op, ra: u8, v: u16) Instruction {
-    return @as(u32, @intFromEnum(o)) | (@as(u32, ra) << 8) | (@as(u32, v) << 16);
+    return @as(u32, @backingInt(o)) | (@as(u32, ra) << 8) | (@as(u32, v) << 16);
 }
 pub inline fn asbx(o: Op, ra: u8, v: i32) Instruction {
     return abx(o, ra, @intCast(v + offset_sbx));
 }
 pub inline fn isj(o: Op, v: i32) Instruction {
-    return @as(u32, @intFromEnum(o)) | (@as(u32, @intCast(v + offset_sj)) << 8);
+    return @as(u32, @backingInt(o)) | (@as(u32, @intCast(v + offset_sj)) << 8);
 }
 pub inline fn iax(o: Op, v: u32) Instruction {
-    return @as(u32, @intFromEnum(o)) | (v << 8);
+    return @as(u32, @backingInt(o)) | (v << 8);
 }
 
 pub inline fn setOp(i: *Instruction, o: Op) void {
-    i.* = (i.* & 0xFFFFFF00) | @intFromEnum(o);
+    i.* = (i.* & 0xFFFFFF00) | @backingInt(o);
 }
 pub inline fn setSj(i: *Instruction, v: i32) void {
     i.* = (i.* & 0xFF) | (@as(u32, @intCast(v + offset_sj)) << 8);

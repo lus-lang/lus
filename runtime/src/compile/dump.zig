@@ -24,7 +24,9 @@ const String = object.String;
 const Allocator = std.mem.Allocator;
 
 pub const signature = "\x1bLus";
-const format_version: u8 = 1;
+/// Bumped whenever the instruction set changes. Version 2 added the
+/// immediate comparisons.
+const format_version: u8 = 2;
 
 const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration };
 
