@@ -1680,21 +1680,26 @@ pub const Lower = struct {
         const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, ir.none);
         const mask = st.hash.len - 1;
         var i: usize = key_str.hash & mask;
-        var steps: u32 = 0;
-        while (true) : (i = (i + 1) & mask) {
+        // A hash part may hold a key in every node, so the walk visits
+        // each node at most once. Then every node is proven to hold
+        // another key.
+        if (st.hash.len > 4 and st.hash_used >= st.hash.len) return false;
+        for (0..@min(st.hash.len, 4)) |_| {
             const n = &st.hash[i];
             const off: i32 = @intCast(i << tl.node_shift);
             if (n.key.tag == .nil) {
                 _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.nil), .c = g });
                 return true;
             }
-            if (n.key.tag != .string or steps >= 4) return false;
+            if (n.key.tag != .string) return false;
             if (n.key.payload == @intFromPtr(key_str)) return false;
             const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(n.key.payload), .c = g });
             _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.string), .c = g });
-            steps += 1;
+            i = (i + 1) & mask;
         }
+        // Every node was visited when the part is that small.
+        return st.hash.len <= 4;
     }
 
     /// t[key] for a string key, along the path that the sample takes:
@@ -1872,8 +1877,10 @@ pub const Lower = struct {
         const key_str = key_v.as(String);
         const ty = b.staticTy(rv) orelse return false;
         if (ty == .nil or fz.metatable) return false;
+        // A full hash part sends the store to the general path, as
+        // `table.storeStr` does.
         const len = fz.mask + 1;
-        if ((fz.used + 1) * 4 > len * 3 or fz.used >= fz.keys.len) return false;
+        if (fz.used >= len or fz.used >= fz.keys.len) return false;
         // The probe sequence of the key, as `table.storeStr` walks it.
         var i: u32 = key_str.hash & fz.mask;
         var at: ?u32 = null;
@@ -1886,6 +1893,7 @@ pub const Lower = struct {
             }
             if (!taken) break;
         }
+        if (at == null and !table.hashRoom(fz.used, len)) return false;
         const base: i32 = @intCast(@sizeOf(Table) + (@as(usize, at orelse i) << tl.node_shift));
         const v = try b.typed(rv, ty);
         if (at == null) {
@@ -1906,8 +1914,7 @@ pub const Lower = struct {
         // A record constructor allocates nothing yet. The table exists
         // as its fields until something needs the table itself.
         if (nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
-            var hsize: u32 = 4;
-            while (hsize * 3 < nc * 4) hsize *= 2;
+            const hsize: u32 = @intCast(table.hashSizeExact(nc));
             _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * 16), .snap = try b.snap() });
             const ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = nc });
             try b.vobjs.append(b.arena, .{ .ref = ref, .nc = nc, .mask = hsize - 1 });
@@ -1932,8 +1939,7 @@ pub const Lower = struct {
         b.fresh = null;
         const units = table.inlineUnits(nb, nc);
         if (nb == 0 and nc > 0 and units > 0) {
-            var hsize: u32 = 4;
-            while (hsize * 3 < nc * 4) hsize *= 2;
+            const hsize: u32 = @intCast(table.hashSizeExact(nc));
             b.fresh = .{ .ref = t, .mask = hsize - 1 };
         }
         return true;
@@ -2474,7 +2480,7 @@ pub const Lower = struct {
             }
         }
         const len = v.mask + 1;
-        if ((v.used + 1) * 4 > len * 3 or v.used >= max_vfields) return false;
+        if (v.used >= len or !table.hashRoom(v.used, len) or v.used >= max_vfields) return false;
         // The node the key goes to, as `table.storeStr` finds it.
         var i: u32 = key_str.hash & v.mask;
         while (true) : (i = (i + 1) & v.mask) {

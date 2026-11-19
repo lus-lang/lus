@@ -50,6 +50,8 @@ const frame_size: i32 = @sizeOf(Frame);
 const frame_shift: u6 = std.math.log2_int(usize, @sizeOf(Frame));
 comptime {
     std.debug.assert(@sizeOf(Frame) == @as(usize, 1) << frame_shift);
+    // The templates load sizes and addresses as 64-bit words.
+    std.debug.assert(@sizeOf(usize) == 8);
 }
 
 fn frameField(comptime name: []const u8) i32 {
@@ -1581,7 +1583,9 @@ pub const Emitter = struct {
                 // The receiver is a table whose prediction missed. The
                 // probe below is `table.findStr` for an interned key. It
                 // proves that the key is absent, and a key that is
-                // present goes to the helper, which records where.
+                // present goes to the helper, which records where. A
+                // small hash part may be full, so the probe also ends
+                // after visiting every node, counted down in t5.
                 a.bind(m.chain);
                 if (!s.flags.interned) {
                     a.jmp(helper);
@@ -1589,6 +1593,7 @@ pub const Emitter = struct {
                     const loop = a.newLabel();
                     a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
                     a.jumpIfImm(.eq, A.t2, 0, in_metatable);
+                    a.mov(A.t5, A.t2);
                     a.addImm(A.t2, -1);
                     a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
                     a.movImm(A.t1, s.hash);
@@ -1596,11 +1601,12 @@ pub const Emitter = struct {
                     a.bind(loop);
                     a.@"and"(A.t1, A.t2);
                     a.addScaled(A.t4, A.t3, A.t1, tl.node_shift);
-                    a.load8(A.t5, .{ .base = A.t4, .disp = tl.node_key + tl.value_tag });
-                    a.jumpIfImm(.eq, A.t5, tag_nil, in_metatable);
+                    a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.node_key + tl.value_tag }, tag_nil, in_metatable);
                     a.jumpIfMem(.eq, A.t6, .{ .base = A.t4, .disp = tl.node_key }, helper);
                     a.addImm(A.t1, 1);
-                    a.jmp(loop);
+                    a.addImm(A.t5, -1);
+                    a.jumpIfImm(.ne, A.t5, 0, loop);
+                    a.jmp(in_metatable);
                 }
 
                 // The first step of `interp.indexChain`: `__index` of the

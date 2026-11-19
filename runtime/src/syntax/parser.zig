@@ -27,6 +27,12 @@ pub const Options = struct {
 };
 
 const max_depth = 200;
+/// Depth limit for the expression tree. A chain of suffixes or of left
+/// associative operators adds one level per link, and the later passes
+/// recurse once per level, so this bounds their native stack use. A wasm
+/// engine also keeps its own call stack of about a megabyte, which holds
+/// fewer levels than the native main thread.
+const max_tree: u32 = if (@import("builtin").cpu.arch.isWasm()) 2000 else 8000;
 
 pub const Parser = struct {
     arena: Allocator,
@@ -35,6 +41,8 @@ pub const Parser = struct {
     payloads: []lexer.Payload,
     pos: u32 = 0,
     depth: u32 = 0,
+    /// Depth of the expression tree being built, counted per chain link.
+    tree: u32 = 0,
     /// Nesting of do-expressions in the current function, for `provide`.
     do_depth: u32 = 0,
     /// Nesting of loops in the current function, for `break`.
@@ -154,6 +162,11 @@ pub const Parser = struct {
     }
     fn leave(p: *Parser) void {
         p.depth -= 1;
+    }
+
+    fn grow(p: *Parser) Error!void {
+        p.tree += 1;
+        if (p.tree > max_tree) return p.errSem("chunk has too many syntax levels (stack overflow)", .{});
     }
 
     fn new(p: *Parser, comptime T: type, v: T) Error!*T {
@@ -768,9 +781,12 @@ pub const Parser = struct {
         } else {
             left = try p.simpleExpr();
         }
+        const saved_tree = p.tree;
+        defer p.tree = saved_tree;
         while (binOpOf(p.tag())) |op| {
             const pr = op.priority();
             if (pr[0] <= limit) break;
+            try p.grow();
             const op_line = p.cur().line;
             _ = p.advance();
             const right = try p.subExpr(pr[1]);
@@ -947,8 +963,14 @@ pub const Parser = struct {
     fn suffixes(p: *Parser, base: *ast.Expr, start: Token) Error!*ast.Expr {
         var e = base;
         var has_optional = false;
+        const saved_tree = p.tree;
+        defer p.tree = saved_tree;
         while (true) {
             const t = p.cur();
+            switch (t.tag) {
+                .question, .dot, .lbracket, .colon, .lparen, .lbrace, .string => try p.grow(),
+                else => {},
+            }
             switch (t.tag) {
                 .question => {
                     _ = p.advance();

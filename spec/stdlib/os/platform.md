@@ -8,4 +8,4 @@ origin: lus
 returns: string
 ---
 
-Returns a string identifying the current platform (e.g., `"linux"`, `"darwin"`, `"windows"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `"darwin"`.
+Returns a string identifying the current platform (e.g., `"linux"`, `"darwin"`, `"windows"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `"darwin"`. The WebAssembly build reports `"wasi"`.

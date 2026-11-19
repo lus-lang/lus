@@ -69,12 +69,23 @@ pub const Finish = union(enum) {
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
+/// The common case of a native, run without a frame of its own. It reads
+/// its `nargs` arguments at `args` before it allocates anything, and it
+/// returns the single result, or null when the call needs the full
+/// native. It never raises an error, never calls back into Lus code, and
+/// never yields: every such case returns null, and the full native then
+/// runs the call from the start. The full native begins with the same
+/// fast part, so both paths share one implementation.
+pub const LeafFn = *const fn (l: *Thread, args: [*]const Value, nargs: u32) ?Value;
+
 /// A native function object. Natives receive their arguments in the stack
 /// window starting at `l.base()` and push results, returning their count.
 pub const Native = struct {
     hdr: gc.Header,
     func: NativeFn,
     name: ?*String = null,
+    /// The frameless fast part of `func`, when it has one.
+    leaf: ?LeafFn = null,
     nupvals: u32 = 0,
 
     pub inline fn upvalues(n: *Native) []Value {
@@ -139,25 +150,74 @@ const tag_count = @as(usize, @backingInt(Tag.upvalue)) + 1;
 // String interning set
 
 pub const StringSet = struct {
-    slots: []?*String = &.{},
+    /// Open addressing with linear probing, kept at most a quarter full
+    /// so that most lookups end at their first slot. Each slot packs the
+    /// string pointer with the top 16 bits of its hash, so a probe that
+    /// passes other strings compares hashes without loading those
+    /// strings.
+    slots: []u64 = &.{},
     count: usize = 0,
+
+    /// Object addresses fit in 48 bits on every 64-bit target, and the
+    /// 32-bit targets keep the whole hash below them.
+    const tag_shift = if (@sizeOf(usize) == 8) 48 else 32;
+    const addr_mask: u64 = (@as(u64, 1) << tag_shift) - 1;
+
+    inline fn pack(str: *String) u64 {
+        return @as(u64, @intFromPtr(str)) | tagOf(str.hash);
+    }
+
+    /// The hash bits a slot keeps. The lowest of them is always set, so
+    /// no tag equals the bits of an empty slot.
+    inline fn tagOf(h: u32) u64 {
+        const tag: u64 = if (tag_shift == 48) h >> 16 else h;
+        return (tag | 1) << tag_shift;
+    }
+
+    inline fn strOf(slot: u64) *String {
+        return @ptrFromInt(@as(usize, @intCast(slot & addr_mask)));
+    }
 
     fn deinit(s: *StringSet, gpa: Allocator) void {
         if (s.slots.len > 0) gpa.free(s.slots);
     }
 
-    fn find(s: *StringSet, b: []const u8, h: u32) ?*String {
+    /// Probes two slots at a time and picks the candidate without a
+    /// branch, so a string found in the second slot of its probe costs
+    /// no more than one found in the first.
+    inline fn find(s: *StringSet, b: []const u8, h: u32) ?*String {
         if (s.slots.len == 0) return null;
         const mask = s.slots.len - 1;
+        const tag = tagOf(h);
         var i: usize = h & mask;
-        while (s.slots[i]) |p| : (i = (i + 1) & mask) {
-            if (p.hash == h and p.len == b.len and std.mem.eql(u8, p.bytes(), b)) return p;
+        while (true) : (i = (i + 2) & mask) {
+            const x = s.slots[i];
+            const y = s.slots[(i + 1) & mask];
+            const xm = x & ~addr_mask == tag;
+            const ym = y & ~addr_mask == tag;
+            if (xm or ym) {
+                const p = strOf(if (xm) x else y);
+                if (p.hash == h and p.len == b.len and shortEql(p.bytes().ptr, b)) return p;
+                // A hash that matches only in its top bits is rare, so the
+                // slots are compared again one at a time.
+                return s.findFrom(b, h, i);
+            }
+            if (x == 0 or y == 0) return null;
+        }
+    }
+
+    noinline fn findFrom(s: *StringSet, b: []const u8, h: u32, start: usize) ?*String {
+        const mask = s.slots.len - 1;
+        var i = start;
+        while (s.slots[i] != 0) : (i = (i + 1) & mask) {
+            const p = strOf(s.slots[i]);
+            if (p.hash == h and p.len == b.len and shortEql(p.bytes().ptr, b)) return p;
         }
         return null;
     }
 
     fn insert(s: *StringSet, gpa: Allocator, str: *String) !void {
-        if ((s.count + 1) * 2 > s.slots.len) try s.grow(gpa);
+        if ((s.count + 1) * 4 > s.slots.len) try s.resize(gpa, @max(256, s.slots.len * 2));
         s.place(str);
         s.count += 1;
     }
@@ -165,36 +225,69 @@ pub const StringSet = struct {
     fn place(s: *StringSet, str: *String) void {
         const mask = s.slots.len - 1;
         var i: usize = str.hash & mask;
-        while (s.slots[i] != null) : (i = (i + 1) & mask) {}
-        s.slots[i] = str;
+        while (s.slots[i] != 0) : (i = (i + 1) & mask) {}
+        s.slots[i] = pack(str);
     }
 
-    fn grow(s: *StringSet, gpa: Allocator) !void {
+    fn resize(s: *StringSet, gpa: Allocator, n: usize) !void {
         const old = s.slots;
-        const n = if (old.len == 0) 256 else old.len * 2;
-        s.slots = try gpa.alloc(?*String, n);
-        @memset(s.slots, null);
-        for (old) |p| if (p) |str| s.place(str);
+        s.slots = try gpa.alloc(u64, n);
+        @memset(s.slots, 0);
+        for (old) |slot| if (slot != 0) s.place(strOf(slot));
         if (old.len > 0) gpa.free(old);
+    }
+
+    /// Halves the set while it is less than a sixteenth full, after a
+    /// collection freed many strings.
+    pub fn shrink(s: *StringSet, gpa: Allocator) void {
+        var n = s.slots.len;
+        while (n > 256 and s.count * 16 < n) n /= 2;
+        if (n == s.slots.len) return;
+        s.resize(gpa, n) catch {};
     }
 
     /// Removes `str`, repairing the probe sequence after it.
     pub fn remove(s: *StringSet, str: *String) void {
         if (s.slots.len == 0) return;
         const mask = s.slots.len - 1;
+        const want = pack(str);
         var i: usize = str.hash & mask;
-        while (s.slots[i]) |p| : (i = (i + 1) & mask) {
-            if (p == str) break;
+        while (s.slots[i] != 0) : (i = (i + 1) & mask) {
+            if (s.slots[i] == want) break;
         } else return;
-        s.slots[i] = null;
+        s.slots[i] = 0;
         s.count -= 1;
         var j = (i + 1) & mask;
-        while (s.slots[j]) |p| : (j = (j + 1) & mask) {
-            s.slots[j] = null;
+        while (s.slots[j] != 0) : (j = (j + 1) & mask) {
+            const p = strOf(s.slots[j]);
+            s.slots[j] = 0;
             s.place(p);
         }
     }
 };
+
+/// Compares the bytes at `a` with `b`, which is at most
+/// `String.short_max` long. Two overlapping word loads cover a string of
+/// 8 to 16 bytes, so short keys compare without a loop or a call. Every
+/// string keeps a terminating zero after its bytes, but `b` may be a
+/// slice of anything, so neither side is read past its end.
+inline fn shortEql(a: [*]const u8, b: []const u8) bool {
+    const n = b.len;
+    if (n >= 8) {
+        var i: usize = 0;
+        while (i + 8 < n) : (i += 8) {
+            if (std.mem.readInt(u64, a[i..][0..8], .little) != std.mem.readInt(u64, b[i..][0..8], .little)) return false;
+        }
+        return std.mem.readInt(u64, a[n - 8 ..][0..8], .little) == std.mem.readInt(u64, b[n - 8 ..][0..8], .little);
+    }
+    if (n >= 4) {
+        return std.mem.readInt(u32, a[0..4], .little) == std.mem.readInt(u32, b[0..4], .little) and
+            std.mem.readInt(u32, a[n - 4 ..][0..4], .little) == std.mem.readInt(u32, b[n - 4 ..][0..4], .little);
+    }
+    var i: usize = 0;
+    while (i < n) : (i += 1) if (a[i] != b[i]) return false;
+    return true;
+}
 
 // ---------------------------------------------------------------------
 // Global state
@@ -618,15 +711,23 @@ pub fn newStringIn(g: *Global, b: []const u8) (Allocator.Error || error{InvalidU
 }
 
 /// Creates a string from bytes already known to be valid WTF-8.
-pub fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usize) Allocator.Error!*String {
-    const h = object.hashBytes(g.seed, b);
-    const short = b.len <= String.short_max;
-    if (short) {
+pub inline fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usize) Allocator.Error!*String {
+    // A short string that already exists is found inline. Creating a
+    // string is the out-of-line part.
+    if (b.len <= String.short_max) {
+        const h = object.hashBytes(g.seed, b);
         if (g.strings.find(b, h)) |s| {
             gc.touchInterned(g, s);
             return s;
         }
+        return createString(g, b, ascii, chars, h);
     }
+    return createString(g, b, ascii, chars, object.hashBytes(g.seed, b));
+}
+
+/// Allocates a string with hash `h` that `newStringKnown` did not find.
+noinline fn createString(g: *Global, b: []const u8, ascii: bool, chars: usize, h: u32) Allocator.Error!*String {
+    const short = b.len <= String.short_max;
     gc.maybeCollect(g);
     const s = try gc.allocUninit(g, String, .string, String.allocSize(b.len));
     s.len = @intCast(b.len);
@@ -662,6 +763,7 @@ pub fn newNative(g: *Global, f: NativeFn, name: ?[]const u8, nup: u32) Allocator
     const name_str = if (name) |s| try newStringKnown(g, s, true, s.len) else null;
     const n = try gc.allocUninit(g, Native, .native, Native.allocSize(nup));
     n.func = f;
+    n.leaf = null;
     n.nupvals = nup;
     n.name = name_str;
     for (n.upvalues()) |*v| v.* = .nil;
@@ -740,7 +842,7 @@ pub fn traverseExtra(m: *gc.MarkerApi, h: *gc.Header) void {
             if (p.source) |s| m.markHeader(&s.hdr);
             if (p.name) |s| m.markHeader(&s.hdr);
             const jit = @import("../jit/jit.zig");
-            if (jit.enabled) jit.opt.traverse(m, p);
+            if (jit.has_opt) jit.opt.traverse(m, p);
         },
         .upvalue => {
             const u = h.as(object.Upvalue);

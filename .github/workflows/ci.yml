@@ -96,7 +96,24 @@ jobs:
       - name: WebAssembly build
         if: runner.os == 'Linux'
         working-directory: runtime
-        run: zig build wasm
+        run: |
+          zig build wasm
+          mkdir -p ../packages/wasm/dist
+          cp zig-out/wasm/lus.wasm ../packages/wasm/dist/lus.wasm
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: WebAssembly host tests
+        if: runner.os == 'Linux'
+        working-directory: packages/wasm
+        run: node --test
+      - name: Conformance tests on WebAssembly
+        # Tests that need the network, workers, or processes fail under
+        # WASI. The run fails when the JIT modes disagree or a test crashes.
+        if: runner.os == 'Linux'
+        working-directory: packages/wasm
+        run: node scripts/conformance.mjs --modes off,eager
 
   legacy:
     # The frozen 1.7 runtime is the differential oracle for the rewrite.

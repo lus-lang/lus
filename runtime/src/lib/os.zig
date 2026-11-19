@@ -109,6 +109,7 @@ fn platform(l: *Thread) Error!u32 {
         .illumos => "sunos",
         .windows => "windows",
         .dragonfly, .haiku => "posix",
+        .wasi => "wasi",
         else => "unknown",
     };
     return aux.retStr(l, name);

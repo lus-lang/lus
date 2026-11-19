@@ -90,7 +90,7 @@ The interpreter caches a string-keyed access by predicting the hash node that he
 
 - **Field reads** (`getfield`, `gettabup`). The receiver is a table, the predicted node exists and holds the key, and its value is something other than nil. A nil value goes to the helper, because `__index` may apply.
 - **Field stores** (`setfield`, `settabup`). The table is writable and has no metatable, or one whose absence cache says it lacks `__newindex`. A key in the predicted node is overwritten. A constructor stores into a fresh table, where the predicted node is empty. The store then walks the probe sequence of the key from its first node, and when it reaches the predicted node over nodes that hold other keys, the value is something other than nil, and the load factor allows one more key, it writes the key and the value there. This is what `table.storeStr` does for an absent key. Both stores clear the absence cache of the table, as the interpreter does.
-- **Method lookups** (`self`). A method that the receiver holds is a field read. Otherwise the probe sequence of the key proves that the receiver lacks it, and the lookup takes the first step of `interp.indexChain`: the absence cache of the metatable allows `__index`, the second prediction finds `__index` and it names a table, and the third prediction finds the method in that table. A string receiver enters at the second step with the metatable that all strings share.
+- **Method lookups** (`self`). A method that the receiver holds is a field read. Otherwise the probe sequence of the key proves that the receiver lacks it, ending at an empty node or after visiting every node of a full part, and the lookup takes the first step of `interp.indexChain`: the absence cache of the metatable allows `__index`, the second prediction finds `__index` and it names a table, and the third prediction finds the method in that table. A string receiver enters at the second step with the metatable that all strings share.
 - **Array reads and stores** (`gettable`, `settable`, `getindex`). The key is an integer inside the array part. An unboxed part yields its word with the kind as the tag, and the word that stands for nil goes to the helper. A boxed part yields its value. A store into an unboxed part takes a number of the kind of the part whose bits differ from the nil word, and a store into a boxed part takes any value. A store that changes the kind of the part goes to the helper, and through it to the general path that boxes the part.
 
 A store of a collectable value runs the write barrier of the interpreter. The inline part is the test of the barrier bit of the table, and the slow part is a call to `gc.barrierTable`, which chooses between the backward barrier and the forward barrier of a large table (`gc.md`). A store that adds a key passes the key as well. Unboxed array parts hold numbers, so stores into them need no barrier.
@@ -109,6 +109,8 @@ A **lean return** tests that the running frame is lean and that no hook is set, 
 
 The **tail entry** does what the closure branch of the interpreter's `tailcall` does. It moves the callee and its arguments down to the return slot of the running frame and makes that frame the frame of the callee. What the frame owes its caller stays in it: the return slot, the wanted count, the boundary and lean flags, the finish action of a metamethod frame, and the address its caller continues at. The caller of the entry first tests that its frame has no open upvalue, and the helper `helpers.tailcall` handles the frame that has one.
 
+A **frameless native call** runs the common case of a native function without pushing a frame. A native may name a leaf function, its fast part, which reads its arguments in place, returns one result or declines, and never raises, allocates a frame, calls back into Lus code, or yields. `interp.callNative`, which both tiers use for every call of a native, tries the leaf first and stores its result as a return would. A leaf that declines leaves nothing changed, and the full native then runs the call from its start. The full native begins with the same leaf, so each builtin keeps one implementation of its fast case. `setmetatable` and `string.sub` have leaves: the first for a table without a metatable that receives a metatable known to lack `__gc`, and the second for a string with integer positions.
+
 A call and return between two compiled functions is about 73 machine instructions and 16 stores on aarch64, where the first version of the tier took about 90 and 25.
 
 ## Executable memory
@@ -121,7 +123,7 @@ Code is position independent. Addresses of runtime routines and of constants are
 
 ## Controls
 
-- `zig build -Djit=false` builds without the JIT. The WebAssembly build and every target other than aarch64 and x86-64 on macOS and Linux have none.
+- `zig build -Djit=false` builds without the JIT. The WebAssembly build compiles to WebAssembly modules that its host instantiates (`wasmjit.md`). Every target other than aarch64 and x86-64 on macOS and Linux and WebAssembly has none.
 - `LUS_JIT=off` interprets everything. `LUS_JIT=eager` compiles every function on its first call, which is what the test suites use. `LUS_JIT=on` is the default.
 - `LUS_JIT_THRESHOLD=N` sets the number of events before a function compiles.
 - `debug.jit()` returns the setting, and `debug.jit(f)` tells whether `f` has native code.
@@ -150,7 +152,7 @@ Every row runs at least as fast in native code as interpreted. The three rows th
 
 `unicode` gains in both Lus columns. A method call on a string used to look the method up through the generic index path, and the string fast path of the interpreter now covers it, which took the interpreter from 0.096 to 0.079. The rest of that row is the string library: finding a character position in a long non-ASCII string, and interning the result. It stays behind LuaJIT, which slices bytes.
 
-`tables` spends half its time in the collector, which marks three million tables that stay alive, and most of the rest in the allocation of those tables. That is where the distance to LuaJIT's interpreter on that row lies.
+`tables` spends half its time in the collector, which marks three million tables that stay alive, and most of the rest in the allocation of those tables. That is where the distance to LuaJIT's interpreter on that row lay. Exact hash parts for small records (`tables.md`), prefetching in the marker, and leaving the heap to the exit of the process (`gc.md`) later closed it, and frameless natives with inline method lookups took `methods` ahead of LuaJIT's interpreter as well. The table in `tests/bench/README.md` has the current numbers.
 
 The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`, `strings`) run the same in both tiers. Their two Lus columns differ by less than the noise of the measurement, which is about one percent, and over 31 alternating runs the medians of `strings` are 0.1794 interpreted and 0.1796 in native code.
 

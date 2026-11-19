@@ -288,7 +288,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     defer package.preincludes = &.{};
 
     const l = try api.newState(gpa, io);
-    defer api.close(l);
+    defer api.closeForExit(l);
     defer out.deinit(l.g);
     if (!cli.ignore_env) l.g.environ = init.environ_map;
     l.g.args = args;

@@ -43,44 +43,94 @@ pub const String = struct {
     }
 
     /// Byte offset of the character at zero-based index `ci`. `ci` may equal
-    /// `chars`, which yields `len`.
-    pub fn byteOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
+    /// `chars`, which yields `len`. A long non-ASCII string starts from the
+    /// nearest breadcrumb at or before `ci`, or from the position the last
+    /// call found when that lies between the breadcrumb and `ci`, and skips
+    /// the remaining characters with the vectorized `wtf8.advance`. The
+    /// remembered position makes a scan that moves forward through a
+    /// string cost the distance it moves.
+    pub inline fn byteOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
         if (s.flags.ascii or ci == 0) return ci;
         if (ci >= s.chars) return s.len;
         const b = s.bytes();
-        if (s.crumbs == null and s.chars > crumb_step) s.buildCrumbs(gpa);
-        var off: usize = 0;
-        var at: usize = 0;
-        if (s.crumbs) |cr| {
-            const k = ci / crumb_step;
-            off = cr[k];
-            at = k * crumb_step;
+        if (s.chars <= crumb_step) return wtf8.advance(b, 0, ci);
+        if (s.crumbs == null) s.buildCrumbs(gpa);
+        const cr = s.crumbs orelse return wtf8.advance(b, 0, ci);
+        const n = crumbCount(s.chars);
+        const k = ci / crumb_step;
+        var at: usize = k * crumb_step;
+        var off: usize = cr[k];
+        const last = cr[n];
+        if (last > at and last <= ci) {
+            at = last;
+            off = cr[n + 1];
         }
-        while (at < ci) : (at += 1) off += wtf8.seqLen(b[off]);
+        off = wtf8.advance(b, off, ci - at);
+        cr[n] = @intCast(ci);
+        cr[n + 1] = @intCast(off);
         return off;
     }
 
-    fn buildCrumbs(s: *String, gpa: std.mem.Allocator) void {
-        const n = s.chars / crumb_step + 1;
-        const cr = gpa.alloc(u32, n) catch return;
+    /// Number of breadcrumbs of a string with `chars` characters. The
+    /// allocation holds two more words, the character index and byte
+    /// offset that `byteOffset` found last.
+    inline fn crumbCount(chars: usize) usize {
+        return chars / crumb_step + 1;
+    }
+
+    noinline fn buildCrumbs(s: *String, gpa: std.mem.Allocator) void {
+        const n = crumbCount(s.chars);
+        const cr = gpa.alloc(u32, n + 2) catch return;
         const b = s.bytes();
         var off: usize = 0;
-        var ci: usize = 0;
-        var k: usize = 0;
+        cr[0] = 0;
+        var k: usize = 1;
         while (k < n) : (k += 1) {
-            while (ci < k * crumb_step) : (ci += 1) off += wtf8.seqLen(b[off]);
+            off = wtf8.advance(b, off, crumb_step);
             cr[k] = @intCast(off);
         }
+        @memset(cr[n..], 0);
         s.crumbs = cr.ptr;
     }
 
     pub fn freeExtra(s: *String, gpa: std.mem.Allocator) void {
-        if (s.crumbs) |cr| gpa.free(cr[0 .. s.chars / crumb_step + 1]);
+        if (s.crumbs) |cr| gpa.free(cr[0 .. crumbCount(s.chars) + 2]);
     }
 };
 
-pub fn hashBytes(seed: u64, b: []const u8) u32 {
-    return @truncate(std.hash.Wyhash.hash(seed, b));
+/// The hash of a string. Strings of up to 32 bytes, which covers most
+/// interned strings, hash inline with a few multiplications in the
+/// manner of wyhash. Longer strings use `std.hash.Wyhash`.
+pub inline fn hashBytes(seed: u64, b: []const u8) u32 {
+    const n = b.len;
+    if (n > 32) return @truncate(std.hash.Wyhash.hash(seed, b));
+    const s0: u64 = 0xa0761d6478bd642f;
+    const s1: u64 = 0xe7037ed1a0b428db;
+    const s2: u64 = 0x8ebc6af09c88c6e3;
+    var x: u64 = 0;
+    var y: u64 = 0;
+    if (n > 16) {
+        x = mum(rd64(b[0..8]) ^ s1, rd64(b[8..16]) ^ seed);
+        y = mum(rd64(b[n - 16 ..][0..8]) ^ s2, rd64(b[n - 8 ..][0..8]) ^ seed);
+    } else if (n >= 8) {
+        x = rd64(b[0..8]);
+        y = rd64(b[n - 8 ..][0..8]);
+    } else if (n >= 4) {
+        x = std.mem.readInt(u32, b[0..4], .little);
+        y = std.mem.readInt(u32, b[n - 4 ..][0..4], .little);
+    } else if (n > 0) {
+        x = (@as(u64, b[0]) << 16) | (@as(u64, b[n / 2]) << 8) | b[n - 1];
+    }
+    return @truncate(mum(s1 ^ n, mum(x ^ s1, y ^ seed ^ s0)));
+}
+
+inline fn rd64(b: *const [8]u8) u64 {
+    return std.mem.readInt(u64, b, .little);
+}
+
+inline fn mum(a: u64, b: u64) u64 {
+    const r = @as(u128, a) * b;
+    return @as(u64, @truncate(r)) ^ @as(u64, @truncate(r >> 64));
 }
 
 // ---------------------------------------------------------------------

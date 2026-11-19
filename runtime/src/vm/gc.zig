@@ -208,7 +208,13 @@ fn promote(g: *Global, v: Value) void {
     if (!v.tag.isCollectable()) return;
     const h = v.header();
     if (!setMark(h) or isLeaf(h.tag)) return;
-    g.gcs.grayagain.append(g.gpa, h) catch {
+    pushGray(g, &g.gcs.grayagain, h);
+}
+
+/// Appends `h` to a gray list, without a call while the list has room.
+inline fn pushGray(g: *Global, list: *std.ArrayList(*Header), h: *Header) void {
+    if (list.items.len < list.capacity) return list.appendAssumeCapacity(h);
+    list.append(g.gpa, h) catch {
         g.gcs.overflow = true;
     };
 }
@@ -218,9 +224,7 @@ fn markGray(g: *Global, v: Value) void {
     if (!v.tag.isCollectable()) return;
     const h = v.header();
     if (!setMark(h) or isLeaf(h.tag)) return;
-    g.gcs.gray.append(g.gpa, h) catch {
-        g.gcs.overflow = true;
-    };
+    pushGray(g, &g.gcs.gray, h);
 }
 
 fn barrierSlow(g: *Global, h: *Header) void {
@@ -465,7 +469,7 @@ fn propagate(g: *Global, budget: usize) void {
     const s = &g.gcs;
     var m = Marker{ .g = g };
     while (m.work < budget) {
-        if (s.gray.pop()) |h| {
+        if (popGray(&s.gray)) |h| {
             m.traverse(h);
             continue;
         }
@@ -646,6 +650,7 @@ fn sweepLarge(g: *Global) bool {
 fn finishSweep(g: *Global) void {
     const s = &g.gcs;
     heap.releaseSegments(g);
+    g.strings.shrink(g.gpa);
     s.phase = .pause;
     s.live = s.heap_at_mark -| s.swept;
     if (s.mode != .generational) return setThreshold(g);
@@ -795,6 +800,28 @@ inline fn isLeaf(tag: Tag) bool {
     };
 }
 
+/// How far below the top of the gray stack `popGray` prefetches.
+const prefetch_distance = 8;
+
+/// Pops the next gray object and prefetches the object that will be
+/// popped `prefetch_distance` pops later. Objects reach the gray stack
+/// long before they are traced, as when a large table pushes all of its
+/// elements, so the object being traced is rarely in the cache. The
+/// prefetch covers the first two cache lines, which hold the header and
+/// the parts that a small table keeps in its own cell.
+inline fn popGray(gray: *std.ArrayList(*Header)) ?*Header {
+    const n = gray.items.len;
+    if (n == 0) return null;
+    if (n > prefetch_distance) {
+        const ahead: [*]const u8 = @ptrCast(gray.items[n - 1 - prefetch_distance]);
+        @prefetch(ahead, .{ .rw = .write });
+        @prefetch(ahead + 64, .{});
+    }
+    const h = gray.items[n - 1];
+    gray.items.len = n - 1;
+    return h;
+}
+
 const Marker = struct {
     g: *Global,
     /// Bytes of objects marked and traced by this marker.
@@ -822,7 +849,12 @@ const Marker = struct {
         }
         // Leaf objects have no references to trace.
         if (isLeaf(h.tag)) return;
-        m.g.gcs.gray.append(m.g.gpa, h) catch m.traverse(h);
+        const gray = &m.g.gcs.gray;
+        if (gray.items.len < gray.capacity) {
+            gray.appendAssumeCapacity(h);
+        } else {
+            gray.append(m.g.gpa, h) catch m.traverse(h);
+        }
     }
 
     fn markRoots(m: *Marker) void {
@@ -842,7 +874,7 @@ const Marker = struct {
     fn drainAll(m: *Marker) void {
         const s = &m.g.gcs;
         while (true) {
-            if (s.gray.pop()) |h| {
+            if (popGray(&s.gray)) |h| {
                 m.traverse(h);
             } else if (s.grayagain.pop()) |h| {
                 m.traverse(h);

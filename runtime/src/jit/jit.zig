@@ -6,7 +6,9 @@
 //! the settings, the hotness policy, the hand-over between the tiers, and
 //! the lifetime of the code. `emit.zig` turns bytecode into instructions
 //! through the assembler of the target (`a64.zig` or `x64.zig`), and
-//! `mem.zig` manages executable memory.
+//! `mem.zig` manages executable memory. On WebAssembly `wasm.zig` turns
+//! bytecode into a module that the host instantiates
+//! (`spec/design/wasmjit.md`).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -20,17 +22,26 @@ const Proto = object.Proto;
 const Error = state.Error;
 
 /// True when this build has a JIT: the option is on and the target has a
-/// backend and a way to map executable memory.
+/// backend and a way to map executable memory, or on WebAssembly a host
+/// that instantiates modules.
 pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
     .aarch64, .x86_64 => switch (builtin.os.tag) {
         .macos, .linux => true,
         else => false,
     },
+    .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
 
+/// Whether the backend emits WebAssembly modules rather than machine code.
+pub const is_wasm = builtin.cpu.arch == .wasm32;
+
+/// Whether this build has the optimizing tier, which emits machine code.
+pub const has_opt = enabled and !is_wasm;
+
 const mem = @import("mem.zig");
 const emit = @import("emit.zig");
+const wasm = @import("wasm.zig");
 pub const helpers = @import("helpers.zig");
 /// The optimizing tier, which compiles what stays hot in baseline code.
 pub const opt = @import("opt/opt.zig");
@@ -50,14 +61,14 @@ pub const State = if (enabled) struct {
     /// Length of the current sampling period of the interpreter.
     period: u32 = 1,
     seed: u32 = 12345,
-    arena: mem.Arena = .{},
+    arena: if (is_wasm) void else mem.Arena = if (is_wasm) {} else .{},
     /// Functions that have native code now.
     live: usize = 0,
     /// Functions compiled since the state started.
     compiled: usize = 0,
     /// The optimizing tier: its setting, the events in baseline code
     /// before it compiles, and its counters.
-    opt: opt.Setting = .on,
+    opt: opt.Setting = if (is_wasm) .off else .on,
     opt_threshold: u32 = opt.default_threshold,
     optimized: usize = 0,
     exits: usize = 0,
@@ -97,6 +108,12 @@ pub const Code = extern struct {
 fn setup(g: *Global) void {
     const js = &g.jit;
     js.ready = true;
+    // A WebAssembly host that cannot instantiate modules leaves the state
+    // interpreted.
+    if (is_wasm and !wasm.available()) {
+        js.setting = .off;
+        return;
+    }
     const env = g.environ orelse return;
     if (env.get("LUS_JIT")) |v| {
         if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
@@ -111,7 +128,7 @@ fn setup(g: *Global) void {
         } else if (std.mem.eql(u8, v, "opt-eager")) {
             js.setting = .eager;
             js.threshold = 1;
-            js.opt = .eager;
+            js.opt = if (is_wasm) .off else .eager;
             js.opt_threshold = 1;
         }
     }
@@ -130,7 +147,7 @@ pub fn configure(g: *Global, how: Setting, threshold: u32) void {
     if (!enabled) return;
     const js = &g.jit;
     js.ready = true;
-    js.setting = how;
+    js.setting = if (is_wasm and !wasm.available()) .off else how;
     js.threshold = if (how == .eager) 1 else @max(threshold, 1);
     js.period = 1;
     js.opt = .off;
@@ -138,7 +155,7 @@ pub fn configure(g: *Global, how: Setting, threshold: u32) void {
 
 /// Sets the optimizing tier of a state from the host.
 pub fn configureOpt(g: *Global, how: opt.Setting, threshold: u32) void {
-    if (!enabled) return;
+    if (!has_opt) return;
     const js = &g.jit;
     js.opt = if (js.setting == .off) .off else how;
     js.opt_threshold = if (how == .eager) 1 else @max(threshold, 1);
@@ -146,7 +163,7 @@ pub fn configureOpt(g: *Global, how: opt.Setting, threshold: u32) void {
 
 /// The setting of the optimizing tier, for `debug.jit`.
 pub fn optSetting(g: *Global) opt.Setting {
-    if (!enabled) return .off;
+    if (!has_opt) return .off;
     if (!g.jit.ready) setup(g);
     return if (g.jit.setting == .off) .off else g.jit.opt;
 }
@@ -154,13 +171,13 @@ pub fn optSetting(g: *Global) opt.Setting {
 /// How many pieces of optimized code the state compiled, and how often
 /// optimized code left through a guard.
 pub fn counters(g: *Global) [2]usize {
-    if (!enabled) return .{ 0, 0 };
+    if (!has_opt) return .{ 0, 0 };
     return .{ g.jit.optimized, g.jit.exits };
 }
 
 /// Whether the function has optimized code in use.
 pub fn isOptimized(p: *Proto) bool {
-    return enabled and opt.isOptimized(p);
+    return has_opt and opt.isOptimized(p);
 }
 
 /// The setting of the state, for `debug.jit`.
@@ -213,10 +230,20 @@ pub noinline fn expire(l: *Thread, p: *Proto) bool {
         },
         .counting => {},
     }
-    if (compile(l, p)) {
-        p.jit_state = .compiled;
-        p.hot = 1;
-        return true;
+    switch (compile(l, p)) {
+        .done => {
+            p.jit_state = .compiled;
+            p.hot = 1;
+            return true;
+        },
+        // The host compiles the code in the background. The function
+        // asks again after more events.
+        .later => {
+            p.jit_state = .counting;
+            p.hot = @max(g.jit.threshold, default_threshold) *| 16;
+            return false;
+        },
+        .failed => {},
     }
     p.jit_state = .declined;
     p.hot = 0;
@@ -325,7 +352,7 @@ pub fn dispatch(l: *Thread) callconv(.c) Target {
     }
     // A function entered at its first instruction runs its optimized
     // code when it has some, and counts toward getting some otherwise.
-    if (fr.pc == 0 and l.g.jit.opt != .off) {
+    if (has_opt and fr.pc == 0 and l.g.jit.opt != .off) {
         const addr = opt.entry(l, p);
         if (addr != 0) return .{ .addr = addr, .base = fr.base };
     }
@@ -339,6 +366,7 @@ const Enter = *const fn (l: *Thread, stop: usize, addr: usize, base: usize) call
 /// frame count drops to `stop` or a frame needs the interpreter.
 pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopError)!void {
     if (!enabled) return error.SwitchLoop;
+    if (is_wasm) return wasm.run(l, stop);
     const t = dispatch(l);
     if (t.addr == 0) return error.SwitchLoop;
     const code: *Code = @ptrCast(@alignCast(l.frame().closure.?.proto.jit_code.?));
@@ -352,7 +380,16 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
     };
 }
 
-fn compile(l: *Thread, p: *Proto) bool {
+/// The outcome of compiling a function.
+pub const Outcome = enum { done, failed, later };
+
+const compile = if (is_wasm) wasm.compile else compileNative;
+
+fn compileNative(l: *Thread, p: *Proto) Outcome {
+    return if (compileMachine(l, p)) .done else .failed;
+}
+
+fn compileMachine(l: *Thread, p: *Proto) bool {
     const g = l.g;
     const gpa = g.gpa;
     if (p.code.len > max_instructions) return false;
@@ -398,7 +435,15 @@ fn compile(l: *Thread, p: *Proto) bool {
 /// Frees the native code of a function that is being collected.
 pub fn freeProto(g: *Global, p: *Proto) void {
     if (!enabled) return;
-    opt.freeProto(g, p);
+    if (has_opt) opt.freeProto(g, p);
+    if (is_wasm) {
+        if (p.jit_code == null) return;
+        wasm.release(p);
+        p.jit_code = null;
+        p.plain_call = !p.is_vararg;
+        g.jit.live -= 1;
+        return;
+    }
     const code: *Code = @ptrCast(@alignCast(p.jit_code orelse return));
     g.jit.arena.release(g.gpa, @as([*]u8, @ptrFromInt(code.base))[0..code.size]);
     g.gpa.free(code.offs[0..code.count]);
@@ -412,7 +457,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
 
 /// Releases the executable memory of a state that is closing.
 pub fn deinit(g: *Global) void {
-    if (!enabled) return;
+    if (!enabled or is_wasm) return;
     g.jit.arena.deinit(g.gpa);
 }
 

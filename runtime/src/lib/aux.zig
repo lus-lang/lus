@@ -18,6 +18,8 @@ const Table = object.Table;
 pub const Reg = struct {
     name: []const u8,
     func: state.NativeFn,
+    /// The frameless fast part of `func` (`state.LeafFn`), if any.
+    leaf: ?state.LeafFn = null,
 };
 
 /// True on targets that can start processes. WASI has no process
@@ -75,7 +77,14 @@ pub fn checkTable(l: *Thread, i: u32) Error!*Table {
     return v.as(Table);
 }
 
-pub fn checkInt(l: *Thread, i: u32) Error!i64 {
+pub inline fn checkInt(l: *Thread, i: u32) Error!i64 {
+    const v = l.arg(i);
+    if (v.tag == .integer) return v.asInt();
+    return checkIntSlow(l, i);
+}
+
+/// `checkInt` for every argument that is not an integer already.
+noinline fn checkIntSlow(l: *Thread, i: u32) Error!i64 {
     const v = l.arg(i);
     switch (v.tag) {
         .integer => return v.asInt(),
@@ -212,6 +221,7 @@ pub fn newLib(l: *Thread, funcs: []const Reg) Error!*Table {
 pub fn setFuncs(l: *Thread, t: *Table, funcs: []const Reg) Error!void {
     for (funcs) |f| {
         const n = state.newNative(l.g, f.func, f.name, 0) catch return l.raiseMem();
+        n.leaf = f.leaf;
         try setField(l, t, f.name, Value.obj(.native, n));
     }
 }
