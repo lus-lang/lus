@@ -14,8 +14,9 @@
 // a driver chunk. It has the `skip`, `raises`, and `same` helpers of
 // `lus test` and plain `assert`. Files that need the network, workers,
 // processes, or the real file system fail under WebAssembly whatever the
-// JIT does, so the result that matters is that both modes agree. The
-// script exits with status 1 when they disagree on any test.
+// JIT does, so the result that matters is that both modes agree and that
+// nothing crashes. The script exits with status 1 when the modes disagree
+// on any test or when a test traps or panics the runtime.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -257,7 +258,21 @@ async function main() {
     }
   }
   console.log(differ === 0 ? "The modes agree on every test." : `${differ} tests differ between the modes.`);
-  process.exitCode = differ === 0 ? 0 : 1;
+  // A trap or a runtime panic is a bug in every mode, so it fails the run
+  // even when the modes agree.
+  let crashes = 0;
+  for (const mode of modes) {
+    for (const [file, results] of Object.entries(byMode[mode])) {
+      for (const [name, r] of Object.entries(results)) {
+        if (r.status === "fail" && /^trap: |runtime crashed/.test(r.message ?? "")) {
+          crashes++;
+          console.log(`CRASH ${mode} ${file} ${name}: ${r.message}`);
+        }
+      }
+    }
+  }
+  if (crashes > 0) console.log(`${crashes} tests crashed the runtime.`);
+  process.exitCode = differ === 0 && crashes === 0 ? 0 : 1;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
