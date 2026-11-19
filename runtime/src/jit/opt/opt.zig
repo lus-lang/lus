@@ -476,7 +476,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
 
 /// Marks the functions that the optimized code of `p` was compiled
 /// with.
-pub fn traverse(m: *gc.MarkerApi, p: *Proto) void {
+pub fn traverse(m: anytype, p: *Proto) void {
     const info = existing(p) orelse return;
     for (info.units.items) |u| {
         for (u.protos) |q| m.markHeader(&q.hdr);

@@ -561,7 +561,7 @@ pub const Thread = struct {
         l.tbc.deinit(gpa);
     }
 
-    pub fn traverse(l: *Thread, m: *gc.MarkerApi) void {
+    pub fn traverse(l: *Thread, m: anytype) void {
         for (l.stack[0..l.top]) |v| m.mark(v);
         // Clear the dead part so stale values never resurrect.
         for (l.stack[l.top..]) |*v| v.* = .nil;
@@ -898,7 +898,7 @@ pub fn freeExtra(g: *Global, h: *gc.Header) void {
     }
 }
 
-pub fn traverseExtra(m: *gc.MarkerApi, h: *gc.Header) void {
+pub fn traverseExtra(m: anytype, h: *gc.Header) void {
     switch (h.tag) {
         .proto => {
             const p = h.as(object.Proto);
