@@ -187,6 +187,8 @@ pub const Global = struct {
     /// The collector mode reported by collectgarbage("generational") and
     /// collectgarbage("incremental").
     gc_generational: bool = false,
+    /// Allocation points seen, for the GC stress build.
+    stress_tick: u32 = 0,
     cycles: u64 = 0,
     strings: StringSet = .{},
     seed: u64,

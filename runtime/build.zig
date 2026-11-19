@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const options = b.addOptions();
-    options.addOption(bool, "gc_stress", b.option(bool, "gc-stress", "Collect at every allocation point (finds missing roots)") orelse false);
+    options.addOption(u32, "gc_stress", b.option(u32, "gc-stress", "Collect at every Nth allocation point to expose missing roots (0 disables)") orelse 0);
 
     const lus_mod = b.createModule(.{
         .root_source_file = b.path("src/lus.zig"),
