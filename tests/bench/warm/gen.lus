@@ -1,0 +1,53 @@
+--[[
+  Writes the warm start benchmark program to the path given as the first
+  argument. The optional second and third arguments set the number of
+  functions (600) and of rounds (100). The program defines many small functions that each turn hot
+  after a few calls, then calls all of them once per round. It prints the
+  time of the first ten rounds, which include the warmup of a cold start,
+  next to ten rounds at the steady speed of the end of the run.
+]]
+pledge("fs")
+
+local count = tonumber(arg[2]) or 600
+local rounds = tonumber(arg[3]) or 100
+local parts = {}
+
+parts[#parts + 1] = "local fns = {}"
+for i = 1, count do
+    parts[#parts + 1] = string.format([[
+fns[%d] = function(x)
+    local s = 0
+    for i = 1, 12 do
+        local a = x * %d + i
+        s = s + a %% %d + (a ~ i) * 3 - s // 4
+    end
+    return s
+end
+]], i, i, 7 + i % 11)
+end
+
+parts[#parts + 1] = string.format([[
+local times = {}
+local sink = 0
+local start = os.clock()
+for r = 1, %d do
+    local t0 = os.clock()
+    for j = 1, #fns do
+        sink = sink + fns[j](r)
+    end
+    times[r] = os.clock() - t0
+end
+local total = os.clock() - start
+local tail = {}
+for r = #times - 19, #times do tail[#tail + 1] = times[r] end
+table.sort(tail)
+local steady = tail[10]
+local early = 0
+for r = 1, 10 do early = early + times[r] end
+print(string.format("first 10 rounds %%.2f ms  steady 10 rounds %%.2f ms  all %%d rounds %%.2f ms  (sink %%d)",
+    early * 1000, steady * 10000, #times, total * 1000, sink))
+]], rounds)
+
+local file = assert(io.open(arg[1], "w"))
+file:write(table.concat(parts, "\n"))
+file:close()

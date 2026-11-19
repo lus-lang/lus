@@ -94,6 +94,7 @@ Code is position independent. Addresses of runtime routines and of constants are
 - `LUS_JIT=off` interprets everything. `LUS_JIT=eager` compiles every function on its first call, which is what the test suites use. `LUS_JIT=on` is the default.
 - `LUS_JIT_THRESHOLD=N` sets the number of events before a function compiles.
 - `debug.jit()` returns the setting, and `debug.jit(f)` tells whether `f` has native code.
+- A binary chunk written by `lus compile --profile` or `lus build --profile` names the functions that were hot in a profiling run, and loading it compiles them at once (`warmstart.md`).
 - A host written in Zig calls `jit.configure`.
 
 ## Measurements
