@@ -562,6 +562,10 @@ fn finishMark(g: *Global, m: *Marker, major: bool) void {
     m.clearWeak();
     if (verify) verifyHeap(g);
     std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
+    // The gray stack holds an entry per reference while it drains, so a
+    // heap with many references grows it far past what a later cycle
+    // needs. Its memory is counted as heap, so a large one is freed.
+    if (s.gray.capacity > gray_keep) s.gray.clearAndFree(g.gpa);
     s.heap_at_mark = g.counter.bytes;
     s.swept = 0;
     s.last_major = major;
@@ -835,6 +839,10 @@ const prefetch_distance = 8;
 /// they are not aligned.
 pub const GrayList = std.ArrayList(*align(1) Header);
 
+/// The gray stack capacity, in entries, that survives the end of a mark
+/// phase (512 KB on 64-bit targets).
+const gray_keep = 64 * 1024;
+
 /// Set in a gray stack entry whose object was not marked when it was
 /// pushed (`Marker.markValue`).
 const unmarked_bit: usize = 1;
@@ -877,6 +885,9 @@ const Marker = struct {
         if (m.verifying or isLeaf(v.tag)) return m.markObject(v.header());
         const h: *align(1) Header = @ptrFromInt(@intFromPtr(v.header()) | unmarked_bit);
         const gray = &m.g.gcs.gray;
+        // Runs of references to one object, such as an array filled with
+        // the same table, push it once.
+        if (gray.items.len > 0 and gray.items[gray.items.len - 1] == h) return;
         if (gray.items.len < gray.capacity) {
             gray.appendAssumeCapacity(h);
         } else {
@@ -917,6 +928,9 @@ const Marker = struct {
         // Leaf objects have no references to trace.
         if (isLeaf(h.tag)) return;
         const gray = &m.g.gcs.gray;
+        // Runs of references to one object, such as an array filled with
+        // the same table, push it once.
+        if (gray.items.len > 0 and gray.items[gray.items.len - 1] == h) return;
         if (gray.items.len < gray.capacity) {
             gray.appendAssumeCapacity(h);
         } else {
