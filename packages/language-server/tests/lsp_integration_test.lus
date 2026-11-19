@@ -554,7 +554,6 @@ local function uses_the_documented_candidate_order_including_lua_init_files_test
 end
 
 local function invalidates_versioned_module_exports_without_cross_root_leakage_test()
-  skip("2.0 bug: assigning t[k2] = v with a long (non-interned) string key k2 that equals an existing key k1 adds a duplicate entry instead of replacing it, so the mirror table keeps the stale version")
   local a_exports = modules.get_exports("lib.tool", ROOT_A .. "/main.lus")
   local b_exports = modules.get_exports("lib.tool", ROOT_B .. "/main.lus")
   assert(a_exports[1].name == "a")
@@ -581,7 +580,6 @@ local function promotes_a_newly_created_higher_priority_module_candidate_test()
 end
 
 local function indexes_closed_files_while_open_text_remains_authoritative_test()
-  skip("2.0 bug: assigning t[k2] = v with a long (non-interned) string key k2 that equals an existing key k1 adds a duplicate entry instead of replacing it, so the mirror table keeps the stale version")
   upsert(ROOT_A, "closed.lus", MIRROR_URI, 1,
     "global mirrored_symbol\nmirrored_symbol = 1")
 
@@ -610,7 +608,6 @@ local function indexes_closed_files_while_open_text_remains_authoritative_test()
 end
 
 local function deletes_closed_mirrors_and_retains_uri_authorities_test()
-  skip("2.0 bug: assigning t[k2] = v with a long (non-interned) string key k2 that equals an existing key k1 adds a duplicate entry instead of replacing it, so the mirror table keeps the stale version")
   send_notification("lus/workspace/delete", {
     rootUri = ROOT_A,
     relativePath = "closed.lus",

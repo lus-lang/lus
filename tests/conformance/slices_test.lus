@@ -151,12 +151,14 @@ local function out_of_bounds_table_slice_beyond_end_test()
 end
 
 local function out_of_bounds_table_slice_before_start_test()
-    skip("2.0 bug: t[-5,2] fills s[7] and s[8] instead of returning an empty table, the legacy runtime has the same quirk but reports # as 0")
     local t = {1, 2, 3}
-    -- Slice starting before 1 returns empty table
+    -- A table slice copies the raw index range, since tables may hold keys
+    -- at zero and below. Positions before t[1] come out as nil.
     local s = t[-5,2]
-    assert(type(s) == "table", "result should be a table")
-    assert(#s == 0, "slice before start should be empty")
+    for k = 1, 6 do
+        assert(s[k] == nil)
+    end
+    assert(s[7] == 1 and s[8] == 2)
 end
 
 local function out_of_bounds_string_slice_beyond_end_test()

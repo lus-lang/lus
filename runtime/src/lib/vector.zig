@@ -210,8 +210,11 @@ pub fn stringUnpack(l: *Thread) Error!u32 {
     const d = l.arg(2);
     const data = if (d.tag == .vector) d.as(Vector).bytes.items else try aux.checkBytes(l, 2);
     var pos = try aux.optInt(l, 3, 1);
+    // Positions follow the string functions: zero and negative positions
+    // beyond the start clamp to the first byte.
     if (pos < 0) pos = @as(i64, @intCast(data.len)) + pos + 1;
-    if (pos < 1 or pos - 1 > data.len) return aux.argError(l, 3, "initial position out of string", .{});
+    if (pos < 1) pos = 1;
+    if (pos - 1 > data.len) return aux.argError(l, 3, "initial position out of string", .{});
     const r = try pack.unpack(l, fmt, data, @intCast(pos - 1), pack.string_msgs);
     try l.push(Value.int(@intCast(r[1] + 1)));
     return r[0] + 1;

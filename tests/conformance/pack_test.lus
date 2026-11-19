@@ -481,7 +481,6 @@ end
 -- first byte and returns the little-endian i4 value of "abcd" with a next
 -- position of 5.
 local function initial_position_zero_clamps_to_the_first_byte_test()
-    skip("2.0 bug: string.unpack raises 'initial position out of string' for position 0, the legacy runtime clamps it to 1")
     local value, nextpos = unpack("i4", "abcd", 0)
     assert(value == 1684234849)
     assert(nextpos == 5)
@@ -491,7 +490,6 @@ end
 -- start, again matching reference Lua's posrelat, so a far-negative position
 -- reads from the first byte just like position 1.
 local function far_negative_position_clamps_to_the_first_byte_test()
-    skip("2.0 bug: string.unpack raises 'initial position out of string' for a far negative position, the legacy runtime clamps it to 1")
     local value, nextpos = unpack("i4", "abcd", -100)
     assert(value == 1684234849)
     assert(nextpos == 5)
