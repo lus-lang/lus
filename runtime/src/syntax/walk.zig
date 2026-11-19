@@ -49,7 +49,7 @@ pub fn Visitor(comptime Ctx: type) type {
 
         pub fn stat(v: Self, s: *ast.Stat) anyerror!void {
             switch (s.kind) {
-                .empty, .break_, .continue_, .goto_, .label => {},
+                .empty, .break_, .continue_, .goto_, .label, .recovered => {},
                 .expr => |*e| try v.slot(e),
                 .local => |l| try v.exprs(l.values),
                 .local_from => |*l| try v.slot(&l.source),

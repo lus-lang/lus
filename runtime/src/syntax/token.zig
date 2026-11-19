@@ -91,19 +91,24 @@ pub const Tag = enum(u8) {
     /// A backtick string without interpolation.
     interp_simple,
 
+    /// A byte that starts no token. Only the tolerant lexer of the
+    /// tooling (`debug.parse`) emits it, so that the parser can report
+    /// it and recover. The ordinary lexer stops with an error instead.
+    unknown,
+
     eof,
 };
 
 pub const keywords = [_][]const u8{
-    "and",   "break",  "catch",  "continue", "do",     "else",  "elseif",
-    "end",   "enum",   "false",  "for",      "from",   "function", "global",
-    "goto",  "if",     "in",     "local",    "nil",    "not",   "or",
-    "provide", "repeat", "return", "then",   "true",   "until", "while",
+    "and",     "break",  "catch",  "continue", "do",   "else",     "elseif",
+    "end",     "enum",   "false",  "for",      "from", "function", "global",
+    "goto",    "if",     "in",     "local",    "nil",  "not",      "or",
+    "provide", "repeat", "return", "then",     "true", "until",    "while",
 };
 
 pub const keyword_map = std.StaticStringMap(Tag).initComptime(blk: {
     var entries: [keywords.len]struct { []const u8, Tag } = undefined;
-    for (keywords, 0..) |kw, i| entries[i] = .{ kw, @enumFromInt(i) };
+    for (keywords, 0..) |kw, i| entries[i] = .{ kw, @fromBackingInt(@intCast(i)) };
     break :blk entries;
 });
 
@@ -170,8 +175,9 @@ pub fn describe(tag: Tag) []const u8 {
         .decimal => "<decimal>",
         .string => "<string>",
         .interp_begin, .interp_mid, .interp_end, .interp_simple => "<interpolation>",
+        .unknown => "<unknown>",
         .eof => "<eof>",
-        else => keywords[@intFromEnum(tag)],
+        else => keywords[@backingInt(tag)],
     };
 }
 

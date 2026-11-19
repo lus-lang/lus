@@ -2004,7 +2004,7 @@ fn block(fs: *FuncState, b: *ast.Block) Error!void {
 fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
     fs.line = s.line;
     switch (s.kind) {
-        .empty => {},
+        .empty, .recovered => {},
         .expr => |e| {
             var v: ExpDesc = .{};
             try expr(fs, e, &v);
