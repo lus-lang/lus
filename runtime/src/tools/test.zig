@@ -37,6 +37,8 @@ const Options = struct {
     jobs: usize = 0,
     timeout_s: i64 = 60,
     verbose: bool = false,
+    /// Run the `lus` code blocks of Markdown files instead of test files.
+    doc: bool = false,
     tmp_root: []const u8 = "/tmp",
 };
 
@@ -54,6 +56,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
                 i += 1;
             }
         }
+        if (isDoc(args[1])) return runDocFile(init, args[1], filter);
         return runOne(init, args[1], filter, update);
     }
     var o: Options = .{};
@@ -67,6 +70,8 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             o.json = true;
         } else if (std.mem.eql(u8, a, "-v")) {
             o.verbose = true;
+        } else if (std.mem.eql(u8, a, "--doc")) {
+            o.doc = true;
         } else if (std.mem.eql(u8, a, "--filter") and i + 1 < args.len) {
             i += 1;
             o.filter = args[i];
@@ -100,7 +105,11 @@ const FileResult = struct {
     millis: i64 = 0,
 };
 
-fn discover(gpa: std.mem.Allocator, io: std.Io, path: []const u8, files: *std.ArrayList([]const u8)) !void {
+fn isDoc(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".md") or std.mem.endsWith(u8, path, ".mdx");
+}
+
+fn discover(gpa: std.mem.Allocator, io: std.Io, path: []const u8, files: *std.ArrayList([]const u8), doc: bool) !void {
     const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch {
         std.debug.print("lus test: cannot open {s}\n", .{path});
         return error.NotFound;
@@ -115,7 +124,9 @@ fn discover(gpa: std.mem.Allocator, io: std.Io, path: []const u8, files: *std.Ar
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.basename, "_test.lus")) continue;
+        if (doc) {
+            if (!isDoc(entry.basename)) continue;
+        } else if (!std.mem.endsWith(u8, entry.basename, "_test.lus")) continue;
         const skip_dirs = [_][]const u8{ "node_modules", ".git", "zig-out", ".zig-cache", "legacy" };
         var skip = false;
         for (skip_dirs) |d| {
@@ -134,7 +145,7 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
         for (files.items) |f| gpa.free(f);
         files.deinit(gpa);
     }
-    for (o.paths.items) |p| discover(gpa, io, p, &files) catch return 2;
+    for (o.paths.items) |p| discover(gpa, io, p, &files, o.doc) catch return 2;
     std.mem.sort([]const u8, files.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.lessThan(u8, a, b);
@@ -444,6 +455,101 @@ fn reportFileError(l: *Thread) void {
     buf.print(l.g.gpa, "{s}\n", .{msg}) catch return;
     if (l.err_traceback) |tb| buf.print(l.g.gpa, "{s}\n", .{tb.bytes()}) catch {};
     out.stderr(l.g, buf.items);
+}
+
+// ---------------------------------------------------------------------
+// Doc tests
+
+/// Runs every ```lus code block of a Markdown file as its own test, in a
+/// fresh state with every permission granted. A block whose fence reads
+/// ```lus nocheck is a fragment and is skipped.
+fn runDocFile(init: std.process.Init, path: []const u8, filter: ?[]const u8) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
+        std.debug.print("cannot open {s} ({s})\n", .{ path, @errorName(e) });
+        return 2;
+    };
+    defer gpa.free(src);
+    var failed = false;
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    var lineno: usize = 0;
+    var code: std.ArrayList(u8) = .empty;
+    defer code.deinit(gpa);
+    var in_block = false;
+    var skip_block = false;
+    var start_line: usize = 0;
+    while (lines.next()) |raw| {
+        lineno += 1;
+        const line = std.mem.trimStart(u8, raw, " \t");
+        if (!in_block) {
+            if (std.mem.startsWith(u8, line, "```lus")) {
+                // A fence such as ```lusc names another language.
+                const after = line["```lus".len..];
+                if (after.len > 0 and std.ascii.isAlphanumeric(after[0])) continue;
+                const meta = std.mem.trim(u8, after, " \t\r");
+                in_block = true;
+                skip_block = std.mem.indexOf(u8, meta, "nocheck") != null;
+                start_line = lineno + 1;
+                code.clearRetainingCapacity();
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "```")) {
+            in_block = false;
+            const name = try std.fmt.allocPrint(gpa, "line {d}", .{start_line});
+            defer gpa.free(name);
+            if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            if (skip_block) {
+                writeRecord(gpa, io, "skip", name, "nocheck");
+                continue;
+            }
+            if (!try runDocBlock(init, path, start_line, code.items, name)) failed = true;
+            continue;
+        }
+        try code.appendSlice(gpa, raw);
+        try code.append(gpa, '\n');
+    }
+    return if (failed) 1 else 0;
+}
+
+fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []const u8, name: []const u8) !bool {
+    const gpa = init.gpa;
+    const io = init.io;
+    const l = try api.newState(gpa, io);
+    l.g.environ = init.environ_map;
+    try api.setFlags(l, &.{});
+    api.openLibs(l) catch {
+        api.close(l);
+        return false;
+    };
+    api.grantPledges(l, &.{"all"}) catch {};
+    const chunkname = try std.fmt.allocPrint(gpa, "={s}:{d}", .{ std.fs.path.basename(path), line });
+    defer gpa.free(chunkname);
+    var ok = true;
+    var msg: []u8 = &.{};
+    defer gpa.free(msg);
+    api.load(l, code, chunkname) catch {
+        ok = false;
+    };
+    if (ok) ok = api.pcall(l, 0, 0);
+    if (!ok) msg = try gpa.dupe(u8, api.errorMessage(l, l.stack[l.top - 1]));
+    api.close(l);
+    writeRecord(gpa, io, if (ok) "pass" else "fail", name, msg);
+    return ok;
+}
+
+fn writeRecord(gpa: std.mem.Allocator, io: std.Io, status: []const u8, name: []const u8, msg: []const u8) void {
+    var rec: std.ArrayList(u8) = .empty;
+    defer rec.deinit(gpa);
+    rec.appendSlice(gpa, "\x1e{\"status\":\"") catch return;
+    rec.appendSlice(gpa, status) catch return;
+    rec.appendSlice(gpa, "\",\"name\":\"") catch return;
+    jsonEscape(gpa, &rec, name) catch return;
+    rec.appendSlice(gpa, "\",\"message\":\"") catch return;
+    jsonEscape(gpa, &rec, msg) catch return;
+    rec.appendSlice(gpa, "\"}\n") catch return;
+    std.Io.File.stdout().writeStreamingAll(io, rec.items) catch {};
 }
 
 fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Value) bool {

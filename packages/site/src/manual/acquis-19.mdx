@@ -33,7 +33,7 @@ lus --standalone app.lus --include lib/utils.lus --include lib/config.lus
 
 The bundled modules are available via their derived module names:
 
-```lus
+```lus nocheck
 -- app.lus
 local utils = require("utils")   -- loads bundled lib/utils.lus
 local config = require("config") -- loads bundled lib/config.lus
@@ -47,7 +47,7 @@ Use the `:alias` syntax to specify a custom module name:
 lus --standalone app.lus --include vendor/json.lus:json
 ```
 
-```lus
+```lus nocheck
 -- app.lus
 local json = require("json")  -- loads bundled vendor/json.lus
 ```
@@ -60,7 +60,7 @@ Entire directories can be included, with files recursively bundled using dot-not
 lus --standalone app.lus --include lib
 ```
 
-```lus
+```lus nocheck
 -- app.lus
 local http = require("lib.http")      -- loads lib/http.lus
 local utils = require("lib.utils")    -- loads lib/utils.lus
@@ -90,7 +90,7 @@ Arguments passed to the standalone binary are available via the `arg` table and 
 ./app foo bar baz
 ```
 
-```lus
+```lus nocheck
 -- app.lus
 print(arg[0])  -- "./app"
 print(arg[1])  -- "foo"

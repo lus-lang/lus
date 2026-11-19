@@ -135,7 +135,7 @@ CSV is one of the most common data interchange formats. Like JSON, it appears fr
 
 Lus already provides `fromjson` and `tojson` as global functions for the most common serialization format. CSV is the natural complement: it covers the tabular data use case that JSON handles awkwardly.
 
-```lus
+```lus nocheck
 -- Reading a CSV file is as simple as reading JSON
 local data = fromcsv(io.open("data.csv"):read("*a"), true)
 for _, row in ipairs(data) do

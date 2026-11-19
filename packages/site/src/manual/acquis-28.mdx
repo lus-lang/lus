@@ -23,7 +23,7 @@ lus --flag channel=beta script.lus  # same as -F
 
 The table always exists, including when no flags are given. Undefined flags read as `nil`.
 
-```lus
+```lus nocheck
 -- Run with: lus -Fdebug -Fversion=1.5 script.lus
 assert(flags.debug == true)
 assert(flags.version == 1.5)

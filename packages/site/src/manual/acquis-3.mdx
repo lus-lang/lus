@@ -51,7 +51,7 @@ end
 
 This is particularly useful for functions that return nil on failure:
 
-```lus
+```lus nocheck
 local function findUser(id)
     return users[id]  -- may be nil
 end
@@ -100,7 +100,7 @@ end
 
 This enables progressive narrowing:
 
-```lus
+```lus nocheck
 if primary = getPrimary() then
     use(primary)
 elseif secondary = getSecondary() then
@@ -159,7 +159,7 @@ Lua does not allow assignments in conditional expressions. Testing a value often
 
 A common Lua pattern:
 
-```lus
+```lus nocheck
 -- Lua: separate assignment and test
 local result = compute()
 if result then
@@ -169,7 +169,7 @@ end
 
 With if-assignment:
 
-```lus
+```lus nocheck
 -- Lus: combined
 if result = compute() then
     use(result)
@@ -180,7 +180,7 @@ end
 
 In Lua, variables declared for conditions pollute the outer scope:
 
-```lus
+```lus nocheck
 -- Lua: result visible after if block
 local result = compute()
 if result then
@@ -191,7 +191,7 @@ end
 
 With if-assignment, variables are scoped to the conditional block:
 
-```lus
+```lus nocheck
 -- Lus: result scoped to conditional
 if result = compute() then
     process(result)
@@ -203,7 +203,7 @@ end
 
 Chained fallbacks are verbose in Lua:
 
-```lus
+```lus nocheck
 -- Lua: verbose fallback chain
 local primary = getPrimary()
 if primary then
@@ -220,7 +220,7 @@ end
 
 With if-assignment:
 
-```lus
+```lus nocheck
 -- Lus: flat fallback chain
 if primary = getPrimary() then
     use(primary)

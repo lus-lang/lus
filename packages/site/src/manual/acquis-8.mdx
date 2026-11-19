@@ -196,7 +196,7 @@ print(hexdump("Hello, World!"))
 
 ### Reading files with different encodings
 
-```lus
+```lus nocheck
 local function readLatin1File(path)
     local f = io.open(path, "rb")
     local content = f:read("*a")
@@ -217,7 +217,7 @@ Lus strings hold text, and vectors hold raw bytes. External systems expect speci
 
 Base64 and URL encoding are ubiquitous:
 
-```lus
+```lus nocheck
 -- Without transcode: manual encoding
 local b64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 -- ... 50+ lines of encoding logic
@@ -230,7 +230,7 @@ local encoded = string.transcode(data, "utf-8", "base64")
 
 Many legacy systems use Latin-1 or other single-byte encodings:
 
-```lus
+```lus nocheck
 -- Convert modern UTF-8 to legacy encoding
 local legacy = string.transcode(modern_text, "utf-8", "iso-8859-1")
 ```
@@ -239,7 +239,7 @@ local legacy = string.transcode(modern_text, "utf-8", "iso-8859-1")
 
 UTF-16LE is common on Windows:
 
-```lus
+```lus nocheck
 -- Read Windows clipboard or registry data
 local utf8_text = string.transcode(windows_data, "utf-16le", "utf-8")
 ```

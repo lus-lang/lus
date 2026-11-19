@@ -37,7 +37,7 @@ pledge("network")  -- Warning: pledge() after pledge("seal") has no effect
 
 References to `pcall` or `xpcall` suggest using the `catch` expression instead ([Acquis 1](/manual/acquis-1)).
 
-```lus
+```lus nocheck
 local ok, err = pcall(risky)  -- Warning: 'pcall' is deprecated, use 'catch'
 ```
 
@@ -51,7 +51,7 @@ local ok, result = catch risky()
 
 Local variables that are only used in the immediately following `if` or `while` condition can be moved into the condition using assignment syntax ([Acquis 3](/manual/acquis-3), [Acquis 13](/manual/acquis-13)).
 
-```lus
+```lus nocheck
 local x = getValue()
 if x then          -- Warning: local declaration can be moved to if condition
     process(x)
@@ -60,7 +60,7 @@ end
 
 Use instead:
 
-```lus
+```lus nocheck
 if x = getValue() then
     process(x)
 end
@@ -96,14 +96,14 @@ end
 
 Pattern of extracting multiple fields from a table can use `from` syntax ([Acquis 4](/manual/acquis-4)).
 
-```lus
+```lus nocheck
 local a, b, c = t.a, t.b, t.c
 -- Warning: use 'from' destructuring: local ... from t
 ```
 
 Use instead:
 
-```lus
+```lus nocheck
 local a, b, c from t
 ```
 

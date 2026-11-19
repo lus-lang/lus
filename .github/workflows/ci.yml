@@ -80,6 +80,9 @@ jobs:
       - name: Conformance tests
         working-directory: runtime
         run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Documentation examples
+        working-directory: runtime
+        run: zig-out/bin/lus test --doc ../packages/site/src/manual ../spec
       - name: WebAssembly build
         if: runner.os == 'Linux'
         working-directory: runtime

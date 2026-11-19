@@ -17,7 +17,7 @@ returns: T
 
 Creates a copy of the table `t`. If `deep` is true, nested tables are recursively cloned. Deep copies preserve circular references.
 
-```lus
+```lus nocheck
 local x = table.clone(t)        -- shallow copy
 local y = table.clone(t, true)  -- deep copy
 ```

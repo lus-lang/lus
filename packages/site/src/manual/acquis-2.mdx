@@ -11,7 +11,7 @@ The `?` suffix operator enables safe navigation through potentially nil values. 
 
 The `?` operator is placed after any expression and before a suffix operation:
 
-```lus
+```lus nocheck
 expr?.field    -- field access
 expr?[key]     -- index access
 expr?:method() -- method call
@@ -183,7 +183,7 @@ end
 
 With optional chaining:
 
-```lus
+```lus nocheck
 -- Lus: inline safety
 obj?:process()
 ```

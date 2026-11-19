@@ -48,7 +48,7 @@ config = {}
 
 Inside an explicit `global` declaration, every global name is declared explicitly. An undeclared name produces an error, which catches typos and supports strict code.
 
-```lus
+```lus nocheck
 x = 1               -- Ok, global by default
 do
   global y          -- voids implicit declaration for this block
@@ -89,7 +89,7 @@ print(x, y)  --> 10  20
 
 The table expression is evaluated once, and missing fields become `nil`. The `from` keyword works with `local`, bare assignment, and `global` declarations:
 
-```lus
+```lus nocheck
 local x, y from getPosition()   -- local declaration
 x, y from otherPoint             -- assigns to existing variables
 global width, height from getDimensions()
@@ -101,7 +101,7 @@ Local variables can carry _attributes_ that modify their behavior. There are two
 
 The `<const>` attribute makes a variable immutable after initialization, so any attempt to reassign it is a compile-time error:
 
-```lus
+```lus nocheck
 local MAX <const> = 100
 MAX = 200  -- ERROR: attempt to assign to const variable
 ```
@@ -117,7 +117,7 @@ end  -- f:close() called automatically here
 
 Runtime attributes use the `<attr>` syntax to attach a function that is called on every assignment. The function receives the variable name and the new value. If it returns a non-nil value, that value replaces the assigned one:
 
-```lus
+```lus nocheck
 local function typed(name, value)
   if type(value) ~= "number" then
     error(`$name must be a number, got $(type(value))`)
@@ -150,7 +150,7 @@ pos = { x = 5 }  -- only updates x; y remains 0
 
 Groups can contain subgroups and `<const>` fields:
 
-```lus
+```lus nocheck
 local player <group> = {
   name <const> = "Alice",
   pos <group> = { x = 0, y = 0 }
@@ -377,7 +377,7 @@ Exponentiation (`^`) and concatenation (`..`) are right-associative. All other b
 
 The `if` statement executes a block when its condition is truthy. Optional `elseif` and `else` branches handle alternative cases:
 
-```lus
+```lus nocheck
 if x > 0 then
   print("positive")
 elseif x < 0 then
@@ -391,7 +391,7 @@ Only `nil` and `false` are falsy. Values such as `0`, `""`, and empty tables are
 
 An `if` or `elseif` condition can include an assignment using `=`. The assigned variables are scoped to the entire conditional block (all branches), and the condition succeeds when all assigned values are truthy:
 
-```lus
+```lus nocheck
 if user = findUser(id) then
   print(user.name)
 elseif guest = findGuest(id) then
@@ -415,7 +415,7 @@ end
 
 The same assignment syntax works in `while` conditions. The expression is evaluated on each iteration, and the loop exits when any assigned value is falsy. The assigned variables are scoped to the loop body.
 
-```lus
+```lus nocheck
 while line = file:read() do
   process(line)
 end
@@ -521,7 +521,7 @@ Labels cannot jump into a nested block, out of a function, or into the scope of 
 
 A `do`/`end` block is normally a plain scoping block (as seen in the [Variables](#variables) examples). By using the `provide` keyword inside it, the block becomes an expression that evaluates to the provided value:
 
-```lus
+```lus nocheck
 local result = do
   local temp = compute()
   provide temp * 2
@@ -530,7 +530,7 @@ end
 
 Multiple values can be provided for multiple assignment targets:
 
-```lus
+```lus nocheck
 local x, y = do
   local p = getPoint()
   provide p.x, p.y
@@ -886,7 +886,7 @@ The call to `setmetatable(Dog, {__index = Animal})` ensures that methods not fou
 
 The generic `for` loop calls an _iterator function_ on each iteration. The loop:
 
-```lus
+```lus nocheck
 for var1, var2 in iterator, state, initial do
   -- body
 end
@@ -932,7 +932,7 @@ end
 
 A stateful iterator uses a closure to maintain internal state across calls:
 
-```lus
+```lus nocheck
 local function lines(filename)
   local file = io.open(filename, "r")
   return function()
@@ -1096,7 +1096,7 @@ print(result)  --> HELLO WORLD
 
 Patterns are _not_ regular expressions, so they lack alternation (`|`), backreferences, and other regex features. However, they handle most practical tasks:
 
-```lus
+```lus nocheck
 -- Match a number (integer or float)
 string.match(s, "-?%d+%.?%d*")
 
@@ -1154,7 +1154,7 @@ Coroutines start with the permissions of their creator. Later permission changes
 
 [`require`](/manual/api#require) loads and caches modules. On the first call, it searches for the module, runs it, and stores the return value in [`package.loaded`](/manual/api#package.loaded). Subsequent calls return the cached value:
 
-```lus
+```lus nocheck
 local json = require("json")
 local data = json.decode('{"x": 1}')
 ```
@@ -1301,7 +1301,7 @@ The [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) globals pr
 
 The `fs` library provides cross-platform filesystem operations. All `fs` functions throw on failure. Use `catch` for error handling.
 
-```lus
+```lus nocheck
 local files = fs.list("src", "*.lus")
 fs.createdirectory("build", true)   -- true creates parent directories
 fs.copy("src/main.lus", "build/main.lus")
@@ -1313,7 +1313,7 @@ Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whe
 
 The [`network` library](/manual/api#network-library) provides HTTP, HTTPS, TCP, and UDP communication.
 
-```lus
+```lus nocheck
 local status, body, headers = network.fetch("https://api.example.com/data")
 local sock = network.tcp.connect("example.com", 80)
 ```
@@ -1326,7 +1326,7 @@ TCP sockets support `send`, `receive`, `settimeout`, and `close`. Every receive 
 
 [Workers](/manual/api#worker-library) are separate interpreter states running on a process-wide thread pool. They provide concurrency through serialized message passing. Arguments passed to [`worker.create`](/manual/api#worker.create) are deep-copied into the worker's state:
 
-```lus
+```lus nocheck
 local w = worker.create("task.lus", {data = "input"})
 worker.send(w, "a message")
 while result = worker.receive(w) do
@@ -1365,7 +1365,7 @@ The runtime embeds SQLite for local, file-backed and in-memory databases. [`io.s
 
 Values always travel through `?` or named placeholders, and handles close through `<close>`, `__gc`, or an explicit `db:close()`, just like `io.open` file objects.
 
-```lus
+```lus nocheck
 local db <close> = io.sqlite("app.db")
 db:run("INSERT INTO users (name) VALUES (?)", name)
 for row in db:query("SELECT id, name FROM users WHERE age >= ?", 18) do

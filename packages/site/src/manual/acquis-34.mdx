@@ -27,7 +27,7 @@ The `select` clause always produces a record. Writing `select p.name` yields a r
 
 Several sources separated by commas form a join whose condition is written in the `where` clause. A join requires a `select` clause.
 
-```lus
+```lus nocheck
 @orders as o, customers as c
   where o.cust_id == c.id and o.total > 100
   select c.name, o.total
@@ -35,7 +35,7 @@ Several sources separated by commas form a join whose condition is written in th
 
 Grouping, aggregation, and de-duplication are expressed as clauses. The supported aggregates are `count`, `sum`, `avg`, `min`, and `max`, and `count(*)` counts rows while `count(expr)` counts non-nil values. In a grouped query every projection must be an aggregate or a group key, which keeps results deterministic and identical across providers.
 
-```lus
+```lus nocheck
 @sales as s
   select s.region, sum(s.amount) as total
   group by s.region
@@ -51,7 +51,7 @@ Inside a clause, literals, row-variable columns, comparisons, boolean logic, ari
 
 Everything else lifts into a host closure that runs in memory: a call, a method call, a row chain deeper than one field, or a constructor. Host closures see their upvalues live, like any Lus closure, and receive the current row of every source.
 
-```lus
+```lus nocheck
 @db.users as u
   where u.age >= 18 and matches(u.name, "^A")
   select u.name
@@ -63,7 +63,7 @@ Everything else lifts into a host closure that runs in memory: a call, a method 
 
 A query is lazy and read-only. It is run with the `query` iterator, which is used like `pairs`. Each call to `query(q)` produces a fresh iterator, so a stored query runs again on each loop and observes source changes. Every result comes from the query itself and the loop that consumes it: a count is expressed with `select count(*) as n`, a single row with `limit 1`, and a list is built inside the loop. Because iteration is the whole surface, the query value stays opaque and its evaluation stays entirely inside the provider.
 
-```lus
+```lus nocheck
 for row in query(adults) do
     print(row.name, row.age)
 end

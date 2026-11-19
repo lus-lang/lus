@@ -20,7 +20,7 @@ returns: function
 
 Returns an iterator that repeatedly unpacks values from `v` using the format `fmt`. Optional `count` limits the number of iterations.
 
-```lus
+```lus nocheck
 for a, b in vector.unpackmany(v, 0, "I4I4") do
   print(a, b)
 end

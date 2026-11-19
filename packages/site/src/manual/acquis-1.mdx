@@ -11,7 +11,7 @@ The `catch` expression evaluates an expression in protected mode. A successful c
 
 The `catch` keyword is followed by any expression:
 
-```lus
+```lus nocheck
 local success, ... = catch <expression>
 ```
 
@@ -42,7 +42,7 @@ An expression that returns no values gives the catch one result, the `true` stat
 
 When only the status matters, the remaining results can be ignored.
 
-```lus
+```lus nocheck
 local ok = catch someRiskyOperation()
 if not ok then
     recover()

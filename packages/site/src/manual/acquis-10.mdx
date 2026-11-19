@@ -24,7 +24,7 @@ pledge("exec")
 
 Without the appropriate permission, operations are denied:
 
-```lus
+```lus nocheck
 -- Without pledge("fs"):
 local ok, err = catch fs.list("/tmp")
 assert(not ok)  -- permission denied
@@ -264,7 +264,7 @@ pledge("network:http")
 
 Restrict access to only what's needed:
 
-```lus
+```lus nocheck
 -- Only read from specific directory
 pledge("fs:read=/var/log/app/*")
 
@@ -277,7 +277,7 @@ catch fs.list("/etc")  -- denied
 
 Host applications can pre-reject capabilities before running scripts:
 
-```lus
+```lus nocheck
 -- Host application
 pledge("~exec")    -- scripts cannot run commands
 pledge("~network") -- scripts cannot access network

@@ -36,7 +36,7 @@ until attempts >= 6
 
 The condition of a `repeat` loop can read the locals of the loop body. A `continue` that would skip the declaration of such a local is a compile error, because the condition would then read a variable that was never initialized. The following loop is rejected with `<continue> at line 4 jumps into the scope of 'done'`:
 
-```lus
+```lus nocheck
 local i = 0
 repeat
     i = i + 1

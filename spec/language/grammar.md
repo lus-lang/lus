@@ -664,7 +664,7 @@ catch cleanup()                             -- statement form
 
 `?` is a postfix suffix that may appear anywhere in a suffix chain:
 
-```lus
+```lus nocheck
 t?.a        t?[k]        t?:m(x)        f?()        t?.list[2,]        t?
 ```
 
@@ -705,7 +705,7 @@ assert(s?.list[2,] == nil)                  -- the slice is skipped too
 
 #### Syntax
 
-```lus
+```lus nocheck
 obj[a, b]     obj[a,]     obj[, b]     obj[,]
 ```
 
@@ -831,7 +831,7 @@ assert(tonumber(color.blue) == 3)
 
 #### Syntax
 
-```lus
+```lus nocheck
 local a, b, c from src          -- local declaration
 global a, b from src            -- global declaration
 a, b from src                   -- assignment to existing variables
@@ -912,7 +912,7 @@ Detection is described in section 2.1.
 
 Because the `while` variables are one binding, closures created in different iterations share them. **Pinned** (`syntax-interactions.lus`): closures created in a while-assignment loop all observe the value at break time, or the final falsy value after normal exit, and a body-local copy restores per-iteration capture. Closures over `if` condition variables capture the value of that `if` statement.
 
-```lus
+```lus nocheck
 if user = find(id) then
     greet(user)
 elseif guest = defaultGuest() then
@@ -1131,7 +1131,7 @@ A folded condition is true when the flag is present and truthy, negated for the 
 - Discarded code leaves no trace: no instructions, no pending `break` or `goto` targets, no labels, no nested prototypes, no debug locals, and correct line information afterwards. Constants and upvalues created while parsing a discarded block may remain in the function (this is invisible to programs).
 - Folding decisions are made at compile time with the flags of the compiling process and are baked into dumped bytecode.
 
-```lus
+```lus nocheck
 -- lus -Fdebug script.lus
 if flags.debug then
     enableTracing()        -- compiled

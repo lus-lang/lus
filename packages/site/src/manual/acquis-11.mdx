@@ -29,7 +29,7 @@ Nil, booleans, integers, floats, strings, and tables can cross a worker boundary
 
 Inside a worker state, `worker.message(value)` appends a serialized value to the worker's outbox. The parent calls `worker.receive(handle)` to wait for and deserialize the next value.
 
-```lus
+```lus nocheck
 -- processor.lus
 global worker
 
@@ -41,7 +41,7 @@ end
 worker.message(total)
 ```
 
-```lus
+```lus nocheck
 -- main.lus
 global worker
 
@@ -52,7 +52,7 @@ assert(total == 6)
 
 `worker.receive` accepts multiple handles. It waits until at least one handle has a message or reaches a terminal state, then returns one aligned result per handle. A handle without a ready message contributes `nil`.
 
-```lus
+```lus nocheck
 local first = worker.create("task.lus", "first")
 local second = worker.create("task.lus", "second")
 
@@ -65,12 +65,12 @@ if second_message then print("second:", second_message) end
 
 The parent uses `worker.send(handle, value)` to append a value to the worker's inbox. The worker-only `worker.peek()` function blocks until it can return the next inbox value.
 
-```lus
+```lus nocheck
 -- main.lus
 worker.send(handle, {command = "start"})
 ```
 
-```lus
+```lus nocheck
 -- processor.lus
 global worker
 

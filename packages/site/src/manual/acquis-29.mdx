@@ -18,7 +18,7 @@ This replaces the legacy `--include` behavior, which was only meaningful togethe
 lus --include a.lus script.lus
 ```
 
-```lus
+```lus nocheck
 global require, pledge
 
 -- Allow no further permissions.
@@ -51,7 +51,7 @@ Under [readonly environments](/manual/acquis-27), calls that match the strict `r
 
 Only the exact pattern is optimized. Anything looser (an aliased `local r = require`, a computed name, a conditional callee like `(mock or require)("a")`) compiles to an ordinary call and goes through the searcher:
 
-```lus
+```lus nocheck
 -- Run with: lus --readonly-env --include a.lus script.lus
 local m1 = require("a")   -- compiled to OP_REQUIRE
 

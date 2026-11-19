@@ -14,7 +14,7 @@ returns: T
 
 Shrinks the internal storage of `t` to fit its current contents and returns `t`. This releases unused array and hash capacity left after removing keys. It raises an error if `t` is readonly.
 
-```lus
+```lus nocheck
 local cache = build_huge_table()
 prune(cache)            -- removes most entries
 table.compact(cache)    -- releases the now-unused capacity

@@ -5,7 +5,7 @@ const std = @import("std");
 
 /// Usage for the commands that read their options themselves.
 const usages = .{
-    .{ "test", "usage: lus test [-u] [--filter TEXT] [--jobs N] [--timeout SECONDS] [--json] [-v] [PATH...]\n\nRuns every *_test.lus file under the given paths (default: the current\ndirectory). Each top-level function ending in _test is a test. -u updates\nsnapshots.\n" },
+    .{ "test", "usage: lus test [-u] [--doc] [--filter TEXT] [--jobs N] [--timeout SECONDS] [--json] [-v] [PATH...]\n\nRuns every *_test.lus file under the given paths (default: the current\ndirectory). Each top-level function ending in _test is a test. -u updates\nsnapshots. --doc runs the lus code blocks of Markdown files instead, skipping\nblocks fenced as ```lus nocheck.\n" },
     .{ "ast", "usage: lus ast [--no-comments] [--no-recover] FILE\n\nPrints the syntax tree of FILE as JSON.\n" },
     .{ "build", "usage: lus build [-o OUT] [-P PERM]... [-F NAME=VALUE]... [--include PATH[:ALIAS]]... MAIN.lus\n\nBundles MAIN.lus and the modules it requires into a standalone executable.\n" },
 };

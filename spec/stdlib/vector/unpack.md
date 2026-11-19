@@ -17,6 +17,6 @@ returns: any
 
 Unpacks values from the vector `v` starting at `offset`. Uses the same format string as `string.unpack`. Returns unpacked values followed by the next offset.
 
-```lus
+```lus nocheck
 local a, b, c, nextpos = vector.unpack(v, 0, "I4I4I4")
 ```

@@ -49,7 +49,7 @@ vector.resize(v, 2048)
 
 `vector.unpackmany` can be used to iteratively unpack from a vector. The signature is the same as `vector.unpack`, but returns a generator that can be iterated over. An additional end _count_ (not index) can be passed to limit the number of iterations.
 
-```lus
+```lus nocheck
 -- Iterate until end of vector
 for a, b, c in vector.unpackmany(v, 0, "I4I4I4") do
     print(a, b, c)

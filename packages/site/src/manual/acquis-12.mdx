@@ -20,7 +20,7 @@ local ast = debug.parse("local x = 1 + 2")
 
 Returns `nil` if parsing fails. An optional second argument specifies the chunk name for error messages:
 
-```lus
+```lus nocheck
 local ast = debug.parse(code, "myfile.lus")
 ```
 
@@ -75,7 +75,7 @@ walk(ast)
 
 Different node types have different fields:
 
-```lus
+```lus nocheck
 -- Binary operation
 {type = "binop", line = 1, op = "+", left = {...}, right = {...}}
 
@@ -142,7 +142,7 @@ Example JSON output:
 
 ### Static Analysis
 
-```lus
+```lus nocheck
 -- Count function calls
 local function count_calls(node)
   local count = 0

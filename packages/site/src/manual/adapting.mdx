@@ -61,7 +61,7 @@ Permissions can be restricted with subpermissions (e.g. `fs:read=/tmp/*`), rejec
 
 Instead of wrapping calls in `pcall`, Lus provides the `catch` keyword which works directly on any expression. The result follows the same `ok, value` convention as `pcall`.
 
-```lus
+```lus nocheck
 -- In Lua, protected calls require wrapping in a function:
 -- local ok, result = pcall(function() return riskyOp() end)
 
@@ -78,7 +78,7 @@ See [Error handling](/manual/guide#error-handling), [Catch handlers](/manual/gui
 
 Backtick strings support interpolation with `$` for identifiers and `$(...)` for expressions, replacing verbose concatenation.
 
-```lus
+```lus nocheck
 -- Instead of concatenation:
 -- print("Hello, " .. name .. "! Age: " .. tostring(age))
 
@@ -93,7 +93,7 @@ See [string](/manual/guide#string) and [Acquis 21](/manual/acquis-21).
 
 The `?` operator short-circuits to `nil` on any `nil` value in a chain, replacing verbose `and`-guard patterns.
 
-```lus
+```lus nocheck
 -- Instead of chained and-checks:
 -- local host = config and config.server and config.server.host
 
@@ -109,7 +109,7 @@ See [Optional chaining](/manual/guide#optional-chaining) and [Acquis 2](/manual/
 
 Variables can be declared directly in `if` and `while` conditions, scoped to the block. This replaces the pattern of pre-declaring a variable before testing it.
 
-```lus
+```lus nocheck
 -- Instead of pre-declaring and testing:
 -- local user = findUser(id)
 -- if user then print(user.name) end
@@ -129,7 +129,7 @@ See [if, elseif, else](/manual/guide#if-elseif-else), [while](/manual/guide#whil
 
 The `from` keyword extracts fields from a table into local variables in a single statement. It also works with `require`.
 
-```lus
+```lus nocheck
 -- Instead of manually extracting fields:
 -- local x = point.x; local y = point.y
 
@@ -155,7 +155,7 @@ See [Slices](/manual/guide#slices) and [Acquis 16](/manual/acquis-16).
 
 `table.clone` creates shallow or deep copies of tables, correctly handling circular references when deep copying.
 
-```lus
+```lus nocheck
 local shallow = table.clone(original)
 local deep = table.clone(original, true) -- circular refs preserved
 ```
@@ -166,7 +166,7 @@ See [Table cloning](/manual/guide#table-cloning) and [Acquis 17](/manual/acquis-
 
 A `do ... end` block becomes an expression when it contains a `provide` statement, yielding a value from the block.
 
-```lus
+```lus nocheck
 local result = do
     local temp = compute()
     provide temp * 2
@@ -204,7 +204,7 @@ See [Local groups](/manual/guide#local-groups) and [Acquis 18](/manual/acquis-18
 
 Lus extends Lua 5.4's `<const>` and `<close>` attributes and adds support for runtime attributes, which are user-defined functions called on every assignment to the variable.
 
-```lus
+```lus nocheck
 local MAX <const> = 100         -- immutable
 local f <close> = io.open(path) -- auto-closed on scope exit
 
@@ -245,7 +245,7 @@ See [JSON](/manual/guide#json) and [Acquis 6](/manual/acquis-6).
 
 The `fs` library provides file and directory operations. Requires `pledge("fs")`.
 
-```lus
+```lus nocheck
 local entries = fs.list(".")
 local kind = fs.type("config.txt") -- "file", "directory", or nil
 ```
@@ -266,7 +266,7 @@ See [Networking](/manual/guide#networking) and [Acquis 9](/manual/acquis-9).
 
 `string.transcode` converts strings between character encodings.
 
-```lus
+```lus nocheck
 local utf16 = string.transcode(data, "utf-8", "utf-16le")  -- a vector
 ```
 
@@ -276,7 +276,7 @@ See [Acquis 8](/manual/acquis-8).
 
 Workers provide true OS-thread concurrency via message passing, unlike coroutines which are cooperative and single-threaded.
 
-```lus
+```lus nocheck
 local w = worker.create("task.lus", {data = "input"})
 while result = worker.receive(w) do
     print(result)

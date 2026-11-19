@@ -49,7 +49,7 @@ Temp structures live in memory. `ATTACH` and `VACUUM INTO` paths are denied. The
 
 The following example pledges the database files, creates a table, and reads matching rows back with a named placeholder.
 
-```lus
+```lus nocheck
 global io, pledge
 
 pledge("fs:read=./app.db*", "fs:write=./app.db*", "seal")

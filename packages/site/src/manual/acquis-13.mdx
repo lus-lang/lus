@@ -24,7 +24,7 @@ end
 
 The condition is true when **all** assigned values are truthy (not nil or false). When any value becomes falsy, the loop exits.
 
-```lus
+```lus nocheck
 while x = getNext() do
     print(x)  -- prints each value until getNext() returns nil
 end
@@ -51,7 +51,7 @@ end
 
 This is particularly useful for iterator functions:
 
-```lus
+```lus nocheck
 while line = file:read() do
     process(line)
 end
@@ -61,7 +61,7 @@ end
 
 Multiple variables can be assigned and tested simultaneously:
 
-```lus
+```lus nocheck
 while a, b = getTwo() do
     print(a, b)
 end
@@ -69,7 +69,7 @@ end
 
 The condition fails if **any** assigned value becomes falsy:
 
-```lus
+```lus nocheck
 local function coords()
     -- returns nil, nil when done
     local x, y = getNextPoint()
@@ -85,7 +85,7 @@ end
 
 Variables declared in while conditions are scoped to the loop body:
 
-```lus
+```lus nocheck
 while data = fetch() do
     process(data)
 end
@@ -100,7 +100,7 @@ This prevents pollution of the outer scope and clearly indicates the variable's 
 
 A common Lua pattern requires separate assignment and test:
 
-```lus
+```lus nocheck
 -- Lua: separate assignment and test
 local line = file:read()
 while line do
@@ -111,7 +111,7 @@ end
 
 With while-assignment:
 
-```lus
+```lus nocheck
 -- Lus: combined
 while line = file:read() do
     process(line)

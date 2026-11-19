@@ -11,13 +11,13 @@ The `catch` expression supports an optional handler function that transforms a r
 
 A handler is specified in brackets between `catch` and the expression:
 
-```lus
+```lus nocheck
 local success, ... = catch[handler] <expression>
 ```
 
 When the expression raises an error, the handler receives the exact object that was raised. Its first return value replaces that object in the catch result. Additional handler results are discarded, so failure still returns exactly `false` and one value.
 
-```lus
+```lus nocheck
 -- Basic handler that extracts just the message
 local function simplify(err)
     return err:match("^[^:]+:[^:]+: (.+)") or err
@@ -107,7 +107,7 @@ local ok, result = catch[logged] riskyOperation()
 
 Convert technical errors to user-friendly messages:
 
-```lus
+```lus nocheck
 local translations = {
     ["ECONNREFUSED"] = "Could not connect to server",
     ["ETIMEDOUT"] = "Connection timed out",
@@ -132,7 +132,7 @@ end
 
 Handlers can be composed for complex error processing:
 
-```lus
+```lus nocheck
 local function compose(f, g)
     return function(x) return f(g(x)) end
 end
@@ -145,7 +145,7 @@ local ok, err = catch[logAndSimplify] operation()
 
 If the handler raises an error, that error propagates to an outer catch or the host.
 
-```lus
+```lus nocheck
 local function badHandler(err)
     error("handler failed")  -- this propagates!
 end
@@ -186,7 +186,7 @@ The handler value has the Lus type `function`. A table with a `__call` metametho
 
 Lua's `xpcall` provides similar functionality but operates at the function level:
 
-```lus
+```lus nocheck
 -- Lua: xpcall with error handler
 local ok, result = xpcall(function()
     return someOperation()
@@ -212,7 +212,7 @@ The catch handler syntax is more concise for single expressions and doesn't requ
 
 Without handlers, error transformation requires additional code after the catch:
 
-```lus
+```lus nocheck
 -- Without handler
 local ok, err = catch operation()
 if not ok then
@@ -222,7 +222,7 @@ end
 
 With handlers, the transformation is part of the catch:
 
-```lus
+```lus nocheck
 -- With handler
 local ok, err = catch[transform] operation()
 ```

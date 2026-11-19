@@ -11,13 +11,13 @@ The `from` keyword enables table destructuring, extracting fields into variables
 
 The `from` keyword follows a variable list and precedes a table expression:
 
-```lus
+```lus nocheck
 local a, b, c from table_expr
 ```
 
 This is equivalent to:
 
-```lus
+```lus nocheck
 local a, b, c = table_expr.a, table_expr.b, table_expr.c
 ```
 
@@ -45,7 +45,7 @@ assert(a == 1 and c == 3)
 
 Use `global` for global variable declarations:
 
-```lus
+```lus nocheck
 local t = { config = "default", timeout = 30 }
 global config, timeout from t
 assert(_G.config == "default")
@@ -192,7 +192,7 @@ end
 
 Extracting functions from a module:
 
-```lus
+```lus nocheck
 -- Lua: manual extraction
 local module = require("mymodule")
 local func1 = module.func1
@@ -202,7 +202,7 @@ local func3 = module.func3
 
 With `from`:
 
-```lus
+```lus nocheck
 -- Lus: destructured import
 local func1, func2, func3 from require("mymodule")
 ```

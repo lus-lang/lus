@@ -63,7 +63,7 @@ assert(x == 13)
 
 If using any compile-time attributes (e.g., `const` or `close`), they must be provided first.
 
-```lus
+```lus nocheck
 local function first(name, value)
     print("first", name, value)
 end
@@ -109,7 +109,7 @@ x = nil -- prints "printvar is being closed"
 
 A common pattern is to use a function to generate the attribute, which allows for parameterizing the attribute behavior. In this example, we constrain the type of a local variable to be a number.
 
-```lus
+```lus nocheck
 local function only(expected)
     return function(name, value)
         if type(value) ~= expected then
