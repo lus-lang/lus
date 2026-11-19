@@ -2,36 +2,64 @@
 ** Canonical install commands, imported by the homepage and
 ** getting-started.mdx so the surfaces can never drift.
 */
+// @ts-expect-error vite ?raw import
+import runtimeManifest from "../../../../runtime/build.zig.zon?raw"
 
 /*
 ** The one-line installer for Linux and macOS. Serves
-** packaging/install/install.sh (repo root) via src/pages/install.sh.ts;
-** on platforms without prebuilt binaries it prints build-from-source
+** packaging/install/install.sh (repo root) via src/pages/install.sh.ts.
+** On platforms without prebuilt archives it prints build-from-source
 ** guidance instead of installing.
 */
 export const INSTALL_SH = `curl -fsSL https://lus.dev/install.sh | sh`
 
 /*
-** The Windows installer: per-user by default (no admin prompt),
-** puts lus on PATH; /ALLUSERS from an elevated prompt installs
-** machine-wide.
+** The Windows installer. It installs per user by default, with no admin
+** prompt, and puts lus on PATH. /ALLUSERS from an elevated prompt
+** installs machine-wide.
 */
 export const WINDOWS_INSTALLER_URL =
   "https://github.com/lus-lang/lus/releases/latest/download/lus-setup.exe"
 
 /*
-** Manual downloads: the bare binary, no installer.
+** The release the manual download commands name. The site documents the
+** runtime of its checkout, so the tag is the version in build.zig.zon
+** without its prerelease suffix.
 */
-export const INSTALL_LINUX = `# glibc; use lus-linux-musl on Alpine
-curl -LO https://github.com/lus-lang/lus/releases/latest/download/lus-linux
-chmod +x lus-linux
-./lus-linux -v`
+const version = /^\s*\.version = "([0-9]+\.[0-9]+\.[0-9]+)[^"]*",/m.exec(
+  runtimeManifest as string,
+)?.[1]
+if (version === undefined) {
+  throw new Error("runtime/build.zig.zon has no version")
+}
+export const RELEASE_TAG = `v${version}`
 
-export const INSTALL_MACOS = `# Apple Silicon
-curl -LO https://github.com/lus-lang/lus/releases/latest/download/lus-macos
-chmod +x lus-macos
-xattr -d com.apple.quarantine lus-macos   # clear Gatekeeper quarantine
-./lus-macos -v`
+const DOWNLOAD = "https://github.com/lus-lang/lus/releases/download"
 
-export const INSTALL_WINDOWS = `curl.exe -LO https://github.com/lus-lang/lus/releases/latest/download/lus-windows.exe
-.\\lus-windows.exe -v`
+/*
+** Manual downloads: the release archive for one target, unpacked into
+** ./lus with the interpreter at lus/bin/lus.
+*/
+function unixCommands(comment: string, target: string): string {
+  return `${comment}
+tag=${RELEASE_TAG}
+curl -LO ${DOWNLOAD}/$tag/lus-$tag-${target}.tar.gz
+mkdir lus && tar -xzf lus-$tag-${target}.tar.gz -C lus
+./lus/bin/lus -v`
+}
+
+export const INSTALL_LINUX = unixCommands(
+  "# x86_64. Use aarch64-linux-musl on 64-bit Arm.",
+  "x86_64-linux-musl",
+)
+
+export const INSTALL_MACOS = unixCommands(
+  "# Apple Silicon. Use x86_64-macos on Intel Macs.",
+  "aarch64-macos",
+)
+
+export const INSTALL_WINDOWS = `# x86_64. Use aarch64-windows on 64-bit Arm.
+$tag = "${RELEASE_TAG}"
+curl.exe -LO ${DOWNLOAD}/$tag/lus-$tag-x86_64-windows.zip
+Expand-Archive lus-$tag-x86_64-windows.zip lus
+.\\lus\\bin\\lus.exe -v`

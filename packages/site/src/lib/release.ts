@@ -1,12 +1,14 @@
 const GITHUB_REPO = "lus-lang/lus"
 
 export interface ReleaseLinks {
-  windows?: string
   windowsInstaller?: string
-  macos?: string
-  linuxGlibc?: string
-  linuxMusl?: string
-  wasmBinary?: string
+  windowsX64?: string
+  windowsArm64?: string
+  macosArm64?: string
+  macosX64?: string
+  linuxX64?: string
+  linuxArm64?: string
+  wasm?: string
   checksums?: string
   sourceZip?: string
   sourceTarball?: string
@@ -24,7 +26,7 @@ interface GitHubAsset {
   browser_download_url: string
 }
 
-interface GitHubRelease {
+export interface GitHubRelease {
   tag_name: string
   published_at: string
   html_url: string
@@ -35,45 +37,38 @@ interface GitHubRelease {
 }
 
 /*
-** Releases from 2.0 on publish one archive per target, named
-** lus-<tag>-<target>.tar.gz or .zip. Releases before 2.0 published one
-** binary per platform under the names in LEGACY_ASSET_NAMES.
+** A release publishes one archive per target, named
+** lus-<tag>-<target>.tar.gz, or .zip for Windows, which holds the install
+** prefix with bin/lus, the embedding libraries, and lus.h. Beside the
+** archives sit the Windows installer lus-setup.exe, lus.wasm, and the
+** SHA256SUMS manifest.
 */
-const TARGET_ASSETS = {
-  windows: "x86_64-windows.zip",
-  macos: "aarch64-macos.tar.gz",
-  linuxMusl: "x86_64-linux-musl.tar.gz",
-}
+const TARGET_ARCHIVES = {
+  windowsX64: "x86_64-windows.zip",
+  windowsArm64: "aarch64-windows.zip",
+  macosArm64: "aarch64-macos.tar.gz",
+  macosX64: "x86_64-macos.tar.gz",
+  linuxX64: "x86_64-linux-musl.tar.gz",
+  linuxArm64: "aarch64-linux-musl.tar.gz",
+} as const
 
-const LEGACY_ASSET_NAMES = {
-  windows: "lus-windows.exe",
-  windowsInstaller: "lus-setup.exe",
-  macos: "lus-macos",
-  linuxGlibc: "lus-linux",
-  linuxMusl: "lus-linux-musl",
-}
-
-function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
+export function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
   const assetMap = new Map(
     release.assets.map((a) => [a.name, a.browser_download_url])
   )
-  const target = (suffix: string) =>
-    assetMap.get(`lus-${release.tag_name}-${suffix}`)
-
-  return {
-    windows:
-      target(TARGET_ASSETS.windows) ?? assetMap.get(LEGACY_ASSET_NAMES.windows),
-    windowsInstaller: assetMap.get(LEGACY_ASSET_NAMES.windowsInstaller),
-    macos: target(TARGET_ASSETS.macos) ?? assetMap.get(LEGACY_ASSET_NAMES.macos),
-    linuxGlibc: assetMap.get(LEGACY_ASSET_NAMES.linuxGlibc),
-    linuxMusl:
-      target(TARGET_ASSETS.linuxMusl) ??
-      assetMap.get(LEGACY_ASSET_NAMES.linuxMusl),
-    wasmBinary: assetMap.get("lus.wasm"),
+  const links: ReleaseLinks = {
+    windowsInstaller: assetMap.get("lus-setup.exe"),
+    wasm: assetMap.get("lus.wasm"),
     checksums: assetMap.get("SHA256SUMS"),
     sourceZip: release.zipball_url,
     sourceTarball: release.tarball_url,
   }
+  for (const [key, suffix] of Object.entries(TARGET_ARCHIVES)) {
+    links[key as keyof typeof TARGET_ARCHIVES] = assetMap.get(
+      `lus-${release.tag_name}-${suffix}`
+    )
+  }
+  return links
 }
 
 function formatReleaseDate(isoDate: string): string {
