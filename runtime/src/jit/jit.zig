@@ -45,6 +45,9 @@ pub const State = if (enabled) struct {
     setting: Setting = .on,
     /// Events (calls, loop iterations, returns) before a function compiles.
     threshold: u32 = default_threshold,
+    /// Length of the current sampling period of the interpreter.
+    period: u32 = 1,
+    seed: u32 = 12345,
     arena: mem.Arena = .{},
     /// Functions that have native code now.
     live: usize = 0,
@@ -94,7 +97,7 @@ pub fn isCompiled(p: *const Proto) bool {
 
 /// Called when the counter of a function reaches zero. Returns true when
 /// the function has native code and the caller should hand its frame over.
-pub noinline fn tick(l: *Thread, p: *Proto) bool {
+pub noinline fn expire(l: *Thread, p: *Proto) bool {
     @branchHint(.cold);
     if (!enabled) return false;
     const g = l.g;
@@ -132,6 +135,62 @@ pub noinline fn tick(l: *Thread, p: *Proto) bool {
     return false;
 }
 
+/// Charges a function for `weight` events at once.
+pub noinline fn charge(l: *Thread, p: *Proto, weight: u64) bool {
+    if (!enabled) return false;
+    switch (p.jit_state) {
+        .compiled => return true,
+        .declined => return false,
+        .fresh => {
+            if (!l.g.jit.ready) setup(l.g);
+            if (l.g.jit.setting != .off and l.g.jit.threshold > 1) {
+                p.jit_state = .counting;
+                p.hot = l.g.jit.threshold;
+            }
+        },
+        .counting => {},
+    }
+    if (p.jit_state == .counting and p.hot > weight) {
+        p.hot -= @intCast(weight);
+        return false;
+    }
+    return expire(l, p);
+}
+
+/// Numeric loops with fewer iterations than this are not charged when
+/// they start. The function around them reaches the threshold some other
+/// way if it matters.
+pub const loop_weight_min = 16;
+
+pub const Sample = struct {
+    /// Events until the next sample.
+    budget: u32,
+    /// The sampled function has native code.
+    enter: bool,
+};
+
+/// The sampling budget of the interpreter ran out in the top frame.
+/// The function is charged for the period, and the next period gets a
+/// different length, so that a regular program cannot hide a function
+/// from the samples.
+pub noinline fn sample(l: *Thread) Sample {
+    @branchHint(.cold);
+    if (!enabled) return .{ .budget = std.math.maxInt(u32), .enter = false };
+    const g = l.g;
+    const p = l.frame().closure.?.proto;
+    if (!g.jit.ready) setup(g);
+    const js = &g.jit;
+    if (js.setting == .off) return .{ .budget = std.math.maxInt(u32), .enter = false };
+    const used = js.period;
+    if (js.setting == .on and js.threshold > 1) {
+        js.seed = js.seed *% 1103515245 +% 12345;
+        js.period = 5 + ((js.seed >> 16) & 7);
+    } else {
+        js.period = 1;
+    }
+    return .{ .budget = js.period, .enter = charge(l, p, used) };
+}
+
 /// Whether native code should run the top frame of a thread that is about
 /// to execute. A function entered at its first instruction counts a call.
 pub inline fn entryCheck(l: *Thread) bool {
@@ -143,7 +202,7 @@ pub inline fn entryCheck(l: *Thread) bool {
     if (fr.pc != 0) return false;
     p.hot -%= 1;
     if (p.hot != 0) return false;
-    return tick(l, p);
+    return expire(l, p);
 }
 
 /// Whether the function of the top frame has native code.
@@ -174,7 +233,7 @@ pub fn dispatch(l: *Thread) callconv(.c) Target {
         // threshold, as it does in the interpreter.
         if (fr.pc != 0) return none;
         p.hot -%= 1;
-        if (p.hot != 0 or !tick(l, p)) return none;
+        if (p.hot != 0 or !expire(l, p)) return none;
     }
     const code: *Code = @ptrCast(@alignCast(p.jit_code.?));
     return .{ .addr = @intFromPtr(code.block.ptr) + code.offs[fr.pc], .base = fr.base };
@@ -225,6 +284,7 @@ fn compile(l: *Thread, p: *Proto) bool {
     mem.install(block, bytes);
     code.* = .{ .block = block, .offs = offs };
     p.jit_code = code;
+    p.plain_call = false;
     g.jit.live += 1;
     g.jit.compiled += 1;
     return true;
@@ -238,6 +298,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
     g.gpa.free(code.offs);
     g.gpa.destroy(code);
     p.jit_code = null;
+    p.plain_call = !p.is_vararg;
     g.jit.live -= 1;
 }
 

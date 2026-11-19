@@ -317,6 +317,9 @@ pub const Thread = struct {
     /// Per-thread extension slots (permission set, debug hooks).
     pledges: ?*anyopaque = null,
     hook: ?*anyopaque = null,
+    /// Events left before the interpreter samples the running function
+    /// for the JIT. The dispatch loop keeps it in a register while it runs.
+    jit_budget: u32 = 1,
 
     pub const max_stack = 1_000_000;
     pub const hook_call: u8 = 1;

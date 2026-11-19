@@ -153,6 +153,10 @@ pub const Proto = struct {
     hdr: Header,
     num_params: u8 = 0,
     is_vararg: bool = false,
+    /// True when the function has fixed parameters and no native code, so
+    /// that the interpreter enters it on its shortest path. The default
+    /// sends every call through the general path, which is always right.
+    plain_call: bool = false,
     max_stack: u8 = 2,
     line_defined: u32 = 0,
     last_line_defined: u32 = 0,

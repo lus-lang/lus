@@ -453,11 +453,11 @@ fn Loop(comptime mode: Mode) type {
             }
         }
 
-        /// Counts a call, a loop iteration, or a return into the running
-        /// function, whose next instruction is `pc`. A function that is
-        /// hot enough gets native code, and the loop then hands the frame
-        /// over. A function with native code keeps its counter at one, so
-        /// that every event reaches the hand-over.
+        /// Counts one event of the running function, whose next
+        /// instruction is `pc`, on the function's own counter. A function
+        /// that is hot enough gets native code, and the loop then hands
+        /// the frame over. Only the rarer loop forms count this way,
+        /// because the counter is a store on every event.
         inline fn tier(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
             if (comptime !(jit.enabled and mode == .fast)) return;
             const p = c.cl.proto;
@@ -465,7 +465,61 @@ fn Loop(comptime mode: Mode) type {
             if (p.hot == 0) {
                 @branchHint(.unlikely);
                 c.fr.pc = pc;
-                if (jit.tick(l, p)) return error.EnterJit;
+                if (jit.expire(l, p)) return error.EnterJit;
+            }
+        }
+
+        /// Counts a loop iteration on the sampling budget, which lives in
+        /// a machine register. When the budget runs out, the running
+        /// function is charged for the whole period.
+        inline fn tierLoop(l: *Thread, c: *Ctx, pc: *u32, budget: *u32) LoopError!void {
+            if (comptime !(jit.enabled and mode == .fast)) return;
+            budget.* -= 1;
+            if (budget.* == 0) {
+                @branchHint(.unlikely);
+                c.fr.pc = pc.*;
+                const r = jit.sample(l);
+                budget.* = r.budget;
+                if (r.enter) return error.EnterJit;
+                // The frame state is read again, so that nothing has to
+                // stay in a register across the rare call above.
+                c.* = load(l);
+                pc.* = c.fr.pc;
+            }
+        }
+
+        /// A function was entered at `pc`. One with native code is handed
+        /// over at once. Any other counts on the sampling budget.
+        inline fn tierCall(l: *Thread, c: *Ctx, pc: *u32, budget: *u32) LoopError!void {
+            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (c.cl.proto.jit_code != null) {
+                @branchHint(.unlikely);
+                c.fr.pc = pc.*;
+                return error.EnterJit;
+            }
+            return tierLoop(l, c, pc, budget);
+        }
+
+        /// A callee returned into the running function, which continues
+        /// at `pc`. Native code takes the frame when the function has some.
+        inline fn tierReturn(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
+            _ = l;
+            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (c.cl.proto.jit_code != null) {
+                @branchHint(.unlikely);
+                c.fr.pc = pc;
+                return error.EnterJit;
+            }
+        }
+
+        /// A numeric loop at `pc` is about to run `count` times. The
+        /// function is charged for all of them here, so that the loop
+        /// instruction itself counts nothing.
+        inline fn tierFor(l: *Thread, c: *Ctx, pc: u32, count: u64) LoopError!void {
+            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (count >= jit.loop_weight_min) {
+                c.fr.pc = pc;
+                if (jit.charge(l, c.cl.proto, count)) return error.EnterJit;
             }
         }
     };
@@ -479,6 +533,17 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
     const fetch = Loop(mode).fetch;
     const condJump = Loop(mode).condJump;
     const tier = Loop(mode).tier;
+    const tierLoop = Loop(mode).tierLoop;
+    const tierCall = Loop(mode).tierCall;
+    const tierReturn = Loop(mode).tierReturn;
+    const tierFor = Loop(mode).tierFor;
+    // The sampling budget of the tier-up policy. It is a local so that
+    // counting an event is a register decrement.
+    const sampling = comptime (jit.enabled and mode == .fast);
+    var budget: u32 = if (sampling) l.jit_budget else 0;
+    defer if (sampling) {
+        l.jit_budget = budget;
+    };
     var c = load(l);
     var pc: u32 = c.fr.pc;
     var ins: u32 = undefined;
@@ -794,7 +859,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                     try runPendingFinalizers(l);
                     c.refresh(l);
                 }
-                try tier(l, &c, pc);
+                try tierLoop(l, &c, &pc, &budget);
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -908,7 +973,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
             if (nb != 0) l.top = func + nb;
             const callee = &l.stack[func];
-            if (callee.tag == .closure and !callee.as(Closure).proto.is_vararg) {
+            if (callee.tag == .closure and callee.as(Closure).proto.plain_call) {
                 try enterLus(l, callee.as(Closure), func, nargs, want);
                 c = load(l);
                 pc = 0;
@@ -916,7 +981,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                     try callHook(l, "call", null);
                     c.refresh(l);
                 }
-                try tier(l, &c, pc);
+                try tierLoop(l, &c, &pc, &budget);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             const kind: CallKind = if (callee.tag == .native) blk: {
@@ -930,7 +995,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                     try callHook(l, "call", null);
                     c.refresh(l);
                 }
-                try tier(l, &c, pc);
+                try tierCall(l, &c, &pc, &budget);
             } else {
                 c.refresh(l);
                 if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
@@ -956,12 +1021,12 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                 if (kind == .lus) {
                     c = load(l);
                     pc = 0;
-                    try tier(l, &c, pc);
+                    try tierCall(l, &c, &pc, &budget);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
                 c.refresh(l);
                 if (try doReturn(l, &c, &pc, func, l.top - func, stop)) return finished(mode);
-                try tier(l, &c, pc);
+                try tierReturn(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             // Reuse the current frame: close upvalues, move the callee
@@ -987,7 +1052,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                 try callHook(l, "tail call", null);
                 c.refresh(l);
             }
-            try tier(l, &c, pc);
+            try tierCall(l, &c, &pc, &budget);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .ret => {
@@ -996,7 +1061,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const n: u32 = if (nb != 0) nb - 1 else l.top - first;
             c.fr.pc = pc;
             if (try doReturn(l, &c, &pc, first, n, stop)) return finished(mode);
-            try tier(l, &c, pc);
+            try tierReturn(l, &c, pc);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         inline .ret0, .ret1 => |o| {
@@ -1018,18 +1083,22 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                 c = load(l);
                 pc = c.fr.pc;
                 if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
-                try tier(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
             if (try doReturn(l, &c, &pc, first, n, stop)) return finished(mode);
-            try tier(l, &c, pc);
+            try tierReturn(l, &c, pc);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
         .forprep => {
             c.fr.pc = pc;
-            if (try forPrep(l, c.base + opc.a(ins))) pc += opc.bx(ins) + 1;
+            if (try forPrep(l, c.base + opc.a(ins))) {
+                pc += opc.bx(ins) + 1;
+            } else {
+                const r = c.bp + opc.a(ins);
+                if (r[0].tag == .integer) try tierFor(l, &c, pc, @bitCast(r[1].asInt()));
+            }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .forloop => {
@@ -1043,7 +1112,6 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
                     r[0] = Value.int(idx);
                     r[3] = Value.int(idx);
                     pc -= opc.bx(ins);
-                    try tier(l, &c, pc);
                 }
             } else if (r[0].tag == .float) {
                 const step = r[2].asFloat();
@@ -1093,7 +1161,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             if (kind == .lus) {
                 c = load(l);
                 pc = 0;
-                try tier(l, &c, pc);
+                try tierCall(l, &c, &pc, &budget);
             } else {
                 c.refresh(l);
                 l.top = c.base + c.cl.proto.max_stack;
@@ -1105,7 +1173,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             if (!r[4].isNil()) {
                 r[2] = r[4];
                 pc -= opc.bx(ins);
-                try tier(l, &c, pc);
+                try tierLoop(l, &c, &pc, &budget);
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -1118,7 +1186,12 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const r = c.base + opc.a(ins);
             if (isBuiltinRange(l, l.stack[r])) {
                 c.fr.pc = pc;
-                if (try rangePrep(l, r)) pc += opc.bx(ins) + 1;
+                if (try rangePrep(l, r)) {
+                    pc += opc.bx(ins) + 1;
+                } else {
+                    const lr = c.bp + opc.a(ins);
+                    if (lr[0].tag == .integer) try tierFor(l, &c, pc, @bitCast(lr[1].asInt()));
+                }
             } else {
                 pc += opc.c(ins);
             }
