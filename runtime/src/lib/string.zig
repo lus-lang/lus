@@ -840,9 +840,47 @@ pub fn MatcherFor(comptime bytewise: bool) type {
             return null;
         }
 
+        /// The set of ASCII bytes that match the class `p..ep`, as a bit
+        /// set. Only the bytewise matcher uses it, because there every
+        /// pattern character is one ASCII byte.
+        fn classSet(m: *M, p: usize, ep: usize) u128 {
+            const pat = m.pat;
+            switch (pat[p]) {
+                '.' => return ~@as(u128, 0),
+                '%' => return classMask(pat[p + 1]),
+                '[' => {
+                    var set: u128 = 0;
+                    var i = p + 1;
+                    const ec = ep - 1;
+                    const negate = pat[i] == '^';
+                    if (negate) i += 1;
+                    while (i < ec) {
+                        if (pat[i] == '%') {
+                            set |= classMask(pat[i + 1]);
+                            i += 2;
+                        } else if (i + 2 < ec and pat[i + 1] == '-') {
+                            var c = pat[i];
+                            while (c <= pat[i + 2]) : (c += 1) set |= bitOf(c);
+                            i += 3;
+                        } else {
+                            set |= bitOf(pat[i]);
+                            i += 1;
+                        }
+                    }
+                    return if (negate) ~set else set;
+                },
+                else => return bitOf(pat[p]),
+            }
+        }
+
         fn maxExpand(m: *M, s: usize, p: usize, ep: usize) PatternError!?usize {
             var e = s;
-            while (true) {
+            if (bytewise) {
+                // Build the class once and test each byte with one shift.
+                const set = m.classSet(p, ep);
+                const src = m.src;
+                while (e < src.len and (set >> @intCast(src[e])) & 1 != 0) e += 1;
+            } else while (true) {
                 const n = m.singleMatch(e, p, ep);
                 if (n == 0) break;
                 e += n;
@@ -942,6 +980,36 @@ const class_bit: [128]u16 = blk: {
     for (class_letters, 0..) |c, k| t[c] = 1 << k;
     break :blk t;
 };
+
+/// For each class letter, the ASCII bytes in the class as a bit set.
+const class_masks: [class_letters.len]u128 = blk: {
+    @setEvalBranchQuota(10000);
+    var t: [class_letters.len]u128 = @splat(0);
+    for (0..128) |c| {
+        for (0..class_letters.len) |k| {
+            if (class_table[c] & (1 << k) != 0) t[k] |= @as(u128, 1) << c;
+        }
+    }
+    break :blk t;
+};
+
+/// The bit for ASCII byte `c` in a class bit set.
+inline fn bitOf(c: u8) u128 {
+    return @as(u128, 1) << @intCast(c);
+}
+
+/// The ASCII bytes that `%cl` matches, for an ASCII `cl`.
+fn classMask(cl: u8) u128 {
+    const lc = std.ascii.toLower(cl);
+    const bit = class_bit[lc];
+    const set = if (bit != 0)
+        class_masks[@ctz(bit)]
+    else if (lc == 'z')
+        bitOf(0)
+    else
+        return bitOf(cl);
+    return if (cl == lc) set else ~set;
+}
 
 /// Whether `c` belongs to class `cl` (the character after '%'). Class
 /// letters describe ASCII characters, and an uppercase letter is the
@@ -1764,6 +1832,29 @@ test "class table" {
     }
     try testing.expect(!matchClass(0xE9, 'a'));
     try testing.expect(matchClass(0xE9, 'A'));
+    // The bit sets of the bytewise matcher agree with matchClass.
+    for (0..0x80) |cl| for (0..0x80) |c| {
+        const in_set = (classMask(@intCast(cl)) >> @intCast(c)) & 1 != 0;
+        try testing.expectEqual(matchClass(@intCast(c), @intCast(cl)), in_set);
+    };
+}
+
+test "bytewise sets agree with the general matcher" {
+    const sets = [_][]const u8{ "[^,]", "[a-c]", "[%a_]", "[^%s]", "[%-a]", "[]]", "[^]]", "[a-]", "[%%]", "[%W%d]", "[z-a]", "%A", "%.", "." };
+    var src: [128]u8 = undefined;
+    for (&src, 0..) |*c, i| c.* = @intCast(i);
+    for (sets) |set| {
+        var pat_buf: [16]u8 = undefined;
+        const pat = std.fmt.bufPrint(&pat_buf, "{s}+", .{set}) catch unreachable;
+        // Every starting byte gives the same longest run in both matchers.
+        for (0..src.len) |start| {
+            var g = Matcher.init(&src, pat, true);
+            var b = MatcherFor(true).init(&src, pat, true);
+            g.reset(start, start);
+            b.reset(start, start);
+            try testing.expectEqual(try g.match(start, 0), try b.match(start, 0));
+        }
+    }
 }
 
 test "pattern basics" {
