@@ -86,6 +86,13 @@ pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
             l.top = saved_top;
             continue;
         }
+        if (err == null and l.meta_finish != null and tm.tag == .closure) {
+            // A normal block exit inside the interpreter: the handler runs
+            // as a frame (so it may yield) and the instruction runs again
+            // for the remaining variables.
+            _ = try ops.callMeta(l, tm, &.{ obj, .nil });
+            unreachable;
+        }
         _ = ops.callN(l, tm, &.{ obj, cur_err orelse .nil }, 0) catch {
             cur_err = l.err;
             failed = true;
@@ -711,7 +718,11 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             .close => {
                 const level = c.base + ra;
                 closeUpvals(l, level);
-                try closeTbc(l, level, null);
+                if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= level) {
+                    l.meta_finish = .{ .redo = false };
+                    defer l.meta_finish = null;
+                    try closeTbc(l, level, null);
+                }
             },
             .tbc => try markTbc(l, c.base + ra),
 
@@ -772,6 +783,8 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= fr.base) {
         // Protect the results while __close runs.
         l.top = first + n;
+        l.meta_finish = .{ .redo = true };
+        defer l.meta_finish = null;
         try closeTbc(l, fr.base, null);
     }
     l.top = first + n;
@@ -789,6 +802,11 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
         .cond => |k| if (l.stack[fr.ret].truthy() != k) {
             pc.* += 1;
             l.frames.items[c.fi].pc = pc.*;
+        },
+        .redo => |keep_top| {
+            pc.* -= 1;
+            l.frames.items[c.fi].pc = pc.*;
+            if (keep_top) l.top = fr.ret;
         },
     }
     // Fixed result counts restore the caller's register window top.

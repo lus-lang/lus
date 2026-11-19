@@ -33,6 +33,10 @@ pub const Finish = union(enum) {
     cond: bool,
     /// Drop the result.
     discard,
+    /// Drop the result and run the calling instruction again (closing
+    /// the next pending variable). When true, keep the stack top where the
+    /// call left it, because a variable-count return reads it.
+    redo: bool,
 };
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;

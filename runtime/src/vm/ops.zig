@@ -136,7 +136,10 @@ pub fn callMeta(l: *Thread, tm: Value, args: []const Value) Error!Value {
         l.stack[func] = tm;
         for (args, 0..) |v, i| l.stack[func + 1 + i] = v;
         l.top = func + 1 + @as(u32, @intCast(args.len));
-        const want: i32 = if (f == .discard) 0 else 1;
+        const want: i32 = switch (f) {
+            .discard, .redo => 0,
+            else => 1,
+        };
         _ = interp.precall(l, func, @intCast(args.len), want) catch |e| return switch (e) {
             error.Yield => unreachable,
             else => |x| x,
@@ -244,7 +247,7 @@ pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 break :blk Value.int(imod(x, y));
             },
             .idiv => blk: {
-                if (y == 0) return l.raiseFmt("attempt to perform 'n//0'", .{});
+                if (y == 0) return l.raiseFmt("attempt to divide by zero", .{});
                 break :blk Value.int(idiv(x, y));
             },
             .pow => Value.float(std.math.pow(f64, @floatFromInt(x), @floatFromInt(y))),

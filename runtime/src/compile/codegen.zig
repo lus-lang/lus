@@ -319,7 +319,7 @@ fn codeABC(fs: *FuncState, o: Op, a: u32, b: u32, cc: u32) Error!void {
 }
 
 fn emitABC(fs: *FuncState, o: Op, a: u32, b: u32, cc: u32) Error!i32 {
-    if (a > 255 or b > 255 or cc > 255) return fs.c.err(fs.line, "function or expression needs too many registers", .{});
+    if (a > 255 or b > 255 or cc > 255) return fs.c.err(fs.line, "too many registers (limit is {d}) in {s}", .{ max_regs, whereFunc(fs) });
     return emit(fs, opc.abc(o, @intCast(a), @intCast(b), @intCast(cc)));
 }
 
@@ -426,7 +426,7 @@ fn patchToHere(fs: *FuncState, list: i32) Error!void {
 fn checkStack(fs: *FuncState, n: u32) Error!void {
     const newstack = @as(u32, fs.freereg) + n;
     if (newstack > fs.max_stack) {
-        if (newstack >= max_regs) return fs.c.err(fs.line, "function or expression needs too many registers", .{});
+        if (newstack > max_regs) return fs.c.err(fs.line, "too many registers (limit is {d}) in {s}", .{ max_regs, whereFunc(fs) });
         fs.max_stack = @intCast(newstack);
     }
 }
@@ -1397,12 +1397,12 @@ fn checkReadonly(fs: *FuncState, v: *const ExpDesc, name: []const u8, line: u32)
     switch (v.kind) {
         .local => {
             const vd = getLocalVar(fs, @intCast(v.aux));
-            if (vd.readonly) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{vd.name});
+            if (vd.readonly) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{fieldName(vd.name)});
         },
         .ctc => return fs.c.err(line, "attempt to assign to const variable '{s}'", .{name}),
         .upval => {
             const u = fs.upvals.items[@intCast(v.info)];
-            if (u.readonly) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{u.name});
+            if (u.readonly) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{fieldName(u.name)});
         },
         else => if (v.node == &readonly_marker) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{name}),
     }
@@ -2495,6 +2495,13 @@ fn storeTarget(fs: *FuncState, v: *ExpDesc, ex: *ExpDesc, target: *ast.Expr) Err
 fn publicName(hidden: []const u8) []const u8 {
     if (hidden.len > 2 and hidden[0] == '(' and hidden[hidden.len - 1] == ')') return hidden[1 .. hidden.len - 1];
     return hidden;
+}
+
+/// The name a user wrote for a variable: a group field "(g.f)" is "f".
+fn fieldName(hidden: []const u8) []const u8 {
+    const p = publicName(hidden);
+    if (p.len != hidden.len) if (std.mem.lastIndexOfScalar(u8, p, '.')) |dot| return p[dot + 1 ..];
+    return p;
 }
 
 /// In multiple assignment, a later target's table or key register may be

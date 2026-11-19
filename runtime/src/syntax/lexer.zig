@@ -150,7 +150,13 @@ pub const Lexer = struct {
             const start = lx.pos;
             const c = lx.cur();
             if (lx.atEnd()) {
-                if (lx.modes.items.len > 1) return lx.fail(start, "unfinished interpolated string near <eof>", .{});
+                if (lx.modes.items.len > 1) {
+                    // Right after "$(" the expression itself is missing,
+                    // which the parser reports as an unexpected <eof>.
+                    const toks = lx.tokens.items;
+                    const just_opened = toks.len > 0 and (toks[toks.len - 1].tag == .interp_begin or toks[toks.len - 1].tag == .interp_mid);
+                    if (!just_opened) return lx.fail(start, "unfinished interpolated string near <eof>", .{});
+                }
                 try lx.push(.eof, start, lx.line, .none);
                 return true;
             }

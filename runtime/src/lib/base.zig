@@ -442,17 +442,19 @@ fn load(l: *Thread) Error!u32 {
         // Binary chunks from string.dump arrive as vectors.
         src = chunk.as(object.Vector).bytes.items;
     } else if (chunk.tag == .closure or chunk.tag == .native) {
-        // Reader function: concatenate pieces until nil or "".
+        // Reader function: concatenate pieces until nil or "". An error
+        // while reading fails the load like a syntax error does.
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(l.g.gpa);
-        while (true) {
-            const piece = try ops.call1(l, chunk, &.{});
-            if (piece.isNil()) break;
-            if (piece.tag != .string) return l.raiseFmt("reader function must return a string", .{});
-            const b = piece.as(String).bytes();
-            if (b.len == 0) break;
-            buf.appendSlice(l.g.gpa, b) catch return l.raiseMem();
-        }
+        readChunk(l, chunk, &buf) catch |e| switch (e) {
+            error.LusError => {
+                const msg = l.err;
+                try l.push(.nil);
+                try l.push(msg);
+                return 2;
+            },
+            else => |x| return x,
+        };
         owned = buf.toOwnedSlice(l.g.gpa) catch return l.raiseMem();
         src = owned.?;
     } else return aux.typeError(l, 1, "string");
@@ -474,6 +476,17 @@ fn load(l: *Thread) Error!u32 {
         if (cl.nupvals > 0) cl.upvals()[0].closed = env;
     }
     return 1;
+}
+
+fn readChunk(l: *Thread, reader: Value, buf: *std.ArrayList(u8)) Error!void {
+    while (true) {
+        const piece = try ops.call1(l, reader, &.{});
+        if (piece.isNil()) return;
+        if (piece.tag != .string) return l.raiseMsg("reader function must return a string");
+        const b = piece.as(String).bytes();
+        if (b.len == 0) return;
+        buf.appendSlice(l.g.gpa, b) catch return l.raiseMem();
+    }
 }
 
 pub fn readFile(l: *Thread, path: []const u8) Error![]u8 {
