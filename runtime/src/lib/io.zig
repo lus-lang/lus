@@ -188,7 +188,7 @@ fn readLine(l: *Thread, h: *Handle, keep_nl: bool) Error!?Value {
     while (true) {
         const avail = pending(h);
         if (std.mem.indexOfScalarPos(u8, avail, scanned, '\n')) |nl| {
-            const line = avail[0 .. if (keep_nl) nl + 1 else nl];
+            const line = avail[0..if (keep_nl) nl + 1 else nl];
             const v = try wrap(l, h, line);
             consume(h, nl + 1);
             return v;
@@ -406,8 +406,8 @@ pub fn openFile(l: *Thread, path: []const u8, mode: []const u8, lossy: bool) Err
         }
         break :blk cwd.openFile(io, path, .{ .mode = if (mi.write) .read_write else .read_only }) catch |e| {
             const t = try errText(l, path, e);
-                defer l.g.gpa.free(t);
-                l.err = try l.newStringValue(t);
+            defer l.g.gpa.free(t);
+            l.err = try l.newStringValue(t);
             return null;
         };
     };

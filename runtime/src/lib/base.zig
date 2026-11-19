@@ -167,7 +167,7 @@ fn assert(l: *Thread) Error!u32 {
 fn getmetatable(l: *Thread) Error!u32 {
     const v = try aux.checkAny(l, 1);
     const mt = l.metatable(v) orelse return aux.retNil(l);
-    const protected = table.getStr(mt, l.g.tm_names[@intFromEnum(state.TM.metatable)].?);
+    const protected = table.getStr(mt, l.g.tm_names[@backingInt(state.TM.metatable)].?);
     if (!protected.isNil()) return aux.ret(l, protected);
     return aux.ret(l, Value.obj(.table, mt));
 }
@@ -177,7 +177,7 @@ fn setmetatable(l: *Thread) Error!u32 {
     const mtv = l.arg(2);
     if (mtv.tag != .nil and mtv.tag != .table) return aux.typeError(l, 2, "nil or table");
     if (t.metatable) |old| {
-        if (!table.getStr(old, l.g.tm_names[@intFromEnum(state.TM.metatable)].?).isNil()) {
+        if (!table.getStr(old, l.g.tm_names[@backingInt(state.TM.metatable)].?).isNil()) {
             return l.raiseFmt("cannot change a protected metatable", .{});
         }
     }
@@ -406,7 +406,7 @@ fn collectgarbage(l: *Thread) Error!u32 {
         8 => {
             const p = try aux.checkOption(l, 2, null, std.meta.fieldNames(gc.Param));
             const v = try aux.optInt(l, 3, -1);
-            return aux.retInt(l, gc.setParam(g, @enumFromInt(p), v));
+            return aux.retInt(l, gc.setParam(g, @fromBackingInt(@intCast(p)), v));
         },
         else => unreachable,
     }

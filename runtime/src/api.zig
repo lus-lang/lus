@@ -243,4 +243,3 @@ fn finalizeAll(g: *state.Global) void {
     g.gc_stopped = true;
     @import("lib/base.zig").runFinalizers(main) catch {};
 }
-

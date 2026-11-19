@@ -219,7 +219,7 @@ fn spawnShell(l: *Thread) Error!u32 {
         .signal, .stopped => |sig| {
             try l.push(.nil);
             try l.push(try l.newStringValue("signal"));
-            try l.push(Value.int(@intFromEnum(sig)));
+            try l.push(Value.int(@backingInt(sig)));
         },
         .unknown => |code| {
             try l.push(.nil);

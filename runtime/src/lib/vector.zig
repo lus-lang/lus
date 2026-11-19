@@ -35,7 +35,7 @@ pub fn open(l: *Thread) Error!void {
     // Vectors index their library, so v:size() works.
     const mt = try l.newTable(0, 2);
     try aux.setField(l, mt, "__index", Value.obj(.table, t));
-    l.g.type_metatables[@intFromEnum(value.Tag.vector)] = mt;
+    l.g.type_metatables[@backingInt(value.Tag.vector)] = mt;
 }
 
 pub fn newVector(l: *Thread, bytes: []const u8) Error!*Vector {
