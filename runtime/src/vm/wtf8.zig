@@ -15,26 +15,34 @@ pub const Analysis = struct {
 /// Width of the vector blocks used by the scanning loops.
 const block = 32;
 const VB = @Vector(block, u8);
-const Mask = @Int(.unsigned, block);
 
-/// Bit k is set when byte k of the block has its high bit set.
-inline fn highMask(v: VB) Mask {
-    return @bitCast(v >= @as(VB, @splat(0x80)));
+// The helpers below reduce a block with a horizontal maximum or sum
+// rather than turning a comparison into a bit mask, because both
+// reductions are single instructions on the vector units the runtime
+// targets, while a bit mask costs several on some of them.
+
+/// Whether any byte of the block has its high bit set.
+inline fn anyHigh(v: VB) bool {
+    return @reduce(.Max, v) >= 0x80;
 }
 
-/// Bit k is set when byte k of the block starts a character, that is when
-/// it is not a continuation byte (0x80 to 0xBF).
-inline fn leadMask(v: VB) Mask {
-    return @bitCast((v & @as(VB, @splat(0xC0))) != @as(VB, @splat(0x80)));
+/// One for every byte of the block that starts a character, that is
+/// every byte that is not a continuation byte (0x80 to 0xBF), and zero
+/// for the others.
+inline fn leadOnes(v: VB) VB {
+    const lead = (v & @as(VB, @splat(0xC0))) != @as(VB, @splat(0x80));
+    return @select(u8, lead, @as(VB, @splat(1)), @as(VB, @splat(0)));
+}
+
+/// Number of bytes of the block that start a character.
+inline fn leadCount(v: VB) usize {
+    return @reduce(.Add, @as(@Vector(block, u16), leadOnes(v)));
 }
 
 /// Length of the leading run of ASCII bytes in `bytes`.
 pub fn asciiPrefix(bytes: []const u8) usize {
     var i: usize = 0;
-    while (i + block <= bytes.len) : (i += block) {
-        const m = highMask(bytes[i..][0..block].*);
-        if (m != 0) return i + @ctz(m);
-    }
+    while (i + block <= bytes.len and !anyHigh(bytes[i..][0..block].*)) i += block;
     while (i < bytes.len and bytes[i] < 0x80) i += 1;
     return i;
 }
@@ -66,12 +74,12 @@ fn firstInvalid(bytes: []const u8, start: usize) ?usize {
         const c = bytes[i];
         if (c < 0x80) {
             // Skip the ASCII run that starts here a block at a time.
-            if (i + block <= n) {
-                const m = highMask(bytes[i..][0..block].*);
-                i += if (m == 0) block else @ctz(m);
-            } else {
-                i += 1;
+            if (i + block <= n and !anyHigh(bytes[i..][0..block].*)) {
+                i += block;
+                continue;
             }
+            i += 1;
+            while (i < n and bytes[i] < 0x80) i += 1;
             continue;
         }
         if (c < 0xC2) return i;
@@ -113,23 +121,62 @@ fn firstInvalid(bytes: []const u8, start: usize) ?usize {
 pub fn countChars(bytes: []const u8) usize {
     var n: usize = 0;
     var i: usize = 0;
-    while (i + block <= bytes.len) : (i += block) n += @popCount(leadMask(bytes[i..][0..block].*));
+    // Per lane counts add up in bytes for up to 255 blocks before they
+    // are widened, so the inner loop is one compare and one add. The add
+    // wraps because the bound already rules out overflow, and the checked
+    // vector add of safe builds reports overflow where there is none.
+    while (i + block <= bytes.len) {
+        var acc: VB = @splat(0);
+        var k: usize = 0;
+        while (k < 255 and i + block <= bytes.len) : ({
+            k += 1;
+            i += block;
+        }) acc +%= leadOnes(bytes[i..][0..block].*);
+        n += @reduce(.Add, @as(@Vector(block, u16), acc));
+    }
     while (i < bytes.len) : (i += 1) n += @intFromBool(!isCont(bytes[i]));
     return n;
 }
 
 /// Byte offset of the character `count` characters after the one at
 /// byte `off` in valid WTF-8, or `bytes.len` when the text ends first.
-/// Whole blocks whose characters all come before the target are skipped
-/// with one vector count each.
+/// Long distances skip whole vector blocks whose characters all come
+/// before the target. The rest goes eight bytes at a time and finds the
+/// target inside its word without branching, because the position of a
+/// character within a word is unpredictable and a mispredicted branch
+/// costs more than the arithmetic.
 pub fn advance(bytes: []const u8, off: usize, count: usize) usize {
     var i = off;
     var rem = count;
-    while (i + block <= bytes.len) {
-        const k = @popCount(leadMask(bytes[i..][0..block].*));
-        if (k > rem) break;
+    if (rem >= block) {
+        while (i + block <= bytes.len) {
+            const k = leadCount(bytes[i..][0..block].*);
+            if (k > rem) break;
+            rem -= k;
+            i += block;
+        }
+    }
+    const ones: u64 = 0x0101010101010101;
+    const highs: u64 = 0x8080808080808080;
+    while (i + 8 <= bytes.len) {
+        const w = std.mem.readInt(u64, bytes[i..][0..8], .little);
+        // A continuation byte has bit 7 set and bit 6 clear. Shifting the
+        // word left by one moves bit 6 of each byte under its bit 7. The
+        // multiplication turns one bit per lead byte into running counts,
+        // so byte j holds the number of leads in bytes 0 through j and the
+        // top byte holds the total.
+        const leads = (~(w & ~(w << 1)) & highs) >> 7;
+        const prefix = leads *% ones;
+        const k: usize = @intCast(prefix >> 56);
+        if (k > rem) {
+            // The target is the first byte whose running count exceeds
+            // `rem`. Every count is at most 8, so setting bit 7 of each
+            // byte keeps the subtraction from borrowing across bytes.
+            const hit = ((prefix | highs) -% (rem + 1) *% ones) & highs;
+            return i + @ctz(hit) / 8;
+        }
         rem -= k;
-        i += block;
+        i += 8;
     }
     while (i < bytes.len) : (i += 1) {
         if (isCont(bytes[i])) continue;
