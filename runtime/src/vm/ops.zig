@@ -537,7 +537,9 @@ pub fn roundedDigits(f: f64, p: usize) Digits {
         }
     }
     const tie = p < n and all[p] == '5' and std.mem.allEqual(u8, all[p + 1 .. n], '0');
-    if (p <= 15 and !tie) {
+    // A subnormal has fewer significant bits than 15 decimal digits, so
+    // its shortest digits can stray from the exact value it holds.
+    if (p <= 15 and !tie and a >= std.math.floatMin(f64)) {
         return roundSlice(all[0..n], exp0, p);
     }
     // Exact path through a big-integer expansion of the double.

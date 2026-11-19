@@ -9,6 +9,7 @@ const ops = @import("../vm/ops.zig");
 const debug = @import("../vm/debug.zig");
 const aux = @import("aux.zig");
 const astexport = @import("../syntax/astexport.zig");
+const format = @import("../syntax/format.zig");
 const codegen = @import("../compile/codegen.zig");
 const Value = value.Value;
 const Thread = state.Thread;
@@ -35,6 +36,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "setuservalue", .func = setuservalue },
 
     .{ .name = "parse", .func = parse },
+    .{ .name = "format", .func = formatSource },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -519,6 +521,38 @@ fn parse(l: *Thread) Error!u32 {
             try l.push(Value.obj(.table, t));
             try l.push(.nil);
             return 2;
+        },
+    }
+}
+
+// ---------------------------------------------------------------------
+// debug.format
+
+/// `debug.format(code [, chunkname [, indent]])` returns `code` formatted
+/// with `indent` spaces per level (4 by default), or nil and an error
+/// message when it does not parse.
+fn formatSource(l: *Thread) Error!u32 {
+    const code = if (l.arg(1).tag == .vector) (try @import("vector.zig").checkVector(l, 1)).bytes.items else try aux.checkBytes(l, 1);
+    const chunkname = (try aux.optString(l, 2, "=format")).?;
+    const width = try aux.optInt(l, 3, 4);
+    if (width > 64) return aux.argError(l, 3, "indent width too large", .{});
+    var arena_state = std.heap.ArenaAllocator.init(l.g.gpa);
+    defer arena_state.deinit();
+    const checker: astexport.Checker = .{ .ctx = l.g, .check = checkChunk };
+    const opts: format.Options = .{
+        .chunkname = chunkname,
+        .indent_width = if (width > 0) @intCast(width) else 4,
+        .checker = checker,
+    };
+    const res = format.format(l.g.gpa, arena_state.allocator(), code, opts) catch return l.raiseMem();
+    switch (res) {
+        .fail => |msg| return aux.retFail(l, msg),
+        .ok => |text| {
+            // Comments keep their bytes, so a source with raw bytes in a
+            // comment can produce text that is not WTF-8. Each invalid
+            // sequence then becomes U+FFFD.
+            try l.push(try astString(l, text));
+            return 1;
         },
     }
 }
