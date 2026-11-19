@@ -1,0 +1,70 @@
+--- Plane geometry helpers.
+---
+--- Every function works on plain numbers.
+--- @since 2.0.0
+--- @stability unstable
+
+local geometry = {
+    --- The ratio of a circle's circumference to its diameter.
+    pi = 3.14159,
+
+    --- Returns the area of a circle.
+    --- @param r number The radius.
+    --- @return number The area.
+    circle = function(r)
+        return 3.14159 * r * r
+    end,
+
+    -- An ordinary comment is not documentation.
+    internal = 1,
+}
+
+--- Returns the area of a rectangle.
+--- @param w number The width.
+--- @param h? number The height. It defaults to
+---   the width, which gives a square.
+--- @return number The area.
+function geometry.rect(w, h)
+    return w * (h or w)
+end
+
+function geometry.undocumented(x, ...)
+    return x
+end
+
+--- Scales every value.
+--- @param factor number The scale factor.
+--- @param ... number The values to scale.
+--- @return number... The scaled values.
+function geometry.scale(factor, ...)
+    return factor, ...
+end
+
+local Point = {}
+
+--[[-
+Returns the distance from the origin.
+
+The result is never negative.
+@return number The distance.
+]]
+function Point:length()
+    return math.sqrt(self.x * self.x + self.y * self.y)
+end
+
+geometry.Point = Point
+
+--- Number of calls so far.
+local calls <const> = 0
+
+local function helper()
+    return calls
+end
+
+---------------------------------------------------------------------
+-- A rule of dashes is not documentation either.
+local function private()
+    return helper()
+end
+
+return geometry

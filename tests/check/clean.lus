@@ -1,0 +1,14 @@
+-- A file without diagnostics.
+global print, pairs
+
+local function sum(list)
+    local total = 0
+    for _, v in pairs(list) do
+        total = total + v
+    end
+    return total
+end
+
+if result = sum({ 1, 2, 3 }) then
+    print(result)
+end

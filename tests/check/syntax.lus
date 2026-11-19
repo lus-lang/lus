@@ -1,0 +1,2 @@
+-- A syntax error stops the file.
+local x = = 1

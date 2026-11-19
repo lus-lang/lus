@@ -1,0 +1,20 @@
+-- Doc comments that name parameters the function does not have.
+global print
+
+--- Adds two numbers.
+--- @param a number The first addend.
+--- @param c number A parameter that does not exist.
+--- @param ... number Extra values.
+local function add(a, b, ...)
+    return a + b
+end
+
+local obj = {}
+
+--- @param self table The receiver.
+--- @param name string The name.
+function obj:greet(name)
+    return name
+end
+
+print(add(1, 2), obj:greet("x"))

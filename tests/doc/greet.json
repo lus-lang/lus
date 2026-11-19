@@ -1,0 +1,11 @@
+{
+  "name": "greet",
+  "kind": "module",
+  "description": "",
+  "entries": [
+    {"name": "GREETING", "module": "greet", "kind": "constant", "line": 4, "description": "The greeting used by `greet`."},
+    {"name": "greet", "module": "greet", "kind": "function", "params": [{"name": "name", "type": "string", "description": "Who to greet."}], "returns": [], "line": 10, "description": "Prints a greeting.\n\nThe text is `GREETING` followed by the name."},
+    {"name": "shout", "module": "greet", "kind": "function", "params": [{"name": "text", "type": "any"}], "returns": [], "line": 14, "description": ""},
+    {"name": "join", "module": "greet", "kind": "function", "params": [{"name": "sep", "type": "string", "description": "The separator."}, {"name": "parts", "type": "string", "rest": true, "description": "The strings to join."}], "vararg": true, "returns": [{"type": "string", "description": "The joined text."}], "line": 22, "description": "Joins strings with a separator."}
+  ]
+}

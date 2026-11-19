@@ -1,0 +1,3 @@
+-- args: --json
+local unused = 1
+print("é", nope)

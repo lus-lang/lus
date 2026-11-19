@@ -1749,7 +1749,7 @@ fn indent(w: *std.Io.Writer, depth: usize) std.Io.Writer.Error!void {
 /// Writes a JSON string. A surrogate code point is written as an escape
 /// and a byte that starts no valid sequence as U+FFFD, so that the output
 /// is always valid UTF-8.
-fn jsonString(w: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
+pub fn jsonString(w: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
     try w.writeByte('"');
     var i: usize = 0;
     while (i < s.len) {

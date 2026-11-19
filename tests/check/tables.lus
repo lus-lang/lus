@@ -1,0 +1,20 @@
+-- Table constructors and assignments.
+global print
+
+local t = {
+    1,
+    2,
+    [2] = "two",
+    name = "a",
+    ["name"] = "b",
+    [true] = 1,
+    [true] = 2,
+    [1.0] = "one",
+}
+
+local x = 1
+x = x
+t.name = t.name
+t[1], x = t[1], x + 1
+t.list = t.other
+print(t, x)

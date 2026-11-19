@@ -1,0 +1,16 @@
+{
+  "name": "geometry",
+  "kind": "module",
+  "since": "2.0.0",
+  "stability": "unstable",
+  "description": "Plane geometry helpers.\n\nEvery function works on plain numbers.",
+  "entries": [
+    {"name": "geometry.pi", "module": "geometry", "kind": "variable", "line": 9, "description": "The ratio of a circle's circumference to its diameter."},
+    {"name": "geometry.circle", "module": "geometry", "kind": "function", "params": [{"name": "r", "type": "number", "description": "The radius."}], "returns": [{"type": "number", "description": "The area."}], "line": 14, "description": "Returns the area of a circle."},
+    {"name": "geometry.rect", "module": "geometry", "kind": "function", "params": [{"name": "w", "type": "number", "description": "The width."}, {"name": "h", "type": "number", "optional": true, "description": "The height. It defaults to the width, which gives a square."}], "returns": [{"type": "number", "description": "The area."}], "line": 27, "description": "Returns the area of a rectangle."},
+    {"name": "geometry.undocumented", "module": "geometry", "kind": "function", "params": [{"name": "x", "type": "any"}], "vararg": true, "returns": [], "line": 31, "description": ""},
+    {"name": "geometry.scale", "module": "geometry", "kind": "function", "params": [{"name": "factor", "type": "number", "description": "The scale factor."}, {"name": "...", "type": "number", "optional": true, "description": "The values to scale."}], "vararg": true, "returns": [{"type": "number...", "description": "The scaled values."}], "line": 39, "description": "Scales every value."},
+    {"name": "Point:length", "module": "geometry", "kind": "function", "receiver": "Point", "params": [], "returns": [{"type": "number", "description": "The distance."}], "line": 51, "description": "Returns the distance from the origin.\n\nThe result is never negative."},
+    {"name": "calls", "module": "geometry", "kind": "constant", "line": 58, "description": "Number of calls so far."}
+  ]
+}

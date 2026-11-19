@@ -1,0 +1,7 @@
+scope.lus:4:21: warning: 'count' shadows the local declared on line 2 [shadowed-local]
+scope.lus:9:11: warning: 'count' shadows the local declared on line 2 [shadowed-local]
+scope.lus:13:7: warning: unused local 'name' [unused-local]
+scope.lus:17:1: warning: global 'total' is assigned without a 'global' declaration [implicit-global]
+scope.lus:19:7: warning: undefined global 'undefined_thing' [undefined-global]
+scope.lus:20:12: warning: 'pcall' no longer exists, use a 'catch' expression instead [deprecated-pcall]
+scope.lus:21:11: warning: 'xpcall' no longer exists, use a 'catch' expression instead [deprecated-pcall]
