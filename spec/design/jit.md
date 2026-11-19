@@ -121,7 +121,7 @@ Code is position independent. Addresses of runtime routines and of constants are
 
 ## Controls
 
-- `zig build -Djit=false` builds without the JIT. The WebAssembly build and every target other than aarch64 and x86-64 on macOS and Linux have none.
+- `zig build -Djit=false` builds without the JIT. The WebAssembly build compiles to WebAssembly modules that its host instantiates (`wasmjit.md`). Every target other than aarch64 and x86-64 on macOS and Linux and WebAssembly has none.
 - `LUS_JIT=off` interprets everything. `LUS_JIT=eager` compiles every function on its first call, which is what the test suites use. `LUS_JIT=on` is the default.
 - `LUS_JIT_THRESHOLD=N` sets the number of events before a function compiles.
 - `debug.jit()` returns the setting, and `debug.jit(f)` tells whether `f` has native code.

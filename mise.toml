@@ -43,6 +43,18 @@ depends = ["wasm"]
 dir = "packages/wasm"
 run = "node --test"
 
+[tasks."wasm:conformance"]
+description = "Run the conformance tests on lus.wasm with the JIT off, on, and eager"
+depends = ["wasm"]
+dir = "packages/wasm"
+run = "node scripts/conformance.mjs --modes off,on,eager"
+
+[tasks."wasm:bench"]
+description = "Time the benchmarks on lus.wasm with the JIT off and on"
+depends = ["wasm"]
+dir = "packages/wasm"
+run = "node bench/run.mjs"
+
 [tasks.gen]
 description = "Regenerate LSP stdlib data and TextMate grammars from spec/"
 run = "pnpm run gen"

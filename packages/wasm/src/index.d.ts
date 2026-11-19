@@ -54,11 +54,42 @@ export interface RunResult {
 export const MAX_LSP_FRAME_BYTES: number;
 export const EXEC_OUTPUT_BYTES: number;
 
+export interface JitOptions {
+  /** Modules up to this many bytes compile synchronously. Larger ones compile in the background. */
+  syncLimit?: number;
+  /** Called with every error of compiling or instantiating a module. */
+  onError?: (error: unknown) => void;
+}
+
+/** The host side of the WebAssembly JIT, which compiles and installs the modules lus.wasm emits. */
+export class WasmJit {
+  /** Registers a JIT host with an instance of lus.wasm. Returns null when the module has no JIT. */
+  static attach(instance: WebAssembly.Instance, options?: JitOptions): WasmJit | null;
+  /** What the host did: modules installed, bytes received, and the time spent compiling and instantiating them. */
+  readonly stats: {
+    modules: number;
+    bytes: number;
+    compileMs: number;
+    instantiateMs: number;
+    deferred: number;
+    failed: number;
+  };
+  /** The counts lus.wasm keeps: functions compiled, modules that failed or were deferred, and bytes emitted. */
+  runtimeStats(): { compiled: number; failed: number; deferred: number; bytes: number } | null;
+}
+
 export class Lus {
   static load(
     source: BufferSource | WebAssembly.Module | Response | URL | string,
-    options?: { fs?: MemFS; env?: Record<string, string> },
+    options?: { fs?: MemFS; env?: Record<string, string>; jit?: false | JitOptions },
   ): Promise<Lus>;
+
+  /**
+   * The JIT host of the current instance, or null when the options turned
+   * it off or the module has no JIT. `LUS_JIT` in `env` sets the policy
+   * of each state, as it does for the native runtime.
+   */
+  readonly jit: WasmJit | null;
 
   readonly fs: MemFS;
   /**

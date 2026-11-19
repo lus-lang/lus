@@ -659,7 +659,7 @@ pub const layout = struct {
         assert(@backingInt(ArrayKind.float) == @backingInt(value.Tag.float));
         assert(@FieldType(Table, "tm_absent") == u16);
         assert(@FieldType(Table, "hash_used") == u32);
-        assert(@FieldType(Table, "asize") == usize and @sizeOf(usize) == 8);
+        assert(@FieldType(Table, "asize") == usize);
         assert(@FieldType(Table, "readonly") == bool);
         assert(@sizeOf(ArrayKind) == 1);
         assert(@sizeOf(gc.Header.Flags) == 1);

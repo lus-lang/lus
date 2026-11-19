@@ -6,7 +6,9 @@
 //! the settings, the hotness policy, the hand-over between the tiers, and
 //! the lifetime of the code. `emit.zig` turns bytecode into instructions
 //! through the assembler of the target (`a64.zig` or `x64.zig`), and
-//! `mem.zig` manages executable memory.
+//! `mem.zig` manages executable memory. On WebAssembly `wasm.zig` turns
+//! bytecode into a module that the host instantiates
+//! (`spec/design/wasmjit.md`).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -20,17 +22,23 @@ const Proto = object.Proto;
 const Error = state.Error;
 
 /// True when this build has a JIT: the option is on and the target has a
-/// backend and a way to map executable memory.
+/// backend and a way to map executable memory, or on WebAssembly a host
+/// that instantiates modules.
 pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
     .aarch64, .x86_64 => switch (builtin.os.tag) {
         .macos, .linux => true,
         else => false,
     },
+    .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
 
+/// Whether the backend emits WebAssembly modules rather than machine code.
+pub const is_wasm = builtin.cpu.arch == .wasm32;
+
 const mem = @import("mem.zig");
 const emit = @import("emit.zig");
+const wasm = @import("wasm.zig");
 pub const helpers = @import("helpers.zig");
 
 pub const default_threshold = 60;
@@ -48,7 +56,7 @@ pub const State = if (enabled) struct {
     /// Length of the current sampling period of the interpreter.
     period: u32 = 1,
     seed: u32 = 12345,
-    arena: mem.Arena = .{},
+    arena: if (is_wasm) void else mem.Arena = if (is_wasm) {} else .{},
     /// Functions that have native code now.
     live: usize = 0,
     /// Functions compiled since the state started.
@@ -74,6 +82,12 @@ pub const Code = extern struct {
 fn setup(g: *Global) void {
     const js = &g.jit;
     js.ready = true;
+    // A WebAssembly host that cannot instantiate modules leaves the state
+    // interpreted.
+    if (is_wasm and !wasm.available()) {
+        js.setting = .off;
+        return;
+    }
     const env = g.environ orelse return;
     if (env.get("LUS_JIT")) |v| {
         if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
@@ -93,7 +107,7 @@ pub fn configure(g: *Global, how: Setting, threshold: u32) void {
     if (!enabled) return;
     const js = &g.jit;
     js.ready = true;
-    js.setting = how;
+    js.setting = if (is_wasm and !wasm.available()) .off else how;
     js.threshold = if (how == .eager) 1 else @max(threshold, 1);
     js.period = 1;
 }
@@ -148,10 +162,20 @@ pub noinline fn expire(l: *Thread, p: *Proto) bool {
         },
         .counting => {},
     }
-    if (compile(l, p)) {
-        p.jit_state = .compiled;
-        p.hot = 1;
-        return true;
+    switch (compile(l, p)) {
+        .done => {
+            p.jit_state = .compiled;
+            p.hot = 1;
+            return true;
+        },
+        // The host compiles the code in the background. The function
+        // asks again after more events.
+        .later => {
+            p.jit_state = .counting;
+            p.hot = @max(g.jit.threshold, default_threshold) *| 16;
+            return false;
+        },
+        .failed => {},
     }
     p.jit_state = .declined;
     p.hot = 0;
@@ -268,6 +292,7 @@ const Enter = *const fn (l: *Thread, stop: usize, addr: usize, base: usize) call
 /// frame count drops to `stop` or a frame needs the interpreter.
 pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopError)!void {
     if (!enabled) return error.SwitchLoop;
+    if (is_wasm) return wasm.run(l, stop);
     const t = dispatch(l);
     if (t.addr == 0) return error.SwitchLoop;
     const code: *Code = @ptrCast(@alignCast(l.frame().closure.?.proto.jit_code.?));
@@ -281,7 +306,16 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
     };
 }
 
-fn compile(l: *Thread, p: *Proto) bool {
+/// The outcome of compiling a function.
+pub const Outcome = enum { done, failed, later };
+
+const compile = if (is_wasm) wasm.compile else compileNative;
+
+fn compileNative(l: *Thread, p: *Proto) Outcome {
+    return if (compileMachine(l, p)) .done else .failed;
+}
+
+fn compileMachine(l: *Thread, p: *Proto) bool {
     const g = l.g;
     const gpa = g.gpa;
     if (p.code.len > max_instructions) return false;
@@ -318,6 +352,14 @@ fn compile(l: *Thread, p: *Proto) bool {
 /// Frees the native code of a function that is being collected.
 pub fn freeProto(g: *Global, p: *Proto) void {
     if (!enabled) return;
+    if (is_wasm) {
+        if (p.jit_code == null) return;
+        wasm.release(p);
+        p.jit_code = null;
+        p.plain_call = !p.is_vararg;
+        g.jit.live -= 1;
+        return;
+    }
     const code: *Code = @ptrCast(@alignCast(p.jit_code orelse return));
     g.jit.arena.release(g.gpa, @as([*]u8, @ptrFromInt(code.base))[0..code.size]);
     g.gpa.free(code.offs[0..code.count]);
@@ -331,7 +373,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
 
 /// Releases the executable memory of a state that is closing.
 pub fn deinit(g: *Global) void {
-    if (!enabled) return;
+    if (!enabled or is_wasm) return;
     g.jit.arena.deinit(g.gpa);
 }
 

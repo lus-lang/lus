@@ -7,8 +7,9 @@
 
 import { MemFS } from "./memfs.js";
 import { Wasi, WasiExit } from "./wasi.js";
+import { WasmJit } from "./jit.js";
 
-export { MemFS, WasiExit };
+export { MemFS, WasiExit, WasmJit };
 
 const LUS_OK = 0;
 const LUS_MULTRET = -1;
@@ -102,7 +103,7 @@ export class Lus {
   /**
    * Compiles and instantiates lus.wasm.
    * @param {BufferSource | WebAssembly.Module | Response | URL | string} source
-   * @param {{ fs?: MemFS, env?: Record<string, string> }} [options]
+   * @param {{ fs?: MemFS, env?: Record<string, string>, jit?: false | { syncLimit?: number, onError?: (error: unknown) => void } }} [options]
    */
   static async load(source, options = {}) {
     const module = await compile(source);
@@ -116,6 +117,8 @@ export class Lus {
     this.module = module;
     this.fs = options.fs ?? new MemFS();
     this.env = options.env ?? {};
+    // The JIT host is on unless the options turn it off with `jit: false`.
+    this.jitOptions = options.jit ?? {};
     this.capture = new Capture();
     this.stdinQueue = [];
     this.generation = 0;
@@ -136,6 +139,7 @@ export class Lus {
   adopt(instance, wasi) {
     wasi.bind(instance.exports.memory);
     instance.exports._initialize?.();
+    this.jit = this.jitOptions === false ? null : WasmJit.attach(instance, this.jitOptions);
     this.wasi = wasi;
     this.exports = instance.exports;
     this.generation++;

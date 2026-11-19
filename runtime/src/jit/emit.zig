@@ -50,6 +50,8 @@ const frame_size: i32 = @sizeOf(Frame);
 const frame_shift: u6 = std.math.log2_int(usize, @sizeOf(Frame));
 comptime {
     std.debug.assert(@sizeOf(Frame) == @as(usize, 1) << frame_shift);
+    // The templates load sizes and addresses as 64-bit words.
+    std.debug.assert(@sizeOf(usize) == 8);
 }
 
 fn frameField(comptime name: []const u8) i32 {

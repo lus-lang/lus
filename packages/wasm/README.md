@@ -24,7 +24,15 @@ The tests run the module under Node:
 mise run wasm:test
 ```
 
-They cover hello world, errors with their traceback, pledge denials, the in-memory file system, string, vector, and JSON functions, SQLite, the archive codecs, `os.exit`, the playground interface, and a language server session.
+They cover hello world, errors with their traceback, pledge denials, the in-memory file system, string, vector, and JSON functions, SQLite, the archive codecs, `os.exit`, the playground interface, a language server session, and the JIT.
+
+Two scripts measure the JIT. `mise run wasm:conformance` runs `scripts/conformance.mjs`, which runs the conformance suite and the language server tests through the module with the JIT off, on, and eager, and fails when the modes disagree on any test. `mise run wasm:bench` runs `bench/run.mjs`, which times the benchmarks of `tests/bench` with the JIT off and on.
+
+## The JIT
+
+Hot functions compile to WebAssembly (`spec/design/wasmjit.md`). The runtime emits a small module for each one, and the host in `src/jit.js` compiles and instantiates it and installs its function in the function table of the module, which `lus.wasm` exports for this purpose. `Lus.load` sets the host up for every instance, and `lus.jit` holds its statistics. Modules up to 4 MiB compile synchronously, and larger ones compile in the background while the function keeps running in the interpreter.
+
+`LUS_JIT` and `LUS_JIT_THRESHOLD` in `lus.env` set the policy of each state, as they do for the native runtime: `off`, `on` (the default), or `eager`. The option `jit: false` of `Lus.load` leaves the host without a compiler, and the module then interprets everything. `lus.wasm` imports nothing but WASI, so a plain WASI runner such as wasmtime runs it too, interpreted.
 
 ## Using the host
 

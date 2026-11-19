@@ -268,6 +268,10 @@ fn wasmModule(b: *std.Build, requested: Features, optimize: std.builtin.Optimize
     const exe = b.addExecutable(.{ .name = "lus", .root_module = mod });
     exe.entry = .disabled;
     exe.wasi_exec_model = .reactor;
+    // The JIT installs compiled functions in the function table, so the
+    // host needs the table and must be able to grow it.
+    exe.export_table = true;
+    exe.growable_table = true;
     // The interpreter recurses for nested calls and the parser for nested
     // expressions, so the shadow stack gets the same megabyte the native
     // main thread starts with.
