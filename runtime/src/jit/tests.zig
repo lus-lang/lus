@@ -143,6 +143,50 @@ test "loops, calls, and closures agree with the interpreter" {
     );
 }
 
+test "table templates agree with the interpreter" {
+    try expectSame(
+        \\local out = {}
+        \\local function note(v) out[#out + 1] = tostring(v) end
+        \\local Class = {}
+        \\Class.__index = Class
+        \\function Class.new(v) return setmetatable({ v = v, w = v }, Class) end
+        \\function Class:sum() return self.v + self.w end
+        \\function Class:next() return Class.new(self.v + 1) end
+        \\local function fields(o, n)
+        \\    for _ = 1, n do
+        \\        o.v = o.v + 1
+        \\        o = o:next()
+        \\    end
+        \\    return o:sum()
+        \\end
+        \\note(fields(Class.new(1), 50))
+        \\local function arrays(n, first, other)
+        \\    local t = {}
+        \\    for i = 1, n do t[i] = first end
+        \\    t[n // 2] = other
+        \\    local s = 0
+        \\    for i = 1, n do
+        \\        local v = t[i]
+        \\        if type(v) == "number" then s = s + v end
+        \\    end
+        \\    return s, math.type(t[1]), t[n + 1], t[0], #t, t[n // 2]
+        \\end
+        \\for _, pair in ipairs({ { 1, 2 }, { 1, 0.5 }, { 0.5, 1 }, { 1, "s" }, { "s", 1 }, { 0.5, false } }) do
+        \\    local s, kind, past, zero, len, mid = arrays(20, pair[1], pair[2])
+        \\    note(s) note(kind) note(past) note(zero) note(len) note(mid)
+        \\end
+        \\local function strings(s) return s:upper(), #s, s:sub(2, 3) end
+        \\for _ = 1, 3 do
+        \\    local u, n, m = strings("héllo")
+        \\    note(u) note(n) note(m)
+        \\end
+        \\local function tail(a, b) return math.max(a, b) end
+        \\local function pass(a, b) return tail(b, a) end
+        \\for i = 1, 5 do note(pass(i, 3)) end
+        \\return table.concat(out, " ")
+    );
+}
+
 test "collecting a function frees its native code" {
     const l = try newState(.eager);
     defer api.close(l);

@@ -177,6 +177,11 @@ pub const Assembler = struct {
         a.imm32(0);
     }
 
+    /// This target keeps its constants in the instructions.
+    pub fn flushPool(a: *Assembler) void {
+        _ = a;
+    }
+
     /// Resolves every branch. Returns false when the code is unusable.
     pub fn finish(a: *Assembler) bool {
         if (a.oom) return false;
@@ -704,6 +709,24 @@ test "x86-64 memory forms" {
         0x4D, 0x89, 0x56, 0x28,
         0x49, 0xC7, 0x46, 0x08,
         0x03, 0x00, 0x00, 0x00,
+    });
+}
+
+test "x86-64 sixteen-bit forms" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.load16(.rax, .{ .base = .rbx, .disp = 2 }); // movzx eax, word [rbx+2]
+    a.store16(.rax, .{ .base = .rbx, .disp = 2 }); // mov [rbx+2], ax
+    a.storeImm16(.{ .base = .rax, .disp = 4 }, 0); // mov word [rax+4], 0
+    a.load16(.r9, .{ .base = .r14, .disp = 2 }); // movzx r9d, word [r14+2]
+    a.store16(.r9, .{ .base = .r14, .disp = 2 }); // mov [r14+2], r9w
+    try expectBytes(&a, &.{
+        0x0F, 0xB7, 0x43, 0x02,
+        0x66, 0x89, 0x43, 0x02,
+        0x66, 0xC7, 0x40, 0x04,
+        0x00, 0x00, 0x45, 0x0F,
+        0xB7, 0x4E, 0x02, 0x66,
+        0x45, 0x89, 0x4E, 0x02,
     });
 }
 

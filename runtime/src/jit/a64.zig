@@ -131,10 +131,12 @@ pub const Assembler = struct {
     /// Offset of each label, or `unbound`.
     labels: std.ArrayList(u32) = .empty,
     fixups: std.ArrayList(Fixup) = .empty,
-    /// Constants that take more than two move instructions. They follow
-    /// the code, and a load relative to the pc reads them. For a literal
-    /// fixup, `label` is an index into this pool.
+    /// Constants that take more than two move instructions. They wait
+    /// here for the next `flushPool`, and a load relative to the pc reads
+    /// them. For a literal fixup, `label` is an index into this pool.
     pool: std.ArrayList(u64) = .empty,
+    /// The first fixup that the next `flushPool` looks at.
+    pool_fixups: usize = 0,
     oom: bool = false,
     /// Set when a branch cannot reach its label.
     overflow: bool = false,
@@ -192,30 +194,53 @@ pub const Assembler = struct {
         };
     }
 
+    /// Writes the pending constants at the current position, which
+    /// execution never reaches, and points the loads that wait for them
+    /// at them. A load reaches one megabyte, so a long function flushes
+    /// its pool at intervals.
+    pub fn flushPool(a: *Assembler) void {
+        if (a.pool.items.len > 0) {
+            // The pool is aligned for 64-bit loads.
+            while (a.buf.items.len % 8 != 0) a.word(0xD4200000);
+            const pool_at = a.offset();
+            for (a.pool.items) |v| a.buf.appendSlice(a.gpa, std.mem.asBytes(&std.mem.nativeToLittle(u64, v))) catch {
+                a.oom = true;
+                return;
+            };
+            for (a.fixups.items[a.pool_fixups..]) |f| {
+                if (f.kind == .literal) a.patch(f, pool_at + f.label * 8);
+            }
+            a.pool.clearRetainingCapacity();
+        }
+        a.pool_fixups = a.fixups.items.len;
+    }
+
+    fn patch(a: *Assembler, f: Fixup, target: u32) void {
+        const delta = @divExact(@as(i64, target) - @as(i64, f.at), 4);
+        const p: *align(1) u32 = @ptrCast(a.buf.items[f.at..].ptr);
+        var w = std.mem.littleToNative(u32, p.*);
+        switch (f.kind) {
+            .b26 => {
+                if (delta < -(1 << 25) or delta >= (1 << 25)) a.overflow = true;
+                w |= @as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x03FF_FFFF;
+            },
+            .b19, .literal => {
+                if (delta < -(1 << 18) or delta >= (1 << 18)) a.overflow = true;
+                w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x7FFFF) << 5;
+            },
+        }
+        p.* = std.mem.nativeToLittle(u32, w);
+    }
+
     /// Resolves every branch. Returns false when the code is unusable.
     pub fn finish(a: *Assembler) bool {
+        a.flushPool();
         if (a.oom) return false;
-        // The pool goes after the code, aligned for 64-bit loads.
-        while (a.buf.items.len % 8 != 0) a.word(0xD4200000);
-        const pool_at = a.offset();
-        for (a.pool.items) |v| a.buf.appendSlice(a.gpa, std.mem.asBytes(&std.mem.nativeToLittle(u64, v))) catch return false;
         for (a.fixups.items) |f| {
-            const target = if (f.kind == .literal) pool_at + f.label * 8 else a.labels.items[f.label];
+            if (f.kind == .literal) continue;
+            const target = a.labels.items[f.label];
             if (target == unbound) return false;
-            const delta = @divExact(@as(i64, target) - @as(i64, f.at), 4);
-            const p: *align(1) u32 = @ptrCast(a.buf.items[f.at..].ptr);
-            var w = std.mem.littleToNative(u32, p.*);
-            switch (f.kind) {
-                .b26 => {
-                    if (delta < -(1 << 25) or delta >= (1 << 25)) a.overflow = true;
-                    w |= @as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x03FF_FFFF;
-                },
-                .b19, .literal => {
-                    if (delta < -(1 << 18) or delta >= (1 << 18)) a.overflow = true;
-                    w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x7FFFF) << 5;
-                },
-            }
-            p.* = std.mem.nativeToLittle(u32, w);
+            a.patch(f, target);
         }
         return !a.overflow;
     }
@@ -654,6 +679,18 @@ test "aarch64 memory forms" {
     a.copy16(.{ .base = .x20, .disp = 32 }, .{ .base = .x20, .disp = 48 }); // ldp x16, x17, [x20, #48]; stp x16, x17, [x20, #32]
     a.loadF(.v0, .{ .base = .x20, .disp = 0 }); // ldr d0, [x20]
     try expectWords(&a, &.{ 0xF9400A89, 0xF9000E89, 0xF85F0289, 0x3940228A, 0xB940066A, 0xA9434690, 0xA9024690, 0xFD400280 });
+}
+
+test "aarch64 sixteen-bit forms and pairs" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.load16(.x9, .{ .base = .x20, .disp = 2 }); // ldrh w9, [x20, #2]
+    a.store16(.x9, .{ .base = .x20, .disp = 2 }); // strh w9, [x20, #2]
+    a.storeImm16(.{ .base = .x9, .disp = 2 }, 0); // strh wzr, [x9, #2]
+    a.storePair64(.x9, .x10, .{ .base = .x20, .disp = 16 }); // stp x9, x10, [x20, #16]
+    a.storePair64(.x9, Assembler.zero_reg.?, .{ .base = .x20, .disp = 16 }); // stp x9, xzr, [x20, #16]
+    a.storePair32(.x9, .x10, .{ .base = .x20, .disp = 16 }); // stp w9, w10, [x20, #16]
+    try expectWords(&a, &.{ 0x79400689, 0x79000689, 0x7900053F, 0xA9012A89, 0xA9017E89, 0x29022A89 });
 }
 
 test "aarch64 arithmetic" {

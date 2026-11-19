@@ -194,9 +194,16 @@ pub const Emitter = struct {
     cold: std.ArrayList(Cold) = .empty,
     /// Label of instruction 0. The label of instruction `pc` follows.
     first: Label = 0,
+    /// Where a step result other than "next" or "skip" goes. It is the
+    /// status code at the start of the function or a jump to it that is
+    /// close to the code being emitted.
     l_status: Label = 0,
     l_dispatch: Label = 0,
     l_exit: Label = 0,
+    /// The first out-of-line block that is not emitted yet, and the code
+    /// offset of the last flush.
+    cold_next: usize = 0,
+    flushed_at: u32 = 0,
     oom: bool = false,
     /// Whether a frame of the function can own an open upvalue, and a
     /// to-be-closed variable. A return tests only for what can exist.
@@ -275,22 +282,49 @@ pub const Emitter = struct {
             e.callEntry();
         }
 
+        const status = e.l_status;
         var pc: u32 = 0;
         while (pc < code.len) : (pc += 1) {
             a.bind(e.first + pc);
             e.instruction(pc, code[pc]);
+            if (a.offset() - e.flushed_at >= flush_interval and pc + 1 < code.len) {
+                // A long function emits its out-of-line code and its
+                // constants at intervals, so that every conditional
+                // branch and every constant load stays in range. The
+                // code after this point reaches the status code through
+                // a jump that is emitted here.
+                const over = a.newLabel();
+                const near_status = a.newLabel();
+                a.jmp(over);
+                e.flushCold();
+                a.bind(near_status);
+                a.jmp(status);
+                a.flushPool();
+                a.bind(over);
+                e.l_status = near_status;
+                e.flushed_at = a.offset();
+            }
         }
         // Execution never runs off the end of a function.
         a.bind(e.first + pc);
         a.trap();
-
-        // Out-of-line code may add more of its own.
-        var next: usize = 0;
-        while (next < e.cold.items.len) : (next += 1) e.emitCold(e.cold.items[next]);
+        e.flushCold();
 
         if (e.oom or !a.finish()) return false;
         for (offs, 0..) |*o, i| o.* = a.labelOffset(e.first + @as(u32, @intCast(i)));
         return true;
+    }
+
+    /// Bytes of straight-line code between two flushes of the out-of-line
+    /// code. The out-of-line code of that much straight-line code is a
+    /// few times larger, and the sum stays well inside the megabyte that
+    /// a conditional branch reaches on aarch64.
+    const flush_interval = 64 * 1024;
+
+    /// Emits the out-of-line code that is pending. A block may add more
+    /// of its own, which follows in the same pass.
+    fn flushCold(e: *Emitter) void {
+        while (e.cold_next < e.cold.items.len) : (e.cold_next += 1) e.emitCold(e.cold.items[e.cold_next]);
     }
 
     // -----------------------------------------------------------------

@@ -320,16 +320,19 @@ pub const Frame = extern struct {
     };
 
     comptime {
-        const assert = std.debug.assert;
-        assert(@sizeOf(Frame) == 64);
-        // The pairs and words that a lean call stores at once.
-        assert(@offsetOf(Frame, "native") == @offsetOf(Frame, "closure") + 8);
-        assert(@offsetOf(Frame, "base") == @offsetOf(Frame, "func") + 4);
-        assert(@offsetOf(Frame, "want") == @offsetOf(Frame, "ret") + 4);
-        assert(@offsetOf(Frame, "nvarargs") == @offsetOf(Frame, "pc") + 4);
-        assert(@offsetOf(Frame, "pc") % 8 == 0);
-        assert(@offsetOf(Frame, "boundary") % 8 == 0);
-        assert(@offsetOf(Frame, "resume_at") == @offsetOf(Frame, "boundary") + 8);
+        // Native code exists only on 64-bit targets.
+        if (@sizeOf(usize) == 8) {
+            const assert = std.debug.assert;
+            assert(@sizeOf(Frame) == 64);
+            // The pairs and words that a lean call stores at once.
+            assert(@offsetOf(Frame, "native") == @offsetOf(Frame, "closure") + 8);
+            assert(@offsetOf(Frame, "base") == @offsetOf(Frame, "func") + 4);
+            assert(@offsetOf(Frame, "want") == @offsetOf(Frame, "ret") + 4);
+            assert(@offsetOf(Frame, "nvarargs") == @offsetOf(Frame, "pc") + 4);
+            assert(@offsetOf(Frame, "pc") % 8 == 0);
+            assert(@offsetOf(Frame, "boundary") % 8 == 0);
+            assert(@offsetOf(Frame, "resume_at") == @offsetOf(Frame, "boundary") + 8);
+        }
     }
 };
 
