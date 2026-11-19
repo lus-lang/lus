@@ -1,10 +1,16 @@
 /**
  * Fetches verified WASM files from GitHub releases at build time.
  * Run this before `astro build` to include WASM in the static output.
+ *
+ * The playground runs lus.wasm through the lus-wasm host, which loads the
+ * WASI module that Lus 2.0 and later releases ship. Each such release
+ * contributes its lus.wasm, checked against its SHA256SUMS. A local build
+ * of packages/wasm (made with `mise run wasm`) becomes the unstable
+ * channel, so a checkout can try its own runtime in the playground.
  */
 
 import { createHash } from "node:crypto"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { TextDecoder } from "node:util"
@@ -14,8 +20,18 @@ const GITHUB_REPO = "lus-lang/lus"
 const RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases`
 const OUTPUT_DIR = join(scriptDirectory, "..", "public", "wasm")
 const CHECKSUM_ASSET = "SHA256SUMS"
-const JAVASCRIPT_ASSET = "lus.web.js"
 const WASM_ASSET = "lus.wasm"
+const LOCAL_WASM = join(scriptDirectory, "..", "..", "wasm", "dist", WASM_ASSET)
+const RUNTIME_MANIFEST = join(
+  scriptDirectory,
+  "..",
+  "..",
+  "..",
+  "runtime",
+  "build.zig.zon",
+)
+/** The emscripten glue that releases before Lus 2.0 ship beside lus.wasm. */
+const EMSCRIPTEN_ASSETS = new Set(["lus.js", "lus.web.js", "lus.node.js"])
 const RELEASE_TAG_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/
 const CHECKSUM_LINE_PATTERN = /^([0-9a-fA-F]{64}) [ *]([^\r\n]+)$/
 
@@ -92,20 +108,65 @@ function validateReleaseUrls(release, selected) {
     CHECKSUM_ASSET,
   )
 
-  for (const [name, url] of [
-    [JAVASCRIPT_ASSET, selected.javascript],
-    [WASM_ASSET, selected.wasm],
-  ]) {
-    const directory = assetDirectory(url, release, name)
-    if (
-      directory.origin !== checksumDirectory.origin ||
-      directory.pathname !== checksumDirectory.pathname
-    ) {
-      throw new Error(
-        `Release ${release.tag_name} serves ${name} outside its checksum directory`,
-      )
-    }
+  const directory = assetDirectory(selected.wasm, release, WASM_ASSET)
+  if (
+    directory.origin !== checksumDirectory.origin ||
+    directory.pathname !== checksumDirectory.pathname
+  ) {
+    throw new Error(
+      `Release ${release.tag_name} serves ${WASM_ASSET} outside its checksum directory`,
+    )
   }
+}
+
+/**
+ * True when the release ships a lus.wasm that runs on the lus-wasm host.
+ * Releases before Lus 2.0 ship an emscripten module together with its
+ * JavaScript glue, and the playground leaves them out.
+ */
+export function isWasiRelease(release) {
+  if (!Array.isArray(release?.assets)) return true
+  const names = release.assets.map((asset) => asset?.name)
+  return (
+    names.includes(WASM_ASSET) &&
+    !names.some((name) => EMSCRIPTEN_ASSETS.has(name))
+  )
+}
+
+function hasWasmHeader(bytes) {
+  return (
+    bytes.length >= 8 &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x61 &&
+    bytes[2] === 0x73 &&
+    bytes[3] === 0x6d
+  )
+}
+
+/** Reads the runtime version from runtime/build.zig.zon, such as v2.0.0-dev. */
+export async function localRuntimeVersion(manifestPath = RUNTIME_MANIFEST) {
+  const source = await readFile(manifestPath, "utf8")
+  const match = /^\s*\.version\s*=\s*"([0-9A-Za-z.+_-]+)"/m.exec(source)
+  if (!match) throw new Error(`${manifestPath} has no version`)
+  return `v${match[1]}`
+}
+
+/**
+ * Reads a local lus.wasm, or returns null when there is none.
+ */
+async function readLocalWasm(path) {
+  if (!path) return null
+  let bytes
+  try {
+    bytes = await readFile(path)
+  } catch (error) {
+    if (error?.code === "ENOENT") return null
+    throw error
+  }
+  if (!hasWasmHeader(bytes)) {
+    throw new Error(`${path} does not have a WebAssembly header`)
+  }
+  return bytes
 }
 
 export function parseChecksumManifest(source) {
@@ -209,31 +270,22 @@ async function downloadRelease(release, { fetchImpl, hashFactory, log }) {
   const assets = releaseAssetIndex(release)
   const selected = {
     checksums: requiredAsset(assets, release, CHECKSUM_ASSET),
-    javascript: requiredAsset(assets, release, JAVASCRIPT_ASSET),
     wasm: requiredAsset(assets, release, WASM_ASSET),
   }
   validateReleaseUrls(release, selected)
 
   log(`  Downloading ${selected.checksums}`)
   const entries = await fetchChecksumManifest(selected.checksums, fetchImpl)
-  const javascriptChecksum = requireChecksum(entries, JAVASCRIPT_ASSET)
   const wasmChecksum = requireChecksum(entries, WASM_ASSET)
 
   sha256(Buffer.alloc(0), hashFactory)
 
-  log(`  Downloading ${selected.javascript}`)
-  const javascript = await fetchBytes(
-    selected.javascript,
-    JAVASCRIPT_ASSET,
-    fetchImpl,
-  )
   log(`  Downloading ${selected.wasm}`)
   const wasm = await fetchBytes(selected.wasm, WASM_ASSET, fetchImpl)
 
-  verifyBytes(javascript, JAVASCRIPT_ASSET, javascriptChecksum, hashFactory)
   verifyBytes(wasm, WASM_ASSET, wasmChecksum, hashFactory)
 
-  return { version: release.tag_name, javascript, wasm }
+  return { version: release.tag_name, wasm }
 }
 
 async function fetchReleases(releasesUrl, fetchImpl) {
@@ -260,6 +312,8 @@ export async function fetchWasmReleases({
   fetchImpl = globalThis.fetch,
   hashFactory = createHash,
   log = console.log,
+  localWasmPath = process.env.LUS_SITE_LOCAL_WASM ?? LOCAL_WASM,
+  localVersion = localRuntimeVersion,
 } = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("The fetch implementation is unavailable")
@@ -267,7 +321,7 @@ export async function fetchWasmReleases({
 
   log("Fetching releases from GitHub...")
   const releases = await fetchReleases(releasesUrl, fetchImpl)
-  const sorted = [...releases].sort(
+  const sorted = releases.filter(isWasiRelease).sort(
     (a, b) =>
       new Date(b.published_at).getTime() - new Date(a.published_at).getTime(),
   )
@@ -289,10 +343,23 @@ export async function fetchWasmReleases({
     manifest[type] = { version: download.version }
   }
 
+  const localWasm = await readLocalWasm(localWasmPath)
+  if (localWasm) {
+    const version = await localVersion()
+    if (!RELEASE_TAG_PATTERN.test(version)) {
+      throw new Error(`The local runtime version ${version} is not a valid tag`)
+    }
+    log(`\nUsing the local build ${localWasmPath} as ${version} (unstable)`)
+    const index = downloads.findIndex((download) => download.version === version)
+    if (index !== -1) downloads.splice(index, 1)
+    if (manifest.stable?.version === version) manifest.stable = null
+    downloads.push({ version, wasm: localWasm })
+    manifest.unstable = { version }
+  }
+
   for (const download of downloads) {
     const versionDirectory = join(outputDirectory, download.version)
     await mkdir(versionDirectory, { recursive: true })
-    await writeFile(join(versionDirectory, "lus.js"), download.javascript)
     await writeFile(join(versionDirectory, WASM_ASSET), download.wasm)
   }
 

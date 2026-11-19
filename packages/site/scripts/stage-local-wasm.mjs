@@ -5,7 +5,6 @@ export async function stageLocalWasmPublic({
   sourcePublicDirectory,
   stagedPublicDirectory,
   version,
-  javascript,
   wasm,
 }) {
   await cp(sourcePublicDirectory, stagedPublicDirectory, { recursive: true })
@@ -14,7 +13,6 @@ export async function stageLocalWasmPublic({
   await rm(outputDirectory, { recursive: true, force: true })
   const versionDirectory = join(outputDirectory, version)
   await mkdir(versionDirectory, { recursive: true })
-  await writeFile(join(versionDirectory, "lus.js"), javascript)
   await writeFile(join(versionDirectory, "lus.wasm"), wasm)
   await writeFile(
     join(outputDirectory, "manifest.json"),

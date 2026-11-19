@@ -1,32 +1,30 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { access, mkdtemp, readFile, rm } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { once } from "node:events"
 import test from "node:test"
 
-import { fetchWasmReleases } from "../scripts/fetch-wasm.mjs"
+import {
+  fetchWasmReleases,
+  localRuntimeVersion,
+} from "../scripts/fetch-wasm.mjs"
 
-const VERSION = "v1.7.0"
-const JAVASCRIPT = Buffer.from("export default function Lus() {}\n")
+const VERSION = "v2.0.0"
 const WASM = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
 }
 
-function checksumManifest({
-  javascript = digest(JAVASCRIPT),
-  wasm = digest(WASM),
-  extra = "",
-} = {}) {
-  return `${javascript}  lus.web.js\n${wasm}  lus.wasm\n${extra}`
+function checksumManifest({ wasm = digest(WASM), extra = "" } = {}) {
+  return `${wasm}  lus.wasm\n${extra}`
 }
 
 function release(base, { prerelease = false, assets, version = VERSION } = {}) {
-  const names = assets ?? ["SHA256SUMS", "lus.web.js", "lus.wasm"]
+  const names = assets ?? ["SHA256SUMS", "lus.wasm"]
   return {
     tag_name: version,
     published_at: "2026-08-30T00:00:00Z",
@@ -98,11 +96,6 @@ function addStandardRoutes(fixture, options = {}) {
     options.checksumResponse,
   )
   fixture.route(
-    `/download/${VERSION}/lus.web.js`,
-    options.javascript ?? JAVASCRIPT,
-    options.javascriptResponse,
-  )
-  fixture.route(
     `/download/${VERSION}/lus.wasm`,
     options.wasm ?? WASM,
     options.wasmResponse,
@@ -114,6 +107,7 @@ async function runFetch(fixture, outputDirectory, options = {}) {
     releasesUrl: `${fixture.base}/api/releases`,
     outputDirectory,
     log() {},
+    localWasmPath: null,
     ...options,
   })
 }
@@ -122,7 +116,7 @@ test("downloads the checksum manifest before verified release files", async () =
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
       checksums: checksumManifest({
-        extra: `${"a".repeat(64)}  lus-1.7.0-wasm.tar.gz\n`,
+        extra: `${"a".repeat(64)}  lus-2.0.0-wasm.tar.gz\n`,
       }),
     })
 
@@ -134,13 +128,8 @@ test("downloads the checksum manifest before verified release files", async () =
       assert.deepEqual(fixture.requests, [
         "/api/releases",
         `/download/${VERSION}/SHA256SUMS`,
-        `/download/${VERSION}/lus.web.js`,
         `/download/${VERSION}/lus.wasm`,
       ])
-      assert.deepEqual(
-        await readFile(join(outputDirectory, VERSION, "lus.js")),
-        JAVASCRIPT,
-      )
       assert.deepEqual(
         await readFile(join(outputDirectory, VERSION, "lus.wasm")),
         WASM,
@@ -164,7 +153,6 @@ test("accepts a safe versioned unstable release tag", async () => {
       headers: { "Content-Type": "application/json" },
     })
     fixture.route(`/download/${version}/SHA256SUMS`, checksumManifest())
-    fixture.route(`/download/${version}/lus.web.js`, JAVASCRIPT)
     fixture.route(`/download/${version}/lus.wasm`, WASM)
 
     await withOutputDirectory(async (outputDirectory) => {
@@ -172,32 +160,96 @@ test("accepts a safe versioned unstable release tag", async () => {
         stable: null,
         unstable: { version },
       })
-      assert.deepEqual(await readFile(join(outputDirectory, version, "lus.js")), JAVASCRIPT)
+      assert.deepEqual(await readFile(join(outputDirectory, version, "lus.wasm")), WASM)
     })
   })
 })
 
-test("requires the canonical web loader asset", async () => {
+test("skips releases that ship the emscripten module", async () => {
+  await withReleaseServer(async (fixture) => {
+    const legacy = release(fixture.base, {
+      version: "v1.7.0",
+      assets: ["SHA256SUMS", "lus.web.js", "lus.wasm"],
+    })
+    legacy.published_at = "2026-09-30T00:00:00Z"
+    addStandardRoutes(fixture, { releases: [legacy, release(fixture.base)] })
+    await withOutputDirectory(async (outputDirectory) => {
+      assert.deepEqual(await runFetch(fixture, outputDirectory), {
+        stable: { version: VERSION },
+        unstable: null,
+      })
+      assert.ok(!fixture.requests.some((url) => url.includes("v1.7.0")))
+    })
+  })
+})
+
+test("skips releases without a WebAssembly module", async () => {
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
-      selectedRelease: release(fixture.base, {
-        assets: ["SHA256SUMS", "lus.js", "lus.wasm"],
-      }),
+      releases: [
+        release(fixture.base, { version: "v1.0.0", assets: ["lus.js", "lus.wasm"] }),
+        release(fixture.base, { version: "binaries", assets: ["lus-linux"] }),
+      ],
     })
     await withOutputDirectory(async (outputDirectory) => {
-      await assert.rejects(
-        runFetch(fixture, outputDirectory),
-        /missing lus\.web\.js/,
+      assert.deepEqual(await runFetch(fixture, outputDirectory), {
+        stable: null,
+        unstable: null,
+      })
+      assert.deepEqual(fixture.requests, ["/api/releases"])
+    })
+  })
+})
+
+test("stages a local build as the unstable channel", async () => {
+  await withReleaseServer(async (fixture) => {
+    addStandardRoutes(fixture)
+    await withOutputDirectory(async (outputDirectory) => {
+      const localWasmPath = join(outputDirectory, "local.wasm")
+      const local = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x01])
+      await writeFile(localWasmPath, local)
+      assert.deepEqual(
+        await runFetch(fixture, outputDirectory, {
+          localWasmPath,
+          localVersion: async () => "v2.1.0-dev",
+        }),
+        { stable: { version: VERSION }, unstable: { version: "v2.1.0-dev" } },
+      )
+      assert.deepEqual(
+        await readFile(join(outputDirectory, "v2.1.0-dev", "lus.wasm")),
+        local,
       )
     })
   })
+})
+
+test("ignores a missing local build and rejects one without a WebAssembly header", async () => {
+  await withReleaseServer(async (fixture) => {
+    addStandardRoutes(fixture)
+    await withOutputDirectory(async (outputDirectory) => {
+      const localWasmPath = join(outputDirectory, "local.wasm")
+      assert.deepEqual(
+        await runFetch(fixture, outputDirectory, { localWasmPath }),
+        { stable: { version: VERSION }, unstable: null },
+      )
+      await writeFile(localWasmPath, "not wasm")
+      await assert.rejects(
+        runFetch(fixture, outputDirectory, { localWasmPath }),
+        /does not have a WebAssembly header/,
+      )
+    })
+  })
+})
+
+test("reads the local runtime version from build.zig.zon", async () => {
+  assert.match(await localRuntimeVersion(), /^v[0-9]+\.[0-9]+\.[0-9]+/)
 })
 
 test("requires a checksum release asset", async () => {
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
       selectedRelease: release(fixture.base, {
-        assets: ["lus.web.js", "lus.wasm"],
+        assets: ["lus.wasm"],
       }),
     })
     await withOutputDirectory(async (outputDirectory) => {
@@ -230,7 +282,7 @@ test("fails when the checksum file cannot be downloaded", async () => {
 test("rejects malformed checksum entries", async () => {
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
-      checksums: `${"a".repeat(63)}  lus.web.js\n${digest(WASM)}  lus.wasm\n`,
+      checksums: `${"a".repeat(63)}  lus.wasm\n`,
     })
     await withOutputDirectory(async (outputDirectory) => {
       await assert.rejects(
@@ -244,12 +296,12 @@ test("rejects malformed checksum entries", async () => {
 test("rejects duplicate checksum entries", async () => {
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
-      checksums: `${checksumManifest()}${digest(JAVASCRIPT)}  lus.web.js\n`,
+      checksums: `${checksumManifest()}${digest(WASM)}  lus.wasm\n`,
     })
     await withOutputDirectory(async (outputDirectory) => {
       await assert.rejects(
         runFetch(fixture, outputDirectory),
-        /lists lus\.web\.js more than once/,
+        /lists lus\.wasm more than once/,
       )
     })
   })
@@ -258,7 +310,7 @@ test("rejects duplicate checksum entries", async () => {
 test("requires checksum entries for every selected file", async () => {
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
-      checksums: `${digest(JAVASCRIPT)}  lus.web.js\n`,
+      checksums: `${digest(WASM)}  lus.wasm.sig\n`,
     })
     await withOutputDirectory(async (outputDirectory) => {
       await assert.rejects(
@@ -296,7 +348,7 @@ test("fails when a selected release file is missing", async () => {
         /Failed to download lus\.wasm: 404/,
       )
       await assert.rejects(
-        access(join(outputDirectory, VERSION, "lus.js")),
+        access(join(outputDirectory, VERSION, "lus.wasm")),
         /ENOENT/,
       )
     })
@@ -306,15 +358,15 @@ test("fails when a selected release file is missing", async () => {
 test("rejects a checksum mismatch before writing release files", async () => {
   await withReleaseServer(async (fixture) => {
     addStandardRoutes(fixture, {
-      checksums: checksumManifest({ javascript: "0".repeat(64) }),
+      checksums: checksumManifest({ wasm: "0".repeat(64) }),
     })
     await withOutputDirectory(async (outputDirectory) => {
       await assert.rejects(
         runFetch(fixture, outputDirectory),
-        /SHA-256 mismatch for lus\.web\.js/,
+        /SHA-256 mismatch for lus\.wasm/,
       )
       await assert.rejects(
-        access(join(outputDirectory, VERSION, "lus.js")),
+        access(join(outputDirectory, VERSION, "lus.wasm")),
         /ENOENT/,
       )
       await assert.rejects(
@@ -329,13 +381,13 @@ test("requires release files and checksums to share one versioned directory", as
   await withReleaseServer(async (fixture) => {
     const selectedRelease = release(fixture.base)
     selectedRelease.assets.find(
-      (asset) => asset.name === "lus.web.js",
-    ).browser_download_url = `${fixture.base}/download/other/lus.web.js`
+      (asset) => asset.name === "lus.wasm",
+    ).browser_download_url = `${fixture.base}/download/other/lus.wasm`
     addStandardRoutes(fixture, { selectedRelease })
     await withOutputDirectory(async (outputDirectory) => {
       await assert.rejects(
         runFetch(fixture, outputDirectory),
-        /unversioned URL for lus\.web\.js/,
+        /unversioned URL for lus\.wasm/,
       )
     })
   })
@@ -345,9 +397,9 @@ test("requires release files and checksums to share one origin", async () => {
   await withReleaseServer(async (fixture) => {
     const selectedRelease = release(fixture.base)
     selectedRelease.assets.find(
-      (asset) => asset.name === "lus.web.js",
+      (asset) => asset.name === "lus.wasm",
     ).browser_download_url = selectedRelease.assets.find(
-      (asset) => asset.name === "lus.web.js",
+      (asset) => asset.name === "lus.wasm",
     ).browser_download_url.replace("127.0.0.1", "localhost")
     addStandardRoutes(fixture, { selectedRelease })
     await withOutputDirectory(async (outputDirectory) => {
@@ -367,7 +419,7 @@ test("rejects duplicate release asset names", async () => {
     await withOutputDirectory(async (outputDirectory) => {
       await assert.rejects(
         runFetch(fixture, outputDirectory),
-        /lists lus\.web\.js more than once/,
+        /lists lus\.wasm more than once/,
       )
     })
   })
