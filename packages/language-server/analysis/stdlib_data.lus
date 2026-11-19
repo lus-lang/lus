@@ -3389,7 +3389,7 @@ The `env` pledge can be scoped to individual variables, e.g. `pledge("env=HOME")
   ["os.platform"] = {
     children = {},
     description = [[
-Returns a string identifying the current platform (e.g., `"linux"`, `"darwin"`, `"windows"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `"darwin"`.]],
+Returns a string identifying the current platform (e.g., `"linux"`, `"darwin"`, `"windows"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `"darwin"`. The WebAssembly build reports `"wasi"`.]],
     kind = "function",
     module = "os",
     name = "os.platform",

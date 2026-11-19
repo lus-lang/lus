@@ -209,7 +209,7 @@ pub fn pack(l: *Thread, fmt: []const u8, first_arg: u32, out: *std.ArrayList(u8)
             },
             .string => {
                 const s = try argBytes(l, arg);
-                if (it.size < 8 and s.len >= @as(usize, 1) << @intCast(it.size * 8)) return aux.argError(l, arg, "string length does not fit in given size", .{});
+                if (it.size < 8 and @as(u64, s.len) >= @as(u64, 1) << @intCast(it.size * 8)) return aux.argError(l, arg, "string length does not fit in given size", .{});
                 var tmp: [max_int_size]u8 = undefined;
                 putInt(tmp[0..it.size], s.len, it.size, p.little, false);
                 out.appendSlice(gpa, tmp[0..it.size]) catch return l.raiseMem();

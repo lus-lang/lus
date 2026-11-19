@@ -272,10 +272,10 @@ fn wasmModule(b: *std.Build, requested: Features, optimize: std.builtin.Optimize
     // host needs the table and must be able to grow it.
     exe.export_table = true;
     exe.growable_table = true;
-    // The interpreter recurses for nested calls and the parser for nested
-    // expressions, so the shadow stack gets the same megabyte the native
-    // main thread starts with.
-    exe.stack_size = 1 << 20;
+    // The compiler passes recurse once per level of the expression tree,
+    // which the parser bounds, so the shadow stack gets the same 8 MB the
+    // native main thread starts with.
+    exe.stack_size = 8 << 20;
     return exe;
 }
 

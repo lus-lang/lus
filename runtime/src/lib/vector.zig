@@ -66,7 +66,8 @@ fn create(l: *Thread) Error!u32 {
     const n = try aux.checkInt(l, 1);
     if (n < 0) return aux.argError(l, 1, "capacity must be non-negative", .{});
     const v = try newVector(l, &.{});
-    v.bytes.appendNTimes(l.g.gpa, 0, @intCast(n)) catch return l.raiseMem();
+    const len = std.math.cast(usize, n) orelse return l.raiseMem();
+    v.bytes.appendNTimes(l.g.gpa, 0, len) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.vector, v));
 }
 
@@ -171,8 +172,9 @@ fn resize(l: *Thread) Error!u32 {
     const n = try aux.checkInt(l, 2);
     if (n < 0) return aux.argError(l, 2, "size must be non-negative", .{});
     const old = v.bytes.items.len;
-    v.bytes.resize(l.g.gpa, @intCast(n)) catch return l.raiseMem();
-    if (@as(usize, @intCast(n)) > old) @memset(v.bytes.items[old..], 0);
+    const len = std.math.cast(usize, n) orelse return l.raiseMem();
+    v.bytes.resize(l.g.gpa, len) catch return l.raiseMem();
+    if (len > old) @memset(v.bytes.items[old..], 0);
     return 0;
 }
 

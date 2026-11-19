@@ -113,7 +113,10 @@ fn charOffset(l: *Thread, s: *String, ci: usize) usize {
 /// Translates a relative initial position (negative counts back from the
 /// end) into a 1-based position clipped to [1, inf).
 fn posRelat(pos: i64, n: usize) usize {
-    if (pos > 0) return @intCast(pos);
+    // Callers compare the result with n and n + 1 only, so any position past
+    // n + 1 saturates at n + 2. This keeps the cast in range where usize is
+    // 32 bits.
+    if (pos > 0) return if (pos > @as(i64, @intCast(n)) + 1) n + 2 else @intCast(pos);
     if (pos == 0) return 1;
     if (pos < -@as(i64, @intCast(n))) return 1;
     return n - @as(usize, @intCast(-pos)) + 1;
@@ -309,12 +312,13 @@ fn rep(l: *Thread) Error!u32 {
     const sep_chars: usize = if (sep) |x| x.chars else 0;
     const sep_ascii = if (sep) |x| x.flags.ascii else true;
     if (n <= 0 or (sb.len == 0 and sepb.len == 0)) return aux.retStr(l, "");
-    const count: usize = @intCast(n);
-    const unit = sb.len + sepb.len;
-    const max_len: usize = std.math.maxInt(u32);
-    if (unit > max_len or count > (max_len + sepb.len) / unit)
+    // The size check runs in u64 so it holds where usize is 32 bits.
+    const unit64: u64 = @as(u64, sb.len) + sepb.len;
+    const max_len: u64 = std.math.maxInt(u32);
+    if (unit64 > max_len or @as(u64, @intCast(n)) > (max_len + sepb.len) / unit64)
         return l.raiseFmt("resulting string too large", .{});
-    const total = count * unit - sepb.len;
+    const count: usize = @intCast(n);
+    const total: usize = @intCast(@as(u64, count) * unit64 - sepb.len);
 
     // A copy can join with its neighbour only when a piece starts with a
     // trail surrogate. Otherwise the result is a plain byte join whose

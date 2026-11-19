@@ -293,6 +293,9 @@ local deep_optional_chains_short_circuit_to_nil_cases = {
 }
 
 local function deep_optional_chains_short_circuit_to_nil_test(n)
+    -- The WebAssembly build allows 2000 levels of expression tree, and each
+    -- optional link takes two.
+    if n > 1000 and os.platform() == "wasi" then skip("deeper than the WebAssembly limit") end
     local got = expect_run("local t = nil return t" .. string.rep("?.b", n))
     assert(got == nil, "expected nil, got " .. tostring(got))
 end
@@ -382,4 +385,18 @@ local function reader_returning_a_non_coercible_value_fails_cleanly_test()
     assert(string.find(tostring(tblerr),
         "reader function must return a string", 1, true),
         "expected the reader-contract message for a table return")
+end
+
+-- Chains of any length either compile or report too many syntax levels.
+-- The compiler passes recurse once per link, so the parser bounds the depth
+-- of the expression tree before they run.
+local overlong_chains_report_too_many_syntax_levels_cases = {
+    {"?.b"}, {".b"}, {"[1]"}, {"(1)"}, {":m()"}, {"+1"}, {" or x"}, {" .. 'a'"},
+}
+
+local function overlong_chains_report_too_many_syntax_levels_test(link)
+    local f, err = load("return t" .. string.rep(link, 100000))
+    if f == nil then
+        assert(err:find("too many syntax levels", 1, true), err)
+    end
 end
