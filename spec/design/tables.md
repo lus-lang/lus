@@ -34,7 +34,7 @@ A new array part starts as `none`. A store follows these rules.
 
 So an integer stored into a `float` part, or a float stored into an `int` part, boxes the part. This keeps the integer and float subtypes apart, which `math.type` and the formatting of numbers can observe. A part never narrows back to an unboxed kind, even if a program later stores only numbers into it again. A rehash keeps the kind of the part, and when a hash entry with an integer key moves into the array part, the rehash computes the kind that admits every entry before it allocates the new part. An array part of length zero keeps its kind as well, so a table that once held strings in its array part starts boxed when its array part grows again.
 
-The interpreter stores into an array slot inline when the value fits the kind. A value that does not fit takes the generic path, which boxes the part and then stores. Constructors and vararg tables compute the kind of the whole list once and then copy it in.
+The interpreter stores into an array slot inline when the value fits the kind. A value that does not fit takes the generic path, which boxes the part and then stores. Constructors and vararg tables compute the kind of the whole list once and then copy it in. Native code makes the same inline loads and stores (`jit.md`), and it reads the layout it needs from `table.layout`, which is computed from the declarations of the table.
 
 Traversal order does not depend on the kind. `next` walks the array part from index 1 and then the hash part, and a store that boxes the part during a traversal keeps every value at its index, so the traversal continues from the same key.
 
