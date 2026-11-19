@@ -212,3 +212,8 @@ pub fn openEnums(l: *Thread) Error!void {
 pub fn newQuery(l: *Thread, plan: Value, sources: u32) Error!Value {
     return @import("query.zig").build(l, plan, sources);
 }
+
+/// Registers the `query` global and `debug.queryplan`.
+pub fn openQueries(l: *Thread) Error!void {
+    return @import("query.zig").open(l);
+}
