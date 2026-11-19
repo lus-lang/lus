@@ -1561,7 +1561,7 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: *const 
 pub const fast = struct {
     /// out = t[key] for a string key, when the lookup ends in a table.
     pub inline fn getStr(l: *Thread, ic: *object.IcEntry, t: *const Value, key: *const Value, out: *Value) bool {
-        if (t.tag != .table) return false;
+        if (t.tag != .table) return t.tag == .string and stringMethod(l, ic, key.as(String), out);
         const tab = t.as(Table);
         const v = lookupIc(tab, key.as(String), &ic.own);
         if (!v.isNil() or noIndexMeta(tab)) {
@@ -1685,6 +1685,23 @@ fn indexChain(l: *Thread, start: *Table, key: *String, ic: *object.IcEntry, out:
             out.* = v;
             return true;
         }
+    }
+    return false;
+}
+
+/// out = s[key] for a string `s`, when the string metatable names a table
+/// as `__index` and the lookup ends in that table. This is the lookup of
+/// a method such as `s:sub`. The slot predictions are the ones a table
+/// receiver uses for its metatable and for the table `__index` names.
+fn stringMethod(l: *Thread, ic: *object.IcEntry, key: *String, out: *Value) bool {
+    const mt = l.g.type_metatables[value.typeSlot(.string)] orelse return false;
+    const h = indexMetaIc(l, mt, &ic.index);
+    if (h.tag != .table) return false;
+    const tab = h.as(Table);
+    const v = lookupIc(tab, key, &ic.holder);
+    if (!v.isNil() or noIndexMeta(tab)) {
+        out.* = v;
+        return true;
     }
     return false;
 }
