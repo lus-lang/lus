@@ -87,6 +87,10 @@ pub const State = if (enabled) struct {
     /// such a chain continues with.
     stack_floor: usize = 0,
     exit_sp: usize = 0,
+    /// Bytes of native stack that a chain of direct calls may use below
+    /// the entry into Lus code, or zero to let the stack of the thread
+    /// decide.
+    chain_budget: usize = 0,
     /// The lowest address that the chain of direct calls that runs now
     /// may reach. The call that starts a chain sets it.
     chain_limit: usize = 0,
@@ -117,6 +121,9 @@ pub const Code = extern struct {
 /// `LUS_JIT_THRESHOLD` is the number of events before a function
 /// compiles, and `LUS_JIT_OPT_THRESHOLD` the number of events in
 /// baseline code before the optimizing tier compiles it.
+/// `LUS_JIT_DIRECT=off` keeps optimized code from calling optimized
+/// code directly, and a number gives a chain of direct calls that many
+/// bytes of native stack, which the tests use to leave chains often.
 fn setup(g: *Global) void {
     const js = &g.jit;
     js.ready = true;
@@ -151,7 +158,13 @@ fn setup(g: *Global) void {
         js.opt_threshold = @max(std.fmt.parseInt(u32, v, 10) catch opt.default_threshold, 1);
     };
     js.opt_dump = env.get("LUS_JIT_DUMP") != null;
-    if (env.get("LUS_JIT_DIRECT")) |v| js.direct = !(std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0"));
+    if (env.get("LUS_JIT_DIRECT")) |v| {
+        if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
+            js.direct = false;
+        } else if (std.fmt.parseInt(usize, v, 10)) |bytes| {
+            js.chain_budget = @max(bytes, 256);
+        } else |_| {}
+    }
 }
 
 /// Sets the JIT of a state from the host, in place of the environment.
@@ -382,12 +395,7 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
     if (is_wasm) return wasm.run(l, stop);
     const t = dispatch(l);
     if (t.addr == 0) return error.SwitchLoop;
-    if (has_opt) {
-        // Chains of direct calls share a budget of native stack below
-        // the outermost entry into Lus code on this stack.
-        const js = &l.g.jit;
-        if (l.g.native_depth <= 1 or js.stack_floor == 0) js.stack_floor = @frameAddress() -| opt.direct_stack_budget;
-    }
+    if (has_opt) setFloor(&l.g.jit, @frameAddress(), l.g.native_depth <= 1);
     const code: *Code = @ptrCast(@alignCast(l.frame().closure.?.proto.jit_code.?));
     const enter: Enter = @ptrFromInt(code.base);
     return switch (enter(l, stop, t.addr, t.base)) {
@@ -397,6 +405,62 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
         interp.Step.interpret => error.SwitchLoop,
         else => unreachable,
     };
+}
+
+/// Sets the lowest address that a chain of direct calls may take the
+/// native stack to, for an entry into native code whose frame is at
+/// `here`. When the stack of the thread is known and `here` lies in it,
+/// a chain may use it down to a reserve that the runtime keeps for
+/// leaving the chain. On any other stack, and when the setting names a
+/// budget, the outermost entry into Lus code gives the chains a budget
+/// below itself, and an entry that finds itself outside that budget
+/// starts another one.
+fn setFloor(js: *State, here: usize, outermost: bool) void {
+    const b = stackBounds();
+    if (js.chain_budget == 0 and b.low != 0 and here > b.low + 2 * opt.direct_stack_reserve and here <= b.high) {
+        js.stack_floor = b.low + opt.direct_stack_reserve;
+        return;
+    }
+    const budget = if (js.chain_budget != 0) js.chain_budget else opt.direct_stack_budget;
+    if (outermost or js.stack_floor == 0 or here < js.stack_floor or here - js.stack_floor > budget) js.stack_floor = here -| budget;
+}
+
+const Bounds = struct { low: usize = 0, high: usize = 0 };
+
+extern "c" fn pthread_get_stackaddr_np(thread: std.c.pthread_t) ?*anyopaque;
+extern "c" fn pthread_get_stacksize_np(thread: std.c.pthread_t) usize;
+extern "c" fn pthread_getattr_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
+extern "c" fn pthread_attr_getstack(attr: *const std.c.pthread_attr_t, addr: *?*anyopaque, size: *usize) c_int;
+
+threadlocal var thread_bounds: ?Bounds = null;
+
+/// The native stack of the running thread, or zeros when the system
+/// does not tell. A thread asks once.
+fn stackBounds() Bounds {
+    if (thread_bounds) |b| return b;
+    var b: Bounds = .{};
+    if (builtin.link_libc) switch (builtin.os.tag) {
+        .macos => {
+            const self = std.c.pthread_self();
+            const high = @intFromPtr(pthread_get_stackaddr_np(self));
+            const size = pthread_get_stacksize_np(self);
+            if (high > size and size != 0) b = .{ .low = high - size, .high = high };
+        },
+        .linux => {
+            var attr: std.c.pthread_attr_t = undefined;
+            if (pthread_getattr_np(std.c.pthread_self(), &attr) == 0) {
+                var addr: ?*anyopaque = null;
+                var size: usize = 0;
+                if (pthread_attr_getstack(&attr, &addr, &size) == 0 and addr != null and size != 0) {
+                    b = .{ .low = @intFromPtr(addr), .high = @intFromPtr(addr) + size };
+                }
+                _ = std.c.pthread_attr_destroy(&attr);
+            }
+        },
+        else => {},
+    };
+    thread_bounds = b;
+    return b;
 }
 
 /// The outcome of compiling a function.

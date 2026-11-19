@@ -271,3 +271,42 @@ test "optimized code agrees with the interpreter and leaves through its guards" 
         \\return a.x .. " " .. a.y .. " " .. b.x .. " " .. b.y .. " " .. tostring(getmetatable(b) == P)
     );
 }
+
+test "direct calls agree with the interpreter and build their frames" {
+    try expectSameOptimized(
+        \\local out = {}
+        \\local k = 1
+        \\local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+        \\local function down(n, pad)
+        \\    local twice = n * 2
+        \\    if n == 0 then return k + 1 end
+        \\    return down(n - 1, pad) + twice - twice + pad - pad
+        \\end
+        \\for _ = 1, 3 do out[#out + 1] = fib(18) end
+        \\for _ = 1, 3 do out[#out + 1] = down(40, 7) end
+        \\out[#out + 1] = fib(18.0)
+        \\k = 0.5
+        \\out[#out + 1] = down(40, 7)
+        \\k = setmetatable({}, { __add = function()
+        \\    local names, level = {}, 2
+        \\    while debug.getinfo(level, "f") do
+        \\        local name, value = debug.getlocal(level, 1)
+        \\        if name == "n" then names[#names + 1] = value end
+        \\        level = level + 1
+        \\    end
+        \\    return #names * 1000 + names[#names]
+        \\end })
+        \\out[#out + 1] = down(12, 7)
+        \\k = nil
+        \\local co = coroutine.create(function() return down(5, 7) end)
+        \\local ok, err = coroutine.resume(co)
+        \\out[#out + 1] = tostring(ok) .. tostring(err)
+        \\out[#out + 1] = select(2, debug.traceback(co):gsub("\n", "\n"))
+        \\local function forever(n) return 1 + forever(n + 1) end
+        \\local ok2, err2 = catch forever(1)
+        \\out[#out + 1] = tostring(ok2) .. tostring(err2)
+        \\k = 1
+        \\out[#out + 1] = down(40, 7)
+        \\return table.concat(out, " ")
+    );
+}

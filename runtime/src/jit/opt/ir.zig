@@ -224,7 +224,9 @@ pub const Op = enum(u8) {
     /// Parameter `imm` of a directly entered function. Zero is the
     /// closure, and the fixed parameters follow.
     param,
-    /// Leaves optimized code when the native stack runs short.
+    /// Leaves optimized code when the native stack pointer is below
+    /// the lowest address that the running chain of direct calls may
+    /// take it to.
     dlimit,
     /// Argument `imm` of the direct call that follows.
     darg,

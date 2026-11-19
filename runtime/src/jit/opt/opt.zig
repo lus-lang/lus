@@ -164,8 +164,12 @@ pub const Unit = struct {
     writes: u32 = 0,
 };
 
+/// Bytes at the low end of the native stack of a thread that chains of
+/// direct calls leave to the runtime, which builds their frames there
+/// when optimized code is left.
+pub const direct_stack_reserve: usize = 128 * 1024;
 /// Bytes of native stack below the outermost entry into Lus code that
-/// chains of direct calls may use.
+/// chains of direct calls may use on a stack whose bounds are unknown.
 pub const direct_stack_budget: usize = 160 * 1024;
 
 pub fn counts(g: *Global) bool {
@@ -610,9 +614,12 @@ const Root = union(enum) {
 /// that activation, with its registers still to be written, and every
 /// frame below is complete.
 ///
-/// The Lus stack may lack room for the chain. The activations that fit
-/// get their frames, and the error that the interpreter raises at the
-/// call that found no room is raised from the innermost one of them.
+/// The entry of a chain keeps its activations inside the Lus stack
+/// (`codegen.rootEntry`), so every one of them fits. The walk checks the
+/// room all the same, as the interpreter does when it enters a function.
+/// Should an activation lack room, the ones that fit get their frames,
+/// and the error that the interpreter raises at the call that found no
+/// room is raised from the innermost one of them.
 fn unwind(l: *Thread, first: *Unit, snap0: u32, sp0: usize) state.Error!void {
     const g = l.g;
     const top_i = l.frames.items.len - 1;
@@ -930,7 +937,7 @@ pub const rt = struct {
     /// direct call that is running gets its frame first, from the
     /// native frames of the callers, and then the exit proceeds as any
     /// other. The native stack pointer that the entry sequence expects
-    /// is left in the thread for the code that called.
+    /// is left in the state for the code that called.
     pub fn deoptDirect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(.c) jit.Target {
         const sp = @intFromPtr(regs) + @as(usize, @intCast(codegen.save_bytes));
         unwind(l, u, @intCast(snap), sp) catch return .{ .addr = failed, .base = 0 };
