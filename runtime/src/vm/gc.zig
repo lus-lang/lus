@@ -875,7 +875,7 @@ const Marker = struct {
     fn markValue(m: *Marker, v: Value) void {
         if (!v.tag.isCollectable()) return;
         if (m.verifying or isLeaf(v.tag)) return m.markObject(v.header());
-        const h: *align(1) Header = @ptrFromInt(v.payload | unmarked_bit);
+        const h: *align(1) Header = @ptrFromInt(@intFromPtr(v.header()) | unmarked_bit);
         const gray = &m.g.gcs.gray;
         if (gray.items.len < gray.capacity) {
             gray.appendAssumeCapacity(h);
