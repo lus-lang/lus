@@ -47,13 +47,13 @@ Native code pins four values in callee-saved registers: the thread, the address 
 
 ### The call and the return of the interpreter
 
-The interpreter makes a call between two Lus functions in the `call` instruction itself. It reads what the push needs once into locals, clears the registers of the callee, and writes the frame with five stores: the closure with a null native, the function slot with the base, the return slot with the wanted count, the saved pc, and the word of flags.
+The interpreter makes a call between two Lus functions in the `call` instruction itself. It reads what the push needs once into locals, sets the parameters that the caller left out to nil, and writes the frame with five stores: the closure with a null native, the function slot with the base, the return slot with the wanted count, the saved pc, and the word of flags. The other registers of the callee keep what the stack holds, and `interp.md` says why that is sound and what else the call leaves out.
 
 A function records whether one of its frames can own an open upvalue or a to-be-closed variable (`Proto.call.closes`). Only a closure that the function makes opens an upvalue on one of its registers, and only `tbc` and `tforprep` mark a variable to be closed. The call copies that into the frame as the `closes` flag. The return of a plain frame without it compares the flags word with one constant and closes nothing. Every other frame takes the tests for open upvalues and to-be-closed variables first.
 
 The dispatch loop keeps three values of the running frame in locals: the frame, the code pointer, and the register pointer. The few instructions that need the index of register 0 read it from the frame. The constants and the inline caches of a function are named by two words in front of its code (`Proto.CodeLinks`), so an instruction that needs them loads them through the code pointer, and a call and a return load one pointer where they loaded three. With fewer values to keep across instructions, the bodies of the instructions spill less to the native stack. A step routine reads the function anyway to find its code, so it takes both from the function, and it keeps the index of its frame, which tells it without a load whether the instruction kept its frame.
 
-A call and a return of `local function f(x) return x end` took 5.9 ns in the loop that the interpreter ran before this work and take 3.6 ns now, against 3.0 ns in the interpreter of LuaJIT. `fib` went from 0.062 s to 0.045 s with the JIT off, `methods` from 0.250 s to 0.205 s, and `closures` from 0.091 s to 0.081 s. The table in `tests/bench/README.md` has every benchmark.
+A call and a return of `local function f(x) return x end` took 5.9 ns in the loop that the interpreter ran before this work and 3.6 ns after it, against 3.0 ns in the interpreter of LuaJIT. `fib` went from 0.062 s to 0.045 s with the JIT off, `methods` from 0.250 s to 0.205 s, and `closures` from 0.091 s to 0.081 s. Later work on the same path (`interp.md`) took the call and the return from 126 to 108 machine instructions and `fib` to 0.034 s, ahead of the interpreter of LuaJIT at 0.036 s. The table in `tests/bench/README.md` has every benchmark.
 
 ## Tier-up
 
@@ -179,7 +179,7 @@ LuaJIT's tracing JIT remains several times faster than this tier alone on `fib`,
 - Allocation in native code. `newtable` and `closure` run their step routines, and a table constructor is dominated by them.
 - String keys held in registers (`t[k]` with a string `k`) take the inline cache through a helper.
 - The length of a table takes a helper, which searches for a border.
-- A call still tests for pending finalizers, for room in the frame list, and for room on the stack, and clears the registers of the callee. Liveness information from the compiler would remove most of the clearing. The same holds for the call of the interpreter, which is why `fib` with the JIT off stays behind the interpreter of LuaJIT.
+- A call entry still tests for pending finalizers, for room in the frame list, and for room on the stack, and clears the registers of the callee. The call of the interpreter leaves the registers as they are and leaves pending finalizers to the next safe point (`interp.md`), and the call entry can do the same.
 - Windows. The emitter follows the System V convention on x86-64, and the arena uses `mmap`.
 - Systems that forbid writable and executable mappings run interpreted. Mapping the code twice, once writable and once executable, would lift that.
 - Warm starts, binary chunks that compile the functions a profiling run found hot, were built and measured and are kept out (`warmstart.md`).

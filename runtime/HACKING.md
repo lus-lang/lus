@@ -56,6 +56,18 @@ C functions never see a Zig error. Every exported function that can fail returns
 - Prose and comments follow the repository rules in `../AGENTS.md`: full sentences, no em or en dashes, no semicolons.
 - Tests for a module are Lus files run with `lus test` or plain scripts run with `lus`.
 
+## The interpreter loop
+
+`vm/interp.zig` holds one dispatch loop, instantiated as the plain loop, the loop that counts for the JIT, the hooked loop, and one step routine per opcode (`../spec/design/jit.md`). `../spec/design/interp.md` records how its hot paths are shaped and why. A change there should keep to these rules.
+
+- A frame that the `call` instruction pushes keeps what the stack holds in its registers, apart from the parameters. No instruction may count on a fresh register being nil: an instruction writes a register before it reads it, and the compiler emits `loadnil` for every local that starts nil.
+- The stack top of a running Lus frame is its last register plus one between instructions, unless the instruction before left a variable number of values. A call restores it on return, because the frame of a callee can end below the frame of its caller.
+- Values go through the hot paths as pointers or as their two words. A 16-byte value that an inline routine returns from two places is built in memory.
+- Signed operands are two's complement (`opc.sbx`, `opc.sj`, `opc.sb`, `opc.sc`), and `opc.signedByte` encodes the 8-bit ones.
+- `opc.op` gives the plain opcode of an instruction and `opc.code` the opcode it holds, which may be fused. Only the two unhooked loops and the listing read `opc.code`. A new fused pair is an entry in `opc.fusions` and a case in the loop that runs the first body and then the fast path of the second from the definition the plain case uses. `../tests/conformance/fused_test.lus` covers the pairs.
+
+Read the instruction count first when measuring a change to the loop (`LUS_JIT=off /usr/bin/time -l zig-out/bin/lus ../tests/bench/fib.lus` on macOS), since it is exact and the wall time of the loop moves by a few percent with its code layout. `zig build -Dop-profile=true` makes a binary that counts the opcode pairs and runs of three it dispatches and prints them at exit, and `node ../tools/op-ngrams.js <that binary>` ranks them over the bench corpus.
+
 ## The JIT
 
 Hot functions compile to native code on aarch64 and x86-64 (`../spec/design/jit.md`). `-Djit=false` builds without it. At run time `LUS_JIT=off` interprets everything, `LUS_JIT=eager` compiles every function on its first call, and `LUS_JIT_THRESHOLD=N` sets how many calls and loop iterations a function sees before it compiles. `debug.jit()` reports the setting.
