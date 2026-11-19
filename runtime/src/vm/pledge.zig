@@ -52,8 +52,13 @@ pub const Entry = struct {
     rejected: bool = false,
     /// Granted without a value restriction.
     unrestricted: bool = false,
-    /// Granted value patterns, canonicalized for path capabilities.
+    /// Granted value patterns, canonicalized for path capabilities. A path
+    /// grant resolves through symbolic links when it is made, so it stays
+    /// bound to what it named at that moment.
     values: std.ArrayList([]u8) = .empty,
+    /// For path capabilities, each grant with only its directory resolved.
+    /// Operations on a link itself (removing or inspecting it) match these.
+    link_values: std.ArrayList([]u8) = .empty,
 };
 
 pub const Set = struct {
@@ -72,6 +77,7 @@ pub const Set = struct {
         for (s.entries.items) |e| {
             var ne: Entry = .{ .name = try gpa.dupe(u8, e.name), .rejected = e.rejected, .unrestricted = e.unrestricted };
             for (e.values.items) |v| try ne.values.append(gpa, try gpa.dupe(u8, v));
+            for (e.link_values.items) |v| try ne.link_values.append(gpa, try gpa.dupe(u8, v));
             try n.entries.append(gpa, ne);
         }
         return n;
@@ -82,6 +88,8 @@ pub const Set = struct {
             gpa.free(e.name);
             for (e.values.items) |v| gpa.free(v);
             e.values.deinit(gpa);
+            for (e.link_values.items) |v| gpa.free(v);
+            e.link_values.deinit(gpa);
         }
         s.entries.deinit(gpa);
         gpa.destroy(s);
@@ -309,14 +317,14 @@ pub fn canonicalizeLink(g: *Global, path: []const u8) ?[]u8 {
 /// first wildcard (or the whole path without one) resolves through its
 /// deepest existing ancestor, so a grant made before its directory exists
 /// stays attached to the right place.
-fn canonicalPattern(g: *Global, pattern: []const u8) []u8 {
+fn canonicalPattern(g: *Global, pattern: []const u8, keep_last: bool) []u8 {
     const gpa = g.gpa;
     if (pattern.len == 0 or (pattern[0] != '/' and pattern[0] != '.')) return gpa.dupe(u8, pattern) catch @panic("oom");
     const wild = std.mem.indexOfAny(u8, pattern, "*?") orelse pattern.len;
     // Split at the last separator before the first wildcard.
     const head = pattern[0..wild];
     var cut = std.mem.lastIndexOfScalar(u8, head, '/') orelse return gpa.dupe(u8, pattern) catch @panic("oom");
-    if (wild == pattern.len) cut = pattern.len; // no wildcard: resolve it all
+    if (wild == pattern.len and !keep_last) cut = pattern.len; // no wildcard: resolve it all
     var dir_end = cut;
     while (true) {
         const dir = if (dir_end == 0) "/" else pattern[0..dir_end];
@@ -362,8 +370,14 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
     if (s.find(base)) |e| if (e.rejected) return false;
     var canon: ?[]u8 = null;
     defer if (canon) |c| g.gpa.free(c);
+    var canon_link: ?[]u8 = null;
+    defer if (canon_link) |c| g.gpa.free(c);
     if (cap.kind == .path) {
-        if (requested) |r| canon = if (follow) canonicalize(g, r) else canonicalizeLink(g, r);
+        if (requested) |r| {
+            // Following operations match what the path resolves to now.
+            // Operations on a link match the link's own location.
+            if (follow) canon = canonicalize(g, r) else canon_link = canonicalizeLink(g, r);
+        }
     }
     const candidates = [_][]const u8{ perm, base };
     for (candidates, 0..) |name, ci| {
@@ -375,7 +389,13 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
             if (e.values.items.len > 0) return true;
             continue;
         };
-        for (e.values.items) |v| if (valueMatches(cap, v, req, canon)) return true;
+        if (cap.kind != .path) {
+            for (e.values.items) |v| if (valueMatches(cap, v, req, null)) return true;
+        } else if (follow) {
+            for (e.values.items) |v| if (valueMatches(cap, v, req, canon)) return true;
+        } else {
+            for (e.link_values.items) |v| if (valueMatches(cap, v, req, canon_link)) return true;
+        }
         // A specific sub-permission entry decides on its own.
         if (ci == 0) return false;
     }
@@ -478,8 +498,10 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
     }
     if (val) |v| {
         const cap = findCap(g, split(name)[0]);
-        const stored = if (cap != null and cap.?.kind == .path) canonicalPattern(g, v) else gpa.dupe(u8, v) catch return l.raiseMem();
+        const is_path = cap != null and cap.?.kind == .path;
+        const stored = if (is_path) canonicalPattern(g, v, false) else gpa.dupe(u8, v) catch return l.raiseMem();
         e.values.append(gpa, stored) catch return l.raiseMem();
+        if (is_path) e.link_values.append(gpa, canonicalPattern(g, v, true)) catch return l.raiseMem();
     } else e.unrestricted = true;
     return .granted;
 }
