@@ -29,6 +29,8 @@ const Op = opc.Op;
 
 /// Error variant used internally to unwind a coroutine back to `resume`.
 pub const YieldError = error{Yield};
+/// Internal: hooks were set or cleared, so the interpreter changes loops.
+const LoopError = error{SwitchLoop};
 
 // ---------------------------------------------------------------------
 // Upvalues
@@ -226,8 +228,11 @@ pub fn call(l: *Thread, func: u32, nargs: u32, want: i32) Error!u32 {
     }
     l.meta_finish = null;
     const depth = l.frames.items.len;
+    const as_hook = l.hook_calling;
+    l.hook_calling = false;
     const kind = precall(l, func, nargs, want) catch |e| return yieldAcrossBoundary(l, e);
     if (kind == .lus) {
+        if (as_hook) l.frame().hook = true;
         l.frame().boundary = true;
         execute(l, depth) catch |e| {
             const r = yieldAcrossBoundary(l, e);
@@ -286,13 +291,20 @@ inline fn load(l: *Thread) Ctx {
 /// Runs Lus frames until the frame count drops to `stop`.
 pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
     while (true) {
-        run(l, stop) catch |e| {
+        // The hooked loop is a second instantiation of the same code, so
+        // threads without hooks pay nothing for them.
+        const r = if (l.hook_mask != 0) run(l, stop, true) else run(l, stop, false);
+        r catch |e| {
             l.meta_finish = null;
-            // A metamethod frame was pushed: run it.
-            if (e == error.MetaCall) continue;
-            if (e == error.Yield) return e;
-            if (!handleError(l, stop)) return e;
-            continue;
+            switch (e) {
+                // A metamethod frame was pushed, or the hooks changed.
+                error.MetaCall, error.SwitchLoop => continue,
+                error.Yield => return error.Yield,
+                error.LusError => {
+                    if (!handleError(l, stop)) return error.LusError;
+                    continue;
+                },
+            }
         };
         return;
     }
@@ -337,7 +349,7 @@ fn handleError(l: *Thread, stop: usize) bool {
     return false;
 }
 
-fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
+fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || LoopError)!void {
     var c = load(l);
     var pc = l.frames.items[c.fi].pc;
     const R = struct {
@@ -346,6 +358,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
         }
     };
     while (true) {
+        if (hooked) try hookStep(l, &c, pc);
         const ins = c.code[pc];
         pc += 1;
         l.frames.items[c.fi].pc = pc; // keep the frame pc current for errors and hooks
@@ -558,8 +571,11 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 if (kind == .lus) {
                     c = load(l);
                     pc = 0;
+                    if (hooked and l.hook_mask & Thread.hook_call != 0) try callHook(l, "call", null);
                 } else {
                     if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
+                    // A native may have set or cleared the hooks.
+                    if ((l.hook_mask != 0) != hooked) return error.SwitchLoop;
                 }
             },
             .tailcall => {
@@ -594,6 +610,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 nf.tail = true;
                 c = load(l);
                 pc = 0;
+                if (hooked and l.hook_mask & Thread.hook_call != 0) try callHook(l, "tail call", null);
             },
             .ret => {
                 const nb = opc.b(ins);
@@ -784,6 +801,10 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
 /// Returns `n` values starting at `first` from the current frame. Returns
 /// true when the interpreter loop must exit.
 inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usize) Error!bool {
+    if (l.hook_mask & Thread.hook_ret != 0) {
+        if (l.top < first + n) l.top = first + n;
+        try callHook(l, "return", null);
+    }
     // Copy what is needed: __close handlers may reallocate the frames.
     const fr = l.frames.items[c.fi];
     if (l.open_upvals) |u| {
@@ -805,6 +826,11 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     if (l.frame().closure == null) return true;
     c.* = load(l);
     pc.* = l.frames.items[c.fi].pc;
+    if (l.hook_mask != 0) {
+        // Returning into the caller is not a new line.
+        l.hook_oldfi = c.fi;
+        l.hook_oldpc = if (pc.* > 0) pc.* - 1 else 0;
+    }
     switch (fr.finish) {
         .none, .discard => {},
         .store => |r| l.stack[c.base + r] = l.stack[fr.ret],
@@ -1065,6 +1091,54 @@ fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {
 /// Runs queued `__gc` finalizers at a safe point (a call instruction).
 fn runPendingFinalizers(l: *Thread) Error!void {
     try @import("../lib/base.zig").runFinalizers(l);
+}
+
+// ---------------------------------------------------------------------
+// Debug hooks
+
+/// Count and line events, before the instruction at `pc` runs.
+fn hookStep(l: *Thread, c: *Ctx, pc: u32) Error!void {
+    const mask = l.hook_mask;
+    if (mask == 0 or !l.allow_hook) return;
+    l.frames.items[c.fi].pc = pc + 1;
+    if (mask & Thread.hook_countm != 0) {
+        if (l.hook_left <= 1) {
+            l.hook_left = l.hook_count;
+            try callHook(l, "count", null);
+        } else l.hook_left -= 1;
+    }
+    if (mask & Thread.hook_line != 0) {
+        const lines = c.cl.proto.lines;
+        if (lines.len > pc) {
+            const line = lines[pc];
+            const old = l.hook_oldpc;
+            // A new function, a jump backwards, or a new line.
+            const fire = if (l.hook_oldfi != c.fi)
+                pc == 0 or lines[pc - 1] != line
+            else
+                pc == 0 or pc <= old or old >= lines.len or lines[old] != line;
+            l.hook_oldpc = pc;
+            l.hook_oldfi = c.fi;
+            if (fire) try callHook(l, "line", line);
+        }
+    }
+}
+
+/// Calls the thread's hook function with `event` (and the line for line
+/// events). Hooks do not fire while a hook runs.
+pub fn callHook(l: *Thread, event: []const u8, line: ?u32) Error!void {
+    if (!l.allow_hook) return;
+    const f = @import("../lib/debuglib.zig").hookFunction(l) orelse return;
+    l.allow_hook = false;
+    defer l.allow_hook = true;
+    const saved_top = l.top;
+    defer l.top = saved_top;
+    if (l.frames.items.len > 0) if (l.frame().closure) |cl| {
+        l.top = @max(l.top, l.frame().base + cl.proto.max_stack);
+    };
+    const ev = try l.newStringValue(event);
+    l.hook_calling = true;
+    _ = try ops.callN(l, f, &.{ ev, if (line) |n| Value.int(n) else .nil }, 0);
 }
 
 fn captureTraceback(l: *Thread) void {

@@ -237,6 +237,8 @@ pub const Frame = struct {
     ret: u32,
     /// Set on metamethod frames pushed by the interpreter.
     finish: Finish = .none,
+    /// Set on the frame of a running debug hook.
+    hook: bool = false,
 };
 
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };
@@ -268,6 +270,18 @@ pub const Thread = struct {
     meta_finish: ?Finish = null,
     /// Set when a coroutine closes itself, to end its resume cleanly.
     self_closed: bool = false,
+    /// Debug hook state (debug.sethook). The hook function itself lives in
+    /// the registry. `hook_mask` combines the `hook_*` bits.
+    hook_mask: u8 = 0,
+    hook_count: u32 = 0,
+    hook_left: u32 = 0,
+    /// The last instruction and frame seen by the line hook.
+    hook_oldpc: u32 = 0,
+    hook_oldfi: usize = std.math.maxInt(usize),
+    /// False while a hook runs, so hooks never fire recursively.
+    allow_hook: bool = true,
+    /// Marks the next frame entered from native code as a hook frame.
+    hook_calling: bool = false,
     /// When set, the first error to reach a native call boundary records a
     /// traceback in `err_traceback` before the frames unwind.
     want_traceback: bool = false,
@@ -276,6 +290,10 @@ pub const Thread = struct {
     hook: ?*anyopaque = null,
 
     pub const max_stack = 1_000_000;
+    pub const hook_call: u8 = 1;
+    pub const hook_ret: u8 = 2;
+    pub const hook_line: u8 = 4;
+    pub const hook_countm: u8 = 8;
     pub const max_ncalls = 200;
 
     pub fn deinitStack(l: *Thread) void {

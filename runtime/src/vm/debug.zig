@@ -166,6 +166,7 @@ pub fn varInfo(l: *Thread, v: Value) ?ObjName {
 
 /// Name of the function running in frame `fi` as seen from its caller.
 pub fn funcName(l: *Thread, fi: usize) ?ObjName {
+    if (l.frames.items[fi].hook) return .{ .kind = "hook", .name = "?" };
     if (fi == 0) return null;
     // A tail call replaced the frame that knew the call site.
     if (l.frames.items[fi].tail) return null;

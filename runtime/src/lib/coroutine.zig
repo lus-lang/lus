@@ -123,6 +123,7 @@ fn runCo(co: *Thread, fresh: bool, nargs: u32) Outcome {
             co.transfer = co.top;
             return .returned;
         }
+        if (co.hook_mask & Thread.hook_call != 0) interp.callHook(co, "call", null) catch |e| return handleStop(co, e);
     } else {
         // Finish the pending `yield` call: its results are the resume
         // arguments now at the top of the stack.

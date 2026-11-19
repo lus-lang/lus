@@ -327,6 +327,18 @@ fn hookTable(l: *Thread) Error!*Table {
     return t;
 }
 
+/// The hook function installed on `l`, if any.
+pub fn hookFunction(l: *Thread) ?Value {
+    const reg = l.g.registry.as(Table);
+    const key = state.newStringKnown(l.g, hook_key, true, hook_key.len) catch return null;
+    const t = table.getStr(reg, key);
+    if (t.tag != .table) return null;
+    const rec = table.get(t.as(Table), Value.obj(.thread, l));
+    if (rec.tag != .table) return null;
+    const f = table.getInt(rec.as(Table), 1);
+    return if (f.isNil()) null else f;
+}
+
 fn gethook(l: *Thread) Error!u32 {
     const co = threadArg(l)[0];
     const t = try hookTable(l);
@@ -349,6 +361,7 @@ fn sethook(l: *Thread) Error!u32 {
     const key = Value.obj(.thread, co);
     if (l.arg(a).isNil()) {
         try ops.rawSet(l, t, key, .nil);
+        co.hook_mask = 0;
         return 0;
     }
     const smask = try aux.checkBytes(l, a + 1);
@@ -363,6 +376,7 @@ fn sethook(l: *Thread) Error!u32 {
     };
     if (n == 0 and count <= 0) {
         try ops.rawSet(l, t, key, .nil);
+        co.hook_mask = 0;
         return 0;
     }
     const rec = try l.newTable(3, 0);
@@ -371,6 +385,17 @@ fn sethook(l: *Thread) Error!u32 {
     try ops.rawSet(l, rec, Value.int(2), try l.newStringValue(buf[0..n]));
     try ops.rawSet(l, rec, Value.int(3), Value.int(@max(count, 0)));
     try ops.rawSet(l, t, key, Value.obj(.table, rec));
+    var mask: u8 = 0;
+    for (buf[0..n]) |ch| mask |= switch (ch) {
+        'c' => Thread.hook_call,
+        'r' => Thread.hook_ret,
+        else => Thread.hook_line,
+    };
+    if (count > 0) mask |= Thread.hook_countm;
+    co.hook_count = @intCast(@max(count, 0));
+    co.hook_left = co.hook_count;
+    co.hook_oldfi = std.math.maxInt(usize);
+    co.hook_mask = mask;
     return 0;
 }
 
