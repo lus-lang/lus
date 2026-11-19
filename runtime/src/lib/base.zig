@@ -513,7 +513,7 @@ pub fn readFile(l: *Thread, path: []const u8) Error![]u8 {
 /// the mode rejects the chunk, pushes the conventional failure and
 /// returns true.
 fn modeRejects(l: *Thread, src: []const u8, mode: []const u8) Error!bool {
-    const binary = std.mem.startsWith(u8, src, "\x1bLus");
+    const binary = @import("../compile/dump.zig").isBinary(src);
     const want: u8 = if (binary) 'b' else 't';
     if (std.mem.indexOfScalar(u8, mode, want) != null) return false;
     const msg = std.fmt.allocPrint(l.g.gpa, "attempt to load a {s} chunk (mode is '{s}')", .{ if (binary) "binary" else "text", mode }) catch return l.raiseMem();
