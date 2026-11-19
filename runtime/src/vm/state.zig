@@ -218,6 +218,26 @@ pub const Global = struct {
     /// exception handler catches errors while it is set, so the worker
     /// script unwinds completely.
     halting: bool = false,
+    /// A debugger written in Zig (`lus debug`), or null. It receives the
+    /// hook events of every thread in place of the hook function set by
+    /// `debug.sethook`. Code compiles with optimizations that hide locals
+    /// turned off while it is attached.
+    debugger: ?*const Debugger = null,
+};
+
+/// The native hook entry point used by `lus debug`. Every thread created
+/// while a debugger is attached starts with `mask`, so coroutines report
+/// their events too.
+pub const Debugger = struct {
+    ctx: *anyopaque,
+    /// Receives the events named as for `debug.sethook` ("line", "call",
+    /// "tail call", "return", "count"). `line` is set for line events.
+    /// Hooks are disabled on `l` while it runs.
+    event: *const fn (ctx: *anyopaque, l: *Thread, event: []const u8, line: ?u32) Error!void,
+    /// Called with the error in `l.err` when it reaches the interpreter,
+    /// before the frames unwind and before a handler is searched.
+    raised: *const fn (ctx: *anyopaque, l: *Thread) void,
+    mask: u8,
 };
 
 // ---------------------------------------------------------------------
@@ -567,6 +587,7 @@ pub fn newNative(g: *Global, f: NativeFn, name: ?[]const u8, nup: u32) Allocator
 pub fn newThread(g: *Global) Allocator.Error!*Thread {
     const l = try gc.alloc(g, Thread, .thread, @sizeOf(Thread));
     l.* = .{ .hdr = l.hdr, .g = g };
+    if (g.debugger) |d| l.hook_mask = d.mask;
     l.stack = try g.gpa.alloc(Value, 64);
     @memset(l.stack, Value.nil);
     return l;

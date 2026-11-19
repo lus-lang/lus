@@ -341,6 +341,11 @@ pub fn hookFunction(l: *Thread) ?Value {
     return if (f.isNil()) null else f;
 }
 
+/// The events an attached debugger needs, which `sethook` never clears.
+fn debuggerMask(l: *Thread) u8 {
+    return if (l.g.debugger) |d| d.mask else 0;
+}
+
 fn gethook(l: *Thread) Error!u32 {
     const co = threadArg(l)[0];
     const t = try hookTable(l);
@@ -363,7 +368,7 @@ fn sethook(l: *Thread) Error!u32 {
     const key = Value.obj(.thread, co);
     if (l.arg(a).isNil()) {
         try ops.rawSet(l, t, key, .nil);
-        co.hook_mask = 0;
+        co.hook_mask = debuggerMask(l);
         return 0;
     }
     const smask = try aux.checkBytes(l, a + 1);
@@ -378,7 +383,7 @@ fn sethook(l: *Thread) Error!u32 {
     };
     if (n == 0 and count <= 0) {
         try ops.rawSet(l, t, key, .nil);
-        co.hook_mask = 0;
+        co.hook_mask = debuggerMask(l);
         return 0;
     }
     const rec = try l.newTable(3, 0);
@@ -397,7 +402,7 @@ fn sethook(l: *Thread) Error!u32 {
     co.hook_count = @intCast(@max(count, 0));
     co.hook_left = co.hook_count;
     co.hook_oldfi = std.math.maxInt(usize);
-    co.hook_mask = mask;
+    co.hook_mask = mask | debuggerMask(l);
     return 0;
 }
 
