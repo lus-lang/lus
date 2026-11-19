@@ -47,6 +47,8 @@ function haystack(d: any, from: From) {
     from,
     d.fastcall ? "fastcall" : "",
     ...(d.pledges ?? []),
+    /* a C constant group lists its members in the signature */
+    d.header && d.kind === "constant" ? (d.signature ?? "") : "",
   ]
     .join(" ")
     .toLowerCase()

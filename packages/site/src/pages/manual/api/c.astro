@@ -16,7 +16,7 @@ const sections = await getCapiSections()
     if (
       location.hash &&
       !document.getElementById(decodeURIComponent(location.hash.slice(1))) &&
-      !/^#(lua_|luaL_|lus_|LUA_|LUAL_)/.test(location.hash)
+      !/^#(lus_|LUS_)/.test(location.hash)
     ) {
       location.replace("/manual/api" + location.search + location.hash)
     }

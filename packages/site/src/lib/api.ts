@@ -42,7 +42,7 @@ function slug(title: string): string {
 
 interface SectionSpec {
   title: string
-  filter: (d: ApiData) => boolean
+  filter: (d: ApiData, id: string) => boolean
 }
 
 const stdlibOrder: SectionSpec[] = [
@@ -79,24 +79,24 @@ const stdlibOrder: SectionSpec[] = [
   { title: "Time Library", filter: (d) => d.module === "time" },
 ]
 
+/* C API entries are grouped by their directory under spec/capi. */
+const capiGroup =
+  (dir: string) =>
+  (_d: ApiData, id: string): boolean =>
+    id.startsWith(`${dir}/`)
+
 const capiOrder: SectionSpec[] = [
-  {
-    title: "Permission System (C API)",
-    filter: (d) => d.header === "lpledge.h",
-  },
-  {
-    title: "Worker System (C API)",
-    filter: (d) =>
-      d.header === "lworkerlib.h" ||
-      d.name === "WorkerState" ||
-      d.name === "lus_WorkerSetup" ||
-      d.name === "lus_onworker" ||
-      d.name.startsWith("lus_worker_") ||
-      d.name.startsWith("LUS_WORKER_"),
-  },
-  { title: "Library Openers", filter: (d) => d.header === "lualib.h" },
-  { title: "Core C API", filter: (d) => d.header === "lua.h" },
-  { title: "Auxiliary C API", filter: (d) => d.header === "lauxlib.h" },
+  { title: "State", filter: capiGroup("state") },
+  { title: "Stack", filter: capiGroup("stack") },
+  { title: "Reading Values", filter: capiGroup("read") },
+  { title: "Pushing Values", filter: capiGroup("push") },
+  { title: "Tables and Globals", filter: capiGroup("tables") },
+  { title: "C Functions", filter: capiGroup("functions") },
+  { title: "Userdata and Metatables", filter: capiGroup("userdata") },
+  { title: "References", filter: capiGroup("references") },
+  { title: "Loading and Calling", filter: capiGroup("call") },
+  { title: "Errors", filter: capiGroup("errors") },
+  { title: "Permissions", filter: capiGroup("permissions") },
 ]
 
 function sectionize(entries: ApiEntry[], order: SectionSpec[]): ApiSection[] {
@@ -107,7 +107,7 @@ function sectionize(entries: ApiEntry[], order: SectionSpec[]): ApiSection[] {
   const sections: ApiSection[] = []
   for (const spec of order) {
     const matched = sorted.filter(
-      (e) => !used.has(e.data.name) && spec.filter(e.data),
+      (e) => !used.has(e.data.name) && spec.filter(e.data, e.id),
     )
     for (const e of matched) used.add(e.data.name)
     if (matched.length > 0) {
