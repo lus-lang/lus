@@ -71,12 +71,17 @@ pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
 /// The common case of a native, run without a frame of its own. It reads
 /// its `nargs` arguments at `args` before it allocates anything, and it
-/// returns the single result, or null when the call needs the full
+/// returns the single result, or `leaf_miss` when the call needs the full
 /// native. It never raises an error, never calls back into Lus code, and
-/// never yields: every such case returns null, and the full native then
-/// runs the call from the start. The full native begins with the same
-/// fast part, so both paths share one implementation.
-pub const LeafFn = *const fn (l: *Thread, args: [*]const Value, nargs: u32) ?Value;
+/// never yields: every such case returns `leaf_miss`, and the full native
+/// then runs the call from the start. The full native begins with the
+/// same fast part, so both paths share one implementation. The result
+/// comes back in two registers.
+pub const LeafFn = *const fn (l: *Thread, args: [*]const Value, nargs: u32) Value;
+
+/// What a leaf returns when the full native must run the call. Its tag
+/// belongs to internal objects and never appears in a value.
+pub const leaf_miss: Value = Value.make(0, .proto);
 
 /// A native function object. Natives receive their arguments in the stack
 /// window starting at `l.base()` and push results, returning their count.

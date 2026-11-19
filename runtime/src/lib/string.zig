@@ -244,18 +244,18 @@ fn sub(l: *Thread) Error!u32 {
 }
 
 /// `string.sub` with integer positions (`state.LeafFn`), the common call.
-fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) ?Value {
-    if (nargs < 2 or nargs > 3) return null;
-    if (args[0].tag != .string or args[1].tag != .integer) return null;
+fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) Value {
+    if (nargs < 2 or nargs > 3) return state.leaf_miss;
+    if (args[0].tag != .string or args[1].tag != .integer) return state.leaf_miss;
     var j: i64 = -1;
     if (nargs == 3) {
         if (args[2].tag == .integer) {
             j = args[2].asInt();
-        } else if (args[2].tag != .nil) return null;
+        } else if (args[2].tag != .nil) return state.leaf_miss;
     }
     const s = args[0].as(String);
     const n: usize = s.chars;
-    return subRange(l, s, posRelat(args[1].asInt(), n), clipEnd(j, n)) catch null;
+    return subRange(l, s, posRelat(args[1].asInt(), n), clipEnd(j, n)) catch state.leaf_miss;
 }
 
 /// The characters `start` through `end` of `s`, 1-based and clipped.

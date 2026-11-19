@@ -963,6 +963,10 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 try tierLoop(l, &c, &pc, &budget);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
+            // The common call of a builtin pushes no frame and touches
+            // neither the frame state nor the hooks.
+            if (callee.tag == .native and callLeaf(l, callee.as(state.Native), func, nargs, want, c.base + c.cl.proto.max_stack))
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
             const kind: CallKind = if (callee.tag == .native) blk: {
                 try callNative(l, callee.as(state.Native), func, nargs, want);
                 break :blk .done;
@@ -1335,6 +1339,29 @@ noinline fn growFrames(l: *Thread) Error!void {
     l.frames.ensureUnusedCapacity(l.g.gpa, 1) catch return l.raiseMem();
 }
 
+/// Runs the leaf of a native called with its `nargs` arguments above
+/// `func`, when it has one, and returns true when the leaf ran the call.
+/// The result goes to `func`, adjusted to `want`, and a fixed result
+/// count sets the stack top to `frame_top`, the register window of the
+/// caller.
+pub inline fn callLeaf(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32, frame_top: u32) bool {
+    const leaf = nat.leaf orelse return false;
+    // The stack top covers the arguments, which keeps them alive if the
+    // leaf allocates.
+    l.top = func + 1 + nargs;
+    const r = leaf(l, l.stack.ptr + func + 1, nargs);
+    if (r.tag == state.leaf_miss.tag) return false;
+    l.stack[func] = r;
+    if (want < 0) {
+        l.top = func + 1;
+    } else {
+        var i: u32 = 1;
+        while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[func + i] = .nil;
+        l.top = frame_top;
+    }
+    return true;
+}
+
 /// Runs a native function called from the interpreter with its `nargs`
 /// arguments above `func`, leaving its results at `func` adjusted to
 /// `want`.
@@ -1344,7 +1371,8 @@ pub inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, 
         // at `func`, as a return would. The stack top covers the
         // arguments, which keeps them alive if the leaf allocates.
         l.top = func + 1 + nargs;
-        if (leaf(l, l.stack.ptr + func + 1, nargs)) |r| {
+        const r = leaf(l, l.stack.ptr + func + 1, nargs);
+        if (r.tag != state.leaf_miss.tag) {
             l.stack[func] = r;
             if (want < 0) {
                 l.top = func + 1;
