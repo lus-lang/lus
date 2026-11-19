@@ -20,6 +20,7 @@ const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
 const ops = @import("../vm/ops.zig");
+const vmtable = @import("../vm/table.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const numeric = @import("../vm/numeric.zig");
 const aux = @import("aux.zig");
@@ -529,6 +530,19 @@ fn join(l: *Thread) Error!u32 {
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
+    // A table without a metatable is read twice: once to size the result
+    // so the bytes are copied once into one buffer, and once to append.
+    const t = tv.as(Table);
+    if (t.metatable == null and n > 0) {
+        var room: usize = 0;
+        var j: i64 = 1;
+        while (j <= n) : (j += 1) {
+            const v = vmtable.getInt(t, j);
+            if (v.tag != .string) break;
+            room += v.as(String).len + sep.len;
+        }
+        try b.reserve(room);
+    }
     var i: i64 = 1;
     while (i <= n) : (i += 1) {
         const v = try ops.index(l, tv, Value.int(i));

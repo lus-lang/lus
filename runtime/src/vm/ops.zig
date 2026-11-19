@@ -476,7 +476,24 @@ pub fn length(l: *Thread, v: Value) Error!Value {
 /// Formats a number the way `tostring` does.
 pub fn numberToBuf(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value) !void {
     switch (v.tag) {
-        .integer => try buf.print(gpa, "{d}", .{v.asInt()}),
+        .integer => {
+            // Integers are the most common number in concatenations, so
+            // they skip the general formatter.
+            var tmp: [20]u8 = undefined;
+            var u: u64 = @abs(v.asInt());
+            var i: usize = tmp.len;
+            while (true) {
+                i -= 1;
+                tmp[i] = @intCast('0' + u % 10);
+                u /= 10;
+                if (u == 0) break;
+            }
+            if (v.asInt() < 0) {
+                i -= 1;
+                tmp[i] = '-';
+            }
+            try buf.appendSlice(gpa, tmp[i..]);
+        },
         .float => try formatFloat(gpa, buf, v.asFloat()),
         .bigint => {
             const s = try numeric.bigToString(gpa, v.as(numeric.BigInt));
@@ -695,21 +712,41 @@ fn isStringLike(v: Value) bool {
 }
 
 fn joinStrings(l: *Thread, parts: []const Value, last: Value) Error!Value {
-    const gpa = l.g.gpa;
+    var stack: [concat_stack]u8 = undefined;
+    var first = std.heap.BufferFirstAllocator.init(&stack, l.g.gpa);
+    const gpa = first.allocator();
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
+    // Reserve the whole result at once. A number takes at most
+    // `number_room` bytes unless it is a big integer or a decimal, which
+    // grow the buffer as needed.
+    var room = concatRoom(last);
+    for (parts) |p| room += concatRoom(p);
+    buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();
     var ascii = true;
     var chars: usize = 0;
-    for (parts) |p| try appendForConcat(l, &buf, p, &ascii, &chars);
-    try appendForConcat(l, &buf, last, &ascii, &chars);
+    for (parts) |p| try appendForConcat(l, gpa, &buf, p, &ascii, &chars);
+    try appendForConcat(l, gpa, &buf, last, &ascii, &chars);
     const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
     return Value.obj(.string, s);
 }
 
+/// Size of the stack buffers that hold short concatenation results
+/// before they are copied into a new string.
+pub const concat_stack = 256;
+
+/// Room for the text of an integer or a float.
+const number_room = 32;
+
+/// Bytes to reserve for a string or number operand of a concatenation.
+pub fn concatRoom(v: Value) usize {
+    return if (v.tag == .string) v.as(String).len else number_room;
+}
+
 /// Appends a string or number, joining a trailing lead surrogate with a
-/// leading trail surrogate as WTF-8 requires.
-pub fn appendForConcat(l: *Thread, buf: *std.ArrayList(u8), v: Value, ascii: *bool, chars: *usize) Error!void {
-    const gpa = l.g.gpa;
+/// leading trail surrogate as WTF-8 requires. `gpa` is the allocator of
+/// `buf`.
+pub fn appendForConcat(l: *Thread, gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value, ascii: *bool, chars: *usize) Error!void {
     if (v.tag == .string) {
         const s = v.as(String);
         const b = s.bytes();

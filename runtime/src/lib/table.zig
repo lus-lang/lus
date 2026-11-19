@@ -223,9 +223,28 @@ fn concat(l: *Thread) Error!u32 {
     const sep = l.arg(2);
     var i = try aux.optInt(l, 3, 1);
     last = try aux.optInt(l, 4, last);
-    const gpa = l.g.gpa;
+    var stack: [ops.concat_stack]u8 = undefined;
+    var first = std.heap.BufferFirstAllocator.init(&stack, l.g.gpa);
+    const gpa = first.allocator();
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
+    // A table without a metatable is read twice: once to size the result,
+    // so the bytes are copied once into one buffer, and once to append.
+    if (t.tag == .table and t.as(Table).metatable == null and i <= last) {
+        const tab = t.as(Table);
+        const sep_room = if (sep_given) ops.concatRoom(sep) else 0;
+        var room: usize = 0;
+        var j = i;
+        while (true) : (j += 1) {
+            const v = table.getInt(tab, j);
+            // A value that cannot be joined raises an error below.
+            if (v.tag != .string and !v.isNumber()) break;
+            room += ops.concatRoom(v);
+            if (j == last) break;
+            room += sep_room;
+        }
+        buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();
+    }
     var ascii = true;
     var chars: usize = 0;
     while (i <= last) : (i += 1) {
@@ -233,9 +252,9 @@ fn concat(l: *Thread) Error!u32 {
         if (v.tag != .string and !v.isNumber()) {
             return l.raiseFmt("invalid value ({s}) at index {d} in table for 'concat'", .{ value.typeName(v.tag), i });
         }
-        try ops.appendForConcat(l, &buf, v, &ascii, &chars);
+        try ops.appendForConcat(l, gpa, &buf, v, &ascii, &chars);
         if (i == last) break; // also avoids overflow when last is maxinteger
-        if (sep_given) try ops.appendForConcat(l, &buf, sep, &ascii, &chars);
+        if (sep_given) try ops.appendForConcat(l, gpa, &buf, sep, &ascii, &chars);
     }
     const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, s));
