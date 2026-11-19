@@ -8,4 +8,4 @@ origin: lua
 type: string
 ---
 
-A global variable containing the running Lus version string.
+A global variable containing the running Lus version string, such as `"Lus 2.0"`.

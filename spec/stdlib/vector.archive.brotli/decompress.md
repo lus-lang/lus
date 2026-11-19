@@ -7,8 +7,8 @@ stability: stable
 origin: lus
 params:
   - name: data
-    type: string|vector
-returns: string|vector
+    type: vector|string
+returns: vector
 ---
 
-Decompresses Brotli-compressed `data`. Returns the same type as the input.
+Decompresses Brotli-compressed `data`. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.

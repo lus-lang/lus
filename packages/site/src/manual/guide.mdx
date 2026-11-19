@@ -173,7 +173,15 @@ Boolean values are `true` and `false`. In conditional contexts, `nil` and `false
 
 ### `number`
 
-Numbers in Lus are either 64-bit integers or floating-point numbers. Both use the `number` type, and [`math.type`](/manual/api#math.type) reports the subtype. The runtime converts between the subtypes as needed. Code with exact arithmetic requirements can inspect the subtype directly.
+Numbers in Lus have one type, `number`, with four subtypes. An _integer_ is a 64-bit two's complement value and a _float_ is an IEEE 754 binary64 value, as in Lua. A _bigint_ is an integer of any size, written with an `n` suffix such as `2n` or `0xffn`. A _decimal_ is an exact base 10 number that keeps the digits it was given, written with a `d` suffix such as `19.90d`. [`math.type`](/manual/api#math.type) reports the subtype.
+
+```lus
+print(math.type(1), math.type(1.0))   --> integer  float
+print(2n ^ 100)                       --> 1267650600228229401496703205376
+print(0.1d + 0.2d == 0.3d)            --> true
+```
+
+All four subtypes compare by mathematical value, so `1 == 1.0`, `1 == 1n`, and `1n == 1.00d` are all true, and a table key is normalized so that `t[1]`, `t[1.0]`, `t[1n]`, and `t[1d]` name the same slot. The global functions [`bigint`](/manual/api#bigint) and [`decimal`](/manual/api#decimal) convert other numbers and numeric strings. [Acquis 36](/manual/acquis-36) describes the exact subtypes in full.
 
 ### `string`
 
@@ -242,7 +250,7 @@ Members from one declaration order by declaration position. `Color.Red == Color.
 
 ### `vector`
 
-Vectors are resizable byte buffers for working with raw binary data. They let you read and write values of various sizes at specific positions within the buffer, making them useful for file formats, network protocols, and performance-critical code. They are similar to userdata, but userdata are opaque, not resizable, and managed exclusively by the runtime or the embedding program.
+Vectors are resizable byte buffers, and they are the type of all raw binary data in Lus. Binary file reads, network reads, compressed data, the results of `string.pack`, byte encodings from `string.transcode`, and compiled chunks from `string.dump` are all vectors. Vector offsets are zero based. `vector.pack` and `vector.unpack` read and write values of various sizes at given offsets, `vector.get` and `vector.set` access single bytes, and `#v` is the size in bytes. `vector.fromstring` and `vector.tostring` convert between text and its WTF-8 bytes. [Acquis 37](/manual/acquis-37) describes how strings and vectors divide the work between text and bytes.
 
 ### `query`
 
@@ -252,7 +260,7 @@ Query values are compiled `@` query expressions: first-class, immutable descript
 
 ### Arithmetic operators
 
-Lus provides the usual arithmetic operators: `+` (addition), `-` (subtraction), `*` (multiplication), `/` (float division), `//` (floor division), `%` (modulo), `^` (exponentiation), and unary `-` (negation). When both operands are integers, the result is an integer (except for `/`, which always produces a float). If either operand is a float, the other is converted to float before the operation.
+Lus provides the usual arithmetic operators: `+` (addition), `-` (subtraction), `*` (multiplication), `/` (division), `//` (floor division), `%` (modulo), `^` (exponentiation), and unary `-` (negation). When both operands are integers, the result is an integer, and `/` produces a float. If either operand is a float, the other is converted to float before the operation. Integer arithmetic wraps around on overflow.
 
 ```lus
 print(7 + 3)    --> 10      (integer)
@@ -263,9 +271,17 @@ print(2 ^ 10)   --> 1024.0  (always float)
 print(-3)       --> -3      (negation)
 ```
 
+Bigints and decimals take part in the same operators. An integer combined with a bigint gives a bigint, an integer or bigint combined with a decimal gives a decimal, and `/` on two decimals gives a decimal rounded to 34 significant digits. Mixing a decimal and a float raises an error, so the program converts one side explicitly with `decimal` or `tonumber`.
+
+```lus
+print(2n ^ 64 + 1)  --> 18446744073709551617
+print(1.10d * 3)    --> 3.30
+print(10d / 4d)     --> 2.5
+```
+
 ### Relational operators
 
-The relational operators are `==` (equal), `~=` (not equal), `<`, `>`, `<=`, and `>=`. They always produce a boolean. Equality (`==`) compares by value for numbers, strings, and booleans, but by _reference_ for tables, functions, and userdata. Two objects of different types are never equal (except for integer/float comparisons, e.g. `1 == 1.0` is true).
+The relational operators are `==` (equal), `~=` (not equal), `<`, `>`, `<=`, and `>=`. They always produce a boolean. Equality (`==`) compares by value for numbers, strings, and booleans, but by _reference_ for tables, functions, and userdata. Two values of different types are never equal. Numbers compare by mathematical value whatever their subtype, so `1 == 1.0` and `1 == 1n` are true.
 
 Custom equality and ordering behavior can be defined through the `__eq`, `__lt`, and `__le` [metamethods](#metatables-and-metamethods).
 
@@ -326,7 +342,7 @@ For tables, `#t` returns the length of the _sequence_. If the array portion has 
 
 ### Bitwise operators
 
-Lus provides bitwise operators that work on integers: `&` (AND), `|` (OR), `~` (XOR), `<<` (left shift), `>>` (right shift), and unary `~` (bitwise NOT). Float operands are converted to integers before the operation.
+Lus provides bitwise operators that work on integers: `&` (AND), `|` (OR), `~` (XOR), `<<` (left shift), `>>` (right shift), and unary `~` (bitwise NOT). Floats with an integral value are converted to integers before the operation. On integers the operators act on 64 bits. When either operand is a bigint they act on an unbounded two's complement value and produce a bigint, so `1n << 64` is `18446744073709551616`.
 
 ```lus
 print(0xFF & 0x0F)   --> 15
@@ -432,7 +448,21 @@ for i = 10, 1, -2 do  -- 10, 8, 6, 4, 2
 end
 ```
 
-The loop variable is local to the body. The start, stop, and step expressions are evaluated once before the loop begins.
+The loop variable is local to the body and cannot be assigned. The start, stop, and step expressions are evaluated once before the loop begins.
+
+The global function [`range`](/manual/api#range) writes the same loop in the form of a generic `for`. `range(a, b, step)` counts from `a` to `b`, the step defaults to 1, and `range(n)` counts from 1 to `n`. When a `for` loop calls `range` directly, the compiler emits exactly the numeric loop above:
+
+```lus
+for i in range(1, 5) do       -- 1, 2, 3, 4, 5
+  print(i)
+end
+
+for i in range(10, 1, -2) do  -- 10, 8, 6, 4, 2
+  print(i)
+end
+```
+
+Elsewhere `range` returns an ordinary iterator triple that any generic `for` can consume. [Acquis 35](/manual/acquis-35) covers `range` and `continue`.
 
 ### Generic for
 
@@ -464,7 +494,7 @@ for i = 1, 100 do
 end
 ```
 
-`continue` skips the rest of the current iteration and starts the next one:
+`continue` skips the rest of the current iteration and starts the next one. In a `repeat` loop it jumps to the `until` condition:
 
 ```lus
 for i = 1, 10 do
@@ -883,18 +913,18 @@ end
 A stateless iterator relies only on the invariant state and the control variable, so no closures or mutable state. This is the most efficient form:
 
 ```lus
-local function range_iter(limit, current)
+local function squares_iter(limit, current)
   current = current + 1
   if current > limit then return nil end
-  return current
+  return current, current * current
 end
 
-local function range(n)
-  return range_iter, n, 0
+local function squares(n)
+  return squares_iter, n, 0
 end
 
-for i in range(5) do
-  print(i)  --> 1 2 3 4 5
+for i, sq in squares(3) do
+  print(i, sq)  --> 1 1, 2 4, 3 9
 end
 ```
 
@@ -1100,7 +1130,7 @@ local chunk = load("print(math.sqrt(16))", "sandbox", "t", safe_env)
 chunk()  --> 4.0
 ```
 
-The `"t"` mode accepts text only and is the appropriate mode for source from an untrusted party. Binary chunks are version-dependent runtime artifacts for trusted build and storage paths. Treat every binary chunk as trusted input.
+Loading code requires the `load` permission. The `"t"` mode accepts text only and is the appropriate mode for source from an untrusted party. A binary chunk is a vector produced by [`string.dump`](/manual/api#string.dump), a version-dependent runtime artifact for trusted build and storage paths. Treat every binary chunk as trusted input.
 
 For security-critical sandboxing, the `pledge` function provides fine-grained capability-based access control. Permissions follow a hierarchical naming scheme, so granting a base permission implicitly grants all sub-permissions:
 
@@ -1116,7 +1146,7 @@ Path and URL restrictions can be added: `pledge("fs:read=/var/log/*")`. Permanen
 lus -Pfs -Pnetwork script.lus
 ```
 
-Coroutines inherit an independent copy of the parent's permissions at creation. Later permission changes remain local to the parent or coroutine that makes them.
+Coroutines start with the permissions of their creator. Later permission changes remain local to the parent or coroutine that makes them.
 
 ## Modules and require
 
@@ -1151,22 +1181,22 @@ return M
 
 ### Search paths
 
-`require("name")` consults [`package.searchers`](/manual/api#package.searchers) in this order: `package.preload`, launch-time preincluded modules, standalone bundled modules, files from [`package.path`](/manual/api#package.path), C libraries from [`package.cpath`](/manual/api#package.cpath), and C root loaders. The `?` placeholder in a path template is replaced with the module name.
+`require("name")` consults [`package.searchers`](/manual/api#package.searchers) in this order: [`package.preload`](/manual/api#package.preload), modules preincluded with `--include`, modules bundled into a standalone executable by `lus build`, and source files found through [`package.path`](/manual/api#package.path). The `?` placeholder in a path template is replaced with the module name, with dots turned into directory separators.
 
 ```lus
 print(package.path)
---> /usr/local/share/lus/1.7/?.lus;...;./?.lus;./?/init.lus;./?.lua;./?/init.lua
+--> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
 ```
 
-Within each default source directory, `.lus` and `init.lus` templates precede their `.lua` compatibility templates. Directories are searched in this order: `share/lus/1.7`, `lib/lus/1.7`, `share/lua/1.7`, `lib/lua/1.7`, then the current directory. The standalone interpreter derives those versioned directories from an archive whose executable is under `bin`. Other standalone invocations use the configured installation prefix. An embedded state always uses the prefix configured when `liblus` was built.
+The `.lus` templates come before their `.lua` compatibility templates. When the environment variable `LUS_PATH` is set, its value becomes the initial `package.path`, and the `-E` option ignores it. Loading a module from a file requires the `load` permission and `fs:read` for the file. Custom searchers can be added to the [`package.searchers`](/manual/api#package.searchers) table.
 
-`LUA_PATH_1_7` takes priority over `LUA_PATH`, and `LUA_CPATH_1_7` takes priority over `LUA_CPATH`. A `;;` marker in either environment value inserts the corresponding defaults at that position. The `-E` option ignores these environment values. Custom searchers can be added to the [`package.searchers`](/manual/api#package.searchers) table.
-
-For distributing self-contained programs, the `--standalone` flag bundles a script and its dependencies into a single executable. Use `--include` to add files or directories. The bundle searcher resolves a bundled module before the filesystem searchers. CLI flags like `-P` are baked into the binary.
+Modules given with `--include` are compiled when the interpreter starts, so `require` loads them from memory without `load` or `fs` permissions ([Acquis 29](/manual/acquis-29)). For distributing a self-contained program, `lus build` bundles a script and every module it requires by a literal name into a single executable ([Acquis 39](/manual/acquis-39)):
 
 ```bash
-lus --standalone app.lus --include lib/
+lus build -o app app.lus --include lib/
 ```
+
+Native code extends Lus through the [embedding API](#embedding-lus), where a host program registers its functions directly. A native module found on `package.cpath` reports that native C libraries are unavailable.
 
 ## Error handling
 
@@ -1217,37 +1247,37 @@ local ok, err = catch[simplify] divide(10, 0)
 
 When an error occurs, the handler is called with the raw error object and its first return value replaces the original error. Additional handler results are discarded. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates to an outer catch or the host. The bracketed expression must evaluate to a function, and any other value raises an error at the catch site.
 
-### C API error handling
+### Errors in the embedding API
 
-_This section is primarily relevant for programs embedding the Lus runtime in C/C++._
+_This section is primarily relevant for programs embedding the Lus runtime in C or another language with a C interface._
 
-Use the public `lua_pcall` or `lua_pcallk` interfaces from the installed `lua.h` header to call Lus functions in protected mode. A successful call returns `LUA_OK`. A failure returns a status code and leaves its error object on the stack.
+Every function of `lus.h` that can fail returns a status code, and an error never jumps across C frames. `lus_pcall` calls a function and returns `LUS_OK` on success. On failure it returns the status and leaves the error value on the stack in place of the results, and `lus_traceback` returns the traceback of that error:
 
 ```c
-#include "lua.h"
+#include "lus.h"
 
-int run_work(lua_State *L) {
+int run_work(lus_State *L) {
   int status;
-  lua_getglobal(L, "work");
-  status = lua_pcall(L, 0, 0, 0);
-  if (status != LUA_OK) {
-    const char *message = lua_tostring(L, -1);
-    report_error(message);
-    lua_pop(L, 1);
+  lus_getglobal(L, "work");
+  status = lus_pcall(L, 0, 0);
+  if (status != LUS_OK) {
+    const char *message = lus_tostring(L, -1, NULL);
+    report_error(message ? message : "(error object is not a string)");
+    lus_pop(L, 1);
   }
   return status;
 }
 ```
 
-`lua_pcallk` adds a continuation for protected calls that can yield. The runtime's internal protection macros and `ldo.h` remain private implementation details and are not installed as part of the embedding SDK.
+A C function raises an error by returning `lus_error(L)`, which takes the top value as the error, or `lus_errorf(L, fmt, ...)`, which formats a message and prefixes the position of the calling Lus code. [Embedding Lus](#embedding-lus) introduces the whole interface.
 
 ## Standard library
 
-In addition to the core libraries (`math`, `string`, `table`, `io`, `os`, `utf8`, `coroutine`, `debug`, `package`), Lus ships with extended libraries for common tasks. See the [API reference](/manual/api) for complete documentation.
+In addition to the core libraries (`math`, `string`, `table`, `io`, `os`, `utf8`, `coroutine`, `debug`, `package`), Lus ships with extended libraries for common tasks. Every function that produces or consumes raw bytes uses [vectors](#vector), and every string function works in characters. See the [API reference](/manual/api) for complete documentation.
 
 ### Permissions
 
-The [`pledge`](/manual/api#pledge) function (covered in [Sandboxing](#sandboxing)) controls access to sensitive operations. All libraries below that perform I/O require appropriate permissions. Available permission categories include `fs`, `fs:read`, `fs:write`, `network`, `network:http`, `network:tcp`, `network:udp`, `exec`, `env`, and `load`. The `io` library is gated by the `fs` permissions, and [`os.getenv`](/manual/api#os.getenv) by `env`.
+The [`pledge`](/manual/api#pledge) function (covered in [Sandboxing](#sandboxing)) controls access to sensitive operations. All libraries below that perform I/O require appropriate permissions. Available permission categories include `fs`, `fs:read`, `fs:write`, `fs:exec`, `network`, `network:http`, `network:tcp`, `network:udp`, `network:tls`, `network:server`, `exec`, `env`, `load`, and `worker`. The `io` library is gated by the `fs` permissions, [`os.getenv`](/manual/api#os.getenv) by `env`, and [`load`](/manual/api#load) and loading modules from files by `load`.
 
 ### JSON
 
@@ -1261,7 +1291,7 @@ print(data.scores[1])  --> 95
 local json = tojson({name = "Bob", scores = {95, 87}})
 ```
 
-Integer JSON syntax preserves the integer subtype, while a decimal point or exponent produces a float. JSON null becomes an absent table field or an array hole because it maps to `nil`. A contiguous table key set from 1 through `n` serializes as an array. Other tables serialize as objects, which retain string keys and omit keys of other types. The empty table serializes as `[]`. JSON object member order is unspecified, so consumers should parse objects and access members by name.
+Integer JSON syntax preserves the integer subtype, while a decimal point or exponent produces a float. With the option `{ exact = true }`, integers beyond 64 bits become bigints and numbers with a fraction or exponent become decimals, and `tojson` writes both back with their exact digits. JSON null becomes an absent table field or an array hole because it maps to `nil`. A contiguous table key set from 1 through `n` serializes as an array. Other tables serialize as objects, which retain string keys and omit keys of other types. The empty table serializes as `[]`. JSON object member order is unspecified, so consumers should parse objects and access members by name.
 
 `tojson` accepts an optional filter function as a second argument for transforming or omitting fields. The filter first receives the root with a `nil` key, then integer array keys or string object keys. Tables with a `__json` metamethod can return any serializable replacement value. Special float values such as [`math.huge`](/manual/api#math.huge), negative infinity, and NaN serialize as `null`. Functions, threads, userdata, vectors, and enum values serialize as `null` at the root or in arrays, while object fields with these values are omitted. Shared acyclic tables serialize by value and circular references raise an error. [Acquis 6](/manual/acquis-6) gives the full mapping.
 
@@ -1277,7 +1307,7 @@ fs.createdirectory("build", true)   -- true creates parent directories
 fs.copy("src/main.lus", "build/main.lus")
 ```
 
-Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whether it is a symlink), `fs.remove(path, recursive)`, and the [`fs.path`](/manual/api#fs.path) utilities ([`fs.path.join`](/manual/api#fs.path.join), [`fs.path.split`](/manual/api#fs.path.split), [`fs.path.name`](/manual/api#fs.path.name), [`fs.path.parent`](/manual/api#fs.path.parent)).
+Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whether it is a symlink), `fs.remove(path, recursive)`, `fs.move(from, to)`, and the [`fs.path`](/manual/api#fs.path) utilities ([`fs.path.join`](/manual/api#fs.path.join), [`fs.path.split`](/manual/api#fs.path.split), [`fs.path.name`](/manual/api#fs.path.name), [`fs.path.parent`](/manual/api#fs.path.parent)).
 
 ### Networking
 
@@ -1288,9 +1318,9 @@ local status, body, headers = network.fetch("https://api.example.com/data")
 local sock = network.tcp.connect("example.com", 80)
 ```
 
-`network.fetch(url, method, headers, body)` uses positional optional arguments and returns the status code, response body, and lowercase response headers. The method defaults to `"GET"`, and response bodies are capped at 64 MiB.
+`network.fetch(url, method, headers, body)` uses positional optional arguments and returns the status code, the response body as a vector, and lowercase response headers. The method defaults to `"GET"`, and response bodies are capped at 64 MiB. A text body is decoded with `vector.tostring(body)`.
 
-TCP sockets support `send`, `receive`, `settimeout`, and `close`. A numeric receive reads up to 1 MiB. `receive("*l", max_bytes)` reads a line with a 1 MiB default limit. `receive("*a", max_bytes)` reads through EOF with a 64 MiB default limit. Exceeding a line or all-data limit closes the connection and raises `"receive limit exceeded"`. TCP servers and UDP sockets expose `getsockname()` so a bind to port `0` can report the selected address and port. UDP receives default to 8 KiB and accept a maximum size of 1 MiB. [Acquis 9](/manual/acquis-9) documents the socket methods.
+TCP sockets support `send`, `receive`, `settimeout`, and `close`. Every receive returns a vector. A numeric receive reads up to 1 MiB. `receive("*l", max_bytes)` reads a line with a 1 MiB default limit. `receive("*a", max_bytes)` reads through EOF with a 64 MiB default limit. Exceeding a line or all-data limit closes the connection and raises `"receive limit exceeded"`. TCP servers and UDP sockets expose `getsockname()` so a bind to port `0` can report the selected address and port. UDP receives default to 8 KiB and accept a maximum size of 1 MiB. [Acquis 9](/manual/acquis-9) documents the socket methods.
 
 ### Workers
 
@@ -1358,28 +1388,91 @@ The full standard library also includes:
 - [`os`](/manual/api#os-library) for operating system facilities.
 - [`utf8`](/manual/api#utf-8-library) for UTF-8 support.
 - [`debug`](/manual/api#debug-library) for debugging facilities.
-- [`vector`](/manual/api#vector-library) for byte buffers.
+- [`vector`](/manual/api#vector-library) for byte buffers, and [`vector.archive`](/manual/api#archive-library) for gzip, deflate, Zstandard, Brotli, and LZ4 compression.
 - [`coroutine`](/manual/api#coroutine-library) for coroutine control.
 - [`package`](/manual/api#package-library) for module loading.
 
 See the [API reference](/manual/api) for complete documentation.
 
+## Tools
+
+The `lus` executable carries the tools of a Lus project as subcommands, all built on the parser of the interpreter. The [CLI page](/manual/cli) lists every option.
+
+### Testing
+
+`lus test` runs every function whose name ends in `_test` inside files whose names end in `_test.lus`. Each file runs in its own process and temporary directory, and the files run in parallel. Inside a test file, `assert` reports the values of the operands of a failed comparison, a local `NAME_cases` table runs `NAME_test` once per entry, and the helpers `raises`, `same`, `skip`, and `snapshot` cover errors, structural equality, skipped tests, and recorded output:
+
+```lus
+-- add_test.lus
+local function add(a, b) return a + b end
+
+local add_cases = {
+  { 1, 2, 3 },
+  { -1, 1, 0 },
+}
+
+local function add_test(a, b, want)
+  assert(add(a, b) == want)
+end
+
+function errors_test()
+  raises(function() add(nil, 1) end, "arithmetic")
+end
+```
+
+[Acquis 38](/manual/acquis-38) describes the runner in full.
+
+### Formatting, checking, and documentation
+
+`lus fmt` formats source files, `lus check` reports compile errors and lint warnings with stable codes, `lus doc` turns `---` doc comments into Markdown or JSON reference documentation, and `lus ast` prints the syntax tree of a file as JSON. `lus build` bundles a script and its modules into a standalone executable. [Acquis 39](/manual/acquis-39) describes each tool.
+
+### Debugging
+
+`lus debug` runs a script under the Debug Adapter Protocol, with conditional breakpoints, log points, error breakpoints, stepping through coroutines, and inspection of locals, upvalues, and globals. The VS Code extension uses it for **Run and Debug**, and any editor with a DAP client can drive it. [Acquis 40](/manual/acquis-40) describes the debugger.
+
+## Embedding Lus
+
+_This section is primarily relevant for programs embedding the Lus runtime in C or another language with a C interface._
+
+A host program embeds Lus through the C header `lus.h` and the library `liblus`. The host creates a state, opens the standard libraries, decides the permissions of the scripts it runs, and exchanges values with them through a stack:
+
+```c
+#include "lus.h"
+
+static int add(lus_State *L) {
+  lus_pushinteger(L, lus_tointeger(L, 1, NULL) + lus_tointeger(L, 2, NULL));
+  return 1;
+}
+
+int main(void) {
+  lus_State *L = lus_newstate();
+  lus_openlibs(L);
+  lus_grant(L, "fs:read=/srv/data/*");
+  lus_pushcfunction(L, add);
+  lus_setglobal(L, "add");
+  if (lus_dostring(L, "print(add(2, 3))") != LUS_OK)
+    lus_pop(L, 1);
+  lus_close(L);
+  return 0;
+}
+```
+
+Every function that can fail returns a status, as described in [Errors in the embedding API](#errors-in-the-embedding-api). References keep values alive between calls, userdata carry host memory with a metatable, and extensions declare their own capabilities so scripts can pledge them. [Acquis 41](/manual/acquis-41) documents the interface, and the same interface is exported by the [WebAssembly module](/manual/acquis-42) that runs Lus in browsers and in the VS Code extension.
+
 ## Internals
 
 ### Implementation
 
-Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and resembles traditional machine code.
+Lus is an _interpreted language_, meaning that it is not compiled to machine code. Instead, the input is transformed into an _intermediate representation_ that efficiently details the structure of your code, which is then fed to a _virtual machine_ (or the _interpreter_) for execution. The intermediate representation, which we call _bytecode_, is highly compact and resembles traditional machine code. The runtime is written in Zig, and `lus --dis script.lus` prints the bytecode of a script instead of running it.
 
-The Lus interpreter is a register-based virtual machine where the operands of each instruction represent either a position on the machine's stack or a constant within the currently executing function. Each instruction within the Lus instruction set maps closely to a language construct: `OP_SLICE` refers to the slice syntax (`t[i,j]`), `OP_ADD` refers to additive arithmetic (`a + b`), and so on.
+The Lus interpreter is a register-based virtual machine. Every instruction is 32 bits wide, and its operands name either a slot in the current frame or a constant of the running function. Each instruction maps closely to a language construct: `slice` implements the slice syntax (`t[i, j]`), `add` implements additive arithmetic (`a + b`), and so on.
 
-Calls to known standard-library functions compile to a dedicated fast-dispatch instruction that executes them inline. Running with `--readonly-env` freezes `_ENV` and the module tables, letting that dispatch skip its runtime validation.
+Generic instructions _quicken_ as the program runs: an instruction that observes integer operands, or a table field at a stable position, rewrites itself in place into a specialized variant with a short fast path. Calls between Lus functions never recurse on the native stack, and entering a `catch` costs nothing until an error occurs. Running with `--readonly-env` freezes `_ENV` and the module tables after startup, which lets the compiler and the interpreter rely on the standard library staying in place.
 
 ### Memory management
 
-Lus implements an incremental mark-and-sweep garbage collector with an optional generational mode. Objects allocated by the runtime are tracked by the collector. As allocations accumulate, it interleaves short marking and sweeping steps with program execution, reclaiming everything no longer reachable from the program's roots.
-
-The garbage collector can also operate _generationally_, meaning it can divide objects into generations based on their age. As most objects in programs die young, we can account for their rapid expiration and optimize accordingly. Newly created objects belong to the young generation and are collected frequently. Objects that survive multiple collection cycles are promoted to the old generation, which is collected less often. The standalone interpreter runs in generational mode by default, and embedders start in incremental mode.
+Lus manages memory with a precise, non-moving, mark-and-sweep garbage collector. Objects allocated by the runtime are tracked by the collector. As allocations accumulate, it marks everything reachable from the program's roots and reclaims the rest, with full support for weak tables, ephemeron tables, and finalizers through `__gc`.
 
 You rarely need to think about garbage collection in practice. However, if you're working with performance-sensitive code or managing large amounts of data, Lus exposes the [`collectgarbage`](/manual/api#collectgarbage) function to let you interface with the garbage collector.
 
-Two interpreter flags also help memory-constrained deployments. `--gc-pause N` bounds how far the heap may grow past the live set (in percent) before an incremental collection cycle starts, trading CPU for a smaller peak footprint. `--strip-debug` drops debug information from loaded code at the cost of source detail in tracebacks.
+The interpreter flag `--gc-pause N` bounds how far the heap may grow past the live set (in percent) before a collection starts, trading CPU for a smaller peak footprint.

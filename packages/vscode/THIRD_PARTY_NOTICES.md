@@ -1,6 +1,6 @@
 # Third-party notices
 
-The VSIX contains the Lus WebAssembly runtime, Unicode and CLDR data, Emscripten runtime support, the embedded Lus language server, and the bundled Node language client. The following notices apply to those redistributed components.
+The VSIX contains the Lus WebAssembly runtime, the components compiled into it, Unicode and CLDR data, the embedded Lus language server, and the bundled Node language client. The following notices apply to those redistributed components.
 
 ## Lua
 
@@ -30,10 +30,9 @@ Except as contained in this notice, the name of a copyright holder shall not be 
 
 SPDX-License-Identifier: Unicode-3.0
 
-## Emscripten runtime support
+## Components compiled into the WebAssembly runtime
 
-The complete MIT and University of Illinois/NCSA terms ship in
-`licenses/LICENSE.EMSCRIPTEN.txt`.
+The runtime module compiles in Brotli (MIT), SQLite (public domain), Zstandard (BSD), the IANA time zone database (public domain), wasi-libc (MIT and Apache 2.0), and the Zig standard library and compiler runtime (MIT). Their complete terms ship in `licenses/LICENSE.BROTLI.txt`, `licenses/LICENSE.SQLITE.txt`, `licenses/LICENSE.ZSTD.txt`, `licenses/LICENSE.TZDATA.txt`, `licenses/LICENSE.WASI-LIBC.txt`, and `licenses/LICENSE.ZIG.txt`.
 
 ## Lua language server lineage
 

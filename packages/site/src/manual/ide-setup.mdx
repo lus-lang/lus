@@ -32,6 +32,22 @@ Alternatively, install from the command line (replace `version` with the version
 code --install-extension lus-version.vsix
 ```
 
+### Debugging
+
+The extension registers the `lus` debugger, so **Run and Debug** works on any `.lus` file. It starts `lus debug` from a local installation of `lus`, found on the `PATH` or named by the `lus.executablePath` setting. A launch configuration in `.vscode/launch.json` sets the program, its arguments, its working directory, and the permissions it receives:
+
+```json
+{
+  "type": "lus",
+  "request": "launch",
+  "name": "Debug Lus File",
+  "program": "${file}",
+  "pledges": ["fs:read"]
+}
+```
+
+Breakpoints can carry conditions, hit counts, and log messages, and the debugger stops on uncaught errors by default. [Acquis 40](/manual/acquis-40) describes every feature. Other editors with a Debug Adapter Protocol client run `lus debug` the same way.
+
 > Each example below requires a local installation of `lus` and a checkout of this repository so the command can open `lus-language/main.lus`.
 
 ## Neovim

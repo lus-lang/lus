@@ -4,13 +4,17 @@ import { copyFile, cp, mkdir, rm, stat } from "node:fs/promises";
 const watch = process.argv.includes("--watch");
 
 await mkdir("licenses", { recursive: true });
-await Promise.all([
-  copyFile(
-    "../../packaging/licenses/LICENSE.EMSCRIPTEN.txt",
-    "licenses/LICENSE.EMSCRIPTEN.txt",
+// The license texts of the components compiled into lus.wasm, and of the
+// language server lineage.
+const licenses = ["BROTLI", "LUALS", "SQLITE", "TZDATA", "WASI-LIBC", "ZIG", "ZSTD"];
+await Promise.all(
+  licenses.map((name) =>
+    copyFile(
+      `../../packaging/licenses/LICENSE.${name}.txt`,
+      `licenses/LICENSE.${name}.txt`,
+    ),
   ),
-  copyFile("../../packaging/licenses/LICENSE.LUALS.txt", "licenses/LICENSE.LUALS.txt"),
-]);
+);
 
 // The extension runs the language server from its Lus sources, which the
 // package carries in language-server/. The tests stay in the repository.

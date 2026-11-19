@@ -16,15 +16,15 @@ params:
     type: table
     optional: true
   - name: body
-    type: string
+    type: string|vector
     optional: true
 returns:
   - name: status
     type: integer
   - name: body
-    type: string
+    type: vector
   - name: headers
     type: table
 ---
 
-Performs an HTTP or HTTPS request using positional optional arguments. `method` defaults to `"GET"`. `headers` supplies request header names and values, and `body` supplies the request body. Returns the integer response status, response body string, and a table with lowercase response header names. Response bodies are capped at 64 MiB.
+Performs an HTTP or HTTPS request using positional optional arguments. `method` defaults to `"GET"`. `headers` supplies request header names and values, and `body` supplies the request body as a string or a vector. Returns the integer response status, the response body as a vector, and a table with lowercase response header names. A program that expects a text body decodes it with `vector.tostring`. Response bodies are capped at 64 MiB.

@@ -16,4 +16,4 @@ params:
 returns: function
 ---
 
-Return an iterator function that, each time it is called, returns the next captures from `pattern` in string `s`. If `pattern` has no captures, the whole match is returned. If `init` is given, the search starts at that position.
+Return an iterator function that, each time it is called, returns the next captures from `pattern` in string `s`. If `pattern` has no captures, the whole match is returned. If `init` is given, the search starts at that character position. Patterns match whole characters.

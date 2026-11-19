@@ -1,0 +1,118 @@
+---
+order: 139
+title: "Acquis 39 - Developer Tools"
+acquis: true
+shortdesc: "The fmt, check, doc, ast, and build subcommands of the lus executable."
+draft: true
+---
+
+The `lus` executable carries the everyday tools of a Lus project as subcommands. `lus fmt` formats source, `lus check` reports errors and lint warnings, `lus doc` generates API documentation from doc comments, `lus ast` prints syntax trees, and `lus build` turns a script into a standalone executable. Every tool uses the same parser as the interpreter, so they all agree on what a program means.
+
+```
+lus fmt     format source files
+lus check   check source files for errors and lint warnings
+lus doc     generate API documentation from doc comments
+lus ast     print the syntax tree of a file as JSON
+lus build   bundle a script into a standalone executable
+```
+
+The tools that read source accept file names, and with no file, or with the file `-`, they read standard input. Their exit status is 0 on success, 1 when they report a problem in the input, and 2 for a usage or I/O error.
+
+## Formatting
+
+`lus fmt` prints the formatted text of each file. `--write` rewrites the files that change in place, and `--check` changes nothing and lists the files that are not formatted, which suits continuous integration. `--indent N` sets the width of one indentation level, 4 spaces by default. [`debug.format`](/manual/api#debug.format) exposes the same formatter to Lus code.
+
+```sh
+lus fmt --write src/*.lus
+lus fmt --check src/*.lus
+```
+
+## Checking
+
+`lus check` parses, lints, and compiles each file without running it, and prints each problem as `file:line:column: severity: message [code]`.
+
+```lus
+local unused = 1
+local function area(w, h)
+    return w * h
+end
+total = area(4, 5)
+```
+
+```
+messy.lus:1:7: warning: unused local 'unused' [unused-local]
+messy.lus:5:1: warning: global 'total' is assigned without a 'global' declaration [implicit-global]
+```
+
+Errors are programs the compiler rejects, such as an assignment to a constant, a `goto` without a visible label, or a `continue` outside every loop. Warnings are programs that run but probably do not do what their author meant, such as unused locals, shadowed names, and unreachable code, along with Lua idioms that a Lus feature expresses directly, such as copying fields one by one where [`from`](/manual/acquis-4) does it in one statement or spelling out nil checks that [optional chaining](/manual/acquis-2) covers. `lus check --list` prints every diagnostic code with its severity and summary. A name that starts with an underscore is exempt from the unused checks.
+
+`--json` prints all diagnostics as one JSON array of objects with the fields `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`, and `message`, for editors and other tools.
+
+## Documentation
+
+`lus doc` turns doc comments into reference documentation. A doc comment is a run of `---` line comments, or one `--[[- ... ]]` long comment, that ends on the line directly above a declaration. Its text is Markdown, and lines that start with an annotation describe the declaration.
+
+```lus
+--- Joins strings with a separator.
+---
+--- The parts are converted with `tostring` first.
+--- @param sep string The separator.
+--- @param parts any The values to join.
+--- @return string The joined text.
+local function join(sep, ...parts)
+    return sep
+end
+
+return { join = join }
+```
+
+`@param NAME TYPE DESCRIPTION` documents a parameter, and a `?` after the name or the type marks it optional. Named variable arguments such as `...parts` are documented under their bare name. `@return TYPE DESCRIPTION` documents one result, in order. `@since VERSION` and `@stability LEVEL` record when an entry appeared and how settled it is. A line indented under an annotation continues its description.
+
+Each file is one module, named after the file. The documented entries are the top-level declarations: functions, locals, and globals, and the fields of the table the module returns. Functions in the returned table and global functions are public, so they are listed even without a comment. Other declarations are listed when they have a doc comment.
+
+The default output is Markdown on standard output. `--format json` writes a model whose entries carry the same fields as the [standard library specification](https://github.com/lus-lang/lus/tree/main/spec), so the website and other tools can consume it. `-o DIR` writes one file per module into a directory.
+
+```sh
+lus doc -o docs src/*.lus
+lus doc --format json strings.lus
+```
+
+The language server shows the same comments on hover, and `lus check` warns about a `@param` that names no parameter, so one set of comments serves the editor, the checker, and the documentation.
+
+## Syntax trees
+
+`lus ast FILE` prints the syntax tree of a file as JSON. It is the tree that [`debug.parse`](/manual/acquis-12) returns, with the fields of every node in a fixed order: `type`, `line`, `column`, the end position, the fields of the node, and then `children`. `--no-comments` leaves the comments out, and `--no-recover` stops at the first syntax error instead of recovering and listing every error in the tree. The JSON schema of the tree is `spec/language/ast.schema.json`.
+
+```sh
+lus ast app.lus > app.json
+```
+
+## Standalone executables
+
+`lus build SCRIPT` bundles a script and the modules it requires into one executable that runs without the source files. The command compiles the script, finds every `require` whose argument is a string literal, resolves those names through the module path, and compiles the modules it finds, recursively. Names that resolve to no file, such as standard library modules, are left to the usual searchers at run time.
+
+```sh
+lus build -o app main.lus
+./app first-argument
+```
+
+| Option | Effect |
+| --- | --- |
+| `-o FILE` | Write the executable to `FILE`. The default is the script name without its extension. |
+| `-P perm`, `--pledge perm` | Grant a permission every time the program runs. |
+| `-F name[=value]`, `--flag name[=value]` | Define a [compile-time flag](/manual/acquis-28). |
+| `--include path[:alias]` | Bundle a module file, or every module below a directory, even when no literal `require` names it. |
+
+The executable is a copy of the running `lus` with the compiled chunks appended. It grants nothing implicitly, so the program runs with exactly the permissions it pledges plus those given with `-P` at build time, and a program that requires its bundled modules pledges `load` or is built with `-P load`. Every command line argument goes to the script, which reads them from `arg` and `...` as usual.
+
+---
+
+## Motivation
+
+### One executable
+
+A single `lus` binary that formats, checks, documents, tests, debugs, and packages code means a project needs nothing beyond the interpreter to follow good practice. The tools are versioned with the language, so they always understand every construct the interpreter accepts.
+
+### Shared front end
+
+All the tools sit on the parser and syntax tree of the interpreter. A construct added to the language reaches the formatter, the checker, the documentation generator, and the syntax tree export in the same change, and the diagnostics of `lus check` use the same positions and messages as the compiler.

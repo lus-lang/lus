@@ -19,4 +19,4 @@ params:
 returns: integer|nil
 ---
 
-Look for the first match of `pattern` in string `s`. Returns the start and end indices of the match, plus any captures. Returns `nil` if no match is found. If `init` is given, the search starts at that position. If `plain` is true, performs a plain substring search with no pattern matching.
+Look for the first match of `pattern` in string `s`. Returns the start and end character positions of the match, plus any captures. Returns `nil` if no match is found. If `init` is given, the search starts at that character position. If `plain` is true, performs a plain substring search with no pattern matching. Patterns match whole characters, so `.` matches one character and a set such as `[éà]` may hold any characters.

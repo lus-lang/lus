@@ -74,7 +74,7 @@
           "name": "keyword.operator.query.lus"
         }
       },
-      "end": "(?=[;)\\]}])|(?=^\\s*$)|(?=\\b(?:local|global|function|return|if|elseif|else|for|while|repeat|until|do|end|then|break|goto|catch|provide)\\b)",
+      "end": "(?=[;)\\]}])|(?=^\\s*$)|(?=\\b(?:local|global|function|return|if|elseif|else|for|while|repeat|until|do|end|then|break|continue|goto|catch|provide)\\b)",
       "name": "meta.query.lus",
       "patterns": [
         {
@@ -100,6 +100,14 @@
           "name": "keyword.operator.query.lus"
         }
       ]
+    },
+    {
+      "match": "(?<![\\w\\d.])(?:0[xX][0-9A-Fa-f]+|\\d+)n\\b",
+      "name": "constant.numeric.integer.bigint.lus"
+    },
+    {
+      "match": "(?<![\\w\\d.])(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?d\\b",
+      "name": "constant.numeric.decimal.lus"
     },
     {
       "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(\\.[0-9A-Fa-f]*)?([eE]-?\\d*)?([pP][-+]\\d+)?",
@@ -215,7 +223,7 @@
       ]
     },
     {
-      "match": "\\b(break|catch|do|else|end|enum|for|from|if|elseif|goto|in|provide|repeat|return|then|until|while)\\b",
+      "match": "\\b(break|catch|continue|do|else|end|enum|for|from|if|elseif|goto|in|provide|repeat|return|then|until|while)\\b",
       "name": "keyword.control.lus"
     },
     {

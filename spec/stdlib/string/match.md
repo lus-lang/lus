@@ -16,4 +16,4 @@ params:
 returns: string|nil
 ---
 
-Look for the first match of `pattern` in string `s`. Returns the captures from the match, or the whole match if there are no captures. Returns `nil` if no match is found.
+Look for the first match of `pattern` in string `s`. Returns the captures from the match, or the whole match if there are no captures. Returns `nil` if no match is found. If `init` is given, the search starts at that character position. Position captures `()` return character positions.

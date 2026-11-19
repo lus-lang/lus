@@ -11,7 +11,7 @@ params:
   - name: level
     type: integer
     optional: true
-returns: string|vector
+returns: vector
 ---
 
-Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1) controls the speed-ratio trade-off. Returns the same type as the input.
+Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1) controls the speed-ratio trade-off. Accepts a string or a vector and returns the compressed bytes as a vector.

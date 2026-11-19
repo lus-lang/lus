@@ -6,6 +6,8 @@ shortdesc: "A readonly flags table populated from --flag/-F arguments and folded
 draft: true
 ---
 
+> In Lus 2.0, `lus build` preserves `-F` flags in standalone executables, and `string.dump` produces the compiled chunks that other interpreters load.
+
 The `flags` table is a special readonly table populated from the command line. Lookups on it inside `if` conditions are evaluated at compile time when possible, and the losing branch is removed from the generated code entirely.
 
 ## Defining flags

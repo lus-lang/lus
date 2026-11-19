@@ -17,4 +17,4 @@ params:
 returns: string
 ---
 
-Return the substring of `s` from position `i` to `j` (inclusive). Negative indices count from the end of the string. Default for `j` is `-1` (end of string).
+Return the substring of `s` from character position `i` to `j` (inclusive). Negative indices count from the end of the string. Default for `j` is `-1` (end of string). Positions count characters, so `string.sub("héllo", 2, 2)` is `"é"`.

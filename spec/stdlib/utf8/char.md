@@ -10,4 +10,4 @@ vararg: true
 returns: string
 ---
 
-Return a string containing the UTF-8 encoding of the given codepoints.
+Return a string containing the given code points, one character per argument. Code points up to U+10FFFF are accepted, including surrogates. An adjacent lead and trail surrogate join into one supplementary character, as concatenation does.

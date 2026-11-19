@@ -1,6 +1,6 @@
 ---
 name: fs.path.separator
-module: fs
+module: fs.path
 kind: constant
 since: 0.1.0
 stability: stable

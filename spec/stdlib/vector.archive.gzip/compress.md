@@ -11,7 +11,7 @@ params:
   - name: level
     type: integer
     optional: true
-returns: string|vector
+returns: vector
 ---
 
-Compresses `data` using gzip format. The optional `level` (0-9, default 6) controls the compression ratio. Returns the same type as the input.
+Compresses `data` using gzip format. The optional `level` (0-9, default 6) controls the compression ratio. Accepts a string or a vector and returns the compressed bytes as a vector.

@@ -11,9 +11,15 @@ params:
   - name: strip
     type: boolean
     optional: true
-returns: string
+returns: vector
 ---
 
-Returns a binary string containing a serialized representation of `function`, so that a compatible later `load` returns a copy of the function. If `strip` is true, debug information is omitted.
+Returns a vector containing a serialized representation of `function`, so that a compatible later `load` returns a copy of the function. If `strip` is true, debug information is omitted. A function with native code, such as `print`, raises an error.
+
+```lus
+local chunk = string.dump(function(a) return a * 2 end)
+local double = load(chunk, "double", "b")
+print(double(21))   --> 42
+```
 
 The result is a version-dependent runtime artifact for trusted storage and distribution. It can include captured bytecode structure. Accept text-only source with `load` mode `"t"` when input crosses an untrusted boundary.

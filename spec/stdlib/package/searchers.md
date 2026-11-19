@@ -8,4 +8,4 @@ origin: lua
 type: table
 ---
 
-A table holding the sequence of searcher functions used by `require`. The default order is `package.preload`, launch-time preincluded modules, standalone bundled modules, source modules from `package.path`, native modules from `package.cpath`, then native root loaders.
+A table holding the sequence of searcher functions used by `require`. The default order is `package.preload`, modules preincluded with `--include`, modules bundled by `lus build`, source modules from `package.path`, and two searchers over `package.cpath` that report native modules as unavailable.

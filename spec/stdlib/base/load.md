@@ -8,7 +8,7 @@ pledges: ["load"]
 origin: lua
 params:
   - name: chunk
-    type: string|function
+    type: string|vector|function
   - name: chunkname
     type: string
     optional: true
@@ -21,7 +21,7 @@ params:
 returns: function|nil
 ---
 
-Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure.
+Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a vector, the chunk is its bytes, which is the form `string.dump` produces for binary chunks. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure.
 
 The optional arguments refine the load:
 

@@ -374,7 +374,7 @@ local function infers_nominal_receiver_method_returns_through_the_symbol_graph_t
   end
   assert(line_decl ~= nil)
   assert(line_decl.type_info ~= nil)
-  assert(line_decl.type_info.tag == "string")
+  assert(line_decl.type_info.tag == "vector")
   close_doc(uri)
 end
 

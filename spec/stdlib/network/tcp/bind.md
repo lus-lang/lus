@@ -1,6 +1,6 @@
 ---
 name: network.tcp.bind
-module: network
+module: network.tcp
 kind: function
 since: 0.1.0
 stability: stable

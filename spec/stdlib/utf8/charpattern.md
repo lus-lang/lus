@@ -8,4 +8,4 @@ origin: lua
 type: string
 ---
 
-The pattern which matches exactly one UTF-8 byte sequence.
+The pattern that matches exactly one character. Patterns match whole characters, so its value is `"."`.

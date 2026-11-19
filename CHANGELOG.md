@@ -1,5 +1,60 @@
 # Changelog
 
+## 2.0.0 (**WIP**)
+
+**Release date:** TBD
+
+Lus 2.0 is a new runtime written in Zig. It keeps every language feature and library of 1.7 and runs the same scripts, permissions, and command line pledges.
+
+### Language
+
+- Added the `continue` statement, which starts the next iteration of the innermost `for`, `while`, or `repeat` loop. In a `repeat` loop it jumps to the `until` condition. `continue` is now a reserved word.
+- Added the global `range(a, b [, step])` and `range(n)` iterator. A `for` loop that calls `range` directly compiles to the same numeric loop as `for i = a, b, step`.
+- Added bigint and decimal numbers as subtypes of `number`, written with the literal suffixes `n` (`123n`, `0xffn`) and `d` (`1.50d`, `1e-2d`). The virtual machine handles them in every arithmetic, bitwise, and comparison operator, they compare by mathematical value with integers and floats, and they normalize to the same table keys. Mixing a decimal and a float raises an error that asks for an explicit conversion.
+- Added the `bigint` and `decimal` conversion functions. `math.type` reports `"bigint"` and `"decimal"`, and `math.tointeger` accepts every subtype.
+- Added the `{ exact = true }` option to `fromjson`, which decodes wide integers as bigints and fractional numbers as decimals. `tojson` writes both with their exact digits.
+- Strings are now well formed WTF-8 text, and every string function counts characters. `#s`, `string.len`, `string.sub`, slices, `string.find`, `string.match`, `string.gmatch`, and `string.gsub` use character positions. `string.byte` returns code points, `string.char` takes code points, and patterns match whole characters. A string literal must decode as text.
+- Raw bytes are now vectors throughout the standard library. `string.pack`, `string.dump`, the `vector.archive` compressors and decompressors, byte encodings of `string.transcode`, binary file reads, TCP and UDP receives, and the body returned by `network.fetch` all produce vectors, and the functions that read bytes accept them.
+- Added `vector.fromstring`, `vector.tostring` with strict and lossy decoding, `vector.get`, and `vector.set`.
+- Files opened in text mode validate what they read, and the option `{ lossy = true }` of `io.open` replaces invalid sequences with U+FFFD. Files opened in binary mode read vectors.
+- `load` accepts a vector produced by `string.dump` as a binary chunk.
+- Interpolating a vector raises an error that points to `vector.tostring`.
+
+### Tools
+
+- Added `lus test`, a built-in test runner. Functions ending in `_test` in `*_test.lus` files are tests, a local `NAME_cases` table runs a test once per case, `assert` reports the values of a failed comparison, and the helpers `raises`, `same`, `skip`, and `snapshot` cover errors, structural equality, skipped tests, and recorded output. `TEST_DIR` names the directory of the test file and `LUS_EXE` the running interpreter. Each file runs in its own process and temporary directory, and files run in parallel.
+- Added `lus fmt`, which formats source files with `--check`, `--write`, and `--indent`.
+- Added `lus check`, which reports compile errors and lint warnings with stable codes, in text or JSON. Its warnings include the Lua idioms that a Lus feature expresses directly.
+- Added `lus doc`, which generates Markdown or JSON reference documentation from `---` doc comments with `@param`, `@return`, `@since`, and `@stability` annotations.
+- Added `lus ast`, which prints the syntax tree of a file as JSON.
+- Added `lus build`, which bundles a script and the modules it requires into a standalone executable, with `-o`, `-P`, `-F`, and `--include`.
+- Added `lus debug`, a Debug Adapter Protocol server with conditional breakpoints, hit counts, log points, error breakpoints, stepping through coroutines, pausing, and inspection of locals, upvalues, globals, and expressions. The VS Code extension registers it as the `lus` debugger.
+- Added `--dis`, which prints the bytecode of a script.
+- The language server reports its version as `2.0.0-dev`.
+
+### Embedding
+
+- Added `lus.h`, the C embedding interface of the 2.0 runtime. It is stack based, every fallible function returns a status and leaves the error value in place of its result, references keep values alive outside the stack, and userdata carry host memory with registered metatables.
+- Added the host permission policy to the embedding interface: `lus_grant`, `lus_reject`, and `lus_seal` set the starting permissions, `lus_onrequest` decides script pledges interactively, `lus_defcapability` declares new capabilities, and `lus_require` and `lus_allowed` check them.
+- `zig build lib` produces the static and shared `liblus` with the vendored SQLite, Zstandard, and Brotli sources compiled in, so a host links one library.
+- Added the `lus-wasm` package, which runs the runtime compiled to `wasm32-wasi` in browsers, web workers, and Node through a dependency-free JavaScript host. The playground and the VS Code extension run on it.
+
+### Runtime
+
+- The runtime builds with Zig alone and compiles SQLite, Zstandard, and Brotli from source. Gzip, deflate, LZ4, and the TLS client are written in Zig.
+- The interpreter is a register machine with 32-bit instructions, quickened instructions that specialize in place, slot-prediction inline caches for string-keyed table access, and zero-cost entry into `catch`.
+- `package.path` defaults to `./?.lus;./?/init.lus;./?.lua;./?/init.lua`, and the environment variable `LUS_PATH` sets it.
+- The standard library is written once in Zig, and every builtin has a single implementation.
+
+### Removed
+
+- Removed `pcall` and `xpcall`. The `catch` expression covers protected calls, and `catch[handler]` covers message handlers.
+- Removed `os.remove` and `os.rename`. `fs.remove` and `fs.move` cover them.
+- Removed loading C modules through `package.cpath` and `package.loadlib`. Native code extends Lus through the embedding interface.
+- Removed `LUA_INIT` and the `LUA_PATH` family of environment variables. `-e`, `-l`, and `LUS_PATH` cover them.
+- Removed the `lusc` compiler and the `--standalone`, `--ast-json`, `--ast-graph`, `-Wpedantic`, `--no-fastcall`, and `--strip-debug` options, and the `lus format` command. `string.dump`, `lus build`, `lus ast`, `lus check`, and `lus fmt` cover them.
+- Removed the `lua.h`, `lauxlib.h`, and `lualib.h` embedding headers. `lus.h` is the embedding interface.
+
 ## 1.7.0 (**WIP**)
 
 **Release date:** TBD

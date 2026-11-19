@@ -11,4 +11,4 @@ params:
 returns: function
 ---
 
-Return an iterator function that traverses `s`, returning the byte position and codepoint of each UTF-8 character.
+Return an iterator function that traverses `s`, returning the character position and code point of each character. Positions count characters, like every string position.
