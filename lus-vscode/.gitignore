@@ -26,4 +26,6 @@ pnpm-debug.log*
 .idea/
 
 out/
+.test-out/
 wasm/
+licenses/

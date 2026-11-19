@@ -68,6 +68,40 @@
       ]
     },
     {
+      "begin": "(@)(?=[a-zA-Z_(])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.query.lus"
+        }
+      },
+      "end": "(?=[;)\\]}])|(?=^\\s*$)|(?=\\b(?:local|global|function|return|if|elseif|else|for|while|repeat|until|do|end|then|break|goto|catch|provide)\\b)",
+      "name": "meta.query.lus",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "match": "\\b(where|select|distinct|group|having|order|by|limit|offset|as|asc|desc)\\b",
+          "name": "keyword.control.query.lus"
+        },
+        {
+          "match": "\\b(count|sum|avg|min|max)\\b(?=\\s*\\()",
+          "name": "support.function.query.lus"
+        },
+        {
+          "match": "(?<![\\w\\d.])\\d+(\\.\\d*)?([eE]-?\\d*)?",
+          "name": "constant.numeric.float.lus"
+        },
+        {
+          "match": "\\b(and|or|not|nil|true|false)\\b",
+          "name": "keyword.operator.query.lus"
+        }
+      ]
+    },
+    {
       "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(\\.[0-9A-Fa-f]*)?([eE]-?\\d*)?([pP][-+]\\d+)?",
       "name": "constant.numeric.float.hexadecimal.lus"
     },
@@ -201,7 +235,7 @@
       "name": "keyword.control.lus"
     },
     {
-      "match": "(?<![^.]\\.|:)\\b(false|nil(?!:)|true|_ENV|_G|_VERSION|math\\.(pi|huge|maxinteger|mininteger)|utf8\\.charpattern|io\\.(stdin|stdout|stderr)|package\\.(config|cpath|loaded|path|preload|searchers)|fs\\.path\\.(delimiter|separator))\\b|(?<![.])\\.{3}(?!\\.)",
+      "match": "(?<![^.]\\.|:)\\b(?:fs\\.path\\.delimiter|fs\\.path\\.separator|package\\.searchers|utf8\\.charpattern|math\\.maxinteger|math\\.mininteger|package\\.preload|package\\.config|package\\.loaded|package\\.cpath|package\\.path|time\\.weekday|time\\.month|io\\.stderr|io\\.stdout|math\\.huge|_VERSION|io\\.stdin|math\\.pi|false|flags|_ENV|true|_G|nil(?!:))\\b|(?<![.])\\.{3}(?!\\.)",
       "name": "constant.language.lus"
     },
     {
@@ -209,7 +243,7 @@
       "name": "variable.language.self.lus"
     },
     {
-      "match": "(?<![^.]\\.|:)\\b(assert|collectgarbage|dofile|error|fromjson|getmetatable|ipairs|load|loadfile|next|pairs|pledge|print|rawequal|rawget|rawlen|rawset|require|select|setmetatable|tojson|tonumber|tostring|type|warn)\\b(?!\\s*=(?!=))",
+      "match": "(?<![^.]\\.|:)\\b(?:collectgarbage|getmetatable|setmetatable|fromjson|loadfile|rawequal|tonumber|tostring|fromcsv|require|assert|dofile|ipairs|pledge|rawget|rawlen|rawset|select|tojson|error|pairs|print|query|tocsv|load|next|type|warn)\\b(?!\\s*=(?!=))",
       "name": "support.function.lus"
     },
     {
@@ -217,7 +251,7 @@
       "name": "entity.name.tag.lus"
     },
     {
-      "match": "(?<![^.]\\.|:)\\b(coroutine\\.(create|isyieldable|close|resume|running|status|wrap|yield)|string\\.(byte|char|dump|find|format|gmatch|gsub|len|lower|match|pack|packsize|rep|reverse|sub|transcode|unpack|upper)|table\\.(concat|create|insert|move|pack|remove|sort|unpack)|math\\.(abs|acos|asin|atan2?|ceil|cos|deg|exp|floor|fmod|frexp|ldexp|log|max|min|modf|rad|random|randomseed|sin|sqrt|tan|tointeger|type|ult)|io\\.(close|flush|input|lines|open|output|popen|read|tmpfile|type|write)|os\\.(clock|date|difftime|execute|exit|getenv|platform|setlocale|time|tmpname)|package\\.(loadlib|searchpath)|debug\\.(debug|gethook|getinfo|getlocal|getmetatable|getregistry|getupvalue|getuservalue|parse|sethook|setlocal|setmetatable|setupvalue|setuservalue|traceback|upvalueid|upvaluejoin)|utf8\\.(char|codes|codepoint|len|offset)|fs\\.(copy|createdirectory|createlink|follow|list|move|remove|type)|fs\\.path\\.(join|name|parent|split)|network\\.(fetch)|network\\.tcp\\.(bind|connect)|network\\.udp\\.(open)|worker\\.(create|message|peek|receive|send|status)|json\\.(encode|decode))\\b(?!\\s*=(?!=))",
+      "match": "(?<![^.]\\.|:)\\b(?:vector\\.archive\\.deflate\\.decompress|vector\\.archive\\.brotli\\.decompress|vector\\.archive\\.lz4\\.decompress_hc|vector\\.archive\\.deflate\\.compress|vector\\.archive\\.brotli\\.compress|vector\\.archive\\.gzip\\.decompress|vector\\.archive\\.zstd\\.decompress|vector\\.archive\\.lz4\\.decompress|vector\\.archive\\.gzip\\.compress|vector\\.archive\\.zstd\\.compress|vector\\.archive\\.lz4\\.compress|tcp_server:getsockname|udp_socket:getsockname|coroutine\\.isyieldable|network\\.tcp\\.connect|time\\.tzdata_version|debug\\.getmetatable|debug\\.getuservalue|debug\\.setmetatable|debug\\.setuservalue|fs\\.createdirectory|package\\.searchpath|tcp_socket:receive|udp_socket:receive|coroutine\\.running|debug\\.getregistry|debug\\.upvaluejoin|vector\\.unpackmany|coroutine\\.create|coroutine\\.resume|coroutine\\.status|debug\\.getupvalue|debug\\.setupvalue|network\\.tcp\\.bind|network\\.udp\\.open|string\\.transcode|coroutine\\.close|coroutine\\.yield|debug\\.queryplan|debug\\.traceback|debug\\.upvalueid|math\\.randomseed|package\\.loadlib|string\\.packsize|table\\.transpose|coroutine\\.wrap|debug\\.getlocal|debug\\.setlocal|fs\\.path\\.parent|math\\.tointeger|string\\.reverse|time\\.localzone|time\\.monotonic|utf8\\.codepoint|worker\\.message|worker\\.receive|debug\\.gethook|debug\\.getinfo|debug\\.sethook|fs\\.createlink|fs\\.path\\.split|network\\.fetch|string\\.format|string\\.gmatch|string\\.unpack|table\\.compact|table\\.groupby|table\\.reshape|time\\.duration|vector\\.create|vector\\.resize|vector\\.unpack|worker\\.create|worker\\.status|debug\\.format|fs\\.path\\.join|fs\\.path\\.name|os\\.setlocale|string\\.lower|string\\.ltrim|string\\.match|string\\.rtrim|string\\.split|string\\.upper|table\\.concat|table\\.create|table\\.filter|table\\.insert|table\\.median|table\\.reduce|table\\.remove|table\\.sortby|table\\.unpack|time\\.instant|time\\.minutes|time\\.seconds|vector\\.clone|debug\\.debug|debug\\.parse|math\\.random|os\\.difftime|os\\.platform|string\\.byte|string\\.char|string\\.dump|string\\.find|string\\.gsub|string\\.join|string\\.pack|string\\.trim|table\\.clone|table\\.stdev|table\\.unzip|time\\.millis|time\\.offset|utf8\\.offset|vector\\.pack|vector\\.size|worker\\.peek|worker\\.send|io\\.tmpfile|math\\.floor|math\\.frexp|math\\.ldexp|os\\.execute|os\\.tmpname|string\\.len|string\\.rep|string\\.sub|table\\.mean|table\\.move|table\\.pack|table\\.sort|time\\.hours|time\\.parse|time\\.zoned|utf8\\.codes|fs\\.follow|fs\\.remove|io\\.output|io\\.sqlite|math\\.acos|math\\.asin|math\\.atan|math\\.ceil|math\\.fmod|math\\.modf|math\\.sqrt|math\\.type|os\\.getenv|table\\.map|table\\.sum|table\\.zip|time\\.days|time\\.zone|utf8\\.char|io\\.close|io\\.flush|io\\.input|io\\.lines|io\\.popen|io\\.write|math\\.abs|math\\.cos|math\\.deg|math\\.exp|math\\.log|math\\.max|math\\.min|math\\.rad|math\\.sin|math\\.tan|math\\.ult|os\\.clock|time\\.now|utf8\\.len|fs\\.copy|fs\\.list|fs\\.move|fs\\.type|io\\.open|io\\.read|io\\.type|os\\.date|os\\.exit|os\\.time)\\b(?!\\s*=(?!=))",
       "name": "support.function.library.lus"
     },
     {

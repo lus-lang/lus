@@ -1,112 +1,133 @@
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
+import { packagedWasmAsset } from "./wasmAsset";
+import {
+  callWasmUtf8,
+  dispatchJsonRpcUtf8,
+  WasmByteDispatcher,
+  WasmUtf8Module,
+} from "./wasmUtf8";
 
-/**
- * Wrapper around the Lus WASM module.
- * Provides a TypeScript API for creating Lus states and running the LSP.
- */
+interface EmscriptenFileSystem {
+  readFile(path: string, options: { encoding: "utf8" }): string;
+}
+
+interface EmscriptenModule extends WasmUtf8Module {
+  FS: EmscriptenFileSystem;
+  cwrap(
+    name: string,
+    returnType: "number" | "string" | null,
+    argumentTypes: string[],
+  ): (...args: unknown[]) => unknown;
+}
+
+type ModuleFactory = (options: {
+  locateFile(file: string): string;
+}) => Promise<EmscriptenModule>;
+
 export class LusWasm {
-  private module: any;
-  private cwrap: any;
+  private readonly createState: () => number;
+  private readonly executeSourceBytes: WasmByteDispatcher;
+  private readonly loadLanguageServerBytes: WasmByteDispatcher;
+  private readonly dispatchMessageBytes: WasmByteDispatcher;
+  private readonly outputLength: (state: number) => number;
+  private readonly destroyState: (state: number) => void;
 
-  private _create: () => number;
-  private _execute: (state: number, code: string) => string;
-  private _loadLsp: (state: number, source: string) => string;
-  private _handleMessage: (state: number, json: string) => string;
-  private _destroy: (state: number) => void;
-
-  private constructor(mod: any) {
-    this.module = mod;
-    this.cwrap = mod.cwrap;
-
-    this._create = this.cwrap("lus_create", "number", []);
-    this._execute = this.cwrap("lus_execute", "string", ["number", "string"]);
-    this._loadLsp = this.cwrap("lus_load_lsp", "string", [
+  private constructor(private readonly module: EmscriptenModule) {
+    this.createState = module.cwrap("lus_create", "number", []) as () => number;
+    this.executeSourceBytes = module.cwrap(
+      "lus_execute_bytes",
       "number",
-      "string",
-    ]);
-    this._handleMessage = this.cwrap("lus_handle_message", "string", [
+      ["number", "number", "number"],
+    ) as WasmByteDispatcher;
+    this.loadLanguageServerBytes = module.cwrap(
+      "lus_load_lsp_bytes",
       "number",
-      "string",
-    ]);
-    this._destroy = this.cwrap("lus_destroy", null, ["number"]);
+      ["number", "number", "number"],
+    ) as WasmByteDispatcher;
+    this.dispatchMessageBytes = module.cwrap(
+      "lus_handle_message_bytes",
+      "number",
+      ["number", "number", "number"],
+    ) as (
+      state: number,
+      inputPointer: number,
+      inputBytes: number,
+    ) => number;
+    this.outputLength = module.cwrap("lus_output_length", "number", [
+      "number",
+    ]) as (state: number) => number;
+    this.destroyState = module.cwrap("lus_destroy", null, ["number"]) as (
+      state: number,
+    ) => void;
   }
 
-  /**
-   * Load the WASM module from the extension's wasm/ directory.
-   */
   static async load(context: vscode.ExtensionContext): Promise<LusWasm> {
-    const wasmDir = path.join(context.extensionPath, "wasm");
-    const jsPath = path.join(wasmDir, "lus.js");
-
-    // Dynamic import of the Emscripten-generated ESM module
-    const { default: createModule } = await import(jsPath);
-    const mod = await createModule({
-      // Emscripten configuration
-      locateFile: (file: string) => path.join(wasmDir, file),
-    });
-
-    return new LusWasm(mod);
-  }
-
-  /**
-   * Create a new Lus state.
-   */
-  create(): number {
-    return this._create();
-  }
-
-  /**
-   * Execute a Lus code string. Returns the output.
-   */
-  execute(state: number, code: string): string {
-    return this._execute(state, code);
-  }
-
-  /**
-   * Load the language server into a Lus state.
-   * The source should be the content of wasm.lus.
-   * Returns empty string on success, or error message on failure.
-   */
-  loadLsp(state: number, source: string): string {
-    return this._loadLsp(state, source);
-  }
-
-  /**
-   * Handle a single LSP JSON-RPC message.
-   * Returns the raw output (Content-Length-delimited LSP messages).
-   */
-  handleMessage(state: number, json: string): string {
-    return this._handleMessage(state, json);
-  }
-
-  /**
-   * Destroy a Lus state.
-   */
-  destroy(state: number): void {
-    this._destroy(state);
-  }
-
-  /**
-   * Read the embedded LSP source from the WASM virtual filesystem.
-   * Falls back to reading from disk if not embedded.
-   */
-  getLspSource(context: vscode.ExtensionContext): string {
-    // Try reading wasm.lus from the language server directory
-    const candidates = [
-      path.join(context.extensionPath, "..", "lus-language", "wasm.lus"),
-      path.join(context.extensionPath, "lus-language", "wasm.lus"),
-    ];
-
-    for (const p of candidates) {
-      if (fs.existsSync(p)) {
-        return fs.readFileSync(p, "utf-8");
-      }
+    const wasmDirectory = path.join(context.extensionPath, "wasm");
+    const modulePath = path.join(wasmDirectory, "lus.mjs");
+    const moduleUrl = pathToFileURL(modulePath).href;
+    const imported = (await import(moduleUrl)) as {
+      default?: ModuleFactory;
+    };
+    if (typeof imported.default !== "function") {
+      throw new Error("The Lus WASM module does not export a module factory");
     }
 
-    throw new Error(
-      "Could not find lus-language/wasm.lus. Ensure the language server files are available.",
+    const module = await imported.default({
+      locateFile: (file: string) =>
+        pathToFileURL(path.join(wasmDirectory, packagedWasmAsset(file))).href,
+    });
+    return new LusWasm(module);
+  }
+
+  create(): number {
+    return this.createState();
+  }
+
+  execute(state: number, code: string): string {
+    return callWasmUtf8(
+      this.module,
+      this.executeSourceBytes,
+      this.outputLength,
+      state,
+      code,
+      { label: "WASM source" },
     );
+  }
+
+  loadLsp(state: number, source: string): string {
+    return callWasmUtf8(
+      this.module,
+      this.loadLanguageServerBytes,
+      this.outputLength,
+      state,
+      source,
+      { label: "WASM language server" },
+    );
+  }
+
+  handleMessage(state: number, json: string): string {
+    return dispatchJsonRpcUtf8(
+      this.module,
+      this.dispatchMessageBytes,
+      this.outputLength,
+      state,
+      json,
+    );
+  }
+
+  destroy(state: number): void {
+    this.destroyState(state);
+  }
+
+  getLspSource(): string {
+    try {
+      return this.module.FS.readFile("/lus-language/wasm.lus", {
+        encoding: "utf8",
+      });
+    } catch {
+      throw new Error("The embedded Lus language server is unavailable");
+    }
   }
 }

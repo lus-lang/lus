@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "outDir": ".test-out",
+    "rootDir": "src",
+    "sourceMap": false
+  },
+  "include": [
+    "src/lspFrames.ts",
+    "src/wasmAsset.ts",
+    "src/wasmUtf8.ts",
+    "src/workspaceProtocol.ts"
+  ]
+}

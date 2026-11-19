@@ -1,0 +1,11 @@
+{
+  "name": "Lus VS Code remote qualification",
+  "image": "emscripten/emsdk@sha256:af45409f3199d88db4b1b03af0098532c8fb33a375ac257463eeb0a622870d06",
+  "overrideCommand": true,
+  "remoteUser": "root",
+  "updateRemoteUserUID": false,
+  "shutdownAction": "stopContainer",
+  "containerEnv": {
+    "LUS_DEVCONTAINER_QUALIFICATION": "1"
+  }
+}

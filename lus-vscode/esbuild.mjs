@@ -1,6 +1,16 @@
 import * as esbuild from "esbuild";
+import { copyFile, mkdir } from "node:fs/promises";
 
 const watch = process.argv.includes("--watch");
+
+await mkdir("licenses", { recursive: true });
+await Promise.all([
+  copyFile(
+    "../licenses/LICENSE.EMSCRIPTEN.txt",
+    "licenses/LICENSE.EMSCRIPTEN.txt",
+  ),
+  copyFile("../licenses/LICENSE.LUALS.txt", "licenses/LICENSE.LUALS.txt"),
+]);
 
 const config = {
   entryPoints: ["src/extension.ts"],
@@ -10,8 +20,9 @@ const config = {
   format: "cjs",
   platform: "node",
   target: "node20",
-  sourcemap: true,
-  minify: false,
+  sourcemap: watch,
+  minify: !watch,
+  legalComments: "none",
 };
 
 if (watch) {

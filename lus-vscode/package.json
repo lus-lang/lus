@@ -19,9 +19,26 @@
     "Formatters"
   ],
   "activationEvents": [
-    "onLanguage:lus"
+    "onLanguage:lus",
+    "workspaceContains:**/*.lus"
+  ],
+  "extensionKind": [
+    "workspace"
   ],
   "main": "./out/extension.js",
+  "files": [
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "icon.png",
+    "language-configuration.json",
+    "licenses/LICENSE.EMSCRIPTEN.txt",
+    "licenses/LICENSE.LUALS.txt",
+    "out/extension.js",
+    "syntaxes/lus.tmLanguage.json",
+    "wasm/lus.mjs",
+    "wasm/lus.wasm"
+  ],
   "contributes": {
     "languages": [
       {
@@ -42,22 +59,41 @@
         "scopeName": "source.lus",
         "path": "./syntaxes/lus.tmLanguage.json"
       }
+    ],
+    "commands": [
+      {
+        "command": "lus.restartLanguageServer",
+        "title": "Lus: Restart Language Server"
+      }
     ]
   },
   "scripts": {
-    "prebuild": "node ../lus-spec/build-lsp.js && cp ../lus-textmate/lus.tmLanguage.json syntaxes/lus.tmLanguage.json",
+    "check:generated": "node ../lus-textmate/build-grammar.test.js && node ../lus-textmate/build-grammar.js --check && node scripts/check-generated.mjs",
+    "prebuild": "pnpm check:generated",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package",
-    "publish": "ovsx publish"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test test/*.test.cjs scripts/open-vsx-publisher.test.mjs",
+    "test:wasm": "node scripts/smoke-wasm.mjs",
+    "test:devcontainer": "node scripts/smoke-devcontainer.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "package": "pnpm build && vsce package --no-dependencies",
+    "publish": "ovsx publish",
+    "ci": "pnpm typecheck && pnpm test && pnpm build"
   },
+  "packageManager": "pnpm@10.18.0",
   "devDependencies": {
-    "@types/node": "^25.2.1",
-    "@types/vscode": "~1.100.0",
-    "esbuild": "^0.27.3",
-    "typescript": "^5.9.3"
+    "@devcontainers/cli": "0.88.0",
+    "@shikijs/engine-javascript": "4.2.0",
+    "@shikijs/vscode-textmate": "10.0.2",
+    "@types/node": "20.19.43",
+    "@types/vscode": "1.100.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.27.3",
+    "ovsx": "0.10.9",
+    "typescript": "5.9.3"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "9.0.1"
   }
 }
