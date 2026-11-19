@@ -2160,7 +2160,8 @@ fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     var handler_regs: []u8 = &.{};
     if (has_runtime) handler_regs = try evalHandlers(fs, names[0], line);
     // Compile-time constant: single const local with constant initializer.
-    if (names.len == values.len and !has_runtime) {
+    // Debug builds keep it in a register so the debugger can show it.
+    if (names.len == values.len and !has_runtime and !fs.c.opts.debug) {
         const lastn = names[names.len - 1];
         const k = try attribKind(fs, lastn, line, true);
         if (k == .const_) {

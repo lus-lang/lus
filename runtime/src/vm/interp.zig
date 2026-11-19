@@ -311,6 +311,7 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
                 error.MetaCall, error.SwitchLoop => continue,
                 error.Yield => return error.Yield,
                 error.LusError => {
+                    if (l.g.debugger) |d| d.raised(d.ctx, l);
                     if (!handleError(l, stop)) return error.LusError;
                     continue;
                 },
@@ -1660,7 +1661,9 @@ fn hookStep(l: *Thread, fi: usize, cl: *Closure, pc: u32) Error!void {
 /// events). Hooks do not fire while a hook runs.
 pub fn callHook(l: *Thread, event: []const u8, line: ?u32) Error!void {
     if (!l.allow_hook) return;
-    const f = @import("../lib/debuglib.zig").hookFunction(l) orelse return;
+    // An attached debugger takes every event in place of the hook function.
+    const dbg = l.g.debugger;
+    const f = if (dbg == null) @import("../lib/debuglib.zig").hookFunction(l) orelse return else Value.nil;
     l.allow_hook = false;
     defer l.allow_hook = true;
     const saved_top = l.top;
@@ -1668,6 +1671,7 @@ pub fn callHook(l: *Thread, event: []const u8, line: ?u32) Error!void {
     if (l.frames.items.len > 0) if (l.frame().closure) |cl| {
         l.top = @max(l.top, l.frame().base + cl.proto.max_stack);
     };
+    if (dbg) |d| return d.event(d.ctx, l, event, line);
     const ev = try l.newStringValue(event);
     l.hook_calling = true;
     _ = try ops.callN(l, f, &.{ ev, if (line) |n| Value.int(n) else .nil }, 0);

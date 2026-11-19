@@ -72,7 +72,7 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
         try l.push(Value.obj(.closure, cl));
         return;
     }
-    const r = codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flagsTable(g) }) catch return l.raiseMem();
+    const r = codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flagsTable(g), .debug = g.debugger != null }) catch return l.raiseMem();
     switch (r) {
         .err => |msg| {
             defer g.gpa.free(msg);

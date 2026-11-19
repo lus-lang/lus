@@ -20,7 +20,8 @@
   ],
   "activationEvents": [
     "onLanguage:lus",
-    "workspaceContains:**/*.lus"
+    "workspaceContains:**/*.lus",
+    "onDebugResolve:lus"
   ],
   "extensionKind": [
     "workspace"
@@ -64,6 +65,104 @@
       {
         "command": "lus.restartLanguageServer",
         "title": "Lus: Restart Language Server"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "lus"
+      }
+    ],
+    "configuration": {
+      "title": "Lus",
+      "properties": {
+        "lus.executablePath": {
+          "type": "string",
+          "default": "lus",
+          "markdownDescription": "The `lus` command used to debug programs. A relative path with a directory part is relative to the workspace folder."
+        }
+      }
+    },
+    "debuggers": [
+      {
+        "type": "lus",
+        "label": "Lus",
+        "languages": [
+          "lus"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The Lus script to run.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments passed to the script.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The working directory of the program.",
+                "default": "${workspaceFolder}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first line of the program.",
+                "default": false
+              },
+              "pledges": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Permissions granted to the program, as with `lus -P`.",
+                "default": []
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "lus",
+            "request": "launch",
+            "name": "Debug Lus File",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Lus: Launch File",
+            "description": "Debug the active Lus file.",
+            "body": {
+              "type": "lus",
+              "request": "launch",
+              "name": "Debug Lus File",
+              "program": "^\"\\${file}\"",
+              "cwd": "^\"\\${workspaceFolder}\""
+            }
+          },
+          {
+            "label": "Lus: Launch Program",
+            "description": "Debug a Lus script with arguments.",
+            "body": {
+              "type": "lus",
+              "request": "launch",
+              "name": "Debug ${1:program}",
+              "program": "^\"\\${workspaceFolder}/${1:main.lus}\"",
+              "args": [],
+              "stopOnEntry": false
+            }
+          }
+        ]
       }
     ]
   },

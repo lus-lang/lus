@@ -10,6 +10,7 @@ pub fn run(init: std.process.Init, cmd: []const u8, args: []const []const u8) !u
     if (std.mem.eql(u8, cmd, "build")) return @import("tools/build.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "check")) return @import("tools/check.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "doc")) return @import("tools/doc.zig").run(init, args);
+    if (std.mem.eql(u8, cmd, "debug")) return @import("tools/debug.zig").run(init, args);
     std.debug.print("lus {s}: not available yet\n", .{cmd});
     return 1;
 }

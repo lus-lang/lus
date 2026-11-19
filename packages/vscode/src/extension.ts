@@ -3,6 +3,7 @@ import {
   LanguageClient,
   LanguageClientOptions,
 } from "vscode-languageclient/node";
+import { registerDebugger } from "./debugAdapter";
 import {
   createWasmTransports,
   WasmDispatcher,
@@ -207,6 +208,7 @@ export async function activate(
   const lifecycleChannel = vscode.window.createOutputChannel("Lus");
   context.subscriptions.push(lifecycleChannel);
   lifecycleLog = new LifecycleLog(lifecycleChannel);
+  registerDebugger(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("lus.restartLanguageServer", async () => {

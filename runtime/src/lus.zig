@@ -68,5 +68,7 @@ test {
     _ = api;
     _ = bundle;
     _ = @import("tools/build.zig");
+    _ = @import("tools/debug.zig");
+    _ = @import("tools/dap.zig");
     _ = @import("lib/init.zig");
 }

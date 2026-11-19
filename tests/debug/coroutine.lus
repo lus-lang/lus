@@ -1,0 +1,17 @@
+global print, coroutine
+
+local function worker(limit)
+    local count = 0
+    while count < limit do
+        count = count + 1
+        coroutine.yield(count)
+    end
+    return "done"
+end
+
+local co = coroutine.create(worker)
+local spins = 0
+while true do
+    local ok, v = coroutine.resume(co, 1000000000)
+    spins = spins + 1
+end
