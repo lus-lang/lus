@@ -15,14 +15,17 @@ const channels: { name: string; release: ReleaseInfo | null }[] = [
 ]
 
 function downloads(release: ReleaseInfo) {
-  // installer/checksums only exist from 1.6.0 on; the filter hides
-  // them on older releases
+  // Releases list only the assets they publish, and the filter drops
+  // every link a release does not have.
   return [
     { label: "installer", href: release.links.windowsInstaller },
-    { label: "windows", href: release.links.windows },
-    { label: "macos", href: release.links.macos },
-    { label: "linux-glibc", href: release.links.linuxGlibc },
-    { label: "linux-musl", href: release.links.linuxMusl },
+    { label: "windows-x64", href: release.links.windowsX64 },
+    { label: "windows-arm64", href: release.links.windowsArm64 },
+    { label: "macos-arm64", href: release.links.macosArm64 },
+    { label: "macos-x64", href: release.links.macosX64 },
+    { label: "linux-x64", href: release.links.linuxX64 },
+    { label: "linux-arm64", href: release.links.linuxArm64 },
+    { label: "wasm", href: release.links.wasm },
     { label: "source", href: release.links.sourceTarball },
     { label: "checksums", href: release.links.checksums },
     { label: "notes", href: release.htmlUrl },

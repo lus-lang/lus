@@ -8,7 +8,7 @@ shortdesc: "Downloads, release archives, versioning, and integrity checks."
 
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 
-Each Lus release ships prebuilt archives for six targets, a standalone WebAssembly module, and a checksum manifest.
+Each Lus release ships prebuilt archives for six targets, a Windows installer, a standalone WebAssembly module, the VSCode extension, and a checksum manifest.
 
 ## Downloads
 
@@ -26,6 +26,8 @@ Every archive holds the `lus` interpreter together with the embedding libraries 
 | Windows | aarch64 | `lus-vX.Y.Z-aarch64-windows.zip` |
 
 The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture.
+
+The `install.sh` script on Linux and macOS downloads the archive for the machine it runs on, checks it against `SHA256SUMS`, and installs `bin/lus`. On Windows, `lus-setup.exe` installs the contents of the x86_64 archive and puts `lus` on `PATH`. It installs for the current user by default, and `/ALLUSERS` from an elevated prompt installs it for every user.
 
 ## Archive layout
 
@@ -49,7 +51,7 @@ The release also includes `lus.wasm`, the runtime built for `wasm32-wasi`. It ex
 
 ## Checking download integrity
 
-Each release includes `SHA256SUMS`, which lists the SHA-256 digest of every archive and of `lus.wasm`. A download is checked against it with `sha256sum`.
+Each release includes `SHA256SUMS`, which lists the SHA-256 digest of every archive, of `lus-setup.exe`, of `lus.wasm`, and of the VSCode extension files. A download is checked against it with `sha256sum`.
 
 ```bash
 curl -LO https://github.com/lus-lang/lus/releases/latest/download/SHA256SUMS
@@ -62,7 +64,7 @@ The digest detects corruption and any mismatch between an asset and the manifest
 
 ## How a release is made
 
-Pushing a tag such as `v2.0.0` starts the release workflow. The workflow first confirms that the tag matches the version in `runtime/build.zig.zon`. It then runs the unit, embedding, bundle, check, and documentation tests along with the conformance suite and the language server tests. When they pass, it cross compiles every target from one runner with Zig, builds `lus.wasm`, and writes `SHA256SUMS`.
+Pushing a tag such as `v2.0.0` starts the release workflow. The workflow first confirms that the tag matches the version in `runtime/build.zig.zon`. It then runs the unit, embedding, bundle, check, and documentation tests along with the conformance suite and the language server tests. When they pass, it cross compiles every target from one runner with Zig, builds `lus.wasm`, and packages the VSCode extension with the Open VSX publisher that later uploads it. A Windows runner then compiles `lus-setup.exe` from the x86_64 archive and installs and uninstalls it as a smoke test. The last step writes `SHA256SUMS` over every asset.
 
 The workflow publishes the result as a draft GitHub release titled after the version, with `CHANGELOG.md` as its notes. A maintainer reviews the draft and its assets and then publishes it.
 

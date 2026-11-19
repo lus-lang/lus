@@ -1,17 +1,30 @@
 ; Inno Setup script for the Lus Windows installer (lus-setup.exe).
 ;
-; Compiled in CI (see the installer job in .github/workflows/build.yml):
-;   ISCC.exe /DAppVer=1.7.0 /O<outdir> lus.iss
-; with the release lus.exe and lusc.exe placed next to this file beforehand.
+; The windows-installer job in .github/workflows/release.yml unpacks the
+; x86_64-windows release archive into the archive directory beside this
+; file and compiles the installer with
+;   ISCC.exe /DAppVer=2.0.0 /DNumVer=2.0.0 /O<outdir> lus.iss
+; AppVer is the release version and NumVer its numeric x.y.z part, which
+; the Windows version resource requires.
 ;
-; Per-user by default: installs to {localappdata}\Programs\Lus and
-; edits the user PATH, with no admin rights and no UAC prompt. Run with
+; The installer copies the archive as it is: bin\lus.exe with lus.dll,
+; the embedding libraries in lib, lus.h in include, and the license
+; texts. It adds {app}\bin to PATH.
+;
+; Per user by default: installs to {localappdata}\Programs\Lus and edits
+; the user PATH, with no admin rights and no UAC prompt. Run with
 ; /ALLUSERS from an elevated prompt for a machine-wide install
-; (Program Files + system PATH). Standard silent flags apply:
+; (Program Files and the system PATH). Standard silent flags apply:
 ; /VERYSILENT /SUPPRESSMSGBOXES.
 
 #ifndef AppVer
   #define AppVer "0.0.0"
+#endif
+#ifndef NumVer
+  #define NumVer "0.0.0"
+#endif
+#ifndef Archive
+  #define Archive "archive"
 #endif
 
 [Setup]
@@ -21,9 +34,9 @@ AppVersion={#AppVer}
 AppPublisher=The Lus Project
 AppPublisherURL=https://lus.dev
 AppSupportURL=https://lus.dev/manual
-LicenseFile=..\LICENSE.md
+LicenseFile={#Archive}\LICENSE.md
 ; {autopf} resolves per install mode: {localappdata}\Programs in
-; per-user mode, C:\Program Files under /ALLUSERS.
+; per-user mode, and C:\Program Files under /ALLUSERS.
 DefaultDirName={autopf}\Lus
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -32,29 +45,31 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ChangesEnvironment=yes
 OutputBaseFilename=lus-setup
-VersionInfoVersion={#AppVer}.0
+VersionInfoVersion={#NumVer}.0
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\lus.exe
+UninstallDisplayIcon={app}\bin\lus.exe
 
 [Files]
-Source: "lus.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "lusc.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\LICENSE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "..\licenses\*.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#Archive}\*"; DestDir: "{app}"; Excludes: "*.pdb"; \
+  Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Append {app} to PATH in the hive matching the install mode. The
-; NeedsAddPath gate keeps reinstalls/upgrades from duplicating the
-; entry; the uninstaller removes it in CurUninstallStepChanged.
+; Releases before 2.0 placed lus.exe and lusc.exe directly in {app}.
+[InstallDelete]
+Type: files; Name: "{app}\lus.exe"
+Type: files; Name: "{app}\lusc.exe"
+
+; Append {app}\bin to PATH in the hive matching the install mode. The
+; NeedsAddPath gate keeps reinstalls and upgrades from duplicating the
+; entry. The uninstaller removes it in CurUninstallStepChanged.
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-  ValueData: "{olddata};{app}"; \
-  Check: (not IsAdminInstallMode) and NeedsAddPath(ExpandConstant('{app}'))
+  ValueData: "{olddata};{app}\bin"; \
+  Check: (not IsAdminInstallMode) and NeedsAddPath(ExpandConstant('{app}\bin'))
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; \
-  ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \
-  Check: IsAdminInstallMode and NeedsAddPath(ExpandConstant('{app}'))
+  ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}\bin"; \
+  Check: IsAdminInstallMode and NeedsAddPath(ExpandConstant('{app}\bin'))
 
 [Code]
 function PathRegRoot: Integer;
@@ -84,21 +99,19 @@ begin
   Result := Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(OrigPath) + ';') = 0;
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+{ Removes Dir from PATH in the hive matching the install mode. }
+procedure RemovePath(Dir: String);
 var
-  OrigPath, Dir: String;
+  OrigPath: String;
   P: Integer;
 begin
-  if CurUninstallStep <> usPostUninstall then
-    exit;
-  Dir := ExpandConstant('{app}');
   if not RegQueryStringValue(PathRegRoot, PathRegKey, 'Path', OrigPath) then
     exit;
-  { Find the entry on the ';'-padded copy: for match position P,
-    P = 1 means Dir leads OrigPath (strip Dir plus its trailing ';'),
-    otherwise OrigPath[P-1] is the ';' preceding Dir (strip ';'+Dir).
-    Lowercased copies share lengths with the originals, so P indexes
-    OrigPath directly. }
+  { Find the entry on the semicolon-padded copy. For match position P,
+    P = 1 means Dir leads OrigPath, so strip Dir and the semicolon after
+    it. Otherwise OrigPath[P-1] is the semicolon before Dir, so strip
+    that semicolon and Dir. Lowercased copies share lengths with the
+    originals, so P indexes OrigPath directly. }
   P := Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(OrigPath) + ';');
   if P = 0 then
     exit;
@@ -107,4 +120,18 @@ begin
   else
     Delete(OrigPath, P - 1, Length(Dir) + 1);
   RegWriteExpandStringValue(PathRegRoot, PathRegKey, 'Path', OrigPath);
+end;
+
+// Releases before 2.0 put the application directory itself on PATH. An
+// upgrade replaces that entry with its bin subdirectory.
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RemovePath(ExpandConstant('{app}'));
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RemovePath(ExpandConstant('{app}\bin'));
 end;
