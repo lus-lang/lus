@@ -437,17 +437,26 @@ pub const Frame = extern struct {
     /// The bit of the flags word that `closes` sets.
     pub const closes_bit: u64 = flagMask("closes", 1) & 0x0101010101010101;
 
-    pub inline fn flagsWordPtr(f: *Frame) *u64 {
-        return @ptrCast(@alignCast(&f.boundary));
+    /// A word of a frame. Frames are aligned to 4 bytes on 32-bit
+    /// targets, so a word is only as aligned as the frame.
+    pub const Word = *align(@alignOf(Frame)) u64;
+
+    comptime {
+        std.debug.assert(@offsetOf(Frame, "boundary") % @alignOf(Frame) == 0);
+        std.debug.assert(@offsetOf(Frame, "pc") % @alignOf(Frame) == 0);
+    }
+
+    pub inline fn flagsWordPtr(f: *Frame) Word {
+        return @ptrCast(&f.boundary);
     }
     /// The word that holds the saved pc and the count of extra arguments.
-    pub inline fn pcWord(f: *Frame) *u64 {
-        return @ptrCast(@alignCast(&f.pc));
+    pub inline fn pcWord(f: *Frame) Word {
+        return @ptrCast(&f.pc);
     }
 
     /// The flags word of a frame, for tests of several flags at once.
     pub inline fn flagsWord(f: *const Frame) u64 {
-        const p: *const u64 = @ptrCast(@alignCast(&f.boundary));
+        const p: *align(@alignOf(Frame)) const u64 = @ptrCast(&f.boundary);
         return p.*;
     }
 
