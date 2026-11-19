@@ -465,7 +465,8 @@ fn load(l: *Thread) Error!u32 {
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(l.g.gpa);
         readChunk(l, chunk, &buf) catch |e| switch (e) {
-            error.LusError => {
+            // A state shutting down unwinds through every protection.
+            error.LusError => if (l.g.halting) return e else {
                 const msg = l.err;
                 try l.push(.nil);
                 try l.push(msg);

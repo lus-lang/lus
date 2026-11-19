@@ -292,7 +292,6 @@ end
 -- protections (load's reader runs under an internal pcall) without
 -- corrupting the suspended catch state.
 local function catch_load_reader_peek_loop_does_not_hang_interpreter_exit_test()
-    skip("2.0 bug: a worker that retries worker.peek through catch and a load reader is not woken at shutdown, so the process never exits")
     local w = worker.create(WDIR1 .. "catchloadpeek.lus")
     assert(w ~= nil)
 end

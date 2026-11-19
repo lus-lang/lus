@@ -91,7 +91,7 @@ local function sealed_entry_scripts_use_their_authorized_file_object_test()
 end
 
 local function sealed_init_files_use_their_authorized_file_object_test()
-    skip("2.0 has no init file environment variable, and the entry script read is not checked against the fs:read grant")
+    skip("2.0 design: the interpreter reads no init file from the environment")
     local root = fixture()
     local entry = fs.path.join(root, "entry.lus")
     local allowed = fs.path.join(root, "allowed-init.lus")
