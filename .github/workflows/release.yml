@@ -2,7 +2,9 @@ name: Release
 
 # A release builds the interpreter for every supported platform, the
 # embedding libraries, and lus.wasm from one runner, since Zig cross
-# compiles each target. The tag must match the version in
+# compiles each target. The VSCode extension and its Open VSX publisher
+# are packaged on Linux, and the Windows installer is compiled and smoke
+# tested on Windows. The tag must match the version in
 # runtime/build.zig.zon. The release is created as a draft so a maintainer
 # reviews it before publishing.
 
@@ -21,6 +23,8 @@ permissions:
 env:
   ZIG_VERSION: "0.17.1"
   NODE_VERSION: "24.7.0"
+  PNPM_VERSION: "10.18.0"
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -32,23 +36,25 @@ jobs:
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - name: Resolve the tag
-        id: tag
+      - name: Check the tag
         shell: bash
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
           version="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
-          if [ "v$version" != "$tag" ]; then
-            echo "tag $tag does not match build.zig.zon version $version" >&2
+          if [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG does not match build.zig.zon version $version" >&2
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Test before building
         working-directory: runtime
         run: |
           zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
           zig build -Doptimize=ReleaseSafe
           zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Test the Unix installer
+        run: node --test packaging/install/install.test.mjs
       - name: Build every target
         working-directory: runtime
         shell: bash
@@ -59,7 +65,18 @@ jobs:
             prefix="../out/$target"
             zig build -Doptimize=ReleaseFast -Dtarget="$target" --prefix "$prefix"
             zig build lib -Doptimize=ReleaseFast -Dtarget="$target" --prefix "$prefix"
-            name="lus-${{ steps.tag.outputs.tag }}-$target"
+            # The license of Lus and of every component compiled into the
+            # archive ship at its root.
+            cp ../LICENSE.md "$prefix/LICENSE.md"
+            cp ../packaging/notices/THIRD_PARTY_NOTICES.NATIVE.md "$prefix/THIRD_PARTY_NOTICES.md"
+            mkdir -p "$prefix/licenses"
+            for license in BROTLI LUA SQLITE TZDATA UNICODE ZIG ZSTD; do
+              cp "../packaging/licenses/LICENSE.$license.txt" "$prefix/licenses/"
+            done
+            case "$target" in
+              *linux-musl) cp ../packaging/licenses/LICENSE.MUSL.txt "$prefix/licenses/" ;;
+            esac
+            name="lus-$TAG-$target"
             case "$target" in
               *windows*) (cd "$prefix" && zip -qr "../../dist/$name.zip" .) ;;
               *) tar -C "$prefix" -czf "../dist/$name.tar.gz" . ;;
@@ -67,28 +84,171 @@ jobs:
           done
           zig build wasm
           cp zig-out/wasm/lus.wasm ../dist/lus.wasm
-      - name: Checksums
-        working-directory: dist
-        run: sha256sum * > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release
+          name: release-build
           path: dist/
+          if-no-files-found: error
+
+  vscode:
+    name: Package the VSCode extension
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pnpm
+        run: npm install --global "pnpm@$PNPM_VERSION"
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-build
+          path: release-build
+      - name: Stage the release lus.wasm
+        run: |
+          mkdir -p packages/wasm/dist
+          cp release-build/lus.wasm packages/wasm/dist/lus.wasm
+      # Open VSX takes plain x.y.z versions, and publish-vscode.yml publishes
+      # only stable tags, so a prerelease tag ships without the extension.
+      - name: Package the VSIX and the Open VSX publisher
+        if: ${{ startsWith(env.TAG, 'v') && !contains(env.TAG, '-') }}
+        working-directory: packages/vscode
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          out="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$out"
+          npm pkg set "version=$version"
+          pnpm typecheck
+          pnpm test
+          pnpm build
+          pnpm check:package
+          pnpm exec vsce package --no-dependencies --out "$out/lus-$version.vsix"
+          publisher="$out/lus-$version-open-vsx-publisher.cjs"
+          node scripts/build-open-vsx-publisher.mjs "$publisher"
+          expected=$(node -p 'require("../../packaging/release/manifest.json").components.vscodePublisher.sha256')
+          test "$(sha256sum "$publisher" | awk '{ print $1 }')" = "$expected"
+          test "$(node "$publisher" --version)" = "$(node -p 'require("./package.json").devDependencies.ovsx')"
+          ls -l "$out"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ startsWith(env.TAG, 'v') && !contains(env.TAG, '-') }}
+        with:
+          name: release-vscode
+          path: dist/
+          if-no-files-found: error
+
+  windows-installer:
+    name: Build the Windows installer
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-build
+          path: release-build
+      - name: Compile lus-setup.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:TAG.Substring(1)
+          $numeric = ($version -split "-")[0]
+          Expand-Archive "release-build\lus-$env:TAG-x86_64-windows.zip" packaging\install\archive
+          if (-not (Test-Path packaging\install\archive\bin\lus.exe)) {
+            throw "the x86_64-windows archive has no bin\lus.exe"
+          }
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $compiler "/DAppVer=$version" "/DNumVer=$numeric" "/O$env:GITHUB_WORKSPACE\dist" packaging\install\lus.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+      - name: Silent install smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = Start-Process -Wait -PassThru dist\lus-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/LOG=setup.log'
+          if ($setup.ExitCode -ne 0) {
+            Get-Content setup.log
+            throw "setup exited with $($setup.ExitCode)"
+          }
+          $root = "$env:LOCALAPPDATA\Programs\Lus"
+          foreach ($file in "bin\lus.exe", "include\lus.h", "LICENSE.md", "THIRD_PARTY_NOTICES.md") {
+            if (-not (Test-Path "$root\$file")) {
+              Get-Content setup.log
+              throw "$file was not installed"
+            }
+          }
+          $reported = & "$root\bin\lus.exe" -v 2>&1
+          if ("$reported" -notlike "*$($env:TAG.Substring(1))*") {
+            throw "lus -v printed $reported"
+          }
+          Set-Content -Path hello.lus -Value 'print("installer-source-ok")'
+          $output = & "$root\bin\lus.exe" hello.lus
+          if ("$output" -ne "installer-source-ok") { throw "lus printed $output" }
+          $userPath = (Get-ItemProperty HKCU:\Environment).Path
+          if ($userPath -notlike "*\Programs\Lus\bin*") {
+            throw "user PATH was not updated: $userPath"
+          }
+      - name: Silent uninstall smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "$env:LOCALAPPDATA\Programs\Lus"
+          Start-Process -Wait "$root\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES'
+          # The uninstaller hands off to a copy of itself, so wait for the
+          # files and the PATH entry to go.
+          $deadline = (Get-Date).AddSeconds(90)
+          while ($true) {
+            $removed = -not (Test-Path "$root\bin\lus.exe")
+            $userPath = (Get-ItemProperty HKCU:\Environment -ErrorAction SilentlyContinue).Path
+            if ($removed -and ($userPath -notlike "*\Programs\Lus*")) { break }
+            if ((Get-Date) -gt $deadline) { throw "uninstall did not complete" }
+            Start-Sleep -Seconds 2
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-windows-installer
+          path: dist/lus-setup.exe
+          if-no-files-found: error
 
   publish:
     name: Create the draft release
-    needs: build
+    needs: [build, vscode, windows-installer]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: release
+          pattern: release-*
           path: dist
+          merge-multiple: true
+      - name: Check the assets and write SHA256SUMS
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(lus.wasm lus-setup.exe)
+          for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos; do
+            expected+=("lus-$TAG-$target.tar.gz")
+          done
+          for target in x86_64-windows aarch64-windows; do
+            expected+=("lus-$TAG-$target.zip")
+          done
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            expected+=("lus-${TAG#v}.vsix" "lus-${TAG#v}-open-vsx-publisher.cjs")
+          fi
+          diff <(printf '%s\n' "${expected[@]}" | sort) <(ls -1 | sort)
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release create "$tag" dist/* --draft --verify-tag --title "Lus ${tag#v}" --notes-file CHANGELOG.md
+          gh release create "$TAG" dist/* --draft --verify-tag --title "Lus ${TAG#v}" --notes-file CHANGELOG.md
