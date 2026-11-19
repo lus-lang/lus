@@ -1,8 +1,9 @@
-//! The os library. Dates are computed in pure Zig: civil calendar
-//! arithmetic for UTC, and local time from the TZif database (the `TZ`
-//! variable, then /etc/localtime) with POSIX TZ rules for times past the
-//! last recorded transition. `os.date` formats like C `strftime` in the
-//! "C" locale.
+//! The os library. Dates are computed in pure Zig by `timecore.zig`,
+//! which the `time` library shares: civil calendar arithmetic for UTC,
+//! and local time from the TZif database (the `TZ` variable, then
+//! /etc/localtime, with the tzdata embedded in the runtime as a fallback
+//! for zone names) with POSIX TZ rules for times past the last recorded
+//! transition. `os.date` formats like C `strftime` in the "C" locale.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -44,7 +45,7 @@ pub fn open(l: *Thread) Error!void {
 
 /// Looks up an environment variable in the host provided map, or in the
 /// process environment when the C library is linked.
-fn envGet(l: *Thread, name: []const u8) ?[]const u8 {
+pub fn envGet(l: *Thread, name: []const u8) ?[]const u8 {
     if (l.g.environ) |m| return m.get(name);
     if (builtin.link_libc and builtin.os.tag != .windows) {
         var buf: [256]u8 = undefined;
@@ -244,328 +245,86 @@ fn execute(l: *Thread) Error!u32 {
 }
 
 // ---------------------------------------------------------------------
-// Calendar arithmetic (proleptic Gregorian, days since 1970-01-01)
-
-fn floorDiv(a: i64, b: i64) i64 {
-    return @divFloor(a, b);
-}
-
-fn daysFromCivil(y_in: i64, m: i64, d: i64) i64 {
-    const y = if (m <= 2) y_in - 1 else y_in;
-    const era = floorDiv(y, 400);
-    const yoe = y - era * 400;
-    const mp = if (m > 2) m - 3 else m + 9;
-    const doy = @divTrunc(153 * mp + 2, 5) + d - 1;
-    const doe = yoe * 365 + @divTrunc(yoe, 4) - @divTrunc(yoe, 100) + doy;
-    return era * 146097 + doe - 719468;
-}
-
-const Civil = struct { year: i64, month: i64, day: i64 };
-
-fn civilFromDays(z_in: i64) Civil {
-    const z = z_in + 719468;
-    const era = floorDiv(z, 146097);
-    const doe = z - era * 146097;
-    const yoe = @divTrunc(doe - @divTrunc(doe, 1460) + @divTrunc(doe, 36524) - @divTrunc(doe, 146096), 365);
-    const y = yoe + era * 400;
-    const doy = doe - (365 * yoe + @divTrunc(yoe, 4) - @divTrunc(yoe, 100));
-    const mp = @divTrunc(5 * doy + 2, 153);
-    const d = doy - @divTrunc(153 * mp + 2, 5) + 1;
-    const m = if (mp < 10) mp + 3 else mp - 9;
-    return .{ .year = if (m <= 2) y + 1 else y, .month = m, .day = d };
-}
-
-fn isLeap(y: i64) bool {
-    return @mod(y, 4) == 0 and (@mod(y, 100) != 0 or @mod(y, 400) == 0);
-}
-
-/// Broken-down time.
-const Tm = struct {
-    year: i64,
-    month: i64, // 1..12
-    day: i64,
-    hour: i64,
-    min: i64,
-    sec: i64,
-    wday: i64, // 0..6, Sunday is 0
-    yday: i64, // 0..365
-    isdst: bool,
-    utoff: i64,
-    abbr: [16]u8 = @splat(0),
-    abbr_len: usize = 0,
-
-    fn zone(t: *const Tm) []const u8 {
-        return t.abbr[0..t.abbr_len];
-    }
-};
-
-fn breakDown(t: i64, info: ZoneInfo) Tm {
-    const local = t +% info.utoff;
-    const days = floorDiv(local, 86400);
-    const secs = local - days * 86400;
-    const c = civilFromDays(days);
-    var tm: Tm = .{
-        .year = c.year,
-        .month = c.month,
-        .day = c.day,
-        .hour = @divTrunc(secs, 3600),
-        .min = @divTrunc(@mod(secs, 3600), 60),
-        .sec = @mod(secs, 60),
-        .wday = @mod(days + 4, 7), // 1970-01-01 was a Thursday
-        .yday = days - daysFromCivil(c.year, 1, 1),
-        .isdst = info.isdst,
-        .utoff = info.utoff,
-    };
-    const n = @min(info.abbr.len, tm.abbr.len);
-    @memcpy(tm.abbr[0..n], info.abbr[0..n]);
-    tm.abbr_len = n;
-    return tm;
-}
-
-// ---------------------------------------------------------------------
 // Time zones
 
-const ZoneInfo = struct {
-    utoff: i64,
-    isdst: bool,
-    abbr: []const u8,
-};
+const timecore = @import("timecore.zig");
+const Tm = timecore.Tm;
+const ZoneInfo = timecore.ZoneInfo;
+const utc_info = timecore.utc_info;
+const breakDown = timecore.breakDown;
+const daysFromCivil = timecore.daysFromCivil;
 
-const utc_info: ZoneInfo = .{ .utoff = 0, .isdst = false, .abbr = "UTC" };
-
-/// A POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3".
-const PosixRule = struct {
-    std_abbr: [16]u8 = @splat(0),
-    std_len: usize = 0,
-    std_off: i64 = 0, // seconds east of UTC
-    has_dst: bool = false,
-    dst_abbr: [16]u8 = @splat(0),
-    dst_len: usize = 0,
-    dst_off: i64 = 0,
-    start: DateRule = .{ .kind = .month, .month = 3, .week = 2, .wday = 0, .time = 7200 },
-    end: DateRule = .{ .kind = .month, .month = 11, .week = 1, .wday = 0, .time = 7200 },
-
-    const DateRule = struct {
-        kind: enum { julian1, julian0, month },
-        day: i64 = 0,
-        month: i64 = 0,
-        week: i64 = 0,
-        wday: i64 = 0,
-        time: i64 = 7200,
-    };
-
-    fn parse(s: []const u8) ?PosixRule {
-        var r: PosixRule = .{};
-        var i: usize = 0;
-        r.std_len = parseName(s, &i, &r.std_abbr) orelse return null;
-        r.std_off = -(parseOffset(s, &i) orelse return null);
-        if (i == s.len) return r;
-        r.dst_len = parseName(s, &i, &r.dst_abbr) orelse return null;
-        r.has_dst = true;
-        r.dst_off = r.std_off + 3600;
-        if (i < s.len and s[i] != ',') r.dst_off = -(parseOffset(s, &i) orelse return null);
-        if (i == s.len) return r;
-        if (s[i] != ',') return null;
-        i += 1;
-        r.start = parseDate(s, &i) orelse return null;
-        if (i >= s.len or s[i] != ',') return null;
-        i += 1;
-        r.end = parseDate(s, &i) orelse return null;
-        return r;
-    }
-
-    fn parseName(s: []const u8, i: *usize, buf: *[16]u8) ?usize {
-        var n: usize = 0;
-        if (i.* < s.len and s[i.*] == '<') {
-            i.* += 1;
-            while (i.* < s.len and s[i.*] != '>') : (i.* += 1) {
-                if (n < buf.len) buf[n] = s[i.*];
-                n += 1;
-            }
-            if (i.* >= s.len) return null;
-            i.* += 1;
-        } else {
-            while (i.* < s.len and std.ascii.isAlphabetic(s[i.*])) : (i.* += 1) {
-                if (n < buf.len) buf[n] = s[i.*];
-                n += 1;
-            }
-            if (n < 3) return null;
-        }
-        return @min(n, buf.len);
-    }
-
-    /// Parses [+-]hh[:mm[:ss]] into seconds (positive west, as written).
-    fn parseOffset(s: []const u8, i: *usize) ?i64 {
-        var sign: i64 = 1;
-        if (i.* < s.len and (s[i.*] == '+' or s[i.*] == '-')) {
-            if (s[i.*] == '-') sign = -1;
-            i.* += 1;
-        }
-        var total: i64 = 0;
-        var part: u32 = 0;
-        while (part < 3) : (part += 1) {
-            const start = i.*;
-            var v: i64 = 0;
-            while (i.* < s.len and std.ascii.isDigit(s[i.*])) : (i.* += 1) v = v * 10 + (s[i.*] - '0');
-            if (i.* == start) return if (part == 0) null else total * sign;
-            total += v * @as(i64, switch (part) {
-                0 => 3600,
-                1 => 60,
-                else => 1,
-            });
-            if (i.* < s.len and s[i.*] == ':') i.* += 1 else break;
-        }
-        return total * sign;
-    }
-
-    fn parseNum(s: []const u8, i: *usize) ?i64 {
-        const start = i.*;
-        var v: i64 = 0;
-        while (i.* < s.len and std.ascii.isDigit(s[i.*])) : (i.* += 1) v = v * 10 + (s[i.*] - '0');
-        return if (i.* == start) null else v;
-    }
-
-    fn parseDate(s: []const u8, i: *usize) ?DateRule {
-        var d: DateRule = undefined;
-        if (i.* < s.len and s[i.*] == 'J') {
-            i.* += 1;
-            d = .{ .kind = .julian1, .day = parseNum(s, i) orelse return null };
-        } else if (i.* < s.len and s[i.*] == 'M') {
-            i.* += 1;
-            const m = parseNum(s, i) orelse return null;
-            if (i.* >= s.len or s[i.*] != '.') return null;
-            i.* += 1;
-            const w = parseNum(s, i) orelse return null;
-            if (i.* >= s.len or s[i.*] != '.') return null;
-            i.* += 1;
-            const wd = parseNum(s, i) orelse return null;
-            d = .{ .kind = .month, .month = m, .week = w, .wday = wd };
-        } else {
-            d = .{ .kind = .julian0, .day = parseNum(s, i) orelse return null };
-        }
-        d.time = 7200;
-        if (i.* < s.len and s[i.*] == '/') {
-            i.* += 1;
-            d.time = parseOffset(s, i) orelse return null;
-        }
-        return d;
-    }
-
-    /// Local time (seconds since the epoch, in local wall clock) at which
-    /// the rule fires in `year`.
-    fn ruleLocal(d: DateRule, year: i64) i64 {
-        const jan1 = daysFromCivil(year, 1, 1);
-        const day: i64 = switch (d.kind) {
-            .julian1 => blk: {
-                // Day 1..365, February 29 never counted.
-                var n = d.day - 1;
-                if (isLeap(year) and d.day >= 60) n += 1;
-                break :blk jan1 + n;
-            },
-            .julian0 => jan1 + d.day,
-            .month => blk: {
-                const first = daysFromCivil(year, d.month, 1);
-                const first_wday = @mod(first + 4, 7);
-                var dd = first + @mod(d.wday - first_wday, 7) + (d.week - 1) * 7;
-                if (d.week == 5) {
-                    const mdays = daysFromCivil(if (d.month == 12) year + 1 else year, if (d.month == 12) 1 else d.month + 1, 1) - first;
-                    while (dd - first >= mdays) dd -= 7;
-                }
-                break :blk dd;
-            },
-        };
-        return day * 86400 + d.time;
-    }
-
-    fn info(r: *const PosixRule, t: i64) ZoneInfo {
-        const std_info: ZoneInfo = .{ .utoff = r.std_off, .isdst = false, .abbr = r.std_abbr[0..r.std_len] };
-        if (!r.has_dst) return std_info;
-        const dst_info: ZoneInfo = .{ .utoff = r.dst_off, .isdst = true, .abbr = r.dst_abbr[0..r.dst_len] };
-        const year = civilFromDays(floorDiv(t + r.std_off, 86400)).year;
-        const start = ruleLocal(r.start, year) - r.std_off;
-        const end = ruleLocal(r.end, year) - r.dst_off;
-        const in_dst = if (start < end) (t >= start and t < end) else !(t >= end and t < start);
-        return if (in_dst) dst_info else std_info;
-    }
-};
-
+/// The local time zone, held in the flat layout of `timecore`. A zone
+/// without memory is UTC.
 const Zone = struct {
-    tz: ?std.tz.Tz = null,
-    rule: ?PosixRule = null,
+    gpa: std.mem.Allocator,
+    mem: ?[]align(8) u8 = null,
 
     fn deinit(z: *Zone) void {
-        if (z.tz) |*t| t.deinit();
+        if (z.mem) |m| z.gpa.free(m);
     }
 
     fn info(z: *const Zone, t: i64) ZoneInfo {
-        if (z.tz) |*tz| {
-            const trans = tz.transitions;
-            if (trans.len == 0 or t < trans[0].ts) {
-                if (trans.len == 0) {
-                    if (z.rule) |*r| return r.info(t);
-                }
-                if (tz.timetypes.len == 0) return utc_info;
-                return typeInfo(&tz.timetypes[0]);
-            }
-            if (t >= trans[trans.len - 1].ts) {
-                if (z.rule) |*r| return r.info(t);
-                return typeInfo(trans[trans.len - 1].timetype);
-            }
-            // Binary search for the last transition at or before t.
-            var lo: usize = 0;
-            var hi: usize = trans.len - 1;
-            while (hi - lo > 1) {
-                const mid = (lo + hi) / 2;
-                if (trans[mid].ts <= t) lo = mid else hi = mid;
-            }
-            return typeInfo(trans[lo].timetype);
-        }
-        if (z.rule) |*r| return r.info(t);
-        return utc_info;
-    }
-
-    fn typeInfo(tt: *const std.tz.Timetype) ZoneInfo {
-        return .{ .utoff = tt.offset, .isdst = tt.isDst(), .abbr = tt.name() };
+        const m = z.mem orelse return utc_info;
+        const flat: *const timecore.FlatZone = @ptrCast(m.ptr);
+        return flat.info(t);
     }
 };
 
-fn loadTzFile(l: *Thread, path: []const u8) ?std.tz.Tz {
+/// Copies a TZif record into a freshly allocated flat zone.
+fn flatFromTzif(gpa: std.mem.Allocator, bytes: []const u8) ?[]align(8) u8 {
+    const t = timecore.Tzif.scan(bytes) catch return null;
+    const mem = gpa.alignedAlloc(u8, .@"8", t.flatSize()) catch return null;
+    _ = t.fill(mem) catch {
+        gpa.free(mem);
+        return null;
+    };
+    return mem;
+}
+
+fn loadTzFile(l: *Thread, path: []const u8) ?[]align(8) u8 {
     const gpa = l.g.gpa;
     const bytes = std.Io.Dir.cwd().readFileAlloc(l.g.io, path, gpa, .limited(1 << 20)) catch return null;
     defer gpa.free(bytes);
-    // Version 4 files only add leap second semantics, which this reader
-    // does not use. Present them as version 3.
-    var i: usize = 0;
-    while (std.mem.indexOfPos(u8, bytes, i, "TZif4")) |p| : (i = p + 5) bytes[p + 4] = '3';
-    var r: std.Io.Reader = .fixed(bytes);
-    return std.tz.Tz.parse(gpa, &r) catch null;
+    return flatFromTzif(gpa, bytes);
+}
+
+/// Loads a named zone from the system database, then from the tzdata
+/// embedded in the runtime.
+fn loadNamedZone(l: *Thread, name: []const u8) ?[]align(8) u8 {
+    if (name.len == 0 or std.mem.indexOf(u8, name, "..") != null) return null;
+    var buf: [512]u8 = undefined;
+    if (std.fmt.bufPrint(&buf, "/usr/share/zoneinfo/{s}", .{name})) |p| {
+        if (loadTzFile(l, p)) |m| return m;
+    } else |_| {}
+    const gpa = l.g.gpa;
+    const blob = timecore.decompressTzdata(gpa) catch return null;
+    defer gpa.free(blob);
+    const rec = timecore.findZone(blob, name) orelse return null;
+    return flatFromTzif(gpa, rec);
+}
+
+fn ruleZone(l: *Thread, spec: []const u8) Zone {
+    const gpa = l.g.gpa;
+    const r = timecore.PosixRule.parse(spec) orelse return .{ .gpa = gpa };
+    const mem = gpa.alignedAlloc(u8, .@"8", timecore.FlatZone.sizeFor(0, 0, 0)) catch return .{ .gpa = gpa };
+    _ = timecore.FlatZone.initRule(mem, r);
+    return .{ .gpa = gpa, .mem = mem };
 }
 
 /// Loads the local time zone. The caller deinitializes the result.
 fn localZone(l: *Thread) Zone {
-    if (builtin.os.tag == .windows) return .{};
-    var z: Zone = .{};
+    const gpa = l.g.gpa;
+    if (builtin.os.tag == .windows) return .{ .gpa = gpa };
     if (envGet(l, "TZ")) |tz_raw| {
         var tzs = tz_raw;
-        if (tzs.len == 0) return .{ .rule = PosixRule.parse("UTC0") };
+        if (tzs.len == 0) return ruleZone(l, "UTC0");
         if (tzs[0] == ':') tzs = tzs[1..];
-        if (tzs.len > 0 and tzs[0] == '/') {
-            z.tz = loadTzFile(l, tzs);
-        } else if (tzs.len > 0 and std.mem.indexOf(u8, tzs, "..") == null) {
-            var buf: [512]u8 = undefined;
-            if (std.fmt.bufPrint(&buf, "/usr/share/zoneinfo/{s}", .{tzs})) |p| z.tz = loadTzFile(l, p) else |_| {}
-        }
-        if (z.tz == null) {
-            z.rule = PosixRule.parse(tzs);
-            return z;
-        }
-    } else {
-        z.tz = loadTzFile(l, "/etc/localtime");
+        const mem = if (tzs.len > 0 and tzs[0] == '/') loadTzFile(l, tzs) else loadNamedZone(l, tzs);
+        if (mem) |m| return .{ .gpa = gpa, .mem = m };
+        return ruleZone(l, tzs);
     }
-    if (z.tz) |tz| {
-        if (tz.footer) |f| z.rule = PosixRule.parse(f);
-    }
-    return z;
+    return .{ .gpa = gpa, .mem = loadTzFile(l, "/etc/localtime") };
 }
 
 // ---------------------------------------------------------------------
@@ -662,7 +421,7 @@ fn time(l: *Thread) Error!u32 {
     const dst_v = try ops.index(l, t, try l.newStringValue("isdst"));
     const isdst: ?bool = if (dst_v.isNil()) null else dst_v.truthy();
     // Normalize the month first, then let day arithmetic carry the rest.
-    const y = year + 1900 + floorDiv(month, 12);
+    const y = year + 1900 + @divFloor(month, 12);
     const m = @mod(month, 12) + 1;
     const days = daysFromCivil(y, m, 1) + day - 1;
     const local = days * 86400 + hour * 3600 + min * 60 + sec;
@@ -682,13 +441,6 @@ fn difftime(l: *Thread) Error!u32 {
     const t2 = try aux.checkInt(l, 2);
     return aux.ret(l, Value.float(@as(f64, @floatFromInt(t1)) - @as(f64, @floatFromInt(t2))));
 }
-
-const day_names = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
-const month_names = [_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
-
-/// Conversion specifiers accepted after '%', grouped by length as in Lua.
-const single_options = "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%";
-const double_options = [_][]const u8{ "Ec", "EC", "Ex", "EX", "Ey", "EY", "Od", "Oe", "OH", "OI", "Om", "OM", "OS", "Ou", "OU", "OV", "Ow", "OW", "Oy" };
 
 fn date(l: *Thread) Error!u32 {
     var fmt = (try aux.optString(l, 1, "%c")).?;
@@ -723,161 +475,9 @@ fn date(l: *Thread) Error!u32 {
         }
         i += 1;
         const rest = fmt[i..];
-        var conv: u8 = 0;
-        if (rest.len >= 1 and std.mem.indexOfScalar(u8, single_options, rest[0]) != null) {
-            conv = rest[0];
-            i += 1;
-        } else if (rest.len >= 2) {
-            for (double_options) |o| {
-                if (rest[0] == o[0] and rest[1] == o[1]) {
-                    conv = o[1];
-                    i += 2;
-                    break;
-                }
-            }
-        }
-        if (conv == 0) return aux.argError(l, 1, "invalid conversion specifier '%{s}'", .{rest});
-        formatConv(gpa, &buf, conv, &tm) catch return l.raiseMem();
+        const m = timecore.matchConversion(rest) orelse return aux.argError(l, 1, "invalid conversion specifier '%{s}'", .{rest});
+        i += m.len;
+        timecore.formatConv(gpa, &buf, m.conv, &tm) catch return l.raiseMem();
     }
     return aux.ret(l, try lossyString(l, buf.items));
-}
-
-fn isoWeek(tm: *const Tm) struct { year: i64, week: i64 } {
-    const iso_wday = @mod(tm.wday + 6, 7); // Monday is 0
-    var week = @divFloor(tm.yday - iso_wday + 10, 7);
-    var year = tm.year;
-    if (week < 1) {
-        year -= 1;
-        week = weeksInYear(year);
-    } else if (week > weeksInYear(year)) {
-        year += 1;
-        week = 1;
-    }
-    return .{ .year = year, .week = week };
-}
-
-fn weeksInYear(y: i64) i64 {
-    const p = struct {
-        fn f(x: i64) i64 {
-            return @mod(x + floorDiv(x, 4) - floorDiv(x, 100) + floorDiv(x, 400), 7);
-        }
-    }.f;
-    return if (p(y) == 4 or p(y - 1) == 3) 53 else 52;
-}
-
-fn formatConv(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), conv: u8, tm: *const Tm) !void {
-    switch (conv) {
-        'a' => try buf.appendSlice(gpa, day_names[@intCast(tm.wday)][0..3]),
-        'A' => try buf.appendSlice(gpa, day_names[@intCast(tm.wday)]),
-        'b', 'h' => try buf.appendSlice(gpa, month_names[@intCast(tm.month - 1)][0..3]),
-        'B' => try buf.appendSlice(gpa, month_names[@intCast(tm.month - 1)]),
-        'c' => {
-            try formatConv(gpa, buf, 'a', tm);
-            try buf.append(gpa, ' ');
-            try formatConv(gpa, buf, 'b', tm);
-            try buf.append(gpa, ' ');
-            try formatConv(gpa, buf, 'e', tm);
-            try buf.append(gpa, ' ');
-            try formatConv(gpa, buf, 'T', tm);
-            try buf.append(gpa, ' ');
-            try formatConv(gpa, buf, 'Y', tm);
-        },
-        'C' => try pad2(gpa, buf, floorDiv(tm.year, 100)),
-        'd' => try pad2(gpa, buf, tm.day),
-        'D', 'x' => {
-            try pad2(gpa, buf, tm.month);
-            try buf.append(gpa, '/');
-            try pad2(gpa, buf, tm.day);
-            try buf.append(gpa, '/');
-            try pad2(gpa, buf, @mod(tm.year, 100));
-        },
-        'e' => try buf.print(gpa, "{d: >2}", .{@as(u64, @intCast(tm.day))}),
-        'F' => {
-            try formatConv(gpa, buf, 'Y', tm);
-            try buf.append(gpa, '-');
-            try pad2(gpa, buf, tm.month);
-            try buf.append(gpa, '-');
-            try pad2(gpa, buf, tm.day);
-        },
-        'g' => try pad2(gpa, buf, @mod(isoWeek(tm).year, 100)),
-        'G' => try buf.print(gpa, "{d}", .{isoWeek(tm).year}),
-        'H' => try pad2(gpa, buf, tm.hour),
-        'I' => try pad2(gpa, buf, if (@mod(tm.hour, 12) == 0) 12 else @mod(tm.hour, 12)),
-        'j' => try buf.print(gpa, "{d:0>3}", .{@as(u64, @intCast(tm.yday + 1))}),
-        'm' => try pad2(gpa, buf, tm.month),
-        'M' => try pad2(gpa, buf, tm.min),
-        'n' => try buf.append(gpa, '\n'),
-        'p' => try buf.appendSlice(gpa, if (tm.hour < 12) "AM" else "PM"),
-        'r' => {
-            try formatConv(gpa, buf, 'I', tm);
-            try buf.append(gpa, ':');
-            try pad2(gpa, buf, tm.min);
-            try buf.append(gpa, ':');
-            try pad2(gpa, buf, tm.sec);
-            try buf.append(gpa, ' ');
-            try formatConv(gpa, buf, 'p', tm);
-        },
-        'R' => {
-            try pad2(gpa, buf, tm.hour);
-            try buf.append(gpa, ':');
-            try pad2(gpa, buf, tm.min);
-        },
-        'S' => try pad2(gpa, buf, tm.sec),
-        't' => try buf.append(gpa, '\t'),
-        'T', 'X' => {
-            try pad2(gpa, buf, tm.hour);
-            try buf.append(gpa, ':');
-            try pad2(gpa, buf, tm.min);
-            try buf.append(gpa, ':');
-            try pad2(gpa, buf, tm.sec);
-        },
-        'u' => try buf.print(gpa, "{d}", .{if (tm.wday == 0) 7 else tm.wday}),
-        'U' => try pad2(gpa, buf, @divFloor(tm.yday + 7 - tm.wday, 7)),
-        'V' => try pad2(gpa, buf, isoWeek(tm).week),
-        'w' => try buf.print(gpa, "{d}", .{tm.wday}),
-        'W' => try pad2(gpa, buf, @divFloor(tm.yday + 7 - @mod(tm.wday + 6, 7), 7)),
-        'y' => try pad2(gpa, buf, @mod(tm.year, 100)),
-        'Y' => try buf.print(gpa, "{d}", .{tm.year}),
-        'z' => {
-            const off = tm.utoff;
-            const a: u64 = @abs(off);
-            try buf.print(gpa, "{c}{d:0>2}{d:0>2}", .{ @as(u8, if (off < 0) '-' else '+'), a / 3600, (a % 3600) / 60 });
-        },
-        'Z' => try buf.appendSlice(gpa, tm.zone()),
-        '%' => try buf.append(gpa, '%'),
-        else => unreachable,
-    }
-}
-
-/// Two digit zero padded number. Negative values keep their sign.
-fn pad2(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), n: i64) !void {
-    if (n < 0) {
-        try buf.print(gpa, "-{d:0>2}", .{@as(u64, @intCast(-n))});
-    } else {
-        try buf.print(gpa, "{d:0>2}", .{@as(u64, @intCast(n))});
-    }
-}
-
-test "civil calendar round trip" {
-    const testing = std.testing;
-    try testing.expectEqual(@as(i64, 0), daysFromCivil(1970, 1, 1));
-    try testing.expectEqual(@as(i64, 11017), daysFromCivil(2000, 3, 1));
-    var d: i64 = -800000;
-    while (d < 800000) : (d += 997) {
-        const c = civilFromDays(d);
-        try testing.expectEqual(d, daysFromCivil(c.year, c.month, c.day));
-    }
-}
-
-test "posix tz rule" {
-    const testing = std.testing;
-    const r = PosixRule.parse("CET-1CEST,M3.5.0,M10.5.0/3").?;
-    try testing.expectEqual(@as(i64, 3600), r.std_off);
-    try testing.expectEqual(@as(i64, 7200), r.dst_off);
-    // 2024-07-01 12:00 UTC is summer time, 2024-01-15 is winter time.
-    try testing.expect(r.info(1719835200).isdst);
-    try testing.expect(!r.info(1705320000).isdst);
-    // DST starts 2024-03-31 01:00 UTC.
-    try testing.expect(!r.info(1711846799).isdst);
-    try testing.expect(r.info(1711846800).isdst);
 }
