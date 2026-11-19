@@ -76,8 +76,10 @@ pub const Val = extern struct {
     bits: u64 align(8),
 
     /// `virt` names a table of the snapshot that is not allocated yet,
-    /// by its index among those tables.
-    pub const Kind = enum(u8) { reg, freg, spill, imm, virt };
+    /// by its index among those tables. `pair` is the result of a direct
+    /// call as the callee returned it, the payload and the tag in the
+    /// two registers of the convention.
+    pub const Kind = enum(u8) { reg, freg, spill, imm, virt, pair };
 };
 
 /// A table that an exit allocates.
@@ -129,11 +131,46 @@ pub const Unit = struct {
     /// Slots that the frames of the unit cover, from register zero of
     /// the root.
     extent: u32 = 0,
-    /// Functions compiled inline, which the unit keeps alive.
+    /// Functions compiled inline or called directly, which the unit
+    /// keeps alive.
     protos: []*Proto = &.{},
     exits: u32 = 0,
     retired: bool = false,
+    /// The direct calls the unit makes.
+    sites: []ir.Site = &.{},
+    /// Bytes of native stack the unit holds while it runs: for a unit
+    /// that keeps a frame, its spilled values.
+    frame_bytes: usize = 0,
+    /// The unit is entered directly (`ir.Func.direct`). `total` is the
+    /// native frame of one activation, with the return address in its
+    /// top word. `ret_a` and `ret_b` are the return addresses of the
+    /// calls that the two entries with a frame protocol make.
+    direct: bool = false,
+    total: usize = 0,
+    direct_entry: usize = 0,
+    /// The entry of a call that starts a chain of direct calls. It
+    /// sets how far the chain may take the native stack, from the room
+    /// the Lus stack has left and from `chain_ratio`: the most slots
+    /// that the chain covers per sixteen bytes of native stack.
+    root_entry: usize = 0,
+    chain_ratio: u32 = 1,
+    ret_a: usize = 0,
+    ret_b: usize = 0,
+    /// Nonzero while the unit takes new direct calls. Callers in other
+    /// units test this word before they call.
+    cell: usize = 0,
+    sig: [ir.max_direct_params]ir.Ty = @splat(.nil),
+    ret_ty: ?ir.Ty = null,
+    writes: u32 = 0,
 };
+
+/// Bytes at the low end of the native stack of a thread that chains of
+/// direct calls leave to the runtime, which builds their frames there
+/// when optimized code is left.
+pub const direct_stack_reserve: usize = 128 * 1024;
+/// Bytes of native stack below the outermost entry into Lus code that
+/// chains of direct calls may use on a stack whose bounds are unknown.
+pub const direct_stack_budget: usize = 160 * 1024;
 
 pub fn counts(g: *Global) bool {
     return g.jit.opt != .off;
@@ -179,6 +216,12 @@ pub fn isOptimized(p: *Proto) bool {
         if (!u.retired) return true;
     }
     return false;
+}
+
+/// The optimized code of `p` that takes direct calls, if it has some.
+pub fn directUnit(p: *Proto) ?*Unit {
+    const u = unitAt(p, 0) orelse return null;
+    return if (u.direct and u.cell != 0) u else null;
 }
 
 fn isDeclined(info: *Info, pc: u32) bool {
@@ -254,16 +297,29 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var persist: lower.Persist = .{};
+    // A function that is compiled from its first instruction is built
+    // for direct entry first, and with a frame when that fails.
+    var persist: lower.Persist = .{ .direct = pc == 0 and g.jit.direct };
     var loops: []lower.Lower.LoopInfo = &.{};
     var inlined: []*Proto = &.{};
     var cfg: *flow_mod.Cfg = undefined;
     var func: *ir.Func = undefined;
     var tries: u32 = 0;
     while (true) : (tries += 1) {
-        if (tries > 8) return null;
+        if (tries > 8) {
+            if (!persist.direct) return null;
+            persist = .{};
+            tries = 0;
+        }
         func = lower.Lower.build(arena, l, p, pc, &persist, &loops, &cfg, &inlined) catch |e| switch (e) {
             error.Rebuild => continue,
+            error.NotDirect => {
+                if (!persist.direct) return null;
+                if (g.jit.opt_dump) std.debug.print("  rebuild: the function keeps a frame\n", .{});
+                persist = .{};
+                tries = 0;
+                continue;
+            },
             else => return null,
         };
         break;
@@ -292,6 +348,20 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
         unit.call_entry = base + cg.em.call_entry;
         unit.tail_entry = base + cg.em.tail_entry;
     }
+    unit.frame_bytes = @intCast(cg.frame);
+    if (func.direct) {
+        unit.direct = true;
+        unit.total = @intCast(cg.total);
+        unit.direct_entry = base + cg.direct_off;
+        unit.root_entry = base + cg.root_off;
+        unit.chain_ratio = cg.chain_ratio;
+        unit.ret_a = base + cg.ret_a_off;
+        unit.ret_b = base + cg.ret_b_off;
+        unit.sig = func.sig;
+        unit.ret_ty = func.ret_ty;
+        unit.writes = func.writes;
+    }
+    unit.sites = gpa.dupe(ir.Site, func.sites.items) catch return null;
 
     // What the exits need, in a form that outlives the compilation.
     unit.snaps = gpa.dupe(ir.Snap, func.snaps.items) catch return null;
@@ -329,7 +399,14 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
         }
     }
     unit.protos = gpa.dupe(*Proto, inlined) catch return null;
-    info.units.append(gpa, unit) catch return null;
+    // Leaving optimized code inside a direct call finds the unit of
+    // every caller by its return address.
+    if (unit.sites.len != 0) g.jit.callers.append(gpa, unit) catch return null;
+    info.units.append(gpa, unit) catch {
+        if (unit.sites.len != 0) _ = g.jit.callers.pop();
+        return null;
+    };
+    unit.cell = 1;
     // The function now refers to the functions compiled inline.
     if (inlined.len != 0) gc.barrierBack(g, &p.hdr);
     ok = true;
@@ -339,6 +416,7 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
 
 fn valOf(f: *ir.Func, ra: regalloc.Result, r: ir.Ref) Val {
     const i = f.at(r);
+    if (i.op == .dcall) return .{ .kind = .pair, .ty = .nil, .bits = 0 };
     if (i.isConst()) return .{ .kind = .imm, .ty = i.ty, .bits = @bitCast(i.imm) };
     return switch (ra.loc[r]) {
         .reg => |x| .{ .kind = .reg, .ty = i.ty, .bits = x },
@@ -357,6 +435,13 @@ fn freeUnit(g: *Global, u: *Unit) void {
     gpa.free(u.virts);
     gpa.free(u.vfields);
     gpa.free(u.protos);
+    gpa.free(u.sites);
+    for (g.jit.callers.items, 0..) |x, i| {
+        if (x == u) {
+            _ = g.jit.callers.swapRemove(i);
+            break;
+        }
+    }
     gpa.destroy(u);
 }
 
@@ -366,6 +451,7 @@ fn freeUnit(g: *Global, u: *Unit) void {
 fn retire(g: *Global, u: *Unit) void {
     if (u.retired) return;
     u.retired = true;
+    u.cell = 0;
     const p = u.proto;
     if (u.entry_pc == 0) if (p.jit_code) |c| {
         const code: *jit.Code = @ptrCast(@alignCast(c));
@@ -406,6 +492,8 @@ fn valueOf(v: Val, regs: [*]const u64) Value {
         .spill => regs[save_words + v.bits],
         .imm => v.bits,
         .virt => unreachable,
+        // A callee that returned nothing leaves nil.
+        .pair => return if (regs[1] == codegen.no_result) .nil else Value.make(regs[0], @fromBackingInt(@as(u8, @truncate(regs[1])))),
     };
     return switch (v.ty) {
         .nil, .void => .nil,
@@ -418,9 +506,13 @@ fn valueOf(v: Val, regs: [*]const u64) Value {
 /// tables that the exit allocated, or is null while the collector runs,
 /// when a slot that will hold such a table is left alone.
 fn writeBack(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, tables: ?[]const *Table) []FrameMeta {
+    return writeBackAt(l, u, snap, regs, tables, l.frame().base);
+}
+
+/// The same for a root frame whose first register is the slot `base`.
+fn writeBackAt(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, tables: ?[]const *Table, base: u32) []FrameMeta {
     const s = u.snaps[snap];
     const frames = u.frames[s.frames..][0..s.nframes];
-    const base = l.frame().base;
     for (frames) |fm| {
         for (u.entries[fm.entries..][0..fm.count]) |e| {
             if (e.val.kind == .virt) {
@@ -457,6 +549,284 @@ fn materialize(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, out: *[max_v
         out[i] = t;
     }
     return out[0..s.nvirts];
+}
+
+// ---------------------------------------------------------------------
+// Frames of direct calls
+//
+// A direct call pushes no frame. While a chain of direct calls runs, the
+// native stack holds one frame per activation: the spilled values of the
+// caller and the address its call returns to. That address names a call
+// site, and the site names a snapshot of the caller. Leaving optimized
+// code inside the chain walks the native frames from the innermost
+// activation outward and builds, for every activation, the frame the
+// interpreter would have pushed, with the registers the snapshot lists.
+// Nothing can look at the frames of a thread while a chain runs, because
+// directly entered code calls nothing but itself and its like, so the
+// frames exist whenever anything reads them.
+
+const Hit = struct {
+    u: *Unit,
+    site: *const ir.Site,
+};
+
+fn siteIn(u: *Unit, ra: usize) ?*const ir.Site {
+    const start = @intFromPtr(u.code.ptr);
+    if (ra < start or ra >= start + u.code.len) return null;
+    const off: u32 = @intCast(ra - start);
+    for (u.sites) |*s| {
+        if (s.ret_off == off) return s;
+    }
+    return null;
+}
+
+/// The call site that returns to `ra`. A recursive function calls from
+/// its own unit, which is `hint`.
+fn findSite(g: *Global, ra: usize, hint: *Unit) Hit {
+    if (siteIn(hint, ra)) |s| return .{ .u = hint, .site = s };
+    for (g.jit.callers.items) |u| {
+        if (siteIn(u, ra)) |s| return .{ .u = u, .site = s };
+    }
+    @panic("a direct call returns to no call site");
+}
+
+inline fn word(addr: usize) usize {
+    return @as(*const usize, @ptrFromInt(addr)).*;
+}
+
+inline fn half(addr: usize) u32 {
+    return @as(*const u32, @ptrFromInt(addr)).*;
+}
+
+/// What ends a chain of direct calls on its outer side.
+const Root = union(enum) {
+    /// The entry that found the frame of the outermost activation in
+    /// place.
+    frame,
+    /// The entry that baseline code called, which holds what the frame
+    /// of the outermost activation needs.
+    thunk: struct { pc: u32, nargs: u32, base: u32, want: i32 },
+    /// A unit that keeps a frame and called from the native frame at
+    /// `sp`.
+    unit: struct { u: *Unit, site: *const ir.Site, sp: usize },
+};
+
+/// Builds the frame of every activation of the chain of direct calls
+/// whose innermost activation runs `first` with its native frame at `sp0`
+/// and leaves through `snap0`. Afterwards the top frame is the frame of
+/// that activation, with its registers still to be written, and every
+/// frame below is complete.
+///
+/// The entry of a chain keeps its activations inside the Lus stack
+/// (`codegen.rootEntry`), so every one of them fits. The walk checks the
+/// room all the same, as the interpreter does when it enters a function.
+/// Should an activation lack room, the ones that fit get their frames,
+/// and the error that the interpreter raises at the call that found no
+/// room is raised from the innermost one of them.
+fn unwind(l: *Thread, first: *Unit, snap0: u32, sp0: usize) state.Error!void {
+    const g = l.g;
+    const top_i = l.frames.items.len - 1;
+    const regs_off: usize = @intCast(codegen.save_bytes);
+
+    // The first walk finds where the chain ends, how many activations
+    // wait in it, and how many slots and frames they cover.
+    var links: usize = 0;
+    var slots: u32 = 0;
+    var nframes: usize = 0;
+    var cur = first;
+    var sp = sp0;
+    var root: Root = undefined;
+    var outer_pc: u32 = first.frames[first.snaps[snap0].frames].pc;
+    while (true) {
+        const up = sp + cur.total;
+        const ra = word(up - 8);
+        if (ra == cur.ret_a) {
+            root = .frame;
+            g.jit.exit_sp = up;
+            break;
+        }
+        if (ra == cur.ret_b) {
+            root = .{ .thunk = .{ .pc = half(up), .nargs = half(up + 4), .base = half(up + 8), .want = @bitCast(half(up + 12)) } };
+            g.jit.exit_sp = up + @as(usize, @intCast(codegen.thunk_bytes));
+            break;
+        }
+        const hit = findSite(g, ra, cur);
+        if (!hit.u.direct) {
+            root = .{ .unit = .{ .u = hit.u, .site = hit.site, .sp = up } };
+            g.jit.exit_sp = up + hit.u.frame_bytes;
+            break;
+        }
+        const s = hit.u.snaps[hit.site.snap];
+        slots += hit.site.slot + 1;
+        nframes += s.nframes;
+        links += 1;
+        outer_pc = hit.u.frames[s.frames].pc;
+        cur = hit.u;
+        sp = up;
+    }
+
+    // The frame below the chain continues where its call returns.
+    var base_n: u32 = undefined;
+    var fi_n: usize = undefined;
+    switch (root) {
+        .frame => {
+            const fr = &l.frames.items[top_i];
+            fr.pc = outer_pc;
+            base_n = fr.base;
+            fi_n = top_i;
+        },
+        .thunk => |t| {
+            l.frames.items[top_i].pc = t.pc;
+            base_n = t.base;
+            fi_n = top_i + 1;
+        },
+        .unit => |c| {
+            const fr = &l.frames.items[top_i];
+            const s = c.u.snaps[c.site.snap];
+            fr.pc = c.u.frames[s.frames].pc;
+            base_n = fr.base + c.site.slot + 1;
+            fi_n = top_i + s.nframes;
+        },
+    }
+    const fi0 = fi_n + nframes;
+    l.frames.ensureTotalCapacity(g.gpa, fi0 + max_inline_depth + 2) catch return l.raiseMem();
+
+    // The second walk builds the frames, from the innermost activation
+    // outward. `below` is the site an activation waits at.
+    cur = first;
+    sp = sp0;
+    var base: u32 = base_n + slots;
+    var fi: usize = fi0;
+    var below: ?Hit = null;
+    var kept_len: usize = 0;
+    var callee_kept = false;
+    var callee_fi: usize = 0;
+    var callee_base: u32 = 0;
+    var callee_stack: u32 = 0;
+    var raise: ?struct { func: u32, nargs: u32, max_stack: u32 } = null;
+    var k: usize = 0;
+    while (true) : (k += 1) {
+        const up = sp + cur.total;
+        const outermost = k == links;
+        var above: ?Hit = null;
+        var nargs: u32 = 0;
+        var want: i32 = 0;
+        if (!outermost) {
+            above = findSite(g, word(up - 8), cur);
+            nargs = above.?.site.nargs;
+            want = above.?.site.want;
+        } else switch (root) {
+            .frame => {},
+            .thunk => |t| {
+                nargs = t.nargs;
+                want = t.want;
+            },
+            .unit => |c| {
+                nargs = c.site.nargs;
+                want = c.site.want;
+            },
+        }
+        const in_place = outermost and root == .frame;
+        const p = cur.proto;
+        // The room the interpreter asks for when it enters the function.
+        var fits = in_place or @as(u64, base) + p.max_stack + 2 * @as(u64, nargs) + 8 <= Thread.max_stack;
+        if (k == 0 and @as(u64, base) + cur.extent + 16 > Thread.max_stack) fits = in_place;
+        if (fits) {
+            const end: u32 = if (below) |b| base + b.site.slot else base + @max(cur.extent, p.max_stack);
+            if (kept_len == 0) {
+                // The innermost activation that fits. The stack grows
+                // once, to hold it.
+                const need = end + 16;
+                if (need > l.stack.len) {
+                    if (l.top > need) l.top = need;
+                    try l.ensure(need - l.top);
+                }
+                if (below) |b| {
+                    kept_len = fi + cur.snaps[b.site.snap].nframes;
+                    raise = .{ .func = base + b.site.slot, .nargs = b.site.nargs, .max_stack = callee_stack };
+                } else kept_len = fi + 1;
+            }
+            const frames = l.frames.items.ptr;
+            if (!in_place) frames[fi] = .{ .func = base - 1, .base = base, .ret = base - 1, .want = want };
+            // Registers that the snapshot leaves out are dead.
+            for (l.stack[base..end]) |*v| v.* = .nil;
+            if (below) |b| {
+                const regs: [*]const u64 = @ptrFromInt(sp - regs_off);
+                const fms = writeBackAt(l, cur, b.site.snap, regs, null, base);
+                frames[fi].pc = fms[0].pc;
+                for (fms[1..], 1..) |fm, j| {
+                    const func = base + fm.off - 1;
+                    frames[fi + j] = .{
+                        .closure = valueOf(fm.closure, regs).as(Closure),
+                        .func = func,
+                        .base = func + 1,
+                        .ret = func,
+                        .want = fm.want,
+                        .pc = fm.pc,
+                        .tail = fm.tail,
+                    };
+                }
+                if (callee_kept) frames[callee_fi].closure = l.stack[callee_base - 1].as(Closure);
+            }
+        }
+        callee_kept = fits;
+        callee_fi = fi;
+        callee_base = base;
+        callee_stack = p.max_stack;
+        if (outermost) break;
+        const hit = above.?;
+        base -= hit.site.slot + 1;
+        fi -= hit.u.snaps[hit.site.snap].nframes;
+        below = hit;
+        cur = hit.u;
+        sp = up;
+    }
+
+    // What ends the chain supplies the closure of the outermost
+    // activation, and a unit with a frame writes its own values back.
+    const frames = l.frames.items.ptr;
+    switch (root) {
+        .frame => {},
+        .thunk => |t| {
+            if (callee_kept) {
+                frames[fi_n].closure = l.stack[base_n - 1].as(Closure);
+            } else {
+                kept_len = top_i + 1;
+                raise = .{ .func = t.base - 1, .nargs = t.nargs, .max_stack = callee_stack };
+            }
+        },
+        .unit => |c| {
+            const regs: [*]const u64 = @ptrFromInt(c.sp - regs_off);
+            const root_base = frames[top_i].base;
+            const fms = writeBackAt(l, c.u, c.site.snap, regs, null, root_base);
+            for (fms[1..], 1..) |fm, j| {
+                const func = root_base + fm.off - 1;
+                frames[top_i + j] = .{
+                    .closure = valueOf(fm.closure, regs).as(Closure),
+                    .func = func,
+                    .base = func + 1,
+                    .ret = func,
+                    .want = fm.want,
+                    .pc = fm.pc,
+                    .tail = fm.tail,
+                };
+            }
+            if (callee_kept) {
+                frames[fi_n].closure = l.stack[base_n - 1].as(Closure);
+            } else {
+                kept_len = top_i + fms.len;
+                raise = .{ .func = root_base + c.site.slot, .nargs = c.site.nargs, .max_stack = callee_stack };
+            }
+        },
+    }
+    l.frames.items.len = kept_len;
+    if (raise) |r| {
+        // The call that found no room raises as it does in the
+        // interpreter, with its arguments below the stack top.
+        l.top = r.func + 1 + r.nargs;
+        try l.ensure(@as(usize, r.max_stack) + r.nargs + 8);
+        return l.raiseMsg("stack overflow");
+    }
 }
 
 /// The baseline code that continues the top frame at its saved pc. A
@@ -537,14 +907,19 @@ pub const rt = struct {
             g.jit.sunk_limit = @max(sunk_step, g.counter.bytes);
             return baseline(l);
         }
+        // An exit that says nothing about the predictions of the code
+        // is left out of the records.
+        const flags = u.snaps[snap];
+        if (flags.quiet) return baseline(l);
         // Record the exit: against the instruction, and against every
-        // call that was compiled inline around it.
+        // call that was compiled inline around it. An exit after a
+        // direct call counts against the call.
         var retire_now = false;
         if (infoOf(g, inner.proto)) |info| {
-            const pc = inner.pc;
+            const pc = if (flags.after_call) inner.pc - 1 else inner.pc;
             const m = bump(&info.marks[pc]);
             if (m == mark_respec or m == mark_generic) retire_now = true;
-            if (pc < inner.proto.code.len) {
+            if (!flags.after_call and pc < inner.proto.code.len) {
                 const ins = inner.proto.code[pc];
                 const ops = [3]u32{ opc.a(ins), opc.b(ins), opc.c(ins) };
                 for (ops, 0..) |r, i| {
@@ -562,6 +937,17 @@ pub const rt = struct {
         if (retire_now or u.exits >= max_exits) retire(g, u);
         g.jit.exits += 1;
         return baseline(l);
+    }
+
+    /// A guard failed in a function that was entered directly. Every
+    /// direct call that is running gets its frame first, from the
+    /// native frames of the callers, and then the exit proceeds as any
+    /// other. The native stack pointer that the entry sequence expects
+    /// is left in the state for the code that called.
+    pub fn deoptDirect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(.c) jit.Target {
+        const sp = @intFromPtr(regs) + @as(usize, @intCast(codegen.save_bytes));
+        unwind(l, u, @intCast(snap), sp) catch return .{ .addr = failed, .base = 0 };
+        return deopt(l, u, snap, regs);
     }
 
     /// Optimized code found too little room for its inline frames and

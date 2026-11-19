@@ -403,7 +403,16 @@ pub const Frame = extern struct {
     lean: bool = false,
     /// Set on metamethod frames pushed by the interpreter.
     finish: Finish.Packed = .{},
-    _pad: [2]u8 = @splat(0),
+    /// Set on a frame that the interpreter pushed for a plain call
+    /// between two Lus functions. Like a lean frame, it has no finish
+    /// action and is not a boundary, and its caller is a Lus frame of
+    /// the same run, so one test of the flags word admits the short
+    /// return.
+    plain: bool = false,
+    /// Set on a plain frame of a function that can own an open upvalue
+    /// or a to-be-closed variable. A plain frame without it returns
+    /// with nothing to close.
+    closes: bool = false,
     /// On a lean frame, the address in native code where the caller
     /// continues.
     resume_at: usize = 0,
@@ -417,7 +426,45 @@ pub const Frame = extern struct {
         break :blk std.mem.readInt(u64, bytes, @import("builtin").cpu.arch.endian());
     };
 
+    /// The word that holds the flags and the finish action, as a plain
+    /// frame has it.
+    pub const plain_flags: u64 = blk: {
+        const f: Frame = .{ .func = 0, .base = 0, .ret = 0, .want = 0, .plain = true };
+        const bytes = std.mem.asBytes(&f)[@offsetOf(Frame, "boundary")..][0..8];
+        break :blk std.mem.readInt(u64, bytes, @import("builtin").cpu.arch.endian());
+    };
+
+    /// The bit of the flags word that `closes` sets.
+    pub const closes_bit: u64 = flagMask("closes", 1) & 0x0101010101010101;
+
+    pub inline fn flagsWordPtr(f: *Frame) *u64 {
+        return @ptrCast(@alignCast(&f.boundary));
+    }
+    /// The word that holds the saved pc and the count of extra arguments.
+    pub inline fn pcWord(f: *Frame) *u64 {
+        return @ptrCast(@alignCast(&f.pc));
+    }
+
+    /// The flags word of a frame, for tests of several flags at once.
+    pub inline fn flagsWord(f: *const Frame) u64 {
+        const p: *const u64 = @ptrCast(@alignCast(&f.boundary));
+        return p.*;
+    }
+
+    fn flagMask(comptime name: []const u8, comptime size: usize) u64 {
+        var bytes: [8]u8 = @splat(0);
+        const off = @offsetOf(Frame, name) - @offsetOf(Frame, "boundary");
+        for (bytes[off..][0..size]) |*b| b.* = 0xFF;
+        return @bitCast(bytes);
+    }
+
+    /// Bits of the flags word that are clear in a frame that returns
+    /// straight to a Lus caller, and bits of which one is set in it.
+    pub const short_clear: u64 = flagMask("boundary", 1) | flagMask("finish", 1);
+    pub const short_any: u64 = flagMask("lean", 1) | flagMask("plain", 1);
+
     comptime {
+        std.debug.assert(@offsetOf(Finish.Packed, "kind") == 0);
         // Native code exists only on 64-bit targets.
         if (@sizeOf(usize) == 8) {
             const assert = std.debug.assert;
@@ -819,7 +866,7 @@ pub fn freeExtra(g: *Global, h: *gc.Header) void {
         .proto => {
             const p = h.as(object.Proto);
             @import("../jit/jit.zig").freeProto(g, p);
-            gpa.free(p.code);
+            object.Proto.freeCode(gpa, p.code);
             gpa.free(p.ic);
             gpa.free(p.constants);
             gpa.free(p.protos);

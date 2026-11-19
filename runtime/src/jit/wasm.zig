@@ -123,7 +123,7 @@ pub fn compile(l: *Thread, p: *Proto) jit.Outcome {
     if (index == reuse) _ = free_slots.pop();
     stats.compiled += 1;
     p.jit_code = @ptrFromInt(index);
-    p.plain_call = false;
+    p.call.plain = false;
     g.jit.live += 1;
     g.jit.compiled += 1;
     return .done;

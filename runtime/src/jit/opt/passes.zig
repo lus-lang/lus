@@ -144,7 +144,7 @@ fn rewrite(f: *ir.Func, fwd: []Ref) !void {
 
 pub fn usesA(i: *const ir.Inst) bool {
     return switch (i.op) {
-        .nop, .knil, .kbool, .kint, .kflt, .kptr, .sload, .gslot, .scopy, .gpending, .gdebt, .gccheck, .jmp, .brtruthy, .brtag, .generic, .exit, .phi, .valloc => false,
+        .nop, .knil, .kbool, .kint, .kflt, .kptr, .sload, .gslot, .scopy, .gpending, .gdebt, .gccheck, .jmp, .brtruthy, .brtag, .generic, .exit, .phi, .valloc, .param, .dlimit => false,
         else => true,
     };
 }
@@ -210,7 +210,8 @@ pub fn hoist(f: *ir.Func, cfg: *Cfg, loops: []const lower.Lower.LoopInfo, marks:
                         try w.slots.put(arena, inst.imm, {});
                         if (inst.cls == .upval) w.classes[@backingInt(ir.Class.upval)] = true;
                     },
-                    .generic => w.generic = true,
+                    // A callee may write anything.
+                    .generic, .dcall => w.generic = true,
                     .gccheck => w.collects = true,
                     .callc => {
                         if (!inst.flags.pure) w.collects = true;
@@ -320,12 +321,12 @@ fn dedupe(f: *ir.Func, blk: BlockId) !void {
         const inst = f.at(r);
         switch (inst.op) {
             // Writes end what the earlier loads of the block know.
-            .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .callc, .gccheck, .generic, .barrier => {
+            .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .callc, .gccheck, .generic, .barrier, .dcall, .darg, .dres, .dgate, .dlimit, .param => {
                 seen.clearRetainingCapacity();
                 try keep.append(arena, r);
                 continue;
             },
-            .phi, .jmp, .br, .bri, .fbr, .brtruthy, .brtag, .exit, .nop => {
+            .phi, .jmp, .br, .bri, .fbr, .brtruthy, .brtag, .exit, .nop, .dret => {
                 try keep.append(arena, r);
                 continue;
             },
@@ -353,7 +354,7 @@ fn dedupe(f: *ir.Func, blk: BlockId) !void {
 
 fn hasEffect(i: *const ir.Inst) bool {
     return switch (i.op) {
-        .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .barrier, .gccheck => true,
+        .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .barrier, .gccheck, .darg, .dcall => true,
         .callc => !i.flags.pure,
         .phi => false,
         else => i.isGuard() or i.isTerminator(),

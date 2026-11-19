@@ -21,6 +21,9 @@ const value = @import("../../vm/value.zig");
 const table = @import("../../vm/table.zig");
 const gc = @import("../../vm/gc.zig");
 const interp = @import("../../vm/interp.zig");
+const jit = @import("../jit.zig");
+const helpers = @import("../helpers.zig");
+const opc = @import("../../compile/opcodes.zig");
 const Thread = state.Thread;
 const Proto = object.Proto;
 const Tag = value.Tag;
@@ -53,6 +56,34 @@ const sc2: A.Reg = if (is_a64) .x15 else .r13;
 const fsc0: A.FReg = if (is_a64) .v30 else .xmm13;
 const fsc1: A.FReg = if (is_a64) .v29 else .xmm12;
 const fret: A.FReg = if (is_a64) .v0 else .xmm0;
+
+/// The registers of a direct call. The closure travels in the first
+/// pool register and the parameters in the ones after it, each as its
+/// payload. The callee returns the payload of its result in the first
+/// and the tag in the second.
+const dret_payload: A.Reg = gpr_pool[0];
+const dret_tag: A.Reg = gpr_pool[1];
+/// The tag word of a direct return that carries no value.
+pub const no_result: u64 = 0x100;
+/// The tag word that the entry of a chain returns when the callee did
+/// not run, because the stack has too little room left.
+pub const no_entry: u64 = 0x200;
+/// Slots of the Lus stack that a chain of direct calls leaves free
+/// below the limit of the stack. The frames of one more call fit in
+/// them, so the call that finds no room is made by the interpreter.
+pub const chain_margin: u32 = 1024;
+/// Registers that hold no parameter of a direct call.
+const spare0: A.Reg = gpr_pool[ir.max_direct_params + 1];
+const spare1: A.Reg = gpr_pool[ir.max_direct_params + 2];
+/// Bytes of native stack that the entry of a direct call from baseline
+/// code holds while the callee runs: the saved pc and the argument
+/// count, the base and the wanted count, and the return address.
+pub const thunk_bytes: i32 = 32;
+
+comptime {
+    std.debug.assert(gpr_pool.len >= ir.max_direct_params + 3);
+    std.debug.assert(@backingInt(Tag.nil) == 0);
+}
 
 /// Bytes that the exit sequence saves the pool registers in.
 pub const save_bytes: i32 = @intCast(std.mem.alignForward(usize, (gpr_pool.len + fpr_pool.len) * 8, 16));
@@ -103,6 +134,23 @@ pub const Codegen = struct {
     gc_bytes: i32,
     gc_next: i32,
     entry_off: u32 = 0,
+    /// For a function that is entered directly: the native frame of one
+    /// activation, which holds the spilled values and, in its top word,
+    /// the return address.
+    total: i32 = 0,
+    l_direct: Label = 0,
+    l_root: Label = 0,
+    root_off: u32 = 0,
+    chain_ratio: u32 = 1,
+    /// The exit of the entries that find a frame in place.
+    l_deopt_frame: Label = 0,
+    /// Offsets of the direct entry and of the instructions after the
+    /// two calls of it that the unit makes for its other entries.
+    direct_off: u32 = 0,
+    ret_a_off: u32 = 0,
+    ret_b_off: u32 = 0,
+    /// The arguments of the direct call being emitted.
+    dargs: [ir.max_direct_params]Ref = @splat(ir.none),
 
     pub fn init(arena: std.mem.Allocator, gpa: std.mem.Allocator, l: *Thread, p: *Proto, f: *ir.Func, ra: regalloc.Result, unit: *opt.Unit) !Codegen {
         const gs = l.g;
@@ -115,7 +163,8 @@ pub const Codegen = struct {
             .l = l,
             .unit = unit,
             .labels = try arena.alloc(Label, f.blocks.items.len),
-            .frame = @intCast(std.mem.alignForward(usize, @as(usize, ra.nspill) * 8, 16)),
+            .frame = if (f.direct) 0 else @intCast(std.mem.alignForward(usize, @as(usize, ra.nspill) * 8, 16)),
+            .total = @intCast(std.mem.alignForward(usize, @as(usize, ra.nspill) * 8 + 8, 16)),
             .exit_labels = try arena.alloc(Label, f.snaps.items.len),
             .gc_bytes = @intCast(@intFromPtr(&gs.counter.bytes) - @intFromPtr(gs)),
             .gc_next = @intCast(@intFromPtr(&gs.gcs.next_check) - @intFromPtr(gs)),
@@ -150,20 +199,39 @@ pub const Codegen = struct {
         c.l_deopt = a.newLabel();
         c.l_trap = a.newLabel();
         c.l_entry = a.newLabel();
+        c.l_direct = a.newLabel();
+        c.l_root = a.newLabel();
+        c.l_deopt_frame = a.newLabel();
+        if (f.direct) c.chainShape();
 
         // The entries that calls from native code use run into the body.
         if (!c.p.is_vararg and c.unit.entry_pc == 0) {
             c.em.first = c.l_entry;
             c.em.tailEntry();
-            c.em.callEntry();
-            a.jmp(c.l_entry);
+            if (f.direct) {
+                c.callThunk();
+            } else {
+                c.em.callEntry();
+                a.jmp(c.l_entry);
+            }
         }
-        // The body starts with the frame in place and every register in
-        // its slot.
         a.bind(c.l_entry);
         c.entry_off = a.offset();
-        if (f.extent > c.p.max_stack or f.depth > 0 or f.scratch > 0) c.roomCheck();
-        if (c.frame != 0) a.moveSp(-c.frame);
+        if (f.direct) {
+            // A frame is in place. The body runs as a direct call from
+            // here, and its result returns through the frame.
+            c.frameThunk();
+            c.rootEntry();
+            a.bind(c.l_direct);
+            c.direct_off = a.offset();
+            a.saveLink(c.total);
+            c.paramMoves();
+        } else {
+            // The body starts with the frame in place and every
+            // register in its slot.
+            if (f.extent > c.p.max_stack or f.depth > 0 or f.scratch > 0) c.roomCheck();
+            if (c.frame != 0) a.moveSp(-c.frame);
+        }
         a.jmp(c.labels[f.entry]);
 
         for (c.ra.order, 0..) |b, oi| {
@@ -189,14 +257,26 @@ pub const Codegen = struct {
             a.movImm(sc0, sid);
             a.jmp(c.l_deopt);
         }
+        const l_continue = a.newLabel();
         a.bind(c.l_deopt);
         c.saveAll();
         a.mov(A.args[0], A.thread);
         a.mov(A.args[2], sc0);
         a.movImm(A.args[1], @intFromPtr(c.unit));
         a.leaSp(A.args[3], 0);
-        a.call(@intFromPtr(&opt.rt.deopt));
-        a.moveSp(save_bytes + c.frame);
+        if (f.direct) {
+            // The runtime builds the frame of every direct call that
+            // is running, and the native stack returns to where the
+            // entry sequence left it.
+            a.call(@intFromPtr(&opt.rt.deoptDirect));
+            a.load64(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
+            a.load64(sc0, .{ .base = sc0, .disp = @intCast(@intFromPtr(&c.l.g.jit.exit_sp) - @intFromPtr(c.l.g)) });
+            a.setSp(sc0);
+        } else {
+            a.call(@intFromPtr(&opt.rt.deopt));
+            a.moveSp(save_bytes + c.frame);
+        }
+        a.bind(l_continue);
         const l_interp = a.newLabel();
         const l_failed = a.newLabel();
         a.jumpIfImm(.eq, A.ret0, 0, l_interp);
@@ -210,6 +290,18 @@ pub const Codegen = struct {
         a.bind(l_failed);
         a.movImm(A.ret0, interp.Step.failed);
         a.jmp(c.em.l_exit);
+        if (f.direct) {
+            // An exit of an entry that found its frame in place.
+            a.bind(c.l_deopt_frame);
+            c.saveAll();
+            a.mov(A.args[0], A.thread);
+            a.mov(A.args[2], sc0);
+            a.movImm(A.args[1], @intFromPtr(c.unit));
+            a.leaSp(A.args[3], 0);
+            a.call(@intFromPtr(&opt.rt.deopt));
+            a.moveSp(save_bytes);
+            a.jmp(l_continue);
+        }
 
         c.em.flushCold();
         if (c.em.oom) return false;
@@ -240,6 +332,345 @@ pub const Codegen = struct {
         a.movImm(A.ret0, interp.Step.interpret);
         a.jmp(c.em.l_exit);
         a.bind(ok);
+    }
+
+    // -----------------------------------------------------------------
+    // Direct entry
+
+    fn jitField(c: *Codegen, field: *const usize) i32 {
+        return @intCast(@intFromPtr(field) - @intFromPtr(c.l.g));
+    }
+
+    /// Fits the native frame of an activation to the slots its calls
+    /// take, and finds the ratio between the two for every chain of
+    /// direct calls that starts in this function. An activation covers
+    /// at least as many bytes as its call took slots, so the ratio is
+    /// at most sixteen slots per sixteen bytes.
+    fn chainShape(c: *Codegen) void {
+        var ratio: u32 = 1;
+        for (c.f.sites.items) |s| {
+            if (s.callee_total == 0) c.total = @max(c.total, @as(i32, @intCast(std.mem.alignForward(u32, s.slot + 1, 16))));
+        }
+        for (c.f.sites.items) |s| {
+            const total: u32 = if (s.callee_total == 0) @intCast(c.total) else s.callee_total;
+            const per16 = ((s.slot + 1) * 16 + total - 1) / total;
+            ratio = @max(ratio, std.math.ceilPowerOfTwoAssert(u32, per16), s.callee_ratio);
+        }
+        c.chain_ratio = @min(ratio, 16);
+    }
+
+    /// The entry of a call that starts a chain of direct calls: a call
+    /// from one of the two entries with a frame protocol, or from a
+    /// function that keeps a frame. The caller passes the base that the
+    /// frame of the callee would have in `sc0`. The entry sets the
+    /// lowest address the chain may take the native stack to, so that
+    /// its activations stay inside the Lus stack and above the floor of
+    /// the native stack, and runs into the body. It returns `no_entry`
+    /// at once when either has no room for the first activation.
+    fn rootEntry(c: *Codegen) void {
+        const a = &c.em.a;
+        const js = &c.l.g.jit;
+        const l_no = a.newLabel();
+        const l_store = a.newLabel();
+        const l_body = a.newLabel();
+        a.bind(c.l_root);
+        c.root_off = a.offset();
+        // sc1 = the bytes of native stack that the slots left allow.
+        a.movImm(sc1, Thread.max_stack - chain_margin);
+        a.sub(sc1, sc0);
+        a.jumpIfImm(.le, sc1, 0, l_no);
+        var mult: u32 = 16 / c.chain_ratio;
+        while (mult > 1) : (mult /= 2) a.add(sc1, sc1);
+        a.load64(spare0, .{ .base = A.thread, .disp = c.em.lay.global });
+        a.load64(spare1, .{ .base = spare0, .disp = c.jitField(&js.stack_floor) });
+        a.leaSp(sc0, 0);
+        a.jumpIf(.lo, sc0, spare1, l_no);
+        a.sub(sc0, sc1);
+        a.jumpIf(.hs, sc0, spare1, l_store);
+        a.mov(sc0, spare1);
+        a.bind(l_store);
+        a.store64(sc0, .{ .base = spare0, .disp = c.jitField(&js.chain_limit) });
+        a.jmp(l_body);
+        a.bind(l_no);
+        a.movImm(dret_tag, no_entry);
+        a.retLocal();
+        a.bind(l_body);
+    }
+
+    /// Loads parameter `i` of the function from the value at `m` into
+    /// its register, as its payload.
+    fn loadParam(c: *Codegen, i: usize, m: Mem) void {
+        const a = &c.em.a;
+        const r = gpr_pool[1 + i];
+        switch (c.f.sig[i]) {
+            .nil => {},
+            .boolean => {
+                a.load8(r, .{ .base = m.base, .disp = m.disp + 8 });
+                a.addImm(r, -@as(i32, @backingInt(Tag.false)));
+            },
+            else => a.load64(r, m),
+        }
+    }
+
+    /// The entry that a call from baseline code uses. The caller passes
+    /// what it passes to every call entry: the closure in t0, the pc to
+    /// save in t3, the base of the callee in t4, the wanted result count
+    /// in t5, and the argument count in t6. The entry pushes no frame.
+    /// It checks the types of the arguments in their slots, calls the
+    /// body with them in registers, stores the result into the slot of
+    /// the called function, and continues in the caller where a lean
+    /// return would. What a frame for the callee needs stays in the
+    /// native frame of the entry meanwhile. The entry returns to the
+    /// caller, with nothing changed, when the call needs the step
+    /// routine.
+    fn callThunk(c: *Codegen) void {
+        const a = &c.em.a;
+        const lay = c.em.lay;
+        const np: usize = c.p.num_params;
+        const fail = a.newLabel();
+        const deep = a.newLabel();
+        const zero = a.newLabel();
+        const fin = a.newLabel();
+        c.em.call_entry = a.offset();
+        c.em.call_entry_plain = a.offset();
+        a.load64(A.t1, .{ .base = A.thread, .disp = lay.global });
+        a.load64(A.t1, .{ .base = A.t1, .disp = lay.pending });
+        a.jumpIfImm(.ne, A.t1, 0, fail);
+        if (np > 0) a.jumpIfImm(.lo, A.t6, @intCast(np), fail);
+        // t1 = the address of register 0 of the callee.
+        a.load64(A.t1, .{ .base = A.thread, .disp = lay.stack_ptr });
+        a.addScaled(A.t1, A.t1, A.t4, 4);
+        for (0..np) |i| {
+            const tag_m: Mem = .{ .base = A.t1, .disp = @intCast(i * 16 + 8) };
+            if (c.f.sig[i] == .boolean) {
+                a.load8(A.t2, tag_m);
+                a.addImm(A.t2, -@as(i32, @backingInt(Tag.false)));
+                a.jumpIfImm(.hi, A.t2, 1, fail);
+            } else {
+                a.jumpIfByte(.ne, tag_m, @backingInt(c.f.sig[i]), fail);
+            }
+        }
+
+        // Nothing fails from here on.
+        a.saveLink(thunk_bytes);
+        a.store32(A.t3, .{ .base = A.sp, .disp = 0 });
+        a.store32(A.t6, .{ .base = A.sp, .disp = 4 });
+        a.store32(A.t4, .{ .base = A.sp, .disp = 8 });
+        a.store32(A.t5, .{ .base = A.sp, .disp = 12 });
+        a.mov(A.t6, A.t1);
+        a.mov(sc0, A.t4);
+        a.mov(gpr_pool[0], A.t0);
+        for (0..np) |i| c.loadParam(i, .{ .base = A.t6, .disp = @intCast(i * 16) });
+        a.callLocal(c.l_root);
+        c.ret_b_off = a.offset();
+        a.jumpIfImm(.eq, dret_tag, @intCast(no_entry), deep);
+
+        // The result goes to the slot of the called function, and the
+        // caller gets the count in t6, as after a lean return.
+        a.load32(A.t6, .{ .base = A.sp, .disp = 8 });
+        a.load64(A.t5, .{ .base = A.thread, .disp = lay.stack_ptr });
+        a.addScaled(A.t5, A.t5, A.t6, 4);
+        a.jumpIfImm(.eq, dret_tag, @intCast(no_result), zero);
+        a.store64(dret_payload, .{ .base = A.t5, .disp = -16 });
+        a.store64(dret_tag, .{ .base = A.t5, .disp = -8 });
+        a.movImm(A.t6, 1);
+        a.jmp(fin);
+        a.bind(zero);
+        a.movImm(A.t6, 0);
+        a.bind(fin);
+        a.unsaveLink(thunk_bytes);
+        a.linkPastJump(A.t3);
+        a.dropLink();
+        a.jmpReg(A.t3);
+        a.bind(fail);
+        a.retLocal();
+        // The stack has too little room left for a chain of direct
+        // calls, so the call enters baseline code, which takes the
+        // registers the caller passed.
+        a.bind(deep);
+        a.load32(A.t4, .{ .base = A.sp, .disp = 8 });
+        a.load64(A.t1, .{ .base = A.thread, .disp = lay.stack_ptr });
+        a.addScaled(A.t1, A.t1, A.t4, 4);
+        a.load64(A.t0, .{ .base = A.t1, .disp = -16 });
+        a.load32(A.t3, .{ .base = A.sp, .disp = 0 });
+        a.load32(A.t6, .{ .base = A.sp, .disp = 4 });
+        a.load32(A.t5, .{ .base = A.sp, .disp = 12 });
+        a.unsaveLink(thunk_bytes);
+        const code: *jit.Code = @ptrCast(@alignCast(c.p.jit_code.?));
+        a.movImm(A.t1, code.base + code.call_entry_plain);
+        a.jmpReg(A.t1);
+    }
+
+    /// The entry that finds the frame of the function in place: a frame
+    /// that the interpreter or a step routine pushed, or that a tail
+    /// call took over. It checks the types of the parameters, calls the
+    /// body with them in registers, and returns the result as the
+    /// baseline templates of `ret0` and `ret1` do.
+    fn frameThunk(c: *Codegen) void {
+        const a = &c.em.a;
+        const np: usize = c.p.num_params;
+        const l_baseline = a.newLabel();
+        const l_exit = a.newLabel();
+        const zero = a.newLabel();
+        const slow0 = a.newLabel();
+        const slow1 = a.newLabel();
+        for (0..np) |i| c.tagGuard(tagOf(@intCast(i)), c.f.sig[i].guardTag(), true, l_exit);
+        a.load64(gpr_pool[0], slot(-1));
+        for (0..np) |i| c.loadParam(i, slot(@intCast(i)));
+        a.mov(sc0, A.base);
+        a.callLocal(c.l_root);
+        c.ret_a_off = a.offset();
+        a.jumpIfImm(.eq, dret_tag, @intCast(no_entry), l_baseline);
+
+        a.jumpIfImm(.eq, dret_tag, @intCast(no_result), zero);
+        a.store64(dret_payload, slot(0));
+        a.store64(dret_tag, tagOf(0));
+        c.em.leanReturnOr(1, 0, slow1);
+        a.bind(slow1);
+        c.stepReturn(.ret1);
+        a.bind(zero);
+        c.em.leanReturnOr(0, 0, slow0);
+        a.bind(slow0);
+        c.stepReturn(.ret0);
+
+        // The stack has too little room left for a chain of direct
+        // calls, so the frame runs in baseline code.
+        a.bind(l_baseline);
+        const code: *jit.Code = @ptrCast(@alignCast(c.p.jit_code.?));
+        a.movImm(sc0, code.base + code.offs[0]);
+        a.jmpReg(sc0);
+        a.bind(l_exit);
+        a.movImm(sc0, c.f.entry_snap);
+        a.jmp(c.l_deopt_frame);
+    }
+
+    /// Returns from the frame in place through the step routine of a
+    /// return instruction, with the result in register zero.
+    fn stepReturn(c: *Codegen, o: opc.Op) void {
+        const a = &c.em.a;
+        // The saved pc is that of a return of the function.
+        var pc: u32 = 0;
+        for (c.p.code, 0..) |ins, i| switch (opc.op(ins)) {
+            .ret0, .ret1, .ret => {
+                pc = @intCast(i);
+                break;
+            },
+            else => {},
+        };
+        a.mov(A.args[0], A.thread);
+        a.movImm(A.args[1], pc + 1);
+        a.mov(A.args[2], A.stop);
+        a.movImm(A.args[3], opc.abc(o, 0, 0, 0));
+        a.call(@intFromPtr(helpers.steps[@backingInt(o)]));
+        a.jmp(c.em.l_status);
+    }
+
+    /// Moves the closure and the parameters from the registers a direct
+    /// call passes them in to the places they live in.
+    fn paramMoves(c: *Codegen) void {
+        var buf: [ir.max_direct_params + 1]Move = undefined;
+        var n: usize = 0;
+        for (c.f.blocks.items[c.f.entry].insts.items) |r| {
+            const i = c.f.at(r);
+            if (i.op != .param or c.ra.loc[r] == .none) continue;
+            buf[n] = .{ .dst = c.place(r), .src = .{ .g = gpr_pool[@intCast(i.imm)] }, .float = i.ty == .float };
+            n += 1;
+        }
+        c.parallel(buf[0..n]);
+    }
+
+    /// A direct call: the closure and the arguments move to the
+    /// registers of the convention, and the callee returns to the
+    /// instruction after the call.
+    fn dcall(c: *Codegen, i: *const ir.Inst) void {
+        const a = &c.em.a;
+        var buf: [ir.max_direct_params + 1]Move = undefined;
+        var n: usize = 1;
+        buf[0] = .{ .dst = .{ .g = gpr_pool[0] }, .src = c.place(i.a), .float = false };
+        for (c.dargs, 0..) |x, k| {
+            if (x == ir.none) continue;
+            // A float travels as its bits.
+            buf[n] = .{ .dst = .{ .g = gpr_pool[1 + k] }, .src = c.place(x), .float = false };
+            n += 1;
+        }
+        c.dargs = @splat(ir.none);
+        c.parallel(buf[0..n]);
+        if (i.imm == 0) {
+            a.callLocal(c.l_direct);
+        } else {
+            // A call from a function with a frame starts a chain, and
+            // the entry of a chain takes the base of the callee.
+            if (!c.f.direct) a.lea(sc0, .{ .base = A.base, .disp = @intCast(c.f.sites.items[@intCast(i.aux)].slot + 1) });
+            a.movImm(sc1, @bitCast(i.imm));
+            a.callReg(sc1);
+        }
+        c.f.sites.items[@intCast(i.aux)].ret_off = a.offset();
+    }
+
+    /// The result of a direct call, checked against the predicted type.
+    fn dres(c: *Codegen, r: Ref, i: *const ir.Inst) void {
+        const a = &c.em.a;
+        const miss = c.exitOf(i);
+        switch (i.ty) {
+            .nil => {
+                // A callee that returned nothing yields nil as well.
+                a.movImm(sc1, 0xFF);
+                a.and3(sc0, dret_tag, sc1);
+                a.jumpIfImm(.ne, sc0, 0, miss);
+            },
+            .boolean => {
+                a.addImm3(sc0, dret_tag, -@as(i32, @backingInt(Tag.false)));
+                a.jumpIfImm(.hi, sc0, 1, miss);
+                const d = c.dst(r);
+                a.mov(d, sc0);
+                c.done(r, d);
+            },
+            .float => {
+                a.jumpIfImm(.ne, dret_tag, @backingInt(Tag.float), miss);
+                const d = c.fdst(r);
+                a.bitsToFloat(d, dret_payload);
+                c.fdone(r, d);
+            },
+            else => {
+                a.jumpIfImm(.ne, dret_tag, @backingInt(i.ty), miss);
+                const d = c.dst(r);
+                a.mov(d, dret_payload);
+                c.done(r, d);
+            },
+        }
+    }
+
+    /// A return to a direct caller: the payload and the tag of the
+    /// result in the two registers of the convention.
+    fn dret(c: *Codegen, i: *const ir.Inst) void {
+        const a = &c.em.a;
+        if (i.imm == 0) {
+            a.movImm(dret_payload, 0);
+            a.movImm(dret_tag, no_result);
+        } else switch (c.f.at(i.a).ty) {
+            .nil => {
+                a.movImm(dret_payload, 0);
+                a.movImm(dret_tag, 0);
+            },
+            .boolean => {
+                const x = c.g(i.a, sc0);
+                a.addImm3(sc0, x, @backingInt(Tag.false));
+                a.movImm(dret_payload, 0);
+                a.mov(dret_tag, sc0);
+            },
+            .float => {
+                switch (c.place(i.a)) {
+                    .f => |x| a.floatToBits(dret_payload, x),
+                    else => a.mov(dret_payload, c.g(i.a, sc0)),
+                }
+                a.movImm(dret_tag, @backingInt(Tag.float));
+            },
+            else => |ty| {
+                a.mov(dret_payload, c.g(i.a, sc0));
+                a.movImm(dret_tag, @backingInt(ty));
+            },
+        }
+        a.leaveLink(c.total);
     }
 
     // -----------------------------------------------------------------
@@ -803,6 +1234,18 @@ pub const Codegen = struct {
             },
             .generic => c.generic(i),
             .exit => a.jmp(c.exitOf(i)),
+
+            .param => {},
+            .dlimit => {
+                a.load64(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
+                a.leaSp(sc0, 0);
+                a.jumpIfMem(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+            },
+            .dgate => a.jumpIfImm(.eq, dret_tag, @intCast(no_entry), c.exitOf(i)),
+            .darg => c.dargs[@intCast(i.imm)] = i.a,
+            .dcall => c.dcall(i),
+            .dres => c.dres(r, i),
+            .dret => c.dret(i),
         }
     }
 

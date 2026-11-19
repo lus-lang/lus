@@ -972,7 +972,7 @@ pub const Emitter = struct {
 
     /// The lean return, which branches to `slow` for a frame that needs
     /// the general return.
-    fn leanReturnOr(e: *Emitter, n: u32, ra: u32, slow: Label) void {
+    pub fn leanReturnOr(e: *Emitter, n: u32, ra: u32, slow: Label) void {
         const a = &e.a;
         const lay = e.lay;
         const thread: A.Reg = A.thread;

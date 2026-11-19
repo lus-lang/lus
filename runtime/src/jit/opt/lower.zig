@@ -40,7 +40,9 @@ const RegSet = flow_mod.RegSet;
 const tl = table.layout;
 const il = interp.layout;
 
-pub const Error = error{ OutOfMemory, Unsupported, Rebuild };
+/// `NotDirect` means that the function needs its frame while it runs,
+/// so it is built again as a function that keeps one.
+pub const Error = error{ OutOfMemory, Unsupported, Rebuild, NotDirect };
 
 /// What the builder expects a value to be: its tag, and the value itself
 /// when the builder could read it.
@@ -168,6 +170,14 @@ pub const Persist = struct {
     /// Loop header instructions whose loop allocates its tables before
     /// it starts.
     no_sink: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// The function is built for direct entry (`ir.Func.direct`).
+    direct: bool = false,
+    /// What a direct call of the function itself returns and writes, as
+    /// the last build found it. The first build predicts an integer.
+    self_ret: ?Ty = .int,
+    self_writes: u32 = 0,
+    /// Builds that changed the two predictions.
+    self_rounds: u32 = 0,
 };
 
 const CseKey = struct {
@@ -227,6 +237,15 @@ pub const Lower = struct {
     loops: std.ArrayList(LoopInfo) = .empty,
     /// Number of instructions that became typed operations.
     specialized: u32 = 0,
+    /// The function is built for direct entry.
+    direct: bool = false,
+    /// The function calls itself directly.
+    self_calls: bool = false,
+    /// The type of every return so far, and whether two returns differ.
+    ret_seen: ?Ty = null,
+    ret_mixed: bool = false,
+    /// The memory classes that the direct callees of the function write.
+    callee_writes: u32 = 0,
 
     pub const LoopInfo = struct {
         header: BlockId,
@@ -262,22 +281,122 @@ pub const Lower = struct {
             .hash_ptr = tl.hashPtr(),
             .hash_len = tl.hashLen(),
         };
-        // Every register starts in its slot, and the frame says what
-        // each one holds right now.
-        for (fr.regs, 0..) |*r, i| {
-            r.* = .{ .sample = Sample.of(l.stack[live_fr.base + i]) };
-        }
         const entry = try func.newBlock();
         func.entry = entry;
         b.cur = entry;
         func.blocks.items[entry].node = cfg.entry;
+        if (persist.direct) {
+            if (entry_pc != 0 or !directCandidate(p, fl)) return b.notDirect("shape", 0);
+            b.direct = true;
+            func.direct = true;
+            try b.directEntry(live_fr.base);
+        } else {
+            // Every register starts in its slot, and the frame says what
+            // each one holds right now.
+            for (fr.regs, 0..) |*r, i| {
+                r.* = .{ .sample = Sample.of(l.stack[live_fr.base + i]) };
+            }
+        }
         try fr.incoming[cfg.entry].append(arena, try b.incomingOf(entry));
         try b.buildFrame();
         if (b.rebuild) return error.Rebuild;
+        if (b.direct) try b.finishDirect();
         out_inlined.* = b.inlined.items;
         out_loops.* = b.loops.items;
         out_cfg.* = cfg;
         return func;
+    }
+
+    /// Whether the bytecode of `p` allows direct entry at all: a fixed
+    /// and small number of parameters, and a frame that nothing refers
+    /// to while the function runs.
+    fn directCandidate(p: *const Proto, fl: *const Flow) bool {
+        if (p.is_vararg or p.num_params > ir.max_direct_params or p.handlers.len != 0) return false;
+        for (fl.captured.w) |w| {
+            if (w != 0) return false;
+        }
+        return true;
+    }
+
+    /// Starts a function that is entered directly. Its closure and its
+    /// parameters arrive in machine registers with the types the running
+    /// frame shows, and every other register starts nil. No register
+    /// ever lives in its slot.
+    fn directEntry(b: *Lower, base: u32) Error!void {
+        const fr = b.fr;
+        const p = fr.proto;
+        // The entries that find a frame in place leave through this
+        // snapshot when an argument has another type.
+        b.f.entry_snap = try b.snapAt(0);
+        fr.closure = try b.emit(.{ .op = .param, .ty = .closure, .imm = 0 });
+        for (fr.regs, 0..) |*r, i| {
+            if (i >= p.num_params) {
+                r.* = .{ .val = try b.knil(), .in_slot = false, .sample = Sample.of(.nil) };
+                continue;
+            }
+            const sample = Sample.of(b.l.stack[base + i]);
+            const ty = sample.ty() orelse return b.notDirect("parameter", 0);
+            b.f.sig[i] = ty;
+            const v = if (ty == .nil) try b.knil() else try b.emit(.{ .op = .param, .ty = ty, .imm = @intCast(i + 1) });
+            r.* = .{ .val = v, .in_slot = false, .sample = sample };
+        }
+        const s = try b.snapAt(0);
+        b.f.snaps.items[s].quiet = true;
+        _ = try b.emit(.{ .op = .dlimit, .snap = s });
+        b.snap_cache = ir.no_snap;
+    }
+
+    /// Checks what the build of a directly entered function produced.
+    /// Anything that reads or writes a slot of the frame sends the
+    /// function back to be built with a frame. The type its returns
+    /// yield and the memory it writes are what its own direct calls
+    /// assumed, or the function builds again with what was found.
+    fn finishDirect(b: *Lower) Error!void {
+        const f = b.f;
+        var writes: u32 = b.callee_writes;
+        for (f.blocks.items) |blk| {
+            for (blk.insts.items) |r| {
+                const i = f.at(r);
+                switch (i.op) {
+                    .sload, .gslot, .sstore, .scopy, .copy_m2s, .copy_s2m, .brtruthy, .brtag, .generic, .gccheck => return b.notDirect(@tagName(i.op), 0),
+                    .barrier => {
+                        if (i.aux & 3 == 2) return b.notDirect("barrier", 0);
+                        writes |= classBit(.gc);
+                    },
+                    .store, .storex, .copy_m2m => {
+                        if (!i.flags.fresh) writes |= classBit(i.cls);
+                    },
+                    .callc => {
+                        if (!i.flags.pure) writes = all_classes;
+                    },
+                    else => {},
+                }
+            }
+        }
+        const ret: ?Ty = if (b.ret_mixed) null else b.ret_seen;
+        f.ret_ty = ret;
+        f.writes = writes;
+        if (!b.self_calls) return;
+        const same_ret = if (ret) |t| (if (b.persist.self_ret) |u| t == u else false) else b.persist.self_ret == null;
+        if (same_ret and writes & ~b.persist.self_writes == 0) return;
+        b.persist.self_rounds += 1;
+        // A type that keeps changing is no prediction.
+        b.persist.self_ret = if (b.persist.self_rounds > 2) null else ret;
+        b.persist.self_writes |= writes;
+        if (b.l.g.jit.opt_dump) std.debug.print("  rebuild: the function returns and writes something else to itself\n", .{});
+        return error.Rebuild;
+    }
+
+    /// Gives up direct entry, and says why when the tier lists its work.
+    fn notDirect(b: *Lower, what: []const u8, pc: u32) Error {
+        if (b.l.g.jit.opt_dump) std.debug.print("  the function keeps a frame: {s} at {d}\n", .{ what, pc });
+        return error.NotDirect;
+    }
+
+    const all_classes: u32 = (1 << class_count) - 1;
+
+    fn classBit(c: ir.Class) u32 {
+        return @as(u32, 1) << @intCast(@backingInt(c));
     }
 
     fn newFrame(arena: std.mem.Allocator, l: *Thread, p: *Proto, fl: *Flow, cfg: *Cfg, off: u32) Error!*Frame {
@@ -498,6 +617,25 @@ pub const Lower = struct {
     /// A snapshot that continues the current frame at `pc` with the
     /// given state of its registers and of the unallocated tables.
     fn snapWith(b: *Lower, pc: u32, inner_regs: []const Reg, vobjs: []const VObj) Error!u32 {
+        return b.snapFull(pc, inner_regs, vobjs, null);
+    }
+
+    /// The register and the closure of a direct call that a snapshot
+    /// describes the caller of.
+    const Waiting = struct {
+        ra: u32,
+        closure: Ref,
+    };
+
+    /// A snapshot of the current frame while the direct call at the
+    /// current instruction runs. The frame continues after the call,
+    /// without what the call writes, and the slot of the called function
+    /// holds its closure, as it does in the interpreter.
+    fn snapCall(b: *Lower, ra: u32, closure: Ref) Error!u32 {
+        return b.snapFull(b.pc + 1, b.fr.regs, b.vobjs.items, .{ .ra = ra, .closure = closure });
+    }
+
+    fn snapFull(b: *Lower, pc: u32, inner_regs: []const Reg, vobjs: []const VObj, waiting: ?Waiting) Error!u32 {
         const f = b.f;
         const first_entry: u32 = @intCast(f.snap_entries.items.len);
         // Frames from the root to the current one.
@@ -514,11 +652,11 @@ pub const Lower = struct {
             i -= 1;
             const fr = chain[i];
             const inner = i == 0;
-            // A frame that waits for an inline call continues after the
-            // call, without what the call writes.
+            // A frame that waits for a call continues after the call,
+            // without what the call writes.
             const at: u32 = if (inner) pc else chain[i - 1].call_pc + 1;
             var live = if (at < fr.flow.live.len) fr.flow.live[at] else RegSet{};
-            if (!inner) {
+            if (!inner or waiting != null) {
                 const e = flow_mod.effects(fr.proto, at - 1);
                 live = fr.flow.live_out[at - 1].without(e.writes);
                 if (at < fr.flow.live.len) {
@@ -534,9 +672,14 @@ pub const Lower = struct {
                 if (r.in_slot or !live.has(@intCast(ri))) continue;
                 try f.snap_entries.append(b.arena, .{ .slot = fr.off + @as(u32, @intCast(ri)), .ref = r.val });
             }
+            if (inner) if (waiting) |w| {
+                try f.snap_entries.append(b.arena, .{ .slot = fr.off + w.ra, .ref = w.closure });
+            };
             try f.snap_frames.append(b.arena, .{
                 .proto = fr.proto,
-                .closure = fr.closure,
+                // The frame of the root exists, or is built from the
+                // call that entered it.
+                .closure = if (fr.parent != null) fr.closure else ir.none,
                 .off = fr.off,
                 .pc = at,
                 .want = fr.want,
@@ -1173,6 +1316,8 @@ pub const Lower = struct {
     fn generic(b: *Lower, pc: u32, last: bool) Error!bool {
         const fr = b.fr;
         if (fr.parent != null) return error.Unsupported;
+        // A template works on the frame.
+        if (b.direct) return b.notDirect(@tagName(opc.op(fr.proto.code[pc])), pc);
         try b.sync(pc);
         const e = flow_mod.effects(fr.proto, pc);
         // What the template leaves behind.
@@ -1354,14 +1499,20 @@ pub const Lower = struct {
             .tailcall => return b.tailCall(ra, rb, last),
             .ret0 => {
                 if (fr.parent != null) return b.inlineReturn(null);
+                if (b.direct) return b.directReturn(null);
                 return b.generic(pc, last);
             },
             .ret1 => {
                 if (fr.parent != null) return b.inlineReturn(ra);
+                if (b.direct) return b.directReturn(ra);
                 return b.generic(pc, last);
             },
             .ret => {
-                if (fr.parent == null) return b.generic(pc, last);
+                if (fr.parent == null) {
+                    if (b.direct and rb == 1) return b.directReturn(null);
+                    if (b.direct and rb == 2) return b.directReturn(ra);
+                    return b.generic(pc, last);
+                }
                 if (rb == 1) return b.inlineReturn(null);
                 if (rb == 2) return b.inlineReturn(ra);
                 return error.Unsupported;
@@ -2767,10 +2918,163 @@ pub const Lower = struct {
                     b.specialized += 1;
                     return true;
                 }
+                if (try b.directCall(ra, nargs, want, cl)) {
+                    b.specialized += 1;
+                    return true;
+                }
             },
             else => {},
         }
         return b.generic(pc, last);
+    }
+
+    /// A call of the closure `cl` at the direct entry of its optimized
+    /// code, when it has one whose parameter types the arguments have.
+    /// The callee is the function being built itself, or a function that
+    /// was compiled for direct entry before. The caller passes the
+    /// closure and the arguments in machine registers, and its own
+    /// values wait in its native frame, where the snapshot of the call
+    /// finds them when optimized code is left inside the callee.
+    fn directCall(b: *Lower, ra: u32, nargs: u32, want: i32, cl: *Closure) Error!bool {
+        const fr = b.fr;
+        const p = cl.proto;
+        const g = b.l.g;
+        if (!g.jit.direct or want > 1) return false;
+        const self = b.direct and p == b.root.proto;
+        var sig: [ir.max_direct_params]Ty = undefined;
+        var ret: ?Ty = null;
+        var writes: u32 = 0;
+        var unit: ?*opt.Unit = null;
+        if (self) {
+            sig = b.f.sig;
+            ret = b.persist.self_ret;
+            writes = b.persist.self_writes;
+        } else if (opt.directUnit(p)) |u| {
+            sig = u.sig;
+            ret = u.ret_ty;
+            writes = u.writes;
+            unit = u;
+        } else return false;
+        if (want == 1 and ret == null) return false;
+        // A chain of direct calls keeps to the stack through the native
+        // frames of its activations, each of which covers at least as
+        // many bytes as its call takes slots.
+        if (unit) |u| {
+            if (fr.off + ra + 1 > u.total) return false;
+        }
+        const np: u32 = p.num_params;
+        var i: u32 = 0;
+        while (i < np) : (i += 1) {
+            const have: ?Ty = if (i < nargs) b.argTy(ra + 1 + i) else .nil;
+            if (have == null or have.? != sig[i]) return false;
+        }
+        if (fr.off + ra + 1 + p.max_stack > 240) return false;
+
+        // Every guard comes before the call.
+        const cv = try b.typed(ra, .closure);
+        if (self and b.root.closure_sample == cl) {
+            _ = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = cv, .b = b.root.closure });
+        } else {
+            const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, 8, .fixed, ir.none);
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
+        }
+        if (unit) |u| {
+            // Code that was retired takes no new calls.
+            const cell = try b.kptr(.int, @intFromPtr(&u.cell));
+            const live = try b.load(cell, 0, .int, 8, .code, ir.none);
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = live, .imm = 0 });
+        }
+        var args: [ir.max_direct_params]Ref = @splat(ir.none);
+        i = 0;
+        while (i < np and i < nargs) : (i += 1) {
+            if (sig[i] != .nil) args[i] = try b.typed(ra + 1 + i, sig[i]);
+        }
+        // The snapshot of the call names values, so every table a
+        // register holds is allocated first.
+        try b.materializeAll();
+
+        // A call from a function with a frame starts a chain. The
+        // callee then checks the stack before it runs, and when it
+        // declines, the frame continues before the call.
+        var before: u32 = ir.no_snap;
+        if (!b.direct) {
+            before = try b.snapAt(b.pc);
+            b.f.snaps.items[before].quiet = true;
+        }
+        const site: u32 = @intCast(b.f.sites.items.len);
+        const snap_id = try b.snapCall(ra, cv);
+        try b.f.sites.append(b.arena, .{
+            .snap = snap_id,
+            .slot = fr.off + ra,
+            .nargs = nargs,
+            .want = want,
+            .callee_total = if (unit) |u| @intCast(u.total) else 0,
+            .callee_ratio = if (unit) |u| u.chain_ratio else 0,
+        });
+        for (args, 0..) |x, k| {
+            if (x != ir.none) _ = try b.emit(.{ .op = .darg, .a = x, .imm = @intCast(k) });
+        }
+        const addr: usize = if (unit) |u| (if (b.direct) u.direct_entry else u.root_entry) else 0;
+        const call_ref = try b.emit(.{ .op = .dcall, .a = cv, .imm = @bitCast(@as(u64, addr)), .aux = site, .snap = snap_id });
+        if (!b.direct) _ = try b.emit(.{ .op = .dgate, .a = call_ref, .snap = before });
+        if (unit) |u| {
+            try b.inlined.append(b.arena, u.proto);
+        } else b.self_calls = true;
+        b.callee_writes |= writes;
+
+        // The callee wrote what its code writes, and nothing else ran.
+        if (writes == all_classes) {
+            b.clobberAll();
+        } else {
+            for (&b.epochs, 0..) |*e, c| {
+                if (writes & (@as(u32, 1) << @intCast(c)) != 0) e.* +%= 1;
+            }
+            b.fresh = null;
+        }
+        b.snap_cache = ir.no_snap;
+        // The registers from the callee up are dead, except the result.
+        var r: u32 = ra;
+        while (r < fr.regs.len) : (r += 1) {
+            if (b.captured(r)) continue;
+            fr.regs[r] = if (b.direct) .{ .val = try b.knil(), .in_slot = false, .sample = Sample.of(.nil) } else .{};
+            if (!b.direct) try b.clobberSlot(b.slotOf(r));
+        }
+        if (want == 1) {
+            const ty = ret.?;
+            // A result of another type leaves optimized code after the
+            // call, with the result in its register.
+            const after = try b.arena.dupe(Reg, fr.regs);
+            after[ra] = .{ .val = call_ref, .in_slot = false };
+            const s = try b.snapWith(b.pc + 1, after, b.vobjs.items);
+            b.f.snaps.items[s].after_call = true;
+            const v = try b.emit(.{ .op = .dres, .ty = ty, .a = call_ref, .snap = s });
+            const sample: Sample = if (ty == .boolean) Sample.tagged(.false) else Sample.tagged(@fromBackingInt(@backingInt(ty)));
+            try b.setReg(ra, v, sample);
+        }
+        return true;
+    }
+
+    /// A return from a function that was entered directly. The result
+    /// travels in machine registers as its payload and its tag.
+    fn directReturn(b: *Lower, r: ?u32) Error!bool {
+        var v: Ref = ir.none;
+        var ty: Ty = .nil;
+        if (r) |x| {
+            ty = b.staticTy(x) orelse return b.notDirect("return", b.pc);
+            v = try b.typed(x, ty);
+        }
+        // A return that passes on what the function returned to itself
+        // says nothing new about the type.
+        const src = b.f.at(v);
+        const passes_on = v != ir.none and src.op == .dres and b.f.at(src.a).imm == 0;
+        if (!passes_on) {
+            if (b.ret_seen) |t| {
+                if (t != ty) b.ret_mixed = true;
+            } else b.ret_seen = ty;
+        }
+        _ = try b.emit(.{ .op = .dret, .a = v, .imm = @intFromBool(r != null) });
+        try b.finishEdges();
+        return false;
     }
 
     /// A tail call. In the root it runs through the template. In an

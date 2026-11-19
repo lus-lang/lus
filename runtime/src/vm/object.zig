@@ -303,10 +303,7 @@ pub const Proto = struct {
     hdr: Header,
     num_params: u8 = 0,
     is_vararg: bool = false,
-    /// True when the function has fixed parameters and no native code, so
-    /// that the interpreter enters it on its shortest path. The default
-    /// sends every call through the general path, which is always right.
-    plain_call: bool = false,
+    call: CallFlags = .{},
     max_stack: u8 = 2,
     line_defined: u32 = 0,
     last_line_defined: u32 = 0,
@@ -354,10 +351,78 @@ pub const Proto = struct {
         declined,
     };
 
+    /// How the interpreter calls the function and returns from it. The
+    /// two flags share a byte, so that a call reads both at once.
+    pub const CallFlags = packed struct(u8) {
+        /// The function has fixed parameters and no native code, so the
+        /// interpreter enters it on its shortest path. The default
+        /// sends every call through the general path, which is always
+        /// right.
+        plain: bool = false,
+        /// A frame of the function can own an open upvalue or a
+        /// to-be-closed variable, which its return then has to close.
+        closes: bool = true,
+        _pad: u6 = 0,
+    };
+
+    /// Finds whether a frame of the function can own an open upvalue or
+    /// a to-be-closed variable. Only a closure made by the function
+    /// opens an upvalue on one of its registers, and only two
+    /// instructions mark a variable to be closed. It runs once the code
+    /// and the nested functions are in place.
+    pub fn noteCloses(p: *Proto) void {
+        const opc = @import("../compile/opcodes.zig");
+        p.call.closes = false;
+        for (p.protos) |child| for (child.upvals) |d| {
+            if (d.in_stack and !d.by_value) p.call.closes = true;
+        };
+        for (p.code) |ins| switch (opc.op(ins)) {
+            .tbc, .tforprep => p.call.closes = true,
+            else => {},
+        };
+    }
+
     /// Allocates the inline caches for the code, all empty.
     pub fn initIc(p: *Proto, gpa: std.mem.Allocator) !void {
         p.ic = try gpa.alloc(IcEntry, p.code.len);
         @memset(p.ic, .{});
+        p.link();
+    }
+
+    /// What sits in front of the code of a function: the addresses of
+    /// its constants and of its inline caches. The interpreter keeps the
+    /// code pointer of the running function in a machine register and
+    /// reaches both through it, so a call and a return load one pointer.
+    pub const CodeLinks = extern struct {
+        constants: [*]const Value,
+        ic: [*]IcEntry,
+    };
+
+    /// Allocates the code of a function with room for its links.
+    pub fn allocCode(gpa: std.mem.Allocator, n: usize) ![]u32 {
+        if (n == 0) return &.{};
+        const raw = try gpa.alignedAlloc(u8, .of(CodeLinks), @sizeOf(CodeLinks) + n * @sizeOf(u32));
+        @memset(raw[0..@sizeOf(CodeLinks)], 0);
+        const code: [*]u32 = @ptrCast(@alignCast(raw.ptr + @sizeOf(CodeLinks)));
+        return code[0..n];
+    }
+
+    pub fn freeCode(gpa: std.mem.Allocator, code: []u32) void {
+        if (code.len == 0) return;
+        const raw: [*]align(@alignOf(CodeLinks)) u8 = @ptrCast(linksOf(code.ptr));
+        gpa.free(raw[0 .. @sizeOf(CodeLinks) + code.len * @sizeOf(u32)]);
+    }
+
+    pub inline fn linksOf(code: [*]const u32) *CodeLinks {
+        const bytes: [*]const u8 = @ptrCast(code);
+        return @ptrCast(@alignCast(@constCast(bytes - @sizeOf(CodeLinks))));
+    }
+
+    /// Writes the links in front of the code. It runs whenever the
+    /// constants or the inline caches of the function are set.
+    pub fn link(p: *Proto) void {
+        if (p.code.len == 0) return;
+        linksOf(p.code.ptr).* = .{ .constants = p.constants.ptr, .ic = p.ic.ptr };
     }
 };
 
