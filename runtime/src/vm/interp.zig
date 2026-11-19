@@ -217,6 +217,7 @@ pub fn call(l: *Thread, func: u32, nargs: u32, want: i32) Error!u32 {
         l.ncalls -= 1;
         l.g.native_depth -= 1;
     }
+    l.meta_finish = null;
     const depth = l.frames.items.len;
     const kind = precall(l, func, nargs, want) catch |e| return yieldAcrossBoundary(l, e);
     if (kind == .lus) {
@@ -234,10 +235,12 @@ pub fn call(l: *Thread, func: u32, nargs: u32, want: i32) Error!u32 {
 fn yieldAcrossBoundary(l: *Thread, e: (Error || YieldError)) Error {
     return switch (e) {
         error.LusError => error.LusError,
+        // The interpreter handles metamethod frames before they get here.
+        error.MetaCall => unreachable,
         error.Yield => {
             l.yielding = false;
             l.status = .running;
-            return l.raiseFmt("attempt to yield across a native call boundary", .{});
+            return l.raiseFmt("attempt to yield across a C-call boundary", .{});
         },
     };
 }
@@ -277,6 +280,9 @@ inline fn load(l: *Thread) Ctx {
 pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
     while (true) {
         run(l, stop) catch |e| {
+            l.meta_finish = null;
+            // A metamethod frame was pushed: run it.
+            if (e == error.MetaCall) continue;
             if (e == error.Yield) return e;
             if (!handleError(l, stop)) return e;
             continue;
@@ -288,6 +294,8 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
 /// Finds an exception handler in the Lus frames above `stop` for the
 /// current error. On success the matching frame resumes at its handler.
 fn handleError(l: *Thread, stop: usize) bool {
+    // A coroutine closing itself unwinds past every handler.
+    if (l.self_closed) return false;
     var i = l.frames.items.len;
     while (i > stop) {
         i -= 1;
@@ -356,7 +364,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 const t = c.cl.upvals()[opc.b(ins)].loc.*;
                 const key = c.k[opc.c(ins)];
                 {
-                    const v_ = try getStrFast(l, t, key);
+                    const v_ = try getStrFast(l, t, key, ra);
                     R.reg(l, c.base, ra).* = v_;
                 }
             },
@@ -368,14 +376,14 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 const t = R.reg(l, c.base, opc.b(ins)).*;
                 const key = R.reg(l, c.base, opc.c(ins)).*;
                 {
-                    const v_ = try getFast(l, t, key);
+                    const v_ = try getFast(l, t, key, ra);
                     R.reg(l, c.base, ra).* = v_;
                 }
             },
             .getfield => {
                 const t = R.reg(l, c.base, opc.b(ins)).*;
                 {
-                    const v_ = try getStrFast(l, t, c.k[opc.c(ins)]);
+                    const v_ = try getStrFast(l, t, c.k[opc.c(ins)], ra);
                     R.reg(l, c.base, ra).* = v_;
                 }
             },
@@ -390,7 +398,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                     }
                 }
                 {
-                    const v_ = try ops.index(l, t, Value.int(i));
+                    const v_ = try metaIndex(l, t, Value.int(i), ra);
                     R.reg(l, c.base, ra).* = v_;
                 }
             },
@@ -416,7 +424,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 const obj = R.reg(l, c.base, opc.b(ins)).*;
                 R.reg(l, c.base, ra + 1).* = obj;
                 {
-                    const v_ = try getStrFast(l, obj, c.k[opc.c(ins)]);
+                    const v_ = try getStrFast(l, obj, c.k[opc.c(ins)], ra);
                     R.reg(l, c.base, ra).* = v_;
                 }
             },
@@ -449,7 +457,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                     R.reg(l, c.base, ra).* = Value.float(x.asFloat() + @as(f64, @floatFromInt(imm)));
                 } else {
                     {
-                        const v_ = try ops.arith(l, .add, x, Value.int(imm));
+                        const v_ = try metaArith(l, .add, x, Value.int(imm), ra);
                         R.reg(l, c.base, ra).* = v_;
                     }
                 }
@@ -460,18 +468,18 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 const r = switch (x.tag) {
                     .integer => Value.int(0 -% x.asInt()),
                     .float => Value.float(-x.asFloat()),
-                    else => try ops.arith(l, .unm, x, x),
+                    else => try metaArith(l, .unm, x, x, ra),
                 };
                 R.reg(l, c.base, ra).* = r;
             },
             .bnot => {
                 const x = R.reg(l, c.base, opc.b(ins)).*;
-                const r = if (x.tag == .integer) Value.int(~x.asInt()) else try ops.arith(l, .bnot, x, x);
+                const r = if (x.tag == .integer) Value.int(~x.asInt()) else try metaArith(l, .bnot, x, x, ra);
                 R.reg(l, c.base, ra).* = r;
             },
             .not => R.reg(l, c.base, ra).* = Value.boolean(!R.reg(l, c.base, opc.b(ins)).truthy()),
             .len => {
-                const r = try ops.length(l, R.reg(l, c.base, opc.b(ins)).*);
+                const r = try metaLength(l, R.reg(l, c.base, opc.b(ins)).*, ra);
                 R.reg(l, c.base, ra).* = r;
             },
             .concat => {
@@ -491,19 +499,19 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             .eq => {
                 const x = R.reg(l, c.base, ra).*;
                 const y = R.reg(l, c.base, opc.b(ins)).*;
-                const r = try ops.equal(l, x, y);
+                const r = try metaCompare(l, .eq, x, y, opc.c(ins) != 0);
                 if (r != (opc.c(ins) != 0)) pc += 1;
             },
             .lt => {
                 const x = R.reg(l, c.base, ra).*;
                 const y = R.reg(l, c.base, opc.b(ins)).*;
-                const r = if (x.tag == .integer and y.tag == .integer) x.asInt() < y.asInt() else try ops.lessThan(l, x, y);
+                const r = if (x.tag == .integer and y.tag == .integer) x.asInt() < y.asInt() else try metaCompare(l, .lt, x, y, opc.c(ins) != 0);
                 if (r != (opc.c(ins) != 0)) pc += 1;
             },
             .le => {
                 const x = R.reg(l, c.base, ra).*;
                 const y = R.reg(l, c.base, opc.b(ins)).*;
-                const r = if (x.tag == .integer and y.tag == .integer) x.asInt() <= y.asInt() else try ops.lessEqual(l, x, y);
+                const r = if (x.tag == .integer and y.tag == .integer) x.asInt() <= y.asInt() else try metaCompare(l, .le, x, y, opc.c(ins) != 0);
                 if (r != (opc.c(ins) != 0)) pc += 1;
             },
             .eqk => {
@@ -774,6 +782,14 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     if (l.frame().closure == null) return true;
     c.* = load(l);
     pc.* = l.frames.items[c.fi].pc;
+    switch (fr.finish) {
+        .none, .discard => {},
+        .store => |r| l.stack[c.base + r] = l.stack[fr.ret],
+        .cond => |k| if (l.stack[fr.ret].truthy() != k) {
+            pc.* += 1;
+            l.frames.items[c.fi].pc = pc.*;
+        },
+    }
     // Fixed result counts restore the caller's register window top.
     if (fr.want >= 0) l.top = c.base + c.cl.proto.max_stack;
     return false;
@@ -817,18 +833,18 @@ pub fn makeClosure(l: *Thread, p: *Proto, parent: *Closure, base: u32) Error!*Cl
 inline fn arith2(l: *Thread, base: u32, ins: u32, comptime op: ops.ArithOp) Error!void {
     const x = l.stack[base + opc.b(ins)];
     const y = l.stack[base + opc.c(ins)];
-    const r = try arithFast(l, op, x, y);
+    const r = try arithFast(l, op, x, y, opc.a(ins));
     l.stack[base + opc.a(ins)] = r;
 }
 
 inline fn arithK(l: *Thread, c: Ctx, ins: u32, comptime op: ops.ArithOp) Error!void {
     const x = l.stack[c.base + opc.b(ins)];
     const y = c.k[opc.c(ins)];
-    const r = try arithFast(l, op, x, y);
+    const r = try arithFast(l, op, x, y, opc.a(ins));
     l.stack[c.base + opc.a(ins)] = r;
 }
 
-inline fn arithFast(l: *Thread, comptime op: ops.ArithOp, x: Value, y: Value) Error!Value {
+inline fn arithFast(l: *Thread, comptime op: ops.ArithOp, x: Value, y: Value, dest: u8) Error!Value {
     if (x.tag == .integer and y.tag == .integer) {
         const a = x.asInt();
         const b = y.asInt();
@@ -852,25 +868,61 @@ inline fn arithFast(l: *Thread, comptime op: ops.ArithOp, x: Value, y: Value) Er
             else => {},
         }
     }
-    return ops.arith(l, op, x, y);
+    return metaArith(l, op, x, y, dest);
 }
 
-inline fn getStrFast(l: *Thread, t: Value, key: Value) Error!Value {
+inline fn getStrFast(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
     if (t.tag == .table) {
         const tab = t.as(Table);
         const v = table.getStr(tab, key.as(String));
         if (!v.isNil() or tab.metatable == null) return v;
     }
+    return metaIndex(l, t, key, dest);
+}
+
+/// Slow-path operations that may run a metamethod as an interpreter
+/// frame. `fin` says what to do with the metamethod's result.
+fn metaIndex(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
+    l.meta_finish = .{ .store = dest };
+    defer l.meta_finish = null;
     return ops.index(l, t, key);
 }
 
-inline fn getFast(l: *Thread, t: Value, key: Value) Error!Value {
+fn metaSet(l: *Thread, t: Value, key: Value, v: Value) Error!void {
+    l.meta_finish = .discard;
+    defer l.meta_finish = null;
+    return ops.setIndex(l, t, key, v);
+}
+
+fn metaArith(l: *Thread, op: ops.ArithOp, x: Value, y: Value, dest: u8) Error!Value {
+    l.meta_finish = .{ .store = dest };
+    defer l.meta_finish = null;
+    return ops.arith(l, op, x, y);
+}
+
+fn metaLength(l: *Thread, v: Value, dest: u8) Error!Value {
+    l.meta_finish = .{ .store = dest };
+    defer l.meta_finish = null;
+    return ops.length(l, v);
+}
+
+fn metaCompare(l: *Thread, comptime which: enum { eq, lt, le }, x: Value, y: Value, k: bool) Error!bool {
+    l.meta_finish = .{ .cond = k };
+    defer l.meta_finish = null;
+    return switch (which) {
+        .eq => ops.equal(l, x, y),
+        .lt => ops.lessThan(l, x, y),
+        .le => ops.lessEqual(l, x, y),
+    };
+}
+
+inline fn getFast(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
     if (t.tag == .table) {
         const tab = t.as(Table);
         const v = if (key.tag == .integer) table.getInt(tab, key.asInt()) else if (key.tag == .string) table.getStr(tab, key.as(String)) else table.get(tab, try ops.normKey(l, key));
         if (!v.isNil() or tab.metatable == null) return v;
     }
-    return ops.index(l, t, key);
+    return metaIndex(l, t, key, dest);
 }
 
 inline fn setFast(l: *Thread, t: Value, key: Value, v: Value) Error!void {
@@ -878,7 +930,7 @@ inline fn setFast(l: *Thread, t: Value, key: Value, v: Value) Error!void {
         const tab = t.as(Table);
         if (tab.metatable == null) return ops.rawSet(l, tab, key, v);
     }
-    return ops.setIndex(l, t, key, v);
+    return metaSet(l, t, key, v);
 }
 
 fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {

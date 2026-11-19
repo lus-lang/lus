@@ -1470,6 +1470,10 @@ fn expr(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!void {
             var k: ExpDesc = .{};
             try expr(fs, ix.key, &k);
             try exp2val(fs, &k);
+            // An upvalue table indexed by a computed key moves to a
+            // register after the key is complete, so the load is not
+            // emitted inside the key's pending jumps.
+            if (v.kind == .upval and k.kind == .jmp) _ = try exp2anyreg(fs, &k);
             try indexed(fs, v, &k);
         },
         .call => |cl| try callExpr(fs, cl.callee, null, cl.args, v, e.line),

@@ -44,7 +44,7 @@ pub fn index(l: *Thread, obj: Value, key: Value) Error!Value {
             if (tm.isNil()) return indexError(l, t, key);
         }
         if (tm.tag == .closure or tm.tag == .native) {
-            return call1(l, tm, &.{ t, key });
+            return callMeta(l, tm, &.{ t, key });
         }
         t = tm;
     }
@@ -70,7 +70,7 @@ pub fn setIndex(l: *Thread, obj: Value, key: Value, val: Value) Error!void {
                     tm = state.tmLookup(l.g, mt, .newindex);
                     if (!tm.isNil()) {
                         if (tm.tag == .closure or tm.tag == .native) {
-                            _ = try callN(l, tm, &.{ t, key, val }, 0);
+                            _ = try callMeta(l, tm, &.{ t, key, val });
                             return;
                         }
                         t = tm;
@@ -83,7 +83,7 @@ pub fn setIndex(l: *Thread, obj: Value, key: Value, val: Value) Error!void {
         tm = l.metamethod(t, .newindex);
         if (tm.isNil()) return indexError(l, t, key);
         if (tm.tag == .closure or tm.tag == .native) {
-            _ = try callN(l, tm, &.{ t, key, val }, 0);
+            _ = try callMeta(l, tm, &.{ t, key, val });
             return;
         }
         t = tm;
@@ -119,6 +119,31 @@ pub fn call1(l: *Thread, f: Value, args: []const Value) Error!Value {
     const r = l.stack[base];
     l.top = base;
     return r;
+}
+
+/// Calls the metamethod `tm`. Inside the interpreter (when
+/// `l.meta_finish` is set) a Lus metamethod is pushed as a frame and
+/// `error.MetaCall` returns control to the interpreter, which runs it and
+/// applies the finish action to its result. This keeps the metamethod
+/// free to yield. Elsewhere it is an ordinary call.
+pub fn callMeta(l: *Thread, tm: Value, args: []const Value) Error!Value {
+    const fin = l.meta_finish;
+    l.meta_finish = null;
+    if (fin) |f| if (tm.tag == .closure) {
+        try l.ensure(args.len + 2);
+        const func = l.top;
+        l.stack[func] = tm;
+        for (args, 0..) |v, i| l.stack[func + 1 + i] = v;
+        l.top = func + 1 + @as(u32, @intCast(args.len));
+        const want: i32 = if (f == .discard) 0 else 1;
+        _ = interp.precall(l, func, @intCast(args.len), want) catch |e| return switch (e) {
+            error.Yield => unreachable,
+            else => |x| x,
+        };
+        l.frame().finish = f;
+        return error.MetaCall;
+    };
+    return call1(l, tm, args);
 }
 
 /// Calls `f` with `args`, leaving `want` results (or all, when want is -1)
@@ -171,7 +196,7 @@ pub fn arith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!Value {
     const event = tmForArith(op);
     var tm = l.metamethod(a, event);
     if (tm.isNil()) tm = l.metamethod(b, event);
-    if (!tm.isNil()) return call1(l, tm, &.{ a, b });
+    if (!tm.isNil()) return callMeta(l, tm, &.{ a, b });
     return arithError(l, op, a, b);
 }
 
@@ -355,7 +380,7 @@ pub fn equal(l: *Thread, a: Value, b: Value) Error!bool {
     var tm = l.metamethod(a, .eq);
     if (tm.isNil()) tm = l.metamethod(b, .eq);
     if (tm.isNil()) return false;
-    return (try call1(l, tm, &.{ a, b })).truthy();
+    return (try callMeta(l, tm, &.{ a, b })).truthy();
 }
 
 pub fn lessThan(l: *Thread, a: Value, b: Value) Error!bool {
@@ -411,7 +436,7 @@ fn strLess(a: *String, b: *String, or_equal: bool) bool {
 fn compareTM(l: *Thread, a: Value, b: Value, event: TM) Error!bool {
     var tm = l.metamethod(a, event);
     if (tm.isNil()) tm = l.metamethod(b, event);
-    if (!tm.isNil()) return (try call1(l, tm, &.{ a, b })).truthy();
+    if (!tm.isNil()) return (try callMeta(l, tm, &.{ a, b })).truthy();
     const ta = value.typeName(a.tag);
     const tb = value.typeName(b.tag);
     if (std.mem.eql(u8, ta, tb)) return l.raiseFmt("attempt to compare two {s} values", .{l.typeNameOf(a)});
@@ -428,14 +453,14 @@ pub fn length(l: *Thread, v: Value) Error!Value {
             const t = v.as(Table);
             if (t.metatable) |mt| {
                 const tm = state.tmLookup(l.g, mt, .len);
-                if (!tm.isNil()) return call1(l, tm, &.{v});
+                if (!tm.isNil()) return callMeta(l, tm, &.{v});
             }
             return Value.int(table.length(t));
         },
         .vector => return Value.int(@intCast(v.as(object.Vector).bytes.items.len)),
         else => {
             const tm = l.metamethod(v, .len);
-            if (!tm.isNil()) return call1(l, tm, &.{v});
+            if (!tm.isNil()) return callMeta(l, tm, &.{v});
             return l.typeError(v, "get length of");
         },
     }

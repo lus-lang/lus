@@ -151,10 +151,47 @@ fn handleStop(co: *Thread, e: anyerror) Outcome {
         co.yielding = false;
         return .yielded;
     }
-    // Error: unwind every frame, closing pending variables.
-    interp.unwindTo(co, 0);
-    co.top = 0;
+    if (co.self_closed) {
+        // The coroutine closed itself: it ends with no results.
+        co.self_closed = false;
+        co.frames.items.len = 0;
+        co.top = 0;
+        co.transfer = 0;
+        return .returned;
+    }
+    // Error: the frames and pending to-be-closed variables stay in place
+    // until coroutine.close, so a traceback can still inspect them. The
+    // top covers every live register so the collector keeps them.
+    var top = co.top;
+    for (co.frames.items) |f| {
+        if (f.closure) |cl| top = @max(top, f.base + cl.proto.max_stack);
+    }
+    if (co.tbc.items.len > 0) top = @max(top, co.tbc.items[co.tbc.items.len - 1] + 1);
+    co.top = @min(top, @as(u32, @intCast(co.stack.len)));
     return .failed;
+}
+
+/// Closes a suspended or errored coroutine: runs pending to-be-closed
+/// variables with the pending error (if any) and marks it dead. Returns
+/// the final error, or null when everything closed cleanly.
+fn closeThread(co: *Thread) ?Value {
+    var err: ?Value = if (co.status == .err) co.err else null;
+    co.err = .nil;
+    if (co.frames.items.len > 0) {
+        interp.closeUpvals(co, 0);
+        const saved = co.status;
+        co.status = .running;
+        interp.closeTbc(co, 0, err) catch {
+            err = co.err;
+        };
+        co.status = saved;
+    }
+    co.frames.items.len = 0;
+    co.tbc.items.len = 0;
+    co.top = 0;
+    co.status = .dead;
+    co.err = .nil;
+    return err;
 }
 
 fn @"resume"(l: *Thread) Error!u32 {
@@ -219,11 +256,18 @@ fn wrapAux(l: *Thread) Error!u32 {
     const co = nat.upvalues()[0].as(Thread);
     const nargs = l.argCount();
     return resumeCo(l, co, nargs) catch {
-        // Propagate the error, adding position information to strings
-        // like Lua does.
         var err = l.err;
+        if (co.status == .err) {
+            // Close the failed coroutine, then propagate its error with
+            // the position of the call to the wrapper.
+            err = closeThread(co) orelse err;
+        }
         if (err.tag == .string) {
-            err = l.err;
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(l.g.gpa);
+            l.where(&buf, 1) catch return l.raiseMem();
+            buf.appendSlice(l.g.gpa, err.as(object.String).bytes()) catch return l.raiseMem();
+            err = try l.newStringValue(buf.items);
         }
         return l.raise(err);
     };
@@ -238,37 +282,24 @@ fn wrap(l: *Thread) Error!u32 {
 }
 
 fn close(l: *Thread) Error!u32 {
-    const co = try checkCo(l, 1);
-    if (co == l.g.main_thread) return l.raiseFmt("cannot close the main coroutine", .{});
-    if (co.status == .err) {
-        const err = co.err;
-        co.status = .dead;
-        co.err = .nil;
-        co.frames.items.len = 0;
-        co.top = 0;
-        try l.push(.false);
-        try l.push(err);
-        return 2;
+    const co = if (l.hasArg(1)) try checkCo(l, 1) else l;
+    if (co == l) {
+        if (co == l.g.main_thread) return l.raiseFmt("cannot close main thread", .{});
+        // Closing the running coroutine runs its pending to-be-closed
+        // variables and ends it, as if its body had returned nothing.
+        interp.closeUpvals(co, 0);
+        try interp.closeTbc(co, 0, null);
+        co.self_closed = true;
+        return error.LusError;
     }
     switch (co.status) {
         .suspended, .dead, .err => {},
         else => return l.raiseFmt("cannot close a {s} coroutine", .{statusName(l, co)}),
     }
-    if (co.status == .suspended and co.frames.items.len > 0) {
-        // Close pending to-be-closed variables with no error.
-        co.err = .nil;
-        interp.closeUpvals(co, 0);
-        interp.closeTbc(co, 0, null) catch {
-            co.status = .dead;
-            co.frames.items.len = 0;
-            co.top = 0;
-            try l.push(.false);
-            try l.push(co.err);
-            return 2;
-        };
+    if (closeThread(co)) |err| {
+        try l.push(.false);
+        try l.push(err);
+        return 2;
     }
-    co.frames.items.len = 0;
-    co.top = 0;
-    co.status = .dead;
     return aux.retBool(l, true);
 }

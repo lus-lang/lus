@@ -15,7 +15,25 @@ const Allocator = std.mem.Allocator;
 
 /// The single error a Lus operation can fail with. The error value itself
 /// is in `Thread.err`.
-pub const Error = error{LusError};
+pub const Error = error{
+    LusError,
+    /// Internal: a metamethod frame was pushed for the interpreter to run.
+    /// Raised only while `Thread.meta_finish` is set, which happens only
+    /// inside the interpreter loop.
+    MetaCall,
+};
+
+/// What the interpreter does with the result of a metamethod frame it
+/// pushed instead of calling the metamethod natively.
+pub const Finish = union(enum) {
+    none,
+    /// Store the result into this register of the caller.
+    store: u8,
+    /// Skip the next instruction when the result's truth differs from k.
+    cond: bool,
+    /// Drop the result.
+    discard,
+};
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
@@ -209,7 +227,8 @@ pub const Frame = struct {
     /// Stack slot where results go (the original function slot, before
     /// vararg adjustment).
     ret: u32,
-
+    /// Set on metamethod frames pushed by the interpreter.
+    finish: Finish = .none,
 };
 
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };
@@ -235,6 +254,12 @@ pub const Thread = struct {
     transfer: u32 = 0,
     /// Set by `coroutine.yield` so the call machinery unwinds to `resume`.
     yielding: bool = false,
+    /// Set by the interpreter just before an operation that may call a
+    /// metamethod. A Lus metamethod then runs as an interpreter frame,
+    /// which lets it yield. Any native call clears it.
+    meta_finish: ?Finish = null,
+    /// Set when a coroutine closes itself, to end its resume cleanly.
+    self_closed: bool = false,
     /// When set, the first error to reach a native call boundary records a
     /// traceback in `err_traceback` before the frames unwind.
     want_traceback: bool = false,
