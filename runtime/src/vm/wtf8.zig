@@ -12,47 +12,131 @@ pub const Analysis = struct {
     error_offset: usize = 0,
 };
 
-const vec_len = 16;
-const V = @Vector(vec_len, u8);
+/// Width of the vector blocks used by the scanning loops.
+const block = 32;
+const VB = @Vector(block, u8);
+const Mask = @Int(.unsigned, block);
 
-/// Validates `bytes` as WTF-8 and counts code points. ASCII runs are
-/// processed sixteen bytes at a time.
-pub fn analyze(bytes: []const u8) Analysis {
+/// Bit k is set when byte k of the block has its high bit set.
+inline fn highMask(v: VB) Mask {
+    return @bitCast(v >= @as(VB, @splat(0x80)));
+}
+
+/// Bit k is set when byte k of the block starts a character, that is when
+/// it is not a continuation byte (0x80 to 0xBF).
+inline fn leadMask(v: VB) Mask {
+    return @bitCast((v & @as(VB, @splat(0xC0))) != @as(VB, @splat(0x80)));
+}
+
+/// Length of the leading run of ASCII bytes in `bytes`.
+pub fn asciiPrefix(bytes: []const u8) usize {
     var i: usize = 0;
-    var chars: usize = 0;
-    var ascii = true;
+    while (i + block <= bytes.len) : (i += block) {
+        const m = highMask(bytes[i..][0..block].*);
+        if (m != 0) return i + @ctz(m);
+    }
+    while (i < bytes.len and bytes[i] < 0x80) i += 1;
+    return i;
+}
+
+/// Validates `bytes` as WTF-8 and counts code points. The common case of
+/// ASCII text is checked a vector block at a time. Text with multi-byte
+/// characters is validated by a scalar loop that skips ASCII runs a
+/// block at a time, and the characters are then counted with vector
+/// operations as the bytes that are not continuation bytes.
+pub fn analyze(bytes: []const u8) Analysis {
+    const first = asciiPrefix(bytes);
+    if (first == bytes.len) return .{ .valid = true, .ascii = true, .chars = bytes.len };
+    if (firstInvalid(bytes, first)) |at|
+        return .{ .valid = false, .ascii = false, .chars = countChars(bytes[0..at]), .error_offset = at };
+    return .{ .valid = true, .ascii = false, .chars = countChars(bytes) };
+}
+
+inline fn isCont(c: u8) bool {
+    return c & 0xC0 == 0x80;
+}
+
+/// Byte offset of the first invalid sequence of `bytes` at or after
+/// `start`, which must be a character boundary, or null when the rest of
+/// the text is valid WTF-8.
+fn firstInvalid(bytes: []const u8, start: usize) ?usize {
     const n = bytes.len;
-    var prev_lead_surrogate = false;
+    var i = start;
     while (i < n) {
-        // Fast path: a block of sixteen ASCII bytes.
-        if (i + vec_len <= n) {
-            const block: V = bytes[i..][0..vec_len].*;
-            const high: @Vector(vec_len, bool) = block >= @as(V, @splat(0x80));
-            if (!@reduce(.Or, high)) {
-                i += vec_len;
-                chars += vec_len;
-                prev_lead_surrogate = false;
-                continue;
-            }
-        }
         const c = bytes[i];
         if (c < 0x80) {
-            i += 1;
-            chars += 1;
-            prev_lead_surrogate = false;
+            // Skip the ASCII run that starts here a block at a time.
+            if (i + block <= n) {
+                const m = highMask(bytes[i..][0..block].*);
+                i += if (m == 0) block else @ctz(m);
+            } else {
+                i += 1;
+            }
             continue;
         }
-        ascii = false;
-        const d = decodeAt(bytes, i) orelse return .{ .valid = false, .ascii = false, .chars = chars, .error_offset = i };
-        // A trail surrogate directly after a lead surrogate must have been
-        // encoded as one supplementary character.
-        if (d.cp >= 0xDC00 and d.cp <= 0xDFFF and prev_lead_surrogate)
-            return .{ .valid = false, .ascii = false, .chars = chars, .error_offset = i };
-        prev_lead_surrogate = d.cp >= 0xD800 and d.cp <= 0xDBFF;
-        i += d.len;
-        chars += 1;
+        if (c < 0xC2) return i;
+        if (c < 0xE0) {
+            if (i + 1 >= n or !isCont(bytes[i + 1])) return i;
+            i += 2;
+            continue;
+        }
+        if (c < 0xF0) {
+            if (i + 2 >= n) return i;
+            const c1 = bytes[i + 1];
+            // E0 needs A0 or more to avoid an overlong form. ED accepts the
+            // whole continuation range because WTF-8 allows surrogates.
+            const lo: u8 = if (c == 0xE0) 0xA0 else 0x80;
+            if (c1 < lo or c1 > 0xBF or !isCont(bytes[i + 2])) return i;
+            i += 3;
+            // A lead surrogate directly followed by a trail surrogate must
+            // have been encoded as one supplementary character.
+            if (c == 0xED and c1 >= 0xA0 and c1 <= 0xAF and i + 1 < n and bytes[i] == 0xED and bytes[i + 1] >= 0xB0 and bytes[i + 1] <= 0xBF)
+                return i;
+            continue;
+        }
+        if (c < 0xF5) {
+            if (i + 3 >= n) return i;
+            const c1 = bytes[i + 1];
+            const lo: u8 = if (c == 0xF0) 0x90 else 0x80;
+            const hi: u8 = if (c == 0xF4) 0x8F else 0xBF;
+            if (c1 < lo or c1 > hi or !isCont(bytes[i + 2]) or !isCont(bytes[i + 3])) return i;
+            i += 4;
+            continue;
+        }
+        return i;
     }
-    return .{ .valid = true, .ascii = ascii, .chars = chars };
+    return null;
+}
+
+/// Number of characters in valid WTF-8: the count of bytes that are not
+/// continuation bytes.
+pub fn countChars(bytes: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + block <= bytes.len) : (i += block) n += @popCount(leadMask(bytes[i..][0..block].*));
+    while (i < bytes.len) : (i += 1) n += @intFromBool(!isCont(bytes[i]));
+    return n;
+}
+
+/// Byte offset of the character `count` characters after the one at
+/// byte `off` in valid WTF-8, or `bytes.len` when the text ends first.
+/// Whole blocks whose characters all come before the target are skipped
+/// with one vector count each.
+pub fn advance(bytes: []const u8, off: usize, count: usize) usize {
+    var i = off;
+    var rem = count;
+    while (i + block <= bytes.len) {
+        const k = @popCount(leadMask(bytes[i..][0..block].*));
+        if (k > rem) break;
+        rem -= k;
+        i += block;
+    }
+    while (i < bytes.len) : (i += 1) {
+        if (isCont(bytes[i])) continue;
+        if (rem == 0) return i;
+        rem -= 1;
+    }
+    return bytes.len;
 }
 
 pub const Decoded = struct { cp: u21, len: u3 };
@@ -93,6 +177,8 @@ pub fn decodeAt(bytes: []const u8, i: usize) ?Decoded {
 
 /// Decodes a code point known to be valid. Used on already validated text.
 pub inline fn decodeValid(bytes: []const u8, i: usize) Decoded {
+    const c = bytes[i];
+    if (c < 0x80) return .{ .cp = c, .len = 1 };
     return decodeAt(bytes, i).?;
 }
 
@@ -201,4 +287,168 @@ test "surrogate helpers" {
     const m = encode(0xDE00, &buf);
     try testing.expectEqual(@as(u21, 0xDE00), leadingTrailSurrogate(buf[0..m]).?);
     try testing.expectEqual(@as(u21, 0x1F600), combineSurrogates(0xD83D, 0xDE00));
+}
+
+/// The byte at a time validator that `analyze` must agree with. It
+/// decodes every character with `decodeAt`.
+fn analyzeScalar(bytes: []const u8) Analysis {
+    var i: usize = 0;
+    var chars: usize = 0;
+    var ascii = true;
+    var prev_lead_surrogate = false;
+    while (i < bytes.len) {
+        const d = decodeAt(bytes, i) orelse return .{ .valid = false, .ascii = false, .chars = chars, .error_offset = i };
+        if (d.cp >= 0xDC00 and d.cp <= 0xDFFF and prev_lead_surrogate)
+            return .{ .valid = false, .ascii = false, .chars = chars, .error_offset = i };
+        prev_lead_surrogate = d.cp >= 0xD800 and d.cp <= 0xDBFF;
+        if (d.len > 1) ascii = false;
+        i += d.len;
+        chars += 1;
+    }
+    return .{ .valid = true, .ascii = ascii, .chars = chars };
+}
+
+fn expectSameAnalysis(bytes: []const u8) !void {
+    const want = analyzeScalar(bytes);
+    const got = analyze(bytes);
+    try testing.expectEqual(want.valid, got.valid);
+    try testing.expectEqual(want.chars, got.chars);
+    if (want.valid) {
+        try testing.expectEqual(want.ascii, got.ascii);
+    } else {
+        try testing.expectEqual(want.error_offset, got.error_offset);
+    }
+}
+
+/// Bytes that sit on or next to every boundary of the lead and
+/// continuation ranges.
+const edge_bytes = [_]u8{ 0x00, 0x41, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xAF, 0xB0, 0xBF, 0xC0, 0xC1, 0xC2, 0xDF, 0xE0, 0xE1, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF3, 0xF4, 0xF5, 0xFF };
+
+test "vector validator matches the scalar one on every two byte prefix" {
+    // Every lead byte with every second byte, followed by the edge bytes,
+    // complete and truncated after each byte.
+    for (0..256) |c0| for (0..256) |c1| for (edge_bytes) |c2| for (edge_bytes) |c3| {
+        const seq = [4]u8{ @intCast(c0), @intCast(c1), c2, c3 };
+        try expectSameAnalysis(&seq);
+        if (c0 >= 0xC0 and c3 == 0x80) {
+            try expectSameAnalysis(seq[0..1]);
+            try expectSameAnalysis(seq[0..2]);
+            try expectSameAnalysis(seq[0..3]);
+        }
+    };
+}
+
+test "vector validator matches the scalar one at every block position" {
+    // Sequences of edge bytes placed so that they start, cross, and end at
+    // every position around a vector block boundary, then truncated.
+    var buf: [2 * block + 8]u8 = undefined;
+    for (edge_bytes) |c0| {
+        if (c0 < 0xC0) continue;
+        for (edge_bytes) |c1| for (edge_bytes) |c2| for (edge_bytes) |c3| {
+            const seq = [4]u8{ c0, c1, c2, c3 };
+            var off: usize = block - 5;
+            while (off <= block + 1) : (off += 1) {
+                @memset(&buf, 'a');
+                @memcpy(buf[off..][0..4], &seq);
+                try expectSameAnalysis(&buf);
+                try expectSameAnalysis(buf[0 .. off + 1]);
+                try expectSameAnalysis(buf[0 .. off + 2]);
+                try expectSameAnalysis(buf[0 .. off + 3]);
+            }
+        };
+    }
+}
+
+test "vector validator on surrogates and supplementary characters" {
+    var out: [4]u8 = undefined;
+    // Every lone surrogate is valid on its own.
+    var cp: u21 = 0xD800;
+    while (cp <= 0xDFFF) : (cp += 1) {
+        const n = encode(cp, &out);
+        try testing.expect(analyze(out[0..n]).valid);
+        try expectSameAnalysis(out[0..n]);
+    }
+    // A lead surrogate followed by a trail surrogate is invalid at every
+    // position, while the reverse order is valid.
+    var buf: [3 * block]u8 = undefined;
+    for (0..2 * block) |off| {
+        @memset(&buf, 'x');
+        @memcpy(buf[off..][0..6], "\xED\xA0\x80\xED\xB0\x80");
+        const a = analyze(&buf);
+        try testing.expect(!a.valid);
+        try testing.expectEqual(off + 3, a.error_offset);
+        try expectSameAnalysis(&buf);
+        @memcpy(buf[off..][0..6], "\xED\xB0\x80\xED\xA0\x80");
+        try testing.expect(analyze(&buf).valid);
+        try expectSameAnalysis(&buf);
+    }
+    // A character from the ED row that is not a surrogate may precede a
+    // trail surrogate.
+    try testing.expect(analyze("\xED\x8C\x95\xED\xB0\x9C").valid);
+    try testing.expect(analyze("\xED\x9F\xBF\xED\xB0\x80").valid);
+    // Overlong forms and values past U+10FFFF.
+    const bad = [_][]const u8{ "\xC0\xAF", "\xC1\xBF", "\xE0\x80\xAF", "\xE0\x9F\xBF", "\xF0\x80\x80\xAF", "\xF0\x8F\xBF\xBF", "\xF4\x90\x80\x80", "\xF5\x80\x80\x80", "\xF8\x88\x80\x80\x80" };
+    for (bad) |b| {
+        try testing.expect(!analyze(b).valid);
+        try expectSameAnalysis(b);
+    }
+    // Every code point is one valid character.
+    cp = 0;
+    while (cp <= 0x10FFFF) : (cp += 1) {
+        const n = encode(cp, &out);
+        const a = analyze(out[0..n]);
+        try testing.expect(a.valid);
+        try testing.expectEqual(@as(usize, 1), a.chars);
+    }
+}
+
+test "vector validator, counter, and advance on random text" {
+    var prng = std.Random.DefaultPrng.init(0x5EED);
+    const r = prng.random();
+    var buf: [200]u8 = undefined;
+    var out: [4]u8 = undefined;
+    for (0..20000) |_| {
+        // Build valid text from random code points, then corrupt one byte
+        // half of the time.
+        var n: usize = 0;
+        const want = r.uintLessThan(usize, buf.len - 4);
+        while (n < want) {
+            const cp: u21 = switch (r.uintLessThan(u8, 10)) {
+                0...5 => r.uintLessThan(u21, 0x80),
+                6 => r.uintLessThan(u21, 0x800),
+                7 => r.uintLessThan(u21, 0x10000),
+                else => r.uintLessThan(u21, 0x110000),
+            };
+            const k = encode(cp, &out);
+            @memcpy(buf[n..][0..k], out[0..k]);
+            n += k;
+        }
+        if (n > 0 and r.boolean()) buf[r.uintLessThan(usize, n)] = r.int(u8);
+        try expectSameAnalysis(buf[0..n]);
+        const a = analyze(buf[0..n]);
+        if (!a.valid) continue;
+        try testing.expectEqual(a.chars, countChars(buf[0..n]));
+        // Advancing agrees with stepping one character at a time.
+        const from_char = r.uintLessThan(usize, a.chars + 1);
+        var off: usize = 0;
+        for (0..from_char) |_| off += seqLen(buf[off]);
+        const steps = r.uintLessThan(usize, a.chars - from_char + 2);
+        var want_off = off;
+        for (0..steps) |_| {
+            if (want_off >= n) break;
+            want_off += seqLen(buf[want_off]);
+        }
+        try testing.expectEqual(want_off, advance(buf[0..n], off, steps));
+    }
+}
+
+test "ascii prefix" {
+    try testing.expectEqual(@as(usize, 0), asciiPrefix(""));
+    try testing.expectEqual(@as(usize, 3), asciiPrefix("abc"));
+    var buf: [100]u8 = undefined;
+    for (0..buf.len) |k| {
+        @memset(&buf, 'a');
+        buf[k] = 0xC3;
+        try testing.expectEqual(k, asciiPrefix(&buf));
+    }
 }
