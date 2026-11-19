@@ -18,6 +18,7 @@ pub fn openAll(l: *Thread) Error!void {
     try @import("json.zig").open(l);
     try @import("../vm/ext.zig").openEnums(l);
     try @import("vector.zig").registerString(l);
+    try @import("network.zig").open(l);
     // package last, so it registers the libraries above as loaded.
     try @import("package.zig").open(l);
 }
