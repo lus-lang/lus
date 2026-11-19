@@ -37,11 +37,14 @@ pub const YieldError = error{Yield};
 /// function has native code.
 pub const LoopError = error{ SwitchLoop, EnterJit };
 
-/// How the dispatch loop is instantiated. `fast` and `hooked` are the two
-/// interpreter loops. `step` runs the body of one opcode and returns, which
-/// gives the JIT an out-of-line routine for every opcode that is the
-/// interpreter's own definition of it.
-pub const Mode = union(enum) { fast, hooked, step: Op };
+/// How the dispatch loop is instantiated. `fast` is the plain interpreter
+/// loop and `hooked` the one that fires debug hooks. `warm` is the loop of
+/// a state whose JIT is on: it counts calls and loop iterations and hands
+/// hot functions to native code. A state whose JIT is off runs `fast`,
+/// which carries no counting at all. `step` runs the body of one opcode
+/// and returns, which gives the JIT an out-of-line routine for every
+/// opcode that is the interpreter's own definition of it.
+pub const Mode = union(enum) { fast, warm, hooked, step: Op };
 
 /// What a step returns to native code.
 pub const Step = struct {
@@ -300,7 +303,7 @@ pub fn unwindTo(l: *Thread, depth: usize) void {
 /// in a growable list that a re-entrant call can reallocate, and the stack
 /// grows by reallocation too, so `fr` and `bp` are refreshed after every
 /// operation that may run other code.
-const Ctx = struct {
+pub const Ctx = struct {
     fi: usize,
     fr: *Frame,
     cl: *Closure,
@@ -317,7 +320,7 @@ const Ctx = struct {
     }
 };
 
-inline fn load(l: *Thread) Ctx {
+pub inline fn load(l: *Thread) Ctx {
     const fi = l.frames.items.len - 1;
     const fr = &l.frames.items[fi];
     const cl = fr.closure.?;
@@ -346,6 +349,8 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
             run(l, stop, .hooked)
         else if (jit.enabled and native)
             jit.run(l, stop)
+        else if (jit.enabled and jit.active(l.g))
+            run(l, stop, .warm)
         else
             run(l, stop, .fast);
         native = false;
@@ -459,7 +464,7 @@ fn Loop(comptime mode: Mode) type {
         /// the frame over. Only the rarer loop forms count this way,
         /// because the counter is a store on every event.
         inline fn tier(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
-            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (comptime !(jit.enabled and mode == .warm)) return;
             const p = c.cl.proto;
             p.hot -%= 1;
             if (p.hot == 0) {
@@ -473,7 +478,7 @@ fn Loop(comptime mode: Mode) type {
         /// a machine register. When the budget runs out, the running
         /// function is charged for the whole period.
         inline fn tierLoop(l: *Thread, c: *Ctx, pc: *u32, budget: *u32) LoopError!void {
-            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (comptime !(jit.enabled and mode == .warm)) return;
             budget.* -= 1;
             if (budget.* == 0) {
                 @branchHint(.unlikely);
@@ -491,7 +496,7 @@ fn Loop(comptime mode: Mode) type {
         /// A function was entered at `pc`. One with native code is handed
         /// over at once. Any other counts on the sampling budget.
         inline fn tierCall(l: *Thread, c: *Ctx, pc: *u32, budget: *u32) LoopError!void {
-            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (comptime !(jit.enabled and mode == .warm)) return;
             if (c.cl.proto.jit_code != null) {
                 @branchHint(.unlikely);
                 c.fr.pc = pc.*;
@@ -504,7 +509,7 @@ fn Loop(comptime mode: Mode) type {
         /// at `pc`. Native code takes the frame when the function has some.
         inline fn tierReturn(l: *Thread, c: *Ctx, pc: u32) LoopError!void {
             _ = l;
-            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (comptime !(jit.enabled and mode == .warm)) return;
             if (c.cl.proto.jit_code != null) {
                 @branchHint(.unlikely);
                 c.fr.pc = pc;
@@ -516,7 +521,7 @@ fn Loop(comptime mode: Mode) type {
         /// function is charged for all of them here, so that the loop
         /// instruction itself counts nothing.
         inline fn tierFor(l: *Thread, c: *Ctx, pc: u32, count: u64) LoopError!void {
-            if (comptime !(jit.enabled and mode == .fast)) return;
+            if (comptime !(jit.enabled and mode == .warm)) return;
             if (count >= jit.loop_weight_min) {
                 c.fr.pc = pc;
                 if (jit.charge(l, c.cl.proto, count)) return error.EnterJit;
@@ -539,7 +544,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
     const tierFor = Loop(mode).tierFor;
     // The sampling budget of the tier-up policy. It is a local so that
     // counting an event is a register decrement.
-    const sampling = comptime (jit.enabled and mode == .fast);
+    const sampling = comptime (jit.enabled and mode == .warm);
     var budget: u32 = if (sampling) l.jit_budget else 0;
     defer if (sampling) {
         l.jit_budget = budget;
@@ -615,15 +620,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const t = &c.bp[opc.b(ins)];
             const key = &c.bp[opc.c(ins)];
             if (t.tag == .table and key.tag == .integer) {
-                const tab = t.as(Table);
-                const i = key.asInt();
-                if (i >= 1 and i <= tab.asize) {
-                    const v = table.arrayGet(tab, @intCast(i - 1));
-                    if (!v.isNil() or noIndexMeta(tab)) {
-                        c.bp[a] = v;
-                        continue :sw try fetch(l, &c, &pc, &ins, hooked);
-                    }
-                }
+                if (fast.getArray(t.as(Table), key.asInt(), &c.bp[a])) continue :sw try fetch(l, &c, &pc, &ins, hooked);
             } else if (key.tag == .string) {
                 try getStrOp(l, &c, pc, &c.ic[pc - 1], a, t, key);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -642,14 +639,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const a = opc.a(ins);
             const t = c.bp[opc.b(ins)];
             const i: i64 = opc.c(ins);
-            if (t.tag == .table) {
-                const tab = t.as(Table);
-                const v = table.getInt(tab, i);
-                if (!v.isNil() or noIndexMeta(tab)) {
-                    c.bp[a] = v;
-                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
-                }
-            }
+            if (fast.getIndex(&t, i, &c.bp[a])) continue :sw try fetch(l, &c, &pc, &ins, hooked);
             c.fr.pc = pc;
             const v = try metaIndex(l, t, Value.int(i), a);
             c.refresh(l);
@@ -661,18 +651,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const key = &c.bp[opc.b(ins)];
             const v = &c.bp[opc.c(ins)];
             if (t.tag == .table and key.tag == .integer) {
-                const tab = t.as(Table);
-                const i = key.asInt();
-                // A store that does not fit the kind of the array part
-                // takes the slow path, which boxes the part.
-                if (i >= 1 and i <= tab.asize and !tab.readonly and noNewindexMeta(tab) and
-                    table.arrayStoreFast(tab, @intCast(i - 1), v.*))
-                {
-                    // An integer key never names a metamethod, so the
-                    // absence cache stays valid.
-                    if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
-                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
-                }
+                if (fast.setArray(l, t.as(Table), key.asInt(), v)) continue :sw try fetch(l, &c, &pc, &ins, hooked);
             } else if (key.tag == .string) {
                 try setStrOp(l, &c, pc, &c.ic[pc - 1], t, key, v);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -823,11 +802,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
         .len => {
             const a = opc.a(ins);
             const x = c.bp[opc.b(ins)];
-            if (x.tag == .table and x.as(Table).metatable == null) {
-                c.bp[a] = Value.int(table.length(x.as(Table)));
-            } else if (x.tag == .string) {
-                c.bp[a] = Value.int(x.as(String).chars);
-            } else {
+            if (!fast.length(&x, &c.bp[a])) {
                 c.fr.pc = pc;
                 const r = try metaLength(l, x, a);
                 c.refresh(l);
@@ -1071,21 +1046,8 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
             const n: u32 = if (o == .ret1) 1 else 0;
             const first = c.base + opc.a(ins);
             if (!hooked and leanReturn(l, c, stop)) {
-                // Return to a Lus caller with nothing to close.
-                const fr = c.fr;
-                const dst = fr.ret;
-                const want = fr.want;
-                if (n == 1) l.stack[dst] = l.stack[first];
-                if (want < 0) {
-                    l.top = dst + n;
-                } else {
-                    var i: u32 = n;
-                    while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[dst + i] = .nil;
-                }
-                l.frames.items.len -= 1;
-                c = load(l);
+                c = fast.finishLean(l, c, first, n);
                 pc = c.fr.pc;
-                if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
@@ -1377,7 +1339,7 @@ inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want
 
 /// Pushes a frame for a call to a Lus function with fixed parameters. The
 /// callee and its `nargs` arguments are at `func`.
-inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {
+pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {
     const p = cl.proto;
     const base = func + 1;
     const top = base + p.max_stack;
@@ -1392,7 +1354,7 @@ inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) E
 /// True when the running frame can return without hooks, closing, a
 /// finish action, or leaving the loop: its caller is a Lus frame above
 /// `stop` and no open upvalue or to-be-closed variable lives in it.
-inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
+pub inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
     const fr = c.fr;
     if (fr.finish != .none or fr.boundary or l.hook_mask != 0) return false;
     if (c.fi <= stop or l.frames.items[c.fi - 1].closure == null) return false;
@@ -1575,15 +1537,7 @@ inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
 /// The operands are pointers into registers, constants, or upvalues, read
 /// only before anything that may reallocate the stack.
 inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: *const Value, key: *const Value) Error!void {
-    if (t.tag == .table) {
-        const tab = t.as(Table);
-        const v = lookupIc(tab, key.as(String), &ic.own);
-        if (!v.isNil() or noIndexMeta(tab)) {
-            c.bp[a] = v;
-            return;
-        }
-        if (indexChain(l, tab, key.as(String), ic, &c.bp[a])) return;
-    }
+    if (fast.getStr(l, ic, t, key, &c.bp[a])) return;
     c.fr.pc = pc;
     const v = try metaIndex(l, t.*, key.*, a);
     c.refresh(l);
@@ -1594,31 +1548,117 @@ inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: 
 /// table, and new keys that fit without a rehash, happen inline.
 /// Everything else goes through `setSlow`.
 inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: *const Value, key: *const Value, v: *const Value) Error!void {
-    if (t.tag == .table) {
-        const tab = t.as(Table);
-        if (!tab.readonly and noNewindexMeta(tab)) {
-            const i: usize = ic.own;
-            if (i < tab.hash.len and tab.hash[i].key.payload == key.payload and tab.hash[i].key.tag == .string) {
-                tab.hash[i].val = v.*;
-                if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
-            } else if (table.storeStr(tab, key.*, v.*)) |idx| {
-                if (idx < object.IcEntry.none) ic.own = @intCast(idx);
-                // The store may have added the key itself.
-                gc.barrierTable(l.g, tab, key.*, v.*);
-            } else {
-                c.fr.pc = pc;
-                try setSlow(l, t.*, key.*, v.*);
-                c.refresh(l);
-                return;
-            }
-            tab.tm_absent = 0;
-            return;
-        }
-    }
+    if (fast.setStr(l, ic, t, key, v)) return;
     c.fr.pc = pc;
     try setSlow(l, t.*, key.*, v.*);
     c.refresh(l);
 }
+
+/// The parts of the table and return instructions that touch no frame
+/// state. The interpreter runs them inline, and native code calls them
+/// through `jit/helpers.zig`, so both tiers take the same fast paths. Each
+/// returns false when the instruction needs its general path.
+pub const fast = struct {
+    /// out = t[key] for a string key, when the lookup ends in a table.
+    pub inline fn getStr(l: *Thread, ic: *object.IcEntry, t: *const Value, key: *const Value, out: *Value) bool {
+        if (t.tag != .table) return false;
+        const tab = t.as(Table);
+        const v = lookupIc(tab, key.as(String), &ic.own);
+        if (!v.isNil() or noIndexMeta(tab)) {
+            out.* = v;
+            return true;
+        }
+        return indexChain(l, tab, key.as(String), ic, out);
+    }
+
+    /// t[key] = v for a string key: a store into an existing key of a
+    /// plain table, or a new key that fits without a rehash.
+    pub inline fn setStr(l: *Thread, ic: *object.IcEntry, t: *const Value, key: *const Value, v: *const Value) bool {
+        if (t.tag != .table) return false;
+        const tab = t.as(Table);
+        if (tab.readonly or !noNewindexMeta(tab)) return false;
+        const i: usize = ic.own;
+        if (i < tab.hash.len and tab.hash[i].key.payload == key.payload and tab.hash[i].key.tag == .string) {
+            tab.hash[i].val = v.*;
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (table.storeStr(tab, key.*, v.*)) |idx| {
+            if (idx < object.IcEntry.none) ic.own = @intCast(idx);
+            // The store may have added the key itself.
+            gc.barrierTable(l.g, tab, key.*, v.*);
+        } else return false;
+        tab.tm_absent = 0;
+        return true;
+    }
+
+    /// out = tab[i] for an integer key inside the array part.
+    pub inline fn getArray(tab: *Table, i: i64, out: *Value) bool {
+        if (i >= 1 and i <= tab.asize) {
+            const v = table.arrayGet(tab, @intCast(i - 1));
+            if (!v.isNil() or noIndexMeta(tab)) {
+                out.* = v;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// tab[i] = v for an integer key inside the array part. A store that
+    /// does not fit the kind of the array part takes the general path,
+    /// which boxes the part.
+    pub inline fn setArray(l: *Thread, tab: *Table, i: i64, v: *const Value) bool {
+        if (i >= 1 and i <= tab.asize and !tab.readonly and noNewindexMeta(tab) and
+            table.arrayStoreFast(tab, @intCast(i - 1), v.*))
+        {
+            // An integer key never names a metamethod, so the absence
+            // cache stays valid.
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+            return true;
+        }
+        return false;
+    }
+
+    /// out = t[i] for a constant integer index.
+    pub inline fn getIndex(t: *const Value, i: i64, out: *Value) bool {
+        if (t.tag != .table) return false;
+        const tab = t.as(Table);
+        const v = table.getInt(tab, i);
+        if (!v.isNil() or noIndexMeta(tab)) {
+            out.* = v;
+            return true;
+        }
+        return false;
+    }
+
+    /// out = #x for a string or a table without a metatable.
+    pub inline fn length(x: *const Value, out: *Value) bool {
+        if (x.tag == .table and x.as(Table).metatable == null) {
+            out.* = Value.int(table.length(x.as(Table)));
+        } else if (x.tag == .string) {
+            out.* = Value.int(x.as(String).chars);
+        } else return false;
+        return true;
+    }
+
+    /// Returns `n` values (zero or one) at `first` from a frame that
+    /// `leanReturn` accepted: a return to a Lus caller with nothing to
+    /// close. The result is the caller's frame state.
+    pub inline fn finishLean(l: *Thread, c: Ctx, first: u32, n: u32) Ctx {
+        const fr = c.fr;
+        const dst = fr.ret;
+        const want = fr.want;
+        if (n == 1) l.stack[dst] = l.stack[first];
+        if (want < 0) {
+            l.top = dst + n;
+        } else {
+            var i: u32 = n;
+            while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[dst + i] = .nil;
+        }
+        l.frames.items.len -= 1;
+        const caller = load(l);
+        if (want >= 0) l.top = caller.base + caller.cl.proto.max_stack;
+        return caller;
+    }
+};
 
 /// Follows `__index` tables from `tab`, whose own lookup missed and whose
 /// metatable may have `__index`. Stores the result and returns true when

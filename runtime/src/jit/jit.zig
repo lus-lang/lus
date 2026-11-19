@@ -90,6 +90,14 @@ pub fn setting(g: *Global) Setting {
     return g.jit.setting;
 }
 
+/// Whether the state compiles functions, which decides the interpreter
+/// loop it runs.
+pub inline fn active(g: *Global) bool {
+    if (!enabled) return false;
+    if (!g.jit.ready) setup(g);
+    return g.jit.setting != .off;
+}
+
 /// Whether the function has native code.
 pub fn isCompiled(p: *const Proto) bool {
     return enabled and p.jit_code != null;

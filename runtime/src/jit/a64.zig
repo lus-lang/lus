@@ -121,7 +121,7 @@ pub const Label = u32;
 const Fixup = struct {
     at: u32,
     label: Label,
-    kind: enum { b26, b19, b14 },
+    kind: enum { b26, b19, b14, literal },
 };
 
 pub const Assembler = struct {
@@ -130,6 +130,10 @@ pub const Assembler = struct {
     /// Offset of each label, or `unbound`.
     labels: std.ArrayList(u32) = .empty,
     fixups: std.ArrayList(Fixup) = .empty,
+    /// Constants that take more than two move instructions. They follow
+    /// the code, and a load relative to the pc reads them. For a literal
+    /// fixup, `label` is an index into this pool.
+    pool: std.ArrayList(u64) = .empty,
     oom: bool = false,
     /// Set when a branch cannot reach its label.
     overflow: bool = false,
@@ -144,6 +148,7 @@ pub const Assembler = struct {
         a.buf.deinit(a.gpa);
         a.labels.deinit(a.gpa);
         a.fixups.deinit(a.gpa);
+        a.pool.deinit(a.gpa);
     }
 
     pub fn offset(a: *const Assembler) u32 {
@@ -189,8 +194,12 @@ pub const Assembler = struct {
     /// Resolves every branch. Returns false when the code is unusable.
     pub fn finish(a: *Assembler) bool {
         if (a.oom) return false;
+        // The pool goes after the code, aligned for 64-bit loads.
+        while (a.buf.items.len % 8 != 0) a.word(0xD4200000);
+        const pool_at = a.offset();
+        for (a.pool.items) |v| a.buf.appendSlice(a.gpa, std.mem.asBytes(&std.mem.nativeToLittle(u64, v))) catch return false;
         for (a.fixups.items) |f| {
-            const target = a.labels.items[f.label];
+            const target = if (f.kind == .literal) pool_at + f.label * 8 else a.labels.items[f.label];
             if (target == unbound) return false;
             const delta = @divExact(@as(i64, target) - @as(i64, f.at), 4);
             const p: *align(1) u32 = @ptrCast(a.buf.items[f.at..].ptr);
@@ -200,7 +209,7 @@ pub const Assembler = struct {
                     if (delta < -(1 << 25) or delta >= (1 << 25)) a.overflow = true;
                     w |= @as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x03FF_FFFF;
                 },
-                .b19 => {
+                .b19, .literal => {
                     if (delta < -(1 << 18) or delta >= (1 << 18)) a.overflow = true;
                     w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x7FFFF) << 5;
                 },
@@ -232,6 +241,16 @@ pub const Assembler = struct {
             const h: u16 = @truncate(v >> @intCast(16 * i));
             if (h == 0xFFFF) ones += 1;
             if (h == 0) zeros += 1;
+        }
+        if (@max(ones, zeros) < 2) {
+            // Three or four moves cost more than one load from the pool.
+            var index: usize = 0;
+            while (index < a.pool.items.len and a.pool.items[index] != v) index += 1;
+            if (index == a.pool.items.len) a.pool.append(a.gpa, v) catch {
+                a.oom = true;
+            };
+            a.fix(@intCast(index), .literal);
+            return a.word(0x58000000 | dst.n());
         }
         if (ones > zeros) {
             var first = true;
@@ -594,4 +613,22 @@ test "aarch64 unbound label fails" {
     defer a.deinit();
     a.jmp(a.newLabel());
     try std.testing.expect(!a.finish());
+}
+
+test "aarch64 wide constants load from the pool" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.movImm(.x9, 0x1122334455667788); // ldr x9, pool[0]
+    a.movImm(.x10, 0x1122334455667788); // ldr x10, pool[0]
+    a.movImm(.x11, 0x0000123456789ABC); // ldr x11, pool[1]
+    a.epilogue();
+    try std.testing.expect(a.finish());
+    const w = std.mem.bytesAsSlice(u32, a.buf.items);
+    // Seven instructions, one word of padding, then the pool at byte 32.
+    try std.testing.expectEqual(@as(u32, 0x58000109), w[0]);
+    try std.testing.expectEqual(@as(u32, 0x580000EA), w[1]);
+    try std.testing.expectEqual(@as(u32, 0x5800010B), w[2]);
+    try std.testing.expectEqual(@as(u32, 0x55667788), w[8]);
+    try std.testing.expectEqual(@as(u32, 0x11223344), w[9]);
+    try std.testing.expectEqual(@as(u32, 0x56789ABC), w[10]);
 }
