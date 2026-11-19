@@ -11,13 +11,13 @@ local instance = server.new()
 if arg then
   for i = 1, #arg do
     if arg[i] == "--version" then
-      io.write("lus-language 1.7.0\n")
+      io.write("lus-language 2.0.0-dev\n")
       os.exit(0)
     end
   end
 end
 
-transport.log("starting lus-language 1.7.0")
+transport.log("starting lus-language 2.0.0-dev")
 
 while true do
   local msg, read_error, status = transport.read_message()

@@ -137,7 +137,7 @@ local function returns_capabilities_on_initialize_test()
   assert(resp.result.capabilities.documentHighlightProvider == true)
   assert(resp.result.capabilities.selectionRangeProvider == true)
   assert(resp.result.capabilities.workspace.workspaceFolders.supported == true)
-  assert(resp.result.serverInfo.version == "1.7.0")
+  assert(resp.result.serverInfo.version == "2.0.0-dev")
 end
 
 -- Initialized notification
@@ -517,7 +517,7 @@ local function accepts_a_silent_workspace_seed_before_initialization_test()
     method = "initialize",
     params = {workspaceFolders = {{uri = ROOT_A, name = "a"}}},
   })
-  assert(response.result.serverInfo.version == "1.7.0")
+  assert(response.result.serverInfo.version == "2.0.0-dev")
   assert(modules.resolve("seeded", ROOT_A .. "/main.lus") == ROOT_A .. "/seeded.lus")
   capture_buffer = ""
   fresh.dispatch({
