@@ -7,7 +7,8 @@
 //! operands, `skip(reason)` skips the current test, and `snapshot(value)`
 //! compares a value against `__snapshots__/FILE.snap`. `raises(f, pattern)`
 //! expects `f` to raise and returns the error, and `same(a, b)` compares
-//! two values structurally.
+//! two values structurally. `TEST_DIR` names the directory of the test
+//! file, for fixtures.
 //!
 //! Each file runs in its own child process inside a fresh temporary
 //! directory, with a timeout, and files run in parallel.
@@ -351,6 +352,9 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     defer snap.deinit();
     snap.load() catch {};
     try installHelpers(l, &snap);
+    // TEST_DIR is the directory holding the test file, for fixtures. The
+    // test itself runs in a fresh temporary directory.
+    try aux.setGlobal(l, "TEST_DIR", try l.newStringValue(std.fs.path.dirname(path) orelse "."));
 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
