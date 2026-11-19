@@ -9,6 +9,7 @@ const std = @import("std");
 const lus = @import("lus");
 const api = lus.api;
 const out = lus.lib.out;
+const package = lus.lib.package;
 const Value = lus.vm.value.Value;
 const Thread = lus.vm.state.Thread;
 
@@ -38,6 +39,8 @@ const usage =
     \\  -W               turn warnings on
     \\  -P perm          grant a permission (also --pledge perm)
     \\  -F name[=value]  define a compile-time flag (also --flag)
+    \\  --include path[:alias]
+    \\                   preinclude a module file or directory for require
     \\  --gc-pause N     heap growth before a collection, in percent
     \\  --dis            print bytecode instead of running
     \\  --               stop handling options
@@ -54,6 +57,7 @@ const Cli = struct {
     actions: std.ArrayList(Action) = .empty,
     pledges: std.ArrayList([]const u8) = .empty,
     flags: std.ArrayList([]const u8) = .empty,
+    includes: std.ArrayList([]const u8) = .empty,
     script: ?[]const u8 = null,
     script_index: usize = 0,
     interactive: bool = false,
@@ -96,6 +100,9 @@ fn optPledge(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
 fn optFlag(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
     try c.flags.append(a, v.?);
 }
+fn optInclude(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
+    try c.includes.append(a, v.?);
+}
 fn optGcPause(c: *Cli, _: std.mem.Allocator, v: ?[]const u8) !void {
     c.gc_pause = try std.fmt.parseInt(usize, v.?, 10);
 }
@@ -114,6 +121,7 @@ const options = [_]OptSpec{
     .{ .short = "W", .long = null, .takes_arg = false, .apply = optWarn },
     .{ .short = "P", .long = "pledge", .takes_arg = true, .apply = optPledge },
     .{ .short = "F", .long = "flag", .takes_arg = true, .apply = optFlag },
+    .{ .short = null, .long = "include", .takes_arg = true, .apply = optInclude },
     .{ .short = null, .long = "gc-pause", .takes_arg = true, .apply = optGcPause },
     .{ .short = null, .long = "dis", .takes_arg = false, .apply = optDis },
 };
@@ -213,10 +221,24 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
     defer cli.actions.deinit(gpa);
     defer cli.pledges.deinit(gpa);
     defer cli.flags.deinit(gpa);
+    defer cli.includes.deinit(gpa);
     if (cli.version) {
         std.debug.print("{s}\n", .{version});
         if (cli.script == null and cli.actions.items.len == 0 and !cli.interactive) return 0;
     }
+
+    // Preincluded sources are read before any state exists, under the
+    // full authority of the command line.
+    var preinc: Preincludes = .{ .gpa = gpa, .io = io };
+    defer preinc.deinit();
+    for (cli.includes.items) |spec| {
+        preinc.add(spec) catch |e| {
+            if (e != error.Reported) std.debug.print("lus: not enough memory for preinclusion\n", .{});
+            return 1;
+        };
+    }
+    package.preincludes = preinc.list.items;
+    defer package.preincludes = &.{};
 
     const l = try api.newState(gpa, io);
     defer api.close(l);
@@ -228,6 +250,10 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
     try api.setFlags(l, cli.flags.items);
     api.openLibs(l) catch {
         std.debug.print("lus: cannot open libraries\n", .{});
+        return 1;
+    };
+    package.installPreincludes(l) catch {
+        reportError(l);
         return 1;
     };
     api.grantPledges(l, cli.pledges.items) catch {
@@ -275,6 +301,97 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
     }
     return 0;
 }
+
+/// The modules named by `--include`. A spec is `path[:alias]`. A file
+/// becomes the module named by its file name without the extension, or by
+/// the alias. A directory contributes every `.lus` and `.lua` file below
+/// it, named by its path from the directory's own name.
+const Preincludes = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    list: std.ArrayList(package.Preinclude) = .empty,
+
+    fn deinit(p: *Preincludes) void {
+        for (p.list.items) |e| {
+            p.gpa.free(e.name);
+            p.gpa.free(e.path);
+            p.gpa.free(e.src);
+        }
+        p.list.deinit(p.gpa);
+    }
+
+    /// The colon that starts an alias, skipping a Windows drive prefix.
+    fn aliasColon(spec: []const u8) ?usize {
+        const c = std.mem.lastIndexOfScalar(u8, spec, ':') orelse return null;
+        if (c == 1 and std.ascii.isAlphabetic(spec[0]) and spec.len > 2 and (spec[2] == '/' or spec[2] == '\\')) return null;
+        return c;
+    }
+
+    fn add(p: *Preincludes, spec: []const u8) !void {
+        const colon = aliasColon(spec);
+        const path = if (colon) |c| spec[0..c] else spec;
+        if (colon == null) {
+            if (std.Io.Dir.cwd().statFile(p.io, path, .{})) |st| {
+                if (st.kind == .directory) {
+                    const base = std.fs.path.basename(std.mem.trimEnd(u8, path, "/\\"));
+                    return p.addDir(path, base);
+                }
+            } else |_| {}
+        }
+        const name = if (colon) |c| try p.gpa.dupe(u8, spec[c + 1 ..]) else try moduleName(p.gpa, std.fs.path.basename(path), "");
+        try p.addFile(path, name);
+    }
+
+    fn moduleName(gpa: std.mem.Allocator, file: []const u8, prefix: []const u8) ![]u8 {
+        var stem = file;
+        if (std.mem.endsWith(u8, stem, ".lus") or std.mem.endsWith(u8, stem, ".lua")) stem = stem[0 .. stem.len - 4];
+        if (prefix.len == 0) return gpa.dupe(u8, stem);
+        return std.fmt.allocPrint(gpa, "{s}.{s}", .{ prefix, stem });
+    }
+
+    /// Takes ownership of `name`.
+    fn addFile(p: *Preincludes, path: []const u8, name: []u8) !void {
+        errdefer p.gpa.free(name);
+        for (p.list.items) |e| {
+            if (std.mem.eql(u8, e.name, name)) {
+                std.debug.print("lus: duplicate preincluded module '{s}' ({s})\n", .{ name, path });
+                return error.Reported;
+            }
+        }
+        const src = std.Io.Dir.cwd().readFileAlloc(p.io, path, p.gpa, .unlimited) catch {
+            std.debug.print("lus: cannot read include file '{s}'\n", .{path});
+            return error.Reported;
+        };
+        errdefer p.gpa.free(src);
+        const owned_path = try p.gpa.dupe(u8, path);
+        errdefer p.gpa.free(owned_path);
+        try p.list.append(p.gpa, .{ .name = name, .path = owned_path, .src = src });
+    }
+
+    fn addDir(p: *Preincludes, path: []const u8, prefix: []const u8) !void {
+        var dir = std.Io.Dir.cwd().openDir(p.io, path, .{ .iterate = true }) catch {
+            std.debug.print("lus: failed to include directory '{s}'\n", .{path});
+            return error.Reported;
+        };
+        defer dir.close(p.io);
+        var it = dir.iterate();
+        while (it.next(p.io) catch {
+            std.debug.print("lus: failed to include directory '{s}'\n", .{path});
+            return error.Reported;
+        }) |ent| {
+            if (std.mem.eql(u8, ent.name, ".") or std.mem.eql(u8, ent.name, "..")) continue;
+            const full = try std.fmt.allocPrint(p.gpa, "{s}/{s}", .{ path, ent.name });
+            defer p.gpa.free(full);
+            if (ent.kind == .directory) {
+                const sub = try std.fmt.allocPrint(p.gpa, "{s}.{s}", .{ prefix, ent.name });
+                defer p.gpa.free(sub);
+                try p.addDir(full, sub);
+            } else if (std.mem.endsWith(u8, ent.name, ".lus") or std.mem.endsWith(u8, ent.name, ".lua")) {
+                try p.addFile(full, try moduleName(p.gpa, ent.name, prefix));
+            }
+        }
+    }
+};
 
 fn setArgTable(l: *Thread, args: []const []const u8, script_index: usize, has_script: bool) !void {
     const t = try l.newTable(args.len, 2);

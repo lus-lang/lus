@@ -471,6 +471,9 @@ fn run(w: *Worker, msg: *?[]u8) void {
     g.pause = w.pause;
     api.setFlags(l, w.flags) catch return fail(msg, gpa, "failed to create worker state");
     api.openLibs(l) catch return fail(msg, gpa, "failed to open worker libraries");
+    // Preincluded modules come from the sources the CLI retained, so the
+    // worker requires them without touching the file system.
+    @import("package.zig").installPreincludes(l) catch return fail(msg, gpa, api.errorMessage(l, l.err));
     // The worker runs with its creator's permissions, sealed so that it
     // can never grant itself more.
     if (w.pledges) |p| {
