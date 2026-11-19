@@ -1492,6 +1492,20 @@ fn expr(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!void {
 pub const Internal = struct {
     pub const FS = FuncState;
     pub const Exp = ExpDesc;
+    // Helpers for query_gen.zig, which synthesizes clause functions and
+    // emits the query instruction.
+    pub const BlockCnt = Block;
+    pub const genExpr = expr;
+    pub const genFunction = funcExpr;
+    pub const toNextReg = exp2nextreg;
+    pub const reserve = reserveRegs;
+    pub const openBlock = enterBlock;
+    pub const closeBlock = leaveBlock;
+    pub const declareLocal = newLocalVar;
+    pub const activateLocals = adjustLocalVars;
+    pub const constString = stringK;
+    pub const emitBx = emitABx;
+    pub const emitAbc = codeABC;
 };
 
 fn interpExpr(fs: *FuncState, parts: []ast.InterpPart, v: *ExpDesc) Error!void {
