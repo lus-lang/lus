@@ -367,3 +367,13 @@ local function same_build_compiler_chunks_round_trip_and_reject_header_damage_te
         damage_out:find("binary", 1, true), damage_out)
     clean_fixture(root)
 end
+
+local function a_syntax_error_at_a_letter_outside_ascii_reads_as_text_test()
+    local tmp = "nonascii_name.lus"
+    write_file(tmp, "local é = 1\n")
+    local _, out = run_command(lus_cmd .. " " .. tmp)
+    assert(string.find(out, "nonascii_name.lus:1: unexpected symbol near 'é'", 1, true), out)
+    local _, checked = run_command(lus_cmd .. " check " .. tmp)
+    assert(string.find(checked, "nonascii_name.lus:1:7: error: unexpected symbol near 'é'", 1, true), checked)
+    fs.remove(tmp)
+end

@@ -14,6 +14,7 @@ const vm = struct {
     const gc = @import("../vm/gc.zig");
     const numeric = @import("../vm/numeric.zig");
     const ops = @import("../vm/ops.zig");
+    const wtf8 = @import("../vm/wtf8.zig");
 };
 const Value = vm.value.Value;
 const Proto = vm.object.Proto;
@@ -213,7 +214,7 @@ pub const Compiler = struct {
 
     pub fn err(c: *Compiler, line: u32, comptime fmt: []const u8, args: anytype) Error {
         const name = @import("../syntax/parser.zig").chunkDisplay(c.arena, c.opts.chunkname);
-        c.diag = try std.fmt.allocPrint(c.arena, "{s}:{d}: " ++ fmt, .{ name, line } ++ args);
+        c.diag = try vm.wtf8.escapeInvalid(c.arena, try std.fmt.allocPrint(c.arena, "{s}:{d}: " ++ fmt, .{ name, line } ++ args));
         return error.CompileError;
     }
 

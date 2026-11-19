@@ -246,7 +246,7 @@ Nesting works to any depth, so `` return `a $( `b $(1) c` ) d` `` yields `"a b 1
 
 ### 1.9 Lexical error format
 
-A lexical error message has the form `CHUNK:LINE: MESSAGE near TOKEN`, where `LINE` is the line at which the lexer currently is. For errors raised at the end of input, the `near` part is `near <eof>`. For number and string errors, `TOKEN` is the raw text collected so far in single quotes. The interpolation errors `invalid interpolation after '$'` and `invalid escape sequence in interpolated string` carry no `near` part.
+A lexical error message has the form `CHUNK:LINE: MESSAGE near TOKEN`, where `LINE` is the line at which the lexer currently is. For errors raised at the end of input, the `near` part is `near <eof>`. For number and string errors, `TOKEN` is the raw text collected so far in single quotes. A character outside ASCII that no token accepts, such as the `é` of `local é = 1`, fails with `unexpected symbol near 'é'`, which quotes the whole character. Quoted text always runs to the end of the character the lexer stopped in, and each byte of the source that is not part of a UTF-8 character reads as `<\N>` with its decimal value, so `x = 1` followed by the byte 255 fails with `unexpected symbol near '<\255>'`. The `[string "..."]` form of a chunk name cuts a long first line on a character boundary. **Tested** (`lexer_errors_test.lus`, `cli_test.lus`). The interpolation errors `invalid interpolation after '$'` and `invalid escape sequence in interpolated string` carry no `near` part.
 
 ---
 

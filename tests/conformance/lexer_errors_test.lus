@@ -312,3 +312,42 @@ local function uses_the_string_form_for_a_bare_source_name_test()
     assert(msg ~= nil)
     assert(has(msg, '[string "'))
 end
+
+-- characters outside ASCII in diagnostics.
+
+-- A message quotes the whole character the lexer stopped at, so it stays
+-- valid text that load can return.
+local function a_letter_outside_ascii_is_quoted_whole_test()
+    local cases = {
+        { "local é = 1", "unexpected symbol near 'é'" },
+        { "x = 1 😀 2", "unexpected symbol near '😀'" },
+        { "local n = 12€", "unexpected symbol near '€'" },
+        { 'local s = "\\é"', "invalid escape sequence near '\"\\é'" },
+    }
+    for _, c in ipairs(cases) do
+        local msg = load_error(c[1])
+        assert(msg ~= nil, c[1])
+        assert(has(msg, "chunk:1: " .. c[2]), msg)
+    end
+end
+
+-- A source given as a vector may hold bytes that are not UTF-8. Each such
+-- byte in a message reads as its decimal value.
+local function a_byte_outside_utf8_is_quoted_by_its_value_test()
+    local v = vector.fromstring("x = 1 ?")
+    vector.set(v, 6, 255)
+    local _, msg = load(v, "=bytes")
+    assert(msg == "bytes:1: unexpected symbol near '<\\255>'", msg)
+    local w = vector.fromstring('x = "?\n')
+    vector.set(w, 5, 195)
+    local _, msg2 = load(w, "=bytes")
+    assert(msg2 == "bytes:1: unfinished string near '\"<\\195>'", msg2)
+end
+
+-- The [string "..."] form cuts a long first line on a character boundary.
+local function the_string_form_cuts_on_a_character_boundary_test()
+    local src = "--" .. string.rep("a", 42) .. "é\nx = = 1"
+    local f, msg = load(src)
+    assert(f == nil)
+    assert(has(msg, '[string "--' .. string.rep("a", 42) .. '..."]:2:'), msg)
+end

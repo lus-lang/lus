@@ -6,6 +6,7 @@ const std = @import("std");
 const token = @import("token.zig");
 const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
+const wtf8 = @import("../vm/wtf8.zig");
 const Tag = token.Tag;
 const Token = token.Token;
 const Span = token.Span;
@@ -117,14 +118,14 @@ pub const Parser = struct {
     fn errNear(p: *Parser, comptime fmt: []const u8, args: anytype) Error {
         const t = p.cur();
         const near = try p.tokenDesc(t);
-        const msg = try std.fmt.allocPrint(p.arena, fmt ++ " near {s}", args ++ .{near});
+        const msg = try wtf8.escapeInvalid(p.arena, try std.fmt.allocPrint(p.arena, fmt ++ " near {s}", args ++ .{near}));
         p.diag = .{ .message = msg, .line = t.line, .span = t.span, .tok = p.pos };
         return error.SyntaxError;
     }
 
     /// Semantic error at the last consumed token, without a `near` part.
     pub fn errSem(p: *Parser, comptime fmt: []const u8, args: anytype) Error {
-        const msg = try std.fmt.allocPrint(p.arena, fmt, args);
+        const msg = try wtf8.escapeInvalid(p.arena, try std.fmt.allocPrint(p.arena, fmt, args));
         const t = if (p.pos == 0) p.cur() else p.toks[p.pos - 1];
         p.diag = .{ .message = msg, .line = t.line, .span = t.span, .tok = p.pos };
         return error.SyntaxError;
@@ -1395,14 +1396,15 @@ pub fn parse(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, d
 
 /// Formats a chunk name for messages (Lua's luaO_chunkid).
 pub fn chunkDisplay(arena: Allocator, name: []const u8) []const u8 {
-    if (name.len > 0 and (name[0] == '=' or name[0] == '@')) return name[1..];
-    // Source text: [string "first line..."]
+    if (name.len > 0 and (name[0] == '=' or name[0] == '@')) return wtf8.escapeInvalid(arena, name[1..]) catch "?";
+    // Source text: [string "first line..."], cut on a character boundary.
     const nl = std.mem.indexOfScalar(u8, name, '\n');
     const max = 45;
     var first = if (nl) |i| name[0..i] else name;
     const truncated = nl != null or first.len > max;
-    if (first.len > max) first = first[0..max];
-    return std.fmt.allocPrint(arena, "[string \"{s}{s}\"]", .{ first, if (truncated) "..." else "" }) catch "?";
+    if (first.len > max) first = first[0..wtf8.boundaryBefore(first, max)];
+    const shown = wtf8.escapeInvalid(arena, first) catch return "?";
+    return std.fmt.allocPrint(arena, "[string \"{s}{s}\"]", .{ shown, if (truncated) "..." else "" }) catch "?";
 }
 
 const testing = std.testing;
