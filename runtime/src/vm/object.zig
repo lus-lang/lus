@@ -97,9 +97,14 @@ pub const Table = struct {
     /// store into the table.
     tm_absent: u16 = 0,
     log2_hash: u8 = 0,
+    /// Element kind of the array part. See `ArrayKind`.
+    kind: ArrayKind = .none,
     metatable: ?*Table = null,
-    /// Array part, indices 1..array.len.
-    array: []Value = &.{},
+    /// Array part, indices 1..asize. Holds `asize` words when the kind is
+    /// unboxed and `asize` values when it is `boxed`. Use `words` and
+    /// `values` to view it.
+    array_ptr: [*]u64 = empty_words,
+    asize: usize = 0,
     /// Hash part with open addressing and linear probing. Length is a
     /// power of two, or zero.
     hash: []Node = &.{},
@@ -114,6 +119,38 @@ pub const Table = struct {
     len_hint: u32 = 0,
 
     pub const WeakMode = enum(u8) { none, keys, values, both };
+
+    /// What the array part stores. An unboxed part (`none`, `int`, or
+    /// `float`) holds one 64-bit word per slot: the payload of an integer
+    /// or a float, or `hole` for nil. A `none` part holds only holes. The
+    /// kind starts as `none`, takes the kind of the first number stored,
+    /// and becomes `boxed` on the first store that does not fit. It never
+    /// narrows back. The integer values of `int` and `float` equal the
+    /// value tags they hold, so a load rebuilds a value from the word and
+    /// the kind alone.
+    pub const ArrayKind = enum(u8) {
+        none = @backingInt(value.Tag.nil),
+        int = @backingInt(value.Tag.integer),
+        float = @backingInt(value.Tag.float),
+        boxed = 0xFF,
+    };
+
+    /// The word an unboxed array part stores for nil. It is a signaling
+    /// NaN, which no arithmetic produces. An integer or float whose bits
+    /// equal it makes the part boxed.
+    pub const hole: u64 = 0x7FF4_0000_0000_0000;
+
+    pub const empty_words: [*]u64 = @ptrFromInt(@alignOf(u64));
+
+    /// The unboxed array part. Only valid when the kind is not `boxed`.
+    pub inline fn words(t: *const Table) []u64 {
+        return t.array_ptr[0..t.asize];
+    }
+    /// The boxed array part. Only valid when the kind is `boxed`.
+    pub inline fn values(t: *const Table) []Value {
+        const p: [*]Value = @ptrCast(t.array_ptr);
+        return p[0..t.asize];
+    }
 };
 
 // ---------------------------------------------------------------------

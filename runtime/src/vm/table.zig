@@ -2,6 +2,11 @@
 //! open addressing and linear probing. Dead entries keep their key with a
 //! nil value until the next rehash, so `next` stays valid while a program
 //! clears fields during traversal, as Lua requires.
+//!
+//! The array part specializes by element kind (`Table.ArrayKind`). An
+//! array of integers or of floats stores bare 64-bit words, and every
+//! other array stores full values. `spec/design/tables.md` describes the
+//! layout and the transitions.
 
 const std = @import("std");
 const numeric = @import("numeric.zig");
@@ -10,7 +15,9 @@ const object = @import("object.zig");
 const Value = value.Value;
 const Table = object.Table;
 const Node = object.Node;
+const ArrayKind = Table.ArrayKind;
 const Allocator = std.mem.Allocator;
+const hole = Table.hole;
 
 pub const Error = error{ OutOfMemory, InvalidKey, NanKey };
 
@@ -78,10 +85,112 @@ fn longStringEqual(x: *object.String, y: *object.String) bool {
 }
 
 // ---------------------------------------------------------------------
+// Array part
+
+/// The value in the zero-based array slot `idx`, which is below `asize`.
+pub inline fn arrayGet(t: *const Table, idx: usize) Value {
+    if (t.kind == .boxed) return t.values()[idx];
+    return unboxWord(t.kind, t.array_ptr[idx]);
+}
+
+/// The value an unboxed slot of kind `kind` holding `w` stands for.
+inline fn unboxWord(kind: ArrayKind, w: u64) Value {
+    if (w == hole) return .nil;
+    return Value.make(w, @fromBackingInt(@intCast(@backingInt(kind))));
+}
+
+/// True when the zero-based array slot `idx` holds nil.
+pub inline fn arrayIsNil(t: *const Table, idx: usize) bool {
+    if (t.kind == .boxed) return t.values()[idx].isNil();
+    return t.array_ptr[idx] == hole;
+}
+
+/// The kind an array part of kind `k` needs to also hold `v`.
+pub inline fn joinKind(k: ArrayKind, v: Value) ArrayKind {
+    if (k == .boxed or v.tag == .nil) return k;
+    if ((v.tag == .integer or v.tag == .float) and v.payload != hole) {
+        const vk: ArrayKind = @fromBackingInt(@intCast(@backingInt(v.tag)));
+        if (k == .none or k == vk) return vk;
+    }
+    return .boxed;
+}
+
+/// Stores `v` into the zero-based array slot `idx` when it fits the kind
+/// of the array part, fixing the kind of a `none` part on its first
+/// number. Returns false, leaving the table unchanged, when the part must
+/// become boxed first. The caller runs the write barrier.
+pub inline fn arrayStoreFast(t: *Table, idx: usize, v: Value) bool {
+    if (t.kind == .boxed) {
+        t.values()[idx] = v;
+        return true;
+    }
+    if (v.tag == .nil) {
+        t.array_ptr[idx] = hole;
+        return true;
+    }
+    const k = joinKind(t.kind, v);
+    if (k == .boxed) return false;
+    t.kind = k;
+    t.array_ptr[idx] = v.payload;
+    return true;
+}
+
+/// Stores `v` into the zero-based array slot `idx`, boxing the array
+/// part when `v` does not fit its kind.
+pub fn arrayStore(gpa: Allocator, t: *Table, idx: usize, v: Value) Error!void {
+    if (arrayStoreFast(t, idx, v)) return;
+    try box(gpa, t);
+    t.values()[idx] = v;
+}
+
+/// Makes the array part boxed. Every slot keeps its value.
+pub fn box(gpa: Allocator, t: *Table) Error!void {
+    if (t.kind == .boxed) return;
+    if (t.asize > 0) {
+        const vals = try gpa.alloc(Value, t.asize);
+        for (vals, t.words()) |*d, w| d.* = unboxWord(t.kind, w);
+        gpa.free(t.words());
+        t.array_ptr = @ptrCast(vals.ptr);
+    }
+    t.kind = .boxed;
+}
+
+/// Releases the array and hash parts of a dead table.
+pub fn freeParts(gpa: Allocator, t: *Table) void {
+    freeArray(gpa, t.kind, t.array_ptr, t.asize);
+    if (t.hash.len > 0) gpa.free(t.hash);
+}
+
+fn freeArray(gpa: Allocator, kind: ArrayKind, ptr: [*]u64, n: usize) void {
+    if (n == 0) return;
+    if (kind == .boxed) {
+        const p: [*]Value = @ptrCast(ptr);
+        gpa.free(p[0..n]);
+    } else gpa.free(ptr[0..n]);
+}
+
+/// Stores `vals` into the array slots `start + 1` through
+/// `start + vals.len`, growing the array part to hold them. Constructors
+/// and vararg tables fill their array parts this way.
+pub fn storeList(gpa: Allocator, t: *Table, start: usize, vals: []const Value) Error!void {
+    const last = start + vals.len;
+    if (last > t.asize) try resize(gpa, t, last, t.hash_used);
+    var kind = t.kind;
+    for (vals) |v| kind = joinKind(kind, v);
+    if (kind == .boxed) {
+        try box(gpa, t);
+        @memcpy(t.values()[start..last], vals);
+    } else {
+        t.kind = kind;
+        for (t.words()[start..last], vals) |*w, v| w.* = if (v.isNil()) hole else v.payload;
+    }
+}
+
+// ---------------------------------------------------------------------
 // Lookup
 
 pub fn getInt(t: *Table, k: i64) Value {
-    if (k >= 1 and k <= t.array.len) return t.array[@intCast(k - 1)];
+    if (k >= 1 and k <= t.asize) return arrayGet(t, @intCast(k - 1));
     return getHash(t, Value.int(k));
 }
 
@@ -175,10 +284,7 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
     t.tm_absent = 0;
     if (k.tag == .integer) {
         const i = k.asInt();
-        if (i >= 1 and i <= t.array.len) {
-            t.array[@intCast(i - 1)] = val;
-            return;
-        }
+        if (i >= 1 and i <= t.asize) return arrayStore(gpa, t, @intCast(i - 1), val);
     }
     if (findSlot(t, k)) |idx| {
         t.hash[idx].val = val;
@@ -191,20 +297,16 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
         // The key may now belong in the array part.
         if (k.tag == .integer) {
             const i = k.asInt();
-            if (i >= 1 and i <= t.array.len) {
-                t.array[@intCast(i - 1)] = val;
-                return;
-            }
+            if (i >= 1 and i <= t.asize) return arrayStore(gpa, t, @intCast(i - 1), val);
         }
     }
     insertNew(t, k, val);
 }
 
 pub fn setInt(gpa: Allocator, t: *Table, i: i64, val: Value) Error!void {
-    if (i >= 1 and i <= t.array.len) {
-        t.array[@intCast(i - 1)] = val;
+    if (i >= 1 and i <= t.asize) {
         t.tm_absent = 0;
-        return;
+        return arrayStore(gpa, t, @intCast(i - 1), val);
     }
     return set(gpa, t, Value.int(i), val);
 }
@@ -229,8 +331,8 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value) Error!void {
     var nums: [64]u32 = @splat(0);
     var total_int: u32 = 0;
     var total: u32 = 0;
-    for (t.array, 0..) |v, idx| {
-        if (!v.isNil()) {
+    for (0..t.asize) |idx| {
+        if (!arrayIsNil(t, idx)) {
             nums[ceilLog2(idx + 1)] += 1;
             total_int += 1;
         }
@@ -274,8 +376,10 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value) Error!void {
 
 fn countArray(t: *Table) u32 {
     var n: u32 = 0;
-    for (t.array) |v| {
-        if (!v.isNil()) n += 1;
+    if (t.kind == .boxed) {
+        for (t.values()) |v| n += @intFromBool(!v.isNil());
+    } else {
+        for (t.words()) |w| n += @intFromBool(w != hole);
     }
     return n;
 }
@@ -286,31 +390,62 @@ fn ceilLog2(x: usize) usize {
 }
 
 /// Resizes the table to `asize` array slots and a hash part big enough for
-/// `hcount` entries at the target load factor.
+/// `hcount` entries at the target load factor. The array part keeps its
+/// kind unless an entry that moves into it from the hash part does not
+/// fit, in which case it becomes boxed.
 pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void {
     var hsize: usize = 0;
     if (hcount > 0) {
         hsize = 4;
         while (hsize * 3 < hcount * 4) hsize *= 2;
     }
-    const old_array = t.array;
+    const old_kind = t.kind;
+    const old_ptr = t.array_ptr;
+    const old_n = t.asize;
     const old_hash = t.hash;
-    const new_array = if (asize == old_array.len) old_array else try gpa.alloc(Value, asize);
-    errdefer if (asize != old_array.len) gpa.free(new_array);
+    var kind = old_kind;
+    for (old_hash) |n| {
+        if (n.key.tag != .integer or n.val.isNil()) continue;
+        const i = n.key.asInt();
+        if (i >= 1 and i <= asize) kind = joinKind(kind, n.val);
+    }
+    // Allocate both parts before changing the table, so that running out
+    // of memory leaves it intact.
+    const reuse = asize == old_n and kind == old_kind;
+    var new_ptr = if (reuse) old_ptr else Table.empty_words;
+    if (!reuse and asize > 0) {
+        new_ptr = if (kind == .boxed) @ptrCast((try gpa.alloc(Value, asize)).ptr) else (try gpa.alloc(u64, asize)).ptr;
+    }
+    errdefer if (!reuse) freeArray(gpa, kind, new_ptr, asize);
     const new_hash = try gpa.alloc(Node, hsize);
     for (new_hash) |*n| n.* = .{ .key = .nil, .val = .nil };
-    if (new_array.ptr != old_array.ptr) {
-        const keep = @min(asize, old_array.len);
-        @memcpy(new_array[0..keep], old_array[0..keep]);
-        for (new_array[keep..]) |*v| v.* = .nil;
+    const old: Table = .{ .hdr = t.hdr, .kind = old_kind, .array_ptr = old_ptr, .asize = old_n };
+    t.kind = kind;
+    t.array_ptr = new_ptr;
+    t.asize = asize;
+    if (!reuse) {
+        const keep = @min(asize, old_n);
+        if (kind == .boxed) {
+            const dst = t.values();
+            if (old_kind == .boxed) {
+                @memcpy(dst[0..keep], old.values()[0..keep]);
+            } else {
+                for (dst[0..keep], 0..) |*d, idx| d.* = arrayGet(&old, idx);
+            }
+            @memset(dst[keep..], .nil);
+        } else {
+            const dst = t.words();
+            @memcpy(dst[0..keep], old.words()[0..keep]);
+            @memset(dst[keep..], hole);
+        }
     }
-    t.array = new_array;
     t.hash = new_hash;
     t.hash_used = 0;
     t.log2_hash = if (hsize == 0) 0 else @intCast(std.math.log2_int(usize, hsize));
     // Move array entries that no longer fit into the hash part.
-    if (old_array.len > asize) {
-        for (old_array[asize..], asize..) |v, idx| {
+    if (old_n > asize) {
+        for (asize..old_n) |idx| {
+            const v = arrayGet(&old, idx);
             if (!v.isNil()) reinsert(t, Value.int(@intCast(idx + 1)), v);
         }
     }
@@ -318,15 +453,18 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
         if (n.key.tag == .nil or n.val.isNil()) continue;
         reinsert(t, n.key, n.val);
     }
-    if (new_array.ptr != old_array.ptr and old_array.len > 0) gpa.free(old_array);
+    if (!reuse) freeArray(gpa, old_kind, old_ptr, old_n);
     if (old_hash.len > 0) gpa.free(old_hash);
 }
 
+/// Inserts a live entry while rebuilding. The kind of the array part
+/// already admits every value that lands in it.
 fn reinsert(t: *Table, k: Value, v: Value) void {
     if (k.tag == .integer) {
         const i = k.asInt();
-        if (i >= 1 and i <= t.array.len) {
-            t.array[@intCast(i - 1)] = v;
+        if (i >= 1 and i <= t.asize) {
+            const ok = arrayStoreFast(t, @intCast(i - 1), v);
+            std.debug.assert(ok);
             return;
         }
     }
@@ -339,14 +477,14 @@ fn reinsert(t: *Table, k: Value, v: Value) void {
 /// Border of the table, as defined by the `#` operator: an index n such
 /// that t[n] is not nil and t[n+1] is nil (or 0 when t[1] is nil).
 pub fn length(t: *Table) i64 {
-    const n = t.array.len;
-    if (n > 0 and t.array[n - 1].isNil()) {
+    const n = t.asize;
+    if (n > 0 and arrayIsNil(t, n - 1)) {
         // The previous border, or the one just after it when a value was
         // appended, is usually still a border.
         const h: usize = t.len_hint;
-        if (h < n and t.array[h].isNil()) {
-            if (h == 0 or !t.array[h - 1].isNil()) return @intCast(h);
-        } else if (h + 1 < n and t.array[h + 1].isNil()) {
+        if (h < n and arrayIsNil(t, h)) {
+            if (h == 0 or !arrayIsNil(t, h - 1)) return @intCast(h);
+        } else if (h + 1 < n and arrayIsNil(t, h + 1)) {
             t.len_hint = @intCast(h + 1);
             return @intCast(h + 1);
         }
@@ -355,7 +493,7 @@ pub fn length(t: *Table) i64 {
         var hi: usize = n;
         while (hi - lo > 1) {
             const m = (lo + hi) / 2;
-            if (t.array[m - 1].isNil()) hi = m else lo = m;
+            if (arrayIsNil(t, m - 1)) hi = m else lo = m;
         }
         t.len_hint = @intCast(lo);
         return @intCast(lo);
@@ -390,18 +528,19 @@ pub fn next(t: *Table, key: Value) Error!?NextResult {
     var start: usize = 0; // position in the combined array+hash sequence
     if (!key.isNil()) {
         const k = normalizeKey(key);
-        if (k.tag == .integer and k.asInt() >= 1 and k.asInt() <= t.array.len) {
+        if (k.tag == .integer and k.asInt() >= 1 and k.asInt() <= t.asize) {
             start = @intCast(k.asInt());
         } else {
             const idx = findSlot(t, k) orelse return error.InvalidKey;
-            start = t.array.len + idx + 1;
+            start = t.asize + idx + 1;
         }
     }
     var i = start;
-    while (i < t.array.len) : (i += 1) {
-        if (!t.array[i].isNil()) return .{ .key = Value.int(@intCast(i + 1)), .val = t.array[i] };
+    while (i < t.asize) : (i += 1) {
+        const v = arrayGet(t, i);
+        if (!v.isNil()) return .{ .key = Value.int(@intCast(i + 1)), .val = v };
     }
-    var h = i - t.array.len;
+    var h = i - t.asize;
     while (h < t.hash.len) : (h += 1) {
         const n = t.hash[h];
         if (n.key.tag != .nil and !n.val.isNil()) return .{ .key = n.key, .val = n.val };
@@ -413,15 +552,13 @@ const testing = std.testing;
 
 test "array and hash parts" {
     var t: Table = .{ .hdr = .{ .tag = .table } };
-    defer {
-        if (t.array.len > 0) testing.allocator.free(t.array);
-        if (t.hash.len > 0) testing.allocator.free(t.hash);
-    }
+    defer freeParts(testing.allocator, &t);
     var i: i64 = 1;
     while (i <= 100) : (i += 1) try setInt(testing.allocator, &t, i, Value.int(i * 2));
     try testing.expectEqual(@as(i64, 100), length(&t));
     try testing.expectEqual(@as(i64, 84), getInt(&t, 42).asInt());
-    try testing.expect(t.array.len >= 64);
+    try testing.expect(t.asize >= 64);
+    try testing.expectEqual(ArrayKind.int, t.kind);
     try set(testing.allocator, &t, Value.float(3.0), Value.int(7));
     try testing.expectEqual(@as(i64, 7), getInt(&t, 3).asInt());
     // Traversal visits every key once.

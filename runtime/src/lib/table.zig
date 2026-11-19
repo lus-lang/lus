@@ -102,9 +102,9 @@ fn checkTab(l: *Thread, i: u32, what: u8) Error!void {
     if (v.tag == .table) return;
     if (l.metatable(v)) |mt| {
         const names = l.g.tm_names;
-        const ok = (what & tab_r == 0 or !table.getStr(mt, names[@intFromEnum(state.TM.index)].?).isNil()) and
-            (what & tab_w == 0 or !table.getStr(mt, names[@intFromEnum(state.TM.newindex)].?).isNil()) and
-            (what & tab_l == 0 or v.tag == .string or !table.getStr(mt, names[@intFromEnum(state.TM.len)].?).isNil());
+        const ok = (what & tab_r == 0 or !table.getStr(mt, names[@backingInt(state.TM.index)].?).isNil()) and
+            (what & tab_w == 0 or !table.getStr(mt, names[@backingInt(state.TM.newindex)].?).isNil()) and
+            (what & tab_l == 0 or v.tag == .string or !table.getStr(mt, names[@backingInt(state.TM.len)].?).isNil());
         if (ok) return;
     }
     return aux.typeError(l, i, "table");
@@ -436,7 +436,7 @@ fn clone(l: *Thread) Error!u32 {
         l.top = map_slot + 1;
         return 1;
     }
-    const dst = try pushNewTable(l, src.array.len, src.hash_used);
+    const dst = try pushNewTable(l, src.asize, src.hash_used);
     var k: Value = .nil;
     while (table.next(src, k) catch null) |kv| : (k = kv.key) {
         try ops.rawSet(l, dst, kv.key, kv.val);
@@ -459,7 +459,7 @@ fn cloneDeep(l: *Thread, src: *Table, map_t: *Table, depth: u32) Error!*Table {
         try l.push(existing);
         return existing.as(Table);
     }
-    const dst = try pushNewTable(l, src.array.len, src.hash_used);
+    const dst = try pushNewTable(l, src.asize, src.hash_used);
     const dst_slot = l.top - 1;
     try ops.rawSet(l, map_t, key, Value.obj(.table, dst));
     var k: Value = .nil;
@@ -478,8 +478,8 @@ fn cloneDeep(l: *Thread, src: *Table, map_t: *Table, depth: u32) Error!*Table {
 /// Shrinks the storage of a table to fit its live contents.
 fn compact(l: *Thread) Error!u32 {
     const t = try aux.checkTable(l, 1);
-    var asize = t.array.len;
-    while (asize > 0 and t.array[asize - 1].isNil()) asize -= 1;
+    var asize = t.asize;
+    while (asize > 0 and table.arrayIsNil(t, asize - 1)) asize -= 1;
     var live: usize = 0;
     for (t.hash) |n| {
         if (n.key.tag != .nil and !n.val.isNil()) live += 1;
