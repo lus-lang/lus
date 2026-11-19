@@ -531,7 +531,7 @@ Lus is lexically scoped. A local declared by `local` enters scope at the stateme
 
 A name resolves by scanning active declarations of the current function from innermost to outermost, then the enclosing functions (creating upvalues), and finally as a global. Global declarations participate in the same scan (section 4.3).
 
-Limits: at most 200 active locals per function (`too many local variables (limit is 200) in main function` or `... in function at line N`), at most 255 upvalues per function (`too many upvalues (limit is 255) in ...`), and at most 255 registers (`too many registers (limit is 255) in ...`). Hidden internal variables such as the generic-for state slots and runtime attribute slots count toward the local limit.
+Limits: at most 200 active locals per function (`too many local variables (limit is 200) in main function` or `... in function at line N`), at most 255 upvalues per function (`too many upvalues (limit is 255) in ...`), and at most 255 registers (`too many registers (limit is 255) in ...`). A loop instruction stores the length of its loop in 16 bits, so a `for` loop whose body compiles to more than about 65535 instructions raises `control structure too long`. Hidden internal variables such as the generic-for state slots and runtime attribute slots count toward the local limit.
 
 ### 4.2 Local attributes
 

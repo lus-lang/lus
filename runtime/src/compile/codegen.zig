@@ -3032,6 +3032,9 @@ fn forBody(fs: *FuncState, base: u8, line: u32, nvars: u32, generic: bool, body:
     try leaveBlock(fs);
     fs.line = line;
     const prep_target = getLabel(fs);
+    // The loop instruction jumps back over the body and the call of a
+    // generic loop, and its Bx field holds that distance.
+    if (prep_target - prep + @intFromBool(generic) > opc.max_arg_bx) return fs.c.err(line, "control structure too long", .{});
     if (generic) {
         opc.setBx(&fs.code.items[@intCast(prep)], @intCast(prep_target - prep - 1));
         try codeABC(fs, .tforcall, base, 0, @intCast(nvars));

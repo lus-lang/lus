@@ -400,3 +400,33 @@ local function overlong_chains_report_too_many_syntax_levels_test(link)
         assert(err:find("too many syntax levels", 1, true), err)
     end
 end
+
+-- A loop instruction holds the length of its body in a 16-bit field. Each
+-- `x = 1` statement in these bodies is one instruction, so the longest
+-- bodies that fit are 65534 statements for a numeric loop and 65533 for a
+-- generic one, whose body also holds the iterator call.
+local function loop_with_body(head, n)
+    return "local x = 0 " .. head .. " do " .. string.rep("x = 1 ", n)
+        .. "end return x"
+end
+
+local loop_bodies_up_to_the_jump_limit_compile_and_run_cases = {
+    {"for i = 1, 2", 65534},
+    {"for _ in pairs({ 1 })", 65533},
+    {"for i in range(2)", 65533},
+}
+
+local function loop_bodies_up_to_the_jump_limit_compile_and_run_test(head, n)
+    assert(expect_run(loop_with_body(head, n)) == 1)
+end
+
+local loop_bodies_past_the_jump_limit_are_rejected_cases = {
+    {"for i = 1, 2", 65535},
+    {"for _ in pairs({ 1 })", 65534},
+    {"for i in range(2)", 65534},
+    {"for i = 1, 2", 100000},
+}
+
+local function loop_bodies_past_the_jump_limit_are_rejected_test(head, n)
+    expect_compile_error(loop_with_body(head, n), "control structure too long")
+end
