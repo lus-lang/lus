@@ -1,0 +1,99 @@
+{
+  "name": "lus",
+  "displayName": "Lus",
+  "description": "Language support for Lus with syntax highlighting, diagnostics, completion, and formatting.",
+  "version": "1.7.0",
+  "publisher": "lus",
+  "icon": "icon.png",
+  "license": "0BSD",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lus-lang/lus"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:lus",
+    "workspaceContains:**/*.lus"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./out/extension.js",
+  "files": [
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "icon.png",
+    "language-configuration.json",
+    "licenses/LICENSE.EMSCRIPTEN.txt",
+    "licenses/LICENSE.LUALS.txt",
+    "out/extension.js",
+    "syntaxes/lus.tmLanguage.json",
+    "wasm/lus.mjs",
+    "wasm/lus.wasm"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lus",
+        "aliases": [
+          "Lus",
+          "lus"
+        ],
+        "extensions": [
+          ".lus"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lus",
+        "scopeName": "source.lus",
+        "path": "./syntaxes/lus.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "lus.restartLanguageServer",
+        "title": "Lus: Restart Language Server"
+      }
+    ]
+  },
+  "scripts": {
+    "check:generated": "node ../../tools/build-grammar.test.js && node ../../tools/build-grammar.js --check && node scripts/check-generated.mjs",
+    "prebuild": "pnpm check:generated",
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test test/*.test.cjs scripts/open-vsx-publisher.test.mjs",
+    "test:wasm": "node scripts/smoke-wasm.mjs",
+    "test:devcontainer": "node scripts/smoke-devcontainer.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "package": "pnpm build && vsce package --no-dependencies",
+    "publish": "ovsx publish",
+    "ci": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "packageManager": "pnpm@10.18.0",
+  "devDependencies": {
+    "@devcontainers/cli": "0.88.0",
+    "@shikijs/engine-javascript": "4.2.0",
+    "@shikijs/vscode-textmate": "10.0.2",
+    "@types/node": "20.19.43",
+    "@types/vscode": "1.100.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.27.3",
+    "ovsx": "0.10.9",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  }
+}

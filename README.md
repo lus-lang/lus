@@ -1,6 +1,6 @@
 <p>
 <a href="https://lus.dev">
-<img src="./lus-site/src/assets/logo.svg" width="64" height="64">
+<img src="./packages/site/src/assets/logo.svg" width="64" height="64">
 </a>
 </p>
 
@@ -14,15 +14,17 @@ Lus is a small, productive programming language. It should be able to be picked 
 
 This is a monorepository containing the following projects:
 
-- [**`/lus`**](https://github.com/lus-lang/lus/tree/main/lus): Source code for the language runtime
-- [**`/lus-site`**](https://github.com/lus-lang/lus/tree/main/lus-site): Source code for lus.dev
-- [**`/lus-tests`**](https://github.com/lus-lang/lus/tree/main/lus-tests): Tests for integrity
-- [**`/lus-textmate`**](https://github.com/lus-lang/lus/tree/main/lus-textmate): TextMate grammar
-- [**`/lus-examples`**](https://github.com/lus-lang/lus/tree/main/lus-examples): Examples of Lus syntax
-- [**`/lus-language`**](https://github.com/lus-lang/lus/tree/main/lus-language): Language server for Lus
-- [**`/lus-vscode`**](https://github.com/lus-lang/lus/tree/main/lus-vscode): VSCode extension for Lus
-- [**`/lus-spec`**](https://github.com/lus-lang/lus/tree/main/lus-spec): Lus language specification
-- [**`/lus-install`**](https://github.com/lus-lang/lus/tree/main/lus-install): Install scripts for Lus
+- [**`/legacy`**](legacy): The frozen 1.7 C runtime and its tests, kept as the reference for the rewrite
+- [**`/spec`**](spec): Standard library specification and design notes
+- [**`/packages/language-server`**](packages/language-server): Language server for Lus
+- [**`/packages/vscode`**](packages/vscode): VSCode extension for Lus
+- [**`/packages/textmate`**](packages/textmate): TextMate grammar
+- [**`/packages/site`**](packages/site): Source code for lus.dev
+- [**`/examples`**](examples): Examples of Lus syntax
+- [**`/packaging`**](packaging): Install scripts, notices, and dependency licenses
+- [**`/tools`**](tools): Generators and repository checks
+
+Tasks run through [mise](https://mise.jdx.dev). Run `mise tasks` to list them.
 
 ## Examples
 
@@ -32,4 +34,4 @@ This is a monorepository containing the following projects:
 
 These works are licensed under the 0-clause BSD license. They may be used for any purpose, including commercial purposes, at no cost. [For more details, consult the license here.](/LICENSE.md)
 
-Dependency licenses can be found in [`/licenses`](/licenses).
+Dependency licenses can be found in [`/packaging/licenses`](/packaging/licenses).

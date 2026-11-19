@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, rewrite]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24.7.0"
+  PNPM_VERSION: "10.18.0"
+  MESON_VERSION: "1.11.2"
+  NINJA_VERSION: "1.13.0"
+
+jobs:
+  lint:
+    name: Lint and generated files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Repository lint
+        run: node tools/lint-repo.js
+      - name: Generator tests
+        run: node tools/build-lsp.test.js && node tools/build-grammar.test.js
+      - name: Generated files are current
+        run: node tools/build-lsp.js --check && node tools/build-grammar.js --check
+
+  web:
+    name: Site and VSCode extension
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pnpm
+        run: npm install --global "pnpm@$PNPM_VERSION"
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: VSCode extension
+        working-directory: packages/vscode
+        run: pnpm typecheck && pnpm test && pnpm build
+      - name: Site
+        working-directory: packages/site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm test && pnpm build
+
+  legacy:
+    # The frozen 1.7 runtime is the differential oracle for the rewrite.
+    name: Legacy runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Ubuntu dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv libssl-dev libc-ares-dev zlib1g-dev libzstd-dev libbrotli-dev liblz4-dev libreadline-dev
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install readline openssl@3 c-ares zstd brotli lz4
+      - name: Install pinned Meson and Ninja
+        run: |
+          python3 -m venv .ci-tools
+          .ci-tools/bin/pip install "meson==$MESON_VERSION" "ninja==$NINJA_VERSION"
+          echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
+      - name: Build
+        working-directory: legacy/lus
+        run: meson setup build --buildtype=debug && meson compile -C build
+      - name: Test
+        working-directory: legacy/lus
+        run: meson test -C build --print-errorlogs --suite h1 --suite h2

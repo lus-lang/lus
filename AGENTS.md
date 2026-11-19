@@ -4,116 +4,90 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Repository Structure
 
-Monorepository for the Lus programming language (a Lua 5.5 derivative). Key directories:
+Monorepository for the Lus programming language (a Lua 5.5 derivative). Lus 2.0 is a ground-up rewrite in Zig, developed on the `rewrite` branch. The 1.7 C runtime is frozen under `legacy/` and tagged `v1.7-legacy`. It receives no feature work and serves only as the differential oracle for the rewrite. Key directories:
 
-- **`/lus`**: C runtime (interpreter `lus`, compiler `lusc`, static library `liblus`)
-- **`/lus-tests`**: Four test harnesses (H1-H4)
-- **`/lus-language`**: Language server written in Lus
-- **`/lus-vscode`**: VSCode extension (TypeScript + WASM)
-- **`/lus-site`**: Website (Astro + MDX)
-- **`/lus-spec`**: Stdlib specification (YAML frontmatter `.md` files)
-- **`/lus-textmate`**: TextMate grammar (shared by site and extension)
+- **`/runtime`**: The Lus 2.0 runtime in Zig (created at milestone M1)
+- **`/legacy`**: Frozen 1.7 C runtime (`legacy/lus`), its four test harnesses (`legacy/lus-tests`), and its release tooling
+- **`/spec`**: Stdlib specification (YAML frontmatter `.md` files) and, from M1, design notes in `spec/design/`
+- **`/packages/language-server`**: Language server written in Lus (module namespace `lus-language`)
+- **`/packages/vscode`**: VSCode extension (TypeScript + WASM)
+- **`/packages/site`**: Website (Astro + MDX)
+- **`/packages/textmate`**: TextMate grammar (shared by site and extension)
+- **`/examples`**: Runnable examples, shown on the site and in the playground
+- **`/packaging`**: Install scripts, third-party notices, and dependency licenses
+- **`/tools`**: Generators (spec to LSP data, spec to grammar) and the repository lint
+
+The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. Run `mise tasks` to list the tasks.
 
 ## Build Commands
 
-### Runtime (C)
+### Workspace
 
 ```sh
-cd lus
+mise run install       # pnpm install --frozen-lockfile
+mise run gen           # regenerate LSP stdlib data and TextMate grammars from spec/
+mise run gen:check     # fail if generated files are stale
+mise run lint          # repository prose and naming checks
+mise run site          # build the website
+mise run vscode        # build the VSCode extension
+```
+
+### Legacy runtime (C, frozen)
+
+```sh
+cd legacy/lus
 meson setup build
 meson compile -C build
-./build/lus            # interpreter
-./build/lusc           # bytecode compiler
+meson test -C build --suite h1 --suite h2
 ```
 
-### Tests
-
-```sh
-# From lus/ directory:
-meson test -C build                    # all suites
-meson test -C build --suite h1         # language integrity (pure Lus)
-meson test -C build --suite h2         # C API
-meson test -C build --suite h3-local   # system integration (containerized)
-meson test -C build --suite h4         # benchmarks
-meson test -C build h1/optchain        # single test by name
-
-# Full CI simulation with sanitizers (requires Docker + act):
-act -j sanitize                        # from repo root
-```
+The legacy tests run with `legacy/` as their working directory. The `legacy/lus-language` symbolic link points at `packages/language-server` so the language server tests resolve their modules.
 
 ### Website
 
 ```sh
-cd lus-site
-pnpm install
+cd packages/site
 pnpm dev          # dev server
-pnpm build        # production build (npx astro build)
-```
-
-### Language Server Data
-
-```sh
-node lus-spec/build-lsp.js    # regenerates lus-language/analysis/stdlib_data.lus
+pnpm build        # production build
 ```
 
 ## Architecture Notes
 
 ### Lus Language vs Lua
 
-Lus extends Lua 5.5 with: `catch` (replaces `pcall`/`xpcall`), `enum`, optional chaining (`?.`), string interpolation (backticks), `from` destructuring, if/while-assignment, `pledge` permissions, `vector` buffers, workers, slices, `table.clone`, do-expressions (`provide`), runtime attributes, and new stdlib (JSON, filesystem, networking, transcoding).
+Lus extends Lua 5.5 with: `catch` (replaces `pcall`/`xpcall`), `enum`, optional chaining (`?.`), string interpolation (backticks), `from` destructuring, if/while-assignment, `pledge` permissions, `vector` buffers, workers, slices, `table.clone`, do-expressions (`provide`), runtime attributes, local groups, compile flags, queries, and new stdlib (JSON, CSV, filesystem, networking, compression, time, SQLite, transcoding). Lus 2.0 keeps every one of these and adds `continue`, `range`, bigint and decimal number literals, WTF-8 strings indexed by character, `lus test`, `lus debug`, and `lus doc`.
 
 All Lus source files use `.lus` extension. Code blocks in documentation use ` ```lus ` fencing.
 
-### C Runtime Internals
+### Legacy C Runtime Internals
 
-The runtime is a modified Lua 5.5 codebase. New types added to the GC system:
+The legacy runtime is a modified Lua 5.5 codebase. These notes apply only when reading `legacy/` as a reference. New types added to the GC system:
 - `LUA_TENUM` / `LUA_TENUMROOT`: first-class enums (`lenum.c`, `lenum.h`)
 - `LUA_TVECTOR`: mutable byte buffers (`lvector.c`)
 
 New libraries: `ljsonlib.c`, `lfslib.c`, `lnetlib.c`, `lworkerlib.c`, `lvectorlib.c`. Permissions: `lpledge.c`. AST: `last.c`. Bundling: `lbundle.c`.
 
-When adding GC-managed types or constants, always initialize new array slots to nil (see `addk` in `lcode.c` for the pattern). The GC's `markvalue` macro will dereference garbage type tags if `BIT_ISCOLLECTABLE` happens to be set.
-
-### Stdlib Fastcall Parity
-
-The VM intrinsifies common stdlib calls as `OP_FASTCALL` (`lfastcall.c`, `lfastcall.h`), so a fastcalled builtin has two implementations: the intrinsic case in `luaV_dofastcall` and the registered C function. Which one runs depends on the call shape (single-result sites take the fast path, multret sites such as the last argument of a call or a `return` take the C path), so any divergence surfaces as position-dependent behavior. A whole class of 1.7.0 bugs came from the two paths disagreeing. Treat parity as a hard requirement whenever you touch the stdlib:
-
-1. **Adding a stdlib function**: assess it for fastcall eligibility (hot, fixed arity, and implementable on the fast path without allocation, metamethods, or Lua calls). If eligible, add the intrinsic in the same change: an `FC_*` id, an `FCDef` entry with correct `nargs`, registration via `luaF_registerfastcall`, and the `multret` flag when the builtin can return other than exactly one value at the registered arity (otherwise return-position calls truncate it). If not eligible, state why in the PR or commit message.
-2. **Changing either side of an existing fastcall** (the `luaV_dofastcall` case or the C function in the library file): re-verify behavioral parity on every axis that has produced real bugs: numeric-string coercion, NaN and signed-zero handling, integer versus float subtype of results, position clamping and out-of-range behavior, metatable and metamethod interaction, error messages and error object types, and result counts including zero results.
-3. **Fall back instead of approximating.** For any input outside the intrinsic's exact competence, `return 0` from `luaV_dofastcall` so the plain call runs. The C function is the single source of truth for coercions, metamethods, and error reporting. The fast path may only ever duplicate its behavior bit for bit or decline.
-4. **Prove parity with tests.** Extend `lus-tests/h1/fastcall-parity.lus` for every new or changed fastcall. It drives an `OP_FASTCALL` call site and an aliased `OP_CALL` site over the same adversarial corpus and asserts identical results, subtypes, and error reasons, using `framework.get_fastcalls` to prove the fast form really compiled to `OP_FASTCALL`. For manual differential checks, run the same script with and without `--no-fastcall`. Casual `print(f(...))` repros hide divergences because the multret argument position never emits `OP_FASTCALL`.
-
-### Test Harnesses
-
-- **H1**: Pure Lus tests using `lus-tests/framework.lus`. Each file is a self-contained test suite.
-- **H2**: Compiled C programs linking against `liblus` (tests C API embedding).
-- **H3**: System integration: `runner_local.lus` (containerized) and `runner_direct.lus` (CI-only).
-- **H4**: Benchmarks with pass/fail thresholds. `BUILD_TYPE` env controls strictness.
-
-Tests run from the repo root as working directory. The test binary path is the meson-built executable, and runners use `arg[-1]` to find it.
-
-### CI Workflow
-
-Platform-specific build directories (`build-<platform>`) prevent race conditions when `act` runs matrix jobs in parallel on a shared filesystem. The sanitizer job uses ASAN+UBSAN. Windows and macOS matrix entries will fail under `act` (Docker limitation). Only linux-glibc and linux-musl run locally.
+The legacy VM intrinsifies common stdlib calls as `OP_FASTCALL` (`lfastcall.c`), so a fastcalled builtin has two implementations, and the two must agree bit for bit. A whole class of 1.7.0 bugs came from them disagreeing. Lus 2.0 removes this class by construction: every builtin is written once in Zig and the fast call path is generated from the same definition.
 
 ### Website Content
 
-Manual pages are MDX files in `lus-site/src/manual/`. Cross-references use `/manual/guide#section-slug` and `/manual/acquis-N` formats. The acquis pages (0 to 30) document individual language features. The guide is the comprehensive reference.
+Manual pages are MDX files in `packages/site/src/manual/`. Cross-references use `/manual/guide#section-slug` and `/manual/acquis-N` formats. The acquis pages document individual language features. The guide is the comprehensive reference.
 
 ### Writing Acquis and Documentation
 
 Acquis are tracked both as GitHub issues (label `📗 acquis`, assigned to a version milestone) and as MDX pages. Whenever you write an acquis, or any project prose (docs, changelog, spec `.md`, comments), follow these rules:
 
 - **Frame everything positively.** Describe what the design is and does. Never describe it in terms of an alternative the reader has not seen. Phrasing like "there is no `tolist` method", "instead of a new global", "not an object", or "clauses rather than methods" implies an earlier proposal that exists only in your head, and the reader has no context for it. State the actual behavior instead ("the only way to run a query is the `query` iterator"). Comparisons to features that already ship, or to concepts every reader knows, are fine.
-- **No em dashes or en dashes.** Rewrite the sentence so the dash is unnecessary rather than swapping it for a hyphen. The repository is kept free of both.
+- **No em dashes or en dashes.** Rewrite the sentence so the dash is unnecessary rather than swapping it for a hyphen. The repository is kept free of both, and `tools/lint-repo.js` enforces it.
 - **No semicolons.** Write separate full sentences.
 - **Use full sentences and flowing paragraphs**, including complete-sentence lead-ins before code blocks.
+- **Never name the Roblox Lua dialect** anywhere in the repository: code, comments, docs, design notes, or commit messages. Describe techniques neutrally (for example "slot-prediction inline caches" or "goal-based GC pacer"). `tools/lint-repo.js` enforces this too.
 
-Before posting an issue or committing prose, grep for em dashes, en dashes, and semicolons, and reread for any wording that presumes a rejected alternative.
+Before posting an issue or committing prose, run `node tools/lint-repo.js`, grep for semicolons, and reread for any wording that presumes a rejected alternative.
 
-### Lus-spec → Language Server Pipeline
+### Spec → Language Server Pipeline
 
-`lus-spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node lus-spec/build-lsp.js` generates `lus-language/analysis/stdlib_data.lus` which the language server uses for completions, hover, and linting.
+`spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node tools/build-lsp.js` generates `packages/language-server/analysis/stdlib_data.lus`, which the language server uses for completions, hover, and linting. `node tools/build-grammar.js` generates both TextMate grammar copies from the same spec.
 
 ## Picking the right models for workflows and subagents
 
@@ -155,6 +129,6 @@ Claude models (`sonnet-5`, `opus-4.8`, `fable-5`) run via the Agent/Workflow mod
 
 ## Code Style
 
-C code is formatted with clang-format (config at `lus/.clang-format`): LLVM base style, 2-space indent, 80-column limit, `else` on new line after `}`, pointers right-aligned (`char *p`). Never sort includes.
+Zig code is formatted with `zig fmt`. Legacy C code is formatted with clang-format (config at `legacy/lus/.clang-format`): LLVM base style, 2-space indent, 80-column limit, `else` on new line after `}`, pointers right-aligned (`char *p`). Never sort includes.
 
 Lus code uses 4-space indentation. Global variables must be declared with `global` at the top of the file. Permissions are pledged immediately after globals.

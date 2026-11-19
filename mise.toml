@@ -1,2 +1,41 @@
 [tools]
+node = "24.7.0"
+pnpm = "10.18.0"
 python = "3.12"
+
+[tasks.gen]
+description = "Regenerate LSP stdlib data and TextMate grammars from spec/"
+run = "pnpm run gen"
+
+[tasks."gen:check"]
+description = "Fail if generated files are out of date"
+run = ["pnpm run test:tools", "pnpm run gen:check"]
+
+[tasks.install]
+description = "Install JavaScript workspace dependencies"
+run = "pnpm install --frozen-lockfile"
+
+[tasks.site]
+description = "Build the website"
+depends = ["install"]
+run = "pnpm --filter ./packages/site build"
+
+[tasks.vscode]
+description = "Build the VSCode extension"
+depends = ["install"]
+run = "pnpm --filter ./packages/vscode build"
+
+[tasks."legacy:build"]
+description = "Build the frozen 1.7 C runtime (differential oracle)"
+dir = "legacy/lus"
+run = ["meson setup build --reconfigure", "meson compile -C build"]
+
+[tasks."legacy:test"]
+description = "Run the frozen 1.7 runtime's H1 and H2 suites"
+depends = ["legacy:build"]
+dir = "legacy/lus"
+run = "meson test -C build --suite h1 --suite h2"
+
+[tasks.lint]
+description = "Repository prose and naming checks"
+run = "node tools/lint-repo.js"

@@ -1,0 +1,7 @@
+packages:
+  - packages/site
+  - packages/vscode
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
