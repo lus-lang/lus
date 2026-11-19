@@ -298,6 +298,11 @@ pub const State = struct {
     live: usize = 0,
     /// Bytes the sweep of the current cycle freed.
     swept: usize = 0,
+    /// Set when the last major collection freed less than a quarter of
+    /// what the program allocated since the collection before it. The
+    /// heap is then growing, and the next cycle waits for twice the
+    /// usual growth.
+    growing: bool = false,
     /// Minor collections since the last major one.
     minors: u32 = 0,
     stepmul: usize = 200,
@@ -356,7 +361,8 @@ fn setThreshold(g: *Global) void {
     const s = &g.gcs;
     // The products are formed in 64 bits, since they overflow a 32-bit
     // usize once the heap passes a few dozen megabytes.
-    const goal: u64 = @as(u64, s.live) * g.pause / 100;
+    const pause: u64 = if (s.growing) @as(u64, g.pause) * 2 else g.pause;
+    const goal: u64 = @as(u64, s.live) * pause / 100;
     const during: u64 = @as(u64, s.live) * 100 / @max(s.stepmul, 1);
     const start = @max(goal -| during, @as(u64, s.live) + s.stepsize);
     const t: u64 = @max(start, 256 * 1024, @as(u64, g.counter.bytes) + s.stepsize);
@@ -654,7 +660,16 @@ fn finishSweep(g: *Global) void {
     heap.releaseSegments(g);
     g.strings.shrink(g.gpa);
     s.phase = .pause;
+    const before = s.live;
     s.live = s.heap_at_mark -| s.swept;
+    if (s.mode != .generational or s.last_major) {
+        // The bytes allocated since the previous major collection. In
+        // generational mode that collection left `gen_base` bytes, and
+        // otherwise the previous cycle left `before`.
+        const allocated = s.heap_at_mark -| (if (s.mode == .generational) s.gen_base else before);
+        const freed = s.heap_at_mark -| s.live;
+        s.growing = @as(u64, freed) * 4 < allocated;
+    }
     if (s.mode != .generational) return setThreshold(g);
     const live = s.live;
     if (s.last_major) {
