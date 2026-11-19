@@ -434,8 +434,11 @@ fn join(l: *Thread) Error!u32 {
     defer b.deinit();
     var i: i64 = 1;
     while (i <= n) : (i += 1) {
-        if (i > 1) try b.append(sep);
         const v = try ops.index(l, tv, Value.int(i));
+        // A hole ends the sequence, so the result never depends on which
+        // border the length operator picks.
+        if (v.isNil()) break;
+        if (i > 1) try b.append(sep);
         // The bytes are copied before anything else can allocate.
         const str = try ops.toString(l, v);
         try b.append(str.bytes());

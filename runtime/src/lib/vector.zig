@@ -64,7 +64,7 @@ pub fn checkVector(l: *Thread, i: u32) Error!*Vector {
 
 fn create(l: *Thread) Error!u32 {
     const n = try aux.checkInt(l, 1);
-    if (n < 0) return aux.argError(l, 1, "size must be non-negative", .{});
+    if (n < 0) return aux.argError(l, 1, "capacity must be non-negative", .{});
     const v = try newVector(l, &.{});
     v.bytes.appendNTimes(l.g.gpa, 0, @intCast(n)) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.vector, v));
@@ -109,7 +109,7 @@ fn vpack(l: *Thread) Error!u32 {
     var tmp: std.ArrayList(u8) = .empty;
     defer tmp.deinit(l.g.gpa);
     try pack.pack(l, fmt, 4, &tmp);
-    if (off + tmp.items.len > v.bytes.items.len) return l.raiseFmt("vector.pack: data does not fit (need {d} bytes at offset {d}, size {d})", .{ tmp.items.len, off, v.bytes.items.len });
+    if (off + tmp.items.len > v.bytes.items.len) return aux.argError(l, 2, "pack would exceed vector bounds", .{});
     @memcpy(v.bytes.items[off .. off + tmp.items.len], tmp.items);
     return aux.retInt(l, @intCast(off + tmp.items.len));
 }
@@ -118,7 +118,7 @@ fn vunpack(l: *Thread) Error!u32 {
     const v = try checkVector(l, 1);
     const off = try checkOffset(l, 2, v.bytes.items.len);
     const fmt = try aux.checkBytes(l, 3);
-    const r = try pack.unpack(l, fmt, v.bytes.items, off);
+    const r = try pack.unpack(l, fmt, v.bytes.items, off, pack.vector_msgs);
     try l.push(Value.int(@intCast(r[1])));
     return r[0] + 1;
 }
@@ -131,24 +131,28 @@ fn unpackmanyAux(l: *Thread) Error!u32 {
     const off: usize = @intCast(ups[2].asInt());
     const remaining = ups[3].asInt();
     if (remaining == 0 or off >= v.bytes.items.len) return aux.retNil(l);
+    // A trailing partial record is an error rather than a silent stop.
     const need = pack.size(l, fmt) catch 0;
-    if (need > 0 and off + need > v.bytes.items.len) return aux.retNil(l);
-    const r = try pack.unpack(l, fmt, v.bytes.items, off);
+    if (need > 0 and off + need > v.bytes.items.len) return l.raiseFmt("unpack falls out of bounds", .{});
+    const r = try pack.unpack(l, fmt, v.bytes.items, off, pack.vector_msgs);
     ups[2] = Value.int(@intCast(r[1]));
     if (remaining > 0) ups[3] = Value.int(remaining - 1);
     return r[0];
 }
 
+/// vector.unpackmany(v, offset, fmt [, count]): an iterator over records.
+/// A count of zero, the default, means no limit.
 fn unpackmany(l: *Thread) Error!u32 {
     const v = try checkVector(l, 1);
     const off = try checkOffset(l, 2, v.bytes.items.len);
     const fmt = try aux.checkString(l, 3);
-    const count = try aux.optInt(l, 4, -1);
+    const count = try aux.optInt(l, 4, 0);
+    if (count < 0) return aux.argError(l, 4, "count must be non-negative", .{});
     const n = state.newNative(l.g, unpackmanyAux, "unpackmany", 4) catch return l.raiseMem();
     n.upvalues()[0] = Value.obj(.vector, v);
     n.upvalues()[1] = Value.obj(.string, fmt);
     n.upvalues()[2] = Value.int(@intCast(off));
-    n.upvalues()[3] = Value.int(count);
+    n.upvalues()[3] = Value.int(if (count == 0) -1 else count);
     return aux.ret(l, Value.obj(.native, n));
 }
 
@@ -208,7 +212,7 @@ pub fn stringUnpack(l: *Thread) Error!u32 {
     var pos = try aux.optInt(l, 3, 1);
     if (pos < 0) pos = @as(i64, @intCast(data.len)) + pos + 1;
     if (pos < 1 or pos - 1 > data.len) return aux.argError(l, 3, "initial position out of string", .{});
-    const r = try pack.unpack(l, fmt, data, @intCast(pos - 1));
+    const r = try pack.unpack(l, fmt, data, @intCast(pos - 1), pack.string_msgs);
     try l.push(Value.int(@intCast(r[1] + 1)));
     return r[0] + 1;
 }
