@@ -1359,7 +1359,7 @@ pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i3
 /// `stop` and no open upvalue or to-be-closed variable lives in it.
 pub inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
     const fr = c.fr;
-    if (fr.finish != .none or fr.boundary or l.hook_mask != 0) return false;
+    if (fr.finish.kind != .none or fr.boundary or l.hook_mask != 0) return false;
     if (c.fi <= stop or l.frames.items[c.fi - 1].closure == null) return false;
     if (l.open_upvals) |u| if (u.level >= c.base) return false;
     if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= c.base) return false;
@@ -1407,7 +1407,7 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
         l.hook_oldfi = c.fi;
         l.hook_oldpc = if (pc.* > 0) pc.* - 1 else 0;
     }
-    switch (fr.finish) {
+    switch (fr.finish.unpack()) {
         .none, .discard => {},
         .store => |r| c.bp[r] = l.stack[dst],
         .cond => |k| if (l.stack[dst].truthy() != k) {
@@ -1423,6 +1423,17 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     // Fixed result counts restore the caller's register window top.
     if (fr.want >= 0) l.top = c.base + c.cl.proto.max_stack;
     return false;
+}
+
+/// Returns `n` values starting at `first` from the running frame, for
+/// native code that finished a call in tail position. The result is the
+/// step code that a return instruction reports.
+pub fn returnStep(l: *Thread, first: u32, n: u32, stop: usize) Error!u32 {
+    var c = load(l);
+    var pc: u32 = c.fr.pc;
+    if (try doReturn(l, &c, &pc, first, n, stop)) return Step.done;
+    c.fr.pc = pc;
+    return Step.dispatch;
 }
 
 fn markTbc(l: *Thread, level: u32) Error!void {
@@ -1556,6 +1567,27 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: *const 
     try setSlow(l, t.*, key.*, v.*);
     c.refresh(l);
 }
+
+/// The facts about the inline caches and the metamethod absence cache
+/// that native code relies on (`jit/emit.zig`). The hit paths that native
+/// code runs inline are the ones of `lookupIc`, `noNewindexMeta`, and
+/// `indexChain` below, and this is where their data layout is named.
+pub const layout = struct {
+    /// Byte offsets of the slot predictions in an inline cache entry.
+    /// Each prediction is 16 bits wide.
+    pub const ic_own: usize = @offsetOf(object.IcEntry, "own");
+    pub const ic_index: usize = @offsetOf(object.IcEntry, "index");
+    pub const ic_holder: usize = @offsetOf(object.IcEntry, "holder");
+    /// Bits of `Table.tm_absent`.
+    pub const absent_index: u4 = @backingInt(state.TM.index);
+    pub const absent_newindex: u4 = @backingInt(state.TM.newindex);
+
+    comptime {
+        std.debug.assert(@FieldType(object.IcEntry, "own") == u16);
+        std.debug.assert(@FieldType(object.IcEntry, "index") == u16);
+        std.debug.assert(@FieldType(object.IcEntry, "holder") == u16);
+    }
+};
 
 /// The parts of the table and return instructions that touch no frame
 /// state. The interpreter runs them inline, and native code calls them

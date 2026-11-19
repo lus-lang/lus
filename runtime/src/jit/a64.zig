@@ -315,6 +315,39 @@ pub const Assembler = struct {
     pub fn store8(a: *Assembler, src: Reg, m: Mem) void {
         a.mem(src.n(), m, 0, 0x39000000, 0x38000000);
     }
+    /// Loads 16 bits, zero-extended.
+    pub fn load16(a: *Assembler, dst: Reg, m: Mem) void {
+        a.mem(dst.n(), m, 1, 0x79400000, 0x78400000);
+    }
+    pub fn store16(a: *Assembler, src: Reg, m: Mem) void {
+        a.mem(src.n(), m, 1, 0x79000000, 0x78000000);
+    }
+    pub fn storeImm16(a: *Assembler, m: Mem, v: u16) void {
+        if (v == 0) return a.store16(zr, m);
+        a.movImm(s0, v);
+        a.store16(s0, m);
+    }
+    /// Stores two 64-bit registers at `m` and `m + 8`.
+    pub fn storePair64(a: *Assembler, first: Reg, second: Reg, m: Mem) void {
+        if (pairable(m.disp)) {
+            a.word(0xA9000000 | pairOffset(m.disp) | second.n() << 10 | m.base.n() << 5 | first.n());
+        } else {
+            a.store64(first, m);
+            a.store64(second, .{ .base = m.base, .disp = m.disp + 8 });
+        }
+    }
+    /// Stores the low halves of two registers at `m` and `m + 4`.
+    pub fn storePair32(a: *Assembler, first: Reg, second: Reg, m: Mem) void {
+        if (m.disp >= -256 and m.disp <= 252 and @mod(m.disp, 4) == 0) {
+            const off = (@as(u32, @bitCast(@divExact(m.disp, 4))) & 0x7F) << 15;
+            a.word(0x29000000 | off | second.n() << 10 | m.base.n() << 5 | first.n());
+        } else {
+            a.store32(first, m);
+            a.store32(second, .{ .base = m.base, .disp = m.disp + 4 });
+        }
+    }
+    /// The register that reads as zero in `storePair64` and `storePair32`.
+    pub const zero_reg: ?Reg = zr;
     pub fn loadF(a: *Assembler, dst: FReg, m: Mem) void {
         a.mem(dst.n(), m, 3, 0xFD400000, 0xFC400000);
     }

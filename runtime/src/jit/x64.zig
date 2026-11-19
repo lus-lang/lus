@@ -291,6 +291,31 @@ pub const Assembler = struct {
         a.byte(0x88);
         a.modrm(src.n(), m);
     }
+    /// Loads 16 bits, zero-extended.
+    pub fn load16(a: *Assembler, dst: Reg, m: Mem) void {
+        a.opRM(false, &.{ 0x0F, 0xB7 }, dst.n(), m);
+    }
+    pub fn store16(a: *Assembler, src: Reg, m: Mem) void {
+        a.byte(0x66);
+        a.opRM(false, &.{0x89}, src.n(), m);
+    }
+    pub fn storeImm16(a: *Assembler, m: Mem, v: u16) void {
+        a.byte(0x66);
+        a.opRM(false, &.{0xC7}, 0, m);
+        a.bytes(std.mem.asBytes(&std.mem.nativeToLittle(u16, v)));
+    }
+    /// Stores two 64-bit registers at `m` and `m + 8`.
+    pub fn storePair64(a: *Assembler, first: Reg, second: Reg, m: Mem) void {
+        a.store64(first, m);
+        a.store64(second, .{ .base = m.base, .disp = m.disp + 8 });
+    }
+    /// Stores the low halves of two registers at `m` and `m + 4`.
+    pub fn storePair32(a: *Assembler, first: Reg, second: Reg, m: Mem) void {
+        a.store32(first, m);
+        a.store32(second, .{ .base = m.base, .disp = m.disp + 4 });
+    }
+    /// This target has no register that reads as zero.
+    pub const zero_reg: ?Reg = null;
     pub fn loadF(a: *Assembler, dst: FReg, m: Mem) void {
         a.byte(0xF2);
         a.opRM(false, &.{ 0x0F, 0x10 }, dst.n(), m);
