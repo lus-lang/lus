@@ -19,6 +19,7 @@ run = [
   "zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe",
   "zig build -Doptimize=ReleaseSafe",
   "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=eager zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "zig-out/bin/lus test --doc ../packages/site/src/manual ../spec",
 ]
 

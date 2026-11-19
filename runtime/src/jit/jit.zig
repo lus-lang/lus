@@ -58,8 +58,7 @@ pub const State = if (enabled) struct {
     compiled: usize = 0,
 } else struct {};
 
-/// The native code of one function. Native code reads the first two
-/// fields when it returns into the function.
+/// The native code of one function.
 pub const Code = extern struct {
     /// Address of the executable block. The entry sequence is at its
     /// start.
@@ -90,6 +89,16 @@ fn setup(g: *Global) void {
     if (js.setting == .on) if (env.get("LUS_JIT_THRESHOLD")) |v| {
         js.threshold = @max(std.fmt.parseInt(u32, v, 10) catch default_threshold, 1);
     };
+}
+
+/// Sets the JIT of a state from the host, in place of the environment.
+pub fn configure(g: *Global, how: Setting, threshold: u32) void {
+    if (!enabled) return;
+    const js = &g.jit;
+    js.ready = true;
+    js.setting = how;
+    js.threshold = if (how == .eager) 1 else @max(threshold, 1);
+    js.period = 1;
 }
 
 /// The setting of the state, for `debug.jit`.
@@ -333,5 +342,6 @@ test {
     if (enabled) {
         _ = mem;
         _ = emit;
+        _ = @import("tests.zig");
     }
 }

@@ -1323,7 +1323,7 @@ noinline fn growFrames(l: *Thread) Error!void {
 /// Runs a native function called from the interpreter with its `nargs`
 /// arguments above `func`, leaving its results at `func` adjusted to
 /// `want`.
-inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32) (Error || YieldError)!void {
+pub inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32) (Error || YieldError)!void {
     if (@as(usize, func) + 1 + nargs + 32 > l.stack.len) try l.ensure(32);
     try pushFrame(l, .{ .func = func, .base = func + 1, .native = nat, .want = want, .ret = func });
     l.top = func + 1 + nargs;

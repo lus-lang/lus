@@ -124,3 +124,38 @@ pub fn tailcall(l: *Thread, bp: [*]Value, ins: u32, pc: u32) callconv(.c) jit.Ta
     nf.resume_at = old.resume_at;
     return .{ .addr = code.base + code.offs[0], .base = dst + 1 };
 }
+
+/// Returned by a helper that changed nothing and needs the step routine.
+/// The value lies outside the `interp.Step` codes.
+pub const retry: usize = 7;
+
+/// A call to a native function: the native branch of the interpreter's
+/// `call`. Returns `interp.Step.next` when the call completed, another
+/// `interp.Step` code when it raised, yielded, or set a hook, and `retry`
+/// when the callee is something else or finalizers are pending.
+pub fn callNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
+    const fr = l.frame();
+    fr.pc = pc;
+    if (l.g.tobefnz.items.len > 0) return retry;
+    const func = fr.base + opc.a(ins);
+    const callee = l.stack[func];
+    if (callee.tag != .native) return retry;
+    const nb = opc.b(ins);
+    const want: i32 = @as(i32, opc.c(ins)) - 1;
+    const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
+    if (nb != 0) l.top = func + nb;
+    interp.callNative(l, callee.as(state.Native), func, nargs, want) catch |e| {
+        l.meta_finish = null;
+        return switch (e) {
+            error.MetaCall => interp.Step.dispatch,
+            error.LusError => interp.Step.failed,
+            error.Yield => interp.Step.yielded,
+        };
+    };
+    // A fixed result count restores the register window of the caller.
+    const caller = l.frame();
+    if (want >= 0) l.top = caller.base + caller.closure.?.proto.max_stack;
+    // The native may have set a hook.
+    if (l.hook_mask != 0) return interp.Step.interpret;
+    return interp.Step.next;
+}

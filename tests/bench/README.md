@@ -25,6 +25,6 @@ tests/bench/run.sh        # three runs per benchmark
 tests/bench/run.sh 5      # five runs per benchmark
 ```
 
-The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LEGACY` is the 1.7 binary and defaults to `legacy/lus/build/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. LuaJIT runs with `-joff`, so the table compares interpreters only. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash.
+The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LEGACY` is the 1.7 binary and defaults to `legacy/lus/build/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. LuaJIT runs with `-joff`, so its column is its interpreter. Lus runs as it does by default, with its baseline JIT on. Set `LUS_JIT=off` in the environment to time the Lus interpreter alone. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash.
 
 The last column is the Lus time divided by the legacy time. Numbers below one mean the new runtime is faster.

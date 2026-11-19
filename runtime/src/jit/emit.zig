@@ -102,6 +102,9 @@ const Cold = struct {
         compare_float: Compare,
         /// The slow part of the write barrier for the header in `t1`.
         barrier,
+        /// A call of a value that is not a closure, which is most often
+        /// a native function.
+        native_call,
         /// A table access through a fast-path helper, for a key whose
         /// tag is `key_tag`.
         table: struct { helper: usize, t: Place, key: Place, v: Place, key_tag: u8 },
@@ -551,7 +554,8 @@ pub const Emitter = struct {
                 // and does not come back. It returns here, with nothing
                 // changed, when the call needs the step routine.
                 const slow = e.coldStep(pc);
-                a.jumpIfByte(.ne, tagOf(ra), tag_closure, slow);
+                const done = a.newLabel();
+                a.jumpIfByte(.ne, tagOf(ra), tag_closure, e.addCold(pc, .native_call, done));
                 a.load64(A.t0, slot(ra));
                 a.load64(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
                 a.load64(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_entry") });
@@ -593,8 +597,11 @@ pub const Emitter = struct {
                     a.addImm(A.t0, e.p.max_stack);
                 }
                 a.store32(A.t0, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
+                a.bind(done);
             },
             .tailcall => {
+                // Only a Lus function has the fast path.
+                a.jumpIfByte(.ne, tagOf(ra), tag_closure, e.coldStep(pc));
                 a.mov(A.args[0], A.thread);
                 a.mov(A.args[1], A.bp);
                 a.movImm(A.args[2], ins);
@@ -1003,6 +1010,20 @@ pub const Emitter = struct {
                 a.mov(A.args[0], A.thread);
                 a.call(@intFromPtr(&helpers.barrier));
                 a.jmp(c.resume_at);
+            },
+            .native_call => {
+                const other = a.newLabel();
+                a.mov(A.args[0], A.thread);
+                a.movImm(A.args[1], e.p.code[c.pc]);
+                a.movImm(A.args[2], c.pc + 1);
+                a.call(@intFromPtr(&helpers.callNative));
+                a.jumpIfImm(.ne, A.ret0, 0, other);
+                e.reloadBp();
+                a.jmp(c.resume_at);
+                a.bind(other);
+                // Anything but a request for the step routine is a status.
+                a.jumpIfImm(.ne, A.ret0, @intCast(helpers.retry), e.l_status);
+                e.step(c.pc, false);
             },
             .table => |t| {
                 const slow = a.newLabel();

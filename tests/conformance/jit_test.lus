@@ -417,6 +417,33 @@ local function calls_test()
     local function missing() return few(1) end
     local p, q, r = hot(missing)
     assert(p == 1 and q == nil and r == nil)
+    -- A caller that wants more or fewer results than the callee returns.
+    local function one() return 1 end
+    local function none() end
+    local function wants()
+        local a, b, c = one()
+        local d, e = none()
+        local t = { one() }
+        local n = select("#", none())
+        local m = select("#", one())
+        one()
+        return a, b, c, d, e, #t, n, m, (none())
+    end
+    local w1, w2, w3, w4, w5, w6, w7, w8, w9 = hot(wants)
+    assert(w1 == 1 and w2 == nil and w3 == nil and w4 == nil and w5 == nil)
+    assert(w6 == 1 and w7 == 0 and w8 == 1 and w9 == nil)
+    -- A return that closes an upvalue or a to-be-closed variable.
+    local closed = 0
+    local function captures(x)
+        local function get() return x end
+        return get
+    end
+    local function closes(x)
+        local guard <close> = setmetatable({}, { __close = function() closed = closed + 1 end })
+        return x
+    end
+    local function both() return captures(5)() + closes(6) end
+    assert(hot(both) == 11 and closed == 300)
     local function natives(s) return string.upper(s), #s, math.max(1, 5, 3), tostring(12) end
     local u, l, m, t = hot(natives, "abc")
     assert(u == "ABC" and l == 3 and m == 5 and t == "12")

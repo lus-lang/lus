@@ -122,7 +122,7 @@ pub const Label = u32;
 const Fixup = struct {
     at: u32,
     label: Label,
-    kind: enum { b26, b19, b14, literal },
+    kind: enum { b26, b19, literal },
 };
 
 pub const Assembler = struct {
@@ -213,10 +213,6 @@ pub const Assembler = struct {
                 .b19, .literal => {
                     if (delta < -(1 << 18) or delta >= (1 << 18)) a.overflow = true;
                     w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x7FFFF) << 5;
-                },
-                .b14 => {
-                    if (delta < -(1 << 13) or delta >= (1 << 13)) a.overflow = true;
-                    w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x3FFF) << 5;
                 },
             }
             p.* = std.mem.nativeToLittle(u32, w);
@@ -507,8 +503,9 @@ pub const Assembler = struct {
     /// Branches when bit `bit` of the byte in memory is set or clear.
     pub fn jumpIfBit(a: *Assembler, m: Mem, bit: u3, set: bool, l: Label) void {
         a.load8(s0, m);
-        a.fix(l, .b14);
-        a.word((if (set) @as(u32, 0x37000000) else 0x36000000) | @as(u32, bit) << 19 | s0.n());
+        // A bit test reaches only 32 KB, so it skips over a plain jump.
+        a.word((if (set) @as(u32, 0x36000000) else 0x37000000) | @as(u32, bit) << 19 | 2 << 5 | s0.n());
+        a.jmp(l);
     }
     /// Branches when the floats compare as `c`.
     pub fn jumpIfFloat(a: *Assembler, c: FCond, x: FReg, y: FReg, l: Label) void {
