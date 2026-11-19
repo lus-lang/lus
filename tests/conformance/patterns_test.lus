@@ -94,11 +94,10 @@ local function nested_captures_test()
     assert(a == "hello" and b == "h")
 end
 
--- ==== pm2.lus ====
 -- Pattern matching error and reentrancy suite.
 -- This file focuses on the malformed pattern error surface of the pattern
 -- compiler, the matcher recursion guard, and the reentrant behavior of gsub
--- and gmatch replacement callbacks. Happy path matching lives in pm.lus, so
+-- and gmatch replacement callbacks. Happy path matching comes first in this file, so
 -- everything here exercises error paths, boundary values, and the interaction
 -- between the C matcher state and Lus level callbacks.
 

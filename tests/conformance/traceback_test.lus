@@ -1,0 +1,431 @@
+--[[
+  Traceback naming: the `[C]: in <name>` native frame and the call-site-kind
+  naming of Lus frames. When an error propagates uncaught, the runtime renders
+  a `stack traceback:` whose entries name each frame by how its caller invoked
+  it: builtins as `function '<qualified>'`, other natives and Lus
+  functions by their call-site kind (`global 'g'`, `field 'rep'`, `local 'f'`,
+  `function <src:line>` when anonymous).
+
+  Caught errors carry the raw error object with no traceback attached, so
+  rendering is observed by running the fixture driver in a subprocess and
+  letting each case error escape uncaught. The assertions match the captured
+  stderr text.
+]]
+
+pledge("exec", "env=LUS_EXE")
+
+-- The interpreter binary comes from LUS_EXE, because `lus test` does not set `arg`.
+-- Without it the tests skip.
+local LUS = os.getenv("LUS_EXE")
+
+local CASES = TEST_DIR .. "/fixtures/traceback/cases.lus"
+
+-- Run one fixture case in a subprocess and capture its rendered traceback.
+local run_cache = {}
+local function run_case(name)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if run_cache[name] == nil then
+        local f = io.popen(LUS .. " " .. CASES .. " " .. name .. " 2>&1")
+        run_cache[name] = f:read("a")
+        f:close()
+    end
+    return run_cache[name]
+end
+
+local function a_builtin_in_a_module_table_shows_function_qualified_test()
+    local e = run_case("floor")
+    assert(e:find("%[C%]: in function 'math%.floor'"), e)
+end
+
+local function setmetatable_shows_function_setmetatable_test()
+    local e = run_case("setmeta")
+    assert(e:find("%[C%]: in function 'setmetatable'"), e)
+end
+
+local function a_global_native_shows_global_name_test()
+    local e = run_case("next")
+    assert(e:find("%[C%]: in global 'next'"), e)
+end
+
+local function a_field_native_shows_field_name_test()
+    local e = run_case("rep")
+    assert(e:find("%[C%]: in field 'rep'"), e)
+end
+
+local function a_lua_frame_is_named_by_its_call_site_kind_test()
+    local e = run_case("localboom")
+    -- the native frame, then the Lua frame named as a local
+    assert(e:find("%[C%]: in function 'setmetatable'"), e)
+    assert(e:find("in local 'boom'"), e)
+end
+
+local function a_tail_called_builtin_keeps_its_qualified_name_test()
+    local e = run_case("viatail")
+    assert(e:find("%[C%]: in function 'math%.floor'"), e)
+end
+
+-- ---- proper tail calls ----
+
+local function deep_tail_recursion_runs_in_constant_stack_test()
+    local function loop(n)
+        if n <= 0 then return "done" end
+        return loop(n - 1)
+    end
+    -- Would overflow if tail calls grew the stack.
+    assert(loop(1000000) == "done")
+end
+
+local function a_tail_called_frame_shows_the_tail_calls_marker_test()
+    local e = run_case("tailmarker")
+    assert(e:find("%(%.%.%.tail calls%.%.%.%)"), e)
+end
+
+--[[
+  Traceback rendering parity and type-error variable naming. The first half
+  pins the full body of the traceback the runtime renders for an uncaught
+  error: the exact src:line of every frame in a fixed-layout load()ed chain,
+  the call-site kinds for Lua frames (method, field, global, upvalue, local,
+  for iterator, metamethod), the anonymous form `function <src:line>`, the
+  `main chunk` entry, the deep-stack elision marker, and the section count.
+  The second half pins the parenthesized variable-name suffix on `attempt to
+  index` and `attempt to call` errors for every name kind, plus the shapes
+  that must carry no name.
+
+  Caught errors carry the raw error object with no traceback attached, so
+  rendering is observed by running the fixture driver (traceback/cases.lus)
+  in a subprocess and letting each case error escape uncaught. Chunks whose
+  exact line numbers matter are compiled by the fixture with load() under a
+  fixed chunk name, so the assertions are immune to edits of the fixture.
+  Assertions that quote literal traceback lines use plain-text find.
+]]
+
+
+-- Plain-text containment, so quoted traceback lines need no pattern escaping.
+local function has(s, txt)
+    return string.find(tostring(s), txt, 1, true) ~= nil
+end
+
+-- ---- frame naming kinds ----
+
+local function an_error_inside_add_renders_in_metamethod_add_test()
+    local e = run_case("mm_add")
+    assert(has(e, "in metamethod 'add'"), e)
+end
+
+local function an_error_inside_an_index_function_renders_in_metamethod_index_test()
+    local e = run_case("mm_index")
+    assert(has(e, "in metamethod 'index'"), e)
+end
+
+local function an_error_inside_concat_renders_in_metamethod_concat_test()
+    local e = run_case("mm_concat")
+    assert(has(e, "in metamethod 'concat'"), e)
+end
+
+local function a_call_function_is_framed_by_its_call_site_kind_not_as_a_test()
+    local e = run_case("calltable")
+    assert(has(e, "in local 'c'"), e)
+    assert(not has(e, "metamethod 'call'"), e)
+end
+
+local function a_colon_call_site_renders_in_method_m_test()
+    local e = run_case("method")
+    assert(has(e, "in method 'm'"), e)
+end
+
+local function an_upvalue_call_site_renders_in_upvalue_f_test()
+    local e = run_case("upvalue")
+    assert(has(e, "in upvalue 'f'"), e)
+    assert(has(e, "in local 'wrapper'"), e)
+end
+
+local function a_dotted_field_call_site_renders_in_field_f_test()
+    local e = run_case("field")
+    assert(has(e, "in field 'f'"), e)
+end
+
+local function a_global_call_site_renders_in_global_name_for_a_lua_function_test()
+    local e = run_case("globalfn")
+    assert(has(e, "in global 'tb2_gfn'"), e)
+end
+
+local function an_anonymous_callee_renders_as_function_src_line_test()
+    local e = run_case("anon")
+    assert(e:find("in function <[^\n]*cases%.lus:%d+>"), e)
+end
+
+local function an_erroring_generic_for_iterator_renders_in_for_iterator_for_test()
+    local e = run_case("foriter")
+    assert(has(e, "in for iterator 'for iterator'"), e)
+end
+
+local function a_tail_called_global_keeps_its_name_via_the_function_name_test()
+    local e = run_case("tailglobal")
+    assert(has(e, "in function 'tb2_gtail'"), e)
+    assert(e:find("%(%.%.%.tail calls%.%.%.%)"), e)
+    -- The tail call reused the trampoline's frame, so it must not be listed.
+    assert(not has(e, "in local 'tramp'"), e)
+end
+
+local function a_loaded_chunk_called_through_a_local_is_framed_by_the_call_test()
+    local e = run_case("chunklocal")
+    assert(has(e, "tb2main:3: in local 'chunk'"), e)
+end
+
+local function a_tail_called_loaded_chunk_renders_in_main_chunk_at_the_test()
+    local e = run_case("chunktail")
+    assert(has(e, "tb2main:3: in main chunk"), e)
+end
+
+-- ---- exact line numbers in a fixed-layout three-deep chain ----
+
+-- The fixture's chain chunk has a fixed layout: inner errors at line 2, mid
+-- calls inner at line 5, outer calls mid at line 8, the chunk calls outer at
+-- line 10. Every assertion below derives from those known positions.
+
+local function the_error_message_carries_the_erroring_line_as_its_position_test()
+    local e = run_case("chain")
+    assert(has(e, "tb2chain:2: deep"), e)
+end
+
+local function the_innermost_frame_reports_the_error_line_test()
+    local e = run_case("chain")
+    assert(has(e, "tb2chain:2: in upvalue 'inner'"), e)
+end
+
+local function the_middle_frame_reports_its_own_call_line_test()
+    local e = run_case("chain")
+    assert(has(e, "tb2chain:5: in upvalue 'mid'"), e)
+end
+
+local function the_outer_frame_reports_its_own_call_line_test()
+    local e = run_case("chain")
+    assert(has(e, "tb2chain:8: in local 'outer'"), e)
+end
+
+local function the_chunk_frame_reports_the_top_level_call_line_test()
+    local e = run_case("chain")
+    assert(has(e, "tb2chain:10: in local 'chunk'"), e)
+end
+
+local function frames_appear_innermost_first_test()
+    local e = run_case("chain")
+    local pi = e:find("tb2chain:2: in upvalue 'inner'", 1, true)
+    local pm = e:find("tb2chain:5: in upvalue 'mid'", 1, true)
+    local po = e:find("tb2chain:8: in local 'outer'", 1, true)
+    assert(pi and pm and po, e)
+    assert(pi < pm and pm < po, e)
+end
+
+local function a_runtime_fault_lists_the_erroring_lua_frame_first_test()
+    local e = run_case("rtfault")
+    assert(has(e, "tb2rt:2: attempt to perform arithmetic on a nil value (local 'x')"), e)
+    assert(has(e, "stack traceback:\n\ttb2rt:2: in "), e)
+end
+
+local function error_lists_its_own_native_frame_first_test()
+    local e = run_case("errorfirst")
+    assert(has(e, "stack traceback:\n\t[C]: in global 'error'"), e)
+end
+
+local function an_anonymous_frame_shows_current_line_and_definition_line_test()
+    local e = run_case("anonframe")
+    assert(has(e, "tb2anon:2: in function <tb2anon:1>"), e)
+end
+
+local function the_traceback_bottoms_out_at_the_c_in_boundary_test()
+    local e = run_case("bottom")
+    assert(e:find("%[C%]: in %?%s*$"), e)
+end
+
+-- ---- deep-stack elision ----
+
+-- The fixture's deep chunk recurses 200 levels before erroring at line 2 of
+-- the "=tb2deep" chunk.
+
+local function a_200_deep_recursion_elides_middle_frames_with_the_skipping_test()
+    local e = run_case("deep")
+    assert(e:find("\n\t%.%.%.\t%(skipping %d+ levels%)"), e)
+end
+
+local function the_elided_traceback_renders_exactly_21_frames_plus_the_marker_test()
+    local e = run_case("deep")
+    local cnt = 0
+    for _ in e:gmatch("\n\t") do cnt = cnt + 1 end
+    local tails = 0
+    for _ in e:gmatch("\n\t%(%.%.%.tail calls%.%.%.%)") do tails = tails + 1 end
+    -- Ten leading frames, the marker line, and eleven trailing frames.
+    assert(cnt - tails == 22, "got " .. tostring(cnt - tails) .. " lines\n" .. e)
+end
+
+local function the_skipped_level_count_accounts_for_the_recursion_depth_test()
+    local e = run_case("deep")
+    local n = e:match("skipping (%d+) levels")
+    assert(n, e)
+    n = 0 + n
+    assert(n >= 170 and n <= 210, "skipped " .. tostring(n))
+end
+
+local function the_error_site_frame_stays_in_the_section_before_the_marker_test()
+    local e = run_case("deep")
+    local perr = e:find("tb2deep:2: in upvalue 'rec'", 1, true)
+    local pskip = e:find("(skipping", 1, true)
+    assert(perr and pskip, e)
+    assert(perr < pskip, e)
+end
+
+local function the_outer_frames_stay_in_the_section_after_the_marker_test()
+    local e = run_case("deep")
+    local pskip = e:find("(skipping", 1, true)
+    assert(pskip, e)
+    assert(e:find("cases%.lus", pskip), e)
+end
+
+local function the_message_prefix_names_the_deepest_line_test()
+    local e = run_case("deep")
+    assert(has(e, "tb2deep:2: bottom"), e)
+end
+
+-- ---- traceback sections: none on caught errors, one on uncaught ----
+
+local function count_tracebacks(s)
+    local _, n = tostring(s):gsub("stack traceback:", "")
+    return n
+end
+
+local function a_caught_error_carries_no_traceback_section_test()
+    local ok, e = catch error("once")
+    assert(not ok)
+    assert(count_tracebacks(e) == 0, tostring(e))
+end
+
+local function a_caught_runtime_fault_carries_no_traceback_section_test()
+    local x
+    local ok, e = catch (x + 1)
+    assert(count_tracebacks(e) == 0, tostring(e))
+end
+
+local function a_caught_error_rethrown_and_recaught_stays_traceback_free_test()
+    local ok1, e1 = catch error("orig")
+    assert(not ok1)
+    local function rethrow() error(e1, 0) end
+    local ok2, e2 = catch rethrow()
+    assert(not ok2)
+    assert(e2 == e1, tostring(e2))
+    assert(count_tracebacks(e2) == 0, tostring(e2))
+end
+
+local function an_error_consumed_by_an_inner_catch_never_reaches_the_outer_one_test()
+    local function absorb()
+        local ok, e = catch error("inneronly")
+        assert(not ok)
+        return e
+    end
+    local ok2, res = catch absorb()
+    assert(ok2, tostring(res))
+    assert(count_tracebacks(res) == 0, tostring(res))
+end
+
+local function an_uncaught_error_renders_exactly_one_traceback_section_test()
+    local e = run_case("errorfirst")
+    assert(count_tracebacks(e) == 1, e)
+end
+
+-- ---- variable naming for index errors ----
+
+local index_errors_carry_the_accessed_variable_s_name_cases = {
+    {"local", function() local x return x.y end,
+        "attempt to index a nil value %(local 'x'%)"},
+    {"field", function() local t = {} return t.a.b end,
+        "attempt to index a nil value %(field 'a'%)"},
+    {"global", function() return tb2_undefined.foo end,
+        "attempt to index a nil value %(global 'tb2_undefined'%)"},
+    {"upvalue", function()
+        local u
+        local function g() return u.k end
+        return g()
+    end, "attempt to index a nil value %(upvalue 'u'%)"},
+    {"method lookup on nil names the object", function() local x return x:m() end,
+        "attempt to index a nil value %(local 'x'%)"},
+    {"constant integer index", function() local t = {} return t[1][2] end,
+        "attempt to index a nil value %(field 'integer index'%)"},
+    {"typed value word", function() local b = true return b.k end,
+        "attempt to index a boolean value %(local 'b'%)"},
+}
+
+local function index_errors_carry_the_accessed_variable_s_name_test(label, f, pat)
+    local ok, e = catch f()
+    assert(not ok, label)
+    assert(tostring(e):find(pat), label .. ": " .. tostring(e))
+end
+
+local index_errors_on_temporaries_carry_no_name_suffix_cases = {
+    {"call result", function()
+        local f = function() return nil end
+        return (f()).y
+    end},
+    {"vararg expression", function()
+        local function v(...) return (...).x end
+        return v(nil)
+    end},
+}
+
+local function index_errors_on_temporaries_carry_no_name_suffix_test(label, f)
+    local ok, e = catch f()
+    assert(not ok, label)
+    local first = tostring(e):match("^[^\n]*")
+    assert(first:find("attempt to index a nil value$"), label .. ": " .. first)
+end
+
+-- ---- variable naming for call errors ----
+
+local call_errors_carry_the_callee_variable_s_name_cases = {
+    {"local", function() local f return f() end,
+        "attempt to call a nil value %(local 'f'%)"},
+    {"global", function() return tb2_undefined() end,
+        "attempt to call a nil value %(global 'tb2_undefined'%)"},
+    {"field", function() local t = {} return t.f() end,
+        "attempt to call a nil value %(field 'f'%)"},
+    {"method", function() local t = {} return t:m() end,
+        "attempt to call a nil value %(method 'm'%)"},
+    {"upvalue", function()
+        local u
+        local function g() return u() end
+        return g()
+    end, "attempt to call a nil value %(upvalue 'u'%)"},
+    {"constant integer index", function() local t = {} return t[1]() end,
+        "attempt to call a nil value %(field 'integer index'%)"},
+    {"typed value word", function()
+        local t = {}
+        t.f = 5
+        return t.f()
+    end, "attempt to call a number value %(field 'f'%)"},
+    {"nil for iterator", function() for x in nil do end end,
+        "attempt to call a nil value %(for iterator 'for iterator'%)"},
+    {"non-callable for iterator", function() for x in 5 do end end,
+        "attempt to call a number value %(for iterator 'for iterator'%)"},
+}
+
+local function call_errors_carry_the_callee_variable_s_name_test(label, f, pat)
+    local ok, e = catch f()
+    assert(not ok, label)
+    assert(tostring(e):find(pat), label .. ": " .. tostring(e))
+end
+
+local call_errors_on_temporaries_carry_no_name_suffix_cases = {
+    {"call result", function()
+        local f = function() return nil end
+        return (f())()
+    end},
+    {"vararg expression", function()
+        local function v(...) return (...)() end
+        return v(nil)
+    end},
+}
+
+local function call_errors_on_temporaries_carry_no_name_suffix_test(label, f)
+    local ok, e = catch f()
+    assert(not ok, label)
+    local first = tostring(e):match("^[^\n]*")
+    assert(first:find("attempt to call a nil value$"), label .. ": " .. first)
+end

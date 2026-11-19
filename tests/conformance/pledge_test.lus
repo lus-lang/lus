@@ -439,12 +439,11 @@ local function file_reading_still_works_after_seal_with_granted_permission_test(
 end
 
 
--- ==== pledge2 ====
 --[[
-    pledge2.lus - In-process pledge semantics, second suite.
+    In-process pledge semantics, second suite.
 
-    This suite pins the parts of the capability system that pledge.lus and
-    security.lus leave unpinned. The focus is the exact contract of pledge()
+    This suite pins the parts of the capability system that the first suite and
+    the security suite leave unpinned. The focus is the exact contract of pledge()
     itself: the "~" reject prefix, the refusal of the "all" permission from a
     script, argument and value validation, glob boundary precision on the deny
     side, the fact that a valueless re-pledge of a value-scoped grant does not

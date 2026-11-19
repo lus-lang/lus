@@ -124,7 +124,7 @@ end
 -- and alignment options, endianness prefixes verified against the packed
 -- bytes, packsize rejecting variable-size formats, unpack position bounds,
 -- and float round trips including infinities, NaN and negative zero.
--- The happy-path smoke tests live in tpack.lus and are not repeated here.
+-- The happy-path smoke tests come first in this file and are not repeated here.
 
 
 local pack = string.pack

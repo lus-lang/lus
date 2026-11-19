@@ -3,7 +3,7 @@
   provider, projections, where evaluation, ordering, grouping,
   aggregates, distinct, joins, laziness, the __query metamethod, and
   debug.queryplan. Syntax and value semantics live in
-  h1/query_syntax.lus.
+  the syntax section further down.
 ]]
 
 pledge("load")
@@ -610,8 +610,8 @@ end
   provider and the SQLite provider. Everything runs on ":memory:"
   databases under the standard sealed pledge.
 
-  Execution semantics live in h1/query.lus, syntax and value semantics
-  in h1/query_syntax.lus, and the push-down split in h1/query_sqlite.lus.
+  Execution semantics live in the first section of this file, syntax and value
+  semantics in the last section, and the push-down split in the sqlite section.
 ]]
 
 
@@ -1345,7 +1345,7 @@ end
   as first-class objects, bytecode round trips, GC behavior, and the
   debug.parse and debug.format integration.
 
-  Execution semantics (the query() iterator) live in h1/query.lus.
+  Execution semantics (the query() iterator) live in the first section of this file.
 ]]
 
 -- no "seal": the bytecode round-trip tests load binary chunks, which a

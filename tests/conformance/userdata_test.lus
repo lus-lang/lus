@@ -2,10 +2,10 @@
   Userdata parity tests for Lus.
 
   Proves that io file handles and network sockets are real first-class
-  *userdata* (LUA_TUSERDATA) driven by per-type VM-level metatables, not
+  *userdata* driven by per-type VM-level metatables, not
   tables masquerading as userdata. Each behaviour below is dispatched through
   the userdata's shared metatable (`__index` methods, `__name`, `__tostring`)
-  exactly as the C runtime does.
+  exactly as every other runtime type does.
 
   Note: io.stdin/stdout/stderr are pre-opened standard streams, so they need
   no fs pledge. Sockets require the `network` pledge.

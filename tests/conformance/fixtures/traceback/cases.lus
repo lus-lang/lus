@@ -1,0 +1,210 @@
+--[[
+    Traceback fixture driver.
+
+    Each case raises an error that escapes uncaught, so the standalone
+    interpreter renders the message and the stack traceback on stderr.
+    The traceback suites run this file in a subprocess with the case name
+    as the first argument and match the captured text. Caught errors carry
+    the raw error object with no traceback, so uncaught subprocess errors
+    are the sanctioned way to observe traceback rendering.
+]]
+
+global arg, error, load, math, setmetatable, string, next, pledge,
+       tb2_gfn, tb2_gtail
+
+pledge("load", "seal")
+
+-- Globals used as named call sites.
+tb2_gfn = function() error("gboom") end
+tb2_gtail = function() error("tgboom") end
+
+local cases = {}
+
+-- ---- native frame naming (traceback.lus) ----
+
+function cases.floor()
+    local r = math.floor({})
+    return r
+end
+
+function cases.setmeta()
+    local r = setmetatable(1, 2)
+    return r
+end
+
+function cases.next()
+    local r = next(5)
+    return r
+end
+
+function cases.rep()
+    local r = string.rep("x", {})
+    return r
+end
+
+function cases.localboom()
+    local function boom() return setmetatable(1, 2) end
+    local r = boom()
+    return r
+end
+
+function cases.viatail()
+    local function viatail() return math.floor({}) end
+    local r = viatail()
+    return r
+end
+
+function cases.tailmarker()
+    local function inner() return nil + 1 end
+    local function outer() return inner() end
+    local r = outer()
+    return r
+end
+
+-- ---- Lua frame naming kinds (traceback2.lus) ----
+
+function cases.mm_add()
+    local t = setmetatable({}, {__add = function() error("mmboom") end})
+    local r = t + 1
+    return r
+end
+
+function cases.mm_index()
+    local t = setmetatable({}, {__index = function() error("ixboom") end})
+    local r = t.k
+    return r
+end
+
+function cases.mm_concat()
+    local t = setmetatable({}, {__concat = function() error("ccboom") end})
+    local r = t .. "x"
+    return r
+end
+
+function cases.calltable()
+    local c = setmetatable({}, {__call = function() error("cboom") end})
+    local r = c()
+    return r
+end
+
+function cases.method()
+    local obj = {}
+    function obj:m() error("mboom") end
+    local r = obj:m()
+    return r
+end
+
+function cases.upvalue()
+    local f = function() error("uv") end
+    -- The wrapper must not tail call, or the frame naming would be erased.
+    local wrapper = function() local r = f() return r end
+    local r = wrapper()
+    return r
+end
+
+function cases.field()
+    local t = {}
+    t.f = function() error("fboom") end
+    local r = t.f()
+    return r
+end
+
+function cases.globalfn()
+    local r = tb2_gfn()
+    return r
+end
+
+function cases.anon()
+    local r = (function() error("aboom") end)()
+    return r
+end
+
+function cases.foriter()
+    for k in (function() error("iterboom") end) do
+        local _ = k
+    end
+end
+
+function cases.tailglobal()
+    local function tramp() return tb2_gtail() end
+    local r = tramp()
+    return r
+end
+
+function cases.chunklocal()
+    local chunk = load("\n\nerror('top')", "=tb2main")
+    local r = chunk()
+    return r
+end
+
+function cases.chunktail()
+    local chunk = load("\n\nerror('top')", "=tb2main")
+    local function run(c) return c() end
+    local r = run(chunk)
+    return r
+end
+
+-- ---- exact line numbers in a fixed-layout three-deep chain ----
+
+-- The chunk source has a fixed layout: inner errors at line 2, mid calls
+-- inner at line 5, outer calls mid at line 8, the chunk calls outer at
+-- line 10. The suite assertions derive from those known positions.
+local chain_src = "local function inner()\n" ..
+    "    error('deep')\n" ..
+    "end\n" ..
+    "local function mid()\n" ..
+    "    inner()\n" ..
+    "end\n" ..
+    "local function outer()\n" ..
+    "    mid()\n" ..
+    "end\n" ..
+    "outer()\n"
+
+function cases.chain()
+    local chunk = load(chain_src, "=tb2chain")
+    local r = chunk()
+    return r
+end
+
+function cases.rtfault()
+    local chunk = load("local x\nreturn x + 1\n", "=tb2rt")
+    local r = chunk()
+    return r
+end
+
+function cases.errorfirst()
+    local chunk = load("error('efirst')", "=tb2ef")
+    local r = chunk()
+    return r
+end
+
+function cases.anonframe()
+    local chunk = load("(function()\n    error('anon')\nend)()\n", "=tb2anon")
+    local r = chunk()
+    return r
+end
+
+function cases.bottom()
+    error("bottomcheck")
+end
+
+-- ---- deep-stack elision ----
+
+local deep_src = "local function rec(n)\n" ..
+    "    if n <= 0 then error('bottom') end\n" ..
+    "    rec(n - 1)\n" ..
+    "    return n\n" ..
+    "end\n" ..
+    "rec(200)\n"
+
+function cases.deep()
+    local chunk = load(deep_src, "=tb2deep")
+    local r = chunk()
+    return r
+end
+
+local case = cases[arg[1] or ""]
+if case == nil then
+    error("unknown traceback case: " .. (arg[1] or "<none>"), 0)
+end
+case()

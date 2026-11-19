@@ -1,4 +1,4 @@
--- security.lus - Regression tests for the pre-release security/hardening pass.
+-- Regression tests for the pre-release security/hardening pass.
 -- Each case pins a specific fix so the holes cannot silently reopen.
 
 -- Self-confine: only the test tree is readable, only one env var, then seal.
