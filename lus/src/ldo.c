@@ -137,23 +137,6 @@ l_noret luaD_throwbaselevel(lua_State *L, TStatus errcode) {
 }
 
 
-/*
-** Run a protected function, ensuring that Lua-level catch blocks
-** do not intercept errors from this internal operation.
-** This is the new catch-based API for internal runtime operations.
-** Uses the new CPROTECT mechanism instead of luaD_rawrunprotected.
-*/
-TStatus luaD_catchcall(lua_State *L, Pfunc f, void *ud) {
-  CCatchInfo cinfo;
-  CatchInfo *oldActiveCatch = L->activeCatch;
-  L->activeCatch = NULL; /* disable Lua catch blocks */
-  CPROTECT_BEGIN(L, &cinfo)
-  f(L, ud);
-  CPROTECT_END(L, &cinfo);
-  L->activeCatch = oldActiveCatch; /* restore Lua catch blocks */
-  return cinfo.status;
-}
-
 /* }====================================================== */
 
 /*
@@ -401,6 +384,10 @@ void luaD_inctop(lua_State *L) {
 int luaD_checkminstack(lua_State *L) {
   if (getCcalls(L) >= LUAI_MAXCCALLS - 2)
     return 0; /* not enough C-stack slots */
+#if LUAI_TRACKHEAVYCALLS
+  if (L->nHeavyCcalls >= LUAI_MAXHEAVYCCALLS - 2)
+    return 0; /* not enough heavy C-stack slots */
+#endif
   if (L->ci->next == NULL && luaE_extendCI(L, 0) == NULL)
     return 0; /* unable to allocate first ci */
   if (L->ci->next->next == NULL && luaE_extendCI(L, 0) == NULL)
@@ -722,15 +709,34 @@ retry:
 */
 l_sinline void ccall(lua_State *L, StkId func, int nResults, l_uint32 inc) {
   CallInfo *ci;
+#if LUAI_TRACKHEAVYCALLS
+  l_uint32 heavyinc = (inc != 0);
+#endif
   L->nCcalls += inc;
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls += heavyinc;
+#endif
+#if LUAI_TRACKHEAVYCALLS
+  if (l_unlikely(getCcalls(L) >= LUAI_MAXCCALLS ||
+                 L->nHeavyCcalls >= LUAI_MAXHEAVYCCALLS)) {
+#else
   if (l_unlikely(getCcalls(L) >= LUAI_MAXCCALLS)) {
+#endif
     checkstackp(L, 0, func); /* free any use of EXTRA_STACK */
-    luaE_checkcstack(L);
+    if (getCcalls(L) >= LUAI_MAXCCALLS)
+      luaE_checkcstack(L, getCcalls(L), LUAI_MAXCCALLS);
+#if LUAI_TRACKHEAVYCALLS
+    if (L->nHeavyCcalls >= LUAI_MAXHEAVYCCALLS)
+      luaE_checkcstack(L, L->nHeavyCcalls, LUAI_MAXHEAVYCCALLS);
+#endif
   }
   if ((ci = luaD_precall(L, func, nResults)) != NULL) { /* Lua function? */
     ci->callstatus |= CIST_FRESH; /* mark that it is a "fresh" execute */
     luaV_execute(L, ci);          /* call it */
   }
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls -= heavyinc;
+#endif
   L->nCcalls -= inc;
 }
 
@@ -941,9 +947,20 @@ LUA_API int lua_resume(lua_State *L, lua_State *from, int nargs,
   else if (L->status != LUA_YIELD) /* ended with errors? */
     return resume_error(L, "cannot resume dead coroutine", nargs);
   L->nCcalls = (from) ? getCcalls(from) : 0;
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls = (from) ? from->nHeavyCcalls : 0;
+#endif
+#if LUAI_TRACKHEAVYCALLS
+  if (getCcalls(L) >= LUAI_MAXCCALLS ||
+      L->nHeavyCcalls >= LUAI_MAXHEAVYCCALLS)
+#else
   if (getCcalls(L) >= LUAI_MAXCCALLS)
+#endif
     return resume_error(L, "C stack overflow", nargs);
   L->nCcalls++;
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls++;
+#endif
   luai_userstateresume(L, nargs);
   api_checkpop(L, (L->status == LUA_OK) ? nargs + 1 : nargs);
   /* Disable Lua catch blocks during coroutine resume (errors should

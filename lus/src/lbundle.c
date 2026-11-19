@@ -9,6 +9,7 @@
 
 #include "lprefix.h"
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,14 +27,32 @@
 #if defined(LUA_USE_MACOSX)
 #include <limits.h>
 #include <mach-o/dyld.h>
+#include <unistd.h>
 #endif
 
 #if defined(LUA_USE_WINDOWS)
+#include <io.h>
+#include <share.h>
 #include <windows.h>
+
+static FILE *win_open_self(void) {
+  WCHAR path[32768];
+  DWORD length = GetModuleFileNameW(NULL, path, 32768);
+  if (length == 0 || length >= 32768)
+    return NULL;
+  return _wfsopen(path, L"rb", _SH_DENYWR);
+}
 #endif
 
 /* Global bundle pointer (used by loadlib.c searcher, set by lua.c) */
 LusBundle *g_bundle = NULL;
+
+/*
+** A successful probe retains the inspected executable object for lusB_load.
+** This prevents a path replacement between bundle detection and parsing from
+** selecting a different file.
+*/
+static FILE *detected_source = NULL;
 
 /*
 ** Read little-endian u16
@@ -92,8 +111,17 @@ int lusB_getexepath(char *buf, size_t bufsize) {
   return 1;
 
 #elif defined(LUA_USE_WINDOWS)
-  DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)bufsize);
-  if (len == 0 || len >= bufsize)
+  WCHAR path[32768];
+  DWORD length = GetModuleFileNameW(NULL, path, 32768);
+  int needed;
+  if (length == 0 || length >= 32768)
+    return 0;
+  needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, NULL,
+                               0, NULL, NULL);
+  if (needed <= 0 || (size_t)needed > bufsize)
+    return 0;
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, buf, needed,
+                          NULL, NULL) == 0)
     return 0;
   return 1;
 
@@ -126,15 +154,25 @@ int lusB_getexepath(char *buf, size_t bufsize) {
 ** Returns 1 if bundle detected, 0 otherwise.
 */
 int lusB_detect(void) {
+#if !defined(LUA_USE_WINDOWS)
   char exepath[4096];
+#endif
   FILE *f;
   unsigned char footer[8];
   long filesize;
 
+  if (detected_source != NULL) {
+    fclose(detected_source);
+    detected_source = NULL;
+  }
+
+#if defined(LUA_USE_WINDOWS)
+  f = win_open_self();
+#else
   if (!lusB_getexepath(exepath, sizeof(exepath)))
     return 0;
-
   f = fopen(exepath, "rb");
+#endif
   if (f == NULL)
     return 0;
 
@@ -158,12 +196,13 @@ int lusB_detect(void) {
     fclose(f);
     return 0;
   }
-  fclose(f);
-
   /* Check magic */
-  if (memcmp(footer + 4, LUSB_MAGIC, LUSB_MAGIC_SIZE) != 0)
+  if (memcmp(footer + 4, LUSB_MAGIC, LUSB_MAGIC_SIZE) != 0) {
+    fclose(f);
     return 0;
+  }
 
+  detected_source = f;
   return 1;
 }
 
@@ -182,10 +221,30 @@ LusBundle *lusB_load(void) {
   int i;
   unsigned int len;
 
-  if (!lusB_getexepath(exepath, sizeof(exepath)))
+#if defined(LUA_USE_WINDOWS)
+  exepath[0] = '\0';
+  (void)lusB_getexepath(exepath, sizeof(exepath));
+#else
+  if (!lusB_getexepath(exepath, sizeof(exepath))) {
+    if (detected_source != NULL) {
+      fclose(detected_source);
+      detected_source = NULL;
+    }
     return NULL;
+  }
+#endif
 
-  f = fopen(exepath, "rb");
+  if (detected_source != NULL) {
+    f = detected_source;
+    detected_source = NULL;
+  }
+  else {
+#if defined(LUA_USE_WINDOWS)
+    f = win_open_self();
+#else
+    f = fopen(exepath, "rb");
+#endif
+  }
   if (f == NULL)
     return NULL;
 
@@ -249,6 +308,12 @@ LusBundle *lusB_load(void) {
     fclose(f);
     return NULL;
   }
+#if defined(LUA_USE_WINDOWS)
+  bundle->source_handle = INVALID_HANDLE_VALUE;
+  InitializeSRWLock(&bundle->source_lock);
+#else
+  bundle->source_fd = -1;
+#endif
   strncpy(bundle->exe_path, exepath, sizeof(bundle->exe_path) - 1);
 
   /* Parse index
@@ -384,6 +449,25 @@ LusBundle *lusB_load(void) {
         (size_t)((uint64_t)filesize - 8 - index_size - total_bytecode);
   }
 
+#if defined(LUA_USE_WINDOWS)
+  {
+    HANDLE current = (HANDLE)(intptr_t)_get_osfhandle(_fileno(f));
+    if (current == INVALID_HANDLE_VALUE ||
+        !DuplicateHandle(GetCurrentProcess(), current, GetCurrentProcess(),
+                         &bundle->source_handle, GENERIC_READ, FALSE, 0)) {
+      lusB_free(bundle);
+      fclose(f);
+      return NULL;
+    }
+  }
+#else
+  bundle->source_fd = dup(fileno(f));
+  if (bundle->source_fd < 0) {
+    lusB_free(bundle);
+    fclose(f);
+    return NULL;
+  }
+#endif
   fclose(f);
   return bundle;
 }
@@ -392,7 +476,6 @@ LusBundle *lusB_load(void) {
 ** Get file contents from bundle.
 */
 char *lusB_getfile(LusBundle *bundle, const char *name, size_t *size) {
-  FILE *f;
   char *data;
   int i;
 
@@ -403,29 +486,65 @@ char *lusB_getfile(LusBundle *bundle, const char *name, size_t *size) {
   for (i = 0; i < bundle->num_files; i++) {
     if (strcmp(bundle->files[i].name, name) == 0) {
       /* Found - read from exe */
-      f = fopen(bundle->exe_path, "rb");
-      if (f == NULL)
+#if defined(LUA_USE_WINDOWS)
+      LARGE_INTEGER offset;
+      size_t done = 0;
+      DWORD error = ERROR_SUCCESS;
+      if (bundle->source_handle == NULL ||
+          bundle->source_handle == INVALID_HANDLE_VALUE)
         return NULL;
-
-      if (fseek(f, (long)(bundle->data_offset + bundle->files[i].offset),
-                SEEK_SET) != 0) {
-        fclose(f);
+      data = (char *)malloc(bundle->files[i].size == 0
+                                ? 1
+                                : bundle->files[i].size);
+      if (data == NULL)
         return NULL;
+      offset.QuadPart = (LONGLONG)bundle->data_offset +
+                        (LONGLONG)bundle->files[i].offset;
+      AcquireSRWLockExclusive(&bundle->source_lock);
+      if (!SetFilePointerEx(bundle->source_handle, offset, NULL, FILE_BEGIN))
+        error = GetLastError();
+      while (error == ERROR_SUCCESS && done < bundle->files[i].size) {
+        DWORD request = (DWORD)(bundle->files[i].size - done > MAXDWORD
+                                    ? MAXDWORD
+                                    : bundle->files[i].size - done);
+        DWORD got;
+        if (!ReadFile(bundle->source_handle, data + done, request, &got, NULL) ||
+            got == 0) {
+          error = GetLastError();
+          if (error == ERROR_SUCCESS)
+            error = ERROR_HANDLE_EOF;
+          break;
+        }
+        done += got;
       }
-
-      data = (char *)malloc(bundle->files[i].size);
-      if (data == NULL) {
-        fclose(f);
-        return NULL;
-      }
-
-      if (fread(data, 1, bundle->files[i].size, f) != bundle->files[i].size) {
+      ReleaseSRWLockExclusive(&bundle->source_lock);
+      if (error != ERROR_SUCCESS) {
         free(data);
-        fclose(f);
         return NULL;
       }
-
-      fclose(f);
+#else
+      size_t done = 0;
+      if (bundle->source_fd < 0)
+        return NULL;
+      data = (char *)malloc(bundle->files[i].size == 0
+                                ? 1
+                                : bundle->files[i].size);
+      if (data == NULL)
+        return NULL;
+      while (done < bundle->files[i].size) {
+        off_t offset = (off_t)(bundle->data_offset + bundle->files[i].offset +
+                               done);
+        ssize_t got = pread(bundle->source_fd, data + done,
+                            bundle->files[i].size - done, offset);
+        if (got < 0 && errno == EINTR)
+          continue;
+        if (got <= 0) {
+          free(data);
+          return NULL;
+        }
+        done += (size_t)got;
+      }
+#endif
       if (size)
         *size = bundle->files[i].size;
       return data;
@@ -447,6 +566,14 @@ void lusB_free(LusBundle *bundle) {
     free(bundle->args[i]);
   }
   free(bundle->files);
+#if defined(LUA_USE_WINDOWS)
+  if (bundle->source_handle != NULL &&
+      bundle->source_handle != INVALID_HANDLE_VALUE)
+    CloseHandle(bundle->source_handle);
+#else
+  if (bundle->source_fd >= 0)
+    close(bundle->source_fd);
+#endif
   free(bundle);
 }
 
@@ -464,21 +591,46 @@ unsigned char *lusB_buildindex(int version, const char *entrypoint,
   int i;
   size_t len;
 
+  if (version < 0 || version > UINT8_MAX || entrypoint == NULL ||
+      index_size == NULL || num_args < 0 || num_args > LUSB_MAX_ARGS ||
+      num_files < 1 || num_files > LUSB_MAX_FILES ||
+      (num_args > 0 && args == NULL) || names == NULL || offsets == NULL ||
+      sizes == NULL)
+    return NULL;
+
   /* Calculate total size */
-  total_size += 1;                      /* version */
-  total_size += 2;                      /* num_args */
-  total_size += 2;                      /* num_files */
-  total_size += 2 + strlen(entrypoint); /* entrypoint */
+  total_size += 1; /* version */
+  total_size += 2; /* num_args */
+  total_size += 2; /* num_files */
+  len = strlen(entrypoint);
+  if (len > UINT16_MAX)
+    return NULL;
+  total_size += 2 + len; /* entrypoint */
 
   for (i = 0; i < num_args; i++) {
-    total_size += 2 + strlen(args[i]);
+    if (args[i] == NULL)
+      return NULL;
+    len = strlen(args[i]);
+    if (len > UINT16_MAX || total_size > SIZE_MAX - 2 ||
+        len > SIZE_MAX - total_size - 2)
+      return NULL;
+    total_size += 2 + len;
   }
 
   for (i = 0; i < num_files; i++) {
-    total_size += 2 + strlen(names[i]); /* name */
-    total_size += 4;                    /* offset */
-    total_size += 4;                    /* size */
+    if (names[i] == NULL || offsets[i] > UINT32_MAX || sizes[i] > UINT32_MAX)
+      return NULL;
+    len = strlen(names[i]);
+    if (len == 0 || len >= LUSB_MAX_NAME || total_size > SIZE_MAX - 10 ||
+        len > SIZE_MAX - total_size - 10)
+      return NULL;
+    total_size += 2 + len; /* name */
+    total_size += 4;       /* offset */
+    total_size += 4;       /* size */
   }
+
+  if (total_size > UINT32_MAX)
+    return NULL;
 
   /* Allocate */
   buf = (unsigned char *)malloc(total_size);

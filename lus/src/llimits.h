@@ -55,6 +55,43 @@ typedef lu_byte TStatus;
                                         : cast_sizet(LUA_MAXINTEGER))
 
 /*
+** Maximum depth for nested C calls, syntactical nested non-terminals,
+** and other features implemented through recursion in C. The value must
+** fit in a 16-bit unsigned integer and suit the native stack size.
+*/
+#if !defined(LUAI_MAXCCALLS)
+#define LUAI_MAXCCALLS 200
+#endif
+
+/*
+** Nested calls that cross the VM and C API boundary use larger native
+** frames than parser and JSON recursion. AddressSanitizer expands those
+** frames further, so its heavy-call budget stays below the instrumented
+** stack boundary. Both limits can be overridden by the embedding build.
+*/
+#if !defined(LUAI_MAXHEAVYCCALLS)
+#if defined(__SANITIZE_ADDRESS__)
+#define LUAI_MAXHEAVYCCALLS 50
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define LUAI_MAXHEAVYCCALLS 50
+#else
+#define LUAI_MAXHEAVYCCALLS LUAI_MAXCCALLS
+#endif
+#else
+#define LUAI_MAXHEAVYCCALLS LUAI_MAXCCALLS
+#endif
+#endif
+
+#if !defined(LUAI_TRACKHEAVYCALLS)
+#if LUAI_MAXHEAVYCCALLS < LUAI_MAXCCALLS
+#define LUAI_TRACKHEAVYCALLS 1
+#else
+#define LUAI_TRACKHEAVYCALLS 0
+#endif
+#endif
+
+/*
 ** test whether an unsigned value is a power of 2 (or zero)
 */
 #define ispow2(x) (((x) & ((x) - 1)) == 0)

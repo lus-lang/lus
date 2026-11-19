@@ -13,6 +13,7 @@
 
 #include "lua.h"
 
+#include "lapi.h"
 #include "ldebug.h"
 #include "ldo.h"
 #include "lgc.h"
@@ -70,6 +71,8 @@ static int validateplan(lua_State *L, QPlan *pl) {
   const QPlanHeader *h = &pl->h;
   int i;
   lu_byte *depth;
+#define QROWDEP cast_byte(0x80)
+#define QDEPTH(d) ((d) & cast_byte(~QROWDEP))
   if (h->version != LUS_QPLAN_VERSION)
     return 0;
   if (h->nsources < 1 || h->nsources > LUS_QMAXSOURCES ||
@@ -100,18 +103,26 @@ static int validateplan(lua_State *L, QPlan *pl) {
   for (i = 0; i < h->nnodes; i++) {
     const QNode *n = &pl->nodes[i];
     int da = 0, db = 0;
+    int rowdep = 0;
     int ok = 1;
     switch (n->kind) {
       case QN_COLUMN:
       case QN_ROWVAR:
         ok = (n->sub < h->nsources) &&
              (n->kind == QN_ROWVAR || okstr(h, n->u.s));
+        rowdep = 1;
         break;
       case QN_PARAM:
-      case QN_CLOSURE:
         ok = (n->a < h->noperands);
         break;
+      case QN_CLOSURE:
+        ok = (n->a < h->noperands);
+        rowdep = 1;
+        break;
       case QN_NAMEREF:
+        ok = okstr(h, n->u.s);
+        rowdep = 1;
+        break;
       case QN_LIT_STR:
         ok = okstr(h, n->u.s);
         break;
@@ -134,11 +145,13 @@ static int validateplan(lua_State *L, QPlan *pl) {
         break;
       case QN_ARITH:
         ok = (n->sub <= QAR_UNM) && okchild(n->a, i, 0) &&
-             okchild(n->b, i, n->sub == QAR_UNM);
+             ((n->sub == QAR_UNM) ? n->b == QNODE_NONE
+                                  : okchild(n->b, i, 0));
         break;
       case QN_AGG:
         ok = (n->sub <= QAGG_MAX) &&
              okchild(n->a, i, n->sub == QAGG_COUNT);
+        rowdep = 1;
         break;
       default:
         ok = 0;
@@ -150,18 +163,25 @@ static int validateplan(lua_State *L, QPlan *pl) {
         case QN_OR:
         case QN_CONCAT:
         case QN_CMP:
-          da = depth[n->a];
-          db = depth[n->b];
+          rowdep |= (depth[n->a] | depth[n->b]) & QROWDEP;
+          da = QDEPTH(depth[n->a]);
+          db = QDEPTH(depth[n->b]);
           break;
         case QN_ARITH:
-          da = depth[n->a];
-          db = (n->b != QNODE_NONE) ? depth[n->b] : 0;
+          rowdep |= depth[n->a] & QROWDEP;
+          da = QDEPTH(depth[n->a]);
+          if (n->b != QNODE_NONE) {
+            rowdep |= depth[n->b] & QROWDEP;
+            db = QDEPTH(depth[n->b]);
+          }
           break;
         case QN_NOT:
-          da = depth[n->a];
+          rowdep |= depth[n->a] & QROWDEP;
+          da = QDEPTH(depth[n->a]);
           break;
         case QN_AGG:
-          da = (n->a != QNODE_NONE) ? depth[n->a] : 0;
+          if (n->a != QNODE_NONE)
+            da = QDEPTH(depth[n->a]);
           break;
         default:
           break;
@@ -169,12 +189,20 @@ static int validateplan(lua_State *L, QPlan *pl) {
       if (da >= LUS_QMAXDEPTH || db >= LUS_QMAXDEPTH)
         ok = 0;
       else
-        depth[i] = cast_byte(1 + (da > db ? da : db));
+        depth[i] = cast_byte(1 + (da > db ? da : db)) |
+                   (rowdep ? QROWDEP : 0);
     }
     if (!ok) {
       luaM_freearray(L, depth, h->nnodes ? h->nnodes : 1);
       return 0;
     }
+  }
+  if ((h->limit_node != QNODE_NONE &&
+       (depth[h->limit_node] & QROWDEP)) ||
+      (h->offset_node != QNODE_NONE &&
+       (depth[h->offset_node] & QROWDEP))) {
+    luaM_freearray(L, depth, h->nnodes ? h->nnodes : 1);
+    return 0;
   }
   /*
   ** The node array must be a forest: every node is referenced at most
@@ -238,6 +266,8 @@ static int validateplan(lua_State *L, QPlan *pl) {
 #undef QREF
   }
   luaM_freearray(L, depth, h->nnodes ? h->nnodes : 1);
+#undef QDEPTH
+#undef QROWDEP
   return 1;
 }
 
@@ -365,14 +395,7 @@ static int publickind(const QNode *n) {
 }
 
 LUA_API lus_Query *lus_toquery(lua_State *L, int idx) {
-  const TValue *o;
-  if (idx > 0)
-    o = s2v(L->ci->func.p + idx);
-  else if (idx < 0 && idx > LUA_REGISTRYINDEX)
-    o = s2v(L->top.p + idx);
-  else
-    return NULL;
-  return ttisquery(o) ? queryvalue(o) : NULL;
+  return lus_isquery(L, idx) ? (lus_Query *)lua_topointer(L, idx) : NULL;
 }
 
 LUA_API int lus_querysourcecount(const lus_Query *q) { return q->nsources; }
@@ -554,8 +577,8 @@ LUA_API void lus_qnodevalue(lua_State *L, const lus_Query *q,
 LUA_API void lus_setqueryprovider(lua_State *L, int mt_idx,
                                   const lus_QueryProvider *p) {
   mt_idx = lua_absindex(L, mt_idx);
-  lua_pushlightuserdata(L, (void *)p);
-  lua_setfield(L, mt_idx, "__queryprovider");
+  api_check(L, lua_type(L, mt_idx) == LUA_TTABLE, "table expected");
+  ((Table *)lua_topointer(L, mt_idx))->queryprovider = p;
 }
 
 /* }================================================================== */

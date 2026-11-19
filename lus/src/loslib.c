@@ -21,6 +21,7 @@
 #include "lglob.h"
 #include "llimits.h"
 #include "lpledge.h"
+#include "lstate.h"
 #include "lualib.h"
 
 /*
@@ -439,6 +440,8 @@ static int os_exit(lua_State *L) {
     status = (lua_toboolean(L, 1) ? EXIT_SUCCESS : EXIT_FAILURE);
   else
     status = (int)luaL_optinteger(L, 1, EXIT_SUCCESS);
+  if (G(L)->isworker)
+    return luaL_error(L, "os.exit is unavailable in a worker");
   if (lua_toboolean(L, 2))
     lua_close(L);
   if (L)

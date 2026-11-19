@@ -12,14 +12,19 @@
 #include "llimits.h"
 #include "lua.h"
 
+typedef union LuaArenaAlignment {
+  LUAI_MAXALIGN;
+} LuaArenaAlignment;
+
 /*
 ** Arena block - a chunk of memory for bump allocation
 */
 typedef struct LuaArenaBlock {
-  struct LuaArenaBlock *next; /* next block in chain (for overflow) */
-  char *current;              /* current allocation pointer */
-  char *end;                  /* end of this block */
-  char data[];                /* flexible array member for block data */
+  struct LuaArenaBlock *next;  /* next block in chain (for overflow) */
+  char *current;               /* current allocation pointer */
+  char *end;                   /* end of this block */
+  LuaArenaAlignment alignment; /* align the flexible allocation region */
+  char data[];                 /* flexible array member for block data */
 } LuaArenaBlock;
 
 /*
@@ -41,9 +46,9 @@ typedef struct LuaArena {
 #define LUAA_DEFAULT_BLOCKSIZE (64 * 1024)
 
 /*
-** Minimum alignment for arena allocations (pointer-sized)
+** Alignment for every type stored in an arena
 */
-#define LUAA_ALIGNMENT sizeof(void *)
+#define LUAA_ALIGNMENT sizeof(LuaArenaAlignment)
 
 /*
 ** Arena API Functions
@@ -88,6 +93,7 @@ typedef struct StandaloneArenaBlock {
   struct StandaloneArenaBlock *next;
   char *current;
   char *end;
+  LuaArenaAlignment alignment;
   char data[];
 } StandaloneArenaBlock;
 

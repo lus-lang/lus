@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lauthpath.h"
 #include "lglob.h"
 
 /* Platform specific for canonicalization */
@@ -121,28 +122,17 @@ int lus_glob_match_path(const char *pattern, const char *path,
   }
 
 #if defined(LUS_PLATFORM_WINDOWS)
-  /*
-  ** On Windows, use GetFullPathName for canonicalization (resolves '..' and
-  ** makes the path absolute). On failure -- including a path longer than the
-  ** buffer -- deny rather than copying the raw path into a fixed buffer
-  ** (which would overflow) or matching an unresolved path.
-  */
   {
-    char canon_path[MAX_PATH];
-    char canon_pattern[MAX_PATH];
-    DWORD path_len = GetFullPathNameA(path, MAX_PATH, canon_path, NULL);
-    if (path_len == 0 || path_len >= MAX_PATH)
-      return 0; /* cannot canonicalize -> deny (fail closed) */
-
-    /* Canonicalize the pattern only if it looks like a path. */
-    if (pattern[0] != '*' && pattern[0] != '?') {
-      DWORD pattern_len =
-          GetFullPathNameA(pattern, MAX_PATH, canon_pattern, NULL);
-      if (pattern_len == 0 || pattern_len >= MAX_PATH)
-        return glob_match_internal(pattern, canon_path); /* keep raw pattern */
-      return glob_match_internal(canon_pattern, canon_path);
-    }
-    return glob_match_internal(pattern, canon_path);
+    char *canon_path = cast(char *, malloc(LUS_AUTH_PATH_MAX));
+    char *canon_pattern = cast(char *, malloc(LUS_AUTH_PATH_MAX));
+    int matched = 0;
+    if (canon_path != NULL && canon_pattern != NULL &&
+        luaAP_resolvepattern(path, canon_path, LUS_AUTH_PATH_MAX) &&
+        luaAP_resolvepattern(pattern, canon_pattern, LUS_AUTH_PATH_MAX))
+      matched = glob_match_internal(canon_pattern, canon_path);
+    free(canon_path);
+    free(canon_pattern);
+    return matched;
   }
 #else
   /*

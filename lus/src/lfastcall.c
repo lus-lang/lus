@@ -130,6 +130,18 @@ static Table *fc_gettimemt(lua_State *L, TString *name) {
 
 
 /*
+** Return whether the ordinary library path would observe a metamethod for
+** this value. Intrinsics use this before duplicating operations whose C
+** implementations go through luaL_len, lua_geti, or luaL_tolstring. A
+** present metamethod, including a non-callable value that will raise an
+** error, belongs to the C path.
+*/
+static int fc_hasmetamethod(lua_State *L, const TValue *v, TMS event) {
+  return !notm(luaT_gettmbyobj(L, v, event));
+}
+
+
+/*
 ** Memory-find helper (replicates lstrlib's static lmemfind).
 */
 static const char *fc_memfind(const char *s1, size_t l1, const char *s2,
@@ -188,10 +200,10 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
     case FC_RAWLEN: {
       TValue *arg = s2v(ra + 1);
       if (ttistable(arg)) {
-        setivalue(s2v(ra), cast_int(luaH_getn(L, hvalue(arg))));
+        setivalue(s2v(ra), l_castU2S(luaH_getn(L, hvalue(arg))));
       }
       else if (ttisstring(arg)) {
-        setivalue(s2v(ra), cast_int(tsslen(tsvalue(arg))));
+        setivalue(s2v(ra), cast_st2S(tsslen(tsvalue(arg))));
       }
       else
         return 0;
@@ -314,6 +326,8 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
     }
     case FC_TOSTRING: {
       TValue *arg = s2v(ra + 1);
+      if (l_unlikely(fc_hasmetamethod(L, arg, TM_TOSTRING)))
+        return 0;
       if (ttisstring(arg)) {
         setsvalue2s(L, ra, tsvalue(arg));
       }
@@ -331,7 +345,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         fc_checkGC(L);
       }
       else
-        return 0; /* table/func/userdata may have __tostring */
+        return 0; /* remaining types use luaL_tolstring's named form */
       break;
     }
     case FC_MATH_ABS: {
@@ -552,7 +566,7 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
     case FC_STRING_LEN: {
       TValue *arg = s2v(ra + 1);
       if (l_likely(ttisstring(arg))) {
-        setivalue(s2v(ra), cast_int(tsslen(tsvalue(arg))));
+        setivalue(s2v(ra), cast_st2S(tsslen(tsvalue(arg))));
       }
       else
         return 0;
@@ -678,6 +692,10 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         Table *t = hvalue(arg1);
         TString *sep = tsvalue(arg2);
         size_t lsep = tsslen(sep);
+        if (l_unlikely(fc_hasmetamethod(L, arg1, TM_LEN) ||
+                       fc_hasmetamethod(L, arg1, TM_INDEX) ||
+                       fc_hasmetamethod(L, arg2, TM_TOSTRING)))
+          return 0;
         lua_Unsigned len = luaH_getn(L, t);
         if (len == 0) {
           setsvalue2s(L, ra, luaS_newlstr(L, "", 0));
@@ -691,10 +709,17 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
           lu_byte tag = luaH_getint(t, (lua_Integer)i, &val);
           if (tagisempty(tag) || !ttisstring(&val))
             return 0; /* fall back to normal call */
+          if (tsslen(tsvalue(&val)) > MAX_SIZE - total)
+            return 0;
           total += tsslen(tsvalue(&val));
         }
-        if (len > 1)
-          total += lsep * (size_t)(len - 1);
+        if (len > 1) {
+          lua_Unsigned nseps = len - 1;
+          if (nseps > MAX_SIZE ||
+              (lsep != 0 && (size_t)nseps > (MAX_SIZE - total) / lsep))
+            return 0;
+          total += lsep * (size_t)nseps;
+        }
         /* Build result */
         if (total <= LUAI_MAXSHORTLEN) {
           /* Short string: use stack buffer */
@@ -1068,6 +1093,9 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       TValue *arg = s2v(ra + 1);
       if (l_likely(ttistable(arg))) {
         Table *outer = hvalue(arg);
+        if (l_unlikely(fc_hasmetamethod(L, arg, TM_LEN) ||
+                       fc_hasmetamethod(L, arg, TM_INDEX)))
+          return 0;
         lua_Unsigned rows = luaH_getn(L, outer);
         if (rows == 0) {
           Table *res = luaH_new(L);
@@ -1080,12 +1108,18 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
         lu_byte tag = luaH_getint(outer, 1, &firstrow);
         if (tagisempty(tag) || !ttistable(&firstrow))
           return 0;
+        if (l_unlikely(fc_hasmetamethod(L, &firstrow, TM_LEN) ||
+                       fc_hasmetamethod(L, &firstrow, TM_INDEX)))
+          return 0;
         lua_Unsigned cols = luaH_getn(L, hvalue(&firstrow));
         /* Validate all rows have same column count */
         for (lua_Unsigned i = 2; i <= rows; i++) {
           TValue row;
           tag = luaH_getint(outer, (lua_Integer)i, &row);
           if (tagisempty(tag) || !ttistable(&row))
+            return 0;
+          if (l_unlikely(fc_hasmetamethod(L, &row, TM_LEN) ||
+                         fc_hasmetamethod(L, &row, TM_INDEX)))
             return 0;
           if (luaH_getn(L, hvalue(&row)) != cols)
             return 0;
@@ -1125,6 +1159,9 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       if (l_likely(ttistable(arg1) && ttisinteger(arg2) && ttisinteger(arg3))) {
         Table *t = hvalue(arg1);
         lua_Integer nrows = ivalue(arg2), ncols = ivalue(arg3);
+        if (l_unlikely(fc_hasmetamethod(L, arg1, TM_LEN) ||
+                       fc_hasmetamethod(L, arg1, TM_INDEX)))
+          return 0;
         if (nrows <= 0 || ncols <= 0)
           return 0;
         lua_Unsigned len = luaH_getn(L, t);
@@ -1334,14 +1371,11 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
       break;
     }
       /*
-      ** Shared body for the scalar duration fastcalls. Only integer
-      ** arguments within the unit's overflow-free range are handled, so
-      ** the C function keeps sole ownership of coercions, of error
-      ** reporting, and of the wraparound behavior on out-of-range
-      ** inputs. The division guards truncate toward zero, which admits
-      ** exactly the values whose product stays representable. Metatable
-      ** wiring mirrors the userdata arm of lua_setmetatable so the
-      ** result is bit-identical to what push_duration builds.
+      ** Shared body for the scalar duration fastcalls. The checked helper
+      ** accepts every representable result. Coercions and range errors fall
+      ** back to the C function. Metatable wiring mirrors the userdata arm of
+      ** lua_setmetatable so the result is bit-identical to what
+      ** push_duration builds.
       */
 #define FC_TIME_DUR(unit_sec, unit_ns)                                         \
   {                                                                            \
@@ -1354,18 +1388,13 @@ int luaV_dofastcall(lua_State *L, int fc_id, StkId ra) {
     if (!ttisinteger(arg))                                                     \
       return 0;                                                                \
     n = ivalue(arg);                                                           \
-    if ((unit_sec) > 1 && (n > LUA_MAXINTEGER / (unit_sec) ||                  \
-                           n < LUA_MININTEGER / (unit_sec)))                   \
-      return 0;                                                                \
-    if ((unit_ns) > 1 &&                                                       \
-        (n > LUA_MAXINTEGER / (unit_ns) || n < LUA_MININTEGER / (unit_ns)))    \
+    if (!lus_dur_compute_checked(n, unit_sec, unit_ns, &sec, &nsec))           \
       return 0;                                                                \
     mt = fc_gettimemt(L, fc_str_time_duration);                                \
     if (mt == NULL)                                                            \
       return 0;                                                                \
     u = luaS_newudata(L, sizeof(l_duration), 0);                               \
     setuvalue(L, s2v(ra), u); /* root the result immediately */                \
-    lus_dur_compute(n, unit_sec, unit_ns, &sec, &nsec);                        \
     d = (l_duration *)getudatamem(u);                                          \
     d->sec = sec;                                                              \
     d->nsec = nsec;                                                            \

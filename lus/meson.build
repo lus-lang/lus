@@ -21,6 +21,15 @@ lus_c_args = []
 lus_link_args = []
 lus_deps = [m_dep]
 
+# Embedded states use the configured installation prefix. The standalone
+# interpreter replaces these defaults only when it runs from an archive bin
+# directory.
+configured_prefix = get_option('prefix').replace('\\', '/')
+if not configured_prefix.endswith('/')
+  configured_prefix += '/'
+endif
+lus_c_args += '-DLUS_INSTALL_PREFIX="' + configured_prefix + '"'
+
 # Required dependencies for network library
 openssl_dep = dependency('openssl', required: true)
 cares_dep = dependency('libcares', required: true)
@@ -87,8 +96,9 @@ lus_deps += [zlib_dep, zstd_dep, brotlienc_dep, brotlidec_dep, lz4_dep]
 thread_dep = dependency('threads', required: true)
 lus_deps += thread_dep
 
-# Vendored SQLite amalgamation, compiled into liblus. THREADSAFE=2 matches
-# the worker model (each connection is confined to one interpreter state).
+# Vendored SQLite amalgamation, compiled as a separate static dependency.
+# THREADSAFE=2 matches the worker model because each connection is confined to
+# one interpreter state.
 # TEMP_STORE=3 keeps statement journals and temp b-trees in memory so SQLite
 # never writes to paths outside the pledge sweep. OMIT_LOAD_EXTENSION keeps
 # the static musl link free of a dl requirement.
@@ -111,7 +121,8 @@ sqlite_inc = include_directories('vendor/sqlite')
 libsqlite = static_library('sqlite3',
   'vendor/sqlite/sqlite3.c',
   c_args: sqlite_args,
-  override_options: ['warning_level=0', 'optimization=s', 'b_lto=false'],
+  override_options: ['warning_level=0', 'optimization=3', 'b_lto=false'],
+  install: true,
 )
 # Defines that alter the sqlite3.h API surface must be visible to the
 # binding translation unit as well.
@@ -127,6 +138,7 @@ lus_c_args += [
 core_sources = files(
   'src/lapi.c',
   'src/larena.c',
+  'src/lauthpath.c',
   'src/last.c',
   'src/lbundle.c',
   'src/lcode.c',
@@ -192,8 +204,33 @@ install_headers(
   'src/luaconf.h',
   'src/lualib.h',
   'src/lauxlib.h',
+  'src/lworkerlib.h',
   'src/lua.hpp',
   'vendor/sqlite/sqlite3.h',
+)
+
+license_install_dir = get_option('datadir') / 'licenses' / 'lus'
+install_data('../LICENSE.md',
+  install_dir: license_install_dir,
+  rename: 'LICENSE.md',
+)
+install_data('../THIRD_PARTY_NOTICES.md',
+  install_dir: license_install_dir,
+  rename: 'THIRD_PARTY_NOTICES.md',
+)
+install_data(
+  '../licenses/LICENSE.BROTLI.txt',
+  '../licenses/LICENSE.CARES.txt',
+  '../licenses/LICENSE.JTS.txt',
+  '../licenses/LICENSE.LUA.txt',
+  '../licenses/LICENSE.LUALS.txt',
+  '../licenses/LICENSE.LZ4.txt',
+  '../licenses/LICENSE.OPENSSL.txt',
+  '../licenses/LICENSE.SQLITE.txt',
+  '../licenses/LICENSE.UNICODE.txt',
+  '../licenses/LICENSE.ZLIB.txt',
+  '../licenses/LICENSE.ZSTD.txt',
+  install_dir: license_install_dir,
 )
 
 # Static library
@@ -202,7 +239,6 @@ liblus = static_library('lus',
   c_args: lus_c_args,
   include_directories: sqlite_inc,
   dependencies: lus_deps,
-  link_whole: libsqlite,
   install: true,
 )
 
@@ -211,7 +247,7 @@ lus_exe = executable('lus',
   'src/lua.c',
   c_args: lus_c_args,
   link_args: lus_link_args,
-  link_with: liblus,
+  link_with: [liblus, libsqlite],
   dependencies: lus_deps,
   install: true,
 )
@@ -221,7 +257,7 @@ lusc_exe = executable('lusc',
   'src/luac.c',
   c_args: lus_c_args,
   link_args: lus_link_args,
-  link_with: liblus,
+  link_with: [liblus, libsqlite],
   dependencies: lus_deps,
   install: true,
 )
@@ -233,220 +269,221 @@ pkg.generate(liblus,
   name: 'lus',
   description: 'A small, productive programming language.',
   url: 'https://lus.dev/',
+  libraries_private: '-lsqlite3',
 )
 
-# H1: Language Integrity (Pure Lus)
-h1_tests = [
-  'h1/enum',
-  'h1/errors',
-  'h1/from',
-  'h1/ifassign',
-  'h1/whileassign',
-  'h1/optchain',
-  'h1/bitwise',
-  'h1/math',
-  'h1/strings',
-  'h1/attrib',
-  'h1/calls',
-  'h1/catchstat',
-  'h1/closure',
-  'h1/constructs',
-  'h1/coroutine',
-  'h1/events',
-  'h1/gc',
-  'h1/goto',
-  'h1/literals',
-  'h1/locals',
-  'h1/nextvar',
-  'h1/pm',
-  'h1/sort',
-  'h1/tpack',
-  'h1/transcode',
-  'h1/utf8',
-  'h1/vararg',
-  'h1/db',
-  'h1/big',
-  'h1/bwcoercion',
-  'h1/cstack',
-  'h1/gengc',
-  'h1/memerr',
-  'h1/json',
-  'h1/csv',
-  'h1/dataproc',
-  'h1/network',
-  'h1/worker',
-  'h1/global',
-  'h1/parse',
-  'h1/slices',
-  'h1/groups',
-  'h1/vectors',
-  'h1/cloning',
-  'h1/datetime',
-  'h1/sqlite',
-  'h1/sqlite_fs',
-  'h1/archive',
-  'h1/pledge',
-  'h1/security',
-  'h1/runtime-attrs',
-  'h1/doexpr',
-  'h1/interp',
-  'h1/fastcall',
-  'h1/traceback',
-  'h1/userdata',
-  'h1/varinfo',
-  'h1/lsp-unit',
-  'h1/lsp-integration',
-  'h1/lsp-lint-h1',
-  'h1/lsp-e2e',
-  'h1/preinclude',
-  'h1/flags',
-  'h1/query_syntax',
-  'h1/query',
-  'h1/query_sqlite',
-  'h1/archive2',
-  'h1/attrs2',
-  'h1/baselib',
-  'h1/close',
-  'h1/compile-errors',
-  'h1/coroutine2',
-  'h1/csv2',
-  'h1/dataproc2',
-  'h1/datetime2',
-  'h1/debuglib',
-  'h1/errmodel',
-  'h1/evalorder',
-  'h1/fastcall-parity',
-  'h1/finalizers',
-  'h1/format',
-  'h1/fs2',
-  'h1/gctypes',
-  'h1/iolib',
-  'h1/json2',
-  'h1/lexer-errors',
-  'h1/mathx',
-  'h1/metamethods2',
-  'h1/multret',
-  'h1/netio',
-  'h1/numconv',
-  'h1/oslib',
-  'h1/pkg',
-  'h1/pledge2',
-  'h1/pm2',
-  'h1/query2',
-  'h1/sortprop',
-  'h1/stringx',
-  'h1/syntax-interactions',
-  'h1/syntax-limits',
-  'h1/tablesem',
-  'h1/tpack2',
-  'h1/traceback2',
-  'h1/utf8x',
-  'h1/vector2',
-  'h1/weak2',
-  'h1/worker2',
-]
+if system == 'windows'
+  install_data('cmake/LusConfig.cmake',
+    install_dir: get_option('libdir') / 'cmake' / 'Lus',
+  )
+endif
 
-foreach t : h1_tests
-  # Network tests need more time due to external HTTP requests
-  if t == 'h1/network'
-    test('h1/' + fs.name(t), lus_exe,
-      args: ['lus-tests' / t + '.lus'],
-      workdir: meson.project_source_root() / '..',
-      suite: 'h1',
-      timeout: 240,
+# H1 and H2 are registered from one checked-in manifest. The configure-time
+# validator rejects missing files, duplicate entries, and critical omissions.
+qualification_python = import('python').find_installation()
+qualification_root = meson.project_source_root() / '..'
+qualification_script = qualification_root / 'lus-tests/qualification.py'
+qualification_env = environment()
+if get_option('b_sanitize').contains('address')
+  qualification_env.set('LUS_TEST_SANITIZER', 'address')
+else
+  qualification_env.set('LUS_TEST_SANITIZER', 'none')
+endif
+qualification_result = run_command(
+  qualification_python,
+  qualification_script,
+  'meson-records',
+  check: true,
+)
+qualification_records = qualification_result.stdout().strip().split('\n')
+
+foreach record : qualification_records
+  fields = record.split('|')
+  kind = fields[0]
+  test_id = fields[1]
+  if kind == 'h1'
+    test(test_id, qualification_python,
+      args: [
+        qualification_script,
+        'run',
+        '--id', test_id,
+        '--program', lus_exe.full_path(),
+      ],
+      workdir: qualification_root,
+      env: qualification_env,
+      suite: fields[3].split(','),
+      timeout: fields[2].to_int(),
     )
-  elif t == 'h1/flags'
-    # Flags feature test: needs --flag/-F arguments on the command line
-    test('h1/' + fs.name(t), lus_exe,
-      args: ['-Fdebug', '-Fversion=1.5', '-Fcount=3', '-Fname=alpha',
-             '--flag', 'empty=', 'lus-tests' / t + '.lus'],
-      workdir: meson.project_source_root() / '..',
-      suite: 'h1',
+  elif kind == 'h2'
+    h2_sources = [qualification_root / fields[3]]
+    if fields[9] != ''
+      foreach extra_source : fields[9].split(',')
+        h2_sources += qualification_root / extra_source
+      endforeach
+    endif
+    h2_includes = [include_directories('src')]
+    if fields[6] == 'true'
+      h2_includes += sqlite_inc
+    endif
+    if fields[7] == 'true'
+      h2_includes += include_directories('wasm')
+    endif
+    h2_c_args = []
+    if fields[8] == 'true'
+      h2_c_args += lus_c_args
+    endif
+    h2_target = executable(fields[2], h2_sources,
+      include_directories: h2_includes,
+      c_args: h2_c_args,
+      link_with: [liblus, libsqlite],
+      dependencies: lus_deps,
+    )
+    test(test_id, qualification_python,
+      args: [
+        qualification_script,
+        'run',
+        '--id', test_id,
+        '--program', h2_target.full_path(),
+      ],
+      workdir: qualification_root,
+      env: qualification_env,
+      suite: fields[5].split(','),
+      timeout: fields[4].to_int(),
     )
   else
-    test('h1/' + fs.name(t), lus_exe,
-      args: ['lus-tests' / t + '.lus'],
-      workdir: meson.project_source_root() / '..',
-      suite: 'h1',
+    error('unknown qualification record kind: ' + kind)
+  endif
+endforeach
+
+test('qualification/manifest', qualification_python,
+  args: [
+    qualification_script,
+    'validate',
+    '--build-dir', meson.current_build_dir(),
+  ],
+  workdir: qualification_root,
+  env: qualification_env,
+  suite: ['h1', 'h2', 'qualification'],
+  timeout: 30,
+)
+
+test('qualification/selftest', qualification_python,
+  args: [
+    qualification_script,
+    'self-test',
+    '--program', lus_exe.full_path(),
+  ],
+  workdir: qualification_root,
+  env: qualification_env,
+  suite: ['h1', 'h2', 'qualification'],
+  timeout: 30,
+)
+
+
+# H3 system cases are independent so one failure cannot hide later cases.
+h3_script = qualification_root / 'lus-tests/h3/qualification.py'
+h3_result = run_command(
+  qualification_python,
+  h3_script,
+  'meson-records',
+  check: true,
+)
+h3_records = h3_result.stdout().strip().split('\n')
+
+test('h3/manifest', qualification_python,
+  args: [
+    h3_script,
+    'validate',
+    '--build-dir', meson.current_build_dir(),
+  ],
+  workdir: qualification_root,
+  suite: ['h3', 'h3-ci', 'h3-local', 'qualification'],
+  timeout: 30,
+)
+
+test('h3/selftest', qualification_python,
+  args: [h3_script, 'self-test', '--program', lus_exe.full_path()],
+  workdir: qualification_root,
+  suite: ['h3', 'h3-ci', 'h3-local', 'qualification'],
+  timeout: 30,
+)
+
+test('release/qualification-selftest', qualification_python,
+  args: [qualification_root / 'release/qualification.py', 'self-test'],
+  workdir: qualification_root,
+  suite: ['qualification', 'release'],
+  timeout: 30,
+)
+
+foreach record : h3_records
+  fields = record.split('|')
+  test_id = fields[0]
+  test(test_id, qualification_python,
+    args: [
+      h3_script,
+      'run',
+      '--mode', 'direct',
+      '--id', test_id,
+      '--program', lus_exe.full_path(),
+    ],
+    workdir: qualification_root,
+    suite: ['h3', 'h3-ci', 'system-integration'],
+    timeout: fields[3].to_int(),
+  )
+  if fields[5] == 'true'
+    test('h3-local/' + test_id.split('/')[1], qualification_python,
+      args: [
+        h3_script,
+        'run',
+        '--mode', 'container',
+        '--id', test_id,
+        '--program', lus_exe.full_path(),
+      ],
+      workdir: qualification_root,
+      suite: ['h3-local', 'system-integration'],
+      timeout: fields[3].to_int(),
     )
   endif
 endforeach
 
-# H2: C API (Compiled Executables)
-h2_stack = executable('test_stack', '../lus-tests/h2/test_stack.c',
-  include_directories: include_directories('src'),
-  link_with: liblus,
-  dependencies: lus_deps,
-)
-test('h2/stack', h2_stack, suite: 'h2')
+# H4: paired performance evidence
+# Benchmarks are opt-in: run with `meson test --suite h4`.
+h4_python = import('python').find_installation()
+h4_root = meson.project_source_root() / '..'
+h4_harness = h4_root / 'lus-tests/h4/harness.py'
+h4_env = environment()
+h4_env.set('PYTHONPYCACHEPREFIX', meson.current_build_dir() / 'h4-pycache')
 
-h2_call = executable('test_call', '../lus-tests/h2/test_call.c',
-  include_directories: include_directories('src'),
-  link_with: liblus,
-  dependencies: lus_deps,
-)
-test('h2/call', h2_call, suite: 'h2')
-
-h2_sqlite = executable('test_sqlite', '../lus-tests/h2/test_sqlite.c',
-  include_directories: [include_directories('src'), sqlite_inc],
-  link_with: liblus,
-  dependencies: lus_deps,
-)
-test('h2/sqlite', h2_sqlite, suite: 'h2')
-
-h2_query = executable('test_query', '../lus-tests/h2/test_query.c',
-  include_directories: include_directories('src'),
-  link_with: liblus,
-  dependencies: lus_deps,
-)
-test('h2/query', h2_query, suite: 'h2')
-
-h2_query_hostile = executable('test_query_hostile',
-  '../lus-tests/h2/test_query_hostile.c',
-  include_directories: [include_directories('src'), sqlite_inc],
-  link_with: liblus,
-  dependencies: lus_deps,
-)
-test('h2/query_hostile', h2_query_hostile, suite: 'h2')
-
-
-# H3: System Integration (Container Wrapper)
-# Runs the Lus runner script
-test('h3/io', lus_exe,
-  args : ['lus-tests/h3/runner_local.lus'],
-  workdir : meson.project_source_root() / '..',
-  suite : ['h3', 'h3-local'])
-
-# h3/ci runs directly on the host (CI environments only)
-test('h3/ci', lus_exe,
-  args : ['lus-tests/h3/runner_direct.lus'],
-  workdir : meson.project_source_root() / '..',
-  suite : ['h3-ci'],
-  timeout: 60,
-)
-
-# H4: Performance (Lus Runner)
-# Benchmarks are opt-in: run with `meson test --suite h4`
-test('h4/bench', lus_exe,
-  args: ['lus-tests/h4/runner.lus'],
-  workdir: meson.project_source_root() / '..',
+test('h4/manifest', h4_python,
+  args: [h4_harness, 'validate'],
+  workdir: h4_root,
   suite: 'h4',
-  env: ['BUILD_TYPE=Unstable'], # Default to Unstable for local tests
+  env: h4_env,
+  timeout: 30,
 )
 
-test('h4/fastcall', lus_exe,
-  args: ['lus-tests/h4/runner_fastcall.lus'],
-  workdir: meson.project_source_root() / '..',
+test('h4/statistics', h4_python,
+  args: [h4_root / 'lus-tests/h4/test_harness.py'],
+  workdir: h4_root,
   suite: 'h4',
-  timeout: 600,
+  env: h4_env,
+  timeout: 30,
 )
 
-test('h4/micro', lus_exe,
-  args: ['lus-tests/h4/runner_micro.lus'],
-  workdir: meson.project_source_root() / '..',
+# H4_BASELINE selects the 1.6.2 release binary. Exit 77 records a Meson skip
+# with an explicit message when release comparison has not been prepared.
+test('h4/release', h4_python,
+  args: [h4_harness, 'release', '--candidate', lus_exe.full_path()],
+  workdir: h4_root,
   suite: 'h4',
-  env: ['BUILD_TYPE=Unstable'],
-  timeout: 600,
+  env: h4_env,
+  timeout: 3600,
 )
 
-
+test('h4/fastcall', h4_python,
+  args: [h4_harness, 'fastcall', '--binary', lus_exe.full_path()],
+  workdir: h4_root,
+  suite: 'h4',
+  env: h4_env,
+  timeout: 1800,
+)

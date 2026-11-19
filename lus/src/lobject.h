@@ -861,6 +861,7 @@ typedef struct Table {
   Value *array;       /* array part */
   Node *node;
   struct Table *metatable;
+  const struct lus_QueryProvider *queryprovider; /* borrowed native provider */
   GCObject *gclist;
 } Table;
 

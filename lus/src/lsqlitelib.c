@@ -9,7 +9,8 @@
 **
 **   sqlite.db     : the connection. Uservalue 1 is a weak-valued registry
 **                   of every live statement, so closing the database can
-**                   finalize them first (SQLite requires it).
+**                   finalize them first (SQLite requires it). Uservalue 2
+**                   retains the thread whose pledge store backs its VFS.
 **   sqlite.stmt   : a prepared statement. Uservalue 1 is the db userdata,
 **                   which keeps the connection alive. The stmt pointer is
 **                   the single owner of the sqlite3_stmt: every finalize
@@ -21,11 +22,10 @@
 **                   cursor as the generic for's closing value, so breaking
 **                   out of a loop still releases the statement.
 **
-** Security: file-backed opens pledge-check the path plus the -journal,
-** -wal, and -shm sidecars. ATTACH and VACUUM INTO are denied through an
-** authorizer, URI filenames are rejected, and SQLITE_TEMP_STORE=3 keeps
-** temp structures in memory, so SQLite never touches an unpledged path.
-** ":memory:" opens with no pledge at all.
+** Security: file-backed connections use a pledge-aware VFS that checks each
+** file operation. ATTACH, VACUUM INTO, and path-changing PRAGMAs are denied
+** through an authorizer. URI filenames are rejected. SQLITE_TEMP_STORE=3
+** keeps temp structures in memory. ":memory:" opens with no pledge at all.
 */
 
 #define lsqlitelib_c
@@ -33,6 +33,10 @@
 
 #include "lprefix.h"
 
+#include <limits.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "sqlite3.h"
@@ -40,10 +44,12 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lauthpath.h"
 #include "lgc.h"
 #include "lobject.h"
 #include "lpledge.h"
 #include "lstate.h"
+#include "lsqlitelib.h"
 #include "lvector.h"
 
 #define SQLITE_DB_METATABLE "sqlite.db"
@@ -51,8 +57,54 @@
 #define SQLITE_CURSOR_METATABLE "sqlite.cursor"
 #define SQLITE_TABLEREF_METATABLE "sqlite.tableref"
 
+/* Private bridge between this wrapper and the bundled native VFS. This
+** intentionally stays out of the installed sqlite3.h API. */
+#define SQLITE_FCNTL_LUS_BOUND_SHM 0x4c530001
+
+typedef int (*sqlite3_lus_delete_file)(sqlite3_int64 file_handle,
+                                       sqlite3_int64 parent_handle,
+                                       const char *leaf);
+
+typedef struct sqlite3_lus_bound_shm {
+  sqlite3_int64 file_handle;
+  sqlite3_int64 parent_handle;
+  sqlite3_lus_delete_file delete_file;
+  int readonly;
+} sqlite3_lus_bound_shm;
+
+typedef struct LSqliteVFS LSqliteVFS;
+
+typedef struct LSqliteFile {
+  sqlite3_file base;
+  sqlite3_file *real;
+  LSqliteVFS *owner;
+  sqlite3_filename realname;
+  const char *path;
+  int can_read;
+  int can_write;
+  int shm_read;
+  int shm_write;
+  int shm_bound;
+  unsigned int object_mode;
+} LSqliteFile;
+
+struct LSqliteVFS {
+  sqlite3_vfs vfs;
+  sqlite3_vfs *real;
+  lua_State *L;
+  LusAuthFile main_file;
+  char *name;
+  char *denied_path;
+  char *sidecar_path;
+  const char *denied_perm;
+  int readonly;
+  int main_bound;
+  int denied;
+};
+
 typedef struct LSqliteDB {
   sqlite3 *db; /* NULL means closed, io-style */
+  LSqliteVFS *vfs;
   int readonly;
 } LSqliteDB;
 
@@ -69,8 +121,833 @@ typedef struct LSqliteCursor {
 } LSqliteCursor;
 
 typedef struct LSqliteTableRef {
-  LSqliteDB *db; /* backing struct, kept valid by uservalue 1 */
+  LSqliteDB *db;   /* backing struct, kept valid by uservalue 1 */
 } LSqliteTableRef; /* uservalue 1: the db userdata, 2: the table name */
+
+static LusSQLitePathHook sqlite_path_hook;
+static void *sqlite_path_hook_context;
+
+void luaS_setsqlitepathhook(LusSQLitePathHook hook, void *context) {
+  sqlite_path_hook = hook;
+  sqlite_path_hook_context = context;
+}
+
+static void sqlite_path_sync(const char *phase, const char *path) {
+  if (sqlite_path_hook != NULL)
+    sqlite_path_hook(phase, path, sqlite_path_hook_context);
+}
+
+#if !defined(LUS_PLATFORM_WINDOWS)
+static int sqlite_delete_bound_file(sqlite3_int64 file_handle,
+                                    sqlite3_int64 parent_handle,
+                                    const char *leaf) {
+  if (file_handle < 0 || file_handle > INT_MAX || parent_handle < 0 ||
+      parent_handle > INT_MAX)
+    return 0;
+  return luaAP_deleteboundfd(cast_int(file_handle), cast_int(parent_handle),
+                             leaf);
+}
+#endif
+
+/* ===================================================================
+** Pledge-aware VFS
+** =================================================================== */
+
+#define SQLITE_VFS_NAME_BYTES 64
+
+static size_t sqlite_real_offset(void) {
+  size_t align = _Alignof(max_align_t);
+  return (sizeof(LSqliteFile) + align - 1) & ~(align - 1);
+}
+
+static LSqliteFile *sqlite_file(sqlite3_file *file) {
+  return (LSqliteFile *)file;
+}
+
+static LSqliteVFS *sqlite_vfs(sqlite3_vfs *vfs) {
+  return (LSqliteVFS *)vfs->pAppData;
+}
+
+static void sqlite_vfs_deny(LSqliteVFS *vfs, const char *perm,
+                            const char *path) {
+  vfs->denied = 1;
+  vfs->denied_perm = perm;
+  sqlite3_snprintf(vfs->real->mxPathname + 1, vfs->denied_path, "%s",
+                   path != NULL ? path : "(temporary file)");
+}
+
+/* This is the replaceable authorization hook for SQLite. It deliberately
+** performs no Lua allocation and cannot raise across SQLite's C frames. */
+static int sqlite_vfs_allowed(LSqliteVFS *vfs, const char *perm,
+                              const char *path) {
+  if (vfs->L != NULL && path != NULL && luaP_hasfsperm(vfs->L, perm, path)) {
+    vfs->denied = 0;
+    return 1;
+  }
+  sqlite_vfs_deny(vfs, perm, path);
+  return 0;
+}
+
+static const char *sqlite_auth_path(const LusAuthFile *file,
+                                    const char *fallback) {
+  const char *canonical = luaAP_authfilepath(file);
+  if (canonical != NULL && *canonical != '\0')
+    return canonical;
+#if defined(LUS_PLATFORM_WINDOWS)
+  if (file->has_parent && file->parent.canonical != NULL)
+    return file->parent.canonical;
+#else
+  if (file->has_parent && file->parent.canonical[0] != '\0')
+    return file->parent.canonical;
+#endif
+  return fallback;
+}
+
+static int sqlite_auth_status(LSqliteVFS *vfs, const LusAuthFile *file,
+                              const char *path, int status) {
+  if (status == LUS_AUTH_DENIED) {
+    sqlite_vfs_deny(vfs,
+                    file->denied_perm != NULL ? file->denied_perm : "fs:read",
+                    sqlite_auth_path(file, path));
+  }
+  return status;
+}
+
+static int sqlite_hex_digit(char byte) {
+  return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f') ||
+         (byte >= 'A' && byte <= 'F');
+}
+
+static int sqlite_known_sidecar(const char *suffix) {
+  size_t length;
+  size_t i;
+  if (strcmp(suffix, "-journal") == 0 || strcmp(suffix, "-wal") == 0 ||
+      strcmp(suffix, "-shm") == 0)
+    return 1;
+  length = strlen(suffix);
+  if (length != 12 || memcmp(suffix, "-mj", 3) != 0)
+    return 0;
+  for (i = 3; i < length; i++) {
+    if (!sqlite_hex_digit(suffix[i]))
+      return 0;
+  }
+  return 1;
+}
+
+static int sqlite_bound_main(LSqliteVFS *vfs, const char *path) {
+  const char *main_path;
+  if (!vfs->main_bound || path == NULL)
+    return 0;
+  main_path = luaAP_authfilepath(&vfs->main_file);
+  return main_path != NULL && strcmp(path, main_path) == 0;
+}
+
+static const char *sqlite_bound_suffix(LSqliteVFS *vfs, const char *path) {
+  const char *main_path;
+  const char *suffix;
+  size_t length;
+  if (!vfs->main_bound || path == NULL)
+    return NULL;
+  main_path = luaAP_authfilepath(&vfs->main_file);
+  if (main_path == NULL)
+    return NULL;
+  length = strlen(main_path);
+  if (strncmp(path, main_path, length) != 0)
+    return NULL;
+  suffix = path + length;
+  return sqlite_known_sidecar(suffix) ? suffix : NULL;
+}
+
+static int sqlite_tryopen(LSqliteVFS *vfs, const char *path, int options,
+                          unsigned int mode, LusAuthFile *file) {
+  const char *suffix = sqlite_bound_suffix(vfs, path);
+  if (sqlite_bound_main(vfs, path))
+    return luaAP_tryopensibling(vfs->L, &vfs->main_file, "", path, options,
+                                mode, file);
+  if (suffix != NULL)
+    return luaAP_tryopensibling(vfs->L, &vfs->main_file, suffix, path, options,
+                                mode, file);
+  return luaAP_tryopen(vfs->L, path, options, mode, file);
+}
+
+static int sqlite_bound_allowed(LSqliteVFS *vfs, const char *perm,
+                                const char *path) {
+  if (sqlite_bound_main(vfs, path) || sqlite_bound_suffix(vfs, path) != NULL) {
+    if (vfs->L != NULL && luaP_hasfscanonical(vfs->L, perm, path)) {
+      vfs->denied = 0;
+      return 1;
+    }
+    sqlite_vfs_deny(vfs, perm, path);
+    return 0;
+  }
+  return sqlite_vfs_allowed(vfs, perm, path);
+}
+
+static sqlite3_filename sqlite_bound_filename(const char *path,
+                                              const LusAuthFile *file,
+                                              int readonly_shm,
+                                              int delete_unlinked) {
+  const char *params[8];
+  char object[32];
+  int count = 0;
+#if defined(LUS_PLATFORM_WINDOWS)
+  snprintf(object, sizeof(object), "%lld",
+           cast(long long, cast(intptr_t, file->handle)));
+  params[count * 2] = "lus_bound_handle";
+  params[count * 2 + 1] = object;
+  count++;
+#else
+  char parent[32];
+  snprintf(object, sizeof(object), "%d", file->fd);
+  snprintf(parent, sizeof(parent), "%d", file->parent.fd);
+  params[count * 2] = "lus_bound_fd";
+  params[count * 2 + 1] = object;
+  count++;
+  params[count * 2] = "lus_bound_dirfd";
+  params[count * 2 + 1] = parent;
+  count++;
+#endif
+  if (readonly_shm) {
+    params[count * 2] = "readonly_shm";
+    params[count * 2 + 1] = "1";
+    count++;
+  }
+  if (delete_unlinked) {
+    params[count * 2] = "lus_delete_unlinked";
+    params[count * 2 + 1] = "1";
+    count++;
+  }
+  return sqlite3_create_filename(path, "", "", count, params);
+}
+
+static int sqlite_open_options(int flags) {
+  int options = LUS_AUTH_READ;
+  if ((flags & SQLITE_OPEN_READWRITE) != 0)
+    options |= LUS_AUTH_WRITE;
+  if ((flags & SQLITE_OPEN_CREATE) != 0)
+    options |= LUS_AUTH_CREATE;
+  if ((flags & SQLITE_OPEN_EXCLUSIVE) != 0)
+    options |= LUS_AUTH_EXCLUSIVE;
+  if ((flags & SQLITE_OPEN_DELETEONCLOSE) != 0)
+    options |= LUS_AUTH_DELETE_ON_CLOSE;
+  return options;
+}
+
+static const char *sqlite_sidecar(LSqliteFile *file, const char *suffix) {
+  LSqliteVFS *vfs = file->owner;
+  if (strlen(file->path) + strlen(suffix) > (size_t)vfs->real->mxPathname)
+    return NULL;
+  sqlite3_snprintf(vfs->real->mxPathname + 1, vfs->sidecar_path, "%s%s",
+                   file->path, suffix);
+  return vfs->sidecar_path;
+}
+
+static int sqlite_shm_allowed(LSqliteFile *file, int write) {
+  int *cached = write ? &file->shm_write : &file->shm_read;
+  const char *perm = write ? "fs:write" : "fs:read";
+  const char *path = sqlite_sidecar(file, "-shm");
+  if (*cached)
+    return 1;
+  if (!sqlite_bound_allowed(file->owner, perm, path))
+    return 0;
+  *cached = 1;
+  return 1;
+}
+
+static int sqlite_io_close(sqlite3_file *file) {
+  LSqliteFile *f = sqlite_file(file);
+  int rc = f->real->pMethods->xClose(f->real);
+  sqlite3_free_filename(f->realname);
+  f->realname = NULL;
+  file->pMethods = NULL;
+  return rc;
+}
+
+static int sqlite_io_read(sqlite3_file *file, void *buf, int amount,
+                          sqlite3_int64 offset) {
+  LSqliteFile *f = sqlite_file(file);
+  if (!f->can_read) {
+    sqlite_vfs_deny(f->owner, "fs:read", f->path);
+    memset(buf, 0, (size_t)amount);
+    return SQLITE_IOERR_READ;
+  }
+  return f->real->pMethods->xRead(f->real, buf, amount, offset);
+}
+
+static int sqlite_io_write(sqlite3_file *file, const void *buf, int amount,
+                           sqlite3_int64 offset) {
+  LSqliteFile *f = sqlite_file(file);
+  if (!f->can_write) {
+    sqlite_vfs_deny(f->owner, "fs:write", f->path);
+    return SQLITE_IOERR_WRITE;
+  }
+  return f->real->pMethods->xWrite(f->real, buf, amount, offset);
+}
+
+static int sqlite_io_truncate(sqlite3_file *file, sqlite3_int64 size) {
+  LSqliteFile *f = sqlite_file(file);
+  if (!f->can_write) {
+    sqlite_vfs_deny(f->owner, "fs:write", f->path);
+    return SQLITE_IOERR_TRUNCATE;
+  }
+  return f->real->pMethods->xTruncate(f->real, size);
+}
+
+static int sqlite_io_sync(sqlite3_file *file, int flags) {
+  LSqliteFile *f = sqlite_file(file);
+  if (!f->can_write) {
+    sqlite_vfs_deny(f->owner, "fs:write", f->path);
+    return SQLITE_IOERR_FSYNC;
+  }
+  return f->real->pMethods->xSync(f->real, flags);
+}
+
+static int sqlite_io_filesize(sqlite3_file *file, sqlite3_int64 *size) {
+  LSqliteFile *f = sqlite_file(file);
+  if (!f->can_read) {
+    sqlite_vfs_deny(f->owner, "fs:read", f->path);
+    return SQLITE_IOERR_FSTAT;
+  }
+  return f->real->pMethods->xFileSize(f->real, size);
+}
+
+static int sqlite_io_lock(sqlite3_file *file, int level) {
+  LSqliteFile *f = sqlite_file(file);
+  return f->real->pMethods->xLock(f->real, level);
+}
+
+static int sqlite_io_unlock(sqlite3_file *file, int level) {
+  LSqliteFile *f = sqlite_file(file);
+  return f->real->pMethods->xUnlock(f->real, level);
+}
+
+static int sqlite_io_reserved(sqlite3_file *file, int *out) {
+  LSqliteFile *f = sqlite_file(file);
+  return f->real->pMethods->xCheckReservedLock(f->real, out);
+}
+
+static int sqlite_io_control(sqlite3_file *file, int op, void *arg) {
+  LSqliteFile *f = sqlite_file(file);
+  if (op == SQLITE_FCNTL_SET_LOCKPROXYFILE) {
+    sqlite_vfs_deny(f->owner, "fs:write", f->path);
+    return SQLITE_PERM;
+  }
+  if ((op == SQLITE_FCNTL_SIZE_HINT || op == SQLITE_FCNTL_OVERWRITE ||
+       op == SQLITE_FCNTL_BEGIN_ATOMIC_WRITE ||
+       op == SQLITE_FCNTL_COMMIT_ATOMIC_WRITE ||
+       op == SQLITE_FCNTL_ROLLBACK_ATOMIC_WRITE) &&
+      !f->can_write) {
+    sqlite_vfs_deny(f->owner, "fs:write", f->path);
+    return SQLITE_PERM;
+  }
+  return f->real->pMethods->xFileControl(f->real, op, arg);
+}
+
+static int sqlite_io_sector(sqlite3_file *file) {
+  LSqliteFile *f = sqlite_file(file);
+  return f->real->pMethods->xSectorSize(f->real);
+}
+
+static int sqlite_io_characteristics(sqlite3_file *file) {
+  LSqliteFile *f = sqlite_file(file);
+  return f->real->pMethods->xDeviceCharacteristics(f->real);
+}
+
+static int sqlite_bind_shm(LSqliteFile *file) {
+  LSqliteVFS *owner = file->owner;
+  LusAuthFile auth;
+  sqlite3_lus_bound_shm bound;
+  const char *path = sqlite_sidecar(file, "-shm");
+  int options = LUS_AUTH_READ;
+  int status;
+  int rc;
+  if (file->shm_bound)
+    return SQLITE_OK;
+  if (path == NULL)
+    return SQLITE_CANTOPEN;
+  if (!owner->readonly)
+    options |= LUS_AUTH_WRITE | LUS_AUTH_CREATE | LUS_AUTH_DELETE;
+  status = sqlite_tryopen(
+      owner, path, options,
+      file->object_mode != 0 ? file->object_mode & 0777u : 0666u, &auth);
+  sqlite_auth_status(owner, &auth, path, status);
+  if (status != LUS_AUTH_OK) {
+    if (owner->readonly && status == LUS_AUTH_MISSING)
+      sqlite_vfs_deny(owner, "fs:write", sqlite_auth_path(&auth, path));
+    luaAP_closeauthfile(&auth);
+    return status == LUS_AUTH_DENIED || status == LUS_AUTH_MISSING
+               ? SQLITE_PERM
+               : SQLITE_CANTOPEN;
+  }
+  sqlite_path_sync("shm", path);
+#if defined(LUS_PLATFORM_WINDOWS)
+  bound.file_handle = cast(sqlite3_int64, cast(intptr_t, auth.handle));
+  bound.parent_handle = 0;
+  bound.delete_file = NULL;
+#else
+  bound.file_handle = auth.fd;
+  bound.parent_handle = auth.parent.fd;
+  bound.delete_file = sqlite_delete_bound_file;
+#endif
+  bound.readonly = owner->readonly;
+  rc = file->real->pMethods->xFileControl(file->real,
+                                          SQLITE_FCNTL_LUS_BOUND_SHM, &bound);
+  if (rc != SQLITE_OK && auth.created)
+    luaAP_deleteauthfile(&auth);
+  luaAP_closeauthfile(&auth);
+  if (rc == SQLITE_OK)
+    file->shm_bound = 1;
+  return rc;
+}
+
+static int sqlite_io_shmmap(sqlite3_file *file, int page, int pagesize,
+                            int write, void volatile **out) {
+  LSqliteFile *f = sqlite_file(file);
+  int rc;
+  if (f->real->pMethods->iVersion < 2 || f->real->pMethods->xShmMap == NULL)
+    return SQLITE_IOERR_SHMMAP;
+  if (!sqlite_shm_allowed(f, 0))
+    return SQLITE_IOERR_SHMMAP;
+  if (write && f->owner->readonly) {
+    sqlite_vfs_deny(f->owner, "fs:write", sqlite_sidecar(f, "-shm"));
+    return SQLITE_READONLY;
+  }
+  if (!f->owner->readonly && !sqlite_shm_allowed(f, 1))
+    return SQLITE_IOERR_SHMMAP;
+  if (sqlite_bind_shm(f) != SQLITE_OK)
+    return SQLITE_IOERR_SHMOPEN;
+  rc = f->real->pMethods->xShmMap(f->real, page, pagesize, write, out);
+  sqlite_path_sync("shm-opened", f->path);
+  return rc;
+}
+
+static int sqlite_io_shmlock(sqlite3_file *file, int offset, int count,
+                             int flags) {
+  LSqliteFile *f = sqlite_file(file);
+  if (f->owner->readonly && (flags & SQLITE_SHM_LOCK) != 0 &&
+      (flags & SQLITE_SHM_EXCLUSIVE) != 0) {
+    sqlite_vfs_deny(f->owner, "fs:write", sqlite_sidecar(f, "-shm"));
+    return SQLITE_READONLY;
+  }
+  if (!sqlite_shm_allowed(f, 0) ||
+      (!f->owner->readonly && !sqlite_shm_allowed(f, 1)))
+    return SQLITE_IOERR_SHMLOCK;
+  if (sqlite_bind_shm(f) != SQLITE_OK)
+    return SQLITE_IOERR_SHMOPEN;
+  if (f->real->pMethods->iVersion < 2 || f->real->pMethods->xShmLock == NULL)
+    return SQLITE_IOERR_SHMLOCK;
+  return f->real->pMethods->xShmLock(f->real, offset, count, flags);
+}
+
+static void sqlite_io_shmbarrier(sqlite3_file *file) {
+  LSqliteFile *f = sqlite_file(file);
+  if (f->real->pMethods->iVersion >= 2 &&
+      f->real->pMethods->xShmBarrier != NULL)
+    f->real->pMethods->xShmBarrier(f->real);
+}
+
+static int sqlite_io_shmunmap(sqlite3_file *file, int remove) {
+  LSqliteFile *f = sqlite_file(file);
+  if (remove && !sqlite_shm_allowed(f, 1))
+    return SQLITE_IOERR_SHMOPEN;
+  if (f->real->pMethods->iVersion < 2 || f->real->pMethods->xShmUnmap == NULL)
+    return SQLITE_IOERR_SHMOPEN;
+  return f->real->pMethods->xShmUnmap(f->real, remove);
+}
+
+static int sqlite_io_fetch(sqlite3_file *file, sqlite3_int64 offset, int amount,
+                           void **out) {
+  LSqliteFile *f = sqlite_file(file);
+  if (!f->can_read) {
+    sqlite_vfs_deny(f->owner, "fs:read", f->path);
+    return SQLITE_IOERR_READ;
+  }
+  if (f->real->pMethods->iVersion < 3 || f->real->pMethods->xFetch == NULL) {
+    *out = NULL;
+    return SQLITE_OK;
+  }
+  return f->real->pMethods->xFetch(f->real, offset, amount, out);
+}
+
+static int sqlite_io_unfetch(sqlite3_file *file, sqlite3_int64 offset,
+                             void *ptr) {
+  LSqliteFile *f = sqlite_file(file);
+  if (f->real->pMethods->iVersion < 3 || f->real->pMethods->xUnfetch == NULL)
+    return SQLITE_OK;
+  return f->real->pMethods->xUnfetch(f->real, offset, ptr);
+}
+
+static const sqlite3_io_methods sqlite_io_methods = {
+    3,
+    sqlite_io_close,
+    sqlite_io_read,
+    sqlite_io_write,
+    sqlite_io_truncate,
+    sqlite_io_sync,
+    sqlite_io_filesize,
+    sqlite_io_lock,
+    sqlite_io_unlock,
+    sqlite_io_reserved,
+    sqlite_io_control,
+    sqlite_io_sector,
+    sqlite_io_characteristics,
+    sqlite_io_shmmap,
+    sqlite_io_shmlock,
+    sqlite_io_shmbarrier,
+    sqlite_io_shmunmap,
+    sqlite_io_fetch,
+    sqlite_io_unfetch,
+};
+
+static int sqlite_vfs_open(sqlite3_vfs *vfs, const char *path,
+                           sqlite3_file *file, int flags, int *outflags) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  LSqliteFile *f = sqlite_file(file);
+  LusAuthFile auth;
+  size_t offset = sqlite_real_offset();
+  int realflags = flags;
+  int options;
+  int status;
+  int delete_unlinked = 0;
+  const char *canonical;
+  const char *phase = "open";
+  int rc;
+  memset(f, 0, sizeof(*f));
+  f->real = (sqlite3_file *)((char *)file + offset);
+  f->owner = owner;
+  f->path = (const char *)f->real + owner->real->szOsFile;
+  if (path == NULL) {
+    sqlite_vfs_deny(owner, "fs:read", NULL);
+    return SQLITE_CANTOPEN;
+  }
+
+  /* A reader may consume an existing WAL through a read-only descriptor.
+  ** Creation and every writable descriptor remain write-gated. */
+  if (owner->readonly && (flags & SQLITE_OPEN_WAL)) {
+    realflags &=
+        ~(SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_EXCLUSIVE);
+    realflags |= SQLITE_OPEN_READONLY;
+  }
+  options = sqlite_open_options(realflags);
+  status = sqlite_tryopen(owner, path, options, 0666, &auth);
+  sqlite_auth_status(owner, &auth, path, status);
+  if (status == LUS_AUTH_ERROR && (realflags & SQLITE_OPEN_READWRITE) != 0 &&
+      (realflags & SQLITE_OPEN_EXCLUSIVE) == 0) {
+    luaAP_closeauthfile(&auth);
+    realflags &= ~(SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+    realflags |= SQLITE_OPEN_READONLY;
+    status = sqlite_tryopen(owner, path, LUS_AUTH_READ, 0, &auth);
+    sqlite_auth_status(owner, &auth, path, status);
+  }
+  if (status != LUS_AUTH_OK) {
+    if (owner->readonly && (flags & SQLITE_OPEN_WAL) != 0 &&
+        status == LUS_AUTH_MISSING)
+      sqlite_vfs_deny(owner, "fs:write", sqlite_auth_path(&auth, path));
+    luaAP_closeauthfile(&auth);
+    return status == LUS_AUTH_DENIED ? SQLITE_PERM : SQLITE_CANTOPEN;
+  }
+  canonical = luaAP_authfilepath(&auth);
+  if (canonical == NULL ||
+      strlen(canonical) > (size_t)owner->real->mxPathname) {
+    rc = canonical == NULL ? SQLITE_CANTOPEN : SQLITE_CANTOPEN_FULLPATH;
+    if (auth.created)
+      luaAP_deleteauthfile(&auth);
+    luaAP_closeauthfile(&auth);
+    return rc;
+  }
+  sqlite3_snprintf(owner->real->mxPathname + 1, (char *)f->path, "%s",
+                   canonical);
+  if ((flags & SQLITE_OPEN_MAIN_DB) != 0)
+    phase = "main";
+  else if ((flags & SQLITE_OPEN_WAL) != 0)
+    phase = "wal";
+  else if ((flags & (SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL)) !=
+           0)
+    phase = "journal";
+  sqlite_path_sync(phase, path);
+#if !defined(LUS_PLATFORM_WINDOWS)
+  if ((flags & SQLITE_OPEN_DELETEONCLOSE) != 0) {
+    if (!luaAP_deleteauthfile(&auth)) {
+      luaAP_closeauthfile(&auth);
+      return SQLITE_IOERR_DELETE;
+    }
+    delete_unlinked = 1;
+  }
+#endif
+  f->realname = sqlite_bound_filename(
+      f->path, &auth, owner->readonly && (flags & SQLITE_OPEN_MAIN_DB) != 0,
+      delete_unlinked);
+  if (f->realname == NULL) {
+    if (auth.created && !delete_unlinked)
+      luaAP_deleteauthfile(&auth);
+    luaAP_closeauthfile(&auth);
+    return SQLITE_NOMEM;
+  }
+  f->can_read = 1;
+  f->can_write = (realflags & SQLITE_OPEN_READWRITE) != 0;
+  f->object_mode = auth.object_mode;
+  realflags |= SQLITE_OPEN_URI;
+  memset(f->real, 0, (size_t)owner->real->szOsFile);
+  rc = owner->real->xOpen(owner->real, f->realname, f->real, realflags,
+                          outflags);
+  if (rc == SQLITE_OK) {
+    file->pMethods = &sqlite_io_methods;
+    if (strcmp(phase, "main") == 0) {
+      if (!owner->main_bound) {
+        luaAP_moveauthfile(&owner->main_file, &auth);
+        owner->main_bound = 1;
+      }
+      sqlite_path_sync("main-opened", path);
+    }
+    else if (strcmp(phase, "wal") == 0)
+      sqlite_path_sync("wal-opened", path);
+    else if (strcmp(phase, "journal") == 0)
+      sqlite_path_sync("journal-opened", path);
+  }
+  else {
+    if (auth.created && !delete_unlinked)
+      luaAP_deleteauthfile(&auth);
+    sqlite3_free_filename(f->realname);
+    f->realname = NULL;
+  }
+  luaAP_closeauthfile(&auth);
+  return rc;
+}
+
+static int sqlite_vfs_delete(sqlite3_vfs *vfs, const char *path, int syncdir) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  LusAuthFile auth;
+  int status = sqlite_tryopen(owner, path, LUS_AUTH_DELETE, 0, &auth);
+  sqlite_auth_status(owner, &auth, path, status);
+  if (status == LUS_AUTH_MISSING) {
+    luaAP_closeauthfile(&auth);
+    return SQLITE_IOERR_DELETE_NOENT;
+  }
+  if (status != LUS_AUTH_OK) {
+    luaAP_closeauthfile(&auth);
+    return status == LUS_AUTH_DENIED ? SQLITE_PERM : SQLITE_IOERR_DELETE;
+  }
+  sqlite_path_sync("delete", path);
+  if (!luaAP_deleteauthfile(&auth)) {
+    luaAP_closeauthfile(&auth);
+    return SQLITE_IOERR_DELETE;
+  }
+  sqlite_path_sync("delete-done", path);
+  if (syncdir && !luaAP_syncauthparent(&auth)) {
+    luaAP_closeauthfile(&auth);
+    return SQLITE_IOERR_DIR_FSYNC;
+  }
+  luaAP_closeauthfile(&auth);
+  return SQLITE_OK;
+}
+
+static int sqlite_vfs_access(sqlite3_vfs *vfs, const char *path, int flags,
+                             int *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  LusAuthFile auth;
+  int options = LUS_AUTH_READ;
+  int status;
+  if (flags == SQLITE_ACCESS_READWRITE)
+    options |= LUS_AUTH_WRITE;
+  status = sqlite_tryopen(owner, path, options, 0, &auth);
+  sqlite_auth_status(owner, &auth, path, status);
+  if (status == LUS_AUTH_DENIED) {
+    *out = 0;
+    luaAP_closeauthfile(&auth);
+    return SQLITE_PERM;
+  }
+  if (status == LUS_AUTH_MISSING || status == LUS_AUTH_ERROR) {
+    *out = 0;
+    luaAP_closeauthfile(&auth);
+    return SQLITE_OK;
+  }
+  *out = 1;
+  luaAP_closeauthfile(&auth);
+  return SQLITE_OK;
+}
+
+static int sqlite_vfs_fullpath(sqlite3_vfs *vfs, const char *path, int bytes,
+                               char *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  LusAuthFile auth;
+  const char *canonical;
+  int status = sqlite_tryopen(owner, path, LUS_AUTH_READ, 0, &auth);
+  sqlite_auth_status(owner, &auth, path, status);
+  if (status != LUS_AUTH_OK && status != LUS_AUTH_MISSING) {
+    luaAP_closeauthfile(&auth);
+    return status == LUS_AUTH_DENIED ? SQLITE_PERM : SQLITE_CANTOPEN;
+  }
+  canonical = sqlite_auth_path(&auth, path);
+  if (strlen(canonical) >= cast_sizet(bytes)) {
+    luaAP_closeauthfile(&auth);
+    return SQLITE_CANTOPEN_FULLPATH;
+  }
+  sqlite3_snprintf(bytes, out, "%s", canonical);
+  luaAP_closeauthfile(&auth);
+  return SQLITE_OK;
+}
+
+static void *sqlite_vfs_dlopen(sqlite3_vfs *vfs, const char *path) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  if (!sqlite_vfs_allowed(owner, "fs:read", path))
+    return NULL;
+  return owner->real->xDlOpen(owner->real, path);
+}
+
+static void sqlite_vfs_dlerror(sqlite3_vfs *vfs, int bytes, char *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  owner->real->xDlError(owner->real, bytes, out);
+}
+
+static void (*sqlite_vfs_dlsym(sqlite3_vfs *vfs, void *handle,
+                               const char *symbol))(void) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  return owner->real->xDlSym(owner->real, handle, symbol);
+}
+
+static void sqlite_vfs_dlclose(sqlite3_vfs *vfs, void *handle) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  owner->real->xDlClose(owner->real, handle);
+}
+
+static int sqlite_vfs_random(sqlite3_vfs *vfs, int bytes, char *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  return owner->real->xRandomness(owner->real, bytes, out);
+}
+
+static int sqlite_vfs_sleep(sqlite3_vfs *vfs, int micros) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  return owner->real->xSleep(owner->real, micros);
+}
+
+static int sqlite_vfs_time(sqlite3_vfs *vfs, double *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  return owner->real->xCurrentTime(owner->real, out);
+}
+
+static int sqlite_vfs_lasterror(sqlite3_vfs *vfs, int bytes, char *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  if (owner->denied) {
+    sqlite3_snprintf(bytes, out, "permission %s denied for '%s'",
+                     owner->denied_perm, owner->denied_path);
+    return SQLITE_PERM;
+  }
+  if (owner->real->xGetLastError != NULL)
+    return owner->real->xGetLastError(owner->real, bytes, out);
+  return 0;
+}
+
+static int sqlite_vfs_time64(sqlite3_vfs *vfs, sqlite3_int64 *out) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  if (owner->real->iVersion >= 2 && owner->real->xCurrentTimeInt64 != NULL)
+    return owner->real->xCurrentTimeInt64(owner->real, out);
+  return SQLITE_NOTFOUND;
+}
+
+static int sqlite_vfs_setcall(sqlite3_vfs *vfs, const char *name,
+                              sqlite3_syscall_ptr call) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  if (owner->real->iVersion >= 3 && owner->real->xSetSystemCall != NULL)
+    return owner->real->xSetSystemCall(owner->real, name, call);
+  return SQLITE_NOTFOUND;
+}
+
+static sqlite3_syscall_ptr sqlite_vfs_getcall(sqlite3_vfs *vfs,
+                                              const char *name) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  if (owner->real->iVersion >= 3 && owner->real->xGetSystemCall != NULL)
+    return owner->real->xGetSystemCall(owner->real, name);
+  return NULL;
+}
+
+static const char *sqlite_vfs_nextcall(sqlite3_vfs *vfs, const char *name) {
+  LSqliteVFS *owner = sqlite_vfs(vfs);
+  if (owner->real->iVersion >= 3 && owner->real->xNextSystemCall != NULL)
+    return owner->real->xNextSystemCall(owner->real, name);
+  return NULL;
+}
+
+static LSqliteVFS *sqlite_vfs_create(lua_State *L, int readonly) {
+#if defined(LUS_PLATFORM_WINDOWS)
+  sqlite3_vfs *real = sqlite3_vfs_find(NULL);
+#elif defined(LUS_PLATFORM_DARWIN)
+  sqlite3_vfs *real = sqlite3_vfs_find("unix-posix");
+#else
+  sqlite3_vfs *real = sqlite3_vfs_find("unix");
+#endif
+  LSqliteVFS *vfs;
+  size_t realoff = sqlite_real_offset();
+  size_t filebytes;
+  size_t pathbytes;
+  if (real == NULL || real->mxPathname < 1)
+    return NULL;
+  pathbytes = (size_t)real->mxPathname + 1;
+  if (realoff > (size_t)INT_MAX || pathbytes > (size_t)INT_MAX - realoff ||
+      (size_t)real->szOsFile > (size_t)INT_MAX - realoff - pathbytes)
+    return NULL;
+  filebytes = realoff + (size_t)real->szOsFile + pathbytes;
+  vfs = (LSqliteVFS *)sqlite3_malloc64(sizeof(*vfs));
+  if (vfs == NULL)
+    return NULL;
+  memset(vfs, 0, sizeof(*vfs));
+  vfs->name = (char *)sqlite3_malloc64(SQLITE_VFS_NAME_BYTES);
+  vfs->denied_path = (char *)sqlite3_malloc64(pathbytes);
+  vfs->sidecar_path = (char *)sqlite3_malloc64(pathbytes);
+  if (vfs->name == NULL || vfs->denied_path == NULL ||
+      vfs->sidecar_path == NULL) {
+    sqlite3_free(vfs->name);
+    sqlite3_free(vfs->denied_path);
+    sqlite3_free(vfs->sidecar_path);
+    sqlite3_free(vfs);
+    return NULL;
+  }
+  vfs->real = real;
+  vfs->L = L;
+  vfs->readonly = readonly;
+  sqlite3_snprintf(SQLITE_VFS_NAME_BYTES, vfs->name, "lus-pledge-%p",
+                   (void *)vfs);
+  vfs->vfs.iVersion = real->iVersion > 3 ? 3 : real->iVersion;
+  vfs->vfs.szOsFile = (int)filebytes;
+  vfs->vfs.mxPathname = real->mxPathname;
+  vfs->vfs.zName = vfs->name;
+  vfs->vfs.pAppData = vfs;
+  vfs->vfs.xOpen = sqlite_vfs_open;
+  vfs->vfs.xDelete = sqlite_vfs_delete;
+  vfs->vfs.xAccess = sqlite_vfs_access;
+  vfs->vfs.xFullPathname = sqlite_vfs_fullpath;
+  vfs->vfs.xDlOpen = sqlite_vfs_dlopen;
+  vfs->vfs.xDlError = sqlite_vfs_dlerror;
+  vfs->vfs.xDlSym = sqlite_vfs_dlsym;
+  vfs->vfs.xDlClose = sqlite_vfs_dlclose;
+  vfs->vfs.xRandomness = sqlite_vfs_random;
+  vfs->vfs.xSleep = sqlite_vfs_sleep;
+  vfs->vfs.xCurrentTime = sqlite_vfs_time;
+  vfs->vfs.xGetLastError = sqlite_vfs_lasterror;
+  vfs->vfs.xCurrentTimeInt64 = sqlite_vfs_time64;
+  vfs->vfs.xSetSystemCall = sqlite_vfs_setcall;
+  vfs->vfs.xGetSystemCall = sqlite_vfs_getcall;
+  vfs->vfs.xNextSystemCall = sqlite_vfs_nextcall;
+  if (sqlite3_vfs_register(&vfs->vfs, 0) != SQLITE_OK) {
+    sqlite3_free(vfs->name);
+    sqlite3_free(vfs->denied_path);
+    sqlite3_free(vfs->sidecar_path);
+    sqlite3_free(vfs);
+    return NULL;
+  }
+  return vfs;
+}
+
+static void sqlite_vfs_destroy(LSqliteVFS *vfs) {
+  if (vfs == NULL)
+    return;
+  sqlite3_vfs_unregister(&vfs->vfs);
+  if (vfs->main_bound)
+    luaAP_closeauthfile(&vfs->main_file);
+  sqlite3_free(vfs->name);
+  sqlite3_free(vfs->denied_path);
+  sqlite3_free(vfs->sidecar_path);
+  sqlite3_free(vfs);
+}
 
 /* ===================================================================
 ** Handle checking
@@ -99,6 +976,17 @@ static LSqliteStmt *checkstmt(lua_State *L) {
   if (l_unlikely(s->db->db == NULL))
     luaL_error(L, "attempt to use a closed database");
   return s;
+}
+
+static void sqlite_push_error(lua_State *L, LSqliteDB *d,
+                              const char *fallback) {
+  if (d->vfs != NULL && d->vfs->denied) {
+    lua_pushfstring(L, "permission \"%s\" denied for '%s'", d->vfs->denied_perm,
+                    d->vfs->denied_path);
+    d->vfs->denied = 0;
+  }
+  else
+    lua_pushstring(L, fallback);
 }
 
 /*
@@ -133,25 +1021,23 @@ static int sqlite_auth(void *ud, int action, const char *a3, const char *a4,
   (void)a6;
   if (action == SQLITE_ATTACH && a3 != NULL && a3[0] != '\0')
     return SQLITE_DENY;
+  if (action == SQLITE_PRAGMA && a3 != NULL &&
+      (sqlite3_stricmp(a3, "data_store_directory") == 0 ||
+       sqlite3_stricmp(a3, "temp_store_directory") == 0 ||
+       sqlite3_stricmp(a3, "lock_proxy_file") == 0))
+    return SQLITE_DENY;
   return SQLITE_OK;
 }
 
 /*
-** Pledge-check a database path together with SQLite's sidecar files.
-** WAL mode touches -wal and -shm, rollback journals touch -journal, so
-** all four paths must be granted up front: denial happens at open time
-** with the standard permission message instead of mid-transaction.
+** Check the requested database itself before entering SQLite. The VFS checks
+** each sidecar when SQLite actually accesses it, so unused paths need no
+** speculative grant.
 */
 static void sqlite_checkfsperm(lua_State *L, const char *path, int readonly) {
-  static const char *const suffixes[] = {"", "-journal", "-wal", "-shm"};
-  int i;
-  for (i = 0; i < 4; i++) {
-    lua_pushfstring(L, "%s%s", path, suffixes[i]);
-    lus_checkfsperm(L, "fs:read", lua_tostring(L, -1));
-    if (!readonly)
-      lus_checkfsperm(L, "fs:write", lua_tostring(L, -1));
-    lua_pop(L, 1);
-  }
+  lus_checkfsperm(L, "fs:read", path);
+  if (!readonly)
+    lus_checkfsperm(L, "fs:write", path);
 }
 
 /*
@@ -159,6 +1045,8 @@ static void sqlite_checkfsperm(lua_State *L, const char *path, int readonly) {
 ** 'idx'), finalize every live statement, then close the connection.
 */
 static void close_db(lua_State *L, LSqliteDB *d, int idx) {
+  sqlite3_stmt *stmt;
+  int rc;
   if (lua_getiuservalue(L, idx, 1) == LUA_TTABLE) {
     lua_pushnil(L);
     while (lua_next(L, -2) != 0) {
@@ -169,8 +1057,27 @@ static void close_db(lua_State *L, LSqliteDB *d, int idx) {
     }
   }
   lua_pop(L, 1);
-  sqlite3_close_v2(d->db);
+  /* Embedders can prepare statements through lus_tosqlite. Closing a Lus
+  ** database invalidates the connection, so finalize any such unregistered
+  ** statements before freeing the per-connection VFS. */
+  while ((stmt = sqlite3_next_stmt(d->db, NULL)) != NULL)
+    sqlite3_finalize(stmt);
+  rc = sqlite3_close(d->db);
+  if (rc != SQLITE_OK) {
+    /* An outstanding embedding operation can keep the SQLite connection in a
+    ** zombie state after close_v2. Detach it from the Lua state so later VFS
+    ** callbacks fail closed. The wrapper stays registered because SQLite may
+    ** still hold its address. */
+    if (d->vfs != NULL)
+      d->vfs->L = NULL;
+    sqlite3_close_v2(d->db);
+    d->db = NULL;
+    d->vfs = NULL;
+    return;
+  }
   d->db = NULL;
+  sqlite_vfs_destroy(d->vfs);
+  d->vfs = NULL;
 }
 
 static int db_close(lua_State *L) {
@@ -219,8 +1126,9 @@ static int io_sqlite(lua_State *L) {
   if (!in_memory)
     sqlite_checkfsperm(L, path, readonly);
   /* create a closed handle first, so a raise leaves a consistent state */
-  d = (LSqliteDB *)lua_newuserdatauv(L, sizeof(LSqliteDB), 1);
+  d = (LSqliteDB *)lua_newuserdatauv(L, sizeof(LSqliteDB), 2);
   d->db = NULL;
+  d->vfs = NULL;
   d->readonly = readonly;
   luaL_setmetatable(L, SQLITE_DB_METATABLE);
   lua_createtable(L, 0, 0); /* the statement registry, weak-valued */
@@ -229,11 +1137,24 @@ static int io_sqlite(lua_State *L) {
   lua_setfield(L, -2, "__mode");
   lua_setmetatable(L, -2);
   lua_setiuservalue(L, -2, 1);
-  rc = sqlite3_open_v2(path, &db, flags, NULL);
+  lua_pushthread(L);
+  lua_setiuservalue(L, -2, 2);
+  if (!in_memory) {
+    d->vfs = sqlite_vfs_create(L, readonly);
+    if (d->vfs == NULL)
+      return luaL_error(L, "cannot create pledge-aware SQLite VFS");
+  }
+  rc = sqlite3_open_v2(path, &db, flags,
+                       d->vfs != NULL ? d->vfs->vfs.zName : NULL);
   if (rc != SQLITE_OK) {
-    lua_pushfstring(L, "cannot open database '%s' (%s)", path,
-                    db != NULL ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
+    if (d->vfs != NULL && d->vfs->denied)
+      sqlite_push_error(L, d, sqlite3_errstr(rc));
+    else
+      lua_pushfstring(L, "cannot open database '%s' (%s)", path,
+                      db != NULL ? sqlite3_errmsg(db) : sqlite3_errstr(rc));
     sqlite3_close(db);
+    sqlite_vfs_destroy(d->vfs);
+    d->vfs = NULL;
     return lua_error(L);
   }
   d->db = db;
@@ -245,8 +1166,11 @@ static int io_sqlite(lua_State *L) {
     char *errmsg = NULL;
     if (sqlite3_exec(db, "PRAGMA journal_mode=WAL", NULL, NULL, &errmsg) !=
         SQLITE_OK) {
-      lua_pushfstring(L, "cannot open database '%s' (%s)", path,
-                      errmsg != NULL ? errmsg : sqlite3_errmsg(db));
+      if (d->vfs != NULL && d->vfs->denied)
+        sqlite_push_error(L, d, errmsg != NULL ? errmsg : sqlite3_errmsg(db));
+      else
+        lua_pushfstring(L, "cannot open database '%s' (%s)", path,
+                        errmsg != NULL ? errmsg : sqlite3_errmsg(db));
       sqlite3_free(errmsg);
       close_db(L, d, -1);
       return lua_error(L);
@@ -288,12 +1212,14 @@ static LSqliteStmt *new_stmt(lua_State *L, int dbidx, sqlite3_stmt *stmt) {
 ** only whitespace and SQL comments, which is checked by preparing it:
 ** a tail that yields another statement (or fails to parse) raises.
 */
-static LSqliteStmt *prepare_single(lua_State *L, LSqliteDB *d,
-                                   const char *sql, int dbidx) {
+static LSqliteStmt *prepare_single(lua_State *L, LSqliteDB *d, const char *sql,
+                                   int dbidx) {
   sqlite3_stmt *stmt = NULL;
   const char *tail = NULL;
-  if (sqlite3_prepare_v2(d->db, sql, -1, &stmt, &tail) != SQLITE_OK)
-    luaL_error(L, "%s", sqlite3_errmsg(d->db));
+  if (sqlite3_prepare_v2(d->db, sql, -1, &stmt, &tail) != SQLITE_OK) {
+    sqlite_push_error(L, d, sqlite3_errmsg(d->db));
+    lua_error(L);
+  }
   if (stmt == NULL) /* comment- or whitespace-only sql */
     luaL_error(L, "sql contains no statement");
   if (tail != NULL && *tail != '\0') {
@@ -315,9 +1241,7 @@ static LSqliteStmt *prepare_single(lua_State *L, LSqliteDB *d,
 static void bind_one(lua_State *L, LSqliteStmt *s, int pidx, int argidx) {
   int rc;
   switch (lua_type(L, argidx)) {
-    case LUA_TNIL:
-      rc = sqlite3_bind_null(s->stmt, pidx);
-      break;
+    case LUA_TNIL: rc = sqlite3_bind_null(s->stmt, pidx); break;
     case LUA_TBOOLEAN:
       rc = sqlite3_bind_int64(s->stmt, pidx, lua_toboolean(L, argidx));
       break;
@@ -339,7 +1263,8 @@ static void bind_one(lua_State *L, LSqliteStmt *s, int pidx, int argidx) {
       /* a NULL data pointer would bind NULL, so a zero-length blob
          binds through a non-NULL dummy pointer instead */
       Vector *v = vecvalue(s2v(L->ci->func.p + argidx));
-      const void *data = (v->len > 0) ? (const void *)v->data : (const void *)"";
+      const void *data =
+          (v->len > 0) ? (const void *)v->data : (const void *)"";
       rc = sqlite3_bind_blob64(s->stmt, pidx, data, (sqlite3_uint64)v->len,
                                SQLITE_TRANSIENT);
       break;
@@ -395,8 +1320,8 @@ static void bind_values(lua_State *L, LSqliteStmt *s, int firstarg,
       luaL_error(L, "statement uses positional parameters, but a table "
                     "was given");
     if (nvals != np)
-      luaL_error(L, "statement has %d parameters, but %d values were given",
-                 np, nvals);
+      luaL_error(L, "statement has %d parameters, but %d values were given", np,
+                 nvals);
     for (i = 1; i <= np; i++)
       bind_one(L, s, i, firstarg + i - 1);
   }
@@ -405,10 +1330,9 @@ static void bind_values(lua_State *L, LSqliteStmt *s, int firstarg,
 /* Step a statement to completion, discarding any rows */
 static void run_to_completion(lua_State *L, LSqliteStmt *s) {
   int rc;
-  while ((rc = sqlite3_step(s->stmt)) == SQLITE_ROW) {
-  }
+  while ((rc = sqlite3_step(s->stmt)) == SQLITE_ROW) {}
   if (rc != SQLITE_DONE) {
-    lua_pushfstring(L, "%s", sqlite3_errmsg(s->db->db));
+    sqlite_push_error(L, s->db, sqlite3_errmsg(s->db->db));
     sqlite3_reset(s->stmt);
     lua_error(L);
   }
@@ -447,16 +1371,14 @@ static void push_row(lua_State *L, LSqliteStmt *s) {
         L->top.p++;
         break;
       }
-      default: /* SQLITE_NULL: the key is simply absent */
-        continue;
+      default: /* SQLITE_NULL: the key is simply absent */ continue;
     }
     lua_setfield(L, -2, sqlite3_column_name(stmt, i));
   }
 }
 
 static int query_iter(lua_State *L) {
-  LSqliteCursor *cur =
-      (LSqliteCursor *)lua_touserdata(L, lua_upvalueindex(1));
+  LSqliteCursor *cur = (LSqliteCursor *)lua_touserdata(L, lua_upvalueindex(1));
   LSqliteStmt *s = cur->stmt;
   int rc;
   if (s == NULL) { /* spent cursor keeps returning nil */
@@ -483,7 +1405,7 @@ static int query_iter(lua_State *L) {
     lua_pushnil(L);
     return 1;
   }
-  lua_pushfstring(L, "%s", sqlite3_errmsg(s->db->db));
+  sqlite_push_error(L, s->db, sqlite3_errmsg(s->db->db));
   if (cur->owns)
     finalize_stmt(s);
   else
@@ -548,7 +1470,7 @@ static int db_exec(lua_State *L) {
   const char *sql = checkstring_strict(L, 2);
   char *errmsg = NULL;
   if (sqlite3_exec(d->db, sql, NULL, NULL, &errmsg) != SQLITE_OK) {
-    lua_pushstring(L, errmsg != NULL ? errmsg : sqlite3_errmsg(d->db));
+    sqlite_push_error(L, d, errmsg != NULL ? errmsg : sqlite3_errmsg(d->db));
     sqlite3_free(errmsg);
     return lua_error(L);
   }
@@ -591,7 +1513,7 @@ static int db_transaction(lua_State *L) {
   luaL_checktype(L, 2, LUA_TFUNCTION);
   lua_settop(L, 2);
   if (sqlite3_exec(d->db, "BEGIN", NULL, NULL, &errmsg) != SQLITE_OK) {
-    lua_pushstring(L, errmsg != NULL ? errmsg : sqlite3_errmsg(d->db));
+    sqlite_push_error(L, d, errmsg != NULL ? errmsg : sqlite3_errmsg(d->db));
     sqlite3_free(errmsg);
     return lua_error(L);
   }
@@ -601,7 +1523,7 @@ static int db_transaction(lua_State *L) {
     return luaL_error(L, "database closed during transaction");
   if (status == LUA_OK) {
     if (sqlite3_exec(d->db, "COMMIT", NULL, NULL, &errmsg) != SQLITE_OK) {
-      lua_pushstring(L, errmsg != NULL ? errmsg : sqlite3_errmsg(d->db));
+      sqlite_push_error(L, d, errmsg != NULL ? errmsg : sqlite3_errmsg(d->db));
       sqlite3_free(errmsg);
       sqlite3_exec(d->db, "ROLLBACK", NULL, NULL, NULL);
       return lua_error(L);
@@ -685,8 +1607,7 @@ static int stmt_tostring(lua_State *L) {
 static int sqlite_expr_ok(lua_State *L, const lus_Query *q,
                           const lus_QueryNode *n) {
   switch (lus_qnodekind(n)) {
-    case LUS_QN_COLUMN:
-      return 1;
+    case LUS_QN_COLUMN: return 1;
     case LUS_QN_LIT:
     case LUS_QN_PARAM: {
       int t;
@@ -702,14 +1623,12 @@ static int sqlite_expr_ok(lua_State *L, const lus_Query *q,
         return 0; /* SQL integer division and friends diverge */
       if (!sqlite_expr_ok(L, q, lus_qnodechild(q, n, 0)))
         return 0;
-      return op == LUS_QAR_UNM ||
-             sqlite_expr_ok(L, q, lus_qnodechild(q, n, 1));
+      return op == LUS_QAR_UNM || sqlite_expr_ok(L, q, lus_qnodechild(q, n, 1));
     }
     case LUS_QN_CONCAT:
       return sqlite_expr_ok(L, q, lus_qnodechild(q, n, 0)) &&
              sqlite_expr_ok(L, q, lus_qnodechild(q, n, 1));
-    default:
-      return 0;
+    default: return 0;
   }
 }
 
@@ -723,8 +1642,7 @@ static int sqlite_bool_ok(lua_State *L, const lus_Query *q,
     case LUS_QN_OR:
       return sqlite_bool_ok(L, q, lus_qnodechild(q, n, 0)) &&
              sqlite_bool_ok(L, q, lus_qnodechild(q, n, 1));
-    default:
-      return 0;
+    default: return 0;
   }
 }
 
@@ -756,7 +1674,7 @@ static void gen_expr(lua_State *L, luaL_Buffer *b, const lus_Query *q,
                      const lus_QueryNode *n, SqliteGen *g) {
   switch (lus_qnodekind(n)) {
     case LUS_QN_COLUMN: {
-      size_t len;
+      size_t len = 0;
       const char *s = lus_qnodename(q, n, &len);
       addident(b, s, len);
       break;
@@ -810,8 +1728,7 @@ static void gen_expr(lua_State *L, luaL_Buffer *b, const lus_Query *q,
       gen_expr(L, b, q, lus_qnodechild(q, n, 1), g);
       luaL_addchar(b, ')');
       break;
-    default:
-      luaL_error(L, "unsupported node in a pushed conjunct");
+    default: luaL_error(L, "unsupported node in a pushed conjunct");
   }
 }
 
@@ -827,8 +1744,7 @@ static void sqlite_open(lua_State *L, const lus_Query *q, int srcindex,
   g.nbinds = 0;
   lus_querysource(L, q, srcindex - 1);
   refidx = lua_gettop(L);
-  t = (LSqliteTableRef *)luaL_checkudata(L, refidx,
-                                         SQLITE_TABLEREF_METATABLE);
+  t = (LSqliteTableRef *)luaL_checkudata(L, refidx, SQLITE_TABLEREF_METATABLE);
   if (t->db->db == NULL)
     luaL_error(L, "attempt to use a closed database");
   lua_getiuservalue(L, refidx, 1); /* the db userdata, for anchoring */
@@ -861,8 +1777,7 @@ static void sqlite_open(lua_State *L, const lus_Query *q, int srcindex,
   lua_settop(L, refidx);
 }
 
-static const lus_QueryProvider sqlite_provider = {sqlite_accepts,
-                                                  sqlite_open};
+static const lus_QueryProvider sqlite_provider = {sqlite_accepts, sqlite_open};
 
 static int tableref_tostring(lua_State *L) {
   luaL_checkudata(L, 1, SQLITE_TABLEREF_METATABLE);
@@ -932,9 +1847,8 @@ static const luaL_Reg stmt_metameth[] = {{"__gc", stmt_gc},
                                          {"__tostring", stmt_tostring},
                                          {NULL, NULL}};
 
-static const luaL_Reg cursor_metameth[] = {{"__gc", cursor_close},
-                                           {"__close", cursor_close},
-                                           {NULL, NULL}};
+static const luaL_Reg cursor_metameth[] = {
+    {"__gc", cursor_close}, {"__close", cursor_close}, {NULL, NULL}};
 
 static void make_meta(lua_State *L, const char *name, const luaL_Reg *methods,
                       const luaL_Reg *meta) {

@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "lua.h"
+#include "lauxlib.h"
 
 #include "larena.h"
 #include "last.h"
@@ -230,6 +231,8 @@ static void nodetotable(lua_State *L, LusAstNode *node) {
     lua_pushnil(L);
     return;
   }
+
+  luaL_checkstack(L, LUA_MINSTACK, "AST nesting too deep");
 
   lua_newtable(L);
 
@@ -715,17 +718,8 @@ static int emit_node(FILE *f, LusAstNode *node) {
   return myid;
 }
 
-/*
-** Convert AST to Graphviz DOT format
-*/
-int lusA_tographviz(LusAst *ast, const char *filename) {
-  FILE *f;
-
-  if (ast == NULL || ast->root == NULL || filename == NULL)
-    return 0;
-
-  f = fopen(filename, "w");
-  if (f == NULL)
+int lusA_tographvizfile(LusAst *ast, FILE *f) {
+  if (ast == NULL || ast->root == NULL || f == NULL)
     return 0;
 
   graphviz_nodeid = 0;
@@ -737,9 +731,27 @@ int lusA_tographviz(LusAst *ast, const char *filename) {
   emit_node(f, ast->root);
 
   fprintf(f, "}\n");
-  fclose(f);
 
-  return 1;
+  return ferror(f) == 0;
+}
+
+/*
+** Convert AST to Graphviz DOT format
+*/
+int lusA_tographviz(LusAst *ast, const char *filename) {
+  FILE *f;
+  int ok;
+
+  if (ast == NULL || ast->root == NULL || filename == NULL)
+    return 0;
+  f = fopen(filename, "w");
+  if (f == NULL)
+    return 0;
+  ok = lusA_tographvizfile(ast, f);
+  if (fclose(f) != 0)
+    ok = 0;
+
+  return ok;
 }
 
 /*
@@ -1074,24 +1086,33 @@ static void emit_json_node(FILE *f, LusAstNode *node, int indent) {
   fprintf(f, "\n%*s}", indent, "");
 }
 
+int lusA_tojsonfile(LusAst *ast, FILE *f) {
+  if (ast == NULL || ast->root == NULL || f == NULL)
+    return 0;
+
+  emit_json_node(f, ast->root, 0);
+  fprintf(f, "\n");
+
+  return ferror(f) == 0;
+}
+
 /*
 ** Convert AST to JSON format
 */
 int lusA_tojson(LusAst *ast, const char *filename) {
   FILE *f;
+  int ok;
 
   if (ast == NULL || ast->root == NULL || filename == NULL)
     return 0;
-
   f = fopen(filename, "w");
   if (f == NULL)
     return 0;
+  ok = lusA_tojsonfile(ast, f);
+  if (fclose(f) != 0)
+    ok = 0;
 
-  emit_json_node(f, ast->root, 0);
-  fprintf(f, "\n");
-  fclose(f);
-
-  return 1;
+  return ok;
 }
 
 /*

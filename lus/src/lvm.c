@@ -1636,6 +1636,9 @@ catchErrorRecovery(lua_State *L, CallInfo **pci, LClosure **pcl, TValue **pk,
   /* Undo any C-call-count increments leaked by frames the error unwound past
   ** (mirrors what CPROTECT restores on the C-level catch path). */
   L->nCcalls = cinfo->savednCcalls;
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls = cinfo->savednHeavyCcalls;
+#endif
 
   /* Close any to-be-closed variables opened during the catch body (e.g. a
   ** <close> local, or a grown luaL_Buffer's box registered with
@@ -2607,6 +2610,9 @@ returning: /* trap already set */
         ** so without this restore the count leaks and eventually trips a
         ** spurious "C stack overflow" for the lifetime of the thread. */
         catchinfo->savednCcalls = L->nCcalls;
+#if LUAI_TRACKHEAVYCALLS
+        catchinfo->savednHeavyCcalls = L->nHeavyCcalls;
+#endif
 
         /* Copy the handler (if any) into the node; the source is on the stack
         ** (a GC root) during the copy, and the node is GC-marked once linked. */

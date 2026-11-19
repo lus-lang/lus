@@ -7,6 +7,8 @@
 #ifndef last_h
 #define last_h
 
+#include <stdio.h>
+
 #include "larena.h"
 #include "lobject.h"
 #include "lua.h"
@@ -369,6 +371,7 @@ LUAI_FUNC void lusA_totable(lua_State *L, LusAst *ast);
 
 /* Convert AST to Graphviz DOT format */
 LUAI_FUNC int lusA_tographviz(LusAst *ast, const char *filename);
+LUAI_FUNC int lusA_tographvizfile(LusAst *ast, FILE *file);
 
 /* Add a comment to the AST */
 LUAI_FUNC void lusA_addcomment(LusAst *ast, int line, int column, int endline,
@@ -380,6 +383,7 @@ LUAI_FUNC void lusA_adderror(LusAst *ast, int line, int column,
 
 /* Convert AST to JSON format */
 LUAI_FUNC int lusA_tojson(LusAst *ast, const char *filename);
+LUAI_FUNC int lusA_tojsonfile(LusAst *ast, FILE *file);
 
 /* Get string name for node type */
 LUAI_FUNC const char *lusA_typename(LusAstType type);

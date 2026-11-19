@@ -200,6 +200,14 @@ LUAI_FUNC PledgeStore *luaP_copypledges(lua_State *L, PledgeStore *parent);
 /* Seal the state's pledge store (no further permission changes). */
 LUAI_FUNC void luaP_sealpledges(lua_State *L);
 
+/* Non-raising filesystem check for foreign-library callbacks. */
+LUAI_FUNC int luaP_hasfsperm(lua_State *L, const char *perm,
+                             const char *path);
+
+/* Check a canonical path without performing another pathname lookup. */
+LUAI_FUNC int luaP_hasfscanonical(lua_State *L, const char *perm,
+                                  const char *canonical);
+
 /* Free pledges when thread is closed */
 LUAI_FUNC void luaP_freepledges(lua_State *L, PledgeStore *store);
 

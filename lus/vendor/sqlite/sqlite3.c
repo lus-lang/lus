@@ -1,6 +1,6 @@
 /******************************************************************************
 ** This file is an amalgamation of many separate C source files from SQLite
-** version 3.53.3.  By combining all the individual C code files into this
+** version 3.53.4.  By combining all the individual C code files into this
 ** single large file, the entire code can be compiled as a single translation
 ** unit.  This allows many compilers to do optimizations that would not be
 ** possible if the files were compiled separately.  Performance improvements
@@ -18,7 +18,7 @@
 ** separate file. This file contains only code for the core SQLite library.
 **
 ** The content in this amalgamation comes from Fossil check-in
-** d4c0e51e4aeb96955b99185ab9cde75c339e with changes in files:
+** bf7c7f30031888f4e796e429ab3978879485 with changes in files:
 **
 **    
 */
@@ -467,12 +467,12 @@ extern "C" {
 ** [sqlite3_libversion_number()], [sqlite3_sourceid()],
 ** [sqlite_version()] and [sqlite_source_id()].
 */
-#define SQLITE_VERSION        "3.53.3"
-#define SQLITE_VERSION_NUMBER 3053003
-#define SQLITE_SOURCE_ID      "2026-06-26 20:14:12 d4c0e51e4aeb96955b99185ab9cde75c339e2c29c3f3f12428d364a10d782c62"
+#define SQLITE_VERSION        "3.53.4"
+#define SQLITE_VERSION_NUMBER 3053004
+#define SQLITE_SOURCE_ID      "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc"
 #define SQLITE_SCM_BRANCH     "branch-3.53"
-#define SQLITE_SCM_TAGS       "release version-3.53.3"
-#define SQLITE_SCM_DATETIME   "2026-06-26T20:14:12.354Z"
+#define SQLITE_SCM_TAGS       "release version-3.53.4"
+#define SQLITE_SCM_DATETIME   "2026-07-24T19:02:57.525Z"
 
 /*
 ** CAPI3REF: Run-Time Library Version Numbers
@@ -1602,6 +1602,21 @@ struct sqlite3_io_methods {
 #define SQLITE_FCNTL_EXTERNAL_READER        40
 #define SQLITE_FCNTL_CKSM_FILE              41
 #define SQLITE_FCNTL_RESET_CACHE            42
+
+/* Lus-private file control. The Lus pledge VFS uses this to transfer an
+** already-authorized SHM object to the native SQLite VFS. This value is
+** outside SQLite's public opcode range and is not part of the Lus SDK. */
+#define SQLITE_FCNTL_LUS_BOUND_SHM       0x4c530001
+
+typedef struct sqlite3_lus_bound_shm sqlite3_lus_bound_shm;
+typedef int (*sqlite3_lus_delete_file)(sqlite3_int64, sqlite3_int64,
+                                       const char*);
+struct sqlite3_lus_bound_shm {
+  sqlite3_int64 file_handle;
+  sqlite3_int64 parent_handle;
+  sqlite3_lus_delete_file delete_file;
+  int readonly;
+};
 #define SQLITE_FCNTL_NULL_IO                43
 #define SQLITE_FCNTL_BLOCK_ON_CONNECT       44
 #define SQLITE_FCNTL_FILESTAT               45
@@ -27591,7 +27606,7 @@ SQLITE_PRIVATE int sqlite3OsCurrentTimeInt64(sqlite3_vfs *pVfs, sqlite3_int64 *p
   }else{
     double r;
     rc = pVfs->xCurrentTime(pVfs, &r);
-    *pTimeOut = (sqlite3_int64)(r*86400000.0);
+    *pTimeOut = sqlite3RealToI64(r*86400000.0);
   }
   return rc;
 }
@@ -40463,6 +40478,12 @@ struct unixFile {
   UnixUnusedFd *pPreallocatedUnused;  /* Pre-allocated UnixUnusedFd */
   const char *zPath;                  /* Name of the file */
   unixShm *pShm;                      /* Shared memory segment information */
+  int lusBound;                       /* Object came from the Lus pledge VFS */
+  int lusDirFd;                       /* Bound parent used for directory sync */
+  int lusShmFd;                       /* Pending bound SHM object */
+  int lusShmDirFd;                    /* Pending bound SHM parent */
+  sqlite3_lus_delete_file lusShmDelete; /* Exact SHM deletion callback */
+  int lusShmReadonly;                 /* Pending SHM descriptor is read-only */
   int szChunk;                        /* Configured by FCNTL_CHUNK_SIZE */
 #if SQLITE_MAX_MMAP_SIZE>0
   int nFetchOut;                      /* Number of outstanding xFetch refs */
@@ -41818,6 +41839,7 @@ static int findInodeInfo(
 ** Return TRUE if pFile has been renamed or unlinked since it was first opened.
 */
 static int fileHasMoved(unixFile *pFile){
+  if( pFile->lusBound ) return 0;
 #if OS_VXWORKS
   return pFile->pInode!=0 && pFile->pId!=pFile->pInode->fileId.pId;
 #else
@@ -42508,6 +42530,18 @@ static int closeUnixFile(sqlite3_file *id){
   if( pFile->h>=0 ){
     robust_close(pFile, pFile->h, __LINE__);
     pFile->h = -1;
+  }
+  if( pFile->lusDirFd>=0 ){
+    robust_close(pFile, pFile->lusDirFd, __LINE__);
+    pFile->lusDirFd = -1;
+  }
+  if( pFile->lusShmFd>=0 ){
+    robust_close(pFile, pFile->lusShmFd, __LINE__);
+    pFile->lusShmFd = -1;
+  }
+  if( pFile->lusShmDirFd>=0 ){
+    robust_close(pFile, pFile->lusShmDirFd, __LINE__);
+    pFile->lusShmDirFd = -1;
   }
 #if OS_VXWORKS
   if( pFile->pId ){
@@ -44139,7 +44173,13 @@ static int unixSync(sqlite3_file *id, int flags){
     int dirfd;
     OSTRACE(("DIRSYNC %s (have_fullfsync=%d fullsync=%d)\n", pFile->zPath,
             HAVE_FULLFSYNC, isFullsync));
-    rc = osOpenDirectory(pFile->zPath, &dirfd);
+    if( pFile->lusDirFd>=0 ){
+      dirfd = pFile->lusDirFd;
+      pFile->lusDirFd = -1;
+      rc = SQLITE_OK;
+    }else{
+      rc = osOpenDirectory(pFile->zPath, &dirfd);
+    }
     if( rc==SQLITE_OK ){
       full_fsync(dirfd, 0, 0);
       robust_close(pFile, dirfd, __LINE__);
@@ -44338,6 +44378,31 @@ static int unixGetTempname(int nBuf, char *zBuf);
 static int unixFileControl(sqlite3_file *id, int op, void *pArg){
   unixFile *pFile = (unixFile*)id;
   switch( op ){
+#ifndef SQLITE_OMIT_WAL
+    case SQLITE_FCNTL_LUS_BOUND_SHM: {
+      sqlite3_lus_bound_shm *pBound = (sqlite3_lus_bound_shm*)pArg;
+      int fd;
+      int dirfd;
+      if( pFile->pShm!=0 || pFile->lusShmFd>=0 ||
+          pBound==0 || pBound->file_handle<0 || pBound->parent_handle<0 ||
+          pBound->file_handle>0x7fffffff ||
+          pBound->parent_handle>0x7fffffff ){
+        return SQLITE_MISUSE;
+      }
+      fd = fcntl((int)pBound->file_handle, F_DUPFD_CLOEXEC, 0);
+      if( fd<0 ) return SQLITE_CANTOPEN;
+      dirfd = fcntl((int)pBound->parent_handle, F_DUPFD_CLOEXEC, 0);
+      if( dirfd<0 ){
+        osClose(fd);
+        return SQLITE_CANTOPEN;
+      }
+      pFile->lusShmFd = fd;
+      pFile->lusShmDirFd = dirfd;
+      pFile->lusShmDelete = pBound->delete_file;
+      pFile->lusShmReadonly = pBound->readonly!=0;
+      return SQLITE_OK;
+    }
+#endif
 #if defined(__linux__) && defined(SQLITE_ENABLE_BATCH_ATOMIC_WRITE)
     case SQLITE_FCNTL_BEGIN_ATOMIC_WRITE: {
       int rc = osIoctl(pFile->h, F2FS_IOC_START_ATOMIC_WRITE);
@@ -44755,8 +44820,11 @@ struct unixShmNode {
   sqlite3_mutex *pShmMutex;  /* Mutex to access this object */
   char *zFilename;           /* Name of the mmapped file */
   int hShm;                  /* Open file descriptor */
+  int lusDirFd;              /* Bound parent for exact SHM deletion */
+  sqlite3_lus_delete_file lusDelete; /* Exact bound deletion callback */
   int szRegion;              /* Size of shared-memory regions */
   u16 nRegion;               /* Size of array apRegion */
+  u8 lusBound;               /* SHM object was bound by the Lus pledge VFS */
   u8 isReadonly;             /* True if read-only */
   u8 isUnlocked;             /* True if no DMS lock held */
   char **apRegion;           /* Array of mapped shared-memory regions */
@@ -44788,6 +44856,7 @@ struct unixShm {
   unixShmNode *pShmNode;     /* The underlying unixShmNode object */
   unixShm *pNext;            /* Next unixShm with the same unixShmNode */
   u8 hasMutex;               /* True if holding the unixShmNode->pShmMutex */
+  u8 lusReadonly;            /* Lus bound connection has read-only authority */
   u8 id;                     /* Id of this connection within its unixShmNode */
   u16 sharedMask;            /* Mask of shared locks held */
   u16 exclMask;              /* Mask of exclusive locks held */
@@ -45030,6 +45099,10 @@ static void unixShmPurge(unixFile *pFd){
       robust_close(pFd, p->hShm, __LINE__);
       p->hShm = -1;
     }
+    if( p->lusDirFd>=0 ){
+      robust_close(pFd, p->lusDirFd, __LINE__);
+      p->lusDirFd = -1;
+    }
     p->pInode->pShmNode = 0;
     sqlite3_free(p);
   }
@@ -45193,6 +45266,7 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
       goto shm_open_err;
     }
     memset(pShmNode, 0, sizeof(*pShmNode)+nShmFilename);
+    pShmNode->lusDirFd = -1;
     zShm = pShmNode->zFilename = (char*)&pShmNode[1];
 #ifdef SQLITE_SHM_DIRECTORY
     sqlite3_snprintf(nShmFilename, zShm,
@@ -45226,7 +45300,16 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
     }
 
     if( pInode->bProcessLock==0 ){
-      if( 0==sqlite3_uri_boolean(pDbFd->zPath, "readonly_shm", 0) ){
+      if( pDbFd->lusShmFd>=0 ){
+        pShmNode->hShm = pDbFd->lusShmFd;
+        pDbFd->lusShmFd = -1;
+        pShmNode->lusDirFd = pDbFd->lusShmDirFd;
+        pDbFd->lusShmDirFd = -1;
+        pShmNode->lusDelete = pDbFd->lusShmDelete;
+        pDbFd->lusShmDelete = 0;
+        pShmNode->lusBound = 1;
+        pShmNode->isReadonly = pDbFd->lusShmReadonly!=0;
+      }else if( 0==sqlite3_uri_boolean(pDbFd->zPath, "readonly_shm", 0) ){
         pShmNode->hShm = robust_open(zShm, O_RDWR|O_CREAT|O_NOFOLLOW,
                                      (sStat.st_mode&0777));
       }
@@ -45240,19 +45323,46 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
         pShmNode->isReadonly = 1;
       }
 
-      /* If this process is running as root, make sure that the SHM file
-      ** is owned by the same user that owns the original database.  Otherwise,
-      ** the original owner will not be able to connect.
+      /* If this process is running as root, make sure that a writable SHM
+      ** file is owned by the same user that owns the original database.
       */
-      robustFchown(pShmNode->hShm, sStat.st_uid, sStat.st_gid);
+      if( !pShmNode->isReadonly ){
+        robustFchown(pShmNode->hShm, sStat.st_uid, sStat.st_gid);
+      }
 
       rc = unixLockSharedMemory(pDbFd, pShmNode);
       if( rc!=SQLITE_OK && rc!=SQLITE_READONLY_CANTINIT ) goto shm_open_err;
     }
+  }else if( pDbFd->lusShmFd>=0 ){
+    struct stat a;
+    struct stat b;
+    if( pShmNode->hShm<0 || osFstat(pShmNode->hShm, &a)!=0 ||
+        osFstat(pDbFd->lusShmFd, &b)!=0 || a.st_dev!=b.st_dev ||
+        a.st_ino!=b.st_ino ){
+      rc = SQLITE_CANTOPEN_BKPT;
+      goto shm_open_err;
+    }
+    pShmNode->lusBound = 1;
+    if( pShmNode->lusDirFd<0 ){
+      pShmNode->lusDirFd = pDbFd->lusShmDirFd;
+      pDbFd->lusShmDirFd = -1;
+      pShmNode->lusDelete = pDbFd->lusShmDelete;
+      pDbFd->lusShmDelete = 0;
+    }
+  }
+
+  if( pDbFd->lusShmFd>=0 ){
+    robust_close(pDbFd, pDbFd->lusShmFd, __LINE__);
+    pDbFd->lusShmFd = -1;
+  }
+  if( pDbFd->lusShmDirFd>=0 ){
+    robust_close(pDbFd, pDbFd->lusShmDirFd, __LINE__);
+    pDbFd->lusShmDirFd = -1;
   }
 
   /* Make the new connection a child of the unixShmNode */
   p->pShmNode = pShmNode;
+  p->lusReadonly = pDbFd->lusShmReadonly!=0;
 #ifdef SQLITE_DEBUG
   p->id = pShmNode->nextShmId++;
 #endif
@@ -45275,6 +45385,14 @@ static int unixOpenSharedMemory(unixFile *pDbFd){
 
   /* Jump here on any error */
 shm_open_err:
+  if( pDbFd->lusShmFd>=0 ){
+    robust_close(pDbFd, pDbFd->lusShmFd, __LINE__);
+    pDbFd->lusShmFd = -1;
+  }
+  if( pDbFd->lusShmDirFd>=0 ){
+    robust_close(pDbFd, pDbFd->lusShmDirFd, __LINE__);
+    pDbFd->lusShmDirFd = -1;
+  }
   unixShmPurge(pDbFd);       /* This call frees pShmNode if required */
   sqlite3_free(p);
   unixLeaveMutex();
@@ -45324,6 +45442,10 @@ static int unixShmMap(
   pShmNode = p->pShmNode;
   sqlite3_mutex_enter(pShmNode->pShmMutex);
   if( pShmNode->isUnlocked ){
+    if( p->lusReadonly ){
+      rc = SQLITE_READONLY_CANTINIT;
+      goto shmpage_out;
+    }
     rc = unixLockSharedMemory(pDbFd, pShmNode);
     if( rc!=SQLITE_OK ) goto shmpage_out;
     pShmNode->isUnlocked = 0;
@@ -45332,6 +45454,11 @@ static int unixShmMap(
   assert( pShmNode->pInode==pDbFd->pInode );
   assert( pShmNode->hShm>=0 || pDbFd->pInode->bProcessLock==1 );
   assert( pShmNode->hShm<0 || pDbFd->pInode->bProcessLock==0 );
+
+  if( p->lusReadonly && bExtend ){
+    rc = SQLITE_READONLY;
+    goto shmpage_out;
+  }
 
   /* Minimum number of regions required to be mapped. */
   nReqRegion = ((iRegion+nShmPerMap) / nShmPerMap) * nShmPerMap;
@@ -45430,7 +45557,9 @@ shmpage_out:
   }else{
     *pp = 0;
   }
-  if( pShmNode->isReadonly && rc==SQLITE_OK ) rc = SQLITE_READONLY;
+  if( (p->lusReadonly || pShmNode->isReadonly) && rc==SQLITE_OK ){
+    rc = SQLITE_READONLY;
+  }
   sqlite3_mutex_leave(pShmNode->pShmMutex);
   return rc;
 }
@@ -45545,6 +45674,10 @@ static int unixShmLock(
   assert( flags!=(SQLITE_SHM_EXCLUSIVE|SQLITE_SHM_LOCK)
        || 0==(p->exclMask & mask)
   );
+  if( p->lusReadonly &&
+      flags==(SQLITE_SHM_EXCLUSIVE|SQLITE_SHM_LOCK) ){
+    return SQLITE_READONLY;
+  }
   if( ((flags & SQLITE_SHM_UNLOCK) && ((p->exclMask|p->sharedMask) & mask))
    || (flags==(SQLITE_SHM_SHARED|SQLITE_SHM_LOCK) && 0==(p->sharedMask & mask))
    || (flags==(SQLITE_SHM_EXCLUSIVE|SQLITE_SHM_LOCK))
@@ -45733,7 +45866,19 @@ static int unixShmUnmap(
   pShmNode->nRef--;
   if( pShmNode->nRef==0 ){
     if( deleteFlag && pShmNode->hShm>=0 ){
-      osUnlink(pShmNode->zFilename);
+      if( pShmNode->lusBound ){
+        const char *zLeaf = strrchr(pShmNode->zFilename, '/');
+        if( pShmNode->lusDirFd>=0 && zLeaf!=0 &&
+            pShmNode->lusDelete!=0 ){
+          /* SQLite treats SHM removal as best-effort during close. The Lus
+          ** callback skips an unverified replacement and reports failure,
+          ** but that does not turn a successful database close into an I/O
+          ** error. */
+          pShmNode->lusDelete(pShmNode->hShm, pShmNode->lusDirFd, zLeaf+1);
+        }
+      }else{
+        osUnlink(pShmNode->zFilename);
+      }
     }
     unixShmPurge(pDbFd);
   }
@@ -46774,6 +46919,13 @@ static int unixOpen(
   */
   char zTmpname[MAX_PATHNAME+2];
   const char *zName = zPath;
+  sqlite3_int64 lusBoundFd = zName
+      ? sqlite3_uri_int64(zName, "lus_bound_fd", -1) : -1;
+  sqlite3_int64 lusBoundDirFd = zName
+      ? sqlite3_uri_int64(zName, "lus_bound_dirfd", -1) : -1;
+  int lusBound = lusBoundFd>=0 && lusBoundFd<=0x7fffffff;
+  int lusDeleteUnlinked = zName
+      ? sqlite3_uri_boolean(zName, "lus_delete_unlinked", 0) : 0;
 
   /* Check the following statements are true:
   **
@@ -46817,6 +46969,11 @@ static int unixOpen(
     sqlite3_randomness(0,0);
   }
   memset(p, 0, sizeof(unixFile));
+  p->h = -1;
+  p->lusBound = lusBound;
+  p->lusDirFd = -1;
+  p->lusShmFd = -1;
+  p->lusShmDirFd = -1;
 
 #ifdef SQLITE_ASSERT_NO_FILES
   /* Applications that never read or write a persistent disk files */
@@ -46825,7 +46982,7 @@ static int unixOpen(
 
   if( eType==SQLITE_OPEN_MAIN_DB ){
     UnixUnusedFd *pUnused;
-    pUnused = findReusableFd(zName, flags);
+    pUnused = lusBound ? 0 : findReusableFd(zName, flags);
     if( pUnused ){
       fd = pUnused->fd;
     }else{
@@ -46865,7 +47022,14 @@ static int unixOpen(
   if( isExclusive ) openFlags |= (O_EXCL|O_NOFOLLOW);
   openFlags |= (O_LARGEFILE|O_BINARY|O_NOFOLLOW);
 
-  if( fd<0 ){
+  if( fd<0 && lusBound ){
+    fd = fcntl((int)lusBoundFd, F_DUPFD_CLOEXEC, 0);
+    if( fd<0 ){
+      rc = unixLogError(SQLITE_CANTOPEN_BKPT, "dup", zName);
+      goto open_finished;
+    }
+    OSTRACE(("OPENB   %-3d %s 0%o\n", fd, zName, openFlags));
+  }else if( fd<0 ){
     mode_t openMode;              /* Permissions to create file with */
     uid_t uid;                    /* Userid for the file */
     gid_t gid;                    /* Groupid for the file */
@@ -46934,16 +47098,21 @@ static int unixOpen(
   }
 
   if( isDelete ){
+    if( lusDeleteUnlinked ){
+      /* The pledge VFS already unlinked the retained parent and leaf. */
+    }
 #if OS_VXWORKS
-    zPath = zName;
+    else zPath = zName;
 #elif defined(SQLITE_UNLINK_AFTER_CLOSE)
-    zPath = sqlite3_mprintf("%s", zName);
-    if( zPath==0 ){
-      robust_close(p, fd, __LINE__);
-      return SQLITE_NOMEM_BKPT;
+    else{
+      zPath = sqlite3_mprintf("%s", zName);
+      if( zPath==0 ){
+        robust_close(p, fd, __LINE__);
+        return SQLITE_NOMEM_BKPT;
+      }
     }
 #else
-    osUnlink(zName);
+    else osUnlink(zName);
 #endif
   }
 #if SQLITE_ENABLE_LOCKING_STYLE
@@ -46967,7 +47136,7 @@ static int unixOpen(
 #endif
 
   /* Set up appropriate ctrlFlags */
-  if( isDelete )                ctrlFlags |= UNIXFILE_DELETE;
+  if( isDelete && !lusDeleteUnlinked ) ctrlFlags |= UNIXFILE_DELETE;
   if( isReadonly )              ctrlFlags |= UNIXFILE_RDONLY;
   noLock = eType!=SQLITE_OPEN_MAIN_DB;
   if( noLock )                  ctrlFlags |= UNIXFILE_NOLOCK;
@@ -47013,10 +47182,22 @@ static int unixOpen(
        || eType==SQLITE_OPEN_MAIN_JOURNAL
        || eType==SQLITE_OPEN_TEMP_JOURNAL
   );
+  if( lusBound && lusBoundDirFd>=0 && lusBoundDirFd<=0x7fffffff ){
+    p->lusDirFd = fcntl((int)lusBoundDirFd, F_DUPFD_CLOEXEC, 0);
+    if( p->lusDirFd<0 ){
+      robust_close(p, fd, __LINE__);
+      rc = unixLogError(SQLITE_CANTOPEN_BKPT, "dup", zName);
+      goto open_finished;
+    }
+  }
   rc = fillInUnixFile(pVfs, fd, pFile, zPath, ctrlFlags);
 
 open_finished:
   if( rc!=SQLITE_OK ){
+    if( p->lusDirFd>=0 ){
+      robust_close(p, p->lusDirFd, __LINE__);
+      p->lusDirFd = -1;
+    }
     sqlite3_free(p->pPreallocatedUnused);
   }
   return rc;
@@ -49051,6 +49232,8 @@ struct winFile {
   winShm *pShm;           /* Instance of shared memory on this file */
 #endif
   const char *zPath;      /* Full pathname of this file */
+  HANDLE lusShmHandle;    /* Pending bound SHM object */
+  int lusShmReadonly;     /* Pending SHM handle is read-only */
   int szChunk;            /* Chunk size configured by FCNTL_CHUNK_SIZE */
 #if SQLITE_OS_WINCE
   LPWSTR zDeleteOnClose;  /* Name of file to delete when closing */
@@ -51513,6 +51696,12 @@ static int winClose(sqlite3_file *id){
   winUnmapfile(pFile);
 #endif
 
+  if( pFile->lusShmHandle!=NULL &&
+      pFile->lusShmHandle!=INVALID_HANDLE_VALUE ){
+    osCloseHandle(pFile->lusShmHandle);
+    pFile->lusShmHandle = INVALID_HANDLE_VALUE;
+  }
+
   do{
     rc = osCloseHandle(pFile->h);
     /* SimulateIOError( rc=0; cnt=MX_CLOSE_ATTEMPT; ); */
@@ -52400,6 +52589,27 @@ static int winFileControl(sqlite3_file *id, int op, void *pArg){
   winFile *pFile = (winFile*)id;
   OSTRACE(("FCNTL file=%p, op=%d, pArg=%p\n", pFile->h, op, pArg));
   switch( op ){
+#ifndef SQLITE_OMIT_WAL
+    case SQLITE_FCNTL_LUS_BOUND_SHM: {
+      sqlite3_lus_bound_shm *pBound = (sqlite3_lus_bound_shm*)pArg;
+      HANDLE source;
+      HANDLE duplicate = INVALID_HANDLE_VALUE;
+      if( pFile->pShm!=0 ||
+          (pFile->lusShmHandle!=NULL &&
+           pFile->lusShmHandle!=INVALID_HANDLE_VALUE) || pBound==0 ||
+          pBound->file_handle==0 || pBound->file_handle==-1 ){
+        return SQLITE_MISUSE;
+      }
+      source = (HANDLE)(INT_PTR)pBound->file_handle;
+      if( !DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                           &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) ){
+        return SQLITE_CANTOPEN;
+      }
+      pFile->lusShmHandle = duplicate;
+      pFile->lusShmReadonly = pBound->readonly!=0;
+      return SQLITE_OK;
+    }
+#endif
     case SQLITE_FCNTL_LOCKSTATE: {
       *(int*)pArg = pFile->locktype;
       OSTRACE(("FCNTL file=%p, rc=SQLITE_OK\n", pFile->h));
@@ -52763,6 +52973,8 @@ struct winShmNode {
   sqlite3_mutex *mutex;      /* Mutex to access this object */
   char *zFilename;           /* Name of the file */
   HANDLE hSharedShm;         /* File handle open on zFilename */
+  HANDLE lusDeleteHandle;    /* Bound handle used for exact deletion */
+  int lusBound;              /* hSharedShm came from the Lus pledge VFS */
   int bUseSharedLockHandle;  /* True to use hSharedShm for everything */
 
   int isUnlocked;            /* DMS lock has not yet been obtained */
@@ -52790,6 +53002,16 @@ struct winShmNode {
 ** The winShmMutexHeld() must be true while reading or writing this list.
 */
 static winShmNode *winShmNodeList = 0;
+
+static int winLusSameHandle(HANDLE a, HANDLE b){
+  BY_HANDLE_FILE_INFORMATION ai;
+  BY_HANDLE_FILE_INFORMATION bi;
+  return GetFileInformationByHandle(a, &ai) &&
+         GetFileInformationByHandle(b, &bi) &&
+         ai.dwVolumeSerialNumber==bi.dwVolumeSerialNumber &&
+         ai.nFileIndexHigh==bi.nFileIndexHigh &&
+         ai.nFileIndexLow==bi.nFileIndexLow;
+}
 
 /*
 ** Structure used internally by this VFS to record the state of an
@@ -52847,11 +53069,20 @@ static void winShmPurge(sqlite3_vfs *pVfs, int deleteFlag){
       }
       winHandleClose(p->hSharedShm);
       if( deleteFlag ){
-        SimulateIOErrorBenign(1);
-        sqlite3BeginBenignMalloc();
-        winDelete(pVfs, p->zFilename, 0);
-        sqlite3EndBenignMalloc();
-        SimulateIOErrorBenign(0);
+        if( p->lusDeleteHandle!=INVALID_HANDLE_VALUE ){
+          FILE_DISPOSITION_INFO disposition = { TRUE };
+          SetFileInformationByHandle(p->lusDeleteHandle, FileDispositionInfo,
+                                     &disposition, sizeof(disposition));
+        }else if( !p->lusBound ){
+          SimulateIOErrorBenign(1);
+          sqlite3BeginBenignMalloc();
+          winDelete(pVfs, p->zFilename, 0);
+          sqlite3EndBenignMalloc();
+          SimulateIOErrorBenign(0);
+        }
+      }
+      if( p->lusDeleteHandle!=INVALID_HANDLE_VALUE ){
+        osCloseHandle(p->lusDeleteHandle);
       }
       *pp = p->pNext;
       sqlite3_free(p->aRegion);
@@ -53055,6 +53286,105 @@ static int winIsUNCPath(const char *zFile){
 }
 
 /*
+** Return true if zName is an ordinary absolute drive path.  This helper is
+** intentionally narrower than the general Windows path parser.  It is used
+** only to recognize the exact alias produced when the Lus VFS retains an
+** object using its extended path name while SQLite opens the same object
+** using an ordinary path name.
+*/
+static int winLusIsDrivePath(const char *zName){
+  return sqlite3Isalpha(zName[0]) && zName[1]==':' && zName[2]=='\\';
+}
+
+/*
+** Return true if zName is the tail of a UNC path containing non-empty server
+** and share components.  Device namespaces are excluded by the caller.
+*/
+static int winLusIsUncTail(const char *zName){
+  const char *zSep;
+  if( zName[0]==0 ) return 0;
+  zSep = strchr(zName, '\\');
+  return zSep!=0 && zSep!=zName && zSep[1]!=0 && zSep[1]!='\\';
+}
+
+/*
+** Return true if two SHM filenames identify the same exact Windows path
+** spelling supported by the Lus pledge VFS.  Extended drive paths alias
+** ordinary drive paths, and extended UNC paths alias ordinary UNC paths.
+** Other device, volume, relative, and lookalike names retain SQLite's
+** existing exact case-insensitive comparison.
+*/
+static int winLusShmFilenameEqual(const char *zA, const char *zB){
+  const char *zExtended;
+  const char *zOrdinary;
+  int i;
+
+  if( sqlite3StrICmp(zA, zB)==0 ) return 1;
+  for(i=0; i<2; i++){
+    zExtended = i==0 ? zA : zB;
+    zOrdinary = i==0 ? zB : zA;
+    if( zExtended[0]=='\\' && zExtended[1]=='\\' &&
+        zExtended[2]=='?' && zExtended[3]=='\\' ){
+      if( winLusIsDrivePath(zExtended+4) &&
+          winLusIsDrivePath(zOrdinary) &&
+          sqlite3StrICmp(zExtended+4, zOrdinary)==0 ){
+        return 1;
+      }
+      if( sqlite3StrNICmp(zExtended+4, "UNC", 3)==0 &&
+          zExtended[7]=='\\' &&
+          zOrdinary[0]=='\\' && zOrdinary[1]=='\\' &&
+          zOrdinary[2]!='.' && zOrdinary[2]!='?' &&
+          winLusIsUncTail(zExtended+8) &&
+          winLusIsUncTail(zOrdinary+2) &&
+          sqlite3StrICmp(zExtended+8, zOrdinary+2)==0 ){
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+#ifdef SQLITE_DEBUG
+static void winLusShmFilenameSelftest(void){
+  assert( winLusShmFilenameEqual("C:\\db\\main.db-shm",
+                                 "c:\\DB\\main.db-SHM") );
+  assert( winLusShmFilenameEqual("\\\\?\\C:\\db\\main.db-shm",
+                                 "C:\\db\\main.db-shm") );
+  assert( winLusShmFilenameEqual("c:\\db\\main.db-shm",
+                                 "\\\\?\\C:\\DB\\main.db-SHM") );
+  assert( winLusShmFilenameEqual(
+              "\\\\?\\UNC\\server\\share\\main.db-shm",
+              "\\\\SERVER\\share\\main.db-SHM") );
+  assert( winLusShmFilenameEqual(
+              "\\\\server\\share\\main.db-shm",
+              "\\\\?\\unc\\SERVER\\share\\main.db-SHM") );
+  assert( winLusShmFilenameEqual("\\\\.\\C:\\db\\main.db-shm",
+                                 "\\\\.\\c:\\DB\\main.db-SHM") );
+  assert( !winLusShmFilenameEqual("\\\\.\\C:\\db\\main.db-shm",
+                                  "C:\\db\\main.db-shm") );
+  assert( !winLusShmFilenameEqual(
+              "\\\\?\\Volume{1234}\\db\\main.db-shm",
+              "C:\\db\\main.db-shm") );
+  assert( !winLusShmFilenameEqual("\\\\?\\C:db\\main.db-shm",
+                                  "C:db\\main.db-shm") );
+  assert( !winLusShmFilenameEqual("\\\\?x\\C:\\db\\main.db-shm",
+                                  "C:\\db\\main.db-shm") );
+  assert( !winLusShmFilenameEqual(
+              "\\\\?\\UNCserver\\share\\main.db-shm",
+              "\\\\server\\share\\main.db-shm") );
+  assert( !winLusShmFilenameEqual(
+              "\\\\?\\UNC\\server\\share\\main.db-shm",
+              "\\\\.\\server\\share\\main.db-shm") );
+  assert( !winLusShmFilenameEqual(
+              "\\\\?\\UNC\\server\\\\main.db-shm",
+              "\\\\server\\\\main.db-shm") );
+  assert( !winLusShmFilenameEqual(
+              "\\\\?\\UNC\\\\share\\main.db-shm",
+              "\\\\\\share\\main.db-shm") );
+}
+#endif
+
+/*
 ** Open the shared-memory area associated with database file pDbFd.
 */
 static int winOpenSharedMemory(winFile *pDbFd){
@@ -53070,6 +53400,7 @@ static int winOpenSharedMemory(winFile *pDbFd){
   ** allocate space for a new winShmNode and filename.  */
   p = sqlite3MallocZero( sizeof(*p) );
   if( p==0 ) return SQLITE_IOERR_NOMEM_BKPT;
+  p->hShm = INVALID_HANDLE_VALUE;
   nName = sqlite3Strlen30(pDbFd->zPath);
   pNew = sqlite3MallocZero( sizeof(*pShmNode) + (i64)nName + 17 );
   if( pNew==0 ){
@@ -53078,6 +53409,7 @@ static int winOpenSharedMemory(winFile *pDbFd){
   }
   pNew->zFilename = (char*)&pNew[1];
   pNew->hSharedShm = INVALID_HANDLE_VALUE;
+  pNew->lusDeleteHandle = INVALID_HANDLE_VALUE;
   pNew->isUnlocked = 1;
   pNew->bUseSharedLockHandle = winIsUNCPath(pDbFd->zPath);
   sqlite3_snprintf(nName+15, pNew->zFilename, "%s-shm", pDbFd->zPath);
@@ -53085,11 +53417,14 @@ static int winOpenSharedMemory(winFile *pDbFd){
 
   /* Look to see if there is an existing winShmNode that can be used.
   ** If no matching winShmNode currently exists, then create a new one.  */
+#ifdef SQLITE_DEBUG
+  winLusShmFilenameSelftest();
+#endif
   winShmEnterMutex();
   for(pShmNode = winShmNodeList; pShmNode; pShmNode=pShmNode->pNext){
     /* TBD need to come up with better match here.  Perhaps
     ** use FILE_ID_BOTH_DIR_INFO Structure.  */
-    if( sqlite3StrICmp(pShmNode->zFilename, pNew->zFilename)==0 ) break;
+    if( winLusShmFilenameEqual(pShmNode->zFilename, pNew->zFilename) ) break;
   }
   if( pShmNode==0 ){
     pShmNode = pNew;
@@ -53102,10 +53437,25 @@ static int winOpenSharedMemory(winFile *pDbFd){
 
     /* Open a file-handle to use for mappings, and for the DMS lock. */
     if( rc==SQLITE_OK ){
-      HANDLE h = INVALID_HANDLE_VALUE;
-      pShmNode->isReadonly = sqlite3_uri_boolean(pDbFd->zPath,"readonly_shm",0);
-      rc = winHandleOpen(pNew->zFilename, &pShmNode->isReadonly, &h);
-      pShmNode->hSharedShm = h;
+      if( pDbFd->lusShmHandle!=INVALID_HANDLE_VALUE ){
+        HANDLE source = pDbFd->lusShmHandle;
+        pShmNode->lusBound = 1;
+        pShmNode->isReadonly = pDbFd->lusShmReadonly!=0;
+        if( !DuplicateHandle(GetCurrentProcess(), source,
+                             GetCurrentProcess(), &pShmNode->hSharedShm,
+                             0, FALSE, DUPLICATE_SAME_ACCESS) ){
+          rc = SQLITE_CANTOPEN_BKPT;
+        }else if( !pShmNode->isReadonly ){
+          pShmNode->lusDeleteHandle = source;
+          pDbFd->lusShmHandle = INVALID_HANDLE_VALUE;
+        }
+      }else{
+        HANDLE h = INVALID_HANDLE_VALUE;
+        pShmNode->isReadonly =
+            sqlite3_uri_boolean(pDbFd->zPath,"readonly_shm",0);
+        rc = winHandleOpen(pNew->zFilename, &pShmNode->isReadonly, &h);
+        pShmNode->hSharedShm = h;
+      }
     }
 
     /* If successful, link the new winShmNode into the global list. If an
@@ -53119,6 +53469,26 @@ static int winOpenSharedMemory(winFile *pDbFd){
       if( pShmNode->hSharedShm!=INVALID_HANDLE_VALUE ){
         osCloseHandle(pShmNode->hSharedShm);
       }
+      if( pShmNode->lusDeleteHandle!=INVALID_HANDLE_VALUE ){
+        osCloseHandle(pShmNode->lusDeleteHandle);
+      }
+    }
+  }else if( pDbFd->lusShmHandle!=INVALID_HANDLE_VALUE ){
+    if( !winLusSameHandle(pShmNode->hSharedShm,
+                          pDbFd->lusShmHandle) ){
+      rc = SQLITE_CANTOPEN_BKPT;
+    }
+    if( rc==SQLITE_OK ){
+      pShmNode->lusBound = 1;
+    }
+    if( rc==SQLITE_OK && !pDbFd->lusShmReadonly &&
+        pShmNode->lusDeleteHandle==INVALID_HANDLE_VALUE ){
+      pShmNode->lusDeleteHandle = pDbFd->lusShmHandle;
+      pDbFd->lusShmHandle = INVALID_HANDLE_VALUE;
+    }
+    if( pDbFd->lusShmHandle!=INVALID_HANDLE_VALUE ){
+      osCloseHandle(pDbFd->lusShmHandle);
+      pDbFd->lusShmHandle = INVALID_HANDLE_VALUE;
     }
   }
 
@@ -53127,6 +53497,7 @@ static int winOpenSharedMemory(winFile *pDbFd){
   if( rc==SQLITE_OK ){
     sqlite3_mutex_enter(pShmNode->mutex);
     p->pShmNode = pShmNode;
+    p->bReadonly = pShmNode->isReadonly || pDbFd->lusShmReadonly;
     p->pWinShmNext = pShmNode->pWinShmList;
     pShmNode->pWinShmList = p;
 #if defined(SQLITE_DEBUG) || defined(SQLITE_HAVE_OS_TRACE)
@@ -53146,12 +53517,21 @@ static int winOpenSharedMemory(winFile *pDbFd){
   ** is only used for locking. The mapping of the *-shm file is created using
   ** the shared file handle in winShmNode.hSharedShm.  */
   if( rc==SQLITE_OK && pShmNode->bUseSharedLockHandle==0 ){
-    p->bReadonly = sqlite3_uri_boolean(pDbFd->zPath, "readonly_shm", 0);
-    rc = winHandleOpen(pShmNode->zFilename, &p->bReadonly, &p->hShm);
+    if( !DuplicateHandle(GetCurrentProcess(), pShmNode->hSharedShm,
+                         GetCurrentProcess(), &p->hShm, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS) ){
+      p->hShm = INVALID_HANDLE_VALUE;
+      rc = SQLITE_CANTOPEN_BKPT;
+    }
     if( rc!=SQLITE_OK ){
       assert( p->hShm==INVALID_HANDLE_VALUE );
       winCloseSharedMemory(pDbFd, 0);
     }
+  }
+
+  if( pDbFd->lusShmHandle!=INVALID_HANDLE_VALUE ){
+    osCloseHandle(pDbFd->lusShmHandle);
+    pDbFd->lusShmHandle = INVALID_HANDLE_VALUE;
   }
 
   return rc;
@@ -53230,6 +53610,10 @@ static int winShmLock(
   assert( flags!=(SQLITE_SHM_EXCLUSIVE|SQLITE_SHM_LOCK)
        || 0==(p->exclMask & mask)
   );
+  if( p->bReadonly &&
+      flags==(SQLITE_SHM_EXCLUSIVE|SQLITE_SHM_LOCK) ){
+    return SQLITE_READONLY;
+  }
   if( ((flags & SQLITE_SHM_UNLOCK) && ((p->exclMask|p->sharedMask) & mask))
    || (flags==(SQLITE_SHM_SHARED|SQLITE_SHM_LOCK) && 0==(p->sharedMask & mask))
    || (flags==(SQLITE_SHM_EXCLUSIVE|SQLITE_SHM_LOCK))
@@ -53377,6 +53761,10 @@ static int winShmMap(
 
   sqlite3_mutex_enter(pShmNode->mutex);
   if( pShmNode->isUnlocked ){
+    if( pShm->bReadonly ){
+      rc = SQLITE_READONLY_CANTINIT;
+      goto shmpage_out;
+    }
     /* Take the DMS lock. */
     assert( pShmNode->nRegion==0 );
     rc = winLockSharedMemory(pShmNode, winFileBusyTimeout(pDbFd));
@@ -53384,6 +53772,10 @@ static int winShmMap(
   }
 
   assert( szRegion==pShmNode->szRegion || pShmNode->nRegion==0 );
+  if( pShm->bReadonly && isWrite ){
+    rc = SQLITE_READONLY;
+    goto shmpage_out;
+  }
   if( pShmNode->nRegion<=iRegion ){
     HANDLE hShared = pShmNode->hSharedShm;
     struct ShmRegion *apNew;           /* New aRegion[] array */
@@ -53476,7 +53868,7 @@ shmpage_out:
   }else{
     *pp = 0;
   }
-  if( pShmNode->isReadonly && rc==SQLITE_OK ){
+  if( (pShm->bReadonly || pShmNode->isReadonly) && rc==SQLITE_OK ){
     rc = SQLITE_READONLY;
   }
   sqlite3_mutex_leave(pShmNode->mutex);
@@ -54103,6 +54495,9 @@ static int winOpen(
   winFile *pFile = (winFile*)id;
   void *zConverted;              /* Filename in OS encoding */
   const char *zUtf8Name = zName; /* Filename in UTF-8 encoding */
+  sqlite3_int64 lusBoundHandle = zName
+      ? sqlite3_uri_int64(zName, "lus_bound_handle", -1) : -1;
+  int lusBound = lusBoundHandle!=0 && lusBoundHandle!=-1;
   int cnt = 0;
   int isRO = 0;              /* file is known to be accessible readonly */
 
@@ -54162,6 +54557,7 @@ static int winOpen(
   assert( pFile!=0 );
   memset(pFile, 0, sizeof(winFile));
   pFile->h = INVALID_HANDLE_VALUE;
+  pFile->lusShmHandle = INVALID_HANDLE_VALUE;
 
   /* If the second argument to this function is NULL, generate a
   ** temporary file name to use
@@ -54191,7 +54587,7 @@ static int winOpen(
     return SQLITE_IOERR_NOMEM_BKPT;
   }
 
-  if( winIsDir(zConverted) ){
+  if( !lusBound && winIsDir(zConverted) ){
     sqlite3_free(zConverted);
     sqlite3_free(zTmpname);
     OSTRACE(("OPEN name=%s, rc=SQLITE_CANTOPEN_ISDIR", zUtf8Name));
@@ -54244,7 +54640,14 @@ static int winOpen(
   dwFlagsAndAttributes |= FILE_FLAG_RANDOM_ACCESS;
 #endif
 
-  if( osIsNT() ){
+  if( lusBound ){
+    HANDLE source = (HANDLE)(INT_PTR)lusBoundHandle;
+    if( !DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                         &h, 0, FALSE, DUPLICATE_SAME_ACCESS) ){
+      h = INVALID_HANDLE_VALUE;
+      lastErrno = osGetLastError();
+    }
+  }else if( osIsNT() ){
     do{
       h = osCreateFileW((LPCWSTR)zConverted,
                         dwDesiredAccess,
@@ -60969,7 +61372,7 @@ static int readSuperJournal(sqlite3_file *pJrnl, u64 nSuper, char **pzSuper){
         cksum -= zOut[u];
       }
     }
-    if( rc!=SQLITE_OK || cksum ){
+    if( rc!=SQLITE_OK || cksum || zOut[0]==0 ){
       /* If the checksum doesn't add up, then one or more of the disk sectors
       ** containing the super-journal filename is corrupted. This means
       ** definitely roll back, so just return SQLITE_OK and report a (nul)
@@ -111437,11 +111840,20 @@ static SQLITE_NOINLINE void resolveSetExprSubtypeArg(ExprList *pList){
   nn = pList ? pList->nExpr : 0;
   for(ii=0; ii<nn; ii++){
     Expr *pExpr = pList->a[ii].pExpr;
-    ExprSetProperty(pExpr, EP_SubtArg);
-    if( pExpr->op==TK_SELECT ){
-      assert( ExprUseXSelect(pExpr) );
-      assert( pExpr->x.pSelect!=0 );
-      resolveSetExprSubtypeArg(pExpr->x.pSelect->pEList);
+    while( 1 /*exit-by-break*/ ){
+      ExprSetProperty(pExpr, EP_SubtArg);
+      if( pExpr->op==TK_SELECT ){
+        assert( ExprUseXSelect(pExpr) );
+        assert( pExpr->x.pSelect!=0 );
+        resolveSetExprSubtypeArg(pExpr->x.pSelect->pEList);
+        break;
+      }
+      if( pExpr->op==TK_UPLUS ){
+        pExpr = pExpr->pLeft;
+        assert( pExpr!=0 );
+      }else{
+        break;
+      }
     }
   }
 }
@@ -176954,7 +177366,7 @@ static void nth_valueStepFunc(
         break;
       case SQLITE_FLOAT: {
         double fVal = sqlite3_value_double(apArg[1]);
-        if( ((i64)fVal)!=fVal ) goto error_out;
+        if( sqlite3RealToI64(fVal)!=fVal ) goto error_out;
         iVal = (i64)fVal;
         break;
       }
@@ -210776,8 +211188,8 @@ static int fts3StringAppend(
   ** to grow the buffer until so that it is big enough to accommodate the
   ** appended data.
   */
-  if( pStr->n+nAppend+1>=pStr->nAlloc ){
-    sqlite3_int64 nAlloc = pStr->nAlloc+(sqlite3_int64)nAppend+100;
+  if( (i64)pStr->n+(i64)nAppend+1>=(i64)pStr->nAlloc ){
+    i64 nAlloc = pStr->nAlloc+(i64)nAppend+100;
     char *zNew = sqlite3_realloc64(pStr->z, nAlloc);
     if( !zNew ){
       return SQLITE_NOMEM;
@@ -214981,7 +215393,8 @@ static u32 jsonTranslateBlobToText(
       if( sz==0 ) goto malformed_jsonb;
       if( zIn[0]=='-' ){
         jsonAppendChar(pOut, '-');
-        k++;
+        if( sz<=1 ) goto malformed_jsonb;
+        k = 1;
       }
       if( zIn[k]=='.' ){
         jsonAppendChar(pOut, '0');
@@ -217945,7 +218358,9 @@ static int jsonSkipLabel(JsonEachCursor *p){
   if( p->eType==JSONB_OBJECT ){
     u32 sz = 0;
     u32 n = jsonbPayloadSize(&p->sParse, p->i, &sz);
-    return p->i + n + sz;
+    sz += p->i + n;
+    if( sz >= p->sParse.nBlob ) sz = p->i;
+    return sz;
   }else{
     return p->i;
   }
@@ -226906,8 +227321,8 @@ static int rbuDeltaApply(
   int lenDelta,          /* Length of the delta */
   char *zOut             /* Write the output into this preallocated buffer */
 ){
-  unsigned int limit;
-  unsigned int total = 0;
+  sqlite3_uint64 limit;
+  sqlite3_uint64 total = 0;
 #if RBU_ENABLE_DELTA_CKSUM
   char *zOrigOut = zOut;
 #endif
@@ -226917,8 +227332,8 @@ static int rbuDeltaApply(
     /* ERROR: size integer not terminated by "\n" */
     return -1;
   }
-  zDelta++; lenDelta--;
-  while( *zDelta && lenDelta>0 ){
+  zDelta++; lenDelta--; /* Skip the \n */
+  while( lenDelta>0 && zDelta[0] ){
     unsigned int cnt, ofst;
     cnt = rbuDeltaGetInt(&zDelta, &lenDelta);
     if( lenDelta<=0 ) return -1;
@@ -226926,7 +227341,7 @@ static int rbuDeltaApply(
       case '@': {
         zDelta++; lenDelta--;
         ofst = rbuDeltaGetInt(&zDelta, &lenDelta);
-        if( lenDelta>0 || zDelta[0]!=',' ){
+        if( lenDelta>0 && zDelta[0]!=',' ){
           /* ERROR: copy command not terminated by ',' */
           return -1;
         }
@@ -226951,7 +227366,7 @@ static int rbuDeltaApply(
           /* ERROR:  insert command gives an output larger than predicted */
           return -1;
         }
-        if( (i64)cnt>(i64)lenDelta ){
+        if( cnt>lenDelta ){
           /* ERROR: insert count exceeds size of delta */
           return -1;
         }
@@ -228964,13 +229379,13 @@ static int rbuGetUpdateStmt(
     char *zUpdate = 0;
 
     pUp->zMask = (char*)&pUp[1];
-    memcpy(pUp->zMask, zMask, pIter->nTblCol);
     pUp->pNext = pIter->pRbuUpdate;
     pIter->pRbuUpdate = pUp;
 
     if( zSet ){
       const char *zPrefix = "";
-
+      assert( p->rc==SQLITE_OK );
+      memcpy(pUp->zMask, zMask, pIter->nTblCol);
       if( pIter->eType!=RBU_PK_VTAB ) zPrefix = "rbu_imp_";
       zUpdate = sqlite3_mprintf("UPDATE \"%s%w\" SET %s WHERE %s",
           zPrefix, pIter->zTbl, zSet, zWhere
@@ -229060,6 +229475,9 @@ static RbuState *rbuLoadState(sqlite3rbu *p){
 
       case RBU_STATE_ROW:
         pRet->nRow = sqlite3_column_int(pStmt, 1);
+        if( pRet->nRow<0 ){
+          rc = SQLITE_CORRUPT;
+        }
         break;
 
       case RBU_STATE_PROGRESS:
@@ -240296,7 +240714,12 @@ static int sessionChangesetToHash(
 
   pIter->in.bNoDiscard = 1;
   while( SQLITE_ROW==(sessionChangesetNext(pIter, &aRec, &nRec, 0)) ){
-    rc = sessionOneChangeIterToHash(pGrp, pIter, bRebase);
+    if( bRebase && pIter->bPatchset ){
+      /* A patchset may not be used as a rebase */
+      rc = SQLITE_ERROR;
+    }else{
+      rc = sessionOneChangeIterToHash(pGrp, pIter, bRebase);
+    }
     if( rc!=SQLITE_OK ) break;
   }
 
@@ -240673,13 +241096,14 @@ static void sessionAppendPartialUpdate(
     int i;
     u8 *a1 = aRec;
     u8 *a2 = aChange;
+    u8 *a2Eof = &a2[nChange];
 
     *pOut++ = SQLITE_UPDATE;
     *pOut++ = pIter->bIndirect;
     for(i=0; i<pIter->nCol; i++){
       int n1 = sessionSerialLen(a1);
-      int n2 = sessionSerialLen(a2);
-      if( pIter->abPK[i] || a2[0]==0 ){
+      int n2 = (a2>=a2Eof) ? 0 : sessionSerialLen(a2);
+      if( n2<=0 || pIter->abPK[i] || a2[0]==0 ){
         if( !pIter->abPK[i] && a1[0] ) bData = 1;
         memcpy(pOut, a1, n1);
         pOut += n1;
@@ -240880,8 +241304,8 @@ SQLITE_API int sqlite3rebaser_configure(
   sqlite3_rebaser *p,
   int nRebase, const void *pRebase
 ){
-  sqlite3_changeset_iter *pIter = 0;   /* Iterator opened on pData/nData */
   int rc;                              /* Return code */
+  sqlite3_changeset_iter *pIter = 0;   /* Iterator opened on pData/nData */
   rc = sqlite3changeset_start(&pIter, nRebase, (void*)pRebase);
   if( rc==SQLITE_OK ){
     rc = sessionChangesetToHash(pIter, &p->grp, 1);
@@ -251701,6 +252125,7 @@ static Fts5Data *fts5DataRead(Fts5Index *p, i64 iRowid){
       pRet = (Fts5Data*)sqlite3_malloc64(nAlloc);
       if( pRet ){
         pRet->nn = nByte;
+        pRet->szLeaf = 0;
         aOut = pRet->p = (u8*)pRet + szData;
       }else{
         rc = SQLITE_NOMEM;
@@ -251713,10 +252138,8 @@ static Fts5Data *fts5DataRead(Fts5Index *p, i64 iRowid){
         sqlite3_free(pRet);
         pRet = 0;
       }else{
-        /* TODO1: Fix this */
         pRet->p[nByte] = 0x00;
         pRet->p[nByte+1] = 0x00;
-        pRet->szLeaf = fts5GetU16(&pRet->p[2]);
       }
     }
     p->rc = rc;
@@ -251737,9 +252160,17 @@ static void fts5DataRelease(Fts5Data *pData){
   sqlite3_free(pData);
 }
 
+/*
+** Read a leaf-page record. This is similar to fts5DataRead(), except that
+** it fills in the Fts5Data.szLeaf value before returning.
+*/
 static Fts5Data *fts5LeafRead(Fts5Index *p, i64 iRowid){
   Fts5Data *pRet = fts5DataRead(p, iRowid);
   if( pRet ){
+    assert( pRet->szLeaf==0 );
+    if( pRet->nn>=4 ){
+      pRet->szLeaf = fts5GetU16(&pRet->p[2]);
+    }
     if( pRet->szLeaf<4 || pRet->szLeaf>pRet->nn ){
       FTS5_CORRUPT_ROWID(p, iRowid);
       fts5DataRelease(pRet);
@@ -253649,6 +254080,10 @@ static void fts5SegIterNextInit(
 
     pIter->iPgidxOff = pIter->pLeaf->szLeaf;
     pIter->iPgidxOff += fts5GetVarint32(&a[pIter->iPgidxOff], iTermOff);
+    if( iTermOff > pIter->pLeaf->szLeaf ){
+      p->rc = FTS5_CORRUPT;
+      return;
+    }
     pIter->iLeafOffset = iTermOff;
     fts5SegIterLoadTerm(p, pIter, 0);
     fts5SegIterLoadNPos(p, pIter);
@@ -255975,7 +256410,7 @@ static void fts5SecureDeleteOverflow(
     int iNext = 0;
     u8 *aPg = 0;
 
-    pLeaf = fts5DataRead(p, iRowid);
+    pLeaf = fts5LeafRead(p, iRowid);
     if( pLeaf==0 ) break;
     aPg = pLeaf->p;
 
@@ -255983,7 +256418,7 @@ static void fts5SecureDeleteOverflow(
     if( iNext!=0 ){
       *pbLastInDoclist = 0;
     }
-    if( iNext==0 && pLeaf->szLeaf!=pLeaf->nn ){
+    if( iNext==0 && pLeaf->szLeaf<pLeaf->nn ){
       fts5GetVarint32(&aPg[pLeaf->szLeaf], iNext);
     }
 
@@ -256270,7 +256705,7 @@ static void fts5DoSecureDelete(
     /* The entry being removed may be the only position list in
     ** its doclist. */
     for(iPgno=pSeg->iLeafPgno-1; iPgno>pSeg->iTermLeafPgno; iPgno-- ){
-      Fts5Data *pPg = fts5DataRead(p, FTS5_SEGMENT_ROWID(iSegid, iPgno));
+      Fts5Data *pPg = fts5LeafRead(p, FTS5_SEGMENT_ROWID(iSegid, iPgno));
       int bEmpty = (pPg && pPg->nn==4);
       fts5DataRelease(pPg);
       if( bEmpty==0 ) break;
@@ -256278,7 +256713,7 @@ static void fts5DoSecureDelete(
 
     if( iPgno==pSeg->iTermLeafPgno ){
       i64 iId = FTS5_SEGMENT_ROWID(iSegid, pSeg->iTermLeafPgno);
-      Fts5Data *pTerm = fts5DataRead(p, iId);
+      Fts5Data *pTerm = fts5LeafRead(p, iId);
       if( pTerm && pTerm->szLeaf==pSeg->iTermLeafOffset ){
         u8 *aTermIdx = &pTerm->p[pTerm->szLeaf];
         int nTermIdx = pTerm->nn - pTerm->szLeaf;
@@ -259230,7 +259665,7 @@ static void fts5IndexIntegrityCheckEmpty(
   /* Now check that the iter.nEmpty leaves following the current leaf
   ** (a) exist and (b) contain no terms. */
   for(i=iFirst; p->rc==SQLITE_OK && i<=iLast; i++){
-    Fts5Data *pLeaf = fts5DataRead(p, FTS5_SEGMENT_ROWID(pSeg->iSegid, i));
+    Fts5Data *pLeaf = fts5LeafRead(p, FTS5_SEGMENT_ROWID(pSeg->iSegid, i));
     if( pLeaf ){
       if( !fts5LeafIsTermless(pLeaf)
        || (i>=iNoRowid && 0!=fts5LeafFirstRowidOff(pLeaf))
@@ -259358,7 +259793,7 @@ static void fts5IndexIntegrityCheckSegment(
         FTS5_CORRUPT_ROWID(p, iRow);
       }else{
         iOff += fts5GetVarint32(&pLeaf->p[iOff], nTerm);
-        if( iOff+nTerm>pLeaf->szLeaf ){
+        if( (i64)iOff+(i64)nTerm>(i64)pLeaf->szLeaf ){
           FTS5_CORRUPT_ROWID(p, iRow);
         }else{
           res = fts5Memcmp(&pLeaf->p[iOff], zIdxTerm, MIN(nTerm, nIdxTerm));
@@ -263086,19 +263521,23 @@ static int fts5ApiPhraseFirstColumn(
 
   if( pConfig->eDetail==FTS5_DETAIL_COLUMNS ){
     Fts5Sorter *pSorter = pCsr->pSorter;
-    int n;
-    if( pSorter ){
-      int i1 = (iPhrase==0 ? 0 : pSorter->aIdx[iPhrase-1]);
-      n = pSorter->aIdx[iPhrase] - i1;
-      pIter->a = &pSorter->aPoslist[i1];
+    if( iPhrase<0 || iPhrase>=sqlite3Fts5ExprPhraseCount(pCsr->pExpr) ){
+      rc = SQLITE_RANGE;
     }else{
-      rc = sqlite3Fts5ExprPhraseCollist(pCsr->pExpr, iPhrase, &pIter->a, &n);
-    }
-    if( rc==SQLITE_OK ){
-      assert( pIter->a || n==0 );
-      pIter->b = (pIter->a ? &pIter->a[n] : 0);
-      *piCol = 0;
-      fts5ApiPhraseNextColumn(pCtx, pIter, piCol);
+      int n;
+      if( pSorter ){
+        int i1 = (iPhrase==0 ? 0 : pSorter->aIdx[iPhrase-1]);
+        n = pSorter->aIdx[iPhrase] - i1;
+        pIter->a = &pSorter->aPoslist[i1];
+      }else{
+        rc = sqlite3Fts5ExprPhraseCollist(pCsr->pExpr, iPhrase, &pIter->a, &n);
+      }
+      if( rc==SQLITE_OK ){
+        assert( pIter->a || n==0 );
+        pIter->b = (pIter->a ? &pIter->a[n] : 0);
+        *piCol = 0;
+        fts5ApiPhraseNextColumn(pCtx, pIter, piCol);
+      }
     }
   }else{
     int n;
@@ -264006,7 +264445,7 @@ static void fts5SourceIdFunc(
 ){
   assert( nArg==0 );
   UNUSED_PARAM2(nArg, apUnused);
-  sqlite3_result_text(pCtx, "fts5: 2026-06-26 20:14:12 d4c0e51e4aeb96955b99185ab9cde75c339e2c29c3f3f12428d364a10d782c62", -1, SQLITE_TRANSIENT);
+  sqlite3_result_text(pCtx, "fts5: 2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc", -1, SQLITE_TRANSIENT);
 }
 
 /*

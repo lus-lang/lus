@@ -18,6 +18,7 @@
 
 #include "lua.h"
 
+#include "lauthpath.h"
 #include "lauxlib.h"
 #include "llimits.h"
 #include "lpledge.h"
@@ -244,20 +245,10 @@ static LStream *newfile(lua_State *L) {
 ** lfslib gates fs.*, so io.open cannot bypass the filesystem sandbox.
 ** Each lus_checkfsperm raises on denial.
 */
-static void io_checkfsperm(lua_State *L, const char *filename,
-                           const char *mode) {
-  if (strchr(mode, 'r') != NULL || strchr(mode, '+') != NULL)
-    lus_checkfsperm(L, "fs:read", filename);
-  if (strchr(mode, 'w') != NULL || strchr(mode, 'a') != NULL ||
-      strchr(mode, '+') != NULL)
-    lus_checkfsperm(L, "fs:write", filename);
-}
-
 static void opencheck(lua_State *L, const char *fname, const char *mode) {
   LStream *p;
-  io_checkfsperm(L, fname, mode);
   p = newfile(L);
-  p->f = fopen(fname, mode);
+  p->f = luaAP_fopen(L, fname, mode);
   if (l_unlikely(p->f == NULL))
     luaL_error(L, "cannot open file '%s' (%s)", fname, strerror(errno));
 }
@@ -268,10 +259,9 @@ static int io_open(lua_State *L) {
   LStream *p;
   const char *md = mode; /* to traverse/check mode */
   luaL_argcheck(L, l_checkmode(md), 2, "invalid mode");
-  io_checkfsperm(L, filename, mode);
   p = newfile(L);
   errno = 0;
-  p->f = fopen(filename, mode);
+  p->f = luaAP_fopen(L, filename, mode);
   return (p->f == NULL) ? luaL_fileresult(L, 0, filename) : 1;
 }
 

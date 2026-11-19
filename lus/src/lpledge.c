@@ -13,6 +13,8 @@
 #include <string.h>
 
 #include "lauxlib.h"
+#include "lauthpath.h"
+#include "lglob.h"
 #include "lmem.h"
 #include "lpledge.h"
 #include "lstate.h"
@@ -117,11 +119,7 @@ static lus_PledgeGranter findgranter(PledgeStore *store, const char *name) {
 /* Add a new entry to the store */
 static PledgeEntry *addentry(lua_State *L, PledgeStore *store,
                              const char *name) {
-  /* A sealed store must never gain entries. Permission CHECKs route through the
-  ** granters, which call lus_setpledge()/lus_rejectrequest() -> addentry; left
-  ** unguarded, a read-only check (e.g. io.tmpfile()'s NULL-path fs:write probe)
-  ** could plant a zero-value sub-entry that the nvalues==0 "global access"
-  ** shortcut then treats as a grant, escalating a value-scoped pledge. */
+  /* A sealed store must never gain entries. */
   if (store->sealed)
     return NULL;
   if (store->nentries >= store->capacity) {
@@ -251,6 +249,14 @@ LUA_API int lus_nextpledge(lua_State *L, lus_PledgeRequest *p) {
 LUA_API void lus_setpledge(lua_State *L, lus_PledgeRequest *p, const char *sub,
                            const char *value) {
   PledgeStore *store = (PledgeStore *)p->_store;
+  /* A check acknowledges an existing grant. It never creates an entry or
+  ** widens the values stored in one. Besides making checks observational,
+  ** this prevents a check for an absent subpermission from planting the
+  ** zero-value entry that denotes unrestricted access. */
+  if (p->status == LUS_PLEDGE_CHECK) {
+    p->_processed = 1;
+    return;
+  }
   if (store == NULL)
     store = getstore(L);
 
@@ -263,9 +269,7 @@ LUA_API void lus_setpledge(lua_State *L, lus_PledgeRequest *p, const char *sub,
   if (entry == NULL) {
     entry = addentry(L, store, namebuf);
     if (entry == NULL) {
-      /* Sealed store: do not mutate. Still answer the probe (a path-less CHECK
-      ** is "allowed" because the base/sub permission already exists), but never
-      ** create the entry that would widen later specific-path checks. */
+      /* A sealed store cannot accept a new grant. */
       p->_processed = 1;
       return;
     }
@@ -281,6 +285,8 @@ LUA_API void lus_setpledge(lua_State *L, lus_PledgeRequest *p, const char *sub,
 
 LUA_API void lus_rejectrequest(lua_State *L, lus_PledgeRequest *p) {
   PledgeStore *store = (PledgeStore *)p->_store;
+  if (p->status == LUS_PLEDGE_CHECK)
+    return;
   if (store == NULL)
     store = getstore(L);
 
@@ -302,6 +308,8 @@ LUA_API void lus_rejectrequest(lua_State *L, lus_PledgeRequest *p) {
 LUA_API void lus_pledgeerror(lua_State *L, lus_PledgeRequest *p,
                              const char *msg) {
   PledgeStore *store = (PledgeStore *)p->_store;
+  if (p->status == LUS_PLEDGE_CHECK)
+    return;
   if (store == NULL)
     store = getstore(L);
 
@@ -537,6 +545,99 @@ void luaP_sealpledges(lua_State *L) {
 LUA_API int lus_checkfsperm(lua_State *L, const char *perm, const char *path) {
   if (!lus_haspledge(L, perm, path)) {
     return luaL_error(L, "permission \"%s\" denied for '%s'", perm, path);
+  }
+  return 0;
+}
+
+static int is_delete_quarantine_path(const char *path) {
+#if !defined(LUS_PLATFORM_WINDOWS) && !defined(__EMSCRIPTEN__)
+  const char *component = path;
+  static const char prefix[] = LUS_AUTH_QUARANTINE_PREFIX;
+  while (component != NULL) {
+    const char *next = strchr(component, '/');
+    size_t length =
+        next != NULL ? cast_sizet(next - component) : strlen(component);
+    if (length >= sizeof(prefix) - 1 &&
+        memcmp(component, prefix, sizeof(prefix) - 1) == 0)
+      return 1;
+    component = next != NULL ? next + 1 : NULL;
+  }
+#else
+  UNUSED(path);
+#endif
+  return 0;
+}
+
+/*
+** Non-raising filesystem check for code that runs inside a foreign library
+** callback. The regular public check invokes the registered granter, which
+** may allocate or raise. SQLite VFS methods cannot safely let such a raise
+** cross SQLite's C frames, so they use this direct view of the built-in fs
+** grant store. Path matching itself is allocation-free and fails closed when
+** canonicalization is unavailable.
+*/
+int luaP_hasfsperm(lua_State *L, const char *perm, const char *path) {
+  PledgeStore *store = L->pledges;
+  PledgeEntry *entry;
+  PledgeEntry *baseentry;
+  int i;
+  if (store == NULL || path == NULL)
+    return 0;
+  if (is_delete_quarantine_path(path))
+    return 0;
+  entry = findentry(store, perm);
+  if (entry != NULL && entry->rejected)
+    return 0;
+  baseentry = findentry(store, "fs");
+  if (entry != NULL) {
+    if (entry->nvalues == 0)
+      return 1;
+    for (i = 0; i < entry->nvalues; i++) {
+      if (lus_glob_match_path(entry->values[i], path, 1))
+        return 1;
+    }
+    return 0;
+  }
+  if (baseentry == NULL || baseentry->rejected)
+    return 0;
+  if (baseentry->nvalues == 0)
+    return 1;
+  for (i = 0; i < baseentry->nvalues; i++) {
+    if (lus_glob_match_path(baseentry->values[i], path, 1))
+      return 1;
+  }
+  return 0;
+}
+
+int luaP_hasfscanonical(lua_State *L, const char *perm, const char *canonical) {
+  PledgeStore *store = L->pledges;
+  PledgeEntry *entry;
+  PledgeEntry *baseentry;
+  int i;
+  if (store == NULL || canonical == NULL)
+    return 0;
+  if (is_delete_quarantine_path(canonical))
+    return 0;
+  entry = findentry(store, perm);
+  if (entry != NULL && entry->rejected)
+    return 0;
+  baseentry = findentry(store, "fs");
+  if (entry != NULL) {
+    if (entry->nvalues == 0)
+      return 1;
+    for (i = 0; i < entry->nvalues; i++) {
+      if (lus_glob_match(entry->values[i], canonical))
+        return 1;
+    }
+    return 0;
+  }
+  if (baseentry == NULL || baseentry->rejected)
+    return 0;
+  if (baseentry->nvalues == 0)
+    return 1;
+  for (i = 0; i < baseentry->nvalues; i++) {
+    if (lus_glob_match(baseentry->values[i], canonical))
+      return 1;
   }
   return 0;
 }

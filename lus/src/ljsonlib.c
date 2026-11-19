@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <float.h>
 #include <limits.h>
+#include <locale.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,7 +66,7 @@ static int peek(JsonParser *p) {
   return (unsigned char)*p->json;
 }
 
-static int accept(JsonParser *p, char c) {
+static int json_accept(JsonParser *p, char c) {
   skip_whitespace(p);
   if (p->json < p->end && *p->json == c) {
     p->json++;
@@ -75,7 +76,7 @@ static int accept(JsonParser *p, char c) {
 }
 
 static void expect(JsonParser *p, char c, const char *context) {
-  if (!accept(p, c)) {
+  if (!json_accept(p, c)) {
     char msg[64];
     snprintf(msg, sizeof(msg), "expected '%c' %s", c, context);
     json_error(p, msg);
@@ -326,18 +327,15 @@ static void parse_value_iterative(JsonParser *p) {
         memcpy(numbuf, start, numlen);
         numbuf[numlen] = '\0';
         if (is_float) {
-          char *endptr;
-          double d;
-          lua_Number n;
+          TValue parsed;
           errno = 0;
-          d = strtod(numbuf, &endptr);
-          n = (lua_Number)d;
-          if (endptr != numbuf + numlen || errno == ERANGE || !isfinite(d) ||
-              !isfinite((double)n)) {
+          if (luaO_str2num(numbuf, &parsed) != numlen + 1 ||
+              !ttisfloat(&parsed) || errno == ERANGE ||
+              !isfinite(fltvalue(&parsed))) {
             luaM_freearray(L, numbuf, numlen + 1);
             json_error(p, "number out of range");
           }
-          setfltvalue(&value, n);
+          setfltvalue(&value, fltvalue(&parsed));
         }
         else {
           char *endptr;
@@ -581,7 +579,7 @@ static void parse_value_iterative(JsonParser *p) {
         luaC_barrierback(L, obj2gco(parent->table), &value);
         parent->idx++;
 
-        if (accept(p, ',')) {
+        if (json_accept(p, ',')) {
           break; /* Parse next element */
         }
         else {
@@ -598,7 +596,7 @@ static void parse_value_iterative(JsonParser *p) {
         luaH_set(L, parent->table, &keyval, &value);
         luaC_barrierback(L, obj2gco(parent->table), &value);
 
-        if (accept(p, ',')) {
+        if (json_accept(p, ',')) {
           /* Parse next key */
           if (peek(p) != '"') {
             lua_pop(L, 1); /* pop anchor table */
@@ -970,6 +968,17 @@ static void write_number(JsonWriter *w, lua_State *L, int idx) {
 
     char buf[64];
     int len = snprintf(buf, sizeof(buf), "%.17g", n);
+    const char *radix = localeconv()->decimal_point;
+    size_t radixlen = strlen(radix);
+    if (radixlen > 0 && !(radixlen == 1 && radix[0] == '.')) {
+      char *point = strstr(buf, radix);
+      if (point != NULL) {
+        size_t tail = (size_t)(buf + len - (point + radixlen));
+        point[0] = '.';
+        memmove(point + 1, point + radixlen, tail + 1);
+        len -= (int)radixlen - 1;
+      }
+    }
     write_raw(w, buf, (size_t)len);
   }
 }

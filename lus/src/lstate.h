@@ -196,18 +196,21 @@ typedef struct stringtable {
 **    but keeps the CallInfo), letting a catch body that yielded complete.
 */
 typedef struct CatchInfo {
-  jmp_buf jmpbuf;             /* setjmp buffer for error recovery */
-  struct CatchInfo *prev;     /* enclosing throwable catch (global chain) */
-  struct CatchInfo *frameprev;/* enclosing catch in the same frame */
-  CallInfo *ci;               /* call frame this catch belongs to */
-  volatile TStatus status;    /* error status (if error occurred) */
-  const Instruction *errorpc; /* PC to jump to on error (after ENDCATCH) */
-  ptrdiff_t erroffset;  /* stack offset of error object (survives realloc) */
-  ptrdiff_t baseoffset; /* stack offset of base register (survives realloc) */
-  TValue handler;       /* error handler function (nil if no handler) */
+  jmp_buf jmpbuf;              /* setjmp buffer for error recovery */
+  struct CatchInfo *prev;      /* enclosing throwable catch (global chain) */
+  struct CatchInfo *frameprev; /* enclosing catch in the same frame */
+  CallInfo *ci;                /* call frame this catch belongs to */
+  volatile TStatus status;     /* error status (if error occurred) */
+  const Instruction *errorpc;  /* PC to jump to on error (after ENDCATCH) */
+  ptrdiff_t erroffset;   /* stack offset of error object (survives realloc) */
+  ptrdiff_t baseoffset;  /* stack offset of base register (survives realloc) */
+  TValue handler;        /* error handler function (nil if no handler) */
   l_uint32 savednCcalls; /* L->nCcalls at catch entry, restored on recovery */
-  lu_byte destreg;      /* destination register for status/error */
-  lu_byte nresults;     /* expected number of results (for nil-filling) */
+#if LUAI_TRACKHEAVYCALLS
+  l_uint32 savednHeavyCcalls; /* heavy-call count at catch entry */
+#endif
+  lu_byte destreg;       /* destination register for status/error */
+  lu_byte nresults;      /* expected number of results (for nil-filling) */
 } CatchInfo;
 
 struct CallInfo {
@@ -217,14 +220,14 @@ struct CallInfo {
   union {
     struct { /* only for Lua functions */
       const Instruction *savedpc;
-      volatile l_signalT trap;     /* function is tracing lines/counts */
-      int nextraargs;              /* # of extra arguments in vararg functions */
+      volatile l_signalT trap; /* function is tracing lines/counts */
+      int nextraargs;          /* # of extra arguments in vararg functions */
       struct CatchInfo *catchlist; /* active catches in this frame (or NULL) */
     } l;
     struct {           /* only for C functions */
       lua_KFunction k; /* continuation in case of yields */
       ptrdiff_t old_errfunc;
-      lua_KContext ctx; /* context info. in case of yields */
+      lua_KContext ctx;                  /* context info. in case of yields */
       struct CatchInfo *old_activecatch; /* suspended Lua catch chain for a
                                             yieldable protected call */
     } c;
@@ -319,11 +322,14 @@ struct lua_State {
   GCObject *gclist;
   struct lua_State *twups; /* list of threads with open upvalues */
   CCatchInfo *cCatch;      /* C-level catch handler */
-  CatchInfo *activeCatch;  /* innermost active Lua catch (head of linked list) */
-  CallInfo base_ci;        /* CallInfo for first level (C host) */
+  CatchInfo *activeCatch; /* innermost active Lua catch (head of linked list) */
+  CallInfo base_ci;       /* CallInfo for first level (C host) */
   volatile lua_Hook hook;
   ptrdiff_t errfunc; /* current error handling function (stack index) */
   l_uint32 nCcalls;  /* number of nested non-yieldable or C calls */
+#if LUAI_TRACKHEAVYCALLS
+  l_uint32 nHeavyCcalls; /* nested calls with large native frames */
+#endif
   int oldpc;         /* last pc traced */
   int nci;           /* number of items in 'ci' list */
   int basehookcount;
@@ -394,9 +400,9 @@ typedef struct global_State {
   lu_byte pedantic;                          /* pedantic warnings enabled */
   lu_byte no_fastcall;                       /* disable fastcall emission */
   lu_byte readonly_env;                      /* environment is immutable */
-  lu_byte stripdebug;          /* strip debug info from loaded prototypes */
-  lu_byte isworker;            /* state runs a worker body on a pool thread */
-  TString *fc_names[FC_COUNT]; /* interned fastcall func names */
+  lu_byte stripdebug; /* strip debug info from loaded prototypes */
+  lu_byte isworker;   /* state runs a worker body on a pool thread */
+  TString *fc_names[FC_COUNT];          /* interned fastcall func names */
   TString *fc_modules[FC_NMODULES + 1]; /* [0] = NULL (base library) */
   lu_byte fc_ready[FC_COUNT];           /* entry registered/enabled here */
   lua_CFunction iter_next;      /* baselib 'next' (OP_TFORCALL fast path) */
@@ -417,7 +423,10 @@ typedef struct global_State {
   struct Table *preinctab;  /* preincluded modules ([i]=name, [name]=loader);
                                anchored by registry["_PREINCLUDE"]; NULL if
                                nothing was preincluded */
-  LX mainth;                             /* main thread of this state */
+  struct WorkerDomain *workerdomain;  /* workers owned by this state */
+  void (*worker_close)(lua_State *L); /* state-scoped worker teardown */
+  lus_WorkerSetup worker_setup;       /* callback inherited by new workers */
+  LX mainth;                /* main thread of this state */
 } global_State;
 
 #define G(L) (L->l_G)
@@ -491,7 +500,8 @@ LUAI_FUNC void luaE_freethread(lua_State *L, lua_State *L1);
 LUAI_FUNC lu_mem luaE_threadsize(lua_State *L);
 LUAI_FUNC CallInfo *luaE_extendCI(lua_State *L, int err);
 LUAI_FUNC void luaE_shrinkCI(lua_State *L);
-LUAI_FUNC void luaE_checkcstack(lua_State *L);
+LUAI_FUNC void luaE_checkcstack(lua_State *L, unsigned int count,
+                                unsigned int limit);
 LUAI_FUNC void luaE_incCstack(lua_State *L);
 LUAI_FUNC void luaE_warning(lua_State *L, const char *msg, int tocont);
 LUAI_FUNC void luaE_warnerror(lua_State *L, const char *where);

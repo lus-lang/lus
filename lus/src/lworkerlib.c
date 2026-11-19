@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "larena.h"
+#include "lauthpath.h"
 #include "lauxlib.h"
 #include "ldo.h"
 #include "lobject.h"
@@ -23,6 +24,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "lworkerlib.h"
+#include "lworkerint.h"
 
 /* Metatable name for worker userdata */
 #define WORKER_METATABLE "worker.state"
@@ -30,8 +32,7 @@
 /* Global worker pool (single instance) */
 static WorkerPool g_pool = {0};
 
-/* Global worker setup callback */
-static lus_WorkerSetup g_worker_setup = NULL;
+static void signal_recv_ctx(WorkerState *w);
 
 /*
 ** {======================================================
@@ -40,13 +41,20 @@ static lus_WorkerSetup g_worker_setup = NULL;
 */
 
 #if defined(LUS_PLATFORM_WINDOWS)
+#include <io.h>
+#define worker_closefd(fd) _close(fd)
 static int get_cpu_count(void) {
   SYSTEM_INFO si;
   GetSystemInfo(&si);
   return (int)si.dwNumberOfProcessors;
 }
 #else
+#include <fcntl.h>
 #include <unistd.h>
+#define worker_closefd(fd) close(fd)
+#if !defined(O_CLOEXEC)
+#define O_CLOEXEC 0
+#endif
 #if defined(_SC_NPROCESSORS_ONLN)
 static int get_cpu_count(void) {
   long n = sysconf(_SC_NPROCESSORS_ONLN);
@@ -57,6 +65,17 @@ static int get_cpu_count(void) {
   return 4; /* fallback */
 }
 #endif
+#endif
+
+/* Serialize process-pool startup, shutdown, and enqueue operations. */
+#if defined(LUS_PLATFORM_WINDOWS)
+static SRWLOCK g_pool_lifecycle = SRWLOCK_INIT;
+#define pool_lifecycle_lock() AcquireSRWLockExclusive(&g_pool_lifecycle)
+#define pool_lifecycle_unlock() ReleaseSRWLockExclusive(&g_pool_lifecycle)
+#else
+static pthread_mutex_t g_pool_lifecycle = PTHREAD_MUTEX_INITIALIZER;
+#define pool_lifecycle_lock() pthread_mutex_lock(&g_pool_lifecycle)
+#define pool_lifecycle_unlock() pthread_mutex_unlock(&g_pool_lifecycle)
 #endif
 
 /* }====================================================== */
@@ -147,8 +166,8 @@ typedef struct {
   const char *errarg;     /* optional argument for 'err' (may be NULL) */
 } SerBuffer;
 
-/* Default arena block size for serialization (4KB) */
-#define SERBUF_ARENA_SIZE 4096
+/* Default arena block size for serialization (64KB) */
+#define SERBUF_ARENA_SIZE (64 * 1024)
 /* Default initial buffer size */
 #define SERBUF_INIT_SIZE 256
 
@@ -279,13 +298,11 @@ static int serialize_value(lua_State *L, int idx, SerBuffer *b, int depth) {
     case LUA_TNUMBER:
       if (lua_isinteger(L, idx)) {
         lua_Integer i = lua_tointeger(L, idx);
-        return serbuf_write_byte(b, SER_INT) &&
-               serbuf_write(b, &i, sizeof(i));
+        return serbuf_write_byte(b, SER_INT) && serbuf_write(b, &i, sizeof(i));
       }
       else {
         lua_Number n = lua_tonumber(L, idx);
-        return serbuf_write_byte(b, SER_NUM) &&
-               serbuf_write(b, &n, sizeof(n));
+        return serbuf_write_byte(b, SER_NUM) && serbuf_write(b, &n, sizeof(n));
       }
     case LUA_TSTRING: {
       size_t len;
@@ -397,21 +414,225 @@ static int deserialize_value(lua_State *L, DeserBuffer *b, int depth) {
 ** =======================================================
 */
 
-static WorkerState *worker_new(lua_State *parent, const char *path) {
-  WorkerState *w = (WorkerState *)malloc(sizeof(WorkerState));
-  if (!w)
+static void worker_state_shutdown(lua_State *L);
+
+static void worker_domain_destroy(WorkerDomain *domain) {
+  lus_cond_destroy(&domain->idle_cond);
+  lus_mutex_destroy(&domain->mutex);
+  free(domain);
+}
+
+static WorkerDomain *worker_domain_get(lua_State *L) {
+  global_State *g = G(L);
+  WorkerDomain *domain = g->workerdomain;
+  if (domain != NULL)
+    return domain;
+
+  domain = (WorkerDomain *)malloc(sizeof(WorkerDomain));
+  if (domain == NULL)
     return NULL;
+  memset(domain, 0, sizeof(WorkerDomain));
+  lus_mutex_init(&domain->mutex);
+  lus_cond_init(&domain->idle_cond);
+  domain->refcount = 1; /* owning global_State */
+  g->workerdomain = domain;
+  g->worker_close = worker_state_shutdown;
+  return domain;
+}
+
+static int worker_domain_attach(WorkerDomain *domain, WorkerState *w) {
+  int attached = 0;
+  lus_mutex_lock(&domain->mutex);
+  if (!domain->closing) {
+    w->domain = domain;
+    w->domain_next = domain->workers;
+    domain->workers = w;
+    domain->refcount++; /* WorkerState owns a domain reference */
+    attached = 1;
+  }
+  lus_mutex_unlock(&domain->mutex);
+  return attached;
+}
+
+static void worker_domain_detach(WorkerState *w) {
+  WorkerDomain *domain = w->domain;
+  int destroy = 0;
+  if (domain == NULL)
+    return;
+
+  lus_mutex_lock(&domain->mutex);
+  WorkerState **link = &domain->workers;
+  while (*link != NULL && *link != w)
+    link = &(*link)->domain_next;
+  if (*link == w)
+    *link = w->domain_next;
+  w->domain = NULL;
+  w->domain_next = NULL;
+  domain->refcount--;
+  destroy = (domain->refcount == 0);
+  lus_mutex_unlock(&domain->mutex);
+  if (destroy)
+    worker_domain_destroy(domain);
+}
+
+static int worker_domain_start(WorkerState *w) {
+  WorkerDomain *domain = w->domain;
+  int started = 0;
+  lus_mutex_lock(&domain->mutex);
+  if (!domain->closing) {
+    domain->active_count++;
+    w->domain_active = 1;
+    started = 1;
+  }
+  lus_mutex_unlock(&domain->mutex);
+  return started;
+}
+
+static void worker_domain_complete(WorkerState *w) {
+  WorkerDomain *domain = w->domain;
+  if (domain == NULL)
+    return;
+  lus_mutex_lock(&domain->mutex);
+  if (w->domain_active) {
+    w->domain_active = 0;
+    domain->active_count--;
+    if (domain->active_count == 0)
+      lus_cond_broadcast(&domain->idle_cond);
+  }
+  lus_mutex_unlock(&domain->mutex);
+}
+
+/*
+** Remove work owned by one state before waiting for its domain to become
+** idle. Pool lifecycle serialization keeps the queue mutex alive throughout
+** the scan. A stopping process pool has already detached the complete queue
+** and will finish those workers itself.
+*/
+static WorkerState *pool_cancel_domain_queued(WorkerDomain *domain) {
+  WorkerState *cancelled_head = NULL;
+  WorkerState *cancelled_tail = NULL;
+
+  pool_lifecycle_lock();
+  if (g_pool.initialized && !g_pool.stopping) {
+    WorkerState *previous = NULL;
+    WorkerState *worker;
+
+    lus_mutex_lock(&g_pool.queue_mutex);
+    worker = g_pool.runnable_head;
+    while (worker != NULL) {
+      WorkerState *next = worker->next;
+      if (worker->domain == domain) {
+        if (previous != NULL)
+          previous->next = next;
+        else
+          g_pool.runnable_head = next;
+        if (g_pool.runnable_tail == worker)
+          g_pool.runnable_tail = previous;
+
+        worker->next = NULL;
+        if (cancelled_tail != NULL)
+          cancelled_tail->next = worker;
+        else
+          cancelled_head = worker;
+        cancelled_tail = worker;
+      }
+      else
+        previous = worker;
+      worker = next;
+    }
+    lus_mutex_unlock(&g_pool.queue_mutex);
+  }
+  pool_lifecycle_unlock();
+  return cancelled_head;
+}
+
+static void worker_state_shutdown(lua_State *L) {
+  global_State *g = G(L);
+  WorkerDomain *domain = g->workerdomain;
+  WorkerState *cancelled;
+  int destroy;
+  if (domain == NULL)
+    return;
+
+  lus_mutex_lock(&domain->mutex);
+  domain->closing = 1;
+  for (WorkerState *w = domain->workers; w != NULL; w = w->domain_next) {
+    lus_mutex_lock(&w->mutex);
+    w->shutdown = 1;
+    lus_cond_broadcast(&w->inbox_cond);
+    lus_cond_broadcast(&w->outbox_cond);
+    if (w->recv_ctx != NULL) {
+      lus_mutex_lock(&w->recv_ctx->mutex);
+      w->recv_ctx->ready = 1;
+      lus_cond_signal(&w->recv_ctx->cond);
+      lus_mutex_unlock(&w->recv_ctx->mutex);
+    }
+    lus_mutex_unlock(&w->mutex);
+  }
+
+  /* Release the domain lock before taking the process-pool locks. Enqueue
+  ** checks the shutdown bit while holding the lifecycle lock, so a worker
+  ** that passed worker_domain_start just before closing either appears in
+  ** this cancellation scan or declines to join the queue. */
+  lus_mutex_unlock(&domain->mutex);
+  cancelled = pool_cancel_domain_queued(domain);
+
+  while (cancelled != NULL) {
+    WorkerState *next = cancelled->next;
+    cancelled->next = NULL;
+    lus_mutex_lock(&cancelled->mutex);
+    cancelled->shutdown = 1;
+    cancelled->status = LUS_WORKER_DEAD;
+    lus_cond_broadcast(&cancelled->inbox_cond);
+    lus_cond_broadcast(&cancelled->outbox_cond);
+    signal_recv_ctx(cancelled);
+    worker_domain_complete(cancelled);
+    lus_worker_release(cancelled); /* runnable queue reference */
+    cancelled = next;
+  }
+
+  lus_mutex_lock(&domain->mutex);
+  while (domain->active_count != 0)
+    lus_cond_wait(&domain->idle_cond, &domain->mutex);
+
+  g->workerdomain = NULL;
+  g->worker_close = NULL;
+  domain->refcount--; /* owning global_State */
+  destroy = (domain->refcount == 0);
+  lus_mutex_unlock(&domain->mutex);
+  if (destroy)
+    worker_domain_destroy(domain);
+}
+
+static WorkerState *worker_new(lua_State *parent, const char *path,
+                               int script_fd, int script_errno) {
+  WorkerDomain *domain = worker_domain_get(parent);
+  WorkerState *w = (WorkerState *)malloc(sizeof(WorkerState));
+  if (domain == NULL || w == NULL) {
+    if (script_fd >= 0)
+      worker_closefd(script_fd);
+    free(w);
+    return NULL;
+  }
 
   memset(w, 0, sizeof(WorkerState));
-  w->parent = parent;
+  /* Domain ownership and callbacks follow the global state. Keeping the main
+  ** thread here also prevents a collected coroutine from becoming a dangling
+  ** asynchronous parent pointer. */
+  w->parent = mainthread(G(parent));
+  w->setup = G(parent)->worker_setup;
   w->script_path = strdup(path);
   if (w->script_path == NULL) {
+    if (script_fd >= 0)
+      worker_closefd(script_fd);
     free(w);
     return NULL;
   }
   w->status = LUS_WORKER_RUNNING;
   w->refcount = 1;
   w->recv_ctx = NULL;
+  w->script_fd = script_fd;
+  w->script_errno = script_errno;
 
   lus_mutex_init(&w->mutex);
   lus_cond_init(&w->outbox_cond);
@@ -419,17 +640,33 @@ static WorkerState *worker_new(lua_State *parent, const char *path) {
   msgqueue_init(&w->outbox);
   msgqueue_init(&w->inbox);
 
+  if (!worker_domain_attach(domain, w)) {
+    lus_cond_destroy(&w->outbox_cond);
+    lus_cond_destroy(&w->inbox_cond);
+    lus_mutex_destroy(&w->mutex);
+    free(w->script_path);
+    if (w->script_fd >= 0)
+      worker_closefd(w->script_fd);
+    free(w);
+    return NULL;
+  }
+
   return w;
 }
 
-static void worker_incref(WorkerState *w) {
+LUA_API WorkerState *lus_worker_retain(WorkerState *w) {
+  if (w == NULL)
+    return NULL;
   lus_mutex_lock(&w->mutex);
   w->refcount++;
   lus_mutex_unlock(&w->mutex);
+  return w;
 }
 
-static void worker_decref(WorkerState *w) {
+LUA_API void lus_worker_release(WorkerState *w) {
   int should_free = 0;
+  if (w == NULL)
+    return;
   lus_mutex_lock(&w->mutex);
   w->refcount--;
   if (w->refcount <= 0)
@@ -439,7 +676,10 @@ static void worker_decref(WorkerState *w) {
   if (should_free) {
     if (w->L)
       lua_close(w->L);
+    worker_domain_detach(w);
     free(w->script_path);
+    if (w->script_fd >= 0)
+      worker_closefd(w->script_fd);
     free(w->error_msg);
     msgqueue_clear(&w->outbox);
     msgqueue_clear(&w->inbox);
@@ -475,7 +715,31 @@ static void signal_recv_ctx(WorkerState *w) {
 ** =======================================================
 */
 
-static void pool_enqueue(WorkerState *w) {
+static int pool_enqueue(WorkerState *w) {
+  if (!worker_domain_start(w))
+    return 0;
+
+  pool_lifecycle_lock();
+  if (!g_pool.initialized || g_pool.shutdown) {
+    pool_lifecycle_unlock();
+    worker_domain_complete(w);
+    return 0;
+  }
+
+  /* State close can begin after worker_domain_start and before this lifecycle
+  ** lock. Recheck its shutdown mark before making the active count visible in
+  ** the runnable queue. Holding the lifecycle lock makes this check atomic
+  ** with the domain cancellation scan. */
+  lus_mutex_lock(&w->mutex);
+  int shutting_down = w->shutdown;
+  lus_mutex_unlock(&w->mutex);
+  if (shutting_down) {
+    pool_lifecycle_unlock();
+    worker_domain_complete(w);
+    return 0;
+  }
+
+  lus_worker_retain(w); /* runnable queue and pool thread */
   lus_mutex_lock(&g_pool.queue_mutex);
   w->next = NULL;
   if (g_pool.runnable_tail) {
@@ -487,6 +751,8 @@ static void pool_enqueue(WorkerState *w) {
   g_pool.runnable_tail = w;
   lus_cond_signal(&g_pool.queue_cond);
   lus_mutex_unlock(&g_pool.queue_mutex);
+  pool_lifecycle_unlock();
+  return 1;
 }
 
 /*
@@ -586,9 +852,9 @@ static int worker_lib_peek(lua_State *L) {
   if (!w)
     return luaL_error(L, "worker.peek called outside worker context");
 
-  StandaloneArena *arena;
-  char *data;
-  size_t size;
+  StandaloneArena *arena = NULL;
+  char *data = NULL;
+  size_t size = 0;
 
   lus_mutex_lock(&w->mutex);
   while (w->inbox.count == 0 && !w->shutdown) {
@@ -640,6 +906,15 @@ static int copy_pledges_protected(lua_State *L) {
 }
 
 static void worker_run(WorkerState *w) {
+  lus_mutex_lock(&w->mutex);
+  if (w->shutdown) {
+    w->status = LUS_WORKER_DEAD;
+    lus_cond_signal(&w->outbox_cond);
+    signal_recv_ctx(w);
+    return;
+  }
+  lus_mutex_unlock(&w->mutex);
+
   lua_State *L = luaL_newstate();
   if (!L) {
     lus_mutex_lock(&w->mutex);
@@ -658,8 +933,8 @@ static void worker_run(WorkerState *w) {
   G(L)->isworker = 1;
 
   /* Call the setup callback if registered */
-  if (g_worker_setup) {
-    g_worker_setup(w->parent, L);
+  if (w->setup != NULL) {
+    w->setup(w->parent, L);
   }
 
   /* Inherit the parent's pledges, then seal them. A worker must run with the
@@ -742,8 +1017,17 @@ static void worker_run(WorkerState *w) {
   }
 
   /* Load and run the script */
-  if (luaL_loadfilex(L, w->script_path, lus_issealed(L) ? "t" : "bt") !=
-      LUA_OK) {
+  int load_status;
+  if (w->script_fd < 0) {
+    lua_pushfstring(L, "cannot open worker script '%s': %s", w->script_path,
+                    strerror(w->script_errno));
+    load_status = LUA_ERRFILE;
+  }
+  else {
+    load_status = luaAP_loadfd(L, w->script_fd, w->script_path,
+                               lus_issealed(L) ? "t" : "bt");
+  }
+  if (load_status != LUA_OK) {
     lus_mutex_lock(&w->mutex);
     w->status = LUS_WORKER_ERROR;
     const char *err = lua_tostring(L, -1);
@@ -792,7 +1076,8 @@ static void *pool_thread_func(void *arg) {
     pool_register_active(w);
     worker_run(w);
     pool_unregister_active(w);
-    worker_decref(w);
+    worker_domain_complete(w);
+    lus_worker_release(w);
   }
 #if defined(LUS_PLATFORM_WINDOWS)
   return 0;
@@ -810,9 +1095,9 @@ static void *pool_thread_func(void *arg) {
 */
 #define LUS_WORKER_STACK_SIZE (8 * 1024 * 1024)
 
-LUA_API void lus_worker_pool_init(lua_State *L) {
-  (void)L;
-  if (g_pool.initialized)
+static void worker_pool_init_locked(void) {
+  int started;
+  if (g_pool.initialized || g_pool.stopping)
     return;
 
   g_pool.nthreads = get_cpu_count();
@@ -824,23 +1109,22 @@ LUA_API void lus_worker_pool_init(lua_State *L) {
   g_pool.threads =
       (lus_thread_t *)malloc(sizeof(lus_thread_t) * g_pool.nthreads);
   if (g_pool.threads == NULL)
-    return; /* stays uninitialized; creation sites report the failure */
+    return;
   lus_mutex_init(&g_pool.queue_mutex);
   lus_cond_init(&g_pool.queue_cond);
   g_pool.runnable_head = NULL;
   g_pool.runnable_tail = NULL;
   g_pool.active_head = NULL;
   g_pool.shutdown = 0;
+  g_pool.stopping = 0;
 
-  /* a partially started pool still works with fewer threads; only join
-     the threads that actually started */
 #if !defined(LUS_PLATFORM_WINDOWS)
   pthread_attr_t attr;
   int have_attr = (pthread_attr_init(&attr) == 0);
   if (have_attr)
     pthread_attr_setstacksize(&attr, LUS_WORKER_STACK_SIZE);
 #endif
-  int started = 0;
+  started = 0;
   for (int i = 0; i < g_pool.nthreads; i++) {
 #if defined(LUS_PLATFORM_WINDOWS)
     g_pool.threads[i] = CreateThread(NULL, LUS_WORKER_STACK_SIZE,
@@ -870,13 +1154,28 @@ LUA_API void lus_worker_pool_init(lua_State *L) {
   g_pool.initialized = 1;
 }
 
+LUA_API void lus_worker_pool_init(lua_State *L) {
+  (void)L;
+  pool_lifecycle_lock();
+  worker_pool_init_locked();
+  pool_lifecycle_unlock();
+}
+
 LUA_API void lus_worker_pool_shutdown(void) {
-  if (!g_pool.initialized)
+  WorkerState *queued;
+  pool_lifecycle_lock();
+  if (!g_pool.initialized || g_pool.stopping) {
+    pool_lifecycle_unlock();
     return;
+  }
+  g_pool.stopping = 1;
 
   lus_mutex_lock(&g_pool.queue_mutex);
   g_pool.shutdown = 1;
   lus_cond_broadcast(&g_pool.queue_cond);
+  queued = g_pool.runnable_head;
+  g_pool.runnable_head = NULL;
+  g_pool.runnable_tail = NULL;
   /* wake running workers blocked in worker.peek so their threads can
      unwind and reach the shutdown check in pool_dequeue */
   for (WorkerState *w = g_pool.active_head; w != NULL; w = w->active_next) {
@@ -886,6 +1185,23 @@ LUA_API void lus_worker_pool_shutdown(void) {
     lus_mutex_unlock(&w->mutex);
   }
   lus_mutex_unlock(&g_pool.queue_mutex);
+  pool_lifecycle_unlock();
+
+  /* Queued workers will not be picked up after shutdown. Complete them before
+  ** joining so an active worker that owns one can finish its state teardown. */
+  while (queued != NULL) {
+    WorkerState *next = queued->next;
+    queued->next = NULL;
+    lus_mutex_lock(&queued->mutex);
+    queued->shutdown = 1;
+    queued->status = LUS_WORKER_DEAD;
+    lus_cond_broadcast(&queued->inbox_cond);
+    lus_cond_broadcast(&queued->outbox_cond);
+    signal_recv_ctx(queued);
+    worker_domain_complete(queued);
+    lus_worker_release(queued); /* runnable queue reference */
+    queued = next;
+  }
 
   for (int i = 0; i < g_pool.nthreads; i++) {
 #if defined(LUS_PLATFORM_WINDOWS)
@@ -896,15 +1212,19 @@ LUA_API void lus_worker_pool_shutdown(void) {
 #endif
   }
 
+  pool_lifecycle_lock();
   free(g_pool.threads);
+  g_pool.threads = NULL;
   lus_cond_destroy(&g_pool.queue_cond);
   lus_mutex_destroy(&g_pool.queue_mutex);
   g_pool.initialized = 0;
+  g_pool.shutdown = 0;
+  g_pool.stopping = 0;
+  pool_lifecycle_unlock();
 }
 
 LUA_API void lus_onworker(lua_State *L, lus_WorkerSetup fn) {
-  (void)L;
-  g_worker_setup = fn;
+  G(L)->worker_setup = fn;
 }
 
 /* }====================================================== */
@@ -916,26 +1236,35 @@ LUA_API void lus_onworker(lua_State *L, lus_WorkerSetup fn) {
 */
 
 static WorkerState *check_worker(lua_State *L, int idx) {
-  return *(WorkerState **)luaL_checkudata(L, idx, WORKER_METATABLE);
+  WorkerState *w = *(WorkerState **)luaL_checkudata(L, idx, WORKER_METATABLE);
+  if (w == NULL)
+    luaL_argerror(L, idx, "released worker handle");
+  return w;
 }
 
 /* worker.create(path, ...) */
 static int lib_create(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
+  int script_fd = -1;
+  int script_errno = 0;
 
   /* Check permissions */
-  lus_checkfsperm(L, "fs:read", path);
   if (!lus_haspledge(L, "load", NULL)) {
     return luaL_error(L, "permission denied: 'load' pledge required");
   }
+#if defined(LUS_PLATFORM_WINDOWS)
+  script_fd = luaAP_winopenfd(L, path, 1, 0);
+#else
+  script_fd = luaAP_open(L, path, O_RDONLY | O_CLOEXEC, 0, 1, 0);
+#endif
+  if (script_fd < 0)
+    script_errno = errno;
 
   /* Initialize pool if needed */
   lus_worker_pool_init(L);
-  if (!g_pool.initialized)
-    return luaL_error(L, "failed to start worker thread pool");
 
   /* Create worker state */
-  WorkerState *w = worker_new(L, path);
+  WorkerState *w = worker_new(L, path, script_fd, script_errno);
   if (!w)
     return luaL_error(L, "failed to allocate worker");
 
@@ -945,7 +1274,7 @@ static int lib_create(lua_State *L) {
     SerBuffer buf;
     serbuf_init(&buf);
     if (!serialize_value(L, i, &buf, 0)) {
-      worker_decref(w);
+      lus_worker_release(w);
       serbuf_free(&buf);
       return luaL_error(L, buf.err ? buf.err : "worker serialization failed",
                         buf.errarg);
@@ -954,7 +1283,7 @@ static int lib_create(lua_State *L) {
     if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
       lus_mutex_unlock(&w->mutex);
       serbuf_free(&buf);
-      worker_decref(w);
+      lus_worker_release(w);
       return luaL_error(L, "out of memory");
     }
     lus_mutex_unlock(&w->mutex);
@@ -964,12 +1293,15 @@ static int lib_create(lua_State *L) {
   /* Create userdata */
   WorkerState **ud =
       (WorkerState **)lua_newuserdatauv(L, sizeof(WorkerState *), 0);
-  *ud = w;
-  worker_incref(w); /* userdata holds a reference */
+  *ud = w; /* transfer worker_new's owned reference to the userdata */
   luaL_setmetatable(L, WORKER_METATABLE);
 
   /* Enqueue to pool */
-  pool_enqueue(w);
+  if (!pool_enqueue(w)) {
+    *ud = NULL;
+    lus_worker_release(w);
+    return luaL_error(L, "failed to start worker thread pool");
+  }
 
   return 1;
 }
@@ -1145,8 +1477,10 @@ static int lib_send(lua_State *L) {
 
 /* GC metamethod */
 static int worker_gc(lua_State *L) {
-  WorkerState *w = check_worker(L, 1);
-  worker_decref(w);
+  WorkerState **ud = (WorkerState **)luaL_checkudata(L, 1, WORKER_METATABLE);
+  WorkerState *w = *ud;
+  *ud = NULL;
+  lus_worker_release(w);
   return 0;
 }
 
@@ -1191,32 +1525,47 @@ LUAMOD_API int luaopen_worker(lua_State *L) {
 */
 
 LUA_API WorkerState *lus_worker_create(lua_State *L, const char *path) {
+  int script_fd = -1;
+  int script_errno = 0;
+#if defined(LUS_PLATFORM_WINDOWS)
+  script_fd = luaAP_winopenrawfd(path);
+#else
+  script_fd = open(path, O_RDONLY | O_CLOEXEC);
+#endif
+  if (script_fd < 0)
+    script_errno = errno;
   lus_worker_pool_init(L);
-  if (!g_pool.initialized)
+  WorkerState *w = worker_new(L, path, script_fd, script_errno);
+  if (w == NULL)
     return NULL;
-  WorkerState *w = worker_new(L, path);
-  if (w)
-    pool_enqueue(w);
+  if (!pool_enqueue(w)) {
+    lus_worker_release(w);
+    return NULL;
+  }
   return w;
 }
 
 LUA_API int lus_worker_send(lua_State *L, WorkerState *w, int idx) {
   if (w == NULL)
     return 0;
+  lus_worker_retain(w);
   SerBuffer buf;
   serbuf_init(&buf);
   if (!serialize_value(L, idx, &buf, 0)) {
     serbuf_free(&buf);
+    lus_worker_release(w);
     return 0;
   }
   lus_mutex_lock(&w->mutex);
-  if (!msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
+  if (w->shutdown || !msgqueue_push(&w->inbox, buf.arena, buf.data, buf.size)) {
     lus_mutex_unlock(&w->mutex);
     serbuf_free(&buf);
+    lus_worker_release(w);
     return 0;
   }
   lus_cond_signal(&w->inbox_cond);
   lus_mutex_unlock(&w->mutex);
+  lus_worker_release(w);
   return 1;
 }
 
@@ -1224,22 +1573,33 @@ LUA_API int lus_worker_receive(lua_State *L, WorkerState *w) {
   StandaloneArena *arena;
   char *data;
   size_t size;
+  if (w == NULL)
+    return 0;
+  lus_worker_retain(w);
   lus_mutex_lock(&w->mutex);
   int got = msgqueue_pop(&w->outbox, &arena, &data, &size);
   lus_mutex_unlock(&w->mutex);
-  if (!got)
+  if (!got) {
+    lus_worker_release(w);
     return 0;
+  }
 
   DeserBuffer db = {data, size, 0};
   int ok = deserialize_value(L, &db, 0);
   luaA_freestandalone(arena);
+  lus_worker_release(w);
   return ok;
 }
 
 LUA_API int lus_worker_status(WorkerState *w) {
+  int status;
+  if (w == NULL)
+    return LUS_WORKER_DEAD;
+  lus_worker_retain(w);
   lus_mutex_lock(&w->mutex);
-  int status = w->status;
+  status = w->status;
   lus_mutex_unlock(&w->mutex);
+  lus_worker_release(w);
   return status;
 }
 

@@ -46,6 +46,22 @@
 typedef struct lua_State lua_State;
 
 /*
+** Opaque worker handle. A successful 'lus_worker_create' returns one owned
+** reference. Retain a handle before sharing it with another owner and release
+** every owned reference when it is no longer needed.
+*/
+typedef struct WorkerState WorkerState;
+
+/* Worker status constants returned by 'lus_worker_status'. */
+#define LUS_WORKER_RUNNING 0
+#define LUS_WORKER_BLOCKED 1
+#define LUS_WORKER_DEAD 2
+#define LUS_WORKER_ERROR 3
+
+/* Called after a worker state is created and before its script is loaded. */
+typedef void (*lus_WorkerSetup)(lua_State *parent, lua_State *worker);
+
+/*
 ** basic types
 */
 #define LUA_TNONE (-1)
@@ -148,6 +164,20 @@ LUA_API lua_CFunction(lua_atpanic)(lua_State *L, lua_CFunction panicf);
 LUA_API lua_Number(lua_version)(lua_State *L);
 
 /*
+** Worker API. The process pool is initialized automatically by worker
+** creation. Its shutdown is explicit and affects workers from every state.
+*/
+LUA_API void(lus_worker_pool_init)(lua_State *L);
+LUA_API void(lus_worker_pool_shutdown)(void);
+LUA_API void(lus_onworker)(lua_State *L, lus_WorkerSetup fn);
+LUA_API WorkerState *(lus_worker_create)(lua_State * L, const char *path);
+LUA_API WorkerState *(lus_worker_retain)(WorkerState * w);
+LUA_API void(lus_worker_release)(WorkerState *w);
+LUA_API int(lus_worker_send)(lua_State *L, WorkerState *w, int idx);
+LUA_API int(lus_worker_receive)(lua_State *L, WorkerState *w);
+LUA_API int(lus_worker_status)(WorkerState *w);
+
+/*
 ** basic stack manipulation
 */
 LUA_API int(lua_absindex)(lua_State *L, int idx);
@@ -235,7 +265,7 @@ LUA_API void(lua_pushenum)(lua_State *L, int npairs);
 ** handle, or NULL for a closed handle or any other value. Provided by
 ** the sqlite binding, so the symbol is absent in LUS_NO_SQLITE builds.
 */
-LUA_API void *(lus_tosqlite)(lua_State *L, int idx);
+LUA_API void *(lus_tosqlite)(lua_State * L, int idx);
 
 /*
 ** {==============================================================
@@ -293,7 +323,7 @@ typedef struct QNode lus_QueryNode; /* opaque */
 #define LUS_QAGG_MIN 3
 #define LUS_QAGG_MAX 4
 
-LUA_API lus_Query *(lus_toquery)(lua_State *L, int idx);
+LUA_API lus_Query *(lus_toquery)(lua_State * L, int idx);
 LUA_API int(lus_querysourcecount)(const lus_Query *q);
 LUA_API const char *(lus_querysourcealias)(const lus_Query *q, int i,
                                            size_t *len);
@@ -309,8 +339,8 @@ LUA_API int(lus_qnodekind)(const lus_QueryNode *n);
 LUA_API int(lus_qnodeop)(const lus_QueryNode *n);
 LUA_API const lus_QueryNode *(lus_qnodechild)(const lus_Query *q,
                                               const lus_QueryNode *n, int i);
-LUA_API const char *(lus_qnodename)(const lus_Query *q,
-                                    const lus_QueryNode *n, size_t *len);
+LUA_API const char *(lus_qnodename)(const lus_Query *q, const lus_QueryNode *n,
+                                    size_t *len);
 LUA_API void(lus_qnodevalue)(lua_State *L, const lus_Query *q,
                              const lus_QueryNode *n);
 

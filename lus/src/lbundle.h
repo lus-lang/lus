@@ -11,6 +11,10 @@
 
 #include "lua.h"
 
+#if defined(LUA_USE_WINDOWS)
+#include <windows.h>
+#endif
+
 /* Bundle magic signature (at end of file) */
 #define LUSB_MAGIC "LUSB"
 #define LUSB_MAGIC_SIZE 4
@@ -47,6 +51,12 @@ typedef struct LusBundle {
   int num_files;                  /* bundled files count */
   LusBundleFile *files;           /* file entries */
   size_t data_offset;             /* offset to bytecode blob in exe */
+#if defined(LUA_USE_WINDOWS)
+  HANDLE source_handle;             /* retained executable object */
+  SRWLOCK source_lock;              /* serializes positional reads */
+#else
+  int source_fd;                  /* retained executable object */
+#endif
   char exe_path[4096];            /* path to self executable */
 } LusBundle;
 

@@ -193,55 +193,56 @@
 */
 
 #define LUA_VDIR LUA_VERSION_MAJOR "." LUA_VERSION_MINOR
+#if !defined(LUS_INSTALL_PREFIX)
+#if defined(_WIN32)
+#define LUS_INSTALL_PREFIX "C:/Program Files/Lus/"
+#else
+#define LUS_INSTALL_PREFIX "/usr/local/"
+#endif
+#endif
+
+#define LUA_ROOT LUS_INSTALL_PREFIX
+#define LUS_LDIR LUA_ROOT "share/lus/" LUA_VDIR "/"
+#define LUS_CDIR LUA_ROOT "lib/lus/" LUA_VDIR "/"
+#define LUA_LDIR LUA_ROOT "share/lua/" LUA_VDIR "/"
+#define LUA_CDIR LUA_ROOT "lib/lua/" LUA_VDIR "/"
+
 #if defined(_WIN32) /* { */
-/*
-** In Windows, any exclamation mark ('!') in the path is replaced by the
-** path of the directory of the executable file of the current process.
-*/
-#define LUA_LDIR "!\\lua\\"
-#define LUA_CDIR "!\\"
-#define LUA_SHRDIR "!\\..\\share\\lua\\" LUA_VDIR "\\"
 
 #if !defined(LUA_PATH_DEFAULT)
-#define LUA_PATH_DEFAULT                                                     \
-  LUA_LDIR "?.lus;" LUA_LDIR "?\\init.lus;" LUA_LDIR "?.lua;" LUA_LDIR       \
-           "?\\init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?\\init.lus;" LUA_CDIR \
-           "?.lua;" LUA_CDIR "?\\init.lua;" LUA_SHRDIR "?.lus;" LUA_SHRDIR   \
-           "?\\init.lus;" LUA_SHRDIR "?.lua;" LUA_SHRDIR "?\\init.lua;"      \
-           ".\\?.lus;"                                                       \
-           ".\\?\\init.lus;"                                                 \
-           ".\\?.lua;"                                                       \
-           ".\\?\\init.lua"
+#define LUA_PATH_DEFAULT                                                    \
+  LUS_LDIR "?.lus;" LUS_LDIR "?\\init.lus;" LUS_LDIR "?.lua;" LUS_LDIR     \
+           "?\\init.lua;" LUS_CDIR "?.lus;" LUS_CDIR "?\\init.lus;"       \
+           LUS_CDIR "?.lua;" LUS_CDIR "?\\init.lua;" LUA_LDIR "?.lus;"     \
+           LUA_LDIR "?\\init.lus;" LUA_LDIR "?.lua;" LUA_LDIR               \
+           "?\\init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?\\init.lus;"       \
+           LUA_CDIR "?.lua;" LUA_CDIR "?\\init.lua;" ".\\?.lus;"           \
+           ".\\?\\init.lus;" ".\\?.lua;" ".\\?\\init.lua"
 #endif
 
 #if !defined(LUA_CPATH_DEFAULT)
-#define LUA_CPATH_DEFAULT                                                  \
-  LUA_CDIR "?.dll;" LUA_CDIR "..\\lib\\lua\\" LUA_VDIR "\\?.dll;" LUA_CDIR \
-           "loadall.dll;"                                                  \
-           ".\\?.dll"
+#define LUA_CPATH_DEFAULT                                                    \
+  LUS_CDIR "?.dll;" LUS_CDIR "loadall.dll;" LUA_CDIR "?.dll;" LUA_CDIR       \
+           "loadall.dll;" ".\\?.dll"
 #endif
 
 #else /* }{ */
 
-#define LUA_ROOT "/usr/local/"
-#define LUA_LDIR LUA_ROOT "share/lua/" LUA_VDIR "/"
-#define LUA_CDIR LUA_ROOT "lib/lua/" LUA_VDIR "/"
-
 #if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT                                                   \
-  LUA_LDIR "?.lus;" LUA_LDIR "?/init.lus;" LUA_LDIR "?.lua;" LUA_LDIR      \
-           "?/init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?/init.lus;" LUA_CDIR \
-           "?.lua;" LUA_CDIR "?/init.lua;"                                 \
-           "./?.lus;"                                                      \
-           "./?/init.lus;"                                                 \
-           "./?.lua;"                                                      \
-           "./?/init.lua"
+  LUS_LDIR "?.lus;" LUS_LDIR "?/init.lus;" LUS_LDIR "?.lua;" LUS_LDIR    \
+           "?/init.lua;" LUS_CDIR "?.lus;" LUS_CDIR "?/init.lus;"         \
+           LUS_CDIR "?.lua;" LUS_CDIR "?/init.lua;" LUA_LDIR "?.lus;"     \
+           LUA_LDIR "?/init.lus;" LUA_LDIR "?.lua;" LUA_LDIR              \
+           "?/init.lua;" LUA_CDIR "?.lus;" LUA_CDIR "?/init.lus;"         \
+           LUA_CDIR "?.lua;" LUA_CDIR "?/init.lua;" "./?.lus;"            \
+           "./?/init.lus;" "./?.lua;" "./?/init.lua"
 #endif
 
 #if !defined(LUA_CPATH_DEFAULT)
-#define LUA_CPATH_DEFAULT                 \
-  LUA_CDIR "?.so;" LUA_CDIR "loadall.so;" \
-           "./?.so"
+#define LUA_CPATH_DEFAULT                                                   \
+  LUS_CDIR "?.so;" LUS_CDIR "loadall.so;" LUA_CDIR "?.so;" LUA_CDIR       \
+           "loadall.so;" "./?.so"
 #endif
 
 #endif /* } */

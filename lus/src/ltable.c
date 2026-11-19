@@ -829,6 +829,7 @@ Table *luaH_new(lua_State *L) {
   GCObject *o = luaC_newobj(L, LUA_VTABLE, sizeof(Table));
   Table *t = gco2t(o);
   t->metatable = NULL;
+  t->queryprovider = NULL;
   t->flags = maskflags; /* table has no metamethod fields */
   t->array = NULL;
   t->asize = 0;

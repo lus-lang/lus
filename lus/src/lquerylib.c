@@ -341,12 +341,18 @@ static void evalagg(QExec *e, const QNode *n) {
         lua_pop(L, 2);
         continue;
       }
+      {
+        int t = lua_type(L, -1);
+        if (t != LUA_TNUMBER && t != LUA_TSTRING)
+          luaL_error(L, "cannot aggregate a %s value",
+                     luaL_typename(L, -1));
+      }
       if (!seen)
         take = 1;
       else {
         int ta = lua_type(L, -1);
         int tb = lua_type(L, best);
-        if (ta != tb || (ta != LUA_TNUMBER && ta != LUA_TSTRING))
+        if (ta != tb)
           luaL_error(L, "cannot aggregate a %s value", luaL_typename(L, -1));
         take = (n->sub == QAGG_MIN) ? lua_compare(L, -1, best, LUA_OPLT)
                                     : lua_compare(L, best, -1, LUA_OPLT);
@@ -496,11 +502,15 @@ static void eval(QExec *e, int node) {
 
 static int classify_source(lua_State *L, int srcidx,
                            const lus_QueryProvider **pp) {
-  if (luaL_getmetafield(L, srcidx, "__queryprovider") != LUA_TNIL) {
-    if (pp != NULL)
-      *pp = (const lus_QueryProvider *)lua_touserdata(L, -1);
+  if (lua_getmetatable(L, srcidx)) {
+    const lus_QueryProvider *p =
+        ((const Table *)lua_topointer(L, -1))->queryprovider;
     lua_pop(L, 1);
-    return QP_NATIVE;
+    if (p != NULL) {
+      if (pp != NULL)
+        *pp = p;
+      return QP_NATIVE;
+    }
   }
   if (luaL_getmetafield(L, srcidx, "__query") != LUA_TNIL) {
     lua_pop(L, 1);
@@ -1054,11 +1064,17 @@ static void execquery(lua_State *L, Query *q, int qidx) {
     lua_Integer limit = evalcount(&e, pl->h.limit_node, "limit");
     lua_Integer offset = evalcount(&e, pl->h.offset_node, "offset");
     if (limit >= 0 || offset > 0) {
-      lua_Integer from = (offset > 0) ? offset + 1 : 1;
-      lua_Integer to = (limit >= 0) ? from + limit - 1 : nrecords;
+      lua_Integer skip = (offset > 0) ? offset : 0;
+      lua_Integer from = 1;
+      lua_Integer to = 0;
       lua_Integer r, out = 0;
-      if (to > nrecords)
-        to = nrecords;
+      if (skip < nrecords && limit != 0) {
+        lua_Integer available = nrecords - skip;
+        lua_Integer take =
+            (limit < 0 || limit > available) ? available : limit;
+        from = skip + 1;
+        to = from + take - 1;
+      }
       lua_newtable(L);
       for (r = from; r <= to; r++) {
         lua_rawgeti(L, records, r);

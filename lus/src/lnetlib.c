@@ -80,6 +80,8 @@ typedef int socket_t;
 #define DEFAULT_RECV_SIZE 4096
 #define DEFAULT_UDP_SIZE 8192
 #define MAX_RECV_SIZE 1048576 /* 1MB max single read */
+#define DEFAULT_LINE_LIMIT ((size_t)1024 * 1024)
+#define DEFAULT_ALL_LIMIT ((size_t)64 * 1024 * 1024)
 #define FETCH_TIMEOUT_MS 30000
 #define FETCH_MAX_BODY ((size_t)64 * 1024 * 1024)
 
@@ -547,11 +549,19 @@ static int socket_send(lua_State *L) {
 
 /* Helper: ensure socket buffer has capacity for additional bytes */
 static void sock_buffer_ensure(lua_State *L, LSocket *sock, size_t additional) {
+  if (additional > MAX_SIZE - sock->buflen)
+    luaM_toobig(L);
   size_t needed = sock->buflen + additional;
   if (needed > sock->bufcap) {
-    size_t newcap = sock->bufcap ? sock->bufcap * 2 : 4096;
+    size_t newcap;
+    if (sock->bufcap == 0)
+      newcap = 4096;
+    else if (sock->bufcap > MAX_SIZE / 2)
+      newcap = needed;
+    else
+      newcap = sock->bufcap * 2;
     while (newcap < needed) {
-      if (newcap > SIZE_MAX / 2) {
+      if (newcap > MAX_SIZE / 2) {
         newcap = needed;
         break;
       }
@@ -575,6 +585,36 @@ static void sock_buffer_push_and_clear(lua_State *L, LSocket *sock) {
   lua_pushlstring(L, sock->buffer, sock->buflen);
   sock->buflen = 0;
 }
+
+/* Abort a connection after a framing limit violation. Do not perform a TLS
+** close handshake or drain attacker-controlled input. */
+static void receive_limit_exceeded(lua_State *L, LSocket *sock) {
+  if (sock->ssl) {
+    SSL_free(sock->ssl);
+    sock->ssl = NULL;
+  }
+  if (sock->fd != SOCKET_INVALID) {
+    sock_close(sock->fd);
+    sock->fd = SOCKET_INVALID;
+  }
+  if (sock->buffer) {
+    luaM_freemem(L, sock->buffer, sock->bufcap);
+    sock->buffer = NULL;
+  }
+  sock->buflen = 0;
+  sock->bufcap = 0;
+  sock->closed = 1;
+  luaL_error(L, "receive limit exceeded");
+}
+
+static size_t receive_limit(lua_State *L, int arg, size_t def) {
+  lua_Integer limit = luaL_optinteger(L, arg, (lua_Integer)def);
+  luaL_argcheck(L, limit > 0, arg, "max_bytes must be positive");
+  luaL_argcheck(L, (lua_Unsigned)limit <= (lua_Unsigned)MAX_SIZE, arg,
+                "max_bytes is too large");
+  return (size_t)limit;
+}
+
 /* Read exactly n bytes - synchronous implementation */
 static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
   char buf[DEFAULT_RECV_SIZE];
@@ -637,7 +677,7 @@ static int recv_bytes(lua_State *L, LSocket *sock, size_t n) {
 }
 
 /* Read until newline - synchronous implementation */
-static int recv_line(lua_State *L, LSocket *sock) {
+static int recv_line(lua_State *L, LSocket *sock, size_t limit) {
   char buf[DEFAULT_RECV_SIZE];
 
   for (;;) {
@@ -653,6 +693,9 @@ static int recv_line(lua_State *L, LSocket *sock) {
           pushlen--;
         }
 
+        if (pushlen > limit)
+          receive_limit_exceeded(L, sock);
+
         /* Push the line (without \r\n) */
         lua_pushlstring(L, sock->buffer, pushlen);
 
@@ -667,6 +710,10 @@ static int recv_line(lua_State *L, LSocket *sock) {
         return 1;
       }
     }
+
+    if (sock->buflen > limit &&
+        !(sock->buflen == limit + 1 && sock->buffer[limit] == '\r'))
+      receive_limit_exceeded(L, sock);
 
     /* No newline found, read more data */
     ssize_t got;
@@ -688,6 +735,8 @@ static int recv_line(lua_State *L, LSocket *sock) {
         int ssl_err = SSL_get_error(sock->ssl, (int)got);
         if (ssl_err == SSL_ERROR_ZERO_RETURN) {
           /* EOF - return what we have */
+          if (sock->buflen > limit)
+            receive_limit_exceeded(L, sock);
           sock_buffer_push_and_clear(L, sock);
           return 1;
         }
@@ -708,6 +757,8 @@ static int recv_line(lua_State *L, LSocket *sock) {
       }
       if (got == 0) {
         /* EOF - return what we have */
+        if (sock->buflen > limit)
+          receive_limit_exceeded(L, sock);
         sock_buffer_push_and_clear(L, sock);
         return 1;
       }
@@ -718,8 +769,11 @@ static int recv_line(lua_State *L, LSocket *sock) {
   }
 }
 /* Read until connection closed - synchronous implementation */
-static int recv_all(lua_State *L, LSocket *sock) {
+static int recv_all(lua_State *L, LSocket *sock, size_t limit) {
   char buf[DEFAULT_RECV_SIZE];
+
+  if (sock->buflen > limit)
+    receive_limit_exceeded(L, sock);
 
   for (;;) {
     ssize_t got;
@@ -766,6 +820,9 @@ static int recv_all(lua_State *L, LSocket *sock) {
       }
     }
 
+    if ((size_t)got > limit - sock->buflen)
+      receive_limit_exceeded(L, sock);
+
     /* Append received data to buffer */
     sock_buffer_append(L, sock, buf, (size_t)got);
   }
@@ -785,10 +842,10 @@ static int socket_receive(lua_State *L) {
   const char *pattern = luaL_optstring(L, 2, "*l");
 
   if (strcmp(pattern, "*l") == 0) {
-    return recv_line(L, sock);
+    return recv_line(L, sock, receive_limit(L, 3, DEFAULT_LINE_LIMIT));
   }
   else if (strcmp(pattern, "*a") == 0) {
-    return recv_all(L, sock);
+    return recv_all(L, sock, receive_limit(L, 3, DEFAULT_ALL_LIMIT));
   }
   else {
     return luaL_error(L, "invalid receive pattern: %s", pattern);
@@ -949,6 +1006,34 @@ static int server_settimeout(lua_State *L) {
   return 0;
 }
 
+static int server_getsockname(lua_State *L) {
+  LServer *srv = check_server(L, 1);
+  struct sockaddr_storage addr;
+  socklen_t addrlen = sizeof(addr);
+  char ip[INET6_ADDRSTRLEN];
+  int port;
+  if (getsockname(srv->fd, (struct sockaddr *)&addr, &addrlen) ==
+      SOCKET_ERROR_VAL)
+    return push_socket_error(L, "getsockname");
+  if (addr.ss_family == AF_INET) {
+    struct sockaddr_in *sin = (struct sockaddr_in *)&addr;
+    if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip)) == NULL)
+      return push_socket_error(L, "getsockname");
+    port = ntohs(sin->sin_port);
+  }
+  else if (addr.ss_family == AF_INET6) {
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&addr;
+    if (inet_ntop(AF_INET6, &sin6->sin6_addr, ip, sizeof(ip)) == NULL)
+      return push_socket_error(L, "getsockname");
+    port = ntohs(sin6->sin6_port);
+  }
+  else
+    return luaL_error(L, "getsockname returned an unsupported address");
+  lua_pushstring(L, ip);
+  lua_pushinteger(L, port);
+  return 2;
+}
+
 static int server_gc(lua_State *L) {
   return server_close(L);
 }
@@ -967,6 +1052,7 @@ static int server_tostring(lua_State *L) {
 static const luaL_Reg server_methods[] = {{"accept", server_accept},
                                           {"close", server_close},
                                           {"settimeout", server_settimeout},
+                                          {"getsockname", server_getsockname},
                                           {"__gc", server_gc},
                                           {"__close", server_close},
                                           {"__tostring", server_tostring},
@@ -1117,6 +1203,34 @@ static int udp_setsockname(lua_State *L) {
   return 0;
 }
 
+static int udp_getsockname(lua_State *L) {
+  LUDPSocket *sock = check_udpsocket(L, 1);
+  struct sockaddr_storage addr;
+  socklen_t addrlen = sizeof(addr);
+  char ip[INET6_ADDRSTRLEN];
+  int port;
+  if (getsockname(sock->fd, (struct sockaddr *)&addr, &addrlen) ==
+      SOCKET_ERROR_VAL)
+    return push_socket_error(L, "getsockname");
+  if (addr.ss_family == AF_INET) {
+    struct sockaddr_in *sin = (struct sockaddr_in *)&addr;
+    if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip)) == NULL)
+      return push_socket_error(L, "getsockname");
+    port = ntohs(sin->sin_port);
+  }
+  else if (addr.ss_family == AF_INET6) {
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&addr;
+    if (inet_ntop(AF_INET6, &sin6->sin6_addr, ip, sizeof(ip)) == NULL)
+      return push_socket_error(L, "getsockname");
+    port = ntohs(sin6->sin6_port);
+  }
+  else
+    return luaL_error(L, "getsockname returned an unsupported address");
+  lua_pushstring(L, ip);
+  lua_pushinteger(L, port);
+  return 2;
+}
+
 static int udp_close(lua_State *L) {
   LUDPSocket *sock = (LUDPSocket *)luaL_checkudata(L, 1, UDPSOCKET_METATABLE);
   if (!sock->closed) {
@@ -1147,6 +1261,7 @@ static int udp_tostring(lua_State *L) {
 static const luaL_Reg udpsocket_methods[] = {{"sendto", udp_sendto},
                                              {"receive", udp_receive},
                                              {"setsockname", udp_setsockname},
+                                             {"getsockname", udp_getsockname},
                                              {"close", udp_close},
                                              {"__gc", udp_gc},
                                              {"__close", udp_close},

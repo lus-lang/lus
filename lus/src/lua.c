@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,12 +19,14 @@
 
 #if !defined(_WIN32)
 #include <sys/stat.h>
+#include <unistd.h>
 #else
 #include <windows.h>
 #endif
 
 #include "lua.h"
 
+#include "lauthpath.h"
 #include "last.h"
 #include "lauxlib.h"
 #include "lbundle.h"
@@ -48,6 +51,9 @@
 
 #define LUA_INITVARVERSION LUA_INIT_VAR LUA_VERSUFFIX
 
+#define LUS_PATH_DEFAULT_REGISTRY "_LUS_PATH_DEFAULT"
+#define LUS_CPATH_DEFAULT_REGISTRY "_LUS_CPATH_DEFAULT"
+
 static lua_State *globalL = NULL;
 
 static const char *progname = LUA_PROGNAME;
@@ -63,6 +69,101 @@ static void mark_env_readonly(lua_State *L);
 static void create_flags_table(lua_State *L);
 static int install_preincludes(lua_State *L);
 
+static int archive_prefix(char *path, size_t size) {
+  char *directory;
+  char *separator;
+  if (!lusB_getexepath(path, size))
+    return 0;
+  directory = strrchr(path, '/');
+#if defined(_WIN32)
+  separator = strrchr(path, '\\');
+  if (separator != NULL && (directory == NULL || separator > directory))
+    directory = separator;
+#endif
+  if (directory == NULL)
+    return 0;
+  *directory = '\0';
+  separator = strrchr(path, '/');
+#if defined(_WIN32)
+  directory = strrchr(path, '\\');
+  if (directory != NULL && (separator == NULL || directory > separator))
+    separator = directory;
+  if (_stricmp(separator == NULL ? path : separator + 1, "bin") != 0)
+    return 0;
+#else
+  if (strcmp(separator == NULL ? path : separator + 1, "bin") != 0)
+    return 0;
+#endif
+  if (separator == NULL)
+    return 0;
+  *separator = '\0';
+  return path[0] != '\0';
+}
+
+static void addpathtemplate(luaL_Buffer *buffer, int *first, const char *prefix,
+                            const char *suffix) {
+  if (!*first)
+    luaL_addchar(buffer, *LUA_PATH_SEP);
+  *first = 0;
+  if (prefix != NULL)
+    luaL_addstring(buffer, prefix);
+  luaL_addstring(buffer, suffix);
+}
+
+static void set_archive_path_defaults(lua_State *L) {
+  char prefix[4096];
+  luaL_Buffer buffer;
+  int first = 1;
+  if (!archive_prefix(prefix, sizeof(prefix)))
+    return;
+
+  luaL_buffinit(L, &buffer);
+  addpathtemplate(&buffer, &first, prefix, "/share/lus/" LUA_VDIR "/?.lus");
+  addpathtemplate(&buffer, &first, prefix,
+                  "/share/lus/" LUA_VDIR "/?/init.lus");
+  addpathtemplate(&buffer, &first, prefix, "/share/lus/" LUA_VDIR "/?.lua");
+  addpathtemplate(&buffer, &first, prefix,
+                  "/share/lus/" LUA_VDIR "/?/init.lua");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/?.lus");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/?/init.lus");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/?.lua");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/?/init.lua");
+  addpathtemplate(&buffer, &first, prefix, "/share/lua/" LUA_VDIR "/?.lus");
+  addpathtemplate(&buffer, &first, prefix,
+                  "/share/lua/" LUA_VDIR "/?/init.lus");
+  addpathtemplate(&buffer, &first, prefix, "/share/lua/" LUA_VDIR "/?.lua");
+  addpathtemplate(&buffer, &first, prefix,
+                  "/share/lua/" LUA_VDIR "/?/init.lua");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/?.lus");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/?/init.lus");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/?.lua");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/?/init.lua");
+  addpathtemplate(&buffer, &first, NULL, "./?.lus");
+  addpathtemplate(&buffer, &first, NULL, "./?/init.lus");
+  addpathtemplate(&buffer, &first, NULL, "./?.lua");
+  addpathtemplate(&buffer, &first, NULL, "./?/init.lua");
+  luaL_pushresult(&buffer);
+  lua_setfield(L, LUA_REGISTRYINDEX, LUS_PATH_DEFAULT_REGISTRY);
+
+  first = 1;
+  luaL_buffinit(L, &buffer);
+#if defined(_WIN32)
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/?.dll");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/loadall.dll");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/?.dll");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/loadall.dll");
+  addpathtemplate(&buffer, &first, NULL, ".\\?.dll");
+#else
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/?.so");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lus/" LUA_VDIR "/loadall.so");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/?.so");
+  addpathtemplate(&buffer, &first, prefix, "/lib/lua/" LUA_VDIR "/loadall.so");
+  addpathtemplate(&buffer, &first, NULL, "./?.so");
+#endif
+  luaL_pushresult(&buffer);
+  lua_setfield(L, LUA_REGISTRYINDEX, LUS_CPATH_DEFAULT_REGISTRY);
+}
+
 static int parse_positive_int_arg(const char *s, int *result) {
   char *endptr;
   long value;
@@ -77,9 +178,8 @@ static int parse_positive_int_arg(const char *s, int *result) {
 }
 
 /* Standalone bundle options */
-static const char *standalone_entry = NULL; /* --standalone entry file */
-#define MAX_INCLUDES 256
-static const char *includes[MAX_INCLUDES]; /* --include files */
+static const char *standalone_entry = NULL;  /* --standalone entry file */
+static const char *includes[LUSB_MAX_FILES]; /* --include files */
 static int num_includes = 0;
 #define MAX_PRESERVED_ARGS 64
 static const char *preserved_args[MAX_PRESERVED_ARGS]; /* --args values */
@@ -110,6 +210,7 @@ static int num_preinc_sources = 0;
 */
 static void worker_setup(lua_State *parent, lua_State *worker) {
   (void)parent;
+  set_archive_path_defaults(worker);
   luaL_openselectedlibs(worker, ~0, 0); /* open all standard libraries */
   create_flags_table(worker); /* before the environment may be frozen */
   if (readonly_env) {
@@ -628,6 +729,8 @@ static int dochunk(lua_State *L, int status) {
 }
 
 static int dofile(lua_State *L, const char *name) {
+  if (name != NULL && lus_issealed(L))
+    return dochunk(L, luaAP_loadfile(L, name, "t"));
   return dochunk(L, luaL_loadfilex(L, name, lus_issealed(L) ? "t" : "bt"));
 }
 
@@ -686,7 +789,10 @@ static int handle_script(lua_State *L, char **argv) {
   /* If the operator sandboxed the run (-P... seals the store), refuse a
   ** precompiled binary entry file: the unverified loader would let an
   ** attacker-supplied chunk corrupt memory and defeat the pledge policy. */
-  status = luaL_loadfilex(L, fname, lus_issealed(L) ? "t" : "bt");
+  if (fname != NULL && lus_issealed(L))
+    status = luaAP_loadfile(L, fname, "t");
+  else
+    status = luaL_loadfilex(L, fname, lus_issealed(L) ? "t" : "bt");
   if (status == LUA_OK) {
     int n = pushargs(L); /* push arguments to script */
     status = docall(L, n, LUA_MULTRET);
@@ -727,7 +833,7 @@ static int handle_astgraph(lua_State *L, const char *fname,
   int c;
 
   /* Read file content */
-  f = fopen(fname, "r");
+  f = lus_issealed(L) ? luaAP_fopen(L, fname, "r") : fopen(fname, "r");
   if (f == NULL) {
     l_message(progname, "cannot open file for AST dump");
     return 0;
@@ -783,11 +889,22 @@ static int handle_astgraph(lua_State *L, const char *fname,
 
   luaM_freemem(L, content, fsize + 1);
 
-  /* Dump AST to .dot file */
-  if (!lusA_tographviz(ast, output)) {
+  /* Authorize and retain the output object before emitting into it. */
+  f = lus_issealed(L) ? luaAP_fopen(L, output, "w") : fopen(output, "w");
+  if (f == NULL) {
     lusA_free(L, ast);
     l_message(progname, "cannot write AST graph file");
     return 0;
+  }
+  {
+    int ok = lusA_tographvizfile(ast, f);
+    if (fclose(f) != 0)
+      ok = 0;
+    if (!ok) {
+      lusA_free(L, ast);
+      l_message(progname, "cannot write AST graph file");
+      return 0;
+    }
   }
 
   lua_writestringerror("AST graph written to %s\n", output);
@@ -811,7 +928,7 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
   int c;
 
   /* Read file content */
-  f = fopen(fname, "r");
+  f = lus_issealed(L) ? luaAP_fopen(L, fname, "r") : fopen(fname, "r");
   if (f == NULL) {
     l_message(progname, "cannot open file for AST dump");
     return 0;
@@ -867,11 +984,22 @@ static int handle_astjson(lua_State *L, const char *fname, const char *output) {
 
   luaM_freemem(L, content, fsize + 1);
 
-  /* Dump AST to JSON file */
-  if (!lusA_tojson(ast, output)) {
+  /* Authorize and retain the output object before emitting into it. */
+  f = lus_issealed(L) ? luaAP_fopen(L, output, "w") : fopen(output, "w");
+  if (f == NULL) {
     lusA_free(L, ast);
     l_message(progname, "cannot write AST JSON file");
     return 0;
+  }
+  {
+    int ok = lusA_tojsonfile(ast, f);
+    if (fclose(f) != 0)
+      ok = 0;
+    if (!ok) {
+      lusA_free(L, ast);
+      l_message(progname, "cannot write AST JSON file");
+      return 0;
+    }
   }
 
   lua_writestringerror("AST JSON written to %s\n", output);
@@ -903,14 +1031,34 @@ static int dump_writer(lua_State *L, const void *p, size_t sz, void *ud) {
   return 0;
 }
 
+static void free_bundle_build_buffers(lua_State *L, DumpBuffer *bytecodes,
+                                      const char **names, int count) {
+  int i;
+  for (i = 0; i < count; i++) {
+    if (bytecodes[i].buf != NULL)
+      luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
+    free((void *)names[i]);
+  }
+}
+
 /*
 ** Get module name from file path, optionally with alias
 ** "foo.lua" -> "foo"
 ** "foo.lua:bar" -> "bar"
 ** "dir/foo.lua" -> "dir.foo"
 */
+static const char *find_include_alias(const char *path) {
+  const char *colon = strrchr(path, ':');
+  if (colon == path + 1 &&
+      ((path[0] >= 'A' && path[0] <= 'Z') ||
+       (path[0] >= 'a' && path[0] <= 'z')) &&
+      (path[2] == '/' || path[2] == '\\'))
+    return NULL;
+  return colon;
+}
+
 static void get_module_name(const char *path, char *out, size_t outsize) {
-  const char *colon = strchr(path, ':');
+  const char *colon = find_include_alias(path);
   if (colon != NULL) {
     /* Use alias after colon */
     size_t len = strlen(colon + 1);
@@ -951,7 +1099,7 @@ static void get_module_name(const char *path, char *out, size_t outsize) {
 ** Get file path without alias
 */
 static const char *get_file_path(const char *path) {
-  const char *colon = strchr(path, ':');
+  const char *colon = find_include_alias(path);
   if (colon != NULL) {
     static char buf[4096];
     size_t len = colon - path;
@@ -981,13 +1129,51 @@ static int is_directory(const char *path) {
 #include <dirent.h>
 #endif
 
+static int append_module_prefix(char *out, size_t outsize, const char *prefix,
+                                const char *component) {
+  int written;
+  if (prefix[0] != '\0')
+    written = snprintf(out, outsize, "%s.%s", prefix, component);
+  else
+    written = snprintf(out, outsize, "%s", component);
+  return written >= 0 && (size_t)written < outsize;
+}
+
+static char *make_include_entry(const char *fullpath, const char *prefix,
+                                const char *filename, size_t filename_len) {
+  char modname[LUSB_MAX_NAME];
+  size_t baselen = filename_len - 4;
+  size_t needed;
+  int written;
+  char *result;
+  if (prefix[0] != '\0')
+    written = snprintf(modname, sizeof(modname), "%s.%.*s", prefix,
+                       (int)baselen, filename);
+  else
+    written =
+        snprintf(modname, sizeof(modname), "%.*s", (int)baselen, filename);
+  if (written < 0 || (size_t)written >= sizeof(modname))
+    return NULL;
+  if (strlen(fullpath) > SIZE_MAX - strlen(modname) - 2)
+    return NULL;
+  needed = strlen(fullpath) + strlen(modname) + 2;
+  result = (char *)malloc(needed);
+  if (result == NULL)
+    return NULL;
+  written = snprintf(result, needed, "%s:%s", fullpath, modname);
+  if (written < 0 || (size_t)written >= needed) {
+    free(result);
+    return NULL;
+  }
+  return result;
+}
+
 /*
 ** Add files from a directory to the include list (recursive).
 ** Returns number of files added, or -1 on error.
 */
 static int include_directory(const char *dirpath, const char *prefix,
-                             const char **file_list, int *file_count,
-                             int max_files) {
+                             char **file_list, int *file_count, int max_files) {
   char fullpath[4096];
   char modprefix[LUSB_MAX_NAME];
   int added = 0;
@@ -996,8 +1182,13 @@ static int include_directory(const char *dirpath, const char *prefix,
   char search_path[4096];
   WIN32_FIND_DATA fd;
   HANDLE hFind;
+  DWORD find_error;
 
-  snprintf(search_path, sizeof(search_path), "%s\\*", dirpath);
+  {
+    int path_len = snprintf(search_path, sizeof(search_path), "%s\\*", dirpath);
+    if (path_len < 0 || (size_t)path_len >= sizeof(search_path))
+      return -1;
+  }
   hFind = FindFirstFile(search_path, &fd);
   if (hFind == INVALID_HANDLE_VALUE)
     return -1;
@@ -1008,14 +1199,22 @@ static int include_directory(const char *dirpath, const char *prefix,
       continue;
 
     /* Build full path */
-    snprintf(fullpath, sizeof(fullpath), "%s\\%s", dirpath, fd.cFileName);
+    {
+      int path_len =
+          snprintf(fullpath, sizeof(fullpath), "%s\\%s", dirpath, fd.cFileName);
+      if (path_len < 0 || (size_t)path_len >= sizeof(fullpath)) {
+        FindClose(hFind);
+        return -1;
+      }
+    }
 
     if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
       /* Recurse into subdirectory */
-      if (prefix[0] != '\0')
-        snprintf(modprefix, sizeof(modprefix), "%s.%s", prefix, fd.cFileName);
-      else
-        snprintf(modprefix, sizeof(modprefix), "%s", fd.cFileName);
+      if (!append_module_prefix(modprefix, sizeof(modprefix), prefix,
+                                fd.cFileName)) {
+        FindClose(hFind);
+        return -1;
+      }
 
       int sub = include_directory(fullpath, modprefix, file_list, file_count,
                                   max_files);
@@ -1034,53 +1233,58 @@ static int include_directory(const char *dirpath, const char *prefix,
           FindClose(hFind);
           return -1;
         }
-        /* Store as "path:module.name" format */
-        char *entry_str = (char *)malloc(4096);
+        char *entry_str =
+            make_include_entry(fullpath, prefix, fd.cFileName, len);
         if (entry_str == NULL) {
           FindClose(hFind);
           return -1;
         }
-        /* Build module name: prefix + basename without extension */
-        char modname[LUSB_MAX_NAME];
-        size_t baselen = len - 4;
-        if (prefix[0] != '\0')
-          snprintf(modname, sizeof(modname), "%s.%.*s", prefix, (int)baselen,
-                   fd.cFileName);
-        else
-          snprintf(modname, sizeof(modname), "%.*s", (int)baselen,
-                   fd.cFileName);
-
-        snprintf(entry_str, 4096, "%s:%s", fullpath, modname);
         file_list[*file_count] = entry_str;
         (*file_count)++;
         added++;
       }
     }
   } while (FindNextFile(hFind, &fd));
-  FindClose(hFind);
+  find_error = GetLastError();
+  if (!FindClose(hFind) || find_error != ERROR_NO_MORE_FILES)
+    return -1;
 
 #else /* POSIX */
   DIR *dir;
   struct dirent *entry;
+  int read_error;
+  int close_error;
 
   dir = opendir(dirpath);
   if (dir == NULL)
     return -1;
 
-  while ((entry = readdir(dir)) != NULL) {
+  for (;;) {
+    errno = 0;
+    entry = readdir(dir);
+    if (entry == NULL)
+      break;
     /* Skip . and .. */
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
       continue;
 
     /* Build full path */
-    snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
+    {
+      int path_len =
+          snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
+      if (path_len < 0 || (size_t)path_len >= sizeof(fullpath)) {
+        closedir(dir);
+        return -1;
+      }
+    }
 
     if (is_directory(fullpath)) {
       /* Recurse into subdirectory */
-      if (prefix[0] != '\0')
-        snprintf(modprefix, sizeof(modprefix), "%s.%s", prefix, entry->d_name);
-      else
-        snprintf(modprefix, sizeof(modprefix), "%s", entry->d_name);
+      if (!append_module_prefix(modprefix, sizeof(modprefix), prefix,
+                                entry->d_name)) {
+        closedir(dir);
+        return -1;
+      }
 
       int sub = include_directory(fullpath, modprefix, file_list, file_count,
                                   max_files);
@@ -1099,23 +1303,12 @@ static int include_directory(const char *dirpath, const char *prefix,
           closedir(dir);
           return -1;
         }
-        /* Store as "path:module.name" format */
-        char *entry_str = (char *)malloc(4096);
+        char *entry_str =
+            make_include_entry(fullpath, prefix, entry->d_name, len);
         if (entry_str == NULL) {
           closedir(dir);
           return -1;
         }
-        /* Build module name: prefix + basename without extension */
-        char modname[LUSB_MAX_NAME];
-        size_t baselen = len - 4; /* strip .lua or .lus */
-        if (prefix[0] != '\0')
-          snprintf(modname, sizeof(modname), "%s.%.*s", prefix, (int)baselen,
-                   entry->d_name);
-        else
-          snprintf(modname, sizeof(modname), "%.*s", (int)baselen,
-                   entry->d_name);
-
-        snprintf(entry_str, 4096, "%s:%s", fullpath, modname);
         file_list[*file_count] = entry_str;
         (*file_count)++;
         added++;
@@ -1123,7 +1316,10 @@ static int include_directory(const char *dirpath, const char *prefix,
     }
   }
 
-  closedir(dir);
+  read_error = errno;
+  close_error = closedir(dir);
+  if (read_error != 0 || close_error != 0)
+    return -1;
 #endif
 
   return added;
@@ -1141,6 +1337,68 @@ static char *dupstring(const char *s) {
   if (r != NULL)
     memcpy(r, s, n);
   return r;
+}
+
+static void free_expanded_includes(char **expanded, int count) {
+  int i;
+  for (i = 0; i < count; i++)
+    free(expanded[i]);
+}
+
+/*
+** Expand every include specification into one uniformly owned list.
+** The caller owns every returned string, including direct file specs.
+*/
+static int expand_includes(char **expanded, int *expanded_count,
+                           int max_files) {
+  int i;
+  *expanded_count = 0;
+  for (i = 0; i < num_includes; i++) {
+    char filepath[4096];
+    snprintf(filepath, sizeof(filepath), "%s", get_file_path(includes[i]));
+    if (is_directory(filepath)) {
+      const char *dirbase = filepath;
+      const char *p;
+      int status;
+      for (p = filepath; *p; p++) {
+        if (*p == '/' || *p == '\\')
+          dirbase = p + 1;
+      }
+      status = include_directory(filepath, dirbase, expanded, expanded_count,
+                                 max_files);
+      if (status < 0) {
+        char msg[1024];
+        if (*expanded_count >= max_files)
+          l_message(progname, "too many include files");
+        else {
+          snprintf(msg, sizeof(msg), "failed to include directory '%s'",
+                   filepath);
+          l_message(progname, msg);
+        }
+        free_expanded_includes(expanded, *expanded_count);
+        *expanded_count = 0;
+        return 0;
+      }
+    }
+    else {
+      char *copy;
+      if (*expanded_count >= max_files) {
+        l_message(progname, "too many include files");
+        free_expanded_includes(expanded, *expanded_count);
+        *expanded_count = 0;
+        return 0;
+      }
+      copy = dupstring(includes[i]);
+      if (copy == NULL) {
+        l_message(progname, "not enough memory for include list");
+        free_expanded_includes(expanded, *expanded_count);
+        *expanded_count = 0;
+        return 0;
+      }
+      expanded[(*expanded_count)++] = copy;
+    }
+  }
+  return 1;
 }
 
 /* Read one include spec ("path[:alias]") into the retained-source list */
@@ -1178,6 +1436,10 @@ static int add_preinc_source(const char *spec) {
   preinc_sources[num_preinc_sources].len = len;
   if (preinc_sources[num_preinc_sources].name == NULL ||
       preinc_sources[num_preinc_sources].path == NULL) {
+    free(preinc_sources[num_preinc_sources].name);
+    free(preinc_sources[num_preinc_sources].path);
+    free(preinc_sources[num_preinc_sources].src);
+    memset(&preinc_sources[num_preinc_sources], 0, sizeof(PreincSource));
     l_message(progname, "not enough memory for preinclusion");
     return 0;
   }
@@ -1187,42 +1449,29 @@ static int add_preinc_source(const char *spec) {
 
 /* Expand the --include list (files and directories) into retained sources */
 static int collect_preinc_sources(void) {
+  char *expanded[LUSB_MAX_FILES];
+  int count = 0;
   int i;
-  for (i = 0; i < num_includes; i++) {
-    const char *filepath = get_file_path(includes[i]);
-    if (is_directory(filepath)) {
-      const char *expanded[LUSB_MAX_FILES];
-      int count = 0;
-      int j, ok = 1;
-      /* directory base name becomes the module prefix (as in bundles) */
-      const char *dirbase = filepath;
-      const char *p;
-      for (p = filepath; *p; p++) {
-        if (*p == '/' || *p == '\\')
-          dirbase = p + 1;
-      }
-      if (include_directory(filepath, dirbase, expanded, &count,
-                            LUSB_MAX_FILES) < 0) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg), "failed to include directory '%s'",
-                 filepath);
-        l_message(progname, msg);
-        return 0;
-      }
-      for (j = 0; j < count; j++) {
-        if (ok)
-          ok = add_preinc_source(expanded[j]);
-        free((void *)(uintptr_t)expanded[j]); /* entries are heap-allocated */
-      }
-      if (!ok)
-        return 0;
-    }
-    else {
-      if (!add_preinc_source(includes[i]))
-        return 0;
-    }
+  int ok = 1;
+  if (!expand_includes(expanded, &count, LUSB_MAX_FILES))
+    return 0;
+  for (i = 0; i < count; i++) {
+    if (ok)
+      ok = add_preinc_source(expanded[i]);
   }
-  return 1;
+  free_expanded_includes(expanded, count);
+  return ok;
+}
+
+static void free_preinc_sources(void) {
+  int i;
+  for (i = 0; i < num_preinc_sources; i++) {
+    free(preinc_sources[i].name);
+    free(preinc_sources[i].path);
+    free(preinc_sources[i].src);
+    memset(&preinc_sources[i], 0, sizeof(PreincSource));
+  }
+  num_preinc_sources = 0;
 }
 
 /*
@@ -1275,6 +1524,8 @@ static int create_standalone(lua_State *L) {
   const char **names = NULL;
   size_t *offsets = NULL;
   size_t *sizes = NULL;
+  char *expanded[LUSB_MAX_FILES];
+  int expanded_count = 0;
   int file_count = 0;
   int file_capacity = 0;
   size_t total_bytecode_size = 0;
@@ -1282,11 +1533,17 @@ static int create_standalone(lua_State *L) {
   size_t index_size;
   unsigned char footer[8];
   const char *entryname = "main";
+  int write_failed = 0;
   int i;
+
+  /* The entrypoint occupies one bundle file slot. */
+  if (!expand_includes(expanded, &expanded_count, LUSB_MAX_FILES - 1))
+    return 0;
 
   /* Get current executable path */
   if (!lusB_getexepath(exepath, sizeof(exepath))) {
     l_message(progname, "cannot get executable path");
+    free_expanded_includes(expanded, expanded_count);
     return 0;
   }
 
@@ -1294,20 +1551,26 @@ static int create_standalone(lua_State *L) {
   exefile = fopen(exepath, "rb");
   if (exefile == NULL) {
     l_message(progname, "cannot open executable");
+    free_expanded_includes(expanded, expanded_count);
     return 0;
   }
 
   /* Get executable size */
-  fseek(exefile, 0, SEEK_END);
-  exesize = ftell(exefile);
-  fseek(exefile, 0, SEEK_SET);
+  if (fseek(exefile, 0, SEEK_END) != 0 || (exesize = ftell(exefile)) < 0 ||
+      fseek(exefile, 0, SEEK_SET) != 0) {
+    fclose(exefile);
+    l_message(progname, "cannot determine executable size");
+    free_expanded_includes(expanded, expanded_count);
+    return 0;
+  }
 
   /* Read executable */
   exedata = luaM_newblock(L, (size_t)exesize);
-  if (fread(exedata, 1, exesize, exefile) != (size_t)exesize) {
+  if (fread(exedata, 1, (size_t)exesize, exefile) != (size_t)exesize) {
     luaM_freemem(L, exedata, (size_t)exesize);
     fclose(exefile);
     l_message(progname, "cannot read executable");
+    free_expanded_includes(expanded, expanded_count);
     return 0;
   }
   fclose(exefile);
@@ -1342,7 +1605,7 @@ static int create_standalone(lua_State *L) {
   }
 
   /* Compile entry point and all includes */
-  file_capacity = num_includes + 1;
+  file_capacity = expanded_count + 1;
   bytecodes = luaM_newvector(L, file_capacity, DumpBuffer);
   names = luaM_newvector(L, file_capacity, const char *);
   offsets = luaM_newvector(L, file_capacity, size_t);
@@ -1352,111 +1615,72 @@ static int create_standalone(lua_State *L) {
   {
     char modname[LUSB_MAX_NAME];
     get_module_name(standalone_entry, modname, sizeof(modname));
-    entryname = strdup(modname);
+    bytecodes[file_count].buf = NULL;
+    bytecodes[file_count].size = 0;
+    bytecodes[file_count].capacity = 0;
+    names[file_count] = NULL;
 
-    if (luaL_loadfile(L, standalone_entry) != LUA_OK) {
+    if ((lus_issealed(L) ? luaAP_loadfile(L, standalone_entry, NULL)
+                         : luaL_loadfile(L, standalone_entry)) != LUA_OK) {
       l_message(progname, lua_tostring(L, -1));
       luaM_freemem(L, exedata, (size_t)exesize);
       luaM_freearray(L, bytecodes, file_capacity);
       luaM_freearray(L, names, file_capacity);
       luaM_freearray(L, offsets, file_capacity);
       luaM_freearray(L, sizes, file_capacity);
+      free_expanded_includes(expanded, expanded_count);
       return 0;
     }
 
-    bytecodes[file_count].buf = NULL;
-    bytecodes[file_count].size = 0;
-    bytecodes[file_count].capacity = 0;
-
     if (lua_dump(L, dump_writer, &bytecodes[file_count], 1) != 0) {
       l_message(progname, "cannot dump bytecode");
+      free_bundle_build_buffers(L, bytecodes, names, 1);
       luaM_freemem(L, exedata, (size_t)exesize);
       luaM_freearray(L, bytecodes, file_capacity);
       luaM_freearray(L, names, file_capacity);
       luaM_freearray(L, offsets, file_capacity);
       luaM_freearray(L, sizes, file_capacity);
+      free_expanded_includes(expanded, expanded_count);
       return 0;
     }
     lua_pop(L, 1);
 
-    names[file_count] = entryname;
+    names[file_count] = dupstring(modname);
+    if (names[file_count] == NULL) {
+      l_message(progname, "not enough memory for bundle index");
+      free_bundle_build_buffers(L, bytecodes, names, 1);
+      luaM_freemem(L, exedata, (size_t)exesize);
+      luaM_freearray(L, bytecodes, file_capacity);
+      luaM_freearray(L, names, file_capacity);
+      luaM_freearray(L, offsets, file_capacity);
+      luaM_freearray(L, sizes, file_capacity);
+      free_expanded_includes(expanded, expanded_count);
+      return 0;
+    }
+    entryname = names[file_count];
     offsets[file_count] = total_bytecode_size;
     sizes[file_count] = bytecodes[file_count].size;
     total_bytecode_size += bytecodes[file_count].size;
     file_count++;
   }
 
-  /* Expand directories and compile includes */
+  /* Compile the uniformly owned, fully expanded include list. */
   {
-    /* Build expanded file list from includes (files + directory contents) */
-    const char *expanded[LUSB_MAX_FILES];
-    int expanded_count = 0;
-
-    for (i = 0; i < num_includes; i++) {
-      const char *filepath = get_file_path(includes[i]);
-
-      if (is_directory(filepath)) {
-        /* Get directory base name for module prefix */
-        const char *dirbase = filepath;
-        const char *p;
-        for (p = filepath; *p; p++) {
-          if (*p == '/' || *p == '\\')
-            dirbase = p + 1;
-        }
-        /* Expand directory recursively */
-        if (include_directory(filepath, dirbase, expanded, &expanded_count,
-                              LUSB_MAX_FILES) < 0) {
-          lua_writestringerror("warning: failed to include directory: %s\n",
-                               filepath);
-        }
-      }
-      else {
-        /* Regular file */
-        if (expanded_count >= LUSB_MAX_FILES) {
-          l_message(progname, "too many include files");
-          for (int j = 0; j < file_count; j++)
-            luaM_freemem(L, bytecodes[j].buf, bytecodes[j].capacity);
-          luaM_freemem(L, exedata, (size_t)exesize);
-          luaM_freearray(L, bytecodes, file_capacity);
-          luaM_freearray(L, names, file_capacity);
-          luaM_freearray(L, offsets, file_capacity);
-          luaM_freearray(L, sizes, file_capacity);
-          return 0;
-        }
-        expanded[expanded_count++] = includes[i];
-      }
-    }
-
-    /* Reallocate arrays if we have more files from directory expansion */
-    if (file_count + expanded_count > file_capacity) {
-      int old_capacity = file_capacity;
-      file_capacity = file_count + expanded_count;
-      bytecodes = luaM_reallocvector(L, bytecodes, old_capacity, file_capacity,
-                                     DumpBuffer);
-      names = luaM_reallocvector(L, names, old_capacity, file_capacity,
-                                 const char *);
-      offsets =
-          luaM_reallocvector(L, offsets, old_capacity, file_capacity, size_t);
-      sizes = luaM_reallocvector(L, sizes, old_capacity, file_capacity, size_t);
-    }
-
-    /* Compile each expanded file */
     for (i = 0; i < expanded_count; i++) {
       const char *filepath = get_file_path(expanded[i]);
       char modname[LUSB_MAX_NAME];
 
       get_module_name(expanded[i], modname, sizeof(modname));
+      bytecodes[file_count].buf = NULL;
+      bytecodes[file_count].size = 0;
+      bytecodes[file_count].capacity = 0;
+      names[file_count] = NULL;
 
-      if (luaL_loadfile(L, filepath) != LUA_OK) {
+      if ((lus_issealed(L) ? luaAP_loadfile(L, filepath, NULL)
+                           : luaL_loadfile(L, filepath)) != LUA_OK) {
         l_message(progname, lua_tostring(L, -1));
-        /* Clean up */
-        for (int j = 0; j < file_count; j++)
-          luaM_freemem(L, bytecodes[j].buf, bytecodes[j].capacity);
-        for (int j = 0; j < expanded_count; j++) {
-          /* Free strings allocated by include_directory */
-          if (expanded[j] != includes[j])
-            free((void *)expanded[j]);
-        }
+        free_bundle_build_buffers(L, bytecodes, names, file_count + 1);
+        free_expanded_includes(expanded, expanded_count);
         luaM_freemem(L, exedata, (size_t)exesize);
         luaM_freearray(L, bytecodes, file_capacity);
         luaM_freearray(L, names, file_capacity);
@@ -1465,18 +1689,10 @@ static int create_standalone(lua_State *L) {
         return 0;
       }
 
-      bytecodes[file_count].buf = NULL;
-      bytecodes[file_count].size = 0;
-      bytecodes[file_count].capacity = 0;
-
       if (lua_dump(L, dump_writer, &bytecodes[file_count], 1) != 0) {
         l_message(progname, "cannot dump bytecode");
-        for (int j = 0; j < file_count; j++)
-          luaM_freemem(L, bytecodes[j].buf, bytecodes[j].capacity);
-        for (int j = 0; j < expanded_count; j++) {
-          if (expanded[j] != includes[j])
-            free((void *)expanded[j]);
-        }
+        free_bundle_build_buffers(L, bytecodes, names, file_count + 1);
+        free_expanded_includes(expanded, expanded_count);
         luaM_freemem(L, exedata, (size_t)exesize);
         luaM_freearray(L, bytecodes, file_capacity);
         luaM_freearray(L, names, file_capacity);
@@ -1486,18 +1702,26 @@ static int create_standalone(lua_State *L) {
       }
       lua_pop(L, 1);
 
-      names[file_count] = strdup(modname);
+      names[file_count] = dupstring(modname);
+      if (names[file_count] == NULL) {
+        l_message(progname, "not enough memory for bundle index");
+        free_bundle_build_buffers(L, bytecodes, names, file_count + 1);
+        free_expanded_includes(expanded, expanded_count);
+        luaM_freemem(L, exedata, (size_t)exesize);
+        luaM_freearray(L, bytecodes, file_capacity);
+        luaM_freearray(L, names, file_capacity);
+        luaM_freearray(L, offsets, file_capacity);
+        luaM_freearray(L, sizes, file_capacity);
+        return 0;
+      }
       offsets[file_count] = total_bytecode_size;
       sizes[file_count] = bytecodes[file_count].size;
       total_bytecode_size += bytecodes[file_count].size;
       file_count++;
     }
 
-    /* Free strings allocated by include_directory */
-    for (i = 0; i < expanded_count; i++) {
-      if (expanded[i] != includes[i])
-        free((void *)expanded[i]);
-    }
+    free_expanded_includes(expanded, expanded_count);
+    expanded_count = 0;
   }
 
   /* Preserve every -F/--flag value in the bundle, regardless of where it
@@ -1520,8 +1744,7 @@ static int create_standalone(lua_State *L) {
                                offsets, sizes, &index_size);
 
   if (index_data == NULL) {
-    for (i = 0; i < file_count; i++)
-      luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
+    free_bundle_build_buffers(L, bytecodes, names, file_count);
     luaM_freemem(L, exedata, (size_t)exesize);
     luaM_freearray(L, bytecodes, file_capacity);
     luaM_freearray(L, names, file_capacity);
@@ -1531,11 +1754,11 @@ static int create_standalone(lua_State *L) {
     return 0;
   }
 
-  /* Write output file */
-  outfile = fopen(outpath, "wb");
+  /* Write through the retained object selected by the pledge check. */
+  outfile =
+      lus_issealed(L) ? luaAP_fopen(L, outpath, "wb") : fopen(outpath, "wb");
   if (outfile == NULL) {
-    for (i = 0; i < file_count; i++)
-      luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
+    free_bundle_build_buffers(L, bytecodes, names, file_count);
     free(index_data); /* allocated by lusB_buildindex (uses malloc) */
     luaM_freemem(L, exedata, (size_t)exesize);
     luaM_freearray(L, bytecodes, file_capacity);
@@ -1547,15 +1770,19 @@ static int create_standalone(lua_State *L) {
   }
 
   /* Write executable */
-  fwrite(exedata, 1, exesize, outfile);
+  if (fwrite(exedata, 1, (size_t)exesize, outfile) != (size_t)exesize)
+    write_failed = 1;
 
   /* Write bytecode blobs */
   for (i = 0; i < file_count; i++) {
-    fwrite(bytecodes[i].buf, 1, bytecodes[i].size, outfile);
+    if (!write_failed && fwrite(bytecodes[i].buf, 1, bytecodes[i].size,
+                                outfile) != bytecodes[i].size)
+      write_failed = 1;
   }
 
   /* Write index */
-  fwrite(index_data, 1, index_size, outfile);
+  if (!write_failed && fwrite(index_data, 1, index_size, outfile) != index_size)
+    write_failed = 1;
 
   /* Write footer: index_size (4 bytes LE) + magic (4 bytes) */
   footer[0] = (unsigned char)(index_size & 0xFF);
@@ -1563,21 +1790,37 @@ static int create_standalone(lua_State *L) {
   footer[2] = (unsigned char)((index_size >> 16) & 0xFF);
   footer[3] = (unsigned char)((index_size >> 24) & 0xFF);
   memcpy(footer + 4, LUSB_MAGIC, LUSB_MAGIC_SIZE);
-  fwrite(footer, 1, 8, outfile);
-
-  fclose(outfile);
+  if (!write_failed && fwrite(footer, 1, 8, outfile) != 8)
+    write_failed = 1;
 
 #if !defined(_WIN32)
-  /* Make output executable on Unix */
-  chmod(outpath, 0755);
+  if (!write_failed && fchmod(fileno(outfile), 0755) != 0)
+    write_failed = 1;
 #endif
+
+  if (fclose(outfile) != 0)
+    write_failed = 1;
+
+  if (write_failed) {
+    if (lus_issealed(L))
+      luaAP_unlink(L, outpath, "fs:write");
+    else
+      remove(outpath);
+    free_bundle_build_buffers(L, bytecodes, names, file_count);
+    free(index_data);
+    luaM_freemem(L, exedata, (size_t)exesize);
+    luaM_freearray(L, bytecodes, file_capacity);
+    luaM_freearray(L, names, file_capacity);
+    luaM_freearray(L, offsets, file_capacity);
+    luaM_freearray(L, sizes, file_capacity);
+    l_message(progname, "cannot write standalone executable");
+    return 0;
+  }
 
   lua_writestringerror("Created standalone: %s\n", outpath);
 
   /* Cleanup */
-  for (i = 0; i < file_count; i++) {
-    luaM_freemem(L, bytecodes[i].buf, bytecodes[i].capacity);
-  }
+  free_bundle_build_buffers(L, bytecodes, names, file_count);
   free(index_data); /* allocated by lusB_buildindex (uses malloc) */
   luaM_freemem(L, exedata, (size_t)exesize);
   luaM_freearray(L, bytecodes, file_capacity);
@@ -1658,7 +1901,7 @@ static int collectargs(char **argv, int *first) {
             i++; /* skip to argument */
             if (argv[i] == NULL || argv[i][0] == '-')
               return has_error; /* no argument */
-            if (num_includes >= MAX_INCLUDES) {
+            if (num_includes >= LUSB_MAX_FILES) {
               l_message(progname, "too many --include arguments");
               return has_error;
             }
@@ -2446,6 +2689,7 @@ int main(int argc, char **argv) {
       lusB_free(g_bundle);
     return EXIT_FAILURE;
   }
+  set_archive_path_defaults(L);
   lua_gc(L, LUA_GCSTOP);              /* stop GC while building state */
   lua_pushcfunction(L, &pmain);       /* to call 'pmain' in protected mode */
   lua_pushinteger(L, effective_argc); /* 1st argument */
@@ -2454,6 +2698,8 @@ int main(int argc, char **argv) {
   result = lua_toboolean(L, -1);            /* get result */
   report(L, status);
   lua_close(L);
+  lus_worker_pool_shutdown();
+  free_preinc_sources();
   free(synthetic_argv);
   if (g_bundle)
     lusB_free(g_bundle);

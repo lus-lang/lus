@@ -16,6 +16,7 @@
 
 #include "lua.h"
 
+#include "lauthpath.h"
 #include "lauxlib.h"
 #include "lfastcall.h"
 #include "llimits.h"
@@ -365,17 +366,13 @@ static int luaB_loadfile(lua_State *L) {
   const char *mode = getMode(L, 2);
   int env = (!lua_isnone(L, 3) ? 3 : 0); /* 'env' index or 0 if no 'env' */
 
-  /* Check fs:read permission if loading from file */
-  if (fname != NULL) {
-    lus_checkfsperm(L, "fs:read", fname);
-  }
-
   /* Check load permission for dynamic code loading */
   if (!lus_haspledge(L, "load", NULL)) {
     return luaL_error(L, "permission \"load\" denied");
   }
 
-  int status = luaL_loadfilex(L, fname, mode);
+  int status;
+  status = luaAP_loadfile(L, fname, mode);
   return load_aux(L, status, env);
 }
 
@@ -442,11 +439,6 @@ static int dofilecont(lua_State *L, int d1, lua_KContext d2) {
 static int luaB_dofile(lua_State *L) {
   const char *fname = luaL_optstring(L, 1, NULL);
 
-  /* Check fs:read permission if loading from file */
-  if (fname != NULL) {
-    lus_checkfsperm(L, "fs:read", fname);
-  }
-
   /* Check load permission for dynamic code loading */
   if (!lus_haspledge(L, "load", NULL)) {
     return luaL_error(L, "permission \"load\" denied");
@@ -454,7 +446,7 @@ static int luaB_dofile(lua_State *L) {
 
   lua_settop(L, 1);
   /* Sealed state: text-only (no unverified bytecode); see getMode(). */
-  if (l_unlikely(luaL_loadfilex(L, fname, lus_issealed(L) ? "t" : "bt") !=
+  if (l_unlikely(luaAP_loadfile(L, fname, lus_issealed(L) ? "t" : "bt") !=
                  LUA_OK))
     return lua_error(L);
   lua_callk(L, 0, LUA_MULTRET, 0, dofilecont);

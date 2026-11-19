@@ -3095,6 +3095,32 @@ static int qb_addnode(QueryBuilder *qb, int kind, int sub, int a, int b) {
   return qb->nnodes++;
 }
 
+/* Limit and offset are evaluated after row materialization. They may use
+** captured values, but they cannot depend on a current row. */
+static int qb_node_uses_row(const QueryBuilder *qb, int node) {
+  const QNode *n = &qb->nodes[node];
+  switch (n->kind) {
+    case QN_COLUMN:
+    case QN_ROWVAR:
+    case QN_CLOSURE:
+    case QN_NAMEREF:
+    case QN_AGG:
+      return 1;
+    case QN_AND:
+    case QN_OR:
+    case QN_CMP:
+    case QN_CONCAT:
+      return qb_node_uses_row(qb, n->a) || qb_node_uses_row(qb, n->b);
+    case QN_NOT:
+      return qb_node_uses_row(qb, n->a);
+    case QN_ARITH:
+      return qb_node_uses_row(qb, n->a) ||
+             (n->b != QNODE_NONE && qb_node_uses_row(qb, n->b));
+    default:
+      return 0;
+  }
+}
+
 static QStr qb_addstr(QueryBuilder *qb, TString *s) {
   QStr r;
   size_t len = tsslen(s);
@@ -3879,6 +3905,8 @@ static void queryexpr(LexState *ls, expdesc *v) {
         luaK_semerror(ls, "duplicate 'limit' clause in query");
       luaX_next(ls);
       qb.limit_node = (unsigned short)qexpr(ls, &qb, 0, &east);
+      if (qb_node_uses_row(&qb, qb.limit_node))
+        luaK_semerror(ls, "query limit must be row-independent");
       clnode = qclausenode(ls, LUS_QCLAUSE_LIMIT, east, 0, clline, clcolumn);
     }
     else if (qwordis(ls, "offset")) {
@@ -3887,6 +3915,8 @@ static void queryexpr(LexState *ls, expdesc *v) {
         luaK_semerror(ls, "duplicate 'offset' clause in query");
       luaX_next(ls);
       qb.offset_node = (unsigned short)qexpr(ls, &qb, 0, &east);
+      if (qb_node_uses_row(&qb, qb.offset_node))
+        luaK_semerror(ls, "query offset must be row-independent");
       clnode = qclausenode(ls, LUS_QCLAUSE_OFFSET, east, 0, clline, clcolumn);
     }
     else

@@ -67,6 +67,7 @@ mkdir -p "$OUT_DIR"
 SOURCES=(
   "$SRC_DIR/lapi.c"
   "$SRC_DIR/lauxlib.c"
+  "$SRC_DIR/lauthpath.c"
   "$SRC_DIR/lbaselib.c"
   "$SRC_DIR/lcode.c"
   "$SRC_DIR/lcorolib.c"
@@ -126,10 +127,11 @@ COMMON_FLAGS=(
   -I"$SRC_DIR"
   -s MODULARIZE=1
   -s EXPORT_ES6=1
-  -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_destroy","_lus_load_lsp","_lus_handle_message","_malloc","_free"]'
-  -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
+  -s EXPORTED_FUNCTIONS='["_lus_create","_lus_execute","_lus_execute_bytes","_lus_destroy","_lus_load_lsp","_lus_load_lsp_bytes","_lus_handle_message","_lus_handle_message_bytes","_lus_handle_frame","_lus_handle_frame_bytes","_lus_output_length","_malloc","_free"]'
+  -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","lengthBytesUTF8","HEAPU8","FS"]'
   -s ALLOW_MEMORY_GROWTH=1
   -s NO_EXIT_RUNTIME=1
+  -s STACK_SIZE=1048576
   --embed-file "$REPO_ROOT/lus-language@/lus-language"
   -O2
   -DLUA_USE_C89
@@ -149,7 +151,7 @@ build_target() {
 }
 
 if [ "$TARGET" = "web" ] || [ "$TARGET" = "all" ]; then
-  build_target "web" ".web"
+  build_target "worker" ".web"
 fi
 
 if [ "$TARGET" = "node" ] || [ "$TARGET" = "all" ]; then
@@ -159,6 +161,13 @@ fi
 # When both targets are built, they produce identical .wasm files.
 # Keep a shared lus.wasm and remove duplicates.
 if [ "$TARGET" = "all" ]; then
+  if ! cmp -s "$OUT_DIR/lus.web.wasm" "$OUT_DIR/lus.node.wasm"; then
+    echo "Error: web and Node builds produced different WASM modules." >&2
+    exit 1
+  fi
+  if [ -n "${LUS_WASM_NODE_WASM_PROOF:-}" ]; then
+    cp "$OUT_DIR/lus.node.wasm" "$LUS_WASM_NODE_WASM_PROOF"
+  fi
   mv "$OUT_DIR/lus.web.wasm" "$OUT_DIR/lus.wasm"
   rm -f "$OUT_DIR/lus.node.wasm"
 elif [ "$TARGET" = "web" ]; then
@@ -171,7 +180,7 @@ fi
 if [ "$TARGET" = "node" ] || [ "$TARGET" = "all" ]; then
   VSCODE_WASM="$REPO_ROOT/lus-vscode/wasm"
   if [ -d "$VSCODE_WASM" ]; then
-    cp "$OUT_DIR/lus.node.js" "$VSCODE_WASM/lus.js"
+    cp "$OUT_DIR/lus.node.js" "$VSCODE_WASM/lus.mjs"
     cp "$OUT_DIR/lus.wasm" "$VSCODE_WASM/lus.wasm"
     echo "Copied node build to $VSCODE_WASM"
   fi

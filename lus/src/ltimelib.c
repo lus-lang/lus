@@ -134,14 +134,55 @@ static uint8_t *zone_isdst(l_zone *z) { return zone_ttype(z) + z->timecnt; }
 ** =======================================================
 */
 
+/* Floored integer division with a positive divisor. */
+static lua_Integer floordiv(lua_Integer a, lua_Integer b) {
+  lua_Integer q = a / b, r = a % b;
+  if (r < 0)
+    q--;
+  return q;
+}
+
+static void split_days(lua_Integer seconds, lua_Integer *days,
+                       lua_Integer *remainder) {
+  *days = seconds / 86400;
+  *remainder = seconds % 86400;
+  if (*remainder < 0) {
+    (*days)--;
+    *remainder += 86400;
+  }
+}
+
+static int days_from_civil_checked(lua_Integer y, unsigned m, unsigned d,
+                                   lua_Integer *result) {
+  lua_Integer era;
+  lua_Integer era_days;
+  lua_Integer adjusted = y;
+  unsigned yoe;
+  unsigned doy;
+  unsigned doe;
+  if (m <= 2 && !lus_time_sub_checked(adjusted, 1, &adjusted))
+    return 0;
+  era = floordiv(adjusted, 400);
+  if (!lus_time_mul_checked(era, 400, &era_days) ||
+      !lus_time_sub_checked(adjusted, era_days, &adjusted))
+    return 0;
+  yoe = (unsigned)adjusted;
+  doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  if (!lus_time_mul_checked(era, 146097, &era_days) ||
+      !lus_time_add_checked(era_days, (lua_Integer)doe, &era_days) ||
+      !lus_time_sub_checked(era_days, 719468, result))
+    return 0;
+  return 1;
+}
+
 /* Days from 1970-01-01 to the given civil date (proleptic Gregorian). */
 static lua_Integer days_from_civil(lua_Integer y, unsigned m, unsigned d) {
-  y -= m <= 2;
-  lua_Integer era = (y >= 0 ? y : y - 399) / 400;
-  unsigned yoe = (unsigned)(y - era * 400); /* [0, 399] */
-  unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1; /* [0,365] */
-  unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;           /* [0,146096]*/
-  return era * 146097 + (lua_Integer)doe - 719468;
+  lua_Integer result = 0;
+  int ok = days_from_civil_checked(y, m, d, &result);
+  lua_assert(ok);
+  (void)ok;
+  return result;
 }
 
 /* Civil date from a day count relative to 1970-01-01. */
@@ -171,33 +212,124 @@ static int weekday_from_days(lua_Integer z) {
 ** =======================================================
 */
 
-static l_instant *push_instant(lua_State *L, lua_Integer sec, int nsec,
+static l_noret time_range_error(lua_State *L) {
+  luaL_error(L, "time value out of range");
+  abort();
+}
+
+static lua_Integer time_add(lua_State *L, lua_Integer a, lua_Integer b) {
+  lua_Integer result;
+  if (!lus_time_add_checked(a, b, &result))
+    time_range_error(L);
+  return result;
+}
+
+static lua_Integer time_sub(lua_State *L, lua_Integer a, lua_Integer b) {
+  lua_Integer result;
+  if (!lus_time_sub_checked(a, b, &result))
+    time_range_error(L);
+  return result;
+}
+
+static lua_Integer time_mul(lua_State *L, lua_Integer a, lua_Integer b) {
+  lua_Integer result;
+  if (!lus_time_mul_checked(a, b, &result))
+    time_range_error(L);
+  return result;
+}
+
+static void time_normalize(lua_State *L, lua_Integer sec, lua_Integer nsec,
+                           lua_Integer *outsec, int *outnsec) {
+  if (!lus_time_norm_checked(sec, nsec, outsec, outnsec))
+    time_range_error(L);
+}
+
+static void time_pair_add(lua_State *L, lua_Integer asec, int ansec,
+                          lua_Integer bsec, int bnsec, lua_Integer *outsec,
+                          int *outnsec) {
+  lua_Integer carry = ((lua_Integer)ansec + bnsec) / NANOS_PER_SEC;
+  lua_Integer sec;
+  if (carry == 0) {
+    if (!lus_time_add_checked(asec, bsec, &sec))
+      time_range_error(L);
+  }
+  else if (bsec != LUA_MAXINTEGER) {
+    if (!lus_time_add_checked(asec, bsec + 1, &sec))
+      time_range_error(L);
+  }
+  else if (!lus_time_sub_checked(asec, LUA_MININTEGER, &sec)) {
+    time_range_error(L);
+  }
+  *outsec = sec;
+  *outnsec = (ansec + bnsec) % NANOS_PER_SEC;
+}
+
+static void time_pair_sub(lua_State *L, lua_Integer asec, int ansec,
+                          lua_Integer bsec, int bnsec, lua_Integer *outsec,
+                          int *outnsec) {
+  lua_Integer nsec = (lua_Integer)ansec - bnsec;
+  lua_Integer carry = nsec < 0 ? -1 : 0;
+  lua_Integer sec;
+  if (carry == 0) {
+    if (!lus_time_sub_checked(asec, bsec, &sec))
+      time_range_error(L);
+  }
+  else if (bsec != LUA_MAXINTEGER) {
+    if (!lus_time_sub_checked(asec, bsec + 1, &sec))
+      time_range_error(L);
+  }
+  else if (!lus_time_add_checked(asec, LUA_MININTEGER, &sec)) {
+    time_range_error(L);
+  }
+  *outsec = sec;
+  *outnsec = nsec < 0 ? (int)(nsec + NANOS_PER_SEC) : (int)nsec;
+}
+
+static lua_Integer civil_seconds(lua_State *L, lua_Integer year, unsigned month,
+                                 unsigned day, lua_Integer hour,
+                                 lua_Integer minute, lua_Integer second) {
+  lua_Integer days;
+  lua_Integer result;
+  if (!days_from_civil_checked(year, month, day, &days))
+    time_range_error(L);
+  result = time_mul(L, days, 86400);
+  result = time_add(L, result, time_mul(L, hour, 3600));
+  result = time_add(L, result, time_mul(L, minute, 60));
+  return time_add(L, result, second);
+}
+
+static l_instant *push_instant(lua_State *L, lua_Integer sec, lua_Integer nsec,
                                int mono) {
+  int normalized_nsec;
+  time_normalize(L, sec, nsec, &sec, &normalized_nsec);
   l_instant *i = (l_instant *)lua_newuserdatauv(L, sizeof(l_instant), 0);
-  lus_time_norm(&sec, &nsec);
   i->sec = sec;
-  i->nsec = nsec;
+  i->nsec = normalized_nsec;
   i->mono = mono;
   luaL_setmetatable(L, INSTANT_METATABLE);
   return i;
 }
 
-static l_duration *push_duration(lua_State *L, lua_Integer sec, int nsec) {
+static l_duration *push_duration(lua_State *L, lua_Integer sec,
+                                 lua_Integer nsec) {
+  int normalized_nsec;
+  time_normalize(L, sec, nsec, &sec, &normalized_nsec);
   l_duration *d = (l_duration *)lua_newuserdatauv(L, sizeof(l_duration), 0);
-  lus_time_norm(&sec, &nsec);
   d->sec = sec;
-  d->nsec = nsec;
+  d->nsec = normalized_nsec;
   luaL_setmetatable(L, DURATION_METATABLE);
   return d;
 }
 
 /* A zoned carries its originating zone (or nil for a bare fixed offset) in user
 ** value 1, so calendar operations can re-resolve the offset across DST. */
-static l_zoned *push_zoned(lua_State *L, lua_Integer sec, int nsec, int offset) {
+static l_zoned *push_zoned(lua_State *L, lua_Integer sec, lua_Integer nsec,
+                           int offset) {
+  int normalized_nsec;
+  time_normalize(L, sec, nsec, &sec, &normalized_nsec);
   l_zoned *z = (l_zoned *)lua_newuserdatauv(L, sizeof(l_zoned), 1);
-  lus_time_norm(&sec, &nsec);
   z->sec = sec;
-  z->nsec = nsec;
+  z->nsec = normalized_nsec;
   z->offset = offset;
   luaL_setmetatable(L, ZONED_METATABLE);
   return z; /* user value 1 defaults to nil */
@@ -485,14 +617,6 @@ static int zone_offset_at(l_zone *z, lua_Integer t) {
   return offs[ttype[ans]];
 }
 
-/* Floored integer division (rounds toward negative infinity). */
-static lua_Integer floordiv(lua_Integer a, lua_Integer b) {
-  lua_Integer q = a / b, r = a % b;
-  if (r != 0 && (r < 0) != (b < 0))
-    q--;
-  return q;
-}
-
 static int days_in_month(lua_Integer y, int m) {
   static const int dm[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
   if (m == 2) {
@@ -680,11 +804,15 @@ static lua_Integer rule_day_count(tzrule *r, lua_Integer year) {
 static int posix_offset(l_zone *z, lua_Integer t) {
   if (!z->tz_has_dst)
     return z->tz_std_off;
-  lua_Integer days = t >= 0 ? t / 86400 : (t - 86399) / 86400;
+  lua_Integer days;
+  lua_Integer remainder;
+  split_days(t, &days, &remainder);
+  (void)remainder;
   lua_Integer y;
   unsigned mo, d;
   civil_from_days(days, &y, &mo, &d);
-  lua_Integer startL = rule_day_count(&z->tz_start, y) * 86400 + z->tz_start.time;
+  lua_Integer startL =
+      rule_day_count(&z->tz_start, y) * 86400 + z->tz_start.time;
   lua_Integer endL = rule_day_count(&z->tz_end, y) * 86400 + z->tz_end.time;
   lua_Integer startU = startL - z->tz_std_off; /* std in effect before start */
   lua_Integer endU = endL - z->tz_dst_off;     /* dst in effect before end */
@@ -692,16 +820,18 @@ static int posix_offset(l_zone *z, lua_Integer t) {
   if (startU < endU)
     dst = (t >= startU && t < endU);
   else
-    dst = (t >= startU || t < endU); /* southern hemisphere: DST spans New Year */
+    dst =
+        (t >= startU || t < endU); /* southern hemisphere: DST spans New Year */
   return dst ? z->tz_dst_off : z->tz_std_off;
 }
 
 /* Decompose a zoned into its wall-clock civil fields. */
 static void zoned_civil(l_zoned *z, lua_Integer *Y, int *Mo, int *D, int *H,
-                        int *Mi, int *S) {
-  lua_Integer wall = z->sec + z->offset;
-  lua_Integer days = wall >= 0 ? wall / 86400 : (wall - 86399) / 86400;
-  lua_Integer rem = wall - days * 86400;
+                        int *Mi, int *S, lua_State *L) {
+  lua_Integer wall = time_add(L, z->sec, z->offset);
+  lua_Integer days;
+  lua_Integer rem;
+  split_days(wall, &days, &rem);
   lua_Integer y;
   unsigned mo, d;
   civil_from_days(days, &y, &mo, &d);
@@ -721,15 +851,15 @@ static void push_zoned_in_zone(lua_State *L, lua_Integer naive, int frac,
                                int zoneidx) {
   l_zone *z = check_zone(L, zoneidx);
   int g = zone_offset_at(z, naive);
-  lua_Integer utc = naive - g;
+  lua_Integer utc = time_sub(L, naive, g);
   int g2 = zone_offset_at(z, utc);
   if (g2 != g) {
-    utc = naive - g2;
+    utc = time_sub(L, naive, g2);
     g = g2;
   }
-  push_zoned(L, utc, frac, g);   /* zoned on top */
-  lua_pushvalue(L, zoneidx);     /* the zone */
-  lua_setiuservalue(L, -2, 1);   /* attach it */
+  push_zoned(L, utc, frac, g); /* zoned on top */
+  lua_pushvalue(L, zoneidx);   /* the zone */
+  lua_setiuservalue(L, -2, 1); /* attach it */
 }
 
 /* Rebuild a zoned from a wall-clock instant, re-resolving through its own zone
@@ -740,8 +870,9 @@ static void rebuild_zoned(lua_State *L, int zonedarg, l_zoned *src,
   lua_getiuservalue(L, zonedarg, 1); /* zone or nil */
   if (lua_isnil(L, -1)) {
     lua_pop(L, 1);
-    push_zoned(L, naive - src->offset, frac, src->offset);
-  } else {
+    push_zoned(L, time_sub(L, naive, src->offset), frac, src->offset);
+  }
+  else {
     int zi = lua_gettop(L);
     push_zoned_in_zone(L, naive, frac, zi);
     lua_remove(L, zi); /* drop the zone copy left underneath */
@@ -809,7 +940,7 @@ static int time_monotonic(lua_State *L) {
 static int time_instant(lua_State *L) {
   lua_Integer sec = luaL_checkinteger(L, 1);
   lua_Integer nsec = luaL_optinteger(L, 2, 0);
-  push_instant(L, sec, (int)(nsec % NANOS_PER_SEC), 0);
+  push_instant(L, sec, nsec, 0);
   return 1;
 }
 
@@ -829,21 +960,54 @@ static lua_Integer field(lua_State *L, int arg, const char *key,
   return v;
 }
 
+static int fixed_offset_valid(lua_Integer seconds) {
+  return seconds >= -24 * 3600 && seconds <= 24 * 3600;
+}
+
+static int fixed_offset_arg(lua_State *L, lua_Integer seconds, int arg) {
+  luaL_argcheck(L, fixed_offset_valid(seconds), arg, "offset out of range");
+  return (int)seconds;
+}
+
+static int fixed_offset_parts(int sign, int hours, int minutes, int *result) {
+  lua_Integer seconds;
+  if (minutes < 0 || minutes > 59 || hours < 0 || hours > 24 ||
+      (hours == 24 && minutes != 0))
+    return 0;
+  seconds = (lua_Integer)sign * (hours * 3600 + minutes * 60);
+  if (!fixed_offset_valid(seconds))
+    return 0;
+  *result = (int)seconds;
+  return 1;
+}
+
+static void duration_accumulate(lua_State *L, lua_Integer value,
+                                lua_Integer unit_sec, lua_Integer unit_nsec,
+                                lua_Integer *sec, int *nsec) {
+  lua_Integer part_sec;
+  int part_nsec;
+  lua_Integer sum_sec;
+  int sum_nsec;
+  if (!lus_dur_compute_checked(value, unit_sec, unit_nsec, &part_sec,
+                               &part_nsec))
+    time_range_error(L);
+  time_pair_add(L, *sec, *nsec, part_sec, part_nsec, &sum_sec, &sum_nsec);
+  *sec = sum_sec;
+  *nsec = sum_nsec;
+}
+
 static int time_duration(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   lua_Integer sec = 0;
-  sec += field(L, 1, "days", 0) * 86400;
-  sec += field(L, 1, "hours", 0) * 3600;
-  sec += field(L, 1, "minutes", 0) * 60;
-  sec += field(L, 1, "seconds", 0);
-  lua_Integer nsec = field(L, 1, "millis", 0) * 1000000 +
-                     field(L, 1, "micros", 0) * 1000 + field(L, 1, "nanos", 0);
-  push_duration(L, sec, (int)(nsec % NANOS_PER_SEC));
-  /* fold whole seconds out of the nanos accumulator */
-  {
-    l_duration *d = check_duration(L, -1);
-    d->sec += nsec / NANOS_PER_SEC;
-  }
+  int nsec = 0;
+  duration_accumulate(L, field(L, 1, "days", 0), 86400, 0, &sec, &nsec);
+  duration_accumulate(L, field(L, 1, "hours", 0), 3600, 0, &sec, &nsec);
+  duration_accumulate(L, field(L, 1, "minutes", 0), 60, 0, &sec, &nsec);
+  duration_accumulate(L, field(L, 1, "seconds", 0), 1, 0, &sec, &nsec);
+  duration_accumulate(L, field(L, 1, "millis", 0), 0, 1000000, &sec, &nsec);
+  duration_accumulate(L, field(L, 1, "micros", 0), 0, 1000, &sec, &nsec);
+  duration_accumulate(L, field(L, 1, "nanos", 0), 0, 1, &sec, &nsec);
+  push_duration(L, sec, nsec);
   return 1;
 }
 
@@ -852,15 +1016,26 @@ static int dur_helper(lua_State *L, lua_Integer unit_sec, lua_Integer unit_ns) {
   lua_Integer n = luaL_checkinteger(L, 1);
   lua_Integer sec;
   int nsec;
-  lus_dur_compute(n, unit_sec, unit_ns, &sec, &nsec);
+  if (!lus_dur_compute_checked(n, unit_sec, unit_ns, &sec, &nsec))
+    time_range_error(L);
   push_duration(L, sec, nsec);
   return 1;
 }
-static int time_days(lua_State *L) { return dur_helper(L, 86400, 0); }
-static int time_hours(lua_State *L) { return dur_helper(L, 3600, 0); }
-static int time_minutes(lua_State *L) { return dur_helper(L, 60, 0); }
-static int time_seconds(lua_State *L) { return dur_helper(L, 1, 0); }
-static int time_millis(lua_State *L) { return dur_helper(L, 0, 1000000); }
+static int time_days(lua_State *L) {
+  return dur_helper(L, 86400, 0);
+}
+static int time_hours(lua_State *L) {
+  return dur_helper(L, 3600, 0);
+}
+static int time_minutes(lua_State *L) {
+  return dur_helper(L, 60, 0);
+}
+static int time_seconds(lua_State *L) {
+  return dur_helper(L, 1, 0);
+}
+static int time_millis(lua_State *L) {
+  return dur_helper(L, 0, 1000000);
+}
 
 static int time_zoned(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
@@ -873,14 +1048,17 @@ static int time_zoned(lua_State *L) {
   lua_Integer nsec = field(L, 1, "nanosecond", 0);
   luaL_argcheck(L, month >= 1 && month <= 12, 1, "month out of range");
   luaL_argcheck(L, day >= 1 && day <= 31, 1, "day out of range");
-  lua_Integer days = days_from_civil(year, (unsigned)month, (unsigned)day);
-  lua_Integer naive = days * 86400 + hour * 3600 + min * 60 + secf; /* wall */
-  int frac = (int)(nsec % NANOS_PER_SEC);
+  lua_Integer naive =
+      civil_seconds(L, year, (unsigned)month, (unsigned)day, hour, min, secf);
+  int frac;
+  time_normalize(L, naive, nsec, &naive, &frac);
   if (luaL_testudata(L, 2, ZONE_METATABLE)) {
     push_zoned_in_zone(L, naive, frac, 2);
-  } else {
-    int offset = (int)luaL_optinteger(L, 2, 0); /* fixed offset seconds */
-    push_zoned(L, naive - offset, frac, offset);
+  }
+  else {
+    lua_Integer raw_offset = luaL_optinteger(L, 2, 0);
+    int offset = fixed_offset_arg(L, raw_offset, 2);
+    push_zoned(L, time_sub(L, naive, offset), frac, offset);
   }
   return 1;
 }
@@ -929,70 +1107,76 @@ static int parse_format(lua_State *L, const char *s, const char *fmt) {
     if (*fmt == '%') {
       fmt++;
       switch (*fmt) {
-      case 'Y':
-        if (!rd_num(&p, 4, &Y))
-          goto bad;
-        break;
-      case 'y': {
-        int yy;
-        if (!rd_num(&p, 2, &yy))
-          goto bad;
-        Y = 2000 + yy;
-        break;
-      }
-      case 'm':
-        if (!rd_num(&p, 2, &Mo))
-          goto bad;
-        break;
-      case 'e': /* space-padded day */
-      case 'd':
-        while (*p == ' ')
-          p++;
-        if (!rd_num(&p, 2, &D))
-          goto bad;
-        break;
-      case 'H':
-        if (!rd_num(&p, 2, &H))
-          goto bad;
-        break;
-      case 'M':
-        if (!rd_num(&p, 2, &Mi))
-          goto bad;
-        break;
-      case 'S':
-        if (!rd_num(&p, 2, &S))
-          goto bad;
-        break;
-      case 'z':
-        if (*p == 'Z') {
-          p++; /* UTC */
-        } else if (*p == '+' || *p == '-') {
-          int sign = *p == '-' ? -1 : 1, oh, om = 0;
-          p++;
-          if (!rd_num(&p, 2, &oh))
+        case 'Y':
+          if (!rd_num(&p, 4, &Y))
             goto bad;
-          if (*p == ':')
-            p++;
-          if (*p >= '0' && *p <= '9' && !rd_num(&p, 2, &om))
+          break;
+        case 'y': {
+          int yy;
+          if (!rd_num(&p, 2, &yy))
             goto bad;
-          off = sign * (oh * 3600 + om * 60);
-          zoned = 1;
-        } else {
-          goto bad;
+          Y = 2000 + yy;
+          break;
         }
-        break;
-      case '%':
-        if (*p != '%')
-          goto bad;
-        p++;
-        break;
-      default:
-        return luaL_error(L, "unsupported time format specifier '%%%c'", *fmt);
+        case 'm':
+          if (!rd_num(&p, 2, &Mo))
+            goto bad;
+          break;
+        case 'e': /* space-padded day */
+        case 'd':
+          while (*p == ' ')
+            p++;
+          if (!rd_num(&p, 2, &D))
+            goto bad;
+          break;
+        case 'H':
+          if (!rd_num(&p, 2, &H))
+            goto bad;
+          break;
+        case 'M':
+          if (!rd_num(&p, 2, &Mi))
+            goto bad;
+          break;
+        case 'S':
+          if (!rd_num(&p, 2, &S))
+            goto bad;
+          break;
+        case 'z':
+          if (*p == 'Z') {
+            p++; /* UTC */
+          }
+          else if (*p == '+' || *p == '-') {
+            int sign = *p == '-' ? -1 : 1, oh, om = 0;
+            p++;
+            if (!rd_num(&p, 2, &oh))
+              goto bad;
+            if (*p == ':')
+              p++;
+            if (*p >= '0' && *p <= '9' && !rd_num(&p, 2, &om))
+              goto bad;
+            if (!fixed_offset_parts(sign, oh, om, &off))
+              goto bad;
+            zoned = 1;
+          }
+          else {
+            goto bad;
+          }
+          break;
+        case '%':
+          if (*p != '%')
+            goto bad;
+          p++;
+          break;
+        default:
+          return luaL_error(L, "unsupported time format specifier '%%%c'",
+                            *fmt);
       }
-    } else if (*fmt == ' ') {
+    }
+    else if (*fmt == ' ') {
       while (*p == ' ' || *p == '\t')
         p++;
-    } else {
+    }
+    else {
       if (*p != *fmt)
         goto bad;
       p++;
@@ -1001,10 +1185,10 @@ static int parse_format(lua_State *L, const char *s, const char *fmt) {
   if (Mo < 1 || Mo > 12 || D < 1 || D > 31)
     goto bad;
   {
-    lua_Integer naive = days_from_civil(Y, (unsigned)Mo, (unsigned)D) * 86400 +
-                        (lua_Integer)H * 3600 + Mi * 60 + S;
+    lua_Integer naive =
+        civil_seconds(L, Y, (unsigned)Mo, (unsigned)D, H, Mi, S);
     if (zoned)
-      push_zoned(L, naive - off, 0, off);
+      push_zoned(L, time_sub(L, naive, off), 0, off);
     else
       push_instant(L, naive, 0, 0);
   }
@@ -1054,7 +1238,8 @@ static int time_parse(lua_State *L) {
     }
     if (*p == 'Z') {
       p++; /* UTC */
-    } else if (*p == '+' || *p == '-') {
+    }
+    else if (*p == '+' || *p == '-') {
       int sign = *p == '-' ? -1 : 1;
       int oh, om = 0;
       p++;
@@ -1064,7 +1249,8 @@ static int time_parse(lua_State *L) {
         p++;
       if (*p >= '0' && *p <= '9' && !rd_digits(&p, 2, &om))
         return luaL_error(L, "invalid zone offset in '%s'", s);
-      off = sign * (oh * 3600 + om * 60);
+      if (!fixed_offset_parts(sign, oh, om, &off))
+        return luaL_error(L, "invalid zone offset in '%s'", s);
       zoned = 1;
     }
   }
@@ -1073,10 +1259,10 @@ static int time_parse(lua_State *L) {
   if (*p != '\0')
     return luaL_error(L, "trailing characters in '%s'", s);
 
-  lua_Integer days = days_from_civil(y, (unsigned)mo, (unsigned)d);
-  lua_Integer naive = days * 86400 + hh * 3600 + mi * 60 + ss;
+  lua_Integer naive =
+      civil_seconds(L, y, (unsigned)mo, (unsigned)d, hh, mi, ss);
   if (zoned)
-    push_zoned(L, naive - off, frac, off);
+    push_zoned(L, time_sub(L, naive, off), frac, off);
   else
     push_instant(L, naive, frac, 0); /* Z or no offset -> UTC instant */
   return 1;
@@ -1091,13 +1277,12 @@ static int time_zone(lua_State *L) {
 
 static int time_offset(lua_State *L) {
   lua_Integer secs = luaL_checkinteger(L, 1);
-  luaL_argcheck(L, secs >= -24 * 3600 && secs <= 24 * 3600, 1,
-                "offset out of range");
+  int fixed = fixed_offset_arg(L, secs, 1);
   char name[16];
-  int a = secs < 0 ? -(int)secs : (int)secs;
+  int a = fixed < 0 ? -fixed : fixed;
   snprintf(name, sizeof(name), "%c%02d:%02d", secs < 0 ? '-' : '+', a / 3600,
            (a % 3600) / 60);
-  push_fixed_zone(L, (int)secs, name);
+  push_fixed_zone(L, fixed, name);
   return 1;
 }
 
@@ -1192,9 +1377,9 @@ static int time_tzdata_version(lua_State *L) {
 ** offset, so the output would otherwise depend on where the program runs. */
 static int format_wall(lua_State *L, lua_Integer wall_sec, int nsec,
                        const char *fmt, int offset) {
-  lua_Integer days =
-      wall_sec >= 0 ? wall_sec / 86400 : (wall_sec - 86399) / 86400;
-  lua_Integer rem = wall_sec - days * 86400;
+  lua_Integer days;
+  lua_Integer rem;
+  split_days(wall_sec, &days, &rem);
   lua_Integer y;
   unsigned mo, d;
   civil_from_days(days, &y, &mo, &d);
@@ -1306,8 +1491,9 @@ static int inst_in(lua_State *L) {
     push_zoned(L, i->sec, i->nsec, offset);
     lua_pushvalue(L, 2); /* remember the zone for later calendar ops */
     lua_setiuservalue(L, -2, 1);
-  } else {
-    int offset = (int)luaL_checkinteger(L, 2); /* fixed offset seconds */
+  }
+  else {
+    int offset = fixed_offset_arg(L, luaL_checkinteger(L, 2), 2);
     push_zoned(L, i->sec, i->nsec, offset);
   }
   return 1;
@@ -1316,7 +1502,10 @@ static int inst_in(lua_State *L) {
 static int inst_add(lua_State *L) {
   l_instant *i = check_instant(L, 1);
   l_duration *d = check_duration(L, 2);
-  push_instant(L, i->sec + d->sec, i->nsec + d->nsec, i->mono);
+  lua_Integer sec;
+  int nsec;
+  time_pair_add(L, i->sec, i->nsec, d->sec, d->nsec, &sec, &nsec);
+  push_instant(L, sec, nsec, i->mono);
   return 1;
 }
 
@@ -1324,7 +1513,10 @@ static int inst_add(lua_State *L) {
 static int inst_meta_add(lua_State *L) {
   l_instant *i = check_instant(L, 1);
   l_duration *d = check_duration(L, 2);
-  push_instant(L, i->sec + d->sec, i->nsec + d->nsec, i->mono);
+  lua_Integer sec;
+  int nsec;
+  time_pair_add(L, i->sec, i->nsec, d->sec, d->nsec, &sec, &nsec);
+  push_instant(L, sec, nsec, i->mono);
   return 1;
 }
 
@@ -1335,10 +1527,17 @@ static int inst_meta_sub(lua_State *L) {
     l_instant *j = check_instant(L, 2);
     if (i->mono != j->mono)
       return luaL_error(L, "cannot subtract instants from different clocks");
-    push_duration(L, i->sec - j->sec, i->nsec - j->nsec);
-  } else {
+    lua_Integer sec;
+    int nsec;
+    time_pair_sub(L, i->sec, i->nsec, j->sec, j->nsec, &sec, &nsec);
+    push_duration(L, sec, nsec);
+  }
+  else {
     l_duration *d = check_duration(L, 2);
-    push_instant(L, i->sec - d->sec, i->nsec - d->nsec, i->mono);
+    lua_Integer sec;
+    int nsec;
+    time_pair_sub(L, i->sec, i->nsec, d->sec, d->nsec, &sec, &nsec);
+    push_instant(L, sec, nsec, i->mono);
   }
   return 1;
 }
@@ -1346,23 +1545,24 @@ static int inst_meta_sub(lua_State *L) {
 static int inst_meta_eq(lua_State *L) {
   l_instant *a = check_instant(L, 1);
   l_instant *b = check_instant(L, 2);
-  lua_pushboolean(L, a->sec == b->sec && a->nsec == b->nsec &&
-                         a->mono == b->mono);
+  lua_pushboolean(L,
+                  a->sec == b->sec && a->nsec == b->nsec && a->mono == b->mono);
   return 1;
 }
 
 static int inst_meta_lt(lua_State *L) {
   l_instant *a = check_instant(L, 1);
   l_instant *b = check_instant(L, 2);
-  lua_pushboolean(L, a->sec < b->sec || (a->sec == b->sec && a->nsec < b->nsec));
+  lua_pushboolean(L,
+                  a->sec < b->sec || (a->sec == b->sec && a->nsec < b->nsec));
   return 1;
 }
 
 static int inst_meta_le(lua_State *L) {
   l_instant *a = check_instant(L, 1);
   l_instant *b = check_instant(L, 2);
-  lua_pushboolean(L, a->sec < b->sec ||
-                         (a->sec == b->sec && a->nsec <= b->nsec));
+  lua_pushboolean(L,
+                  a->sec < b->sec || (a->sec == b->sec && a->nsec <= b->nsec));
   return 1;
 }
 
@@ -1389,40 +1589,101 @@ static int dur_seconds(lua_State *L) {
 
 static int dur_millis(lua_State *L) {
   l_duration *d = check_duration(L, 1);
-  lua_pushnumber(L, (lua_Number)d->sec * 1000.0 +
-                        (lua_Number)d->nsec / 1000000.0);
+  lua_pushnumber(L,
+                 (lua_Number)d->sec * 1000.0 + (lua_Number)d->nsec / 1000000.0);
   return 1;
+}
+
+static void duration_multiply(lua_State *L, l_duration *d, lua_Integer factor,
+                              lua_Integer *outsec, int *outnsec) {
+  int negative = (d->sec < 0) != (factor < 0);
+  lua_Unsigned magsec;
+  lua_Unsigned magnsec;
+  lua_Unsigned multiplier =
+      factor < 0 ? 0u - l_castS2U(factor) : l_castS2U(factor);
+  lua_Unsigned second_limit =
+      l_castS2U(LUA_MAXINTEGER) + cast(lua_Unsigned, negative);
+  lua_Unsigned product_sec;
+  lua_Unsigned factor_whole;
+  lua_Unsigned factor_rem;
+  lua_Unsigned nsec_product;
+  lua_Unsigned carry;
+  lua_Unsigned product_nsec;
+
+  if (d->sec >= 0) {
+    magsec = l_castS2U(d->sec);
+    magnsec = (lua_Unsigned)d->nsec;
+  }
+  else if (d->nsec == 0) {
+    magsec = 0u - l_castS2U(d->sec);
+    magnsec = 0;
+  }
+  else {
+    magsec = 0u - l_castS2U(d->sec) - 1u;
+    magnsec = (lua_Unsigned)(NANOS_PER_SEC - d->nsec);
+  }
+
+  if (multiplier != 0 && magsec > second_limit / multiplier)
+    time_range_error(L);
+  product_sec = magsec * multiplier;
+  factor_whole = multiplier / NANOS_PER_SEC;
+  factor_rem = multiplier % NANOS_PER_SEC;
+  nsec_product = magnsec * factor_rem;
+  carry = magnsec * factor_whole + nsec_product / NANOS_PER_SEC;
+  product_nsec = nsec_product % NANOS_PER_SEC;
+  if (carry > second_limit - product_sec)
+    time_range_error(L);
+  product_sec += carry;
+
+  if (!negative) {
+    *outsec = l_castU2S(product_sec);
+    *outnsec = (int)product_nsec;
+  }
+  else if (product_nsec == 0) {
+    *outsec = l_castU2S(0u - product_sec);
+    *outnsec = 0;
+  }
+  else {
+    lua_Integer negative_sec;
+    if (product_sec >= l_castS2U(LUA_MAXINTEGER) + 1u)
+      time_range_error(L);
+    negative_sec = l_castU2S(0u - product_sec);
+    if (!lus_time_sub_checked(negative_sec, 1, outsec))
+      time_range_error(L);
+    *outnsec = (int)((lua_Unsigned)NANOS_PER_SEC - product_nsec);
+  }
 }
 
 static int dur_parts(lua_State *L) {
   l_duration *d = check_duration(L, 1);
   /* Break the absolute magnitude into components; report the sign separately. */
   int neg = (d->sec < 0);
-  lua_Integer s;
-  lua_Integer nanos;
+  lua_Unsigned s;
+  lua_Unsigned nanos;
   if (!neg) {
-    s = d->sec;
-    nanos = d->nsec;
-  } else {
-    s = -d->sec;
-    nanos = d->nsec;
-    if (nanos != 0) { /* borrow: |sec + nsec/1e9| */
-      s -= 1;
-      nanos = NANOS_PER_SEC - nanos;
+    s = l_castS2U(d->sec);
+    nanos = (lua_Unsigned)d->nsec;
+  }
+  else {
+    s = 0u - l_castS2U(d->sec);
+    nanos = (lua_Unsigned)d->nsec;
+    if (nanos != 0) {
+      s--;
+      nanos = (lua_Unsigned)NANOS_PER_SEC - nanos;
     }
   }
   lua_newtable(L);
   lua_pushboolean(L, neg);
   lua_setfield(L, -2, "negative");
-  lua_pushinteger(L, s / 86400);
+  lua_pushinteger(L, (lua_Integer)(s / 86400));
   lua_setfield(L, -2, "days");
-  lua_pushinteger(L, (s % 86400) / 3600);
+  lua_pushinteger(L, (lua_Integer)((s % 86400) / 3600));
   lua_setfield(L, -2, "hours");
-  lua_pushinteger(L, (s % 3600) / 60);
+  lua_pushinteger(L, (lua_Integer)((s % 3600) / 60));
   lua_setfield(L, -2, "minutes");
-  lua_pushinteger(L, s % 60);
+  lua_pushinteger(L, (lua_Integer)(s % 60));
   lua_setfield(L, -2, "seconds");
-  lua_pushinteger(L, nanos);
+  lua_pushinteger(L, (lua_Integer)nanos);
   lua_setfield(L, -2, "nanos");
   return 1;
 }
@@ -1430,14 +1691,20 @@ static int dur_parts(lua_State *L) {
 static int dur_meta_add(lua_State *L) {
   l_duration *a = check_duration(L, 1);
   l_duration *b = check_duration(L, 2);
-  push_duration(L, a->sec + b->sec, a->nsec + b->nsec);
+  lua_Integer sec;
+  int nsec;
+  time_pair_add(L, a->sec, a->nsec, b->sec, b->nsec, &sec, &nsec);
+  push_duration(L, sec, nsec);
   return 1;
 }
 
 static int dur_meta_sub(lua_State *L) {
   l_duration *a = check_duration(L, 1);
   l_duration *b = check_duration(L, 2);
-  push_duration(L, a->sec - b->sec, a->nsec - b->nsec);
+  lua_Integer sec;
+  int nsec;
+  time_pair_sub(L, a->sec, a->nsec, b->sec, b->nsec, &sec, &nsec);
+  push_duration(L, sec, nsec);
   return 1;
 }
 
@@ -1448,21 +1715,24 @@ static int dur_meta_mul(lua_State *L) {
   if (luaL_testudata(L, 1, DURATION_METATABLE)) {
     d = check_duration(L, 1);
     k = luaL_checkinteger(L, 2);
-  } else {
+  }
+  else {
     k = luaL_checkinteger(L, 1);
     d = check_duration(L, 2);
   }
-  push_duration(L, d->sec * k, (int)((lua_Integer)d->nsec * k % NANOS_PER_SEC));
-  {
-    l_duration *r = check_duration(L, -1);
-    r->sec += (lua_Integer)d->nsec * k / NANOS_PER_SEC;
-  }
+  lua_Integer sec;
+  int nsec;
+  duration_multiply(L, d, k, &sec, &nsec);
+  push_duration(L, sec, nsec);
   return 1;
 }
 
 static int dur_meta_unm(lua_State *L) {
   l_duration *d = check_duration(L, 1);
-  push_duration(L, -d->sec, -d->nsec);
+  lua_Integer sec;
+  int nsec;
+  duration_multiply(L, d, -1, &sec, &nsec);
+  push_duration(L, sec, nsec);
   return 1;
 }
 
@@ -1508,17 +1778,19 @@ static int zoned_instant(lua_State *L) {
 static int zoned_format(lua_State *L) {
   l_zoned *z = check_zoned(L, 1);
   const char *fmt = luaL_optstring(L, 2, "%Y-%m-%dT%H:%M:%S");
-  return format_wall(L, z->sec + z->offset, z->nsec, fmt, z->offset);
+  return format_wall(L, time_add(L, z->sec, z->offset), z->nsec, fmt,
+                     z->offset);
 }
 
 static int zoned_iso(lua_State *L) {
   l_zoned *z = check_zoned(L, 1);
-  format_wall(L, z->sec + z->offset, z->nsec, "%Y-%m-%dT%H:%M:%S",
+  format_wall(L, time_add(L, z->sec, z->offset), z->nsec, "%Y-%m-%dT%H:%M:%S",
               z->offset); /* pushes */
   int off = z->offset;
   if (off == 0) {
     lua_pushliteral(L, "Z");
-  } else {
+  }
+  else {
     char sign = off < 0 ? '-' : '+';
     int a = off < 0 ? -off : off;
     char buf[16];
@@ -1537,20 +1809,27 @@ static int zoned_with(lua_State *L) {
   luaL_checktype(L, 2, LUA_TTABLE);
   lua_Integer Y;
   int Mo, D, H, Mi, S;
-  zoned_civil(z, &Y, &Mo, &D, &H, &Mi, &S);
+  zoned_civil(z, &Y, &Mo, &D, &H, &Mi, &S, L);
+  lua_Integer month;
+  lua_Integer day;
+  lua_Integer hour;
+  lua_Integer minute;
+  lua_Integer second;
   lua_Integer nsec = z->nsec;
   Y = field(L, 2, "year", Y);
-  Mo = (int)field(L, 2, "month", Mo);
-  D = (int)field(L, 2, "day", D);
-  H = (int)field(L, 2, "hour", H);
-  Mi = (int)field(L, 2, "minute", Mi);
-  S = (int)field(L, 2, "second", S);
+  month = field(L, 2, "month", Mo);
+  day = field(L, 2, "day", D);
+  hour = field(L, 2, "hour", H);
+  minute = field(L, 2, "minute", Mi);
+  second = field(L, 2, "second", S);
   nsec = field(L, 2, "nanosecond", nsec);
-  luaL_argcheck(L, Mo >= 1 && Mo <= 12, 2, "month out of range");
-  luaL_argcheck(L, D >= 1 && D <= 31, 2, "day out of range");
-  lua_Integer naive = days_from_civil(Y, (unsigned)Mo, (unsigned)D) * 86400 +
-                      (lua_Integer)H * 3600 + Mi * 60 + S;
-  rebuild_zoned(L, 1, z, naive, (int)(nsec % NANOS_PER_SEC));
+  luaL_argcheck(L, month >= 1 && month <= 12, 2, "month out of range");
+  luaL_argcheck(L, day >= 1 && day <= 31, 2, "day out of range");
+  lua_Integer naive =
+      civil_seconds(L, Y, (unsigned)month, (unsigned)day, hour, minute, second);
+  int frac;
+  time_normalize(L, naive, nsec, &naive, &frac);
+  rebuild_zoned(L, 1, z, naive, frac);
   return 1;
 }
 
@@ -1563,27 +1842,37 @@ static int zoned_add(lua_State *L) {
   luaL_checktype(L, 2, LUA_TTABLE);
   lua_Integer Y;
   int Mo, D, H, Mi, S;
-  zoned_civil(z, &Y, &Mo, &D, &H, &Mi, &S);
+  zoned_civil(z, &Y, &Mo, &D, &H, &Mi, &S, L);
 
-  Y += field(L, 2, "years", 0);
-  lua_Integer m0 = (lua_Integer)(Mo - 1) + field(L, 2, "months", 0);
-  Y += floordiv(m0, 12);
-  Mo = (int)(m0 - floordiv(m0, 12) * 12) + 1; /* 1..12 */
+  Y = time_add(L, Y, field(L, 2, "years", 0));
+  lua_Integer m0 = time_add(L, Mo - 1, field(L, 2, "months", 0));
+  lua_Integer month_years = floordiv(m0, 12);
+  Y = time_add(L, Y, month_years);
+  lua_Integer month_index = m0 % 12;
+  if (month_index < 0)
+    month_index += 12;
+  Mo = (int)month_index + 1;
   int dim = days_in_month(Y, Mo);
   if (D > dim)
     D = dim; /* e.g. Jan 31 + 1 month -> Feb 28/29 */
 
-  lua_Integer dayCount = days_from_civil(Y, (unsigned)Mo, (unsigned)D) +
-                        field(L, 2, "weeks", 0) * 7 + field(L, 2, "days", 0);
-  lua_Integer secOfDay = (lua_Integer)H * 3600 + Mi * 60 + S +
-                        field(L, 2, "hours", 0) * 3600 +
-                        field(L, 2, "minutes", 0) * 60 +
-                        field(L, 2, "seconds", 0);
-  lua_Integer nsecTotal = (lua_Integer)z->nsec + field(L, 2, "nanos", 0);
-  lua_Integer naive = dayCount * 86400 + secOfDay + floordiv(nsecTotal,
-                                                             NANOS_PER_SEC);
-  int frac = (int)(nsecTotal - floordiv(nsecTotal, NANOS_PER_SEC) *
-                                   NANOS_PER_SEC);
+  lua_Integer dayCount;
+  if (!days_from_civil_checked(Y, (unsigned)Mo, (unsigned)D, &dayCount))
+    time_range_error(L);
+  dayCount = time_add(L, dayCount, time_mul(L, field(L, 2, "weeks", 0), 7));
+  dayCount = time_add(L, dayCount, field(L, 2, "days", 0));
+  lua_Integer secOfDay = (lua_Integer)H * 3600 + Mi * 60 + S;
+  secOfDay = time_add(L, secOfDay, time_mul(L, field(L, 2, "hours", 0), 3600));
+  secOfDay = time_add(L, secOfDay, time_mul(L, field(L, 2, "minutes", 0), 60));
+  secOfDay = time_add(L, secOfDay, field(L, 2, "seconds", 0));
+  lua_Integer naive = time_add(L, time_mul(L, dayCount, 86400), secOfDay);
+  lua_Integer nano_sec;
+  int nano_frac;
+  if (!lus_dur_compute_checked(field(L, 2, "nanos", 0), 0, 1, &nano_sec,
+                               &nano_frac))
+    time_range_error(L);
+  int frac;
+  time_pair_add(L, naive, z->nsec, nano_sec, nano_frac, &naive, &frac);
   rebuild_zoned(L, 1, z, naive, frac);
   return 1;
 }
@@ -1604,9 +1893,10 @@ static int zoned_index(lua_State *L) {
     return 1;
   lua_pop(L, 3);
 
-  lua_Integer wall = z->sec + z->offset;
-  lua_Integer days = wall >= 0 ? wall / 86400 : (wall - 86399) / 86400;
-  lua_Integer rem = wall - days * 86400;
+  lua_Integer wall = time_add(L, z->sec, z->offset);
+  lua_Integer days;
+  lua_Integer rem;
+  split_days(wall, &days, &rem);
   lua_Integer y;
   unsigned mo, d;
   civil_from_days(days, &y, &mo, &d);
@@ -1629,7 +1919,8 @@ static int zoned_index(lua_State *L) {
     lua_getfield(L, LUA_REGISTRYINDEX, WEEKDAY_KEY);
     lua_geti(L, -1, weekday_from_days(days)); /* enum[idx] -> sibling value */
     lua_remove(L, -2);                        /* drop the enum root */
-  } else if (strcmp(k, "yearday") == 0)
+  }
+  else if (strcmp(k, "yearday") == 0)
     lua_pushinteger(L, days - days_from_civil(y, 1, 1) + 1);
   else if (strcmp(k, "offset") == 0)
     lua_pushinteger(L, z->offset);

@@ -121,23 +121,23 @@ void luaE_shrinkCI(lua_State *L) {
 }
 
 /*
-** Called when 'getCcalls(L)' larger or equal to LUAI_MAXCCALLS.
+** Called when a C-recursion 'count' is larger than or equal to 'limit'.
 ** If equal, raises an overflow error. If value is larger than
-** LUAI_MAXCCALLS (which means it is handling an overflow) but
+** 'limit' (which means it is handling an overflow) but
 ** not much larger, does not report an error (to allow overflow
 ** handling to work).
 */
-void luaE_checkcstack(lua_State *L) {
-  if (getCcalls(L) == LUAI_MAXCCALLS)
+void luaE_checkcstack(lua_State *L, unsigned int count, unsigned int limit) {
+  if (count == limit)
     luaG_runerror(L, "C stack overflow");
-  else if (getCcalls(L) >= (LUAI_MAXCCALLS / 10 * 11))
+  else if (count >= (limit / 10 * 11))
     luaD_errerr(L); /* error while handling stack error */
 }
 
 LUAI_FUNC void luaE_incCstack(lua_State *L) {
   L->nCcalls++;
   if (l_unlikely(getCcalls(L) >= LUAI_MAXCCALLS))
-    luaE_checkcstack(L);
+    luaE_checkcstack(L, getCcalls(L), LUAI_MAXCCALLS);
 }
 
 static void resetCI(lua_State *L) {
@@ -192,8 +192,8 @@ void luaE_clearcatch(lua_State *L) {
 
 static void freestack(lua_State *L) {
   if (L->stack.p == NULL)
-    return;             /* stack not completely built yet */
-  luaE_clearcatch(L);   /* free leftover catch nodes before freeing CIs */
+    return;            /* stack not completely built yet */
+  luaE_clearcatch(L);  /* free leftover catch nodes before freeing CIs */
   L->ci = &L->base_ci; /* free the entire 'ci' list */
   freeCI(L);
   lua_assert(L->nci == 0);
@@ -249,6 +249,9 @@ static void preinit_thread(lua_State *L, global_State *g) {
   L->nci = 0;
   L->twups = L; /* thread has no upvalues */
   L->nCcalls = 0;
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls = 0;
+#endif
   L->cCatch = NULL;      /* no C-level catch handler */
   L->activeCatch = NULL; /* no active Lua catch handler */
   L->hook = NULL;
@@ -271,20 +274,12 @@ lu_mem luaE_threadsize(lua_State *L) {
   return sz;
 }
 
-/* Join any worker-pool threads before tearing down the state. Declared here to
-** avoid a core->lib header dependency; it no-ops if the pool was never started.
-** Without this, abandoned pool threads read the freed parent PledgeStore (and
-** other freed state) -- a use-after-free and pledge escape. */
-LUA_API void lus_worker_pool_shutdown(void);
-
 static void close_state(lua_State *L) {
   global_State *g = G(L);
-  /* Only the owning interpreter tears the shared pool down. A worker's own
-  ** state closes on a pool thread when its last handle is dropped, and letting
-  ** that reenter the shutdown would double free the pool and make a thread join
-  ** itself. The main interpreter still shuts the pool down exactly once. */
-  if (!g->isworker)
-    lus_worker_pool_shutdown(); /* join pool threads before freeing anything */
+  /* A state drains only the workers it owns. Process-wide pool shutdown stays
+  ** an explicit embedder operation. Worker bodies can own nested workers. */
+  if (g->worker_close != NULL)
+    g->worker_close(L);
   if (!completestate(g))    /* closing a partially built state? */
     luaC_freeallobjects(L); /* just collect its objects */
   else {                    /* closing a fully built state */
@@ -356,6 +351,9 @@ LUA_API int lua_closethread(lua_State *L, lua_State *from) {
   TStatus status;
   lua_lock(L);
   L->nCcalls = (from) ? getCcalls(from) : 0;
+#if LUAI_TRACKHEAVYCALLS
+  L->nHeavyCcalls = (from) ? from->nHeavyCcalls : 0;
+#endif
   status = luaE_resetthread(L, L->status);
   if (L == from) /* closing itself? */
     luaD_throwbaselevel(L, status);
@@ -414,6 +412,9 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   g->pedantic = 0;
   g->stripdebug = 0;
   g->isworker = 0;
+  g->workerdomain = NULL;
+  g->worker_close = NULL;
+  g->worker_setup = NULL;
   g->flagstable = NULL;
   g->preinctab = NULL;
   g->iter_next = NULL;

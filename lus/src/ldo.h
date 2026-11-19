@@ -14,6 +14,16 @@
 #include "lstate.h"
 #include "lzio.h"
 
+#if LUAI_TRACKHEAVYCALLS
+#define CPROTECT_SAVEHEAVY(L) \
+  l_uint32 _oldnHeavyCcalls = (L)->nHeavyCcalls
+#define CPROTECT_RESTOREHEAVY(L) \
+  (L)->nHeavyCcalls = _oldnHeavyCcalls
+#else
+#define CPROTECT_SAVEHEAVY(L)
+#define CPROTECT_RESTOREHEAVY(L)
+#endif
+
 
 /*
 ** C-level catch information for protected execution in C code.
@@ -46,26 +56,28 @@ typedef struct CCatchInfo {
 #if defined(__cplusplus) && !defined(LUA_USE_LONGJMP) /* { */
 
 /* C++ exception-based protection */
-#define CPROTECT_BEGIN(L, cinfo)         \
-  do {                                   \
-    l_uint32 _oldnCcalls = (L)->nCcalls; \
-    (cinfo)->status = LUA_OK;            \
-    (cinfo)->prev = (L)->cCatch;         \
-    (cinfo)->erroffset = 0;              \
-    (L)->cCatch = (cinfo);               \
+#define CPROTECT_BEGIN(L, cinfo)                          \
+  do {                                                    \
+    l_uint32 _oldnCcalls = (L)->nCcalls;                  \
+    CPROTECT_SAVEHEAVY(L);                                \
+    (cinfo)->status = LUA_OK;                             \
+    (cinfo)->prev = (L)->cCatch;                          \
+    (cinfo)->erroffset = 0;                               \
+    (L)->cCatch = (cinfo);                                \
     try {
-#define CPROTECT_END(L, cinfo)                    \
-  }                                               \
-  catch(CCatchInfo *_caught) {                    \
-    if (_caught != (cinfo))                       \
-      throw; /* rethrow if not our catch */       \
-  }                                               \
-  catch(...) {                                    \
-    (cinfo)->status = -1; /* unknown exception */ \
-  }                                               \
-  (L)->cCatch = (cinfo)->prev;                    \
-  (L)->nCcalls = _oldnCcalls;                     \
-  }                                               \
+#define CPROTECT_END(L, cinfo)                            \
+  }                                                       \
+  catch(CCatchInfo *_caught) {                            \
+    if (_caught != (cinfo))                               \
+      throw; /* rethrow if not our catch */               \
+  }                                                       \
+  catch(...) {                                            \
+    (cinfo)->status = -1; /* unknown exception */         \
+  }                                                       \
+  (L)->cCatch = (cinfo)->prev;                            \
+  (L)->nCcalls = _oldnCcalls;                             \
+  CPROTECT_RESTOREHEAVY(L);                               \
+  }                                                       \
   while (0)
 
 /* C++ throw for luaD_throw */
@@ -81,19 +93,21 @@ typedef struct CCatchInfo {
 #define CPROTECT_LONGJMP(buf, val) longjmp(buf, val)
 #endif
 
-#define CPROTECT_BEGIN(L, cinfo)         \
-  do {                                   \
-    l_uint32 _oldnCcalls = (L)->nCcalls; \
-    (cinfo)->status = LUA_OK;            \
-    (cinfo)->prev = (L)->cCatch;         \
-    (cinfo)->erroffset = 0;              \
-    (L)->cCatch = (cinfo);               \
+#define CPROTECT_BEGIN(L, cinfo)                          \
+  do {                                                    \
+    l_uint32 _oldnCcalls = (L)->nCcalls;                  \
+    CPROTECT_SAVEHEAVY(L);                                \
+    (cinfo)->status = LUA_OK;                             \
+    (cinfo)->prev = (L)->cCatch;                          \
+    (cinfo)->erroffset = 0;                               \
+    (L)->cCatch = (cinfo);                                \
     if (CPROTECT_SETJMP((cinfo)->jmpbuf) == 0) {
-#define CPROTECT_END(L, cinfo) \
-  }                            \
-  (L)->cCatch = (cinfo)->prev; \
-  (L)->nCcalls = _oldnCcalls;  \
-  }                            \
+#define CPROTECT_END(L, cinfo)                            \
+  }                                                       \
+  (L)->cCatch = (cinfo)->prev;                            \
+  (L)->nCcalls = _oldnCcalls;                             \
+  CPROTECT_RESTOREHEAVY(L);                               \
+  }                                                       \
   while (0)
 
 /* C longjmp for luaD_throw */
@@ -149,17 +163,6 @@ typedef struct CCatchInfo {
                      p = restorestack(L, t__)) /* 'pos' part: restore 'p' */
 
 
-/*
-** Maximum depth for nested C calls, syntactical nested non-terminals,
-** and other features implemented through recursion in C. (Value must
-** fit in a 16-bit unsigned integer. It must also be compatible with
-** the size of the C stack.)
-*/
-#if !defined(LUAI_MAXCCALLS)
-#define LUAI_MAXCCALLS 200
-#endif
-
-
 /* type of protected functions, to be ran by 'runprotected' */
 typedef void (*Pfunc)(lua_State *L, void *ud);
 
@@ -189,6 +192,4 @@ LUAI_FUNC void luaD_anchorobj(lua_State *L, Table *anchor, GCObject *obj);
 
 LUAI_FUNC l_noret luaD_throw(lua_State *L, TStatus errcode);
 LUAI_FUNC l_noret luaD_throwbaselevel(lua_State *L, TStatus errcode);
-LUAI_FUNC TStatus luaD_catchcall(lua_State *L, Pfunc f, void *ud);
-
 #endif
