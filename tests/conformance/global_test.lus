@@ -1,0 +1,251 @@
+pledge("load")
+
+-- ===== ported from h1/global.lus =====
+--[[
+    Test suite for the global statement in Lus.
+
+    Contract:
+    - global name1, name2, ...      declares globals without defining them
+    - global name = expr            declares and initializes
+    - global function name() end    declares and defines a function
+    - global <const> name = expr    declares a read-only global
+    - global *                      restores implicit global declarations
+
+    Every chunk starts with an implicit "global *" that lets undeclared
+    names act as globals. From the first explicit global declaration to
+    the end of its enclosing block, that implicit declaration is voided
+    and using an undeclared name is a compile-time error.
+
+    Initializing a global whose current value is non-nil raises
+    "global 'x' already defined" at runtime. Declaring without an
+    initializer never raises and can be repeated across chunks.
+
+    Local variables shadow globals.
+]]
+
+
+-- =========================================================================
+-- Declaration and initialization
+-- =========================================================================
+
+-- global name = expr declares and initializes
+local function global_name_expr_declares_and_initializes_test()
+    local f = load("global g_t1 = 42 return g_t1")
+    assert(f ~= nil)
+    assert(f() == 42)
+    assert(_G.g_t1 == 42, "the initialized value must land in the global table")
+end
+
+-- declaration without initializer reads nil
+local function declaration_without_initializer_reads_nil_test()
+    local f = load("global g_t2 return g_t2")
+    assert(f ~= nil)
+    assert(f() == nil)
+    assert(_G.g_t2 == nil, "declaring alone must not create a value")
+end
+
+-- declared global is assignable after declaration
+local function declared_global_is_assignable_after_declaration_test()
+    local f = load("global g_t3 g_t3 = 10 return g_t3")
+    assert(f() == 10)
+    assert(_G.g_t3 == 10)
+end
+
+-- multiple names declared and initialized in one statement
+local function multiple_names_declared_and_initialized_in_one_statement_test()
+    local f = load("global g_t4a, g_t4b, g_t4c = 1, 2, 3 return g_t4a, g_t4b, g_t4c")
+    local a, b, c = f()
+    assert(a == 1 and b == 2 and c == 3)
+    assert(_G.g_t4a == 1 and _G.g_t4b == 2 and _G.g_t4c == 3)
+end
+
+-- extra declared names pad with nil
+local function extra_declared_names_pad_with_nil_test()
+    local f = load("global g_t5a, g_t5b, g_t5c = 1, 2 return g_t5a, g_t5b, g_t5c")
+    local a, b, c = f()
+    assert(a == 1 and b == 2)
+    assert(c == nil, "the third name received no value")
+end
+
+-- =========================================================================
+-- Visibility of new globals
+-- =========================================================================
+
+-- new global is visible through _G
+local function new_global_is_visible_through_g_test()
+    local f = load("global g_t6 = 11")
+    f()
+    assert(_G.g_t6 == 11)
+end
+
+-- new global is visible to a later chunk
+local function new_global_is_visible_to_a_later_chunk_test()
+    load("global g_t7 = 12")()
+    local reader = load("global g_t7 return g_t7")
+    assert(reader() == 12, "a second chunk redeclares the name and reads the value")
+end
+
+-- assignment from an inner function is visible in the chunk
+local function assignment_from_an_inner_function_is_visible_in_the_chunk_test()
+    local f = load("global g_t8 local function set() g_t8 = 5 end set() return g_t8")
+    assert(f() == 5)
+    assert(_G.g_t8 == 5)
+end
+
+-- writing through _G defines a declared global
+local function writing_through_g_defines_a_declared_global_test()
+    local f = load("global _G, g_t9 _G.g_t9 = 77 return g_t9")
+    assert(f() == 77, "globals are entries of the global table")
+end
+
+-- =========================================================================
+-- Declared-before-use enforcement
+-- =========================================================================
+
+-- undeclared read is a compile error after a declaration
+local function undeclared_read_is_a_compile_error_after_a_declaration_test()
+    local f, err = load("global g_t10 = 1 return g_t10_undeclared_name")
+    assert(f == nil, "reading an undeclared name should not compile")
+    assert(string.find(err, "not declared"))
+end
+
+-- undeclared assignment is a compile error after a declaration
+local function undeclared_assignment_is_a_compile_error_after_a_declaration_test()
+    local f, err = load("global g_t11 = 1 g_t11_undeclared_name = 5")
+    assert(f == nil, "writing an undeclared name should not compile")
+    assert(string.find(err, "not declared"))
+end
+
+-- enforcement begins at the declaration
+local function enforcement_begins_at_the_declaration_test()
+    -- Uses before the first global statement fall under the implicit
+    -- declaration and stay legal. The read is captured into a local
+    -- because after the declaration the same name would not compile.
+    local f = load("g_t12_early = 1 local r = g_t12_early global g_t12 = 2 return r")
+    assert(f ~= nil, "uses before the declaration compile")
+    assert(f() == 1)
+    assert(_G.g_t12_early == 1)
+    -- The very same read placed after the declaration is rejected
+    local bad, err = load("g_t12b_early = 1 global g_t12b = 2 return g_t12b_early")
+    assert(bad == nil)
+    assert(string.find(err, "not declared"))
+end
+
+-- enforcement ends with the enclosing block
+local function enforcement_ends_with_the_enclosing_block_test()
+    local f = load("do global g_t13 = 1 end g_t13_after = 5 return g_t13_after")
+    assert(f ~= nil, "after the block the implicit declaration applies again")
+    assert(f() == 5)
+end
+
+-- declared name leaves scope with its block but the value persists
+local function declared_name_leaves_scope_with_its_block_but_the_value_persists_test()
+    local f = load("do global g_t14 = 7 end return g_t14")
+    assert(f ~= nil, "the read after the block is an implicit global")
+    assert(f() == 7, "the value stored during the block persists in _G")
+end
+
+-- global * restores implicit declarations
+local function global_restores_implicit_declarations_test()
+    local f = load("global g_t15 = 1 global * g_t15_anything = 9 return g_t15_anything")
+    assert(f ~= nil, "global * lifts the enforcement for the rest of the block")
+    assert(f() == 9)
+end
+
+-- =========================================================================
+-- Redefinition rules
+-- =========================================================================
+
+-- initializing an already defined global raises at runtime
+local function initializing_an_already_defined_global_raises_at_runtime_test()
+    load("global g_t16 = 1")()
+    local f = load("global g_t16 = 2")
+    assert(f ~= nil, "the redefinition compiles, the check happens at runtime")
+    local ok, msg = catch f()
+    assert(ok == false)
+    assert(string.find(tostring(msg), "already defined"))
+    assert(_G.g_t16 == 1, "the original value survives the failed redefinition")
+end
+
+-- redeclaring without initializer never raises
+local function redeclaring_without_initializer_never_raises_test()
+    load("global g_t17 = 3")()
+    local f = load("global g_t17 return g_t17")
+    assert(f() == 3)
+end
+
+-- clearing the value allows a later initialization
+local function clearing_the_value_allows_a_later_initialization_test()
+    load("global g_t18 = 1")()
+    _G.g_t18 = nil
+    local f = load("global g_t18 = 2 return g_t18")
+    local ok, v = catch f()
+    assert(ok == true, "the check tests the current value, not history")
+    assert(v == 2)
+end
+
+-- =========================================================================
+-- Other declaration forms
+-- =========================================================================
+
+-- global function declares and defines
+local function global_function_declares_and_defines_test()
+    local f = load("global function g_t19() return 99 end return g_t19()")
+    assert(f() == 99)
+    assert(type(_G.g_t19) == "function")
+end
+
+-- const global is readable
+local function const_global_is_readable_test()
+    local f = load("global <const> g_t20 = 5 return g_t20")
+    assert(f() == 5)
+end
+
+-- const global rejects assignment at compile time
+local function const_global_rejects_assignment_at_compile_time_test()
+    local f, err = load("global <const> g_t21 = 5 g_t21 = 6")
+    assert(f == nil, "assigning a const global should not compile")
+    assert(string.find(err, "attempt to assign to const variable"))
+end
+
+-- globals cannot be to-be-closed
+local function globals_cannot_be_to_be_closed_test()
+    local f, err = load("global g_t22 <close> = nil")
+    assert(f == nil, "a close attribute on a global should not compile")
+    assert(string.find(err, "cannot be to-be-closed", 1, true) ~= nil)
+end
+
+-- =========================================================================
+-- Interaction with locals and builtins
+-- =========================================================================
+
+-- declared builtins are usable
+local function declared_builtins_are_usable_test()
+    assert(type(assert) == "function")
+    assert(type(load) == "function")
+    assert(tostring(42) == "42")
+    assert(tostring(nil) == "nil")
+end
+
+-- local shadows global
+local function local_shadows_global_test()
+    local tostring = function() return "shadowed" end
+    local r = tostring(42)
+    assert(r == "shadowed", "the local must win over the global tostring")
+end
+
+-- local unshadows after block
+local function local_unshadows_after_block_test()
+    do
+        local tostring = function() return "shadow" end
+        assert(tostring(99) == "shadow")
+    end
+    assert(tostring(99) == "99", "the global tostring is visible again")
+end
+
+-- global read from a nested function
+local function global_read_from_a_nested_function_test()
+    load("global g_t23 = 21")()
+    local f = load("global g_t23 local function get() return g_t23 end return get()")
+    assert(f() == 21)
+end

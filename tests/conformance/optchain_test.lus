@@ -1,0 +1,376 @@
+pledge("load")
+
+-- ===== ported from h1/optchain.lus =====
+--[[
+  Tests for the '?' optional chaining operator in Lus
+
+  The '?' operator enables safe navigation through potentially nil values.
+  If the value before '?' is nil/false, subsequent operations short-circuit
+  and return nil instead of raising an error.
+
+  Syntax: expr?.field, expr?[key], expr?:method(), expr?()
+]]
+
+
+-- simple field access on table
+local function simple_field_access_on_table_test()
+    local t = { a = 42 }
+    assert(t?.a == 42, "should access field normally")
+end
+
+-- nil value short-circuits
+local function nil_value_short_circuits_test()
+    local t = nil
+    assert(t?.a == nil, "should return nil, not error")
+end
+
+-- false value short-circuits
+local function false_value_short_circuits_test()
+    local t = false
+    assert(t?.a == false, "false?.a should return false")
+end
+
+-- missing field returns nil
+local function missing_field_returns_nil_test()
+    local t = {}
+    assert(t?.missing == nil, "should return nil for missing field")
+end
+
+-- chained access all exist
+local function chained_access_all_exist_test()
+    local t = { a = { b = { c = 100 } } }
+    assert(t?.a?.b?.c == 100, "should navigate through chain")
+end
+
+-- chained access with nil intermediate
+local function chained_access_with_nil_intermediate_test()
+    local t = { a = { b = nil } }
+    assert(t?.a?.b?.c == nil, "should short-circuit at nil")
+end
+
+-- first value nil in chain
+local function first_value_nil_in_chain_test()
+    local t = nil
+    assert(t?.a?.b?.c?.d?.e == nil, "should short-circuit immediately")
+end
+
+-- value without ? suffix is unchanged
+local function value_without_suffix_is_unchanged_test()
+    local t = { a = 42 }
+    local x = t?
+    assert(x == t, "t? should equal t when t is not nil")
+end
+
+-- nil with just ? returns nil
+local function nil_with_just_returns_nil_test()
+    local n = nil
+    local x = n?
+    assert(x == nil, "nil? should be nil")
+end
+
+-- array index after ?
+local function array_index_after_test()
+    local t = { 10, 20, 30 }
+    assert(t?[2] == 20, "should access array index")
+end
+
+-- nil before array index
+local function nil_before_array_index_test()
+    local t = nil
+    assert(t?[1] == nil, "should short-circuit")
+end
+
+-- chained array and field access
+local function chained_array_and_field_access_test()
+    local t = { items = { { name = "first" }, { name = "second" } } }
+    assert(t?.items?[2]?.name == "second", "should navigate mixed access")
+end
+
+-- array index on nil intermediate
+local function array_index_on_nil_intermediate_test()
+    local t = { items = nil }
+    assert(t?.items?[1]?.value == nil, "should short-circuit")
+end
+
+-- string key indexing
+local function string_key_indexing_test()
+    local t = { ["complex key"] = { value = 99 } }
+    assert(t?["complex key"]?.value == 99, "should work with string keys")
+end
+
+-- method call after ?
+local function method_call_after_test()
+    local obj = {
+        value = 42,
+        getValue = function(self) return self.value end
+    }
+    assert(obj?:getValue() == 42, "should call method")
+end
+
+-- method call on nil
+local function method_call_on_nil_test()
+    local obj = nil
+    assert(obj?:getValue() == nil, "should short-circuit method call")
+end
+
+-- chained method calls
+local function chained_method_calls_test()
+    local obj = {
+        getInner = function(self)
+            return {
+                getValue = function(self2) return 100 end
+            }
+        end
+    }
+    assert(obj?:getInner()?:getValue() == 100, "should chain methods")
+end
+
+-- method returning nil
+local function method_returning_nil_test()
+    local obj = {
+        getNothing = function(self) return nil end
+    }
+    assert(obj?:getNothing()?.field == nil, "should handle nil return")
+end
+
+-- function call result with ?
+local function function_call_result_with_test()
+    local function getTable()
+        return { value = 42 }
+    end
+    assert(getTable()?.value == 42, "should access field on result")
+end
+
+-- function returning nil with ?
+local function function_returning_nil_with_test()
+    local function getNil()
+        return nil
+    end
+    assert(getNil()?.field == nil, "should handle nil result")
+end
+
+-- callable table with ?
+local function callable_table_with_test()
+    local callable = setmetatable({}, {
+        __call = function(self) return { x = 10 } end
+    })
+    assert(callable()?.x == 10, "should work with callable tables")
+end
+
+-- nil in parentheses
+local function nil_in_parentheses_test()
+    local k = (nil)?.op
+    assert(k == nil, "(nil)?.op should be nil")
+end
+
+-- table in parentheses
+local function table_in_parentheses_test()
+    local k = ({ a = 1 })?.a
+    assert(k == 1, "should access field of inline table")
+end
+
+-- conditional expression with ?
+local function conditional_expression_with_test()
+    local w = nil
+    local k = (w and {} or nil)?.op
+    assert(k == nil, "nil result from conditional should short-circuit")
+end
+
+-- truthy conditional expression with ?
+local function truthy_conditional_expression_with_test()
+    local w = true
+    local t = (w and { op = 42 } or nil)?.op
+    assert(t == 42, "truthy conditional should allow access")
+end
+
+-- nested parentheses
+local function nested_parentheses_test()
+    local t = { a = { b = 5 } }
+    local x = ((t)?.a)?.b
+    assert(x == 5, "nested parens should work")
+end
+
+-- bare ? passes through non-table values
+local function bare_passes_through_non_table_values_test()
+    local n = 42
+    assert(n? == 42, "number? should pass the number through")
+    local s = "text"
+    assert(s? == "text", "string? should pass the string through")
+    local b = true
+    assert(b? == true, "true? should pass true through")
+end
+
+-- doc example: t?.a equals t.a
+local function doc_example_t_a_equals_t_a_test()
+    local t = { a = {} }
+    local y = t?.a
+    assert(y == t.a, "t?.a should equal t.a")
+end
+
+-- doc example: long chain with nil
+local function doc_example_long_chain_with_nil_test()
+    local t = { a = {} }
+    local z = t?.a?.r?.k?.e?.w
+    assert(z == nil, "chain should return nil when intermediate is nil")
+end
+
+-- optional chain as index key
+local function optional_chain_as_index_key_test()
+    local u = { k = 5 }
+    local t = { [5] = "found" }
+    assert(t?[u?.k] == "found", "inner chain should produce the key")
+    local w = nil
+    assert(t?[w?.k] == nil, "nil key from the inner chain should read as nil")
+end
+
+-- zero is truthy
+local function zero_is_truthy_test()
+    local t = { [0] = { value = "zero" } }
+    assert(t?[0]?.value == "zero", "0 is truthy, should access")
+end
+
+-- empty string is truthy
+local function empty_string_is_truthy_test()
+    local t = { [""] = { x = 1 } }
+    assert(t?[""]?.x == 1, "empty string key should work")
+end
+
+-- multiple ? without suffix
+local function multiple_without_suffix_test()
+    local t = { a = { b = 42 } }
+    local x = t?.a?
+    assert(x == t.a, "t?.a? should equal t.a")
+end
+
+-- deep nesting
+local function deep_nesting_test()
+    local t = { a = { b = { c = { d = { e = { f = { g = 7 } } } } } } }
+    assert(t?.a?.b?.c?.d?.e?.f?.g == 7, "deep nesting should work")
+end
+
+-- deep nesting with nil at various levels
+local function deep_nesting_with_nil_at_various_levels_test()
+    local function check(t, expected)
+        return t?.a?.b?.c?.d?.e == expected
+    end
+    assert(check(nil, nil), "nil at root")
+    assert(check({}, nil), "nil at a")
+    assert(check({ a = {} }, nil), "nil at b")
+    assert(check({ a = { b = {} } }, nil), "nil at c")
+    assert(check({ a = { b = { c = { d = { e = 5 } } } } }, 5), "value at e")
+end
+
+-- ? with function that modifies state
+local function with_function_that_modifies_state_test()
+    local count = 0
+    local function getTable()
+        count = count + 1
+        return { value = count }
+    end
+    local x = getTable()?.value
+    assert(x == 1, "first call")
+    assert(count == 1, "function called once")
+
+    local y = nil
+    local z = (y or getTable())?.value
+    assert(z == 2, "second call via or")
+    assert(count == 2, "function called again")
+end
+
+-- ? in table constructor
+local function in_table_constructor_test()
+    local t = { a = { b = 10 } }
+    local n = nil
+    local result = { t?.a?.b, n?.x?.y }
+    assert(result[1] == 10, "first should be 10")
+    assert(result[2] == nil, "second should be nil")
+end
+
+-- ? in function arguments
+local function in_function_arguments_test()
+    local function add(a, b)
+        return (a or 0) + (b or 0)
+    end
+    local t = { x = 5 }
+    local n = nil
+    assert(add(t?.x, n?.y) == 5, "should pass nil for n?.y")
+end
+
+-- ? preserves false when short-circuiting
+local function preserves_false_when_short_circuiting_test()
+    local t = false
+    local result = t?.a
+    assert(result == false, "false?.a should be false")
+end
+
+-- ? with catch expression
+local function with_catch_expression_test()
+    local t = { a = { b = 42 } }
+    local ok, result = catch t?.a?.b
+    assert(ok == true, "should succeed")
+    assert(result == 42, "should get value")
+end
+
+-- ? with catch on nil chain
+local function with_catch_on_nil_chain_test()
+    local n = nil
+    local ok, result = catch n?.a?.b?.c
+    assert(ok == true, "should succeed (no error)")
+    assert(result == nil, "result should be nil")
+end
+
+-- ? in if-assignment
+local function in_if_assignment_test()
+    local t = { a = { b = 99 } }
+    local result = nil
+    if x = t?.a?.b then
+        result = x
+    end
+    assert(result == 99, "should get value in if-assignment")
+end
+
+-- ? in if-assignment with nil chain
+local function in_if_assignment_with_nil_chain_test()
+    local t = { a = nil }
+    local result = "not entered"
+    if x = t?.a?.b then
+        result = "entered"
+    else
+        result = "else"
+    end
+    assert(result == "else", "should go to else when chain is nil")
+end
+
+-- optional call is an expression, not a statement
+local function optional_call_is_an_expression_not_a_statement_test()
+    -- A bare optional call cannot stand alone as a statement
+    local f1 = load("local obj = nil obj?:m()")
+    assert(f1 == nil, "optional method call statement should not parse")
+    local f2 = load("local fn = nil fn?()")
+    assert(f2 == nil, "optional function call statement should not parse")
+    -- The same calls parse fine as the source of an assignment
+    local f3 = load("local obj = nil local r = obj?:m() return r")
+    assert(f3 ~= nil, "optional method call should parse in expression position")
+    assert(f3() == nil)
+end
+
+-- pure bracket optional chain
+local function pure_bracket_optional_chain_test()
+    local m = { { 10, 20 } }
+    assert(m?[1]?[2] == 20, "all-bracket chain should navigate")
+    assert(m?[2]?[1] == nil, "nil at the first bracket level short-circuits")
+end
+
+-- calling nil
+local function calling_nil_test()
+    local fn = nil
+    local result = fn?()
+    assert(result == nil, "should not error on nil()")
+end
+
+-- complex expression that would normally error
+local function complex_expression_that_would_normally_error_test()
+    local t = nil
+    local result = t?.a?.b?.c?:method()?[1]?.x?.y?.z
+    assert(result == nil, "complex nil chain should return nil")
+end

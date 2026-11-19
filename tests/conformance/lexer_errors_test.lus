@@ -1,0 +1,314 @@
+pledge("load")
+
+-- ===== ported from h1/lexer-errors.lus =====
+-- Lexer rejection tests: the error half of the lexer that literals.lus skips.
+-- Every case drives the lexer through load() and inspects the diagnostic it
+-- produces. We check escape-sequence failures and boundaries, malformed number
+-- literals, unfinished short strings at newline versus end of input, unfinished
+-- long strings and long comments including nested bracket levels, invalid long
+-- bracket delimiters, and the accuracy of the reported chunk name and line
+-- number across LF, CRLF, and CR line endings.
+
+
+-- Load a chunk and return its compile error message, or nil if it compiled.
+-- load reports a lexer failure by returning nil plus a message rather than
+-- raising, so we unwrap catch and then look at the first returned value to
+-- decide whether the compile succeeded. Handling the thrown case too keeps the
+-- helper honest if the runtime ever switches to raising instead.
+local function load_error(src, name)
+    local ok, first, second = catch load(src, name or "=chunk")
+    if not ok then
+        return tostring(first)
+    end
+    if first == nil then
+        return tostring(second)
+    end
+    return nil
+end
+
+-- Plain (non-pattern) substring search so message text containing pattern
+-- magic characters such as parentheses, braces, and angle brackets matches
+-- literally.
+local function has(str, needle)
+    return string.find(str, needle, 1, true) ~= nil
+end
+
+-- Assert that src fails to lex and its message contains every listed fragment.
+local function checkfail(src, ...)
+    local msg = load_error(src)
+    assert(msg ~= nil, "expected a lexer error for source: " .. src)
+    local needles = {...}
+    for i = 1, #needles do
+        assert(has(msg, needles[i]),
+            "expected error to contain '" .. needles[i] .. "' but got: " .. msg)
+    end
+    return msg
+end
+
+-- Assert that src compiles cleanly. These positive controls make the suite
+-- able to fail against a runtime that rejects valid input.
+local function checkok(src)
+    local msg = load_error(src)
+    assert(msg == nil, "expected clean compile but got error: " .. tostring(msg))
+end
+
+-- Compile src and run the resulting chunk, returning its first result. Used to
+-- pin the value of accepted escape forms so a miscompile is observable.
+local function eval(src)
+    local f = load(src, "=eval")
+    assert(f ~= nil, "expected source to compile: " .. src)
+    return f()
+end
+
+-- escape sequence failures.
+
+-- Each row is a source string and the substrings its diagnostic must contain.
+-- rejects a bad escape
+local rejects_a_bad_escape_cases = {
+    {[[return "\256"]], "decimal escape too large"},
+    {[[return "\300"]], "decimal escape too large"},
+    {[[return "\999"]], "decimal escape too large"},
+    {[[return "\x"]], "hexadecimal digit expected"},
+    {[[return "\xG"]], "hexadecimal digit expected"},
+    {[[return "\xA"]], "hexadecimal digit expected"},
+    {[[return "\x1G"]], "hexadecimal digit expected"},
+    {[[return "\m"]], "invalid escape sequence"},
+    {[[return "\q"]], "invalid escape sequence"},
+    {[[return "\u{}"]], "hexadecimal digit expected"},
+    {[[return "\u{80000000}"]], "value too large"},
+    {[[return "\u{FFFFFFFF}"]], "value too large"},
+    {[[return "\u{110000"]], "missing '}'"},
+    {[[return "\u{2G}"]], "missing '}'"},
+    {[[return "\uABCD"]], "missing '{'"},
+    {[[return "\u41"]], "missing '{'"},
+}
+
+local function rejects_a_bad_escape_test(src, needle)
+    checkfail(src, needle)
+end
+
+-- escape sequence boundaries that are accepted.
+
+-- \127 is the largest decimal escape that forms a valid string on its own (a
+-- lone byte at or above 128 is invalid UTF-8, see spec/design/strings.md), and
+-- a decimal escape reads at most three digits then stops, so \65B is the byte
+-- 65 followed by a literal B.
+-- accepts the decimal escape boundary and stops at three digits
+local function accepts_the_decimal_escape_boundary_and_stops_at_three_digits_test()
+    assert(eval([[return "\127"]]) == "\u{7F}")
+    assert(string.find(load_error([[return "\255"]]), "UTF%-8"))
+    assert(eval([[return "\65B"]]) == "AB")
+    assert(eval([[return "\0300"]]) == "\0300")
+end
+
+-- Unicode escapes are limited to the Unicode range, because a string holds
+-- well formed WTF-8 (spec/design/strings.md). The largest scalar value and a
+-- lone surrogate are accepted, anything above 0x10FFFF is rejected.
+-- accepts \\u code points up to 0x10FFFF
+local function accepts_u_code_points_up_to_0x10ffff_test()
+    checkok([[return "\u{10FFFF}"]])
+    checkok([[return "\u{D800}"]])
+    assert(eval([[return "\u{41}"]]) == "A")
+    assert(#eval([[return "\u{10FFFF}"]]) == 1)
+    checkfail([[return "\u{110000}"]], "invalid UTF-8")
+    checkfail([[return "\u{7FFFFFFF}"]], "invalid UTF-8")
+end
+
+-- \z skips the whitespace run that follows it, including newlines, joining the
+-- text across the gap.
+-- accepts \\z spanning a newline
+local function accepts_z_spanning_a_newline_test()
+    assert(eval('return "ab\\z\n   cd"') == "abcd")
+end
+
+-- An embedded \0 is a real byte, so length and inequality see three bytes.
+-- accepts an embedded nul byte
+local function accepts_an_embedded_nul_byte_test()
+    assert(#eval([[return "a\0b"]]) == 3)
+    assert(eval([[return "a\0b"]]) ~= "a\0c")
+end
+
+-- malformed number literals.
+
+-- rejects a malformed number
+local rejects_a_malformed_number_cases = {
+    {"return 0x"},
+    {"return 0X"},
+    {"return 1e"},
+    {"return 1e+"},
+    {"return 1e-"},
+    {"return 1.2.3"},
+    {"return 0x1p"},
+    {"return 0x1p+"},
+    {"return 0x.p2"},
+    {"return 3xyz"},
+    {"return 0b101"},
+}
+
+local function rejects_a_malformed_number_test(src)
+    checkfail(src, "malformed number")
+end
+
+-- Valid numeric forms that neighbour the malformed ones, to prove the lexer is
+-- not simply rejecting everything nearby.
+-- accepts a valid number
+local accepts_a_valid_number_cases = {
+    {"return 0x1p3"},
+    {"return 0x1.8p1"},
+    {"return 0x1.p3"},
+    {"return 0x.8p1"},
+    {"return 1e3"},
+    {"return 1.5e-2"},
+    {"return .5"},
+    {"return 0xABCp0"},
+}
+
+local function accepts_a_valid_number_test(src)
+    checkok(src)
+end
+
+-- unfinished short strings.
+
+-- A short string closed by a newline reports the partial text it saw, while one
+-- that runs to end of input reports <eof>. The two situations produce distinct
+-- diagnostics even though both mention an unfinished string.
+-- distinguishes a newline break from end of input
+local function distinguishes_a_newline_break_from_end_of_input_test()
+    local at_newline = checkfail('return "bad\ncontinue', "unfinished string")
+    assert(has(at_newline, '"bad'))
+    assert(not has(at_newline, "<eof>"))
+
+    local at_eof = checkfail('return "bad', "unfinished string")
+    assert(has(at_eof, "<eof>"))
+end
+
+-- A single quoted string behaves the same way as a double quoted one.
+-- reports an unfinished single-quoted string
+local function reports_an_unfinished_single_quoted_string_test()
+    checkfail("return 'oops", "unfinished string", "<eof>")
+end
+
+-- unfinished long strings and comments.
+
+-- rejects an unfinished long string or comment
+local rejects_an_unfinished_long_string_or_comment_cases = {
+    {"return [[abc", "unfinished long string", "starting at line 1"},
+    {"return [==[abc]==", "unfinished long string", "starting at line 1"},
+    {"return [=[abc]]", "unfinished long string", "starting at line 1"},
+    {"--[[ open comment", "unfinished long comment", "starting at line 1"},
+    {"--[==[ open comment ]==", "unfinished long comment", "starting at line 1"},
+}
+
+local function rejects_an_unfinished_long_string_or_comment_test(src, a, b)
+    checkfail(src, a, b)
+end
+
+-- The starting line reported is where the opening bracket was, not where input
+-- ran out, so an opener on line 2 that reaches end of input on line 4 still
+-- names line 2 as the start and line 4 as the error position.
+-- names the opening line of an unfinished long string
+local function names_the_opening_line_of_an_unfinished_long_string_test()
+    local msg = checkfail("local a = 1\nlocal c = [[abc\ndef\nghi",
+        "unfinished long string", "starting at line 2")
+    assert(has(msg, "err:4:") or has(msg, ":4:"))
+end
+
+-- Nested same-content brackets at the wrong level do not close the literal, so
+-- a level-2 opener is only closed by a level-2 close and level-1 or level-0
+-- closes inside it are ordinary content.
+-- treats a lower-level close bracket as content
+local function treats_a_lower_level_close_bracket_as_content_test()
+    checkok("return [==[ has ]] and ]=] inside ]==]")
+    assert(eval("return [=[a]==]=]") == "a]==")
+end
+
+-- invalid long bracket delimiters.
+
+-- An opening long bracket whose run of equals signs is not followed by a second
+-- square bracket is not a valid delimiter and is rejected on sight. The 2.0
+-- lexer reports it as an unexpected symbol at the opening bracket.
+-- rejects an invalid opening delimiter
+local rejects_an_invalid_opening_delimiter_cases = {
+    {"return [==x", "unexpected symbol near '['"},
+    {"return [=[ok]=] .. [= ", "unexpected symbol near '['"},
+}
+
+local function rejects_an_invalid_opening_delimiter_test(src, needle)
+    checkfail(src, needle)
+end
+
+-- error position across line endings.
+
+-- The same three-line source, differing only in its line terminator, must
+-- report the error on line 3 whether the terminator is LF, CRLF, or CR. Each
+-- source places an unfinished string on the third line.
+local function three_line_source(sep)
+    return "local a = 1" .. sep .. "local b = 2" .. sep .. 'local c = "bad'
+end
+
+-- reports line 3 for an unfinished string
+local reports_line_3_for_an_unfinished_string_cases = {
+    {"\n"},
+    {"\r\n"},
+    {"\r"},
+}
+
+local function reports_line_3_for_an_unfinished_string_test(sep)
+    local msg = load_error(three_line_source(sep), "=pos")
+    assert(msg ~= nil, "expected a lexer error")
+    assert(has(msg, "pos:3:"))
+end
+
+-- A malformed number on line 3 is likewise reported on line 3 for every line
+-- ending style, confirming the line counter advances on each terminator form.
+local function three_line_number(sep)
+    return "local a = 1" .. sep .. "local b = 2" .. sep .. "local c = 0x"
+end
+
+-- reports line 3 for a malformed number
+local reports_line_3_for_a_malformed_number_cases = {
+    {"\n"},
+    {"\r\n"},
+    {"\r"},
+}
+
+local function reports_line_3_for_a_malformed_number_test(sep)
+    local msg = load_error(three_line_number(sep), "=pos")
+    assert(msg ~= nil, "expected a lexer error")
+    assert(has(msg, "pos:3:"))
+end
+
+-- A lone carriage return still terminates a line, so an error on the line after
+-- it is line 2 and never line 1.
+-- counts a bare CR as a line break
+local function counts_a_bare_cr_as_a_line_break_test()
+    local msg = load_error("local a = 1\rlocal c = 0x", "=pos")
+    assert(msg ~= nil, "expected a lexer error")
+    assert(has(msg, "pos:2:"))
+end
+
+-- chunk name in diagnostics.
+
+-- The chunk name prefix follows the load naming convention: a leading '@' marks
+-- a file name shown verbatim, a leading '=' marks a literal name shown as is,
+-- and a bare source string is shown truncated inside [string "..."].
+-- uses the @ file-name form
+local function uses_the_file_name_form_test()
+    local msg = load_error("return 0x", "@myfile.lus")
+    assert(msg ~= nil)
+    assert(has(msg, "myfile.lus:1:"))
+end
+
+-- uses the = literal-name form
+local function uses_the_literal_name_form_test()
+    local msg = load_error("return 0x", "=customname")
+    assert(msg ~= nil)
+    assert(has(msg, "customname:1:"))
+end
+
+-- uses the [string] form for a bare source name
+local function uses_the_string_form_for_a_bare_source_name_test()
+    local msg = load_error("return 0x", "return 0x")
+    assert(msg ~= nil)
+    assert(has(msg, '[string "'))
+end
