@@ -42,6 +42,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "ltrim", .func = ltrim },
     .{ .name = "match", .func = match },
     .{ .name = "rep", .func = rep },
+    .{ .name = "dump", .func = dump },
     .{ .name = "reverse", .func = reverse },
     .{ .name = "rtrim", .func = rtrim },
     .{ .name = "split", .func = split },
@@ -222,6 +223,23 @@ fn upper(l: *Thread) Error!u32 {
 
 fn lower(l: *Thread) Error!u32 {
     return mapAscii(l, std.ascii.toLower);
+}
+
+/// string.dump(f [, strip]): the binary chunk of a Lus function, as a
+/// vector of raw bytes. `load` accepts it back.
+fn dump(l: *Thread) Error!u32 {
+    const f = l.arg(1);
+    if (f.tag != .closure) {
+        if (f.tag == .native) return l.raiseFmt("unable to dump given function", .{});
+        return aux.typeError(l, 1, "function");
+    }
+    const strip = l.arg(2).truthy();
+    const bytes = @import("../compile/dump.zig").dump(l.g.gpa, f.as(object.Closure).proto, strip) catch |e| switch (e) {
+        error.OutOfMemory => return l.raiseMem(),
+        error.Unsupported => return l.raiseFmt("unable to dump given function", .{}),
+    };
+    defer l.g.gpa.free(bytes);
+    return aux.ret(l, Value.obj(.vector, try @import("vector.zig").newVector(l, bytes)));
 }
 
 fn rep(l: *Thread) Error!u32 {

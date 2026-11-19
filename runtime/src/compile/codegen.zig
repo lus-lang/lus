@@ -1835,6 +1835,9 @@ fn genCatch(fs: *FuncState, c: ast.Catch, base: u8, nresults: i32) Error!void {
         var he: ExpDesc = .{};
         try expr(fs, h, &he);
         try exp2reg(fs, &he, base);
+        // The handler lives only in the status slot. Release any temporary
+        // its evaluation left behind so the values start right after it.
+        fs.freereg = base + 1;
         try codeABC(fs, .catchcheck, base, 0, 0);
     }
     const vals: u8 = base + 1; // first value slot

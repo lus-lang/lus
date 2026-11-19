@@ -107,6 +107,8 @@ pub const Table = struct {
     hash_used: u32 = 0,
     /// Next free search position used by `next` scanning heuristics.
     weak_mode: WeakMode = .none,
+    /// Read-only tables (such as `flags`) reject every store.
+    readonly: bool = false,
 
     pub const WeakMode = enum(u8) { none, keys, values, both };
 };

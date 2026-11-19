@@ -3,6 +3,7 @@
 //! with protection, and read results.
 
 const std = @import("std");
+const dump = @import("compile/dump.zig");
 const value = @import("vm/value.zig");
 const object = @import("vm/object.zig");
 const state = @import("vm/state.zig");
@@ -47,6 +48,23 @@ pub fn close(l: *Thread) void {
 /// pushes the message string and returns error.LusError.
 pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
     const g = l.g;
+    if (dump.isBinary(src)) {
+        const was_stopped = g.gc_stopped;
+        g.gc_stopped = true;
+        defer g.gc_stopped = was_stopped;
+        const p = dump.undump(g, src, chunkname) catch |e| switch (e) {
+            error.OutOfMemory => return l.raiseMem(),
+            error.Malformed => {
+                const s = try l.newString("bad binary format (truncated or corrupted chunk)");
+                try l.push(Value.obj(.string, s));
+                l.err = Value.obj(.string, s);
+                return error.LusError;
+            },
+        };
+        const cl = try newMainClosure(l, p, g.globals);
+        try l.push(Value.obj(.closure, cl));
+        return;
+    }
     const r = codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flagsTable(g) }) catch return l.raiseMem();
     switch (r) {
         .err => |msg| {
@@ -158,23 +176,14 @@ pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
         try map.put(g.gpa, name, v);
     }
     try g.ext.put(g.gpa, "flags.compile", map);
-    // The read-only runtime table: a proxy whose __index is the data and
-    // whose __newindex raises.
+    // The runtime view is a read-only table holding every flag.
     const data = try l.newTable(0, map.count());
+    try l.push(Value.obj(.table, data));
+    defer l.top -= 1;
     var it = map.iterator();
     while (it.next()) |e| try ops.rawSet(l, data, try l.newStringValue(e.key_ptr.*), e.value_ptr.*);
-    const mt = try l.newTable(0, 3);
-    const lib_aux = @import("lib/aux.zig");
-    try lib_aux.setField(l, mt, "__index", Value.obj(.table, data));
-    try lib_aux.setField(l, mt, "__newindex", try lib_aux.native(l, flagsReadonly, "flags"));
-    try lib_aux.setField(l, mt, "__metatable", .false);
-    const proxy = try l.newTable(0, 0);
-    proxy.metatable = mt;
-    try lib_aux.setGlobal(l, "flags", Value.obj(.table, proxy));
-}
-
-fn flagsReadonly(l: *Thread) Error!u32 {
-    return l.raiseFmt("attempt to modify read-only table 'flags'", .{});
+    data.readonly = true;
+    try @import("lib/aux.zig").setGlobal(l, "flags", Value.obj(.table, data));
 }
 
 /// Grants the command line permissions (`-P`). Pledge arrives with the

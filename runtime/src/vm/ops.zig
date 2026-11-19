@@ -99,6 +99,7 @@ pub inline fn normKey(l: *Thread, key: Value) Error!Value {
 }
 
 pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
+    if (t.readonly) return l.raiseRun("attempt to modify a readonly table", .{});
     const k = try normKey(l, key);
     switch (k.tag) {
         .nil => return l.raiseRun("table index is nil", .{}),

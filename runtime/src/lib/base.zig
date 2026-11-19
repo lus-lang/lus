@@ -438,6 +438,9 @@ fn load(l: *Thread) Error!u32 {
     defer if (owned) |o| l.g.gpa.free(o);
     if (chunk.tag == .string) {
         src = chunk.as(String).bytes();
+    } else if (chunk.tag == .vector) {
+        // Binary chunks from string.dump arrive as vectors.
+        src = chunk.as(object.Vector).bytes.items;
     } else if (chunk.tag == .closure or chunk.tag == .native) {
         // Reader function: concatenate pieces until nil or "".
         var buf: std.ArrayList(u8) = .empty;
@@ -453,7 +456,7 @@ fn load(l: *Thread) Error!u32 {
         owned = buf.toOwnedSlice(l.g.gpa) catch return l.raiseMem();
         src = owned.?;
     } else return aux.typeError(l, 1, "string");
-    const default_name = if (chunk.tag == .string) src else "=(load)";
+    const default_name = if (chunk.tag == .string) src else if (chunk.tag == .vector) "=(load)" else "=(load)";
     const name = (try aux.optString(l, 2, default_name)).?;
     const name_copy = l.g.gpa.dupe(u8, name) catch return l.raiseMem();
     defer l.g.gpa.free(name_copy);
