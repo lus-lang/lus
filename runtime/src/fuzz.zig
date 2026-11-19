@@ -12,6 +12,7 @@ const parser = @import("syntax/parser.zig");
 const format = @import("syntax/format.zig");
 const codegen = @import("compile/codegen.zig");
 const dump = @import("compile/dump.zig");
+const feedback = @import("compile/feedback.zig");
 const state = @import("vm/state.zig");
 
 const Smith = std.testing.Smith;
@@ -111,21 +112,32 @@ fn undumpOne(_: void, smith: *Smith) anyerror!void {
             return;
         },
     };
-    const bytes = try dump.dump(std.testing.allocator, p, smith.value(bool));
-    defer std.testing.allocator.free(bytes);
+    const chunk = try dump.dump(std.testing.allocator, p, smith.value(bool));
+    defer std.testing.allocator.free(chunk);
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+    try buf.appendSlice(std.testing.allocator, chunk);
+    if (smith.value(bool)) {
+        // A warm chunk: its feedback section must never be trusted unless
+        // it checks out against the chunk it follows.
+        const flags = try std.testing.allocator.alloc(u8, feedback.count(p));
+        defer std.testing.allocator.free(flags);
+        for (flags) |*f| f.* = smith.value(u8) & feedback.flag_hot;
+        try feedback.appendSection(std.testing.allocator, &buf, chunk, flags);
+    }
+    const bytes = buf.items;
     const edits = smith.valueRangeAtMost(u8, 0, 8);
     for (0..edits) |_| {
         if (bytes.len <= dump.signature.len) break;
         const at = dump.signature.len + smith.index(bytes.len - dump.signature.len);
         bytes[at] = smith.value(u8);
     }
-    if (smith.value(bool)) {
-        // Truncation is the most common corruption.
-        const keep = smith.index(bytes.len + 1);
-        _ = dump.undump(g, bytes[0..keep], "=fuzz") catch return;
-        return;
+    // Truncation is the most common corruption.
+    const keep = if (smith.value(bool)) smith.index(bytes.len + 1) else bytes.len;
+    const loaded = dump.undumpWarm(g, bytes[0..keep], "=fuzz") catch return;
+    if (loaded.feedback.status == .valid) {
+        try std.testing.expectEqual(feedback.count(loaded.proto), loaded.feedback.flags.len);
     }
-    _ = dump.undump(g, bytes, "=fuzz") catch return;
 }
 
 test "fuzz: loading a corrupt binary chunk never crashes" {
