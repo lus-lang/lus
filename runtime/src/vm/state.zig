@@ -200,13 +200,10 @@ pub const Frame = struct {
     boundary: bool = false,
     /// Set when this frame was entered by a tail call (for tracebacks).
     tail: bool = false,
-    /// Result destination for calls made by the interpreter on behalf of an
-    /// instruction (metamethods). Unused for plain calls.
-    pending: Pending = .none,
+    /// Stack slot where results go (the original function slot, before
+    /// vararg adjustment).
+    ret: u32,
 
-    pub const Pending = union(enum) {
-        none,
-    };
 };
 
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };
@@ -230,6 +227,8 @@ pub const Thread = struct {
     resumer: ?*Thread = null,
     /// Values passed across resume and yield.
     transfer: u32 = 0,
+    /// Set by `coroutine.yield` so the call machinery unwinds to `resume`.
+    yielding: bool = false,
     /// Per-thread extension slots (permission set, debug hooks).
     pledges: ?*anyopaque = null,
     hook: ?*anyopaque = null,

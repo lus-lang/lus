@@ -1,0 +1,686 @@
+//! Generic semantics used by the interpreter's slow paths and by the
+//! standard library: indexing with metamethods, arithmetic with coercion,
+//! comparison, concatenation, length, and conversion to strings and
+//! numbers. Fast paths in the interpreter must agree with these bit for
+//! bit or decline.
+
+const std = @import("std");
+const value = @import("value.zig");
+const object = @import("object.zig");
+const state = @import("state.zig");
+const table = @import("table.zig");
+const numeric = @import("numeric.zig");
+const wtf8 = @import("wtf8.zig");
+const lexer = @import("../syntax/lexer.zig");
+const interp = @import("interp.zig");
+const Value = value.Value;
+const Thread = state.Thread;
+const Table = object.Table;
+const String = object.String;
+const TM = state.TM;
+const Error = state.Error;
+
+const max_tag_loop = 2000;
+
+// ---------------------------------------------------------------------
+// Indexing
+
+pub fn index(l: *Thread, obj: Value, key: Value) Error!Value {
+    var t = obj;
+    var loop: u32 = 0;
+    while (loop < max_tag_loop) : (loop += 1) {
+        var tm: Value = undefined;
+        if (t.tag == .table) {
+            const tab = t.as(Table);
+            const k = try normKey(l, key);
+            const v = table.get(tab, k);
+            if (!v.isNil()) return v;
+            const mt = tab.metatable orelse return .nil;
+            tm = state.tmLookup(l.g, mt, .index);
+            if (tm.isNil()) return .nil;
+        } else {
+            tm = l.metamethod(t, .index);
+            if (tm.isNil()) return indexError(l, t, key);
+        }
+        if (tm.tag == .closure or tm.tag == .native) {
+            return call1(l, tm, &.{ t, key });
+        }
+        t = tm;
+    }
+    return l.raiseFmt("'__index' chain too long, possible loop", .{});
+}
+
+fn indexError(l: *Thread, t: Value, key: Value) Error {
+    if (key.tag == .string) {
+        return l.raiseFmt("attempt to index a {s} value (field '{s}')", .{ l.typeNameOf(t), key.as(String).bytes() });
+    }
+    return l.typeError(t, "index");
+}
+
+pub fn setIndex(l: *Thread, obj: Value, key: Value, val: Value) Error!void {
+    var t = obj;
+    var loop: u32 = 0;
+    while (loop < max_tag_loop) : (loop += 1) {
+        var tm: Value = undefined;
+        if (t.tag == .table) {
+            const tab = t.as(Table);
+            const k = try normKey(l, key);
+            if (tab.metatable) |mt| {
+                const existing = table.get(tab, k);
+                if (existing.isNil()) {
+                    tm = state.tmLookup(l.g, mt, .newindex);
+                    if (!tm.isNil()) {
+                        if (tm.tag == .closure or tm.tag == .native) {
+                            _ = try callN(l, tm, &.{ t, key, val }, 0);
+                            return;
+                        }
+                        t = tm;
+                        continue;
+                    }
+                }
+            }
+            return rawSet(l, tab, k, val);
+        }
+        tm = l.metamethod(t, .newindex);
+        if (tm.isNil()) return indexError(l, t, key);
+        if (tm.tag == .closure or tm.tag == .native) {
+            _ = try callN(l, tm, &.{ t, key, val }, 0);
+            return;
+        }
+        t = tm;
+    }
+    return l.raiseFmt("'__newindex' chain too long, possible loop", .{});
+}
+
+/// Normalizes bigint and decimal keys. Integer and float keys are
+/// normalized inside the table.
+pub inline fn normKey(l: *Thread, key: Value) Error!Value {
+    if (key.tag == .bigint or key.tag == .decimal) return numeric.normalizeKey(l, key);
+    return key;
+}
+
+pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
+    const k = try normKey(l, key);
+    switch (k.tag) {
+        .nil => return l.raiseFmt("index is nil", .{}),
+        .float => if (std.math.isNan(k.asFloat())) return l.raiseFmt("index is NaN", .{}),
+        else => {},
+    }
+    table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
+    if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierBack(l.g, &t.hdr);
+}
+
+// ---------------------------------------------------------------------
+// Calls from native code into Lus values
+
+/// Calls `f` with `args` and returns its first result.
+pub fn call1(l: *Thread, f: Value, args: []const Value) Error!Value {
+    const base = l.top;
+    _ = try callN(l, f, args, 1);
+    const r = l.stack[base];
+    l.top = base;
+    return r;
+}
+
+/// Calls `f` with `args`, leaving `want` results (or all, when want is -1)
+/// on the stack starting at the old top. Returns the result count.
+pub fn callN(l: *Thread, f: Value, args: []const Value, want: i32) Error!u32 {
+    try l.ensure(args.len + 2);
+    const func = l.top;
+    l.stack[func] = f;
+    for (args, 0..) |v, i| l.stack[func + 1 + i] = v;
+    l.top = func + 1 + @as(u32, @intCast(args.len));
+    return interp.call(l, func, @intCast(args.len), want);
+}
+
+// ---------------------------------------------------------------------
+// Arithmetic
+
+pub const ArithOp = numeric.ArithOp;
+
+pub fn tmForArith(op: ArithOp) TM {
+    return switch (op) {
+        .add => .add,
+        .sub => .sub,
+        .mul => .mul,
+        .div => .div,
+        .mod => .mod,
+        .pow => .pow,
+        .idiv => .idiv,
+        .unm => .unm,
+        .band => .band,
+        .bor => .bor,
+        .bxor => .bxor,
+        .shl => .shl,
+        .shr => .shr,
+        .bnot => .bnot,
+    };
+}
+
+/// Full arithmetic semantics: numbers of every subtype, string coercion,
+/// then metamethods.
+pub fn arith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!Value {
+    if (try arithRaw(l, op, a, b)) |r| return r;
+    // Coerce numeric strings.
+    const na = toNumberCoerce(a);
+    const nb = toNumberCoerce(b);
+    if (na != null and nb != null) {
+        if (try arithRaw(l, op, na.?, nb.?)) |r| return r;
+    }
+    const event = tmForArith(op);
+    var tm = l.metamethod(a, event);
+    if (tm.isNil()) tm = l.metamethod(b, event);
+    if (!tm.isNil()) return call1(l, tm, &.{ a, b });
+    return arithError(l, op, a, b);
+}
+
+fn arithError(l: *Thread, op: ArithOp, a: Value, b: Value) Error {
+    const is_bit = switch (op) {
+        .band, .bor, .bxor, .shl, .shr, .bnot => true,
+        else => false,
+    };
+    const bad = if (toNumberCoerce(a) == null) a else b;
+    if (is_bit) {
+        if (bad.isNumber() or toNumberCoerce(bad) != null) {
+            return l.raiseFmt("number has no integer representation", .{});
+        }
+        return l.typeError(bad, "perform bitwise operation on");
+    }
+    if (bad.tag == .string) return l.typeError(bad, "perform arithmetic on");
+    return l.typeError(bad, "perform arithmetic on");
+}
+
+/// Arithmetic on number operands only. Returns null when an operand is not
+/// a number or a bitwise operand has no integer representation.
+pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
+    if (a.tag == .integer and b.tag == .integer) {
+        const x = a.asInt();
+        const y = b.asInt();
+        return switch (op) {
+            .add => Value.int(x +% y),
+            .sub => Value.int(x -% y),
+            .mul => Value.int(x *% y),
+            .div => Value.float(@as(f64, @floatFromInt(x)) / @as(f64, @floatFromInt(y))),
+            .mod => blk: {
+                if (y == 0) return l.raiseFmt("attempt to perform 'n%%0'", .{});
+                break :blk Value.int(imod(x, y));
+            },
+            .idiv => blk: {
+                if (y == 0) return l.raiseFmt("attempt to perform 'n//0'", .{});
+                break :blk Value.int(idiv(x, y));
+            },
+            .pow => Value.float(std.math.pow(f64, @floatFromInt(x), @floatFromInt(y))),
+            .unm => Value.int(0 -% x),
+            .band => Value.int(x & y),
+            .bor => Value.int(x | y),
+            .bxor => Value.int(x ^ y),
+            .shl => Value.int(shiftLeft(x, y)),
+            .shr => Value.int(shiftLeft(x, 0 -% y)),
+            .bnot => Value.int(~x),
+        };
+    }
+    if (!a.isNumber() or !b.isNumber()) return null;
+    if (a.tag == .bigint or a.tag == .decimal or b.tag == .bigint or b.tag == .decimal) {
+        return numeric.arith(l, op, a, b);
+    }
+    // At least one float.
+    switch (op) {
+        .band, .bor, .bxor, .shl, .shr, .bnot => {
+            const x = toIntegerStrict(a) orelse return null;
+            const y = toIntegerStrict(b) orelse return null;
+            return arithRaw(l, op, Value.int(x), Value.int(y));
+        },
+        else => {},
+    }
+    const x = toFloat(a);
+    const y = toFloat(b);
+    return Value.float(switch (op) {
+        .add => x + y,
+        .sub => x - y,
+        .mul => x * y,
+        .div => x / y,
+        .mod => numeric.fmod(x, y),
+        .idiv => @floor(x / y),
+        .pow => std.math.pow(f64, x, y),
+        .unm => -x,
+        else => unreachable,
+    });
+}
+
+pub inline fn imod(x: i64, y: i64) i64 {
+    if (y == -1) return 0;
+    const m = @rem(x, y);
+    return if (m != 0 and (m ^ y) < 0) m + y else m;
+}
+
+pub inline fn idiv(x: i64, y: i64) i64 {
+    if (y == -1) return 0 -% x;
+    var q = @divTrunc(x, y);
+    if (@rem(x, y) != 0 and ((x ^ y) < 0)) q -= 1;
+    return q;
+}
+
+pub inline fn shiftLeft(x: i64, y: i64) i64 {
+    if (y <= -64 or y >= 64) return 0;
+    const ux: u64 = @bitCast(x);
+    if (y >= 0) return @bitCast(ux << @intCast(y));
+    return @bitCast(ux >> @intCast(-y));
+}
+
+pub fn toFloat(v: Value) f64 {
+    return switch (v.tag) {
+        .integer => @floatFromInt(v.asInt()),
+        .float => v.asFloat(),
+        else => std.math.nan(f64),
+    };
+}
+
+/// Converts a number with an exact integer value to an integer.
+pub fn toIntegerStrict(v: Value) ?i64 {
+    return switch (v.tag) {
+        .integer => v.asInt(),
+        .float => floatToInt(v.asFloat()),
+        .bigint => numeric.bigToInt(v.as(numeric.BigInt)),
+        else => null,
+    };
+}
+
+pub fn floatToInt(f: f64) ?i64 {
+    if (f != @floor(f)) return null;
+    if (f >= -9.223372036854775808e18 and f < 9.223372036854775808e18) return @intFromFloat(f);
+    return null;
+}
+
+/// Converts strings holding numerals to numbers, as arithmetic does.
+pub fn toNumberCoerce(v: Value) ?Value {
+    switch (v.tag) {
+        .integer, .float, .bigint, .decimal => return v,
+        .string => {
+            const s = std.mem.trim(u8, v.as(String).bytes(), " \t\n\r\x0b\x0c");
+            const n = lexer.parseNumber(s) orelse return null;
+            return switch (n) {
+                .integer => |i| Value.int(i),
+                .float => |f| Value.float(f),
+            };
+        },
+        else => return null,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Comparison
+
+pub fn rawEqual(l: *Thread, a: Value, b: Value) bool {
+    if (a.tag == b.tag) {
+        return switch (a.tag) {
+            .nil, .true, .false => true,
+            .integer, .light => a.payload == b.payload,
+            .float => a.asFloat() == b.asFloat(),
+            .string => a.payload == b.payload or stringEqual(a.as(String), b.as(String)),
+            .bigint, .decimal => numeric.compare(l.g.gpa, a, b) == .eq,
+            else => a.payload == b.payload,
+        };
+    }
+    if (a.isNumber() and b.isNumber()) {
+        if (a.tag == .integer and b.tag == .float) return @as(f64, @floatFromInt(a.asInt())) == b.asFloat() and floatToInt(b.asFloat()) == a.asInt();
+        if (a.tag == .float and b.tag == .integer) return rawEqual(l, b, a);
+        return numeric.compare(l.g.gpa, a, b) == .eq;
+    }
+    return false;
+}
+
+fn stringEqual(x: *String, y: *String) bool {
+    // Short strings are interned, so distinct pointers mean distinct
+    // strings unless both are long.
+    if (x.flags.interned and y.flags.interned) return false;
+    return x.len == y.len and x.hash == y.hash and std.mem.eql(u8, x.bytes(), y.bytes());
+}
+
+pub fn equal(l: *Thread, a: Value, b: Value) Error!bool {
+    if (rawEqual(l, a, b)) return true;
+    if (a.tag != b.tag) return false;
+    if (a.tag != .table and a.tag != .userdata) return false;
+    var tm = l.metamethod(a, .eq);
+    if (tm.isNil()) tm = l.metamethod(b, .eq);
+    if (tm.isNil()) return false;
+    return (try call1(l, tm, &.{ a, b })).truthy();
+}
+
+pub fn lessThan(l: *Thread, a: Value, b: Value) Error!bool {
+    if (a.tag == .integer and b.tag == .integer) return a.asInt() < b.asInt();
+    if (a.isNumber() and b.isNumber()) return numLess(l, a, b, false);
+    if (a.tag == .string and b.tag == .string) return strLess(a.as(String), b.as(String), false);
+    return compareTM(l, a, b, .lt);
+}
+
+pub fn lessEqual(l: *Thread, a: Value, b: Value) Error!bool {
+    if (a.tag == .integer and b.tag == .integer) return a.asInt() <= b.asInt();
+    if (a.isNumber() and b.isNumber()) return numLess(l, a, b, true);
+    if (a.tag == .string and b.tag == .string) return strLess(a.as(String), b.as(String), true);
+    return compareTM(l, a, b, .le);
+}
+
+fn numLess(l: *Thread, a: Value, b: Value, or_equal: bool) bool {
+    if (a.tag == .float and b.tag == .float) return if (or_equal) a.asFloat() <= b.asFloat() else a.asFloat() < b.asFloat();
+    if ((a.tag == .integer or a.tag == .float) and (b.tag == .integer or b.tag == .float)) {
+        return intFloatLess(a, b, or_equal);
+    }
+    const o = numeric.compare(l.g.gpa, a, b) orelse return false;
+    return if (or_equal) o != .gt else o == .lt;
+}
+
+fn intFloatLess(a: Value, b: Value, or_equal: bool) bool {
+    // Exact comparison between an integer and a float.
+    if (a.tag == .integer) {
+        const i = a.asInt();
+        const f = b.asFloat();
+        if (std.math.isNan(f)) return false;
+        if (f >= 9.223372036854775808e18) return true;
+        if (f < -9.223372036854775808e18) return false;
+        const fl = if (or_equal) @floor(f) else @ceil(f);
+        const fi: i64 = @intFromFloat(fl);
+        return if (or_equal) i <= fi else i < fi;
+    }
+    const f = a.asFloat();
+    const i = b.asInt();
+    if (std.math.isNan(f)) return false;
+    if (f >= 9.223372036854775808e18) return false;
+    if (f < -9.223372036854775808e18) return true;
+    const fl = if (or_equal) @ceil(f) else @floor(f);
+    const fi: i64 = @intFromFloat(fl);
+    return if (or_equal) fi <= i else fi < i;
+}
+
+fn strLess(a: *String, b: *String, or_equal: bool) bool {
+    const o = std.mem.order(u8, a.bytes(), b.bytes());
+    return if (or_equal) o != .gt else o == .lt;
+}
+
+fn compareTM(l: *Thread, a: Value, b: Value, event: TM) Error!bool {
+    var tm = l.metamethod(a, event);
+    if (tm.isNil()) tm = l.metamethod(b, event);
+    if (!tm.isNil()) return (try call1(l, tm, &.{ a, b })).truthy();
+    const ta = value.typeName(a.tag);
+    const tb = value.typeName(b.tag);
+    if (std.mem.eql(u8, ta, tb)) return l.raiseFmt("attempt to compare two {s} values", .{l.typeNameOf(a)});
+    return l.raiseFmt("attempt to compare {s} with {s}", .{ l.typeNameOf(a), l.typeNameOf(b) });
+}
+
+// ---------------------------------------------------------------------
+// Length
+
+pub fn length(l: *Thread, v: Value) Error!Value {
+    switch (v.tag) {
+        .string => return Value.int(v.as(String).chars),
+        .table => {
+            const t = v.as(Table);
+            if (t.metatable) |mt| {
+                const tm = state.tmLookup(l.g, mt, .len);
+                if (!tm.isNil()) return call1(l, tm, &.{v});
+            }
+            return Value.int(table.length(t));
+        },
+        .vector => return Value.int(@intCast(v.as(object.Vector).bytes.items.len)),
+        else => {
+            const tm = l.metamethod(v, .len);
+            if (!tm.isNil()) return call1(l, tm, &.{v});
+            return l.typeError(v, "get length of");
+        },
+    }
+}
+
+// ---------------------------------------------------------------------
+// Strings
+
+/// Formats a number the way `tostring` does.
+pub fn numberToBuf(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value) !void {
+    switch (v.tag) {
+        .integer => try buf.print(gpa, "{d}", .{v.asInt()}),
+        .float => try formatFloat(gpa, buf, v.asFloat()),
+        .bigint => {
+            const s = try numeric.bigToString(gpa, v.as(numeric.BigInt));
+            defer gpa.free(s);
+            try buf.appendSlice(gpa, s);
+        },
+        .decimal => {
+            const s = try numeric.decimalToString(gpa, v.as(numeric.Decimal));
+            defer gpa.free(s);
+            try buf.appendSlice(gpa, s);
+        },
+        else => unreachable,
+    }
+}
+
+/// Lua's "%.14g" float formatting, plus a trailing ".0" when the result
+/// looks like an integer.
+pub fn formatFloat(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !void {
+    if (std.math.isNan(f)) {
+        try buf.appendSlice(gpa, if (std.math.signbit(f)) "-nan" else "nan");
+        return;
+    }
+    if (std.math.isInf(f)) {
+        try buf.appendSlice(gpa, if (f < 0) "-inf" else "inf");
+        return;
+    }
+    const start = buf.items.len;
+    try formatG(gpa, buf, f, 14);
+    const s = buf.items[start..];
+    if (std.mem.indexOfAny(u8, s, ".eEn") == null) try buf.appendSlice(gpa, ".0");
+}
+
+/// Significant digits of a finite nonzero |f| rounded half to even to `p`
+/// digits (as C printf does), and the decimal exponent of the first digit.
+pub const Digits = struct { buf: [64]u8, len: usize, exp: i32 };
+
+pub fn roundedDigits(f: f64, p: usize) Digits {
+    var tmp: [128]u8 = undefined;
+    // Forty extra exact digits are enough to decide every tie.
+    const sci = std.fmt.bufPrint(&tmp, "{e:.48}", .{@abs(f)}) catch unreachable;
+    const epos = std.mem.indexOfScalar(u8, sci, 'e').?;
+    var exp = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch 0;
+    var all: [64]u8 = undefined;
+    var n: usize = 0;
+    for (sci[0..epos]) |ch| {
+        if (ch != '.') {
+            all[n] = ch;
+            n += 1;
+        }
+    }
+    var out: Digits = .{ .buf = undefined, .len = @min(p, n), .exp = exp };
+    @memcpy(out.buf[0..out.len], all[0..out.len]);
+    if (p < n) {
+        const next = all[p];
+        var rest_nonzero = false;
+        for (all[p + 1 .. n]) |d| if (d != '0') {
+            rest_nonzero = true;
+            break;
+        };
+        const last_odd = p > 0 and (all[p - 1] - '0') % 2 == 1;
+        const up = next > '5' or (next == '5' and (rest_nonzero or last_odd));
+        if (up) {
+            var i = out.len;
+            while (i > 0) {
+                i -= 1;
+                if (out.buf[i] == '9') {
+                    out.buf[i] = '0';
+                } else {
+                    out.buf[i] += 1;
+                    break;
+                }
+            } else {
+                // Carry past the first digit: 999 -> 1000.
+                std.mem.copyBackwards(u8, out.buf[1 .. out.len + 1], out.buf[0..out.len]);
+                out.buf[0] = '1';
+                exp += 1;
+                out.exp = exp;
+            }
+        }
+    }
+    return out;
+}
+
+/// C printf "%.*g" for finite values.
+pub fn formatG(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64, precision: usize) !void {
+    const p = if (precision == 0) 1 else precision;
+    if (f == 0) {
+        try buf.appendSlice(gpa, if (std.math.signbit(f)) "-0" else "0");
+        return;
+    }
+    if (f < 0) try buf.append(gpa, '-');
+    const d = roundedDigits(f, p);
+    // Strip trailing zeros (%g without the # flag).
+    var len = d.len;
+    while (len > 1 and d.buf[len - 1] == '0') len -= 1;
+    const digits = d.buf[0..len];
+    const exp = d.exp;
+    if (exp < -4 or exp >= @as(i32, @intCast(p))) {
+        try buf.append(gpa, digits[0]);
+        if (len > 1) {
+            try buf.append(gpa, '.');
+            try buf.appendSlice(gpa, digits[1..]);
+        }
+        try buf.append(gpa, 'e');
+        try buf.append(gpa, if (exp < 0) '-' else '+');
+        const ae: u32 = @abs(exp);
+        if (ae < 10) try buf.append(gpa, '0');
+        try buf.print(gpa, "{d}", .{ae});
+    } else if (exp >= 0) {
+        const int_len: usize = @intCast(exp + 1);
+        if (len <= int_len) {
+            try buf.appendSlice(gpa, digits);
+            try buf.appendNTimes(gpa, '0', int_len - len);
+        } else {
+            try buf.appendSlice(gpa, digits[0..int_len]);
+            try buf.append(gpa, '.');
+            try buf.appendSlice(gpa, digits[int_len..]);
+        }
+    } else {
+        try buf.appendSlice(gpa, "0.");
+        try buf.appendNTimes(gpa, '0', @intCast(-exp - 1));
+        try buf.appendSlice(gpa, digits);
+    }
+}
+
+/// `tostring` without metamethods for primitive values. Appends to `buf`.
+pub fn rawToBuf(l: *Thread, buf: *std.ArrayList(u8), v: Value) !void {
+    const gpa = l.g.gpa;
+    switch (v.tag) {
+        .nil => try buf.appendSlice(gpa, "nil"),
+        .true => try buf.appendSlice(gpa, "true"),
+        .false => try buf.appendSlice(gpa, "false"),
+        .integer, .float, .bigint, .decimal => try numberToBuf(gpa, buf, v),
+        .string => try buf.appendSlice(gpa, v.as(String).bytes()),
+        .enum_value => {
+            const e = v.as(object.EnumValue);
+            try buf.appendSlice(gpa, e.root.names[e.index].bytes());
+        },
+        else => try buf.print(gpa, "{s}: 0x{x:0>14}", .{ l.typeNameOf(v), v.payload }),
+    }
+}
+
+/// Full `tostring`, honoring `__tostring` and `__name`.
+pub fn toString(l: *Thread, v: Value) Error!*String {
+    if (v.tag == .string) return v.as(String);
+    const tm = l.metamethod(v, .tostring);
+    if (!tm.isNil()) {
+        const r = try call1(l, tm, &.{v});
+        if (r.tag != .string) return l.raiseFmt("'__tostring' must return a string", .{});
+        return r.as(String);
+    }
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(l.g.gpa);
+    rawToBuf(l, &buf, v) catch return l.raiseMem();
+    return l.newString(buf.items);
+}
+
+/// Concatenates values for the `..` operator. Strings and numbers join
+/// directly. Other values use `__concat`, pairwise from the right.
+pub fn concat(l: *Thread, vals: []Value) Error!Value {
+    // Right to left, collapsing runs of strings and numbers.
+    var acc = vals[vals.len - 1];
+    var i = vals.len - 1;
+    while (i > 0) {
+        i -= 1;
+        const lhs = vals[i];
+        if (isStringLike(lhs) and isStringLike(acc)) {
+            // Find the longest run of string-like values ending at i.
+            var j = i;
+            while (j > 0 and isStringLike(vals[j - 1])) j -= 1;
+            acc = try joinStrings(l, vals[j .. i + 1], acc);
+            i = j;
+            continue;
+        }
+        var tm = l.metamethod(lhs, .concat);
+        if (tm.isNil()) tm = l.metamethod(acc, .concat);
+        if (tm.isNil()) {
+            const bad = if (isStringLike(lhs)) acc else lhs;
+            return l.typeError(bad, "concatenate");
+        }
+        acc = try call1(l, tm, &.{ lhs, acc });
+    }
+    return acc;
+}
+
+fn isStringLike(v: Value) bool {
+    return v.tag == .string or v.isNumber();
+}
+
+fn joinStrings(l: *Thread, parts: []const Value, last: Value) Error!Value {
+    const gpa = l.g.gpa;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
+    var ascii = true;
+    var chars: usize = 0;
+    for (parts) |p| try appendForConcat(l, &buf, p, &ascii, &chars);
+    try appendForConcat(l, &buf, last, &ascii, &chars);
+    const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
+    return Value.obj(.string, s);
+}
+
+/// Appends a string or number, joining a trailing lead surrogate with a
+/// leading trail surrogate as WTF-8 requires.
+pub fn appendForConcat(l: *Thread, buf: *std.ArrayList(u8), v: Value, ascii: *bool, chars: *usize) Error!void {
+    const gpa = l.g.gpa;
+    if (v.tag == .string) {
+        const s = v.as(String);
+        const b = s.bytes();
+        if (!s.flags.ascii) {
+            if (wtf8.leadingTrailSurrogate(b)) |trail| {
+                if (wtf8.trailingLeadSurrogate(buf.items)) |lead| {
+                    buf.items.len -= 3;
+                    var tmp: [4]u8 = undefined;
+                    const n = wtf8.encode(wtf8.combineSurrogates(lead, trail), &tmp);
+                    buf.appendSlice(gpa, tmp[0..n]) catch return l.raiseMem();
+                    buf.appendSlice(gpa, b[3..]) catch return l.raiseMem();
+                    chars.* += s.chars - 1;
+                    ascii.* = false;
+                    return;
+                }
+            }
+        }
+        buf.appendSlice(gpa, b) catch return l.raiseMem();
+        chars.* += s.chars;
+        ascii.* = ascii.* and s.flags.ascii;
+        return;
+    }
+    const before = buf.items.len;
+    numberToBuf(gpa, buf, v) catch return l.raiseMem();
+    chars.* += buf.items.len - before;
+}
+
+test "float formatting" {
+    const gpa = std.testing.allocator;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
+    const cases = [_]struct { f64, []const u8 }{
+        .{ 1.0, "1.0" },        .{ 0.1, "0.1" },     .{ 1e100, "1e+100" },
+        .{ 123456789012345.0, "1.2345678901234e+14" }, .{ -2.5, "-2.5" },
+        .{ 1.0 / 3.0, "0.33333333333333" }, .{ 1e15, "1e+15" }, .{ 0.0001, "0.0001" },
+        .{ 0.00001, "1e-05" },  .{ 3.14159, "3.14159" },
+    };
+    for (cases) |cs| {
+        buf.clearRetainingCapacity();
+        try formatFloat(gpa, &buf, cs[0]);
+        try std.testing.expectEqualStrings(cs[1], buf.items);
+    }
+}

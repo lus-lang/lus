@@ -88,6 +88,8 @@ pub const Tag = enum(u8) {
     interp_begin,
     interp_mid,
     interp_end,
+    /// A backtick string without interpolation.
+    interp_simple,
 
     eof,
 };
@@ -167,7 +169,7 @@ pub fn describe(tag: Tag) []const u8 {
         .bigint => "<bigint>",
         .decimal => "<decimal>",
         .string => "<string>",
-        .interp_begin, .interp_mid, .interp_end => "<interpolation>",
+        .interp_begin, .interp_mid, .interp_end, .interp_simple => "<interpolation>",
         .eof => "<eof>",
         else => keywords[@intFromEnum(tag)],
     };

@@ -118,7 +118,7 @@ pub const Lexer = struct {
 
     fn nearText(lx: *Lexer, start: u32) []const u8 {
         const end = @min(lx.pos, @as(u32, @intCast(lx.src.len)));
-        if (end <= start) return "<eof>";
+        if (end <= start) return "";
         return lx.src[start..end];
     }
 
@@ -150,7 +150,7 @@ pub const Lexer = struct {
             const start = lx.pos;
             const c = lx.cur();
             if (lx.atEnd()) {
-                if (lx.modes.items.len > 1) return lx.fail(start, "unfinished interpolated string", .{});
+                if (lx.modes.items.len > 1) return lx.fail(start, "unfinished interpolated string near <eof>", .{});
                 try lx.push(.eof, start, lx.line, .none);
                 return true;
             }
@@ -343,7 +343,7 @@ pub const Lexer = struct {
         lx.buf.clearRetainingCapacity();
         while (true) {
             if (lx.atEnd()) {
-                return lx.fail(start, "unfinished long {s} near '<eof>'", .{if (is_comment) "comment" else "string"});
+                return lx.fail(start, "unfinished long {s} near <eof>", .{if (is_comment) "comment" else "string"});
             }
             const c = lx.cur();
             if (c == ']') {
@@ -371,7 +371,7 @@ pub const Lexer = struct {
         lx.pos += 1;
         lx.buf.clearRetainingCapacity();
         while (true) {
-            if (lx.atEnd()) return lx.fail(start, "unfinished string near '<eof>'", .{});
+            if (lx.atEnd()) return lx.fail(start, "unfinished string near <eof>", .{});
             const c = lx.cur();
             if (c == delim) {
                 lx.pos += 1;
@@ -468,7 +468,7 @@ pub const Lexer = struct {
                 try lx.buf.append(lx.gpa, @intCast(v));
             },
             else => {
-                if (lx.atEnd()) return lx.fail(start, "unfinished string near '<eof>'", .{});
+                if (lx.atEnd()) return lx.fail(start, "unfinished string near <eof>", .{});
                 lx.pos += 1;
                 return lx.fail(start, "invalid escape sequence near '{s}'", .{lx.nearText(start)});
             },
@@ -482,13 +482,13 @@ pub const Lexer = struct {
         const line = lx.line;
         lx.buf.clearRetainingCapacity();
         while (true) {
-            if (lx.atEnd()) return lx.fail(start, "unfinished interpolated string", .{});
+            if (lx.atEnd()) return lx.fail(start, "unfinished interpolated string near <eof>", .{});
             const c = lx.cur();
             switch (c) {
                 '`' => {
                     lx.pos += 1;
                     const text = try lx.arena.dupe(u8, lx.buf.items);
-                    try lx.push(if (first) .string else .interp_end, start, line, .{ .text = text });
+                    try lx.push(if (first) .interp_simple else .interp_end, start, line, .{ .text = text });
                     return;
                 },
                 '$' => {
