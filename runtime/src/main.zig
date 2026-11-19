@@ -438,13 +438,15 @@ const Preincludes = struct {
 };
 
 fn setArgTable(l: *Thread, args: []const []const u8, script_index: usize, has_script: bool) !void {
+    // The table becomes the global first, so it stays reachable while
+    // the strings it receives are allocated.
     const t = try l.newTable(args.len, 2);
+    try lus.lib.aux.setGlobal(l, "arg", Value.obj(.table, t));
     const base: i64 = if (has_script) @intCast(script_index) else @intCast(args.len);
     for (args, 0..) |a, i| {
         const v = try l.newStringValue(a);
         try lus.vm.ops.rawSet(l, t, Value.int(@as(i64, @intCast(i)) - base), v);
     }
-    try lus.lib.aux.setGlobal(l, "arg", Value.obj(.table, t));
 }
 
 fn reportError(l: *Thread) void {

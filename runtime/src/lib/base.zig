@@ -53,8 +53,11 @@ pub fn open(l: *Thread) Error!void {
     try aux.setFuncs(l, globals, &funcs);
     try aux.setField(l, globals, "_G", g.globals);
     try aux.setField(l, globals, "_VERSION", try l.newStringValue("Lus 2.0"));
-    // `range` is recognized by the numeric loop lowering.
+    // `range` is recognized by the numeric loop lowering, which compares
+    // natives by address, so the builtin is fixed and its address is never
+    // reused.
     const r = try aux.getField(l, globals, "range");
+    g.fixed.append(g.gpa, r.header()) catch return l.raiseMem();
     g.ext.put(g.gpa, "range", @ptrFromInt(r.address())) catch return l.raiseMem();
 }
 

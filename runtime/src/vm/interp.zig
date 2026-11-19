@@ -45,7 +45,7 @@ pub fn findUpval(l: *Thread, level: u32) Error!*Upvalue {
         prev = u;
         it = u.next_open;
     }
-    const u = gc.alloc(l.g, Upvalue, .upvalue, @sizeOf(Upvalue)) catch return l.raiseMem();
+    const u = gc.allocUninit(l.g, Upvalue, .upvalue, @sizeOf(Upvalue)) catch return l.raiseMem();
     u.* = .{ .hdr = u.hdr, .loc = &l.stack[level], .level = level, .next_open = it };
     if (prev) |p| p.next_open = u else l.open_upvals = u;
     return u;
@@ -64,7 +64,7 @@ pub fn closeUpvals(l: *Thread, level: u32) void {
 }
 
 fn newClosedUpval(l: *Thread, v: Value) Error!*Upvalue {
-    const u = gc.alloc(l.g, Upvalue, .upvalue, @sizeOf(Upvalue)) catch return l.raiseMem();
+    const u = gc.allocUninit(l.g, Upvalue, .upvalue, @sizeOf(Upvalue)) catch return l.raiseMem();
     u.* = .{ .hdr = u.hdr, .loc = undefined, .closed = v, .open = false };
     u.loc = &u.closed;
     return u;
@@ -1286,7 +1286,7 @@ fn markTbc(l: *Thread, level: u32) Error!void {
 
 pub fn makeClosure(l: *Thread, p: *Proto, parent: *Closure, base: u32) Error!*Closure {
     const n = p.upvals.len;
-    const cl = gc.alloc(l.g, Closure, .closure, Closure.allocSize(n)) catch return l.raiseMem();
+    const cl = gc.allocUninit(l.g, Closure, .closure, Closure.allocSize(n)) catch return l.raiseMem();
     cl.proto = p;
     cl.nupvals = @intCast(n);
     const ups = cl.upvals();

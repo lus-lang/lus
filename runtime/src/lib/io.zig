@@ -75,7 +75,10 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, mt, "__tostring", try aux.native(l, fToString, "tostring"));
     try aux.setField(l, mt, "__gc", try aux.native(l, fGc, "gc"));
     try aux.setField(l, mt, "__close", try aux.native(l, fGc, "close"));
+    // The registry roots the metatable, and the extension map records it
+    // for fast lookup.
     const g = l.g;
+    try aux.setField(l, g.registry.as(Table), "io.mt", Value.obj(.table, mt));
     g.ext.put(g.gpa, "io.mt", mt) catch return l.raiseMem();
     const stdin = try newHandle(l, .{ .file = std.Io.File.stdin(), .kind = .stdin, .readable = true, .writable = false });
     const stdout = try newHandle(l, .{ .file = std.Io.File.stdout(), .kind = .stdout, .readable = false, .writable = true });

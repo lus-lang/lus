@@ -125,7 +125,10 @@ fn makeMetatable(l: *Thread, comptime name: []const u8, methods: []const aux.Reg
     try aux.setField(l, mt, "__tostring", try aux.native(l, tostr, "tostring"));
     try aux.setField(l, mt, "__gc", try aux.native(l, gcf, "gc"));
     try aux.setField(l, mt, "__close", try aux.native(l, gcf, "close"));
+    // The registry roots the metatable, and the extension map records it
+    // for fast lookup.
     const g = l.g;
+    try aux.setField(l, g.registry.as(Table), name, Value.obj(.table, mt));
     g.ext.put(g.gpa, name, mt) catch return l.raiseMem();
 }
 

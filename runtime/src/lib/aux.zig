@@ -217,6 +217,12 @@ pub fn setFuncs(l: *Thread, t: *Table, funcs: []const Reg) Error!void {
 }
 
 pub fn setField(l: *Thread, t: *Table, name: []const u8, v: Value) Error!void {
+    // Creating the key can collect, so the table and the value stay on
+    // the stack until the store.
+    const top = l.top;
+    defer l.top = top;
+    try l.push(Value.obj(.table, t));
+    try l.push(v);
     const k = try l.newString(name);
     try ops.rawSet(l, t, Value.obj(.string, k), v);
 }
