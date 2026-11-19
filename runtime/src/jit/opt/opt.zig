@@ -232,18 +232,20 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
 
     var persist: lower.Persist = .{};
     var loops: []lower.Lower.LoopInfo = &.{};
+    var inlined: []*Proto = &.{};
     var cfg: *flow_mod.Cfg = undefined;
     var func: *ir.Func = undefined;
     var tries: u32 = 0;
     while (true) : (tries += 1) {
         if (tries > 8) return null;
-        func = lower.Lower.build(arena, l, p, pc, &persist, &loops, &cfg) catch |e| switch (e) {
+        func = lower.Lower.build(arena, l, p, pc, &persist, &loops, &cfg, &inlined) catch |e| switch (e) {
             error.Rebuild => continue,
             else => return null,
         };
         break;
     }
     passes.simplifyPhis(func) catch return null;
+    passes.foldImmediates(func);
     passes.hoist(func, cfg, loops, info.marks, mark_generic) catch return null;
     passes.eliminateDead(func) catch return null;
     const ra = regalloc.run(func, @intCast(codegen.gpr_pool.len), @intCast(codegen.fpr_pool.len)) catch return null;
@@ -284,7 +286,10 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
         };
     }
     for (func.snap_entries.items, unit.entries) |e, *m| m.* = .{ .slot = e.slot, .val = valOf(func, ra, e.ref) };
+    unit.protos = gpa.dupe(*Proto, inlined) catch return null;
     info.units.append(gpa, unit) catch return null;
+    // The function now refers to the functions compiled inline.
+    if (inlined.len != 0) gc.barrierBack(g, &p.hdr);
     ok = true;
     g.jit.optimized += 1;
     return unit;
@@ -493,6 +498,29 @@ pub const rt = struct {
 
     pub fn tableLength(t: *Table) callconv(.c) i64 {
         return table.length(t);
+    }
+
+    /// The character count of `string.sub(s, i, j)` for a string of
+    /// `chars` characters, with the clipping of the library function.
+    pub fn subLength(chars: i64, i: i64, j: i64) callconv(.c) i64 {
+        const start: i64 = if (i > 0) i else if (i == 0 or i < -chars) 1 else chars + i + 1;
+        const end: i64 = if (j > chars) chars else if (j >= 0) j else if (j < -chars) 0 else chars + j + 1;
+        return if (start > end) 0 else end - start + 1;
+    }
+
+    /// The code point of character `i` of `s`, as `string.byte(s, i)`
+    /// returns it, or minus one for a position outside the string.
+    pub fn stringByte(l: *Thread, s: *object.String, i: i64) callconv(.c) i64 {
+        const n: i64 = s.chars;
+        const pos: i64 = if (i > 0) i else if (i == 0 or i < -n) 1 else n + i + 1;
+        // The end position is the start position, clipped like the
+        // library function clips it.
+        const end: i64 = if (i > n) n else if (i >= 0) i else if (i < -n) 0 else n + i + 1;
+        if (pos > end or pos < 1 or pos > n) return -1;
+        const src = s.bytes();
+        if (s.flags.ascii) return src[@intCast(pos - 1)];
+        const off = s.byteOffset(l.g.gpa, @intCast(pos - 1));
+        return @import("../../vm/wtf8.zig").decodeValid(src, off).cp;
     }
 };
 

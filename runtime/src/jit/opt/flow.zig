@@ -303,13 +303,18 @@ pub const Flow = struct {
                 pc -= 1;
                 var out: RegSet = .{};
                 for (successors(p, pc, &buf)) |t| _ = out.merge(f.live[t]);
-                // An error in a protected range continues at its handler.
-                for (p.handlers) |h| {
-                    if (pc >= h.start_pc and pc < h.end_pc) _ = out.merge(f.live[h.handler_pc]);
-                }
                 const e = effects(p, pc);
                 var in = out.without(e.defs);
                 _ = in.merge(e.uses);
+                // An error in a protected range continues at its handler
+                // with the registers as they were before the instruction,
+                // so what the handler reads is live across it.
+                for (p.handlers) |h| {
+                    if (pc >= h.start_pc and pc < h.end_pc) {
+                        _ = out.merge(f.live[h.handler_pc]);
+                        _ = in.merge(f.live[h.handler_pc]);
+                    }
+                }
                 if (f.live_out[pc].merge(out)) changed = true;
                 if (f.live[pc].merge(in)) changed = true;
             }

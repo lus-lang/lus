@@ -147,6 +147,13 @@ pub fn optSetting(g: *Global) opt.Setting {
     return if (g.jit.setting == .off) .off else g.jit.opt;
 }
 
+/// How many pieces of optimized code the state compiled, and how often
+/// optimized code left through a guard.
+pub fn counters(g: *Global) [2]usize {
+    if (!enabled) return .{ 0, 0 };
+    return .{ g.jit.optimized, g.jit.exits };
+}
+
 /// Whether the function has optimized code in use.
 pub fn isOptimized(p: *Proto) bool {
     return enabled and opt.isOptimized(p);

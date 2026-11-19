@@ -80,9 +80,11 @@ pub const Class = enum(u8) {
     upval,
     /// The address an upvalue keeps its value at.
     upval_loc,
-    /// Fields of a closure, a proto, a string, or a native, which never
-    /// change.
+    /// Fields of a proto, a string, or a native, and the slot of the
+    /// running closure, which never change.
     fixed,
+    /// The upvalues of a closure, which the debug library can rejoin.
+    closure_up,
     /// The metatable and the read-only flag.
     tab_meta,
     /// The absence cache of metamethods.

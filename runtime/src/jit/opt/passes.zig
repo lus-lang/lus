@@ -58,6 +58,61 @@ pub fn simplifyPhis(f: *ir.Func) !void {
     }
 }
 
+/// Turns an addition, a comparison, or a guard with a small constant
+/// operand into its immediate form.
+pub fn foldImmediates(f: *ir.Func) void {
+    for (f.insts.items) |*inst| {
+        switch (inst.op) {
+            .add, .sub => {
+                if (smallInt(f, inst.b)) |v| {
+                    inst.imm = if (inst.op == .add) v else -v;
+                    inst.op = .addi;
+                    inst.b = ir.none;
+                } else if (inst.op == .add) if (smallInt(f, inst.a)) |v| {
+                    inst.imm = v;
+                    inst.op = .addi;
+                    inst.a = inst.b;
+                    inst.b = ir.none;
+                };
+            },
+            .guard, .br => {
+                if (smallInt(f, inst.b) == null and smallInt(f, inst.a) != null) {
+                    // The constant moves to the right.
+                    const t = inst.a;
+                    inst.a = inst.b;
+                    inst.b = t;
+                    const c: ir.Cond = @fromBackingInt(inst.cond);
+                    inst.cond = @backingInt(switch (c) {
+                        .lt => ir.Cond.gt,
+                        .gt => ir.Cond.lt,
+                        .le => ir.Cond.ge,
+                        .ge => ir.Cond.le,
+                        .lo => ir.Cond.hi,
+                        .hi => ir.Cond.lo,
+                        .ls => ir.Cond.hs,
+                        .hs => ir.Cond.ls,
+                        else => c,
+                    });
+                }
+                if (smallInt(f, inst.b)) |v| {
+                    if (f.at(inst.a).isConst()) continue;
+                    inst.imm = v;
+                    inst.op = if (inst.op == .guard) .guardi else .bri;
+                    inst.b = ir.none;
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn smallInt(f: *ir.Func, r: Ref) ?i64 {
+    if (r == ir.none) return null;
+    const i = f.at(r);
+    if (i.op != .kint or i.imm <= -(1 << 30) or i.imm >= (1 << 30)) return null;
+    return i.imm;
+}
+
 fn resolve(fwd: []Ref, r: Ref) Ref {
     var x = r;
     while (fwd[x] != x) x = fwd[x];

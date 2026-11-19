@@ -42,14 +42,32 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "format", .func = formatSource },
 };
 
-/// debug.jit([f]): the JIT setting of the state, or whether the Lus
-/// function `f` has native code.
+/// debug.jit([f]): the JIT setting of the state, the setting of its
+/// optimizing tier, the number of optimized compilations, and the number
+/// of exits from optimized code. With a Lus function `f`: whether it has
+/// native code and whether it has optimized code.
 fn jitStatus(l: *Thread) Error!u32 {
     const jit = @import("../jit/jit.zig");
     const f = l.arg(1);
-    if (f.isNil()) return aux.retStr(l, @tagName(jit.setting(l.g)));
-    if (f.tag == .closure) return aux.ret(l, Value.boolean(jit.isCompiled(f.as(object.Closure).proto)));
-    if (f.tag == .native) return aux.ret(l, Value.boolean(false));
+    if (f.isNil()) {
+        try l.push(try l.newStringValue(@tagName(jit.setting(l.g))));
+        try l.push(try l.newStringValue(@tagName(jit.optSetting(l.g))));
+        const c = jit.counters(l.g);
+        try l.push(Value.int(@intCast(c[0])));
+        try l.push(Value.int(@intCast(c[1])));
+        return 4;
+    }
+    if (f.tag == .closure) {
+        const p = f.as(object.Closure).proto;
+        try l.push(Value.boolean(jit.isCompiled(p)));
+        try l.push(Value.boolean(jit.isOptimized(p)));
+        return 2;
+    }
+    if (f.tag == .native) {
+        try l.push(Value.boolean(false));
+        try l.push(Value.boolean(false));
+        return 2;
+    }
     return aux.typeError(l, 1, "function");
 }
 

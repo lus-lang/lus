@@ -114,6 +114,15 @@ const Frame = struct {
     incoming: []std.ArrayList(Incoming),
     built: []bool,
     headers: []?HeaderState,
+    /// For an inline frame: where its returns are collected. A frame
+    /// that replaces another one by a tail call shares the list.
+    returns: ?*std.ArrayList(Return) = null,
+};
+
+/// A return of an inline frame: the block it leaves, and the result.
+const Return = struct {
+    from: BlockId,
+    res: Reg,
 };
 
 /// Decisions that survive a rebuild of the same function.
@@ -164,7 +173,13 @@ pub const Lower = struct {
     pc: u32 = 0,
     /// The node of the root that the code being built belongs to.
     root_node: u32 = 0,
+    /// The node of the current frame that is being built.
+    node: u32 = 0,
     always: bool = true,
+    /// The instruction after the current one was compiled with it.
+    skip_next: bool = false,
+    /// Functions compiled inline.
+    inlined: std.ArrayList(*Proto) = .empty,
     cse: std.AutoHashMapUnmanaged(CseKey, Ref) = .empty,
     epochs: [class_count]u32 = @splat(1),
     slot_ver: std.ArrayList(u32) = .empty,
@@ -190,7 +205,7 @@ pub const Lower = struct {
 
     /// Builds the function `p` from the instruction `entry_pc`, with the
     /// running frame of the thread as the sample of its registers.
-    pub fn build(arena: std.mem.Allocator, l: *Thread, p: *Proto, entry_pc: u32, persist: *Persist, out_loops: *[]LoopInfo, out_cfg: **Cfg) Error!*ir.Func {
+    pub fn build(arena: std.mem.Allocator, l: *Thread, p: *Proto, entry_pc: u32, persist: *Persist, out_loops: *[]LoopInfo, out_cfg: **Cfg, out_inlined: *[]*Proto) Error!*ir.Func {
         const fl = try Flow.init(arena, p);
         const cfg = Cfg.init(arena, fl, entry_pc, false) catch |e| switch (e) {
             error.Irreducible => return error.Unsupported,
@@ -224,6 +239,7 @@ pub const Lower = struct {
         try fr.incoming[cfg.entry].append(arena, .{ .from = entry, .regs = try arena.dupe(Reg, fr.regs) });
         try b.buildFrame();
         if (b.rebuild) return error.Rebuild;
+        out_inlined.* = b.inlined.items;
         out_loops.* = b.loops.items;
         out_cfg.* = cfg;
         return func;
@@ -263,10 +279,17 @@ pub const Lower = struct {
             while (pc <= nd.end and open) : (pc += 1) {
                 b.pc = pc;
                 b.snap_cache = ir.no_snap;
+                b.fr = fr;
+                b.node = nid;
                 open = try b.instruction(pc, pc == nd.end);
                 if (b.rebuild) return;
+                if (b.skip_next) {
+                    b.skip_next = false;
+                    pc += 1;
+                }
             }
             // A node that runs into the next one.
+            b.node = nid;
             if (open) {
                 if (nd.nsuccs == 1) {
                     const e = try b.edgeTo(nd.succs[0]);
@@ -434,6 +457,12 @@ pub const Lower = struct {
 
     /// A snapshot that continues the current frame at `pc`.
     fn snapAt(b: *Lower, pc: u32) Error!u32 {
+        return b.snapWith(pc, b.fr.regs);
+    }
+
+    /// A snapshot that continues the current frame at `pc` with the
+    /// given state of its registers.
+    fn snapWith(b: *Lower, pc: u32, inner_regs: []const Reg) Error!u32 {
         const f = b.f;
         // Frames from the root to the current one.
         var chain: [opt.max_inline_depth + 1]*Frame = undefined;
@@ -464,7 +493,8 @@ pub const Lower = struct {
             }
             const start: u32 = @intCast(f.snap_entries.items.len);
             if (fr.parent != null) try f.snap_entries.append(b.arena, .{ .slot = fr.off - 1, .ref = fr.closure });
-            for (fr.regs, 0..) |r, ri| {
+            const regs: []const Reg = if (inner) inner_regs else fr.regs;
+            for (regs, 0..) |r, ri| {
                 if (r.in_slot or !live.has(@intCast(ri))) continue;
                 try f.snap_entries.append(b.arena, .{ .slot = fr.off + @as(u32, @intCast(ri)), .ref = r.val });
             }
@@ -655,12 +685,23 @@ pub const Lower = struct {
     }
 
     /// The value of a register on an edge, for a phi of type `ty`. A
-    /// register that lives in its slot is loaded in the edge block.
-    fn edgeValue(b: *Lower, inc: Incoming, r: u32, ty: Ty) Error!Ref {
+    /// register that lives in its slot is loaded in the edge block, with
+    /// a guard when its type is only predicted. The guard continues at
+    /// `pc`, where the edge leads. Returns null when the register is
+    /// something else on this edge.
+    fn edgeValue(b: *Lower, inc: Incoming, r: u32, ty: Ty, pc: u32) Error!?Ref {
         const reg = inc.regs[r];
-        if (reg.val != ir.none) return reg.val;
-        if (ty == .nil) return b.emitIn(inc.from, .{ .op = .knil, .ty = .nil });
-        return b.emitIn(inc.from, .{ .op = .sload, .ty = ty, .cls = .slot, .imm = b.slotOf(r) });
+        if (reg.val != ir.none) return if (b.tyOf(reg.val) == ty) reg.val else null;
+        var dep: Ref = ir.none;
+        if (reg.ty) |t| {
+            if (t != ty) return null;
+        } else {
+            const st = reg.sample.ty() orelse return null;
+            if (st != ty) return null;
+            dep = try b.emitIn(inc.from, .{ .op = .gslot, .cls = .slot, .imm = b.slotOf(r), .aux = ty.guardTag(), .snap = try b.snapWith(pc, inc.regs) });
+        }
+        if (ty == .nil) return try b.emitIn(inc.from, .{ .op = .knil, .ty = .nil });
+        return try b.emitIn(inc.from, .{ .op = .sload, .ty = ty, .cls = .slot, .imm = b.slotOf(r), .c = dep });
     }
 
     fn regTy(b: *Lower, reg: Reg) ?Ty {
@@ -674,34 +715,50 @@ pub const Lower = struct {
         _ = try b.emitIn(inc.from, .{ .op = .sstore, .cls = .slot, .a = reg.val, .imm = b.slotOf(r) });
     }
 
-    /// Merges the register states of several edges into `blk`.
+    /// Merges the register states of several edges into `blk`, which
+    /// starts at instruction `pc`.
     fn merge(b: *Lower, blk: BlockId, incs: []const Incoming, pc: u32) Error!void {
         const fr = b.fr;
         const live = fr.flow.live[pc];
+        var vals: [8]Ref = undefined;
         for (fr.regs, 0..) |*out, i| {
             const r: u32 = @intCast(i);
             out.* = .{ .sample = incs[0].regs[i].sample };
             if (!live.has(r) or b.captured(r)) continue;
             var same = true;
             var all_slot = true;
+            var some_val: Ref = ir.none;
             var common: ?Ty = b.regTy(incs[0].regs[i]);
             for (incs) |inc| {
                 const reg = inc.regs[i];
                 if (reg.val != incs[0].regs[i].val) same = false;
+                if (reg.val != ir.none and some_val == ir.none) some_val = reg.val;
                 if (!reg.in_slot) all_slot = false;
                 const t = b.regTy(reg);
                 if (common == null or t == null or t.? != common.?) common = null;
             }
-            if (same and incs[0].regs[i].val != ir.none) {
-                out.* = .{ .val = incs[0].regs[i].val, .in_slot = all_slot, .sample = incs[0].regs[i].sample };
-            } else if (common) |ty| {
-                if (same) {
+            if (same) {
+                if (some_val != ir.none) {
+                    out.* = .{ .val = some_val, .in_slot = all_slot, .sample = incs[0].regs[i].sample };
+                } else {
                     // Every edge keeps the register in its slot.
-                    out.ty = ty;
-                    continue;
+                    out.ty = common;
                 }
+                continue;
+            }
+            // Some edge holds a typed value. The others join it when
+            // they hold the same type, known or predicted.
+            const ty = b.tyOf(some_val);
+            var ok = incs.len <= vals.len;
+            if (ok) for (incs, 0..) |inc, k| {
+                const t = b.regTy(inc.regs[i]) orelse inc.regs[i].sample.ty();
+                if (t == null or t.? != ty) ok = false;
+                _ = k;
+            };
+            if (ok) {
+                for (incs, 0..) |inc, k| vals[k] = (try b.edgeValue(inc, r, ty, pc)).?;
                 const phi = try b.newPhi(blk, ty);
-                for (incs) |inc| try b.phiArg(phi, inc.from, try b.edgeValue(inc, r, ty));
+                for (incs, 0..) |inc, k| try b.phiArg(phi, inc.from, vals[k]);
                 out.* = .{ .val = phi, .in_slot = all_slot, .sample = incs[0].regs[i].sample };
             } else {
                 for (incs) |inc| try b.storeOnEdge(inc, r);
@@ -715,10 +772,18 @@ pub const Lower = struct {
         const fr = b.fr;
         const nd = &fr.cfg.nodes.items[nid];
         const incs = fr.incoming[nid].items;
-        b.root_node = nid;
-        b.always = true;
+        b.node = nid;
         b.snap_cache = ir.no_snap;
-        b.clobberAll();
+        // An inline frame starts in the block of its call and belongs
+        // to the node of the root that holds the call.
+        const inline_entry = fr.parent != null and nid == fr.cfg.entry;
+        if (fr.parent == null) {
+            b.root_node = nid;
+            b.always = true;
+        } else if (!inline_entry) {
+            b.always = false;
+        }
+        if (!inline_entry) b.clobberAll();
         if (nd.header) {
             try b.enterHeader(nid);
         } else if (incs.len == 1) {
@@ -726,8 +791,8 @@ pub const Lower = struct {
             b.cur = incs[0].from;
             @memcpy(fr.regs, incs[0].regs);
             const blk = &b.f.blocks.items[b.cur];
-            blk.node = nid;
-            blk.always = true;
+            blk.node = b.root_node;
+            blk.always = b.always;
             // Registers that died on the way need no slot.
             const live = fr.flow.live[nd.start];
             for (fr.regs, 0..) |*r, i| {
@@ -735,7 +800,8 @@ pub const Lower = struct {
             }
         } else {
             const blk = try b.f.newBlock();
-            b.f.blocks.items[blk].node = nid;
+            b.f.blocks.items[blk].node = b.root_node;
+            b.f.blocks.items[blk].always = b.always;
             try b.merge(blk, incs, nd.start);
             b.cur = blk;
         }
@@ -767,7 +833,7 @@ pub const Lower = struct {
         const pb = pre.from;
         const header = try b.f.newBlock();
         const hb = &b.f.blocks.items[header];
-        hb.node = nid;
+        hb.node = b.root_node;
         hb.loop_header = true;
         @memcpy(fr.regs, pre.regs);
 
@@ -896,7 +962,7 @@ pub const Lower = struct {
             const s = inc.regs[i];
             if (hreg.val != ir.none) {
                 const ty = b.tyOf(hreg.val);
-                const st = b.regTy(s);
+                const st = b.regTy(s) orelse s.sample.ty();
                 if (st == null or st.? != ty) {
                     try b.addPersist(&b.persist.demote, nd.start, r);
                     continue;
@@ -912,7 +978,7 @@ pub const Lower = struct {
                             continue;
                         }
                     }
-                    if (!shared or !done_for) try b.phiArg(hreg.val, inc.from, try b.edgeValue(inc, r, ty));
+                    if (!shared or !done_for) try b.phiArg(hreg.val, inc.from, (try b.edgeValue(inc, r, ty, nd.start)).?);
                     if (shared) done_for = true;
                 } else if (s.val != hreg.val) {
                     try b.addPersist(&b.persist.demote, nd.start, r);
@@ -963,7 +1029,15 @@ pub const Lower = struct {
             if (e.writes.has(r) or b.captured(r) or !reg.in_slot) {
                 reg.* = .{};
             } else {
-                reg.* = .{ .ty = b.regTy(reg.*), .sample = reg.sample };
+                // The template may run code that assigns to a local of
+                // this frame through the debug library, so a type that
+                // was known becomes a prediction.
+                var sample = reg.sample;
+                if (b.regTy(reg.*)) |t| {
+                    if (t != .boolean and (sample.tag == null or Ty.fromTag(sample.tag.?) != t)) sample = Sample.tagged(@fromBackingInt(@backingInt(t)));
+                    if (t == .boolean and (sample.tag == null or Ty.fromTag(sample.tag.?) != .boolean)) sample = Sample.tagged(.false);
+                }
+                reg.* = .{ .sample = sample };
             }
         }
         b.hint(pc, after);
@@ -972,7 +1046,7 @@ pub const Lower = struct {
         const start: u32 = @intCast(b.f.gen_targets.items.len);
         var buf: [3]u32 = undefined;
         const succ = flow_mod.successors(fr.proto, pc, &buf);
-        const nd = fr.cfg.nodes.items[b.root_node];
+        const nd = fr.cfg.nodes.items[b.node];
         const term = try b.emit(.{ .op = .generic, .imm = pc, .a = start, .b = 0 });
         b.clobberAll();
         b.snap_cache = ir.no_snap;
@@ -1105,7 +1179,7 @@ pub const Lower = struct {
             .jmp => {
                 const off = opc.sj(ins);
                 if (off < 0) _ = try b.guard(.{ .op = .gpending, .cls = .pending });
-                const nd = fr.cfg.nodes.items[b.root_node];
+                const nd = fr.cfg.nodes.items[b.node];
                 const e = try b.edgeTo(nd.succs[0]);
                 _ = try b.emit(.{ .op = .jmp, .t = e });
                 try b.finishEdges();
@@ -1121,6 +1195,22 @@ pub const Lower = struct {
             .testnil => return b.testReg(ra, rc != 0, true, last),
             .forprep => return b.forPrep(ra, last),
             .forloop => return b.forLoop(ra, last),
+            .call => return b.call(ra, rb, rc, last),
+            .tailcall => return b.tailCall(ra, rb, last),
+            .ret0 => {
+                if (fr.parent != null) return b.inlineReturn(null);
+                return b.generic(pc, last);
+            },
+            .ret1 => {
+                if (fr.parent != null) return b.inlineReturn(ra);
+                return b.generic(pc, last);
+            },
+            .ret => {
+                if (fr.parent == null) return b.generic(pc, last);
+                if (rb == 1) return b.inlineReturn(null);
+                if (rb == 2) return b.inlineReturn(ra);
+                return error.Unsupported;
+            },
             .varargprep, .extraarg => true,
             else => false,
         };
@@ -1300,7 +1390,7 @@ pub const Lower = struct {
                 _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
                 // The border search reads the array part and keeps a
                 // hint in the table.
-                const n = try b.emit(.{ .op = .callc, .ty = .int, .a = t, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.tableLength))) });
+                const n = try b.emit(.{ .op = .callc, .ty = .int, .a = t, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.tableLength))), .flags = .{ .pure = true } });
                 try b.setReg(ra, n, Sample.tagged(.integer));
                 return true;
             },
@@ -1320,7 +1410,7 @@ pub const Lower = struct {
     /// The address that upvalue `i` keeps its value at, and the upvalue.
     fn upvalLoc(b: *Lower, i: u32) Error!struct { loc: Ref, uv: Ref } {
         const cl = try b.closureRef();
-        const uv = try b.load(cl, @intCast(@sizeOf(Closure) + i * @sizeOf(usize)), .int, 8, .fixed, ir.none);
+        const uv = try b.load(cl, @intCast(@sizeOf(Closure) + i * @sizeOf(usize)), .int, 8, .closure_up, ir.none);
         const loc = try b.load(uv, @offsetOf(object.Upvalue, "loc"), .int, 8, .upval_loc, ir.none);
         return .{ .loc = loc, .uv = uv };
     }
@@ -1403,7 +1493,7 @@ pub const Lower = struct {
 
     /// The hash node `idx` of table `t`, proven to exist and to hold the
     /// string `key`.
-    fn node(b: *Lower, t: Ref, idx: usize, key_str: *String) Error!Node {
+    fn hashNode(b: *Lower, t: Ref, idx: usize, key_str: *String) Error!Node {
         const len = try b.load(t, b.hash_len, .int, 8, .tab_hash, ir.none);
         const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.hi), .a = len, .imm = @intCast(idx) });
         const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, ir.none);
@@ -1457,7 +1547,7 @@ pub const Lower = struct {
         if (table.findStr(st, key_str)) |idx| {
             const v = st.hash[idx].val;
             if (v.isNil()) return null;
-            const n = try b.node(t, idx, key_str);
+            const n = try b.hashNode(t, idx, key_str);
             return .{ .ref = try b.loadValue(n.hp, n.off + tl.node_val, v, .node_val, n.dep), .sample = Sample.of(v) };
         }
         // The key is absent, so the metatable decides.
@@ -1479,9 +1569,9 @@ pub const Lower = struct {
         const m = try b.load(t, tl.metatable, .table, 8, .tab_meta, ir.none);
         const gm = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
         _ = gm;
-        const n1 = try b.node(m, hidx, index_name);
+        const n1 = try b.hashNode(m, hidx, index_name);
         const hv = try b.loadValue(n1.hp, n1.off + tl.node_val, h, .node_val, n1.dep);
-        const n2 = try b.node(hv, idx2, key_str);
+        const n2 = try b.hashNode(hv, idx2, key_str);
         return .{ .ref = try b.loadValue(n2.hp, n2.off + tl.node_val, v2, .node_val, n2.dep), .sample = Sample.of(v2) };
     }
 
@@ -1495,11 +1585,40 @@ pub const Lower = struct {
 
     fn method(b: *Lower, ra: u32, rb: u32, key_v: Value) Error!bool {
         if (key_v.tag != .string) return false;
+        if ((b.guess(rb, 1) orelse return false) == .string) return b.stringMethod(ra, rb, key_v.as(String));
         const t = (try b.tableOf(.{ .reg = rb }, 1)) orelse return false;
         const r = (try b.fieldLoad(t.ref, t.sample, key_v.as(String))) orelse return false;
         const recv_sample = b.fr.regs[rb].sample;
         try b.setReg(ra + 1, t.ref, recv_sample);
         try b.setReg(ra, r.ref, r.sample);
+        return true;
+    }
+
+    /// The lookup of a method on a string: the metatable that all
+    /// strings share names a table as `__index`, and that table holds
+    /// the method.
+    fn stringMethod(b: *Lower, ra: u32, rb: u32, key_str: *String) Error!bool {
+        const g = b.l.g;
+        if (!key_str.flags.interned) return false;
+        const slot_ptr = &g.type_metatables[value.typeSlot(.string)];
+        const mt = slot_ptr.* orelse return false;
+        const index_name = g.tm_names[@backingInt(state.TM.index)].?;
+        const hidx = table.findStr(mt, index_name) orelse return false;
+        const h = mt.hash[hidx].val;
+        if (h.tag != .table) return false;
+        const idx2 = table.findStr(h.as(Table), key_str) orelse return false;
+        const v2 = h.as(Table).hash[idx2].val;
+        if (v2.isNil()) return false;
+        const sv = try b.typed(rb, .string);
+        const recv_sample = b.fr.regs[rb].sample;
+        const m = try b.load(try b.kint(@bitCast(@as(u64, @intFromPtr(slot_ptr)))), 0, .table, 8, .tab_meta, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
+        const n1 = try b.hashNode(m, hidx, index_name);
+        const hv = try b.loadValue(n1.hp, n1.off + tl.node_val, h, .node_val, n1.dep);
+        const n2 = try b.hashNode(hv, idx2, key_str);
+        const v = try b.loadValue(n2.hp, n2.off + tl.node_val, v2, .node_val, n2.dep);
+        try b.setReg(ra + 1, sv, recv_sample);
+        try b.setReg(ra, v, Sample.of(v2));
         return true;
     }
 
@@ -1551,7 +1670,7 @@ pub const Lower = struct {
         const t = (try b.tableOf(src, 0)) orelse return false;
         const idx = table.findStr(t.sample, key_str) orelse return false;
         if (!try b.rawStore(t)) return false;
-        const n = try b.node(t.ref, idx, key_str);
+        const n = try b.hashNode(t.ref, idx, key_str);
         try b.storeReg(n.hp, n.off + tl.node_val, rv, .node_val, t.ref, 0, false);
         b.clobber(.tab_absent);
         _ = try b.emit(.{ .op = .store, .size = 2, .cls = .tab_absent, .a = t.ref, .b = try b.kint(0), .imm = tl.tm_absent });
@@ -1563,7 +1682,7 @@ pub const Lower = struct {
     fn freshStore(b: *Lower, fz: *Fresh, key_v: Value, rv: u32) Error!bool {
         const key_str = key_v.as(String);
         const ty = b.staticTy(rv) orelse return false;
-        if (ty == .nil) return false;
+        if (ty == .nil or fz.metatable) return false;
         const len = fz.mask + 1;
         if ((fz.used + 1) * 4 > len * 3 or fz.used >= fz.keys.len) return false;
         // The probe sequence of the key, as `table.storeStr` walks it.
@@ -1811,7 +1930,7 @@ pub const Lower = struct {
 
     /// Ends a node whose last instruction runs into the next node.
     fn fallOut(b: *Lower) Error!bool {
-        const nd = b.fr.cfg.nodes.items[b.root_node];
+        const nd = b.fr.cfg.nodes.items[b.node];
         if (nd.nsuccs == 1) {
             const e = try b.edgeTo(nd.succs[0]);
             _ = try b.emit(.{ .op = .jmp, .t = e });
@@ -1867,7 +1986,7 @@ pub const Lower = struct {
     /// Ends the node with a branch on `cond`. The instruction skips the
     /// jump after it when the comparison differs from `k`.
     fn branch(b: *Lower, i: Inst, k: bool) Error!bool {
-        const nd = b.fr.cfg.nodes.items[b.root_node];
+        const nd = b.fr.cfg.nodes.items[b.node];
         std.debug.assert(nd.nsuccs == 2);
         // Successor zero is the jump, which runs when the comparison
         // equals k.
@@ -1884,7 +2003,7 @@ pub const Lower = struct {
     /// Ends the node with a jump to the successor that a test with a
     /// known result takes.
     fn fixedBranch(b: *Lower, result: bool, k: bool) Error!bool {
-        const nd = b.fr.cfg.nodes.items[b.root_node];
+        const nd = b.fr.cfg.nodes.items[b.node];
         const e = try b.edgeTo(nd.succs[if (result == k) 0 else 1]);
         _ = try b.emit(.{ .op = .jmp, .t = e });
         try b.finishEdges();
@@ -1892,7 +2011,7 @@ pub const Lower = struct {
     }
 
     fn testable(b: *Lower, last: bool) bool {
-        const nd = b.fr.cfg.nodes.items[b.root_node];
+        const nd = b.fr.cfg.nodes.items[b.node];
         return last and nd.nsuccs == 2;
     }
 
@@ -1996,7 +2115,7 @@ pub const Lower = struct {
     /// registers hold the index, the count of iterations left, the step,
     /// and the copy of the index that the body sees.
     fn forPrep(b: *Lower, ra: u32, last: bool) Error!bool {
-        const nd = b.fr.cfg.nodes.items[b.root_node];
+        const nd = b.fr.cfg.nodes.items[b.node];
         if (!last or nd.nsuccs != 2) return b.generic(b.pc, last);
         const step_ref = b.fr.regs[ra + 2].val;
         if (step_ref == ir.none) return b.generic(b.pc, last);
@@ -2035,7 +2154,7 @@ pub const Lower = struct {
     }
 
     fn forLoop(b: *Lower, ra: u32, last: bool) Error!bool {
-        const nd = b.fr.cfg.nodes.items[b.root_node];
+        const nd = b.fr.cfg.nodes.items[b.node];
         if (!last or nd.nsuccs != 2) return b.generic(b.pc, last);
         for ([_]u32{ ra, ra + 1, ra + 2 }) |r| {
             if ((b.guess(r, 0) orelse return b.generic(b.pc, last)) != .int) return b.generic(b.pc, last);
@@ -2072,5 +2191,378 @@ pub const Lower = struct {
         _ = try b.emit(.{ .op = .bri, .cond = @backingInt(ir.Cond.ne), .a = count, .imm = 0, .t = again, .f = done });
         try b.finishEdges();
         return false;
+    }
+
+    // -----------------------------------------------------------------
+    // Calls
+
+    /// The type of an argument register: its static type, or what the
+    /// sample predicts.
+    fn argTy(b: *Lower, r: u32) ?Ty {
+        return b.staticTy(r) orelse b.fr.regs[r].sample.ty();
+    }
+
+    /// Stores the results of a call compiled inline into the registers
+    /// of the caller: `want` results from register `ra`, the first of
+    /// which is `v`.
+    fn setResults(b: *Lower, ra: u32, want: i32, v: Ref, sample: Sample) Error!void {
+        if (want >= 1) try b.setReg(ra, v, sample);
+        var k: u32 = 1;
+        while (k < want) : (k += 1) try b.setReg(ra + k, try b.knil(), Sample.of(.nil));
+    }
+
+    fn call(b: *Lower, ra: u32, nb: u32, nc: u32, last: bool) Error!bool {
+        const pc = b.pc;
+        if (nb == 0 or nc == 0 or b.marks() >= opt.mark_respec) return b.generic(pc, last);
+        const nargs = nb - 1;
+        const want: i32 = @as(i32, @intCast(nc)) - 1;
+        const s = b.fr.regs[ra].sample;
+        if (!s.exact) return b.generic(pc, last);
+        switch (s.v.tag) {
+            .native => {
+                if (try b.intrinsic(ra, nargs, want, s.v.as(state.Native))) |res| {
+                    if (!b.skip_next) try b.setResults(ra, want, res.ref, res.sample);
+                    b.specialized += 1;
+                    return true;
+                }
+            },
+            .closure => {
+                const cl = s.v.as(Closure);
+                if (b.canInline(cl.proto, ra)) {
+                    try b.inlineCall(ra, nargs, want, cl);
+                    b.specialized += 1;
+                    return true;
+                }
+            },
+            else => {},
+        }
+        return b.generic(pc, last);
+    }
+
+    /// A tail call. In the root it runs through the template. In an
+    /// inline frame, the callee replaces the frame, as it does in the
+    /// interpreter.
+    fn tailCall(b: *Lower, ra: u32, nb: u32, last: bool) Error!bool {
+        const fr = b.fr;
+        if (fr.parent == null) return b.generic(b.pc, last);
+        if (nb == 0 or b.marks() >= opt.mark_respec) return error.Unsupported;
+        const nargs = nb - 1;
+        const s = fr.regs[ra].sample;
+        if (!s.exact) return error.Unsupported;
+        switch (s.v.tag) {
+            .native => {
+                const res = (try b.intrinsic(ra, nargs, 1, s.v.as(state.Native))) orelse return error.Unsupported;
+                if (b.skip_next) return error.Unsupported;
+                try fr.returns.?.append(b.arena, .{ .from = b.cur, .res = .{ .val = res.ref, .in_slot = false, .sample = res.sample } });
+                return false;
+            },
+            .closure => {
+                const cl = s.v.as(Closure);
+                const p = cl.proto;
+                if (!b.inlinable(p)) return error.Unsupported;
+                const cv = try b.typed(ra, .closure);
+                const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, 8, .fixed, ir.none);
+                _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
+                const fl = try Flow.init(b.arena, p);
+                const cfg = Cfg.init(b.arena, fl, 0, false) catch return error.Unsupported;
+                if (cfg.loops.items.len != 0) return error.Unsupported;
+                const k = try newFrame(b.arena, b.l, p, fl, cfg, fr.off);
+                k.parent = fr.parent;
+                k.closure = cv;
+                k.closure_sample = cl;
+                k.call_pc = fr.call_pc;
+                k.want = fr.want;
+                k.tail = true;
+                k.depth = fr.depth;
+                k.returns = fr.returns;
+                // The arguments move down to the registers of the
+                // callee.
+                for (k.regs, 0..) |*reg, i| {
+                    if (i < p.num_params and i < nargs) {
+                        const src = fr.regs[ra + 1 + i];
+                        if (src.val != ir.none) {
+                            reg.* = .{ .val = src.val, .in_slot = false, .sample = src.sample };
+                        } else {
+                            _ = try b.emit(.{ .op = .scopy, .cls = .slot, .imm = @as(i64, k.off) + @as(i64, @intCast(i)), .aux = @bitCast(b.slotOf(ra + 1 + @as(u32, @intCast(i)))) });
+                            try b.clobberSlot(@as(i64, k.off) + @as(i64, @intCast(i)));
+                            reg.* = .{ .ty = src.ty, .sample = src.sample };
+                        }
+                    } else {
+                        reg.* = .{ .val = try b.knil(), .in_slot = false, .sample = Sample.of(.nil) };
+                    }
+                }
+                b.f.extent = @max(b.f.extent, k.off + p.max_stack);
+                try b.inlined.append(b.arena, p);
+                try k.incoming[cfg.entry].append(b.arena, .{ .from = b.cur, .regs = try b.arena.dupe(Reg, k.regs) });
+                b.fr = k;
+                b.snap_cache = ir.no_snap;
+                try b.buildFrame();
+                b.fr = fr;
+                return false;
+            },
+            else => return error.Unsupported,
+        }
+    }
+
+    /// A return from an inline frame. The result goes where the
+    /// interpreter would put it: the slot of the called function, which
+    /// is the register of the caller that receives it.
+    fn inlineReturn(b: *Lower, r: ?u32) Error!bool {
+        const fr = b.fr;
+        var res: Reg = .{ .val = try b.knil(), .in_slot = false, .sample = Sample.of(.nil) };
+        if (r) |x| {
+            const reg = fr.regs[x];
+            if (b.staticTy(x)) |t| {
+                res = .{ .val = try b.typed(x, t), .in_slot = false, .sample = reg.sample };
+            } else {
+                _ = try b.emit(.{ .op = .scopy, .cls = .slot, .imm = @as(i64, fr.off) - 1, .aux = @bitCast(b.slotOf(x)) });
+                try b.clobberSlot(@as(i64, fr.off) - 1);
+                res = .{ .sample = reg.sample };
+            }
+        }
+        try fr.returns.?.append(b.arena, .{ .from = b.cur, .res = res });
+        return false;
+    }
+
+    /// Whether the bytecode of `p` can be compiled inline at all.
+    fn inlinable(b: *Lower, p: *Proto) bool {
+        if (p.is_vararg or p.code.len > 48 or p.handlers.len != 0) return false;
+        var it: ?*Frame = b.fr;
+        while (it) |x| : (it = x.parent) {
+            if (x.proto == p) return false;
+        }
+        for (p.code, 0..) |ins, pc| {
+            switch (opc.op(ins)) {
+                .move, .loadk, .loadi, .loadf, .loadnil, .loadfalse, .loadtrue, .getupval, .setupval, .gettabup, .settabup, .gettable, .getfield, .getindex, .settable, .setfield, .newtable, .self, .add, .sub, .mul, .div, .mod, .idiv, .band, .bor, .bxor, .addk, .subk, .mulk, .divk, .modk, .idivk, .addi, .unm, .not, .len, .bnot, .eq, .lt, .le, .eqk, .lti, .lei, .gti, .gei, .test_, .testnil, .call, .tailcall, .ret, .ret0, .ret1, .extraarg => {},
+                .jmp => {
+                    if (opc.sj(ins) < 0) return false;
+                },
+                else => return false,
+            }
+            _ = pc;
+        }
+        return true;
+    }
+
+    fn canInline(b: *Lower, p: *Proto, ra: u32) bool {
+        const fr = b.fr;
+        if (fr.depth >= opt.max_inline_depth) return false;
+        if (fr.off + ra + 1 + p.max_stack > 240) return false;
+        // The root decides for every call that is compiled inline
+        // inside one of its calls.
+        var root_fr = fr;
+        var root_pc = b.pc;
+        while (root_fr.parent) |up| {
+            root_pc = root_fr.call_pc;
+            root_fr = up;
+        }
+        if (b.persist.no_inline.contains(root_pc)) return false;
+        return b.inlinable(p);
+    }
+
+    /// Compiles a call of the closure `cl` inline. The frame of the
+    /// callee exists only in the snapshots: leaving optimized code
+    /// inside the callee builds it. A callee that needs something the
+    /// tier cannot compile inline makes the function build again with
+    /// this call as a plain call.
+    fn inlineCall(b: *Lower, ra: u32, nargs: u32, want: i32, cl: *Closure) Error!void {
+        const parent = b.fr;
+        const p = cl.proto;
+        const call_pc = b.pc;
+        const outer = parent.parent == null;
+        const cv = try b.typed(ra, .closure);
+        const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, 8, .fixed, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
+        b.inlineBody(ra, nargs, want, cl, cv) catch |e| switch (e) {
+            error.Unsupported => {
+                if (!outer) return e;
+                try b.persist.no_inline.put(b.arena, call_pc, {});
+                b.rebuild = true;
+                return error.Rebuild;
+            },
+            else => return e,
+        };
+    }
+
+    fn inlineBody(b: *Lower, ra: u32, nargs: u32, want: i32, cl: *Closure, cv: Ref) Error!void {
+        const parent = b.fr;
+        const p = cl.proto;
+        const call_pc = b.pc;
+        const saved_node = b.node;
+        const saved_always = b.always;
+        const fl = try Flow.init(b.arena, p);
+        const cfg = Cfg.init(b.arena, fl, 0, false) catch return error.Unsupported;
+        if (cfg.loops.items.len != 0) return error.Unsupported;
+        const child = try newFrame(b.arena, b.l, p, fl, cfg, parent.off + ra + 1);
+        var returns: std.ArrayList(Return) = .empty;
+        child.parent = parent;
+        child.closure = cv;
+        child.closure_sample = cl;
+        child.call_pc = call_pc;
+        child.want = want;
+        child.depth = parent.depth + 1;
+        child.returns = &returns;
+        // The arguments are the first registers of the callee, in the
+        // same slots.
+        for (child.regs, 0..) |*reg, i| {
+            if (i < p.num_params and i < nargs) {
+                reg.* = parent.regs[ra + 1 + i];
+            } else {
+                reg.* = .{ .val = try b.knil(), .in_slot = false, .sample = Sample.of(.nil) };
+            }
+        }
+        b.f.extent = @max(b.f.extent, child.off + p.max_stack);
+        b.f.depth = @max(b.f.depth, child.depth);
+        try b.inlined.append(b.arena, p);
+        try child.incoming[cfg.entry].append(b.arena, .{ .from = b.cur, .regs = try b.arena.dupe(Reg, child.regs) });
+        b.fr = child;
+        b.snap_cache = ir.no_snap;
+        try b.buildFrame();
+        b.fr = parent;
+        b.pc = call_pc;
+        b.node = saved_node;
+        b.snap_cache = ir.no_snap;
+        if (b.rebuild) return;
+        if (returns.items.len == 0) return error.Unsupported;
+
+        // The callee is done. Every return continues after the call
+        // with its result in the registers of the caller.
+        var incs = try b.arena.alloc(Incoming, returns.items.len);
+        for (returns.items, 0..) |ret, i| {
+            const regs = try b.arena.dupe(Reg, parent.regs);
+            var r: u32 = ra;
+            while (r < regs.len) : (r += 1) regs[r] = .{};
+            if (want >= 1) {
+                regs[ra] = ret.res;
+                var k: u32 = 1;
+                while (k < want) : (k += 1) {
+                    regs[ra + k] = .{ .val = try b.emitIn(ret.from, .{ .op = .knil, .ty = .nil }), .in_slot = false, .sample = Sample.of(.nil) };
+                }
+            }
+            incs[i] = .{ .from = ret.from, .regs = regs };
+        }
+        if (incs.len == 1) {
+            b.cur = incs[0].from;
+            @memcpy(parent.regs, incs[0].regs);
+            b.always = saved_always;
+            return;
+        }
+        const join = try b.f.newBlock();
+        b.f.blocks.items[join].node = b.root_node;
+        b.f.blocks.items[join].always = saved_always;
+        b.always = saved_always;
+        try b.merge(join, incs, call_pc + 1);
+        b.cur = join;
+        b.clobberAll();
+    }
+
+    const natives = struct {
+        const aux = @import("../../lib/aux.zig");
+        fn find(comptime funcs: []const aux.Reg, comptime name: []const u8) state.NativeFn {
+            inline for (funcs) |r| {
+                if (comptime std.mem.eql(u8, r.name, name)) return r.func;
+            }
+            @compileError("no such library function: " ++ name);
+        }
+        const mathlib = @import("../../lib/math.zig");
+        const stringlib = @import("../../lib/string.zig");
+        const baselib = @import("../../lib/base.zig");
+        const sqrt = find(&mathlib.funcs, "sqrt");
+        const abs = find(&mathlib.funcs, "abs");
+        const floor = find(&mathlib.funcs, "floor");
+        const ceil = find(&mathlib.funcs, "ceil");
+        const sub = find(&stringlib.funcs, "sub");
+        const byte = find(&stringlib.funcs, "byte");
+        const setmetatable = find(&baselib.funcs, "setmetatable");
+    };
+
+    /// Guards that register `ra` holds the native function `f`.
+    fn guardNative(b: *Lower, ra: u32, f: state.NativeFn) Error!void {
+        const nv = try b.typed(ra, .native);
+        const fp = try b.load(nv, @offsetOf(state.Native, "func"), .int, 8, .fixed, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = fp, .imm = @bitCast(@as(u64, @intFromPtr(f))) });
+    }
+
+    /// Compiles a call of a library function that the tier knows as
+    /// typed operations. Returns the first result, or null when the
+    /// arguments are not the ones the tier handles.
+    fn intrinsic(b: *Lower, ra: u32, nargs: u32, want: i32, nat: *state.Native) Error!?Loaded {
+        const f = nat.func;
+        if (b.argTy(ra) == null or b.argTy(ra).? != .native) return null;
+        const a1 = ra + 1;
+        const t1: ?Ty = if (nargs >= 1) b.argTy(a1) else null;
+        const t2: ?Ty = if (nargs >= 2) b.argTy(a1 + 1) else null;
+        const t3: ?Ty = if (nargs >= 3) b.argTy(a1 + 2) else null;
+        if (f == natives.sqrt and nargs == 1 and t1 != null and (t1.? == .int or t1.? == .float)) {
+            try b.guardNative(ra, f);
+            const x = try b.toFloat(try b.typed(a1, t1.?));
+            return .{ .ref = try b.pure(.{ .op = .fsqrt, .ty = .float, .a = x }), .sample = Sample.tagged(.float) };
+        }
+        if (f == natives.abs and nargs == 1 and t1 != null and t1.? == .float) {
+            try b.guardNative(ra, f);
+            const x = try b.typed(a1, .float);
+            return .{ .ref = try b.pure(.{ .op = .fabs, .ty = .float, .a = x }), .sample = Sample.tagged(.float) };
+        }
+        if ((f == natives.floor or f == natives.ceil) and nargs == 1 and t1 != null and t1.? == .int) {
+            try b.guardNative(ra, f);
+            return .{ .ref = try b.typed(a1, .int), .sample = b.fr.regs[a1].sample };
+        }
+        if (f == natives.setmetatable and nargs == 2 and t1 != null and t1.? == .table and t2 != null and t2.? == .table) {
+            // The sample of the metatable must already answer, through
+            // its absence cache, that it has no finalizer.
+            const mts = b.fr.regs[a1 + 1].sample.tableOf() orelse return null;
+            const gc_bit: u16 = @as(u16, 1) << @backingInt(state.TM.gc);
+            if (mts.tm_absent & gc_bit == 0) return null;
+            try b.guardNative(ra, f);
+            const t = try b.typed(a1, .table);
+            const mt = try b.typed(a1 + 1, .table);
+            // A table with a metatable may protect it.
+            const old = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = old, .imm = 0 });
+            const bit: u8 = @backingInt(state.TM.gc);
+            _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + bit / 8, .aux = @as(u64, bit % 8) | (1 << 8) });
+            const is_fresh = if (b.fresh) |fz| fz.ref == t else false;
+            _ = try b.store(t, tl.metatable, mt, 8, .tab_meta, is_fresh);
+            _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
+            if (b.fresh) |*fz| {
+                if (fz.ref == t) fz.metatable = true;
+            }
+            return .{ .ref = t, .sample = b.fr.regs[a1].sample };
+        }
+        if (f == natives.sub and (nargs == 2 or nargs == 3) and want == 1 and
+            t1 != null and t1.? == .string and t2 != null and t2.? == .int and (nargs == 2 or (t3 != null and t3.? == .int)))
+        {
+            // Only the length of the result is wanted: the instruction
+            // after the call takes it and nothing else reads the
+            // string. The length follows from the character count and
+            // the positions, so no string is made.
+            const fr = b.fr;
+            const nd = fr.cfg.nodes.items[b.node];
+            if (b.pc + 1 > nd.end) return null;
+            const next = fr.proto.code[b.pc + 1];
+            if (opc.op(next) != .len or opc.b(next) != ra) return null;
+            const dst: u32 = opc.a(next);
+            if (dst != ra and fr.flow.live_out[b.pc + 1].has(ra)) return null;
+            if (fr.info.marks[b.pc + 1] != 0) return null;
+            try b.guardNative(ra, f);
+            const sv = try b.typed(a1, .string);
+            const i = try b.typed(a1 + 1, .int);
+            const j = if (nargs == 3) try b.typed(a1 + 2, .int) else try b.kint(-1);
+            const chars = try b.load(sv, @offsetOf(String, "chars"), .int, 4, .fixed, ir.none);
+            const n = try b.emit(.{ .op = .callc, .ty = .int, .a = chars, .b = i, .c = j, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.subLength))), .flags = .{ .pure = true } });
+            try b.setReg(dst, n, Sample.tagged(.integer));
+            b.skip_next = true;
+            return .{ .ref = n, .sample = Sample.tagged(.integer) };
+        }
+        if (f == natives.byte and (nargs == 1 or nargs == 2) and t1 != null and t1.? == .string and (nargs == 1 or (t2 != null and t2.? == .int))) {
+            try b.guardNative(ra, f);
+            const sv = try b.typed(a1, .string);
+            const i = if (nargs == 2) try b.typed(a1 + 1, .int) else try b.kint(1);
+            const n = try b.emit(.{ .op = .callc, .ty = .int, .a = sv, .b = i, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.stringByte))), .flags = .{ .pure = true, .thread = true } });
+            // A position outside the string yields no value at all.
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ge), .a = n, .imm = 0 });
+            return .{ .ref = n, .sample = Sample.tagged(.integer) };
+        }
+        return null;
     }
 };
