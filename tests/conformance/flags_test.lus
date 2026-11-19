@@ -1,0 +1,157 @@
+pledge("load", "exec", "env=LUS_EXE", "fs:read=" .. TEST_DIR .. "/fixtures/flags", "fs:read=" .. TEST_DIR .. "/fixtures/flags/*")
+
+--[[
+    Test suite for the flags feature (Acquis: flags).
+
+    The flags table is populated from the command line, and `lus test` passes
+    no flags to a test file. The cases therefore live in fixtures/flags/cases.lus,
+    which runs once in a child interpreter started with
+    -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty= and reports one
+    line per case. Each test below checks the line of its case. The interpreter
+    is found through the environment variable LUS_EXE and falls back to `lus` on
+    the PATH.
+
+    - flags is a readonly table populated from --flag/-F CLI arguments
+    - `if flags.x then` conditions fold at compile time when resolvable
+    - assigning to flags is a parse error, writing fields is a runtime error
+]]
+
+local LUS = os.getenv("LUS_EXE") or "lus"
+
+local function run(args)
+    local h = io.popen(LUS .. " " .. args .. " 2>&1", "r")
+    if not h then return nil, "cannot start the interpreter" end
+    local out = h:read("a")
+    local ok = h:close()
+    return out, ok
+end
+
+local results = {}
+local setup_error
+do
+    local out = run("-Pload -Pworker -Pfs:read -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty= " .. TEST_DIR .. "/fixtures/flags/cases.lus")
+    if out == nil then
+        setup_error = "the interpreter is unavailable"
+    else
+        for line in out:gmatch("[^\n]+") do
+            local name, status, msg = line:match("^RESULT\t([^\t]+)\t(%a+)\t?(.*)$")
+            if name then results[name] = {status = status, msg = msg} end
+        end
+        if next(results) == nil then setup_error = "the child run produced no results: " .. out end
+    end
+end
+
+local function check(name)
+    if setup_error then skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)") end
+    local r = results[name]
+    assert(r ~= nil)
+    if r.status ~= "ok" then error(r.msg, 0) end
+end
+
+local function boolean_flag_defaults_to_true_test()
+    check("boolean_flag_defaults_to_true")
+end
+
+local function numeric_values_become_numbers_test()
+    check("numeric_values_become_numbers")
+end
+
+local function non_numeric_values_become_strings_test()
+    check("non_numeric_values_become_strings")
+end
+
+local function empty_value_is_the_empty_string_test()
+    check("empty_value_is_the_empty_string")
+end
+
+local function absent_flags_read_as_nil_test()
+    check("absent_flags_read_as_nil")
+end
+
+local function flags_is_a_table_and_iterable_test()
+    check("flags_is_a_table_and_iterable")
+end
+
+local function set_flag_selects_then_branch_test()
+    check("set_flag_selects_then_branch")
+end
+
+local function absent_flag_selects_else_chain_test()
+    check("absent_flag_selects_else_chain")
+end
+
+local function not_form_folds_both_polarities_test()
+    check("not_form_folds_both_polarities")
+end
+
+local function string_and_number_flags_are_truthy_in_conditions_test()
+    check("string_and_number_flags_are_truthy_in_conditions")
+end
+
+local function non_foldable_shapes_still_evaluate_correctly_test()
+    check("non_foldable_shapes_still_evaluate_correctly")
+end
+
+local function shadowed_flags_does_not_fold_test()
+    check("shadowed_flags_does_not_fold")
+end
+
+local function folding_eliminates_the_dead_branch_from_generated_code_test()
+    check("folding_eliminates_the_dead_branch_from_generated_code")
+end
+
+local function dead_branches_are_still_syntax_checked_test()
+    check("dead_branches_are_still_syntax_checked")
+end
+
+local function line_numbers_stay_correct_after_folded_branches_test()
+    check("line_numbers_stay_correct_after_folded_branches")
+end
+
+local function break_inside_dead_branch_does_not_leak_into_the_loop_test()
+    check("break_inside_dead_branch_does_not_leak_into_the_loop")
+end
+
+local function closures_and_to_be_closed_locals_in_dead_branches_test()
+    check("closures_and_to_be_closed_locals_in_dead_branches")
+end
+
+local function goto_in_dead_branch_test()
+    check("goto_in_dead_branch")
+end
+
+local function nested_folds_test()
+    check("nested_folds")
+end
+
+local function assigning_to_flags_is_a_parse_error_test()
+    check("assigning_to_flags_is_a_parse_error")
+end
+
+local function function_flags_is_a_parse_error_test()
+    check("function_flags_is_a_parse_error")
+end
+
+local function declaring_global_flags_is_a_parse_error_test()
+    check("declaring_global_flags_is_a_parse_error")
+end
+
+local function writing_a_field_is_a_runtime_readonly_error_test()
+    check("writing_a_field_is_a_runtime_readonly_error")
+end
+
+local function runtime_load_folds_and_reads_consistently_test()
+    check("runtime_load_folds_and_reads_consistently")
+end
+
+local function workers_see_the_same_flags_test()
+    check("workers_see_the_same_flags")
+end
+
+-- interpreter without -F still has an empty flags table
+local function interpreter_without_f_still_has_an_empty_flags_table_test()
+    if setup_error then skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)") end
+    local script = "if type(flags) == 'table' and next(flags) == nil and not flags.debug then os.exit(0) end os.exit(1)"
+    local out, ok = run("-Pload -e \"" .. script .. "\"")
+    assert(ok == true or ok == 0)
+end

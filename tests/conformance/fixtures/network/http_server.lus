@@ -1,0 +1,22 @@
+local config = worker.peek()
+local server <close> = network.tcp.bind("127.0.0.1", config.port)
+worker.message("ready")
+
+local connection <close> = server:accept()
+while true do
+    -- Network reads return vectors, so an empty line is an empty vector.
+    local line = connection:receive("*l")
+    if line == nil or #line == 0 then break end
+end
+
+local body = config.body or ""
+local response = "HTTP/1.1 " .. tostring(config.status) .. " Fixture\r\n"
+    .. "Content-Length: " .. tostring(#body) .. "\r\n"
+    .. "Connection: close\r\n"
+if config.location then
+    response = response .. "Location: " .. config.location .. "\r\n"
+end
+connection:send(response .. "\r\n" .. body)
+connection:close()
+server:close()
+worker.message("done")

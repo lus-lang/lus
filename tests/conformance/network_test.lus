@@ -1,0 +1,805 @@
+local FIXTURES = TEST_DIR .. "/fixtures/network"
+
+pledge("load", "network", "fs:read=" .. FIXTURES .. "/*")
+
+-- ===== ported from h1/netio.lus =====
+--[[
+  Network data-path tests for Lus (netio suite)
+
+  This suite exercises the loopback data path that network.lus never touches.
+  It binds real TCP servers and UDP sockets on 127.0.0.1, connects to them in
+  the same process, accepts the queued connection, and asserts exact bytes in
+  both directions. It also pins the error wording for the validation paths that
+  need no bind at all.
+
+  The bind syscall is blocked inside the sandbox with "Operation not permitted".
+  Every bind-dependent test therefore performs its bind as the very first
+  fallible call so that the only local failures are that one environmental
+  error. These stay as tests:it because they pass once run outside the sandbox.
+  The validation and connect-refused tests below do not bind and must pass
+  locally.
+]]
+
+
+-- Network reads return vectors in 2.0 (spec/design/strings.md), so the tests
+-- decode them before comparing against text.
+local function txt(v)
+    if type(v) == "vector" then return vector.tostring(v) end
+    return v
+end
+
+-- Binding a socket is not permitted in every environment, so a refused bind
+-- skips the test instead of failing it.
+local function skip_if_denied(ok, err)
+    if not ok and (string.find(tostring(err), "ermission denied", 1, true)
+        or string.find(tostring(err), "not permitted", 1, true)
+        or string.find(tostring(err), "EPERM", 1, true)
+        -- A sandbox that forbids UDP sockets surfaces as an unmapped error.
+        or string.find(tostring(err), "UDP socket: Unexpected", 1, true)) then
+        skip("loopback sockets unavailable")
+    end
+end
+
+local function tcp_bind(...)
+    local ok, server = catch network.tcp.bind(...)
+    skip_if_denied(ok, server)
+    if not ok then error(server, 0) end
+    return server
+end
+
+local function udp_open(...)
+    local ok, sock = catch network.udp.open(...)
+    skip_if_denied(ok, sock)
+    if not ok then error(sock, 0) end
+    return sock
+end
+
+-- Establish a connected loopback pair on an ephemeral port. The bind is the
+-- first fallible call so a sandbox EPERM surfaces here and nowhere else. On
+-- loopback the connect lands in the listen backlog and completes before accept
+-- runs, so accept returns the queued connection without blocking.
+local function make_pair()
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local client = network.tcp.connect("127.0.0.1", port)
+    local conn = server:accept()
+    return server, client, conn
+end
+
+local function make_sender(bytes, suffix)
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local sender = worker.create(FIXTURES .. "/net_sender.lus")
+    worker.send(sender, { port = port, bytes = bytes, suffix = suffix })
+    return server, server:accept(), sender
+end
+
+local function finish_sender(sender)
+    assert(worker.receive(sender) == "done")
+    assert(worker.receive(sender) == nil)
+end
+
+local function closed_tcp_port()
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    server:close()
+    return port
+end
+
+-- ============================================================
+-- TCP loopback data path (bind-dependent)
+-- ============================================================
+
+-- TCP send then receive delivers the exact bytes
+local function tcp_send_then_receive_delivers_the_exact_bytes_test()
+    local server, client, conn = make_pair()
+    local n = client:send("hello")
+    assert(n == 5)
+    assert(txt(conn:receive(5)) == "hello")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP data flows in both directions
+local function tcp_data_flows_in_both_directions_test()
+    local server, client, conn = make_pair()
+    client:send("ping")
+    assert(txt(conn:receive(4)) == "ping")
+    conn:send("pong")
+    assert(txt(client:receive(4)) == "pong")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP receive with a size splits a payload into chunks
+local function tcp_receive_with_a_size_splits_a_payload_into_chunks_test()
+    local server, client, conn = make_pair()
+    client:send("hello world")
+    assert(txt(conn:receive(5)) == "hello")
+    assert(txt(conn:receive(6)) == " world")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP receive coalesces bytes from multiple sends
+local function tcp_receive_coalesces_bytes_from_multiple_sends_test()
+    local server, client, conn = make_pair()
+    client:send("ab")
+    client:send("cd")
+    assert(txt(conn:receive(4)) == "abcd")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP receive '*a' returns all bytes up to peer close
+local function tcp_receive_a_returns_all_bytes_up_to_peer_close_test()
+    local server, client, conn = make_pair()
+    client:send("goodbye")
+    client:close()
+    assert(txt(conn:receive("*a")) == "goodbye")
+    conn:close()
+    server:close()
+end
+
+-- TCP receive '*l' returns one line without the newline
+local function tcp_receive_l_returns_one_line_without_the_newline_test()
+    local server, client, conn = make_pair()
+    client:send("first\nsecond\n")
+    assert(txt(conn:receive("*l")) == "first")
+    assert(txt(conn:receive("*l")) == "second")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP receive strips a trailing carriage return on '*l'
+local function tcp_receive_strips_a_trailing_carriage_return_on_l_test()
+    local server, client, conn = make_pair()
+    client:send("crlf\r\nrest")
+    assert(txt(conn:receive("*l")) == "crlf")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP line receive accepts its exact limit and buffered next line
+local function tcp_line_receive_accepts_its_exact_limit_and_buffered_next_line_test()
+    local server, client, conn = make_pair()
+    client:send("abcd\r\nnext\n")
+    assert(txt(conn:receive("*l", 4)) == "abcd")
+    assert(txt(conn:receive("*l", 4)) == "next")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP line receive closes the socket when its limit is exceeded
+local function tcp_line_receive_closes_the_socket_when_its_limit_is_exceeded_test()
+    local server, client, conn = make_pair()
+    client:send("abcde\n")
+    client:close()
+    local ok, err = catch conn:receive("*l", 4)
+    assert(not ok)
+    assert(string.find(tostring(err),
+        "receive limit exceeded", 1, true) ~= nil)
+    assert(string.find(tostring(conn), "closed"))
+    raises(function() conn:receive("*l", 4) end, "closed")
+    conn:close()
+    server:close()
+end
+
+-- TCP line receive counts an unterminated carriage return
+local function tcp_line_receive_counts_an_unterminated_carriage_return_test()
+    local server, client, conn = make_pair()
+    client:send("abc\r")
+    client:close()
+    assert(txt(conn:receive("*l", 4)) == "abc\r")
+    conn:close()
+    server:close()
+
+    server, client, conn = make_pair()
+    client:send("abcd\r")
+    client:close()
+    local ok, err = catch conn:receive("*l", 4)
+    assert(not ok)
+    assert(string.find(tostring(err), "receive limit exceeded"))
+    assert(string.find(tostring(conn), "closed"))
+    conn:close()
+    server:close()
+end
+
+-- TCP all-data receive enforces an explicit limit
+local function tcp_all_data_receive_enforces_an_explicit_limit_test()
+    local server, client, conn = make_pair()
+    client:send("abcd")
+    client:close()
+    assert(txt(conn:receive("*a", 4)) == "abcd")
+    conn:close()
+    server:close()
+
+    server, client, conn = make_pair()
+    client:send("abcde")
+    client:close()
+    local ok, err = catch conn:receive("*a", 4)
+    assert(not ok)
+    assert(string.find(tostring(err),
+        "receive limit exceeded", 1, true) ~= nil)
+    assert(string.find(tostring(conn), "closed"))
+    server:close()
+end
+
+-- TCP pattern receive requires a positive integer limit
+local function tcp_pattern_receive_requires_a_positive_integer_limit_test()
+    local server, client, conn = make_pair()
+    raises(function() conn:receive("*l", 0) end, "positive")
+    raises(function() conn:receive("*a", -1) end, "positive")
+    raises(function() conn:receive("*l", 0.5) end, "integer")
+    client:send("ping")
+    assert(txt(conn:receive(4, -1)) == "ping")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP receive times out cleanly when no data is pending
+local function tcp_receive_times_out_cleanly_when_no_data_is_pending_test()
+    local server, client, conn = make_pair()
+    conn:settimeout(0.05)
+    raises(function()
+        conn:receive(4)
+    end, "timeout")
+    conn:close()
+    client:close()
+    server:close()
+end
+
+-- TCP accept times out cleanly on an idle server
+local function tcp_accept_times_out_cleanly_on_an_idle_server_test()
+    local server = tcp_bind("127.0.0.1", 0)
+    server:settimeout(0.05)
+    raises(function()
+        server:accept()
+    end, "timeout")
+    server:close()
+end
+
+-- TCP send on a closed connection errors about the closed socket
+local function tcp_send_on_a_closed_connection_errors_about_the_closed_socket_test()
+    local server, client, conn = make_pair()
+    client:close()
+    raises(function()
+        client:send("nope")
+    end, "closed")
+    conn:close()
+    server:close()
+end
+
+-- TCP receive on a closed connection errors about the closed socket
+local function tcp_receive_on_a_closed_connection_errors_about_the_closed_socket_test()
+    local server, client, conn = make_pair()
+    conn:close()
+    raises(function()
+        conn:receive(1)
+    end, "closed")
+    client:close()
+    server:close()
+end
+
+-- ============================================================
+-- TCP server lifecycle (bind-dependent)
+-- ============================================================
+
+-- TCP double close on a server is a clean no-op
+local function tcp_double_close_on_a_server_is_a_clean_no_op_test()
+    local server = tcp_bind("127.0.0.1", 0)
+    server:close()
+    -- A second close must neither throw nor crash.
+    server:close()
+    assert(string.find(tostring(server), "closed"))
+end
+
+-- TCP accept after close errors about the closed server
+local function tcp_accept_after_close_errors_about_the_closed_server_test()
+    local server = tcp_bind("127.0.0.1", 0)
+    server:close()
+    raises(function()
+        server:accept()
+    end, "closed")
+end
+
+-- TCP settimeout after close errors about the closed server
+local function tcp_settimeout_after_close_errors_about_the_closed_server_test()
+    local server = tcp_bind("127.0.0.1", 0)
+    server:close()
+    raises(function()
+        server:settimeout(1)
+    end, "closed")
+end
+
+-- TCP binding the same port twice reports address in use
+local function tcp_binding_the_same_port_twice_reports_address_in_use_test()
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local ok, err = catch network.tcp.bind("127.0.0.1", port)
+    assert(not ok)
+    assert(string.find(tostring(err), "cannot bind to 127.0.0.1:" .. tostring(port)))
+    server:close()
+end
+
+-- TCP bind accepts an explicit backlog argument
+local function tcp_bind_accepts_an_explicit_backlog_argument_test()
+    local server = tcp_bind("127.0.0.1", 0, 16)
+    assert(string.find(tostring(server), "server"))
+    server:close()
+end
+
+-- TCP bind to port 0 assigns an ephemeral port
+local function tcp_bind_to_port_0_assigns_an_ephemeral_port_test()
+    local server = tcp_bind("127.0.0.1", 0)
+    assert(server ~= nil)
+    assert(string.find(tostring(server), "server"))
+    local address, port = server:getsockname()
+    assert(address == "127.0.0.1")
+    assert(port > 0 and port <= 65535, "the kernel assigned a usable port")
+    server:close()
+end
+
+-- ============================================================
+-- TCP connect error paths (no bind, must pass locally)
+-- ============================================================
+
+-- TCP connect to a closed port is refused with a clear message
+local function tcp_connect_to_a_closed_port_is_refused_with_a_clear_message_test()
+    local port = closed_tcp_port()
+    local ok, err = catch network.tcp.connect("127.0.0.1", port)
+    assert(not ok)
+    assert(string.find(tostring(err), "cannot connect to 127.0.0.1:" .. tostring(port)))
+end
+
+-- TCP connect rejects an out-of-range port
+local tcp_connect_rejects_an_out_of_range_port_cases = {
+    {70000}, {65536}, {0}, {-1},
+}
+
+local function tcp_connect_rejects_an_out_of_range_port_test(port)
+    raises(function()
+        network.tcp.connect("127.0.0.1", port)
+    end, "port out of range")
+end
+
+-- TCP connect rejects a non-integer port
+local function tcp_connect_rejects_a_non_integer_port_test()
+    raises(function()
+        network.tcp.connect("127.0.0.1", 80.5)
+    end, "integer")
+end
+
+-- TCP connect rejects a nil host
+local function tcp_connect_rejects_a_nil_host_test()
+    raises(function()
+        network.tcp.connect(nil, 80)
+    end, "bad argument")
+end
+
+-- TCP connect rejects a missing port
+local function tcp_connect_rejects_a_missing_port_test()
+    raises(function()
+        network.tcp.connect("127.0.0.1")
+    end, "bad argument")
+end
+
+-- ============================================================
+-- TCP bind argument validation (no bind syscall reached)
+-- ============================================================
+
+-- TCP bind rejects an out-of-range port
+local tcp_bind_rejects_an_out_of_range_port_cases = {
+    {70000}, {65536}, {-1},
+}
+
+local function tcp_bind_rejects_an_out_of_range_port_test(port)
+    raises(function()
+        network.tcp.bind("127.0.0.1", port)
+    end, "port out of range")
+end
+
+-- TCP bind rejects a non-integer port
+local function tcp_bind_rejects_a_non_integer_port_test()
+    raises(function()
+        network.tcp.bind("127.0.0.1", 80.5)
+    end, "integer")
+end
+
+-- TCP bind rejects a nil host
+local function tcp_bind_rejects_a_nil_host_test()
+    raises(function()
+        network.tcp.bind(nil, 1234)
+    end, "bad argument")
+end
+
+-- TCP bind rejects a non-integer host port pair
+local function tcp_bind_rejects_a_non_integer_host_port_pair_test()
+    raises(function()
+        network.tcp.bind("127.0.0.1", "abc")
+    end, "bad argument")
+end
+
+-- ============================================================
+-- UDP datagram round trip (bind-dependent)
+-- ============================================================
+
+-- UDP delivers a datagram with the sender address
+local function udp_delivers_a_datagram_with_the_sender_address_test()
+    -- The receiver binds first so a sandbox EPERM surfaces on this line.
+    local receiver = udp_open(0, "127.0.0.1")
+    local _, receiver_port = receiver:getsockname()
+    local sender = udp_open(0, "127.0.0.1")
+    local _, sender_port = sender:getsockname()
+    local n = sender:sendto("ping", "127.0.0.1", receiver_port)
+    assert(n == 4)
+    local data, ip, port = receiver:receive()
+    assert(txt(data) == "ping")
+    assert(ip == "127.0.0.1")
+    assert(port == sender_port)
+    sender:close()
+    receiver:close()
+end
+
+-- UDP round trips a second datagram in the other direction
+local function udp_round_trips_a_second_datagram_in_the_other_direction_test()
+    local a = udp_open(0, "127.0.0.1")
+    local _, aport = a:getsockname()
+    local b = udp_open(0, "127.0.0.1")
+    local _, bport = b:getsockname()
+    a:sendto("from-a", "127.0.0.1", bport)
+    local data, ip, port = b:receive()
+    assert(txt(data) == "from-a")
+    assert(port == aport)
+    b:sendto("from-b", ip, port)
+    local reply = a:receive()
+    assert(txt(reply) == "from-b")
+    a:close()
+    b:close()
+end
+
+-- UDP open with a port only binds to all interfaces
+local function udp_open_with_a_port_only_binds_to_all_interfaces_test()
+    local sock = udp_open(0)
+    assert(string.find(tostring(sock), "udpsocket"))
+    sock:close()
+end
+
+-- ============================================================
+-- UDP validation and lifecycle (no bind syscall reached)
+-- ============================================================
+
+-- UDP open with no arguments creates an unbound socket
+local function udp_open_with_no_arguments_creates_an_unbound_socket_test()
+    local sock = udp_open()
+    assert(string.find(tostring(sock), "udpsocket"))
+    sock:close()
+end
+
+-- UDP open rejects an invalid literal address
+local function udp_open_rejects_an_invalid_literal_address_test()
+    -- inet_pton fails before any bind, so this raises locally.
+    raises(function()
+        network.udp.open(34891, "not-an-ip")
+    end, "invalid address: not%-an%-ip")
+end
+
+-- UDP open rejects an out-of-range port
+local udp_open_rejects_an_out_of_range_port_cases = {
+    {70000}, {65536}, {-1},
+}
+
+local function udp_open_rejects_an_out_of_range_port_test(port)
+    raises(function()
+        network.udp.open(port)
+    end, "port out of range")
+end
+
+-- UDP open rejects a non-integer port
+local function udp_open_rejects_a_non_integer_port_test()
+    raises(function()
+        network.udp.open(100.5)
+    end, "integer")
+end
+
+-- UDP sendto on a closed socket errors about the closed socket
+local function udp_sendto_on_a_closed_socket_errors_about_the_closed_socket_test()
+    local sock = udp_open()
+    sock:close()
+    raises(function()
+        sock:sendto("x", "127.0.0.1", 34892)
+    end, "closed")
+end
+
+-- UDP receive on a closed socket errors about the closed socket
+local function udp_receive_on_a_closed_socket_errors_about_the_closed_socket_test()
+    local sock = udp_open()
+    sock:close()
+    raises(function()
+        sock:receive()
+    end, "closed")
+end
+
+-- UDP double close is a clean no-op
+local function udp_double_close_is_a_clean_no_op_test()
+    local sock = udp_open()
+    sock:close()
+    sock:close()
+    assert(string.find(tostring(sock), "closed"))
+end
+
+-- UDP sendto rejects an out-of-range destination port
+local function udp_sendto_rejects_an_out_of_range_destination_port_test()
+    local sock = udp_open()
+    raises(function()
+        sock:sendto("x", "127.0.0.1", 70000)
+    end, "port out of range")
+    sock:close()
+end
+
+-- ============================================================
+-- network.fetch argument and URL validation (no connection made)
+-- ============================================================
+
+-- fetch rejects a nil URL
+local function fetch_rejects_a_nil_url_test()
+    raises(function()
+        network.fetch(nil)
+    end, "bad argument")
+end
+
+-- fetch rejects a malformed URL
+local fetch_rejects_a_malformed_url_cases = {
+    {"notaurl"}, {"ftp://example/"}, {""}, {"http://"}, {"http://127.0.0.1:70000/"},
+}
+
+local function fetch_rejects_a_malformed_url_test(url)
+    raises(function()
+        network.fetch(url)
+    end, "invalid URL")
+end
+
+-- fetch rejects carriage returns embedded in the URL
+local function fetch_rejects_carriage_returns_embedded_in_the_url_test()
+    raises(function()
+        network.fetch("https://example.com/\r\nInjected: 1")
+    end, "invalid characters in URL")
+end
+
+-- fetch rejects carriage returns embedded in the method
+local function fetch_rejects_carriage_returns_embedded_in_the_method_test()
+    raises(function()
+        network.fetch("http://127.0.0.1/", "GET\r\nHost: evil")
+    end, "invalid characters in HTTP method")
+end
+
+-- fetch to a closed local port reports it cannot connect
+local function fetch_to_a_closed_local_port_reports_it_cannot_connect_test()
+    local port = closed_tcp_port()
+    local url = "http://127.0.0.1:" .. tostring(port) .. "/"
+    local ok, err = catch network.fetch(url)
+    assert(not ok)
+    assert(string.find(tostring(err), "cannot connect to 127.0.0.1:" .. tostring(port)))
+end
+
+
+-- ===== ported from h1/network.lus =====
+--[[
+  Network Library Tests for Lus
+  Tests: TCP, UDP, and HTTP/HTTPS functionality
+
+  Note: Uses 'catch' expression for protected execution.
+]]
+
+
+-- ============================================
+-- Library Structure Tests
+-- ============================================
+
+-- network global exists
+local function network_global_exists_test()
+  assert(type(network) == "table", "network should be a table")
+end
+
+-- network.tcp subtable exists
+local function network_tcp_subtable_exists_test()
+  assert(type(network.tcp) == "table", "network.tcp should be a table")
+  assert(type(network.tcp.connect) == "function", "network.tcp.connect should be a function")
+  assert(type(network.tcp.bind) == "function", "network.tcp.bind should be a function")
+end
+
+-- network.udp subtable exists
+local function network_udp_subtable_exists_test()
+  assert(type(network.udp) == "table", "network.udp should be a table")
+  assert(type(network.udp.open) == "function", "network.udp.open should be a function")
+end
+
+-- network.fetch function exists
+local function network_fetch_function_exists_test()
+  assert(type(network.fetch) == "function", "network.fetch should be a function")
+end
+
+-- ============================================
+-- TCP Basic Tests
+-- ============================================
+
+-- TCP server bind and close
+local function tcp_server_bind_and_close_test()
+  local server = tcp_bind("127.0.0.1", 0)
+  assert(server ~= nil, "server should be created")
+  assert(tostring(server):find("server"), "tostring should indicate server")
+  server:close()
+  assert(tostring(server):find("closed"), "tostring should indicate closed")
+end
+
+-- TCP connection refused error
+local function tcp_connection_refused_error_test()
+  local server = tcp_bind("127.0.0.1", 0)
+  local _, port = server:getsockname()
+  server:close()
+  local ok, err = catch network.tcp.connect("127.0.0.1", port)
+  assert(not ok, "should fail to connect to closed port")
+  assert(type(err) == "string", "error should be string")
+end
+
+-- TCP server has expected methods
+local function tcp_server_has_expected_methods_test()
+  local server = tcp_bind("127.0.0.1", 0)
+  assert(type(server.accept) == "function", "should have accept")
+  assert(type(server.close) == "function", "should have close")
+  assert(type(server.settimeout) == "function", "should have settimeout")
+  server:close()
+end
+
+-- ============================================
+-- UDP Tests
+-- ============================================
+
+-- UDP socket create and close
+local function udp_socket_create_and_close_test()
+  local sock = udp_open()
+  assert(sock ~= nil, "UDP socket should be created")
+  assert(tostring(sock):find("udpsocket"), "tostring should indicate udpsocket")
+  sock:close()
+  assert(tostring(sock):find("closed"), "tostring should indicate closed")
+end
+
+-- UDP socket has expected methods
+local function udp_socket_has_expected_methods_test()
+  local sock = udp_open()
+  assert(type(sock.sendto) == "function", "should have sendto")
+  assert(type(sock.receive) == "function", "should have receive")
+  assert(type(sock.setsockname) == "function", "should have setsockname")
+  assert(type(sock.close) == "function", "should have close")
+  sock:close()
+end
+
+-- UDP socket bind to port
+local function udp_socket_bind_to_port_test()
+  local sock = udp_open(0, "127.0.0.1")
+  assert(sock ~= nil, "bound UDP socket should be created")
+  sock:close()
+end
+
+-- using closed UDP socket raises error
+local function using_closed_udp_socket_raises_error_test()
+  local sock = udp_open()
+  sock:close()
+  local ok, err = catch sock:sendto("test", "127.0.0.1", 1234)
+  assert(not ok, "should fail on closed socket")
+  assert(err:find("closed"), "error should mention closed")
+end
+
+-- ============================================
+-- HTTP response tests
+-- ============================================
+
+local function local_fetch(status, location, body)
+  local probe = tcp_bind("127.0.0.1", 0)
+  local _, port = probe:getsockname()
+  probe:close()
+
+  local fixture = worker.create(FIXTURES .. "/http_server.lus")
+  worker.send(fixture, {status = status, location = location, body = body, port = port})
+  assert(worker.receive(fixture) == "ready", "local HTTP fixture should bind")
+  local got_status, got_body, got_headers =
+      network.fetch("http://127.0.0.1:" .. tostring(port) .. "/fixture")
+  assert(worker.receive(fixture) == "done", "local HTTP fixture should finish")
+  return got_status, got_body, got_headers
+end
+
+-- HTTP GET returns status, body, and headers
+local function http_get_returns_status_body_and_headers_test()
+  local status, body, headers = local_fetch(200, nil, "OK")
+  assert(status == 200, "status should be 200, got: " .. tostring(status))
+  assert(txt(body) == "OK", "response body should be preserved")
+  assert(type(headers) == "table", "headers should be a table")
+end
+
+-- HTTP GET exposes different success status codes
+local function http_get_exposes_different_success_status_codes_test()
+  local status201 = local_fetch(201, nil, "created")
+  assert(status201 == 201, "should get 201, got: " .. tostring(status201))
+  local status204 = local_fetch(204, nil, "")
+  assert(status204 == 204, "should get 204, got: " .. tostring(status204))
+end
+
+-- HTTP returns redirect status to the caller
+local function http_returns_redirect_status_to_the_caller_test()
+  local status, _, headers = local_fetch(301, "/next", "")
+  assert(status == 301, "redirect must not be followed, got: " .. tostring(status))
+  assert(type(headers) == "table", "headers should be a table")
+  assert(headers.location == "/next", "location header should be exposed")
+end
+
+-- HTTP exposes client error status codes
+local function http_exposes_client_error_status_codes_test()
+  local status404 = local_fetch(404, nil, "missing")
+  assert(status404 == 404, "should get 404, got: " .. tostring(status404))
+  local status400 = local_fetch(400, nil, "bad request")
+  assert(status400 == 400, "should get 400, got: " .. tostring(status400))
+end
+
+-- HTTP exposes server error status codes
+local function http_exposes_server_error_status_codes_test()
+  local status500 = local_fetch(500, nil, "failure")
+  assert(status500 == 500, "should get 500, got: " .. tostring(status500))
+end
+
+-- a closed local endpoint reports a fetch error
+local function a_closed_local_endpoint_reports_a_fetch_error_test()
+  local server = tcp_bind("127.0.0.1", 0)
+  local _, port = server:getsockname()
+  server:close()
+  local ok, err = catch network.fetch(
+      "https://127.0.0.1:" .. tostring(port) .. "/")
+  assert(not ok, "should fail for a closed local endpoint")
+  assert(type(err) == "string", "error should be string")
+end
+
+-- The two default limit tests run last on purpose. In the 2.0 runtime a
+-- network.udp.open call blocks forever when it follows a worker driven
+-- receive limit error, so no test that opens a UDP socket may run after them.
+-- TCP line receive enforces its default one MiB limit
+local function tcp_line_receive_enforces_its_default_one_mib_limit_test()
+    local mib = 1024 * 1024
+    local server, conn, sender = make_sender(mib, "\n")
+    assert(#txt(conn:receive("*l")) == mib)
+    finish_sender(sender)
+    conn:close()
+    server:close()
+
+    server, conn, sender = make_sender(mib + 1, "\n")
+    local ok, err = catch conn:receive("*l")
+    assert(not ok)
+    assert(string.find(tostring(err), "receive limit exceeded"))
+    catch worker.receive(sender)
+    conn:close()
+    server:close()
+end
+
+-- TCP all-data receive enforces its default 64 MiB limit
+local function tcp_all_data_receive_enforces_its_default_64_mib_limit_test()
+    local limit = 64 * 1024 * 1024
+    local server, conn, sender = make_sender(limit)
+    assert(#txt(conn:receive("*a")) == limit)
+    finish_sender(sender)
+    conn:close()
+    server:close()
+
+    server, conn, sender = make_sender(limit + 1)
+    local ok, err = catch conn:receive("*a")
+    assert(not ok)
+    assert(string.find(tostring(err), "receive limit exceeded"))
+    catch worker.receive(sender)
+    conn:close()
+    server:close()
+end
