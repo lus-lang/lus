@@ -58,6 +58,20 @@ pub fn close(l: *Thread) void {
     state.destroy(g);
 }
 
+/// Closes a state just before the process exits. It runs the finalizers,
+/// stops the workers, and flushes output as `close` does. Builds without
+/// runtime safety then leave the heap to the exit of the process instead
+/// of returning it object by object, which reads every live object once
+/// more. Safe builds free everything, so their allocators still check
+/// the whole teardown.
+pub fn closeForExit(l: *Thread) void {
+    if (std.debug.runtime_safety) return close(l);
+    const g = l.g;
+    finalizeAll(g);
+    if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
+    @import("lib/out.zig").deinit(g);
+}
+
 /// Compiles `src` and pushes the resulting function. On a syntax error,
 /// pushes the message string and returns error.LusError.
 pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
