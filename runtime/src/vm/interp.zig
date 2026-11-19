@@ -18,6 +18,7 @@ const gc = @import("gc.zig");
 const jit = @import("../jit/jit.zig");
 const numeric = @import("numeric.zig");
 const opc = @import("../compile/opcodes.zig");
+const opprofile = @import("opprofile.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Frame = state.Frame;
@@ -439,7 +440,7 @@ fn Loop(comptime mode: Mode) type {
         /// because errors, tracebacks, and returns read it from the frame.
         /// A step ends here: it dispatches to the `extraarg` case, which
         /// reports where execution continues.
-        inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool) Error!Op {
+        inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool) Error!opc.Code {
             if (mode == .step) return .extraarg;
             if (hooked) {
                 try hookStep(l, l.frames.items.len - 1, c.cl(), pc.*);
@@ -447,7 +448,10 @@ fn Loop(comptime mode: Mode) type {
             }
             ins.* = c.code[pc.*];
             pc.* += 1;
-            return opc.op(ins.*);
+            if (opprofile.enabled and mode == .fast) opprofile.note(opc.op(ins.*));
+            // The hooked loop runs plain instructions, so that a hook
+            // sees each of them.
+            return if (hooked) opc.plainCode(opc.op(ins.*)) else opc.code(ins.*);
         }
 
         /// Finishes a test instruction. The compiler always follows a test
@@ -466,6 +470,7 @@ fn Loop(comptime mode: Mode) type {
             if (off < 0) {
                 // Loops are safe points for pending finalizers.
                 if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                    @branchHint(.unlikely);
                     c.fr.pc = pc.*;
                     try runPendingFinalizers(l);
                     c.refresh(l, mode);
@@ -577,7 +582,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
     if (mode == .step) ins = step_ins;
     // Every case ends by dispatching the next instruction directly, which
     // gives each opcode its own indirect branch.
-    sw: switch (if (mode == .step) mode.step else try fetch(l, &c, &pc, &ins, hooked)) {
+    sw: switch (if (mode == .step) opc.plainCode(mode.step) else try fetch(l, &c, &pc, &ins, hooked)) {
         .move => {
             c.bp[opc.a(ins)] = c.bp[opc.b(ins)];
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -609,8 +614,19 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
-        .getupval => {
+        inline .getupval, .getupval_subk => |o| {
             c.bp[opc.a(ins)] = c.cl().upvals()[opc.b(ins)].loc.*;
+            if (comptime fuses(mode, o)) {
+                // The subtraction of two integers runs here. Any other
+                // one is dispatched as the instruction it is.
+                const next = c.code[pc];
+                const x = &c.bp[opc.b(next)];
+                const y = &c.k(mode)[opc.c(next)];
+                if (x.tag == .integer and y.tag == .integer) {
+                    c.bp[opc.a(next)] = Value.int(x.asInt() -% y.asInt());
+                    pc += 1;
+                }
+            }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setupval => {
@@ -662,12 +678,15 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             c.bp[a] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
-        .settable => {
+        inline .settable, .settable_forloop => |o| {
             const t = &c.bp[opc.a(ins)];
             const key = &c.bp[opc.b(ins)];
             const v = &c.bp[opc.c(ins)];
             if (t.tag == .table and key.tag == .integer) {
-                if (fast.setArray(l, t.as(Table), key.asInt(), v)) continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                if (fast.setArray(l, t.as(Table), key.asInt(), v)) {
+                    if (comptime fuses(mode, o)) fast.forInt(c.bp, c.code[pc], &pc);
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
             } else if (key.tag == .string) {
                 try setStrOp(mode, l, &c, pc, &c.ic(mode)[pc - 1], t, key, v);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -691,6 +710,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             const a = opc.a(ins);
             c.fr.pc = pc;
             if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                @branchHint(.unlikely);
                 try runPendingFinalizers(l);
                 c.refresh(l, mode);
             }
@@ -711,7 +731,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
-        inline .add, .sub, .mul, .div, .mod, .pow, .idiv, .band, .bor, .bxor, .shl, .shr => |o| {
+        inline .add, .sub, .mul, .div, .mod, .pow, .idiv, .band, .bor, .bxor, .shl, .shr, .add_forloop => |o| {
             const op = comptime arithOf(o);
             const a = opc.a(ins);
             // Operands are read through pointers so the fast paths load
@@ -725,11 +745,13 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 }
                 if (intArith(op, x.asInt(), y.asInt())) |r| {
                     c.bp[a] = Value.int(r);
+                    if (comptime fuses(mode, o)) fast.forInt(c.bp, c.code[pc], &pc);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
             } else if (x.tag == .float and y.tag == .float) {
                 if (floatArith(op, x.asFloat(), y.asFloat())) |r| {
                     c.bp[a] = Value.float(r);
+                    if (comptime fuses(mode, o)) fast.forInt(c.bp, c.code[pc], &pc);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
             }
@@ -849,6 +871,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             // Loops are safe points for pending finalizers.
             if (off < 0) {
                 if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                    @branchHint(.unlikely);
                     c.fr.pc = pc;
                     try runPendingFinalizers(l);
                     c.refresh(l, mode);
@@ -860,7 +883,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .eq => {
             const x = &c.bp[opc.a(ins)];
             const y = &c.bp[opc.b(ins)];
-            const k = opc.c(ins) != 0;
+            const k = opc.cond(ins);
             // Nil, booleans, and integers compare by tag and payload.
             const r = if (x.tag == y.tag and @backingInt(x.tag) <= @backingInt(value.Tag.integer))
                 (x.tag != .integer or x.payload == y.payload)
@@ -872,13 +895,13 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 c.refresh(l, mode);
                 break :blk r;
             };
-            try condJump(l, &c, &pc, r != k, hooked);
+            try condJump(l, &c, &pc, opc.skips(r, ins), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         inline .lt, .le => |o| {
             const x = &c.bp[opc.a(ins)];
             const y = &c.bp[opc.b(ins)];
-            const k = opc.c(ins) != 0;
+            const k = opc.cond(ins);
             const r = if (x.tag == .integer and y.tag == .integer)
                 (if (o == .lt) x.asInt() < y.asInt() else x.asInt() <= y.asInt())
             else if (x.tag == .float and y.tag == .float)
@@ -889,13 +912,13 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 c.refresh(l, mode);
                 break :blk r;
             };
-            try condJump(l, &c, &pc, r != k, hooked);
+            try condJump(l, &c, &pc, opc.skips(r, ins), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         inline .lti, .lei, .gti, .gei => |o| {
             const x = &c.bp[opc.a(ins)];
             const imm = opc.sb(ins);
-            const k = opc.c(ins) != 0;
+            const k = opc.cond(ins);
             const r = if (x.tag == .integer) switch (o) {
                 .lti => x.asInt() < imm,
                 .lei => x.asInt() <= imm,
@@ -921,7 +944,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 c.refresh(l, mode);
                 break :blk r;
             };
-            try condJump(l, &c, &pc, r != k, hooked);
+            try condJump(l, &c, &pc, opc.skips(r, ins), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .eqk => {
@@ -931,18 +954,21 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 x.payload == y.payload
             else if (x.tag == .string and y.tag == .string and x.payload == y.payload)
                 true
+            else if (x.tag != y.tag and !(x.isNumber() and y.isNumber()))
+                // Values of two types are equal only as numbers.
+                false
             else
                 ops.rawEqual(l, x.*, y.*);
-            try condJump(l, &c, &pc, r != (opc.c(ins) != 0), hooked);
+            try condJump(l, &c, &pc, opc.skips(r, ins), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .test_ => {
-            try condJump(l, &c, &pc, c.bp[opc.a(ins)].truthy() != (opc.c(ins) != 0), hooked);
+            try condJump(l, &c, &pc, opc.skips(c.bp[opc.a(ins)].truthy(), ins), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .testset => {
             const v = c.bp[opc.b(ins)];
-            if (v.truthy() != (opc.c(ins) != 0)) {
+            if (opc.skips(v.truthy(), ins)) {
                 pc += 1;
             } else {
                 c.bp[opc.a(ins)] = v;
@@ -951,36 +977,55 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .testnil => {
-            try condJump(l, &c, &pc, c.bp[opc.a(ins)].isNil() != (opc.c(ins) != 0), hooked);
+            try condJump(l, &c, &pc, opc.skips(c.bp[opc.a(ins)].isNil(), ins), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
         .call => {
+            // A plain call between two Lus functions comes first and
+            // computes only what it needs, so that it shares nothing
+            // with the calls below that keep values across a native.
+            {
+                const callee: [*]Value = c.bp + opc.a(ins);
+                c.fr.pc = pc;
+                if (callee[0].tag == .closure) {
+                    const cl = callee[0].as(Closure);
+                    const flags = cl.proto.call;
+                    // Such a call allocates nothing, so pending
+                    // finalizers wait for the next safe point: a loop, a
+                    // new table, or any other call.
+                    if (flags.plain) {
+                        const func = c.fr.base + opc.a(ins);
+                        var nargs: u32 = @as(u32, opc.b(ins)) -% 1;
+                        if (opc.b(ins) == 0) {
+                            // The arguments end at the stack top.
+                            @branchHint(.unlikely);
+                            nargs = l.top - func - 1;
+                        }
+                        c = try enterPlain(l, c.fr, cl, flags.frameFlags(), callee, func, nargs, @as(i32, opc.c(ins)) - 1);
+                        pc = 0;
+                        if (hooked and l.hook_mask & Thread.hook_call != 0) {
+                            try callHook(l, "call", null);
+                            c.refresh(l, mode);
+                        }
+                        try tierLoop(l, &c, &pc, &budget);
+                        continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                    }
+                }
+            }
             const nb = opc.b(ins);
             const want: i32 = @as(i32, opc.c(ins)) - 1;
-            const func = c.fr.base + opc.a(ins);
-            c.fr.pc = pc;
             if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                @branchHint(.unlikely);
                 try runPendingFinalizers(l);
                 c.refresh(l, mode);
             }
+            const func = c.fr.base + opc.a(ins);
             const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
             const callee: [*]Value = c.bp + opc.a(ins);
-            const flags: object.Proto.CallFlags = if (callee[0].tag == .closure) callee[0].as(Closure).proto.call else .{};
-            if (flags.plain) {
-                const cl = callee[0].as(Closure);
-                c = try enterPlain(l, cl, flags.closes, callee, func, nargs, want);
-                pc = 0;
-                if (hooked and l.hook_mask & Thread.hook_call != 0) {
-                    try callHook(l, "call", null);
-                    c.refresh(l, mode);
-                }
-                try tierLoop(l, &c, &pc, &budget);
-                continue :sw try fetch(l, &c, &pc, &ins, hooked);
-            }
             // The common call of a builtin pushes no frame and touches
             // neither the frame state nor the hooks.
-            if (callee[0].tag == .native and callLeaf(l, callee[0].as(state.Native), func, nargs, want, c.fr.base + c.cl().proto.max_stack))
+            if (callee[0].tag == .native and callLeaf(l, &c, callee[0].as(state.Native), callee, func, nargs, want))
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             if (nb != 0) l.top = func + nb;
             const kind: CallKind = if (callee[0].tag == .native) blk: {
@@ -1085,6 +1130,13 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         inline .ret0, .ret1 => |o| {
             const n: u32 = if (o == .ret1) 1 else 0;
+            // The frame that the `call` instruction pushed for a function
+            // that closes nothing returns on the shortest path.
+            if (!hooked and l.hook_mask == 0 and c.fr.flagsWord() == Frame.plain_flags) {
+                c = fast.finishPlain(l, c, c.bp + opc.a(ins), n);
+                pc = c.fr.pc;
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
             const first = c.fr.base + opc.a(ins);
             if (!hooked and leanReturn(l, c, stop)) {
                 c = fast.finishLean(l, c, first, n);
@@ -1110,15 +1162,8 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .forloop => {
             const r = c.bp + opc.a(ins);
             if (r[0].tag == .integer) {
-                // R[r+1] holds the remaining iteration count.
-                const count: u64 = @bitCast(r[1].asInt());
-                if (count > 0) {
-                    const idx = r[0].asInt() +% r[2].asInt();
-                    r[1] = Value.int(@bitCast(count - 1));
-                    r[0] = Value.int(idx);
-                    r[3] = Value.int(idx);
-                    pc -= opc.bx(ins);
-                }
+                pc -= 1;
+                fast.forInt(c.bp, ins, &pc);
             } else if (r[0].tag == .float) {
                 const step = r[2].asFloat();
                 const limit = r[1].asFloat();
@@ -1267,7 +1312,9 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .close => {
             const level = c.fr.base + opc.a(ins);
-            closeUpvals(l, level);
+            if (l.open_upvals) |u| {
+                if (u.level >= level) closeUpvals(l, level);
+            }
             if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= level) {
                 c.fr.pc = pc;
                 l.meta_finish = .{ .redo = false };
@@ -1363,25 +1410,27 @@ noinline fn growFrames(l: *Thread) Error!void {
     l.frames.ensureUnusedCapacity(l.g.gpa, 1) catch return l.raiseMem();
 }
 
-/// Runs the leaf of a native called with its `nargs` arguments above
-/// `func`, when it has one, and returns true when the leaf ran the call.
-/// The result goes to `func`, adjusted to `want`, and a fixed result
-/// count sets the stack top to `frame_top`, the register window of the
-/// caller.
-pub inline fn callLeaf(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32, frame_top: u32) bool {
+/// Runs the leaf of a native that the running frame `c` calls, when it
+/// has one, and returns true when the leaf ran the call. `slot` is the
+/// stack slot of the native, whose index is `func`, and its `nargs`
+/// arguments follow it. The result goes to `slot`, adjusted to `want`,
+/// and a fixed result count sets the stack top back to the end of the
+/// registers of the caller. That end is read after the leaf returns, so
+/// that nothing waits for it across the call.
+pub inline fn callLeaf(l: *Thread, c: *const Ctx, nat: *state.Native, slot: [*]Value, func: u32, nargs: u32, want: i32) bool {
     const leaf = nat.leaf orelse return false;
     // The stack top covers the arguments, which keeps them alive if the
     // leaf allocates.
     l.top = func + 1 + nargs;
-    const r = leaf(l, l.stack.ptr + func + 1, nargs);
+    const r = leaf(l, slot + 1, nargs);
     if (r.tag == state.leaf_miss.tag) return false;
-    l.stack[func] = r;
+    slot[0] = r;
     if (want < 0) {
         l.top = func + 1;
     } else {
         var i: u32 = 1;
-        while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[func + i] = .nil;
-        l.top = frame_top;
+        while (i < @as(u32, @intCast(want))) : (i += 1) slot[i] = .nil;
+        l.top = c.fr.base + c.cl().proto.max_stack;
     }
     return true;
 }
@@ -1438,32 +1487,48 @@ pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i3
 /// Pushes the frame of a plain call that the `call` instruction makes to
 /// `cl`, a Lus function with fixed parameters, and returns the frame
 /// state of the callee. `slot` is the stack slot of the callee, whose
-/// index is `func`, and its `nargs` arguments follow it. `closes` says
-/// whether a frame of the function can have something to close, which
-/// the frame records for its return. Everything the
+/// index is `func`, and its `nargs` arguments follow it. `flags` is the
+/// flags word of the frame (`Proto.CallFlags.frameFlags`), which says whether a
+/// frame of the function can have something to close. `cur` is the
+/// running frame. Everything the
 /// push needs is read once into locals, so that the stores into the stack
 /// and the frame list force no second read.
-inline fn enterPlain(l: *Thread, cl: *Closure, closes: bool, slot: [*]Value, func: u32, nargs: u32, want: i32) Error!Ctx {
+inline fn enterPlain(l: *Thread, cur: *Frame, cl: *Closure, flags: u64, slot: [*]Value, func: u32, nargs: u32, want: i32) Error!Ctx {
     const p = cl.proto;
     const nregs: u32 = p.max_stack;
     const base = func + 1;
     const top = base + nregs;
     var regs = slot + 1;
     if (@as(usize, top) + nargs + 8 > l.stack.len) {
+        @branchHint(.unlikely);
         l.top = base + nargs;
         try l.ensure(@as(usize, nregs) + nargs + 8);
         regs = l.stack.ptr + base;
     }
-    var fi = l.frames.items.len;
+    // The new frame follows the running one, which is the top frame.
+    // Its index comes from its address, so that the frame count a call
+    // stores owes nothing to the count the last call or return stored:
+    // reading that back would chain every call and return to the one
+    // before it through memory.
+    var fr: *Frame = &(@as([*]Frame, @ptrCast(cur)) + 1)[0];
+    const fi = (@intFromPtr(fr) - @intFromPtr(l.frames.items.ptr)) / @sizeOf(Frame);
     if (fi == l.frames.capacity) {
+        @branchHint(.unlikely);
         try growFrames(l);
-        fi = l.frames.items.len;
+        fr = &l.frames.items.ptr[fi];
     }
-    // Missing parameters and the registers above the parameters start nil.
-    var r = regs + @min(nargs, @as(u32, p.num_params));
-    const end = regs + nregs;
-    while (r != end) : (r += 1) r[0] = .nil;
-    const fr: *Frame = &l.frames.items.ptr[fi];
+    // Missing parameters start nil. The registers above the parameters
+    // keep what the stack holds there: the compiler writes a register
+    // before it reads it, and the collector clears the stack above the
+    // top at the end of every mark phase (`Thread.traverse`), so what a
+    // frame finds in them is a value that is still alive.
+    const np: u32 = p.num_params;
+    if (nargs < np) {
+        @branchHint(.unlikely);
+        var r = regs + nargs;
+        const end = regs + np;
+        while (r != end) : (r += 1) r[0] = .nil;
+    }
     // The fields a plain frame reads, written as five stores. The
     // address a lean frame continues at stays as it is, because only a
     // lean frame reads it.
@@ -1474,7 +1539,7 @@ inline fn enterPlain(l: *Thread, cl: *Closure, closes: bool, slot: [*]Value, fun
     fr.ret = func;
     fr.want = want;
     fr.pcWord().* = 0;
-    fr.flagsWordPtr().* = if (closes) Frame.plain_flags | Frame.closes_bit else Frame.plain_flags;
+    fr.flagsWordPtr().* = flags;
     l.frames.items.len = fi + 1;
     l.top = top;
     return .{ .fi = fi, .fr = fr, .code = p.code.ptr, .bp = regs };
@@ -1649,9 +1714,17 @@ pub fn makeClosure(l: *Thread, p: *Proto, parent: *Closure, base: u32) Error!*Cl
 // ---------------------------------------------------------------------
 // Instruction helpers
 
-fn arithOf(comptime o: Op) ops.ArithOp {
+/// True when the instantiation `mode` follows the fused opcode `o` with
+/// the next instruction without a dispatch. A step runs one instruction
+/// and the hooked loop reports each one, so both treat a fused opcode
+/// as its first instruction.
+fn fuses(comptime mode: Mode, comptime o: opc.Code) bool {
+    return (mode == .fast or mode == .warm) and opc.fusedWith(o) != null;
+}
+
+fn arithOf(comptime o: opc.Code) ops.ArithOp {
     return switch (o) {
-        .add, .addk => .add,
+        .add, .addk, .add_forloop => .add,
         .sub, .subk => .sub,
         .mul, .mulk => .mul,
         .div, .divk => .div,
@@ -1795,9 +1868,18 @@ pub const fast = struct {
                 return true;
             }
         }
-        const v = lookupIc(tab, key.as(String), &ic.own);
-        if (!v.isNil() or noIndexMeta(tab)) {
-            out.* = v;
+        // The value is copied from its node, or nil is stored, so that
+        // no copy of it passes through memory.
+        if (table.findStr(tab, key.as(String))) |idx| {
+            if (idx < object.IcEntry.none) ic.own = @intCast(idx);
+            const n = &tab.hash[idx];
+            if (n.val.tag != .nil) {
+                out.* = n.val;
+                return true;
+            }
+        }
+        if (noIndexMeta(tab)) {
+            out.* = .nil;
             return true;
         }
         if (tab.metatable) |mt| {
@@ -1816,7 +1898,7 @@ pub const fast = struct {
         if (i < tab.hash.len and tab.hash[i].key.payload == key.payload and tab.hash[i].key.tag == .string) {
             tab.hash[i].val = v.*;
             if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
-        } else if (table.storeStr(tab, key.*, v.*)) |idx| {
+        } else if (table.storeStr(tab, key, v)) |idx| {
             if (idx < object.IcEntry.none) ic.own = @intCast(idx);
             // The store may have added the key itself.
             gc.barrierTable(l.g, tab, key.*, v.*);
@@ -1828,9 +1910,9 @@ pub const fast = struct {
     /// out = tab[i] for an integer key inside the array part.
     pub inline fn getArray(tab: *Table, i: i64, out: *Value) bool {
         if (i >= 1 and i <= tab.asize) {
-            const v = table.arrayGet(tab, @intCast(i - 1));
-            if (!v.isNil() or noIndexMeta(tab)) {
-                out.* = v;
+            if (table.arrayLoad(tab, @intCast(i - 1), out)) return true;
+            if (noIndexMeta(tab)) {
+                out.* = .nil;
                 return true;
             }
         }
@@ -1842,7 +1924,7 @@ pub const fast = struct {
     /// which boxes the part.
     pub inline fn setArray(l: *Thread, tab: *Table, i: i64, v: *const Value) bool {
         if (i >= 1 and i <= tab.asize and !tab.readonly and noNewindexMeta(tab) and
-            table.arrayStoreFast(tab, @intCast(i - 1), v.*))
+            table.arrayStoreAt(tab, @intCast(i - 1), v))
         {
             // An integer key never names a metamethod, so the absence
             // cache stays valid.
@@ -1864,6 +1946,25 @@ pub const fast = struct {
         return false;
     }
 
+    /// Runs the `forloop` instruction `ins`, which is at `pc`, when its
+    /// loop counts in integers, and moves `pc` to where the loop
+    /// continues. A loop of another kind leaves `pc` at the instruction.
+    /// The fused instructions that end in a `forloop` run it this way
+    /// too.
+    pub inline fn forInt(bp: [*]Value, ins: u32, pc: *u32) void {
+        const r = bp + opc.a(ins);
+        if (r[0].tag != .integer) return;
+        // R[r+1] holds the remaining iteration count.
+        const count: u64 = @bitCast(r[1].asInt());
+        if (count > 0) {
+            const idx = r[0].asInt() +% r[2].asInt();
+            r[1] = Value.int(@bitCast(count - 1));
+            r[0] = Value.int(idx);
+            r[3] = Value.int(idx);
+            pc.* = pc.* + 1 - opc.bx(ins);
+        } else pc.* += 1;
+    }
+
     /// out = #x for a string or a table without a metatable.
     pub inline fn length(x: *const Value, out: *Value) bool {
         if (x.tag == .table and x.as(Table).metatable == null) {
@@ -1872,6 +1973,32 @@ pub const fast = struct {
             out.* = Value.int(x.as(String).chars);
         } else return false;
         return true;
+    }
+
+    /// Returns `n` values (zero or one) at `src` from a frame whose flags
+    /// word is `Frame.plain_flags`, which only `enterPlain` writes. Such
+    /// a frame returns into the slot of the function it ran, which sits
+    /// just below its registers, so the results move without an index.
+    /// The result is the caller's frame state.
+    pub inline fn finishPlain(l: *Thread, c: Ctx, src: [*]const Value, n: u32) Ctx {
+        const fr = c.fr;
+        const dst = c.bp - 1;
+        const want = fr.want;
+        if (n == 1) dst[0] = src[0];
+        if (want > @as(i32, @intCast(n))) {
+            // The caller wants more values than the function returns.
+            @branchHint(.unlikely);
+            var i: u32 = n;
+            while (i < @as(u32, @intCast(want))) : (i += 1) dst[i] = .nil;
+        }
+        // The frame count becomes the index of the frame that returns,
+        // found from its address. See `enterPlain`.
+        l.frames.items.len = (@intFromPtr(fr) - @intFromPtr(l.frames.items.ptr)) / @sizeOf(Frame);
+        const caller: *Frame = &(@as([*]Frame, @ptrCast(fr)) - 1)[0];
+        const p = caller.closure.?.proto;
+        const base = caller.base;
+        l.top = if (want < 0) fr.func + n else base + p.max_stack;
+        return .{ .fi = c.fi - 1, .fr = caller, .code = p.code.ptr, .bp = l.stack.ptr + base };
     }
 
     /// Returns `n` values (zero or one) at `first` from a frame that
@@ -1889,7 +2016,9 @@ pub const fast = struct {
             var i: u32 = n;
             while (i < @as(u32, @intCast(want))) : (i += 1) stack[dst + i] = .nil;
         }
-        l.frames.items.len -= 1;
+        // The frame count becomes the index of the frame that returns,
+        // found from its address. See `enterPlain`.
+        l.frames.items.len = (@intFromPtr(fr) - @intFromPtr(l.frames.items.ptr)) / @sizeOf(Frame);
         const caller: *Frame = &(@as([*]Frame, @ptrCast(fr)) - 1)[0];
         const p = caller.closure.?.proto;
         const base = caller.base;

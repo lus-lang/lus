@@ -182,7 +182,7 @@ fn setmetatable(l: *Thread) Error!u32 {
 /// The common call of `setmetatable` (`state.LeafFn`): a table without a
 /// metatable gets a metatable that is known to lack `__gc`, which needs
 /// no check beyond the types.
-fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) Value {
+fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     if (nargs != 2) return state.leaf_miss;
     const tv = args[0];
     const mv = args[1];

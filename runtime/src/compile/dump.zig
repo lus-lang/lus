@@ -26,7 +26,7 @@ const Allocator = std.mem.Allocator;
 pub const signature = "\x1bLus";
 /// Bumped whenever the instruction set changes. Version 2 added the
 /// immediate comparisons.
-const format_version: u8 = 2;
+const format_version: u8 = 3;
 
 const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration };
 
@@ -359,12 +359,17 @@ fn verify(p: *Proto) error{Malformed}!void {
     if (p.code.len == 0) return error.Malformed;
     if (p.lines.len != 0 and p.lines.len != p.code.len) return error.Malformed;
     for (p.code) |ins| {
-        const raw: u8 = @truncate(ins);
-        if (std.enums.fromInt(opc.Op, raw) == null) return error.Malformed;
+        if (!opc.isCode(@truncate(ins))) return error.Malformed;
         switch (opc.op(ins)) {
             .loadk => if (opc.bx(ins) >= p.constants.len) return error.Malformed,
             .closure => if (opc.bx(ins) >= p.protos.len) return error.Malformed,
             else => {},
+        }
+    }
+    // A fused instruction is followed by its second instruction.
+    for (p.code, 0..) |ins, i| {
+        if (opc.fusedWith(opc.code(ins))) |second| {
+            if (i + 1 >= p.code.len or opc.code(p.code[i + 1]) != second) return error.Malformed;
         }
     }
     for (p.handlers) |h| {

@@ -75,9 +75,10 @@ pub const NativeFn = *const fn (l: *Thread) Error!u32;
 /// native. It never raises an error, never calls back into Lus code, and
 /// never yields: every such case returns `leaf_miss`, and the full native
 /// then runs the call from the start. The full native begins with the
-/// same fast part, so both paths share one implementation. The result
-/// comes back in two registers.
-pub const LeafFn = *const fn (l: *Thread, args: [*]const Value, nargs: u32) Value;
+/// same fast part, so both paths share one implementation. A leaf has
+/// the C calling convention, which returns the two words of the result
+/// in two registers.
+pub const LeafFn = *const fn (l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value;
 
 /// What a leaf returns when the full native must run the call. Its tag
 /// belongs to internal objects and never appears in a value.
@@ -445,6 +446,9 @@ pub const Frame = extern struct {
     pub const Word = *align(@alignOf(Frame)) u64;
 
     comptime {
+        const Call = object.Proto.CallFlags;
+        std.debug.assert(plain_flags == (Call{ .plain = true, .closes = false }).frameFlags());
+        std.debug.assert(plain_flags | closes_bit == (Call{ .plain = true, .closes = true }).frameFlags());
         std.debug.assert(@offsetOf(Frame, "boundary") % @alignOf(Frame) == 0);
         std.debug.assert(@offsetOf(Frame, "pc") % @alignOf(Frame) == 0);
     }

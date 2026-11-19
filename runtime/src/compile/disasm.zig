@@ -20,7 +20,7 @@ pub fn dump(gpa: std.mem.Allocator, out: *std.ArrayList(u8), p: *object.Proto, d
     });
     for (p.code, 0..) |ins, i| {
         const o = opc.op(ins);
-        try out.print(gpa, "  {d:>4} [{d:>3}] {s:<12}", .{ i, if (i < p.lines.len) p.lines[i] else 0, @tagName(o) });
+        try out.print(gpa, "  {d:>4} [{d:>3}] {s:<12}", .{ i, if (i < p.lines.len) p.lines[i] else 0, @tagName(opc.code(ins)) });
         switch (o) {
             .loadk, .closure, .forprep, .forloop, .tforprep, .tforloop => try out.print(gpa, "{d} {d}", .{ opc.a(ins), opc.bx(ins) }),
             .loadi, .loadf => try out.print(gpa, "{d} {d}", .{ opc.a(ins), opc.sbx(ins) }),

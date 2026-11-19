@@ -235,9 +235,16 @@ pub fn main(init: std.process.Init) !u8 {
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
         }
-        if (std.mem.eql(u8, cmd, "run")) return runMain(init, args, 2, null);
+        if (std.mem.eql(u8, cmd, "run")) return profiled(runMain(init, args, 2, null));
     }
-    return runMain(init, args, 1, null);
+    return profiled(runMain(init, args, 1, null));
+}
+
+/// Prints the opcode sequences a run counted, in a build that counts
+/// them (`-Dop-profile=true`), and passes the result of the run on.
+fn profiled(result: anyerror!u8) anyerror!u8 {
+    lus.vm.opprofile.dump();
+    return result;
 }
 
 /// Runs the entry module of a bundle. The options preserved at build time

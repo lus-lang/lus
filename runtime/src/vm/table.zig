@@ -94,6 +94,23 @@ pub inline fn arrayGet(t: *const Table, idx: usize) Value {
     return unboxWord(t.kind, t.array_ptr[idx]);
 }
 
+/// Copies the value in the zero-based array slot `idx`, which is below
+/// `asize`, to `out` and returns true, or returns false when the slot
+/// holds nil. The value goes from the array part to `out` directly,
+/// which keeps it in registers where `arrayGet` builds it in memory.
+pub inline fn arrayLoad(t: *const Table, idx: usize, out: *Value) bool {
+    if (t.kind == .boxed) {
+        const p = &t.values()[idx];
+        if (p.tag == .nil) return false;
+        out.* = p.*;
+        return true;
+    }
+    const w = t.array_ptr[idx];
+    if (w == hole) return false;
+    out.* = Value.make(w, @fromBackingInt(@intCast(@backingInt(t.kind))));
+    return true;
+}
+
 /// The value an unboxed slot of kind `kind` holding `w` stands for.
 inline fn unboxWord(kind: ArrayKind, w: u64) Value {
     if (w == hole) return .nil;
@@ -121,18 +138,28 @@ pub inline fn joinKind(k: ArrayKind, v: Value) ArrayKind {
 /// number. Returns false, leaving the table unchanged, when the part must
 /// become boxed first. The caller runs the write barrier.
 pub inline fn arrayStoreFast(t: *Table, idx: usize, v: Value) bool {
+    return arrayStoreAt(t, idx, &v);
+}
+
+/// `arrayStoreFast` for a value read in place, which copies it to a
+/// boxed part without a temporary.
+pub inline fn arrayStoreAt(t: *Table, idx: usize, v: *const Value) bool {
     if (t.kind == .boxed) {
-        t.values()[idx] = v;
+        t.values()[idx] = v.*;
         return true;
     }
-    if (v.tag == .nil) {
+    const tag = v.tag;
+    const w = v.payload;
+    if (tag == .nil) {
         t.array_ptr[idx] = hole;
         return true;
     }
-    const k = joinKind(t.kind, v);
-    if (k == .boxed) return false;
-    t.kind = k;
-    t.array_ptr[idx] = v.payload;
+    // What `joinKind` decides, on the two words of the value.
+    if ((tag != .integer and tag != .float) or w == hole) return false;
+    const vk: ArrayKind = @fromBackingInt(@intCast(@backingInt(tag)));
+    if (t.kind != .none and t.kind != vk) return false;
+    t.kind = vk;
+    t.array_ptr[idx] = w;
     return true;
 }
 
@@ -272,7 +299,7 @@ pub const full_max = 4;
 /// part has room. Returns the node index, or null when the store needs
 /// the general path, leaving the table unchanged. The caller resets the
 /// metamethod cache and runs the write barrier.
-pub inline fn storeStr(t: *Table, key: Value, val: Value) ?usize {
+pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
     if (t.hash.len == 0) return null;
     const s = key.as(object.String);
     // A full part has no empty node to end the probe, and the general
@@ -288,13 +315,13 @@ pub inline fn storeStr(t: *Table, key: Value, val: Value) ?usize {
         } else if (n.key.tag == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
-            if (val.isNil() or !hashRoom(t.hash_used, t.hash.len)) return null;
-            n.key = key;
+            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash.len)) return null;
+            n.key = key.*;
             t.hash_used += 1;
             break;
         }
     }
-    t.hash[i].val = val;
+    t.hash[i].val = val.*;
     return i;
 }
 

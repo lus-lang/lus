@@ -244,7 +244,7 @@ fn sub(l: *Thread) Error!u32 {
 }
 
 /// `string.sub` with integer positions (`state.LeafFn`), the common call.
-fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) Value {
+fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     if (nargs < 2 or nargs > 3) return state.leaf_miss;
     if (args[0].tag != .string or args[1].tag != .integer) return state.leaf_miss;
     var j: i64 = -1;

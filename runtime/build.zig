@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
         .workers = b.option(bool, "workers", "Include the worker library (default: true, false on WebAssembly)"),
         .archive = b.option(bool, "archive", "Include vector.archive compression (default: true)"),
         .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
+        .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -218,6 +219,7 @@ const Features = struct {
     workers: ?bool = null,
     archive: ?bool = null,
     jit: bool = true,
+    op_profile: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -241,6 +243,7 @@ const Features = struct {
         options.addOption(bool, "workers", r.workers);
         options.addOption(bool, "archive", r.archive);
         options.addOption(bool, "jit", f.jit);
+        options.addOption(bool, "op_profile", f.op_profile);
         return options;
     }
 };

@@ -22,6 +22,7 @@ pub const vm = struct {
     pub const numeric = @import("vm/numeric.zig");
     pub const ops = @import("vm/ops.zig");
     pub const interp = @import("vm/interp.zig");
+    pub const opprofile = @import("vm/opprofile.zig");
     pub const debug = @import("vm/debug.zig");
     pub const pledge = @import("vm/pledge.zig");
 };

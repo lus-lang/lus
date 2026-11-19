@@ -368,17 +368,29 @@ pub const Proto = struct {
     };
 
     /// How the interpreter calls the function and returns from it. The
-    /// two flags share a byte, so that a call reads both at once.
-    pub const CallFlags = packed struct(u8) {
+    /// two flags share a word, so that a call reads both at once, and
+    /// they sit one byte apart, as the flags `plain` and `closes` of a
+    /// frame do. The word shifted left by `frame_shift` is therefore the
+    /// flags word of the frame that a plain call pushes, which
+    /// `state.Frame` checks against its layout.
+    pub const CallFlags = packed struct(u16) {
         /// The function has fixed parameters and no native code, so the
         /// interpreter enters it on its shortest path. The default
         /// sends every call through the general path, which is always
         /// right.
         plain: bool = false,
+        _pad: u7 = 0,
         /// A frame of the function can own an open upvalue or a
         /// to-be-closed variable, which its return then has to close.
         closes: bool = true,
-        _pad: u6 = 0,
+        _pad2: u7 = 0,
+
+        pub const frame_shift = 48;
+
+        /// The flags word of the frame of a plain call.
+        pub inline fn frameFlags(f: CallFlags) u64 {
+            return @as(u64, @as(u16, @bitCast(f))) << frame_shift;
+        }
     };
 
     /// Finds whether a frame of the function can own an open upvalue or

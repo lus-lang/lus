@@ -275,6 +275,7 @@ fn closeFunc(c: *Compiler, fs: *FuncState) Error!*Proto {
     p.* = .{ .hdr = p.hdr };
     p.code = try Proto.allocCode(g.gpa, fs.code.items.len);
     @memcpy(p.code, fs.code.items);
+    opc.fuse(p.code);
     try p.initIc(g.gpa);
     p.lines = try g.gpa.dupe(u32, fs.lines.items);
     p.constants = try g.gpa.dupe(Value, fs.constants.items);
@@ -1046,10 +1047,10 @@ fn posfix(fs: *FuncState, op: ast.BinOp, e1: *ExpDesc, e2: *ExpDesc, line: u32) 
 
 fn codeArith(fs: *FuncState, aop: vm.ops.ArithOp, e1: *ExpDesc, e2: *ExpDesc) Error!void {
     // Integer immediate add.
-    if (aop == .add and e2.kind == .kint and !e2.hasJumps() and e2.ival >= -127 and e2.ival <= 128) {
+    if (aop == .add and e2.kind == .kint and !e2.hasJumps() and e2.ival >= opc.min_sc and e2.ival <= opc.max_sc) {
         const r1 = try exp2anyreg(fs, e1);
         freeExp(fs, e1);
-        e1.info = try emitABC(fs, .addi, 0, r1, @intCast(e2.ival + opc.offset_sc));
+        e1.info = try emitABC(fs, .addi, 0, r1, opc.signedByte(e2.ival));
         e1.kind = .reloc;
         return;
     }
@@ -1100,14 +1101,14 @@ fn codeOrder(fs: *FuncState, o: Op, e1: *ExpDesc, e2: *ExpDesc) Error!void {
     if (isSmallInt(e2)) {
         const r1 = try exp2anyreg(fs, e1);
         freeExp(fs, e1);
-        e1.info = try condJump(fs, if (o == .lt) .lti else .lei, r1, @intCast(e2.ival + opc.offset_sc), 1);
+        e1.info = try condJump(fs, if (o == .lt) .lti else .lei, r1, opc.signedByte(e2.ival), 1);
         e1.kind = .jmp;
         return;
     }
     if (isSmallInt(e1)) {
         const r2 = try exp2anyreg(fs, e2);
         freeExp(fs, e2);
-        e1.info = try condJump(fs, if (o == .lt) .gti else .gei, r2, @intCast(e1.ival + opc.offset_sc), 1);
+        e1.info = try condJump(fs, if (o == .lt) .gti else .gei, r2, opc.signedByte(e1.ival), 1);
         e1.kind = .jmp;
         return;
     }
@@ -1120,7 +1121,7 @@ fn codeOrder(fs: *FuncState, o: Op, e1: *ExpDesc, e2: *ExpDesc) Error!void {
 
 /// An integer constant that fits the signed immediate of a comparison.
 fn isSmallInt(e: *const ExpDesc) bool {
-    return e.kind == .kint and !e.hasJumps() and e.ival >= -127 and e.ival <= 128;
+    return e.kind == .kint and !e.hasJumps() and e.ival >= opc.min_sc and e.ival <= opc.max_sc;
 }
 
 fn prefix(fs: *FuncState, op: ast.UnOp, e: *ExpDesc, line: u32) Error!void {
