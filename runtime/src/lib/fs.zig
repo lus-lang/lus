@@ -233,7 +233,7 @@ fn move(l: *Thread) Error!u32 {
 fn remove(l: *Thread) Error!u32 {
     const path = try aux.checkBytes(l, 1);
     const recursive = l.arg(2).truthy();
-    try pledge.require(l, "fs:write", path);
+    try pledge.requireNoFollow(l, "fs:write", path);
     const io = l.g.io;
     const cwd = Dir.cwd();
     const st = cwd.statFile(io, path, .{ .follow_symlinks = false }) catch |e| switch (e) {

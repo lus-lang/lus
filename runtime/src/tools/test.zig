@@ -386,8 +386,10 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
         reportFileError(l);
         return 2;
     }
+    // The registry of tests stays on the stack so it remains rooted while
+    // the tests run and allocate.
     const registry = l.stack[base];
-    l.top = base;
+    l.top = base + 1;
     var failed = false;
     for (tests.items, 0..) |name, ti| {
         if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
@@ -607,7 +609,7 @@ const helpers_src =
     \\    local ok, err = catchfn(f, ...)
     \\    if ok then error("expected an error, but the call succeeded", 2) end
     \\    if pattern ~= nil and not tostring(err):find(pattern) then
-    \\        error(`expected an error matching '{pattern}', got: {tostring(err)}`, 2)
+    \\        error(`expected an error matching '$(pattern)', got: $(tostring(err))`, 2)
     \\    end
     \\    return err
     \\end

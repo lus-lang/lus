@@ -290,6 +290,21 @@ pub fn canonicalize(g: *Global, path: []const u8) ?[]u8 {
     return std.fs.path.join(gpa, &.{ rp, base }) catch null;
 }
 
+/// Canonical path of a link itself: its parent resolves, its final
+/// component does not, so an operation on a symbolic link is checked
+/// against the link's own location rather than its target.
+pub fn canonicalizeLink(g: *Global, path: []const u8) ?[]u8 {
+    const gpa = g.gpa;
+    const trimmed = std.mem.trimEnd(u8, path, "/");
+    const slash = std.mem.lastIndexOfScalar(u8, trimmed, '/');
+    const parent = if (slash) |sl| (if (sl == 0) "/" else trimmed[0..sl]) else ".";
+    const base = if (slash) |sl| trimmed[sl + 1 ..] else trimmed;
+    if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return canonicalize(g, path);
+    const rp = std.Io.Dir.cwd().realPathFileAlloc(g.io, parent, gpa) catch return null;
+    defer gpa.free(rp);
+    return std.fs.path.join(gpa, &.{ rp, base }) catch null;
+}
+
 /// Canonicalizes a granted path pattern. The directory part before the
 /// first wildcard (or the whole path without one) resolves through its
 /// deepest existing ancestor, so a grant made before its directory exists
@@ -336,6 +351,10 @@ fn split(spec: []const u8) struct { []const u8, []const u8 } {
 /// Whether set `s` allows `perm` (e.g. "fs:read") for `requested` (or for
 /// any value when null).
 fn setAllows(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8) bool {
+    return setAllowsMode(g, s, perm, requested, true);
+}
+
+fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, follow: bool) bool {
     const parts = split(perm);
     const base = parts[0];
     const cap = findCap(g, base) orelse return false;
@@ -344,7 +363,7 @@ fn setAllows(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8) bool
     var canon: ?[]u8 = null;
     defer if (canon) |c| g.gpa.free(c);
     if (cap.kind == .path) {
-        if (requested) |r| canon = canonicalize(g, r);
+        if (requested) |r| canon = if (follow) canonicalize(g, r) else canonicalizeLink(g, r);
     }
     const candidates = [_][]const u8{ perm, base };
     for (candidates, 0..) |name, ci| {
@@ -368,6 +387,13 @@ fn setAllows(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8) bool
 pub fn allowed(l: *Thread, perm: []const u8, requested: ?[]const u8) bool {
     const s = setOf(l) orelse return false;
     return setAllows(l.g, s, perm, requested);
+}
+
+/// Raising check for operations that act on a path itself and never
+/// follow a final symbolic link (removing, renaming, reading a link).
+pub fn requireNoFollow(l: *Thread, perm: []const u8, requested: []const u8) Error!void {
+    if (setOf(l)) |s| if (setAllowsMode(l.g, s, perm, requested, false)) return;
+    return l.raiseFmt("permission \"{s}\" denied for '{s}'", .{ perm, requested });
 }
 
 /// Raising check with the standard message.

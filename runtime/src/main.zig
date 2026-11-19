@@ -6,6 +6,7 @@
 //! Commands: run (default), test, fmt, check, ast, doc, debug, build.
 
 const std = @import("std");
+const pledge = @import("lus").vm.pledge;
 const lus = @import("lus");
 const api = lus.api;
 const out = lus.lib.out;
@@ -317,6 +318,12 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         if (!runChunk(l, m.data, m.chunkname, args[cli.script_index + 1 ..])) return 1;
     } else if (cli.script) |path| {
         if (cli.dis) return disassemble(l, path);
+        // When the host limits file reads with -P, the entry script itself
+        // must fall within the grant.
+        if (limitsFileReads(cli.pledges.items) and !pledge.allowed(l, "fs:read", path)) {
+            std.debug.print("lus: permission \"fs:read\" denied for '{s}'\n", .{path});
+            return 1;
+        }
         const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
             std.debug.print("lus: cannot open {s} ({s})\n", .{ path, @errorName(e) });
             return 1;
@@ -542,4 +549,13 @@ fn repl(l: *Thread, io: std.Io) !void {
         l.top = base;
         out.flushAll(l.g);
     }
+}
+
+/// True when the -P grants mention the file system, which makes them the
+/// ceiling for reading the entry script.
+fn limitsFileReads(specs: []const []const u8) bool {
+    for (specs) |spec| {
+        if (std.mem.startsWith(u8, spec, "fs") and (spec.len == 2 or spec[2] == ':' or spec[2] == '=')) return true;
+    }
+    return false;
 }
