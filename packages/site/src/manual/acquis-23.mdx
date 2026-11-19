@@ -55,12 +55,12 @@ assert(ok and x == 10)
 
 ## Use with group statements
 
-Do expressions can be used with group local variables to initialize them.
+A group's fields are fixed when the code is compiled, so a group is initialized with a constructor or another group. Do expressions initialize the individual fields.
 
 ```lus
-local x <group> = do
-    local y <group> = { a = 1, b = 2 }
-    provide y
-end
+local x <group> = {
+    a = do provide 1 end,
+    b = do local t = 1 provide t + 1 end,
+}
 assert(x.a == 1 and x.b == 2)
 ```
