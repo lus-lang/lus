@@ -383,14 +383,21 @@ const Writer = struct {
     /// dropped (filter returned nil).
     fn transform(w: *Writer, key: Value, v: Value) Error!?Value {
         var cur = v;
-        if (cur.tag == .table) {
-            const tm = w.l.metamethod(cur, .index);
-            _ = tm;
-            if (w.l.metatable(cur)) |mt| {
-                const k = state.newStringKnown(w.l.g, "__json", true, 6) catch return w.l.raiseMem();
-                const j = table.getStr(mt, k);
-                if (!j.isNil()) cur = try ops.call1(w.l, j, &.{cur});
-            }
+        // A `__json` result that itself has `__json` is transformed again,
+        // so replacements chain. Each step counts against the nesting
+        // limit, and a table that returns itself is a cycle.
+        var steps: usize = 0;
+        while (cur.tag == .table) {
+            const mt = w.l.metatable(cur) orelse break;
+            const k = state.newStringKnown(w.l.g, "__json", true, 6) catch return w.l.raiseMem();
+            const j = table.getStr(mt, k);
+            if (j.isNil()) break;
+            if (w.path.contains(@intFromPtr(cur.as(Table)))) return w.l.raiseFmt("circular reference detected in table", .{});
+            steps += 1;
+            if (w.depth + steps > max_depth) return w.l.raiseFmt("maximum nesting depth exceeded", .{});
+            const r = try ops.call1(w.l, j, &.{cur});
+            if (r.tag == .table and r.as(Table) == cur.as(Table)) return w.l.raiseFmt("circular reference detected in table", .{});
+            cur = r;
         }
         if (!w.filter.isNil()) {
             const r = try ops.call1(w.l, w.filter, &.{ key, cur });
@@ -417,11 +424,17 @@ const Writer = struct {
         const key = @intFromPtr(t);
         if (w.path.contains(key)) return l.raiseFmt("circular reference detected in table", .{});
         if (w.depth >= max_depth) return l.raiseFmt("maximum nesting depth exceeded", .{});
+        // The writer recurses natively, so each level is charged against
+        // the interpreter's native call budget and deep nesting raises a
+        // catchable C stack overflow.
+        if (l.g.native_depth >= Thread.max_ncalls) return l.raiseFmt("C stack overflow", .{});
         w.path.put(l.g.gpa, key, {}) catch return l.raiseMem();
         w.depth += 1;
+        l.g.native_depth += 1;
         defer {
             _ = w.path.remove(key);
             w.depth -= 1;
+            l.g.native_depth -= 1;
         }
         // Array detection: the key set is exactly 1..n.
         var count: i64 = 0;
