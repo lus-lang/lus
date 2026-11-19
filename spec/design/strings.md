@@ -33,6 +33,7 @@ Byte level data uses vectors.
 - `vector.fromstring(s)` returns the WTF-8 bytes of a string.
 - `vector.tostring(v [, i [, j [, mode]]])` decodes bytes `i` through `j` into a string. With mode `"strict"`, the default, invalid input raises an error naming the byte offset. With mode `"lossy"` each invalid sequence becomes U+FFFD.
 - `string.pack` returns a vector and `string.unpack` and `string.packsize` read vectors.
+- The `vector.archive` compressors accept a string or a vector and return a vector. The decompressors accept a vector or a string and return a vector, which `vector.tostring` turns back into text.
 - `string.transcode(input, from, to)` converts between encodings. An input or output in a byte encoding such as `"utf-16le"`, `"latin1"`, `"base64"` decoding, or `"hex"` decoding is a vector. An input or output in a text encoding is a string.
 
 ## Input and output boundaries
