@@ -10,8 +10,9 @@
 //!     local function add(a, b) ... end
 //!
 //! `@param NAME TYPE DESCRIPTION` documents a parameter. A `?` after the
-//! name or after the type marks it optional, and `...` names the variable
-//! arguments. `@return TYPE DESCRIPTION` documents one result, in order.
+//! name or after the type marks it optional. `...` documents unnamed
+//! variable arguments, and `...NAME` documents variable arguments that the
+//! declaration names, as in `local function f(...parts)`. `@return TYPE DESCRIPTION` documents one result, in order.
 //! `@since VERSION` and `@stability LEVEL` fill the fields of the same name
 //! in the specification frontmatter. A line indented under an annotation
 //! continues its description. Every other line is free Markdown text.
@@ -217,6 +218,9 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
                     p.name = p.name[0 .. p.name.len - 1];
                     p.optional = true;
                 }
+                // `...name` documents named variable arguments under the
+                // name the declaration gives them.
+                if (p.name.len > 3 and std.mem.startsWith(u8, p.name, "...")) p.name = p.name[3..];
                 if (ty.word.len > 0) {
                     var t = ty.word;
                     if (t.len > 1 and t[t.len - 1] == '?') {
@@ -288,4 +292,17 @@ test "parse doc annotations" {
     try testing.expect(d.params[1].optional);
     try testing.expectEqualStrings("The second addend.", d.params[1].description);
     try testing.expectEqualStrings("number", d.returns[0].type);
+}
+
+test "parse named variable arguments" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const lines = [_][]const u8{
+        "@param ...parts string The strings to join.",
+        "@param ... any The rest.",
+    };
+    const d = try parse(arena_state.allocator(), &lines, 1, 2);
+    try testing.expectEqualStrings("parts", d.params[0].name);
+    try testing.expectEqualStrings("The strings to join.", d.params[0].description);
+    try testing.expectEqualStrings("...", d.params[1].name);
 }

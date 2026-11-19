@@ -1,0 +1,9 @@
+{
+  "name": "rest",
+  "kind": "module",
+  "description": "",
+  "entries": [
+    {"name": "join", "module": "rest", "kind": "function", "params": [{"name": "sep", "type": "string", "description": "The separator."}, {"name": "parts", "type": "string", "rest": true, "description": "The strings to join."}], "vararg": true, "returns": [{"type": "string", "description": "The joined text."}], "line": 5, "description": "Joins strings with a separator."},
+    {"name": "pass", "module": "rest", "kind": "function", "params": [{"name": "...", "type": "any", "optional": true, "description": "The values to pass through."}], "vararg": true, "returns": [{"type": "any", "description": "The same values."}], "line": 12, "description": "Returns its arguments unchanged."}
+  ]
+}

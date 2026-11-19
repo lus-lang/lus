@@ -1,0 +1,14 @@
+--- Joins strings with a separator.
+--- @param sep string The separator.
+--- @param ...parts string The strings to join.
+--- @return string The joined text.
+global function join(sep, ...parts)
+    return sep, parts
+end
+
+--- Returns its arguments unchanged.
+--- @param ... any The values to pass through.
+--- @return any The same values.
+global function pass(...)
+    return ...
+end
