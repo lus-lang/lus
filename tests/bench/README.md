@@ -41,29 +41,30 @@ The table has one column per configuration.
 
 ## Results
 
-Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the merge of the shorter call, return, and table paths of the interpreter, the fused instructions, and the faster forward scans of `string.sub` (`spec/design/interp.md`).
+Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, with parallel marking, shared worker strings, the shorter call, return, and table paths of the interpreter, the fused instructions, and the faster forward scans of `string.sub` all merged.
 
 | benchmark | lus | lus baseline | lus off | luajit -joff | luajit |
 |---|---:|---:|---:|---:|---:|
-| arrays | 0.035 | 0.151 | 0.205 | 0.247 | 0.038 |
-| closures | 0.064 | 0.073 | 0.075 | 0.135 | 0.126 |
-| data | 0.026 | 0.032 | 0.032 | 0.276 | 0.050 |
-| fib | 0.008 | 0.029 | 0.034 | 0.036 | 0.010 |
-| gcpause | 0.391 | 0.396 | 0.392 | 0.451 | 0.413 |
-| interp | 0.914 | 0.906 | 0.898 | 2.011 | 1.285 |
-| loop | 0.057 | 0.144 | 0.213 | 0.250 | 0.091 |
-| messages | 0.171 | 0.179 | 0.178 | - | - |
-| methods | 0.006 | 0.162 | 0.193 | 0.247 | 0.006 |
-| patterns | 0.199 | 0.202 | 0.202 | 0.262 | 0.258 |
-| startup | 0.130 | 0.123 | 0.122 | - | - |
-| strings | 0.146 | 0.141 | 0.139 | 0.252 | 0.209 |
-| tables | 0.102 | 0.099 | 0.099 | 0.162 | 0.122 |
-| unicode | 0.007 | 0.029 | 0.033 | 0.031 | 0.004 |
+| arrays | 0.034 | 0.150 | 0.201 | 0.243 | 0.038 |
+| closures | 0.062 | 0.071 | 0.075 | 0.132 | 0.122 |
+| data | 0.026 | 0.032 | 0.032 | 0.270 | 0.050 |
+| fib | 0.008 | 0.028 | 0.034 | 0.035 | 0.010 |
+| fullgc | 0.051 | 0.051 | 0.051 | 0.313 | 0.315 |
+| gcpause | 0.391 | 0.389 | 0.390 | 0.439 | 0.404 |
+| interp | 0.920 | 0.904 | 0.897 | 2.004 | 1.281 |
+| loop | 0.057 | 0.142 | 0.211 | 0.264 | 0.091 |
+| messages | 0.167 | 0.166 | 0.167 | - | - |
+| methods | 0.006 | 0.160 | 0.201 | 0.246 | 0.006 |
+| patterns | 0.198 | 0.196 | 0.196 | 0.261 | 0.256 |
+| startup | 0.118 | 0.116 | 0.117 | - | - |
+| strings | 0.144 | 0.140 | 0.139 | 0.250 | 0.208 |
+| tables | 0.104 | 0.101 | 0.101 | 0.159 | 0.124 |
+| unicode | 0.007 | 0.029 | 0.034 | 0.031 | 0.004 |
 
 The baseline tier runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. The optimizing tier adds typed values in machine registers, checks moved in front of loops, calls compiled inline, direct calls between optimized functions, and tables that are never allocated. `methods`, `arrays`, `loop`, and `unicode` are where it shows. `methods` builds a new object on every iteration through a method and a constructor, and its optimized loop adds two numbers. `unicode` takes the length of `string.sub` on a long non-ASCII string, which the optimizing tier computes from the positions. `fib` is all calls. The optimizing tier makes them as direct calls: an activation takes its argument in a machine register, calls itself with a native call, and gets a frame only when optimized code is left. That takes `fib` from 0.029 s to 0.008 s, level with LuaJIT. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their three Lus columns agree. `tables` keeps three million tables alive, so its time goes to allocating and marking them. The collector reads each of them once, when it traces it, and waits for twice the usual growth while the heap only grows, which puts every Lus column ahead of LuaJIT with its JIT.
 
-With the JIT off, the interpreter is ahead of the interpreter of LuaJIT on eleven of the twelve benchmarks. `fib` shows the call and the return of the interpreter, which went from 0.062 s to 0.047 s and then to 0.034 s. It runs about 1130 million machine instructions against 880 million for LuaJIT, at more of them per cycle. `unicode` went from 0.042 s to 0.033 s, mostly because each `string.sub` now finds its start from where the previous one started. LuaJIT, which slices bytes there, takes 0.031 s to 0.033 s from one set of runs to the next, so the two are level within the noise and Lus is the one behind when they differ. `spec/design/interp.md` has the instruction and cycle counts behind both, and the measurements of the designs that were tried and kept out.
+With the JIT off, the interpreter is ahead of the interpreter of LuaJIT on eleven of the thirteen benchmarks that both run. `fib` shows the call and the return of the interpreter, which went from 0.062 s to 0.047 s and then to 0.034 s. It runs about 1130 million machine instructions against 880 million for LuaJIT, at more of them per cycle, and the two are level within the noise of repeated runs. `unicode` went from 0.042 s to 0.034 s, mostly because each `string.sub` now finds its start from where the previous one started. It still trails LuaJIT, which slices bytes where Lus counts characters, by 4 to 10 percent across sets of alternating runs. `spec/design/interp.md` has the instruction and cycle counts behind both, and the measurements of the designs that were tried and kept out.
 
-The `messages` and `startup` rows were measured when they were added, with shared string blobs for worker messages (`spec/design/workers.md`). Before blobs, `messages` took 0.40 s.
+Strings over 64 bytes travel between workers as shared blobs (`spec/design/workers.md`), and before blobs `messages` took 0.40 s. `fullgc` marks on several threads (`spec/design/gc.md`), and on one thread it takes 0.110 s.
 
 The `lus off` column moves by a few percent between builds with the code layout of the interpreter loop. Compare the Lus columns of one build with each other, and read instruction counts for a change to the loop (`runtime/HACKING.md`).
