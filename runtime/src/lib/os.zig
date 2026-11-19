@@ -93,9 +93,10 @@ fn exit(l: *Thread) Error!u32 {
     } else {
         status = try aux.optInt(l, 1, 0);
     }
-    // Workers must raise "os.exit is unavailable in a worker" here once
-    // the worker library exists. The optional `close` argument would close
-    // the state first. Exiting directly releases everything anyway.
+    // A worker cannot end the whole process. The optional `close`
+    // argument would close the state first, and exiting directly releases
+    // everything anyway.
+    if (@import("worker.zig").isWorker(l.g)) return l.raiseFmt("os.exit is unavailable in a worker", .{});
     out.flushAll(l.g);
     std.process.exit(@truncate(@as(u64, @bitCast(status))));
 }

@@ -296,6 +296,7 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
 fn handleError(l: *Thread, stop: usize) bool {
     // A coroutine closing itself unwinds past every handler.
     if (l.self_closed) return false;
+    if (l.g.halting) return false;
     var i = l.frames.items.len;
     while (i > stop) {
         i -= 1;
