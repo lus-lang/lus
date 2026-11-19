@@ -40,7 +40,7 @@ fn checkCo(l: *Thread, i: u32) Error!*Thread {
 pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
     const co = state.newThread(l.g) catch return l.raiseMem();
     co.status = .suspended;
-    co.pledges = l.pledges;
+    @import("../vm/pledge.zig").inherit(co, l);
     co.stack[0] = f;
     co.top = 1;
     return co;
@@ -66,7 +66,10 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
         l.top -= nargs;
         return l.raise(try l.newStringValue(what));
     }
-    if (l.ncalls >= Thread.max_ncalls) return l.raiseFmt("C stack overflow", .{});
+    if (l.ncalls >= Thread.max_ncalls or l.g.native_depth >= Thread.max_ncalls) {
+        l.top -= nargs;
+        return l.raiseFmt("C stack overflow", .{});
+    }
     // Move the arguments to the coroutine.
     co.ensure(nargs + 1) catch {
         l.top -= nargs;
@@ -82,8 +85,10 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
     co.resumer = l;
     l.status = .normal;
     l.ncalls += 1;
+    l.g.native_depth += 1;
     defer {
         l.ncalls -= 1;
+        l.g.native_depth -= 1;
         l.status = .running;
     }
     const outcome = runCo(co, fresh, nargs);

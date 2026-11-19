@@ -59,7 +59,7 @@ fn envGet(l: *Thread, name: []const u8) ?[]const u8 {
 
 fn getenv(l: *Thread) Error!u32 {
     const name = try aux.checkBytes(l, 1);
-    // Capability check belongs here: pledge "env" scoped to `name`.
+    if (!@import("../vm/pledge.zig").allowed(l, "env", name)) return l.raiseFmt("permission \"env\" denied for '{s}'", .{name});
     const v = envGet(l, name) orelse return aux.retNil(l);
     return aux.ret(l, try lossyString(l, v));
 }
@@ -164,7 +164,7 @@ fn errnoOf(e: anyerror) ErrInfo {
 
 fn remove(l: *Thread) Error!u32 {
     const name = try aux.checkBytes(l, 1);
-    // Capability check belongs here: pledge "fs:write" for `name`.
+    try @import("../vm/pledge.zig").require(l, "fs:write", name);
     const io = l.g.io;
     const cwd = std.Io.Dir.cwd();
     cwd.deleteFile(io, name) catch |e| switch (e) {
@@ -177,14 +177,15 @@ fn remove(l: *Thread) Error!u32 {
 fn rename(l: *Thread) Error!u32 {
     const from = try aux.checkBytes(l, 1);
     const to = try aux.checkBytes(l, 2);
-    // Capability check belongs here: pledge "fs:write" for both paths.
+    try @import("../vm/pledge.zig").require(l, "fs:write", from);
+    try @import("../vm/pledge.zig").require(l, "fs:write", to);
     const cwd = std.Io.Dir.cwd();
     std.Io.Dir.rename(cwd, from, cwd, to, l.g.io) catch |e| return fileError(l, from, e);
     return aux.retBool(l, true);
 }
 
 fn tmpname(l: *Thread) Error!u32 {
-    // Capability check belongs here: pledge "fs:write" (the file is created).
+    if (!@import("../vm/pledge.zig").allowed(l, "fs:write", null)) return l.raiseFmt("permission \"fs:write\" denied for os.tmpname", .{});
     const io = l.g.io;
     const dir: []const u8 = if (builtin.os.tag == .windows) (envGet(l, "TEMP") orelse ".") else "/tmp";
     const sep: []const u8 = if (builtin.os.tag == .windows) "\\" else "/";
@@ -213,7 +214,7 @@ fn tmpname(l: *Thread) Error!u32 {
 fn execute(l: *Thread) Error!u32 {
     const cmd = try aux.optString(l, 1, null);
     const c = cmd orelse return aux.retBool(l, true); // a shell is available
-    // Capability check belongs here: pledge "exec".
+    if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for os.execute", .{});
     const io = l.g.io;
     out.flushAll(l.g);
     const argv: []const []const u8 = if (builtin.os.tag == .windows)

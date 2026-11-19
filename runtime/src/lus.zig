@@ -18,6 +18,7 @@ pub const vm = struct {
     pub const ops = @import("vm/ops.zig");
     pub const interp = @import("vm/interp.zig");
     pub const debug = @import("vm/debug.zig");
+    pub const pledge = @import("vm/pledge.zig");
 };
 
 pub const api = @import("api.zig");
@@ -48,6 +49,7 @@ test {
     _ = vm.numeric;
     _ = vm.ops;
     _ = vm.interp;
+    _ = vm.pledge;
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = api;

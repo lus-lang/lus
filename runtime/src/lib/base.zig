@@ -46,6 +46,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "range", .func = range },
     .{ .name = "bigint", .func = bigint },
     .{ .name = "decimal", .func = decimal },
+    .{ .name = "pledge", .func = pledgeFn },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -461,6 +462,7 @@ fn xpcall(l: *Thread) Error!u32 {
 }
 
 fn load(l: *Thread) Error!u32 {
+    try requireLoad(l);
     const chunk = l.arg(1);
     var src: []const u8 = undefined;
     var owned: ?[]u8 = null;
@@ -511,6 +513,8 @@ pub fn readFile(l: *Thread, path: []const u8) Error![]u8 {
 
 fn loadfile(l: *Thread) Error!u32 {
     const path = try aux.checkBytes(l, 1);
+    try requireLoad(l);
+    try @import("../vm/pledge.zig").require(l, "fs:read", path);
     const src = readFile(l, path) catch {
         const msg = l.err;
         try l.push(.nil);
@@ -536,6 +540,8 @@ fn loadfile(l: *Thread) Error!u32 {
 
 fn dofile(l: *Thread) Error!u32 {
     const path = try aux.checkBytes(l, 1);
+    try requireLoad(l);
+    try @import("../vm/pledge.zig").require(l, "fs:read", path);
     const src = try readFile(l, path);
     defer l.g.gpa.free(src);
     const name = std.fmt.allocPrint(l.g.gpa, "@{s}", .{path}) catch return l.raiseMem();
@@ -544,4 +550,23 @@ fn dofile(l: *Thread) Error!u32 {
     api.load(l, src, name) catch return l.raise(l.stack[l.top - 1]);
     _ = try interp.call(l, base, 0, -1);
     return l.top - base;
+}
+
+fn pledgeFn(l: *Thread) Error!u32 {
+    const pledge = @import("../vm/pledge.zig");
+    const n = l.argCount();
+    var results: std.ArrayList(bool) = .empty;
+    defer results.deinit(l.g.gpa);
+    var i: u32 = 1;
+    while (i <= n) : (i += 1) {
+        const spec = try aux.checkBytes(l, i);
+        const r = try pledge.apply(l, spec, false);
+        results.append(l.g.gpa, r == .granted) catch return l.raiseMem();
+    }
+    for (results.items) |b| try l.push(Value.boolean(b));
+    return n;
+}
+
+fn requireLoad(l: *Thread) Error!void {
+    if (!@import("../vm/pledge.zig").allowed(l, "load", null)) return l.raiseFmt("permission \"load\" denied", .{});
 }

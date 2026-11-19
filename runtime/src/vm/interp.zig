@@ -211,9 +211,13 @@ pub fn poscall(l: *Thread, nres: u32) Error!void {
 /// Calls the value at `func` from native code. Returns the number of
 /// results now at `func` (equal to `want` unless want is -1).
 pub fn call(l: *Thread, func: u32, nargs: u32, want: i32) Error!u32 {
-    if (l.ncalls >= Thread.max_ncalls) return l.raiseFmt("stack overflow (too many nested native calls)", .{});
+    if (l.ncalls >= Thread.max_ncalls or l.g.native_depth >= Thread.max_ncalls) return l.raiseFmt("stack overflow (too many nested native calls)", .{});
     l.ncalls += 1;
-    defer l.ncalls -= 1;
+    l.g.native_depth += 1;
+    defer {
+        l.ncalls -= 1;
+        l.g.native_depth -= 1;
+    }
     const depth = l.frames.items.len;
     const kind = precall(l, func, nargs, want) catch |e| return yieldAcrossBoundary(l, e);
     if (kind == .lus) {

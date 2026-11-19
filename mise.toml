@@ -10,7 +10,7 @@ ZIG_GLOBAL_CACHE_DIR = "{{config_root}}/runtime/.zig-cache/global"
 [tasks.build]
 description = "Build the Zig runtime"
 dir = "runtime"
-run = "zig build"
+run = "zig build -Doptimize=ReleaseSafe"
 
 [tasks.test]
 description = "Run the Zig runtime unit and conformance tests"

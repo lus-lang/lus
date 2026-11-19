@@ -181,6 +181,9 @@ pub const Global = struct {
     environ: ?*std.process.Environ.Map = null,
     warn_on: bool = false,
     running_finalizers: bool = false,
+    /// Native recursion depth across all threads (calls from natives into
+    /// Lus and coroutine resumes), bounded to protect the native stack.
+    native_depth: u32 = 0,
 };
 
 // ---------------------------------------------------------------------

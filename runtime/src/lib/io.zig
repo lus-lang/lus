@@ -429,7 +429,7 @@ fn ioOpen(l: *Thread) Error!u32 {
     if (l.arg(3).tag == .table) {
         lossy = (try aux.getField(l, l.arg(3).as(Table), "lossy")).truthy();
     }
-    // Capability check (fs:read / fs:write) belongs here once pledge lands.
+    try checkOpen(l, path, mode);
     const r = try openFile(l, path, mode, lossy);
     if (r) |v| return aux.ret(l, v);
     const msg = l.err;
@@ -568,6 +568,7 @@ fn setDefaultFile(l: *Thread, key: []const u8, mode: []const u8) Error!u32 {
     const a = l.arg(1);
     if (!a.isNil()) {
         if (a.tag == .string) {
+            try checkOpen(l, a.as(String).bytes(), mode);
             const v = (try openFile(l, a.as(String).bytes(), mode, false)) orelse return l.raise(l.err);
             try setDefault(l, key, v);
         } else {
@@ -654,6 +655,7 @@ fn ioLines(l: *Thread) Error!u32 {
         return makeLines(l, v, false, 2);
     }
     const path = try aux.checkBytes(l, 1);
+    try checkOpen(l, path, "r");
     const v = (try openFile(l, path, "r", false)) orelse return l.raise(l.err);
     return makeLines(l, v, true, 2);
 }
@@ -666,7 +668,7 @@ fn ioPopen(l: *Thread) Error!u32 {
     const reading = std.mem.eql(u8, mode, "r");
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
-    // Capability check (exec) belongs here once pledge lands.
+    if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
     const argv = [_][]const u8{ "/bin/sh", "-c", cmd };
     const child = std.process.spawn(l.g.io, .{
         .argv = &argv,
@@ -679,6 +681,7 @@ fn ioPopen(l: *Thread) Error!u32 {
 }
 
 fn ioTmpfile(l: *Thread) Error!u32 {
+    if (!@import("../vm/pledge.zig").allowed(l, "fs:write", null)) return l.raiseFmt("permission \"fs:write\" denied for io.tmpfile", .{});
     var rnd: [8]u8 = undefined;
     l.g.io.random(&rnd);
     const dir = if (l.g.environ) |env| env.get("TMPDIR") orelse "/tmp" else "/tmp";
@@ -688,4 +691,12 @@ fn ioTmpfile(l: *Thread) Error!u32 {
     // The file is removed right away and lives until closed.
     std.Io.Dir.cwd().deleteFile(l.g.io, path) catch {};
     return aux.ret(l, v);
+}
+
+fn checkOpen(l: *Thread, path: []const u8, mode: []const u8) Error!void {
+    const pledge = @import("../vm/pledge.zig");
+    const writes = std.mem.indexOfAny(u8, mode, "wa+") != null;
+    const reads = mode.len > 0 and (mode[0] == 'r' or std.mem.indexOfScalar(u8, mode, '+') != null);
+    if (reads) try pledge.require(l, "fs:read", path);
+    if (writes) try pledge.require(l, "fs:write", path);
 }

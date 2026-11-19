@@ -72,7 +72,10 @@ fn freeObject(g: *Global, h: *Header) void {
             if (t.array.len > 0) gpa.free(t.array);
             if (t.hash.len > 0) gpa.free(t.hash);
         },
-        .thread => h.as(Thread).deinitStack(),
+        .thread => {
+            @import("pledge.zig").release(h.as(Thread));
+            h.as(Thread).deinitStack();
+        },
         .vector => h.as(object.Vector).bytes.deinit(gpa),
         .enum_root => {
             const r = h.as(object.EnumRoot);

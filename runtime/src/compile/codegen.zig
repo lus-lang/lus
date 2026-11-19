@@ -170,6 +170,7 @@ const FuncState = struct {
     /// do-expression body, whose locals sit above the temporaries of the
     /// enclosing expression.
     reg_floor: u8 = 0,
+    label_is_last: bool = false,
 };
 
 const KKey = struct { tag: u8, bits: u64, str: []const u8 = "" };
@@ -238,11 +239,15 @@ pub fn compileChunk(c: *Compiler, chunk: ast.Chunk) Error!*Proto {
     };
     var fs: FuncState = undefined;
     try openFunc(c, &fs, main_fn);
+    errdefer abortFunc(c, &fs);
     // The main function has a single upvalue: _ENV.
     try fs.upvals.append(c.gpa, .{ .name = "_ENV", .in_stack = true, .index = 0, .kind = .regular, .readonly = false });
     try codeABC(&fs, .varargprep, 0, 0, 0);
+    var bl: Block = undefined;
+    enterBlock(&fs, &bl, false);
     try statList(&fs, chunk.block.stats);
     try finalReturn(&fs, chunk.block.end_line);
+    try leaveBlock(&fs);
     return closeFunc(c, &fs);
 }
 
@@ -1191,7 +1196,6 @@ fn leaveBlock(fs: *FuncState) Error!void {
         if (std.mem.eql(u8, g.name, "continue")) return c.err(g.line, "continue outside loop", .{});
         return c.err(g.line, "no visible label '{s}' for <goto> at line {d}", .{ g.name, g.line });
     }
-    bl.continues.deinit(c.gpa);
 }
 
 /// Register level of the first local at variable index `nvar`.
@@ -1211,7 +1215,7 @@ fn moveGotosOut(fs: *FuncState, bl: *Block, parent: *Block) Error!void {
     var i = bl.first_goto;
     while (i < c.gotos.items.len) : (i += 1) {
         const g = &c.gotos.items[i];
-        if (blockLevel(fs, g.nactvar) > blockLevel(fs, bl.nactvar)) g.close = g.close or bl.upval;
+        if (g.nactvar > bl.nactvar) g.close = g.close or bl.upval;
         g.nactvar = @min(g.nactvar, bl.nactvar);
     }
 }
@@ -1586,6 +1590,7 @@ fn funcExpr(fs: *FuncState, f: *ast.Function, v: *ExpDesc) Error!void {
 fn compileFunction(c: *Compiler, f: *ast.Function) Error!*Proto {
     var fs: FuncState = undefined;
     try openFunc(c, &fs, f);
+    errdefer abortFunc(c, &fs);
     var bl: Block = undefined;
     enterBlock(&fs, &bl, false);
     var nparams: u32 = 0;
@@ -1947,7 +1952,23 @@ fn provideStat(fs: *FuncState, vals: []*ast.Expr, line: u32) Error!void {
 // Statements
 
 fn statList(fs: *FuncState, stats: []*ast.Stat) Error!void {
-    for (stats) |s| try statement(fs, s);
+    for (stats, 0..) |s, i| {
+        // A label followed only by empty statements and other labels up
+        // to the end of its block is outside the scope of the block's
+        // locals, so forward gotos may jump to it.
+        if (s.kind == .label) {
+            var last = true;
+            for (stats[i + 1 ..]) |rest| switch (rest.kind) {
+                .empty, .label => {},
+                else => {
+                    last = false;
+                    break;
+                },
+            };
+            fs.label_is_last = last;
+        }
+        try statement(fs, s);
+    }
 }
 
 fn block(fs: *FuncState, b: *ast.Block) Error!void {
@@ -2000,7 +2021,7 @@ fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
         .provide => |vals| try provideStat(fs, vals, s.line),
         .break_ => try newGoto(fs, "break", s.line, try jump(fs)),
         .continue_ => try continueStat(fs, s.line),
-        .goto_ => |n| try newGoto(fs, n.text, s.line, try jump(fs)),
+        .goto_ => |n| try gotoStat(fs, n.text, s.line),
         .label => |n| try labelStat(fs, n.text, s.line),
         .catch_ => |c| {
             const base = fs.freereg;
@@ -2806,7 +2827,7 @@ fn continueStat(fs: *FuncState, line: u32) Error!void {
     while (bl) |b| : (bl = b.parent) {
         if (b.is_loop) {
             const j = try jump(fs);
-            try b.continues.append(fs.c.gpa, .{ .name = "continue", .pc = j, .line = line, .nactvar = fs.nactvar });
+            try b.continues.append(fs.c.arena, .{ .name = "continue", .pc = j, .line = line, .nactvar = fs.nactvar });
             // Leaving blocks with captured locals needs a close at the
             // target.
             var x = fs.bl;
@@ -2954,7 +2975,7 @@ fn labelStat(fs: *FuncState, name: []const u8, line: u32) Error!void {
         const l = c.labels.items[i];
         if (std.mem.eql(u8, l.name, name)) return c.err(line, "label '{s}' already defined on line {d}", .{ name, l.line });
     }
-    _ = try createLabel(fs, name, line, false);
+    _ = try createLabel(fs, name, line, fs.label_is_last);
 }
 
 // ---------------------------------------------------------------------
@@ -2983,8 +3004,12 @@ pub fn compile(g: *vm.state.Global, src: []const u8, opts: Options) Allocator.Er
     defer c.labels.deinit(g.gpa);
     defer c.gotos.deinit(g.gpa);
     const p = compileChunk(&c, chunk) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.CompileError => return .{ .err = try g.gpa.dupe(u8, c.diag.?) },
+        error.OutOfMemory => {
+            return error.OutOfMemory;
+        },
+        error.CompileError => {
+            return .{ .err = try g.gpa.dupe(u8, c.diag.?) };
+        },
     };
     return .{ .ok = p };
 }
@@ -3000,8 +3025,47 @@ pub fn compileAst(g: *vm.state.Global, arena: Allocator, chunk: ast.Chunk, opts:
     defer c.labels.deinit(g.gpa);
     defer c.gotos.deinit(g.gpa);
     const p = compileChunk(&c, chunk) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.CompileError => return .{ .err = try g.gpa.dupe(u8, c.diag.?) },
+        error.OutOfMemory => {
+            return error.OutOfMemory;
+        },
+        error.CompileError => {
+            return .{ .err = try g.gpa.dupe(u8, c.diag.?) };
+        },
     };
     return .{ .ok = p };
+}
+
+/// A goto to a visible label jumps backward right away. Otherwise it
+/// waits for the label as a pending forward jump.
+fn gotoStat(fs: *FuncState, name: []const u8, line: u32) Error!void {
+    const c = fs.c;
+    var i = c.labels.items.len;
+    while (i > fs.first_label) {
+        i -= 1;
+        const lb = c.labels.items[i];
+        if (!std.mem.eql(u8, lb.name, name)) continue;
+        // Locals declared after the label are being left: close them.
+        const lblevel = blockLevel(fs, lb.nactvar);
+        if (nvarstack(fs) > lblevel) try codeABC(fs, .close, lblevel, 0, 0);
+        const j = try jump(fs);
+        try patchList(fs, j, lb.pc);
+        return;
+    }
+    try newGoto(fs, name, line, try jump(fs));
+}
+
+/// Releases the buffers of a function whose compilation failed. Called by
+/// the owner of the function state before it goes out of scope.
+fn abortFunc(c: *Compiler, fs: *FuncState) void {
+    {
+        fs.code.deinit(c.gpa);
+        fs.lines.deinit(c.gpa);
+        fs.constants.deinit(c.gpa);
+        fs.kcache.deinit(c.gpa);
+        fs.protos.deinit(c.gpa);
+        fs.upvals.deinit(c.gpa);
+        fs.handlers.deinit(c.gpa);
+        fs.locvars.deinit(c.gpa);
+    }
+    c.fs = fs.parent;
 }

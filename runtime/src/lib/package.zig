@@ -9,6 +9,7 @@ const ops = @import("../vm/ops.zig");
 const interp = @import("../vm/interp.zig");
 const api = @import("../api.zig");
 const aux = @import("aux.zig");
+const pledge = @import("../vm/pledge.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -67,6 +68,11 @@ pub fn search(l: *Thread, name: []const u8, path: []const u8, tried: *std.ArrayL
         if (tmpl.len == 0) continue;
         const file = std.mem.replaceOwned(u8, gpa, tmpl, "?", mod.items) catch return l.raiseMem();
         if (std.Io.Dir.cwd().statFile(io, file, .{})) |_| {
+            if (!pledge.allowed(l, "fs:read", file)) {
+                tried.print(gpa, "\n\tno file '{s}' (permission \"fs:read\" denied)", .{file}) catch return l.raiseMem();
+                gpa.free(file);
+                continue;
+            }
             return file;
         } else |_| {
             tried.print(gpa, "\n\tno file '{s}'", .{file}) catch return l.raiseMem();
@@ -107,6 +113,7 @@ fn searcherPreload(l: *Thread) Error!u32 {
 
 fn searcherLus(l: *Thread) Error!u32 {
     const name = try aux.checkBytes(l, 1);
+    if (!pledge.allowed(l, "load", null)) return l.raiseFmt("permission \"load\" denied", .{});
     const path = try aux.getField(l, try packageTable(l), "path");
     if (path.tag != .string) return l.raiseFmt("'package.path' must be a string", .{});
     var tried: std.ArrayList(u8) = .empty;

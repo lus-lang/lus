@@ -37,6 +37,7 @@ pub fn close(l: *Thread) void {
         map.deinit(g.gpa);
         g.gpa.destroy(map);
     }
+    @import("vm/pledge.zig").deinit(g);
     state.destroy(g);
 }
 
@@ -177,6 +178,5 @@ fn flagsReadonly(l: *Thread) Error!u32 {
 /// Grants the command line permissions (`-P`). Pledge arrives with the
 /// capability registry; until then grants are accepted and recorded.
 pub fn grantPledges(l: *Thread, specs: []const []const u8) Error!void {
-    _ = l;
-    _ = specs;
+    try @import("vm/pledge.zig").hostGrant(l, specs);
 }
