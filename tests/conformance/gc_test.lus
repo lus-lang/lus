@@ -1,0 +1,1227 @@
+pledge("load")
+
+-- ===== ported from h1/gc.lus =====
+-- collectgarbage basics
+local function collectgarbage_basics_test()
+    assert(collectgarbage("isrunning"))
+    collectgarbage()
+end
+
+-- gc mode switching
+local function gc_mode_switching_test()
+    local oldmode = collectgarbage("incremental")
+    -- changing modes should return previous mode
+    assert(collectgarbage("generational") == "incremental")
+    assert(collectgarbage("generational") == "generational")
+    assert(collectgarbage("incremental") == "generational")
+    assert(collectgarbage("incremental") == "incremental")
+    collectgarbage(oldmode)
+end
+
+-- gc with weak tables (k mode)
+local function gc_with_weak_tables_k_mode_test()
+    local a = setmetatable({}, {__mode = 'k'})
+    for i=1,10 do a[{}] = i end -- 10 collectable keys
+    collectgarbage()
+    -- keys should be collected
+    local count = 0
+    for k,v in pairs(a) do count = count + 1 end
+    assert(count == 0)
+end
+
+-- gc with weak tables (v mode)
+local function gc_with_weak_tables_v_mode_test()
+    local a = setmetatable({}, {__mode = 'v'})
+    a[1] = string.rep('b', 21)
+    collectgarbage()
+    assert(a[1])   -- strings are *values*
+    a[1] = nil
+    -- values should be collectable
+    for i=1,10 do a[i] = {} end
+    collectgarbage()
+    local count = 0
+    for k,v in pairs(a) do count = count + 1 end
+    assert(count == 0)
+end
+
+-- gc with weak tables (kv mode)
+local function gc_with_weak_tables_kv_mode_test()
+    local a = setmetatable({}, {__mode = 'kv'})
+    local x, y, z = {}, {}, {}
+    a[1], a[2], a[3] = x, y, z
+    a[string.rep('$', 11)] = string.rep('$', 11)
+    for i=4,15 do a[i] = {} end
+    for i=1,15 do a[{}] = i end
+    collectgarbage()
+    assert(next(a) ~= nil)
+    local i = 0
+    for k,v in pairs(a) do
+      assert((k == 1 and v == x) or
+             (k == 2 and v == y) or
+             (k == 3 and v == z) or k==v)
+      i = i+1
+    end
+    assert(i == 4)
+    x,y,z=nil,nil,nil
+    collectgarbage()
+    assert(next(a) == string.rep('$', 11))
+end
+
+-- gc finalizers (__gc)
+local function gc_finalizers_gc_test()
+    local finished = false
+    local u = setmetatable({}, {__gc = function() finished = true end})
+    u = nil
+    collectgarbage()
+    collectgarbage()
+    assert(finished)
+end
+
+-- gc recursive structures
+local function gc_recursive_structures_test()
+    -- A weak-value table witnesses that both members of the cycle
+    -- are actually reclaimed, not just that collection survives.
+    local witness = setmetatable({}, {__mode = 'v'})
+    local a = {}
+    a.b = {c = a} -- cycle
+    a.b.back = a.b -- self-reference inside the cycle
+    witness.outer = a
+    witness.inner = a.b
+    a = nil
+    collectgarbage()
+    collectgarbage()
+    assert(witness.outer == nil, "the outer table of the cycle was collected")
+    assert(witness.inner == nil, "the inner table of the cycle was collected")
+end
+
+-- clearing tables
+local function clearing_tables_test()
+    local lim = 15
+    local a = {}
+    local b = {}
+    for i=1,lim do a[{}] = i end
+    for k,v in pairs(a) do b[k]=v end
+    for n in pairs(b) do
+      a[n] = nil
+      assert(type(n) == 'table' and next(n) == nil)
+      collectgarbage()
+    end
+    for n in pairs(a) do error'cannot be here' end
+end
+
+-- GC activation
+local function gc_activation_test()
+    local finish = false
+    local u = setmetatable({}, {__gc = function () finish = true end})
+    local b = {34}
+    repeat u = {} until finish
+    assert(b[1] == 34)   -- 'u' was collected, but 'b' was not
+end
+
+-- long strings
+local function long_strings_test()
+    local x = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
+    assert(string.len(x)==80)
+    local s = ''
+    local k = 100
+    for n = 1, k do s = s..x end
+    assert(string.len(s) == k*80)
+end
+
+-- self-referenced threads
+local function self_referenced_threads_test()
+    local thread_id = 0
+    local threads = {}
+
+    local function fn (thread)
+        local x = {}
+        threads[thread_id] = function() thread = x end
+        coroutine.yield()
+    end
+
+    while thread_id < 10 do
+        local thread = coroutine.create(fn)
+        coroutine.resume(thread, thread)
+        thread_id = thread_id + 1
+    end
+end
+
+-- gc not reentrant in incremental mode
+local function gc_not_reentrant_in_incremental_mode_test()
+    local res = true
+    setmetatable({}, {__gc = function ()
+      res = collectgarbage()
+    end})
+    collectgarbage()
+    assert(not res)
+end
+
+-- json serialization/deserialization doesn't leak
+local function json_serialization_deserialization_doesn_t_leak_test()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+
+    -- Perform many JSON operations
+    for i = 1, 1000 do
+        local data = {
+            name = "test" .. i,
+            values = {1, 2, 3, 4, 5},
+            nested = {a = 1, b = 2, c = {d = 3}}
+        }
+        local json = tojson(data)
+        local parsed = fromjson(json)
+        -- Also test error paths (caught errors shouldn't leak)
+        local ok = catch fromjson("invalid json " .. i)
+    end
+
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+
+    -- Memory shouldn't grow significantly (allow some slack for interned strings)
+    local growth = after - before
+    assert(growth < 100, "JSON operations leaked memory: " .. growth .. " KB")
+end
+
+-- ============================================
+-- Stress Tests and Advanced GC Scenarios
+-- ============================================
+
+-- resurrection in finalizer
+local function resurrection_in_finalizer_test()
+    -- Object can be resurrected in finalizer and collected again
+    local resurrected = nil
+    local finalize_count = 0
+
+    local mt = {
+        __gc = function(self)
+            finalize_count = finalize_count + 1
+            if finalize_count == 1 then
+                -- Resurrect the object by storing it globally
+                resurrected = self
+            end
+        end
+    }
+
+    local obj = setmetatable({value = 42}, mt)
+    obj = nil
+    collectgarbage()
+    collectgarbage()
+
+    assert(finalize_count >= 1, "should have finalized at least once")
+    assert(resurrected ~= nil, "object should be resurrected")
+    assert(resurrected.value == 42, "resurrected object should have data")
+
+    -- Clear resurrection and collect again
+    resurrected = nil
+    collectgarbage()
+    collectgarbage()
+
+    -- Should finalize again (or may not depending on implementation)
+end
+
+-- finalizer receives the dying object and runs exactly once
+local function finalizer_receives_the_dying_object_and_runs_exactly_once_test()
+    -- The finalizer is called with the object itself, with its data and
+    -- metatable intact at finalization time.
+    local received = nil
+    local runs = 0
+    local mt = {__gc = function(o)
+        received = o
+        runs = runs + 1
+    end}
+    setmetatable({tag = "victim"}, mt)
+
+    collectgarbage()
+    collectgarbage()
+
+    assert(runs == 1, "finalizer should have run once, ran " .. runs .. " times")
+    assert(received ~= nil, "finalizer receives the object as its argument")
+    assert(received.tag == "victim", "the object's data is intact when finalized")
+    assert(getmetatable(received) == mt, "the metatable is intact when finalized")
+
+    -- Dropping the resurrected object again must not re-finalize it.
+    received = nil
+    collectgarbage()
+    collectgarbage()
+    assert(runs == 1, "a plain finalizer runs exactly once")
+end
+
+-- weak table creation and collection
+local function weak_table_creation_and_collection_test()
+    -- Test that weak tables can be created, used, and collected properly
+    local weak_k = setmetatable({}, {__mode = 'k'})
+    local weak_v = setmetatable({}, {__mode = 'v'})
+
+    -- Test weak key table
+    local key = {}
+    weak_k[key] = "value"
+    assert(weak_k[key] == "value", "weak key table should work while key exists")
+
+    -- Test weak value table
+    local val = {}
+    weak_v["mykey"] = val
+    assert(weak_v["mykey"] == val, "weak value table should work while value exists")
+
+    -- Clear references and collect
+    key = nil
+    val = nil
+    collectgarbage()
+    collectgarbage()
+    collectgarbage()
+
+    -- Verify weak key entry was collected
+    local key_count = 0
+    for k, v in pairs(weak_k) do key_count = key_count + 1 end
+    assert(key_count == 0, "weak key table should be empty after key is collected")
+
+    -- Verify weak value entry was collected
+    assert(weak_v["mykey"] == nil, "weak value should be nil after collection")
+end
+
+-- gc during table iteration is safe
+local function gc_during_table_iteration_is_safe_test()
+    local t = {}
+    for i = 1, 100 do t[i] = {} end
+
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        if count % 10 == 0 then
+            collectgarbage("step", 10)
+        end
+    end
+
+    assert(count == 100, "should iterate all elements")
+end
+
+-- many small allocations stress
+local function many_small_allocations_stress_test()
+    -- Create and discard many small objects
+    -- This tests that GC can handle rapid allocation/deallocation
+    local before = collectgarbage("count")
+
+    for i = 1, 10000 do
+        local t = {a = 1, b = 2, c = 3}
+        local s = "string" .. i
+        local f = function() return i end
+    end
+
+    -- Force collection
+    collectgarbage()
+    collectgarbage()
+
+    local after = collectgarbage("count")
+    -- Memory shouldn't grow unboundedly - GC should have collected the garbage
+    -- Allow some growth for test infrastructure, but not 10000x
+    assert(after < before + 1000, "memory should be reclaimed, before: " .. before .. " after: " .. after)
+end
+
+-- nested table structures with gc
+local function nested_table_structures_with_gc_test()
+    -- Test that nested structures are properly collected
+    local before = collectgarbage("count")
+
+    -- Create nested structures
+    local outer = {}
+    for i = 1, 100 do
+        outer[i] = {inner = {value = i, data = string.rep("x", 100)}}
+    end
+
+    local during = collectgarbage("count")
+    assert(during > before, "memory should increase with allocations")
+
+    -- Clear and collect
+    outer = nil
+    collectgarbage()
+    collectgarbage()
+
+    local after = collectgarbage("count")
+    -- Memory should decrease after collection (may not be exact due to other allocations)
+    assert(after < during, "memory should decrease after collection")
+end
+
+-- multiple objects with finalizers all run
+local function multiple_objects_with_finalizers_all_run_test()
+    -- Test that all finalizers run for multiple objects
+    local finalize_count = 0
+    local finalized_ids = {}
+
+    for i = 1, 5 do
+        local obj = setmetatable({id = i}, {
+            __gc = function(self)
+                finalize_count = finalize_count + 1
+                finalized_ids[self.id] = true
+            end
+        })
+    end
+
+    collectgarbage()
+    collectgarbage()
+    collectgarbage()
+
+    assert(finalize_count == 5, "all 5 finalizers should run, got: " .. finalize_count)
+    for i = 1, 5 do
+        assert(finalized_ids[i], "finalizer for object " .. i .. " should have run")
+    end
+end
+
+-- incremental gc step works without error
+local function incremental_gc_step_works_without_error_test()
+    -- Create garbage
+    local before = collectgarbage("count")
+    local garbage = {}
+    for i = 1, 1000 do
+        garbage[i] = {string.rep("x", 100)}
+    end
+    local peak = collectgarbage("count")
+    assert(peak > before, "memory should grow with allocations")
+
+    -- Clear references
+    garbage = nil
+
+    -- Do incremental collection - verify step returns a boolean (did it finish)
+    local step_count = 0
+    for i = 1, 100 do
+        local finished = collectgarbage("step", 10)
+        step_count = step_count + 1
+        -- step returns true when collection is complete
+        if finished then break end
+    end
+
+    assert(step_count > 0, "should have done at least one step")
+
+    -- Do a full collection to ensure memory can be reclaimed
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after < peak, "full gc after incremental should reduce memory")
+end
+
+-- gc operations return expected values
+local function gc_operations_return_expected_values_test()
+    -- Test various gc operations work and return expected types
+    collectgarbage()
+    collectgarbage("collect")
+    collectgarbage("stop")
+    collectgarbage("restart")
+
+    -- gc("count") should return memory usage as a number
+    local mem = collectgarbage("count")
+    assert(type(mem) == "number", "gc count should return number, got: " .. type(mem))
+    assert(mem > 0, "memory usage should be positive")
+
+    -- Allocate some memory
+    local t = {}
+    for i = 1, 100 do
+        t[i] = string.rep("x", 100)
+    end
+
+    local mem_after = collectgarbage("count")
+    assert(mem_after > mem, "memory should increase after allocations")
+
+    -- Clean up
+    t = nil
+    collectgarbage()
+end
+
+-- weak key table collects unreferenced keys
+local function weak_key_table_collects_unreferenced_keys_test()
+    -- Partial retention: in the same table, an entry whose key is still
+    -- referenced must survive the exact collection that clears an entry
+    -- whose key is not.
+    local weak = setmetatable({}, {__mode = 'k'})
+
+    local live = {}
+    weak[live] = "kept"
+    weak[{}] = "dropped"
+
+    collectgarbage()
+    collectgarbage()
+
+    assert(weak[live] == "kept", "the entry with a live key survives")
+    local count = 0
+    for k, v in pairs(weak) do count = count + 1 end
+    assert(count == 1, "only the unreferenced key was collected, found " .. count)
+
+    -- Dropping the last key empties the table.
+    live = nil
+    collectgarbage()
+    collectgarbage()
+    count = 0
+    for k, v in pairs(weak) do count = count + 1 end
+    assert(count == 0, "weak key table should be empty after all keys are unreferenced")
+end
+
+-- gc with coroutines
+local function gc_with_coroutines_test()
+    -- Test that GC works correctly with coroutines
+    local coroutine_ran = false
+    local coroutine_completed = false
+
+    local co = coroutine.create(function()
+        coroutine_ran = true
+        local t = {}
+        for i = 1, 100 do
+            t[i] = {value = i}
+        end
+        coroutine.yield("yielded")
+        t = nil
+        coroutine_completed = true
+        return "done"
+    end)
+
+    local ok1, result1 = coroutine.resume(co)
+    assert(ok1, "first resume should succeed")
+    assert(result1 == "yielded", "should yield with value")
+    assert(coroutine_ran, "coroutine should have started")
+
+    collectgarbage()
+
+    local ok2, result2 = coroutine.resume(co)
+    assert(ok2, "second resume should succeed")
+    assert(result2 == "done", "should return done")
+    assert(coroutine_completed, "coroutine should have completed")
+
+    -- Coroutine is now dead
+    assert(coroutine.status(co) == "dead", "coroutine should be dead")
+
+    co = nil
+    collectgarbage()
+    collectgarbage()
+end
+
+
+-- ===== ported from h1/gctypes.lus =====
+--[[
+    GC coverage for the Lus-specific collectable types, LUA_TVECTOR byte
+    buffers and LUA_TENUM/LUA_TENUMROOT first-class enums.
+
+    These tests prove the collector treats vectors and enums like every other
+    GC-managed object. Allocate-and-drop loops must not grow the reported heap,
+    vectors and enum values must work as weak-table keys and values and be
+    cleared once unreferenced, enum value identity must survive major
+    collections, and both types must stay readable from inside a __gc
+    finalizer. Enums can only be declared statically with the enum block, so
+    dynamically created enums are compiled through load.
+]]
+
+
+-- Compute a simple additive checksum over the bytes of a vector so that
+-- corruption anywhere in the buffer changes the result.
+local function checksum(v)
+    local sum = 0
+    for i = 0, vector.size(v) - 1 do
+        sum = (sum + vector.unpack(v, i, "B")) % 4294967296
+    end
+    return sum
+end
+
+-- Build a fresh enum root at runtime through the compiler.
+local function make_enum(src)
+    local chunk = assert(load("return enum " .. src .. " end"))
+    return chunk()
+end
+
+-- Count entries still present in a table.
+local function count(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+-- ============================================================
+-- Vector allocation leak bounds
+-- ============================================================
+
+-- allocate and drop vectors does not grow the heap
+local allocate_and_drop_vectors_does_not_grow_the_heap_cases = {
+    { 64, 4000 },
+    { 1024, 1000 },
+    { 8192, 200 },
+}
+
+local function allocate_and_drop_vectors_does_not_grow_the_heap_test(size, iters)
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, iters do
+        local v = vector.create(size)
+        vector.pack(v, 0, "I4", i)
+        -- v goes out of scope every iteration and becomes collectable.
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    -- A leak of one buffer per iteration would be size*iters bytes. Allow a
+    -- generous fixed slack so the bound stays well clear of interning noise.
+    assert(after - before < 128,
+        "dropped vectors leaked " .. (after - before) .. " KB for size " .. size)
+end
+
+-- uninitialized fast vectors also drop cleanly
+local function uninitialized_fast_vectors_also_drop_cleanly_test()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 3000 do
+        local v = vector.create(512, true)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "fast vectors leaked " .. (after - before) .. " KB")
+end
+
+-- cloned vectors drop cleanly
+local function cloned_vectors_drop_cleanly_test()
+    local seed = vector.create(1024)
+    vector.pack(seed, 0, "I4", 0x11223344)
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 2000 do
+        local c = vector.clone(seed)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "cloned vectors leaked " .. (after - before) .. " KB")
+    -- The retained seed must be untouched by all that churn.
+    assert(vector.unpack(seed, 0, "I4") == 0x11223344)
+end
+
+-- ============================================================
+-- Enum allocation leak bounds
+-- ============================================================
+
+-- allocate and drop enum roots does not grow the heap
+local function allocate_and_drop_enum_roots_does_not_grow_the_heap_test()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 2000 do
+        local e = make_enum("alpha, beta, gamma, delta")
+        -- Touch a member so the root is genuinely built, then drop it.
+        assert(tonumber(e.delta) == 4)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "dropped enums leaked " .. (after - before) .. " KB")
+end
+
+-- ============================================================
+-- Vectors as weak-table keys and values
+-- ============================================================
+
+-- vector weak key is cleared once unreferenced
+local function vector_weak_key_is_cleared_once_unreferenced_test()
+    local w = setmetatable({}, { __mode = "k" })
+    local v = vector.create(16)
+    w[v] = "payload"
+    assert(w[v] == "payload", "entry must be present while the vector is held")
+    v = nil
+    collectgarbage()
+    collectgarbage()
+    assert(count(w) == 0, "weak key entry must clear after the vector is dropped")
+end
+
+-- vector weak key is retained while referenced
+local function vector_weak_key_is_retained_while_referenced_test()
+    local w = setmetatable({}, { __mode = "k" })
+    local v = vector.create(16)
+    w[v] = "payload"
+    collectgarbage()
+    collectgarbage()
+    assert(w[v] == "payload", "held vector key must survive collection")
+    assert(count(w) == 1)
+end
+
+-- vector weak value is cleared once unreferenced
+local function vector_weak_value_is_cleared_once_unreferenced_test()
+    local w = setmetatable({}, { __mode = "v" })
+    w[1] = vector.create(64)
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "weak value vector must clear when nothing else holds it")
+end
+
+-- vector weak value is retained while referenced
+local function vector_weak_value_is_retained_while_referenced_test()
+    local w = setmetatable({}, { __mode = "v" })
+    local keep = vector.create(64)
+    vector.pack(keep, 0, "I4", 4242)
+    w[1] = keep
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == keep, "held vector value must survive collection")
+    assert(vector.unpack(w[1], 0, "I4") == 4242)
+end
+
+-- many vector weak keys clear in bulk
+local function many_vector_weak_keys_clear_in_bulk_test()
+    local w = setmetatable({}, { __mode = "k" })
+    local anchor = {}
+    for i = 1, 200 do
+        local v = vector.create(8)
+        anchor[i] = v
+        w[v] = i
+    end
+    -- Strong references in anchor keep every weak key alive for now.
+    assert(count(w) == 200, "all fresh vector keys present while anchored")
+    anchor = nil
+    collectgarbage()
+    collectgarbage()
+    assert(count(w) == 0, "all unreferenced vector keys must clear")
+end
+
+-- vectors nested in a dropped table tree do not leak
+local function vectors_nested_in_a_dropped_table_tree_do_not_leak_test()
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 1000 do
+        local tree = { left = { buf = vector.create(128) }, right = { buf = vector.create(128) } }
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "nested vectors leaked " .. (after - before) .. " KB")
+end
+
+-- dropping a coroutine collects vectors reachable only from its stack
+local function dropping_a_coroutine_collects_vectors_reachable_only_from_its_stack_test()
+    local w = setmetatable({}, { __mode = "v" })
+    do
+        local co = coroutine.create(function()
+            local v = vector.create(256)
+            w[1] = v
+            coroutine.yield()
+        end)
+        coroutine.resume(co)
+        assert(w[1] ~= nil, "vector must be live while the coroutine holds it")
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "vector must clear once the suspended coroutine is dropped")
+end
+
+-- vectors do not leak in generational mode
+local function vectors_do_not_leak_in_generational_mode_test()
+    local prev = collectgarbage("generational")
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 3000 do
+        local v = vector.create(256)
+        vector.pack(v, 0, "I4", i)
+    end
+    collectgarbage()
+    local after = collectgarbage("count")
+    collectgarbage(prev)
+    assert(after - before < 128, "vectors leaked in generational mode: " .. (after - before) .. " KB")
+end
+
+-- single basic step and a huge step leave vectors intact
+local function single_basic_step_and_a_huge_step_leave_vectors_intact_test()
+    local v = vector.create(1024)
+    vector.pack(v, 0, "I8", 0x0102030405060708)
+    -- step with size 0 performs one basic step, a very large size completes a cycle.
+    collectgarbage("step", 0)
+    collectgarbage("step", 1000000)
+    assert(vector.unpack(v, 0, "I8") == 0x0102030405060708, "held vector must survive explicit steps")
+end
+
+-- ============================================================
+-- Enum values as weak-table keys and values
+-- ============================================================
+
+-- enum value weak key is retained while referenced
+local function enum_value_weak_key_is_retained_while_referenced_test()
+    local e = make_enum("red, green, blue")
+    local w = setmetatable({}, { __mode = "k" })
+    local held = e.green
+    w[held] = "verdant"
+    collectgarbage()
+    collectgarbage()
+    assert(w[held] == "verdant", "held enum key must survive collection")
+    assert(count(w) == 1)
+end
+
+-- enum value weak key clears once nothing holds it
+local function enum_value_weak_key_clears_once_nothing_holds_it_test()
+    local w = setmetatable({}, { __mode = "k" })
+    do
+        local e = make_enum("one, two, three")
+        w[e.one] = true
+        assert(count(w) == 1)
+    end
+    collectgarbage()
+    collectgarbage()
+    -- With the root and every member reference gone, the weak entry clears.
+    assert(count(w) == 0, "enum weak key must clear after its root is dropped")
+end
+
+-- enum value weak value clears once unreferenced
+local function enum_value_weak_value_clears_once_unreferenced_test()
+    local w = setmetatable({}, { __mode = "v" })
+    do
+        local e = make_enum("a, b, c")
+        w[1] = e.b
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "weak enum value must clear when its root is gone")
+end
+
+-- enum value weak value retained while root and value held
+local function enum_value_weak_value_retained_while_root_and_value_held_test()
+    local e = make_enum("north, south, east, west")
+    local w = setmetatable({}, { __mode = "v" })
+    local held = e.east
+    w[1] = held
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == held, "held enum value must survive collection")
+    assert(tonumber(w[1]) == 3)
+end
+
+-- enum root value weak reference clears when the root is dropped
+local function enum_root_value_weak_reference_clears_when_the_root_is_dropped_test()
+    local w = setmetatable({}, { __mode = "v" })
+    do
+        local e = make_enum("a, b, c")
+        -- The root object itself equals its first member and is a value too.
+        w[1] = e
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(w[1] == nil, "the enum root must clear once no strong reference remains")
+end
+
+-- many enum values clear in bulk once their roots are dropped
+local function many_enum_values_clear_in_bulk_once_their_roots_are_dropped_test()
+    local w = setmetatable({}, { __mode = "k" })
+    local anchor = {}
+    for i = 1, 100 do
+        local e = make_enum("x, y, z")
+        local val = e.y
+        anchor[i] = val
+        w[val] = i
+    end
+    assert(count(w) == 100, "all enum keys present while anchored")
+    anchor = nil
+    collectgarbage()
+    collectgarbage()
+    assert(count(w) == 0, "all unreferenced enum keys must clear")
+end
+
+-- enum with many members allocates and drops without leaking
+local function enum_with_many_members_allocates_and_drops_without_leaking_test()
+    local names = "m1"
+    for i = 2, 60 do names = names .. ", m" .. i end
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 500 do
+        local e = make_enum(names)
+        assert(tonumber(e.m60) == 60)
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "wide enums leaked " .. (after - before) .. " KB")
+end
+
+-- ============================================================
+-- Mixed vector and enum weak tables
+-- ============================================================
+
+-- kv weak table retains anchored vectors and enums, clears the rest
+local function kv_weak_table_retains_anchored_vectors_and_enums_clears_the_rest_test()
+    local e = make_enum("keep, gone")
+    local w = setmetatable({}, { __mode = "kv" })
+    local kept_vec = vector.create(16)
+    local kept_enum = e.keep
+    -- Anchored pair survives, unanchored entries clear.
+    w[kept_vec] = kept_enum
+    w[vector.create(16)] = "dropme"
+    w["dropme"] = vector.create(16)
+    collectgarbage()
+    collectgarbage()
+    assert(w[kept_vec] == kept_enum, "anchored vector key and enum value must survive")
+    assert(count(w) == 1, "only the anchored pair should remain")
+end
+
+-- enum value works as a stable strong table key across collections
+local function enum_value_works_as_a_stable_strong_table_key_across_collections_test()
+    local e = make_enum("red, green, blue")
+    local t = {}
+    t[e.red] = "R"
+    t[e.green] = "G"
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(t[e.red] == "R", "enum key lookup must still resolve after collection")
+    assert(t[e.green] == "G")
+    assert(t[e.blue] == nil, "an unset enum key must stay absent")
+end
+
+-- ============================================================
+-- Enum identity and tostring stability across collections
+-- ============================================================
+
+-- enum value identity is stable across major collections
+local function enum_value_identity_is_stable_across_major_collections_test()
+    local e = make_enum("alpha, beta, gamma")
+    local first = e.beta
+    local label = tostring(e.beta)
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(first == e.beta, "value fetched before and after collect must be equal")
+    assert(e.beta == e[2], "name and index lookups must agree after collection")
+    assert(tostring(e.beta) == label, "tostring rendering must stay stable")
+    assert(tonumber(e.beta) == 2)
+end
+
+-- held enum value keeps its root alive across collections
+local function held_enum_value_keeps_its_root_alive_across_collections_test()
+    local held
+    do
+        local e = make_enum("mercury, venus, earth")
+        held = e.earth
+    end
+    -- Only the single value keeps the whole enum root reachable.
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(tonumber(held) == 3, "value must remain usable after its root falls out of scope")
+    assert(held == held, "value must remain self-consistent")
+end
+
+-- enum comparisons stay valid under repeated collection
+local function enum_comparisons_stay_valid_under_repeated_collection_test()
+    local e = make_enum("low, mid, high")
+    local ok = 0
+    for i = 1, 5000 do
+        if e.low < e.high and e.mid <= e.high then ok = ok + 1 end
+        if i % 500 == 0 then collectgarbage("step") end
+    end
+    assert(ok == 5000, "ordering must hold on every iteration through GC steps")
+end
+
+-- ============================================================
+-- Vectors surviving churn, checksums, and resize under GC
+-- ============================================================
+
+-- large held vector survives small-garbage churn intact
+local function large_held_vector_survives_small_garbage_churn_intact_test()
+    local big = vector.create(65536)
+    for i = 0, vector.size(big) - 1 do
+        vector.pack(big, i, "B", (i * 7 + 3) % 256)
+    end
+    local want = checksum(big)
+    -- Churn a lot of small collectable garbage, forcing collections while the
+    -- large buffer is held live.
+    for i = 1, 20000 do
+        local junk = { i, tostring(i), vector.create(16) }
+        if i % 2000 == 0 then collectgarbage("step", 20) end
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(checksum(big) == want, "held vector contents must be unchanged after churn")
+    assert(vector.size(big) == 65536)
+end
+
+-- vector resize under GC churn preserves data
+local function vector_resize_under_gc_churn_preserves_data_test()
+    local v = vector.create(8)
+    vector.pack(v, 0, "I4", 0xDEADBEEF)
+    for i = 1, 2000 do
+        vector.resize(v, 8 + (i % 4096))
+        -- Allocate throwaway garbage between resizes to drive collections.
+        local junk = vector.create(128)
+        if i % 200 == 0 then collectgarbage("step", 10) end
+    end
+    -- The head of the buffer, always within range, must be intact.
+    assert(vector.unpack(v, 0, "I4") == 0xDEADBEEF, "resize churn must preserve leading bytes")
+end
+
+-- resize down then up under churn zero-fills re-exposed bytes
+local function resize_down_then_up_under_churn_zero_fills_re_exposed_bytes_test()
+    local v = vector.create(64)
+    vector.pack(v, 0, "I4", 0x5A5A5A5A)
+    for i = 1, 500 do
+        vector.resize(v, 8)
+        local junk = vector.create(256)
+        vector.resize(v, 64)
+        if i % 100 == 0 then collectgarbage("step", 10) end
+    end
+    -- Bytes above offset 8 were dropped and re-added, so they must read as zero.
+    assert(vector.unpack(v, 8, "I4") == 0, "re-exposed bytes must be zero after churned resize")
+    -- The retained head must still hold its value.
+    assert(vector.unpack(v, 0, "I4") == 0x5A5A5A5A, "leading bytes must be preserved")
+end
+
+-- a vector resurrected inside a finalizer keeps its data
+local function a_vector_resurrected_inside_a_finalizer_keeps_its_data_test()
+    local saved = {}
+    do
+        local v = vector.create(4)
+        vector.pack(v, 0, "I4", 0x600DF00D)
+        setmetatable({ buf = v }, {
+            __gc = function(self)
+                saved.buf = self.buf
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(saved.buf ~= nil, "finalizer must be able to resurrect the vector")
+    assert(vector.unpack(saved.buf, 0, "I4") == 0x600DF00D, "resurrected vector data must be intact")
+    -- The resurrected vector must remain fully usable.
+    vector.pack(saved.buf, 0, "I4", 1)
+    assert(vector.unpack(saved.buf, 0, "I4") == 1)
+end
+
+-- checksum detects corruption so the test can fail
+local function checksum_detects_corruption_so_the_test_can_fail_test()
+    -- Guard against a tautological checksum: mutating one byte must change it.
+    local v = vector.create(32)
+    for i = 0, 31 do vector.pack(v, i, "B", i) end
+    local a = checksum(v)
+    vector.pack(v, 5, "B", 200)
+    assert(checksum(v) ~= a, "checksum must change when a byte changes")
+end
+
+-- ============================================================
+-- Vectors and enums reachable from __gc finalizers
+-- ============================================================
+
+-- slice results are vectors that drop without leaking
+local function slice_results_are_vectors_that_drop_without_leaking_test()
+    local base = vector.create(1024)
+    for i = 0, 1023 do vector.pack(base, i, "B", i % 256) end
+    collectgarbage()
+    collectgarbage()
+    local before = collectgarbage("count")
+    for i = 1, 3000 do
+        local s = base[1, 512]
+        assert(type(s) == "vector")
+    end
+    collectgarbage()
+    collectgarbage()
+    local after = collectgarbage("count")
+    assert(after - before < 128, "slice copies leaked " .. (after - before) .. " KB")
+    -- The base buffer must be untouched by all the slicing.
+    assert(vector.unpack(base, 100, "B") == 100)
+end
+
+-- vector tostring rendering is stable across collections
+local function vector_tostring_rendering_is_stable_across_collections_test()
+    local v = vector.create(32)
+    local label = tostring(v)
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(tostring(v) == label, "vector identity string must not change across GC")
+end
+
+-- unpackmany iteration stays correct with interleaved GC steps
+local function unpackmany_iteration_stays_correct_with_interleaved_gc_steps_test()
+    local v = vector.create(4000)
+    for i = 0, 999 do vector.pack(v, i * 4, "I4", i) end
+    local sum = 0
+    local n = 0
+    for val in vector.unpackmany(v, 0, "I4") do
+        sum = sum + val
+        n = n + 1
+        if n % 100 == 0 then collectgarbage("step", 5) end
+    end
+    assert(n == 1000, "must iterate every element, got " .. n)
+    -- Sum of 0..999 is 499500.
+    assert(sum == 499500, "iteration values must be intact under GC, got " .. sum)
+end
+
+-- distinct enum roots never collide as keys after collection
+local function distinct_enum_roots_never_collide_as_keys_after_collection_test()
+    local e1 = make_enum("a, b, c")
+    local e2 = make_enum("a, b, c")
+    local t = {}
+    t[e1.a] = "first"
+    t[e2.a] = "second"
+    collectgarbage("collect")
+    collectgarbage("collect")
+    -- Same names and positions but different roots must remain separate keys.
+    assert(t[e1.a] == "first", "first root key must be preserved")
+    assert(t[e2.a] == "second", "second root key must be preserved")
+    assert(e1.a ~= e2.a, "values from distinct roots must never be equal")
+end
+
+-- a held enum member keeps every other member reachable after GC
+local function a_held_enum_member_keeps_every_other_member_reachable_after_gc_test()
+    local held
+    do
+        local e = make_enum("spring, summer, autumn, winter")
+        held = e.summer
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    -- Reaching sibling members through the held value keeps the whole root live.
+    assert(tonumber(held.winter) == 4, "sibling lookup through a held member must work")
+    assert(held.spring < held.winter, "ordering across recovered members must hold")
+    assert(held == held.summer, "the held member must equal its own re-lookup")
+end
+
+-- finalizer can read a vector still owned by the dying object
+local function finalizer_can_read_a_vector_still_owned_by_the_dying_object_test()
+    local seen = {}
+    do
+        local v = vector.create(8)
+        vector.pack(v, 0, "I4", 0xABCD1234)
+        setmetatable({ buf = v }, {
+            __gc = function(self)
+                seen.value = vector.unpack(self.buf, 0, "I4")
+                seen.size = vector.size(self.buf)
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(seen.value == 0xABCD1234, "finalizer must read the vector payload")
+    assert(seen.size == 8, "finalizer must see the vector size")
+end
+
+-- finalizer can read an enum value still owned by the dying object
+local function finalizer_can_read_an_enum_value_still_owned_by_the_dying_object_test()
+    local seen = {}
+    do
+        local e = make_enum("draft, review, done")
+        setmetatable({ state = e.done }, {
+            __gc = function(self)
+                seen.index = tonumber(self.state)
+                seen.same = (self.state == self.state)
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(seen.index == 3, "finalizer must read the enum index")
+    assert(seen.same == true, "enum value must stay coherent during finalization")
+end
+
+-- all finalizers holding vectors run and read their own data
+local function all_finalizers_holding_vectors_run_and_read_their_own_data_test()
+    local total = 0
+    for i = 1, 8 do
+        local v = vector.create(4)
+        vector.pack(v, 0, "I4", i * 100)
+        setmetatable({ buf = v }, {
+            __gc = function(self)
+                total = total + vector.unpack(self.buf, 0, "I4")
+            end,
+        })
+    end
+    collectgarbage()
+    collectgarbage()
+    -- 100 + 200 + ... + 800 = 3600
+    assert(total == 3600, "every vector finalizer must run and read its payload, got " .. total)
+end
+
+
+-- ===== ported from h1/gengc.lus =====
+local debug = require"debug"
+
+-- gc mode switching
+local function gc_mode_switching_2_test()
+    local oldmode = collectgarbage("generational")
+    assert(oldmode == "incremental" or oldmode == "generational")
+
+    -- switching modes
+    assert(collectgarbage("incremental") == "generational")
+    assert(collectgarbage("generational") == "incremental")
+
+    collectgarbage(oldmode)
+end
+
+-- table barrier evolution
+local function table_barrier_evolution_test()
+    local U = {}
+    collectgarbage()  -- make U old
+
+    -- U refers to a new table
+    U[1] = {x = {234}}
+
+    -- both survive collections
+    collectgarbage("step")
+    collectgarbage("step")
+
+    -- data was not corrupted
+    assert(U[1].x[1] == 234)
+end
+
+-- firstold1 correction
+local function firstold1_correction_test()
+    local function foo() end
+    local old = {10}
+    collectgarbage()    -- make 'old' old
+    setmetatable(old, {})    -- new table
+    collectgarbage("step")   -- step
+    setmetatable(getmetatable(old), {__gc = foo})  -- get it out of allgc list
+    collectgarbage("step")   -- should not seg. fault
+    assert(old[1] == 10)
+end
+
+-- finalized objects
+local function finalized_objects_test()
+    local finalized = false
+    local obj = setmetatable({}, {__gc = function()
+        finalized = true
+    end})
+    obj = nil
+    collectgarbage()
+    collectgarbage()
+    assert(finalized)
+end
+
+-- coroutine with closures
+local function coroutine_with_closures_test()
+    local old = {10}
+    collectgarbage()   -- make 'old' old
+    local co = coroutine.create(function()
+        local x = nil
+        local f = function()
+            return x and x[1]
+        end
+        x = coroutine.yield(f)
+        coroutine.yield()
+    end)
+    local _, f = coroutine.resume(co)   -- create closure over 'x' in coroutine
+    collectgarbage("step")
+    old[1] = {"hello"}
+    coroutine.resume(co, {123})
+    collectgarbage("step")
+    assert(f() == 123 and old[1][1] == "hello")
+end
+
+-- weak table in generational mode
+local function weak_table_in_generational_mode_test()
+    local oldmode = collectgarbage("generational")
+    local t = setmetatable({}, {__mode = "kv"})
+    collectgarbage()  -- make the weak table old
+    t[1] = {10}       -- unreferenced young value
+    local keep = {20}
+    t[2] = keep       -- value with a live strong reference
+    collectgarbage("step")
+    collectgarbage("step")
+    -- a full (major) collection must clear the unreferenced value while
+    -- keeping the referenced one
+    collectgarbage()
+    local cleared = (t[1] == nil)
+    local survived = (t[2] == keep)
+    collectgarbage(oldmode)
+    assert(cleared, "the unreferenced weak value was cleared")
+    assert(survived, "the strongly referenced value survived")
+end
+
+-- gc is running
+local function gc_is_running_test()
+    assert(collectgarbage'isrunning')
+end

@@ -1,0 +1,617 @@
+pledge("load")
+
+-- ===== ported from h1/numconv.lus =====
+--[[
+    Test suite for number literals and conversions in Lus.
+
+    Covers:
+    - hex float literals (0x1p4, 0x.8p1) and hex integer wrap-around
+    - malformed numeral syntax errors
+    - decimal literals and strings overflowing to float
+    - tonumber with explicit bases 2 through 36, including invalid digits and bad bases
+    - plain tonumber whitespace and rejection rules
+    - string arithmetic coercion and its error paths
+    - minus zero semantics (division, tostring, table key aliasing)
+    - integer and float comparisons at the 2^53 and 2^63 boundaries
+    - math.type and math.tointeger across every value class
+    - tostring round trips and float formatting fidelity
+    - float to integer coercion errors in integer-only contexts
+]]
+
+
+local minint, maxint = math.mininteger, math.maxinteger
+local inf = math.huge
+
+-- ============================================
+-- Hex float literals
+-- ============================================
+
+-- hex float literal value and type
+local hex_float_literal_value_and_type_cases = {
+    {0x1p4, 16.0},
+    {0x.8p1, 1.0},
+    {0x1p-2, 0.25},
+    {0xA.8p0, 10.5},
+    {0x1.8, 1.5},
+    {0X1P4, 16.0},
+    {0x1.fp0, 1.9375},
+}
+
+local function hex_float_literal_value_and_type_test(value, expected)
+    assert(value == expected)
+    assert(math.type(value) == "float")
+end
+
+-- hex float literal with a huge exponent overflows to infinity
+local function hex_float_literal_with_a_huge_exponent_overflows_to_infinity_test()
+    assert(0x1p1024 == inf)
+    assert(math.type(0x1p1024) == "float")
+end
+
+-- hex integer literals wrap modulo 2^64 and stay integers
+local function hex_integer_literals_wrap_modulo_2_64_and_stay_integers_test()
+    assert(0xFFFFFFFFFFFFFFFF == -1)
+    assert(0x10000000000000000 == 0)
+    assert(0x8000000000000000 == minint)
+    assert(math.type(0xFFFFFFFFFFFFFFFF) == "integer")
+    assert(math.type(0x10000000000000000) == "integer")
+end
+
+-- ============================================
+-- Malformed numeral syntax
+-- ============================================
+
+-- malformed numeral is a compile error
+local malformed_numeral_is_a_compile_error_cases = {
+    {"return 0x"},
+    {"return 1e"},
+    {"return 1e+"},
+    {"return 0xp4"},
+    {"return 0x1pz"},
+    {"return 1..2"},
+}
+
+local function malformed_numeral_is_a_compile_error_test(src)
+    local chunk, msg = load(src)
+    assert(chunk == nil)
+    assert(string.find(msg, "malformed number"))
+end
+
+-- ============================================
+-- Overflow to float
+-- ============================================
+
+-- decimal integer literal above maxinteger becomes a float
+local function decimal_integer_literal_above_maxinteger_becomes_a_float_test()
+    local v = 9223372036854775808
+    assert(math.type(v) == "float")
+    assert(v == 2.0^63)
+    assert(math.type(9223372036854775807) == "integer")
+    assert(9223372036854775807 == maxint)
+    assert(math.type(12345678901234567890123) == "float")
+end
+
+-- huge exponent literals become infinity
+local function huge_exponent_literals_become_infinity_test()
+    assert(1e999 == inf)
+    assert(-1e999 == -inf)
+    assert(math.type(1e999) == "float")
+end
+
+-- huge decimal strings convert to float through tonumber
+local function huge_decimal_strings_convert_to_float_through_tonumber_test()
+    local giant = tonumber(string.rep("9", 400))
+    assert(giant == inf)
+    assert(math.type(giant) == "float")
+    local wide = tonumber("123456789012345678901234567890")
+    assert(math.type(wide) == "float")
+    assert(wide == 123456789012345678901234567890)
+    local just_over = tonumber("9223372036854775808")
+    assert(math.type(just_over) == "float")
+    assert(just_over == 2.0^63)
+end
+
+-- ============================================
+-- tonumber with an explicit base
+-- ============================================
+
+-- tonumber with base parses valid digits
+local tonumber_with_base_parses_valid_digits_cases = {
+    {"10", 2, 2},
+    {"1111111", 2, 127},
+    {"+10", 2, 2},
+    {"777", 8, 511},
+    {"ff", 16, 255},
+    {"FF", 16, 255},
+    {"-ff", 16, -255},
+    {"1e2", 16, 482},
+    {"z", 36, 35},
+    {"zz", 36, 1295},
+    {"10", 36, 36},
+    {" 42 ", 10, 42},
+}
+
+local function tonumber_with_base_parses_valid_digits_test(str, base, expected)
+    assert(tonumber(str, base) == expected)
+    assert(math.type(tonumber(str, base)) == "integer")
+end
+
+-- tonumber with base returns nil for invalid input
+local tonumber_with_base_returns_nil_for_invalid_input_cases = {
+    {"2", 2},
+    {"z", 35},
+    {"g", 16},
+    {"zz", 10},
+    {"0x10", 16},
+    {"", 16},
+    {"   ", 8},
+    {"-", 10},
+    {"10.5", 10},
+    {"1e2", 10},
+    {"10\0", 10},
+}
+
+local function tonumber_with_base_returns_nil_for_invalid_input_test(str, base)
+    assert(tonumber(str, base) == nil)
+end
+
+-- tonumber with an out of range base raises
+local tonumber_with_an_out_of_range_base_raises_cases = {
+    {0},
+    {1},
+    {37},
+    {-16},
+}
+
+local function tonumber_with_an_out_of_range_base_raises_test(base)
+    raises(function() return tonumber("10", base) end, "base out of range")
+end
+
+-- tonumber with base requires a string subject
+local function tonumber_with_base_requires_a_string_subject_test()
+    raises(function() return tonumber(10, 16) end, "string expected, got number")
+end
+
+-- tonumber with base rejects an enum subject
+local function tonumber_with_base_rejects_an_enum_subject_test()
+    local e = enum red, green end
+    raises(function() return tonumber(e.red, 10) end, "string expected, got enum")
+end
+
+-- tonumber base must have an integer representation
+local function tonumber_base_must_have_an_integer_representation_test()
+    raises(function() return tonumber("10", 2.5) end, "no integer representation")
+    assert(tonumber("10", 16.0) == 16)
+end
+
+-- tonumber with base 16 wraps around like unsigned accumulation
+local function tonumber_with_base_16_wraps_around_like_unsigned_accumulation_test()
+    assert(tonumber(string.rep("f", 16), 16) == -1)
+    assert(tonumber("8000000000000000", 16) == minint)
+end
+
+-- ============================================
+-- Plain tonumber string rules
+-- ============================================
+
+-- tonumber accepts numerals with surrounding whitespace and prefixes
+local tonumber_accepts_numerals_with_surrounding_whitespace_and_prefixes_cases = {
+    {" 10 ", 10, "integer"},
+    {"\t10\n", 10, "integer"},
+    {"\f10\v", 10, "integer"},
+    {".5", 0.5, "float"},
+    {"5.", 5.0, "float"},
+    {"0x1p4", 16.0, "float"},
+    {"0x.8p1", 1.0, "float"},
+    {" -0x10 ", -16, "integer"},
+    {"-0", 0, "integer"},
+    {"0X10", 16, "integer"},
+}
+
+local function tonumber_accepts_numerals_with_surrounding_whitespace_and_prefixes_test(str, expected, ntype)
+    local n = tonumber(str)
+    assert(n == expected)
+    assert(math.type(n) == ntype)
+end
+
+-- tonumber returns nil for non-numerals
+local tonumber_returns_nil_for_non_numerals_cases = {
+    {"0x"},
+    {"10 x"},
+    {"- 10"},
+    {"1e"},
+    {"1e+"},
+    {"0b101"},
+    {"1_000"},
+    {"1,5"},
+    {"inf"},
+    {"nan"},
+    {"10\0"},
+}
+
+local function tonumber_returns_nil_for_non_numerals_test(str)
+    assert(tonumber(str) == nil)
+end
+
+-- tonumber of the string -0.0 preserves the sign of zero
+local function tonumber_of_the_string_0_0_preserves_the_sign_of_zero_test()
+    local mz = tonumber("-0.0")
+    assert(math.type(mz) == "float")
+    assert(1 / mz == -inf)
+end
+
+-- tonumber of non-string non-number values returns nil
+local function tonumber_of_non_string_non_number_values_returns_nil_test()
+    assert(tonumber(nil) == nil)
+    assert(tonumber(true) == nil)
+    assert(tonumber({}) == nil)
+end
+
+-- tonumber with no argument raises
+local function tonumber_with_no_argument_raises_test()
+    raises(tonumber, "value expected")
+end
+
+-- ============================================
+-- String arithmetic coercion
+-- ============================================
+
+-- string operands coerce in arithmetic with the numeral's own type
+local string_operands_coerce_in_arithmetic_with_the_numeral_s_own_type_cases = {
+    {"10" + 5, 15, "integer"},
+    {"0x10" + 0, 16, "integer"},
+    {"1e2" * 1, 100.0, "float"},
+    {" 0x10 " + 0, 16, "integer"},
+    {"0x1p4" + 0, 16.0, "float"},
+    {"10" + "20", 30, "integer"},
+    {"10" / "2", 5.0, "float"},
+    {"10" // "3", 3, "integer"},
+    {"3.5" % 2, 1.5, "float"},
+    {"2" ^ "3", 8.0, "float"},
+}
+
+local function string_operands_coerce_in_arithmetic_with_the_numeral_s_own_type_test(value, expected, ntype)
+    assert(value == expected)
+    assert(math.type(value) == ntype)
+end
+
+-- non-numeric string in arithmetic raises
+local function non_numeric_string_in_arithmetic_raises_test()
+    raises(function() return "a" + 1 end, "attempt to add a 'string' with a 'number'")
+end
+
+-- relational comparison never coerces strings
+local function relational_comparison_never_coerces_strings_test()
+    raises(function() return "10" < 5 end, "attempt to compare string with number")
+    raises(function() return 5 < "10" end, "attempt to compare number with string")
+end
+
+-- bitwise operators never coerce strings
+local function bitwise_operators_never_coerce_strings_test()
+    raises(function() return "10" & 1 end, "bitwise operation on a string value")
+end
+
+-- equality never coerces between strings and numbers
+local function equality_never_coerces_between_strings_and_numbers_test()
+    assert(not ("10" == 10))
+    assert(not (10 == "10"))
+    assert("10" ~= 10)
+end
+
+-- concatenation converts numbers with their tostring form
+local function concatenation_converts_numbers_with_their_tostring_form_test()
+    assert(12 .. "" == "12")
+    assert(1.5 .. "" == "1.5")
+    assert((1.0) .. "" == "1.0")
+    assert(12 .. 34 == "1234")
+end
+
+-- unary minus on a numeric string preserves the sign of zero
+local function unary_minus_on_a_numeric_string_preserves_the_sign_of_zero_test()
+    local s = "0.0"
+    assert(1 / -s == -inf)
+end
+
+-- ============================================
+-- Minus zero semantics
+-- ============================================
+
+-- minus zero literal folds without losing its sign
+local function minus_zero_literal_folds_without_losing_its_sign_test()
+    local mz = -0.0
+    assert(1 / mz == -inf)
+    assert(math.type(mz) == "float")
+end
+
+-- minus zero computed at runtime keeps its sign
+local function minus_zero_computed_at_runtime_keeps_its_sign_test()
+    local x = -1
+    local mz = 0 / x
+    assert(1 / mz == -inf)
+end
+
+-- tostring of minus zero shows the sign
+local function tostring_of_minus_zero_shows_the_sign_test()
+    assert(tostring(-0.0) == "-0.0")
+end
+
+-- minus zero compares equal to plus zero
+local function minus_zero_compares_equal_to_plus_zero_test()
+    assert(-0.0 == 0.0)
+    assert(not (-0.0 < 0.0))
+    assert(not (0.0 < -0.0))
+end
+
+-- signed zero arithmetic follows IEEE 754
+local function signed_zero_arithmetic_follows_ieee_754_test()
+    assert(1 / (0.0 + -0.0) == inf)
+    assert(1 / (-0.0 + -0.0) == -inf)
+    assert(1 / ((-0.0) * -1) == inf)
+end
+
+-- minus zero as a table key aliases the integer key zero
+local function minus_zero_as_a_table_key_aliases_the_integer_key_zero_test()
+    local t = {}
+    t[0] = "a"
+    assert(t[-0.0] == "a")
+    assert(t[0.0] == "a")
+    t[-0.0] = "b"
+    assert(t[0] == "b")
+    local count = 0
+    for _ in pairs(t) do
+        count = count + 1
+    end
+    assert(count == 1)
+    assert(math.type(next(t)) == "integer")
+end
+
+-- ============================================
+-- Integer and float comparison boundaries
+-- ============================================
+
+-- maxinteger is strictly below its float conversion
+local function maxinteger_is_strictly_below_its_float_conversion_test()
+    -- The float conversion of maxinteger rounds up to exactly 2^63.
+    assert(maxint < maxint + 0.0)
+    assert(maxint + 0.0 == 2.0^63)
+    assert(not (maxint == maxint + 0.0))
+end
+
+-- mininteger converts to float exactly
+local function mininteger_converts_to_float_exactly_test()
+    assert(minint == minint + 0.0)
+    assert(minint <= minint + 0.0)
+    assert(not (minint < minint + 0.0))
+end
+
+-- mixed comparison near 2^63 is exact
+local function mixed_comparison_near_2_63_is_exact_test()
+    -- The largest double below 2^63 is 2^63 - 1024.
+    assert(maxint > 9223372036854774784.0)
+    assert(2.0^63 > maxint)
+end
+
+-- mixed comparison at the 2^53 float precision limit is exact
+local function mixed_comparison_at_the_2_53_float_precision_limit_is_exact_test()
+    local p53 = 1 << 53
+    assert(math.type(p53) == "integer")
+    assert(p53 + 0.0 == p53)
+    assert(p53 + 1 > p53 + 0.0)
+    assert((p53 + 1) + 0.0 == p53 + 0.0)
+end
+
+-- math.ult treats mininteger as a huge unsigned value
+local function math_ult_treats_mininteger_as_a_huge_unsigned_value_test()
+    assert(not math.ult(minint, maxint))
+    assert(math.ult(maxint, minint))
+end
+
+-- math.tointeger converts exact float values
+local math_tointeger_converts_exact_float_values_cases = {
+    {3.0, 3},
+    {-3.0, -3},
+    {-0.0, 0},
+    {2.0^62, 4611686018427387904},
+    {-2.0^63, math.mininteger},
+}
+
+local function math_tointeger_converts_exact_float_values_test(x, expected)
+    assert(math.tointeger(x) == expected)
+    assert(math.type(math.tointeger(x)) == "integer")
+end
+
+-- math.tointeger returns nil for unconvertible values
+local math_tointeger_returns_nil_for_unconvertible_values_cases = {
+    {3.5},
+    {2.0^63},
+    {math.huge},
+    {-math.huge},
+    {0/0},
+    {true},
+}
+
+local function math_tointeger_returns_nil_for_unconvertible_values_test(x)
+    assert(math.tointeger(x) == nil)
+end
+
+-- math.tointeger coerces numeric strings on the fastcall path
+local function math_tointeger_coerces_numeric_strings_on_the_fastcall_path_test()
+    -- Numeric strings naming an exact integer are converted, matching
+    -- reference Lua, and the compiled fastcall form of this call agrees
+    -- with the plain C function.
+    local function probe(x)
+        return math.tointeger(x)
+    end
+    assert(probe("3") == 3)
+    assert(probe("3.0") == 3)
+end
+
+-- math.tointeger coerces numeric strings on the C call path
+local function math_tointeger_coerces_numeric_strings_on_the_c_call_path_test()
+    local alias = math.tointeger
+    assert(alias("3") == 3)
+    assert(alias("3.0") == 3)
+end
+
+-- ============================================
+-- math.type across value classes
+-- ============================================
+
+-- math.type reports integer
+local math_type_reports_integer_cases = {
+    {0},
+    {maxint},
+    {minint},
+    {0xFF},
+    {1 << 62},
+}
+
+local function math_type_reports_integer_test(v)
+    assert(math.type(v) == "integer")
+end
+
+-- math.type reports float
+local math_type_reports_float_cases = {
+    {0.0},
+    {-0.0},
+    {3.5},
+    {math.huge},
+    {0/0},
+    {1e999},
+    {0x1p4},
+    {maxint + 0.0},
+}
+
+local function math_type_reports_float_test(v)
+    assert(math.type(v) == "float")
+end
+
+-- math.type is nil for every non-number
+local function math_type_is_nil_for_every_non_number_test()
+    assert(math.type("3.5") == nil)
+    assert(math.type(nil) == nil)
+    assert(math.type(true) == nil)
+    assert(math.type({}) == nil)
+    assert(math.type(tostring) == nil)
+end
+
+-- math.type with no argument raises
+local function math_type_with_no_argument_raises_test()
+    raises(math.type, "value expected")
+end
+
+-- ============================================
+-- tostring and tonumber round trips
+-- ============================================
+
+-- maxinteger round trips through tostring
+local function maxinteger_round_trips_through_tostring_test()
+    assert(tostring(maxint) == "9223372036854775807")
+    local back = tonumber(tostring(maxint))
+    assert(back == maxint)
+    assert(math.type(back) == "integer")
+end
+
+-- mininteger round trips through tostring
+local function mininteger_round_trips_through_tostring_test()
+    assert(tostring(minint) == "-9223372036854775808")
+    local back = tonumber(tostring(minint))
+    assert(back == minint)
+    assert(math.type(back) == "integer")
+end
+
+-- floats round trip through tostring exactly
+local floats_round_trip_through_tostring_exactly_cases = {
+    {0.1},
+    {1/3},
+    {math.pi},
+    {5e-324},
+    {1.7976931348623157e308},
+    {0.30000000000000004},
+    {123.456},
+}
+
+local function floats_round_trip_through_tostring_exactly_test(f)
+    local back = tonumber(tostring(f))
+    assert(back == f)
+    assert(math.type(back) == "float")
+end
+
+-- minus zero round trips through tostring
+local function minus_zero_round_trips_through_tostring_test()
+    local back = tonumber(tostring(-0.0))
+    assert(1 / back == -inf)
+end
+
+-- float tostring formatting is pinned
+local float_tostring_formatting_is_pinned_cases = {
+    {1.0, "1.0"},
+    {100.0, "100.0"},
+    {0.5, "0.5"},
+    {0.1, "0.1"},
+    {1/3, "0.33333333333333331"},
+    {1e15, "1e+15"},
+    {2.0^53, "9007199254740992.0"},
+    {math.pi, "3.1415926535897931"},
+    {math.huge, "inf"},
+    {-math.huge, "-inf"},
+}
+
+local function float_tostring_formatting_is_pinned_test(f, expected)
+    assert(tostring(f) == expected)
+end
+
+-- tostring of NaN carries a nan marker
+local function tostring_of_nan_carries_a_nan_marker_test()
+    -- The sign and suffix of a rendered NaN are platform dependent: macOS
+    -- prints "nan", glibc x86-64 prints "-nan", and MSVC prints "-nan(ind)".
+    local rendered = tostring(0/0)
+    assert(string.find(rendered, "nan", 1, true) ~= nil)
+end
+
+-- integer tostring has no decimal point
+local function integer_tostring_has_no_decimal_point_test()
+    assert(tostring(3) == "3")
+    assert(tostring(-3) == "-3")
+    assert(tostring(0) == "0")
+end
+
+-- ============================================
+-- Float to integer coercion in integer-only contexts
+-- ============================================
+
+-- fractional float in a bitwise operator names the variable
+local fractional_float_in_a_bitwise_operator_names_the_variable_cases = {
+    {function(x) return x | 1 end},
+    {function(x) return x & 1 end},
+    {function(x) return x ~ 1 end},
+    {function(x) return x << 1 end},
+    {function(x) return x >> 1 end},
+    {function(x) return ~x end},
+}
+
+local function fractional_float_in_a_bitwise_operator_names_the_variable_test(op)
+    raises(function() return op(2.5) end, "number %(local 'x'%) has no integer representation")
+end
+
+-- fractional float in stdlib integer arguments raises
+local fractional_float_in_stdlib_integer_arguments_raises_cases = {
+    {function() return string.rep("a", 2.5) end},
+    {function() return ("abc"):sub(1.5) end},
+    {function() return table.insert({}, 1.5, "v") end},
+    {function() return math.random(1.5) end},
+}
+
+local function fractional_float_in_stdlib_integer_arguments_raises_test(f)
+    raises(f, "no integer representation")
+end
+
+-- floats with exact integer values are accepted in integer contexts
+local function floats_with_exact_integer_values_are_accepted_in_integer_contexts_test()
+    assert((1 << 2.0) == 4)
+    assert(3.0 | 0 == 3)
+    assert(math.type(3.0 | 0) == "integer")
+    assert(~(-0.0) == -1)
+    assert(string.rep("a", 3.0) == "aaa")
+    assert(("abc"):sub(2.0) == "bc")
+end
