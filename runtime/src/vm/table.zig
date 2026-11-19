@@ -66,7 +66,14 @@ pub fn getStr(t: *Table, s: *object.String) Value {
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
         const n = &t.hash[i];
-        if (n.key.tag == .string and n.key.payload == @intFromPtr(s)) return n.val;
+        if (n.key.tag == .string) {
+            if (n.key.payload == @intFromPtr(s)) return n.val;
+            // Long strings are not interned: equal contents, distinct objects.
+            if (!s.flags.interned) {
+                const o = n.key.as(object.String);
+                if (!o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes())) return n.val;
+            }
+        }
         if (n.key.tag == .nil) return .nil;
     }
 }

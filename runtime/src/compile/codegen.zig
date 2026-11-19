@@ -988,7 +988,9 @@ fn infix(fs: *FuncState, op: ast.BinOp, v: *ExpDesc) Error!void {
             if (!isNumeral(v)) _ = try exp2anyreg(fs, v);
         },
         .eq, .ne => {
-            if (!isNumeral(v) and v.kind != .kstr and v.kind != .nil and v.kind != .true_ and v.kind != .false_) _ = try exp2anyreg(fs, v);
+            // Constants stay operands only when no jumps are pending on them.
+            const constant = isNumeral(v) or (!v.hasJumps() and (v.kind == .kstr or v.kind == .nil or v.kind == .true_ or v.kind == .false_));
+            if (!constant) _ = try exp2anyreg(fs, v);
         },
         .lt, .le, .gt, .ge => {
             if (!isNumeral(v)) _ = try exp2anyreg(fs, v);
@@ -2504,14 +2506,31 @@ fn fieldName(hidden: []const u8) []const u8 {
     return p;
 }
 
-/// In multiple assignment, a later target's table or key register may be
-/// a local assigned by an earlier target. Copy such locals first.
+/// Multiple assignment stores right to left, so a local target is written
+/// before the targets to its left. When one of those uses the local as its
+/// table or key, copy the local first and index through the copy.
 fn checkConflicts(fs: *FuncState, descs: []ExpDesc) Error!void {
     for (descs, 0..) |*d, i| {
+        if (d.kind == .upval) {
+            // An upvalue target conflicts with earlier fields of that same
+            // upvalue table: load the table into a register for them.
+            var conflict = false;
+            for (descs[0..i]) |*o| {
+                if (o.kind == .indexup and o.info == d.info) {
+                    conflict = true;
+                    o.* = .{ .kind = .indexstr, .info = fs.freereg, .aux = o.aux };
+                }
+            }
+            if (conflict) {
+                try codeABC(fs, .getupval, fs.freereg, @intCast(d.info), 0);
+                try reserveRegs(fs, 1);
+            }
+            continue;
+        }
         if (d.kind != .local) continue;
         const reg = d.info;
         var conflict = false;
-        for (descs[i + 1 ..]) |*o| {
+        for (descs[0..i]) |*o| {
             switch (o.kind) {
                 .indexed => {
                     if (o.info == reg) {
