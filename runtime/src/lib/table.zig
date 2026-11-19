@@ -501,31 +501,108 @@ fn numericValue(l: *Thread, v: Value) ?f64 {
     return null;
 }
 
+/// Floating-point sums in a fixed order that SIMD loops can follow. The
+/// element at index i adds into accumulator (i - 1) % 8, and the eight
+/// accumulators combine pairwise: accumulator j with j + 4, then j with
+/// j + 2, then the last two. Every path, unboxed or not, adds in this
+/// order, so the results never depend on how a table is stored.
+const lanes = 8;
+const F64s = @Vector(lanes, f64);
+const U64s = @Vector(lanes, u64);
+const I64s = @Vector(lanes, i64);
+
+const Term = enum { value, square };
+
+const Lanes = struct {
+    acc: [lanes]f64 = @splat(0),
+    count: i64 = 0,
+
+    /// Adds the term for `x` at the one-based index `i`.
+    inline fn add(a: *Lanes, comptime term: Term, i: i64, x: f64, m: f64) void {
+        const lane: usize = @intCast(@mod(i - 1, lanes));
+        a.acc[lane] += termOf(term, x, m);
+        a.count += 1;
+    }
+
+    fn total(a: *const Lanes) f64 {
+        const v = a.acc;
+        const s0 = v[0] + v[4];
+        const s1 = v[1] + v[5];
+        const s2 = v[2] + v[6];
+        const s3 = v[3] + v[7];
+        return (s0 + s2) + (s1 + s3);
+    }
+};
+
+inline fn termOf(comptime term: Term, x: anytype, m: anytype) @TypeOf(x) {
+    return switch (term) {
+        .value => x,
+        .square => (x - m) * (x - m),
+    };
+}
+
+/// Accumulates the terms of the numeric values `t[1]` through `t[len]`
+/// for the table argument 1. A plain table reads its array part directly,
+/// eight unboxed slots at a time when it holds integers or floats.
+fn accumulate(l: *Thread, len: i64, comptime term: Term, m: f64) Error!Lanes {
+    var a: Lanes = .{};
+    var i: i64 = 1;
+    const tv = l.arg(1);
+    if (tv.tag == .table and tv.as(Table).metatable == null and len > 0) {
+        const t = tv.as(Table);
+        const n: usize = @intCast(@min(len, @as(i64, @intCast(@min(t.asize, std.math.maxInt(i64))))));
+        switch (t.kind) {
+            .float => accumulateWords(.float, t.words()[0..n], &a, term, m),
+            .int => accumulateWords(.int, t.words()[0..n], &a, term, m),
+            .none => {},
+            // Converting a value never runs Lus code, so the array part
+            // stays in place during the loop.
+            .boxed => for (t.values()[0..n], 1..) |v, k| {
+                if (numericValue(l, v)) |x| a.add(term, @intCast(k), x, m);
+            },
+        }
+        i = @as(i64, @intCast(n)) + 1;
+    }
+    while (i <= len) : (i += 1) {
+        if (numericValue(l, try geti(l, l.arg(1), i))) |x| a.add(term, i, x, m);
+    }
+    return a;
+}
+
+fn accumulateWords(comptime kind: Table.ArrayKind, w: []const u64, a: *Lanes, comptime term: Term, m: f64) void {
+    var acc: F64s = a.acc;
+    var count: i64 = 0;
+    const mv: F64s = @splat(m);
+    var k: usize = 0;
+    while (k + lanes <= w.len) : (k += lanes) {
+        const x: U64s = w[k..][0..lanes].*;
+        const live = x != @as(U64s, @splat(Table.hole));
+        const xf: F64s = if (kind == .float) @bitCast(x) else @floatFromInt(@as(I64s, @bitCast(x)));
+        acc = @select(f64, live, acc + termOf(term, xf, mv), acc);
+        count += @popCount(@as(u8, @bitCast(live)));
+    }
+    a.acc = acc;
+    a.count += count;
+    while (k < w.len) : (k += 1) {
+        if (w[k] == Table.hole) continue;
+        const x: f64 = if (kind == .float) @bitCast(w[k]) else @floatFromInt(@as(i64, @bitCast(w[k])));
+        a.add(term, @intCast(k + 1), x, m);
+    }
+}
+
 fn sum(l: *Thread) Error!u32 {
     _ = try aux.checkTable(l, 1);
     const len = try lenOf(l, l.arg(1));
-    var acc: f64 = 0;
-    var i: i64 = 1;
-    while (i <= len) : (i += 1) {
-        if (numericValue(l, try geti(l, l.arg(1), i))) |x| acc += x;
-    }
-    return aux.ret(l, Value.float(acc));
+    const a = try accumulate(l, len, .value, 0);
+    return aux.ret(l, Value.float(a.total()));
 }
 
 fn mean(l: *Thread) Error!u32 {
     _ = try aux.checkTable(l, 1);
     const len = try lenOf(l, l.arg(1));
-    var acc: f64 = 0;
-    var count: i64 = 0;
-    var i: i64 = 1;
-    while (i <= len) : (i += 1) {
-        if (numericValue(l, try geti(l, l.arg(1), i))) |x| {
-            acc += x;
-            count += 1;
-        }
-    }
-    if (count == 0) return aux.ret(l, Value.float(std.math.nan(f64)));
-    return aux.ret(l, Value.float(acc / @as(f64, @floatFromInt(count))));
+    const a = try accumulate(l, len, .value, 0);
+    if (a.count == 0) return aux.ret(l, Value.float(std.math.nan(f64)));
+    return aux.ret(l, Value.float(a.total() / @as(f64, @floatFromInt(a.count))));
 }
 
 fn floatLess(_: void, a: f64, b: f64) bool {
@@ -553,27 +630,13 @@ fn stdev(l: *Thread) Error!u32 {
     _ = try aux.checkTable(l, 1);
     const sample = l.arg(2).truthy();
     const len = try lenOf(l, l.arg(1));
-    var acc: f64 = 0;
-    var count: i64 = 0;
-    var i: i64 = 1;
-    while (i <= len) : (i += 1) {
-        if (numericValue(l, try geti(l, l.arg(1), i))) |x| {
-            acc += x;
-            count += 1;
-        }
-    }
+    const a = try accumulate(l, len, .value, 0);
+    const count = a.count;
     if (count == 0 or (sample and count < 2)) return aux.ret(l, Value.float(std.math.nan(f64)));
-    const m = acc / @as(f64, @floatFromInt(count));
-    var sumsq: f64 = 0;
-    i = 1;
-    while (i <= len) : (i += 1) {
-        if (numericValue(l, try geti(l, l.arg(1), i))) |x| {
-            const d = x - m;
-            sumsq += d * d;
-        }
-    }
+    const m = a.total() / @as(f64, @floatFromInt(count));
+    const q = try accumulate(l, len, .square, m);
     const div: f64 = @floatFromInt(if (sample) count - 1 else count);
-    return aux.ret(l, Value.float(@sqrt(sumsq / div)));
+    return aux.ret(l, Value.float(@sqrt(q.total() / div)));
 }
 
 // ---------------------------------------------------------------------

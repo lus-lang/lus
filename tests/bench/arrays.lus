@@ -1,0 +1,15 @@
+local n = 1000000
+local a, b = {}, {}
+for i = 1, n do
+    a[i] = i
+    b[i] = i * 0.5
+end
+local s, t = 0, 0.0
+for _ = 1, 30 do
+    for i = 1, n do
+        s = s + a[i]
+        t = t + b[i]
+        b[i] = b[i] * 1.0000001
+    end
+end
+print(s, t)

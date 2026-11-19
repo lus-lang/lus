@@ -1,0 +1,11 @@
+local n = 1000000
+local f, k = {}, {}
+for i = 1, n do
+    f[i] = i * 0.25
+    k[i] = i % 1000
+end
+local s = 0
+for _ = 1, 20 do
+    s = s + table.sum(f) + table.mean(k) + table.stdev(f) + table.sum(k)
+end
+print(s)
