@@ -29,6 +29,7 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Added `lus ast`, which prints the syntax tree of a file as JSON.
 - Added `lus build`, which bundles a script and the modules it requires into a standalone executable, with `-o`, `-P`, `-F`, and `--include`.
 - Added `lus debug`, a Debug Adapter Protocol server with conditional breakpoints, hit counts, log points, error breakpoints, stepping through coroutines, pausing, and inspection of locals, upvalues, globals, and expressions. The VS Code extension registers it as the `lus` debugger.
+- Added `lus compile`, which writes a script as a binary chunk, with `-o`, `-s`, and `-F`.
 - Added `--dis`, which prints the bytecode of a script.
 - The language server reports its version as `2.0.0-dev`.
 
@@ -43,6 +44,10 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 
 - The runtime builds with Zig alone and compiles SQLite, Zstandard, and Brotli from source. Gzip, deflate, LZ4, and the TLS client are written in Zig.
 - The interpreter is a register machine with 32-bit instructions, quickened instructions that specialize in place, slot-prediction inline caches for string-keyed table access, and zero-cost entry into `catch`.
+- Hot functions compile to native code on aarch64 and x86-64 macOS and Linux. A baseline tier generated from the interpreter's own opcode definitions compiles functions that run often, and an optimizing tier recompiles those that stay hot with types predicted from inline caches, values kept in machine registers, inlining of small functions, loop-invariant code motion, and tables that never escape kept out of the heap. Guards leave optimized code for the baseline code whenever a prediction fails.
+- The WebAssembly build compiles hot functions to WebAssembly modules that the JavaScript host instantiates, so the playground and the VS Code extension run compiled code too.
+- The environment variable `LUS_JIT` selects `off`, `on`, `eager`, `baseline`, or `opt-eager`, and `debug.jit` reports the setting and whether a function is compiled.
+- The garbage collector is precise and non-moving, with size-classed pages, mark bitmaps, and lazy sweeping. It runs generationally by default and switches to incremental collections with a goal-based pacer when most new objects survive. Every worker owns its heap.
 - `package.path` defaults to `./?.lus;./?/init.lus;./?.lua;./?/init.lua`, and the environment variable `LUS_PATH` sets it.
 - The standard library is written once in Zig, and every builtin has a single implementation.
 
