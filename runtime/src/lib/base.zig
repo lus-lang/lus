@@ -363,6 +363,8 @@ fn collectgarbage(l: *Thread) Error!u32 {
     const opts = [_][]const u8{ "collect", "stop", "restart", "count", "step", "isrunning", "generational", "incremental", "param" };
     const o = try aux.checkOption(l, 1, "collect", &opts);
     const g = l.g;
+    // The collector cannot be driven from inside a finalizer.
+    if (g.running_finalizers) return aux.retNil(l);
     switch (o) {
         0 => {
             gc.fullCollect(g);
@@ -384,7 +386,11 @@ fn collectgarbage(l: *Thread) Error!u32 {
             return aux.retBool(l, true);
         },
         5 => return aux.retBool(l, !g.gc_stopped),
-        6, 7 => return aux.retStr(l, "incremental"),
+        6, 7 => {
+            const prev: []const u8 = if (g.gc_generational) "generational" else "incremental";
+            g.gc_generational = o == 6;
+            return aux.retStr(l, prev);
+        },
         8 => {
             const p = try aux.checkOption(l, 2, null, std.meta.fieldNames(gc.Param));
             const v = try aux.optInt(l, 3, -1);

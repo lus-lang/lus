@@ -181,6 +181,9 @@ pub const Global = struct {
     pause: usize = 200,
     gc_depth: u32 = 0,
     gc_stopped: bool = false,
+    /// The collector mode reported by collectgarbage("generational") and
+    /// collectgarbage("incremental").
+    gc_generational: bool = false,
     cycles: u64 = 0,
     strings: StringSet = .{},
     seed: u64,
