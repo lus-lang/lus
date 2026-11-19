@@ -1526,9 +1526,16 @@ fn metaCompare(l: *Thread, comptime which: enum { eq, lt, le }, x: Value, y: Val
 }
 
 fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {
-    const gpa = l.g.gpa;
+    // Short results are built on the stack, and the parts that are
+    // already strings or numbers size the buffer up front.
+    var stack: [ops.concat_stack]u8 = undefined;
+    var fb = std.heap.BufferFirstAllocator.init(&stack, l.g.gpa);
+    const gpa = fb.allocator();
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
+    var room: usize = 0;
+    for (l.stack[first..][0..n]) |v| room += ops.concatRoom(v);
+    buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();
     var ascii = true;
     var chars: usize = 0;
     var i: u32 = 0;
@@ -1536,7 +1543,7 @@ fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {
         var v = l.stack[first + i];
         if (v.tag == .vector) return l.raiseFmt("cannot interpolate a vector (decode it with vector.tostring)", .{});
         if (v.tag != .string and !v.isNumber()) v = Value.obj(.string, try ops.toString(l, v));
-        try ops.appendForConcat(l, &buf, v, &ascii, &chars);
+        try ops.appendForConcat(l, gpa, &buf, v, &ascii, &chars);
     }
     const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
     return Value.obj(.string, s);

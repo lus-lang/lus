@@ -8,6 +8,9 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `methods.lus`: method calls through a metatable `__index` and table allocation.
 - `strings.lus`: string interpolation, `table.concat`, and `string.gmatch`.
 - `closures.lus`: closure creation with captured upvalues.
+- `patterns.lus`: `find`, `match`, `gmatch`, `gsub`, and `upper` over ASCII text, with plain searches, literal prefixes, captures, and classes.
+- `interp.lus`: building many short strings with interpolation, `..`, `upper`, `string.format`, and `table.concat`.
+- `unicode.lus`: `string.sub` and `#` on a long string of mixed one to four byte characters. Lus counts characters, while legacy and LuaJIT count bytes, so this benchmark measures the cost of character indexing against plain byte slicing.
 
 The runner times every benchmark under each runtime it finds and prints the best wall time of several runs. Build the runtime with ReleaseFast before measuring.
 

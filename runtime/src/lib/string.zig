@@ -14,11 +14,13 @@
 //! concatenation does.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Decimal = @import("../vm/fdigits.zig").Decimal;
 const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
 const ops = @import("../vm/ops.zig");
+const vmtable = @import("../vm/table.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const numeric = @import("../vm/numeric.zig");
 const aux = @import("aux.zig");
@@ -69,28 +71,10 @@ pub fn open(l: *Thread) Error!void {
 // ---------------------------------------------------------------------
 // Character helpers
 
-/// Number of characters in a slice of valid WTF-8: the count of bytes
-/// that are not continuation bytes.
-fn countChars(b: []const u8) usize {
-    const n_vec = 16;
-    const V = @Vector(n_vec, u8);
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i + n_vec <= b.len) : (i += n_vec) {
-        const v: V = b[i..][0..n_vec].*;
-        const cont = (v & @as(V, @splat(0xC0))) == @as(V, @splat(0x80));
-        n += n_vec - @popCount(@as(u16, @bitCast(cont)));
-    }
-    while (i < b.len) : (i += 1) {
-        if (b[i] & 0xC0 != 0x80) n += 1;
-    }
-    return n;
-}
-
 /// Characters in `b`, a slice of `s` that starts and ends on character
 /// boundaries.
 inline fn charsIn(s: *const String, b: []const u8) usize {
-    return if (s.flags.ascii) b.len else countChars(b);
+    return if (s.flags.ascii) b.len else wtf8.countChars(b);
 }
 
 /// Byte offset of the character that ends just before offset `i > 0`.
@@ -103,11 +87,27 @@ fn prevChar(src: []const u8, i: usize) usize {
 /// Creates the string `s[from..to]` (byte offsets on character
 /// boundaries). The slice is valid text, so it is not revalidated.
 fn substring(l: *Thread, s: *String, from: usize, to: usize) Error!Value {
+    return substringKnown(l, s, from, to, charsIn(s, s.bytes()[from..to]));
+}
+
+/// Creates the string `s[from..to]` whose character count is already
+/// known. A slice is ASCII exactly when it has one byte per character.
+fn substringKnown(l: *Thread, s: *String, from: usize, to: usize, chars: usize) Error!Value {
     if (from == 0 and to == s.len) return Value.obj(.string, s);
     const b = s.bytes()[from..to];
-    const chars = charsIn(s, b);
     const r = state.newStringKnown(l.g, b, chars == b.len, chars) catch return l.raiseMem();
     return Value.obj(.string, r);
+}
+
+/// Byte offset of the character at zero-based index `ci` of `s`, where
+/// `ci` may equal the character count. Long non-ASCII strings start from
+/// the nearest breadcrumb at or before `ci` and skip the remaining
+/// characters with the vectorized `wtf8.advance`.
+fn charOffset(l: *Thread, s: *String, ci: usize) usize {
+    if (s.flags.ascii) return ci;
+    if (ci >= s.chars) return s.len;
+    const k = ci - ci % String.crumb_step;
+    return wtf8.advance(s.bytes(), s.byteOffset(l.g.gpa, k), ci - k);
 }
 
 /// Translates a relative initial position (negative counts back from the
@@ -129,37 +129,51 @@ fn getEndPos(l: *Thread, i: u32, default: i64, n: usize) Error!usize {
     return @intCast(ni + pos + 1);
 }
 
+/// Size of the stack buffers that hold short results before they are
+/// copied into a new string.
+const stack_len = 512;
+
 /// Accumulates the bytes of a result string. Appending a piece that
 /// starts with a trail surrogate right after a lead surrogate joins the
 /// two into one supplementary character, so the result stays valid
-/// WTF-8.
+/// WTF-8. Short results never leave the builder's stack buffer.
 const Builder = struct {
     l: *Thread,
-    buf: std.ArrayList(u8) = .empty,
+    buf: std.ArrayList(u8),
+    first: std.heap.BufferFirstAllocator,
+    stack: [stack_len]u8,
 
-    fn init(l: *Thread) Builder {
-        return .{ .l = l };
+    /// Prepares the builder in place, because its allocator points into
+    /// its own stack buffer.
+    fn init(b: *Builder, l: *Thread) void {
+        b.l = l;
+        b.buf = .empty;
+        b.first = .init(&b.stack, l.g.gpa);
+    }
+
+    fn gpa(b: *Builder) Allocator {
+        return b.first.allocator();
     }
 
     fn deinit(b: *Builder) void {
-        b.buf.deinit(b.l.g.gpa);
+        b.buf.deinit(b.gpa());
     }
 
     fn append(b: *Builder, bytes: []const u8) Error!void {
-        const gpa = b.l.g.gpa;
+        const a = b.gpa();
         if (bytes.len >= 3 and bytes[0] == 0xED) {
             if (wtf8.leadingTrailSurrogate(bytes)) |trail| {
                 if (wtf8.trailingLeadSurrogate(b.buf.items)) |lead| {
                     b.buf.items.len -= 3;
                     var tmp: [4]u8 = undefined;
                     const n = wtf8.encode(wtf8.combineSurrogates(lead, trail), &tmp);
-                    b.buf.appendSlice(gpa, tmp[0..n]) catch return b.l.raiseMem();
-                    b.buf.appendSlice(gpa, bytes[3..]) catch return b.l.raiseMem();
+                    b.buf.appendSlice(a, tmp[0..n]) catch return b.l.raiseMem();
+                    b.buf.appendSlice(a, bytes[3..]) catch return b.l.raiseMem();
                     return;
                 }
             }
         }
-        b.buf.appendSlice(gpa, bytes) catch return b.l.raiseMem();
+        b.buf.appendSlice(a, bytes) catch return b.l.raiseMem();
     }
 
     fn appendChar(b: *Builder, cp: u21) Error!void {
@@ -169,17 +183,45 @@ const Builder = struct {
     }
 
     fn appendRepeat(b: *Builder, c: u8, n: usize) Error!void {
-        b.buf.appendNTimes(b.l.g.gpa, c, n) catch return b.l.raiseMem();
+        b.buf.appendNTimes(b.gpa(), c, n) catch return b.l.raiseMem();
     }
 
     fn print(b: *Builder, comptime fmt: []const u8, args: anytype) Error!void {
-        b.buf.print(b.l.g.gpa, fmt, args) catch return b.l.raiseMem();
+        b.buf.print(b.gpa(), fmt, args) catch return b.l.raiseMem();
     }
 
-    /// Creates the result string. Validation also computes the character
-    /// count and the ASCII flag in one vectorized pass.
+    fn reserve(b: *Builder, n: usize) Error!void {
+        b.buf.ensureTotalCapacity(b.gpa(), n) catch return b.l.raiseMem();
+    }
+
+    /// Creates the result string. Every piece appended is valid WTF-8 and
+    /// surrogate pairs are joined on the way in, so the bytes need no
+    /// validation. The ASCII flag and the character count come from
+    /// vectorized scans.
     fn finish(b: *Builder) Error!Value {
-        return b.l.newStringValue(b.buf.items);
+        const items = b.buf.items;
+        if (builtin.mode == .debug) std.debug.assert(wtf8.analyze(items).valid);
+        const ascii = wtf8.asciiPrefix(items) == items.len;
+        const chars = if (ascii) items.len else wtf8.countChars(items);
+        const r = state.newStringKnown(b.l.g, items, ascii, chars) catch return b.l.raiseMem();
+        return Value.obj(.string, r);
+    }
+};
+
+/// A temporary buffer for a result of known size that is then copied
+/// into a new string. Short results stay on the stack.
+const Scratch = struct {
+    stack: [stack_len]u8 = undefined,
+    heap: []u8 = &.{},
+
+    fn get(sc: *Scratch, l: *Thread, n: usize) Error![]u8 {
+        if (n <= stack_len) return sc.stack[0..n];
+        sc.heap = l.g.gpa.alloc(u8, n) catch return l.raiseMem();
+        return sc.heap;
+    }
+
+    fn deinit(sc: *Scratch, l: *Thread) void {
+        if (sc.heap.len > 0) l.g.gpa.free(sc.heap);
     }
 };
 
@@ -197,32 +239,48 @@ fn sub(l: *Thread) Error!u32 {
     const start = posRelat(try aux.checkInt(l, 2), n);
     const end = try getEndPos(l, 3, -1, n);
     if (start > end) return aux.retStr(l, "");
-    const gpa = l.g.gpa;
-    const from = s.byteOffset(gpa, start - 1);
-    const to = s.byteOffset(gpa, end);
-    return aux.ret(l, try substring(l, s, from, to));
+    const count = end - start + 1;
+    if (s.flags.ascii) return aux.ret(l, try substringKnown(l, s, start - 1, end, count));
+    // Find the start, then skip the characters of the result from there.
+    const from = charOffset(l, s, start - 1);
+    const to = wtf8.advance(s.bytes(), from, count);
+    return aux.ret(l, try substringKnown(l, s, from, to, count));
 }
 
 /// Maps ASCII letters with `f` and leaves every other byte unchanged.
 /// Bytes of multi-byte characters are never ASCII letters, so the
 /// character count and ASCII flag carry over.
-fn mapAscii(l: *Thread, comptime f: fn (u8) u8) Error!u32 {
+fn mapAscii(l: *Thread, comptime first: u8) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const gpa = l.g.gpa;
     const src = s.bytes();
-    const buf = gpa.alloc(u8, src.len) catch return l.raiseMem();
-    defer gpa.free(buf);
-    for (src, buf) |c, *o| o.* = f(c);
+    var sc: Scratch = .{};
+    defer sc.deinit(l);
+    const buf = try sc.get(l, src.len);
+    // Flipping bit 0x20 maps between the cases. A letter of the case
+    // being mapped is one of the 26 bytes from `first`, which a single
+    // unsigned comparison tests.
+    const vlen = 32;
+    const V = @Vector(vlen, u8);
+    var i: usize = 0;
+    while (i + vlen <= src.len) : (i += vlen) {
+        const v: V = src[i..][0..vlen].*;
+        const hit = (v -% @as(V, @splat(first))) < @as(V, @splat(26));
+        buf[i..][0..vlen].* = @select(u8, hit, v ^ @as(V, @splat(0x20)), v);
+    }
+    while (i < src.len) : (i += 1) {
+        const c = src[i];
+        buf[i] = if (c -% first < 26) c ^ 0x20 else c;
+    }
     const r = state.newStringKnown(l.g, buf, s.flags.ascii, s.chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, r));
 }
 
 fn upper(l: *Thread) Error!u32 {
-    return mapAscii(l, std.ascii.toUpper);
+    return mapAscii(l, 'a');
 }
 
 fn lower(l: *Thread) Error!u32 {
-    return mapAscii(l, std.ascii.toLower);
+    return mapAscii(l, 'A');
 }
 
 /// string.dump(f [, strip]): the binary chunk of a Lus function, as a
@@ -263,7 +321,8 @@ fn rep(l: *Thread) Error!u32 {
     // character count is known up front.
     const may_join = wtf8.leadingTrailSurrogate(sb) != null or wtf8.leadingTrailSurrogate(sepb) != null;
     if (may_join) {
-        var b = Builder.init(l);
+        var b: Builder = undefined;
+        b.init(l);
         defer b.deinit();
         var i: usize = 0;
         while (i < count) : (i += 1) {
@@ -272,9 +331,9 @@ fn rep(l: *Thread) Error!u32 {
         }
         return aux.ret(l, try b.finish());
     }
-    const gpa = l.g.gpa;
-    const buf = gpa.alloc(u8, total) catch return l.raiseMem();
-    defer gpa.free(buf);
+    var sc: Scratch = .{};
+    defer sc.deinit(l);
+    const buf = try sc.get(l, total);
     var off: usize = 0;
     var i: usize = 0;
     while (i < count) : (i += 1) {
@@ -295,9 +354,9 @@ fn reverse(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
     const src = s.bytes();
     if (s.flags.ascii) {
-        const gpa = l.g.gpa;
-        const buf = gpa.alloc(u8, src.len) catch return l.raiseMem();
-        defer gpa.free(buf);
+        var sc: Scratch = .{};
+        defer sc.deinit(l);
+        const buf = try sc.get(l, src.len);
         for (buf, 0..) |*o, i| o.* = src[src.len - 1 - i];
         const r = state.newStringKnown(l.g, buf, true, src.len) catch return l.raiseMem();
         return aux.ret(l, Value.obj(.string, r));
@@ -305,7 +364,8 @@ fn reverse(l: *Thread) Error!u32 {
     // Reversing characters can bring an unpaired trail surrogate before
     // an unpaired lead surrogate into the joining order, so go through
     // the builder.
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var end = src.len;
     while (end > 0) {
@@ -327,7 +387,11 @@ fn byte(l: *Thread) Error!u32 {
     const count = pose - posi + 1;
     try l.ensure(count);
     const src = s.bytes();
-    var off = s.byteOffset(l.g.gpa, posi - 1);
+    if (s.flags.ascii) {
+        for (src[posi - 1 ..][0..count]) |c| try l.push(Value.int(c));
+        return @intCast(count);
+    }
+    var off = charOffset(l, s, posi - 1);
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const d = wtf8.decodeValid(src, off);
@@ -339,7 +403,22 @@ fn byte(l: *Thread) Error!u32 {
 
 fn char(l: *Thread) Error!u32 {
     const n = l.argCount();
-    var b = Builder.init(l);
+    // Short runs of ASCII code points are the common case and need no
+    // surrogate joining.
+    if (n <= stack_len) {
+        var tmp: [stack_len]u8 = undefined;
+        var i: u32 = 1;
+        while (i <= n) : (i += 1) {
+            const v = l.arg(i);
+            if (v.tag != .integer or v.asInt() < 0 or v.asInt() >= 0x80) break;
+            tmp[i - 1] = @intCast(v.asInt());
+        } else {
+            const r = state.newStringKnown(l.g, tmp[0..n], true, n) catch return l.raiseMem();
+            return aux.ret(l, Value.obj(.string, r));
+        }
+    }
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var i: u32 = 1;
     while (i <= n) : (i += 1) {
@@ -448,8 +527,22 @@ fn join(l: *Thread) Error!u32 {
         .integer => lv.asInt(),
         else => ops.toIntegerStrict(lv) orelse return l.raiseFmt("object length is not an integer", .{}),
     };
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
+    // A table without a metatable is read twice: once to size the result
+    // so the bytes are copied once into one buffer, and once to append.
+    const t = tv.as(Table);
+    if (t.metatable == null and n > 0) {
+        var room: usize = 0;
+        var j: i64 = 1;
+        while (j <= n) : (j += 1) {
+            const v = vmtable.getInt(t, j);
+            if (v.tag != .string) break;
+            room += v.as(String).len + sep.len;
+        }
+        try b.reserve(room);
+    }
     var i: i64 = 1;
     while (i <= n) : (i += 1) {
         const v = try ops.index(l, tv, Value.int(i));
@@ -498,294 +591,425 @@ pub const Cap = union(enum) {
     position: usize,
 };
 
-pub const Matcher = struct {
-    src: []const u8,
-    pat: []const u8,
-    /// Source is ASCII, so byte offsets are character indices.
-    ascii: bool,
-    depth: u32 = max_depth,
-    level: usize = 0,
-    capture: [max_captures]struct { init: usize, len: isize } = undefined,
-    /// Capture number reported by `error.InvalidCaptureIndex`.
-    bad_index: i32 = 0,
-    /// A byte offset whose character index is known, used to convert
-    /// later offsets without rescanning from the start.
-    anchor_byte: usize = 0,
-    anchor_char: usize = 0,
+/// The pattern matcher, specialized at compile time. With `bytewise` set
+/// the subject and the pattern are both ASCII, so every character is one
+/// byte and the matcher compares bytes without decoding anything.
+pub fn MatcherFor(comptime bytewise: bool) type {
+    return struct {
+        const M = @This();
 
-    pub fn init(src: []const u8, pat: []const u8, ascii: bool) Matcher {
-        return .{ .src = src, .pat = pat, .ascii = ascii };
-    }
+        src: []const u8,
+        pat: []const u8,
+        /// Source is ASCII, so byte offsets are character indices.
+        ascii: bool,
+        depth: u32 = max_depth,
+        level: usize = 0,
+        capture: [max_captures]struct { init: usize, len: isize } = undefined,
+        /// Capture number reported by `error.InvalidCaptureIndex`.
+        bad_index: i32 = 0,
+        /// A byte offset whose character index is known, used to convert
+        /// later offsets without rescanning from the start.
+        anchor_byte: usize = 0,
+        anchor_char: usize = 0,
 
-    /// Prepares a new match attempt starting at byte `s`, which is
-    /// character `c`.
-    pub fn reset(m: *Matcher, s: usize, c: usize) void {
-        m.depth = max_depth;
-        m.level = 0;
-        m.anchor_byte = s;
-        m.anchor_char = c;
-    }
+        pub fn init(src: []const u8, pat: []const u8, ascii: bool) M {
+            return .{ .src = src, .pat = pat, .ascii = bytewise or ascii };
+        }
 
-    /// Zero-based character index of byte offset `off`.
-    pub fn charIndex(m: *const Matcher, off: usize) usize {
-        if (m.ascii) return off;
-        if (off >= m.anchor_byte) return m.anchor_char + countChars(m.src[m.anchor_byte..off]);
-        return countChars(m.src[0..off]);
-    }
+        /// Prepares a new match attempt starting at byte `s`, which is
+        /// character `c`.
+        pub fn reset(m: *M, s: usize, c: usize) void {
+            m.depth = max_depth;
+            m.level = 0;
+            m.anchor_byte = s;
+            m.anchor_char = c;
+        }
 
-    /// Matches the pattern from byte `p` against the source from byte
-    /// `s`, returning the end of the match.
-    pub fn match(m: *Matcher, s_in: usize, p_in: usize) PatternError!?usize {
-        if (m.depth == 0) return error.TooComplex;
-        m.depth -= 1;
-        defer m.depth += 1;
-        const pat = m.pat;
-        var s = s_in;
-        var p = p_in;
-        while (p < pat.len) {
-            switch (pat[p]) {
-                '(' => {
-                    if (p + 1 < pat.len and pat[p + 1] == ')') return m.startCapture(s, p + 2, cap_position);
-                    return m.startCapture(s, p + 1, cap_unfinished);
-                },
-                ')' => return m.endCapture(s, p + 1),
-                '$' => if (p + 1 == pat.len) {
-                    return if (s == m.src.len) s else null;
-                },
-                '%' => if (p + 1 < pat.len) switch (pat[p + 1]) {
-                    'b' => {
-                        const r = try m.matchBalance(s, p + 2) orelse return null;
-                        s = r.s;
-                        p = r.p;
-                        continue;
+        /// Zero-based character index of byte offset `off`.
+        pub fn charIndex(m: *const M, off: usize) usize {
+            if (m.ascii) return off;
+            if (off >= m.anchor_byte) return m.anchor_char + wtf8.countChars(m.src[m.anchor_byte..off]);
+            return wtf8.countChars(m.src[0..off]);
+        }
+
+        /// The character of `text` at byte `i`.
+        inline fn charAt(text: []const u8, i: usize) wtf8.Decoded {
+            if (bytewise) return .{ .cp = text[i], .len = 1 };
+            return wtf8.decodeValid(text, i);
+        }
+
+        /// Byte length of the character of `text` that starts at `i`.
+        inline fn lenAt(text: []const u8, i: usize) usize {
+            if (bytewise) return 1;
+            return wtf8.seqLen(text[i]);
+        }
+
+        /// Byte offset of the source character that ends just before `s`.
+        inline fn before(m: *const M, s: usize) usize {
+            if (bytewise) return s - 1;
+            return prevChar(m.src, s);
+        }
+
+        /// Matches the pattern from byte `p` against the source from byte
+        /// `s`, returning the end of the match.
+        pub fn match(m: *M, s_in: usize, p_in: usize) PatternError!?usize {
+            if (m.depth == 0) return error.TooComplex;
+            m.depth -= 1;
+            defer m.depth += 1;
+            const pat = m.pat;
+            var s = s_in;
+            var p = p_in;
+            while (p < pat.len) {
+                switch (pat[p]) {
+                    '(' => {
+                        if (p + 1 < pat.len and pat[p + 1] == ')') return m.startCapture(s, p + 2, cap_position);
+                        return m.startCapture(s, p + 1, cap_unfinished);
                     },
-                    'f' => {
-                        p += 2;
-                        if (p >= pat.len or pat[p] != '[') return error.MissingFrontierBracket;
-                        const ep = try m.classEnd(p);
-                        const prev: u21 = if (s == 0) 0 else wtf8.decodeValid(m.src, prevChar(m.src, s)).cp;
-                        const cur: u21 = if (s < m.src.len) wtf8.decodeValid(m.src, s).cp else 0;
-                        if (!m.matchBracket(prev, p, ep - 1) and m.matchBracket(cur, p, ep - 1)) {
-                            p = ep;
+                    ')' => return m.endCapture(s, p + 1),
+                    '$' => if (p + 1 == pat.len) {
+                        return if (s == m.src.len) s else null;
+                    },
+                    '%' => if (p + 1 < pat.len) switch (pat[p + 1]) {
+                        'b' => {
+                            const r = try m.matchBalance(s, p + 2) orelse return null;
+                            s = r.s;
+                            p = r.p;
                             continue;
-                        }
-                        return null;
-                    },
-                    '0'...'9' => {
-                        s = try m.matchCapture(s, pat[p + 1]) orelse return null;
-                        p += 2;
-                        continue;
+                        },
+                        'f' => {
+                            p += 2;
+                            if (p >= pat.len or pat[p] != '[') return error.MissingFrontierBracket;
+                            const ep = try m.classEnd(p);
+                            const prev: u21 = if (s == 0) 0 else charAt(m.src, m.before(s)).cp;
+                            const cur: u21 = if (s < m.src.len) charAt(m.src, s).cp else 0;
+                            if (!m.matchBracket(prev, p, ep - 1) and m.matchBracket(cur, p, ep - 1)) {
+                                p = ep;
+                                continue;
+                            }
+                            return null;
+                        },
+                        '0'...'9' => {
+                            s = try m.matchCapture(s, pat[p + 1]) orelse return null;
+                            p += 2;
+                            continue;
+                        },
+                        else => {},
                     },
                     else => {},
-                },
-                else => {},
+                }
+                // A single character class with an optional repetition
+                // suffix.
+                const ep = try m.classEnd(p);
+                const suffix: u8 = if (ep < pat.len) pat[ep] else 0;
+                const n = m.singleMatch(s, p, ep);
+                if (n == 0) {
+                    if (suffix == '*' or suffix == '?' or suffix == '-') {
+                        p = ep + 1;
+                        continue;
+                    }
+                    return null;
+                }
+                switch (suffix) {
+                    '?' => {
+                        if (try m.match(s + n, ep + 1)) |r| return r;
+                        p = ep + 1;
+                    },
+                    '+' => return m.maxExpand(s + n, p, ep),
+                    '*' => return m.maxExpand(s, p, ep),
+                    '-' => return m.minExpand(s, p, ep),
+                    else => {
+                        s += n;
+                        p = ep;
+                    },
+                }
             }
-            // A single character class with an optional repetition suffix.
-            const ep = try m.classEnd(p);
-            const suffix: u8 = if (ep < pat.len) pat[ep] else 0;
-            const n = m.singleMatch(s, p, ep);
-            if (n == 0) {
-                if (suffix == '*' or suffix == '?' or suffix == '-') {
-                    p = ep + 1;
+            return s;
+        }
+
+        /// Returns capture `i` of a successful match spanning `s..e`. With
+        /// no captures, capture 0 is the whole match.
+        pub fn getCapture(m: *M, i: usize, s: usize, e: usize) PatternError!Cap {
+            if (i >= m.level) {
+                if (i != 0) {
+                    m.bad_index = @intCast(i + 1);
+                    return error.InvalidCaptureIndex;
+                }
+                return .{ .range = .{ .from = s, .to = e } };
+            }
+            const c = m.capture[i];
+            if (c.len == cap_unfinished) return error.UnfinishedCapture;
+            if (c.len == cap_position) return .{ .position = c.init };
+            return .{ .range = .{ .from = c.init, .to = c.init + @as(usize, @intCast(c.len)) } };
+        }
+
+        /// Byte offset just past the single class starting at `p`.
+        fn classEnd(m: *M, p: usize) PatternError!usize {
+            const pat = m.pat;
+            const c = pat[p];
+            var q = p + lenAt(pat, p);
+            switch (c) {
+                '%' => {
+                    if (q >= pat.len) return error.EndsWithPercent;
+                    return q + lenAt(pat, q);
+                },
+                '[' => {
+                    if (q < pat.len and pat[q] == '^') q += 1;
+                    // The first character is part of the set even when it
+                    // is ']', so look for the closing bracket after it.
+                    while (true) {
+                        if (q >= pat.len) return error.MissingBracket;
+                        const cc = pat[q];
+                        q += lenAt(pat, q);
+                        if (cc == '%' and q < pat.len) q += lenAt(pat, q);
+                        if (q < pat.len and pat[q] == ']') break;
+                    }
+                    return q + 1;
+                },
+                else => return q,
+            }
+        }
+
+        /// Byte length of the source character at `s` when it matches the
+        /// class `p..ep`, or zero.
+        inline fn singleMatch(m: *M, s: usize, p: usize, ep: usize) usize {
+            if (s >= m.src.len) return 0;
+            const d = charAt(m.src, s);
+            const ok = switch (m.pat[p]) {
+                '.' => true,
+                '%' => matchClass(d.cp, charAt(m.pat, p + 1).cp),
+                '[' => m.matchBracket(d.cp, p, ep - 1),
+                else => charAt(m.pat, p).cp == d.cp,
+            };
+            return if (ok) d.len else 0;
+        }
+
+        /// Matches `c` against the set whose '[' is at `p` and ']' at
+        /// `ec`.
+        fn matchBracket(m: *M, c: u21, p: usize, ec: usize) bool {
+            const pat = m.pat;
+            var sig = true;
+            var i = p + 1;
+            if (pat[i] == '^') {
+                sig = false;
+                i += 1;
+            }
+            while (i < ec) {
+                if (pat[i] == '%') {
+                    i += 1;
+                    const cl = charAt(pat, i);
+                    if (matchClass(c, cl.cp)) return sig;
+                    i += cl.len;
                     continue;
                 }
-                return null;
+                const lo = charAt(pat, i);
+                const next = i + lo.len;
+                if (next + 1 < ec and pat[next] == '-') {
+                    const hi = charAt(pat, next + 1);
+                    if (lo.cp <= c and c <= hi.cp) return sig;
+                    i = next + 1 + hi.len;
+                } else {
+                    if (lo.cp == c) return sig;
+                    i = next;
+                }
             }
-            switch (suffix) {
-                '?' => {
-                    if (try m.match(s + n, ep + 1)) |r| return r;
-                    p = ep + 1;
+            return !sig;
+        }
+
+        fn matchBalance(m: *M, s: usize, p: usize) PatternError!?struct { s: usize, p: usize } {
+            const pat = m.pat;
+            if (p >= pat.len) return error.MissingBalanceArgs;
+            const open_c = charAt(pat, p);
+            if (p + open_c.len >= pat.len) return error.MissingBalanceArgs;
+            const close_c = charAt(pat, p + open_c.len);
+            const next_p = p + open_c.len + close_c.len;
+            if (s >= m.src.len) return null;
+            const first = charAt(m.src, s);
+            if (first.cp != open_c.cp) return null;
+            var depth: usize = 1;
+            var q = s + first.len;
+            while (q < m.src.len) {
+                const d = charAt(m.src, q);
+                q += d.len;
+                if (d.cp == close_c.cp) {
+                    depth -= 1;
+                    if (depth == 0) return .{ .s = q, .p = next_p };
+                } else if (d.cp == open_c.cp) {
+                    depth += 1;
+                }
+            }
+            return null;
+        }
+
+        /// The set of ASCII bytes that match the class `p..ep`, as a bit
+        /// set. Only the bytewise matcher uses it, because there every
+        /// pattern character is one ASCII byte.
+        fn classSet(m: *M, p: usize, ep: usize) u128 {
+            const pat = m.pat;
+            switch (pat[p]) {
+                '.' => return ~@as(u128, 0),
+                '%' => return classMask(pat[p + 1]),
+                '[' => {
+                    var set: u128 = 0;
+                    var i = p + 1;
+                    const ec = ep - 1;
+                    const negate = pat[i] == '^';
+                    if (negate) i += 1;
+                    while (i < ec) {
+                        if (pat[i] == '%') {
+                            set |= classMask(pat[i + 1]);
+                            i += 2;
+                        } else if (i + 2 < ec and pat[i + 1] == '-') {
+                            var c = pat[i];
+                            while (c <= pat[i + 2]) : (c += 1) set |= bitOf(c);
+                            i += 3;
+                        } else {
+                            set |= bitOf(pat[i]);
+                            i += 1;
+                        }
+                    }
+                    return if (negate) ~set else set;
                 },
-                '+' => return m.maxExpand(s + n, p, ep),
-                '*' => return m.maxExpand(s, p, ep),
-                '-' => return m.minExpand(s, p, ep),
-                else => {
-                    s += n;
-                    p = ep;
-                },
+                else => return bitOf(pat[p]),
             }
         }
-        return s;
-    }
 
-    /// Returns capture `i` of a successful match spanning `s..e`. With no
-    /// captures, capture 0 is the whole match.
-    pub fn getCapture(m: *Matcher, i: usize, s: usize, e: usize) PatternError!Cap {
-        if (i >= m.level) {
-            if (i != 0) {
-                m.bad_index = @intCast(i + 1);
+        fn maxExpand(m: *M, s: usize, p: usize, ep: usize) PatternError!?usize {
+            var e = s;
+            if (bytewise) {
+                // Build the class once and test each byte with one shift.
+                const set = m.classSet(p, ep);
+                const src = m.src;
+                while (e < src.len and (set >> @intCast(src[e])) & 1 != 0) e += 1;
+            } else while (true) {
+                const n = m.singleMatch(e, p, ep);
+                if (n == 0) break;
+                e += n;
+            }
+            // Back off one character at a time until the rest matches.
+            while (true) {
+                if (try m.match(e, ep + 1)) |r| return r;
+                if (e == s) return null;
+                e = m.before(e);
+            }
+        }
+
+        fn minExpand(m: *M, s: usize, p: usize, ep: usize) PatternError!?usize {
+            var cur = s;
+            while (true) {
+                if (try m.match(cur, ep + 1)) |r| return r;
+                const n = m.singleMatch(cur, p, ep);
+                if (n == 0) return null;
+                cur += n;
+            }
+        }
+
+        fn startCapture(m: *M, s: usize, p: usize, what: isize) PatternError!?usize {
+            if (m.level >= max_captures) return error.TooManyCaptures;
+            m.capture[m.level] = .{ .init = s, .len = what };
+            m.level += 1;
+            const r = try m.match(s, p);
+            if (r == null) m.level -= 1;
+            return r;
+        }
+
+        fn endCapture(m: *M, s: usize, p: usize) PatternError!?usize {
+            const lv = try m.captureToClose();
+            m.capture[lv].len = @intCast(s - m.capture[lv].init);
+            const r = try m.match(s, p);
+            if (r == null) m.capture[lv].len = cap_unfinished;
+            return r;
+        }
+
+        fn captureToClose(m: *M) PatternError!usize {
+            var lv = m.level;
+            while (lv > 0) {
+                lv -= 1;
+                if (m.capture[lv].len == cap_unfinished) return lv;
+            }
+            return error.InvalidPatternCapture;
+        }
+
+        fn matchCapture(m: *M, s: usize, digit: u8) PatternError!?usize {
+            const i = @as(i32, digit) - '1';
+            if (i < 0 or i >= m.level or m.capture[@intCast(i)].len == cap_unfinished) {
+                m.bad_index = i + 1;
                 return error.InvalidCaptureIndex;
             }
-            return .{ .range = .{ .from = s, .to = e } };
+            const c = m.capture[@intCast(i)];
+            // A position capture has no text and never matches.
+            if (c.len < 0) return null;
+            const n: usize = @intCast(c.len);
+            if (m.src.len - s >= n and std.mem.eql(u8, m.src[c.init..][0..n], m.src[s..][0..n])) return s + n;
+            return null;
         }
-        const c = m.capture[i];
-        if (c.len == cap_unfinished) return error.UnfinishedCapture;
-        if (c.len == cap_position) return .{ .position = c.init };
-        return .{ .range = .{ .from = c.init, .to = c.init + @as(usize, @intCast(c.len)) } };
-    }
+    };
+}
 
-    /// Byte offset just past the single class starting at `p`.
-    fn classEnd(m: *Matcher, p: usize) PatternError!usize {
-        const pat = m.pat;
-        const c = pat[p];
-        var q = p + wtf8.seqLen(c);
-        switch (c) {
-            '%' => {
-                if (q >= pat.len) return error.EndsWithPercent;
-                return q + wtf8.seqLen(pat[q]);
-            },
-            '[' => {
-                if (q < pat.len and pat[q] == '^') q += 1;
-                // The first character is part of the set even when it is
-                // ']', so look for the closing bracket after it.
-                while (true) {
-                    if (q >= pat.len) return error.MissingBracket;
-                    const cc = pat[q];
-                    q += wtf8.seqLen(cc);
-                    if (cc == '%' and q < pat.len) q += wtf8.seqLen(pat[q]);
-                    if (q < pat.len and pat[q] == ']') break;
-                }
-                return q + 1;
-            },
-            else => return q,
-        }
-    }
+/// The general matcher, which decodes characters.
+pub const Matcher = MatcherFor(false);
 
-    /// Byte length of the source character at `s` when it matches the
-    /// class `p..ep`, or zero.
-    fn singleMatch(m: *Matcher, s: usize, p: usize, ep: usize) usize {
-        if (s >= m.src.len) return 0;
-        const d = wtf8.decodeValid(m.src, s);
-        const ok = switch (m.pat[p]) {
-            '.' => true,
-            '%' => matchClass(d.cp, wtf8.decodeValid(m.pat, p + 1).cp),
-            '[' => m.matchBracket(d.cp, p, ep - 1),
-            else => wtf8.decodeValid(m.pat, p).cp == d.cp,
+/// The class letters and, for every ASCII character, a bit set of the
+/// classes it belongs to. Bit k stands for `class_letters[k]`.
+const class_letters = "acdglpsuwx";
+const class_table: [128]u16 = blk: {
+    @setEvalBranchQuota(10000);
+    var t: [128]u16 = @splat(0);
+    for (0..128) |i| {
+        const b: u8 = @intCast(i);
+        const in = [class_letters.len]bool{
+            std.ascii.isAlphabetic(b),
+            b < 0x20 or b == 0x7F,
+            std.ascii.isDigit(b),
+            b > 0x20 and b < 0x7F,
+            std.ascii.isLower(b),
+            b > 0x20 and b < 0x7F and !std.ascii.isAlphanumeric(b),
+            b == ' ' or (b >= '\t' and b <= '\r'),
+            std.ascii.isUpper(b),
+            std.ascii.isAlphanumeric(b),
+            std.ascii.isHex(b),
         };
-        return if (ok) d.len else 0;
-    }
-
-    /// Matches `c` against the set whose '[' is at `p` and ']' at `ec`.
-    fn matchBracket(m: *Matcher, c: u21, p: usize, ec: usize) bool {
-        const pat = m.pat;
-        var sig = true;
-        var i = p + 1;
-        if (pat[i] == '^') {
-            sig = false;
-            i += 1;
-        }
-        while (i < ec) {
-            if (pat[i] == '%') {
-                i += 1;
-                const cl = wtf8.decodeValid(pat, i);
-                if (matchClass(c, cl.cp)) return sig;
-                i += cl.len;
-                continue;
-            }
-            const lo = wtf8.decodeValid(pat, i);
-            const next = i + lo.len;
-            if (next + 1 < ec and pat[next] == '-') {
-                const hi = wtf8.decodeValid(pat, next + 1);
-                if (lo.cp <= c and c <= hi.cp) return sig;
-                i = next + 1 + hi.len;
-            } else {
-                if (lo.cp == c) return sig;
-                i = next;
-            }
-        }
-        return !sig;
-    }
-
-    fn matchBalance(m: *Matcher, s: usize, p: usize) PatternError!?struct { s: usize, p: usize } {
-        const pat = m.pat;
-        if (p >= pat.len) return error.MissingBalanceArgs;
-        const open_c = wtf8.decodeValid(pat, p);
-        if (p + open_c.len >= pat.len) return error.MissingBalanceArgs;
-        const close_c = wtf8.decodeValid(pat, p + open_c.len);
-        const next_p = p + open_c.len + close_c.len;
-        if (s >= m.src.len) return null;
-        const first = wtf8.decodeValid(m.src, s);
-        if (first.cp != open_c.cp) return null;
-        var depth: usize = 1;
-        var q = s + first.len;
-        while (q < m.src.len) {
-            const d = wtf8.decodeValid(m.src, q);
-            q += d.len;
-            if (d.cp == close_c.cp) {
-                depth -= 1;
-                if (depth == 0) return .{ .s = q, .p = next_p };
-            } else if (d.cp == open_c.cp) {
-                depth += 1;
-            }
-        }
-        return null;
-    }
-
-    fn maxExpand(m: *Matcher, s: usize, p: usize, ep: usize) PatternError!?usize {
-        var e = s;
-        while (true) {
-            const n = m.singleMatch(e, p, ep);
-            if (n == 0) break;
-            e += n;
-        }
-        // Back off one character at a time until the rest matches.
-        while (true) {
-            if (try m.match(e, ep + 1)) |r| return r;
-            if (e == s) return null;
-            e = prevChar(m.src, e);
+        for (in, 0..) |yes, k| {
+            if (yes) t[i] |= 1 << k;
         }
     }
-
-    fn minExpand(m: *Matcher, s: usize, p: usize, ep: usize) PatternError!?usize {
-        var cur = s;
-        while (true) {
-            if (try m.match(cur, ep + 1)) |r| return r;
-            const n = m.singleMatch(cur, p, ep);
-            if (n == 0) return null;
-            cur += n;
-        }
-    }
-
-    fn startCapture(m: *Matcher, s: usize, p: usize, what: isize) PatternError!?usize {
-        if (m.level >= max_captures) return error.TooManyCaptures;
-        m.capture[m.level] = .{ .init = s, .len = what };
-        m.level += 1;
-        const r = try m.match(s, p);
-        if (r == null) m.level -= 1;
-        return r;
-    }
-
-    fn endCapture(m: *Matcher, s: usize, p: usize) PatternError!?usize {
-        const lv = try m.captureToClose();
-        m.capture[lv].len = @intCast(s - m.capture[lv].init);
-        const r = try m.match(s, p);
-        if (r == null) m.capture[lv].len = cap_unfinished;
-        return r;
-    }
-
-    fn captureToClose(m: *Matcher) PatternError!usize {
-        var lv = m.level;
-        while (lv > 0) {
-            lv -= 1;
-            if (m.capture[lv].len == cap_unfinished) return lv;
-        }
-        return error.InvalidPatternCapture;
-    }
-
-    fn matchCapture(m: *Matcher, s: usize, digit: u8) PatternError!?usize {
-        const i = @as(i32, digit) - '1';
-        if (i < 0 or i >= m.level or m.capture[@intCast(i)].len == cap_unfinished) {
-            m.bad_index = i + 1;
-            return error.InvalidCaptureIndex;
-        }
-        const c = m.capture[@intCast(i)];
-        // A position capture has no text and never matches.
-        if (c.len < 0) return null;
-        const n: usize = @intCast(c.len);
-        if (m.src.len - s >= n and std.mem.eql(u8, m.src[c.init..][0..n], m.src[s..][0..n])) return s + n;
-        return null;
-    }
+    break :blk t;
 };
+/// The bit of each lowercase class letter in `class_table`, or zero.
+const class_bit: [128]u16 = blk: {
+    var t: [128]u16 = @splat(0);
+    for (class_letters, 0..) |c, k| t[c] = 1 << k;
+    break :blk t;
+};
+
+/// For each class letter, the ASCII bytes in the class as a bit set.
+const class_masks: [class_letters.len]u128 = blk: {
+    @setEvalBranchQuota(10000);
+    var t: [class_letters.len]u128 = @splat(0);
+    for (0..128) |c| {
+        for (0..class_letters.len) |k| {
+            if (class_table[c] & (1 << k) != 0) t[k] |= @as(u128, 1) << c;
+        }
+    }
+    break :blk t;
+};
+
+/// The bit for ASCII byte `c` in a class bit set.
+inline fn bitOf(c: u8) u128 {
+    return @as(u128, 1) << @intCast(c);
+}
+
+/// The ASCII bytes that `%cl` matches, for an ASCII `cl`.
+fn classMask(cl: u8) u128 {
+    const lc = std.ascii.toLower(cl);
+    const bit = class_bit[lc];
+    const set = if (bit != 0)
+        class_masks[@ctz(bit)]
+    else if (lc == 'z')
+        bitOf(0)
+    else
+        return bitOf(cl);
+    return if (cl == lc) set else ~set;
+}
 
 /// Whether `c` belongs to class `cl` (the character after '%'). Class
 /// letters describe ASCII characters, and an uppercase letter is the
@@ -793,30 +1017,48 @@ pub const Matcher = struct {
 fn matchClass(c: u21, cl: u21) bool {
     if (cl >= 0x80) return cl == c;
     const lc = std.ascii.toLower(@intCast(cl));
-    const b: u8 = if (c < 0x80) @intCast(c) else 0x80;
-    const ascii = c < 0x80;
-    const res = switch (lc) {
-        'a' => ascii and std.ascii.isAlphabetic(b),
-        'c' => ascii and (b < 0x20 or b == 0x7F),
-        'd' => ascii and std.ascii.isDigit(b),
-        'g' => ascii and b > 0x20 and b < 0x7F,
-        'l' => ascii and std.ascii.isLower(b),
-        'p' => ascii and b > 0x20 and b < 0x7F and !std.ascii.isAlphanumeric(b),
-        's' => ascii and (b == ' ' or (b >= '\t' and b <= '\r')),
-        'u' => ascii and std.ascii.isUpper(b),
-        'w' => ascii and std.ascii.isAlphanumeric(b),
-        'x' => ascii and std.ascii.isHex(b),
-        'z' => c == 0,
-        else => return cl == c,
-    };
-    return if (std.ascii.isLower(@intCast(cl))) res else !res;
+    const bit = class_bit[lc];
+    const res = if (bit != 0)
+        c < 0x80 and class_table[c] & bit != 0
+    else if (lc == 'z')
+        c == 0
+    else
+        return cl == c;
+    return if (cl == lc) res else !res;
 }
 
 fn noSpecials(p: []const u8) bool {
     return std.mem.indexOfAny(u8, p, specials) == null;
 }
 
-fn patternError(l: *Thread, m: *const Matcher, e: PatternError) Error {
+/// The literal text every match of `pat` (from byte `p`) starts with:
+/// the leading plain characters, after any opening captures, that are
+/// not optional. A match can only start where this text occurs, so the
+/// search loops jump between its occurrences with a vectorized
+/// substring search instead of trying every position.
+fn literalPrefix(pat: []const u8, p_in: usize) []const u8 {
+    var p = p_in;
+    // Captures consume nothing, so the text after them starts the match.
+    while (p < pat.len and pat[p] == '(') {
+        p += 1;
+        if (p < pat.len and pat[p] == ')') p += 1;
+    }
+    const start = p;
+    while (p < pat.len) {
+        if (std.mem.indexOfScalar(u8, "^$*+?.([%-)", pat[p]) != null) break;
+        const next = p + wtf8.seqLen(pat[p]);
+        const suffix: u8 = if (next < pat.len) pat[next] else 0;
+        // A character that may repeat zero times is not required.
+        if (suffix == '*' or suffix == '?' or suffix == '-') break;
+        p = next;
+        // A character that repeats is required once, and nothing after it
+        // is at a fixed offset.
+        if (suffix == '+') break;
+    }
+    return pat[start..p];
+}
+
+fn patternError(l: *Thread, m: anytype, e: PatternError) Error {
     return switch (e) {
         error.TooComplex => l.raiseFmt("pattern too complex", .{}),
         error.InvalidCaptureIndex => l.raiseFmt("invalid capture index %{d}", .{m.bad_index}),
@@ -831,7 +1073,7 @@ fn patternError(l: *Thread, m: *const Matcher, e: PatternError) Error {
 }
 
 /// Pushes capture `i` of the match `s..e` of subject `str`.
-fn pushCapture(l: *Thread, str: *String, m: *Matcher, i: usize, s: usize, e: usize) Error!void {
+fn pushCapture(l: *Thread, str: *String, m: anytype, i: usize, s: usize, e: usize) Error!void {
     const cap = m.getCapture(i, s, e) catch |err| return patternError(l, m, err);
     switch (cap) {
         .range => |r| try l.push(try substring(l, str, r.from, r.to)),
@@ -841,12 +1083,18 @@ fn pushCapture(l: *Thread, str: *String, m: *Matcher, i: usize, s: usize, e: usi
 
 /// Pushes every capture, or the whole match when the pattern has none
 /// and `s` is given.
-fn pushCaptures(l: *Thread, str: *String, m: *Matcher, s: ?usize, e: usize) Error!u32 {
+fn pushCaptures(l: *Thread, str: *String, m: anytype, s: ?usize, e: usize) Error!u32 {
     const n: usize = if (m.level == 0 and s != null) 1 else m.level;
     try l.ensure(n);
     var i: usize = 0;
     while (i < n) : (i += 1) try pushCapture(l, str, m, i, s orelse 0, e);
     return @intCast(n);
+}
+
+/// Whether the bytewise matcher applies: the subject and the pattern are
+/// both ASCII.
+fn bothAscii(s: *const String, p: *const String) bool {
+    return s.flags.ascii and p.flags.ascii;
 }
 
 fn findAux(l: *Thread, is_find: bool) Error!u32 {
@@ -856,7 +1104,7 @@ fn findAux(l: *Thread, is_find: bool) Error!u32 {
     if (init_c > s.chars) return aux.retNil(l);
     const src = s.bytes();
     const pat = p.bytes();
-    const init_b = s.byteOffset(l.g.gpa, init_c);
+    const init_b = charOffset(l, s, init_c);
     if (is_find and (l.arg(4).truthy() or noSpecials(pat))) {
         const rel = std.mem.indexOf(u8, src[init_b..], pat) orelse return aux.retNil(l);
         const start = init_c + charsIn(s, src[init_b..][0..rel]);
@@ -864,12 +1112,25 @@ fn findAux(l: *Thread, is_find: bool) Error!u32 {
         try l.push(Value.int(@intCast(start + p.chars)));
         return 2;
     }
-    var m = Matcher.init(src, pat, s.flags.ascii);
+    if (bothAscii(s, p)) return findWith(MatcherFor(true), l, s, p, init_b, init_c, is_find);
+    return findWith(Matcher, l, s, p, init_b, init_c, is_find);
+}
+
+fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize, init_c: usize, is_find: bool) Error!u32 {
+    const src = s.bytes();
+    const pat = p.bytes();
+    var m = M.init(src, pat, s.flags.ascii);
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
+    const prefix = if (anchor) "" else literalPrefix(pat, pstart);
     var s1 = init_b;
     var c1 = init_c;
     while (true) {
+        if (prefix.len > 0) {
+            const at = std.mem.indexOfPos(u8, src, s1, prefix) orelse break;
+            c1 += charsIn(s, src[s1..at]);
+            s1 = at;
+        }
         m.reset(s1, c1);
         const res = m.match(s1, pstart) catch |err| return patternError(l, &m, err);
         if (res) |e| {
@@ -909,7 +1170,7 @@ fn gmatch(l: *Thread) Error!u32 {
     var pos_b: usize = s.len + 1;
     var pos_c: usize = s.chars + 1;
     if (init_c <= s.chars) {
-        pos_b = s.byteOffset(l.g.gpa, init_c);
+        pos_b = charOffset(l, s, init_c);
         pos_c = init_c;
     }
     const it = state.newNative(l.g, gmatchAux, null, 5) catch return l.raiseMem();
@@ -925,12 +1186,25 @@ fn gmatch(l: *Thread) Error!u32 {
 fn gmatchAux(l: *Thread) Error!u32 {
     const ups = l.frame().native.?.upvalues();
     const s = ups[gm_subject].as(String);
+    const p = ups[gm_pattern].as(String);
+    if (bothAscii(s, p)) return gmatchWith(MatcherFor(true), l, ups, s, p);
+    return gmatchWith(Matcher, l, ups, s, p);
+}
+
+fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String) Error!u32 {
     const src = s.bytes();
-    var m = Matcher.init(src, ups[gm_pattern].as(String).bytes(), s.flags.ascii);
+    const pat = p.bytes();
+    var m = M.init(src, pat, s.flags.ascii);
+    const prefix = literalPrefix(pat, 0);
     var pos: usize = @intCast(ups[gm_pos].asInt());
     var c: usize = @intCast(ups[gm_char].asInt());
     const last = ups[gm_last].asInt();
     while (pos <= src.len) {
+        if (prefix.len > 0) {
+            const at = std.mem.indexOfPos(u8, src, pos, prefix) orelse break;
+            c += charsIn(s, src[pos..at]);
+            pos = at;
+        }
         m.reset(pos, c);
         const res = m.match(pos, 0) catch |err| return patternError(l, &m, err);
         if (res) |e| {
@@ -953,7 +1227,7 @@ const ReplKind = enum { string, table, function };
 
 /// Expands a replacement string: `%0` to `%9` insert captures and `%%`
 /// inserts a percent sign.
-fn addString(l: *Thread, b: *Builder, str: *String, m: *Matcher, s: usize, e: usize, news: []const u8) Error!void {
+fn addString(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usize, news: []const u8) Error!void {
     const src = str.bytes();
     var i: usize = 0;
     while (std.mem.indexOfScalarPos(u8, news, i, '%')) |j| {
@@ -981,7 +1255,7 @@ fn addString(l: *Thread, b: *Builder, str: *String, m: *Matcher, s: usize, e: us
 /// Appends the replacement for the match `s..e`. Returns false when the
 /// function or table produced nil or false, which keeps the original
 /// text.
-fn addValue(l: *Thread, b: *Builder, str: *String, m: *Matcher, s: usize, e: usize, kind: ReplKind) Error!bool {
+fn addValue(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usize, kind: ReplKind) Error!bool {
     const repl = l.arg(3);
     const base = l.top;
     const r: Value = switch (kind) {
@@ -1009,7 +1283,7 @@ fn addValue(l: *Thread, b: *Builder, str: *String, m: *Matcher, s: usize, e: usi
     }
     switch (r.tag) {
         .string => try b.append(r.as(String).bytes()),
-        .integer, .float, .bigint, .decimal => ops.numberToBuf(l.g.gpa, &b.buf, r) catch return l.raiseMem(),
+        .integer, .float, .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, r) catch return l.raiseMem(),
         else => return l.raiseFmt("invalid replacement value (a {s})", .{value.typeName(r.tag)}),
     }
     return true;
@@ -1029,32 +1303,47 @@ fn gsub(l: *Thread) Error!u32 {
         else => return aux.typeError(l, 3, "string/function/table"),
     };
     const max_s = try aux.optInt(l, 4, @as(i64, s.chars) + 1);
+    if (bothAscii(s, p)) return gsubWith(MatcherFor(true), l, s, p, kind, max_s);
+    return gsubWith(Matcher, l, s, p, kind, max_s);
+}
+
+fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind, max_s: i64) Error!u32 {
     const src = s.bytes();
     const pat = p.bytes();
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
-    var m = Matcher.init(src, pat, s.flags.ascii);
-    var b = Builder.init(l);
+    const prefix = if (anchor) "" else literalPrefix(pat, pstart);
+    var m = M.init(src, pat, s.flags.ascii);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var pos: usize = 0;
     var cpos: usize = 0;
+    // Source text before `copied` is already in the builder. Unmatched
+    // text is copied in runs, when a match or the end is reached.
+    var copied: usize = 0;
     var last: ?usize = null;
     var n: i64 = 0;
     var changed = false;
     while (n < max_s) {
+        if (prefix.len > 0) {
+            const at = std.mem.indexOfPos(u8, src, pos, prefix) orelse break;
+            cpos += charsIn(s, src[pos..at]);
+            pos = at;
+        }
         m.reset(pos, cpos);
         const res = m.match(pos, pstart) catch |err| return patternError(l, &m, err);
         if (res != null and res != last) {
             const e = res.?;
             n += 1;
+            try b.append(src[copied..pos]);
             changed = (try addValue(l, &b, s, &m, pos, e, kind)) or changed;
             cpos = m.charIndex(e);
             pos = e;
+            copied = e;
             last = e;
         } else if (pos < src.len) {
-            const k = wtf8.seqLen(src[pos]);
-            try b.append(src[pos..][0..k]);
-            pos += k;
+            pos += wtf8.seqLen(src[pos]);
             cpos += 1;
         } else break;
         if (anchor) break;
@@ -1062,7 +1351,7 @@ fn gsub(l: *Thread) Error!u32 {
     if (!changed) {
         try l.push(Value.obj(.string, s));
     } else {
-        try b.append(src[pos..]);
+        try b.append(src[copied..]);
         try l.push(try b.finish());
     }
     try l.push(Value.int(n));
@@ -1196,7 +1485,6 @@ fn fmtInt(b: *Builder, spec: Spec, conv: u8, n: i64) Error!void {
     const negative = (conv == 'd' or conv == 'i') and n < 0;
     return fmtIntDigits(b, spec, conv, negative, digits);
 }
-
 
 /// The %e, %f, and %g conversions (and their uppercase forms).
 fn fmtFloat(b: *Builder, spec: Spec, conv: u8, f: f64) Error!void {
@@ -1374,10 +1662,10 @@ fn addLiteral(l: *Thread, b: *Builder, arg: u32) Error!void {
                 try b.append(if (f < 0) "-1e9999" else "1e9999");
             } else {
                 if (std.math.signbit(f)) try b.append("-");
-                hexFloatBody(&b.buf, l.g.gpa, f, null, false) catch return l.raiseMem();
+                hexFloatBody(&b.buf, b.gpa(), f, null, false) catch return l.raiseMem();
             }
         },
-        .bigint, .decimal => ops.numberToBuf(l.g.gpa, &b.buf, v) catch return l.raiseMem(),
+        .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, v) catch return l.raiseMem(),
         .nil, .true, .false => try b.append((try ops.toString(l, v)).bytes()),
         else => return aux.argError(l, arg, "value has no literal form", .{}),
     }
@@ -1386,7 +1674,8 @@ fn addLiteral(l: *Thread, b: *Builder, arg: u32) Error!void {
 fn format(l: *Thread) Error!u32 {
     const top = l.argCount();
     const fmt = (try aux.checkString(l, 1)).bytes();
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var arg: u32 = 1;
     var i: usize = 0;
@@ -1474,7 +1763,7 @@ fn format(l: *Thread) Error!u32 {
                     var to: usize = str.len;
                     var chars: usize = str.chars;
                     if (sp.precision) |pr| if (pr < chars) {
-                        to = str.byteOffset(l.g.gpa, pr);
+                        to = charOffset(l, str, pr);
                         chars = pr;
                     };
                     try pad(&b, sp, "", str.bytes()[0..to], chars, false);
@@ -1491,8 +1780,20 @@ fn format(l: *Thread) Error!u32 {
 
 const testing = std.testing;
 
+/// Finds the first match of `pat` in `src`. When both are ASCII it runs
+/// the bytewise matcher too and checks that the two agree.
 fn testMatch(src: []const u8, pat: []const u8) !?[]const u8 {
-    var m = Matcher.init(src, pat, wtf8.analyze(src).ascii);
+    const general = try testMatchWith(Matcher, src, pat);
+    if (wtf8.analyze(src).ascii and wtf8.analyze(pat).ascii) {
+        const bytes = try testMatchWith(MatcherFor(true), src, pat);
+        try testing.expectEqual(general == null, bytes == null);
+        if (general) |g| try testing.expectEqualStrings(g, bytes.?);
+    }
+    return general;
+}
+
+fn testMatchWith(comptime M: type, src: []const u8, pat: []const u8) !?[]const u8 {
+    var m = M.init(src, pat, wtf8.analyze(src).ascii);
     const anchor = pat.len > 0 and pat[0] == '^';
     var s: usize = 0;
     while (true) {
@@ -1500,6 +1801,59 @@ fn testMatch(src: []const u8, pat: []const u8) !?[]const u8 {
         if (try m.match(s, if (anchor) 1 else 0)) |e| return src[s..e];
         if (s >= src.len or anchor) return null;
         s += wtf8.seqLen(src[s]);
+    }
+}
+
+test "literal prefixes" {
+    try testing.expectEqualStrings("key_", literalPrefix("key_%d+", 0));
+    try testing.expectEqualStrings("value ", literalPrefix("value (%d+)", 0));
+    try testing.expectEqualStrings("ab", literalPrefix("(ab)c*", 0));
+    try testing.expectEqualStrings("ab", literalPrefix("()ab+c", 0));
+    try testing.expectEqualStrings("a", literalPrefix("ab-", 0));
+    try testing.expectEqualStrings("", literalPrefix("a?b", 0));
+    try testing.expectEqualStrings("", literalPrefix("%d+", 0));
+    try testing.expectEqualStrings("", literalPrefix("[ab]c", 0));
+    try testing.expectEqualStrings("日本", literalPrefix("日本.", 0));
+    try testing.expectEqualStrings("x", literalPrefix("x$", 0));
+    try testing.expectEqualStrings("abc", literalPrefix("^abc", 1));
+}
+
+test "class table" {
+    // The table agrees with the class definitions on every ASCII byte.
+    for (0..0x80) |i| {
+        const c: u21 = @intCast(i);
+        const b: u8 = @intCast(i);
+        try testing.expectEqual(std.ascii.isAlphabetic(b), matchClass(c, 'a'));
+        try testing.expectEqual(!std.ascii.isDigit(b), matchClass(c, 'D'));
+        try testing.expectEqual(b == ' ' or (b >= '\t' and b <= '\r'), matchClass(c, 's'));
+        try testing.expectEqual(b > 0x20 and b < 0x7F and !std.ascii.isAlphanumeric(b), matchClass(c, 'p'));
+        try testing.expectEqual(c == 0, matchClass(c, 'z'));
+        try testing.expectEqual(c == '.', matchClass(c, '.'));
+    }
+    try testing.expect(!matchClass(0xE9, 'a'));
+    try testing.expect(matchClass(0xE9, 'A'));
+    // The bit sets of the bytewise matcher agree with matchClass.
+    for (0..0x80) |cl| for (0..0x80) |c| {
+        const in_set = (classMask(@intCast(cl)) >> @intCast(c)) & 1 != 0;
+        try testing.expectEqual(matchClass(@intCast(c), @intCast(cl)), in_set);
+    };
+}
+
+test "bytewise sets agree with the general matcher" {
+    const sets = [_][]const u8{ "[^,]", "[a-c]", "[%a_]", "[^%s]", "[%-a]", "[]]", "[^]]", "[a-]", "[%%]", "[%W%d]", "[z-a]", "%A", "%.", "." };
+    var src: [128]u8 = undefined;
+    for (&src, 0..) |*c, i| c.* = @intCast(i);
+    for (sets) |set| {
+        var pat_buf: [16]u8 = undefined;
+        const pat = std.fmt.bufPrint(&pat_buf, "{s}+", .{set}) catch unreachable;
+        // Every starting byte gives the same longest run in both matchers.
+        for (0..src.len) |start| {
+            var g = Matcher.init(&src, pat, true);
+            var b = MatcherFor(true).init(&src, pat, true);
+            g.reset(start, start);
+            b.reset(start, start);
+            try testing.expectEqual(try g.match(start, 0), try b.match(start, 0));
+        }
     }
 }
 
