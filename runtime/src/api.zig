@@ -191,3 +191,27 @@ pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
 pub fn grantPledges(l: *Thread, specs: []const []const u8) Error!void {
     try @import("vm/pledge.zig").hostGrant(l, specs);
 }
+
+/// Makes the global table, and every library table up to two levels below
+/// it, read-only (`--readonly-env`). The module cache stays writable so
+/// `require` keeps working.
+pub fn freezeEnv(l: *Thread) void {
+    const table = @import("vm/table.zig");
+    const g = l.g;
+    const reg = g.registry.as(object.Table);
+    const loaded_key = state.newStringKnown(g, "_LOADED", true, 7) catch return;
+    const loaded = table.getStr(reg, loaded_key);
+    const skip: ?*object.Table = if (loaded.tag == .table) loaded.as(object.Table) else null;
+    freezeTable(g.globals.as(object.Table), skip, 2);
+}
+
+fn freezeTable(t: *object.Table, skip: ?*object.Table, depth: u32) void {
+    const table = @import("vm/table.zig");
+    if (t == skip) return;
+    t.readonly = true;
+    if (depth == 0) return;
+    var key: Value = .nil;
+    while (table.next(t, key) catch null) |e| : (key = e.key) {
+        if (e.val.tag == .table and !e.val.as(object.Table).readonly) freezeTable(e.val.as(object.Table), skip, depth - 1);
+    }
+}

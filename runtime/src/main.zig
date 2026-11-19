@@ -41,6 +41,7 @@ const usage =
     \\  -F name[=value]  define a compile-time flag (also --flag)
     \\  --include path[:alias]
     \\                   preinclude a module file or directory for require
+    \\  --readonly-env   freeze the global environment after startup
     \\  --gc-pause N     heap growth before a collection, in percent
     \\  --dis            print bytecode instead of running
     \\  --               stop handling options
@@ -66,6 +67,7 @@ const Cli = struct {
     warnings: bool = false,
     stdin: bool = false,
     dis: bool = false,
+    readonly_env: bool = false,
     gc_pause: ?usize = null,
 };
 
@@ -109,6 +111,9 @@ fn optGcPause(c: *Cli, _: std.mem.Allocator, v: ?[]const u8) !void {
 fn optDis(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
     c.dis = true;
 }
+fn optReadonlyEnv(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.readonly_env = true;
+}
 
 /// The single option table. Short options with arguments accept both
 /// "-e stat" and "-estat".
@@ -124,6 +129,7 @@ const options = [_]OptSpec{
     .{ .short = null, .long = "include", .takes_arg = true, .apply = optInclude },
     .{ .short = null, .long = "gc-pause", .takes_arg = true, .apply = optGcPause },
     .{ .short = null, .long = "dis", .takes_arg = false, .apply = optDis },
+    .{ .short = null, .long = "readonly-env", .takes_arg = false, .apply = optReadonlyEnv },
 };
 
 fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8, start: usize) !?Cli {
@@ -262,6 +268,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
     };
     // The `arg` table.
     try setArgTable(l, args, cli.script_index, cli.script != null or cli.stdin);
+    if (cli.readonly_env) api.freezeEnv(l);
 
     for (cli.actions.items) |a| switch (a) {
         .exec => |src| if (!runString(l, src, "=(command line)")) return 1,
