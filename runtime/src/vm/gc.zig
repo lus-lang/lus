@@ -361,3 +361,32 @@ pub fn freeAll(g: *Global) void {
     }
     g.all_objects = null;
 }
+
+// ---------------------------------------------------------------------
+// Tuning parameters
+
+/// The collector parameters that `collectgarbage("param", name)` names.
+pub const Param = enum { minormul, majorminor, minormajor, pause, stepmul, stepsize };
+
+/// Returns the value of a parameter, as a percentage or a byte count.
+/// The stop-the-world stage is tuned by `pause` alone. The incremental
+/// and generational parameters report fixed default values, because this
+/// stage has no steps or generations for them to tune.
+pub fn getParam(g: *const Global, p: Param) i64 {
+    return switch (p) {
+        .pause => @intCast(g.pause),
+        .minormul => 20,
+        .majorminor => 50,
+        .minormajor => 70,
+        .stepmul => 200,
+        .stepsize => 200 * @sizeOf(object.Table),
+    };
+}
+
+/// Sets a parameter when `v` is non-negative and returns its previous
+/// value. Only `pause` is stored by the current stage.
+pub fn setParam(g: *Global, p: Param, v: i64) i64 {
+    const old = getParam(g, p);
+    if (v >= 0 and p == .pause) g.pause = @intCast(v);
+    return old;
+}

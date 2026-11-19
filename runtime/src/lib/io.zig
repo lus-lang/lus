@@ -52,6 +52,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "close", .func = ioClose },
         .{ .name = "read", .func = ioRead },
         .{ .name = "write", .func = ioWrite },
+        .{ .name = "flush", .func = ioFlush },
         .{ .name = "lines", .func = ioLines },
         .{ .name = "input", .func = ioInput },
         .{ .name = "output", .func = ioOutput },
@@ -531,6 +532,15 @@ fn fFlush(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     if (h.kind == .stdout) out.flushAll(l.g);
     return aux.ret(l, l.arg(1));
+}
+
+/// io.flush(): flushes the default output file and returns true.
+fn ioFlush(l: *Thread) Error!u32 {
+    const v = try getDefault(l, "io.output");
+    const h = toHandle(l, v).?;
+    if (h.closed) return l.raiseFmt("default output file is closed", .{});
+    if (h.kind == .stdout) out.flushAll(l.g);
+    return aux.retBool(l, true);
 }
 
 fn fSetvbuf(l: *Thread) Error!u32 {

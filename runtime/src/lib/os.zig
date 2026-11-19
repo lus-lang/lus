@@ -28,8 +28,6 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "exit", .func = exit },
     .{ .name = "getenv", .func = getenv },
     .{ .name = "platform", .func = platform },
-    .{ .name = "remove", .func = remove },
-    .{ .name = "rename", .func = rename },
     .{ .name = "setlocale", .func = setlocale },
     .{ .name = "time", .func = time },
     .{ .name = "tmpname", .func = tmpname },
@@ -162,28 +160,6 @@ pub fn errnoOf(e: anyerror) ErrInfo {
         error.FileNotFoundOrNoAccess => .{ .msg = "No such file or directory", .errno = 2 },
         else => .{ .msg = @errorName(e), .errno = 0 },
     };
-}
-
-fn remove(l: *Thread) Error!u32 {
-    const name = try aux.checkBytes(l, 1);
-    try @import("../vm/pledge.zig").require(l, "fs:write", name);
-    const io = l.g.io;
-    const cwd = std.Io.Dir.cwd();
-    cwd.deleteFile(io, name) catch |e| switch (e) {
-        error.IsDir => cwd.deleteDir(io, name) catch |e2| return fileError(l, name, e2),
-        else => return fileError(l, name, e),
-    };
-    return aux.retBool(l, true);
-}
-
-fn rename(l: *Thread) Error!u32 {
-    const from = try aux.checkBytes(l, 1);
-    const to = try aux.checkBytes(l, 2);
-    try @import("../vm/pledge.zig").require(l, "fs:write", from);
-    try @import("../vm/pledge.zig").require(l, "fs:write", to);
-    const cwd = std.Io.Dir.cwd();
-    std.Io.Dir.rename(cwd, from, cwd, to, l.g.io) catch |e| return fileError(l, from, e);
-    return aux.retBool(l, true);
 }
 
 fn tmpname(l: *Thread) Error!u32 {

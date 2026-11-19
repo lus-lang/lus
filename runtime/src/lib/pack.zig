@@ -249,15 +249,25 @@ pub fn size(l: *Thread, fmt: []const u8) Error!usize {
     return total;
 }
 
+/// The error messages of `unpack`, which differ between `string.unpack`
+/// and the vector library.
+pub const Msgs = struct {
+    short: []const u8,
+    zterm: []const u8,
+};
+
+pub const string_msgs: Msgs = .{ .short = "data string too short", .zterm = "unfinished string for format 'z'" };
+pub const vector_msgs: Msgs = .{ .short = "data too short", .zterm = "unfinished string in vector" };
+
 /// Unpacks values from `data` at byte offset `start`, pushing them.
 /// Returns the number of values pushed and the offset after the data.
-pub fn unpack(l: *Thread, fmt: []const u8, data: []const u8, start: usize) Error!struct { u32, usize } {
+pub fn unpack(l: *Thread, fmt: []const u8, data: []const u8, start: usize, msgs: Msgs) Error!struct { u32, usize } {
     var p: Parser = .{ .fmt = fmt, .l = l, .argi = 0 };
     var pos = start;
     var n: u32 = 0;
     while (try p.next(pos)) |it| {
         if (it.ntoalign + it.size > data.len -| pos and it.kind != .zstr and it.kind != .nop and it.kind != .paddalign) {
-            return aux.argError(l, 2, "data string too short", .{});
+            return aux.argError(l, 2, "{s}", .{msgs.short});
         }
         pos += it.ntoalign;
         switch (it.kind) {
@@ -282,13 +292,13 @@ pub fn unpack(l: *Thread, fmt: []const u8, data: []const u8, start: usize) Error
             },
             .string => {
                 const len: usize = @intCast(@as(u64, @bitCast(try getInt(l, data[pos .. pos + it.size], p.little, it.size, false))));
-                if (len > data.len - pos - it.size) return aux.argError(l, 2, "data string too short", .{});
+                if (len > data.len - pos - it.size) return aux.argError(l, 2, "{s}", .{msgs.short});
                 try l.push(try bytesValue(l, data[pos + it.size .. pos + it.size + len]));
                 pos += len;
                 n += 1;
             },
             .zstr => {
-                const end = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return aux.argError(l, 2, "unfinished string for format 'z'", .{});
+                const end = std.mem.indexOfScalarPos(u8, data, pos, 0) orelse return aux.argError(l, 2, "{s}", .{msgs.zterm});
                 try l.push(try bytesValue(l, data[pos..end]));
                 pos = end + 1 - it.size;
                 n += 1;
