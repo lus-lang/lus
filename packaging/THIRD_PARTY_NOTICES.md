@@ -1,27 +1,41 @@
 # Third-party notices
 
-Lus includes or links software and generated data maintained by other
-projects. The corresponding license texts ship in the `licenses` directory.
+Lus includes software and generated data maintained by other projects. The
+Lus 2.0 runtime is written in Zig and compiles the C sources it depends on
+into the same executable, library, or WebAssembly module. The corresponding
+license texts ship in the `licenses` directory.
 
-| Component | Distributed artifact | License file |
+| Component | Distributed artifact | License | License file |
+| --- | --- | --- | --- |
+| Brotli | Native runtime, WASM, site, VSIX | MIT | `LICENSE.BROTLI.txt` |
+| Fontsource font files | Site | SIL Open Font License 1.1 | `LICENSE.FONTS.txt` |
+| IANA time zone database | Native runtime, WASM, site, VSIX | Public domain | `LICENSE.TZDATA.txt` |
+| JSON Test Suite fixtures | Source tests | MIT | `LICENSE.JTS.txt` |
+| Lua | Native runtime, WASM, site, VSIX | MIT | `LICENSE.LUA.txt` |
+| Lua language server lineage | WASM, site, VSIX | MIT | `LICENSE.LUALS.txt` |
+| Lucide icons | Site | ISC | `LICENSE.LUCIDE.txt` |
+| modern-monaco | Site | MIT | `LICENSE.MODERN-MONACO.txt` |
+| musl libc | Native runtime for Linux musl targets | MIT | `LICENSE.MUSL.txt` |
+| SQLite | Native runtime, WASM, site, VSIX | Public domain | `LICENSE.SQLITE.txt` |
+| Unicode and CLDR data | Native runtime, WASM, site, VSIX | Unicode License V3 | `LICENSE.UNICODE.txt` |
+| wasi-libc | WASM, site, VSIX | MIT, Apache 2.0 | `LICENSE.WASI-LIBC.txt` |
+| Zig standard library and compiler runtime | Native runtime, WASM, site, VSIX | MIT | `LICENSE.ZIG.txt` |
+| Zstandard | Native runtime, WASM, site, VSIX | BSD | `LICENSE.ZSTD.txt` |
+
+The runtime pins the versions of its bundled sources.
+
+| Component | Version | Source |
 | --- | --- | --- |
-| Brotli | Native runtime | `LICENSE.BROTLI.txt` |
-| c-ares | Native runtime | `LICENSE.CARES.txt` |
-| Emscripten runtime support | WASM, site, VSIX | `LICENSE.EMSCRIPTEN.txt` |
-| Fontsource font files | Site | `LICENSE.FONTS.txt` |
-| JSON Test Suite fixtures | Source tests | `LICENSE.JTS.txt` |
-| Lua | Native runtime, WASM, site, VSIX | `LICENSE.LUA.txt` |
-| Lua language server lineage | WASM, site, VSIX | `LICENSE.LUALS.txt` |
-| Lucide icons | Site | `LICENSE.LUCIDE.txt` |
-| LZ4 | Native runtime | `LICENSE.LZ4.txt` |
-| modern-monaco | Site | `LICENSE.MODERN-MONACO.txt` |
-| OpenSSL | Native runtime | `LICENSE.OPENSSL.txt` |
-| SQLite | Native runtime | `LICENSE.SQLITE.txt` |
-| Unicode and CLDR data | Native runtime, WASM, site, VSIX | `LICENSE.UNICODE.txt` |
-| zlib | Native runtime | `LICENSE.ZLIB.txt` |
-| Zstandard | Native runtime | `LICENSE.ZSTD.txt` |
+| Brotli | 1.1.0 | `runtime/build.zig.zon` |
+| IANA time zone database | 2026c | `runtime/src/lib/data/tzdata.version` |
+| SQLite | 3.53.4 | `runtime/vendor/sqlite/sqlite3.h` |
+| Zig | 0.17.1 | `mise.toml` |
+| Zstandard | 1.5.7 | `runtime/build.zig.zon` |
+
+The gzip, deflate, and LZ4 codecs of `vector.archive`, the TLS client of the
+`network` library, and the WebAssembly host in `packages/wasm` are written in
+Zig or JavaScript as part of Lus and the Zig standard library.
 
 Each release archive contains an artifact-specific notice, the Lus license,
 and the license texts for the components it redistributes. The release
-inventory verifies that exact set. The release evidence records the dependency
-and generated-data versions used for each build.
+inventory verifies that exact set.

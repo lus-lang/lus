@@ -1,19 +1,18 @@
 # Third-party notices for native Lus archives
 
-Native Lus archives contain the interpreter, compiler, static embedding SDK,
-generated Unicode and CLDR data, and the runtime dependencies listed below.
-The complete license texts ship beside this notice.
+Native Lus archives contain the `lus` executable, the `liblus` embedding
+libraries with the `lus.h` header, and the components listed below, which
+are compiled into them. The complete license texts ship beside this notice.
 
 | Component | License file |
 | --- | --- |
 | Brotli | `LICENSE.BROTLI.txt` |
-| c-ares | `LICENSE.CARES.txt` |
+| IANA time zone database | `LICENSE.TZDATA.txt` |
 | Lua | `LICENSE.LUA.txt` |
-| LZ4 | `LICENSE.LZ4.txt` |
-| OpenSSL | `LICENSE.OPENSSL.txt` |
+| musl libc (Linux musl archives) | `LICENSE.MUSL.txt` |
 | SQLite | `LICENSE.SQLITE.txt` |
 | Unicode and CLDR data | `LICENSE.UNICODE.txt` |
-| zlib | `LICENSE.ZLIB.txt` |
+| Zig standard library and compiler runtime | `LICENSE.ZIG.txt` |
 | Zstandard | `LICENSE.ZSTD.txt` |
 
 The native inventory contains runtime and SDK dependencies. The source tree
