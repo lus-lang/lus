@@ -390,9 +390,8 @@ fn collectgarbage(l: *Thread) Error!u32 {
         },
         5 => return aux.retBool(l, !g.gc_stopped),
         6, 7 => {
-            const prev: []const u8 = if (g.gc_generational) "generational" else "incremental";
-            g.gc_generational = o == 6;
-            return aux.retStr(l, prev);
+            const prev = gc.setMode(g, if (o == 6) .generational else .incremental);
+            return aux.retStr(l, @tagName(prev));
         },
         8 => {
             const p = try aux.checkOption(l, 2, null, std.meta.fieldNames(gc.Param));

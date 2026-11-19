@@ -352,6 +352,8 @@ pub fn sweepPage(g: *Global, p: *Page) void {
     std.debug.assert(p.needs_sweep and !p.current);
     p.needs_sweep = false;
     g.heap.pending_pages -= 1;
+    const before = g.counter.bytes;
+    defer g.gcs.swept += before -| g.counter.bytes;
     const base = p.base();
     const masks = &start_masks[p.class];
     const top_granule = p.top / granule;
