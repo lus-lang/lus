@@ -8,7 +8,7 @@ Small objects live in 16 KB pages carved out of 256 KB segments aligned to their
 
 A page also holds one kind of object. Leaf pages hold strings, bigints, decimals, and vector headers, which reference no other object, so marking sets their bit and never traces them. Scan pages hold everything else. Separating the two keeps text and numbers out of the cache lines the marker reads.
 
-Objects larger than 2 KB come straight from the backing allocator and sit in a list. Table array and hash parts, thread stacks, vector payloads, and prototype code stay in the backing allocator as well. Every byte the state holds, in pages or outside them, goes through one counting allocator, and the pacer reads its total.
+Objects larger than 2 KB come straight from the backing allocator and sit in a list. Thread stacks, vector payloads, prototype code, and table parts stay in the backing allocator as well, except the small parts of a table created with known sizes, which live in the cell of the table (`tables.md`). Every byte the state holds, in pages or outside them, goes through one counting allocator, and the pacer reads its total.
 
 A fresh page allocates by bumping a pointer. A page that was swept allocates from a free list rebuilt in address order. Allocation sites that initialize every field skip clearing the memory.
 
@@ -30,7 +30,7 @@ When the gray stack runs empty, the atomic phase ends the mark phase without the
 
 Weak tables keep the semantics of Lua 5.4. Keys and values that are strings, bigints, or decimals count as values and are never cleared. An ephemeron table keeps a value alive only while its key is alive. A value with a pending finalizer is cleared from weak-value tables. Interned strings are weak: a dead interned string stays in the string table until its page is swept, and finding it again in that window marks it, which revives it.
 
-Inline caches record slot numbers, never pointers, so they need no tracing.
+Inline caches record slot numbers, never pointers, so they need no tracing. Table array parts that hold only integers or only floats store bare numbers, and the marker skips them.
 
 ## Barriers
 

@@ -92,7 +92,7 @@ inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usiz
 pub fn objectSize(h: *Header) usize {
     return switch (h.tag) {
         .string => object.String.allocSize(h.as(object.String).len),
-        .table => @sizeOf(object.Table),
+        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).inline_units) * 16,
         .closure => object.Closure.allocSize(h.as(object.Closure).nupvals),
         .native => state_mod.Native.allocSize(h.as(state_mod.Native).nupvals),
         .userdata => object.Userdata.allocSize(h.as(object.Userdata).size, h.as(object.Userdata).nuser),
@@ -115,9 +115,7 @@ pub fn releaseObject(g: *Global, h: *Header) void {
             s.freeExtra(gpa);
         },
         .table => {
-            const t = h.as(object.Table);
-            if (t.array.len > 0) gpa.free(t.array);
-            if (t.hash.len > 0) gpa.free(t.hash);
+            @import("table.zig").freeParts(gpa, h.as(object.Table));
         },
         .thread => {
             @import("pledge.zig").release(h.as(Thread));
@@ -187,7 +185,7 @@ const big_table = 1024;
 
 fn barrierTableSlow(g: *Global, t: *object.Table, key: Value, val: Value) void {
     const s = &g.gcs;
-    if (t.weak_mode == .none and t.array.len + t.hash.len >= big_table and isMarked(&t.hdr)) {
+    if (t.weak_mode == .none and t.asize + t.hash.len >= big_table and isMarked(&t.hdr)) {
         if (s.phase == .propagate) {
             markGray(g, key);
             markGray(g, val);
@@ -898,13 +896,15 @@ const Marker = struct {
     fn traverseTable(m: *Marker, t: *object.Table) void {
         const gpa = m.g.gpa;
         const s = &m.g.gcs;
-        m.work += t.array.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
+        // An unboxed array part holds only numbers, so tracing skips it.
+        const arr: []const Value = if (t.kind == .boxed) t.values() else &.{};
+        m.work += arr.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
         if (t.metatable) |mt| m.markObject(&mt.hdr);
         const mode = weakModeOf(m.g, t);
         if (!m.verifying) t.weak_mode = mode;
         switch (mode) {
             .none => {
-                for (t.array) |v| m.markValue(v);
+                for (arr) |v| m.markValue(v);
                 for (t.hash) |n| {
                     if (n.val.isNil()) continue;
                     m.markValue(n.key);
@@ -913,7 +913,7 @@ const Marker = struct {
             },
             .values => {
                 // Keys are strong, values are weak.
-                for (t.array) |v| m.markIfValueLike(v);
+                for (arr) |v| m.markIfValueLike(v);
                 for (t.hash) |n| {
                     if (n.val.isNil()) continue;
                     m.markValue(n.key);
@@ -923,7 +923,7 @@ const Marker = struct {
             },
             .keys => {
                 // Ephemeron: a value is reachable only through its key.
-                for (t.array) |v| m.markValue(v);
+                for (arr) |v| m.markValue(v);
                 for (t.hash) |n| {
                     if (n.val.isNil()) continue;
                     m.markIfValueLike(n.key);
@@ -935,7 +935,7 @@ const Marker = struct {
                 }
             },
             .both => {
-                for (t.array) |v| m.markIfValueLike(v);
+                for (arr) |v| m.markIfValueLike(v);
                 for (t.hash) |n| {
                     if (n.val.isNil()) continue;
                     m.markIfValueLike(n.key);
@@ -989,8 +989,8 @@ const Marker = struct {
 
     fn clearWeak(m: *Marker) void {
         for (m.g.gcs.weak.items) |t| {
-            if (t.weak_mode == .values or t.weak_mode == .both) {
-                for (t.array) |*v| {
+            if ((t.weak_mode == .values or t.weak_mode == .both) and t.kind == .boxed) {
+                for (t.values()) |*v| {
                     if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
                 }
             }

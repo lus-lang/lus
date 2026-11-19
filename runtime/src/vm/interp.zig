@@ -443,8 +443,8 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             if (t.tag == .table and key.tag == .integer) {
                 const tab = t.as(Table);
                 const i = key.asInt();
-                if (i >= 1 and i <= tab.array.len) {
-                    const v = tab.array[@intCast(i - 1)];
+                if (i >= 1 and i <= tab.asize) {
+                    const v = table.arrayGet(tab, @intCast(i - 1));
                     if (!v.isNil() or noIndexMeta(tab)) {
                         c.bp[a] = v;
                         continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -489,10 +489,13 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             if (t.tag == .table and key.tag == .integer) {
                 const tab = t.as(Table);
                 const i = key.asInt();
-                if (i >= 1 and i <= tab.array.len and !tab.readonly and noNewindexMeta(tab)) {
+                // A store that does not fit the kind of the array part
+                // takes the slow path, which boxes the part.
+                if (i >= 1 and i <= tab.asize and !tab.readonly and noNewindexMeta(tab) and
+                    table.arrayStoreFast(tab, @intCast(i - 1), v.*))
+                {
                     // An integer key never names a metamethod, so the
                     // absence cache stays valid.
-                    tab.array[@intCast(i - 1)] = v.*;
                     if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
@@ -1007,10 +1010,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             const start = opc.ax(c.code[pc]);
             pc += 1;
             c.fr.pc = pc;
-            const last = start + n;
-            if (last > t.array.len) table.resize(l.g.gpa, t, last, t.hash_used) catch return l.raiseMem();
-            var i: u32 = 0;
-            while (i < n) : (i += 1) t.array[start + i] = l.stack[first + i];
+            table.storeList(l.g.gpa, t, start, l.stack[first..][0..n]) catch return l.raiseMem();
             gc.barrierBack(l.g, &t.hdr);
             l.top = c.base + c.cl.proto.max_stack;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -1053,8 +1053,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             const src = c.fr.func - nv;
             c.fr.pc = pc;
             const t = try l.newTable(nv, 1);
-            var i: u32 = 0;
-            while (i < nv) : (i += 1) t.array[i] = l.stack[src + i];
+            table.storeList(l.g.gpa, t, 0, l.stack[src..][0..nv]) catch return l.raiseMem();
             c.refresh(l);
             c.bp[opc.a(ins)] = Value.obj(.table, t);
             try ops.rawSet(l, t, try l.newStringValue("n"), Value.int(nv));
