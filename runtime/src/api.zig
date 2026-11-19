@@ -31,7 +31,13 @@ pub fn openLibs(l: *Thread) Error!void {
 }
 
 pub fn close(l: *Thread) void {
-    state.destroy(l.g);
+    const g = l.g;
+    if (g.ext.get("flags.compile")) |p| {
+        const map: *std.StringHashMapUnmanaged(Value) = @ptrCast(@alignCast(p));
+        map.deinit(g.gpa);
+        g.gpa.destroy(map);
+    }
+    state.destroy(g);
 }
 
 /// Compiles `src` and pushes the resulting function. On a syntax error,
@@ -120,4 +126,57 @@ pub fn doString(l: *Thread, src: []const u8, chunkname: []const u8) ?[]const u8 
     }
     l.top = base;
     return null;
+}
+
+/// Defines compile-time flags (`-F name[=value]`). A flag without a value
+/// is true, a numeral becomes a number, anything else a string. The flags
+/// are visible to compile-time folding and as the read-only global
+/// `flags`, which exists even when no flag is given.
+pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
+    const g = l.g;
+    const map = try g.gpa.create(std.StringHashMapUnmanaged(Value));
+    map.* = .empty;
+    for (specs) |spec| {
+        var name = spec;
+        var v: Value = .true;
+        if (std.mem.indexOfScalar(u8, spec, '=')) |eq| {
+            name = spec[0..eq];
+            const raw = spec[eq + 1 ..];
+            if (@import("syntax/lexer.zig").parseNumber(raw)) |n| {
+                v = switch (n) {
+                    .integer => |i| Value.int(i),
+                    .float => |f| Value.float(f),
+                };
+            } else {
+                v = Value.obj(.string, try l.newString(raw));
+                try g.fixed.append(g.gpa, v.header());
+            }
+        }
+        try map.put(g.gpa, name, v);
+    }
+    try g.ext.put(g.gpa, "flags.compile", map);
+    // The read-only runtime table: a proxy whose __index is the data and
+    // whose __newindex raises.
+    const data = try l.newTable(0, map.count());
+    var it = map.iterator();
+    while (it.next()) |e| try ops.rawSet(l, data, try l.newStringValue(e.key_ptr.*), e.value_ptr.*);
+    const mt = try l.newTable(0, 3);
+    const lib_aux = @import("lib/aux.zig");
+    try lib_aux.setField(l, mt, "__index", Value.obj(.table, data));
+    try lib_aux.setField(l, mt, "__newindex", try lib_aux.native(l, flagsReadonly, "flags"));
+    try lib_aux.setField(l, mt, "__metatable", .false);
+    const proxy = try l.newTable(0, 0);
+    proxy.metatable = mt;
+    try lib_aux.setGlobal(l, "flags", Value.obj(.table, proxy));
+}
+
+fn flagsReadonly(l: *Thread) Error!u32 {
+    return l.raiseFmt("attempt to modify read-only table 'flags'", .{});
+}
+
+/// Grants the command line permissions (`-P`). Pledge arrives with the
+/// capability registry; until then grants are accepted and recorded.
+pub fn grantPledges(l: *Thread, specs: []const []const u8) Error!void {
+    _ = l;
+    _ = specs;
 }

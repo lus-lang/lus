@@ -1,13 +1,192 @@
 //! The `lus` command line interface.
+//!
+//!   lus [options] [script [args]]
+//!   lus <command> [arguments]
+//!
+//! Commands: run (default), test, fmt, check, ast, doc, debug, build.
 
 const std = @import("std");
 const lus = @import("lus");
 const api = lus.api;
 const out = lus.lib.out;
+const Value = lus.vm.value.Value;
+const Thread = lus.vm.state.Thread;
+
+pub const version = "Lus 2.0.0-dev";
+
+const usage =
+    \\usage: lus [options] [script [args]]
+    \\       lus <command> [arguments]
+    \\
+    \\Commands:
+    \\  run       run a script (default)
+    \\  test      run tests (*_test.lus files and *_test functions)
+    \\  fmt       format source files
+    \\  check     check source files for errors and lint warnings
+    \\  ast       print the syntax tree of a file as JSON
+    \\  doc       generate API documentation from doc comments
+    \\  debug     run a script under the debug adapter protocol
+    \\  build     bundle a script into a standalone executable
+    \\
+    \\Options:
+    \\  -e stat          execute string 'stat'
+    \\  -i               enter interactive mode after running 'script'
+    \\  -l mod           require library 'mod' into global 'mod'
+    \\  -l g=mod         require library 'mod' into global 'g'
+    \\  -v               show version information
+    \\  -E               ignore environment variables
+    \\  -W               turn warnings on
+    \\  -P perm          grant a permission (also --pledge perm)
+    \\  -F name[=value]  define a compile-time flag (also --flag)
+    \\  --gc-pause N     heap growth before a collection, in percent
+    \\  --dis            print bytecode instead of running
+    \\  --               stop handling options
+    \\  -                stop handling options and run standard input
+    \\
+;
+
+const Action = union(enum) {
+    exec: []const u8,
+    require: []const u8,
+};
+
+const Cli = struct {
+    actions: std.ArrayList(Action) = .empty,
+    pledges: std.ArrayList([]const u8) = .empty,
+    flags: std.ArrayList([]const u8) = .empty,
+    script: ?[]const u8 = null,
+    script_index: usize = 0,
+    interactive: bool = false,
+    version: bool = false,
+    ignore_env: bool = false,
+    warnings: bool = false,
+    stdin: bool = false,
+    dis: bool = false,
+    gc_pause: ?usize = null,
+};
+
+const OptSpec = struct {
+    short: ?[]const u8,
+    long: ?[]const u8,
+    takes_arg: bool,
+    apply: *const fn (*Cli, std.mem.Allocator, ?[]const u8) anyerror!void,
+};
+
+fn optExec(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
+    try c.actions.append(a, .{ .exec = v.? });
+}
+fn optRequire(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
+    try c.actions.append(a, .{ .require = v.? });
+}
+fn optInteractive(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.interactive = true;
+}
+fn optVersion(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.version = true;
+}
+fn optIgnoreEnv(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.ignore_env = true;
+}
+fn optWarn(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.warnings = true;
+}
+fn optPledge(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
+    try c.pledges.append(a, v.?);
+}
+fn optFlag(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
+    try c.flags.append(a, v.?);
+}
+fn optGcPause(c: *Cli, _: std.mem.Allocator, v: ?[]const u8) !void {
+    c.gc_pause = try std.fmt.parseInt(usize, v.?, 10);
+}
+fn optDis(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.dis = true;
+}
+
+/// The single option table. Short options with arguments accept both
+/// "-e stat" and "-estat".
+const options = [_]OptSpec{
+    .{ .short = "e", .long = null, .takes_arg = true, .apply = optExec },
+    .{ .short = "l", .long = null, .takes_arg = true, .apply = optRequire },
+    .{ .short = "i", .long = null, .takes_arg = false, .apply = optInteractive },
+    .{ .short = "v", .long = "version", .takes_arg = false, .apply = optVersion },
+    .{ .short = "E", .long = null, .takes_arg = false, .apply = optIgnoreEnv },
+    .{ .short = "W", .long = null, .takes_arg = false, .apply = optWarn },
+    .{ .short = "P", .long = "pledge", .takes_arg = true, .apply = optPledge },
+    .{ .short = "F", .long = "flag", .takes_arg = true, .apply = optFlag },
+    .{ .short = null, .long = "gc-pause", .takes_arg = true, .apply = optGcPause },
+    .{ .short = null, .long = "dis", .takes_arg = false, .apply = optDis },
+};
+
+fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8, start: usize) !?Cli {
+    var c: Cli = .{};
+    var i = start;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--")) {
+            i += 1;
+            break;
+        }
+        if (std.mem.eql(u8, a, "-")) {
+            c.stdin = true;
+            c.script_index = i;
+            return c;
+        }
+        if (a.len < 2 or a[0] != '-') break;
+        var matched = false;
+        for (options) |o| {
+            if (a[1] == '-') {
+                const name = a[2..];
+                const ln = o.long orelse continue;
+                if (std.mem.startsWith(u8, name, ln) and (name.len == ln.len or name[ln.len] == '=')) {
+                    var val: ?[]const u8 = null;
+                    if (o.takes_arg) {
+                        if (name.len > ln.len) {
+                            val = name[ln.len + 1 ..];
+                        } else {
+                            i += 1;
+                            if (i >= args.len) return badOption(a, "needs argument");
+                            val = args[i];
+                        }
+                    }
+                    try o.apply(&c, gpa, val);
+                    matched = true;
+                    break;
+                }
+            } else {
+                const sn = o.short orelse continue;
+                if (a[1] != sn[0]) continue;
+                var val: ?[]const u8 = null;
+                if (o.takes_arg) {
+                    if (a.len > 2) {
+                        val = a[2..];
+                    } else {
+                        i += 1;
+                        if (i >= args.len) return badOption(a, "needs argument");
+                        val = args[i];
+                    }
+                } else if (a.len > 2) continue;
+                try o.apply(&c, gpa, val);
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) return badOption(a, "unrecognized option");
+    }
+    if (i < args.len) {
+        c.script = args[i];
+        c.script_index = i;
+    }
+    return c;
+}
+
+fn badOption(opt: []const u8, what: []const u8) ?Cli {
+    std.debug.print("lus: {s} '{s}'\n{s}", .{ what, opt, usage });
+    return null;
+}
 
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
-    const io = init.io;
     var args_list: std.ArrayList([]const u8) = .empty;
     defer args_list.deinit(gpa);
     var it = try init.minimal.args.iterateAllocator(gpa);
@@ -15,51 +194,198 @@ pub fn main(init: std.process.Init) !u8 {
     while (it.next()) |a| try args_list.append(gpa, a);
     const args = args_list.items;
 
+    // Subcommands.
+    if (args.len >= 2) {
+        const cmd = args[1];
+        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build" };
+        for (tools) |t| {
+            if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
+        }
+        if (std.mem.eql(u8, cmd, "run")) return runMain(init, args, 2);
+    }
+    return runMain(init, args, 1);
+}
+
+fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    var cli = (try parseArgs(gpa, args, start)) orelse return 1;
+    defer cli.actions.deinit(gpa);
+    defer cli.pledges.deinit(gpa);
+    defer cli.flags.deinit(gpa);
+    if (cli.version) {
+        std.debug.print("{s}\n", .{version});
+        if (cli.script == null and cli.actions.items.len == 0 and !cli.interactive) return 0;
+    }
+
     const l = try api.newState(gpa, io);
     defer api.close(l);
     defer out.deinit(l.g);
+    if (!cli.ignore_env) l.g.environ = init.environ_map;
+    l.g.args = args;
+    l.g.warn_on = cli.warnings;
+    if (cli.gc_pause) |p| l.g.pause = p;
+    try api.setFlags(l, cli.flags.items);
     api.openLibs(l) catch {
         std.debug.print("lus: cannot open libraries\n", .{});
         return 1;
     };
-
-    if (args.len >= 3 and std.mem.eql(u8, args[1], "--dis")) {
-        const s = std.Io.Dir.cwd().readFileAlloc(io, args[2], gpa, .unlimited) catch return 1;
-        defer gpa.free(s);
-        const r = try lus.compile.codegen.compile(l.g, s, .{ .chunkname = args[2] });
-        switch (r) {
-            .err => |m| {
-                std.debug.print("{s}\n", .{m});
-                gpa.free(m);
-                return 1;
-            },
-            .ok => |p| {
-                var buf: std.ArrayList(u8) = .empty;
-                defer buf.deinit(gpa);
-                try lus.compile.disasm.dump(gpa, &buf, p, 0);
-                out.stdout(l.g).write(l.g, buf.items);
-                return 0;
-            },
-        }
-    }
-    if (args.len < 2) {
-        std.debug.print("usage: lus script.lus [args]\n", .{});
-        return 1;
-    }
-    const path = args[1];
-    const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
-        std.debug.print("lus: cannot open {s} ({s})\n", .{ path, @errorName(e) });
+    api.grantPledges(l, cli.pledges.items) catch {
+        reportError(l);
         return 1;
     };
-    defer gpa.free(src);
-    const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
-    defer gpa.free(chunkname);
-    if (api.doString(l, src, chunkname)) |msg| {
-        out.flushAll(l.g);
-        var buf: [4096]u8 = undefined;
-        const line = std.fmt.bufPrint(&buf, "lus: {s}\n", .{msg}) catch "lus: error\n";
-        out.stderr(l.g, line);
-        return 1;
+    // The `arg` table.
+    try setArgTable(l, args, cli.script_index, cli.script != null or cli.stdin);
+
+    for (cli.actions.items) |a| switch (a) {
+        .exec => |src| if (!runString(l, src, "=(command line)")) return 1,
+        .require => |spec| {
+            var gname = spec;
+            var mod = spec;
+            if (std.mem.indexOfScalar(u8, spec, '=')) |eq| {
+                gname = spec[0..eq];
+                mod = spec[eq + 1 ..];
+            }
+            const code = try std.fmt.allocPrint(gpa, "{s} = require(\"{s}\")", .{ gname, mod });
+            defer gpa.free(code);
+            if (!runString(l, code, "=(command line)")) return 1;
+        },
+    };
+
+    if (cli.script) |path| {
+        if (cli.dis) return disassemble(l, path);
+        const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
+            std.debug.print("lus: cannot open {s} ({s})\n", .{ path, @errorName(e) });
+            return 1;
+        };
+        defer gpa.free(src);
+        const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
+        defer gpa.free(chunkname);
+        if (!runChunk(l, src, chunkname, args[cli.script_index + 1 ..])) return 1;
+    } else if (cli.stdin) {
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(gpa);
+        var rbuf: [4096]u8 = undefined;
+        var r = std.Io.File.stdin().readerStreaming(io, &rbuf);
+        r.interface.appendRemainingUnlimited(gpa, &buf) catch {};
+        if (!runChunk(l, buf.items, "=stdin", args[cli.script_index + 1 ..])) return 1;
+    }
+    if (cli.interactive or (cli.script == null and !cli.stdin and cli.actions.items.len == 0 and !cli.version)) {
+        try repl(l, io);
     }
     return 0;
+}
+
+fn setArgTable(l: *Thread, args: []const []const u8, script_index: usize, has_script: bool) !void {
+    const t = try l.newTable(args.len, 2);
+    const base: i64 = if (has_script) @intCast(script_index) else @intCast(args.len);
+    for (args, 0..) |a, i| {
+        const v = try l.newStringValue(a);
+        try lus.vm.ops.rawSet(l, t, Value.int(@as(i64, @intCast(i)) - base), v);
+    }
+    try lus.lib.aux.setGlobal(l, "arg", Value.obj(.table, t));
+}
+
+fn reportError(l: *Thread) void {
+    const msg = api.errorMessage(l, l.err);
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(l.g.gpa);
+    buf.print(l.g.gpa, "lus: {s}\n", .{msg}) catch return;
+    if (l.err_traceback) |tb| buf.print(l.g.gpa, "{s}\n", .{tb.bytes()}) catch {};
+    out.stderr(l.g, buf.items);
+}
+
+fn runString(l: *Thread, src: []const u8, name: []const u8) bool {
+    return runChunk(l, src, name, &.{});
+}
+
+fn runChunk(l: *Thread, src: []const u8, name: []const u8, script_args: []const []const u8) bool {
+    const base = l.top;
+    api.load(l, src, name) catch {
+        reportError(l);
+        l.top = base;
+        return false;
+    };
+    for (script_args) |a| {
+        const v = l.newStringValue(a) catch return false;
+        l.push(v) catch return false;
+    }
+    l.want_traceback = true;
+    l.err_traceback = null;
+    defer l.want_traceback = false;
+    if (!api.pcall(l, @intCast(script_args.len), 0)) {
+        reportError(l);
+        l.top = base;
+        return false;
+    }
+    l.top = base;
+    return true;
+}
+
+fn disassemble(l: *Thread, path: []const u8) !u8 {
+    const gpa = l.g.gpa;
+    const s = std.Io.Dir.cwd().readFileAlloc(l.g.io, path, gpa, .unlimited) catch return 1;
+    defer gpa.free(s);
+    const r = try lus.compile.codegen.compile(l.g, s, .{ .chunkname = path });
+    switch (r) {
+        .err => |m| {
+            std.debug.print("{s}\n", .{m});
+            gpa.free(m);
+            return 1;
+        },
+        .ok => |p| {
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(gpa);
+            try lus.compile.disasm.dump(gpa, &buf, p, 0);
+            out.stdout(l.g).write(l.g, buf.items);
+            return 0;
+        },
+    }
+}
+
+/// A minimal interactive loop: expressions print their values, and
+/// statements run as typed. Incomplete input continues on the next line.
+fn repl(l: *Thread, io: std.Io) !void {
+    const gpa = l.g.gpa;
+    std.debug.print("{s}\n", .{version});
+    var rbuf: [4096]u8 = undefined;
+    var r = std.Io.File.stdin().readerStreaming(io, &rbuf);
+    var pending: std.ArrayList(u8) = .empty;
+    defer pending.deinit(gpa);
+    while (true) {
+        out.stderr(l.g, if (pending.items.len == 0) "> " else ">> ");
+        const line = r.interface.takeDelimiterExclusive('\n') catch break;
+        r.interface.toss(1);
+        if (pending.items.len > 0) try pending.append(gpa, '\n');
+        try pending.appendSlice(gpa, line);
+        // Try as an expression first.
+        const expr_src = try std.fmt.allocPrint(gpa, "return {s}", .{pending.items});
+        defer gpa.free(expr_src);
+        const base = l.top;
+        api.load(l, expr_src, "=stdin") catch {
+            l.top = base;
+            api.load(l, pending.items, "=stdin") catch {
+                const msg = api.errorMessage(l, l.err);
+                l.top = base;
+                if (std.mem.endsWith(u8, msg, "<eof>")) continue; // incomplete
+                out.stderr(l.g, msg);
+                out.stderr(l.g, "\n");
+                pending.clearRetainingCapacity();
+                continue;
+            };
+        };
+        pending.clearRetainingCapacity();
+        if (!api.pcall(l, 0, -1)) {
+            reportError(l);
+        } else if (l.top > base) {
+            const prn = try lus.lib.aux.getField(l, l.g.globals.as(lus.vm.object.Table), "print");
+            var vals: std.ArrayList(Value) = .empty;
+            defer vals.deinit(gpa);
+            for (l.stack[base..l.top]) |v| try vals.append(gpa, v);
+            l.top = base;
+            _ = lus.vm.ops.callN(l, prn, vals.items, 0) catch reportError(l);
+        }
+        l.top = base;
+        out.flushAll(l.g);
+    }
 }

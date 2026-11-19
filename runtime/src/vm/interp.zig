@@ -220,6 +220,7 @@ pub fn call(l: *Thread, func: u32, nargs: u32, want: i32) Error!u32 {
         l.frame().boundary = true;
         execute(l, depth) catch |e| {
             const r = yieldAcrossBoundary(l, e);
+            if (l.want_traceback and l.err_traceback == null) captureTraceback(l);
             unwindTo(l, depth);
             return r;
         };
@@ -924,4 +925,11 @@ fn runPendingFinalizers(l: *Thread) Error!void {
     l.g.running_finalizers = true;
     defer l.g.running_finalizers = false;
     try @import("../lib/base.zig").runFinalizers(l);
+}
+
+fn captureTraceback(l: *Thread) void {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(l.g.gpa);
+    @import("debug.zig").traceback(l, &buf, 0) catch return;
+    l.err_traceback = state.newStringIn(l.g, buf.items) catch null;
 }

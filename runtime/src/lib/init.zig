@@ -7,4 +7,7 @@ const Error = state.Error;
 pub fn openAll(l: *Thread) Error!void {
     try @import("base.zig").open(l);
     try @import("coroutine.zig").open(l);
+    try @import("debuglib.zig").open(l);
+    // package last, so it registers the libraries above as loaded.
+    try @import("package.zig").open(l);
 }

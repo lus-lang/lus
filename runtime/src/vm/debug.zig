@@ -174,3 +174,54 @@ pub fn funcName(l: *Thread, fi: usize) ?ObjName {
         else => null,
     };
 }
+
+/// Appends a Lua-style traceback of `l`'s frames, innermost first,
+/// starting at `level` frames below the top.
+pub fn traceback(l: *Thread, buf: *std.ArrayList(u8), level: usize) !void {
+    const gpa = l.g.gpa;
+    try buf.appendSlice(gpa, "stack traceback:");
+    const frames = l.frames.items;
+    if (frames.len == 0) return;
+    var fi: usize = frames.len - 1 - @min(level, frames.len - 1);
+    var shown: usize = 0;
+    const total = fi + 1;
+    while (true) {
+        // Long tracebacks keep the first 10 and last 11 frames.
+        if (total > 22 and shown == 10) {
+            try buf.print(gpa, "\n\t...\t(skipping {d} levels)", .{total - 21});
+            fi = 10;
+        }
+        const f = frames[fi];
+        try buf.appendSlice(gpa, "\n\t");
+        if (f.closure) |cl| {
+            const p = cl.proto;
+            try buf.print(gpa, "{s}:{d}: in ", .{ state.shortSource(p), state.currentLine(p, f.pc) });
+            if (fi == 0 and p.line_defined == 0) {
+                try buf.appendSlice(gpa, "main chunk");
+            } else if (funcName(l, fi)) |n| {
+                if (std.mem.eql(u8, n.kind, "global")) {
+                    try buf.print(gpa, "function '{s}'", .{n.name});
+                } else if (std.mem.eql(u8, n.kind, "for iterator")) {
+                    try buf.appendSlice(gpa, "for iterator 'for iterator'");
+                } else {
+                    try buf.print(gpa, "{s} '{s}'", .{ n.kind, n.name });
+                }
+            } else if (p.line_defined == 0) {
+                try buf.appendSlice(gpa, "main chunk");
+            } else {
+                try buf.print(gpa, "function <{s}:{d}>", .{ state.shortSource(p), p.line_defined });
+            }
+        } else if (f.native) |n| {
+            const name = if (n.name) |s| s.bytes() else "?";
+            if (funcName(l, fi)) |fnm| {
+                try buf.print(gpa, "[C]: in {s} '{s}'", .{ if (std.mem.eql(u8, fnm.kind, "global")) "function" else fnm.kind, fnm.name });
+            } else {
+                try buf.print(gpa, "[C]: in function '{s}'", .{name});
+            }
+        }
+        if (f.tail) try buf.appendSlice(gpa, "\n\t(...tail calls...)");
+        shown += 1;
+        if (fi == 0) break;
+        fi -= 1;
+    }
+}

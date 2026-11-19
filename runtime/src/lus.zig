@@ -21,6 +21,7 @@ pub const vm = struct {
 };
 
 pub const api = @import("api.zig");
+pub const tools = @import("tools.zig");
 
 pub const lib = struct {
     pub const aux = @import("lib/aux.zig");

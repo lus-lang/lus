@@ -232,6 +232,9 @@ pub const Thread = struct {
     transfer: u32 = 0,
     /// Set by `coroutine.yield` so the call machinery unwinds to `resume`.
     yielding: bool = false,
+    /// When set, the first error to reach a native call boundary records a
+    /// traceback in `err_traceback` before the frames unwind.
+    want_traceback: bool = false,
     /// Per-thread extension slots (permission set, debug hooks).
     pledges: ?*anyopaque = null,
     hook: ?*anyopaque = null,
