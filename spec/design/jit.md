@@ -131,4 +131,5 @@ The numbers of the `rewrite` branch when this work started, before the array ele
 - A leaner frame for calls between compiled functions.
 - Windows. The emitter follows the System V convention on x86-64, and the arena uses `mmap`.
 - Systems that forbid writable and executable mappings run interpreted. Mapping the code twice, once writable and once executable, would lift that.
+- Warm starts, binary chunks that compile the functions a profiling run found hot, were built and measured and are kept out (`warmstart.md`).
 - The embedding interface in C has no JIT control yet. A state created through it uses the default setting, and a host written in Zig calls `jit.configure`.

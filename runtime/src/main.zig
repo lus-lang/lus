@@ -3,7 +3,8 @@
 //!   lus [options] [script [args]]
 //!   lus <command> [arguments]
 //!
-//! Commands: run (default), test, fmt, check, ast, doc, debug, build.
+//! Commands: run (default), test, fmt, check, ast, doc, debug, build,
+//! compile.
 
 const std = @import("std");
 const pledge = @import("lus").vm.pledge;
@@ -14,7 +15,7 @@ const package = lus.lib.package;
 const Value = lus.vm.value.Value;
 const Thread = lus.vm.state.Thread;
 
-pub const version = "Lus 2.0.0-dev";
+pub const version = api.version;
 
 const usage =
     \\usage: lus [options] [script [args]]
@@ -29,6 +30,7 @@ const usage =
     \\  doc       generate API documentation from doc comments
     \\  debug     run a script under the debug adapter protocol
     \\  build     bundle a script into a standalone executable
+    \\  compile   compile a script to a binary chunk
     \\
     \\Options:
     \\  -e stat          execute string 'stat'
@@ -229,7 +231,7 @@ pub fn main(init: std.process.Init) !u8 {
     // Subcommands.
     if (args.len >= 2) {
         const cmd = args[1];
-        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build" };
+        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile" };
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
         }

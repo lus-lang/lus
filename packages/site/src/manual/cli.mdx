@@ -3,7 +3,7 @@ order: 4
 title: CLI
 icon: terminal
 group: use
-shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, and debug."
+shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, compile, and debug."
 ---
 
 ## lus
@@ -24,6 +24,7 @@ The `lus` executable runs scripts and carries the tools of a Lus project as comm
 | `doc` | Generate API documentation from doc comments. |
 | `ast` | Print the syntax tree of a file as JSON. |
 | `build` | Bundle a script into a standalone executable. |
+| `compile` | Compile a script to a binary chunk. |
 | `debug` | Run a script under the Debug Adapter Protocol. |
 
 ### Options
@@ -130,6 +131,20 @@ Bundles a script and every module it requires by a literal name into a standalon
 | `-P perm`, `--pledge perm` | Grant a permission every time the program runs. |
 | `-F name[=value]`, `--flag name[=value]` | Define a compile-time flag. |
 | `--include path[:alias]` | Bundle a module file or directory even when no literal `require` names it. |
+
+## lus compile
+
+```
+lus compile [options] script
+```
+
+Compiles a script to a binary chunk, the same chunk that [`string.dump`](/manual/api#string.dump) writes for the compiled script. `lus` runs the chunk directly, and `load` reads it in binary mode. The default output is the script name with the extension `.lusc`.
+
+| Option | Effect |
+| --- | --- |
+| `-o FILE` | Write the chunk to `FILE`. |
+| `-s`, `--strip` | Leave out debug information. |
+| `-F name[=value]`, `--flag name[=value]` | Define a compile-time flag, which folds into the chunk. |
 
 ## lus debug
 
