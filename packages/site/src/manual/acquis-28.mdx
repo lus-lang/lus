@@ -6,7 +6,7 @@ shortdesc: "A readonly flags table populated from --flag/-F arguments and folded
 draft: true
 ---
 
-> In Lus 2.0, `lus build` preserves `-F` flags in standalone executables, and `string.dump` produces the compiled chunks that other interpreters load.
+> In Lus 2.0, `lus build` preserves `-F` flags in standalone executables, and `lus compile` and `string.dump` produce the compiled chunks that other interpreters load.
 
 The `flags` table is a special readonly table populated from the command line. Lookups on it inside `if` conditions are evaluated at compile time when possible, and the losing branch is removed from the generated code entirely.
 
@@ -78,8 +78,8 @@ assert(flags.debug == "shadowed") -- locals shadow the reserved name
 
 - Workers see the same flags as the parent interpreter.
 - Chunks loaded at run time with `load` fold against the same table.
-- Standalone executables built with `--standalone` preserve their `-F` flags, so the bundled program folds and reads the same values at run time.
-- `lusc` compiles without any flag context: nothing folds, and `flags` lookups compile to ordinary reads resolved by whichever interpreter runs the chunk.
+- `lus build -F NAME=VALUE` bakes the flags into the executable it produces, so the bundled program folds with them and reads the same values at run time.
+- `lus compile` folds with the flags given by its own `-F` options. Without any, every flag is absent at compile time, so each folded condition is decided as false in the written chunk, whatever flags the running interpreter has.
 - Flag values are fixed for the lifetime of the process. Bytecode produced by `string.dump` bakes in the folding decisions made at compile time.
 
 ---

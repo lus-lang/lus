@@ -2,12 +2,12 @@
 order: 127
 title: "Acquis 27 - Readonly Environment"
 acquis: true
-shortdesc: "The --readonly-env flag freezes _ENV and module tables, enabling fast-dispatch fastcalls."
+shortdesc: "The --readonly-env flag freezes _ENV and the module tables after startup."
 ---
 
-> In Lus 2.0, `--readonly-env` freezes `_ENV` and the module tables after startup exactly as described here. Every builtin is written once, and the interpreter's quickened instructions take the place of the separate fastcall dispatch.
+> In Lus 2.0, `--readonly-env` freezes `_ENV` and the module tables after startup exactly as described here.
 
-The `--readonly-env` flag freezes the global environment (`_ENV`) and all standard library module tables after initialization. This guarantees that no stdlib function can be replaced at runtime, allowing the VM to skip function-pointer validation on fastcalls and dispatch directly.
+The `--readonly-env` flag freezes the global environment (`_ENV`) and all standard library module tables after initialization. This guarantees that no stdlib function can be replaced at runtime.
 
 ## Usage
 
@@ -40,7 +40,7 @@ The flag freezes tables two levels deep from `_ENV`:
 
 User-created tables are not affected. Local variables, function-scoped tables, and tables created after initialization remain fully mutable.
 
-One module table is deliberately exempted: `package.loaded`, the module cache. `require` stores every loaded module there, so freezing it would make requiring anything new impossible. Its mutability does not weaken the frozen-globals guarantee that fast dispatch relies on, since global bindings themselves stay immutable.
+One module table is deliberately exempted: `package.loaded`, the module cache. `require` stores every loaded module there, so freezing it would make requiring anything new impossible. Its mutability does not weaken the frozen-globals guarantee, since global bindings themselves stay immutable.
 
 ```lus
 -- User tables are unaffected
@@ -51,13 +51,8 @@ t[4] = 4                -- works fine
 myGlobal = "hello"      -- errors: attempt to modify a readonly table
 ```
 
-## Fast dispatch
-
-When `--readonly-env` is active, the VM's `OP_FASTCALL` handler skips the runtime function-pointer comparison that normally verifies the called function hasn't been replaced. Instead, it checks a single byte flag and dispatches immediately. This reduces per-call overhead for all fastcalled stdlib functions.
-
 ## Interaction with other flags
 
-- `--readonly-env` can be combined with `--no-fastcall` (readonly enforcement still applies, but fastcalls are not emitted).
 - The flag is applied after all libraries are loaded and the `arg` table is created.
 - Workers inherit the readonly-env setting from the parent state.
 

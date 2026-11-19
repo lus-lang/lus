@@ -69,6 +69,14 @@ run = "pnpm run gen"
 description = "Fail if generated files are out of date"
 run = ["pnpm run test:tools", "pnpm run gen:check"]
 
+[tasks."gen:tzdata"]
+description = "Rebuild the embedded IANA tzdata from the pinned release"
+run = "node tools/gen-tzdata.js"
+
+[tasks."gen:winzones"]
+description = "Regenerate the Windows to IANA zone table from the pinned CLDR release"
+run = "node tools/gen-winzones.js"
+
 [tasks.install]
 description = "Install JavaScript workspace dependencies"
 run = "pnpm install --frozen-lockfile"

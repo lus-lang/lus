@@ -246,9 +246,35 @@ jobs:
           diff <(printf '%s\n' "${expected[@]}" | sort) <(ls -1 | sort)
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
+      - name: Extract the release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The notes are the CHANGELOG.md section of this version, from
+          # its "## VERSION" heading to the next "## " heading. A
+          # prerelease tag such as v2.0.0-rc.1 uses the section of 2.0.0.
+          version="${TAG#v}"
+          extract() {
+            awk -v v="$1" '
+              /^## / {
+                if (found) exit
+                if ($0 == "## " v || index($0, "## " v " ") == 1) { found = 1; next }
+              }
+              found { print }
+            ' CHANGELOG.md
+          }
+          notes="$(extract "$version")"
+          if [[ -z "${notes//[[:space:]]/}" && "$version" == *-* ]]; then
+            notes="$(extract "${version%%-*}")"
+          fi
+          if [[ -z "${notes//[[:space:]]/}" ]]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          printf '%s\n' "$notes" > "$RUNNER_TEMP/notes.md"
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$TAG" dist/* --draft --verify-tag --title "Lus ${TAG#v}" --notes-file CHANGELOG.md
+          gh release create "$TAG" dist/* --draft --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"

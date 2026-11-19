@@ -10,7 +10,7 @@ draft: true
 
 _Preinclusion_ is a redesign of `--include` that compiles Lus dependencies ahead of time. Each `--include` argument is parsed when the interpreter starts, and the resulting module loader is stored inside the interpreter state. `require` then resolves preincluded modules from memory, **without needing `load` or `fs` pledges**.
 
-This replaces the legacy `--include` behavior, which was only meaningful together with `--standalone`. That combination is unchanged: with `--standalone`, `--include` still bundles the module into the produced executable.
+`lus build` accepts the same `--include` arguments. It bundles each module into the executable it produces, and the bundled program loads the module from memory with `require`, without pledges.
 
 ## Usage
 
@@ -45,22 +45,18 @@ Files are read once, before any pledge restriction applies and before any code r
 
 Preincluded modules participate in the normal module system: a searcher between `package.preload` and the bundle searcher resolves them, results are cached in `package.loaded`, and repeated requires return the same value. Preincluded modules may `require` each other, and workers see the same preincluded modules as the parent interpreter (re-materialized from memory, never from disk).
 
-### The OP_REQUIRE instruction
+### Readonly environments
 
-Under [readonly environments](/manual/acquis-27), calls that match the strict `require("literal")` pattern (where the literal names a preincluded module) are compiled to `OP_REQUIRE`, a new instruction whose operand indexes the preincluded module directly. The entire call is stripped from the generated code: neither the `require` function nor the module name is ever loaded at run time. The instruction checks `package.loaded` and otherwise instantiates the stored loader.
-
-Only the exact pattern is optimized. Anything looser (an aliased `local r = require`, a computed name, a conditional callee like `(mock or require)("a")`) compiles to an ordinary call and goes through the searcher:
+Preinclusion works the same way under [readonly environments](/manual/acquis-27). Every `require` of a preincluded module, whether its name is a literal or computed, goes through the searcher, and `package.loaded`, which stays writable, caches the result:
 
 ```lus nocheck
 -- Run with: lus --readonly-env --include a.lus script.lus
-local m1 = require("a")   -- compiled to OP_REQUIRE
+local m1 = require("a")
 
 local name = "a"
-local m2 = require(name)  -- ordinary call, resolved by the searcher
+local m2 = require(name)
 assert(m1 == m2)          -- same module either way (shared cache)
 ```
-
-In a mutable environment, every `require` goes through the searcher.
 
 ## Security model
 
@@ -74,7 +70,7 @@ lus --include json_helpers.lus --include config.lus:cfg app.lus
 
 ## Compatibility
 
-The bytecode format number was bumped alongside this acquis: `OP_REQUIRE` changed the instruction set, so chunks compiled by older versions are rejected with a format mismatch instead of being misread. Recompile `.luac` artifacts and rebuild standalone executables when upgrading.
+Preincluded modules are compiled from source at startup, so they always match the running interpreter. Compiled chunks from `lus compile` or `string.dump` carry a format version, and a runtime rejects a chunk of another format with `bad binary format (truncated or corrupted chunk)`. Recompile `.lusc` files when upgrading.
 
 ---
 
@@ -86,4 +82,4 @@ Before preinclusion, any program that used modules needed `load` and `fs:read` p
 
 ### Ahead-of-time compilation
 
-Modules are parsed once at startup rather than at first `require`, moving parse errors to launch time and removing parse latency from the program's critical path. Under readonly environments, the strict-pattern rewrite goes further and removes the call machinery altogether.
+Modules are parsed once at startup rather than at first `require`, moving parse errors to launch time and removing parse latency from the program's critical path.
