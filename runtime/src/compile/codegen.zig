@@ -1361,7 +1361,7 @@ fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!voi
     try singleVarAux(fs, name, v, true);
     if (v.kind != .void_) return;
     if (v.info == -3) return; // group: handled by the caller
-    if (v.info == -1 and !std.mem.eql(u8, name, "flags")) {
+    if (v.info == -1 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
         return fs.c.err(line, "variable '{s}' not declared", .{name});
     }
     const readonly = v.info == -2 and v.aux != 0;
@@ -2975,6 +2975,23 @@ pub fn compile(g: *vm.state.Global, src: []const u8, opts: Options) Allocator.Er
         error.OutOfMemory => return error.OutOfMemory,
         error.SyntaxError => return .{ .err = try g.gpa.dupe(u8, diag.?) },
     };
+    const was_stopped = g.gc_stopped;
+    g.gc_stopped = true;
+    defer g.gc_stopped = was_stopped;
+    var c = Compiler{ .gpa = g.gpa, .arena = arena, .g = g, .opts = opts };
+    defer c.actvars.deinit(g.gpa);
+    defer c.labels.deinit(g.gpa);
+    defer c.gotos.deinit(g.gpa);
+    const p = compileChunk(&c, chunk) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CompileError => return .{ .err = try g.gpa.dupe(u8, c.diag.?) },
+    };
+    return .{ .ok = p };
+}
+
+/// Compiles an already parsed (and possibly transformed) chunk. The arena
+/// must own the tree. GC is paused for the duration.
+pub fn compileAst(g: *vm.state.Global, arena: Allocator, chunk: ast.Chunk, opts: Options) Allocator.Error!CompileResult {
     const was_stopped = g.gc_stopped;
     g.gc_stopped = true;
     defer g.gc_stopped = was_stopped;
