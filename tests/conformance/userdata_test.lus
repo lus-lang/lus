@@ -1,0 +1,134 @@
+--[[
+  Userdata parity tests for Lus.
+
+  Proves that io file handles and network sockets are real first-class
+  *userdata* driven by per-type VM-level metatables, not
+  tables masquerading as userdata. Each behaviour below is dispatched through
+  the userdata's shared metatable (`__index` methods, `__name`, `__tostring`)
+  exactly as every other runtime type does.
+
+  Note: io.stdin/stdout/stderr are pre-opened standard streams, so they need
+  no fs pledge. Sockets require the `network` pledge.
+]]
+
+pledge("load", "fs:read=" .. TEST_DIR .. "/*", "network")
+
+-- Loopback sockets may be unavailable, so the socket tests skip when binding fails.
+local function bind_or_skip()
+    local ok, server = catch network.tcp.bind("127.0.0.1", 0)
+    if not ok then skip("loopback sockets unavailable") end
+    return server
+end
+
+local function udp_or_skip()
+    local ok, sock = catch network.udp.open()
+    if not ok then skip("loopback sockets unavailable") end
+    return sock
+end
+
+-- ============================================
+-- io file handles are userdata
+-- ============================================
+
+local function standard_streams_are_userdata_test()
+    assert(type(io.stdin) == "userdata", "io.stdin should be userdata")
+    assert(type(io.stdout) == "userdata", "io.stdout should be userdata")
+    assert(type(io.stderr) == "userdata", "io.stderr should be userdata")
+end
+
+local function file_handles_have_stable_identity_test()
+    -- Two independent lookups of the same underlying stream must yield
+    -- the very same userdata object.
+    assert(io.input() == io.stdin, "io.input() returns the io.stdin object")
+    assert(io.output() == io.stdout, "io.output() returns the io.stdout object")
+    assert(io.stdin ~= io.stdout, "distinct handles compare unequal")
+    -- Two opens of the same file are distinct userdata values.
+    local f1 = io.open(TEST_DIR .. "/userdata_test.lus", "r")
+    local f2 = io.open(TEST_DIR .. "/userdata_test.lus", "r")
+    assert(f1 and f2, "the pledged test file opens for reading")
+    assert(f1 ~= f2, "two opens of the same file are distinct handles")
+    f1:close()
+    f2:close()
+end
+
+local function file_methods_come_from_the_metatable_index_test()
+    assert(type(io.stdout.write) == "function", "write method via metatable")
+    assert(type(io.stdout.close) == "function", "close method via metatable")
+    assert(type(io.stdout.flush) == "function", "flush method via metatable")
+    assert(type(io.stdin.read) == "function", "read method via metatable")
+end
+
+local function file_tostring_renders_as_a_file_test()
+    local s = tostring(io.stdin)
+    assert(type(s) == "string", "tostring returns a string")
+    assert(s:find("^file"), "rendered as a file, got: " .. s)
+end
+
+local function setmetatable_rejects_a_file_with_its_name_test()
+    local ok, err = catch setmetatable(io.stdin, {})
+    assert(not ok, "setmetatable on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end
+
+local function rawlen_rejects_a_file_with_its_name_test()
+    local ok, err = catch rawlen(io.stdin)
+    assert(not ok, "rawlen on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end
+
+local function arithmetic_on_a_file_names_the_file_type_test()
+    local ok, err = catch (io.stdin + 1)
+    assert(not ok, "arithmetic on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end
+
+local function concatenation_of_a_file_names_the_file_type_test()
+    local ok, err = catch (io.stdin .. "x")
+    assert(not ok, "concat on userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end
+
+local function length_of_a_file_names_the_file_type_test()
+    local ok, err = catch (#io.stdin)
+    assert(not ok, "length of userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end
+
+local function calling_a_file_names_the_file_type_test()
+    local ok, err = catch io.stdin()
+    assert(not ok, "calling userdata must error")
+    assert(err:find("FILE%*"), "error names the FILE* type, got: " .. tostring(err))
+end
+
+-- ============================================
+-- network sockets are userdata
+-- ============================================
+
+local function a_bound_tcp_server_is_userdata_test()
+    local server = bind_or_skip()
+    assert(type(server) == "userdata", "server should be userdata")
+    assert(type(server.close) == "function", "close method via metatable")
+    assert(tostring(server):find("server"), "tostring tags it a server")
+    server:close()
+end
+
+local function a_closed_socket_still_renders_via_tostring_test()
+    local server = bind_or_skip()
+    server:close()
+    local s = tostring(server)
+    assert(s:find("server"), "closed socket keeps its kind tag")
+    assert(s:find("closed"), "closed socket marked closed, got: " .. s)
+end
+
+local function setmetatable_rejects_a_socket_with_its_name_test()
+    local server = bind_or_skip()
+    local ok, err = catch setmetatable(server, {})
+    assert(not ok, "setmetatable on a socket must error")
+    assert(err:find("network%.server"), "error names the socket type, got: " .. tostring(err))
+end
+
+local function a_udp_socket_is_userdata_test()
+    local sock = udp_or_skip()
+    assert(type(sock) == "userdata", "udp socket should be userdata")
+    assert(tostring(sock):find("udpsocket"), "tostring tags it a udpsocket")
+end

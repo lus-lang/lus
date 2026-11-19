@@ -1,0 +1,466 @@
+
+local function string_find_basics_test()
+    local i, e = string.find("hello world", "world")
+    assert(i == 7 and e == 11)
+    assert(string.find("alo123alo", "12") == 4)
+    assert(string.find("hello", "^hello$") == 1)
+    assert(string.find("hello", "^world") == nil)
+end
+
+local function string_find_with_patterns_test()
+    assert(string.find("1234", "^%d+$") == 1)
+    assert(string.find("abc", "^%a+$") == 1)
+    assert(not string.find("abc123", "^%a+$"))
+end
+
+local function string_match_captures_test()
+    local s = "hello world"
+    assert(string.match(s, "^hello") == "hello")
+    assert(string.match(s, "world$") == "world")
+    local w1, w2 = string.match(s, "(%w+) (%w+)")
+    assert(w1 == "hello" and w2 == "world")
+end
+
+local function string_match_character_classes_test()
+    assert(string.match("user@example.com", "[%w%p]+@[%w%p]+") == "user@example.com")
+    assert(string.match("123", "^%d+$") == "123")
+    assert(string.match("abc", "%a+") == "abc")
+    assert(string.match("hello\nworld", "hello%s+world") == "hello\nworld")
+    assert(string.match("a\tb", "%S+%s+%S+"))
+end
+
+local function string_gsub_basic_test()
+    assert(string.gsub("hello world", "l", "x") == "hexxo worxd")
+    local s, n = string.gsub("aaa", "a", "b")
+    assert(s == "bbb" and n == 3)
+end
+
+local function string_gsub_table_replacement_test()
+    local t = {name="Lua", version="5.4"}
+    local res = string.gsub("$name-$version", "$(%w+)", t)
+    assert(res == "Lua-5.4")
+end
+
+local function string_gsub_function_replacement_test()
+    local res = string.gsub("hello", "(%w)", function(c)
+        return string.upper(c)
+    end)
+    assert(res == "HELLO")
+end
+
+local function balanced_match_b_test()
+    assert(string.match("a(b(c)d)e", "%b()") == "(b(c)d)")
+    assert(string.match("{test}", "%b{}") == "{test}")
+    assert(string.match("[1,2,3]", "%b[]") == "[1,2,3]")
+end
+
+local function frontiers_f_test()
+    assert(string.gsub("aaa aa a aaa a", "%f[%w]a", "x") == "xaa xa x xaa x")
+    assert(string.gsub("01abc45de3", "%f[%d]", ".") == ".01abc.45de.3")
+    -- Strings count characters (spec/design/strings.md), so the upper bound of the class is the last code point.
+    assert(string.gsub("function", "%f[^\1-\u{10FFFF}]", ".") == "function.")
+    assert(string.find("a", "%f[a]") == 1)
+end
+
+local function gmatch_iterator_test()
+    local s = "hello world from lua"
+    local t = {}
+    for w in string.gmatch(s, "%w+") do
+        table.insert(t, w)
+    end
+    assert(#t == 4)
+    assert(t[1] == "hello")
+    assert(t[4] == "lua")
+end
+
+local function gmatch_with_captures_test()
+    local s = "a=1, b=2, c=3"
+    local t = {}
+    for k, v in string.gmatch(s, "(%w+)=(%d+)") do
+        t[k] = tonumber(v)
+    end
+    assert(t.a == 1 and t.b == 2 and t.c == 3)
+end
+
+local function position_capture_test()
+    local s = "hello"
+    local p1, p2, p3 = string.match(s, "()l()l()")
+    assert(p1 == 3 and p2 == 4 and p3 == 5)
+end
+
+local function nested_captures_test()
+    local s = "hello"
+    local a, b = string.match(s, "((.)%w+)")
+    assert(a == "hello" and b == "h")
+end
+
+-- Pattern matching error and reentrancy suite.
+-- This file focuses on the malformed pattern error surface of the pattern
+-- compiler, the matcher recursion guard, and the reentrant behavior of gsub
+-- and gmatch replacement callbacks. Happy path matching comes first in this file, so
+-- everything here exercises error paths, boundary values, and the interaction
+-- between the C matcher state and Lus level callbacks.
+
+
+-- Malformed pattern errors. Each row is a subject, the pattern that should be
+-- rejected, and a safe message fragment that contains no pattern magic so it
+-- can be handed straight to assert_throws.
+local malformed_patterns_raise_the_documented_message_cases = {
+    {"hello", "(", "unfinished capture"},
+    {"abc", "abc(", "unfinished capture"},
+    {"x", "%", "ends with "},
+    {"ab", "ab%", "ends with "},
+    {"x", "[abc", "missing ']'"},
+    {"x", "[^abc", "missing ']'"},
+    {"x", "%b", "missing arguments"},
+    {"x", "%b(", "missing arguments"},
+    {"x", "%f", "after '%%f' in pattern"},
+    {"x", "%fa", "after '%%f' in pattern"},
+    {"abc", "%9", "invalid capture index"},
+    {"abc", "%1", "invalid capture index"},
+    {"x", ")", "invalid pattern capture"},
+}
+
+local function malformed_patterns_raise_the_documented_message_test(subject, pattern, fragment)
+    raises(function()
+        return string.match(subject, pattern)
+    end, fragment)
+end
+
+-- A '%b' construct needs exactly two following characters. With them present it
+-- is a valid pattern and simply fails to match rather than raising.
+local function b_with_both_delimiters_is_valid_and_can_fail_to_match_test()
+    assert(string.match("(((", "%b()") == nil)
+    assert(string.match("(a(b)c)", "%b()") == "(a(b)c)")
+end
+
+-- Exactly LUA_MAXCAPTURES capture groups are allowed, one more is not.
+local function t_32_capture_groups_are_accepted_test()
+    local pat = string.rep("()", 32)
+    local first = (string.match("x", pat))
+    assert(first == 1)
+end
+
+local function t_33_capture_groups_raise_too_many_captures_test()
+    raises(function()
+        return string.match("x", string.rep("()", 33))
+    end, "too many captures")
+end
+
+-- The matcher has a fixed recursion budget so that pathological patterns fail
+-- cleanly instead of overflowing the C stack. The inputs are kept small so the
+-- guard trips well under a second.
+local pathological_backtracking_raises_pattern_too_complex_cases = {
+    {string.rep("a", 300), string.rep("a?", 300) .. "b"},
+    {string.rep("a", 220), string.rep("a?", 220)},
+    {string.rep("a", 250), string.rep("a-", 250) .. "x"},
+}
+
+local function pathological_backtracking_raises_pattern_too_complex_test(subject, pattern)
+    raises(function()
+        return string.match(subject, pattern)
+    end, "too complex")
+end
+
+-- An error raised inside a gsub replacement function propagates unchanged so
+-- callers see the original message and not a wrapper.
+local function gsub_replacement_error_propagates_its_message_test()
+    raises(function()
+        return string.gsub("abc", "%w", function(c)
+            error("boom:" .. c)
+        end)
+    end, "boom:a")
+end
+
+-- A non string error object raised inside the callback still propagates. The
+-- catch statement renders it through its __tostring metamethod, so the custom
+-- text reaches the caller rather than being swallowed by gsub.
+local function gsub_replacement_error_propagates_a_non_string_error_object_test()
+    local ok, err = catch string.gsub("abc", "%w", function()
+        error(setmetatable({}, {__tostring = function()
+            return "customObjectError"
+        end}))
+    end)
+    assert(not ok)
+    assert(string.find(tostring(err), "customObjectError"))
+end
+
+-- A replacement callback or table lookup must yield a string, number, false, or
+-- nil. Any other type is rejected with 'invalid replacement value'.
+local gsub_rejects_invalid_replacement_values_cases = {
+    {function() return string.gsub("abc", "%w", function() return {} end) end},
+    {function() return string.gsub("abc", "%w", function() return true end) end},
+    {function() return string.gsub("abc", "%w", function() return print end) end},
+    {function() return string.gsub("abc", "%w", {a = {}}) end},
+    {function() return string.gsub("abc", "%w", {a = true}) end},
+}
+
+local function gsub_rejects_invalid_replacement_values_test(thunk)
+    raises(thunk, "invalid replacement value")
+end
+
+-- A callback returning nil or false leaves the matched text untouched while
+-- still counting as a visited match.
+local function gsub_callback_returning_nil_keeps_the_original_text_test()
+    local res, n = string.gsub("abc", "%w", function(c)
+        if c == "b" then return "B" end
+    end)
+    assert(res == "aBc")
+    assert(n == 3)
+end
+
+local function gsub_callback_returning_false_keeps_the_original_text_test()
+    local res, n = string.gsub("abc", "%w", function()
+        return false
+    end)
+    assert(res == "abc")
+    assert(n == 3)
+end
+
+-- A table replacement whose lookup misses (nil) also keeps the original text.
+local function gsub_table_miss_keeps_the_original_text_test()
+    local res, n = string.gsub("abc", "%w", {b = "B"})
+    assert(res == "aBc")
+    assert(n == 3)
+end
+
+-- A callback may legally return a number, which is coerced to its string form.
+local function gsub_callback_returning_a_number_is_coerced_test()
+    local res = string.gsub("aaa", "a", function() return 7 end)
+    assert(res == "777")
+end
+
+-- Replacement string escapes. '%0' is the whole match, '%n' is capture n, and
+-- '%%' is a literal percent. Any other escape or a trailing percent is invalid,
+-- and a capture index with no matching group is rejected.
+local gsub_replacement_string_escapes_raise_on_misuse_cases = {
+    {function() return string.gsub("abc", "(%w)", "%2") end, "invalid capture index"},
+    {function() return string.gsub("abc", "%w", "%y") end, "in replacement string"},
+    {function() return string.gsub("abc", "%w", "%") end, "in replacement string"},
+    {function() return string.gsub("abc", "%w", "a%") end, "in replacement string"},
+}
+
+local function gsub_replacement_string_escapes_raise_on_misuse_test(thunk, fragment)
+    raises(thunk, fragment)
+end
+
+local function gsub_replacement_string_honors_0_n_and_test()
+    assert((string.gsub("abc", "%w", "[%0]")) == "[a][b][c]")
+    assert((string.gsub("hello world", "%w+", "<%0>")) == "<hello> <world>")
+    assert((string.gsub("x=1;y=2", "(%w+)=(%w+)", "%2=%1")) == "1=x;2=y")
+    assert((string.gsub("abc", "b", "100%%")) == "a100%c")
+end
+
+-- Reentrancy: a replacement function may itself run gsub over the same subject.
+-- The inner call gets a fresh matcher state so both results are correct.
+local function gsub_can_be_called_recursively_on_the_same_subject_test()
+    local subject = "abcabc"
+    local res, n = string.gsub(subject, "a(b)c", function()
+        return (string.gsub(subject, "b", "B"))
+    end)
+    assert(res == "aBcaBcaBcaBc")
+    assert(n == 2)
+end
+
+-- A gmatch iterator run from inside a gsub callback keeps its own state.
+local function gmatch_nested_inside_a_gsub_callback_iterates_independently_test()
+    local res = string.gsub("one two", "%w+", function(word)
+        local count = 0
+        for _ in string.gmatch(word, "%a") do
+            count = count + 1
+        end
+        return tostring(count)
+    end)
+    assert(res == "3 3")
+end
+
+-- The gmatch closure keeps its subject and pattern alive, so collecting the
+-- outer references does not disturb an in flight iteration.
+local function gmatch_survives_collection_of_the_subject_reference_test()
+    local function make()
+        local s = string.rep("x", 5) .. " y z"
+        return string.gmatch(s, "%a+")
+    end
+    local iter = make()
+    collectgarbage()
+    collectgarbage()
+    local a = iter()
+    local b = iter()
+    local c = iter()
+    local d = iter()
+    assert(a == "xxxxx")
+    assert(b == "y")
+    assert(c == "z")
+    assert(d == nil)
+end
+
+-- In gmatch a leading '^' is an ordinary character rather than an anchor, since
+-- an anchor would stop the iteration after the first position.
+local function gmatch_treats_a_leading_caret_as_a_literal_test()
+    local count = 0
+    for _ in string.gmatch("aaa", "^a") do
+        count = count + 1
+    end
+    assert(count == 0)
+    local literal = 0
+    for _ in string.gmatch("^a^a", "^a") do
+        literal = literal + 1
+    end
+    assert(literal == 2)
+end
+
+-- Empty matches advance the scan by one position so the iteration terminates.
+local function gmatch_advances_past_empty_matches_test()
+    local acc = {}
+    for x in string.gmatch("ab", "a*") do
+        table.insert(acc, "[" .. x .. "]")
+    end
+    assert(table.concat(acc) == "[a][]")
+
+    local n = 0
+    for _ in string.gmatch("hello", "") do
+        n = n + 1
+    end
+    assert(n == 6)
+
+    local m = 0
+    for _ in string.gmatch("", "") do
+        m = m + 1
+    end
+    assert(m == 1)
+end
+
+-- The gmatch init argument skips a prefix of the subject.
+local gmatch_honors_an_init_position_cases = {
+    {"hello world", "%w+", 7, "world"},
+    {"hello world", "%w+", 1, "hello"},
+    {"abcdef", "%a", 4, "d"},
+}
+
+local function gmatch_honors_an_init_position_test(subject, pattern, init, expected)
+    local iter = string.gmatch(subject, pattern, init)
+    assert(iter() == expected)
+end
+
+-- Position captures record a one based offset and are valid at the very start
+-- and very end of a pattern.
+local function position_captures_work_at_pattern_edges_test()
+    assert(string.match("abc", "()abc") == 1)
+    assert(string.match("abc", "abc()") == 4)
+    local a, b = string.match("abc", "a()b()c")
+    assert(a == 2)
+    assert(b == 3)
+    local p1, p2, p3 = string.match("hello", "()l()l()")
+    assert(p1 == 3)
+    assert(p2 == 4)
+    assert(p3 == 5)
+end
+
+-- A position capture used in a gsub replacement inserts its numeric value.
+local function gsub_emits_position_captures_as_numbers_test()
+    local res = string.gsub("abc", "()b", "%1")
+    assert(res == "a2c")
+end
+
+-- Anchored find only tries the init position, so the anchor is relative to init
+-- rather than to the start of the subject.
+local anchored_find_is_relative_to_the_init_position_cases = {
+    {"aaa", "^a", 2, 2, 2},
+    {"xaaa", "^a", 2, 2, 2},
+    {"hello", "^e", 2, 2, 2},
+    {"hello", "^h", 2, false, false},
+    {"hello", "^l", 3, 3, 3},
+}
+
+local function anchored_find_is_relative_to_the_init_position_test(subject, pattern, init, exp_start, exp_end)
+    local i, e = string.find(subject, pattern, init)
+    if exp_start == false then
+        assert(i == nil)
+    else
+        assert(i == exp_start)
+        assert(e == exp_end)
+    end
+end
+
+-- Init position boundaries for find. Negative init counts from the end and an
+-- init beyond the subject length reports no match.
+local function find_honors_negative_and_out_of_range_init_test()
+    assert(string.find("hello", "l", -2) == 4)
+    assert(string.find("abc", "b", 10) == nil)
+    assert(string.find("abc", "", 10) == nil)
+    assert(string.find("abc", "", 4) == 4)
+end
+
+-- In pattern mode find returns the captures after the two index values.
+local function find_returns_captures_after_the_match_bounds_test()
+    local i, e, cap = string.find("abc", "(b)")
+    assert(i == 2)
+    assert(e == 2)
+    assert(cap == "b")
+    local s1, s2, k, v = string.find("a=1", "(%a)=(%d)")
+    assert(s1 == 1)
+    assert(s2 == 3)
+    assert(k == "a")
+    assert(v == "1")
+end
+
+-- Backreferences in the pattern match the text a prior capture recorded.
+local backreferences_match_repeated_text_cases = {
+    {"abc abc", "(%a+) %1", "abc"},
+    {"abc def", "(%a+) %1", false},
+    {"55x55", "(%d+)x%1", "55"},
+}
+
+local function backreferences_match_repeated_text_test(subject, pattern, expected)
+    local res = string.match(subject, pattern)
+    if expected == false then
+        assert(res == nil)
+    else
+        assert(res == expected)
+    end
+end
+
+-- Set and range syntax including negation, a literal dash at the edge, and an
+-- escaped closing bracket inside the set.
+local set_and_range_syntax_cases = {
+    {"Hello123", "[a-z]+", "ello"},
+    {"  hi  ", "[^%s]+", "hi"},
+    {"a-b", "[-ab]+", "a-b"},
+    {"a]b", "[%]]", "]"},
+    {"1af9", "[0-9a-f]+", "1af9"},
+    {"xyzABC", "[^a-z]+", "ABC"},
+}
+
+local function set_and_range_syntax_test(subject, pattern, expected)
+    assert(string.match(subject, pattern) == expected)
+end
+
+-- Lazy and greedy quantifiers differ in how much they consume.
+local function lazy_and_greedy_quantifiers_consume_differently_test()
+    assert(string.match("<a><b>", "<(.-)>") == "a")
+    assert(string.match("<a><b>", "<(.*)>") == "a><b")
+    assert(string.match("aXbXc", "(.-)X") == "a")
+    assert(string.match("aXbXc", "(.*)X") == "aXb")
+end
+
+-- The optional quantifier accepts zero or one occurrence of the class.
+local optional_quantifier_matches_with_and_without_the_class_cases = {
+    {"heo", "^hel?o$", "heo"},
+    {"helo", "^hel?o$", "helo"},
+    {"hello", "^hel?o$", false},
+}
+
+local function optional_quantifier_matches_with_and_without_the_class_test(subject, pattern, expected)
+    local res = string.match(subject, pattern)
+    if expected == false then
+        assert(res == nil)
+    else
+        assert(res == expected)
+    end
+end
+
+-- A caret that is not the first pattern character is an ordinary literal.
+local function a_caret_is_literal_when_not_leading_test()
+    assert(string.find("a^b", "a^b") == 1)
+    assert(string.match("2^8", "%d^%d") == "2^8")
+end

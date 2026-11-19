@@ -1,0 +1,1168 @@
+-- Worker library tests (Acquis 11)
+
+local WDIR1 = TEST_DIR .. "/fixtures/worker/"
+
+-- Workers are spawned from the fixture scripts and from scripts written into the
+-- temporary working directory. The grants are sealed after the setup, so workers
+-- inherit a store they cannot escalate out of.
+pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./*", "fs:write=./*", "seal")
+
+-- Group: worker.create
+
+local function creates_a_worker_and_returns_a_handle_test()
+  local w = worker.create(WDIR1 .. "counter.lus")
+  assert(w ~= nil)
+  assert(type(w) == "userdata")
+end
+
+-- Group: worker.status
+
+local function returns_running_for_active_worker_test()
+  -- The processor worker blocks in peek until it receives STOP, so it
+  -- cannot have finished when this status call observes it
+  local w = worker.create(WDIR1 .. "processor.lus")
+  assert(worker.status(w) == "running")
+  -- Shut the worker down cleanly so it is not parked at interpreter exit
+  worker.send(w, "STOP")
+  while worker.receive(w) ~= nil do end
+  assert(worker.status(w) == "dead")
+end
+
+-- Group: worker.message and worker.receive
+
+local function receives_messages_from_worker_test()
+  local w = worker.create(WDIR1 .. "counter.lus")
+  
+  -- Collect all messages
+  local messages = {}
+  while true do
+    local msg = worker.receive(w)
+    if msg == nil then break end
+    table.insert(messages, msg)
+  end
+  
+  assert(#messages == 5)
+  assert(messages[1] == 1)
+  assert(messages[5] == 5)
+end
+
+-- Group: worker.send and worker.peek
+
+local function sends_messages_to_worker_and_receives_responses_test()
+  local w = worker.create(WDIR1 .. "processor.lus")
+  
+  -- Send messages
+  worker.send(w, "hello")
+  worker.send(w, "world")
+  worker.send(w, "STOP")
+  
+  -- Receive responses
+  local messages = {}
+  while true do
+    local msg = worker.receive(w)
+    if msg == nil then break end
+    table.insert(messages, msg)
+  end
+  
+  assert(#messages == 3)
+  assert(messages[1] == "GOT: hello")
+  assert(messages[2] == "GOT: world")
+  assert(messages[3] == "STOPPED")
+end
+
+-- Group: serialization of types
+
+local function serializes_integer_messages_test()
+  local w = worker.create(WDIR1 .. "counter.lus")
+  local messages = {}
+  while true do
+    local msg = worker.receive(w)
+    if msg == nil then break end
+    table.insert(messages, msg)
+  end
+  for i = 1, 5 do
+    assert(type(messages[i]) == "number")
+    assert(messages[i] == i)
+  end
+end
+
+local function serializes_table_messages_test()
+  local w = worker.create(WDIR1 .. "table.lus")
+  local messages = {}
+  while true do
+    local msg = worker.receive(w)
+    if msg == nil then break end
+    table.insert(messages, msg)
+  end
+
+  assert(#messages == 3)
+
+  -- Array table
+  assert(type(messages[1]) == "table")
+  assert(messages[1][1] == 1)
+  assert(messages[1][2] == 2)
+  assert(messages[1][3] == 3)
+
+  -- Key-value table
+  assert(messages[2].key == "value")
+  assert(messages[2].num == 42)
+
+  -- Nested table
+  assert(type(messages[3].nested) == "table")
+  assert(messages[3].nested.a == 1)
+  assert(messages[3].nested.b[1] == 2)
+  assert(messages[3].nested.b[2] == 3)
+end
+
+-- Group: message ordering
+
+local function delivers_messages_in_fifo_order_test()
+  local w = worker.create(WDIR1 .. "ordering.lus")
+  local messages = {}
+  while true do
+    local msg = worker.receive(w)
+    if msg == nil then break end
+    table.insert(messages, msg)
+  end
+  assert(#messages == 10)
+  for i = 1, 10 do
+    assert(messages[i] == i)
+  end
+end
+
+-- Group: multiple workers
+
+local function runs_multiple_workers_concurrently_test()
+  local w1 = worker.create(WDIR1 .. "counter.lus")
+  local w2 = worker.create(WDIR1 .. "counter.lus")
+
+  local msgs1 = {}
+  local msgs2 = {}
+
+  while true do
+    local msg = worker.receive(w1)
+    if msg == nil then break end
+    table.insert(msgs1, msg)
+  end
+  while true do
+    local msg = worker.receive(w2)
+    if msg == nil then break end
+    table.insert(msgs2, msg)
+  end
+
+  assert(#msgs1 == 5)
+  assert(#msgs2 == 5)
+end
+
+-- Group: worker lifecycle
+
+local function worker_becomes_dead_after_completion_test()
+  local w = worker.create(WDIR1 .. "counter.lus")
+  -- Drain all messages
+  while worker.receive(w) ~= nil do end
+  local status = worker.status(w)
+  assert(status == "dead")
+end
+
+-- Group: error handling
+
+local function propagates_worker_errors_via_receive_test()
+  local w = worker.create(WDIR1 .. "error.lus")
+
+  -- receive on an errored worker must raise, carrying the worker's own
+  -- error message so callers can identify what failed
+  local ok, err = catch worker.receive(w)
+  assert(not ok)
+  assert(string.find(tostring(err), "intentional worker error"))
+end
+
+local function error_worker_becomes_dead_test()
+  local w = worker.create(WDIR1 .. "error.lus")
+  -- Give worker time to error, then drain
+  catch worker.receive(w)
+  local status = worker.status(w)
+  assert(status == "dead")
+end
+
+local function handles_string_messages_with_special_characters_test()
+  local w = worker.create(WDIR1 .. "processor.lus")
+
+  worker.send(w, "hello\0world")
+  worker.send(w, "line1\nline2")
+  worker.send(w, "\t\r\n")
+  worker.send(w, "STOP")
+
+  local messages = {}
+  while true do
+    local msg = worker.receive(w)
+    if msg == nil then break end
+    table.insert(messages, msg)
+  end
+
+  assert(#messages == 4)
+  assert(messages[4] == "STOPPED")
+end
+
+-- Group: edge cases
+
+local function serializes_boolean_messages_test()
+    local w = worker.create(WDIR1 .. "types.lus")
+    local messages = {}
+    while true do
+        local msg = worker.receive(w)
+        if msg == nil then break end
+        table.insert(messages, msg)
+    end
+    -- types.lus sends: 42, 3.14, "hello", true, false, nil
+    -- nil terminates receive loop, so we get 5 messages
+    assert(#messages == 5)
+    assert(messages[4] == true)
+    assert(type(messages[4]) == "boolean")
+    assert(messages[5] == false)
+    assert(type(messages[5]) == "boolean")
+end
+
+local function non_existent_script_propagates_error_via_receive_test()
+    local w = worker.create(WDIR1 .. "nonexistent.lus")
+    local ok, err = catch worker.receive(w)
+    assert(not ok)
+    assert(worker.status(w) == "dead")
+end
+
+-- Group: snow leopard regressions
+
+local function send_rejects_non_serializable_values_with_an_error_test()
+    local w = worker.create(WDIR1 .. "processor.lus")
+    local ok, err = catch worker.send(w, function() end)
+    assert(not ok)
+    assert(tostring(err):find("cannot serialize") ~= nil)
+    -- the worker must still be usable after a failed send
+    worker.send(w, "still alive")
+    worker.send(w, "STOP")
+    local messages = {}
+    while true do
+        local msg = worker.receive(w)
+        if msg == nil then break end
+        table.insert(messages, msg)
+    end
+    assert(messages[#messages] == "STOPPED")
+end
+
+local function many_workers_with_message_churn_test()
+    local pool = {}
+    for i = 1, 8 do
+        pool[i] = worker.create(WDIR1 .. "processor.lus")
+        for j = 1, 20 do
+            worker.send(pool[i], "w" .. i .. "-" .. j)
+        end
+        worker.send(pool[i], "STOP")
+    end
+    for i = 1, 8 do
+        local messages = {}
+        while true do
+            local msg = worker.receive(pool[i])
+            if msg == nil then break end
+            table.insert(messages, msg)
+        end
+        assert(#messages == 21)
+        assert(messages[1] == "GOT: w" .. i .. "-1")
+        assert(messages[21] == "STOPPED")
+    end
+end
+
+-- Regression: a worker blocked in worker.peek() with an empty inbox used to
+-- hang interpreter exit forever (pool shutdown only woke the queue condvar,
+-- never the per-worker inbox condvars, so pthread_join never returned). The
+-- real assertion is the test process exiting at all: if the bug comes back,
+-- this suite times out. Keep this the LAST test so the worker is still
+-- parked in peek when the interpreter shuts down.
+local function worker_blocked_in_peek_does_not_hang_interpreter_exit_test()
+    local w = worker.create(WDIR1 .. "peekforever.lus")
+    assert(w ~= nil)
+end
+
+-- Regression: the shutdown wakeup must not be catchable; a worker that
+-- retries peek inside 'catch' would otherwise spin forever and hang exit.
+local function catch_peek_retry_loop_does_not_hang_interpreter_exit_test()
+    local w = worker.create(WDIR1 .. "catchpeek.lus")
+    assert(w ~= nil)
+end
+
+-- Regression: the shutdown unwind must also bypass intermediate C-level
+-- protections (load's reader runs under an internal pcall) without
+-- corrupting the suspended catch state.
+local function catch_load_reader_peek_loop_does_not_hang_interpreter_exit_test()
+    skip("2.0 bug: a worker that retries worker.peek through catch and a load reader is not woken at shutdown, so the process never exits")
+    local w = worker.create(WDIR1 .. "catchloadpeek.lus")
+    assert(w ~= nil)
+end
+--[[
+    Worker serialization deep-dive and the worker/pledge security boundary.
+
+    This suite complements the first half of the file. It focuses on the serialization
+    contract in both directions (parent to worker via send, worker to parent
+    via message), the multi-worker select form of worker.receive, error
+    propagation and precedence, argument validation on all four parent-side
+    functions, and the pledge inheritance boundary. Workers inherit the
+    parent's pledges and are sealed, so a worker can never escalate to a
+    permission the parent never granted.
+
+    The parent grants load and fs but never grants network, so any network
+    access attempted inside a worker must be denied. Several small helper
+    scripts are generated at startup into a suite-namespaced temporary
+    directory and removed before the suite finishes. The suite reuses the
+    stable helper scripts under fixtures/worker where they fit.
+]]
+
+-- The parent grants load and fs so it can spawn workers and write the helper
+-- scripts. It deliberately never grants network, which lets the boundary
+-- tests assert that a worker is denied network access. Sealing prevents the
+-- parent from ever granting network later and guarantees the workers inherit
+-- a sealed store they cannot escalate out of.
+
+-- Directory of the stable, checked-in helper scripts used by the first half of this file.
+local WDIR = WDIR1
+
+-- Suite-namespaced scratch directory for the helper scripts generated below.
+-- It lives in the temporary working directory, which `lus test` removes afterwards.
+local TMP = "worker2-tmp"
+
+-- Each helper script is a self-contained worker body. They are written to disk
+-- so worker.create can load them by path. The keys become file names.
+local scripts = {}
+
+-- Peeks one table and echoes selected fields. Used for the parent-to-worker
+-- table send and for the deep-copy isolation test.
+scripts["fieldecho"] = [==[
+local t = worker.peek()
+worker.message(t.a)
+worker.message(t.b[2])
+worker.message(t.nested.c)
+worker.message("DONE")
+]==]
+
+-- Peeks one table and reports whether two sibling fields are the same object,
+-- then echoes a value from each. Pins whether aliasing survives the deep copy.
+scripts["alias"] = [==[
+local t = worker.peek()
+worker.message(t.x == t.y)
+worker.message(t.x.v)
+worker.message(t.y.v)
+]==]
+
+-- Peeks a chain of nested tables and reports how many child links it walked
+-- plus the leaf marker. Used to confirm moderate nesting survives.
+scripts["deepwalk"] = [==[
+local t = worker.peek()
+local n = 0
+local cur = t
+while type(cur) == "table" and cur.child ~= nil do
+    cur = cur.child
+    n = n + 1
+end
+worker.message(n)
+worker.message(cur.leaf)
+]==]
+
+-- Peeks two values and reports their math.type before echoing them back.
+scripts["mtype"] = [==[
+local a = worker.peek()
+local b = worker.peek()
+worker.message(math.type(a))
+worker.message(math.type(b))
+worker.message(a)
+worker.message(b)
+]==]
+
+-- Peeks a table with exotic keys and echoes each value by key. Confirms float,
+-- boolean, embedded-NUL string, negative integer, and maxinteger keys survive.
+scripts["exotickeys"] = [==[
+local t = worker.peek()
+worker.message(t[1.5])
+worker.message(t[true])
+worker.message(t[false])
+worker.message(t["a" .. string.char(0) .. "b"])
+worker.message(t[-5])
+worker.message(t[math.maxinteger])
+worker.message("END")
+]==]
+
+-- Sends a large string to the parent and then its length for cross-checking.
+scripts["bigmsg"] = [==[
+local s = string.rep("q", 500000)
+worker.message(s)
+worker.message(#s)
+]==]
+
+-- Echoes the length of each message it receives until told to stop. Used to
+-- send large and NUL-bearing payloads parent-to-worker and verify the length.
+scripts["lenecho"] = [==[
+while true do
+    local m = worker.peek()
+    if m == "STOP" then
+        worker.message("STOPPED")
+        break
+    end
+    worker.message(#m)
+end
+]==]
+
+-- Echoes each value it receives, preserving type, until told to stop.
+scripts["valecho"] = [==[
+while true do
+    local m = worker.peek()
+    if m == "STOP" then
+        worker.message("STOPPED")
+        break
+    end
+    worker.message(m)
+end
+]==]
+
+-- Attempts a network connection and reports whether it was denied. The parent
+-- never grants network, so the inherited sealed store must reject this.
+scripts["wnet"] = [==[
+local ok, err = catch network.tcp.connect("127.0.0.1", 1)
+worker.message(ok == true)
+worker.message(tostring(err))
+]==]
+
+-- Attempts to grant itself the network pledge and then to connect. Sealing
+-- means the self-grant returns false and the connection stays denied.
+scripts["wpledge"] = [==[
+local granted = pledge("network")
+worker.message(granted == true)
+local ok, err = catch network.tcp.connect("127.0.0.1", 1)
+worker.message(ok == true)
+worker.message(tostring(err))
+]==]
+
+-- Reads a file inside the parent's fs grant to confirm positive inheritance.
+scripts["wfsread"] = [==[
+local f = io.open("@@TESTDIR@@", "r")
+worker.message(f ~= nil)
+if f then f:close() end
+]==]
+
+-- The worker reads this test file, which sits inside the parent's read grant.
+scripts["wfsread"] = (string.gsub(scripts["wfsread"], "@@TESTDIR@@", function()
+    return TEST_DIR .. "/worker_test.lus"
+end))
+
+-- Tries to send a function via worker.message, which cannot be serialized.
+scripts["msgfail"] = [==[
+worker.message(function() end)
+]==]
+
+-- Catches os.exit inside a worker and proves execution can continue.
+scripts["exitcaught"] = [==[
+local ok, err = catch os.exit(37, true)
+worker.message(ok)
+worker.message(tostring(err))
+worker.message("alive")
+]==]
+
+-- Leaves a worker os.exit error uncaught so the parent observes it.
+scripts["exituncaught"] = [==[
+os.exit(37)
+]==]
+
+-- Sends a value, then an explicit nil, then another value. Pins how the parent
+-- observes a genuine nil message versus the drain sentinel.
+scripts["nilmid"] = [==[
+worker.message("before")
+worker.message(nil)
+worker.message("after")
+]==]
+
+-- Buffers two messages and then raises. Pins whether receive yields the
+-- buffered messages or the error preempts them.
+scripts["buferr"] = [==[
+worker.message(1)
+worker.message(2)
+error("boom after buffer")
+]==]
+
+-- Peeks a table that contains itself and reports whether the cycle survived.
+scripts["cyclewalk"] = [==[
+local t = worker.peek()
+worker.message(t.self == t)
+worker.message(t.tag)
+]==]
+
+-- Peeks a vector and reports its type, size, and first byte.
+scripts["vecinfo"] = [==[
+local v = worker.peek()
+worker.message(type(v))
+worker.message(#v)
+worker.message(vector.get(v, 0))
+]==]
+
+-- Echoes its varargs back to the parent one by one. This mirrors the stable
+-- echo.lus helper but declares the ipairs global it uses so it runs under the
+-- suite's sealed, strict-global worker state.
+scripts["myecho"] = [==[
+local args = {...}
+for _, a in ipairs(args) do
+    worker.message(a)
+end
+]==]
+
+-- Create the scratch directory. If a previous run left it behind the call
+-- raises, which is harmless because the writes below still overwrite the
+-- stale scripts, so the failure is swallowed.
+catch fs.createdirectory(TMP)
+
+-- Write every generated helper script to disk.
+local script_names = {}
+for name, src in pairs(scripts) do
+    local path = TMP .. "/" .. name .. ".lus"
+    local f = io.open(path, "w")
+    assert(f ~= nil, "could not write helper script " .. path)
+    f:write(src)
+    f:close()
+    table.insert(script_names, name)
+end
+
+-- Path to a generated helper script by name.
+local function gen(name)
+    return TMP .. "/" .. name .. ".lus"
+end
+
+-- Collects every message a worker produces until it is drained.
+local function drain(w)
+    local out = {}
+    while true do
+        local m = worker.receive(w)
+        if m == nil then break end
+        table.insert(out, m)
+    end
+    return out
+end
+
+-- Busy-polls until a worker reports "dead". Workers used here finish promptly,
+-- so the bound only guards against a genuine hang rather than normal timing.
+local function wait_dead(w)
+    local i = 0
+    while worker.status(w) ~= "dead" do
+        i = i + 1
+        if i > 50000000 then
+            error("worker did not reach dead status")
+        end
+    end
+end
+
+-- Drives a processor-style worker to a clean stop and returns its replies.
+local function stop_processor(w)
+    worker.send(w, "STOP")
+    return drain(w)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: scalar round trips through send and receive
+
+-- Every scalar the serializer supports must survive a parent-to-worker and
+-- worker-to-parent round trip with its value and numeric subtype intact. The
+-- serializer stores the exact double bits, so even 3.14 compares equal.
+local scalar_cases = {
+    {true, false},
+    {false, false},
+    {0, "integer"},
+    {-42, "integer"},
+    {math.maxinteger, "integer"},
+    {math.mininteger, "integer"},
+    {3.14, "float"},
+    {42.0, "float"},
+    {math.huge, "float"},
+    {-math.huge, "float"},
+    {"", false},
+    {"hello", false},
+    {"with" .. string.char(0) .. "nul", false},
+}
+
+local scalar_survives_a_full_round_trip_cases = scalar_cases
+
+local function scalar_survives_a_full_round_trip_test(value, mtype)
+    local w = worker.create(gen("valecho"))
+    worker.send(w, value)
+    local r = worker.receive(w)
+    assert(r == value)
+    if mtype then
+        assert(math.type(r) == mtype)
+    end
+    assert(type(r) == type(value))
+    stop_processor(w)
+end
+
+local function nan_round_trips_as_a_nan_test()
+    local nan = 0.0 / 0.0
+    local w = worker.create(gen("valecho"))
+    worker.send(w, nan)
+    local r = worker.receive(w)
+    assert(type(r) == "number")
+    assert(r ~= r)
+    stop_processor(w)
+end
+
+local function distinguishes_integer_and_float_across_the_boundary_test()
+    local w = worker.create(gen("mtype"))
+    worker.send(w, 7)
+    worker.send(w, 3.14)
+    local msgs = drain(w)
+    assert(msgs[1] == "integer")
+    assert(msgs[2] == "float")
+    assert(msgs[3] == 7)
+    assert(math.abs(msgs[4] - 3.14) <= 0.0000001)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: table serialization
+
+local function sends_a_nested_table_parent_to_worker_and_reads_its_fields_test()
+    local w = worker.create(gen("fieldecho"))
+    worker.send(w, {a = 1, b = {10, 20}, nested = {c = true}})
+    local msgs = drain(w)
+    assert(msgs[1] == 1)
+    assert(msgs[2] == 20)
+    assert(msgs[3] == true)
+    assert(msgs[4] == "DONE")
+end
+
+-- Worker messages keep shared subtables intact, so two fields that alias the same
+-- subtable in the parent alias one table in the worker as well.
+local function preserves_aliasing_of_shared_subtables_test()
+    local w = worker.create(gen("alias"))
+    local sub = {v = 99}
+    worker.send(w, {x = sub, y = sub})
+    local msgs = drain(w)
+    assert(msgs[1] == true)
+    assert(msgs[2] == 99)
+    assert(msgs[3] == 99)
+end
+
+-- worker.send serializes synchronously in the parent, so mutating the table
+-- after send cannot reach the snapshot the worker deserializes.
+local function deep_copies_on_send_so_later_mutation_is_not_observed_test()
+    local w = worker.create(gen("fieldecho"))
+    local t = {a = "orig", b = {10, 20}, nested = {c = true}}
+    worker.send(w, t)
+    t.a = "MUTATED"
+    t.b[2] = 777
+    t.nested.c = false
+    local msgs = drain(w)
+    assert(msgs[1] == "orig")
+    assert(msgs[2] == 20)
+    assert(msgs[3] == true)
+end
+
+-- Moderate nesting round trips through the worker thread untouched.
+local function moderately_nested_tables_survive_serialization_test()
+    local w = worker.create(gen("deepwalk"))
+    local deep = {leaf = "LEAF"}
+    for _ = 1, 10 do
+        deep = {child = deep}
+    end
+    worker.send(w, deep)
+    local msgs = drain(w)
+    assert(msgs[1] == 10)
+    assert(msgs[2] == "LEAF")
+end
+
+-- A table nested far past the point where the worker thread's stack used to
+-- overflow, yet still under the serializer's depth cap, must round trip intact.
+-- The pool thread has room to deserialize the full documented depth.
+local function round_trips_a_deeply_nested_table_through_a_worker_test()
+    local w = worker.create(gen("deepwalk"))
+    local deep = {leaf = "LEAF"}
+    for _ = 1, 40 do
+        deep = {child = deep}
+    end
+    worker.send(w, deep)
+    local msgs = drain(w)
+    assert(msgs[1] == 40)
+    assert(msgs[2] == "LEAF")
+end
+
+-- Worker messages keep cycles intact, so a table that contains itself arrives as a
+-- table that contains itself.
+local function transfers_a_cyclic_table_with_its_cycle_intact_test()
+    local w = worker.create(gen("cyclewalk"))
+    local c = {tag = "loop"}
+    c.self = c
+    worker.send(w, c)
+    local msgs = drain(w)
+    assert(msgs[1] == true)
+    assert(msgs[2] == "loop")
+end
+
+-- A table nested past the serializer's depth cap is reported as a clean error
+-- on the parent, before anything reaches a worker thread.
+local function rejects_a_table_nested_past_the_depth_cap_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    local deep = {leaf = "LEAF"}
+    for _ = 1, 200 do
+        deep = {child = deep}
+    end
+    raises(function() worker.send(w, deep) end, "table nesting too deep")
+    stop_processor(w)
+end
+
+local function preserves_exotic_table_keys_through_the_deep_copy_test()
+    local w = worker.create(gen("exotickeys"))
+    local nulkey = "a" .. string.char(0) .. "b"
+    worker.send(w, {
+        [1.5] = "F",
+        [true] = "T",
+        [false] = "FF",
+        [nulkey] = "NUL",
+        [-5] = "neg",
+        [math.maxinteger] = "max",
+    })
+    local msgs = drain(w)
+    assert(msgs[1] == "F")
+    assert(msgs[2] == "T")
+    assert(msgs[3] == "FF")
+    assert(msgs[4] == "NUL")
+    assert(msgs[5] == "neg")
+    assert(msgs[6] == "max")
+    assert(msgs[7] == "END")
+end
+
+------------------------------------------------------------------------------
+
+-- Group: non-serializable values
+
+local function send_rejects_a_top_level_function_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    raises(function() worker.send(w, function() end) end, "cannot serialize")
+    stop_processor(w)
+end
+
+local function send_rejects_a_function_nested_inside_a_table_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    raises(function() worker.send(w, {ok = 1, bad = function() end}) end, "cannot serialize")
+    stop_processor(w)
+end
+
+-- Worker messages transfer vectors, so the worker receives the bytes.
+local function send_transfers_a_vector_value_test()
+    local w = worker.create(gen("vecinfo"))
+    local v = vector.create(8)
+    vector.set(v, 0, 42)
+    worker.send(w, v)
+    local msgs = drain(w)
+    assert(msgs[1] == "vector")
+    assert(msgs[2] == 8)
+    assert(msgs[3] == 42)
+end
+
+local function send_rejects_an_enum_value_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    local e = enum red, green, blue end
+    raises(function() worker.send(w, e.green) end, "cannot serialize")
+    stop_processor(w)
+end
+
+local function worker_message_of_a_function_errors_and_propagates_test()
+    local w = worker.create(gen("msgfail"))
+    local ok, err = catch worker.receive(w)
+    assert(not ok)
+    assert(string.find(tostring(err), "cannot serialize"))
+end
+
+local function os_exit_is_catchable_inside_a_worker_test()
+    local w = worker.create(gen("exitcaught"))
+    local msgs = drain(w)
+    assert(msgs[1] == false)
+    assert(string.find(msgs[2], "os.exit", 1, true) ~= nil)
+    assert(msgs[3] == "alive")
+end
+
+local function an_uncaught_worker_os_exit_propagates_as_a_worker_error_test()
+    local w = worker.create(gen("exituncaught"))
+    local ok, err = catch worker.receive(w)
+    assert(not ok)
+    assert(string.find(tostring(err), "os.exit", 1, true) ~= nil)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: send semantics
+
+local function delivers_an_explicit_nil_to_the_worker_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    worker.send(w, nil)
+    local first = worker.receive(w)
+    assert(first == "GOT: nil")
+    assert(stop_processor(w)[1] == "STOPPED")
+end
+
+local function sending_to_a_finished_worker_does_not_raise_test()
+    local w = worker.create(WDIR .. "counter.lus")
+    drain(w)
+    wait_dead(w)
+    local ok = catch worker.send(w, "late")
+    assert(ok)
+end
+
+-- The existing suite sends an embedded-NUL string but never checks the echoed
+-- content. Length-prefixed strings must carry the NUL through unchanged.
+local function preserves_embedded_nul_bytes_in_string_content_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    local payload = "hello" .. string.char(0) .. "world"
+    worker.send(w, payload)
+    local reply = worker.receive(w)
+    assert(reply == "GOT: " .. payload)
+    stop_processor(w)
+end
+
+local send_rejects_a_non_worker_first_argument_cases = {{42}, {"x"}, {{}}}
+
+local function send_rejects_a_non_worker_first_argument_test(bad)
+        raises(function() worker.send(bad, 1) end, nil)
+end
+
+local function send_rejects_a_nil_first_argument_test()
+    raises(function() worker.send(nil, 1) end, nil)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: multi-worker select receive
+
+-- A counter produces a message immediately while an idle processor stays
+-- silent, so the select returns the counter's value paired with a nil.
+local function returns_one_value_per_worker_nil_for_the_silent_one_test()
+    local prod = worker.create(WDIR .. "counter.lus")
+    local idle = worker.create(WDIR .. "processor.lus")
+    local m1, m2 = worker.receive(prod, idle)
+    assert(m1 == 1)
+    assert(m2 == nil)
+    drain(prod)
+    stop_processor(idle)
+end
+
+local function keeps_positional_correspondence_when_the_producer_is_second_test()
+    local idle = worker.create(WDIR .. "processor.lus")
+    local prod = worker.create(WDIR .. "counter.lus")
+    local m1, m2 = worker.receive(idle, prod)
+    assert(m1 == nil)
+    assert(m2 == 1)
+    stop_processor(idle)
+    drain(prod)
+end
+
+local function selects_across_three_workers_test()
+    local a = worker.create(WDIR .. "processor.lus")
+    local prod = worker.create(WDIR .. "counter.lus")
+    local b = worker.create(WDIR .. "processor.lus")
+    local m1, m2, m3 = worker.receive(a, prod, b)
+    assert(m1 == nil)
+    assert(m2 == 1)
+    assert(m3 == nil)
+    stop_processor(a)
+    drain(prod)
+    stop_processor(b)
+end
+
+local function returns_nils_for_every_worker_when_all_are_drained_and_dead_test()
+    local w1 = worker.create(WDIR .. "counter.lus")
+    local w2 = worker.create(WDIR .. "counter.lus")
+    drain(w1)
+    drain(w2)
+    wait_dead(w1)
+    wait_dead(w2)
+    local m1, m2 = worker.receive(w1, w2)
+    assert(m1 == nil)
+    assert(m2 == nil)
+end
+
+local function receive_with_no_arguments_errors_test()
+    raises(function() worker.receive() end, "at least one worker")
+end
+
+local receive_rejects_a_non_worker_argument_cases = {{42}, {"x"}, {{}}}
+
+local function receive_rejects_a_non_worker_argument_test(bad)
+        raises(function() worker.receive(bad) end, nil)
+end
+
+local function receive_validates_every_argument_including_a_trailing_bad_one_test()
+    local w = worker.create(WDIR .. "counter.lus")
+    raises(function() worker.receive(w, "x") end, nil)
+    drain(w)
+end
+
+local function receive_on_a_dead_drained_worker_returns_nil_test()
+    local w = worker.create(WDIR .. "counter.lus")
+    drain(w)
+    wait_dead(w)
+    assert(worker.receive(w) == nil)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: error propagation
+
+local function propagates_the_worker_error_message_text_test()
+    local w = worker.create(WDIR .. "error.lus")
+    local ok, err = catch worker.receive(w)
+    assert(not ok)
+    assert(string.find(tostring(err), "intentional worker error"))
+end
+
+-- When a worker has already errored, the select raises that error even though
+-- another worker in the same call has a queued message.
+local function an_errored_worker_preempts_a_queued_message_in_select_test()
+    local ew = worker.create(WDIR .. "error.lus")
+    wait_dead(ew)
+    local prod = worker.create(WDIR .. "counter.lus")
+    local ok, err = catch worker.receive(ew, prod)
+    assert(not ok)
+    assert(string.find(tostring(err), "intentional worker error"))
+    drain(prod)
+end
+
+-- A worker that buffers messages and then errors surfaces the error rather
+-- than the buffered messages, because receive checks status before the outbox.
+local function an_error_preempts_messages_buffered_before_it_test()
+    local w = worker.create(gen("buferr"))
+    wait_dead(w)
+    local ok, err = catch worker.receive(w)
+    assert(not ok)
+    assert(string.find(tostring(err), "boom after buffer"))
+end
+
+-- A genuine nil message and end-of-stream both surface as nil, so the drain
+-- loop stops at the nil, yet a later receive still yields the message after it.
+local function an_explicit_nil_message_stops_the_drain_but_the_tail_remains_test()
+    local w = worker.create(gen("nilmid"))
+    local first = worker.receive(w)
+    assert(first == "before")
+    local sentinel = worker.receive(w)
+    assert(sentinel == nil)
+    local tail = worker.receive(w)
+    assert(tail == "after")
+    wait_dead(w)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: status lifecycle
+
+-- A worker blocked in peek reports "running", giving that state a hard
+-- assertion. The reply proves the worker is alive before we check status.
+local function reports_running_for_a_worker_blocked_in_peek_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    worker.send(w, "ping")
+    assert(worker.receive(w) == "GOT: ping")
+    assert(worker.status(w) == "running")
+    stop_processor(w)
+end
+
+local status_rejects_a_non_worker_argument_cases = {{42}, {"x"}}
+
+local function status_rejects_a_non_worker_argument_test(bad)
+        raises(function() worker.status(bad) end, nil)
+end
+
+local function status_rejects_a_nil_argument_test()
+    raises(function() worker.status(nil) end, nil)
+end
+
+local function a_dead_worker_keeps_its_messages_receivable_test()
+    local w = worker.create(WDIR .. "counter.lus")
+    wait_dead(w)
+    assert(worker.status(w) == "dead")
+    local msgs = drain(w)
+    assert(#msgs == 5)
+    assert(msgs[1] == 1)
+    assert(msgs[5] == 5)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: create arguments and varargs
+
+local function passes_scalar_varargs_to_the_worker_chunk_test()
+    local w = worker.create(gen("myecho"), "hello", 42, 3.14, true)
+    local msgs = drain(w)
+    assert(msgs[1] == "hello")
+    assert(msgs[2] == 42)
+    assert(math.type(msgs[2]) == "integer")
+    assert(math.abs(msgs[3] - 3.14) <= 0.0000001)
+    assert(msgs[4] == true)
+end
+
+local function passes_a_table_vararg_to_the_worker_chunk_test()
+    local w = worker.create(gen("myecho"), "tag", {x = 1, y = {2, 3}})
+    local msgs = drain(w)
+    assert(msgs[1] == "tag")
+    assert(type(msgs[2]) == "table")
+    assert(msgs[2].x == 1)
+    assert(msgs[2].y[2] == 3)
+end
+
+local function rejects_a_non_serializable_vararg_at_create_time_test()
+    raises(function() worker.create(WDIR .. "echo.lus", function() end) end, "cannot serialize")
+end
+
+local create_rejects_a_non_string_path_cases = {{nil}, {{}}, {true}}
+
+local function create_rejects_a_non_string_path_test(bad)
+        raises(function() worker.create(bad) end, nil)
+end
+
+local function create_with_no_arguments_errors_test()
+    raises(function() worker.create() end, nil)
+end
+
+-- A number path is coerced to a string by luaL_checkstring, so create itself
+-- succeeds and the worker instead fails to load the nonexistent file.
+local function coerces_a_number_path_and_fails_at_load_test()
+    local w = worker.create(42)
+    assert(type(w) == "userdata")
+    local ok = catch worker.receive(w)
+    assert(not ok)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: worker-side context guards
+
+-- worker.message and worker.peek are injected only into a running worker's
+-- global table. The parent's worker table never exposes them, so referencing
+-- them in the main program yields nil and calling that nil raises.
+local function worker_message_is_not_exposed_to_the_parent_test()
+    assert(worker.message == nil)
+    raises(function() worker.message(1) end, nil)
+end
+
+local function worker_peek_is_not_exposed_to_the_parent_test()
+    assert(worker.peek == nil)
+    raises(function() worker.peek() end, nil)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: handle surface
+
+local function tostring_of_a_worker_handle_names_the_type_test()
+    local w = worker.create(WDIR .. "counter.lus")
+    assert(string.find(tostring(w), "worker"))
+    drain(w)
+end
+
+-- Dropping the only reference to a finished worker handle and collecting must
+-- release it without corrupting the pool. A fresh round trip afterward proves
+-- the pool still works.
+local function collecting_a_finished_worker_handle_leaves_the_pool_usable_test()
+    local w = worker.create(WDIR .. "counter.lus")
+    drain(w)
+    wait_dead(w)
+    w = nil
+    collectgarbage()
+    collectgarbage()
+    local w2 = worker.create(WDIR .. "processor.lus")
+    worker.send(w2, "again")
+    assert(worker.receive(w2) == "GOT: again")
+    stop_processor(w2)
+end
+
+-- Dropping the only handle to a worker that is still blocked in peek, then
+-- collecting, is also safe. The pool keeps its own reference, so the worker
+-- keeps running and the pool stays usable. The dropped worker is reclaimed at
+-- interpreter shutdown without corrupting the shared pool.
+local function collecting_a_still_running_worker_handle_keeps_the_pool_usable_test()
+    local w = worker.create(WDIR .. "processor.lus")
+    worker.send(w, "ping")
+    assert(worker.receive(w) == "GOT: ping")
+    w = nil
+    collectgarbage()
+    collectgarbage()
+    local w2 = worker.create(WDIR .. "processor.lus")
+    worker.send(w2, "again")
+    assert(worker.receive(w2) == "GOT: again")
+    stop_processor(w2)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: handle lifetime under churn
+
+-- Many workers created and driven to completion, none collected during the
+-- loop, must not disturb a freshly created worker. Each worker is fully drained
+-- and dead before the next, so this exercises a large backlog of finished
+-- handles that ordinary automatic collection reclaims in bursts, with no manual
+-- collection at all.
+local function a_backlog_of_uncollected_finished_handles_does_not_disturb_a_test()
+    local all_ok = true
+    for _ = 1, 300 do
+        local p = worker.create(WDIR .. "processor.lus")
+        worker.send(p, "x")
+        if worker.receive(p) ~= "GOT: x" then all_ok = false end
+        worker.send(p, "STOP")
+        drain(p)
+    end
+    assert(all_ok)
+    local w = worker.create(WDIR .. "processor.lus")
+    worker.send(w, "hi")
+    assert(worker.receive(w) == "GOT: hi")
+    stop_processor(w)
+end
+
+------------------------------------------------------------------------------
+
+-- Group: large payloads
+
+local function transports_a_large_message_worker_to_parent_test()
+    local w = worker.create(gen("bigmsg"))
+    local msgs = drain(w)
+    assert(#msgs[1] == 500000)
+    assert(msgs[2] == 500000)
+end
+
+local function transports_a_large_payload_parent_to_worker_test()
+    local w = worker.create(gen("lenecho"))
+    worker.send(w, string.rep("z", 300000))
+    worker.send(w, "hello" .. string.char(0) .. "world")
+    local msgs = stop_processor(w)
+    assert(msgs[1] == 300000)
+    assert(msgs[2] == 11)
+    assert(msgs[3] == "STOPPED")
+end
+
+------------------------------------------------------------------------------
+
+-- Group: pledge inheritance boundary
+
+-- The parent granted fs, so a worker inherits it and can read a file.
+local function a_worker_inherits_the_parent_s_fs_pledge_test()
+    local w = worker.create(gen("wfsread"))
+    local msgs = drain(w)
+    assert(msgs[1] == true)
+end
+
+-- The parent never granted network, so the sealed inherited store denies it.
+local function a_worker_is_denied_network_the_parent_never_granted_test()
+    local w = worker.create(gen("wnet"))
+    local msgs = drain(w)
+    assert(msgs[1] == false)
+    local err = tostring(msgs[2])
+    assert(string.find(err, "permission") ~= nil or string.find(err, "denied") ~= nil)
+end
+
+-- A worker cannot escalate its own permissions because its inherited store is
+-- sealed, so self-granting network returns false and access stays denied.
+local function a_worker_cannot_escalate_to_a_permission_the_parent_lacks_test()
+    local w = worker.create(gen("wpledge"))
+    local msgs = drain(w)
+    assert(msgs[1] == false)
+    assert(msgs[2] == false)
+    local err = tostring(msgs[3])
+    assert(string.find(err, "permission") ~= nil or string.find(err, "denied") ~= nil)
+end
+
+------------------------------------------------------------------------------

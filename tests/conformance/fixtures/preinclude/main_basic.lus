@@ -1,0 +1,11 @@
+global require, pledge, assert, type, print
+pledge("seal")
+local ok = catch require("definitely_not_preincluded")
+assert(not ok, "non-preincluded require must fail when sealed")
+local m = require("hello")
+assert(type(m) == "table" and m.greeting == "hello from preinclude")
+assert(m.add(2, 3) == 5)
+assert(require("hello") == m, "cache must return the same table")
+local m2, extra = require("hello")
+assert(m2 == m and extra == nil, "cached require yields one value")
+print("BASIC-OK")

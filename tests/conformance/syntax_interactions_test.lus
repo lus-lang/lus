@@ -1,0 +1,770 @@
+--[[
+    Cross-feature composition test suite.
+
+    Every test in this file combines at least two Lus syntax features:
+    do expressions, backtick interpolation, slices, optional chaining,
+    from destructuring, enums, groups, catch, if-assignment,
+    while-assignment, and coroutines. Single-feature behavior is covered
+    by the per-feature suites. This file pins how the features compose.
+]]
+
+pledge("load")
+
+-- =============================================================================
+-- Do expressions inside interpolation
+-- =============================================================================
+
+local function do_expression_providing_an_outer_local_inside_interpolation_test()
+    local name = "lus"
+    local s = `a $( do provide name end ) b`
+    assert(s == "a lus b", "got " .. tostring(s))
+end
+
+local function do_expression_computing_on_an_outer_local_inside_interpolation_test()
+    local x = 5
+    local s = `v $( do provide x + 1 end )`
+    assert(s == "v 6", "got " .. tostring(s))
+end
+
+local function multiline_do_expression_inside_interpolation_test()
+    local name = "lus"
+    local s = `a $( do
+        provide name
+    end ) b`
+    assert(s == "a lus b", "got " .. tostring(s))
+end
+
+local function do_expression_branching_on_an_outer_local_inside_interpolation_test()
+    local flag = true
+    local s = `r=$( do if flag then provide "yes" else provide "no" end end )`
+    assert(s == "r=yes", "got " .. tostring(s))
+end
+
+local function do_expression_providing_two_values_inside_interpolation_keeps_test()
+    local s = `v=$( do provide 1, 2 end )`
+    assert(s == "v=1", "got " .. tostring(s))
+end
+
+local function do_expression_without_provide_inside_interpolation_renders_nil_test()
+    local s = `v=$( do end )`
+    assert(s == "v=nil", "got " .. tostring(s))
+end
+
+local function do_expression_with_a_block_local_inside_interpolation_test()
+    local s = `v=$( do local q = 5 provide q end )`
+    assert(s == "v=5", "got " .. tostring(s))
+end
+
+local function do_expression_branching_on_a_block_local_inside_interpolation_test()
+    local ok, s = catch `r=$( do local q = 3 if q > 1 then provide "big" else provide "small" end end )`
+    assert(ok == true, "should not raise, got " .. tostring(s))
+    assert(s == "r=big", "got " .. tostring(s))
+end
+
+local function interpolation_with_a_dollar_name_inside_a_do_expression_body_test()
+    local r = do
+        local w = 5
+        provide `w=$w`
+    end
+    assert(r == "w=5", "got " .. tostring(r))
+end
+
+local function catch_expression_used_inside_interpolation_test()
+    local ok, s = catch `x $( catch error("boom") )`
+    assert(ok == true, "outer string build should succeed")
+    assert(s == "x false", "got " .. tostring(s))
+end
+
+-- =============================================================================
+-- Slices of optional chains
+-- =============================================================================
+
+local function slice_after_optional_field_access_on_a_non_nil_base_test()
+    local t = { list = {10, 20, 30, 40} }
+    local s = t?.list[2,]
+    assert(type(s) == "table", "expected table, got " .. type(s))
+    assert(#s == 3 and s[1] == 20 and s[3] == 40)
+end
+
+local function slice_after_optional_field_access_short_circuits_on_nil_base_test()
+    local n = nil
+    local s = n?.list[2,]
+    assert(s == nil, "got " .. tostring(s))
+end
+
+local function slice_after_optional_field_access_short_circuits_on_false_base_test()
+    local f = false
+    local s = f?.list[2,]
+    assert(s == false, "got " .. tostring(s))
+end
+
+local optional_slice_form_base_matrix_cases = {
+    {"table"}, {"nil"}, {"false"},
+}
+
+local function optional_slice_form_base_matrix_test(kind)
+    if kind == "table" then
+        local t = {1, 2, 3, 4}
+        local s = t?[2,3]
+        assert(type(s) == "table" and #s == 2 and s[1] == 2 and s[2] == 3)
+    elseif kind == "nil" then
+        local t = nil
+        assert(t?[2,3] == nil)
+    else
+        local t = false
+        assert(t?[2,3] == false)
+    end
+end
+
+local function optional_chain_string_slice_on_non_nil_base_test()
+    local t = { s = "abcdef" }
+    assert(t?.s[2,4] == "bcd")
+end
+
+local function optional_chain_string_slice_on_nil_base_test()
+    local t = nil
+    assert(t?.s[2,4] == nil)
+end
+
+local function nil_field_then_unguarded_slice_raises_test()
+    local t = {}
+    raises(function()
+        local _ = t?.list[2,]
+    end, "attempt to slice a nil value")
+end
+
+local function nil_field_then_guarded_slice_short_circuits_test()
+    local t = {}
+    local s = t?.list?[2,]
+    assert(s == nil, "got " .. tostring(s))
+end
+
+local function optional_index_continues_after_a_plain_slice_test()
+    local t = { list = {10, 20, 30, 40} }
+    local v = t.list[2,4]?[1]
+    assert(v == 20, "got " .. tostring(v))
+end
+
+-- =============================================================================
+-- From destructuring composed with do expressions and chains
+-- =============================================================================
+
+local function from_destructuring_inside_a_do_expression_body_test()
+    local qt = { first = "f", second = "s" }
+    local r = do
+        local first, second from qt
+        provide second .. first
+    end
+    assert(r == "sf", "got " .. tostring(r))
+end
+
+local function do_expression_as_the_source_of_a_from_destructuring_test()
+    local a, b from do provide { a = 1, b = 2 } end
+    assert(a == 1 and b == 2)
+end
+
+local function from_destructuring_over_an_optional_chain_source_test()
+    local t = { inner = { a = 1, b = 2 } }
+    local a, b from t?.inner
+    assert(a == 1 and b == 2)
+end
+
+local function from_over_a_nil_optional_chain_raises_under_catch_test()
+    local n = nil
+    local ok, err = catch (function()
+        local q from n?.inner
+        return q
+    end)()
+    assert(ok == false, "should fail")
+    assert(string.find(tostring(err), "attempt to index a nil value"))
+end
+
+local function while_from_drains_a_table_field_until_it_goes_nil_test()
+    local t = { a = 3 }
+    local log = {}
+    while a from t do
+        table.insert(log, a)
+        t.a = t.a - 1
+        if t.a == 0 then t.a = nil end
+    end
+    assert(#log == 3 and log[1] == 3 and log[2] == 2 and log[3] == 1)
+end
+
+-- =============================================================================
+-- Enums composed with interpolation, groups, and keys
+-- =============================================================================
+
+local function enum_value_interpolates_like_tostring_test()
+    local e = enum apple, orange end
+    local s = `$(e.orange)`
+    assert(s == tostring(e.orange), "got " .. tostring(s))
+    assert(string.find(s, "enum"))
+end
+
+local function enum_comparison_result_inside_interpolation_test()
+    local e = enum low, high end
+    local s = `cmp $(e.low < e.high)`
+    assert(s == "cmp true", "got " .. tostring(s))
+end
+
+local function enum_values_as_keys_in_a_table_held_by_a_group_field_test()
+    local e = enum red, green, blue end
+    local g <group> = { map = {} }
+    g.map[e.green] = "middle"
+    assert(g.map[e.green] == "middle")
+    assert(g.map[e.red] == nil)
+end
+
+local function enum_key_in_a_table_constructor_provided_by_a_do_expression_test()
+    local e = enum red, green end
+    local t = do provide { [e.red] = "r" } end
+    assert(t[e.red] == "r")
+    assert(t[e.green] == nil)
+end
+
+local function enum_value_in_an_if_assignment_condition_is_truthy_and_keeps_test()
+    local e = enum low, mid, high end
+    local seen = nil
+    if lvl = e.mid then
+        seen = lvl
+    end
+    assert(seen == e.mid)
+    assert(tonumber(seen) == 2)
+end
+
+local function enum_indices_precomputed_into_locals_work_as_slice_bounds_test()
+    local e = enum low, mid, high end
+    local t = {"a", "b", "c", "d"}
+    local lo, hi = tonumber(e.low), tonumber(e.high)
+    local s = t[lo, hi]
+    assert(#s == 3 and s[1] == "a" and s[3] == "c")
+end
+
+local function enum_indices_via_direct_tonumber_calls_as_slice_bounds_test()
+    local e = enum low, mid, high end
+    local t = {"a", "b", "c", "d"}
+    local s = t[tonumber(e.low), tonumber(e.high)]
+    assert(type(s) == "table", "expected table, got " .. type(s) .. " (" .. tostring(s) .. ")")
+    assert(#s == 3 and s[1] == "a" and s[3] == "c")
+end
+
+-- =============================================================================
+-- Catch wrapped around each construct's failing form
+-- =============================================================================
+
+local function optional_chain_on_a_boolean_true_base_raises_test()
+    local b = true
+    local ok, err = catch b?.x
+    assert(ok == false, "true?.x must raise since only nil and false short-circuit")
+    assert(string.find(tostring(err), "attempt to index a boolean value"))
+end
+
+local function optional_chain_on_a_number_base_raises_test()
+    local n = 5
+    local ok, err = catch n?.x
+    assert(ok == false)
+    assert(string.find(tostring(err), "attempt to index a number value"))
+end
+
+local function optional_chain_on_a_string_base_indexes_the_string_library_test()
+    local s = "str"
+    local ok, v = catch s?.x
+    assert(ok == true, "strings are indexable so this must not raise")
+    assert(v == nil)
+    local ok2, rep = catch s?.rep
+    assert(ok2 == true and type(rep) == "function")
+end
+
+local slice_of_a_non_sliceable_value_raises_cases = {
+    {"number", "attempt to slice a number value"},
+    {"boolean", "attempt to slice a boolean value"},
+    {"nil", "attempt to slice a nil value"},
+}
+
+local function slice_of_a_non_sliceable_value_raises_test(kind, pattern)
+    local value
+    if kind == "number" then value = 42 end
+    if kind == "boolean" then value = true end
+    local ok, err = catch value[1,2]
+    assert(ok == false, "slicing " .. kind .. " must raise")
+    assert(string.find(tostring(err), pattern))
+end
+
+local function from_of_nil_raises_under_catch_test()
+    local ok, err = catch (function()
+        local a from nil
+        return a
+    end)()
+    assert(ok == false)
+    assert(string.find(tostring(err), "attempt to index a nil value"))
+end
+
+local function from_of_a_number_raises_under_catch_test()
+    local ok, err = catch (function()
+        local a from 42
+        return a
+    end)()
+    assert(ok == false)
+    assert(string.find(tostring(err), "attempt to index a number value"))
+end
+
+local function catch_around_a_do_expression_whose_body_errors_test()
+    local ok, err = catch do error("boom") end
+    assert(ok == false)
+    assert(string.find(tostring(err), "boom"))
+end
+
+local function catch_around_an_interpolation_whose_expression_errors_test()
+    local ok, err = catch `bad $(error("interr"))`
+    assert(ok == false)
+    assert(string.find(tostring(err), "interr"))
+end
+
+local function missing_method_on_a_non_nil_optional_chain_base_raises_test()
+    local t = {}
+    local ok, err = catch t?:nosuch()
+    assert(ok == false, "the base is non-nil so the call must be attempted")
+    assert(string.find(tostring(err), "attempt to call a nil value"))
+end
+
+local function error_raised_inside_slice_propagates_through_catch_test()
+    local x = setmetatable({}, {
+        __slice = function() error("slicefail") end
+    })
+    local ok, err = catch x[1,2]
+    assert(ok == false)
+    assert(string.find(tostring(err), "slicefail"))
+end
+
+-- =============================================================================
+-- Group fields composed with slices and interpolation
+-- =============================================================================
+
+local function group_const_fields_as_table_slice_bounds_test()
+    local g <group> = { lo <const> = 2, hi <const> = 4 }
+    local t = {"a", "b", "c", "d", "e"}
+    local s = t[g.lo, g.hi]
+    assert(#s == 3 and s[1] == "b" and s[3] == "d")
+end
+
+local function group_const_fields_as_string_slice_bounds_test()
+    local g <group> = { lo <const> = 2, hi <const> = 4 }
+    assert(("hello")[g.lo, g.hi] == "ell")
+end
+
+local function mutated_group_field_used_as_a_slice_bound_test()
+    local g <group> = { hi = 3 }
+    local t = {10, 20, 30, 40, 50}
+    g.hi = 5
+    local s = t[2, g.hi]
+    assert(#s == 4 and s[1] == 20 and s[4] == 50)
+end
+
+local function group_field_arithmetic_inside_interpolation_test()
+    local g <group> = { lo <const> = 2, hi <const> = 4 }
+    local s = `sum $(g.lo + g.hi)`
+    assert(s == "sum 6", "got " .. tostring(s))
+end
+
+-- =============================================================================
+-- Nested do expressions and do expressions in condition positions
+-- =============================================================================
+
+local function three_inline_nested_do_expressions_provide_outward_test()
+    local v = do provide do provide do provide 7 end end end
+    assert(v == 7, "got " .. tostring(v))
+end
+
+local function do_expression_in_an_if_assignment_condition_test()
+    local seen = nil
+    if v = do provide 5 end then
+        seen = v
+    end
+    assert(seen == 5)
+end
+
+local function falsy_do_expression_in_an_if_assignment_condition_takes_else_test()
+    local branch = nil
+    if v = do provide false end then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+end
+
+local function do_expression_as_a_while_assignment_condition_re_evaluates_test()
+    local n = 0
+    local total = 0
+    while v = do
+        n = n + 1
+        if n <= 3 then provide n * 10 end
+    end do
+        total = total + v
+    end
+    assert(total == 60, "10+20+30 should be 60, got " .. tostring(total))
+    assert(n == 4, "condition body must run once more to observe the exit")
+end
+
+local function do_expression_as_an_optional_method_call_argument_test()
+    local obj = { m = function(self, x) return x * 2 end }
+    assert(obj?:m(do provide 21 end) == 42)
+end
+
+local function nil_base_suppresses_a_side_effecting_do_expression_argument_test()
+    local count = 0
+    local nilobj = nil
+    local r = nilobj?:m(do count = count + 1 provide 1 end)
+    assert(r == nil)
+    assert(count == 0, "argument must not be evaluated when the chain short-circuits")
+end
+
+-- =============================================================================
+-- Closures capturing if-assignment and while-assignment condition variables
+-- =============================================================================
+
+local function closure_captures_an_if_assignment_condition_variable_test()
+    local capture
+    if c = 42 then
+        capture = function() return c end
+    end
+    assert(capture() == 42)
+end
+
+local function closure_in_the_else_branch_captures_the_false_condition_value_test()
+    local capture
+    if c = false then
+        error("unreachable branch")
+    else
+        capture = function() return c end
+    end
+    assert(capture() == false)
+end
+
+local function consecutive_if_assignments_with_one_name_bind_independently_test()
+    local first, second
+    if c = 10 then
+        first = function() return c end
+    end
+    if c = 20 then
+        second = function() return c end
+    end
+    assert(first() == 10, "first binding must be untouched by the second if")
+    assert(second() == 20)
+end
+
+local function if_assignment_condition_variable_shadows_an_outer_local_test()
+    local x = 1
+    local inner = nil
+    if x = 2 then
+        inner = x
+    end
+    assert(inner == 2)
+    assert(x == 1, "outer local must be unchanged after the if")
+end
+
+-- The while-assignment condition variable is one shared binding, matching
+-- the documented equivalent Lua pattern of assigning a single local before
+-- and inside the loop. All closures therefore observe the same variable.
+local function while_assignment_closures_share_one_binding_across_iterations_test()
+    local fns = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 5 and i or nil
+    end
+    while v = nextv() do
+        table.insert(fns, function() return v end)
+        if v == 2 then break end
+    end
+    assert(#fns == 2)
+    assert(fns[1]() == 2, "shared binding holds the value at break time")
+    assert(fns[2]() == 2)
+end
+
+local function after_normal_exit_while_assignment_closures_observe_the_falsy_test()
+    local fns = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = nextv() do
+        table.insert(fns, function() return v end)
+    end
+    assert(#fns == 3)
+    -- The final condition evaluation assigned nil to the shared binding.
+    assert(fns[1]() == nil and fns[2]() == nil and fns[3]() == nil)
+end
+
+local function explicit_body_local_restores_per_iteration_capture_test()
+    local fns = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = nextv() do
+        local copy = v
+        table.insert(fns, function() return copy end)
+    end
+    assert(fns[1]() == 1 and fns[2]() == 2 and fns[3]() == 3)
+end
+
+local function closure_made_in_the_first_iteration_reads_later_iteration_values_test()
+    local reader
+    local vals = {}
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 3 and i or nil
+    end
+    while v = nextv() do
+        if not reader then
+            reader = function() return v end
+        end
+        table.insert(vals, reader())
+    end
+    assert(vals[1] == 1 and vals[2] == 2 and vals[3] == 3)
+end
+
+local function closure_can_write_the_shared_while_assignment_binding_test()
+    local setter
+    local i = 0
+    local function nextv()
+        i = i + 1
+        return i <= 2 and i or nil
+    end
+    while v = nextv() do
+        if not setter then
+            setter = function(nv) v = nv return v end
+        end
+    end
+    assert(setter(99) == 99, "assignment through the captured binding must stick")
+end
+
+-- =============================================================================
+-- Coroutine suspension points inside each construct
+-- =============================================================================
+
+local function yield_inside_an_interpolation_segment_test()
+    local co = coroutine.create(function()
+        local s = `a $(coroutine.yield(1)) b`
+        return s
+    end)
+    local ok, v = coroutine.resume(co)
+    assert(ok and v == 1)
+    local ok2, s = coroutine.resume(co, "mid")
+    assert(ok2 and s == "a mid b", "got " .. tostring(s))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function two_yields_inside_one_interpolation_resumed_in_order_test()
+    local gen = coroutine.wrap(function()
+        local s = `$(coroutine.yield(1)) and $(coroutine.yield(2))`
+        coroutine.yield(s)
+    end)
+    assert(gen() == 1)
+    assert(gen("x") == 2)
+    assert(gen("y") == "x and y")
+end
+
+local function yield_inside_a_do_expression_body_test()
+    local co = coroutine.create(function()
+        local x = do
+            local got = coroutine.yield("ask")
+            provide got * 2
+        end
+        return x
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "ask")
+    local ok2, v = coroutine.resume(co, 21)
+    assert(ok2 and v == 42, "got " .. tostring(v))
+end
+
+local function yield_inside_an_if_assignment_condition_taking_the_then_branch_test()
+    local co = coroutine.create(function()
+        if v = coroutine.yield("cond?") then
+            return "then:" .. tostring(v)
+        else
+            return "else:" .. tostring(v)
+        end
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "cond?")
+    local ok2, r = coroutine.resume(co, 7)
+    assert(ok2 and r == "then:7", "got " .. tostring(r))
+end
+
+local function yield_inside_an_if_assignment_condition_taking_the_else_branch_test()
+    local co = coroutine.create(function()
+        if v = coroutine.yield("cond?") then
+            return "then:" .. tostring(v)
+        else
+            return "else:" .. tostring(v)
+        end
+    end)
+    coroutine.resume(co)
+    local ok, r = coroutine.resume(co, false)
+    assert(ok and r == "else:false", "got " .. tostring(r))
+end
+
+local function yield_inside_a_while_assignment_condition_drives_the_loop_test()
+    local co = coroutine.create(function()
+        local sum = 0
+        while v = coroutine.yield("more?") do
+            sum = sum + v
+        end
+        return sum
+    end)
+    local ok1, q1 = coroutine.resume(co)
+    assert(ok1 and q1 == "more?")
+    local ok2, q2 = coroutine.resume(co, 10)
+    assert(ok2 and q2 == "more?")
+    local ok3, q3 = coroutine.resume(co, 5)
+    assert(ok3 and q3 == "more?")
+    local ok4, total = coroutine.resume(co, nil)
+    assert(ok4 and total == 15, "got " .. tostring(total))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function yield_inside_an_optional_chain_method_call_test()
+    local obj = {
+        m = function(self, x)
+            return coroutine.yield("in-m") + x
+        end
+    }
+    local co = coroutine.create(function()
+        return obj?:m(100)
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "in-m")
+    local ok2, v = coroutine.resume(co, 5)
+    assert(ok2 and v == 105, "got " .. tostring(v))
+end
+
+local function nil_base_never_reaches_a_yield_in_optional_call_arguments_test()
+    local co = coroutine.create(function()
+        local base = nil
+        local r = base?:m(coroutine.yield("should not appear"))
+        return "finished", r
+    end)
+    local ok, a, b = coroutine.resume(co)
+    assert(ok and a == "finished" and b == nil,
+        "coroutine must complete in one resume without suspending")
+    assert(coroutine.status(co) == "dead")
+end
+
+local function yield_as_the_source_expression_of_a_from_destructuring_test()
+    local co = coroutine.create(function()
+        local a, b from coroutine.yield("table?")
+        return a, b
+    end)
+    local ok, q = coroutine.resume(co)
+    assert(ok and q == "table?")
+    local ok2, a, b = coroutine.resume(co, { a = 11, b = 22 })
+    assert(ok2 and a == 11 and b == 22)
+end
+
+local function from_source_table_built_across_a_yield_boundary_test()
+    local co = coroutine.create(function()
+        local src = { x = coroutine.yield("need x") }
+        local x from src
+        return x
+    end)
+    coroutine.resume(co)
+    local ok, v = coroutine.resume(co, 77)
+    assert(ok and v == 77)
+end
+
+local function yield_expressions_as_slice_bounds_across_two_resumes_test()
+    local co = coroutine.create(function()
+        local t = {10, 20, 30, 40, 50}
+        local s = t[coroutine.yield("lo?"), coroutine.yield("hi?")]
+        return type(s), #s, s[1]
+    end)
+    local ok1, q1 = coroutine.resume(co)
+    assert(ok1 and q1 == "lo?")
+    local ok2, q2 = coroutine.resume(co, 2)
+    assert(ok2 and q2 == "hi?")
+    local ok3, ty, len, first = coroutine.resume(co, 4)
+    assert(ok3, "final resume failed: " .. tostring(ty))
+    assert(ty == "table" and len == 3 and first == 20)
+end
+
+local function group_field_assigned_from_a_resumed_value_inside_a_coroutine_test()
+    local co = coroutine.create(function()
+        local cfg <group> = { n = 0 }
+        cfg.n = coroutine.yield("give n")
+        return cfg.n * 3
+    end)
+    coroutine.resume(co)
+    local ok, v = coroutine.resume(co, 14)
+    assert(ok and v == 42)
+end
+
+-- =============================================================================
+-- Enum identity across coroutine boundaries
+-- =============================================================================
+
+local function enum_value_yielded_out_of_a_coroutine_keeps_identity_test()
+    local e = enum red, green, blue end
+    local co = coroutine.create(function()
+        local back = coroutine.yield(e.green)
+        return back == e.red, e.blue
+    end)
+    local ok, out = coroutine.resume(co)
+    assert(ok and out == e.green, "yielded value must be the same enum value")
+    assert(type(out) == "enum")
+    local ok2, same, last = coroutine.resume(co, e.red)
+    assert(ok2 and same == true, "resumed enum must compare equal inside")
+    assert(last == e.blue)
+end
+
+local function enum_identity_across_coroutine_boundary_survives_a_gc_cycle_test()
+    local e = enum alpha, beta end
+    local co = coroutine.create(function()
+        local got = coroutine.yield(e.beta)
+        return got == e.alpha
+    end)
+    local ok, out = coroutine.resume(co)
+    assert(ok and out == e.beta)
+    collectgarbage("collect")
+    local ok2, same = coroutine.resume(co, e.alpha)
+    assert(ok2 and same == true)
+end
+
+-- =============================================================================
+-- Remaining condition-position compositions
+-- =============================================================================
+
+local function slice_result_as_an_if_assignment_condition_test()
+    local t = {1, 2, 3}
+    local got = nil
+    if s = t[2,3] then
+        got = s
+    end
+    assert(type(got) == "table" and #got == 2 and got[1] == 2)
+end
+
+local function optional_chain_inside_a_while_assignment_condition_test()
+    local data = { queue = {5, 6, 7} }
+    local out = {}
+    while item = data?.queue and table.remove(data.queue, 1) do
+        table.insert(out, item)
+    end
+    assert(#out == 3 and out[1] == 5 and out[3] == 7)
+end
+
+local function string_slice_result_inside_interpolation_test()
+    local s = "hello"
+    local r = `mid: $(s[2,4])`
+    assert(r == "mid: ell", "got " .. tostring(r))
+end
+
+local function table_slice_length_inside_interpolation_test()
+    local t = {1, 2, 3, 4, 5}
+    local r = `len $(#t[2,4])`
+    assert(r == "len 3", "got " .. tostring(r))
+end

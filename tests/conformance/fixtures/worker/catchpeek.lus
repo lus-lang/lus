@@ -1,0 +1,8 @@
+-- catchpeek.lus - retries worker.peek in a catch loop forever. The pool
+-- shutdown wakeup must NOT be catchable, or this loop spins and hangs
+-- interpreter exit (snow leopard review regression test).
+global worker
+
+while true do
+    catch worker.peek()
+end

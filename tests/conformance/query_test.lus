@@ -1,0 +1,1676 @@
+--[[
+  Query execution semantics: the query() iterator over the in-memory
+  provider, projections, where evaluation, ordering, grouping,
+  aggregates, distinct, joins, laziness, the __query metamethod, and
+  debug.queryplan. Syntax and value semantics live in
+  the syntax section further down.
+]]
+
+pledge("load")
+
+
+local function collect(q)
+    local out = {}
+    for row in query(q) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+local function people()
+    return {
+        { name = "Alice", age = 30, region = "east" },
+        { name = "Bob",   age = 17, region = "west" },
+        { name = "Carol", age = 42, region = "east" },
+        { name = "Dave",  age = 30, region = "west" },
+    }
+end
+
+-- Group: select and projection
+
+local function select_one_column_yields_records_keyed_by_field_test()
+    local t = people()
+    local rows = collect(@t as p select p.name order by p.name)
+    assert(#rows == 4)
+    assert(rows[1].name == "Alice")
+    assert(rows[1].age == nil)
+end
+
+local function multi_column_select_carries_both_keys_test()
+    local t = people()
+    local rows = collect(@t as p where p.name == "Bob" select p.name, p.age)
+    assert(rows[1].name == "Bob")
+    assert(rows[1].age == 17)
+end
+
+local function whole_row_select_passes_the_source_record_through_test()
+    local t = people()
+    local rows = collect(@t as p where p.name == "Bob" select p)
+    assert(rows[1] == t[2], "identity, not a copy")
+end
+
+local function no_select_at_all_passes_rows_through_test()
+    local t = people()
+    local rows = collect(@t as p where p.age > 18)
+    assert(#rows == 3)
+    assert(rows[1] == t[1])
+end
+
+local function computed_projections_need_and_use_their_name_test()
+    local t = people()
+    local rows = collect(@t as p where p.name == "Bob" select p.age * 2 as double)
+    assert(rows[1].double == 34)
+end
+
+local function a_missing_column_projects_to_an_absent_field_test()
+    local t = people()
+    local rows = collect(@t as p select p.missing as m limit 1)
+    assert(rows[1].m == nil)
+    local keys = 0
+    for _ in pairs(rows[1]) do
+        keys = keys + 1
+    end
+    assert(keys == 0)
+end
+
+-- Group: where
+
+local every_comparison_operator_filters_cases = {
+    { "==", 2 }, { "~=", 2 }, { "<", 1 }, { "<=", 3 }, { ">", 1 },
+    { ">=", 3 },
+}
+
+local function every_comparison_operator_filters_test(op, expected)
+    local t = people()
+    local q = load("local t = ... return @t as p where p.age " .. op ..
+        " 30 select p.name")(t)
+    assert(#collect(q) == expected)
+end
+
+local function boolean_logic_and_parentheses_test()
+    local t = people()
+    local rows = collect(@t as p
+        where (p.region == "east" or p.age < 20) and not (p.name == "Bob")
+        select p.name)
+    assert(#rows == 2)
+end
+
+local function arithmetic_and_concatenation_in_predicates_test()
+    local t = people()
+    local rows = collect(@t as p
+        where p.age + 10 > 40 and p.name .. "!" == "Carol!"
+        select p.name)
+    assert(#rows == 1)
+    assert(rows[1].name == "Carol")
+end
+
+local function bound_parameters_capture_at_build_time_test()
+    local t = people()
+    local minimum = 18
+    local q = @t as p where p.age >= minimum select p.name
+    minimum = 100
+    assert(#collect(q) == 3)
+end
+
+local function parameter_chains_resolve_through_tables_test()
+    local t = people()
+    local limits = { adult = 18 }
+    local rows = collect(@t as p where p.age >= limits.adult select p.name)
+    assert(#rows == 3)
+end
+
+local function host_closures_run_once_per_row_with_the_row_test()
+    local t = people()
+    local calls = 0
+    local function probe(row)
+        calls = calls + 1
+        assert(type(row) == "table" and row.name ~= nil)
+        return row.age > 18
+    end
+    local rows = collect(@t as p where probe(p) select p.name)
+    assert(calls == 4)
+    assert(#rows == 3)
+end
+
+local function host_closures_capture_upvalues_live_test()
+    local t = people()
+    local cutoff = 18
+    local function pass(row)
+        return row.age >= cutoff
+    end
+    local q = @t as p where pass(p) select p.name
+    assert(#collect(q) == 3)
+    cutoff = 40
+    assert(#collect(q) == 1)
+end
+
+local function method_calls_lift_and_run_in_memory_test()
+    local t = people()
+    local rows = collect(@t as p where p.name:find("^A") select p.name)
+    assert(#rows == 1)
+    assert(rows[1].name == "Alice")
+end
+
+local function row_against_row_comparisons_work_test()
+    local t = { { a = 2, b = 1 }, { a = 1, b = 2 } }
+    local rows = collect(@t as r where r.a > r.b select r.a)
+    assert(#rows == 1)
+    assert(rows[1].a == 2)
+end
+
+local function a_comparison_with_nil_is_false_test()
+    local t = { { a = 1 }, { b = 2 } }
+    assert(#collect(@t as s where s.a > 0 select s) == 1)
+    assert(#collect(@t as s where s.a == nil select s) == 0)
+end
+
+local function a_raising_host_closure_propagates_catchably_test()
+    local t = people()
+    local q = @t as p where error("boom") select p.name
+    local ok, err = catch (function()
+        for _ in query(q) do
+        end
+    end)()
+    assert(not ok)
+    assert(string.find(tostring(err), "boom"))
+end
+
+-- Group: order, limit, offset
+
+local function ascending_is_the_default_and_desc_flips_test()
+    local t = people()
+    local up = collect(@t as p select p.age order by p.age)
+    local down = collect(@t as p select p.age order by p.age desc)
+    assert(up[1].age == 17)
+    assert(down[1].age == 42)
+end
+
+local function multiple_keys_with_mixed_directions_test()
+    local t = people()
+    local rows = collect(@t as p select p.age, p.name
+        order by p.age desc, p.name)
+    assert(rows[1].age == 42)
+    assert(rows[2].name == "Alice")
+    assert(rows[3].name == "Dave")
+end
+
+local function order_by_a_projection_alias_test()
+    local t = people()
+    local rows = collect(@t as p select p.name, p.age * 2 as double
+        order by double desc)
+    assert(rows[1].name == "Carol")
+end
+
+local function nil_orders_first_ascending_test()
+    local t = { { a = 2 }, {}, { a = 1 } }
+    local rows = collect(@t as r select r order by r.a)
+    assert(rows[1].a == nil)
+    assert(rows[2].a == 1)
+end
+
+local function nan_orders_with_nil_test()
+    -- NaN keys sort in the same leading band as nil keys: both come
+    -- before every number ascending, in unpinned order between them.
+    local t = { { a = 2 }, {}, { a = 0 / 0 }, { a = 1 } }
+    local rows = collect(@t as r select r order by r.a)
+    local function unordered(v)
+        return v == nil or v ~= v
+    end
+    assert(unordered(rows[1].a), "a non-value row comes first")
+    assert(unordered(rows[2].a), "the other non-value row comes second")
+    assert((rows[1].a == nil) ~= (rows[2].a == nil),
+        "the leading band holds exactly the nil row and the NaN row")
+    assert(rows[3].a == 1)
+    assert(rows[4].a == 2)
+end
+
+local function ordering_across_types_raises_test()
+    local t = { { a = 1 }, { a = "x" } }
+    raises(function()
+        collect(@t as r select r order by r.a)
+    end, "cannot order rows on a")
+end
+
+local function limit_and_offset_window_the_results_test()
+    local t = people()
+    assert(#collect(@t as p select p.name limit 0) == 0)
+    assert(#collect(@t as p select p.name limit 100) == 4)
+    assert(#collect(@t as p select p.name offset 100) == 0)
+    local w = collect(@t as p select p.name order by p.name limit 2 offset 1)
+    assert(#w == 2)
+    assert(w[1].name == "Bob")
+    local nrows = 3
+    assert(#collect(@t as p select p.name limit nrows) == 3)
+end
+
+local function limit_and_offset_clamp_before_integer_arithmetic_test()
+    local t = people()
+    local remaining = collect(@t as p select p.name
+        limit math.maxinteger offset 1)
+    assert(#remaining == 3)
+    assert(#collect(@t as p select p.name
+        offset math.maxinteger) == 0)
+    assert(#collect(@t as p select p.name
+        limit 0 offset math.maxinteger) == 0)
+end
+
+local function limit_and_offset_expressions_are_row_independent_test()
+    local limitfn, limiterr =
+        load("local t = ... return @t as r limit r.n")
+    assert(limitfn == nil)
+    assert(string.find(tostring(limiterr), "query limit must be row%-independent"))
+    local offsetfn, offseterr =
+        load("local t = ... return @t as r offset r.n")
+    assert(offsetfn == nil)
+    assert(string.find(tostring(offseterr), "query offset must be row%-independent"))
+end
+
+local function negative_and_non_numeric_limits_raise_test()
+    local t = people()
+    raises(function()
+        collect(@t as p select p.name limit -1)
+    end, "nonnegative")
+    local bad = "x"
+    raises(function()
+        collect(@t as p select p.name limit bad)
+    end, "query limit must be a number")
+end
+
+-- Group: group, having, aggregates, distinct
+
+local function every_aggregate_over_groups_test()
+    local sales = {
+        { region = "east", amount = 100 },
+        { region = "west", amount = 50 },
+        { region = "east", amount = 26 },
+    }
+    local rows = collect(@sales as s
+        select s.region, sum(s.amount) as total, count(*) as n,
+            avg(s.amount) as mean, min(s.amount) as lo, max(s.amount) as hi
+        group by s.region
+        order by total desc)
+    assert(#rows == 2)
+    assert(rows[1].region == "east")
+    assert(rows[1].total == 126)
+    assert(rows[1].n == 2)
+    assert(rows[1].mean == 63.0)
+    assert(rows[1].lo == 26)
+    assert(rows[1].hi == 100)
+end
+
+local function count_col_skips_nils_and_count_does_not_test()
+    local t = { { a = 1 }, {}, { a = 3 } }
+    local rows = collect(@t as r select count(*) as all, count(r.a) as some)
+    assert(rows[1].all == 3)
+    assert(rows[1].some == 2)
+end
+
+local function min_and_max_work_over_strings_test()
+    local t = people()
+    local rows = collect(@t as p select min(p.name) as lo, max(p.name) as hi)
+    assert(rows[1].lo == "Alice")
+    assert(rows[1].hi == "Dave")
+end
+
+local function min_and_max_validate_every_non_nil_value_test()
+    for _, name in ipairs({ "min", "max" }) do
+        local one_boolean = { { v = true } }
+        local one_table = { { v = {} } }
+        raises(function()
+            local make = load("local t = ... return @t as r select " ..
+                name .. "(r.v) as value")
+            collect(make(one_boolean))
+        end, "cannot aggregate a boolean value")
+        raises(function()
+            local make = load("local t = ... return @t as r select " ..
+                name .. "(r.v) as value")
+            collect(make(one_table))
+        end, "cannot aggregate a table value")
+        for _, values in ipairs({
+            { { v = 1 }, { v = "1" } },
+            { { v = "1" }, { v = 1 } },
+        }) do
+            raises(function()
+                local make = load("local t = ... return @t as r select " ..
+                    name .. "(r.v) as value")
+                collect(make(values))
+            end, "cannot aggregate")
+        end
+    end
+end
+
+local function grouping_by_two_keys_test()
+    local t = people()
+    local rows = collect(@t as p select p.region, p.age, count(*) as n
+        group by p.region, p.age)
+    assert(#rows == 4)
+end
+
+local function having_filters_groups_with_aggregates_not_in_select_test()
+    local t = people()
+    local rows = collect(@t as p select p.region
+        group by p.region having count(*) > 1 and max(p.age) > 40)
+    assert(#rows == 1)
+    assert(rows[1].region == "east")
+end
+
+local function aggregates_without_group_by_yield_one_record_test()
+    local t = people()
+    local rows = collect(@t as p select count(*) as n, sum(p.age) as total)
+    assert(#rows == 1)
+    assert(rows[1].n == 4)
+    assert(rows[1].total == 119)
+end
+
+local function aggregates_over_an_empty_source_test()
+    local empty = {}
+    local rows = collect(@empty as t
+        select count(*) as n, sum(t.x) as s, min(t.x) as lo)
+    assert(#rows == 1)
+    assert(rows[1].n == 0)
+    assert(rows[1].s == nil)
+    assert(rows[1].lo == nil)
+end
+
+local function integer_sums_overflow_loudly_and_floats_mix_in_test()
+    local big = { { v = math.maxinteger }, { v = 1 } }
+    raises(function()
+        collect(@big as b select sum(b.v) as s)
+    end, "integer overflow in sum")
+    local mixed = { { v = 1 }, { v = 0.5 } }
+    local rows = collect(@mixed as m select sum(m.v) as s)
+    assert(rows[1].s == 1.5)
+end
+
+local function a_non_key_non_aggregate_projection_raises_test()
+    local t = people()
+    raises(function()
+        collect(@t as p select p.region, p.age group by p.region)
+    end, "must be an aggregate or a group key")
+end
+
+local function group_keys_must_be_primitives_test()
+    local t = { { k = {} } }
+    raises(function()
+        collect(@t as r select count(*) as n group by r.k)
+    end, "primitive")
+end
+
+local function integer_and_float_group_keys_unify_test()
+    local t = { { k = 1 }, { k = 1.0 }, { k = 2 } }
+    local rows = collect(@t as r select r.k, count(*) as n group by r.k)
+    assert(#rows == 2)
+end
+
+local function nil_and_nan_group_together_test()
+    local t = { {}, { k = 0 / 0 }, { k = 1 } }
+    local rows = collect(@t as r select count(*) as n group by r.k
+        order by n desc)
+    assert(#rows == 2)
+    assert(rows[1].n == 2)
+end
+
+local function enums_group_and_compare_test()
+    local color = enum red, green end
+    local t = { { c = color.red }, { c = color.red }, { c = color.green } }
+    local reds = collect(@t as r where r.c == color.red select r)
+    assert(#reds == 2)
+    local grouped = collect(@t as r select count(*) as n group by r.c
+        order by n desc)
+    assert(#grouped == 2)
+    assert(grouped[1].n == 2)
+end
+
+local function distinct_dedupes_single_and_multi_column_projections_test()
+    local t = people()
+    assert(#collect(@t as p select distinct p.region) == 2)
+    assert(#collect(@t as p select distinct p.region, p.age) == 4)
+    assert(#collect(@t as p select distinct p.age) == 3)
+end
+
+-- Group: joins
+
+local function no_condition_means_a_cross_product_test()
+    local a = { { x = 1 }, { x = 2 } }
+    local b = { { y = 1 }, { y = 2 }, { y = 3 } }
+    local rows = collect(@a as l, b as r select l.x, r.y)
+    assert(#rows == 6)
+end
+
+local function equality_joins_filter_test()
+    local t = people()
+    local orders = {
+        { who = "Alice", total = 5 },
+        { who = "Carol", total = 9 },
+        { who = "Nobody", total = 1 },
+    }
+    local rows = collect(@t as p, orders as o
+        where p.name == o.who select p.name, o.total order by o.total)
+    assert(#rows == 2)
+    assert(rows[1].total == 5)
+end
+
+local function non_equality_join_conditions_work_test()
+    local a = { { x = 1 }, { x = 3 } }
+    local b = { { y = 2 } }
+    local rows = collect(@a as l, b as r where l.x > r.y select l.x)
+    assert(#rows == 1)
+    assert(rows[1].x == 3)
+end
+
+local function three_way_and_self_joins_test()
+    local t = { { n = 1 }, { n = 2 } }
+    local rows = collect(@t as a, t as b, t as c
+        where a.n == b.n and b.n == c.n select a.n)
+    assert(#rows == 2)
+    local pairs_ = collect(@t as a, t as b where a.n < b.n select a.n, b.n as m)
+    assert(#pairs_ == 1)
+end
+
+-- Group: laziness and re-execution
+
+local function a_stored_query_runs_fresh_on_every_loop_test()
+    local src = { { v = 1 } }
+    local q = @src as s select s.v
+    assert(#collect(q) == 1)
+    src[2] = { v = 2 }
+    assert(#collect(q) == 2)
+end
+
+local function two_iterators_over_one_query_are_independent_test()
+    local t = people()
+    local q = @t as p select p.name order by p.name
+    local a = query(q)
+    local b = query(q)
+    assert(a().name == "Alice")
+    assert(b().name == "Alice")
+    assert(a().name == "Bob")
+end
+
+local function an_exhausted_iterator_keeps_returning_nil_test()
+    local one = { { v = 1 } }
+    local iter = query(@one as s select s.v)
+    assert(iter() ~= nil)
+    assert(iter() == nil)
+    assert(iter() == nil)
+end
+
+local function an_empty_source_yields_zero_iterations_test()
+    local empty = {}
+    local ran = false
+    for _ in query(@empty as e select e.x) do
+        ran = true
+    end
+    assert(ran == false)
+end
+
+-- Group: sources and providers
+
+local function a_non_record_row_raises_at_execution_test()
+    local bad = { "notatable" }
+    local q = @bad as x select x.a
+    raises(function() return query(q) end, "not a record")
+end
+
+local function a_non_queryable_source_raises_at_execution_not_build_test()
+    local n = 42
+    local q = @(n) as x select x.a
+    assert(type(q) == "query")
+    raises(function() return query(q) end, "not queryable")
+end
+
+local function query_supplies_rows_and_residual_work_stays_in_memory_test()
+    local seen
+    local custom = setmetatable({}, {
+        __query = function(self, q, idx)
+            seen = { qtype = type(q), idx = idx }
+            local i = 0
+            return function()
+                i = i + 1
+                if i <= 4 then
+                    return { v = i * 10 }
+                end
+            end
+        end,
+    })
+    local total = 0
+    for r in query(@custom as c where c.v > 10 select c.v) do
+        total = total + r.v
+    end
+    assert(total == 90)
+    assert(seen.qtype == "query")
+    assert(seen.idx == 1)
+end
+
+local function query_returning_a_non_function_raises_test()
+    local bad = setmetatable({}, { __query = function() return 42 end })
+    local q = @bad as b select b.a
+    raises(function() return query(q) end, "'__query' must return a function")
+end
+
+local function query_rejects_non_queries_test()
+    raises(function() return query(42) end, "query expected")
+    raises(function() return query() end)
+    raises(function() return query({}) end, "query expected")
+end
+
+-- Group: debug.queryplan
+
+local function the_plan_names_providers_and_conjunct_shapes_test()
+    local t = people()
+    local function opaque(p) return true end
+    local plan = debug.queryplan(@t as p
+        where p.age > 1 and opaque(p) select p.name)
+    assert(string.find(plan, "memory"))
+    assert(string.find(plan, "host closure"))
+    assert(string.find(plan, "translatable"))
+end
+
+local function the_plan_is_stable_across_calls_test()
+    local t = people()
+    local q = @t as p where p.age > 1 select p.name
+    assert(debug.queryplan(q) == debug.queryplan(q))
+end
+
+local function queryplan_rejects_non_queries_test()
+    raises(function() return debug.queryplan(1) end, "query expected")
+end
+
+-- Group: GC under execution
+
+local function collection_during_a_paused_iteration_is_safe_test()
+    local t = people()
+    local iter = query(@t as p select p.name order by p.name)
+    assert(iter() ~= nil)
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(iter() ~= nil, "the iterator survives collection")
+end
+
+local function a_query_keeps_an_otherwise_dead_source_alive_test()
+    local q
+    do
+        local hidden = { { n = 7 } }
+        q = @hidden as h select h.n
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local rows = collect(q)
+    assert(rows[1].n == 7)
+end
+
+--[[
+  Query engine edges that the core execution and syntax suites do not
+  reach: query and db:query iterators crossing coroutine boundaries,
+  coroutine.yield attempted from inside where-clause and transaction
+  host closures, to-be-closed database handles unwound by
+  coroutine.close, line-anchored diagnostics for every documented query
+  syntax error (the language server consumes these), and byte-identical
+  ordering, grouping, and integer-boundary parity between the in-memory
+  provider and the SQLite provider. Everything runs on ":memory:"
+  databases under the standard sealed pledge.
+
+  Execution semantics live in the first section of this file, syntax and value
+  semantics in the last section, and the push-down split in the sqlite section.
+]]
+
+
+local function collect(q)
+    local out = {}
+    for row in query(q) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+-- Build a query over an arbitrary source by appending a clause tail. The
+-- source arrives as a runtime parameter so one clause string can run
+-- against both a plain table and a db table reference.
+local function build(src, tail)
+    return load("local s = ... return @(s) as x " .. tail)(src)
+end
+
+-- Serialize a single-column result, marking an absent field as NULL so a
+-- nil in a memory table and a NULL in a SQLite column compare identically.
+local function serialize_col(src, tail, col)
+    local out = {}
+    for r in query(build(src, tail)) do
+        local v = r[col]
+        out[#out + 1] = (v == nil) and "NULL" or tostring(v)
+    end
+    return table.concat(out, ",")
+end
+
+-- Group: iterators across coroutines
+
+local function a_query_iterator_built_in_a_coroutine_drives_from_the_outside_test()
+    local t = { { a = 1 }, { a = 2 }, { a = 3 } }
+    local iter
+    local co = coroutine.create(function()
+        iter = query(@t as r select r.a order by r.a)
+        coroutine.yield(iter().a)
+    end)
+    local ok, first = coroutine.resume(co)
+    assert(ok == true)
+    assert(first == 1)
+    assert(coroutine.status(co) == "suspended")
+    -- The coroutine that made the iterator is still alive but the handle
+    -- keeps producing rows when pulled from the main thread.
+    assert(iter().a == 2)
+    assert(iter().a == 3)
+    assert(iter() == nil)
+end
+
+local function a_query_iterator_survives_its_creating_coroutine_dying_test()
+    local t = { { a = 10 }, { a = 20 } }
+    local iter
+    local co = coroutine.create(function()
+        iter = query(@t as r select r.a order by r.a)
+    end)
+    assert(coroutine.resume(co))
+    assert(coroutine.status(co) == "dead")
+    collectgarbage("collect")
+    assert(iter().a == 10)
+    assert(iter().a == 20)
+end
+
+local function a_query_iterator_built_outside_drives_inside_a_coroutine_test()
+    local t = { { a = 1 }, { a = 2 }, { a = 3 } }
+    local iter = query(@t as r select r.a order by r.a)
+    local co = coroutine.create(function()
+        local acc = {}
+        while true do
+            local r = iter()
+            if r == nil then break end
+            acc[#acc + 1] = r.a
+        end
+        return table.concat(acc, ",")
+    end)
+    local ok, joined = coroutine.resume(co)
+    assert(ok == true)
+    assert(joined == "1,2,3")
+end
+
+local function a_db_query_iterator_built_in_a_coroutine_drives_from_outside_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1),(2),(3)")
+    local iter
+    local co = coroutine.create(function()
+        iter = db:query("SELECT n FROM t ORDER BY n")
+        coroutine.yield(iter().n)
+    end)
+    local ok, first = coroutine.resume(co)
+    assert(ok == true)
+    assert(first == 1)
+    assert(iter().n == 2)
+    assert(iter().n == 3)
+    assert(iter() == nil)
+end
+
+-- Group: yielding across query host closures
+
+local function yield_inside_a_where_host_closure_hits_the_c_call_boundary_test()
+    local t = { { a = 1 }, { a = 2 } }
+    local function pred(r)
+        coroutine.yield("mid-where")
+        return r.a > 1
+    end
+    local co = coroutine.create(function()
+        for _ in query(@t as r where pred(r) select r.a) do
+        end
+    end)
+    local ok, err = coroutine.resume(co)
+    assert(ok == false)
+    assert(string.find(tostring(err), "yield across a C%-call boundary"))
+    assert(coroutine.status(co) == "dead")
+end
+
+local function coroutine_wrap_surfaces_the_boundary_error_as_a_raise_test()
+    local t = { { a = 1 } }
+    local function pred(r)
+        coroutine.yield("mid-where")
+        return true
+    end
+    local w = coroutine.wrap(function()
+        for _ in query(@t as r where pred(r) select r.a) do
+        end
+    end)
+    raises(function() return w() end, "yield across a C%-call boundary")
+end
+
+local function yield_inside_a_db_transaction_body_hits_the_c_call_boundary_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    local co = coroutine.create(function()
+        db:transaction(function()
+            coroutine.yield("mid-txn")
+        end)
+    end)
+    local ok, err = coroutine.resume(co)
+    assert(ok == false)
+    assert(string.find(tostring(err), "yield across a C%-call boundary"))
+end
+
+-- Group: coroutine.close unwinds handles
+
+local function coroutine_close_closes_a_to_be_closed_database_handle_test()
+    local captured
+    local co = coroutine.create(function()
+        local db <close> = io.sqlite(":memory:")
+        db:exec("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)")
+        captured = db
+        coroutine.yield("open")
+        error("this line is never reached")
+    end)
+    assert(coroutine.resume(co))
+    -- While suspended the handle is still live.
+    local seen
+    for r in captured:query("SELECT n FROM t") do seen = r.n end
+    assert(seen == 1)
+    assert(coroutine.close(co) == true)
+    assert(coroutine.status(co) == "dead")
+    raises(function() captured:exec("SELECT 1") end, "attempt to use a closed database")
+end
+
+local function coroutine_close_unwinds_several_handles_at_once_test()
+    local a, b
+    local co = coroutine.create(function()
+        local first <close> = io.sqlite(":memory:")
+        local second <close> = io.sqlite(":memory:")
+        first:exec("CREATE TABLE t (n INTEGER)")
+        second:exec("CREATE TABLE t (n INTEGER)")
+        a, b = first, second
+        coroutine.yield()
+    end)
+    assert(coroutine.resume(co))
+    assert(coroutine.close(co) == true)
+    raises(function() a:exec("SELECT 1") end, "attempt to use a closed database")
+    raises(function() b:exec("SELECT 1") end, "attempt to use a closed database")
+end
+
+-- Group: line-anchored syntax diagnostics
+
+-- Place a chunk so the query begins on a chosen line, keeping the source
+-- table declared on line 1. Distinct lines per case prove the reporter
+-- tracks the offending position rather than emitting a constant.
+local function at_line(atline, q)
+    local src = "local t = {}"
+    for _ = 2, atline - 1 do
+        src = src .. "\n"
+    end
+    return src .. "\n" .. q
+end
+
+local function checkdiag(atline, q, fragment)
+    local f, err = load(at_line(atline, q))
+    assert(f == nil, "chunk must not compile: " .. q)
+    local msg = tostring(err)
+    assert(string.find(msg, fragment))
+    assert(string.find(msg, ":" .. atline .. ":"))
+end
+
+-- Each documented query syntax error, pinned by message fragment and by a
+-- distinct source line, so drift in either breaks a test.
+local every_documented_syntax_error_reports_a_fragment_and_a_line_cases = {
+    { 2, "return @t as x where 1 where 2", "duplicate 'where' clause" },
+    { 3, "return @t as x select x.a select x.a", "duplicate 'select' clause" },
+    { 4, "return @t as x, t as x select x.a", "duplicate row variable 'x'" },
+    { 5, "return @(t) select x.a", "query source needs an 'as' name" },
+    { 6, "return @t as x order x.a", "'by' expected after 'order'" },
+    { 7, "return @t as x group x.a", "'by' expected after 'group'" },
+    { 8, "return @t as x select count(*)",
+        "'as' name expected for this projection" },
+    { 9, "return @t as x, t as y", "a join requires a 'select' clause" },
+    { 10, "return @t as x where sum(x.a) > 1",
+        "only allowed in 'select' or 'having'" },
+    { 11, "return @t as x select sum(*) as s", "'%*' is only allowed in count" },
+    { 12, "return @t as x select sum(count(x.a)) as s",
+        "aggregates cannot nest" },
+    { 13, "return @t as x where (@t as y select y.a) == 1",
+        "nested queries are not supported" },
+    { 14, "return @t as x where x.a & 1 == 1",
+        "operator not supported in a query clause" },
+    { 15, "return @t as x where (x.a)[1] == 1", "parenthesized expression" },
+    { 16, "local k = 1 return @t[k] as x select x.a",
+        "query source index must be a literal" },
+    { 17, "return @t as a, t as b, t as c, t as d, t as e, t as f, t as g, "
+        .. "t as h, t as i select a.x", "too many sources" },
+}
+
+local function every_documented_syntax_error_reports_a_fragment_and_a_line_test(atline, q, fragment)
+    checkdiag(atline, q, fragment)
+end
+
+local function a_valid_query_compiles_at_the_same_anchoring_depth_test()
+    -- A control proving checkdiag rejects for the syntax, not the depth.
+    local f = load(at_line(9, "return @t as x where x.a > 1 select x.a"))
+    assert(type(f) == "function")
+end
+
+-- Group: NULL and nil ordering parity
+
+-- Identical logical data: two absent values plus 1, 2, 3 in a fixed order.
+local function null_pair()
+    local db = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (a INTEGER);
+        INSERT INTO t (a) VALUES (3), (NULL), (1), (NULL), (2);
+    ]])
+    local mem = { { a = 3 }, {}, { a = 1 }, {}, { a = 2 } }
+    return mem, db
+end
+
+local order_by_over_nulls_is_byte_identical_across_providers_cases = {
+    { "order by x.a" },
+    { "order by x.a asc" },
+    { "order by x.a desc" },
+    { "order by x.a limit 2 offset 1" },
+    { "order by x.a desc limit 3" },
+    { "order by x.a limit 4 offset 2" },
+    { "order by x.a asc limit 10 offset 3" },
+}
+
+local function order_by_over_nulls_is_byte_identical_across_providers_test(tail)
+    local mem, db = null_pair()
+    local memr = serialize_col(mem, tail, "a")
+    local dbr = serialize_col(db.t, tail, "a")
+    assert(memr == dbr)
+    db:close()
+end
+
+local function the_null_ordering_harness_has_real_values_to_compare_test()
+    -- Guards against a harness that trivially agrees on empty strings.
+    local mem, db = null_pair()
+    assert(serialize_col(mem, "order by x.a", "a") == "NULL,NULL,1,2,3")
+    assert(serialize_col(db.t, "order by x.a desc", "a") == "3,2,1,NULL,NULL")
+    db:close()
+end
+
+-- Group: NaN ordering parity
+
+local function a_nan_in_memory_sorts_to_the_ascending_front_like_a_null_test()
+    local nan = 0 / 0
+    local mem = { { a = 2 }, { a = nan }, { a = 1 } }
+    local rows = collect(@mem as x select x.a order by x.a)
+    assert(rows[1].a ~= rows[1].a, "the NaN row leads ascending")
+    assert(rows[2].a == 1)
+    assert(rows[3].a == 2)
+    local down = collect(@mem as x select x.a order by x.a desc)
+    assert(down[3].a ~= down[3].a, "the NaN row trails descending")
+    assert(down[1].a == 2)
+end
+
+local function sqlite_folds_a_bound_nan_to_null_and_it_leads_ascending_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (a REAL)")
+    db:run("INSERT INTO t VALUES (?)", 2.0)
+    db:run("INSERT INTO t VALUES (?)", 0 / 0)
+    db:run("INSERT INTO t VALUES (?)", 1.0)
+    -- Ascending order must place the folded NULL first, then 1.0, 2.0.
+    local out = {}
+    for r in query(@db.t as x select x.a order by x.a) do
+        out[#out + 1] = (r.a == nil) and "NULL" or tostring(r.a)
+    end
+    assert(out[1] == "NULL")
+    assert(out[2] == "1.0")
+    assert(out[3] == "2.0")
+end
+
+-- Group: group by and distinct string parity
+
+-- Mixed-case and non-ASCII strings exercise the byte-wise key comparison
+-- that both providers use by default.
+local function strings_pair()
+    local rows = {
+        { c = "Foo" }, { c = "foo" }, { c = "FOO" },
+        { c = "café" }, { c = "cafe" }, { c = "café" },
+    }
+    local db = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (c TEXT)")
+    for _, r in ipairs(rows) do
+        db:run("INSERT INTO t VALUES (?)", r.c)
+    end
+    return rows, db
+end
+
+local function serialize_groups(src)
+    local out = {}
+    for r in query(@(src) as x select x.c, count(*) as n
+        group by x.c order by x.c, n) do
+        out[#out + 1] = r.c .. "=" .. r.n
+    end
+    return table.concat(out, ",")
+end
+
+local function group_by_over_mixed_case_and_non_ascii_agrees_across_providers_test()
+    local mem, db = strings_pair()
+    local expected = "FOO=1,Foo=1,cafe=1,café=2,foo=1"
+    assert(serialize_groups(mem) == expected)
+    assert(serialize_groups(db.t) == expected)
+    db:close()
+end
+
+local function distinct_over_mixed_case_and_non_ascii_agrees_across_providers_test()
+    local mem, db = strings_pair()
+    local function ser(src)
+        local out = {}
+        for r in query(@(src) as x select distinct x.c order by x.c) do
+            out[#out + 1] = r.c
+        end
+        return table.concat(out, ",")
+    end
+    local expected = "FOO,Foo,cafe,café,foo"
+    assert(ser(mem) == expected)
+    assert(ser(db.t) == expected)
+    db:close()
+end
+
+local function case_folding_is_not_applied_upper_and_lower_stay_separate_keys_test()
+    -- A default case-insensitive collation would collapse these to fewer
+    -- than three groups, so this pins the byte-wise default.
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (c TEXT)")
+    db:run("INSERT INTO t VALUES (?)", "A")
+    db:run("INSERT INTO t VALUES (?)", "a")
+    local rows = collect(@db.t as x select x.c, count(*) as n group by x.c)
+    assert(#rows == 2)
+end
+
+-- Group: integer boundary round-trips
+
+local function maxinteger_and_mininteger_survive_the_sqlite_provider_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    db:run("INSERT INTO t VALUES (?)", 0)
+    local rows = collect(@db.t as x select x.v order by x.v)
+    assert(#rows == 3)
+    assert(rows[1].v == math.mininteger)
+    assert(math.type(rows[1].v) == "integer")
+    assert(rows[2].v == 0)
+    assert(rows[3].v == math.maxinteger)
+    assert(math.type(rows[3].v) == "integer")
+end
+
+local function boundary_equality_pushes_down_and_matches_exactly_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    local hi = math.maxinteger
+    local lo = math.mininteger
+    local hits = collect(@db.t as x where x.v == hi select x.v)
+    assert(#hits == 1)
+    assert(hits[1].v == math.maxinteger)
+    local lows = collect(@db.t as x where x.v == lo select x.v)
+    assert(#lows == 1)
+    assert(lows[1].v == math.mininteger)
+end
+
+local function a_boundary_integer_groups_against_its_own_float_parity_test()
+    -- math.maxinteger and its group key must not silently split by
+    -- representation the way a lossy float cast would.
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.maxinteger)
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    local rows = collect(@db.t as x select x.v, count(*) as n
+        group by x.v order by x.v)
+    assert(#rows == 2)
+    assert(rows[1].v == math.mininteger)
+    assert(rows[1].n == 1)
+    assert(rows[2].v == math.maxinteger)
+    assert(rows[2].n == 2)
+end
+
+--[[
+  Queries over SQLite: table references, automatic push-down and the
+  in-memory split, provider parity with plain tables, injection safety,
+  identifier quoting, the type map, and handle lifetimes. Everything
+  runs on ":memory:" databases under the standard sealed pledge.
+]]
+
+
+local function freshdb()
+    local db = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);
+        INSERT INTO users (name, age) VALUES
+            ('Alice', 30), ('Bob', 17), ('Carol', 42), ('Dave', 30);
+    ]])
+    return db
+end
+
+local function collect(q)
+    local out = {}
+    for row in query(q) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+-- Group: table references
+
+local function indexing_a_db_with_a_non_method_key_yields_a_table_reference_test()
+    local db <close> = freshdb()
+    assert(type(db.users) == "userdata")
+    assert(string.find(tostring(db.users), "table reference"))
+    assert(type(db.exec) == "function")
+    assert(db[1] == nil)
+end
+
+local function a_table_reference_on_a_closed_db_raises_test()
+    local db = io.sqlite(":memory:")
+    db:close()
+    raises(function() return db.users end, "attempt to use a closed database")
+end
+
+-- Group: push-down
+
+local function a_pushed_comparison_filters_in_sql_test()
+    local db <close> = freshdb()
+    local rows = collect(@db.users as u where u.age >= 18
+        select u.name order by u.name)
+    assert(#rows == 3)
+    assert(rows[1].name == "Alice")
+end
+
+local function the_plan_shows_the_native_provider_and_the_pushed_conjunct_test()
+    local db <close> = freshdb()
+    local minage = 18
+    local plan = debug.queryplan(@db.users as u where u.age >= minage
+        select u.name)
+    assert(string.find(plan, "native"))
+    assert(string.find(plan, "pushed down"))
+end
+
+local function probe_counting_proves_the_split_test()
+    local db <close> = freshdb()
+    local calls = 0
+    local function probe(u)
+        calls = calls + 1
+        return true
+    end
+    local rows = collect(@db.users as u
+        where u.age >= 18 and probe(u) select u.name)
+    assert(#rows == 3)
+    assert(calls == 3)
+end
+
+local function a_fully_opaque_where_fetches_every_row_test()
+    local db <close> = freshdb()
+    local calls = 0
+    local function probe(u)
+        calls = calls + 1
+        return false
+    end
+    collect(@db.users as u where probe(u) select u.name)
+    assert(calls == 4)
+end
+
+local function arithmetic_and_concatenation_push_down_test()
+    local db <close> = freshdb()
+    local rows = collect(@db.users as u
+        where u.age * 2 >= 60 and u.name .. "!" == "Alice!"
+        select u.name)
+    assert(#rows == 1)
+    assert(rows[1].name == "Alice")
+end
+
+local function division_stays_residual_for_parity_test()
+    local db <close> = freshdb()
+    -- 17 / 2 is 8.5 in Lus and 8 in SQL, so the engine keeps it
+    local rows = collect(@db.users as u where u.age / 2 > 8.4
+        select u.name order by u.name)
+    assert(#rows == 4)
+    local plan = debug.queryplan(@db.users as u where u.age / 2 > 8.4
+        select u.name)
+    assert(string.find(plan, "0 pushed"))
+end
+
+local function an_enum_parameter_stays_residual_instead_of_failing_to_bind_test()
+    local db <close> = freshdb()
+    local color = enum red, green end
+    local rows = collect(@db.users as u
+        where u.age > 18 and u.name ~= color.red select u.name)
+    assert(#rows == 3)
+end
+
+-- Group: provider parity
+
+local function identical_data_gives_identical_results_through_both_providers_test()
+    local db <close> = freshdb()
+    local mem = {
+        { name = "Alice", age = 30 }, { name = "Bob", age = 17 },
+        { name = "Carol", age = 42 }, { name = "Dave", age = 30 },
+    }
+    local function run(src)
+        local out = {}
+        for r in query(@(src) as u
+            where u.age >= 17 and u.age * 2 < 80
+            select u.name, u.age
+            order by u.age desc, u.name) do
+            out[#out + 1] = r.name .. "=" .. r.age
+        end
+        return table.concat(out, ",")
+    end
+    assert(run(mem) == run(db.users))
+end
+
+local function nil_and_null_predicates_agree_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (a INTEGER);
+        INSERT INTO t (a) VALUES (1), (NULL), (3);
+    ]])
+    local mem = { { a = 1 }, {}, { a = 3 } }
+    local function run(src)
+        local out = {}
+        for r in query(@(src) as s where s.a > 0 select s.a order by s.a) do
+            out[#out + 1] = r.a
+        end
+        return table.concat(out, ",")
+    end
+    assert(run(mem) == run(db.t))
+    assert(run(db.t) == "1,3")
+end
+
+local function empty_input_aggregates_agree_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (a INTEGER)")
+    local mem = {}
+    local function run(src)
+        for r in query(@(src) as s select count(*) as n, sum(s.a) as total) do
+            return r.n, r.total
+        end
+    end
+    local n1, t1 = run(mem)
+    local n2, t2 = run(db.t)
+    assert(n1 == n2)
+    assert(t1 == t2)
+    assert(n1 == 0)
+end
+
+-- Group: injection safety
+
+local function a_hostile_bound_value_stays_data_test()
+    local db <close> = freshdb()
+    local hostile = "'; DROP TABLE users; --"
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", hostile, 1)
+    local found = collect(@db.users as u where u.name == hostile
+        select u.name)
+    assert(#found == 1)
+    assert(found[1].name == hostile)
+    for r in db:query("SELECT count(*) AS n FROM users") do
+        assert(r.n == 5)
+    end
+end
+
+local function wildcard_characters_in_parameters_stay_literal_test()
+    local db <close> = freshdb()
+    local tricky = [[100% _certain_ "quoted" \slashed]]
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", tricky, 1)
+    local found = collect(@db.users as u where u.name == tricky
+        select u.name)
+    assert(#found == 1)
+end
+
+local function hostile_table_names_round_trip_through_identifier_quoting_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec('CREATE TABLE "my ""weird"" table" (v INTEGER)')
+    db:exec('INSERT INTO "my ""weird"" table" VALUES (7)')
+    local rows = collect(@db["my \"weird\" table"] as t select t.v)
+    assert(#rows == 1)
+    assert(rows[1].v == 7)
+end
+
+-- Group: the type map through queries
+
+local function every_sqlite_type_arrives_as_its_lus_counterpart_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (i INTEGER, f REAL, s TEXT, b BLOB, n INTEGER);
+        INSERT INTO t VALUES (9223372036854775807, 1.5, 'x', X'0102', NULL);
+    ]])
+    local rows = collect(@db.t as r select r)
+    local r = rows[1]
+    assert(r.i == math.maxinteger)
+    assert(math.type(r.f) == "float")
+    assert(r.s == "x")
+    assert(type(r.b) == "vector")
+    assert(vector.size(r.b) == 2)
+    assert(r.n == nil)
+end
+
+local function bound_parameters_cover_the_numeric_boundaries_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (v INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", math.mininteger)
+    local needle = math.mininteger
+    local rows = collect(@db.t as r where r.v == needle select r.v)
+    assert(#rows == 1)
+    assert(rows[1].v == math.mininteger)
+end
+
+-- Group: joins across providers
+
+local function a_sqlite_table_joins_an_in_memory_table_test()
+    local db <close> = freshdb()
+    local notes = {
+        { who = "Alice", note = "vip" },
+        { who = "Carol", note = "new" },
+    }
+    local rows = collect(@db.users as u, notes as n
+        where u.name == n.who select u.name, n.note order by u.name)
+    assert(#rows == 2)
+    assert(rows[1].name == "Alice")
+    assert(rows[1].note == "vip")
+end
+
+local function two_tables_of_one_database_join_in_memory_test()
+    local db <close> = freshdb()
+    db:exec([[
+        CREATE TABLE pets (owner TEXT, pet TEXT);
+        INSERT INTO pets VALUES ('Alice', 'cat'), ('Bob', 'dog');
+    ]])
+    local rows = collect(@db.users as u, db.pets as p
+        where u.name == p.owner select u.name, p.pet order by u.name)
+    assert(#rows == 2)
+    assert(rows[2].pet == "dog")
+end
+
+local function per_source_conjuncts_push_while_the_join_runs_in_memory_test()
+    local db <close> = freshdb()
+    local calls = 0
+    local notes = { { who = "Alice" }, { who = "Bob" } }
+    local function probe(u, n)
+        calls = calls + 1
+        return true
+    end
+    local rows = collect(@db.users as u, notes as n
+        where u.age >= 18 and u.name == n.who and probe(u, n)
+        select u.name)
+    assert(#rows == 1)
+    assert(calls == 1)
+end
+
+-- Group: lifetimes
+
+local function a_table_reference_keeps_its_database_alive_test()
+    local ref
+    do
+        local db = io.sqlite(":memory:")
+        db:exec("CREATE TABLE t (n INTEGER)")
+        db:run("INSERT INTO t VALUES (5)")
+        ref = db.t
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local rows = collect(@(ref) as t select t.n)
+    assert(rows[1].n == 5)
+end
+
+local function querying_through_a_closed_database_raises_test()
+    local db = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    local ref = db.t
+    db:close()
+    raises(function()
+        return query(@(ref) as t select t.n)
+    end, "attempt to use a closed database")
+end
+
+local function an_unknown_table_errors_at_execution_not_at_build_test()
+    local db <close> = freshdb()
+    local q = @db.nosuch as t select t.v
+    assert(type(q) == "query")
+    raises(function() return query(q) end, "no such table")
+end
+
+local function an_abandoned_result_set_does_not_block_later_queries_test()
+    local db <close> = freshdb()
+    local iter = query(@db.users as u select u.name)
+    assert(iter() ~= nil, "half consumed")
+    collectgarbage("collect")
+    local rows = collect(@db.users as u select u.name)
+    assert(#rows == 4)
+    assert(db:close() == true)
+end
+
+--[[
+  Query expression syntax and value semantics: contextual keywords stay
+  ordinary names, the '@' grammar and its error messages, query values
+  as first-class objects, bytecode round trips, GC behavior, and the
+  debug.parse and debug.format integration.
+
+  Execution semantics (the query() iterator) live in the first section of this file.
+]]
+
+-- no "seal": the bytecode round-trip tests load binary chunks, which a
+-- sealed state refuses by design
+
+local people = {
+    { name = "Alice", age = 30 },
+    { name = "Bob",   age = 17 },
+}
+
+-- Group: contextual keywords stay ordinary names
+
+local function clause_words_work_as_locals_and_functions_test()
+    local select = 1
+    local where = 2
+    local order = 3
+    local group = 4
+    local having = 5
+    local limit = 6
+    local offset = 7
+    local distinct = 8
+    local by = 9
+    local as = 10
+    assert(select + where + order + group + having + limit
+        + offset + distinct + by + as == 55)
+    local count = function(x) return x end
+    local sum = function(x) return x + 1 end
+    assert(count(1) == 1)
+    assert(sum(1) == 2)
+end
+
+local function clause_words_work_as_table_fields_and_methods_test()
+    local t = { select = 1, where = 2 }
+    function t.order(x) return x end
+    function t:group() return self.select end
+    assert(t.select == 1)
+    assert(t.where == 2)
+    assert(t.order(3) == 3)
+    assert(t:group() == 1)
+end
+
+local function inside_comments_and_strings_is_inert_test()
+    -- Compile fresh chunks so this test itself observes the parse
+    -- succeeding, rather than relying on the enclosing file loading.
+    local f = load("-- a comment with a query shape: @people as p select p.name\n"
+        .. "return 'an @ inside a string'")
+    assert(f ~= nil, "'@' in a comment and a string must compile")
+    local v = f()
+    assert(type(v) == "string")
+    assert(string.find(v, "@"))
+    local g = load("--[[ @people as p\nselect p.name ]] return 7")
+    assert(g ~= nil, "'@' spanning a long comment must compile")
+    assert(g() == 7)
+end
+
+-- Group: grammar acceptance
+
+local function queries_appear_in_every_expression_position_test()
+    local q = @people as p select p.name
+    local function takes(x) return x end
+    assert(type(takes(@people as p select p.name)) == "query")
+    local t = { @people as p select p.name }
+    assert(type(t[1]) == "query")
+    local function gives()
+        return @people as p select p.name
+    end
+    assert(type(gives()) == "query")
+    assert(type(q) == "query")
+end
+
+local function a_query_ends_at_the_first_unrelated_name_test()
+    local q = @people as p where p.age > 1
+    local answer = 42
+    assert(type(q) == "query")
+    assert(answer == 42)
+end
+
+local function clause_order_is_free_test()
+    local q = @people as p
+        select p.name, count(*) as n
+        group by p.name
+        having count(*) > 0
+        order by n desc
+    assert(type(q) == "query")
+end
+
+local function a_parenthesized_source_takes_an_explicit_alias_test()
+    local q = @(people) as row where row.age > 1 select row.name
+    assert(type(q) == "query")
+end
+
+local function the_implicit_alias_is_the_last_name_of_the_source_chain_test()
+    local db = { users = {} }
+    local q = @db.users where users.age > 1 select users.name
+    assert(type(q) == "query")
+end
+
+local function a_literal_bracket_index_works_in_a_source_test()
+    local db = { ["odd table"] = {} }
+    local q = @db["odd table"] as t select t.a
+    assert(type(q) == "query")
+end
+
+-- Group: syntax errors
+
+local function checkload(src, fragment)
+    local f, err = load(src)
+    assert(f == nil, "chunk must not compile: " .. src)
+    assert(string.find(tostring(err), fragment))
+end
+
+local function bare_and_truncated_queries_fail_test()
+    checkload("return @", "expected")
+    checkload("local t = {} return @t as", "expected")
+end
+
+local function a_source_without_a_name_needs_as_test()
+    checkload("local t = {} return @(t) select x.a",
+        "query source needs an 'as' name")
+end
+
+local function duplicate_clauses_and_aliases_fail_test()
+    checkload("local t = {} return @t as x where 1 where 2",
+        "duplicate 'where' clause")
+    checkload("local t = {} return @t as x select x.a select x.a",
+        "duplicate 'select' clause")
+    checkload("local t = {} return @t as x, t as x select x.a",
+        "duplicate row variable 'x'")
+end
+
+local function order_and_group_require_by_test()
+    checkload("local t = {} return @t as x order x.a",
+        "'by' expected after 'order'")
+    checkload("local t = {} return @t as x group x.a",
+        "'by' expected after 'group'")
+end
+
+local function projections_that_need_a_name_fail_without_as_test()
+    checkload("local t = {} return @t as x select count(*)",
+        "'as' name expected for this projection")
+    checkload("local t = {} return @t as x select x.a + 1",
+        "'as' name expected for this projection")
+end
+
+local function a_join_requires_a_select_clause_test()
+    checkload("local t = {} return @t as x, t as y",
+        "a join requires a 'select' clause")
+end
+
+local function aggregate_placement_rules_test()
+    checkload("local t = {} return @t as x where sum(x.a) > 1",
+        "only allowed in 'select' or 'having'")
+    checkload("local t = {} return @t as x select sum(*) as s",
+        "'%*' is only allowed in count")
+    checkload("local t = {} return @t as x select sum(count(x.a)) as s",
+        "aggregates cannot nest")
+end
+
+local function nested_queries_are_rejected_test()
+    checkload("local t = {} return @t as x where (@t as y select y.a) == 1",
+        "nested queries are not supported")
+end
+
+local function unsupported_operators_in_clauses_fail_test()
+    checkload("local t = {} return @t as x where x.a & 1 == 1",
+        "operator not supported in a query clause")
+    checkload("local t = {} return @t as x where #x.a > 0",
+        "operator not supported in a query clause")
+end
+
+local function a_suffixed_parenthesized_clause_expression_fails_test()
+    checkload("local t = {} return @t as x where (x.a)[1] == 1",
+        "parenthesized expression")
+end
+
+local function a_non_literal_source_index_fails_test()
+    checkload("local t = {} local k = 1 return @t[k] as x select x.a",
+        "query source index must be a literal")
+end
+
+local function too_many_sources_fail_test()
+    checkload("local t = {} return @t as a, t as b, t as c, t as d, "
+        .. "t as e, t as f, t as g, t as h, t as i select a.x",
+        "too many sources")
+end
+
+-- Group: query values
+
+local function type_and_tostring_test()
+    local q = @people as p select p.name
+    assert(type(q) == "query")
+    assert(string.find(tostring(q), "query"))
+end
+
+local function identity_equality_test()
+    local q = @people as p select p.name
+    local r = @people as p select p.name
+    assert(q == q, "a query equals itself")
+    assert(q ~= r, "two builds are distinct values")
+end
+
+local function queries_work_as_table_keys_test()
+    local q = @people as p select p.name
+    local t = { [q] = "here" }
+    assert(t[q] == "here")
+end
+
+local function comparison_length_and_arithmetic_raise_test()
+    local q = @people as p select p.name
+    local r = @people as p select p.name
+    raises(function() return q < r end, "attempt to compare")
+    raises(function() return #q end, "attempt to get length")
+    raises(function() return q + 1 end, "attempt to perform arithmetic")
+end
+
+local function tojson_serializes_a_query_as_null_test()
+    local q = @people as p select p.name
+    assert(tojson(q) == "null")
+end
+
+local function a_query_is_not_closable_test()
+    local ok, err = catch load([[
+        local people = {}
+        local q <close> = @people as p select p.name
+    ]])()
+    assert(not ok, "close on a query must fail")
+    assert(string.find(tostring(err), "non%-closable"))
+end
+
+local function a_query_cannot_cross_a_worker_boundary_test()
+    pledge("load", "fs:read=" .. TEST_DIR .. "/*")
+    local q = @people as p select p.name
+    local w = worker.create(TEST_DIR .. "/fixtures/worker/echo.lus")
+    local ok, err = catch worker.send(w, q)
+    assert(not ok)
+    assert(string.find(tostring(err), "cannot serialize"))
+    worker.send(w, "STOP")
+end
+
+-- Group: bytecode round trip
+
+local function string_dump_preserves_query_building_functions_test()
+    local function maker(src, minimum)
+        return @src as r where r.age >= minimum select r.name
+    end
+    assert(type(maker(people, 18)) == "query")
+    local dumped = string.dump(maker)
+    local loaded = load(dumped, "maker", "b")
+    local q = loaded(people, 18)
+    assert(type(q) == "query")
+end
+
+-- Group: GC
+
+local function queries_survive_collection_and_keep_sources_alive_test()
+    local function build()
+        local hidden = { { n = 7 } }
+        return @hidden as h select h.n
+    end
+    local q = build()
+    -- the only reference to the source table is now inside the query
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(type(q) == "query")
+    -- executing the query proves the source was kept alive
+    local rows = 0
+    for row in query(q) do
+        rows = rows + 1
+        assert(row.n == 7)
+    end
+    assert(rows == 1)
+end
+
+local function discarded_queries_do_not_leak_test()
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    for i = 1, 10000 do
+        local _ = @people as p where p.age > i select p.name
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local after = collectgarbage("count")
+    assert(after < before + 256,
+        "10000 discarded queries must not retain memory, grew from "
+        .. before .. " to " .. after)
+end
+
+-- Group: tooling round trip
+
+local function debug_parse_exposes_a_structured_query_node_test()
+    local tree = debug.parse("local t = {} return @t as x "
+        .. "where x.a > 1 select x.a")
+    local function find(node, ty)
+        if type(node) ~= "table" then
+            return nil
+        end
+        if node.type == ty then
+            return node
+        end
+        for _, v in pairs(node) do
+            local r = find(v, ty)
+            if r then
+                return r
+            end
+        end
+    end
+    local qn = find(tree, "query")
+    assert(qn ~= nil, "query node present")
+    assert(qn.sources[1].alias == "x")
+    assert(qn.clauses[1].kind == "where")
+    assert(qn.clauses[2].kind == "select")
+end
+
+local function debug_format_is_idempotent_on_query_chunks_test()
+    local src = "local t = {}\nlocal q = @t as x where x.a >= 1 "
+        .. "and probe(x.b) select distinct x.a, x.b * 2 as d "
+        .. "group by x.a having count(*) > 1 order by d desc limit 3\n"
+    local once = debug.format(src)
+    local twice = debug.format(once)
+    assert(twice == once)
+    assert(string.find(once, "@t as x"))
+end
+
+local function debug_parse_recovers_on_a_broken_query_test()
+    local tree = debug.parse("local t = {} return @t as x where ",
+        "broken", { recover = true })
+    assert(tree ~= nil, "recovery returns a tree")
+end

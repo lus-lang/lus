@@ -1,0 +1,1129 @@
+--[[
+  Tests for io.sqlite: opening, exec/run/query, parameter binding, the
+  type map, prepared statements, transactions, and handle lifetimes.
+
+  Everything here runs on ":memory:" databases. The sealed read-only
+  pledge below doubles as a live proof that in-memory databases need no
+  filesystem pledge at all. File-backed behavior and pledge denial live
+  in the file backed section below.
+]]
+
+pledge("load")
+
+-- The read grant used by one test below only resolves when its directory exists, so the
+-- directory is created in a coroutine that keeps its write grant to itself.
+local setup = coroutine.create(function()
+    pledge("fs:write=./*")
+    fs.createdirectory("lus-tests")
+    fs.createdirectory("lus-tests/h1")
+end)
+assert(coroutine.resume(setup))
+
+-- Open a fresh in-memory database with a standard users table.
+local function fresh()
+    local db = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE users (
+            id   INTEGER PRIMARY KEY,
+            name TEXT,
+            age  INTEGER
+        )
+    ]])
+    return db
+end
+
+local function seed(db)
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Bob", 17)
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Carol", 42)
+end
+
+-- Group: opening and handle basics
+
+local function io_sqlite_memory_returns_a_database_userdata_test()
+    local db <close> = io.sqlite(":memory:")
+    assert(type(db) == "userdata")
+    assert(string.find(tostring(db), "database"))
+end
+
+local function io_sqlite_with_a_number_argument_raises_test()
+    raises(function() return io.sqlite(42) end, "bad argument")
+end
+
+local function empty_path_raises_test()
+    raises(function() return io.sqlite("") end, "empty database path")
+end
+
+local function invalid_mode_raises_test()
+    raises(function() return io.sqlite(":memory:", "x") end, "invalid mode")
+end
+
+local function uri_filenames_are_rejected_test()
+    raises(function() return io.sqlite("file::memory:") end, "URI filenames are not supported")
+end
+
+local function read_only_mode_opens_memory_as_an_empty_frozen_database_test()
+    local db <close> = io.sqlite(":memory:", "r")
+    raises(function() db:exec("CREATE TABLE t (n INTEGER)") end, "readonly database")
+end
+
+local function memory_opens_under_a_sealed_pledge_with_no_fs_grants_for_it_test()
+    -- A sealed pledge that grants fs:read only under ./lus-tests denies
+    -- file-backed databases and must leave :memory: fully usable, proving
+    -- the exemption is real rather than the pledge being inert. The grants
+    -- live in a coroutine, so they stay local to this test.
+    local co = coroutine.create(function()
+    pledge("fs:read=./lus-tests/*", "seal")
+    raises(function()
+        return io.sqlite("./sqlite-pledge-probe.db")
+    end, 'permission "fs:read" denied')
+    raises(function()
+        return io.sqlite("lus-tests/h1/sqlite-pledge-probe.db")
+    end, 'permission "fs:write" denied')
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    db:run("INSERT INTO t VALUES (?)", 5)
+    for row in db:query("SELECT n FROM t") do
+        assert(row.n == 5)
+    end
+    end)
+    local ok, err = coroutine.resume(co)
+    if not ok then error(err, 0) end
+end
+
+-- Group: db:exec
+
+local function exec_creates_a_table_and_returns_no_values_test()
+    local db <close> = io.sqlite(":memory:")
+    assert(select("#", db:exec("CREATE TABLE t (n INTEGER)")) == 0)
+end
+
+local function one_exec_string_may_hold_several_statements_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        CREATE TABLE t (n INTEGER);
+        INSERT INTO t VALUES (1);
+        INSERT INTO t VALUES (2);
+    ]])
+    for row in db:query("SELECT count(*) AS n FROM t") do
+        assert(row.n == 2)
+    end
+end
+
+local function exec_with_a_syntax_error_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:exec("CREATE TABEL t (n)") end, "syntax error")
+end
+
+local function exec_with_a_non_string_argument_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:exec(42) end, "bad argument")
+end
+
+local function exec_applies_statements_before_the_failing_one_test()
+    local db <close> = io.sqlite(":memory:")
+    local ok = catch db:exec([[
+        CREATE TABLE t (n INTEGER);
+        INSERT INTO t VALUES (7);
+        INSERT INTO nosuch VALUES (1);
+    ]])
+    assert(not ok, "the third statement must fail")
+    for row in db:query("SELECT count(*) AS n FROM t") do
+        assert(row.n == 1)
+    end
+end
+
+local function exec_on_a_closed_db_raises_test()
+    local db = io.sqlite(":memory:")
+    db:close()
+    raises(function() db:exec("SELECT 1") end, "attempt to use a closed database")
+end
+
+-- Group: db:run
+
+local function insert_returns_changes_and_rowid_as_integers_test()
+    local db <close> = fresh()
+    local changes, rowid = db:run(
+        "INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+    assert(changes == 1)
+    assert(rowid == 1)
+    assert(math.type(changes) == "integer")
+    assert(math.type(rowid) == "integer")
+end
+
+local function update_returns_the_touched_row_count_test()
+    local db <close> = fresh()
+    seed(db)
+    local changes = db:run("UPDATE users SET age = age + 1")
+    assert(changes == 3)
+end
+
+local function delete_returns_the_deleted_count_test()
+    local db <close> = fresh()
+    seed(db)
+    local changes = db:run("DELETE FROM users WHERE age >= ?", 30)
+    assert(changes == 2)
+end
+
+local function positional_binding_accepts_every_bindable_type_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (i INTEGER, f REAL, s TEXT, b INTEGER, n TEXT, v BLOB)")
+    local blob = vector.create(3)
+    vector.pack(blob, 0, "BBB", 1, 2, 3)
+    local changes = db:run("INSERT INTO t VALUES (?, ?, ?, ?, ?, ?)",
+        7, 1.5, "hi", true, nil, blob)
+    assert(changes == 1)
+end
+
+local function too_few_positional_values_raises_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x")
+    end, "statement has 2 parameters, but 1 values were given")
+end
+
+local function too_many_positional_values_raises_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name) VALUES (?)", "x", "y")
+    end, "statement has 1 parameters, but 2 values were given")
+end
+
+local function named_binding_takes_values_from_a_table_test()
+    local db <close> = fresh()
+    db:run("INSERT INTO users (name, age) VALUES (:name, :age)",
+        { name = "Dora", age = 25 })
+    for row in db:query("SELECT age FROM users WHERE name = 'Dora'") do
+        assert(row.age == 25)
+    end
+end
+
+local name_and_name_placeholders_bind_too_cases = { { "@" }, { "$" } }
+
+local function name_and_name_placeholders_bind_too_test(sigil)
+    local db <close> = fresh()
+    db:run("INSERT INTO users (name, age) VALUES (" .. sigil .. "name, "
+        .. sigil .. "age)", { name = "Eve", age = 33 })
+    for row in db:query("SELECT age FROM users WHERE name = 'Eve'") do
+        assert(row.age == 33)
+    end
+end
+
+local function a_missing_named_key_raises_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name, age) VALUES (:name, :age)",
+            { name = "x" })
+    end, "no value for parameter ':age'")
+end
+
+local function a_repeated_named_parameter_binds_its_one_value_everywhere_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT :v + :v AS s", { v = 21 }) do
+        assert(row.s == 42)
+    end
+end
+
+local function extra_keys_in_the_named_table_are_ignored_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT :v AS v", { v = 1, unused = 2 }) do
+        assert(row.v == 1)
+    end
+end
+
+local function a_table_against_a_positional_statement_raises_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name) VALUES (?)", { name = "x" })
+    end, "statement uses positional parameters, but a table was given")
+end
+
+local function varargs_against_a_named_statement_raise_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name) VALUES (:name)", "x")
+    end, "statement uses named parameters, but no table was given")
+end
+
+local function numbered_nnn_parameters_are_rejected_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:run("SELECT ?1", 1) end, "numbered parameters are not supported")
+end
+
+local function binding_a_function_value_raises_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x",
+            function() end)
+    end, "cannot bind function value to parameter 2")
+end
+
+local function binding_a_table_value_raises_test()
+    local db <close> = fresh()
+    raises(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x", {})
+    end, "cannot bind table value to parameter 2")
+end
+
+local function binding_an_enum_value_raises_test()
+    local db <close> = fresh()
+    local e = enum red, green end
+    raises(function()
+        db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x", e.red)
+    end, "cannot bind enum value to parameter 2")
+end
+
+local function run_with_two_statements_in_one_string_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:run("SELECT 1; SELECT 2") end, "sql contains more than one statement")
+end
+
+local function a_trailing_comment_after_the_statement_is_fine_test()
+    local db <close> = io.sqlite(":memory:")
+    local changes = db:run("SELECT 1; -- trailing comment\n  ")
+    assert(math.type(changes) == "integer")
+end
+
+local function comment_only_sql_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:run("-- nothing here") end, "sql contains no statement")
+end
+
+local function run_with_a_select_executes_and_returns_integers_test()
+    local db <close> = fresh()
+    local changes, rowid = db:run("SELECT * FROM users")
+    assert(math.type(changes) == "integer")
+    assert(math.type(rowid) == "integer")
+end
+
+-- Group: db:query and the type map
+
+local function query_yields_rows_keyed_by_column_name_in_order_test()
+    local db <close> = fresh()
+    seed(db)
+    local names = {}
+    for row in db:query("SELECT name, age FROM users ORDER BY age") do
+        names[#names + 1] = row.name
+    end
+    assert(#names == 3)
+    assert(names[1] == "Bob")
+    assert(names[2] == "Alice")
+    assert(names[3] == "Carol")
+end
+
+local function an_empty_result_set_never_runs_the_loop_body_test()
+    local db <close> = fresh()
+    local ran = false
+    for _ in db:query("SELECT * FROM users") do
+        ran = true
+    end
+    assert(ran == false)
+end
+
+local function an_exhausted_iterator_keeps_returning_nil_test()
+    local db <close> = io.sqlite(":memory:")
+    local iter = db:query("SELECT 1 AS n")
+    assert(iter() ~= nil, "first call yields the row")
+    assert(iter() == nil)
+    assert(iter() == nil)
+end
+
+local function sqlite_types_map_to_lus_types_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1 AS i, 1.5 AS f, 'x' AS s, X'0102' AS b, NULL AS n") do
+        assert(math.type(row.i) == "integer")
+        assert(math.type(row.f) == "float")
+        assert(row.s == "x")
+        assert(type(row.b) == "vector")
+        assert(vector.size(row.b) == 2)
+        assert(vector.unpack(row.b, 0, "B") == 1)
+        assert(row.n == nil)
+    end
+end
+
+local function a_null_column_is_absent_from_the_row_entirely_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1 AS a, NULL AS x") do
+        assert(row.x == nil)
+        local keys = 0
+        for _ in next, row do
+            keys = keys + 1
+        end
+        assert(keys == 1)
+    end
+end
+
+local function int64_boundaries_round_trip_exactly_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT ? AS hi, ? AS lo",
+        math.maxinteger, math.mininteger) do
+        assert(row.hi == math.maxinteger)
+        assert(row.lo == math.mininteger)
+    end
+end
+
+local function nan_binds_to_null_and_infinity_round_trips_as_real_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT ? AS nan, ? AS inf", 0 / 0, math.huge) do
+        assert(row.nan == nil)
+        assert(row.inf == math.huge)
+    end
+end
+
+local function booleans_bind_as_integers_1_and_0_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT ? AS t, ? AS f", true, false) do
+        assert(row.t == 1)
+        assert(row.f == 0)
+    end
+end
+
+local function embedded_nul_bytes_survive_text_round_trips_test()
+    local db <close> = io.sqlite(":memory:")
+    local s = "a\0b\0c"
+    for row in db:query("SELECT ? AS s", s) do
+        assert(#row.s == 5)
+        assert(row.s == s)
+    end
+end
+
+local function embedded_nul_bytes_survive_blob_round_trips_test()
+    local db <close> = io.sqlite(":memory:")
+    local v = vector.create(3)
+    vector.pack(v, 0, "BBB", 65, 0, 66)
+    for row in db:query("SELECT ? AS b", v) do
+        assert(vector.size(row.b) == 3)
+        assert(vector.unpack(row.b, 1, "B") == 0)
+    end
+end
+
+local function a_1_mb_string_round_trips_intact_test()
+    local db <close> = io.sqlite(":memory:")
+    local big = string.rep("x", 1024 * 1024)
+    for row in db:query("SELECT ? AS s", big) do
+        assert(#row.s == #big)
+        assert(row.s == big)
+    end
+end
+
+local function a_1_mb_blob_round_trips_intact_test()
+    local db <close> = io.sqlite(":memory:")
+    local n = 1024 * 1024
+    local v = vector.create(n)
+    vector.pack(v, 0, "B", 255)
+    vector.pack(v, n - 1, "B", 128)
+    for row in db:query("SELECT ? AS b", v) do
+        assert(vector.size(row.b) == n)
+        assert(vector.unpack(row.b, 0, "B") == 255)
+        assert(vector.unpack(row.b, n - 1, "B") == 128)
+    end
+end
+
+local function empty_string_and_zero_length_blob_are_distinct_from_null_test()
+    local db <close> = io.sqlite(":memory:")
+    local empty = vector.create(0)
+    for row in db:query("SELECT ? AS s, ? AS b, NULL AS n", "", empty) do
+        assert(row.s == "")
+        assert(type(row.b) == "vector")
+        assert(vector.size(row.b) == 0)
+        assert(row.n == nil)
+    end
+end
+
+local function utf_8_text_round_trips_byte_identically_test()
+    local db <close> = io.sqlite(":memory:")
+    local s = "h\u{00E9}llo w\u{00F6}rld \u{2603}"
+    for row in db:query("SELECT ? AS s", s) do
+        assert(row.s == s)
+    end
+end
+
+local function duplicate_column_names_keep_the_last_column_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1 AS a, 2 AS a") do
+        assert(row.a == 2)
+    end
+end
+
+local function unaliased_expression_columns_use_sqlite_s_default_names_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("SELECT 1+1") do
+        assert(row["1+1"] == 2)
+    end
+end
+
+local function a_bound_where_parameter_filters_test()
+    local db <close> = fresh()
+    seed(db)
+    local count = 0
+    for _ in db:query("SELECT * FROM users WHERE age >= ?", 18) do
+        count = count + 1
+    end
+    assert(count == 2)
+end
+
+local function query_error_paths_raise_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() return db:query("SELECT 1; SELECT 2") end, "more than one statement")
+    raises(function() return db:query("SELEKT 1") end, "syntax error")
+    local closed = io.sqlite(":memory:")
+    closed:close()
+    raises(function() return closed:query("SELECT 1") end, "attempt to use a closed database")
+end
+
+local function a_bound_injection_payload_stays_data_test()
+    local db <close> = fresh()
+    seed(db)
+    local payload = "'; DROP TABLE users; --"
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", payload, 1)
+    local found = 0
+    for row in db:query("SELECT name FROM users WHERE name = ?", payload) do
+        assert(row.name == payload)
+        found = found + 1
+    end
+    assert(found == 1)
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        assert(row.n == 4)
+    end
+end
+
+local function interpolated_hostile_values_reach_the_database_as_data_test()
+    local db <close> = io.sqlite(":memory:")
+    local fragment = [[quo"te, back\slash, per%cent and 'single']]
+    local hostile = `built by interpolation: {fragment} #{1 + 1}`
+    for row in db:query("SELECT ? AS s", hostile) do
+        assert(row.s == hostile)
+    end
+end
+
+local function nested_iteration_over_one_database_works_test()
+    local db <close> = fresh()
+    seed(db)
+    local pairs_seen = 0
+    for a in db:query("SELECT name FROM users") do
+        for b in db:query("SELECT name FROM users") do
+            pairs_seen = pairs_seen + 1
+        end
+    end
+    assert(pairs_seen == 9)
+end
+
+local function breaking_out_of_a_query_loop_releases_the_statement_test()
+    local db <close> = fresh()
+    seed(db)
+    for row in db:query("SELECT * FROM users") do
+        break
+    end
+    local count = 0
+    for _ in db:query("SELECT * FROM users") do
+        count = count + 1
+    end
+    assert(count == 3)
+    db:close()
+end
+
+local function a_captured_iterator_raises_after_the_db_closes_test()
+    local db = fresh()
+    seed(db)
+    local iter = db:query("SELECT * FROM users")
+    db:close()
+    raises(function() return iter() end, "closed")
+end
+
+local function pragma_queries_work_test()
+    local db <close> = io.sqlite(":memory:")
+    for row in db:query("PRAGMA journal_mode") do
+        assert(row.journal_mode == "memory")
+    end
+end
+
+local function path_changing_pragmas_are_denied_case_insensitively_test()
+    local db <close> = io.sqlite(":memory:")
+    for _, sql in ipairs({
+        "PRAGMA data_store_directory = '.'",
+        "PRAGMA TEMP_STORE_DIRECTORY = '.'",
+        "PRAGMA LoCk_PrOxY_FiLe = '.'",
+    }) do
+        raises(function() db:exec(sql) end, "not authorized")
+    end
+end
+
+local function attach_with_a_filename_is_denied_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:exec("ATTACH 'x.db' AS other") end, "not authorized")
+end
+
+local function vacuum_into_is_denied_and_plain_vacuum_works_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    raises(function() db:exec("VACUUM INTO 'out.db'") end, "authorization denied")
+    db:exec("VACUUM")
+end
+
+local function query_with_an_insert_executes_it_and_yields_no_rows_test()
+    local db <close> = fresh()
+    local ran = false
+    for _ in db:query("INSERT INTO users (name, age) VALUES ('x', 1)") do
+        ran = true
+    end
+    assert(ran == false)
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        assert(row.n == 1)
+    end
+end
+
+local function manual_begin_and_commit_through_exec_work_test()
+    local db <close> = fresh()
+    db:exec("BEGIN")
+    db:run("INSERT INTO users (name, age) VALUES (?, ?)", "x", 1)
+    db:exec("COMMIT")
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        assert(row.n == 1)
+    end
+end
+
+-- Group: prepared statements
+
+local function prepare_returns_a_statement_test()
+    local db <close> = fresh()
+    local stmt = db:prepare("SELECT * FROM users")
+    assert(type(stmt) == "userdata")
+    assert(string.find(tostring(stmt), "statement"))
+end
+
+local function prepare_error_paths_raise_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() return db:prepare("SELEKT") end, "syntax error")
+    raises(function() return db:prepare("SELECT 1; SELECT 2") end, "more than one statement")
+end
+
+local function stmt_run_re_executes_with_fresh_bindings_test()
+    local db <close> = fresh()
+    local insert = db:prepare("INSERT INTO users (name, age) VALUES (?, ?)")
+    for i = 1, 100 do
+        insert:run("user" .. i, i)
+    end
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        assert(row.n == 100)
+    end
+end
+
+local function stmt_query_runs_twice_and_yields_the_full_set_both_times_test()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT * FROM users")
+    local first, second = 0, 0
+    for _ in stmt:query() do
+        first = first + 1
+    end
+    for _ in stmt:query() do
+        second = second + 1
+    end
+    assert(first == 3)
+    assert(second == 3)
+end
+
+local function stepping_is_lazy_rows_inserted_before_the_first_call_are_seen_test()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT count(*) AS n FROM users")
+    local iter = stmt:query()
+    db:run("INSERT INTO users (name, age) VALUES ('late', 1)")
+    local row = iter()
+    assert(row.n == 4)
+end
+
+local function re_running_a_statement_invalidates_its_live_iterator_test()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT * FROM users")
+    local stale = stmt:query()
+    assert(stale() ~= nil, "the first iterator started")
+    local fresh_iter = stmt:query()
+    raises(function() return stale() end, "statement was reset during iteration")
+    assert(fresh_iter() ~= nil, "the new iterator works")
+end
+
+local function stmt_run_after_an_abandoned_iteration_self_heals_test()
+    local db <close> = fresh()
+    seed(db)
+    local stmt = db:prepare("SELECT * FROM users")
+    local iter = stmt:query()
+    assert(iter() ~= nil, "half-consumed")
+    -- run on the same statement must reset it and execute cleanly
+    stmt:run()
+    -- the abandoned iterator is now stale
+    raises(function() return iter() end, "statement was reset during iteration")
+    -- and the statement remains fully usable afterwards
+    local count = 0
+    for _ in stmt:query() do
+        count = count + 1
+    end
+    assert(count == 3)
+end
+
+local function stmt_close_semantics_test()
+    local db <close> = fresh()
+    local stmt = db:prepare("SELECT 1")
+    assert(stmt:close() == true)
+    raises(function() return stmt:close() end, "attempt to use a closed statement")
+    raises(function() return stmt:run() end, "attempt to use a closed statement")
+    assert(tostring(stmt) == "statement (closed)")
+end
+
+local function named_binding_works_through_statements_test()
+    local db <close> = fresh()
+    local insert = db:prepare(
+        "INSERT INTO users (name, age) VALUES (:name, :age)")
+    insert:run{ name = "Nia", age = 28 }
+    local stmt = db:prepare("SELECT age FROM users WHERE name = :name")
+    for row in stmt:query{ name = "Nia" } do
+        assert(row.age == 28)
+    end
+end
+
+local function db_close_finalizes_live_statements_first_test()
+    local db = fresh()
+    local stmt = db:prepare("SELECT * FROM users")
+    db:close()
+    raises(function() return stmt:run() end, "attempt to use a closed statement")
+end
+
+-- Group: transactions
+
+local function a_transaction_commits_on_return_test()
+    local db <close> = fresh()
+    db:transaction(function()
+        db:run("INSERT INTO users (name, age) VALUES ('a', 1)")
+        db:run("INSERT INTO users (name, age) VALUES ('b', 2)")
+    end)
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        assert(row.n == 2)
+    end
+end
+
+local function an_error_rolls_back_and_rethrows_test()
+    local db <close> = fresh()
+    local ok, err = catch db:transaction(function()
+        db:run("INSERT INTO users (name, age) VALUES ('a', 1)")
+        error("boom")
+    end)
+    assert(not ok, "the transaction failed")
+    assert(string.find(tostring(err), "boom"))
+    for row in db:query("SELECT count(*) AS n FROM users") do
+        assert(row.n == 0)
+    end
+end
+
+local function a_table_error_value_survives_the_transaction_rethrow_raw_test()
+    -- catch delivers error objects exactly as raised, and the transaction
+    -- rethrows the original value into that machinery
+    local db <close> = fresh()
+    local ok, err = catch db:transaction(function()
+        error({ reason = "custom" })
+    end)
+    assert(not ok)
+    assert(type(err) == "table")
+    assert(err.reason == "custom")
+end
+
+local function the_transaction_returns_everything_fn_returns_test()
+    local db <close> = io.sqlite(":memory:")
+    local a, b, c = db:transaction(function()
+        return 1, "two", nil
+    end)
+    assert(a == 1)
+    assert(b == "two")
+    assert(c == nil)
+end
+
+local function nesting_transactions_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function()
+        db:transaction(function()
+            db:transaction(function() end)
+        end)
+    end, "within a transaction")
+end
+
+local function transaction_with_a_non_function_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    raises(function() db:transaction(42) end, "bad argument")
+end
+
+local function closing_the_db_inside_the_transaction_raises_test()
+    local db = fresh()
+    raises(function()
+        db:transaction(function()
+            db:close()
+        end)
+    end, "database closed during transaction")
+end
+
+local function a_failing_commit_rolls_back_and_raises_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec([[
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE parent (id INTEGER PRIMARY KEY);
+        CREATE TABLE child (
+            pid INTEGER REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED
+        );
+    ]])
+    local ok, err = catch db:transaction(function()
+        db:run("INSERT INTO child VALUES (99)")
+    end)
+    assert(not ok, "the deferred constraint fails at COMMIT")
+    assert(string.find(tostring(err), "FOREIGN KEY"))
+    for row in db:query("SELECT count(*) AS n FROM child") do
+        assert(row.n == 0)
+    end
+end
+
+-- Group: lifetime, GC, and close
+
+local function db_close_returns_true_and_closing_twice_raises_test()
+    local db = io.sqlite(":memory:")
+    assert(db:close() == true)
+    raises(function() return db:close() end, "attempt to use a closed database")
+end
+
+local function tostring_reflects_the_closed_state_test()
+    local db = io.sqlite(":memory:")
+    db:close()
+    assert(tostring(db) == "database (closed)")
+end
+
+local function a_close_handle_closes_at_block_exit_test()
+    local captured
+    do
+        local db <close> = io.sqlite(":memory:")
+        captured = db
+    end
+    raises(function() captured:exec("SELECT 1") end, "attempt to use a closed database")
+end
+
+local function close_after_a_manual_close_is_a_quiet_no_op_test()
+    do
+        local db <close> = io.sqlite(":memory:")
+        db:close()
+    end
+end
+
+local function an_error_unwinding_a_block_still_closes_the_handle_test()
+    local captured
+    local ok = catch (function()
+        local db <close> = io.sqlite(":memory:")
+        captured = db
+        error("unwind")
+    end)()
+    assert(not ok)
+    raises(function() captured:exec("SELECT 1") end, "attempt to use a closed database")
+end
+
+local function a_statement_keeps_its_database_alive_through_gc_test()
+    local stmt
+    do
+        local db = fresh()
+        db:run("INSERT INTO users (name, age) VALUES ('kept', 1)")
+        stmt = db:prepare("SELECT count(*) AS n FROM users")
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    for row in stmt:query() do
+        assert(row.n == 1)
+    end
+end
+
+local function the_weak_registry_does_not_retain_dropped_statements_test()
+    local db = io.sqlite(":memory:")
+    do
+        local stmt = db:prepare("SELECT 1")
+        stmt = nil
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    assert(db:close() == true)
+end
+
+local function gc_finalizes_an_unreferenced_open_database_test()
+    do
+        local db = io.sqlite(":memory:")
+        db:exec("CREATE TABLE t (n INTEGER)")
+    end
+    collectgarbage("collect")
+    collectgarbage("collect")
+    local db <close> = io.sqlite(":memory:")
+    assert(string.find(tostring(db), "database"))
+end
+
+local function a_database_handle_cannot_cross_a_worker_boundary_test()
+    local db <close> = io.sqlite(":memory:")
+    pledge("fs:read=" .. TEST_DIR .. "/*")
+    local w = worker.create(TEST_DIR .. "/fixtures/worker/echo.lus")
+    local ok, err = catch worker.send(w, db)
+    assert(not ok, "sending a database must fail")
+    assert(string.find(tostring(err), "cannot serialize"))
+    worker.send(w, "STOP")
+end
+
+--[[
+  File-backed io.sqlite tests: persistence, WAL journaling, read-only
+  mode, sidecar pledge coverage, and pledge denial.
+
+  The suite runs inside per-run sandbox paths at the repository root.
+  The pledge preamble grants value-scoped access to those paths only,
+  so the denial tests exercise real pledge boundaries:
+
+    sqlite_fs_*   : the sandbox directory, read and write
+    sqlite_ro_*   : a read-only glob covering the db and its sidecars
+    exactdb_*     : reads cover sidecars while writes cover the db only
+]]
+
+
+local RUN = tostring(os.time())
+local SANDBOX = "sqlite_fs_" .. RUN
+
+-- The sandbox directory is created under the same grants that the tests use. The
+-- grants live in a coroutine, so they stay local to each test and to this setup.
+local FS_GRANTS = {
+    "load",
+    "fs:read=./sqlite_fs_*", "fs:write=./sqlite_fs_*",
+    "fs:read=./sqlite_ro_*",
+    "fs:read=./exactdb_*", "fs:write=./exactdb_*.db",
+}
+
+local function with_grants(body)
+    local co = coroutine.create(function()
+        pledge(table.unpack(FS_GRANTS))
+        body()
+    end)
+    local ok, err = coroutine.resume(co)
+    if not ok then error(err, 0) end
+end
+
+with_grants(function()
+    fs.createdirectory(SANDBOX)
+end)
+
+local function dbpath(name)
+    return SANDBOX .. "/" .. name
+end
+
+-- Group: persistence
+
+local function data_persists_across_close_and_reopen_test()
+    with_grants(function()
+        local path = dbpath("persist.db")
+        do
+            local db <close> = io.sqlite(path)
+            db:exec("CREATE TABLE t (n INTEGER, s TEXT)")
+            db:run("INSERT INTO t VALUES (?, ?)", 7, "seven")
+        end
+        local db <close> = io.sqlite(path)
+        for row in db:query("SELECT n, s FROM t") do
+            assert(row.n == 7)
+            assert(row.s == "seven")
+        end
+    end)
+end
+
+local function file_backed_databases_run_in_wal_mode_test()
+    with_grants(function()
+        local db <close> = io.sqlite(dbpath("wal.db"))
+        for row in db:query("PRAGMA journal_mode") do
+            assert(row.journal_mode == "wal")
+        end
+    end)
+end
+
+local function a_write_leaves_the_wal_sidecar_on_disk_test()
+    with_grants(function()
+        local path = dbpath("sidecar.db")
+        local db <close> = io.sqlite(path)
+        db:exec("CREATE TABLE t (n INTEGER)")
+        db:run("INSERT INTO t VALUES (1)")
+        assert(fs.type(path .. "-wal") == "file")
+    end)
+end
+
+local function blobs_and_large_text_persist_across_reopen_test()
+    with_grants(function()
+        local path = dbpath("blob.db")
+        local big = string.rep("y", 256 * 1024)
+        local v = vector.create(4)
+        vector.pack(v, 0, "BBBB", 9, 8, 7, 6)
+        do
+            local db <close> = io.sqlite(path)
+            db:exec("CREATE TABLE t (s TEXT, b BLOB)")
+            db:run("INSERT INTO t VALUES (?, ?)", big, v)
+        end
+        local db <close> = io.sqlite(path)
+        for row in db:query("SELECT s, b FROM t") do
+            assert(row.s == big)
+            assert(vector.size(row.b) == 4)
+            assert(vector.unpack(row.b, 3, "B") == 6)
+        end
+    end)
+end
+
+local function rollback_persists_across_reopen_test()
+    with_grants(function()
+        local path = dbpath("rollback.db")
+        do
+            local db <close> = io.sqlite(path)
+            db:exec("CREATE TABLE t (n INTEGER)")
+            catch db:transaction(function()
+                db:run("INSERT INTO t VALUES (1)")
+                error("abort")
+            end)
+        end
+        local db <close> = io.sqlite(path)
+        for row in db:query("SELECT count(*) AS n FROM t") do
+            assert(row.n == 0)
+        end
+    end)
+end
+
+local function a_reader_handle_sees_a_writer_s_committed_rows_test()
+    with_grants(function()
+        local path = dbpath("two.db")
+        local writer <close> = io.sqlite(path)
+        writer:exec("CREATE TABLE t (n INTEGER)")
+        local reader <close> = io.sqlite(path)
+        writer:run("INSERT INTO t VALUES (42)")
+        for row in reader:query("SELECT n FROM t") do
+            assert(row.n == 42)
+        end
+    end)
+end
+
+-- Group: read-only mode
+
+local function mode_r_reads_and_refuses_writes_test()
+    with_grants(function()
+        local path = dbpath("readonly.db")
+        local writer <close> = io.sqlite(path)
+        writer:exec("CREATE TABLE t (n INTEGER)")
+        writer:run("INSERT INTO t VALUES (5)")
+        assert(fs.type(path .. "-shm") == "file")
+        local db <close> = io.sqlite(path, "r")
+        for row in db:query("SELECT n FROM t") do
+            assert(row.n == 5)
+        end
+        raises(function() db:run("INSERT INTO t VALUES (6)") end, "readonly database")
+    end)
+end
+
+local function mode_r_skips_the_write_pledge_and_surfaces_sqlite_s_error_test()
+    with_grants(function()
+        -- sqlite_ro_* paths carry a read grant only, and the file does not
+        -- exist, so the failure is SQLite's and never a permission denial
+        local ok, err = catch io.sqlite("./sqlite_ro_" .. RUN .. ".db", "r")
+        assert(not ok, "opening a missing file read-only fails")
+        assert(string.find(tostring(err), "unable to open"))
+        assert(not tostring(err):find("permission"),
+            "the pledge sweep passed on the read grant alone")
+    end)
+end
+
+-- Group: pledge gating
+
+local function an_ungranted_path_is_denied_at_open_test()
+    with_grants(function()
+        local ok, err = catch io.sqlite("./elsewhere_" .. RUN .. "/x.db")
+        assert(not ok)
+        assert(string.find(tostring(err), 'permission "fs:read" denied'))
+    end)
+end
+
+local function a_read_only_grant_denies_the_default_writable_mode_test()
+    with_grants(function()
+        local ok, err = catch io.sqlite("./sqlite_ro_" .. RUN .. ".db")
+        assert(not ok)
+        assert(string.find(tostring(err), 'permission "fs:write" denied'))
+    end)
+end
+
+local function sidecar_creation_requires_a_matching_write_grant_test()
+    with_grants(function()
+        -- Reads cover the database and every sidecar. Writes cover only the
+        -- database, so the VFS rejects the first writable sidecar operation.
+        local ok, err = catch io.sqlite("./exactdb_" .. RUN .. ".db")
+        assert(not ok)
+        assert(string.find(tostring(err), 'permission "fs:write" denied'))
+        assert(string.find(tostring(err), "exactdb_"))
+    end)
+end
+
+-- Group: hostile and odd files
+
+local function a_garbage_file_raises_at_open_in_writable_mode_test()
+    with_grants(function()
+        local path = dbpath("garbage.db")
+        local f = io.open(path, "wb")
+        f:write("this is definitely not a sqlite file at all")
+        f:close()
+        local ok, err = catch io.sqlite(path)
+        assert(not ok, "the WAL pragma reads the header at open")
+        assert(string.find(tostring(err), "not a database"))
+    end)
+end
+
+local function a_garbage_file_in_mode_r_raises_at_first_query_test()
+    with_grants(function()
+        local path = dbpath("garbage2.db")
+        local f = io.open(path, "wb")
+        f:write("still not a sqlite file")
+        f:close()
+        local db <close> = io.sqlite(path, "r")
+        raises(function()
+            for _ in db:query("SELECT * FROM sqlite_schema") do
+            end
+        end, "not a database")
+    end)
+end
+
+local function opening_a_directory_fails_cleanly_test()
+    with_grants(function()
+        local ok, err = catch io.sqlite(SANDBOX)
+        assert(not ok)
+        assert(string.find(tostring(err), "cannot open database"))
+    end)
+end
+
+-- Group: lifetime
+
+local function a_database_retains_the_thread_that_owns_its_pledge_store_test()
+    with_grants(function()
+        local path = dbpath("thread-owner.db")
+        local co = coroutine.create(function()
+            return io.sqlite(path)
+        end)
+        local ok, db = coroutine.resume(co)
+        assert(ok, tostring(db))
+        co = nil
+        collectgarbage("collect")
+        collectgarbage("collect")
+        db:exec("CREATE TABLE t (n INTEGER)")
+        db:run("INSERT INTO t VALUES (9)")
+        db:close()
+    end)
+end
+
+local function gc_releases_a_file_backed_handle_test()
+    with_grants(function()
+        local path = dbpath("gcfile.db")
+        do
+            local db = io.sqlite(path)
+            db:exec("CREATE TABLE t (n INTEGER)")
+        end
+        collectgarbage("collect")
+        collectgarbage("collect")
+        local db <close> = io.sqlite(path)
+        db:run("INSERT INTO t VALUES (1)")
+        for row in db:query("SELECT count(*) AS n FROM t") do
+            assert(row.n == 1)
+        end
+    end)
+end
+

@@ -1,0 +1,443 @@
+--[[
+    Test suite for the package module (Acquis: modules and require).
+
+    This exercises the caching semantics of package.loaded, the priority
+    of package.preload, on-disk module resolution through package.path with
+    a namespaced temporary module directory, the structure and order of
+    package.searchers, custom searcher end-to-end behavior, require error
+    messages, the propagation of load-time errors, circular require, and
+    the Lus-specific pledge gating and return arity of package.loadlib.
+
+    The pledge preamble grants load plus read access to the test tree so
+    require can resolve framework and fixture modules, and read and write
+    access to the ./pkg_* namespace for the temporary module directory.
+    loadlib denial tests probe a path outside every grant so the failure
+    is a real fs:read boundary rather than a missing file.
+]]
+
+pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./lus-tests/*", "fs:write=./*",
+    "fs:read=./pkg_*", "fs:write=./pkg_*")
+
+-- The legacy paths below name the fixture modules under lus-tests/h1/preinclude,
+-- so the fixtures are copied into the temporary working directory under that name.
+local function copy_tree(src, dst)
+    fs.createdirectory(dst)
+    for _, name in ipairs(fs.list(src)) do
+        local origin, target = src .. "/" .. name, dst .. "/" .. name
+        if fs.type(origin) == "directory" then
+            copy_tree(origin, target)
+        else
+            fs.copy(origin, target)
+        end
+    end
+end
+fs.createdirectory("lus-tests")
+fs.createdirectory("lus-tests/h1")
+copy_tree(TEST_DIR .. "/fixtures/preinclude", "lus-tests/h1/preinclude")
+pledge("seal")
+
+local RUN = tostring(os.time()) .. "_" .. tostring(math and math.random(1, 999999) or 0)
+local MODDIR = "./pkg_" .. RUN
+
+-- A single fixture module that already ships in the tree. Every path test
+-- below points package.path at this directory and requires "hello".
+local FIXPATH = "lus-tests/h1/preinclude/?.lus"
+
+-- Save and restore the mutable package globals around a test body so the
+-- shared interpreter state stays clean between tests.
+local function with_saved(body)
+    local old_path = package.path
+    local old_cpath = package.cpath
+    -- Snapshot the searcher list by value so a test that appends to the
+    -- shared table in place is fully undone, not just rebound.
+    local old_searchers = {}
+    for i, v in ipairs(package.searchers) do old_searchers[i] = v end
+    local ok, err = catch body()
+    package.path = old_path
+    package.cpath = old_cpath
+    package.searchers = old_searchers
+    if not ok then error(err) end
+end
+
+-- Plain (non-pattern) substring assertion, for messages that carry the
+-- magic characters that string.find would otherwise interpret.
+local function assert_has(haystack, needle)
+    assert(string.find(tostring(haystack), needle, 1, true) ~= nil,
+        "expected to find '" .. needle .. "' in: " .. tostring(haystack))
+end
+
+-- Group: package.config
+
+local function config_is_five_newline_terminated_fields_test()
+    assert(type(package.config) == "string")
+    local lines = {}
+    for line in string.gmatch(package.config, "([^\n]*)\n") do
+        lines[#lines + 1] = line
+    end
+    assert(#lines == 5)
+    -- Line one is the directory separator, either POSIX or Windows.
+    assert(lines[1] == "/" or lines[1] == "\\",
+        "line 1 is the directory separator, got " .. tostring(lines[1]))
+    assert(lines[2] == ";")
+    assert(lines[3] == "?")
+    assert(lines[4] == "!")
+    assert(lines[5] == "-")
+end
+
+local function the_config_separators_are_the_ones_searchpath_honors_test()
+    -- Build a two-template path joined by config's line-2 separator, each
+    -- template carrying config's line-3 substitution mark, and confirm
+    -- searchpath resolves the fixture through it.
+    local tmpl_sep = ";"
+    local sub = "?"
+    local path = "lus-tests/none/" .. sub .. ".lus" .. tmpl_sep ..
+        "lus-tests/h1/preinclude/" .. sub .. ".lus"
+    local found = package.searchpath("hello", path)
+    assert(found == "lus-tests/h1/preinclude/hello.lus")
+end
+
+-- Group: package.loaded caching
+
+local function a_second_require_returns_the_identical_value_test()
+    with_saved(function()
+        package.path = FIXPATH
+        package.loaded["hello"] = nil
+        local first = require("hello")
+        local second = require("hello")
+        assert(rawequal(first, second))
+    end)
+end
+
+local function mutating_package_loaded_changes_what_require_returns_test()
+    package.loaded["pkg_swap_" .. RUN] = { tag = "one" }
+    assert(require("pkg_swap_" .. RUN).tag == "one")
+    package.loaded["pkg_swap_" .. RUN] = { tag = "two" }
+    assert(require("pkg_swap_" .. RUN).tag == "two")
+    package.loaded["pkg_swap_" .. RUN] = nil
+end
+
+local function a_pre_seeded_entry_short_circuits_every_searcher_test()
+    -- A tripwire searcher records if it ever runs. A pre-seeded loaded
+    -- entry must be returned without any searcher being consulted.
+    with_saved(function()
+        local tripped = false
+        table.insert(package.searchers, function(name) tripped = true end)
+        local sentinel = { seeded = true }
+        package.loaded["pkg_seed_" .. RUN] = sentinel
+        local got = require("pkg_seed_" .. RUN)
+        assert(rawequal(got, sentinel))
+        assert(not tripped)
+        package.loaded["pkg_seed_" .. RUN] = nil
+    end)
+end
+
+local function clearing_package_loaded_forces_the_loader_to_run_again_test()
+    local calls = 0
+    package.preload["pkg_reload_" .. RUN] = function()
+        calls = calls + 1
+        return { n = calls }
+    end
+    local a = require("pkg_reload_" .. RUN)
+    assert(a.n == 1)
+    -- Repeat without clearing: cached, loader not rerun.
+    assert(require("pkg_reload_" .. RUN).n == 1)
+    package.loaded["pkg_reload_" .. RUN] = nil
+    local b = require("pkg_reload_" .. RUN)
+    assert(b.n == 2)
+    package.preload["pkg_reload_" .. RUN] = nil
+    package.loaded["pkg_reload_" .. RUN] = nil
+end
+
+local function a_loader_returning_no_value_marks_loaded_true_test()
+    package.preload["pkg_novalue_" .. RUN] = function() end
+    local r = require("pkg_novalue_" .. RUN)
+    assert(r == true)
+    assert(package.loaded["pkg_novalue_" .. RUN] == true)
+    package.preload["pkg_novalue_" .. RUN] = nil
+    package.loaded["pkg_novalue_" .. RUN] = nil
+end
+
+local function a_false_value_in_package_loaded_is_treated_as_not_loaded_test()
+    package.preload["pkg_false_" .. RUN] = function() return { real = true } end
+    package.loaded["pkg_false_" .. RUN] = false
+    local r = require("pkg_false_" .. RUN)
+    assert(type(r) == "table")
+    assert(r.real)
+    package.preload["pkg_false_" .. RUN] = nil
+    package.loaded["pkg_false_" .. RUN] = nil
+end
+
+local function stdlib_modules_resolve_to_their_own_tables_test()
+    assert(rawequal(package.loaded["package"], package))
+    assert(rawequal(package.loaded["_G"], _G))
+    assert(rawequal(package.loaded["string"], string))
+end
+
+-- Group: package.preload
+
+local function preload_takes_priority_over_the_path_searcher_test()
+    with_saved(function()
+        -- Point the path at the on-disk hello fixture, but also register a
+        -- preload loader under the same name. Preload is searcher one, so
+        -- it must win.
+        package.path = FIXPATH
+        package.loaded["hello"] = nil
+        package.preload["hello"] = function(name)
+            return { origin = "preload", who = name }
+        end
+        local mod, where = require("hello")
+        assert(mod.origin == "preload")
+        assert(mod.who == "hello")
+        assert(where == ":preload:")
+        package.preload["hello"] = nil
+        package.loaded["hello"] = nil
+    end)
+end
+
+-- Group: package.path resolution
+
+local function require_resolves_an_on_disk_module_and_returns_the_filename_test()
+    with_saved(function()
+        package.path = FIXPATH
+        package.loaded["hello"] = nil
+        local mod, where = require("hello")
+        assert(type(mod) == "table")
+        assert(where == "lus-tests/h1/preinclude/hello.lus")
+        package.loaded["hello"] = nil
+    end)
+end
+
+local function dots_in_the_module_name_map_to_the_directory_separator_test()
+    with_saved(function()
+        package.path = "lus-tests/?.lus"
+        package.loaded["h1.preinclude.hello"] = nil
+        local mod, where = require("h1.preinclude.hello")
+        assert(type(mod) == "table")
+        local dirsep = string.sub(package.config, 1, 1)
+        assert(where == "lus-tests/h1" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
+        package.loaded["h1.preinclude.hello"] = nil
+    end)
+end
+
+local function a_table_package_path_fails_with_the_exact_wording_test()
+    with_saved(function()
+        package.path = {}
+        local ok, err = catch require("pkg_nofile_" .. RUN)
+        assert(not ok)
+        assert(string.find(tostring(err), "'package.path' must be a string"))
+    end)
+end
+
+local function a_table_package_cpath_fails_with_the_exact_wording_test()
+    with_saved(function()
+        package.path = "?.lua"
+        package.cpath = {}
+        local ok, err = catch require("pkg_nocfile_" .. RUN)
+        assert(not ok)
+        assert(string.find(tostring(err), "'package.cpath' must be a string"))
+    end)
+end
+
+local function a_freshly_written_module_resolves_through_package_path_test()
+    -- Build a namespaced temp module directory, drop a .lus module in it,
+    -- point package.path there, and require it end to end.
+    with_saved(function()
+        catch fs.remove(MODDIR, true)
+        fs.createdirectory(MODDIR)
+        local w = io.open(MODDIR .. "/tempmod.lus", "wb")
+        w:write("return { value = 1234 }")
+        w:close()
+        package.path = MODDIR .. "/?.lus"
+        package.loaded["tempmod"] = nil
+        local mod, where = require("tempmod")
+        assert(mod.value == 1234)
+        assert(where == MODDIR .. "/tempmod.lus")
+        -- A second require serves the cached table without touching disk.
+        assert(rawequal(require("tempmod"), mod))
+        package.loaded["tempmod"] = nil
+        fs.remove(MODDIR, true)
+    end)
+end
+
+-- Group: require error messages
+
+local function the_not_found_message_lists_every_searched_candidate_test()
+    with_saved(function()
+        package.path = "?.lua;?/?"
+        package.cpath = "?.so;?/init"
+        local ok, msg = catch require("XXX")
+        assert(not ok)
+        msg = tostring(msg)
+        assert(string.find(msg, "module 'XXX' not found"))
+        assert(string.find(msg, "no field package.preload%['XXX'%]"))
+        assert(string.find(msg, "no file 'XXX.lua'"))
+        -- cpath-derived lines must appear too.
+        assert(string.find(msg, "no file 'XXX.so'"))
+        assert(string.find(msg, "no file 'XXX/init'"))
+    end)
+end
+
+local function a_load_time_error_propagates_and_does_not_cache_the_module_test()
+    package.preload["pkg_boom_" .. RUN] = function()
+        error("boom during load")
+    end
+    local ok, err = catch require("pkg_boom_" .. RUN)
+    assert(not ok)
+    assert(string.find(tostring(err), "boom during load"))
+    assert(package.loaded["pkg_boom_" .. RUN] == nil)
+    package.preload["pkg_boom_" .. RUN] = nil
+end
+
+-- Group: circular require
+
+local function a_module_required_mid_load_resolves_to_its_finished_value_test()
+    package.preload["pkg_circA_" .. RUN] = function()
+        local b = require("pkg_circB_" .. RUN)
+        return { name = "A", dep = b.name }
+    end
+    package.preload["pkg_circB_" .. RUN] = function()
+        return { name = "B" }
+    end
+    local a = require("pkg_circA_" .. RUN)
+    assert(a.name == "A")
+    assert(a.dep == "B")
+    package.preload["pkg_circA_" .. RUN] = nil
+    package.preload["pkg_circB_" .. RUN] = nil
+    package.loaded["pkg_circA_" .. RUN] = nil
+    package.loaded["pkg_circB_" .. RUN] = nil
+end
+
+-- Group: package.searchers
+
+local function the_default_searcher_list_has_six_entries_test()
+    assert(type(package.searchers) == "table")
+    assert(#package.searchers == 6)
+end
+
+local function a_custom_searcher_runs_its_loader_with_its_own_data_test()
+    with_saved(function()
+        local DATA = { marker = "custom-data" }
+        table.insert(package.searchers, function(name)
+            if name == "pkg_custom_" .. RUN then
+                return function(n, extra)
+                    return { got = n, extra = extra }
+                end, DATA
+            end
+        end)
+        local mod, where = require("pkg_custom_" .. RUN)
+        assert(mod.got == "pkg_custom_" .. RUN)
+        assert(rawequal(mod.extra, DATA))
+        assert(rawequal(where, DATA))
+        package.loaded["pkg_custom_" .. RUN] = nil
+    end)
+end
+
+local function an_empty_searcher_table_still_raises_a_clean_not_found_error_test()
+    with_saved(function()
+        package.searchers = {}
+        local ok, msg = catch require("pkg_empty_" .. RUN)
+        assert(not ok)
+        assert(string.find(tostring(msg), "module 'pkg_empty_" .. RUN .. "' not found"))
+    end)
+end
+
+local function setting_searchers_to_a_non_table_fails_require_test()
+    with_saved(function()
+        package.searchers = 3
+        local ok, msg = catch require("pkg_notable_" .. RUN)
+        assert(not ok)
+        assert(string.find(tostring(msg), "must be a table"))
+    end)
+end
+
+-- Group: package.searchpath
+
+local function a_positive_search_returns_the_existing_file_test()
+    local found = package.searchpath("hello", FIXPATH)
+    assert(found == "lus-tests/h1/preinclude/hello.lus")
+end
+
+local function the_default_separator_rewrites_dots_to_the_directory_separator_test()
+    local found = package.searchpath("h1.preinclude.hello", "lus-tests/?.lus")
+    local dirsep = string.sub(package.config, 1, 1)
+    assert(found == "lus-tests/h1" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
+end
+
+local function explicit_sep_and_rep_control_the_substitution_test()
+    -- With sep and rep both "/", no rewriting happens and the slashed name
+    -- is substituted verbatim.
+    local found = package.searchpath("h1/preinclude/hello", "lus-tests/?.lus", "/", "/")
+    assert(found == "lus-tests/h1/preinclude/hello.lus")
+end
+
+local function a_name_without_a_separator_takes_the_no_substitution_path_test()
+    -- A bare name yields the same result with and without a sep argument.
+    local a = package.searchpath("hello", FIXPATH)
+    local b = package.searchpath("hello", FIXPATH, ".")
+    assert(a == b)
+    assert(a == "lus-tests/h1/preinclude/hello.lus")
+end
+
+local function a_failed_search_lists_every_tried_candidate_test()
+    local found, msg = package.searchpath("nope", "lus-tests/a/?.lus;lus-tests/b/?.lus")
+    assert(found == nil)
+    assert_has(msg, "no file 'lus-tests/a/nope.lus'")
+    assert_has(msg, "no file 'lus-tests/b/nope.lus'")
+end
+
+local function an_empty_path_yields_a_single_empty_candidate_test()
+    local found, msg = package.searchpath("n", "")
+    assert(found == nil)
+    assert(string.find(tostring(msg), "no file ''"))
+end
+
+-- searchpath silently skips files outside the fs:read pledge. The fixture
+-- under lus-tests is granted, so a template pointing at an ungranted tree
+-- for the same basename must return nil even though the granted copy exists.
+local function searchpath_skips_a_file_the_pledge_does_not_cover_test()
+    local found = package.searchpath("hello", "./pkg_denied_area/?.lus")
+    assert(found == nil)
+end
+
+local searchpath_argument_type_errors_raise_cases = {
+    { function() return package.searchpath(nil, "?") end, 1 },
+    { function() return package.searchpath("n", nil) end, 2 },
+}
+
+local function searchpath_argument_type_errors_raise_test(call, argno)
+    local ok, err = catch call()
+    assert(not ok)
+    assert(string.find(tostring(err), "bad argument #" .. argno))
+end
+
+-- Group: package.loadlib
+
+local function a_missing_library_returns_fail_a_message_and_open_test()
+    -- The path sits under the granted fs:read scope, so the failure is
+    -- the dynamic loader's, not a pledge denial. loadlib yields three
+    -- values, and the third is the failure phase.
+    local ok, msg, phase = package.loadlib("./lus-tests/no_such_pkg_lib.so", "f")
+    assert(not ok)
+    assert(type(msg) == "string")
+    assert(#msg > 0)
+    assert(phase == "open")
+end
+
+local function loadlib_raises_fs_read_denial_for_an_ungranted_path_test()
+    -- This path is covered by no grant in the pledge preamble, so the Lus
+    -- gate raises rather than returning a failure value.
+    local ok, err = catch package.loadlib("/opt/pkg_denied_lib_" .. RUN .. ".so", "f")
+    assert(not ok)
+    assert(string.find(tostring(err), 'permission "fs:read" denied'))
+end
+
+local loadlib_rejects_non_string_arguments_cases = {
+    { function() return package.loadlib(nil, "f") end, 1 },
+    { function() return package.loadlib("./lus-tests/x.so", nil) end, 2 },
+}
+
+local function loadlib_rejects_non_string_arguments_test(call, argno)
+    local ok, err = catch call()
+    assert(not ok)
+    assert(string.find(tostring(err), "bad argument #" .. argno))
+end

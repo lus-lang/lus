@@ -1,0 +1,384 @@
+pledge("load")
+
+-- Raw bytes are vectors in 2.0 (spec/design/strings.md), so the byte level cases below
+-- build their inputs with bytes() and compare outputs through their hexadecimal dump.
+local function bytes(...)
+  local n = select("#", ...)
+  local v = vector.create(n)
+  for i = 1, n do
+    vector.set(v, i - 1, (select(i, ...)))
+  end
+  return v
+end
+
+local function dump(v)
+  local parts = {}
+  for i = 0, #v - 1 do
+    parts[#parts + 1] = string.format("%02x", vector.get(v, i))
+  end
+  return table.concat(parts)
+end
+
+local function same_bytes(a, b)
+  return type(a) == "vector" and type(b) == "vector" and dump(a) == dump(b)
+end
+
+local function checkerror(msg, f, ...)
+  local args = {...}
+  local status, err = catch (function() return f(table.unpack(args)) end)()
+  -- Use plain search (4th arg = true) to avoid pattern interpretation
+  assert(not status and string.find(err, msg, 1, true), "expected error containing: " .. msg)
+end
+
+-- ============================================
+-- Identity / roundtrip tests
+-- ============================================
+
+-- Group: identity transformations
+
+local function utf_8_to_utf_8_roundtrip_test()
+  assert(string.transcode("hello", "utf-8", "utf-8") == "hello")
+  assert(string.transcode("", "utf-8", "utf-8") == "")
+  assert(string.transcode("日本語", "utf-8", "utf-8") == "日本語")
+end
+
+local function ascii_to_ascii_roundtrip_test()
+  assert(string.transcode("hello", "ascii", "ascii") == "hello")
+  assert(string.transcode("ABC123", "ascii", "ascii") == "ABC123")
+end
+
+local function iso_8859_1_to_iso_8859_1_roundtrip_test()
+  local latin = bytes(0xE9, 0xE8, 0xE0)
+  assert(same_bytes(string.transcode(latin, "iso-8859-1", "iso-8859-1"), latin))
+end
+
+-- ============================================
+-- Base64 tests
+-- ============================================
+
+-- Group: base64 encoding/decoding
+
+local function encodes_utf_8_to_base64_test()
+  assert(string.transcode("user:password", "utf-8", "base64") == "dXNlcjpwYXNzd29yZA==")
+  assert(string.transcode("Lus", "utf-8", "base64") == "THVz")
+  assert(string.transcode("Lu", "utf-8", "base64") == "THU=")
+  assert(string.transcode("L", "utf-8", "base64") == "TA==")
+  assert(string.transcode("", "utf-8", "base64") == "")
+end
+
+local function decodes_base64_to_utf_8_test()
+  assert(string.transcode("dXNlcjpwYXNzd29yZA==", "base64", "utf-8") == "user:password")
+  assert(string.transcode("THVz", "base64", "utf-8") == "Lus")
+  assert(string.transcode("THU=", "base64", "utf-8") == "Lu")
+  assert(string.transcode("TA==", "base64", "utf-8") == "L")
+  assert(string.transcode("", "base64", "utf-8") == "")
+end
+
+local function handles_base64_with_whitespace_test()
+  assert(string.transcode("dXNl\ncjpw\nYXNz\nd29y\nZA==", "base64", "utf-8") == "user:password")
+  assert(string.transcode("THVz  ", "base64", "utf-8") == "Lus")
+end
+
+local function errors_on_invalid_base64_test()
+  checkerror("invalid base64", string.transcode, "!!!!", "base64", "utf-8")
+  checkerror("invalid base64", string.transcode, "abc$", "base64", "utf-8")
+end
+
+local function ignorebad_skips_invalid_base64_test()
+  local result = string.transcode("!!!!", "base64", "utf-8", true)
+  assert(result == "")
+end
+
+-- ============================================
+-- URL encoding tests
+-- ============================================
+
+-- Group: url encoding/decoding
+
+local function encodes_utf_8_to_url_test()
+  assert(string.transcode("hello world", "utf-8", "url") == "hello%20world")
+  assert(string.transcode("a=1&b=2", "utf-8", "url") == "a%3D1%26b%3D2")
+  assert(string.transcode("hello", "utf-8", "url") == "hello")
+  assert(string.transcode("test_value-123.txt", "utf-8", "url") == "test_value-123.txt")
+end
+
+local function decodes_url_to_utf_8_test()
+  assert(string.transcode("hello%20world", "url", "utf-8") == "hello world")
+  assert(string.transcode("a%3D1%26b%3D2", "url", "utf-8") == "a=1&b=2")
+  assert(string.transcode("hello%2Bworld", "url", "utf-8") == "hello+world")
+end
+
+local function decodes_as_space_in_url_test()
+  assert(string.transcode("hello+world", "url", "utf-8") == "hello world")
+end
+
+local function handles_case_insensitive_hex_in_url_test()
+  assert(string.transcode("hello%2fworld", "url", "utf-8") == "hello/world")
+  assert(string.transcode("hello%2Fworld", "url", "utf-8") == "hello/world")
+end
+
+local function errors_on_invalid_url_encoding_test()
+  checkerror("invalid url", string.transcode, "hello%2", "url", "utf-8")
+  checkerror("invalid url", string.transcode, "hello%GG", "url", "utf-8")
+end
+
+-- ============================================
+-- Hex encoding tests
+-- ============================================
+
+-- Group: hex encoding/decoding
+
+local function encodes_utf_8_to_hex_test()
+  assert(string.transcode("Lus", "utf-8", "hex") == "4c7573")
+  assert(string.transcode("ABC", "utf-8", "hex") == "414243")
+  assert(string.transcode(bytes(0x00, 0xFF), "binary", "hex") == "00ff")
+  assert(string.transcode("", "utf-8", "hex") == "")
+end
+
+local function decodes_hex_to_utf_8_test()
+  assert(string.transcode("4c7573", "hex", "utf-8") == "Lus")
+  assert(string.transcode("414243", "hex", "utf-8") == "ABC")
+  -- hex -> binary returns raw bytes as a vector
+  assert(same_bytes(string.transcode("00ff", "hex", "binary"), bytes(0x00, 0xFF)))
+  assert(string.transcode("", "hex", "utf-8") == "")
+end
+
+local function handles_case_insensitive_hex_test()
+  assert(string.transcode("4C7573", "hex", "utf-8") == "Lus")
+  assert(string.transcode("4c7573", "hex", "utf-8") == "Lus")
+  assert(string.transcode("4C7573", "hex", "utf-8") == string.transcode("4c7573", "hex", "utf-8"))
+end
+
+local function errors_on_invalid_hex_test()
+  checkerror("invalid hex", string.transcode, "4c757", "hex", "utf-8") -- odd length
+  checkerror("invalid hex", string.transcode, "GGGG", "hex", "utf-8") -- invalid chars
+end
+
+-- ============================================
+-- UTF-8 BOM tests
+-- ============================================
+
+-- Group: utf-8bom encoding
+
+local function strips_bom_when_decoding_utf_8bom_test()
+  local bom = "\u{FEFF}"
+  assert(string.transcode(bom .. "hello", "utf-8bom", "utf-8") == "hello")
+  assert(string.transcode("hello", "utf-8bom", "utf-8") == "hello") -- no BOM is fine
+end
+
+local function adds_bom_when_encoding_to_utf_8bom_test()
+  local result = string.transcode("hello", "utf-8", "utf-8bom")
+  -- The BOM is the single character U+FEFF.
+  assert(string.sub(result, 1, 1) == "\u{FEFF}")
+  assert(string.sub(result, 2) == "hello")
+end
+
+local function roundtrips_utf_8bom_test()
+  local result = string.transcode("test", "utf-8", "utf-8bom")
+  local decoded = string.transcode(result, "utf-8bom", "utf-8")
+  assert(decoded == "test")
+end
+
+-- ============================================
+-- UTF-16LE tests
+-- ============================================
+
+-- Group: utf-16le encoding
+
+local function encodes_ascii_to_utf_16le_test()
+  local result = string.transcode("ABC", "utf-8", "utf-16le")
+  assert(same_bytes(result, bytes(0x41, 0, 0x42, 0, 0x43, 0)))
+end
+
+local function decodes_utf_16le_to_utf_8_test()
+  local result = string.transcode(bytes(0x41, 0, 0x42, 0, 0x43, 0), "utf-16le", "utf-8")
+  assert(result == "ABC")
+end
+
+local function handles_bmp_characters_in_utf_16le_test()
+  -- 日 = U+65E5, in UTF-16LE: E5 65
+  -- 本 = U+672C, in UTF-16LE: 2C 67
+  local utf16 = bytes(0xE5, 0x65, 0x2C, 0x67)
+  local result = string.transcode(utf16, "utf-16le", "utf-8")
+  assert(result == "日本")
+  
+  -- And back
+  local encoded = string.transcode("日本", "utf-8", "utf-16le")
+  assert(same_bytes(encoded, utf16))
+end
+
+local function handles_surrogate_pairs_supplementary_plane_test()
+  -- 𝌆 = U+1D306 (TETRAGRAM FOR CENTER)
+  -- In UTF-16LE: D834 DF06 -> 34 D8 06 DF
+  local utf16 = bytes(0x34, 0xD8, 0x06, 0xDF)
+  local result = string.transcode(utf16, "utf-16le", "utf-8")
+  assert(result == "𝌆")
+  
+  -- And back
+  local encoded = string.transcode("𝌆", "utf-8", "utf-16le")
+  assert(same_bytes(encoded, utf16))
+end
+
+local function errors_on_lone_surrogate_in_utf_16le_test()
+  -- Lone high surrogate (followed by non-surrogate to avoid odd-byte error)
+  checkerror("invalid UTF-16LE", string.transcode, bytes(0x34, 0xD8, 0x00, 0x00), "utf-16le", "utf-8")
+  -- Lone low surrogate at start
+  checkerror("invalid UTF-16LE", string.transcode, bytes(0x06, 0xDF, 0x00, 0x00), "utf-16le", "utf-8")
+end
+
+local function errors_on_odd_byte_count_in_utf_16le_test()
+  checkerror("odd byte count", string.transcode, bytes(0x41, 0, 0x42), "utf-16le", "utf-8")
+end
+
+-- ============================================
+-- ISO-8859-1 / Latin-1 tests
+-- ============================================
+
+-- Group: iso-8859-1 (latin-1) encoding
+
+local function encodes_utf_8_to_iso_8859_1_test()
+  -- é = U+00E9 = \xE9 in ISO-8859-1
+  local result = string.transcode("café", "utf-8", "iso-8859-1")
+  assert(same_bytes(result, bytes(0x63, 0x61, 0x66, 0xE9)))
+end
+
+local function decodes_iso_8859_1_to_utf_8_test()
+  local result = string.transcode(bytes(0x63, 0x61, 0x66, 0xE9), "iso-8859-1", "utf-8")
+  assert(result == "café")
+end
+
+local function accepts_latin_1_as_alias_test()
+  assert(string.transcode(bytes(0x63, 0x61, 0x66, 0xE9), "latin-1", "utf-8") == "café")
+  assert(same_bytes(string.transcode("café", "utf-8", "latin-1"), bytes(0x63, 0x61, 0x66, 0xE9)))
+end
+
+local function errors_on_codepoints_255_when_encoding_to_iso_8859_1_test()
+  checkerror("cannot be encoded as ISO-8859-1", string.transcode, "日本", "utf-8", "iso-8859-1")
+  checkerror("cannot be encoded as ISO-8859-1", string.transcode, "€", "utf-8", "iso-8859-1") -- U+20AC
+end
+
+local function ignorebad_skips_non_latin1_characters_test()
+  local result = string.transcode("hello日world", "utf-8", "iso-8859-1", true)
+  assert(same_bytes(result, bytes(0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x77, 0x6F, 0x72, 0x6C, 0x64)))
+end
+
+-- ============================================
+-- ASCII tests
+-- ============================================
+
+-- Group: ascii encoding
+
+local function encodes_decodes_valid_ascii_test()
+  assert(string.transcode("Hello, World!", "ascii", "utf-8") == "Hello, World!")
+  assert(string.transcode("Hello, World!", "utf-8", "ascii") == "Hello, World!")
+end
+
+local function errors_on_bytes_127_when_decoding_ascii_test()
+  checkerror("invalid ASCII byte", string.transcode, bytes(0x80), "ascii", "utf-8")
+  checkerror("invalid ASCII byte", string.transcode, "café", "ascii", "utf-8")
+end
+
+local function errors_on_codepoints_127_when_encoding_to_ascii_test()
+  checkerror("cannot be encoded as ASCII", string.transcode, "café", "utf-8", "ascii")
+  checkerror("cannot be encoded as ASCII", string.transcode, "日本", "utf-8", "ascii")
+end
+
+local function ignorebad_skips_non_ascii_characters_test()
+  local result = string.transcode("hello日world", "utf-8", "ascii", true)
+  assert(result == "helloworld")
+  
+  local result2 = string.transcode(bytes(0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x80, 0x77, 0x6F, 0x72, 0x6C, 0x64), "ascii", "utf-8", true)
+  assert(result2 == "helloworld")
+end
+
+-- ============================================
+-- Binary-to-text chaining
+-- ============================================
+
+-- Group: binary-to-text chaining
+
+local function base64_to_hex_test()
+  -- "Lus" in base64 = "THVz"
+  -- "Lus" in hex = "4c7573"
+  local result = string.transcode("THVz", "base64", "hex")
+  assert(result == "4c7573")
+end
+
+local function hex_to_base64_test()
+  local result = string.transcode("4c7573", "hex", "base64")
+  assert(result == "THVz")
+end
+
+local function url_to_base64_test()
+  -- "a b" url-encoded = "a%20b"
+  local result = string.transcode("a%20b", "url", "base64")
+  -- "a b" in base64 = "YSBi"
+  assert(result == "YSBi")
+end
+
+-- ============================================
+-- Error handling
+-- ============================================
+
+-- Group: error handling
+
+local function errors_on_invalid_encoding_names_test()
+  checkerror("invalid source encoding", string.transcode, "test", "invalid", "utf-8")
+  checkerror("invalid target encoding", string.transcode, "test", "utf-8", "invalid")
+end
+
+local function errors_on_malformed_utf_8_test()
+  -- Malformed UTF-8 can only arrive as a vector, because string literals must be valid.
+  checkerror("invalid UTF-8", string.transcode, bytes(0xFF, 0xFE), "utf-8", "iso-8859-1")
+  checkerror("invalid UTF-8", string.transcode, bytes(0xC0, 0x80), "utf-8", "ascii") -- overlong NUL
+end
+
+local function ignorebad_skips_malformed_utf_8_test()
+  local result = string.transcode(bytes(0x68, 0x65, 0x6C, 0x6C, 0x6F, 0xFF, 0xFE, 0x77, 0x6F, 0x72, 0x6C, 0x64), "utf-8", "ascii", true)
+  assert(result == "helloworld")
+end
+
+-- ============================================
+-- Edge cases
+-- ============================================
+
+-- Group: edge cases
+
+local function handles_empty_strings_test()
+  assert(string.transcode("", "utf-8", "base64") == "")
+  assert(string.transcode("", "base64", "utf-8") == "")
+  assert(same_bytes(string.transcode("", "utf-8", "utf-16le"), bytes()))
+  assert(string.transcode("", "hex", "url") == "")
+end
+
+local function handles_strings_with_null_bytes_test()
+  local s = "a\x00b\x00c"
+  local hex = string.transcode(s, "utf-8", "hex")
+  assert(hex == "6100620063")
+  
+  local back = string.transcode(hex, "hex", "utf-8")
+  assert(back == s)
+end
+
+local function handles_all_ascii_printable_characters_test()
+  local s = ""
+  for i = 32, 126 do
+    s = s .. string.char(i)
+  end
+  -- Roundtrip through base64
+  local encoded = string.transcode(s, "utf-8", "base64")
+  local decoded = string.transcode(encoded, "base64", "utf-8")
+  assert(decoded == s)
+end
+
+local function handles_high_iso_8859_1_characters_test()
+  -- All bytes 128-255 are valid ISO-8859-1
+  local s = vector.create(128)
+  for i = 128, 255 do
+    vector.set(s, i - 128, i)
+  end
+  -- Convert to UTF-8 and back
+  local utf8 = string.transcode(s, "iso-8859-1", "utf-8")
+  local back = string.transcode(utf8, "utf-8", "iso-8859-1")
+  assert(same_bytes(back, s))
+end

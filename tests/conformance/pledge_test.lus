@@ -1,0 +1,893 @@
+--[[
+    Test suite for the pledge security system in Lus.
+    
+    The pledge system provides capability-based security by restricting
+    what operations a Lus program can perform. Permissions can be:
+    - Granted: pledge("load"), pledge("fs:read=./path/*")
+    - Sealed: pledge("seal") - no more permission changes allowed
+    
+    Note: These tests run with limited pledges to test the system.
+    Some tests verify permission denials which require specific setup.
+]]
+
+-- The legacy suites ran against one process-wide permission store that grew over the
+-- run. Here every test starts from its own baseline inside a fresh coroutine, because
+-- permission changes made in a coroutine stay local to it.
+local function isolated(body)
+    local co = coroutine.create(body)
+    local ok, err = coroutine.resume(co)
+    if not ok then error(err, 0) end
+end
+
+local BASE_A = { "load", "fs:read=./lus-tests/*" }
+local BASE_B = {
+    "load",
+    "fs:read=./lus-tests/framework.lus",
+    "fs:read=./lus-tests/h1/enum.lus*",
+    "fs:read=./lus-tests/tmp-pledge2/*",
+    "fs:write=./lus-tests/tmp-pledge2",
+    "fs:write=./lus-tests/tmp-pledge2/*",
+    "fs:write=./lus-tests/tmp-pledge2x",
+    "fs:read=./lus-tests/tmp-pledge2x/missing-prefix*",
+    "fs:write=./lus-tests/tmp-pledge2x/missing-prefix*",
+    "fs:write=./retargeted_pledge2_link",
+    "env=LUS_PLEDGE2_OK",
+}
+
+local function with_baseline(base, body)
+    isolated(function()
+        pledge(table.unpack(base))
+        body()
+    end)
+end
+
+-- The files the permission tests read are created in the temporary working directory.
+isolated(function()
+    pledge("fs:write=./*")
+    for _, dir in ipairs({ "lus-tests", "lus-tests/h1", "lus", "lus/src", "lus-tests/tmp-pledge2", "lus-tests/tmp-pledge2x" }) do
+        fs.createdirectory(dir)
+    end
+    local files = {
+        ["README.md"] = "readme\n",
+        ["lus-tests/README.md"] = "tests readme\n",
+        ["lus-tests/framework.lus"] = "return { new = function(name) return { name = name } end }\n",
+        ["lus-tests/h1/enum.lus"] = "-- enum fixture\n" .. string.rep("-- padding line\n", 10),
+        ["lus/src/lapi.h"] = "/* header */\n",
+        ["lus/src/lapi.c"] = "/* source */\n",
+    }
+    for name, content in pairs(files) do
+        local f = assert(io.open(name, "w"))
+        f:write(content)
+        f:close()
+    end
+end)
+
+-- Start with just load permission (don't seal yet so we can test pledge behavior)
+
+-- ============================================
+-- Basic Pledge Tests
+-- ============================================
+
+local function pledge_function_exists_test()
+    with_baseline(BASE_A, function()
+        assert(type(pledge) == "function", "pledge should be a function")
+    end)
+end
+
+local function pledge_returns_true_on_success_test()
+    with_baseline(BASE_A, function()
+        -- Granting load when we already have it should succeed
+        local result = pledge("load")
+        assert(result == true or result == nil, "pledge should return true or nil on success")
+    end)
+end
+
+local function can_grant_fs_read_permission_test()
+    with_baseline(BASE_A, function()
+        -- README.md lies outside every value granted so far, so the grant
+        -- must observably flip the file from denied to readable
+        local denied = catch io.open("README.md", "r")
+        assert(not denied, "file should be denied before the grant")
+        local result = pledge("fs:read=./README.md")
+        assert(result == true, "pledge should return true on success")
+        local f = io.open("README.md", "r")
+        assert(f ~= nil, "granted file should now be readable")
+        f:close()
+    end)
+end
+
+local function require_works_with_load_permission_test()
+    with_baseline(BASE_A, function()
+        -- We have load permission, so require should work
+        local ok, mod = catch require("lus-tests.framework")
+        assert(ok, "require should work with load permission")
+    end)
+end
+
+local function io_open_works_with_matching_fs_read_permission_test()
+    with_baseline(BASE_A, function()
+        -- We have fs:read=./lus-tests/*, so reading framework.lus should work
+        local f = io.open("lus-tests/framework.lus", "r")
+        assert(f ~= nil, "should be able to open file within permitted path")
+        f:close()
+    end)
+end
+
+-- ============================================
+-- Seal Tests
+-- ============================================
+
+-- Group: seal behavior
+
+-- NOTE: The "seal prevents further pledge changes" test is at the end of the file
+-- after pledge("seal") is called, because we can't un-seal.
+
+-- ============================================
+-- Permission String Parsing Tests
+-- ============================================
+
+-- Group: permission string formats
+
+local function base_permission_without_value_test()
+    with_baseline(BASE_A, function()
+        -- "env" is a base permission with no subpermission or value, and it
+        -- has not been granted yet, so the grant must observably take effect
+        local denied = catch os.getenv("PATH")
+        assert(not denied, "getenv should be denied before the env grant")
+        local result = pledge("env")
+        assert(result == true, "pledge should return true on success")
+        local ok, value = catch os.getenv("PATH")
+        assert(ok, "getenv should succeed after the env grant")
+        assert(type(value) == "string", "PATH should be readable")
+    end)
+end
+
+local function permission_with_subpermission_test()
+    with_baseline(BASE_A, function()
+        -- "fs:read" has base "fs" and subpermission "read": granting the read
+        -- sub must allow reading the value and must NOT allow writable modes
+        local result = pledge("fs:read=./lus-tests/README.md")
+        assert(result == true, "pledge should return true on success")
+        local f = io.open("lus-tests/README.md", "r")
+        assert(f ~= nil, "read should be allowed after the fs:read grant")
+        f:close()
+        local ok = catch io.open("lus-tests/README.md", "r+")
+        assert(not ok, "fs:read grant must not allow a writable open mode")
+    end)
+end
+
+local function permission_with_glob_pattern_test()
+    with_baseline(BASE_A, function()
+        -- The glob value must admit matching paths and keep rejecting
+        -- non-matching paths in the same directory
+        local denied = catch io.open("lus/src/lapi.h", "r")
+        assert(not denied, "header should be denied before the glob grant")
+        local result = pledge("fs:read=./lus/src/*.h")
+        assert(result == true, "pledge should return true on success")
+        local f = io.open("lus/src/lapi.h", "r")
+        assert(f ~= nil, "path matching the glob should be readable")
+        f:close()
+        local still_denied = catch io.open("lus/src/lapi.c", "r")
+        assert(not still_denied, "path not matching the glob must stay denied")
+    end)
+end
+
+-- ============================================
+-- Permission Checking Tests
+-- ============================================
+
+-- Group: permission checks
+
+local function file_access_within_permitted_path_succeeds_test()
+    with_baseline(BASE_A, function()
+        local f = io.open("lus-tests/h1/enum.lus", "r")
+        if f then
+            local content = f:read(100)
+            f:close()
+            assert(content ~= nil, "should read file content")
+        end
+        -- If file doesn't exist, that's fine - we're testing permission, not file existence
+    end)
+end
+
+local function load_works_with_load_permission_test()
+    with_baseline(BASE_A, function()
+        local fn = load("return 1 + 2")
+        assert(fn ~= nil, "load should work")
+        assert(fn() == 3, "loaded function should execute")
+    end)
+end
+
+local function load_with_custom_environment_test()
+    with_baseline(BASE_A, function()
+        local env = {x = 10}
+        local fn = load("return x * 2", "test", "t", env)
+        assert(fn ~= nil, "load with env should work")
+        assert(fn() == 20, "should use provided environment")
+    end)
+end
+
+-- ============================================
+-- Error Handling Tests
+-- ============================================
+
+-- Group: error handling
+
+local function invalid_pledge_string_format_errors_test()
+    with_baseline(BASE_A, function()
+        -- Empty string should error with "unknown permission"
+        local ok, err = catch pledge("")
+        assert(not ok, "empty pledge string should error")
+        assert(tostring(err):find("unknown permission"), "error should mention unknown permission")
+    end)
+end
+
+local function pledge_with_multiple_permissions_succeeds_test()
+    with_baseline(BASE_A, function()
+        -- Can pass multiple permissions in one call
+        local ok, result = catch pledge("load", "fs:read=./test/*")
+        assert(ok, "pledge with multiple permissions should succeed")
+        assert(result == true, "pledge should return true on success")
+    end)
+end
+
+-- ============================================
+-- Edge Cases
+-- ============================================
+
+-- Group: edge cases
+
+local function pledge_same_permission_twice_test()
+    with_baseline(BASE_A, function()
+        -- Granting an already-granted permission should be idempotent
+        pledge("load")
+        pledge("load")
+        -- No error
+    end)
+end
+
+local function pledge_with_special_characters_in_path_succeeds_test()
+    with_baseline(BASE_A, function()
+        -- Paths with glob patterns (* and ?)
+        local ok, result = catch pledge("fs:read=./lus-tests/h1/*.lus")
+        assert(ok, "pledge with glob pattern should succeed")
+        assert(result == true, "pledge should return true")
+    end)
+end
+
+local function pledge_path_with_dots_succeeds_test()
+    with_baseline(BASE_A, function()
+        -- Paths with . and .. components
+        local ok, result = catch pledge("fs:read=./lus-tests/./h1/../h1/*.lus")
+        assert(ok, "pledge with dot components should succeed")
+        assert(result == true, "pledge should return true")
+    end)
+end
+
+-- ============================================
+-- Integration Tests
+-- ============================================
+
+-- Group: integration
+
+local function framework_loads_correctly_with_pledges_test()
+    with_baseline(BASE_A, function()
+        -- Load the framework from disk again under the active pledges,
+        -- proving fs:read and load cooperate to produce a working module
+        local f = io.open("lus-tests/framework.lus", "r")
+        assert(f ~= nil, "framework source should be readable under fs:read")
+        local src = f:read("a")
+        f:close()
+        assert(type(src) == "string" and #src > 0, "framework source should be non-empty")
+        local chunk = load(src, "@lus-tests/framework.lus")
+        assert(chunk ~= nil, "framework source should compile under the load pledge")
+        local fresh = chunk()
+        assert(type(fresh) == "table", "framework chunk should return a module table")
+        assert(type(fresh.new) == "function", "freshly loaded framework should expose new")
+    end)
+end
+
+local function test_file_can_use_all_framework_features_test()
+    with_baseline(BASE_A, function()
+        -- Drive the framework's catch-based helpers against a live pledge
+        -- denial raised from C, so a broken helper or a vanished denial
+        -- both fail here
+        assert(type(pledge) == "function")
+        raises(function()
+            io.open("/etc/passwd", "r")
+        end, "denied")
+        local ok, err = catch io.open("/etc/passwd", "r")
+        assert(not ok)
+        assert(string.find(tostring(err), "fs:read"))
+    end)
+end
+
+-- ============================================
+-- Permission Denial Tests
+-- ============================================
+
+-- Group: permission denial
+
+local function fs_operations_denied_without_fs_write_test()
+    with_baseline(BASE_A, function()
+        local ok, err = catch fs.createdirectory("/tmp/__lus_test_pledge_deny")
+        assert(not ok)
+        assert(tostring(err):find("permission") ~= nil)
+    end)
+end
+
+local function network_denied_without_pledge_test()
+    with_baseline(BASE_A, function()
+        local ok, err = catch network.tcp.connect("127.0.0.1", 1)
+        assert(not ok)
+        assert(tostring(err):find("permission") ~= nil or tostring(err):find("denied") ~= nil)
+    end)
+end
+
+local function tcp_bind_denied_without_pledge_test()
+    with_baseline(BASE_A, function()
+        local ok, err = catch network.tcp.bind("127.0.0.1", 0)
+        assert(not ok)
+        assert(tostring(err):find("permission") ~= nil)
+    end)
+end
+
+local function network_ports_reject_out_of_range_values_test()
+    with_baseline(BASE_A, function()
+        local ok, err = catch network.udp.open(70000)
+        assert(not ok)
+        assert(tostring(err):find("port out of range") ~= nil)
+    end)
+end
+
+local function network_host_port_pledges_match_the_checked_port_test()
+    with_baseline(BASE_A, function()
+        pledge("network:tcp=127.0.0.1:1")
+        local ok, sock_or_err = catch network.tcp.connect("127.0.0.1", 1)
+        if ok then
+            sock_or_err:close()
+        else
+            assert(tostring(sock_or_err):find("permission") == nil)
+        end
+
+        local denied, err = catch network.tcp.connect("127.0.0.1", 2)
+        assert(not denied)
+        assert(tostring(err):find("permission") ~= nil)
+    end)
+end
+
+local function udp_setsockname_honors_value_scoped_pledge_test()
+    with_baseline(BASE_A, function()
+        pledge("network:udp=127.0.0.1:9")
+        local sock = network.udp.open()
+        local ok, err = catch sock:setsockname("127.0.0.1", 10)
+        sock:close()
+        assert(not ok)
+        assert(tostring(err):find("permission") ~= nil)
+    end)
+end
+
+-- Group: glob matching (snow leopard regressions)
+
+-- Regression: the recursive glob matcher backtracked exponentially on
+-- wildcard-heavy patterns, so a pledge check against a long non-matching
+-- subject could take effectively forever (a DoS via any attacker-influenced
+-- path or URL). The rewritten matcher is linear; these must return quickly.
+local function wildcard_heavy_fs_pattern_is_checked_in_linear_time_test()
+    with_baseline(BASE_A, function()
+        -- NOTE: on POSIX the fs path check delegates to fnmatch (linear in
+        -- glibc/musl), so this guards the overall pledge-check path; the
+        -- rewritten internal matcher (used for URL checks everywhere and for
+        -- path checks on Windows) is guarded by the URL test below.
+        -- subject must live outside ./lus-tests/* (granted at the top of this
+        -- file), so the only candidate pattern is the wildcard-heavy one
+        pledge("fs:read=./a*a*a*a*a*a*a*a*a*b")
+        local subject = "./" .. string.rep("a", 200)
+        local t0 = os.clock()
+        local ok = catch io.open(subject, "r")
+        local elapsed = os.clock() - t0
+        assert(not ok)
+        assert(elapsed < 2.0)
+    end)
+end
+
+local function wildcard_heavy_url_pattern_is_checked_in_linear_time_test()
+    with_baseline(BASE_A, function()
+        pledge("network:http=http://a*a*a*a*a*a*a*b/*")
+        local url = "http://" .. string.rep("a", 200) .. "/"
+        local t0 = os.clock()
+        local ok = catch network.fetch(url)
+        local elapsed = os.clock() - t0
+        assert(not ok)
+        assert(elapsed < 2.0)
+    end)
+end
+
+-- The tests below seal their own permission store before checking sealed behavior.
+
+local function state_is_sealed_after_pledge_seal_test()
+    with_baseline(BASE_A, function()
+        pledge("seal")
+        -- Can verify by trying to pledge again
+        -- After seal, pledge should either error or return false/nil
+        local ok, result = catch pledge("network")
+        -- Either it errors (ok is false) or it returns false/nil
+        assert(not ok or not result, "pledge should fail or return falsy after seal")
+    end)
+end
+
+local function existing_permissions_still_work_after_seal_test()
+    with_baseline(BASE_A, function()
+        pledge("seal")
+        -- load should still work
+        local fn = load("return 42")
+        assert(fn ~= nil, "load should work after seal")
+        assert(fn() == 42, "loaded function should execute after seal")
+    end)
+end
+
+local function file_reading_still_works_after_seal_with_granted_permission_test()
+    with_baseline(BASE_A, function()
+        pledge("seal")
+        local f = io.open("lus-tests/framework.lus", "r")
+        if f then
+            local content = f:read(10)
+            f:close()
+            assert(content ~= nil, "should still read permitted files after seal")
+        end
+    end)
+end
+
+
+--[[
+    In-process pledge semantics, second suite.
+
+    This suite pins the parts of the capability system that the first suite and
+    the security suite leave unpinned. The focus is the exact contract of pledge()
+    itself: the "~" reject prefix, the refusal of the "all" permission from a
+    script, argument and value validation, glob boundary precision on the deny
+    side, the fact that a valueless re-pledge of a value-scoped grant does not
+    broaden it, and the precise return-value behaviour once the store is sealed.
+
+    Everything here asserts a denial or an exact return value. The suite never
+    uses the network. It creates two sibling scratch directories under
+    ./lus-tests namespaced with the suite name and removes them before sealing.
+    The seal section is last because sealing is irreversible.
+]]
+
+-- Every test starts from the BASE_B grants and defers sealing to the tests that need it.
+
+-- ============================================================
+-- Argument and value validation
+-- ============================================================
+
+-- Group: argument validation
+
+-- Each malformed permission string must raise a specific, informative error
+-- rather than silently succeeding or crashing the parser.
+local malformed_permission_string_raises_cases = {
+    {"", "unknown permission"},
+    {"notapermission", "unknown permission"},
+    {"net", "unknown permission"},
+    {":read", "unknown permission"},
+    {"=value", "unknown permission"},
+    {"fs:", "fs subpermission"},
+    {"fs:bogus", "fs subpermission"},
+    {"env:read=x", "env subpermission"},
+}
+
+local function malformed_permission_string_raises_test(perm, pattern)
+    with_baseline(BASE_B, function()
+        raises(function() pledge(perm) end, pattern)
+    end)
+end
+
+-- The fs granter refuses an unanchored wildcard because "*" spans path
+-- separators and would otherwise match files anywhere on the disk.
+local unanchored_fs_wildcard_pattern_is_refused_cases = {
+    {"fs:read=*.pem"},
+    {"fs:read=?secret"},
+    {"fs:write=*"},
+}
+
+local function unanchored_fs_wildcard_pattern_is_refused_test(perm)
+    with_baseline(BASE_B, function()
+        raises(function() pledge(perm) end, "absolute path")
+    end)
+end
+
+local function overlong_permission_name_is_refused_test()
+    with_baseline(BASE_B, function()
+        local huge = string.rep("a", 300)
+        raises(function() pledge(huge) end, "too long")
+    end)
+end
+
+-- A number argument is coerced to its decimal string by the argument checker,
+-- so it surfaces as an unknown permission rather than a type error.
+local function numeric_argument_is_coerced_to_a_string_then_rejected_as_unknown_test()
+    with_baseline(BASE_B, function()
+        raises(function() pledge(42) end, "unknown permission")
+    end)
+end
+
+-- A value that cannot be coerced to a string must raise a type error and must
+-- not corrupt the store or crash.
+local non_coercible_argument_raises_cases = {
+    {"table", {}},
+    {"boolean", true},
+}
+
+local function non_coercible_argument_raises_test(_, badarg)
+    with_baseline(BASE_B, function()
+        raises(function() pledge(badarg) end)
+    end)
+end
+
+local function a_nil_argument_raises_test()
+    with_baseline(BASE_B, function()
+        raises(function() pledge(nil) end)
+    end)
+end
+
+-- ============================================================
+-- The "all" permission is CLI-only
+-- ============================================================
+
+-- Group: all is refused from a script
+
+local function pledge_all_always_raises_when_called_from_a_script_test()
+    with_baseline(BASE_B, function()
+        raises(function() pledge("all") end, "cannot be requested from scripts")
+    end)
+end
+
+-- ============================================================
+-- The "~" reject prefix
+-- ============================================================
+
+-- Group: reject prefix
+
+local function rejecting_a_fresh_permission_returns_true_test()
+    with_baseline(BASE_B, function()
+        assert(pledge("~exec") == true)
+    end)
+end
+
+-- Once a permission is rejected, asking to grant it again is a hard error, not
+-- a silent false, because the program declared it never wants that capability.
+local function granting_a_rejected_permission_raises_was_rejected_test()
+    with_baseline(BASE_B, function()
+        pledge("~exec")
+        raises(function() pledge("exec") end, "was rejected")
+    end)
+end
+
+local function rejecting_a_subpermission_form_returns_true_test()
+    with_baseline(BASE_B, function()
+        assert(pledge("~network:tcp") == true)
+    end)
+end
+
+local function rejecting_the_network_base_returns_true_test()
+    with_baseline(BASE_B, function()
+        assert(pledge("~network") == true)
+    end)
+end
+
+local function re_granting_the_rejected_network_base_raises_was_rejected_test()
+    with_baseline(BASE_B, function()
+        pledge("~network")
+        raises(function() pledge("network") end, "was rejected")
+    end)
+end
+
+-- The rejection also denies the underlying capability at use time.
+local function network_use_is_denied_after_the_base_is_rejected_test()
+    with_baseline(BASE_B, function()
+        pledge("~network")
+        raises(function() network.tcp.connect("127.0.0.1", 1) end, "denied")
+    end)
+end
+
+-- ============================================================
+-- Filesystem scratch fixtures
+-- ============================================================
+
+-- Group: filesystem gating
+
+local dir_ok = "./lus-tests/tmp-pledge2"
+local dir_sibling = "./lus-tests/tmp-pledge2x"
+local file_inside = dir_ok .. "/w_inside.txt"
+local file_dotted = dir_ok .. "/dotted.txt"
+
+local function scratch_directories_can_be_created_inside_their_write_grants_test()
+    with_baseline(BASE_B, function()
+        -- Tolerate a directory left over from an interrupted previous run.
+        catch fs.createdirectory(dir_ok)
+        catch fs.createdirectory(dir_sibling)
+        -- The directories must now exist and be usable, proven by the writes below.
+        local f = io.open(file_inside, "w")
+        assert(f ~= nil)
+        f:write("inside")
+        f:close()
+    end)
+end
+
+-- Glob boundary precision: the grant covers ./lus-tests/tmp-pledge2/* and must
+-- not leak to the lexically adjacent directory ./lus-tests/tmp-pledge2x, whose
+-- name shares the grant's prefix. A prefix matcher would wrongly allow this.
+local function write_to_a_prefix_sharing_sibling_directory_is_denied_test()
+    with_baseline(BASE_B, function()
+        raises(function()
+            io.open(dir_sibling .. "/b.txt", "w")
+        end, "denied")
+    end)
+end
+
+local function a_wildcard_suffix_stays_attached_to_an_existing_filename_test()
+    with_baseline(BASE_B, function()
+        local f = io.open("./lus-tests/h1/enum.lus", "r")
+        assert(f ~= nil)
+        f:close()
+    end)
+end
+
+local function a_wildcard_prefix_granted_before_its_leaf_exists_stays_attached_test()
+    with_baseline(BASE_B, function()
+        local filename = dir_sibling .. "/missing-prefix-one.txt"
+        local written = assert(io.open(filename, "w"))
+        assert(written:write("missing prefix"))
+        assert(written:close())
+        local readback = assert(io.open(filename, "r"))
+        assert(readback:read("a") == "missing prefix")
+        readback:close()
+    end)
+end
+
+-- Write mode under a read-only grant must be gated separately from read mode.
+local function write_mode_is_denied_under_a_read_only_grant_test()
+    with_baseline(BASE_B, function()
+        raises(function()
+            io.open("./lus-tests/framework.lus", "w")
+        end, "fs:write")
+    end)
+end
+
+-- Creating a directory whose parent carries no write grant is denied.
+local function createdirectory_outside_any_write_grant_is_denied_test()
+    with_baseline(BASE_B, function()
+        raises(function()
+            fs.createdirectory("./lus-tests/tmp-pledge2-unpledged/child")
+        end, "denied")
+    end)
+end
+
+-- Reading a prefix-sharing sibling that is outside the read grant is denied.
+local function read_of_a_prefix_sharing_sibling_directory_is_denied_test()
+    with_baseline(BASE_B, function()
+        raises(function()
+            io.open(dir_sibling .. "/anything.txt", "r")
+        end, "denied")
+    end)
+end
+
+-- A dotted, non-canonical path that normalizes back into the grant is allowed,
+-- proving the check canonicalizes both sides rather than comparing raw strings.
+local function a_non_canonical_path_inside_the_grant_is_allowed_test()
+    with_baseline(BASE_B, function()
+        local f = io.open(file_dotted, "w")
+        assert(f ~= nil)
+        f:write("dotted")
+        f:close()
+        local g = io.open("./lus-tests/./tmp-pledge2/dotted.txt", "r")
+        assert(g ~= nil)
+        g:close()
+    end)
+end
+
+local function a_granted_symbolic_link_stays_bound_to_its_original_target_test()
+    with_baseline(BASE_B, function()
+        local original = dir_ok .. "/link_original.txt"
+        local outside = dir_sibling .. "/link_outside.txt"
+        local link = "./retargeted_pledge2_link"
+        assert(pledge("fs:write=" .. original) == true)
+        assert(pledge("fs:write=" .. outside) == true)
+        local first = io.open(original, "w")
+        first:write("original")
+        first:close()
+        local second = io.open(outside, "w")
+        second:write("outside")
+        second:close()
+        catch fs.remove(link)
+        local linked = catch fs.createlink(link, original)
+        if linked then
+            assert(pledge("fs:read=" .. link) == true)
+            local readable = io.open(link, "r")
+            assert(readable:read("a") == "original")
+            readable:close()
+            fs.remove(link)
+            fs.createlink(link, outside)
+            raises(function() io.open(link, "r") end, "denied")
+            fs.remove(link)
+        end
+        fs.remove(original)
+        fs.remove(outside)
+    end)
+end
+
+-- ============================================================
+-- Valueless re-pledge does not broaden a value-scoped grant
+-- ============================================================
+
+-- Group: scoped grants do not widen
+
+-- fs:read is already scoped to specific paths by the header. Re-pledging it
+-- without a value returns true but must leave the existing scope intact, never
+-- upgrading to global read access.
+local function valueless_fs_read_re_pledge_returns_true_test()
+    with_baseline(BASE_B, function()
+        assert(pledge("fs:read") == true)
+    end)
+end
+
+local function valueless_re_pledge_does_not_grant_an_out_of_scope_read_test()
+    with_baseline(BASE_B, function()
+        raises(function() io.open("/etc/hostname", "r") end, "denied")
+    end)
+end
+
+local function in_scope_reads_still_work_after_the_valueless_re_pledge_test()
+    with_baseline(BASE_B, function()
+        local f = io.open("./lus-tests/framework.lus", "r")
+        assert(f ~= nil)
+        f:close()
+    end)
+end
+
+-- An empty value string carries no path, so it likewise cannot widen an
+-- already-scoped grant.
+local function empty_value_fs_read_re_pledge_returns_true_test()
+    with_baseline(BASE_B, function()
+        assert(pledge("fs:read=") == true)
+    end)
+end
+
+local function empty_value_re_pledge_still_denies_an_out_of_scope_read_test()
+    with_baseline(BASE_B, function()
+        raises(function() io.open("/etc/passwd", "r") end, "denied")
+    end)
+end
+
+-- ============================================================
+-- Environment gating
+-- ============================================================
+
+-- Group: env gating
+
+-- The env pledge is scoped to a single variable name in the header. Reading the
+-- pledged name is permitted (the value itself may legitimately be nil).
+local function reading_the_pledged_env_variable_is_permitted_test()
+    with_baseline(BASE_B, function()
+        local ok = catch os.getenv("LUS_PLEDGE2_OK")
+        assert(ok)
+    end)
+end
+
+-- Reading any other variable is denied because the pledge is name-scoped.
+local reading_an_unpledged_env_variable_is_denied_cases = {
+    {"LUS_PLEDGE2_SECRET"},
+    {"HOME"},
+    {"PATH"},
+}
+
+local function reading_an_unpledged_env_variable_is_denied_test(name)
+    with_baseline(BASE_B, function()
+        raises(function() os.getenv(name) end, "denied")
+    end)
+end
+
+-- ============================================================
+-- Seal behaviour (must be last: sealing is irreversible)
+-- ============================================================
+
+-- Group: seal
+
+-- A grant and a seal can be requested in one call. The already-granted env
+-- permission returns true and the seal returns true, in that order.
+local function grant_and_seal_in_a_single_call_both_return_true_test()
+    with_baseline(BASE_B, function()
+        local granted, sealed = pledge("env=LUS_PLEDGE2_OK", "seal")
+        assert(granted == true)
+        assert(sealed == true)
+    end)
+end
+
+local function sealing_again_is_idempotent_and_returns_true_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        assert(pledge("seal") == true)
+    end)
+end
+
+-- After sealing, a new grant returns false and must NOT raise: the sealed
+-- check happens before any unknown-permission or rejection handling.
+local function a_new_grant_after_seal_returns_false_without_raising_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        local ok, result = catch pledge("fs:read=./lus-tests/tmp-pledge2/deep/*")
+        assert(ok)
+        assert(result == false)
+    end)
+end
+
+-- The sealed check even short-circuits ahead of the "was rejected" error, so
+-- re-granting the earlier-rejected network base now returns false silently.
+local function granting_a_rejected_permission_after_seal_returns_false_without_test()
+    with_baseline(BASE_B, function()
+        pledge("~network")
+        pledge("seal")
+        local ok, result = catch pledge("network")
+        assert(ok)
+        assert(result == false)
+    end)
+end
+
+local function a_reject_request_after_seal_returns_false_without_raising_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        local ok, result = catch pledge("~load")
+        assert(ok)
+        assert(result == false)
+    end)
+end
+
+-- Capabilities granted before the seal keep working afterwards.
+local function a_granted_read_still_works_after_seal_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        local f = io.open("./lus-tests/framework.lus", "r")
+        assert(f ~= nil)
+        f:close()
+    end)
+end
+
+local function the_granted_env_variable_still_reads_after_seal_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        local ok = catch os.getenv("LUS_PLEDGE2_OK")
+        assert(ok)
+    end)
+end
+
+-- Denials granted before the seal stay denied afterwards.
+local function an_out_of_scope_read_stays_denied_after_seal_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        raises(function() io.open("/etc/hostname", "r") end, "denied")
+    end)
+end
+
+local function network_stays_denied_after_seal_test()
+    with_baseline(BASE_B, function()
+        pledge("seal")
+        raises(function() network.tcp.connect("127.0.0.1", 1) end, "denied")
+    end)
+end
+
+-- Remove the scratch fixtures. The write grants survive the seal, so cleanup
+-- works here at the end of the run.
+local function scratch_fixtures_are_removed_test()
+    with_baseline(BASE_B, function()
+        catch fs.remove(file_inside)
+        catch fs.remove(file_dotted)
+        catch fs.remove(dir_sibling .. "/missing-prefix-one.txt")
+        -- With the parent directory still present, reading remains permitted, so a
+        -- nil result means the file is genuinely gone rather than merely denied.
+        local f = io.open(file_inside, "r")
+        assert(f == nil)
+        -- Now drop the directories themselves.
+        catch fs.remove(dir_ok)
+        catch fs.remove(dir_sibling)
+    end)
+end

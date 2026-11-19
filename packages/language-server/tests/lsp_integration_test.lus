@@ -1,0 +1,753 @@
+-- The language server modules are required under the name `lus-language`. A searcher maps
+-- that name onto the package directory next to the tests.
+local LANG_DIR = string.match(TEST_DIR, "^(.*)/[^/]*$")
+
+pledge("load", "fs:read=" .. LANG_DIR .. "/*")
+
+table.insert(package.searchers, 2, function(name)
+    local rest = string.match(name, "^lus%-language%.(.+)$")
+    if rest == nil then
+        return nil
+    end
+    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
+    if path == nil then
+        return nil
+    end
+    return assert(loadfile(path)), path
+end)
+
+-- Override io.write to capture output BEFORE loading wasm.lus
+local capture_buffer = ""
+
+local original_write = io.write
+io.write = function(...)
+  for i = 1, select("#", ...) do
+    capture_buffer = capture_buffer .. tostring(select(i, ...))
+  end
+  return io  -- match io.write chaining
+end
+
+-- Now require wasm.lus which will define _lsp_handle and call pledge("seal")
+require("lus-language.wasm")
+
+local transport = require("lus-language.transport")
+local modules = require("lus-language.analysis.modules")
+local uri_util = require("lus-language.util.uri")
+local server_core = require("lus-language.server")
+
+-- ---------------------------------------------------------------------------
+-- Test helpers
+-- ---------------------------------------------------------------------------
+
+-- Helper to build an LSP range without inline ["end"] (formatter bug workaround)
+local function make_range(sl, sc, el, ec)
+  local r = {start = {line = sl, character = sc}}
+  r["end"] = {line = el, character = ec}
+  return r
+end
+
+local msg_id = 0
+
+local function next_id()
+  msg_id = msg_id + 1
+  return msg_id
+end
+
+local function send(msg)
+  capture_buffer = ""
+  _lsp_handle(tojson(msg))
+  return capture_buffer
+end
+
+local function send_request(method, params)
+  local id = next_id()
+  return send({
+    jsonrpc = "2.0",
+    id = id,
+    method = method,
+    params = params or {},
+  }), id
+end
+
+local function send_notification(method, params)
+  return send({
+    jsonrpc = "2.0",
+    method = method,
+    params = params or {},
+  })
+end
+
+-- Parse the first LSP response from the captured output
+local function parse_response(raw)
+  if not raw or raw == "" then return nil end
+  -- Find Content-Length header
+  local len_str = string.match(raw, "Content%-Length: (%d+)")
+  if not len_str then return nil end
+  -- Find the JSON body after the header
+  local body_start = string.find(raw, "\r\n\r\n")
+  if not body_start then return nil end
+  local body = string.sub(raw, body_start + 4)
+  local ok, result = catch fromjson(body)
+  if ok then return result end
+  return nil
+end
+
+-- Parse all LSP messages from captured output
+local function parse_all_responses(raw)
+  if not raw or raw == "" then return {} end
+  local results = {}
+  local pos = 1
+  while pos <= #raw do
+    local len_start, len_end = string.find(raw, "Content%-Length: (%d+)", pos)
+    if not len_start then break end
+    local len_str = string.match(raw, "Content%-Length: (%d+)", pos)
+    local len = tonumber(len_str)
+    local header_end = string.find(raw, "\r\n\r\n", len_end)
+    if not header_end then break end
+    local body_start = header_end + 4
+    local body = string.sub(raw, body_start, body_start + len - 1)
+    local ok, msg = catch fromjson(body)
+    if ok and msg then
+      results[#results + 1] = msg
+    end
+    pos = body_start + len
+  end
+  return results
+end
+
+-- =========================================================================
+-- Tests
+-- =========================================================================
+
+-- Group: LSP protocol integration
+
+-- Initialize handshake
+local function returns_capabilities_on_initialize_test()
+  local raw = send_request("initialize", {
+    processId = 1,
+    rootUri = "file:///test",
+    capabilities = {},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.result ~= nil)
+  assert(resp.result.capabilities ~= nil)
+  assert(resp.result.capabilities.hoverProvider == true)
+  assert(resp.result.capabilities.definitionProvider == true)
+  assert(resp.result.capabilities.documentHighlightProvider == true)
+  assert(resp.result.capabilities.selectionRangeProvider == true)
+  assert(resp.result.capabilities.workspace.workspaceFolders.supported == true)
+  assert(resp.result.serverInfo.version == "1.7.0")
+end
+
+-- Initialized notification
+local function accepts_initialized_notification_without_error_test()
+  local raw = send_notification("initialized", {})
+  -- Should produce no response (it's a notification)
+  assert(raw == "")
+end
+
+-- Open document triggers diagnostics
+local function publishes_diagnostics_on_didopen_test()
+  local raw = send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = "file:///test/integration.lus",
+      languageId = "lus",
+      version = 1,
+      text = "local x = 1",
+    },
+  })
+  -- Should publish diagnostics notification
+  local msgs = parse_all_responses(raw)
+  assert(#msgs >= 1)
+  local diag_msg = msgs[1]
+  assert(diag_msg.method == "textDocument/publishDiagnostics")
+  assert(diag_msg.params ~= nil)
+  assert(diag_msg.params.uri == "file:///test/integration.lus")
+end
+
+-- Change document triggers updated diagnostics with errors
+local function publishes_error_diagnostics_on_didchange_with_broken_code_test()
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {
+      uri = "file:///test/integration.lus",
+      version = 2,
+    },
+    contentChanges = {
+      {
+        range = make_range(0, 0, 0, 11),
+        text = "local = = =",
+      },
+    },
+  })
+  local msgs = parse_all_responses(raw)
+  assert(#msgs >= 1)
+  local diag_msg = msgs[1]
+  assert(diag_msg.method == "textDocument/publishDiagnostics")
+  assert(#diag_msg.params.diagnostics > 0)
+end
+
+-- Fix the doc back to valid code for subsequent tests
+local function clears_diagnostics_on_valid_code_change_test()
+  local raw = send_notification("textDocument/didChange", {
+    textDocument = {
+      uri = "file:///test/integration.lus",
+      version = 3,
+    },
+    contentChanges = {
+      {
+        range = make_range(0, 0, 0, 11),
+        text = "local x = 1\nlocal y = x + 1",
+      },
+    },
+  })
+  local msgs = parse_all_responses(raw)
+  assert(#msgs >= 1)
+  local diag_msg = nil
+  for _, m in ipairs(msgs) do
+    if m.method == "textDocument/publishDiagnostics" then diag_msg = m end
+  end
+  assert(diag_msg ~= nil)
+  assert(diag_msg.params.uri == "file:///test/integration.lus")
+  -- the syntax error must be gone: no error-severity diagnostics remain
+  -- (lint hints like unused-local may still ride along)
+  local error_count = 0
+  for _, d in ipairs(diag_msg.params.diagnostics) do
+    if d.severity == 1 then error_count = error_count + 1 end
+    assert(not string.find(d.message, "expected"))
+  end
+  assert(error_count == 0)
+end
+
+-- Document symbols
+local function returns_document_symbols_test()
+  local raw = send_request("textDocument/documentSymbol", {
+    textDocument = {uri = "file:///test/integration.lus"},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.result ~= nil)
+  assert(type(resp.result) == "table")
+end
+
+-- Hover
+local function returns_hover_information_test()
+  -- position (0, 6) sits on the x of "local x = 1", so hover must
+  -- resolve to real content, not null
+  local raw = send_request("textDocument/hover", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 0, character = 6},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(type(resp.result) == "table")
+  assert(resp.result.contents ~= nil)
+  assert(string.find(resp.result.contents.value, "local x"))
+end
+
+-- Completion
+local function returns_completions_test()
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 1, character = 10},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.result ~= nil)
+end
+
+-- Unknown method returns MethodNotFound
+local function returns_methodnotfound_for_unknown_methods_test()
+  local raw = send_request("textDocument/unknownMethod", {
+    textDocument = {uri = "file:///test/integration.lus"},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.error ~= nil)
+  assert(resp.error.code == -32601)
+end
+
+-- Document highlight
+local function returns_document_highlights_test()
+  local raw = send_request("textDocument/documentHighlight", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 0, character = 6},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.result ~= nil)
+end
+
+-- Selection range
+local function returns_selection_ranges_test()
+  local raw = send_request("textDocument/selectionRange", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    positions = {{line = 0, character = 6}},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.result ~= nil)
+end
+
+-- Code action
+local function returns_code_actions_for_diagnostics_test()
+  local raw = send_request("textDocument/codeAction", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    range = make_range(0, 0, 0, 0),
+    context = {diagnostics = {}},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  assert(resp.result ~= nil)
+end
+
+-- Prepare rename
+local function returns_prepare_rename_result_test()
+  local raw = send_request("textDocument/prepareRename", {
+    textDocument = {uri = "file:///test/integration.lus"},
+    position = {line = 0, character = 6},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  -- result may be null or a range+placeholder depending on position
+end
+
+-- Shutdown
+local function responds_to_shutdown_with_null_result_test()
+  local raw = send_request("shutdown", {})
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+  -- result should be null (JSON null)
+  -- In Lus, tojson encodes NaN as null, and fromjson may decode it as nil or NaN
+end
+
+-- Close document
+local function accepts_didclose_without_error_test()
+  local raw = send_notification("textDocument/didClose", {
+    textDocument = {uri = "file:///test/integration.lus"},
+  })
+  -- Should produce no direct response (notification)
+  -- But might produce diagnostics clear
+end
+
+-- Full lifecycle test
+-- Group: full lifecycle
+
+local function open_edit_get_completions_close_test()
+  -- Open
+  send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = "file:///test/lifecycle.lus",
+      languageId = "lus",
+      version = 1,
+      text = "local greeting = 'hello'\nlocal msg = gre",
+    },
+  })
+
+  -- Edit (add more text)
+  send_notification("textDocument/didChange", {
+    textDocument = {uri = "file:///test/lifecycle.lus", version = 2},
+    contentChanges = {
+      {
+        range = make_range(1, 15, 1, 15),
+        text = "eting",
+      },
+    },
+  })
+
+  -- Get completions
+  local raw = send_request("textDocument/completion", {
+    textDocument = {uri = "file:///test/lifecycle.lus"},
+    position = {line = 1, character = 20},
+  })
+  local resp = parse_response(raw)
+  assert(resp ~= nil)
+
+  -- Close
+  send_notification("textDocument/didClose", {
+    textDocument = {uri = "file:///test/lifecycle.lus"},
+  })
+end
+
+-- =========================================================================
+-- Strict framing and workspace mirrors
+-- =========================================================================
+
+-- Group: strict framing
+
+local function accepts_one_canonical_frame_test()
+  local body = '{"jsonrpc":"2.0","id":1,"method":"shutdown"}'
+  local msg, reason = transport.parse_frame(
+    "Content-Length: " .. #body .. "\r\n\r\n" .. body
+  )
+  assert(reason == nil)
+  assert(msg.method == "shutdown")
+
+  msg, reason = transport.parse_frame(
+    "Content-Length: " .. #body ..
+    "\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8" ..
+    "\r\n\r\n" .. body
+  )
+  assert(reason == nil)
+  assert(msg.method == "shutdown")
+end
+
+local function rejects_ambiguous_or_noncanonical_framing_test()
+  local body = "{}"
+  local cases = {
+    "Content-Length: 2\n\n" .. body,
+    "Content-Length: 2\r\nContent-Length: 2\r\n\r\n" .. body,
+    "Content-Length: 1\r\n\r\n" .. body,
+    "Content-Length: 3\r\n\r\n" .. body,
+    "Content-Length: 16777217\r\n\r\n",
+    "Content-Length: +2\r\n\r\n" .. body,
+    "Content-Length: 02\r\n\r\n" .. body,
+    "Content-Length: 2\r\nContent-Type: text/plain\r\n\r\n" .. body,
+  }
+  for _, frame in ipairs(cases) do
+    local msg, reason = transport.parse_frame(frame)
+    assert(msg == nil)
+    assert(reason ~= nil)
+  end
+end
+
+local function rejects_invalid_utf_8_and_json_trailing_data_test()
+  -- A lone surrogate is the only invalid text a 2.0 string can hold (spec/design/strings.md).
+  local bad_utf8 = "{\"x\":\"" .. utf8.char(0xD800) .. "\"}"
+  local msg, reason = transport.decode_json(bad_utf8)
+  assert(msg == nil)
+  assert(string.find(reason, "UTF%-8"))
+
+  msg, reason = transport.decode_json("{} true")
+  assert(msg == nil)
+  assert(string.find(reason, "invalid JSON"))
+end
+
+local function routes_false_valued_json_to_invalid_request_test()
+  for _, body in ipairs({"null", "false"}) do
+    local msg, reason = transport.decode_json(body)
+    assert(reason == nil)
+    local fresh = server_core.new()
+    local response = fresh.dispatch(msg)
+    assert(response.error.code == -32600)
+  end
+end
+
+local function caps_outbound_json_bodies_at_16_mib_test()
+  local frame, reason = transport.encode_message({
+    jsonrpc = "2.0",
+    id = 82,
+    result = string.rep("x", transport.MAX_FRAME_BYTES),
+  })
+  assert(frame == nil)
+  assert(string.find(reason, "16 MiB"))
+end
+
+local function keeps_framed_wasm_dispatch_aligned_with_the_shared_server_test()
+  local fresh = server_core.new()
+  fresh.dispatch({
+    jsonrpc = "2.0",
+    id = 80,
+    method = "initialize",
+    params = {rootUri = "file:///test"},
+  })
+  local direct = fresh.dispatch({
+    jsonrpc = "2.0",
+    id = 81,
+    method = "lus/unknown",
+    params = {},
+  })
+
+  local body = tojson({
+    jsonrpc = "2.0",
+    id = 81,
+    method = "lus/unknown",
+    params = {},
+  })
+  capture_buffer = ""
+  _lsp_handle_frame(
+    "Content-Length: " .. #body .. "\r\n\r\n" .. body
+  )
+  local framed = parse_response(capture_buffer)
+  assert(framed.error.code == direct.error.code)
+  assert(framed.error.message == direct.error.message)
+end
+
+-- Group: workspace mirror
+
+local ROOT_A = "vscode-remote://ssh-remote+box/work/a"
+local ROOT_B = "vscode-remote://ssh-remote+box/work/b"
+local URI_A = ROOT_A .. "/lib/tool.lus"
+local URI_B = ROOT_B .. "/lib/tool.lus"
+local MIRROR_URI = ROOT_A .. "/closed.lus"
+
+local function upsert(root_uri, relative_path, exact_uri, version, text)
+  send_notification("lus/workspace/upsert", {
+    rootUri = root_uri,
+    relativePath = relative_path,
+    uri = exact_uri,
+    version = version,
+    text = text,
+  })
+end
+
+local function accepts_a_silent_workspace_seed_before_initialization_test()
+  local fresh = server_core.new()
+  capture_buffer = ""
+  fresh.dispatch({
+    jsonrpc = "2.0",
+    method = "lus/workspace/reset",
+    params = {roots = {ROOT_A}},
+  })
+  fresh.dispatch({
+    jsonrpc = "2.0",
+    method = "lus/workspace/upsert",
+    params = {
+      rootUri = ROOT_A,
+      relativePath = "seeded.lus",
+      uri = ROOT_A .. "/seeded.lus",
+      version = 1,
+      text = "return true",
+    },
+  })
+  assert(capture_buffer == "")
+  local response = fresh.dispatch({
+    jsonrpc = "2.0",
+    id = 91,
+    method = "initialize",
+    params = {workspaceFolders = {{uri = ROOT_A, name = "a"}}},
+  })
+  assert(response.result.serverInfo.version == "1.7.0")
+  assert(modules.resolve("seeded", ROOT_A .. "/main.lus") == ROOT_A .. "/seeded.lus")
+  capture_buffer = ""
+  fresh.dispatch({
+    jsonrpc = "2.0",
+    method = "initialized",
+    params = {},
+  })
+  assert(string.find(
+    capture_buffer, ROOT_A .. "/seeded.lus", 1, true
+  ) ~= nil)
+end
+
+local function resolves_the_requesting_root_first_and_preserves_exact_uris_test()
+  send_notification("lus/workspace/reset", {roots = {ROOT_A, ROOT_B}})
+  upsert(ROOT_A, "lib/tool.lus", URI_A, 1,
+    "local M = {}\nM.a = 1\nreturn M")
+  upsert(ROOT_B, "lib/tool.lus", URI_B, 1,
+    "local M = {}\nM.b = 2\nreturn M")
+
+  assert(modules.resolve("lib.tool", ROOT_A .. "/main.lus") == URI_A)
+  assert(modules.resolve("lib.tool", ROOT_B .. "/main.lus") == URI_B)
+end
+
+local function uses_the_documented_candidate_order_including_lua_init_files_test()
+  local direct = ROOT_B .. "/pkg.lus"
+  upsert(ROOT_B, "pkg/init.lus", ROOT_B .. "/pkg/init.lus", 1,
+    "return {from_init = true}")
+  upsert(ROOT_B, "pkg.lus", direct, 1, "return {from_file = true}")
+  upsert(ROOT_B, "fallback/init.lua", ROOT_B .. "/fallback/init.lua", 1,
+    "return {lua_init = true}")
+
+  assert(modules.resolve("pkg", ROOT_B .. "/main.lus") == direct)
+  assert(modules.resolve("fallback", ROOT_B .. "/main.lus") == ROOT_B .. "/fallback/init.lua")
+end
+
+local function invalidates_versioned_module_exports_without_cross_root_leakage_test()
+  skip("2.0 bug: assigning t[k2] = v with a long (non-interned) string key k2 that equals an existing key k1 adds a duplicate entry instead of replacing it, so the mirror table keeps the stale version")
+  local a_exports = modules.get_exports("lib.tool", ROOT_A .. "/main.lus")
+  local b_exports = modules.get_exports("lib.tool", ROOT_B .. "/main.lus")
+  assert(a_exports[1].name == "a")
+  assert(b_exports[1].name == "b")
+
+  upsert(ROOT_A, "lib/tool.lus", URI_A, 2,
+    "local M = {}\nM.updated = 3\nreturn M")
+  a_exports = modules.get_exports("lib.tool", ROOT_A .. "/main.lus")
+  b_exports = modules.get_exports("lib.tool", ROOT_B .. "/main.lus")
+  assert(a_exports[1].name == "updated")
+  assert(b_exports[1].name == "b")
+end
+
+local function promotes_a_newly_created_higher_priority_module_candidate_test()
+  upsert(ROOT_B, "promote.lus", ROOT_B .. "/promote.lus", 1,
+    "local M = {}\nM.from_b = true\nreturn M")
+  local exports = modules.get_exports("promote", ROOT_A .. "/main.lus")
+  assert(exports[1].name == "from_b")
+
+  upsert(ROOT_A, "promote.lus", ROOT_A .. "/promote.lus", 1,
+    "local M = {}\nM.from_a = true\nreturn M")
+  exports = modules.get_exports("promote", ROOT_A .. "/main.lus")
+  assert(exports[1].name == "from_a")
+end
+
+local function indexes_closed_files_while_open_text_remains_authoritative_test()
+  skip("2.0 bug: assigning t[k2] = v with a long (non-interned) string key k2 that equals an existing key k1 adds a duplicate entry instead of replacing it, so the mirror table keeps the stale version")
+  upsert(ROOT_A, "closed.lus", MIRROR_URI, 1,
+    "global mirrored_symbol\nmirrored_symbol = 1")
+
+  local raw = send_request("workspace/symbol", {query = "mirrored_symbol"})
+  local resp = parse_response(raw)
+  assert(#resp.result >= 1)
+
+  send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = MIRROR_URI,
+      languageId = "lus",
+      version = 2,
+      text = "global open_symbol\nopen_symbol = 2",
+    },
+  })
+  raw = send_request("workspace/symbol", {query = "open_symbol"})
+  resp = parse_response(raw)
+  assert(#resp.result >= 1)
+
+  send_notification("textDocument/didClose", {
+    textDocument = {uri = MIRROR_URI},
+  })
+  raw = send_request("workspace/symbol", {query = "mirrored_symbol"})
+  resp = parse_response(raw)
+  assert(#resp.result >= 1)
+end
+
+local function deletes_closed_mirrors_and_retains_uri_authorities_test()
+  skip("2.0 bug: assigning t[k2] = v with a long (non-interned) string key k2 that equals an existing key k1 adds a duplicate entry instead of replacing it, so the mirror table keeps the stale version")
+  send_notification("lus/workspace/delete", {
+    rootUri = ROOT_A,
+    relativePath = "closed.lus",
+    uri = MIRROR_URI,
+    version = 3,
+  })
+  local raw = send_request("workspace/symbol", {query = "mirrored_symbol"})
+  local resp = parse_response(raw)
+  assert(#resp.result == 0)
+
+  assert(uri_util.to_path("file://server/share/a.lus") == "//server/share/a.lus")
+  assert(uri_util.within("file://SERVER/Share/Project",
+    "file://server/share/project/a.lus"))
+  assert(uri_util.join(ROOT_A, "space name/main.lus") == ROOT_A .. "/space%20name/main.lus")
+end
+
+local function resolves_windows_drive_and_unc_workspace_uris_test()
+  local windows_root = "file:///C:/Workspace"
+  local unc_root = "file://server/share/project"
+  send_notification("lus/workspace/reset", {roots = {windows_root, unc_root}})
+  upsert(windows_root, "lib/win.lus",
+    "file:///C:/Workspace/lib/win.lus", 1, "return true")
+  upsert(unc_root, "lib/unc.lus",
+    "file://server/share/project/lib/unc.lus", 1, "return true")
+
+  assert(modules.resolve("lib.win",
+    "file:///C:/Workspace/main.lus") == "file:///C:/Workspace/lib/win.lus")
+  assert(modules.resolve("lib.unc",
+    "file://server/share/project/main.lus") == "file://server/share/project/lib/unc.lus")
+end
+
+local function uses_recorded_and_most_specific_nested_workspace_roots_test()
+  local parent_root = "vscode-remote://ssh-remote+box/work"
+  local nested_root = parent_root .. "/project"
+  send_notification("lus/workspace/reset", {
+    roots = {parent_root, nested_root, ROOT_B},
+  })
+  upsert(parent_root, "lib/choice.lus",
+    parent_root .. "/lib/choice.lus", 1,
+    "local M = {}\nM.from_parent = true\nreturn M")
+  upsert(nested_root, "lib/choice.lus",
+    nested_root .. "/lib/choice.lus", 1,
+    "local M = {}\nM.from_nested = true\nreturn M")
+  upsert(parent_root, "lib/remaining.lus",
+    parent_root .. "/lib/remaining.lus", 1, "return true")
+  upsert(ROOT_B, "lib/remaining.lus",
+    ROOT_B .. "/lib/remaining.lus", 1, "return true")
+
+  local recorded_uri = nested_root .. "/src/recorded.lus"
+  upsert(parent_root, "project/src/recorded.lus", recorded_uri, 1,
+    "return true")
+  assert(modules.resolve("lib.choice", recorded_uri) == parent_root .. "/lib/choice.lus")
+
+  local unrecorded_uri = nested_root .. "/src/unrecorded.lus"
+  assert(modules.resolve("lib.choice", unrecorded_uri) == nested_root .. "/lib/choice.lus")
+  assert(modules.resolve("lib.remaining", unrecorded_uri) == parent_root .. "/lib/remaining.lus")
+
+  local parent_exports = modules.get_exports("lib.choice", recorded_uri)
+  local nested_exports = modules.get_exports("lib.choice", unrecorded_uri)
+  assert(parent_exports[1].name == "from_parent")
+  assert(nested_exports[1].name == "from_nested")
+end
+
+local function treats_unavailable_disk_probes_as_absent_test()
+  local denied_root = "file:///outside-lsp-workspace"
+  send_notification("lus/workspace/reset", {roots = {denied_root}})
+  local ok, resolved = catch modules.resolve(
+    "missing", denied_root .. "/main.lus"
+  )
+  assert(ok)
+  assert(resolved == nil)
+
+  local denied_uri = denied_root .. "/lint.lus"
+  local raw = send_notification("textDocument/didOpen", {
+    textDocument = {
+      uri = denied_uri,
+      languageId = "lus",
+      version = 1,
+      text = "local unused = require('missing')",
+    },
+  })
+  local messages = parse_all_responses(raw)
+  local found_unused = false
+  for _, message in ipairs(messages) do
+    for _, diagnostic in ipairs(
+      message.params and message.params.diagnostics or {}
+    ) do
+      if string.find(diagnostic.message, "Unused", 1, true) then
+        found_unused = true
+      end
+    end
+  end
+  assert(found_unused)
+  send_notification("textDocument/didClose", {
+    textDocument = {uri = denied_uri},
+  })
+
+  send_notification("lus/workspace/reset", {roots = {}})
+  ok, resolved = catch modules.resolve(
+    "/outside-lsp-workspace/missing", denied_root .. "/main.lus"
+  )
+  assert(ok)
+  assert(resolved == nil)
+end
+
+local function does_not_probe_host_disk_for_mirrored_or_virtual_origins_test()
+  local file_root = "file:///mirrored-lsp-workspace"
+  local file_origin = file_root .. "/main.lus"
+  send_notification("lus/workspace/reset", {roots = {file_root}})
+  upsert(file_root, "main.lus", file_origin, 1, "return true")
+
+  local original_open = io.open
+  local probes = 0
+  io.open = function()
+    probes = probes + 1
+    return nil, "unavailable"
+  end
+  local ok, resolved = catch modules.resolve("not_mirrored", file_origin)
+  io.open = original_open
+  assert(ok)
+  assert(resolved == nil)
+  assert(probes == 0)
+
+  local virtual_root = "memory://workspace/project"
+  local virtual_origin = virtual_root .. "/main.lus"
+  send_notification("lus/workspace/reset", {roots = {virtual_root}})
+  upsert(virtual_root, "main.lus", virtual_origin, 1, "return true")
+  probes = 0
+  io.open = function()
+    probes = probes + 1
+    return nil, "unavailable"
+  end
+  ok, resolved = catch modules.resolve("not_virtual", virtual_origin)
+  io.open = original_open
+  assert(ok)
+  assert(resolved == nil)
+  assert(probes == 0)
+end
+
+-- =========================================================================
