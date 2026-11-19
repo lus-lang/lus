@@ -85,6 +85,8 @@ local missing = nil
 assert(missing?:getValue() == nil)  -- no error
 ```
 
+An optional chain is an expression and never a statement on its own, so a call kept only for its effect is assigned, as in `local _ = obj?:process()`.
+
 ## Function calls
 
 When a value might be a function or nil, `?()` provides safe invocation:
@@ -181,9 +183,10 @@ if obj ~= nil then
 end
 ```
 
-With optional chaining:
+With optional chaining, the guarded call fits on one line. An optional chain is always an expression, so a call kept only for its effect is assigned:
 
-```lus nocheck
+```lus
+local obj = nil
 -- Lus: inline safety
-obj?:process()
+local _ = obj?:process()
 ```

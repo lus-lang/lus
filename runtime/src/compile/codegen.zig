@@ -14,6 +14,7 @@ const vm = struct {
     const gc = @import("../vm/gc.zig");
     const numeric = @import("../vm/numeric.zig");
     const ops = @import("../vm/ops.zig");
+    const wtf8 = @import("../vm/wtf8.zig");
 };
 const Value = vm.value.Value;
 const Proto = vm.object.Proto;
@@ -213,7 +214,7 @@ pub const Compiler = struct {
 
     pub fn err(c: *Compiler, line: u32, comptime fmt: []const u8, args: anytype) Error {
         const name = @import("../syntax/parser.zig").chunkDisplay(c.arena, c.opts.chunkname);
-        c.diag = try std.fmt.allocPrint(c.arena, "{s}:{d}: " ++ fmt, .{ name, line } ++ args);
+        c.diag = try vm.wtf8.escapeInvalid(c.arena, try std.fmt.allocPrint(c.arena, "{s}:{d}: " ++ fmt, .{ name, line } ++ args));
         return error.CompileError;
     }
 
@@ -1793,6 +1794,30 @@ fn callExpr(fs: *FuncState, callee: *ast.Expr, method: ?[]const u8, args: []*ast
     if (chain_ctx != null) try setOneRet(fs, v);
 }
 
+/// Describes the field local `vabs` of a local group as seen from `fs`. A
+/// field of a group declared in an enclosing function is reached through an
+/// upvalue, created on each function level between the two as needed.
+fn groupField(fs: *FuncState, vabs: u32, v: *ExpDesc) Error!void {
+    if (vabs >= fs.first_local) {
+        const vidx = vabs - fs.first_local;
+        v.* = .{ .kind = .local, .info = getLocalVar(fs, vidx).reg, .aux = @intCast(vidx) };
+        return;
+    }
+    const parent = fs.parent.?;
+    try groupField(parent, vabs, v);
+    if (v.kind == .local) markUpval(parent, @intCast(v.aux));
+    const in_stack = v.kind == .local;
+    const index: u8 = @intCast(v.info);
+    for (fs.upvals.items, 0..) |u, i| {
+        if (u.in_stack == in_stack and u.index == index) {
+            v.* = .{ .kind = .upval, .info = @intCast(i) };
+            return;
+        }
+    }
+    const idx = try newUpvalue(fs, fs.c.actvars.items[vabs].name, v);
+    v.* = .{ .kind = .upval, .info = @intCast(idx) };
+}
+
 /// Resolves `g.f` paths of local groups. Returns true when `e` was a group
 /// path and `v` now describes the field local.
 fn groupPath(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!bool {
@@ -1818,8 +1843,6 @@ fn groupPath(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!bool {
     var group: *Group = undefined;
     if (rv.kind == .void_ and rv.info == -3) {
         group = fs.c.actvars.items[@intCast(rv.aux)].group.?;
-    } else if (rv.kind == .upval and fs.upvals.items[@intCast(rv.info)].kind == .group) {
-        return fs.c.err(e.line, "group fields cannot be captured through the group name in nested functions yet", .{});
     } else return false;
     // Walk fields from the root outward. names[] is reversed.
     var i = n;
@@ -1833,8 +1856,7 @@ fn groupPath(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!bool {
                 group = sg;
             },
             .field => |vabs| {
-                const vd = &fs.c.actvars.items[vabs];
-                v.* = .{ .kind = .local, .info = vd.reg, .aux = @intCast(vabs - fs.first_local) };
+                try groupField(fs, vabs, v);
                 if (i > 0) {
                     // Remaining names index into the field's value.
                     var j = i;
@@ -2303,7 +2325,11 @@ fn groupSourceFields(fs: *FuncState, source: *ast.Expr, names: []ast.AttName, ba
         const m = group.fields.get(an.name.text) orelse return fs.c.err(line, "'{s}' is not a field of group '{s}'", .{ an.name.text, vd.name });
         switch (m) {
             .sub => return fs.c.err(line, "cannot deconstruct subgroup '{s}' with 'from'", .{an.name.text}),
-            .field => |vabs| try codeABC(fs, .move, base + @as(u32, @intCast(i)), fs.c.actvars.items[vabs].reg, 0),
+            .field => |vabs| {
+                var fv: ExpDesc = .{};
+                try groupField(fs, vabs, &fv);
+                try exp2reg(fs, &fv, base + @as(u32, @intCast(i)));
+            },
         }
     }
     return true;
@@ -2373,8 +2399,10 @@ fn groupCopy(fs: *FuncState, group: *Group, src: ast.Name, line: u32) Error!void
             .field => |vabs| {
                 const svd = fs.c.actvars.items[vabs];
                 const reg = fs.freereg;
+                var fv: ExpDesc = .{};
+                try groupField(fs, vabs, &fv);
                 try reserveRegs(fs, 1);
-                try codeABC(fs, .move, reg, svd.reg, 0);
+                try exp2reg(fs, &fv, reg);
                 const vidx = try newLocalVar(fs, svd.name, svd.kind);
                 try adjustLocalVars(fs, 1);
                 try group.fields.put(fs.c.arena, entry.key_ptr.*, .{ .field = fs.first_local + vidx });
@@ -2613,9 +2641,11 @@ fn groupOverwrite(fs: *FuncState, target: *ast.Expr, values: []*ast.Expr, line: 
             .field => |vabs| {
                 const vd = fs.c.actvars.items[vabs];
                 if (vd.readonly) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{nf.name.text});
+                var fv: ExpDesc = .{};
+                try groupField(fs, vabs, &fv);
                 var ve: ExpDesc = .{};
                 try expr(fs, nf.value, &ve);
-                try exp2reg(fs, &ve, vd.reg);
+                try storeVar(fs, &fv, &ve);
             },
         }
     }
@@ -3003,6 +3033,9 @@ fn forBody(fs: *FuncState, base: u8, line: u32, nvars: u32, generic: bool, body:
     try leaveBlock(fs);
     fs.line = line;
     const prep_target = getLabel(fs);
+    // The loop instruction jumps back over the body and the call of a
+    // generic loop, and its Bx field holds that distance.
+    if (prep_target - prep + @intFromBool(generic) > opc.max_arg_bx) return fs.c.err(line, "control structure too long", .{});
     if (generic) {
         opc.setBx(&fs.code.items[@intCast(prep)], @intCast(prep_target - prep - 1));
         try codeABC(fs, .tforcall, base, 0, @intCast(nvars));

@@ -335,6 +335,9 @@ pub const Global = struct {
     args: []const []const u8 = &.{},
     environ: ?*std.process.Environ.Map = null,
     warn_on: bool = false,
+    /// Set once `api.freezeEnv` has frozen the global environment. Workers
+    /// started from this state freeze their own environment too.
+    env_frozen: bool = false,
     running_finalizers: bool = false,
     /// Native recursion depth across all threads (calls from natives into
     /// Lus and coroutine resumes), bounded to protect the native stack.

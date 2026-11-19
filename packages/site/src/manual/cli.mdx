@@ -43,7 +43,7 @@ The `lus` executable runs scripts and carries the tools of a Lus project as comm
 | `--include path[:alias]` | [Preinclude](/manual/acquis-29) a module file or directory so `require` finds it without `load` or `fs` permissions. |
 | `--readonly-env` | Freeze `_ENV` and the module tables after startup. |
 | `--gc-pause N` | Let the heap grow by N percent of its live size before a collection starts. Lower values trade CPU for lower peak memory. |
-| `--dis` | Print the bytecode of the script instead of running it. |
+| `--dis` | Print the bytecode of the script instead of running it. The script compiles exactly as it would run, so the listing reflects the flags given with `-F`. |
 | `--` | Stop handling options. |
 | `-` | Stop handling options and execute standard input. |
 

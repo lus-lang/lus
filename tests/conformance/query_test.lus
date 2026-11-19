@@ -1674,3 +1674,49 @@ local function debug_parse_recovers_on_a_broken_query_test()
         "broken", { recover = true })
     assert(tree ~= nil, "recovery returns a tree")
 end
+
+-- Group: large where clauses
+
+-- Builds `@src as r where r.n ~= 2 and r.n ~= 3 and ...` with `count`
+-- conjuncts and returns the values of r.n it selects.
+local function wide_where(src, count)
+    local parts = {}
+    for i = 1, count do
+        parts[i] = "r.n ~= " .. (i + 1)
+    end
+    local f = assert(load("local src = ... local out = {} "
+        .. "for row in query(@src as r where " .. table.concat(parts, " and ")
+        .. " select r.n order by r.n) do out[#out + 1] = row.n end return out"))
+    return f(src)
+end
+
+local function where_clauses_with_hundreds_of_conjuncts_compile_and_filter_test()
+    local t = {}
+    for n = 1, 1100 do
+        t[#t + 1] = { n = n }
+    end
+    for _, count in ipairs({ 63, 64, 100, 256, 257, 1000 }) do
+        local got = wide_where(t, count)
+        assert(got[1] == 1, count)
+        assert(got[2] == count + 2, count)
+        assert(#got == 1100 - count, count)
+    end
+end
+
+local function a_wide_where_over_sqlite_matches_the_plain_table_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (n INTEGER)")
+    local t = {}
+    for n = 1, 120 do
+        db:exec("INSERT INTO t VALUES (" .. n .. ")")
+        t[#t + 1] = { n = n }
+    end
+    for _, count in ipairs({ 62, 63, 64, 100 }) do
+        local from_db = wide_where(db.t, count)
+        local from_table = wide_where(t, count)
+        assert(#from_db == #from_table and #from_db == 120 - count, count)
+        for i, n in ipairs(from_table) do
+            assert(from_db[i] == n, count)
+        end
+    end
+end

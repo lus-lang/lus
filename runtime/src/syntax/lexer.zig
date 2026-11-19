@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const token = @import("token.zig");
+const wtf8 = @import("../vm/wtf8.zig");
 const Tag = token.Tag;
 const Token = token.Token;
 const Span = token.Span;
@@ -114,14 +115,19 @@ pub const Lexer = struct {
     }
 
     fn fail(lx: *Lexer, start: u32, comptime fmt: []const u8, args: anytype) Error {
-        const msg = std.fmt.allocPrint(lx.arena, fmt, args) catch return error.OutOfMemory;
+        const raw = std.fmt.allocPrint(lx.arena, fmt, args) catch return error.OutOfMemory;
+        const msg = wtf8.escapeInvalid(lx.arena, raw) catch return error.OutOfMemory;
         lx.diag = .{ .message = msg, .line = lx.line, .span = .{ .start = start, .end = @max(start, lx.pos) } };
         return error.SyntaxError;
     }
 
+    /// The source text of a failing token. It runs to the end of the
+    /// character the lexer stopped in, so a message quotes whole characters.
     fn nearText(lx: *Lexer, start: u32) []const u8 {
-        const end = @min(lx.pos, @as(u32, @intCast(lx.src.len)));
+        var end: usize = @min(lx.pos, @as(u32, @intCast(lx.src.len)));
         if (end <= start) return "";
+        var extra: usize = 0;
+        while (end < lx.src.len and extra < 3 and lx.src[end] & 0xC0 == 0x80) : (extra += 1) end += 1;
         return lx.src[start..end];
     }
 
@@ -306,6 +312,9 @@ pub const Lexer = struct {
                         try lx.push(.unknown, start, lx.line, .none);
                         return false;
                     }
+                    // Quote a whole character, such as a letter outside
+                    // ASCII, rather than its first byte.
+                    if (wtf8.decodeAt(lx.src, start)) |d| lx.pos = start + d.len;
                     return lx.fail(start, "unexpected symbol near '{s}'", .{lx.nearText(start)});
                 },
             }

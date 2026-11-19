@@ -254,7 +254,7 @@ pub fn decimalToString(gpa: Allocator, d: *const Decimal) ![]u8 {
             try out.appendNTimes(gpa, '0', @intCast(e));
         }
     } else {
-        const frac: usize = @intCast(-e);
+        const frac: usize = @intCast(-@as(i64, e));
         if (frac > 40 and frac > digits.len + 20) {
             try out.print(gpa, "{s}e{d}", .{ digits, e });
         } else if (digits.len > frac) {
@@ -433,6 +433,11 @@ fn toDecParts(gpa: Allocator, v: Value) !struct { M, i32 } {
 
 const div_precision = 34;
 
+/// Narrows the exponent of a decimal result to the 32 bits a decimal holds.
+fn decExp(l: *Thread, e: i64) Error!i32 {
+    return std.math.cast(i32, e) orelse l.raiseFmt("decimal exponent out of range", .{});
+}
+
 fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
     const g = l.g;
     const gpa = g.gpa;
@@ -442,7 +447,7 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
     defer pb[0].deinit();
     var r = M.init(gpa) catch return l.raiseMem();
     defer r.deinit();
-    var exp: i32 = 0;
+    var exp: i64 = 0;
     switch (op) {
         .add, .sub, .mod, .idiv => {
             // Align exponents to the smaller one.
@@ -465,7 +470,7 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
         },
         .mul => {
             r.mul(&pa[0], &pb[0]) catch return l.raiseMem();
-            exp = pa[1] + pb[1];
+            exp = @as(i64, pa[1]) + pb[1];
         },
         .unm => {
             r.copy(pa[0].toConst()) catch return l.raiseMem();
@@ -483,22 +488,22 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 return l.raiseFmt("decimal exponent must be an integer", .{});
             }
             const n = pb[0].toConst().toInt(i32) catch return l.raiseFmt("exponent too large", .{});
+            exp = try decExp(l, @as(i64, pa[1]) * @abs(n));
             r.pow(&pa[0], @abs(n)) catch return l.raiseMem();
-            exp = pa[1] * @as(i32, @intCast(@abs(n)));
             if (n < 0) {
                 var one = M.initSet(gpa, 1) catch return l.raiseMem();
                 defer one.deinit();
                 var q = M.init(gpa) catch return l.raiseMem();
                 defer q.deinit();
-                var qe: i32 = 0;
-                divDecimal(gpa, &q, &qe, &one, 0, &r, exp) catch return l.raiseMem();
+                var qe: i64 = 0;
+                divDecimal(gpa, &q, &qe, &one, 0, &r, @intCast(exp)) catch return l.raiseMem();
                 r.swap(&q);
                 exp = qe;
             }
         },
         else => return null,
     }
-    return Value.obj(.decimal, newDecFromConst(g, r.toConst(), exp) catch return l.raiseMem());
+    return Value.obj(.decimal, newDecFromConst(g, r.toConst(), try decExp(l, exp)) catch return l.raiseMem());
 }
 
 fn digitCount(gpa: Allocator, m: *const M) !usize {
@@ -510,7 +515,7 @@ fn digitCount(gpa: Allocator, m: *const M) !usize {
 
 /// Decimal division rounded half to even to `div_precision` significant
 /// digits, with trailing zeros removed down to the ideal exponent.
-fn divDecimal(gpa: Allocator, q: *M, exp: *i32, ca: *M, ea: i32, cb: *M, eb: i32) !void {
+fn divDecimal(gpa: Allocator, q: *M, exp: *i64, ca: *M, ea: i32, cb: *M, eb: i32) !void {
     const da = try digitCount(gpa, ca);
     const db = try digitCount(gpa, cb);
     const shift: u32 = @intCast(@max(0, @as(i64, div_precision) + @as(i64, @intCast(db)) - @as(i64, @intCast(da)) + 1));
@@ -520,7 +525,7 @@ fn divDecimal(gpa: Allocator, q: *M, exp: *i32, ca: *M, ea: i32, cb: *M, eb: i32
     var rem = try M.init(gpa);
     defer rem.deinit();
     try M.divTrunc(q, &rem, &num, cb);
-    var e: i32 = ea - eb - @as(i32, @intCast(shift));
+    var e: i64 = @as(i64, ea) - eb - shift;
     // Round to div_precision digits.
     var dq = try digitCount(gpa, q);
     var sticky = !rem.eqlZero();
@@ -549,7 +554,7 @@ fn divDecimal(gpa: Allocator, q: *M, exp: *i32, ca: *M, ea: i32, cb: *M, eb: i32
         dq -= 1;
     }
     // Strip trailing zeros down to the ideal exponent.
-    const ideal = ea - eb;
+    const ideal = @as(i64, ea) - eb;
     while (e < ideal and !q.eqlZero()) {
         var ten = try M.initSet(gpa, 10);
         defer ten.deinit();
@@ -585,10 +590,28 @@ pub fn compare(gpa: Allocator, a: Value, b: Value) ?std.math.Order {
     defer pa[0].deinit();
     var pb = exactParts(gpa, b) catch return null;
     defer pb[0].deinit();
+    // Decide by sign and by order of magnitude first, so that exponents far
+    // apart never build a large power of ten. Equal magnitudes leave the
+    // exponents at most the difference of the digit counts apart.
+    const sa = pa[0].toConst().orderAgainstScalar(0);
+    const sb = pb[0].toConst().orderAgainstScalar(0);
+    if (sa != sb) return std.math.order(signRank(sa), signRank(sb));
+    if (sa == .eq) return .eq;
+    const ma = @as(i64, @intCast(digitCount(gpa, &pa[0]) catch return null)) + pa[1];
+    const mb = @as(i64, @intCast(digitCount(gpa, &pb[0]) catch return null)) + pb[1];
+    if (ma != mb) return if ((ma < mb) == (sa == .gt)) .lt else .gt;
     const e = @min(pa[1], pb[1]);
     mulPow10(&pa[0], @intCast(pa[1] - e)) catch return null;
     mulPow10(&pb[0], @intCast(pb[1] - e)) catch return null;
     return pa[0].order(pb[0]);
+}
+
+fn signRank(o: std.math.Order) i2 {
+    return switch (o) {
+        .lt => -1,
+        .eq => 0,
+        .gt => 1,
+    };
 }
 
 fn exactParts(gpa: Allocator, v: Value) !struct { M, i32 } {

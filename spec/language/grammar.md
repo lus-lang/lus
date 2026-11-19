@@ -122,7 +122,7 @@ A numeral may also start with `.` when the `.` is directly followed by a digit (
 
 An underscore is a digit separator. It must sit between two digits, so `1_000_000` and `0xff_ff` are valid, while `1__0`, `1_`, and `0x_1` are malformed. Separators are removed before the value is read.
 
-A trailing `n` makes the numeral a bigint, and a trailing `d` makes it a decimal. The `n` suffix applies only to integer numerals, decimal or hexadecimal, so `1.5n`, `1e3n`, and `0x1.8n` are malformed. The `d` suffix applies only to decimal notation. In a hexadecimal numeral `d` is a digit, so `0x10d` is the integer 269. A decimal keeps exactly the digits it was written with.
+A trailing `n` makes the numeral a bigint, and a trailing `d` makes it a decimal. The `n` suffix applies only to integer numerals, decimal or hexadecimal, so `1.5n`, `1e3n`, and `0x1.8n` are malformed. The `d` suffix applies only to decimal notation. In a hexadecimal numeral `d` is a digit, so `0x10d` is the integer 269. A decimal keeps exactly the digits it was written with. Its exponent must fit in 32 bits, so `1e2147483647d` and `1e-2147483648d` are valid while `1e2147483648d` is malformed. **Tested** (`exact_literals_test.lus`): the bigint and decimal forms of the table below, digit separators in both, `0xffd` as an integer, the malformed forms `1.5n`, `1e3n`, `.5n`, `0x1.8n`, `0x1p4n`, `0x1p4d`, `1nn`, `1nd`, `1dn`, `1N`, `1.5D`, `1d5`, `1_n`, `1_d`, and `1ed`, and a round trip through `string.dump`.
 
 The accepted forms after validation are:
 
@@ -246,7 +246,7 @@ Nesting works to any depth, so `` return `a $( `b $(1) c` ) d` `` yields `"a b 1
 
 ### 1.9 Lexical error format
 
-A lexical error message has the form `CHUNK:LINE: MESSAGE near TOKEN`, where `LINE` is the line at which the lexer currently is. For errors raised at the end of input, the `near` part is `near <eof>`. For number and string errors, `TOKEN` is the raw text collected so far in single quotes. The interpolation errors `invalid interpolation after '$'` and `invalid escape sequence in interpolated string` carry no `near` part.
+A lexical error message has the form `CHUNK:LINE: MESSAGE near TOKEN`, where `LINE` is the line at which the lexer currently is. For errors raised at the end of input, the `near` part is `near <eof>`. For number and string errors, `TOKEN` is the raw text collected so far in single quotes. A character outside ASCII that no token accepts, such as the `é` of `local é = 1`, fails with `unexpected symbol near 'é'`, which quotes the whole character. Quoted text always runs to the end of the character the lexer stopped in, and each byte of the source that is not part of a UTF-8 character reads as `<\N>` with its decimal value, so `x = 1` followed by the byte 255 fails with `unexpected symbol near '<\255>'`. The `[string "..."]` form of a chunk name cuts a long first line on a character boundary. **Tested** (`lexer_errors_test.lus`, `cli_test.lus`). The interpolation errors `invalid interpolation after '$'` and `invalid escape sequence in interpolated string` carry no `near` part.
 
 ---
 
@@ -531,7 +531,7 @@ Lus is lexically scoped. A local declared by `local` enters scope at the stateme
 
 A name resolves by scanning active declarations of the current function from innermost to outermost, then the enclosing functions (creating upvalues), and finally as a global. Global declarations participate in the same scan (section 4.3).
 
-Limits: at most 200 active locals per function (`too many local variables (limit is 200) in main function` or `... in function at line N`), at most 255 upvalues per function (`too many upvalues (limit is 255) in ...`), and at most 255 registers (`too many registers (limit is 255) in ...`). Hidden internal variables such as the generic-for state slots and runtime attribute slots count toward the local limit.
+Limits: at most 200 active locals per function (`too many local variables (limit is 200) in main function` or `... in function at line N`), at most 255 upvalues per function (`too many upvalues (limit is 255) in ...`), and at most 255 registers (`too many registers (limit is 255) in ...`). A loop instruction stores the length of its loop in 16 bits, so a `for` loop whose body compiles to more than about 65535 instructions raises `control structure too long`. Hidden internal variables such as the generic-for state slots and runtime attribute slots count toward the local limit.
 
 ### 4.2 Local attributes
 
@@ -1079,7 +1079,7 @@ local a, b from z                   -- group source
 - A group overwrite `g = { ... }` accepts only a constructor (`group can only be assigned a constructor or another group`), and every listed field must already exist (`'d' is not a field of group 'z'`). Subgroups cannot be overwritten (`cannot overwrite subgroups`). Fields are separated by `,` or `;`, so `z = { a = 1 a = 2 }` fails with `'}' expected near 'a'`.
 - Groups are always local. `global g <group>` raises `global variables cannot be groups`.
 - Group names resolve lexically to the innermost group in scope. In `local g <group> = {a=1} do local g <group> = {b=2} end print(g.a)`, the last `g.a` names the field of the outer group.
-- A field path through a group declared in an enclosing function is outside the language. The compiler carries the error `group fields cannot be captured through the group name in nested functions yet` for it, but the current build stops with an internal integer overflow before reaching that check, which is a known defect. A nested function reaches such a field through an ordinary local that holds its value.
+- A nested function reaches the fields of a group declared in an enclosing function through the same group paths. Each field it names becomes an upvalue of the nested function that refers to the field local, so reads and writes on either side see one variable, exactly as for a captured ordinary local. Overwrites, copies, and `from` sources work the same way inside the nested function. **Tested** (`groups_test.lus`): a closure created in each loop iteration captures that iteration's field.
 - A field declared `<close>` is read-only and is never closed. A value that needs closing belongs in an ordinary `<close>` local.
 
 #### Dynamic semantics
@@ -1195,6 +1195,8 @@ Rejected forms: unary `#` and `~`, and binary `&`, `|`, `~`, `<<`, `>>` raise `o
 
 Complexity limits raise `query too complex`. The parser checks 32 select items, 16 group keys, 16 order items, and 10 names per chain at compile time. Building the query value checks the limit of 200 operands (parameters plus host closures).
 
+A `where` clause may hold any number of top-level `and` conjuncts. The plan lists the first 255 separately and joins the rest into one final conjunct, and only the first 63 may be pushed down to a provider. Both bounds keep the condition and its evaluation order. **Tested** (`query_test.lus`): `where` clauses of 63 to 1000 conjuncts filter tables and SQLite sources alike.
+
 The parser also bounds the nesting depth of clause expressions. A clause expression nested too deeply raises `query too complex` at compile time.
 
 A bare column is a valid clause expression. `where r.active` keeps the rows whose `active` field is truthy.
@@ -1288,7 +1290,6 @@ A chunk that fails to compile produces a single string message. `load` returns `
 | `cannot use <close> with <group> variables` | semantic | `compile/codegen.zig` |
 | `group can only be copied from another group` | semantic | `compile/codegen.zig` |
 | `group can only be assigned a constructor or another group` | semantic | `compile/codegen.zig` |
-| `group fields cannot be captured through the group name in nested functions yet` | semantic | `compile/codegen.zig` |
 | `cannot pass local group` | semantic | `compile/codegen.zig` |
 | `'X' is not a field of group 'G'` | semantic | `compile/codegen.zig` |
 | `cannot deconstruct subgroup 'X' with 'from'` | semantic | `compile/codegen.zig` |
@@ -1355,13 +1356,15 @@ A chunk that fails to compile produces a single string message. `load` returns `
 17. Every string literal is well formed WTF-8. Raw bytes belong in vectors.
 18. `continue` in a `repeat` loop may not skip a local that the `until` condition can see.
 
-### 7.2 Manual statements that disagree with the implementation
+### 7.2 Manual statements checked against the implementation
 
-| Manual | Statement | Implementation |
+The manual pages agree with the implementation on every point this reference covers. The table lists three statements that readers often check against the grammar, with the section that specifies each one and names its tests.
+
+| Manual | Statement | Section |
 | --- | --- | --- |
-| `acquis-2.mdx` | `obj?:process()` used as a statement | syntax error (section 5.2) |
-| `acquis-22.mdx` | attributes are inserted prior to `local` | attributes follow the name (section 5.9) |
-| `acquis-34.mdx` | bare boolean columns are compile-time errors | a bare column filters by truthiness (section 5.12) |
+| `acquis-2.mdx` | an optional chain is an expression, so a call kept for its effect is written `local _ = obj?:process()` | 5.2 |
+| `acquis-22.mdx` | runtime attributes follow the variable name | 5.9 |
+| `acquis-34.mdx` | a bare column filters by truthiness | 5.12 |
 
 ---
 

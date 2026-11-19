@@ -260,7 +260,7 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
     for (p.sel) |*it| {
         it.* = if ((r.count(1) orelse return false) == 1) (r.str() orelse return false) else null;
     }
-    const nconj = r.count(256) orelse return false;
+    const nconj = r.count(qgen.max_conjuncts) orelse return false;
     p.conj = a.alloc(Conj, nconj) catch return false;
     for (p.conj) |*cj| {
         cj.mask = r.count(0xff) orelse return false;
@@ -873,7 +873,7 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     }
     var skip_mask: i64 = 0;
     for (pushed, 0..) |b, i| {
-        if (b and i < 63) skip_mask |= @as(i64, 1) << @intCast(i);
+        if (b and i < qgen.max_skip_bits) skip_mask |= @as(i64, 1) << @intCast(i);
     }
 
     var accs: std.ArrayList(Acc) = .empty;

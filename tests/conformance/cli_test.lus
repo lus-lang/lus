@@ -367,3 +367,53 @@ local function same_build_compiler_chunks_round_trip_and_reject_header_damage_te
         damage_out:find("binary", 1, true), damage_out)
     clean_fixture(root)
 end
+
+local function a_syntax_error_at_a_letter_outside_ascii_reads_as_text_test()
+    local tmp = "nonascii_name.lus"
+    write_file(tmp, "local é = 1\n")
+    local _, out = run_command(lus_cmd .. " " .. tmp)
+    assert(string.find(out, "nonascii_name.lus:1: unexpected symbol near 'é'", 1, true), out)
+    local _, checked = run_command(lus_cmd .. " check " .. tmp)
+    assert(string.find(checked, "nonascii_name.lus:1:7: error: unexpected symbol near 'é'", 1, true), checked)
+    fs.remove(tmp)
+end
+
+local function workers_inherit_the_readonly_environment_test()
+    write_file("readonly_worker.lus", [[
+local ok, err = catch do created = 1 end
+local replaced = catch do math.abs = nil end
+worker.message({ ok = ok, err = tostring(err), replaced = replaced })
+]])
+    write_file("readonly_main.lus", [[
+local w = worker.create("readonly_worker.lus")
+local m = worker.receive(w)
+print(m.ok, m.replaced, m.err)
+]])
+    local _, frozen = run_command(lus_cmd .. " -P load -P fs:read --readonly-env readonly_main.lus")
+    assert(string.find(frozen, "false\tfalse\treadonly_worker.lus:1: attempt to modify a readonly table", 1, true), frozen)
+    local _, open = run_command(lus_cmd .. " -P load -P fs:read readonly_main.lus")
+    assert(string.find(open, "true\ttrue\tnil", 1, true), open)
+    fs.remove("readonly_worker.lus")
+    fs.remove("readonly_main.lus")
+end
+
+local function disassembly_folds_compile_time_flags_as_running_does_test()
+    write_file("dis_flags.lus", 'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n')
+    local _, ran = run_command(lus_cmd .. " -F FAST dis_flags.lus")
+    assert(ran == "fast\n", ran)
+    -- Folding keeps only the taken branch, so the listing calls print once,
+    -- from line 2 with the flag and from line 4 without it.
+    local _, fast = run_command(lus_cmd .. " -F FAST --dis dis_flags.lus")
+    assert(string.find(fast, "function <dis_flags.lus:0> (5 instructions", 1, true), fast)
+    assert(string.find(fast, "[  2] call", 1, true), fast)
+    assert(not string.find(fast, "[  4] call", 1, true), fast)
+    assert(not string.find(fast, "test_", 1, true), fast)
+    local _, slow = run_command(lus_cmd .. " --dis dis_flags.lus")
+    assert(string.find(slow, "[  4] call", 1, true), slow)
+    assert(not string.find(slow, "[  2] call", 1, true), slow)
+    write_file("dis_error.lus", "x = = 1\n")
+    local _, err = run_command(lus_cmd .. " --dis dis_error.lus")
+    assert(string.find(err, "dis_error.lus:1: unexpected symbol near '='", 1, true), err)
+    fs.remove("dis_flags.lus")
+    fs.remove("dis_error.lus")
+end

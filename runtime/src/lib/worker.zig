@@ -292,6 +292,7 @@ const Worker = struct {
     pledges: ?*anyopaque = null,
     environ: ?*std.process.Environ.Map = null,
     warn_on: bool = false,
+    env_frozen: bool = false,
     pause: usize = 200,
 
     // Owned by the creator's thread.
@@ -484,6 +485,9 @@ fn run(w: *Worker, msg: *?[]u8) void {
     }
     g.ext.put(gpa, self_key, w) catch return fail(msg, gpa, "not enough memory");
     setup(l) catch return fail(msg, gpa, api.errorMessage(l, l.err));
+    // A worker inherits a frozen environment, after its own functions are
+    // in place.
+    if (w.env_frozen) api.freezeEnv(l);
 
     if (w.load_error) |e| return fail(msg, gpa, e);
     const base = l.top;
@@ -620,6 +624,7 @@ fn create(l: *Thread) Error!u32 {
     w.pledges = pledge.snapshot(l) catch return l.raiseMem();
     w.environ = g.environ;
     w.warn_on = g.warn_on;
+    w.env_frozen = g.env_frozen;
     w.pause = g.pause;
 
     // The handle, rooted on the stack before the thread starts.

@@ -332,7 +332,61 @@ pub fn appendLossy(gpa: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []con
     }
 }
 
+/// Returns `bytes` when it is valid WTF-8. Otherwise returns a copy in
+/// which every byte of an invalid sequence reads `<\NNN>`, its decimal
+/// value, so messages that quote source text stay valid text. The result
+/// may be `bytes` itself, so `gpa` is meant to be an arena.
+pub fn escapeInvalid(gpa: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    if (analyze(bytes).valid) return bytes;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var i: usize = 0;
+    var prev_lead = false;
+    while (i < bytes.len) {
+        const c = bytes[i];
+        if (c < 0x80) {
+            try out.append(gpa, c);
+            i += 1;
+            prev_lead = false;
+            continue;
+        }
+        if (decodeAt(bytes, i)) |d| {
+            const is_trail = d.cp >= 0xDC00 and d.cp <= 0xDFFF;
+            if (!(is_trail and prev_lead)) {
+                try out.appendSlice(gpa, bytes[i .. i + d.len]);
+                prev_lead = d.cp >= 0xD800 and d.cp <= 0xDBFF;
+                i += d.len;
+                continue;
+            }
+        }
+        try out.print(gpa, "<\\{d}>", .{c});
+        prev_lead = false;
+        i += 1;
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+/// Length of the longest prefix of `bytes` no longer than `max` that ends
+/// on a character boundary.
+pub fn boundaryBefore(bytes: []const u8, max: usize) usize {
+    if (max >= bytes.len) return bytes.len;
+    var n = max;
+    while (n > 0 and isCont(bytes[n])) n -= 1;
+    return n;
+}
+
 const testing = std.testing;
+
+test "escapeInvalid quotes invalid bytes" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("h\u{e9}", try escapeInvalid(a, "h\u{e9}"));
+    try testing.expectEqualStrings("a<\\195>b", try escapeInvalid(a, "a\xC3b"));
+    try testing.expectEqualStrings("<\\255>\u{e9}", try escapeInvalid(a, "\xFF\u{e9}"));
+    try testing.expectEqual(@as(usize, 1), boundaryBefore("a\u{e9}", 2));
+    try testing.expectEqual(@as(usize, 3), boundaryBefore("a\u{e9}", 3));
+}
 
 test "analyze ascii and multibyte" {
     const a = analyze("hello world, this is longer than sixteen bytes");
