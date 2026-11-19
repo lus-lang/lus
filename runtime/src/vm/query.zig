@@ -34,7 +34,20 @@ const table = @import("table.zig");
 const ops = @import("ops.zig");
 const qgen = @import("../compile/query_gen.zig");
 const aux = @import("../lib/aux.zig");
-const sqlite = @import("../lib/sqlite.zig");
+// A build without SQLite (`-Dsqlite=false`) has no table references, so
+// every source is classified as memory or metamethod.
+const sqlite = if (@import("build_options").sqlite) @import("../lib/sqlite.zig") else struct {
+    const TableRefInfo = struct { name: *object.String };
+    fn toTableRef(_: *Thread, _: Value) ?TableRefInfo {
+        return null;
+    }
+    fn appendIdent(_: std.mem.Allocator, _: *std.ArrayList(u8), _: []const u8) !void {
+        unreachable;
+    }
+    fn openSelect(_: *Thread, _: TableRefInfo, _: []const u8, _: []const Value) Error!Value {
+        unreachable;
+    }
+};
 
 const Value = value.Value;
 const Thread = state.Thread;

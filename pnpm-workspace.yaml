@@ -1,6 +1,7 @@
 packages:
   - packages/site
   - packages/vscode
+  - packages/wasm
 
 onlyBuiltDependencies:
   - esbuild

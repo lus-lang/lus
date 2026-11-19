@@ -20,6 +20,15 @@ pub const Reg = struct {
     func: state.NativeFn,
 };
 
+/// True on targets that can start processes. WASI has no process
+/// creation, so `os.execute` and `io.popen` raise there.
+pub const can_spawn = @import("builtin").os.tag != .wasi;
+
+/// Raises the standard error for an operation the target lacks.
+pub fn unavailable(l: *Thread, what: []const u8) Error {
+    return l.raiseFmt("{s} is not available on this platform", .{what});
+}
+
 /// Name of the running native for error messages.
 pub fn fnName(l: *Thread) []const u8 {
     const f = l.frame();

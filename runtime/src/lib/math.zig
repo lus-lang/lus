@@ -429,7 +429,7 @@ fn setSeed(s: *[4]u64, n1: u64, n2: u64) void {
 fn makeSeed(l: *Thread) u64 {
     const ns = std.Io.Clock.real.now(l.g.io).nanoseconds;
     const t: u64 = @truncate(@as(u96, @bitCast(ns)));
-    return t ^ (@intFromPtr(l) *% 0x9E3779B97F4A7C15) ^ l.g.seed;
+    return t ^ (@as(u64, @intFromPtr(l)) *% 0x9E3779B97F4A7C15) ^ l.g.seed;
 }
 
 fn stateTable(l: *Thread) *Table {

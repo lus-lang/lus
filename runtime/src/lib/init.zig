@@ -1,5 +1,9 @@
-//! Opens the standard libraries.
+//! Opens the standard libraries. The network, worker, SQLite, and
+//! archive libraries are optional (`-Dnet`, `-Dworkers`, `-Dsqlite`,
+//! `-Darchive`). A library left out is never registered and its code is
+//! compiled out.
 
+const build_options = @import("build_options");
 const state = @import("../vm/state.zig");
 const Thread = state.Thread;
 const Error = state.Error;
@@ -14,7 +18,7 @@ pub fn openAll(l: *Thread) Error!void {
     try @import("coroutine.zig").open(l);
     try @import("debuglib.zig").open(l);
     try @import("vector.zig").open(l);
-    try @import("archive.zig").open(l);
+    if (build_options.archive) try @import("archive.zig").open(l);
     try @import("io.zig").open(l);
     try @import("json.zig").open(l);
     try @import("../vm/ext.zig").openEnums(l);
@@ -22,10 +26,10 @@ pub fn openAll(l: *Thread) Error!void {
     try @import("vector.zig").registerString(l);
     try @import("transcode.zig").register(l);
     try @import("fs.zig").open(l);
-    try @import("network.zig").open(l);
+    if (build_options.net) try @import("network.zig").open(l);
     try @import("time.zig").open(l);
     try @import("csv.zig").open(l);
-    try @import("worker.zig").open(l);
+    if (build_options.workers) try @import("worker.zig").open(l);
     // package last, so it registers the libraries above as loaded.
     try @import("package.zig").open(l);
 }
@@ -43,5 +47,5 @@ test {
     _ = @import("pack.zig");
     _ = @import("fs.zig");
     _ = @import("transcode.zig");
-    _ = @import("archive.zig");
+    if (build_options.archive) _ = @import("archive.zig");
 }

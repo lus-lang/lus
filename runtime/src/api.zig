@@ -41,7 +41,7 @@ pub fn openLibs(l: *Thread) Error!void {
 pub fn close(l: *Thread) void {
     const g = l.g;
     // Workers created by this state stop before anything is freed.
-    @import("lib/worker.zig").closeState(g);
+    if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
     if (g.ext.get("flags.compile")) |p| {
         const map: *std.StringHashMapUnmanaged(Value) = @ptrCast(@alignCast(p));
         map.deinit(g.gpa);

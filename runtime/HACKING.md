@@ -9,7 +9,10 @@ zig build test                          # unit tests
 zig build lib                           # liblus.a, the shared liblus, and lus.h
 zig build test-embed                    # the C embedding tests in ../tests/embed
 zig build test-bundle                   # `lus build` on ../tests/build
+zig build wasm                          # lus.wasm for wasm32-wasi in zig-out/wasm
 ```
+
+The libraries that need more than a plain host are optional: `-Dnet`, `-Dworkers`, `-Dsqlite`, and `-Darchive`. All four default to true, except that the WebAssembly build leaves out the network and worker libraries. A library left out is never registered (`src/lib/init.zig`) and its code is compiled out. `../packages/wasm` holds the JavaScript host for `lus.wasm` and explains how to use it.
 
 Debug builds work but run slowly, because the debug allocator records a stack trace for every allocation. Use ReleaseSafe for anything that runs real programs.
 
@@ -20,7 +23,7 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 - `src/vm`: values, objects, strings (WTF-8), tables, the collector, the interpreter, generic operations (`ops.zig`), debug information, pledge.
 - `src/lib`: the standard library, one file per module, opened from `lib/init.zig`.
 - `src/tools`: `lus test` and the other developer tools.
-- `src/api.zig`: the embedding interface used from Zig. `src/capi.zig`: the C interface declared in `include/lus.h`. `src/main.zig`: the CLI.
+- `src/api.zig`: the embedding interface used from Zig. `src/capi.zig`: the C interface declared in `include/lus.h`. `src/main.zig`: the CLI. `src/wasm.zig`: the root of the WebAssembly build, which exports the C interface.
 - `src/bundle.zig`: the payload format of standalone executables made by `lus build` (`src/tools/build.zig`).
 
 ## Writing a native function

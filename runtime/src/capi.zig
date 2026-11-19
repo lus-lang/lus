@@ -344,7 +344,7 @@ export fn lus_tobytes(l: *Thread, idx: c_int, len: ?*usize) ?[*]u8 {
 export fn lus_touserdata(l: *Thread, idx: c_int) ?*anyopaque {
     const v = at(l, idx);
     return switch (v.tag) {
-        .light => @ptrFromInt(v.payload),
+        .light => @ptrFromInt(v.address()),
         .userdata => @ptrCast(v.as(object.Userdata).data()),
         else => null,
     };
@@ -352,7 +352,7 @@ export fn lus_touserdata(l: *Thread, idx: c_int) ?*anyopaque {
 
 export fn lus_tolight(l: *Thread, idx: c_int) ?*anyopaque {
     const v = at(l, idx);
-    return if (v.tag == .light) @ptrFromInt(v.payload) else null;
+    return if (v.tag == .light) @ptrFromInt(v.address()) else null;
 }
 
 export fn lus_rawequal(l: *Thread, a: c_int, b: c_int) c_int {
@@ -445,7 +445,7 @@ export fn lus_newtable(l: *Thread, narr: c_int, nrec: c_int) c_int {
 /// pointer and the remaining upvalues belong to the C closure.
 fn trampoline(l: *Thread) Error!u32 {
     const nat = l.frame().native.?;
-    const f: lus_CFunction = @ptrFromInt(nat.upvalues()[0].payload);
+    const f: lus_CFunction = @ptrFromInt(nat.upvalues()[0].address());
     const n = f(l);
     if (n < 0) return error.LusError;
     const nres: u32 = @intCast(n);
