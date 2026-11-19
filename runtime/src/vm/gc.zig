@@ -238,19 +238,39 @@ const Marker = struct {
             },
             .values => {
                 // Keys are strong, values are weak.
+                for (t.array) |v| m.markIfValueLike(v);
                 for (t.hash) |n| {
-                    if (!n.val.isNil()) m.markValue(n.key);
+                    if (n.val.isNil()) continue;
+                    m.markValue(n.key);
+                    m.markIfValueLike(n.val);
                 }
                 m.weak.append(m.g.gpa, t) catch {};
             },
             .keys => {
                 // Ephemeron: a value is reachable only through its key.
                 for (t.array) |v| m.markValue(v);
+                for (t.hash) |n| {
+                    if (!n.val.isNil()) m.markIfValueLike(n.key);
+                }
                 m.ephemerons.append(m.g.gpa, t) catch {};
                 m.weak.append(m.g.gpa, t) catch {};
             },
-            .both => m.weak.append(m.g.gpa, t) catch {},
+            .both => {
+                for (t.array) |v| m.markIfValueLike(v);
+                for (t.hash) |n| {
+                    if (n.val.isNil()) continue;
+                    m.markIfValueLike(n.key);
+                    m.markIfValueLike(n.val);
+                }
+                m.weak.append(m.g.gpa, t) catch {};
+            },
         }
+    }
+
+    /// Strings and arbitrary-precision numbers are values, not objects,
+    /// for weak tables: they are never cleared, so they must stay alive.
+    fn markIfValueLike(m: *Marker, v: Value) void {
+        if (isValueLike(v)) m.markValue(v);
     }
 
     fn convergeEphemerons(m: *Marker) void {
@@ -311,8 +331,12 @@ fn isMarkedOrNotCollectable(v: Value) bool {
     if (!v.tag.isCollectable()) return true;
     // Strings are values for weak table purposes and never collected from
     // weak tables, as in Lua.
-    if (v.tag == .string) return true;
+    if (isValueLike(v)) return true;
     return v.header().marked;
+}
+
+fn isValueLike(v: Value) bool {
+    return v.tag == .string or v.tag == .bigint or v.tag == .decimal;
 }
 
 fn isFinalizedObject(v: Value) bool {

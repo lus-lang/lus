@@ -439,8 +439,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) try runPendingFinalizers(l);
                 const nb: usize = opc.b(ins);
                 const nc: usize = opc.c(ins);
-                const t = try l.newTable(nb, if (nc == 0) 0 else nc);
-                R.reg(l, c.base, ra).* = Value.obj(.table, t);
+                // Registers above the target are dead here, so a collection
+                // triggered by this allocation must not keep their values.
+                l.top = c.base + ra + 1;
+                const t = l.newTable(nb, if (nc == 0) 0 else nc);
+                l.top = c.base + c.cl.proto.max_stack;
+                R.reg(l, c.base, ra).* = Value.obj(.table, try t);
             },
             .self => {
                 const obj = R.reg(l, c.base, opc.b(ins)).*;
@@ -712,7 +716,10 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             },
             .closure => {
                 const p = c.cl.proto.protos[opc.bx(ins)];
-                R.reg(l, c.base, ra).* = Value.obj(.closure, try makeClosure(l, p, c.cl, c.base));
+                l.top = c.base + ra + 1;
+                const nc = makeClosure(l, p, c.cl, c.base);
+                l.top = c.base + c.cl.proto.max_stack;
+                R.reg(l, c.base, ra).* = Value.obj(.closure, try nc);
             },
             .vararg => {
                 const want: i32 = @as(i32, opc.c(ins)) - 1;
