@@ -212,7 +212,7 @@ fn promote(g: *Global, v: Value) void {
 }
 
 /// Appends `h` to a gray list, without a call while the list has room.
-inline fn pushGray(g: *Global, list: *std.ArrayList(*Header), h: *Header) void {
+inline fn pushGray(g: *Global, list: *GrayList, h: *Header) void {
     if (list.items.len < list.capacity) return list.appendAssumeCapacity(h);
     list.append(g.gpa, h) catch {
         g.gcs.overflow = true;
@@ -267,11 +267,11 @@ pub const State = struct {
     /// The heap size when the last mark phase ended.
     heap_at_mark: usize = 0,
     /// Objects marked but not traced yet.
-    gray: std.ArrayList(*Header) = .empty,
+    gray: GrayList = .empty,
     /// Black objects that a store turned gray again. In generational mode
     /// between collections, the old objects stored into since the last
     /// collection (the remembered set).
-    grayagain: std.ArrayList(*Header) = .empty,
+    grayagain: GrayList = .empty,
     weak: std.ArrayList(*object.Table) = .empty,
     /// Every weak table that the last mark phase found alive. A minor
     /// collection traces the old ones again to clear their young entries.
@@ -478,14 +478,14 @@ fn propagate(g: *Global, budget: usize) void {
     var m = Marker{ .g = g };
     while (m.work < budget) {
         if (popGray(&s.gray)) |h| {
-            m.traverse(h);
+            m.visit(h);
             continue;
         }
         // Objects that stores turned gray again are traced a couple of
         // times while the program runs, so the atomic phase finds few.
         if (s.grayagain.items.len > 0 and s.again_rounds < 2) {
             s.again_rounds += 1;
-            std.mem.swap(std.ArrayList(*Header), &s.gray, &s.grayagain);
+            std.mem.swap(GrayList, &s.gray, &s.grayagain);
             continue;
         }
         s.marked += m.work;
@@ -521,7 +521,7 @@ fn minorCollect(g: *Global) void {
     m.markRoots();
     // The remembered set: old objects stored into since the last
     // collection, and young objects promoted by large tables.
-    while (s.grayagain.pop()) |h| m.traverse(h);
+    while (s.grayagain.pop()) |h| m.traverse(@alignCast(h));
     // Old weak tables are traced again, so that their entries that
     // reference young objects are cleared or kept like in any table.
     for (s.all_weak.items) |t| {
@@ -831,17 +831,25 @@ inline fn isLeaf(tag: Tag) bool {
 /// How far below the top of the gray stack `popGray` prefetches.
 const prefetch_distance = 8;
 
+/// A gray list. Entries of the gray stack may carry `unmarked_bit`, so
+/// they are not aligned.
+pub const GrayList = std.ArrayList(*align(1) Header);
+
+/// Set in a gray stack entry whose object was not marked when it was
+/// pushed (`Marker.markValue`).
+const unmarked_bit: usize = 1;
+
 /// Pops the next gray object and prefetches the object that will be
 /// popped `prefetch_distance` pops later. Objects reach the gray stack
 /// long before they are traced, as when a large table pushes all of its
 /// elements, so the object being traced is rarely in the cache. The
 /// prefetch covers the first two cache lines, which hold the header and
 /// the parts that a small table keeps in its own cell.
-inline fn popGray(gray: *std.ArrayList(*Header)) ?*Header {
+inline fn popGray(gray: *GrayList) ?*align(1) Header {
     const n = gray.items.len;
     if (n == 0) return null;
     if (n > prefetch_distance) {
-        const ahead: [*]const u8 = @ptrCast(gray.items[n - 1 - prefetch_distance]);
+        const ahead: [*]const u8 = @ptrFromInt(@intFromPtr(gray.items[n - 1 - prefetch_distance]) & ~unmarked_bit);
         @prefetch(ahead, .{ .rw = .write });
         @prefetch(ahead + 64, .{});
     }
@@ -860,8 +868,39 @@ const Marker = struct {
     /// The object the verifier is checking.
     parent: ?*Header = null,
 
+    /// Marks a value. An object that the marker traces goes on the gray
+    /// stack unmarked, with the low bit of its address set, so that its
+    /// header is read only when it pops, after `popGray` prefetched it.
+    /// `visit` marks it then.
     fn markValue(m: *Marker, v: Value) void {
-        if (v.tag.isCollectable()) m.markObject(v.header());
+        if (!v.tag.isCollectable()) return;
+        if (m.verifying or isLeaf(v.tag)) return m.markObject(v.header());
+        const h: *align(1) Header = @ptrFromInt(v.payload | unmarked_bit);
+        const gray = &m.g.gcs.gray;
+        if (gray.items.len < gray.capacity) {
+            gray.appendAssumeCapacity(h);
+        } else {
+            gray.append(m.g.gpa, h) catch m.markObject(v.header());
+        }
+    }
+
+    /// Traces an object that popped from the gray stack. An entry with
+    /// the low bit set is an object that was not marked when it was
+    /// pushed. It is traced only if it is still unmarked, because whoever
+    /// marked it meanwhile also queued it, or it is old.
+    fn visit(m: *Marker, e: *align(1) Header) void {
+        const a = @intFromPtr(e);
+        if (a & unmarked_bit == 0) return m.traverse(@alignCast(e));
+        const h: *Header = @ptrFromInt(a & ~unmarked_bit);
+        if (h.flags.large) {
+            if (h.flags.mark) return;
+            h.flags.mark = true;
+            m.work += objectSize(h);
+        } else {
+            if (!heap.setMarkSmall(h)) return;
+            m.work += heap.pageOf(h).cell;
+        }
+        m.traverse(h);
     }
 
     fn markObject(m: *Marker, h: *Header) void {
@@ -903,9 +942,9 @@ const Marker = struct {
         const s = &m.g.gcs;
         while (true) {
             if (popGray(&s.gray)) |h| {
-                m.traverse(h);
+                m.visit(h);
             } else if (s.grayagain.pop()) |h| {
-                m.traverse(h);
+                m.traverse(@alignCast(h));
             } else break;
         }
     }
