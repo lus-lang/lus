@@ -134,6 +134,9 @@ const Cold = struct {
         /// entered with the receiver table in `t0`, and the entry of the
         /// block with a receiver that is not a table.
         method: struct { call: TableCall, chain: Label, rb: u32 },
+        /// A loop that became hot in baseline code, with the instruction
+        /// its body starts at.
+        opt_loop: u32,
         /// The helper of an array access.
         get_array: struct { t: u32, key: u32, dst: u32 },
         set_array: struct { t: u32, key: u32, v: u32 },
@@ -218,6 +221,22 @@ pub const Emitter = struct {
     /// The instruction that `step_label` runs the step routine of.
     step_pc: u32 = std.math.maxInt(u32),
     step_label: Label = 0,
+    /// Whether the code counts calls and loop iterations for the
+    /// optimizing tier.
+    count: bool = false,
+    /// Offset of the call entry behind its counter.
+    call_entry_plain: u32 = 0,
+    /// The instruction being emitted, and where its branches to other
+    /// instructions go when the optimizing tier embeds a template.
+    cur_pc: u32 = 0,
+    redirect: ?*const Redirect = null,
+
+    /// Maps a branch from the template of one instruction to the code of
+    /// another instruction onto a label of the embedding code.
+    pub const Redirect = struct {
+        ctx: *anyopaque,
+        target: *const fn (ctx: *anyopaque, from: u32, to: u32) Label,
+    };
 
     pub fn init(gpa: std.mem.Allocator, l: *Thread, p: *Proto) Emitter {
         return .{ .a = A.Assembler.init(gpa), .gpa = gpa, .p = p, .g = l.g, .lay = Layout.of(l) };
@@ -243,39 +262,10 @@ pub const Emitter = struct {
         e.reloadBp();
         a.jmpReg(A.entry_target);
 
-        e.l_status = a.newLabel();
-        e.l_dispatch = a.newLabel();
-        e.l_exit = a.newLabel();
         e.first = a.newLabels(code.len + 1);
-
-        // A step returned something other than "next". Codes up to
-        // "dispatch" continue at the saved pc of the top frame, and the
-        // others leave native code.
-        a.bind(e.l_status);
-        a.jumpIfImm(.hi, A.ret0, @intCast(Step.dispatch), e.l_exit);
-        a.bind(e.l_dispatch);
-        a.mov(A.args[0], A.thread);
-        a.call(@intFromPtr(&jit.dispatch));
-        const l_interp = a.newLabel();
-        a.jumpIfImm(.eq, A.ret0, 0, l_interp);
-        a.mov(A.base, A.ret1);
-        e.reloadBp();
-        a.jmpReg(A.ret0);
-        a.bind(l_interp);
-        a.movImm(A.ret0, Step.interpret);
-        a.bind(e.l_exit);
-        a.epilogue();
-
-        // Only a closure made by this function opens an upvalue on one
-        // of its registers, and only these two instructions mark a
-        // variable to be closed.
-        for (e.p.protos) |child| for (child.upvals) |d| {
-            if (d.in_stack and !d.by_value) e.captures = true;
-        };
-        for (code) |ins| switch (opc.op(ins)) {
-            .tbc, .tforprep => e.closes = true,
-            else => {},
-        };
+        e.statusTail();
+        e.scan();
+        e.count = jit.opt.counts(e.g);
         // The call entry runs into the first instruction.
         if (!e.p.is_vararg) {
             e.tailEntry();
@@ -315,6 +305,44 @@ pub const Emitter = struct {
         return true;
     }
 
+    /// Emits the code that a step result other than "next" or "skip"
+    /// reaches. Codes up to "dispatch" continue at the saved pc of the
+    /// top frame, and the others leave native code.
+    pub fn statusTail(e: *Emitter) void {
+        const a = &e.a;
+        e.l_status = a.newLabel();
+        e.l_dispatch = a.newLabel();
+        e.l_exit = a.newLabel();
+        a.bind(e.l_status);
+        a.jumpIfImm(.hi, A.ret0, @intCast(Step.dispatch), e.l_exit);
+        a.bind(e.l_dispatch);
+        a.mov(A.args[0], A.thread);
+        a.call(@intFromPtr(&jit.dispatch));
+        const l_interp = a.newLabel();
+        a.jumpIfImm(.eq, A.ret0, 0, l_interp);
+        a.mov(A.base, A.ret1);
+        e.reloadBp();
+        a.jmpReg(A.ret0);
+        a.bind(l_interp);
+        a.movImm(A.ret0, Step.interpret);
+        a.bind(e.l_exit);
+        a.epilogue();
+    }
+
+    /// Finds what a return of the function has to test for. Only a
+    /// closure made by this function opens an upvalue on one of its
+    /// registers, and only two instructions mark a variable to be
+    /// closed.
+    pub fn scan(e: *Emitter) void {
+        for (e.p.protos) |child| for (child.upvals) |d| {
+            if (d.in_stack and !d.by_value) e.captures = true;
+        };
+        for (e.p.code) |ins| switch (opc.op(ins)) {
+            .tbc, .tforprep => e.closes = true,
+            else => {},
+        };
+    }
+
     /// Bytes of straight-line code between two flushes of the out-of-line
     /// code. The out-of-line code of that much straight-line code is a
     /// few times larger, and the sum stays well inside the megabyte that
@@ -323,7 +351,7 @@ pub const Emitter = struct {
 
     /// Emits the out-of-line code that is pending. A block may add more
     /// of its own, which follows in the same pass.
-    fn flushCold(e: *Emitter) void {
+    pub fn flushCold(e: *Emitter) void {
         while (e.cold_next < e.cold.items.len) : (e.cold_next += 1) e.emitCold(e.cold.items[e.cold_next]);
     }
 
@@ -331,6 +359,7 @@ pub const Emitter = struct {
     // Building blocks
 
     fn at(e: *const Emitter, pc: u32) Label {
+        if (e.redirect) |r| return r.target(r.ctx, e.cur_pc, pc);
         return e.first + pc;
     }
 
@@ -345,7 +374,7 @@ pub const Emitter = struct {
 
     /// bp = stack + base * 16. Runs after anything that may have moved
     /// the stack or changed the frame.
-    fn reloadBp(e: *Emitter) void {
+    pub fn reloadBp(e: *Emitter) void {
         e.a.load64(A.bp, .{ .base = A.thread, .disp = e.lay.stack_ptr });
         e.a.addScaled(A.bp, A.bp, A.base, 4);
     }
@@ -440,8 +469,9 @@ pub const Emitter = struct {
     // -----------------------------------------------------------------
     // Instructions
 
-    fn instruction(e: *Emitter, pc: u32, ins: u32) void {
+    pub fn instruction(e: *Emitter, pc: u32, ins: u32) void {
         const a = &e.a;
+        e.cur_pc = pc;
         const o = opc.op(ins);
         const ra: u32 = opc.a(ins);
         const rb: u32 = opc.b(ins);
@@ -597,6 +627,7 @@ pub const Emitter = struct {
                     a.load64(A.t0, .{ .base = A.thread, .disp = e.lay.global });
                     a.load64(A.t0, .{ .base = A.t0, .disp = e.lay.pending });
                     a.jumpIfImm(.ne, A.t0, 0, e.coldStep(pc));
+                    e.countLoop(pc, target);
                 }
                 a.jmp(e.at(target));
             },
@@ -640,12 +671,14 @@ pub const Emitter = struct {
                 a.store64(A.t1, slot(ra));
                 a.store64(A.t1, slot(ra + 3));
                 e.storeTag(ra + 3, tag_int);
+                e.countLoop(pc, pc + 1 - opc.bx(ins));
                 a.jmp(e.at(pc + 1 - opc.bx(ins)));
             },
             .tforloop => {
                 a.load8(A.t0, tagOf(ra + 4));
                 a.jumpIfImm(.eq, A.t0, @backingInt(Tag.nil), e.at(pc + 1));
                 a.copy16(slot(ra + 2), slot(ra + 4));
+                e.countLoop(pc, pc + 1 - opc.bx(ins));
                 a.jmp(e.at(pc + 1 - opc.bx(ins)));
             },
 
@@ -752,13 +785,24 @@ pub const Emitter = struct {
     /// interpreter read it like any other frame. The fields that are the
     /// same for every lean frame sit together (`state.Frame`), so the
     /// frame takes six stores.
-    fn callEntry(e: *Emitter) void {
+    pub fn callEntry(e: *Emitter) void {
         const a = &e.a;
         const lay = e.lay;
         const max_stack: i32 = e.p.max_stack;
         const fail = a.newLabel();
         const thread: A.Reg = A.thread;
         e.call_entry = a.offset();
+        if (e.count) {
+            // A call counts toward the optimizing tier. The call that
+            // brings the counter to zero goes through the step routine,
+            // and `jit.dispatch` then compiles the function.
+            a.movImm(A.t1, @intFromPtr(&e.p.opt_hot));
+            a.load32(A.t2, .{ .base = A.t1 });
+            a.addImm(A.t2, -1);
+            a.store32(A.t2, .{ .base = A.t1 });
+            a.jumpIfZero32(A.t2, true, fail);
+        }
+        e.call_entry_plain = a.offset();
         a.load64(A.t1, .{ .base = thread, .disp = lay.global });
         a.load64(A.t1, .{ .base = A.t1, .disp = lay.pending });
         a.jumpIfImm(.ne, A.t1, 0, fail);
@@ -851,7 +895,7 @@ pub const Emitter = struct {
     /// finish action, and the address its caller continues at. The entry
     /// returns to the caller, with nothing changed, when the stack must
     /// grow.
-    fn tailEntry(e: *Emitter) void {
+    pub fn tailEntry(e: *Emitter) void {
         const a = &e.a;
         const lay = e.lay;
         const max_stack: i32 = e.p.max_stack;
@@ -898,6 +942,20 @@ pub const Emitter = struct {
         a.jmp(e.first);
         a.bind(fail);
         a.retLocal();
+    }
+
+    /// Counts an iteration of the loop that the instruction at `pc`
+    /// closes, toward the optimizing tier. When the counter reaches
+    /// zero, the runtime looks for optimized code that starts at the
+    /// first instruction of the loop, and the frame continues there.
+    fn countLoop(e: *Emitter, pc: u32, target: u32) void {
+        if (!e.count) return;
+        const a = &e.a;
+        a.movImm(A.t0, @intFromPtr(&e.p.opt_hot));
+        a.load32(A.t1, .{ .base = A.t0 });
+        a.addImm(A.t1, -1);
+        a.store32(A.t1, .{ .base = A.t0 });
+        a.jumpIfZero32(A.t1, true, e.addCold(pc, .{ .opt_loop = target }, 0));
     }
 
     /// `ret0` (n = 0) and `ret1` (n = 1) with the result in register
@@ -1332,8 +1390,16 @@ pub const Emitter = struct {
     fn emitCold(e: *Emitter, c: Cold) void {
         const a = &e.a;
         a.bind(c.entry);
+        e.cur_pc = c.pc;
         switch (c.kind) {
             .step => e.step(c.pc, false),
+            .opt_loop => |target| {
+                a.mov(A.args[0], A.thread);
+                a.movImm(A.args[1], target);
+                a.call(@intFromPtr(&jit.opt.loopEntry));
+                a.jumpIfImm(.eq, A.ret0, 0, e.at(target));
+                a.jmpReg(A.ret0);
+            },
             .arith_float => |ar| {
                 const slow = a.newLabel();
                 if (ar.y == .float or ar.op == .div) {

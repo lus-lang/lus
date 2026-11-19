@@ -51,11 +51,42 @@ pub const FReg = enum(u5) {
     v1,
     v2,
     v3,
+    v4,
+    v5,
+    v6,
+    v7,
+    v8,
+    v9,
+    v10,
+    v11,
+    v12,
+    v13,
+    v14,
+    v15,
+    v16,
+    v17,
+    v18,
+    v19,
+    v20,
+    v21,
+    v22,
+    v23,
+    v24,
+    v25,
+    v26,
+    v27,
+    v28,
+    v29,
+    v30,
+    v31,
 
     inline fn n(r: FReg) u32 {
         return @backingInt(r);
     }
 };
+
+/// The native stack pointer, as the base of a memory operand.
+pub const sp: Reg = .sp;
 
 // The registers the emitter uses. Pinned registers are callee-saved, so
 // they survive calls into the runtime.
@@ -509,6 +540,109 @@ pub const Assembler = struct {
     }
     pub fn floatToBits(a: *Assembler, dst: Reg, src: FReg) void {
         a.word(0x9E660000 | src.n() << 5 | dst.n());
+    }
+
+    pub fn fmov(a: *Assembler, dst: FReg, src: FReg) void {
+        if (dst == src) return;
+        a.word(0x1E604000 | src.n() << 5 | dst.n());
+    }
+    pub fn fneg(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E614000 | src.n() << 5 | dst.n());
+    }
+    pub fn fabs(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E60C000 | src.n() << 5 | dst.n());
+    }
+    pub fn fsqrt(a: *Assembler, dst: FReg, src: FReg) void {
+        a.word(0x1E61C000 | src.n() << 5 | dst.n());
+    }
+    /// Rounds toward minus infinity, or toward plus infinity.
+    pub fn fround(a: *Assembler, dst: FReg, src: FReg, up: bool) void {
+        a.word((if (up) @as(u32, 0x1E64C000) else 0x1E654000) | src.n() << 5 | dst.n());
+    }
+    pub const has_fround = true;
+    /// Converts a float to a signed integer, truncating.
+    pub fn floatToInt(a: *Assembler, dst: Reg, src: FReg) void {
+        a.word(0x9E780000 | src.n() << 5 | dst.n());
+    }
+
+    // Three-operand forms: dst = x op y.
+    pub fn add3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.word(0x8B000000 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn sub3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.word(0xCB000000 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn mul3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.word(0x9B007C00 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn and3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.word(0x8A000000 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn or3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.word(0xAA000000 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn xor3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.word(0xCA000000 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn fadd3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.word(0x1E602800 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn fsub3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.word(0x1E603800 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn fmul3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.word(0x1E600800 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    pub fn fdiv3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.word(0x1E601800 | y.n() << 16 | x.n() << 5 | dst.n());
+    }
+    /// dst = x + v.
+    pub fn addImm3(a: *Assembler, dst: Reg, x: Reg, v: i32) void {
+        a.lea(dst, .{ .base = x, .disp = v });
+    }
+    /// Loads and stores of the word at [b + index * 8].
+    pub fn loadIdx64(a: *Assembler, dst: Reg, b: Reg, index: Reg) void {
+        a.word(0xF8607800 | index.n() << 16 | b.n() << 5 | dst.n());
+    }
+    pub fn storeIdx64(a: *Assembler, src: Reg, b: Reg, index: Reg) void {
+        a.word(0xF8207800 | index.n() << 16 | b.n() << 5 | src.n());
+    }
+    /// dst = x mod y or the floor of x / y, rounded toward minus
+    /// infinity. The divisor is neither zero nor minus one. `tmp` is a
+    /// free register other than the operands.
+    pub fn floorDiv(a: *Assembler, dst: Reg, x: Reg, y: Reg, mod: bool, tmp: Reg, tmp2: Reg) void {
+        _ = tmp2;
+        a.word(0x9AC00C00 | y.n() << 16 | x.n() << 5 | s0.n());
+        a.word(0x9B008000 | y.n() << 16 | x.n() << 10 | s0.n() << 5 | s1.n());
+        // The truncated results are right unless the remainder is not
+        // zero and its sign differs from the sign of the divisor.
+        a.word(0xB4000000 | 4 << 5 | s1.n()); // cbz s1, +4
+        a.word(0xCA000000 | y.n() << 16 | s1.n() << 5 | tmp.n()); // eor tmp, s1, y
+        a.word(0xB6F80000 | 2 << 5 | tmp.n()); // tbz tmp, #63, +2
+        if (mod) {
+            a.word(0x8B000000 | y.n() << 16 | s1.n() << 5 | s1.n());
+        } else {
+            a.word(0xD1000400 | s0.n() << 5 | s0.n()); // sub s0, s0, #1
+        }
+        a.mov(dst, if (mod) s1 else s0);
+    }
+    /// Copies one 64-bit word.
+    pub fn copy8(a: *Assembler, dst: Mem, src: Mem) void {
+        a.load64(s0, src);
+        a.store64(s0, dst);
+    }
+    /// Loads a float constant from its bits.
+    pub fn fmovImm(a: *Assembler, dst: FReg, bits: u64) void {
+        a.movImm(s0, bits);
+        a.bitsToFloat(dst, s0);
+    }
+    /// The address of the native stack pointer plus `disp`.
+    pub fn leaSp(a: *Assembler, dst: Reg, disp: i32) void {
+        a.lea(dst, .{ .base = .sp, .disp = disp });
+    }
+    /// Moves the native stack pointer by `v` bytes.
+    pub fn moveSp(a: *Assembler, v: i32) void {
+        a.addImm(.sp, v);
     }
 
     // -----------------------------------------------------------------

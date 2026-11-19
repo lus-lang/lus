@@ -37,11 +37,26 @@ pub const FReg = enum(u4) {
     xmm1,
     xmm2,
     xmm3,
+    xmm4,
+    xmm5,
+    xmm6,
+    xmm7,
+    xmm8,
+    xmm9,
+    xmm10,
+    xmm11,
+    xmm12,
+    xmm13,
+    xmm14,
+    xmm15,
 
     inline fn n(r: FReg) u8 {
         return @backingInt(r);
     }
 };
+
+/// The native stack pointer, as the base of a memory operand.
+pub const sp: Reg = .rsp;
 
 // The registers the emitter uses. Pinned registers are callee-saved, so
 // they survive calls into the runtime.
@@ -481,6 +496,171 @@ pub const Assembler = struct {
         a.rex(true, src.n(), dst.n());
         a.bytes(&.{ 0x0F, 0x7E });
         a.modrr(src.n(), dst.n());
+    }
+
+    pub fn fmov(a: *Assembler, dst: FReg, src: FReg) void {
+        if (dst == src) return;
+        // movaps
+        a.rex(false, dst.n(), src.n());
+        a.bytes(&.{ 0x0F, 0x28 });
+        a.modrr(dst.n(), src.n());
+    }
+    /// The float scratch register of the assembler.
+    const fs0: FReg = .xmm14;
+    pub fn fneg(a: *Assembler, dst: FReg, src: FReg) void {
+        a.movImm(s0, 0x8000_0000_0000_0000);
+        a.bitsToFloat(fs0, s0);
+        a.fmov(dst, src);
+        a.sse(0x66, 0x57, dst.n(), fs0.n()); // xorpd
+    }
+    pub fn fabs(a: *Assembler, dst: FReg, src: FReg) void {
+        a.movImm(s0, 0x7FFF_FFFF_FFFF_FFFF);
+        a.bitsToFloat(fs0, s0);
+        a.fmov(dst, src);
+        a.sse(0x66, 0x54, dst.n(), fs0.n()); // andpd
+    }
+    pub fn fsqrt(a: *Assembler, dst: FReg, src: FReg) void {
+        a.sse(0xF2, 0x51, dst.n(), src.n());
+    }
+    /// This target rounds through the runtime.
+    pub fn fround(a: *Assembler, dst: FReg, src: FReg, up: bool) void {
+        _ = a;
+        _ = dst;
+        _ = src;
+        _ = up;
+        unreachable;
+    }
+    pub const has_fround = false;
+    /// Converts a float to a signed integer, truncating.
+    pub fn floatToInt(a: *Assembler, dst: Reg, src: FReg) void {
+        a.byte(0xF2);
+        a.rex(true, dst.n(), src.n());
+        a.bytes(&.{ 0x0F, 0x2C });
+        a.modrr(dst.n(), src.n());
+    }
+
+    // Three-operand forms: dst = x op y.
+    fn bin3(a: *Assembler, dst: Reg, x: Reg, y: Reg, comptime op: fn (*Assembler, Reg, Reg) void, commutes: bool) void {
+        if (dst == x) {
+            op(a, dst, y);
+        } else if (dst == y) {
+            if (commutes) {
+                op(a, dst, x);
+            } else {
+                a.mov(s0, y);
+                a.mov(dst, x);
+                op(a, dst, s0);
+            }
+        } else {
+            a.mov(dst, x);
+            op(a, dst, y);
+        }
+    }
+    pub fn add3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.bin3(dst, x, y, add, true);
+    }
+    pub fn sub3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.bin3(dst, x, y, sub, false);
+    }
+    pub fn mul3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.bin3(dst, x, y, mul, true);
+    }
+    pub fn and3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.bin3(dst, x, y, @"and", true);
+    }
+    pub fn or3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.bin3(dst, x, y, @"or", true);
+    }
+    pub fn xor3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
+        a.bin3(dst, x, y, xor, true);
+    }
+    fn fbin3(a: *Assembler, dst: FReg, x: FReg, y: FReg, comptime op: fn (*Assembler, FReg, FReg) void, commutes: bool) void {
+        if (dst == x) {
+            op(a, dst, y);
+        } else if (dst == y) {
+            if (commutes) {
+                op(a, dst, x);
+            } else {
+                a.fmov(fs0, y);
+                a.fmov(dst, x);
+                op(a, dst, fs0);
+            }
+        } else {
+            a.fmov(dst, x);
+            op(a, dst, y);
+        }
+    }
+    pub fn fadd3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.fbin3(dst, x, y, fadd, true);
+    }
+    pub fn fsub3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.fbin3(dst, x, y, fsub, false);
+    }
+    pub fn fmul3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.fbin3(dst, x, y, fmul, true);
+    }
+    pub fn fdiv3(a: *Assembler, dst: FReg, x: FReg, y: FReg) void {
+        a.fbin3(dst, x, y, fdiv, false);
+    }
+    /// dst = x + v.
+    pub fn addImm3(a: *Assembler, dst: Reg, x: Reg, v: i32) void {
+        a.lea(dst, .{ .base = x, .disp = v });
+    }
+    /// Loads and stores of the word at [b + index * 8].
+    pub fn loadIdx64(a: *Assembler, dst: Reg, b: Reg, index: Reg) void {
+        a.addScaled(s1, b, index, 3);
+        a.load64(dst, .{ .base = s1 });
+    }
+    pub fn storeIdx64(a: *Assembler, src: Reg, b: Reg, index: Reg) void {
+        a.addScaled(s1, b, index, 3);
+        a.store64(src, .{ .base = s1 });
+    }
+    /// dst = x mod y or the floor of x / y, rounded toward minus
+    /// infinity. The divisor is neither zero nor minus one. `tmp` and
+    /// `tmp2` are free registers other than rax and rdx, which the
+    /// division uses and which come back unchanged.
+    pub fn floorDiv(a: *Assembler, dst: Reg, x: Reg, y: Reg, mod: bool, tmp: Reg, tmp2: Reg) void {
+        const done = a.newLabel();
+        a.mov(s0, y);
+        a.mov(s1, x);
+        a.mov(tmp, .rax);
+        a.mov(tmp2, .rdx);
+        a.mov(.rax, s1);
+        a.bytes(&.{ 0x48, 0x99 }); // cqo
+        a.rex(true, 0, s0.n());
+        a.byte(0xF7);
+        a.modrr(7, s0.n());
+        // The truncated results are right unless the remainder is not
+        // zero and its sign differs from the sign of the divisor.
+        a.mov(s1, .rdx);
+        a.opRR(0x85, s1, s1);
+        a.jcc(0x4, done);
+        a.xor(s1, s0);
+        a.jcc(0x9, done);
+        if (mod) a.add(.rdx, s0) else a.addImm(.rax, -1);
+        a.bind(done);
+        a.mov(s1, if (mod) .rdx else .rax);
+        a.mov(.rax, tmp);
+        a.mov(.rdx, tmp2);
+        a.mov(dst, s1);
+    }
+    /// Copies one 64-bit word.
+    pub fn copy8(a: *Assembler, dst: Mem, src: Mem) void {
+        a.load64(s0, src);
+        a.store64(s0, dst);
+    }
+    /// Loads a float constant from its bits.
+    pub fn fmovImm(a: *Assembler, dst: FReg, bits: u64) void {
+        a.movImm(s0, bits);
+        a.bitsToFloat(dst, s0);
+    }
+    /// The address of the native stack pointer plus `disp`.
+    pub fn leaSp(a: *Assembler, dst: Reg, disp: i32) void {
+        a.lea(dst, .{ .base = .rsp, .disp = disp });
+    }
+    /// Moves the native stack pointer by `v` bytes.
+    pub fn moveSp(a: *Assembler, v: i32) void {
+        a.addImm(.rsp, v);
     }
 
     // -----------------------------------------------------------------
