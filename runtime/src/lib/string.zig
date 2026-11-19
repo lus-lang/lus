@@ -14,6 +14,7 @@
 //! concatenation does.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Decimal = @import("../vm/fdigits.zig").Decimal;
 const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
@@ -69,28 +70,10 @@ pub fn open(l: *Thread) Error!void {
 // ---------------------------------------------------------------------
 // Character helpers
 
-/// Number of characters in a slice of valid WTF-8: the count of bytes
-/// that are not continuation bytes.
-fn countChars(b: []const u8) usize {
-    const n_vec = 16;
-    const V = @Vector(n_vec, u8);
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i + n_vec <= b.len) : (i += n_vec) {
-        const v: V = b[i..][0..n_vec].*;
-        const cont = (v & @as(V, @splat(0xC0))) == @as(V, @splat(0x80));
-        n += n_vec - @popCount(@as(u16, @bitCast(cont)));
-    }
-    while (i < b.len) : (i += 1) {
-        if (b[i] & 0xC0 != 0x80) n += 1;
-    }
-    return n;
-}
-
 /// Characters in `b`, a slice of `s` that starts and ends on character
 /// boundaries.
 inline fn charsIn(s: *const String, b: []const u8) usize {
-    return if (s.flags.ascii) b.len else countChars(b);
+    return if (s.flags.ascii) b.len else wtf8.countChars(b);
 }
 
 /// Byte offset of the character that ends just before offset `i > 0`.
@@ -103,11 +86,27 @@ fn prevChar(src: []const u8, i: usize) usize {
 /// Creates the string `s[from..to]` (byte offsets on character
 /// boundaries). The slice is valid text, so it is not revalidated.
 fn substring(l: *Thread, s: *String, from: usize, to: usize) Error!Value {
+    return substringKnown(l, s, from, to, charsIn(s, s.bytes()[from..to]));
+}
+
+/// Creates the string `s[from..to]` whose character count is already
+/// known. A slice is ASCII exactly when it has one byte per character.
+fn substringKnown(l: *Thread, s: *String, from: usize, to: usize, chars: usize) Error!Value {
     if (from == 0 and to == s.len) return Value.obj(.string, s);
     const b = s.bytes()[from..to];
-    const chars = charsIn(s, b);
     const r = state.newStringKnown(l.g, b, chars == b.len, chars) catch return l.raiseMem();
     return Value.obj(.string, r);
+}
+
+/// Byte offset of the character at zero-based index `ci` of `s`, where
+/// `ci` may equal the character count. Long non-ASCII strings start from
+/// the nearest breadcrumb at or before `ci` and skip the remaining
+/// characters with the vectorized `wtf8.advance`.
+fn charOffset(l: *Thread, s: *String, ci: usize) usize {
+    if (s.flags.ascii) return ci;
+    if (ci >= s.chars) return s.len;
+    const k = ci - ci % String.crumb_step;
+    return wtf8.advance(s.bytes(), s.byteOffset(l.g.gpa, k), ci - k);
 }
 
 /// Translates a relative initial position (negative counts back from the
@@ -129,37 +128,51 @@ fn getEndPos(l: *Thread, i: u32, default: i64, n: usize) Error!usize {
     return @intCast(ni + pos + 1);
 }
 
+/// Size of the stack buffers that hold short results before they are
+/// copied into a new string.
+const stack_len = 512;
+
 /// Accumulates the bytes of a result string. Appending a piece that
 /// starts with a trail surrogate right after a lead surrogate joins the
 /// two into one supplementary character, so the result stays valid
-/// WTF-8.
+/// WTF-8. Short results never leave the builder's stack buffer.
 const Builder = struct {
     l: *Thread,
-    buf: std.ArrayList(u8) = .empty,
+    buf: std.ArrayList(u8),
+    first: std.heap.BufferFirstAllocator,
+    stack: [stack_len]u8,
 
-    fn init(l: *Thread) Builder {
-        return .{ .l = l };
+    /// Prepares the builder in place, because its allocator points into
+    /// its own stack buffer.
+    fn init(b: *Builder, l: *Thread) void {
+        b.l = l;
+        b.buf = .empty;
+        b.first = .init(&b.stack, l.g.gpa);
+    }
+
+    fn gpa(b: *Builder) Allocator {
+        return b.first.allocator();
     }
 
     fn deinit(b: *Builder) void {
-        b.buf.deinit(b.l.g.gpa);
+        b.buf.deinit(b.gpa());
     }
 
     fn append(b: *Builder, bytes: []const u8) Error!void {
-        const gpa = b.l.g.gpa;
+        const a = b.gpa();
         if (bytes.len >= 3 and bytes[0] == 0xED) {
             if (wtf8.leadingTrailSurrogate(bytes)) |trail| {
                 if (wtf8.trailingLeadSurrogate(b.buf.items)) |lead| {
                     b.buf.items.len -= 3;
                     var tmp: [4]u8 = undefined;
                     const n = wtf8.encode(wtf8.combineSurrogates(lead, trail), &tmp);
-                    b.buf.appendSlice(gpa, tmp[0..n]) catch return b.l.raiseMem();
-                    b.buf.appendSlice(gpa, bytes[3..]) catch return b.l.raiseMem();
+                    b.buf.appendSlice(a, tmp[0..n]) catch return b.l.raiseMem();
+                    b.buf.appendSlice(a, bytes[3..]) catch return b.l.raiseMem();
                     return;
                 }
             }
         }
-        b.buf.appendSlice(gpa, bytes) catch return b.l.raiseMem();
+        b.buf.appendSlice(a, bytes) catch return b.l.raiseMem();
     }
 
     fn appendChar(b: *Builder, cp: u21) Error!void {
@@ -169,17 +182,45 @@ const Builder = struct {
     }
 
     fn appendRepeat(b: *Builder, c: u8, n: usize) Error!void {
-        b.buf.appendNTimes(b.l.g.gpa, c, n) catch return b.l.raiseMem();
+        b.buf.appendNTimes(b.gpa(), c, n) catch return b.l.raiseMem();
     }
 
     fn print(b: *Builder, comptime fmt: []const u8, args: anytype) Error!void {
-        b.buf.print(b.l.g.gpa, fmt, args) catch return b.l.raiseMem();
+        b.buf.print(b.gpa(), fmt, args) catch return b.l.raiseMem();
     }
 
-    /// Creates the result string. Validation also computes the character
-    /// count and the ASCII flag in one vectorized pass.
+    fn reserve(b: *Builder, n: usize) Error!void {
+        b.buf.ensureTotalCapacity(b.gpa(), n) catch return b.l.raiseMem();
+    }
+
+    /// Creates the result string. Every piece appended is valid WTF-8 and
+    /// surrogate pairs are joined on the way in, so the bytes need no
+    /// validation. The ASCII flag and the character count come from
+    /// vectorized scans.
     fn finish(b: *Builder) Error!Value {
-        return b.l.newStringValue(b.buf.items);
+        const items = b.buf.items;
+        if (builtin.mode == .debug) std.debug.assert(wtf8.analyze(items).valid);
+        const ascii = wtf8.asciiPrefix(items) == items.len;
+        const chars = if (ascii) items.len else wtf8.countChars(items);
+        const r = state.newStringKnown(b.l.g, items, ascii, chars) catch return b.l.raiseMem();
+        return Value.obj(.string, r);
+    }
+};
+
+/// A temporary buffer for a result of known size that is then copied
+/// into a new string. Short results stay on the stack.
+const Scratch = struct {
+    stack: [stack_len]u8 = undefined,
+    heap: []u8 = &.{},
+
+    fn get(sc: *Scratch, l: *Thread, n: usize) Error![]u8 {
+        if (n <= stack_len) return sc.stack[0..n];
+        sc.heap = l.g.gpa.alloc(u8, n) catch return l.raiseMem();
+        return sc.heap;
+    }
+
+    fn deinit(sc: *Scratch, l: *Thread) void {
+        if (sc.heap.len > 0) l.g.gpa.free(sc.heap);
     }
 };
 
@@ -197,32 +238,48 @@ fn sub(l: *Thread) Error!u32 {
     const start = posRelat(try aux.checkInt(l, 2), n);
     const end = try getEndPos(l, 3, -1, n);
     if (start > end) return aux.retStr(l, "");
-    const gpa = l.g.gpa;
-    const from = s.byteOffset(gpa, start - 1);
-    const to = s.byteOffset(gpa, end);
-    return aux.ret(l, try substring(l, s, from, to));
+    const count = end - start + 1;
+    if (s.flags.ascii) return aux.ret(l, try substringKnown(l, s, start - 1, end, count));
+    // Find the start, then skip the characters of the result from there.
+    const from = charOffset(l, s, start - 1);
+    const to = wtf8.advance(s.bytes(), from, count);
+    return aux.ret(l, try substringKnown(l, s, from, to, count));
 }
 
 /// Maps ASCII letters with `f` and leaves every other byte unchanged.
 /// Bytes of multi-byte characters are never ASCII letters, so the
 /// character count and ASCII flag carry over.
-fn mapAscii(l: *Thread, comptime f: fn (u8) u8) Error!u32 {
+fn mapAscii(l: *Thread, comptime first: u8) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const gpa = l.g.gpa;
     const src = s.bytes();
-    const buf = gpa.alloc(u8, src.len) catch return l.raiseMem();
-    defer gpa.free(buf);
-    for (src, buf) |c, *o| o.* = f(c);
+    var sc: Scratch = .{};
+    defer sc.deinit(l);
+    const buf = try sc.get(l, src.len);
+    // Flipping bit 0x20 maps between the cases. A letter of the case
+    // being mapped is one of the 26 bytes from `first`, which a single
+    // unsigned comparison tests.
+    const vlen = 32;
+    const V = @Vector(vlen, u8);
+    var i: usize = 0;
+    while (i + vlen <= src.len) : (i += vlen) {
+        const v: V = src[i..][0..vlen].*;
+        const hit = (v -% @as(V, @splat(first))) < @as(V, @splat(26));
+        buf[i..][0..vlen].* = @select(u8, hit, v ^ @as(V, @splat(0x20)), v);
+    }
+    while (i < src.len) : (i += 1) {
+        const c = src[i];
+        buf[i] = if (c -% first < 26) c ^ 0x20 else c;
+    }
     const r = state.newStringKnown(l.g, buf, s.flags.ascii, s.chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, r));
 }
 
 fn upper(l: *Thread) Error!u32 {
-    return mapAscii(l, std.ascii.toUpper);
+    return mapAscii(l, 'a');
 }
 
 fn lower(l: *Thread) Error!u32 {
-    return mapAscii(l, std.ascii.toLower);
+    return mapAscii(l, 'A');
 }
 
 /// string.dump(f [, strip]): the binary chunk of a Lus function, as a
@@ -263,7 +320,8 @@ fn rep(l: *Thread) Error!u32 {
     // character count is known up front.
     const may_join = wtf8.leadingTrailSurrogate(sb) != null or wtf8.leadingTrailSurrogate(sepb) != null;
     if (may_join) {
-        var b = Builder.init(l);
+        var b: Builder = undefined;
+        b.init(l);
         defer b.deinit();
         var i: usize = 0;
         while (i < count) : (i += 1) {
@@ -272,9 +330,9 @@ fn rep(l: *Thread) Error!u32 {
         }
         return aux.ret(l, try b.finish());
     }
-    const gpa = l.g.gpa;
-    const buf = gpa.alloc(u8, total) catch return l.raiseMem();
-    defer gpa.free(buf);
+    var sc: Scratch = .{};
+    defer sc.deinit(l);
+    const buf = try sc.get(l, total);
     var off: usize = 0;
     var i: usize = 0;
     while (i < count) : (i += 1) {
@@ -295,9 +353,9 @@ fn reverse(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
     const src = s.bytes();
     if (s.flags.ascii) {
-        const gpa = l.g.gpa;
-        const buf = gpa.alloc(u8, src.len) catch return l.raiseMem();
-        defer gpa.free(buf);
+        var sc: Scratch = .{};
+        defer sc.deinit(l);
+        const buf = try sc.get(l, src.len);
         for (buf, 0..) |*o, i| o.* = src[src.len - 1 - i];
         const r = state.newStringKnown(l.g, buf, true, src.len) catch return l.raiseMem();
         return aux.ret(l, Value.obj(.string, r));
@@ -305,7 +363,8 @@ fn reverse(l: *Thread) Error!u32 {
     // Reversing characters can bring an unpaired trail surrogate before
     // an unpaired lead surrogate into the joining order, so go through
     // the builder.
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var end = src.len;
     while (end > 0) {
@@ -327,7 +386,11 @@ fn byte(l: *Thread) Error!u32 {
     const count = pose - posi + 1;
     try l.ensure(count);
     const src = s.bytes();
-    var off = s.byteOffset(l.g.gpa, posi - 1);
+    if (s.flags.ascii) {
+        for (src[posi - 1 ..][0..count]) |c| try l.push(Value.int(c));
+        return @intCast(count);
+    }
+    var off = charOffset(l, s, posi - 1);
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const d = wtf8.decodeValid(src, off);
@@ -339,7 +402,22 @@ fn byte(l: *Thread) Error!u32 {
 
 fn char(l: *Thread) Error!u32 {
     const n = l.argCount();
-    var b = Builder.init(l);
+    // Short runs of ASCII code points are the common case and need no
+    // surrogate joining.
+    if (n <= stack_len) {
+        var tmp: [stack_len]u8 = undefined;
+        var i: u32 = 1;
+        while (i <= n) : (i += 1) {
+            const v = l.arg(i);
+            if (v.tag != .integer or v.asInt() < 0 or v.asInt() >= 0x80) break;
+            tmp[i - 1] = @intCast(v.asInt());
+        } else {
+            const r = state.newStringKnown(l.g, tmp[0..n], true, n) catch return l.raiseMem();
+            return aux.ret(l, Value.obj(.string, r));
+        }
+    }
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var i: u32 = 1;
     while (i <= n) : (i += 1) {
@@ -448,7 +526,8 @@ fn join(l: *Thread) Error!u32 {
         .integer => lv.asInt(),
         else => ops.toIntegerStrict(lv) orelse return l.raiseFmt("object length is not an integer", .{}),
     };
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var i: i64 = 1;
     while (i <= n) : (i += 1) {
@@ -529,8 +608,8 @@ pub const Matcher = struct {
     /// Zero-based character index of byte offset `off`.
     pub fn charIndex(m: *const Matcher, off: usize) usize {
         if (m.ascii) return off;
-        if (off >= m.anchor_byte) return m.anchor_char + countChars(m.src[m.anchor_byte..off]);
-        return countChars(m.src[0..off]);
+        if (off >= m.anchor_byte) return m.anchor_char + wtf8.countChars(m.src[m.anchor_byte..off]);
+        return wtf8.countChars(m.src[0..off]);
     }
 
     /// Matches the pattern from byte `p` against the source from byte
@@ -1009,7 +1088,7 @@ fn addValue(l: *Thread, b: *Builder, str: *String, m: *Matcher, s: usize, e: usi
     }
     switch (r.tag) {
         .string => try b.append(r.as(String).bytes()),
-        .integer, .float, .bigint, .decimal => ops.numberToBuf(l.g.gpa, &b.buf, r) catch return l.raiseMem(),
+        .integer, .float, .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, r) catch return l.raiseMem(),
         else => return l.raiseFmt("invalid replacement value (a {s})", .{value.typeName(r.tag)}),
     }
     return true;
@@ -1034,7 +1113,8 @@ fn gsub(l: *Thread) Error!u32 {
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
     var m = Matcher.init(src, pat, s.flags.ascii);
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var pos: usize = 0;
     var cpos: usize = 0;
@@ -1196,7 +1276,6 @@ fn fmtInt(b: *Builder, spec: Spec, conv: u8, n: i64) Error!void {
     const negative = (conv == 'd' or conv == 'i') and n < 0;
     return fmtIntDigits(b, spec, conv, negative, digits);
 }
-
 
 /// The %e, %f, and %g conversions (and their uppercase forms).
 fn fmtFloat(b: *Builder, spec: Spec, conv: u8, f: f64) Error!void {
@@ -1374,10 +1453,10 @@ fn addLiteral(l: *Thread, b: *Builder, arg: u32) Error!void {
                 try b.append(if (f < 0) "-1e9999" else "1e9999");
             } else {
                 if (std.math.signbit(f)) try b.append("-");
-                hexFloatBody(&b.buf, l.g.gpa, f, null, false) catch return l.raiseMem();
+                hexFloatBody(&b.buf, b.gpa(), f, null, false) catch return l.raiseMem();
             }
         },
-        .bigint, .decimal => ops.numberToBuf(l.g.gpa, &b.buf, v) catch return l.raiseMem(),
+        .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, v) catch return l.raiseMem(),
         .nil, .true, .false => try b.append((try ops.toString(l, v)).bytes()),
         else => return aux.argError(l, arg, "value has no literal form", .{}),
     }
@@ -1386,7 +1465,8 @@ fn addLiteral(l: *Thread, b: *Builder, arg: u32) Error!void {
 fn format(l: *Thread) Error!u32 {
     const top = l.argCount();
     const fmt = (try aux.checkString(l, 1)).bytes();
-    var b = Builder.init(l);
+    var b: Builder = undefined;
+    b.init(l);
     defer b.deinit();
     var arg: u32 = 1;
     var i: usize = 0;
@@ -1474,7 +1554,7 @@ fn format(l: *Thread) Error!u32 {
                     var to: usize = str.len;
                     var chars: usize = str.chars;
                     if (sp.precision) |pr| if (pr < chars) {
-                        to = str.byteOffset(l.g.gpa, pr);
+                        to = charOffset(l, str, pr);
                         chars = pr;
                     };
                     try pad(&b, sp, "", str.bytes()[0..to], chars, false);
