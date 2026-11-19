@@ -84,6 +84,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, io_t, "stderr", stderr);
     try setDefault(l, "io.input", stdin);
     try setDefault(l, "io.output", stdout);
+    try @import("sqlite.zig").register(l, io_t);
     try aux.setGlobal(l, "io", Value.obj(.table, io_t));
 }
 
