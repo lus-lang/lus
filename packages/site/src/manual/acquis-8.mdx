@@ -21,6 +21,8 @@ assert(encoded == "SGVsbG8gV29ybGQ=")
 
 The function signature is `string.transcode(data, from, to [, ignorebad])`.
 
+Text encodings such as UTF-8, ASCII, base64, URL encoding, and hexadecimal produce strings. Byte encodings such as UTF-16LE and Latin-1 produce vectors, since their output is bytes rather than text. The `data` argument may be a string or a vector.
+
 ## Supported encodings
 
 ### Character encodings
@@ -38,11 +40,11 @@ string.transcode("日本語", "utf-8", "utf-16le")
 string.transcode("Hello", "utf-8", "utf-8bom")  -- prepends EF BB BF
 string.transcode("\xEF\xBB\xBFHello", "utf-8bom", "utf-8")  -- strips BOM
 
--- UTF-16LE: little-endian UTF-16
-string.transcode("A", "utf-8", "utf-16le")  -- "A\0"
+-- UTF-16LE: little-endian UTF-16, returned as a vector
+string.transcode("A", "utf-8", "utf-16le")  -- the bytes 41 00
 
--- ISO-8859-1 (Latin-1): Western European
-string.transcode("café", "utf-8", "iso-8859-1")  -- "caf\xE9"
+-- ISO-8859-1 (Latin-1): Western European, returned as a vector
+string.transcode("café", "utf-8", "iso-8859-1")  -- the bytes 63 61 66 E9
 string.transcode("café", "utf-8", "latin-1")     -- alias
 ```
 
@@ -71,7 +73,7 @@ Convert between character encodings via Unicode:
 ```lus
 -- UTF-8 to UTF-16LE
 local utf16 = string.transcode("Hello 日本", "utf-8", "utf-16le")
--- H\0e\0l\0l\0o\0 \0\xE5\x65\x2C\x67
+assert(#utf16 == 16)  -- eight UTF-16 code units of two bytes each
 
 -- UTF-16LE back to UTF-8
 local utf8 = string.transcode(utf16, "utf-16le", "utf-8")
@@ -83,7 +85,8 @@ Supplementary plane characters (emoji, rare CJK) use surrogate pairs in UTF-16LE
 ```lus
 -- 𝌆 (U+1D306) encoded as surrogate pair
 local tetragram = string.transcode("𝌆", "utf-8", "utf-16le")
-assert(tetragram == "\x34\xD8\x06\xDF")  -- D834 DF06 in little-endian
+local high, low = vector.unpack(tetragram, 0, "<I2I2")
+assert(high == 0xD834 and low == 0xDF06)
 ```
 
 ## Binary format chaining
@@ -115,10 +118,12 @@ local ok, err = catch string.transcode("日本語", "utf-8", "ascii")
 assert(not ok)
 assert(err:find("cannot be encoded as ASCII"))
 
--- Malformed UTF-8
-local ok, err = catch string.transcode("\xFF\xFE", "utf-8", "hex")
+-- Malformed UTF-8 in a vector
+local bytes = vector.create(2)
+vector.pack(bytes, 0, "BB", 0xFF, 0xFE)
+local ok, err = catch string.transcode(bytes, "utf-8", "utf-16le")
 assert(not ok)
-assert(err:find("invalid UTF-8"))
+assert(err:find("invalid UTF-8", 1, true))
 ```
 
 ## Graceful degradation with `ignorebad`
@@ -132,11 +137,13 @@ assert(result == "Hello ")
 
 -- Skip non-Latin1 characters
 local result = string.transcode("€100", "utf-8", "iso-8859-1", true)
-assert(result == "100")  -- € (U+20AC) not in Latin-1
+assert(vector.tostring(result) == "100")  -- € (U+20AC) not in Latin-1
 
 -- Skip malformed input
-local result = string.transcode("valid\xFF\xFEtext", "utf-8", "hex", true)
-assert(result == "76616c6964text")  -- skips bad bytes
+local bytes = vector.fromstring("valid--text")
+vector.pack(bytes, 5, "BB", 0xFF, 0xFE)
+local result = string.transcode(bytes, "utf-8", "utf-8", true)
+assert(result == "validtext")  -- skips bad bytes
 ```
 
 ## Real-world examples
@@ -204,7 +211,7 @@ local text = readLatin1File("legacy_document.txt")
 
 ## Motivation
 
-Lus strings are raw byte buffers with no inherent encoding. While flexible, this creates challenges when working with external systems that expect specific text representations.
+Lus strings hold text, and vectors hold raw bytes. External systems expect specific representations of both, so programs need a direct way to move between them.
 
 ### Web API integration
 

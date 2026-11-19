@@ -2,7 +2,7 @@
 -- playground: false
 -- cookbook: true
 
-global network, pledge, print
+global network, pledge, print, vector
 
 pledge("network", "seal")
 
@@ -11,12 +11,13 @@ local address, port = server:getsockname()
 print(`HTTP server listening on http://$address:$port`)
 
 while client <close> = server:accept() do
+    -- Network reads return vectors of bytes, which vector.tostring decodes.
     local request_line = client:receive("*l", 8192)
     if request_line then
-        print("Request: " .. request_line)
+        print("Request: " .. vector.tostring(request_line))
         repeat
             local header = client:receive("*l", 8192)
-        until not header or header == ""
+        until not header or #header == 0
 
         local body = "<h1>Hello world from Lus!</h1>"
         local response = "HTTP/1.1 200 OK\r\n"

@@ -126,7 +126,7 @@ Tables and strings can be sliced with a two-argument index syntax, returning a n
 ```lus
 local t = {10, 20, 30, 40, 50}
 local sub = t[2, 4]     -- {20, 30, 40}
-local s = "hello"[2, 4] -- "ell"
+local s = ("hello")[2, 4] -- "ell"
 ```
 
 See [Slices](/manual/guide#slices) and [Acquis 16](/manual/acquis-16).
@@ -226,8 +226,8 @@ See [JSON](/manual/guide#json) and [Acquis 6](/manual/acquis-6).
 The `fs` library provides file and directory operations. Requires `pledge("fs")`.
 
 ```lus
-local contents = fs.read("config.txt")
 local entries = fs.list(".")
+local kind = fs.type("config.txt") -- "file", "directory", or nil
 ```
 
 See [Filesystem](/manual/guide#filesystem) and [Acquis 7](/manual/acquis-7).
@@ -237,7 +237,7 @@ See [Filesystem](/manual/guide#filesystem) and [Acquis 7](/manual/acquis-7).
 The `network` library provides HTTP, TCP, and UDP support. Requires `pledge("network")`.
 
 ```lus
-local res = network.http("https://example.com")
+local status, body = network.fetch("https://example.com")
 ```
 
 See [Networking](/manual/guide#networking) and [Acquis 9](/manual/acquis-9).

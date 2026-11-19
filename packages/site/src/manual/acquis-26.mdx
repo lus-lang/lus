@@ -5,7 +5,7 @@ acquis: true
 shortdesc: "Compression and decompression via the vector.archive module, supporting gzip, deflate, zstd, brotli, and lz4."
 ---
 
-The `vector.archive` module provides compression and decompression using five industry-standard algorithms. All functions accept strings or vector buffers as input and return the matching type.
+The `vector.archive` module provides compression and decompression using five industry-standard algorithms. All functions accept a string or a vector as input and return a vector, since compressed and decompressed data are bytes. `vector.tostring` turns decompressed text back into a string.
 
 ## Gzip
 
@@ -14,7 +14,7 @@ Compress and decompress using gzip format (deflate with gzip header, per RFC 195
 ```lus
 local compressed = vector.archive.gzip.compress("hello world", 6)
 local original = vector.archive.gzip.decompress(compressed)
-assert(original == "hello world")
+assert(vector.tostring(original) == "hello world")
 
 -- Vector buffers
 local buf = vector.create(11)
@@ -81,18 +81,19 @@ local better = vector.archive.lz4.compress("data", 10)
 
 The `level` parameter (1-12, default 1) controls the speed-ratio trade-off. LZ4 prioritizes speed over compression ratio.
 
-## Type preservation
+## Result type
 
-All functions preserve the input type. A string input returns a string, and a vector input returns a vector.
+Every function returns a vector, whether its input is a string or a vector.
 
 ```lus
 local s = vector.archive.gzip.compress("string input")
-assert(type(s) == "string")
+assert(type(s) == "vector")
 
 local buf = vector.create(12)
 vector.pack(buf, 0, "c12", "vector input")
 local v = vector.archive.gzip.compress(buf)
 assert(type(v) == "vector")
+assert(vector.tostring(vector.archive.gzip.decompress(v)) == "vector input")
 ```
 
 ## Error handling
