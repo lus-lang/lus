@@ -4,7 +4,7 @@
 
 **Release date:** TBD
 
-Lus 2.0 is a new runtime written in Zig. It keeps every language feature and library of 1.7 and runs the same scripts, permissions, and command line pledges.
+Lus 2.0 is a new runtime written in Zig. It keeps every language feature and library of 1.6 and runs the same scripts, permissions, and command line pledges, apart from the removals listed below.
 
 ### Language
 
@@ -19,6 +19,14 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Files opened in text mode validate what they read, and the option `{ lossy = true }` of `io.open` replaces invalid sequences with U+FFFD. Files opened in binary mode read vectors.
 - `load` accepts a vector produced by `string.dump` as a binary chunk.
 - Interpolating a vector raises an error that points to `vector.tostring`.
+- Added queries. The `@` expression builds a lazy query value with the contextual clauses `where`, `select distinct`, `group by`, `having`, `order by`, `limit`, and `offset`. The `query` iterator runs it over plain tables in memory or pushes it down to SQLite as parameterized SQL, and `debug.queryplan` renders the provider and push-down decisions of a query as a string.
+- Added the read-only `flags` table, populated from the `-F name[=value]` and `--flag` options, and folded at compile time in `if flags.x then` conditions.
+- Added the `time` module with immutable `instant`, `duration`, and `zoned` types, which keep exact instant arithmetic separate from calendar arithmetic. `zoned:with{}` replaces fields and `zoned:add{}` adds calendar amounts with day clamping, both correct across daylight saving changes. `time.parse` reads ISO 8601 strings and explicit `strftime` patterns.
+- Added time zones to the `time` module, resolved from an IANA tzdata database embedded in the runtime: named zones (`time.zone`), fixed offsets (`time.offset`), and the system zone (`time.localzone`), all without filesystem access. The trailing POSIX rule keeps offsets correct past the last explicit transition.
+- Added the `time.weekday` and `time.month` enums. `zoned.weekday` is a weekday member, and a month member is accepted wherever a month number is.
+- Added `io.sqlite`, an embedded SQLite database with prepared statements, placeholder-only parameter binding, transactions, WAL journaling, and pledge-checked file access that covers the sidecar files.
+- Added `getsockname` to TCP sockets, TCP servers, and UDP sockets, so code that binds port `0` can discover the selected address and port.
+- TCP line and all-data receives are bounded. Lines default to 1 MiB and all-data reads to 64 MiB, and the optional `max_bytes` argument sets the limit per call.
 
 ### Tools
 
@@ -31,6 +39,8 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Added `lus debug`, a Debug Adapter Protocol server with conditional breakpoints, hit counts, log points, error breakpoints, stepping through coroutines, pausing, and inspection of locals, upvalues, globals, and expressions. The VS Code extension registers it as the `lus` debugger.
 - Added `lus compile`, which writes a script as a binary chunk, with `-o`, `-s`, and `-F`.
 - Added `--dis`, which prints the bytecode of a script.
+- `--include path[:alias]` compiles modules at startup, so `require` loads them without the `load` or `fs` pledges.
+- The browser playground runs programs in a dedicated Web Worker with a five-second execution limit and a 256 KiB output limit.
 - The language server reports its version as `2.0.0-dev`.
 
 ### Embedding
@@ -59,82 +69,6 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Removed `LUA_INIT` and the `LUA_PATH` family of environment variables. `-e`, `-l`, and `LUS_PATH` cover them.
 - Removed the `lusc` compiler and the `--standalone`, `--ast-json`, `--ast-graph`, `-Wpedantic`, `--no-fastcall`, and `--strip-debug` options, and the `lus format` command. `string.dump`, `lus build`, `lus ast`, `lus check`, and `lus fmt` cover them.
 - Removed the `lua.h`, `lauxlib.h`, and `lualib.h` embedding headers. `lus.h` is the embedding interface.
-
-## 1.7.0 (**WIP**)
-
-**Release date:** TBD
-
-- Added the `time` module with immutable `instant`, `duration`, and `zoned` types, keeping exact instant arithmetic separate from calendar arithmetic.
-- Added DST-aware time zones to the `time` module, resolved from an IANA tzdata database embedded in the runtime, with named zones (`time.zone`), fixed offsets (`time.offset`), and system-local detection (`time.localzone`) requiring no filesystem access. The trailing POSIX rule keeps offsets correct past the last explicit transition.
-- Added DST-correct calendar arithmetic to the `time` module through `zoned:with{}` (field replacement) and `zoned:add{}` (calendar amounts with day clamping).
-- Added `time.parse` for ISO 8601 strings and explicit `strftime`-style patterns.
-- Added first-class `time.weekday` and `time.month` enums. `zoned.weekday` returns a weekday enum value, and a month enum is accepted anywhere a month integer is.
-- `--include path[:alias]` now compiles modules at startup so `require` loads them without `load` or `fs` pledges.
-- Preincluded module requires are optimized to the new `OP_REQUIRE` instruction in most circumstances under a readonly environment.
-- Added the readonly `flags` table, populated from `--flag`/`-F name[=value]` arguments and resolved at compile time in `if flags.x then` conditions.
-- Added `io.sqlite`, an embedded SQLite database with prepared statements, placeholder-only parameter binding, transactions, WAL journaling, and pledge-gated file access covering the sidecar files.
-- Added queries: the new `@` expression builds a first-class lazy query value with contextual `where`, `select distinct`, `group by`, `having`, `order by`, `limit`, and `offset` clauses, runs over plain tables in memory or pushes down to SQLite as parameterized SQL, and is consumed with the new `query` iterator.
-- Added `debug.queryplan`, which renders a query's provider and push-down decisions as a string.
-- The C API gains `LUA_TQUERY` with `lus_toquery`, `lus_isquery`, a visitor over query sources, clauses, and expression nodes, and `lus_setqueryprovider` for registering native query providers, plus `lus_tosqlite` for the embedded SQLite connection.
-- The worker C API now exposes `WorkerState` as an opaque handle in `lua.h`, with explicit `lus_worker_retain` and `lus_worker_release` ownership.
-- Added `getsockname` to TCP servers and UDP sockets so code that binds port `0` can discover the selected address and port.
-- Added bounded TCP line and all-data receives. Lines default to 1 MiB, all-data reads default to 64 MiB, and either limit can be set per call.
-- The browser playground now runs programs in a dedicated Web Worker with a five-second execution limit and a 256 KiB output limit.
-- Release CI now assembles a canonical asset inventory with test and toolchain evidence, creates unstable prereleases from complete `main` builds, and creates draft candidates from version tags for maintainer review.
-- Made `tojson` ~4x faster on large documents by serializing into a single contiguous buffer instead of one Lua string per output piece.
-- Made `tocsv` serialize into a single contiguous buffer instead of one Lua string per field, delimiter, and newline.
-- Enum value accesses are now interned and no longer allocate a new object every time.
-- `vector.resize` now grows capacity geometrically, making grow-by-one append loops O(n) amortized instead of O(n²).
-- `network.fetch` now reads response headers in buffered chunks instead of one byte per system call.
-- Vector-returning archive compression and decompression no longer copy the whole output through a temporary Lua string, reducing peak memory.
-- Allocating fastcalls now give the garbage collector a step, so tight loops that allocate only through fastcall builtins no longer defer collection indefinitely.
-- Gave do-expressions a runtime multi-value protocol through the new `OP_PROVIDE` and `OP_ENDDO` instructions, fixing dropped table constructor entries, duplicated and shifted `provide` values, empty multi-value returns, and internal stack slots leaking into user code.
-- Fixed `load`, `debug.parse`, and other internally-protected C calls having their errors hijacked by an enclosing `catch` block, which broke their return values and leaked their internal resources.
-- Fixed the JSON parser leaking its container stack on parse errors raised from helper functions.
-- Fixed a worker blocked in `worker.peek()` on an empty inbox hanging interpreter shutdown forever.
-- Fixed `worker.send`, `worker.message`, and `worker.create` leaking their serialization arena and raising a garbage error value when given a non-serializable value.
-- Fixed a use-after-free window where an emergency collection during vector creation could sweep the still-unreachable vector.
-- Fixed `network.fetch` leaking the socket and TLS handle when a Lua error unwound mid-request.
-- Fixed pledge glob matching backtracking exponentially on wildcard-heavy patterns, a denial-of-service vector through attacker-influenced paths, hosts, and URLs.
-- Fixed an out-of-memory during worker pledge inheritance aborting the whole process.
-- Fixed unchecked allocations in the worker library and a leaked array when `worker.receive` is passed an invalid handle.
-- Fixed fastcall registration racing on a process-wide table when worker threads open libraries concurrently.
-- Fixed bundle loading trusting crafted executable offsets that could underflow the data-offset computation.
-- Fixed 32-bit size overflows in archive buffer sizing, `vector.create`/`vector.resize` capacity casts, and enum-root allocation.
-- Fixed the `worker.peek` shutdown wakeup being swallowed by a `catch` retry loop, which could still hang interpreter exit at 100% CPU.
-- Fixed `lua_pcallk` continuations having their errors intercepted by an enclosing `catch` block, the same defect previously fixed for `lua_pcall`.
-- Fixed `tojson` corrupting interpreter memory or crashing on deeply nested tables. Extreme nesting now raises a catchable error.
-- Fixed a NULL write when an embedder creates a zero-member enum via `lua_pushenum`. Such enums are now rejected with an error.
-- Fixed `require` failing to cache modules under `--readonly-env` because the environment freeze wrongly included `package.loaded`.
-- Fixed workers crashing at startup under `--readonly-env` when the runtime registered `worker.message`/`worker.peek` into the frozen module table.
-- Fixed `catch` over a call returning zero results leaking a stale stack slot, often the called function itself, as a caught value instead of nil.
-- Fixed an error raised by a `__close` handler while `catch` unwound to-be-closed variables escaping the catch and aborting the process.
-- Fixed `catch` reporting a `__close` method or the closed object instead of the original error when to-be-closed variables ran during unwinding.
-- Fixed `coroutine.yield` inside a `catch` block being swallowed as a caught error, which corrupted the coroutine and crashed the interpreter on a later resume.
-- Fixed `catch` in the main thread receiving traceback-decorated strings instead of the raw error value.
-- Fixed out-of-memory errors caught by `catch` delivering a garbage stack value instead of the "not enough memory" message.
-- Fixed locals declared inside a do-expression reading as nil or as unrelated values when the expression appears inside string interpolation, call arguments, or other positions with live temporaries below it.
-- Fixed a function call used as a slice bound miscompiling the slice.
-- Fixed duplicate enum member names being silently accepted instead of raising a compile error.
-- Fixed `global` declarations with a `<group>` attribute producing an internal error instead of a proper diagnostic.
-- Fixed runtime attribute handlers never running on `<const>` locals initialized with compile-time constants.
-- Fixed the `math.max` and `math.min` fastcalls inverting NaN handling, losing the integer subtype of the winning operand, and picking the wrong operand on signed-zero ties and values past 2^53.
-- Fixed the `string.byte` fastcall returning a clamped first byte where the C function returns nothing for out-of-range positions.
-- Fixed the `math.tointeger` fastcall returning nil for integer-valued numeric strings instead of coercing them like the C function.
-- Fixed the `table.sum`, `table.mean`, `table.median`, and `table.stdev` fastcalls skipping numeric strings and ignoring metatables instead of deferring to the C path.
-- Fixed `return f(x)` truncating fastcall builtins that can return other than one value, such as `utf8.offset`, `utf8.len`, out-of-range `string.byte`, and `vector.resize`.
-- Fixed deeply nested and cyclic tables sent to a worker crashing the process on either side of the transfer instead of failing cleanly at the documented nesting cap.
-- Fixed closing a worker's interpreter state tearing down the process-wide worker pool, which crashed or hung interpreter exit when a worker handle was collected while its worker was still running.
-- Fixed `%z` in time formatting printing the host's UTC offset instead of the formatted value's own offset.
-- Fixed `vector.archive.lz4.decompress_hc` sharing the modern-frame decoder and rejecting every legacy LZ4 frame.
-- Fixed `debug.format` dropping the `...` from named vararg parameters.
-- Fixed `debug.format` rendering floats with too few digits and re-emitting whole-number floats as integer literals.
-- Fixed `debug.format` emitting the minimum integer as a decimal literal that reparses as a float.
-- Fixed the language server's selection ranges never producing a chain of enclosing parents and ordering nodes arbitrarily on single-line documents.
-- Fixed the `os.platform` documentation using `macos` as the Apple identifier when the function returns the uname-style `darwin`.
-- Fixed the `getmetatable` fastcall reading the type-wide metatable slot for userdata instead of the object's own metatable.
-- Fixed a second `network.tcp.bind` on a live port succeeding on Windows instead of reporting the address in use by binding with the exclusive-use socket option there.
-- Fixed `fs.follow` on Windows resolving the link and returning an absolute final path instead of the stored target, failing on dangling links, and accepting regular files.
 
 ## 1.6.2
 
