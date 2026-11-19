@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) void {
 
     const requested: Features = .{
         .gc_stress = b.option(u32, "gc-stress", "Collect at every Nth allocation point to expose missing roots (0 disables)") orelse 0,
+        .gc_verify = b.option(bool, "gc-verify", "Check the tri-color invariant and barrier coverage after every mark phase") orelse false,
         .net = b.option(bool, "net", "Include the network library (default: true, false on WebAssembly)"),
         .sqlite = b.option(bool, "sqlite", "Include SQLite (default: true)"),
         .workers = b.option(bool, "workers", "Include the worker library (default: true, false on WebAssembly)"),
@@ -210,6 +211,7 @@ fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
 /// threads that WASI does not provide.
 const Features = struct {
     gc_stress: u32 = 0,
+    gc_verify: bool = false,
     net: ?bool = null,
     sqlite: ?bool = null,
     workers: ?bool = null,
@@ -231,6 +233,7 @@ const Features = struct {
         const r = f.forTarget(target);
         const options = b.addOptions();
         options.addOption(u32, "gc_stress", f.gc_stress);
+        options.addOption(bool, "gc_verify", f.gc_verify);
         options.addOption(bool, "net", r.net);
         options.addOption(bool, "sqlite", r.sqlite);
         options.addOption(bool, "workers", r.workers);

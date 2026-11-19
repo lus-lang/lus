@@ -53,8 +53,11 @@ pub fn open(l: *Thread) Error!void {
     try aux.setFuncs(l, globals, &funcs);
     try aux.setField(l, globals, "_G", g.globals);
     try aux.setField(l, globals, "_VERSION", try l.newStringValue("Lus 2.0"));
-    // `range` is recognized by the numeric loop lowering.
+    // `range` is recognized by the numeric loop lowering, which compares
+    // natives by address, so the builtin is fixed and its address is never
+    // reused.
     const r = try aux.getField(l, globals, "range");
+    g.fixed.append(g.gpa, r.header()) catch return l.raiseMem();
     g.ext.put(g.gpa, "range", @ptrFromInt(r.address())) catch return l.raiseMem();
 }
 
@@ -391,15 +394,14 @@ fn collectgarbage(l: *Thread) Error!u32 {
         },
         3 => return aux.ret(l, Value.float(@as(f64, @floatFromInt(g.counter.bytes)) / 1024.0)),
         4 => {
-            gc.fullCollect(g);
+            const done = gc.stepCollect(g, try aux.optInt(l, 2, 0));
             try runFinalizers(l);
-            return aux.retBool(l, true);
+            return aux.retBool(l, done);
         },
         5 => return aux.retBool(l, !g.gc_stopped),
         6, 7 => {
-            const prev: []const u8 = if (g.gc_generational) "generational" else "incremental";
-            g.gc_generational = o == 6;
-            return aux.retStr(l, prev);
+            const prev = gc.setMode(g, if (o == 6) .generational else .incremental);
+            return aux.retStr(l, @tagName(prev));
         },
         8 => {
             const p = try aux.checkOption(l, 2, null, std.meta.fieldNames(gc.Param));
@@ -503,7 +505,10 @@ fn load(l: *Thread) Error!u32 {
     };
     if (env_given) {
         const cl = l.stack[l.top - 1].as(object.Closure);
-        if (cl.nupvals > 0) cl.upvals()[0].closed = env;
+        if (cl.nupvals > 0) {
+            cl.upvals()[0].closed = env;
+            gc.barrierBack(l.g, &cl.upvals()[0].hdr);
+        }
     }
     return 1;
 }
@@ -562,7 +567,10 @@ fn loadfile(l: *Thread) Error!u32 {
     };
     if (l.hasArg(3)) {
         const cl = l.stack[l.top - 1].as(object.Closure);
-        if (cl.nupvals > 0) cl.upvals()[0].closed = l.arg(3);
+        if (cl.nupvals > 0) {
+            cl.upvals()[0].closed = l.arg(3);
+            gc.barrierBack(l.g, &cl.upvals()[0].hdr);
+        }
     }
     return 1;
 }

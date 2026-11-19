@@ -107,7 +107,7 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         else => {},
     }
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
-    if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierBack(l.g, &t.hdr);
+    if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
 
 // ---------------------------------------------------------------------

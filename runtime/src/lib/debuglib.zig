@@ -17,6 +17,7 @@ const Error = state.Error;
 const Table = object.Table;
 const String = object.String;
 const Closure = object.Closure;
+const gc = @import("../vm/gc.zig");
 
 pub const funcs = [_]aux.Reg{
     .{ .name = "traceback", .func = traceback },
@@ -258,6 +259,13 @@ fn setupvalue(l: *Thread) Error!u32 {
     _ = try aux.checkAny(l, 3);
     const u = (try upvalueOf(l, 1, 2)) orelse return 0;
     u[1].* = l.arg(3);
+    // The value lives in an upvalue object or in the native itself.
+    const f = l.arg(1);
+    const n: usize = @intCast(try aux.checkInt(l, 2));
+    switch (f.tag) {
+        .closure => gc.barrierBack(l.g, &f.as(Closure).upvals()[n - 1].hdr),
+        else => gc.barrierBack(l.g, f.header()),
+    }
     return aux.retStr(l, u[0]);
 }
 
@@ -284,6 +292,7 @@ fn upvaluejoin(l: *Thread) Error!u32 {
     if (n1 < 1 or n1 > c1.nupvals) return aux.argError(l, 2, "invalid upvalue index", .{});
     if (n2 < 1 or n2 > c2.nupvals) return aux.argError(l, 4, "invalid upvalue index", .{});
     c1.upvals()[@intCast(n1 - 1)] = c2.upvals()[@intCast(n2 - 1)];
+    gc.barrierBack(l.g, &c1.hdr);
     return 0;
 }
 
@@ -303,6 +312,7 @@ fn setmetatable(l: *Thread) Error!u32 {
         .userdata => v.as(object.Userdata).metatable = mt,
         else => l.g.type_metatables[value.typeSlot(v.tag)] = mt,
     }
+    if (v.tag == .table or v.tag == .userdata) gc.barrierBack(l.g, v.header());
     return aux.ret(l, v);
 }
 
@@ -327,6 +337,7 @@ fn hookTable(l: *Thread) Error!*Table {
     try aux.setField(l, reg, hook_key, Value.obj(.table, t));
     try aux.setField(l, t, "__mode", try l.newStringValue("k"));
     t.metatable = t;
+    gc.barrierBack(l.g, &t.hdr);
     return t;
 }
 
@@ -432,6 +443,7 @@ fn setuservalue(l: *Thread) Error!u32 {
     const vals = l.arg(1).as(object.Userdata).userValues();
     if (n < 1 or n > vals.len) return aux.retNil(l);
     vals[@intCast(n - 1)] = v;
+    gc.barrierBack(l.g, l.arg(1).header());
     return aux.ret(l, l.arg(1));
 }
 

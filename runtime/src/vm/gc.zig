@@ -1,17 +1,24 @@
-//! Garbage collector. Stage one of the plan: a precise, non-moving,
-//! stop-the-world mark and sweep with full weak table, ephemeron, and
-//! finalizer semantics. Allocation and barrier entry points are the ones
-//! the incremental and generational stages keep, so the interpreter never
-//! has to change when the collector does.
+//! Garbage collector. A precise, non-moving mark and sweep over the page
+//! heap of `heap.zig`, with full weak table, ephemeron, and finalizer
+//! semantics. Marking sets a bit in the mark bitmap of the page of an
+//! object (or in the header of a large object). Sweeping is lazy: the
+//! allocator sweeps a page when it reaches it, and collector steps sweep
+//! the pages that the allocator does not reach. Incremental mode
+//! interleaves tri-color marking with the program under a goal-based
+//! pacer. Generational mode keeps marks between collections, so marked
+//! objects are old and minor collections trace only young ones. The
+//! design is described in `spec/design/gc.md`.
 
 const std = @import("std");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const state_mod = @import("state.zig");
+const heap = @import("heap.zig");
 const Value = value.Value;
 const Tag = value.Tag;
 const Global = state_mod.Global;
 const Thread = state_mod.Thread;
+const Allocator = std.mem.Allocator;
 
 pub const Header = struct {
     /// Every object starts with its header, and a header pointer converts
@@ -21,14 +28,25 @@ pub const Header = struct {
     /// targets (wasm32) 16-byte alignment puts the header ahead of the
     /// 8-byte values and integers, and it keeps the values that trail a
     /// native or a userdata aligned.
-    next: ?*Header align(if (@sizeOf(usize) == 8) 8 else 16) = null,
-    tag: Tag,
-    marked: bool = false,
+    tag: Tag align(if (@sizeOf(usize) == 8) 8 else 16),
+    flags: Flags = .{},
     /// Set on objects that wait for (or already ran) their finalizer.
     finalize: Finalize = .none,
-    /// The barrier bit of the plan. Set while an object is marked, so
-    /// stores into marked objects take the slow path during a cycle.
-    barrier: bool = false,
+
+    pub const Flags = packed struct(u8) {
+        /// Set while the object is black: marked and traced in the
+        /// current collection. A store into an object with the bit set
+        /// takes the slow path of the write barrier.
+        barrier: bool = false,
+        /// Set on free cells of a page.
+        free: bool = false,
+        /// Set on objects allocated outside the pages.
+        large: bool = false,
+        /// The mark bit of a large object. Small objects keep theirs in
+        /// the bitmap of their page.
+        mark: bool = false,
+        _pad: u4 = 0,
+    };
 
     pub const Finalize = enum(u8) { none, pending, done };
 
@@ -37,16 +55,37 @@ pub const Header = struct {
     }
 };
 
-/// Allocates a zeroed object of type `T` with `extra` trailing bytes and
-/// links it into the heap. The caller initializes the fields.
-pub fn alloc(g: *Global, comptime T: type, tag: Tag, size: usize) !*T {
+/// Objects that hold no references live in leaf pages.
+fn kindOf(comptime tag: Tag) heap.Kind {
+    return switch (tag) {
+        .string, .bigint, .decimal, .vector => .leaf,
+        else => .scan,
+    };
+}
+
+inline fn allocMem(g: *Global, comptime tag: Tag, size: usize) Allocator.Error![*]u8 {
+    if (size <= heap.max_small) return heap.allocSmall(g, comptime kindOf(tag), size);
+    return heap.allocLarge(g, size);
+}
+
+/// Allocates a zeroed object of type `T` with `size` bytes in total. The
+/// caller initializes the fields.
+pub inline fn alloc(g: *Global, comptime T: type, comptime tag: Tag, size: usize) Allocator.Error!*T {
+    const mem = try allocMem(g, tag, size);
+    @memset(mem[0..size], 0);
+    return initHeader(T, tag, mem, size);
+}
+
+/// Allocates an object without clearing it, for callers that initialize
+/// every field before anything else can observe the object.
+pub inline fn allocUninit(g: *Global, comptime T: type, comptime tag: Tag, size: usize) Allocator.Error!*T {
+    return initHeader(T, tag, try allocMem(g, tag, size), size);
+}
+
+inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usize) *T {
     comptime std.debug.assert(@offsetOf(T, "hdr") == 0);
-    const mem = try g.gpa.alignedAlloc(u8, .of(T), size);
-    @memset(mem, 0);
-    const obj: *T = @ptrCast(@alignCast(mem.ptr));
-    obj.hdr = .{ .tag = tag, .next = g.all_objects };
-    g.all_objects = &obj.hdr;
-    g.object_count += 1;
+    const obj: *T = @ptrCast(@alignCast(mem));
+    obj.hdr = .{ .tag = tag, .flags = .{ .large = size > heap.max_small } };
     return obj;
 }
 
@@ -65,9 +104,10 @@ pub fn objectSize(h: *Header) usize {
     };
 }
 
-fn freeObject(g: *Global, h: *Header) void {
+/// Releases what a dead object owns outside its cell. The cell itself
+/// goes back to its page, or the large object to the backing allocator.
+pub fn releaseObject(g: *Global, h: *Header) void {
     const gpa = g.gpa;
-    const size = objectSize(h);
     switch (h.tag) {
         .string => {
             const s = h.as(object.String);
@@ -91,101 +131,700 @@ fn freeObject(g: *Global, h: *Header) void {
         },
         else => state_mod.freeExtra(g, h),
     }
-    const base: [*]u8 = @ptrCast(h);
-    g.object_count -|= 1;
-    // Every object was allocated with the alignment of its own type, which
-    // is at most 16, so freeing with a 16-aligned slice of the same length
-    // is valid for the general purpose allocator.
-    gpa.rawFree(base[0..size], alignOf(h.tag), @returnAddress());
 }
 
-fn alignOf(tag: Tag) std.mem.Alignment {
-    return switch (tag) {
-        .string => .of(object.String),
-        .table => .of(object.Table),
-        .closure => .of(object.Closure),
-        .native => .of(state_mod.Native),
-        .userdata => .of(object.Userdata),
-        .thread => .of(Thread),
-        .vector => .of(object.Vector),
-        .enum_root => .of(object.EnumRoot),
-        .enum_value => .of(object.EnumValue),
-        else => state_mod.extraAlign(tag),
-    };
+pub inline fn isMarked(h: *const Header) bool {
+    if (h.flags.large) return h.flags.mark;
+    return heap.isMarkedSmall(h);
+}
+
+/// Sets the mark of an object and returns true when it was clear.
+inline fn setMark(h: *Header) bool {
+    if (h.flags.large) {
+        if (h.flags.mark) return false;
+        h.flags.mark = true;
+        return true;
+    }
+    return heap.setMarkSmall(h);
+}
+
+/// Called when the string table hands out an existing string. A string
+/// that the last collection found dead stays in the table until its page
+/// is swept, so finding it again revives it.
+pub inline fn touchInterned(g: *Global, s: *object.String) void {
+    if (g.gcs.phase == .sweep) reviveInterned(s);
+}
+
+fn reviveInterned(s: *object.String) void {
+    if (heap.pageOf(&s.hdr).needs_sweep) _ = setMark(&s.hdr);
 }
 
 // ---------------------------------------------------------------------
 // Barriers. Called on every store of a collectable value into a heap
-// object. With the stop-the-world collector they only matter while a
-// cycle is in progress, which never overlaps the mutator, so the fast
-// path is a single flag test that is never taken.
+// object, after the store. The fast path is a single test of the barrier
+// bit, which only black objects carry. During a mark phase the barrier is
+// backward: a store into a black object turns the object gray again, and
+// the collector traces it once more before the mark phase ends. In
+// generational mode, marked objects are old, and the same bit logs the
+// first store into an old object since the last collection, so that the
+// next minor collection traces it.
 
 pub inline fn barrierBack(g: *Global, h: *Header) void {
-    if (h.barrier) barrierSlow(g, h);
+    if (h.flags.barrier) barrierSlow(g, h);
+}
+
+/// The barrier for a store of `key` and `val` into a table. A large table
+/// stays black and the stored values turn gray instead, so filling a big
+/// table during a mark phase never traces it again. Smaller tables, and
+/// weak tables, whose entries must not be marked through them, use the
+/// backward barrier.
+pub inline fn barrierTable(g: *Global, t: *object.Table, key: Value, val: Value) void {
+    if (t.hdr.flags.barrier) barrierTableSlow(g, t, key, val);
+}
+
+/// Tables with at least this many slots use the forward barrier.
+const big_table = 1024;
+
+fn barrierTableSlow(g: *Global, t: *object.Table, key: Value, val: Value) void {
+    const s = &g.gcs;
+    if (t.weak_mode == .none and t.array.len + t.hash.len >= big_table and isMarked(&t.hdr)) {
+        if (s.phase == .propagate) {
+            markGray(g, key);
+            markGray(g, val);
+            return;
+        }
+        // An old table in generational mode promotes what it receives,
+        // and the next minor collection traces the promoted objects.
+        if (s.mode == .generational) {
+            promote(g, key);
+            promote(g, val);
+            return;
+        }
+    }
+    barrierSlow(g, &t.hdr);
+}
+
+/// Marks a young value as old and logs it, since its children may be
+/// young.
+fn promote(g: *Global, v: Value) void {
+    if (!v.tag.isCollectable()) return;
+    const h = v.header();
+    if (!setMark(h) or isLeaf(h.tag)) return;
+    g.gcs.grayagain.append(g.gpa, h) catch {
+        g.gcs.overflow = true;
+    };
+}
+
+/// Marks a value outside a marker and queues it for tracing.
+fn markGray(g: *Global, v: Value) void {
+    if (!v.tag.isCollectable()) return;
+    const h = v.header();
+    if (!setMark(h) or isLeaf(h.tag)) return;
+    g.gcs.gray.append(g.gpa, h) catch {
+        g.gcs.overflow = true;
+    };
 }
 
 fn barrierSlow(g: *Global, h: *Header) void {
-    _ = g;
-    h.barrier = false;
+    h.flags.barrier = false;
+    const s = &g.gcs;
+    if (s.phase != .propagate and s.mode != .generational) return;
+    if (!isMarked(h)) return;
+    // When the list cannot grow, the end of the mark phase traces every
+    // marked object again instead.
+    s.grayagain.append(g.gpa, h) catch {
+        s.overflow = true;
+    };
+}
+
+// ---------------------------------------------------------------------
+// Collector state
+
+pub const Phase = enum(u8) {
+    /// No collection is in progress.
+    pause,
+    /// Marking: gray objects wait to be traced, interleaved with the
+    /// program.
+    propagate,
+    /// Marking finished and pages wait for their sweep.
+    sweep,
+};
+
+pub const Mode = enum(u8) { incremental, generational };
+
+pub const State = struct {
+    phase: Phase = .pause,
+    mode: Mode = .generational,
+    /// In generational mode: the next collection is a major one, run as
+    /// an incremental cycle.
+    major_pending: bool = false,
+    /// Set when the last mark phase belonged to a major collection.
+    last_major: bool = true,
+    /// The heap size after the last major collection.
+    gen_base: usize = 0,
+    /// The heap size when the last mark phase ended.
+    heap_at_mark: usize = 0,
+    /// Objects marked but not traced yet.
+    gray: std.ArrayList(*Header) = .empty,
+    /// Black objects that a store turned gray again. In generational mode
+    /// between collections, the old objects stored into since the last
+    /// collection (the remembered set).
+    grayagain: std.ArrayList(*Header) = .empty,
+    weak: std.ArrayList(*object.Table) = .empty,
+    /// Every weak table that the last mark phase found alive. A minor
+    /// collection traces the old ones again to clear their young entries.
+    all_weak: std.ArrayList(*object.Table) = .empty,
+    ephemerons: std.ArrayList(*object.Table) = .empty,
+    /// Every thread, so that the atomic phase rescans the stacks and dead
+    /// threads close their upvalues before their stacks go away.
+    threads: std.ArrayList(*Thread) = .empty,
+    /// Set when the barrier could not record an object. The atomic phase
+    /// then traces every marked object again.
+    overflow: bool = false,
+    /// Rounds of gray-again tracing done before the atomic phase.
+    again_rounds: u8 = 0,
+    /// The heap size at which the next collector step runs.
+    next_check: usize = 1 << 20,
+    /// Bytes traced in the current cycle.
+    marked: usize = 0,
+    /// Bytes the current cycle expects to trace.
+    estimate: usize = 0,
+    /// The heap size at which marking should be finished.
+    goal: usize = 0,
+    /// The bytes that survived the last collection: the heap size when
+    /// its mark phase ended, less what its sweep freed.
+    live: usize = 0,
+    /// Bytes the sweep of the current cycle freed.
+    swept: usize = 0,
+    stepmul: usize = 200,
+    stepsize: usize = 200 * @sizeOf(object.Table),
+    minormul: usize = 20,
+    minormajor: usize = 70,
+    majorminor: usize = 50,
+
+    pub fn deinit(s: *State, gpa: Allocator) void {
+        s.gray.deinit(gpa);
+        s.grayagain.deinit(gpa);
+        s.weak.deinit(gpa);
+        s.all_weak.deinit(gpa);
+        s.ephemerons.deinit(gpa);
+        s.threads.deinit(gpa);
+    }
+};
+
+/// Registers a new thread. The caller reserves room in the list first.
+pub fn addThread(g: *Global, l: *Thread) void {
+    g.gcs.threads.appendAssumeCapacity(l);
+}
+
+// ---------------------------------------------------------------------
+// Pacing
+//
+// The collector targets a heap size relative to the live data. When a
+// cycle ends, the heap holds about `live` bytes, and the next mark phase
+// should end before the heap reaches `live * pause / 100`. Marking traces
+// about `live` bytes, and every step traces `stepmul / 100` bytes per
+// allocated byte, so the cycle starts early enough to finish in time.
+// During marking, each step compares the work left with the room left
+// before the goal and raises its budget when marking falls behind.
+
+/// Bytes of work in a basic step.
+fn baseBudget(s: *const State) usize {
+    return @max(s.stepsize *| s.stepmul / 100, 1024);
+}
+
+/// The largest step, which bounds the pause of a step that catches up.
+fn maxBudget(s: *const State) usize {
+    return baseBudget(s) *| 64;
+}
+
+fn markBudget(g: *Global) usize {
+    const s = &g.gcs;
+    const base = baseBudget(s);
+    const need = @max(s.estimate -| s.marked, base);
+    const runway = s.goal -| g.counter.bytes;
+    if (runway <= s.stepsize) return @min(need, maxBudget(s));
+    const want: u64 = @as(u64, need) * s.stepsize / runway;
+    return @intCast(@min(@max(want, base), maxBudget(s)));
+}
+
+fn setThreshold(g: *Global) void {
+    const s = &g.gcs;
+    // The products are formed in 64 bits, since they overflow a 32-bit
+    // usize once the heap passes a few dozen megabytes.
+    const goal: u64 = @as(u64, s.live) * g.pause / 100;
+    const during: u64 = @as(u64, s.live) * 100 / @max(s.stepmul, 1);
+    const start = @max(goal -| during, @as(u64, s.live) + s.stepsize);
+    const t: u64 = @max(start, 256 * 1024, @as(u64, g.counter.bytes) + s.stepsize);
+    g.threshold = @intCast(@min(t, std.math.maxInt(usize)));
+    s.goal = @intCast(@min(@max(goal, t + s.stepsize), std.math.maxInt(usize)));
+    s.next_check = g.threshold;
 }
 
 // ---------------------------------------------------------------------
 // Collection
 
 const stress = @import("build_options").gc_stress;
+const verify = @import("build_options").gc_verify;
 
-pub fn maybeCollect(g: *Global) void {
-    if (g.gc_stopped or g.gc_depth != 0) return;
-    if (stress != 0) {
-        g.stress_tick +%= 1;
-        if (g.stress_tick % stress == 0) return fullCollect(g);
-    }
-    if (g.counter.bytes >= g.threshold) fullCollect(g);
+pub inline fn maybeCollect(g: *Global) void {
+    if (stress != 0) return stressPoint(g);
+    if (g.counter.bytes >= g.gcs.next_check) collectSlow(g);
 }
 
-pub fn fullCollect(g: *Global) void {
-    if (g.gc_depth != 0) return;
+/// True when the next collection is a minor one.
+inline fn minorNext(s: *const State) bool {
+    return s.mode == .generational and !s.major_pending;
+}
+
+/// The stress build runs a small step at every allocation point, so
+/// marking always overlaps the program, and finishes a mark phase (or
+/// runs a minor collection) at every Nth point.
+fn stressPoint(g: *Global) void {
+    if (g.gc_stopped or g.gc_depth != 0) return;
     g.gc_depth += 1;
     defer g.gc_depth -= 1;
+    const s = &g.gcs;
+    g.stress_tick +%= 1;
+    if (s.mode == .generational and g.stress_tick % (stress *% 8) == 0) return collectFull(g);
+    if (g.stress_tick % stress == 0) {
+        switch (s.phase) {
+            .pause => if (minorNext(s)) minorCollect(g) else {
+                startCycle(g);
+                finishMarking(g);
+            },
+            .propagate => finishMarking(g),
+            .sweep => completeSweep(g),
+        }
+        return;
+    }
+    if (s.phase == .pause and minorNext(s)) return;
+    _ = step(g, 512, true);
+}
+
+fn collectSlow(g: *Global) void {
+    if (g.gc_stopped or g.gc_depth != 0) return;
+    g.gc_depth += 1;
+    defer g.gc_depth -= 1;
+    _ = step(g, 0, false);
+}
+
+/// Runs one collector step with `budget` bytes of work, or a paced budget
+/// when it is zero. A step in the pause phase starts a collection when the
+/// heap reached the threshold, or always when `force` is set. Returns
+/// true when the step finished a cycle.
+fn step(g: *Global, budget: usize, force: bool) bool {
+    const s = &g.gcs;
+    switch (s.phase) {
+        .pause => {
+            if (!force and g.counter.bytes < g.threshold) {
+                s.next_check = g.threshold;
+                return false;
+            }
+            if (minorNext(s)) {
+                minorCollect(g);
+                return false;
+            }
+            startCycle(g);
+            propagate(g, if (budget != 0) budget else markBudget(g));
+            return false;
+        },
+        .propagate => {
+            propagate(g, if (budget != 0) budget else markBudget(g));
+            return false;
+        },
+        .sweep => return sweepStep(g, if (budget != 0) budget else 4 * baseBudget(s)),
+    }
+}
+
+/// Starts the mark phase of a major collection, run incrementally. Every
+/// object turns white.
+fn startCycle(g: *Global) void {
+    const s = &g.gcs;
+    std.debug.assert(s.phase == .pause);
+    heap.clearMarks(g);
+    s.gray.clearRetainingCapacity();
+    s.grayagain.clearRetainingCapacity();
+    s.weak.clearRetainingCapacity();
+    s.ephemerons.clearRetainingCapacity();
+    s.overflow = false;
+    s.again_rounds = 0;
+    s.marked = 0;
+    s.estimate = if (s.live != 0) s.live else g.counter.bytes;
+    if (s.goal <= g.counter.bytes) {
+        const goal: u64 = @as(u64, @max(s.estimate, g.counter.bytes)) * @max(g.pause, 100) / 100;
+        s.goal = @intCast(@min(goal + s.stepsize, std.math.maxInt(usize)));
+    }
+    s.phase = .propagate;
     var m = Marker{ .g = g };
-    defer m.gray.deinit(g.gpa);
-    defer m.weak.deinit(g.gpa);
-    defer m.ephemerons.deinit(g.gpa);
     m.markRoots();
-    m.drain();
+    s.marked += m.work;
+}
+
+/// Traces gray objects until `budget` bytes of work are done, and runs
+/// the atomic phase when no gray object is left.
+fn propagate(g: *Global, budget: usize) void {
+    const s = &g.gcs;
+    var m = Marker{ .g = g };
+    while (m.work < budget) {
+        if (s.gray.pop()) |h| {
+            m.traverse(h);
+            continue;
+        }
+        // Objects that stores turned gray again are traced a couple of
+        // times while the program runs, so the atomic phase finds few.
+        if (s.grayagain.items.len > 0 and s.again_rounds < 2) {
+            s.again_rounds += 1;
+            std.mem.swap(std.ArrayList(*Header), &s.gray, &s.grayagain);
+            continue;
+        }
+        s.marked += m.work;
+        m.work = 0;
+        // The atomic phase: the mark phase ends without the program
+        // running.
+        m.markRoots();
+        finishMark(g, &m, true);
+        return;
+    }
+    s.marked += m.work;
+    s.next_check = g.counter.bytes + s.stepsize;
+}
+
+/// Completes the mark phase of the current cycle.
+fn finishMarking(g: *Global) void {
+    while (g.gcs.phase == .propagate) propagate(g, std.math.maxInt(usize));
+}
+
+/// A minor collection in generational mode, run without interruption.
+/// Old objects stay marked, so marking traces only the young objects that
+/// the roots, the stacks, the remembered set, and the old weak tables
+/// reach. The sweep then visits only pages that received objects since
+/// the last collection.
+fn minorCollect(g: *Global) void {
+    const s = &g.gcs;
+    completeSweep(g);
+    std.debug.assert(s.phase == .pause);
+    s.gray.clearRetainingCapacity();
+    s.weak.clearRetainingCapacity();
+    s.ephemerons.clearRetainingCapacity();
+    var m = Marker{ .g = g };
+    m.markRoots();
+    // The remembered set: old objects stored into since the last
+    // collection, and young objects promoted by large tables.
+    while (s.grayagain.pop()) |h| m.traverse(h);
+    // Old weak tables are traced again, so that their entries that
+    // reference young objects are cleared or kept like in any table.
+    for (s.all_weak.items) |t| {
+        if (isMarked(&t.hdr)) m.traverse(&t.hdr);
+    }
+    finishMark(g, &m, false);
+}
+
+/// The end of every mark phase. Stacks change without barriers, so every
+/// live thread is traced again, and a dead thread may still own open
+/// upvalues that a live closure captured, so their current values are
+/// marked. Then ephemerons converge, finalizable objects are separated,
+/// weak tables are cleared, and the sweep starts.
+fn finishMark(g: *Global, m: *Marker, major: bool) void {
+    const s = &g.gcs;
+    for (s.threads.items) |t| {
+        if (isMarked(&t.hdr)) {
+            m.traverse(&t.hdr);
+        } else {
+            var u = t.open_upvals;
+            while (u) |up| : (u = up.next_open) {
+                if (isMarked(&up.hdr)) m.markValue(up.loc.*);
+            }
+        }
+    }
+    m.drainAll();
+    if (s.overflow) {
+        s.overflow = false;
+        retraceMarked(g, m);
+        m.drainAll();
+    }
     m.convergeEphemerons();
     // Separate unreachable objects with finalizers and resurrect them for
     // one more cycle, so their finalizers see valid objects.
     m.separateFinalizable();
-    m.drain();
+    m.drainAll();
     m.convergeEphemerons();
     m.clearWeak();
-    sweep(g);
-    // The product is formed in 64 bits, since it overflows a 32-bit
-    // usize once the heap passes a few dozen megabytes.
-    const next = (@as(u64, g.counter.bytes) *| g.pause) / 100;
-    g.threshold = @intCast(@max(@min(next, std.math.maxInt(usize)), 256 * 1024));
+    if (verify) verifyHeap(g);
+    std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
+    s.heap_at_mark = g.counter.bytes;
+    s.swept = 0;
+    s.last_major = major;
+    rememberWeak(g);
+    s.weak.clearRetainingCapacity();
+    s.ephemerons.clearRetainingCapacity();
+    s.phase = .sweep;
+    closeDeadThreads(g);
+    heap.startSweep(g, major);
+    sweepLargeLater(g, major);
+    s.next_check = g.counter.bytes + s.stepsize;
     g.cycles += 1;
+}
+
+/// Records the weak tables found alive, each once.
+fn rememberWeak(g: *Global) void {
+    const s = &g.gcs;
+    s.all_weak.clearRetainingCapacity();
+    s.all_weak.appendSlice(g.gpa, s.weak.items) catch {
+        // Without the list, the next collection must be a major one.
+        s.major_pending = true;
+        return;
+    };
+    const items = s.all_weak.items;
+    std.mem.sort(*object.Table, items, {}, struct {
+        fn lt(_: void, a: *object.Table, b: *object.Table) bool {
+            return @intFromPtr(a) < @intFromPtr(b);
+        }
+    }.lt);
+    var n: usize = 0;
+    for (items) |t| {
+        if (n > 0 and items[n - 1] == t) continue;
+        items[n] = t;
+        n += 1;
+    }
+    s.all_weak.items.len = n;
+}
+
+/// Moves the large objects that the sweep examines into the sweep list:
+/// all of them after a major collection, the young ones after a minor
+/// one. The surviving ones return to `large`, so it keeps room for them.
+fn sweepLargeLater(g: *Global, major: bool) void {
+    const h = &g.heap;
+    const old = if (major) h.large.items.len else 0;
+    const total = old + h.large_young.items.len;
+    h.large_sweep.ensureTotalCapacity(g.gpa, total) catch return keepLarge(g);
+    h.large.ensureTotalCapacity(g.gpa, h.large.items.len - old + total) catch return keepLarge(g);
+    if (major) {
+        h.large_sweep.appendSliceAssumeCapacity(h.large.items);
+        h.large.clearRetainingCapacity();
+    }
+    h.large_sweep.appendSliceAssumeCapacity(h.large_young.items);
+    h.large_young.clearRetainingCapacity();
+}
+
+/// Out of memory before a sweep: every large object survives this cycle.
+fn keepLarge(g: *Global) void {
+    const h = &g.heap;
+    h.large.appendSlice(g.gpa, h.large_young.items) catch return;
+    h.large_young.clearRetainingCapacity();
+}
+
+/// Sweeps a share of the pages that wait for their sweep. Returns true
+/// when the sweep, and with it the cycle, finished.
+fn sweepStep(g: *Global, budget: usize) bool {
+    const s = &g.gcs;
+    if (heap.sweepSome(g, budget) and sweepLarge(g)) {
+        finishSweep(g);
+        return true;
+    }
+    s.next_check = g.counter.bytes + s.stepsize;
+    return false;
+}
+
+fn sweepLarge(g: *Global) bool {
+    const h = &g.heap;
+    const before = g.counter.bytes;
+    defer g.gcs.swept += before -| g.counter.bytes;
+    for (h.large_sweep.items) |o| {
+        if (isMarked(o)) {
+            // The list has room, since every object in the sweep list
+            // came from the other two lists.
+            h.large.appendAssumeCapacity(o);
+        } else {
+            releaseObject(g, o);
+            heap.freeLarge(g, o);
+        }
+    }
+    h.large_sweep.clearRetainingCapacity();
+    return true;
+}
+
+/// Ends a cycle and sets the heap size of the next collection.
+fn finishSweep(g: *Global) void {
+    const s = &g.gcs;
+    heap.releaseSegments(g);
+    s.phase = .pause;
+    s.live = s.heap_at_mark -| s.swept;
+    if (s.mode != .generational) return setThreshold(g);
+    const live = s.live;
+    if (s.last_major) {
+        // Generational mode pays off when a major collection frees a
+        // good share of what the program allocated since the previous
+        // one. Otherwise most new objects live long, and incremental
+        // cycles serve better until a major collection frees enough
+        // again. The first major collection only sets the base.
+        const allocated = s.heap_at_mark -| s.gen_base;
+        const freed = s.heap_at_mark -| live;
+        s.major_pending = s.gen_base != 0 and @as(u64, freed) * 100 < @as(u64, allocated) * s.majorminor;
+        s.gen_base = live;
+    } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
+        // The old generation grew too much since the last major
+        // collection.
+        s.major_pending = true;
+    }
+    if (s.major_pending) return setThreshold(g);
+    setMinorThreshold(g);
+}
+
+/// The next minor collection runs after the program allocates
+/// `minormul` percent of the heap that the last major collection left.
+fn setMinorThreshold(g: *Global) void {
+    const s = &g.gcs;
+    const young: u64 = @max(@as(u64, s.gen_base) * s.minormul / 100, min_young);
+    const t = @max(@as(u64, s.live) + young, @as(u64, g.counter.bytes) + s.stepsize);
+    g.threshold = @intCast(@min(t, std.math.maxInt(usize)));
+    s.next_check = g.threshold;
+}
+
+/// The least allocation between two minor collections.
+const min_young = 1024 * 1024;
+
+/// Completes the sweep of the previous collection.
+fn completeSweep(g: *Global) void {
+    if (g.gcs.phase != .sweep) return;
+    _ = heap.sweepSome(g, std.math.maxInt(usize));
+    _ = sweepLarge(g);
+    finishSweep(g);
+}
+
+/// Runs a complete collection, including its sweep.
+pub fn fullCollect(g: *Global) void {
+    if (g.gc_depth != 0) return;
+    g.gc_depth += 1;
+    defer g.gc_depth -= 1;
+    collectFull(g);
+}
+
+/// A full collection. A mark phase in progress is abandoned, since its
+/// marks may be stale for objects that died since it started. In
+/// generational mode, the survivors are the old generation and minor
+/// collections follow.
+fn collectFull(g: *Global) void {
+    const s = &g.gcs;
+    if (s.phase == .propagate) s.phase = .pause;
+    completeSweep(g);
+    startCycle(g);
+    finishMarking(g);
+    completeSweep(g);
+    if (s.mode == .generational and s.major_pending) {
+        s.major_pending = false;
+        setMinorThreshold(g);
+    }
+}
+
+/// Runs collector work for `collectgarbage("step", kb)`. A size of zero
+/// runs one basic step. A positive size runs about that many kilobytes of
+/// work. In generational mode between major collections, a step is a
+/// complete minor collection. Returns true when a cycle finished.
+pub fn stepCollect(g: *Global, kb: i64) bool {
+    if (g.gc_depth != 0) return false;
+    g.gc_depth += 1;
+    defer g.gc_depth -= 1;
+    const s = &g.gcs;
+    if (s.phase != .propagate and minorNext(s)) {
+        minorCollect(g);
+        completeSweep(g);
+        return true;
+    }
+    if (kb <= 0) return step(g, baseBudget(s), true);
+    var left: usize = std.math.cast(usize, kb) orelse std.math.maxInt(usize);
+    left = left *| 1024;
+    while (true) {
+        const chunk = @min(left, baseBudget(s));
+        if (step(g, chunk, true)) return true;
+        left -|= chunk;
+        if (left == 0) return false;
+    }
+}
+
+/// Switches between incremental and generational mode and returns the
+/// previous mode. Entering generational mode runs a full collection,
+/// whose survivors form the old generation.
+pub fn setMode(g: *Global, mode: Mode) Mode {
+    const s = &g.gcs;
+    const old = s.mode;
+    if (mode == old) return old;
+    s.mode = mode;
+    s.major_pending = false;
+    if (mode == .generational) {
+        if (g.gc_depth == 0) {
+            g.gc_depth += 1;
+            defer g.gc_depth -= 1;
+            collectFull(g);
+        } else s.major_pending = true;
+    } else if (s.phase == .pause and s.live != 0) {
+        setThreshold(g);
+    }
+    return old;
+}
+
+/// Traces every marked object again. Used when the barrier lost track of
+/// an object for lack of memory.
+fn retraceMarked(g: *Global, m: *Marker) void {
+    heap.forEachObject(g, m, struct {
+        fn f(mm: *Marker, h: *Header) void {
+            if (isMarked(h) and !isLeaf(h.tag)) mm.traverse(h);
+        }
+    }.f);
+}
+
+/// Dead threads close their open upvalues before anything is freed, so
+/// closures that survive keep the captured values instead of pointing
+/// into a freed stack.
+fn closeDeadThreads(g: *Global) void {
+    const list = &g.gcs.threads;
+    var keep: usize = 0;
+    for (list.items) |t| {
+        if (isMarked(&t.hdr)) {
+            list.items[keep] = t;
+            keep += 1;
+        } else {
+            @import("interp.zig").closeUpvals(t, 0);
+        }
+    }
+    list.items.len = keep;
+}
+
+inline fn isLeaf(tag: Tag) bool {
+    return switch (tag) {
+        .string, .bigint, .decimal, .vector => true,
+        else => false,
+    };
 }
 
 const Marker = struct {
     g: *Global,
-    gray: std.ArrayList(*Header) = .empty,
-    weak: std.ArrayList(*object.Table) = .empty,
-    ephemerons: std.ArrayList(*object.Table) = .empty,
+    /// Bytes of objects marked and traced by this marker.
+    work: usize = 0,
+    /// Set while the heap verifier walks the heap. Marking then checks
+    /// marks instead of setting them.
+    verifying: bool = false,
+    /// The object the verifier is checking.
+    parent: ?*Header = null,
 
     fn markValue(m: *Marker, v: Value) void {
         if (v.tag.isCollectable()) m.markObject(v.header());
     }
 
     fn markObject(m: *Marker, h: *Header) void {
-        if (h.marked) return;
-        h.marked = true;
-        switch (h.tag) {
-            // Leaf objects have no references to trace.
-            .string, .bigint, .decimal, .vector => {},
-            else => m.gray.append(m.g.gpa, h) catch m.traverse(h),
+        if (m.verifying) return m.check(h);
+        if (h.flags.large) {
+            if (h.flags.mark) return;
+            h.flags.mark = true;
+            m.work += objectSize(h);
+        } else {
+            const p = heap.pageOf(h);
+            if (!heap.setMarkSmall(h)) return;
+            m.work += p.cell;
         }
+        // Leaf objects have no references to trace.
+        if (isLeaf(h.tag)) return;
+        m.g.gcs.gray.append(m.g.gpa, h) catch m.traverse(h);
     }
 
     fn markRoots(m: *Marker) void {
@@ -200,11 +839,23 @@ const Marker = struct {
         for (g.tobefnz.items) |h| m.markObject(h);
     }
 
-    fn drain(m: *Marker) void {
-        while (m.gray.pop()) |h| m.traverse(h);
+    /// Traces gray objects, including those that stores turned gray
+    /// again, until none is left.
+    fn drainAll(m: *Marker) void {
+        const s = &m.g.gcs;
+        while (true) {
+            if (s.gray.pop()) |h| {
+                m.traverse(h);
+            } else if (s.grayagain.pop()) |h| {
+                m.traverse(h);
+            } else break;
+        }
     }
 
     fn traverse(m: *Marker, h: *Header) void {
+        // The object turns black. A later store into it takes the slow
+        // path of the barrier.
+        if (!m.verifying) h.flags.barrier = true;
         switch (h.tag) {
             .table => m.traverseTable(h.as(object.Table)),
             .closure => {
@@ -222,7 +873,11 @@ const Marker = struct {
                 if (u.metatable) |mt| m.markObject(&mt.hdr);
                 for (u.userValues()) |v| m.markValue(v);
             },
-            .thread => h.as(Thread).traverse(m),
+            .thread => {
+                const t = h.as(Thread);
+                m.work += t.stack.len * @sizeOf(Value);
+                t.traverse(m);
+            },
             .enum_root => {
                 const r = h.as(object.EnumRoot);
                 for (r.names) |s| m.markObject(&s.hdr);
@@ -241,9 +896,13 @@ const Marker = struct {
     }
 
     fn traverseTable(m: *Marker, t: *object.Table) void {
+        const gpa = m.g.gpa;
+        const s = &m.g.gcs;
+        m.work += t.array.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
         if (t.metatable) |mt| m.markObject(&mt.hdr);
-        t.weak_mode = weakModeOf(m.g, t);
-        switch (t.weak_mode) {
+        const mode = weakModeOf(m.g, t);
+        if (!m.verifying) t.weak_mode = mode;
+        switch (mode) {
             .none => {
                 for (t.array) |v| m.markValue(v);
                 for (t.hash) |n| {
@@ -260,16 +919,20 @@ const Marker = struct {
                     m.markValue(n.key);
                     m.markIfValueLike(n.val);
                 }
-                m.weak.append(m.g.gpa, t) catch {};
+                if (!m.verifying) s.weak.append(gpa, t) catch {};
             },
             .keys => {
                 // Ephemeron: a value is reachable only through its key.
                 for (t.array) |v| m.markValue(v);
                 for (t.hash) |n| {
-                    if (!n.val.isNil()) m.markIfValueLike(n.key);
+                    if (n.val.isNil()) continue;
+                    m.markIfValueLike(n.key);
+                    if (m.verifying and isMarkedOrNotCollectable(n.key)) m.markValue(n.val);
                 }
-                m.ephemerons.append(m.g.gpa, t) catch {};
-                m.weak.append(m.g.gpa, t) catch {};
+                if (!m.verifying) {
+                    s.ephemerons.append(gpa, t) catch {};
+                    s.weak.append(gpa, t) catch {};
+                }
             },
             .both => {
                 for (t.array) |v| m.markIfValueLike(v);
@@ -278,7 +941,7 @@ const Marker = struct {
                     m.markIfValueLike(n.key);
                     m.markIfValueLike(n.val);
                 }
-                m.weak.append(m.g.gpa, t) catch {};
+                if (!m.verifying) s.weak.append(gpa, t) catch {};
             },
         }
     }
@@ -293,16 +956,16 @@ const Marker = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (m.ephemerons.items) |t| {
+            for (m.g.gcs.ephemerons.items) |t| {
                 for (t.hash) |n| {
                     if (n.val.isNil()) continue;
-                    if (isMarkedOrNotCollectable(n.key) and n.val.tag.isCollectable() and !n.val.header().marked) {
+                    if (isMarkedOrNotCollectable(n.key) and n.val.tag.isCollectable() and !isMarked(n.val.header())) {
                         m.markValue(n.val);
                         changed = true;
                     }
                 }
             }
-            if (changed) m.drain();
+            if (changed) m.drainAll();
         }
     }
 
@@ -313,7 +976,7 @@ const Marker = struct {
         const g = m.g;
         var keep: usize = 0;
         for (g.finobj.items) |h| {
-            if (!h.marked) {
+            if (!isMarked(h)) {
                 g.tobefnz.append(g.gpa, h) catch {};
                 m.markObject(h);
             } else {
@@ -325,7 +988,7 @@ const Marker = struct {
     }
 
     fn clearWeak(m: *Marker) void {
-        for (m.weak.items) |t| {
+        for (m.g.gcs.weak.items) |t| {
             if (t.weak_mode == .values or t.weak_mode == .both) {
                 for (t.array) |*v| {
                     if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
@@ -339,16 +1002,46 @@ const Marker = struct {
             }
         }
     }
+
+    /// Verifier: a marked object references an unmarked one.
+    fn check(m: *Marker, h: *Header) void {
+        if (isMarked(h)) return;
+        const p = m.parent.?;
+        std.debug.print("gc verify: marked {s} at {*} references unmarked {s} at {*}\n", .{ @tagName(p.tag), p, @tagName(h.tag), h });
+        @panic("gc verify: tri-color invariant violated");
+    }
 };
 
 pub const MarkerApi = Marker;
+
+// ---------------------------------------------------------------------
+// Heap verifier, enabled with -Dgc-verify. At the end of every mark
+// phase, every marked object must be black (traced after its last store)
+// and must reference only marked objects through strong references. A
+// failure means a missing barrier or a missing root.
+
+fn verifyHeap(g: *Global) void {
+    var m = Marker{ .g = g, .verifying = true };
+    std.debug.assert(g.gcs.gray.items.len == 0 and g.gcs.grayagain.items.len == 0);
+    heap.forEachObject(g, &m, struct {
+        fn f(mm: *Marker, h: *Header) void {
+            if (!isMarked(h) or isLeaf(h.tag)) return;
+            if (!h.flags.barrier) {
+                std.debug.print("gc verify: marked {s} at {*} is not black\n", .{ @tagName(h.tag), h });
+                @panic("gc verify: barrier coverage violated");
+            }
+            mm.parent = h;
+            mm.traverse(h);
+        }
+    }.f);
+}
 
 fn isMarkedOrNotCollectable(v: Value) bool {
     if (!v.tag.isCollectable()) return true;
     // Strings are values for weak table purposes and never collected from
     // weak tables, as in Lua.
     if (isValueLike(v)) return true;
-    return v.header().marked;
+    return isMarked(v.header());
 }
 
 fn isValueLike(v: Value) bool {
@@ -361,7 +1054,7 @@ fn isFinalizedObject(v: Value) bool {
 
 fn weakModeOf(g: *Global, t: *object.Table) object.Table.WeakMode {
     const mt = t.metatable orelse return .none;
-    const mode = state_mod.rawGetStr(mt, g.tm_names[@intFromEnum(state_mod.TM.mode)].?) orelse return .none;
+    const mode = state_mod.rawGetStr(mt, g.tm_names[@backingInt(state_mod.TM.mode)].?) orelse return .none;
     if (mode.tag != .string) return .none;
     const b = mode.as(object.String).bytes();
     const k = std.mem.indexOfScalar(u8, b, 'k') != null;
@@ -372,34 +1065,10 @@ fn weakModeOf(g: *Global, t: *object.Table) object.Table.WeakMode {
     return .none;
 }
 
-fn sweep(g: *Global) void {
-    // Dead threads close their open upvalues first, so closures that
-    // survive keep the captured values instead of pointing into a freed
-    // stack. This runs before any object is freed.
-    var it = g.all_objects;
-    while (it) |h| : (it = h.next) {
-        if (!h.marked and h.tag == .thread) @import("interp.zig").closeUpvals(h.as(Thread), 0);
-    }
-    var link: *?*Header = &g.all_objects;
-    while (link.*) |h| {
-        if (h.marked) {
-            h.marked = false;
-            link = &h.next;
-        } else {
-            link.* = h.next;
-            freeObject(g, h);
-        }
-    }
-}
-
 /// Frees every object. Used when a state closes.
 pub fn freeAll(g: *Global) void {
-    var it = g.all_objects;
-    while (it) |h| {
-        it = h.next;
-        freeObject(g, h);
-    }
-    g.all_objects = null;
+    heap.freeAll(g);
+    g.gcs.deinit(g.gpa);
 }
 
 // ---------------------------------------------------------------------
@@ -409,24 +1078,43 @@ pub fn freeAll(g: *Global) void {
 pub const Param = enum { minormul, majorminor, minormajor, pause, stepmul, stepsize };
 
 /// Returns the value of a parameter, as a percentage or a byte count.
-/// The stop-the-world stage is tuned by `pause` alone. The incremental
-/// and generational parameters report fixed default values, because this
-/// stage has no steps or generations for them to tune.
+/// `pause` sets the heap goal relative to the live data, `stepmul` the
+/// marking work per allocated byte, and `stepsize` the allocation between
+/// steps. `minormul` sets the allocation between minor collections as a
+/// percentage of the heap after the last major collection, `minormajor`
+/// the growth of the old generation that calls for a major collection,
+/// and `majorminor` the share of the heap a major collection must free to
+/// return to minor collections.
 pub fn getParam(g: *const Global, p: Param) i64 {
+    const s = &g.gcs;
     return switch (p) {
         .pause => @intCast(g.pause),
-        .minormul => 20,
-        .majorminor => 50,
-        .minormajor => 70,
-        .stepmul => 200,
-        .stepsize => 200 * @sizeOf(object.Table),
+        .minormul => @intCast(s.minormul),
+        .majorminor => @intCast(s.majorminor),
+        .minormajor => @intCast(s.minormajor),
+        .stepmul => @intCast(s.stepmul),
+        .stepsize => @intCast(s.stepsize),
     };
 }
 
 /// Sets a parameter when `v` is non-negative and returns its previous
-/// value. Only `pause` is stored by the current stage.
+/// value.
 pub fn setParam(g: *Global, p: Param, v: i64) i64 {
     const old = getParam(g, p);
-    if (v >= 0 and p == .pause) g.pause = std.math.cast(usize, v) orelse std.math.maxInt(usize);
+    if (v < 0) return old;
+    const n = std.math.cast(usize, v) orelse std.math.maxInt(usize);
+    const s = &g.gcs;
+    switch (p) {
+        .pause => g.pause = n,
+        .stepmul => s.stepmul = @max(n, 1),
+        .stepsize => s.stepsize = @max(n, 1024),
+        .minormul => s.minormul = @max(n, 1),
+        .majorminor => s.majorminor = @min(n, 100),
+        .minormajor => s.minormajor = n,
+    }
+    // A new pace applies from the next threshold.
+    if (s.phase == .pause and s.live != 0) {
+        if (minorNext(s)) setMinorThreshold(g) else setThreshold(g);
+    }
     return old;
 }

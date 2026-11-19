@@ -279,6 +279,9 @@ fn wrapAux(l: *Thread) Error!u32 {
 fn wrap(l: *Thread) Error!u32 {
     const f = try aux.checkFunction(l, 1);
     const co = try newCoroutine(l, f);
+    // Creating the native can collect, so the coroutine stays on the
+    // stack until the native holds it.
+    try l.push(Value.obj(.thread, co));
     const n = state.newNative(l.g, wrapAux, "wrap", 1) catch return l.raiseMem();
     n.upvalues()[0] = Value.obj(.thread, co);
     return aux.ret(l, Value.obj(.native, n));

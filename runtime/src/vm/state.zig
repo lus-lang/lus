@@ -174,19 +174,18 @@ pub const StringSet = struct {
 pub const Global = struct {
     gpa: Allocator,
     io: std.Io,
-    all_objects: ?*gc.Header = null,
+    /// The object heap: pages, size classes, and large objects.
+    heap: @import("heap.zig").Heap = .{},
+    /// The collector state: phase, gray lists, and pacing.
+    gcs: gc.State = .{},
     /// Counts every byte the state holds. `gpa` allocates through it.
     counter: @import("heapcount.zig").Counting = undefined,
     /// The allocator the state was created with, which owns the Global.
     parent_gpa: Allocator = undefined,
-    object_count: usize = 0,
     threshold: usize = 1 << 20,
     pause: usize = 200,
     gc_depth: u32 = 0,
     gc_stopped: bool = false,
-    /// The collector mode reported by collectgarbage("generational") and
-    /// collectgarbage("incremental").
-    gc_generational: bool = false,
     /// Allocation points seen, for the GC stress build.
     stress_tick: u32 = 0,
     cycles: u64 = 0,
@@ -552,14 +551,18 @@ pub fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usize) Allo
     const h = object.hashBytes(g.seed, b);
     const short = b.len <= String.short_max;
     if (short) {
-        if (g.strings.find(b, h)) |s| return s;
+        if (g.strings.find(b, h)) |s| {
+            gc.touchInterned(g, s);
+            return s;
+        }
     }
     gc.maybeCollect(g);
-    const s = try gc.alloc(g, String, .string, String.allocSize(b.len));
+    const s = try gc.allocUninit(g, String, .string, String.allocSize(b.len));
     s.len = @intCast(b.len);
     s.chars = @intCast(chars);
     s.hash = h;
     s.flags = .{ .ascii = ascii, .interned = short };
+    s.crumbs = null;
     @memcpy(s.bytesMut(), b);
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + b.len] = 0;
@@ -569,25 +572,31 @@ pub fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usize) Allo
 
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
     gc.maybeCollect(g);
-    const t = try gc.alloc(g, Table, .table, @sizeOf(Table));
+    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table));
     t.* = .{ .hdr = t.hdr };
     if (narr > 0 or nhash > 0) table.resize(g.gpa, t, narr, nhash) catch return error.OutOfMemory;
     return t;
 }
 
 pub fn newNative(g: *Global, f: NativeFn, name: ?[]const u8, nup: u32) Allocator.Error!*Native {
-    const n = try gc.alloc(g, Native, .native, Native.allocSize(nup));
+    // The name is created first, because creating a string can collect
+    // and nothing roots the native until it is returned. Allocating the
+    // native itself never collects.
+    const name_str = if (name) |s| try newStringKnown(g, s, true, s.len) else null;
+    const n = try gc.allocUninit(g, Native, .native, Native.allocSize(nup));
     n.func = f;
     n.nupvals = nup;
-    n.name = if (name) |s| try newStringKnown(g, s, true, s.len) else null;
+    n.name = name_str;
     for (n.upvalues()) |*v| v.* = .nil;
     return n;
 }
 
 pub fn newThread(g: *Global) Allocator.Error!*Thread {
-    const l = try gc.alloc(g, Thread, .thread, @sizeOf(Thread));
+    try g.gcs.threads.ensureUnusedCapacity(g.gpa, 1);
+    const l = try gc.allocUninit(g, Thread, .thread, @sizeOf(Thread));
     l.* = .{ .hdr = l.hdr, .g = g };
     if (g.debugger) |d| l.hook_mask = d.mask;
+    gc.addThread(g, l);
     l.stack = try g.gpa.alloc(Value, 64);
     @memset(l.stack, Value.nil);
     return l;
