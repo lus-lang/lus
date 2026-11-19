@@ -6,4 +6,5 @@ const Error = state.Error;
 
 pub fn openAll(l: *Thread) Error!void {
     try @import("base.zig").open(l);
+    try @import("string.zig").open(l);
 }
