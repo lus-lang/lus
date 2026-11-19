@@ -302,7 +302,11 @@ fn realPath(g: *Global, path: []const u8) ![]u8 {
         _ = try cwd.statFile(g.io, path, .{});
         return std.fs.path.resolve(g.gpa, &.{ "/", path });
     }
-    return cwd.realPathFileAlloc(g.io, path, g.gpa);
+    // The result is sentinel terminated. Copy it so callers free a plain
+    // slice of the right length.
+    const r = try cwd.realPathFileAlloc(g.io, path, g.gpa);
+    defer g.gpa.free(r);
+    return g.gpa.dupe(u8, r);
 }
 
 /// Canonical absolute path: realpath when the file exists, otherwise the
