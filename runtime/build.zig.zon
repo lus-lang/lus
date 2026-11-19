@@ -1,0 +1,7 @@
+.{
+    .name = .lus,
+    .version = "2.0.0-dev",
+    .fingerprint = 0x25c84663b2127d3a,
+    .minimum_zig_version = "0.15.2",
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

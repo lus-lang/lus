@@ -1,7 +1,21 @@
 [tools]
+zig = "0.17.1"
 node = "24.7.0"
 pnpm = "10.18.0"
 python = "3.12"
+
+[env]
+ZIG_GLOBAL_CACHE_DIR = "{{config_root}}/runtime/.zig-cache/global"
+
+[tasks.build]
+description = "Build the Zig runtime"
+dir = "runtime"
+run = "zig build"
+
+[tasks.test]
+description = "Run the Zig runtime unit and conformance tests"
+dir = "runtime"
+run = "zig build test"
 
 [tasks.gen]
 description = "Regenerate LSP stdlib data and TextMate grammars from spec/"

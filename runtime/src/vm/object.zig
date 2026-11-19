@@ -1,0 +1,246 @@
+//! Heap object layouts. Every object begins with `gc.Header`, and the
+//! collector dispatches on the header tag to trace and free them.
+
+const std = @import("std");
+const value = @import("value.zig");
+const gc = @import("gc.zig");
+const wtf8 = @import("wtf8.zig");
+const Value = value.Value;
+const Header = gc.Header;
+
+// ---------------------------------------------------------------------
+// Strings
+
+pub const String = struct {
+    hdr: Header,
+    len: u32,
+    chars: u32,
+    hash: u32,
+    flags: Flags,
+    /// Byte offset of every 64th character, built on first indexed access
+    /// for non-ASCII strings. Entry k is the offset of character 64*k.
+    crumbs: ?[*]u32 = null,
+
+    pub const Flags = packed struct(u8) {
+        ascii: bool = false,
+        interned: bool = false,
+        _pad: u6 = 0,
+    };
+
+    pub const short_max = 40;
+    pub const crumb_step = 64;
+
+    pub inline fn bytes(s: *const String) []const u8 {
+        const base: [*]const u8 = @ptrCast(s);
+        return (base + @sizeOf(String))[0..s.len];
+    }
+    pub inline fn bytesMut(s: *String) []u8 {
+        const base: [*]u8 = @ptrCast(s);
+        return (base + @sizeOf(String))[0..s.len];
+    }
+    pub inline fn allocSize(len: usize) usize {
+        return @sizeOf(String) + len + 1;
+    }
+
+    /// Byte offset of the character at zero-based index `ci`. `ci` may equal
+    /// `chars`, which yields `len`.
+    pub fn byteOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
+        if (s.flags.ascii or ci == 0) return ci;
+        if (ci >= s.chars) return s.len;
+        const b = s.bytes();
+        if (s.crumbs == null and s.chars > crumb_step) s.buildCrumbs(gpa);
+        var off: usize = 0;
+        var at: usize = 0;
+        if (s.crumbs) |cr| {
+            const k = ci / crumb_step;
+            off = cr[k];
+            at = k * crumb_step;
+        }
+        while (at < ci) : (at += 1) off += wtf8.seqLen(b[off]);
+        return off;
+    }
+
+    fn buildCrumbs(s: *String, gpa: std.mem.Allocator) void {
+        const n = s.chars / crumb_step + 1;
+        const cr = gpa.alloc(u32, n) catch return;
+        const b = s.bytes();
+        var off: usize = 0;
+        var ci: usize = 0;
+        var k: usize = 0;
+        while (k < n) : (k += 1) {
+            while (ci < k * crumb_step) : (ci += 1) off += wtf8.seqLen(b[off]);
+            cr[k] = @intCast(off);
+        }
+        s.crumbs = cr.ptr;
+    }
+
+    pub fn freeExtra(s: *String, gpa: std.mem.Allocator) void {
+        if (s.crumbs) |cr| gpa.free(cr[0 .. s.chars / crumb_step + 1]);
+    }
+};
+
+pub fn hashBytes(seed: u64, b: []const u8) u32 {
+    return @truncate(std.hash.Wyhash.hash(seed, b));
+}
+
+// ---------------------------------------------------------------------
+// Tables
+
+pub const Node = struct {
+    key: Value,
+    val: Value,
+};
+
+pub const Table = struct {
+    hdr: Header,
+    /// Bit k set means metamethod k is known to be absent. Cleared on any
+    /// store into the table.
+    tm_absent: u16 = 0,
+    log2_hash: u8 = 0,
+    metatable: ?*Table = null,
+    /// Array part, indices 1..array.len.
+    array: []Value = &.{},
+    /// Hash part with open addressing and linear probing. Length is a
+    /// power of two, or zero.
+    hash: []Node = &.{},
+    /// Live plus dead slots in the hash part (dead slots keep their key).
+    hash_used: u32 = 0,
+    /// Next free search position used by `next` scanning heuristics.
+    weak_mode: WeakMode = .none,
+
+    pub const WeakMode = enum(u8) { none, keys, values, both };
+};
+
+// ---------------------------------------------------------------------
+// Functions
+
+pub const UpvalDesc = struct {
+    /// True if the upvalue captures a register of the enclosing function,
+    /// false if it copies an upvalue of the enclosing function.
+    in_stack: bool,
+    index: u8,
+    /// Capture by value: the captured local is never written after the
+    /// closure is created, so the value is copied and never boxed.
+    by_value: bool = false,
+    name: ?*String = null,
+};
+
+pub const LocVar = struct {
+    name: *String,
+    start_pc: u32,
+    end_pc: u32,
+    reg: u8,
+};
+
+/// Entry of a function's exception table. Instructions in
+/// [start_pc, end_pc) are protected. On error the unwinder closes upvalues
+/// and to-be-closed variables down to `level`, stores the error in `dest`
+/// and jumps to `handler_pc`.
+pub const Handler = struct {
+    start_pc: u32,
+    end_pc: u32,
+    handler_pc: u32,
+    level: u8,
+    dest: u8,
+};
+
+pub const Proto = struct {
+    hdr: Header,
+    num_params: u8 = 0,
+    is_vararg: bool = false,
+    max_stack: u8 = 2,
+    line_defined: u32 = 0,
+    last_line_defined: u32 = 0,
+    code: []u32 = &.{},
+    constants: []Value = &.{},
+    protos: []*Proto = &.{},
+    upvals: []UpvalDesc = &.{},
+    handlers: []Handler = &.{},
+    /// Source line of each instruction.
+    lines: []u32 = &.{},
+    locvars: []LocVar = &.{},
+    source: ?*String = null,
+    name: ?*String = null,
+    /// Inline cache side table, indexed by the IC operand of instructions
+    /// that carry one.
+    ic_count: u32 = 0,
+};
+
+pub const Upvalue = struct {
+    hdr: Header,
+    /// Points either into a thread stack (open) or to `closed`.
+    loc: *Value,
+    closed: Value = .nil,
+    /// Next open upvalue of the owning thread, sorted by stack level
+    /// (higher levels first). Null once closed.
+    next_open: ?*Upvalue = null,
+    level: u32 = 0,
+    open: bool = true,
+};
+
+pub const Closure = struct {
+    hdr: Header,
+    proto: *Proto,
+    nupvals: u32,
+
+    pub inline fn upvals(c: *Closure) []*Upvalue {
+        const base: [*]u8 = @ptrCast(c);
+        const p: [*]*Upvalue = @ptrCast(@alignCast(base + @sizeOf(Closure)));
+        return p[0..c.nupvals];
+    }
+    pub inline fn allocSize(n: usize) usize {
+        return @sizeOf(Closure) + n * @sizeOf(*Upvalue);
+    }
+};
+
+// ---------------------------------------------------------------------
+// Userdata, vectors, enums
+
+pub const Userdata = struct {
+    hdr: Header,
+    metatable: ?*Table = null,
+    size: usize,
+    nuser: u16 = 0,
+
+    pub inline fn userValues(u: *Userdata) []Value {
+        const base: [*]u8 = @ptrCast(u);
+        const p: [*]Value = @ptrCast(@alignCast(base + @sizeOf(Userdata)));
+        return p[0..u.nuser];
+    }
+    pub inline fn data(u: *Userdata) [*]u8 {
+        const base: [*]u8 = @ptrCast(u);
+        return base + @sizeOf(Userdata) + @as(usize, u.nuser) * @sizeOf(Value);
+    }
+    pub inline fn allocSize(size: usize, nuser: usize) usize {
+        return @sizeOf(Userdata) + nuser * @sizeOf(Value) + size;
+    }
+};
+
+pub const Vector = struct {
+    hdr: Header,
+    bytes: std.ArrayList(u8) = .empty,
+    /// Set when the payload was transferred to another worker.
+    detached: bool = false,
+};
+
+pub const EnumRoot = struct {
+    hdr: Header,
+    names: []*String,
+    /// Lazily created values, one per name.
+    values: []?*EnumValue,
+};
+
+pub const EnumValue = struct {
+    hdr: Header,
+    root: *EnumRoot,
+    index: u32,
+};
+
+comptime {
+    // Headers come first so a Header pointer converts to the object.
+    std.debug.assert(@offsetOf(String, "hdr") == 0);
+    std.debug.assert(@offsetOf(Table, "hdr") == 0);
+    std.debug.assert(@offsetOf(Closure, "hdr") == 0);
+    std.debug.assert(@sizeOf(Closure) % @alignOf(*Upvalue) == 0);
+    std.debug.assert(@sizeOf(Userdata) % 16 == 0 or @sizeOf(Userdata) % 8 == 0);
+}
