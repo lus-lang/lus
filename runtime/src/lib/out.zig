@@ -9,8 +9,17 @@ const Global = state.Global;
 pub const Out = struct {
     buf: std.ArrayList(u8) = .empty,
     file: std.Io.File,
+    /// The buffering mode set by `setvbuf`.
+    mode: Mode = .full,
+
+    pub const Mode = enum { no, line, full };
 
     pub fn write(o: *Out, g: *Global, bytes: []const u8) void {
+        defer switch (o.mode) {
+            .full => {},
+            .no => o.flush(g),
+            .line => if (std.mem.indexOfScalar(u8, bytes, '\n') != null) o.flush(g),
+        };
         if (o.buf.items.len + bytes.len > 1 << 16) o.flush(g);
         if (bytes.len >= 1 << 16) {
             o.file.writeStreamingAll(g.io, bytes) catch {};

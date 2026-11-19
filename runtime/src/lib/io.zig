@@ -544,7 +544,17 @@ fn ioFlush(l: *Thread) Error!u32 {
 }
 
 fn fSetvbuf(l: *Thread) Error!u32 {
-    _ = try checkHandle(l, 1);
+    const h = try checkHandle(l, 1);
+    const mode = try aux.checkOption(l, 2, null, &.{ "no", "full", "line" });
+    if (h.kind == .stdout) {
+        const o = out.stdout(l.g);
+        o.mode = switch (mode) {
+            0 => .no,
+            1 => .full,
+            else => .line,
+        };
+        if (o.mode != .full) o.flush(l.g);
+    }
     return aux.retBool(l, true);
 }
 

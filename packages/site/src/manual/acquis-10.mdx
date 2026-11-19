@@ -73,8 +73,8 @@ Use the `~` prefix to permanently reject a permission:
 -- Reject network access
 pledge("~network")
 
--- Later: cannot grant what was rejected
-local ok = pledge("network")  -- returns false
+-- Later: granting it again raises "permission \"network\" was rejected"
+local ok, err = catch pledge("network")
 ```
 
 This is useful for host applications that want to restrict scripts from ever acquiring certain capabilities.
@@ -106,7 +106,7 @@ else
 end
 ```
 
-For sealed or rejected permissions, `pledge` returns `false` without erroring. For invalid permission names, it raises an error.
+In a sealed state, `pledge` returns `false` without erroring. Granting a permission that was rejected with `~` raises an error naming that permission, and so does an invalid permission name.
 
 ## CLI usage
 

@@ -293,21 +293,31 @@ pub fn hostMatch(granted: []const u8, requested: []const u8) bool {
     return true;
 }
 
+/// The absolute path of an existing file. WASI has no realpath, and its
+/// file system has no symbolic links to resolve, so there the path resolves
+/// lexically against the root.
+fn realPath(g: *Global, path: []const u8) ![]u8 {
+    const cwd = std.Io.Dir.cwd();
+    if (@import("builtin").os.tag == .wasi) {
+        _ = try cwd.statFile(g.io, path, .{});
+        return std.fs.path.resolve(g.gpa, &.{ "/", path });
+    }
+    return cwd.realPathFileAlloc(g.io, path, g.gpa);
+}
+
 /// Canonical absolute path: realpath when the file exists, otherwise the
 /// realpath of its parent plus the final component. Returns null when the
 /// path cannot be resolved (which callers treat as denied).
 pub fn canonicalize(g: *Global, path: []const u8) ?[]u8 {
-    const io = g.io;
     const gpa = g.gpa;
-    const cwd = std.Io.Dir.cwd();
-    if (cwd.realPathFileAlloc(io, path, gpa)) |r| {
+    if (realPath(g, path)) |r| {
         defer gpa.free(r);
         return gpa.dupe(u8, r) catch null;
     } else |_| {}
     const slash = std.mem.lastIndexOfScalar(u8, path, '/');
     const parent = if (slash) |sl| (if (sl == 0) "/" else path[0..sl]) else ".";
     const base = if (slash) |sl| path[sl + 1 ..] else path;
-    const rp = cwd.realPathFileAlloc(io, parent, gpa) catch return null;
+    const rp = realPath(g, parent) catch return null;
     defer gpa.free(rp);
     return std.fs.path.join(gpa, &.{ rp, base }) catch null;
 }
@@ -322,7 +332,7 @@ pub fn canonicalizeLink(g: *Global, path: []const u8) ?[]u8 {
     const parent = if (slash) |sl| (if (sl == 0) "/" else trimmed[0..sl]) else ".";
     const base = if (slash) |sl| trimmed[sl + 1 ..] else trimmed;
     if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return canonicalize(g, path);
-    const rp = std.Io.Dir.cwd().realPathFileAlloc(g.io, parent, gpa) catch return null;
+    const rp = realPath(g, parent) catch return null;
     defer gpa.free(rp);
     return std.fs.path.join(gpa, &.{ rp, base }) catch null;
 }
@@ -342,7 +352,7 @@ fn canonicalPattern(g: *Global, pattern: []const u8, keep_last: bool) []u8 {
     var dir_end = cut;
     while (true) {
         const dir = if (dir_end == 0) "/" else pattern[0..dir_end];
-        if (std.Io.Dir.cwd().realPathFileAlloc(g.io, dir, gpa)) |rp| {
+        if (realPath(g, dir)) |rp| {
             defer gpa.free(rp);
             const rest = pattern[dir_end..];
             if (rest.len > 0 and rest[0] != '/') return std.mem.concat(gpa, u8, &.{ rp, "/", rest }) catch @panic("oom");

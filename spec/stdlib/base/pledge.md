@@ -11,7 +11,7 @@ params:
 returns: boolean
 ---
 
-Grants or checks a permission. Returns `true` if the permission was granted, `false` if it was denied or the state is sealed.
+Grants or checks a permission. Returns `true` if the permission was granted and `false` if it was denied or the state is sealed. Granting a permission that was rejected with `~` raises an error.
 
 The `name` arguments specify the permissions to grant or check.
 
