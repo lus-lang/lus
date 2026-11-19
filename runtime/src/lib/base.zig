@@ -393,15 +393,22 @@ fn collectgarbage(l: *Thread) Error!u32 {
 /// warnings, as in Lua.
 pub fn runFinalizers(l: *Thread) Error!void {
     const g = l.g;
+    // Finalizers never nest: one running finalizer does not start the
+    // queue again at its own safe points.
+    if (g.running_finalizers) return;
+    g.running_finalizers = true;
+    defer g.running_finalizers = false;
     while (g.tobefnz.pop()) |h| {
-        h.finalize = .done;
+        // The object is an ordinary object again: setting a metatable with
+        // __gc inside its finalizer registers it for one more round.
+        h.finalize = .none;
         const v = switch (h.tag) {
             .table => Value.obj(.table, h),
             .userdata => Value.obj(.userdata, h),
             else => continue,
         };
         const tm = l.metamethod(v, .gc);
-        if (tm.tag != .closure and tm.tag != .native) continue;
+        if (tm.isNil()) continue;
         const saved = l.top;
         try l.push(tm);
         try l.push(v);

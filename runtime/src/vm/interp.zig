@@ -423,6 +423,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 try setFast(l, t, Value.int(opc.b(ins)), R.reg(l, c.base, opc.c(ins)).*);
             },
             .newtable => {
+                if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) try runPendingFinalizers(l);
                 const nb: usize = opc.b(ins);
                 const nc: usize = opc.c(ins);
                 const t = try l.newTable(nb, if (nc == 0) 0 else nc);
@@ -503,7 +504,15 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 }
             },
 
-            .jmp => pc = @intCast(@as(i64, pc) + opc.sj(ins)),
+            .jmp => {
+                const off = opc.sj(ins);
+                pc = @intCast(@as(i64, pc) + off);
+                // Loops are safe points for pending finalizers.
+                if (off < 0 and l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                    l.frames.items[c.fi].pc = pc;
+                    try runPendingFinalizers(l);
+                }
+            },
             .eq => {
                 const x = R.reg(l, c.base, ra).*;
                 const y = R.reg(l, c.base, opc.b(ins)).*;
@@ -1055,8 +1064,6 @@ fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {
 
 /// Runs queued `__gc` finalizers at a safe point (a call instruction).
 fn runPendingFinalizers(l: *Thread) Error!void {
-    l.g.running_finalizers = true;
-    defer l.g.running_finalizers = false;
     try @import("../lib/base.zig").runFinalizers(l);
 }
 

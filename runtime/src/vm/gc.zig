@@ -270,17 +270,22 @@ const Marker = struct {
         }
     }
 
+    /// Moves unreachable objects with finalizers to the finalizer queue,
+    /// keeping registration order. The queue runs from its end, so the
+    /// most recently registered object is finalized first.
     fn separateFinalizable(m: *Marker) void {
         const g = m.g;
-        var i: usize = 0;
-        while (i < g.finobj.items.len) {
-            const h = g.finobj.items[i];
+        var keep: usize = 0;
+        for (g.finobj.items) |h| {
             if (!h.marked) {
-                _ = g.finobj.swapRemove(i);
                 g.tobefnz.append(g.gpa, h) catch {};
                 m.markObject(h);
-            } else i += 1;
+            } else {
+                g.finobj.items[keep] = h;
+                keep += 1;
+            }
         }
+        g.finobj.items.len = keep;
     }
 
     fn clearWeak(m: *Marker) void {
