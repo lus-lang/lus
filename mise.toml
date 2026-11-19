@@ -2,7 +2,6 @@
 zig = "0.17.1"
 node = "24.7.0"
 pnpm = "10.18.0"
-python = "3.12"
 
 [env]
 ZIG_GLOBAL_CACHE_DIR = "{{config_root}}/runtime/.zig-cache/global"
@@ -22,6 +21,11 @@ run = [
   "LUS_JIT=eager zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "zig-out/bin/lus test --doc ../packages/site/src/manual ../spec",
 ]
+
+[tasks."install:test"]
+description = "Run install.sh against a local release built from runtime/zig-out"
+depends = ["build"]
+run = "node --test packaging/install/install.test.mjs"
 
 [tasks.fuzz]
 description = "Fuzz the lexer, parser, compiler, formatter, and chunk loader"

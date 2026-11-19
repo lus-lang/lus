@@ -2,10 +2,9 @@
 *.out
 .pnpm-store/
 .DS_Store
-__pycache__/
-*.pyc
 *.vsix
 node_modules/
 zig-out/
 .zig-cache/
 zig-pkg/
+packaging/install/archive/

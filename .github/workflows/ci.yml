@@ -99,9 +99,12 @@ jobs:
           mkdir -p ../packages/wasm/dist
           cp zig-out/wasm/lus.wasm ../packages/wasm/dist/lus.wasm
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Unix installer
+        if: runner.os != 'Windows'
+        run: node --test packaging/install/install.test.mjs
       - name: WebAssembly host tests
         if: runner.os == 'Linux'
         working-directory: packages/wasm
