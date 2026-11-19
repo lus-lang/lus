@@ -37,9 +37,21 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "getuservalue", .func = getuservalue },
     .{ .name = "setuservalue", .func = setuservalue },
 
+    .{ .name = "jit", .func = jitStatus },
     .{ .name = "parse", .func = parse },
     .{ .name = "format", .func = formatSource },
 };
+
+/// debug.jit([f]): the JIT setting of the state, or whether the Lus
+/// function `f` has native code.
+fn jitStatus(l: *Thread) Error!u32 {
+    const jit = @import("../jit/jit.zig");
+    const f = l.arg(1);
+    if (f.isNil()) return aux.retStr(l, @tagName(jit.setting(l.g)));
+    if (f.tag == .closure) return aux.ret(l, Value.boolean(jit.isCompiled(f.as(object.Closure).proto)));
+    if (f.tag == .native) return aux.ret(l, Value.boolean(false));
+    return aux.typeError(l, 1, "function");
+}
 
 pub fn open(l: *Thread) Error!void {
     const t = try aux.newLib(l, &funcs);
@@ -685,4 +697,3 @@ fn debugRepl(l: *Thread) Error!u32 {
         if (eof) return 0;
     }
 }
-

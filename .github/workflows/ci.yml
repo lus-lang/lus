@@ -79,6 +79,13 @@ jobs:
       - name: Conformance tests
         working-directory: runtime
         run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in native code
+        # Every function compiles on its first call. A platform without
+        # the JIT runs the suite interpreted once more.
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
       - name: Documentation examples
         working-directory: runtime
         run: zig-out/bin/lus test --doc ../packages/site/src/manual ../spec

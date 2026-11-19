@@ -62,6 +62,7 @@ test {
     _ = vm.ops;
     _ = vm.interp;
     _ = vm.pledge;
+    _ = @import("jit/jit.zig");
     _ = @import("vm/heapcount.zig");
     _ = @import("fuzz.zig");
     _ = compile.opcodes;

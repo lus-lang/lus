@@ -22,6 +22,7 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 - `src/syntax`: lexer, syntax tree, parser, tree walker.
 - `src/compile`: code generator, bytecode format, disassembler.
 - `src/vm`: values, objects, strings (WTF-8), tables, the collector, the interpreter, generic operations (`ops.zig`), debug information, pledge.
+- `src/jit`: the baseline JIT. `jit.zig` holds the tier-up policy and the hand-over between the tiers, `emit.zig` the templates, `a64.zig` and `x64.zig` the assemblers, `helpers.zig` the routines native code calls, and `mem.zig` the executable memory.
 - `src/lib`: the standard library, one file per module, opened from `lib/init.zig`.
 - `src/tools`: `lus test` and the other developer tools.
 - `src/api.zig`: the embedding interface used from Zig. `src/capi.zig`: the C interface declared in `include/lus.h`. `src/main.zig`: the CLI. `src/wasm.zig`: the root of the WebAssembly build, which exports the C interface.
@@ -53,6 +54,12 @@ C functions never see a Zig error. Every exported function that can fail returns
 - Match the semantics and error messages of the legacy C runtime in `../legacy/lus/src` and of the specification in `../spec/stdlib`, unless a design note in `../spec/design` changes them.
 - Prose and comments follow the repository rules in `../AGENTS.md`: full sentences, no em or en dashes, no semicolons.
 - Tests for a module are Lus files run with `lus test` or plain scripts run with `lus`. Run the legacy corpus from a scratch copy of `../legacy/lus-tests`, never from the repository, because some tests write files.
+
+## The JIT
+
+Hot functions compile to native code on aarch64 and x86-64 (`../spec/design/jit.md`). `-Djit=false` builds without it. At run time `LUS_JIT=off` interprets everything, `LUS_JIT=eager` compiles every function on its first call, and `LUS_JIT_THRESHOLD=N` sets how many calls and loop iterations a function sees before it compiles. `debug.jit()` reports the setting.
+
+Native code calls the interpreter's own body of an opcode for everything it does not run inline, so a change to an opcode in `vm/interp.zig` reaches both tiers. A change to a fast path in `jit/emit.zig` must keep the interpreter's results exactly. Run the conformance suite with `LUS_JIT=eager` after either kind of change, and on x86-64 as well (a cross-built `x86_64-macos` binary runs under Rosetta).
 
 ## Fuzzing
 

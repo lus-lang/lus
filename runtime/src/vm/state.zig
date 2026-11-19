@@ -222,6 +222,8 @@ pub const Global = struct {
     /// `debug.sethook`. Code compiles with optimizations that hide locals
     /// turned off while it is attached.
     debugger: ?*const Debugger = null,
+    /// The JIT of this state: its settings and its executable memory.
+    jit: @import("../jit/jit.zig").State = .{},
 };
 
 /// The native hook entry point used by `lus debug`. Every thread created
@@ -266,6 +268,14 @@ pub const Frame = struct {
     finish: Finish = .none,
     /// Set on the frame of a running debug hook.
     hook: bool = false,
+    /// Set on a frame that native code pushed for a plain call between
+    /// two Lus functions. Such a frame has no finish action and is not a
+    /// boundary, and its caller is a Lus frame of the same run, so native
+    /// code returns from it without asking the interpreter.
+    lean: bool = false,
+    /// On a lean frame, the address in native code where the caller
+    /// continues.
+    resume_at: usize = 0,
 };
 
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };
@@ -315,6 +325,9 @@ pub const Thread = struct {
     /// Per-thread extension slots (permission set, debug hooks).
     pledges: ?*anyopaque = null,
     hook: ?*anyopaque = null,
+    /// Events left before the interpreter samples the running function
+    /// for the JIT. The dispatch loop keeps it in a register while it runs.
+    jit_budget: u32 = 1,
 
     pub const max_stack = 1_000_000;
     pub const hook_call: u8 = 1;
@@ -640,6 +653,7 @@ pub fn freeExtra(g: *Global, h: *gc.Header) void {
     switch (h.tag) {
         .proto => {
             const p = h.as(object.Proto);
+            @import("../jit/jit.zig").freeProto(g, p);
             gpa.free(p.code);
             gpa.free(p.ic);
             gpa.free(p.constants);
@@ -710,6 +724,7 @@ pub fn create(gpa: Allocator, io: std.Io) !*Global {
 pub fn destroy(g: *Global) void {
     const gpa = g.gpa;
     gc.freeAll(g);
+    @import("../jit/jit.zig").deinit(g);
     g.strings.deinit(gpa);
     g.fixed.deinit(gpa);
     g.finobj.deinit(gpa);

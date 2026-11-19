@@ -286,6 +286,7 @@ fn closeFunc(c: *Compiler, fs: *FuncState) Error!*Proto {
     p.upvals = ups;
     p.num_params = fs.num_params;
     p.is_vararg = fs.is_vararg or fs.f.is_vararg;
+    p.plain_call = !p.is_vararg;
     p.max_stack = @max(fs.max_stack, 2);
     p.line_defined = fs.f.line;
     p.last_line_defined = fs.f.end_line;

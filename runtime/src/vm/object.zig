@@ -206,6 +206,10 @@ pub const Proto = struct {
     hdr: Header,
     num_params: u8 = 0,
     is_vararg: bool = false,
+    /// True when the function has fixed parameters and no native code, so
+    /// that the interpreter enters it on its shortest path. The default
+    /// sends every call through the general path, which is always right.
+    plain_call: bool = false,
     max_stack: u8 = 2,
     line_defined: u32 = 0,
     last_line_defined: u32 = 0,
@@ -222,6 +226,27 @@ pub const Proto = struct {
     /// Inline caches, one entry per instruction, indexed by pc. Only
     /// string-keyed table accesses use them.
     ic: []IcEntry = &.{},
+    /// Counts down the calls, loop iterations, and returns the function
+    /// sees. At zero the interpreter asks the JIT what to do with the
+    /// function. A function with native code keeps the counter at one.
+    hot: u32 = 1,
+    jit_state: JitState = .fresh,
+    /// The native code of the function (a `jit.Code`), or null.
+    jit_code: ?*anyopaque = null,
+    /// Address that native code calls to enter the function with fixed
+    /// parameters, or zero when the function has no native code or takes
+    /// variable arguments.
+    jit_entry: usize = 0,
+
+    pub const JitState = enum(u8) {
+        /// Not yet seen by the JIT.
+        fresh,
+        /// Counting toward the threshold.
+        counting,
+        compiled,
+        /// The function stays in the interpreter.
+        declined,
+    };
 
     /// Allocates the inline caches for the code, all empty.
     pub fn initIc(p: *Proto, gpa: std.mem.Allocator) !void {

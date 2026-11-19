@@ -366,6 +366,7 @@ Suspends the running coroutine. Arguments to `yield` become the extra return val
       "debug.getregistry",
       "debug.getupvalue",
       "debug.getuservalue",
+      "debug.jit",
       "debug.parse",
       "debug.queryplan",
       "debug.sethook",
@@ -626,6 +627,36 @@ Returns the `n`-th user value associated with userdata `u`, plus a boolean indic
     since = "0.1.0",
     source = "stdlib/debug/getuservalue.md",
     stability = "stable",
+  },
+  ["debug.jit"] = {
+    children = {},
+    description = [[
+Reports on the baseline JIT. Called with no argument, it returns the setting of the running state as a string: `"on"` when hot functions compile to native code, `"eager"` when every function compiles on its first call, and `"off"` when the state only interprets. The setting is `"off"` in a build without a JIT, on a platform without one, and under `LUS_JIT=off`.
+
+Called with a function, it returns `true` when that function has native code now and `false` otherwise. A native function never has any.
+
+The JIT changes how fast a program runs and nothing else, so this function exists for tests and for measurements.]],
+    kind = "function",
+    module = "debug",
+    name = "debug.jit",
+    origin = "lus",
+    params = {
+      {
+        name = "f",
+        optional = true,
+        type = "function",
+      },
+    },
+    parent = "debug",
+    returns = {
+      {
+        type = "string | boolean",
+      },
+    },
+    short_name = "jit",
+    since = "2.0.0",
+    source = "stdlib/debug/jit.md",
+    stability = "unstable",
   },
   ["debug.parse"] = {
     children = {},

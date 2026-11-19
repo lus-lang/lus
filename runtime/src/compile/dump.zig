@@ -252,6 +252,7 @@ const Reader = struct {
         p.last_line_defined = @intCast(try r.uint());
         p.num_params = try r.byte();
         p.is_vararg = try r.byte() != 0;
+        p.plain_call = !p.is_vararg;
         p.max_stack = try r.byte();
         const ncode = try r.len();
         p.code = try gpa.alloc(u32, ncode);
