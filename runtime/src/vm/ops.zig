@@ -13,6 +13,7 @@ const numeric = @import("numeric.zig");
 const wtf8 = @import("wtf8.zig");
 const lexer = @import("../syntax/lexer.zig");
 const interp = @import("interp.zig");
+const fdigits = @import("fdigits.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Table = object.Table;
@@ -471,12 +472,15 @@ pub fn formatFloat(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !voi
 pub const Digits = struct { buf: [64]u8, len: usize, exp: i32 };
 
 pub fn roundedDigits(f: f64, p: usize) Digits {
-    var tmp: [128]u8 = undefined;
-    // Forty extra exact digits are enough to decide every tie.
-    const sci = std.fmt.bufPrint(&tmp, "{e:.48}", .{@abs(f)}) catch unreachable;
+    const a = @abs(f);
+    // Fast path: the shortest round-trip digits. Rounding them to p
+    // digits matches rounding the exact value whenever p is at most 15 and
+    // the cut does not land on an apparent tie.
+    var tmp: [64]u8 = undefined;
+    const sci = std.fmt.bufPrint(&tmp, "{e}", .{a}) catch unreachable;
     const epos = std.mem.indexOfScalar(u8, sci, 'e').?;
-    var exp = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch 0;
-    var all: [64]u8 = undefined;
+    const exp0 = std.fmt.parseInt(i32, sci[epos + 1 ..], 10) catch 0;
+    var all: [32]u8 = undefined;
     var n: usize = 0;
     for (sci[0..epos]) |ch| {
         if (ch != '.') {
@@ -484,18 +488,34 @@ pub fn roundedDigits(f: f64, p: usize) Digits {
             n += 1;
         }
     }
+    const tie = p < n and all[p] == '5' and std.mem.allEqual(u8, all[p + 1 .. n], '0');
+    if (p <= 15 and !tie) {
+        return roundSlice(all[0..n], exp0, p);
+    }
+    // Exact path through a big-integer expansion of the double.
+    var heap: [32 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&heap);
+    var dec = fdigits.Decimal.init(fba.allocator(), a) catch return roundSlice(all[0..n], exp0, p);
+    dec.round(@intCast(p));
+    var out: Digits = .{ .buf = undefined, .len = @min(dec.digits.items.len, p), .exp = dec.exp };
+    @memcpy(out.buf[0..out.len], dec.digits.items[0..out.len]);
+    if (out.len == 0) {
+        out.buf[0] = '0';
+        out.len = 1;
+    }
+    return out;
+}
+
+fn roundSlice(all: []const u8, exp0: i32, p: usize) Digits {
+    var exp = exp0;
+    const n = all.len;
     var out: Digits = .{ .buf = undefined, .len = @min(p, n), .exp = exp };
     @memcpy(out.buf[0..out.len], all[0..out.len]);
     if (p < n) {
         const next = all[p];
-        var rest_nonzero = false;
-        for (all[p + 1 .. n]) |d| if (d != '0') {
-            rest_nonzero = true;
-            break;
-        };
+        const rest_nonzero = !std.mem.allEqual(u8, all[p + 1 .. n], '0');
         const last_odd = p > 0 and (all[p - 1] - '0') % 2 == 1;
-        const up = next > '5' or (next == '5' and (rest_nonzero or last_odd));
-        if (up) {
+        if (next > '5' or (next == '5' and (rest_nonzero or last_odd))) {
             var i = out.len;
             while (i > 0) {
                 i -= 1;
@@ -506,7 +526,6 @@ pub fn roundedDigits(f: f64, p: usize) Digits {
                     break;
                 }
             } else {
-                // Carry past the first digit: 999 -> 1000.
                 std.mem.copyBackwards(u8, out.buf[1 .. out.len + 1], out.buf[0..out.len]);
                 out.buf[0] = '1';
                 exp += 1;
