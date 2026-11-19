@@ -55,7 +55,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, globals, "_VERSION", try l.newStringValue("Lus 2.0"));
     // `range` is recognized by the numeric loop lowering.
     const r = try aux.getField(l, globals, "range");
-    g.ext.put(g.gpa, "range", @ptrFromInt(r.payload)) catch return l.raiseMem();
+    g.ext.put(g.gpa, "range", @ptrFromInt(r.address())) catch return l.raiseMem();
 }
 
 fn print(l: *Thread) Error!u32 {

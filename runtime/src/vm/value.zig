@@ -82,10 +82,15 @@ pub const Value = extern struct {
         };
     }
     pub inline fn header(v: Value) *gc.Header {
-        return @ptrFromInt(v.payload);
+        return @ptrFromInt(v.address());
     }
     pub inline fn as(v: Value, comptime T: type) *T {
-        return @ptrFromInt(v.payload);
+        return @ptrFromInt(v.address());
+    }
+    /// The payload as a pointer-sized address. On 32-bit targets the
+    /// upper half of the payload of a pointer value is always zero.
+    pub inline fn address(v: Value) usize {
+        return @truncate(v.payload);
     }
     pub inline fn raw(v: Value) u64 {
         return v.payload;

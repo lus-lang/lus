@@ -4,8 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const options = b.addOptions();
-    options.addOption(u32, "gc_stress", b.option(u32, "gc-stress", "Collect at every Nth allocation point to expose missing roots (0 disables)") orelse 0);
+    const requested: Features = .{
+        .gc_stress = b.option(u32, "gc-stress", "Collect at every Nth allocation point to expose missing roots (0 disables)") orelse 0,
+        .net = b.option(bool, "net", "Include the network library (default: true, false on WebAssembly)"),
+        .sqlite = b.option(bool, "sqlite", "Include SQLite (default: true)"),
+        .workers = b.option(bool, "workers", "Include the worker library (default: true, false on WebAssembly)"),
+        .archive = b.option(bool, "archive", "Include vector.archive compression (default: true)"),
+    };
+    const options = requested.resolve(b, target);
+    const features = requested.forTarget(target);
 
     const lus_mod = b.createModule(.{
         .root_source_file = b.path("src/lus.zig"),
@@ -14,8 +21,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     lus_mod.addOptions("build_options", options);
-    lus_mod.linkLibrary(compressionLibrary(b, target));
-    lus_mod.linkLibrary(sqliteLibrary(b, target));
+    if (features.archive) lus_mod.linkLibrary(compressionLibrary(b, target));
+    if (features.sqlite) lus_mod.linkLibrary(sqliteLibrary(b, target));
 
     const exe = b.addExecutable(.{
         .name = "lus",
@@ -67,8 +74,8 @@ pub fn build(b: *std.Build) void {
     // The C embedding library: `liblus.a`, the shared `liblus`, and the
     // header `lus.h`. Each library carries the vendored C code, so a host
     // links one file.
-    const static_lib = embedLibrary(b, target, optimize, .static, options);
-    const shared_lib = embedLibrary(b, target, optimize, .dynamic, options);
+    const static_lib = embedLibrary(b, target, optimize, .static, options, features);
+    const shared_lib = embedLibrary(b, target, optimize, .dynamic, options, features);
     const lib_step = b.step("lib", "Build the C embedding libraries and install lus.h");
     const header = b.addInstallHeaderFile(b.path("include/lus.h"), "lus.h");
     lib_step.dependOn(&b.addInstallArtifact(static_lib, .{}).step);
@@ -94,6 +101,15 @@ pub fn build(b: *std.Build) void {
         run_t.expectExitCode(0);
         embed_step.dependOn(&run_t.step);
     }
+
+    // `zig build wasm` makes zig-out/wasm/lus.wasm. It keeps safety checks
+    // unless -Dwasm-optimize names another mode, because the playground
+    // runs untrusted code and a failed check traps instead of corrupting
+    // memory. The safe build is about 15 percent larger than a small one.
+    const wasm_optimize = b.option(std.builtin.OptimizeMode, "wasm-optimize", "Optimization mode of the WebAssembly build: debug, safe, fast, or small (default: safe)") orelse std.builtin.OptimizeMode.ReleaseSafe;
+    const wasm = wasmModule(b, requested, wasm_optimize);
+    const wasm_step = b.step("wasm", "Build lus.wasm for wasm32-wasi");
+    wasm_step.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "wasm" } } }).step);
 }
 
 /// Adds one run of `lus <command>` per fixture in `../tests/<command>`.
@@ -156,7 +172,7 @@ fn fixtureSuite(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
 
 /// The embedding library rooted at `src/capi.zig`. The vendored C sources
 /// are compiled into it, so the archive is self-contained.
-fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, linkage: std.builtin.LinkMode, options: *std.Build.Step.Options) *std.Build.Step.Compile {
+fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, linkage: std.builtin.LinkMode, options: *std.Build.Step.Options, features: Features.Resolved) *std.Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/capi.zig"),
         .target = target,
@@ -164,9 +180,74 @@ fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
         .link_libc = true,
         .pic = true,
     });
-    mod.addImport("vendor", vendorModule(b, target));
+    if (vendorModule(b, target, .{ .archive = features.archive, .sqlite = features.sqlite })) |v| mod.addImport("vendor", v);
     mod.addOptions("build_options", options);
     return b.addLibrary(.{ .name = "lus", .linkage = linkage, .root_module = mod });
+}
+
+/// The libraries a build includes. A null field takes the default for the
+/// target: everything on native targets, and on WebAssembly everything
+/// except the network and worker libraries, which need sockets and
+/// threads that WASI does not provide.
+const Features = struct {
+    gc_stress: u32 = 0,
+    net: ?bool = null,
+    sqlite: ?bool = null,
+    workers: ?bool = null,
+    archive: ?bool = null,
+
+    const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
+
+    fn forTarget(f: Features, target: std.Build.ResolvedTarget) Resolved {
+        const wasm = target.result.cpu.arch.isWasm();
+        return .{
+            .net = f.net orelse !wasm,
+            .sqlite = f.sqlite orelse true,
+            .workers = f.workers orelse !wasm,
+            .archive = f.archive orelse true,
+        };
+    }
+
+    fn resolve(f: Features, b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Options {
+        const r = f.forTarget(target);
+        const options = b.addOptions();
+        options.addOption(u32, "gc_stress", f.gc_stress);
+        options.addOption(bool, "net", r.net);
+        options.addOption(bool, "sqlite", r.sqlite);
+        options.addOption(bool, "workers", r.workers);
+        options.addOption(bool, "archive", r.archive);
+        return options;
+    }
+};
+
+/// The WebAssembly build: `lus.wasm`, a WASI reactor that exports the C
+/// embedding interface of `include/lus.h` and the helpers of
+/// `src/wasm.zig` for the JavaScript host in `packages/wasm`. It has no `main`.
+/// The host calls `_initialize` once and then drives states through the
+/// exported functions.
+fn wasmModule(b: *std.Build, requested: Features, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
+    const target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
+    const features = requested.forTarget(target);
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/wasm.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        // Debug information would triple the download, so only debug
+        // builds keep it.
+        .strip = optimize != .debug,
+    });
+    if (vendorModule(b, target, .{ .archive = features.archive, .sqlite = features.sqlite })) |v| mod.addImport("vendor", v);
+    mod.addOptions("build_options", requested.resolve(b, target));
+    mod.export_symbol_names = wasmExports(b);
+    const exe = b.addExecutable(.{ .name = "lus", .root_module = mod });
+    exe.entry = .disabled;
+    exe.wasi_exec_model = .reactor;
+    // The interpreter recurses for nested calls and the parser for nested
+    // expressions, so the shadow stack gets the same megabyte the native
+    // main thread starts with.
+    exe.stack_size = 1 << 20;
+    return exe;
 }
 
 /// Builds the vendored Brotli and Zstandard C sources used by
@@ -265,6 +346,60 @@ const sqlite_flags = [_][]const u8{
     "-fno-sanitize=undefined",
 };
 
+/// The symbols `lus.wasm` exports: every function declared in
+/// `include/lus.h` and every `export fn` of `src/wasm.zig`. The list
+/// comes from the header itself, so the C and WebAssembly interfaces
+/// cannot drift apart. Inline helpers in the header are skipped, since a
+/// JavaScript host cannot call them anyway.
+fn wasmExports(b: *std.Build) []const []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    var helpers = std.mem.splitSequence(u8, @embedFile("src/wasm.zig"), "export fn ");
+    _ = helpers.next();
+    while (helpers.next()) |rest| {
+        const paren = std.mem.indexOfScalar(u8, rest, '(') orelse continue;
+        names.append(b.allocator, rest[0..paren]) catch @panic("OOM");
+    }
+    var lines = std.mem.splitScalar(u8, @embedFile("include/lus.h"), '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or !std.ascii.isAlphabetic(line[0])) continue;
+        if (std.mem.startsWith(u8, line, "typedef") or std.mem.startsWith(u8, line, "static") or std.mem.startsWith(u8, line, "extern")) continue;
+        const paren = std.mem.indexOfScalar(u8, line, '(') orelse continue;
+        var start = paren;
+        while (start > 0 and (std.ascii.isAlphanumeric(line[start - 1]) or line[start - 1] == '_')) start -= 1;
+        const name = line[start..paren];
+        if (std.mem.startsWith(u8, name, "lus_")) names.append(b.allocator, name) catch @panic("OOM");
+    }
+    return names.items;
+}
+
+/// Extra flags for SQLite on WASI. SQLite detects WASI by itself and then
+/// uses dot-file locking. WASI has no shared memory and no descriptor
+/// duplication, so the write-ahead log and memory mapping are compiled
+/// out, and wasi-libc emulates `mmap`, `getpid`, and signals for the rest
+/// of the unix VFS. The descriptor-binding bridge of the pledge VFS is
+/// only reached with a write-ahead log, so its `F_DUPFD_CLOEXEC` gets an
+/// inert value.
+const sqlite_wasi_flags = [_][]const u8{
+    "-DSQLITE_OMIT_WAL",
+    "-DSQLITE_MAX_MMAP_SIZE=0",
+    "-DSQLITE_OMIT_POPEN",
+    "-D_WASI_EMULATED_MMAN",
+    "-D_WASI_EMULATED_GETPID",
+    "-D_WASI_EMULATED_SIGNAL",
+    "-DF_DUPFD_CLOEXEC=-1",
+};
+
+fn addSqliteSource(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    if (target.result.os.tag == .wasi) {
+        mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &(sqlite_flags ++ sqlite_wasi_flags) });
+        mod.linkSystemLibrary("wasi-emulated-mman", .{});
+        mod.linkSystemLibrary("wasi-emulated-getpid", .{});
+        mod.linkSystemLibrary("wasi-emulated-signal", .{});
+    } else {
+        mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &sqlite_flags });
+    }
+}
+
 /// SQLite always builds optimized, whatever the mode of the runtime, so
 /// debug builds of the interpreter stay usable.
 fn sqliteLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Compile {
@@ -274,20 +409,22 @@ fn sqliteLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Ste
         .link_libc = true,
         .pic = true,
     });
-    mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &sqlite_flags });
+    addSqliteSource(b, mod, target);
     return b.addLibrary(.{ .name = "sqlite3", .linkage = .static, .root_module = mod });
 }
 
 /// Every vendored C source in one optimized module. The embedding library
-/// imports it, so the C objects land inside `liblus.a` itself.
-fn vendorModule(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Module {
+/// imports it, so the C objects land inside `liblus.a` itself. Returns
+/// null when the build includes no vendored library.
+fn vendorModule(b: *std.Build, target: std.Build.ResolvedTarget, include: struct { archive: bool, sqlite: bool }) ?*std.Build.Module {
+    if (!include.archive and !include.sqlite) return null;
     const mod = b.createModule(.{
         .target = target,
         .optimize = .ReleaseFast,
         .link_libc = true,
         .pic = true,
     });
-    addCompressionSources(b, mod);
-    mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &sqlite_flags });
+    if (include.archive) addCompressionSources(b, mod);
+    if (include.sqlite) addSqliteSource(b, mod, target);
     return mod;
 }

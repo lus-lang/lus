@@ -17,6 +17,21 @@ description = "Run the Zig runtime unit and conformance tests"
 dir = "runtime"
 run = "zig build test"
 
+[tasks.wasm]
+description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"
+dir = "runtime"
+run = [
+  "zig build wasm",
+  "mkdir -p ../packages/wasm/dist",
+  "cp zig-out/wasm/lus.wasm ../packages/wasm/dist/lus.wasm",
+]
+
+[tasks."wasm:test"]
+description = "Run the lus.wasm host tests"
+depends = ["wasm"]
+dir = "packages/wasm"
+run = "node --test"
+
 [tasks.gen]
 description = "Regenerate LSP stdlib data and TextMate grammars from spec/"
 run = "pnpm run gen"

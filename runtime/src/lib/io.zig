@@ -85,7 +85,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, io_t, "stderr", stderr);
     try setDefault(l, "io.input", stdin);
     try setDefault(l, "io.output", stdout);
-    try @import("sqlite.zig").register(l, io_t);
+    if (@import("build_options").sqlite) try @import("sqlite.zig").register(l, io_t);
     try aux.setGlobal(l, "io", Value.obj(.table, io_t));
 }
 
@@ -674,6 +674,11 @@ fn ioLines(l: *Thread) Error!u32 {
 // --- processes and temporary files ------------------------------------
 
 fn ioPopen(l: *Thread) Error!u32 {
+    if (comptime !aux.can_spawn) return aux.unavailable(l, "io.popen");
+    return popen(l);
+}
+
+fn popen(l: *Thread) Error!u32 {
     const cmd = try aux.checkBytes(l, 1);
     const mode = (try aux.optString(l, 2, "r")).?;
     const reading = std.mem.eql(u8, mode, "r");

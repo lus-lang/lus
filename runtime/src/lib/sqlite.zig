@@ -318,7 +318,7 @@ const BoundShm = extern struct {
 /// would need creating, which raises a clear fs:write denial.
 fn bindReadonlyShm(f: *PFile) c_int {
     if (!f.owner.readonly or f.shm_bound) return c.OK;
-    if (builtin.os.tag == .windows) return c.OK;
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return c.OK;
     var buf: [path_cap + 8]u8 = undefined;
     const p = sidecar(buf[0 .. buf.len - 1], f.pathSlice(), "-shm") orelse return c.CANTOPEN;
     buf[p.len] = 0;

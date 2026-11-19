@@ -94,7 +94,7 @@ fn exit(l: *Thread) Error!u32 {
     // A worker cannot end the whole process. The optional `close`
     // argument would close the state first, and exiting directly releases
     // everything anyway.
-    if (@import("worker.zig").isWorker(l.g)) return l.raiseFmt("os.exit is unavailable in a worker", .{});
+    if (@import("build_options").workers and @import("worker.zig").isWorker(l.g)) return l.raiseFmt("os.exit is unavailable in a worker", .{});
     out.flushAll(l.g);
     std.process.exit(@truncate(@as(u64, @bitCast(status))));
 }
@@ -190,6 +190,15 @@ fn tmpname(l: *Thread) Error!u32 {
 }
 
 fn execute(l: *Thread) Error!u32 {
+    if (comptime !aux.can_spawn) {
+        // Without a command, os.execute reports that no shell exists.
+        if ((try aux.optString(l, 1, null)) == null) return aux.retBool(l, false);
+        return aux.unavailable(l, "os.execute");
+    }
+    return spawnShell(l);
+}
+
+fn spawnShell(l: *Thread) Error!u32 {
     const cmd = try aux.optString(l, 1, null);
     const c = cmd orelse return aux.retBool(l, true); // a shell is available
     if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for os.execute", .{});

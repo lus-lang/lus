@@ -14,7 +14,14 @@ const Global = state_mod.Global;
 const Thread = state_mod.Thread;
 
 pub const Header = struct {
-    next: ?*Header = null,
+    /// Every object starts with its header, and a header pointer converts
+    /// to the object pointer. Struct layout places the most aligned fields
+    /// first, so the header takes the largest alignment of any object
+    /// field. On 64-bit targets pointers already have it. On 32-bit
+    /// targets (wasm32) 16-byte alignment puts the header ahead of the
+    /// 8-byte values and integers, and it keeps the values that trail a
+    /// native or a userdata aligned.
+    next: ?*Header align(if (@sizeOf(usize) == 8) 8 else 16) = null,
     tag: Tag,
     marked: bool = false,
     /// Set on objects that wait for (or already ran) their finalizer.
@@ -33,6 +40,7 @@ pub const Header = struct {
 /// Allocates a zeroed object of type `T` with `extra` trailing bytes and
 /// links it into the heap. The caller initializes the fields.
 pub fn alloc(g: *Global, comptime T: type, tag: Tag, size: usize) !*T {
+    comptime std.debug.assert(@offsetOf(T, "hdr") == 0);
     const mem = try g.gpa.alignedAlloc(u8, .of(T), size);
     @memset(mem, 0);
     const obj: *T = @ptrCast(@alignCast(mem.ptr));
@@ -153,7 +161,10 @@ pub fn fullCollect(g: *Global) void {
     m.convergeEphemerons();
     m.clearWeak();
     sweep(g);
-    g.threshold = @max(g.counter.bytes * g.pause / 100, 256 * 1024);
+    // The product is formed in 64 bits, since it overflows a 32-bit
+    // usize once the heap passes a few dozen megabytes.
+    const next = (@as(u64, g.counter.bytes) *| g.pause) / 100;
+    g.threshold = @intCast(@max(@min(next, std.math.maxInt(usize)), 256 * 1024));
     g.cycles += 1;
 }
 
@@ -416,6 +427,6 @@ pub fn getParam(g: *const Global, p: Param) i64 {
 /// value. Only `pause` is stored by the current stage.
 pub fn setParam(g: *Global, p: Param, v: i64) i64 {
     const old = getParam(g, p);
-    if (v >= 0 and p == .pause) g.pause = @intCast(v);
+    if (v >= 0 and p == .pause) g.pause = std.math.cast(usize, v) orelse std.math.maxInt(usize);
     return old;
 }
