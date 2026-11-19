@@ -35,7 +35,8 @@ const usage =
     \\  -i               enter interactive mode after running 'script'
     \\  -l mod           require library 'mod' into global 'mod'
     \\  -l g=mod         require library 'mod' into global 'g'
-    \\  -v               show version information
+    \\  -v, --version    show version information
+    \\  -h, --help       show this help
     \\  -E               ignore environment variables
     \\  -W               turn warnings on
     \\  -P perm          grant a permission (also --pledge perm)
@@ -64,6 +65,7 @@ const Cli = struct {
     script_index: usize = 0,
     interactive: bool = false,
     version: bool = false,
+    help: bool = false,
     ignore_env: bool = false,
     warnings: bool = false,
     stdin: bool = false,
@@ -87,6 +89,9 @@ fn optRequire(c: *Cli, a: std.mem.Allocator, v: ?[]const u8) !void {
 }
 fn optInteractive(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
     c.interactive = true;
+}
+fn optHelp(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.help = true;
 }
 fn optVersion(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
     c.version = true;
@@ -123,6 +128,7 @@ const options = [_]OptSpec{
     .{ .short = "l", .long = null, .takes_arg = true, .apply = optRequire },
     .{ .short = "i", .long = null, .takes_arg = false, .apply = optInteractive },
     .{ .short = "v", .long = "version", .takes_arg = false, .apply = optVersion },
+    .{ .short = "h", .long = "help", .takes_arg = false, .apply = optHelp },
     .{ .short = "E", .long = null, .takes_arg = false, .apply = optIgnoreEnv },
     .{ .short = "W", .long = null, .takes_arg = false, .apply = optWarn },
     .{ .short = "P", .long = "pledge", .takes_arg = true, .apply = optPledge },
@@ -257,6 +263,10 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     defer cli.pledges.deinit(gpa);
     defer cli.flags.deinit(gpa);
     defer cli.includes.deinit(gpa);
+    if (cli.help) {
+        std.debug.print("{s}", .{usage});
+        return 0;
+    }
     if (cli.version) {
         std.debug.print("{s}\n", .{version});
         if (cli.script == null and cli.actions.items.len == 0 and !cli.interactive) return 0;

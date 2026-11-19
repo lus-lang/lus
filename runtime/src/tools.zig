@@ -3,7 +3,22 @@
 
 const std = @import("std");
 
+/// Usage for the commands that read their options themselves.
+const usages = .{
+    .{ "test", "usage: lus test [-u] [--filter TEXT] [--jobs N] [--timeout SECONDS] [--json] [-v] [PATH...]\n\nRuns every *_test.lus file under the given paths (default: the current\ndirectory). Each top-level function ending in _test is a test. -u updates\nsnapshots.\n" },
+    .{ "ast", "usage: lus ast [--no-comments] [--no-recover] FILE\n\nPrints the syntax tree of FILE as JSON.\n" },
+    .{ "build", "usage: lus build [-o OUT] [-P PERM]... [-F NAME=VALUE]... [--include PATH[:ALIAS]]... MAIN.lus\n\nBundles MAIN.lus and the modules it requires into a standalone executable.\n" },
+};
+
 pub fn run(init: std.process.Init, cmd: []const u8, args: []const []const u8) !u8 {
+    if (args.len > 0 and (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h"))) {
+        inline for (usages) |u| {
+            if (std.mem.eql(u8, cmd, u[0])) {
+                std.debug.print("{s}", .{u[1]});
+                return 0;
+            }
+        }
+    }
     if (std.mem.eql(u8, cmd, "test")) return @import("tools/test.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "ast")) return @import("tools/ast.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "fmt")) return @import("tools/fmt.zig").run(init, args);

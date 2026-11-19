@@ -408,12 +408,25 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
             if (std.mem.eql(u8, cn, case_name)) case_tbl = lus.vm.table.getInt(registry.as(Table), @intCast(tests.items.len * 2 + ci + 1));
         }
         if (case_tbl.tag == .table) {
+            // Positional entries run in order, then keyed entries, each
+            // labelled by its key.
+            const ct = case_tbl.as(Table);
             var k: i64 = 1;
             while (true) : (k += 1) {
-                const entry = lus.vm.table.getInt(case_tbl.as(Table), k);
+                const entry = lus.vm.table.getInt(ct, k);
                 if (entry.isNil()) break;
                 const label = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, k });
                 if (!runTest(l, &snap, label, fv, entry)) failed = true;
+            }
+            const positional = k - 1;
+            var key: Value = .nil;
+            while (lus.vm.table.next(ct, key) catch null) |e| : (key = e.key) {
+                if (e.key.tag == .integer and e.key.asInt() >= 1 and e.key.asInt() <= positional) continue;
+                const label = if (e.key.tag == .string)
+                    try std.fmt.allocPrint(arena, "{s}[{s}]", .{ name, e.key.as(String).bytes() })
+                else
+                    try std.fmt.allocPrint(arena, "{s}[?]", .{name});
+                if (!runTest(l, &snap, label, fv, e.val)) failed = true;
             }
         } else {
             if (!runTest(l, &snap, name, fv, null)) failed = true;
@@ -501,6 +514,11 @@ fn jsonEscape(gpa: std.mem.Allocator, o: *std.ArrayList(u8), s: []const u8) !voi
 // ---------------------------------------------------------------------
 // Source transformation
 
+fn appendOnce(arena: std.mem.Allocator, list: *std.ArrayList([]const u8), name: []const u8) !void {
+    for (list.items) |n| if (std.mem.eql(u8, n, name)) return;
+    try list.append(arena, name);
+}
+
 /// Collects tests and case tables, rewrites `assert` into power asserts,
 /// and makes the chunk return its tests as {name1, fn1, ..., cases...}.
 fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests: *std.ArrayList([]const u8), cases: *std.ArrayList([]const u8)) !void {
@@ -517,6 +535,17 @@ fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests
                 for (l.names) |n| {
                     if (std.mem.endsWith(u8, n.name.text, "_test")) try tests.append(arena, n.name.text);
                     if (std.mem.endsWith(u8, n.name.text, "_cases")) try cases.append(arena, n.name.text);
+                }
+            },
+            .global => |g| {
+                for (g.names) |n| {
+                    if (std.mem.endsWith(u8, n.name.text, "_cases")) try appendOnce(arena, cases, n.name.text);
+                }
+            },
+            // A case table may also be a plain global assignment.
+            .assign => |a| {
+                for (a.targets) |t| {
+                    if (t.kind == .name and std.mem.endsWith(u8, t.kind.name.text, "_cases")) try appendOnce(arena, cases, t.kind.name.text);
                 }
             },
             else => {},
