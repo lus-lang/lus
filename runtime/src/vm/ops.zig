@@ -587,10 +587,6 @@ pub fn rawToBuf(l: *Thread, buf: *std.ArrayList(u8), v: Value) !void {
         .false => try buf.appendSlice(gpa, "false"),
         .integer, .float, .bigint, .decimal => try numberToBuf(gpa, buf, v),
         .string => try buf.appendSlice(gpa, v.as(String).bytes()),
-        .enum_value => {
-            const e = v.as(object.EnumValue);
-            try buf.appendSlice(gpa, e.root.names[e.index].bytes());
-        },
         else => try buf.print(gpa, "{s}: 0x{x:0>14}", .{ l.typeNameOf(v), v.payload }),
     }
 }

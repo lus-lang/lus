@@ -2187,7 +2187,7 @@ fn evalHandlers(fs: *FuncState, an: ast.AttName, line: u32) Error![]u8 {
 fn runHandlers(fs: *FuncState, handlers: []const u8, name: []const u8, vreg: u32) Error!void {
     if (handlers.len == 0) return;
     // if v == nil skip all
-    const skip = try condJump(fs, .testnil, vreg, 0, 0);
+    const skip = try condJump(fs, .testnil, vreg, 0, 1);
     for (handlers) |h| {
         const base = fs.freereg;
         try reserveRegs(fs, 3);
@@ -2219,12 +2219,7 @@ fn localFrom(fs: *FuncState, names: []ast.AttName, source: *ast.Expr, line: u32)
     } else {
         try expr(fs, source, &src);
         const sreg = try exp2anyreg(fs, &src);
-        for (names, 0..) |an, i| {
-            var t: ExpDesc = ExpDesc.init(.nonreloc, sreg);
-            var k: ExpDesc = .{ .kind = .kstr, .strval = an.name.text };
-            try indexed(fs, &t, &k);
-            try exp2reg(fs, &t, base + @as(u32, @intCast(i)));
-        }
+        for (names, 0..) |an, i| try getFieldTo(fs, base + @as(u32, @intCast(i)), sreg, an.name.text);
     }
     fs.freereg = base + @as(u8, @intCast(names.len));
     for (names) |an| {
@@ -2381,12 +2376,7 @@ fn globalFrom(fs: *FuncState, defaults: []ast.Attrib, names: []ast.AttName, sour
     var src: ExpDesc = .{};
     try expr(fs, source, &src);
     const sreg = try exp2anyreg(fs, &src);
-    for (names, 0..) |an, i| {
-        var t: ExpDesc = ExpDesc.init(.nonreloc, sreg);
-        var k: ExpDesc = .{ .kind = .kstr, .strval = an.name.text };
-        try indexed(fs, &t, &k);
-        try exp2reg(fs, &t, base + @as(u32, @intCast(i)));
-    }
+    for (names, 0..) |an, i| try getFieldTo(fs, base + @as(u32, @intCast(i)), sreg, an.name.text);
     fs.freereg = base + @as(u8, @intCast(names.len));
     try declareGlobals(fs, defaults, names, line);
     var i = names.len;
@@ -2576,12 +2566,7 @@ fn assignFrom(fs: *FuncState, targets: []*ast.Expr, source: *ast.Expr, line: u32
     if (!try groupSourceFields(fs, source, names, base, line)) {
         try expr(fs, source, &src);
         const sreg = try exp2anyreg(fs, &src);
-        for (names, 0..) |n, i| {
-            var t: ExpDesc = ExpDesc.init(.nonreloc, sreg);
-            var k: ExpDesc = .{ .kind = .kstr, .strval = n.name.text };
-            try indexed(fs, &t, &k);
-            try exp2reg(fs, &t, base + @as(u32, @intCast(i)));
-        }
+        for (names, 0..) |n, i| try getFieldTo(fs, base + @as(u32, @intCast(i)), sreg, n.name.text);
     }
     fs.freereg = base + @as(u8, @intCast(targets.len));
     var i = targets.len;
@@ -2783,8 +2768,13 @@ fn whileStat(fs: *FuncState, cond: ast.Cond, body: *ast.Block, line: u32) Error!
     const exit = try condition(fs, cond, line);
     var bl: Block = undefined;
     enterBlock(fs, &bl, true);
+    // The body has its own block, so locals captured by closures are
+    // closed on every iteration. `continue` lands before that close.
+    var inner: Block = undefined;
+    enterBlock(fs, &inner, false);
     try statList(fs, body.stats);
     try patchContinues(fs, &bl, getLabel(fs), true);
+    try leaveBlock(fs);
     const back = try jump(fs);
     try patchList(fs, back, start);
     try leaveBlock(fs);
@@ -2921,9 +2911,9 @@ fn forBody(fs: *FuncState, base: u8, line: u32, nvars: u32, generic: bool, body:
     try adjustLocalVars(fs, nvars);
     try reserveRegs(fs, nvars);
     try statList(fs, body.stats);
-    try leaveBlock(fs);
-    // Continue target: the loop update.
+    // Continue lands before the body block closes its captured locals.
     try patchContinues(fs, loop, getLabel(fs), true);
+    try leaveBlock(fs);
     fs.line = line;
     const prep_target = getLabel(fs);
     if (generic) {
@@ -3068,4 +3058,16 @@ fn abortFunc(c: *Compiler, fs: *FuncState) void {
         fs.locvars.deinit(c.gpa);
     }
     c.fs = fs.parent;
+}
+
+/// R[dest] = R[obj].name, keeping R[obj] alive (for `from`, which reads
+/// several fields of one source).
+fn getFieldTo(fs: *FuncState, dest: u32, obj: u8, name: []const u8) Error!void {
+    const ki = try stringK(fs, name);
+    if (ki <= 255) {
+        try codeABC(fs, .getfield, dest, obj, ki);
+    } else {
+        _ = try emitABx(fs, .loadk, dest, ki);
+        try codeABC(fs, .gettable, dest, obj, dest);
+    }
 }
