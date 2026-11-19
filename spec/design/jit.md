@@ -109,6 +109,8 @@ A **lean return** tests that the running frame is lean and that no hook is set, 
 
 The **tail entry** does what the closure branch of the interpreter's `tailcall` does. It moves the callee and its arguments down to the return slot of the running frame and makes that frame the frame of the callee. What the frame owes its caller stays in it: the return slot, the wanted count, the boundary and lean flags, the finish action of a metamethod frame, and the address its caller continues at. The caller of the entry first tests that its frame has no open upvalue, and the helper `helpers.tailcall` handles the frame that has one.
 
+A **frameless native call** runs the common case of a native function without pushing a frame. A native may name a leaf function, its fast part, which reads its arguments in place, returns one result or declines, and never raises, allocates a frame, calls back into Lus code, or yields. `interp.callNative`, which both tiers use for every call of a native, tries the leaf first and stores its result as a return would. A leaf that declines leaves nothing changed, and the full native then runs the call from its start. The full native begins with the same leaf, so each builtin keeps one implementation of its fast case. `setmetatable` and `string.sub` have leaves: the first for a table without a metatable that receives a metatable known to lack `__gc`, and the second for a string with integer positions.
+
 A call and return between two compiled functions is about 73 machine instructions and 16 stores on aarch64, where the first version of the tier took about 90 and 25.
 
 ## Executable memory

@@ -69,12 +69,23 @@ pub const Finish = union(enum) {
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
+/// The common case of a native, run without a frame of its own. It reads
+/// its `nargs` arguments at `args` before it allocates anything, and it
+/// returns the single result, or null when the call needs the full
+/// native. It never raises an error, never calls back into Lus code, and
+/// never yields: every such case returns null, and the full native then
+/// runs the call from the start. The full native begins with the same
+/// fast part, so both paths share one implementation.
+pub const LeafFn = *const fn (l: *Thread, args: [*]const Value, nargs: u32) ?Value;
+
 /// A native function object. Natives receive their arguments in the stack
 /// window starting at `l.base()` and push results, returning their count.
 pub const Native = struct {
     hdr: gc.Header,
     func: NativeFn,
     name: ?*String = null,
+    /// The frameless fast part of `func`, when it has one.
+    leaf: ?LeafFn = null,
     nupvals: u32 = 0,
 
     pub inline fn upvalues(n: *Native) []Value {
@@ -662,6 +673,7 @@ pub fn newNative(g: *Global, f: NativeFn, name: ?[]const u8, nup: u32) Allocator
     const name_str = if (name) |s| try newStringKnown(g, s, true, s.len) else null;
     const n = try gc.allocUninit(g, Native, .native, Native.allocSize(nup));
     n.func = f;
+    n.leaf = null;
     n.nupvals = nup;
     n.name = name_str;
     for (n.upvalues()) |*v| v.* = .nil;

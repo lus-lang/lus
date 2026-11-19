@@ -1339,6 +1339,23 @@ noinline fn growFrames(l: *Thread) Error!void {
 /// arguments above `func`, leaving its results at `func` adjusted to
 /// `want`.
 pub inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32) (Error || YieldError)!void {
+    if (nat.leaf) |leaf| {
+        // The common case runs without a frame and leaves its one result
+        // at `func`, as a return would. The stack top covers the
+        // arguments, which keeps them alive if the leaf allocates.
+        l.top = func + 1 + nargs;
+        if (leaf(l, l.stack.ptr + func + 1, nargs)) |r| {
+            l.stack[func] = r;
+            if (want < 0) {
+                l.top = func + 1;
+            } else {
+                var i: u32 = 1;
+                while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[func + i] = .nil;
+                l.top = func + @as(u32, @intCast(want));
+            }
+            return;
+        }
+    }
     if (@as(usize, func) + 1 + nargs + 32 > l.stack.len) try l.ensure(32);
     try pushFrame(l, .{ .func = func, .base = func + 1, .native = nat, .want = want, .ret = func });
     l.top = func + 1 + nargs;
