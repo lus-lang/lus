@@ -85,7 +85,7 @@ The C API exposes the value to embedders and providers through `lus_isquery` and
 
 ## Limits
 
-A query holds at most 8 sources and 200 captured operands, and clause expressions nest at most 64 levels deep. Aggregates appear only in `select` and `having` and cannot nest. Bare boolean columns, bitwise operators, and length in clauses are compile-time errors, as is a suffix on a parenthesized clause expression.
+A query holds at most 8 sources and 200 captured operands, and clause expressions nest at most 64 levels deep. Aggregates appear only in `select` and `having` and cannot nest. Bitwise operators and length in clauses are compile-time errors, as is a suffix on a parenthesized clause expression. A bare column is a filter by truthiness, so `where r.active` keeps the rows whose `active` field is neither `nil` nor `false`.
 
 ## Provider execution boundary
 

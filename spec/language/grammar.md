@@ -1356,13 +1356,15 @@ A chunk that fails to compile produces a single string message. `load` returns `
 17. Every string literal is well formed WTF-8. Raw bytes belong in vectors.
 18. `continue` in a `repeat` loop may not skip a local that the `until` condition can see.
 
-### 7.2 Manual statements that disagree with the implementation
+### 7.2 Manual statements checked against the implementation
 
-| Manual | Statement | Implementation |
+The manual pages agree with the implementation on every point this reference covers. The table lists three statements that readers often check against the grammar, with the section that specifies each one and names its tests.
+
+| Manual | Statement | Section |
 | --- | --- | --- |
-| `acquis-2.mdx` | `obj?:process()` used as a statement | syntax error (section 5.2) |
-| `acquis-22.mdx` | attributes are inserted prior to `local` | attributes follow the name (section 5.9) |
-| `acquis-34.mdx` | bare boolean columns are compile-time errors | a bare column filters by truthiness (section 5.12) |
+| `acquis-2.mdx` | an optional chain is an expression, so a call kept for its effect is written `local _ = obj?:process()` | 5.2 |
+| `acquis-22.mdx` | runtime attributes follow the variable name | 5.9 |
+| `acquis-34.mdx` | a bare column filters by truthiness | 5.12 |
 
 ---
 

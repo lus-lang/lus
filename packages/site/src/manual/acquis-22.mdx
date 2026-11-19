@@ -9,7 +9,7 @@ In addition to the compile time attributes, local variables can also be given ru
 
 ## Basic usage
 
-Runtime attributes are declared as functions and inserted prior to the `local` keyword and the variable name. The function is called with the variable name and value as arguments each time the variable is initialized or assigned within the scope where it is declared.
+Runtime attributes are declared as functions and written in angle brackets after the variable name, in the same position as the compile-time attributes. The function is called with the variable name and value as arguments each time the variable is initialized or assigned within the scope where it is declared.
 
 ```lus
 local function printvar(name, value)
