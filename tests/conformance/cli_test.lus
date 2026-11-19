@@ -1,0 +1,370 @@
+-- Command line tests. They run the lus binary that sits in the runtime build
+-- directory, or the one named by the LUS_BIN environment variable.
+pledge("load", "fs", "exec", "env")
+
+local windows = package.config:sub(1, 1) == "\\"
+local path_separator = package.config:sub(1, 1)
+local fixture_number = 0
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function shell_quote(value)
+    if windows then
+        return '"' .. value .. '"'
+    end
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+local lus_cmd = shell_quote(lus_bin)
+
+local function run_lus(args)
+    local h = io.popen(lus_cmd .. " " .. args)
+    local out = h:read("a")
+    h:close()
+    return out
+end
+
+local function run_command(command)
+    local h = io.popen(command .. " 2>&1")
+    assert(h, "could not start command: " .. command)
+    local out = h:read("a")
+    local ok = h:close()
+    return ok == true or ok == 0, out
+end
+
+local function path(...)
+    return fs.path.join(...)
+end
+
+local function write_file(filename, contents)
+    local file = assert(io.open(filename, "wb"))
+    assert(file:write(contents))
+    assert(file:close())
+end
+
+local function new_fixture()
+    fixture_number = fixture_number + 1
+    local root = "h3c" .. tostring(fixture_number)
+    local entry_base = "h3e" .. tostring(fixture_number)
+    local entry = path(root, entry_base .. ".lus")
+    local output = entry_base .. (windows and ".exe" or "")
+    catch fs.remove(root, true)
+    catch fs.remove(output)
+    fs.createdirectory(root)
+    return root, entry, output
+end
+
+local function clean_fixture(root, output)
+    catch fs.remove(root, true)
+    if output then
+        catch fs.remove(output)
+    end
+end
+
+local function path_exists(filename)
+    local ok = catch fs.type(filename)
+    return ok
+end
+
+-- Runs `lus build ENTRY -o OUTPUT` with the given extra arguments.
+local function build_standalone(entry, output, includes, extra)
+    local parts = {lus_cmd, "build", entry, "-o", output}
+    for i = 1, #includes do
+        parts[#parts + 1] = "--include"
+        parts[#parts + 1] = includes[i]
+    end
+    for i = 1, #(extra or {}) do
+        parts[#parts + 1] = extra[i]
+    end
+    return run_command(table.concat(parts, " "))
+end
+
+local function run_standalone(output)
+    local executable = "." .. path_separator .. output
+    return run_command(executable)
+end
+
+local function version_check_test()
+    local _, out = run_command(lus_cmd .. " -v")
+    assert(string.find(out, "Lus"))
+end
+
+local function execute_string_test()
+    local quote = windows and '"' or "'"
+    local out = run_lus("-e " .. quote .. "print(10*10)" .. quote)
+    assert(string.find(out, "100"))
+end
+
+local function script_execution_test()
+    local tmp = "script_execution.lus"
+    local f = io.open(tmp, "w")
+    f:write("print('hello from file')")
+    f:close()
+
+    local out = run_lus(tmp)
+    assert(string.find(out, "hello from file"))
+    fs.remove(tmp)
+end
+
+local function stdin_execution_test()
+    -- echo "print(123)" | lus -
+    local cmd
+    if windows then
+        cmd = "echo print(123) | " .. lus_cmd .. " -"
+    else
+        cmd = "echo \"print(123)\" | " .. lus_cmd .. " -"
+    end
+
+    local h = io.popen(cmd)
+    local out = h:read("a")
+    h:close()
+    assert(string.find(out, "123"))
+end
+
+-- The syntax tree command writes to standard output, so there is no output
+-- file whose link could redirect a write. The command leaves every file it
+-- does not read untouched.
+local function ast_output_goes_to_standard_output_and_touches_no_linked_file_test()
+    local root, entry = new_fixture()
+    local outside = path(root, "outside.json")
+    local output = path(root, "ast.json")
+    write_file(entry, "local answer = 42\n")
+    write_file(outside, "outside sentinel\n")
+    fs.createlink(output, "outside.json")
+
+    local ok, command_out = run_command(table.concat({lus_cmd, "ast", entry}, " "))
+    assert(ok, command_out)
+    assert(command_out:find('"type"', 1, true), command_out)
+    local untouched = assert(io.open(outside, "r"))
+    assert(untouched:read("a") == "outside sentinel\n")
+    assert(untouched:close())
+    clean_fixture(root)
+end
+
+local function unpledged_ast_json_output_remains_available_test()
+    local root, entry = new_fixture()
+    write_file(entry, "local answer = 42\n")
+    local ok, command_out = run_command(table.concat({lus_cmd, "ast", entry}, " "))
+    assert(ok, command_out)
+    assert(command_out:find('"type"', 1, true), command_out)
+    clean_fixture(root)
+end
+
+local function link_metadata_and_deletion_authorize_the_link_object_test()
+    local root, script = new_fixture()
+    local target = path(root, "target.txt")
+    local allowed_link = path(root, "allowed-link")
+    write_file(target, "target\n")
+    write_file(script, [[
+local kind, linked = fs.type(arg[2])
+assert(kind == "file" and linked == true)
+assert(fs.follow(arg[2]) == "target.txt")
+fs.remove(arg[2])
+print("link-object-ok")
+]])
+    fs.createlink(allowed_link, "target.txt")
+    local inspected, inspect_out = run_command(table.concat({
+        lus_cmd,
+        "-Pload",
+        "-Pfs:read=./" .. script,
+        "-Pfs:read=./" .. allowed_link,
+        "-Pfs:write=./" .. allowed_link,
+        script,
+        "inspect",
+        "./" .. allowed_link,
+    }, " "))
+    assert(inspected and inspect_out:find("link-object-ok", 1, true),
+        inspect_out)
+    assert(not path_exists(allowed_link), "authorized link was not removed")
+    assert(path_exists(target), "link deletion removed its target")
+    clean_fixture(root)
+end
+
+local function a_target_grant_does_not_authorize_removing_a_link_test()
+    skip("2.0 bug: fs.remove on a link is authorized by the link target's write grant")
+    local root, script = new_fixture()
+    local target = path(root, "target.txt")
+    local blocked_link = path(root, "blocked-link")
+    write_file(target, "target\n")
+    write_file(script, "fs.remove(arg[2])\n")
+    fs.createlink(blocked_link, "target.txt")
+    local removed, remove_out = run_command(table.concat({
+        lus_cmd,
+        "-Pload",
+        "-Pfs:read=./" .. script,
+        "-Pfs:write=./" .. target,
+        script,
+        "remove",
+        "./" .. blocked_link,
+    }, " "))
+    assert(not removed, "target authority removed an ungranted link: " .. remove_out)
+    assert(path_exists(blocked_link), "ungranted link was removed")
+    clean_fixture(root)
+end
+
+-- The build command has no scoped write grant of its own, since a pledge
+-- given to `lus build` belongs to the program it produces. The standalone
+-- program carries those pledges and enforces them at every run.
+local function a_standalone_program_enforces_the_pledges_it_was_built_with_test()
+    local root, entry, output = new_fixture()
+    local data = path(root, "data.txt")
+    local other = path(root, "other.txt")
+    write_file(data, "granted\n")
+    write_file(other, "withheld\n")
+    write_file(entry, [[
+local f = assert(io.open(arg[1] or "", "r"))
+print(f:read("a"))
+f:close()
+]])
+    local ok, out = run_command(table.concat({
+        lus_cmd, "build", entry, "-o", output,
+        "-Pload", "-Pfs:read=./" .. data,
+    }, " "))
+    assert(ok, out)
+    local ran, run_out = run_command("." .. path_separator .. output .. " ./" .. data)
+    assert(ran and run_out:find("granted", 1, true), run_out)
+    local denied, denied_out = run_command("." .. path_separator .. output .. " ./" .. other)
+    assert(not denied, denied_out)
+    assert(denied_out:find('permission "fs:read" denied', 1, true), denied_out)
+    clean_fixture(root, output)
+end
+
+local function scoped_standalone_output_stays_within_its_write_grant_test()
+    skip("2.0 bug: lus build writes its output without any scoped write grant check")
+    local root, entry, output = new_fixture()
+    local outside = path(root, "outside.bin")
+    write_file(entry, "print('scoped-standalone-ok')\n")
+    write_file(outside, "outside sentinel\n")
+    fs.createlink(output, outside)
+    local escaped = build_standalone(entry, output, {})
+    assert(not escaped)
+    local untouched = assert(io.open(outside, "r"))
+    assert(untouched:read("a") == "outside sentinel\n")
+    assert(untouched:close())
+    clean_fixture(root, output)
+end
+
+local function standalone_owns_mixed_direct_and_recursive_include_specs_test()
+    local root, entry, output = new_fixture()
+    local modules = path(root, "mods")
+    local nested = path(modules, "nested")
+    fs.createdirectory(nested, true)
+    write_file(path(root, "direct.lus"), "return 'direct'\n")
+    write_file(path(modules, "alpha.lus"), "return 'alpha'\n")
+    write_file(path(nested, "beta.lus"), "return 'beta'\n")
+    write_file(entry, [[
+local direct = require("direct")
+local alpha = require("mods.alpha")
+local beta = require("mods.nested.beta")
+print(direct .. ":" .. alpha .. ":" .. beta)
+]])
+
+    local ok, out = build_standalone(entry, output, {
+        path(root, "direct.lus"),
+        modules,
+    }, {"-Pload"})
+    assert(ok, out)
+    local ran, run_out = run_standalone(output)
+    assert(ran, run_out)
+    assert(run_out:find("direct:alpha:beta", 1, true), run_out)
+    clean_fixture(root, output)
+end
+
+local function standalone_fails_closed_after_a_partially_compiled_include_list_test()
+    local root, entry, output = new_fixture()
+    local broken = path(root, "broken")
+    fs.createdirectory(broken)
+    write_file(entry, "print('entry')\n")
+    write_file(path(root, "direct.lus"), "return 'compiled first'\n")
+    write_file(path(broken, "bad.lus"), "local = broken\n")
+
+    local ok, out = build_standalone(entry, output, {
+        path(root, "direct.lus"),
+        broken,
+    })
+    assert(not ok, "invalid include unexpectedly built: " .. out)
+    assert(out:find("bad.lus", 1, true), out)
+    assert(not path_exists(output), "failed build left an executable")
+    clean_fixture(root, output)
+end
+
+local function standalone_accepts_256_and_257_direct_include_arguments_test()
+    local root, entry, output = new_fixture()
+    local includes = {}
+    write_file(entry, "print('direct-count-ok')\n")
+    for i = 1, 257 do
+        local filename = path(root, string.format("m%03d.lus", i))
+        write_file(filename, "return " .. tostring(i) .. "\n")
+        includes[i] = filename
+    end
+
+    local first_ok, first_out = build_standalone(entry, output,
+        {table.unpack(includes, 1, 256)})
+    assert(first_ok, first_out)
+    catch fs.remove(output)
+    local second_ok, second_out = build_standalone(entry, output, includes)
+    assert(second_ok, second_out)
+    local ran, run_out = run_standalone(output)
+    assert(ran and run_out:find("direct-count-ok", 1, true), run_out)
+    clean_fixture(root, output)
+end
+
+local function standalone_permits_1024_final_files_test()
+    local root, entry, output = new_fixture()
+    local modules = path(root, "many")
+    fs.createdirectory(modules)
+    write_file(entry, "print('expanded-count-ok')\n")
+    for i = 1, 1023 do
+        write_file(path(modules, string.format("m%04d.lus", i)),
+            "return " .. tostring(i) .. "\n")
+    end
+
+    local exact_ok, exact_out = build_standalone(entry, output, {modules})
+    assert(exact_ok, exact_out)
+    local ran, run_out = run_standalone(output)
+    assert(ran and run_out:find("expanded-count-ok", 1, true), run_out)
+    clean_fixture(root, output)
+end
+
+local function standalone_rejects_1025_final_files_test()
+    skip("2.0 bug: lus build has no limit on the number of include files")
+    local root, entry, output = new_fixture()
+    local modules = path(root, "many")
+    fs.createdirectory(modules)
+    write_file(entry, "print('expanded-count-ok')\n")
+    for i = 1, 1024 do
+        write_file(path(modules, string.format("m%04d.lus", i)),
+            "return " .. tostring(i) .. "\n")
+    end
+    local excess_ok, excess_out = build_standalone(entry, output, {modules})
+    assert(not excess_ok, "1025 final files unexpectedly built")
+    assert(excess_out:find("too many include files", 1, true), excess_out)
+    assert(not path_exists(output), "over-limit build left an executable")
+    clean_fixture(root, output)
+end
+
+-- Lus 2.0 has no separate compiler binary. A function dumps itself with
+-- string.dump and the loader reads the chunk back in binary mode.
+local function same_build_compiler_chunks_round_trip_and_reject_header_damage_test()
+    local root, entry = new_fixture()
+    local chunk = path(root, "entry.lusc")
+    local corrupt = path(root, "corrupt.lusc")
+    write_file(entry, "print('binary-round-trip')\n")
+
+    local fn = assert(loadfile(entry))
+    local bytes = string.dump(fn)
+    assert(#bytes > 5, "dump emitted a short chunk")
+    write_file(chunk, bytes)
+    local ran, run_out = run_command(lus_cmd .. " " .. chunk)
+    assert(ran, run_out)
+    assert(run_out:find("binary-round-trip", 1, true), run_out)
+
+    local damaged = vector.clone(bytes)
+    vector.set(damaged, 4, (vector.get(damaged, 4) + 1) & 0xff)
+    write_file(corrupt, damaged)
+    local accepted, damage_out = run_command(lus_cmd .. " " .. corrupt)
+    assert(not accepted, "damaged binary header was accepted")
+    assert(damage_out:find("bad binary format", 1, true) or
+        damage_out:find("binary", 1, true), damage_out)
+    clean_fixture(root)
+end
