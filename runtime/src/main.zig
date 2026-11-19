@@ -202,6 +202,17 @@ pub fn main(init: std.process.Init) !u8 {
     while (it.next()) |a| try args_list.append(gpa, a);
     const args = args_list.items;
 
+    // A standalone executable made by `lus build` runs its bundle and
+    // nothing else.
+    var found = lus.bundle.loadSelf(init.io, gpa) catch {
+        std.debug.print("lus: cannot load the embedded bundle\n", .{});
+        return 1;
+    };
+    if (found) |*b| {
+        defer b.deinit(gpa);
+        return runBundle(init, b, args);
+    }
+
     // Subcommands.
     if (args.len >= 2) {
         const cmd = args[1];
@@ -209,12 +220,29 @@ pub fn main(init: std.process.Init) !u8 {
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
         }
-        if (std.mem.eql(u8, cmd, "run")) return runMain(init, args, 2);
+        if (std.mem.eql(u8, cmd, "run")) return runMain(init, args, 2, null);
     }
-    return runMain(init, args, 1);
+    return runMain(init, args, 1, null);
 }
 
-fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
+/// Runs the entry module of a bundle. The options preserved at build time
+/// come first, then the executable path takes the place of the script, so
+/// every user argument reaches the script and none is read as an option.
+fn runBundle(init: std.process.Init, b: *const lus.bundle.Bundle, args: []const []const u8) !u8 {
+    const gpa = init.gpa;
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    const self = if (args.len > 0) args[0] else "lus";
+    try argv.append(gpa, self);
+    try argv.appendSlice(gpa, b.args);
+    try argv.appendSlice(gpa, &.{ "--", self });
+    if (args.len > 1) try argv.appendSlice(gpa, args[1..]);
+    package.bundle = b;
+    defer package.bundle = null;
+    return runMain(init, argv.items, 1, b.entryModule());
+}
+
+fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry: ?lus.bundle.Module) !u8 {
     const gpa = init.gpa;
     const io = init.io;
     var cli = (try parseArgs(gpa, args, start)) orelse return 1;
@@ -278,7 +306,9 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize) !u8 {
         },
     };
 
-    if (cli.script) |path| {
+    if (entry) |m| {
+        if (!runChunk(l, m.data, m.chunkname, args[cli.script_index + 1 ..])) return 1;
+    } else if (cli.script) |path| {
         if (cli.dis) return disassemble(l, path);
         const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
             std.debug.print("lus: cannot open {s} ({s})\n", .{ path, @errorName(e) });

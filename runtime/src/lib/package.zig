@@ -34,6 +34,11 @@ pub var preincludes: []const Preinclude = &.{};
 
 const preinclude_key = "_PREINCLUDE";
 
+/// The bundle of a standalone executable made by `lus build`, or null in
+/// a plain interpreter. The CLI sets it before any state is created and
+/// never changes it afterwards, so workers read it freely.
+pub var bundle: ?*const @import("../bundle.zig").Bundle = null;
+
 pub fn open(l: *Thread) Error!void {
     const pkg = try l.newTable(0, 8);
     const pv = Value.obj(.table, pkg);
@@ -221,11 +226,24 @@ fn searcherPreinclude(l: *Thread) Error!u32 {
     return 2;
 }
 
-/// Bundled modules belong to standalone executables. A plain interpreter
-/// carries no bundle, so this searcher finds nothing.
+/// Finds modules in the bundle of a standalone executable. A plain
+/// interpreter carries no bundle, so there this searcher finds nothing.
+/// Loading a bundled module needs the `load` permission, as loading it
+/// from a file does.
 fn searcherBundle(l: *Thread) Error!u32 {
-    _ = try aux.checkString(l, 1);
-    return 0;
+    const name = try aux.checkBytes(l, 1);
+    const b = bundle orelse return 0;
+    const m = b.find(name) orelse {
+        const msg = std.fmt.allocPrint(l.g.gpa, "no module '{s}' in the bundle", .{name}) catch return l.raiseMem();
+        defer l.g.gpa.free(msg);
+        return aux.retStr(l, msg);
+    };
+    if (!pledge.allowed(l, "load", null)) return l.raiseFmt("permission \"load\" denied", .{});
+    api.load(l, m.data, m.chunkname) catch {
+        return l.raiseFmt("error loading bundled module '{s}':\n\t{s}", .{ name, api.errorMessage(l, l.err) });
+    };
+    try l.push(try l.newStringValue(state.chunkId(m.chunkname)));
+    return 2;
 }
 
 /// Looks `name` up in `package.<field>`, which must be a string.

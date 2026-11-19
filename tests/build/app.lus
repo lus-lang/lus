@@ -1,0 +1,23 @@
+-- The entry script of the `lus build` test. It requires modules by
+-- literal names, loads one only through --include, and checks that the
+-- bundled program holds no permission it did not pledge.
+
+pledge("load")
+
+local util = require("lib.util")
+local deep = require "lib.sub.deep"
+print(util.greet(arg[1] or "world"))
+print(deep.value)
+print(`args $(#arg)`)
+print(`flag $(flags.mode)`)
+
+local opened = catch io.open("app.lus")
+print(`fs denied $(not opened)`)
+
+local name = "extra." .. "dyn"
+local found, dyn = catch require(name)
+print(`dynamic $(found and dyn.n or "missing")`)
+
+if arg[1] == "boom" then
+    error("boom from the bundle")
+end

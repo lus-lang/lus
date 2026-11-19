@@ -27,6 +27,28 @@ pub fn build(b: *std.Build) void {
     const run = b.addRunArtifact(exe);
     b.step("run", "Run the lus interpreter").dependOn(&run.step);
 
+    // `lus build` on tests/build, then the standalone program it made,
+    // run from a directory without the sources.
+    const bundle_step = b.step("test-bundle", "Build a standalone executable and run it");
+    const make = b.addRunArtifact(exe);
+    make.setCwd(b.path("../tests/build"));
+    make.addArgs(&.{ "build", "-F", "mode=prod", "--include", "extra", "-o" });
+    const app = make.addOutputFileArg("app");
+    make.addArg("app.lus");
+    const run_app = std.Build.Step.Run.create(b, "run bundled app");
+    run_app.addFileArg(app);
+    run_app.addArgs(&.{ "there", "-P", "all" });
+    run_app.setCwd(b.path("../tests/embed"));
+    run_app.expectStdOutEqual("hello there\nhello deep\nargs 3\nflag prod\nfs denied true\ndynamic 5\n");
+    bundle_step.dependOn(&run_app.step);
+    const run_fail = std.Build.Step.Run.create(b, "run bundled app that fails");
+    run_fail.addFileArg(app);
+    run_fail.addArg("boom");
+    run_fail.setCwd(b.path("../tests/embed"));
+    run_fail.expectExitCode(1);
+    run_fail.expectStdErrMatch("app.lus:22: boom from the bundle");
+    bundle_step.dependOn(&run_fail.step);
+
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
