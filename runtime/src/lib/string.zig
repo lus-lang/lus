@@ -48,7 +48,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "reverse", .func = reverse },
     .{ .name = "rtrim", .func = rtrim },
     .{ .name = "split", .func = split },
-    .{ .name = "sub", .func = sub },
+    .{ .name = "sub", .func = sub, .leaf = subLeaf },
     .{ .name = "trim", .func = trim },
     .{ .name = "upper", .func = upper },
 };
@@ -100,14 +100,9 @@ fn substringKnown(l: *Thread, s: *String, from: usize, to: usize, chars: usize) 
 }
 
 /// Byte offset of the character at zero-based index `ci` of `s`, where
-/// `ci` may equal the character count. Long non-ASCII strings start from
-/// the nearest breadcrumb at or before `ci` and skip the remaining
-/// characters with the vectorized `wtf8.advance`.
-fn charOffset(l: *Thread, s: *String, ci: usize) usize {
-    if (s.flags.ascii) return ci;
-    if (ci >= s.chars) return s.len;
-    const k = ci - ci % String.crumb_step;
-    return wtf8.advance(s.bytes(), s.byteOffset(l.g.gpa, k), ci - k);
+/// `ci` may equal the character count (`String.byteOffset`).
+inline fn charOffset(l: *Thread, s: *String, ci: usize) usize {
+    return s.byteOffset(l.g.gpa, ci);
 }
 
 /// Translates a relative initial position (negative counts back from the
@@ -124,7 +119,11 @@ fn posRelat(pos: i64, n: usize) usize {
 
 /// Optional end position at argument `i`, clipped to [0, n].
 fn getEndPos(l: *Thread, i: u32, default: i64, n: usize) Error!usize {
-    const pos = try aux.optInt(l, i, default);
+    return clipEnd(try aux.optInt(l, i, default), n);
+}
+
+/// An end position clipped to [0, n].
+fn clipEnd(pos: i64, n: usize) usize {
     const ni: i64 = @intCast(n);
     if (pos > ni) return n;
     if (pos >= 0) return @intCast(pos);
@@ -241,13 +240,44 @@ fn sub(l: *Thread) Error!u32 {
     const n: usize = s.chars;
     const start = posRelat(try aux.checkInt(l, 2), n);
     const end = try getEndPos(l, 3, -1, n);
-    if (start > end) return aux.retStr(l, "");
-    const count = end - start + 1;
-    if (s.flags.ascii) return aux.ret(l, try substringKnown(l, s, start - 1, end, count));
-    // Find the start, then skip the characters of the result from there.
-    const from = charOffset(l, s, start - 1);
-    const to = wtf8.advance(s.bytes(), from, count);
-    return aux.ret(l, try substringKnown(l, s, from, to, count));
+    return aux.ret(l, subRange(l, s, start, end) catch return l.raiseMem());
+}
+
+/// `string.sub` with integer positions (`state.LeafFn`), the common call.
+fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) ?Value {
+    if (nargs < 2 or nargs > 3) return null;
+    if (args[0].tag != .string or args[1].tag != .integer) return null;
+    var j: i64 = -1;
+    if (nargs == 3) {
+        if (args[2].tag == .integer) {
+            j = args[2].asInt();
+        } else if (args[2].tag != .nil) return null;
+    }
+    const s = args[0].as(String);
+    const n: usize = s.chars;
+    return subRange(l, s, posRelat(args[1].asInt(), n), clipEnd(j, n)) catch null;
+}
+
+/// The characters `start` through `end` of `s`, 1-based and clipped.
+inline fn subRange(l: *Thread, s: *String, start: usize, end: usize) Allocator.Error!Value {
+    var from: usize = 0;
+    var to: usize = 0;
+    var count: usize = 0;
+    if (start <= end) {
+        count = end - start + 1;
+        if (s.flags.ascii) {
+            from = start - 1;
+            to = end;
+        } else {
+            // Find the start, then skip the characters of the result
+            // from there.
+            from = charOffset(l, s, start - 1);
+            to = wtf8.advance(s.bytes(), from, count);
+        }
+    }
+    if (from == 0 and to == s.len) return Value.obj(.string, s);
+    const b = s.bytes()[from..to];
+    return Value.obj(.string, try state.newStringKnown(l.g, b, count == b.len, count));
 }
 
 /// Maps ASCII letters with `f` and leaves every other byte unchanged.

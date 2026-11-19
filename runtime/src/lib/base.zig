@@ -36,7 +36,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "rawlen", .func = rawlen },
     .{ .name = "rawset", .func = rawset },
     .{ .name = "select", .func = select },
-    .{ .name = "setmetatable", .func = setmetatable },
+    .{ .name = "setmetatable", .func = setmetatable, .leaf = setmetatableLeaf },
     .{ .name = "tonumber", .func = tonumber },
     .{ .name = "tostring", .func = tostring },
     .{ .name = "type", .func = @"type" },
@@ -173,6 +173,31 @@ fn getmetatable(l: *Thread) Error!u32 {
 }
 
 fn setmetatable(l: *Thread) Error!u32 {
+    const b = l.base();
+    if (setmetatableLeaf(l, l.stack.ptr + b, l.top - b)) |r| return aux.ret(l, r);
+    return setmetatableSlow(l);
+}
+
+/// The common call of `setmetatable` (`state.LeafFn`): a table without a
+/// metatable gets a metatable that is known to lack `__gc`, which needs
+/// no check beyond the types.
+fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) ?Value {
+    if (nargs != 2) return null;
+    const tv = args[0];
+    const mv = args[1];
+    if (tv.tag != .table or mv.tag != .table) return null;
+    const t = tv.as(Table);
+    const mt = mv.as(Table);
+    const gc_bit = @as(u16, 1) << @backingInt(state.TM.gc);
+    if (t.metatable != null or mt.tm_absent & gc_bit == 0) return null;
+    t.metatable = mt;
+    gc.barrierBack(l.g, &t.hdr);
+    return tv;
+}
+
+/// Every other call of `setmetatable`, kept out of line so the common
+/// call above runs without saving registers.
+noinline fn setmetatableSlow(l: *Thread) Error!u32 {
     const t = try aux.checkTable(l, 1);
     const mtv = l.arg(2);
     if (mtv.tag != .nil and mtv.tag != .table) return aux.typeError(l, 2, "nil or table");

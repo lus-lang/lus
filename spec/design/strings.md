@@ -18,9 +18,13 @@ Patterns match whole characters. `.` matches one character. A set such as `[éà
 
 ## Representation
 
-A string object stores its byte length, its character count, its hash, and an ASCII flag. ASCII strings index any character in constant time. Non-ASCII strings build a breadcrumb index on first indexed access. The index records the byte offset of every 64th character, so any character is found by one lookup and a scan of at most 63 characters. Validation, character counting, and breadcrumb construction use vectorized loops.
+A string object stores its byte length, its character count, its hash, and an ASCII flag. ASCII strings index any character in constant time. Non-ASCII strings build a breadcrumb index on first indexed access. The index records the byte offset of every 64th character, so any character is found by one lookup and a scan of at most 63 characters. Validation, character counting, breadcrumb construction, and the scan use vectorized loops.
 
-Short strings are interned, so equality between them is a pointer comparison. Substrings of long strings are views into their parent's buffer. A view that is much smaller than its parent copies its bytes when it outlives a collection cycle, so a small substring never keeps a large buffer alive.
+The index also remembers the last position it found, as a character index and a byte offset. A lookup starts from that position when it lies between the breadcrumb and the character it wants, so a loop that walks forward through a string, such as a tokenizer reading `s:sub(i, i)` or a window `s:sub(i, i + 8)` moving one character at a time, scans only the distance it moves. A lookup anywhere else costs what the breadcrumbs alone cost.
+
+Short strings are interned, so equality between them is a pointer comparison. A string of up to 32 bytes hashes inline with a few multiplications in the manner of wyhash, and longer strings hash with wyhash itself. The string table probes linearly and stays at most a quarter full. Each slot packs the pointer to a string with the top 16 bits of its hash, so a probe that passes other strings never loads them, and a lookup reads two neighboring slots at once and picks the candidate without a branch. The table halves itself after a collection that leaves it less than a sixteenth full.
+
+`string.sub` and `setmetatable` run their common calls without a frame of their own (`jit.md`). The common call of `string.sub` takes a string and integer positions, and the result is a substring found in or added to the string table. Substrings of long strings are views into their parent's buffer. A view that is much smaller than its parent copies its bytes when it outlives a collection cycle, so a small substring never keeps a large buffer alive.
 
 ## Concatenation
 

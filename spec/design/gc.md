@@ -26,9 +26,11 @@ A sweep frees what a dead object owns outside its cell, such as the parts of a t
 
 Marking is tri-color. White objects are unmarked. Gray objects are marked and wait on an explicit gray stack. Black objects are marked and traced, and they carry the barrier bit. A mark phase starts by clearing the mark bitmaps and marking the roots: the main thread, the registry, the globals, the per-type metatables, the metamethod names, the fixed objects, and the objects waiting for their finalizers. Steps then trace gray objects, each within a budget of bytes.
 
+The marker pops gray objects from the top of the stack and prefetches the object eight places below the top, the first two cache lines of it. Objects often reach the stack long before they are traced, as when a large table pushes all of its elements at once, and the prefetch lets the marker trace one object while the next ones arrive from memory.
+
 When the gray stack runs empty, the atomic phase ends the mark phase without the program running. It marks the roots again, traces every live thread again because stores into stacks take no barrier, and marks the current values of open upvalues that a dead thread still owns when a live closure captured them. It traces the objects that stores turned gray, converges ephemerons, moves unreachable objects with finalizers to the finalizer queue in registration order and marks them for one more cycle, and clears weak tables. Dead threads then close their open upvalues, and the sweep starts.
 
-Weak tables keep the semantics of Lua 5.4. Keys and values that are strings, bigints, or decimals count as values and are never cleared. An ephemeron table keeps a value alive only while its key is alive. A value with a pending finalizer is cleared from weak-value tables. Interned strings are weak: a dead interned string stays in the string table until its page is swept, and finding it again in that window marks it, which revives it.
+Weak tables keep the semantics of Lua 5.4. Keys and values that are strings, bigints, or decimals count as values and are never cleared. An ephemeron table keeps a value alive only while its key is alive. A value with a pending finalizer is cleared from weak-value tables. Interned strings are weak: a dead interned string stays in the string table until its page is swept, and finding it again in that window marks it, which revives it. When a sweep leaves the string table less than a sixteenth full, the table shrinks (`strings.md`).
 
 Inline caches record slot numbers, never pointers, so they need no tracing. Table array parts that hold only integers or only floats store bare numbers, and the marker skips them.
 
@@ -53,6 +55,10 @@ A minor collection runs without interruption. It marks the roots and traces the 
 A minor collection runs after the program allocates `minormul` percent (default 20) of the heap that the last major collection left, and at least 1 MB. When the bytes that survived minor collections grow the old generation past `minormajor` percent (default 70) of that heap, the next collection is a major one, run as an incremental cycle that clears every mark. After a major collection, the collector returns to minor collections when the major freed at least `majorminor` percent (default 50) of what the program allocated since the previous major collection. Otherwise most new objects live long, so it stays with incremental cycles until a major collection frees enough again.
 
 `collectgarbage("generational")` enters generational mode with a full collection, whose survivors form the old generation. `collectgarbage("incremental")` leaves it. Both return the previous mode. In generational mode between major collections, `collectgarbage("step")` runs one complete minor collection.
+
+## Closing a state
+
+Closing a state runs every pending finalizer and then frees every object. The command line runner closes its state just before the process exits, and in builds without runtime safety it stops after the finalizers, the shutdown of workers, and the flush of output: the exit of the process returns the heap, which spares a last pass that reads every live object. Safe builds and embedders that call `api.close` free everything, so the allocators of the safe builds still check the whole teardown. On `tables.lus` the full teardown was a sixth of the run.
 
 ## Checking the collector
 

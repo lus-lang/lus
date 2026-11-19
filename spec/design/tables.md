@@ -8,6 +8,8 @@ The table object holds its header, the metamethod absence cache, its metatable, 
 
 The hash part uses open addressing with linear probing over a power-of-two number of nodes, each a key and a value. Dead entries keep their key with a nil value until the next rehash, so `next` stays valid while a program clears fields during a traversal. A rehash sizes the array part to the largest power of two that is more than half full, as Lua does, and moves every other entry into a hash part kept under a load factor of three quarters.
 
+A table created for a known number of keys, as a constructor creates it, sizes a small hash part exactly. A part of at most four nodes may hold a key in every node, so the record `{x = 1, y = 2}` takes two nodes and its whole table fits a 128-byte cell. A probe for an absent key ends at the first empty node, and a part with no empty node is recognized from its count of used nodes and probed with a bound of one visit per node. A part that grows later follows the load factor again. On `tables.lus`, which keeps three million such records alive, this took the heap from 770 MB to 560 MB and the run from 0.189 to 0.165 seconds.
+
 ## Element kinds
 
 The array part has one of four kinds.
