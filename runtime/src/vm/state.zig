@@ -409,7 +409,7 @@ pub const Thread = struct {
         return switch (v.tag) {
             .table => v.as(Table).metatable,
             .userdata => v.as(object.Userdata).metatable,
-            else => l.g.type_metatables[@intFromEnum(v.tag)],
+            else => l.g.type_metatables[value.typeSlot(v.tag)],
         };
     }
 

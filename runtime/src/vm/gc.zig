@@ -328,6 +328,13 @@ fn weakModeOf(g: *Global, t: *object.Table) object.Table.WeakMode {
 }
 
 fn sweep(g: *Global) void {
+    // Dead threads close their open upvalues first, so closures that
+    // survive keep the captured values instead of pointing into a freed
+    // stack. This runs before any object is freed.
+    var it = g.all_objects;
+    while (it) |h| : (it = h.next) {
+        if (!h.marked and h.tag == .thread) @import("interp.zig").closeUpvals(h.as(Thread), 0);
+    }
     var link: *?*Header = &g.all_objects;
     while (link.*) |h| {
         if (h.marked) {

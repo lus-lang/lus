@@ -28,6 +28,9 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, pkg, "config", try l.newStringValue("/\n;\n?\n!\n-\n"));
     const loaded = try l.newTable(0, 16);
     try aux.setField(l, pkg, "loaded", Value.obj(.table, loaded));
+    // require uses the registry copy, so reassigning package.loaded does
+    // not lose loaded modules (as in Lua).
+    try aux.setField(l, l.g.registry.as(Table), "_LOADED", Value.obj(.table, loaded));
     try aux.setField(l, pkg, "preload", Value.obj(.table, try l.newTable(0, 4)));
     const searchers = try l.newTable(2, 0);
     try ops.rawSet(l, searchers, Value.int(1), try aux.native(l, searcherPreload, "searcher_preload"));
@@ -134,8 +137,7 @@ fn searcherLus(l: *Thread) Error!u32 {
 fn require(l: *Thread) Error!u32 {
     const name = try aux.checkString(l, 1);
     const pkg = try packageTable(l);
-    const loaded_v = try aux.getField(l, pkg, "loaded");
-    if (loaded_v.tag != .table) return l.raiseFmt("'package.loaded' must be a table", .{});
+    const loaded_v = try aux.getField(l, l.g.registry.as(Table), "_LOADED");
     const loaded = loaded_v.as(Table);
     const existing = table.getStr(loaded, name);
     if (existing.truthy()) return aux.ret(l, existing);

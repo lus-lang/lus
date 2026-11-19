@@ -33,7 +33,7 @@ pub fn open(l: *Thread) Error!void {
 
 fn checkCo(l: *Thread, i: u32) Error!*Thread {
     const v = l.arg(i);
-    if (v.tag != .thread) return aux.typeError(l, i, "coroutine");
+    if (v.tag != .thread) return aux.typeError(l, i, "thread");
     return v.as(Thread);
 }
 
@@ -107,7 +107,8 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
             return n;
         },
         .failed => {
-            co.status = .dead;
+            // The error stays on the coroutine until close() reports it.
+            co.status = .err;
             return l.raise(co.err);
         },
     }
@@ -208,7 +209,9 @@ fn running(l: *Thread) Error!u32 {
 
 fn isyieldable(l: *Thread) Error!u32 {
     const co = if (l.hasArg(1)) try checkCo(l, 1) else l;
-    return aux.retBool(l, co != l.g.main_thread and co.resumer != null);
+    // Every coroutine can yield. The main thread and coroutines
+    // running under a native call boundary cannot.
+    return aux.retBool(l, co != l.g.main_thread and (co != l or co.ncalls == 0));
 }
 
 fn wrapAux(l: *Thread) Error!u32 {
@@ -236,6 +239,17 @@ fn wrap(l: *Thread) Error!u32 {
 
 fn close(l: *Thread) Error!u32 {
     const co = try checkCo(l, 1);
+    if (co == l.g.main_thread) return l.raiseFmt("cannot close the main coroutine", .{});
+    if (co.status == .err) {
+        const err = co.err;
+        co.status = .dead;
+        co.err = .nil;
+        co.frames.items.len = 0;
+        co.top = 0;
+        try l.push(.false);
+        try l.push(err);
+        return 2;
+    }
     switch (co.status) {
         .suspended, .dead, .err => {},
         else => return l.raiseFmt("cannot close a {s} coroutine", .{statusName(l, co)}),

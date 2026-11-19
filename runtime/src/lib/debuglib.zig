@@ -289,7 +289,7 @@ fn setmetatable(l: *Thread) Error!u32 {
     switch (v.tag) {
         .table => v.as(Table).metatable = mt,
         .userdata => v.as(object.Userdata).metatable = mt,
-        else => l.g.type_metatables[@intFromEnum(v.tag)] = mt,
+        else => l.g.type_metatables[value.typeSlot(v.tag)] = mt,
     }
     return aux.ret(l, v);
 }

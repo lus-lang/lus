@@ -169,9 +169,8 @@ pub fn precall(l: *Thread, func: u32, nargs: u32, want: i32) (Error || YieldErro
             else => {
                 // __call: insert the metamethod below the arguments.
                 const tm = l.metamethod(callee, .call);
-                if (tm.isNil() or tries > 100) {
-                    return callError(l, callee);
-                }
+                if (tm.isNil()) return callError(l, callee);
+                if (tries >= 15) return l.raiseFmt("'__call' chain too long", .{});
                 try l.ensure(1);
                 var i = f + 1 + n;
                 while (i > f) : (i -= 1) l.stack[i] = l.stack[i - 1];
@@ -300,6 +299,8 @@ fn handleError(l: *Thread, stop: usize) bool {
         const pc = if (fr.pc == 0) 0 else fr.pc - 1;
         for (cl.proto.handlers) |h| {
             if (pc >= h.start_pc and pc < h.end_pc) {
+                // A nil payload becomes the standard message.
+                if (l.err.isNil()) l.err = Value.obj(.string, state.newStringKnown(l.g, "<no error object>", true, 17) catch l.g.memerr);
                 const err = l.err;
                 const level = fr.base + h.level;
                 // Drop inner frames.
@@ -475,8 +476,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             },
             .concat => {
                 const n = opc.b(ins);
-                const s = l.stack[c.base + ra .. c.base + ra + n];
-                const r = try ops.concat(l, s);
+                const r = try ops.concat(l, c.base + ra, n);
                 R.reg(l, c.base, ra).* = r;
             },
             .interp => {
@@ -773,6 +773,12 @@ fn markTbc(l: *Thread, level: u32) Error!void {
     const v = l.stack[level];
     if (v.isNil() or v.tag == .false) return;
     if (l.metamethod(v, .close).isNil()) {
+        if (l.frames.items.len > 0) if (l.frame().closure) |cl| {
+            const pc = if (l.frame().pc == 0) 0 else l.frame().pc - 1;
+            if (@import("debug.zig").localName(cl.proto, level - l.frame().base, pc + 1)) |name| {
+                return l.raiseFmt("variable '{s}' got a non-closable value", .{name});
+            }
+        };
         return l.raiseFmt("variable got a non-closable value", .{});
     }
     l.tbc.append(l.g.gpa, level) catch return l.raiseMem();

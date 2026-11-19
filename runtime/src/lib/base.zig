@@ -30,7 +30,6 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "loadfile", .func = loadfile },
     .{ .name = "next", .func = next },
     .{ .name = "pairs", .func = pairs },
-    .{ .name = "pcall", .func = pcall },
     .{ .name = "print", .func = print },
     .{ .name = "rawequal", .func = rawequal },
     .{ .name = "rawget", .func = rawget },
@@ -42,7 +41,6 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "tostring", .func = tostring },
     .{ .name = "type", .func = @"type" },
     .{ .name = "warn", .func = warn },
-    .{ .name = "xpcall", .func = xpcall },
     .{ .name = "range", .func = range },
     .{ .name = "bigint", .func = bigint },
     .{ .name = "decimal", .func = decimal },
@@ -414,51 +412,6 @@ fn warn(l: *Thread) Error!u32 {
     }
     if (l.g.warn_on) out.warning(l.g, null, msg);
     return 0;
-}
-
-fn pcall(l: *Thread) Error!u32 {
-    _ = try aux.checkAny(l, 1);
-    const func = l.base();
-    const nargs = l.argCount() - 1;
-    if (api.pcall(l, nargs, -1)) {
-        // Results are at func: shift them up one to insert `true`.
-        const n = l.top - func;
-        try l.ensure(1);
-        var i = n;
-        while (i > 0) : (i -= 1) l.stack[func + i] = l.stack[func + i - 1];
-        l.stack[func] = .true;
-        l.top = func + n + 1;
-        return n + 1;
-    }
-    const err = l.stack[l.top - 1];
-    l.top = func;
-    try l.push(.false);
-    try l.push(err);
-    return 2;
-}
-
-fn xpcall(l: *Thread) Error!u32 {
-    const handler = try aux.checkFunction(l, 2);
-    const base = l.base();
-    const nargs = l.argCount() - 2;
-    // Move the function above the handler: [f, h, args] -> [h, f, args]
-    const f = l.stack[base];
-    l.stack[base] = handler;
-    l.stack[base + 1] = f;
-    const func = base + 1;
-    l.top = func + 1 + nargs;
-    if (api.pcall(l, nargs, -1)) {
-        const n = l.top - func;
-        l.stack[base] = .true;
-        return n + 1;
-    }
-    const err = l.stack[l.top - 1];
-    l.top = base + 1;
-    const r = try ops.call1(l, handler, &.{err});
-    l.top = base;
-    try l.push(.false);
-    try l.push(r);
-    return 2;
 }
 
 fn load(l: *Thread) Error!u32 {

@@ -106,6 +106,19 @@ comptime {
     std.debug.assert(@sizeOf(Value) == 16);
 }
 
+/// Index into the per-type metatable array. Values of one Lus type share
+/// a metatable whatever their internal tag (every number, both booleans,
+/// every function).
+pub fn typeSlot(tag: Tag) usize {
+    return @intFromEnum(switch (tag) {
+        .integer, .float, .bigint, .decimal => Tag.integer,
+        .true, .false => Tag.false,
+        .closure, .native => Tag.closure,
+        .enum_value, .enum_root => Tag.enum_value,
+        else => tag,
+    });
+}
+
 pub fn typeName(tag: Tag) []const u8 {
     return switch (tag) {
         .nil => "nil",

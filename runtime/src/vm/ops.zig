@@ -612,18 +612,20 @@ pub fn toString(l: *Thread, v: Value) Error!*String {
 
 /// Concatenates values for the `..` operator. Strings and numbers join
 /// directly. Other values use `__concat`, pairwise from the right.
-pub fn concat(l: *Thread, vals: []Value) Error!Value {
-    // Right to left, collapsing runs of strings and numbers.
-    var acc = vals[vals.len - 1];
-    var i = vals.len - 1;
+pub fn concat(l: *Thread, first: u32, n: u32) Error!Value {
+    // Right to left, collapsing runs of strings and numbers. The operands
+    // are re-read from the stack after every metamethod call, which may
+    // reallocate it.
+    var acc = l.stack[first + n - 1];
+    var i: usize = n - 1;
     while (i > 0) {
         i -= 1;
-        const lhs = vals[i];
+        const lhs = l.stack[first + i];
         if (isStringLike(lhs) and isStringLike(acc)) {
             // Find the longest run of string-like values ending at i.
             var j = i;
-            while (j > 0 and isStringLike(vals[j - 1])) j -= 1;
-            acc = try joinStrings(l, vals[j .. i + 1], acc);
+            while (j > 0 and isStringLike(l.stack[first + j - 1])) j -= 1;
+            acc = try joinStrings(l, l.stack[first + j .. first + i + 1], acc);
             i = j;
             continue;
         }
