@@ -117,6 +117,10 @@ pub const Table = struct {
     /// The border that the length operator last found in the array part.
     /// It is only a starting guess and is checked before every use.
     len_hint: u32 = 0,
+    /// Size in 16-byte units of the storage that trails the table in its
+    /// own cell. A table created with known sizes holds its first parts
+    /// there, and parts that outgrow it move to the backing allocator.
+    inline_units: u16 = 0,
 
     pub const WeakMode = enum(u8) { none, keys, values, both };
 
@@ -141,6 +145,18 @@ pub const Table = struct {
     pub const hole: u64 = 0x7FF4_0000_0000_0000;
 
     pub const empty_words: [*]u64 = @ptrFromInt(@alignOf(u64));
+
+    /// The storage that trails the table in its cell.
+    pub inline fn inlineBytes(t: *Table) []u8 {
+        const base: [*]u8 = @ptrCast(t);
+        return (base + @sizeOf(Table))[0 .. @as(usize, t.inline_units) * 16];
+    }
+    /// True when `p` points into the storage that trails the table.
+    pub inline fn ownsInline(t: *Table, p: *const anyopaque) bool {
+        const b = t.inlineBytes();
+        const a = @intFromPtr(p);
+        return a >= @intFromPtr(b.ptr) and a < @intFromPtr(b.ptr) + b.len;
+    }
 
     /// The unboxed array part. Only valid when the kind is not `boxed`.
     pub inline fn words(t: *const Table) []u64 {

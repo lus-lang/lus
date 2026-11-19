@@ -146,7 +146,17 @@ pub fn arrayStore(gpa: Allocator, t: *Table, idx: usize, v: Value) Error!void {
 /// Makes the array part boxed. Every slot keeps its value.
 pub fn box(gpa: Allocator, t: *Table) Error!void {
     if (t.kind == .boxed) return;
-    if (t.asize > 0) {
+    if (t.asize > 0 and t.ownsInline(t.array_ptr)) {
+        // An array part in the cell reserves a full value per slot, so it
+        // boxes in place. Slot i moves from word i to words 2i and 2i+1,
+        // and walking down never overwrites a word before it is read.
+        const vals: [*]Value = @ptrCast(t.array_ptr);
+        var i = t.asize;
+        while (i > 0) {
+            i -= 1;
+            vals[i] = unboxWord(t.kind, t.array_ptr[i]);
+        }
+    } else if (t.asize > 0) {
         const vals = try gpa.alloc(Value, t.asize);
         for (vals, t.words()) |*d, w| d.* = unboxWord(t.kind, w);
         gpa.free(t.words());
@@ -157,12 +167,16 @@ pub fn box(gpa: Allocator, t: *Table) Error!void {
 
 /// Releases the array and hash parts of a dead table.
 pub fn freeParts(gpa: Allocator, t: *Table) void {
-    freeArray(gpa, t.kind, t.array_ptr, t.asize);
-    if (t.hash.len > 0) gpa.free(t.hash);
+    freeArray(gpa, t, t.kind, t.array_ptr, t.asize);
+    freeHash(gpa, t, t.hash);
 }
 
-fn freeArray(gpa: Allocator, kind: ArrayKind, ptr: [*]u64, n: usize) void {
-    if (n == 0) return;
+fn freeHash(gpa: Allocator, t: *Table, h: []Node) void {
+    if (h.len > 0 and !t.ownsInline(h.ptr)) gpa.free(h);
+}
+
+fn freeArray(gpa: Allocator, t: *Table, kind: ArrayKind, ptr: [*]u64, n: usize) void {
+    if (n == 0 or t.ownsInline(ptr)) return;
     if (kind == .boxed) {
         const p: [*]Value = @ptrCast(ptr);
         gpa.free(p[0..n]);
@@ -389,16 +403,51 @@ fn ceilLog2(x: usize) usize {
     return @as(usize, 64) - @clz(@as(u64, x - 1));
 }
 
+/// The number of hash slots that holds `hcount` entries at the target
+/// load factor.
+fn hashSizeFor(hcount: usize) usize {
+    if (hcount == 0) return 0;
+    var hsize: usize = 4;
+    while (hsize * 3 < hcount * 4) hsize *= 2;
+    return hsize;
+}
+
+/// Largest storage, in bytes, that a new table keeps in its own cell.
+const max_inline = 512;
+
+/// The size in 16-byte units of the storage that a new table with
+/// `narr` array slots and room for `nhash` hash entries keeps in its own
+/// cell, or zero when the parts are too big for it. The array part
+/// reserves a full value per slot so that it can box in place.
+pub fn inlineUnits(narr: usize, nhash: usize) usize {
+    if (narr == 0 and nhash == 0) return 0;
+    if (narr > max_inline or nhash > max_inline) return 0;
+    const bytes = hashSizeFor(nhash) * @sizeOf(Node) + narr * @sizeOf(Value);
+    if (bytes > max_inline) return 0;
+    return std.math.divCeil(usize, bytes, 16) catch unreachable;
+}
+
+/// Lays out the parts of a fresh table in the storage of its cell, as
+/// `inlineUnits` sized it: the hash part first, then the array part.
+pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
+    const hsize = hashSizeFor(nhash);
+    const mem = t.inlineBytes();
+    const nodes: [*]Node = @ptrCast(@alignCast(mem.ptr));
+    t.hash = nodes[0..hsize];
+    @memset(t.hash, .{ .key = .nil, .val = .nil });
+    t.log2_hash = if (hsize == 0) 0 else @intCast(std.math.log2_int(usize, hsize));
+    if (narr == 0) return;
+    t.array_ptr = @ptrCast(@alignCast(mem.ptr + hsize * @sizeOf(Node)));
+    t.asize = narr;
+    @memset(t.words(), hole);
+}
+
 /// Resizes the table to `asize` array slots and a hash part big enough for
 /// `hcount` entries at the target load factor. The array part keeps its
 /// kind unless an entry that moves into it from the hash part does not
 /// fit, in which case it becomes boxed.
 pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void {
-    var hsize: usize = 0;
-    if (hcount > 0) {
-        hsize = 4;
-        while (hsize * 3 < hcount * 4) hsize *= 2;
-    }
+    const hsize = hashSizeFor(hcount);
     const old_kind = t.kind;
     const old_ptr = t.array_ptr;
     const old_n = t.asize;
@@ -416,7 +465,7 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
     if (!reuse and asize > 0) {
         new_ptr = if (kind == .boxed) @ptrCast((try gpa.alloc(Value, asize)).ptr) else (try gpa.alloc(u64, asize)).ptr;
     }
-    errdefer if (!reuse) freeArray(gpa, kind, new_ptr, asize);
+    errdefer if (!reuse) freeArray(gpa, t, kind, new_ptr, asize);
     const new_hash = try gpa.alloc(Node, hsize);
     for (new_hash) |*n| n.* = .{ .key = .nil, .val = .nil };
     const old: Table = .{ .hdr = t.hdr, .kind = old_kind, .array_ptr = old_ptr, .asize = old_n };
@@ -453,8 +502,8 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
         if (n.key.tag == .nil or n.val.isNil()) continue;
         reinsert(t, n.key, n.val);
     }
-    if (!reuse) freeArray(gpa, old_kind, old_ptr, old_n);
-    if (old_hash.len > 0) gpa.free(old_hash);
+    if (!reuse) freeArray(gpa, t, old_kind, old_ptr, old_n);
+    freeHash(gpa, t, old_hash);
 }
 
 /// Inserts a live entry while rebuilding. The kind of the array part
