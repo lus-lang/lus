@@ -173,6 +173,7 @@ const Marker = struct {
         const g = m.g;
         m.markObject(&g.main_thread.hdr);
         m.markValue(g.registry);
+        m.markValue(g.globals);
         for (g.type_metatables) |mt| if (mt) |t| m.markObject(&t.hdr);
         for (g.tm_names) |s| if (s) |p| m.markObject(&p.hdr);
         for (g.fixed.items) |h| m.markObject(h);

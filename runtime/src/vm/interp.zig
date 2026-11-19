@@ -670,7 +670,28 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             .query => {
                 R.reg(l, c.base, ra).* = try @import("ext.zig").newQuery(l, c.k[opc.bx(ins)], c.base + ra + 1);
             },
-            .checkglobal => {},
+            .globaldef => {
+                const env = c.cl.upvals()[ra].loc.*;
+                try globalDefine(l, env, c.k[opc.b(ins)], R.reg(l, c.base, opc.c(ins)).*);
+            },
+            .globaldefr => {
+                try globalDefine(l, R.reg(l, c.base, ra).*, c.k[opc.b(ins)], R.reg(l, c.base, opc.c(ins)).*);
+            },
+            .catchcheck => {
+                const h = R.reg(l, c.base, ra).*;
+                if (h.tag != .closure and h.tag != .native) {
+                    return l.raiseFmt("attempt to use a {s} value as a catch handler", .{l.typeNameOf(h)});
+                }
+            },
+            .settop => l.top = c.base + ra,
+            .moverange => {
+                const src = c.base + opc.b(ins);
+                const dst = c.base + ra;
+                const n = l.top - src;
+                var i: u32 = 0;
+                while (i < n) : (i += 1) l.stack[dst + i] = l.stack[src + i];
+                l.top = dst + n;
+            },
             .extraarg => unreachable,
         }
     }
@@ -889,4 +910,10 @@ fn rangePrep(l: *Thread, r: u32) Error!bool {
     l.stack[r + 1] = l.stack[r + 2];
     l.stack[r + 2] = if (l.stack[r + 3].isNil()) Value.int(1) else l.stack[r + 3];
     return forPrep(l, r);
+}
+
+fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {
+    const cur = try ops.index(l, env, name);
+    if (!cur.isNil()) return l.raiseFmt("global '{s}' already defined", .{name.as(String).bytes()});
+    try ops.setIndex(l, env, name, v);
 }

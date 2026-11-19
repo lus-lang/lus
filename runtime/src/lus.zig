@@ -19,8 +19,18 @@ pub const vm = struct {
     pub const interp = @import("vm/interp.zig");
 };
 
+pub const api = @import("api.zig");
+
+pub const lib = struct {
+    pub const aux = @import("lib/aux.zig");
+    pub const base = @import("lib/base.zig");
+    pub const out = @import("lib/out.zig");
+};
+
 pub const compile = struct {
+    pub const codegen = @import("compile/codegen.zig");
     pub const opcodes = @import("compile/opcodes.zig");
+    pub const disasm = @import("compile/disasm.zig");
 };
 
 test {
@@ -37,4 +47,6 @@ test {
     _ = vm.ops;
     _ = vm.interp;
     _ = compile.opcodes;
+    _ = compile.codegen;
+    _ = api;
 }

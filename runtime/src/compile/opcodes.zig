@@ -103,7 +103,11 @@ pub const Op = enum(u8) {
     slice, // R[A] = R[B][R[B+1], R[B+2]]
     newenum, // R[A] = enum root from constant K[Bx] (a table of names)
     query, // R[A] = query object from plan K[Bx] with sources at R[A+1..]
-    checkglobal, // raise if global K[Bx] was not declared (strict mode)
+    globaldef, // Up[A][K[B]] = R[C], raising if the global is already non-nil
+    globaldefr, // R[A][K[B]] = R[C], same check, with a register environment
+    catchcheck, // raise if R[A] is not a function (catch handler check)
+    settop, // top = base + A (variable results of catch and do expressions)
+    moverange, // R[A..] = R[B..top), top = base + A + count
 
     extraarg, // Ax operand for the previous instruction
 };

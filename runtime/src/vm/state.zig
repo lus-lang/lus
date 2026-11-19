@@ -163,6 +163,8 @@ pub const Global = struct {
     strings: StringSet = .{},
     seed: u64,
     registry: Value = .nil,
+    /// The global environment table (`_G`).
+    globals: Value = .nil,
     main_thread: *Thread = undefined,
     type_metatables: [tag_count]?*Table = @splat(null),
     tm_names: [tm_count]?*String = @splat(null),
@@ -572,6 +574,7 @@ pub fn create(gpa: Allocator, io: std.Io) !*Global {
     }
     g.main_thread = try newThread(g);
     g.registry = Value.obj(.table, try newTableIn(g, 0, 4));
+    g.globals = Value.obj(.table, try newTableIn(g, 0, 64));
     g.gc_stopped = false;
     return g;
 }

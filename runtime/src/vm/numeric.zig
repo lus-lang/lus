@@ -539,7 +539,7 @@ fn divDecimal(gpa: Allocator, q: *M, exp: *i32, ca: *M, ea: i32, cb: *M, eb: i32
         } else {
             const round_up = digit > 5 or (digit == 5 and (sticky or nq.isOdd()));
             if (round_up) {
-                var one = try M.initSet(gpa, if (nq.isPositive()) 1 else -1);
+                var one = try M.initSet(gpa, @as(i64, if (nq.isPositive()) 1 else -1));
                 defer one.deinit();
                 try nq.add(&nq, &one);
             }
