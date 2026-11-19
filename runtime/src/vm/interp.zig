@@ -15,6 +15,7 @@ const state = @import("state.zig");
 const table = @import("table.zig");
 const ops = @import("ops.zig");
 const gc = @import("gc.zig");
+const numeric = @import("numeric.zig");
 const opc = @import("../compile/opcodes.zig");
 const Value = value.Value;
 const Thread = state.Thread;
@@ -271,21 +272,39 @@ pub fn unwindTo(l: *Thread, depth: usize) void {
 // ---------------------------------------------------------------------
 // The dispatch loop
 
+/// The interpreter's view of the running frame, kept in locals. Frames live
+/// in a growable list that a re-entrant call can reallocate, and the stack
+/// grows by reallocation too, so `fr` and `bp` are refreshed after every
+/// operation that may run other code.
 const Ctx = struct {
-    /// Index of the running frame. Frames live in a growable list that a
-    /// re-entrant call can reallocate, so the interpreter never keeps a
-    /// pointer to a frame across an operation.
     fi: usize,
+    fr: *Frame,
     cl: *Closure,
-    code: []u32,
-    k: []Value,
+    code: [*]const u32,
+    k: [*]const Value,
     base: u32,
+    /// Pointer to register 0 of the running frame.
+    bp: [*]Value,
+
+    inline fn refresh(c: *Ctx, l: *Thread) void {
+        c.fr = &l.frames.items[c.fi];
+        c.bp = l.stack.ptr + c.base;
+    }
 };
 
 inline fn load(l: *Thread) Ctx {
-    const fr = l.frame();
+    const fi = l.frames.items.len - 1;
+    const fr = &l.frames.items[fi];
     const cl = fr.closure.?;
-    return .{ .fi = l.frames.items.len - 1, .cl = cl, .code = cl.proto.code, .k = cl.proto.constants, .base = fr.base };
+    return .{
+        .fi = fi,
+        .fr = fr,
+        .cl = cl,
+        .code = cl.proto.code.ptr,
+        .k = cl.proto.constants.ptr,
+        .base = fr.base,
+        .bp = l.stack.ptr + fr.base,
+    };
 }
 
 /// Runs Lus frames until the frame count drops to `stop`.
@@ -349,492 +368,755 @@ fn handleError(l: *Thread, stop: usize) bool {
     return false;
 }
 
+/// Fetches the next instruction. The frame's saved pc is written only
+/// before operations that can raise, call, or allocate, because errors,
+/// tracebacks, and returns read it from the frame.
+inline fn fetch(l: *Thread, c: *Ctx, pc: *u32, ins: *u32, comptime hooked: bool) Error!Op {
+    if (hooked) {
+        try hookStep(l, c.fi, c.cl, pc.*);
+        c.refresh(l);
+    }
+    ins.* = c.code[pc.*];
+    pc.* += 1;
+    return opc.op(ins.*);
+}
+
 fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || LoopError)!void {
     var c = load(l);
-    var pc = l.frames.items[c.fi].pc;
-    const R = struct {
-        inline fn reg(lp: *Thread, base: u32, i: u8) *Value {
-            return &lp.stack[base + i];
-        }
-    };
-    while (true) {
-        if (hooked) try hookStep(l, &c, pc);
-        const ins = c.code[pc];
-        pc += 1;
-        l.frames.items[c.fi].pc = pc; // keep the frame pc current for errors and hooks
-        const ra = opc.a(ins);
-        switch (opc.op(ins)) {
-            .move => R.reg(l, c.base, ra).* = R.reg(l, c.base, opc.b(ins)).*,
-            .loadk => R.reg(l, c.base, ra).* = c.k[opc.bx(ins)],
-            .loadi => R.reg(l, c.base, ra).* = Value.int(opc.sbx(ins)),
-            .loadf => R.reg(l, c.base, ra).* = Value.float(@floatFromInt(opc.sbx(ins))),
-            .loadnil => {
-                var i: u32 = 0;
-                while (i <= opc.b(ins)) : (i += 1) R.reg(l, c.base, ra + @as(u8, @intCast(i))).* = .nil;
-            },
-            .loadfalse => R.reg(l, c.base, ra).* = .false,
-            .loadtrue => R.reg(l, c.base, ra).* = .true,
+    var pc: u32 = c.fr.pc;
+    var ins: u32 = undefined;
+    // Every case ends by dispatching the next instruction directly, which
+    // gives each opcode its own indirect branch.
+    sw: switch (try fetch(l, &c, &pc, &ins, hooked)) {
+        .move => {
+            c.bp[opc.a(ins)] = c.bp[opc.b(ins)];
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .loadk => {
+            c.bp[opc.a(ins)] = c.k[opc.bx(ins)];
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .loadi => {
+            c.bp[opc.a(ins)] = Value.int(opc.sbx(ins));
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .loadf => {
+            c.bp[opc.a(ins)] = Value.float(@floatFromInt(opc.sbx(ins)));
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .loadnil => {
+            const a: u32 = opc.a(ins);
+            var i: u32 = 0;
+            while (i <= opc.b(ins)) : (i += 1) c.bp[a + i] = .nil;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .loadfalse => {
+            c.bp[opc.a(ins)] = .false;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .loadtrue => {
+            c.bp[opc.a(ins)] = .true;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
 
-            .getupval => R.reg(l, c.base, ra).* = c.cl.upvals()[opc.b(ins)].loc.*,
-            .setupval => {
-                const u = c.cl.upvals()[opc.b(ins)];
-                u.loc.* = R.reg(l, c.base, ra).*;
-                gc.barrierBack(l.g, &u.hdr);
-            },
-            .gettabup => {
-                const t = c.cl.upvals()[opc.b(ins)].loc.*;
-                const key = c.k[opc.c(ins)];
-                {
-                    const v_ = try getStrFast(l, t, key, ra);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
-            .settabup => {
-                const t = c.cl.upvals()[ra].loc.*;
-                try setFast(l, t, c.k[opc.b(ins)], R.reg(l, c.base, opc.c(ins)).*);
-            },
-            .gettable => {
-                const t = R.reg(l, c.base, opc.b(ins)).*;
-                const key = R.reg(l, c.base, opc.c(ins)).*;
-                {
-                    const v_ = try getFast(l, t, key, ra);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
-            .getfield => {
-                const t = R.reg(l, c.base, opc.b(ins)).*;
-                {
-                    const v_ = try getStrFast(l, t, c.k[opc.c(ins)], ra);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
-            .getindex => {
-                const t = R.reg(l, c.base, opc.b(ins)).*;
-                const i: i64 = opc.c(ins);
-                if (t.tag == .table) {
-                    const v = table.getInt(t.as(Table), i);
-                    if (!v.isNil() or t.as(Table).metatable == null) {
-                        R.reg(l, c.base, ra).* = v;
-                        continue;
+        .getupval => {
+            c.bp[opc.a(ins)] = c.cl.upvals()[opc.b(ins)].loc.*;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .setupval => {
+            const u = c.cl.upvals()[opc.b(ins)];
+            u.loc.* = c.bp[opc.a(ins)];
+            gc.barrierBack(l.g, &u.hdr);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .gettabup => {
+            const t = c.cl.upvals()[opc.b(ins)].loc.*;
+            try getStrOp(l, &c, pc, opc.a(ins), t, c.k[opc.c(ins)]);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .settabup => {
+            const t = c.cl.upvals()[opc.a(ins)].loc.*;
+            try setStrOp(l, &c, pc, t, c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .gettable => {
+            const a = opc.a(ins);
+            const t = c.bp[opc.b(ins)];
+            const key = c.bp[opc.c(ins)];
+            if (t.tag == .table and key.tag == .integer) {
+                const tab = t.as(Table);
+                const i = key.asInt();
+                if (i >= 1 and i <= tab.array.len) {
+                    const v = tab.array[@intCast(i - 1)];
+                    if (!v.isNil() or noIndexMeta(tab)) {
+                        c.bp[a] = v;
+                        continue :sw try fetch(l, &c, &pc, &ins, hooked);
                     }
                 }
-                {
-                    const v_ = try metaIndex(l, t, Value.int(i), ra);
-                    R.reg(l, c.base, ra).* = v_;
+            } else if (key.tag == .string) {
+                try getStrOp(l, &c, pc, a, t, key);
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
+            c.fr.pc = pc;
+            const v = try getSlow(l, t, key, a);
+            c.refresh(l);
+            c.bp[a] = v;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .getfield => {
+            try getStrOp(l, &c, pc, opc.a(ins), c.bp[opc.b(ins)], c.k[opc.c(ins)]);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .getindex => {
+            const a = opc.a(ins);
+            const t = c.bp[opc.b(ins)];
+            const i: i64 = opc.c(ins);
+            if (t.tag == .table) {
+                const tab = t.as(Table);
+                const v = table.getInt(tab, i);
+                if (!v.isNil() or noIndexMeta(tab)) {
+                    c.bp[a] = v;
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
-            },
-            .settable => {
-                const t = R.reg(l, c.base, ra).*;
-                try setFast(l, t, R.reg(l, c.base, opc.b(ins)).*, R.reg(l, c.base, opc.c(ins)).*);
-            },
-            .setfield => {
-                const t = R.reg(l, c.base, ra).*;
-                try setFast(l, t, c.k[opc.b(ins)], R.reg(l, c.base, opc.c(ins)).*);
-            },
-            .setindex => {
-                const t = R.reg(l, c.base, ra).*;
-                try setFast(l, t, Value.int(opc.b(ins)), R.reg(l, c.base, opc.c(ins)).*);
-            },
-            .newtable => {
-                if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) try runPendingFinalizers(l);
-                const nb: usize = opc.b(ins);
-                const nc: usize = opc.c(ins);
-                // Registers above the target are dead here, so a collection
-                // triggered by this allocation must not keep their values.
-                l.top = c.base + ra + 1;
-                const t = l.newTable(nb, if (nc == 0) 0 else nc);
-                l.top = c.base + c.cl.proto.max_stack;
-                R.reg(l, c.base, ra).* = Value.obj(.table, try t);
-            },
-            .self => {
-                const obj = R.reg(l, c.base, opc.b(ins)).*;
-                R.reg(l, c.base, ra + 1).* = obj;
-                {
-                    const v_ = try getStrFast(l, obj, c.k[opc.c(ins)], ra);
-                    R.reg(l, c.base, ra).* = v_;
+            }
+            c.fr.pc = pc;
+            const v = try metaIndex(l, t, Value.int(i), a);
+            c.refresh(l);
+            c.bp[a] = v;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .settable => {
+            const t = c.bp[opc.a(ins)];
+            const key = c.bp[opc.b(ins)];
+            const v = c.bp[opc.c(ins)];
+            if (t.tag == .table and key.tag == .integer) {
+                const tab = t.as(Table);
+                const i = key.asInt();
+                if (i >= 1 and i <= tab.array.len and !tab.readonly and noNewindexMeta(tab)) {
+                    tab.array[@intCast(i - 1)] = v;
+                    tab.tm_absent = 0;
+                    if (v.tag.isCollectable()) gc.barrierBack(l.g, &tab.hdr);
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
-            },
+            } else if (key.tag == .string) {
+                try setStrOp(l, &c, pc, t, key, v);
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
+            c.fr.pc = pc;
+            try setSlow(l, t, key, v);
+            c.refresh(l);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .setfield => {
+            try setStrOp(l, &c, pc, c.bp[opc.a(ins)], c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .setindex => {
+            c.fr.pc = pc;
+            try setSlow(l, c.bp[opc.a(ins)], Value.int(opc.b(ins)), c.bp[opc.c(ins)]);
+            c.refresh(l);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .newtable => {
+            const a = opc.a(ins);
+            c.fr.pc = pc;
+            if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                try runPendingFinalizers(l);
+                c.refresh(l);
+            }
+            const nb: usize = opc.b(ins);
+            const nc: usize = opc.c(ins);
+            // Registers above the target are dead here, so a collection
+            // triggered by this allocation must not keep their values.
+            l.top = c.base + a + 1;
+            const t = l.newTable(nb, nc);
+            l.top = c.base + c.cl.proto.max_stack;
+            c.bp[a] = Value.obj(.table, try t);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .self => {
+            const a = opc.a(ins);
+            const obj = c.bp[opc.b(ins)];
+            c.bp[a + 1] = obj;
+            try getStrOp(l, &c, pc, a, obj, c.k[opc.c(ins)]);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
 
-            .add => try arith2(l, c.base, ins, .add),
-            .sub => try arith2(l, c.base, ins, .sub),
-            .mul => try arith2(l, c.base, ins, .mul),
-            .div => try arith2(l, c.base, ins, .div),
-            .mod => try arith2(l, c.base, ins, .mod),
-            .pow => try arith2(l, c.base, ins, .pow),
-            .idiv => try arith2(l, c.base, ins, .idiv),
-            .band => try arith2(l, c.base, ins, .band),
-            .bor => try arith2(l, c.base, ins, .bor),
-            .bxor => try arith2(l, c.base, ins, .bxor),
-            .shl => try arith2(l, c.base, ins, .shl),
-            .shr => try arith2(l, c.base, ins, .shr),
-            .addk => try arithK(l, c, ins, .add),
-            .subk => try arithK(l, c, ins, .sub),
-            .mulk => try arithK(l, c, ins, .mul),
-            .divk => try arithK(l, c, ins, .div),
-            .modk => try arithK(l, c, ins, .mod),
-            .powk => try arithK(l, c, ins, .pow),
-            .idivk => try arithK(l, c, ins, .idiv),
-            .addi => {
-                const x = R.reg(l, c.base, opc.b(ins)).*;
-                const imm = opc.sc(ins);
-                if (x.tag == .integer) {
-                    R.reg(l, c.base, ra).* = Value.int(x.asInt() +% imm);
-                } else if (x.tag == .float) {
-                    R.reg(l, c.base, ra).* = Value.float(x.asFloat() + @as(f64, @floatFromInt(imm)));
-                } else {
-                    {
-                        const v_ = try metaArith(l, .add, x, Value.int(imm), ra);
-                        R.reg(l, c.base, ra).* = v_;
-                    }
+        inline .add, .sub, .mul, .div, .mod, .pow, .idiv, .band, .bor, .bxor, .shl, .shr => |o| {
+            const op = comptime arithOf(o);
+            const a = opc.a(ins);
+            // Operands are read through pointers so the fast paths load
+            // only the tag and payload words.
+            const x = &c.bp[opc.b(ins)];
+            const y = &c.bp[opc.c(ins)];
+            if (x.tag == .integer and y.tag == .integer) {
+                if (op == .div) {
+                    c.bp[a] = Value.float(@as(f64, @floatFromInt(x.asInt())) / @as(f64, @floatFromInt(y.asInt())));
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
-            },
+                if (intArith(op, x.asInt(), y.asInt())) |r| {
+                    c.bp[a] = Value.int(r);
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
+            } else if (x.tag == .float and y.tag == .float) {
+                if (floatArith(op, x.asFloat(), y.asFloat())) |r| {
+                    c.bp[a] = Value.float(r);
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
+            }
+            c.fr.pc = pc;
+            const r = try metaArith(l, op, x.*, y.*, a);
+            c.refresh(l);
+            c.bp[a] = r;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        inline .addk, .subk, .mulk, .divk, .modk, .powk, .idivk => |o| {
+            const op = comptime arithOf(o);
+            const a = opc.a(ins);
+            const x = &c.bp[opc.b(ins)];
+            const y = &c.k[opc.c(ins)];
+            if (x.tag == .integer and y.tag == .integer) {
+                if (op == .div) {
+                    c.bp[a] = Value.float(@as(f64, @floatFromInt(x.asInt())) / @as(f64, @floatFromInt(y.asInt())));
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
+                if (intArith(op, x.asInt(), y.asInt())) |r| {
+                    c.bp[a] = Value.int(r);
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
+            } else if (x.tag == .float and y.tag == .float) {
+                if (floatArith(op, x.asFloat(), y.asFloat())) |r| {
+                    c.bp[a] = Value.float(r);
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
+                }
+            }
+            c.fr.pc = pc;
+            const r = try metaArith(l, op, x.*, y.*, a);
+            c.refresh(l);
+            c.bp[a] = r;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .addi => {
+            const a = opc.a(ins);
+            const x = c.bp[opc.b(ins)];
+            const imm = opc.sc(ins);
+            if (x.tag == .integer) {
+                c.bp[a] = Value.int(x.asInt() +% imm);
+            } else if (x.tag == .float) {
+                c.bp[a] = Value.float(x.asFloat() + @as(f64, @floatFromInt(imm)));
+            } else {
+                @branchHint(.cold);
+                c.fr.pc = pc;
+                const r = try metaArith(l, .add, x, Value.int(imm), a);
+                c.refresh(l);
+                c.bp[a] = r;
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
 
-            .unm => {
-                const x = R.reg(l, c.base, opc.b(ins)).*;
-                const r = switch (x.tag) {
-                    .integer => Value.int(0 -% x.asInt()),
-                    .float => Value.float(-x.asFloat()),
-                    else => try metaArith(l, .unm, x, x, ra),
-                };
-                R.reg(l, c.base, ra).* = r;
-            },
-            .bnot => {
-                const x = R.reg(l, c.base, opc.b(ins)).*;
-                const r = if (x.tag == .integer) Value.int(~x.asInt()) else try metaArith(l, .bnot, x, x, ra);
-                R.reg(l, c.base, ra).* = r;
-            },
-            .not => R.reg(l, c.base, ra).* = Value.boolean(!R.reg(l, c.base, opc.b(ins)).truthy()),
-            .len => {
-                const r = try metaLength(l, R.reg(l, c.base, opc.b(ins)).*, ra);
-                R.reg(l, c.base, ra).* = r;
-            },
-            .concat => {
-                const n = opc.b(ins);
-                const r = try ops.concat(l, c.base + ra, n);
-                R.reg(l, c.base, ra).* = r;
-            },
-            .interp => {
-                const n = opc.b(ins);
-                {
-                    const v_ = try interpolate(l, c.base + ra, n);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
+        .unm => {
+            const a = opc.a(ins);
+            const x = c.bp[opc.b(ins)];
+            switch (x.tag) {
+                .integer => c.bp[a] = Value.int(0 -% x.asInt()),
+                .float => c.bp[a] = Value.float(-x.asFloat()),
+                else => {
+                    c.fr.pc = pc;
+                    const r = try metaArith(l, .unm, x, x, a);
+                    c.refresh(l);
+                    c.bp[a] = r;
+                },
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .bnot => {
+            const a = opc.a(ins);
+            const x = c.bp[opc.b(ins)];
+            if (x.tag == .integer) {
+                c.bp[a] = Value.int(~x.asInt());
+            } else {
+                c.fr.pc = pc;
+                const r = try metaArith(l, .bnot, x, x, a);
+                c.refresh(l);
+                c.bp[a] = r;
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .not => {
+            c.bp[opc.a(ins)] = Value.boolean(!c.bp[opc.b(ins)].truthy());
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .len => {
+            const a = opc.a(ins);
+            const x = c.bp[opc.b(ins)];
+            if (x.tag == .table and x.as(Table).metatable == null) {
+                c.bp[a] = Value.int(table.length(x.as(Table)));
+            } else if (x.tag == .string) {
+                c.bp[a] = Value.int(x.as(String).chars);
+            } else {
+                c.fr.pc = pc;
+                const r = try metaLength(l, x, a);
+                c.refresh(l);
+                c.bp[a] = r;
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .concat => {
+            const a = opc.a(ins);
+            c.fr.pc = pc;
+            const r = try ops.concat(l, c.base + a, opc.b(ins));
+            c.refresh(l);
+            c.bp[a] = r;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .interp => {
+            const a = opc.a(ins);
+            c.fr.pc = pc;
+            const r = try interpolate(l, c.base + a, opc.b(ins));
+            c.refresh(l);
+            c.bp[a] = r;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
 
-            .jmp => {
-                const off = opc.sj(ins);
-                pc = @intCast(@as(i64, pc) + off);
-                // Loops are safe points for pending finalizers.
-                if (off < 0 and l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
-                    l.frames.items[c.fi].pc = pc;
-                    try runPendingFinalizers(l);
-                }
-            },
-            .eq => {
-                const x = R.reg(l, c.base, ra).*;
-                const y = R.reg(l, c.base, opc.b(ins)).*;
-                const r = try metaCompare(l, .eq, x, y, opc.c(ins) != 0);
-                if (r != (opc.c(ins) != 0)) pc += 1;
-            },
-            .lt => {
-                const x = R.reg(l, c.base, ra).*;
-                const y = R.reg(l, c.base, opc.b(ins)).*;
-                const r = if (x.tag == .integer and y.tag == .integer) x.asInt() < y.asInt() else try metaCompare(l, .lt, x, y, opc.c(ins) != 0);
-                if (r != (opc.c(ins) != 0)) pc += 1;
-            },
-            .le => {
-                const x = R.reg(l, c.base, ra).*;
-                const y = R.reg(l, c.base, opc.b(ins)).*;
-                const r = if (x.tag == .integer and y.tag == .integer) x.asInt() <= y.asInt() else try metaCompare(l, .le, x, y, opc.c(ins) != 0);
-                if (r != (opc.c(ins) != 0)) pc += 1;
-            },
-            .eqk => {
-                const x = R.reg(l, c.base, ra).*;
-                const r = ops.rawEqual(l, x, c.k[opc.b(ins)]);
-                if (r != (opc.c(ins) != 0)) pc += 1;
-            },
-            .test_ => {
-                if (R.reg(l, c.base, ra).truthy() != (opc.c(ins) != 0)) pc += 1;
-            },
-            .testset => {
-                const v = R.reg(l, c.base, opc.b(ins)).*;
-                if (v.truthy() != (opc.c(ins) != 0)) pc += 1 else R.reg(l, c.base, ra).* = v;
-            },
-            .testnil => {
-                if (R.reg(l, c.base, ra).isNil() != (opc.c(ins) != 0)) pc += 1;
-            },
+        .jmp => {
+            const off = opc.sj(ins);
+            pc = @intCast(@as(i64, pc) + off);
+            // Loops are safe points for pending finalizers.
+            if (off < 0 and l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                c.fr.pc = pc;
+                try runPendingFinalizers(l);
+                c.refresh(l);
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .eq => {
+            const x = &c.bp[opc.a(ins)];
+            const y = &c.bp[opc.b(ins)];
+            const k = opc.c(ins) != 0;
+            // Nil, booleans, and integers compare by tag and payload.
+            const r = if (x.tag == y.tag and @backingInt(x.tag) <= @backingInt(value.Tag.integer))
+                (x.tag != .integer or x.payload == y.payload)
+            else if (x.tag == .float and y.tag == .float)
+                x.asFloat() == y.asFloat()
+            else blk: {
+                c.fr.pc = pc;
+                const r = try metaCompare(l, .eq, x.*, y.*, k);
+                c.refresh(l);
+                break :blk r;
+            };
+            if (r != k) pc += 1;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        inline .lt, .le => |o| {
+            const x = &c.bp[opc.a(ins)];
+            const y = &c.bp[opc.b(ins)];
+            const k = opc.c(ins) != 0;
+            const r = if (x.tag == .integer and y.tag == .integer)
+                (if (o == .lt) x.asInt() < y.asInt() else x.asInt() <= y.asInt())
+            else if (x.tag == .float and y.tag == .float)
+                (if (o == .lt) x.asFloat() < y.asFloat() else x.asFloat() <= y.asFloat())
+            else blk: {
+                c.fr.pc = pc;
+                const r = try metaCompare(l, if (o == .lt) .lt else .le, x.*, y.*, k);
+                c.refresh(l);
+                break :blk r;
+            };
+            if (r != k) pc += 1;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .eqk => {
+            const x = c.bp[opc.a(ins)];
+            const y = c.k[opc.b(ins)];
+            const r = if (x.tag == y.tag and (x.tag == .integer or x.tag == .string)) x.payload == y.payload or ops.rawEqual(l, x, y) else ops.rawEqual(l, x, y);
+            if (r != (opc.c(ins) != 0)) pc += 1;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .test_ => {
+            if (c.bp[opc.a(ins)].truthy() != (opc.c(ins) != 0)) pc += 1;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .testset => {
+            const v = c.bp[opc.b(ins)];
+            if (v.truthy() != (opc.c(ins) != 0)) pc += 1 else c.bp[opc.a(ins)] = v;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .testnil => {
+            if (c.bp[opc.a(ins)].isNil() != (opc.c(ins) != 0)) pc += 1;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
 
-            .call => {
-                if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) try runPendingFinalizers(l);
-                const nb = opc.b(ins);
-                const want: i32 = @as(i32, opc.c(ins)) - 1;
-                const func = c.base + ra;
-                const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
-                if (nb != 0) l.top = func + nb;
-                const kind = try precall(l, func, nargs, want);
-                if (kind == .lus) {
-                    c = load(l);
-                    pc = 0;
-                    if (hooked and l.hook_mask & Thread.hook_call != 0) try callHook(l, "call", null);
-                } else {
-                    if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
-                    // A native may have set or cleared the hooks.
-                    if ((l.hook_mask != 0) != hooked) return error.SwitchLoop;
-                }
-            },
-            .tailcall => {
-                const nb = opc.b(ins);
-                const func = c.base + ra;
-                const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
-                const callee = l.stack[func];
-                if (callee.tag != .closure) {
-                    // Natives and __call targets run as a plain call
-                    // followed by a return of all results.
-                    if (nb != 0) l.top = func + nb;
-                    const kind = try precall(l, func, nargs, -1);
-                    if (kind == .lus) {
-                        c = load(l);
-                        pc = 0;
-                        continue;
-                    }
-                    if (try doReturn(l, &c, &pc, func, l.top - func, stop)) return;
-                    continue;
-                }
-                // Reuse the current frame: close upvalues, move the callee
-                // and arguments down to the frame's return slot.
-                closeUpvals(l, c.base);
-                const fr = l.frames.pop().?;
-                const dst = fr.ret;
-                var i: u32 = 0;
-                while (i <= nargs) : (i += 1) l.stack[dst + i] = l.stack[func + i];
-                l.top = dst + 1 + nargs;
-                _ = try precall(l, dst, nargs, fr.want);
-                const nf = l.frame();
-                nf.boundary = fr.boundary;
-                nf.tail = true;
+        .call => {
+            const nb = opc.b(ins);
+            const want: i32 = @as(i32, opc.c(ins)) - 1;
+            const func = c.base + opc.a(ins);
+            c.fr.pc = pc;
+            if (l.g.tobefnz.items.len > 0 and !l.g.running_finalizers) {
+                try runPendingFinalizers(l);
+                c.refresh(l);
+            }
+            const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
+            if (nb != 0) l.top = func + nb;
+            const callee = l.stack[func];
+            if (callee.tag == .closure and !callee.as(Closure).proto.is_vararg) {
+                try enterLus(l, callee.as(Closure), func, nargs, want);
                 c = load(l);
                 pc = 0;
-                if (hooked and l.hook_mask & Thread.hook_call != 0) try callHook(l, "tail call", null);
-            },
-            .ret => {
-                const nb = opc.b(ins);
-                const first = c.base + ra;
-                const n: u32 = if (nb != 0) nb - 1 else l.top - first;
-                if (try doReturn(l, &c, &pc, first, n, stop)) return;
-            },
-            .ret0 => {
-                if (try doReturn(l, &c, &pc, c.base, 0, stop)) return;
-            },
-            .ret1 => {
-                if (try doReturn(l, &c, &pc, c.base + ra, 1, stop)) return;
-            },
-
-            .forprep => {
-                if (try forPrep(l, c.base + ra)) pc += opc.bx(ins) + 1;
-            },
-            .forloop => {
-                const r = c.base + ra;
-                const idx = &l.stack[r];
-                if (idx.tag == .integer) {
-                    // R[r+1] holds the remaining iteration count.
-                    const count: u64 = @bitCast(l.stack[r + 1].asInt());
-                    if (count > 0) {
-                        const step = l.stack[r + 2].asInt();
-                        l.stack[r + 1] = Value.int(@bitCast(count - 1));
-                        idx.* = Value.int(idx.asInt() +% step);
-                        l.stack[r + 3] = idx.*;
-                        pc -= opc.bx(ins);
-                    }
-                } else {
-                    const step = l.stack[r + 2].asFloat();
-                    const limit = l.stack[r + 1].asFloat();
-                    const ni = idx.asFloat() + step;
-                    if (if (step > 0) ni <= limit else limit <= ni) {
-                        idx.* = Value.float(ni);
-                        l.stack[r + 3] = idx.*;
-                        pc -= opc.bx(ins);
-                    }
+                if (hooked and l.hook_mask & Thread.hook_call != 0) {
+                    try callHook(l, "call", null);
+                    c.refresh(l);
                 }
-            },
-            .tforprep => {
-                const r = c.base + ra;
-                if (!l.stack[r + 3].isNil()) try markTbc(l, r + 3);
-                pc += opc.bx(ins);
-            },
-            .tforcall => {
-                const r = c.base + ra;
-                // R[r+4..] = R[r](R[r+1], R[r+2])
-                l.stack[r + 4] = l.stack[r];
-                l.stack[r + 5] = l.stack[r + 1];
-                l.stack[r + 6] = l.stack[r + 2];
-                l.top = r + 4 + 3;
-                const want: i32 = opc.c(ins);
-                const kind = try precall(l, r + 4, 2, want);
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
+            const kind = try precall(l, func, nargs, want);
+            if (kind == .lus) {
+                c = load(l);
+                pc = 0;
+                if (hooked and l.hook_mask & Thread.hook_call != 0) {
+                    try callHook(l, "call", null);
+                    c.refresh(l);
+                }
+            } else {
+                c.refresh(l);
+                if (want >= 0) l.top = c.base + c.cl.proto.max_stack;
+                // A native may have set or cleared the hooks.
+                if ((l.hook_mask != 0) != hooked) return error.SwitchLoop;
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .tailcall => {
+            const nb = opc.b(ins);
+            const func = c.base + opc.a(ins);
+            const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
+            const callee = l.stack[func];
+            c.fr.pc = pc;
+            if (callee.tag != .closure) {
+                // Natives and __call targets run as a plain call
+                // followed by a return of all results.
+                if (nb != 0) l.top = func + nb;
+                const kind = try precall(l, func, nargs, -1);
                 if (kind == .lus) {
                     c = load(l);
                     pc = 0;
-                } else {
-                    l.top = c.base + c.cl.proto.max_stack;
+                    continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
-            },
-            .tforloop => {
-                const r = c.base + ra;
-                if (!l.stack[r + 4].isNil()) {
-                    l.stack[r + 2] = l.stack[r + 4];
+                c.refresh(l);
+                if (try doReturn(l, &c, &pc, func, l.top - func, stop)) return;
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
+            // Reuse the current frame: close upvalues, move the callee
+            // and arguments down to the frame's return slot.
+            closeUpvals(l, c.base);
+            const fr = l.frames.pop().?;
+            const dst = fr.ret;
+            var i: u32 = 0;
+            while (i <= nargs) : (i += 1) l.stack[dst + i] = l.stack[func + i];
+            l.top = dst + 1 + nargs;
+            _ = try precall(l, dst, nargs, fr.want);
+            const nf = l.frame();
+            nf.boundary = fr.boundary;
+            nf.tail = true;
+            c = load(l);
+            pc = 0;
+            if (hooked and l.hook_mask & Thread.hook_call != 0) {
+                try callHook(l, "tail call", null);
+                c.refresh(l);
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .ret => {
+            const nb = opc.b(ins);
+            const first = c.base + opc.a(ins);
+            const n: u32 = if (nb != 0) nb - 1 else l.top - first;
+            c.fr.pc = pc;
+            if (try doReturn(l, &c, &pc, first, n, stop)) return;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .ret0 => {
+            c.fr.pc = pc;
+            if (try doReturn(l, &c, &pc, c.base, 0, stop)) return;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .ret1 => {
+            c.fr.pc = pc;
+            if (try doReturn(l, &c, &pc, c.base + opc.a(ins), 1, stop)) return;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+
+        .forprep => {
+            c.fr.pc = pc;
+            if (try forPrep(l, c.base + opc.a(ins))) pc += opc.bx(ins) + 1;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .forloop => {
+            const r = c.bp + opc.a(ins);
+            if (r[0].tag == .integer) {
+                // R[r+1] holds the remaining iteration count.
+                const count: u64 = @bitCast(r[1].asInt());
+                if (count > 0) {
+                    const idx = r[0].asInt() +% r[2].asInt();
+                    r[1] = Value.int(@bitCast(count - 1));
+                    r[0] = Value.int(idx);
+                    r[3] = Value.int(idx);
                     pc -= opc.bx(ins);
                 }
-            },
-            .rangeprep => {
-                // R[A] holds the iterator expression results. When R[A] is
-                // the builtin range, convert to an integer numeric loop:
-                // R[A..A+2] = start, count, step and skip to the numeric
-                // loop body following this instruction.
-                const r = c.base + ra;
-                if (isBuiltinRange(l, l.stack[r])) {
-                    if (try rangePrep(l, r)) pc += opc.bx(ins) + 1;
-                } else {
-                    // Generic protocol: fall through to the tforprep that
-                    // the compiler placed at pc + Bx + 1... encoded as the
-                    // next instruction offset in C.
-                    pc += opc.c(ins);
+            } else {
+                const step = r[2].asFloat();
+                const limit = r[1].asFloat();
+                const ni = r[0].asFloat() + step;
+                if (if (step > 0) ni <= limit else limit <= ni) {
+                    r[0] = Value.float(ni);
+                    r[3] = Value.float(ni);
+                    pc -= opc.bx(ins);
                 }
-            },
-
-            .setlist => {
-                const t = R.reg(l, c.base, ra).as(Table);
-                var n: u32 = opc.b(ins);
-                const first = c.base + ra + 1;
-                if (n == 0) n = l.top - first;
-                const start = opc.ax(c.code[pc]);
-                pc += 1;
-                const last = start + n;
-                if (last > t.array.len) table.resize(l.g.gpa, t, last, t.hash_used) catch return l.raiseMem();
-                var i: u32 = 0;
-                while (i < n) : (i += 1) t.array[start + i] = l.stack[first + i];
-                gc.barrierBack(l.g, &t.hdr);
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .tforprep => {
+            const r = c.base + opc.a(ins);
+            if (!l.stack[r + 3].isNil()) {
+                c.fr.pc = pc;
+                try markTbc(l, r + 3);
+                c.refresh(l);
+            }
+            pc += opc.bx(ins);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .tforcall => {
+            const r = c.base + opc.a(ins);
+            c.fr.pc = pc;
+            // R[r+4..] = R[r](R[r+1], R[r+2])
+            l.stack[r + 4] = l.stack[r];
+            l.stack[r + 5] = l.stack[r + 1];
+            l.stack[r + 6] = l.stack[r + 2];
+            l.top = r + 4 + 3;
+            const want: i32 = opc.c(ins);
+            const kind = try precall(l, r + 4, 2, want);
+            if (kind == .lus) {
+                c = load(l);
+                pc = 0;
+            } else {
+                c.refresh(l);
                 l.top = c.base + c.cl.proto.max_stack;
-            },
-            .closure => {
-                const p = c.cl.proto.protos[opc.bx(ins)];
-                // Collect only once the closure is rooted in its register,
-                // with the registers above it treated as dead.
-                R.reg(l, c.base, ra).* = Value.obj(.closure, try makeClosure(l, p, c.cl, c.base));
-                l.top = c.base + ra + 1;
-                gc.maybeCollect(l.g);
-                l.top = c.base + c.cl.proto.max_stack;
-            },
-            .vararg => {
-                const want: i32 = @as(i32, opc.c(ins)) - 1;
-                const vfr = l.frames.items[c.fi];
-                const nv = vfr.nvarargs;
-                const src = vfr.func - nv;
-                const dst = c.base + ra;
-                if (want < 0) {
-                    try l.ensure(nv + 8);
-                    var i: u32 = 0;
-                    while (i < nv) : (i += 1) l.stack[dst + i] = l.stack[src + i];
-                    l.top = dst + nv;
-                } else {
-                    var i: u32 = 0;
-                    while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[dst + i] = if (i < nv) l.stack[src + i] else .nil;
-                }
-            },
-            .varargprep => {},
-            .varargtab => {
-                const vfr = l.frames.items[c.fi];
-                const nv = vfr.nvarargs;
-                const src = vfr.func - nv;
-                const t = try l.newTable(nv, 1);
-                var i: u32 = 0;
-                while (i < nv) : (i += 1) t.array[i] = l.stack[src + i];
-                R.reg(l, c.base, ra).* = Value.obj(.table, t);
-                try ops.rawSet(l, t, try l.newStringValue("n"), Value.int(nv));
-            },
-            .close => {
-                const level = c.base + ra;
-                closeUpvals(l, level);
-                if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= level) {
-                    l.meta_finish = .{ .redo = false };
-                    defer l.meta_finish = null;
-                    try closeTbc(l, level, null);
-                }
-            },
-            .tbc => try markTbc(l, c.base + ra),
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .tforloop => {
+            const r = c.bp + opc.a(ins);
+            if (!r[4].isNil()) {
+                r[2] = r[4];
+                pc -= opc.bx(ins);
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .rangeprep => {
+            // R[A] holds the iterator expression results. When R[A] is
+            // the builtin range, convert to an integer numeric loop:
+            // R[A..A+2] = start, count, step and skip to the numeric
+            // loop body following this instruction. Otherwise continue
+            // with the generic protocol at the offset in C.
+            const r = c.base + opc.a(ins);
+            if (isBuiltinRange(l, l.stack[r])) {
+                c.fr.pc = pc;
+                if (try rangePrep(l, r)) pc += opc.bx(ins) + 1;
+            } else {
+                pc += opc.c(ins);
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
 
-            .slice => {
-                const r = c.base + opc.b(ins);
-                {
-                    const v_ = try @import("ext.zig").slice(l, l.stack[r], l.stack[r + 1], l.stack[r + 2]);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
-            .newenum => {
-                {
-                    const v_ = try @import("ext.zig").newEnum(l, c.k[opc.bx(ins)]);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
-            .query => {
-                {
-                    const v_ = try @import("ext.zig").newQuery(l, c.k[opc.bx(ins)], c.base + ra + 1);
-                    R.reg(l, c.base, ra).* = v_;
-                }
-            },
-            .globaldef => {
-                const env = c.cl.upvals()[ra].loc.*;
-                try globalDefine(l, env, c.k[opc.b(ins)], R.reg(l, c.base, opc.c(ins)).*);
-            },
-            .globaldefr => {
-                try globalDefine(l, R.reg(l, c.base, ra).*, c.k[opc.b(ins)], R.reg(l, c.base, opc.c(ins)).*);
-            },
-            .catchcheck => {
-                const h = R.reg(l, c.base, ra).*;
-                if (h.tag != .closure and h.tag != .native) {
-                    return l.raiseFmt("attempt to use a {s} value as a catch handler", .{l.typeNameOf(h)});
-                }
-            },
-            .settop => l.top = c.base + ra,
-            .moverange => {
-                const src = c.base + opc.b(ins);
-                const dst = c.base + ra;
-                const n = l.top - src;
+        .setlist => {
+            const a = opc.a(ins);
+            const t = c.bp[a].as(Table);
+            var n: u32 = opc.b(ins);
+            const first = c.base + a + 1;
+            if (n == 0) n = l.top - first;
+            const start = opc.ax(c.code[pc]);
+            pc += 1;
+            c.fr.pc = pc;
+            const last = start + n;
+            if (last > t.array.len) table.resize(l.g.gpa, t, last, t.hash_used) catch return l.raiseMem();
+            var i: u32 = 0;
+            while (i < n) : (i += 1) t.array[start + i] = l.stack[first + i];
+            gc.barrierBack(l.g, &t.hdr);
+            l.top = c.base + c.cl.proto.max_stack;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .closure => {
+            const a = opc.a(ins);
+            const p = c.cl.proto.protos[opc.bx(ins)];
+            c.fr.pc = pc;
+            // Collect only once the closure is rooted in its register,
+            // with the registers above it treated as dead.
+            const ncl = try makeClosure(l, p, c.cl, c.base);
+            c.refresh(l);
+            c.bp[a] = Value.obj(.closure, ncl);
+            l.top = c.base + a + 1;
+            gc.maybeCollect(l.g);
+            l.top = c.base + c.cl.proto.max_stack;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .vararg => {
+            const want: i32 = @as(i32, opc.c(ins)) - 1;
+            const nv = c.fr.nvarargs;
+            const src = c.fr.func - nv;
+            const dst = c.base + opc.a(ins);
+            if (want < 0) {
+                c.fr.pc = pc;
+                try l.ensure(nv + 8);
+                c.refresh(l);
                 var i: u32 = 0;
-                while (i < n) : (i += 1) l.stack[dst + i] = l.stack[src + i];
-                l.top = dst + n;
-            },
-            .extraarg => unreachable,
-        }
+                while (i < nv) : (i += 1) l.stack[dst + i] = l.stack[src + i];
+                l.top = dst + nv;
+            } else {
+                var i: u32 = 0;
+                while (i < @as(u32, @intCast(want))) : (i += 1) l.stack[dst + i] = if (i < nv) l.stack[src + i] else .nil;
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .varargprep => continue :sw try fetch(l, &c, &pc, &ins, hooked),
+        .varargtab => {
+            const nv = c.fr.nvarargs;
+            const src = c.fr.func - nv;
+            c.fr.pc = pc;
+            const t = try l.newTable(nv, 1);
+            var i: u32 = 0;
+            while (i < nv) : (i += 1) t.array[i] = l.stack[src + i];
+            c.refresh(l);
+            c.bp[opc.a(ins)] = Value.obj(.table, t);
+            try ops.rawSet(l, t, try l.newStringValue("n"), Value.int(nv));
+            c.refresh(l);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .close => {
+            const level = c.base + opc.a(ins);
+            closeUpvals(l, level);
+            if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= level) {
+                c.fr.pc = pc;
+                l.meta_finish = .{ .redo = false };
+                defer l.meta_finish = null;
+                try closeTbc(l, level, null);
+                c.refresh(l);
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .tbc => {
+            c.fr.pc = pc;
+            try markTbc(l, c.base + opc.a(ins));
+            c.refresh(l);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+
+        .slice => {
+            const r = c.base + opc.b(ins);
+            c.fr.pc = pc;
+            const v = try @import("ext.zig").slice(l, l.stack[r], l.stack[r + 1], l.stack[r + 2]);
+            c.refresh(l);
+            c.bp[opc.a(ins)] = v;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .newenum => {
+            c.fr.pc = pc;
+            const v = try @import("ext.zig").newEnum(l, c.k[opc.bx(ins)]);
+            c.refresh(l);
+            c.bp[opc.a(ins)] = v;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .query => {
+            const a = opc.a(ins);
+            c.fr.pc = pc;
+            const v = try @import("ext.zig").newQuery(l, c.k[opc.bx(ins)], c.base + a + 1);
+            c.refresh(l);
+            c.bp[a] = v;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .globaldef => {
+            const env = c.cl.upvals()[opc.a(ins)].loc.*;
+            c.fr.pc = pc;
+            try globalDefine(l, env, c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            c.refresh(l);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .globaldefr => {
+            c.fr.pc = pc;
+            try globalDefine(l, c.bp[opc.a(ins)], c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            c.refresh(l);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .catchcheck => {
+            const h = c.bp[opc.a(ins)];
+            if (h.tag != .closure and h.tag != .native) {
+                c.fr.pc = pc;
+                return l.raiseFmt("attempt to use a {s} value as a catch handler", .{l.typeNameOf(h)});
+            }
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .settop => {
+            l.top = c.base + opc.a(ins);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .moverange => {
+            const src = c.base + opc.b(ins);
+            const dst = c.base + opc.a(ins);
+            const n = l.top - src;
+            var i: u32 = 0;
+            while (i < n) : (i += 1) l.stack[dst + i] = l.stack[src + i];
+            l.top = dst + n;
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .extraarg => unreachable,
     }
 }
 
+/// Pushes a frame for a call to a Lus function with fixed parameters. The
+/// callee and its `nargs` arguments are at `func`.
+inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {
+    const p = cl.proto;
+    const base = func + 1;
+    const top = base + p.max_stack;
+    if (@as(usize, top) + nargs + 8 > l.stack.len) try l.ensure(@as(usize, p.max_stack) + nargs + 8);
+    // Missing parameters and the registers above the parameters start nil.
+    var r = base + @min(nargs, @as(u32, p.num_params));
+    while (r < top) : (r += 1) l.stack[r] = .nil;
+    l.frames.append(l.g.gpa, .{ .func = func, .base = base, .closure = cl, .want = want, .ret = func }) catch return l.raiseMem();
+    l.top = top;
+}
+
 /// Returns `n` values starting at `first` from the current frame. Returns
-/// true when the interpreter loop must exit.
+/// true when the interpreter loop must exit. The caller has saved the pc.
 inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usize) Error!bool {
     if (l.hook_mask & Thread.hook_ret != 0) {
         if (l.top < first + n) l.top = first + n;
         try callHook(l, "return", null);
     }
-    // Copy what is needed: __close handlers may reallocate the frames.
-    const fr = l.frames.items[c.fi];
+    const base = c.base;
     if (l.open_upvals) |u| {
-        if (u.level >= fr.base) closeUpvals(l, fr.base);
+        if (u.level >= base) closeUpvals(l, base);
     }
-    if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= fr.base) {
+    if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= base) {
         // Protect the results while __close runs.
         l.top = first + n;
         l.meta_finish = .{ .redo = true };
         defer l.meta_finish = null;
-        try closeTbc(l, fr.base, null);
+        try closeTbc(l, base, null);
     }
-    l.top = first + n;
-    const boundary = fr.boundary;
-    try poscall(l, n);
-    if (boundary or l.frames.items.len <= stop) return true;
-    const want = l.frames.items.len; // caller frame now on top
-    _ = want;
+    // Finish the frame: move the results to its return slot, adjusted to
+    // the wanted count. __close handlers may have reallocated the frames.
+    const fr = l.frames.pop().?;
+    const dst = fr.ret;
+    if (fr.want < 0) {
+        var i: u32 = 0;
+        while (i < n) : (i += 1) l.stack[dst + i] = l.stack[first + i];
+        l.top = dst + n;
+    } else {
+        const w: u32 = @intCast(fr.want);
+        var i: u32 = 0;
+        while (i < w) : (i += 1) l.stack[dst + i] = if (i < n) l.stack[first + i] else .nil;
+        l.top = dst + w;
+    }
+    if (fr.boundary or l.frames.items.len <= stop) return true;
     if (l.frame().closure == null) return true;
     c.* = load(l);
-    pc.* = l.frames.items[c.fi].pc;
+    pc.* = c.fr.pc;
     if (l.hook_mask != 0) {
         // Returning into the caller is not a new line.
         l.hook_oldfi = c.fi;
@@ -842,15 +1124,15 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     }
     switch (fr.finish) {
         .none, .discard => {},
-        .store => |r| l.stack[c.base + r] = l.stack[fr.ret],
-        .cond => |k| if (l.stack[fr.ret].truthy() != k) {
+        .store => |r| c.bp[r] = l.stack[dst],
+        .cond => |k| if (l.stack[dst].truthy() != k) {
             pc.* += 1;
-            l.frames.items[c.fi].pc = pc.*;
+            c.fr.pc = pc.*;
         },
         .redo => |keep_top| {
             pc.* -= 1;
-            l.frames.items[c.fi].pc = pc.*;
-            if (keep_top) l.top = fr.ret;
+            c.fr.pc = pc.*;
+            if (keep_top) l.top = dst;
         },
     }
     // Fixed result counts restore the caller's register window top.
@@ -892,54 +1174,120 @@ pub fn makeClosure(l: *Thread, p: *Proto, parent: *Closure, base: u32) Error!*Cl
 // ---------------------------------------------------------------------
 // Instruction helpers
 
-inline fn arith2(l: *Thread, base: u32, ins: u32, comptime op: ops.ArithOp) Error!void {
-    const x = l.stack[base + opc.b(ins)];
-    const y = l.stack[base + opc.c(ins)];
-    const r = try arithFast(l, op, x, y, opc.a(ins));
-    l.stack[base + opc.a(ins)] = r;
+fn arithOf(comptime o: Op) ops.ArithOp {
+    return switch (o) {
+        .add, .addk => .add,
+        .sub, .subk => .sub,
+        .mul, .mulk => .mul,
+        .div, .divk => .div,
+        .mod, .modk => .mod,
+        .pow, .powk => .pow,
+        .idiv, .idivk => .idiv,
+        .band => .band,
+        .bor => .bor,
+        .bxor => .bxor,
+        .shl => .shl,
+        .shr => .shr,
+        else => unreachable,
+    };
 }
 
-inline fn arithK(l: *Thread, c: Ctx, ins: u32, comptime op: ops.ArithOp) Error!void {
-    const x = l.stack[c.base + opc.b(ins)];
-    const y = c.k[opc.c(ins)];
-    const r = try arithFast(l, op, x, y, opc.a(ins));
-    l.stack[c.base + opc.a(ins)] = r;
+/// Integer arithmetic with the exact results of `ops.arithRaw`. Returns
+/// null for division by zero and for the operators that need the slow
+/// path, so that it raises the error.
+inline fn intArith(comptime op: ops.ArithOp, a: i64, b: i64) ?i64 {
+    return switch (op) {
+        .add => a +% b,
+        .sub => a -% b,
+        .mul => a *% b,
+        .band => a & b,
+        .bor => a | b,
+        .bxor => a ^ b,
+        .shl => ops.shiftLeft(a, b),
+        .shr => ops.shiftLeft(a, 0 -% b),
+        .mod => if (b == 0) null else ops.imod(a, b),
+        .idiv => if (b == 0) null else ops.idiv(a, b),
+        else => null,
+    };
 }
 
-inline fn arithFast(l: *Thread, comptime op: ops.ArithOp, x: Value, y: Value, dest: u8) Error!Value {
-    if (x.tag == .integer and y.tag == .integer) {
-        const a = x.asInt();
-        const b = y.asInt();
-        switch (op) {
-            .add => return Value.int(a +% b),
-            .sub => return Value.int(a -% b),
-            .mul => return Value.int(a *% b),
-            .band => return Value.int(a & b),
-            .bor => return Value.int(a | b),
-            .bxor => return Value.int(a ^ b),
-            else => {},
-        }
-    } else if (x.tag == .float and y.tag == .float) {
-        const a = x.asFloat();
-        const b = y.asFloat();
-        switch (op) {
-            .add => return Value.float(a + b),
-            .sub => return Value.float(a - b),
-            .mul => return Value.float(a * b),
-            .div => return Value.float(a / b),
-            else => {},
-        }
-    }
-    return metaArith(l, op, x, y, dest);
+/// Float arithmetic with the exact results of `ops.arithRaw`.
+inline fn floatArith(comptime op: ops.ArithOp, a: f64, b: f64) ?f64 {
+    return switch (op) {
+        .add => a + b,
+        .sub => a - b,
+        .mul => a * b,
+        .div => a / b,
+        .mod => numeric.fmod(a, b),
+        .idiv => @floor(a / b),
+        else => null,
+    };
 }
 
-inline fn getStrFast(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
+/// True when indexing a missing key of `t` yields nil without a
+/// metamethod: no metatable, or one known to lack `__index`.
+inline fn noIndexMeta(t: *Table) bool {
+    const mt = t.metatable orelse return true;
+    return mt.tm_absent & (@as(u16, 1) << @backingInt(state.TM.index)) != 0;
+}
+
+/// True when a store into `t` is a raw store: no metatable, or one known
+/// to lack `__newindex`.
+inline fn noNewindexMeta(t: *Table) bool {
+    const mt = t.metatable orelse return true;
+    return mt.tm_absent & (@as(u16, 1) << @backingInt(state.TM.newindex)) != 0;
+}
+
+/// R[a] = t[key] for a string key.
+inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, a: u8, t: Value, key: Value) Error!void {
     if (t.tag == .table) {
         const tab = t.as(Table);
         const v = table.getStr(tab, key.as(String));
+        if (!v.isNil() or noIndexMeta(tab)) {
+            c.bp[a] = v;
+            return;
+        }
+    }
+    c.fr.pc = pc;
+    const v = try metaIndex(l, t, key, a);
+    c.refresh(l);
+    c.bp[a] = v;
+}
+
+/// t[key] = v for a string key. Stores into an existing key of a plain
+/// table happen inline. Everything else goes through `setSlow`.
+inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, t: Value, key: Value, v: Value) Error!void {
+    if (t.tag == .table) {
+        const tab = t.as(Table);
+        if (!tab.readonly and noNewindexMeta(tab)) {
+            if (table.findStr(tab, key.as(String))) |idx| {
+                tab.hash[idx].val = v;
+                tab.tm_absent = 0;
+                if (v.tag.isCollectable()) gc.barrierBack(l.g, &tab.hdr);
+                return;
+            }
+        }
+    }
+    c.fr.pc = pc;
+    try setSlow(l, t, key, v);
+    c.refresh(l);
+}
+
+fn getSlow(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
+    if (t.tag == .table) {
+        const tab = t.as(Table);
+        const v = table.get(tab, try ops.normKey(l, key));
         if (!v.isNil() or tab.metatable == null) return v;
     }
     return metaIndex(l, t, key, dest);
+}
+
+fn setSlow(l: *Thread, t: Value, key: Value, v: Value) Error!void {
+    if (t.tag == .table) {
+        const tab = t.as(Table);
+        if (tab.metatable == null) return ops.rawSet(l, tab, key, v);
+    }
+    return metaSet(l, t, key, v);
 }
 
 /// Slow-path operations that may run a metamethod as an interpreter
@@ -957,6 +1305,7 @@ fn metaSet(l: *Thread, t: Value, key: Value, v: Value) Error!void {
 }
 
 fn metaArith(l: *Thread, op: ops.ArithOp, x: Value, y: Value, dest: u8) Error!Value {
+    @branchHint(.cold);
     l.meta_finish = .{ .store = dest };
     defer l.meta_finish = null;
     return ops.arith(l, op, x, y);
@@ -976,23 +1325,6 @@ fn metaCompare(l: *Thread, comptime which: enum { eq, lt, le }, x: Value, y: Val
         .lt => ops.lessThan(l, x, y),
         .le => ops.lessEqual(l, x, y),
     };
-}
-
-inline fn getFast(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
-    if (t.tag == .table) {
-        const tab = t.as(Table);
-        const v = if (key.tag == .integer) table.getInt(tab, key.asInt()) else if (key.tag == .string) table.getStr(tab, key.as(String)) else table.get(tab, try ops.normKey(l, key));
-        if (!v.isNil() or tab.metatable == null) return v;
-    }
-    return metaIndex(l, t, key, dest);
-}
-
-inline fn setFast(l: *Thread, t: Value, key: Value, v: Value) Error!void {
-    if (t.tag == .table) {
-        const tab = t.as(Table);
-        if (tab.metatable == null) return ops.rawSet(l, tab, key, v);
-    }
-    return metaSet(l, t, key, v);
 }
 
 fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {
@@ -1105,10 +1437,10 @@ fn runPendingFinalizers(l: *Thread) Error!void {
 // Debug hooks
 
 /// Count and line events, before the instruction at `pc` runs.
-fn hookStep(l: *Thread, c: *Ctx, pc: u32) Error!void {
+fn hookStep(l: *Thread, fi: usize, cl: *Closure, pc: u32) Error!void {
     const mask = l.hook_mask;
     if (mask == 0 or !l.allow_hook) return;
-    l.frames.items[c.fi].pc = pc + 1;
+    l.frames.items[fi].pc = pc + 1;
     if (mask & Thread.hook_countm != 0) {
         if (l.hook_left <= 1) {
             l.hook_left = l.hook_count;
@@ -1116,17 +1448,17 @@ fn hookStep(l: *Thread, c: *Ctx, pc: u32) Error!void {
         } else l.hook_left -= 1;
     }
     if (mask & Thread.hook_line != 0) {
-        const lines = c.cl.proto.lines;
+        const lines = cl.proto.lines;
         if (lines.len > pc) {
             const line = lines[pc];
             const old = l.hook_oldpc;
             // A new function, a jump backwards, or a new line.
-            const fire = if (l.hook_oldfi != c.fi)
+            const fire = if (l.hook_oldfi != fi)
                 pc == 0 or lines[pc - 1] != line
             else
                 pc == 0 or pc <= old or old >= lines.len or lines[old] != line;
             l.hook_oldpc = pc;
-            l.hook_oldfi = c.fi;
+            l.hook_oldfi = fi;
             if (fire) try callHook(l, "line", line);
         }
     }

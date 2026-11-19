@@ -61,20 +61,27 @@ pub fn getInt(t: *Table, k: i64) Value {
 }
 
 pub fn getStr(t: *Table, s: *object.String) Value {
-    if (t.hash.len == 0) return .nil;
+    const idx = findStr(t, s) orelse return .nil;
+    return t.hash[idx].val;
+}
+
+/// Index of the hash slot holding the string key `s` (live or dead), or
+/// null.
+pub inline fn findStr(t: *Table, s: *object.String) ?usize {
+    if (t.hash.len == 0) return null;
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
         const n = &t.hash[i];
         if (n.key.tag == .string) {
-            if (n.key.payload == @intFromPtr(s)) return n.val;
+            if (n.key.payload == @intFromPtr(s)) return i;
             // Long strings are not interned: equal contents, distinct objects.
             if (!s.flags.interned) {
                 const o = n.key.as(object.String);
-                if (!o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes())) return n.val;
+                if (!o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes())) return i;
             }
         }
-        if (n.key.tag == .nil) return .nil;
+        if (n.key.tag == .nil) return null;
     }
 }
 
