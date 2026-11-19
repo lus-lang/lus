@@ -33,7 +33,7 @@ Native code keeps no Lus value in a machine register across instructions. Regist
 
 It follows that every instruction boundary is both an exit and an entry. Leaving native code is a return with a status. Entering it is a jump to the code of an instruction, whose address comes from a table with one offset per instruction. On-stack replacement at a loop header is that same jump. The collector, tracebacks, `debug.getinfo`, coroutines, and exception tables read the same frames whatever tier is running.
 
-A frame (`state.Frame`) has a fixed layout of 64 bytes, so native code writes one with a few stores and finds one with a shift and an add. Every frame is complete whichever tier pushed it. A frame that native code pushed carries the `lean` flag and the address in native code where its caller continues.
+A frame (`state.Frame`) has a fixed layout of 64 bytes, so native code writes one with a few stores and finds one with a shift and an add. Every frame is complete whichever tier pushed it. A frame that native code pushed carries the `lean` flag and the address in native code where its caller continues. A frame that the `call` instruction of the interpreter pushed carries the `plain` flag. Both flags say the same about a frame: its caller is a Lus frame of the same run, and its return is the plain one, which hands the results to that caller. A return tests for them with one load of the word that holds every flag.
 
 Native code pins four values in callee-saved registers: the thread, the address of register 0 of the running frame, the index of that register in the stack, and the stop depth. Anything that may move the stack is followed by a reload of the register address. Each block of code starts with an entry sequence that the runtime calls as a C function. It saves the pinned registers once, and every function compiled for the same state jumps in and out of other blocks under that one native frame.
 
@@ -44,6 +44,16 @@ Native code pins four values in callee-saved registers: the thread, the address 
 - **Yields.** A yield unwinds to `resume` through the status code. The resumed coroutine enters native code again at the saved pc.
 - **Hooks.** Native code never runs while a hook is set. `execute` picks the hooked loop whenever the hook mask is nonzero, and a step that returns from a native that set a hook reports it, as the interpreter's own check does. `lus debug` sets its mask on every thread, so a debugged program is interpreted.
 - **Finalizers.** Backward jumps and calls test the pending finalizer count inline and take the step routine when it is nonzero.
+
+### The call and the return of the interpreter
+
+The interpreter makes a call between two Lus functions in the `call` instruction itself. It reads what the push needs once into locals, clears the registers of the callee, and writes the frame with five stores: the closure with a null native, the function slot with the base, the return slot with the wanted count, the saved pc, and the word of flags.
+
+A function records whether one of its frames can own an open upvalue or a to-be-closed variable (`Proto.call.closes`). Only a closure that the function makes opens an upvalue on one of its registers, and only `tbc` and `tforprep` mark a variable to be closed. The call copies that into the frame as the `closes` flag. The return of a plain frame without it compares the flags word with one constant and closes nothing. Every other frame takes the tests for open upvalues and to-be-closed variables first.
+
+The dispatch loop keeps three values of the running frame in locals: the frame, the code pointer, and the register pointer. The few instructions that need the index of register 0 read it from the frame. The constants and the inline caches of a function are named by two words in front of its code (`Proto.CodeLinks`), so an instruction that needs them loads them through the code pointer, and a call and a return load one pointer where they loaded three. With fewer values to keep across instructions, the bodies of the instructions spill less to the native stack. A step routine reads the function anyway to find its code, so it takes both from the function, and it keeps the index of its frame, which tells it without a load whether the instruction kept its frame.
+
+A call and a return of `local function f(x) return x end` took 5.9 ns in the loop that the interpreter ran before this work and take 3.6 ns now, against 3.0 ns in the interpreter of LuaJIT. `fib` went from 0.062 s to 0.045 s with the JIT off, `methods` from 0.250 s to 0.205 s, and `closures` from 0.091 s to 0.081 s. The table in `tests/bench/README.md` has every benchmark.
 
 ## Tier-up
 
@@ -115,6 +125,8 @@ A **frameless native call** runs the common case of a native function without pu
 
 A call and return between two compiled functions is about 73 machine instructions and 16 stores on aarch64, where the first version of the tier took about 90 and 25.
 
+A function that the optimizing tier compiled for **direct entry** has another call entry (`opt.md`). It pushes no frame. It checks the types of the arguments in their slots, calls the optimized body with them in machine registers, stores the result into the slot of the called function, and continues in the caller where a lean return would. The caller passes it the same registers as any call entry, so the `call` template is the same for both.
+
 ## Executable memory
 
 Each state owns an arena (`jit/mem.zig`) of 1 MB chunks. A block is carved out of a chunk for each function, the bookkeeping lives outside the chunks, and a chunk with no blocks left returns to the system. The collector frees the block of a function when it frees the function, and closing the state unmaps every chunk. A worker has its own state, so it has its own arena and its own code.
@@ -167,7 +179,7 @@ LuaJIT's tracing JIT remains several times faster than this tier alone on `fib`,
 - Allocation in native code. `newtable` and `closure` run their step routines, and a table constructor is dominated by them.
 - String keys held in registers (`t[k]` with a string `k`) take the inline cache through a helper.
 - The length of a table takes a helper, which searches for a border.
-- A call still tests for pending finalizers, for room in the frame list, and for room on the stack, and clears the registers of the callee. Liveness information from the compiler would remove most of the clearing.
+- A call still tests for pending finalizers, for room in the frame list, and for room on the stack, and clears the registers of the callee. Liveness information from the compiler would remove most of the clearing. The same holds for the call of the interpreter, which is why `fib` with the JIT off stays behind the interpreter of LuaJIT.
 - Windows. The emitter follows the System V convention on x86-64, and the arena uses `mmap`.
 - Systems that forbid writable and executable mappings run interpreted. Mapping the code twice, once writable and once executable, would lift that.
 - Warm starts, binary chunks that compile the functions a profiling run found hot, were built and measured and are kept out (`warmstart.md`).

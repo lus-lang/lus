@@ -6,7 +6,9 @@ Above the baseline JIT (`jit.md`) sits a second compiler for code that stays hot
 
 Frames belong to every tier. Optimized code runs the same frame, on the same Lus stack, as the interpreter and the baseline code, and it keeps the four pinned registers of the baseline code. So the tiers jump to each other at instruction boundaries, and everything that reads frames (the collector, tracebacks, the debug library, coroutines, exception tables) keeps working unchanged.
 
-An instruction that the tier has no typed form for runs through its baseline template, emitted by the baseline emitter itself inside the optimized code. Calls, returns, generic loops, closures, and string building work this way. Before such a template, every live register goes to its slot, and afterwards every register lives in its slot. The tier therefore adds typed code where it pays and leaves the rest at baseline speed.
+An instruction that the tier has no typed form for runs through its baseline template, emitted by the baseline emitter itself inside the optimized code. Generic loops, closures, string building, and the calls that are neither compiled inline nor made directly work this way. Before such a template, every live register goes to its slot, and afterwards every register lives in its slot. The tier therefore adds typed code where it pays and leaves the rest at baseline speed.
+
+A function that needs no template at all is compiled for direct entry. Its registers live in machine registers alone, a call of it from optimized code is a native call, and its frame is built only when optimized code is left (see "Direct calls").
 
 ## When it compiles
 
@@ -65,6 +67,53 @@ The frame of an inline callee exists only in the snapshots. A snapshot inside in
 
 The tier knows a few library functions as typed operations: `math.sqrt`, `math.abs` on a float, `math.floor` and `math.ceil` on an integer, `setmetatable` on a table without a metatable, `string.byte` with one position, and the length of `string.sub`, which follows from the character count and the positions without making the substring. Each guards that the callee is that very library function. A method call on a string finds the method through the metatable that all strings share.
 
+## Direct calls
+
+A call that is too large to compile inline, or that calls the function it is in, is made directly when its callee was compiled for direct entry. `fib` is the model: each activation calls itself twice, and nothing in it needs a frame.
+
+### Direct entry
+
+A function compiled from its first instruction is built for direct entry first. The builder starts it with its closure and its fixed parameters as values, typed as the arguments of the running frame are, and with every other register nil. No register ever lives in its slot. A return becomes a native return that carries the result in two machine registers, the payload and the tag. The build succeeds when the function needs no baseline template and no instruction that reads or writes a slot. Anything else builds the function again with a frame. That covers a function with a variable number of arguments or more than four parameters, one that makes a closure over a register, a tail call, a call that stays a plain call, a register whose type differs between two paths, and an allocation that reaches the collector check.
+
+The closure travels in the first register that holds values and the parameters in the ones after it, each as its payload, with a float as its bits. The parameter types are part of the entry: a direct caller has arguments of exactly those types.
+
+### The three ways in
+
+Optimized code for direct entry has one body and three entries around it.
+
+- A **direct call** from optimized code enters the body itself. It is a native call instruction, and the native stack holds one small frame per activation: the values of the caller that live across the call, and the return address.
+- A **call from baseline code** enters through a thunk that takes the registers of every call entry (`jit.md`). It checks the argument types in their slots, keeps what a frame for the callee needs in its own native frame, and calls the body. Afterwards it stores the result into the slot of the called function and continues in the caller.
+- A **frame in place**, which the interpreter or a step routine pushed or which a tail call took over, enters through a thunk that loads the parameters from the frame, calls the body, and returns the result as the templates of `ret0` and `ret1` do.
+
+An argument of another type sends a call from baseline code to its step routine, and a frame in place to baseline code through an exit that is recorded against the first instruction. A function that keeps getting other types is built with a frame from then on.
+
+### The caller
+
+The caller guards that the callee is the predicted function. A function that calls itself compares the closure it loaded with its own, and a call into other code compares the function of the closure and tests a word of the callee's code that retiring the code clears. Then the arguments move to the registers of the convention, and the call follows.
+
+The callee returns its result with its tag. The caller predicts the type and guards the tag. For a call into other code the prediction is the type that every return of the callee yields. For a call of the function itself, the builder starts with an integer, looks at the returns it built, and builds again when they yield another type. A result of another type leaves optimized code after the call, with the result in its register, and counts against the call.
+
+A direct callee is typed code that the builder knows. It lists the classes of memory that the callee writes, so a call forgets what the block knew about those classes alone. In `fib` the callee writes nothing, so the second call reuses the closure that the first one loaded from the upvalue.
+
+### Frames exist when something reads them
+
+While a chain of direct calls runs, the frame list and the Lus stack show only what was there when the chain started. Each call site has a snapshot of its caller: the instruction after the call, the registers that are live across it, and the closure in the slot of the called function. Those values live in the native frame of the caller, because every value that is live across a direct call takes a slot there.
+
+Directly entered code calls nothing but direct callees and a few runtime routines that neither allocate through the collector nor look at frames. So nothing can read the frames of a thread while a chain runs. The one way out of a chain other than returning is an exit, and an exit builds the frames first. `opt.rt.deoptDirect` walks the native stack from the activation that leaves to the entry that started the chain. The return address in each native frame names a call site, the site names a snapshot, and the walk pushes for every activation the frame the interpreter would have pushed, clears its registers, and writes the values of the snapshot from the native frame. A call site inside a call that was compiled inline pushes the inline frames too. Then the exit proceeds as any other: it writes the registers of the innermost activation and continues that frame in baseline code. The native stack returns to where the entry sequence left it, and every other frame of the chain continues in baseline code at the instruction after its call when its callee returns.
+
+Tracebacks, errors, `catch`, the collector, coroutines, hooks, and the debug library therefore see complete frames whenever they look. An error inside a chain is a failed guard followed by the error that baseline code raises. A yield happens in a function that baseline code or the interpreter runs, above frames that an exit built. A thread with a hook runs in the interpreter.
+
+### The stacks
+
+A chain uses native stack where the interpreter uses the Lus stack, and both have limits.
+
+The call that starts a chain enters the callee at its chain entry, which sets the lowest address the chain may take the native stack to. Every activation compares the stack pointer with it before anything else and leaves through an exit that is kept out of the records. The address comes from two limits.
+
+- **The native stack.** The outermost entry into Lus code asks the system for the stack of the thread and keeps a floor 128 KB above its low end. The runtime builds the frames of a chain in that reserve. On a stack the system does not describe, a chain gets 160 KB below the entry.
+- **The Lus stack.** An activation covers at least as many bytes of native stack as its call takes slots, and the code of every function knows the most slots that a chain starting in it covers per sixteen bytes. The chain entry turns the slots that the Lus stack has left, less 1024, into bytes. A chain that stays above that address stays inside the Lus stack.
+
+When the Lus stack has fewer than 1024 slots left, a chain entry declines, and the call runs in baseline code. The call that finds no room is therefore made by the interpreter's own code, which raises the stack overflow error at the depth where the interpreter raises it, and no activation runs that the interpreter would not have run.
+
 ## Tables that are never allocated
 
 A record constructor in optimized code allocates nothing at first. The builder keeps the table as its fields: a list of keys, the hash node each key would occupy, and the value of each field. Reading a field yields the value. A method lookup goes through the metatable that `setmetatable` gave the table. Snapshots describe such a table field by field, and an exit allocates it and fills it in before it writes the registers.
@@ -98,12 +147,13 @@ The tier allocates 13 integer and 16 float registers on aarch64, and 7 integer a
 - `LUS_JIT=on`, the default, runs both tiers. `LUS_JIT=baseline` runs the baseline tier alone, and so does `LUS_JIT=eager`, which compiles every function on its first call.
 - `LUS_JIT=opt-eager` sends every function through both tiers on its first call. The test suites use it to run the whole conformance suite through optimized code.
 - `LUS_JIT_OPT_THRESHOLD=N` sets the number of calls and loop iterations in baseline code before the optimizing tier compiles.
+- `LUS_JIT_DIRECT=off` keeps optimized code from calling optimized code directly. A number gives a chain of direct calls that many bytes of native stack, which makes chains short and exits frequent for testing.
 - `LUS_JIT_DUMP=1` prints the intermediate representation of every compilation, with the place of every value, the reasons the builder started over, and every exit.
 - `debug.jit()` returns the setting of the baseline tier, the setting of the optimizing tier, the number of units compiled, and the number of exits taken. `debug.jit(f)` returns whether `f` has native code and whether it has optimized code in use.
 
 ## Tests
 
-`tests/conformance/opt_test.lus` warms each subject with one kind of operand and then makes every kind of guard fail: operand types of arithmetic and comparisons, integer overflow, division by zero and by minus one, table shapes, metamethods that appear in a loop, array kinds and bounds, upvalues, inline callees that change or raise, unallocated tables on every path, the collector and finalizers, hooks, coroutines, and the debug library. The whole conformance suite also runs under `LUS_JIT=opt-eager`, on x86-64 under Rosetta, and with a collector that runs at every 97th allocation point and verifies the heap.
+`tests/conformance/opt_test.lus` warms each subject with one kind of operand and then makes every kind of guard fail: operand types of arithmetic and comparisons, integer overflow, division by zero and by minus one, table shapes, metamethods that appear in a loop, array kinds and bounds, upvalues, inline callees that change or raise, unallocated tables on every path, the collector and finalizers, hooks, coroutines, and the debug library. For direct calls it leaves optimized code deep inside recursion and checks the frames that `debug.getinfo` counts, the locals of every activation, the traceback of an error, a yield and a collection below the frames that the exit built, calls between two pieces of optimized code, recursion through a call compiled inline, and the depth at which the stack overflows. The whole conformance suite also runs under `LUS_JIT=opt-eager`, on x86-64 under Rosetta, with a collector that runs at every 97th allocation point and verifies the heap, and with `LUS_JIT_DIRECT=1024`, which ends every chain of direct calls after a few activations.
 
 ## Measurements
 
@@ -111,26 +161,30 @@ Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac. "
 
 | benchmark | off | baseline | optimizing | luajit -joff | luajit |
 |---|---:|---:|---:|---:|---:|
-| arrays | 0.241 | 0.153 | 0.034 | 0.246 | 0.038 |
-| closures | 0.091 | 0.074 | 0.068 | 0.134 | 0.127 |
-| data | 0.034 | 0.033 | 0.027 | 0.277 | 0.050 |
-| fib | 0.062 | 0.029 | 0.029 | 0.036 | 0.010 |
-| gcpause | 0.407 | 0.409 | 0.409 | 0.460 | 0.432 |
-| interp | 0.936 | 0.920 | 0.942 | 2.069 | 1.326 |
-| loop | 0.228 | 0.149 | 0.059 | 0.256 | 0.095 |
-| methods | 0.250 | 0.188 | 0.006 | 0.251 | 0.006 |
-| patterns | 0.203 | 0.202 | 0.204 | 0.263 | 0.257 |
-| strings | 0.146 | 0.145 | 0.145 | 0.252 | 0.221 |
-| tables | 0.166 | 0.156 | 0.151 | 0.167 | 0.128 |
-| unicode | 0.051 | 0.042 | 0.007 | 0.034 | 0.005 |
+| arrays | 0.238 | 0.153 | 0.034 | 0.247 | 0.038 |
+| closures | 0.081 | 0.072 | 0.064 | 0.133 | 0.126 |
+| data | 0.034 | 0.033 | 0.027 | 0.278 | 0.050 |
+| fib | 0.045 | 0.029 | 0.009 | 0.036 | 0.010 |
+| gcpause | 0.414 | 0.416 | 0.416 | 0.467 | 0.425 |
+| interp | 0.901 | 0.898 | 0.917 | 2.009 | 1.281 |
+| loop | 0.221 | 0.144 | 0.057 | 0.252 | 0.091 |
+| methods | 0.205 | 0.181 | 0.006 | 0.247 | 0.006 |
+| patterns | 0.198 | 0.200 | 0.200 | 0.260 | 0.256 |
+| strings | 0.140 | 0.141 | 0.144 | 0.246 | 0.207 |
+| tables | 0.155 | 0.152 | 0.143 | 0.165 | 0.126 |
+| unicode | 0.050 | 0.040 | 0.007 | 0.031 | 0.004 |
 
 `methods` gains the most. Its loop calls a method that builds a new object from two fields of the old one. The tier compiles the method and the constructor inline, keeps the object unallocated around the loop, and moves the method lookup in front of it. `arrays` gains from typed element loads and stores whose kind and bounds checks sit in front of the loops. `loop` is integer arithmetic in registers. `unicode` takes the length of a substring on every iteration, which the tier computes from the positions alone.
 
-`fib` stays where the baseline tier left it. Its time is the call itself: every call pushes a frame that all tiers share, and the tier compiles the arithmetic around the calls but leaves the calls to the baseline templates. `tables` spends most of its time allocating three million tables that stay alive and marking them. The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`, `strings`) run the same in every Lus column.
+`fib` is all calls, and the tier makes them directly. Each activation takes `n` in a machine register, calls itself twice with a native call, and returns its result in a register, so the recursion touches neither the frame list nor the Lus stack. It runs three times as fast as in baseline code, where every call pushes a frame, and level with LuaJIT. Deep recursion gains less: a function that calls itself 100 000 deep, a hundred times over, takes 0.049 s where baseline code takes 0.068 s. `tables` spends most of its time allocating three million tables that stay alive and marking them. The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`, `strings`) run the same in every Lus column.
 
 ## Open ends
 
-- Calls between optimized functions use the baseline call and return templates. Passing arguments in registers and building frames only on exit would help recursive code such as `fib`.
+- A function that needs a baseline template keeps its frame, and so do its calls. Tail calls are the common case: a function that calls itself in tail position runs through the tail entry of the baseline tier.
+- Two functions that call each other are compiled one after the other, and the first is built before the second has code to call, so both keep their frames.
+- A direct call returns at most one result and passes at most four parameters.
+- Recursion that outgrows the native stack before the Lus stack leaves its chain once, and the frames that the exit built return through the general return of the interpreter.
+- Compiling a recursive call inline one level deep was tried on `fib` and gained nothing. The join after the inline body forgets what the block loaded, so each half loads and guards the closure again.
 - A table with an array part, and a table stored into another unallocated table, are allocated at once.
 - Generic `for` loops over `pairs` and `ipairs` run through baseline templates, which sends every live register through its slot on each iteration.
 - Float `for` loops, loops with a step other than one or minus one, `pow`, float modulo, shifts, and string comparison have no typed form.

@@ -39,23 +39,23 @@ The table has one column per configuration.
 
 ## Results
 
-Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the commit that added the optimizing tier (`spec/design/opt.md`). The legacy runtime was not built for this run.
+Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the commit that added direct calls between optimized functions (`spec/design/opt.md`). The legacy runtime was not built for this run.
 
 | benchmark | lus | lus baseline | lus off | luajit -joff | luajit |
 |---|---:|---:|---:|---:|---:|
-| arrays | 0.034 | 0.153 | 0.241 | 0.246 | 0.038 |
-| closures | 0.068 | 0.074 | 0.091 | 0.134 | 0.127 |
-| data | 0.027 | 0.033 | 0.034 | 0.277 | 0.050 |
-| fib | 0.029 | 0.029 | 0.062 | 0.036 | 0.010 |
-| gcpause | 0.409 | 0.409 | 0.407 | 0.460 | 0.432 |
-| interp | 0.942 | 0.920 | 0.936 | 2.069 | 1.326 |
-| loop | 0.059 | 0.149 | 0.228 | 0.256 | 0.095 |
-| methods | 0.006 | 0.188 | 0.250 | 0.251 | 0.006 |
-| patterns | 0.204 | 0.202 | 0.203 | 0.263 | 0.257 |
-| strings | 0.145 | 0.145 | 0.146 | 0.252 | 0.221 |
-| tables | 0.151 | 0.156 | 0.166 | 0.167 | 0.128 |
-| unicode | 0.007 | 0.042 | 0.051 | 0.034 | 0.005 |
+| arrays | 0.034 | 0.153 | 0.238 | 0.247 | 0.038 |
+| closures | 0.064 | 0.072 | 0.081 | 0.133 | 0.126 |
+| data | 0.027 | 0.033 | 0.034 | 0.278 | 0.050 |
+| fib | 0.009 | 0.029 | 0.045 | 0.036 | 0.010 |
+| gcpause | 0.416 | 0.416 | 0.414 | 0.467 | 0.425 |
+| interp | 0.917 | 0.898 | 0.901 | 2.009 | 1.281 |
+| loop | 0.057 | 0.144 | 0.221 | 0.252 | 0.091 |
+| methods | 0.006 | 0.181 | 0.205 | 0.247 | 0.006 |
+| patterns | 0.200 | 0.200 | 0.198 | 0.260 | 0.256 |
+| strings | 0.144 | 0.141 | 0.140 | 0.246 | 0.207 |
+| tables | 0.143 | 0.152 | 0.155 | 0.165 | 0.126 |
+| unicode | 0.007 | 0.040 | 0.050 | 0.031 | 0.004 |
 
-The baseline tier runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. The optimizing tier adds typed values in machine registers, checks moved in front of loops, calls compiled inline, and tables that are never allocated. `methods`, `arrays`, `loop`, and `unicode` are where it shows. `methods` builds a new object on every iteration through a method and a constructor, and its optimized loop adds two numbers. `unicode` takes the length of `string.sub` on a long non-ASCII string, which the optimizing tier computes from the positions. `fib` is all calls, which both tiers make the same way. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their three Lus columns agree. `tables` keeps three million tables alive, so its time goes to allocating and marking them.
+The baseline tier runs the hit paths of the interpreter's inline caches, array accesses for every element kind, and calls, returns, and tail calls between compiled functions without leaving native code. The optimizing tier adds typed values in machine registers, checks moved in front of loops, calls compiled inline, direct calls between optimized functions, and tables that are never allocated. `methods`, `arrays`, `loop`, and `unicode` are where it shows. `methods` builds a new object on every iteration through a method and a constructor, and its optimized loop adds two numbers. `unicode` takes the length of `string.sub` on a long non-ASCII string, which the optimizing tier computes from the positions. `fib` is all calls. The optimizing tier makes them as direct calls: an activation takes its argument in a machine register, calls itself with a native call, and gets a frame only when optimized code is left. That takes `fib` from 0.029 s to 0.009 s, level with LuaJIT. With the JIT off, `fib` shows the call and the return of the interpreter, which went from 0.062 s to 0.045 s and still trail the interpreter of LuaJIT. `data`, `gcpause`, `interp`, `patterns`, and `strings` measure the runtime underneath, so their three Lus columns agree. `tables` keeps three million tables alive, so its time goes to allocating and marking them.
 
 The `lus off` column moves by a few percent between builds with the code layout of the interpreter loop. Compare the Lus columns of one build with each other.
