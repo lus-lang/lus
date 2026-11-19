@@ -1,0 +1,95 @@
+name: Release
+
+# A release builds the interpreter for every supported platform, the
+# embedding libraries, and lus.wasm from one runner, since Zig cross
+# compiles each target. The tag must match the version in
+# runtime/build.zig.zon. The release is created as a draft so a maintainer
+# reviews it before publishing.
+
+on:
+  push:
+    tags: ["v2.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build, for example v2.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: "0.17.1"
+  NODE_VERSION: "24.7.0"
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Zig
+        # Pin this to a verified commit before the first release run.
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Resolve the tag
+        id: tag
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
+          if [ "v$version" != "$tag" ]; then
+            echo "tag $tag does not match build.zig.zon version $version" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Test before building
+        working-directory: runtime
+        run: |
+          zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
+          zig build -Doptimize=ReleaseSafe
+          zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Build every target
+        working-directory: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
+            prefix="../out/$target"
+            zig build -Doptimize=ReleaseFast -Dtarget="$target" --prefix "$prefix"
+            zig build lib -Doptimize=ReleaseFast -Dtarget="$target" --prefix "$prefix"
+            name="lus-${{ steps.tag.outputs.tag }}-$target"
+            case "$target" in
+              *windows*) (cd "$prefix" && zip -qr "../../dist/$name.zip" .) ;;
+              *) tar -C "$prefix" -czf "../dist/$name.tar.gz" . ;;
+            esac
+          done
+          zig build wasm
+          cp zig-out/wasm/lus.wasm ../dist/lus.wasm
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/
+
+  publish:
+    name: Create the draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "$tag" dist/* --draft --verify-tag --title "Lus ${tag#v}" --notes-file CHANGELOG.md
