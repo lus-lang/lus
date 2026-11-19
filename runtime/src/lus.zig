@@ -51,4 +51,5 @@ test {
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = api;
+    _ = @import("lib/init.zig");
 }

@@ -21,3 +21,13 @@ pub fn openAll(l: *Thread) Error!void {
     // package last, so it registers the libraries above as loaded.
     try @import("package.zig").open(l);
 }
+
+test {
+    _ = @import("string.zig");
+    _ = @import("table.zig");
+    _ = @import("math.zig");
+    _ = @import("os.zig");
+    _ = @import("utf8.zig");
+    _ = @import("json.zig");
+    _ = @import("pack.zig");
+}
