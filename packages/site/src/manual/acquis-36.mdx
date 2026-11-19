@@ -64,6 +64,8 @@ print(1.10d + 2.205d)        --> 3.305
 print(1.5d * 2)              --> 3.0
 ```
 
+The exponent of a decimal is a 32-bit integer, so an operation whose exact result needs an exponent beyond that range, such as `1e2147483647d * 1e2147483647d`, raises `decimal exponent out of range`.
+
 Mixing a decimal and a float raises the error `attempt to mix decimal and float in arithmetic`. A decimal holds an exact base 10 value and a float an approximate base 2 value, so the program states which one it wants by converting with `decimal(x)` or `tonumber(x)`.
 
 ```lus

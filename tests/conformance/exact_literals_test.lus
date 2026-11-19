@@ -139,3 +139,32 @@ local function literals_in_a_hot_loop_keep_their_subtype_test()
     assert(math.type(sum) == "bigint" and sum == 51000)
     assert(math.type(total) == "decimal" and tostring(total) == "10.00")
 end
+
+-- Group: extreme exponents
+
+local function a_result_exponent_past_32_bits_raises_test()
+    local cases = {
+        function() return 1e2147483647d * 1e2147483647d end,
+        function() return 1e-2147483647d * 1e-2147483647d end,
+        function() return 1e-2147483647d / 3d end,
+        function() return 1e2147483647d ^ 2 end,
+        function() return 1e-2147483600d ^ 2 end,
+    }
+    for i, f in ipairs(cases) do
+        local ok, err = catch f()
+        assert(not ok, i)
+        assert(string.find(tostring(err), "decimal exponent out of range", 1, true), err)
+    end
+end
+
+local function decimals_with_distant_exponents_compare_by_magnitude_test()
+    assert(not (1e2147483647d == 1n))
+    assert(not (1e2147483647d < 1))
+    assert(-1e2147483647d < 1)
+    assert(1e-2147483648d < 1e-2147483647d)
+    assert(1e2147483647d > 1e308)
+    assert(not (0d < -1e-2000d))
+    assert(-2d < -1.99d)
+    assert(1.5d < 1.50001d)
+    assert(1e10d == 10000000000)
+end
