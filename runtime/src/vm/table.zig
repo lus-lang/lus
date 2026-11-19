@@ -12,6 +12,7 @@ const std = @import("std");
 const numeric = @import("numeric.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
+const gc = @import("gc.zig");
 const Value = value.Value;
 const Table = object.Table;
 const Node = object.Node;
@@ -596,6 +597,74 @@ pub fn next(t: *Table, key: Value) Error!?NextResult {
     }
     return null;
 }
+
+// ---------------------------------------------------------------------
+// Layout
+
+/// The facts about the storage of a table that native code relies on
+/// (`jit/emit.zig`). Each one is computed from the declarations above, so
+/// native code follows a change of layout, and a change that breaks an
+/// assumption of the templates fails to compile.
+pub const layout = struct {
+    /// Byte offsets in a table.
+    pub const flags: i32 = @offsetOf(Table, "hdr") + @offsetOf(gc.Header, "flags");
+    pub const tm_absent: i32 = @offsetOf(Table, "tm_absent");
+    pub const kind: i32 = @offsetOf(Table, "kind");
+    pub const metatable: i32 = @offsetOf(Table, "metatable");
+    pub const array_ptr: i32 = @offsetOf(Table, "array_ptr");
+    pub const asize: i32 = @offsetOf(Table, "asize");
+    pub const hash_used: i32 = @offsetOf(Table, "hash_used");
+    pub const readonly: i32 = @offsetOf(Table, "readonly");
+    /// Bit of the flag byte that the write barrier tests.
+    pub const barrier_bit: u3 = @bitOffsetOf(gc.Header.Flags, "barrier");
+
+    /// A hash node is `1 << node_shift` bytes, and its key and value are
+    /// values at these offsets.
+    pub const node_shift: u6 = std.math.log2_int(usize, @sizeOf(Node));
+    pub const node_key: i32 = @offsetOf(Node, "key");
+    pub const node_val: i32 = @offsetOf(Node, "val");
+
+    /// A value is its payload word followed by a word whose first byte is
+    /// the tag. A boxed array slot is a value, and an unboxed slot is one
+    /// word.
+    pub const value_shift: u6 = 4;
+    pub const word_shift: u6 = 3;
+    pub const value_tag: i32 = @offsetOf(Value, "tag");
+
+    /// The element kinds as bytes. `kind_none` holds only holes, and the
+    /// other unboxed kinds equal the tag of the values they hold.
+    pub const kind_none: u8 = @backingInt(ArrayKind.none);
+    pub const kind_boxed: u8 = @backingInt(ArrayKind.boxed);
+    /// The word an unboxed slot holds for nil.
+    pub const nil_word: u64 = hole;
+
+    /// Offsets of the pointer and of the length of the hash part. The
+    /// language leaves the layout of a slice open, so they are measured.
+    pub fn hashPtr() i32 {
+        var t: Table = undefined;
+        return @intCast(@intFromPtr(&t.hash.ptr) - @intFromPtr(&t));
+    }
+    pub fn hashLen() i32 {
+        var t: Table = undefined;
+        return @intCast(@intFromPtr(&t.hash.len) - @intFromPtr(&t));
+    }
+
+    comptime {
+        const assert = std.debug.assert;
+        assert(@sizeOf(Node) == @as(usize, 1) << node_shift);
+        assert(@sizeOf(Value) == @as(usize, 1) << value_shift);
+        assert(@offsetOf(Value, "payload") == 0 and value_tag == 8);
+        assert(@backingInt(ArrayKind.none) == @backingInt(value.Tag.nil));
+        assert(@backingInt(ArrayKind.int) == @backingInt(value.Tag.integer));
+        assert(@backingInt(ArrayKind.float) == @backingInt(value.Tag.float));
+        assert(@FieldType(Table, "tm_absent") == u16);
+        assert(@FieldType(Table, "hash_used") == u32);
+        assert(@FieldType(Table, "asize") == usize and @sizeOf(usize) == 8);
+        assert(@FieldType(Table, "readonly") == bool);
+        assert(@sizeOf(ArrayKind) == 1);
+        assert(@sizeOf(gc.Header.Flags) == 1);
+    }
+};
 
 const testing = std.testing;
 

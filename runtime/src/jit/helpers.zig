@@ -86,6 +86,12 @@ pub fn barrier(l: *Thread, h: *gc.Header) callconv(.c) void {
     gc.barrierBack(l.g, h);
 }
 
+/// The slow part of the table write barrier, for a store native code
+/// made into `tab`. `key` is null when the key was already present.
+pub fn barrierTable(l: *Thread, tab: *object.Table, key: ?*const Value, v: *const Value) callconv(.c) void {
+    gc.barrierTable(l.g, tab, if (key) |k| k.* else .nil, v.*);
+}
+
 /// A tail call to a Lus function with fixed parameters and native code:
 /// the closure branch of the interpreter's `tailcall`, with the checks
 /// that could fail made before anything changes. Returns where the
@@ -117,6 +123,7 @@ pub fn tailcall(l: *Thread, bp: [*]Value, ins: u32, pc: u32) callconv(.c) jit.Ta
     interp.enterLus(l, tcl, dst, nargs, old.want) catch unreachable;
     const nf = l.frame();
     nf.boundary = old.boundary;
+    nf.finish = old.finish;
     nf.tail = true;
     // The new frame returns to the same caller, so it inherits the
     // native return of the frame it replaces.
@@ -158,4 +165,43 @@ pub fn callNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
     // The native may have set a hook.
     if (l.hook_mask != 0) return interp.Step.interpret;
     return interp.Step.next;
+}
+
+/// A call to a native function in tail position: the native branch of
+/// the interpreter's `tailcall` up to the return. The results are at the
+/// register of the callee and run up to the stack top when this returns
+/// `interp.Step.next`. It returns `retry`, with nothing changed, when the
+/// callee is something else.
+pub fn tailNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
+    const fr = l.frame();
+    const func = fr.base + opc.a(ins);
+    const callee = l.stack[func];
+    if (callee.tag != .native) return retry;
+    fr.pc = pc;
+    const nb = opc.b(ins);
+    const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
+    if (nb != 0) l.top = func + nb;
+    interp.callNative(l, callee.as(state.Native), func, nargs, -1) catch |e| {
+        l.meta_finish = null;
+        return switch (e) {
+            error.MetaCall => interp.Step.dispatch,
+            error.LusError => interp.Step.failed,
+            error.Yield => interp.Step.yielded,
+        };
+    };
+    return interp.Step.next;
+}
+
+/// Returns every value from the register of the callee of the tail call
+/// `ins` up to the stack top, as the interpreter does after a native
+/// that was called in tail position.
+pub fn returnAll(l: *Thread, stop: usize, ins: u32) callconv(.c) usize {
+    const func = l.frame().base + opc.a(ins);
+    return interp.returnStep(l, func, l.top - func, stop) catch |e| {
+        l.meta_finish = null;
+        return switch (e) {
+            error.MetaCall => interp.Step.dispatch,
+            error.LusError => interp.Step.failed,
+        };
+    };
 }

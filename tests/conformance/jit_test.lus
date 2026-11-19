@@ -722,6 +722,738 @@ local function collection_test()
     assert(next(weak) == nil)
 end
 
+-- The tests from here to `strings_test` cover the table accesses and the
+-- calls that native code runs inline. Each one first trains a site on the
+-- common case and then gives the same site the cases its guards reject.
+
+local function field_cache_test()
+    local function get(t) return t.x end
+    local a = { x = 1 }
+    assert(hot(get, a) == 1)
+    -- The same key in another node, in a larger table, and absent.
+    assert(get({ y = 0, x = 2 }) == 2)
+    assert(get({ a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, x = 3 }) == 3)
+    assert(get({}) == nil)
+    assert(get({ y = 1 }) == nil)
+    assert(get({ 1, 2, 3 }) == nil)
+    assert(get(a) == 1)
+    -- A key that was cleared keeps its node and reads as nil, or as what
+    -- `__index` gives.
+    a.x = nil
+    assert(get(a) == nil)
+    setmetatable(a, { __index = { x = "inherited" } })
+    assert(get(a) == "inherited")
+    setmetatable(a, { __index = function(_, k) return k .. "!" end })
+    assert(get(a) == "x!")
+    a.x = false
+    assert(get(a) == false)
+    -- Receivers that are not tables.
+    assert(get("str") == nil)
+    local ok, err = catch get(nil)
+    assert(not ok and string.find(err, "attempt to index a nil value"), err)
+    ok, err = catch get(12)
+    assert(not ok and string.find(err, "attempt to index a number value"), err)
+    local function len(s) return s.len end
+    assert(hot(len, "abc") == string.len)
+
+    -- Stores into a key that exists.
+    local function set(t, v)
+        t.x = v
+        return t.x
+    end
+    local b = { x = 0 }
+    assert(hot(set, b, 5) == 5 and b.x == 5)
+    assert(set(b, "s") == "s" and set(b, b) == b and set(b, 1.5) == 1.5)
+    assert(set(b, nil) == nil and next(b) == nil)
+    assert(set(b, 7) == 7)
+    -- A store that adds the key: to an empty table, to a full hash part,
+    -- and after other keys that share the probe sequence.
+    local e = {}
+    assert(set(e, 1) == 1 and e.x == 1)
+    local full = { a = 1, b = 2, c = 3 }
+    assert(set(full, 2) == 2 and full.a == 1 and full.c == 3)
+    for n = 0, 40 do
+        local t = {}
+        for i = 1, n do t["k" .. i] = i end
+        assert(set(t, n) == n)
+        for i = 1, n do assert(t["k" .. i] == i) end
+    end
+    -- A store that `__newindex` takes, as a function and as a table.
+    local seen = {}
+    local guarded = setmetatable({}, { __newindex = function(t, k, v) seen[#seen + 1] = v end })
+    assert(set(guarded, 1) == nil and seen[1] == 1 and rawget(guarded, "x") == nil)
+    local sink = {}
+    local forwarded = setmetatable({}, { __newindex = sink })
+    assert(set(forwarded, 2) == nil and sink.x == 2)
+    -- A metatable without `__newindex` leaves the store raw, until it
+    -- gains one.
+    local mt = {}
+    local plain = setmetatable({}, mt)
+    assert(set(plain, 3) == 3 and rawget(plain, "x") == 3)
+    plain.x = nil
+    mt.__newindex = function(t, k, v) rawset(t, k, v * 2) end
+    assert(set(plain, 4) == 8)
+    assert(set(plain, 5) == 5)
+    -- Stores into values that are not tables.
+    ok, err = catch set(nil, 1)
+    assert(not ok and string.find(err, "attempt to index a nil value"), err)
+    ok, err = catch set("s", 1)
+    assert(not ok)
+    -- A table that rejects every store, at a site trained on a table
+    -- with the same key.
+    local key = next(flags)
+    if type(key) == "string" and string.find(key, "^[%a_][%w_]*$") then
+        local store = load("local t, v = ... t." .. key .. " = v return t." .. key)
+        local normal = { [key] = 1 }
+        for _ = 1, 300 do assert(store(normal, 2) == 2) end
+        ok, err = catch store(flags, 3)
+        assert(not ok and string.find(err, "readonly"), err)
+    end
+    ok, err = catch set(flags, 1)
+    assert(not ok and string.find(err, "readonly"), err)
+end
+
+local function constructor_test()
+    -- A constructor stores every key into a fresh table.
+    local function point(x, y) return { x = x, y = y } end
+    local p = hot(point, 1, 2)
+    assert(p.x == 1 and p.y == 2)
+    p = point(nil, 3)
+    assert(p.x == nil and p.y == 3 and next(p) == "y")
+    p = point(4, nil)
+    assert(p.x == 4 and next(p, "x") == nil)
+    local function wide(v)
+        return { a = v, b = v, c = v, d = v, e = v, f = v, g = v, h = v, i = v, j = v, k = v, l = v, m = v }
+    end
+    local w = hot(wide, 9)
+    local n = 0
+    for k, v in pairs(w) do
+        assert(v == 9 and #k == 1)
+        n = n + 1
+    end
+    assert(n == 13)
+    -- The same key twice, and a key next to list items.
+    local function twice(v) return { x = v, x = v + 1 } end
+    assert(hot(twice, 1).x == 2)
+    local function mixed(v) return { v, x = v, v + 1, y = v } end
+    local m = hot(mixed, 5)
+    assert(m[1] == 5 and m[2] == 6 and m.x == 5 and m.y == 5)
+    -- A table that grows one key at a time rehashes on the way.
+    local function grow(count)
+        local t = {}
+        for i = 1, count do
+            t.a = i
+            t.b = i
+            t.c = i
+            t["n" .. i] = i
+            t.d = i
+        end
+        return t
+    end
+    local g = hot(grow, 50)
+    assert(g.a == 50 and g.b == 50 and g.c == 50 and g.d == 50 and g.n1 == 1 and g.n50 == 50)
+end
+
+local function method_cache_test()
+    local Class = {}
+    Class.__index = Class
+    function Class.new(v) return setmetatable({ v = v }, Class) end
+    function Class:get() return self.v end
+    function Class:add(n) return Class.new(self.v + n) end
+    local function call(o) return o:get() end
+    local o = Class.new(3)
+    assert(hot(call, o) == 3)
+    local function chain(o, n)
+        for _ = 1, n do o = o:add(1) end
+        return o:get()
+    end
+    assert(hot(chain, o, 10) == 13)
+    -- The receiver gains the method itself, and loses it again.
+    o.get = function() return "own" end
+    assert(call(o) == "own")
+    o.get = nil
+    assert(call(o) == 3)
+    -- The class replaces the method, then drops it.
+    local old = Class.get
+    Class.get = function(self) return self.v * 2 end
+    assert(call(o) == 6)
+    Class.get = nil
+    local ok, err = catch call(o)
+    assert(not ok and string.find(err, "attempt to call a nil value %(method 'get'%)"), err)
+    Class.get = old
+    assert(call(o) == 3)
+    -- Another class at the same site, a class two steps away, and
+    -- `__index` as a function.
+    local Other = { get = function() return "other" end }
+    Other.__index = Other
+    assert(call(setmetatable({}, Other)) == "other")
+    local Sub = setmetatable({}, Class)
+    Sub.__index = Sub
+    assert(call(setmetatable({ v = 8 }, Sub)) == 8)
+    local dynamic = setmetatable({}, { __index = function(_, k) return function() return k end end })
+    assert(call(dynamic) == "get")
+    assert(call(o) == 3)
+    -- Receivers with no hash part, and with hash parts of every small
+    -- size, where the probe for the method passes other keys.
+    assert(call(setmetatable({ 1, 2, 3 }, Other)) == "other")
+    assert(call(setmetatable({}, Class)) == nil)
+    for n = 1, 40 do
+        local obj = Class.new(n)
+        for i = 1, n do obj["f" .. i] = i end
+        assert(call(obj) == n)
+        if n % 5 == 0 then
+            obj.get = function() return -n end
+            assert(call(obj) == -n)
+        end
+    end
+    -- The metatable changes while the site is hot.
+    local function swap(n)
+        local obj = Class.new(1)
+        local sum = 0
+        for i = 1, n do
+            if i % 7 == 0 then setmetatable(obj, Other) elseif i % 7 == 1 then setmetatable(obj, Class) end
+            local r = obj:get()
+            if r == "other" then sum = sum + 100 else sum = sum + r end
+        end
+        return sum
+    end
+    assert(hot(swap, 70) == 60 + 10 * 100)
+    -- `__index` of the metatable changes while the site is hot.
+    local mt = { __index = Class }
+    local function reindex(n)
+        local obj = setmetatable({ v = 2 }, mt)
+        local sum = 0
+        for i = 1, n do
+            mt.__index = i % 2 == 0 and Other or Class
+            local r = obj:get()
+            sum = sum + (r == "other" and 10 or r)
+        end
+        return sum
+    end
+    assert(hot(reindex, 20) == 10 * 10 + 10 * 2)
+    -- A table with no metatable, and values that are not tables.
+    ok, err = catch call({})
+    assert(not ok and string.find(err, "attempt to call a nil value"), err)
+    ok, err = catch call(nil)
+    assert(not ok and string.find(err, "attempt to index a nil value"), err)
+    ok, err = catch call(5)
+    assert(not ok)
+    -- Strings find their methods through their metatable.
+    local function upper(s) return s:upper(), s:len(), s:rep(2) end
+    local u, l, r = hot(upper, "ab")
+    assert(u == "AB" and l == 2 and r == "abab")
+    ok, err = catch (function(s) return s:nosuchmethod() end)("x")
+    assert(not ok and string.find(err, "nosuchmethod"), err)
+    local smt = getmetatable("")
+    local saved = smt.__index
+    local function shout(s) return s:upper() end
+    assert(hot(shout, "q") == "Q")
+    smt.__index = { upper = function(s) return s .. "?" end }
+    local changed = shout("q")
+    smt.__index = function(s, k) return function() return k end end
+    local viafn = shout("q")
+    smt.__index = saved
+    assert(changed == "q?" and viafn == "upper" and shout("q") == "Q")
+end
+
+local function array_kinds_test()
+    local function sum(t, n)
+        local s = 0
+        for i = 1, n do s = s + t[i] end
+        return s
+    end
+    local function fill(t, n, v)
+        for i = 1, n do t[i] = v end
+        return t
+    end
+    local ints = fill({}, 100, 1)
+    assert(hot(sum, ints, 100) == 100 and math.type(sum(ints, 100)) == "integer")
+    local floats = fill({}, 100, 0.5)
+    assert(hot(sum, floats, 100) == 50.0 and math.type(sum(floats, 100)) == "float")
+    local boxed = fill({}, 100, 1)
+    boxed[50] = "7"
+    boxed[50] = 2
+    assert(sum(boxed, 100) == 101)
+    -- A hole, an index outside the array part, and `__index` for both.
+    local function at(t, i) return t[i] end
+    assert(hot(at, ints, 5) == 1)
+    assert(at(ints, 0) == nil and at(ints, -1) == nil and at(ints, 101) == nil and at(ints, 1 << 40) == nil)
+    assert(at(ints, 5.0) == 1 and at(ints, "5") == nil and at(ints, 1.5) == nil)
+    ints[7] = nil
+    assert(at(ints, 7) == nil and at(ints, 8) == 1)
+    setmetatable(ints, { __index = function(_, k) return -k end })
+    assert(at(ints, 7) == -7 and at(ints, 200) == -200 and at(ints, 8) == 1)
+    setmetatable(ints, nil)
+    floats[3] = nil
+    assert(at(floats, 3) == nil and at(floats, 4) == 0.5)
+    boxed[9] = nil
+    assert(at(boxed, 9) == nil and at(boxed, 10) == 1)
+    assert(at({}, 1) == nil)
+    -- A site that stores integers sees a float, a string, nil, and a
+    -- table, and every element keeps its value and its subtype.
+    local function put(t, i, v)
+        t[i] = v
+        return t[i]
+    end
+    local t = fill({}, 16, 3)
+    assert(hot(put, t, 1, 4) == 4)
+    assert(math.type(put(t, 2, 2.0)) == "float" and math.type(t[1]) == "integer" and t[3] == 3)
+    t = fill({}, 16, 3)
+    assert(put(t, 2, "s") == "s" and t[1] == 3 and t[16] == 3)
+    t = fill({}, 16, 3)
+    assert(put(t, 2, nil) == nil and t[1] == 3 and t[3] == 3 and put(t, 2, 9) == 9)
+    assert(put(t, 4, t) == t and t[2] == 9)
+    t = fill({}, 16, 1.5)
+    assert(put(t, 2, 2.5) == 2.5 and math.type(put(t, 3, 7)) == "integer" and t[1] == 1.5)
+    -- A fresh array part has no kind yet.
+    t = table.create(8)
+    assert(put(t, 1, 1) == 1 and put(t, 2, 2) == 2 and put(t, 3, 0.5) == 0.5 and t[1] == 1)
+    t = table.create(8)
+    assert(put(t, 1, nil) == nil and put(t, 1, 0.5) == 0.5 and put(t, 2, 1.5) == 1.5)
+    -- The kind changes while a loop is hot.
+    local function transition(n)
+        local a = {}
+        for i = 1, n do a[i] = i end
+        local s = 0
+        for i = 1, n do
+            if i == n // 2 then a[i + 1] = 0.25 end
+            if i == n - 3 then a[n] = "9" end
+            s = s + a[i]
+        end
+        return s, math.type(a[1]), math.type(a[n // 2 + 1]), a[n]
+    end
+    local s, k1, k2, last = hot(transition, 40)
+    assert(s == 40 * 41 // 2 - 21 + 0.25 - 40 + 9 and k1 == "integer" and k2 == "float" and last == "9")
+    -- Numbers whose bits are the word that stands for nil in an unboxed
+    -- part survive a store and a load.
+    local bits = 0x7FF4000000000000
+    local odd = string.unpack("<d", string.pack("<i8", bits))
+    t = fill({}, 8, 1)
+    assert(put(t, 2, bits) == bits and t[1] == 1 and math.type(t[2]) == "integer")
+    t = fill({}, 8, 0.5)
+    local back = put(t, 2, odd)
+    assert(back ~= back and string.unpack("<i8", string.pack("<d", back)) == bits and t[1] == 0.5)
+    -- Stores outside the array part, and stores that `__newindex` takes.
+    t = fill({}, 4, 1)
+    assert(put(t, 5, 5) == 5 and put(t, 100, 6) == 6 and put(t, 0, 7) == 7 and put(t, -3, 8) == 8)
+    assert(#t == 5 and t[100] == 6 and t[0] == 7 and t[-3] == 8)
+    local log = {}
+    local watched = setmetatable(fill({}, 4, 1), { __newindex = function(_, k, v) log[#log + 1] = k end })
+    assert(put(watched, 2, 5) == 5 and #log == 0)
+    watched[3] = nil
+    assert(put(watched, 3, 6) == nil and log[1] == 3)
+    assert(put(watched, 9, 6) == nil and log[2] == 9)
+    local ok = catch put(flags, 1, 1)
+    assert(not ok)
+    -- Constant indexes.
+    local function first3(a) return a[1], a[2], a[3] end
+    local x, y, z = hot(first3, { 1, 2, 3 })
+    assert(x == 1 and y == 2 and z == 3)
+    x, y, z = first3({ 0.5, 1.5 })
+    assert(x == 0.5 and y == 1.5 and z == nil)
+    x, y, z = first3({ "a", {}, false })
+    assert(x == "a" and type(y) == "table" and z == false)
+    x, y, z = first3({ [1] = "h", [3] = "k" })
+    assert(x == "h" and y == nil and z == "k")
+    x, y, z = first3(setmetatable({ 1 }, { __index = function(_, k) return k * 10 end }))
+    assert(x == 1 and y == 20 and z == 30)
+    x = first3("abc")
+    assert(x == nil)
+    ok = catch first3(nil)
+    assert(not ok)
+    local function zeroth(a) return a[0] end
+    assert(hot(zeroth, { [0] = "z" }) == "z" and zeroth({ 1 }) == nil)
+    -- Lengths.
+    local function length(v) return #v end
+    assert(hot(length, "héllo") == 5 and length("") == 0 and length({ 1, 2, 3 }) == 3)
+    assert(length(setmetatable({}, { __len = function() return 42 end })) == 42)
+    ok = catch length(5)
+    assert(not ok)
+end
+
+local function environment_test()
+    jit_test_a = 1
+    jit_test_b = nil
+    local function read() return jit_test_a, jit_test_b, jit_test_missing end
+    local a, b, c = hot(read)
+    assert(a == 1 and b == nil and c == nil)
+    local function write(v)
+        jit_test_a = v
+        jit_test_b = v
+        return jit_test_a + jit_test_b
+    end
+    assert(hot(write, 4) == 8 and jit_test_a == 4 and jit_test_b == 4)
+    jit_test_b = nil
+    assert(write(5) == 10)
+    -- A function whose environment is another table, with and without
+    -- metamethods.
+    local env = { v = 1 }
+    local f = load("v = v + 1 return v, w", "=env", "t", env)
+    local r, w
+    for _ = 1, 300 do r, w = f() end
+    assert(r == 301 and w == nil)
+    setmetatable(env, { __index = function(_, k) return k end })
+    r, w = f()
+    assert(r == 302 and w == "w")
+    local stored = {}
+    env = setmetatable({}, { __index = _G, __newindex = function(_, k, v) stored[k] = v end })
+    f = load("for i = 1, 300 do counter = i end return counter", "=env", "t", env)
+    assert(f() == nil and stored.counter == 300)
+    jit_test_a, jit_test_b = nil, nil
+end
+
+local function barriers_test()
+    -- Tables that have survived a collection receive fresh objects
+    -- through every inline store, with a collection in the middle.
+    local function fresh(i) return { i } end
+    local function churn(rounds)
+        local record = { a = false, b = false }
+        local list = { 1, 2, 3, 4, 5, 6, 7, 8 }
+        list[1] = record
+        local big = {}
+        for i = 1, 2000 do big[i] = false end
+        collectgarbage()
+        collectgarbage()
+        local sum = 0
+        for i = 1, rounds do
+            record.a = fresh(i)
+            record.b = `s$i`
+            list[2] = fresh(i + 1)
+            big[i % 2000 + 1] = fresh(i + 2)
+            local grown = { k = fresh(i + 3) }
+            grown.later = fresh(i + 4)
+            if i % 50 == 0 then collectgarbage("step") end
+            if i % 200 == 0 then collectgarbage() end
+            sum = sum + record.a[1] + list[2][1] + big[i % 2000 + 1][1] + grown.k[1] + grown.later[1] + #record.b
+        end
+        return sum
+    end
+    local expected = 0
+    for i = 1, 400 do expected = expected + 5 * i + 10 + #tostring(i) + 1 end
+    for _, how in ipairs({ "generational", "incremental" }) do
+        local before = collectgarbage(how)
+        local r
+        for _ = 1, 4 do r = churn(400) end
+        assert(r == expected)
+        collectgarbage(before)
+    end
+    -- A store that adds a key to a table that has survived a collection.
+    local function extend(olds, n)
+        for i = 1, n do
+            olds[i].b = fresh(i)
+            if i % 50 == 0 then collectgarbage("step") end
+        end
+    end
+    for _ = 1, 3 do
+        local olds = {}
+        for i = 1, 300 do olds[i] = { a = false, b = nil } end
+        collectgarbage()
+        collectgarbage()
+        extend(olds, 300)
+        collectgarbage()
+        for i = 1, 300 do assert(olds[i].b[1] == i and olds[i].a == false) end
+    end
+    -- An upvalue table and a global table take the same stores.
+    local holder = { v = false }
+    jit_test_holder = { v = false }
+    collectgarbage()
+    local function through(n)
+        local s = 0
+        for i = 1, n do
+            holder.v = fresh(i)
+            jit_test_holder.v = fresh(i)
+            if i % 64 == 0 then collectgarbage() end
+            s = s + holder.v[1] + jit_test_holder.v[1]
+        end
+        return s
+    end
+    assert(hot(through, 200) == 200 * 201)
+    jit_test_holder = nil
+end
+
+local function frames_test()
+    -- A traceback taken under frames that native calls pushed lists
+    -- every frame with the line it is on.
+    local function leaf() return debug.traceback("tb") end
+    local function recurse(n)
+        if n == 0 then
+            local t = leaf()
+            return t
+        end
+        local r = recurse(n - 1)
+        return r
+    end
+    local function entry()
+        local r = recurse(2)
+        return r
+    end
+    local tb = hot(entry)
+    local l_leaf = debug.getinfo(leaf, "S").linedefined
+    local l_rec = debug.getinfo(recurse, "S").linedefined
+    local l_entry = debug.getinfo(entry, "S").linedefined
+    local seen = {}
+    for line in string.gmatch(tb, "jit_test%.lus:(%d+): in") do seen[#seen + 1] = tonumber(line) end
+    local want = { l_leaf, l_rec + 2, l_rec + 5, l_rec + 5, l_entry + 1 }
+    for i = 1, #want do assert(seen[i] == want[i], tb) end
+    assert(string.find(tb, "in upvalue 'recurse'") and string.find(tb, "in upvalue 'leaf'"), tb)
+    -- `debug.getinfo` reads the same frames.
+    local function levels()
+        local names = {}
+        for level = 1, 4 do
+            local info = debug.getinfo(level, "nl")
+            names[level] = info.name .. ":" .. info.currentline
+        end
+        return table.concat(names, " ")
+    end
+    local function b()
+        local r = levels()
+        return r
+    end
+    local function a()
+        local r = b()
+        return r
+    end
+    local l_levels = debug.getinfo(levels, "S").linedefined
+    local l_b = debug.getinfo(b, "S").linedefined
+    local l_a = debug.getinfo(a, "S").linedefined
+    local got = hot(a)
+    assert(string.find(got, "^levels:" .. (l_levels + 3) .. " b:" .. (l_b + 1) .. " f:" .. (l_a + 1) .. " "), got)
+
+    -- An error raised two frames down names its own line, and the frames
+    -- above it continue.
+    local function thrower(i)
+        local t = nil
+        if i % 4 == 0 then return t.field end
+        return i
+    end
+    local function relay(i)
+        local v = thrower(i)
+        return v + 1
+    end
+    local function protect(n)
+        local caught, sum, where = 0, 0, nil
+        for i = 1, n do
+            local ok, v = catch relay(i)
+            if ok then sum = sum + v else
+                caught = caught + 1
+                where = v
+            end
+        end
+        return caught, sum, where
+    end
+    local caught, sum, where = hot(protect, 40)
+    assert(caught == 10 and sum == 40 * 41 // 2 - 4 * 55 + 30)
+    assert(string.find(where, "jit_test.lus:" .. (debug.getinfo(thrower, "S").linedefined + 2) .. ":"), where)
+    -- A coroutine that fails keeps the frames of the error for a
+    -- traceback.
+    local co = coroutine.create(function() return relay(4) end)
+    for i = 1, 3 do relay(i) end
+    local ok = coroutine.resume(co)
+    tb = debug.traceback(co)
+    assert(not ok)
+    assert(string.find(tb, "jit_test.lus:" .. (debug.getinfo(thrower, "S").linedefined + 2) .. ":"), tb)
+    assert(string.find(tb, "jit_test.lus:" .. (debug.getinfo(relay, "S").linedefined + 1) .. ":"), tb)
+    -- A yield under several native calls, resumed many times.
+    local function producer(n)
+        local function emit(i)
+            local r = coroutine.yield(i)
+            return r
+        end
+        local function step(i)
+            local r = emit(i)
+            return r + 1
+        end
+        local total = 0
+        for i = 1, n do total = total + step(i) end
+        return total
+    end
+    local function drive(n)
+        local gen = coroutine.wrap(producer)
+        local v = gen(n)
+        local s = 0
+        while n > 0 do
+            s = s + v
+            n = n - 1
+            v = gen(v * 2)
+        end
+        return s, v
+    end
+    local s, total = hot(drive, 20)
+    assert(s == 210 and total == 2 * 210 + 20)
+    -- Deep recursion grows the stack and the frame list under native
+    -- calls.
+    local function depth(n)
+        if n == 0 then return 0 end
+        local d = depth(n - 1)
+        return d + 1
+    end
+    assert(depth(50000) == 50000)
+    local grown = coroutine.wrap(function() return depth(20000) end)
+    assert(grown() == 20000)
+    -- A hook that a callee sets is seen by the frames that return.
+    local events = 0
+    local function arm() debug.sethook(function() events = events + 1 end, "r") end
+    local function hooked()
+        arm()
+        return 1
+    end
+    local function outer()
+        local r = hooked()
+        return r
+    end
+    for _ = 1, 100 do
+        outer()
+        debug.sethook()
+    end
+    assert(events >= 100)
+end
+
+local function tail_calls_test()
+    -- A tail call to a compiled function with the exact, a smaller, and
+    -- a larger number of arguments.
+    local function target(a, b, c) return a, b, c end
+    local function exact(a, b, c) return target(a, b, c) end
+    local function fewer(a) return target(a) end
+    local function more(a, b, c) return target(a, b, c, 4, 5, 6) end
+    local function spread(...) return target(...) end
+    local a, b, c = hot(exact, 1, 2, 3)
+    assert(a == 1 and b == 2 and c == 3)
+    a, b, c = hot(fewer, 1)
+    assert(a == 1 and b == nil and c == nil)
+    a, b, c = hot(more, 1, 2, 3)
+    assert(a == 1 and b == 2 and c == 3)
+    a, b, c = hot(spread, 7, 8)
+    assert(a == 7 and b == 8 and c == nil)
+    assert(select("#", spread(1, 2, 3, 4, 5)) == 3)
+    -- Callers that want none, one, two, and all of the results.
+    local function wants()
+        exact(1, 2, 3)
+        local one = exact(1, 2, 3)
+        local p, q = exact(4, 5, 6)
+        local all = { exact(7, 8, 9) }
+        return one, p, q, #all, (exact(10, 11, 12))
+    end
+    local one, p, q, n, last = hot(wants)
+    assert(one == 1 and p == 4 and q == 5 and n == 3 and last == 10)
+    -- A long chain of tail calls keeps one frame.
+    local function down(i, acc)
+        if i == 0 then return acc end
+        return down(i - 1, acc + i)
+    end
+    assert(down(200000, 0) == 200000 * 200001 // 2)
+    local even, odd
+    function even(i) if i == 0 then return true end return odd(i - 1) end
+    function odd(i) if i == 0 then return false end return even(i - 1) end
+    assert(even(100001) == false and odd(100001) == true)
+    -- A tail call out of a frame with a captured local closes it.
+    local function capture(v)
+        local function get() return v end
+        v = v + 1
+        return target(get, v)
+    end
+    local get, v = hot(capture, 1)
+    assert(get() == 2 and v == 2)
+    -- A tail call to a native function with zero, one, and several
+    -- results, and one that raises.
+    local function none() return collectgarbage("step", 0) and nil end
+    local function nothing() return (function() end)() end
+    local function single(s) return string.upper(s) end
+    local function several(...) return select(2, ...) end
+    local function count(...) return select("#", ...) end
+    local function failing(x) return error(x, 0) end
+    assert(select("#", hot(nothing)) == 0)
+    assert(hot(single, "a") == "A")
+    a, b, c = hot(several, 1, 2, 3)
+    assert(a == 2 and b == 3 and c == nil)
+    assert(hot(count, 1, nil, 3, nil) == 4 and count() == 0)
+    local ok, err = catch failing("flat")
+    assert(not ok and err == "flat")
+    -- A yield in tail position, and a tail call whose arguments need a
+    -- larger stack.
+    local function relay(v) return coroutine.yield(v) end
+    local function pump(n)
+        local co = coroutine.wrap(function()
+            local got = 0
+            for i = 1, n do got = got + relay(i) end
+            return got
+        end)
+        local v = co()
+        local sent = 0
+        while sent < n do
+            sent = sent + 1
+            v = co(v * 3)
+        end
+        return v
+    end
+    assert(hot(pump, 10) == 3 * 55)
+    local wide = {}
+    for i = 1, 250 do wide[i] = i end
+    local function widest(...) return select("#", ...), (select(250, ...)) end
+    local function forward(...) return widest(...) end
+    local function narrow() return forward(table.unpack(wide)) end
+    local argc, lastarg = hot(narrow)
+    assert(argc == 250 and lastarg == 250)
+    local fresh = coroutine.wrap(function() return target(table.unpack(wide)) end)
+    a, b, c = fresh()
+    assert(a == 1 and b == 2 and c == 3)
+    local function wrapped(t, mt) return setmetatable(t, mt) end
+    local mt = {}
+    local w = hot(wrapped, {}, mt)
+    assert(getmetatable(w) == mt)
+    assert(select("#", none()) == 1)
+    -- A tail call to a value with `__call`, and to a value that cannot
+    -- be called.
+    local callable = setmetatable({}, { __call = function(self, x) return x + 1 end })
+    local function viacall(x) return callable(x) end
+    assert(hot(viacall, 1) == 2)
+    ok, err = catch (function(f) return f() end)(nil)
+    assert(not ok and string.find(err, "attempt to call a nil value"), err)
+    -- A metamethod that ends in a tail call still delivers its result to
+    -- the instruction that ran it.
+    local function suffix(k) return k .. "!" end
+    local function yes() return true end
+    local proxy = setmetatable({}, {
+        __index = function(_, k) return suffix(k) end,
+        __lt = function() return yes() end,
+        __add = function(x, y) return suffix("sum") end,
+        __len = function() return count(1, 2, 3) end,
+        __concat = function() return string.upper("cat") end,
+    })
+    local function through()
+        local i = proxy.name
+        local lt = proxy < proxy
+        local branch = "no"
+        if proxy < proxy then branch = "yes" end
+        return i, lt, branch, proxy + 1, #proxy, proxy .. "x"
+    end
+    local i, lt, branch, sum, len, cat = hot(through)
+    assert(i == "name!" and lt == true and branch == "yes" and sum == "sum!" and len == 3 and cat == "CAT")
+end
+
+local function long_functions_test()
+    -- A function of some twenty thousand instructions compiles, and its
+    -- code far from the start runs like the code near it.
+    local parts = { "local t, o = ... local s = 0 " }
+    for i = 1, 2500 do
+        parts[#parts + 1] = "t.x = t.x + 1 s = s + t.x + o:get() "
+        if i % 500 == 0 then parts[#parts + 1] = "if s < 0 then error('negative') end " end
+    end
+    parts[#parts + 1] = "return s + t[1] + #t"
+    local f = load(table.concat(parts), "=long")
+    local Class = {}
+    Class.__index = Class
+    function Class:get() return 1 end
+    local o = setmetatable({}, Class)
+    local r
+    for _ = 1, 80 do r = f({ 5, x = 0 }, o) end
+    assert(r == 2500 * 2501 // 2 + 2500 + 5 + 1)
+    if mode ~= "off" then assert(debug.jit(f)) end
+    local ok, err = catch f({ 5, x = 0 }, {})
+    assert(not ok and string.find(err, "attempt to call a nil value"), err)
+    ok, err = catch f({ 5, x = {} }, o)
+    assert(not ok and string.find(err, "attempt to perform arithmetic"), err)
+end
+
 local function strings_test()
     local function f(a, b)
         local n = 3

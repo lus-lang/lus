@@ -25,13 +25,15 @@ The plan for 2.0 names copy-and-patch, with stencils cut from compiled object co
 - Comptime already gives the property that matters. The step routines are the interpreter bodies, instantiated by the compiler, so the shared definition needs no object-file processing.
 - The fast paths that pay off are short. They are written once against a small assembler interface that `jit/a64.zig` and `jit/x64.zig` both implement, so each template exists once for both architectures.
 
-The cost of this choice is that the inline fast paths are written by hand and must agree with the interpreter. They are kept small, each one falls back to the step routine, and `tests/conformance/jit_test.lus` and the unit tests in `jit/tests.zig` compare them with the interpreter at their edges.
+The cost of this choice is that the inline fast paths are written by hand and must agree with the interpreter. Each one is the hit path of a fast path that the interpreter already has, each one falls back to the step routine, and `tests/conformance/jit_test.lus` and the unit tests in `jit/tests.zig` compare them with the interpreter at their edges.
 
 ## Frames belong to both tiers
 
 Native code keeps no Lus value in a machine register across instructions. Registers stay in the Lus stack, frames stay in the frame list of the thread, and the stack top follows the interpreter's rules. Calls between Lus functions never recurse on the native stack in either tier.
 
 It follows that every instruction boundary is both an exit and an entry. Leaving native code is a return with a status. Entering it is a jump to the code of an instruction, whose address comes from a table with one offset per instruction. On-stack replacement at a loop header is that same jump. The collector, tracebacks, `debug.getinfo`, coroutines, and exception tables read the same frames whatever tier is running.
+
+A frame (`state.Frame`) has a fixed layout of 64 bytes, so native code writes one with a few stores and finds one with a shift and an add. Every frame is complete whichever tier pushed it. A frame that native code pushed carries the `lean` flag and the address in native code where its caller continues.
 
 Native code pins four values in callee-saved registers: the thread, the address of register 0 of the running frame, the index of that register in the stack, and the stop depth. Anything that may move the stack is followed by a reload of the register address. Each block of code starts with an entry sequence that the runtime calls as a C function. It saves the pinned registers once, and every function compiled for the same state jumps in and out of other blocks under that one native frame.
 
@@ -55,7 +57,7 @@ A function that reaches zero is compiled at once. The interpreter then leaves it
 
 Counting in memory at every call and loop iteration cost the interpreter up to 17 percent, and any counting in the plain loop changed its register allocation enough to cost several percent. That is why the counters live in a separate instantiation: a state whose JIT is off runs the `fast` loop, which is the same code as a build without the JIT.
 
-Functions with more than 30 000 instructions stay in the interpreter, and so does a function whose code would put a branch out of range.
+Functions with more than 30 000 instructions stay in the interpreter. A long function emits its out-of-line code and its constants at intervals of 64 KB of straight-line code, so that every conditional branch and every constant load stays in range on aarch64.
 
 ## What runs inline
 
@@ -70,15 +72,44 @@ Functions with more than 30 000 instructions stay in the interpreter, and so doe
 | `eq`, `lt`, `le`, `lti`, `lei`, `gti`, `gei`, `eqk`, `test`, `testset`, `testnil` | Integers inline and fused with the jump that follows. Floats out of line for the ordered comparisons. `eqk` handles integer, nil, boolean, and interned string constants. |
 | `jmp` | A direct branch. A backward jump first tests for pending finalizers. |
 | `forloop`, `tforloop` | The integer loop and the generic loop test inline. Float and exact loops take the step routine. |
-| `call` | A callee with native code and fixed parameters is entered in native code: the call pushes the interpreter's frame from a prepared image, clears the callee's registers, and jumps. A native function is called through a helper that mirrors the interpreter. |
-| `ret0`, `ret1` | A frame pushed by a native call returns in native code when nothing needs closing, to the address its caller left in the frame. |
-| `tailcall` | A helper that mirrors the interpreter for a compiled callee with fixed parameters. |
-| `getfield`, `setfield`, `gettabup`, `settabup`, `self`, `gettable`, `settable`, `getindex`, `len` | A call to the fast path the interpreter runs inline (`interp.fast`), then the step routine. |
+| `call` | A callee with native code and fixed parameters is entered in native code through its call entry. A native function is called through a helper that mirrors the interpreter. |
+| `ret0`, `ret1` | A lean frame returns in native code when nothing needs closing, to the address its caller left in the frame. |
+| `tailcall` | A callee with native code and fixed parameters is entered through its tail entry, which rewrites the running frame in place. A native function is called through a helper, and one result returns as `ret1` does. |
+| `getfield`, `gettabup` | The slot prediction of the inline cache, tested and followed inline. |
+| `setfield`, `settabup` | The same for a key that is present. A key that is absent from the empty node its probe reaches is added inline, which is what a constructor does. |
+| `self` | The prediction in the receiver, then `__index` of its metatable through two more predictions. A string receiver starts at the metatable of strings. |
+| `gettable`, `settable`, `getindex` | An integer key inside the array part, for every element kind. A string key takes the inline cache through a helper. |
+| `len` | The character count of a string is a load. A table takes a helper. |
 | Everything else | The step routine. |
 
-Table accesses are calls on purpose. The inline caches and the array kinds are defined in one place, `interp.fast` and `vm/table.zig`, and native code knows nothing about the layout of a table.
-
 The emitter writes a value as its two 64-bit words and copies it as two words. A value is often written just before it is copied, for example a result that is returned at once, and a 16-byte load would wait for both stores to leave the store buffer. Fresh registers of a callee are cleared with one 16-byte store each. These two rules were worth a quarter of the time of a call.
+
+## Table accesses
+
+The interpreter caches a string-keyed access by predicting the hash node that held the key the last time (`tables.md`). A hit compares the key in the predicted node and uses the value next to it. Native code runs exactly that hit inline, and every other outcome calls the helper that runs the whole fast path of the interpreter (`interp.fast`), which also records the new prediction. When the helper declines too, the step routine runs the instruction.
+
+- **Field reads** (`getfield`, `gettabup`). The receiver is a table, the predicted node exists and holds the key, and its value is something other than nil. A nil value goes to the helper, because `__index` may apply.
+- **Field stores** (`setfield`, `settabup`). The table is writable and has no metatable, or one whose absence cache says it lacks `__newindex`. A key in the predicted node is overwritten. A constructor stores into a fresh table, where the predicted node is empty. The store then walks the probe sequence of the key from its first node, and when it reaches the predicted node over nodes that hold other keys, the value is something other than nil, and the load factor allows one more key, it writes the key and the value there. This is what `table.storeStr` does for an absent key. Both stores clear the absence cache of the table, as the interpreter does.
+- **Method lookups** (`self`). A method that the receiver holds is a field read. Otherwise the probe sequence of the key proves that the receiver lacks it, and the lookup takes the first step of `interp.indexChain`: the absence cache of the metatable allows `__index`, the second prediction finds `__index` and it names a table, and the third prediction finds the method in that table. A string receiver enters at the second step with the metatable that all strings share.
+- **Array reads and stores** (`gettable`, `settable`, `getindex`). The key is an integer inside the array part. An unboxed part yields its word with the kind as the tag, and the word that stands for nil goes to the helper. A boxed part yields its value. A store into an unboxed part takes a number of the kind of the part whose bits differ from the nil word, and a store into a boxed part takes any value. A store that changes the kind of the part goes to the helper, and through it to the general path that boxes the part.
+
+A store of a collectable value runs the write barrier of the interpreter. The inline part is the test of the barrier bit of the table, and the slow part is a call to `gc.barrierTable`, which chooses between the backward barrier and the forward barrier of a large table (`gc.md`). A store that adds a key passes the key as well. Unboxed array parts hold numbers, so stores into them need no barrier.
+
+### Layout facts
+
+Native code reads table memory directly, so it depends on where fields are. `table.layout` and `interp.layout` name every such fact: the offsets of the fields of a table and of a hash node, the size of a node as a shift, the element kinds as bytes, the word that stands for nil, the bit that the barrier tests, the offsets of the three predictions in an inline cache entry, and the bits of the absence cache. Each fact is computed from the declarations with `@offsetOf` and its relatives, so moving a field moves the offset that native code uses. The assumptions that the templates build in, such as a node size that is a power of two or an element kind that equals the tag it holds, are compile-time assertions next to the facts. The offsets of the pointer and the length of the hash part are measured when a function is compiled, because the language leaves the layout of a slice open. Every offset into a table that the emitter uses is one of these names.
+
+## Calls between compiled functions
+
+Every compiled function with fixed parameters has two entries besides the code of its instructions.
+
+The **call entry** does what `interp.enterLus` does. The caller passes the closure, the pc to save, the base of the new frame, the wanted result count, and the argument count in registers. The entry tests for pending finalizers, for room in the frame list, and for room on the stack, and returns to the caller with nothing changed when one of them fails, so that the step routine makes the call. Otherwise it pushes a lean frame with six stores, clears the registers of the callee, and runs into the first instruction. The fields that are the same for every lean frame are neighbors in the frame, so pairs of them take one store.
+
+A **lean return** tests that the running frame is lean and that no hook is set, pops the frame, and jumps to the address the frame holds. The tests for open upvalues and for to-be-closed variables are emitted only in a function that can have them: one that creates a closure over one of its registers, or that contains a `tbc` or `tforprep` instruction. The code after the call in the caller adjusts the result count, as `interp.fast.finishLean` does.
+
+The **tail entry** does what the closure branch of the interpreter's `tailcall` does. It moves the callee and its arguments down to the return slot of the running frame and makes that frame the frame of the callee. What the frame owes its caller stays in it: the return slot, the wanted count, the boundary and lean flags, the finish action of a metamethod frame, and the address its caller continues at. The caller of the entry first tests that its frame has no open upvalue, and the helper `helpers.tailcall` handles the frame that has one.
+
+A call and return between two compiled functions is about 73 machine instructions and 16 stores on aarch64, where the first version of the tier took about 90 and 25.
 
 ## Executable memory
 
@@ -98,37 +129,41 @@ Code is position independent. Addresses of runtime routines and of constants are
 
 ## Measurements
 
-Wall times in seconds, best of five runs, ReleaseFast on an Apple silicon Mac. "before" is the interpreter of the same tree, built with `-Djit=false`. "off" is the JIT build with `LUS_JIT=off`. `luajit -joff` is LuaJIT 2.1 with its JIT disabled, and `luajit` is LuaJIT with its tracing JIT.
+Wall times in seconds, best of fifteen runs that alternate between the configurations, ReleaseFast on an Apple silicon Mac. "off" is the JIT build with `LUS_JIT=off`, which runs the plain interpreter loop. "first JIT" is the tier as it first merged, with table accesses through helpers and the frame of a call copied from an image. `luajit -joff` is LuaJIT 2.1 with its JIT disabled, and `luajit` is LuaJIT with its tracing JIT.
 
-| benchmark | before | off | JIT | luajit -joff | luajit |
+| benchmark | off | first JIT | JIT | luajit -joff | luajit |
 |---|---:|---:|---:|---:|---:|
-| arrays | 0.245 | 0.246 | 0.214 | 0.248 | 0.039 |
-| closures | 0.089 | 0.092 | 0.078 | 0.134 | 0.126 |
-| data | 0.034 | 0.035 | 0.034 | 0.277 | 0.051 |
-| fib | 0.059 | 0.060 | 0.034 | 0.036 | 0.010 |
-| gcpause | 0.401 | 0.402 | 0.401 | 0.448 | 0.410 |
-| interp | 1.051 | 1.063 | 1.056 | 2.003 | 1.275 |
-| loop | 0.233 | 0.235 | 0.145 | 0.249 | 0.092 |
-| methods | 0.282 | 0.285 | 0.300 | 0.244 | 0.007 |
-| patterns | 0.207 | 0.211 | 0.211 | 0.263 | 0.258 |
-| strings | 0.178 | 0.179 | 0.181 | 0.250 | 0.207 |
-| tables | 0.189 | 0.190 | 0.196 | 0.163 | 0.132 |
-| unicode | 0.091 | 0.096 | 0.100 | 0.033 | 0.005 |
+| arrays | 0.235 | 0.214 | 0.152 | 0.247 | 0.039 |
+| closures | 0.095 | 0.078 | 0.071 | 0.133 | 0.125 |
+| data | 0.034 | 0.034 | 0.032 | 0.273 | 0.051 |
+| fib | 0.061 | 0.034 | 0.028 | 0.036 | 0.010 |
+| gcpause | 0.410 | 0.401 | 0.398 | 0.458 | 0.409 |
+| interp | 1.021 | 1.056 | 1.010 | 2.001 | 1.280 |
+| loop | 0.220 | 0.145 | 0.143 | 0.250 | 0.092 |
+| methods | 0.294 | 0.300 | 0.184 | 0.241 | 0.007 |
+| patterns | 0.205 | 0.211 | 0.202 | 0.261 | 0.256 |
+| strings | 0.178 | 0.181 | 0.178 | 0.249 | 0.205 |
+| tables | 0.189 | 0.196 | 0.170 | 0.163 | 0.125 |
+| unicode | 0.079 | 0.100 | 0.065 | 0.032 | 0.005 |
 
-Code that spends its time in bytecode gains the most. `loop` runs 1.6 times faster and `fib` 1.7 times, `closures` gains 12 percent, and `arrays` gains 13 percent from the inline arithmetic around its table calls. `loop` is now well ahead of LuaJIT's interpreter, and `fib` is level with it, where the interpreter took 1.6 times as long. The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`, `strings`) are unchanged, as expected.
+Every row runs at least as fast in native code as interpreted. The three rows that the first version made slower gain the most from the inline table accesses: `methods` runs 1.6 times faster than interpreted, `arrays` 1.5 times, and `tables` gains 10 percent. `methods` also gains from the tail entry and from the native tail call, because its constructor ends in `return setmetatable(...)` and its method in `return Point.new(...)`. `fib` gains from the leaner call and runs 2.2 times faster than interpreted. `arrays`, `closures`, `fib`, `loop`, and `methods` are ahead of LuaJIT's interpreter.
 
-`methods`, `tables`, and `unicode` are slower in native code than interpreted, by 6, 4, and up to 10 percent. They are dominated by table accesses, allocation, and calls to native functions, which native code makes through the same routines as the interpreter with a call in place of a dispatch. A call costs a little more than the dispatch it replaces, most of all for a table constructor and for a store that adds a key. Those three rows stay behind LuaJIT's interpreter, as they did before the JIT, for reasons that lie in the runtime.
+`unicode` gains in both Lus columns. A method call on a string used to look the method up through the generic index path, and the string fast path of the interpreter now covers it, which took the interpreter from 0.096 to 0.079. The rest of that row is the string library: finding a character position in a long non-ASCII string, and interning the result. It stays behind LuaJIT, which slices bytes.
 
-The "off" column shows that the interpreter of a JIT build keeps its speed. The differences from "before" are within the noise of the measurement, which is a few percent on the short rows.
+`tables` spends half its time in the collector, which marks three million tables that stay alive, and most of the rest in the allocation of those tables. That is where the distance to LuaJIT's interpreter on that row lies.
 
-LuaJIT's tracing JIT remains several times faster on `fib`, `methods`, `arrays`, and `unicode`. Closing that distance takes what a baseline tier leaves out by design: values kept in machine registers across instructions, inline caches compiled into the code, and type feedback. The frame protocol is the largest fixed cost today. A call and return between two compiled functions is about 90 machine instructions and 25 stores, because it builds the interpreter's full frame.
+The benchmarks that live in the runtime (`data`, `gcpause`, `interp`, `patterns`, `strings`) run the same in both tiers. Their two Lus columns differ by less than the noise of the measurement, which is about one percent, and over 31 alternating runs the medians of `strings` are 0.1794 interpreted and 0.1796 in native code.
 
-The numbers of the `rewrite` branch when this work started, before the array element kinds merged into it, were 0.106 for `closures`, 0.065 for `fib`, 0.255 for `loop`, 0.398 for `methods`, 0.215 for `tables`, and 0.108 for `unicode`.
+The "off" column moves by a few percent between builds with the code layout of the interpreter loop, which shifts whenever the loop changes. `closures`, `fib`, and `methods` moved by up to 5 percent that way during this work, in both directions.
+
+LuaJIT's tracing JIT remains several times faster on `fib`, `methods`, `arrays`, and `unicode`. Closing that distance takes what a baseline tier leaves out by design: values kept in machine registers across instructions, type feedback, and allocation sinking.
 
 ## Open ends
 
-- Table accesses inline. Once shapes or the element kinds settle, a guarded inline load can replace the helper call, and the helpers stay as the fallback. This is what turns the three slower rows above into gains.
-- A leaner frame for calls between compiled functions.
+- Allocation in native code. `newtable` and `closure` run their step routines, and a table constructor is dominated by them.
+- String keys held in registers (`t[k]` with a string `k`) take the inline cache through a helper.
+- The length of a table takes a helper, which searches for a border.
+- A call still tests for pending finalizers, for room in the frame list, and for room on the stack, and clears the registers of the callee. Liveness information from the compiler would remove most of the clearing.
 - Windows. The emitter follows the System V convention on x86-64, and the arena uses `mmap`.
 - Systems that forbid writable and executable mappings run interpreted. Mapping the code twice, once writable and once executable, would lift that.
 - Warm starts, binary chunks that compile the functions a profiling run found hot, were built and measured and are kept out (`warmstart.md`).

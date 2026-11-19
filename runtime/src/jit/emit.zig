@@ -17,6 +17,7 @@ const object = @import("../vm/object.zig");
 const value = @import("../vm/value.zig");
 const gc = @import("../vm/gc.zig");
 const interp = @import("../vm/interp.zig");
+const table = @import("../vm/table.zig");
 const opc = @import("../compile/opcodes.zig");
 const jit = @import("jit.zig");
 const helpers = @import("helpers.zig");
@@ -41,8 +42,15 @@ const tag_float: u8 = @backingInt(Tag.float);
 const tag_string: u8 = @backingInt(Tag.string);
 const tag_table: u8 = @backingInt(Tag.table);
 const tag_closure: u8 = @backingInt(Tag.closure);
+const tag_nil: u8 = @backingInt(Tag.nil);
 const Frame = state.Frame;
+const tl = table.layout;
+const il = interp.layout;
 const frame_size: i32 = @sizeOf(Frame);
+const frame_shift: u6 = std.math.log2_int(usize, @sizeOf(Frame));
+comptime {
+    std.debug.assert(@sizeOf(Frame) == @as(usize, 1) << frame_shift);
+}
 
 fn frameField(comptime name: []const u8) i32 {
     return @offsetOf(Frame, name);
@@ -62,8 +70,9 @@ const Layout = struct {
     frames_cap: i32,
     tbc_ptr: i32,
     tbc_len: i32,
-    /// Address of the frame image that a native call copies.
-    template: usize,
+    /// Offsets in a table of the pointer and the length of its hash part.
+    hash_ptr: i32,
+    hash_len: i32,
 
     fn of(l: *Thread) Layout {
         const b = @intFromPtr(l);
@@ -75,7 +84,8 @@ const Layout = struct {
             .frames_cap = @intCast(@intFromPtr(&l.frames.capacity) - b),
             .tbc_ptr = @intCast(@intFromPtr(&l.tbc.items.ptr) - b),
             .tbc_len = @intCast(@intFromPtr(&l.tbc.items.len) - b),
-            .template = @intFromPtr(&g.jit.frame_template),
+            .hash_ptr = tl.hashPtr(),
+            .hash_len = tl.hashLen(),
             .stack_ptr = @intCast(@intFromPtr(&l.stack.ptr) - b),
             .global = @offsetOf(Thread, "g"),
             .pending = @intCast(@intFromPtr(&g.tobefnz.items.len) - @intFromPtr(g)),
@@ -105,10 +115,39 @@ const Cold = struct {
         /// A call of a value that is not a closure, which is most often
         /// a native function.
         native_call,
-        /// A table access through a fast-path helper, for a key whose
-        /// tag is `key_tag`.
-        table: struct { helper: usize, t: Place, key: Place, v: Place, key_tag: u8 },
+        /// The slow part of the table write barrier for the table in
+        /// `t0`, after a store of register `v` under the constant `key`,
+        /// or under a key that was already present.
+        barrier_table: struct { v: u32, key: ?u32 },
+        /// A call of a value that is not a closure in tail position.
+        native_tail,
+        /// A tail call to a Lus function through the helper.
+        tail_helper,
+        /// A table access through a fast-path helper. A key in a
+        /// register must have the tag `key_tag`.
+        table: TableCall,
+        /// A store of a constant key that the prediction missed, with the
+        /// table in `t0` and the predicted node in `t1`. A key that is
+        /// absent from an empty predicted node is added here.
+        field_insert: TableCall,
+        /// A method lookup that missed in the receiver. `chain` is
+        /// entered with the receiver table in `t0`, and the entry of the
+        /// block with a receiver that is not a table.
+        method: struct { call: TableCall, chain: Label, rb: u32 },
+        /// The helper of an array access.
+        get_array: struct { t: u32, key: u32, dst: u32 },
+        set_array: struct { t: u32, key: u32, v: u32 },
+        get_index: struct { t: u32, index: u32, dst: u32 },
+        length: struct { x: u32, dst: u32 },
     };
+};
+
+const TableCall = struct {
+    helper: usize,
+    t: Place,
+    key: Place,
+    v: Place,
+    key_tag: ?u8 = null,
 };
 
 /// Where a value lives.
@@ -150,24 +189,38 @@ pub const Emitter = struct {
     a: A.Assembler,
     gpa: std.mem.Allocator,
     p: *Proto,
+    g: *state.Global,
     lay: Layout,
     cold: std.ArrayList(Cold) = .empty,
     /// Label of instruction 0. The label of instruction `pc` follows.
     first: Label = 0,
+    /// Where a step result other than "next" or "skip" goes. It is the
+    /// status code at the start of the function or a jump to it that is
+    /// close to the code being emitted.
     l_status: Label = 0,
     l_dispatch: Label = 0,
     l_exit: Label = 0,
+    /// The first out-of-line block that is not emitted yet, and the code
+    /// offset of the last flush.
+    cold_next: usize = 0,
+    flushed_at: u32 = 0,
     oom: bool = false,
-    l_ret: [2]Label = .{ 0, 0 },
+    /// Whether a frame of the function can own an open upvalue, and a
+    /// to-be-closed variable. A return tests only for what can exist.
+    captures: bool = false,
+    closes: bool = false,
     /// Offset of the code that a native call enters the function at, or
     /// zero when the function has none.
     call_entry: u32 = 0,
+    /// Offset of the code that a native tail call enters the function
+    /// at, or zero when the function has none.
+    tail_entry: u32 = 0,
     /// The instruction that `step_label` runs the step routine of.
     step_pc: u32 = std.math.maxInt(u32),
     step_label: Label = 0,
 
     pub fn init(gpa: std.mem.Allocator, l: *Thread, p: *Proto) Emitter {
-        return .{ .a = A.Assembler.init(gpa), .gpa = gpa, .p = p, .lay = Layout.of(l) };
+        return .{ .a = A.Assembler.init(gpa), .gpa = gpa, .p = p, .g = l.g, .lay = Layout.of(l) };
     }
 
     pub fn deinit(e: *Emitter) void {
@@ -213,26 +266,65 @@ pub const Emitter = struct {
         a.bind(e.l_exit);
         a.epilogue();
 
-        e.l_ret = .{ a.newLabel(), a.newLabel() };
-        e.returnRoutine(0);
-        e.returnRoutine(1);
+        // Only a closure made by this function opens an upvalue on one
+        // of its registers, and only these two instructions mark a
+        // variable to be closed.
+        for (e.p.protos) |child| for (child.upvals) |d| {
+            if (d.in_stack and !d.by_value) e.captures = true;
+        };
+        for (code) |ins| switch (opc.op(ins)) {
+            .tbc, .tforprep => e.closes = true,
+            else => {},
+        };
         // The call entry runs into the first instruction.
-        if (!e.p.is_vararg) e.callEntry();
+        if (!e.p.is_vararg) {
+            e.tailEntry();
+            e.callEntry();
+        }
 
+        const status = e.l_status;
         var pc: u32 = 0;
         while (pc < code.len) : (pc += 1) {
             a.bind(e.first + pc);
             e.instruction(pc, code[pc]);
+            if (a.offset() - e.flushed_at >= flush_interval and pc + 1 < code.len) {
+                // A long function emits its out-of-line code and its
+                // constants at intervals, so that every conditional
+                // branch and every constant load stays in range. The
+                // code after this point reaches the status code through
+                // a jump that is emitted here.
+                const over = a.newLabel();
+                const near_status = a.newLabel();
+                a.jmp(over);
+                e.flushCold();
+                a.bind(near_status);
+                a.jmp(status);
+                a.flushPool();
+                a.bind(over);
+                e.l_status = near_status;
+                e.flushed_at = a.offset();
+            }
         }
         // Execution never runs off the end of a function.
         a.bind(e.first + pc);
         a.trap();
-
-        for (e.cold.items) |c| e.emitCold(c);
+        e.flushCold();
 
         if (e.oom or !a.finish()) return false;
         for (offs, 0..) |*o, i| o.* = a.labelOffset(e.first + @as(u32, @intCast(i)));
         return true;
+    }
+
+    /// Bytes of straight-line code between two flushes of the out-of-line
+    /// code. The out-of-line code of that much straight-line code is a
+    /// few times larger, and the sum stays well inside the megabyte that
+    /// a conditional branch reaches on aarch64.
+    const flush_interval = 64 * 1024;
+
+    /// Emits the out-of-line code that is pending. A block may add more
+    /// of its own, which follows in the same pass.
+    fn flushCold(e: *Emitter) void {
+        while (e.cold_next < e.cold.items.len) : (e.cold_next += 1) e.emitCold(e.cold.items[e.cold_next]);
     }
 
     // -----------------------------------------------------------------
@@ -383,54 +475,63 @@ pub const Emitter = struct {
                 a.bind(done);
             },
 
-            .getfield => e.tableOp(pc, &helpers.getStr, .{ .reg = rb }, .{ .konst = rc }, .{ .reg = ra }),
-            .setfield => e.tableOp(pc, &helpers.setStr, .{ .reg = ra }, .{ .konst = rb }, .{ .reg = rc }),
-            .gettabup => e.tableOp(pc, &helpers.getStr, .{ .upval = rb }, .{ .konst = rc }, .{ .reg = ra }),
-            .settabup => e.tableOp(pc, &helpers.setStr, .{ .upval = ra }, .{ .konst = rb }, .{ .reg = rc }),
+            .getfield => e.fieldGet(pc, .{ .reg = rb }, rc, ra),
+            .gettabup => e.fieldGet(pc, .{ .upval = rb }, rc, ra),
+            .setfield => e.fieldSet(pc, .{ .reg = ra }, rb, rc),
+            .settabup => e.fieldSet(pc, .{ .upval = ra }, rb, rc),
+            .self => e.method(pc, ra, rb, rc),
             .gettable => {
                 // An integer key reads the array part. A string key takes
                 // the inline cache out of line.
                 const done = a.newLabel();
                 const by_name: Cold.Kind = .{ .table = .{ .helper = @intFromPtr(&helpers.getStr), .t = .{ .reg = rb }, .key = .{ .reg = rc }, .v = .{ .reg = ra }, .key_tag = tag_string } };
+                const miss = e.addCold(pc, .{ .get_array = .{ .t = rb, .key = rc, .dst = ra } }, done);
                 a.jumpIfByte(.ne, tagOf(rb), tag_table, e.coldStep(pc));
                 a.jumpIfByte(.ne, tagOf(rc), tag_int, e.addCold(pc, by_name, done));
-                a.load64(A.args[0], slot(rb));
-                a.load64(A.args[1], slot(rc));
-                a.lea(A.args[2], slot(ra));
-                a.call(@intFromPtr(&helpers.getArray));
-                a.jumpIfImm(.ne, A.ret0, 0, e.coldStep(pc));
+                a.load64(A.t0, slot(rb));
+                a.load64(A.t1, slot(rc));
+                a.addImm(A.t1, -1);
+                // The helper reads only the array part, so a key outside
+                // it takes the step routine at once.
+                e.arrayGet(ra, e.coldStep(pc), miss, done);
+                a.bind(done);
+            },
+            .getindex => {
+                const done = a.newLabel();
+                const miss = e.addCold(pc, .{ .get_index = .{ .t = rb, .index = rc, .dst = ra } }, done);
+                // Index zero is never in the array part.
+                if (rc == 0) {
+                    a.jmp(miss);
+                } else {
+                    a.jumpIfByte(.ne, tagOf(rb), tag_table, miss);
+                    a.load64(A.t0, slot(rb));
+                    a.movImm(A.t1, rc - 1);
+                    e.arrayGet(ra, miss, miss, done);
+                }
                 a.bind(done);
             },
             .settable => {
                 const done = a.newLabel();
                 const by_name: Cold.Kind = .{ .table = .{ .helper = @intFromPtr(&helpers.setStr), .t = .{ .reg = ra }, .key = .{ .reg = rb }, .v = .{ .reg = rc }, .key_tag = tag_string } };
+                const miss = e.addCold(pc, .{ .set_array = .{ .t = ra, .key = rb, .v = rc } }, done);
                 a.jumpIfByte(.ne, tagOf(ra), tag_table, e.coldStep(pc));
                 a.jumpIfByte(.ne, tagOf(rb), tag_int, e.addCold(pc, by_name, done));
-                a.mov(A.args[0], A.thread);
-                a.load64(A.args[1], slot(ra));
-                a.load64(A.args[2], slot(rb));
-                a.lea(A.args[3], slot(rc));
-                a.call(@intFromPtr(&helpers.setArray));
-                a.jumpIfImm(.ne, A.ret0, 0, e.coldStep(pc));
+                a.load64(A.t0, slot(ra));
+                a.load64(A.t1, slot(rb));
+                a.addImm(A.t1, -1);
+                e.arraySet(pc, rc, e.coldStep(pc), miss, done);
                 a.bind(done);
             },
-            .self => {
-                // The step routine repeats this copy, which is harmless.
-                a.copy16(slot(ra + 1), slot(rb));
-                e.tableOp(pc, &helpers.getStr, .{ .reg = ra + 1 }, .{ .konst = rc }, .{ .reg = ra });
-            },
-            .getindex => {
-                a.lea(A.args[0], slot(rb));
-                a.movImm(A.args[1], rc);
-                a.lea(A.args[2], slot(ra));
-                a.call(@intFromPtr(&helpers.getIndex));
-                a.jumpIfImm(.ne, A.ret0, 0, e.coldStep(pc));
-            },
             .len => {
-                a.lea(A.args[0], slot(rb));
-                a.lea(A.args[1], slot(ra));
-                a.call(@intFromPtr(&helpers.length));
-                a.jumpIfImm(.ne, A.ret0, 0, e.coldStep(pc));
+                // The character count of a string is a field of it. A
+                // table takes the helper, which searches for a border.
+                const done = a.newLabel();
+                a.jumpIfByte(.ne, tagOf(rb), tag_string, e.addCold(pc, .{ .length = .{ .x = rb, .dst = ra } }, done));
+                a.load64(A.t0, slot(rb));
+                a.load32(A.t0, .{ .base = A.t0, .disp = @offsetOf(object.String, "chars") });
+                a.store64(A.t0, slot(ra));
+                e.storeTag(ra, tag_int);
+                a.bind(done);
             },
 
             .add => e.arith(pc, .add, ra, .{ .reg = rb }, .{ .reg = rc }),
@@ -561,15 +662,14 @@ pub const Emitter = struct {
                 a.load64(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_entry") });
                 a.jumpIfImm(.eq, A.t2, 0, slow);
                 a.movImm(A.t3, pc + 1);
-                a.movImm(A.t4, ra);
+                a.lea(A.t4, .{ .base = A.base, .disp = @intCast(ra + 1) });
                 a.movImm(A.t5, @as(u32, @bitCast(@as(i32, @intCast(rc)) - 1)));
                 if (rb != 0) {
                     a.movImm(A.t6, rb - 1);
                 } else {
                     // The arguments run up to the stack top.
                     a.load32(A.t6, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
-                    a.sub(A.t6, A.base);
-                    a.addImm(A.t6, -@as(i32, @intCast(ra + 1)));
+                    a.sub(A.t6, A.t4);
                 }
                 a.callReg(A.t2);
                 // The callee returns to the code after this jump, with its
@@ -600,23 +700,39 @@ pub const Emitter = struct {
                 a.bind(done);
             },
             .tailcall => {
-                // Only a Lus function has the fast path.
-                a.jumpIfByte(.ne, tagOf(ra), tag_closure, e.coldStep(pc));
-                a.mov(A.args[0], A.thread);
-                a.mov(A.args[1], A.bp);
-                a.movImm(A.args[2], ins);
-                a.movImm(A.args[3], pc + 1);
-                a.call(@intFromPtr(&helpers.tailcall));
-                a.jumpIfImm(.eq, A.ret0, 0, e.coldStep(pc));
-                a.mov(A.base, A.ret1);
-                e.reloadBp();
-                a.jmpReg(A.ret0);
+                // A callee with a tail entry is a Lus function with fixed
+                // parameters and native code. The entry replaces the
+                // running frame and does not come back. It returns here,
+                // with nothing changed, when the stack must grow.
+                const helper = e.addCold(pc, .tail_helper, 0);
+                // A native function is called and its results returned.
+                a.jumpIfByte(.ne, tagOf(ra), tag_closure, e.addCold(pc, .native_tail, 0));
+                a.load64(A.t0, slot(ra));
+                a.load64(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
+                a.load64(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_tail") });
+                a.jumpIfImm(.eq, A.t2, 0, helper);
+                if (e.captures) {
+                    // The helper closes the upvalues of this frame.
+                    const none = a.newLabel();
+                    a.load64(A.t1, .{ .base = A.thread, .disp = @offsetOf(Thread, "open_upvals") });
+                    a.jumpIfImm(.eq, A.t1, 0, none);
+                    a.load32(A.t1, .{ .base = A.t1, .disp = @offsetOf(object.Upvalue, "level") });
+                    a.jumpIf(.hs, A.t1, A.base, helper);
+                    a.bind(none);
+                }
+                a.lea(A.t4, slot(ra));
+                if (rb != 0) {
+                    a.movImm(A.t6, rb - 1);
+                } else {
+                    // The arguments run up to the stack top.
+                    a.load32(A.t6, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
+                    a.sub(A.t6, A.base);
+                    a.addImm(A.t6, -@as(i32, @intCast(ra + 1)));
+                }
+                a.callReg(A.t2);
+                a.jmp(helper);
             },
-            .ret0, .ret1 => {
-                a.movImm(A.t4, ra);
-                a.callLocal(e.l_ret[@intFromBool(o == .ret1)]);
-                e.step(pc, false);
-            },
+            .ret0, .ret1 => e.leanReturn(pc, @intFromBool(o == .ret1), ra),
 
             // An instruction that never changes the pc by itself falls
             // through to its successor.
@@ -625,17 +741,21 @@ pub const Emitter = struct {
     }
 
     /// The code a native call enters the function at. The caller passes
-    /// the closure in t0, the pc to save in t3, the register of the callee
-    /// in t4, the wanted result count in t5, and the argument count in t6.
-    /// The entry does what `interp.enterLus` does. It returns to the
+    /// the closure in t0, the pc to save in t3, the base of the new frame
+    /// in t4, the wanted result count in t5, and the argument count in
+    /// t6. The entry does what `interp.enterLus` does. It returns to the
     /// caller, with nothing changed, when finalizers are pending or when
     /// the frame list or the stack must grow.
+    ///
+    /// The frame it pushes is a lean frame. Every field of the frame is
+    /// written, so the collector, tracebacks, the unwinder, and the
+    /// interpreter read it like any other frame. The fields that are the
+    /// same for every lean frame sit together (`state.Frame`), so the
+    /// frame takes six stores.
     fn callEntry(e: *Emitter) void {
         const a = &e.a;
-        const p = e.p;
         const lay = e.lay;
-        const max_stack: i32 = p.max_stack;
-        const np: u32 = p.num_params;
+        const max_stack: i32 = e.p.max_stack;
         const fail = a.newLabel();
         const thread: A.Reg = A.thread;
         e.call_entry = a.offset();
@@ -644,49 +764,54 @@ pub const Emitter = struct {
         a.jumpIfImm(.ne, A.t1, 0, fail);
         a.load64(A.t1, .{ .base = thread, .disp = lay.frames_len });
         a.jumpIfMem(.eq, A.t1, .{ .base = thread, .disp = lay.frames_cap }, fail);
-        // t2 = the base of the new frame.
-        a.mov(A.t2, A.base);
-        a.add(A.t2, A.t4);
-        a.addImm(A.t2, 1);
-        a.mov(A.t4, A.t2);
-        a.add(A.t4, A.t6);
-        a.addImm(A.t4, max_stack + 8);
-        a.jumpIfMem(.hi, A.t4, .{ .base = thread, .disp = lay.stack_len }, fail);
+        a.mov(A.t2, A.t4);
+        a.add(A.t2, A.t6);
+        a.addImm(A.t2, max_stack + 8);
+        a.jumpIfMem(.hi, A.t2, .{ .base = thread, .disp = lay.stack_len }, fail);
 
         // Nothing fails from here on.
-        // t4 = the new frame, one past the caller's.
-        a.movImm(A.t4, @intCast(frame_size));
-        a.mul(A.t4, A.t1);
+        // t2 = the new frame, one past the caller's.
+        a.load64(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
+        a.addScaled(A.t2, A.t2, A.t1, frame_shift);
         a.addImm(A.t1, 1);
         a.store64(A.t1, .{ .base = thread, .disp = lay.frames_len });
-        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_ptr });
-        a.add(A.t4, A.t1);
-        a.store32(A.t3, .{ .base = A.t4, .disp = frameField("pc") - frame_size });
-        a.movImm(A.t1, lay.template);
-        var off: i32 = 0;
-        while (off + 16 <= frame_size) : (off += 16) a.copy16(.{ .base = A.t4, .disp = off }, .{ .base = A.t1, .disp = off });
-        while (off < frame_size) : (off += 8) {
-            a.load64(A.t3, .{ .base = A.t1, .disp = off });
-            a.store64(A.t3, .{ .base = A.t4, .disp = off });
-        }
+        a.store32(A.t3, .{ .base = A.t2, .disp = frameField("pc") - frame_size });
+        const zero: A.Reg = A.Assembler.zero_reg orelse blk: {
+            a.movImm(A.t3, 0);
+            break :blk A.t3;
+        };
+        a.storePair64(A.t0, zero, .{ .base = A.t2, .disp = frameField("closure") });
+        a.store64(zero, .{ .base = A.t2, .disp = frameField("pc") });
+        // The function value sits below the base, and the result goes
+        // there.
+        a.lea(A.t1, .{ .base = A.t4, .disp = -1 });
+        a.storePair32(A.t1, A.t4, .{ .base = A.t2, .disp = frameField("func") });
+        a.storePair32(A.t1, A.t5, .{ .base = A.t2, .disp = frameField("ret") });
+        a.storeImm64(.{ .base = A.t2, .disp = frameField("boundary") }, Frame.lean_flags);
         // The caller continues after the jump that follows its call.
         a.linkPastJump(A.t3);
         a.dropLink();
-        a.store64(A.t3, .{ .base = A.t4, .disp = frameField("resume_at") });
-        a.store64(A.t0, .{ .base = A.t4, .disp = frameField("closure") });
-        a.store32(A.t5, .{ .base = A.t4, .disp = frameField("want") });
-        a.store32(A.t2, .{ .base = A.t4, .disp = frameField("base") });
-        a.mov(A.t1, A.t2);
-        a.addImm(A.t1, -1);
-        a.store32(A.t1, .{ .base = A.t4, .disp = frameField("func") });
-        a.store32(A.t1, .{ .base = A.t4, .disp = frameField("ret") });
+        a.store64(A.t3, .{ .base = A.t2, .disp = frameField("resume_at") });
         a.addImm(A.t1, 1 + max_stack);
         a.store32(A.t1, .{ .base = thread, .disp = @offsetOf(Thread, "top") });
-        a.mov(A.base, A.t2);
+        a.mov(A.base, A.t4);
         e.reloadBp();
 
-        // Missing parameters and the registers above the parameters
-        // start nil.
+        e.clearRegisters();
+        const start = a.newLabel();
+        a.jmp(start);
+        a.bind(fail);
+        a.retLocal();
+        a.bind(start);
+    }
+
+    /// Clears the registers of a function that was just entered with
+    /// the argument count in t6: missing parameters and the registers
+    /// above the parameters start nil.
+    fn clearRegisters(e: *Emitter) void {
+        const a = &e.a;
+        const p = e.p;
+        const np: u32 = p.num_params;
         a.zeroPrepare();
         if (np > 0) {
             const fixed = a.newLabel();
@@ -713,70 +838,122 @@ pub const Emitter = struct {
             a.addImm(A.t3, -1);
             a.jumpIfImm(.ne, A.t3, 0, loop);
         }
-        const start = a.newLabel();
-        a.jmp(start);
-        a.bind(fail);
-        a.retLocal();
-        a.bind(start);
     }
 
-    /// The shared code of `ret0` (n = 0) and `ret1` (n = 1), entered with
-    /// the register of the result in t4. It returns from a frame that a
-    /// native call pushed when nothing needs closing, as the lean return
-    /// of the interpreter does, and continues in the caller. Any other
-    /// frame returns to the instruction, which runs the step routine.
-    /// The caller's code after the call finishes what
-    /// `interp.fast.finishLean` does.
-    fn returnRoutine(e: *Emitter, n: u32) void {
+    /// The code a native tail call enters the function at. The caller
+    /// passes the closure in t0, the address of the stack slot that holds
+    /// it in t4, and the argument count in t6, and it has no open upvalue
+    /// left. The entry does what the closure branch of the interpreter's
+    /// `tailcall` does: it moves the callee and its arguments down to the
+    /// return slot of the running frame and makes that frame the frame
+    /// of the callee. What the frame owes its caller stays in it: the
+    /// return slot, the wanted count, the boundary and lean flags, the
+    /// finish action, and the address its caller continues at. The entry
+    /// returns to the caller, with nothing changed, when the stack must
+    /// grow.
+    fn tailEntry(e: *Emitter) void {
+        const a = &e.a;
+        const lay = e.lay;
+        const max_stack: i32 = e.p.max_stack;
+        const thread: A.Reg = A.thread;
+        const fail = a.newLabel();
+        const loop = a.newLabel();
+        e.tail_entry = a.offset();
+        // t1 = the end of the running frame, t2 = its return slot.
+        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_len });
+        a.load64(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
+        a.addScaled(A.t1, A.t2, A.t1, frame_shift);
+        a.load32(A.t2, .{ .base = A.t1, .disp = frameField("ret") - frame_size });
+        a.mov(A.t3, A.t2);
+        a.add(A.t3, A.t6);
+        a.addImm(A.t3, max_stack + 9);
+        a.jumpIfMem(.hi, A.t3, .{ .base = thread, .disp = lay.stack_len }, fail);
+
+        // Nothing fails from here on.
+        a.dropLink();
+        a.load64(A.t3, .{ .base = thread, .disp = lay.stack_ptr });
+        a.addScaled(A.t3, A.t3, A.t2, 4);
+        a.mov(A.t5, A.t6);
+        a.addImm(A.t5, 1);
+        a.bind(loop);
+        a.copy16(.{ .base = A.t3 }, .{ .base = A.t4 });
+        a.addImm(A.t3, 16);
+        a.addImm(A.t4, 16);
+        a.addImm(A.t5, -1);
+        a.jumpIfImm(.ne, A.t5, 0, loop);
+
+        a.store64(A.t0, .{ .base = A.t1, .disp = frameField("closure") - frame_size });
+        a.lea(A.t4, .{ .base = A.t2, .disp = 1 });
+        a.storePair32(A.t2, A.t4, .{ .base = A.t1, .disp = frameField("func") - frame_size });
+        a.movImm(A.t3, 0);
+        a.movImm(A.t5, 1);
+        a.store64(A.t3, .{ .base = A.t1, .disp = frameField("pc") - frame_size });
+        a.store8(A.t5, .{ .base = A.t1, .disp = frameField("tail") - frame_size });
+        a.store8(A.t3, .{ .base = A.t1, .disp = frameField("hook") - frame_size });
+        a.lea(A.t3, .{ .base = A.t4, .disp = max_stack });
+        a.store32(A.t3, .{ .base = thread, .disp = @offsetOf(Thread, "top") });
+        a.mov(A.base, A.t4);
+        e.reloadBp();
+        e.clearRegisters();
+        a.jmp(e.first);
+        a.bind(fail);
+        a.retLocal();
+    }
+
+    /// `ret0` (n = 0) and `ret1` (n = 1) with the result in register
+    /// `ra`. A lean frame with nothing to close returns here, as the lean
+    /// return of the interpreter does, and continues in the caller at the
+    /// address its call left in the frame. The caller's code after the
+    /// call finishes what `interp.fast.finishLean` does. Any other frame
+    /// takes the step routine.
+    fn leanReturn(e: *Emitter, pc: u32, n: u32, ra: u32) void {
+        e.leanReturnOr(n, ra, e.coldStep(pc));
+    }
+
+    /// The lean return, which branches to `slow` for a frame that needs
+    /// the general return.
+    fn leanReturnOr(e: *Emitter, n: u32, ra: u32, slow: Label) void {
         const a = &e.a;
         const lay = e.lay;
         const thread: A.Reg = A.thread;
-        const fail = a.newLabel();
-        const no_upvals = a.newLabel();
-        const no_tbc = a.newLabel();
-        a.bind(e.l_ret[n]);
-        // t1 = the running frame.
+        // t1 = the end of the running frame.
         a.load64(A.t0, .{ .base = thread, .disp = lay.frames_len });
-        a.movImm(A.t1, @intCast(frame_size));
-        a.mul(A.t1, A.t0);
-        a.load64(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
-        a.add(A.t1, A.t2);
-        a.addImm(A.t1, -frame_size);
-        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = frameField("lean") }, 0, fail);
-        a.jumpIfByte(.ne, .{ .base = thread, .disp = @offsetOf(Thread, "hook_mask") }, 0, fail);
+        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_ptr });
+        a.addScaled(A.t1, A.t1, A.t0, frame_shift);
+        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = frameField("lean") - frame_size }, 0, slow);
+        a.jumpIfByte(.ne, .{ .base = thread, .disp = @offsetOf(Thread, "hook_mask") }, 0, slow);
         // An open upvalue or a to-be-closed variable of this frame needs
         // the general return.
-        a.load64(A.t2, .{ .base = thread, .disp = @offsetOf(Thread, "open_upvals") });
-        a.jumpIfImm(.eq, A.t2, 0, no_upvals);
-        a.load32(A.t2, .{ .base = A.t2, .disp = @offsetOf(object.Upvalue, "level") });
-        a.jumpIf(.hs, A.t2, A.base, fail);
-        a.bind(no_upvals);
-        a.load64(A.t2, .{ .base = thread, .disp = lay.tbc_len });
-        a.jumpIfImm(.eq, A.t2, 0, no_tbc);
-        a.load64(A.t3, .{ .base = thread, .disp = lay.tbc_ptr });
-        a.addScaled(A.t3, A.t3, A.t2, 2);
-        a.load32(A.t2, .{ .base = A.t3, .disp = -4 });
-        a.jumpIf(.hs, A.t2, A.base, fail);
-        a.bind(no_tbc);
-
-        a.dropLink();
+        if (e.captures) {
+            const none = a.newLabel();
+            a.load64(A.t2, .{ .base = thread, .disp = @offsetOf(Thread, "open_upvals") });
+            a.jumpIfImm(.eq, A.t2, 0, none);
+            a.load32(A.t2, .{ .base = A.t2, .disp = @offsetOf(object.Upvalue, "level") });
+            a.jumpIf(.hs, A.t2, A.base, slow);
+            a.bind(none);
+        }
+        if (e.closes) {
+            const none = a.newLabel();
+            a.load64(A.t2, .{ .base = thread, .disp = lay.tbc_len });
+            a.jumpIfImm(.eq, A.t2, 0, none);
+            a.load64(A.t3, .{ .base = thread, .disp = lay.tbc_ptr });
+            a.addScaled(A.t3, A.t3, A.t2, 2);
+            a.load32(A.t2, .{ .base = A.t3, .disp = -4 });
+            a.jumpIf(.hs, A.t2, A.base, slow);
+            a.bind(none);
+        }
         // The result goes to the slot of the called function, which is
         // the one below register 0.
-        if (n == 1) {
-            a.addScaled(A.t6, A.bp, A.t4, 4);
-            a.copy16(.{ .base = A.bp, .disp = -16 }, .{ .base = A.t6 });
-        }
-        // Pop the frame and continue in the caller, at the address its
-        // call left in the frame. The caller adjusts the result count.
+        if (n == 1) a.copy16(.{ .base = A.bp, .disp = -16 }, slot(ra));
+        // Pop the frame and continue in the caller, which adjusts the
+        // result count.
         a.addImm(A.t0, -1);
         a.store64(A.t0, .{ .base = thread, .disp = lay.frames_len });
-        a.load32(A.base, .{ .base = A.t1, .disp = frameField("base") - frame_size });
-        a.load64(A.t3, .{ .base = A.t1, .disp = frameField("resume_at") });
+        a.load32(A.base, .{ .base = A.t1, .disp = frameField("base") - 2 * frame_size });
+        a.load64(A.t3, .{ .base = A.t1, .disp = frameField("resume_at") - frame_size });
         a.movImm(A.t6, n);
         e.reloadBp();
         a.jmpReg(A.t3);
-        a.bind(fail);
-        a.retLocal();
     }
 
     /// t0 = address of the value of upvalue `i` of the running closure,
@@ -799,13 +976,197 @@ pub const Emitter = struct {
         }
     }
 
-    /// A table access through a fast-path helper that takes the thread,
-    /// the table, the key, the inline cache, and the value or result.
-    fn tableOp(e: *Emitter, pc: u32, helper: anytype, t: Place, key: Place, v: Place) void {
-        // Only a table has a fast path.
-        if (t == .reg) e.a.jumpIfByte(.ne, tagOf(t.reg), tag_table, e.coldStep(pc));
-        e.tableCall(pc, @intFromPtr(helper), t, key, v);
-        e.a.jumpIfImm(.ne, A.ret0, 0, e.coldStep(pc));
+    // -----------------------------------------------------------------
+    // Table accesses
+    //
+    // The inline paths below are the hit paths of `interp.fast`: a slot
+    // prediction that names the right node, and an integer key inside
+    // the array part. They read the layout of a table through
+    // `table.layout` and of an inline cache through `interp.layout`.
+    // Every other case calls the helper that runs the whole fast path
+    // of the interpreter, and then the step routine.
+
+    /// t0 = the table at `t`. Branches to `miss` when the value there is
+    /// something else.
+    fn loadTable(e: *Emitter, t: Place, miss: Label) void {
+        const a = &e.a;
+        switch (t) {
+            .reg => |r| {
+                a.jumpIfByte(.ne, tagOf(r), tag_table, miss);
+                a.load64(A.t0, slot(r));
+            },
+            .upval => |i| {
+                e.loadUpvalLoc(A.t0, A.t1, i);
+                a.jumpIfByte(.ne, .{ .base = A.t0, .disp = tl.value_tag }, tag_table, miss);
+                a.load64(A.t0, .{ .base = A.t0 });
+            },
+            .konst => unreachable,
+        }
+    }
+
+    /// node = the hash node of the table in `tab` that the slot
+    /// prediction at `slot_addr` names. Branches to `out_of_range` when
+    /// the table has no such node, and to `other_key` when the node holds
+    /// another key than the string `key`. This is the test that
+    /// `interp.lookupIc` makes before it trusts a prediction.
+    fn predictedNode(e: *Emitter, slot_addr: usize, tab: A.Reg, key: *object.String, node: A.Reg, tmp: A.Reg, out_of_range: Label, other_key: Label) void {
+        const a = &e.a;
+        a.movImm(node, slot_addr);
+        a.load16(node, .{ .base = node });
+        a.jumpIfMem(.hs, node, .{ .base = tab, .disp = e.lay.hash_len }, out_of_range);
+        a.load64(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
+        a.addScaled(node, tmp, node, tl.node_shift);
+        a.movImm(tmp, @intFromPtr(key));
+        a.jumpIfMem(.ne, tmp, .{ .base = node, .disp = tl.node_key }, other_key);
+        a.jumpIfByte(.ne, .{ .base = node, .disp = tl.node_key + tl.value_tag }, tag_string, other_key);
+    }
+
+    /// Address of a slot prediction of the instruction at `pc`.
+    fn prediction(e: *Emitter, pc: u32, comptime offset: usize) usize {
+        return @intFromPtr(&e.p.ic[pc]) + offset;
+    }
+
+    /// Branches to `miss` unless a store into the table in `tab` is a raw
+    /// store: the table is writable and has no metatable, or one known to
+    /// lack `__newindex`.
+    fn guardRawStore(e: *Emitter, tab: A.Reg, tmp: A.Reg, miss: Label) void {
+        const a = &e.a;
+        const plain = a.newLabel();
+        a.jumpIfByte(.ne, .{ .base = tab, .disp = tl.readonly }, 0, miss);
+        a.load64(tmp, .{ .base = tab, .disp = tl.metatable });
+        a.jumpIfImm(.eq, tmp, 0, plain);
+        a.jumpIfBit(.{ .base = tmp, .disp = tl.tm_absent + il.absent_newindex / 8 }, il.absent_newindex % 8, false, miss);
+        a.bind(plain);
+    }
+
+    /// The write barrier after a store of register `v` into the table in
+    /// t0: nothing for a value that is not collectable, and otherwise the
+    /// test of the barrier bit, with the slow part out of line.
+    fn tableBarrier(e: *Emitter, pc: u32, v: u32, done: Label) void {
+        const a = &e.a;
+        a.load8(A.t2, tagOf(v));
+        a.jumpIfImm(.lo, A.t2, tag_string, done);
+        a.jumpIfBit(.{ .base = A.t0, .disp = tl.flags }, tl.barrier_bit, true, e.addCold(pc, .{ .barrier_table = .{ .v = v, .key = null } }, done));
+    }
+
+    /// R[dst] = t[K[kc]] for a constant string key.
+    fn fieldGet(e: *Emitter, pc: u32, t: Place, kc: u32, dst: u32) void {
+        const a = &e.a;
+        const done = a.newLabel();
+        const miss = e.addCold(pc, .{ .table = .{ .helper = @intFromPtr(&helpers.getStr), .t = t, .key = .{ .konst = kc }, .v = .{ .reg = dst } } }, done);
+        e.loadTable(t, miss);
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, miss, miss);
+        // A nil value may have an `__index` to follow.
+        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = tl.node_val + tl.value_tag }, tag_nil, miss);
+        a.copy16(slot(dst), .{ .base = A.t1, .disp = tl.node_val });
+        a.bind(done);
+    }
+
+    /// t[K[kb]] = R[v] for a constant string key.
+    fn fieldSet(e: *Emitter, pc: u32, t: Place, kb: u32, v: u32) void {
+        const a = &e.a;
+        const done = a.newLabel();
+        const call: TableCall = .{ .helper = @intFromPtr(&helpers.setStr), .t = t, .key = .{ .konst = kb }, .v = .{ .reg = v } };
+        const miss = e.addCold(pc, .{ .table = call }, done);
+        const key = e.p.constants[kb].as(object.String);
+        // A constructor stores into a fresh table, where the predicted
+        // node is still empty.
+        const other_key = if (key.flags.interned) e.addCold(pc, .{ .field_insert = call }, done) else miss;
+        e.loadTable(t, miss);
+        e.guardRawStore(A.t0, A.t1, miss);
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, key, A.t1, A.t2, miss, other_key);
+        a.copy16(.{ .base = A.t1, .disp = tl.node_val }, slot(v));
+        a.storeImm16(.{ .base = A.t0, .disp = tl.tm_absent }, 0);
+        e.tableBarrier(pc, v, done);
+        a.bind(done);
+    }
+
+    /// R[ra + 1] = R[rb] and R[ra] = R[rb][K[kc]], the lookup of a
+    /// method. The receiver itself holds the method, or the table that
+    /// `__index` of its metatable names does.
+    fn method(e: *Emitter, pc: u32, ra: u32, rb: u32, kc: u32) void {
+        const a = &e.a;
+        const done = a.newLabel();
+        const chain = a.newLabel();
+        const call: TableCall = .{ .helper = @intFromPtr(&helpers.getStr), .t = .{ .reg = ra + 1 }, .key = .{ .konst = kc }, .v = .{ .reg = ra } };
+        const other = e.addCold(pc, .{ .method = .{ .call = call, .chain = chain, .rb = rb } }, done);
+        const miss = e.addCold(pc, .{ .table = call }, done);
+        a.copy16(slot(ra + 1), slot(rb));
+        a.jumpIfByte(.ne, tagOf(rb), tag_table, other);
+        a.load64(A.t0, slot(rb));
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, chain, chain);
+        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = tl.node_val + tl.value_tag }, tag_nil, miss);
+        a.copy16(slot(ra), .{ .base = A.t1, .disp = tl.node_val });
+        a.bind(done);
+    }
+
+    /// R[dst] = the array slot t1 (zero-based) of the table in t0.
+    /// Branches to `outside` for an index outside the array part, and to
+    /// `miss` for a slot that holds nil, which may have an `__index` to
+    /// follow.
+    fn arrayGet(e: *Emitter, dst: u32, outside: Label, miss: Label, done: Label) void {
+        const a = &e.a;
+        const boxed = a.newLabel();
+        // An index below one wrapped around to a large unsigned number.
+        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, outside);
+        a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
+        a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
+        a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
+        // An unboxed slot is the payload, and the kind is its tag. A part
+        // of kind `none` holds only the nil word.
+        a.addScaled(A.t2, A.t2, A.t1, tl.word_shift);
+        a.load64(A.t4, .{ .base = A.t2 });
+        a.movImm(A.t5, tl.nil_word);
+        a.jumpIf(.eq, A.t4, A.t5, miss);
+        a.store64(A.t4, slot(dst));
+        a.store64(A.t3, tagOf(dst));
+        a.jmp(done);
+        a.bind(boxed);
+        a.addScaled(A.t2, A.t2, A.t1, tl.value_shift);
+        a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.value_tag }, tag_nil, miss);
+        a.copy16(slot(dst), .{ .base = A.t2 });
+    }
+
+    /// Stores R[v] into the array slot t1 (zero-based) of the table in
+    /// t0, as `table.arrayStoreFast` does when the value fits the kind of
+    /// the array part. Branches to `outside` for an index outside the
+    /// array part, and to `miss` for a table that is not plain and for a
+    /// value of another kind.
+    fn arraySet(e: *Emitter, pc: u32, v: u32, outside: Label, miss: Label, done: Label) void {
+        const a = &e.a;
+        const boxed = a.newLabel();
+        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, outside);
+        e.guardRawStore(A.t0, A.t2, miss);
+        a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
+        a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
+        a.load8(A.t4, tagOf(v));
+        a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
+        // An unboxed part takes a number of its own kind whose bits are
+        // not the nil word. Anything else changes the part or writes the
+        // nil word, which the helper does.
+        a.jumpIf(.ne, A.t3, A.t4, miss);
+        a.jumpIfImm(.eq, A.t3, tl.kind_none, miss);
+        a.load64(A.t5, slot(v));
+        a.movImm(A.t6, tl.nil_word);
+        a.jumpIf(.eq, A.t5, A.t6, miss);
+        a.addScaled(A.t2, A.t2, A.t1, tl.word_shift);
+        a.store64(A.t5, .{ .base = A.t2 });
+        a.jmp(done);
+        a.bind(boxed);
+        a.addScaled(A.t2, A.t2, A.t1, tl.value_shift);
+        a.copy16(.{ .base = A.t2 }, slot(v));
+        e.tableBarrier(pc, v, done);
+    }
+
+    /// Calls a fast-path helper that takes the thread, the table, the
+    /// key, the inline cache, and the value or result, and continues at
+    /// `resume_at` when it completed the instruction. Otherwise the step
+    /// routine runs.
+    fn tableHelper(e: *Emitter, pc: u32, c: TableCall, resume_at: Label) void {
+        const a = &e.a;
+        e.tableCall(pc, c.helper, c.t, c.key, c.v);
+        a.jumpIfImm(.eq, A.ret0, 0, resume_at);
+        e.step(pc, false);
     }
 
     fn tableCall(e: *Emitter, pc: u32, helper: usize, t: Place, key: Place, v: Place) void {
@@ -1025,12 +1386,204 @@ pub const Emitter = struct {
                 a.jumpIfImm(.ne, A.ret0, @intCast(helpers.retry), e.l_status);
                 e.step(c.pc, false);
             },
+            .barrier_table => |b| {
+                a.mov(A.args[1], A.t0);
+                if (b.key) |k| a.movImm(A.args[2], @intFromPtr(&e.p.constants[k])) else a.movImm(A.args[2], 0);
+                a.lea(A.args[3], slot(b.v));
+                a.mov(A.args[0], A.thread);
+                a.call(@intFromPtr(&helpers.barrierTable));
+                a.jmp(c.resume_at);
+            },
+            .tail_helper => {
+                const ins = e.p.code[c.pc];
+                a.mov(A.args[0], A.thread);
+                a.mov(A.args[1], A.bp);
+                a.movImm(A.args[2], ins);
+                a.movImm(A.args[3], c.pc + 1);
+                a.call(@intFromPtr(&helpers.tailcall));
+                const refused = a.newLabel();
+                a.jumpIfImm(.eq, A.ret0, 0, refused);
+                a.mov(A.base, A.ret1);
+                e.reloadBp();
+                a.jmpReg(A.ret0);
+                a.bind(refused);
+                e.step(c.pc, false);
+            },
+            .native_tail => {
+                const other = a.newLabel();
+                const general = a.newLabel();
+                const ins = e.p.code[c.pc];
+                const ra: u32 = opc.a(ins);
+                a.mov(A.args[0], A.thread);
+                a.movImm(A.args[1], ins);
+                a.movImm(A.args[2], c.pc + 1);
+                a.call(@intFromPtr(&helpers.tailNative));
+                a.jumpIfImm(.ne, A.ret0, 0, other);
+                e.reloadBp();
+                // One result from a lean frame returns here, and it is
+                // in the register of the callee.
+                a.load32(A.t0, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
+                a.sub(A.t0, A.base);
+                a.jumpIfImm(.ne, A.t0, @intCast(ra + 1), general);
+                e.leanReturnOr(1, ra, general);
+                a.bind(general);
+                a.mov(A.args[0], A.thread);
+                a.mov(A.args[1], A.stop);
+                a.movImm(A.args[2], ins);
+                a.call(@intFromPtr(&helpers.returnAll));
+                a.jmp(e.l_status);
+                a.bind(other);
+                // Anything but a request for the step routine is a status.
+                a.jumpIfImm(.ne, A.ret0, @intCast(helpers.retry), e.l_status);
+                e.step(c.pc, false);
+            },
             .table => |t| {
-                const slow = a.newLabel();
-                a.jumpIfByte(.ne, tagOf(t.key.reg), t.key_tag, slow);
-                e.tableCall(c.pc, t.helper, t.t, t.key, t.v);
+                if (t.key_tag) |tag| {
+                    const slow = a.newLabel();
+                    a.jumpIfByte(.ne, tagOf(t.key.reg), tag, slow);
+                    e.tableCall(c.pc, t.helper, t.t, t.key, t.v);
+                    a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
+                    a.bind(slow);
+                    e.step(c.pc, false);
+                } else e.tableHelper(c.pc, t, c.resume_at);
+            },
+            .field_insert => |t| {
+                // What `table.storeStr` does for an absent key: the
+                // predicted node is empty, the probe of the key reaches
+                // it over nodes that hold other keys, the value is not
+                // nil, and the hash part has room.
+                const helper = a.newLabel();
+                const loop = a.newLabel();
+                const reached = a.newLabel();
+                const key = e.p.constants[t.key.konst];
+                const s = key.as(object.String);
+                const v = t.v.reg;
+                const kw: *const [2]u64 = @ptrCast(&e.p.constants[t.key.konst]);
+                a.jumpIfByte(.ne, .{ .base = A.t1, .disp = tl.node_key + tl.value_tag }, tag_nil, helper);
+                a.jumpIfByte(.eq, tagOf(v), tag_nil, helper);
+                a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
+                a.addImm(A.t2, -1);
+                a.load64(A.t4, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+                a.movImm(A.t3, s.hash);
+                a.movImm(A.t6, @intFromPtr(s));
+                a.bind(loop);
+                a.@"and"(A.t3, A.t2);
+                a.addScaled(A.t5, A.t4, A.t3, tl.node_shift);
+                a.jumpIf(.eq, A.t5, A.t1, reached);
+                a.jumpIfByte(.eq, .{ .base = A.t5, .disp = tl.node_key + tl.value_tag }, tag_nil, helper);
+                a.jumpIfMem(.eq, A.t6, .{ .base = A.t5, .disp = tl.node_key }, helper);
+                a.addImm(A.t3, 1);
+                a.jmp(loop);
+                a.bind(reached);
+                // Room: (used + 1) * 4 <= len * 3, where t2 = len - 1.
+                a.load32(A.t3, .{ .base = A.t0, .disp = tl.hash_used });
+                a.addImm(A.t3, 1);
+                a.mov(A.t4, A.t3);
+                a.add(A.t4, A.t4);
+                a.add(A.t4, A.t4);
+                a.addImm(A.t2, 1);
+                a.mov(A.t5, A.t2);
+                a.add(A.t5, A.t5);
+                a.add(A.t5, A.t2);
+                a.jumpIf(.hi, A.t4, A.t5, helper);
+                a.store32(A.t3, .{ .base = A.t0, .disp = tl.hash_used });
+                a.storeImm64(.{ .base = A.t1, .disp = tl.node_key }, kw[0]);
+                a.storeImm64(.{ .base = A.t1, .disp = tl.node_key + tl.value_tag }, kw[1]);
+                a.copy16(.{ .base = A.t1, .disp = tl.node_val }, slot(v));
+                a.storeImm16(.{ .base = A.t0, .disp = tl.tm_absent }, 0);
+                // The table now holds the key, so the barrier runs for
+                // the key and the value whatever the value is.
+                a.jumpIfBit(.{ .base = A.t0, .disp = tl.flags }, tl.barrier_bit, true, e.addCold(c.pc, .{ .barrier_table = .{ .v = v, .key = t.key.konst } }, c.resume_at));
+                a.jmp(c.resume_at);
+                a.bind(helper);
+                e.tableHelper(c.pc, t, c.resume_at);
+            },
+            .method => |m| {
+                const helper = a.newLabel();
+                const in_metatable = a.newLabel();
+                const have_metatable = a.newLabel();
+                const s = e.p.constants[m.call.key.konst].as(object.String);
+                const g = e.g;
+                const dst = m.call.v.reg;
+                // A string finds its methods through the metatable that
+                // all strings share.
+                a.jumpIfByte(.ne, tagOf(m.rb), tag_string, helper);
+                a.movImm(A.t1, @intFromPtr(&g.type_metatables[value.typeSlot(.string)]));
+                a.load64(A.t1, .{ .base = A.t1 });
+                a.jmp(have_metatable);
+
+                // The receiver is a table whose prediction missed. The
+                // probe below is `table.findStr` for an interned key. It
+                // proves that the key is absent, and a key that is
+                // present goes to the helper, which records where.
+                a.bind(m.chain);
+                if (!s.flags.interned) {
+                    a.jmp(helper);
+                } else {
+                    const loop = a.newLabel();
+                    a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
+                    a.jumpIfImm(.eq, A.t2, 0, in_metatable);
+                    a.addImm(A.t2, -1);
+                    a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+                    a.movImm(A.t1, s.hash);
+                    a.movImm(A.t6, @intFromPtr(s));
+                    a.bind(loop);
+                    a.@"and"(A.t1, A.t2);
+                    a.addScaled(A.t4, A.t3, A.t1, tl.node_shift);
+                    a.load8(A.t5, .{ .base = A.t4, .disp = tl.node_key + tl.value_tag });
+                    a.jumpIfImm(.eq, A.t5, tag_nil, in_metatable);
+                    a.jumpIfMem(.eq, A.t6, .{ .base = A.t4, .disp = tl.node_key }, helper);
+                    a.addImm(A.t1, 1);
+                    a.jmp(loop);
+                }
+
+                // The first step of `interp.indexChain`: `__index` of the
+                // metatable names a table, and that table holds the key.
+                a.bind(in_metatable);
+                a.load64(A.t1, .{ .base = A.t0, .disp = tl.metatable });
+                a.bind(have_metatable);
+                a.jumpIfImm(.eq, A.t1, 0, helper);
+                a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, true, helper);
+                e.predictedNode(e.prediction(c.pc, il.ic_index), A.t1, g.tm_names[@backingInt(state.TM.index)].?, A.t2, A.t3, helper, helper);
+                a.jumpIfByte(.ne, .{ .base = A.t2, .disp = tl.node_val + tl.value_tag }, tag_table, helper);
+                a.load64(A.t1, .{ .base = A.t2, .disp = tl.node_val });
+                e.predictedNode(e.prediction(c.pc, il.ic_holder), A.t1, s, A.t2, A.t3, helper, helper);
+                a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.node_val + tl.value_tag }, tag_nil, helper);
+                a.copy16(slot(dst), .{ .base = A.t2, .disp = tl.node_val });
+                a.jmp(c.resume_at);
+                a.bind(helper);
+                e.tableHelper(c.pc, m.call, c.resume_at);
+            },
+            .get_array => |g| {
+                a.load64(A.args[0], slot(g.t));
+                a.load64(A.args[1], slot(g.key));
+                a.lea(A.args[2], slot(g.dst));
+                a.call(@intFromPtr(&helpers.getArray));
                 a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
-                a.bind(slow);
+                e.step(c.pc, false);
+            },
+            .set_array => |g| {
+                a.mov(A.args[0], A.thread);
+                a.load64(A.args[1], slot(g.t));
+                a.load64(A.args[2], slot(g.key));
+                a.lea(A.args[3], slot(g.v));
+                a.call(@intFromPtr(&helpers.setArray));
+                a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
+                e.step(c.pc, false);
+            },
+            .get_index => |g| {
+                a.lea(A.args[0], slot(g.t));
+                a.movImm(A.args[1], g.index);
+                a.lea(A.args[2], slot(g.dst));
+                a.call(@intFromPtr(&helpers.getIndex));
+                a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
+                e.step(c.pc, false);
+            },
+            .length => |g| {
+                a.lea(A.args[0], slot(g.x));
+                a.lea(A.args[1], slot(g.dst));
+                a.call(@intFromPtr(&helpers.length));
+                a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
                 e.step(c.pc, false);
             },
         }

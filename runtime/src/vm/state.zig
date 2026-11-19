@@ -37,6 +37,34 @@ pub const Finish = union(enum) {
     /// the next pending variable). When true, keep the stack top where the
     /// call left it, because a variable-count return reads it.
     redo: bool,
+
+    /// The form a frame stores, which has a fixed layout.
+    pub const Packed = extern struct {
+        kind: Kind = .none,
+        arg: u8 = 0,
+
+        pub const Kind = enum(u8) { none, store, cond, discard, redo };
+
+        pub inline fn unpack(p: Packed) Finish {
+            return switch (p.kind) {
+                .none => .none,
+                .store => .{ .store = p.arg },
+                .cond => .{ .cond = p.arg != 0 },
+                .discard => .discard,
+                .redo => .{ .redo = p.arg != 0 },
+            };
+        }
+    };
+
+    pub inline fn pack(f: Finish) Packed {
+        return switch (f) {
+            .none => .{},
+            .store => |r| .{ .kind = .store, .arg = r },
+            .cond => |k| .{ .kind = .cond, .arg = @intFromBool(k) },
+            .discard => .{ .kind = .discard },
+            .redo => |keep| .{ .kind = .redo, .arg = @intFromBool(keep) },
+        };
+    }
 };
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
@@ -244,16 +272,23 @@ pub const Debugger = struct {
 // ---------------------------------------------------------------------
 // Threads
 
-pub const Frame = struct {
+/// A call frame. The layout is fixed, because native code writes the
+/// frame of a call between two compiled functions itself: fields that
+/// such a call stores together are neighbors, and the frame is 64 bytes,
+/// so that the address of a frame is a shift and an add.
+pub const Frame = extern struct {
+    closure: ?*object.Closure = null,
+    native: ?*Native = null,
     /// Stack index of the called function value.
     func: u32,
     /// First register (first fixed parameter).
     base: u32,
-    pc: u32 = 0,
-    closure: ?*object.Closure = null,
-    native: ?*Native = null,
+    /// Stack slot where results go (the original function slot, before
+    /// vararg adjustment).
+    ret: u32,
     /// Number of results the caller wants, or -1 for all.
     want: i32,
+    pc: u32 = 0,
     /// Number of extra (vararg) arguments stored below `func` relocation.
     nvarargs: u32 = 0,
     /// Set when this frame was entered by a re-entrant `call` from native
@@ -261,11 +296,6 @@ pub const Frame = struct {
     boundary: bool = false,
     /// Set when this frame was entered by a tail call (for tracebacks).
     tail: bool = false,
-    /// Stack slot where results go (the original function slot, before
-    /// vararg adjustment).
-    ret: u32,
-    /// Set on metamethod frames pushed by the interpreter.
-    finish: Finish = .none,
     /// Set on the frame of a running debug hook.
     hook: bool = false,
     /// Set on a frame that native code pushed for a plain call between
@@ -273,9 +303,37 @@ pub const Frame = struct {
     /// boundary, and its caller is a Lus frame of the same run, so native
     /// code returns from it without asking the interpreter.
     lean: bool = false,
+    /// Set on metamethod frames pushed by the interpreter.
+    finish: Finish.Packed = .{},
+    _pad: [2]u8 = @splat(0),
     /// On a lean frame, the address in native code where the caller
     /// continues.
     resume_at: usize = 0,
+    _reserved: usize = 0,
+
+    /// The word that holds the flags and the finish action, as a lean
+    /// frame has it.
+    pub const lean_flags: u64 = blk: {
+        const f: Frame = .{ .func = 0, .base = 0, .ret = 0, .want = 0, .lean = true };
+        const bytes = std.mem.asBytes(&f)[@offsetOf(Frame, "boundary")..][0..8];
+        break :blk std.mem.readInt(u64, bytes, @import("builtin").cpu.arch.endian());
+    };
+
+    comptime {
+        // Native code exists only on 64-bit targets.
+        if (@sizeOf(usize) == 8) {
+            const assert = std.debug.assert;
+            assert(@sizeOf(Frame) == 64);
+            // The pairs and words that a lean call stores at once.
+            assert(@offsetOf(Frame, "native") == @offsetOf(Frame, "closure") + 8);
+            assert(@offsetOf(Frame, "base") == @offsetOf(Frame, "func") + 4);
+            assert(@offsetOf(Frame, "want") == @offsetOf(Frame, "ret") + 4);
+            assert(@offsetOf(Frame, "nvarargs") == @offsetOf(Frame, "pc") + 4);
+            assert(@offsetOf(Frame, "pc") % 8 == 0);
+            assert(@offsetOf(Frame, "boundary") % 8 == 0);
+            assert(@offsetOf(Frame, "resume_at") == @offsetOf(Frame, "boundary") + 8);
+        }
+    }
 };
 
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };

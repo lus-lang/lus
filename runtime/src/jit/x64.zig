@@ -177,6 +177,11 @@ pub const Assembler = struct {
         a.imm32(0);
     }
 
+    /// This target keeps its constants in the instructions.
+    pub fn flushPool(a: *Assembler) void {
+        _ = a;
+    }
+
     /// Resolves every branch. Returns false when the code is unusable.
     pub fn finish(a: *Assembler) bool {
         if (a.oom) return false;
@@ -291,6 +296,31 @@ pub const Assembler = struct {
         a.byte(0x88);
         a.modrm(src.n(), m);
     }
+    /// Loads 16 bits, zero-extended.
+    pub fn load16(a: *Assembler, dst: Reg, m: Mem) void {
+        a.opRM(false, &.{ 0x0F, 0xB7 }, dst.n(), m);
+    }
+    pub fn store16(a: *Assembler, src: Reg, m: Mem) void {
+        a.byte(0x66);
+        a.opRM(false, &.{0x89}, src.n(), m);
+    }
+    pub fn storeImm16(a: *Assembler, m: Mem, v: u16) void {
+        a.byte(0x66);
+        a.opRM(false, &.{0xC7}, 0, m);
+        a.bytes(std.mem.asBytes(&std.mem.nativeToLittle(u16, v)));
+    }
+    /// Stores two 64-bit registers at `m` and `m + 8`.
+    pub fn storePair64(a: *Assembler, first: Reg, second: Reg, m: Mem) void {
+        a.store64(first, m);
+        a.store64(second, .{ .base = m.base, .disp = m.disp + 8 });
+    }
+    /// Stores the low halves of two registers at `m` and `m + 4`.
+    pub fn storePair32(a: *Assembler, first: Reg, second: Reg, m: Mem) void {
+        a.store32(first, m);
+        a.store32(second, .{ .base = m.base, .disp = m.disp + 4 });
+    }
+    /// This target has no register that reads as zero.
+    pub const zero_reg: ?Reg = null;
     pub fn loadF(a: *Assembler, dst: FReg, m: Mem) void {
         a.byte(0xF2);
         a.opRM(false, &.{ 0x0F, 0x10 }, dst.n(), m);
@@ -679,6 +709,24 @@ test "x86-64 memory forms" {
         0x4D, 0x89, 0x56, 0x28,
         0x49, 0xC7, 0x46, 0x08,
         0x03, 0x00, 0x00, 0x00,
+    });
+}
+
+test "x86-64 sixteen-bit forms" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.load16(.rax, .{ .base = .rbx, .disp = 2 }); // movzx eax, word [rbx+2]
+    a.store16(.rax, .{ .base = .rbx, .disp = 2 }); // mov [rbx+2], ax
+    a.storeImm16(.{ .base = .rax, .disp = 4 }, 0); // mov word [rax+4], 0
+    a.load16(.r9, .{ .base = .r14, .disp = 2 }); // movzx r9d, word [r14+2]
+    a.store16(.r9, .{ .base = .r14, .disp = 2 }); // mov [r14+2], r9w
+    try expectBytes(&a, &.{
+        0x0F, 0xB7, 0x43, 0x02,
+        0x66, 0x89, 0x43, 0x02,
+        0x66, 0xC7, 0x40, 0x04,
+        0x00, 0x00, 0x45, 0x0F,
+        0xB7, 0x4E, 0x02, 0x66,
+        0x45, 0x89, 0x4E, 0x02,
     });
 }
 

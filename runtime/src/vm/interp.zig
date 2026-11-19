@@ -1021,8 +1021,11 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             } else {
                 _ = try precall(l, dst, nargs, fr.want);
             }
+            // The new frame returns in place of the old one, so it takes
+            // over what the old one owed its caller.
             const nf = l.frame();
             nf.boundary = fr.boundary;
+            nf.finish = fr.finish;
             nf.tail = true;
             c = load(l);
             pc = 0;
@@ -1356,7 +1359,7 @@ pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i3
 /// `stop` and no open upvalue or to-be-closed variable lives in it.
 pub inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
     const fr = c.fr;
-    if (fr.finish != .none or fr.boundary or l.hook_mask != 0) return false;
+    if (fr.finish.kind != .none or fr.boundary or l.hook_mask != 0) return false;
     if (c.fi <= stop or l.frames.items[c.fi - 1].closure == null) return false;
     if (l.open_upvals) |u| if (u.level >= c.base) return false;
     if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= c.base) return false;
@@ -1404,7 +1407,7 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
         l.hook_oldfi = c.fi;
         l.hook_oldpc = if (pc.* > 0) pc.* - 1 else 0;
     }
-    switch (fr.finish) {
+    switch (fr.finish.unpack()) {
         .none, .discard => {},
         .store => |r| c.bp[r] = l.stack[dst],
         .cond => |k| if (l.stack[dst].truthy() != k) {
@@ -1420,6 +1423,17 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     // Fixed result counts restore the caller's register window top.
     if (fr.want >= 0) l.top = c.base + c.cl.proto.max_stack;
     return false;
+}
+
+/// Returns `n` values starting at `first` from the running frame, for
+/// native code that finished a call in tail position. The result is the
+/// step code that a return instruction reports.
+pub fn returnStep(l: *Thread, first: u32, n: u32, stop: usize) Error!u32 {
+    var c = load(l);
+    var pc: u32 = c.fr.pc;
+    if (try doReturn(l, &c, &pc, first, n, stop)) return Step.done;
+    c.fr.pc = pc;
+    return Step.dispatch;
 }
 
 fn markTbc(l: *Thread, level: u32) Error!void {
@@ -1554,6 +1568,27 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: *const 
     c.refresh(l);
 }
 
+/// The facts about the inline caches and the metamethod absence cache
+/// that native code relies on (`jit/emit.zig`). The hit paths that native
+/// code runs inline are the ones of `lookupIc`, `noNewindexMeta`, and
+/// `indexChain` below, and this is where their data layout is named.
+pub const layout = struct {
+    /// Byte offsets of the slot predictions in an inline cache entry.
+    /// Each prediction is 16 bits wide.
+    pub const ic_own: usize = @offsetOf(object.IcEntry, "own");
+    pub const ic_index: usize = @offsetOf(object.IcEntry, "index");
+    pub const ic_holder: usize = @offsetOf(object.IcEntry, "holder");
+    /// Bits of `Table.tm_absent`.
+    pub const absent_index: u4 = @backingInt(state.TM.index);
+    pub const absent_newindex: u4 = @backingInt(state.TM.newindex);
+
+    comptime {
+        std.debug.assert(@FieldType(object.IcEntry, "own") == u16);
+        std.debug.assert(@FieldType(object.IcEntry, "index") == u16);
+        std.debug.assert(@FieldType(object.IcEntry, "holder") == u16);
+    }
+};
+
 /// The parts of the table and return instructions that touch no frame
 /// state. The interpreter runs them inline, and native code calls them
 /// through `jit/helpers.zig`, so both tiers take the same fast paths. Each
@@ -1561,7 +1596,7 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: *const 
 pub const fast = struct {
     /// out = t[key] for a string key, when the lookup ends in a table.
     pub inline fn getStr(l: *Thread, ic: *object.IcEntry, t: *const Value, key: *const Value, out: *Value) bool {
-        if (t.tag != .table) return false;
+        if (t.tag != .table) return t.tag == .string and stringMethod(l, ic, key.as(String), out);
         const tab = t.as(Table);
         const v = lookupIc(tab, key.as(String), &ic.own);
         if (!v.isNil() or noIndexMeta(tab)) {
@@ -1685,6 +1720,23 @@ fn indexChain(l: *Thread, start: *Table, key: *String, ic: *object.IcEntry, out:
             out.* = v;
             return true;
         }
+    }
+    return false;
+}
+
+/// out = s[key] for a string `s`, when the string metatable names a table
+/// as `__index` and the lookup ends in that table. This is the lookup of
+/// a method such as `s:sub`. The slot predictions are the ones a table
+/// receiver uses for its metatable and for the table `__index` names.
+fn stringMethod(l: *Thread, ic: *object.IcEntry, key: *String, out: *Value) bool {
+    const mt = l.g.type_metatables[value.typeSlot(.string)] orelse return false;
+    const h = indexMetaIc(l, mt, &ic.index);
+    if (h.tag != .table) return false;
+    const tab = h.as(Table);
+    const v = lookupIc(tab, key, &ic.holder);
+    if (!v.isNil() or noIndexMeta(tab)) {
+        out.* = v;
+        return true;
     }
     return false;
 }

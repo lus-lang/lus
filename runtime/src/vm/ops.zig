@@ -144,7 +144,7 @@ pub fn callMeta(l: *Thread, tm: Value, args: []const Value) Error!Value {
             error.Yield => unreachable,
             else => |x| x,
         };
-        l.frame().finish = f;
+        l.frame().finish = f.pack();
         return error.MetaCall;
     };
     return call1(l, tm, args);

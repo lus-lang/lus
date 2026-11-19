@@ -49,9 +49,6 @@ pub const State = if (enabled) struct {
     period: u32 = 1,
     seed: u32 = 12345,
     arena: mem.Arena = .{},
-    /// The image of a frame that native code pushes for a plain call. A
-    /// call copies it and then stores the fields that differ.
-    frame_template: state.Frame = .{ .func = 0, .base = 0, .want = 0, .ret = 0, .lean = true },
     /// Functions that have native code now.
     live: usize = 0,
     /// Functions compiled since the state started.
@@ -311,6 +308,7 @@ fn compile(l: *Thread, p: *Proto) bool {
     code.* = .{ .base = @intFromPtr(block.ptr), .offs = offs.ptr, .size = block.len, .count = offs.len };
     p.jit_code = code;
     p.jit_entry = if (e.call_entry != 0) code.base + e.call_entry else 0;
+    p.jit_tail = if (e.tail_entry != 0) code.base + e.tail_entry else 0;
     p.plain_call = false;
     g.jit.live += 1;
     g.jit.compiled += 1;
@@ -326,6 +324,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
     g.gpa.destroy(code);
     p.jit_code = null;
     p.jit_entry = 0;
+    p.jit_tail = 0;
     p.plain_call = !p.is_vararg;
     g.jit.live -= 1;
 }

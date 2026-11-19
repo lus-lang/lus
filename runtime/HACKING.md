@@ -61,6 +61,8 @@ Hot functions compile to native code on aarch64 and x86-64 (`../spec/design/jit.
 
 Native code calls the interpreter's own body of an opcode for everything it does not run inline, so a change to an opcode in `vm/interp.zig` reaches both tiers. A change to a fast path in `jit/emit.zig` must keep the interpreter's results exactly. Run the conformance suite with `LUS_JIT=eager` after either kind of change, and on x86-64 as well (a cross-built `x86_64-macos` binary runs under Rosetta).
 
+Native code reads tables, inline cache entries, and frames directly. Every offset and constant it uses comes from `table.layout` in `vm/table.zig`, `interp.layout` in `vm/interp.zig`, or `@offsetOf` on `state.Frame`, so a field that moves takes native code with it, and a change that breaks an assumption of the templates fails a compile-time assertion next to those declarations. A change to what the interpreter's fast paths do (`interp.fast`, `lookupIc`, `indexChain`, `table.storeStr`, `table.arrayStoreFast`) needs the matching change in the inline paths of `jit/emit.zig`. Run a `-Dgc-stress=97 -Dgc-verify=true` build over the conformance suite with `LUS_JIT=eager` after touching a store, because the verifier finds a missing barrier.
+
 ## Fuzzing
 
 `src/fuzz.zig` holds fuzz targets for the lexer, the parser, the compiler, formatter idempotence, and the binary chunk loader. `zig build test` runs each target once over its seed corpus. `mise run fuzz` (or `zig build test --fuzz=1M`) mutates inputs for a million iterations, and `zig build test --fuzz` alone runs until stopped and serves a coverage view in the browser. A crashing input is saved under `.zig-cache/f/crash`.

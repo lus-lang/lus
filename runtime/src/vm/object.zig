@@ -237,6 +237,9 @@ pub const Proto = struct {
     /// parameters, or zero when the function has no native code or takes
     /// variable arguments.
     jit_entry: usize = 0,
+    /// Address that native code calls to enter the function by a tail
+    /// call, under the same conditions.
+    jit_tail: usize = 0,
 
     pub const JitState = enum(u8) {
         /// Not yet seen by the JIT.
