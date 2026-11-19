@@ -528,20 +528,28 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
         if (i >= 1 and i <= asize) kind = joinKind(kind, n.val);
     }
     // Allocate both parts before changing the table, so that running out
-    // of memory leaves it intact.
+    // of memory leaves it intact. The hash part comes first, because a
+    // growing array part may move in place.
+    const new_hash = try gpa.alloc(Node, hsize);
+    errdefer gpa.free(new_hash);
+    for (new_hash) |*n| n.* = .{ .key = .nil, .val = .nil };
     const reuse = asize == old_n and kind == old_kind;
+    // An array part in the backing allocator that grows and keeps its
+    // kind is reallocated, which can extend it without a copy.
+    const grown = if (!reuse and kind == old_kind and asize > old_n and old_n > 0 and !t.ownsInline(old_ptr)) growArray(gpa, kind, old_ptr, old_n, asize) else null;
     var new_ptr = if (reuse) old_ptr else Table.empty_words;
-    if (!reuse and asize > 0) {
+    if (grown) |p| {
+        new_ptr = p;
+    } else if (!reuse and asize > 0) {
         new_ptr = if (kind == .boxed) @ptrCast((try gpa.alloc(Value, asize)).ptr) else (try gpa.alloc(u64, asize)).ptr;
     }
-    errdefer if (!reuse) freeArray(gpa, t, kind, new_ptr, asize);
-    const new_hash = try gpa.alloc(Node, hsize);
-    for (new_hash) |*n| n.* = .{ .key = .nil, .val = .nil };
     const old: Table = .{ .hdr = t.hdr, .kind = old_kind, .array_ptr = old_ptr, .asize = old_n };
     t.kind = kind;
     t.array_ptr = new_ptr;
     t.asize = asize;
-    if (!reuse) {
+    if (grown != null) {
+        if (kind == .boxed) @memset(t.values()[old_n..], .nil) else @memset(t.words()[old_n..], hole);
+    } else if (!reuse) {
         const keep = @min(asize, old_n);
         if (kind == .boxed) {
             const dst = t.values();
@@ -571,8 +579,21 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
         if (n.key.tag == .nil or n.val.isNil()) continue;
         reinsert(t, n.key, n.val);
     }
-    if (!reuse) freeArray(gpa, t, old_kind, old_ptr, old_n);
+    if (!reuse and grown == null) freeArray(gpa, t, old_kind, old_ptr, old_n);
     freeHash(gpa, t, old_hash);
+}
+
+/// Extends an array part of `n` slots of kind `kind` in the backing
+/// allocator to `m` slots, keeping its contents, or returns null when
+/// the allocator cannot. The old part is gone when this succeeds.
+fn growArray(gpa: Allocator, kind: ArrayKind, ptr: [*]u64, n: usize, m: usize) ?[*]u64 {
+    if (kind == .boxed) {
+        const p: [*]Value = @ptrCast(ptr);
+        const r = gpa.remap(p[0..n], m) orelse return null;
+        return @ptrCast(r.ptr);
+    }
+    const r = gpa.remap(ptr[0..n], m) orelse return null;
+    return r.ptr;
 }
 
 /// Inserts a live entry while rebuilding. The kind of the array part
