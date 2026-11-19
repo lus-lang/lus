@@ -175,7 +175,10 @@ pub const Global = struct {
     gpa: Allocator,
     io: std.Io,
     all_objects: ?*gc.Header = null,
-    allocated: usize = 0,
+    /// Counts every byte the state holds. `gpa` allocates through it.
+    counter: @import("heapcount.zig").Counting = undefined,
+    /// The allocator the state was created with, which owns the Global.
+    parent_gpa: Allocator = undefined,
     object_count: usize = 0,
     threshold: usize = 1 << 20,
     pause: usize = 200,
@@ -638,14 +641,22 @@ pub fn traverseExtra(m: *gc.MarkerApi, h: *gc.Header) void {
 // ---------------------------------------------------------------------
 // State creation
 
+/// Bytes currently held by the state.
+pub fn heapBytes(g: *const Global) usize {
+    return g.counter.bytes;
+}
+
 pub fn create(gpa: Allocator, io: std.Io) !*Global {
     const g = try gpa.create(Global);
     var seed: u64 = 0x2545F4914F6CDD1D;
     seed ^= @intFromPtr(g);
     g.* = .{ .gpa = gpa, .io = io, .seed = seed };
+    g.parent_gpa = gpa;
+    g.counter = .{ .child = gpa };
+    g.gpa = g.counter.allocator();
     g.gc_stopped = true; // no collection until the state is fully built
     g.memerr = try newStringKnown(g, "not enough memory", true, 17);
-    try g.fixed.append(gpa, &g.memerr.hdr);
+    try g.fixed.append(g.gpa, &g.memerr.hdr);
     for (tm_event_names, 0..) |name, i| {
         const s = try newStringKnown(g, name, true, name.len);
         g.tm_names[i] = s;
@@ -665,5 +676,5 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
-    gpa.destroy(g);
+    g.parent_gpa.destroy(g);
 }

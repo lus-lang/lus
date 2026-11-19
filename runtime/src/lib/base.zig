@@ -379,7 +379,7 @@ fn collectgarbage(l: *Thread) Error!u32 {
             g.gc_stopped = false;
             return aux.retInt(l, 0);
         },
-        3 => return aux.ret(l, Value.float(@as(f64, @floatFromInt(g.allocated)) / 1024.0)),
+        3 => return aux.ret(l, Value.float(@as(f64, @floatFromInt(g.counter.bytes)) / 1024.0)),
         4 => {
             gc.fullCollect(g);
             try runFinalizers(l);

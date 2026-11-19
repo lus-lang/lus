@@ -38,7 +38,6 @@ pub fn alloc(g: *Global, comptime T: type, tag: Tag, size: usize) !*T {
     const obj: *T = @ptrCast(@alignCast(mem.ptr));
     obj.hdr = .{ .tag = tag, .next = g.all_objects };
     g.all_objects = &obj.hdr;
-    g.allocated += size;
     g.object_count += 1;
     return obj;
 }
@@ -85,7 +84,6 @@ fn freeObject(g: *Global, h: *Header) void {
         else => state_mod.freeExtra(g, h),
     }
     const base: [*]u8 = @ptrCast(h);
-    g.allocated -|= size;
     g.object_count -|= 1;
     // Every object was allocated with the alignment of its own type, which
     // is at most 16, so freeing with a 16-aligned slice of the same length
@@ -127,7 +125,7 @@ fn barrierSlow(g: *Global, h: *Header) void {
 // Collection
 
 pub fn maybeCollect(g: *Global) void {
-    if (g.allocated >= g.threshold and !g.gc_stopped and g.gc_depth == 0) fullCollect(g);
+    if (g.counter.bytes >= g.threshold and !g.gc_stopped and g.gc_depth == 0) fullCollect(g);
 }
 
 pub fn fullCollect(g: *Global) void {
@@ -148,7 +146,7 @@ pub fn fullCollect(g: *Global) void {
     m.convergeEphemerons();
     m.clearWeak();
     sweep(g);
-    g.threshold = @max(g.allocated * g.pause / 100, 256 * 1024);
+    g.threshold = @max(g.counter.bytes * g.pause / 100, 256 * 1024);
     g.cycles += 1;
 }
 

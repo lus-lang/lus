@@ -53,6 +53,7 @@ test {
     _ = vm.ops;
     _ = vm.interp;
     _ = vm.pledge;
+    _ = @import("vm/heapcount.zig");
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = api;
