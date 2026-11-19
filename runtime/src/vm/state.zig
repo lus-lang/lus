@@ -577,9 +577,15 @@ pub fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usize) Allo
 
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
     gc.maybeCollect(g);
-    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table));
-    t.* = .{ .hdr = t.hdr };
-    if (narr > 0 or nhash > 0) table.resize(g.gpa, t, narr, nhash) catch return error.OutOfMemory;
+    // Small parts of known size live in the cell of the table itself.
+    const units = table.inlineUnits(narr, nhash);
+    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16);
+    t.* = .{ .hdr = t.hdr, .inline_units = @intCast(units) };
+    if (units > 0) {
+        table.initInline(t, narr, nhash);
+    } else if (narr > 0 or nhash > 0) {
+        table.resize(g.gpa, t, narr, nhash) catch return error.OutOfMemory;
+    }
     return t;
 }
 
