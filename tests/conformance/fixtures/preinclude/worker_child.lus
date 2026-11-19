@@ -1,0 +1,3 @@
+global worker, require
+local hello = require("hello")
+worker.message("worker got: " .. hello.greeting)

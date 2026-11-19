@@ -1,0 +1,72 @@
+-- security.lus - Regression tests for the pre-release security/hardening pass.
+-- Each case pins a specific fix so the holes cannot silently reopen.
+
+-- Self-confine: only the test tree is readable, only one env var, then seal.
+-- The pledged subtree is created in the temporary working directory first. The
+-- write grant lives in a coroutine, so it stays local to the setup.
+local setup = coroutine.create(function()
+    pledge("fs:write=./*")
+    fs.createdirectory("lus-tests")
+    fs.createdirectory("lus-tests/h1")
+    local f = assert(io.open("lus-tests/h1/security.lus", "w"))
+    f:write("-- security fixture\n")
+    f:close()
+    -- A file outside the pledged subtree that the traversal test tries to reach.
+    fs.createdirectory("lus")
+    local outside = assert(io.open("lus/meson.build", "w"))
+    outside:write("project('fixture')\n")
+    outside:close()
+end)
+assert(coroutine.resume(setup))
+
+pledge("load")
+pledge("fs:read=./lus-tests/*")
+pledge("env=LUS_TEST_ALLOWED")
+pledge("seal")
+
+-- P0-8: a catch nested in the same frame as another must not leave a dangling
+-- active-catch that hijacks a later error via a stale longjmp.
+local function nested_catch_then_error_is_caught_no_stale_longjmp_test()
+    local _ = catch(catch(1 + 1))
+    local ok, err = catch(error("boom"))
+    assert(ok == false, "the later error must be caught")
+    assert(string.find(tostring(err), "boom") ~= nil, "error object preserved")
+end
+
+-- P0-9: slice bounds must be integers; a non-integer must error, not be read
+-- as raw union bits (type confusion).
+local function slice_rejects_a_non_integer_index_test()
+    local ok = catch(({1, 2, 3})["x", 2])
+    assert(ok == false, "non-integer slice index must error")
+end
+
+local function slice_with_integer_indices_still_works_test()
+    local t = {10, 20, 30, 40}
+    local s = t[2, 3]
+    assert(s[1] == 20 and s[2] == 30 and #s == 2)
+end
+
+-- P0-1: io.open is gated by fs pledges (it used to bypass them entirely).
+local function io_open_within_fs_read_pledge_works_test()
+    local f = io.open("./lus-tests/h1/security.lus", "r")
+    assert(f ~= nil, "reading a pledged path should work")
+    f:close()
+end
+
+local function io_open_outside_fs_read_pledge_is_denied_test()
+    local ok = catch(io.open("/etc/hostname", "r"))
+    assert(ok == false, "reading outside the pledge must be denied")
+end
+
+-- P0-4: '..' traversal cannot escape the pledged subtree, even to a file that
+-- exists (the check canonicalizes and fails closed).
+local function traversal_cannot_escape_the_pledge_test()
+    local ok = catch(io.open("./lus-tests/h1/../../lus/meson.build", "r"))
+    assert(ok == false, "..-escape to a real file outside the pledge must be denied")
+end
+
+-- P1-1: os.getenv is gated by the env pledge.
+local function os_getenv_denied_for_an_unpledged_variable_test()
+    local ok = catch(os.getenv("LUS_TEST_SECRET"))
+    assert(ok == false, "unpledged env var must be denied")
+end

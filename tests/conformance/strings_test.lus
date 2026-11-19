@@ -1,0 +1,923 @@
+pledge("load")
+
+local string = string
+local table = table
+local math = math
+
+local function checkerror (msg, f, ...)
+  local args = {...}
+  local s, err = catch (function() return f(table.unpack(args)) end)()
+  assert(not s and string.find(err, msg))
+end
+
+local function basic_string_length_and_concatenation_test()
+    assert("alo" < "alo1")
+    assert("" < "a")
+    assert("alo" > "al")
+    assert("alo" ~= "alo1")
+    assert("alo" ~= nil)
+    assert("alo" ~= 1)
+    
+    assert("alo" .. "123" == "alo123")
+    assert("alo" .. 123 == "alo123")
+    assert(123 .. "alo" == "123alo")
+    assert(123 .. 456 == "123456")
+    
+    assert(string.len("") == 0)
+    assert(string.len("abc") == 3)
+    assert(string.len("123") == 3)
+    
+    assert(string.rep('a', 5) == "aaaaa")
+    assert(string.rep('', 10) == "")
+    assert(string.rep('a', 0) == "")
+    assert(string.rep('a', -1) == "")
+end
+
+local function string_sub_test()
+    assert(string.sub("123456789", 2, 4) == "234")
+    assert(string.sub("123456789", 7) == "789")
+    assert(string.sub("123456789", 7, 6) == "")
+    assert(string.sub("123456789", 7, 7) == "7")
+    assert(string.sub("123456789", 0, 0) == "")
+    assert(string.sub("123456789", -10, 10) == "123456789")
+    assert(string.sub("123456789", 1, 9) == "123456789")
+    assert(string.sub("123456789", -10, -20) == "")
+    assert(string.sub("123456789", -1) == "9")
+    assert(string.sub("123456789", -4) == "6789")
+    assert(string.sub("123456789", -6, -4) == "456")
+end
+
+local function string_find_test()
+    assert(string.find("123456789", "345") == 3)
+    local a, b = string.find("123456789", "345")
+    assert(a == 3 and b == 5)
+    
+    assert(string.find("123456789", "346") == nil)
+    assert(string.find("123456789", ".45", 1, true) == nil) -- plain search
+    assert(string.find("123456789", "888", 1, true) == nil)
+    assert(string.find("123456789", "1", 1, true) == 1)
+    
+    assert(string.find("123456789", "", 1) == 1)
+    assert(string.find("123456789", "", 10) == 10)
+end
+
+local function string_match_test()
+    assert(string.match("123456789", "345") == "345")
+    assert(string.match("123456789", "3(%d)5") == "4")
+    assert(string.match("123456789", "888") == nil)
+end
+
+local function string_gsub_test()
+    assert(string.gsub("hello world", "(%w+)", "%1 %1") == "hello hello world world")
+    assert(string.gsub("hello world", "%w+", "%0 %0", 1) == "hello hello world")
+    assert(string.gsub("hello world from lua", "%a+", function(w) return string.sub(w, 1, 1) end) == "h w f l")
+end
+
+local function string_reverse_test()
+    assert(string.reverse("abc") == "cba")
+    assert(string.reverse("") == "")
+    assert(string.reverse("ab") == "ba")
+end
+
+local function string_byte_and_string_char_round_trips_test()
+    assert(string.byte("a") == 97)
+    assert(string.char(97) == "a")
+    assert(string.byte("abc", 2) == 98)
+
+    -- a range returns one value per byte
+    local a, b = string.byte("abc", 2, 3)
+    assert(a == 98 and b == 99)
+    assert(select("#", string.byte("abc", 2, 3)) == 2)
+    assert(select("#", string.byte("abc", 1, 3)) == 3)
+
+    -- multi-argument char builds the whole string
+    assert(string.char(97, 98, 99) == "abc")
+    assert(string.char(104, 101, 108, 108, 111) == "hello")
+
+    -- bytes above 127 round-trip through char and byte unchanged
+    local s = string.char(0xC3, 0xA9)
+    assert(string.byte(s, 1) == 0xC3 and string.byte(s, 2) == 0xA9)
+end
+
+local function string_format_test()
+    assert(string.format("x%u", 10) == "x10")
+    assert(string.format("%d", 123) == "123")
+    assert(string.format("%s", "test") == "test")
+    assert(string.format("%%%d", 10) == "%10")
+    
+    -- basic float formats
+    assert(string.format("%0.2f", 1.234) == "1.23")
+    
+    checkerror("invalid conversion", string.format, "%k", 10)
+    checkerror("invalid conversion", string.format, "%", 10)
+end
+
+local function table_concat_test()
+    local a = {"a", "b", "c"}
+    assert(table.concat(a) == "abc")
+    assert(table.concat(a, ",") == "a,b,c")
+    assert(table.concat(a, ",", 2) == "b,c")
+    assert(table.concat(a, ",", 2, 2) == "b")
+    assert(table.concat(a, ",", 3, 2) == "")
+    
+    checkerror("table expected", table.concat, 3)
+end
+
+local function gmatch_across_coroutines_bug_5_3_2_test()
+  local f = string.gmatch("1 2 3 4 5", "%d+")
+  assert(f() == "1")
+  local co = coroutine.wrap(f)
+  assert(co() == "2")
+end
+
+local function string_pack_basic_integers_test()
+  -- basic integer packing
+  local packed = string.pack("i4", 123456)
+  assert(#packed == 4)
+  local val = string.unpack("i4", packed)
+  assert(val == 123456)
+  
+  -- unsigned integers
+  packed = string.pack("I4", 0xFFFFFFFF)
+  val = string.unpack("I4", packed)
+  assert(val == 0xFFFFFFFF)
+  
+  -- negative integers
+  packed = string.pack("i4", -12345)
+  val = string.unpack("i4", packed)
+  assert(val == -12345)
+  
+  -- byte (signed and unsigned)
+  packed = string.pack("b", -1)
+  val = string.unpack("b", packed)
+  assert(val == -1)
+  
+  packed = string.pack("B", 255)
+  val = string.unpack("B", packed)
+  assert(val == 255)
+end
+
+local function string_pack_shorts_and_longs_test()
+  -- short
+  local packed = string.pack("h", 12345)
+  assert(#packed == 2)
+  local val = string.unpack("h", packed)
+  assert(val == 12345)
+  
+  -- unsigned short
+  packed = string.pack("H", 65535)
+  val = string.unpack("H", packed)
+  assert(val == 65535)
+  
+  -- lua_Integer (j/J)
+  packed = string.pack("j", 123456789)
+  val = string.unpack("j", packed)
+  assert(val == 123456789)
+end
+
+local function string_pack_floats_test()
+  -- float
+  local packed = string.pack("f", 3.14)
+  assert(#packed == 4)
+  local val = string.unpack("f", packed)
+  assert(math.abs(val - 3.14) < 0.001)
+  
+  -- double
+  packed = string.pack("d", 3.14159265358979)
+  assert(#packed == 8)
+  val = string.unpack("d", packed)
+  assert(math.abs(val - 3.14159265358979) < 0.0000001)
+  
+  -- lua_Number (n)
+  packed = string.pack("n", 2.718281828)
+  val = string.unpack("n", packed)
+  assert(math.abs(val - 2.718281828) < 0.0000001)
+end
+
+local function string_pack_endianness_test()
+  -- little endian
+  local packed = string.pack("<i4", 0x01020304)
+  -- string.pack returns a vector (spec/design/strings.md), so bytes are read with vector.get.
+  assert(vector.get(packed, 0) == 0x04) -- least significant first
+  
+  -- big endian
+  packed = string.pack(">i4", 0x01020304)
+  assert(vector.get(packed, 0) == 0x01) -- most significant first
+  
+  -- verify unpack handles endianness
+  local le = string.pack("<i4", 1000)
+  local be = string.pack(">i4", 1000)
+  assert(string.unpack("<i4", le) == 1000)
+  assert(string.unpack(">i4", be) == 1000)
+end
+
+local function string_pack_fixed_strings_test()
+  -- fixed-size string
+  local packed = string.pack("c5", "hello")
+  assert(vector.tostring(packed) == "hello")
+  local val = string.unpack("c5", packed)
+  assert(val == "hello")
+  
+  -- padding on short string
+  packed = string.pack("c5", "hi")
+  assert(#packed == 5)
+  
+  -- zero-terminated string
+  packed = string.pack("z", "hello")
+  assert(#packed == 6) -- includes null terminator
+  val = string.unpack("z", packed)
+  assert(val == "hello")
+end
+
+local function string_pack_multiple_values_test()
+  local packed = string.pack("i4i4i4", 10, 20, 30)
+  assert(#packed == 12)
+  
+  local a, b, c, nextpos = string.unpack("i4i4i4", packed)
+  assert(a == 10)
+  assert(b == 20)
+  assert(c == 30)
+  assert(nextpos == 13) -- next position after data
+end
+
+local function string_pack_offset_unpack_test()
+  local packed = string.pack("xxxi4", 42) -- 3 padding bytes + integer
+  assert(#packed == 7)
+  
+  -- unpack at offset
+  local val, nextpos = string.unpack("i4", packed, 4)
+  assert(val == 42)
+  assert(nextpos == 8)
+end
+
+local function string_packsize_test()
+  assert(string.packsize("i4") == 4)
+  assert(string.packsize("i4i4") == 8)
+  assert(string.packsize("bBhHlLjJ") > 0)
+  assert(string.packsize("fd") == 12)
+  assert(string.packsize("c10") == 10)
+  assert(string.packsize("xxx") == 3)
+end
+
+-- ============================================
+-- Edge Case Tests
+-- ============================================
+
+local function empty_string_operations_test()
+    local s = ""
+    assert(string.len(s) == 0)
+    assert(string.sub(s, 1, 10) == "")
+    assert(string.reverse(s) == "")
+    assert(string.upper(s) == "")
+    assert(string.lower(s) == "")
+    assert(string.rep(s, 100) == "")
+    assert(string.find(s, "") == 1)
+    assert(string.match(s, ".*") == "")
+end
+
+local function empty_string_concatenation_test()
+    assert("" .. "" == "")
+    assert("a" .. "" == "a")
+    assert("" .. "b" == "b")
+    assert("" .. "" .. "" == "")
+end
+
+local function large_string_creation_with_rep_test()
+    local s = string.rep("x", 100000)
+    assert(#s == 100000)
+    assert(string.sub(s, 1, 5) == "xxxxx")
+    assert(string.sub(s, -5) == "xxxxx")
+end
+
+local function string_sub_edge_cases_test()
+    local s = "hello"
+    -- Beyond string bounds
+    assert(string.sub(s, 100) == "")
+    assert(string.sub(s, 1, 100) == "hello")
+    assert(string.sub(s, -100) == "hello")
+    assert(string.sub(s, -100, 100) == "hello")
+    -- Zero index
+    assert(string.sub(s, 0) == "hello")
+    assert(string.sub(s, 0, 0) == "")
+    -- Reversed indices
+    assert(string.sub(s, 5, 1) == "")
+end
+
+local function string_find_with_special_pattern_chars_test()
+    local s = "hello.world"
+    -- Find literal dot
+    assert(string.find(s, ".", 1, true) == 6)
+    -- Find pattern dot (matches any char)
+    assert(string.find(s, ".") == 1)
+    
+    -- Special pattern characters
+    local special = "a+b*c?d"
+    assert(string.find(special, "+", 1, true) == 2)
+    assert(string.find(special, "*", 1, true) == 4)
+    assert(string.find(special, "?", 1, true) == 6)
+end
+
+local function string_gsub_with_empty_pattern_test()
+    local s = "hello"
+    -- Empty match inserts between each char
+    local r, n = string.gsub(s, "", "-")
+    assert(r == "-h-e-l-l-o-")
+    assert(n == 6)
+end
+
+local function string_gsub_replacement_count_limit_test()
+    local s = "aaaa"
+    local r, n = string.gsub(s, "a", "b", 2)
+    assert(r == "bbaa")
+    assert(n == 2)
+end
+
+local function string_byte_edge_cases_test()
+    local s = "abc"
+    -- No indices returns first byte
+    assert(string.byte(s) == 97)
+    -- Beyond string bounds
+    assert(string.byte(s, 10) == nil)
+    -- Negative index
+    assert(string.byte(s, -1) == 99)
+    -- Multiple bytes beyond end
+    local a, b, c, d = string.byte(s, 1, 5)
+    assert(a == 97 and b == 98 and c == 99 and d == nil)
+end
+
+local function string_char_edge_cases_test()
+    assert(string.char() == "")
+    assert(string.char(0) == "\0")
+    -- string.char builds code points (spec/design/strings.md), so 255 is U+00FF.
+    assert(string.char(255) == "\u{FF}")
+end
+
+local function string_format_edge_cases_test()
+    -- %s with non-string
+    assert(string.format("%s", 123) == "123")
+    assert(string.format("%s", true) == "true")
+    assert(string.format("%s", nil) == "nil")
+    
+    -- Width and precision
+    assert(string.format("%10s", "hi") == "        hi")
+    assert(string.format("%-10s", "hi") == "hi        ")
+    assert(string.format("%.3s", "hello") == "hel")
+    
+    -- Integer formats
+    assert(string.format("%05d", 42) == "00042")
+    assert(string.format("%+d", 42) == "+42")
+    assert(string.format("% d", 42) == " 42")
+end
+
+local function string_format_error_cases_test()
+    -- Missing argument
+    checkerror("no value", string.format, "%d")
+end
+
+local function string_pack_error_cases_test()
+    -- Invalid format
+    checkerror("invalid format", string.pack, "%")
+    
+    -- Value out of range for format
+    checkerror("overflow", string.pack, "b", 200)  -- signed byte max is 127
+end
+
+local function string_unpack_error_cases_test()
+    -- Not enough data
+    checkerror("data string too short", string.unpack, "i4", "ab")
+    
+    -- Invalid format
+    checkerror("invalid format", string.unpack, "%", "test")
+end
+
+local function string_with_embedded_nulls_test()
+    local s = "hello\0world"
+    assert(#s == 11)
+    assert(string.byte(s, 6) == 0)
+    assert(string.sub(s, 7) == "world")
+    assert(string.find(s, "\0") == 6)
+end
+
+local function string_match_captures_test()
+    -- Multiple captures
+    local a, b, c = string.match("hello world test", "(%w+) (%w+) (%w+)")
+    assert(a == "hello" and b == "world" and c == "test")
+    
+    -- No captures returns whole match
+    assert(string.match("hello", "l+") == "ll")
+    
+    -- Position capture
+    local pos = string.match("hello", "()l")
+    assert(pos == 3)
+end
+
+local function string_gmatch_iteration_test()
+    local count = 0
+    local words = {}
+    for w in string.gmatch("hello world test", "%w+") do
+        count = count + 1
+        words[count] = w
+    end
+    assert(count == 3)
+    assert(words[1] == "hello" and words[2] == "world" and words[3] == "test")
+end
+
+local function string_gmatch_with_captures_test()
+    local pairs_t = {}
+    for k, v in string.gmatch("a=1,b=2,c=3", "(%w+)=(%w+)") do
+        pairs_t[k] = v
+    end
+    assert(pairs_t.a == "1" and pairs_t.b == "2" and pairs_t.c == "3")
+end
+
+local function very_long_string_concatenation_test()
+    local parts = {}
+    for i = 1, 1000 do
+        parts[i] = tostring(i)
+    end
+    local s = table.concat(parts)
+    assert(#s > 0)
+    assert(string.sub(s, 1, 1) == "1")
+end
+
+-- =====================================================================
+-- stringx: extended coverage for the string module.
+--
+-- This suite completes the partial-coverage gaps identified in the
+-- module-string audit that are not owned by other writers. It focuses on
+-- string.rep with a separator, the full negative and out-of-range index
+-- matrices for sub and byte, locale-independent upper and lower on
+-- non-ASCII bytes, len versus the length operator on embedded NUL bytes,
+-- string.char range and type errors, plain and magic-character find,
+-- reverse and comparison on strings with embedded NUL bytes, string
+-- methods dispatched through the shared string metatable, and the Lus
+-- trim, ltrim, rtrim, split, and join additions beyond what dataproc
+-- already covers. string.format is deliberately excluded because another
+-- writer owns it.
+-- =====================================================================
+
+
+-- =====================================================================
+-- string.rep with a separator and count boundaries.
+-- =====================================================================
+
+local string_rep_with_separator_cases = {
+    {"ab", 3, "-", "ab-ab-ab"},
+    {"ab", 1, "-", "ab"},
+    {"ab", 2, "", "abab"},
+    {"x", 4, ", ", "x, x, x, x"},
+    {"ab", 0, "-", ""},
+    {"ab", -3, "-", ""},
+    {"", 3, "-", "--"},
+    {"a", 1, "sep-ignored-when-single", "a"},
+}
+
+local function string_rep_with_separator_test(s, n, sep, expected)
+    assert(string.rep(s, n, sep) == expected)
+end
+
+local function string_rep_separator_only_appears_between_copies_test()
+    -- With n copies there are exactly n minus one separators, so counting
+    -- the separator occurrences pins down the placement.
+    local out = string.rep("z", 5, "|")
+    local count = select(2, string.gsub(out, "%|", ""))
+    assert(count == 4)
+    assert(out == "z|z|z|z|z")
+end
+
+local function string_rep_zero_count_with_separator_yields_empty_string_test()
+    assert(string.rep("anything", 0, "-") == "")
+end
+
+local function string_rep_overflow_raises_resulting_string_too_large_test()
+    raises(function()
+        return string.rep("abcdefgh", 0x7fffffffffffffff)
+    end, "resulting string too large")
+end
+
+-- =====================================================================
+-- string.sub full negative-index and out-of-range matrix.
+-- =====================================================================
+
+local string_sub_index_matrix_on_abcde_cases = {
+    {2, 4, "bcd"},
+    {-2, -1, "de"},
+    {-3, -1, "cde"},
+    {1, -1, "abcde"},
+    {-100, 100, "abcde"},
+    {-100, -50, ""},
+    {3, 100, "cde"},
+    {6, 10, ""},
+    {4, 2, ""},
+    {0, 0, ""},
+    {0, 3, "abc"},
+    {-1, -1, "e"},
+    {-5, -5, "a"},
+    {5, 5, "e"},
+}
+
+local function string_sub_index_matrix_on_abcde_test(i, j, expected)
+    assert(string.sub("abcde", i, j) == expected)
+end
+
+local function string_sub_with_only_i_defaults_j_to_end_test()
+    assert(string.sub("abcde", 3) == "cde")
+    assert(string.sub("abcde", -2) == "de")
+    assert(string.sub("abcde", 0) == "abcde")
+end
+
+-- =====================================================================
+-- string.byte full negative-index and out-of-range matrix.
+-- =====================================================================
+
+local string_byte_single_index_matrix_on_abc_cases = {
+    {1, 97},
+    {2, 98},
+    {3, 99},
+    {-1, 99},
+    {-2, 98},
+    {-3, 97},
+}
+
+local function string_byte_single_index_matrix_on_abc_test(i, expected)
+    assert(string.byte("abc", i) == expected)
+end
+
+local string_byte_out_of_range_single_index_returns_nil_cases = {
+    {0},
+    {4},
+    {-4},
+    {100},
+    {-100},
+}
+
+local function string_byte_out_of_range_single_index_returns_nil_test(i)
+    assert(string.byte("abc", i) == nil)
+end
+
+local function string_byte_range_clamps_to_available_bytes_test()
+    local a, b, c, d = string.byte("abc", 2, 10)
+    assert(a == 98)
+    assert(b == 99)
+    assert(c == nil)
+    assert(d == nil)
+end
+
+local function string_byte_with_i_greater_than_j_returns_nothing_test()
+    assert(select("#", string.byte("abc", 3, 1)) == 0)
+end
+
+local function string_byte_negative_range_spans_from_the_end_test()
+    local a, b = string.byte("abcde", -2, -1)
+    assert(a == 100)
+    assert(b == 101)
+end
+
+-- =====================================================================
+-- string.char vararg contract, range errors, and byte roundtrip.
+-- =====================================================================
+
+local function string_char_builds_a_string_from_many_byte_values_test()
+    assert(string.char(104, 101, 108, 108, 111) == "hello")
+end
+
+local function string_char_accepts_boundary_byte_values_test()
+    assert(string.byte(string.char(0)) == 0)
+    assert(string.byte(string.char(255)) == 255)
+end
+
+local function string_char_accepts_floats_with_integral_value_test()
+    assert(string.char(65.0) == "A")
+end
+
+-- string.char builds code points (spec/design/strings.md), so 256 and 1000 are valid.
+local string_char_rejects_out_of_range_codes_cases = {
+    {-1},
+    {0x110000},
+    {0x7FFFFFFF},
+}
+
+local function string_char_rejects_out_of_range_codes_test(code)
+    raises(function()
+        return string.char(code)
+    end, "value out of range")
+end
+
+local function string_char_rejects_a_non_number_argument_test()
+    raises(function()
+        return string.char("x")
+    end, "number expected")
+end
+
+local function string_char_rejects_a_fractional_number_test()
+    raises(function()
+        return string.char(1.5)
+    end, "number has no integer representation")
+end
+
+local function string_char_and_string_byte_roundtrip_on_binary_data_test()
+    -- Build a string that includes both boundary bytes and an interior NUL.
+    local s = string.char(0, 1, 65, 127, 128, 200, 255)
+    assert(string.char(string.byte(s, 1, #s)) == s)
+end
+
+-- =====================================================================
+-- string.upper and string.lower touch only ASCII letters, so high bytes
+-- pass through unchanged regardless of any locale.
+-- =====================================================================
+
+local string_upper_only_maps_ascii_lowercase_letters_cases = {
+    {"aZ9!", "AZ9!"},
+    {"hello", "HELLO"},
+    {"already UP", "ALREADY UP"},
+    {"", ""},
+}
+
+local function string_upper_only_maps_ascii_lowercase_letters_test(s, expected)
+    assert(string.upper(s) == expected)
+end
+
+local string_lower_only_maps_ascii_uppercase_letters_cases = {
+    {"Az9!", "az9!"},
+    {"WORLD", "world"},
+    {"already low", "already low"},
+    {"", ""},
+}
+
+local function string_lower_only_maps_ascii_uppercase_letters_test(s, expected)
+    assert(string.lower(s) == expected)
+end
+
+local function string_upper_leaves_high_non_ascii_bytes_untouched_test()
+    -- Bytes 200 and 255 are letters in some legacy locales but the
+    -- transformation must remain ASCII-only, so they stay put while the
+    -- interleaved ASCII letter is uppercased.
+    local s = string.char(200, 97, 255)
+    local up = string.upper(s)
+    assert(string.byte(up, 1) == 200)
+    assert(string.byte(up, 2) == 65)
+    assert(string.byte(up, 3) == 255)
+end
+
+local function string_lower_leaves_high_non_ascii_bytes_untouched_test()
+    local s = string.char(200, 65, 255)
+    local low = string.lower(s)
+    assert(string.byte(low, 1) == 200)
+    assert(string.byte(low, 2) == 97)
+    assert(string.byte(low, 3) == 255)
+end
+
+-- =====================================================================
+-- string.len and the length operator both count bytes, so embedded NUL
+-- bytes do not terminate the string the way a C string would.
+-- =====================================================================
+
+local function string_len_counts_embedded_nul_bytes_test()
+    local s = "a\0b\0c"
+    assert(string.len(s) == 5)
+    assert(#s == 5)
+    assert(string.len(s) == #s)
+end
+
+local function string_len_matches_length_operator_for_a_nul_only_string_test()
+    local s = string.char(0, 0, 0)
+    assert(string.len(s) == 3)
+    assert(#s == 3)
+end
+
+local function string_byte_reaches_bytes_after_an_embedded_nul_test()
+    local s = "a\0b"
+    assert(string.byte(s, 2) == 0)
+    assert(string.byte(s, 3) == 98)
+end
+
+-- =====================================================================
+-- string.reverse preserves and reorders embedded NUL bytes.
+-- =====================================================================
+
+local function string_reverse_reorders_bytes_across_an_embedded_nul_test()
+    local r = string.reverse("a\0b")
+    assert(string.byte(r, 1) == 98)
+    assert(string.byte(r, 2) == 0)
+    assert(string.byte(r, 3) == 97)
+end
+
+local function string_reverse_is_its_own_inverse_on_binary_data_test()
+    local s = string.char(0, 200, 1, 255, 0)
+    assert(string.reverse(string.reverse(s)) == s)
+end
+
+-- =====================================================================
+-- Comparison operators order strings byte by byte, including the NUL
+-- byte which sorts below every printable character.
+-- =====================================================================
+
+local string_comparison_respects_embedded_nul_bytes_cases = {
+    {"a\0b", "a\0c", true},
+    {"a\0", "a\0b", true},
+    {"a\0b", "a\0b", false},
+    {"a\0b", "ab", true},
+}
+
+local function string_comparison_respects_embedded_nul_bytes_test(left, right, expected)
+    assert((left < right) == expected)
+end
+
+local function strings_with_embedded_nul_compare_equal_only_when_identical_test()
+    assert("a\0b" == "a\0b")
+    assert("a\0b" ~= "a\0c")
+    assert(not ("a\0b" == "a\0"))
+end
+
+-- =====================================================================
+-- string.find plain search, magic characters, init offsets, captures,
+-- and malformed patterns.
+-- =====================================================================
+
+local function string_find_plain_search_treats_magic_characters_literally_test()
+    -- The dot is a magic character in patterns but a literal when plain
+    -- is true, so it must match the actual dot rather than any byte.
+    assert(string.find("hello.world", ".", 1, true) == 6)
+    assert(string.find("a+b*c?d", "+", 1, true) == 2)
+    assert(string.find("a+b*c?d", "*", 1, true) == 4)
+end
+
+local function string_find_plain_search_honors_a_nonzero_init_offset_test()
+    -- The first literal dot at position 2 is skipped when the search
+    -- starts later, so the next dot is reported instead.
+    assert(string.find("a.b.c", ".", 3, true) == 4)
+    assert(string.find("a.b", ".", 4, true) == nil)
+end
+
+local function string_find_returns_captures_after_the_two_indices_test()
+    local i, e, cap = string.find("abc123", "(%d+)")
+    assert(i == 4)
+    assert(e == 6)
+    assert(cap == "123")
+end
+
+local function string_find_accepts_a_negative_init_counting_from_the_end_test()
+    assert(string.find("hello", "l", -2) == 4)
+    assert(string.find("hello", "h", -100) == 1)
+end
+
+local function string_find_with_an_empty_pattern_honors_init_at_the_boundary_test()
+    -- An init one past the last byte still matches the empty string, but
+    -- an init beyond that returns nil.
+    assert(string.find("abc", "", 4) == 4)
+    assert(string.find("abc", "", 5) == nil)
+end
+
+local string_find_raises_on_a_malformed_pattern_cases = {
+    {"(", "unfinished capture"},
+    {"%", "malformed pattern"},
+    {"[a", "malformed pattern"},
+}
+
+local function string_find_raises_on_a_malformed_pattern_test(pattern, needle)
+    raises(function()
+        return string.find("x", pattern)
+    end, needle)
+end
+
+-- =====================================================================
+-- String methods dispatch through the shared string metatable, so a
+-- literal can call any string.* function with colon syntax.
+-- =====================================================================
+
+local function methods_on_a_string_literal_reach_the_string_library_test()
+    assert(("x"):rep(3) == "xxx")
+    assert(("x"):rep(3, "-") == "x-x-x")
+    assert(("abc"):reverse() == "cba")
+    assert(("aBc"):upper() == "ABC")
+    assert(("aBc"):lower() == "abc")
+    assert(("abcde"):sub(2, 4) == "bcd")
+    assert(("abc"):byte(2) == 98)
+    assert(("abc"):len() == 3)
+end
+
+local function method_dispatch_works_on_a_string_valued_variable_test()
+    local s = "Hello, World"
+    assert(s:lower() == "hello, world")
+    assert(s:sub(1, 5) == "Hello")
+    assert(s:find("World") == 8)
+end
+
+local function chained_string_methods_compose_left_to_right_test()
+    assert(("  Hi  "):trim():upper() == "HI")
+    assert(("abcabc"):reverse():sub(1, 3) == "cba")
+end
+
+-- =====================================================================
+-- Lus trim, ltrim, and rtrim edge cases beyond dataproc coverage.
+-- =====================================================================
+
+local string_trim_with_a_character_set_removes_any_listed_byte_cases = {
+    {"xyabcyx", "xy", "abc"},
+    {"yxyxabcxyxy", "xy", "abc"},
+    {"aaabaaa", "a", "b"},
+    {"...mid.point...", ".", "mid.point"},
+}
+
+local function string_trim_with_a_character_set_removes_any_listed_byte_test(s, chars, expected)
+    assert(string.trim(s, chars) == expected)
+end
+
+local function string_trim_with_an_empty_character_set_removes_nothing_test()
+    assert(string.trim("  a  ", "") == "  a  ")
+end
+
+local function string_trim_never_removes_interior_characters_test()
+    assert(string.trim("a b a", "a") == " b ")
+    assert(string.trim("ababXab", "ab") == "X")
+end
+
+local function string_trim_reduces_an_all_trim_char_string_to_empty_test()
+    assert(string.trim("xxxx", "x") == "")
+    assert(string.trim("   ") == "")
+end
+
+-- A false chars entry means the default whitespace behavior is exercised,
+-- which avoids a nil hole in the case table that table.unpack would treat
+-- as a truncation point.
+local string_ltrim_and_string_rtrim_strip_only_their_own_side_cases = {
+    {"ltrim", "xyabc", "yx", "abc"},
+    {"rtrim", "abcxy", "yx", "abc"},
+    {"ltrim", "  abc  ", false, "abc  "},
+    {"rtrim", "  abc  ", false, "  abc"},
+    {"ltrim", "abcxy", "yx", "abcxy"},
+    {"rtrim", "xyabc", "yx", "xyabc"},
+}
+
+local function string_ltrim_and_string_rtrim_strip_only_their_own_side_test(which, s, chars, expected)
+    local out
+    if which == "ltrim" then
+        out = chars and string.ltrim(s, chars) or string.ltrim(s)
+    else
+        out = chars and string.rtrim(s, chars) or string.rtrim(s)
+    end
+    assert(out == expected)
+end
+
+local function string_trim_handles_all_four_default_whitespace_bytes_test()
+    assert(string.trim(" \t\r\nhi \t\r\n") == "hi")
+end
+
+-- =====================================================================
+-- Lus split and join edge cases beyond dataproc coverage.
+-- =====================================================================
+
+local function string_split_keeps_a_trailing_empty_field_test()
+    local p = string.split("a,b,", ",")
+    assert(#p == 3)
+    assert(p[1] == "a")
+    assert(p[2] == "b")
+    assert(p[3] == "")
+end
+
+local function string_split_keeps_a_leading_empty_field_test()
+    local p = string.split(",a", ",")
+    assert(#p == 2)
+    assert(p[1] == "")
+    assert(p[2] == "a")
+end
+
+local function string_split_treats_the_delimiter_literally_test()
+    -- A dot is not a wildcard here, so only the actual dots split.
+    local p = string.split("a.b.c", ".")
+    assert(#p == 3)
+    assert(p[2] == "b")
+end
+
+local function string_split_works_around_embedded_nul_bytes_test()
+    local p = string.split("a\0b\0c", "\0")
+    assert(#p == 3)
+    assert(p[1] == "a")
+    assert(p[3] == "c")
+end
+
+local function string_split_of_only_delimiters_yields_all_empty_fields_test()
+    local p = string.split(",,", ",")
+    assert(#p == 3)
+    assert(p[1] == "")
+    assert(p[2] == "")
+    assert(p[3] == "")
+end
+
+local function string_join_converts_numbers_and_booleans_via_tostring_test()
+    assert(string.join({1, true, "x"}, "|") == "1|true|x")
+    assert(string.join({1.5, 2}, ",") == "1.5,2")
+end
+
+local function string_join_with_an_empty_delimiter_concatenates_elements_test()
+    assert(string.join({"a", "b", "c"}, "") == "abc")
+end
+
+local function string_join_round_trips_a_plain_split_test()
+    local s = "one,two,three"
+    assert(string.join(string.split(s, ","), ",") == s)
+end
+
+local function string_split_and_string_join_compose_through_method_syntax_test()
+    assert(("a-b-c"):split("-")[2] == "b")
+end

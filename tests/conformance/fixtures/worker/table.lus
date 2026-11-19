@@ -1,0 +1,6 @@
+-- table.lus - Worker test script that sends table messages
+global worker
+
+worker.message({1, 2, 3})
+worker.message({key = "value", num = 42})
+worker.message({nested = {a = 1, b = {2, 3}}})

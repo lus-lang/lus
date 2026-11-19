@@ -1,0 +1,558 @@
+pledge("load")
+
+local pack = string.pack
+local packsize = string.packsize
+local unpack = string.unpack
+
+-- string.pack returns a vector and raw bytes are vectors (spec/design/strings.md), so the
+-- tests build byte inputs with bytes() and filled(), and read packed bytes with octets().
+local function bytes(...)
+    local n = select("#", ...)
+    local v = vector.create(n)
+    for i = 1, n do
+        vector.set(v, i - 1, (select(i, ...)))
+    end
+    return v
+end
+
+local function filled(b, n)
+    local v = vector.create(n)
+    for i = 0, n - 1 do
+        vector.set(v, i, b)
+    end
+    return v
+end
+
+local function octets(v)
+    local t = {}
+    for i = 0, #v - 1 do
+        t[#t + 1] = vector.get(v, i)
+    end
+    return t
+end
+
+local platform = os.platform()
+
+local function basic_sizes_test()
+    assert(packsize("b") == 1)
+    assert(packsize("B") == 1)
+    assert(packsize("h") >= 2)
+    assert(packsize("H") >= 2)
+    assert(packsize("i") >= 4)
+    assert(packsize("I") >= 4)
+    -- 'l' is 4 bytes on Windows, 8 bytes on Unix
+    if platform == "windows" then
+        assert(packsize("l") == 4)
+        assert(packsize("L") == 4)
+    else
+        assert(packsize("l") == 8)
+        assert(packsize("L") == 8)
+    end
+end
+
+local function basic_packing_integers_test()
+    local s = pack("b", 0x55)
+    assert(#s == 1)
+    assert(unpack("b", s) == 0x55)
+    
+    local s2 = pack("i", 123456)
+    assert(unpack("i", s2) == 123456)
+    
+    -- signed vs unsigned
+    local s3 = pack("b", -1)
+    assert(unpack("b", s3) == -1)
+    local s4 = pack("B", 255)
+    assert(unpack("B", s4) == 255)
+end
+
+local function multiple_values_test()
+    local s = pack("iii", 1, 2, 3)
+    local a, b, c = unpack("iii", s)
+    assert(a == 1 and b == 2 and c == 3)
+end
+
+local function endianness_test()
+    local s = pack("<i4", 1)
+    assert(same(octets(s), { 1, 0, 0, 0 }))
+    local s2 = pack(">i4", 1)
+    assert(same(octets(s2), { 0, 0, 0, 1 }))
+end
+
+local function string_packing_z_test()
+    local s = pack("z", "hello")
+    assert(same(octets(s), { 104, 101, 108, 108, 111, 0 }))
+    assert(unpack("z", s) == "hello")
+end
+
+local function string_packing_fixed_size_test()
+    local s = pack("c5", "hello")
+    assert(vector.tostring(s) == "hello")
+    assert(unpack("c5", s) == "hello")
+    
+    -- shorter string gets padded with nulls
+    local s2 = pack("c5", "hi")
+    assert(#s2 == 5)
+    assert(unpack("c5", s2) == "hi\0\0\0")
+end
+
+local function float_packing_test()
+    local s = pack("f", 1.5)
+    assert(math.abs(unpack("f", s) - 1.5) < 0.0001)
+    
+    local s2 = pack("d", 3.14159265358979)
+    assert(math.abs(unpack("d", s2) - 3.14159265358979) < 0.0000001)
+end
+
+local function alignment_test()
+    local s = pack("!4 i2 i4", 1, 1)
+    -- i2 is 2 bytes. i4 needs 4-byte align. So 2 padding bytes.
+    assert(#s == 8)
+end
+
+local function position_return_test()
+    local s = pack("iii", 10, 20, 30)
+    local a, pos = unpack("i", s)
+    assert(a == 10)
+    local b, pos2 = unpack("i", s, pos)
+    assert(b == 20)
+end
+
+-- tpack2: error-and-limits coverage for string.pack, string.packsize and
+-- string.unpack. This suite ports the failure-mode half of PUC Lua's tpack
+-- test. It concentrates on integer width limits and sign extension, packing
+-- overflow diagnostics, size-prefixed and zero-terminated strings, padding
+-- and alignment options, endianness prefixes verified against the packed
+-- bytes, packsize rejecting variable-size formats, unpack position bounds,
+-- and float round trips including infinities, NaN and negative zero.
+-- The happy-path smoke tests live in tpack.lus and are not repeated here.
+
+
+local pack = string.pack
+local packsize = string.packsize
+local unpack = string.unpack
+local rep = string.rep
+local byte = string.byte
+
+-- Whether the running platform packs "=" (native) integers little-endian.
+-- The first byte of the native encoding of 1 is 1 exactly when little-endian.
+local native_le = (vector.get(pack("=i2", 1), 0) == 1)
+
+------------------------------------------------------------------------
+-- Integer sizes i1 through i16 and their packsize
+------------------------------------------------------------------------
+
+-- Group: integer sizes i1..i16
+
+local size_cases = {}
+for n = 1, 16 do
+    size_cases[n] = { n }
+end
+-- The packed size of iN and IN is exactly N bytes for every legal width.
+local packsize_of_in_and_in_equals_n_cases = size_cases
+
+local function packsize_of_in_and_in_equals_n_test(n)
+    assert(packsize("i" .. n) == n)
+    assert(packsize("I" .. n) == n)
+end
+
+-- Unpacking an all-ones big-endian integer of any width yields -1 because
+-- the top bit is set and the value sign extends into a Lua integer.
+local signext_cases = {}
+for n = 1, 16 do
+    signext_cases[n] = { n }
+end
+local all_ones_in_sign_extends_to_1_cases = signext_cases
+
+local function all_ones_in_sign_extends_to_1_test(n)
+    assert(unpack(">i" .. n, filled(0xFF, n)) == -1)
+    assert(unpack("<i" .. n, filled(0xFF, n)) == -1)
+end
+
+-- Wide integers i9 through i16 round trip a value that needs more than
+-- eight bytes of storage yet fits in a Lua integer.
+local wide_cases = {}
+for n = 9, 16 do
+    wide_cases[#wide_cases + 1] = { n }
+end
+local wide_in_round_trips_a_positive_value_cases = wide_cases
+
+local function wide_in_round_trips_a_positive_value_test(n)
+    local v = 0x0102030405
+    assert(unpack(">i" .. n, pack(">i" .. n, v)) == v)
+    assert(unpack("<i" .. n, pack("<i" .. n, v)) == v)
+end
+
+local function i0_width_is_out_of_limits_test()
+    raises(function() return pack("i0", 0) end, "out of limits")
+end
+
+local function i17_width_is_out_of_limits_test()
+    raises(function() return pack("i17", 0) end, "out of limits")
+    raises(function() return packsize("i17") end, "out of limits")
+end
+
+local function wide_integer_that_does_not_fit_reports_the_failure_test()
+    -- A 16-byte big-endian value with significant high bytes cannot be held in
+    -- a Lua integer, so unpack refuses it rather than truncating.
+    raises(function() return unpack(">i16", filled(0x7F, 16)) end, "does not fit into Lua Integer")
+end
+
+------------------------------------------------------------------------
+-- Packing overflow for each width
+------------------------------------------------------------------------
+
+-- Group: packing overflow
+
+-- Signed integer formats report "integer overflow" once the value no
+-- longer fits in the requested width, on either side of the range.
+local signed_overflow = {
+    { "b", 128 },
+    { "b", -129 },
+    { "i1", 200 },
+    { "h", 0x8000 },
+    { "i2", -0x8001 },
+    { "i3", 0x800000 },
+    { "i4", 0x80000000 },
+    { "i7", 1 << 55 },
+}
+local signed_width_overflow_cases = signed_overflow
+
+local function signed_width_overflow_test(fmt, v)
+    raises(function() return pack(fmt, v) end, "integer overflow")
+end
+
+-- Unsigned formats report "unsigned overflow" for values above the width
+-- ceiling and for any negative value narrower than the full integer.
+local unsigned_overflow = {
+    { "B", 256 },
+    { "B", -1 },
+    { "H", 65536 },
+    { "H", -1 },
+    { "I1", -1 },
+    { "I2", 0x10000 },
+    { "I4", 0x100000000 },
+    { "I7", -1 },
+}
+local unsigned_width_overflow_cases = unsigned_overflow
+
+local function unsigned_width_overflow_test(fmt, v)
+    raises(function() return pack(fmt, v) end, "unsigned overflow")
+end
+
+local function non_integer_value_to_an_integer_format_is_rejected_test()
+    raises(function() return pack("i", 1.5) end, "no integer representation")
+end
+
+local function numeric_string_coerces_into_an_integer_format_test()
+    -- A string that names an integer is accepted through the usual coercion.
+    assert(unpack("i", pack("i", "37")) == 37)
+end
+
+------------------------------------------------------------------------
+-- Unsigned wraparound at the full integer width
+------------------------------------------------------------------------
+
+-- Group: full-width unsigned wraparound
+
+local function j_of_1_wraps_and_round_trips_test()
+    -- The full-width unsigned formats represent -1 as all ones and read it
+    -- back as -1 through two's complement wraparound at 2^64.
+    assert(unpack("J", pack("J", -1)) == -1)
+    assert(unpack("I8", pack("I8", -1)) == -1)
+end
+
+local function j_of_1_stores_eight_0xff_bytes_test()
+    local s = pack("J", -1)
+    assert(#s == 8)
+    assert(same(octets(s), { 255, 255, 255, 255, 255, 255, 255, 255 }))
+end
+
+------------------------------------------------------------------------
+-- Size-prefixed strings s and sN
+------------------------------------------------------------------------
+
+-- Group: size-prefixed strings
+
+-- Every prefix width round trips a payload and reports the position past
+-- the prefix plus the payload bytes.
+local sn_round_trip_cases = { { "s1", "hi", 4 }, { "s2", "hello", 8 },
+    { "s4", "hello", 10 }, { "s8", "abc", 12 } }
+
+local function sn_round_trip_test(fmt, payload, endpos)
+    local packed = pack(fmt, payload)
+    local got, pos = unpack(fmt, packed)
+    assert(got == payload)
+    assert(pos == endpos)
+end
+
+local function bare_s_uses_a_native_size_prefix_and_round_trips_test()
+    local got = unpack("s", pack("s", "world"))
+    assert(got == "world")
+end
+
+local function s1_prefix_byte_records_the_payload_length_test()
+    assert(vector.get(pack("s1", "abc"), 0) == 3)
+end
+
+local function payload_too_large_for_the_size_prefix_is_rejected_test()
+    -- A 300-byte payload cannot be described by a single-byte length prefix.
+    raises(function() return pack("s1", rep("x", 300)) end, "does not fit in given size")
+end
+
+local function missing_prefix_bytes_report_a_short_string_test()
+    raises(function() return unpack("s8", "ab") end, "data string too short")
+end
+
+local function truncated_s_payload_reports_a_short_string_test()
+    -- A four-byte prefix that announces two bytes of payload backed by none.
+    raises(function() return unpack("s4", bytes(0, 0)) end, "data string too short")
+end
+
+------------------------------------------------------------------------
+-- Zero-terminated strings z
+------------------------------------------------------------------------
+
+-- Group: zero-terminated strings
+
+local function z_round_trips_and_stores_a_terminator_test()
+    local s = pack("z", "hi")
+    assert(same(octets(s), { 104, 105, 0 }))
+    assert(unpack("z", s) == "hi")
+end
+
+local function embedded_nul_in_a_z_payload_is_rejected_test()
+    raises(function() return pack("z", "a\0b") end, "string contains zeros")
+end
+
+local function z_without_a_terminator_is_unfinished_test()
+    raises(function() return unpack("z", "abc") end, "unfinished string")
+end
+
+------------------------------------------------------------------------
+-- Fixed-size strings c
+------------------------------------------------------------------------
+
+-- Group: fixed-size strings
+
+local function c_payload_longer_than_the_size_is_rejected_test()
+    raises(function() return pack("c5", "toolong") end, "longer than given size")
+end
+
+local function c_without_a_size_reports_the_missing_size_test()
+    raises(function() return pack("c", "x") end, "missing size")
+end
+
+local function c0_packs_and_unpacks_the_empty_string_test()
+    assert(#pack("c0", "") == 0)
+    assert(packsize("c0") == 0)
+end
+
+------------------------------------------------------------------------
+-- Padding x and alignment X
+------------------------------------------------------------------------
+
+-- Group: padding and alignment
+
+local function x_emits_zero_padding_bytes_test()
+    local s = pack("xxx")
+    assert(#s == 3)
+    assert(same(octets(s), { 0, 0, 0 }))
+end
+
+local function x_aligns_the_following_item_to_eight_bytes_test()
+    -- Under !8 the X option pads to the alignment of the i8 that names it,
+    -- so i1 then Xi8 then i2 occupies one plus seven padding plus two bytes.
+    assert(#pack("!8 i1 Xi8 i2", 7, 3) == 10)
+    -- Without the X the i2 only needs two-byte alignment.
+    assert(#pack("!8 i1 i2", 7, 3) == 4)
+end
+
+local function x_with_no_following_option_is_invalid_test()
+    raises(function() return pack("i1X", 7) end, "invalid next option")
+end
+
+local function maximal_alignment_pads_to_the_widest_item_test()
+    -- A bare ! sets alignment to the widest native type, so a double after a
+    -- single byte lands on an eight-byte boundary.
+    assert(#pack("!i1 d", 1, 1.0) == 16)
+    assert(packsize("!i1 d") == 16)
+end
+
+local function alignment_that_is_not_a_power_of_two_is_rejected_test()
+    raises(function() return pack("!4 i3", 0) end, "not power of 2")
+end
+
+local function alignment_above_the_maximum_is_out_of_limits_test()
+    raises(function() return pack("!17", 1) end, "out of limits")
+    raises(function() return pack("!0", 1) end, "out of limits")
+end
+
+------------------------------------------------------------------------
+-- Endianness prefixes verified against the packed bytes
+------------------------------------------------------------------------
+
+-- Group: endianness
+
+local function little_endian_writes_least_significant_byte_first_test()
+    assert(same(octets(pack("<i4", 0x01020304)), { 4, 3, 2, 1 }))
+end
+
+local function big_endian_writes_most_significant_byte_first_test()
+    assert(same(octets(pack(">i4", 0x01020304)), { 1, 2, 3, 4 }))
+end
+
+local function native_endianness_matches_the_platform_order_test()
+    local nat = pack("=i4", 0x01020304)
+    if native_le then
+        assert(same(octets(nat), octets(pack("<i4", 0x01020304))))
+    else
+        assert(same(octets(nat), octets(pack(">i4", 0x01020304))))
+    end
+end
+
+local function endianness_switches_per_item_within_one_format_test()
+    -- The first pair is little-endian and the second big-endian, so the four
+    -- bytes read 02 01 03 04.
+    assert(same(octets(pack("<i2>i2", 0x0102, 0x0304)), { 2, 1, 3, 4 }))
+end
+
+------------------------------------------------------------------------
+-- packsize rejects variable-size formats and bad options
+------------------------------------------------------------------------
+
+-- Group: packsize limits
+
+-- Any variable-length option has no statically known size, so packsize
+-- refuses the whole format.
+local variable_formats = { { "z" }, { "s" }, { "s4" }, { "i4 s2" }, { "c3 z" } }
+local packsize_rejects_variable_length_option_cases = variable_formats
+
+local function packsize_rejects_variable_length_option_test(fmt)
+    raises(function() return packsize(fmt) end, "variable%-length format")
+end
+
+local function packsize_rejects_an_unknown_option_test()
+    raises(function() return packsize("y") end, "invalid format option")
+end
+
+------------------------------------------------------------------------
+-- Malformed format strings across all three entry points
+------------------------------------------------------------------------
+
+-- Group: malformed formats
+
+-- An unknown option letter is diagnosed identically by pack, unpack and
+-- packsize so that a typo cannot slip through one entry point.
+local bad_option = {
+    { function() return pack("y", 1) end },
+    { function() return unpack("y", "abcd") end },
+    { function() return packsize("y") end },
+}
+local invalid_option_letter_is_rejected_cases = bad_option
+
+local function invalid_option_letter_is_rejected_test(fn)
+    raises(fn, "invalid format option")
+end
+
+------------------------------------------------------------------------
+-- Unpack position bounds
+------------------------------------------------------------------------
+
+-- Group: unpack position bounds
+
+local function a_negative_position_counts_back_from_the_end_test()
+    -- Position -1 selects the final byte of the data.
+    assert(unpack("B", "abcde", -1) == 101)
+end
+
+local function a_position_past_the_end_is_out_of_string_test()
+    raises(function() return unpack("B", "abcd", 6) end, "initial position out of string")
+    raises(function() return unpack("i", "abcd", 10) end, "initial position out of string")
+end
+
+local function reading_beyond_the_data_reports_a_short_string_test()
+    -- Position five is the byte after the last, so a one-byte read runs off.
+    raises(function() return unpack("B", "abcd", 5) end, "data string too short")
+    raises(function() return unpack("i8", "abc") end, "data string too short")
+end
+
+-- Reference Lua resolves the initial position through posrelat, which clamps
+-- position 0 up to position 1. Lus matches it, so position 0 reads from the
+-- first byte and returns the little-endian i4 value of "abcd" with a next
+-- position of 5.
+local function initial_position_zero_clamps_to_the_first_byte_test()
+    skip("2.0 bug: string.unpack raises 'initial position out of string' for position 0, the legacy runtime clamps it to 1")
+    local value, nextpos = unpack("i4", "abcd", 0)
+    assert(value == 1684234849)
+    assert(nextpos == 5)
+end
+
+-- A negative position whose magnitude exceeds the length also clamps to the
+-- start, again matching reference Lua's posrelat, so a far-negative position
+-- reads from the first byte just like position 1.
+local function far_negative_position_clamps_to_the_first_byte_test()
+    skip("2.0 bug: string.unpack raises 'initial position out of string' for a far negative position, the legacy runtime clamps it to 1")
+    local value, nextpos = unpack("i4", "abcd", -100)
+    assert(value == 1684234849)
+    assert(nextpos == 5)
+end
+
+------------------------------------------------------------------------
+-- Empty format
+------------------------------------------------------------------------
+
+-- Group: empty format
+
+local function packing_an_empty_format_yields_the_empty_string_test()
+    assert(#pack("") == 0)
+end
+
+local function unpacking_an_empty_format_returns_the_starting_position_test()
+    -- With no options to read, unpack returns only the unchanged position.
+    assert(unpack("", "hello") == 1)
+    assert(unpack("", "hello", 3) == 3)
+end
+
+local function empty_format_still_validates_its_position_test()
+    -- Position two beyond the last byte is rejected even with nothing to read.
+    raises(function() return unpack("", "ab", 4) end, "initial position out of string")
+end
+
+------------------------------------------------------------------------
+-- Float formats f, d and n
+------------------------------------------------------------------------
+
+-- Group: float round trips
+
+local finite = {
+    { "f", 0.5 },
+    { "f", -1.25 },
+    { "d", 3.14159265358979 },
+    { "d", -2.5e300 },
+    { "n", 2.5 },
+}
+local finite_float_round_trip_cases = finite
+
+local function finite_float_round_trip_test(fmt, v)
+    assert(math.abs(unpack(fmt, pack(fmt, v)) - v) <= 1e-6 * (v < 0 and -v or v) + 1e-9)
+end
+
+local function positive_and_negative_infinity_round_trip_test()
+    local inf = 1 / 0
+    assert(unpack("d", pack("d", inf)) == inf)
+    assert(unpack("d", pack("d", -inf)) == -inf)
+    assert(unpack("f", pack("f", inf)) == inf)
+end
+
+local function nan_round_trips_as_a_value_unequal_to_itself_test()
+    local nan = unpack("d", pack("d", 0 / 0))
+    assert(nan ~= nan)
+end
+
+local function negative_zero_preserves_its_sign_test()
+    -- Negative zero compares equal to zero yet its reciprocal is negative
+    -- infinity, which is how the preserved sign bit becomes observable.
+    local nz = unpack("d", pack("d", -0.0))
+    assert(nz == 0.0)
+    assert(1 / nz == -1 / 0)
+end

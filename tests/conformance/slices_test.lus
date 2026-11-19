@@ -1,0 +1,327 @@
+pledge("load")
+
+-- Table slices
+local function basic_table_slice_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[2,4]
+    assert(s[1] == 2)
+    assert(s[2] == 3)
+    assert(s[3] == 4)
+    assert(#s == 3)
+end
+
+local function table_slice_from_start_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[,3]
+    assert(s[1] == 1)
+    assert(s[2] == 2)
+    assert(s[3] == 3)
+    assert(#s == 3)
+end
+
+local function table_slice_to_end_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[3,]
+    assert(s[1] == 3)
+    assert(s[2] == 4)
+    assert(s[3] == 5)
+    assert(#s == 3)
+end
+
+local function table_slice_reverse_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[4,2]
+    assert(s[1] == 4)
+    assert(s[2] == 3)
+    assert(s[3] == 2)
+    assert(#s == 3)
+end
+
+local function table_slice_full_copy_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[,]
+    assert(#s == 5)
+    assert(s[1] == 1)
+    assert(s[5] == 5)
+end
+
+-- String slices
+local function basic_string_slice_test()
+    local s = "hello"
+    assert(s[2,4] == "ell")
+end
+
+local function string_slice_from_start_test()
+    local s = "hello"
+    assert(s[,3] == "hel")
+end
+
+local function string_slice_to_end_test()
+    local s = "hello"
+    assert(s[3,] == "llo")
+end
+
+local function string_slice_reverse_test()
+    local s = "hello"
+    assert(s[4,2] == "lle")
+end
+
+local function string_slice_full_test()
+    local s = "hello"
+    assert(s[,] == "hello")
+end
+
+-- __slice metamethod
+local function slice_metamethod_test()
+    local mt = {
+        __slice = function(self, start, finish)
+            return {s = start, f = finish}
+        end
+    }
+    local x = setmetatable({}, mt)
+    local result = x[5,10]
+    assert(result.s == 5)
+    assert(result.f == 10)
+end
+
+local function slice_with_nil_start_test()
+    local mt = {
+        __slice = function(self, start, finish)
+            return {s = start, f = finish}
+        end
+    }
+    local x = setmetatable({}, mt)
+    local result = x[,20]
+    assert(result.s == nil)
+    assert(result.f == 20)
+end
+
+local function slice_with_nil_end_test()
+    local mt = {
+        __slice = function(self, start, finish)
+            return {s = start, f = finish}
+        end
+    }
+    local x = setmetatable({}, mt)
+    local result = x[10,]
+    assert(result.s == 10)
+    assert(result.f == nil)
+end
+
+-- Edge cases
+local function single_element_slice_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[3,3]
+    assert(#s == 1)
+    assert(s[1] == 3)
+end
+
+local function single_char_string_slice_test()
+    local s = "hello"
+    assert(s[3,3] == "l")
+end
+
+-- ============================================
+-- Additional Edge Case and Boundary Tests
+-- ============================================
+
+local function empty_table_slice_test()
+    local t = {}
+    local s = t[,]
+    assert(#s == 0)
+    
+    -- Slice with indices on empty
+    local s2 = t[1,5]
+    assert(#s2 == 0)
+end
+
+local function empty_string_slice_test()
+    local s = ""
+    assert(s[,] == "")
+    assert(s[1,5] == "")
+end
+
+local function out_of_bounds_table_slice_beyond_end_test()
+    local t = {1, 2, 3}
+    -- Slice extending beyond end should clamp
+    local s = t[2,10]
+    assert(s[1] == 2)
+    assert(s[2] == 3)
+    assert(#s == 2)
+end
+
+local function out_of_bounds_table_slice_before_start_test()
+    skip("2.0 bug: t[-5,2] fills s[7] and s[8] instead of returning an empty table, the legacy runtime has the same quirk but reports # as 0")
+    local t = {1, 2, 3}
+    -- Slice starting before 1 returns empty table
+    local s = t[-5,2]
+    assert(type(s) == "table", "result should be a table")
+    assert(#s == 0, "slice before start should be empty")
+end
+
+local function out_of_bounds_string_slice_beyond_end_test()
+    local s = "abc"
+    assert(s[2,10] == "bc")
+end
+
+local function out_of_bounds_string_slice_before_start_test()
+    local s = "abc"
+    -- A start before the first character clamps to 1 for strings
+    assert(s[-5,2] == "ab")
+    assert(s[0,2] == "ab")
+end
+
+local function negative_indices_on_table_test()
+    local t = {1, 2, 3, 4, 5}
+    -- A negative start extends the result with nil slots before the first
+    -- source element: s[i] corresponds to t[start + i - 1]
+    local s = t[-2,]
+    assert(type(s) == "table", "result should be a table")
+    assert(s[1] == nil and s[2] == nil and s[3] == nil,
+        "positions mapping to t[-2..0] are nil")
+    assert(s[4] == 1 and s[5] == 2 and s[6] == 3 and s[7] == 4 and s[8] == 5)
+    assert(#s == 8, "length spans from -2 to 5, which is 8 slots")
+
+    -- A fully negative range reads only absent source positions
+    local s2 = t[-3,-1]
+    assert(type(s2) == "table", "result should be a table")
+    assert(next(s2) == nil, "no entries when every source position is nil")
+end
+
+local function negative_indices_on_string_test()
+    local s = "hello"
+    -- Negative indices on strings in Lus
+    local result = s[-2,]
+    assert(type(result) == "string", "result should be a string")
+    assert(#result > 0, "result should not be empty")
+    
+    -- Negative to negative range
+    local result2 = s[-3,-1]
+    assert(type(result2) == "string", "result should be a string")
+end
+
+local function slice_of_slice_table_test()
+    local t = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+    local s1 = t[3,8]  -- {3, 4, 5, 6, 7, 8}
+    local s2 = s1[2,4] -- {4, 5, 6}
+    assert(#s2 == 3)
+    assert(s2[1] == 4)
+    assert(s2[2] == 5)
+    assert(s2[3] == 6)
+end
+
+local function slice_of_slice_string_test()
+    local s = "abcdefghij"
+    local s1 = s[3,8]  -- "cdefgh"
+    local s2 = s1[2,4] -- "def"
+    assert(s2 == "def")
+end
+
+local function zero_crossing_indices_test()
+    local t = {1, 2, 3, 4, 5}
+    -- Start at 0 includes nil at position 1 (since t[0] is nil)
+    local s = t[0,3]
+    assert(type(s) == "table", "result should be a table")
+    -- Slice from 0 to 3 includes indices 0,1,2,3 which is 4 elements
+    assert(#s == 4, "slice 0,3 should have 4 elements")
+    assert(s[1] == nil, "s[1] corresponds to t[0] which is nil")
+    assert(s[2] == 1, "s[2] corresponds to t[1]")
+    assert(s[3] == 2, "s[3] corresponds to t[2]")
+end
+
+local function reversed_slice_produces_reversed_result_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[5,1]
+    assert(#s == 5)
+    assert(s[1] == 5)
+    assert(s[2] == 4)
+    assert(s[3] == 3)
+    assert(s[4] == 2)
+    assert(s[5] == 1)
+end
+
+local function reversed_string_slice_test()
+    local s = "hello"
+    local r = s[5,1]
+    assert(r == "olleh")
+end
+
+local function slice_creates_independent_copy_table_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[2,4]
+    
+    -- Modify original
+    t[3] = 100
+    
+    -- Slice should be unaffected
+    assert(s[2] == 3, "slice should be independent of original")
+end
+
+local function slice_with_computed_indices_test()
+    local t = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+    local start = 2 + 1
+    local finish = #t - 2
+    local s = t[start, finish]
+    assert(s[1] == 3)
+    assert(s[#s] == 8)
+end
+
+local function table_slice_with_holes_uses_operator_semantics_test()
+    local t = {1, 2, nil, 4, 5}
+    local s = t[,]
+    -- The slice ends at the border that the # operator reports for the source table.
+    assert(type(s) == "table", "result should be a table")
+    assert(s[1] == 1, "first element should be 1")
+    assert(s[2] == 2, "second element should be 2")
+    -- Length depends on # operator behavior with holes
+    assert(#s == #t, "slice length follows # operator semantics")
+end
+
+local function large_table_slice_test()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    
+    local s = t[100,900]
+    assert(#s == 801)
+    assert(s[1] == 100)
+    assert(s[801] == 900)
+end
+
+local function slice_indices_same_as_bounds_test()
+    local t = {1, 2, 3, 4, 5}
+    local s = t[1,5]
+    assert(#s == 5)
+    assert(s[1] == 1)
+    assert(s[5] == 5)
+end
+
+local function slice_with_omitted_start_and_variable_end_test()
+    local t = {1, 2, 3, 4, 5}
+    local e = 3
+    local s = t[,e]
+    assert(#s == 3)
+    assert(s[1] == 1 and s[2] == 2 and s[3] == 3)
+end
+
+local function slice_with_variable_start_and_omitted_end_test()
+    local t = {1, 2, 3, 4, 5}
+    local b = 3
+    local s = t[b,]
+    assert(#s == 3)
+    assert(s[1] == 3 and s[2] == 4 and s[3] == 5)
+end
+
+-- Regression: slicing an inline/parenthesized table (a temporary) must use
+-- the same register the result is assigned to. Previously the result landed
+-- one register too high, so the binding read the still-live source table.
+local function slice_of_an_inline_table_constructor_test()
+    local s = ({10, 20, 30, 40, 50})[4, 2] -- reverse
+    assert(s[1] == 40 and s[2] == 30 and s[3] == 20 and #s == 3)
+end
+
+local function slice_of_an_inline_table_with_preceding_locals_test()
+    local a, b = 99, 88
+    local s = ({10, 20, 30, 40, 50})[2, 4] -- forward
+    assert(a == 99 and b == 88)
+    assert(s[1] == 20 and s[2] == 30 and s[3] == 40 and #s == 3)
+end

@@ -1,0 +1,112 @@
+--[[
+  Operand variable-name parity (`luaG_opinterror` / `luaG_concaterror` /
+  `luaG_tointerror`). When an arithmetic, bitwise, concat, length, or unary
+  operator faults on a value, the C runtime names the offending operand's
+  source variable, such as `(local 'x')`, `(field 'k')`, `(global 'g')`, or
+  `(upvalue 'x')`, in the error message. These tests assert the Rust runtime
+  produces the identical suffix; they pass on both the C and Rust binaries.
+
+  `catch` yields the error with a traceback appended, so the assertions match
+  the suffix as a substring of the first line rather than anchoring to the end.
+]]
+
+pledge("load")
+
+-- ---- arithmetic ----
+
+local function arithmetic_names_a_local_operand_on_either_side_test()
+    local x
+    local ok, e = catch (x + 1)
+    assert(not ok)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+    ok, e = catch (1 + x)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+end
+
+local function arithmetic_names_a_table_local_non_leaf_operand_test()
+    local x = {}
+    local ok, e = catch (x + 1)
+    assert(tostring(e):find("a table value %(local 'x'%)"), tostring(e))
+end
+
+local function arithmetic_names_a_field_operand_test()
+    local t = {}
+    local ok, e = catch (t.k + 1)
+    assert(tostring(e):find("a nil value %(field 'k'%)"), tostring(e))
+end
+
+local function arithmetic_names_a_global_operand_test()
+    local ok, e = catch (undefined_global + 1)
+    assert(tostring(e):find("a nil value %(global 'undefined_global'%)"), tostring(e))
+end
+
+local function arithmetic_names_an_upvalue_operand_test()
+    local x
+    local function f() return x + 1 end
+    local ok, e = catch f()
+    assert(tostring(e):find("a nil value %(upvalue 'x'%)"), tostring(e))
+end
+
+local function arithmetic_with_a_string_operand_keeps_the_binary_form_no_var_test()
+    local x = "abc"
+    local ok, e = catch (x + 1)
+    assert(tostring(e):find("attempt to add a 'string' with a 'number'"), tostring(e))
+end
+
+-- ---- bitwise ----
+
+local function bitwise_names_a_local_operand_test()
+    local x
+    local ok, e = catch (x & 1)
+    assert(tostring(e):find("bitwise operation on a nil value %(local 'x'%)"), tostring(e))
+end
+
+local function no_integer_representation_names_the_operand_mid_message_test()
+    local x = 1.5
+    local ok, e = catch (x & 1)
+    assert(tostring(e):find("number %(local 'x'%) has no integer representation"), tostring(e))
+    -- a bare non-integer constant carries no variable info
+    ok, e = catch (1.5 & 1)
+    assert(tostring(e):find("number has no integer representation"), tostring(e))
+end
+
+-- ---- concatenation ----
+
+local function concat_names_the_offending_operand_on_either_side_test()
+    local x
+    local ok, e = catch (x .. "y")
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+    ok, e = catch ("y" .. x)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+end
+
+-- ---- length ----
+
+local function length_names_a_local_operand_test()
+    local x = true
+    local ok, e = catch (#x)
+    assert(tostring(e):find("a boolean value %(local 'x'%)"), tostring(e))
+end
+
+-- ---- unary ----
+
+local function unary_minus_names_a_local_operand_test()
+    local x
+    local ok, e = catch (-x)
+    assert(tostring(e):find("a nil value %(local 'x'%)"), tostring(e))
+end
+
+local function unary_bnot_names_a_local_operand_test()
+    local x
+    local ok, e = catch (~x)
+    assert(tostring(e):find("bitwise operation on a nil value %(local 'x'%)"), tostring(e))
+end
+
+-- ---- metamethods must not be re-annotated ----
+
+local function an_error_raised_inside_a_metamethod_keeps_its_own_variable_name_test()
+    local t = setmetatable({}, {__add = function() local y; return y + 1 end})
+    local ok, e = catch (t + 1)
+    -- the inner 'y', not the outer 't'
+    assert(tostring(e):find("a nil value %(local 'y'%)"), tostring(e))
+end

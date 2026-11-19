@@ -1,0 +1,641 @@
+-- Table semantic invariants: border definitions with holes, float key
+-- normalization, NaN and nil key validation, integer-limit keys, next
+-- traversal rules, table.create, rehash shrink and regrow cycles, and the
+-- __len metamethod boundary. The baseline contract is Lua 5.5 semantics as
+-- adjusted by the Lus spec in lus-spec/stdlib.
+
+pledge("load")
+
+-- A border of table t is a non-negative integer n such that t[n + 1] is nil
+-- and either n is zero or t[n] is not nil. The length operator may return
+-- any border, so tests on tables with holes assert border membership rather
+-- than one particular value.
+local function is_border(t, n)
+    if type(n) ~= "number" or math.type(n) ~= "integer" or n < 0 then
+        return false
+    end
+    if t[n + 1] ~= nil then
+        return false
+    end
+    return n == 0 or t[n] ~= nil
+end
+
+-- ============================================================
+-- Length operator and borders
+-- ============================================================
+
+local function length_of_an_empty_table_is_zero_test()
+    assert(#{} == 0)
+end
+
+local function length_of_1_nil_3_is_one_of_its_valid_borders_test()
+    local t = {1, nil, 3}
+    assert(is_border(t, #t))
+    assert(#t == 1 or #t == 3)
+end
+
+local function length_of_a_constructor_with_a_trailing_nil_is_the_unique_border_test()
+    -- The only border of {1, 2, nil} is 2, because a border position other
+    -- than zero must itself hold a non-nil value.
+    local t = {1, 2, nil}
+    assert(#t == 2)
+    assert(is_border(t, #t))
+end
+
+local function clearing_the_last_element_moves_the_border_down_test()
+    local t = {1, 2, 3}
+    t[3] = nil
+    assert(#t == 2)
+    assert(is_border(t, #t))
+end
+
+local function length_of_a_sparse_table_is_a_valid_border_test()
+    local t = {}
+    t[1] = "low"
+    t[1 << 30] = "high"
+    local n = #t
+    assert(is_border(t, n))
+    assert(n == 1 or n == (1 << 30))
+end
+
+local function appending_at_the_length_grows_it_by_exactly_one_each_time_test()
+    local t = {}
+    for i = 1, 50 do
+        t[#t + 1] = i * 3
+        assert(#t == i)
+    end
+    assert(t[50] == 150)
+end
+
+local function a_hash_only_table_has_length_zero_test()
+    local t = {alpha = 1, beta = 2, gamma = 3}
+    assert(#t == 0)
+    assert(is_border(t, 0))
+end
+
+-- ============================================================
+-- Float keys normalize to integer keys
+-- ============================================================
+
+local a_float_key_with_an_integral_value_aliases_the_integer_key_cases = {
+    {2.0, 2},
+    {0.0, 0},
+    {-0.0, 0},
+    {7.0, 7},
+    {-3.0, -3},
+    {2.0 ^ 53, 9007199254740992},
+}
+
+local function a_float_key_with_an_integral_value_aliases_the_integer_key_test(fkey, ikey)
+    local t = {}
+    t[fkey] = "stored"
+    assert(t[ikey] == "stored")
+    assert(rawget(t, ikey) == "stored")
+end
+
+local function writing_an_integer_key_and_reading_its_float_form_aliases_test()
+    local t = {}
+    t[3] = "x"
+    assert(t[3.0] == "x")
+end
+
+local function traversal_reports_the_normalized_integer_key_after_a_float_write_test()
+    local t = {}
+    t[7.0] = true
+    local k = next(t)
+    assert(k == 7)
+    assert(math.type(k) == "integer")
+end
+
+local function a_minus_zero_write_produces_the_integer_key_zero_test()
+    local t = {}
+    t[-0.0] = "mz"
+    local k = next(t)
+    assert(k == 0)
+    assert(math.type(k) == "integer")
+    assert(t[0] == "mz")
+end
+
+local function a_non_integral_float_key_stays_a_float_key_test()
+    local t = {}
+    t[2.5] = "half"
+    assert(t[2] == nil)
+    assert(t[3] == nil)
+    assert(t[2.5] == "half")
+    assert(math.type((next(t))) == "float")
+end
+
+local function the_string_key_2_is_distinct_from_the_number_key_2_test()
+    local t = {}
+    t["2"] = "str"
+    t[2] = "num"
+    assert(t["2"] == "str")
+    assert(t[2] == "num")
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    assert(count == 2)
+end
+
+local function the_float_form_of_mininteger_aliases_the_mininteger_key_test()
+    -- mininteger is exactly representable as a float, so the float form
+    -- converts back and lands on the same key.
+    local t = {}
+    t[math.mininteger] = "min"
+    assert(t[math.mininteger + 0.0] == "min")
+end
+
+local function the_float_form_of_maxinteger_is_a_distinct_key_test()
+    -- maxinteger + 0.0 rounds up to 2^63, which has no integer
+    -- representation, so it remains a separate float key.
+    local t = {}
+    t[math.maxinteger] = "imax"
+    assert(t[math.maxinteger + 0.0] == nil)
+    t[math.maxinteger + 0.0] = "fmax"
+    assert(t[math.maxinteger] == "imax")
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    assert(count == 2)
+end
+
+-- ============================================================
+-- NaN and nil keys
+-- ============================================================
+
+local function assigning_through_a_nan_key_raises_with_position_info_test()
+    local ok, err = catch (function()
+        local t = {}
+        t[0 / 0] = 1
+    end)()
+    assert(not ok)
+    assert(string.find(tostring(err), ":%d+: table index is NaN"))
+end
+
+local function assigning_through_a_nil_key_raises_with_position_info_test()
+    local ok, err = catch (function()
+        local t = {}
+        t[nil] = 1
+    end)()
+    assert(not ok)
+    assert(string.find(tostring(err), ":%d+: table index is nil"))
+end
+
+local function a_computed_nan_key_raises_the_same_error_test()
+    raises(function()
+        local t = {}
+        t[math.huge - math.huge] = 1
+    end, "table index is NaN")
+end
+
+local function rawset_with_a_nan_key_raises_without_position_info_test()
+    local ok, err = catch rawset({}, 0 / 0, 1)
+    assert(not ok)
+    local msg = tostring(err)
+    assert(string.find(msg, "table index is NaN"))
+    assert(not string.find(msg, ":%d+: table index is NaN"))
+end
+
+local function rawset_with_a_nil_key_raises_without_position_info_test()
+    local ok, err = catch rawset({}, nil, 1)
+    assert(not ok)
+    local msg = tostring(err)
+    assert(string.find(msg, "table index is nil"))
+    assert(not string.find(msg, ":%d+: table index is nil"))
+end
+
+local function rawset_validates_keys_even_when_a_newindex_metamethod_exists_test()
+    local t = setmetatable({}, {__newindex = function() end})
+    raises(function() rawset(t, nil, 1) end, "table index is nil")
+    raises(function() rawset(t, 0 / 0, 1) end, "table index is NaN")
+end
+
+local function reading_through_a_nan_key_returns_nil_test()
+    local t = {1, 2}
+    assert(t[0 / 0] == nil)
+end
+
+local function rawget_with_a_nan_key_returns_nil_test()
+    assert(rawget({1, 2}, 0 / 0) == nil)
+end
+
+local function reading_through_a_nil_key_returns_nil_test()
+    local t = {a = 1}
+    local k = nil
+    assert(t[k] == nil)
+end
+
+local function assigning_nil_to_an_absent_key_is_a_legal_no_op_test()
+    local t = {}
+    t.absent = nil
+    assert(next(t) == nil)
+end
+
+local function a_newindex_function_receives_nil_keys_instead_of_erroring_test()
+    -- Key validation applies to the raw store only. When a metamethod
+    -- handles the assignment, the invalid key reaches it untouched.
+    local got = "unset"
+    local t = setmetatable({}, {__newindex = function(_, k, v)
+        got = tostring(k) .. "=" .. tostring(v)
+    end})
+    t[nil] = 5
+    assert(got == "nil=5")
+end
+
+local function a_newindex_function_receives_nan_keys_instead_of_erroring_test()
+    local got_key = nil
+    local t = setmetatable({}, {__newindex = function(_, k, _)
+        got_key = k
+    end})
+    t[0 / 0] = 1
+    assert(type(got_key) == "number")
+    assert(got_key ~= got_key)
+end
+
+local function an_index_function_receives_nil_keys_on_reads_test()
+    local t = setmetatable({}, {__index = function(_, k)
+        return "via:" .. tostring(k)
+    end})
+    local k = nil
+    assert(t[k] == "via:nil")
+end
+
+-- ============================================================
+-- Integer-limit keys
+-- ============================================================
+
+local function maxinteger_and_mininteger_keys_store_and_retrieve_test()
+    local t = {}
+    t[math.maxinteger] = "max"
+    t[math.mininteger] = "min"
+    assert(t[math.maxinteger] == "max")
+    assert(t[math.mininteger] == "min")
+end
+
+local function limit_keys_traverse_exactly_once_alongside_the_array_part_test()
+    local t = {10, 20, 30}
+    t[math.maxinteger] = "max"
+    t[math.mininteger] = "min"
+    local seen = {}
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        assert(seen[k] == nil)
+        seen[k] = v
+    end
+    assert(count == 5)
+    assert(seen[math.maxinteger] == "max")
+    assert(seen[math.mininteger] == "min")
+    assert(seen[2] == 20)
+end
+
+local function deleting_limit_keys_removes_them_completely_test()
+    local t = {}
+    t[math.maxinteger] = 1
+    t[math.mininteger] = 2
+    t[math.maxinteger] = nil
+    t[math.mininteger] = nil
+    assert(t[math.maxinteger] == nil)
+    assert(t[math.mininteger] == nil)
+    assert(next(t) == nil)
+end
+
+-- ============================================================
+-- next semantics
+-- ============================================================
+
+local function next_on_an_empty_table_returns_nil_test()
+    assert(next({}) == nil)
+end
+
+local function next_with_a_nil_key_returns_the_first_pair_test()
+    local t = {only = 42}
+    local k, v = next(t, nil)
+    assert(k == "only")
+    assert(v == 42)
+end
+
+local function next_with_an_absent_string_key_raises_invalid_key_test()
+    raises(function()
+        next({a = 1, b = 2}, "zz")
+    end, "invalid key to 'next'")
+end
+
+local function next_with_an_absent_float_key_raises_invalid_key_test()
+    raises(function()
+        next({a = 1}, 2.5)
+    end, "invalid key to 'next'")
+end
+
+local function next_on_a_non_table_raises_a_type_error_naming_next_test()
+    raises(function()
+        next(nil)
+    end, "bad argument #1 to 'next'")
+end
+
+local function manual_traversal_may_delete_the_current_key_and_continue_test()
+    -- Clearing the field the cursor sits on is explicitly legal, and every
+    -- other key must still be visited exactly once.
+    local t = {}
+    for i = 1, 30 do t["k" .. i] = i end
+    local count = 0
+    local k = next(t)
+    while k ~= nil do
+        local dead = k
+        t[dead] = nil
+        count = count + 1
+        k = next(t, dead)
+    end
+    assert(count == 30)
+    assert(next(t) == nil)
+end
+
+local function a_pairs_loop_may_delete_the_current_key_test()
+    local t = {}
+    for i = 1, 25 do t["field" .. i] = i end
+    local visited = 0
+    for k in pairs(t) do
+        visited = visited + 1
+        t[k] = nil
+    end
+    assert(visited == 25)
+    assert(next(t) == nil)
+end
+
+local function delete_as_you_go_works_across_array_and_hash_parts_test()
+    local t = {1, 2, 3, 4, 5}
+    for i = 1, 10 do t["h" .. i] = i end
+    local visited = 0
+    for k in pairs(t) do
+        visited = visited + 1
+        t[k] = nil
+    end
+    assert(visited == 15)
+    assert(next(t) == nil)
+    assert(#t == 0)
+end
+
+local function changing_values_during_traversal_is_fully_legal_test()
+    local t = {a = 1, b = 2, c = 3, d = 4}
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        t[k] = v * 10
+    end
+    assert(count == 4)
+    assert(t.a == 10)
+    assert(t.d == 40)
+end
+
+-- ============================================================
+-- Mixed key type traversal completeness
+-- ============================================================
+
+local function pairs_visits_every_key_type_exactly_once_test()
+    local tab_key = {}
+    local fn_key = function() end
+    local t = {
+        [true] = "T",
+        [false] = "F",
+        [tab_key] = "tab",
+        [fn_key] = "fn",
+        [42] = "int",
+        [2.5] = "float",
+        s = "str",
+    }
+    local counts = {}
+    local total = 0
+    for k in pairs(t) do
+        total = total + 1
+        counts[k] = (counts[k] or 0) + 1
+    end
+    assert(total == 7)
+    for _, k in ipairs({true, false, tab_key, fn_key, 42, 2.5, "s"}) do
+        assert(counts[k] == 1)
+    end
+end
+
+local function mixed_array_and_hash_traversal_collects_the_complete_pair_set_test()
+    local t = {}
+    local expected = {}
+    for i = 1, 8 do
+        t[i] = i * 100
+        expected[i] = i * 100
+    end
+    for _, name in ipairs({"a", "b", "c", "d", "e"}) do
+        t[name] = name .. "!"
+        expected[name] = name .. "!"
+    end
+    local collected = {}
+    for k, v in pairs(t) do
+        assert(collected[k] == nil)
+        collected[k] = v
+    end
+    assert(same(collected, expected))
+end
+
+-- ============================================================
+-- table.create
+-- ============================================================
+
+local function table_create_returns_an_empty_usable_table_test()
+    local t = table.create(10, 5)
+    assert(type(t) == "table")
+    assert(#t == 0)
+    assert(next(t) == nil)
+    t[1] = "works"
+    assert(t[1] == "works")
+end
+
+local function a_preallocated_array_accepts_full_population_test()
+    local t = table.create(1000)
+    for i = 1, 1000 do t[i] = i * 2 end
+    assert(#t == 1000)
+    assert(t[1] == 2)
+    assert(t[500] == 1000)
+    assert(t[1000] == 2000)
+end
+
+local function table_create_accepts_the_single_argument_form_test()
+    local t = table.create(8)
+    assert(next(t) == nil)
+    for i = 1, 8 do t[i] = i end
+    assert(#t == 8)
+end
+
+local function table_create_accepts_zero_sizes_test()
+    local t = table.create(0, 0)
+    assert(next(t) == nil)
+    t.k = 1
+    t[1] = 2
+    assert(t.k == 1)
+    assert(t[1] == 2)
+end
+
+local function hash_preallocation_accepts_hash_population_test()
+    local t = table.create(0, 32)
+    for i = 1, 32 do t["key" .. i] = i end
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    assert(count == 32)
+    assert(t.key17 == 17)
+end
+
+local table_create_rejects_invalid_narray_values_cases = {
+    {-1, "out of range"},
+    {1.5, "no integer representation"},
+    {"x", "number expected"},
+    {math.maxinteger, "out of range"},
+}
+
+local function table_create_rejects_invalid_narray_values_test(narray, pattern)
+    local ok, err = catch table.create(narray)
+    assert(not ok)
+    assert(string.find(tostring(err), "bad argument #1 to 'create'"))
+    assert(string.find(tostring(err), pattern))
+end
+
+local function table_create_rejects_a_negative_nhash_on_argument_two_test()
+    local ok, err = catch table.create(4, -1)
+    assert(not ok)
+    assert(string.find(tostring(err), "bad argument #2 to 'create'"))
+end
+
+local function table_create_with_no_arguments_raises_test()
+    raises(function()
+        table.create()
+    end, "bad argument #1 to 'create'")
+end
+
+-- ============================================================
+-- Rehash shrink and regrow
+-- ============================================================
+
+local function mass_deletion_leaves_no_stale_entries_behind_test()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    for i = 1, 1000 do t[i] = nil end
+    assert(#t == 0)
+    assert(next(t) == nil)
+end
+
+local function hash_keys_added_after_an_array_clear_are_counted_exactly_test()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    for i = 1, 1000 do t[i] = nil end
+    for i = 1, 5 do t["s" .. i] = i * 10 end
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    assert(count == 5)
+    assert(t.s3 == 30)
+end
+
+local function reinsertion_after_a_clear_restores_exact_contents_test()
+    local t = {}
+    for i = 1, 1000 do t[i] = i end
+    for i = 1, 1000 do t[i] = nil end
+    for i = 1, 5 do t["s" .. i] = i end
+    for i = 1, 100 do t[i] = i * 2 end
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    assert(count == 105)
+    assert(t[50] == 100)
+    assert(t[100] == 200)
+    assert(t.s5 == 5)
+    assert(t[101] == nil)
+end
+
+local function repeated_fill_and_clear_cycles_stay_consistent_test()
+    local t = {}
+    for cycle = 1, 3 do
+        for i = 1, 200 do t[i] = i + cycle end
+        for i = 1, 200 do t[i] = nil end
+        assert(next(t) == nil)
+    end
+    for i = 1, 200 do t[i] = i end
+    assert(#t == 200)
+    assert(t[123] == 123)
+end
+
+local function hash_part_mass_insert_delete_and_reinsert_is_exact_test()
+    local t = {}
+    for i = 1, 500 do t["k" .. i] = i end
+    for i = 1, 500 do t["k" .. i] = nil end
+    assert(next(t) == nil)
+    for i = 1, 50 do t["r" .. i] = i end
+    local count = 0
+    for k, v in pairs(t) do
+        count = count + 1
+        assert(v == tonumber(string.sub(k, 2)))
+    end
+    assert(count == 50)
+end
+
+-- ============================================================
+-- __len metamethod boundary
+-- ============================================================
+
+local function the_length_operator_returns_the_len_result_unchecked_test()
+    -- The raw operator hands back whatever the metamethod produced. Only
+    -- library functions that need an integer length reject other values.
+    local t = setmetatable({}, {__len = function() return 2.5 end})
+    assert(#t == 2.5)
+end
+
+local function the_length_operator_passes_through_non_number_len_results_test()
+    local t = setmetatable({}, {__len = function() return "surprise" end})
+    assert(#t == "surprise")
+end
+
+local function table_insert_requires_an_integer_length_from_len_test()
+    local t = setmetatable({}, {__len = function() return 2.5 end})
+    raises(function()
+        table.insert(t, "v")
+    end, "object length is not an integer")
+end
+
+local function table_remove_requires_an_integer_length_from_len_test()
+    local t = setmetatable({}, {__len = function() return 2.5 end})
+    raises(function()
+        table.remove(t)
+    end, "object length is not an integer")
+end
+
+local function errors_raised_inside_len_propagate_to_the_caller_test()
+    local t = setmetatable({}, {__len = function() error("boom") end})
+    raises(function()
+        return #t
+    end, "boom")
+end
+
+-- ============================================================
+-- rawset and rawget extras
+-- ============================================================
+
+local function rawset_returns_the_table_it_modified_test()
+    local t = {}
+    local r = rawset(t, "k", 1)
+    assert(rawequal(r, t))
+    assert(t.k == 1)
+end
+
+local function rawset_normalizes_integral_float_keys_test()
+    local t = {}
+    rawset(t, 2.0, "v")
+    assert(rawget(t, 2) == "v")
+    assert(t[2] == "v")
+end
+
+local function rawget_on_a_non_table_raises_test()
+    raises(function()
+        rawget(5, 1)
+    end, "table expected")
+end
+
+local function rawset_on_a_non_table_raises_test()
+    raises(function()
+        rawset(5, 1, 1)
+    end, "table expected")
+end
+
+local function rawequal_treats_nan_operands_as_unequal_test()
+    assert(not rawequal(0 / 0, 0 / 0))
+end
