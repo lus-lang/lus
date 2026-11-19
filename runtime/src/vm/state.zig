@@ -355,6 +355,17 @@ pub const Thread = struct {
         return l.raiseMsg(buf.items);
     }
 
+    /// Raises a runtime error from inside an operation. Only a running Lus
+    /// function contributes a position, so the same error raised from a
+    /// native (such as `rawset`) carries none.
+    pub fn raiseRun(l: *Thread, comptime fmt: []const u8, args: anytype) Error {
+        if (l.frames.items.len > 0 and l.frame().closure != null) return l.raiseFmt(fmt, args);
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(l.g.gpa);
+        buf.print(l.g.gpa, fmt, args) catch return l.raiseMem();
+        return l.raiseMsg(buf.items);
+    }
+
     /// Appends "source:line: " for the function at `level` (0 = running
     /// function, 1 = its caller), when that function is Lus code.
     pub fn where(l: *Thread, buf: *std.ArrayList(u8), level: usize) !void {

@@ -101,8 +101,8 @@ pub inline fn normKey(l: *Thread, key: Value) Error!Value {
 pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
     const k = try normKey(l, key);
     switch (k.tag) {
-        .nil => return l.raiseFmt("index is nil", .{}),
-        .float => if (std.math.isNan(k.asFloat())) return l.raiseFmt("index is NaN", .{}),
+        .nil => return l.raiseRun("table index is nil", .{}),
+        .float => if (std.math.isNan(k.asFloat())) return l.raiseRun("table index is NaN", .{}),
         else => {},
     }
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
@@ -160,11 +160,13 @@ pub fn tmForArith(op: ArithOp) TM {
 /// then metamethods.
 pub fn arith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!Value {
     if (try arithRaw(l, op, a, b)) |r| return r;
-    // Coerce numeric strings.
-    const na = toNumberCoerce(a);
-    const nb = toNumberCoerce(b);
-    if (na != null and nb != null) {
-        if (try arithRaw(l, op, na.?, nb.?)) |r| return r;
+    // Coerce numeric strings. Bitwise operators never coerce.
+    if (!isBitwise(op)) {
+        const na = toNumberCoerce(a);
+        const nb = toNumberCoerce(b);
+        if (na != null and nb != null) {
+            if (try arithRaw(l, op, na.?, nb.?)) |r| return r;
+        }
     }
     const event = tmForArith(op);
     var tm = l.metamethod(a, event);
@@ -173,19 +175,30 @@ pub fn arith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!Value {
     return arithError(l, op, a, b);
 }
 
-fn arithError(l: *Thread, op: ArithOp, a: Value, b: Value) Error {
-    const is_bit = switch (op) {
+fn isBitwise(op: ArithOp) bool {
+    return switch (op) {
         .band, .bor, .bxor, .shl, .shr, .bnot => true,
         else => false,
     };
-    const bad = if (toNumberCoerce(a) == null) a else b;
-    if (is_bit) {
-        if (bad.isNumber() or toNumberCoerce(bad) != null) {
+}
+
+fn arithError(l: *Thread, op: ArithOp, a: Value, b: Value) Error {
+    if (isBitwise(op)) {
+        const bad = if (!a.isNumber()) a else if (!b.isNumber()) b else if (toIntegerStrict(a) == null) a else b;
+        if (bad.isNumber()) {
+            if (@import("debug.zig").varInfo(l, bad)) |vi| {
+                return l.raiseFmt("number ({s} '{s}') has no integer representation", .{ vi.kind, vi.name });
+            }
             return l.raiseFmt("number has no integer representation", .{});
         }
         return l.typeError(bad, "perform bitwise operation on");
     }
-    if (bad.tag == .string) return l.typeError(bad, "perform arithmetic on");
+    if (a.tag == .string or b.tag == .string) {
+        // Strings take part in arithmetic only as numerals.
+        const name = @tagName(tmForArith(op));
+        return l.raiseFmt("attempt to {s} a '{s}' with a '{s}'", .{ name, l.typeNameOf(a), l.typeNameOf(b) });
+    }
+    const bad = if (!a.isNumber()) a else b;
     return l.typeError(bad, "perform arithmetic on");
 }
 
@@ -463,6 +476,12 @@ pub fn formatFloat(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !voi
     }
     const start = buf.items.len;
     try formatG(gpa, buf, f, 14);
+    // Use more digits when 14 do not read back as the same float.
+    const back = std.fmt.parseFloat(f64, buf.items[start..]) catch f;
+    if (back != f) {
+        buf.items.len = start;
+        try formatG(gpa, buf, f, 17);
+    }
     const s = buf.items[start..];
     if (std.mem.indexOfAny(u8, s, ".eEn") == null) try buf.appendSlice(gpa, ".0");
 }

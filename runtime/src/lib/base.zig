@@ -101,11 +101,12 @@ fn tonumber(l: *Thread) Error!u32 {
     }
     const base = try aux.checkInt(l, 2);
     if (base < 2 or base > 36) return aux.argError(l, 2, "base out of range", .{});
+    if (v.tag != .string) return aux.typeError(l, 1, "string");
     const s = std.mem.trim(u8, try aux.checkBytes(l, 1), " \t\n\r\x0b\x0c");
     var neg = false;
     var digits = s;
-    if (digits.len > 0 and digits[0] == '-') {
-        neg = true;
+    if (digits.len > 0 and (digits[0] == '-' or digits[0] == '+')) {
+        neg = digits[0] == '-';
         digits = digits[1..];
     }
     if (digits.len == 0) return aux.retNil(l);
@@ -129,6 +130,12 @@ fn @"error"(l: *Thread) Error!u32 {
         buf.appendSlice(l.g.gpa, v.as(String).bytes()) catch return l.raiseMem();
         return l.raise(try l.newStringValue(buf.items));
     }
+    return raiseObject(l, v);
+}
+
+/// Raises `v`, replacing a nil error object with a descriptive message.
+fn raiseObject(l: *Thread, v: Value) Error {
+    if (v.isNil()) return l.raise(try l.newStringValue("<no error object>"));
     return l.raise(v);
 }
 
@@ -139,7 +146,16 @@ fn assert(l: *Thread) Error!u32 {
         _ = try aux.checkAny(l, 1);
         return l.raiseFmt("assertion failed!", .{});
     }
-    return l.raise(l.arg(2));
+    const msg = l.arg(2);
+    if (msg.tag == .string) {
+        // A string message carries the position of the assert call.
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(l.g.gpa);
+        l.where(&buf, 1) catch return l.raiseMem();
+        buf.appendSlice(l.g.gpa, msg.as(String).bytes()) catch return l.raiseMem();
+        return l.raise(try l.newStringValue(buf.items));
+    }
+    return raiseObject(l, msg);
 }
 
 fn getmetatable(l: *Thread) Error!u32 {
