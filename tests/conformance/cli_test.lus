@@ -396,3 +396,24 @@ print(m.ok, m.replaced, m.err)
     fs.remove("readonly_worker.lus")
     fs.remove("readonly_main.lus")
 end
+
+local function disassembly_folds_compile_time_flags_as_running_does_test()
+    write_file("dis_flags.lus", 'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n')
+    local _, ran = run_command(lus_cmd .. " -F FAST dis_flags.lus")
+    assert(ran == "fast\n", ran)
+    -- Folding keeps only the taken branch, so the listing calls print once,
+    -- from line 2 with the flag and from line 4 without it.
+    local _, fast = run_command(lus_cmd .. " -F FAST --dis dis_flags.lus")
+    assert(string.find(fast, "function <dis_flags.lus:0> (5 instructions", 1, true), fast)
+    assert(string.find(fast, "[  2] call", 1, true), fast)
+    assert(not string.find(fast, "[  4] call", 1, true), fast)
+    assert(not string.find(fast, "test_", 1, true), fast)
+    local _, slow = run_command(lus_cmd .. " --dis dis_flags.lus")
+    assert(string.find(slow, "[  4] call", 1, true), slow)
+    assert(not string.find(slow, "[  2] call", 1, true), slow)
+    write_file("dis_error.lus", "x = = 1\n")
+    local _, err = run_command(lus_cmd .. " --dis dis_error.lus")
+    assert(string.find(err, "dis_error.lus:1: unexpected symbol near '='", 1, true), err)
+    fs.remove("dis_flags.lus")
+    fs.remove("dis_error.lus")
+end

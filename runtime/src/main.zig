@@ -497,11 +497,18 @@ fn runChunk(l: *Thread, src: []const u8, name: []const u8, script_args: []const 
     return true;
 }
 
+/// Prints the bytecode of a script compiled exactly as running it would
+/// compile it, with the same chunk name and compile-time flags.
 fn disassemble(l: *Thread, path: []const u8) !u8 {
     const gpa = l.g.gpa;
-    const s = std.Io.Dir.cwd().readFileAlloc(l.g.io, path, gpa, .unlimited) catch return 1;
+    const s = std.Io.Dir.cwd().readFileAlloc(l.g.io, path, gpa, .unlimited) catch |e| {
+        std.debug.print("lus: cannot open {s} ({s})\n", .{ path, @errorName(e) });
+        return 1;
+    };
     defer gpa.free(s);
-    const r = try lus.compile.codegen.compile(l.g, s, .{ .chunkname = path });
+    const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
+    defer gpa.free(chunkname);
+    const r = try lus.compile.codegen.compile(l.g, s, .{ .chunkname = chunkname, .flags = api.flagsTable(l.g) });
     switch (r) {
         .err => |m| {
             std.debug.print("{s}\n", .{m});

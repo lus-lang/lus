@@ -5,10 +5,18 @@ const opc = @import("opcodes.zig");
 const object = @import("../vm/object.zig");
 const ops = @import("../vm/ops.zig");
 
+/// The source of a function as the header names it: a file chunk name
+/// without its leading `@` or `=`.
+fn sourceName(p: *object.Proto) []const u8 {
+    const s = if (p.source) |s| s.bytes() else return "?";
+    if (s.len > 0 and (s[0] == '@' or s[0] == '=')) return s[1..];
+    return s;
+}
+
 pub fn dump(gpa: std.mem.Allocator, out: *std.ArrayList(u8), p: *object.Proto, depth: usize) !void {
     try out.print(gpa, "function <{s}:{d}> ({d} instructions, {d} params{s}, {d} slots, {d} upvalues, {d} constants)\n", .{
-        if (p.source) |s| s.bytes() else "?", p.line_defined, p.code.len,   p.num_params,
-        if (p.is_vararg) "+" else "",         p.max_stack,    p.upvals.len, p.constants.len,
+        sourceName(p),                p.line_defined, p.code.len,   p.num_params,
+        if (p.is_vararg) "+" else "", p.max_stack,    p.upvals.len, p.constants.len,
     });
     for (p.code, 0..) |ins, i| {
         const o = opc.op(ins);

@@ -109,7 +109,8 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
     }
 }
 
-fn flagsTable(g: *Global) ?*const std.StringHashMapUnmanaged(Value) {
+/// The compile-time flags set by `setFlags`, as the compiler reads them.
+pub fn flagsTable(g: *Global) ?*const std.StringHashMapUnmanaged(Value) {
     const p = g.ext.get("flags.compile") orelse return null;
     return @ptrCast(@alignCast(p));
 }
