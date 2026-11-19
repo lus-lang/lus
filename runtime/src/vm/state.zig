@@ -184,6 +184,10 @@ pub const Global = struct {
     /// Native recursion depth across all threads (calls from natives into
     /// Lus and coroutine resumes), bounded to protect the native stack.
     native_depth: u32 = 0,
+    /// Set when a worker state is being stopped by its creator. No
+    /// exception handler catches errors while it is set, so the worker
+    /// script unwinds completely.
+    halting: bool = false,
 };
 
 // ---------------------------------------------------------------------

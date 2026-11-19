@@ -288,6 +288,7 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
 /// Finds an exception handler in the Lus frames above `stop` for the
 /// current error. On success the matching frame resumes at its handler.
 fn handleError(l: *Thread, stop: usize) bool {
+    if (l.g.halting) return false;
     var i = l.frames.items.len;
     while (i > stop) {
         i -= 1;

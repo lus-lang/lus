@@ -161,6 +161,8 @@ fn @"resume"(l: *Thread) Error!u32 {
     const co = try checkCo(l, 1);
     const nargs = l.argCount() - 1;
     const n = resumeCo(l, co, nargs) catch {
+        // A stopping worker unwinds through coroutines as well.
+        if (l.g.halting) return error.LusError;
         const err = l.err;
         try l.push(.false);
         try l.push(err);
