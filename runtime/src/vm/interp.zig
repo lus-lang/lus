@@ -424,19 +424,21 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .gettabup => {
-            const t = c.cl.upvals()[opc.b(ins)].loc.*;
-            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), t, c.k[opc.c(ins)]);
+            const t = c.cl.upvals()[opc.b(ins)].loc;
+            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), t, &c.k[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .settabup => {
-            const t = c.cl.upvals()[opc.a(ins)].loc.*;
-            try setStrOp(l, &c, pc, &c.ic[pc - 1], t, c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            const t = c.cl.upvals()[opc.a(ins)].loc;
+            try setStrOp(l, &c, pc, &c.ic[pc - 1], t, &c.k[opc.b(ins)], &c.bp[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .gettable => {
             const a = opc.a(ins);
-            const t = c.bp[opc.b(ins)];
-            const key = c.bp[opc.c(ins)];
+            // Operands are read through pointers so the fast paths load
+            // only the words they test.
+            const t = &c.bp[opc.b(ins)];
+            const key = &c.bp[opc.c(ins)];
             if (t.tag == .table and key.tag == .integer) {
                 const tab = t.as(Table);
                 const i = key.asInt();
@@ -452,13 +454,13 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
-            const v = try getSlow(l, t, key, a);
+            const v = try getSlow(l, t.*, key.*, a);
             c.refresh(l);
             c.bp[a] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .getfield => {
-            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), c.bp[opc.b(ins)], c.k[opc.c(ins)]);
+            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), &c.bp[opc.b(ins)], &c.k[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .getindex => {
@@ -480,15 +482,16 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .settable => {
-            const t = c.bp[opc.a(ins)];
-            const key = c.bp[opc.b(ins)];
-            const v = c.bp[opc.c(ins)];
+            const t = &c.bp[opc.a(ins)];
+            const key = &c.bp[opc.b(ins)];
+            const v = &c.bp[opc.c(ins)];
             if (t.tag == .table and key.tag == .integer) {
                 const tab = t.as(Table);
                 const i = key.asInt();
                 if (i >= 1 and i <= tab.array.len and !tab.readonly and noNewindexMeta(tab)) {
-                    tab.array[@intCast(i - 1)] = v;
-                    tab.tm_absent = 0;
+                    // An integer key never names a metamethod, so the
+                    // absence cache stays valid.
+                    tab.array[@intCast(i - 1)] = v.*;
                     if (v.tag.isCollectable()) gc.barrierBack(l.g, &tab.hdr);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
@@ -497,12 +500,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
-            try setSlow(l, t, key, v);
+            try setSlow(l, t.*, key.*, v.*);
             c.refresh(l);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setfield => {
-            try setStrOp(l, &c, pc, &c.ic[pc - 1], c.bp[opc.a(ins)], c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            try setStrOp(l, &c, pc, &c.ic[pc - 1], &c.bp[opc.a(ins)], &c.k[opc.b(ins)], &c.bp[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setindex => {
@@ -530,9 +533,8 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
         },
         .self => {
             const a = opc.a(ins);
-            const obj = c.bp[opc.b(ins)];
-            c.bp[a + 1] = obj;
-            try getStrOp(l, &c, pc, &c.ic[pc - 1], a, obj, c.k[opc.c(ins)]);
+            c.bp[a + 1] = c.bp[opc.b(ins)];
+            try getStrOp(l, &c, pc, &c.ic[pc - 1], a, &c.bp[a + 1], &c.k[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -751,9 +753,14 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .eqk => {
-            const x = c.bp[opc.a(ins)];
-            const y = c.k[opc.b(ins)];
-            const r = if (x.tag == y.tag and (x.tag == .integer or x.tag == .string)) x.payload == y.payload or ops.rawEqual(l, x, y) else ops.rawEqual(l, x, y);
+            const x = &c.bp[opc.a(ins)];
+            const y = &c.k[opc.b(ins)];
+            const r = if (x.tag == .integer and y.tag == .integer)
+                x.payload == y.payload
+            else if (x.tag == .string and y.tag == .string and x.payload == y.payload)
+                true
+            else
+                ops.rawEqual(l, x.*, y.*);
             try condJump(l, &c, &pc, r != (opc.c(ins) != 0), hooked);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -787,7 +794,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             }
             const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
             if (nb != 0) l.top = func + nb;
-            const callee = l.stack[func];
+            const callee = &l.stack[func];
             if (callee.tag == .closure and !callee.as(Closure).proto.is_vararg) {
                 try enterLus(l, callee.as(Closure), func, nargs, want);
                 c = load(l);
@@ -1374,7 +1381,9 @@ inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
 }
 
 /// R[a] = t[key] for a string key.
-inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: Value, key: Value) Error!void {
+/// The operands are pointers into registers, constants, or upvalues, read
+/// only before anything that may reallocate the stack.
+inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: *const Value, key: *const Value) Error!void {
     if (t.tag == .table) {
         const tab = t.as(Table);
         const v = lookupIc(tab, key.as(String), &ic.own);
@@ -1385,7 +1394,7 @@ inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: 
         if (indexChain(l, tab, key.as(String), ic, &c.bp[a])) return;
     }
     c.fr.pc = pc;
-    const v = try metaIndex(l, t, key, a);
+    const v = try metaIndex(l, t.*, key.*, a);
     c.refresh(l);
     c.bp[a] = v;
 }
@@ -1393,18 +1402,18 @@ inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: 
 /// t[key] = v for a string key. Stores into an existing key of a plain
 /// table, and new keys that fit without a rehash, happen inline.
 /// Everything else goes through `setSlow`.
-inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: Value, key: Value, v: Value) Error!void {
+inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: *const Value, key: *const Value, v: *const Value) Error!void {
     if (t.tag == .table) {
         const tab = t.as(Table);
         if (!tab.readonly and noNewindexMeta(tab)) {
             const i: usize = ic.own;
             if (i < tab.hash.len and tab.hash[i].key.payload == key.payload and tab.hash[i].key.tag == .string) {
-                tab.hash[i].val = v;
-            } else if (table.storeStr(tab, key, v)) |idx| {
+                tab.hash[i].val = v.*;
+            } else if (table.storeStr(tab, key.*, v.*)) |idx| {
                 if (idx < object.IcEntry.none) ic.own = @intCast(idx);
             } else {
                 c.fr.pc = pc;
-                try setSlow(l, t, key, v);
+                try setSlow(l, t.*, key.*, v.*);
                 c.refresh(l);
                 return;
             }
@@ -1414,7 +1423,7 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: Value, 
         }
     }
     c.fr.pc = pc;
-    try setSlow(l, t, key, v);
+    try setSlow(l, t.*, key.*, v.*);
     c.refresh(l);
 }
 
