@@ -87,6 +87,9 @@ pub const State = if (enabled) struct {
     /// such a chain continues with.
     stack_floor: usize = 0,
     exit_sp: usize = 0,
+    /// The lowest address that the chain of direct calls that runs now
+    /// may reach. The call that starts a chain sets it.
+    chain_limit: usize = 0,
 } else struct {};
 
 /// The native code of one function.

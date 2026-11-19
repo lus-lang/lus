@@ -1295,6 +1295,488 @@ local function varargs_and_multiple_results_test()
 end
 
 -- ---------------------------------------------------------------------
+-- Direct calls
+--
+-- A function whose registers all live in machine registers is entered
+-- directly: a call of it from optimized code pushes no frame, and the
+-- frames are built when optimized code is left. These tests leave
+-- optimized code deep inside such calls and look at what the frames,
+-- the registers, tracebacks, coroutines, hooks, and errors show.
+
+-- The number of times a pattern matches in a string.
+local function count(s, pat)
+    local n = 0
+    for _ in s:gmatch(pat) do n = n + 1 end
+    return n
+end
+
+local function recursion_returns_what_the_interpreter_returns_test()
+    local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+    assert(hot(fib, 15) == 610)
+    assert(fib(24) == 46368)
+    local function fact(n) if n <= 1 then return 1 end return n * fact(n - 1) end
+    assert(hot(fact, 10) == 3628800)
+    assert(fact(20) == 2432902008176640000)
+    assert(fact(21) == -4249290049419214848)
+    local function sumf(n, acc) if n == 0 then return acc end return sumf(n - 1, acc + 0.5) end
+    assert(hot(sumf, 10, 0.0) == 5.0)
+    local function even(n) if n == 0 then return true end return not even(n - 1) end
+    assert(hot(even, 10) == true)
+    assert(even(7) == false)
+end
+
+local function arguments_of_another_type_take_the_frame_test()
+    local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+    assert(hot(fib, 12) == 144)
+    assert(fib(12.0) == 144.0 and math.type(fib(12.0)) == "float")
+    assert(fib(12) == 144 and math.type(fib(12)) == "integer")
+    local ok, err = catch fib("x")
+    assert(not ok and tostring(err):find("compare", 1, true))
+    assert(fib(10) == 55)
+    local ok2 = catch fib()
+    assert(not ok2)
+    assert(select("#", fib(3, 4, 5)) == 1 and fib(3, 4, 5) == 2)
+end
+
+local function deep_recursion_stays_exact_test()
+    local function depth(n) if n == 0 then return 0 end return 1 + depth(n - 1) end
+    assert(hot(depth, 50) == 50)
+    for _, n in ipairs({ 100, 1000, 5000, 20000, 60000 }) do
+        assert(depth(n) == n)
+    end
+end
+
+local function stack_overflow_is_the_usual_error_test()
+    local function forever(n) return 1 + forever(n + 1) end
+    local function bounded(n) if n == 0 then return 0 end return 1 + bounded(n - 1) end
+    hot(bounded, 20)
+    for _ = 1, 3 do
+        local ok, err = catch forever(1)
+        assert(not ok)
+        assert(tostring(err):find("stack overflow", 1, true), tostring(err))
+    end
+    -- The stack is usable afterwards.
+    assert(bounded(1000) == 1000)
+    local ok, err = catch bounded(10000000)
+    assert(not ok and tostring(err):find("stack overflow", 1, true))
+    assert(bounded(1000) == 1000)
+end
+
+local function recursion_stops_at_the_stack_limit_where_the_interpreter_stops_test()
+    -- Every activation records itself before it calls, so the record
+    -- shows how many of them ran when the stack overflowed.
+    local started = 0
+    local function forever(n)
+        started = n
+        return 1 + forever(n + 1)
+    end
+    local function bounded(n)
+        if n == 0 then return 0 end
+        started = n
+        return 1 + bounded(n - 1)
+    end
+    hot(bounded, 20)
+    local function run()
+        started = 0
+        local ok, err = catch forever(1)
+        assert(not ok and tostring(err):find("stack overflow", 1, true))
+        return started
+    end
+    -- A count hook keeps the thread in the interpreter.
+    debug.sethook(function() end, "", 1000000000)
+    local reference = run()
+    debug.sethook()
+    for _ = 1, 3 do
+        local n = run()
+        assert(math.abs(n - reference) <= 8, `$n $reference`)
+    end
+end
+
+local function an_error_deep_inside_recursion_names_every_frame_test()
+    local k = 1
+    local function down(n)
+        if n == 0 then return k + 1 end
+        return down(n - 1) + 1
+    end
+    assert(hot(down, 30) == 32)
+    k = nil
+    local ok, err = catch down(40)
+    assert(not ok)
+    assert(tostring(err):find("arithmetic on a nil value", 1, true), tostring(err))
+    assert(tostring(err):find("upvalue 'k'", 1, true), tostring(err))
+    -- A coroutine that fails keeps its stack, so its traceback shows
+    -- the activations that were running: one at the line of the
+    -- addition, and one per level at the line of the recursive call.
+    local co = coroutine.create(function() return down(9) end)
+    local ok2, err2 = coroutine.resume(co)
+    assert(not ok2 and tostring(err2):find("upvalue 'k'", 1, true))
+    local trace = debug.traceback(co)
+    local line = debug.getinfo(down, "S").linedefined
+    assert(count(trace, `:$(line + 1): in`) == 1, trace)
+    assert(count(trace, `:$(line + 2): in`) == 9, trace)
+    k = 1
+    assert(down(30) == 32)
+end
+
+local function frames_are_complete_after_a_failed_guard_test()
+    local k = 1
+    local levels
+    local function probe()
+        local n = 0
+        while debug.getinfo(n + 1, "f") do n = n + 1 end
+        return n
+    end
+    local mt = { __add = function(a, b) levels = probe() return 100 end }
+    local function down(n)
+        if n == 0 then return k + 1 end
+        return down(n - 1) + 1
+    end
+    assert(hot(down, 30) == 32)
+    local base = probe()
+    k = setmetatable({}, mt)
+    assert(down(25) == 125)
+    -- The metamethod and twenty-six activations sit above this test.
+    assert(levels == base + 1 + 26, `$levels $base`)
+    k = 1
+    assert(down(30) == 32)
+end
+
+local function locals_survive_leaving_optimized_code_inside_recursion_test()
+    local k = 1
+    local seen = {}
+    local function peek()
+        -- Level 2 is the innermost activation of walk.
+        local level = 2
+        while true do
+            local info = debug.getinfo(level, "f")
+            if not info then break end
+            local name, value = debug.getlocal(level, 1)
+            if name == "n" then seen[#seen + 1] = value end
+            level = level + 1
+        end
+        return 0
+    end
+    local mt = { __add = function() return peek() end }
+    local function walk(n, pad)
+        local twice = n * 2
+        if n == 0 then return k + 1 end
+        local r = walk(n - 1, pad)
+        return r + twice - twice + pad - pad
+    end
+    assert(hot(walk, 20, 7) == 2)
+    k = setmetatable({}, mt)
+    assert(walk(12, 7) == 0)
+    assert(#seen == 13)
+    for i = 1, 13 do assert(seen[i] == i - 1, `$i`) end
+end
+
+local function a_result_of_another_type_leaves_after_the_call_test()
+    local k = 1
+    local function down(n)
+        if n == 0 then return k end
+        return down(n - 1) + 1
+    end
+    assert(hot(down, 30) == 31)
+    local before = exits()
+    k = 0.5
+    assert(down(30) == 30.5)
+    assert(down(3) == 3.5)
+    if opt ~= "off" then assert(exits() > before) end
+    k = "7"
+    assert(down(3) == 10)
+    k = 1
+    assert(down(30) == 31)
+    assert(hot(down, 30) == 31)
+end
+
+local function yields_cross_recursion_that_left_optimized_code_test()
+    local k = 1
+    local mt = { __add = function(a, b) return coroutine.yield("inside") + b end }
+    local function down(n)
+        if n == 0 then return k + 1 end
+        return down(n - 1) + 1
+    end
+    assert(hot(down, 30) == 32)
+    k = setmetatable({}, mt)
+    local co = coroutine.create(function(n) return down(n) end)
+    local ok, v = coroutine.resume(co, 20)
+    assert(ok and v == "inside")
+    ok, v = coroutine.resume(co, 5)
+    assert(ok and v == 26, tostring(v))
+    assert(coroutine.status(co) == "dead")
+    k = 1
+    -- Recursion inside a coroutine, and a coroutine inside recursion.
+    local gen = coroutine.wrap(function()
+        for i = 1, 3 do coroutine.yield(down(10 * i)) end
+    end)
+    assert(gen() == 12 and gen() == 22 and gen() == 32)
+end
+
+local function recursion_runs_under_a_hook_test()
+    local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+    assert(hot(fib, 12) == 144)
+    local calls = 0
+    debug.sethook(function() calls = calls + 1 end, "c")
+    local r = fib(10)
+    debug.sethook()
+    assert(r == 55)
+    assert(calls >= 177, calls)
+    assert(fib(12) == 144)
+end
+
+local function the_collector_runs_inside_recursion_test()
+    local function build(n)
+        if n == 0 then return 0 end
+        local t = { n, n + 1 }
+        return t[1] + build(n - 1) - t[2] + 1
+    end
+    assert(hot(build, 40) == 0)
+    collectgarbage()
+    assert(build(2000) == 0)
+    local k = 1
+    local mt = { __add = function(a, b) collectgarbage() return 1 end }
+    local function keep(n, s)
+        if n == 0 then return k + 1 end
+        local r = keep(n - 1, s)
+        return r + #s - #s
+    end
+    assert(hot(keep, 20, "abc") == 2)
+    k = setmetatable({}, mt)
+    assert(keep(30, "abc" .. tostring(k)) == 1)
+end
+
+local function procedures_and_other_types_call_directly_test()
+    local total = 0
+    local function visit(n)
+        if n == 0 then return end
+        total = total + n
+        visit(n - 1)
+    end
+    hot(visit, 10)
+    total = 0
+    visit(100)
+    assert(total == 5050)
+    local function pick(n, t)
+        if n == 0 then return t end
+        return pick(n - 1, t)
+    end
+    local t = { 1 }
+    assert(hot(pick, 10, t) == t)
+    local function flag(n, b)
+        if n == 0 then return b end
+        local r = flag(n - 1, not b)
+        return r
+    end
+    assert(hot(flag, 10, true) == true)
+    assert(flag(11, true) == false)
+    local function none(n)
+        if n == 0 then return nil end
+        local r = none(n - 1)
+        return r
+    end
+    assert(hot(none, 10) == nil)
+    local function str(n, s)
+        if n == 0 then return s end
+        local r = str(n - 1, s)
+        return r
+    end
+    assert(hot(str, 10, "x") == "x")
+end
+
+local function a_loop_calls_recursion_directly_test()
+    local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+    local function sum(n)
+        local s = 0
+        for i = 1, n do s = s + fib(i % 10) end
+        return s
+    end
+    assert(hot(fib, 12) == 144)
+    assert(hot(sum, 100) == 880)
+    assert(sum(1000) == 8800)
+    local k = 1
+    local function down(n)
+        if n == 0 then return k + 1 end
+        return down(n - 1) + 1
+    end
+    local function many(n)
+        local s = 0
+        local keep = n * 3
+        for i = 1, n do s = s + down(i % 5) end
+        return s + keep - keep
+    end
+    assert(hot(down, 10) == 12)
+    assert(hot(many, 20) == 80)
+    k = 0.5
+    assert(many(20) == 70.0)
+    k = nil
+    local ok, err = catch many(20)
+    assert(not ok and tostring(err):find("nil value", 1, true))
+    k = 1
+    assert(many(20) == 80)
+end
+
+local function functions_call_each_other_directly_test()
+    local function leaf(n) if n < 0 then return 0 end return n * 2 + 1 end
+    local function down(n) if n == 0 then return 0 end return leaf(n) + down(n - 1) end
+    local function twice(n)
+        local s = 0
+        for i = 1, 60 do s = s + i % 7 end
+        if n == 0 then return s end
+        return twice(n - 1)
+    end
+    local function caller(n)
+        if n == 0 then return twice(2) end
+        return caller(n - 1) + twice(1)
+    end
+    assert(hot(leaf, 3) == 7)
+    assert(hot(down, 10) == 120)
+    assert(hot(twice, 3) == 178)
+    assert(hot(caller, 5) == 178 * 6)
+    assert(caller(50) == 178 * 51)
+end
+
+local function tail_calls_reach_recursion_test()
+    local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+    local function via(n) return fib(n) end
+    assert(hot(fib, 12) == 144)
+    assert(hot(via, 12) == 144)
+    assert(via(12.0) == 144.0)
+    local t = setmetatable({}, { __index = function(_, k) return fib(k) end, __call = function(_, n) return fib(n) end })
+    assert(t[10] == 55)
+    assert(t(10) == 55)
+    local r = {}
+    for i = 1, 5 do r[i] = i end
+    table.sort(r, function(a, b) return fib(a) > fib(b) end)
+    assert(r[1] == 5 and r[5] == 1)
+end
+
+local function a_function_that_goes_wrong_often_keeps_working_test()
+    local function add(n, x) if n == 0 then return x end return add(n - 1, x) + 1 end
+    assert(hot(add, 5, 1) == 6)
+    for i = 1, 40 do
+        assert(add(5, 1) == 6)
+        assert(add(5, 1.5) == 6.5)
+        assert(add(5, "1") == 6)
+    end
+    assert(hot(add, 5, 1.5) == 6.5)
+    assert(add(5, 1) == 6)
+end
+
+local function a_call_compiled_inline_recurses_directly_test()
+    local k = 1
+    local walk
+    local function helper(n, extra) return walk(n - 1) + extra end
+    walk = function(n)
+        if n == 0 then return k + 1 end
+        local keep = n * 3
+        return helper(n, 1) + keep - keep
+    end
+    assert(hot(walk, 20) == 22)
+    local levels = {}
+    local mt = { __add = function()
+        local level = 2
+        while true do
+            local info = debug.getinfo(level, "f")
+            if not info then break end
+            if info.func == walk then levels[#levels + 1] = "w" elseif info.func == helper then levels[#levels + 1] = "h" end
+            level = level + 1
+        end
+        return 0
+    end }
+    k = setmetatable({}, mt)
+    assert(walk(6) == 6)
+    assert(table.concat(levels) == "whwhwhwhwhwhw", table.concat(levels))
+    k = nil
+    local co = coroutine.create(function() return walk(4) end)
+    local ok, err = coroutine.resume(co)
+    assert(not ok and tostring(err):find("upvalue 'k'", 1, true))
+    local trace = debug.traceback(co)
+    assert(count(trace, "in upvalue 'walk'") + count(trace, "in function <") >= 5, trace)
+    assert(count(trace, "in upvalue 'helper'") + count(trace, "in local 'helper'") == 4, trace)
+    k = 1
+    assert(walk(20) == 22)
+end
+
+local function a_callee_in_other_code_leaves_with_its_callers_complete_test()
+    local k = 1
+    local function inner(n, a)
+        if n == 0 then return k + a end
+        local mine = a * 2
+        return inner(n - 1, a) + mine - mine
+    end
+    local function outer(n, b)
+        if n == 0 then return inner(3, b) end
+        local mine = b + n
+        local r = outer(n - 1, b)
+        return r + mine - mine
+    end
+    assert(hot(inner, 3, 5) == 6)
+    assert(hot(outer, 4, 5) == 6)
+    local seen = {}
+    local mt = { __add = function(x, a)
+        local level = 2
+        while true do
+            local info = debug.getinfo(level, "f")
+            if not info then break end
+            if info.func == inner or info.func == outer then
+                local _, n = debug.getlocal(level, 1)
+                local name, mine = debug.getlocal(level, 3)
+                seen[#seen + 1] = (info.func == inner and "i" or "o") .. n .. ":" .. tostring(name == "mine" and mine or "-")
+            end
+            level = level + 1
+        end
+        return a
+    end }
+    k = setmetatable({}, mt)
+    assert(outer(3, 5) == 5)
+    assert(table.concat(seen, " ") == "i0:- i1:10 i2:10 i3:10 o1:6 o2:7 o3:8", table.concat(seen, " "))
+    k = 1
+    assert(outer(4, 5) == 6)
+end
+
+local function a_loop_meets_the_stack_limit_through_recursion_test()
+    local function bounded(n) if n == 0 then return 0 end return 1 + bounded(n - 1) end
+    local function loop(n, depth)
+        local s = 0
+        local keep = n + 7
+        for i = 1, n do s = s + bounded(depth) end
+        return s + keep - keep
+    end
+    assert(hot(bounded, 20) == 20)
+    assert(hot(loop, 5, 20) == 100)
+    assert(loop(3, 30000) == 90000)
+    local ok, err = catch loop(3, 10000000)
+    assert(not ok and tostring(err):find("stack overflow", 1, true), tostring(err))
+    assert(loop(5, 20) == 100)
+    -- The same inside a coroutine, whose stack is its own.
+    local co = coroutine.wrap(function()
+        local ok2, err2 = catch loop(2, 10000000)
+        coroutine.yield(not ok2 and tostring(err2):find("stack overflow", 1, true) ~= nil)
+        return loop(2, 5000)
+    end)
+    assert(co() == true)
+    assert(co() == 10000)
+end
+
+local function natives_reenter_recursion_test()
+    local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
+    assert(hot(fib, 12) == 144)
+    local function nest(d)
+        if d == 0 then return fib(15) end
+        local t = { 3, 1, 2 }
+        local r
+        table.sort(t, function(a, b)
+            if not r then r = nest(d - 1) end
+            return a < b
+        end)
+        return r
+    end
+    assert(nest(60) == 610)
+    local s = ("x"):rep(20):gsub("x", function() return tostring(fib(10)) end)
+    assert(s == ("55"):rep(20))
+end
+
+-- ---------------------------------------------------------------------
 -- Everything around optimized code
 
 local function errors_and_handlers_test()

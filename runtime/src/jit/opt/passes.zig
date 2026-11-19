@@ -321,7 +321,7 @@ fn dedupe(f: *ir.Func, blk: BlockId) !void {
         const inst = f.at(r);
         switch (inst.op) {
             // Writes end what the earlier loads of the block know.
-            .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .callc, .gccheck, .generic, .barrier, .dcall, .darg, .dres, .dlimit, .param => {
+            .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .callc, .gccheck, .generic, .barrier, .dcall, .darg, .dres, .dgate, .dlimit, .param => {
                 seen.clearRetainingCapacity();
                 try keep.append(arena, r);
                 continue;

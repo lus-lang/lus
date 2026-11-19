@@ -148,6 +148,12 @@ pub const Unit = struct {
     direct: bool = false,
     total: usize = 0,
     direct_entry: usize = 0,
+    /// The entry of a call that starts a chain of direct calls. It
+    /// sets how far the chain may take the native stack, from the room
+    /// the Lus stack has left and from `chain_ratio`: the most slots
+    /// that the chain covers per sixteen bytes of native stack.
+    root_entry: usize = 0,
+    chain_ratio: u32 = 1,
     ret_a: usize = 0,
     ret_b: usize = 0,
     /// Nonzero while the unit takes new direct calls. Callers in other
@@ -343,6 +349,8 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
         unit.direct = true;
         unit.total = @intCast(cg.total);
         unit.direct_entry = base + cg.direct_off;
+        unit.root_entry = base + cg.root_off;
+        unit.chain_ratio = cg.chain_ratio;
         unit.ret_a = base + cg.ret_a_off;
         unit.ret_b = base + cg.ret_b_off;
         unit.sig = func.sig;

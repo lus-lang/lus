@@ -2952,6 +2952,12 @@ pub const Lower = struct {
             unit = u;
         } else return false;
         if (want == 1 and ret == null) return false;
+        // A chain of direct calls keeps to the stack through the native
+        // frames of its activations, each of which covers at least as
+        // many bytes as its call takes slots.
+        if (unit) |u| {
+            if (fr.off + ra + 1 > u.total) return false;
+        }
         const np: u32 = p.num_params;
         var i: u32 = 0;
         while (i < np) : (i += 1) {
@@ -2983,14 +2989,30 @@ pub const Lower = struct {
         // register holds is allocated first.
         try b.materializeAll();
 
+        // A call from a function with a frame starts a chain. The
+        // callee then checks the stack before it runs, and when it
+        // declines, the frame continues before the call.
+        var before: u32 = ir.no_snap;
+        if (!b.direct) {
+            before = try b.snapAt(b.pc);
+            b.f.snaps.items[before].quiet = true;
+        }
         const site: u32 = @intCast(b.f.sites.items.len);
         const snap_id = try b.snapCall(ra, cv);
-        try b.f.sites.append(b.arena, .{ .snap = snap_id, .slot = fr.off + ra, .nargs = nargs, .want = want });
+        try b.f.sites.append(b.arena, .{
+            .snap = snap_id,
+            .slot = fr.off + ra,
+            .nargs = nargs,
+            .want = want,
+            .callee_total = if (unit) |u| @intCast(u.total) else 0,
+            .callee_ratio = if (unit) |u| u.chain_ratio else 0,
+        });
         for (args, 0..) |x, k| {
             if (x != ir.none) _ = try b.emit(.{ .op = .darg, .a = x, .imm = @intCast(k) });
         }
-        const addr: usize = if (unit) |u| u.direct_entry else 0;
+        const addr: usize = if (unit) |u| (if (b.direct) u.direct_entry else u.root_entry) else 0;
         const call_ref = try b.emit(.{ .op = .dcall, .a = cv, .imm = @bitCast(@as(u64, addr)), .aux = site, .snap = snap_id });
+        if (!b.direct) _ = try b.emit(.{ .op = .dgate, .a = call_ref, .snap = before });
         if (unit) |u| {
             try b.inlined.append(b.arena, u.proto);
         } else b.self_calls = true;

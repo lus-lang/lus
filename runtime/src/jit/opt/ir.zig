@@ -232,6 +232,10 @@ pub const Op = enum(u8) {
     /// `imm` is the address of the entry, or zero for the entry of the
     /// code being built. `aux` indexes the call sites of the function.
     dcall,
+    /// Follows a direct call that starts a chain of them. It leaves
+    /// optimized code, through a snapshot from before the call, when
+    /// the callee found too little stack and did not run.
+    dgate,
     /// The result of the direct call `a` as a value of the static type.
     /// It leaves optimized code when the callee returned another type.
     dres,
@@ -278,7 +282,7 @@ pub const Inst = struct {
     }
     pub fn isGuard(i: *const Inst) bool {
         return switch (i.op) {
-            .gslot, .guard, .guardi, .gfcmp, .gtag, .gbit, .gnokey, .gpending, .gdebt, .dlimit, .dres => true,
+            .gslot, .guard, .guardi, .gfcmp, .gtag, .gbit, .gnokey, .gpending, .gdebt, .dlimit, .dres, .dgate => true,
             else => false,
         };
     }
@@ -359,6 +363,11 @@ pub const Site = struct {
     want: i32,
     /// Offset in the code of the instruction after the call.
     ret_off: u32 = 0,
+    /// For a callee in other code: the bytes of native stack one of its
+    /// activations takes, and the most slots that a chain of direct
+    /// calls from it covers per sixteen of those bytes.
+    callee_total: u32 = 0,
+    callee_ratio: u32 = 0,
 };
 
 /// Most fixed parameters of a function that is entered directly.
