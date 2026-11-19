@@ -12,4 +12,4 @@ params:
     type: any
 ---
 
-Sends `value` to worker `w`'s inbox. The worker can receive it via `worker.peek()`. Values are deep-copied.
+Serializes `value` and appends it to worker `w`'s inbox. The worker receives the independent copy with `worker.peek`. Nil, booleans, numbers, strings, and tables can cross the boundary. Tables may nest up to 100 levels.

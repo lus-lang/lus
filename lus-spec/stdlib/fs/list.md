@@ -9,6 +9,9 @@ origin: lus
 params:
   - name: path
     type: string
+  - name: glob
+    type: string
+    optional: true
 returns: table
 ---
 

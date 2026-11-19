@@ -13,7 +13,7 @@ params:
   - name: address
     type: string
     optional: true
-returns: userdata
+returns: udp_socket
 ---
 
-Opens a UDP socket, optionally bound to `port` and `address`. Returns a socket object for sending and receiving datagrams.
+Opens a UDP socket, optionally bound to `port` and `address`. Port `0` lets the operating system select an available port when an address is supplied. Returns a socket for sending and receiving datagrams.

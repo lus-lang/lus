@@ -1,6 +1,6 @@
 ---
 name: lus_onworker
-header: lworkerlib.h
+header: lua.h
 kind: function
 since: 0.1.0
 stability: stable
@@ -13,4 +13,4 @@ params:
     type: lus_WorkerSetup
 ---
 
-Registers a callback to be invoked when new worker states are created.
+Registers `fn` as the setup callback for workers created by `L`. Registration belongs to that global state. The callback function pointer must remain valid while workers can be created from the state.

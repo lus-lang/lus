@@ -11,7 +11,7 @@ params:
     type: string
   - name: dest
     type: string
-returns: boolean
+returns: []
 ---
 
-Moves (renames) the file or directory at `source` to `dest`. Returns `true` on success, or `nil` plus an error message on failure.
+Moves the file or directory at `source` to `dest`. Successful calls complete with an empty result list. Failures raise catchable errors.

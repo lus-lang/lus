@@ -1,0 +1,8 @@
+local records = fromcsv(csv_text)
+local database = io.sqlite("records.db")
+local shaped = table.reshape(values, 4, 4)
+local archive = vector.archive.gzip.compress(bytes)
+local instant = time.instant()
+local month = time.month
+table.reshape = replacement
+local custom = project.vector.archive.gzip.compress(bytes)

@@ -1,6 +1,6 @@
 ---
 name: lus_worker_receive
-header: lworkerlib.h
+header: lua.h
 kind: function
 since: 0.1.0
 stability: stable
@@ -13,4 +13,4 @@ params:
     type: "WorkerState*"
 ---
 
-Receives a message from the worker's outbox. Pushes the message onto the stack.
+Attempts to receive one message from `w` without blocking. On success it pushes the deserialized value on `L` and returns `1`. It returns `0` when no message is ready, the handle is `NULL`, or deserialization fails. The function borrows `w` for the call.

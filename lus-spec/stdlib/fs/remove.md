@@ -9,7 +9,10 @@ origin: lus
 params:
   - name: path
     type: string
-returns: boolean
+  - name: recursive
+    type: boolean
+    optional: true
+returns: []
 ---
 
-Removes the file or directory at `path`. Returns `true` on success, or `nil` plus an error message on failure.
+Removes the file or directory at `path`. When `recursive` is true, directory contents are removed from the retained directory object. Authorization remains bound to the validated object through deletion. Successful calls complete with an empty result list. Failures raise catchable errors.

@@ -69,7 +69,7 @@ function definition.compute(uri, position)
 
   -- Check if cursor is on a require() string argument -> jump to module file
   if tree then
-    local mod_uri = modules.get_require_at(tree, line, col)
+    local mod_uri = modules.get_require_at(tree, line, col, uri)
     if mod_uri then
       return {
         uri = mod_uri,
@@ -100,10 +100,10 @@ function definition.compute(uri, position)
             -- Check if it's a require() result
             local mod_name = modules.get_require_for_decl(tree, table_decl)
             if mod_name then
-              local exports = modules.get_exports(mod_name)
+              local exports = modules.get_exports(mod_name, uri)
               for _, exp in ipairs(exports) do
                 if exp.name == field_info.field_name then
-                  local target_uri = exp.uri or modules.resolve(mod_name)
+                  local target_uri = exp.uri or modules.resolve(mod_name, uri)
                   if target_uri then
                     return {
                       uri = target_uri,
@@ -159,7 +159,7 @@ function definition.compute(uri, position)
       if mod_name then
         -- The variable is a require() result. If this is the variable itself,
         -- jump to the module file
-        local mod_uri = modules.resolve(mod_name)
+        local mod_uri = modules.resolve(mod_name, uri)
         if mod_uri then
           return {
             uri = mod_uri,

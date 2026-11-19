@@ -11,4 +11,4 @@ params:
 returns: thread
 ---
 
-Creates a new coroutine from function `f` and returns it. Does not start execution; use `coroutine.resume` to begin.
+Creates and returns a suspended coroutine from function `f`. `coroutine.resume` begins its execution.

@@ -11,4 +11,4 @@ params:
 returns: function
 ---
 
-Returns an iterator function, the table `t`, and `nil`, so that the construction `for k, v in pairs(t)` iterates over all key--value pairs of `t`. If `t` has a `__pairs` metamethod, calls it with `t` as argument and returns its results.
+Returns an iterator function, the table `t`, and `nil`, so that the construction `for k, v in pairs(t)` iterates over every key and value in `t`. If `t` has a `__pairs` metamethod, calls it with `t` as argument and returns its results.

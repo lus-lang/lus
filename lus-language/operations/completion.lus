@@ -50,16 +50,24 @@ local KEYWORDS = {
   "local", "global", "function", "if", "then", "else", "elseif", "end",
   "for", "do", "while", "repeat", "until", "return", "break", "goto",
   "in", "and", "or", "not", "true", "false", "nil",
-  "catch", "provide", "enum",
+  "catch", "provide", "enum", "from",
 }
 
 -- ---------------------------------------------------------------------------
 -- Standard library data (from lus-spec via build-lsp.js)
 -- ---------------------------------------------------------------------------
 
-local STDLIB_MEMBERS = stdlib_data.members
-local GLOBAL_FUNCTIONS = stdlib_data.globals
+local GLOBAL_SYMBOLS = stdlib_data.globals
 local STDLIB_TABLES = stdlib_data.tables
+
+local function stdlib_kind(symbol)
+  if not symbol then return KIND.Field end
+  if symbol.kind == "function" then return KIND.Function end
+  if symbol.kind == "constant" then return KIND.Constant end
+  if symbol.kind == "variable" then return KIND.Variable end
+  if symbol.kind == "module" then return KIND.Module end
+  return KIND.Field
+end
 
 -- ---------------------------------------------------------------------------
 -- Completion logic
@@ -116,24 +124,21 @@ end
 -- Build member completion items for a table name
 local function member_items(table_name)
   local items = {}
-  -- Check stdlib
-  local members = STDLIB_MEMBERS[table_name]
-  if members then
-    for _, m in ipairs(members) do
-      items[#items + 1] = {
-        label = m.n,
-        kind = m.k,
-        detail = table_name .. "." .. m.n,
-      }
-    end
+  for _, symbol in ipairs(stdlib_data.children(table_name)) do
+    items[#items + 1] = {
+      label = symbol.short_name,
+      kind = stdlib_kind(symbol),
+      detail = symbol.name,
+      documentation = symbol.description,
+    }
   end
   return items
 end
 
 -- Build completion items for module exports
-local function module_export_items(mod_name)
+local function module_export_items(mod_name, origin_uri)
   local items = {}
-  local exports = modules.get_exports(mod_name)
+  local exports = modules.get_exports(mod_name, origin_uri)
   for _, exp in ipairs(exports) do
     local kind = exp.kind == "function" and KIND.Function or KIND.Field
     items[#items + 1] = {
@@ -164,13 +169,15 @@ function completion.compute(uri, position)
     -- Inside a `global` statement: suggest known environment globals
     local items = {}
     local seen = {}
-    for _, name in ipairs(GLOBAL_FUNCTIONS) do
+    for _, name in ipairs(GLOBAL_SYMBOLS) do
       if not seen[name] then
         seen[name] = true
+        local symbol = stdlib_data.resolve(name)
         items[#items + 1] = {
           label = name,
-          kind = KIND.Function,
-          detail = "global function",
+          kind = stdlib_kind(symbol),
+          detail = symbol and symbol.type or "global",
+          documentation = symbol and symbol.description,
         }
       end
     end
@@ -227,56 +234,52 @@ function completion.compute(uri, position)
             if tree and #segments == 1 then
               local mod_name = modules.get_require_for_decl(tree, decl)
               if mod_name then
-                items = module_export_items(mod_name)
+                items = module_export_items(mod_name, uri)
               end
             end
             -- Traverse field chain to find final type
             if #items == 0 and decl.type_info then
-              local current_type = decl.type_info
-              for j = 2, #segments do
-                local fields = types_mod.get_fields(current_type)
-                if fields and fields[segments[j]] then
-                  current_type = fields[segments[j]].type_info
-                  if not current_type then break end
-                else
-                  current_type = nil
-                  break
-                end
-              end
+              local current_type = types_mod.resolve_field_chain(
+                decl.type_info, segments, 2
+              )
               -- Show final type's fields
               if current_type then
-                local fields = types_mod.get_fields(current_type)
-                if fields then
-                  for fname, finfo in pairs(fields) do
-                    local fkind = KIND.Field
-                    if finfo.type_info and finfo.type_info.tag == "function" then
-                      fkind = KIND.Function
-                    end
-                    local detail
-                    if finfo.type_info then
-                      local type_str = types_mod.display(finfo.type_info)
-                      if type_str ~= "unknown" then
-                        detail = type_str
+                local receiver = types_mod.stdlib_receiver_name(current_type)
+                if receiver then items = member_items(receiver) end
+                if #items == 0 then
+                  local fields = types_mod.get_fields(current_type)
+                  if fields then
+                    for fname, finfo in pairs(fields) do
+                      local fkind = KIND.Field
+                      if finfo.type_info and finfo.type_info.tag == "function" then
+                        fkind = KIND.Function
                       end
-                    end
-                    if not detail then
-                      detail = value .. "." .. fname
-                    end
-                    local item = {
-                      label = fname,
-                      kind = fkind,
-                      detail = detail,
-                    }
-                    -- Use bracket notation for special-character field names
-                    if not is_valid_identifier(fname) then
-                      item.filterText = fname
-                      if string.find(fname, "'", 1, true) then
-                        item.insertText = '["' .. fname .. '"]'
-                      else
-                        item.insertText = "['" .. fname .. "']"
+                      local detail
+                      if finfo.type_info then
+                        local type_str = types_mod.display(finfo.type_info)
+                        if type_str ~= "unknown" then
+                          detail = type_str
+                        end
                       end
+                      if not detail then
+                        detail = value .. "." .. fname
+                      end
+                      local item = {
+                        label = fname,
+                        kind = fkind,
+                        detail = detail,
+                      }
+                      -- Use bracket notation for special-character field names
+                      if not is_valid_identifier(fname) then
+                        item.filterText = fname
+                        if string.find(fname, "'", 1, true) then
+                          item.insertText = '["' .. fname .. '"]'
+                        else
+                          item.insertText = "['" .. fname .. "']"
+                        end
+                      end
+                      items[#items + 1] = item
                     end
-                    items[#items + 1] = item
                   end
                 end
               end
@@ -329,13 +332,15 @@ function completion.compute(uri, position)
   end
 
   -- Add global functions
-  for _, name in ipairs(GLOBAL_FUNCTIONS) do
+  for _, name in ipairs(GLOBAL_SYMBOLS) do
     if not seen[name] then
       seen[name] = true
+      local symbol = stdlib_data.resolve(name)
       items[#items + 1] = {
         label = name,
-        kind = KIND.Function,
-        detail = "global function",
+        kind = stdlib_kind(symbol),
+        detail = symbol and symbol.type or "global",
+        documentation = symbol and symbol.description,
       }
     end
   end

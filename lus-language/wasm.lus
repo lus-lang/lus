@@ -1,244 +1,42 @@
--- WASM entry point for the Lus language server.
--- Instead of a blocking stdio loop, exposes a _lsp_handle(json) function
--- that processes one LSP message at a time. The WASM host calls this
--- function for each incoming message and captures io.write output.
+-- WASM entry points share dispatch and framing with the native server.
 
-global require, io, tostring, fromjson, tojson, pledge, string
+global require, pledge, _lsp_handle, _lsp_handle_frame
 
 pledge("load", "fs:read", "seal")
 
+local transport = require("lus-language.transport")
 local protocol = require("lus-language.protocol")
-local document = require("lus-language.document")
-local diagnostics = require("lus-language.analysis.diagnostics")
-local doc_symbols = require("lus-language.operations.symbols")
-local doc_format = require("lus-language.operations.format")
-local sem_tokens = require("lus-language.operations.semantic_tokens")
-local nav_definition = require("lus-language.operations.definition")
-local nav_references = require("lus-language.operations.references")
-local nav_hover = require("lus-language.operations.hover")
-local nav_rename = require("lus-language.operations.rename")
-local modules = require("lus-language.analysis.modules")
-local doc_completion = require("lus-language.operations.completion")
-local doc_signature = require("lus-language.operations.signature")
-local doc_folding = require("lus-language.operations.folding")
-local doc_inlay = require("lus-language.operations.inlay_hints")
-local ws_symbols = require("lus-language.operations.workspace_symbols")
-local doc_highlight = require("lus-language.operations.highlight")
-local doc_prepare_rename = require("lus-language.operations.prepare_rename")
-local doc_selection = require("lus-language.operations.selection_range")
-local doc_code_action = require("lus-language.operations.code_action")
+local server = require("lus-language.server")
 
--- Server state
-local initialized = false
-local shutdown_requested = false
+local instance = server.new()
 
--- ---------------------------------------------------------------------------
--- Handlers (same as main.lus)
--- ---------------------------------------------------------------------------
-
-local handlers = {}
-
-function handlers.initialize(msg)
-  initialized = true
-  local root_uri = msg.params.rootUri
-  if not root_uri and msg.params.workspaceFolders then
-    local folders = msg.params.workspaceFolders
-    if folders[1] then
-      root_uri = folders[1].uri
-    end
-  end
-  if root_uri then
-    modules.set_root(root_uri)
-  end
-  return protocol.make_response(msg.id, protocol.initialize_result())
+local function write_parse_error(reason)
+  transport.write_message(protocol.make_error(
+    protocol.JSON_NULL, protocol.PARSE_ERROR, reason
+  ))
 end
 
-function handlers.initialized()
-  return nil
+local function handle_message(msg)
+  local response = instance.dispatch(msg)
+  if response then transport.write_message(response) end
 end
 
-function handlers.shutdown(msg)
-  shutdown_requested = true
-  return protocol.make_response(msg.id, nil)
-end
-
-function handlers.exit()
-  -- No-op in WASM (can't call os.exit)
-  return nil
-end
-
-handlers["textDocument/didOpen"] = function(msg)
-  local params = msg.params
-  local td = params.textDocument
-  document.open(td.uri, td.version, td.text)
-  diagnostics.publish(td.uri)
-  return nil
-end
-
-handlers["textDocument/didChange"] = function(msg)
-  local params = msg.params
-  local td = params.textDocument
-  document.change(td.uri, td.version, params.contentChanges)
-  diagnostics.publish(td.uri)
-  return nil
-end
-
-handlers["textDocument/didClose"] = function(msg)
-  local params = msg.params
-  local td = params.textDocument
-  document.close(td.uri)
-  return nil
-end
-
-handlers["textDocument/documentSymbol"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_symbols.compute(uri))
-end
-
-handlers["textDocument/formatting"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  local edits, err = doc_format.compute(uri, msg.params.options)
-  if err then
-    return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. err)
-  end
-  return protocol.make_response(msg.id, edits)
-end
-
-handlers["textDocument/rangeFormatting"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  local edits, err = doc_format.compute_range(uri, msg.params.range, msg.params.options)
-  if err then
-    return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. err)
-  end
-  return protocol.make_response(msg.id, edits)
-end
-
-handlers["textDocument/semanticTokens/full"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, sem_tokens.compute(uri))
-end
-
-handlers["textDocument/definition"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, nav_definition.compute(uri, msg.params.position))
-end
-
-handlers["textDocument/references"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  local include_decl = msg.params.context and msg.params.context.includeDeclaration
-  return protocol.make_response(msg.id, nav_references.compute(uri, msg.params.position, include_decl))
-end
-
-handlers["textDocument/hover"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, nav_hover.compute(uri, msg.params.position))
-end
-
-handlers["textDocument/rename"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, nav_rename.compute(uri, msg.params.position, msg.params.newName))
-end
-
-handlers["textDocument/completion"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_completion.compute(uri, msg.params.position))
-end
-
-handlers["textDocument/signatureHelp"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_signature.compute(uri, msg.params.position))
-end
-
-handlers["textDocument/foldingRange"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_folding.compute(uri))
-end
-
-handlers["textDocument/inlayHint"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_inlay.compute(uri, msg.params.range))
-end
-
-handlers["workspace/symbol"] = function(msg)
-  local query = msg.params.query or ""
-  return protocol.make_response(msg.id, ws_symbols.compute(query))
-end
-
-handlers["textDocument/documentHighlight"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_highlight.compute(uri, msg.params.position))
-end
-
-handlers["textDocument/prepareRename"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_prepare_rename.compute(uri, msg.params.position))
-end
-
-handlers["textDocument/selectionRange"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_selection.compute(uri, msg.params.positions))
-end
-
-handlers["textDocument/codeAction"] = function(msg)
-  local uri = msg.params.textDocument.uri
-  return protocol.make_response(msg.id, doc_code_action.compute(uri, msg.params.range, msg.params.context))
-end
-
--- ---------------------------------------------------------------------------
--- Dispatch
--- ---------------------------------------------------------------------------
-
-local function dispatch(msg)
-  local method = msg.method
-  if not method then
-    return nil
-  end
-
-  local handler = handlers[method]
-  if handler then
-    return handler(msg)
-  end
-
-  if msg.id then
-    return protocol.make_error(msg.id, protocol.METHOD_NOT_FOUND, "Method not found: " .. method)
-  end
-  return nil
-end
-
--- Write an LSP message to io.write (captured by WASM host)
-local function write_message(msg)
-  local body = tojson(msg)
-  io.write("Content-Length: " .. #body .. "\r\n\r\n")
-  io.write(body)
-end
-
--- ---------------------------------------------------------------------------
--- Global handler function called by WASM host
--- ---------------------------------------------------------------------------
-
--- _lsp_handle(json_string)
--- Parses one JSON-RPC message, dispatches it, writes responses and
--- any notifications (like publishDiagnostics) to io.write which the
--- WASM host captures.
-global function _lsp_handle(json_str)
-  local ok, msg = catch fromjson(json_str)
-  if not ok or not msg then
+-- The JavaScript host passes one UTF-8 JSON-RPC body per call.
+global function _lsp_handle(json_body)
+  local msg, reason = transport.decode_json(json_body)
+  if reason then
+    write_parse_error(reason)
     return
   end
+  handle_message(msg)
+end
 
-  local success, response = catch dispatch(msg)
-  if not success then
-    if msg.id then
-      response = protocol.make_error(
-        msg.id, protocol.INTERNAL_ERROR,
-        "Internal error: " .. tostring(response)
-      )
-    else
-      return
-    end
+-- Tests and native-compatible hosts may pass one complete canonical frame.
+global function _lsp_handle_frame(frame)
+  local msg, reason = transport.parse_frame(frame)
+  if reason then
+    write_parse_error(reason)
+    return
   end
-
-  if response then
-    write_message(response)
-  end
+  handle_message(msg)
 end

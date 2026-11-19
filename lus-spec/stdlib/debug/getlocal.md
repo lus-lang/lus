@@ -14,4 +14,4 @@ params:
 returns: string|nil
 ---
 
-Returns the name and value of local variable `local` at stack level `f`. Returns `nil` if there is no local variable with that index. Negative indices access vararg arguments.
+Returns the name and value of local variable `local` at stack level `f`. An index past the available locals returns `nil`. Negative indices access vararg arguments.

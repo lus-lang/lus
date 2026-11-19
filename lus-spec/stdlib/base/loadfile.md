@@ -19,4 +19,6 @@ params:
 returns: function|nil
 ---
 
-Loads a chunk from `filename` (or standard input if absent) without executing it. Returns the compiled chunk as a function, or `nil` plus an error message on failure. See `load` for the meaning of `mode` and `env`.
+Loads a chunk from `filename` or standard input without executing it. Returns the compiled chunk as a function, or `nil` plus an error message on failure. See `load` for the meaning of `mode` and `env`.
+
+Binary chunks are version-dependent artifacts for trusted build and storage paths. Treat every binary chunk as trusted input. Use `mode = "t"` for a file supplied across an untrusted boundary.

@@ -22,18 +22,22 @@ local KIND_PARAMETER = 2
 local function get_param_names(func_node, analysis, uri)
   if not func_node then return nil end
 
+  local function stdlib_param_names(name)
+    local params, vararg = sig_mod.get_stdlib_params(name)
+    if not params then return nil end
+    local names = {}
+    for _, param in ipairs(params) do
+      names[#names + 1] = param.name
+    end
+    if vararg then names[#names + 1] = "..." end
+    return names
+  end
+
   -- Simple name: look up in scope or stdlib
   if func_node.type == "name" then
     local name = func_node.value
-    -- Check stdlib signatures (extract param names from typed entries)
-    local stdlib = sig_mod.STDLIB_SIGNATURES
-    if stdlib and stdlib[name] then
-      local names = {}
-      for _, p in ipairs(stdlib[name]) do
-        names[#names + 1] = p.n
-      end
-      return names
-    end
+    local stdlib_names = stdlib_param_names(name)
+    if stdlib_names then return stdlib_names end
     -- Check scope for user-defined function
     if analysis then
       local s = scope_mod.get_scope_at(analysis.root, func_node.line or 0)
@@ -56,20 +60,21 @@ local function get_param_names(func_node, analysis, uri)
   end
 
   -- Field access: table.method
-  if func_node.type == "field" and func_node.table
-     and func_node.table.type == "name" and func_node.key then
-    local tname = func_node.table.value
+  if func_node.type == "field" and func_node.table and func_node.key then
+    local tname = func_node.table.type == "name" and func_node.table.value
     local fname = func_node.key.value
+    local function field_name(node)
+      if not node then return nil end
+      if node.type == "name" then return node.value end
+      if node.type ~= "field" or not node.key then return nil end
+      local parent = field_name(node.table)
+      if not parent then return nil end
+      return parent .. "." .. node.key.value
+    end
+    local full = field_name(func_node)
+    local stdlib_names = stdlib_param_names(full)
+    if stdlib_names then return stdlib_names end
     if tname and fname then
-      local full = tname .. "." .. fname
-      local stdlib = sig_mod.STDLIB_SIGNATURES
-      if stdlib and stdlib[full] then
-        local names = {}
-        for _, p in ipairs(stdlib[full]) do
-          names[#names + 1] = p.n
-        end
-        return names
-      end
       -- Check module exports
       if analysis then
         local tree = ast_mod.get(uri)
@@ -81,7 +86,7 @@ local function get_param_names(func_node, analysis, uri)
             if decl then
               local mod_name = modules.get_require_for_decl(tree, decl)
               if mod_name then
-                local exports = modules.get_exports(mod_name)
+                local exports = modules.get_exports(mod_name, uri)
                 for _, exp in ipairs(exports) do
                   if exp.name == fname and exp.params then
                     return exp.params

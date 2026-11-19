@@ -4,16 +4,40 @@ local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
 local modules = require("lus-language.analysis.modules")
 local document = require("lus-language.document")
+local types_mod = require("lus-language.analysis.types")
 local pos_util = require("lus-language.util.position")
 local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local signature = {}
 
--- ---------------------------------------------------------------------------
--- Standard library signatures (from lus-spec via build-lsp.js)
--- ---------------------------------------------------------------------------
+local function stdlib_signature(name)
+  local symbol = stdlib_data.resolve(name)
+  if symbol and symbol.kind == "function" then return symbol end
+  return nil
+end
 
-local STDLIB_SIGNATURES = stdlib_data.signatures
+local function receiver_signature(func_name, analysis, line)
+  local receiver_expr, member = string.match(
+    func_name, "^([%w_%.]+):([%w_]+)$"
+  )
+  if not receiver_expr or not analysis then return nil end
+
+  local segments = {}
+  for segment in string.gmatch(receiver_expr, "[%w_]+") do
+    segments[#segments + 1] = segment
+  end
+  local scope_at_call = scope_mod.get_scope_at(analysis.root, line)
+  local visible = scope_at_call and scope_mod.get_visible(scope_at_call)
+  local declaration = visible and visible[segments[1]]
+  if not declaration or not declaration.type_info then return nil end
+
+  local receiver_type = types_mod.resolve_field_chain(
+    declaration.type_info, segments, 2
+  )
+  local symbol = types_mod.resolve_stdlib_member(receiver_type, member)
+  if symbol and symbol.kind == "function" then return symbol end
+  return nil
+end
 
 -- ---------------------------------------------------------------------------
 -- Parse the call context from the text before cursor
@@ -91,23 +115,29 @@ function signature.compute(uri, position)
   local label = nil
 
   -- Check stdlib signatures first
-  local stdlib_params = STDLIB_SIGNATURES[func_name]
-  if stdlib_params then
+  local stdlib_symbol = stdlib_signature(func_name)
+  if not stdlib_symbol then
+    stdlib_symbol = receiver_signature(func_name, analysis, line)
+  end
+  if stdlib_symbol then
     -- Build typed label: name(param: type, ...)
     params = {}
     local label_parts = {}
-    for _, p in ipairs(stdlib_params) do
-      params[#params + 1] = p.n
-      if p.t and p.t ~= "any" then
-        label_parts[#label_parts + 1] = p.n .. ": " .. p.t
-      else
-        label_parts[#label_parts + 1] = p.n
+    for _, p in ipairs(stdlib_symbol.params or {}) do
+      params[#params + 1] = p.name
+      local part = p.name
+      if p.type and p.type ~= "any" then
+        part = part .. ": " .. p.type
       end
+      if p.optional then part = part .. "?" end
+      label_parts[#label_parts + 1] = part
     end
-    local ret_suffix = ""
-    if stdlib_data.returns[func_name] then
-      ret_suffix = " -> " .. stdlib_data.returns[func_name]
+    if stdlib_symbol.vararg then
+      params[#params + 1] = "..."
+      label_parts[#label_parts + 1] = "..."
     end
+    local returns = stdlib_data.format_returns(stdlib_symbol)
+    local ret_suffix = returns ~= "" and " -> " .. returns or ""
     label = func_name .. "(" .. table.concat(label_parts, ", ") .. ")" .. ret_suffix
   end
 
@@ -151,7 +181,7 @@ function signature.compute(uri, position)
           if decl then
             local mod_name = modules.get_require_for_decl(tree, decl)
             if mod_name then
-              local exports = modules.get_exports(mod_name)
+              local exports = modules.get_exports(mod_name, uri)
               for _, exp in ipairs(exports) do
                 if exp.name == member and exp.params then
                   params = exp.params
@@ -170,15 +200,17 @@ function signature.compute(uri, position)
 
   -- Build LSP SignatureHelp
   local param_infos = {}
-  -- For stdlib sigs, look up the typed info for richer labels
-  local stdlib_params = STDLIB_SIGNATURES[func_name]
-  if stdlib_params then
-    for _, p in ipairs(stdlib_params) do
-      if p.t and p.t ~= "any" then
-        param_infos[#param_infos + 1] = {label = p.n .. ": " .. p.t}
-      else
-        param_infos[#param_infos + 1] = {label = p.n}
+  if stdlib_symbol then
+    for _, p in ipairs(stdlib_symbol.params or {}) do
+      local param_label = p.name
+      if p.type and p.type ~= "any" then
+        param_label = param_label .. ": " .. p.type
       end
+      if p.optional then param_label = param_label .. "?" end
+      param_infos[#param_infos + 1] = {label = param_label}
+    end
+    if stdlib_symbol.vararg then
+      param_infos[#param_infos + 1] = {label = "..."}
     end
   else
     for _, p in ipairs(params) do
@@ -198,7 +230,10 @@ function signature.compute(uri, position)
   }
 end
 
--- Export stdlib signatures for use by inlay hints
-signature.STDLIB_SIGNATURES = STDLIB_SIGNATURES
+function signature.get_stdlib_params(name)
+  local symbol = stdlib_signature(name)
+  if not symbol then return nil end
+  return symbol.params, symbol.vararg
+end
 
 return signature

@@ -1,121 +1,234 @@
-global require, ipairs, pairs, type, string, io, debug, table
+global require, ipairs, pairs, type, string, io, debug, table, tostring
 
 local uri_util = require("lus-language.util.uri")
+local document = require("lus-language.document")
 
 local modules = {}
 
--- Workspace root path (set from initialize params)
-local root_path = nil
+-- Workspace roots retain the client's declared URI order.
+local root_uris = {}
 
--- Cache: module_name -> { uri, path, ast, exports, mtime }
+-- Cache key includes the origin root and module name. Each entry records the
+-- exact resolved URI and content version that produced its analysis.
 local module_cache = {}
 
 -- Dependency graph: uri -> { { module_name, resolved_uri }, ... }
 local deps = {}
+local reverse_deps = {}
+local reverse_candidates = {}
 
 -- ---------------------------------------------------------------------------
 -- Configuration
 -- ---------------------------------------------------------------------------
 
 function modules.set_root(root_uri)
-  if root_uri then
-    root_path = uri_util.to_path(root_uri)
-  end
+  modules.set_roots(root_uri and {root_uri} or {})
 end
 
 function modules.get_root()
-  return root_path
+  if not root_uris[1] then return nil end
+  return uri_util.to_path(root_uris[1])
+end
+
+function modules.set_roots(roots)
+  root_uris = {}
+  for _, root_uri in ipairs(roots or {}) do
+    root_uris[#root_uris + 1] = root_uri
+  end
+  module_cache = {}
+  deps = {}
+  reverse_deps = {}
+  reverse_candidates = {}
+  for _, uri in ipairs(document.all()) do
+    document.invalidate_analysis(uri)
+  end
+end
+
+function modules.get_roots()
+  local result = {}
+  for _, root_uri in ipairs(root_uris) do
+    result[#result + 1] = root_uri
+  end
+  return result
 end
 
 -- ---------------------------------------------------------------------------
 -- Path resolution
 -- ---------------------------------------------------------------------------
 
--- Check if a file exists at the given path
-local function file_exists(path)
-  local f = io.open(path, "r")
-  if f then
-    f:close()
-    return true
+local function declared_root(candidate)
+  if not candidate then return nil end
+  for _, root_uri in ipairs(root_uris) do
+    if root_uri == candidate then return root_uri end
   end
-  return false
+  return nil
 end
 
--- Resolve a module name (e.g., "foo.bar") to a filesystem path.
--- Tries: foo/bar.lus, foo/bar/init.lus, foo/bar.lua
--- Returns the path or nil.
-local function resolve_path(module_name)
-  -- Convert dots to path separators
-  local rel = string.gsub(module_name, "%.", "/")
+local function root_specificity(root_uri)
+  local parsed = uri_util.parse(root_uri)
+  return parsed and #parsed.path or #root_uri
+end
 
-  -- Base directories to search
-  local bases = {}
-  if root_path then
-    bases[#bases + 1] = root_path
+local function origin_root(origin_uri)
+  if origin_uri then
+    local origin_doc = document.get(origin_uri)
+    local recorded = origin_doc and declared_root(origin_doc.root_uri)
+    if recorded and uri_util.within(recorded, origin_uri) then return recorded end
+
+    local best = nil
+    local best_specificity = -1
+    for _, root_uri in ipairs(root_uris) do
+      if uri_util.within(root_uri, origin_uri) then
+        local specificity = root_specificity(root_uri)
+        if specificity > best_specificity then
+          best = root_uri
+          best_specificity = specificity
+        end
+      end
+    end
+    if best then return best end
   end
-  bases[#bases + 1] = "."
+  return root_uris[1]
+end
 
-  -- Suffixes to try
-  local suffixes = {
-    "/" .. rel .. ".lus",
-    "/" .. rel .. "/init.lus",
-    "/" .. rel .. ".lua",
+local function ordered_roots(origin_uri)
+  local origin = origin_root(origin_uri)
+  local result = {}
+  if origin then result[#result + 1] = origin end
+  for _, root_uri in ipairs(root_uris) do
+    if root_uri ~= origin then result[#result + 1] = root_uri end
+  end
+  return result, origin
+end
+
+local function candidates(module_name)
+  local rel = string.gsub(module_name, "%.", "/")
+  return {
+    rel .. ".lus",
+    rel .. "/init.lus",
+    rel .. ".lua",
+    rel .. "/init.lua",
   }
+end
 
-  for _, base in ipairs(bases) do
-    for _, suffix in ipairs(suffixes) do
-      local path = base .. suffix
-      if file_exists(path) then
-        return path
+local function resolution_candidates(module_name, origin_uri)
+  local result = {}
+  local roots = ordered_roots(origin_uri)
+  for _, root_uri in ipairs(roots) do
+    for _, relative_path in ipairs(candidates(module_name)) do
+      result[#result + 1] = uri_util.join(root_uri, relative_path)
+    end
+  end
+  return result
+end
+
+local function may_probe_disk(origin_uri)
+  if not origin_uri then return true end
+  local origin_doc = document.get(origin_uri)
+  if origin_doc and origin_doc.root_uri then return false end
+  local parsed = uri_util.parse(origin_uri)
+  return not parsed or string.lower(parsed.scheme) == "file"
+end
+
+local function read_disk_path(path)
+  local open_ok, file = catch io.open(path, "r")
+  if not open_ok or not file then return nil end
+  local read_ok, content = catch file:read("a")
+  local close_ok = catch file:close()
+  if not read_ok or not close_ok then return nil end
+  return content
+end
+
+local function read_disk_uri(candidate_uri)
+  local path = uri_util.to_path(candidate_uri)
+  if not path then return nil end
+  local content = read_disk_path(path)
+  if not content then return nil end
+  return content, path
+end
+
+-- Return exact URI, text, version, path, and origin root for a resolution.
+local function resolve_source(module_name, origin_uri)
+  local roots, origin = ordered_roots(origin_uri)
+  local suffixes = candidates(module_name)
+  local probe_disk = may_probe_disk(origin_uri)
+
+  for _, root_uri in ipairs(roots) do
+    for _, relative_path in ipairs(suffixes) do
+      local mirrored, exact_uri =
+        document.get_by_root_relative(root_uri, relative_path)
+      if mirrored then
+        return exact_uri, mirrored.text, mirrored.version, nil, origin
+      end
+
+      local candidate_uri = uri_util.join(root_uri, relative_path)
+      local open_doc = document.get(candidate_uri)
+      if open_doc then
+        return candidate_uri, open_doc.text, open_doc.version, nil, origin
+      end
+
+      if probe_disk then
+        local content, path = read_disk_uri(candidate_uri)
+        if content then
+          return candidate_uri, content, "disk", path, origin
+        end
       end
     end
   end
 
-  return nil
+  -- Native use without workspace roots keeps repository-relative resolution.
+  if #roots == 0 and probe_disk then
+    for _, relative_path in ipairs(suffixes) do
+      local content = read_disk_path(relative_path)
+      if content then
+        return uri_util.from_path(relative_path), content, "disk",
+          relative_path, origin
+      end
+    end
+  end
+  return nil, nil, nil, nil, origin
 end
 
 -- Resolve a module name to a file URI. Returns uri or nil.
-function modules.resolve(module_name)
-  -- Check cache first
-  local cached = module_cache[module_name]
+function modules.resolve(module_name, origin_uri)
+  local origin = origin_root(origin_uri) or ""
+  local key = origin .. "\0" .. module_name
+  local cached = module_cache[key]
   if cached then
-    return cached.uri
+    local current = document.content_version(cached.uri)
+    if current == cached.version
+       or (current == nil and cached.version == "disk") then
+      return cached.uri
+    end
   end
-
-  local path = resolve_path(module_name)
-  if not path then return nil end
-
-  return uri_util.from_path(path)
+  local resolved_uri = resolve_source(module_name, origin_uri)
+  return resolved_uri
 end
 
 -- ---------------------------------------------------------------------------
 -- Background file loading and parsing
 -- ---------------------------------------------------------------------------
 
--- Read a file from disk and return its contents, or nil.
-local function read_file(path)
-  local f = io.open(path, "r")
-  if not f then return nil end
-  local content = f:read("a")
-  f:close()
-  return content
-end
-
 -- Parse a module file and cache the result.
 -- Returns { uri, path, ast, exports } or nil.
-local function load_module(module_name)
-  local cached = module_cache[module_name]
-  if cached then return cached end
+local function load_module(module_name, origin_uri)
+  local origin = origin_root(origin_uri) or ""
+  local key = origin .. "\0" .. module_name
+  local cached = module_cache[key]
+  if cached then
+    local current = document.content_version(cached.uri)
+    if (current ~= nil and current == cached.version)
+       or (current == nil and cached.version == "disk") then
+      return cached
+    end
+    module_cache[key] = nil
+  end
 
-  local path = resolve_path(module_name)
-  if not path then return nil end
+  local mod_uri, content, version, path =
+    resolve_source(module_name, origin_uri)
+  if not mod_uri or not content then return nil end
 
-  local content = read_file(path)
-  if not content then return nil end
-
-  local mod_uri = uri_util.from_path(path)
-
-  local ok, ast = catch debug.parse(content, path, {
+  local ok, ast = catch debug.parse(content, path or mod_uri, {
     comments = true,
     recover = true,
   })
@@ -127,10 +240,14 @@ local function load_module(module_name)
   local entry = {
     uri = mod_uri,
     path = path,
+    version = version,
+    origin_root = origin,
+    module_name = module_name,
+    candidate_uris = resolution_candidates(module_name, origin_uri),
     ast = ast,
     exports = nil,  -- lazily computed
   }
-  module_cache[module_name] = entry
+  module_cache[key] = entry
   return entry
 end
 
@@ -343,8 +460,8 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Get exports for a module by name. Returns array of export descriptors.
-function modules.get_exports(module_name)
-  local entry = load_module(module_name)
+function modules.get_exports(module_name, origin_uri)
+  local entry = load_module(module_name, origin_uri)
   if not entry then return {} end
 
   if not entry.exports then
@@ -375,7 +492,7 @@ end
 
 -- Check if a position (1-based) is on a require() string argument.
 -- Returns the resolved module URI if so, or nil.
-function modules.get_require_at(ast, line, col)
+function modules.get_require_at(ast, line, col, origin_uri)
   local reqs = find_requires(ast)
   for _, req in ipairs(reqs) do
     local sn = req.string_node
@@ -385,7 +502,7 @@ function modules.get_require_at(ast, line, col)
       local start_col = (sn.column or 1) - 1  -- include opening quote
       local end_col = start_col + #req.module_name + 2  -- include both quotes
       if col >= start_col and col <= end_col then
-        return modules.resolve(req.module_name)
+        return modules.resolve(req.module_name, origin_uri)
       end
     end
   end
@@ -425,26 +542,126 @@ end
 
 -- Invalidate cached module info for a URI.
 function modules.invalidate(uri)
-  -- Remove from cache if this URI matches any cached module
+  local invalidated = {}
+  local pending = {uri}
+  local seen = {}
+  local index = 1
+  while index <= #pending do
+    local current = pending[index]
+    index = index + 1
+    if not seen[current] then
+      seen[current] = true
+      invalidated[#invalidated + 1] = current
+      document.invalidate_analysis(current)
+      for dependant in pairs(reverse_deps[current] or {}) do
+        pending[#pending + 1] = dependant
+      end
+      for dependant in pairs(reverse_candidates[current] or {}) do
+        pending[#pending + 1] = dependant
+      end
+    end
+  end
+
+  for name, entry in pairs(module_cache) do
+    local affected = seen[entry.uri]
+    for _, candidate_uri in ipairs(entry.candidate_uris or {}) do
+      if seen[candidate_uri] then affected = true end
+    end
+    if affected then
+      module_cache[name] = nil
+    end
+  end
+  for invalid_uri in pairs(seen) do
+    local old = deps[invalid_uri]
+    if old then
+      for _, dep in ipairs(old) do
+        if dep.resolved_uri and reverse_deps[dep.resolved_uri] then
+          reverse_deps[dep.resolved_uri][invalid_uri] = nil
+        end
+        for _, candidate_uri in ipairs(dep.candidate_uris or {}) do
+          if reverse_candidates[candidate_uri] then
+            reverse_candidates[candidate_uri][invalid_uri] = nil
+          end
+        end
+      end
+    end
+    deps[invalid_uri] = nil
+  end
+  return invalidated
+end
+
+function modules.invalidate_workspace(root_uri, relative_path, exact_uri)
+  local result = modules.invalidate(exact_uri)
+  local canonical_uri = uri_util.join(root_uri, relative_path)
+  if canonical_uri ~= exact_uri then
+    local seen = {}
+    for _, uri in ipairs(result) do seen[uri] = true end
+    for _, uri in ipairs(modules.invalidate(canonical_uri)) do
+      if not seen[uri] then
+        seen[uri] = true
+        result[#result + 1] = uri
+      end
+    end
+  end
+  return result
+end
+
+function modules.invalidate_all()
+  module_cache = {}
+  deps = {}
+  reverse_deps = {}
+  reverse_candidates = {}
+  local invalidated = document.all()
+  for _, uri in ipairs(invalidated) do
+    document.invalidate_analysis(uri)
+  end
+  return invalidated
+end
+
+-- Remove module entries that resolve to a URI.
+function modules.invalidate_cache_uri(uri)
   for name, entry in pairs(module_cache) do
     if entry.uri == uri then
       module_cache[name] = nil
     end
   end
-  -- Clear deps for this URI
-  deps[uri] = nil
 end
 
 -- Build dependency list for a document.
 function modules.build_deps(uri, ast)
+  local old = deps[uri]
+  if old then
+    for _, dep in ipairs(old) do
+      if dep.resolved_uri and reverse_deps[dep.resolved_uri] then
+        reverse_deps[dep.resolved_uri][uri] = nil
+      end
+      for _, candidate_uri in ipairs(dep.candidate_uris or {}) do
+        if reverse_candidates[candidate_uri] then
+          reverse_candidates[candidate_uri][uri] = nil
+        end
+      end
+    end
+  end
+
   local reqs = find_requires(ast)
   local dep_list = {}
   for _, req in ipairs(reqs) do
-    local resolved = modules.resolve(req.module_name)
-    dep_list[#dep_list + 1] = {
+    local resolved = modules.resolve(req.module_name, uri)
+    local dep = {
       module_name = req.module_name,
       resolved_uri = resolved,
     }
+    dep_list[#dep_list + 1] = dep
+    dep.candidate_uris = resolution_candidates(req.module_name, uri)
+    for _, candidate_uri in ipairs(dep.candidate_uris) do
+      reverse_candidates[candidate_uri] = reverse_candidates[candidate_uri]
+        or {}
+      reverse_candidates[candidate_uri][uri] = true
+    end
+    if resolved then
+      reverse_deps[resolved] = reverse_deps[resolved] or {}
+      reverse_deps[resolved][uri] = true
+    end
   end
   deps[uri] = dep_list
   return dep_list

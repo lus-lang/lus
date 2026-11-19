@@ -1,6 +1,7 @@
 global require, debug, string, tonumber, type
 
 local document = require("lus-language.document")
+local modules = require("lus-language.analysis.modules")
 
 local ast = {}
 
@@ -48,6 +49,7 @@ function ast.parse(uri)
   if tree then
     local errors = tree.errors or {}
     document.set_ast(uri, tree, errors)
+    modules.build_deps(uri, tree)
     return tree, errors
   else
     -- Total parse failure; preserve last good AST

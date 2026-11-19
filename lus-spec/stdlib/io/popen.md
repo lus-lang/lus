@@ -15,4 +15,4 @@ params:
 returns: userdata|nil
 ---
 
-Starts the program `prog` in a separated process and returns a file handle for reading or writing, depending on `mode` (`"r"` for reading, default; `"w"` for writing).
+Starts program `prog` in a separate process and returns a file handle. Mode `"r"`, the default, reads the program's output. Mode `"w"` writes to its input.

@@ -14,4 +14,4 @@ params:
 returns: string
 ---
 
-Converts a table of rows `t` to a CSV string. Each row must be a sequential table of values. Non-string values are converted via `tostring`; `nil` values produce empty fields. Fields containing the delimiter, newlines, or double quotes are automatically quoted. The optional `delimiter` defaults to `","`.
+Converts a table of rows `t` to a CSV string. Each row is a sequential table of values. `tostring` converts non-string values, and `nil` values produce empty fields. Fields containing the delimiter, newlines, or double quotes are quoted. The optional `delimiter` defaults to `","`.

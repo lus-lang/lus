@@ -288,6 +288,11 @@ local function infer_with_scope(node, s)
     if decl and decl.type_info then return decl.type_info end
     return types.unknown()
   elseif ntype == "field" then
+    local symbol = stdlib_data.resolve(stdlib_data.expression_name(node))
+    if symbol then
+      if symbol.kind == "module" then return types.nominal(symbol.name) end
+      if symbol.type then return types.from_string(symbol.type) end
+    end
     local table_type = infer_with_scope(node.table, s)
     if table_type and table_type.tag == "table" and table_type.fields then
       local key_name = node.key and (node.key.value or node.key.name)
@@ -299,20 +304,12 @@ local function infer_with_scope(node, s)
     return types.unknown()
 
   elseif ntype == "callexpr" or ntype == "callstat" then
-    -- Resolve stdlib function name from AST
-    local func_name
-    if node.func then
-      if node.func.type == "name" then
-        func_name = node.func.value
-      elseif node.func.type == "field" and node.func.table
-             and node.func.table.type == "name" and node.func.key then
-        func_name = node.func.table.value .. "." .. node.func.key.value
-      end
-    end
+    local func_name = node.func and stdlib_data.expression_name(node.func)
+    local symbol = func_name and stdlib_data.resolve(func_name)
+    local return_type = stdlib_data.first_return(symbol)
 
     -- For generic stdlib functions, resolve the argument through scope
-    if func_name and stdlib_data.generics[func_name]
-       and stdlib_data.returns[func_name] == stdlib_data.generics[func_name]
+    if symbol and symbol.generic and return_type == symbol.generic
        and node.args and node.args[1] then
       local arg_type = infer_with_scope(node.args[1], s)
       if arg_type.tag ~= "unknown" then
@@ -325,8 +322,8 @@ local function infer_with_scope(node, s)
     if expr_type.tag ~= "unknown" then return expr_type end
 
     -- Non-generic stdlib return type via data-driven lookup
-    if func_name and stdlib_data.returns[func_name] then
-      return types.from_string(stdlib_data.returns[func_name])
+    if return_type then
+      return types.from_string(return_type)
     end
 
     -- Resolve callee via scope chain
@@ -342,9 +339,14 @@ local function infer_with_scope(node, s)
   elseif ntype == "methodcall" then
     if node.func then
       local obj_type = infer_with_scope(node.func, s)
+      local method_name = node.method
+      if obj_type and method_name then
+        local symbol = types.resolve_stdlib_member(obj_type, method_name)
+        local return_type = stdlib_data.first_return(symbol)
+        if return_type then return types.from_string(return_type) end
+      end
       if obj_type and obj_type.tag == "table" and obj_type.fields
          and node.method then
-        local method_name = node.method
         if method_name and obj_type.fields[method_name] then
           local minfo = obj_type.fields[method_name]
           if minfo.type_info and minfo.type_info.tag == "function"

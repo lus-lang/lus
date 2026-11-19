@@ -1,6 +1,6 @@
 ---
 name: lus_WorkerSetup
-header: lworkerlib.h
+header: lua.h
 kind: type
 since: 0.1.0
 stability: stable
@@ -8,4 +8,4 @@ origin: lus
 signature: "typedef void (*lus_WorkerSetup)(lua_State *parent, lua_State *worker);"
 ---
 
-Callback type for worker state initialization. Called when a new worker is created, allowing embedders to configure the worker's Lua state.
+Callback type for worker state initialization. The runtime calls it after creating `worker` and before loading its script. `parent` identifies the state that created the worker. Both pointers are borrowed for the callback duration.

@@ -1,6 +1,6 @@
 ---
 name: lus_worker_pool_init
-header: lworkerlib.h
+header: lua.h
 kind: function
 since: 0.1.0
 stability: stable
@@ -11,4 +11,4 @@ params:
     type: "lua_State*"
 ---
 
-Initializes the global worker thread pool. Called automatically on first `worker.create()`.
+Initializes the process-wide worker thread pool. Worker creation calls this function automatically.

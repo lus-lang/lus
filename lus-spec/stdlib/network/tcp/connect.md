@@ -11,7 +11,7 @@ params:
     type: string
   - name: port
     type: integer
-returns: userdata
+returns: tcp_socket
 ---
 
-Connects to a TCP server at `host` and `port`. Returns a connection object for reading and writing.
+Connects to a TCP server at `host` and `port`. Returns a TCP socket for reading and writing.

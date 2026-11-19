@@ -12,10 +12,9 @@ vararg: true
 returns: any
 ---
 
-Blocking select-style receive from one or more workers. Blocks until at least one worker has a message. Returns one value per worker: the message if available, or `nil` if that worker has no message. Propagates worker errors.
+Performs a blocking selection over one or more workers. It waits until at least one worker has a message or reaches a terminal state, then returns one aligned value per argument. A ready message is deserialized, while a worker without a message contributes `nil`. A worker script error propagates from this call.
 
 ```lus
 local msg = worker.receive(w)
--- or multi-worker select:
 local m1, m2 = worker.receive(w1, w2)
 ```

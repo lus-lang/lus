@@ -19,6 +19,7 @@ function types.vector()    return {tag = "vector"} end
 function types.thread()    return {tag = "thread"} end
 function types.userdata()  return {tag = "userdata"} end
 function types.worker()    return {tag = "worker"} end
+function types.nominal(name) return {tag = "nominal", name = name} end
 
 function types.func(params, return_type)
   return {tag = "function", params = params or {}, return_type = return_type}
@@ -43,7 +44,7 @@ function types.union(members)
   local seen = {}
   local unique = {}
   for _, m in ipairs(members) do
-    local key = m.tag or "unknown"
+    local key = (m.tag or "unknown") .. ":" .. (m.name or "")
     if not seen[key] then
       seen[key] = true
       unique[#unique + 1] = m
@@ -85,7 +86,7 @@ function types.from_string(s)
       if ctor then
         members[#members + 1] = ctor()
       else
-        members[#members + 1] = types.unknown()
+        members[#members + 1] = types.nominal(part)
       end
     end
     return types.union(members)
@@ -93,7 +94,7 @@ function types.from_string(s)
   -- Simple type
   local ctor = FROM_STRING_MAP[s]
   if ctor then return ctor() end
-  return types.unknown()
+  return types.nominal(s)
 end
 
 -- ---------------------------------------------------------------------------
@@ -107,6 +108,38 @@ function types.get_fields(type_info)
     return type_info.fields
   end
   return nil
+end
+
+-- Resolve the standard library receiver represented by an inferred type.
+-- Nominal types retain their specification name. Built-in value types use
+-- their type tag as the receiver name in the generated symbol graph.
+function types.stdlib_receiver_name(type_info)
+  if not type_info then return nil end
+  if type_info.tag == "nominal" then return type_info.name end
+  if type_info.tag == "string" or type_info.tag == "table"
+     or type_info.tag == "vector" or type_info.tag == "worker" then
+    return type_info.tag
+  end
+  return nil
+end
+
+function types.resolve_stdlib_member(type_info, member_name)
+  local receiver = types.stdlib_receiver_name(type_info)
+  if not receiver then return nil end
+  return stdlib_data.resolve_member(receiver, member_name)
+end
+
+-- Follow named fields through an inferred table shape. This is shared by
+-- completion and signature help so both operations resolve the same receiver.
+function types.resolve_field_chain(type_info, segments, first)
+  local current = type_info
+  for i = first or 1, #segments do
+    local fields = types.get_fields(current)
+    local field = fields and fields[segments[i]]
+    current = field and field.type_info or nil
+    if not current then return nil end
+  end
+  return current
 end
 
 -- Add or update a field on a table type
@@ -182,6 +215,9 @@ function types.display(type_info, depth)
       return "module \"" .. type_info.module_name .. "\""
     end
     return "module"
+
+  elseif tag == "nominal" then
+    return type_info.name or "unknown"
 
   elseif tag == "union" then
     if type_info.members then
@@ -362,6 +398,14 @@ function types.infer_expr(node)
     end
     return types.enumtype(members)
 
+  elseif ntype == "field" then
+    local symbol = stdlib_data.resolve(stdlib_data.expression_name(node))
+    if symbol then
+      if symbol.kind == "module" then return types.nominal(symbol.name) end
+      if symbol.type then return types.from_string(symbol.type) end
+    end
+    return types.unknown()
+
   elseif ntype == "callexpr" or ntype == "callstat" then
     if node.func then
       -- require("module") is a special case (depends on argument value, not type)
@@ -372,28 +416,15 @@ function types.infer_expr(node)
         return types.module(nil)
       end
 
-      -- Resolve stdlib function name from AST
-      local func_name
-      if node.func.type == "name" then
-        func_name = node.func.value
-      elseif node.func.type == "field" and node.func.table then
-        if node.func.table.type == "name" and node.func.key then
-          func_name = node.func.table.value .. "." .. node.func.key.value
-        elseif node.func.table.type == "field"
-               and node.func.table.table
-               and node.func.table.table.type == "name"
-               and node.func.table.key and node.func.key then
-          func_name = node.func.table.table.value .. "."
-            .. node.func.table.key.value .. "." .. node.func.key.value
-        end
-      end
+      local func_name = stdlib_data.expression_name(node.func)
 
       -- Data-driven stdlib return type lookup
-      if func_name and stdlib_data.returns[func_name] then
-        local ret_str = stdlib_data.returns[func_name]
+      local symbol = func_name and stdlib_data.resolve(func_name)
+      local ret_str = stdlib_data.first_return(symbol)
+      if ret_str then
         -- For generic functions, infer from first argument at the expression
         -- level (scope-level resolution handles the full case in scope.lus)
-        if stdlib_data.generics[func_name] and ret_str == stdlib_data.generics[func_name] then
+        if symbol.generic and ret_str == symbol.generic then
           if node.args and node.args[1] then
             return types.infer_expr(node.args[1])
           end

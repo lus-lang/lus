@@ -11,4 +11,4 @@ params:
 returns: string
 ---
 
-Returns the status of worker `w`: `"running"` if the worker is still executing, or `"dead"` if it has finished or errored.
+Returns `"running"` while worker `w` is executing and `"dead"` after it finishes or raises an error.

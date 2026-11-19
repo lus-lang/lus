@@ -1,6 +1,6 @@
 ---
 name: LUS_WORKER_RUNNING
-header: lworkerlib.h
+header: lua.h
 kind: constant
 since: 0.1.0
 stability: stable
@@ -9,4 +9,4 @@ type: int
 value: 0
 ---
 
-Worker status: running.
+The status returned while a worker is runnable or executing.

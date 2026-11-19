@@ -8,4 +8,4 @@ origin: lua
 type: string
 ---
 
-The path used by `require` to search for a C loader.
+The native-module templates used by `require`. Defaults search versioned `lib/lus/1.7` before `lib/lua/1.7`, then the current directory. The standalone interpreter derives the prefix from an archive when its executable is under `bin`, then falls back to its configured installation prefix. Embedded states use the prefix configured when `liblus` was built. `LUA_CPATH_1_7` takes priority over `LUA_CPATH`, and `;;` inserts the defaults at that position.

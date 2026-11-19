@@ -10,4 +10,4 @@ params:
     type: any
 ---
 
-*(Worker-side only)* Sends `value` to the worker's outbox for the parent to receive via `worker.receive()`.
+Available inside a worker state. Serializes and appends `value` to the worker's outbox for the parent to receive with `worker.receive`.

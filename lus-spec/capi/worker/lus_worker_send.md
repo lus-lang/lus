@@ -1,6 +1,6 @@
 ---
 name: lus_worker_send
-header: lworkerlib.h
+header: lua.h
 kind: function
 since: 0.1.0
 stability: stable
@@ -15,4 +15,4 @@ params:
     type: int
 ---
 
-Sends the value at stack index `idx` to the worker's inbox.
+Serializes the value at stack index `idx` and appends it to `w`'s inbox. Returns `1` on success and `0` when the value cannot be serialized, queue allocation fails, the worker is shutting down, or the handle is `NULL`. The function borrows `w` for the call.

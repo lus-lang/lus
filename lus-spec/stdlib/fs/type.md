@@ -9,7 +9,11 @@ origin: lus
 params:
   - name: path
     type: string
-returns: string|nil
+returns:
+  - name: kind
+    type: string
+  - name: link
+    type: boolean
 ---
 
 Returns the type of the filesystem entry at `path` as a string: `"file"`, `"directory"`, `"link"`, or `nil` if it does not exist.

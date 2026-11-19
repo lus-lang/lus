@@ -1,15 +1,19 @@
-global require, ipairs, pairs
+global require, ipairs, pairs, string, type, table
 
 local position = require("lus-language.util.position")
+local uri_util = require("lus-language.util.uri")
 
 local store = {}
 
--- Internal table of open documents, keyed by URI
+-- Effective documents include open editor buffers and closed workspace mirrors.
 local documents = {}
+local mirrors = {}
+local mirror_paths = {}
+local workspace_roots = {}
 
--- Open a new document (textDocument/didOpen)
-function store.open(uri, version, text)
-  documents[uri] = {
+local function new_document(uri, version, text, is_open, root_uri,
+                            relative_path)
+  return {
     uri = uri,
     version = version,
     text = text,
@@ -17,52 +21,214 @@ function store.open(uri, version, text)
     ast = nil,
     parse_errors = nil,
     last_good_ast = nil,
+    is_open = is_open,
+    root_uri = root_uri,
+    relative_path = relative_path,
   }
 end
 
--- Apply incremental changes to a document (textDocument/didChange)
--- Per the LSP spec, changes are sequential: each change is relative
--- to the document state produced by the previous change.
-function store.change(uri, version, changes)
-  local doc = documents[uri]
-  if not doc then return end
+local function normalize_relative(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  path = string.gsub(path, "\\", "/")
+  if string.sub(path, 1, 1) == "/" then return nil end
 
-  doc.version = version
+  local parts = {}
+  for part in string.gmatch(path, "[^/]+") do
+    if part == ".." then return nil end
+    if part ~= "." and part ~= "" then
+      parts[#parts + 1] = part
+    end
+  end
+  if #parts == 0 then return nil end
+  return table.concat(parts, "/")
+end
 
-  for i = 1, #changes do
-    local change = changes[i]
-    doc.text = position.apply_edit(
-      doc.text, change.range, change.text, doc.line_index
+local function path_key(root_uri, relative_path)
+  return root_uri .. "\0" .. relative_path
+end
+
+local function install_mirror(mirror)
+  mirrors[mirror.uri] = mirror
+  mirror_paths[path_key(mirror.root_uri, mirror.relative_path)] = mirror.uri
+  local current = documents[mirror.uri]
+  if not current or not current.is_open then
+    documents[mirror.uri] = new_document(
+      mirror.uri, mirror.version, mirror.text, false,
+      mirror.root_uri, mirror.relative_path
     )
-    -- Rebuild line index after each edit since offsets shift
-    doc.line_index = position.build_line_index(doc.text)
+  end
+end
+
+function store.normalize_relative(path)
+  return normalize_relative(path)
+end
+
+-- Replace the mirrored workspace. Open editor buffers remain authoritative.
+function store.reset_workspace(roots)
+  for uri, doc in pairs(documents) do
+    if not doc.is_open then
+      documents[uri] = nil
+    end
+  end
+  mirrors = {}
+  mirror_paths = {}
+  workspace_roots = {}
+  for _, root_uri in ipairs(roots or {}) do
+    workspace_roots[#workspace_roots + 1] = root_uri
+  end
+end
+
+function store.workspace_roots()
+  local result = {}
+  for _, root_uri in ipairs(workspace_roots) do
+    result[#result + 1] = root_uri
+  end
+  return result
+end
+
+-- Add or replace a closed-file mirror. An open document keeps its text.
+function store.upsert(root_uri, relative_path, uri, version, text)
+  relative_path = normalize_relative(relative_path)
+  if not relative_path then return false, "invalid relativePath" end
+  if type(root_uri) ~= "string" or root_uri == "" then
+    return false, "invalid rootUri"
+  end
+  if type(uri) ~= "string" or uri == "" then
+    return false, "invalid uri"
+  end
+  local uri_relative = normalize_relative(uri_util.relative(root_uri, uri))
+  if uri_relative ~= relative_path then
+    return false, "workspace URI and relativePath do not match"
+  end
+  if type(text) ~= "string" then return false, "invalid text" end
+  if type(version) ~= "number" and type(version) ~= "string" then
+    return false, "invalid version"
   end
 
-  -- Invalidate cached AST since content changed
+  local previous = mirrors[uri]
+  if previous then
+    if type(version) == "number" and type(previous.version) == "number"
+       and version < previous.version then
+      return true
+    end
+    mirror_paths[path_key(previous.root_uri, previous.relative_path)] = nil
+  end
+  install_mirror({
+    root_uri = root_uri,
+    relative_path = relative_path,
+    uri = uri,
+    version = version,
+    text = text,
+  })
+  return true
+end
+
+-- Delete a mirror when the supplied identity matches the current entry.
+function store.delete(root_uri, relative_path, uri, version)
+  relative_path = normalize_relative(relative_path)
+  if not relative_path then return false, "invalid relativePath" end
+  if normalize_relative(uri_util.relative(root_uri, uri)) ~= relative_path then
+    return false, "workspace URI and relativePath do not match"
+  end
+  local mirror = mirrors[uri]
+  if not mirror then return true end
+  if mirror.root_uri ~= root_uri or mirror.relative_path ~= relative_path then
+    return false, "workspace file identity mismatch"
+  end
+  if version ~= nil and mirror.version ~= nil
+     and type(version) == "number" and type(mirror.version) == "number"
+     and version < mirror.version then
+    return true
+  end
+
+  mirrors[uri] = nil
+  mirror_paths[path_key(root_uri, relative_path)] = nil
+  local current = documents[uri]
+  if current and not current.is_open then
+    documents[uri] = nil
+  end
+  return true
+end
+
+function store.get_by_root_relative(root_uri, relative_path)
+  relative_path = normalize_relative(relative_path)
+  if not relative_path then return nil end
+  local exact_uri = mirror_paths[path_key(root_uri, relative_path)]
+  if not exact_uri then return nil end
+  return documents[exact_uri], exact_uri
+end
+
+-- Open editor text takes precedence over the mirrored copy.
+function store.open(uri, version, text)
+  local mirror = mirrors[uri]
+  documents[uri] = new_document(
+    uri, version, text, true,
+    mirror and mirror.root_uri or nil,
+    mirror and mirror.relative_path or nil
+  )
+end
+
+-- Apply sequential incremental changes to an open document.
+function store.change(uri, version, changes)
+  local doc = documents[uri]
+  if not doc or not doc.is_open then return false end
+
+  doc.version = version
+  for i = 1, #changes do
+    local change = changes[i]
+    if change.range then
+      doc.text = position.apply_edit(
+        doc.text, change.range, change.text, doc.line_index
+      )
+    else
+      doc.text = change.text
+    end
+    doc.line_index = position.build_line_index(doc.text)
+  end
   doc.ast = nil
   doc.parse_errors = nil
+  return true
 end
 
--- Close a document (textDocument/didClose)
+-- Restore the mirror when an editor closes, otherwise remove the document.
 function store.close(uri)
-  documents[uri] = nil
+  local mirror = mirrors[uri]
+  if mirror then
+    documents[uri] = new_document(
+      mirror.uri, mirror.version, mirror.text, false,
+      mirror.root_uri, mirror.relative_path
+    )
+  else
+    documents[uri] = nil
+  end
 end
 
--- Get a document entry by URI, or nil if not open
 function store.get(uri)
   return documents[uri]
 end
 
--- Get just the text content of a document, or nil if not open
 function store.get_text(uri)
   local doc = documents[uri]
-  if doc then
-    return doc.text
-  end
-  return nil
+  return doc and doc.text or nil
 end
 
--- Store a parsed AST and its errors on a document
+function store.content_version(uri)
+  local doc = documents[uri]
+  return doc and doc.version or nil
+end
+
+function store.is_open(uri)
+  local doc = documents[uri]
+  return doc and doc.is_open or false
+end
+
+function store.invalidate_analysis(uri)
+  local doc = documents[uri]
+  if not doc then return end
+  doc.ast = nil
+  doc.parse_errors = nil
+end
+
 function store.set_ast(uri, ast, errors)
   local doc = documents[uri]
   if not doc then return end
@@ -73,27 +239,23 @@ function store.set_ast(uri, ast, errors)
   end
 end
 
--- Get the current AST, falling back to the last good AST
 function store.get_ast(uri)
   local doc = documents[uri]
   if not doc then return nil end
   return doc.ast or doc.last_good_ast
 end
 
--- Get the current AST only (no stale fallback).
--- Returns nil if the latest parse failed.
 function store.get_current_ast(uri)
   local doc = documents[uri]
-  if not doc then return nil end
-  return doc.ast
+  return doc and doc.ast or nil
 end
 
--- Return a list of all open document URIs
 function store.all()
   local uris = {}
   for uri in pairs(documents) do
     uris[#uris + 1] = uri
   end
+  table.sort(uris)
   return uris
 end
 

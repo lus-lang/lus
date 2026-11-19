@@ -1,6 +1,6 @@
 ---
 name: LUS_WORKER_BLOCKED
-header: lworkerlib.h
+header: lua.h
 kind: constant
 since: 0.1.0
 stability: stable
@@ -9,4 +9,4 @@ type: int
 value: 1
 ---
 
-Worker status: blocked waiting for message.
+The status returned while a worker is blocked waiting for a message.

@@ -1,6 +1,6 @@
 ---
 name: LUS_WORKER_DEAD
-header: lworkerlib.h
+header: lua.h
 kind: constant
 since: 0.1.0
 stability: stable
@@ -9,4 +9,4 @@ type: int
 value: 2
 ---
 
-Worker status: finished execution.
+The status returned after a worker finishes execution.

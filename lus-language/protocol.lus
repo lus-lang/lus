@@ -89,6 +89,12 @@ function protocol.server_capabilities()
     foldingRangeProvider = true,
     inlayHintProvider = true,
     workspaceSymbolProvider = true,
+    workspace = {
+      workspaceFolders = {
+        supported = true,
+        changeNotifications = true,
+      },
+    },
   }
 end
 
@@ -98,7 +104,7 @@ function protocol.initialize_result()
     capabilities = protocol.server_capabilities(),
     serverInfo = {
       name = "lus-language",
-      version = "0.1.0",
+      version = "1.7.0",
     },
   }
 end

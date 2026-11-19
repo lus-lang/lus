@@ -7,11 +7,11 @@ stability: stable
 pledges: ["fs:write"]
 origin: lus
 params:
-  - name: target
-    type: string
   - name: link
     type: string
-returns: boolean
+  - name: target
+    type: string
+returns: []
 ---
 
-Creates a symbolic link at `link` pointing to `target`. Returns `true` on success, or `nil` plus an error message on failure.
+Creates a symbolic link at `link` pointing to `target`. Successful calls complete with an empty result list. Failures raise catchable errors.

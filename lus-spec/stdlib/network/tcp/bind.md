@@ -11,7 +11,10 @@ params:
     type: string
   - name: port
     type: integer
-returns: userdata
+  - name: backlog
+    type: integer
+    optional: true
+returns: tcp_server
 ---
 
-Binds a TCP server to `host` and `port`. Returns a server object that can accept incoming connections.
+Binds a TCP server to `host` and `port` with an optional accept `backlog`. Port `0` lets the operating system select an available port. Returns a server that can accept incoming connections and report its effective address through `getsockname`.

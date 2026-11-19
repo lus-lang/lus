@@ -163,6 +163,9 @@ value: 0
 | `vararg` | functions | boolean | Whether `...` is accepted |
 | `returns` | functions | array of `{type, name?}` | |
 | `type` | constants/vars | type string | `number`, `string`, `int`, etc. |
+| `receiver` | methods | nominal receiver type | `instant`, `database` |
+| `flags` | optional | array of schema flags | Consumer-specific structured metadata |
+| `from` | optional | qualified source symbol | Structured provenance for generated consumers |
 | `value` | constants | literal value | Only for C `#define` constants |
 | `signature` | capi funcs/types | C declaration | Full C prototype |
 | `deprecated_by` | if deprecated | replacement name | |
@@ -177,10 +180,21 @@ value: 0
 ## Build
 
 ```sh
-# Generate LSP data file
+# Validate the generator and schema
+node lus-spec/build-lsp.test.js
+
+# Generate the LSP symbol graph
 node lus-spec/build-lsp.js
+
+# Validate schema and generated-file freshness without writing
+node lus-spec/build-lsp.js --check
 
 # Rebuild WASM + VS Code extension (after any spec change)
 cd lus/wasm && ./build.sh
 cd lus-vscode && pnpm run build
 ```
+
+The generated language server data contains one symbol graph keyed by qualified
+name. Nested modules link to their children at any depth. Function parameters
+and returns remain structured so completion, hover, signature help, and type
+inference resolve the same records.

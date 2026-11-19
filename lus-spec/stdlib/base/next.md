@@ -14,4 +14,4 @@ params:
 returns: any
 ---
 
-Returns the next key--value pair after key `k` in table `t`. When called with `nil` as the second argument, returns the first pair. Returns `nil` when there are no more pairs. The traversal order is undefined.
+Returns the next key and value after key `k` in table `t`. When called with `nil` as the second argument, returns the first pair. A call after the final pair returns `nil`. The traversal order is undefined.

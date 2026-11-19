@@ -8,4 +8,4 @@ origin: lua
 signature: "#define luaL_optstring(L,n,d) (luaL_optlstring(L,(n),(d),NULL))"
 ---
 
-If the function argument `n` is a string, returns it; otherwise returns `d`.
+Returns string argument `n` when supplied, or default value `d` when the argument is absent or nil.

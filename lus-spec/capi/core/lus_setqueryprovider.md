@@ -15,4 +15,10 @@ params:
     type: "const lus_QueryProvider*"
 ---
 
-Registers the native query provider `p` on the metatable at `mt_idx`, so every value carrying that metatable becomes a query source served by `p`. The provider struct holds two callbacks. `accepts(L, q, n)` is consulted once per single-source, closure-free `where` conjunct and returns 1 to claim it. `open(L, q, srcindex, pushed, npushed)` receives the claimed conjunct nodes and must push a row iterator function; the engine drains it and never evaluates the claimed conjuncts in memory again. The struct must stay alive for the lifetime of the state, so a `static const` definition is the usual shape.
+Registers the native query provider `p` on the metatable at `mt_idx`, so values carrying that metatable become query sources served by `p`. Passing `NULL` unregisters the provider.
+
+The metatable borrows the `lus_QueryProvider` pointer and does not copy or free it. Keep the struct alive until it is unregistered, the metatable becomes unreachable, or the state closes. A `static const` provider is a typical lifetime match.
+
+`accepts(L, q, n)` is consulted once per single-source, closure-free `where` conjunct and returns `1` to claim it. `open(L, q, srcindex, pushed, npushed)` receives the claimed conjunct nodes and pushes a row iterator function. The engine drains that iterator and does not evaluate claimed conjuncts again in memory.
+
+The callback arguments are borrowed and read-only. The `pushed` array and its node pointers are valid only for the `open` call. Query-owned pointers remain valid while their query value is reachable, as described by `lus_toquery`. Copy any names or other data that must outlive the callback.

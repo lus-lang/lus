@@ -19,4 +19,4 @@ returns:
   - type: int
 ---
 
-
+Writes the binary representation of the function at the top of the stack through `writer`. A nonzero `strip` omits debug information. The output is a version-dependent artifact for a trusted build or storage path.

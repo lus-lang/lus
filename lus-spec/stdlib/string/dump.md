@@ -14,4 +14,6 @@ params:
 returns: string
 ---
 
-Return a binary string containing a serialized representation of `function`, so that a later `load` on this string returns a copy of the function. If `strip` is true, debug information is omitted.
+Returns a binary string containing a serialized representation of `function`, so that a compatible later `load` returns a copy of the function. If `strip` is true, debug information is omitted.
+
+The result is a version-dependent runtime artifact for trusted storage and distribution. It can include captured bytecode structure. Accept text-only source with `load` mode `"t"` when input crosses an untrusted boundary.

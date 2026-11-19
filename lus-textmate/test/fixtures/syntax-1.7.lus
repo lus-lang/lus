@@ -1,0 +1,9 @@
+local direction = enum north, south, east, west end
+local ok, response = catch network.fetch("https://example.invalid")
+local value = record?.value
+local first, second from record
+local doubled = do
+    provide first * 2
+end
+local message = `value: $(doubled)`
+local selected = @records where active select name

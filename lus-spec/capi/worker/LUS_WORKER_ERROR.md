@@ -1,6 +1,6 @@
 ---
 name: LUS_WORKER_ERROR
-header: lworkerlib.h
+header: lua.h
 kind: constant
 since: 0.1.0
 stability: stable
@@ -9,4 +9,4 @@ type: int
 value: 3
 ---
 
-Worker status: terminated with error.
+The status returned after a worker terminates with an error.

@@ -3,7 +3,7 @@ name: lua_pcallk
 header: lua.h
 kind: function
 since: 0.1.0
-stability: deprecated
+stability: stable
 origin: lua
 signature: "int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc, lua_KContext ctx, lua_KFunction k)"
 params:
@@ -23,4 +23,4 @@ returns:
   - type: int
 ---
 
-**Deprecated.** Use `CPROTECT_BEGIN`/`CPROTECT_END` macros instead.
+Calls a function in protected mode with continuation support. Success returns `LUA_OK`. A failure returns its status code and leaves the error object on the stack. When the call yields, `k` continues it with context `ctx`.

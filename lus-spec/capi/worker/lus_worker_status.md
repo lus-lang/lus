@@ -1,6 +1,6 @@
 ---
 name: lus_worker_status
-header: lworkerlib.h
+header: lua.h
 kind: function
 since: 0.1.0
 stability: stable
@@ -11,4 +11,4 @@ params:
     type: "WorkerState*"
 ---
 
-Returns the status of a worker (`LUS_WORKER_RUNNING`, `LUS_WORKER_DEAD`, etc.).
+Returns the current `LUS_WORKER_*` status of `w`. A caller-owned reference keeps the opaque handle valid after its parent state closes. A `NULL` handle reports `LUS_WORKER_DEAD`.

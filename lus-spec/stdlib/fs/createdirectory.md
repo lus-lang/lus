@@ -9,7 +9,10 @@ origin: lus
 params:
   - name: path
     type: string
-returns: boolean
+  - name: recursive
+    type: boolean
+    optional: true
+returns: []
 ---
 
-Creates a directory at `path`. Returns `true` on success, or `nil` plus an error message on failure.
+Creates a directory at `path`. When `recursive` is true, missing parent directories are created in order. Successful calls complete with an empty result list. Failures raise catchable errors.

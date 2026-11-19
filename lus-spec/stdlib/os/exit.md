@@ -14,4 +14,6 @@ params:
     optional: true
 ---
 
-Terminates the program. The optional `code` argument is the exit code (`true` means success, `false` means failure, default is `true`). If `close` is true, closes the Lua state before exiting.
+On the main interpreter, terminates the process. The optional `code` argument is the exit code (`true` means success, `false` means failure, default is `true`). If `close` is true, closes the Lua state before exiting.
+
+Inside a worker, raises the catchable error `"os.exit is unavailable in a worker"`. A caught call leaves the worker running. An uncaught call becomes the worker execution error observed by its parent.

@@ -17,7 +17,9 @@ returns: database
 
 Opens the SQLite database at `path` and returns a database handle. SQLite is embedded in the runtime, so no external library or system package is involved. Passing `":memory:"` opens a private in-memory database that needs no filesystem pledge at all. The optional `mode` is `"rw"` (the default, which reads, writes, and creates) or `"r"` (read-only).
 
-A file-backed open pledge-checks the database path together with its `-journal`, `-wal`, and `-shm` sidecar files: `fs:read` always, and `fs:write` too under `"rw"`. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
+A file-backed open checks the database path against `fs:read` and, under `"rw"`, `fs:write`. A per-connection pledge-aware VFS then authorizes each main-file and `-journal`, `-wal`, or `-shm` sidecar operation when SQLite performs it. Writable file-backed databases run in WAL mode and require `fs:write` for creation, deletion, extension, and every other write.
+
+A connection opened with `"r"` requires only `fs:read`. It can consume existing WAL and SHM files through retained read-only objects, take shared coordination locks, and read the WAL index, including when a writable SQLite connection already owns the process-wide SHM node. It never initializes, truncates, extends, deletes, or writes SHM, and it never takes an exclusive SHM lock. A sidecar state that needs creation or recovery raises a clear `fs:write` permission error.
 
 The handle runs statements and queries through six methods:
 
@@ -43,7 +45,7 @@ The handle manages its native resources the same way `io.open` file objects do. 
 
 Indexing the handle with a key that is not a method yields a table reference for use as a [query](/manual/api#query) source, so `@db.users as u where u.age > 18 select u.name` pushes down as a parameterized SELECT. The reference anchors its database, and the push-down makes the same injection-safety guarantee as a hand-written statement.
 
-SQLite never touches a path outside the pledged set: temp structures live in memory, `ATTACH` and `VACUUM INTO` are denied, and URI filenames are rejected at open. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
+Temp structures live in memory. `ATTACH` and `VACUUM INTO` paths are denied. The path-changing PRAGMAs `data_store_directory`, `temp_store_directory`, and `lock_proxy_file` are denied case-insensitively. URI filenames are rejected at open, while a plain `VACUUM` remains available. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
 
 The following example pledges the database files, creates a table, and reads matching rows back with a named placeholder.
 

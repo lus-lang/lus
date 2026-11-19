@@ -13,4 +13,4 @@ params:
     type: int
 ---
 
-Shrinks the internal storage of the table at the given index to fit its current contents. Removing keys never shrinks a table's array or hash parts on its own; this releases the unused capacity. Raises an error if the table is readonly. Exposed to Lus code as `table.compact`.
+Shrinks the internal storage of the table at the given index to fit its current contents. The call releases unused array and hash capacity left after removing keys. It raises an error if the table is readonly. Lus exposes the operation as `table.compact`.

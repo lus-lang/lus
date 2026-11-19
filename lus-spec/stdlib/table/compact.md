@@ -12,7 +12,7 @@ generic: T
 returns: T
 ---
 
-Shrinks the internal storage of `t` to fit its current contents and returns `t`. Removing keys from a table never shrinks its array or hash storage on its own, so a table that was once large keeps its capacity; `table.compact` releases that memory. Raises an error if `t` is readonly.
+Shrinks the internal storage of `t` to fit its current contents and returns `t`. This releases unused array and hash capacity left after removing keys. It raises an error if `t` is readonly.
 
 ```lus
 local cache = build_huge_table()

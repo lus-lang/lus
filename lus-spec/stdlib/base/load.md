@@ -28,3 +28,5 @@ The optional arguments refine the load:
 - `chunkname` names the chunk for error messages.
 - `mode` controls whether text (`"t"`), binary (`"b"`), or both (`"bt"`, the default) are allowed.
 - `env` sets the first upvalue as the chunk's environment.
+
+Binary chunks are version-dependent artifacts for trusted build and storage paths. Treat every binary chunk as trusted input. Use `mode = "t"` when the chunk source crosses an untrusted boundary.

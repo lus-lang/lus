@@ -10,11 +10,37 @@ local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local hover = {}
 
--- ---------------------------------------------------------------------------
--- Standard library field kinds (from lus-spec via build-lsp.js)
--- ---------------------------------------------------------------------------
-
-local STDLIB_FIELDS = stdlib_data.fields
+local function format_stdlib_symbol(symbol)
+  if not symbol then return nil end
+  local parts = {}
+  if symbol.kind == "function" then
+    local params = {}
+    for _, param in ipairs(symbol.params or {}) do
+      local label = param.name or "?"
+      if param.type and param.type ~= "any" then
+        label = label .. ": " .. param.type
+      end
+      if param.optional then label = label .. "?" end
+      params[#params + 1] = label
+    end
+    if symbol.vararg then params[#params + 1] = "..." end
+    local returns = stdlib_data.format_returns(symbol)
+    local suffix = returns ~= "" and " -> " .. returns or ""
+    parts[#parts + 1] = "```lus\nfunction " .. symbol.name
+      .. "(" .. table.concat(params, ", ") .. ")" .. suffix .. "\n```"
+  else
+    parts[#parts + 1] = "```lus\n(" .. symbol.kind .. ") "
+      .. symbol.name .. "\n```"
+    if symbol.type then
+      parts[#parts + 1] = "*Type:* `" .. symbol.type .. "`"
+    end
+  end
+  if symbol.description then
+    parts[#parts + 1] = "---"
+    parts[#parts + 1] = symbol.description
+  end
+  return table.concat(parts, "\n\n")
+end
 
 -- Walk the AST to find a hover target at the given position.
 -- Detects both field access (t.field) and tablefield keys ({ a = 1 }).
@@ -145,9 +171,10 @@ local function describe(decl, uri)
   end
 
   -- Show stdlib description for built-in globals
-  if kind == "global" and stdlib_data.descriptions[name] then
+  local stdlib_symbol = kind == "global" and stdlib_data.resolve(name)
+  if stdlib_symbol and stdlib_symbol.description then
     parts[#parts + 1] = "---"
-    parts[#parts + 1] = stdlib_data.descriptions[name]
+    parts[#parts + 1] = stdlib_symbol.description
   end
 
   -- Check if this is a require() variable and show module info
@@ -157,7 +184,7 @@ local function describe(decl, uri)
     if mod_name then
       parts[#parts + 1] = "---"
       parts[#parts + 1] = "*Module:* `" .. mod_name .. "`"
-      local exports = modules.get_exports(mod_name)
+      local exports = modules.get_exports(mod_name, uri)
       if #exports > 0 then
         local export_names = {}
         for _, exp in ipairs(exports) do
@@ -203,7 +230,7 @@ function hover.compute(uri, position)
         local table_type = scope_mod.infer_expr_type(analysis, target.table_node, line)
         -- Try module exports (for require'd variables)
         if table_type and table_type.tag == "module" and table_type.module_name then
-          local exports = modules.get_exports(table_type.module_name)
+          local exports = modules.get_exports(table_type.module_name, uri)
           for _, exp in ipairs(exports) do
             if exp.name == target.field_name then
               local parts = {}
@@ -245,97 +272,23 @@ function hover.compute(uri, position)
             },
           }
         end
-        -- Fallback: stdlib globals (network.tcp, string.find, etc.)
-        if target.table_node.type == "name" then
-          local stdlib_name = target.table_node.value
-          local stdlib = STDLIB_FIELDS[stdlib_name]
-          if stdlib and stdlib[target.field_name] then
-            local kind = stdlib[target.field_name]
-            local full_name = stdlib_name .. "." .. target.field_name
-            local parts = {}
-            -- Check if it's a function with typed signature
-            local sig_params = stdlib_data.signatures[full_name]
-            if sig_params and kind == "function" then
-              local param_parts = {}
-              for _, p in ipairs(sig_params) do
-                if p.t and p.t ~= "any" then
-                  param_parts[#param_parts + 1] = p.n .. ": " .. p.t
-                else
-                  param_parts[#param_parts + 1] = p.n
-                end
-              end
-              local ret_suffix = ""
-              if stdlib_data.returns[full_name] then
-                ret_suffix = " -> " .. stdlib_data.returns[full_name]
-              end
-              parts[#parts + 1] = "```lus\nfunction " .. full_name
-                .. "(" .. table.concat(param_parts, ", ") .. ")" .. ret_suffix .. "\n```"
-            else
-              parts[#parts + 1] = "```lus\n(" .. kind .. ") " .. full_name .. "\n```"
-            end
-            local desc = stdlib_data.descriptions[full_name]
-            if desc then
-              parts[#parts + 1] = "---"
-              parts[#parts + 1] = desc
-            end
-            return {
-              contents = {
-                kind = "markdown",
-                value = table.concat(parts, "\n\n"),
-              },
-            }
-          end
-          -- Chained stdlib (fs.path.join, network.tcp.connect)
-          if target.table_node.type == "field" then
-            -- handled below
-          end
+        local parent_name = stdlib_data.expression_name(target.table_node)
+        if table_type and table_type.tag == "nominal" then
+          parent_name = table_type.name
+        elseif table_type and (table_type.tag == "string"
+               or table_type.tag == "table"
+               or table_type.tag == "vector"
+               or table_type.tag == "worker") then
+          parent_name = table_type.tag
         end
-        -- Chained stdlib: e.g., network.tcp.connect, fs.path.join
-        if target.table_node.type == "field"
-           and target.table_node.table
-           and target.table_node.table.type == "name"
-           and target.table_node.key then
-          local parent_name = target.table_node.table.value
-          local mid_name = target.table_node.key.value
-          if parent_name and mid_name then
-            local compound = parent_name .. "." .. mid_name
-            local stdlib = STDLIB_FIELDS[compound]
-            if stdlib and stdlib[target.field_name] then
-              local kind = stdlib[target.field_name]
-              local full_name = compound .. "." .. target.field_name
-              local parts = {}
-              local sig_params = stdlib_data.signatures[full_name]
-              if sig_params and kind == "function" then
-                local param_parts = {}
-                for _, p in ipairs(sig_params) do
-                  if p.t and p.t ~= "any" then
-                    param_parts[#param_parts + 1] = p.n .. ": " .. p.t
-                  else
-                    param_parts[#param_parts + 1] = p.n
-                  end
-                end
-                local ret_suffix = ""
-                if stdlib_data.returns[full_name] then
-                  ret_suffix = " -> " .. stdlib_data.returns[full_name]
-                end
-                parts[#parts + 1] = "```lus\nfunction " .. full_name
-                  .. "(" .. table.concat(param_parts, ", ") .. ")" .. ret_suffix .. "\n```"
-              else
-                parts[#parts + 1] = "```lus\n(" .. kind .. ") " .. full_name .. "\n```"
-              end
-              local desc = stdlib_data.descriptions[full_name]
-              if desc then
-                parts[#parts + 1] = "---"
-                parts[#parts + 1] = desc
-              end
-              return {
-                contents = {
-                  kind = "markdown",
-                  value = table.concat(parts, "\n\n"),
-                },
-              }
-            end
-          end
+        local symbol = stdlib_data.resolve_member(parent_name, target.field_name)
+        if symbol then
+          return {
+            contents = {
+              kind = "markdown",
+              value = format_stdlib_symbol(symbol),
+            },
+          }
         end
 
       elseif target.kind == "tablefield" then

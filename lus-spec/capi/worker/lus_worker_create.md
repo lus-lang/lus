@@ -1,6 +1,6 @@
 ---
 name: lus_worker_create
-header: lworkerlib.h
+header: lua.h
 kind: function
 since: 0.1.0
 stability: stable
@@ -13,4 +13,4 @@ params:
     type: "const char*"
 ---
 
-Creates a new worker running the script at `path`.
+Creates a worker associated with `L` and schedules the script at `path`. Success returns one owned reference to an opaque `WorkerState`. Release that reference with `lus_worker_release`. A script open or execution failure is reported asynchronously through worker status. `NULL` reports a setup, allocation, or enqueue failure.

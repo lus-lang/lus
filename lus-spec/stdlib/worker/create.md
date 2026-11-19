@@ -13,9 +13,9 @@ vararg: true
 returns: worker
 ---
 
-Spawns a new worker running the script at `path`. Optional varargs are serialized and can be received by the worker via `worker.peek()`. Returns a worker handle. Requires `load` and `fs:read` pledges.
+Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. Requires `load` and authorized `fs:read` pledges for the script path.
 
 ```lus
 local w = worker.create("worker.lus", "hello", 42)
--- worker can receive "hello" and 42 via worker.peek()
+-- worker.lus begins with: local greeting, number = ...
 ```
