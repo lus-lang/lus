@@ -5,9 +5,8 @@
 # Usage: tests/bench/run.sh [runs]
 #
 # Runtimes come from the environment. LUS is the Lus 2.0 binary (default
-# runtime/zig-out/bin/lus), LEGACY is the 1.7 binary (default
-# legacy/lus/build/lus), and LUAJIT is a LuaJIT binary (default luajit on
-# the PATH). Lus runs three times: with both JIT tiers, with
+# runtime/zig-out/bin/lus), and LUAJIT is a LuaJIT binary (default
+# luajit on the PATH). Lus runs three times: with both JIT tiers, with
 # LUS_JIT=baseline, and with LUS_JIT=off. LuaJIT runs twice, with -joff
 # and with its JIT. A runtime that is missing, or that fails on a
 # benchmark, shows a dash.
@@ -16,7 +15,6 @@ dir=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$dir/../.." && pwd)
 runs=${1:-3}
 LUS=${LUS:-$root/runtime/zig-out/bin/lus}
-LEGACY=${LEGACY:-$root/legacy/lus/build/lus}
 LUAJIT=${LUAJIT:-$(command -v luajit 2>/dev/null)}
 
 # Prints the best wall time in seconds of $runs runs of the command, or a
@@ -44,7 +42,7 @@ best() {
     ' "$runs" "$@"
 }
 
-printf "%-10s %10s %14s %10s %10s %14s %10s %10s\n" benchmark lus "lus baseline" "lus off" legacy "luajit -joff" luajit lus/legacy
+printf "%-10s %10s %14s %10s %14s %10s %12s\n" benchmark lus "lus baseline" "lus off" "luajit -joff" luajit lus/luajit
 for f in "$dir"/*.lus; do
     name=$(basename "$f" .lus)
     if [ -x "$LUS" ]; then
@@ -56,7 +54,6 @@ for f in "$dir"/*.lus; do
         s=-
         o=-
     fi
-    if [ -x "$LEGACY" ]; then b=$(best default "$LEGACY" "$f"); else b=-; fi
     # LuaJIT runs the Lua version of a benchmark when one exists, because
     # some benchmarks use Lus syntax.
     lf="$dir/lua/$name.lua"
@@ -68,10 +65,10 @@ for f in "$dir"/*.lus; do
         c=-
         j=-
     fi
-    if [ "$a" != - ] && [ "$b" != - ]; then
-        r=$(echo "scale=2; $a / $b" | bc)
+    if [ "$a" != - ] && [ "$j" != - ]; then
+        r=$(echo "scale=2; $a / $j" | bc)
     else
         r=-
     fi
-    printf "%-10s %10s %14s %10s %10s %14s %10s %10s\n" "$name" "$a" "$s" "$o" "$b" "$c" "$j" "$r"
+    printf "%-10s %10s %14s %10s %14s %10s %12s\n" "$name" "$a" "$s" "$o" "$c" "$j" "$r"
 done

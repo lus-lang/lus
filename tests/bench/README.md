@@ -10,7 +10,7 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `closures.lus`: closure creation with captured upvalues.
 - `patterns.lus`: `find`, `match`, `gmatch`, `gsub`, and `upper` over ASCII text, with plain searches, literal prefixes, captures, and classes.
 - `interp.lus`: building many short strings with interpolation, `..`, `upper`, `string.format`, and `table.concat`.
-- `unicode.lus`: `string.sub` and `#` on a long string of mixed one to four byte characters. Lus counts characters, while legacy and LuaJIT count bytes, so this benchmark measures the cost of character indexing against plain byte slicing.
+- `unicode.lus`: `string.sub` and `#` on a long string of mixed one to four byte characters. Lus counts characters, while LuaJIT counts bytes, so this benchmark measures the cost of character indexing against plain byte slicing.
 - `arrays.lus`: reading and writing arrays of integers and of floats from Lus code.
 - `data.lus`: `table.sum`, `table.mean`, and `table.stdev` over large arrays of integers and floats. LuaJIT runs the same computation written as Lua loops in `lua/data.lua`.
 - `gcpause.lus`: builds and drops a 50 MB object graph four times. Besides its run time, it prints the longest gap between two loop iterations, which bounds the longest collector pause. Run it directly to see that number.
@@ -25,21 +25,20 @@ tests/bench/run.sh        # three runs per benchmark
 tests/bench/run.sh 5      # five runs per benchmark
 ```
 
-The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LEGACY` is the 1.7 binary and defaults to `legacy/lus/build/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash.
+The runtimes come from environment variables. `LUS` is the Lus 2.0 binary and defaults to `runtime/zig-out/bin/lus`. `LUAJIT` is a LuaJIT binary and defaults to `luajit` on the path. A benchmark that uses Lus syntax has a plain Lua version in `lua/`, which LuaJIT runs instead. A runtime that is missing or fails shows a dash.
 
 The table has one column per configuration.
 
 - `lus`: Lus 2.0 as it runs by default, with its baseline JIT and its optimizing tier.
 - `lus baseline`: Lus 2.0 with `LUS_JIT=baseline`, which is the baseline JIT alone.
 - `lus off`: Lus 2.0 with `LUS_JIT=off`, which is the interpreter alone.
-- `legacy`: the 1.7 runtime.
 - `luajit -joff`: the interpreter of LuaJIT.
 - `luajit`: LuaJIT with its tracing JIT.
-- `lus/legacy`: the `lus` time divided by the legacy time. Numbers below one mean the new runtime is faster.
+- `lus/luajit`: the `lus` time divided by the `luajit` time. Numbers below one mean Lus is faster.
 
 ## Results
 
-Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the commit that made the collector mark objects as they pop from the gray stack and double its goal while the heap grows (`spec/design/gc.md`). The legacy runtime was not built for this run. The machine ran a few percent slower than for earlier tables, LuaJIT included, so compare the columns of this table with each other.
+Wall times in seconds, best of nine runs, ReleaseFast on an Apple silicon Mac, at the commit that made the collector mark objects as they pop from the gray stack and double its goal while the heap grows (`spec/design/gc.md`). The machine ran a few percent slower than for earlier tables, LuaJIT included, so compare the columns of this table with each other.
 
 | benchmark | lus | lus baseline | lus off | luajit -joff | luajit |
 |---|---:|---:|---:|---:|---:|
