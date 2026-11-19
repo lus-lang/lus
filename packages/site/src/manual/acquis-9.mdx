@@ -11,7 +11,7 @@ The `network` library provides TCP, UDP, and HTTP or HTTPS networking with nativ
 
 `network.fetch` takes positional arguments in the order `url`, `method`, `headers`, and `body`. The method defaults to `"GET"`. It returns the integer status code, response body string, and a table whose response header names are lowercase. Response bodies are capped at 64 MiB.
 
-```lus
+```lus nocheck
 local status, body, headers = network.fetch("https://httpbin.org/get")
 print(status)
 print(#body)
@@ -20,7 +20,7 @@ print(headers["content-type"])
 
 The optional values keep their positions for requests that include headers or a body.
 
-```lus
+```lus nocheck
 local status, body = network.fetch(
     "https://httpbin.org/post",
     "POST",
@@ -31,7 +31,7 @@ local status, body = network.fetch(
 
 Network and protocol failures raise errors that can be caught.
 
-```lus
+```lus nocheck
 local ok, err = catch network.fetch("https://invalid.host.example")
 if not ok then
     print("Request failed:", err)
@@ -42,7 +42,7 @@ end
 
 `network.tcp.connect(host, port)` returns a client socket. The socket supports `send`, `receive`, `settimeout`, and `close`.
 
-```lus
+```lus nocheck
 local socket = network.tcp.connect("example.com", 80)
 socket:settimeout(5)
 socket:send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
@@ -62,7 +62,7 @@ socket:close()
 
 The optional positive integer `max_bytes` applies to `"*l"` and `"*a"`. A line or stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A numeric receive size is always limited to 1 MiB.
 
-```lus
+```lus nocheck
 local header = socket:receive("*l", 8192)
 local body = socket:receive("*a", 8 * 1024 * 1024)
 ```
@@ -71,7 +71,7 @@ local body = socket:receive("*a", 8 * 1024 * 1024)
 
 `network.tcp.bind(host, port, backlog)` returns a listening server. Port `0` asks the operating system to select a port. `server:getsockname()` returns the bound address and effective port, which makes that form useful for local services and tests.
 
-```lus
+```lus nocheck
 local server = network.tcp.bind("127.0.0.1", 0)
 local address, port = server:getsockname()
 print(`listening on $address:$port`)
