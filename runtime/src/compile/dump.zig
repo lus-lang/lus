@@ -256,6 +256,7 @@ const Reader = struct {
         const ncode = try r.len();
         p.code = try gpa.alloc(u32, ncode);
         for (p.code) |*ins| ins.* = try r.fixed(u32);
+        try p.initIc(gpa);
         const nk = try r.len();
         p.constants = try gpa.alloc(Value, nk);
         @memset(p.constants, .nil);

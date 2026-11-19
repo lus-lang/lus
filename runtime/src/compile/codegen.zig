@@ -273,6 +273,7 @@ fn closeFunc(c: *Compiler, fs: *FuncState) Error!*Proto {
     const p = try vm.gc.alloc(g, Proto, .proto, @sizeOf(Proto));
     p.* = .{ .hdr = p.hdr };
     p.code = try g.gpa.dupe(u32, fs.code.items);
+    try p.initIc(g.gpa);
     p.lines = try g.gpa.dupe(u32, fs.lines.items);
     p.constants = try g.gpa.dupe(Value, fs.constants.items);
     p.protos = try g.gpa.dupe(*Proto, fs.protos.items);

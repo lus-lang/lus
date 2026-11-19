@@ -87,10 +87,11 @@ pub inline fn findStr(t: *Table, s: *object.String) ?usize {
 
 /// Stores `val` under the string key `key` when that needs no rehash:
 /// the key is present, or it is absent, `val` is not nil, and the hash
-/// part has room. Returns false otherwise, leaving the table unchanged.
-/// The caller resets the metamethod cache and runs the write barrier.
-pub inline fn storeStr(t: *Table, key: Value, val: Value) bool {
-    if (t.hash.len == 0) return false;
+/// part has room. Returns the node index, or null when the store needs
+/// the general path, leaving the table unchanged. The caller resets the
+/// metamethod cache and runs the write barrier.
+pub inline fn storeStr(t: *Table, key: Value, val: Value) ?usize {
+    if (t.hash.len == 0) return null;
     const s = key.as(object.String);
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
@@ -98,18 +99,18 @@ pub inline fn storeStr(t: *Table, key: Value, val: Value) bool {
         const n = &t.hash[i];
         if (n.key.tag == .string) {
             if (n.key.payload == @intFromPtr(s)) break;
-            if (!s.flags.interned) return false;
+            if (!s.flags.interned) return null;
         } else if (n.key.tag == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
-            if (val.isNil() or (t.hash_used + 1) * 4 > t.hash.len * 3) return false;
+            if (val.isNil() or (t.hash_used + 1) * 4 > t.hash.len * 3) return null;
             n.key = key;
             t.hash_used += 1;
             break;
         }
     }
     t.hash[i].val = val;
-    return true;
+    return i;
 }
 
 pub fn get(t: *Table, key: Value) Value {
@@ -315,6 +316,15 @@ fn reinsert(t: *Table, k: Value, v: Value) void {
 pub fn length(t: *Table) i64 {
     const n = t.array.len;
     if (n > 0 and t.array[n - 1].isNil()) {
+        // The previous border, or the one just after it when a value was
+        // appended, is usually still a border.
+        const h: usize = t.len_hint;
+        if (h < n and t.array[h].isNil()) {
+            if (h == 0 or !t.array[h - 1].isNil()) return @intCast(h);
+        } else if (h + 1 < n and t.array[h + 1].isNil()) {
+            t.len_hint = @intCast(h + 1);
+            return @intCast(h + 1);
+        }
         // Binary search for a border inside the array part.
         var lo: usize = 0;
         var hi: usize = n;
@@ -322,6 +332,7 @@ pub fn length(t: *Table) i64 {
             const m = (lo + hi) / 2;
             if (t.array[m - 1].isNil()) hi = m else lo = m;
         }
+        t.len_hint = @intCast(lo);
         return @intCast(lo);
     }
     if (t.hash.len == 0) return @intCast(n);

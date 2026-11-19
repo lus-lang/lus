@@ -271,6 +271,7 @@ const Ctx = struct {
     cl: *Closure,
     code: [*]const u32,
     k: [*]const Value,
+    ic: [*]object.IcEntry,
     base: u32,
     /// Pointer to register 0 of the running frame.
     bp: [*]Value,
@@ -291,6 +292,7 @@ inline fn load(l: *Thread) Ctx {
         .cl = cl,
         .code = cl.proto.code.ptr,
         .k = cl.proto.constants.ptr,
+        .ic = cl.proto.ic.ptr,
         .base = fr.base,
         .bp = l.stack.ptr + fr.base,
     };
@@ -423,12 +425,12 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
         },
         .gettabup => {
             const t = c.cl.upvals()[opc.b(ins)].loc.*;
-            try getStrOp(l, &c, pc, opc.a(ins), t, c.k[opc.c(ins)]);
+            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), t, c.k[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .settabup => {
             const t = c.cl.upvals()[opc.a(ins)].loc.*;
-            try setStrOp(l, &c, pc, t, c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            try setStrOp(l, &c, pc, &c.ic[pc - 1], t, c.k[opc.b(ins)], c.bp[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .gettable => {
@@ -446,7 +448,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     }
                 }
             } else if (key.tag == .string) {
-                try getStrOp(l, &c, pc, a, t, key);
+                try getStrOp(l, &c, pc, &c.ic[pc - 1], a, t, key);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
@@ -456,7 +458,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .getfield => {
-            try getStrOp(l, &c, pc, opc.a(ins), c.bp[opc.b(ins)], c.k[opc.c(ins)]);
+            try getStrOp(l, &c, pc, &c.ic[pc - 1], opc.a(ins), c.bp[opc.b(ins)], c.k[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .getindex => {
@@ -491,7 +493,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
             } else if (key.tag == .string) {
-                try setStrOp(l, &c, pc, t, key, v);
+                try setStrOp(l, &c, pc, &c.ic[pc - 1], t, key, v);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;
@@ -500,7 +502,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setfield => {
-            try setStrOp(l, &c, pc, c.bp[opc.a(ins)], c.k[opc.b(ins)], c.bp[opc.c(ins)]);
+            try setStrOp(l, &c, pc, &c.ic[pc - 1], c.bp[opc.a(ins)], c.k[opc.b(ins)], c.bp[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .setindex => {
@@ -530,7 +532,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             const a = opc.a(ins);
             const obj = c.bp[opc.b(ins)];
             c.bp[a + 1] = obj;
-            try getStrOp(l, &c, pc, a, obj, c.k[opc.c(ins)]);
+            try getStrOp(l, &c, pc, &c.ic[pc - 1], a, obj, c.k[opc.c(ins)]);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -930,7 +932,11 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
             l.stack[r + 6] = l.stack[r + 2];
             l.top = r + 4 + 3;
             const want: i32 = opc.c(ins);
-            const kind = try precall(l, r + 4, 2, want);
+            const iter = l.stack[r + 4];
+            const kind: CallKind = if (iter.tag == .native) blk: {
+                try callNative(l, iter.as(state.Native), r + 4, 2, want);
+                break :blk .done;
+            } else try precall(l, r + 4, 2, want);
             if (kind == .lus) {
                 c = load(l);
                 pc = 0;
@@ -1325,16 +1331,29 @@ inline fn noNewindexMeta(t: *Table) bool {
     return mt.tm_absent & (@as(u16, 1) << @backingInt(state.TM.newindex)) != 0;
 }
 
+/// Looks up the string key `s` in `tab`, trying the node that `slot`
+/// predicts before probing, and records where the key was found.
+inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
+    const i: usize = slot.*;
+    if (i < tab.hash.len) {
+        const n = &tab.hash[i];
+        if (n.key.payload == @intFromPtr(s) and n.key.tag == .string) return n.val;
+    }
+    const idx = table.findStr(tab, s) orelse return .nil;
+    if (idx < object.IcEntry.none) slot.* = @intCast(idx);
+    return tab.hash[idx].val;
+}
+
 /// R[a] = t[key] for a string key.
-inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, a: u8, t: Value, key: Value) Error!void {
+inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, a: u8, t: Value, key: Value) Error!void {
     if (t.tag == .table) {
         const tab = t.as(Table);
-        const v = table.getStr(tab, key.as(String));
+        const v = lookupIc(tab, key.as(String), &ic.own);
         if (!v.isNil() or noIndexMeta(tab)) {
             c.bp[a] = v;
             return;
         }
-        if (indexChain(l, tab, key.as(String), &c.bp[a])) return;
+        if (indexChain(l, tab, key.as(String), ic, &c.bp[a])) return;
     }
     c.fr.pc = pc;
     const v = try metaIndex(l, t, key, a);
@@ -1343,16 +1362,26 @@ inline fn getStrOp(l: *Thread, c: *Ctx, pc: u32, a: u8, t: Value, key: Value) Er
 }
 
 /// t[key] = v for a string key. Stores into an existing key of a plain
-/// table happen inline. Everything else goes through `setSlow`.
-inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, t: Value, key: Value, v: Value) Error!void {
+/// table, and new keys that fit without a rehash, happen inline.
+/// Everything else goes through `setSlow`.
+inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, ic: *object.IcEntry, t: Value, key: Value, v: Value) Error!void {
     if (t.tag == .table) {
         const tab = t.as(Table);
         if (!tab.readonly and noNewindexMeta(tab)) {
-            if (table.storeStr(tab, key, v)) {
-                tab.tm_absent = 0;
-                if (v.tag.isCollectable()) gc.barrierBack(l.g, &tab.hdr);
+            const i: usize = ic.own;
+            if (i < tab.hash.len and tab.hash[i].key.payload == key.payload and tab.hash[i].key.tag == .string) {
+                tab.hash[i].val = v;
+            } else if (table.storeStr(tab, key, v)) |idx| {
+                if (idx < object.IcEntry.none) ic.own = @intCast(idx);
+            } else {
+                c.fr.pc = pc;
+                try setSlow(l, t, key, v);
+                c.refresh(l);
                 return;
             }
+            tab.tm_absent = 0;
+            if (v.tag.isCollectable()) gc.barrierBack(l.g, &tab.hdr);
+            return;
         }
     }
     c.fr.pc = pc;
@@ -1363,8 +1392,9 @@ inline fn setStrOp(l: *Thread, c: *Ctx, pc: u32, t: Value, key: Value, v: Value)
 /// Follows `__index` tables from `tab`, whose own lookup missed and whose
 /// metatable may have `__index`. Stores the result and returns true when
 /// the chain ends in a table lookup. Returns false when a function
-/// metamethod or a non-table must run through the generic path.
-fn indexChain(l: *Thread, start: *Table, key: *String, out: *Value) bool {
+/// metamethod or a non-table must run through the generic path. The first
+/// step of the chain uses the slot predictions in `ic`.
+fn indexChain(l: *Thread, start: *Table, key: *String, ic: *object.IcEntry, out: *Value) bool {
     var tab = start;
     var depth: u32 = 0;
     while (depth < 8) : (depth += 1) {
@@ -1372,20 +1402,29 @@ fn indexChain(l: *Thread, start: *Table, key: *String, out: *Value) bool {
             out.* = .nil;
             return true;
         };
-        const h = state.tmLookup(l.g, mt, .index);
+        const h = if (depth == 0) indexMetaIc(l, mt, &ic.index) else state.tmLookup(l.g, mt, .index);
         if (h.tag != .table) {
             if (!h.isNil()) return false;
             out.* = .nil;
             return true;
         }
         tab = h.as(Table);
-        const v = table.getStr(tab, key);
+        const v = if (depth == 0) lookupIc(tab, key, &ic.holder) else table.getStr(tab, key);
         if (!v.isNil() or noIndexMeta(tab)) {
             out.* = v;
             return true;
         }
     }
     return false;
+}
+
+/// `state.tmLookup` for `__index`, with a slot prediction.
+inline fn indexMetaIc(l: *Thread, mt: *Table, slot: *u16) Value {
+    const bit: u16 = @as(u16, 1) << @backingInt(state.TM.index);
+    if (mt.tm_absent & bit != 0) return .nil;
+    const v = lookupIc(mt, l.g.tm_names[@backingInt(state.TM.index)].?, slot);
+    if (v.isNil()) mt.tm_absent |= bit;
+    return v;
 }
 
 fn getSlow(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
