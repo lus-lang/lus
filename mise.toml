@@ -78,4 +78,4 @@ run = "meson test -C build --suite h1 --suite h2"
 
 [tasks.lint]
 description = "Repository prose and naming checks"
-run = "node tools/lint-repo.js"
+run = ["node tools/lint-repo.js", "cd runtime && zig fmt --check src build.zig"]

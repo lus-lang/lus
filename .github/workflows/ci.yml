@@ -70,6 +70,10 @@ jobs:
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: ${{ env.ZIG_VERSION }}
+      - name: Formatting
+        if: runner.os == 'Linux'
+        working-directory: runtime
+        run: zig fmt --check src build.zig
       - name: Unit, embedding, and tool tests
         working-directory: runtime
         run: zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
