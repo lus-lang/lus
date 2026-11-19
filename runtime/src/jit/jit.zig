@@ -63,6 +63,10 @@ pub const State = if (enabled) struct {
     exits: usize = 0,
     /// Lists the intermediate representation of every compilation.
     opt_dump: bool = false,
+    /// Bytes of tables that optimized code did not allocate since the
+    /// last collection it asked for, and the count at which it asks.
+    sunk: u64 = 0,
+    sunk_limit: u64 = opt.sunk_step,
 } else struct {};
 
 /// The native code of one function.

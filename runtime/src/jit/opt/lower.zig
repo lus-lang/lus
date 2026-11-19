@@ -79,6 +79,34 @@ const Reg = struct {
 const Incoming = struct {
     from: BlockId,
     regs: []Reg,
+    /// The tables that are not allocated on this edge.
+    vobjs: []VObj = &.{},
+};
+
+const max_vfields = 8;
+
+/// A table that the function made and that no code allocated: the
+/// builder keeps its fields as values. `ref` is the `valloc` instruction
+/// that registers and snapshots name it by.
+const VObj = struct {
+    ref: Ref,
+    /// Hash slots the constructor asked for, and the mask of the hash
+    /// part they give.
+    nc: u32,
+    mask: u32,
+    used: u32 = 0,
+    keys: [max_vfields]*String = undefined,
+    nodes: [max_vfields]u32 = undefined,
+    vals: [max_vfields]Ref = undefined,
+    mt: Ref = ir.none,
+    mt_sample: ?*Table = null,
+};
+
+/// A table that a loop carries unallocated from one iteration to the
+/// next: every field is a phi of the loop header.
+const HVirt = struct {
+    obj: VObj,
+    mt_phi: Ref = ir.none,
 };
 
 const HeaderState = struct {
@@ -90,6 +118,7 @@ const HeaderState = struct {
     for_last: Ref = ir.none,
     for_init: Ref = ir.none,
     for_phi: Ref = ir.none,
+    virts: []HVirt = &.{},
 };
 
 /// One function being built: the root, or a call compiled inline.
@@ -123,6 +152,7 @@ const Frame = struct {
 const Return = struct {
     from: BlockId,
     res: Reg,
+    vobjs: []VObj = &.{},
 };
 
 /// Decisions that survive a rebuild of the same function.
@@ -135,6 +165,9 @@ pub const Persist = struct {
     untype: std.AutoHashMapUnmanaged(u32, RegSet) = .empty,
     /// Call instructions of the root that stay calls.
     no_inline: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// Loop header instructions whose loop allocates its tables before
+    /// it starts.
+    no_sink: std.AutoHashMapUnmanaged(u32, void) = .empty,
 };
 
 const CseKey = struct {
@@ -180,6 +213,8 @@ pub const Lower = struct {
     skip_next: bool = false,
     /// Functions compiled inline.
     inlined: std.ArrayList(*Proto) = .empty,
+    /// The tables that are not allocated at the current point.
+    vobjs: std.ArrayList(VObj) = .empty,
     cse: std.AutoHashMapUnmanaged(CseKey, Ref) = .empty,
     epochs: [class_count]u32 = @splat(1),
     slot_ver: std.ArrayList(u32) = .empty,
@@ -207,7 +242,7 @@ pub const Lower = struct {
     /// running frame of the thread as the sample of its registers.
     pub fn build(arena: std.mem.Allocator, l: *Thread, p: *Proto, entry_pc: u32, persist: *Persist, out_loops: *[]LoopInfo, out_cfg: **Cfg, out_inlined: *[]*Proto) Error!*ir.Func {
         const fl = try Flow.init(arena, p);
-        const cfg = Cfg.init(arena, fl, entry_pc, false) catch |e| switch (e) {
+        const cfg = Cfg.init(arena, fl, entry_pc, true) catch |e| switch (e) {
             error.Irreducible => return error.Unsupported,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -236,7 +271,7 @@ pub const Lower = struct {
         func.entry = entry;
         b.cur = entry;
         func.blocks.items[entry].node = cfg.entry;
-        try fr.incoming[cfg.entry].append(arena, .{ .from = entry, .regs = try arena.dupe(Reg, fr.regs) });
+        try fr.incoming[cfg.entry].append(arena, try b.incomingOf(entry));
         try b.buildFrame();
         if (b.rebuild) return error.Rebuild;
         out_inlined.* = b.inlined.items;
@@ -457,13 +492,14 @@ pub const Lower = struct {
 
     /// A snapshot that continues the current frame at `pc`.
     fn snapAt(b: *Lower, pc: u32) Error!u32 {
-        return b.snapWith(pc, b.fr.regs);
+        return b.snapWith(pc, b.fr.regs, b.vobjs.items);
     }
 
     /// A snapshot that continues the current frame at `pc` with the
-    /// given state of its registers.
-    fn snapWith(b: *Lower, pc: u32, inner_regs: []const Reg) Error!u32 {
+    /// given state of its registers and of the unallocated tables.
+    fn snapWith(b: *Lower, pc: u32, inner_regs: []const Reg, vobjs: []const VObj) Error!u32 {
         const f = b.f;
+        const first_entry: u32 = @intCast(f.snap_entries.items.len);
         // Frames from the root to the current one.
         var chain: [opt.max_inline_depth + 1]*Frame = undefined;
         var n: usize = 0;
@@ -509,7 +545,32 @@ pub const Lower = struct {
                 .count = @as(u32, @intCast(f.snap_entries.items.len)) - start,
             });
         }
-        try f.snaps.append(b.arena, .{ .frames = first, .nframes = @intCast(n) });
+        // The tables that the entries name and no code allocated.
+        const first_virt: u32 = @intCast(f.snap_virts.items.len);
+        var roots: u32 = 0;
+        if (vobjs.len != 0) {
+            for (f.snap_entries.items[first_entry..]) |e| {
+                const v = for (vobjs) |*x| {
+                    if (x.ref == e.ref) break x;
+                } else continue;
+                var known = false;
+                for (f.snap_virts.items[first_virt..]) |sv| {
+                    if (sv.ref == v.ref) known = true;
+                }
+                if (known) continue;
+                const fields: u32 = @intCast(f.snap_vfields.items.len);
+                for (v.keys[0..v.used], v.nodes[0..v.used], v.vals[0..v.used]) |k, nidx, val| {
+                    try f.snap_vfields.append(b.arena, .{ .key = @intFromPtr(k), .node = nidx, .val = val });
+                    if (b.tyOf(val).collectable()) roots += 1;
+                }
+                if (v.mt != ir.none) roots += 1;
+                try f.snap_virts.append(b.arena, .{ .ref = v.ref, .nc = v.nc, .mt = v.mt, .fields = fields, .count = v.used });
+            }
+        }
+        f.scratch = @max(f.scratch, roots);
+        const nvirts = @as(u32, @intCast(f.snap_virts.items.len)) - first_virt;
+        if (nvirts > 8) return error.Unsupported;
+        try f.snaps.append(b.arena, .{ .frames = first, .nframes = @intCast(n), .virts = first_virt, .nvirts = nvirts });
         return @intCast(f.snaps.items.len - 1);
     }
 
@@ -555,6 +616,8 @@ pub const Lower = struct {
         const reg = &b.fr.regs[r];
         if (reg.val != ir.none) {
             std.debug.assert(b.tyOf(reg.val) == ty);
+            // A use that needs the table itself allocates it.
+            if (b.virtIndex(reg.val) != null) return b.materialize(reg.val);
             return reg.val;
         }
         const slot = b.slotOf(r);
@@ -580,8 +643,10 @@ pub const Lower = struct {
         return try b.typed(r, ty);
     }
 
-    fn setReg(b: *Lower, r: u32, v: Ref, sample: Sample) Error!void {
+    fn setReg(b: *Lower, r: u32, value_ref: Ref, sample: Sample) Error!void {
         b.snap_cache = ir.no_snap;
+        var v = value_ref;
+        if (b.captured(r) and b.virtIndex(v) != null) v = try b.materialize(v);
         const reg = &b.fr.regs[r];
         if (b.captured(r)) {
             // A captured register is written through at once.
@@ -609,8 +674,9 @@ pub const Lower = struct {
 
     /// Writes register `r` to its slot if the slot is behind.
     fn flush(b: *Lower, r: u32) Error!void {
+        if (b.fr.regs[r].in_slot) return;
+        if (b.virtIndex(b.fr.regs[r].val) != null) _ = try b.materialize(b.fr.regs[r].val);
         const reg = &b.fr.regs[r];
-        if (reg.in_slot) return;
         try b.clobberSlot(b.slotOf(r));
         _ = try b.emit(.{ .op = .sstore, .cls = .slot, .a = reg.val, .imm = b.slotOf(r) });
         reg.in_slot = true;
@@ -642,7 +708,7 @@ pub const Lower = struct {
         blk.always = false;
         blk.edge_from = b.cur;
         try blk.preds.append(b.arena, b.cur);
-        try b.fr.incoming[target].append(b.arena, .{ .from = e, .regs = try b.arena.dupe(Reg, b.fr.regs) });
+        try b.fr.incoming[target].append(b.arena, try b.incomingOf(e));
         return e;
     }
 
@@ -698,7 +764,7 @@ pub const Lower = struct {
         } else {
             const st = reg.sample.ty() orelse return null;
             if (st != ty) return null;
-            dep = try b.emitIn(inc.from, .{ .op = .gslot, .cls = .slot, .imm = b.slotOf(r), .aux = ty.guardTag(), .snap = try b.snapWith(pc, inc.regs) });
+            dep = try b.emitIn(inc.from, .{ .op = .gslot, .cls = .slot, .imm = b.slotOf(r), .aux = ty.guardTag(), .snap = try b.snapWith(pc, inc.regs, inc.vobjs) });
         }
         if (ty == .nil) return try b.emitIn(inc.from, .{ .op = .knil, .ty = .nil });
         return try b.emitIn(inc.from, .{ .op = .sload, .ty = ty, .cls = .slot, .imm = b.slotOf(r), .c = dep });
@@ -717,10 +783,11 @@ pub const Lower = struct {
 
     /// Merges the register states of several edges into `blk`, which
     /// starts at instruction `pc`.
-    fn merge(b: *Lower, blk: BlockId, incs: []const Incoming, pc: u32) Error!void {
+    fn merge(b: *Lower, blk: BlockId, incs: []Incoming, pc: u32) Error!void {
         const fr = b.fr;
         const live = fr.flow.live[pc];
         var vals: [8]Ref = undefined;
+        try b.mergeVirtuals(blk, incs, pc);
         for (fr.regs, 0..) |*out, i| {
             const r: u32 = @intCast(i);
             out.* = .{ .sample = incs[0].regs[i].sample };
@@ -790,6 +857,7 @@ pub const Lower = struct {
             // The block on the only edge becomes the block of the node.
             b.cur = incs[0].from;
             @memcpy(fr.regs, incs[0].regs);
+            try b.setVobjs(incs[0].vobjs);
             const blk = &b.f.blocks.items[b.cur];
             blk.node = b.root_node;
             blk.always = b.always;
@@ -828,7 +896,7 @@ pub const Lower = struct {
             b.f.blocks.items[e].always = false;
             _ = try b.emitIn(join, .{ .op = .jmp, .t = e });
             try b.f.blocks.items[e].preds.append(b.arena, join);
-            pre = .{ .from = e, .regs = try b.arena.dupe(Reg, fr.regs) };
+            pre = try b.incomingOf(e);
         }
         const pb = pre.from;
         const header = try b.f.newBlock();
@@ -836,6 +904,7 @@ pub const Lower = struct {
         hb.node = b.root_node;
         hb.loop_header = true;
         @memcpy(fr.regs, pre.regs);
+        try b.setVobjs(pre.vobjs);
 
         const demote = b.persist.demote.get(b.pkey(nd.start)) orelse RegSet{};
         const untype = b.persist.untype.get(b.pkey(nd.start)) orelse RegSet{};
@@ -877,6 +946,47 @@ pub const Lower = struct {
                 hs.for_last = try b.emitIn(pb, .{ .op = .add, .ty = .int, .a = ri.val, .b = rc.val });
             }
         }
+        // A table that reaches the loop unallocated stays that way when
+        // the loop may: its fields become phis of the header. Any other
+        // one is allocated in front of the loop.
+        var hvirts: std.ArrayList(HVirt) = .empty;
+        const sink = !b.persist.no_sink.contains(b.pkey(nd.start)) and fr.parent == null;
+        for (fr.regs, 0..) |reg, i| {
+            const r: u32 = @intCast(i);
+            if (reg.val == ir.none) continue;
+            const vi = b.virtIndex(reg.val) orelse continue;
+            if (!live.has(r) or b.captured(r)) continue;
+            var known = false;
+            for (hvirts.items) |hv| {
+                if (hv.obj.ref == reg.val) known = true;
+            }
+            if (known) continue;
+            if (!sink or demote.has(r)) {
+                _ = try b.materialize(reg.val);
+                continue;
+            }
+            const old = b.vobjs.items[vi];
+            var hv: HVirt = .{ .obj = old };
+            hv.obj.ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = old.nc });
+            for (old.vals[0..old.used], 0..) |val, k| {
+                const phi = try b.newPhi(header, b.tyOf(val));
+                try b.phiArg(phi, pb, val);
+                hv.obj.vals[k] = phi;
+            }
+            if (old.mt != ir.none) {
+                const phi = try b.newPhi(header, .table);
+                try b.phiArg(phi, pb, old.mt);
+                hv.obj.mt = phi;
+                hv.mt_phi = phi;
+            }
+            // Every register that held the table holds the new one.
+            for (fr.regs) |*x| {
+                if (x.val == old.ref) x.val = hv.obj.ref;
+            }
+            b.vobjs.items[vi] = hv.obj;
+            try hvirts.append(b.arena, hv);
+        }
+        hs.virts = hvirts.items;
         b.cur = save_cur;
         b.pc = save_pc;
         b.snap_cache = ir.no_snap;
@@ -888,6 +998,8 @@ pub const Lower = struct {
                 reg.* = .{ .sample = src.sample };
                 continue;
             }
+            // An unallocated table keeps its register.
+            if (src.val != ir.none and b.virtIndex(src.val) != null) continue;
             const ty = b.regTy(src);
             if (demote.has(r) or ty == null) {
                 if (!src.in_slot) _ = try b.emitIn(pb, .{ .op = .sstore, .cls = .slot, .a = src.val, .imm = b.slotOf(r) });
@@ -950,16 +1062,56 @@ pub const Lower = struct {
     /// Completes the phis of a loop header with the state of an edge
     /// from inside the loop. A register whose type changed in the loop
     /// makes the function build again with that register in its slot.
-    fn backEdge(b: *Lower, nid: u32, inc: Incoming) Error!void {
+    fn backEdge(b: *Lower, nid: u32, edge: Incoming) Error!void {
         const fr = b.fr;
         const hs = fr.headers[nid].?;
         const nd = &fr.cfg.nodes.items[nid];
         const live = fr.flow.live[nd.start];
+        var inc = edge;
+        // A table that the loop carries unallocated must come around
+        // unallocated, with the same fields of the same types.
+        for (hs.virts) |hv| {
+            var back: Ref = ir.none;
+            var ok = true;
+            for (hs.regs, 0..) |hreg, i| {
+                const r: u32 = @intCast(i);
+                if (!live.has(r) or b.captured(r)) continue;
+                const s = inc.regs[i];
+                const here = hreg.val == hv.obj.ref;
+                const there = s.val != ir.none and (back == s.val or (back == ir.none and vobjIn(inc.vobjs, s.val) != null));
+                if (here and !there) ok = false;
+                if (here and there) back = s.val;
+            }
+            // No other live register may hold it.
+            for (hs.regs, 0..) |hreg, i| {
+                const r: u32 = @intCast(i);
+                if (!live.has(r) or b.captured(r)) continue;
+                if (hreg.val != hv.obj.ref and back != ir.none and inc.regs[i].val == back) ok = false;
+            }
+            const v2 = if (ok and back != ir.none) vobjIn(inc.vobjs, back) else null;
+            if (v2 == null or !b.sameShape(&hv.obj, v2.?)) {
+                try b.persist.no_sink.put(b.arena, b.pkey(nd.start), {});
+                b.rebuild = true;
+                if (b.l.g.jit.opt_dump) std.debug.print("  rebuild: the loop at {d} allocates its tables\n", .{nd.start});
+                return;
+            }
+            for (hv.obj.vals[0..hv.obj.used], v2.?.vals[0..hv.obj.used]) |phi, val| try b.phiArg(phi, inc.from, val);
+            if (hv.mt_phi != ir.none) try b.phiArg(hv.mt_phi, inc.from, v2.?.mt);
+        }
+        // Any other unallocated table is allocated on the edge.
+        for (hs.regs, 0..) |hreg, i| {
+            const r: u32 = @intCast(i);
+            if (!live.has(r) or b.captured(r)) continue;
+            if (hreg.val != ir.none and b.f.at(hreg.val).op == .valloc) continue;
+            const s = inc.regs[i];
+            if (s.val != ir.none and vobjIn(inc.vobjs, s.val) != null) try b.materializeOn(&inc, s.val, nd.start);
+        }
         var done_for = false;
         for (hs.regs, 0..) |hreg, i| {
             const r: u32 = @intCast(i);
             if (!live.has(r) or b.captured(r)) continue;
             const s = inc.regs[i];
+            if (hreg.val != ir.none and b.f.at(hreg.val).op == .valloc) continue;
             if (hreg.val != ir.none) {
                 const ty = b.tyOf(hreg.val);
                 const st = b.regTy(s) orelse s.sample.ty();
@@ -1009,6 +1161,7 @@ pub const Lower = struct {
         if (!gop.found_existing) gop.value_ptr.* = .{};
         gop.value_ptr.set(r);
         b.rebuild = true;
+        if (b.l.g.jit.opt_dump) std.debug.print("  rebuild: register {d} of the loop at {d} ({s})\n", .{ r, pc, if (map == &b.persist.demote) "slot" else "type" });
     }
 
     // -----------------------------------------------------------------
@@ -1043,6 +1196,8 @@ pub const Lower = struct {
         b.hint(pc, after);
         @memcpy(fr.regs, after);
         after = fr.regs;
+        // Every table that is still live was allocated for the template.
+        b.vobjs.clearRetainingCapacity();
         const start: u32 = @intCast(b.f.gen_targets.items.len);
         var buf: [3]u32 = undefined;
         const succ = flow_mod.successors(fr.proto, pc, &buf);
@@ -1252,6 +1407,10 @@ pub const Lower = struct {
 
     fn move(b: *Lower, ra: u32, rb: u32) Error!bool {
         const src = &b.fr.regs[rb];
+        if (src.val != ir.none and b.virtIndex(src.val) != null) {
+            try b.setReg(ra, src.val, src.sample);
+            return true;
+        }
         if (src.val != ir.none or src.ty != null) {
             const ty = b.staticTy(rb).?;
             const v = try b.typed(rb, ty);
@@ -1543,7 +1702,6 @@ pub const Lower = struct {
     /// names. Returns null when the lookup needs the general path.
     fn fieldLoad(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!?Loaded {
         if (!key_str.flags.interned) return null;
-        const g = b.l.g;
         if (table.findStr(st, key_str)) |idx| {
             const v = st.hash[idx].val;
             if (v.isNil()) return null;
@@ -1557,18 +1715,34 @@ pub const Lower = struct {
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
             return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
         };
-        const index_name = g.tm_names[@backingInt(state.TM.index)].?;
-        const hidx = table.findStr(mt, index_name) orelse return null;
-        const h = mt.hash[hidx].val;
-        if (h.tag != .table) return null;
-        const holder = h.as(Table);
-        const idx2 = table.findStr(holder, key_str) orelse return null;
-        const v2 = holder.hash[idx2].val;
-        if (v2.isNil()) return null;
+        if (!b.reachable(mt, key_str)) return null;
         if (!try b.absent(t, st, key_str)) return null;
         const m = try b.load(t, tl.metatable, .table, 8, .tab_meta, ir.none);
-        const gm = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
-        _ = gm;
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
+        return b.viaMetatable(m, mt, key_str);
+    }
+
+    /// Whether `viaMetatable` finds the key through the sample `mt`.
+    fn reachable(b: *Lower, mt: *Table, key_str: *String) bool {
+        const index_name = b.l.g.tm_names[@backingInt(state.TM.index)].?;
+        const hidx = table.findStr(mt, index_name) orelse return false;
+        const h = mt.hash[hidx].val;
+        if (h.tag != .table) return false;
+        const idx2 = table.findStr(h.as(Table), key_str) orelse return false;
+        return !h.as(Table).hash[idx2].val.isNil();
+    }
+
+    /// The lookup of a key that a table lacks, through the metatable
+    /// `m`, whose sample is `mt`: `__index` names a table, and that
+    /// table holds the key.
+    fn viaMetatable(b: *Lower, m: Ref, mt: *Table, key_str: *String) Error!?Loaded {
+        if (!b.reachable(mt, key_str)) return null;
+        const index_name = b.l.g.tm_names[@backingInt(state.TM.index)].?;
+        const hidx = table.findStr(mt, index_name).?;
+        const h = mt.hash[hidx].val;
+        const holder = h.as(Table);
+        const idx2 = table.findStr(holder, key_str).?;
+        const v2 = holder.hash[idx2].val;
         const n1 = try b.hashNode(m, hidx, index_name);
         const hv = try b.loadValue(n1.hp, n1.off + tl.node_val, h, .node_val, n1.dep);
         const n2 = try b.hashNode(hv, idx2, key_str);
@@ -1577,6 +1751,11 @@ pub const Lower = struct {
 
     fn getField(b: *Lower, ra: u32, src: TableSrc, key_v: Value) Error!bool {
         if (key_v.tag != .string) return false;
+        if (src == .reg and b.fr.regs[src.reg].val != ir.none and b.virtIndex(b.fr.regs[src.reg].val) != null) {
+            const r = (try b.virtGet(b.fr.regs[src.reg].val, key_v.as(String))) orelse return false;
+            try b.setReg(ra, r.ref, r.sample);
+            return true;
+        }
         const t = (try b.tableOf(src, 1)) orelse return false;
         const r = (try b.fieldLoad(t.ref, t.sample, key_v.as(String))) orelse return false;
         try b.setReg(ra, r.ref, r.sample);
@@ -1586,6 +1765,13 @@ pub const Lower = struct {
     fn method(b: *Lower, ra: u32, rb: u32, key_v: Value) Error!bool {
         if (key_v.tag != .string) return false;
         if ((b.guess(rb, 1) orelse return false) == .string) return b.stringMethod(ra, rb, key_v.as(String));
+        if (b.fr.regs[rb].val != ir.none and b.virtIndex(b.fr.regs[rb].val) != null) {
+            const recv = b.fr.regs[rb];
+            const r = (try b.virtGet(recv.val, key_v.as(String))) orelse return false;
+            try b.setReg(ra + 1, recv.val, recv.sample);
+            try b.setReg(ra, r.ref, r.sample);
+            return true;
+        }
         const t = (try b.tableOf(.{ .reg = rb }, 1)) orelse return false;
         const r = (try b.fieldLoad(t.ref, t.sample, key_v.as(String))) orelse return false;
         const recv_sample = b.fr.regs[rb].sample;
@@ -1663,6 +1849,9 @@ pub const Lower = struct {
         if (key_v.tag != .string) return false;
         const key_str = key_v.as(String);
         if (!key_str.flags.interned) return false;
+        if (src == .reg and b.fr.regs[src.reg].val != ir.none and b.virtIndex(b.fr.regs[src.reg].val) != null) {
+            if (try b.virtSet(b.fr.regs[src.reg].val, key_str, rv)) return true;
+        }
         // A store into a table that this block allocated.
         if (src == .reg) if (b.fresh) |*fz| {
             if (b.fr.regs[src.reg].val == fz.ref) return b.freshStore(fz, key_v, rv);
@@ -1714,6 +1903,17 @@ pub const Lower = struct {
 
     fn newTable(b: *Lower, ra: u32, nb: u32, nc: u32) Error!bool {
         if (b.marks() != 0) return false;
+        // A record constructor allocates nothing yet. The table exists
+        // as its fields until something needs the table itself.
+        if (nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
+            var hsize: u32 = 4;
+            while (hsize * 3 < nc * 4) hsize *= 2;
+            _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * 16), .snap = try b.snap() });
+            const ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = nc });
+            try b.vobjs.append(b.arena, .{ .ref = ref, .nc = nc, .mask = hsize - 1 });
+            try b.setReg(ra, ref, Sample.tagged(.table));
+            return true;
+        }
         _ = try b.guard(.{ .op = .gpending, .cls = .pending });
         // The collector may run here. Registers above the target are
         // dead, as they are for the interpreter.
@@ -1889,24 +2089,27 @@ pub const Lower = struct {
             }
             _ = try b.emit(.{ .op = .br, .cond = @backingInt(ir.Cond.lo), .a = zi, .b = asize, .t = fast, .f = slow });
             const before = try b.arena.dupe(Reg, b.fr.regs);
+            const before_vobjs = try b.arena.dupe(VObj, b.vobjs.items);
             const was_always = b.always;
             // The template.
             b.cur = slow;
             b.always = false;
             b.clobberAll();
             _ = try b.generic(pc, false);
-            const slow_inc: Incoming = .{ .from = b.cur, .regs = try b.arena.dupe(Reg, b.fr.regs) };
+            const slow_inc = try b.incomingOf(b.cur);
             // The inline store.
             b.cur = fast;
             @memcpy(b.fr.regs, before);
+            try b.setVobjs(before_vobjs);
             b.clobberAll();
             try b.elemStore(st.kind, t.ref, ap, zi, v, bits);
-            const fast_inc: Incoming = .{ .from = b.cur, .regs = try b.arena.dupe(Reg, b.fr.regs) };
+            const fast_inc = try b.incomingOf(b.cur);
             const join = try b.f.newBlock();
             b.f.blocks.items[join].node = b.root_node;
             b.f.blocks.items[join].always = was_always;
             b.always = was_always;
-            try b.merge(join, &.{ fast_inc, slow_inc }, pc + 1);
+            var both = [_]Incoming{ fast_inc, slow_inc };
+            try b.merge(join, &both, pc + 1);
             b.cur = join;
             b.clobberAll();
             b.snap_cache = ir.no_snap;
@@ -2146,7 +2349,7 @@ pub const Lower = struct {
         try b.setReg(ra, init, Sample.tagged(.integer));
         try b.setReg(ra + 1, count, Sample.tagged(.integer));
         try b.setReg(ra + 3, init, Sample.tagged(.integer));
-        try b.fr.incoming[nd.succs[0]].append(b.arena, .{ .from = run, .regs = try b.arena.dupe(Reg, b.fr.regs) });
+        try b.fr.incoming[nd.succs[0]].append(b.arena, try b.incomingOf(run));
         b.cur = save;
         _ = try b.emit(.{ .op = .br, .cond = @backingInt(if (up) ir.Cond.gt else ir.Cond.lt), .a = init, .b = limit, .t = skip, .f = run });
         try b.finishEdges();
@@ -2186,11 +2389,332 @@ pub const Lower = struct {
         try b.setReg(ra, next, Sample.tagged(.integer));
         try b.setReg(ra + 1, left, Sample.tagged(.integer));
         try b.setReg(ra + 3, next, Sample.tagged(.integer));
-        try b.fr.incoming[nd.succs[1]].append(b.arena, .{ .from = again, .regs = try b.arena.dupe(Reg, b.fr.regs) });
+        try b.fr.incoming[nd.succs[1]].append(b.arena, try b.incomingOf(again));
         b.cur = save;
         _ = try b.emit(.{ .op = .bri, .cond = @backingInt(ir.Cond.ne), .a = count, .imm = 0, .t = again, .f = done });
         try b.finishEdges();
         return false;
+    }
+
+    // -----------------------------------------------------------------
+    // Tables that are not allocated
+    //
+    // A record constructor makes a `valloc`, which stands for a table
+    // whose fields the builder keeps as values. Reads of its fields are
+    // those values, a method lookup goes through its metatable, and
+    // snapshots describe it field by field, so that leaving optimized
+    // code allocates it. A use that needs the table itself allocates it
+    // on the spot. A table that nothing needs is never allocated.
+
+    fn virtIndex(b: *Lower, ref: Ref) ?usize {
+        if (ref == ir.none) return null;
+        for (b.vobjs.items, 0..) |v, i| {
+            if (v.ref == ref) return i;
+        }
+        return null;
+    }
+
+    fn vobjIn(list: []const VObj, ref: Ref) ?*const VObj {
+        for (list) |*v| {
+            if (v.ref == ref) return v;
+        }
+        return null;
+    }
+
+    fn setVobjs(b: *Lower, list: []const VObj) Error!void {
+        b.vobjs.clearRetainingCapacity();
+        try b.vobjs.appendSlice(b.arena, list);
+    }
+
+    /// The state of the current point, for an edge that leaves `from`.
+    fn incomingOf(b: *Lower, from: BlockId) Error!Incoming {
+        return .{ .from = from, .regs = try b.arena.dupe(Reg, b.fr.regs), .vobjs = try b.arena.dupe(VObj, b.vobjs.items) };
+    }
+
+    fn sameShape(b: *Lower, x: *const VObj, y: *const VObj) bool {
+        if (x.nc != y.nc or x.used != y.used) return false;
+        if ((x.mt == ir.none) != (y.mt == ir.none) or x.mt_sample != y.mt_sample) return false;
+        for (0..x.used) |k| {
+            if (x.keys[k] != y.keys[k] or x.nodes[k] != y.nodes[k]) return false;
+            if (b.tyOf(x.vals[k]) != b.tyOf(y.vals[k])) return false;
+        }
+        return true;
+    }
+
+    /// t[key] for a table that is not allocated: the field, or what its
+    /// metatable finds.
+    fn virtGet(b: *Lower, ref: Ref, key_str: *String) Error!?Loaded {
+        const v = b.vobjs.items[b.virtIndex(ref).?];
+        for (v.keys[0..v.used], v.vals[0..v.used]) |k, val| {
+            if (k != key_str) continue;
+            const ty = b.tyOf(val);
+            return .{ .ref = val, .sample = if (ty == .boolean) Sample{} else Sample.tagged(@fromBackingInt(@backingInt(ty))) };
+        }
+        if (!key_str.flags.interned) return null;
+        if (v.mt == ir.none) return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
+        return b.viaMetatable(v.mt, v.mt_sample.?, key_str);
+    }
+
+    /// t[key] = R[rv] for a table that is not allocated. Returns false
+    /// when the store needs the table itself.
+    fn virtSet(b: *Lower, ref: Ref, key_str: *String, rv: u32) Error!bool {
+        const vi = b.virtIndex(ref).?;
+        // A metatable may see the store.
+        if (b.vobjs.items[vi].mt != ir.none) return false;
+        const ty = b.staticTy(rv) orelse return false;
+        if (ty == .nil) return false;
+        if (b.virtIndex(b.fr.regs[rv].val) != null) return false;
+        const val = try b.typed(rv, ty);
+        const v = &b.vobjs.items[vi];
+        b.snap_cache = ir.no_snap;
+        for (v.keys[0..v.used], 0..) |k, i| {
+            if (k == key_str) {
+                v.vals[i] = val;
+                return true;
+            }
+        }
+        const len = v.mask + 1;
+        if ((v.used + 1) * 4 > len * 3 or v.used >= max_vfields) return false;
+        // The node the key goes to, as `table.storeStr` finds it.
+        var i: u32 = key_str.hash & v.mask;
+        while (true) : (i = (i + 1) & v.mask) {
+            var taken = false;
+            for (v.nodes[0..v.used]) |nidx| {
+                if (nidx == i) taken = true;
+            }
+            if (!taken) break;
+        }
+        v.keys[v.used] = key_str;
+        v.nodes[v.used] = i;
+        v.vals[v.used] = val;
+        v.used += 1;
+        return true;
+    }
+
+    /// The metatable phi of a table that an enclosing loop carries
+    /// unallocated, when its sample is `mts`.
+    fn loopMetatable(b: *Lower, mts: *Table) ?Ref {
+        const root_fr = b.root;
+        var found: ?Ref = null;
+        for (root_fr.headers, 0..) |maybe, nid| {
+            const hs = maybe orelse continue;
+            const nd = root_fr.cfg.nodes.items[nid];
+            if (!root_fr.cfg.loops.items[nd.loop].body[b.root_node]) continue;
+            for (hs.virts) |hv| {
+                if (hv.mt_phi != ir.none and hv.obj.mt_sample == mts) found = hv.mt_phi;
+            }
+        }
+        return found;
+    }
+
+    /// Allocates the table that `ref` stands for, at the current point,
+    /// and stores its fields. Every register that held `ref` holds the
+    /// table afterwards.
+    fn materialize(b: *Lower, ref: Ref) Error!Ref {
+        const vi = b.virtIndex(ref).?;
+        const v = b.vobjs.items[vi];
+        const snap_id = try b.snapAt(b.pc);
+        // The collector sees the registers up to the last live one.
+        var live_top: u32 = 0;
+        if (b.pc < b.fr.flow.live.len) {
+            for (b.fr.regs, 0..) |_, i| {
+                if (b.fr.flow.live[b.pc].has(@intCast(i))) live_top = @intCast(i + 1);
+            }
+        } else live_top = b.fr.proto.max_stack;
+        _ = try b.emit(.{ .op = .gccheck, .snap = snap_id, .aux = b.fr.off + live_top });
+        b.gcPoint();
+        const t = try b.emit(.{
+            .op = .callc,
+            .ty = .table,
+            .a = try b.kint(0),
+            .b = try b.kint(v.nc),
+            .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newTable))),
+            .flags = .{ .thread = true },
+        });
+        _ = try b.emit(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = t, .imm = 0, .snap = snap_id });
+        _ = b.vobjs.swapRemove(vi);
+        var fz: Fresh = .{ .ref = t, .mask = v.mask, .used = v.used, .metatable = v.mt != ir.none };
+        for (v.keys[0..v.used], v.nodes[0..v.used], v.vals[0..v.used], 0..) |k, nidx, val, i| {
+            const base: i32 = @intCast(@sizeOf(Table) + (@as(usize, nidx) << tl.node_shift));
+            _ = try b.store(t, base + tl.node_key, try b.kptr(.string, @intFromPtr(k)), 8, .node_key, true);
+            _ = try b.store(t, base + tl.node_key + 8, try b.kint(@backingInt(Tag.string)), 8, .node_key, true);
+            try b.storeValue(t, base + tl.node_val, val, .node_val, true);
+            _ = try b.emit(.{ .op = .barrier, .a = t, .b = val, .imm = @bitCast(@as(u64, @intFromPtr(k))) });
+            fz.keys[i] = k;
+            fz.nodes[i] = nidx;
+        }
+        if (v.used != 0) _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = t, .b = try b.kint(v.used), .imm = tl.hash_used, .flags = .{ .fresh = true } });
+        if (v.mt != ir.none) {
+            _ = try b.store(t, tl.metatable, v.mt, 8, .tab_meta, true);
+            _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
+        }
+        var it: ?*Frame = b.fr;
+        while (it) |x| : (it = x.parent) {
+            for (x.regs) |*reg| {
+                if (reg.val == ref) reg.val = t;
+            }
+        }
+        b.fresh = fz;
+        b.snap_cache = ir.no_snap;
+        return t;
+    }
+
+    /// Allocates every table that a register of some frame holds.
+    fn materializeAll(b: *Lower) Error!void {
+        while (b.vobjs.items.len > 0) {
+            const ref = b.vobjs.items[b.vobjs.items.len - 1].ref;
+            var held = false;
+            var it: ?*Frame = b.fr;
+            while (it) |x| : (it = x.parent) {
+                for (x.regs) |reg| {
+                    if (reg.val == ref) held = true;
+                }
+            }
+            if (held) {
+                _ = try b.materialize(ref);
+            } else {
+                _ = b.vobjs.pop();
+            }
+        }
+    }
+
+    /// Allocates a table on an edge, in the block and with the state of
+    /// that edge, which leads to the instruction `pc`.
+    fn materializeOn(b: *Lower, inc: *Incoming, ref: Ref, pc: u32) Error!void {
+        const fr = b.fr;
+        const save_cur = b.cur;
+        const save_pc = b.pc;
+        const save_cse = b.cse;
+        const save_fresh = b.fresh;
+        const save_regs = try b.arena.dupe(Reg, fr.regs);
+        const save_vobjs = try b.arena.dupe(VObj, b.vobjs.items);
+        b.cur = inc.from;
+        b.pc = pc;
+        b.cse = .empty;
+        b.fresh = null;
+        @memcpy(fr.regs, inc.regs);
+        try b.setVobjs(inc.vobjs);
+        _ = try b.materialize(ref);
+        @memcpy(inc.regs, fr.regs);
+        inc.vobjs = try b.arena.dupe(VObj, b.vobjs.items);
+        b.cur = save_cur;
+        b.pc = save_pc;
+        b.cse = save_cse;
+        b.fresh = save_fresh;
+        @memcpy(fr.regs, save_regs);
+        try b.setVobjs(save_vobjs);
+        b.snap_cache = ir.no_snap;
+    }
+
+    /// Brings the unallocated tables of several edges together. A
+    /// register that holds one on every edge, with the same fields of
+    /// the same types, holds one afterwards, whose fields are phis.
+    /// Any other unallocated table is allocated on its edge.
+    fn mergeVirtuals(b: *Lower, blk: BlockId, incs: []Incoming, pc: u32) Error!void {
+        const fr = b.fr;
+        const live = fr.flow.live[pc];
+        var any = false;
+        for (incs) |inc| {
+            if (inc.vobjs.len != 0) any = true;
+        }
+        b.vobjs.clearRetainingCapacity();
+        if (!any) return;
+        const Group = struct { refs: [8]Ref, ok: bool };
+        var groups: std.ArrayList(Group) = .empty;
+        if (incs.len <= 8) {
+            for (fr.regs, 0..) |_, i| {
+                const r: u32 = @intCast(i);
+                if (!live.has(r) or b.captured(r)) continue;
+                var tuple: [8]Ref = @splat(ir.none);
+                var all = true;
+                for (incs, 0..) |inc, k| {
+                    const val = inc.regs[i].val;
+                    if (val != ir.none and vobjIn(inc.vobjs, val) != null) tuple[k] = val else all = false;
+                }
+                if (!all) continue;
+                var known = false;
+                for (groups.items) |gr| {
+                    if (std.mem.eql(Ref, &gr.refs, &tuple)) known = true;
+                }
+                if (!known) try groups.append(b.arena, .{ .refs = tuple, .ok = true });
+            }
+        }
+        // A table belongs to one group, and the tables of a group have
+        // one shape.
+        for (groups.items, 0..) |*gr, gi| {
+            const first = vobjIn(incs[0].vobjs, gr.refs[0]).?;
+            for (incs, 0..) |inc, k| {
+                if (!b.sameShape(first, vobjIn(inc.vobjs, gr.refs[k]).?)) gr.ok = false;
+            }
+            for (groups.items, 0..) |*other, oi| {
+                if (oi == gi) continue;
+                for (0..incs.len) |k| {
+                    if (other.refs[k] == gr.refs[k]) {
+                        gr.ok = false;
+                        other.ok = false;
+                    }
+                }
+            }
+        }
+        // Whatever stays outside a group is allocated on its edge.
+        for (incs, 0..) |*inc, k| {
+            var again = true;
+            while (again) {
+                again = false;
+                for (inc.regs, 0..) |reg, i| {
+                    const r: u32 = @intCast(i);
+                    if (!live.has(r) or b.captured(r) or reg.val == ir.none) continue;
+                    if (vobjIn(inc.vobjs, reg.val) == null) continue;
+                    var grouped = false;
+                    for (groups.items) |gr| {
+                        if (gr.ok and gr.refs[k] == reg.val) grouped = true;
+                    }
+                    if (grouped) continue;
+                    try b.materializeOn(inc, reg.val, pc);
+                    again = true;
+                    break;
+                }
+            }
+        }
+        for (groups.items) |gr| {
+            if (!gr.ok) continue;
+            var out = vobjIn(incs[0].vobjs, gr.refs[0]).?.*;
+            var one = true;
+            for (0..incs.len) |k| {
+                if (gr.refs[k] != gr.refs[0]) one = false;
+            }
+            if (!one) out.ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = out.nc });
+            for (0..out.used) |fi| {
+                var same = true;
+                for (incs, 0..) |inc, k| {
+                    if (vobjIn(inc.vobjs, gr.refs[k]).?.vals[fi] != out.vals[fi]) same = false;
+                }
+                if (same) continue;
+                const phi = try b.newPhi(blk, b.tyOf(out.vals[fi]));
+                for (incs, 0..) |inc, k| try b.phiArg(phi, inc.from, vobjIn(inc.vobjs, gr.refs[k]).?.vals[fi]);
+                out.vals[fi] = phi;
+            }
+            if (out.mt != ir.none) {
+                var same = true;
+                for (incs, 0..) |inc, k| {
+                    if (vobjIn(inc.vobjs, gr.refs[k]).?.mt != out.mt) same = false;
+                }
+                if (!same) {
+                    const phi = try b.newPhi(blk, .table);
+                    for (incs, 0..) |inc, k| try b.phiArg(phi, inc.from, vobjIn(inc.vobjs, gr.refs[k]).?.mt);
+                    out.mt = phi;
+                }
+            }
+            // The registers of every edge name the merged table.
+            if (!one) {
+                for (incs, 0..) |*inc, k| {
+                    for (inc.regs) |*reg| {
+                        if (reg.val == gr.refs[k]) reg.val = out.ref;
+                    }
+                }
+            }
+            try b.vobjs.append(b.arena, out);
+        }
     }
 
     // -----------------------------------------------------------------
@@ -2253,7 +2777,7 @@ pub const Lower = struct {
             .native => {
                 const res = (try b.intrinsic(ra, nargs, 1, s.v.as(state.Native))) orelse return error.Unsupported;
                 if (b.skip_next) return error.Unsupported;
-                try fr.returns.?.append(b.arena, .{ .from = b.cur, .res = .{ .val = res.ref, .in_slot = false, .sample = res.sample } });
+                try fr.returns.?.append(b.arena, .{ .from = b.cur, .res = .{ .val = res.ref, .in_slot = false, .sample = res.sample }, .vobjs = try b.arena.dupe(VObj, b.vobjs.items) });
                 return false;
             },
             .closure => {
@@ -2293,7 +2817,8 @@ pub const Lower = struct {
                 }
                 b.f.extent = @max(b.f.extent, k.off + p.max_stack);
                 try b.inlined.append(b.arena, p);
-                try k.incoming[cfg.entry].append(b.arena, .{ .from = b.cur, .regs = try b.arena.dupe(Reg, k.regs) });
+                if (cfg.nodes.items.len > 1) try b.materializeAll();
+                try k.incoming[cfg.entry].append(b.arena, .{ .from = b.cur, .regs = try b.arena.dupe(Reg, k.regs), .vobjs = try b.arena.dupe(VObj, b.vobjs.items) });
                 b.fr = k;
                 b.snap_cache = ir.no_snap;
                 try b.buildFrame();
@@ -2312,7 +2837,9 @@ pub const Lower = struct {
         var res: Reg = .{ .val = try b.knil(), .in_slot = false, .sample = Sample.of(.nil) };
         if (r) |x| {
             const reg = fr.regs[x];
-            if (b.staticTy(x)) |t| {
+            if (reg.val != ir.none and b.virtIndex(reg.val) != null) {
+                res = .{ .val = reg.val, .in_slot = false, .sample = reg.sample };
+            } else if (b.staticTy(x)) |t| {
                 res = .{ .val = try b.typed(x, t), .in_slot = false, .sample = reg.sample };
             } else {
                 _ = try b.emit(.{ .op = .scopy, .cls = .slot, .imm = @as(i64, fr.off) - 1, .aux = @bitCast(b.slotOf(x)) });
@@ -2320,7 +2847,7 @@ pub const Lower = struct {
                 res = .{ .sample = reg.sample };
             }
         }
-        try fr.returns.?.append(b.arena, .{ .from = b.cur, .res = res });
+        try fr.returns.?.append(b.arena, .{ .from = b.cur, .res = res, .vobjs = try b.arena.dupe(VObj, b.vobjs.items) });
         return false;
     }
 
@@ -2378,6 +2905,7 @@ pub const Lower = struct {
                 if (!outer) return e;
                 try b.persist.no_inline.put(b.arena, call_pc, {});
                 b.rebuild = true;
+                if (b.l.g.jit.opt_dump) std.debug.print("  rebuild: the call at {d} stays a call\n", .{call_pc});
                 return error.Rebuild;
             },
             else => return e,
@@ -2393,6 +2921,9 @@ pub const Lower = struct {
         const fl = try Flow.init(b.arena, p);
         const cfg = Cfg.init(b.arena, fl, 0, false) catch return error.Unsupported;
         if (cfg.loops.items.len != 0) return error.Unsupported;
+        // A callee with branches merges only its own registers, so the
+        // registers of its callers hold allocated tables meanwhile.
+        if (cfg.nodes.items.len > 1) try b.materializeAll();
         const child = try newFrame(b.arena, b.l, p, fl, cfg, parent.off + ra + 1);
         var returns: std.ArrayList(Return) = .empty;
         child.parent = parent;
@@ -2414,7 +2945,7 @@ pub const Lower = struct {
         b.f.extent = @max(b.f.extent, child.off + p.max_stack);
         b.f.depth = @max(b.f.depth, child.depth);
         try b.inlined.append(b.arena, p);
-        try child.incoming[cfg.entry].append(b.arena, .{ .from = b.cur, .regs = try b.arena.dupe(Reg, child.regs) });
+        try child.incoming[cfg.entry].append(b.arena, .{ .from = b.cur, .regs = try b.arena.dupe(Reg, child.regs), .vobjs = try b.arena.dupe(VObj, b.vobjs.items) });
         b.fr = child;
         b.snap_cache = ir.no_snap;
         try b.buildFrame();
@@ -2439,11 +2970,12 @@ pub const Lower = struct {
                     regs[ra + k] = .{ .val = try b.emitIn(ret.from, .{ .op = .knil, .ty = .nil }), .in_slot = false, .sample = Sample.of(.nil) };
                 }
             }
-            incs[i] = .{ .from = ret.from, .regs = regs };
+            incs[i] = .{ .from = ret.from, .regs = regs, .vobjs = ret.vobjs };
         }
         if (incs.len == 1) {
             b.cur = incs[0].from;
             @memcpy(parent.regs, incs[0].regs);
+            try b.setVobjs(incs[0].vobjs);
             b.always = saved_always;
             return;
         }
@@ -2513,6 +3045,27 @@ pub const Lower = struct {
             const mts = b.fr.regs[a1 + 1].sample.tableOf() orelse return null;
             const gc_bit: u16 = @as(u16, 1) << @backingInt(state.TM.gc);
             if (mts.tm_absent & gc_bit == 0) return null;
+            const bit0: u8 = @backingInt(state.TM.gc);
+            if (b.fr.regs[a1].val != ir.none) if (b.virtIndex(b.fr.regs[a1].val)) |vi0| {
+                // An unallocated table: the metatable becomes one of
+                // its fields. It has none yet, or the call stays.
+                if (b.vobjs.items[vi0].mt != ir.none) return null;
+                try b.guardNative(ra, f);
+                var mt = try b.typed(a1 + 1, .table);
+                _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + bit0 / 8, .aux = @as(u64, bit0 % 8) | (1 << 8) });
+                // In a loop that carries such a table, the metatable is
+                // most often the one from the last iteration. Proving
+                // that makes it one value for the whole loop.
+                if (b.loopMetatable(mts)) |prev| {
+                    _ = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = mt, .b = prev });
+                    mt = prev;
+                }
+                const vi = b.virtIndex(b.fr.regs[a1].val).?;
+                b.vobjs.items[vi].mt = mt;
+                b.vobjs.items[vi].mt_sample = mts;
+                b.snap_cache = ir.no_snap;
+                return .{ .ref = b.fr.regs[a1].val, .sample = b.fr.regs[a1].sample };
+            };
             try b.guardNative(ra, f);
             const t = try b.typed(a1, .table);
             const mt = try b.typed(a1 + 1, .table);

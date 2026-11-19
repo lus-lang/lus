@@ -34,7 +34,7 @@ const Interval = struct {
 };
 
 fn needsPlace(i: *const ir.Inst) bool {
-    if (i.isConst()) return false;
+    if (i.isConst() or i.op == .valloc) return false;
     return i.ty != .void and i.ty != .nil;
 }
 
@@ -174,11 +174,39 @@ pub fn run(f: *ir.Func, ngpr: u8, nfpr: u8) !Result {
         }
     }
 
-    // Calls into the runtime, in position order.
-    var calls: std.ArrayList(u32) = .empty;
+    // The values that are live across a call into the runtime, which
+    // takes every register. A walk backward through each block that
+    // calls finds exactly them.
+    const crossing = try arena.alloc(bool, ni);
+    @memset(crossing, false);
     for (order) |b| {
-        for (f.blocks.items[b].insts.items) |r| {
-            if (f.at(r).op == .callc) try calls.append(arena, pos[r]);
+        const list = f.blocks.items[b].insts.items;
+        var has_call = false;
+        for (list) |r| {
+            if (f.at(r).op == .callc) has_call = true;
+        }
+        if (!has_call) continue;
+        @memcpy(tmp, live_out[b * words ..][0..words]);
+        var k = list.len;
+        while (k > 0) {
+            k -= 1;
+            const r = list[k];
+            const inst = f.at(r);
+            tmp[r / 64] &= ~(@as(u64, 1) << @intCast(r % 64));
+            if (inst.op == .callc) {
+                for (tmp, 0..) |w, wi| {
+                    var bits = w;
+                    while (bits != 0) {
+                        const bit: usize = @ctz(bits);
+                        crossing[wi * 64 + bit] = true;
+                        bits &= bits - 1;
+                    }
+                }
+            }
+            if (inst.op == .phi) continue;
+            used.clearRetainingCapacity();
+            try uses(f, inst, &used);
+            for (used.items) |u| setBit(tmp, u);
         }
     }
 
@@ -228,14 +256,7 @@ pub fn run(f: *ir.Func, ngpr: u8, nfpr: u8) !Result {
                 _ = active.swapRemove(k);
             } else k += 1;
         }
-        var crosses = false;
-        for (calls.items) |c| {
-            if (c > iv.start and c < iv.end) {
-                crosses = true;
-                break;
-            }
-        }
-        if (crosses) {
+        if (crossing[iv.ref]) {
             loc[iv.ref] = .{ .spill = nspill };
             nspill += 1;
             continue;
@@ -302,6 +323,10 @@ pub fn uses(f: *ir.Func, inst: *const ir.Inst, out: *std.ArrayList(Ref)) !void {
         for (f.snap_frames.items[s.frames..][0..s.nframes]) |fr| {
             if (fr.closure != ir.none) try add(f, out, fr.closure);
             for (f.snap_entries.items[fr.entries..][0..fr.count]) |e| try add(f, out, e.ref);
+        }
+        for (f.snap_virts.items[s.virts..][0..s.nvirts]) |v| {
+            if (v.mt != ir.none) try add(f, out, v.mt);
+            for (f.snap_vfields.items[v.fields..][0..v.count]) |x| try add(f, out, x.val);
         }
     }
 }

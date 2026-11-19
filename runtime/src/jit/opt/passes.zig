@@ -136,11 +136,15 @@ fn rewrite(f: *ir.Func, fwd: []Ref) !void {
     for (f.snap_frames.items) |*fr| {
         if (fr.closure != ir.none) fr.closure = resolve(fwd, fr.closure);
     }
+    for (f.snap_virts.items) |*v| {
+        if (v.mt != ir.none) v.mt = resolve(fwd, v.mt);
+    }
+    for (f.snap_vfields.items) |*x| x.val = resolve(fwd, x.val);
 }
 
 pub fn usesA(i: *const ir.Inst) bool {
     return switch (i.op) {
-        .nop, .knil, .kbool, .kint, .kflt, .kptr, .sload, .gslot, .scopy, .gpending, .gccheck, .jmp, .brtruthy, .brtag, .generic, .exit, .phi => false,
+        .nop, .knil, .kbool, .kint, .kflt, .kptr, .sload, .gslot, .scopy, .gpending, .gdebt, .gccheck, .jmp, .brtruthy, .brtag, .generic, .exit, .phi, .valloc => false,
         else => true,
     };
 }
@@ -385,6 +389,10 @@ pub fn eliminateDead(f: *ir.Func) !void {
             for (f.snap_frames.items[s.frames..][0..s.nframes]) |fr| {
                 if (fr.closure != ir.none) try refs.append(arena, fr.closure);
                 for (f.snap_entries.items[fr.entries..][0..fr.count]) |e| try refs.append(arena, e.ref);
+            }
+            for (f.snap_virts.items[s.virts..][0..s.nvirts]) |v| {
+                if (v.mt != ir.none) try refs.append(arena, v.mt);
+                for (f.snap_vfields.items[v.fields..][0..v.count]) |x| try refs.append(arena, x.val);
             }
         }
         for (refs.items) |x| {

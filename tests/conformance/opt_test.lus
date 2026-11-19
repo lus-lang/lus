@@ -1031,6 +1031,158 @@ local function tables_built_in_loops_survive_collection_test()
     assert(fin == 6000)
 end
 
+local function tables_that_are_never_needed_still_drive_the_collector_test()
+    -- The loops wait for a finalizer, and only their own garbage makes
+    -- the collector run.
+    local function wait_plain()
+        local finish = false
+        local u = setmetatable({}, { __gc = function() finish = true end })
+        local c = 0
+        repeat
+            u = { x = 1 }
+            c = c + 1
+        until finish
+        return c > 0
+    end
+    assert(wait_plain())
+    local function wait_field()
+        local finish = false
+        local u = setmetatable({}, { __gc = function() finish = true end })
+        local c = 0
+        repeat
+            u = { x = c }
+            c = c + 1
+        until finish
+        return u.x == c - 1
+    end
+    assert(wait_field())
+    local Box = {}
+    Box.__index = Box
+    local function box(v) return setmetatable({ v = v }, Box) end
+    function Box:next() return box(self.v + 1) end
+    local function wait_method()
+        local finish = false
+        local u = setmetatable({}, { __gc = function() finish = true end })
+        u = nil
+        local b = box(0)
+        repeat b = b:next() until finish
+        return b.v > 0 and getmetatable(b) == Box
+    end
+    assert(wait_method())
+end
+
+local function unallocated_tables_test()
+    local Vec = {}
+    Vec.__index = Vec
+    local function vec(x, y) return setmetatable({ x = x, y = y }, Vec) end
+    function Vec:add(o) return vec(self.x + o.x, self.y + o.y) end
+    function Vec:dot(o) return self.x * o.x + self.y * o.y end
+    -- A table that only feeds a computation.
+    local function norm2(x, y)
+        local v = vec(x, y)
+        return v:dot(v)
+    end
+    assert(hot(norm2, 3, 4) == 25 and norm2(1.5, 2) == 6.25)
+    local ok = catch norm2("a", {})
+    assert(not ok)
+    -- A table that a loop carries and that leaves the loop.
+    local function walk(n, step)
+        local p = vec(0, 0)
+        for _ = 1, n do p = p:add(step) end
+        return p
+    end
+    local unit = vec(1, 2)
+    local p = hot(walk, 50, unit)
+    assert(p.x == 50 and p.y == 100 and getmetatable(p) == Vec and rawequal(p, p))
+    assert(walk(0, unit).x == 0 and walk(1, unit).y == 2)
+    -- The types of the fields change while the table is unallocated.
+    p = walk(50, vec(0.5, "3"))
+    assert(p.x == 25.0 and p.y == 150)
+    ok = catch walk(5, vec({}, 1))
+    assert(not ok)
+    -- The table escapes on one path only.
+    local kept = {}
+    local function maybe_keep(n)
+        local last
+        for i = 1, n do
+            local v = vec(i, -i)
+            if i % 10 == 0 then kept[#kept + 1] = v end
+            last = v.x + v.y
+        end
+        return last
+    end
+    assert(hot(maybe_keep, 20) == 0)
+    assert(#kept == 1000 and kept[1].x == 10 and kept[2].y == -20 and getmetatable(kept[1000]) == Vec)
+    -- Two names for one table.
+    local function alias(n)
+        local a = { v = 0 }
+        local b = a
+        for i = 1, n do
+            b.v = b.v + i
+            a = b
+        end
+        return a.v, a == b
+    end
+    local v, same = hot(alias, 10)
+    assert(v == 55 and same == true)
+    -- A table that is replaced on one branch.
+    local function branchy(n)
+        local acc = { s = 0 }
+        for i = 1, n do
+            if i % 3 == 0 then acc = { s = acc.s + 100 } else acc.s = acc.s + 1 end
+        end
+        return acc.s
+    end
+    assert(hot(branchy, 9) == 306)
+    -- An error inside the loop finds the table as it was.
+    local function fails(n, bad)
+        local p2 = vec(0, 0)
+        local ok2, err = catch (function()
+            for i = 1, n do
+                p2 = p2:add(unit)
+                if i == bad then error(p2) end
+            end
+        end)()
+        return ok2, err, p2
+    end
+    hot(fails, 10, 0)
+    local ok3, err, p3 = fails(10, 7)
+    assert(ok3 == false and err == p3 and p3.x == 7 and p3.y == 14 and getmetatable(err) == Vec)
+    -- A metatable with a finalizer, and one that changes.
+    local finalized = 0
+    local Fin = { __gc = function() finalized = finalized + 1 end }
+    local function fin(n)
+        for i = 1, n do local t = setmetatable({ i = i }, Fin) end
+    end
+    for _ = 1, 300 do fin(1) end
+    collectgarbage()
+    collectgarbage()
+    assert(finalized == 300)
+    local A, B = { name = "A" }, { name = "B" }
+    A.__index, B.__index = A, B
+    local function tagged(n, m1, m2)
+        local t = setmetatable({ k = 0 }, m1)
+        for i = 1, n do t = setmetatable({ k = t.k + 1 }, i == n and m2 or m1) end
+        return t.name, t.k
+    end
+    local name, k = hot(tagged, 10, A, A)
+    assert(name == "A" and k == 10)
+    name, k = tagged(10, A, B)
+    assert(name == "B" and k == 10)
+    -- The collector runs while tables are unallocated.
+    local function with_garbage(n)
+        local p4 = vec(0, 0)
+        local junk
+        for i = 1, n do
+            p4 = p4:add(unit)
+            junk = { i }
+            if i % 100 == 0 then collectgarbage() end
+        end
+        return p4.x + junk[1]
+    end
+    assert(hot(with_garbage, 300) == 600)
+end
+
 local function weak_entries_are_read_again_test()
     local cache = setmetatable({}, { __mode = "v" })
     local function probe(n)

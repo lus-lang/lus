@@ -162,7 +162,7 @@ pub const Codegen = struct {
         // its slot.
         a.bind(c.l_entry);
         c.entry_off = a.offset();
-        if (f.extent > c.p.max_stack or f.depth > 0) c.roomCheck();
+        if (f.extent > c.p.max_stack or f.depth > 0 or f.scratch > 0) c.roomCheck();
         if (c.frame != 0) a.moveSp(-c.frame);
         a.jmp(c.labels[f.entry]);
 
@@ -198,12 +198,17 @@ pub const Codegen = struct {
         a.call(@intFromPtr(&opt.rt.deopt));
         a.moveSp(save_bytes + c.frame);
         const l_interp = a.newLabel();
+        const l_failed = a.newLabel();
         a.jumpIfImm(.eq, A.ret0, 0, l_interp);
+        a.jumpIfImm(.eq, A.ret0, @intCast(opt.failed), l_failed);
         a.mov(A.base, A.ret1);
         c.em.reloadBp();
         a.jmpReg(A.ret0);
         a.bind(l_interp);
         a.movImm(A.ret0, interp.Step.interpret);
+        a.jmp(c.em.l_exit);
+        a.bind(l_failed);
+        a.movImm(A.ret0, interp.Step.failed);
         a.jmp(c.em.l_exit);
 
         c.em.flushCold();
@@ -218,7 +223,7 @@ pub const Codegen = struct {
         const lay = c.em.lay;
         const bail = a.newLabel();
         const ok = a.newLabel();
-        a.lea(sc0, .{ .base = A.base, .disp = @intCast(c.f.extent + 16) });
+        a.lea(sc0, .{ .base = A.base, .disp = @intCast(c.f.extent + c.f.scratch + 16) });
         a.jumpIfMem(.hi, sc0, .{ .base = A.thread, .disp = lay.stack_len }, bail);
         a.load64(sc0, .{ .base = A.thread, .disp = lay.frames_len });
         a.addImm(sc0, @intCast(c.f.depth + 1));
@@ -482,7 +487,7 @@ pub const Codegen = struct {
         const a = &c.em.a;
         const i = c.f.at(r);
         switch (i.op) {
-            .nop, .knil, .kbool, .kint, .kflt, .kptr, .phi => {},
+            .nop, .knil, .kbool, .kint, .kflt, .kptr, .phi, .valloc => {},
 
             .sload => switch (i.ty) {
                 .float => {
@@ -722,6 +727,14 @@ pub const Codegen = struct {
                 a.jumpIfImm(.ne, sc0, 0, c.exitOf(i));
             },
 
+            .gdebt => {
+                const js = &c.l.g.jit;
+                a.movImm(sc0, @intFromPtr(&js.sunk));
+                a.load64(sc1, .{ .base = sc0 });
+                a.addImm(sc1, @intCast(i.imm));
+                a.store64(sc1, .{ .base = sc0 });
+                a.jumpIfMem(.hs, sc1, .{ .base = sc0, .disp = @intCast(@as(isize, @bitCast(@intFromPtr(&js.sunk_limit) -% @intFromPtr(&js.sunk)))) }, c.exitOf(i));
+            },
             .callc => c.callc(r, i),
             .barrier => {
                 const s: Stub = .{ .entry = a.newLabel(), .back = a.newLabel(), .inst = r };

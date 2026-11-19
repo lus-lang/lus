@@ -49,6 +49,9 @@ pub const mark_respec: u8 = 2;
 pub const mark_generic: u8 = 4;
 
 pub const default_threshold = 120;
+/// Bytes of unallocated tables after which optimized code asks for a
+/// collection, at least.
+pub const sunk_step: u64 = 4 << 20;
 
 pub const Setting = enum { off, on, eager };
 
@@ -72,7 +75,23 @@ pub const Val = extern struct {
     ty: ir.Ty,
     bits: u64 align(8),
 
-    pub const Kind = enum(u8) { reg, freg, spill, imm };
+    /// `virt` names a table of the snapshot that is not allocated yet,
+    /// by its index among those tables.
+    pub const Kind = enum(u8) { reg, freg, spill, imm, virt };
+};
+
+/// A table that an exit allocates.
+pub const VirtMeta = struct {
+    nc: u32,
+    mt: Val,
+    fields: u32,
+    count: u32,
+};
+
+pub const VFieldMeta = struct {
+    key: usize,
+    node: u32,
+    val: Val,
 };
 
 pub const FrameMeta = struct {
@@ -105,6 +124,11 @@ pub const Unit = struct {
     snaps: []ir.Snap = &.{},
     frames: []FrameMeta = &.{},
     entries: []Entry = &.{},
+    virts: []VirtMeta = &.{},
+    vfields: []VFieldMeta = &.{},
+    /// Slots that the frames of the unit cover, from register zero of
+    /// the root.
+    extent: u32 = 0,
     /// Functions compiled inline, which the unit keeps alive.
     protos: []*Proto = &.{},
     exits: u32 = 0,
@@ -285,7 +309,25 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
             .count = f.count,
         };
     }
+    unit.virts = gpa.alloc(VirtMeta, func.snap_virts.items.len) catch return null;
+    unit.vfields = gpa.alloc(VFieldMeta, func.snap_vfields.items.len) catch return null;
+    unit.extent = func.extent;
+    for (func.snap_virts.items, unit.virts) |v, *m| {
+        m.* = .{ .nc = v.nc, .mt = if (v.mt != ir.none) valOf(func, ra, v.mt) else .{ .kind = .imm, .ty = .nil, .bits = 0 }, .fields = v.fields, .count = v.count };
+    }
+    for (func.snap_vfields.items, unit.vfields) |x, *m| m.* = .{ .key = x.key, .node = x.node, .val = valOf(func, ra, x.val) };
     for (func.snap_entries.items, unit.entries) |e, *m| m.* = .{ .slot = e.slot, .val = valOf(func, ra, e.ref) };
+    // An entry that holds a table of its snapshot names it by index.
+    for (func.snaps.items) |s| {
+        for (func.snap_frames.items[s.frames..][0..s.nframes]) |fm| {
+            for (func.snap_entries.items[fm.entries..][0..fm.count], unit.entries[fm.entries..][0..fm.count]) |e, *m| {
+                if (func.at(e.ref).op != .valloc) continue;
+                for (func.snap_virts.items[s.virts..][0..s.nvirts], 0..) |v, vi| {
+                    if (v.ref == e.ref) m.val = .{ .kind = .virt, .ty = .table, .bits = vi };
+                }
+            }
+        }
+    }
     unit.protos = gpa.dupe(*Proto, inlined) catch return null;
     info.units.append(gpa, unit) catch return null;
     // The function now refers to the functions compiled inline.
@@ -312,6 +354,8 @@ fn freeUnit(g: *Global, u: *Unit) void {
     gpa.free(u.snaps);
     gpa.free(u.frames);
     gpa.free(u.entries);
+    gpa.free(u.virts);
+    gpa.free(u.vfields);
     gpa.free(u.protos);
     gpa.destroy(u);
 }
@@ -361,6 +405,7 @@ fn valueOf(v: Val, regs: [*]const u64) Value {
         .freg => regs[codegen.gpr_pool.len + v.bits],
         .spill => regs[save_words + v.bits],
         .imm => v.bits,
+        .virt => unreachable,
     };
     return switch (v.ty) {
         .nil, .void => .nil,
@@ -369,15 +414,46 @@ fn valueOf(v: Val, regs: [*]const u64) Value {
     };
 }
 
-/// Writes every value of a snapshot to its slot.
-fn writeBack(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64) []FrameMeta {
+/// Writes every value of a snapshot to its slot. `tables` holds the
+/// tables that the exit allocated, or is null while the collector runs,
+/// when a slot that will hold such a table is left alone.
+fn writeBack(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, tables: ?[]const *Table) []FrameMeta {
     const s = u.snaps[snap];
     const frames = u.frames[s.frames..][0..s.nframes];
     const base = l.frame().base;
     for (frames) |fm| {
-        for (u.entries[fm.entries..][0..fm.count]) |e| l.stack[base + e.slot] = valueOf(e.val, regs);
+        for (u.entries[fm.entries..][0..fm.count]) |e| {
+            if (e.val.kind == .virt) {
+                if (tables) |t| l.stack[base + e.slot] = Value.obj(.table, t[e.val.bits]);
+                continue;
+            }
+            l.stack[base + e.slot] = valueOf(e.val, regs);
+        }
     }
     return frames;
+}
+
+/// Most tables that one snapshot holds unallocated.
+const max_virts = 8;
+
+/// Allocates the tables that a snapshot describes field by field.
+/// Returns null when memory ran out.
+fn materialize(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, out: *[max_virts]*Table) ?[]const *Table {
+    const g = l.g;
+    const s = u.snaps[snap];
+    for (u.virts[s.virts..][0..s.nvirts], 0..) |v, i| {
+        const t = rt.newTable(l, 0, v.nc) orelse return null;
+        for (u.vfields[v.fields..][0..v.count]) |x| {
+            t.hash[x.node] = .{ .key = Value.make(x.key, .string), .val = valueOf(x.val, regs) };
+        }
+        t.hash_used = v.count;
+        // The metatable was checked for a finalizer when the program
+        // set it.
+        if (v.mt.ty == .table) t.metatable = valueOf(v.mt, regs).as(Table);
+        gc.barrierBack(g, &t.hdr);
+        out[i] = t;
+    }
+    return out[0..s.nvirts];
 }
 
 /// The baseline code that continues the top frame at its saved pc. A
@@ -394,6 +470,10 @@ fn bump(x: *u8) u8 {
     return x.*;
 }
 
+/// The address that `rt.deopt` returns when the exit itself failed and
+/// the thread holds an error.
+pub const failed: usize = 1;
+
 /// The routines that optimized code calls.
 pub const rt = struct {
     /// A guard failed. The values of the snapshot go back to their
@@ -403,7 +483,17 @@ pub const rt = struct {
     /// compilation of the function predicts better.
     pub fn deopt(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(.c) jit.Target {
         const g = l.g;
-        const frames = writeBack(l, u, @intCast(snap), regs);
+        if (g.jit.opt_dump) std.debug.print("  exit: snapshot {d} of the unit at {d}, pc {d}\n", .{ snap, u.entry_pc, u.frames[u.snaps[snap].frames + u.snaps[snap].nframes - 1].pc });
+        var tbuf: [max_virts]*Table = undefined;
+        const tables = materialize(l, u, @intCast(snap), regs, &tbuf) orelse {
+            // Memory ran out. The root frame raises the error at the
+            // instruction it was at.
+            const fs = writeBack(l, u, @intCast(snap), regs, null);
+            l.frame().pc = fs[0].pc;
+            _ = l.raiseMem() catch {};
+            return .{ .addr = failed, .base = 0 };
+        };
+        const frames = writeBack(l, u, @intCast(snap), regs, tables);
         const root = l.frame();
         const base0 = root.base;
         root.pc = frames[0].pc;
@@ -424,6 +514,23 @@ pub const rt = struct {
         const inner = frames[frames.len - 1];
         l.top = top.base + inner.proto.max_stack;
 
+        // Tables that were never allocated put no pressure on the
+        // collector. When enough of them went by, the exit runs a
+        // collection, as the allocations would have, and counts as no
+        // failure of the code.
+        if (g.jit.sunk >= g.jit.sunk_limit) {
+            g.jit.sunk = 0;
+            // The instruction is a table constructor, and the registers
+            // above its target are dead, as they are when the
+            // interpreter collects there.
+            const saved_top = l.top;
+            const ins = inner.proto.code[inner.pc];
+            if (opc.op(ins) == .newtable) l.top = top.base + opc.a(ins) + 1;
+            gc.fullCollect(g);
+            l.top = saved_top;
+            g.jit.sunk_limit = @max(sunk_step, g.counter.bytes);
+            return baseline(l);
+        }
         // Record the exit: against the instruction, and against every
         // call that was compiled inline around it.
         var retire_now = false;
@@ -461,9 +568,26 @@ pub const rt = struct {
     /// their slots first, where the collector finds them, and the stack
     /// top covers `top_slots` registers of the root frame meanwhile.
     pub fn collect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64, top_slots: usize) callconv(.c) void {
-        _ = writeBack(l, u, @intCast(snap), regs);
+        _ = writeBack(l, u, @intCast(snap), regs, null);
         const saved = l.top;
-        l.top = l.frame().base + @as(u32, @intCast(top_slots));
+        const base = l.frame().base;
+        var top: u32 = base + @as(u32, @intCast(top_slots));
+        // What the unallocated tables of the snapshot refer to lives
+        // only in machine registers, so it goes into the slots above
+        // the live registers while the collector runs.
+        const s = u.snaps[snap];
+        for (u.virts[s.virts..][0..s.nvirts]) |v| {
+            if (v.mt.ty == .table) {
+                l.stack[top] = valueOf(v.mt, regs);
+                top += 1;
+            }
+            for (u.vfields[v.fields..][0..v.count]) |x| {
+                if (!x.val.ty.collectable()) continue;
+                l.stack[top] = valueOf(x.val, regs);
+                top += 1;
+            }
+        }
+        l.top = top;
         gc.maybeCollect(l.g);
         l.top = saved;
     }

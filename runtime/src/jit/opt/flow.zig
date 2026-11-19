@@ -559,6 +559,18 @@ pub const Cfg = struct {
             const lp = g.loops.items[li];
             if (lp.nested or lp.size > peel_limit) continue;
             if (g.nodes.items.len > 400) break;
+            // Only a loop that may make tables gains from the copy.
+            var makes = false;
+            for (lp.body, 0..) |in, nid| {
+                if (!in) continue;
+                const nd = g.nodes.items[nid];
+                var pc = nd.start;
+                while (pc <= nd.end) : (pc += 1) switch (opc.op(g.flow.p.code[pc])) {
+                    .newtable, .call, .self => makes = true,
+                    else => {},
+                };
+            }
+            if (!makes) continue;
             const old_count = g.nodes.items.len;
             const copy = try arena.alloc(u32, old_count);
             @memset(copy, std.math.maxInt(u32));
@@ -574,12 +586,12 @@ pub const Cfg = struct {
                 if (!in or nid >= old_count) continue;
                 const c = &g.nodes.items[copy[nid]];
                 for (c.succs[0..c.nsuccs]) |*s| {
-                    if (s.* != lp.header and s.* < old_count and lp.body[s.*]) s.* = copy[s.*];
+                    if (s.* != lp.header and s.* < lp.body.len and lp.body[s.*]) s.* = copy[s.*];
                 }
             }
             // Edges from outside the loop to its header enter the copy.
             for (g.nodes.items[0..old_count], 0..) |*nd, nid| {
-                if (lp.body[nid]) continue;
+                if (nid < lp.body.len and lp.body[nid]) continue;
                 for (nd.succs[0..nd.nsuccs]) |*s| {
                     if (s.* == lp.header) s.* = copy[lp.header];
                 }

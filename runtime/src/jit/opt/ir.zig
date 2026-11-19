@@ -193,6 +193,14 @@ pub const Op = enum(u8) {
     gnokey,
     /// Leaves optimized code when a finalizer is pending.
     gpending,
+    /// Counts `imm` bytes that a table would have taken, had it been
+    /// allocated, and leaves optimized code when the count reaches the
+    /// limit, so that the collector still runs.
+    gdebt,
+    /// A table that exists only in the builder and in the snapshots:
+    /// its fields are values, and nothing allocates it unless optimized
+    /// code is left or the table escapes.
+    valloc,
     // Runtime calls and the collector.
     callc,
     barrier,
@@ -248,7 +256,7 @@ pub const Inst = struct {
     }
     pub fn isGuard(i: *const Inst) bool {
         return switch (i.op) {
-            .gslot, .guard, .guardi, .gfcmp, .gtag, .gbit, .gnokey, .gpending => true,
+            .gslot, .guard, .guardi, .gfcmp, .gtag, .gbit, .gnokey, .gpending, .gdebt => true,
             else => false,
         };
     }
@@ -306,6 +314,29 @@ pub const SnapEntry = struct {
 pub const Snap = struct {
     frames: u32,
     nframes: u32,
+    /// The tables of the snapshot that no code allocated yet.
+    virts: u32 = 0,
+    nvirts: u32 = 0,
+};
+
+/// A table that a snapshot describes field by field. Leaving optimized
+/// code through the snapshot allocates it.
+pub const SnapVirt = struct {
+    /// The `valloc` instruction that stands for the table.
+    ref: Ref,
+    /// Hash slots the constructor asked for.
+    nc: u32,
+    mt: Ref,
+    fields: u32,
+    count: u32,
+};
+
+pub const VField = struct {
+    /// Address of the key string.
+    key: usize,
+    /// Index of the hash node that holds the key.
+    node: u32,
+    val: Ref,
 };
 
 pub const PhiArg = struct {
@@ -325,6 +356,11 @@ pub const Func = struct {
     snaps: std.ArrayList(Snap) = .empty,
     snap_frames: std.ArrayList(SnapFrame) = .empty,
     snap_entries: std.ArrayList(SnapEntry) = .empty,
+    snap_virts: std.ArrayList(SnapVirt) = .empty,
+    snap_vfields: std.ArrayList(VField) = .empty,
+    /// Slots above the frames that root the fields of unallocated
+    /// tables while the collector runs.
+    scratch: u32 = 0,
     /// Arguments of every phi. A phi names its run with `a` (start) and
     /// `b` (count).
     phi_args: std.ArrayList(PhiArg) = .empty,
@@ -355,6 +391,13 @@ pub const Func = struct {
         const r: Ref = @intCast(f.insts.items.len - 1);
         try f.blocks.items[b].insts.append(f.arena, r);
         return r;
+    }
+
+    /// Adds an instruction that belongs to no block, which is how a
+    /// table that is not allocated gets its name.
+    pub fn addDetached(f: *Func, i: Inst) !Ref {
+        try f.insts.append(f.arena, i);
+        return @intCast(f.insts.items.len - 1);
     }
 
     pub inline fn at(f: *Func, r: Ref) *Inst {
