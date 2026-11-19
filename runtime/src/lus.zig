@@ -6,6 +6,7 @@ pub const syntax = struct {
     pub const ast = @import("syntax/ast.zig");
     pub const parser = @import("syntax/parser.zig");
     pub const astexport = @import("syntax/astexport.zig");
+    pub const format = @import("syntax/format.zig");
 };
 
 pub const vm = struct {
@@ -43,6 +44,7 @@ test {
     _ = syntax.lexer;
     _ = syntax.parser;
     _ = syntax.astexport;
+    _ = syntax.format;
     _ = vm.value;
     _ = vm.object;
     _ = vm.gc;
