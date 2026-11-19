@@ -404,7 +404,10 @@ pub const Frame = extern struct {
     /// the same run, so one test of the flags word admits the short
     /// return.
     plain: bool = false,
-    _pad: [1]u8 = @splat(0),
+    /// Set on a plain frame of a function that can own an open upvalue
+    /// or a to-be-closed variable. A plain frame without it returns
+    /// with nothing to close.
+    closes: bool = false,
     /// On a lean frame, the address in native code where the caller
     /// continues.
     resume_at: usize = 0,
@@ -425,6 +428,9 @@ pub const Frame = extern struct {
         const bytes = std.mem.asBytes(&f)[@offsetOf(Frame, "boundary")..][0..8];
         break :blk std.mem.readInt(u64, bytes, @import("builtin").cpu.arch.endian());
     };
+
+    /// The bit of the flags word that `closes` sets.
+    pub const closes_bit: u64 = flagMask("closes", 1) & 0x0101010101010101;
 
     pub inline fn flagsWordPtr(f: *Frame) *u64 {
         return @ptrCast(@alignCast(&f.boundary));

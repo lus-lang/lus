@@ -966,9 +966,10 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             }
             const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
             const callee: [*]Value = c.bp + opc.a(ins);
-            if (callee[0].tag == .closure and callee[0].as(Closure).proto.plain_call) {
+            const flags: object.Proto.CallFlags = if (callee[0].tag == .closure) callee[0].as(Closure).proto.call else .{};
+            if (flags.plain) {
                 const cl = callee[0].as(Closure);
-                c = try enterPlain(l, cl, callee, func, nargs, want);
+                c = try enterPlain(l, cl, flags.closes, callee, func, nargs, want);
                 pc = 0;
                 if (hooked and l.hook_mask & Thread.hook_call != 0) {
                     try callHook(l, "call", null);
@@ -985,6 +986,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             if (kind == .lus) {
                 c = load(l);
                 c.fr.plain = true;
+                c.fr.closes = true;
                 pc = 0;
                 if (hooked and l.hook_mask & Thread.hook_call != 0) {
                     try callHook(l, "call", null);
@@ -1016,6 +1018,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 if (kind == .lus) {
                     c = load(l);
                     c.fr.plain = true;
+                    c.fr.closes = true;
                     pc = 0;
                     try tierCall(l, &c, &pc, &budget);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -1055,6 +1058,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 nf.boundary = fr.boundary;
                 nf.finish = fr.finish;
                 nf.plain = fr.plain;
+                nf.closes = fr.plain;
                 nf.tail = true;
                 c = load(l);
             }
@@ -1159,6 +1163,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             if (kind == .lus) {
                 c = load(l);
                 c.fr.plain = true;
+                c.fr.closes = true;
                 pc = 0;
                 try tierCall(l, &c, &pc, &budget);
             } else {
@@ -1405,10 +1410,12 @@ pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i3
 /// Pushes the frame of a plain call that the `call` instruction makes to
 /// `cl`, a Lus function with fixed parameters, and returns the frame
 /// state of the callee. `slot` is the stack slot of the callee, whose
-/// index is `func`, and its `nargs` arguments follow it. Everything the
+/// index is `func`, and its `nargs` arguments follow it. `closes` says
+/// whether a frame of the function can have something to close, which
+/// the frame records for its return. Everything the
 /// push needs is read once into locals, so that the stores into the stack
 /// and the frame list force no second read.
-inline fn enterPlain(l: *Thread, cl: *Closure, slot: [*]Value, func: u32, nargs: u32, want: i32) Error!Ctx {
+inline fn enterPlain(l: *Thread, cl: *Closure, closes: bool, slot: [*]Value, func: u32, nargs: u32, want: i32) Error!Ctx {
     const p = cl.proto;
     const nregs: u32 = p.max_stack;
     const base = func + 1;
@@ -1439,7 +1446,7 @@ inline fn enterPlain(l: *Thread, cl: *Closure, slot: [*]Value, func: u32, nargs:
     fr.ret = func;
     fr.want = want;
     fr.pcWord().* = 0;
-    fr.flagsWordPtr().* = Frame.plain_flags;
+    fr.flagsWordPtr().* = if (closes) Frame.plain_flags | Frame.closes_bit else Frame.plain_flags;
     l.frames.items.len = fi + 1;
     l.top = top;
     return .{ .fi = fi, .fr = fr, .code = p.code.ptr, .base = base, .bp = regs };
@@ -1472,6 +1479,7 @@ inline fn enterTail(l: *Thread, fr: *Frame, cl: *Closure, func: u32, nargs: u32)
         .boundary = fr.boundary,
         .finish = fr.finish,
         .plain = fr.plain,
+        .closes = fr.plain,
         .tail = true,
     };
     l.top = top;
@@ -1497,10 +1505,14 @@ inline fn entered(l: *Thread, cl: *Closure, base: u32) Ctx {
 /// to-be-closed variable lives in it.
 pub inline fn leanReturn(l: *Thread, c: Ctx, stop: usize) bool {
     _ = stop;
+    const flags = c.fr.flagsWord();
+    if (l.hook_mask != 0) return false;
+    // A plain frame as the call instruction pushed it for a function
+    // that closes nothing.
+    if (flags == Frame.plain_flags) return true;
     // A lean or a plain frame is no boundary, has no finish action, and
     // returns to a Lus frame of the same run.
-    const flags = c.fr.flagsWord();
-    if (flags & Frame.short_clear != 0 or flags & Frame.short_any == 0 or l.hook_mask != 0) return false;
+    if (flags & Frame.short_clear != 0 or flags & Frame.short_any == 0) return false;
     if (l.open_upvals) |u| if (u.level >= c.base) return false;
     if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= c.base) return false;
     return true;

@@ -129,6 +129,7 @@ pub fn tailcall(l: *Thread, bp: [*]Value, ins: u32, pc: u32) callconv(.c) jit.Ta
     // native return of the frame it replaces.
     nf.lean = old.lean;
     nf.plain = old.plain;
+    nf.closes = old.plain;
     nf.resume_at = old.resume_at;
     return .{ .addr = code.base + code.offs[0], .base = dst + 1 };
 }

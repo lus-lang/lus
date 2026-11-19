@@ -252,7 +252,7 @@ const Reader = struct {
         p.last_line_defined = @intCast(try r.uint());
         p.num_params = try r.byte();
         p.is_vararg = try r.byte() != 0;
-        p.plain_call = !p.is_vararg;
+        p.call.plain = !p.is_vararg;
         p.max_stack = try r.byte();
         const ncode = try r.len();
         p.code = try object.Proto.allocCode(gpa, ncode);
@@ -279,6 +279,7 @@ const Reader = struct {
         for (protos) |*q| q.* = try r.proto();
         p.protos = protos;
         protos_owned = false;
+        p.noteCloses();
         const nh = try r.len();
         p.handlers = try gpa.alloc(object.Handler, nh);
         for (p.handlers) |*h| h.* = .{

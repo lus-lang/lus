@@ -445,7 +445,7 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
     p.jit_code = code;
     p.jit_entry = if (e.call_entry != 0) code.base + e.call_entry else 0;
     p.jit_tail = if (e.tail_entry != 0) code.base + e.tail_entry else 0;
-    p.plain_call = false;
+    p.call.plain = false;
     g.jit.live += 1;
     g.jit.compiled += 1;
     return true;
@@ -459,7 +459,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
         if (p.jit_code == null) return;
         wasm.release(p);
         p.jit_code = null;
-        p.plain_call = !p.is_vararg;
+        p.call.plain = !p.is_vararg;
         g.jit.live -= 1;
         return;
     }
@@ -470,7 +470,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
     p.jit_code = null;
     p.jit_entry = 0;
     p.jit_tail = 0;
-    p.plain_call = !p.is_vararg;
+    p.call.plain = !p.is_vararg;
     g.jit.live -= 1;
 }
 
