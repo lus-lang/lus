@@ -455,7 +455,9 @@ fn copyPrefix(buf: *[id_size]u8, s: []const u8, max: usize) []const u8 {
     while (n > 0 and n < s.len and (s[n] & 0xC0) == 0x80) n -= 1;
     @memcpy(buf[0..n], s[0..n]);
     return buf[0..n];
+}
 
+// ---------------------------------------------------------------------
 // debug.parse
 
 /// `debug.parse(code [, chunkname [, options]])` returns the syntax tree
