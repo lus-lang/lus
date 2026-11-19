@@ -1325,6 +1325,24 @@ local function recursion_returns_what_the_interpreter_returns_test()
     assert(even(7) == false)
 end
 
+local function an_argument_that_was_nil_while_warming_keeps_its_value_test()
+    local function pass(n, b)
+        if n == 0 then return b end
+        local r = pass(n - 1, b)
+        return r
+    end
+    for _ = 1, 2000 do pass(3, nil) end
+    local function caller(x, ...)
+        local r = pass(3, x)
+        return r
+    end
+    for _ = 1, 2000 do caller(nil) end
+    assert(caller(nil) == nil)
+    assert(caller(42) == 42)
+    assert(caller("s") == "s")
+    assert(caller(false) == false)
+end
+
 local function arguments_of_another_type_take_the_frame_test()
     local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end
     assert(hot(fib, 12) == 144)

@@ -2987,7 +2987,10 @@ pub const Lower = struct {
         var args: [ir.max_direct_params]Ref = @splat(ir.none);
         i = 0;
         while (i < np and i < nargs) : (i += 1) {
-            if (sig[i] != .nil) args[i] = try b.typed(ra + 1 + i, sig[i]);
+            // The callee was built with a nil parameter as a constant, so
+            // an argument whose type was only sampled is guarded too.
+            const v = try b.typed(ra + 1 + i, sig[i]);
+            if (sig[i] != .nil) args[i] = v;
         }
         // The snapshot of the call names values, so every table a
         // register holds is allocated first.
