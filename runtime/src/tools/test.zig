@@ -453,14 +453,17 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
             nargs = 1;
         }
     }
-    // Each test runs in its own coroutine so a test's permission changes
-    // and pending yields stay local to it.
+    // Each test starts from the file's permissions, and its pledge
+    // changes are undone afterwards, so tests stay independent.
     l.err_traceback = null;
+    const pledge = lus.vm.pledge;
+    const saved = pledge.save(l);
     const ok = api.pcall(l, nargs, 0);
+    const err: Value = if (ok) .nil else l.stack[l.top - 1];
+    pledge.restore(l, saved);
     var status: []const u8 = "pass";
     var msg: []const u8 = "";
     if (!ok) {
-        const err = l.stack[l.top - 1];
         if (skipReason(l, err)) |reason| {
             status = "skip";
             msg = reason;

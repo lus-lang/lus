@@ -48,8 +48,16 @@ pub fn keyEqual(a: Value, b: Value) bool {
     return switch (a.tag) {
         .float => a.asFloat() == b.asFloat(),
         .nil, .true, .false => true,
+        .string => a.payload == b.payload or longStringEqual(a.as(object.String), b.as(object.String)),
         else => a.payload == b.payload,
     };
+}
+
+/// Short strings are interned, so equal short strings are the same object.
+/// Long strings are not, so they compare by content.
+fn longStringEqual(x: *object.String, y: *object.String) bool {
+    if (x.flags.interned or y.flags.interned) return false;
+    return x.len == y.len and x.hash == y.hash and std.mem.eql(u8, x.bytes(), y.bytes());
 }
 
 // ---------------------------------------------------------------------

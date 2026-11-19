@@ -179,6 +179,20 @@ pub fn inherit(child: *Thread, parent: *Thread) void {
     }
 }
 
+/// Saves the permission set of `l`. Sets are copy on write, so later
+/// changes on `l` leave the saved set as it was.
+pub fn save(l: *Thread) ?*anyopaque {
+    const s = setOf(l) orelse return null;
+    s.refs += 1;
+    return s;
+}
+
+/// Puts back a set taken by `save`, dropping the one `l` holds now.
+pub fn restore(l: *Thread, saved: ?*anyopaque) void {
+    release(l);
+    l.pledges = saved;
+}
+
 /// Called when a thread is freed.
 pub fn release(l: *Thread) void {
     if (setOf(l)) |s| {
