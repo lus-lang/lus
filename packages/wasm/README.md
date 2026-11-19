@@ -1,6 +1,6 @@
 # lus-wasm
 
-This package holds the Lus 2.0 runtime compiled to WebAssembly and the small JavaScript host that runs it. The website playground and the VS Code extension will both load the runtime through it.
+This package holds the Lus 2.0 runtime compiled to WebAssembly and the small JavaScript host that runs it. The website playground and the VS Code extension both load the runtime through it.
 
 ## Building
 
@@ -62,19 +62,12 @@ When a program calls `os.exit` or a safety check traps, the WebAssembly instance
 
 The WASI layer is written by hand in `src/wasi.js` and needs no dependency. It captures standard output and standard error, serves standard input from `run`, keeps files in memory with `/` as the only preopened directory, and provides the environment, the clocks, randomness, and sleeping. A sleep blocks with `Atomics.wait` where the platform allows it, which includes Node and web workers.
 
-## How the site will consume it
+## How the site uses it
 
-The playground worker (`packages/site/src/workers/playground-worker.ts`) and its loader (`packages/site/src/lib/wasm-loader.ts`) will change as follows:
+The site build (`packages/site/scripts/fetch-wasm.mjs`) places each runtime at `public/wasm/<version>/lus.wasm` and lists the stable and unstable channels in `public/wasm/manifest.json`. Releases contribute their `lus.wasm`, checked against their `SHA256SUMS`. A local `dist/lus.wasm` becomes the unstable channel under the version in `runtime/build.zig.zon`, so a checkout can try its own runtime in the playground after `mise run wasm`.
 
-1. The site build copies `dist/lus.wasm` into `public/wasm/<version>/lus.wasm`. The release fetcher keeps downloading `lus.wasm` and `SHA256SUMS` but stops downloading `lus.web.js`, since the JavaScript host is bundled with the site from this package instead of being fetched and rewritten into a blob URL.
-2. `loadLusWasm(release)` becomes `Lus.load(release.wasmUrl)` from `lus-wasm/browser`, followed by `create()`. The returned object keeps its `execute(code)` and `destroy()` methods by calling `lus.execute(state, code)` and `lus.destroy(state)`. The UTF-8 marshalling in `callWasmUtf8` goes away.
-3. The worker keeps posting `runtime-error` when `execute` throws, which now happens after a trap. It may instead call `lus.run` to show the error and its traceback separately.
+The playground worker (`packages/site/src/workers/playground-worker.ts`) loads the module with `Lus.load` from `lus-wasm/browser` and keeps one state from `create()` for the session. Each run calls `execute(state, code)`. After `os.exit` ends the instance, the worker opens a fresh state on the next run. A trap makes `execute` throw, and the worker reports it as a `runtime-error` and reloads.
 
-## How the VS Code extension will consume it
+## How the VS Code extension uses it
 
-The extension (`packages/vscode/src/wasm.ts`) will change as follows:
-
-1. The packaged files become `wasm/lus.wasm` and the language server sources. The extension copies `packages/language-server` into the package, since the module no longer embeds it, and drops `wasm/lus.mjs`.
-2. `LusWasm.load(context)` becomes `loadLus(path.join(context.extensionPath, "wasm", "lus.wasm"))` followed by `mountLanguageServer(lus, languageServerDirectory)`. Both come from `lus-wasm`, which esbuild bundles into the extension. A CommonJS bundle has no `import.meta.url`, so the extension passes both paths explicitly.
-3. `create`, `execute`, `loadLsp`, `handleMessage`, `destroy`, and `getLspSource` keep their names and signatures, so `extension.ts` and `lspTransport.ts` stay as they are. `wasmUtf8.ts` and `wasmAsset.ts` go away, and the 16 MiB input limit moves into the host, which answers an oversized body or a failed dispatch with the same JSON-RPC errors as the legacy glue.
-4. `scripts/smoke-wasm.mjs` runs against the new host, or is replaced by the language server test of this package.
+The extension packages `wasm/lus.wasm` and the language server sources in `language-server/`. Its build (`packages/vscode/esbuild.mjs`) copies both from this package and from `packages/language-server`, and bundles this package into the extension. `LusWasm.load` in `packages/vscode/src/wasm.ts` calls `loadLus` with the packaged module and `mountLanguageServer` with the packaged sources. A CommonJS bundle has no `import.meta.url`, so the extension passes both paths explicitly. `scripts/smoke-wasm.mjs` in the extension runs a language server session and playground input against the packaged files.

@@ -29,7 +29,6 @@ class FakeWorkerScope {
 
 const release = (version: string) => ({
   version,
-  jsUrl: `/wasm/${version}/lus.js`,
   wasmUrl: `/wasm/${version}/lus.wasm`,
   isStable: true,
 })

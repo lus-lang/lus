@@ -24,38 +24,33 @@ test("local WASM staging replaces stale versions and preserves other public asse
     await writeFile(join(source, "favicon.svg"), "site asset")
     await writeFile(join(source, "wasm", "manifest.json"), "stale manifest")
     await writeFile(
-      join(source, "wasm", "stale-version", "lus.js"),
+      join(source, "wasm", "stale-version", "lus.wasm"),
       "stale runtime",
     )
 
     await stageLocalWasmPublic({
       sourcePublicDirectory: source,
       stagedPublicDirectory: staged,
-      version: "v1.7.0",
-      javascript: Buffer.from("current runtime"),
+      version: "v2.0.0",
       wasm: Buffer.from([0x00, 0x61, 0x73, 0x6d]),
     })
 
     assert.equal(await readFile(join(staged, "favicon.svg"), "utf8"), "site asset")
     assert.deepEqual((await readdir(join(staged, "wasm"))).sort(), [
       "manifest.json",
-      "v1.7.0",
+      "v2.0.0",
+    ])
+    assert.deepEqual(await readdir(join(staged, "wasm", "v2.0.0")), [
+      "lus.wasm",
     ])
     assert.deepEqual(
-      (await readdir(join(staged, "wasm", "v1.7.0"))).sort(),
-      [
-      "lus.js",
-      "lus.wasm",
-      ],
-    )
-    assert.equal(
-      await readFile(join(staged, "wasm", "v1.7.0", "lus.js"), "utf8"),
-      "current runtime",
+      await readFile(join(staged, "wasm", "v2.0.0", "lus.wasm")),
+      Buffer.from([0x00, 0x61, 0x73, 0x6d]),
     )
     await assert.rejects(access(join(staged, "wasm", "stale-version")))
 
     assert.equal(
-      await readFile(join(source, "wasm", "stale-version", "lus.js"), "utf8"),
+      await readFile(join(source, "wasm", "stale-version", "lus.wasm"), "utf8"),
       "stale runtime",
     )
   } finally {

@@ -34,6 +34,9 @@ importers:
       astro:
         specifier: ^6.4.5
         version: 6.4.5(@azure/identity@4.13.2)(@types/node@24.13.1)(jiti@2.7.0)(lightningcss@1.32.0)(rollup@4.61.1)
+      lus-wasm:
+        specifier: workspace:*
+        version: link:../wasm
       modern-monaco:
         specifier: ^0.4.2
         version: 0.4.2(typescript@5.9.3)
@@ -78,6 +81,9 @@ importers:
       esbuild:
         specifier: 0.27.3
         version: 0.27.3
+      lus-wasm:
+        specifier: workspace:*
+        version: link:../wasm
       ovsx:
         specifier: 0.10.9
         version: 0.10.9

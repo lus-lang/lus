@@ -21,7 +21,7 @@ assert(x == 10)
 local z = 5 + do provide 10 end
 assert(z == 15)
 
-print(do provide local foo = "bar" provide "hello from " .. foo end) -- prints "hello from bar"
+print(do local foo = "bar" provide "hello from " .. foo end) -- prints "hello from bar"
 ```
 
 If no value is provided through the `provide` keyword, the do expression will evaluate to `nil`.

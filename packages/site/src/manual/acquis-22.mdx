@@ -57,8 +57,8 @@ local function second(name, value)
     return value + 2
 end
 
-local x <first, second> = 10 -- prints "first x 10", then "second x 12"
-assert(x == 12)
+local x <first, second> = 10 -- prints "first x 10", then "second x 11"
+assert(x == 13)
 ```
 
 If using any compile-time attributes (e.g., `const` or `close`), they must be provided first.
@@ -98,7 +98,7 @@ local printvar = setmetatable({}, {
     __call = function(self, name, value)
         print(name, value)
     end
-end})
+})
 local x <printvar> = 10 -- prints "x 10"
 printvar = nil
 x = 20 -- prints "x 20"
@@ -110,10 +110,10 @@ x = nil -- prints "printvar is being closed"
 A common pattern is to use a function to generate the attribute, which allows for parameterizing the attribute behavior. In this example, we constrain the type of a local variable to be a number.
 
 ```lus
-local function only(type)
+local function only(expected)
     return function(name, value)
-        if type(value) ~= "number" then
-            error(`Expected $type, got $(type(value))`)
+        if type(value) ~= expected then
+            error(`Expected $expected, got $(type(value))`)
         end
         return value
     end

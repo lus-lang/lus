@@ -4,35 +4,22 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { localRuntimeVersion } from "./fetch-wasm.mjs"
 import { stageLocalWasmPublic } from "./stage-local-wasm.mjs"
 
+// Builds the site with a local lus.wasm as its only runtime. The module
+// comes from LUS_WASM_ARTIFACT_DIR, or from packages/wasm/dist, where
+// `mise run wasm` puts it.
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const siteDirectory = resolve(scriptDirectory, "..")
-const repositoryDirectory = resolve(siteDirectory, "../..")
-const artifactDirectoryValue = process.env.LUS_WASM_ARTIFACT_DIR
-
-if (!artifactDirectoryValue) {
-  throw new Error("LUS_WASM_ARTIFACT_DIR must name the current WASM build")
-}
-
-const artifactDirectory = resolve(siteDirectory, artifactDirectoryValue)
-const javascriptSource = join(artifactDirectory, "lus.web.js")
+const artifactDirectory = resolve(
+  siteDirectory,
+  process.env.LUS_WASM_ARTIFACT_DIR ?? "../wasm/dist",
+)
 const wasmSource = join(artifactDirectory, "lus.wasm")
-const versionHeader = await readFile(join(repositoryDirectory, "legacy/lus/src/lua.h"), "utf8")
-
-function versionPart(name) {
-  const match = versionHeader.match(new RegExp(`^#define ${name} (\\d+)$`, "m"))
-  if (!match) throw new Error(`Missing canonical ${name} in lua.h`)
-  return match[1]
-}
-
-const version = `v${versionPart("LUA_VERSION_MAJOR_N")}.${versionPart(
-  "LUA_VERSION_MINOR_N",
-)}.${versionPart("LUA_VERSION_RELEASE_N")}`
-const javascript = await readFile(javascriptSource)
+const version = await localRuntimeVersion()
 const wasm = await readFile(wasmSource)
 
-if (javascript.length === 0) throw new Error("lus.web.js is empty")
 if (
   wasm.length < 8 ||
   wasm[0] !== 0x00 ||
@@ -58,10 +45,6 @@ const localReleases = [
     prerelease: false,
     assets: [
       {
-        name: "lus.web.js",
-        browser_download_url: `/wasm/${version}/lus.js`,
-      },
-      {
         name: "lus.wasm",
         browser_download_url: `/wasm/${version}/lus.wasm`,
       },
@@ -77,7 +60,6 @@ try {
     sourcePublicDirectory: join(siteDirectory, "public"),
     stagedPublicDirectory: publicDirectory,
     version,
-    javascript,
     wasm,
   })
 

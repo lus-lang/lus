@@ -61,6 +61,11 @@ export class Lus {
   ): Promise<Lus>;
 
   readonly fs: MemFS;
+  /**
+   * True after `os.exit` or a trap ended the WebAssembly instance. The
+   * next call starts a fresh instance, and every earlier state is invalid.
+   */
+  readonly dead: boolean;
   /** Environment variables visible to `os.getenv` (with the `env` pledge). */
   env: Record<string, string>;
 

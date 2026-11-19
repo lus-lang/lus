@@ -1,6 +1,17 @@
+import { Lus } from "lus-wasm/browser"
+
 import { limitPlaygroundOutput } from "../lib/playground-runtime.ts"
-import { loadLusWasm } from "../lib/wasm-loader.ts"
+import { playgroundSession } from "../lib/wasm-loader.ts"
 import type { LusModule, WasmRelease } from "../lib/wasm-loader.ts"
+
+/**
+ * Loads a release's lus.wasm through the lus-wasm host and opens one
+ * long-lived playground state in it.
+ */
+export async function loadLusWasm(release: WasmRelease): Promise<LusModule> {
+  const lus = await Lus.load(new URL(release.wasmUrl, globalThis.location.href))
+  return playgroundSession(lus)
+}
 
 type PlaygroundRequest =
   | { type: "initialize"; release: WasmRelease }

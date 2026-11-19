@@ -6,7 +6,6 @@ export interface ReleaseLinks {
   macos?: string
   linuxGlibc?: string
   linuxMusl?: string
-  wasmJs?: string
   wasmBinary?: string
   checksums?: string
   sourceZip?: string
@@ -41,7 +40,6 @@ const ASSET_NAMES = {
   macos: "lus-macos",
   linuxGlibc: "lus-linux",
   linuxMusl: "lus-linux-musl",
-  wasmJs: "lus.web.js",
   wasmBinary: "lus.wasm",
   checksums: "SHA256SUMS",
 }
@@ -57,7 +55,6 @@ function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
     macos: assetMap.get(ASSET_NAMES.macos),
     linuxGlibc: assetMap.get(ASSET_NAMES.linuxGlibc),
     linuxMusl: assetMap.get(ASSET_NAMES.linuxMusl),
-    wasmJs: assetMap.get(ASSET_NAMES.wasmJs),
     wasmBinary: assetMap.get(ASSET_NAMES.wasmBinary),
     checksums: assetMap.get(ASSET_NAMES.checksums),
     sourceZip: release.zipball_url,
