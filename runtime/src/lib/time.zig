@@ -165,6 +165,7 @@ fn pushZonedInZone(l: *Thread, naive: i64, frac: i32, zone: Value) Error!void {
     }
     const u = try pushZoned(l, .{ .sec = utc, .nsec = frac }, g);
     u.userValues()[0] = zone;
+    gc.barrierBack(l.g, &u.hdr);
 }
 
 /// Rebuilds a zoned value from a wall clock time, re-resolving through
@@ -188,6 +189,7 @@ fn pushFixedZone(l: *Thread, offset: i32, name: []const u8) Error!u32 {
     const mem: [*]align(8) u8 = @ptrCast(@alignCast(u.data()));
     _ = FlatZone.initFixed(mem[0..size], offset);
     u.userValues()[0] = try l.newStringValue(name);
+    gc.barrierBack(l.g, &u.hdr);
     return 1;
 }
 
@@ -234,6 +236,7 @@ fn lookupZone(l: *Thread, name: []const u8) Error!bool {
     const mem: [*]align(8) u8 = @ptrCast(@alignCast(u.data()));
     _ = t.fill(mem[0..size]) catch |e| return tzifError(l, e);
     u.userValues()[0] = try l.newStringValue(name);
+    gc.barrierBack(l.g, &u.hdr);
     return true;
 }
 
@@ -743,6 +746,7 @@ fn instAt(l: *Thread) Error!u32 {
     if (toUserdata(l, zv, .zone) != null) {
         const u = try pushZoned(l, i.span, zoneOf(zv).offsetAt(i.span.sec));
         u.userValues()[0] = zv;
+        gc.barrierBack(l.g, &u.hdr);
     } else {
         const off = try fixedOffsetArg(l, try aux.checkInt(l, 2), 2);
         _ = try pushZoned(l, i.span, off);

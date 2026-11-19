@@ -223,17 +223,24 @@ fn install(a: *ClassAlloc, p: *Page) void {
     p.young = true;
 }
 
+const max_refill_sweeps = 4;
+
 fn refill(g: *Global, comptime kind: Kind, class: u8) Allocator.Error![*]u8 {
     const h = &g.heap;
     const a = &h.classes[@backingInt(kind)][class];
     retire(a);
     const cell = classBytes(class);
+    // A run of full pages is left to the collector steps after a few
+    // sweeps, so one allocation never sweeps a large part of the heap.
+    var swept: u32 = 0;
     while (a.cursor) |p| {
-        a.cursor = p.next;
         if (p.needs_sweep) {
+            if (swept == max_refill_sweeps) break;
+            swept += 1;
+            a.cursor = p.next;
             sweepPage(g, p);
             if (!p.in_use) continue;
-        }
+        } else a.cursor = p.next;
         if (p.free != null or p.top + cell <= p.usable) {
             install(a, p);
             return take(a, cell);

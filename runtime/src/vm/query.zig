@@ -1047,6 +1047,9 @@ fn lusQuery(l: *Thread) Error!u32 {
     const q = try checkQuery(l, 1);
     const qv = l.arg(1);
     const records = try execute(l, q, qv);
+    // Creating the native can collect, so the records stay on the stack
+    // until the native holds them.
+    try l.push(Value.obj(.table, records));
     const n = state.newNative(l.g, queryNext, "query_next", 2) catch return l.raiseMem();
     n.upvalues()[0] = Value.obj(.table, records);
     n.upvalues()[1] = Value.int(0);

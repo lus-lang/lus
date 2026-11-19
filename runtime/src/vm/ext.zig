@@ -138,6 +138,7 @@ pub fn enumMember(l: *Thread, root: *object.EnumRoot, idx: usize) Error!*object.
     v.root = root;
     v.index = @intCast(idx);
     root.values[idx] = v;
+    gc.barrierBack(l.g, &root.hdr);
     return v;
 }
 

@@ -1,0 +1,27 @@
+-- Builds and drops a large object graph several times while measuring the
+-- longest gap between two consecutive loop iterations. Every collector
+-- step runs inside some iteration, so the longest gap bounds the longest
+-- pause the program saw. Each graph holds about 50 MB.
+local clock = os.clock
+local worst = 0
+local last = clock()
+local function tick()
+    local now = clock()
+    local d = now - last
+    if d > worst then worst = d end
+    last = now
+end
+for round = 1, 4 do
+    local graph = {}
+    for i = 1, 200000 do
+        graph[i] = {id = i, name = "node" .. i, prev = graph[i - 1]}
+        tick()
+    end
+    graph = nil
+    -- Short-lived garbage while the old graph dies.
+    for i = 1, 200000 do
+        local t = {i}
+        tick()
+    end
+end
+print(string.format("longest pause %.2f ms", worst * 1000))

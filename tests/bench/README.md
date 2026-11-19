@@ -8,6 +8,7 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `methods.lus`: method calls through a metatable `__index` and table allocation.
 - `strings.lus`: string interpolation, `table.concat`, and `string.gmatch`.
 - `closures.lus`: closure creation with captured upvalues.
+- `gcpause.lus`: builds and drops a 50 MB object graph four times. Besides its run time, it prints the longest gap between two loop iterations, which bounds the longest collector pause. Run it directly to see that number.
 
 The runner times every benchmark under each runtime it finds and prints the best wall time of several runs. Build the runtime with ReleaseFast before measuring.
 

@@ -384,9 +384,9 @@ fn collectgarbage(l: *Thread) Error!u32 {
         },
         3 => return aux.ret(l, Value.float(@as(f64, @floatFromInt(g.counter.bytes)) / 1024.0)),
         4 => {
-            gc.fullCollect(g);
+            const done = gc.stepCollect(g, try aux.optInt(l, 2, 0));
             try runFinalizers(l);
-            return aux.retBool(l, true);
+            return aux.retBool(l, done);
         },
         5 => return aux.retBool(l, !g.gc_stopped),
         6, 7 => {
@@ -496,7 +496,10 @@ fn load(l: *Thread) Error!u32 {
     };
     if (env_given) {
         const cl = l.stack[l.top - 1].as(object.Closure);
-        if (cl.nupvals > 0) cl.upvals()[0].closed = env;
+        if (cl.nupvals > 0) {
+            cl.upvals()[0].closed = env;
+            gc.barrierBack(l.g, &cl.upvals()[0].hdr);
+        }
     }
     return 1;
 }
@@ -555,7 +558,10 @@ fn loadfile(l: *Thread) Error!u32 {
     };
     if (l.hasArg(3)) {
         const cl = l.stack[l.top - 1].as(object.Closure);
-        if (cl.nupvals > 0) cl.upvals()[0].closed = l.arg(3);
+        if (cl.nupvals > 0) {
+            cl.upvals()[0].closed = l.arg(3);
+            gc.barrierBack(l.g, &cl.upvals()[0].hdr);
+        }
     }
     return 1;
 }
