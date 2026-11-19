@@ -269,10 +269,8 @@ inline fn subRange(l: *Thread, s: *String, start: usize, end: usize) Allocator.E
             from = start - 1;
             to = end;
         } else {
-            // Find the start, then skip the characters of the result
-            // from there.
             from = charOffset(l, s, start - 1);
-            to = wtf8.advance(s.bytes(), from, count);
+            to = s.endOffset(end, start - 1, from);
         }
     }
     if (from == 0 and to == s.len) return Value.obj(.string, s);

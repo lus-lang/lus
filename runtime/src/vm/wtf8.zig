@@ -145,7 +145,42 @@ pub fn countChars(bytes: []const u8) usize {
 /// target inside its word without branching, because the position of a
 /// character within a word is unpredictable and a mispredicted branch
 /// costs more than the arithmetic.
-pub fn advance(bytes: []const u8, off: usize, count: usize) usize {
+pub inline fn advance(bytes: []const u8, off: usize, count: usize) usize {
+    // A short distance inside the text takes one or two words, inline.
+    if (count < 16 and off + 16 <= bytes.len) {
+        const p0 = leadPrefix(std.mem.readInt(u64, bytes[off..][0..8], .little));
+        const k0: usize = @intCast(p0 >> 56);
+        if (k0 > count) return off + prefixTarget(p0, count);
+        const p1 = leadPrefix(std.mem.readInt(u64, bytes[off + 8 ..][0..8], .little));
+        const k1: usize = @intCast(p1 >> 56);
+        if (k0 + k1 > count) return off + 8 + prefixTarget(p1, count - k0);
+        return advanceLong(bytes, off + 16, count - k0 - k1);
+    }
+    return advanceLong(bytes, off, count);
+}
+
+/// Running counts of the lead bytes of `w`: byte j holds the number of
+/// lead bytes in bytes 0 through j, so the top byte holds the total. A
+/// continuation byte has bit 7 set and bit 6 clear. Shifting the word
+/// left by one moves bit 6 of each byte under its bit 7, and the
+/// multiplication adds up one bit per lead byte.
+inline fn leadPrefix(w: u64) u64 {
+    const ones: u64 = 0x0101010101010101;
+    const highs: u64 = 0x8080808080808080;
+    return ((~(w & ~(w << 1)) & highs) >> 7) *% ones;
+}
+
+/// The first byte whose running count in `prefix` exceeds `rem`, which
+/// the caller knows to exist. Every count is at most 8, so setting bit
+/// 7 of each byte keeps the subtraction from borrowing across bytes.
+inline fn prefixTarget(prefix: u64, rem: usize) usize {
+    const ones: u64 = 0x0101010101010101;
+    const highs: u64 = 0x8080808080808080;
+    const hit = ((prefix | highs) -% (rem + 1) *% ones) & highs;
+    return @ctz(hit) / 8;
+}
+
+fn advanceLong(bytes: []const u8, off: usize, count: usize) usize {
     var i = off;
     var rem = count;
     if (rem >= block) {
@@ -156,25 +191,10 @@ pub fn advance(bytes: []const u8, off: usize, count: usize) usize {
             i += block;
         }
     }
-    const ones: u64 = 0x0101010101010101;
-    const highs: u64 = 0x8080808080808080;
     while (i + 8 <= bytes.len) {
-        const w = std.mem.readInt(u64, bytes[i..][0..8], .little);
-        // A continuation byte has bit 7 set and bit 6 clear. Shifting the
-        // word left by one moves bit 6 of each byte under its bit 7. The
-        // multiplication turns one bit per lead byte into running counts,
-        // so byte j holds the number of leads in bytes 0 through j and the
-        // top byte holds the total.
-        const leads = (~(w & ~(w << 1)) & highs) >> 7;
-        const prefix = leads *% ones;
+        const prefix = leadPrefix(std.mem.readInt(u64, bytes[i..][0..8], .little));
         const k: usize = @intCast(prefix >> 56);
-        if (k > rem) {
-            // The target is the first byte whose running count exceeds
-            // `rem`. Every count is at most 8, so setting bit 7 of each
-            // byte keeps the subtraction from borrowing across bytes.
-            const hit = ((prefix | highs) -% (rem + 1) *% ones) & highs;
-            return i + @ctz(hit) / 8;
-        }
+        if (k > rem) return i + prefixTarget(prefix, rem);
         rem -= k;
         i += 8;
     }

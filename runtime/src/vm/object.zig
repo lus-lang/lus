@@ -44,43 +44,90 @@ pub const String = struct {
 
     /// Byte offset of the character at zero-based index `ci`. `ci` may equal
     /// `chars`, which yields `len`. A long non-ASCII string starts from the
-    /// nearest breadcrumb at or before `ci`, or from the position the last
+    /// nearest breadcrumb at or before `ci`, or from a position an earlier
     /// call found when that lies between the breadcrumb and `ci`, and skips
     /// the remaining characters with the vectorized `wtf8.advance`. The
-    /// remembered position makes a scan that moves forward through a
+    /// remembered positions make a scan that moves forward through a
     /// string cost the distance it moves.
     pub inline fn byteOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
         if (s.flags.ascii or ci == 0) return ci;
         if (ci >= s.chars) return s.len;
-        const b = s.bytes();
-        if (s.chars <= crumb_step) return wtf8.advance(b, 0, ci);
-        if (s.crumbs == null) s.buildCrumbs(gpa);
-        const cr = s.crumbs orelse return wtf8.advance(b, 0, ci);
+        if (s.chars <= crumb_step) return wtf8.advance(s.bytes(), 0, ci);
+        const cr = s.crumbs orelse return s.firstOffset(gpa, ci);
+        return s.crumbOffset(cr, ci, 0, 0, 0);
+    }
+
+    /// The byte offset of the character `ci` that ends a range, given
+    /// that the character `from_ci` at or before it starts at byte
+    /// `from_off`. A range that moves through a string, as a window
+    /// `s:sub(i, i + 8)` does, finds its end from where the previous end
+    /// was, which `byteOffset` remembers apart from where ranges start.
+    pub inline fn endOffset(s: *String, ci: usize, from_ci: usize, from_off: usize) usize {
+        if (s.flags.ascii) return ci;
+        if (ci >= s.chars) return s.len;
+        const cr = s.crumbs orelse return wtf8.advance(s.bytes(), from_off, ci - from_ci);
+        // The previous end, when it lies between the start and `ci`, is
+        // where the scan starts. Choosing it by a branch keeps the scan
+        // from waiting for the offset of the start.
+        const n = crumbCount(s.chars);
+        const last = cr[n + 2];
+        if (last >= from_ci and last <= ci) {
+            const off = wtf8.advance(s.bytes(), cr[n + 3], ci - last);
+            cr[n + 2] = @intCast(ci);
+            cr[n + 3] = @intCast(off);
+            return off;
+        }
+        return s.crumbOffset(cr, ci, 1, from_ci, from_off);
+    }
+
+    /// The offset of character `ci` through the breadcrumbs `cr`. The
+    /// scan starts from the closest known position at or before `ci`:
+    /// its breadcrumb, `known` at character `known_ci`, or one of the two
+    /// positions found last. Slot 0 remembers where `byteOffset` looked
+    /// and slot 1 where `endOffset` looked, and the result goes to `slot`.
+    inline fn crumbOffset(s: *String, cr: [*]u32, ci: usize, comptime slot: u1, known_ci: usize, known: usize) usize {
         const n = crumbCount(s.chars);
         const k = ci / crumb_step;
         var at: usize = k * crumb_step;
         var off: usize = cr[k];
-        const last = cr[n];
-        if (last > at and last <= ci) {
-            at = last;
-            off = cr[n + 1];
+        if (known_ci > at) {
+            at = known_ci;
+            off = known;
         }
-        off = wtf8.advance(b, off, ci - at);
-        cr[n] = @intCast(ci);
-        cr[n + 1] = @intCast(off);
+        inline for (0..2) |j| {
+            const last = cr[n + 2 * j];
+            if (last > at and last <= ci) {
+                at = last;
+                off = cr[n + 2 * j + 1];
+            }
+        }
+        off = wtf8.advance(s.bytes(), off, ci - at);
+        cr[n + 2 * @as(usize, slot)] = @intCast(ci);
+        cr[n + 2 * @as(usize, slot) + 1] = @intCast(off);
         return off;
     }
 
+    /// `byteOffset` on the first indexed access, which builds the
+    /// breadcrumbs.
+    noinline fn firstOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
+        s.buildCrumbs(gpa);
+        const cr = s.crumbs orelse return wtf8.advance(s.bytes(), 0, ci);
+        return s.crumbOffset(cr, ci, 0, 0, 0);
+    }
+
     /// Number of breadcrumbs of a string with `chars` characters. The
-    /// allocation holds two more words, the character index and byte
-    /// offset that `byteOffset` found last.
+    /// allocation holds four more words, the two positions found last as
+    /// a character index and a byte offset each.
     inline fn crumbCount(chars: usize) usize {
         return chars / crumb_step + 1;
     }
 
+    /// Words of the breadcrumb allocation past the breadcrumbs.
+    const crumb_extra = 4;
+
     noinline fn buildCrumbs(s: *String, gpa: std.mem.Allocator) void {
         const n = crumbCount(s.chars);
-        const cr = gpa.alloc(u32, n + 2) catch return;
+        const cr = gpa.alloc(u32, n + crumb_extra) catch return;
         const b = s.bytes();
         var off: usize = 0;
         cr[0] = 0;
@@ -94,7 +141,7 @@ pub const String = struct {
     }
 
     pub fn freeExtra(s: *String, gpa: std.mem.Allocator) void {
-        if (s.crumbs) |cr| gpa.free(cr[0 .. crumbCount(s.chars) + 2]);
+        if (s.crumbs) |cr| gpa.free(cr[0 .. crumbCount(s.chars) + crumb_extra]);
     }
 };
 
