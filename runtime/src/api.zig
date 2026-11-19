@@ -30,6 +30,13 @@ pub fn newState(gpa: std.mem.Allocator, io: std.Io) !*Thread {
     return l;
 }
 
+/// Creates a state whose strings hash with `seed`. A worker takes the
+/// seed of its creator.
+pub fn newStateSeeded(gpa: std.mem.Allocator, io: std.Io, seed: u64) !*Thread {
+    const g = try state.createSeeded(gpa, io, seed);
+    return g.main_thread;
+}
+
 pub fn openLibs(l: *Thread) Error!void {
     // Opening the libraries is bounded startup work that builds many
     // tables before they are reachable, so the collector waits until it

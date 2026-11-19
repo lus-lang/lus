@@ -91,7 +91,7 @@ inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usiz
 
 pub fn objectSize(h: *Header) usize {
     return switch (h.tag) {
-        .string => object.String.allocSize(h.as(object.String).len),
+        .string => h.as(object.String).cellSize(),
         .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).inline_units) * 16,
         .closure => object.Closure.allocSize(h.as(object.Closure).nupvals),
         .native => state_mod.Native.allocSize(h.as(state_mod.Native).nupvals),
@@ -112,6 +112,7 @@ pub fn releaseObject(g: *Global, h: *Header) void {
         .string => {
             const s = h.as(object.String);
             if (s.flags.interned) g.strings.remove(s);
+            if (s.flags.shared or s.flags.cached) @import("blob.zig").drop(g, s);
             s.freeExtra(gpa);
         },
         .table => {

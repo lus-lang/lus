@@ -1,6 +1,6 @@
 # Garbage collection
 
-The Lus 2.0 collector is precise and non-moving. It allocates small objects from size-classed pages, marks with a bitmap per page, and sweeps lazily. It runs in one of two modes. Incremental mode interleaves tri-color marking with the program under a goal-based pacer. Generational mode keeps survivors marked as an old generation, so that minor collections trace only young objects, and switches to incremental major collections on its own when most new objects survive. Generational mode is the default. Every state owns its heap, so workers never share objects.
+The Lus 2.0 collector is precise and non-moving. It allocates small objects from size-classed pages, marks with a bitmap per page, and sweeps lazily. It runs in one of two modes. Incremental mode interleaves tri-color marking with the program under a goal-based pacer. Generational mode keeps survivors marked as an old generation, so that minor collections trace only young objects, and switches to incremental major collections on its own when most new objects survive. Generational mode is the default. Every state owns its heap, so workers never share objects. The bytes of long strings in worker messages are shared between heaps as reference counted blobs, which each heap releases when it sweeps the string that refers to them (`workers.md`).
 
 ## The heap
 
@@ -20,7 +20,7 @@ Every object starts with a header of one tag byte, one flag byte, and the finali
 
 Sweeping is lazy. When a mark phase ends, every page whose objects it judged waits for a sweep. The allocator sweeps a page when its size class reaches it and then allocates from the cells the sweep freed. After four sweeps that free nothing, the allocator takes a fresh page and leaves the rest to the collector steps, so one allocation never sweeps a large part of the heap. Collector steps sweep the pages that the allocator does not reach. A page left without live objects returns to the pool of free pages, where any size class can take it, and a segment whose pages are all free goes back to the backing allocator.
 
-A sweep frees what a dead object owns outside its cell, such as the parts of a table or the stack of a thread. Safe builds fill dead cells with a fixed pattern, so a use after free reads garbage instead of a plausible object.
+A sweep frees what a dead object owns outside its cell, such as the parts of a table, the stack of a thread, or the reference of a string to a shared blob. Safe builds fill dead cells with a fixed pattern, so a use after free reads garbage instead of a plausible object.
 
 ## Marking
 

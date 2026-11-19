@@ -329,6 +329,9 @@ pub const Global = struct {
     finobj: std.ArrayList(*gc.Header) = .empty,
     tobefnz: std.ArrayList(*gc.Header) = .empty,
     memerr: *String = undefined,
+    /// The blobs of strings of this heap that were sent to workers
+    /// (`blob.zig`).
+    blobs: std.AutoHashMapUnmanaged(*String, *@import("blob.zig").Blob) = .empty,
     /// Hooks installed by library modules (pledge state, worker hosts...).
     ext: std.StringHashMapUnmanaged(*anyopaque) = .empty,
     /// Program arguments and environment, provided by the host.
@@ -926,10 +929,17 @@ pub fn heapBytes(g: *const Global) usize {
 }
 
 pub fn create(gpa: Allocator, io: std.Io) !*Global {
+    return createSeeded(gpa, io, null);
+}
+
+/// Creates a state whose strings hash with `seed`, or with a seed of its
+/// own when `seed` is null. Workers take the seed of their creator, so
+/// the strings they exchange keep their hashes (`blob.zig`).
+pub fn createSeeded(gpa: Allocator, io: std.Io, seed_opt: ?u64) !*Global {
     const g = try gpa.create(Global);
     var seed: u64 = 0x2545F4914F6CDD1D;
     seed ^= @intFromPtr(g);
-    g.* = .{ .gpa = gpa, .io = io, .seed = seed };
+    g.* = .{ .gpa = gpa, .io = io, .seed = seed_opt orelse seed };
     g.parent_gpa = gpa;
     g.counter = .{ .child = gpa };
     g.gpa = g.counter.allocator();
@@ -952,6 +962,7 @@ pub fn destroy(g: *Global) void {
     gc.freeAll(g);
     @import("../jit/jit.zig").deinit(g);
     g.strings.deinit(gpa);
+    g.blobs.deinit(gpa);
     g.fixed.deinit(gpa);
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
