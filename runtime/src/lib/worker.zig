@@ -95,7 +95,7 @@ const Encoder = struct {
     seen_vectors: std.AutoHashMapUnmanaged(*Vector, u32) = .empty,
 
     fn deinit(e: *Encoder) void {
-        const gpa = e.l.g.gpa;
+        const gpa = e.l.g.parent_gpa;
         e.seen.deinit(gpa);
         e.vectors.deinit(gpa);
         e.seen_vectors.deinit(gpa);
@@ -127,10 +127,10 @@ const Encoder = struct {
             .vector => blk: {
                 const vec = v.as(Vector);
                 if (vec.detached) return l.raiseFmt("cannot send a vector that was transferred to another worker", .{});
-                const gop = e.seen_vectors.getOrPut(l.g.gpa, vec) catch return l.raiseMem();
+                const gop = e.seen_vectors.getOrPut(l.g.parent_gpa, vec) catch return l.raiseMem();
                 if (!gop.found_existing) {
                     gop.value_ptr.* = @intCast(e.vectors.items.len);
-                    e.vectors.append(l.g.gpa, vec) catch return l.raiseMem();
+                    e.vectors.append(l.g.parent_gpa, vec) catch return l.raiseMem();
                 }
                 break :blk .{ .vector = gop.value_ptr.* };
             },
@@ -146,7 +146,7 @@ const Encoder = struct {
         // Record the table before its contents so a cycle back to it
         // resolves to this index.
         const index: u32 = @intCast(e.tables.items.len);
-        e.seen.put(l.g.gpa, t, index) catch return l.raiseMem();
+        e.seen.put(l.g.parent_gpa, t, index) catch return l.raiseMem();
         e.tables.append(e.arena, &.{}) catch return l.raiseMem();
         var count: usize = 0;
         var k: Value = .nil;
@@ -166,7 +166,7 @@ const Encoder = struct {
 
 /// Copies `v` out of the heap of `l` into a new packet.
 fn encode(l: *Thread, v: Value) Error!*Packet {
-    const gpa = l.g.gpa;
+    const gpa = l.g.parent_gpa;
     const p = gpa.create(Packet) catch return l.raiseMem();
     p.* = .{ .arena = .init(gpa) };
     errdefer p.destroy(gpa);
@@ -369,10 +369,12 @@ const mt_key = "worker.mt";
 fn domainOf(l: *Thread) Error!*Domain {
     const g = l.g;
     if (g.ext.get(domain_key)) |p| return @ptrCast(@alignCast(p));
-    const d = g.gpa.create(Domain) catch return l.raiseMem();
-    d.* = .{ .gpa = g.gpa, .io = g.io };
+    // Domains and workers are shared between threads, so they use the
+    // process allocator rather than the counting allocator of one state.
+    const d = g.parent_gpa.create(Domain) catch return l.raiseMem();
+    d.* = .{ .gpa = g.parent_gpa, .io = g.io };
     g.ext.put(g.gpa, domain_key, d) catch {
-        g.gpa.destroy(d);
+        g.parent_gpa.destroy(d);
         return l.raiseMem();
     };
     // A worker records its domain so a shutdown can reach a receive.
@@ -527,7 +529,7 @@ fn peek(l: *Thread) Error!u32 {
     const p = w.inbox.pop();
     w.in_mutex.unlock(io);
     const pk = p orelse return halt(l, "worker.peek");
-    defer pk.destroy(l.g.gpa);
+    defer pk.destroy(l.g.parent_gpa);
     return aux.ret(l, try decode(l, pk));
 }
 
@@ -549,7 +551,7 @@ fn checkWorker(l: *Thread, i: u32) Error!*Worker {
 /// The command line flags of `g` as `-F` specifications, so a worker
 /// sees the same `flags` values.
 fn flagSpecs(l: *Thread) Error![][]u8 {
-    const gpa = l.g.gpa;
+    const gpa = l.g.parent_gpa;
     var list: std.ArrayList([]u8) = .empty;
     errdefer {
         for (list.items) |s| gpa.free(s);
@@ -580,7 +582,7 @@ fn flagSpecs(l: *Thread) Error![][]u8 {
 /// with the remaining arguments as its varargs.
 fn create(l: *Thread) Error!u32 {
     const g = l.g;
-    const gpa = g.gpa;
+    const gpa = g.parent_gpa;
     const path = try aux.checkBytes(l, 1);
     try pledge.require(l, "load", null);
     try pledge.require(l, "fs:read", path);
@@ -692,7 +694,7 @@ fn receive(l: *Thread) Error!u32 {
             const p = w.outbox.pop();
             w.out_mutex.unlock(io);
             if (p) |pk| {
-                defer pk.destroy(l.g.gpa);
+                defer pk.destroy(l.g.parent_gpa);
                 const v = try decode(l, pk);
                 try l.ensure(n);
                 var j: u32 = 1;
