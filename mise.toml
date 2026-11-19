@@ -77,17 +77,6 @@ description = "Build the VSCode extension"
 depends = ["install"]
 run = "pnpm --filter ./packages/vscode build"
 
-[tasks."legacy:build"]
-description = "Build the frozen 1.7 C runtime (differential oracle)"
-dir = "legacy/lus"
-run = ["meson setup build --reconfigure", "meson compile -C build"]
-
-[tasks."legacy:test"]
-description = "Run the frozen 1.7 runtime's H1 and H2 suites"
-depends = ["legacy:build"]
-dir = "legacy/lus"
-run = "meson test -C build --suite h1 --suite h2"
-
 [tasks.lint]
 description = "Repository prose and naming checks"
 run = ["node tools/lint-repo.js", "cd runtime && zig fmt --check src build.zig"]

@@ -4,9 +4,8 @@
 // Usage: node scripts/conformance.mjs [--modes off,eager] [--wasm path] [--list-failures] [files or directories...]
 //
 // The default is every file of tests/conformance and of the language
-// server tests. The directories of those files, the language server, the
-// stdlib specification, and the legacy H1 suite are copied into the
-// in-memory file system at their real paths, so fixtures load as they do
+// server tests. The directories of those files, the language server, and
+// the stdlib specification are copied into the in-memory file system at their real paths, so fixtures load as they do
 // under `lus test`. `lus test` itself runs
 // each file in a child process, which WASI does not have, so this script
 // is a small runner of its own. It finds the test functions of a file by
@@ -212,7 +211,7 @@ async function main() {
   const files = listFiles(args.length ? args : [path.join(root, "tests/conformance"), path.join(root, "packages/language-server/tests")]);
   const mounts = {};
   const dirs = new Set(files.map((f) => path.dirname(path.resolve(f))));
-  for (const d of ["packages/language-server", "spec/stdlib", "legacy/lus-tests/h1"]) dirs.add(path.join(root, d));
+  for (const d of ["packages/language-server", "spec/stdlib"]) dirs.add(path.join(root, d));
   for (const dir of dirs) mounts[dir] = await readHostDirectory(dir, [""]);
   const byMode = {};
   for (const mode of modes) {

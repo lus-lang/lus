@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "components": {
+    "vscodePublisher": {
+      "asset": "lus-{version}-open-vsx-publisher.cjs",
+      "sha256": "0af1976b7ed294fc256dc84644134277d854a3b316d402ecda448d9401fd7419"
+    }
+  }
+}

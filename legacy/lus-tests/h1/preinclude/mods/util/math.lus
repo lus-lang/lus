@@ -1,2 +1,0 @@
--- preinclude fixture inside a directory tree
-return { square = function(x) return x * x end }

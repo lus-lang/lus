@@ -127,7 +127,7 @@ fn discover(gpa: std.mem.Allocator, io: std.Io, path: []const u8, files: *std.Ar
         if (doc) {
             if (!isDoc(entry.basename)) continue;
         } else if (!std.mem.endsWith(u8, entry.basename, "_test.lus")) continue;
-        const skip_dirs = [_][]const u8{ "node_modules", ".git", "zig-out", ".zig-cache", "legacy" };
+        const skip_dirs = [_][]const u8{ "node_modules", ".git", "zig-out", ".zig-cache" };
         var skip = false;
         for (skip_dirs) |d| {
             if (std.mem.indexOf(u8, entry.path, d) != null) skip = true;

@@ -1,2 +1,0 @@
--- error.lus - Worker test script that throws an error
-error("intentional worker error")

@@ -39,7 +39,7 @@ test("frozen Open VSX publisher is deterministic and constrained", async () => {
   const firstEvidence = await buildPublisher(first);
   const secondEvidence = await buildPublisher(second);
   const releaseManifest = JSON.parse(
-    await readFile(new URL("../../../legacy/release/manifest.json", import.meta.url), "utf8"),
+    await readFile(new URL("../../../packaging/release/manifest.json", import.meta.url), "utf8"),
   );
   assert.equal(firstEvidence.version, publisherVersion);
   assert.equal(

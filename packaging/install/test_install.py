@@ -82,11 +82,11 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--lusc", required=True)
     value.add_argument(
         "--certificate",
-        default="legacy/lus-tests/h3/fixtures/localhost-cert.pem",
+        default="packaging/install/fixtures/localhost-cert.pem",
     )
     value.add_argument(
         "--private-key",
-        default="legacy/lus-tests/h3/fixtures/localhost-key.pem",
+        default="packaging/install/fixtures/localhost-key.pem",
     )
     return value
 

@@ -40,7 +40,7 @@ jobs:
           mkdir anchor candidate
           gh api \
             -H "Accept: application/vnd.github+json" \
-            "repos/${{ github.repository }}/contents/release/manifest.json?ref=$TAG" \
+            "repos/${{ github.repository }}/contents/packaging/release/manifest.json?ref=$TAG" \
             --jq .content | base64 --decode > anchor/release-manifest.json
           test -s anchor/release-manifest.json
           expected_publisher_sha=$(node -e '

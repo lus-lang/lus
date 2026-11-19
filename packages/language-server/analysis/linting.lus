@@ -19,6 +19,15 @@ for _, name in ipairs(stdlib_data.tables) do
   STDLIB[name] = true
 end
 
+-- Names that `lus test` defines in every `*_test.lus` file
+local TEST_GLOBALS = {
+  raises = true, same = true, skip = true, snapshot = true, TEST_DIR = true,
+}
+
+local function is_test_file(uri)
+  return string.find(uri, "_test%.lus$") ~= nil
+end
+
 -- Names that start with _ are conventionally unused (e.g., _)
 local function is_intentionally_unused(name)
   return string.sub(name, 1, 1) == "_"
@@ -56,8 +65,10 @@ function linting.compute(uri)
   end
 
   -- Undefined global warnings
+  local test_file = is_test_file(uri)
   for _, ref in ipairs(analysis.references) do
-    if not ref.declaration and not STDLIB[ref.name] then
+    if not ref.declaration and not STDLIB[ref.name]
+        and not (test_file and TEST_GLOBALS[ref.name]) then
       diagnostics[#diagnostics + 1] = {
         range = {
           start = {line = ref.line - 1, character = ref.column - 1},

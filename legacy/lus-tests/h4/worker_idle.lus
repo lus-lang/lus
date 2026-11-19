@@ -1,3 +1,0 @@
--- Idle worker body for footprint and teardown qualification.
-global worker
-worker.peek()
