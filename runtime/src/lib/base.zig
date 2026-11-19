@@ -185,8 +185,9 @@ fn setmetatable(l: *Thread) Error!u32 {
 
 pub fn registerFinalizer(l: *Thread, h: *gc.Header, mt: *Table) Error!void {
     if (h.finalize != .none) return;
-    const gcm = table.getStr(mt, l.g.tm_names[@intFromEnum(state.TM.gc)].?);
-    if (gcm.isNil()) return;
+    // The metatable's absence cache answers for the common metatable
+    // without `__gc` without a hash lookup.
+    if (state.tmLookup(l.g, mt, .gc).isNil()) return;
     h.finalize = .pending;
     l.g.finobj.append(l.g.gpa, h) catch return l.raiseMem();
 }
