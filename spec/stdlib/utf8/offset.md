@@ -17,4 +17,4 @@ params:
 returns: integer|nil
 ---
 
-Return the byte position of the `n`-th UTF-8 character, counting from byte position `i` (default 1 for positive `n`, `#s + 1` for non-positive).
+Return the character position of the `n`-th character, counting from character position `i` (default 1 for positive `n`, `#s + 1` for non-positive). Each character occupies exactly one position, so the result is plain position arithmetic checked against the bounds of `s`.

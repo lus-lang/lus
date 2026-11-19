@@ -6,7 +6,7 @@ since: 0.1.0
 stability: stable
 origin: lua
 vararg: true
-returns: string|nil
+returns: string|vector|nil
 ---
 
-Reads from the default input file according to the given formats. Formats: `"n"` reads a number, `"a"` reads the whole file, `"l"` reads a line (default, strips newline), `"L"` reads a line keeping the newline, or an integer *n* reads *n* bytes.
+Reads from the default input file according to the given formats. Formats: `"n"` reads a number, `"a"` reads the whole file, `"l"` reads a line (default, strips newline), `"L"` reads a line keeping the newline, or an integer *n* reads *n* characters. The default input is in text mode, so the results are strings. On a file handle opened in binary mode the same formats return vectors, and an integer counts bytes.

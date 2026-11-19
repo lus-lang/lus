@@ -18,4 +18,4 @@ params:
 returns: string
 ---
 
-Return a copy of `s` where all (or the first `n`) occurrences of `pattern` are replaced by `repl`. The replacement `repl` can be a string, table, or function. Also returns the total number of substitutions as a second value.
+Return a copy of `s` where all (or the first `n`) occurrences of `pattern` are replaced by `repl`. The replacement `repl` can be a string, table, or function. Also returns the total number of substitutions as a second value. Patterns match whole characters, so a replacement never splits a multi-byte character.

@@ -12,4 +12,4 @@ params:
 returns: string
 ---
 
-Returns `"integer"` if `x` is an integer, `"float"` if it is a float, or `nil` if `x` is not a number.
+Returns the subtype of the number `x`: `"integer"`, `"float"`, `"bigint"`, or `"decimal"`. Returns `nil` if `x` is not a number.

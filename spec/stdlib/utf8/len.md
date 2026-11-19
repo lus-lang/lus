@@ -15,7 +15,10 @@ params:
   - name: j
     type: integer
     optional: true
+  - name: lax
+    type: boolean
+    optional: true
 returns: integer|nil
 ---
 
-Return the number of UTF-8 characters in `s` from position `i` to `j`. Returns `nil` plus the position of the first invalid byte on failure.
+Return the number of characters in `s` from character position `i` to `j`, so `utf8.len(s)` equals `#s`. A lone surrogate is invalid unless `lax` is true, and on failure the function returns `nil` plus the position of that character.

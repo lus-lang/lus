@@ -9,4 +9,4 @@ vararg: true
 returns: userdata|nil
 ---
 
-Writes each argument to the default output file. Arguments must be strings or numbers. Returns the file handle on success, or `nil` plus an error message on failure.
+Writes each argument to the default output file. Arguments must be strings, numbers, or vectors. Returns the file handle on success, or `nil` plus an error message on failure.

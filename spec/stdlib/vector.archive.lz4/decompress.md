@@ -7,8 +7,8 @@ stability: stable
 origin: lus
 params:
   - name: data
-    type: string|vector
-returns: string|vector
+    type: vector|string
+returns: vector
 ---
 
-Decompresses LZ4 frame-compressed `data`. Validates the frame header and optional checksum. Returns the same type as the input.
+Decompresses LZ4 frame-compressed `data`. Validates the frame header and optional checksum. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.

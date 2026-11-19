@@ -15,7 +15,10 @@ params:
   - name: j
     type: integer
     optional: true
+  - name: lax
+    type: boolean
+    optional: true
 returns: integer
 ---
 
-Return the codepoints of all characters in `s` from position `i` to `j` (default `i = 1`, `j = i`).
+Return the code points of all characters in `s` from character position `i` to `j` (default `i = 1`, `j = i`). A lone surrogate raises an error unless `lax` is true.

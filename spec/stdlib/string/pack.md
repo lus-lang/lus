@@ -9,7 +9,7 @@ params:
   - name: fmt
     type: string
 vararg: true
-returns: string
+returns: vector
 ---
 
-Return a binary string containing the values packed according to format string `fmt`. See `string.unpack` for format codes.
+Return a vector containing the values packed according to format string `fmt`. Packed data is raw bytes, so the result is a vector. See `string.unpack` for format codes, and `vector.tostring` to decode packed text.

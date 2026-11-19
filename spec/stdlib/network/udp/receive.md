@@ -12,11 +12,11 @@ params:
     optional: true
 returns:
   - name: data
-    type: string
+    type: vector
   - name: address
     type: string
   - name: port
     type: integer
 ---
 
-Receives one datagram and returns its data together with the sender's numeric address and port. `size` defaults to 8 KiB and accepts values through 1 MiB.
+Receives one datagram and returns its data as a vector together with the sender's numeric address and port. `size` defaults to 8 KiB and accepts values through 1 MiB.

@@ -34,7 +34,7 @@ A global variable (not a function) that holds the global environment.]],
   ["_VERSION"] = {
     children = {},
     description = [[
-A global variable containing the running Lus version string.]],
+A global variable containing the running Lus version string, such as `"Lus 2.0"`.]],
     kind = "variable",
     module = "base",
     name = "_VERSION",
@@ -75,6 +75,38 @@ Checks whether `v` is truthy. If so, returns all its arguments. Otherwise, raise
     short_name = "assert",
     since = "0.1.0",
     source = "stdlib/base/assert.md",
+    stability = "stable",
+  },
+  ["bigint"] = {
+    children = {},
+    description = [[
+Converts `x` to a bigint, an arbitrary precision integer. Integers, bigints, floats with an integral value, and decimals with an integral value convert exactly. A string is parsed as an integer numeral, and a string that holds no such numeral returns `nil`. A float or decimal with a fractional part raises an error.
+
+```lus
+print(bigint(2) ^ 100)    --> 1267650600228229401496703205376
+print(bigint("123456789012345678901234567890") + 1)
+```
+
+The literal suffix `n` writes a bigint directly, as in `42n` or `0xffn`. `math.type` reports `"bigint"` for these values, and `tostring` prints them in decimal without a suffix.]],
+    kind = "function",
+    module = "base",
+    name = "bigint",
+    origin = "lus",
+    params = {
+      {
+        name = "x",
+        type = "number|string",
+      },
+    },
+    parent = nil,
+    returns = {
+      {
+        type = "number|nil",
+      },
+    },
+    short_name = "bigint",
+    since = "2.0.0",
+    source = "stdlib/base/bigint.md",
     stability = "stable",
   },
   ["collectgarbage"] = {
@@ -325,7 +357,6 @@ Suspends the running coroutine. Arguments to `yield` become the extra return val
   },
   ["debug"] = {
     children = {
-      "debug.debug",
       "debug.format",
       "debug.gethook",
       "debug.getinfo",
@@ -352,28 +383,12 @@ Suspends the running coroutine. Arguments to `yield` become the extra return val
     short_name = "debug",
     synthetic = true,
   },
-  ["debug.debug"] = {
-    children = {},
-    description = [[
-Enters interactive debugging mode. Prompts for commands from standard input. Not available in all environments.]],
-    kind = "function",
-    module = "debug",
-    name = "debug.debug",
-    origin = "lua",
-    params = {},
-    parent = "debug",
-    returns = {},
-    short_name = "debug",
-    since = "0.1.0",
-    source = "stdlib/debug/debug.md",
-    stability = "stable",
-  },
   ["debug.format"] = {
     children = {},
     description = [[
-Formats Lus source code. Returns the formatted source string.
+Formats Lus source code and returns the formatted source string, or `nil` and an error message when the source does not parse. The source may also be given as a vector of bytes.
 
-The optional `chunkname` specifies the name used in error messages. The optional `indent_width` sets the indentation width (defaults to 2).]],
+The optional `chunkname` specifies the name used in error messages. The optional `indent_width` sets the number of spaces per indentation level and defaults to 4. `lus fmt` formats files with the same formatter.]],
     kind = "function",
     module = "debug",
     name = "debug.format",
@@ -381,7 +396,7 @@ The optional `chunkname` specifies the name used in error messages. The optional
     params = {
       {
         name = "source",
-        type = "string",
+        type = "string|vector",
       },
       {
         name = "chunkname",
@@ -397,7 +412,7 @@ The optional `chunkname` specifies the name used in error messages. The optional
     parent = "debug",
     returns = {
       {
-        type = "string",
+        type = "string|nil",
       },
     },
     short_name = "format",
@@ -920,6 +935,38 @@ Makes upvalue `n1` of closure `f1` refer to the same upvalue as `n2` of closure 
     source = "stdlib/debug/upvaluejoin.md",
     stability = "stable",
   },
+  ["decimal"] = {
+    children = {},
+    description = [[
+Converts `x` to a decimal, an exact base 10 number. Integers, bigints, and numeric strings convert exactly and keep their digits, so `decimal("2.50")` keeps two fractional digits. A float converts through the shortest decimal string that reads back as the same float, so `decimal(0.1)` is `0.1`. A string that holds no numeral returns `nil`.
+
+```lus
+print(decimal("0.1") + decimal("0.2") == decimal("0.3"))   --> true
+print(decimal(1) / 3)    --> 0.3333333333333333333333333333333333
+```
+
+The literal suffix `d` writes a decimal directly, as in `1.50d` or `1e-2d`. Division of decimals rounds to 34 significant digits, half to even. Arithmetic between a decimal and a float raises an error, so a program converts one side explicitly with `decimal` or `tonumber`. `math.type` reports `"decimal"` for these values, and `tostring` prints exactly their stored digits.]],
+    kind = "function",
+    module = "base",
+    name = "decimal",
+    origin = "lus",
+    params = {
+      {
+        name = "x",
+        type = "number|string",
+      },
+    },
+    parent = nil,
+    returns = {
+      {
+        type = "number|nil",
+      },
+    },
+    short_name = "decimal",
+    since = "2.0.0",
+    source = "stdlib/base/decimal.md",
+    stability = "stable",
+  },
   ["dofile"] = {
     children = {},
     description = [[
@@ -1026,7 +1073,14 @@ Parses a CSV string `s` and returns a table of rows. Each row is a sequential ta
   ["fromjson"] = {
     children = {},
     description = [[
-Parses one complete JSON value from `s`. A numeric argument is converted to its textual form before parsing. Other argument types raise a type error. Integer syntax produces a Lus integer, while decimal or exponent syntax produces a float. Arrays become integer-keyed tables, objects become string-keyed tables, and JSON null becomes `nil`. Null fields are absent and null array elements create holes. Duplicate object keys keep the final value. Out-of-range numbers, trailing data, invalid syntax, and nesting beyond 1,000 levels raise an error with position information.]],
+Parses one complete JSON value from `s`. A numeric argument is converted to its textual form before parsing. Other argument types raise a type error. Integer syntax produces a Lus integer, while decimal or exponent syntax produces a float. Arrays become integer-keyed tables, objects become string-keyed tables, and JSON null becomes `nil`. Null fields are absent and null array elements create holes. Duplicate object keys keep the final value. Out-of-range numbers, trailing data, invalid syntax, and nesting beyond 1,000 levels raise an error with position information.
+
+The optional `options` table takes the boolean field `exact`. With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so `tojson` reproduces the original digits on the way back.
+
+```lus
+local n = fromjson('{"price": 19.90}', { exact = true }).price
+print(math.type(n), n)   --> decimal  19.90
+```]],
     kind = "function",
     module = "base",
     name = "fromjson",
@@ -1035,6 +1089,11 @@ Parses one complete JSON value from `s`. A numeric argument is converted to its 
       {
         name = "s",
         type = "string|number",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = nil,
@@ -1629,6 +1688,8 @@ Opens `filename` in the given `mode` and returns a file handle, or `nil` plus an
 
 Modes follow C `fopen` conventions: `"r"` (read, the default), `"w"` (write), `"a"` (append), plus an optional `"b"` suffix for binary. A read mode requires only `fs:read`. Any write or append mode requires `fs:write`.
 
+A file opened in text mode reads strings and validates them as text. A read that meets an invalid UTF-8 sequence raises an error naming its byte offset. The optional `options` table takes the boolean field `lossy`, which replaces each invalid sequence with U+FFFD instead. A file opened in binary mode, with `"b"` in `mode`, reads vectors of raw bytes. Writing accepts strings, numbers, and vectors in either mode.
+
 **Requires pledges:** `fs:read`, `fs:write`]],
     kind = "function",
     module = "io",
@@ -1643,6 +1704,11 @@ Modes follow C `fopen` conventions: `"r"` (read, the default), `"w"` (write), `"
         name = "mode",
         optional = true,
         type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = "io",
@@ -1724,7 +1790,7 @@ Starts program `prog` in a separate process and returns a file handle. Mode `"r"
   ["io.read"] = {
     children = {},
     description = [[
-Reads from the default input file according to the given formats. Formats: `"n"` reads a number, `"a"` reads the whole file, `"l"` reads a line (default, strips newline), `"L"` reads a line keeping the newline, or an integer *n* reads *n* bytes.]],
+Reads from the default input file according to the given formats. Formats: `"n"` reads a number, `"a"` reads the whole file, `"l"` reads a line (default, strips newline), `"L"` reads a line keeping the newline, or an integer *n* reads *n* characters. The default input is in text mode, so the results are strings. On a file handle opened in binary mode the same formats return vectors, and an integer counts bytes.]],
     kind = "function",
     module = "io",
     name = "io.read",
@@ -1733,7 +1799,7 @@ Reads from the default input file according to the given formats. Formats: `"n"`
     parent = "io",
     returns = {
       {
-        type = "string|nil",
+        type = "string|vector|nil",
       },
     },
     short_name = "read",
@@ -1922,7 +1988,7 @@ Returns `"file"` if `obj` is an open file handle, `"closed file"` if it is a clo
   ["io.write"] = {
     children = {},
     description = [[
-Writes each argument to the default output file. Arguments must be strings or numbers. Returns the file handle on success, or `nil` plus an error message on failure.]],
+Writes each argument to the default output file. Arguments must be strings, numbers, or vectors. Returns the file handle on success, or `nil` plus an error message on failure.]],
     kind = "function",
     module = "io",
     name = "io.write",
@@ -1968,7 +2034,7 @@ Returns an iterator function that traverses the integer keys of `t` in order, fr
   ["load"] = {
     children = {},
     description = [[
-Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure.
+Loads a chunk. If `chunk` is a string, the chunk is that string. If it is a vector, the chunk is its bytes, which is the form `string.dump` produces for binary chunks. If it is a function, it is called repeatedly to get the chunk pieces. Returns the compiled chunk as a function, or `nil` plus an error message on failure.
 
 The optional arguments refine the load:
 
@@ -1986,7 +2052,7 @@ Binary chunks are version-dependent artifacts for trusted build and storage path
     params = {
       {
         name = "chunk",
-        type = "string|function",
+        type = "string|vector|function",
       },
       {
         name = "chunkname",
@@ -2760,7 +2826,7 @@ Returns the tangent of angle `x` (in radians).]],
   ["math.tointeger"] = {
     children = {},
     description = [[
-Converts `x` to an integer if its value is convertible to one, meaning a number with an integer value or a string naming such a number. Returns `nil` when `x` cannot be converted.]],
+Converts `x` to an integer if its value is convertible to one, meaning a number of any subtype with an integral value that fits in 64 bits, or a string naming such a number. Returns `nil` when `x` cannot be converted.]],
     fastcall = true,
     kind = "function",
     module = "math",
@@ -2786,7 +2852,7 @@ Converts `x` to an integer if its value is convertible to one, meaning a number 
   ["math.type"] = {
     children = {},
     description = [[
-Returns `"integer"` if `x` is an integer, `"float"` if it is a float, or `nil` if `x` is not a number.]],
+Returns the subtype of the number `x`: `"integer"`, `"float"`, `"bigint"`, or `"decimal"`. Returns `nil` if `x` is not a number.]],
     fastcall = true,
     kind = "function",
     module = "math",
@@ -2855,7 +2921,7 @@ Returns `true` if integer `m` is below integer `n` when compared as unsigned int
   ["network.fetch"] = {
     children = {},
     description = [[
-Performs an HTTP or HTTPS request using positional optional arguments. `method` defaults to `"GET"`. `headers` supplies request header names and values, and `body` supplies the request body. Returns the integer response status, response body string, and a table with lowercase response header names. Response bodies are capped at 64 MiB.
+Performs an HTTP or HTTPS request using positional optional arguments. `method` defaults to `"GET"`. `headers` supplies request header names and values, and `body` supplies the request body as a string or a vector. Returns the integer response status, the response body as a vector, and a table with lowercase response header names. A program that expects a text body decodes it with `vector.tostring`. Response bodies are capped at 64 MiB.
 
 **Requires pledge:** `network:http`]],
     kind = "function",
@@ -2880,7 +2946,7 @@ Performs an HTTP or HTTPS request using positional optional arguments. `method` 
       {
         name = "body",
         optional = true,
-        type = "string",
+        type = "string|vector",
       },
     },
     parent = "network",
@@ -2894,7 +2960,7 @@ Performs an HTTP or HTTPS request using positional optional arguments. `method` 
       },
       {
         name = "body",
-        type = "string",
+        type = "vector",
       },
       {
         name = "headers",
@@ -3410,7 +3476,7 @@ A string describing some compile-time configurations for packages.]],
   ["package.cpath"] = {
     children = {},
     description = [[
-The native-module templates used by `require`. Defaults search versioned `lib/lus/1.7` before `lib/lua/1.7`, then the current directory. The standalone interpreter derives the prefix from an archive when its executable is under `bin`, then falls back to its configured installation prefix. Embedded states use the prefix configured when `liblus` was built. `LUA_CPATH_1_7` takes priority over `LUA_CPATH`, and `;;` inserts the defaults at that position.]],
+The native-module templates used by `require`. Its default is the empty string. Lus 2.0 runs its standard library in the runtime itself and extends it from a host program through the C embedding API, so a native module found on `package.cpath` reports that native C libraries are unavailable.]],
     kind = "variable",
     module = "package",
     name = "package.cpath",
@@ -3440,7 +3506,9 @@ A table used by `require` to control which modules are already loaded.]],
   ["package.loadlib"] = {
     children = {},
     description = [[
-Dynamically loads C library `libname`. If `funcname` is `"*"`, links the library globally. Otherwise, returns the C function `funcname` from the library. Returns `nil` plus an error message on failure.]],
+Reports that native C libraries are unavailable in Lus 2.0. It checks `fs:read` on `libname` and the `load` permission, then returns `nil`, a message, and the name of the failing phase. A host program adds native functions through the C embedding API in `lus.h`.
+
+**Requires pledges:** `fs:read`, `load`]],
     kind = "function",
     module = "package",
     name = "package.loadlib",
@@ -3456,6 +3524,10 @@ Dynamically loads C library `libname`. If `funcname` is `"*"`, links the library
       },
     },
     parent = "package",
+    pledges = {
+      "fs:read",
+      "load",
+    },
     returns = {
       {
         type = "function|nil",
@@ -3469,9 +3541,9 @@ Dynamically loads C library `libname`. If `funcname` is `"*"`, links the library
   ["package.path"] = {
     children = {},
     description = [[
-The source-module templates used by `require`. Defaults put `.lus` and `init.lus` before the matching `.lua` compatibility templates within each directory. The directories are `share/lus/1.7`, `lib/lus/1.7`, `share/lua/1.7`, `lib/lua/1.7`, then the current directory.
+The source-module templates used by `require`. The default is `./?.lus;./?/init.lus;./?.lua;./?/init.lua`, which searches the current directory and puts `.lus` and `init.lus` before the matching `.lua` compatibility templates.
 
-The standalone interpreter derives the prefix from an archive when its executable is under `bin`, then falls back to its configured installation prefix. Embedded states use the prefix configured when `liblus` was built. `LUA_PATH_1_7` takes priority over `LUA_PATH`, and `;;` inserts the defaults at that position.]],
+When the environment variable `LUS_PATH` is set, its value becomes the initial `package.path`. The `-E` option ignores it. Programs that ship their modules together use `--include` or `lus build`, which make the modules available to `require` from any directory.]],
     kind = "variable",
     module = "package",
     name = "package.path",
@@ -3501,7 +3573,7 @@ A table to store loaders for specific modules.]],
   ["package.searchers"] = {
     children = {},
     description = [[
-A table holding the sequence of searcher functions used by `require`. The default order is `package.preload`, launch-time preincluded modules, standalone bundled modules, source modules from `package.path`, native modules from `package.cpath`, then native root loaders.]],
+A table holding the sequence of searcher functions used by `require`. The default order is `package.preload`, modules preincluded with `--include`, modules bundled by `lus build`, source modules from `package.path`, and two searchers over `package.cpath` that report native modules as unavailable.]],
     kind = "variable",
     module = "package",
     name = "package.searchers",
@@ -3681,6 +3753,49 @@ end
     since = "1.7.0",
     source = "stdlib/base/query.md",
     stability = "unstable",
+  },
+  ["range"] = {
+    children = {},
+    description = [[
+Returns an iterator over the numbers from `start` to `limit` inclusive, advancing by `step`, which defaults to 1. With a single argument, `range(n)` counts from 1 to `n`. A negative `step` counts down. A `step` of zero raises an error.
+
+```lus
+for i in range(1, 5) do print(i) end          --> 1 2 3 4 5
+for i in range(10, 1, -3) do print(i) end     --> 10 7 4 1
+for i in range(3) do print(i) end             --> 1 2 3
+```
+
+When a `for` loop calls `range` directly, the compiler emits the same numeric loop as `for i = start, limit, step`. Anywhere else, `range` returns an ordinary iterator function, state, and control value that any generic `for` can consume.]],
+    kind = "function",
+    module = "base",
+    name = "range",
+    origin = "lus",
+    params = {
+      {
+        name = "start",
+        type = "number",
+      },
+      {
+        name = "limit",
+        optional = true,
+        type = "number",
+      },
+      {
+        name = "step",
+        optional = true,
+        type = "number",
+      },
+    },
+    parent = nil,
+    returns = {
+      {
+        type = "function",
+      },
+    },
+    short_name = "range",
+    since = "2.0.0",
+    source = "stdlib/base/range.md",
+    stability = "stable",
   },
   ["rawequal"] = {
     children = {},
@@ -3921,7 +4036,7 @@ Sets the metatable of table `t` to `metatable`. If `metatable` is `nil`, removes
   ["string.byte"] = {
     children = {},
     description = [[
-Return the byte values of characters `s[i]` through `s[j]`. Defaults to `i = 1` and `j = i`.]],
+Return the code points of the characters `s[i]` through `s[j]`. Defaults to `i = 1` and `j = i`. Positions count characters, so `string.byte("é")` is 233. The bytes of a string are available through `vector.fromstring`.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -3957,7 +4072,7 @@ Return the byte values of characters `s[i]` through `s[j]`. Defaults to `i = 1` 
   ["string.char"] = {
     children = {},
     description = [[
-Return a string of characters from the given byte values.]],
+Return a string built from the given code points, one character per argument. Each argument is an integer from 0 to 0x10FFFF. Lone surrogate code points are accepted and kept as WTF-8.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -3979,7 +4094,13 @@ Return a string of characters from the given byte values.]],
   ["string.dump"] = {
     children = {},
     description = [[
-Returns a binary string containing a serialized representation of `function`, so that a compatible later `load` returns a copy of the function. If `strip` is true, debug information is omitted.
+Returns a vector containing a serialized representation of `function`, so that a compatible later `load` returns a copy of the function. If `strip` is true, debug information is omitted. A function with native code, such as `print`, raises an error.
+
+```lus
+local chunk = string.dump(function(a) return a * 2 end)
+local double = load(chunk, "double", "b")
+print(double(21))   --> 42
+```
 
 The result is a version-dependent runtime artifact for trusted storage and distribution. It can include captured bytecode structure. Accept text-only source with `load` mode `"t"` when input crosses an untrusted boundary.]],
     kind = "function",
@@ -4000,7 +4121,7 @@ The result is a version-dependent runtime artifact for trusted storage and distr
     parent = "string",
     returns = {
       {
-        type = "string",
+        type = "vector",
       },
     },
     short_name = "dump",
@@ -4011,7 +4132,7 @@ The result is a version-dependent runtime artifact for trusted storage and distr
   ["string.find"] = {
     children = {},
     description = [[
-Look for the first match of `pattern` in string `s`. Returns the start and end indices of the match, plus any captures. Returns `nil` if no match is found. If `init` is given, the search starts at that position. If `plain` is true, performs a plain substring search with no pattern matching.]],
+Look for the first match of `pattern` in string `s`. Returns the start and end character positions of the match, plus any captures. Returns `nil` if no match is found. If `init` is given, the search starts at that character position. If `plain` is true, performs a plain substring search with no pattern matching. Patterns match whole characters, so `.` matches one character and a set such as `[éà]` may hold any characters.]],
     kind = "function",
     module = "string",
     name = "string.find",
@@ -4076,7 +4197,7 @@ Return a formatted string following the description in `formatstring`, which fol
   ["string.gmatch"] = {
     children = {},
     description = [[
-Return an iterator function that, each time it is called, returns the next captures from `pattern` in string `s`. If `pattern` has no captures, the whole match is returned. If `init` is given, the search starts at that position.]],
+Return an iterator function that, each time it is called, returns the next captures from `pattern` in string `s`. If `pattern` has no captures, the whole match is returned. If `init` is given, the search starts at that character position. Patterns match whole characters.]],
     kind = "function",
     module = "string",
     name = "string.gmatch",
@@ -4110,7 +4231,7 @@ Return an iterator function that, each time it is called, returns the next captu
   ["string.gsub"] = {
     children = {},
     description = [[
-Return a copy of `s` where all (or the first `n`) occurrences of `pattern` are replaced by `repl`. The replacement `repl` can be a string, table, or function. Also returns the total number of substitutions as a second value.]],
+Return a copy of `s` where all (or the first `n`) occurrences of `pattern` are replaced by `repl`. The replacement `repl` can be a string, table, or function. Also returns the total number of substitutions as a second value. Patterns match whole characters, so a replacement never splits a multi-byte character.]],
     kind = "function",
     module = "string",
     name = "string.gsub",
@@ -4178,7 +4299,7 @@ Joins elements of table `t` into a single string with `delimiter` between each e
   ["string.len"] = {
     children = {},
     description = [[
-Return the length of string `s` in bytes.]],
+Return the length of string `s` in characters. A character is one Unicode code point, so `string.len("héllo")` is 5. The `#` operator returns the same value.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -4204,7 +4325,7 @@ Return the length of string `s` in bytes.]],
   ["string.lower"] = {
     children = {},
     description = [[
-Return a copy of `s` with all uppercase letters changed to lowercase, according to the current locale.]],
+Return a copy of `s` with the ASCII letters `A` through `Z` changed to lowercase. Every other character is unchanged.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -4261,7 +4382,7 @@ Removes leading characters from string `s`. If `chars` is not provided, removes 
   ["string.match"] = {
     children = {},
     description = [[
-Look for the first match of `pattern` in string `s`. Returns the captures from the match, or the whole match if there are no captures. Returns `nil` if no match is found.]],
+Look for the first match of `pattern` in string `s`. Returns the captures from the match, or the whole match if there are no captures. Returns `nil` if no match is found. If `init` is given, the search starts at that character position. Position captures `()` return character positions.]],
     kind = "function",
     module = "string",
     name = "string.match",
@@ -4295,7 +4416,7 @@ Look for the first match of `pattern` in string `s`. Returns the captures from t
   ["string.pack"] = {
     children = {},
     description = [[
-Return a binary string containing the values packed according to format string `fmt`. See `string.unpack` for format codes.]],
+Return a vector containing the values packed according to format string `fmt`. Packed data is raw bytes, so the result is a vector. See `string.unpack` for format codes, and `vector.tostring` to decode packed text.]],
     kind = "function",
     module = "string",
     name = "string.pack",
@@ -4309,7 +4430,7 @@ Return a binary string containing the values packed according to format string `
     parent = "string",
     returns = {
       {
-        type = "string",
+        type = "vector",
       },
     },
     short_name = "pack",
@@ -4321,7 +4442,7 @@ Return a binary string containing the values packed according to format string `
   ["string.packsize"] = {
     children = {},
     description = [[
-Return the size of the string that would result from `string.pack` with format `fmt`. The format must not contain variable-length options.]],
+Return the size in bytes of the vector that `string.pack` produces with format `fmt`. The format must not contain variable-length options.]],
     kind = "function",
     module = "string",
     name = "string.packsize",
@@ -4380,7 +4501,7 @@ Return a string consisting of `n` copies of `s`, separated by `sep` (empty strin
   ["string.reverse"] = {
     children = {},
     description = [[
-Return a string with the bytes of `s` in reverse order.]],
+Return a string with the characters of `s` in reverse order.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -4467,7 +4588,7 @@ Splits string `s` on the literal `delimiter`, returning a table of substrings. A
   ["string.sub"] = {
     children = {},
     description = [[
-Return the substring of `s` from position `i` to `j` (inclusive). Negative indices count from the end of the string. Default for `j` is `-1` (end of string).]],
+Return the substring of `s` from character position `i` to `j` (inclusive). Negative indices count from the end of the string. Default for `j` is `-1` (end of string). Positions count characters, so `string.sub("héllo", 2, 2)` is `"é"`.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -4502,15 +4623,25 @@ Return the substring of `s` from position `i` to `j` (inclusive). Negative indic
   ["string.transcode"] = {
     children = {},
     description = [[
-Transcodes string `s` from encoding `from` to encoding `to`. Supported encodings depend on the platform.]],
+Converts `input` from encoding `from` to encoding `to`. The input may be a string or a vector. The result is a vector when `to` is a byte encoding and a string when `to` is a text encoding.
+
+The byte encodings are `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` (also `"latin1"` and `"latin-1"`), and `"binary"`, which stands for the raw bytes. The text encodings are `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"url"`, and `"hex"`. Decoding `"base64"`, `"url"`, or `"hex"` input yields its raw bytes, which are then converted to `to`.
+
+Invalid input, and a character that the target encoding cannot represent, raise an error that names the position. When `ignorebad` is true, such sequences and characters are skipped.
+
+```lus
+local bytes = string.transcode("hé", "utf-8", "utf-16le")   -- a vector of 4 bytes
+local text = string.transcode(bytes, "utf-16le", "utf-8")   -- "hé"
+local b64 = string.transcode("hi", "utf-8", "base64")       -- "aGk="
+```]],
     kind = "function",
     module = "string",
     name = "string.transcode",
     origin = "lus",
     params = {
       {
-        name = "s",
-        type = "string",
+        name = "input",
+        type = "string|vector",
       },
       {
         name = "from",
@@ -4520,11 +4651,16 @@ Transcodes string `s` from encoding `from` to encoding `to`. Supported encodings
         name = "to",
         type = "string",
       },
+      {
+        name = "ignorebad",
+        optional = true,
+        type = "boolean",
+      },
     },
     parent = "string",
     returns = {
       {
-        type = "string",
+        type = "string|vector",
       },
     },
     short_name = "transcode",
@@ -4566,7 +4702,7 @@ Removes leading and trailing characters from string `s`. If `chars` is not provi
   ["string.unpack"] = {
     children = {},
     description = [[
-Return the values packed in string `s` according to format `fmt`, starting at position `pos` (default 1). Also returns the position after the last read byte.]],
+Return the values packed in `data` according to format `fmt`, starting at byte position `pos` (default 1). `data` is usually the vector that `string.pack` returned. A string is read through its WTF-8 bytes. Also returns the position after the last read byte.]],
     kind = "function",
     module = "string",
     name = "string.unpack",
@@ -4577,8 +4713,8 @@ Return the values packed in string `s` according to format `fmt`, starting at po
         type = "string",
       },
       {
-        name = "s",
-        type = "string",
+        name = "data",
+        type = "vector|string",
       },
       {
         name = "pos",
@@ -4600,7 +4736,7 @@ Return the values packed in string `s` according to format `fmt`, starting at po
   ["string.upper"] = {
     children = {},
     description = [[
-Return a copy of `s` with all lowercase letters changed to uppercase, according to the current locale.]],
+Return a copy of `s` with the ASCII letters `a` through `z` changed to uppercase. Every other character is unchanged.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -5399,7 +5535,7 @@ Returns the server's bound numeric address and port. Use it after binding to por
   ["tcp_socket:receive"] = {
     children = {},
     description = [[
-Receives data from a TCP socket. A positive integer pattern reads that many bytes, with a maximum size of 1 MiB. The default pattern is `"*l"`, which reads a line and removes its trailing LF and optional CR. `"*a"` reads through EOF.
+Receives data from a TCP socket and returns it as a vector. A positive integer pattern reads that many bytes, with a maximum size of 1 MiB. The default pattern is `"*l"`, which reads a line and removes its trailing LF and optional CR. `"*a"` reads through EOF.
 
 The optional positive `max_bytes` applies to `"*l"` and `"*a"`. Lines default to a 1 MiB limit and all-data reads default to 64 MiB. Exceeding either limit closes the socket and raises `"receive limit exceeded"`.]],
     kind = "function",
@@ -5422,7 +5558,7 @@ The optional positive `max_bytes` applies to `"*l"` and `"*a"`. Lines default to
     receiver = "tcp_socket",
     returns = {
       {
-        type = "string",
+        type = "vector",
       },
     },
     short_name = "receive",
@@ -5998,7 +6134,7 @@ Converts a Lus value to JSON. A table whose complete key set is the contiguous i
 
 The optional `filter` is called first with `nil, value` for the root, then with integer array keys or string object keys. Its returned value is serialized recursively, and returning `nil` omits a field or produces `null` at the root. A table's `__json` metamethod can return any serializable replacement value.
 
-Non-finite numbers become `null`. Functions, threads, userdata, vectors, and enum values become `null` at the root or in arrays and are omitted from objects. Shared acyclic tables are serialized by value. Cycles raise errors. Serialization enforces a 1,000-level nesting ceiling and follows the interpreter's C-call limit, which can raise a C stack overflow first for deeply nested tables.]],
+Bigints and decimals serialize with their exact digits. Non-finite numbers become `null`. Functions, threads, userdata, vectors, and enum values become `null` at the root or in arrays and are omitted from objects. Shared acyclic tables are serialized by value. Cycles raise errors. Serialization enforces a 1,000-level nesting ceiling and follows the interpreter's C-call limit, which can raise a C stack overflow first for deeply nested tables.]],
     kind = "function",
     module = "base",
     name = "tojson",
@@ -6028,7 +6164,9 @@ Non-finite numbers become `null`. Functions, threads, userdata, vectors, and enu
   ["tonumber"] = {
     children = {},
     description = [[
-Converts `e` to a number. If `e` is already a number, returns it. If `e` is a string, tries to parse it as a numeral. If `e` is an enum value, returns its 1-based index. The optional `base` accepts an integer from 2 through 36 and specifies the base for string conversion. Returns `nil` on failure.]],
+Converts `e` to a number. Integers and floats are returned unchanged. A bigint or a decimal converts to the nearest float, which makes `tonumber` the explicit way to mix an exact number with float arithmetic. If `e` is a string, tries to parse it as a numeral, and a numeral that overflows 64 bits becomes a float. If `e` is an enum value, returns its 1-based index. The optional `base` accepts an integer from 2 through 36 and specifies the base for string conversion, in which case `e` must be a string. Returns `nil` on failure.
+
+The functions `bigint` and `decimal` convert strings to exact numbers.]],
     fastcall = true,
     kind = "function",
     module = "base",
@@ -6059,7 +6197,7 @@ Converts `e` to a number. If `e` is already a number, returns it. If `e` is a st
   ["tostring"] = {
     children = {},
     description = [[
-Converts `v` to a human-readable string. If `v` has a `__tostring` metamethod, calls it with `v` as argument and returns the result.]],
+Converts `v` to a human-readable string. If `v` has a `__tostring` metamethod, calls it with `v` as argument and returns the result. A bigint prints in decimal without its `n` suffix, and a decimal prints exactly its stored digits, so `tostring(1.50d)` is `"1.50"`.]],
     fastcall = true,
     kind = "function",
     module = "base",
@@ -6150,7 +6288,7 @@ Returns the UDP socket's local numeric address and port. Use it after binding to
   ["udp_socket:receive"] = {
     children = {},
     description = [[
-Receives one datagram and returns its data together with the sender's numeric address and port. `size` defaults to 8 KiB and accepts values through 1 MiB.]],
+Receives one datagram and returns its data as a vector together with the sender's numeric address and port. `size` defaults to 8 KiB and accepts values through 1 MiB.]],
     kind = "function",
     module = "network.udp",
     name = "udp_socket:receive",
@@ -6167,7 +6305,7 @@ Receives one datagram and returns its data together with the sender's numeric ad
     returns = {
       {
         name = "data",
-        type = "string",
+        type = "vector",
       },
       {
         name = "address",
@@ -6202,7 +6340,7 @@ Receives one datagram and returns its data together with the sender's numeric ad
   ["utf8.char"] = {
     children = {},
     description = [[
-Return a string containing the UTF-8 encoding of the given codepoints.]],
+Return a string containing the given code points, one character per argument. Code points up to U+10FFFF are accepted, including surrogates. An adjacent lead and trail surrogate join into one supplementary character, as concatenation does.]],
     fastcall = true,
     kind = "function",
     module = "utf8",
@@ -6224,7 +6362,7 @@ Return a string containing the UTF-8 encoding of the given codepoints.]],
   ["utf8.charpattern"] = {
     children = {},
     description = [[
-The pattern which matches exactly one UTF-8 byte sequence.]],
+The pattern that matches exactly one character. Patterns match whole characters, so its value is `"."`.]],
     kind = "constant",
     module = "utf8",
     name = "utf8.charpattern",
@@ -6239,7 +6377,7 @@ The pattern which matches exactly one UTF-8 byte sequence.]],
   ["utf8.codepoint"] = {
     children = {},
     description = [[
-Return the codepoints of all characters in `s` from position `i` to `j` (default `i = 1`, `j = i`).]],
+Return the code points of all characters in `s` from character position `i` to `j` (default `i = 1`, `j = i`). A lone surrogate raises an error unless `lax` is true.]],
     fastcall = true,
     kind = "function",
     module = "utf8",
@@ -6260,6 +6398,11 @@ Return the codepoints of all characters in `s` from position `i` to `j` (default
         optional = true,
         type = "integer",
       },
+      {
+        name = "lax",
+        optional = true,
+        type = "boolean",
+      },
     },
     parent = "utf8",
     returns = {
@@ -6275,7 +6418,7 @@ Return the codepoints of all characters in `s` from position `i` to `j` (default
   ["utf8.codes"] = {
     children = {},
     description = [[
-Return an iterator function that traverses `s`, returning the byte position and codepoint of each UTF-8 character.]],
+Return an iterator function that traverses `s`, returning the character position and code point of each character. Positions count characters, like every string position.]],
     kind = "function",
     module = "utf8",
     name = "utf8.codes",
@@ -6300,7 +6443,7 @@ Return an iterator function that traverses `s`, returning the byte position and 
   ["utf8.len"] = {
     children = {},
     description = [[
-Return the number of UTF-8 characters in `s` from position `i` to `j`. Returns `nil` plus the position of the first invalid byte on failure.]],
+Return the number of characters in `s` from character position `i` to `j`, so `utf8.len(s)` equals `#s`. A lone surrogate is invalid unless `lax` is true, and on failure the function returns `nil` plus the position of that character.]],
     fastcall = true,
     kind = "function",
     module = "utf8",
@@ -6321,6 +6464,11 @@ Return the number of UTF-8 characters in `s` from position `i` to `j`. Returns `
         optional = true,
         type = "integer",
       },
+      {
+        name = "lax",
+        optional = true,
+        type = "boolean",
+      },
     },
     parent = "utf8",
     returns = {
@@ -6336,7 +6484,7 @@ Return the number of UTF-8 characters in `s` from position `i` to `j`. Returns `
   ["utf8.offset"] = {
     children = {},
     description = [[
-Return the byte position of the `n`-th UTF-8 character, counting from byte position `i` (default 1 for positive `n`, `#s + 1` for non-positive).]],
+Return the character position of the `n`-th character, counting from character position `i` (default 1 for positive `n`, `#s + 1` for non-positive). Each character occupies exactly one position, so the result is plain position arithmetic checked against the bounds of `s`.]],
     fastcall = true,
     kind = "function",
     module = "utf8",
@@ -6373,9 +6521,13 @@ Return the byte position of the `n`-th UTF-8 character, counting from byte posit
       "vector.archive",
       "vector.clone",
       "vector.create",
+      "vector.fromstring",
+      "vector.get",
       "vector.pack",
       "vector.resize",
+      "vector.set",
       "vector.size",
+      "vector.tostring",
       "vector.unpack",
       "vector.unpackmany",
     },
@@ -6416,7 +6568,7 @@ Return the byte position of the `n`-th UTF-8 character, counting from byte posit
   ["vector.archive.brotli.compress"] = {
     children = {},
     description = [[
-Compresses `data` using Brotli format (RFC 7932). The optional `quality` (0-11, default 11) controls compression quality. The optional `lgwin` (10-24, default 22) sets the LZ77 window size. Returns the same type as the input.]],
+Compresses `data` using Brotli format (RFC 7932). The optional `quality` (0-11, default 11) controls compression quality. The optional `lgwin` (10-24, default 22) sets the LZ77 window size. Accepts a string or a vector and returns the compressed bytes as a vector.]],
     kind = "function",
     module = "vector.archive.brotli",
     name = "vector.archive.brotli.compress",
@@ -6440,7 +6592,7 @@ Compresses `data` using Brotli format (RFC 7932). The optional `quality` (0-11, 
     parent = "vector.archive.brotli",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "compress",
@@ -6451,7 +6603,7 @@ Compresses `data` using Brotli format (RFC 7932). The optional `quality` (0-11, 
   ["vector.archive.brotli.decompress"] = {
     children = {},
     description = [[
-Decompresses Brotli-compressed `data`. Returns the same type as the input.]],
+Decompresses Brotli-compressed `data`. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.]],
     kind = "function",
     module = "vector.archive.brotli",
     name = "vector.archive.brotli.decompress",
@@ -6459,13 +6611,13 @@ Decompresses Brotli-compressed `data`. Returns the same type as the input.]],
     params = {
       {
         name = "data",
-        type = "string|vector",
+        type = "vector|string",
       },
     },
     parent = "vector.archive.brotli",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "decompress",
@@ -6488,7 +6640,7 @@ Decompresses Brotli-compressed `data`. Returns the same type as the input.]],
   ["vector.archive.deflate.compress"] = {
     children = {},
     description = [[
-Compresses `data` using raw deflate format (RFC 1951) without headers. The optional `level` (0-9, default 6) controls the compression ratio. Returns the same type as the input.]],
+Compresses `data` using raw deflate format (RFC 1951) without headers. The optional `level` (0-9, default 6) controls the compression ratio. Accepts a string or a vector and returns the compressed bytes as a vector.]],
     kind = "function",
     module = "vector.archive.deflate",
     name = "vector.archive.deflate.compress",
@@ -6507,7 +6659,7 @@ Compresses `data` using raw deflate format (RFC 1951) without headers. The optio
     parent = "vector.archive.deflate",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "compress",
@@ -6518,7 +6670,7 @@ Compresses `data` using raw deflate format (RFC 1951) without headers. The optio
   ["vector.archive.deflate.decompress"] = {
     children = {},
     description = [[
-Decompresses raw deflate-compressed `data`. No header or checksum validation is performed. Returns the same type as the input.]],
+Decompresses raw deflate-compressed `data`. No header or checksum validation is performed. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.]],
     kind = "function",
     module = "vector.archive.deflate",
     name = "vector.archive.deflate.decompress",
@@ -6526,13 +6678,13 @@ Decompresses raw deflate-compressed `data`. No header or checksum validation is 
     params = {
       {
         name = "data",
-        type = "string|vector",
+        type = "vector|string",
       },
     },
     parent = "vector.archive.deflate",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "decompress",
@@ -6555,7 +6707,7 @@ Decompresses raw deflate-compressed `data`. No header or checksum validation is 
   ["vector.archive.gzip.compress"] = {
     children = {},
     description = [[
-Compresses `data` using gzip format. The optional `level` (0-9, default 6) controls the compression ratio. Returns the same type as the input.]],
+Compresses `data` using gzip format. The optional `level` (0-9, default 6) controls the compression ratio. Accepts a string or a vector and returns the compressed bytes as a vector.]],
     kind = "function",
     module = "vector.archive.gzip",
     name = "vector.archive.gzip.compress",
@@ -6574,7 +6726,7 @@ Compresses `data` using gzip format. The optional `level` (0-9, default 6) contr
     parent = "vector.archive.gzip",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "compress",
@@ -6585,7 +6737,7 @@ Compresses `data` using gzip format. The optional `level` (0-9, default 6) contr
   ["vector.archive.gzip.decompress"] = {
     children = {},
     description = [[
-Decompresses gzip-compressed `data`. Validates the gzip header and CRC32 checksum. Returns the same type as the input.]],
+Decompresses gzip-compressed `data`. Validates the gzip header and CRC32 checksum. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.]],
     kind = "function",
     module = "vector.archive.gzip",
     name = "vector.archive.gzip.decompress",
@@ -6593,13 +6745,13 @@ Decompresses gzip-compressed `data`. Validates the gzip header and CRC32 checksu
     params = {
       {
         name = "data",
-        type = "string|vector",
+        type = "vector|string",
       },
     },
     parent = "vector.archive.gzip",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "decompress",
@@ -6623,7 +6775,7 @@ Decompresses gzip-compressed `data`. Validates the gzip header and CRC32 checksu
   ["vector.archive.lz4.compress"] = {
     children = {},
     description = [[
-Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1) controls the speed-ratio trade-off. Returns the same type as the input.]],
+Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1) controls the speed-ratio trade-off. Accepts a string or a vector and returns the compressed bytes as a vector.]],
     kind = "function",
     module = "vector.archive.lz4",
     name = "vector.archive.lz4.compress",
@@ -6642,7 +6794,7 @@ Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1)
     parent = "vector.archive.lz4",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "compress",
@@ -6653,7 +6805,7 @@ Compresses `data` using LZ4 frame format. The optional `level` (1-12, default 1)
   ["vector.archive.lz4.decompress"] = {
     children = {},
     description = [[
-Decompresses LZ4 frame-compressed `data`. Validates the frame header and optional checksum. Returns the same type as the input.]],
+Decompresses LZ4 frame-compressed `data`. Validates the frame header and optional checksum. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.]],
     kind = "function",
     module = "vector.archive.lz4",
     name = "vector.archive.lz4.decompress",
@@ -6661,13 +6813,13 @@ Decompresses LZ4 frame-compressed `data`. Validates the frame header and optiona
     params = {
       {
         name = "data",
-        type = "string|vector",
+        type = "vector|string",
       },
     },
     parent = "vector.archive.lz4",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "decompress",
@@ -6678,7 +6830,7 @@ Decompresses LZ4 frame-compressed `data`. Validates the frame header and optiona
   ["vector.archive.lz4.decompress_hc"] = {
     children = {},
     description = [[
-Decompresses `data` written in the legacy LZ4 frame format, identified by the magic number `0x184C2102`. Older LZ4 tools produced this format, so `decompress_hc` reads archives written by them. New code should compress with `compress` and decompress with `decompress`, which use the current LZ4 frame format. Returns the same type as the input.]],
+Decompresses `data` written in the legacy LZ4 frame format, identified by the magic number `0x184C2102`. Older LZ4 tools produced this format, so `decompress_hc` reads archives written by them. New code should compress with `compress` and decompress with `decompress`, which use the current LZ4 frame format. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.]],
     kind = "function",
     module = "vector.archive.lz4",
     name = "vector.archive.lz4.decompress_hc",
@@ -6686,13 +6838,13 @@ Decompresses `data` written in the legacy LZ4 frame format, identified by the ma
     params = {
       {
         name = "data",
-        type = "string|vector",
+        type = "vector|string",
       },
     },
     parent = "vector.archive.lz4",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "decompress_hc",
@@ -6715,7 +6867,7 @@ Decompresses `data` written in the legacy LZ4 frame format, identified by the ma
   ["vector.archive.zstd.compress"] = {
     children = {},
     description = [[
-Compresses `data` using Zstandard format (RFC 8878). The optional `level` (-7 to 22, default 3) controls the speed-ratio trade-off. Returns the same type as the input.]],
+Compresses `data` using Zstandard format (RFC 8878). The optional `level` (-7 to 22, default 3) controls the speed-ratio trade-off. Accepts a string or a vector and returns the compressed bytes as a vector.]],
     kind = "function",
     module = "vector.archive.zstd",
     name = "vector.archive.zstd.compress",
@@ -6734,7 +6886,7 @@ Compresses `data` using Zstandard format (RFC 8878). The optional `level` (-7 to
     parent = "vector.archive.zstd",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "compress",
@@ -6745,7 +6897,7 @@ Compresses `data` using Zstandard format (RFC 8878). The optional `level` (-7 to
   ["vector.archive.zstd.decompress"] = {
     children = {},
     description = [[
-Decompresses Zstandard-compressed `data`. Validates the frame header and optional content checksum. Returns the same type as the input.]],
+Decompresses Zstandard-compressed `data`. Validates the frame header and optional content checksum. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.]],
     kind = "function",
     module = "vector.archive.zstd",
     name = "vector.archive.zstd.decompress",
@@ -6753,13 +6905,13 @@ Decompresses Zstandard-compressed `data`. Validates the frame header and optiona
     params = {
       {
         name = "data",
-        type = "string|vector",
+        type = "vector|string",
       },
     },
     parent = "vector.archive.zstd",
     returns = {
       {
-        type = "string|vector",
+        type = "vector",
       },
     },
     short_name = "decompress",
@@ -6796,11 +6948,11 @@ Creates a copy of the vector `v`.]],
   ["vector.create"] = {
     children = {},
     description = [[
-Creates a new vector with the given `capacity` in bytes. If `fast` is true, the buffer is not zero-initialized (faster but contents are undefined).
+Creates a new vector of `capacity` bytes, all set to zero. The optional `fast` flag is accepted and every vector starts zeroed regardless.
 
 ```lus
-local v = vector.create(1024)        -- zero-initialized
-local v = vector.create(1024, true)  -- fast, uninitialized
+local v = vector.create(1024)
+print(#v, vector.get(v, 0))   --> 1024  0
 ```]],
     fastcall = true,
     kind = "function",
@@ -6827,6 +6979,65 @@ local v = vector.create(1024, true)  -- fast, uninitialized
     short_name = "create",
     since = "0.1.0",
     source = "stdlib/vector/create.md",
+    stability = "stable",
+  },
+  ["vector.fromstring"] = {
+    children = {},
+    description = [[
+Returns a new vector holding the WTF-8 bytes of the string `s`. Given a vector, it returns a copy. String functions work in characters, and this function is how a program reaches the bytes of a string.
+
+```lus
+local v = vector.fromstring("héllo")
+print(#v, vector.get(v, 1))   --> 6  195
+```]],
+    kind = "function",
+    module = "vector",
+    name = "vector.fromstring",
+    origin = "lus",
+    params = {
+      {
+        name = "s",
+        type = "string|vector",
+      },
+    },
+    parent = "vector",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "fromstring",
+    since = "2.0.0",
+    source = "stdlib/vector/fromstring.md",
+    stability = "stable",
+  },
+  ["vector.get"] = {
+    children = {},
+    description = [[
+Returns the byte at the zero-based `offset` of `v` as an integer from 0 to 255, or `nil` when `offset` lies outside the vector.]],
+    kind = "function",
+    module = "vector",
+    name = "vector.get",
+    origin = "lus",
+    params = {
+      {
+        name = "v",
+        type = "vector",
+      },
+      {
+        name = "offset",
+        type = "integer",
+      },
+    },
+    parent = "vector",
+    returns = {
+      {
+        type = "integer|nil",
+      },
+    },
+    short_name = "get",
+    since = "2.0.0",
+    source = "stdlib/vector/get.md",
     stability = "stable",
   },
   ["vector.pack"] = {
@@ -6890,6 +7101,35 @@ Resizes the vector to `newsize` bytes. New bytes are zero-initialized. Existing 
     source = "stdlib/vector/resize.md",
     stability = "stable",
   },
+  ["vector.set"] = {
+    children = {},
+    description = [[
+Stores `byte`, an integer from 0 to 255, at the zero-based `offset` of `v`. An offset outside the vector or a value outside the byte range raises an error. `vector.resize` grows a vector before a write past its end.]],
+    kind = "function",
+    module = "vector",
+    name = "vector.set",
+    origin = "lus",
+    params = {
+      {
+        name = "v",
+        type = "vector",
+      },
+      {
+        name = "offset",
+        type = "integer",
+      },
+      {
+        name = "byte",
+        type = "integer",
+      },
+    },
+    parent = "vector",
+    returns = {},
+    short_name = "set",
+    since = "2.0.0",
+    source = "stdlib/vector/set.md",
+    stability = "stable",
+  },
   ["vector.size"] = {
     children = {},
     description = [[
@@ -6914,6 +7154,55 @@ Returns the size of the vector in bytes. Equivalent to `#v`.]],
     short_name = "size",
     since = "0.1.0",
     source = "stdlib/vector/size.md",
+    stability = "stable",
+  },
+  ["vector.tostring"] = {
+    children = {},
+    description = [[
+Decodes bytes of `v` as text and returns the string. Offsets are zero based, like every vector offset. `i` is the first byte to decode and defaults to 0. `j` is the offset just past the last byte and defaults to the size of the vector. Both are clamped to the vector.
+
+With `mode` set to `"strict"`, the default, input that is not valid WTF-8 raises an error naming the byte offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD.
+
+```lus
+local v = vector.fromstring("héllo")
+print(vector.tostring(v))                 --> héllo
+print(vector.tostring(v, 0, 1))           --> h
+print(vector.tostring(v, 0, 2, "lossy"))  --> h�
+```]],
+    kind = "function",
+    module = "vector",
+    name = "vector.tostring",
+    origin = "lus",
+    params = {
+      {
+        name = "v",
+        type = "vector",
+      },
+      {
+        name = "i",
+        optional = true,
+        type = "integer",
+      },
+      {
+        name = "j",
+        optional = true,
+        type = "integer",
+      },
+      {
+        name = "mode",
+        optional = true,
+        type = "string",
+      },
+    },
+    parent = "vector",
+    returns = {
+      {
+        type = "string",
+      },
+    },
+    short_name = "tostring",
+    since = "2.0.0",
+    source = "stdlib/vector/tostring.md",
     stability = "stable",
   },
   ["vector.unpack"] = {

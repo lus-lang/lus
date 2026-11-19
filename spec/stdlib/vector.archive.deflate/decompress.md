@@ -7,8 +7,8 @@ stability: stable
 origin: lus
 params:
   - name: data
-    type: string|vector
-returns: string|vector
+    type: vector|string
+returns: vector
 ---
 
-Decompresses raw deflate-compressed `data`. No header or checksum validation is performed. Returns the same type as the input.
+Decompresses raw deflate-compressed `data`. No header or checksum validation is performed. Accepts a vector or a string and returns the decompressed bytes as a vector. A program that compressed text decodes the result with `vector.tostring`.

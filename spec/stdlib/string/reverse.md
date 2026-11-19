@@ -12,4 +12,4 @@ params:
 returns: string
 ---
 
-Return a string with the bytes of `s` in reverse order.
+Return a string with the characters of `s` in reverse order.

@@ -12,4 +12,4 @@ params:
 returns: string
 ---
 
-Return a copy of `s` with all lowercase letters changed to uppercase, according to the current locale.
+Return a copy of `s` with the ASCII letters `a` through `z` changed to uppercase. Every other character is unchanged.

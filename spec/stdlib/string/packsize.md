@@ -11,4 +11,4 @@ params:
 returns: integer
 ---
 
-Return the size of the string that would result from `string.pack` with format `fmt`. The format must not contain variable-length options.
+Return the size in bytes of the vector that `string.pack` produces with format `fmt`. The format must not contain variable-length options.

@@ -15,9 +15,9 @@ params:
 returns: vector
 ---
 
-Creates a new vector with the given `capacity` in bytes. If `fast` is true, the buffer is not zero-initialized (faster but contents are undefined).
+Creates a new vector of `capacity` bytes, all set to zero. The optional `fast` flag is accepted and every vector starts zeroed regardless.
 
 ```lus
-local v = vector.create(1024)        -- zero-initialized
-local v = vector.create(1024, true)  -- fast, uninitialized
+local v = vector.create(1024)
+print(#v, vector.get(v, 0))   --> 1024  0
 ```
