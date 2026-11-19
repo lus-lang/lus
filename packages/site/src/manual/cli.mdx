@@ -3,85 +3,146 @@ order: 4
 title: CLI
 icon: terminal
 group: use
-shortdesc: "Every lus and lusc command-line option, plus the format subcommand."
+shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, and debug."
 ---
 
 ## lus
 
 ```
-lus [command] [options] [script [args]]
+lus [options] [script [args]]
+lus <command> [arguments]
 ```
 
-Two commands exist, and `run` is implied when none is given.
+The `lus` executable runs scripts and carries the tools of a Lus project as commands. With no command, or with `run`, it runs a script.
 
-| Command  | Purpose                     |
-| -------- | --------------------------- |
-| `run`    | Run a Lus script (default). |
-| `format` | Format Lus source files.    |
+| Command | Purpose |
+| --- | --- |
+| `run` | Run a Lus script (the default). |
+| `test` | Run tests: functions ending in `_test` in `*_test.lus` files. |
+| `fmt` | Format source files. |
+| `check` | Check source files for errors and lint warnings. |
+| `doc` | Generate API documentation from doc comments. |
+| `ast` | Print the syntax tree of a file as JSON. |
+| `build` | Bundle a script into a standalone executable. |
+| `debug` | Run a script under the Debug Adapter Protocol. |
 
 ### Options
 
-| Option                   | Effect                                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-e stat`                | Execute the string `stat`.                                                                                                                 |
-| `-i`                     | Enter interactive mode after executing `script`.                                                                                           |
-| `-l mod`                 | Require library `mod` into global `mod`.                                                                                                   |
-| `-l g=mod`               | Require library `mod` into global `g`.                                                                                                     |
-| `-v`                     | Show version information.                                                                                                                  |
-| `-E`                     | Ignore environment variables.                                                                                                              |
-| `-W`                     | Turn warnings on.                                                                                                                          |
-| `-Wpedantic`             | Turn on [pedantic warnings](/manual/acquis-14), which flag superseded Lua idioms.                                                          |
-| `-P perm`                | Grant a [permission](/manual/acquis-10) (e.g. `-Pfs:read`, `-Pnetwork`).                                                                   |
-| `--pledge perm`          | Same as `-P`.                                                                                                                              |
-| `-F name[=value]`        | Define a readonly [compile-time flag](/manual/acquis-28): no value means `true`, a numeric value is a number, anything else is a string.   |
-| `--flag name[=value]`    | Same as `-F`.                                                                                                                              |
-| `--ast-graph file`       | Dump the [AST](/manual/acquis-12) to a `.dot` file (does not run the script).                                                              |
-| `--ast-json file`        | Dump the [AST](/manual/acquis-12) to a JSON file (does not run the script).                                                                |
-| `--standalone file`      | Create a [standalone executable](/manual/acquis-19) from the script.                                                                       |
-| `--include path[:alias]` | [Preinclude](/manual/acquis-29) a module so `require` finds it without load or fs pledges. With `--standalone`, also bundle it.            |
-| `--no-fastcall`          | Disable [fastcall](/manual/acquis-27) optimizations.                                                                                       |
-| `--readonly-env`         | Freeze `_ENV` after init (enables fast dispatch).                                                                                          |
-| `--gc-pause N`           | GC pause: the heap may grow to N% of its live size before a new collection cycle (default 250, lower trades CPU for lower peak memory).    |
-| `--strip-debug`          | Drop debug info (line numbers, local/upvalue names, source) from loaded code to save memory. Tracebacks and the debug library lose detail. |
-| `--`                     | Stop handling options.                                                                                                                     |
-| `-`                      | Stop handling options and execute stdin.                                                                                                   |
+| Option | Effect |
+| --- | --- |
+| `-e stat` | Execute the string `stat`. |
+| `-i` | Enter interactive mode after executing `script`. |
+| `-l mod` | Require library `mod` into global `mod`. |
+| `-l g=mod` | Require library `mod` into global `g`. |
+| `-v`, `--version` | Show version information. |
+| `-E` | Ignore environment variables such as `LUS_PATH`. |
+| `-W` | Turn warnings on. |
+| `-P perm`, `--pledge perm` | Grant a [permission](/manual/acquis-10), such as `-Pfs:read` or `-Pnetwork`. |
+| `-F name[=value]`, `--flag name[=value]` | Define a readonly [compile-time flag](/manual/acquis-28). No value means `true`, a numeric value is a number, and anything else is a string. |
+| `--include path[:alias]` | [Preinclude](/manual/acquis-29) a module file or directory so `require` finds it without `load` or `fs` permissions. |
+| `--readonly-env` | Freeze `_ENV` and the module tables after startup. |
+| `--gc-pause N` | Let the heap grow by N percent of its live size before a collection starts. Lower values trade CPU for lower peak memory. |
+| `--dis` | Print the bytecode of the script instead of running it. |
+| `--` | Stop handling options. |
+| `-` | Stop handling options and execute standard input. |
 
-## lus format
+## lus test
 
 ```
-lus format [options] [file ...]
+lus test [options] [path ...]
 ```
 
-With no `--write` or `--check`, formatted output is printed to stdout.
+Runs the tests in the named files, or in every `*_test.lus` file below the named directories, the current directory by default. Each file runs in its own process and temporary directory, and files run in parallel. [Acquis 38](/manual/acquis-38) describes how to write tests.
 
-| Option       | Effect                                        |
-| ------------ | --------------------------------------------- |
-| `--check`    | Check if files are formatted (exit 1 if not). |
-| `--write`    | Format files in-place.                        |
-| `--stdin`    | Read from stdin, write to stdout.             |
-| `--indent N` | Set indent width (default: 4).                |
-| `--help`     | Show help.                                    |
+| Option | Effect |
+| --- | --- |
+| `-v` | List skipped tests and the output of passing files too. |
+| `--filter TEXT` | Run only the tests whose names contain `TEXT`. |
+| `-u`, `--update` | Rewrite snapshots that no longer match. |
+| `--json` | Print one JSON record per test. |
+| `--jobs N` | Run at most N files at once (default: the number of processors). |
+| `--timeout S` | Stop a file after S seconds (default: 60). |
 
-## lusc
-
-The bytecode compiler ships as its own binary. It compiles `.lus` sources to bytecode loadable by the interpreter and `liblus`.
+## lus fmt
 
 ```
-lusc [options] [filenames]
+lus fmt [--check] [--write] [--indent N] [file ...]
 ```
 
-| Option          | Effect                                          |
-| --------------- | ----------------------------------------------- |
-| `-f`            | Emit [fastcall](/manual/acquis-27) opcodes.     |
-| `-l`            | List bytecode (use `-l -l` for a full listing). |
-| `-o name`       | Output to file `name` (default `luac.out`).     |
-| `-p`            | Parse only.                                     |
-| `-s`            | Strip debug information.                        |
-| `-v`            | Show version information.                       |
-| `--no-fastcall` | Disable fastcall opcodes (overrides `-f`).      |
-| `--`            | Stop handling options.                          |
-| `-`             | Stop handling options and process stdin.        |
+Prints the formatted text of each file to standard output. With no file, or with the file `-`, it reads standard input.
 
-Bytecode is a version-dependent runtime artifact for trusted build pipelines. Use text-only loading mode for source received across an untrusted boundary.
+| Option | Effect |
+| --- | --- |
+| `--check` | Change nothing and list the files that are not formatted (exit 1 if any). |
+| `--write` | Rewrite the files in place. |
+| `--indent N` | Spaces per indentation level (default: 4). |
 
-Building the binaries themselves is covered in [Compiling Lus](/manual/compiling).
+## lus check
+
+```
+lus check [--json] [--list] [file ...]
+```
+
+Parses, lints, and compiles each file without running it and prints each problem as `file:line:column: severity: message [code]`. The exit status is 1 when anything is reported.
+
+| Option | Effect |
+| --- | --- |
+| `--json` | Print the diagnostics as one JSON array. |
+| `--list` | Print every diagnostic code with its severity and summary. |
+
+## lus doc
+
+```
+lus doc [-o DIR] [--format md|json] file ...
+```
+
+Generates reference documentation from `---` doc comments, one module per file.
+
+| Option | Effect |
+| --- | --- |
+| `-o DIR` | Write one file per module into `DIR` instead of standard output. |
+| `--format md\|json` | Output format (default: `md`). |
+
+## lus ast
+
+```
+lus ast [--no-comments] [--no-recover] file
+```
+
+Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/manual/acquis-12) returns.
+
+| Option | Effect |
+| --- | --- |
+| `--no-comments` | Leave comments out of the tree. |
+| `--no-recover` | Stop at the first syntax error. |
+
+## lus build
+
+```
+lus build [options] script
+```
+
+Bundles a script and every module it requires by a literal name into a standalone executable. [Acquis 39](/manual/acquis-39) describes the bundle.
+
+| Option | Effect |
+| --- | --- |
+| `-o FILE` | Write the executable to `FILE` (default: the script name without its extension). |
+| `-P perm`, `--pledge perm` | Grant a permission every time the program runs. |
+| `-F name[=value]`, `--flag name[=value]` | Define a compile-time flag. |
+| `--include path[:alias]` | Bundle a module file or directory even when no literal `require` names it. |
+
+## lus debug
+
+```
+lus debug [--stdio | --port N] [-P perm]... [script [args]]
+```
+
+Runs a script under the Debug Adapter Protocol for editors such as VS Code. [Acquis 40](/manual/acquis-40) describes the debugger.
+
+| Option | Effect |
+| --- | --- |
+| `--stdio` | Speak the protocol on standard input and output (the default). |
+| `--port N` | Accept one client on `127.0.0.1:N`. |
+| `-P perm`, `--pledge perm` | Grant a permission to the program. |
+
+Building the executable itself is covered in [Compiling Lus](/manual/compiling).

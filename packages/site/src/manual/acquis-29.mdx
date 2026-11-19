@@ -6,6 +6,8 @@ shortdesc: "The --include flag parses modules at startup so require loads them w
 draft: true
 ---
 
+> In Lus 2.0, `--include` works as described here, and `lus build --include` bundles modules into a standalone executable. The module loads from memory through the preinclusion searcher.
+
 _Preinclusion_ is a redesign of `--include` that compiles Lus dependencies ahead of time. Each `--include` argument is parsed when the interpreter starts, and the resulting module loader is stored inside the interpreter state. `require` then resolves preincluded modules from memory, **without needing `load` or `fs` pledges**.
 
 This replaces the legacy `--include` behavior, which was only meaningful together with `--standalone`. That combination is unchanged: with `--standalone`, `--include` still bundles the module into the produced executable.

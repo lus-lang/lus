@@ -4,22 +4,42 @@ title: "Coming from Lua"
 draft: false
 icon: arrow-right-left
 group: learn
-shortdesc: "What changes coming from Lua 5.5, and how -Wpedantic walks old code forward."
+shortdesc: "What changes coming from Lua 5.5, and how lus check walks old code forward."
 ---
 
-While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus. Enabling `-Wpedantic` during development will catch many of these automatically.
+While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus. Running `lus check` over your code catches many of these automatically.
 
 This page is a concise migration reference. For full details on each feature, follow the links to the [Guide](/manual/guide) and the relevant Acquis pages.
 
-## Use of `-Wpedantic`
+## Use of `lus check`
 
-Using the `-Wpedantic` flag during development identifies Lua idioms with direct Lus forms. It generates an AST for each chunk and analyzes it at compile time, so development and migration builds are its intended setting. Production builds can omit the extra processor and memory cost.
+`lus check` reads source files without running them and reports compile errors, likely mistakes, and Lua idioms that have a direct Lus form, such as calls to `pcall`, fields copied one by one where `from` destructuring fits, and nested nil checks that optional chaining expresses. Each diagnostic carries a stable code, and `lus check --list` prints them all.
 
 ```bash
-lus -Wpedantic myscript.lus
+lus check myscript.lus
 ```
 
-See [Acquis 14](/manual/acquis-14) for the full list of diagnostics produced by `-Wpedantic`.
+See [Acquis 39](/manual/acquis-39) for the checker and the other developer tools.
+
+## Strings, bytes, and numbers
+
+Lus strings hold text. Every string is well formed WTF-8, and `#s`, `string.sub`, `string.byte`, `string.find`, and the other string functions count characters, so `#"héllo"` is 5. Raw bytes live in vectors: binary file reads, network reads, `string.pack`, the compressors, and `string.dump` produce vectors, and `vector.fromstring` and `vector.tostring` convert between the two. Code that treated strings as byte arrays moves that work to vectors. See [Acquis 37](/manual/acquis-37).
+
+Integers and floats behave as in Lua. Lus adds two exact subtypes of `number`: bigints, written `123n`, and decimals, written `1.50d`. See [Acquis 36](/manual/acquis-36).
+
+## Removed functions
+
+A few Lua functions have Lus counterparts that replace them.
+
+| Lua | Lus |
+| --- | --- |
+| `pcall(f, ...)`, `xpcall(f, h, ...)` | `catch f(...)` and `catch[h] f(...)` |
+| `os.remove(path)` | `fs.remove(path)` |
+| `os.rename(from, to)` | `fs.move(from, to)` |
+| C modules loaded with `require` or `package.loadlib` | Native functions registered by a host through the [embedding API](/manual/acquis-41) |
+| `LUA_INIT`, `LUA_PATH` | `-e` or `-l` on the command line, and `LUS_PATH` |
+
+`continue` is a reserved word in Lus, so Lua code that uses it as a variable name or a `goto` label renames it. The Lus `continue` statement usually replaces such a label. See [Acquis 35](/manual/acquis-35).
 
 ## Permissions ("pledging")
 
@@ -196,7 +216,7 @@ See [Variable attributes](/manual/guide#variable-attributes) and [Acquis 22](/ma
 
 ## Vectors
 
-Vectors are mutable, fixed-size byte buffers for efficient binary data manipulation. They use `string.pack`/`string.unpack` format strings.
+Vectors are mutable byte buffers, and they are the type of every piece of raw binary data. They use `string.pack`/`string.unpack` format strings, and their offsets are zero based.
 
 ```lus
 local v = vector.create(1024)
@@ -247,7 +267,7 @@ See [Networking](/manual/guide#networking) and [Acquis 9](/manual/acquis-9).
 `string.transcode` converts strings between character encodings.
 
 ```lus
-local utf16 = string.transcode(data, "utf-8", "utf-16")
+local utf16 = string.transcode(data, "utf-8", "utf-16le")  -- a vector
 ```
 
 See [Acquis 8](/manual/acquis-8).
@@ -267,21 +287,24 @@ See [Workers](/manual/guide#workers) and [Acquis 11](/manual/acquis-11).
 
 ## AST access
 
-Lus exposes its parser for programmatic access. `debug.parse(code)` returns the AST as a Lus table. The CLI also provides `--ast-json` and `--ast-graph` flags for dumping the AST of a file.
+Lus exposes its parser for programmatic access. `debug.parse(code)` returns the AST as a Lus table, and `lus ast` prints the AST of a file as JSON.
 
 ```bash
-lus --ast-json myscript.lus
-lus --ast-graph myscript.lus
+lus ast myscript.lus
 ```
 
 See [Acquis 12](/manual/acquis-12).
 
 ## Standalone binaries
 
-Lus can bundle scripts and their dependencies into standalone executables with `--standalone`. Use `--include` to add additional files or directories to the bundle.
+Lus can bundle scripts and their dependencies into standalone executables with `lus build`. Use `--include` to add additional files or directories to the bundle.
 
 ```bash
-lus --standalone app.lus --include lib/
+lus build -o app app.lus --include lib/
 ```
 
-See [Search paths](/manual/guide#search-paths) and [Acquis 19](/manual/acquis-19).
+See [Search paths](/manual/guide#search-paths) and [Acquis 39](/manual/acquis-39).
+
+## Testing
+
+`lus test` runs the functions ending in `_test` in every `*_test.lus` file, with no framework to install. See [Acquis 38](/manual/acquis-38).

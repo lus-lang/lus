@@ -5,6 +5,8 @@ acquis: true
 shortdesc: "The --readonly-env flag freezes _ENV and module tables, enabling fast-dispatch fastcalls."
 ---
 
+> In Lus 2.0, `--readonly-env` freezes `_ENV` and the module tables after startup exactly as described here. Every builtin is written once, and the interpreter's quickened instructions take the place of the separate fastcall dispatch.
+
 The `--readonly-env` flag freezes the global environment (`_ENV`) and all standard library module tables after initialization. This guarantees that no stdlib function can be replaced at runtime, allowing the VM to skip function-pointer validation on fastcalls and dispatch directly.
 
 ## Usage

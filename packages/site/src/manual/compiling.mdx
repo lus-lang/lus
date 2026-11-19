@@ -3,105 +3,74 @@ order: 6
 title: Compiling Lus
 icon: hammer
 group: use
-shortdesc: "Build the interpreter, compiler, and library from source with Meson."
+shortdesc: "Build the interpreter, the embedding library, and the WebAssembly module from source with Zig."
 ---
 
-Compiling Lus is a straightforward process. The build produces three artifacts: the `lus` interpreter, the `lusc` bytecode compiler, and `liblus` (a static library for embedding).
+The Lus runtime is written in Zig and builds with the Zig compiler alone. The build produces the `lus` executable, the `liblus` embedding library with its header `lus.h`, and the `lus.wasm` WebAssembly module. SQLite, Zstandard, and Brotli are compiled from source as part of the build, so no system libraries are required.
 
 You will need the following tools to compile the runtime:
 
 - The Lus source code, which can be downloaded from its [repository](https://github.com/lus-lang/lus).
-- A C compiler ([gcc](https://gcc.gnu.org/) or [clang](https://clang.llvm.org/) recommended).
-- The [Meson build system](https://mesonbuild.com/).
-- OpenSSL development libraries (for HTTPS support)
-- c-ares development libraries (for async DNS)
-- Compression libraries: zlib, zstd, brotli, and lz4 (for `vector.archive`)
-- A threading library. Pthreads is included by default on most systems.
-- readline (macOS) or libedit (FreeBSD/NetBSD/OpenBSD) for the REPL
-
-### Installing Dependencies
-
-```bash
-# macOS (Homebrew)
-brew install openssl c-ares zstd brotli lz4
-
-# Ubuntu/Debian
-sudo apt install libssl-dev libc-ares-dev zlib1g-dev libzstd-dev libbrotli-dev liblz4-dev
-
-# Fedora/RHEL
-sudo dnf install openssl-devel c-ares-devel zlib-devel libzstd-devel brotli-devel lz4-devel
-
-# FreeBSD/NetBSD/OpenBSD
-pkg install openssl c-ares libedit zstd brotli liblz4
-
-# Arch Linux
-sudo pacman -S openssl c-ares zlib zstd brotli lz4
-
-# Windows (vcpkg)
-vcpkg install openssl c-ares zlib zstd brotli lz4
-```
+- [Zig](https://ziglang.org/download/) 0.17.1. The repository pins it in `mise.toml`, so `mise install` provides the right version.
+- Network access on the first build, which fetches the pinned Zstandard and Brotli sources listed in `runtime/build.zig.zon`.
 
 ## Building
 
 ```bash
 git clone https://github.com/lus-lang/lus.git
-cd lus/lus
-meson setup build
-meson compile -C build
+cd lus/runtime
+zig build -Doptimize=ReleaseSafe
 ```
 
-The `lus` interpreter and `lusc` compiler will be placed in the `build` directory. The `lusc` compiler precompiles Lus source files to bytecode.
+The `lus` executable is placed in `zig-out/bin`. `ReleaseSafe` keeps the runtime's safety checks while optimizing, which is the recommended mode for running programs. `-Doptimize=ReleaseFast` drops the checks for extra speed. Debug builds work but run slowly, because the debug allocator records a stack trace for every allocation.
 
-Compiled bytecode is tied to the producing Lus version and platform. It is a trusted build artifact. Applications that accept source from an untrusted party should use the text-only `"t"` mode of `load` or `loadfile`.
+### Optional libraries
 
-### Build types
+Four libraries can be left out of a build. Each defaults to included, and a library left out is never registered and its code is compiled out.
 
-```bash
-meson setup build --buildtype=release
-```
-
-The default build already enables `-O2` and LTO. The `release` buildtype additionally disables assertions via `-DNDEBUG`.
+| Option | Library |
+| --- | --- |
+| `-Dnet=false` | The `network` library. |
+| `-Dworkers=false` | The `worker` library. |
+| `-Dsqlite=false` | `io.sqlite`. |
+| `-Darchive=false` | The `vector.archive` compression codecs. |
 
 ### Verification
 
 ```bash
-./build/lus -v
-meson test -C build
+./zig-out/bin/lus -v
+zig build test
 ```
 
-Tests are organized into four suites: **h1** (language integrity), **h2** (C API), **h3** (system integration), and **h4** (benchmarks). You can run a specific suite with:
-
-```bash
-meson test -C build --suite h1
-```
+`zig build test` runs the unit tests of the runtime. Further steps exercise the C embedding interface (`zig build test-embed`), standalone executables (`zig build test-bundle`), and the debugger (`zig build test-debug`, which needs Node). The conformance suite is written for `lus test`.
 
 ## Installation
 
-```bash
-sudo meson install -C build
-```
+Copy `zig-out/bin/lus` to a directory on your `PATH`:
 
-This installs the `lus` and `lusc` executables, headers, static libraries, and build metadata to the system prefix (typically `/usr/local`). Alternatively, copy the binaries manually:
-
-- On macOS and Linux, you can place them in the `/usr/local/bin` directory.
+- On macOS and Linux, you can place it in the `/usr/local/bin` directory.
 - On Windows, create a directory for Lus and add that directory to your user `PATH` through Windows Settings.
+
+The executable is self-contained. It carries the standard library, the IANA time zone database, and every tool described in the [CLI](/manual/cli) reference.
 
 ## Embedding Lus
 
-The SDK installs `lua.h`, `luaconf.h`, `lualib.h`, `lauxlib.h`, `lworkerlib.h`, `lua.hpp`, and the matching `sqlite3.h`. Unix archives carry `liblus.a` and the separate `libsqlite3.a`. Windows archives carry `lus.lib` and `sqlite3.lib`. Keeping SQLite in its own archive preserves the public `sqlite3*` embedding surface while allowing `liblus` to remain the language library.
-
-Static consumers also link OpenSSL, c-ares, zlib, zstd, brotli, lz4, the platform thread library, and applicable platform libraries. Use the archive's package metadata with static dependency expansion:
-
 ```bash
-pkg-config --cflags --libs --static lus
+zig build lib -Doptimize=ReleaseSafe
 ```
 
-Example compilation:
+This step writes the static library `liblus.a`, the shared `liblus`, and the header `lus.h` under `zig-out`. Each library carries the vendored C code, so a host links one file:
 
 ```bash
-gcc -o myapp myapp.c $(pkg-config --cflags --libs --static lus)
+cc -o myapp myapp.c -Izig-out/include zig-out/lib/liblus.a
 ```
 
-On Windows, `find_package(Lus CONFIG REQUIRED)` imports `Lus::lus`, its separate `Lus::sqlite3` dependency, and the external vcpkg dependencies recorded by the archive.
+[Embedding Lus](/manual/guide#embedding-lus) in the Guide introduces the interface, and [Acquis 41](/manual/acquis-41) documents it in full.
 
-See [C API error handling](/manual/guide#c-api-error-handling) in the Guide for details on using the C API.
+## WebAssembly
+
+```bash
+zig build wasm
+```
+
+This step writes `zig-out/wasm/lus.wasm`, a WASI module that exports the embedding interface. The `lus-wasm` package in `packages/wasm` runs it in browsers, web workers, and Node, as described in [Acquis 42](/manual/acquis-42).
