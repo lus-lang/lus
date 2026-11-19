@@ -507,6 +507,28 @@ for _, a in ipairs(args) do
 end
 ]==]
 
+-- Receives long strings and reports what string operations see in them.
+-- Strings over 64 bytes travel as shared blobs, so this checks that a
+-- shared string behaves as one built locally: as a table key, in
+-- comparisons, and through the string library. It then forwards each
+-- string back, so the parent receives blobs that crossed two heaps.
+scripts["sharedops"] = [==[
+local local_key = string.rep("k", 100)
+while true do
+    local s = worker.peek()
+    if s == false then break end
+    if type(s) == "table" then
+        local t = {}
+        t[local_key] = "found"
+        worker.message({t[s[1]], s[1] == s[2], #s[1], s[1]:sub(1, 3), s[3][s[1]]})
+        worker.message(s)
+    else
+        worker.message({#s, s:sub(-5), s:upper():sub(1, 5), s:find("needle", 1, true), utf8.len(s)})
+        worker.message(s)
+    end
+end
+]==]
+
 -- Create the scratch directory. If a previous run left it behind the call
 -- raises, which is harmless because the writes below still overwrite the
 -- stale scripts, so the failure is swallowed.
@@ -1131,6 +1153,76 @@ local function transports_a_large_payload_parent_to_worker_test()
     assert(msgs[1] == 300000)
     assert(msgs[2] == 11)
     assert(msgs[3] == "STOPPED")
+end
+
+-- A long string is sent as a shared blob. The worker sees the same length,
+-- characters, and contents, and the string it forwards back equals the
+-- original.
+local function shares_long_strings_with_a_worker_test()
+    local w = worker.create(gen("sharedops"))
+    local s = string.rep("abcdé", 40) .. "needle" .. string.rep("xyzŵ", 30) .. "tail!"
+    for _ = 1, 3 do
+        worker.send(w, s)
+        local info = worker.receive(w)
+        assert(info[1] == #s)
+        assert(info[2] == "tail!")
+        assert(info[3] == "ABCDé")
+        assert(info[4] == 201)
+        assert(info[5] == utf8.len(s))
+        local back = worker.receive(w)
+        assert(back == s)
+        assert(#back == #s)
+        local t = {[s] = 1}
+        assert(t[back] == 1)
+    end
+    worker.send(w, false)
+    drain(w)
+end
+
+-- Shared strings hash like local strings, so they find table entries in
+-- either direction, and repeated strings in one message stay equal.
+local function shared_strings_work_as_table_keys_test()
+    local w = worker.create(gen("sharedops"))
+    local k = string.rep("k", 100)
+    local msg = {k, k, {[k] = "inner"}}
+    for _ = 1, 3 do
+        worker.send(w, msg)
+        local info = worker.receive(w)
+        assert(info[1] == "found")
+        assert(info[2] == true)
+        assert(info[3] == 100)
+        assert(info[4] == "kkk")
+        assert(info[5] == "inner")
+        local back = worker.receive(w)
+        assert(back[1] == k and back[2] == k)
+        assert(back[3][k] == "inner")
+    end
+    worker.send(w, false)
+    drain(w)
+end
+
+-- Many shared strings die in both heaps while the worker keeps receiving
+-- them, and the strings that survive keep their contents. A string sent a
+-- second time travels as a blob, and the worker sends it back as one.
+local function shared_strings_survive_collections_test()
+    local w = worker.create(gen("sharedops"))
+    local keep = {}
+    for i = 1, 200 do
+        local s = string.format("%080d", i) .. string.rep("é", i % 7)
+        -- The second send of a string reuses the blob of the first.
+        for _ = 1, 2 do
+            worker.send(w, s)
+            worker.receive(w)
+            keep[i] = worker.receive(w)
+        end
+        if i % 50 == 0 then collectgarbage() end
+    end
+    collectgarbage()
+    for i = 1, 200 do
+        assert(keep[i] == string.format("%080d", i) .. string.rep("é", i % 7))
+    end
+    worker.send(w, false)
+    drain(w)
 end
 
 ------------------------------------------------------------------------------

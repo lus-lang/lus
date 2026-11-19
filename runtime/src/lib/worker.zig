@@ -8,6 +8,9 @@
 //! so shared references and cycles keep their shape. The receiver rebuilds
 //! the graph in its own heap. Vectors move instead of being copied: the
 //! sender's vector is detached and the receiver takes over its buffer.
+//! Strings longer than `blob.min_len` bytes travel as shared immutable
+//! blobs (`vm/blob.zig`), so the packet and the receiver refer to the
+//! sender's bytes instead of copying them.
 //!
 //! Each worker has two mailboxes. The inbox carries values from the
 //! creator to the worker and has a condition that `worker.peek` waits on.
@@ -30,6 +33,7 @@ const ops = @import("../vm/ops.zig");
 const gc = @import("../vm/gc.zig");
 const numeric = @import("../vm/numeric.zig");
 const pledge = @import("../vm/pledge.zig");
+const blob = @import("../vm/blob.zig");
 const api = @import("../api.zig");
 const aux = @import("aux.zig");
 const out = @import("out.zig");
@@ -58,6 +62,7 @@ const Item = union(enum) {
     int: i64,
     float: f64,
     string: Str,
+    shared: Shared,
     bigint: Big,
     decimal: Dec,
     table: u32,
@@ -65,22 +70,26 @@ const Item = union(enum) {
 };
 
 const Str = struct { bytes: []const u8, ascii: bool, chars: u32 };
+/// A string carried as a blob: an index into the blobs of the packet.
+const Shared = struct { index: u32, ascii: bool, chars: u32 };
 const Big = struct { limbs: []const std.math.big.Limb, positive: bool };
 const Dec = struct { limbs: []const std.math.big.Limb, positive: bool, exponent: i32 };
 const Pair = struct { key: Item, val: Item };
 
-/// One message in transit. Everything except the vector buffers lives in
-/// the arena. The buffers belong to the packet until the receiver adopts
-/// them.
+/// One message in transit. Everything except the vector buffers and the
+/// blobs lives in the arena. The buffers belong to the packet until the
+/// receiver adopts them, and the packet holds one reference to each blob.
 const Packet = struct {
     arena: std.heap.ArenaAllocator,
     root: Item = .nil,
     tables: []const []const Pair = &.{},
     vectors: []std.ArrayList(u8) = &.{},
+    blobs: []const *blob.Blob = &.{},
     next: ?*Packet = null,
 
     fn destroy(p: *Packet, gpa: Allocator) void {
         for (p.vectors) |*v| v.deinit(gpa);
+        for (p.blobs) |b| b.release();
         p.arena.deinit();
         gpa.destroy(p);
     }
@@ -93,12 +102,27 @@ const Encoder = struct {
     seen: std.AutoHashMapUnmanaged(*Table, u32) = .empty,
     vectors: std.ArrayList(*Vector) = .empty,
     seen_vectors: std.AutoHashMapUnmanaged(*Vector, u32) = .empty,
+    /// The blobs of the message, one reference for each string that
+    /// refers to one, held until the packet takes them over.
+    blobs: std.ArrayList(*blob.Blob) = .empty,
 
     fn deinit(e: *Encoder) void {
         const gpa = e.l.g.parent_gpa;
         e.seen.deinit(gpa);
         e.vectors.deinit(gpa);
         e.seen_vectors.deinit(gpa);
+        for (e.blobs.items) |b| b.release();
+        e.blobs.deinit(gpa);
+    }
+
+    /// The index of the blob of `s` in the message, or null when the
+    /// message copies the bytes of `s`.
+    fn blobIndex(e: *Encoder, s: *String) Error!?u32 {
+        const l = e.l;
+        e.blobs.ensureUnusedCapacity(l.g.parent_gpa, 1) catch return l.raiseMem();
+        const b = (blob.acquire(l.g, s) catch return l.raiseMem()) orelse return null;
+        e.blobs.appendAssumeCapacity(b);
+        return @intCast(e.blobs.items.len - 1);
     }
 
     fn item(e: *Encoder, v: Value, depth: u32) Error!Item {
@@ -111,6 +135,7 @@ const Encoder = struct {
             .float => .{ .float = v.asFloat() },
             .string => blk: {
                 const s = v.as(String);
+                if (s.len > blob.min_len) if (try e.blobIndex(s)) |i| break :blk .{ .shared = .{ .index = i, .ascii = s.flags.ascii, .chars = s.chars } };
                 const bytes = e.arena.dupe(u8, s.bytes()) catch return l.raiseMem();
                 break :blk .{ .string = .{ .bytes = bytes, .ascii = s.flags.ascii, .chars = s.chars } };
             },
@@ -182,6 +207,8 @@ fn encode(l: *Thread, v: Value) Error!*Packet {
         vec.detached = true;
     }
     p.vectors = vecs;
+    p.blobs = p.arena.allocator().dupe(*blob.Blob, e.blobs.items) catch return l.raiseMem();
+    e.blobs.clearRetainingCapacity();
     return p;
 }
 
@@ -224,6 +251,7 @@ const Decoder = struct {
             .string => |s| Value.obj(.string, state.newStringKnown(g, s.bytes, s.ascii, s.chars) catch return l.raiseMem()),
             .bigint => |b| Value.obj(.bigint, numeric.newBigFromConst(g, .{ .limbs = b.limbs, .positive = b.positive }) catch return l.raiseMem()),
             .decimal => |dc| Value.obj(.decimal, numeric.newDecFromConst(g, .{ .limbs = dc.limbs, .positive = dc.positive }, dc.exponent) catch return l.raiseMem()),
+            .shared => |s| Value.obj(.string, blob.newString(g, d.p.blobs[s.index], s.ascii, s.chars) catch return l.raiseMem()),
             .table => |i| Value.obj(.table, d.tabs[i]),
             .vector => |i| blk: {
                 if (d.vecs[i] == null) d.vecs[i] = try vector.newVectorFrom(l, &d.p.vectors[i]);
@@ -294,6 +322,8 @@ const Worker = struct {
     warn_on: bool = false,
     env_frozen: bool = false,
     pause: usize = 200,
+    /// The hash seed of the creator, so strings keep their hashes.
+    seed: u64 = 0,
 
     // Owned by the creator's thread.
     thread: ?std.Thread = null,
@@ -463,7 +493,7 @@ fn run(w: *Worker, msg: *?[]u8) void {
             if (m.* == null) m.* = a.dupe(u8, "worker error") catch null;
         }
     }.f;
-    const l = api.newState(gpa, io) catch return fail(msg, gpa, "failed to create worker state");
+    const l = api.newStateSeeded(gpa, io, w.seed) catch return fail(msg, gpa, "failed to create worker state");
     const g = l.g;
     defer {
         out.deinit(g);
@@ -626,6 +656,7 @@ fn create(l: *Thread) Error!u32 {
     w.warn_on = g.warn_on;
     w.env_frozen = g.env_frozen;
     w.pause = g.pause;
+    w.seed = g.seed;
 
     // The handle, rooted on the stack before the thread starts.
     const u = gc.alloc(g, Userdata, .userdata, Userdata.allocSize(@sizeOf(?*Worker), 0)) catch return l.raiseMem();

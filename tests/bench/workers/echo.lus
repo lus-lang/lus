@@ -1,0 +1,6 @@
+-- Replies to every message with its length until it receives false.
+while true do
+    local m = worker.peek()
+    if m == false then break end
+    worker.message(#m)
+end

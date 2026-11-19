@@ -7,6 +7,7 @@ const gc = @import("gc.zig");
 const wtf8 = @import("wtf8.zig");
 const Value = value.Value;
 const Header = gc.Header;
+const Blob = @import("blob.zig").Blob;
 
 // ---------------------------------------------------------------------
 // Strings
@@ -24,22 +25,52 @@ pub const String = struct {
     pub const Flags = packed struct(u8) {
         ascii: bool = false,
         interned: bool = false,
-        _pad: u6 = 0,
+        /// The cell holds a pointer to a shared blob in place of the
+        /// bytes (`blob.zig`).
+        shared: bool = false,
+        /// The string keeps its own bytes and has a blob in the cache of
+        /// its heap, made when it was first sent to a worker.
+        cached: bool = false,
+        /// The string was sent to a worker once without being cached.
+        sent: bool = false,
+        _pad: u3 = 0,
     };
 
     pub const short_max = 40;
     pub const crumb_step = 64;
+    /// The cell size of a shared string.
+    pub const shared_size = @sizeOf(String) + @sizeOf(*Blob);
 
     pub inline fn bytes(s: *const String) []const u8 {
+        if (s.flags.shared) {
+            @branchHint(.unlikely);
+            return s.blob().bytes();
+        }
         const base: [*]const u8 = @ptrCast(s);
         return (base + @sizeOf(String))[0..s.len];
     }
     pub inline fn bytesMut(s: *String) []u8 {
+        std.debug.assert(!s.flags.shared);
         const base: [*]u8 = @ptrCast(s);
         return (base + @sizeOf(String))[0..s.len];
     }
     pub inline fn allocSize(len: usize) usize {
         return @sizeOf(String) + len + 1;
+    }
+    /// The size of the cell of `s`.
+    pub inline fn cellSize(s: *const String) usize {
+        return if (s.flags.shared) shared_size else allocSize(s.len);
+    }
+    /// The blob of a shared string.
+    pub inline fn blob(s: *const String) *Blob {
+        const base: [*]const u8 = @ptrCast(s);
+        const slot: *const *Blob = @ptrCast(@alignCast(base + @sizeOf(String)));
+        return slot.*;
+    }
+    pub inline fn setBlob(s: *String, b: *Blob) void {
+        const base: [*]u8 = @ptrCast(s);
+        const slot: **Blob = @ptrCast(@alignCast(base + @sizeOf(String)));
+        slot.* = b;
     }
 
     /// Byte offset of the character at zero-based index `ci`. `ci` may equal
