@@ -30,6 +30,51 @@ pub fn build(b: *std.Build) void {
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
+
+    // The C embedding library: `liblus.a`, the shared `liblus`, and the
+    // header `lus.h`. Each library carries the vendored C code, so a host
+    // links one file.
+    const static_lib = embedLibrary(b, target, optimize, .static);
+    const shared_lib = embedLibrary(b, target, optimize, .dynamic);
+    const lib_step = b.step("lib", "Build the C embedding libraries and install lus.h");
+    const header = b.addInstallHeaderFile(b.path("include/lus.h"), "lus.h");
+    lib_step.dependOn(&b.addInstallArtifact(static_lib, .{}).step);
+    lib_step.dependOn(&b.addInstallArtifact(shared_lib, .{}).step);
+    lib_step.dependOn(&header.step);
+
+    // Small C hosts that exercise every part of the embedding interface.
+    const embed_step = b.step("test-embed", "Build and run the C embedding tests");
+    const embed_tests = [_][]const u8{ "state", "values", "tables", "functions", "userdata", "errors", "pledge", "shared" };
+    for (embed_tests) |name| {
+        const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+        mod.addIncludePath(b.path("include"));
+        mod.addCSourceFile(.{
+            .file = b.path(b.fmt("../tests/embed/{s}.c", .{name})),
+            .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Werror" },
+        });
+        mod.linkLibrary(if (std.mem.eql(u8, name, "shared")) shared_lib else static_lib);
+        const exe_t = b.addExecutable(.{ .name = b.fmt("embed-{s}", .{name}), .root_module = mod });
+        const run_t = b.addRunArtifact(exe_t);
+        // The shared library is found through a path relative to the build
+        // root, so that test keeps the default working directory.
+        if (!std.mem.eql(u8, name, "shared")) run_t.setCwd(b.path("../tests/embed"));
+        run_t.expectExitCode(0);
+        embed_step.dependOn(&run_t.step);
+    }
+}
+
+/// The embedding library rooted at `src/capi.zig`. The vendored C sources
+/// are compiled into it, so the archive is self-contained.
+fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, linkage: std.builtin.LinkMode) *std.Build.Step.Compile {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/capi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+    });
+    mod.addImport("vendor", vendorModule(b, target));
+    return b.addLibrary(.{ .name = "lus", .linkage = linkage, .root_module = mod });
 }
 
 /// Builds the vendored Brotli and Zstandard C sources used by
@@ -44,13 +89,19 @@ fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Buil
             .target = target,
             .optimize = .ReleaseFast,
             .link_libc = true,
+            .pic = true,
         }),
     });
+    addCompressionSources(b, lib.root_module);
+    return lib;
+}
+
+fn addCompressionSources(b: *std.Build, mod: *std.Build.Module) void {
     const flags: []const []const u8 = &.{"-fno-sanitize=undefined"};
 
     const brotli = b.dependency("brotli", .{});
-    lib.root_module.addIncludePath(brotli.path("c/include"));
-    lib.root_module.addCSourceFiles(.{
+    mod.addIncludePath(brotli.path("c/include"));
+    mod.addCSourceFiles(.{
         .root = brotli.path("c"),
         .files = &.{
             "common/constants.c",         "common/context.c",
@@ -76,10 +127,10 @@ fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Buil
     // Zstandard builds without its x86 assembly decoder loop, so one
     // source list serves every target.
     const zstd = b.dependency("zstd", .{});
-    lib.root_module.addCMacro("ZSTD_DISABLE_ASM", "1");
-    lib.root_module.addCMacro("ZSTD_MULTITHREAD_SUPPORT_DEFAULT", "0");
-    lib.root_module.addIncludePath(zstd.path("lib"));
-    lib.root_module.addCSourceFiles(.{
+    mod.addCMacro("ZSTD_DISABLE_ASM", "1");
+    mod.addCMacro("ZSTD_MULTITHREAD_SUPPORT_DEFAULT", "0");
+    mod.addIncludePath(zstd.path("lib"));
+    mod.addCSourceFiles(.{
         .root = zstd.path("lib"),
         .files = &.{
             "common/debug.c",                      "common/entropy_common.c",
@@ -98,7 +149,6 @@ fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Buil
         },
         .flags = flags,
     });
-    return lib;
 }
 
 /// Flags for the embedded SQLite amalgamation (vendor/sqlite). Each
@@ -130,7 +180,22 @@ fn sqliteLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Ste
         .target = target,
         .optimize = .ReleaseFast,
         .link_libc = true,
+        .pic = true,
     });
     mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &sqlite_flags });
     return b.addLibrary(.{ .name = "sqlite3", .linkage = .static, .root_module = mod });
+}
+
+/// Every vendored C source in one optimized module. The embedding library
+/// imports it, so the C objects land inside `liblus.a` itself.
+fn vendorModule(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Module {
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+        .pic = true,
+    });
+    addCompressionSources(b, mod);
+    mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &sqlite_flags });
+    return mod;
 }
