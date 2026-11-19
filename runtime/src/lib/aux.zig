@@ -177,6 +177,9 @@ pub fn retFail(l: *Thread, msg: []const u8) Error!u32 {
 
 pub fn newLib(l: *Thread, funcs: []const Reg) Error!*Table {
     const t = try l.newTable(0, funcs.len);
+    // Keep the table rooted while the natives are allocated.
+    try l.push(Value.obj(.table, t));
+    defer l.top -= 1;
     try setFuncs(l, t, funcs);
     return t;
 }

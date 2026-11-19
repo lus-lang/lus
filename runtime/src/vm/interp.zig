@@ -254,7 +254,10 @@ pub fn unwindTo(l: *Thread, depth: usize) void {
 // The dispatch loop
 
 const Ctx = struct {
-    fr: *Frame,
+    /// Index of the running frame. Frames live in a growable list that a
+    /// re-entrant call can reallocate, so the interpreter never keeps a
+    /// pointer to a frame across an operation.
+    fi: usize,
     cl: *Closure,
     code: []u32,
     k: []Value,
@@ -264,7 +267,7 @@ const Ctx = struct {
 inline fn load(l: *Thread) Ctx {
     const fr = l.frame();
     const cl = fr.closure.?;
-    return .{ .fr = fr, .cl = cl, .code = cl.proto.code, .k = cl.proto.constants, .base = fr.base };
+    return .{ .fi = l.frames.items.len - 1, .cl = cl, .code = cl.proto.code, .k = cl.proto.constants, .base = fr.base };
 }
 
 /// Runs Lus frames until the frame count drops to `stop`.
@@ -315,7 +318,7 @@ fn handleError(l: *Thread, stop: usize) bool {
 
 fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
     var c = load(l);
-    var pc = c.fr.pc;
+    var pc = l.frames.items[c.fi].pc;
     const R = struct {
         inline fn reg(lp: *Thread, base: u32, i: u8) *Value {
             return &lp.stack[base + i];
@@ -324,7 +327,7 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
     while (true) {
         const ins = c.code[pc];
         pc += 1;
-        c.fr.pc = pc; // keep the frame pc current for errors and hooks
+        l.frames.items[c.fi].pc = pc; // keep the frame pc current for errors and hooks
         const ra = opc.a(ins);
         switch (opc.op(ins)) {
             .move => R.reg(l, c.base, ra).* = R.reg(l, c.base, opc.b(ins)).*,
@@ -347,7 +350,10 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             .gettabup => {
                 const t = c.cl.upvals()[opc.b(ins)].loc.*;
                 const key = c.k[opc.c(ins)];
-                R.reg(l, c.base, ra).* = try getStrFast(l, t, key);
+                {
+                    const v_ = try getStrFast(l, t, key);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .settabup => {
                 const t = c.cl.upvals()[ra].loc.*;
@@ -356,11 +362,17 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             .gettable => {
                 const t = R.reg(l, c.base, opc.b(ins)).*;
                 const key = R.reg(l, c.base, opc.c(ins)).*;
-                R.reg(l, c.base, ra).* = try getFast(l, t, key);
+                {
+                    const v_ = try getFast(l, t, key);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .getfield => {
                 const t = R.reg(l, c.base, opc.b(ins)).*;
-                R.reg(l, c.base, ra).* = try getStrFast(l, t, c.k[opc.c(ins)]);
+                {
+                    const v_ = try getStrFast(l, t, c.k[opc.c(ins)]);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .getindex => {
                 const t = R.reg(l, c.base, opc.b(ins)).*;
@@ -372,7 +384,10 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                         continue;
                     }
                 }
-                R.reg(l, c.base, ra).* = try ops.index(l, t, Value.int(i));
+                {
+                    const v_ = try ops.index(l, t, Value.int(i));
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .settable => {
                 const t = R.reg(l, c.base, ra).*;
@@ -395,7 +410,10 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             .self => {
                 const obj = R.reg(l, c.base, opc.b(ins)).*;
                 R.reg(l, c.base, ra + 1).* = obj;
-                R.reg(l, c.base, ra).* = try getStrFast(l, obj, c.k[opc.c(ins)]);
+                {
+                    const v_ = try getStrFast(l, obj, c.k[opc.c(ins)]);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
 
             .add => try arith2(l, c.base, ins, .add),
@@ -425,24 +443,32 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
                 } else if (x.tag == .float) {
                     R.reg(l, c.base, ra).* = Value.float(x.asFloat() + @as(f64, @floatFromInt(imm)));
                 } else {
-                    R.reg(l, c.base, ra).* = try ops.arith(l, .add, x, Value.int(imm));
+                    {
+                        const v_ = try ops.arith(l, .add, x, Value.int(imm));
+                        R.reg(l, c.base, ra).* = v_;
+                    }
                 }
             },
 
             .unm => {
                 const x = R.reg(l, c.base, opc.b(ins)).*;
-                R.reg(l, c.base, ra).* = switch (x.tag) {
+                const r = switch (x.tag) {
                     .integer => Value.int(0 -% x.asInt()),
                     .float => Value.float(-x.asFloat()),
                     else => try ops.arith(l, .unm, x, x),
                 };
+                R.reg(l, c.base, ra).* = r;
             },
             .bnot => {
                 const x = R.reg(l, c.base, opc.b(ins)).*;
-                R.reg(l, c.base, ra).* = if (x.tag == .integer) Value.int(~x.asInt()) else try ops.arith(l, .bnot, x, x);
+                const r = if (x.tag == .integer) Value.int(~x.asInt()) else try ops.arith(l, .bnot, x, x);
+                R.reg(l, c.base, ra).* = r;
             },
             .not => R.reg(l, c.base, ra).* = Value.boolean(!R.reg(l, c.base, opc.b(ins)).truthy()),
-            .len => R.reg(l, c.base, ra).* = try ops.length(l, R.reg(l, c.base, opc.b(ins)).*),
+            .len => {
+                const r = try ops.length(l, R.reg(l, c.base, opc.b(ins)).*);
+                R.reg(l, c.base, ra).* = r;
+            },
             .concat => {
                 const n = opc.b(ins);
                 const s = l.stack[c.base + ra .. c.base + ra + n];
@@ -451,7 +477,10 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             },
             .interp => {
                 const n = opc.b(ins);
-                R.reg(l, c.base, ra).* = try interpolate(l, c.base + ra, n);
+                {
+                    const v_ = try interpolate(l, c.base + ra, n);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
 
             .jmp => pc = @intCast(@as(i64, pc) + opc.sj(ins)),
@@ -641,8 +670,9 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
             },
             .vararg => {
                 const want: i32 = @as(i32, opc.c(ins)) - 1;
-                const nv = c.fr.nvarargs;
-                const src = c.fr.func - nv;
+                const vfr = l.frames.items[c.fi];
+                const nv = vfr.nvarargs;
+                const src = vfr.func - nv;
                 const dst = c.base + ra;
                 if (want < 0) {
                     try l.ensure(nv + 8);
@@ -664,13 +694,22 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
 
             .slice => {
                 const r = c.base + opc.b(ins);
-                R.reg(l, c.base, ra).* = try @import("ext.zig").slice(l, l.stack[r], l.stack[r + 1], l.stack[r + 2]);
+                {
+                    const v_ = try @import("ext.zig").slice(l, l.stack[r], l.stack[r + 1], l.stack[r + 2]);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .newenum => {
-                R.reg(l, c.base, ra).* = try @import("ext.zig").newEnum(l, c.k[opc.bx(ins)]);
+                {
+                    const v_ = try @import("ext.zig").newEnum(l, c.k[opc.bx(ins)]);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .query => {
-                R.reg(l, c.base, ra).* = try @import("ext.zig").newQuery(l, c.k[opc.bx(ins)], c.base + ra + 1);
+                {
+                    const v_ = try @import("ext.zig").newQuery(l, c.k[opc.bx(ins)], c.base + ra + 1);
+                    R.reg(l, c.base, ra).* = v_;
+                }
             },
             .globaldef => {
                 const env = c.cl.upvals()[ra].loc.*;
@@ -702,7 +741,8 @@ fn run(l: *Thread, stop: usize) (Error || YieldError)!void {
 /// Returns `n` values starting at `first` from the current frame. Returns
 /// true when the interpreter loop must exit.
 inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usize) Error!bool {
-    const fr = c.fr;
+    // Copy what is needed: __close handlers may reallocate the frames.
+    const fr = l.frames.items[c.fi];
     if (l.open_upvals) |u| {
         if (u.level >= fr.base) closeUpvals(l, fr.base);
     }
@@ -719,7 +759,7 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     _ = want;
     if (l.frame().closure == null) return true;
     c.* = load(l);
-    pc.* = c.fr.pc;
+    pc.* = l.frames.items[c.fi].pc;
     // Fixed result counts restore the caller's register window top.
     if (fr.want >= 0) l.top = c.base + c.cl.proto.max_stack;
     return false;
@@ -757,13 +797,15 @@ pub fn makeClosure(l: *Thread, p: *Proto, parent: *Closure, base: u32) Error!*Cl
 inline fn arith2(l: *Thread, base: u32, ins: u32, comptime op: ops.ArithOp) Error!void {
     const x = l.stack[base + opc.b(ins)];
     const y = l.stack[base + opc.c(ins)];
-    l.stack[base + opc.a(ins)] = try arithFast(l, op, x, y);
+    const r = try arithFast(l, op, x, y);
+    l.stack[base + opc.a(ins)] = r;
 }
 
 inline fn arithK(l: *Thread, c: Ctx, ins: u32, comptime op: ops.ArithOp) Error!void {
     const x = l.stack[c.base + opc.b(ins)];
     const y = c.k[opc.c(ins)];
-    l.stack[c.base + opc.a(ins)] = try arithFast(l, op, x, y);
+    const r = try arithFast(l, op, x, y);
+    l.stack[c.base + opc.a(ins)] = r;
 }
 
 inline fn arithFast(l: *Thread, comptime op: ops.ArithOp, x: Value, y: Value) Error!Value {
