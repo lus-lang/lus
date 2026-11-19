@@ -4,17 +4,18 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Repository Structure
 
-Monorepository for the Lus programming language (a Lua 5.5 derivative). Lus 2.0 is a ground-up rewrite in Zig, developed on the `rewrite` branch. The 1.7 C runtime is frozen under `legacy/` and tagged `v1.7-legacy`. It receives no feature work and serves only as the differential oracle for the rewrite. Key directories:
+Monorepository for the Lus programming language, a Lua 5.5 derivative. The runtime is written in Zig. Key directories:
 
-- **`/runtime`**: The Lus 2.0 runtime in Zig (created at milestone M1)
-- **`/legacy`**: Frozen 1.7 C runtime (`legacy/lus`), its four test harnesses (`legacy/lus-tests`), and its release tooling
-- **`/spec`**: Stdlib specification (YAML frontmatter `.md` files) and, from M1, design notes in `spec/design/`
+- **`/runtime`**: The runtime in Zig: front end, compiler, VM, GC, JIT tiers, standard library, C interface, and the `lus` command line tools. `runtime/HACKING.md` is the map of its sources.
+- **`/tests`**: Conformance tests (`tests/conformance/*_test.lus`), embedding tests for the C interface (`tests/embed`), tool tests (`tests/build`, `tests/check`, `tests/doc`, `tests/debug`), and benchmarks (`tests/bench`, never gating)
+- **`/spec`**: Stdlib specification (YAML frontmatter `.md` files) and design notes in `spec/design/`
+- **`/packages/wasm`**: The runtime as a WebAssembly module, with its JavaScript host and WebAssembly JIT
 - **`/packages/language-server`**: Language server written in Lus (module namespace `lus-language`)
 - **`/packages/vscode`**: VSCode extension (TypeScript + WASM)
 - **`/packages/site`**: Website (Astro + MDX)
 - **`/packages/textmate`**: TextMate grammar (shared by site and extension)
 - **`/examples`**: Runnable examples, shown on the site and in the playground
-- **`/packaging`**: Install scripts, third-party notices, and dependency licenses
+- **`/packaging`**: Install scripts, release anchors, third-party notices, and dependency licenses
 - **`/tools`**: Generators (spec to LSP data, spec to grammar) and the repository lint
 
 The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. Run `mise tasks` to list the tasks.
@@ -27,21 +28,21 @@ The JavaScript packages form one pnpm workspace with a single lockfile at the ro
 mise run install       # pnpm install --frozen-lockfile
 mise run gen           # regenerate LSP stdlib data and TextMate grammars from spec/
 mise run gen:check     # fail if generated files are stale
-mise run lint          # repository prose and naming checks
+mise run lint          # repository prose and naming checks, and zig fmt
 mise run site          # build the website
 mise run vscode        # build the VSCode extension
 ```
 
-### Legacy runtime (C, frozen)
+### Runtime
 
 ```sh
-cd legacy/lus
-meson setup build
-meson compile -C build
-meson test -C build --suite h1 --suite h2
+mise run build         # zig build -Doptimize=ReleaseSafe, writes runtime/zig-out/bin/lus
+mise run test          # unit, embedding, and tool tests, then the conformance suite and doc tests
+mise run wasm:test     # build lus.wasm and run its host tests
+mise run wasm:conformance
 ```
 
-The legacy tests run with `legacy/` as their working directory. The `legacy/lus-language` symbolic link points at `packages/language-server` so the language server tests resolve their modules.
+The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test ../tests/conformance ../packages/language-server/tests` from `runtime/`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec` runs the code blocks of the manual and the spec.
 
 ### Website
 
@@ -59,15 +60,9 @@ Lus extends Lua 5.5 with: `catch` (replaces `pcall`/`xpcall`), `enum`, optional 
 
 All Lus source files use `.lus` extension. Code blocks in documentation use ` ```lus ` fencing.
 
-### Legacy C Runtime Internals
+### Runtime Internals
 
-The legacy runtime is a modified Lua 5.5 codebase. These notes apply only when reading `legacy/` as a reference. New types added to the GC system:
-- `LUA_TENUM` / `LUA_TENUMROOT`: first-class enums (`lenum.c`, `lenum.h`)
-- `LUA_TVECTOR`: mutable byte buffers (`lvector.c`)
-
-New libraries: `ljsonlib.c`, `lfslib.c`, `lnetlib.c`, `lworkerlib.c`, `lvectorlib.c`. Permissions: `lpledge.c`. AST: `last.c`. Bundling: `lbundle.c`.
-
-The legacy VM intrinsifies common stdlib calls as `OP_FASTCALL` (`lfastcall.c`), so a fastcalled builtin has two implementations, and the two must agree bit for bit. A whole class of 1.7.0 bugs came from them disagreeing. Lus 2.0 removes this class by construction: every builtin is written once in Zig and the fast call path is generated from the same definition.
+`runtime/HACKING.md` describes the source layout, the conventions, and the checks each kind of change needs. The design notes in `spec/design/` record the decisions behind numbers, strings, permissions, tables, the GC, and the JIT tiers. Every builtin is written once in Zig, and its fast call path is generated from the same definition, so the interpreter, the baseline JIT, and the optimizing tier agree by construction.
 
 ### Website Content
 
@@ -129,6 +124,6 @@ Claude models (`sonnet-5`, `opus-4.8`, `fable-5`) run via the Agent/Workflow mod
 
 ## Code Style
 
-Zig code is formatted with `zig fmt`. Legacy C code is formatted with clang-format (config at `legacy/lus/.clang-format`): LLVM base style, 2-space indent, 80-column limit, `else` on new line after `}`, pointers right-aligned (`char *p`). Never sort includes.
+Zig code is formatted with `zig fmt`, and `mise run lint` checks it. C code in `tests/embed` and in the documentation uses 2-space indentation.
 
 Lus code uses 4-space indentation. Global variables must be declared with `global` at the top of the file. Permissions are pledged immediately after globals.

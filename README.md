@@ -17,7 +17,6 @@ This is a monorepository containing the following projects:
 - [**`/runtime`**](runtime): The Lus 2.0 runtime, written in Zig
 - [**`/packages/wasm`**](packages/wasm): The runtime as a WebAssembly module with its JavaScript host
 - [**`/tests`**](tests): Conformance, embedding, tool, and benchmark tests for the runtime
-- [**`/legacy`**](legacy): The frozen 1.7 C runtime and its tests, kept as the reference for the rewrite
 - [**`/spec`**](spec): Standard library specification and design notes
 - [**`/packages/language-server`**](packages/language-server): Language server for Lus
 - [**`/packages/vscode`**](packages/vscode): VSCode extension for Lus

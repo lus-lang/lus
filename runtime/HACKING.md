@@ -52,9 +52,9 @@ C functions never see a Zig error. Every exported function that can fail returns
 ## Conventions
 
 - One implementation per behavior. Reuse `ops.zig` for coercions and formatting, `pack.zig` for binary layouts, `pledge.zig` for permissions.
-- Match the semantics and error messages of the legacy C runtime in `../legacy/lus/src` and of the specification in `../spec/stdlib`, unless a design note in `../spec/design` changes them.
+- Match the semantics and error messages of the specification in `../spec/stdlib` and of the design notes in `../spec/design`.
 - Prose and comments follow the repository rules in `../AGENTS.md`: full sentences, no em or en dashes, no semicolons.
-- Tests for a module are Lus files run with `lus test` or plain scripts run with `lus`. Run the legacy corpus from a scratch copy of `../legacy/lus-tests`, never from the repository, because some tests write files.
+- Tests for a module are Lus files run with `lus test` or plain scripts run with `lus`.
 
 ## The JIT
 
