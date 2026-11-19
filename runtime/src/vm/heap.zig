@@ -176,6 +176,24 @@ pub inline fn setMarkSmall(h: *const Header) bool {
     return true;
 }
 
+/// `isMarkedSmall` for parallel markers.
+pub inline fn isMarkedSmallAtomic(h: *const Header) bool {
+    const p = pageOf(h);
+    const gi = granuleOf(h);
+    return (@atomicLoad(u64, &p.marks[gi / 64], .monotonic) >> @intCast(gi % 64)) & 1 != 0;
+}
+
+/// `setMarkSmall` for parallel markers. Exactly one of the threads that
+/// mark an object at once gets true.
+pub inline fn setMarkSmallAtomic(h: *const Header) bool {
+    const p = pageOf(h);
+    const gi = granuleOf(h);
+    const bit = @as(u64, 1) << @intCast(gi % 64);
+    const w = &p.marks[gi / 64];
+    if (@atomicLoad(u64, w, .monotonic) & bit != 0) return false;
+    return @atomicRmw(u64, w, .Or, bit, .monotonic) & bit == 0;
+}
+
 // ---------------------------------------------------------------------
 // Allocation
 

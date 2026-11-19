@@ -13,6 +13,7 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `unicode.lus`: `string.sub` and `#` on a long string of mixed one to four byte characters. Lus counts characters, while LuaJIT counts bytes, so this benchmark measures the cost of character indexing against plain byte slicing.
 - `arrays.lus`: reading and writing arrays of integers and of floats from Lus code.
 - `data.lus`: `table.sum`, `table.mean`, and `table.stdev` over large arrays of integers and floats. LuaJIT runs the same computation written as Lua loops in `lua/data.lua`.
+- `fullgc.lus`: builds a graph of a million live tables and collects it in full ten times, which measures marking while the program waits. On native targets those collections mark on several threads (`spec/design/gc.md`).
 - `gcpause.lus`: builds and drops a 50 MB object graph four times. Besides its run time, it prints the longest gap between two loop iterations, which bounds the longest collector pause. Run it directly to see that number.
 
 The runner times every benchmark under each runtime it finds and prints the best wall time of several runs. Build the runtime with ReleaseFast before measuring.
