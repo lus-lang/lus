@@ -3,65 +3,75 @@ order: 3
 title: Releases
 icon: package
 group: use
-shortdesc: "Downloads, release channels, versioning, integrity checks, and stable evidence."
+shortdesc: "Downloads, release archives, versioning, and integrity checks."
 ---
 
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 
-Lus publishes stable releases for production use and unstable prereleases for compatibility testing against current development.
+Each Lus release ships prebuilt archives for six targets, a standalone WebAssembly module, and a checksum manifest.
 
 ## Downloads
 
 <ReleaseStrip />
 
-Release archives contain the `lus` interpreter, `lusc` compiler, embedding SDK, package metadata, build metadata, and artifact-specific license notices. The SDK includes the complete public header set and separate Lus and SQLite static libraries. WASM, site, and VSIX artifacts carry their own redistributed-component license inventories. Compatibility assets provide individual executables for the installer and existing download links.
+Every archive holds the `lus` interpreter together with the embedding libraries and the `lus.h` header, so one download serves both running scripts and [embedding Lus](/manual/api/c) in a C program. Archive names carry the release tag and the target.
 
-| Platform | Architecture | Primary archive | Compatibility assets |
-| --- | --- | --- | --- |
-| Windows | x64 | `lus-VERSION-windows-x64.zip` | `lus-windows.exe`, `lusc-windows.exe`, `lus-setup.exe` |
-| macOS | Apple Silicon | `lus-VERSION-macos-arm64.tar.gz` | `lus-macos`, `lusc-macos` |
-| Linux | x64, glibc | `lus-VERSION-linux-glibc-x64.tar.gz` | `lus-linux`, `lusc-linux` |
-| Linux | x64, musl | `lus-VERSION-linux-musl-x64.tar.gz` | `lus-linux-musl`, `lusc-linux-musl` |
+| Platform | Architecture | Archive |
+| --- | --- | --- |
+| Linux | x86_64 | `lus-vX.Y.Z-x86_64-linux-musl.tar.gz` |
+| Linux | aarch64 | `lus-vX.Y.Z-aarch64-linux-musl.tar.gz` |
+| macOS | x86_64 | `lus-vX.Y.Z-x86_64-macos.tar.gz` |
+| macOS | Apple Silicon | `lus-vX.Y.Z-aarch64-macos.tar.gz` |
+| Windows | x86_64 | `lus-vX.Y.Z-x86_64-windows.zip` |
+| Windows | aarch64 | `lus-vX.Y.Z-aarch64-windows.zip` |
 
-Source builds can also target FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, SunOS, and other compatible systems. [Compiling Lus](/manual/compiling) describes that path. The release evidence and production support commitment cover only the platforms listed in the table.
+The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture.
+
+## Archive layout
+
+An archive unpacks into three directories.
+
+- `bin/lus` is the interpreter. On Windows it is `bin/lus.exe`, and `bin/` also holds the shared library `lus.dll`.
+- `lib/` holds the static and the shared embedding library. On Linux these are `liblus.a` and `liblus.so`, on macOS `liblus.a` and `liblus.dylib`, and on Windows `lus.lib`.
+- `include/lus.h` is the header of the [C API](/manual/api/c).
+
+A host program on Linux or macOS builds against an unpacked archive like this.
+
+```sh
+cc -o host host.c -Ilus/include lus/lib/liblus.a
+```
+
+Each library carries the vendored C code of SQLite, Zstandard, and Brotli, so a host links that one file.
+
+## WebAssembly
+
+The release also includes `lus.wasm`, the runtime built for `wasm32-wasi`. It exports every function of `lus.h`, as [Acquis 42](/manual/acquis-42) describes, and it is the same module that powers the [playground](/playground).
 
 ## Checking download integrity
 
-Each release includes `SHA256SUMS`. The Unix installer checks both `lus` and `lusc` against this manifest before installation. A manual download can be checked in the same way.
+Each release includes `SHA256SUMS`, which lists the SHA-256 digest of every archive and of `lus.wasm`. A download is checked against it with `sha256sum`.
 
 ```bash
 curl -LO https://github.com/lus-lang/lus/releases/latest/download/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
-# macOS uses: shasum -a 256 -c SHA256SUMS
 ```
 
-The digest detects corruption and a mismatch between an asset and its release manifest. The manifest and assets come from the same GitHub release and are not independently signed, so this check alone does not authenticate the publisher or protect against a compromised release account or origin. Environments that require publisher authentication should pin an expected tag and verify release provenance through their own trusted policy before using the assets.
+On macOS, `shasum -a 256 -c --ignore-missing SHA256SUMS` performs the same check.
 
-## Release evidence
+The digest detects corruption and any mismatch between an asset and the manifest of its release. The manifest and the assets come from the same GitHub release, so the check confirms consistency within that release. Environments that require publisher authentication pin an expected tag and verify the provenance of the release through their own trusted policy.
 
-Every complete release bundle carries `release-evidence.json` and `SHA256SUMS`. The quality gate requires all configured jobs before the bundle is assembled. Evidence covers these surfaces.
+## How a release is made
 
-- Runtime tests on Linux glibc, Linux musl, macOS arm64, and Windows x64.
-- Build toolchains on those four platforms plus WebAssembly.
-- Repository lint, address and undefined-behavior sanitizers, focused benchmarks, the VS Code extension, the website, and both installers.
-- The exact commit, dependency versions, toolchain versions, assets, and licenses used for the build.
+Pushing a tag such as `v2.0.0` starts the release workflow. The workflow first confirms that the tag matches the version in `runtime/build.zig.zon`. It then runs the unit, embedding, bundle, check, and documentation tests along with the conformance suite and the language server tests. When they pass, it cross compiles every target from one runner with Zig, builds `lus.wasm`, and writes `SHA256SUMS`.
 
-This evidence records what ran and whether it passed. It gives each release a reviewable qualification record without describing the test harness as exhaustive.
+The workflow publishes the result as a draft GitHub release titled after the version, with `CHANGELOG.md` as its notes. A maintainer reviews the draft and its assets and then publishes it.
 
-## Stable releases
+## Versioning
 
-A `vVERSION` tag starts the complete quality gate. After every required job passes, automation assembles and verifies the assets and creates a GitHub draft release for that exact tag. A maintainer reviews the draft, its evidence, and its inventory before explicitly publishing it. Tag creation alone does not publish a stable release.
-
-Lus follows semantic versioning for its public language, standard library, C API, command-line, package, and supported artifact contracts.
+Lus follows semantic versioning for its language, standard library, C API, and command line.
 
 - A patch release carries compatible fixes, security updates, packaging corrections, or documentation corrections.
 - A minor release adds compatible features and can deprecate older surfaces.
-- A major release can make breaking contract changes.
+- A major release can make breaking changes.
 
-Production deployments should use a reviewed stable release and pin the version according to their update policy.
-
-## Unstable releases
-
-A successful complete build from `main` creates an `unstable-SHA` prerelease for that exact commit. It contains the same asset inventory and evidence format as a stable candidate. Unstable releases can change compatibility and behavior before the next stable release, so they are intended for development, integration testing, and early feedback.
-
-Testing an application against the latest unstable prerelease is a direct way to discover upcoming compatibility changes while the stable deployment remains pinned.
+Production deployments use a published release and pin its version according to their update policy.
