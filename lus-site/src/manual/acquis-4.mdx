@@ -11,13 +11,13 @@ The `from` keyword enables table destructuring, extracting fields into variables
 
 The `from` keyword follows a variable list and precedes a table expression:
 
-```lua
+```lus
 local a, b, c from table_expr
 ```
 
 This is equivalent to:
 
-```lua
+```lus
 local a, b, c = table_expr.a, table_expr.b, table_expr.c
 ```
 
@@ -27,7 +27,7 @@ The variable names determine which fields are extracted. The table expression is
 
 Declare local variables and extract matching fields:
 
-```lua
+```lus
 local t = { x = 10, y = 20, z = 30 }
 local x, y, z from t
 assert(x == 10 and y == 20 and z == 30)
@@ -35,7 +35,7 @@ assert(x == 10 and y == 20 and z == 30)
 
 Variables can be listed in any order:
 
-```lua
+```lus
 local t = { a = 1, b = 2, c = 3 }
 local c, a from t  -- order doesn't match table
 assert(a == 1 and c == 3)
@@ -45,7 +45,7 @@ assert(a == 1 and c == 3)
 
 Use `global` for global variable declarations:
 
-```lua
+```lus
 local t = { config = "default", timeout = 30 }
 global config, timeout from t
 assert(_G.config == "default")
@@ -56,7 +56,7 @@ assert(_G.timeout == 30)
 
 Existing variables can be assigned using bare destructuring:
 
-```lua
+```lus
 local x, y
 local t = { x = 100, y = 200 }
 x, y from t
@@ -65,7 +65,7 @@ assert(x == 100 and y == 200)
 
 This is useful for reassignment:
 
-```lua
+```lus
 local x, y = 0, 0
 local t1 = { x = 1, y = 1 }
 local t2 = { x = 2, y = 2 }
@@ -81,7 +81,7 @@ assert(x == 2 and y == 2)
 
 Fields that don't exist in the table become nil:
 
-```lua
+```lus
 local t = { a = 1 }
 local a, b, c from t
 assert(a == 1)
@@ -92,7 +92,7 @@ assert(b == nil and c == nil)
 
 Destructuring works with nested table access:
 
-```lua
+```lus
 local outer = { inner = { value = 42 } }
 local value from outer.inner
 assert(value == 42)
@@ -102,7 +102,7 @@ assert(value == 42)
 
 Destructure directly from function calls:
 
-```lua
+```lus
 local function getConfig()
     return { host = "localhost", port = 8080 }
 end
@@ -113,7 +113,7 @@ assert(host == "localhost" and port == 8080)
 
 The function is called once, even when extracting multiple fields:
 
-```lua
+```lus
 local callCount = 0
 local function counted()
     callCount = callCount + 1
@@ -129,7 +129,7 @@ assert(a == 1 and b == 1)
 
 Destructure from conditional table expressions:
 
-```lua
+```lus
 local useDefaults = false
 local defaults = { size = 10 }
 local custom = { size = 50 }
@@ -148,7 +148,7 @@ Lua does not have table destructuring. Extracting multiple fields requires repet
 
 A common Lua pattern:
 
-```lua
+```lus
 -- Lua: manual field extraction
 local t = { name = "test", value = 42, enabled = true }
 local name = t.name
@@ -158,7 +158,7 @@ local enabled = t.enabled
 
 With `from`:
 
-```lua
+```lus
 -- Lus: destructuring
 local t = { name = "test", value = 42, enabled = true }
 local name, value, enabled from t
@@ -168,7 +168,7 @@ local name, value, enabled from t
 
 Extracting options from a configuration table:
 
-```lua
+```lus
 -- Lua: verbose extraction
 local function configure(options)
     local host = options.host
@@ -180,7 +180,7 @@ end
 
 With `from`:
 
-```lua
+```lus
 -- Lus: concise extraction
 local function configure(options)
     local host, port, timeout from options
@@ -192,7 +192,7 @@ end
 
 Extracting functions from a module:
 
-```lua
+```lus
 -- Lua: manual extraction
 local module = require("mymodule")
 local func1 = module.func1
@@ -202,7 +202,7 @@ local func3 = module.func3
 
 With `from`:
 
-```lua
+```lus
 -- Lus: destructured import
 local func1, func2, func3 from require("mymodule")
 ```

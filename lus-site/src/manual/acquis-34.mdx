@@ -79,14 +79,14 @@ At execution time the engine splits the `where` clause at its top-level `and` in
 
 ## The query value
 
-A query is a garbage-collected value of the new type `query`, alongside `enum` and `vector`. It holds its sources, captured parameters, and host closures, so a query keeps an otherwise dead source alive. Two query values are equal only when they are the same object, a query works as a table key, and `tostring` prints an address. Comparison, length, and arithmetic raise, and a query cannot be serialized to a worker. Query-building functions survive `string.dump`: the clause plan travels as an ordinary string constant that the loader validates before use.
+A query is a garbage-collected value of the new type `query`, alongside `enum` and `vector`. It holds its sources, captured parameters, and host closures, so a query keeps an otherwise dead source alive. Two query values are equal only when they are the same object, a query works as a table key, and `tostring` prints an address. Comparison, length, and arithmetic raise, and a query cannot be serialized to a worker. Query-building functions survive `string.dump`: the clause plan travels as an ordinary string constant and is reconstructed when the trusted chunk loads.
 
-The C API exposes the value to embedders and providers: `lus_isquery` and `lus_toquery`, a read-only visitor over sources, clauses, and reified expression nodes down to the captured values, and `lus_setqueryprovider`, which registers a native provider on a metatable through two callbacks, `accepts` for the per-conjunct offer and `open` for producing the row iterator.
+The C API exposes the value to embedders and providers through `lus_isquery` and `lus_toquery`, a read-only visitor over sources, clauses, and reified expression nodes down to captured values, and `lus_setqueryprovider`. A metatable borrows the registered `lus_QueryProvider` pointer, so the embedder keeps that struct alive until unregistration, metatable collection, or state close. Passing `NULL` unregisters it. The `accepts` callback receives each eligible conjunct, and `open` receives the accepted node pointers and produces the row iterator. Query and node pointers are borrowed from the reachable query value. The pushed-node array itself is valid only during `open`.
 
 ## Limits
 
 A query holds at most 8 sources and 200 captured operands, and clause expressions nest at most 64 levels deep. Aggregates appear only in `select` and `having` and cannot nest. Bare boolean columns, bitwise operators, and length in clauses are compile-time errors, as is a suffix on a parenthesized clause expression.
 
-## Not yet specified
+## Provider execution boundary
 
-Nested queries inside a clause are rejected for now. Two tables of the same SQLite database joined in one query are fetched separately and joined in memory rather than fused into one SQL join, and `order by`, `limit`, and grouping always run in memory even when a source could translate them. Each can be added compatibly later.
+Clause expressions contain scalar row operations. Each SQLite source executes its accepted single-source conjuncts independently, and the engine joins returned rows in memory. The engine also performs `order by`, `limit`, and grouping in memory. This boundary gives every provider the same observable pipeline.

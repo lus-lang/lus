@@ -11,14 +11,14 @@ Lus can generate an abstract syntax tree from Lus code using the `debug.parse` f
 
 The `debug.parse` function parses a Lus source string and returns its AST as a nested table structure:
 
-```lua
+```lus
 local ast = debug.parse("local x = 1 + 2")
 -- Returns: {type = "chunk", line = 1, children = {...}}
 ```
 
 Returns `nil` if parsing fails. An optional second argument specifies the chunk name for error messages:
 
-```lua
+```lus
 local ast = debug.parse(code, "myfile.lus")
 ```
 
@@ -33,7 +33,7 @@ Each AST node is a table with:
 
 ### Example: Exploring an AST
 
-```lua
+```lus
 local code = [[
 local x = 1 + 2
 print(x)
@@ -73,7 +73,7 @@ walk(ast)
 
 Different node types have different fields:
 
-```lua
+```lus
 -- Binary operation
 {type = "binop", line = 1, op = "+", left = {...}, right = {...}}
 
@@ -140,7 +140,7 @@ Example JSON output:
 
 ### Static Analysis
 
-```lua
+```lus
 -- Count function calls
 local function count_calls(node)
   local count = 0
@@ -161,7 +161,7 @@ print("Function calls:", count_calls(ast))
 
 ### Code Metrics
 
-```lua
+```lus
 -- Get all variable names
 local function collect_names(node, names)
   names = names or {}
@@ -179,7 +179,7 @@ end
 
 ### Linting
 
-```lua
+```lus
 -- Check for global assignments
 local function check_globals(ast, filename)
   for _, child in ipairs(ast.children or {}) do

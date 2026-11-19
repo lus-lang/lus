@@ -10,7 +10,9 @@ Lus has an official extension for VSCode-based editors and a stdio language serv
 
 ## VSCode-based editors
 
-The [Lus extension](https://open-vsx.org/extension/lus/lus) provides syntax highlighting, diagnostics, code completion, hover information, go-to-definition, references, formatting, and more. It bundles a WASM build of Lus and therefore does not require a local installation of the language to work.
+The [Lus extension](https://open-vsx.org/extension/lus/lus) provides syntax highlighting, diagnostics, code completion, hover information, go-to-definition, references, formatting, and more. It bundles the matching Lus WebAssembly runtime, language server, and standard library data, so its workspace host runs without a local Lus installation. It mirrors `.lus` and `.lua` workspace files through the VS Code filesystem API for cross-file analysis.
+
+The current package targets VS Code's Node-based workspace extension host, including remote workspace hosts. Browser-only extension-host packaging is planned for a future release. The language client and server accept JSON-RPC frames up to 16 MiB and reject oversized or malformed frames before dispatch.
 
 ### VSCodium, Cursor, and Antigravity
 
@@ -30,7 +32,7 @@ Alternatively, install from the command line (replace `version` with the version
 code --install-extension lus-version.vsix
 ```
 
-> Each example below requires a local installation of `lus` and the source code's repository cloned as to access `lus-language`.
+> Each example below requires a local installation of `lus` and a checkout of this repository so the command can open `lus-language/main.lus`.
 
 ## Neovim
 

@@ -54,8 +54,8 @@ print(parts.negative, parts.minutes, parts.seconds)   -- true 1 30
 
 A `zone` is either a named IANA zone, a fixed offset, or the system's local zone. Crucially, named zones resolve from an IANA tzdata database **compiled into the runtime** rather than from the operating system. That database is a zstd-compressed blob decompressed on first use. This means:
 
-- no filesystem access or `fs` pledge is needed to use zones;
-- behaviour is identical on every platform, including Windows, which has no IANA database of its own;
+- Zones use embedded data and require no filesystem access or `fs` pledge.
+- The embedded IANA data gives every platform the same behavior, including Windows.
 - offsets honour the full history of DST transitions.
 
 ```lus
@@ -76,14 +76,14 @@ print(z:instant():iso())              -- 2026-07-02T13:15:00Z
 print(z.weekday == time.weekday.thursday, z.yearday)   -- true  183
 ```
 
-Days of the week and months are first-class enums, `time.weekday` (`monday`-`sunday`, ISO numbering) and `time.month` (`january`-`december`). The `weekday` field returns a `time.weekday` value; `month` stays a plain integer for arithmetic, but a `time.month` value may be passed anywhere a month is expected:
+Days of the week and months are first-class enums, `time.weekday` from `monday` through `sunday` with ISO numbering and `time.month` from `january` through `december`. The `weekday` field returns a `time.weekday` value. `month` stays a plain integer for arithmetic, and a `time.month` value may be passed anywhere a month is expected.
 
 ```lus
 local d = time.zoned{ year = 2026, month = time.month.december, day = 25 }
 print(tonumber(d.weekday))            -- 5  (a Friday)
 ```
 
-Calendar arithmetic lives on `zoned`, distinct from the exact instant arithmetic above. `z:with{...}` replaces fields and `z:add{...}` advances by calendar amounts; both re-resolve the offset through the zone, so they cross DST boundaries correctly and clamp overflowing days:
+Calendar arithmetic lives on `zoned` and remains distinct from exact instant arithmetic. `z:with{...}` replaces fields, while `z:add{...}` advances by calendar amounts. Both resolve the resulting offset through the zone, cross daylight-saving boundaries correctly, and clamp overflowing days.
 
 ```lus
 local w = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
@@ -121,8 +121,8 @@ local z = time.parse("2026-07-02T09:15:00-04:00")  -- zoned
 ## Design notes
 
 - **Worker-safe by construction.** All civil arithmetic uses branch-free day-count algorithms rather than `localtime`/`mktime`, and the tzdata database is decompressed per interpreter state, so no global timezone state is ever shared between threads.
-- **Monotonic clock is separate.** `time.monotonic()` returns an `instant` from a monotonic clock for measuring elapsed time; it is immune to wall-clock adjustments, and subtracting two readings yields a `duration`. It has no calendar meaning, so formatting one or calling `:epoch()` is an error.
-- **Public-domain data.** The IANA tzdata database is public domain and is embedded directly; `scripts/update-tzdata.sh` regenerates the compiled blob from a system or freshly-built zoneinfo tree.
+- **Monotonic clock is separate.** `time.monotonic()` returns an `instant` from a monotonic clock for measuring elapsed time. It is independent of wall-clock adjustments, and subtracting two readings yields a `duration`. Formatting and epoch conversion apply to civil timeline values.
+- **Public-domain data.** The public-domain IANA tzdata database is embedded directly. `scripts/update-tzdata.sh` regenerates the compiled blob from a system or freshly built zoneinfo tree.
 
 ## Not yet specified
 

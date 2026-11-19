@@ -3,59 +3,65 @@ order: 3
 title: Releases
 icon: package
 group: use
-shortdesc: "Downloads, release channels, versioning, and what stable promises."
+shortdesc: "Downloads, release channels, versioning, integrity checks, and stable evidence."
 ---
 
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 
-Lus releases are produced by a _release engineering_ process that divides into two channels:
-
-- The **stable** channel, which is well-tested and ready for production use.
-- The **unstable** channel, which contains the latest features.
-
-_Unstable_ does not necessarily mean that they are _literally_ unstable, but rather that they have not been sufficiently tested and are still open to breaking changes.
+Lus publishes stable releases for production use and unstable prereleases for compatibility testing against current development.
 
 ## Downloads
 
 <ReleaseStrip />
 
-## Fully supported platforms
+Release archives contain the `lus` interpreter, `lusc` compiler, embedding SDK, package metadata, build metadata, and artifact-specific license notices. The SDK includes the complete public header set and separate Lus and SQLite static libraries. WASM, site, and VSIX artifacts carry their own redistributed-component license inventories. Compatibility assets provide individual executables for the installer and existing download links.
 
-| Platform | Architecture  | Asset             | Notes                                   |
-| -------- | ------------- | ----------------- | --------------------------------------- |
-| Windows  | x64           | `lus-setup.exe`   | Installer, recommended over bare binary |
-| Windows  | x64           | `lus-windows.exe` |                                         |
-| macOS    | Apple Silicon | `lus-macos`       |                                         |
-| Linux    | x64, glibc    | `lus-linux`       | Needs glibc 2.39+                       |
-| Linux    | x64, musl     | `lus-linux-musl`  |                                         |
+| Platform | Architecture | Primary archive | Compatibility assets |
+| --- | --- | --- | --- |
+| Windows | x64 | `lus-VERSION-windows-x64.zip` | `lus-windows.exe`, `lusc-windows.exe`, `lus-setup.exe` |
+| macOS | Apple Silicon | `lus-VERSION-macos-arm64.tar.gz` | `lus-macos`, `lusc-macos` |
+| Linux | x64, glibc | `lus-VERSION-linux-glibc-x64.tar.gz` | `lus-linux`, `lusc-linux` |
+| Linux | x64, musl | `lus-VERSION-linux-musl-x64.tar.gz` | `lus-linux-musl`, `lusc-linux-musl` |
 
-## Partially supported platforms
+Source builds can also target FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, SunOS, and other compatible systems. [Compiling Lus](/manual/compiling) describes that path. The release evidence and production support commitment cover only the platforms listed in the table.
 
-Lus also supports FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, and SunOS, but their binaries must be [built from source](/manual/compiling) and they are not tested, meaning no stability or functionality guarantees. Help for porting Lus to these operating systems (especially CI/CD support), as well as any other operating system, is always appreciated.
+## Checking download integrity
 
-## Verifying a download
-
-Every release since 1.6.0 publishes a `SHA256SUMS` asset. The install script verifies downloads automatically; for manual downloads:
+Each release includes `SHA256SUMS`. The Unix installer checks both `lus` and `lusc` against this manifest before installation. A manual download can be checked in the same way.
 
 ```bash
 curl -LO https://github.com/lus-lang/lus/releases/latest/download/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS         # macOS: shasum -a 256 -c
+sha256sum -c --ignore-missing SHA256SUMS
+# macOS uses: shasum -a 256 -c SHA256SUMS
 ```
+
+The digest detects corruption and a mismatch between an asset and its release manifest. The manifest and assets come from the same GitHub release and are not independently signed, so this check alone does not authenticate the publisher or protect against a compromised release account or origin. Environments that require publisher authentication should pin an expected tag and verify release provenance through their own trusted policy before using the assets.
+
+## Release evidence
+
+Every complete release bundle carries `release-evidence.json` and `SHA256SUMS`. The quality gate requires all configured jobs before the bundle is assembled. Evidence covers these surfaces.
+
+- Runtime tests on Linux glibc, Linux musl, macOS arm64, and Windows x64.
+- Build toolchains on those four platforms plus WebAssembly.
+- Repository lint, address and undefined-behavior sanitizers, focused benchmarks, the VS Code extension, the website, and both installers.
+- The exact commit, dependency versions, toolchain versions, assets, and licenses used for the build.
+
+This evidence records what ran and whether it passed. It gives each release a reviewable qualification record without describing the test harness as exhaustive.
 
 ## Stable releases
 
-There is no timeline for stable releases, but they are typically released when any work-in-progress [acquis](/manual/acquis-0) have been completed and have received sufficient coverage in the test harnesses.
+A `vVERSION` tag starts the complete quality gate. After every required job passes, automation assembles and verifies the assets and creates a GitHub draft release for that exact tag. A maintainer reviews the draft, its evidence, and its inventory before explicitly publishing it. Tag creation alone does not publish a stable release.
 
-The attribution of acquis to a release is dependent on when the acquis is submitted. If the version X.0.0 release is being worked on, then any acquis submitted during this time will be slated for version X.**1**.0.
+Lus follows semantic versioning for its public language, standard library, C API, command-line, package, and supported artifact contracts.
 
-Even though semantic versioning is used, the patch number is expected to go unused. The harness tests are exhaustive and should cover all runtime features and edge cases. If, however, a very critical bug is found, then the patch number may be used to indicate an emergency bug fix release.
+- A patch release carries compatible fixes, security updates, packaging corrections, or documentation corrections.
+- A minor release adds compatible features and can deprecate older surfaces.
+- A major release can make breaking contract changes.
 
-**Developers should use the stable release of Lus for production use.**
+Production deployments should use a reviewed stable release and pin the version according to their update policy.
 
 ## Unstable releases
 
-Unstable releases are released more frequently than stable releases and contain the latest features. For all intents and purposes, the term _unstable_ is interchangeable with _canary_ or _nightly_ builds.
+A successful complete build from `main` creates an `unstable-SHA` prerelease for that exact commit. It contains the same asset inventory and evidence format as a stable candidate. Unstable releases can change compatibility and behavior before the next stable release, so they are intended for development, integration testing, and early feedback.
 
-There is no guarantee that the unstable release will be usable, compatible with code targeting the stable release, or free of platform-specific oddities. Unstable releases are not as thoroughly tested as stable releases and shouldn't be considered for production use.
-
-That said, the use of unstable builds in a testing capacity is encouraged. If you are working on a program that already makes use of Lus, you should use the unstable build to test your program against the latest features and bug fixes to see if any breaking changes have been introduced.
+Testing an application against the latest unstable prerelease is a direct way to discover upcoming compatibility changes while the stable deployment remains pinned.

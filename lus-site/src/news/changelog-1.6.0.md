@@ -15,7 +15,7 @@ date: 2026-06-10
 - `for ... in pairs(t)`/`ipairs(t)`/`next, t` loops over tables now walk the table directly in the VM instead of calling the iterator function each step (pairs ~1.8x, ipairs ~2.3x faster).
 - Indexing tables with string variables (`t[k]`) now takes the same short-string fast path as constant fields, ~15% faster.
 - Integer-to-string conversion uses a direct conversion loop instead of `snprintf` (~20% faster interpolation-heavy code).
-- Release binaries for Linux and macOS are now built with profile-guided optimization (`tools/pgo-build.sh`), 15–45% faster across VM micro-benchmarks than a plain release build.
+- Release binaries for Linux and macOS are now built with profile-guided optimization (`tools/pgo-build.sh`), 15 to 45% faster across VM micro-benchmarks than a plain release build.
 - The worker library no longer pre-allocates a table from an untrusted declared size while deserializing messages.
 - Workers now inherit their parent's pledges (sealed).
 - `fs` permission checks now canonicalize paths and fail closed.

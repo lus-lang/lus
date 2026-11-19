@@ -39,6 +39,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
     aria-busy="true"
     aria-keyshortcuts="Control+Enter Meta+Enter">Loading…</button
   >
+  <button slot="controls" id="stop-btn" class="btn-stop" disabled>Stop</button>
   <button slot="controls" id="clear-btn" class="btn-clear">Clear</button>
 
   <Fragment slot="version">
@@ -116,8 +117,13 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   import { registerSyntax } from "modern-monaco/core"
   //@ts-ignore
   import { grammars } from "modern-monaco/shiki"
-  import { getWasmReleases, loadLusWasm } from "../lib/wasm-loader"
-  import type { WasmRelease, LusModule } from "../lib/wasm-loader"
+  import {
+    PLAYGROUND_EXECUTION_LIMIT_MS,
+    PlaygroundRunController,
+    playgroundOutputLines,
+  } from "../lib/playground-runtime"
+  import { getWasmReleases } from "../lib/wasm-loader"
+  import type { WasmRelease } from "../lib/wasm-loader"
   import lusGrammar from "../../../lus-textmate/lus.tmLanguage.json"
 
   // HACK: this sucks but it works
@@ -127,6 +133,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   const editorContainer = document.getElementById("code-editor")!
   const output = document.getElementById("output")!
   const runBtn = document.getElementById("run-btn") as HTMLButtonElement
+  const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement
   const clearBtn = document.getElementById("clear-btn") as HTMLButtonElement
   const versionSelect = document.getElementById(
     "version-select",
@@ -157,17 +164,27 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       return null
     }
   }
+  const sharedCode = decodeHashCode()
 
-  let currentModule: LusModule | null = null
   let releases: { stable: WasmRelease | null; unstable: WasmRelease | null }
   let editor: ReturnType<typeof monaco.editor.create>
   let monaco: Awaited<ReturnType<typeof init>>
+  let activeRelease: WasmRelease | null = null
+  let cancelWorkerLoad: (() => void) | null = null
+  const runtimeController = new PlaygroundRunController(
+    {
+      setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay),
+      clearTimeout: (handle) => globalThis.clearTimeout(handle as number),
+    },
+    () => stopExecution("Execution stopped after five seconds."),
+    PLAYGROUND_EXECUTION_LIMIT_MS,
+  )
 
   function appendOutput(
     text: string,
     type: "output" | "error" | "system" = "output",
   ) {
-    const lines = text.split("\n")
+    const lines = playgroundOutputLines(text)
     for (const lineText of lines) {
       const line = document.createElement("div")
       line.className = `output-line ${type}`
@@ -181,52 +198,130 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
     output.innerHTML = ""
   }
 
-  function setRunLoading(loading: boolean) {
-    runBtn.disabled = loading
-    runBtn.textContent = loading ? "Loading…" : "Run"
-    if (loading) runBtn.setAttribute("aria-busy", "true")
-    else runBtn.removeAttribute("aria-busy")
+  function setRuntimeState(
+    state: "loading" | "ready" | "running" | "failed",
+  ) {
+    runBtn.disabled = state !== "ready"
+    runBtn.textContent =
+      state === "loading"
+        ? "Loading…"
+        : state === "running"
+          ? "Running…"
+          : "Run"
+    stopBtn.disabled = state !== "running"
+    if (state === "loading" || state === "running") {
+      runBtn.setAttribute("aria-busy", "true")
+    } else {
+      runBtn.removeAttribute("aria-busy")
+    }
   }
 
-  async function loadVersion(release: WasmRelease) {
-    setRunLoading(true)
-    clearOutput()
-    appendOutput("Loading...", "system")
+  function terminateRuntime() {
+    cancelWorkerLoad?.()
+    cancelWorkerLoad = null
+    runtimeController.terminateWorker()
+  }
 
-    try {
-      if (currentModule) {
-        currentModule.destroy()
-        currentModule = null
-      }
-
-      currentModule = await loadLusWasm(release)
+  async function loadVersion(
+    release: WasmRelease,
+    clearOnReady = true,
+  ): Promise<void> {
+    terminateRuntime()
+    activeRelease = release
+    setRuntimeState("loading")
+    if (clearOnReady) {
       clearOutput()
-      setRunLoading(false)
-      versionTag.textContent = release.isStable ? "stable" : "unstable"
-      versionTag.className = release.isStable ? "tag stable" : "tag unstable"
-    } catch (e) {
-      runBtn.textContent = "Run"
-      runBtn.removeAttribute("aria-busy")
-      appendOutput(`Failed to load: ${e}`, "error")
+      appendOutput("Loading…", "system")
     }
+
+    const worker = new Worker(
+      new URL("../workers/playground-worker.ts", import.meta.url),
+      { type: "module", name: "lus-playground" },
+    )
+    runtimeController.attachWorker(worker)
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const resolveOnce = () => {
+        if (settled) return
+        settled = true
+        cancelWorkerLoad = null
+        resolve()
+      }
+      const rejectOnce = (error: Error) => {
+        if (settled) return
+        settled = true
+        cancelWorkerLoad = null
+        reject(error)
+      }
+      cancelWorkerLoad = resolveOnce
+      worker.addEventListener("message", (event) => {
+        if (!runtimeController.isCurrentWorker(worker)) return
+        const message = event.data
+        if (message.type === "ready") {
+          if (clearOnReady) clearOutput()
+          setRuntimeState("ready")
+          versionTag.textContent = release.isStable ? "stable" : "unstable"
+          versionTag.className = release.isStable
+            ? "tag stable"
+            : "tag unstable"
+          resolveOnce()
+          return
+        }
+        if (message.type === "load-error") {
+          setRuntimeState("failed")
+          appendOutput(`Failed to load: ${message.error}`, "error")
+          rejectOnce(new Error(message.error))
+          return
+        }
+        if (message.type === "runtime-error") {
+          if (!runtimeController.failRun(worker, message.id)) return
+          setRuntimeState("loading")
+          appendOutput(message.error, "error")
+          if (activeRelease) {
+            void loadVersion(activeRelease, false).catch(() => {})
+          } else {
+            setRuntimeState("failed")
+          }
+          return
+        }
+        if (!runtimeController.finishRun(worker, message.id)) return
+        setRuntimeState("ready")
+        if (message.type === "result") {
+          if (message.text && message.text.trim()) {
+            appendOutput(message.text.trimEnd(), "output")
+          } else {
+            appendOutput("(no output)", "system")
+          }
+        }
+      })
+      worker.addEventListener("error", (event) => {
+        if (!runtimeController.isCurrentWorker(worker)) return
+        runtimeController.terminateWorker()
+        setRuntimeState("failed")
+        appendOutput(`Runtime worker failed: ${event.message}`, "error")
+        rejectOnce(new Error(event.message))
+      })
+      worker.postMessage({ type: "initialize", release })
+    })
+  }
+
+  function stopExecution(message = "Execution stopped.") {
+    if (!activeRelease || stopBtn.disabled) return
+    const release = activeRelease
+    terminateRuntime()
+    setRuntimeState("loading")
+    appendOutput(message, "system")
+    void loadVersion(release, false).catch(() => {})
   }
 
   function runCode() {
-    if (!currentModule || !editor) return
-
+    if (!editor || runBtn.disabled) return
     const code = editor.getValue()
     if (!code.trim()) return
 
-    try {
-      const result = currentModule.execute(code)
-      if (result && result.trim()) {
-        appendOutput(result.trimEnd(), "output")
-      } else {
-        appendOutput("(no output)", "system")
-      }
-    } catch (e) {
-      appendOutput(String(e), "error")
-    }
+    const id = runtimeController.run(code)
+    if (id !== null) setRuntimeState("running")
   }
 
   function loadExample(name: string) {
@@ -263,11 +358,10 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       padding: { top: 12, bottom: 12 },
     })
 
-    const hashCode = decodeHashCode()
-    const model = monaco.editor.createModel(hashCode ?? defaultContent, "lus")
+    const model = monaco.editor.createModel(sharedCode ?? defaultContent, "lus")
     editor.setModel(model)
 
-    if (hashCode !== null) {
+    if (sharedCode !== null) {
       // reflect that the editor holds shared code, not the "hello" example
       const opt = document.createElement("option")
       opt.value = "__shared__"
@@ -283,16 +377,6 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   async function initWasm() {
     try {
       appendOutput("Fetching releases…", "system")
-      if (typeof SharedArrayBuffer === "undefined") {
-        appendOutput(
-          "SharedArrayBuffer not available. This is probably because you're running this site locally. This is a funny bug on both Firefox and Chromium:\nhttps://bugzilla.mozilla.org/show_bug.cgi?id=1984864\nhttps://issues.chromium.org/issues/386633375\n(let me know when this is fixed so I can remove this message)",
-          "error",
-        )
-        runBtn.textContent = "Run"
-        runBtn.removeAttribute("aria-busy")
-        return
-      }
-
       releases = await getWasmReleases()
 
       versionSelect.innerHTML = ""
@@ -313,8 +397,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
       if (!releases.stable && !releases.unstable) {
         appendOutput("No WASM builds available.", "error")
-        runBtn.textContent = "Run"
-        runBtn.removeAttribute("aria-busy")
+        setRuntimeState("failed")
         return
       }
 
@@ -329,18 +412,19 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       if (defaultRelease) {
         versionSelect.value =
           defaultRelease === releases.unstable ? "unstable" : "stable"
-        await loadVersion(defaultRelease)
+        await loadVersion(defaultRelease).catch(() => {})
         updateExampleAvailability(defaultRelease === releases.unstable)
       }
     } catch (e) {
       appendOutput(`Failed to fetch releases: ${e}`, "error")
-      runBtn.textContent = "Run"
-      runBtn.removeAttribute("aria-busy")
+      setRuntimeState("failed")
     }
   }
 
   runBtn.addEventListener("click", runCode)
+  stopBtn.addEventListener("click", () => stopExecution())
   clearBtn.addEventListener("click", clearOutput)
+  window.addEventListener("beforeunload", terminateRuntime)
 
   // run from anywhere on the page, not only while Monaco has focus
   document.addEventListener("keydown", (ev) => {
@@ -379,7 +463,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
     const selected = versionSelect.value
     const release = selected === "stable" ? releases.stable : releases.unstable
     if (release) {
-      await loadVersion(release)
+      await loadVersion(release).catch(() => {})
       updateExampleAvailability(selected === "unstable")
     }
   })
@@ -390,6 +474,9 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
   // Initialize both editor and WASM
   await Promise.all([initEditor(), initWasm()])
+  if (sharedCode !== null) {
+    appendOutput("Shared code is ready for review. Press Run to execute it.", "system")
+  }
 </script>
 
 <style>
@@ -418,6 +505,22 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
     &:active {
       @apply bg-accent/20 border-accent;
+    }
+  }
+
+  .btn-stop {
+    @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent-red bg-accent-red text-ink-red select-none;
+
+    &:hover {
+      @apply bg-ink-red text-accent-red;
+    }
+
+    &:active {
+      @apply bg-transparent text-accent-red;
+    }
+
+    &:disabled {
+      @apply bg-transparent text-accent-red/40 border-accent-red/30 cursor-not-allowed;
     }
   }
 

@@ -11,7 +11,7 @@ The `pledge` function provides capability-based sandboxing for Lus scripts. Perm
 
 Grant permissions with the `pledge` function:
 
-```lua
+```lus
 -- Grant filesystem access
 pledge("fs")
 
@@ -24,7 +24,7 @@ pledge("exec")
 
 Without the appropriate permission, operations are denied:
 
-```lua
+```lus
 -- Without pledge("fs"):
 local ok, err = catch fs.list("/tmp")
 assert(not ok)  -- permission denied
@@ -38,7 +38,7 @@ local files = fs.list("/tmp")  -- works
 
 Permissions use a hierarchical naming scheme:
 
-```lua
+```lus
 -- Base permission: grants all sub-permissions
 pledge("fs")         -- grants fs:read, fs:write, etc.
 pledge("network")    -- grants network:tcp, network:http, etc.
@@ -52,7 +52,7 @@ pledge("network:http")  -- only HTTP, not raw TCP
 
 Permissions can include path or URL restrictions:
 
-```lua
+```lus
 -- Grant read access only to /tmp
 pledge("fs:read=/tmp")
 
@@ -69,7 +69,7 @@ Glob patterns are supported for path matching. On systems with symlinks, paths a
 
 Use the `~` prefix to permanently reject a permission:
 
-```lua
+```lus
 -- Reject network access
 pledge("~network")
 
@@ -83,7 +83,7 @@ This is useful for host applications that want to restrict scripts from ever acq
 
 The `seal` permission prevents any future permission changes:
 
-```lua
+```lus
 pledge("fs")
 pledge("network")
 pledge("seal")
@@ -98,7 +98,7 @@ This provides defense-in-depth by locking down capabilities early in script exec
 
 The `pledge` function returns `true` on success, `false` on failure:
 
-```lua
+```lus
 if pledge("fs") then
   print("Filesystem access granted")
 else
@@ -129,7 +129,7 @@ lus -P~exec script.lus
 
 Scripts can then request only what was already granted:
 
-```lua
+```lus
 -- script.lus (run with: lus -Pfs:read=/tmp script.lus)
 pledge("fs:read=/tmp")  -- granted
 pledge("fs:write")      -- denied, not in CLI grant
@@ -137,9 +137,9 @@ pledge("fs:write")      -- denied, not in CLI grant
 
 ## Coroutine inheritance
 
-When a coroutine is created, it receives a copy of its parent's permissions. This copy is independent; changes in the coroutine don't affect the parent, and vice versa.
+When a coroutine is created, it receives an independent copy of its parent's permissions. Changes in either permission set stay local to that coroutine or parent.
 
-```lua
+```lus
 pledge("fs")
 pledge("network")
 
@@ -165,7 +165,7 @@ pledge("network:http")  -- works fine
 
 This copy-on-create behavior enables sandboxing patterns where untrusted code runs with restricted permissions:
 
-```lua
+```lus
 -- Parent has broad permissions
 pledge("fs")
 pledge("network")
@@ -200,7 +200,7 @@ end, {"fs:read"})
 
 Coroutines can progressively restrict permissions as they delegate to less trusted code:
 
-```lua
+```lus
 pledge("fs")
 pledge("network")
 
@@ -252,7 +252,7 @@ Lus scripts often handle untrusted input or run in sandboxed environments. The p
 
 Scripts explicitly declare their needs, making it clear what capabilities are required:
 
-```lua
+```lus
 -- Script header shows requirements
 pledge("fs:read")
 pledge("network:http")
@@ -264,7 +264,7 @@ pledge("network:http")
 
 Restrict access to only what's needed:
 
-```lua
+```lus
 -- Only read from specific directory
 pledge("fs:read=/var/log/app/*")
 
@@ -277,7 +277,7 @@ catch fs.list("/etc")  -- denied
 
 Host applications can pre-reject capabilities before running scripts:
 
-```lua
+```lus
 -- Host application
 pledge("~exec")    -- scripts cannot run commands
 pledge("~network") -- scripts cannot access network

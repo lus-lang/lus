@@ -13,7 +13,7 @@ This page is a concise migration reference. For full details on each feature, fo
 
 ## Use of `-Wpedantic`
 
-Using the `-Wpedantic` flag during development can help catch old Lua idioms which are no longer relevant in Lus. This is your best friend for upgrading Lua code to Lus code; it will catch most of what can be safely rewritten by generating an AST for every chunk and analyzing them at compile time. That said, avoid using this flag in production as AST generation is processor-heavy and involves additional memory allocation.
+Using the `-Wpedantic` flag during development identifies Lua idioms with direct Lus forms. It generates an AST for each chunk and analyzes it at compile time, so development and migration builds are its intended setting. Production builds can omit the extra processor and memory cost.
 
 ```bash
 lus -Wpedantic myscript.lus

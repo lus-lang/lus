@@ -2,155 +2,105 @@
 order: 109
 title: Acquis 9 - Network
 acquis: true
-shortdesc: "Network library featuring TCP/UDP support and a generic HTTP fetch implementation."
+shortdesc: "TCP, UDP, and positional HTTP requests with bounded receives."
 ---
 
-The `network` library provides TCP, UDP, and HTTP/HTTPS networking with native SSL support.
+The `network` library provides TCP, UDP, and HTTP or HTTPS networking with native TLS support. Calls require the corresponding `network:http`, `network:tcp`, or `network:udp` pledge.
 
 ## HTTP requests
 
-Use `network.fetch` for HTTP and HTTPS requests:
+`network.fetch` takes positional arguments in the order `url`, `method`, `headers`, and `body`. The method defaults to `"GET"`. It returns the integer status code, response body string, and a table whose response header names are lowercase. Response bodies are capped at 64 MiB.
 
-```lua
+```lus
 local status, body, headers = network.fetch("https://httpbin.org/get")
-print(status)  -- 200
-print(#body)   -- response size
-print(headers["content-type"])  -- "application/json"
+print(status)
+print(#body)
+print(headers["content-type"])
 ```
 
-### POST requests
+The optional values keep their positions for requests that include headers or a body.
 
-Pass method, headers, and body as additional arguments:
-
-```lua
+```lus
 local status, body = network.fetch(
-  "https://httpbin.org/post",
-  "POST",
-  {["Content-Type"] = "application/json"},
-  '{"name": "Lus"}'
+    "https://httpbin.org/post",
+    "POST",
+    { ["Content-Type"] = "application/json" },
+    '{"name":"Lus"}'
 )
 ```
 
-### Error handling
+Network and protocol failures raise errors that can be caught.
 
-Network errors raise Lua errors:
-
-```lua
+```lus
 local ok, err = catch network.fetch("https://invalid.host.example")
 if not ok then
-  print("Request failed:", err)
+    print("Request failed:", err)
 end
 ```
 
 ## TCP connections
 
-### Client connections
+`network.tcp.connect(host, port)` returns a client socket. The socket supports `send`, `receive`, `settimeout`, and `close`.
 
-Connect to a TCP server and exchange data:
-
-```lua
-local sock = network.tcp.connect("example.com", 80)
-sock:settimeout(5)  -- 5 second timeout
-
-sock:send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
-local response = sock:receive("*a")  -- receive until EOF
-sock:close()
+```lus
+local socket = network.tcp.connect("example.com", 80)
+socket:settimeout(5)
+socket:send("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+local response = socket:receive("*a")
+socket:close()
 ```
 
-### Receive patterns
+### Receive patterns and limits
 
-The `receive` method supports several patterns:
+`socket:receive(pattern, max_bytes)` accepts three patterns.
 
-```lua
--- Receive exactly N bytes
-local data = sock:receive(1024)
+| Pattern | Result | Limit |
+| --- | --- | --- |
+| A positive integer | Reads that many bytes, or the available prefix at EOF | At most 1 MiB |
+| `"*l"` | Reads one line and removes its trailing LF and optional CR | 1 MiB by default |
+| `"*a"` | Reads through EOF | 64 MiB by default |
 
--- Receive a line (strips trailing newline)
-local line = sock:receive("*l")
+The optional positive integer `max_bytes` applies to `"*l"` and `"*a"`. A line or stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A numeric receive size is always limited to 1 MiB.
 
--- Receive all data until EOF
-local all = sock:receive("*a")
+```lus
+local header = socket:receive("*l", 8192)
+local body = socket:receive("*a", 8 * 1024 * 1024)
 ```
 
-### TCP servers
+## TCP servers
 
-Create a listening server:
+`network.tcp.bind(host, port, backlog)` returns a listening server. Port `0` asks the operating system to select a port. `server:getsockname()` returns the bound address and effective port, which makes that form useful for local services and tests.
 
-```lua
-local server = network.tcp.bind("127.0.0.1", 8080)
-server:settimeout(10)
+```lus
+local server = network.tcp.bind("127.0.0.1", 0)
+local address, port = server:getsockname()
+print(`listening on $address:$port`)
 
 local client = server:accept()
-client:settimeout(5)
-
-local request = client:receive("*l")
+local request = client:receive("*l", 8192)
 client:send("HTTP/1.0 200 OK\r\n\r\nHello!\n")
 client:close()
-
 server:close()
 ```
 
+The server also supports `settimeout` and `close`. Accepted clients use the TCP client socket methods.
+
 ## UDP sockets
 
-Create, send, and receive datagrams:
+`network.udp.open(port, address)` creates a UDP socket and can bind it immediately. An unbound socket can later call `setsockname(address, port)`. `getsockname()` returns the current local address and port for either form.
 
-```lua
--- Sender
+```lus
+local receiver = network.udp.open(0, "127.0.0.1")
+local _, port = receiver:getsockname()
+
 local sender = network.udp.open()
-sender:sendto("Hello UDP", "127.0.0.1", 9000)
-sender:close()
+sender:sendto("Hello UDP", "127.0.0.1", port)
 
--- Receiver (bound to port)
-local receiver = network.udp.open(9000, "127.0.0.1")
-local data, addr, port = receiver:receive()
-print(data, addr, port)  -- "Hello UDP", "127.0.0.1", sender_port
+local data, address, sender_port = receiver:receive()
+print(data, address, sender_port)
+
+sender:close()
 receiver:close()
 ```
 
-## Socket methods
-
-### TCP client socket
-
-| Method                | Description                    |
-| --------------------- | ------------------------------ |
-| `send(data)`          | Send data, returns bytes sent  |
-| `receive([pattern])`  | Receive data (default: `"*l"`) |
-| `settimeout(seconds)` | Set operation timeout          |
-| `close()`             | Close the connection           |
-
-### TCP server
-
-| Method                | Description                |
-| --------------------- | -------------------------- |
-| `accept()`            | Accept a client connection |
-| `settimeout(seconds)` | Set accept timeout         |
-| `close()`             | Stop listening             |
-
-### UDP socket
-
-| Method                     | Description                      |
-| -------------------------- | -------------------------------- |
-| `sendto(data, addr, port)` | Send datagram                    |
-| `receive([size])`          | Receive datagram (default: 8192) |
-| `setsockname(addr, port)`  | Bind to address and port         |
-| `close()`                  | Close the socket                 |
-
----
-
-## Motivation
-
-Lus provides native networking without external dependencies. The library handles platform differences transparently.
-
-### Single-call HTTP
-
-Compare to using raw sockets:
-
-```lua
--- Without network.fetch: 20+ lines of socket, TLS, HTTP parsing
--- With network.fetch:
-local status, body = network.fetch("https://api.example.com/data")
-```
-
-### Cross-platform consistency
-
-The library handles platform-specific socket APIs (Winsock vs POSIX) and TLS configuration transparently.
+`receive(size)` defaults to 8 KiB and accepts a maximum of 1 MiB. It returns the datagram prefix up to that size together with the sender address and port. UDP sockets also support `close`.

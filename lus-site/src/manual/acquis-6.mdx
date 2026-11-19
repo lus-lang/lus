@@ -2,176 +2,147 @@
 order: 106
 title: Acquis 6 - JSON
 acquis: true
-shortdesc: "Much-needed tojson/fromjson implementation."
+shortdesc: "RFC 8259 parsing and serialization with filters and custom values."
 ---
 
-The `fromjson` and `tojson` global functions provide RFC 8259 compliant JSON parsing and serialization.
+The `fromjson` and `tojson` global functions provide RFC 8259 parsing and serialization. Parsing accepts up to 1,000 nested arrays and objects. Serialization enforces the same ceiling and also follows the interpreter's C-call limit, which can reject a deeply nested table earlier with a C stack overflow.
 
 ## Parsing with `fromjson`
 
-Parse a JSON string into a Lus value:
+`fromjson` parses one JSON value and requires the complete input to be valid. It accepts a string or number. A numeric argument is converted to its textual form before parsing, while other argument types raise a type error.
 
-```lua
+```lus
 local data = fromjson('{"name": "Alice", "age": 30}')
 assert(data.name == "Alice")
 assert(data.age == 30)
 ```
 
-All JSON types map to Lus types:
+JSON values map to Lus values as follows.
 
-```lua
+```lus
 fromjson("null")           -- nil
 fromjson("true")           -- true
-fromjson("false")          -- false
-fromjson("42")             -- 42 (integer)
-fromjson("3.14")           -- 3.14 (number)
+fromjson("42")             -- 42, an integer
+fromjson("3.14")           -- 3.14, a float
 fromjson('"hello"')        -- "hello"
 fromjson("[1, 2, 3]")      -- {1, 2, 3}
 fromjson('{"a": 1}')       -- {a = 1}
 ```
 
-### Error handling
+Number syntax determines the Lus subtype. Integer syntax produces an integer, while a decimal point or exponent produces a float. Values outside the supported integer or floating-point range raise a range error. Duplicate object keys keep the final value.
 
-Invalid JSON throws an error with position information:
+JSON null maps to `nil`. A null object field is therefore absent from the resulting table, and a null array element creates a hole. This mapping means a parse and serialize cycle can change the structure of JSON that contains null values.
 
-```lua
+### Parse errors
+
+Invalid input raises an error with a byte position.
+
+```lus
 local ok, err = catch fromjson('{"invalid}')
 assert(not ok)
-assert(err:match("position"))  -- "JSON parse error at position 10: ..."
+assert(err:match("position"))
 ```
 
 ## Serializing with `tojson`
 
-Serialize a Lus value to a JSON string:
+`tojson` serializes one Lus value.
 
-```lua
+```lus
 local json = tojson({name = "Bob", scores = {95, 87, 92}})
--- '{"name":"Bob","scores":[95,87,92]}'
+local decoded = fromjson(json)
+assert(decoded.name == "Bob")
+assert(decoded.scores[2] == 87)
 ```
 
-### Array vs object detection
+### Arrays and objects
 
-Tables with contiguous integer keys 1..n become JSON arrays:
+Tables whose complete key set is a contiguous integer range from 1 through `n` become JSON arrays. The empty table is an empty array. Every other table uses object form, which writes string keys and omits keys of other types.
 
-```lua
+JSON object member order is unspecified. Examples that consume an object parse it and inspect fields by name.
+
+```lus
 tojson({10, 20, 30})           -- "[10,20,30]"
-tojson({a = 1, b = 2})         -- '{"a":1,"b":2}'
 tojson({})                     -- "[]"
+
+local object = fromjson(tojson({a = 1, b = 2}))
+assert(object.a == 1 and object.b == 2)
+
+local sparse = fromjson(tojson({1, nil, 3}))
+assert(sparse[1] == nil and sparse[3] == nil)
+
+local named = fromjson(tojson({1, 2, name = "pair"}))
+assert(named.name == "pair")
 ```
 
 ### Special values
 
-Non-finite numbers become `null`:
+Non-finite numbers become JSON null.
 
-```lua
-tojson(math.huge)      -- "null"
-tojson(-math.huge)     -- "null"
-tojson(0/0)            -- "null" (NaN)
+```lus
+tojson(math.huge)   -- "null"
+tojson(-math.huge)  -- "null"
+tojson(0 / 0)       -- "null"
+```
+
+Functions, threads, userdata, vectors, and enum values encode as `null` at the root or in an array. An object field holding one of these values is omitted.
+
+```lus
+local status = enum ready, done end
+tojson(status.ready)                    -- "null"
+tojson({status.ready})                  -- "[null]"
+tojson({status = status.ready})         -- "{}"
 ```
 
 ## Filtering with `tojson`
 
-Pass a filter function to transform or omit values:
+The optional filter transforms values or omits fields.
 
-```lua
+```lus
 local data = {
     name = "Alice",
     password = "secret",
-    age = 30
+    age = 30,
 }
 
--- Omit sensitive fields by returning nil
 local json = tojson(data, function(key, value)
     if key == "password" then return nil end
     return value
 end)
--- '{"name":"Alice","age":30}'
 ```
 
-Transform values:
-
-```lua
-local data = {price = 100, tax = 0.08}
-
-local json = tojson(data, function(key, value)
-    if key == "price" then return value * (1 + data.tax) end
-    if key == "tax" then return nil end
-    return value
-end)
--- '{"price":108}'
-```
+The filter is first called for the root with a `nil` key. It then receives integer keys for array elements and string keys for object fields. A returned table is traversed and filtered recursively. Returning `nil` for the root produces `"null"`. Errors from the filter propagate from `tojson`.
 
 ## Custom serialization with `__json`
 
-Tables with a `__json` metamethod use it for serialization:
+A table can provide a `__json` metamethod that returns the value to serialize.
 
-```lua
+```lus
 local Point = {}
 Point.__index = Point
 Point.__json = function(self)
     return {x = self.x, y = self.y}
 end
 
-local p = setmetatable({x = 10, y = 20, internal = "data"}, Point)
-local json = tojson(p)
--- '{"x":10,"y":20}' (internal field excluded)
+local point = setmetatable({x = 10, y = 20, internal = "data"}, Point)
+local decoded = fromjson(tojson(point))
+assert(decoded.x == 10 and decoded.y == 20)
 ```
 
-The metamethod receives `self` and returns the value to serialize:
+The returned value follows the normal serialization rules and may itself have a `__json` metamethod. Returning `nil` produces `"null"`. Errors raised by the metamethod propagate from `tojson`.
 
-```lua
-local wrapper = setmetatable({value = 42}, {
-    __json = function(self) return self.value end
-})
-tojson(wrapper)  -- "42"
+## References and round trips
+
+Shared acyclic tables are written by value each time they appear. A circular reference raises an error.
+
+```lus
+local child = {value = 1}
+local copies = fromjson(tojson({child, child}))
+assert(copies[1].value == 1 and copies[2].value == 1)
+
+local cycle = {}
+cycle.self = cycle
+local ok, err = catch tojson(cycle)
+assert(not ok)
 ```
 
-## Unsupported types
-
-Functions, coroutines, userdata, and enums are skipped during serialization (unless they have `__json`):
-
-```lua
-local data = {
-    name = "test",
-    callback = function() end,  -- skipped
-    thread = coroutine.create(function() end)  -- skipped
-}
-tojson(data)  -- '{"name":"test"}'
-```
-
-## Circular reference detection
-
-Circular references throw an error:
-
-```lua
-local t = {}
-t.self = t
-
-local ok = catch tojson(t)
-assert(not ok)  -- "circular reference detected"
-```
-
-## Roundtrip preservation
-
-Values survive serialization and parsing:
-
-```lua
-local original = {
-    users = {
-        {name = "Alice", active = true},
-        {name = "Bob", active = false}
-    },
-    count = 2
-}
-
-local roundtrip = fromjson(tojson(original))
-assert(roundtrip.count == 2)
-assert(roundtrip.users[1].name == "Alice")
-assert(roundtrip.users[2].active == false)
-```
-
----
-
-## Motivation
-
-Lua lacks built-in JSON support. Developers must use external libraries or write parsing code, adding dependencies for what should otherwise be a built-in feature.
+Supported primitives, contiguous arrays, and string-keyed objects round trip predictably. Whole-valued floats serialize without a decimal point, so they parse back as integers. JSON null follows the `nil` mapping described above. Applications that need a distinct null sentinel can represent it with an application-level value and a `__json` method.

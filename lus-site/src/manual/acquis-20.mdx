@@ -5,19 +5,19 @@ acquis: true
 shortdesc: "Catch handlers for transforming errors with catch[handler] expr syntax."
 ---
 
-The `catch` expression supports an optional handler function that transforms errors before they are returned. This allows custom error processing without additional code after the catch.
+The `catch` expression supports an optional handler function that transforms a raw error object before it is returned.
 
 ## Syntax
 
 A handler is specified in brackets between `catch` and the expression:
 
-```lua
+```lus
 local success, ... = catch[handler] <expression>
 ```
 
-When the expression raises an error, the handler function is called with the error message. The handler's return value replaces the original error in the catch result.
+When the expression raises an error, the handler receives the exact object that was raised. Its first return value replaces that object in the catch result. Additional handler results are discarded, so failure still returns exactly `false` and one value.
 
-```lua
+```lus
 -- Basic handler that extracts just the message
 local function simplify(err)
     return err:match("^[^:]+:[^:]+: (.+)") or err
@@ -35,10 +35,10 @@ assert(err == "something went wrong")  -- simplified error
 When the expression raises an error:
 
 1. The handler is called with the error object
-2. The handler's return value becomes the second return value
+2. The handler's first return value becomes the second return value
 3. `success` is `false`
 
-```lua
+```lus
 local function wrap(err)
     return { message = err, timestamp = os.time() }
 end
@@ -53,7 +53,7 @@ assert(result.message:match("database connection failed"))
 
 When the expression evaluates successfully, the handler is not called:
 
-```lua
+```lus
 local called = false
 local function handler(err)
     called = true
@@ -72,7 +72,7 @@ assert(called == false)  -- handler was never invoked
 
 Standardize error formats across different sources:
 
-```lua
+```lus
 local function normalize(err)
     if type(err) == "string" then
         return { code = "UNKNOWN", message = err }
@@ -93,7 +93,7 @@ end
 
 Log errors while still returning them:
 
-```lua
+```lus
 local function logged(err)
     io.stderr:write("[ERROR] " .. tostring(err) .. "\n")
     return err
@@ -107,7 +107,7 @@ local ok, result = catch[logged] riskyOperation()
 
 Convert technical errors to user-friendly messages:
 
-```lua
+```lus
 local translations = {
     ["ECONNREFUSED"] = "Could not connect to server",
     ["ETIMEDOUT"] = "Connection timed out",
@@ -132,7 +132,7 @@ end
 
 Handlers can be composed for complex error processing:
 
-```lua
+```lus
 local function compose(f, g)
     return function(x) return f(g(x)) end
 end
@@ -143,9 +143,9 @@ local ok, err = catch[logAndSimplify] operation()
 
 ## Handler errors
 
-If the handler itself throws an error, that error propagates normally (it is not caught):
+If the handler raises an error, that error propagates to an outer catch or the host.
 
-```lua
+```lus
 local function badHandler(err)
     error("handler failed")  -- this propagates!
 end
@@ -156,7 +156,7 @@ catch[badHandler] error("original error")
 
 To catch handler errors, nest another catch:
 
-```lua
+```lus
 local ok, result = catch (catch[badHandler] error("original"))
 ```
 
@@ -164,29 +164,29 @@ local ok, result = catch (catch[badHandler] error("original"))
 
 Anonymous functions work directly in the handler position:
 
-```lua
+```lus
 local ok, err = catch[function(e) return e:upper() end] error("oops", 0)
 assert(err == "OOPS")
 ```
 
 ## Handler validation
 
-The bracketed expression must evaluate to a function. Any other value raises an error at the catch site, so a misspelled handler name is reported instead of being silently ignored:
+The bracketed expression must evaluate to a function. Any other value raises an error at the catch site.
 
-```lua
+```lus
 local ok, err = catch (function()
     catch[42] error("x")
 end)()
 assert(err:find("attempt to use a number value as a catch handler"))
 ```
 
-Only true functions are accepted, matching the `xpcall` baseline. A table with a `__call` metamethod is rejected the same way.
+The handler value has the Lus type `function`. A table with a `__call` metamethod remains a table and therefore raises at the catch site.
 
 ## Comparison with xpcall
 
 Lua's `xpcall` provides similar functionality but operates at the function level:
 
-```lua
+```lus
 -- Lua: xpcall with error handler
 local ok, result = xpcall(function()
     return someOperation()
@@ -197,7 +197,7 @@ end)
 
 With catch handlers:
 
-```lua
+```lus
 -- Lus: catch with handler
 local ok, result = catch[function(e) return "Handled: " .. e end] someOperation()
 ```
@@ -212,7 +212,7 @@ The catch handler syntax is more concise for single expressions and doesn't requ
 
 Without handlers, error transformation requires additional code after the catch:
 
-```lua
+```lus
 -- Without handler
 local ok, err = catch operation()
 if not ok then
@@ -222,7 +222,7 @@ end
 
 With handlers, the transformation is part of the catch:
 
-```lua
+```lus
 -- With handler
 local ok, err = catch[transform] operation()
 ```

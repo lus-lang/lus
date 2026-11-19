@@ -11,7 +11,7 @@ The `while` statement can now include assignments in its condition. Variables as
 
 Assignments use the `=` operator within the condition:
 
-```lua
+```lus
 while var = expr do
     -- var is available here
     -- expr is re-evaluated each iteration
@@ -24,7 +24,7 @@ end
 
 The condition is true when **all** assigned values are truthy (not nil or false). When any value becomes falsy, the loop exits.
 
-```lua
+```lus
 while x = getNext() do
     print(x)  -- prints each value until getNext() returns nil
 end
@@ -34,7 +34,7 @@ end
 
 The simplest form assigns one value and tests it on each iteration:
 
-```lua
+```lus
 local function makeCounter(max)
     local i = 0
     return function()
@@ -51,7 +51,7 @@ end
 
 This is particularly useful for iterator functions:
 
-```lua
+```lus
 while line = file:read() do
     process(line)
 end
@@ -61,7 +61,7 @@ end
 
 Multiple variables can be assigned and tested simultaneously:
 
-```lua
+```lus
 while a, b = getTwo() do
     print(a, b)
 end
@@ -69,7 +69,7 @@ end
 
 The condition fails if **any** assigned value becomes falsy:
 
-```lua
+```lus
 local function coords()
     -- returns nil, nil when done
     local x, y = getNextPoint()
@@ -85,7 +85,7 @@ end
 
 Variables declared in while conditions are scoped to the loop body:
 
-```lua
+```lus
 while data = fetch() do
     process(data)
 end
@@ -100,7 +100,7 @@ This prevents pollution of the outer scope and clearly indicates the variable's 
 
 A common Lua pattern requires separate assignment and test:
 
-```lua
+```lus
 -- Lua: separate assignment and test
 local line = file:read()
 while line do
@@ -111,7 +111,7 @@ end
 
 With while-assignment:
 
-```lua
+```lus
 -- Lus: combined
 while line = file:read() do
     process(line)
@@ -122,7 +122,7 @@ end
 
 While-assignment provides a cleaner alternative to complex iterator protocols for simple cases:
 
-```lua
+```lus
 -- Lus: simple iterator pattern
 local function queue_pop(q)
     return table.remove(q, 1)

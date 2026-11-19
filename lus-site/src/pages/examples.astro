@@ -70,6 +70,16 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
           )
         }
       </p>
+      <p class="examples-intro">
+        Playground examples run in a dedicated browser Web Worker. The page
+        stops a run after five seconds and caps captured output at 256 KiB.
+        The browser sandbox separates the program from the host operating
+        system, while the worker keeps execution away from the interface
+        thread. The browser build provides the language core for local
+        interactive examples and omits native networking, native workers,
+        SQLite, and archive codecs. Services that run code for mutually
+        distrustful users should add a process or virtual-machine boundary.
+      </p>
       <nav class="examples-jump" aria-label="Examples">
         {
           examples.map((ex) => (

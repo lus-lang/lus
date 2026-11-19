@@ -23,7 +23,7 @@ local cbuf = vector.archive.gzip.compress(buf)
 local obuf = vector.archive.gzip.decompress(cbuf)
 ```
 
-The optional `level` parameter (0-9, default 6) controls the trade-off between speed and compression ratio. Level 0 stores data without compression; level 9 produces the smallest output.
+The optional `level` parameter from 0 through 9 defaults to 6 and controls the trade-off between speed and compression ratio. Level 0 stores data directly. Level 9 produces the smallest output.
 
 ## Raw deflate
 
@@ -34,7 +34,7 @@ local compressed = vector.archive.deflate.compress("raw data", 5)
 local original = vector.archive.deflate.decompress(compressed)
 ```
 
-Suitable for embedding in custom container formats. No CRC or checksum is included; the caller is responsible for integrity verification.
+This format is suitable for embedding in custom containers. The caller supplies any required CRC or checksum at the container level.
 
 ## Zstandard
 
@@ -83,7 +83,7 @@ The `level` parameter (1-12, default 1) controls the speed-ratio trade-off. LZ4 
 
 ## Type preservation
 
-All functions preserve the input type. Passing a string returns a string; passing a vector returns a vector.
+All functions preserve the input type. A string input returns a string, and a vector input returns a vector.
 
 ```lus
 local s = vector.archive.gzip.compress("string input")

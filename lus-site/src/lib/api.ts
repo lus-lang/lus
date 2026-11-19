@@ -86,7 +86,13 @@ const capiOrder: SectionSpec[] = [
   },
   {
     title: "Worker System (C API)",
-    filter: (d) => d.header === "lworkerlib.h",
+    filter: (d) =>
+      d.header === "lworkerlib.h" ||
+      d.name === "WorkerState" ||
+      d.name === "lus_WorkerSetup" ||
+      d.name === "lus_onworker" ||
+      d.name.startsWith("lus_worker_") ||
+      d.name.startsWith("LUS_WORKER_"),
   },
   { title: "Library Openers", filter: (d) => d.header === "lualib.h" },
   { title: "Core C API", filter: (d) => d.header === "lua.h" },

@@ -58,11 +58,11 @@ local m2 = require(name)  -- ordinary call, resolved by the searcher
 assert(m1 == m2)          -- same module either way (shared cache)
 ```
 
-In non-readonly environments, no calls are rewritten; every `require` goes through the searcher.
+In a mutable environment, every `require` goes through the searcher.
 
 ## Security model
 
-Preinclusion moves the authority to load code from run time to launch time. The operator who constructs the command line decides exactly which modules exist; the program itself needs no filesystem or load capability to use them. A sealed program cannot use preinclusion to reach anything beyond the modules that were explicitly listed.
+Preinclusion places module selection under launch-time authority. The operator who constructs the command line selects the complete module set. The sealed program uses those modules without filesystem or load capability, and its available preincluded modules remain exactly that selected set.
 
 ```sh
 # The script can require exactly these two modules and nothing else,

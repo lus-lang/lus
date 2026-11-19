@@ -66,19 +66,118 @@ export interface LusModule {
   destroy: () => void
 }
 
+interface EmscriptenModule {
+  HEAPU8: Uint8Array
+  _free(pointer: number): void
+  _malloc(size: number): number
+  lengthBytesUTF8(value: string): number
+  stringToUTF8(
+    value: string,
+    pointer: number,
+    maxBytesToWrite: number,
+  ): number
+}
+
+type WasmByteCall = (
+  state: number,
+  inputPointer: number,
+  inputBytes: number,
+) => number
+
+const MAX_WASM32_INPUT_BYTES = 0xffff_fffe
+const MAX_WASM32_OUTPUT_BYTES = 0xffff_ffff
+const wasmOutputDecoder = new TextDecoder("utf-8", { fatal: true })
+
+function decodeWasmOutput(
+  module: EmscriptenModule,
+  pointer: number,
+  byteLength: number,
+): string {
+  const heap = module.HEAPU8
+  if (
+    !(heap instanceof Uint8Array) ||
+    !Number.isSafeInteger(pointer) ||
+    pointer < 0 ||
+    pointer > heap.byteLength ||
+    byteLength > heap.byteLength - pointer
+  ) {
+    throw new Error("WASM output is outside linear memory")
+  }
+  try {
+    return wasmOutputDecoder.decode(heap.subarray(pointer, pointer + byteLength))
+  } catch {
+    throw new Error("WASM output is not valid UTF-8")
+  }
+}
+
+export function callWasmUtf8(
+  module: EmscriptenModule,
+  call: WasmByteCall,
+  outputLength: (state: number) => number,
+  state: number,
+  input: string,
+): string {
+  const inputBytes = module.lengthBytesUTF8(input)
+  if (
+    !Number.isSafeInteger(inputBytes) ||
+    inputBytes < 0 ||
+    inputBytes > MAX_WASM32_INPUT_BYTES
+  ) {
+    throw new Error("WASM source size is not representable in wasm32")
+  }
+
+  const allocationBytes = inputBytes + 1
+  const inputPointer = module._malloc(allocationBytes)
+  if (!Number.isSafeInteger(inputPointer) || inputPointer <= 0) {
+    throw new Error("WASM source allocation failed")
+  }
+
+  try {
+    const written = module.stringToUTF8(
+      input,
+      inputPointer,
+      allocationBytes,
+    )
+    if (written !== inputBytes) {
+      throw new Error("WASM source encoding failed")
+    }
+
+    const outputPointer = call(state, inputPointer, inputBytes)
+    const outputBytes = outputLength(state)
+    if (
+      !Number.isSafeInteger(outputBytes) ||
+      outputBytes < 0 ||
+      outputBytes > MAX_WASM32_OUTPUT_BYTES
+    ) {
+      throw new Error("WASM output size is not representable in wasm32")
+    }
+    if (outputBytes === 0) return ""
+    if (!Number.isSafeInteger(outputPointer) || outputPointer <= 0) {
+      throw new Error("WASM output is unavailable")
+    }
+    return decodeWasmOutput(module, outputPointer, outputBytes)
+  } finally {
+    module._free(inputPointer)
+  }
+}
+
 /**
  * Loads and initializes the Lus WASM module from a release
  */
 export async function loadLusWasm(release: WasmRelease): Promise<LusModule> {
   // Fetch the JS loader
   const jsResponse = await fetch(release.jsUrl)
+  if (!jsResponse.ok) {
+    throw new Error(`Failed to fetch the WASM loader: ${jsResponse.status}`)
+  }
   let jsCode = await jsResponse.text()
 
   // Rewrite relative URLs to absolute paths before blob creation
   // Emscripten-generated code uses new URL('lus.wasm', import.meta.url)
   // which fails when loaded from a blob: URL
-  const baseUrl = new URL(release.jsUrl, window.location.href).href
+  const baseUrl = new URL(release.jsUrl, globalThis.location.href).href
   const baseDir = baseUrl.substring(0, baseUrl.lastIndexOf("/") + 1)
+  const wasmUrl = new URL(release.wasmUrl, globalThis.location.href).href
   jsCode = jsCode.replace(
     /new URL\(['"]([^'"]+)['"]\s*,\s*import\.meta\.url\)/g,
     (_, relativePath) => `new URL("${baseDir}${relativePath}")`,
@@ -99,9 +198,11 @@ export async function loadLusWasm(release: WasmRelease): Promise<LusModule> {
 
     // Initialize with locateFile to find the WASM
     const Module = await moduleFactory({
+      print: () => {},
+      printErr: () => {},
       locateFile: (path: string) => {
         if (path.endsWith(".wasm")) {
-          return release.wasmUrl
+          return wasmUrl
         }
         return path
       },
@@ -109,10 +210,14 @@ export async function loadLusWasm(release: WasmRelease): Promise<LusModule> {
 
     // Wrap the C functions
     const lus_create = Module.cwrap("lus_create", "number", [])
-    const lus_execute = Module.cwrap("lus_execute", "string", [
+    const lus_execute_bytes = Module.cwrap("lus_execute_bytes", "number", [
       "number",
-      "string",
-    ])
+      "number",
+      "number",
+    ]) as WasmByteCall
+    const lus_output_length = Module.cwrap("lus_output_length", "number", [
+      "number",
+    ]) as (state: number) => number
     const lus_destroy = Module.cwrap("lus_destroy", null, ["number"])
 
     // Create a state
@@ -122,10 +227,20 @@ export async function loadLusWasm(release: WasmRelease): Promise<LusModule> {
     }
 
     return {
-      execute: (code: string) => lus_execute(state, code),
+      execute: (code: string) =>
+        callWasmUtf8(
+          Module,
+          lus_execute_bytes,
+          lus_output_length,
+          state,
+          code,
+        ),
       destroy: () => {
-        lus_destroy(state)
-        URL.revokeObjectURL(blobUrl)
+        try {
+          lus_destroy(state)
+        } finally {
+          URL.revokeObjectURL(blobUrl)
+        }
       },
     }
   } catch (e) {

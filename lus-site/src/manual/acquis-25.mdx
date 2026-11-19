@@ -44,7 +44,7 @@ assert(table.median({1, 2, 3, 4}) == 2.5)
 
 ### table.stdev
 
-Computes the standard deviation of numeric values. When `sample` is `true`, divides by n-1 (sample standard deviation); otherwise divides by n (population standard deviation).
+Computes the standard deviation of numeric values. A true `sample` argument divides by n minus 1 for the sample standard deviation. The default divides by n for the population standard deviation.
 
 ```lus
 local values = {2, 4, 4, 4, 5, 5, 7, 9}
@@ -228,7 +228,7 @@ Lus is designed to be productive out of the box. Operations like filtering, mapp
 
 ### Consistency with existing patterns
 
-The `table` and `string` modules already provide core operations. These extensions follow the same conventions: functions on existing modules, consistent parameter ordering, and predictable error behavior. The `table.sort` function already exists; `table.sortby` extends it for the common case of sorting by a derived key.
+The `table` and `string` modules already provide core operations. These extensions follow the same conventions through functions on existing modules, consistent parameter ordering, and predictable error behavior. `table.sortby` complements `table.sort` by sorting on a derived key.
 
 ### String gaps
 

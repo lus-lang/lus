@@ -47,6 +47,7 @@ const specSchema = z.object({
   type: z.string().optional(),
   value: z.union([z.string(), z.number()]).optional(),
   signature: z.string().optional(),
+  receiver: z.string().optional(),
   deprecated_by: z.string().optional(),
   removed_in: z.string().optional(),
   fastcall: z.boolean().optional(),

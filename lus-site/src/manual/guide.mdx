@@ -13,7 +13,7 @@ This handy guide will give you a brief rundown on the language. If you manage to
 
 ## Variables
 
-Variables in Lus are _dynamically typed_; any variable can hold any type of value at any time. A variable is either _local_ or _global_ depending on how it is declared.
+Variables in Lus are _dynamically typed_. Any variable can hold any type of value at any time. Its declaration gives it local or global scope.
 
 ### Scope
 
@@ -46,7 +46,7 @@ global config       -- explicit declaration
 config = {}
 ```
 
-Inside an explicit `global` declaration, the implicit `global *` is voided; all variables must be declared, and undeclared names cause an error. This is useful for catching typos and enforcing stricter code:
+Inside an explicit `global` declaration, every global name is declared explicitly. An undeclared name produces an error, which catches typos and supports strict code.
 
 ```lus
 x = 1               -- Ok, global by default
@@ -165,19 +165,19 @@ There are eleven types of values in Lus: `nil`, `boolean`, `number`, `string`, `
 
 ### `nil`
 
-Nil values, represented by the universal constant `nil`, represent the _absence_ of a value. When a function returns no values, it will return `nil`; when a variable does not exist, the variable will be equal to `nil`. Nil values are, however, first-class objects like any other value, meaning that you can insert them into tables, pass them as arguments, and use them anywhere else you would use a value.
+Nil values, represented by the universal constant `nil`, express the _absence_ of a value. A function result adjusted to a value becomes `nil` when the function returns no values. An absent table field also reads as `nil`. Nil is a first-class value that can be passed as an argument and used wherever absence has meaning.
 
 ### `boolean`
 
-Boolean values are your good old `true` and `false`. In conditional contexts, only `nil` and `false` are considered _falsy_; all other values, including `0` and empty strings, are _truthy_.
+Boolean values are `true` and `false`. In conditional contexts, `nil` and `false` are _falsy_. Every other value, including `0` and empty strings, is _truthy_.
 
 ### `number`
 
-Numbers in Lus are either 64-bit integers or floating point numbers. While they are both represented by the `number` type, their subtype remains accessible through [`math.type`](/manual/api#math.type). The runtime will convert between the two subtypes as needed; there is generally no need to keep track of or otherwise enforce the subtype of a number, unless you have strict arithmetic needs.
+Numbers in Lus are either 64-bit integers or floating-point numbers. Both use the `number` type, and [`math.type`](/manual/api#math.type) reports the subtype. The runtime converts between the subtypes as needed. Code with exact arithmetic requirements can inspect the subtype directly.
 
 ### `string`
 
-Strings are immutable sequences of 8-bit characters. The runtime does not enforce any specific encoding; it is up to the user to ensure that strings are encoded in a way that is appropriate for their intended use. To this end, Lus provides the [`utf8`](/manual/api#utf8) library for working with UTF-8 encoded strings, as well as [`string.transcode`](/manual/api#string.transcode) for transcoding strings between different encodings.
+Strings are immutable sequences of 8-bit characters. The runtime does not enforce any specific encoding. The program chooses the encoding appropriate for its data. Lus provides the [`utf8` library](/manual/api#utf-8-library) for working with UTF-8 encoded strings and [`string.transcode`](/manual/api#string.transcode) for transcoding strings between different encodings.
 
 While strings can theoretically be used as buffers, the [`vector`](#vector) type is more appropriate (and efficient!) for this purpose.
 
@@ -205,9 +205,9 @@ print(`Multi-line:
 
 ### `table`
 
-Tables are the primary data structure in Lus. They possess an array component for sequential access and a map component for random access; both are accessed through the same `t[n]` syntax, where the array component will be indexed when `n` is a number and the map component will be indexed when `n` is any other value, except `nil` which is considered an invalid index.
+Tables are the primary data structure in Lus. They contain an array component for sequential access and a map component for keyed access. Both use the same `t[n]` syntax. Numeric keys can use the array component, while other non-nil keys use the map component.
 
-Tables are versatile for their capacity to represent any data structure; they can be used as arrays, sets, maps, trees, and more thanks to the automatic dispatch between the array and map components. Any other functionality can be implemented through _metatables_, which allow you to describe behavior for operations such as indexing, comparison, and arithmetic.
+Tables represent arrays, sets, maps, trees, and other structures through automatic dispatch between their array and map components. _Metatables_ define additional behavior for operations such as indexing, comparison, and arithmetic.
 
 Tables are constructed with curly braces:
 
@@ -222,23 +222,23 @@ Tables are covered in depth in [Tables](#tables), and metatables in [Metatables 
 
 ### `function`
 
-Functions are first-class objects in Lus; they can be assigned to variables, passed as arguments, returned from other functions, and even constructed at runtime. Each function is internally composed of two parts, the prototype and the closure; the prototype represents the function's _code_, while the closure represents the function's _context_, which lists the values captured by the function at the time of its instantiation, called _upvalues_.
+Functions are first-class objects in Lus. They can be assigned to variables, passed as arguments, returned from other functions, and constructed at runtime. A function combines a prototype containing its _code_ with a closure containing its _context_. Captured context values are called _upvalues_.
 
 Functions can return multiple values (`return a, b, c`), accept a variable number of arguments (`...`), and be called with method syntax (`:`) which automatically passes the receiver as the first argument. Functions are covered in depth in [Functions](#functions).
 
 ### `thread`
 
-Threads represent _coroutines_, which are lightweight units of execution that can be paused and resumed. They are useful for the implementation of iterators, generators, and other similar patterns where you need to yield control to another function. The type name `thread` is a bit of a misnomer preserved for backwards compatibility; coroutines are not true operating system threads. [Workers](/manual/guide#workers), however, are and should be used anywhere concurrency is required.
+Threads represent _coroutines_, which are lightweight units of execution that can be paused and resumed. They support iterators, generators, and other cooperative control-flow patterns. The type name `thread` is preserved for compatibility. [Workers](/manual/guide#workers) provide concurrent interpreter states scheduled on operating system threads.
 
 ### `userdata`
 
-Userdata are pointers to arbitrary data. Like tables, they can receive a metatable to define their behavior, but cannot otherwise be used or modified in any way. They are generated by programs embedding the Lus runtime and some parts of the standard library. In a pure Lus environment, you will most likely never encounter a userdata value outside of the [`io`](/manual/api#io) library when accessing files.
+Userdata are pointers to arbitrary data. Like tables, they can receive a metatable to define their behavior. Programs embedding the Lus runtime and parts of the standard library create userdata values. The [`io` library](/manual/api#io-library) uses them for file handles.
 
 ### `enum`
 
-Enums define a closed set of named constants. Internally, an enum consists of two parts: an _EnumRoot_ that holds the array of names, and individual _Enum_ values that reference both the root and a 1-based index. When you access an enum member like `Color.Red`, Lus looks up the name in the root's array and returns a new Enum value pointing to that index.
+Enums define a closed set of named constants. Each declaration creates one interned object per member. Name access such as `Color.Red` and 1-based numeric access such as `Color[1]` return those cached member objects.
 
-Enum values are comparable only within the same root; `Color.Red == Color.Red` is true, but comparing enums from different definitions is always false. This makes enums ideal for representing distinct states or options where type safety matters.
+Members from one declaration order by declaration position. `Color.Red == Color.Red` is true, while members from different enum declarations remain distinct even when they share a name or position. An ordering comparison between different declarations raises an error. Duplicate member names are compile-time errors.
 
 ### `vector`
 
@@ -352,7 +352,7 @@ Operators are evaluated in the following order, from highest to lowest precedenc
 | 11         | `and`                            |
 | 12         | `or`                             |
 
-Exponentiation (`^`) and concatenation (`..`) are right-associative; all other binary operators are left-associative. Parentheses can be used to override precedence.
+Exponentiation (`^`) and concatenation (`..`) are right-associative. All other binary operators are left-associative. Parentheses override precedence.
 
 ## Control flow
 
@@ -370,7 +370,7 @@ else
 end
 ```
 
-Remember that only `nil` and `false` are falsy; `0`, `""`, and empty tables are all truthy.
+Only `nil` and `false` are falsy. Values such as `0`, `""`, and empty tables are truthy.
 
 An `if` or `elseif` condition can include an assignment using `=`. The assigned variables are scoped to the entire conditional block (all branches), and the condition succeeds when all assigned values are truthy:
 
@@ -396,7 +396,7 @@ while i <= 5 do
 end
 ```
 
-The same assignment syntax works in `while` conditions. The expression is re-evaluated on each iteration; the loop exits when any assigned value is falsy. The assigned variables are scoped to the loop body:
+The same assignment syntax works in `while` conditions. The expression is evaluated on each iteration, and the loop exits when any assigned value is falsy. The assigned variables are scoped to the loop body.
 
 ```lus
 while line = file:read() do
@@ -526,7 +526,7 @@ The `local function` form pre-declares the variable, which is essential for recu
 
 ### Parameters and arguments
 
-Extra arguments are discarded; missing arguments become `nil`:
+Extra arguments are discarded. Missing arguments become `nil`.
 
 ```lus
 local function f(a, b, c)
@@ -539,7 +539,7 @@ f(1, 2, 3, 4)  --> 1  2  3
 
 ### Multiple return values
 
-Functions can return multiple values. When a function call is the last (or only) expression in a list, all its results are kept; otherwise, the call is adjusted to one result:
+Functions can return multiple values. A function call in the final position of an expression list keeps all its results. A call in an earlier position is adjusted to one result.
 
 ```lus
 local function two() return 10, 20 end
@@ -637,7 +637,7 @@ Positional entries fill indices starting from 1. The last entry may be a functio
 
 ### Array operations
 
-Tables used as arrays are 1-indexed. Use `#t` to get the sequence length, and the [`table`](/manual/api#table) library for common operations:
+Tables used as arrays are 1-indexed. Use `#t` to get the sequence length and the [`table` library](/manual/api#table-library) for common operations.
 
 ```lus
 local t = {10, 20, 30}
@@ -697,7 +697,7 @@ local deep     = table.clone(original, true)  -- fully independent copy
 
 ### Slices
 
-The slice syntax `t[start, end]` extracts a subsequence from a table, string, or vector. Either bound may be omitted: `t[, 3]` starts from 1, and `t[3, ]` ends at the last element. For tables, the result is a new table; for strings, a substring; for vectors, a new vector. Custom slice behavior can be defined with the `__slice(self, start, finish)` metamethod, which receives `nil` for omitted bounds.
+The slice syntax `t[start, end]` extracts a subsequence from a table, string, or vector. Either bound may be omitted. `t[, 3]` starts from 1, and `t[3, ]` ends at the last element. A table produces a new table, a string produces a substring, and a vector produces a new vector. The `__slice(self, start, finish)` metamethod defines custom behavior and receives `nil` for omitted bounds.
 
 ```lus
 local t = {10, 20, 30, 40, 50}
@@ -778,8 +778,8 @@ Lus supports many other metamethods:
 - `__tostring(t)`: string conversion (used by [`tostring`](/manual/api#tostring) and [`print`](/manual/api#print))
 - `__gc(t)`: finalizer, called when the object is garbage collected
 - `__close(t)`: called when a to-be-closed variable goes out of scope
-- `__slice(t, start, finish)`: the slice syntax `t[i, j]`; receives `nil` for omitted bounds
-- `__json(t)`: custom JSON serialization via [`tojson`](/manual/api#tojson); should return a table representing the desired JSON output
+- `__slice(t, start, finish)`: handles the slice syntax `t[i, j]` and receives `nil` for omitted bounds
+- `__json(t)`: returns a replacement value for custom JSON serialization through [`tojson`](/manual/api#tojson)
 - `__pairs(t)`: custom iterator for [`pairs`](/manual/api#pairs)
 - `__mode`: not a function, but a string (`"k"`, `"v"`, or `"kv"`) that makes the table's keys and/or values _weak_, allowing the garbage collector to reclaim them
 
@@ -930,7 +930,7 @@ See [Coroutines](#coroutines) for the full coroutine API.
 
 ## Coroutines
 
-Coroutines are cooperative threads of execution. Unlike OS threads, they never run in parallel; control is transferred explicitly through `resume` and `yield`.
+Coroutines are cooperative threads of execution. Control transfers explicitly through `resume` and `yield`, giving one coroutine execution at a time within its interpreter state.
 
 ### Creating and resuming
 
@@ -1014,7 +1014,7 @@ Special characters `( ) . % + - * ? [ ] ^ $` are escaped with `%` (e.g. `%.` mat
 
 ### Pattern functions
 
-The [`string`](/manual/api#string) library provides four pattern functions:
+The [`string` library](/manual/api#string-library) provides four pattern functions.
 
 [`string.find`](/manual/api#string.find) returns the start and end positions of a match:
 
@@ -1088,6 +1088,8 @@ local chunk = load("print(math.sqrt(16))", "sandbox", "t", safe_env)
 chunk()  --> 4.0
 ```
 
+The `"t"` mode accepts text only and is the appropriate mode for source from an untrusted party. Binary chunks are version-dependent runtime artifacts for trusted build and storage paths. Treat every binary chunk as trusted input.
+
 For security-critical sandboxing, the `pledge` function provides fine-grained capability-based access control. Permissions follow a hierarchical naming scheme, so granting a base permission implicitly grants all sub-permissions:
 
 ```lus
@@ -1102,7 +1104,7 @@ Path and URL restrictions can be added: `pledge("fs:read=/var/log/*")`. Permanen
 lus -Pfs -Pnetwork script.lus
 ```
 
-Coroutines inherit a copy of the parent's permissions at the time of creation; changes in either the parent or the coroutine are isolated from each other.
+Coroutines inherit an independent copy of the parent's permissions at creation. Later permission changes remain local to the parent or coroutine that makes them.
 
 ## Modules and require
 
@@ -1137,14 +1139,18 @@ return M
 
 ### Search paths
 
-`require("name")` searches for files using the patterns in [`package.path`](/manual/api#package.path) (for Lus files) and [`package.cpath`](/manual/api#package.cpath) (for C libraries). The `?` placeholder is replaced with the module name:
+`require("name")` consults [`package.searchers`](/manual/api#package.searchers) in this order: `package.preload`, launch-time preincluded modules, standalone bundled modules, files from [`package.path`](/manual/api#package.path), C libraries from [`package.cpath`](/manual/api#package.cpath), and C root loaders. The `?` placeholder in a path template is replaced with the module name.
 
 ```lus
 print(package.path)
---> ./?.lus;./?/init.lus;/usr/local/share/lus/?.lus
+--> /usr/local/share/lus/1.7/?.lus;...;./?.lus;./?/init.lus;./?.lua;./?/init.lua
 ```
 
-Custom searchers can be added to the [`package.searchers`](/manual/api#package.searchers) table. For distributing self-contained programs, the `--standalone` flag bundles a script and its dependencies into a single executable. Use `--include` to add files or directories; bundled modules take precedence over the filesystem. CLI flags like `-P` are baked into the binary:
+Within each default source directory, `.lus` and `init.lus` templates precede their `.lua` compatibility templates. Directories are searched in this order: `share/lus/1.7`, `lib/lus/1.7`, `share/lua/1.7`, `lib/lua/1.7`, then the current directory. The standalone interpreter derives those versioned directories from an archive whose executable is under `bin`. Other standalone invocations use the configured installation prefix. An embedded state always uses the prefix configured when `liblus` was built.
+
+`LUA_PATH_1_7` takes priority over `LUA_PATH`, and `LUA_CPATH_1_7` takes priority over `LUA_CPATH`. A `;;` marker in either environment value inserts the corresponding defaults at that position. The `-E` option ignores these environment values. Custom searchers can be added to the [`package.searchers`](/manual/api#package.searchers) table.
+
+For distributing self-contained programs, the `--standalone` flag bundles a script and its dependencies into a single executable. Use `--include` to add files or directories. The bundle searcher resolves a bundled module before the filesystem searchers. CLI flags like `-P` are baked into the binary.
 
 ```bash
 lus --standalone app.lus --include lib/
@@ -1165,7 +1171,7 @@ local function divide(a, b)
 end
 ```
 
-The `catch` expression evaluates a sub-expression and captures any error that occurs. It returns a boolean indicating success and either the result or the error object:
+The `catch` expression evaluates a sub-expression and captures any error that occurs. Success returns `true` followed by every expression result. Failure returns exactly `false` and the raw error object:
 
 ```lus
 local ok, result = catch divide(10, 0)
@@ -1180,9 +1186,9 @@ The message carries a `file:line:` position prefix because `error` adds one to s
 
 If an error is not caught, it propagates up to the host program, which can handle it appropriately (for example, by printing a message and exiting).
 
-An error object can be any value except `nil`. Lus itself generates string error messages, but your code can use tables or other types for richer error information.
+An error object can have any type. Strings, tables, and other values pass through catch unchanged. A `nil` error payload becomes the string `"<no error object>"`.
 
-Lus also provides a warning system via [`warn`](/manual/api#warn). Unlike errors, warnings do not interrupt execution; they simply emit a message to the user.
+Lus also provides a warning system through [`warn`](/manual/api#warn). Warnings emit a message while execution continues.
 
 ### Catch handlers
 
@@ -1197,33 +1203,31 @@ local ok, err = catch[simplify] divide(10, 0)
 -- err is now just "division by zero" without file/line prefix
 ```
 
-When an error occurs, the handler is called with the error object and its return value replaces the original error. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates uncaught. The bracketed expression must evaluate to a function. Any other value raises an error at the catch site, so a misspelled handler name is reported instead of being silently ignored.
+When an error occurs, the handler is called with the raw error object and its first return value replaces the original error. Additional handler results are discarded. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates to an outer catch or the host. The bracketed expression must evaluate to a function, and any other value raises an error at the catch site.
 
 ### C API error handling
 
 _This section is primarily relevant for programs embedding the Lus runtime in C/C++._
 
-Lus uses a unified catch-based error handling mechanism. The older `lua_pcall` and `lua_pcallk` functions still work for compatibility, but new C code should use the `CPROTECT` macros:
+Use the public `lua_pcall` or `lua_pcallk` interfaces from the installed `lua.h` header to call Lus functions in protected mode. A successful call returns `LUA_OK`. A failure returns a status code and leaves its error object on the stack.
 
 ```c
-#include "ldo.h"
+#include "lua.h"
 
-void my_function(lua_State *L) {
-  CCatchInfo cinfo;
-  CPROTECT_BEGIN(L, &cinfo)
-    /* code that may throw errors */
-    lua_pushstring(L, "test");
-    lua_call(L, 0, 0);
-  CPROTECT_END(L, &cinfo);
-
-  if (cinfo.status != LUA_OK) {
-    /* handle error */
-    lua_pop(L, 1);  /* remove error object */
+int run_work(lua_State *L) {
+  int status;
+  lua_getglobal(L, "work");
+  status = lua_pcall(L, 0, 0, 0);
+  if (status != LUA_OK) {
+    const char *message = lua_tostring(L, -1);
+    report_error(message);
+    lua_pop(L, 1);
   }
+  return status;
 }
 ```
 
-The `CPROTECT` macros integrate with Lus's `catch` expressions, ensuring consistent error handling between C and Lus code. When compiled as C++, they use native `try`/`catch`; in C mode, they use `setjmp`/`longjmp`.
+`lua_pcallk` adds a continuation for protected calls that can yield. The runtime's internal protection macros and `ldo.h` remain private implementation details and are not installed as part of the embedding SDK.
 
 ## Standard library
 
@@ -1235,7 +1239,7 @@ The [`pledge`](/manual/api#pledge) function (covered in [Sandboxing](#sandboxing
 
 ### JSON
 
-[`fromjson`](/manual/api#fromjson) parses a JSON string into a table, and [`tojson`](/manual/api#tojson) serializes a table to JSON. JSON null maps to `nil`, arrays become integer-keyed tables, and objects become string-keyed tables:
+[`fromjson`](/manual/api#fromjson) parses a complete JSON value from a string or from the textual form of a numeric argument, and [`tojson`](/manual/api#tojson) serializes a Lus value. JSON null maps to `nil`, arrays become integer-keyed tables, and objects become string-keyed tables:
 
 ```lus
 local data = fromjson('{"name": "Alice", "scores": [95, 87]}')
@@ -1245,13 +1249,15 @@ print(data.scores[1])  --> 95
 local json = tojson({name = "Bob", scores = {95, 87}})
 ```
 
-The [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) globals provide the same round trip for CSV data.
+Integer JSON syntax preserves the integer subtype, while a decimal point or exponent produces a float. JSON null becomes an absent table field or an array hole because it maps to `nil`. A contiguous table key set from 1 through `n` serializes as an array. Other tables serialize as objects, which retain string keys and omit keys of other types. The empty table serializes as `[]`. JSON object member order is unspecified, so consumers should parse objects and access members by name.
 
-`tojson` accepts an optional filter function as a second argument for transforming or omitting fields during serialization. Tables with a `__json` metamethod (see [Other metamethods](#other-metamethods)) can customize their JSON representation. Special float values ([`math.huge`](/manual/api#math.huge), `-math.huge`, NaN) serialize as `null`; circular references produce an error.
+`tojson` accepts an optional filter function as a second argument for transforming or omitting fields. The filter first receives the root with a `nil` key, then integer array keys or string object keys. Tables with a `__json` metamethod can return any serializable replacement value. Special float values such as [`math.huge`](/manual/api#math.huge), negative infinity, and NaN serialize as `null`. Functions, threads, userdata, vectors, and enum values serialize as `null` at the root or in arrays, while object fields with these values are omitted. Shared acyclic tables serialize by value and circular references raise an error. [Acquis 6](/manual/acquis-6) gives the full mapping.
+
+The [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) globals provide CSV parsing and serialization.
 
 ### Filesystem
 
-The [`fs`](/manual/api#fs) library provides cross-platform filesystem operations. All `fs` functions throw on failure; use `catch` for error handling:
+The `fs` library provides cross-platform filesystem operations. All `fs` functions throw on failure. Use `catch` for error handling.
 
 ```lus
 local files = fs.list("src", "*.lus")
@@ -1263,18 +1269,20 @@ Key functions include `fs.type(path)` (returns `"file"` or `"directory"` and whe
 
 ### Networking
 
-The [`network`](/manual/api#network) library provides HTTP/HTTPS, TCP, and UDP communication:
+The [`network` library](/manual/api#network-library) provides HTTP, HTTPS, TCP, and UDP communication.
 
 ```lus
 local status, body, headers = network.fetch("https://api.example.com/data")
 local sock = network.tcp.connect("example.com", 80)
 ```
 
-`network.fetch(url, method, headers, body)` performs HTTP requests and returns the status code, response body, and response headers. TCP sockets support `send`, `receive` (with patterns: a number for N bytes, `"*l"` for a line, `"*a"` for all available data), `settimeout`, and `close`. UDP sockets are available via [`network.udp.open`](/manual/api#network.udp.open).
+`network.fetch(url, method, headers, body)` uses positional optional arguments and returns the status code, response body, and lowercase response headers. The method defaults to `"GET"`, and response bodies are capped at 64 MiB.
+
+TCP sockets support `send`, `receive`, `settimeout`, and `close`. A numeric receive reads up to 1 MiB. `receive("*l", max_bytes)` reads a line with a 1 MiB default limit. `receive("*a", max_bytes)` reads through EOF with a 64 MiB default limit. Exceeding a line or all-data limit closes the connection and raises `"receive limit exceeded"`. TCP servers and UDP sockets expose `getsockname()` so a bind to port `0` can report the selected address and port. UDP receives default to 8 KiB and accept a maximum size of 1 MiB. [Acquis 9](/manual/acquis-9) documents the socket methods.
 
 ### Workers
 
-[Workers](/manual/api#worker) are separate interpreter states running on a thread pool, providing true concurrency through message passing. Arguments passed to [`worker.create`](/manual/api#worker.create) are deep-copied into the worker's state:
+[Workers](/manual/api#worker-library) are separate interpreter states running on a process-wide thread pool. They provide concurrency through serialized message passing. Arguments passed to [`worker.create`](/manual/api#worker.create) are deep-copied into the worker's state:
 
 ```lus
 local w = worker.create("task.lus", {data = "input"})
@@ -1284,7 +1292,9 @@ while result = worker.receive(w) do
 end
 ```
 
-Inside a worker, `worker.message(data)` sends data back to the parent, and `worker.peek()` blocks until a message arrives. [`worker.receive`](/manual/api#worker.receive) can accept multiple workers and returns from whichever has a message first (select-like). Workers inherit the parent's permissions in sealed form, so a worker can never hold more permissions than its parent. Creating a worker requires the `load` and `fs:read` permissions to read its script file.
+Inside a worker, `worker.message(data)` sends data back to the parent, and `worker.peek()` blocks until a parent message arrives. [`worker.receive`](/manual/api#worker.receive) accepts one or more workers and returns one aligned value per handle after any handle becomes ready. Worker states have separate globals and heaps, but they share the host process and runtime pool. The host process remains the security boundary. Workers inherit the parent's permissions in sealed form. Creating a worker requires the `load` and authorized `fs:read` permissions for its script file.
+
+On the main interpreter, [`os.exit`](/manual/api#os.exit) terminates the process. Inside a worker, the call raises the catchable error `"os.exit is unavailable in a worker"`. A worker can catch that error and continue. An uncaught instance reaches the parent as the worker's execution error.
 
 ### Time
 
@@ -1321,7 +1331,7 @@ for row in db:query("SELECT id, name FROM users WHERE age >= ?", 18) do
 end
 ```
 
-File-backed databases are gated by the same value-scoped `fs:read` and `fs:write` pledges as `io.open`, covering the database path and its sidecar files. A `":memory:"` database needs no pledge at all.
+Opening a file-backed database checks the database path against `fs:read` and, for the default writable mode, `fs:write`. A per-connection pledge-aware VFS then authorizes every SQLite file operation, including access to `-journal`, `-wal`, and `-shm` sidecars when SQLite uses them. Read-only mode uses existing WAL and SHM state with `fs:read`, shared coordination locks, and read-only WAL-index access. A sidecar state that needs creation or recovery raises an `fs:write` permission error. The path-changing PRAGMAs `data_store_directory`, `temp_store_directory`, and `lock_proxy_file` are denied case-insensitively. A `":memory:"` database needs no filesystem pledge.
 
 Indexing a handle with a table name yields a query source, so `@db.users as u where u.age >= 18 select u.name` pushes down as a parameterized SELECT. This library is described in full in [Acquis 33](/manual/acquis-33).
 
@@ -1329,16 +1339,16 @@ Indexing a handle with a table name yields a query source, so `@db.users as u wh
 
 The full standard library also includes:
 
-- [`math`](/manual/api#math) for mathematical functions.
-- [`string`](/manual/api#string) for string manipulation and patterns.
-- [`table`](/manual/api#table) for table manipulation.
-- [`io`](/manual/api#io) for file I/O.
-- [`os`](/manual/api#os) for operating system facilities.
-- [`utf8`](/manual/api#utf8) for UTF-8 support.
-- [`debug`](/manual/api#debug) for debugging facilities.
-- [`vector`](/manual/api#vector) for byte buffers.
-- [`coroutine`](/manual/api#coroutine) for coroutine control.
-- [`package`](/manual/api#package) for module loading.
+- [`math`](/manual/api#math-library) for mathematical functions.
+- [`string`](/manual/api#string-library) for string manipulation and patterns.
+- [`table`](/manual/api#table-library) for table manipulation.
+- [`io`](/manual/api#io-library) for file I/O.
+- [`os`](/manual/api#os-library) for operating system facilities.
+- [`utf8`](/manual/api#utf-8-library) for UTF-8 support.
+- [`debug`](/manual/api#debug-library) for debugging facilities.
+- [`vector`](/manual/api#vector-library) for byte buffers.
+- [`coroutine`](/manual/api#coroutine-library) for coroutine control.
+- [`package`](/manual/api#package-library) for module loading.
 
 See the [API reference](/manual/api) for complete documentation.
 

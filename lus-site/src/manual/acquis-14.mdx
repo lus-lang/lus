@@ -25,7 +25,7 @@ Lua warning: filename:line: message
 
 Calling `pledge()` after `pledge("seal")` has no effect because permissions are frozen.
 
-```lua
+```lus
 pledge("fs")
 pledge("seal")
 pledge("network")  -- Warning: pledge() after pledge("seal") has no effect
@@ -35,13 +35,13 @@ pledge("network")  -- Warning: pledge() after pledge("seal") has no effect
 
 References to `pcall` or `xpcall` suggest using the `catch` expression instead ([Acquis 1](/manual/acquis-1)).
 
-```lua
+```lus
 local ok, err = pcall(risky)  -- Warning: 'pcall' is deprecated, use 'catch'
 ```
 
 Use instead:
 
-```lua
+```lus
 local ok, result = catch risky()
 ```
 
@@ -49,7 +49,7 @@ local ok, result = catch risky()
 
 Local variables that are only used in the immediately following `if` or `while` condition can be moved into the condition using assignment syntax ([Acquis 3](/manual/acquis-3), [Acquis 13](/manual/acquis-13)).
 
-```lua
+```lus
 local x = getValue()
 if x then          -- Warning: local declaration can be moved to if condition
     process(x)
@@ -58,7 +58,7 @@ end
 
 Use instead:
 
-```lua
+```lus
 if x = getValue() then
     process(x)
 end
@@ -68,20 +68,20 @@ end
 
 Multi-level `and` chains checking for nil can use optional chaining ([Acquis 2](/manual/acquis-2)).
 
-```lua
+```lus
 local port = cfg and cfg.server and cfg.server.port
 -- Warning: and-chain can use optional chaining: x?.y?.z
 ```
 
 Use instead:
 
-```lua
+```lus
 local port = cfg?.server?.port
 ```
 
 This also applies to nested `if x ~= nil` checks:
 
-```lua
+```lus
 if cfg ~= nil then
     if cfg.server ~= nil then
         print(cfg.server.port)
@@ -94,14 +94,14 @@ end
 
 Pattern of extracting multiple fields from a table can use `from` syntax ([Acquis 4](/manual/acquis-4)).
 
-```lua
+```lus
 local a, b, c = t.a, t.b, t.c
 -- Warning: use 'from' destructuring: local ... from t
 ```
 
 Use instead:
 
-```lua
+```lus
 local a, b, c from t
 ```
 

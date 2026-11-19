@@ -5,7 +5,7 @@ date: 2025-12-05
 
 Lus 1.0.0 is the **first major release** of the language.
 
-> This changelog denotes differences between Lus and Lua 5.5 RC 2. Lua 5.5 most (in)famously introduces the `global` assignment statement; it is not a Lus-specific feature.
+> This changelog denotes differences between Lus and Lua 5.5 RC 2. Lua 5.5 introduces the `global` assignment statement, which Lus inherits.
 
 - Added table deconstruction with `from` assignment.
 - Added scoped assignments in `if`/`elseif` conditionals.

@@ -16,7 +16,7 @@ You will need the following tools to compile the runtime:
 - OpenSSL development libraries (for HTTPS support)
 - c-ares development libraries (for async DNS)
 - Compression libraries: zlib, zstd, brotli, and lz4 (for `vector.archive`)
-- A threading library (pthreads; included by default on most systems)
+- A threading library. Pthreads is included by default on most systems.
 - readline (macOS) or libedit (FreeBSD/NetBSD/OpenBSD) for the REPL
 
 ### Installing Dependencies
@@ -52,6 +52,8 @@ meson compile -C build
 
 The `lus` interpreter and `lusc` compiler will be placed in the `build` directory. The `lusc` compiler precompiles Lus source files to bytecode.
 
+Compiled bytecode is tied to the producing Lus version and platform. It is a trusted build artifact. Applications that accept source from an untrusted party should use the text-only `"t"` mode of `load` or `loadfile`.
+
 ### Build types
 
 ```bash
@@ -79,23 +81,27 @@ meson test -C build --suite h1
 sudo meson install -C build
 ```
 
-This installs the `lus` and `lusc` executables, headers, and static library to the system prefix (typically `/usr/local`). Alternatively, copy the binaries manually:
+This installs the `lus` and `lusc` executables, headers, static libraries, and build metadata to the system prefix (typically `/usr/local`). Alternatively, copy the binaries manually:
 
 - On macOS and Linux, you can place them in the `/usr/local/bin` directory.
-- On Windows, you should create a new directory for Lus and [follow these instructions](<https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ee537574(v=office.14)#to-add-a-path-to-the-path-environment-variable>) to add it to your system's `PATH`.
+- On Windows, create a directory for Lus and add that directory to your user `PATH` through Windows Settings.
 
 ## Embedding Lus
 
-The build installs the following headers: `lua.h`, `luaconf.h`, `lualib.h`, `lauxlib.h`, and `lua.hpp` (C++ wrapper). Use pkg-config to get the correct compiler and linker flags:
+The SDK installs `lua.h`, `luaconf.h`, `lualib.h`, `lauxlib.h`, `lworkerlib.h`, `lua.hpp`, and the matching `sqlite3.h`. Unix archives carry `liblus.a` and the separate `libsqlite3.a`. Windows archives carry `lus.lib` and `sqlite3.lib`. Keeping SQLite in its own archive preserves the public `sqlite3*` embedding surface while allowing `liblus` to remain the language library.
+
+Static consumers also link OpenSSL, c-ares, zlib, zstd, brotli, lz4, the platform thread library, and applicable platform libraries. Use the archive's package metadata with static dependency expansion:
 
 ```bash
-pkg-config --cflags --libs lus
+pkg-config --cflags --libs --static lus
 ```
 
 Example compilation:
 
 ```bash
-gcc -o myapp myapp.c $(pkg-config --cflags --libs lus) -lm -lpthread
+gcc -o myapp myapp.c $(pkg-config --cflags --libs --static lus)
 ```
+
+On Windows, `find_package(Lus CONFIG REQUIRED)` imports `Lus::lus`, its separate `Lus::sqlite3` dependency, and the external vcpkg dependencies recorded by the archive.
 
 See [C API error handling](/manual/guide#c-api-error-handling) in the Guide for details on using the C API.

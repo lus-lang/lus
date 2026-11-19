@@ -2,28 +2,31 @@
   "name": "lus-site",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@10.18.0",
   "scripts": {
     "dev": "astro dev",
     "prebuild": "node scripts/fetch-wasm.mjs",
     "build": "astro build",
+    "build:local-wasm": "node scripts/build-local-wasm.mjs",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
     "preview": "astro preview",
     "astro": "astro"
   },
   "dependencies": {
     "@astrojs/mdx": "^6.0.3",
     "@astrojs/sitemap": "^3.7.3",
-    "@fontsource-variable/atkinson-hyperlegible-next": "^5.2.6",
-    "@fontsource-variable/bricolage-grotesque": "^5.2.10",
-    "@fontsource-variable/intel-one-mono": "^5.2.2",
-    "@lucide/astro": "^1.17.0",
-    "@tailwindcss/vite": "^4.3.0",
+    "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/intel-one-mono": "^5.3.0",
+    "@lucide/astro": "^1.37.0",
+    "@tailwindcss/vite": "^4.3.3",
     "astro": "^6.4.5",
     "modern-monaco": "^0.4.2",
     "sharp": "^0.34.5",
-    "tailwindcss": "^4.3.0"
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
-    "@astrojs/markdown-remark": "^7.2.0",
+    "@astrojs/markdown-remark": "^7.2.4",
     "rehype-autolink-headings": "^7.1.0"
   }
 }

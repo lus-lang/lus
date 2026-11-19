@@ -44,7 +44,7 @@ x = nil -- not invoked; nothing printed
 
 ## Multiple attributes
 
-Multiple attributes can be provided by separating them with commas. They will be invoked in the order they are provided. The last returned value will be used as the value of the variable; previous values will be passed as arguments to the next attribute.
+Multiple attributes can be separated with commas. They run in declaration order. Each result becomes the argument to the next attribute, and the final result becomes the variable value.
 
 ```lus
 local function first(name, value)
@@ -88,7 +88,7 @@ setter(2) -- writes x directly, so x is now 2
 
 ## Attribute lifetime
 
-Attribute values will only be garbage collected when the variable goes out of scope; the attribute creates a relationship between the variable and the function. This can be demonstrated by using a metatable with a `__gc` metamethod:
+An attribute keeps its value reachable for the lifetime of the variable. A metatable with a `__gc` metamethod demonstrates that relationship.
 
 ```lus
 local printvar = setmetatable({}, {

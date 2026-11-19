@@ -2,141 +2,107 @@
 order: 111
 title: Acquis 11 - Workers
 acquis: true
-shortdesc: "Concurrency based on M:N hybrid threading and message passing through workers."
+shortdesc: "Concurrent interpreter states using a shared thread pool and message passing."
 ---
 
-Workers in Lus allows for concurrency through the instantiation of separate interpreter states running in their own threads. While workers appear to the user as isolated execution contexts, the underlying implementation utilizes a thread pool (M:N) architecture.
+Workers provide concurrency through separate Lus interpreter states scheduled on a process-wide thread pool. Each state has its own globals, stack, garbage collector, and message queues. The states still share one operating system process and the runtime worker pool. The host process remains the security boundary, while workers isolate interpreter state and message data.
 
-Rather than mapping one worker strictly to one operating system thread, Lus utilizes a fixed number of OS threads (M) to service a potentially larger number of worker states (N). The Lus runtime creates a pool of OS threads upon initialization (typically equal to the number of logical CPU cores), and worker states are scheduled onto these threads dynamically.
+## Creating a worker
 
-## Basic usage
+`worker.create(path, ...)` loads a Lus script in a new state and returns a worker handle. The additional arguments are serialized into the new state and are available through the script's varargs.
 
-Workers can be created by passing a filepath and optional arguments to the `worker.create` function:
-
-```lua
-local p = worker.create("script.lus")
-
--- Worker with arguments.
-local w = worker.create("script.lus", { a = 1 }, "foobar")
+```lus
+-- main.lus
+local worker_handle = worker.create("processor.lus", {1, 2, 3}, "sum")
 ```
 
-Arguments passed to a worker will be copied to the new interpreter state and are accessible in varargs (`...`). Userdata and threads are **not** copied to the new state and attempts to pass any will error before the worker is created.
+```lus
+-- processor.lus
+local values, operation = ...
+```
 
-The current worker state can be retrieved with `worker.status`, similar to `coroutine.status`, which can either return `running` when a worker is still running or `dead` when the worker has returned.
+Nil, booleans, integers, floats, strings, and tables can cross a worker boundary. Tables are deep-copied and may nest up to 100 levels. Functions, threads, userdata, vectors, enums, and queries produce a serialization error. A worker therefore receives independent values and cannot mutate a table in its parent state.
 
-## Message passing
+`worker.status(handle)` returns `"running"` while the script is active and `"dead"` after it finishes or raises an error.
 
-Communication between the main thread and Workers is asynchronous and bi-directional. Messages are deep-copied between states to ensure thread safety.
+## Worker to parent messages
 
-### Worker to Main (`message` and `receive`)
+Inside a worker state, `worker.message(value)` appends a serialized value to the worker's outbox. The parent calls `worker.receive(handle)` to wait for and deserialize the next value.
 
-Workers can send messages to their parent state with the `worker.message` global function. The parent state receives these by passing the worker instance(s) to `worker.receive`.
-
-**`script.lus`**
-
-```lua
+```lus
+-- processor.lus
 global worker
 
--- Send data back to parent
-worker.message("Process started")
-for i = 1, 10 do
-  worker.message(i)
+local values = ...
+local total = 0
+for _, value in ipairs(values) do
+    total = total + value
 end
+worker.message(total)
 ```
 
-**`main.lus`**
-
-```lua
+```lus
+-- main.lus
 global worker
 
-local p = worker.create("script.lus")
-
--- Blocks until a message is available or the worker dies
-while result = worker.receive(p) do
-  print("Got result:", result)
-end
+local handle = worker.create("processor.lus", {1, 2, 3})
+local total = worker.receive(handle)
+assert(total == 6)
 ```
 
-**Select-like Behavior:**
-`worker.receive` accepts multiple workers as arguments. It behaves like a `select` operation: it blocks until **at least one** of the provided workers has a message available. It does _not_ wait for all workers.
+`worker.receive` accepts multiple handles. It waits until at least one handle has a message or reaches a terminal state, then returns one aligned result per handle. A handle without a ready message contributes `nil`.
 
-The return values correspond to the order of the arguments passed. If a worker has no message ready, its corresponding return value is `nil`.
+```lus
+local first = worker.create("task.lus", "first")
+local second = worker.create("task.lus", "second")
 
-```lua
-local p1 = worker.create("slow_task.lus")
-local p2 = worker.create("fast_task.lus")
-
-while true do
-  -- Block until either p1 OR p2 sends a message
-  local res1, res2 = worker.receive(p1, p2)
-
-  if res1 then
-    print("p1 says:", res1)
-  end
-
-  if res2 then
-    print("p2 says:", res2)
-  end
-
-  -- Break if both workers are dead and empty
-  if worker.status(p1) == "dead" and worker.status(p2) == "dead"
-     and not res1 and not res2 then
-     break
-  end
-end
+local first_message, second_message = worker.receive(first, second)
+if first_message then print("first:", first_message) end
+if second_message then print("second:", second_message) end
 ```
 
-### Main to Worker (`send` and `peek`)
+## Parent to worker messages
 
-The parent state can send messages to a running worker using `worker.send`. The worker consumes these messages using `worker.peek`.
+The parent uses `worker.send(handle, value)` to append a value to the worker's inbox. The worker-only `worker.peek()` function blocks until it can return the next inbox value.
 
-**`main.lus`**
-
-```lua
-local w = worker.create("processor.lus")
-
--- Send instructions to the running worker
-worker.send(w, "START")
-worker.send(w, { data = {1, 2, 3} })
+```lus
+-- main.lus
+worker.send(handle, {command = "start"})
 ```
 
-**`processor.lus`**
-
-```lua
+```lus
+-- processor.lus
 global worker
 
-while true do
-  -- worker.peek() blocks until the parent sends a message
-  local msg = worker.peek()
-
-  if msg == "START" then
-    print("Starting...")
-  elseif type(msg) == "table" then
-    process_data(msg.data)
-  elseif msg == "STOP" then
-    break
-  end
+local message = worker.peek()
+if message.command == "start" then
+    run()
 end
 ```
 
-Like `receive`, `worker.peek` queues messages. If multiple messages are sent before `peek` is called, they are stored in the state's inbox. If `worker.peek` is called when the queue is empty, it blocks until a message arrives.
+Both directions preserve message order within a queue. Serialization happens before a value enters the destination queue.
 
-## Error handling
+## Errors
 
-Errors in workers will also queue and will be thrown in `worker.receive`. The following pattern is recommended if you are expecting workers to error:
+An error from the worker script is raised by `worker.receive`. A catch exposes that error through the normal `false, error` result.
 
-```lua
-while err, result = catch worker.receive(p) do
-  if err then
-    print("Worker crashed:", err)
-    break
-  end
-  -- process result
+```lus
+local ok, result = catch worker.receive(handle)
+if not ok then
+    print("Worker failed:", result)
+else
+    process(result)
 end
 ```
+
+A worker that has finished and has no queued message produces `nil` from `worker.receive`.
+
+`os.exit` terminates the process when called by the main interpreter. Inside a worker it raises the catchable error `"os.exit is unavailable in a worker"`. A worker can catch that error and continue. If it remains uncaught, `worker.receive` raises it in the parent like any other worker execution error.
 
 ## Permissions
 
-Usage of workers requires the `load` and the requisite `fs:read` pledges like `require`.
+Creating a worker requires `load` and the `fs:read` authority for its script path. The worker inherits the parent's effective pledges in sealed form. Code inside the worker can narrow those permissions with `pledge`, and the sealed state keeps its authority within the inherited set.
 
-Workers will inherit the parent's permissions, but can be restricted further by invoking `pledge` in the worker state.
+## Scheduling
+
+The runtime initializes a fixed-size pool of operating system threads and schedules worker states over that pool. This M:N model supports more worker states than pool threads while keeping resource use bounded. Blocking worker operations cooperate with the pool so other runnable states can continue.

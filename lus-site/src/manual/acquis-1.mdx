@@ -2,145 +2,96 @@
 order: 101
 title: Acquis 1 - Catch
 acquis: true
-shortdesc: "Expression-level catch statements instead of pcall/xpcall for error handling."
+shortdesc: "Expression-level protected evaluation with raw error objects."
 ---
 
-The `catch` expression evaluates any expression in protected mode and returns a boolean success flag alongside the result of the expression or an error message.
+The `catch` expression evaluates an expression in protected mode. A successful catch returns `true` followed by every result from the expression. A failed catch returns exactly `false` and the raw error object.
 
 ## Syntax
 
 The `catch` keyword is followed by any expression:
 
-```lua
-local success,  ... = catch <expression>
+```lus
+local success, ... = catch <expression>
 ```
 
-When the expression evaluates successfully, `success` is `true` and `...` contains the value of the expression. When the expression raises an error, `success` is `false` and `...` is instead the error message.
+The error object keeps its original type and identity. Strings, numbers, tables, functions, threads, vectors, and enum values all pass through unchanged. An error raised with a `nil` payload produces the string `"<no error object>"`.
 
-```lua
--- Successful evaluation
-local ok, val = catch 1 + 2
-assert(ok == true)
-assert(val == 3)
-
--- Error during evaluation
-local ok, err = catch 1 + "a"
+```lus
+local marker = { code = 42 }
+local ok, err = catch error(marker)
 assert(ok == false)
-assert(type(err) == "string")  -- error message
+assert(err == marker)
 ```
 
 ## Return values
 
-The `catch` expression always returns at least a boolean status, and either the results or error message. When you only need to know whether an expression succeeded, you can ignore the second value:
+A catch preserves the complete result list on success.
 
-```lua
+```lus
+local function values()
+    return "a", "b", "c"
+end
+
+local ok, a, b, c = catch values()
+assert(ok == true)
+assert(a == "a" and b == "b" and c == "c")
+```
+
+An expression that returns no values gives the catch one result, the `true` status. A failure always gives two results. Normal expression-list rules still apply, so parentheses or a non-final position truncate a catch to its first result.
+
+When only the status matters, the remaining results can be ignored.
+
+```lus
 local ok = catch someRiskyOperation()
 if not ok then
-  -- handle error without needing the message
+    recover()
 end
 ```
 
-This pattern is particularly useful for assertions when testing error conditions:
+The same form makes expected failures concise in tests.
 
-```lua
--- Assert that an operation fails
-assert(not catch type())           -- type() with no args errors
-assert(not catch coroutine.yield()) -- yield outside coroutine errors
+```lus
+assert(not catch type())
+assert(not catch coroutine.yield())
 ```
 
 ## Function calls
 
-The most common use case is catching errors from function calls:
+Function calls are protected directly.
 
-```lua
+```lus
 local ok, result = catch require("no-such-module")
 if not ok then
-  print("Module not found: " .. result)
+    print("Module not found: " .. tostring(result))
 end
 
 local ok, data = catch load(someCode)
 if ok then
-  data()  -- execute the loaded chunk
+    data()
 end
 ```
 
-## Composition with other Lus features
+## If assignment
 
-### With if-assignment
+If assignment keeps the status and value in scope for both branches.
 
-The `catch` expression integrates naturally with Lus's if-assignment syntax:
-
-```lua
+```lus
 if ok, val = catch someOperation() then
-  print("Success:", val)
+    print("Success:", val)
 else
-  print("Failed:", val)  -- val contains error message here
+    print("Failed:", tostring(val))
 end
 ```
 
----
+## Catch statements and handlers
 
-## Motivation
+A catch used as a statement evaluates the expression, discards its results, and suppresses an error. The optional `catch[handler] expression` form calls `handler` only when the expression fails. The handler receives the raw error object, and its first result becomes the catch error result. An error raised by the handler propagates to the surrounding code. [Acquis 20](/manual/acquis-20) describes handlers in detail.
 
-Lua's error handling primitives, `pcall` and `xpcall`, operate at the function level. This design has several limitations that become apparent in real-world code.
+```lus
+catch cleanupTemporaryFile()
 
-### The anonymous function problem
-
-To protect a single expression, Lua requires wrapping it in an anonymous function:
-
-```lua
--- Lua: protecting a single operation
-local ok, result = pcall(function()
-  return someValue + otherValue
-end)
-```
-
-This boilerplate obscures the intent and adds cognitive overhead. With `catch`, the same operation is direct:
-
-```lua
--- Lus: direct expression protection
-local ok, result = catch someValue + otherValue
-```
-
-### Dependency on the global library
-
-`pcall` and `xpcall` are global functions, meaning code that uses protected execution depends on the global environment. Sandboxed or restricted environments may not expose these functions, leaving code unable to handle errors gracefully.
-
-The `catch` keyword is a language construct, not a library function. It works in any environment regardless of what globals are available.
-
-### Verbose error checking patterns
-
-Common Lua patterns for error checking become verbose:
-
-```lua
--- Lua: checking if an operation would fail
-local ok = pcall(function() type() end)
-if not ok then
-  print("type() requires an argument")
-end
-```
-
-With `catch`, this becomes natural:
-
-```lua
--- Lus: concise error checking
-if not catch type() then
-  print("type() requires an argument")
-end
-```
-
-### Testing error conditions
-
-Test suites frequently need to verify that operations fail as expected. The Lua pattern requires nested function calls:
-
-```lua
--- Lua: asserting an error
-assert(not pcall(function() error("expected") end))
-```
-
-With `catch`, assertions about errors read more naturally:
-
-```lua
--- Lus: asserting an error
-assert(not catch error("expected"))
+local ok, issue = catch[function(err)
+    return { cause = err, operation = "load settings" }
+end] loadSettings()
 ```

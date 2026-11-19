@@ -19,7 +19,7 @@ lus -Fname=alpha script.lus       # flags.name == "alpha" (string)
 lus --flag channel=beta script.lus  # same as -F
 ```
 
-The table always exists, even when no flags are given; flags that were never defined read as `nil`.
+The table always exists, including when no flags are given. Undefined flags read as `nil`.
 
 ```lus
 -- Run with: lus -Fdebug -Fversion=1.5 script.lus
@@ -30,7 +30,7 @@ assert(flags.absent == nil)
 
 ## Compile-time folding
 
-The parser detects `flags` lookups in `if`/`elseif` conditions and computes the branch ahead of time. When the condition resolves truthy, the body is kept and the rest of the chain is discarded; when it resolves falsy, the body is discarded and the chain continues. Both the bare and negated forms fold:
+The parser detects `flags` lookups in `if` and `elseif` conditions and computes the branch ahead of time. A truthy condition keeps its body. A falsy condition continues to the next branch. Both the bare and negated forms fold.
 
 ```lus
 -- With -Fprerelease, this body is compiled; without it, the body is

@@ -1,6 +1,6 @@
 // @ts-check
 import { defineConfig } from "astro/config"
-import { rehypeHeadingIds } from "@astrojs/markdown-remark"
+import { rehypeHeadingIds, unified } from "@astrojs/markdown-remark"
 import rehypeAutolinkHeadings from "rehype-autolink-headings"
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -80,6 +80,7 @@ function lucideIconData() {
 // https://astro.build/config
 export default defineConfig({
   output: "static",
+  publicDir: process.env.LUS_SITE_PUBLIC_DIR || "./public",
   redirects: {
     "/manual/tldr": "/manual/acquis",
     // deleted pages; the faq's load-bearing answers migrated into the
@@ -91,10 +92,6 @@ export default defineConfig({
   vite: {
     plugins: [tailwindcss(), lucideIconData()],
     server: {
-      headers: {
-        "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Embedder-Policy": "require-corp",
-      },
       fs: {
         // install.sh.ts raw-imports lus-install/install.sh from the
         // repo root, one level above the site project
@@ -103,21 +100,23 @@ export default defineConfig({
     },
   },
   markdown: {
-    rehypePlugins: [
-      rehypeHeadingIds,
-      [
-        rehypeAutolinkHeadings,
-        {
-          behavior: "append",
-          properties: {
-            className: ["heading-anchor"],
-            ariaLabel: "Link to this section",
+    processor: unified({
+      rehypePlugins: [
+        rehypeHeadingIds,
+        [
+          rehypeAutolinkHeadings,
+          {
+            behavior: "append",
+            properties: {
+              className: ["heading-anchor"],
+              ariaLabel: "Link to this section",
+            },
+            content: { type: "text", value: "#" },
           },
-          content: { type: "text", value: "#" },
-        },
+        ],
+        rehypeTableWrap,
       ],
-      rehypeTableWrap,
-    ],
+    }),
     shikiConfig: {
       theme: "github-light",
       langs: [

@@ -5,49 +5,50 @@ acquis: true
 shortdesc: "First-class enum support with the enum ... end syntax."
 ---
 
-Enums are first-class values representing named constants. Each enum value is a symbol: it is only equal to other values from the same enum with the same name.
+Enums are first-class values representing named constants. Every member is an interned symbol associated with one enum declaration.
 
 ## Syntax
 
 Declare an enum with the `enum ... end` expression:
 
-```lua
+```lus
 local status = enum
     pending, active, completed, failed
 end
 ```
 
-Values are comma-separated names. The enum expression returns the first value:
+Values are comma-separated names, and every name in a declaration must be unique. A duplicate member is a compile-time error. The enum expression evaluates to its first member.
 
-```lua
+```lus
 local color = enum red, green, blue end
-assert(color == color.red)  -- enum equals its first value
+assert(color == color.red)
 ```
 
 ## Identity and equality
 
-Enum values are symbols with identity semantics. Values from the same enum with the same name are equal:
+Each member is created once and cached by the enum. Repeated name or numeric access returns the same object, including across garbage collection cycles.
 
-```lua
+```lus
 local e = enum x, y, z end
 assert(e.x == e.x)
 assert(e.y == e.y)
+assert(e[2] == e.y)
 ```
 
-Different values from the same enum are not equal:
+Different members from one enum have distinct identities.
 
-```lua
+```lus
 local e = enum a, b, c end
 assert(e.a ~= e.b)
 assert(e.b ~= e.c)
 ```
 
-Values from different enums are never equal, even with the same name:
+Members from different declarations also have distinct identities, even when their names match.
 
-```lua
+```lus
 local e1 = enum a, b, c end
 local e2 = enum a, b, c end
-assert(e1.a ~= e2.a)  -- different enums
+assert(e1.a ~= e2.a)
 assert(e1.b ~= e2.b)
 ```
 
@@ -55,7 +56,7 @@ assert(e1.b ~= e2.b)
 
 Access enum values by name:
 
-```lua
+```lus
 local fruit = enum apple, orange, banana end
 local f = fruit.orange
 assert(f == fruit.orange)
@@ -63,7 +64,7 @@ assert(f == fruit.orange)
 
 Access by 1-based numeric index:
 
-```lua
+```lus
 local size = enum small, medium, large end
 assert(size[1] == size.small)
 assert(size[2] == size.medium)
@@ -72,18 +73,18 @@ assert(size[3] == size.large)
 
 Any enum value can be indexed to access other values from the same enum:
 
-```lua
+```lus
 local e = enum x, y, z end
-assert(e.x.y == e.y)      -- name indexing from a value
+assert(e.x.y == e.y)
 assert(e.y.z == e.z)
-assert(e[1][3] == e.z)    -- numeric indexing from a value
+assert(e[1][3] == e.z)
 ```
 
 ## Chained indexing
 
 Values can be chained to navigate the enum:
 
-```lua
+```lus
 local e = enum a, b, c end
 assert(e.a.b.c == e.c)
 assert(e.c.b.a == e.a)
@@ -93,7 +94,7 @@ assert(e.c.b.a == e.a)
 
 Enum values can be compared by their position:
 
-```lua
+```lus
 local priority = enum low, medium, high, critical end
 
 assert(priority.low < priority.medium)
@@ -104,13 +105,13 @@ assert(priority.critical >= priority.high)
 assert(priority.low <= priority.low)
 ```
 
-Ordering uses the declaration position, not the name.
+Ordering is defined only for members from the same enum declaration and uses their declaration position. Comparing the order of members from different declarations raises an error.
 
 ## Numeric conversion
 
 Use `tonumber` to get the 1-based index of an enum value:
 
-```lua
+```lus
 local state = enum idle, running, paused, stopped end
 
 assert(tonumber(state.idle) == 1)
@@ -123,7 +124,7 @@ assert(tonumber(state.stopped) == 4)
 
 The `type` function returns `"enum"` for enum values:
 
-```lua
+```lus
 local e = enum val end
 assert(type(e) == "enum")
 assert(type(e.val) == "enum")
@@ -134,7 +135,7 @@ assert(type(e[1]) == "enum")
 
 ### As function arguments
 
-```lua
+```lus
 local mode = enum read, write, append end
 
 local function openFile(path, m)
@@ -150,7 +151,7 @@ openFile("data.txt", mode.read)
 
 ### As table values
 
-```lua
+```lus
 local status = enum pending, approved, rejected end
 
 local requests = {
@@ -167,7 +168,7 @@ end
 
 ### As function returns
 
-```lua
+```lus
 local result = enum success, failure, timeout end
 
 local function fetch(url)
@@ -180,73 +181,28 @@ if fetch("https://example.com") == result.success then
 end
 ```
 
----
+## String representation and table keys
 
-## Motivation
+The `type` function returns `"enum"`. `tostring` identifies the member object, and interned accesses produce the same representation. Enum values can be table keys and remain distinct from strings and numbers.
 
-Lua does not have a built-in enum type. Developers simulate enums using tables or string constants, but these approaches lack type safety.
-
-### String constants
-
-A common Lua pattern:
-
-```lua
--- Lua: string constants
-local STATUS_PENDING = "pending"
-local STATUS_ACTIVE = "active"
-
-local function setStatus(s)
-    if s == STATUS_PENDING then
-        -- ...
-    end
-end
-
-setStatus("pending")  -- works
-setStatus("penidng")  -- typo: no error, just wrong
-```
-
-With enums, typos cause immediate errors:
-
-```lua
--- Lus: type-safe enums
-local status = enum pending, active end
-
-setStatus(status.pending)  -- works
-setStatus(status.penidng)  -- error: nil field
-```
-
-### Numeric constants
-
-Another Lua pattern:
-
-```lua
--- Lua: numeric constants
-local RED, GREEN, BLUE = 1, 2, 3
-
-if color == RED then  -- is this a color or a count?
-```
-
-Enums are distinct types, preventing confusion:
-
-```lua
--- Lus: enums are symbols
+```lus
 local color = enum red, green, blue end
-local count = 1
+local labels = {
+    [color.red] = "stop",
+    [color.green] = "go",
+}
 
-assert(color.red ~= count)  -- never equal
+assert(labels[color.red] == "stop")
+assert(color.red ~= "red")
+assert(color.red ~= 1)
 ```
 
-### Cross-enum safety
+Members from separate declarations keep distinct identities at the same numeric position.
 
-Different enums are incompatible:
-
-```lua
+```lus
 local status = enum ok, error end
 local color = enum red, green end
 
--- Same position (1), but never equal
 assert(tonumber(status.ok) == tonumber(color.red))
 assert(status.ok ~= color.red)
 ```
-
-This prevents accidentally mixing unrelated constants.

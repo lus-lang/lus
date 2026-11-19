@@ -31,7 +31,7 @@ print(z) -- "cannot pass local group"
 
 ## Copying and overwriting
 
-A group can be copied to another group; the target group must either be uninitialized or it must have the same fields as the source group.
+A group can be copied to an uninitialized group or to a group with the same fields.
 
 ```lus
 -- initializing a new group with a copy
@@ -39,7 +39,7 @@ local z <group> = { a = 1 }
 local y <group> = z
 ```
 
-You can overwrite a group; any missing fields will remain the same, so be careful not to confuse this with assigning a table where the fields will become nil.
+Overwriting a group updates the supplied fields and preserves its other fields.
 
 ```lus
 local z <group> = { a = 1, b = 2 }

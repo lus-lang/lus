@@ -75,8 +75,35 @@ function formatReleaseDate(isoDate: string): string {
 */
 let releasesPromise: Promise<GitHubRelease[] | null> | undefined
 
+function isGitHubRelease(value: unknown): value is GitHubRelease {
+  if (!value || typeof value !== "object") return false
+  const release = value as Partial<GitHubRelease>
+  return (
+    typeof release.tag_name === "string" &&
+    typeof release.published_at === "string" &&
+    typeof release.html_url === "string" &&
+    typeof release.prerelease === "boolean" &&
+    typeof release.zipball_url === "string" &&
+    typeof release.tarball_url === "string" &&
+    Array.isArray(release.assets) &&
+    release.assets.every(
+      (asset) =>
+        typeof asset.name === "string" &&
+        typeof asset.browser_download_url === "string",
+    )
+  )
+}
+
 function fetchGitHubReleases(): Promise<GitHubRelease[] | null> {
   releasesPromise ??= (async () => {
+    const localManifest = process.env.LUS_SITE_RELEASES_JSON
+    if (localManifest !== undefined) {
+      const releases: unknown = JSON.parse(localManifest)
+      if (!Array.isArray(releases) || !releases.every(isGitHubRelease)) {
+        throw new Error("LUS_SITE_RELEASES_JSON is not a release array")
+      }
+      return releases
+    }
     try {
       const response = await fetch(
         `https://api.github.com/repos/${GITHUB_REPO}/releases`,

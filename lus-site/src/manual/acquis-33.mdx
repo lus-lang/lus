@@ -6,11 +6,11 @@ shortdesc: "File-backed and in-memory databases with prepared statements, transa
 draft: true
 ---
 
-_SQLite_ embeds the SQLite database engine directly in the runtime for local, file-backed and in-memory databases. The amalgamation is public domain and is compiled into `liblus` the same way the [`time`](/manual/api#time) module bundles its tz database, so a program needs no external library or system package and behaves the same across platforms.
+_SQLite_ provides local, file-backed and in-memory databases through an engine built with the runtime. The interpreter links the public-domain amalgamation directly. The embedding SDK ships it as the separate `libsqlite3.a` or `sqlite3.lib` library beside `liblus`, so static consumers link both archives. Installed interpreter users need no separate SQLite system package.
 
 ## Opening a database
 
-A database is opened through the existing [`io`](/manual/api#io) library with `io.sqlite(path)`, which returns a database handle. SQLite has a single entry point, so it lives alongside `io.open` in the `io` library. Passing `":memory:"` opens a private in-memory database. The optional second argument selects the mode: `"rw"` (the default) reads, writes, and creates, while `"r"` opens read-only.
+A database is opened through the [`io` library](/manual/api#io-library) with `io.sqlite(path)`, which returns a database handle. Passing `":memory:"` opens a private in-memory database. The optional second argument selects the mode. `"rw"`, the default, reads, writes, and creates. `"r"` opens read-only.
 
 ```lus
 global io, pledge
@@ -54,7 +54,7 @@ end
 
 Placeholders carry every value into a statement. A positional `?` placeholder binds from the extra arguments in order, and a named `:name`, `@name`, or `$name` placeholder binds from a single table argument, so values that come from string interpolation or concatenation reach the database as data. Numbered `?NNN` placeholders are not supported, and one statement never mixes named and positional styles.
 
-SQLite types map to Lus types, with `INTEGER` becoming an integer, `REAL` a float, `TEXT` a string, `BLOB` a [`vector`](/manual/api#vector), and `NULL` an absent row field. Binding runs the same map in reverse, with booleans stored as `1` and `0` and NaN stored as `NULL`, following SQLite.
+SQLite types map to Lus types, with `INTEGER` becoming an integer, `REAL` a float, `TEXT` a string, `BLOB` a [`vector`](/manual/api#vector-library), and `NULL` an absent row field. Binding runs the same map in reverse, with booleans stored as `1` and `0` and NaN stored as `NULL`, following SQLite.
 
 ## Lifetime
 
@@ -72,16 +72,18 @@ db:run("INSERT INTO t VALUES (?)", 42)
 
 ## Security and permissions
 
-Because `io.sqlite` opens files through the `io` library, it is gated by the same pledges as `io.open`. A file-backed database requires a value-scoped `fs:read` pledge, and a writable one also requires `fs:write`, each covering the database path together with SQLite's `-journal`, `-wal`, and `-shm` sidecar files. The sweep runs at open time, so a grant that misses a sidecar is denied up front instead of failing inside a transaction.
+Because `io.sqlite` opens files through the `io` library, it is gated by the same value-scoped pledges as `io.open`. Opening a file-backed database checks its main path against `fs:read` and, in the default writable mode, `fs:write`. A per-connection pledge-aware VFS then authorizes each database and sidecar operation when SQLite performs it. Writable connections require `fs:write` for creation, deletion, extension, and every other write to the main file or a `-journal`, `-wal`, or `-shm` sidecar.
 
-The runtime confines SQLite to the pledged set. Temp structures such as statement journals and sort trees live in memory and never touch the filesystem. `ATTACH` and `VACUUM INTO` are denied, since either could reach a path the pledge sweep never saw, and URI filenames are rejected at open. A plain `VACUUM` keeps working.
+`io.sqlite(path, "r")` requires only `fs:read`. It can consume existing WAL and SHM files through retained read-only objects, including when an ordinary writable SQLite connection already owns the process-wide SHM node. It may take shared coordination locks and read the WAL index. It does not initialize, truncate, extend, delete, or write SHM, and it does not take an exclusive SHM lock. A sidecar state that needs creation or recovery fails with a clear `fs:write` permission error.
 
-SQLite calls are synchronous C, and database work that should run alongside other computation can be handed to a [worker](/manual/api#worker). A database handle lives in the interpreter state that opened it and cannot be serialized to a worker, so a worker uses a database by opening the same path itself. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
+Temp structures such as statement journals and sort trees live in memory. `ATTACH` and `VACUUM INTO` paths are denied. The path-changing PRAGMAs `data_store_directory`, `temp_store_directory`, and `lock_proxy_file` are denied case-insensitively. URI filenames are rejected at open, while a plain `VACUUM` remains available.
+
+SQLite calls are synchronous C, and database work that should run alongside other computation can be handed to a [worker](/manual/api#worker-library). A database handle lives in the interpreter state that opened it and stays within that state. A worker uses a database by opening the same authorized path itself. Writable file-backed databases run in WAL mode, which supports concurrent readers alongside a single writer.
 
 ## Embedding
 
 The C API gains `lus_tosqlite(L, idx)`, which returns the underlying `sqlite3*` connection of an open database handle and `NULL` otherwise, so an embedder can drive the same connection from C. The vendored `sqlite3.h` is installed alongside the Lus headers. Builds compiled with `LUS_NO_SQLITE`, such as the playground's WASM target, omit the binding entirely.
 
-## Not yet specified
+## Extension surface
 
-User-defined SQL functions, the online backup API, an explicit WAL checkpoint call, and the FTS5 full-text extension are not part of this acquis. Each can be added compatibly later.
+The core surface covers connections, statements, prepared statements, transactions, query pushdown, and embedding. Its handle and C API design leaves room for compatible extensions such as user-defined SQL functions, online backup, explicit WAL checkpoints, and FTS5.
