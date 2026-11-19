@@ -924,7 +924,7 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     r[3] = Value.int(idx);
                     pc -= opc.bx(ins);
                 }
-            } else {
+            } else if (r[0].tag == .float) {
                 const step = r[2].asFloat();
                 const limit = r[1].asFloat();
                 const ni = r[0].asFloat() + step;
@@ -933,6 +933,11 @@ fn run(l: *Thread, stop: usize, comptime hooked: bool) (Error || YieldError || L
                     r[3] = Value.float(ni);
                     pc -= opc.bx(ins);
                 }
+            } else {
+                c.fr.pc = pc;
+                const more = try exactForStep(l, r);
+                c.refresh(l);
+                if (more) pc -= opc.bx(ins);
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
@@ -1539,10 +1544,53 @@ fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {
 
 /// Prepares a numeric for loop at registers r..r+3 (init, limit, step,
 /// control). Returns true when the loop runs zero times.
+fn isExact(v: Value) bool {
+    return v.tag == .bigint or v.tag == .decimal;
+}
+
+/// Whether `v` has passed `limit` in the direction of the step.
+fn exactPast(l: *Thread, v: Value, limit: Value, ascending: bool) Error!bool {
+    const o = @import("numeric.zig").compare(l.g.gpa, v, limit) orelse return l.raiseFmt("'for' limit is not comparable", .{});
+    return if (ascending) o == .gt else o == .lt;
+}
+
+/// One step of an exact numeric loop. Returns true when the loop goes on.
+noinline fn exactForStep(l: *Thread, r: [*]Value) Error!bool {
+    const next = try ops.arith(l, .add, r[0], r[2]);
+    const ascending = (@import("numeric.zig").compare(l.g.gpa, r[2], Value.int(0)) orelse .gt) == .gt;
+    if (try exactPast(l, next, r[1], ascending)) return false;
+    r[0] = next;
+    r[3] = next;
+    return true;
+}
+
 fn forPrep(l: *Thread, r: u32) Error!bool {
     const init_v = try forValue(l, l.stack[r], "initial");
     const limit_v = try forValue(l, l.stack[r + 1], "limit");
     const step_v = try forValue(l, l.stack[r + 2], "step");
+    if (isExact(init_v) or isExact(limit_v) or isExact(step_v)) {
+        // Bigint and decimal loops step with exact arithmetic.
+        const zero = Value.int(0);
+        const step_order = @import("numeric.zig").compare(l.g.gpa, step_v, zero) orelse return l.raiseFmt("'for' step is not a number", .{});
+        if (step_order == .eq) return l.raiseFmt("'for' step is zero", .{});
+        // The control value takes the exact type, so every step stays exact
+        // and the loop instruction recognizes the exact mode by its tag.
+        var start = init_v;
+        if (!isExact(start)) {
+            const dec = init_v.tag == .decimal or limit_v.tag == .decimal or step_v.tag == .decimal;
+            const zero_exact = if (dec)
+                Value.obj(.decimal, numeric.parseDecimalLiteral(l.g, "0") catch return l.raiseMem())
+            else
+                Value.obj(.bigint, numeric.parseBigLiteral(l.g, "0") catch return l.raiseMem());
+            start = try ops.arith(l, .add, init_v, zero_exact);
+        }
+        if (try exactPast(l, start, limit_v, step_order == .gt)) return true;
+        l.stack[r] = start;
+        l.stack[r + 1] = limit_v;
+        l.stack[r + 2] = step_v;
+        l.stack[r + 3] = start;
+        return false;
+    }
     if (init_v.tag == .integer and step_v.tag == .integer) {
         const init = init_v.asInt();
         const step = step_v.asInt();
@@ -1595,7 +1643,7 @@ fn forValue(l: *Thread, v: Value, what: []const u8) Error!Value {
     return switch (v.tag) {
         .integer, .float => v,
         .string => ops.toNumberCoerce(v) orelse l.raiseFmt("'for' {s} value must be a number", .{what}),
-        .bigint, .decimal => Value.float(@import("numeric.zig").toFloat(l.g.gpa, v)),
+        .bigint, .decimal => v,
         else => l.raiseFmt("'for' {s} value must be a number", .{what}),
     };
 }

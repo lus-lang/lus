@@ -89,6 +89,9 @@ fn tostring(l: *Thread) Error!u32 {
 fn tonumber(l: *Thread) Error!u32 {
     const v = l.arg(1);
     if (l.arg(2).isNil()) {
+        // Bigints and decimals convert to the nearest float
+        // (spec/design/numbers.md).
+        if (v.tag == .bigint or v.tag == .decimal) return aux.ret(l, Value.float(@import("../vm/numeric.zig").toFloat(l.g.gpa, v)));
         if (v.isNumber()) return aux.ret(l, v);
         if (v.tag == .string) {
             if (ops.toNumberCoerce(v)) |n| return aux.ret(l, n);
@@ -281,16 +284,23 @@ fn ipairs(l: *Thread) Error!u32 {
     return 3;
 }
 
+/// The iterator `range` returns. It keeps the next value, the limit and
+/// the step in its upvalues, so it works in a generic `for` and when
+/// called on its own.
 fn rangeAux(l: *Thread) Error!u32 {
-    // state = {limit, step}; control = current value
-    const st = l.arg(1).as(Table);
-    const limit = table.getInt(st, 1);
-    const step = table.getInt(st, 2);
-    const cur = try ops.arith(l, .add, l.arg(2), step);
-    const fwd = if (step.tag == .integer) step.asInt() > 0 else ops.toFloat(step) > 0;
-    const done = if (fwd) try ops.lessThan(l, limit, cur) else try ops.lessThan(l, cur, limit);
-    if (done) return aux.retNil(l);
+    const ups = l.frame().native.?.upvalues();
+    const cur = ups[0];
+    const limit = ups[1];
+    const step = ups[2];
+    const ascending = (numericCompare(l, step, Value.int(0)) orelse .gt) == .gt;
+    const past = numericCompare(l, cur, limit) orelse return aux.retNil(l);
+    if (if (ascending) past == .gt else past == .lt) return aux.retNil(l);
+    ups[0] = try ops.arith(l, .add, cur, step);
     return aux.ret(l, cur);
+}
+
+fn numericCompare(l: *Thread, a: Value, b: Value) ?std.math.Order {
+    return @import("../vm/numeric.zig").compare(l.g.gpa, a, b);
 }
 
 /// `range(a, b [, step])` and `range(n)`, an iterator over a numeric
@@ -303,14 +313,13 @@ fn range(l: *Thread) Error!u32 {
         start = Value.int(1);
     } else limit = try aux.checkNumber(l, 2);
     const step = try aux.optNumber(l, 3, Value.int(1));
-    if (ops.toFloat(step) == 0 and step.tag != .bigint and step.tag != .decimal) return aux.argError(l, 3, "step must not be zero", .{});
-    const st = try l.newTable(2, 0);
-    try ops.rawSet(l, st, Value.int(1), limit);
-    try ops.rawSet(l, st, Value.int(2), step);
-    try l.push(try aux.native(l, rangeAux, "range_aux"));
-    try l.push(Value.obj(.table, st));
-    try l.push(try ops.arith(l, .sub, start, step));
-    return 3;
+    if ((numericCompare(l, step, Value.int(0)) orelse .eq) == .eq) return aux.argError(l, 3, "step must not be zero", .{});
+    const n = state.newNative(l.g, rangeAux, "range_aux", 3) catch return l.raiseMem();
+    const ups = n.upvalues();
+    ups[0] = start;
+    ups[1] = limit;
+    ups[2] = step;
+    return aux.ret(l, Value.obj(.native, n));
 }
 
 fn bigint(l: *Thread) Error!u32 {

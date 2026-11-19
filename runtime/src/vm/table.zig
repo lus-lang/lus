@@ -4,6 +4,7 @@
 //! clears fields during traversal, as Lua requires.
 
 const std = @import("std");
+const numeric = @import("numeric.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const Value = value.Value;
@@ -20,6 +21,16 @@ pub fn hashValue(v: Value) u64 {
         .float => mixInt(@bitCast(v.asFloat())),
         .true => 1,
         .false => 2,
+        // Large bigints hash by their digits so equal values share a slot.
+        .bigint => blk: {
+            const b = v.as(numeric.BigInt);
+            var h = std.hash.Wyhash.init(@intFromBool(b.positive));
+            h.update(std.mem.sliceAsBytes(b.limbs()));
+            break :blk h.final();
+        },
+        // Fractional decimals compare by value across scales (1.5 and
+        // 1.50), so they share one hash class. They are rare as keys.
+        .decimal => 0x9E3779B97F4A7C15,
         else => mixInt(v.payload),
     };
 }
@@ -49,8 +60,14 @@ pub fn keyEqual(a: Value, b: Value) bool {
         .float => a.asFloat() == b.asFloat(),
         .nil, .true, .false => true,
         .string => a.payload == b.payload or longStringEqual(a.as(object.String), b.as(object.String)),
+        .bigint => a.payload == b.payload or bigEqual(a.as(numeric.BigInt), b.as(numeric.BigInt)),
+        .decimal => a.payload == b.payload or (numeric.compare(std.heap.page_allocator, a, b) orelse .lt) == .eq,
         else => a.payload == b.payload,
     };
+}
+
+fn bigEqual(x: *const numeric.BigInt, y: *const numeric.BigInt) bool {
+    return x.positive == y.positive and std.mem.eql(numeric.Limb, x.limbs(), y.limbs());
 }
 
 /// Short strings are interned, so equal short strings are the same object.
