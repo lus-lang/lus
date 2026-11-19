@@ -103,7 +103,7 @@ lus build -o app main.lus
 | `-F name[=value]`, `--flag name[=value]` | Define a [compile-time flag](/manual/acquis-28). |
 | `--include path[:alias]` | Bundle a module file, or every module below a directory, even when no literal `require` names it. |
 
-The executable is a copy of the running `lus` with the compiled chunks appended. It grants nothing implicitly, so the program runs with exactly the permissions it pledges plus those given with `-P` at build time, and a program that requires its bundled modules pledges `load` or is built with `-P load`. Every command line argument goes to the script, which reads them from `arg` and `...` as usual.
+The executable is a copy of the running `lus` with the compiled chunks appended. It grants nothing implicitly, so the program runs with exactly the permissions it pledges plus those given with `-P` at build time. Bundled modules are part of the program, so `require` loads them with no permission, as it does for preincluded modules. Every command line argument goes to the script, which reads them from `arg` and `...` as usual.
 
 ---
 

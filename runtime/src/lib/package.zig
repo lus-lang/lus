@@ -238,7 +238,8 @@ fn searcherBundle(l: *Thread) Error!u32 {
         defer l.g.gpa.free(msg);
         return aux.retStr(l, msg);
     };
-    if (!pledge.allowed(l, "load", null)) return l.raiseFmt("permission \"load\" denied", .{});
+    // Bundled modules are part of the program, like preincluded ones, so
+    // requiring them needs no permission.
     api.load(l, m.data, m.chunkname) catch {
         return l.raiseFmt("error loading bundled module '{s}':\n\t{s}", .{ name, api.errorMessage(l, l.err) });
     };
