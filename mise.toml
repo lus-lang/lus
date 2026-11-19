@@ -13,9 +13,13 @@ dir = "runtime"
 run = "zig build -Doptimize=ReleaseSafe"
 
 [tasks.test]
-description = "Run the Zig runtime unit and conformance tests"
+description = "Run the runtime unit, embedding, tool, and conformance tests"
 dir = "runtime"
-run = "zig build test"
+run = [
+  "zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe",
+  "zig build -Doptimize=ReleaseSafe",
+  "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+]
 
 [tasks.wasm]
 description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"

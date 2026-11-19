@@ -14,6 +14,7 @@ permissions:
   contents: read
 
 env:
+  ZIG_VERSION: "0.17.1"
   NODE_VERSION: "24.7.0"
   PNPM_VERSION: "10.18.0"
   MESON_VERSION: "1.11.2"
@@ -55,6 +56,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm test && pnpm build
+
+  runtime:
+    name: Runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Zig
+        uses: mlugg/setup-zig@a67e68dc5c8281d9608136d3d7ca1b282213e4ac # v1.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Unit, embedding, and tool tests
+        working-directory: runtime
+        run: zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
+      - name: Build
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Conformance tests
+        working-directory: runtime
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: WebAssembly build
+        if: runner.os == 'Linux'
+        working-directory: runtime
+        run: zig build wasm
 
   legacy:
     # The frozen 1.7 runtime is the differential oracle for the rewrite.
