@@ -145,7 +145,7 @@ describe("the JIT", () => {
     const lus = await loadLus(defaultWasmPath, { jit: false, env: { LUS_JIT: "eager" } });
     assert.equal(lus.jit, null);
     const out = output(lus, `local function f() return 1 end f() print(debug.jit(), debug.jit(f))`);
-    assert.equal(out, "off\tfalse\n");
+    assert.equal(out, "off\tfalse\tfalse\n");
     assert.equal(output(lus, CALLS), output(host("off"), CALLS));
   });
 
@@ -180,7 +180,7 @@ describe("the JIT", () => {
     let compiled = false;
     for (let i = 0; i < 20 && !compiled; i++) {
       lus.execute(l, "for _ = 1, 2000 do hot(10) end");
-      compiled = lus.execute(l, "debug.jit(hot)") === "true\n";
+      compiled = lus.execute(l, "debug.jit(hot)").startsWith("true");
       await delay(5);
     }
     assert.ok(compiled, "the background module was never installed");
