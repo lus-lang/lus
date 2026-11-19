@@ -10,15 +10,15 @@ const opc = @import("../compile/opcodes.zig");
 const Thread = state.Thread;
 const Op = opc.Op;
 
-pub const StepFn = *const fn (l: *Thread, pc: u32, stop: usize) callconv(.c) usize;
+pub const StepFn = *const fn (l: *Thread, pc: u32, stop: usize, ins: u32) callconv(.c) usize;
 
 fn StepOf(comptime o: Op) type {
     return struct {
-        /// Runs the instruction before `pc` in the top frame and returns
-        /// an `interp.Step` code.
-        fn step(l: *Thread, pc: u32, stop: usize) callconv(.c) usize {
+        /// Runs the instruction `ins`, which is the one before `pc` in
+        /// the top frame, and returns an `interp.Step` code.
+        fn step(l: *Thread, pc: u32, stop: usize, ins: u32) callconv(.c) usize {
             l.frames.items[l.frames.items.len - 1].pc = pc;
-            return interp.run(l, stop, .{ .step = o }) catch |e| {
+            return interp.run(l, stop, .{ .step = o }, ins) catch |e| {
                 l.meta_finish = null;
                 return switch (e) {
                     // A metamethod frame was pushed. It runs like a call.
@@ -86,38 +86,41 @@ pub fn barrier(l: *Thread, h: *gc.Header) callconv(.c) void {
     gc.barrierBack(l.g, h);
 }
 
-/// A call with a fixed argument count to a function that has native
-/// code. Pushes the callee's frame and returns where it starts. A zero
-/// address means the step routine must make the call.
-pub fn call(l: *Thread, bp: [*]Value, ins: u32, pc: u32) callconv(.c) jit.Target {
+/// A tail call to a Lus function with fixed parameters and native code:
+/// the closure branch of the interpreter's `tailcall`, with the checks
+/// that could fail made before anything changes. Returns where the
+/// callee starts. A zero address means the step routine must make the
+/// call.
+pub fn tailcall(l: *Thread, bp: [*]Value, ins: u32, pc: u32) callconv(.c) jit.Target {
     const none: jit.Target = .{ .addr = 0, .base = 0 };
     const a = opc.a(ins);
-    const callee = &bp[a];
+    const callee = bp[a];
     if (callee.tag != .closure) return none;
-    const cl = callee.as(Closure);
-    const p = cl.proto;
+    const tcl = callee.as(Closure);
+    const p = tcl.proto;
     const code: *jit.Code = @ptrCast(@alignCast(p.jit_code orelse return none));
     if (p.is_vararg) return none;
-    if (l.g.tobefnz.items.len > 0) return none;
     const fr = l.frame();
     const func = fr.base + a;
     const nb = opc.b(ins);
     const nargs: u32 = if (nb != 0) nb - 1 else l.top - func - 1;
+    const dst = fr.ret;
+    // The callee's registers must fit, so that entering it cannot fail
+    // once this frame is gone.
+    if (@as(usize, dst) + 1 + p.max_stack + nargs + 8 > l.stack.len) return none;
     fr.pc = pc;
-    // A failure here leaves the frame as the instruction found it, and
-    // the step routine raises the error.
-    interp.enterLus(l, cl, func, nargs, @as(i32, opc.c(ins)) - 1) catch return none;
-    return .{ .addr = @intFromPtr(code.block.ptr) + code.offs[0], .base = func + 1 };
-}
-
-/// A return of zero or one value to a Lus caller with nothing to close.
-/// Returns where the caller continues. A zero address means the step
-/// routine must make the return, and an address of one means that the
-/// return happened and the caller has no native code.
-pub fn ret(l: *Thread, n: u32, a: u32, stop: usize) callconv(.c) jit.Target {
-    const c = interp.load(l);
-    if (!interp.leanReturn(l, c, stop)) return .{ .addr = 0, .base = 0 };
-    const caller = interp.fast.finishLean(l, c, c.base + a, n);
-    const code: *jit.Code = @ptrCast(@alignCast(caller.cl.proto.jit_code orelse return .{ .addr = 1, .base = 0 }));
-    return .{ .addr = @intFromPtr(code.block.ptr) + code.offs[caller.fr.pc], .base = caller.base };
+    interp.closeUpvals(l, fr.base);
+    const old = l.frames.pop().?;
+    var i: u32 = 0;
+    while (i <= nargs) : (i += 1) l.stack[dst + i] = l.stack[func + i];
+    l.top = dst + 1 + nargs;
+    interp.enterLus(l, tcl, dst, nargs, old.want) catch unreachable;
+    const nf = l.frame();
+    nf.boundary = old.boundary;
+    nf.tail = true;
+    // The new frame returns to the same caller, so it inherits the
+    // native return of the frame it replaces.
+    nf.lean = old.lean;
+    nf.resume_at = old.resume_at;
+    return .{ .addr = code.base + code.offs[0], .base = dst + 1 };
 }

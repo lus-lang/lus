@@ -49,18 +49,27 @@ pub const State = if (enabled) struct {
     period: u32 = 1,
     seed: u32 = 12345,
     arena: mem.Arena = .{},
+    /// The image of a frame that native code pushes for a plain call. A
+    /// call copies it and then stores the fields that differ.
+    frame_template: state.Frame = .{ .func = 0, .base = 0, .want = 0, .ret = 0, .lean = true },
     /// Functions that have native code now.
     live: usize = 0,
     /// Functions compiled since the state started.
     compiled: usize = 0,
 } else struct {};
 
-/// The native code of one function.
-pub const Code = struct {
-    /// The executable block. The entry sequence is at its start.
-    block: []u8,
+/// The native code of one function. Native code reads the first two
+/// fields when it returns into the function.
+pub const Code = extern struct {
+    /// Address of the executable block. The entry sequence is at its
+    /// start.
+    base: usize,
     /// Offset in the block of the code for each instruction.
-    offs: []u32,
+    offs: [*]u32,
+    /// Bytes in the block.
+    size: usize,
+    /// Entries in `offs`.
+    count: usize,
 };
 
 /// Reads the settings from the environment the host gave the state.
@@ -244,7 +253,7 @@ pub fn dispatch(l: *Thread) callconv(.c) Target {
         if (p.hot != 0 or !expire(l, p)) return none;
     }
     const code: *Code = @ptrCast(@alignCast(p.jit_code.?));
-    return .{ .addr = @intFromPtr(code.block.ptr) + code.offs[fr.pc], .base = fr.base };
+    return .{ .addr = code.base + code.offs[fr.pc], .base = fr.base };
 }
 
 const Enter = *const fn (l: *Thread, stop: usize, addr: usize, base: usize) callconv(.c) usize;
@@ -256,7 +265,7 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
     const t = dispatch(l);
     if (t.addr == 0) return error.SwitchLoop;
     const code: *Code = @ptrCast(@alignCast(l.frame().closure.?.proto.jit_code.?));
-    const enter: Enter = @ptrFromInt(@intFromPtr(code.block.ptr));
+    const enter: Enter = @ptrFromInt(code.base);
     return switch (enter(l, stop, t.addr, t.base)) {
         interp.Step.done => {},
         interp.Step.failed => error.LusError,
@@ -290,8 +299,9 @@ fn compile(l: *Thread, p: *Proto) bool {
         return false;
     };
     mem.install(block, bytes);
-    code.* = .{ .block = block, .offs = offs };
+    code.* = .{ .base = @intFromPtr(block.ptr), .offs = offs.ptr, .size = block.len, .count = offs.len };
     p.jit_code = code;
+    p.jit_entry = if (e.call_entry != 0) code.base + e.call_entry else 0;
     p.plain_call = false;
     g.jit.live += 1;
     g.jit.compiled += 1;
@@ -302,10 +312,11 @@ fn compile(l: *Thread, p: *Proto) bool {
 pub fn freeProto(g: *Global, p: *Proto) void {
     if (!enabled) return;
     const code: *Code = @ptrCast(@alignCast(p.jit_code orelse return));
-    g.jit.arena.release(g.gpa, code.block);
-    g.gpa.free(code.offs);
+    g.jit.arena.release(g.gpa, @as([*]u8, @ptrFromInt(code.base))[0..code.size]);
+    g.gpa.free(code.offs[0..code.count]);
     g.gpa.destroy(code);
     p.jit_code = null;
+    p.jit_entry = 0;
     p.plain_call = !p.is_vararg;
     g.jit.live -= 1;
 }

@@ -233,6 +233,10 @@ pub const Proto = struct {
     jit_state: JitState = .fresh,
     /// The native code of the function (a `jit.Code`), or null.
     jit_code: ?*anyopaque = null,
+    /// Address that native code calls to enter the function with fixed
+    /// parameters, or zero when the function has no native code or takes
+    /// variable arguments.
+    jit_entry: usize = 0,
 
     pub const JitState = enum(u8) {
         /// Not yet seen by the JIT.

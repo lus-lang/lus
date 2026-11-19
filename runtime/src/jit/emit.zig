@@ -40,6 +40,13 @@ const tag_int: u8 = @backingInt(Tag.integer);
 const tag_float: u8 = @backingInt(Tag.float);
 const tag_string: u8 = @backingInt(Tag.string);
 const tag_table: u8 = @backingInt(Tag.table);
+const tag_closure: u8 = @backingInt(Tag.closure);
+const Frame = state.Frame;
+const frame_size: i32 = @sizeOf(Frame);
+
+fn frameField(comptime name: []const u8) i32 {
+    return @offsetOf(Frame, name);
+}
 
 /// Byte offsets inside runtime structures, measured on a live thread so
 /// that they follow whatever layout the compiler chose.
@@ -49,11 +56,26 @@ const Layout = struct {
     /// Offset in the global state of the count of pending finalizers.
     pending: i32,
     upval_loc: i32,
+    stack_len: i32,
+    frames_ptr: i32,
+    frames_len: i32,
+    frames_cap: i32,
+    tbc_ptr: i32,
+    tbc_len: i32,
+    /// Address of the frame image that a native call copies.
+    template: usize,
 
     fn of(l: *Thread) Layout {
         const b = @intFromPtr(l);
         const g = l.g;
         return .{
+            .stack_len = @intCast(@intFromPtr(&l.stack.len) - b),
+            .frames_ptr = @intCast(@intFromPtr(&l.frames.items.ptr) - b),
+            .frames_len = @intCast(@intFromPtr(&l.frames.items.len) - b),
+            .frames_cap = @intCast(@intFromPtr(&l.frames.capacity) - b),
+            .tbc_ptr = @intCast(@intFromPtr(&l.tbc.items.ptr) - b),
+            .tbc_len = @intCast(@intFromPtr(&l.tbc.items.len) - b),
+            .template = @intFromPtr(&g.jit.frame_template),
             .stack_ptr = @intCast(@intFromPtr(&l.stack.ptr) - b),
             .global = @offsetOf(Thread, "g"),
             .pending = @intCast(@intFromPtr(&g.tobefnz.items.len) - @intFromPtr(g)),
@@ -80,8 +102,6 @@ const Cold = struct {
         compare_float: Compare,
         /// The slow part of the write barrier for the header in `t1`.
         barrier,
-        /// The fast return helper did not jump to a caller.
-        ret,
         /// A table access through a fast-path helper, for a key whose
         /// tag is `key_tag`.
         table: struct { helper: usize, t: Place, key: Place, v: Place, key_tag: u8 },
@@ -135,6 +155,10 @@ pub const Emitter = struct {
     l_dispatch: Label = 0,
     l_exit: Label = 0,
     oom: bool = false,
+    l_ret: [2]Label = .{ 0, 0 },
+    /// Offset of the code that a native call enters the function at, or
+    /// zero when the function has none.
+    call_entry: u32 = 0,
     /// The instruction that `step_label` runs the step routine of.
     step_pc: u32 = std.math.maxInt(u32),
     step_label: Label = 0,
@@ -185,6 +209,12 @@ pub const Emitter = struct {
         a.movImm(A.ret0, Step.interpret);
         a.bind(e.l_exit);
         a.epilogue();
+
+        e.l_ret = .{ a.newLabel(), a.newLabel() };
+        e.returnRoutine(0);
+        e.returnRoutine(1);
+        // The call entry runs into the first instruction.
+        if (!e.p.is_vararg) e.callEntry();
 
         var pc: u32 = 0;
         while (pc < code.len) : (pc += 1) {
@@ -252,6 +282,7 @@ pub const Emitter = struct {
         a.mov(A.args[0], A.thread);
         a.movImm(A.args[1], pc + 1);
         a.mov(A.args[2], A.stop);
+        a.movImm(A.args[3], e.p.code[pc]);
         a.call(@intFromPtr(helpers.steps[@backingInt(o)]));
         a.jumpIfImm(.hi, A.ret0, @intCast(Step.skip), e.l_status);
         e.reloadBp();
@@ -515,32 +546,230 @@ pub const Emitter = struct {
             },
 
             .call => {
+                // A callee with a call entry is a Lus function with fixed
+                // parameters and native code. The entry pushes the frame
+                // and does not come back. It returns here, with nothing
+                // changed, when the call needs the step routine.
+                const slow = e.coldStep(pc);
+                a.jumpIfByte(.ne, tagOf(ra), tag_closure, slow);
+                a.load64(A.t0, slot(ra));
+                a.load64(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
+                a.load64(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_entry") });
+                a.jumpIfImm(.eq, A.t2, 0, slow);
+                a.movImm(A.t3, pc + 1);
+                a.movImm(A.t4, ra);
+                a.movImm(A.t5, @as(u32, @bitCast(@as(i32, @intCast(rc)) - 1)));
+                if (rb != 0) {
+                    a.movImm(A.t6, rb - 1);
+                } else {
+                    // The arguments run up to the stack top.
+                    a.load32(A.t6, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
+                    a.sub(A.t6, A.base);
+                    a.addImm(A.t6, -@as(i32, @intCast(ra + 1)));
+                }
+                a.callReg(A.t2);
+                // The callee returns to the code after this jump, with its
+                // result count (zero or one) in t6 and its result, if any,
+                // already in R[A].
+                a.jmp(slow);
+                if (rc == 0) {
+                    // Every result is wanted, and the stack top marks
+                    // their end.
+                    a.mov(A.t0, A.base);
+                    a.add(A.t0, A.t6);
+                    a.addImm(A.t0, @intCast(ra));
+                } else {
+                    // Results the callee did not return are nil, and the
+                    // register window of this function comes back.
+                    if (rc >= 2) {
+                        const has_one = a.newLabel();
+                        a.jumpIfImm(.ne, A.t6, 0, has_one);
+                        e.storeConst(ra, .nil);
+                        a.bind(has_one);
+                        var i: u32 = 1;
+                        while (i + 1 < rc) : (i += 1) e.storeConst(ra + i, .nil);
+                    }
+                    a.mov(A.t0, A.base);
+                    a.addImm(A.t0, e.p.max_stack);
+                }
+                a.store32(A.t0, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
+            },
+            .tailcall => {
                 a.mov(A.args[0], A.thread);
                 a.mov(A.args[1], A.bp);
                 a.movImm(A.args[2], ins);
                 a.movImm(A.args[3], pc + 1);
-                a.call(@intFromPtr(&helpers.call));
+                a.call(@intFromPtr(&helpers.tailcall));
                 a.jumpIfImm(.eq, A.ret0, 0, e.coldStep(pc));
                 a.mov(A.base, A.ret1);
                 e.reloadBp();
                 a.jmpReg(A.ret0);
             },
             .ret0, .ret1 => {
-                a.mov(A.args[0], A.thread);
-                a.movImm(A.args[1], @intFromBool(o == .ret1));
-                a.movImm(A.args[2], ra);
-                a.mov(A.args[3], A.stop);
-                a.call(@intFromPtr(&helpers.ret));
-                a.jumpIfImm(.ls, A.ret0, 1, e.addCold(pc, .ret, 0));
-                a.mov(A.base, A.ret1);
-                e.reloadBp();
-                a.jmpReg(A.ret0);
+                a.movImm(A.t4, ra);
+                a.callLocal(e.l_ret[@intFromBool(o == .ret1)]);
+                e.step(pc, false);
             },
 
             // An instruction that never changes the pc by itself falls
             // through to its successor.
             else => e.step(pc, true),
         }
+    }
+
+    /// The code a native call enters the function at. The caller passes
+    /// the closure in t0, the pc to save in t3, the register of the callee
+    /// in t4, the wanted result count in t5, and the argument count in t6.
+    /// The entry does what `interp.enterLus` does. It returns to the
+    /// caller, with nothing changed, when finalizers are pending or when
+    /// the frame list or the stack must grow.
+    fn callEntry(e: *Emitter) void {
+        const a = &e.a;
+        const p = e.p;
+        const lay = e.lay;
+        const max_stack: i32 = p.max_stack;
+        const np: u32 = p.num_params;
+        const fail = a.newLabel();
+        const thread: A.Reg = A.thread;
+        e.call_entry = a.offset();
+        a.load64(A.t1, .{ .base = thread, .disp = lay.global });
+        a.load64(A.t1, .{ .base = A.t1, .disp = lay.pending });
+        a.jumpIfImm(.ne, A.t1, 0, fail);
+        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_len });
+        a.jumpIfMem(.eq, A.t1, .{ .base = thread, .disp = lay.frames_cap }, fail);
+        // t2 = the base of the new frame.
+        a.mov(A.t2, A.base);
+        a.add(A.t2, A.t4);
+        a.addImm(A.t2, 1);
+        a.mov(A.t4, A.t2);
+        a.add(A.t4, A.t6);
+        a.addImm(A.t4, max_stack + 8);
+        a.jumpIfMem(.hi, A.t4, .{ .base = thread, .disp = lay.stack_len }, fail);
+
+        // Nothing fails from here on.
+        // t4 = the new frame, one past the caller's.
+        a.movImm(A.t4, @intCast(frame_size));
+        a.mul(A.t4, A.t1);
+        a.addImm(A.t1, 1);
+        a.store64(A.t1, .{ .base = thread, .disp = lay.frames_len });
+        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_ptr });
+        a.add(A.t4, A.t1);
+        a.store32(A.t3, .{ .base = A.t4, .disp = frameField("pc") - frame_size });
+        a.movImm(A.t1, lay.template);
+        var off: i32 = 0;
+        while (off + 16 <= frame_size) : (off += 16) a.copy16(.{ .base = A.t4, .disp = off }, .{ .base = A.t1, .disp = off });
+        while (off < frame_size) : (off += 8) {
+            a.load64(A.t3, .{ .base = A.t1, .disp = off });
+            a.store64(A.t3, .{ .base = A.t4, .disp = off });
+        }
+        // The caller continues after the jump that follows its call.
+        a.linkPastJump(A.t3);
+        a.dropLink();
+        a.store64(A.t3, .{ .base = A.t4, .disp = frameField("resume_at") });
+        a.store64(A.t0, .{ .base = A.t4, .disp = frameField("closure") });
+        a.store32(A.t5, .{ .base = A.t4, .disp = frameField("want") });
+        a.store32(A.t2, .{ .base = A.t4, .disp = frameField("base") });
+        a.mov(A.t1, A.t2);
+        a.addImm(A.t1, -1);
+        a.store32(A.t1, .{ .base = A.t4, .disp = frameField("func") });
+        a.store32(A.t1, .{ .base = A.t4, .disp = frameField("ret") });
+        a.addImm(A.t1, 1 + max_stack);
+        a.store32(A.t1, .{ .base = thread, .disp = @offsetOf(Thread, "top") });
+        a.mov(A.base, A.t2);
+        e.reloadBp();
+
+        // Missing parameters and the registers above the parameters
+        // start nil.
+        a.zeroPrepare();
+        if (np > 0) {
+            const fixed = a.newLabel();
+            const loop = a.newLabel();
+            a.jumpIfImm(.hs, A.t6, @intCast(np), fixed);
+            a.bind(loop);
+            a.addScaled(A.t1, A.bp, A.t6, 4);
+            a.zero16(.{ .base = A.t1 });
+            a.addImm(A.t6, 1);
+            a.jumpIfImm(.lo, A.t6, @intCast(np), loop);
+            a.bind(fixed);
+        }
+        const count: u32 = @as(u32, p.max_stack) - np;
+        if (count <= 16) {
+            var r: u32 = np;
+            while (r < p.max_stack) : (r += 1) a.zero16(slot(r));
+        } else {
+            const loop = a.newLabel();
+            a.lea(A.t1, slot(np));
+            a.movImm(A.t3, count);
+            a.bind(loop);
+            a.zero16(.{ .base = A.t1 });
+            a.addImm(A.t1, 16);
+            a.addImm(A.t3, -1);
+            a.jumpIfImm(.ne, A.t3, 0, loop);
+        }
+        const start = a.newLabel();
+        a.jmp(start);
+        a.bind(fail);
+        a.retLocal();
+        a.bind(start);
+    }
+
+    /// The shared code of `ret0` (n = 0) and `ret1` (n = 1), entered with
+    /// the register of the result in t4. It returns from a frame that a
+    /// native call pushed when nothing needs closing, as the lean return
+    /// of the interpreter does, and continues in the caller. Any other
+    /// frame returns to the instruction, which runs the step routine.
+    /// The caller's code after the call finishes what
+    /// `interp.fast.finishLean` does.
+    fn returnRoutine(e: *Emitter, n: u32) void {
+        const a = &e.a;
+        const lay = e.lay;
+        const thread: A.Reg = A.thread;
+        const fail = a.newLabel();
+        const no_upvals = a.newLabel();
+        const no_tbc = a.newLabel();
+        a.bind(e.l_ret[n]);
+        // t1 = the running frame.
+        a.load64(A.t0, .{ .base = thread, .disp = lay.frames_len });
+        a.movImm(A.t1, @intCast(frame_size));
+        a.mul(A.t1, A.t0);
+        a.load64(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
+        a.add(A.t1, A.t2);
+        a.addImm(A.t1, -frame_size);
+        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = frameField("lean") }, 0, fail);
+        a.jumpIfByte(.ne, .{ .base = thread, .disp = @offsetOf(Thread, "hook_mask") }, 0, fail);
+        // An open upvalue or a to-be-closed variable of this frame needs
+        // the general return.
+        a.load64(A.t2, .{ .base = thread, .disp = @offsetOf(Thread, "open_upvals") });
+        a.jumpIfImm(.eq, A.t2, 0, no_upvals);
+        a.load32(A.t2, .{ .base = A.t2, .disp = @offsetOf(object.Upvalue, "level") });
+        a.jumpIf(.hs, A.t2, A.base, fail);
+        a.bind(no_upvals);
+        a.load64(A.t2, .{ .base = thread, .disp = lay.tbc_len });
+        a.jumpIfImm(.eq, A.t2, 0, no_tbc);
+        a.load64(A.t3, .{ .base = thread, .disp = lay.tbc_ptr });
+        a.addScaled(A.t3, A.t3, A.t2, 2);
+        a.load32(A.t2, .{ .base = A.t3, .disp = -4 });
+        a.jumpIf(.hs, A.t2, A.base, fail);
+        a.bind(no_tbc);
+
+        a.dropLink();
+        // The result goes to the slot of the called function, which is
+        // the one below register 0.
+        if (n == 1) {
+            a.addScaled(A.t6, A.bp, A.t4, 4);
+            a.copy16(.{ .base = A.bp, .disp = -16 }, .{ .base = A.t6 });
+        }
+        // Pop the frame and continue in the caller, at the address its
+        // call left in the frame. The caller adjusts the result count.
+        a.addImm(A.t0, -1);
+        a.store64(A.t0, .{ .base = thread, .disp = lay.frames_len });
+        a.load32(A.base, .{ .base = A.t1, .disp = frameField("base") - frame_size });
+        a.load64(A.t3, .{ .base = A.t1, .disp = frameField("resume_at") });
+        a.movImm(A.t6, n);
+        e.reloadBp();
+        a.jmpReg(A.t3);
+        a.bind(fail);
+        a.retLocal();
     }
 
     /// t0 = address of the value of upvalue `i` of the running closure,
@@ -780,16 +1009,6 @@ pub const Emitter = struct {
                 a.jumpIfByte(.ne, tagOf(t.key.reg), t.key_tag, slow);
                 e.tableCall(c.pc, t.helper, t.t, t.key, t.v);
                 a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
-                a.bind(slow);
-                e.step(c.pc, false);
-            },
-            .ret => {
-                // Zero asks for the step routine. One means the frame
-                // returned to a caller that the interpreter runs.
-                const slow = a.newLabel();
-                a.jumpIfImm(.eq, A.ret0, 0, slow);
-                a.movImm(A.ret0, Step.interpret);
-                a.jmp(e.l_exit);
                 a.bind(slow);
                 e.step(c.pc, false);
             },

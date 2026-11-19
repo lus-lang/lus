@@ -268,6 +268,14 @@ pub const Frame = struct {
     finish: Finish = .none,
     /// Set on the frame of a running debug hook.
     hook: bool = false,
+    /// Set on a frame that native code pushed for a plain call between
+    /// two Lus functions. Such a frame has no finish action and is not a
+    /// boundary, and its caller is a Lus frame of the same run, so native
+    /// code returns from it without asking the interpreter.
+    lean: bool = false,
+    /// On a lean frame, the address in native code where the caller
+    /// continues.
+    resume_at: usize = 0,
 };
 
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };

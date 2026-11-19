@@ -346,13 +346,13 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
         // The hooked loop is a second instantiation of the same code, so
         // threads without hooks pay nothing for them.
         const r = if (l.hook_mask != 0)
-            run(l, stop, .hooked)
+            run(l, stop, .hooked, 0)
         else if (jit.enabled and native)
             jit.run(l, stop)
         else if (jit.enabled and jit.active(l.g))
-            run(l, stop, .warm)
+            run(l, stop, .warm, 0)
         else
-            run(l, stop, .fast);
+            run(l, stop, .fast, 0);
         native = false;
         r catch |e| {
             l.meta_finish = null;
@@ -530,7 +530,9 @@ fn Loop(comptime mode: Mode) type {
     };
 }
 
-pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError || LoopError)!RunResult(mode) {
+/// Runs the dispatch loop in the given mode. `step_ins` is the instruction
+/// a step runs, which native code knows without reading the function.
+pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error || YieldError || LoopError)!RunResult(mode) {
     // The dispatch loop inlines many fast paths, which needs more
     // semantic analysis than the default quota allows.
     @setEvalBranchQuota(10_000);
@@ -556,9 +558,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode) (Error || YieldError ||
     // set as the instruction itself would.
     const fi0 = c.fi;
     const pc0 = pc;
-    if (mode == .step) {
-        ins = c.code[pc - 1];
-    }
+    if (mode == .step) ins = step_ins;
     // Every case ends by dispatching the next instruction directly, which
     // gives each opcode its own indirect branch.
     sw: switch (if (mode == .step) mode.step else try fetch(l, &c, &pc, &ins, hooked)) {

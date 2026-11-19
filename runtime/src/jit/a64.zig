@@ -69,6 +69,7 @@ pub const t2: Reg = .x11;
 pub const t3: Reg = .x12;
 pub const t4: Reg = .x13;
 pub const t5: Reg = .x14;
+pub const t6: Reg = .x15;
 pub const args = [_]Reg{ .x0, .x1, .x2, .x3, .x4, .x5 };
 pub const ret0: Reg = .x0;
 pub const ret1: Reg = .x1;
@@ -335,10 +336,37 @@ pub const Assembler = struct {
         a.movImm(s0, v);
         a.store32(s0, m);
     }
-    /// Copies 16 bytes.
+    /// Prepares `zero16`, which may then run any number of times before
+    /// the next copy or call.
+    pub fn zeroPrepare(a: *Assembler) void {
+        a.word(0x6F00E400 | 31); // movi v31.2d, #0
+    }
+    /// Clears 16 bytes with one store.
+    pub fn zero16(a: *Assembler, m: Mem) void {
+        a.mem(31, m, 4, 0x3D800000, 0x3C800000);
+    }
+    /// Copies 16 bytes as two 64-bit words. A value is often written as
+    /// two words just before it is copied, and a 16-byte load would wait
+    /// for both of those stores to leave the store buffer.
     pub fn copy16(a: *Assembler, dst: Mem, src: Mem) void {
-        a.mem(31, src, 4, 0x3DC00000, 0x3CC00000);
-        a.mem(31, dst, 4, 0x3D800000, 0x3C800000);
+        if (pairable(src.disp)) {
+            a.word(0xA9400000 | pairOffset(src.disp) | s1.n() << 10 | src.base.n() << 5 | s0.n());
+        } else {
+            a.load64(s0, src);
+            a.load64(s1, .{ .base = src.base, .disp = src.disp + 8 });
+        }
+        if (pairable(dst.disp)) {
+            a.word(0xA9000000 | pairOffset(dst.disp) | s1.n() << 10 | dst.base.n() << 5 | s0.n());
+        } else {
+            a.store64(s0, dst);
+            a.store64(s1, .{ .base = dst.base, .disp = dst.disp + 8 });
+        }
+    }
+    fn pairable(disp: i32) bool {
+        return disp >= -512 and disp <= 504 and @mod(disp, 8) == 0;
+    }
+    fn pairOffset(disp: i32) u32 {
+        return (@as(u32, @bitCast(@divExact(disp, 8))) & 0x7F) << 15;
     }
     /// dst = base + disp.
     pub fn lea(a: *Assembler, dst: Reg, m: Mem) void {
@@ -505,6 +533,30 @@ pub const Assembler = struct {
         a.fix(l, .b26);
         a.word(0x94000000);
     }
+    /// Calls the routine whose address is in a register.
+    pub fn callReg(a: *Assembler, r: Reg) void {
+        a.word(0xD63F0000 | r.n() << 5);
+    }
+    /// Returns from a routine that made no call of its own.
+    pub fn retLocal(a: *Assembler) void {
+        a.word(0xD65F03C0);
+    }
+    /// dst = the address the running routine would return to, plus the
+    /// length of the jump that follows every call of a call entry.
+    pub fn linkPastJump(a: *Assembler, dst: Reg) void {
+        a.word(0x91000000 | 4 << 10 | @as(u32, 30) << 5 | dst.n());
+    }
+    /// Forgets the return address of the running routine, which then
+    /// leaves by a jump.
+    pub fn dropLink(a: *Assembler) void {
+        _ = a;
+    }
+    /// Branches when the register compares as `c` with a 64-bit word in
+    /// memory.
+    pub fn jumpIfMem(a: *Assembler, c: Cond, x: Reg, m: Mem, l: Label) void {
+        a.load64(s0, m);
+        a.jumpIf(c, x, s0, l);
+    }
     /// Opens a routine entered by `callLocal` that calls other functions.
     pub fn enterLocal(a: *Assembler) void {
         a.store64(.x30, .{ .base = .sp, .disp = link_slot });
@@ -569,9 +621,9 @@ test "aarch64 memory forms" {
     a.load64(.x9, .{ .base = .x20, .disp = -16 }); // ldur x9, [x20, #-16]
     a.load8(.x10, .{ .base = .x20, .disp = 8 }); // ldrb w10, [x20, #8]
     a.load32(.x10, .{ .base = .x19, .disp = 4 }); // ldr w10, [x19, #4]
-    a.copy16(.{ .base = .x20, .disp = 32 }, .{ .base = .x20, .disp = 48 }); // ldr q31, [x20, #48]; str q31, [x20, #32]
+    a.copy16(.{ .base = .x20, .disp = 32 }, .{ .base = .x20, .disp = 48 }); // ldp x16, x17, [x20, #48]; stp x16, x17, [x20, #32]
     a.loadF(.v0, .{ .base = .x20, .disp = 0 }); // ldr d0, [x20]
-    try expectWords(&a, &.{ 0xF9400A89, 0xF9000E89, 0xF85F0289, 0x3940228A, 0xB940066A, 0x3DC00E9F, 0x3D800A9F, 0xFD400280 });
+    try expectWords(&a, &.{ 0xF9400A89, 0xF9000E89, 0xF85F0289, 0x3940228A, 0xB940066A, 0xA9434690, 0xA9024690, 0xFD400280 });
 }
 
 test "aarch64 arithmetic" {

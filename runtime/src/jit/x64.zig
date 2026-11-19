@@ -55,6 +55,7 @@ pub const t2: Reg = .rdx;
 pub const t3: Reg = .rsi;
 pub const t4: Reg = .rdi;
 pub const t5: Reg = .r8;
+pub const t6: Reg = .r9;
 pub const args = [_]Reg{ .rdi, .rsi, .rdx, .rcx, .r8, .r9 };
 pub const ret0: Reg = .rax;
 pub const ret1: Reg = .rdx;
@@ -65,7 +66,6 @@ pub const f1: FReg = .xmm1;
 /// Scratch registers of the assembler itself.
 const s0: Reg = .r11;
 const s1: Reg = .r10;
-const fs: u8 = 15;
 
 pub const Cond = enum(u4) {
     eq = 0x4,
@@ -314,10 +314,23 @@ pub const Assembler = struct {
         a.opRM(false, &.{0xC7}, 0, m);
         a.imm32(v);
     }
-    /// Copies 16 bytes.
+    /// Prepares `zero16`, which may then run any number of times before
+    /// the next copy or call.
+    pub fn zeroPrepare(a: *Assembler) void {
+        a.bytes(&.{ 0x45, 0x0F, 0x57, 0xFF }); // xorps xmm15, xmm15
+    }
+    /// Clears 16 bytes with one store.
+    pub fn zero16(a: *Assembler, m: Mem) void {
+        a.opRM(false, &.{ 0x0F, 0x11 }, 15, m);
+    }
+    /// Copies 16 bytes as two 64-bit words. A value is often written as
+    /// two words just before it is copied, and a 16-byte load would wait
+    /// for both of those stores to leave the store buffer.
     pub fn copy16(a: *Assembler, dst: Mem, src: Mem) void {
-        a.opRM(false, &.{ 0x0F, 0x10 }, fs, src);
-        a.opRM(false, &.{ 0x0F, 0x11 }, fs, dst);
+        a.load64(s0, src);
+        a.load64(s1, .{ .base = src.base, .disp = src.disp + 8 });
+        a.store64(s0, dst);
+        a.store64(s1, .{ .base = dst.base, .disp = dst.disp + 8 });
     }
     /// dst = base + disp.
     pub fn lea(a: *Assembler, dst: Reg, m: Mem) void {
@@ -539,6 +552,33 @@ pub const Assembler = struct {
         a.byte(0xE8);
         a.rel32(l);
     }
+    /// Calls the routine whose address is in a register.
+    pub fn callReg(a: *Assembler, r: Reg) void {
+        a.rex(false, 0, r.n());
+        a.byte(0xFF);
+        a.modrr(2, r.n());
+    }
+    /// Returns from a routine that made no call of its own.
+    pub fn retLocal(a: *Assembler) void {
+        a.byte(0xC3);
+    }
+    /// dst = the address the running routine would return to, plus the
+    /// length of the jump that follows every call of a call entry.
+    pub fn linkPastJump(a: *Assembler, dst: Reg) void {
+        a.load64(dst, .{ .base = .rsp });
+        a.addImm(dst, 5);
+    }
+    /// Forgets the return address of the running routine, which then
+    /// leaves by a jump.
+    pub fn dropLink(a: *Assembler) void {
+        a.bytes(&.{ 0x48, 0x83, 0xC4, 0x08 }); // add rsp, 8
+    }
+    /// Branches when the register compares as `c` with a 64-bit word in
+    /// memory.
+    pub fn jumpIfMem(a: *Assembler, c: Cond, x: Reg, m: Mem, l: Label) void {
+        a.opRM(true, &.{0x3B}, x.n(), m);
+        a.jcc(@backingInt(c), l);
+    }
     /// Opens a routine entered by `callLocal` that calls other functions.
     /// The return address unbalanced the stack by eight bytes.
     pub fn enterLocal(a: *Assembler) void {
@@ -622,7 +662,7 @@ test "x86-64 memory forms" {
     a.load64(.rax, .{ .base = .r12 }); // mov rax, [r12]
     a.load64(.rax, .{ .base = .r13 }); // mov rax, [r13+0]
     a.load64(.rax, .{ .base = .rsp, .disp = 8 }); // mov rax, [rsp+8]
-    a.copy16(.{ .base = .r14, .disp = 32 }, .{ .base = .r14, .disp = 48 }); // movups xmm15, [r14+48]; movups [r14+32], xmm15
+    a.copy16(.{ .base = .r14, .disp = 32 }, .{ .base = .r14, .disp = 48 }); // mov r11, [r14+48]; mov r10, [r14+56]; mov [r14+32], r11; mov [r14+40], r10
     a.storeImm64(.{ .base = .r14, .disp = 8 }, 3); // mov qword [r14+8], 3
     try expectBytes(&a, &.{
         0x49, 0x8B, 0x46, 0x10,
@@ -633,11 +673,12 @@ test "x86-64 memory forms" {
         0x8B, 0x04, 0x24, 0x49,
         0x8B, 0x45, 0x00, 0x48,
         0x8B, 0x44, 0x24, 0x08,
-        0x45, 0x0F, 0x10, 0x7E,
-        0x30, 0x45, 0x0F, 0x11,
-        0x7E, 0x20, 0x49, 0xC7,
-        0x46, 0x08, 0x03, 0x00,
-        0x00, 0x00,
+        0x4D, 0x8B, 0x5E, 0x30,
+        0x4D, 0x8B, 0x56, 0x38,
+        0x4D, 0x89, 0x5E, 0x20,
+        0x4D, 0x89, 0x56, 0x28,
+        0x49, 0xC7, 0x46, 0x08,
+        0x03, 0x00, 0x00, 0x00,
     });
 }
 
