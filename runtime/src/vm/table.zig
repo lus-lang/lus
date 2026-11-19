@@ -218,21 +218,54 @@ pub fn getStr(t: *Table, s: *object.String) Value {
 /// null.
 pub inline fn findStr(t: *Table, s: *object.String) ?usize {
     if (t.hash.len == 0) return null;
+    // A small hash part may be full, and a probe for an absent key would
+    // then find no empty node to stop at.
+    if (t.hash_used >= t.hash.len) return findStrFull(t, s);
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
         const n = &t.hash[i];
         if (n.key.tag == .string) {
             if (n.key.payload == @intFromPtr(s)) return i;
-            // Long strings are not interned: equal contents, distinct objects.
-            if (!s.flags.interned) {
-                const o = n.key.as(object.String);
-                if (!o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes())) return i;
-            }
+            if (!s.flags.interned and longStrEqual(n.key, s)) return i;
         }
         if (n.key.tag == .nil) return null;
     }
 }
+
+/// `findStr` in a hash part with a key in every node, which visits every
+/// node at most once.
+noinline fn findStrFull(t: *Table, s: *object.String) ?usize {
+    const mask = t.hash.len - 1;
+    var i: usize = s.hash & mask;
+    for (0..t.hash.len) |_| {
+        const n = &t.hash[i];
+        if (n.key.tag == .string) {
+            if (n.key.payload == @intFromPtr(s)) return i;
+            if (!s.flags.interned and longStrEqual(n.key, s)) return i;
+        }
+        i = (i + 1) & mask;
+    }
+    return null;
+}
+
+/// Long strings are not interned: equal contents, distinct objects.
+inline fn longStrEqual(k: Value, s: *object.String) bool {
+    const o = k.as(object.String);
+    return !o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes());
+}
+
+/// True when a hash part of `len` nodes, `used` of which hold a key, has
+/// room for one more key. A part of up to `full_max` nodes may fill
+/// completely. A larger part stays at most three quarters full, so that
+/// probes stay short.
+pub inline fn hashRoom(used: usize, len: usize) bool {
+    if (len <= full_max) return used < len;
+    return (used + 1) * 4 <= len * 3;
+}
+
+/// The largest hash part that may hold a key in every node.
+pub const full_max = 4;
 
 /// Stores `val` under the string key `key` when that needs no rehash:
 /// the key is present, or it is absent, `val` is not nil, and the hash
@@ -242,6 +275,9 @@ pub inline fn findStr(t: *Table, s: *object.String) ?usize {
 pub inline fn storeStr(t: *Table, key: Value, val: Value) ?usize {
     if (t.hash.len == 0) return null;
     const s = key.as(object.String);
+    // A full part has no empty node to end the probe, and the general
+    // path takes the store.
+    if (t.hash_used >= t.hash.len) return null;
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
@@ -252,7 +288,7 @@ pub inline fn storeStr(t: *Table, key: Value, val: Value) ?usize {
         } else if (n.key.tag == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
-            if (val.isNil() or (t.hash_used + 1) * 4 > t.hash.len * 3) return null;
+            if (val.isNil() or !hashRoom(t.hash_used, t.hash.len)) return null;
             n.key = key;
             t.hash_used += 1;
             break;
@@ -280,6 +316,7 @@ fn getHash(t: *Table, k: Value) Value {
 /// Index of the slot holding `k` (live or dead), or null.
 pub fn findSlot(t: *Table, k: Value) ?usize {
     if (t.hash.len == 0) return null;
+    if (t.hash_used >= t.hash.len) return findSlotFull(t, k);
     const mask = t.hash.len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
     while (true) : (i = (i + 1) & mask) {
@@ -287,6 +324,18 @@ pub fn findSlot(t: *Table, k: Value) ?usize {
         if (n.key.tag == .nil) return null;
         if (keyEqual(n.key, k)) return i;
     }
+}
+
+/// `findSlot` in a hash part with a key in every node, which visits every
+/// node at most once.
+noinline fn findSlotFull(t: *Table, k: Value) ?usize {
+    const mask = t.hash.len - 1;
+    var i: usize = @intCast(hashValue(k) & mask);
+    for (0..t.hash.len) |_| {
+        if (keyEqual(t.hash[i].key, k)) return i;
+        i = (i + 1) & mask;
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------------
@@ -306,8 +355,8 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
         return;
     }
     if (val.isNil()) return; // storing nil under an absent key is a no-op
-    // New key. Grow when the hash part would exceed a 3/4 load factor.
-    if (t.hash.len == 0 or (t.hash_used + 1) * 4 > t.hash.len * 3) {
+    // New key. Grow when the hash part has no room for it.
+    if (t.hash.len == 0 or !hashRoom(t.hash_used, t.hash.len)) {
         try rehash(gpa, t, k);
         // The key may now belong in the array part.
         if (k.tag == .integer) {
@@ -413,6 +462,16 @@ fn hashSizeFor(hcount: usize) usize {
     return hsize;
 }
 
+/// The number of hash slots of a new table that is created for exactly
+/// `hcount` keys, as a constructor creates its table. A small part is
+/// sized to fill completely, which keeps records such as `{x = 1, y = 2}`
+/// compact. Parts that grow later use `hashSizeFor`.
+fn hashSizeExact(hcount: usize) usize {
+    if (hcount == 0) return 0;
+    if (hcount <= full_max) return std.math.ceilPowerOfTwoAssert(usize, hcount);
+    return hashSizeFor(hcount);
+}
+
 /// Largest storage, in bytes, that a new table keeps in its own cell.
 const max_inline = 512;
 
@@ -423,7 +482,7 @@ const max_inline = 512;
 pub fn inlineUnits(narr: usize, nhash: usize) usize {
     if (narr == 0 and nhash == 0) return 0;
     if (narr > max_inline or nhash > max_inline) return 0;
-    const bytes = hashSizeFor(nhash) * @sizeOf(Node) + narr * @sizeOf(Value);
+    const bytes = hashSizeExact(nhash) * @sizeOf(Node) + narr * @sizeOf(Value);
     if (bytes > max_inline) return 0;
     return std.math.divCeil(usize, bytes, 16) catch unreachable;
 }
@@ -431,11 +490,20 @@ pub fn inlineUnits(narr: usize, nhash: usize) usize {
 /// Lays out the parts of a fresh table in the storage of its cell, as
 /// `inlineUnits` sized it: the hash part first, then the array part.
 pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
-    const hsize = hashSizeFor(nhash);
+    const hsize = hashSizeExact(nhash);
     const mem = t.inlineBytes();
     const nodes: [*]Node = @ptrCast(@alignCast(mem.ptr));
     t.hash = nodes[0..hsize];
-    @memset(t.hash, .{ .key = .nil, .val = .nil });
+    // The parts of small records clear with a few stores instead of a
+    // call to memset.
+    const empty: Node = .{ .key = .nil, .val = .nil };
+    switch (hsize) {
+        0 => {},
+        1 => nodes[0..1].* = @splat(empty),
+        2 => nodes[0..2].* = @splat(empty),
+        4 => nodes[0..4].* = @splat(empty),
+        else => @memset(t.hash, empty),
+    }
     t.log2_hash = if (hsize == 0) 0 else @intCast(std.math.log2_int(usize, hsize));
     if (narr == 0) return;
     t.array_ptr = @ptrCast(@alignCast(mem.ptr + hsize * @sizeOf(Node)));
