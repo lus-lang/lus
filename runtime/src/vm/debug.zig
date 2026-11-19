@@ -60,7 +60,7 @@ fn findSetReg(p: *Proto, lastpc: u32, reg: u32) ?u32 {
                 const dest: i64 = @as(i64, pc) + 1 + opc.sj(i);
                 if (dest <= lastpc and dest > jmptarget) jmptarget = @intCast(dest);
             },
-            .setupval, .settabup, .settable, .setfield, .setindex, .setlist, .ret, .ret0, .ret1, .eq, .lt, .le, .eqk, .test_, .testnil, .forloop, .tforloop, .close, .tbc, .extraarg, .globaldef, .globaldefr, .catchcheck, .settop, .moverange, .varargprep => {},
+            .setupval, .settabup, .settable, .setfield, .setindex, .setlist, .ret, .ret0, .ret1, .eq, .lt, .le, .eqk, .lti, .lei, .gti, .gei, .test_, .testnil, .forloop, .tforloop, .close, .tbc, .extraarg, .globaldef, .globaldefr, .catchcheck, .settop, .moverange, .varargprep => {},
             .self => change = reg == a or reg == a + 1,
             else => change = reg == a,
         }
@@ -203,8 +203,8 @@ fn metaEvent(o: opc.Op) ?[]const u8 {
         .len => "len",
         .concat => "concat",
         .eq => "eq",
-        .lt => "lt",
-        .le => "le",
+        .lt, .lti, .gti => "lt",
+        .le, .lei, .gei => "le",
         .gettable, .getfield, .getindex, .gettabup, .self => "index",
         .settable, .setfield, .setindex, .settabup => "newindex",
         .close, .ret, .ret0, .ret1 => "close",
@@ -245,22 +245,22 @@ pub fn globalName(l: *Thread, f: Value, buf: []u8) ?[]const u8 {
 /// "function 'math.floor'". These are the builtins the compiler treats as
 /// intrinsics.
 const intrinsics = std.StaticStringMap(void).initComptime(.{
-    .{"type"},           .{"rawlen"},         .{"rawget"},           .{"rawset"},
-    .{"rawequal"},       .{"assert"},         .{"getmetatable"},     .{"setmetatable"},
-    .{"tonumber"},       .{"tostring"},       .{"math.abs"},         .{"math.max"},
-    .{"math.min"},       .{"math.ceil"},      .{"math.floor"},       .{"math.sqrt"},
-    .{"math.sin"},       .{"math.cos"},       .{"math.tan"},         .{"math.asin"},
-    .{"math.acos"},      .{"math.atan"},      .{"math.exp"},         .{"math.log"},
-    .{"math.deg"},       .{"math.rad"},       .{"math.fmod"},        .{"math.ult"},
-    .{"math.tointeger"}, .{"math.type"},      .{"math.ldexp"},       .{"string.len"},
-    .{"string.trim"},    .{"string.ltrim"},   .{"string.rtrim"},     .{"string.split"},
-    .{"string.join"},    .{"string.sub"},     .{"string.byte"},      .{"string.char"},
-    .{"string.lower"},   .{"string.upper"},   .{"string.reverse"},   .{"table.sum"},
-    .{"table.mean"},     .{"table.median"},   .{"table.stdev"},      .{"table.transpose"},
-    .{"table.reshape"},  .{"vector.create"},  .{"vector.clone"},     .{"vector.size"},
-    .{"vector.resize"},  .{"utf8.len"},       .{"utf8.codepoint"},   .{"utf8.char"},
-    .{"utf8.offset"},    .{"time.days"},      .{"time.hours"},       .{"time.minutes"},
-    .{"time.seconds"},   .{"time.millis"},    .{"time.instant"},
+    .{"type"},           .{"rawlen"},        .{"rawget"},         .{"rawset"},
+    .{"rawequal"},       .{"assert"},        .{"getmetatable"},   .{"setmetatable"},
+    .{"tonumber"},       .{"tostring"},      .{"math.abs"},       .{"math.max"},
+    .{"math.min"},       .{"math.ceil"},     .{"math.floor"},     .{"math.sqrt"},
+    .{"math.sin"},       .{"math.cos"},      .{"math.tan"},       .{"math.asin"},
+    .{"math.acos"},      .{"math.atan"},     .{"math.exp"},       .{"math.log"},
+    .{"math.deg"},       .{"math.rad"},      .{"math.fmod"},      .{"math.ult"},
+    .{"math.tointeger"}, .{"math.type"},     .{"math.ldexp"},     .{"string.len"},
+    .{"string.trim"},    .{"string.ltrim"},  .{"string.rtrim"},   .{"string.split"},
+    .{"string.join"},    .{"string.sub"},    .{"string.byte"},    .{"string.char"},
+    .{"string.lower"},   .{"string.upper"},  .{"string.reverse"}, .{"table.sum"},
+    .{"table.mean"},     .{"table.median"},  .{"table.stdev"},    .{"table.transpose"},
+    .{"table.reshape"},  .{"vector.create"}, .{"vector.clone"},   .{"vector.size"},
+    .{"vector.resize"},  .{"utf8.len"},      .{"utf8.codepoint"}, .{"utf8.char"},
+    .{"utf8.offset"},    .{"time.days"},     .{"time.hours"},     .{"time.minutes"},
+    .{"time.seconds"},   .{"time.millis"},   .{"time.instant"},
 });
 
 /// The qualified name of `f` when it is an intrinsic builtin.

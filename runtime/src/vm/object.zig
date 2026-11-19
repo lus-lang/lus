@@ -109,6 +109,9 @@ pub const Table = struct {
     weak_mode: WeakMode = .none,
     /// Read-only tables (such as `flags`) reject every store.
     readonly: bool = false,
+    /// The border that the length operator last found in the array part.
+    /// It is only a starting guess and is checked before every use.
+    len_hint: u32 = 0,
 
     pub const WeakMode = enum(u8) { none, keys, values, both };
 };
@@ -163,9 +166,32 @@ pub const Proto = struct {
     locvars: []LocVar = &.{},
     source: ?*String = null,
     name: ?*String = null,
-    /// Inline cache side table, indexed by the IC operand of instructions
-    /// that carry one.
-    ic_count: u32 = 0,
+    /// Inline caches, one entry per instruction, indexed by pc. Only
+    /// string-keyed table accesses use them.
+    ic: []IcEntry = &.{},
+
+    /// Allocates the inline caches for the code, all empty.
+    pub fn initIc(p: *Proto, gpa: std.mem.Allocator) !void {
+        p.ic = try gpa.alloc(IcEntry, p.code.len);
+        @memset(p.ic, .{});
+    }
+};
+
+/// Slot predictions for a string-keyed table access. Each field is the
+/// index of the hash node that held the key the last time, or `none`. An
+/// entry holds only indices, never pointers, so it can never keep an
+/// object alive or dangle, and every use checks the key in the predicted
+/// node before trusting it.
+pub const IcEntry = extern struct {
+    /// The key in the accessed table itself.
+    own: u16 = none,
+    /// `__index` in the metatable of the accessed table.
+    index: u16 = none,
+    /// The key in the table that `__index` names.
+    holder: u16 = none,
+    _pad: u16 = 0,
+
+    pub const none: u16 = 0xFFFF;
 };
 
 pub const Upvalue = struct {

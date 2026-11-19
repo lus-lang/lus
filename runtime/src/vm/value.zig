@@ -31,7 +31,7 @@ pub const Tag = enum(u8) {
     upvalue,
 
     pub inline fn isCollectable(t: Tag) bool {
-        return @intFromEnum(t) >= @intFromEnum(Tag.string);
+        return @backingInt(t) >= @backingInt(Tag.string);
     }
 };
 
@@ -46,20 +46,28 @@ pub const Value = extern struct {
     pub const @"true": Value = .{ .tag = .true };
     pub const @"false": Value = .{ .tag = .false };
 
+    /// Builds a value from its two 64-bit words, so that a store writes
+    /// the tag, the auxiliary bits, and the padding as one word.
+    pub inline fn make(payload: u64, tag: Tag) Value {
+        var v: Value = undefined;
+        const w: *[2]u64 = @ptrCast(&v);
+        w.* = .{ payload, @backingInt(tag) };
+        return v;
+    }
     pub inline fn int(v: i64) Value {
-        return .{ .payload = @bitCast(v), .tag = .integer };
+        return make(@bitCast(v), .integer);
     }
     pub inline fn float(v: f64) Value {
-        return .{ .payload = @bitCast(v), .tag = .float };
+        return make(@bitCast(v), .float);
     }
     pub inline fn boolean(b: bool) Value {
-        return .{ .tag = if (b) .true else .false };
+        return make(0, if (b) .true else .false);
     }
     pub inline fn light(p: ?*anyopaque) Value {
-        return .{ .payload = @intFromPtr(p), .tag = .light };
+        return make(@intFromPtr(p), .light);
     }
     pub inline fn obj(tag: Tag, p: anytype) Value {
-        return .{ .payload = @intFromPtr(p), .tag = tag };
+        return make(@intFromPtr(p), tag);
     }
 
     pub inline fn isNil(v: Value) bool {
@@ -67,7 +75,7 @@ pub const Value = extern struct {
     }
     /// Lua truthiness: only nil and false are false.
     pub inline fn truthy(v: Value) bool {
-        return @intFromEnum(v.tag) > @intFromEnum(Tag.false);
+        return @backingInt(v.tag) > @backingInt(Tag.false);
     }
     pub inline fn asInt(v: Value) i64 {
         return @bitCast(v.payload);
@@ -115,7 +123,7 @@ comptime {
 /// a metatable whatever their internal tag (every number, both booleans,
 /// every function).
 pub fn typeSlot(tag: Tag) usize {
-    return @intFromEnum(switch (tag) {
+    return @backingInt(switch (tag) {
         .integer, .float, .bigint, .decimal => Tag.integer,
         .true, .false => Tag.false,
         .closure, .native => Tag.closure,

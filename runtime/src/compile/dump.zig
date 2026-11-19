@@ -24,7 +24,9 @@ const String = object.String;
 const Allocator = std.mem.Allocator;
 
 pub const signature = "\x1bLus";
-const format_version: u8 = 1;
+/// Bumped whenever the instruction set changes. Version 2 added the
+/// immediate comparisons.
+const format_version: u8 = 2;
 
 const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration };
 
@@ -254,6 +256,7 @@ const Reader = struct {
         const ncode = try r.len();
         p.code = try gpa.alloc(u32, ncode);
         for (p.code) |*ins| ins.* = try r.fixed(u32);
+        try p.initIc(gpa);
         const nk = try r.len();
         p.constants = try gpa.alloc(Value, nk);
         @memset(p.constants, .nil);

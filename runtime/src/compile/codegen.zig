@@ -273,6 +273,7 @@ fn closeFunc(c: *Compiler, fs: *FuncState) Error!*Proto {
     const p = try vm.gc.alloc(g, Proto, .proto, @sizeOf(Proto));
     p.* = .{ .hdr = p.hdr };
     p.code = try g.gpa.dupe(u32, fs.code.items);
+    try p.initIc(g.gpa);
     p.lines = try g.gpa.dupe(u32, fs.lines.items);
     p.constants = try g.gpa.dupe(Value, fs.constants.items);
     p.protos = try g.gpa.dupe(*Proto, fs.protos.items);
@@ -377,7 +378,7 @@ fn jumpControl(fs: *FuncState, at: i32) *u32 {
     if (at >= 1) {
         const prev = &fs.code.items[@intCast(at - 1)];
         switch (opc.op(prev.*)) {
-            .eq, .lt, .le, .eqk, .test_, .testset, .testnil => return prev,
+            .eq, .lt, .le, .eqk, .lti, .lei, .gti, .gei, .test_, .testset, .testnil => return prev,
             else => {},
         }
     }
@@ -1090,11 +1091,31 @@ fn codeEq(fs: *FuncState, is_eq: bool, e1: *ExpDesc, e2: *ExpDesc) Error!void {
 }
 
 fn codeOrder(fs: *FuncState, o: Op, e1: *ExpDesc, e2: *ExpDesc) Error!void {
+    // A small integer constant on either side becomes an immediate operand.
+    if (isSmallInt(e2)) {
+        const r1 = try exp2anyreg(fs, e1);
+        freeExp(fs, e1);
+        e1.info = try condJump(fs, if (o == .lt) .lti else .lei, r1, @intCast(e2.ival + opc.offset_sc), 1);
+        e1.kind = .jmp;
+        return;
+    }
+    if (isSmallInt(e1)) {
+        const r2 = try exp2anyreg(fs, e2);
+        freeExp(fs, e2);
+        e1.info = try condJump(fs, if (o == .lt) .gti else .gei, r2, @intCast(e1.ival + opc.offset_sc), 1);
+        e1.kind = .jmp;
+        return;
+    }
     const r1 = try exp2anyreg(fs, e1);
     const r2 = try exp2anyreg(fs, e2);
     freeExps(fs, e1, e2);
     e1.info = try condJump(fs, o, r1, r2, 1);
     e1.kind = .jmp;
+}
+
+/// An integer constant that fits the signed immediate of a comparison.
+fn isSmallInt(e: *const ExpDesc) bool {
+    return e.kind == .kint and !e.hasJumps() and e.ival >= -127 and e.ival <= 128;
 }
 
 fn prefix(fs: *FuncState, op: ast.UnOp, e: *ExpDesc, line: u32) Error!void {

@@ -97,15 +97,15 @@ pub const TM = enum(u8) {
 };
 
 pub const tm_event_names = [_][]const u8{
-    "__index", "__newindex", "__gc",   "__mode", "__len",      "__eq",   "__add",
-    "__sub",   "__mul",      "__mod",  "__pow",  "__div",      "__idiv", "__band",
-    "__bor",   "__bxor",     "__shl",  "__shr",  "__unm",      "__bnot", "__lt",
+    "__index", "__newindex", "__gc",   "__mode",  "__len",      "__eq",   "__add",
+    "__sub",   "__mul",      "__mod",  "__pow",   "__div",      "__idiv", "__band",
+    "__bor",   "__bxor",     "__shl",  "__shr",   "__unm",      "__bnot", "__lt",
     "__le",    "__concat",   "__call", "__close", "__tostring", "__name", "__metatable",
     "__pairs",
 };
 
 const tm_count = tm_event_names.len;
-const tag_count = @as(usize, @intFromEnum(Tag.upvalue)) + 1;
+const tag_count = @as(usize, @backingInt(Tag.upvalue)) + 1;
 
 // ---------------------------------------------------------------------
 // String interning set
@@ -451,7 +451,7 @@ pub const Thread = struct {
         // `__name` in the metatable overrides the name of userdata and
         // tables, as luaL_typeerror does.
         if (l.metatable(v)) |mt| {
-            const n = table.getStr(mt, l.g.tm_names[@intFromEnum(TM.name)].?);
+            const n = table.getStr(mt, l.g.tm_names[@backingInt(TM.name)].?);
             if (n.tag == .string) return n.as(String).bytes();
         }
         return value.typeName(v.tag);
@@ -491,9 +491,9 @@ pub const Thread = struct {
 };
 
 pub fn tmLookup(g: *Global, mt: *Table, event: TM) Value {
-    const bit: u16 = if (@intFromEnum(event) < 16) @as(u16, 1) << @intCast(@intFromEnum(event)) else 0;
+    const bit: u16 = if (@backingInt(event) < 16) @as(u16, 1) << @intCast(@backingInt(event)) else 0;
     if (bit != 0 and mt.tm_absent & bit != 0) return .nil;
-    const r = table.getStr(mt, g.tm_names[@intFromEnum(event)].?);
+    const r = table.getStr(mt, g.tm_names[@backingInt(event)].?);
     if (r.isNil() and bit != 0) mt.tm_absent |= bit;
     return r;
 }
@@ -605,6 +605,7 @@ pub fn freeExtra(g: *Global, h: *gc.Header) void {
         .proto => {
             const p = h.as(object.Proto);
             gpa.free(p.code);
+            gpa.free(p.ic);
             gpa.free(p.constants);
             gpa.free(p.protos);
             gpa.free(p.upvals);
