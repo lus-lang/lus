@@ -57,8 +57,8 @@ local function no_false_undefined_global_warnings_test(name)
   -- Collect "Undefined global" warnings for the names the test runner defines
   local false_positives = {}
   for _, d in ipairs(diagnostics) do
-    local global = string.match(d.message, "^Undefined global '(.*)'$")
-    if global ~= nil and RUNNER_GLOBALS[global] then
+    local flagged = string.match(d.message, "^Undefined global '(.*)'$")
+    if flagged ~= nil and RUNNER_GLOBALS[flagged] then
       false_positives[#false_positives + 1] = d.message
           .. " (line " .. tostring(d.range.start.line + 1) .. ")"
     end

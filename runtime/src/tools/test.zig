@@ -210,7 +210,15 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
         if (!ok or o.verbose) try report.appendSlice(gpa, r.report.items);
     }
     if (!o.json) {
-        try report.print(gpa, "\n{d} files, {d} passed, {d} failed, {d} skipped\n", .{ results.len, passed, failed, skipped });
+        try report.print(gpa, "\n{d} files, {d} passed, {d} failed, {d} skipped", .{ results.len, passed, failed, skipped });
+        // A file that crashed, timed out, or failed to load runs no test,
+        // so the summary counts it apart from failed tests.
+        var broken: usize = 0;
+        for (results) |*r| {
+            if (r.crashed or r.timed_out) broken += 1;
+        }
+        if (broken > 0) try report.print(gpa, ", {d} {s} with errors", .{ broken, if (broken == 1) "file" else "files" });
+        try report.append(gpa, '\n');
     }
     std.Io.File.stdout().writeStreamingAll(io, report.items) catch {};
     return if (bad_files == 0) 0 else 1;
