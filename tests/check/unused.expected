@@ -1,0 +1,7 @@
+unused.lus:4:7: warning: unused local 'unused' [unused-local]
+unused.lus:6:7: warning: local 'written' is assigned but never read [unused-local]
+unused.lus:9:16: warning: unused local function 'helper' [unused-function]
+unused.lus:9:26: warning: unused parameter 'b' [unused-param]
+unused.lus:18:5: warning: unused loop variable 'i' [unused-loop-var]
+unused.lus:22:5: warning: unused loop variable 'k' [unused-loop-var]
+unused.lus:26:19: warning: unused parameter 'x' [unused-param]

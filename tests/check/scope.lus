@@ -1,0 +1,21 @@
+-- Shadowing and free names in a file without global declarations.
+local count = 0
+
+local function bump(count)
+    return count + 1
+end
+
+do
+    local count = bump(1)
+    print(count)
+end
+
+local name = "a"
+local name = "b"
+print(name)
+
+total = count + 1
+total = total + 1
+print(undefined_thing, undefined_thing)
+local ok = pcall(print)
+print(ok, xpcall)

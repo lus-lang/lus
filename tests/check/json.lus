@@ -1,0 +1,2 @@
+-- args: --json
+local "quoted" = 1

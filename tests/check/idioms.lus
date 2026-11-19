@@ -1,0 +1,37 @@
+-- Idioms that a Lus feature expresses directly.
+global print, pledge, config, other
+
+local host, port = config.host, config.port
+print(host, port)
+
+local a, b = config.a, other
+print(a, b)
+
+if config ~= nil then
+    if config.db ~= nil then
+        print(config.db)
+    end
+end
+
+local url = config and config.db and config.db.url
+print(url)
+
+local found = config.find()
+if found then
+    print(found)
+end
+
+local kept = config.find()
+if kept then
+    print(kept)
+end
+print(kept)
+
+local missing = config.find()
+if not missing then
+    print("missing")
+end
+
+pledge("fs:read")
+pledge("seal")
+pledge("network")

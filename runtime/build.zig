@@ -53,6 +53,13 @@ pub fn build(b: *std.Build) void {
     run_fail.expectStdErrMatch("app.lus:22: boom from the bundle");
     bundle_step.dependOn(&run_fail.step);
 
+    // `lus check` and `lus doc` on the fixtures in tests/check and
+    // tests/doc. Each fixture's output must match its expected file.
+    const check_step = b.step("test-check", "Run lus check on the fixtures in tests/check");
+    fixtureSuite(b, exe, check_step, "check", &.{".expected"});
+    const doc_step = b.step("test-doc", "Run lus doc on the fixtures in tests/doc");
+    fixtureSuite(b, exe, doc_step, "doc", &.{ ".md", ".json" });
+
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
@@ -86,6 +93,64 @@ pub fn build(b: *std.Build) void {
         if (!std.mem.eql(u8, name, "shared")) run_t.setCwd(b.path("../tests/embed"));
         run_t.expectExitCode(0);
         embed_step.dependOn(&run_t.step);
+    }
+}
+
+/// Adds one run of `lus <command>` per fixture in `../tests/<command>`.
+/// For a fixture `NAME.lus`, every expected file `NAME<ext>` that exists
+/// adds a run whose standard output must equal it. The `.json` expected
+/// file runs with `--format json`. A first line `-- args: ...` in the
+/// fixture adds arguments before the file name. A run that prints
+/// nothing must exit with status 0, and any other run with status 1 for
+/// `check` and 0 for `doc`.
+fn fixtureSuite(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.Step, command: []const u8, exts: []const []const u8) void {
+    const io = b.graph.io;
+    const rel = b.fmt("../tests/{s}", .{command});
+    // The configure step reads the fixtures, so it reruns when they
+    // change.
+    b.dependOnDirectoryContents(b.path(rel));
+    const root = b.root.join(b.allocator, rel) catch @panic("OOM");
+    var dir = root.root_dir.handle.openDir(io, root.sub_path, .{ .iterate = true }) catch |e| {
+        std.debug.panic("cannot open {s}: {s}", .{ rel, @errorName(e) });
+    };
+    defer dir.close(io);
+    var names: std.ArrayList([]const u8) = .empty;
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".lus")) continue;
+        names.append(b.allocator, b.dupe(entry.name)) catch @panic("OOM");
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.order(u8, x, y) == .lt;
+        }
+    }.lt);
+    for (names.items) |name| {
+        const stem = name[0 .. name.len - 4];
+        b.dependOnFileContents(b.path(b.fmt("{s}/{s}", .{ rel, name })));
+        const src = dir.readFileAlloc(io, name, b.allocator, .unlimited) catch @panic("cannot read fixture");
+        const first = src[0 .. std.mem.indexOfScalar(u8, src, '\n') orelse src.len];
+        for (exts) |ext| {
+            const expected_name = b.fmt("{s}{s}", .{ stem, ext });
+            const expected = dir.readFileAlloc(io, expected_name, b.allocator, .unlimited) catch continue;
+            b.dependOnFileContents(b.path(b.fmt("{s}/{s}", .{ rel, expected_name })));
+            const run = b.addRunArtifact(exe);
+            run.setName(b.fmt("lus {s} {s} ({s})", .{ command, name, ext }));
+            run.setCwd(b.path(rel));
+            run.addArg(command);
+            if (std.mem.eql(u8, ext, ".json")) run.addArgs(&.{ "--format", "json" });
+            const prefix = "-- args: ";
+            if (std.mem.startsWith(u8, first, prefix)) {
+                var words = std.mem.tokenizeScalar(u8, first[prefix.len..], ' ');
+                while (words.next()) |w| run.addArg(w);
+            }
+            run.addArg(name);
+            run.addFileInput(b.path(b.fmt("{s}/{s}", .{ rel, name })));
+            run.expectStdOutEqual(expected);
+            const failing = std.mem.eql(u8, command, "check") and expected.len > 0;
+            run.expectExitCode(if (failing) 1 else 0);
+            step.dependOn(&run.step);
+        }
     }
 }
 

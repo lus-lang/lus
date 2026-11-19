@@ -1,0 +1,3 @@
+[
+  {"file": "json.lus", "line": 2, "column": 7, "endLine": 2, "endColumn": 15, "severity": "error", "code": "syntax", "message": "<name> expected near '\"quoted\"'"}
+]

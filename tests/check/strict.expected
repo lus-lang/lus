@@ -1,0 +1,5 @@
+strict.lus:5:7: error: variable 'missing' not declared [undeclared-global]
+strict.lus:6:1: error: attempt to assign to const variable 'LIMIT' [assign-const]
+strict.lus:8:7: warning: local 'fixed' is assigned but never read [unused-local]
+strict.lus:9:1: error: attempt to assign to const variable 'fixed' [assign-const]
+strict.lus:12:5: error: attempt to assign to const variable 'i' [assign-const]

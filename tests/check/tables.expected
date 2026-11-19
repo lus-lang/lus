@@ -1,0 +1,7 @@
+tables.lus:7:6: warning: duplicate key 2 in table constructor [duplicate-key]
+tables.lus:9:6: warning: duplicate key "name" in table constructor [duplicate-key]
+tables.lus:11:6: warning: duplicate key true in table constructor [duplicate-key]
+tables.lus:12:6: warning: duplicate key 1 in table constructor [duplicate-key]
+tables.lus:16:1: warning: 'x' is assigned to itself [self-assign]
+tables.lus:17:1: warning: 't.name' is assigned to itself [self-assign]
+tables.lus:18:1: warning: 't[1]' is assigned to itself [self-assign]

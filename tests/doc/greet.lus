@@ -1,0 +1,26 @@
+global print
+
+--- The greeting used by `greet`.
+global GREETING <const> = "hello"
+
+--- Prints a greeting.
+---
+--- The text is `GREETING` followed by the name.
+--- @param name string Who to greet.
+global function greet(name)
+    print(GREETING .. " " .. name)
+end
+
+global function shout(text)
+    print(text)
+end
+
+--- Joins strings with a separator.
+--- @param sep string The separator.
+--- @param parts string The strings to join.
+--- @return string The joined text.
+local function join(sep, ...parts)
+    return sep
+end
+
+greet(join(", "))

@@ -1,0 +1,40 @@
+-- Control flow: unreachable code, labels, and continue.
+global print
+
+for i = 1, 3 do
+    if i == 2 then
+        break
+        print("after break")
+    end
+    goto next
+    print("skipped")
+    ::next::
+end
+
+::unused_label::
+
+goto nowhere
+
+do
+    ::twice::
+    do
+        ::twice::
+    end
+    goto twice
+end
+
+continue
+
+local n = 0
+repeat
+    n = n + 1
+    if n == 1 then
+        continue
+    end
+    local later = n
+until later > 2
+
+local function f()
+    continue
+end
+f()

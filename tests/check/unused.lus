@@ -1,0 +1,36 @@
+-- Unused bindings of every kind.
+global print, pairs
+
+local unused = 1
+local _ignored = 2
+local written = 3
+written = 4
+
+local function helper(a, b)
+    return a
+end
+
+local function used(self, ...)
+    return ...
+end
+print(used(1, 2))
+
+for i, v in pairs({}) do
+    print(v)
+end
+
+for k = 1, 3 do
+end
+
+local t = {}
+function t:method(x)
+    return 1
+end
+
+if value = t.missing then
+    print("never")
+end
+
+do
+    local handle <close> = nil
+end

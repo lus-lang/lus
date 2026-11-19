@@ -1,0 +1,19 @@
+-- Named global declarations make every other free name an error.
+global print
+global LIMIT <const> = 10
+
+print(missing)
+LIMIT = 11
+
+local fixed <const> = 1
+fixed = 2
+
+for i = 1, 3 do
+    i = i + 1
+    print(i)
+end
+
+do
+    global *
+    anything = 1
+end
