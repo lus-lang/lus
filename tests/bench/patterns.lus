@@ -1,0 +1,20 @@
+local words = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"}
+local lines = {}
+for i = 1, 20000 do
+    lines[i] = words[i % 8 + 1] .. " = " .. i .. ", key_" .. i .. " -> value " .. (i * 7) .. " end"
+end
+local text = table.concat(lines, "\n")
+local count, total, subs, size = 0, 0, 0, 0
+for round = 1, 10 do
+    for k, v in text:gmatch("(%w+) = (%d+)") do count = count + 1 end
+    for i = 1, #lines do
+        local line = lines[i]
+        if line:find("value", 1, true) then total = total + 1 end
+        if line:find("key_%d+") then total = total + 1 end
+        total = total + tonumber(line:match("value (%d+)"))
+    end
+    local replaced, n = text:gsub("key_(%d+)", "k%1")
+    subs = subs + n
+    size = size + #replaced + #text:upper()
+end
+print(count, total, subs, size)
