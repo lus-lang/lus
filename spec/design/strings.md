@@ -30,7 +30,7 @@ Concatenating a string that ends with a lead surrogate and a string that starts 
 
 Byte level data uses vectors.
 
-- `vector.from(s)` returns the WTF-8 bytes of a string.
+- `vector.fromstring(s)` returns the WTF-8 bytes of a string.
 - `vector.tostring(v [, i [, j [, mode]]])` decodes bytes `i` through `j` into a string. With mode `"strict"`, the default, invalid input raises an error naming the byte offset. With mode `"lossy"` each invalid sequence becomes U+FFFD.
 - `string.pack` returns a vector and `string.unpack` and `string.packsize` read vectors.
 - `string.transcode(input, from, to)` converts between encodings. An input or output in a byte encoding such as `"utf-16le"`, `"latin1"`, `"base64"` decoding, or `"hex"` decoding is a vector. An input or output in a text encoding is a string.

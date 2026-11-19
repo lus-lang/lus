@@ -21,3 +21,11 @@ pub const Query = struct {
         _ = h;
     }
 };
+
+const value = @import("value.zig");
+
+pub fn build(l: *state.Thread, plan: value.Value, sources: u32) state.Error!value.Value {
+    _ = plan;
+    _ = sources;
+    return l.raiseMsg("queries are not supported yet");
+}
