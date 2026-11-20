@@ -352,9 +352,15 @@ pub const full_max = 4;
 pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
     if (t.hash_len == 0) return null;
     const s = key.as(object.String);
-    // A full part has no empty node to end the probe, and the general
-    // path takes the store.
-    if (t.hash_used >= t.hash_len) return null;
+    // A full part has no empty node to end the probe. Such a part is
+    // small (`full_max`), so a key that it holds is found by visiting
+    // every node once, and a new key takes the general path.
+    if (t.hash_used >= t.hash_len) {
+        if (!s.flags.interned) return null;
+        const i = findStrFull(t, s) orelse return null;
+        t.setVal(i, val.*);
+        return i;
+    }
     const mask = t.hash_len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
