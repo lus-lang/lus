@@ -28,6 +28,14 @@ interface Props {
   signal?: "cap" | "fallen" | "none"
   /** the grainy light around the lime cube */
   glow?: boolean
+  /** the front-row bar that wears the lime cube, in place of the peak */
+  limeAt?: number
+  /** the height of one unit as a share of the cube edge, for flat bars */
+  unit?: number
+  /** the depth of one row as a share of the cube edge */
+  depth?: number
+  /** whether the lime cube tints the bars around it */
+  light?: boolean
 }
 
 const {
@@ -38,11 +46,15 @@ const {
   heights,
   signal = "cap",
   glow = true,
+  limeAt,
+  unit = 1,
+  depth = 0.62,
+  light = true,
 } = Astro.props
 const cols = heights ? heights.length : (Astro.props.cols ?? 52)
 
 const S = 22 // cube edge in px
-const D = S * 0.62 // depth of one row on screen
+const D = S * depth // depth of one row on screen
 const dx = D * Math.cos(Math.PI / 5)
 const dy = D * Math.sin(Math.PI / 5)
 
@@ -77,9 +89,10 @@ const bars: Bar[] = []
 for (let i = 0; i < rows; i++) {
   for (let j = 0; j < cols; j++) bars.push({ i, j, h: height(i, j) })
 }
-const peak = bars.reduce((a, b) =>
-  b.h > a.h || (b.h === a.h && b.i < a.i) ? b : a,
-)
+const peak =
+  limeAt !== undefined
+    ? bars.find((b) => b.i === 0 && b.j === limeAt)!
+    : bars.reduce((a, b) => (b.h > a.h || (b.h === a.h && b.i < a.i) ? b : a))
 
 // painter's order: the back row first, each row left to right
 bars.sort((a, b) => b.i - a.i || a.j - b.j)
@@ -88,11 +101,11 @@ const fallen = signal === "fallen"
 const maxH = Math.max(...bars.map((b) => b.h))
 const ground = fallen ? 1.6 * dy + 2 : 0
 const width = cols * S + rows * dx + 2
-const heightPx = (maxH + 0.2) * S + rows * dy + 2 + ground
+const heightPx = (maxH * unit + 0.2) * S + rows * dy + 2 + ground
 const baseY = heightPx - 1 - ground
 
 function point(i: number, j: number, k: number) {
-  return [1 + j * S + i * dx, baseY - k * S - i * dy]
+  return [1 + j * S + i * dx, baseY - k * unit * S - i * dy]
 }
 function poly(pts: number[][]) {
   return pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ")
@@ -136,7 +149,7 @@ const source =
 
 // the light of the lime cube on its neighbors, strongest beside it
 function litBy(b: Bar) {
-  if (signal === "none") return 0
+  if (signal === "none" || !light) return 0
   const dist = Math.hypot(b.j - source.j, (b.i - source.i) * 1.5)
   return Math.max(0, 1 - dist / Math.min(4.5, cols / 6))
 }
@@ -155,11 +168,11 @@ const shapes: Shape[] = bars.flatMap((b) => {
   const row = `r${b.i}`
   const lit = b === peak ? 0 : litBy(b)
   if (b === peak && signal === "fallen") {
-    return [{ ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: 0.5 }]
+    return [{ ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0 }]
   }
   if (b === peak && signal === "cap") {
     return [
-      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: 0.5 },
+      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0 },
       { ...prism(b.i, b.j, b.h - 1, b.h), lime: true, row, lit: 0 },
     ]
   }

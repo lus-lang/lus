@@ -7,6 +7,7 @@
 ** switches which one shows, so readers without scripts see wall time.
 */
 import results from "../data/benchmarks.json"
+import CubeField from "./CubeField.astro"
 
 interface Cell {
   ok?: boolean
@@ -84,6 +85,37 @@ function row(
   }
 }
 
+// a skyline of the runtimes: one bar per column, its height the geometric
+// mean of the runtime's standing in each program (1 for the best), on a
+// scale of one to eight cubes. Higher is better in both modes.
+function standing(key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", httpHigher: boolean) {
+  const rowsOf = [
+    ...programs.map((p) => ({ cells: data.programs[p], key, higher: false })),
+    ...(data.http ? [{ cells: data.http, key: http, higher: httpHigher }] : []),
+  ]
+  return runtimes.map((id) => {
+    const scores: number[] = []
+    for (const r of rowsOf) {
+      const values = runtimes
+        .map((other) => r.cells[other])
+        .filter((c) => c && c.ok !== false && typeof c[r.key] === "number")
+        .map((c) => c![r.key] as number)
+      const own = r.cells[id]
+      if (!own || own.ok === false || typeof own[r.key] !== "number") continue
+      const v = own[r.key] as number
+      const best = r.higher ? Math.max(...values) : Math.min(...values)
+      scores.push(r.higher ? v / best : best / v)
+    }
+    const g = Math.exp(scores.reduce((a, s) => a + Math.log(s), 0) / scores.length)
+    return 1 + Math.round(g * 7)
+  })
+}
+
+const skylines = {
+  time: standing("best_s", "rps", true),
+  memory: standing("peak_rss_mb", "peak_rss_mb", false),
+}
+
 const modes: {
   mode: Mode
   caption: string
@@ -122,6 +154,9 @@ const modes: {
     modes.map((m) => (
       <div class="mode" data-show={m.mode}>
         <div class="scroll">
+          <div class="skyline">
+            <CubeField rows={1} heights={skylines[m.mode]} limeAt={0} glow={false} light={false} unit={0.16} depth={0.22} />
+          </div>
           <table>
             <caption>{m.caption}</caption>
             <thead>
@@ -230,6 +265,21 @@ const modes: {
 
   .scroll {
     @apply overflow-x-auto;
+  }
+
+  /* the runtime skyline stands over the runtime columns, one bar each */
+  .skyline {
+    @apply min-w-[760px] pt-2 pl-[92px];
+
+    :global(svg) {
+      @apply w-full;
+    }
+  }
+
+  @media (min-width: 900px) {
+    .skyline {
+      @apply pl-[25%];
+    }
   }
 
   table {
