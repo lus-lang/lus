@@ -74,6 +74,8 @@ A result whose length is known before its bytes are written goes straight into i
 
 A search that does not start at an anchor tries the pattern at every position. When the pattern begins with a literal text, the search jumps between occurrences of that text. When it begins instead with a single class that must match once, such as `[&<>"']` or `%a+`, the bytewise matcher computes the set of bytes that class accepts and skips every byte outside it before it starts a match. `find`, `match`, `gmatch`, and `gsub` share this. On `template` from the cross-language suite, which escapes a million titles with `gsub(s, "[&<>\"']", ESC)`, the skip together with the decimal fast paths below took the run from 1.38 s to 1.15 s.
 
+The state keeps the last pattern whose start bytes it computed, keyed by the text of the pattern, so a loop that calls `gsub` with the same pattern computes them once. The strings of single ASCII characters, which captures and `string.sub` produce often, are made fixed the first time and `newStringKnown` returns them without a lookup. These took `template` from 1.20 s to 1.09 s, best of three alternating runs on a loaded machine.
+
 `string.format` writes `%d`, `%i`, and `%u` with a table of digit pairs, and `tonumber` and arithmetic coercion read a plain decimal integer of at most 18 digits directly, without the lexer. `ops.intDigits` is the one integer writer that concatenation, `string.format`, and `tojson` use.
 
 ## JSON and CSV

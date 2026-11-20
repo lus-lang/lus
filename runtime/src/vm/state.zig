@@ -319,6 +319,13 @@ pub const Global = struct {
     /// Allocation points seen, for the GC stress build.
     stress_tick: u32 = 0,
     cycles: u64 = 0,
+    /// The last pattern whose start bytes a search computed, by its text
+    /// (`firstSet` in `lib/string.zig`).
+    first_set: FirstSetCache = .{},
+    /// The string of each ASCII character that the program made, which
+    /// lives as long as the state, so `newStringKnown` returns it without
+    /// a lookup.
+    ascii_chars: [128]?*String = @splat(null),
     strings: StringSet = .{},
     seed: u64,
     registry: Value = .nil,
@@ -824,6 +831,10 @@ pub inline fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usiz
     // A short string that already exists is found inline. Creating a
     // string is the out-of-line part.
     if (b.len <= String.short_max) {
+        if (b.len == 1 and b[0] < 0x80) {
+            if (g.ascii_chars[b[0]]) |c| return c;
+            return newAsciiChar(g, b[0]);
+        }
         const h = object.hashBytes(g.seed, b);
         if (g.strings.find(b, h)) |s| {
             gc.touchInterned(g, s);
@@ -832,6 +843,21 @@ pub inline fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usiz
         return createString(g, b, ascii, chars, h);
     }
     return createString(g, b, ascii, chars, object.hashBytes(g.seed, b));
+}
+
+/// The string of the ASCII character `c`, made fixed and remembered the
+/// first time the program asks for it.
+noinline fn newAsciiChar(g: *Global, c: u8) Allocator.Error!*String {
+    const b = [1]u8{c};
+    const h = object.hashBytes(g.seed, &b);
+    const str = if (g.strings.find(&b, h)) |found| blk: {
+        gc.touchInterned(g, found);
+        break :blk found;
+    } else try createString(g, &b, true, 1, h);
+    // A string that cannot be made fixed is still a valid result.
+    g.fixed.append(g.gpa, &str.hdr) catch return str;
+    g.ascii_chars[c] = str;
+    return str;
 }
 
 /// Allocates a string with hash `h` that `newStringKnown` did not find.
@@ -850,6 +876,14 @@ noinline fn createString(g: *Global, b: []const u8, ascii: bool, chars: usize, h
     if (short) try g.strings.insert(g.gpa, s);
     return s;
 }
+
+pub const FirstSetCache = struct {
+    /// Patterns longer than the key are analyzed every time.
+    key: [48]u8 = undefined,
+    len: usize = std.math.maxInt(usize),
+    start: usize = 0,
+    set: ?u128 = null,
+};
 
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
     gc.maybeCollect(g);

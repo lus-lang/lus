@@ -1114,6 +1114,22 @@ fn firstSet(pat: []const u8, p_in: usize) ?u128 {
     return m.classSet(p, ep);
 }
 
+/// `firstSet` through the cache of the state, which holds the last
+/// pattern examined by its text, so that a search repeated with the same
+/// pattern skips the analysis.
+fn firstSetCached(l: *Thread, pat: []const u8, p: usize) ?u128 {
+    const c = &l.g.first_set;
+    if (c.len == pat.len and c.start == p and std.mem.eql(u8, c.key[0..pat.len], pat)) return c.set;
+    const set = firstSet(pat, p);
+    if (pat.len <= c.key.len) {
+        @memcpy(c.key[0..pat.len], pat);
+        c.len = pat.len;
+        c.start = p;
+        c.set = set;
+    }
+    return set;
+}
+
 /// The first byte at or after `pos` that is in `set`, or `src.len`.
 inline fn skipTo(src: []const u8, pos: usize, set: u128) usize {
     var i = pos;
@@ -1186,7 +1202,7 @@ fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize,
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
-    const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSet(pat, pstart) else null;
+    const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSetCached(l, pat, pstart) else null;
     var s1 = init_b;
     var c1 = init_c;
     while (true) {
@@ -1266,7 +1282,7 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
     const pat = p.bytes();
     var m = M.init(src, pat, s.flags.ascii);
     const prefix = literalPrefix(pat, 0);
-    const first: ?u128 = if (M == MatcherFor(true) and prefix.len == 0) firstSet(pat, 0) else null;
+    const first: ?u128 = if (M == MatcherFor(true) and prefix.len == 0) firstSetCached(l, pat, 0) else null;
     var pos: usize = @intCast(ups[gm_pos].asInt());
     var c: usize = @intCast(ups[gm_char].asInt());
     const last = ups[gm_last].asInt();
@@ -1389,7 +1405,7 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
-    const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSet(pat, pstart) else null;
+    const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSetCached(l, pat, pstart) else null;
     var m = M.init(src, pat, s.flags.ascii);
     var b: Builder = undefined;
     b.init(l);
