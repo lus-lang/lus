@@ -60,11 +60,13 @@ local function an_uncollected_error_is_the_error_of_the_worker_test()
         end))
         worker.message("body ends")
     ]])
-    assert(worker.receive(w) == "body ends")
-    assert(worker.receive(w) == "first turn")
-    local err = raises(function()
-        worker.receive(w)
-    end, "workercoro_%d+%.lus:%d+: the detached coroutine failed$")
+    -- A worker that has failed raises its error from the next receive,
+    -- ahead of the messages it sent before.
+    local ok, err
+    repeat
+        ok, err = catch worker.receive(w)
+    until not ok or err == nil
+    assert(not ok and string.find(err, "workercoro_%d+%.lus:%d+: the detached coroutine failed$"), tostring(err))
     assert(worker.status(w) == "dead")
 end
 

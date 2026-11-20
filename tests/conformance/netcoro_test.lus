@@ -460,10 +460,12 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
             sock:close()
         end
     end)
+    local waiting = false
     local patient = spawn(function()
         -- The other acceptor waits first, so it takes every connection.
         yield()
         server:settimeout(0.1)
+        waiting = true
         local ok, err = catch server:accept()
         server:settimeout(-1)
         order[#order + 1] = "timeout"
@@ -472,6 +474,10 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     local dialer = spawn(function()
         local idle = listen()
         idle:settimeout(0.02)
+        -- The first connection arrives once both acceptors wait.
+        while not waiting do
+            yield()
+        end
         -- A connection arrives every 20 ms for longer than the timeout.
         for i = 1, 30 do
             network.tcp.connect("127.0.0.1", port):close()
