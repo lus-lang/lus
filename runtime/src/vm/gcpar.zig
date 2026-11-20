@@ -264,7 +264,10 @@ const spin_limit = 20_000;
 
 /// The number of threads that mark, the calling one included. Set with
 /// `LUS_GC_THREADS` (1 marks alone). The default uses up to eight
-/// threads and leaves one processor to the rest of the system.
+/// threads and leaves one processor to the rest of the system. On Linux
+/// `getCpuCount` counts the processors of the affinity mask of the
+/// process, so a container limited to a few processors starts few
+/// helpers.
 fn wantedWorkers() u32 {
     if (std.c.getenv("LUS_GC_THREADS")) |s| {
         const n = std.fmt.parseInt(u32, std.mem.span(s), 10) catch 0;
@@ -274,18 +277,63 @@ fn wantedWorkers() u32 {
     return @intCast(std.math.clamp(cpus -| 1, 1, max_workers));
 }
 
+/// The stack of a helper thread. The C library of Linux places the
+/// static thread-local storage of every thread at the top of its stack,
+/// and that storage holds the alternate signal stack of the standard
+/// library (`std.options.signal_stack_size`, 256 KiB by default). The
+/// size therefore counts that storage on top of the room the helper
+/// needs for tracing and for the thread-local data of the C libraries.
+const helper_stack_size: usize = 512 * 1024 + (std.options.signal_stack_size orelse 0);
+
 fn startHelpers() void {
     pool.start_lock.lock();
     defer pool.start_lock.unlock();
     if (pool.started.load(.acquire) != 0) return;
     const want = wantedWorkers();
     var k: u32 = 1;
+    // A helper that fails to start leaves the drain to the threads that
+    // did start. With none, every drain runs on the calling thread.
     while (k < want) : (k += 1) {
-        const t = std.Thread.spawn(.{ .stack_size = 256 * 1024 }, helperMain, .{k}) catch break;
-        t.detach();
+        if (!spawnHelper(k)) break;
         pool.helpers = k;
     }
     pool.started.store(1, .release);
+}
+
+/// Starts helper `index` as a detached thread. Returns false when the
+/// system refuses a new thread. With POSIX threads the runtime calls
+/// the C library itself, so that every error of `pthread_create` comes
+/// back as a value.
+fn spawnHelper(index: u32) bool {
+    if (!std.Thread.use_pthreads) {
+        const t = std.Thread.spawn(.{ .stack_size = helper_stack_size }, helperMain, .{index}) catch return false;
+        t.detach();
+        return true;
+    }
+    const c = std.c;
+    const arg: ?*anyopaque = @ptrFromInt(@as(usize, index) + 1);
+    var handle: c.pthread_t = undefined;
+    var attr: c.pthread_attr_t = undefined;
+    var started = false;
+    if (c.pthread_attr_init(&attr) == .SUCCESS) {
+        if (c.pthread_attr_setstacksize(&attr, helper_stack_size) == .SUCCESS)
+            started = c.pthread_create(&handle, &attr, helperEntry, arg) == .SUCCESS;
+        _ = c.pthread_attr_destroy(&attr);
+    }
+    // The default attributes of the C library size the stack for its
+    // own thread-local storage, so they serve as the second try.
+    if (!started) started = c.pthread_create(&handle, null, helperEntry, arg) == .SUCCESS;
+    if (!started) return false;
+    _ = c.pthread_detach(handle);
+    return true;
+}
+
+/// The entry point of a helper started with POSIX threads. The index
+/// arrives in the argument pointer, offset by one to keep it non-null.
+fn helperEntry(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+    std.Thread.maybeAttachSignalStack();
+    helperMain(@intCast(@intFromPtr(arg) - 1));
+    return null;
 }
 
 fn helperMain(index: u32) void {
@@ -347,7 +395,11 @@ pub fn drain(g: *Global, work_out: *usize) bool {
     const gen = pool.gen.load(.monotonic) +% 1;
     pool.job_gen = gen;
     pool.job_lock.unlock();
-    pool.gen.store(gen, .release);
+    // The store and the load of `sleepers` pair with the increment of
+    // `sleepers` and the load of `gen` in `helperMain`. Both sides are
+    // sequentially consistent, so a helper that goes to sleep either sees
+    // the new generation or is counted here and woken.
+    pool.gen.store(gen, .seq_cst);
     if (pool.sleepers.load(.seq_cst) != 0) futex_io.io().futexWake(u32, &pool.gen.raw, std.math.maxInt(u32));
     // The calling thread takes part as worker zero.
     work(&d, 0);
