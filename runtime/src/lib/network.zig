@@ -1,7 +1,17 @@
-//! The `network` library: TCP client and server sockets, UDP sockets, and
-//! `network.fetch`, an HTTP and HTTPS client. Sockets are userdata. Every
-//! operation blocks, optionally bounded by a timeout set with
-//! `settimeout`. Workers provide concurrency.
+//! The `network` library: TCP client and server sockets, UDP sockets,
+//! `network.fetch`, an HTTP and HTTPS client, and `network.serve`, an HTTP
+//! server (`serve.zig`). Sockets are userdata. Every operation blocks its
+//! caller, optionally bounded by a timeout set with `settimeout`.
+//!
+//! TCP connect, accept, send, and receive and UDP receive and sendto are
+//! suspension points (`spec/design/coroutines.md`). Inside a detached
+//! coroutine they suspend the coroutine while the socket is not ready,
+//! and the scheduler runs the others. Anywhere else they keep their
+//! caller blocked and run the scheduler while they wait. An operation
+//! first tries its system call without waiting, and waits through
+//! `sched.waitIo` only when the call reports that it would block. While
+//! no detached coroutine exists and no timeout is set, an operation
+//! blocks in its system call.
 //!
 //! Data received from the network are vectors, and every send accepts a
 //! string or a vector (spec/design/strings.md).
@@ -11,8 +21,9 @@
 //! certificate bundle. The standard library has no TLS server, so there is
 //! no server side TLS.
 //!
-//! Timeouts wait with `poll` on POSIX systems. On Windows they are not
-//! enforced yet and operations block until they complete.
+//! On Windows an operation asks `WSAPoll` whether the socket is ready
+//! before it runs its blocking call, and it blocks in that call when the
+//! question fails.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -24,6 +35,7 @@ const gc = @import("../vm/gc.zig");
 const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
+const sched = @import("../vm/sched.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
@@ -46,12 +58,12 @@ const default_all_limit = 64 * 1024 * 1024;
 const fetch_timeout_ms = 30000;
 const fetch_max_body = 64 * 1024 * 1024;
 
-const socket_name = "network.socket";
-const server_name = "network.server";
+pub const socket_name = "network.socket";
+pub const server_name = "network.server";
 const udp_name = "network.udpsocket";
 
 /// A TCP connection.
-const Socket = struct {
+pub const Socket = struct {
     stream: net.Stream,
     local: net.IpAddress,
     peer: net.IpAddress,
@@ -60,10 +72,17 @@ const Socket = struct {
     closed: bool = false,
     /// Bytes read from the socket and not yet returned.
     buf: std.ArrayList(u8) = .empty,
+    /// Set once the handle is in non-blocking mode, which happens the
+    /// first time an operation on the socket must not block. From then on
+    /// every operation waits through the scheduler.
+    nonblocking: bool = false,
+    /// The state of the HTTP exchange that `network.serve` runs on this
+    /// connection.
+    http: ?*@import("serve.zig").Http = null,
 };
 
 /// A listening TCP socket.
-const Server = struct {
+pub const Server = struct {
     server: net.Server,
     timeout_ms: i32 = -1,
     closed: bool = false,
@@ -102,7 +121,10 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "settimeout", .func = udpSettimeout },
     }, udpGc, udpTostring);
 
-    const t = try aux.newLib(l, &.{.{ .name = "fetch", .func = fetch }});
+    const t = try aux.newLib(l, &.{
+        .{ .name = "fetch", .func = fetch },
+        .{ .name = "serve", .func = @import("serve.zig").serve },
+    });
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
     const tcp = try aux.newLib(l, &.{
@@ -137,7 +159,7 @@ fn metatableOf(l: *Thread, comptime name: []const u8) *Table {
 }
 
 /// Creates a userdata holding `init` and pushes it.
-fn newObject(l: *Thread, comptime T: type, comptime name: []const u8, init: T) Error!*T {
+pub fn newObject(l: *Thread, comptime T: type, comptime name: []const u8, init: T) Error!*T {
     const g = l.g;
     gc.maybeCollect(g);
     const mt = metatableOf(l, name);
@@ -152,20 +174,26 @@ fn newObject(l: *Thread, comptime T: type, comptime name: []const u8, init: T) E
     return p;
 }
 
-fn toObject(l: *Thread, comptime T: type, comptime name: []const u8, v: Value) ?*T {
+pub fn toObject(l: *Thread, comptime T: type, comptime name: []const u8, v: Value) ?*T {
     if (v.tag != .userdata) return null;
     const u = v.as(Userdata);
     if (u.metatable != metatableOf(l, name)) return null;
     return @ptrCast(@alignCast(u.data()));
 }
 
-fn checkSocket(l: *Thread, i: u32) Error!*Socket {
+pub fn checkSocket(l: *Thread, i: u32) Error!*Socket {
     const s = toObject(l, Socket, socket_name, l.arg(i)) orelse return aux.typeError(l, i, socket_name);
     if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
     return s;
 }
 
-fn checkServer(l: *Thread, i: u32) Error!*Server {
+/// Raises when a coroutine closed the socket while its caller, which
+/// kept the stack, ran the scheduler.
+pub fn stillOpen(l: *Thread, s: *Socket) Error!void {
+    if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
+}
+
+pub fn checkServer(l: *Thread, i: u32) Error!*Server {
     const s = toObject(l, Server, server_name, l.arg(i)) orelse return aux.typeError(l, i, server_name);
     if (s.closed) return l.raiseFmt("attempt to use a closed server", .{});
     return s;
@@ -180,7 +208,7 @@ fn checkUdp(l: *Thread, i: u32) Error!*Udp {
 // ---------------------------------------------------------------------
 // Arguments
 
-fn checkPort(l: *Thread, i: u32, allow_zero: bool) Error!u16 {
+pub fn checkPort(l: *Thread, i: u32, allow_zero: bool) Error!u16 {
     const p = try aux.checkInt(l, i);
     const min: i64 = if (allow_zero) 0 else 1;
     if (p < min or p > 65535) return aux.argError(l, i, "port out of range", .{});
@@ -208,7 +236,7 @@ fn timeoutArg(l: *Thread, i: u32) Error!i32 {
 }
 
 /// Formats "host:port" for permission checks and messages.
-fn hostPort(buf: []u8, host: []const u8, port: u16) []const u8 {
+pub fn hostPort(buf: []u8, host: []const u8, port: u16) []const u8 {
     return std.fmt.bufPrint(buf, "{s}:{d}", .{ host, port }) catch host;
 }
 
@@ -217,7 +245,7 @@ fn hostPort(buf: []u8, host: []const u8, port: u16) []const u8 {
 
 /// The message the C library gives for the error a socket call failed
 /// with, so messages read the same on every platform.
-fn errText(err: anyerror) []const u8 {
+pub fn errText(err: anyerror) []const u8 {
     return switch (err) {
         error.ConnectionRefused => "Connection refused",
         error.ConnectionResetByPeer => "Connection reset by peer",
@@ -270,6 +298,94 @@ fn waitHandle(handle: net.Socket.Handle, for_write: bool, timeout_ms: i32) Wait 
     return if (n == 0) .timeout else .ready;
 }
 
+/// True when an operation on a socket with this timeout may block in its
+/// system call: nothing bounds it, and no coroutine could run while it
+/// waits.
+pub inline fn blocksPlainly(l: *Thread, timeout_ms: i32) bool {
+    return timeout_ms < 0 and !sched.active(l.g);
+}
+
+/// Waits until `handle` is ready, through the scheduler. Raises
+/// "`what` timeout" when the timeout of the socket runs out first.
+pub fn awaitIo(l: *Thread, handle: net.Socket.Handle, dir: sched.Dir, timeout_ms: i32, comptime what: []const u8) Error!void {
+    if (!try sched.waitIo(l, handle, dir, timeout_ms)) return l.raiseFmt(what ++ " timeout", .{});
+}
+
+/// What a system call that never waits reports.
+pub const Try = union(enum) { n: usize, again, fail: anyerror };
+
+fn sockError(e: posix.E) anyerror {
+    return switch (e) {
+        .CONNRESET => error.ConnectionResetByPeer,
+        .CONNABORTED => error.ConnectionAborted,
+        .CONNREFUSED => error.ConnectionRefused,
+        .TIMEDOUT => error.ConnectionTimedOut,
+        .NOTCONN => error.SocketUnconnected,
+        .PIPE => error.BrokenPipe,
+        .NETUNREACH => error.NetworkUnreachable,
+        .HOSTUNREACH => error.HostUnreachable,
+        .NETDOWN => error.NetworkDown,
+        .ADDRNOTAVAIL => error.AddressUnavailable,
+        .AFNOSUPPORT => error.AddressFamilyUnsupported,
+        .ACCES, .PERM => error.AccessDenied,
+        .NOBUFS, .NOMEM => error.SystemResources,
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .MSGSIZE => error.MessageOversize,
+        else => error.Unexpected,
+    };
+}
+
+/// Puts the handle of a socket in non-blocking mode. A send with
+/// MSG_DONTWAIT alone still blocks on some systems once it has written a
+/// part of its data.
+fn unblock(s: *Socket) void {
+    if (s.nonblocking) return;
+    setNonblocking(s.stream.socket.handle, true);
+    s.nonblocking = true;
+}
+
+/// Reads what the socket holds now, at most `dst.len` bytes.
+pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
+    const handle = s.stream.socket.handle;
+    if (comptime is_windows) {
+        if (!sched.readyNow(handle, .read)) return .again;
+        const n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
+        return .{ .n = n };
+    }
+    unblock(s);
+    while (true) {
+        const rc = posix.system.recv(handle, dst.ptr, dst.len, posix.MSG.DONTWAIT);
+        switch (posix.errno(rc)) {
+            .SUCCESS => return .{ .n = @intCast(rc) },
+            .INTR => continue,
+            .AGAIN => return .again,
+            else => |e| return .{ .fail = sockError(e) },
+        }
+    }
+}
+
+/// Writes what the socket takes now of `data`.
+pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+    const handle = s.stream.socket.handle;
+    if (comptime is_windows) {
+        if (!sched.readyNow(handle, .write)) return .again;
+        const n = writeSome(l.g.io, handle, data) catch |e| return .{ .fail = e };
+        return .{ .n = n };
+    }
+    unblock(s);
+    const flags: u32 = posix.MSG.DONTWAIT | if (@hasDecl(posix.MSG, "NOSIGNAL")) posix.MSG.NOSIGNAL else 0;
+    while (true) {
+        const rc = posix.system.send(handle, data.ptr, data.len, flags);
+        switch (posix.errno(rc)) {
+            .SUCCESS => return .{ .n = @intCast(rc) },
+            .INTR => continue,
+            .AGAIN => return .again,
+            else => |e| return .{ .fail = sockError(e) },
+        }
+    }
+}
+
 /// Reads at most `dst.len` bytes. Returns 0 at the end of the stream.
 fn readSome(io: Io, stream: net.Stream, dst: []u8) !usize {
     var bufs = [_][]u8{dst};
@@ -304,6 +420,135 @@ fn localAddress(handle: net.Socket.Handle, fallback: net.IpAddress) net.IpAddres
 fn closeHandle(handle: net.Socket.Handle) void {
     if (comptime is_windows) return;
     _ = posix.system.close(handle);
+}
+
+fn setNonblocking(fd: posix.fd_t, on: bool) void {
+    if (comptime is_windows) return;
+    const bit: c_int = @bitCast(@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+    const cur = posix.system.fcntl(fd, posix.F.GETFL, @as(c_int, 0));
+    if (cur < 0) return;
+    const next = if (on) cur | bit else cur & ~bit;
+    if (next != cur) _ = posix.system.fcntl(fd, posix.F.SETFL, next);
+}
+
+/// A connection attempt that waits through the scheduler. It lives in the
+/// scheduler record of its thread, so it survives the runs of
+/// `network.tcp.connect` and is released when the thread is closed.
+const Connecting = struct {
+    addrs: [max_addresses]net.IpAddress = undefined,
+    n: usize = 0,
+    i: usize = 0,
+    fd: posix.fd_t = -1,
+    last: anyerror = error.ConnectionRefused,
+
+    fn release(g: *state.Global, ctx: *anyopaque) void {
+        const c: *Connecting = @ptrCast(@alignCast(ctx));
+        c.drop(g);
+        g.gpa.destroy(c);
+    }
+
+    fn drop(c: *Connecting, g: *state.Global) void {
+        if (c.fd < 0) return;
+        sched.forget(g, c.fd);
+        closeHandle(c.fd);
+        c.fd = -1;
+    }
+};
+
+/// Starts a connection to `a` on a new socket that never blocks. Returns
+/// true when the connection is already established.
+fn startConnect(a: *const net.IpAddress, out: *posix.fd_t) !bool {
+    const Threaded = Io.Threaded;
+    const cloexec: u32 = if (Threaded.socket_flags_unsupported) 0 else posix.SOCK.CLOEXEC;
+    const rc = posix.system.socket(Threaded.posixAddressFamily(a), posix.SOCK.STREAM | cloexec, posix.IPPROTO.TCP);
+    switch (posix.errno(rc)) {
+        .SUCCESS => {},
+        else => |e| return sockError(e),
+    }
+    const fd: posix.fd_t = @intCast(rc);
+    errdefer closeHandle(fd);
+    if (cloexec == 0) _ = posix.system.fcntl(fd, posix.F.SETFD, @as(c_int, posix.FD_CLOEXEC));
+    setNonblocking(fd, true);
+    var storage: Threaded.PosixAddress = undefined;
+    const len = Threaded.addressToPosix(a, &storage);
+    while (true) {
+        switch (posix.errno(posix.system.connect(fd, &storage.any, len))) {
+            .SUCCESS, .ISCONN => {
+                out.* = fd;
+                return true;
+            },
+            .INTR => continue,
+            .INPROGRESS, .AGAIN => {
+                out.* = fd;
+                return false;
+            },
+            else => |e| return sockError(e),
+        }
+    }
+}
+
+/// The error a connection attempt ended with, or null when it succeeded.
+fn connectResult(fd: posix.fd_t) ?anyerror {
+    var code: c_int = 0;
+    var len: posix.socklen_t = @sizeOf(c_int);
+    if (posix.errno(posix.system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.ERROR, &code, &len)) != .SUCCESS) return error.Unexpected;
+    if (code == 0) return null;
+    return sockError(@fromBackingInt(@intCast(code)));
+}
+
+/// `connectHost` for a thread that shares the state with detached
+/// coroutines: the attempt waits through the scheduler.
+fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+    const g = l.g;
+    const t = try sched.ensureTask(l);
+    var c: *Connecting = undefined;
+    if (sched.restarted(l) and t.ctx != null) {
+        c = @ptrCast(@alignCast(t.ctx.?));
+    } else {
+        c = g.gpa.create(Connecting) catch return l.raiseMem();
+        c.* = .{};
+        errdefer g.gpa.destroy(c);
+        c.n = (try resolve(l, host, port, null, &c.addrs)).len;
+        t.ctx = c;
+        t.cancel = Connecting.release;
+    }
+    // Every way out other than a suspension ends the attempt.
+    defer if (!l.yielding) {
+        t.ctx = null;
+        t.cancel = null;
+        c.drop(g);
+        g.gpa.destroy(c);
+    };
+    while (c.i < c.n) {
+        const a = &c.addrs[c.i];
+        var done = false;
+        if (c.fd < 0) {
+            done = startConnect(a, &c.fd) catch |e| {
+                c.last = e;
+                c.i += 1;
+                continue;
+            };
+        }
+        if (!done) {
+            if (!sched.readyNow(c.fd, .write)) {
+                _ = try sched.waitIo(l, c.fd, .write, -1);
+                continue;
+            }
+            if (connectResult(c.fd)) |e| {
+                c.drop(g);
+                c.last = e;
+                c.i += 1;
+                continue;
+            }
+        }
+        const fd = c.fd;
+        sched.forget(g, fd);
+        c.fd = -1;
+        setNonblocking(fd, false);
+        noSigpipe(fd);
+        return .{ .{ .socket = .{ .handle = fd, .address = localAddress(fd, a.*) } }, a.* };
+    }
+    return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
 }
 
 const ListenError = error{ AccessDenied, AddressInUse, AddressUnavailable, AddressFamilyUnsupported, SystemResources, ProcessFdQuotaExceeded, SystemFdQuotaExceeded, Unexpected };
@@ -359,7 +604,7 @@ fn listenTcp(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !n
 }
 
 /// Formats the numeric address of `a` without its port.
-fn formatIp(buf: []u8, a: net.IpAddress) []const u8 {
+pub fn formatIp(buf: []u8, a: net.IpAddress) []const u8 {
     return switch (a) {
         .ip4 => |ip4| std.fmt.bufPrint(buf, "{d}.{d}.{d}.{d}", .{ ip4.bytes[0], ip4.bytes[1], ip4.bytes[2], ip4.bytes[3] }) catch "?",
         .ip6 => |ip6| blk: {
@@ -410,6 +655,7 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
 /// Connects to the first address of `host` that accepts, raising "cannot
 /// connect" when none does.
 fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+    if (!is_windows and (sched.active(l.g) or sched.restarted(l))) return connectScheduled(l, host, port);
     var addrs: [max_addresses]net.IpAddress = undefined;
     const list = try resolve(l, host, port, null, &addrs);
     var last: anyerror = error.ConnectionRefused;
@@ -442,6 +688,13 @@ fn tcpBind(l: *Thread) Error!u32 {
     const host = try aux.checkBytes(l, 1);
     const port = try checkPort(l, 2, true);
     const backlog = try aux.optInt(l, 3, default_backlog);
+    _ = try bindServer(l, host, port, backlog);
+    return 1;
+}
+
+/// Binds a listening socket and pushes its server, as `network.tcp.bind`
+/// does.
+pub fn bindServer(l: *Thread, host: []const u8, port: u16, backlog: i64) Error!*Server {
     var hp: [512]u8 = undefined;
     try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
     var addrs: [max_addresses]net.IpAddress = undefined;
@@ -453,8 +706,7 @@ fn tcpBind(l: *Thread) Error!u32 {
         .listen => return l.raiseFmt("cannot listen on {s}:{d}: {s}", .{ host, port, errText(e) }),
     };
     errdefer server.socket.close(l.g.io);
-    _ = try newObject(l, Server, server_name, .{ .server = server });
-    return 1;
+    return newObject(l, Server, server_name, .{ .server = server });
 }
 
 fn socketSend(l: *Thread) Error!u32 {
@@ -462,33 +714,54 @@ fn socketSend(l: *Thread) Error!u32 {
     const data = try checkData(l, 2);
     const io = l.g.io;
     const h = s.stream.socket.handle;
-    var total: usize = 0;
+    // A send that waited continues after the bytes it already wrote.
+    var total: usize = @min(sched.progress(l), data.len);
     while (total < data.len) {
-        switch (waitHandle(h, true, s.timeout_ms)) {
-            .ready => {},
-            .timeout => return l.raiseFmt("send timeout", .{}),
-            .failed => return failResult(l, "send", error.Unexpected),
-        }
         const chunk = @min(data.len - total, std.math.maxInt(i32));
-        const n = writeSome(io, h, data[total..][0..chunk]) catch |e| return failResult(l, "send", e);
-        total += n;
+        if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+            total += writeSome(io, h, data[total..][0..chunk]) catch |e| return failResult(l, "send", e);
+            continue;
+        }
+        switch (trySend(l, s, data[total..][0..chunk])) {
+            .n => |n| total += n,
+            .again => {
+                try sched.saveProgress(l, total);
+                try awaitIo(l, h, .write, s.timeout_ms, "send");
+                try stillOpen(l, s);
+            },
+            .fail => |e| return failResult(l, "send", e),
+        }
     }
     return aux.retInt(l, @intCast(total));
 }
 
-const Fill = union(enum) { got: usize, eof, fail: anyerror };
+pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
 
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
 /// the socket timeout. Raises "receive timeout" when it expires.
-fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
-    switch (waitHandle(s.stream.socket.handle, false, s.timeout_ms)) {
-        .ready => {},
-        .timeout => return l.raiseFmt("receive timeout", .{}),
-        .failed => return .{ .fail = error.Unexpected },
-    }
+pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
     s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
     const dst = s.buf.unusedCapacitySlice()[0..max];
-    const n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
+    var n: usize = 0;
+    if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+        n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
+    } else while (true) {
+        switch (tryRecv(l, s, dst)) {
+            .n => |got| {
+                n = got;
+                break;
+            },
+            // The bytes already read stay in the buffer of the socket, so
+            // the receive that runs again continues from them.
+            .again => {
+                try awaitIo(l, s.stream.socket.handle, .read, s.timeout_ms, "receive");
+                try stillOpen(l, s);
+                // The buffer may have moved while other coroutines ran.
+                return fill(l, s, max);
+            },
+            .fail => |e| return .{ .fail = e },
+        }
+    }
     if (n == 0) return .eof;
     s.buf.items.len += n;
     return .{ .got = n };
@@ -507,10 +780,7 @@ fn takeBuffered(l: *Thread, s: *Socket, n: usize, skip: usize) Error!u32 {
 /// Closes a socket whose peer exceeded a receive limit. It skips the
 /// graceful shutdown and does not drain input the peer controls.
 fn limitExceeded(l: *Thread, s: *Socket) Error {
-    s.stream.close(l.g.io);
-    s.buf.deinit(l.g.gpa);
-    s.buf = .empty;
-    s.closed = true;
+    releaseSocket(l, s);
     return l.raiseFmt("receive limit exceeded", .{});
 }
 
@@ -588,14 +858,33 @@ fn closeSocket(l: *Thread, s: *Socket) void {
         var tmp: [1024]u8 = undefined;
         var budget: usize = 1024;
         while (budget > 0) : (budget -= 1) {
+            if (s.nonblocking) {
+                switch (tryRecv(l, s, &tmp)) {
+                    .n => |n| if (n == 0) break,
+                    .again, .fail => break,
+                }
+                continue;
+            }
             if (waitHandle(s.stream.socket.handle, false, 0) != .ready) break;
             const n = readSome(io, s.stream, &tmp) catch break;
             if (n == 0) break;
         }
     }
-    s.stream.close(io);
+    releaseSocket(l, s);
+}
+
+/// Closes the handle of a socket and frees what the socket holds.
+/// Coroutines that wait for the socket run again and find it closed.
+fn releaseSocket(l: *Thread, s: *Socket) void {
+    sched.forget(l.g, s.stream.socket.handle);
+    s.stream.close(l.g.io);
     s.buf.deinit(l.g.gpa);
     s.buf = .empty;
+    if (s.http) |h| {
+        h.deinit(l.g.gpa);
+        l.g.gpa.destroy(h);
+        s.http = null;
+    }
     s.closed = true;
 }
 
@@ -642,22 +931,39 @@ fn socketTostring(l: *Thread) Error!u32 {
 
 fn serverAccept(l: *Thread) Error!u32 {
     const s = try checkServer(l, 1);
-    switch (waitHandle(s.server.socket.handle, false, s.timeout_ms)) {
-        .ready => {},
-        .timeout => return l.raiseFmt("accept timeout", .{}),
-        .failed => return failResult(l, "accept", error.Unexpected),
-    }
-    const stream = s.server.accept(l.g.io) catch |e| return failResult(l, "accept", e);
-    errdefer stream.close(l.g.io);
-    noSigpipe(stream.socket.handle);
-    const local = localAddress(stream.socket.handle, s.server.socket.address);
-    _ = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = local, .peer = stream.socket.address });
+    _ = acceptOne(l, s) catch |e| switch (e) {
+        error.LusError, error.MetaCall => |x| return x,
+        else => return failResult(l, "accept", e),
+    };
     return 1;
 }
 
-fn closeServer(l: *Thread, s: *Server) void {
+/// Accepts one connection and pushes its socket. It waits for a
+/// connection the way `accept` does, and returns the error of the system
+/// call when that fails.
+pub fn acceptOne(l: *Thread, s: *Server) !*Socket {
+    const h = s.server.socket.handle;
+    if (!blocksPlainly(l, s.timeout_ms)) {
+        while (!sched.readyNow(h, .read)) {
+            try awaitIo(l, h, .read, s.timeout_ms, "accept");
+            if (s.closed) return l.raiseFmt("attempt to use a closed server", .{});
+        }
+    }
+    const stream = try s.server.accept(l.g.io);
+    errdefer stream.close(l.g.io);
+    noSigpipe(stream.socket.handle);
+    const local = localAddress(stream.socket.handle, s.server.socket.address);
+    return newObject(l, Socket, socket_name, .{ .stream = stream, .local = local, .peer = stream.socket.address });
+}
+
+pub fn closeServer(l: *Thread, s: *Server) void {
+    closeServerIn(l.g, s);
+}
+
+pub fn closeServerIn(g: *state.Global, s: *Server) void {
     if (s.closed) return;
-    s.server.socket.close(l.g.io);
+    sched.forget(g, s.server.socket.handle);
+    s.server.socket.close(g.io);
     s.closed = true;
 }
 
@@ -730,10 +1036,11 @@ fn udpSendto(l: *Thread) Error!u32 {
     try pledge.require(l, "network:udp", hostPort(&hp, address, port));
     var addrs: [max_addresses]net.IpAddress = undefined;
     const list = try resolve(l, address, port, if (s.socket.address == .ip4) .ip4 else null, &addrs);
-    switch (waitHandle(s.socket.handle, true, s.timeout_ms)) {
-        .ready => {},
-        .timeout => return l.raiseFmt("sendto timeout", .{}),
-        .failed => return failResult(l, "sendto", error.Unexpected),
+    if (!blocksPlainly(l, s.timeout_ms)) {
+        while (!sched.readyNow(s.socket.handle, .write)) {
+            try awaitIo(l, s.socket.handle, .write, s.timeout_ms, "sendto");
+            if (s.closed) return l.raiseFmt("attempt to use a closed UDP socket", .{});
+        }
     }
     s.socket.send(l.g.io, &list[0], data) catch |e| return failResult(l, "sendto", e);
     return aux.retInt(l, @intCast(data.len));
@@ -743,14 +1050,15 @@ fn udpReceive(l: *Thread) Error!u32 {
     const s = try checkUdp(l, 1);
     const size = try aux.optInt(l, 2, default_udp_size);
     if (size <= 0 or size > max_recv_size) return l.raiseFmt("invalid receive size: {d}", .{size});
+    if (!blocksPlainly(l, s.timeout_ms)) {
+        while (!sched.readyNow(s.socket.handle, .read)) {
+            try awaitIo(l, s.socket.handle, .read, s.timeout_ms, "receive");
+            if (s.closed) return l.raiseFmt("attempt to use a closed UDP socket", .{});
+        }
+    }
     const gpa = l.g.gpa;
     const buf = gpa.alloc(u8, @intCast(size)) catch return l.raiseMem();
     defer gpa.free(buf);
-    switch (waitHandle(s.socket.handle, false, s.timeout_ms)) {
-        .ready => {},
-        .timeout => return l.raiseFmt("receive timeout", .{}),
-        .failed => return failResult(l, "recvfrom", error.Unexpected),
-    }
     const msg = s.socket.receive(l.g.io, buf) catch |e| return failResult(l, "recvfrom", e);
     try l.push(Value.obj(.vector, try vector.newVector(l, msg.data)));
     _ = try pushAddress(l, msg.from);
@@ -768,6 +1076,7 @@ fn udpSetsockname(l: *Thread) Error!u32 {
     // A socket binds once, as with bind(2).
     if (s.bound) return failResult(l, "bind", error.SocketNotListening);
     const sock = bindUdp(l.g.io, &list[0]) catch |e| return failResult(l, "bind", e);
+    sched.forget(l.g, s.socket.handle);
     s.socket.close(l.g.io);
     s.socket = sock;
     s.bound = true;
@@ -787,6 +1096,7 @@ fn udpSettimeout(l: *Thread) Error!u32 {
 
 fn closeUdp(l: *Thread, s: *Udp) void {
     if (s.closed) return;
+    sched.forget(l.g, s.socket.handle);
     s.socket.close(l.g.io);
     s.closed = true;
 }
