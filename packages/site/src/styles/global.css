@@ -245,43 +245,47 @@ a {
   @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-on-accent focus:rounded-md focus:px-4 focus:py-2 focus:font-semibold focus:no-underline;
 }
 
-section {
-  @apply space-y-3;
+/* section defaults sit in the base layer so utilities such as
+   page-title override them */
+@layer base {
+  section {
+    @apply space-y-3;
 
-  h1 {
-    @apply font-display text-3xl font-bold tracking-tight text-balance;
-  }
+    h1 {
+      @apply font-display text-3xl font-bold tracking-tight text-balance;
+    }
 
-  h2 {
-    @apply font-display text-2xl font-semibold tracking-tight;
-  }
+    h2 {
+      @apply font-display text-2xl font-semibold tracking-tight;
+    }
 
-  h3 {
-    @apply text-lg font-semibold;
-  }
+    h3 {
+      @apply text-lg font-semibold;
+    }
 
-  h4 {
-    @apply text-base font-semibold;
-  }
+    h4 {
+      @apply text-base font-semibold;
+    }
 
-  /* margins live on the headings (adjacent margins collapse with space-y);
-     :where() keeps specificity at 0 so class-level overrides win */
-  h2:where(:not(:first-child)) {
-    @apply mt-8;
-  }
+    /* margins live on the headings (adjacent margins collapse with space-y);
+       :where() keeps specificity at 0 so class-level overrides win */
+    h2:where(:not(:first-child)) {
+      @apply mt-8;
+    }
 
-  h3:where(:not(:first-child)) {
-    @apply mt-4;
-  }
+    h3:where(:not(:first-child)) {
+      @apply mt-4;
+    }
 
-  h2[id],
-  h3[id],
-  h4[id] {
-    scroll-margin-top: 1rem;
-  }
+    h2[id],
+    h3[id],
+    h4[id] {
+      scroll-margin-top: 1rem;
+    }
 
-  pre {
-    @apply my-3;
+    pre {
+      @apply my-3;
+    }
   }
 }
 
