@@ -227,6 +227,10 @@ const lightOn = glow && signal !== "none"
   {
     lightOn && (
       <defs>
+        <radialGradient id={`${uid}-wash`}>
+          <stop offset="0" class="w0" />
+          <stop offset="1" class="w1" />
+        </radialGradient>
         <radialGradient id={`${uid}-glow`}>
           <stop offset="0" class="g0" />
           <stop offset="0.55" class="g1" />
@@ -256,6 +260,18 @@ const lightOn = glow && signal !== "none"
           <feComposite in="SourceGraphic" in2="speckle" operator="in" />
         </filter>
       </defs>
+    )
+  }
+  {
+    lightOn && (
+      <ellipse
+        class="wash"
+        cx={gx.toFixed(1)}
+        cy={gy.toFixed(1)}
+        rx={(S * 10).toFixed(0)}
+        ry={(S * 5).toFixed(0)}
+        fill={`url(#${uid}-wash)`}
+      />
     )
   }
   {
@@ -399,8 +415,21 @@ const lightOn = glow && signal !== "none"
     stroke: color-mix(in oklab, var(--color-ink) 50%, transparent);
   }
 
-  /* the glow shines only at night: on paper the speckle reads as dust,
-     and the lime cube with its lit neighbors carries the signal */
+  /* the glow shines only at night: on paper the speckle reads as dust.
+     Paper gets a smooth lime wash instead, without grain */
+  .cube-field .wash {
+    opacity: 0.2;
+  }
+
+  .cube-field .w0 {
+    stop-color: var(--color-accent);
+    stop-opacity: 1;
+  }
+
+  .cube-field .w1 {
+    stop-color: var(--color-accent);
+    stop-opacity: 0;
+  }
   .cube-field .g0 {
     stop-color: var(--color-accent);
     stop-opacity: 0;
@@ -417,6 +446,10 @@ const lightOn = glow && signal !== "none"
   }
 
   @media (prefers-color-scheme: dark) {
+    .cube-field .wash {
+      opacity: 0;
+    }
+
     .cube-field .g0 {
       stop-opacity: 0.6;
     }
