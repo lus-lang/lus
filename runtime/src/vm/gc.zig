@@ -322,6 +322,13 @@ pub const State = struct {
     /// Set when the last minor collection freed less than `majorminor`
     /// percent of what the program allocated before it.
     poor_minor: bool = false,
+    /// Major collections still to run without minor collections between
+    /// them, and how many the next failed try of minor collections skips.
+    skip_minors: u8 = 0,
+    backoff: u8 = 0,
+    /// Set when minor collections failed right after a major one, until
+    /// the major collection that they asked for ends.
+    minors_failed: bool = false,
     stepmul: usize = 200,
     stepsize: usize = 200 * @sizeOf(object.Table),
     minormul: usize = 20,
@@ -730,14 +737,33 @@ fn finishSweep(g: *Global) void {
         const allocated = s.heap_at_mark -| s.gen_base;
         const freed = s.heap_at_mark -| live;
         s.major_pending = s.gen_base != 0 and @as(u64, freed) * 100 < @as(u64, allocated) * s.majorminor;
+        // Minor collections that failed before a major collection that
+        // freed a good share traced objects that die old, and the next
+        // tries of minor collections wait longer. When the major
+        // collection freed little, the program builds its data, and
+        // minor collections remain the cheaper way to age it.
+        if (s.minors_failed) {
+            if (s.major_pending or s.gen_base == 0) {
+                s.backoff = 0;
+            } else {
+                s.backoff = if (s.backoff == 0) 1 else @min(s.backoff * 2, 16);
+                s.skip_minors = s.backoff;
+            }
+            s.minors_failed = false;
+        }
         s.gen_base = live;
         s.minors = 0;
         s.poor_minor = false;
         // A program that built its data a moment ago may now discard
         // most of what it allocates. The minor collection that follows,
         // after the usual young allocation, tells the two apart much
-        // sooner than the next major collection would.
-        s.major_pending = false;
+        // sooner than the next major collection would. After minor
+        // collections failed right after a major one, they wait for a
+        // number of major collections that doubles with each failure.
+        if (s.skip_minors > 0) {
+            s.skip_minors -= 1;
+            s.major_pending = true;
+        } else s.major_pending = false;
     } else if (poorMinor(s, live, before) and s.poor_minor) {
         // Two minor collections in a row that freed less than
         // `majorminor` percent of what the program allocated before each
@@ -748,14 +774,17 @@ fn finishSweep(g: *Global) void {
         // that the program keeps, such as text it just joined.
         s.poor_minor = false;
         s.major_pending = true;
+        failedMinors(s);
         return setThresholdFrom(g, s.gen_base);
     } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
         s.poor_minor = false;
+        if (s.minors < 2) failedMinors(s);
         // The old generation grew too much since the last major
         // collection.
         s.major_pending = true;
     } else {
         s.poor_minor = poorMinor(s, live, before);
+        if (!s.poor_minor) s.backoff = 0;
         // Old objects die only in major collections. A program sees
         // that through finalizers and weak tables, so while it has
         // either, a major collection runs after a bounded number of
@@ -776,6 +805,16 @@ fn finishSweep(g: *Global) void {
         return setThreshold(g);
     }
     setMinorThreshold(g);
+}
+
+/// Records that minor collections that followed a major one asked for
+/// the next major collection at once, or after two that freed little:
+/// they traced young objects that live on. When that major collection
+/// frees a good share, the next major collections run without minor
+/// collections between them, twice as many as after the last failure,
+/// up to sixteen.
+fn failedMinors(s: *State) void {
+    if (s.minors < 2) s.minors_failed = true;
 }
 
 /// True when the minor collection that just ended freed less than
