@@ -47,13 +47,15 @@ byKey.reference.unshift(
   },
 )
 
-const skylineHeights = skyline(manual.filter((p) => !p.data.acquis && p.data.group).map((p) => (p.body ?? "").length))
+const skylinePages = manual.filter((p) => !p.data.acquis && p.data.group)
+const skylineHeights = skyline(skylinePages.map((p) => (p.body ?? "").length))
+const skylineLinks = skylinePages.map((p) => `/manual/${p.id}`)
 ---
 
 <ManualLayout title="Manual" measure>
   <div class="title-row">
         <h1>Manual</h1>
-        <CubeField rows={1} heights={skylineHeights} glow={false} scale={0.7} />
+        <CubeField rows={1} heights={skylineHeights} glow={false} scale={0.7} links={skylineLinks} />
       </div>
   {
     groups.map((group) => (

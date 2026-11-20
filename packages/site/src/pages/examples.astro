@@ -63,7 +63,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
     <section>
       <div class="title-row">
         <h1 class="page-title">Examples</h1>
-        <CubeField rows={1} heights={skylineHeights} glow={false} scale={0.7} />
+        <CubeField rows={1} heights={skylineHeights} glow={false} scale={0.7} links={examples.map((ex) => `#${ex.name}`)} />
       </div>
       <div class="intro">
         <p>

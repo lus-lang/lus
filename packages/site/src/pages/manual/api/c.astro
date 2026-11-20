@@ -14,7 +14,7 @@ const moduleHeights = skyline(sections.map((s) => s.entries.length))
 <ManualLayout title="C API">
   <div class="title-row">
     <h1>C API reference</h1>
-    <CubeField rows={1} heights={moduleHeights} glow={false} scale={0.7} />
+    <CubeField rows={1} heights={moduleHeights} glow={false} scale={0.7} links={sections.map((s) => `#${s.id}`)} />
   </div>
 
   <ApiReference sections={sections} />

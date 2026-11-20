@@ -61,6 +61,14 @@ const sections = (page.body ?? "").split(/^## /m).slice(1)
 const acquisPages = manual
   .filter((p) => p.data.acquis)
   .toSorted((a, b) => a.data.order - b.data.order)
+// h2 headings in order, to link each section bar to its section
+const h2Slugs = rendered.headings.filter((h) => h.depth === 2).map((h) => `#${h.slug}`)
+const sectionLinks =
+  page.id === "acquis"
+    ? acquisPages.map((p) => `/manual/${p.id}`)
+    : h2Slugs.length === sections.length
+      ? h2Slugs
+      : undefined
 const sectionHeights =
   page.id === "acquis"
     ? skyline(acquisPages.map((p) => (p.body ?? "").length))
@@ -86,7 +94,7 @@ const sectionHeights =
     sectionHeights ? (
       <div class="title-row">
         <h1>{page.data.title}</h1>
-        <CubeField rows={1} heights={sectionHeights} glow={false} scale={0.7} />
+        <CubeField rows={1} heights={sectionHeights} glow={false} scale={0.7} links={sectionLinks} />
       </div>
     ) : (
       <h1>{page.data.title}</h1>

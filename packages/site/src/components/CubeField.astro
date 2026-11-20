@@ -39,6 +39,8 @@ interface Props {
   /** a fixed scale, so a cube keeps one size from page to page; without
       it the field fills its container's width */
   scale?: number
+  /** one link per front-row bar, so a readout leads to its entries */
+  links?: string[]
 }
 
 const {
@@ -54,6 +56,7 @@ const {
   depth = 0.62,
   light = true,
   scale,
+  links,
 } = Astro.props
 const cols = heights ? heights.length : (Astro.props.cols ?? 52)
 
@@ -262,7 +265,8 @@ const lightOn = glow && signal !== "none"
     )
   }
   {
-    shapes.map((f) => (
+    shapes.map((f) => {
+      const shape = (
       <g
         class:list={[f.row, { lime: f.lime }]}
         style={f.lit > 0 ? `--lit:${f.lit.toFixed(2)}` : undefined}
@@ -273,7 +277,18 @@ const lightOn = glow && signal !== "none"
         <polygon points={f.top} />
         {f.ticks && <path d={f.ticks} />}
       </g>
-    ))
+      )
+      // the links repeat navigation the page already offers, so they stay
+      // out of the tab order like the rest of the drawing
+      const href = links && f.row === "r0" ? links[f.j] : undefined
+      return href ? (
+        <a href={href} tabindex="-1">
+          {shape}
+        </a>
+      ) : (
+        shape
+      )
+    })
   }
 </svg>
 
@@ -353,6 +368,15 @@ const lightOn = glow && signal !== "none"
 
   .cube-field .lime polygon:nth-of-type(2) {
     fill: var(--color-accent-strong);
+  }
+
+  /* a linked bar lights its top under the pointer */
+  .cube-field a:hover g:not(.lime) polygon:nth-of-type(3) {
+    fill: var(--color-accent);
+  }
+
+  .cube-field a:hover g:not(.lime) polygon:nth-of-type(1) {
+    fill: var(--color-accent-soft);
   }
 
   .cube-field .lime polygon {
