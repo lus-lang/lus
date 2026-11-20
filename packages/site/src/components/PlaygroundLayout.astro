@@ -1,18 +1,18 @@
 ---
-import { Image } from "astro:assets"
 import "@fontsource-variable/atkinson-hyperlegible-next"
 import "@fontsource-variable/atkinson-hyperlegible-next/wght-italic.css"
+import "@fontsource-variable/bricolage-grotesque/opsz.css"
 import "@fontsource-variable/intel-one-mono"
 import "@fontsource-variable/intel-one-mono/wght-italic.css"
 
 import "../styles/global.css"
-import logo from "../assets/logo.svg"
+import SiteHeader from "./SiteHeader.astro"
 
 const description =
   "Write and run Lus code directly in your browser, no install required."
 ---
 
-<html lang="en">
+<html lang="en" class="night">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -37,24 +37,18 @@ const description =
     <link rel="canonical" href="https://lus.dev/playground" />
     <title>Lus - Playground</title>
   </head>
-  <body class="playground-body dark-chrome">
+  <body class="playground-body">
     <a href="#main" class="skip-link">Skip to editor</a>
-    <header class="toolbar">
+    <SiteHeader wide />
+    <div class="toolbar">
       <h1 class="sr-only">Lus playground</h1>
       <div class="toolbar-left">
-        <a href="/" class="logo-link" aria-label="Back to lus.dev">
-          <Image src={logo} alt="Lus" width={32} height={32} />
-        </a>
-        <a href="/" class="back-link" aria-label="Back to the site"
-          >← <span class="back-label">Back</span></a
-        >
-        <div class="separator"></div>
         <slot name="controls" />
       </div>
       <div class="toolbar-right">
         <slot name="version" />
       </div>
-    </header>
+    </div>
     <main id="main" class="editor-container">
       <slot />
     </main>
@@ -65,43 +59,35 @@ const description =
   @reference "../styles/global.css";
 
   .playground-body {
-    @apply h-dvh w-full overflow-hidden flex flex-col bg-ink m-0 p-0;
-    /* native widgets (selects, scrollbars) match the dark chrome */
-    color-scheme: dark;
+    @apply h-dvh w-full overflow-hidden flex flex-col m-0 p-0;
   }
 
+  /* the run bar sits on the tint surface between the header and the panes */
   .toolbar {
-    @apply flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-1.5 bg-ink border-b-2 border-accent/20 shrink-0;
+    @apply flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 bg-tint shrink-0;
+    /* the bar stands on the ticked section rule, over its tint */
+    border-bottom: 1px solid var(--color-rule);
+    background:
+      repeating-linear-gradient(
+          to right,
+          var(--color-rule) 0 1px,
+          transparent 1px calc(100% / 12)
+        )
+        left bottom / 100% 5px no-repeat,
+      var(--color-tint);
   }
 
   .toolbar-left {
-    @apply flex items-center gap-3;
+    @apply flex items-center gap-2;
   }
 
   .toolbar-right {
     @apply flex items-center gap-2 ml-auto;
   }
 
-  .logo-link {
-    @apply flex items-center hover:bg-transparent;
-  }
-
-  .back-link {
-    @apply text-accent text-sm font-normal no-underline hover:text-tint hover:bg-transparent;
-  }
-
-  .back-label {
-    @apply max-sm:hidden;
-  }
-
-  .separator {
-    @apply w-px h-6 bg-accent/30 max-sm:hidden;
-  }
-
   .editor-container {
-    /* This <main> exists for the landmark/skip-link; opt back out of
-       the global `main` page shell (max-w-7xl mx-auto px py space-y):
-       the work area fills the viewport edge-to-edge. */
-    @apply flex flex-col md:flex-row flex-1 min-h-0 max-w-none mx-0 px-0 py-0;
+    /* This <main> exists for the landmark and skip link. It opts out of
+       the global page shell so the work area fills the viewport. */
+    @apply flex flex-col md:flex-row flex-1 min-h-0 max-w-none mx-0 px-0 py-0 space-y-0;
   }
 </style>

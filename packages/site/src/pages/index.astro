@@ -3,17 +3,16 @@ import { getCollection } from "astro:content"
 import { Code } from "astro:components"
 // @ts-ignore
 import lusGrammar from "../../../textmate/lus.tmLanguage.json"
-import { Image } from "astro:assets"
+import codeThemes from "../lib/code-themes.mjs"
 
 import Layout from "../components/Layout.astro"
-import Button from "../components/Button.astro"
-import Card from "../components/Card.astro"
 import ReleaseStrip from "../components/ReleaseStrip.astro"
-import Icon from "../components/Icon.astro"
-import logo from "../assets/logo.svg"
+import Benchmarks from "../components/Benchmarks.astro"
+import CubeField from "../components/CubeField.astro"
 
-import { INSTALL_SH, WINDOWS_INSTALLER_URL } from "../lib/install"
+import { INSTALL_SH, WINDOWS_INSTALLER_URL, RELEASE_TAG } from "../lib/install"
 import { fmtDate } from "../lib/date"
+import { playgroundHref } from "../lib/playground-link"
 
 const allNews = await getCollection("news")
 const news = allNews
@@ -26,6 +25,7 @@ const news = allNews
 const features = [
   {
     name: "permissions",
+    file: "sandbox.lus",
     href: "/manual/guide#permissions",
     unstable: false,
     blurb:
@@ -39,6 +39,7 @@ local ok = catch fs.list("/home")
   },
   {
     name: "queries",
+    file: "adults.lus",
     href: "/manual/guide#query",
     unstable: true,
     blurb:
@@ -55,20 +56,24 @@ end`,
   },
   {
     name: "sqlite",
+    file: "users.lus",
     href: "/manual/guide#sqlite",
     unstable: true,
     blurb:
       "io.sqlite opens file-backed or in-memory databases. A database table serves as a query source and receives the query as parameterized SQL.",
     code: `local db <close> = io.sqlite("app.db")
 
-db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+db:run("INSERT INTO users (name, age) VALUES (?, ?)",
+    "Alice", 30)
 
-for u in query(@db.users as u where u.age >= 18 select u.name) do
+for u in query(@db.users as u
+        where u.age >= 18 select u.name) do
     print(u.name)
 end`,
   },
   {
     name: "concurrency",
+    file: "pool.lus",
     href: "/manual/guide#workers",
     unstable: false,
     blurb:
@@ -82,18 +87,20 @@ end`,
   },
   {
     name: "time",
+    file: "zones.lus",
     href: "/manual/guide#time",
     unstable: true,
     blurb:
       "The time library separates absolute instants, civil datetimes, and durations. Named zones resolve from tzdata embedded in the runtime.",
-    code: `local now = time.now()                    -- instant
+    code: `local now = time.now()     -- instant
 local later = now + time.hours(72)
 local ny = time.zone("America/New_York")
 
-print(later:at(ny):iso())                 -- wall clock in New York`,
+print(later:at(ny):iso())  -- wall clock in New York`,
   },
   {
     name: "binary data",
+    file: "pack.lus",
     href: "/manual/guide#vector",
     unstable: false,
     blurb:
@@ -170,112 +177,113 @@ const stdlibMap = [
   },
   { name: "C API", desc: "embedding interface", href: "/manual/api/c" },
 ]
+
+// the version chip beside the wordmark: major.minor of the documented runtime
+const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 ---
 
 <Layout>
-  <main id="main">
-    <section class="hp-hero">
-      <Image
-        src={logo}
-        alt=""
-        aria-hidden="true"
-        class="hp-hero-mark"
-        width={352}
-        height={402}
-      />
-      <div class="hp-hero-grid">
-        <div class="hero-pitch">
-          <h1 class="hero-title">Lus</h1>
-          <p class="hero-sub">
-            A small, productive programming language designed to be
-            picked up easily by programmers and put to good use right away.
+  <main id="main" class="home">
+    <div class="band night">
+      <section class="mast">
+        <div class="pitch">
+          <h1>Lus<span class="chip">{versionChip}</span></h1>
+          <p class="sub">
+            A small, productive programming language designed to be picked up
+            easily by programmers and put to good use right away.
           </p>
-          <div class="hp-install-panel">
-            <div class="hero-install-meta">
-              <span id="install-platform">linux x64</span>
-              <a href="/manual/getting-started">other platforms</a>
-              <a href="/manual/compiling">build from source</a>
-            </div>
-            <pre id="install-shell"><code>{INSTALL_SH}</code></pre>
-            <p id="install-windows" hidden>
-              <a class="install-win-btn" href={WINDOWS_INSTALLER_URL}>
-                <Icon name="download" size={16} /> Download lus-setup.exe
-              </a>
-            </p>
+          <div class="install crop" id="install-unix">
+            <span class="plat" id="install-platform">linux · x64</span>
+            <code id="install-shell">{INSTALL_SH}</code>
+            <button type="button" id="install-copy">copy</button>
           </div>
-          <div class="hero-ctas">
-            <Button href="/manual/getting-started">
-              Get started <Icon name="arrow-right" size={16} />
-            </Button>
-            <Button variant="outline" href="/playground">
-              <Icon name="terminal" size={16} /> Open the playground
-            </Button>
+          <div class="install crop" id="install-windows" hidden>
+            <span class="plat">windows · x64</span>
+            <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
+          </div>
+          <div class="row">
+            <a class="btn solid" href="/manual/getting-started">Get started →</a>
+            <a class="btn" href="/playground">Open the playground</a>
+            <span class="alt">
+              <a href="/manual/getting-started">other platforms</a> ·
+              <a href="/manual/compiling">build from source</a>
+            </span>
           </div>
         </div>
 
-        <aside class="hero-news mt-auto">
-          <Card variant="default" class="flex flex-col">
-            <h2 slot="title">
-              <Icon name="newspaper" size={16} class="inline-block" /> news
-            </h2>
-            <ul class="news-list">
-              {
-                news.map((item) => (
-                  <li>
-                    <time class="news-date" datetime={fmtDate(item.data.date)}>
-                      {fmtDate(item.data.date)}
-                    </time>
-                    <a href={`/news/${item.id}`}>{item.data.title}</a>
-                  </li>
-                ))
-              }
-            </ul>
-            <div slot="footer" class="px-3 pb-2 mt-auto">
-              <a href="/news" class="text-sm">All news →</a>
-            </div>
-          </Card>
+        <aside class="rail">
+          <div class="label rail-head">
+            <span>news</span><a href="/news">all →</a>
+          </div>
+          <ol class="ledger">
+            {
+              news.map((item) => (
+                <li>
+                  <time datetime={fmtDate(item.data.date)}>
+                    {fmtDate(item.data.date)}
+                  </time>
+                  <a href={`/news/${item.id}`}>{item.data.title}</a>
+                </li>
+              ))
+            }
+          </ol>
         </aside>
-      </div>
-    </section>
+      </section>
 
-        <section>
+      <CubeField class="horizon wide" amp={6.5} />
+      <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
+    </div>
+
+    <section class="part" id="download">
+      <div class="sech"><h2>Download</h2></div>
       <ReleaseStrip />
     </section>
 
-    <section>
-      <nav class="hp-stdlib" aria-label="Standard library modules">
+    <section class="part" id="documentation">
+      <div class="sech">
+        <h2>Documentation</h2><span class="label">standard library</span>
+      </div>
+      <nav class="index" aria-label="Standard library modules">
         {
           stdlibMap.map((mod) => (
             <a href={mod.href}>
-              <span class="mod-name">{mod.name}</span>
-              <span class="mod-desc">{mod.desc}</span>
+              <b>{mod.name}</b>
+              <i aria-hidden="true" />
+              <span>{mod.desc}</span>
             </a>
           ))
         }
       </nav>
     </section>
 
-    <section>
-      <h2>Lus at a glance</h2>
-      <div class="hp-features">
+    <section class="part" id="glance">
+      <div class="sech"><h2>Lus at a glance</h2></div>
+      <div class="chapters">
         {
-          features.map((f) => (
-            <article class="hp-feature">
-              <header class="hp-feature-head">
-                <a href={f.href} class="hp-feature-name">
-                  {f.name}
-                </a>
-                {f.unstable && <span class="hp-feature-chip">unstable</span>}
-              </header>
-              <p class="hp-feature-blurb">{f.blurb}</p>
-              <div class="hp-feature-code">
-                <Code lang={lusGrammar as any} theme="github-light" code={f.code} />
-              </div>
+          features.map((f, i) => (
+            <article class="chap">
+              <div class="no">{String(i + 1).padStart(2, "0")}</div>
+              <h3>
+                <a href={f.href}>{f.name}</a>
+                {f.unstable && <span class="tag red">unstable</span>}
+              </h3>
+              <p>{f.blurb}</p>
+              <figure class="figure crop">
+                <figcaption>
+                  <span>
+                    fig. {i + 1} · {f.file}
+                  </span>
+                  <a href={playgroundHref(f.code)}>▶ run</a>
+                </figcaption>
+                <Code lang={lusGrammar as any} themes={codeThemes as any} code={f.code} />
+              </figure>
             </article>
           ))
         }
       </div>
     </section>
+
+    <Benchmarks />
   </main>
 </Layout>
 
@@ -291,178 +299,328 @@ const stdlibMap = [
   ).toLowerCase()
   if (plat.includes("mac")) {
     document.getElementById("install-platform").textContent =
-      "macos (apple silicon)"
+      "macos · arm64"
   } else if (plat.includes("win")) {
-    document.getElementById("install-platform").textContent = "windows x64"
-    document.getElementById("install-shell").hidden = true
+    document.getElementById("install-unix").hidden = true
     document.getElementById("install-windows").hidden = false
   }
+  const copy = document.getElementById("install-copy")
+  copy.addEventListener("click", () => {
+    navigator.clipboard
+      .writeText(document.getElementById("install-shell").textContent)
+      .then(() => {
+        copy.textContent = "copied"
+      })
+  })
 </script>
 
 <style>
   @reference "../styles/global.css";
 
-  /*
-  ** HOMEPAGE DEPTH EXCEPTION (sanctioned): the hp-* classes below are the
-  ** ONLY place in the site allowed gradients, background patterns, and
-  ** layered panels, a deliberate softening of the flat grammar scoped to
-  ** this file. Do not promote hp-* into global.css or imitate elsewhere.
-  ** Everything else here still obeys the grammar: hairlines, tint
-  ** surfaces, instant-repaint hovers, ZERO MOTION.
-  */
-
-  .hp-hero {
-    @apply relative overflow-hidden rounded-lg border border-ink/15 p-4 md:p-6;
-    /* dot grid (ink at 5%) layered over the identity gradient */
-    background-image:
-      radial-gradient(
-        color-mix(in oklab, var(--color-ink) 5%, transparent) 1px,
-        transparent 1px
-      ),
-      linear-gradient(
-        135deg,
-        var(--color-accent-soft) 0%,
-        var(--color-tint) 45%,
-        var(--color-paper) 100%
-      );
-    background-size:
-      16px 16px,
-      100% 100%;
+  .home {
+    @apply pt-0 pb-0 space-y-0;
   }
 
-  .hp-hero-mark {
-    @apply hidden md:block absolute pointer-events-none select-none;
-    right: -3rem;
-    bottom: -4rem;
-    width: 22rem;
-    height: auto;
-    opacity: 0.08;
-    z-index: 0;
+  .home > section {
+    @apply space-y-0;
   }
 
-  .hp-hero-grid {
-    @apply relative z-10 flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_minmax(280px,340px)] lg:gap-x-8 lg:items-start;
+  /* masthead: pitch on 8 columns, news rail on 4 */
+  .mast {
+    @apply grid gap-0 pt-10 pb-4;
+    grid-template-columns: minmax(0, 8fr) minmax(0, 4fr);
   }
 
-  .hero-title {
-    @apply font-display text-4xl sm:text-5xl font-bold tracking-tight max-w-3xl text-balance;
+  .pitch {
+    @apply pr-8;
   }
 
-  .hero-sub {
-    @apply text-lg md:text-xl text-ink/80 max-w-2xl mt-3 lg:mb-25;
+  h1 {
+    @apply font-display font-extrabold flex items-start gap-3 m-0 -ml-[0.03em];
+    font-size: clamp(96px, 13vw, 168px);
+    line-height: 0.8;
+    letter-spacing: -0.065em;
+    font-variation-settings: "opsz" 96;
+
+    .chip {
+      @apply font-mono text-base font-semibold tracking-normal leading-normal mt-2.5 px-2 py-0.5 rounded-[3px] bg-accent text-on-accent;
+    }
   }
 
-  .hp-install-panel {
-    @apply border border-ink/15 rounded-lg bg-paper p-3 mt-3 max-w-2xl space-y-1;
+  .sub {
+    @apply text-xl leading-[1.4] text-ink-2 max-w-[44ch] mt-5;
+  }
 
-    .hero-install-meta {
-      @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs mb-1;
+  .install {
+    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md bg-field;
 
-      #install-platform {
-        @apply font-semibold uppercase bg-accent-soft text-ink rounded-sm px-1.5 py-0.5;
-      }
+    &[hidden] {
+      display: none;
+    }
+
+    .plat {
+      @apply font-mono text-[11px] font-semibold uppercase bg-accent-soft px-2.5 flex items-center border-r border-ink/30 whitespace-nowrap rounded-l-[5px];
+    }
+
+    code {
+      @apply flex-1 font-mono text-sm bg-transparent rounded-none px-3 py-2.5 whitespace-nowrap overflow-x-auto;
+      scrollbar-width: none;
+    }
+
+    :is(button, > a, code):focus-visible {
+      outline-offset: -2px;
+    }
+
+    > a {
+      @apply flex-1 font-mono text-sm px-3 py-2.5 no-underline text-link hover:bg-accent-soft;
+    }
+
+    button {
+      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer rounded-r-[5px] hover:bg-accent-soft;
+    }
+  }
+
+  .row {
+    @apply flex flex-wrap items-center gap-2 mt-3;
+
+    .alt {
+      @apply font-mono text-xs text-ink-3 ml-2;
 
       a {
-        @apply font-normal no-underline text-link hover:bg-accent-soft;
-      }
-    }
-
-    pre {
-      @apply my-0;
-
-      code {
-        @apply text-[13px];
-      }
-    }
-
-    #install-windows {
-      @apply my-0;
-
-      .install-win-btn {
-        @apply inline-flex items-center gap-2 rounded-md bg-accent text-ink font-semibold no-underline px-3 py-1.5 hover:bg-accent-strong active:bg-accent-strong;
+        @apply font-normal text-ink-2 no-underline hover:text-ink hover:underline;
       }
     }
   }
 
-  .hero-ctas {
-    @apply flex flex-wrap gap-3 mt-4;
+  .btn {
+    @apply inline-flex gap-1.5 font-semibold text-sm px-3.5 py-[7px] rounded-md no-underline border border-ink text-ink hover:bg-accent-soft hover:text-ink;
+
+    &.solid {
+      @apply bg-solid border-solid text-on-solid hover:bg-solid/85 hover:text-on-solid;
+    }
   }
 
-  .news-list {
-    @apply list-none pl-0 space-y-1.5;
+  /* the masthead stands in a night band in every scheme, bled to the
+     edges of the window and grained like the night paper */
+  .band {
+    @apply relative isolate bg-paper text-ink;
+    margin-inline: calc(50% - 50vw);
+    padding-inline: calc(50vw - 50%);
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+      filter: invert(1);
+      opacity: 0.05;
+    }
+  }
+
+  /* a bloom of the lime light behind the masthead's right half, the same
+     light that glows on the horizon */
+  .mast {
+    @apply relative isolate;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: -40px -24px -120px 30%;
+      z-index: -1;
+      pointer-events: none;
+      background: radial-gradient(
+        closest-side at 62% 64%,
+        color-mix(in oklab, var(--color-accent) 10%, transparent),
+        transparent
+      );
+    }
+  }
+
+  /* the horizon: a full-width field of cube bars under the masthead */
+  :global(svg.horizon) {
+    @apply mt-6 mb-0 ruled pointer-events-none;
+  }
+
+  /* phones get a shorter field, so the bars keep their scale */
+  :global(svg.horizon.narrow) {
+    @apply sm:hidden;
+  }
+
+  /* the wide field rises into the space under the news rail */
+  :global(svg.horizon.wide) {
+    @apply max-sm:hidden;
+    /* rises fully only where the masthead is wide enough to hold it */
+    margin-top: calc(-1 * clamp(0px, (100vw - 1040px) * 0.5, 96px));
+  }
+
+  /* news rail, set as a ledger */
+  .rail {
+    @apply flex flex-col justify-start pl-5 pt-3;
+
+
+    .rail-head {
+      @apply flex justify-between mb-1.5;
+
+      a {
+        @apply normal-case tracking-normal font-normal text-ink-2 no-underline py-1 -my-1 hover:text-ink;
+      }
+    }
+  }
+
+  .ledger {
+    @apply list-none p-0 m-0 space-y-0;
 
     li {
-      @apply flex items-baseline gap-3;
+      @apply flex gap-2.5 items-baseline py-1 text-sm;
     }
 
-    .news-date {
-      @apply text-xs text-ink/70 font-mono shrink-0;
+    time {
+      @apply font-mono text-xs text-ink-3 shrink-0;
     }
 
     a {
-      @apply font-normal;
+      @apply no-underline font-normal text-ink hover:bg-accent-soft;
     }
   }
 
-  .hp-features {
-    @apply grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-stretch;
-  }
-
-  .hp-feature {
-    @apply flex flex-col border border-ink/15 rounded-lg overflow-hidden bg-paper;
-  }
-
-  .hp-feature-head {
-    @apply flex items-baseline gap-2 px-3 py-1.5 border-b border-ink/10;
-    background: linear-gradient(
-      to right,
-      var(--color-accent-soft),
-      var(--color-tint)
-    );
-  }
-
-  .hp-feature-name {
-    @apply font-mono font-semibold text-sm lowercase no-underline text-ink hover:bg-accent-soft;
-  }
-
-  .hp-feature-chip {
-    @apply font-mono text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-sm bg-accent-soft-red text-ink-red ml-auto;
-  }
-
-  .hp-feature-blurb {
-    @apply text-sm text-ink/70 px-3 py-2;
-  }
-
-  .hp-feature-code {
-    @apply mt-auto;
-  }
-
-  .hp-feature-code :global(pre) {
-    @apply my-0;
-  }
-
-  .hp-feature-code :global(pre code) {
-    @apply rounded-none text-[13px];
-  }
-
-  /* stdlib board: gap-px over an ink/10 backdrop = hairline seams */
-  .hp-stdlib {
-    @apply grid grid-cols-2 md:grid-cols-4 gap-px bg-ink/10 border border-ink/15 rounded-lg overflow-hidden;
+  /* standard library index, set like the index of a book: four columns
+     on the measure, filled top to bottom */
+  .index {
+    @apply grid grid-cols-1;
 
     a {
-      @apply flex flex-col gap-0.5 bg-paper p-2 no-underline hover:bg-accent-soft active:bg-accent-soft;
+      @apply flex items-baseline gap-1.5 py-1 no-underline font-normal text-[13px] text-ink hover:bg-accent-soft hover:text-ink;
+    }
 
-      .mod-name {
-        @apply font-mono font-semibold text-sm text-ink;
+    b {
+      @apply font-mono font-semibold whitespace-nowrap;
+    }
+
+    i {
+      @apply flex-1 min-w-3;
+    }
+
+    span {
+      @apply text-ink-3 text-right;
+    }
+  }
+
+  @media (min-width: 521px) {
+    .index {
+      @apply grid-cols-2 gap-x-6;
+    }
+  }
+
+  @media (min-width: 900px) {
+    .index {
+      @apply gap-x-0;
+      grid-auto-flow: column;
+      grid-template-rows: repeat(4, auto);
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+
+      a {
+        @apply pr-6;
       }
 
-      .mod-desc {
-        @apply text-xs text-ink/70 font-normal;
+      a:nth-child(n + 13) {
+        @apply pr-0;
       }
     }
   }
 
-  .release-note {
-    @apply text-sm text-ink/80;
+  /* chapters: two-up spreads of number, text, and figure */
+  .chapters {
+    @apply grid grid-cols-1 gap-x-12 gap-y-2;
+  }
+
+  /* each chapter spans three rows of the spread and shares them with its
+     neighbour through subgrid, so paired figures start on one line */
+  .chap {
+    @apply grid gap-x-4 pt-4 pb-[18px];
+    grid-template-columns: 68px minmax(0, 1fr);
+    grid-row: span 3;
+    grid-template-rows: subgrid;
+
+    /* oversized ghost numerals, hung beside the chapter like plate
+       numbers */
+    .no {
+      @apply font-display font-extrabold text-[56px] leading-[0.8] tracking-[-0.06em] row-span-3 tabular-nums;
+      color: color-mix(in oklab, var(--color-ink) 16%, transparent);
+      align-self: start;
+    }
+
+    h3 {
+      @apply font-display font-bold text-lg tracking-[-0.02em] flex items-center gap-2 m-0;
+      align-self: baseline;
+
+      a {
+        @apply no-underline font-bold text-ink hover:bg-accent-soft;
+      }
+
+      .tag {
+        @apply ml-auto;
+      }
+    }
+
+    p {
+      @apply text-sm text-ink-2 mt-0.5 mb-2.5;
+    }
+
+  }
+
+  @media (min-width: 900px) {
+    .chapters {
+      @apply grid-cols-2;
+    }
+  }
+
+  /* the chapter under the pointer lights its numeral */
+  .chap:hover .no {
+    color: color-mix(in oklab, var(--color-accent) 70%, transparent);
+  }
+
+  @media (max-width: 900px) {
+    .mast {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .rail {
+      @apply border-l-0 pl-0 pt-7;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .row .alt {
+      @apply ml-0 basis-full pt-1;
+    }
+
+    .install code {
+      @apply text-[13px];
+      overscroll-behavior-x: contain;
+    }
+
+    .chap {
+      @apply gap-x-2.5;
+      grid-template-columns: auto minmax(0, 1fr);
+
+      grid-row: auto;
+      grid-template-rows: auto;
+
+      /* small numbers read in label ink, the ghost needs size */
+      .no {
+        @apply row-span-1 text-lg leading-[1.4] text-ink-3;
+      }
+
+      p,
+      .figure {
+        @apply col-span-2;
+      }
+    }
+
+    .install .plat {
+      @apply hidden;
+    }
   }
 </style>

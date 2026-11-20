@@ -1,0 +1,442 @@
+---
+/*
+** Benchmarks: the cross-language suite of tests/bench/compare, rendered
+** from a copy of its results.json. Every runtime, program, and number
+** comes from the data, so a new run of the harness only needs a fresh
+** copy of the file. Both modes render on the server and the toggle only
+** switches which one shows, so readers without scripts see wall time.
+*/
+import results from "../data/benchmarks.json"
+import CubeField from "./CubeField.astro"
+
+interface Cell {
+  ok?: boolean
+  best_s?: number
+  peak_rss_mb?: number
+  rps?: number
+}
+
+type Mode = "time" | "memory"
+
+const data = results as unknown as {
+  device: { cpu: string; cores: number; memory_gb: number }
+  os: string
+  runtimes: Record<string, { name: string }>
+  programs: Record<string, Record<string, Cell>>
+  http?: Record<string, Cell>
+}
+
+// Lus leads, the others keep the order of the harness
+const runtimes = [
+  "lus",
+  ...Object.keys(data.runtimes).filter((id) => id !== "lus"),
+]
+const label = (id: string) =>
+  (data.runtimes[id]?.name ?? id).replace(/\.js$/, "")
+
+const programs = Object.keys(data.programs).toSorted()
+
+const device = [
+  data.device.cpu,
+  `${data.device.cores} cores`,
+  `${data.device.memory_gb} GB`,
+  data.os,
+].join(" · ")
+
+const fmtTime = (s: number) => `${s.toFixed(2)} s`
+const fmtMem = (mb: number) =>
+  mb >= 1000 ? `${(mb / 1000).toFixed(2)} GB` : `${Math.round(mb)} MB`
+const fmtRps = (rps: number) => `${Math.round(rps / 1000)}k`
+
+interface Row {
+  name: string
+  cells: { id: string; value: number | null; text: string; best: boolean; width: number }[]
+}
+
+// one row of cells: the best value takes the signal, bars scale to the
+// largest value in the row
+function row(
+  name: string,
+  source: Record<string, Cell>,
+  key: keyof Cell,
+  fmt: (v: number) => string,
+  higherIsBetter = false,
+): Row {
+  const values = runtimes.map((id) => {
+    const cell = source[id]
+    const v = cell && cell.ok !== false ? cell[key] : undefined
+    return typeof v === "number" ? v : null
+  })
+  const present = values.filter((v): v is number => v !== null)
+  const best = higherIsBetter ? Math.max(...present) : Math.min(...present)
+  const top = Math.max(...present)
+  return {
+    name,
+    cells: runtimes.map((id, i) => {
+      const v = values[i]
+      return {
+        id,
+        value: v,
+        text: v === null ? "n/a" : fmt(v),
+        best: v === best,
+        width: v === null ? 0 : (v / top) * 100,
+      }
+    }),
+  }
+}
+
+// a skyline of the runtimes: one bar per column, its height the geometric
+// mean of the runtime's cost relative to the best in each program (1 for
+// the best), on a log scale of one cube per doubling after the first.
+// Lower is better, like the tables beneath it.
+function standing(key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", httpHigher: boolean) {
+  const rowsOf = [
+    ...programs.map((p) => ({ cells: data.programs[p], key, higher: false })),
+    ...(data.http ? [{ cells: data.http, key: http, higher: httpHigher }] : []),
+  ]
+  return runtimes.map((id) => {
+    const scores: number[] = []
+    for (const r of rowsOf) {
+      const values = runtimes
+        .map((other) => r.cells[other])
+        .filter((c) => c && c.ok !== false && typeof c[r.key] === "number")
+        .map((c) => c![r.key] as number)
+      const own = r.cells[id]
+      if (!own || own.ok === false || typeof own[r.key] !== "number") continue
+      const v = own[r.key] as number
+      const best = r.higher ? Math.max(...values) : Math.min(...values)
+      scores.push(r.higher ? best / v : v / best)
+    }
+    const g = Math.exp(scores.reduce((a, s) => a + Math.log(s), 0) / scores.length)
+    return 1 + Math.round(Math.log2(g) * 3)
+  })
+}
+
+const skylines = {
+  time: standing("best_s", "rps", true),
+  memory: standing("peak_rss_mb", "peak_rss_mb", false),
+}
+
+const modes: {
+  mode: Mode
+  caption: string
+  rows: Row[]
+  httpCaption: string
+  http: Row | null
+}[] = [
+  {
+    mode: "time",
+    caption: "best wall time, lower is better",
+    rows: programs.map((p) => row(p, data.programs[p], "best_s", fmtTime)),
+    httpCaption:
+      "http server, requests per second at 64 connections, higher is better",
+    http: data.http ? row("http", data.http, "rps", fmtRps, true) : null,
+  },
+  {
+    mode: "memory",
+    caption: "peak memory, lower is better",
+    rows: programs.map((p) => row(p, data.programs[p], "peak_rss_mb", fmtMem)),
+    httpCaption: "http server, peak memory under load, lower is better",
+    http: data.http ? row("http", data.http, "peak_rss_mb", fmtMem) : null,
+  },
+]
+---
+
+<section class="bench part" id="benchmarks" data-mode="time">
+  <div class="sech">
+    <h2>Benchmarks</h2>
+    <span class="label">{device}</span>
+    <span class="seg" role="group" aria-label="Measurement">
+      <button type="button" data-set="time" aria-pressed="true">time</button>
+      <button type="button" data-set="memory" aria-pressed="false">memory</button>
+    </span>
+  </div>
+  {
+    modes.map((m) => (
+      <div class="mode" data-show={m.mode}>
+        <div class="scroll">
+          <p class="label skyline-label" aria-hidden="true">{m.caption}</p>
+          <div class="skyline">
+            <CubeField rows={1} heights={skylines[m.mode]} limeAt={0} glow={false} light={false} unit={0.16} depth={0.22} />
+          </div>
+          <table>
+            <caption class="sr-only">{m.caption}</caption>
+            <thead>
+              <tr>
+                <th scope="col">program</th>
+                {runtimes.map((id, ci) => (
+                  <th scope="col" data-col={ci} class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {m.rows.map((r, ri) => (
+                <tr style={`--r:${ri + 1}`}>
+                  <th scope="row">{r.name}</th>
+                  {r.cells.map((c, ci) => (
+                    <td data-col={ci} class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
+                      <b>{c.text}</b>
+                      {c.value !== null && (
+                        <span class="bar">
+                          <i style={`width:${c.width.toFixed(1)}%`} />
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        {m.http && (
+            <table class="http">
+              <caption>{m.httpCaption}</caption>
+              <thead>
+                <tr>
+                  <td />
+                  {runtimes.map((id, ci) => (
+                    <th scope="col" data-col={ci} class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">{m.http.name}</th>
+                  {m.http.cells.map((c, ci) => (
+                    <td data-col={ci} class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
+                      <b>{c.text}</b>
+                      {c.value !== null && (
+                        <span class="bar">
+                          <i style={`width:${c.width.toFixed(1)}%`} />
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+        )}
+        </div>
+      </div>
+    ))
+  }
+</section>
+
+<script>
+  for (const bench of document.querySelectorAll<HTMLElement>(".bench")) {
+    const buttons = bench.querySelectorAll<HTMLButtonElement>(".seg button")
+    for (const button of buttons) {
+      button.addEventListener("click", () => {
+        bench.dataset.mode = button.dataset.set
+        for (const b of buttons) b.setAttribute("aria-pressed", String(b === button))
+      })
+    }
+  }
+
+  // pointing at a runtime's column lights its bar in the skyline and its
+  // cells in both tables, as a repaint
+  for (const mode of document.querySelectorAll<HTMLElement>(".bench .mode")) {
+    let lit: string | null = null
+    const paint = (col: string | null) => {
+      if (col === lit) return
+      for (const el of mode.querySelectorAll(".hl")) el.classList.remove("hl")
+      lit = col
+      if (col === null) return
+      for (const el of mode.querySelectorAll(`[data-col="${col}"], .skyline g[data-j="${col}"]`))
+        el.classList.add("hl")
+    }
+    mode.addEventListener("pointerover", (ev) => {
+      const cell = (ev.target as Element).closest<HTMLElement>("[data-col]")
+      paint(cell ? cell.dataset.col! : null)
+    })
+    mode.addEventListener("pointerleave", () => paint(null))
+  }
+</script>
+
+<style>
+  @reference "../styles/global.css";
+
+  .bench {
+    @apply space-y-0;
+  }
+
+  .seg {
+    @apply ml-auto flex border border-ink/30 rounded-[4px] overflow-hidden;
+
+    button {
+      @apply font-mono text-xs bg-field px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
+
+      &:focus-visible {
+        outline-offset: -2px;
+      }
+
+      &[aria-pressed="true"] {
+        @apply bg-solid text-on-solid;
+      }
+    }
+  }
+
+  .mode {
+    @apply mt-0;
+  }
+
+  .bench[data-mode="time"] .mode[data-show="memory"],
+  .bench[data-mode="memory"] .mode[data-show="time"] {
+    display: none;
+  }
+
+  .scroll {
+    @apply overflow-x-auto;
+  }
+
+  /* the bars stand directly on the runtime names */
+  .skyline + table thead th {
+    @apply pt-0;
+  }
+
+  .skyline-label {
+    @apply min-w-[760px] pt-2 m-0;
+  }
+
+  /* the runtime skyline stands over the runtime columns, one bar each */
+  .skyline {
+    @apply min-w-[760px] pt-1 pl-[92px];
+
+    :global(svg) {
+      @apply w-full;
+    }
+  }
+
+  @media (min-width: 900px) {
+    .skyline {
+      @apply pl-[25%];
+    }
+  }
+
+  table {
+    @apply my-0 font-mono text-xs table-fixed min-w-[760px];
+  }
+
+  caption {
+    @apply text-left font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 pt-2 pb-0.5;
+    caption-side: top;
+  }
+
+  table.http {
+    @apply mt-[18px];
+  }
+
+  th {
+    @apply font-mono text-xs font-semibold normal-case tracking-normal text-ink-3 px-1.5 pt-1.5 pb-1;
+  }
+
+  td,
+  th[scope="row"] {
+    @apply px-1.5 py-[5px] align-bottom font-normal text-ink text-xs;
+  }
+
+  /* program names stay in view while the table scrolls on phones */
+  th:first-child,
+  td:first-child {
+    @apply w-[92px] pl-0 pr-3 sticky left-0 z-10 bg-paper;
+  }
+
+  /* on the measure: three grid columns of names, one per runtime */
+  @media (min-width: 900px) {
+    th:first-child,
+    td:first-child {
+      width: 25%;
+      /* the table never scrolls here, so names need no backing */
+      position: static;
+      background: transparent;
+    }
+  }
+
+  td b {
+    @apply font-semibold text-ink;
+  }
+
+  /* the Lus column is lit from above: its wash fades row by row, like the
+     light of the lime cube on the field, and keeps fading into the http
+     table */
+  tr {
+    --r: 0;
+  }
+
+  table.http tbody tr {
+    --r: 7;
+  }
+
+  .lus {
+    background: color-mix(
+      in oklab,
+      var(--color-accent) calc(22% - var(--r) * 2.5%),
+      transparent
+    );
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .lus {
+      background: color-mix(
+        in oklab,
+        var(--color-accent) calc(14% - var(--r) * 1.5%),
+        transparent
+      );
+    }
+  }
+
+  th.lus {
+    @apply text-ink;
+  }
+
+  /* the column under the pointer, and its bar */
+  .hl {
+    background: var(--color-accent-soft);
+  }
+
+  th.hl {
+    @apply text-ink;
+  }
+
+
+  td.best b {
+    @apply bg-accent text-on-accent px-[3px] rounded-[2px];
+  }
+
+  td.na {
+    @apply text-ink-3;
+  }
+
+  /* each bar is a segmented meter of square cells, like a row of cubes:
+     faint for the scale and solid for the reading */
+  .bar {
+    @apply block h-[5px] mt-[3px] relative;
+    background: repeating-linear-gradient(
+      to right,
+      color-mix(in oklab, var(--color-ink) 7%, transparent) 0 5px,
+      transparent 5px 6px
+    );
+
+    i {
+      @apply absolute inset-y-0 left-0;
+      background: repeating-linear-gradient(
+        to right,
+        var(--color-ink-2) 0 5px,
+        transparent 5px 6px
+      );
+    }
+  }
+
+  td.lus .bar i {
+    background: repeating-linear-gradient(
+      to right,
+      var(--color-link) 0 5px,
+      transparent 5px 6px
+    );
+  }
+
+  @media (max-width: 640px) {
+    .seg {
+      @apply ml-0;
+    }
+  }
+</style>

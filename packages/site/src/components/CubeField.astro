@@ -1,0 +1,582 @@
+---
+/*
+** CubeField: a field of cube bars, the shape of the Lus mark, drawn at
+** build time as SVG in oblique projection. Bars run left to right and
+** recede up and to the right in a few rows, every unit carries a ruler
+** tick, and a landscape tapers to single cubes at both ends.
+**
+** One bar wears the lime cube: the tallest, or the one `limeAt` names. Its
+** light tints the bars around it and, where `glow` is on, spreads as a
+** smooth wash on paper and a grain glow at night. A fallen signal drops
+** the cube to the ground and leaves a dashed ghost in its place. Faces
+** take the design tokens, so the field follows the color scheme and the
+** unstable red.
+**
+** Heights come from a swell with ripples, or from `heights` when a page
+** has data of its own to show, one bar per entry in the front row. Such
+** readouts can link each bar to its entry, and carry data-j so the page
+** can light a bar while its entry is pointed at.
+*/
+interface Props {
+  class?: string
+  /** rows of bars receding from the reader, and bars per row */
+  rows?: number
+  cols?: number
+  /** where the swell peaks along the field, from 0 to 1, and its height */
+  at?: number
+  amp?: number
+  /** varies the grain of the skyline */
+  seed?: number
+  /** measured heights for the front row, which then sets the columns */
+  heights?: number[]
+  /** "cap" crowns the peak with the lime cube, "fallen" drops it to the
+      ground in front of the field, "none" leaves the field plain */
+  signal?: "cap" | "fallen" | "none"
+  /** the grainy light around the lime cube */
+  glow?: boolean
+  /** the front-row bar that wears the lime cube, in place of the peak */
+  limeAt?: number
+  /** the height of one unit as a share of the cube edge, for flat bars */
+  unit?: number
+  /** the depth of one row as a share of the cube edge */
+  depth?: number
+  /** whether the lime cube tints the bars around it */
+  light?: boolean
+  /** a fixed scale, so a cube keeps one size from page to page. Without
+      it the field fills its container's width. */
+  scale?: number
+  /** one link per front-row bar, so a readout leads to its entries */
+  links?: string[]
+}
+
+const {
+  rows = 3,
+  at = 0.72,
+  amp = 3.6,
+  seed = 0,
+  heights,
+  signal = "cap",
+  glow = true,
+  limeAt,
+  unit = 1,
+  depth = 0.62,
+  light = true,
+  scale,
+  links,
+} = Astro.props
+const cols = heights ? heights.length : (Astro.props.cols ?? 52)
+
+const S = 22 // cube edge in px
+const D = S * depth // depth of one row on screen
+const dx = D * Math.cos(Math.PI / 5)
+const dy = D * Math.sin(Math.PI / 5)
+
+// deterministic value noise, so every build draws the same skyline
+function hash(n: number) {
+  const x = Math.sin(n * 127.1) * 43758.5453
+  return x - Math.floor(x)
+}
+
+function height(i: number, j: number) {
+  const t = j / Math.max(1, cols - 1)
+  if (heights) {
+    // the front row reads the data, the rows behind echo it lower
+    return Math.max(1, Math.round(heights[j] - i * 0.6 * hash(j + i * 31)))
+  }
+  const swell = amp * Math.exp(-((t - at) ** 2) / 0.012)
+  const roll = 0.5 * Math.sin(t * Math.PI * 2.4 + 0.6 + seed) + 0.5
+  const grain = hash(j * 7 + i * 131 + seed * 977) * 0.9
+  const back = i * 0.7
+  // both ends taper to single cubes
+  const envelope = Math.min(1, 6 * t, 6 * (1 - t))
+  return Math.max(1, Math.round((0.6 + swell + roll + grain + back) * envelope))
+}
+
+interface Bar {
+  i: number
+  j: number
+  h: number
+}
+
+const bars: Bar[] = []
+for (let i = 0; i < rows; i++) {
+  for (let j = 0; j < cols; j++) bars.push({ i, j, h: height(i, j) })
+}
+const peak =
+  limeAt !== undefined
+    ? bars.find((b) => b.i === 0 && b.j === limeAt)!
+    : bars
+        // a fallen cube leaves its gap in the front row, where it shows
+        .filter((b) => signal !== "fallen" || b.i === 0)
+        .reduce((a, b) => (b.h > a.h || (b.h === a.h && b.i < a.i) ? b : a))
+
+// painter's order: the back row first, each row left to right
+bars.sort((a, b) => b.i - a.i || a.j - b.j)
+
+const fallen = signal === "fallen"
+const maxH = Math.max(...bars.map((b) => b.h))
+const ground = fallen ? 1.6 * dy + 2 : 0
+// data fields keep each front face on its column, sides spill past
+const width = heights ? cols * S : cols * S + rows * dx + 2
+const heightPx = (maxH * unit + 0.2) * S + rows * dy + 2 + ground
+const baseY = heightPx - 1 - ground
+
+function point(i: number, j: number, k: number) {
+  return [1 + j * S + i * dx, baseY - k * unit * S - i * dy]
+}
+// one decimal, without a trailing zero, keeps the markup small
+function n(v: number) {
+  return String(Math.round(v * 10) / 10)
+}
+function poly(pts: number[][]) {
+  return pts.map(([x, y]) => `${n(x)},${n(y)}`).join(" ")
+}
+function line(a: number[], b: number[]) {
+  return `M${n(a[0])},${n(a[1])}L${n(b[0])},${n(b[1])}`
+}
+
+// one prism from k0 to k1: front, right side, and top, ticked per unit
+function prism(i: number, j: number, k0: number, k1: number) {
+  const front = poly([
+    point(i, j, k0),
+    point(i, j + 1, k0),
+    point(i, j + 1, k1),
+    point(i, j, k1),
+  ])
+  const side = poly([
+    point(i, j + 1, k0),
+    point(i + 1, j + 1, k0),
+    point(i + 1, j + 1, k1),
+    point(i, j + 1, k1),
+  ])
+  const top = poly([
+    point(i, j, k1),
+    point(i, j + 1, k1),
+    point(i + 1, j + 1, k1),
+    point(i + 1, j, k1),
+  ])
+  let ticks = ""
+  // flat units are graduated on the front face only, like a meter
+  for (let k = k0 + 1; k < k1; k++) {
+    ticks += line(point(i, j, k), point(i, j + 1, k))
+    if (unit >= 0.5) ticks += line(point(i, j + 1, k), point(i + 1, j + 1, k))
+  }
+  return { front, side, top, ticks }
+}
+
+// where the lime cube sits, standing on the peak or fallen before the field
+const fallenAt = { i: -1.6, j: Math.min(cols - 2, peak.j + 4), k: 0 }
+const source =
+  signal === "fallen" ? fallenAt : { i: peak.i, j: peak.j, k: peak.h - 1 }
+
+// the light of the lime cube on its neighbors, strongest beside it
+function litBy(b: Bar) {
+  if (signal === "none" || !light) return 0
+  const dist = Math.hypot(b.j - source.j, (b.i - source.i) * 1.5)
+  return Math.max(0, 1 - dist / Math.min(4.5, cols / 6))
+}
+
+interface Shape {
+  front: string
+  side: string
+  top: string
+  ticks: string
+  lime: boolean
+  row: string
+  lit: number
+  /** the bar's column, for data fields that pair bars with columns */
+  j: number
+}
+
+const shapes: Shape[] = bars.flatMap((b) => {
+  const row = `r${b.i}`
+  const lit = b === peak ? 0 : litBy(b)
+  if (b === peak && signal === "fallen") {
+    // the place the cube fell from keeps a ghost of it
+    return [
+      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0, j: b.j },
+      { ...prism(b.i, b.j, b.h - 1, b.h), lime: false, row: `${row} ghost`, lit: 0, j: b.j },
+    ]
+  }
+  if (b === peak && signal === "cap") {
+    return [
+      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0, j: b.j },
+      { ...prism(b.i, b.j, b.h - 1, b.h), lime: true, row, lit: 0, j: b.j },
+    ]
+  }
+  return [{ ...prism(b.i, b.j, 0, b.h), lime: false, row, lit, j: b.j }]
+})
+
+if (fallen) {
+  shapes.push({
+    ...prism(fallenAt.i, fallenAt.j, 0, 1),
+    lime: true,
+    row: "r0",
+    lit: 0,
+    j: fallenAt.j,
+  })
+}
+
+const [gx, gy] = point(source.i + 0.5, source.j + 0.5, source.k + 0.5)
+// ids name every input of the drawing, so no two different fields share
+// a filter or gradient
+const uid = `cf${cols}x${rows}s${seed}a${Math.round(at * 100)}h${Math.round(amp * 10)}${signal}${heights ? `d${heights.join("")}` : ""}`
+const lightOn = glow && signal !== "none"
+
+// consecutive shapes of one linked bar (a bar and its lime cap) share one
+// link, every other shape stands alone
+const runs: { href?: string; shapes: Shape[] }[] = []
+for (const f of shapes) {
+  const href = links && f.row === "r0" ? links[f.j] : undefined
+  const last = runs[runs.length - 1]
+  if (href && last?.href === href) last.shapes.push(f)
+  else runs.push({ href, shapes: [f] })
+}
+---
+
+<svg
+  class:list={["cube-field", Astro.props.class]}
+  viewBox={`0 0 ${width.toFixed(0)} ${heightPx.toFixed(0)}`}
+  preserveAspectRatio="xMidYMax meet"
+  style={scale ? `width:${(width * scale).toFixed(0)}px` : undefined}
+  aria-hidden="true"
+  focusable="false"
+>
+  {
+    lightOn && (
+      <defs>
+        <radialGradient id={`${uid}-wash`}>
+          <stop offset="0" class="w0" />
+          <stop offset="1" class="w1" />
+        </radialGradient>
+        <radialGradient id={`${uid}-glow`}>
+          <stop offset="0" class="g0" />
+          <stop offset="0.55" class="g1" />
+          <stop offset="1" class="g2" />
+        </radialGradient>
+        <filter
+          id={`${uid}-grain`}
+          filterUnits="userSpaceOnUse"
+          x={(gx - S * 10).toFixed(0)}
+          y={(gy - S * 6).toFixed(0)}
+          width={(S * 20).toFixed(0)}
+          height={(S * 12).toFixed(0)}
+        >
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="1.1"
+            numOctaves="1"
+            seed="7"
+            result="noise"
+          />
+          <feColorMatrix
+            in="noise"
+            type="matrix"
+            values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 4 -1.7"
+            result="speckle"
+          />
+          <feComposite in="SourceGraphic" in2="speckle" operator="in" />
+        </filter>
+      </defs>
+    )
+  }
+  {
+    lightOn && (
+      <ellipse
+        class="wash"
+        cx={gx.toFixed(1)}
+        cy={gy.toFixed(1)}
+        rx={(S * 10).toFixed(0)}
+        ry={(S * 5).toFixed(0)}
+        fill={`url(#${uid}-wash)`}
+      />
+    )
+  }
+  {
+    lightOn && (
+      <ellipse
+        class="glow"
+        cx={gx.toFixed(1)}
+        cy={gy.toFixed(1)}
+        rx={(S * 9).toFixed(0)}
+        ry={(S * 5).toFixed(0)}
+        fill={`url(#${uid}-glow)`}
+        filter={`url(#${uid}-grain)`}
+      />
+    )
+  }
+  {
+    runs.map((run) => {
+      const drawn = run.shapes.map((f) => (
+        <g
+          class:list={[f.row, { lime: f.lime }]}
+          style={f.lit > 0 ? `--lit:${f.lit.toFixed(2)}` : undefined}
+          data-j={heights ? f.j : undefined}
+        >
+          <polygon points={f.front} />
+          <polygon points={f.side} />
+          <polygon points={f.top} />
+          {f.ticks && <path d={f.ticks} />}
+        </g>
+      ))
+      // the links repeat navigation the page already offers, so they stay
+      // out of the tab order like the rest of the drawing
+      return run.href ? (
+        <a href={run.href} tabindex="-1">
+          {drawn}
+        </a>
+      ) : (
+        drawn
+      )
+    })
+  }
+</svg>
+
+<style is:global>
+  /* global, keyed by .cube-field, so the many shapes carry no scope
+     attribute. Each bar draws its front, side, and top in that order, so
+     position names the face. */
+  .cube-field {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .cube-field g {
+    --lit: 0;
+  }
+
+  /* one hairline weight at any size */
+  .cube-field polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 36%, transparent);
+    stroke-width: 1;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+
+  /* faces: tint fronts, paper tops, shaded sides, each warmed by the light
+     of the lime cube in proportion to --lit */
+  .cube-field polygon:nth-of-type(1) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 18%),
+      var(--color-tint)
+    );
+  }
+
+  .cube-field polygon:nth-of-type(3) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 40%),
+      var(--color-paper)
+    );
+  }
+
+  .cube-field polygon:nth-of-type(2) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 14%),
+      color-mix(in oklab, var(--color-ink) 18%, var(--color-paper))
+    );
+  }
+
+  /* the back rows recede */
+  .cube-field .r1 polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 22%, transparent);
+  }
+
+  .cube-field .r2 polygon,
+  .cube-field .r3 polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 14%, transparent);
+  }
+
+  .cube-field g path {
+    fill: none;
+    stroke: color-mix(in oklab, var(--color-ink) 12%, transparent);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .cube-field .lime polygon:nth-of-type(1) {
+    fill: var(--color-accent);
+  }
+
+  .cube-field .lime polygon:nth-of-type(3) {
+    fill: color-mix(in oklab, var(--color-accent) 60%, white);
+  }
+
+  .cube-field .lime polygon:nth-of-type(2) {
+    fill: var(--color-accent-strong);
+  }
+
+  /* the ghost of a fallen cube: an outline in dashes, unfilled */
+  .cube-field .ghost polygon:nth-of-type(n) {
+    fill: none;
+    stroke: var(--color-link);
+    stroke-dasharray: 3 2;
+  }
+
+  /* a linked bar lights its top under the pointer */
+  .cube-field a:hover g:not(.lime) polygon:nth-of-type(3) {
+    fill: var(--color-accent);
+  }
+
+  /* a bar lit from its entry elsewhere on the page takes half the
+     signal, so the full lime stays with the cube and the pointer */
+  .cube-field g.hl:not(.lime) polygon:nth-of-type(3) {
+    fill: color-mix(in oklab, var(--color-accent) 55%, var(--color-paper));
+  }
+
+  .cube-field a:hover g:not(.lime) polygon:nth-of-type(1),
+  .cube-field g.hl:not(.lime) polygon:nth-of-type(1) {
+    fill: var(--color-accent-soft);
+  }
+
+  .cube-field .lime polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 50%, transparent);
+  }
+
+  /* the glow shines only at night: on paper the speckle reads as dust.
+     Paper gets a smooth lime wash instead, without grain */
+  .cube-field .wash {
+    opacity: 0.2;
+  }
+
+  .cube-field .w0 {
+    stop-color: var(--color-accent);
+    stop-opacity: 1;
+  }
+
+  .cube-field .w1 {
+    stop-color: var(--color-accent);
+    stop-opacity: 0;
+  }
+  .cube-field .g0 {
+    stop-color: var(--color-accent);
+    stop-opacity: 0;
+  }
+
+  .cube-field .g1 {
+    stop-color: var(--color-accent);
+    stop-opacity: 0;
+  }
+
+  .cube-field .g2 {
+    stop-color: var(--color-accent);
+    stop-opacity: 0;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .cube-field .wash {
+      opacity: 0;
+    }
+
+    .cube-field .g0 {
+      stop-opacity: 0.6;
+    }
+
+    .cube-field .g1 {
+      stop-opacity: 0.18;
+    }
+
+    .cube-field polygon:nth-of-type(1) {
+      fill: color-mix(
+        in oklab,
+        var(--color-accent) calc(var(--lit) * 22%),
+        var(--color-paper)
+      );
+    }
+
+    .cube-field polygon:nth-of-type(3) {
+      fill: color-mix(
+        in oklab,
+        var(--color-accent) calc(var(--lit) * 45%),
+        color-mix(in oklab, var(--color-ink) 4%, var(--color-paper))
+      );
+    }
+
+    .cube-field polygon:nth-of-type(2) {
+      fill: color-mix(
+        in oklab,
+        var(--color-accent) calc(var(--lit) * 16%),
+        color-mix(in oklab, var(--color-ink) 10%, var(--color-paper))
+      );
+    }
+
+    .cube-field polygon {
+      stroke: color-mix(in oklab, var(--color-ink) 24%, transparent);
+    }
+
+    .cube-field .r1 polygon {
+      stroke: color-mix(in oklab, var(--color-ink) 16%, transparent);
+    }
+
+    .cube-field .r2 polygon,
+    .cube-field .r3 polygon {
+      stroke: color-mix(in oklab, var(--color-ink) 10%, transparent);
+    }
+
+    .cube-field g path {
+      stroke: color-mix(in oklab, var(--color-ink) 7%, transparent);
+    }
+  }
+
+  /* night elements (the playground, the homepage masthead) are night in
+     every scheme. :where keeps these at the weight of the dark rules, so
+     lime, ghost, and hover rules still win */
+  :where(.night) .cube-field .wash {
+    opacity: 0;
+  }
+
+  :where(.night) .cube-field .g0 {
+    stop-opacity: 0.6;
+  }
+
+  :where(.night) .cube-field .g1 {
+    stop-opacity: 0.18;
+  }
+
+  :where(.night) .cube-field polygon:nth-of-type(1) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 22%),
+      var(--color-paper)
+    );
+  }
+
+  :where(.night) .cube-field polygon:nth-of-type(3) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 45%),
+      color-mix(in oklab, var(--color-ink) 4%, var(--color-paper))
+    );
+  }
+
+  :where(.night) .cube-field polygon:nth-of-type(2) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 16%),
+      color-mix(in oklab, var(--color-ink) 10%, var(--color-paper))
+    );
+  }
+
+  :where(.night) .cube-field polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 24%, transparent);
+  }
+
+  :where(.night) .cube-field .r1 polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 16%, transparent);
+  }
+
+  :where(.night) .cube-field .r2 polygon,
+  :where(.night) .cube-field .r3 polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 10%, transparent);
+  }
+
+  :where(.night) .cube-field g path {
+    stroke: color-mix(in oklab, var(--color-ink) 7%, transparent);
+  }
+
+</style>

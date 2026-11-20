@@ -1,10 +1,12 @@
 ---
+import codeThemes from "../lib/code-themes.mjs"
+import CubeField from "../components/CubeField.astro"
+import { skyline } from "../lib/skyline"
 import { Code } from "astro:components"
 // @ts-ignore
 import lusGrammar from "../../../textmate/lus.tmLanguage.json"
 
 import Layout from "../components/Layout.astro"
-import Button from "../components/Button.astro"
 import { playgroundHref } from "../lib/playground-link"
 
 const exampleFiles = import.meta.glob("../../../../examples/*.lus", {
@@ -32,11 +34,13 @@ for (const [path, content] of Object.entries(exampleFiles)) {
     name,
     title: m?.[1]?.trim() ?? name,
     blurb: m?.[2]?.trim() ?? "",
-    // strip the marker comment lines from the displayed source
+    // strip the marker comment lines, and the title line the heading
+    // already shows, from the displayed source
     content: content
       .split("\n")
       .filter(
-        (l) =>
+        (l, i) =>
+          !(i === 0 && m) &&
           !/^--\s*(playground|unstable|cookbook):\s*(true|false)\s*$/.test(l),
       )
       .join("\n")
@@ -47,6 +51,8 @@ for (const [path, content] of Object.entries(exampleFiles)) {
 }
 
 examples.sort((a, b) => a.title.localeCompare(b.title))
+
+const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").length))
 ---
 
 <Layout
@@ -55,80 +61,83 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
 >
   <main id="main">
     <section>
-      <h1>Examples</h1>
-      <p class="examples-intro">
-        Short, idiomatic Lus programs. Each one is self-contained. Examples
-        marked <span class="ex-badge ex-badge-play">playground</span> run in
-        your browser, the rest run locally because they need real sockets,
-        files, or threads.{" "}
+      <div class="title-row">
+        <h1 class="page-title">Examples</h1>
+        <CubeField rows={1} heights={skylineHeights} glow={false} scale={0.7} links={examples.map((ex) => `#${ex.name}`)} />
+      </div>
+      <div class="intro">
+        <p>
+          Short, idiomatic Lus programs. Each one is self-contained. Examples
+          marked <span class="tag soft">playground</span> run in
+          your browser, the rest run locally because they need real sockets,
+          files, or threads.{" "}
+          {
+            examples.some((ex) => ex.unstable) && (
+              <>
+                <span class="tag red">unstable</span> examples
+                need the unstable release channel.
+              </>
+            )
+          }
+        </p>
+        <p>
+          Playground examples run in a dedicated browser Web Worker. The page
+          stops a run after five seconds and caps captured output at 256 KiB.
+          The browser sandbox separates the program from the host operating
+          system, while the worker keeps execution away from the interface
+          thread. The browser build provides the language core for local
+          interactive examples and omits native networking, native workers,
+          SQLite, and archive codecs. Services that run code for mutually
+          distrustful users should add a process or virtual-machine boundary.
+        </p>
+      </div>
+      <nav class="jump" aria-label="Examples">
         {
-          examples.some((ex) => ex.unstable) && (
-            <>
-              <span class="ex-badge ex-badge-unstable">unstable</span> examples
-              need the unstable release channel.
-            </>
-          )
-        }
-      </p>
-      <p class="examples-intro">
-        Playground examples run in a dedicated browser Web Worker. The page
-        stops a run after five seconds and caps captured output at 256 KiB.
-        The browser sandbox separates the program from the host operating
-        system, while the worker keeps execution away from the interface
-        thread. The browser build provides the language core for local
-        interactive examples and omits native networking, native workers,
-        SQLite, and archive codecs. Services that run code for mutually
-        distrustful users should add a process or virtual-machine boundary.
-      </p>
-      <nav class="examples-jump" aria-label="Examples">
-        {
-          examples.map((ex) => (
-            <a href={`#${ex.name}`}>{ex.title}</a>
+          examples.map((ex, i) => (
+            <a href={`#${ex.name}`} data-bar={i}>
+              <span class="k">{String(i + 1).padStart(2, "0")}</span>
+              {ex.title}
+            </a>
           ))
         }
       </nav>
-      <div class="examples-list">
+    </section>
+
+    <section class="part">
+      <div class="examples">
         {
-          examples.map((ex) => (
+          examples.map((ex, i) => (
             <article class="example" id={ex.name}>
-              <header>
-                <h2>
-                  {ex.title}
-                  <a
-                    class="heading-anchor"
-                    href={`#${ex.name}`}
-                    aria-label="Link to this example"
-                  >#</a>
-                </h2>
-                <span class="ex-file">{ex.name}.lus</span>
-                {ex.playground && (
-                  <span class="ex-badge ex-badge-play">playground</span>
-                )}
-                {ex.unstable && (
-                  <span class="ex-badge ex-badge-unstable">unstable</span>
-                )}
-              </header>
-              {ex.blurb && <p class="ex-blurb">{ex.blurb}</p>}
-              <Code lang={lusGrammar as any} theme="github-light" code={ex.content} />
-              <footer>
-                {ex.playground ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    color={ex.unstable ? "red" : "lime"}
-                    href={playgroundHref(
-                      ex.content,
-                      ex.unstable ? "unstable" : "stable",
-                    )}
-                  >
-                    Open in playground
-                  </Button>
-                ) : (
-                  <span class="ex-local">
-                    runs locally: needs real network, files, or threads
-                  </span>
-                )}
-              </footer>
+              <div class="side">
+                <div class="no">{String(i + 1).padStart(2, "0")}</div>
+                <div class="head">
+                  <h2>
+                    <a href={`#${ex.name}`}>{ex.title}</a>
+                    {ex.unstable && <span class="tag red">unstable</span>}
+                  </h2>
+                  {ex.blurb && <p>{ex.blurb}</p>}
+                </div>
+              </div>
+              <figure class="figure crop">
+                <figcaption>
+                  <span>fig. {i + 1} · {ex.name}.lus</span>
+                  {ex.playground ? (
+                    <a
+                      href={playgroundHref(
+                        ex.content,
+                        ex.unstable ? "unstable" : "stable",
+                      )}
+                    >
+                      ▶ Open in playground
+                    </a>
+                  ) : (
+                    <span class="local">
+                      runs locally: needs real network, files, or threads
+                    </span>
+                  )}
+                </figcaption>
+                <Code lang={lusGrammar as any} themes={codeThemes as any} code={ex.content} />
+              </figure>
             </article>
           ))
         }
@@ -140,67 +149,108 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
 <style>
   @reference "../styles/global.css";
 
-  .examples-intro {
-    @apply text-ink/80 max-w-2xl mb-4;
+  main {
+    @apply pb-12;
   }
 
-  .ex-badge {
-    @apply font-mono text-[10px] font-bold uppercase px-1.5 py-0.5;
+  .part {
+    @apply pt-6;
   }
 
-  .ex-badge-play {
-    @apply bg-accent-soft text-ink;
-  }
+  .intro {
+    @apply grid gap-x-12 gap-y-2 md:grid-cols-2 text-ink-2;
 
-  .ex-badge-unstable {
-    @apply bg-accent-soft-red text-ink-red;
-  }
-
-  .examples-jump {
-    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs border-y-2 border-ink/20 py-2 mb-4;
-
-    a {
-      @apply no-underline font-normal text-link hover:bg-accent-soft py-0.5;
+    .tag {
+      @apply align-[1px];
     }
   }
 
-  .examples-list {
-    @apply grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-8 items-start;
+  /* contents, set like the homepage index: four columns, no rules */
+  .jump {
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 pt-6;
+
+    a {
+      @apply flex gap-2.5 items-baseline py-1 text-sm no-underline font-normal text-ink hover:bg-accent-soft;
+    }
+
+    .k {
+      @apply font-mono text-xs text-ink-3;
+    }
   }
 
-  .example:target h2 {
-    background: var(--color-accent-soft);
+  /* each example is a spread: its name, note, and run link stay in view
+     on the left while the code runs down the right */
+  .examples {
+    @apply grid grid-cols-1 gap-y-10;
   }
 
   .example {
-    @apply min-w-0 scroll-mt-4;
+    @apply grid gap-x-3.5 min-w-0 scroll-mt-4;
+    grid-template-columns: 68px minmax(0, 1fr);
 
-    header {
-      @apply flex flex-wrap items-baseline gap-x-3 gap-y-1;
+    /* ghost numerals, as on the homepage chapters */
+    .no {
+      @apply font-display font-extrabold text-[56px] leading-[0.8] tracking-[-0.06em] tabular-nums;
+      color: color-mix(in oklab, var(--color-ink) 16%, transparent);
+      align-self: start;
+    }
 
-      h2 {
-        @apply text-xl font-bold tracking-tight;
-      }
+    .head {
+      @apply min-w-0;
+      align-self: baseline;
+    }
 
-      .ex-file {
-        @apply font-mono text-xs text-ink/70;
+    h2 {
+      @apply font-display font-bold text-lg tracking-[-0.02em] flex items-center gap-2 m-0;
+
+      a {
+        @apply no-underline font-bold text-ink hover:bg-accent-soft;
       }
     }
 
-    .ex-blurb {
-      @apply text-ink/80 mt-1 mb-3;
+    p {
+      @apply text-sm text-ink-2 mt-0.5 mb-2.5;
     }
 
-    :global(pre) {
-      @apply my-0;
+    .figure {
+      @apply col-span-2 mt-1;
     }
 
-    footer {
-      @apply mt-3;
+    .local {
+      @apply normal-case tracking-normal whitespace-normal;
+    }
+  }
 
-      .ex-local {
-        @apply text-sm text-ink/70 italic;
+  /* the example under the pointer, or the one linked to, lights its
+     numeral */
+  .example:hover .no,
+  .example:target .no {
+    color: color-mix(in oklab, var(--color-accent) 70%, transparent);
+  }
+
+  .example:target h2 a {
+    @apply bg-accent-soft;
+  }
+
+  @media (min-width: 1024px) {
+    .example {
+      @apply gap-x-6;
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+
+      .side {
+        @apply sticky top-4 self-start grid gap-x-3.5;
+        grid-template-columns: 68px minmax(0, 1fr);
       }
+
+      .figure {
+        @apply col-span-1 mt-0;
+      }
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .example .side {
+      @apply contents;
     }
   }
 </style>

@@ -59,19 +59,16 @@ function haystack(d: any, from: From) {
   @reference "../styles/global.css";
 
   .api-entry {
-    @apply mb-5 pb-4 scroll-mt-14 border-b border-ink/10;
-  }
-
-  .api-entry:last-child {
-    @apply border-b-0;
+    @apply mb-8 scroll-mt-20;
   }
 
   .api-section {
-    @apply scroll-mt-12;
+    @apply scroll-mt-20;
   }
 
+  /* signatures wrap on narrow screens rather than widen the page */
   .api-heading {
-    @apply flex items-baseline pb-1;
+    @apply flex flex-wrap items-baseline pb-1;
   }
 
   .api-name {
@@ -79,31 +76,39 @@ function haystack(d: any, from: From) {
   }
 
   .api-params {
-    @apply font-mono text-sm text-link;
+    @apply font-mono text-sm text-link min-w-0;
+    overflow-wrap: anywhere;
   }
 
   .api-returns {
-    @apply font-mono text-sm text-ink/70;
+    @apply font-mono text-sm text-ink-3 min-w-0;
+    overflow-wrap: anywhere;
   }
 
   .api-param-optional {
-    @apply text-ink/70;
+    @apply text-ink-3;
   }
 
   .api-param-type {
-    @apply text-ink/70 text-xs;
+    @apply text-ink-3 text-xs;
   }
 
   .api-name-removed {
     @apply line-through text-neutral-600;
   }
 
+  @media (prefers-color-scheme: dark) {
+    .api-name-removed {
+      @apply text-neutral-400;
+    }
+  }
+
   .api-signature {
-    @apply font-mono text-sm bg-tint rounded-md px-3 py-2 mb-1 whitespace-pre-wrap break-words;
+    @apply font-mono text-[13px] bg-tint rounded-[3px] px-3 py-2 mb-1.5 whitespace-pre-wrap break-words;
   }
 
   .api-meta {
-    @apply text-xs text-ink/70 font-mono mb-1;
+    @apply text-xs text-ink-3 font-mono mb-1.5;
 
     a {
       @apply font-mono;
@@ -111,11 +116,11 @@ function haystack(d: any, from: From) {
   }
 
   .api-body {
-    @apply leading-snug;
+    @apply space-y-2;
   }
 
   .api-section-title {
-    @apply text-xl font-semibold mt-8 pb-1 mb-3 border-b border-ink/20;
+    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] mt-14 pb-2.5 mb-3 ruled;
   }
 
   /* deep-link landing matches the global heading :target grammar */

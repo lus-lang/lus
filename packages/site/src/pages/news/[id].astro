@@ -2,6 +2,7 @@
 import Layout from "../../components/Layout.astro"
 import { getCollection, render } from "astro:content"
 import { fmtDate } from "../../lib/date"
+import CubeField from "../../components/CubeField.astro"
 
 export async function getStaticPaths() {
   const news = await getCollection("news")
@@ -13,6 +14,12 @@ export async function getStaticPaths() {
 
 const { page } = Astro.props
 const rendered = await render(page)
+
+// each article gets its own cover: a field seeded by its id, the way a
+// print run gets its own plate
+let seed = 0
+for (const ch of page.id) seed = (seed * 31 + ch.charCodeAt(0)) % 997
+const peakAt = 0.25 + (seed % 50) / 100
 ---
 
 <Layout
@@ -22,8 +29,9 @@ const rendered = await render(page)
   <main id="main">
     <section>
       <a href="/news" class="back-link">← Back to news</a>
-      <article>
-        <h1>{page.data.title}</h1>
+      <CubeField class="cover" cols={44} at={peakAt} amp={2.8} seed={seed} />
+      <article class="prose">
+        <h1 class="page-title">{page.data.title}</h1>
         <p class="date">
           <time datetime={fmtDate(page.data.date)}>{fmtDate(page.data.date)}</time>
         </p>
@@ -36,15 +44,15 @@ const rendered = await render(page)
 <style>
   @reference "../../styles/global.css";
 
-  .back-link {
-    @apply text-sm text-link font-normal no-underline hover:bg-accent-soft mb-3 inline-block;
+  :global(svg.cover) {
+    @apply max-w-[48.5rem] mt-6 mb-5 ruled;
   }
 
-  article {
-    @apply space-y-2 max-w-[80ch];
+  .back-link {
+    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-link no-underline hover:text-ink inline-block pt-2;
+  }
 
-    .date {
-      @apply text-sm text-ink/70 font-mono;
-    }
+  article .date {
+    @apply font-mono text-xs text-ink-3 mb-4;
   }
 </style>

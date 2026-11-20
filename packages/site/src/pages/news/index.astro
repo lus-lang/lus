@@ -1,5 +1,7 @@
 ---
 import Layout from "../../components/Layout.astro"
+import CubeField from "../../components/CubeField.astro"
+import { skyline } from "../../lib/skyline"
 import { getCollection } from "astro:content"
 import { fmtDate } from "../../lib/date"
 
@@ -7,6 +9,17 @@ const news = await getCollection("news")
 const sorted = news.toSorted(
     (a, b) => b.data.date.getTime() - a.data.date.getTime(),
 )
+
+const skylineHeights = skyline(sorted.toReversed().map((item) => (item.body ?? "").length))
+
+// posts grouped by year, newest first, each year hung as a ghost numeral
+const years: { year: number; items: { item: (typeof sorted)[number]; i: number }[] }[] = []
+sorted.forEach((item, i) => {
+  const year = item.data.date.getUTCFullYear()
+  const last = years[years.length - 1]
+  if (last?.year === year) last.items.push({ item, i })
+  else years.push({ year, items: [{ item, i }] })
+})
 ---
 
 <Layout
@@ -15,19 +28,29 @@ const sorted = news.toSorted(
 >
     <main id="main">
         <section>
-            <h1>News</h1>
+            <div class="title-row">
+        <h1 class="page-title">News</h1>
+        <CubeField rows={1} heights={skylineHeights} glow={false} scale={0.7} links={sorted.toReversed().map((item) => `/news/${item.id}`)} />
+      </div>
             <p class="news-intro">
                 Release notes and announcements from the Lus project.
             </p>
             <div class="news-list">
                 {
-                    sorted.map((item) => (
-                        <a href={`/news/${item.id}`} class="news-row">
-                            <time class="date" datetime={fmtDate(item.data.date)}>
-                                {fmtDate(item.data.date)}
-                            </time>
-                            <span class="title">{item.data.title}</span>
-                        </a>
+                    years.map(({ year, items }) => (
+                        <div class="year">
+                            <div class="no" aria-hidden="true">{year}</div>
+                            <div class="rows">
+                                {items.map(({ item, i }) => (
+                                    <a href={`/news/${item.id}`} class="news-row cube-hover" data-bar={sorted.length - 1 - i}>
+                                        <time class="date" datetime={fmtDate(item.data.date)}>
+                                            {fmtDate(item.data.date)}
+                                        </time>
+                                        <span class="title">{item.data.title}</span>
+                                    </a>
+                                ))}
+                            </div>
+                        </div>
                     ))
                 }
             </div>
@@ -39,19 +62,40 @@ const sorted = news.toSorted(
     @reference "../../styles/global.css";
 
     .news-intro {
-        @apply text-ink/80 mb-4;
+        @apply text-ink-2 mb-6;
     }
 
-    /* strict reverse chronology: one framed column, no card grid */
+    /* strict reverse chronology, set as a ledger, a ghost year beside each
+       year's posts */
     .news-list {
-        @apply border border-ink/15 rounded-lg overflow-hidden bg-paper divide-y divide-ink/10 max-w-3xl;
+        @apply max-w-[48.5rem] space-y-6;
+    }
+
+    .year {
+        @apply grid gap-x-6;
+        grid-template-columns: 7rem minmax(0, 1fr);
+
+        .no {
+            @apply font-display font-extrabold text-[44px] leading-[0.9] tracking-[-0.05em] tabular-nums;
+            color: color-mix(in oklab, var(--color-ink) 16%, transparent);
+        }
+    }
+
+    @media (max-width: 520px) {
+        .year {
+            grid-template-columns: minmax(0, 1fr);
+
+            .no {
+                @apply text-[32px] mb-1;
+            }
+        }
     }
 
     .news-row {
-        @apply flex items-baseline gap-4 px-3 py-2 no-underline font-normal hover:bg-accent-soft;
+        @apply flex items-baseline gap-4 py-1.5 no-underline font-normal hover:bg-accent-soft;
 
         .date {
-            @apply text-sm text-ink/70 font-mono shrink-0 w-28;
+            @apply text-xs text-ink-3 font-mono shrink-0 w-24;
         }
 
         .title {

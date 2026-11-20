@@ -1,0 +1,179 @@
+---
+/*
+** The site header: wordmark and main navigation. Layout uses it with the
+** page shell's width, and the playground spans it across the viewport.
+*/
+import { Image } from "astro:assets"
+import logo from "../assets/logo.svg"
+import logoUnstable from "../assets/logo-unstable.svg"
+
+interface Props {
+  unstable?: boolean
+  /** span the viewport instead of the 1240px page shell */
+  wide?: boolean
+}
+
+const { unstable, wide } = Astro.props
+const currentLogo = unstable ? logoUnstable : logo
+const path = Astro.url.pathname.replace(/\/$/, "") || "/"
+
+const navLinks = [
+  { href: "/playground", label: "playground" },
+  { href: "/examples", label: "examples" },
+  { href: "/manual", label: "manual" },
+  { href: "/news", label: "news" },
+]
+
+function isActive(href: string) {
+  return path === href || path.startsWith(href + "/")
+}
+---
+
+<header class="site-header">
+  <div class:list={["header-inner", { wide }]}>
+    <a href="/" class="brand" aria-label="Lus, home">
+      <Image
+        src={currentLogo}
+        alt=""
+        class="lus-logo"
+        width={18}
+        height={20}
+      />
+      <span class="wordmark">Lus</span>
+    </a>
+
+    <nav aria-label="Main">
+      {
+        navLinks.map((link) => (
+          <a
+            href={link.href}
+            class:list={[{ active: isActive(link.href) }]}
+            aria-current={
+              path === link.href
+                ? "page"
+                : isActive(link.href)
+                  ? "true"
+                  : undefined
+            }
+          >
+            {link.label}
+          </a>
+        ))
+      }
+      <a
+        href="https://github.com/lus-lang/lus"
+        target="_blank"
+        rel="noopener">github</a
+      >
+    </nav>
+  </div>
+</header>
+
+<style>
+  @reference "../styles/global.css";
+
+  .site-header {
+    @apply bg-paper border-b-2 border-rule shrink-0;
+
+    .header-inner {
+      @apply max-w-[1240px] mx-auto px-4 md:px-6 h-12 flex items-center gap-4;
+      /* the spine is marked at the twelve columns of the measure, inside
+         the page gutters */
+      background:
+        repeating-linear-gradient(
+            to right,
+            var(--color-rule) 0 1px,
+            transparent 1px calc((100% - 3rem) / 12)
+          )
+          1.5rem bottom / calc(100% - 3rem) 5px no-repeat,
+        linear-gradient(var(--color-rule), var(--color-rule)) calc(100% - 1.5rem)
+          bottom / 1px 5px no-repeat;
+
+      &.wide {
+        @apply max-w-none px-4;
+        background: none;
+      }
+    }
+
+    .brand {
+      @apply flex items-center gap-2 no-underline shrink-0 text-ink hover:text-ink;
+
+      .lus-logo {
+        @apply w-[18px] h-auto;
+      }
+
+      .wordmark {
+        @apply font-display font-extrabold text-[22px] tracking-[-0.045em] leading-none;
+      }
+    }
+
+    nav {
+      @apply ml-auto flex flex-wrap items-center justify-end gap-0.5 font-mono text-[13px];
+
+      a {
+        @apply no-underline font-normal text-ink-2 px-2.5 py-1.5 rounded-[4px] hover:bg-accent-soft hover:text-ink;
+
+        &.active {
+          @apply bg-solid text-on-solid hover:bg-solid hover:text-on-solid;
+        }
+      }
+    }
+  }
+
+  /* phones use a narrower gutter, so the spine goes unmarked there */
+  @media (max-width: 767px) {
+    .site-header .header-inner {
+      background: none;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .site-header {
+      .header-inner {
+        @apply gap-2;
+      }
+
+      .brand .wordmark {
+        @apply sr-only;
+      }
+
+      nav {
+        @apply text-xs flex-nowrap gap-0;
+
+        a {
+          @apply px-1.5 py-2.5;
+        }
+      }
+    }
+  }
+
+  /* the smallest phones keep all five links on one line */
+  @media (max-width: 360px) {
+    .site-header {
+      .header-inner {
+        @apply px-3 gap-1;
+      }
+
+      nav a {
+        @apply px-[3px];
+      }
+    }
+  }
+
+  :global(html.unstable) .site-header {
+    @apply border-ink-red;
+
+    .brand,
+    .brand:hover {
+      @apply text-ink-red;
+    }
+
+    nav a {
+      @apply text-ink-red/80 hover:bg-accent-soft-red hover:text-ink-red;
+
+      &.active {
+        @apply bg-ink-red text-tint-red;
+      }
+    }
+  }
+</style>

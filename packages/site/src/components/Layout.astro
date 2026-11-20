@@ -1,5 +1,4 @@
 ---
-import { Image } from "astro:assets"
 import "@fontsource-variable/atkinson-hyperlegible-next"
 import "@fontsource-variable/atkinson-hyperlegible-next/wght-italic.css"
 import "@fontsource-variable/bricolage-grotesque/opsz.css"
@@ -7,9 +6,7 @@ import "@fontsource-variable/intel-one-mono"
 import "@fontsource-variable/intel-one-mono/wght-italic.css"
 
 import "../styles/global.css"
-import logo from "../assets/logo.svg"
-import logoUnstable from "../assets/logo-unstable.svg"
-import Icon from "./Icon.astro"
+import SiteHeader from "./SiteHeader.astro"
 
 interface Props {
   title?: string
@@ -17,8 +14,6 @@ interface Props {
   unstable?: boolean
 }
 
-const currentLogo = Astro.props.unstable ? logoUnstable : logo
-const path = Astro.url.pathname.replace(/\/$/, "") || "/"
 
 const fullTitle = `Lus${Astro.props.title ? ` - ${Astro.props.title}` : ""}`
 const description =
@@ -29,16 +24,6 @@ const canonicalUrl = new URL(
   Astro.site ?? "https://lus.dev",
 )
 
-const navLinks = [
-  { href: "/playground", label: "playground", icon: "terminal" },
-  { href: "/examples", label: "examples", icon: "code-xml" },
-  { href: "/manual", label: "manual", icon: "book-open" },
-  { href: "/news", label: "news", icon: "newspaper" },
-]
-
-function isActive(href: string) {
-  return path === href || path.startsWith(href + "/")
-}
 ---
 
 <html lang="en" class:list={[{ unstable: Astro.props.unstable }]}>
@@ -67,172 +52,70 @@ function isActive(href: string) {
 
     <title>{fullTitle}</title>
     <script src="../scripts/copy-code.ts"></script>
+    <script src="../scripts/readout-hover.ts"></script>
   </head>
   <body>
     <a href="#main" class="skip-link">Skip to content</a>
-    <header>
-      <div class="header-inner">
-        <a href="/" class="brand">
-          <Image
-            src={currentLogo}
-            alt="Lus, home"
-            class="lus-logo"
-            width={32}
-            height={32}
-          />
-        </a>
-
-        <nav aria-label="Main">
-          {
-            navLinks.map((link) => (
-              <a
-                href={link.href}
-                class:list={[{ active: isActive(link.href) }]}
-                aria-current={
-                  path === link.href
-                    ? "page"
-                    : isActive(link.href)
-                      ? "true"
-                      : undefined
-                }
-              >
-                <Icon name={link.icon} size={14} />
-                {link.label}
-              </a>
-            ))
-          }
-          <a
-            href="https://github.com/lus-lang/lus"
-            target="_blank"
-            rel="noopener"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              aria-hidden="true"
-              ><path
-                d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
-              ></path></svg
-            >
-            github
-          </a>
-        </nav>
-      </div>
-    </header>
+    <SiteHeader unstable={Astro.props.unstable} />
     <slot />
-    
+    <footer>
+      <div class="footer-wrap">
+        <div class="footer-inner">
+          <a href="/" class="footer-wordmark"><span class="mark" aria-hidden="true"></span>lus.dev</a>
+          <a href="/manual/license">0BSD</a>
+        </div>
+      </div>
+    </footer>
   </body>
 </html>
 
 <style>
   @reference "../styles/global.css";
 
-  header {
-    @apply bg-tint border-b border-ink/10;
+  footer {
+    @apply mt-auto pt-8;
 
-    .header-inner {
-      @apply max-w-7xl mx-auto px-4 md:px-6 py-2 flex items-center gap-3;
+    .footer-wrap {
+      @apply max-w-[1240px] mx-auto px-4 md:px-6;
+    }
 
-      .brand {
-        @apply flex items-center gap-2 no-underline shrink-0 hover:bg-transparent;
+    /* the maker's mark: a small plain cube before the name */
+    .mark {
+      @apply inline-block w-[10px] h-[11px] mr-1.5 align-[-1px];
+      background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2710%27%20height%3D%2711%27%20viewBox%3D%270%200%2010%2011%27%3E%3Cpath%20d%3D%27M5%20.5%209.5%203%205%205.5%20.5%203Z%27%20fill%3D%27%23f9f9f2%27%20stroke%3D%27%23737b68%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M.5%203%205%205.5V10.5L.5%208Z%27%20fill%3D%27%23d9ddcc%27%20stroke%3D%27%23737b68%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M9.5%203%205%205.5V10.5L9.5%208Z%27%20fill%3D%27%23b8bfa8%27%20stroke%3D%27%23737b68%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3C/svg%3E") no-repeat;
+    }
 
-        .wordmark {
-          @apply font-display font-bold text-lg tracking-tight text-ink lowercase;
-        }
-      }
-
-      .version-badge {
-        @apply font-mono text-xs font-normal no-underline text-ink/70 border border-ink/25 bg-paper rounded-sm px-1.5 py-0.5 hover:bg-accent-soft hover:text-ink;
-      }
-
-      nav {
-        @apply ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1;
-
-        a {
-          @apply flex items-center gap-1.5 text-sm font-semibold lowercase no-underline text-ink/80 px-2 py-1 rounded-md hover:bg-accent-soft hover:text-ink;
-
-          &.active {
-            @apply bg-accent text-ink;
-          }
-        }
+    @media (prefers-color-scheme: dark) {
+      .mark {
+        background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2710%27%20height%3D%2711%27%20viewBox%3D%270%200%2010%2011%27%3E%3Cpath%20d%3D%27M5%20.5%209.5%203%205%205.5%20.5%203Z%27%20fill%3D%27%232a3520%27%20stroke%3D%27%23949c88%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M.5%203%205%205.5V10.5L.5%208Z%27%20fill%3D%27%231d2715%27%20stroke%3D%27%23949c88%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M9.5%203%205%205.5V10.5L9.5%208Z%27%20fill%3D%27%23141c0d%27%20stroke%3D%27%23949c88%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3C/svg%3E");
       }
     }
-  }
 
-  .unstable-banner {
-    @apply bg-accent-red text-ink-red text-sm font-semibold text-center px-4 py-1;
+    /* the closing rule carries the same ruler ticks as section rules */
+    .footer-inner {
+      @apply border-t border-rule pt-2.5 pb-10 flex justify-between font-mono text-xs text-ink-3;
+      background:
+        repeating-linear-gradient(
+            to right,
+            var(--color-rule) 0 1px,
+            transparent 1px calc(100% / 12)
+          )
+          left top / 100% 5px no-repeat,
+        linear-gradient(var(--color-rule), var(--color-rule)) right top / 1px
+          5px no-repeat;
+    }
 
     a {
-      @apply text-ink-red hover:bg-accent-soft-red;
-    }
-  }
-
-  footer {
-    @apply py-3 text-xs text-ink/80 bg-tint border-t border-ink/15 mt-auto;
-
-    .footer-inner {
-      @apply flex flex-wrap items-center justify-between px-4 md:px-6 gap-x-6 gap-y-1 max-w-7xl mx-auto;
-
-      .footer-wordmark {
-        @apply font-display font-bold text-sm tracking-tight text-ink;
-      }
-
-      .footer-links {
-        @apply flex flex-wrap items-center gap-x-2 gap-y-2;
-
-        a {
-          @apply font-semibold lowercase no-underline text-ink/80 rounded-md hover:bg-accent-soft hover:text-ink inline-block px-1 py-1;
-        }
-      }
-
-      p {
-        @apply text-right;
-
-        a {
-          @apply text-link;
-        }
-      }
+      @apply no-underline font-normal text-ink-3 hover:text-ink;
     }
   }
 
   :global(html.unstable) {
-    header {
-      @apply bg-tint-red border-ink-red/10;
-
-      .header-inner .brand .wordmark {
-        @apply text-ink-red;
-      }
-
-      .header-inner .version-badge {
-        @apply text-ink-red/70 border-ink-red/25 hover:bg-accent-soft-red hover:text-ink-red;
-      }
-
-      .header-inner nav a {
-        @apply text-ink-red/80 hover:bg-accent-soft-red hover:text-ink-red;
-
-        &.active {
-          @apply bg-accent-red text-ink-red;
-        }
-      }
-    }
-
     footer {
-      @apply text-ink-red/80 bg-tint-red border-ink-red/15;
+      @apply border-ink-red text-ink-red/70;
 
-      .footer-inner {
-        .footer-wordmark {
-          @apply text-ink-red;
-        }
-
-        .footer-links a {
-          @apply text-ink-red/80 hover:bg-accent-soft-red hover:text-ink-red;
-        }
-
-        p a {
-          @apply text-link-red;
-        }
+      a {
+        @apply text-ink-red/70;
       }
     }
   }

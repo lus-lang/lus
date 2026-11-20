@@ -60,7 +60,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
 </details>
 
 <nav class="api-modules" aria-label="Reference sections">
-  {sections.map((section) => <a href={`#${section.id}`}>{section.title}</a>)}
+  {sections.map((section, i) => <a href={`#${section.id}`} data-bar={i}>{section.title}</a>)}
 </nav>
 
 <div class="api-index">
@@ -94,22 +94,22 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   @reference "../styles/global.css";
 
   .api-search {
-    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2 border-b border-ink/10;
+    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2;
 
     input {
-      @apply border border-ink/25 rounded-md bg-paper px-3 py-1.5 w-full max-w-md font-mono text-sm;
+      @apply border border-ink rounded-md bg-field px-3 py-1.5 w-full max-w-md font-mono text-sm;
 
       &::placeholder {
-        @apply text-ink/70;
+        @apply text-ink-3;
       }
     }
 
     #api-search-count {
-      @apply text-sm text-ink/70 font-mono min-w-0;
+      @apply text-sm text-ink-3 font-mono min-w-0;
     }
 
     .api-search-hint {
-      @apply basis-full font-mono text-xs text-ink/70;
+      @apply hidden sm:block basis-full font-mono text-xs text-ink-3;
 
       code {
         @apply bg-tint px-1;
@@ -122,15 +122,15 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   }
 
   .pledge-chip-legend {
-    @apply font-mono text-[11px] font-bold px-1.5 py-0.5 mr-2 rounded-sm shrink-0
-      bg-emerald-100 text-emerald-900;
+    @apply font-mono text-[10px] font-bold px-1.5 py-0.5 mr-2 rounded-[3px] shrink-0
+      bg-accent-soft text-ink;
   }
 
   .legend-wrap {
     @apply mb-3;
 
     summary {
-      @apply font-mono text-xs uppercase tracking-widest text-ink/70 cursor-pointer select-none py-1.5;
+      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 cursor-pointer select-none py-1.5;
     }
   }
 
@@ -139,7 +139,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   }
 
   .api-modules {
-    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs border-b border-ink/10 pb-2 mb-4;
+    @apply flex flex-wrap gap-x-3 gap-y-2 font-mono text-xs pb-2 mb-4;
 
     a {
       @apply no-underline font-normal text-link hover:bg-accent-soft py-0.5;
@@ -154,7 +154,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     }
 
     .api-index-title {
-      @apply text-lg font-semibold mb-2 mt-0;
+      @apply font-display font-bold text-lg tracking-[-0.02em] mb-2 mt-0;
       break-after: avoid;
 
       a {
@@ -163,7 +163,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     }
 
     .api-kind {
-      @apply block font-mono text-[10px] uppercase tracking-widest text-ink/70;
+      @apply block font-mono text-[10px] uppercase tracking-[0.1em] text-ink-3;
     }
 
     p {
@@ -191,6 +191,23 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
 
       &[data-from="lus-unstable"] {
         @apply text-link-red font-semibold hover:bg-accent-soft-red;
+      }
+    }
+  }
+
+  /* night: the reference hues lighten to stay legible on the ink page */
+  @media (prefers-color-scheme: dark) {
+    .api-index p a {
+      &[data-from="lua"] {
+        @apply text-sky-300 hover:bg-sky-950;
+      }
+
+      &[data-from="removed"] {
+        @apply text-neutral-400 hover:bg-neutral-800;
+      }
+
+      &[data-from="deprecated"] {
+        @apply text-yellow-300 hover:bg-yellow-950;
       }
     }
   }

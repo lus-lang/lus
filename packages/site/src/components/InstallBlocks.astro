@@ -1,4 +1,5 @@
 ---
+import codeThemes from "../lib/code-themes.mjs"
 import { Code } from "astro:components"
 import { INSTALL_LINUX, INSTALL_MACOS, INSTALL_WINDOWS } from "../lib/install"
 
@@ -14,7 +15,7 @@ const blocks = [
     blocks.map((block) => (
       <div class="install-block">
         <h3>{block.platform}</h3>
-        <Code lang={block.lang} theme="github-light" code={block.code} />
+        <Code lang={block.lang} themes={codeThemes as any} code={block.code} />
       </div>
     ))
   }
