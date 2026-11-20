@@ -557,6 +557,11 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
+  /* the chapter under the pointer lights its numeral */
+  .chap:hover .no {
+    color: color-mix(in oklab, var(--color-accent) 70%, transparent);
+  }
+
   @media (max-width: 900px) {
     .mast {
       grid-template-columns: minmax(0, 1fr);

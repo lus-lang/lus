@@ -221,6 +221,13 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
     }
   }
 
+  /* the example under the pointer, or the one linked to, lights its
+     numeral */
+  .example:hover .no,
+  .example:target .no {
+    color: color-mix(in oklab, var(--color-accent) 70%, transparent);
+  }
+
   .example:target h2 a {
     @apply bg-accent-soft;
   }
