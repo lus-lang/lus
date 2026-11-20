@@ -113,9 +113,12 @@ const sidebarToc = headings
       <details class="toc" open={headings.length <= 24}>
         <summary>Contents ({headings.length})</summary>
         <ol>
-          {toc.map((section, i) => (
+          {toc.map((section) => (
             <li class="toc-h2">
-              <a href={`#${section.slug}`} data-bar={barsAreSections ? i : undefined}>{section.text}</a>
+              <a
+                href={`#${section.slug}`}
+                data-bar={barsAreSections && h2Slugs.includes(`#${section.slug}`) ? h2Slugs.indexOf(`#${section.slug}`) : undefined}
+              >{section.text}</a>
               {section.children.length > 0 && (
                 <ol>
                   {section.children.map((child) => (

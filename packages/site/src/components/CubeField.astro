@@ -36,8 +36,8 @@ interface Props {
   depth?: number
   /** whether the lime cube tints the bars around it */
   light?: boolean
-  /** a fixed scale, so a cube keeps one size from page to page; without
-      it the field fills its container's width */
+  /** a fixed scale, so a cube keeps one size from page to page. Without
+      it the field fills its container's width. */
   scale?: number
   /** one link per front-row bar, so a readout leads to its entries */
   links?: string[]
@@ -230,7 +230,7 @@ for (const f of shapes) {
   class:list={["cube-field", Astro.props.class]}
   viewBox={`0 0 ${width.toFixed(0)} ${heightPx.toFixed(0)}`}
   preserveAspectRatio="xMidYMax meet"
-  style={scale ? `width:${(width * scale).toFixed(0)}px;max-width:100%` : undefined}
+  style={scale ? `width:${(width * scale).toFixed(0)}px` : undefined}
   aria-hidden="true"
   focusable="false"
 >
@@ -331,6 +331,7 @@ for (const f of shapes) {
   .cube-field {
     display: block;
     width: 100%;
+    max-width: 100%;
     height: auto;
     overflow: visible;
   }
@@ -403,7 +404,7 @@ for (const f of shapes) {
   }
 
   /* the ghost of a fallen cube: an outline in dashes, unfilled */
-  .cube-field .ghost polygon {
+  .cube-field .ghost polygon:nth-of-type(n) {
     fill: none;
     stroke: var(--color-link);
     stroke-dasharray: 3 2;
@@ -508,4 +509,60 @@ for (const f of shapes) {
       stroke: color-mix(in oklab, var(--color-ink) 7%, transparent);
     }
   }
+
+  /* the playground is night in every scheme. :where keeps these at the
+     weight of the dark rules, so lime, ghost, and hover rules still win */
+  :where(:root.night) .cube-field .wash {
+    opacity: 0;
+  }
+
+  :where(:root.night) .cube-field .g0 {
+    stop-opacity: 0.6;
+  }
+
+  :where(:root.night) .cube-field .g1 {
+    stop-opacity: 0.18;
+  }
+
+  :where(:root.night) .cube-field polygon:nth-of-type(1) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 22%),
+      var(--color-paper)
+    );
+  }
+
+  :where(:root.night) .cube-field polygon:nth-of-type(3) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 45%),
+      color-mix(in oklab, var(--color-ink) 4%, var(--color-paper))
+    );
+  }
+
+  :where(:root.night) .cube-field polygon:nth-of-type(2) {
+    fill: color-mix(
+      in oklab,
+      var(--color-accent) calc(var(--lit) * 16%),
+      color-mix(in oklab, var(--color-ink) 10%, var(--color-paper))
+    );
+  }
+
+  :where(:root.night) .cube-field polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 24%, transparent);
+  }
+
+  :where(:root.night) .cube-field .r1 polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 16%, transparent);
+  }
+
+  :where(:root.night) .cube-field .r2 polygon,
+  :where(:root.night) .cube-field .r3 polygon {
+    stroke: color-mix(in oklab, var(--color-ink) 10%, transparent);
+  }
+
+  :where(:root.night) .cube-field g path {
+    stroke: color-mix(in oklab, var(--color-ink) 7%, transparent);
+  }
+
 </style>

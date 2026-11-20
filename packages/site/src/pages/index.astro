@@ -421,7 +421,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
   /* the horizon: a full-width field of cube bars under the masthead */
   :global(svg.horizon) {
-    @apply mt-6 mb-0 ruled;
+    @apply mt-6 mb-0 ruled pointer-events-none;
   }
 
   /* phones get a shorter field, so the bars keep their scale */
