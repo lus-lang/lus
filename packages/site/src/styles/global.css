@@ -217,13 +217,13 @@ body::before {
 @media (prefers-color-scheme: dark) {
   body::before {
     filter: invert(1);
-    opacity: 0.035;
+    opacity: 0.05;
   }
 }
 
 :root.night body::before {
   filter: invert(1);
-  opacity: 0.035;
+  opacity: 0.05;
 }
 
 /* the section rule: 2px, marked like a ruler at the twelve columns of the
