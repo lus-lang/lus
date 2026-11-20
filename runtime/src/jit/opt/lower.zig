@@ -1714,7 +1714,7 @@ pub const Lower = struct {
         switch (ty) {
             .string => {
                 const s = try b.typed(rb, .string);
-                const n = try b.load(s, @offsetOf(String, "chars"), .int, 4, .fixed, ir.none);
+                const n = try b.load(s, String.chars_offset, .int, 4, .fixed, ir.none);
                 try b.setReg(ra, n, Sample.tagged(.integer));
                 return true;
             },
@@ -1897,7 +1897,7 @@ pub const Lower = struct {
     /// the table itself, or the table that `__index` of its metatable
     /// names. Returns null when the lookup needs the general path.
     fn fieldLoad(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!?Loaded {
-        if (!key_str.flags.interned) return null;
+        if (!key_str.flags().interned) return null;
         if (table.findStr(st, key_str)) |idx| {
             const v = st.val(idx);
             if (v.isNil()) return null;
@@ -1981,7 +1981,7 @@ pub const Lower = struct {
     /// the method.
     fn stringMethod(b: *Lower, ra: u32, rb: u32, key_str: *String) Error!bool {
         const g = b.l.g;
-        if (!key_str.flags.interned) return false;
+        if (!key_str.flags().interned) return false;
         const slot_ptr = &g.type_metatables[value.typeSlot(.string)];
         const mt = slot_ptr.* orelse return false;
         const index_name = g.tm_names[@backingInt(state.TM.index)].?;
@@ -2060,7 +2060,7 @@ pub const Lower = struct {
     fn setField(b: *Lower, src: TableSrc, key_v: Value, rv: u32) Error!bool {
         if (key_v.tag != .string) return false;
         const key_str = key_v.as(String);
-        if (!key_str.flags.interned) return false;
+        if (!key_str.flags().interned) return false;
         if (src == .reg and b.fr.regs[src.reg].val != ir.none and b.virtIndex(b.fr.regs[src.reg].val) != null) {
             if (try b.virtSet(b.fr.regs[src.reg].val, key_str, rv)) return true;
         }
@@ -2513,7 +2513,7 @@ pub const Lower = struct {
                 return b.branch(.{ .op = .brtag, .imm = b.slotOf(ra), .aux = @backingInt(kv.tag) }, k);
             },
             .string => {
-                if (!kv.as(String).flags.interned) return b.generic(b.pc, last);
+                if (!kv.as(String).flags().interned) return b.generic(b.pc, last);
                 const t = ty orelse return b.generic(b.pc, last);
                 const v = try b.typed(ra, t);
                 b.specialized += 1;
@@ -2521,7 +2521,7 @@ pub const Lower = struct {
                 // Pointers decide only between interned strings, and the
                 // constant is interned. A string becomes interned at most
                 // once and never stops being so.
-                _ = try b.guard(.{ .op = .gbit, .cls = .fixed, .a = v, .imm = @offsetOf(String, "flags"), .aux = @as(u64, @bitOffsetOf(String.Flags, "interned")) | (1 << 8) });
+                _ = try b.guard(.{ .op = .gbit, .cls = .fixed, .a = v, .imm = String.flags_offset, .aux = @as(u64, @bitOffsetOf(String.Flags, "interned")) | (1 << 8) });
                 return b.branch(.{ .op = .bri, .cond = @backingInt(ir.Cond.eq), .a = v, .imm = @bitCast(@as(u64, kv.address())) }, k);
             },
             else => return b.generic(b.pc, last),
@@ -2683,7 +2683,7 @@ pub const Lower = struct {
             const ty = b.tyOf(val);
             return .{ .ref = val, .sample = if (ty == .boolean) Sample{} else Sample.tagged(@fromBackingInt(@backingInt(ty))) };
         }
-        if (!key_str.flags.interned) return null;
+        if (!key_str.flags().interned) return null;
         if (v.mt == ir.none) return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
         return b.viaMetatable(v.mt, v.mt_sample.?, key_str);
     }
@@ -3509,7 +3509,7 @@ pub const Lower = struct {
             const sv = try b.typed(a1, .string);
             const i = try b.typed(a1 + 1, .int);
             const j = if (nargs == 3) try b.typed(a1 + 2, .int) else try b.kint(-1);
-            const chars = try b.load(sv, @offsetOf(String, "chars"), .int, 4, .fixed, ir.none);
+            const chars = try b.load(sv, String.chars_offset, .int, 4, .fixed, ir.none);
             const n = try b.emit(.{ .op = .callc, .ty = .int, .a = chars, .b = i, .c = j, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.subLength))), .flags = .{ .pure = true } });
             try b.setReg(dst, n, Sample.tagged(.integer));
             b.skip_next = true;

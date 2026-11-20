@@ -83,13 +83,13 @@ pub const Blob = struct {
 /// are sent once, and below that length copying the bytes twice costs
 /// less than allocating and freeing a blob (`spec/design/workers.md`).
 pub fn acquire(g: *Global, s: *String) Allocator.Error!?*Blob {
-    if (s.flags.shared or s.flags.cached) {
-        const b = if (s.flags.shared) s.blob() else g.blobs.get(s).?;
+    if (s.flags().shared or s.flags().cached) {
+        const b = if (s.flags().shared) s.blob() else g.blobs.get(s).?;
         b.retain();
         return b;
     }
-    if (!s.flags.sent) {
-        s.flags.sent = true;
+    if (!s.flags().sent) {
+        s.flags().sent = true;
         if (s.len <= once_len) return null;
         return try Blob.create(g.parent_gpa, s.bytes(), g.seed, s.hash);
     }
@@ -98,7 +98,7 @@ pub fn acquire(g: *Global, s: *String) Allocator.Error!?*Blob {
         b.release();
         return e;
     };
-    s.flags.cached = true;
+    s.flags().cached = true;
     g.counter.bytes += b.len;
     b.retain();
     return b;
@@ -108,12 +108,13 @@ pub fn acquire(g: *Global, s: *String) Allocator.Error!?*Blob {
 /// reference to the blob.
 pub fn newString(g: *Global, b: *Blob, ascii: bool, chars: u32) Allocator.Error!*String {
     gc.maybeCollect(g);
-    const s = try gc.allocUninit(g, String, .string, String.shared_size);
+    const slot = String.needsCrumbs(ascii, chars);
+    const s = try gc.allocUninit(g, String, .string, String.shared_size + @as(usize, if (slot) @sizeOf(usize) else 0));
     s.len = b.len;
-    s.chars = chars;
+    s.setChars(chars);
     s.hash = if (b.seed == g.seed) b.hash else object.hashBytes(g.seed, b.bytes());
-    s.flags = .{ .ascii = ascii, .shared = true };
-    s.crumbs = null;
+    s.flags().* = .{ .ascii = ascii, .shared = true, .crumb_slot = slot };
+    s.initCrumbs();
     s.setBlob(b);
     b.retain();
     g.counter.bytes += b.len;
@@ -123,7 +124,7 @@ pub fn newString(g: *Global, b: *Blob, ascii: bool, chars: u32) Allocator.Error!
 /// Releases the reference that a dying string holds. Called when the
 /// collector frees a string that is shared or cached.
 pub fn drop(g: *Global, s: *String) void {
-    const b = if (s.flags.shared) s.blob() else (g.blobs.fetchRemove(s) orelse return).value;
+    const b = if (s.flags().shared) s.blob() else (g.blobs.fetchRemove(s) orelse return).value;
     g.counter.bytes -|= b.len;
     b.release();
 }

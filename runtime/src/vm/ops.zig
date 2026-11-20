@@ -111,7 +111,7 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         const s = k.as(String);
         // Every short string key is interned, so lookups find it by
         // pointer.
-        if (!s.flags.interned and s.len <= String.short_max) {
+        if (!s.flags().interned and s.len <= String.short_max) {
             const interned = state.intern(l.g, s) catch return l.raiseMem();
             return rawSet(l, t, Value.obj(.string, interned), val);
         }
@@ -429,7 +429,7 @@ fn stringEqual(x: *String, y: *String) bool {
     // Two interned strings are equal exactly when they are the same
     // object. Long strings and the short results of concatenation are
     // not interned, and compare by content.
-    if (x.flags.interned and y.flags.interned) return false;
+    if (x.flags().interned and y.flags().interned) return false;
     return x.len == y.len and x.hash == y.hash and std.mem.eql(u8, x.bytes(), y.bytes());
 }
 
@@ -508,7 +508,7 @@ fn compareTM(l: *Thread, a: Value, b: Value, event: TM) Error!bool {
 
 pub fn length(l: *Thread, v: Value) Error!Value {
     switch (v.tag) {
-        .string => return Value.int(v.as(String).chars),
+        .string => return Value.int(v.as(String).chars()),
         .table => {
             const t = v.as(Table);
             if (t.metatable) |mt| {
@@ -837,13 +837,13 @@ pub inline fn joinShort(l: *Thread, parts: []const Value, last: Value) Error!?Va
             const s = v.as(String);
             const b = s.bytes();
             if (b.len > short_join - n) return null;
-            if (!s.flags.ascii) {
+            if (!s.flags().ascii) {
                 if (b.len > 0 and b[0] == 0xED) return null;
                 ascii = false;
             }
             copyBytes(tmp[n..], b);
             n += b.len;
-            chars += s.chars;
+            chars += s.chars();
         } else if (v.tag == .integer) {
             if (short_join - n < 21) return null;
             var d: [20]u8 = undefined;
@@ -918,7 +918,7 @@ pub fn appendForConcat(l: *Thread, gpa: std.mem.Allocator, buf: *std.ArrayList(u
     if (v.tag == .string) {
         const s = v.as(String);
         const b = s.bytes();
-        if (!s.flags.ascii) {
+        if (!s.flags().ascii) {
             if (wtf8.leadingTrailSurrogate(b)) |trail| {
                 if (wtf8.trailingLeadSurrogate(buf.items)) |lead| {
                     buf.items.len -= 3;
@@ -926,7 +926,7 @@ pub fn appendForConcat(l: *Thread, gpa: std.mem.Allocator, buf: *std.ArrayList(u
                     const n = wtf8.encode(wtf8.combineSurrogates(lead, trail), &tmp);
                     buf.appendSlice(gpa, tmp[0..n]) catch return l.raiseMem();
                     buf.appendSlice(gpa, b[3..]) catch return l.raiseMem();
-                    chars.* += s.chars - 1;
+                    chars.* += s.chars() - 1;
                     ascii.* = false;
                     return;
                 }
@@ -937,8 +937,8 @@ pub fn appendForConcat(l: *Thread, gpa: std.mem.Allocator, buf: *std.ArrayList(u
             copyBytes(room, b);
             buf.items.len += b.len;
         } else buf.appendSlice(gpa, b) catch return l.raiseMem();
-        chars.* += s.chars;
-        ascii.* = ascii.* and s.flags.ascii;
+        chars.* += s.chars();
+        ascii.* = ascii.* and s.flags().ascii;
         return;
     }
     const before = buf.items.len;

@@ -260,7 +260,7 @@ fn rawlen(l: *Thread) Error!u32 {
     const v = l.arg(1);
     return switch (v.tag) {
         .table => aux.retInt(l, table.length(v.as(Table))),
-        .string => aux.retInt(l, v.as(String).chars),
+        .string => aux.retInt(l, v.as(String).chars()),
         else => aux.typeError(l, 1, "table or string"),
     };
 }

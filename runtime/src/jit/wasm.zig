@@ -1429,7 +1429,7 @@ const Emitter = struct {
                 e.get(L.bp);
                 e.get(L.bp);
                 e.load32(slotOff(rb));
-                e.load32(@offsetOf(object.String, "chars"));
+                e.load32(object.String.chars_offset);
                 e.op(W.i64_extend_i32_u);
                 e.store64(slotOff(ra));
                 e.storeTag(ra, tag_int);

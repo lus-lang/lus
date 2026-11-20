@@ -74,7 +74,7 @@ pub fn open(l: *Thread) Error!void {
 /// Characters in `b`, a slice of `s` that starts and ends on character
 /// boundaries.
 inline fn charsIn(s: *const String, b: []const u8) usize {
-    return if (s.flags.ascii) b.len else wtf8.countChars(b);
+    return if (s.flags().ascii) b.len else wtf8.countChars(b);
 }
 
 /// Byte offset of the character that ends just before offset `i > 0`.
@@ -247,12 +247,12 @@ const Scratch = struct {
 
 fn len(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
-    return aux.retInt(l, s.chars);
+    return aux.retInt(l, s.chars());
 }
 
 fn sub(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const n: usize = s.chars;
+    const n: usize = s.chars();
     const start = posRelat(try aux.checkInt(l, 2), n);
     const end = try getEndPos(l, 3, -1, n);
     return aux.ret(l, subRange(l, s, start, end) catch return l.raiseMem());
@@ -269,7 +269,7 @@ fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
         } else if (args[2].tag != .nil) return state.leaf_miss;
     }
     const s = args[0].as(String);
-    const n: usize = s.chars;
+    const n: usize = s.chars();
     return subRange(l, s, posRelat(args[1].asInt(), n), clipEnd(j, n)) catch state.leaf_miss;
 }
 
@@ -280,7 +280,7 @@ inline fn subRange(l: *Thread, s: *String, start: usize, end: usize) Allocator.E
     var count: usize = 0;
     if (start <= end) {
         count = end - start + 1;
-        if (s.flags.ascii) {
+        if (s.flags().ascii) {
             from = start - 1;
             to = end;
         } else {
@@ -322,7 +322,7 @@ fn mapAscii(l: *Thread, comptime first: u8) Error!u32 {
     defer sc.deinit(l);
     const buf = try sc.get(l, src.len);
     mapCase(first, src, buf);
-    const r = state.newStringKnown(l.g, buf, s.flags.ascii, s.chars) catch return l.raiseMem();
+    const r = state.newStringKnown(l.g, buf, s.flags().ascii, s.chars()) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, r));
 }
 
@@ -335,7 +335,7 @@ fn mapLeaf(comptime first: u8, l: *Thread, args: [*]const Value, nargs: u32) Val
     if (src.len > stack_len) return state.leaf_miss;
     var buf: [stack_len]u8 = undefined;
     mapCase(first, src, buf[0..src.len]);
-    const r = state.newStringKnown(l.g, buf[0..src.len], s.flags.ascii, s.chars) catch return state.leaf_miss;
+    const r = state.newStringKnown(l.g, buf[0..src.len], s.flags().ascii, s.chars()) catch return state.leaf_miss;
     return Value.obj(.string, r);
 }
 
@@ -353,7 +353,7 @@ fn lowerLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
 fn byteLeaf(_: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     if (nargs < 1 or nargs > 2 or args[0].tag != .string) return state.leaf_miss;
     const s = args[0].as(String);
-    if (!s.flags.ascii) return state.leaf_miss;
+    if (!s.flags().ascii) return state.leaf_miss;
     var i: i64 = 1;
     if (nargs == 2) {
         if (args[1].tag != .integer) return state.leaf_miss;
@@ -396,8 +396,8 @@ fn rep(l: *Thread) Error!u32 {
     const sep: ?*String = if (l.arg(3).isNil()) null else try aux.checkString(l, 3);
     const sb = s.bytes();
     const sepb: []const u8 = if (sep) |x| x.bytes() else "";
-    const sep_chars: usize = if (sep) |x| x.chars else 0;
-    const sep_ascii = if (sep) |x| x.flags.ascii else true;
+    const sep_chars: usize = if (sep) |x| x.chars() else 0;
+    const sep_ascii = if (sep) |x| x.flags().ascii else true;
     if (n <= 0 or (sb.len == 0 and sepb.len == 0)) return aux.retStr(l, "");
     // The size check runs in u64 so it holds where usize is 32 bits.
     const unit64: u64 = @as(u64, sb.len) + sepb.len;
@@ -435,8 +435,8 @@ fn rep(l: *Thread) Error!u32 {
         @memcpy(buf[off..][0..sb.len], sb);
         off += sb.len;
     }
-    const chars = count * s.chars + (count - 1) * sep_chars;
-    const ascii = s.flags.ascii and sep_ascii;
+    const chars = count * s.chars() + (count - 1) * sep_chars;
+    const ascii = s.flags().ascii and sep_ascii;
     const r = state.newStringKnown(l.g, buf, ascii, chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, r));
 }
@@ -444,7 +444,7 @@ fn rep(l: *Thread) Error!u32 {
 fn reverse(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
     const src = s.bytes();
-    if (s.flags.ascii) {
+    if (s.flags().ascii) {
         var sc: Scratch = .{};
         defer sc.deinit(l);
         const buf = try sc.get(l, src.len);
@@ -469,7 +469,7 @@ fn reverse(l: *Thread) Error!u32 {
 
 fn byte(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const n: usize = s.chars;
+    const n: usize = s.chars();
     const pi = try aux.optInt(l, 2, 1);
     const posi = posRelat(pi, n);
     const pose = try getEndPos(l, 3, pi, n);
@@ -478,7 +478,7 @@ fn byte(l: *Thread) Error!u32 {
     const count = pose - posi + 1;
     try l.ensure(count);
     const src = s.bytes();
-    if (s.flags.ascii) {
+    if (s.flags().ascii) {
         for (src[posi - 1 ..][0..count]) |c| try l.push(Value.int(c));
         return @intCast(count);
     }
@@ -532,7 +532,7 @@ fn isDefaultTrim(cp: u21) bool {
 fn inSet(cp: u21, set: ?*String) bool {
     const st = set orelse return isDefaultTrim(cp);
     const b = st.bytes();
-    if (st.flags.ascii) return cp < 0x80 and std.mem.indexOfScalar(u8, b, @intCast(cp)) != null;
+    if (st.flags().ascii) return cp < 0x80 and std.mem.indexOfScalar(u8, b, @intCast(cp)) != null;
     var i: usize = 0;
     while (i < b.len) {
         const d = wtf8.decodeValid(b, i);
@@ -585,7 +585,7 @@ fn split(l: *Thread) Error!u32 {
     const d = try aux.checkString(l, 2);
     const src = s.bytes();
     const delim = d.bytes();
-    const t = try l.newTable(if (delim.len == 0) s.chars else 0, 0);
+    const t = try l.newTable(if (delim.len == 0) s.chars() else 0, 0);
     try l.push(Value.obj(.table, t));
     var idx: i64 = 1;
     if (delim.len == 0) {
@@ -1232,14 +1232,14 @@ fn pushCaptures(l: *Thread, str: *String, m: anytype, s: ?usize, e: usize) Error
 /// Whether the bytewise matcher applies: the subject and the pattern are
 /// both ASCII.
 fn bothAscii(s: *const String, p: *const String) bool {
-    return s.flags.ascii and p.flags.ascii;
+    return s.flags().ascii and p.flags().ascii;
 }
 
 fn findAux(l: *Thread, is_find: bool) Error!u32 {
     const s = try aux.checkString(l, 1);
     const p = try aux.checkString(l, 2);
-    const init_c = posRelat(try aux.optInt(l, 3, 1), s.chars) - 1;
-    if (init_c > s.chars) return aux.retNil(l);
+    const init_c = posRelat(try aux.optInt(l, 3, 1), s.chars()) - 1;
+    if (init_c > s.chars()) return aux.retNil(l);
     const src = s.bytes();
     const pat = p.bytes();
     const init_b = charOffset(l, s, init_c);
@@ -1247,7 +1247,7 @@ fn findAux(l: *Thread, is_find: bool) Error!u32 {
         const rel = std.mem.indexOf(u8, src[init_b..], pat) orelse return aux.retNil(l);
         const start = init_c + charsIn(s, src[init_b..][0..rel]);
         try l.push(Value.int(@intCast(start + 1)));
-        try l.push(Value.int(@intCast(start + p.chars)));
+        try l.push(Value.int(@intCast(start + p.chars())));
         return 2;
     }
     if (bothAscii(s, p)) return findWith(MatcherFor(true), l, s, p, init_b, init_c, is_find);
@@ -1291,7 +1291,7 @@ fn search(comptime M: type, l: *Thread, m: *M, s: *String, p: *String, init_b: u
 }
 
 fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize, init_c: usize, is_find: bool) Error!u32 {
-    var m = M.init(s.bytes(), p.bytes(), s.flags.ascii);
+    var m = M.init(s.bytes(), p.bytes(), s.flags().ascii);
     const f = (try search(M, l, &m, s, p, init_b, init_c)) orelse return aux.retNil(l);
     if (is_find) {
         try l.push(Value.int(@intCast(f.start_c + 1)));
@@ -1314,8 +1314,8 @@ fn findLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     const plain = nargs == 4 and args[3].truthy();
     const s = args[0].as(String);
     const p = args[1].as(String);
-    const init_c = posRelat(init, s.chars) - 1;
-    if (init_c > s.chars) return .nil;
+    const init_c = posRelat(init, s.chars()) - 1;
+    if (init_c > s.chars()) return .nil;
     const src = s.bytes();
     const pat = p.bytes();
     const init_b = charOffset(l, s, init_c);
@@ -1325,10 +1325,10 @@ fn findLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     }
     const top = l.top;
     const f = (if (bothAscii(s, p)) blk: {
-        var m = MatcherFor(true).init(src, pat, s.flags.ascii);
+        var m = MatcherFor(true).init(src, pat, s.flags().ascii);
         break :blk search(MatcherFor(true), l, &m, s, p, init_b, init_c);
     } else blk: {
-        var m = Matcher.init(src, pat, s.flags.ascii);
+        var m = Matcher.init(src, pat, s.flags().ascii);
         break :blk search(Matcher, l, &m, s, p, init_b, init_c);
     }) catch {
         l.top = top;
@@ -1355,10 +1355,10 @@ const gm_last = 4; // end of the last match, or -1
 fn gmatch(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
     const p = try aux.checkString(l, 2);
-    const init_c = posRelat(try aux.optInt(l, 3, 1), s.chars) - 1;
+    const init_c = posRelat(try aux.optInt(l, 3, 1), s.chars()) - 1;
     var pos_b: usize = s.len + 1;
-    var pos_c: usize = s.chars + 1;
-    if (init_c <= s.chars) {
+    var pos_c: usize = s.chars() + 1;
+    if (init_c <= s.chars()) {
         pos_b = charOffset(l, s, init_c);
         pos_c = init_c;
     }
@@ -1383,7 +1383,7 @@ fn gmatchAux(l: *Thread) Error!u32 {
 fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String) Error!u32 {
     const src = s.bytes();
     const pat = p.bytes();
-    var m = M.init(src, pat, s.flags.ascii);
+    var m = M.init(src, pat, s.flags().ascii);
     const prefix = literalPrefix(pat, 0);
     const first: ?u128 = if (M == MatcherFor(true) and prefix.len == 0) firstSetCached(l, pat, 0) else null;
     var pos: usize = @intCast(ups[gm_pos].asInt());
@@ -1503,7 +1503,7 @@ fn gsub(l: *Thread) Error!u32 {
         .closure, .native => .function,
         else => return aux.typeError(l, 3, "string/function/table"),
     };
-    const max_s = try aux.optInt(l, 4, @as(i64, s.chars) + 1);
+    const max_s = try aux.optInt(l, 4, @as(i64, s.chars()) + 1);
     const r = if (bothAscii(s, p))
         try gsubWith(MatcherFor(true), l, s, p, kind, l.arg(3), max_s)
     else
@@ -1528,7 +1528,7 @@ fn gsubLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     const s = args[0].as(String);
     const p = args[1].as(String);
     const top = l.top;
-    const max_s = @as(i64, s.chars) + 1;
+    const max_s = @as(i64, s.chars()) + 1;
     const r = (if (bothAscii(s, p))
         gsubWith(MatcherFor(true), l, s, p, kind, repl, max_s)
     else
@@ -1548,7 +1548,7 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
     const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSetCached(l, pat, pstart) else null;
-    var m = M.init(src, pat, s.flags.ascii);
+    var m = M.init(src, pat, s.flags().ascii);
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
@@ -2067,7 +2067,7 @@ fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, arg
                 } else {
                     const sp = try parseSpec(l, form, spec, flags_char, true);
                     var to: usize = str.len;
-                    var chars: usize = str.chars;
+                    var chars: usize = str.chars();
                     if (sp.precision) |pr| if (pr < chars) {
                         to = charOffset(l, str, pr);
                         chars = pr;

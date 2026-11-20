@@ -12,15 +12,16 @@ const Blob = @import("blob.zig").Blob;
 // ---------------------------------------------------------------------
 // Strings
 
+/// A string takes a 16-byte header on 64-bit targets: the object header,
+/// whose spare bytes hold the flags of the string (`spare8`) and its
+/// count of characters (`spare32`), then its length in bytes and its
+/// hash. The bytes follow, with a terminating zero. A string that may
+/// need breadcrumbs keeps a pointer to them in a slot after its bytes
+/// (`crumbSlot`).
 pub const String = struct {
     hdr: Header,
     len: u32,
-    chars: u32,
     hash: u32,
-    flags: Flags,
-    /// Byte offset of every 64th character, built on first indexed access
-    /// for non-ASCII strings. Entry k is the offset of character 64*k.
-    crumbs: ?[*]u32 = null,
 
     pub const Flags = packed struct(u8) {
         ascii: bool = false,
@@ -33,8 +34,54 @@ pub const String = struct {
         cached: bool = false,
         /// The string was sent to a worker once without being cached.
         sent: bool = false,
-        _pad: u3 = 0,
+        /// The cell has a slot for the pointer to breadcrumbs.
+        crumb_slot: bool = false,
+        _pad: u2 = 0,
     };
+
+    /// The flags of the string, in the spare byte of its header.
+    pub inline fn flags(s: *const String) *Flags {
+        return @ptrCast(@constCast(&s.hdr.spare8));
+    }
+    /// The byte offset of the count of characters, which native code
+    /// reads as 32 bits.
+    pub const chars_offset = @offsetOf(String, "hdr") + @offsetOf(Header, "spare32");
+    /// The byte offset of the flags, which native code tests bit by bit.
+    pub const flags_offset = @offsetOf(String, "hdr") + @offsetOf(Header, "spare8");
+    /// The number of characters, in the spare word of the header.
+    pub inline fn chars(s: *const String) u32 {
+        return s.hdr.spare32;
+    }
+    pub inline fn setChars(s: *String, n: usize) void {
+        s.hdr.spare32 = @intCast(n);
+    }
+    /// True when a string with these contents may build breadcrumbs,
+    /// which only non-ASCII strings of more than `crumb_step` characters
+    /// do.
+    pub inline fn needsCrumbs(ascii: bool, n: usize) bool {
+        return !ascii and n > crumb_step;
+    }
+    /// The slot for the pointer to the breadcrumbs, after the bytes of
+    /// the string, or after the pointer to its blob.
+    inline fn crumbSlot(s: *const String) ?*?[*]u32 {
+        if (!s.flags().crumb_slot) return null;
+        const base: [*]u8 = @ptrCast(@constCast(s));
+        const off = if (s.flags().shared) @sizeOf(String) + @sizeOf(*Blob) else std.mem.alignForward(usize, @sizeOf(String) + s.len + 1, @alignOf(usize));
+        return @ptrCast(@alignCast(base + off));
+    }
+    /// The breadcrumbs, when they were built.
+    pub inline fn crumbs(s: *const String) ?[*]u32 {
+        const slot = s.crumbSlot() orelse return null;
+        return slot.*;
+    }
+    /// Clears the breadcrumb slot of a new string.
+    pub inline fn initCrumbs(s: *String) void {
+        if (s.crumbSlot()) |slot| slot.* = null;
+    }
+
+    comptime {
+        std.debug.assert(@sizeOf(usize) != 8 or @sizeOf(String) == 16);
+    }
 
     pub const short_max = 40;
     pub const crumb_step = 64;
@@ -42,7 +89,7 @@ pub const String = struct {
     pub const shared_size = @sizeOf(String) + @sizeOf(*Blob);
 
     pub inline fn bytes(s: *const String) []const u8 {
-        if (s.flags.shared) {
+        if (s.flags().shared) {
             @branchHint(.unlikely);
             return s.blob().bytes();
         }
@@ -50,16 +97,23 @@ pub const String = struct {
         return (base + @sizeOf(String))[0..s.len];
     }
     pub inline fn bytesMut(s: *String) []u8 {
-        std.debug.assert(!s.flags.shared);
+        std.debug.assert(!s.flags().shared);
         const base: [*]u8 = @ptrCast(s);
         return (base + @sizeOf(String))[0..s.len];
     }
     pub inline fn allocSize(len: usize) usize {
         return @sizeOf(String) + len + 1;
     }
+    /// The size of a cell of `len` bytes with a breadcrumb slot when
+    /// `slot` is set.
+    pub inline fn allocSizeWith(len: usize, slot: bool) usize {
+        if (!slot) return allocSize(len);
+        return std.mem.alignForward(usize, allocSize(len), @alignOf(usize)) + @sizeOf(usize);
+    }
     /// The size of the cell of `s`.
     pub inline fn cellSize(s: *const String) usize {
-        return if (s.flags.shared) shared_size else allocSize(s.len);
+        const slot: usize = if (s.flags().crumb_slot) @sizeOf(usize) else 0;
+        return if (s.flags().shared) shared_size + slot else allocSizeWith(s.len, s.flags().crumb_slot);
     }
     /// The blob of a shared string.
     pub inline fn blob(s: *const String) *Blob {
@@ -81,14 +135,14 @@ pub const String = struct {
     /// remembered positions make a scan that moves forward through a
     /// string cost the distance it moves.
     pub inline fn byteOffset(s: *String, gpa: *const std.mem.Allocator, ci: usize) usize {
-        if (s.flags.ascii or ci == 0) return ci;
-        if (ci >= s.chars) return s.len;
-        if (s.chars <= crumb_step) return wtf8.advance(s.bytes(), 0, ci);
-        const cr = s.crumbs orelse return s.firstOffset(gpa, ci);
+        if (s.flags().ascii or ci == 0) return ci;
+        if (ci >= s.chars()) return s.len;
+        if (s.chars() <= crumb_step) return wtf8.advance(s.bytes(), 0, ci);
+        const cr = s.crumbs() orelse return s.firstOffset(gpa, ci);
         // A range that starts a few characters after the last one, as
         // every step of a scan through a string does, is found from
         // where that one started, with no look at the breadcrumbs.
-        const n = crumbCount(s.chars);
+        const n = crumbCount(s.chars());
         const ahead = ci -% cr[n];
         if (ahead < near) {
             const off = wtf8.advance(s.bytes(), cr[n + 1], ahead);
@@ -110,13 +164,13 @@ pub const String = struct {
     /// `s:sub(i, i + 8)` does, finds its end from where the previous end
     /// was, which `byteOffset` remembers apart from where ranges start.
     pub inline fn endOffset(s: *String, ci: usize, from_ci: usize, from_off: usize) usize {
-        if (s.flags.ascii) return ci;
-        if (ci >= s.chars) return s.len;
-        const cr = s.crumbs orelse return wtf8.advance(s.bytes(), from_off, ci - from_ci);
+        if (s.flags().ascii) return ci;
+        if (ci >= s.chars()) return s.len;
+        const cr = s.crumbs() orelse return wtf8.advance(s.bytes(), from_off, ci - from_ci);
         // The previous end, when it lies between the start and `ci`, is
         // where the scan starts. Choosing it by a branch keeps the scan
         // from waiting for the offset of the start.
-        const n = crumbCount(s.chars);
+        const n = crumbCount(s.chars());
         const last = cr[n + 2];
         if (last >= from_ci and last <= ci) {
             const off = wtf8.advance(s.bytes(), cr[n + 3], ci - last);
@@ -133,7 +187,7 @@ pub const String = struct {
     /// positions found last. Slot 0 remembers where `byteOffset` looked
     /// and slot 1 where `endOffset` looked, and the result goes to `slot`.
     inline fn crumbOffset(s: *String, cr: [*]u32, ci: usize, comptime slot: u1, known_ci: usize, known: usize) usize {
-        const n = crumbCount(s.chars);
+        const n = crumbCount(s.chars());
         const k = ci / crumb_step;
         var at: usize = k * crumb_step;
         var off: usize = cr[k];
@@ -158,22 +212,22 @@ pub const String = struct {
     /// breadcrumbs.
     noinline fn firstOffset(s: *String, gpa: *const std.mem.Allocator, ci: usize) usize {
         s.buildCrumbs(gpa.*);
-        const cr = s.crumbs orelse return wtf8.advance(s.bytes(), 0, ci);
+        const cr = s.crumbs() orelse return wtf8.advance(s.bytes(), 0, ci);
         return s.crumbOffset(cr, ci, 0, 0, 0);
     }
 
     /// Number of breadcrumbs of a string with `chars` characters. The
     /// allocation holds four more words, the two positions found last as
     /// a character index and a byte offset each.
-    inline fn crumbCount(chars: usize) usize {
-        return chars / crumb_step + 1;
+    inline fn crumbCount(n_chars: usize) usize {
+        return n_chars / crumb_step + 1;
     }
 
     /// Words of the breadcrumb allocation past the breadcrumbs.
     const crumb_extra = 4;
 
     noinline fn buildCrumbs(s: *String, gpa: std.mem.Allocator) void {
-        const n = crumbCount(s.chars);
+        const n = crumbCount(s.chars());
         const cr = gpa.alloc(u32, n + crumb_extra) catch return;
         const b = s.bytes();
         var off: usize = 0;
@@ -184,11 +238,12 @@ pub const String = struct {
             cr[k] = @intCast(off);
         }
         @memset(cr[n..], 0);
-        s.crumbs = cr.ptr;
+        const slot = s.crumbSlot() orelse return gpa.free(cr);
+        slot.* = cr.ptr;
     }
 
     pub fn freeExtra(s: *String, gpa: std.mem.Allocator) void {
-        if (s.crumbs) |cr| gpa.free(cr[0 .. crumbCount(s.chars) + crumb_extra]);
+        if (s.crumbs()) |cr| gpa.free(cr[0 .. crumbCount(s.chars()) + crumb_extra]);
     }
 };
 

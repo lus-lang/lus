@@ -2005,7 +2005,7 @@ pub const fast = struct {
         if (x.tag == .table and x.as(Table).metatable == null) {
             out.* = Value.int(table.length(x.as(Table)));
         } else if (x.tag == .string) {
-            out.* = Value.int(x.as(String).chars);
+            out.* = Value.int(x.as(String).chars());
         } else return false;
         return true;
     }

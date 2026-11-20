@@ -86,7 +86,7 @@ fn bigEqual(x: *const numeric.BigInt, y: *const numeric.BigInt) bool {
 /// short results of concatenation, which are interned only when they
 /// become table keys (`ops.rawSet`).
 fn longStringEqual(x: *object.String, y: *object.String) bool {
-    if (x.flags.interned and y.flags.interned) return false;
+    if (x.flags().interned and y.flags().interned) return false;
     return x.len == y.len and x.hash == y.hash and std.mem.eql(u8, x.bytes(), y.bytes());
 }
 
@@ -310,7 +310,7 @@ pub inline fn findStr(t: *Table, s: *object.String) ?usize {
         const kt = t.keyTag(i);
         if (kt == .string) {
             if (t.hash_ptr[i].key == @intFromPtr(s)) return i;
-            if (!s.flags.interned and longStrEqual(t.hash_ptr[i].key, s)) return i;
+            if (!s.flags().interned and longStrEqual(t.hash_ptr[i].key, s)) return i;
         }
         if (kt == .nil) return null;
     }
@@ -324,7 +324,7 @@ noinline fn findStrFull(t: *Table, s: *object.String) ?usize {
     for (0..t.hash_len) |_| {
         if (t.keyTag(i) == .string) {
             if (t.hash_ptr[i].key == @intFromPtr(s)) return i;
-            if (!s.flags.interned and longStrEqual(t.hash_ptr[i].key, s)) return i;
+            if (!s.flags().interned and longStrEqual(t.hash_ptr[i].key, s)) return i;
         }
         i = (i + 1) & mask;
     }
@@ -361,7 +361,7 @@ pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
     // small (`full_max`), so a key that it holds is found by visiting
     // every node once, and a new key takes the general path.
     if (t.hash_used >= t.hash_len) {
-        if (!s.flags.interned) return null;
+        if (!s.flags().interned) return null;
         const i = findStrFull(t, s) orelse return null;
         t.setVal(i, val.*);
         return i;
@@ -372,12 +372,12 @@ pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
         const kt = t.keyTag(i);
         if (kt == .string) {
             if (t.hash_ptr[i].key == @intFromPtr(s)) break;
-            if (!s.flags.interned) return null;
+            if (!s.flags().interned) return null;
         } else if (kt == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
             // Every short key is interned, which `ops.rawSet` sees to.
-            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash_len) or !s.flags.interned) return null;
+            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash_len) or !s.flags().interned) return null;
             t.setKey(i, key.*);
             t.hash_used += 1;
             break;

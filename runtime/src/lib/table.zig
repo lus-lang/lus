@@ -219,7 +219,7 @@ fn move(l: *Thread) Error!u32 {
 /// not start with a trail surrogate, which would pair with a lead
 /// surrogate at the end of that piece.
 fn joinsPlainly(s: *String) bool {
-    return s.flags.ascii or @import("../vm/wtf8.zig").leadingTrailSurrogate(s.bytes()) == null;
+    return s.flags().ascii or @import("../vm/wtf8.zig").leadingTrailSurrogate(s.bytes()) == null;
 }
 
 fn concat(l: *Thread) Error!u32 {
@@ -247,7 +247,7 @@ fn concat(l: *Thread) Error!u32 {
         // that starts with a trail surrogate may join the piece before
         // it, and it takes the general path.
         var exact = !sep_given or joinsPlainly(sep.as(String));
-        var ascii_all = !sep_given or sep.as(String).flags.ascii;
+        var ascii_all = !sep_given or sep.as(String).flags().ascii;
         var chars_all: usize = 0;
         var j = i;
         while (true) : (j += 1) {
@@ -261,12 +261,12 @@ fn concat(l: *Thread) Error!u32 {
             if (v.tag == .string) {
                 const str = v.as(String);
                 exact = exact and joinsPlainly(str);
-                ascii_all = ascii_all and str.flags.ascii;
-                chars_all += str.chars;
+                ascii_all = ascii_all and str.flags().ascii;
+                chars_all += str.chars();
             } else exact = false;
             if (j == last) break;
             room += sep_room;
-            if (sep_given) chars_all += sep.as(String).chars;
+            if (sep_given) chars_all += sep.as(String).chars();
         }
         if (exact and room > String.short_max) {
             const r = state.newLongUninit(l.g, room) catch return l.raiseMem();
