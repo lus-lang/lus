@@ -6,38 +6,43 @@ const acquis = manual
   .filter((p) => p.data.acquis)
   .toSorted((a, b) => a.data.order - b.data.order)
 
-const stable = acquis.filter((p) => !p.data.draft)
-const unstable = acquis.filter((p) => p.data.draft)
+// "Acquis 12 - AST" sets as the number 12 beside the name AST
+function split(title: string) {
+  const m = /^Acquis (\d+)(?: - (.+))?$/.exec(title)
+  return m ? { no: m[1], name: m[2] ?? "" } : { no: "", name: title }
+}
+
+const columns = [
+  { label: "Stable", red: false, pages: acquis.filter((p) => !p.data.draft) },
+  { label: "Unstable", red: true, pages: acquis.filter((p) => p.data.draft) },
+].filter((c) => c.pages.length > 0)
 ---
 
 <div class="acquis-columns">
-  <div>
-    {stable.length > 0 && <h3>Stable</h3>}
-    <ul>
-      {
-        stable.map((p) => (
-          <li>
-            <a href={`/manual/${p.id}`}>{p.data.title}</a>
-            {p.data.shortdesc && `: ${p.data.shortdesc}`}
-          </li>
-        ))
-      }
-    </ul>
-  </div>
   {
-    unstable.length > 0 && (
+    columns.map((c) => (
       <div>
-        <h3>Unstable</h3>
-        <ul>
-          {unstable.map((p) => (
-            <li>
-              <a href={`/manual/${p.id}`}>{p.data.title}</a>
-              {p.data.shortdesc && `: ${p.data.shortdesc}`}
-            </li>
-          ))}
-        </ul>
+        <h3>
+          <span class:list={["tag", { red: c.red }]}>{c.label}</span>
+        </h3>
+        <ol class="acquis-ledger">
+          {c.pages.map((p) => {
+            const { no, name } = split(p.data.title)
+            return (
+              <li>
+                <a href={`/manual/${p.id}`}>
+                  <span class="k">{no}</span>
+                  <span class="t">
+                    {name && <b>{name}</b>}
+                    {p.data.shortdesc && <span>{p.data.shortdesc}</span>}
+                  </span>
+                </a>
+              </li>
+            )
+          })}
+        </ol>
       </div>
-    )
+    ))
   }
 </div>
 
@@ -45,16 +50,38 @@ const unstable = acquis.filter((p) => p.data.draft)
   @reference "../styles/global.css";
 
   .acquis-columns {
-    @apply flex gap-6;
+    @apply grid gap-x-12 gap-y-6 md:grid-cols-2 mt-6;
+  }
 
-    > div {
-      @apply flex-1;
+  h3 {
+    @apply m-0 mb-2;
+  }
+
+  .acquis-ledger {
+    @apply list-none pl-0 space-y-0;
+
+    a {
+      @apply flex gap-3 items-baseline py-1.5 no-underline font-normal text-ink hover:bg-accent-soft;
+    }
+
+    .k {
+      @apply font-display font-extrabold text-lg leading-none tracking-[-0.04em] w-7 shrink-0 text-right;
+    }
+
+    .t {
+      @apply flex flex-col text-sm;
+
+      b {
+        @apply font-semibold;
+      }
+
+      span {
+        @apply text-ink-2;
+      }
     }
   }
 
-  @media (max-width: 768px) {
-    .acquis-columns {
-      @apply flex-col;
-    }
+  :global(html.unstable) .acquis-ledger a {
+    @apply text-ink-red hover:bg-accent-soft-red;
   }
 </style>

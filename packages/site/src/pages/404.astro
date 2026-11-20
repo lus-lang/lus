@@ -8,9 +8,9 @@ import Layout from "../components/Layout.astro"
 >
   <main id="main">
     <section>
-      <h1>404: page not found</h1>
-      <p>This page doesn't exist.</p>
-      <ul>
+      <h1 class="page-title">404: page not found</h1>
+      <p class="lead">This page doesn't exist.</p>
+      <ul class="ways">
         <li><a href="/manual">Manual</a>: every documentation page</li>
         <li>
           <a href="/manual/api">API reference</a>: the standard library, filterable
@@ -25,3 +25,23 @@ import Layout from "../components/Layout.astro"
     </section>
   </main>
 </Layout>
+
+<style>
+  @reference "../styles/global.css";
+
+  .lead {
+    @apply text-xl text-ink-2 pb-2.5 mb-3 border-b-2 border-rule max-w-[48.5rem];
+  }
+
+  .ways {
+    @apply list-none pl-0 space-y-0 text-ink-2;
+
+    li {
+      @apply py-1;
+    }
+
+    a {
+      @apply font-semibold text-ink no-underline hover:bg-accent-soft;
+    }
+  }
+</style>

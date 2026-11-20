@@ -94,22 +94,22 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
   @reference "../styles/global.css";
 
   .api-search {
-    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2 border-b border-ink/10;
+    @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2;
 
     input {
-      @apply border border-ink/25 rounded-md bg-paper px-3 py-1.5 w-full max-w-md font-mono text-sm;
+      @apply border border-ink rounded-md bg-field px-3 py-1.5 w-full max-w-md font-mono text-sm;
 
       &::placeholder {
-        @apply text-ink/70;
+        @apply text-ink-3;
       }
     }
 
     #api-search-count {
-      @apply text-sm text-ink/70 font-mono min-w-0;
+      @apply text-sm text-ink-3 font-mono min-w-0;
     }
 
     .api-search-hint {
-      @apply basis-full font-mono text-xs text-ink/70;
+      @apply basis-full font-mono text-xs text-ink-3;
 
       code {
         @apply bg-tint px-1;
@@ -130,7 +130,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     @apply mb-3;
 
     summary {
-      @apply font-mono text-xs uppercase tracking-widest text-ink/70 cursor-pointer select-none py-1.5;
+      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 cursor-pointer select-none py-1.5;
     }
   }
 
@@ -163,7 +163,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     }
 
     .api-kind {
-      @apply block font-mono text-[10px] uppercase tracking-widest text-ink/70;
+      @apply block font-mono text-[10px] uppercase tracking-[0.1em] text-ink-3;
     }
 
     p {

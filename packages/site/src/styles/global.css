@@ -52,7 +52,7 @@
 **    Reference pages run full width.
 **  - Red is the unstable channel and errors, never decoration. The red
 **    mirror covers what renders under html.unstable: global primitives,
-**    Layout chrome, ManualLayout, Button and Card with data-color="red".
+**    Layout chrome and ManualLayout.
 **  - The playground keeps its own dark chrome in both schemes and opts
 **    out of the night tokens with html.fixed-scheme.
 **  - Reference badge palette lives here as .api-badge-* (sanctioned
@@ -190,7 +190,11 @@ main {
   @apply bg-figure text-figure-ink border-t-2 border-ink m-0;
 
   figcaption {
-    @apply flex justify-between gap-3 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-3 px-3 pt-1.5;
+    @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-3 px-3 pt-1.5;
+
+    > * {
+      @apply whitespace-nowrap;
+    }
 
     a {
       @apply normal-case tracking-normal no-underline font-normal text-link px-1.5 -mx-1.5 py-1 -my-1 hover:text-ink;
@@ -220,6 +224,10 @@ main {
 
   &.red {
     @apply bg-accent-soft-red text-link-red;
+  }
+
+  &.soft {
+    @apply bg-accent-soft text-ink;
   }
 }
 
