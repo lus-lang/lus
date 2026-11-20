@@ -212,7 +212,9 @@ if (fallen) {
 }
 
 const [gx, gy] = point(source.i + 0.5, source.j + 0.5, source.k + 0.5)
-const uid = `cf${cols}x${rows}s${seed}${signal}`
+// ids name every input of the drawing, so no two different fields share
+// a filter or gradient
+const uid = `cf${cols}x${rows}s${seed}a${Math.round(at * 100)}h${Math.round(amp * 10)}${signal}${heights ? `d${heights.join("")}` : ""}`
 const lightOn = glow && signal !== "none"
 
 // consecutive shapes of one linked bar (a bar and its lime cap) share one
