@@ -56,6 +56,7 @@ byKey.reference.unshift(
           {group.rows.map((row) => (
             <a class="hub-row" href={row.href}>
               <span class="hub-title">{row.title}</span>
+              <i aria-hidden="true" />
               <span class="hub-desc">{row.shortdesc}</span>
             </a>
           ))}
@@ -68,19 +69,24 @@ byKey.reference.unshift(
 <style>
   @reference "../../styles/global.css";
 
+  /* a book index: title, dotted leader, description */
   .hub-rows {
-    @apply flex flex-col gap-2 mb-6;
+    @apply flex flex-col mb-2;
   }
 
   .hub-row {
-    @apply flex flex-col sm:flex-row sm:items-baseline gap-x-4 gap-y-0.5 border border-ink/15 rounded-lg bg-paper p-3 no-underline hover:bg-accent-soft active:bg-accent-soft;
+    @apply flex flex-col sm:flex-row sm:items-baseline gap-x-2 gap-y-0.5 py-1.5 border-b border-ink/15 no-underline hover:bg-accent-soft;
 
     .hub-title {
-      @apply font-semibold text-ink shrink-0 min-w-36;
+      @apply font-semibold text-ink shrink-0;
+    }
+
+    i {
+      @apply hidden sm:block flex-1 min-w-6 border-b border-dotted border-ink/30 -translate-y-[3px];
     }
 
     .hub-desc {
-      @apply text-sm text-ink/80 font-normal;
+      @apply text-sm text-ink-2 font-normal sm:text-right;
     }
   }
 </style>

@@ -33,7 +33,10 @@ interface TocEntry {
   text: string
   children: { slug: string; text: string }[]
 }
-const headings = rendered.headings.filter((h) => h.depth >= 2 && h.depth <= 3)
+// heading text carries the appended "#" self-link, which the outlines drop
+const headings = rendered.headings
+  .filter((h) => h.depth >= 2 && h.depth <= 3)
+  .map((h) => ({ ...h, text: h.text.replace(/#$/, "").trim() }))
 const toc: TocEntry[] = []
 for (const h of headings) {
   if (h.depth === 2 || toc.length === 0) {
@@ -46,7 +49,7 @@ for (const h of headings) {
 
 // h2-level outline for the sticky sidebar (survives scrolling, unlike
 // the collapsible contents box)
-const sidebarToc = rendered.headings
+const sidebarToc = headings
   .filter((h) => h.depth === 2)
   .map((h) => ({ slug: h.slug, text: h.text }))
 ---
@@ -125,30 +128,30 @@ const sidebarToc = rendered.headings
   @reference "../../styles/global.css";
 
   .crumb {
-    @apply font-mono text-xs uppercase tracking-widest text-ink/70;
+    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 pt-2;
 
     a {
-      @apply font-normal no-underline text-link hover:bg-accent-soft;
+      @apply font-semibold no-underline text-link hover:text-ink;
     }
   }
 
   .draft-notice {
-    @apply border border-ink-red/30 rounded-lg bg-tint-red text-ink-red font-semibold px-3 py-1.5 mb-3 text-sm;
+    @apply border-t-2 border-ink-red bg-tint-red text-ink-red font-semibold px-3 py-1.5 mb-3 text-sm;
 
     a {
-      @apply text-link-red hover:bg-accent-soft-red;
+      @apply text-link-red;
     }
   }
 
   .toc {
-    @apply border border-ink/15 rounded-lg bg-tint px-3 py-1.5 mb-4;
+    @apply border-y border-ink mb-6;
 
     summary {
-      @apply font-mono text-xs uppercase tracking-widest text-ink/70 cursor-pointer select-none py-1.5;
+      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 cursor-pointer select-none py-2;
     }
 
     ol {
-      @apply list-none pl-0 mt-1 mb-1.5 sm:columns-2 xl:columns-3 gap-x-6 space-y-0;
+      @apply list-none pl-0 mt-0 mb-2 sm:columns-2 xl:columns-3 gap-x-6 space-y-0;
     }
 
     ol ol {
@@ -156,64 +159,69 @@ const sidebarToc = rendered.headings
     }
 
     li {
-      @apply break-inside-avoid py-0.5;
+      @apply break-inside-avoid py-px text-sm;
     }
 
     .toc-h2 > a {
-      @apply font-semibold;
+      @apply font-semibold text-ink;
     }
 
     .toc-h3 {
-      @apply pl-4;
+      @apply pl-3;
     }
 
     a {
-      @apply text-link font-normal no-underline hover:bg-accent-soft;
+      @apply text-ink-2 font-normal no-underline hover:bg-accent-soft hover:text-ink;
     }
   }
 
   .pager {
-    @apply grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 pt-4 border-t border-ink/15;
+    @apply grid grid-cols-1 sm:grid-cols-2 mt-12 border-t-2 border-ink;
 
     .pager-link {
-      @apply flex flex-col gap-0.5 border border-ink/15 rounded-lg bg-paper p-3 no-underline hover:bg-accent-soft active:bg-accent-soft;
+      @apply flex flex-col gap-0.5 py-2 no-underline hover:bg-accent-soft;
     }
 
     .pager-right {
-      @apply sm:text-right;
+      @apply sm:text-right sm:border-l sm:border-ink/30;
     }
 
     .pager-label {
-      @apply font-mono text-xs uppercase tracking-widest text-ink/70;
+      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3;
     }
 
     .pager-title {
-      @apply font-semibold text-ink;
+      @apply font-display font-bold text-lg tracking-[-0.02em] text-ink;
     }
   }
 
   :global(html.unstable) {
     .crumb a {
-      @apply text-link-red hover:bg-accent-soft-red;
+      @apply text-link-red;
     }
 
     .toc {
-      @apply border-ink-red/15 bg-tint-red;
+      @apply border-ink-red;
 
       summary {
         @apply text-ink-red/70;
       }
 
+      .toc-h2 > a,
       a {
-        @apply text-link-red hover:bg-accent-soft-red;
+        @apply text-ink-red;
       }
     }
 
     .pager {
-      @apply border-ink-red/15;
+      @apply border-ink-red;
 
       .pager-link {
-        @apply border-ink-red/15 hover:bg-accent-soft-red active:bg-accent-soft-red;
+        @apply hover:bg-accent-soft-red;
+      }
+
+      .pager-right {
+        @apply sm:border-ink-red/30;
       }
 
       .pager-label {

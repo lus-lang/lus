@@ -48,7 +48,8 @@
 **    pt-7 pb-3, rows py-1 to py-1.5, figures px-3. The page shell is
 **    max-w-[1240px] with a 24px gutter (16px on phones).
 **  - Measure: long-form prose (manual chapters, news) caps at 80ch via
-**    `measured`. Reference pages run full width.
+**    `measured` (48.5rem, fixed so headings and rules share the prose
+**    edge). Reference pages run full width.
 **  - Red is the unstable channel and errors, never decoration. The red
 **    mirror covers what renders under html.unstable: global primitives,
 **    Layout chrome, ManualLayout, Button and Card with data-color="red".
