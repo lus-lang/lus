@@ -16,6 +16,7 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `messages.lus`: sends a 1 MB string 2,000 times and a table of 10,000 strings of 100 bytes 300 times to a worker, which replies with the length of each message. Strings over 64 bytes travel as shared blobs (`spec/design/workers.md`).
 - `startup.lus`: creates 2,000 workers with an empty body one after the other. Each worker starts a state and opens the standard library, so this measures how fast a state starts (`spec/design/snapshot.md`).
 - `fullgc.lus`: builds a graph of a million live tables and collects it in full ten times, which measures marking while the program waits. On native targets those collections mark on several threads (`spec/design/gc.md`).
+- `http_serve.lus`: an HTTP server on `network.serve` that 64 client coroutines send 100,000 requests to over loopback, all in one process. It measures the scheduler, the sockets as suspension points, and the request parser together. LuaJIT has no counterpart, so its columns show dashes.
 - `gcpause.lus`: builds and drops a 50 MB object graph four times. Besides its run time, it prints the longest gap between two loop iterations, which bounds the longest collector pause. Run it directly to see that number.
 
 The runner times every benchmark under each runtime it finds and prints the best wall time of several runs. Build the runtime with ReleaseFast before measuring.
@@ -68,3 +69,17 @@ With the JIT off, the interpreter is ahead of the interpreter of LuaJIT on every
 Strings over 64 bytes travel between workers as shared blobs (`spec/design/workers.md`), and before blobs `messages` took 0.40 s. `fullgc` marks on several threads (`spec/design/gc.md`), and on one thread it takes 0.110 s.
 
 The `lus off` column moves by a few percent between builds with the code layout of the interpreter loop. Compare the Lus columns of one build with each other, and read instruction counts for a change to the loop (`runtime/HACKING.md`).
+
+## The HTTP server against Node
+
+`http_serve.lus` also runs as a plain server when it receives a port, and `http_serve.js` is the same server on the `http` module of Node. Both answer every request with the same 14 bytes and a `Content-Type` header. An external load generator such as `oha` compares them.
+
+```sh
+runtime/zig-out/bin/lus tests/bench/http_serve.lus 8080 &
+oha -z 10s -c 64 --no-tui http://127.0.0.1:8080/
+
+node tests/bench/http_serve.js 8081 &
+oha -z 10s -c 64 --no-tui http://127.0.0.1:8081/
+```
+
+`spec/design/coroutines.md` records the numbers this comparison gave.
