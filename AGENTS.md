@@ -17,6 +17,7 @@ Monorepository for the Lus programming language, a Lua 5.5 derivative. The runti
 - **`/examples`**: Runnable examples, shown on the site and in the playground
 - **`/packaging`**: Install scripts, release anchors, third-party notices, and dependency licenses
 - **`/tools`**: Generators (spec to LSP data, spec to grammar) and the repository lint
+- **`/.agents`**: Agent skills (`lus`, `lus-rewrite`), the `llms.txt` index, and agent prompts. `.claude/skills/` links into `.agents/skills/`, and `spec/design/agents.md` describes the design
 
 The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. In a fresh clone, run `mise trust` once so mise reads `mise.toml`, then `mise install` for the toolchain. Run `mise tasks` to list the tasks.
 
@@ -42,7 +43,7 @@ mise run wasm:test     # build lus.wasm and run its host tests
 mise run wasm:conformance
 ```
 
-The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test ../tests/conformance ../packages/language-server/tests` from `runtime/`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec` runs the code blocks of the manual and the spec.
+The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test ../tests/conformance ../packages/language-server/tests` from `runtime/`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec ../.agents` runs the code blocks of the manual, the spec, and the agent skills.
 
 ### Website
 

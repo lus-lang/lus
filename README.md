@@ -25,6 +25,7 @@ This is a monorepository containing the following projects:
 - [**`/examples`**](examples): Examples of Lus syntax
 - [**`/packaging`**](packaging): Install scripts, notices, and dependency licenses
 - [**`/tools`**](tools): Generators and repository checks
+- [**`/.agents`**](.agents): Skills and documentation index for coding agents
 
 Tasks run through [mise](https://mise.jdx.dev). In a fresh clone, run `mise trust` and `mise install` once, then `mise tasks` to list them.
 
