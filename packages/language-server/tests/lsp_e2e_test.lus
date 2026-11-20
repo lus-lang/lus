@@ -1,6 +1,6 @@
 -- The language server modules are required under the name `lus-language`. A searcher maps
 -- that name onto the package directory next to the tests.
-local LANG_DIR = string.match(TEST_DIR, "^(.*)/[^/]*$")
+local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
 pledge("load", "fs:read=" .. LANG_DIR .. "/*")
 

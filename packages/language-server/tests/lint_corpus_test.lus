@@ -1,9 +1,9 @@
 -- The language server modules are required under the name `lus-language`. A searcher maps
 -- that name onto the package directory next to the tests.
-local LANG_DIR = string.match(TEST_DIR, "^(.*)/[^/]*$")
+local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
 -- The linted corpus is the conformance suite under tests/conformance in the repository root.
-local ROOT = string.match(LANG_DIR, "^(.*)/packages/[^/]*$")
+local ROOT = string.match(LANG_DIR, "^(.*)[/\\]packages[/\\][^/\\]*$")
 local CORPUS = ROOT .. "/tests/conformance"
 
 pledge("load", "fs:read=" .. LANG_DIR .. "/*", "fs:read=" .. CORPUS, "fs:read=" .. CORPUS .. "/*")
