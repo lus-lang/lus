@@ -242,7 +242,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       <nav class="index" aria-label="Standard library modules">
         {
           stdlibMap.map((mod) => (
-            <a href={mod.href}>
+            <a href={mod.href} class="cube-hover">
               <b>{mod.name}</b>
               <i aria-hidden="true" />
               <span>{mod.desc}</span>

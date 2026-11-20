@@ -61,7 +61,7 @@ const skylineHeights = skyline(manual.filter((p) => !p.data.acquis && p.data.gro
         <h2>{group.label}</h2>
         <div class="hub-rows">
           {group.rows.map((row) => (
-            <a class="hub-row" href={row.href}>
+            <a class="hub-row cube-hover" href={row.href}>
               <span class="hub-title">{row.title}</span>
               <i aria-hidden="true" />
               <span class="hub-desc">{row.shortdesc}</span>
