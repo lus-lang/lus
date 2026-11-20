@@ -5,7 +5,7 @@
     "memory_gb": 36
   },
   "os": "macOS 27.2.1",
-  "date": "2026-11-20T01:03:03.588Z",
+  "date": "2026-11-20T03:04:28.747Z",
   "runs": 5,
   "size": "full",
   "runtimes": {
@@ -386,12 +386,12 @@
   },
   "http": {
     "lus": {
-      "rps": 44513,
-      "p50_ms": 1.429,
-      "p99_ms": 1.64,
+      "rps": 132462,
+      "p50_ms": 0.487,
+      "p99_ms": 0.589,
       "errors": 0,
-      "idle_rss_mb": 5.2,
-      "peak_rss_mb": 12.7,
+      "idle_rss_mb": 3.8,
+      "peak_rss_mb": 16.4,
       "ok": true
     },
     "python": {
@@ -404,21 +404,21 @@
       "ok": true
     },
     "node": {
-      "rps": 99775,
-      "p50_ms": 0.606,
-      "p99_ms": 1.265,
+      "rps": 88287,
+      "p50_ms": 0.678,
+      "p99_ms": 1.506,
       "errors": 0,
-      "idle_rss_mb": 43.5,
-      "peak_rss_mb": 82.2,
+      "idle_rss_mb": 44,
+      "peak_rss_mb": 82.8,
       "ok": true
     },
     "bun": {
-      "rps": 128094,
-      "p50_ms": 0.481,
-      "p99_ms": 0.996,
+      "rps": 122943,
+      "p50_ms": 0.504,
+      "p99_ms": 1.049,
       "errors": 0,
       "idle_rss_mb": 24.8,
-      "peak_rss_mb": 37,
+      "peak_rss_mb": 36,
       "ok": true
     },
     "ruby": {
