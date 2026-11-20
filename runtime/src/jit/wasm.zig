@@ -2373,7 +2373,7 @@ const Emitter = struct {
         e.i32c(tl.kind_boxed);
         e.op(W.i32_eq);
         e.brIf(0);
-        // An unboxed part takes a number or string of its own kind whose
+        // An unboxed part takes a value of its own kind whose
         // bits are not the nil word. Anything else changes the part or
         // writes the nil word, which the step routine does.
         e.get(L.t2);

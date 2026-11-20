@@ -605,9 +605,9 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 
 /// `resize` for a store of `val` under `key` that follows it. When the key
 /// lands in the new array part, the part takes a kind that admits the
-/// value, so a new array part that receives a table is made boxed
-/// instead of made unboxed and boxed again, and one that receives a
-/// string takes the `string` kind.
+/// value. A new array part that receives a string takes the `string`
+/// kind, one that receives a table takes the `table` kind, and one that
+/// receives a value no unboxed kind holds is made boxed directly.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     const hsize = hashSizeFor(hcount);
     const old_kind = t.kind;

@@ -1356,7 +1356,7 @@ pub const Emitter = struct {
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
         a.load8(A.t4, tagOf(v));
         a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
-        // An unboxed part takes a number or string of its own kind whose
+        // An unboxed part takes a value of its own kind whose
         // bits are not the nil word. Anything else changes the part or
         // writes the nil word, which the helper does.
         a.jumpIf(.ne, A.t3, A.t4, miss);
