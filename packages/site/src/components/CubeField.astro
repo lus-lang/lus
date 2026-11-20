@@ -3,13 +3,19 @@
 ** CubeField: a field of cube bars, the shape of the Lus mark, drawn at
 ** build time as SVG in oblique projection. Bars run left to right and
 ** recede up and to the right in a few rows, every unit carries a ruler
-** tick, and the field tapers to single cubes at both ends. The tallest
-** bar is capped by the one lime cube, whose light tints the bars around
-** it and, where asked, glows through a grain filter. Faces take the
-** design tokens, so the field follows the color scheme.
+** tick, and a landscape tapers to single cubes at both ends.
+**
+** One bar wears the lime cube: the tallest, or the one `limeAt` names. Its
+** light tints the bars around it and, where `glow` is on, spreads as a
+** smooth wash on paper and a grain glow at night. A fallen signal drops
+** the cube to the ground and leaves a dashed ghost in its place. Faces
+** take the design tokens, so the field follows the color scheme and the
+** unstable red.
 **
 ** Heights come from a swell with ripples, or from `heights` when a page
-** has data of its own to show (one bar per entry, front row).
+** has data of its own to show, one bar per entry in the front row. Such
+** readouts can link each bar to its entry, and carry data-j so the page
+** can light a bar while its entry is pointed at.
 */
 interface Props {
   class?: string
