@@ -449,11 +449,41 @@ const ProcessTree = struct {
         }
     }
 
-    /// Kills what remains of the tree once its child has ended.
-    fn release(tree: ProcessTree) void {
+    /// Whether `settle` can wait for the leader without reaping it.
+    const can_settle = switch (@import("builtin").os.tag) {
+        .linux, .macos, .ios, .tvos, .watchos, .visionos => true,
+        else => false,
+    };
+
+    /// Waits until the leader of the group has exited and kills the rest
+    /// of the group, on POSIX systems that can wait for a child without
+    /// reaping it. The leader stays a zombie until it is reaped, which
+    /// keeps its process group id from naming another group. Returns
+    /// false when the group was left as it was.
+    fn settle(tree: ProcessTree) bool {
+        if (comptime windows or !can_settle) return false;
+        const p_pid: c_int = 1;
+        const wexited: c_int = 0x4;
+        const wnowait: c_int = if (@import("builtin").os.tag == .linux) 0x01000000 else 0x20;
+        var info: [256]u8 align(16) = undefined;
+        while (posix_wait.waitid(p_pid, @intCast(tree.id), &info, wexited | wnowait) != 0) {
+            if (std.posix.errno(-1) != .INTR) return false;
+        }
         tree.kill();
+        return true;
+    }
+
+    /// Kills what remains of the tree once its child has ended. A group
+    /// that `settle` already killed is not signalled again, since its
+    /// leader may be reaped and its id reused.
+    fn release(tree: ProcessTree, settled: bool) void {
+        if (!settled) tree.kill();
         if (comptime windows) std.os.windows.CloseHandle(tree.id);
     }
+};
+
+const posix_wait = struct {
+    extern "c" fn waitid(idtype: c_int, id: c_uint, info: *anyopaque, options: c_int) c_int;
 };
 
 const win = if (windows) struct {
@@ -535,11 +565,12 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
         if (slot.killed_at != null) if (tree) |t| t.kill();
     }
     // Every way out kills what remains of the processes of the file.
+    var settled = false;
     defer {
         pool.lock();
         defer pool.unlock();
         slot.tree = null;
-        if (tree) |t| t.release();
+        if (tree) |t| t.release(settled);
     }
 
     var streams: std.Io.File.MultiReader.Buffer(2) = undefined;
@@ -558,6 +589,16 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
         else => |e| return e,
     }
     try reader.checkAnyError();
+    // The rest of the group dies before the leader is reaped, and the
+    // watchdog no longer signals a group whose leader may be gone.
+    if (tree) |t| {
+        if (t.settle()) {
+            settled = true;
+            pool.lock();
+            defer pool.unlock();
+            slot.tree = null;
+        }
+    }
     const term = try child.wait(io);
     const stdout = try reader.toOwnedSlice(0);
     defer gpa.free(stdout);
