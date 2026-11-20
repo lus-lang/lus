@@ -35,7 +35,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "byte", .func = byte, .leaf = byteLeaf },
     .{ .name = "char", .func = char },
     .{ .name = "find", .func = find, .leaf = findLeaf, .leaf_first = true },
-    .{ .name = "format", .func = format },
+    .{ .name = "format", .func = format, .leaf = formatLeaf },
     .{ .name = "gmatch", .func = gmatch },
     .{ .name = "gsub", .func = gsub, .leaf = gsubLeaf, .leaf_first = true },
     .{ .name = "join", .func = join },
@@ -169,7 +169,7 @@ const Builder = struct {
     inline fn append(b: *Builder, bytes: []const u8) Error!void {
         const room = b.buf.unusedCapacitySlice();
         if (bytes.len <= room.len and (bytes.len == 0 or bytes[0] != 0xED)) {
-            @memcpy(room[0..bytes.len], bytes);
+            ops.copyBytes(room, bytes);
             b.buf.items.len += bytes.len;
             return;
         }
@@ -1902,11 +1902,53 @@ fn addLiteral(l: *Thread, b: *Builder, arg: u32) Error!void {
 }
 
 fn format(l: *Thread) Error!u32 {
-    const top = l.argCount();
     const fmt = (try aux.checkString(l, 1)).bytes();
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
+    try formatInto(false, l, &b, fmt, l.stack[l.base()..][0..l.argCount()]);
+    return aux.ret(l, try b.finish());
+}
+
+/// `string.format` without a frame, for arguments that are numbers and
+/// strings. Anything that needs a conversion with a metamethod, `%q`, an
+/// exact integer, or an error takes the full native.
+fn formatLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    if (nargs < 1 or args[0].tag != .string) return state.leaf_miss;
+    const top = l.top;
+    var b: Builder = undefined;
+    b.init(l);
+    defer b.deinit();
+    formatInto(true, l, &b, args[0].as(String).bytes(), args[0..nargs]) catch {
+        l.top = top;
+        return state.leaf_miss;
+    };
+    return b.finish() catch {
+        l.top = top;
+        return state.leaf_miss;
+    };
+}
+
+/// The conversions of `string.format` over `args`, whose first value is
+/// the format string. The leaf form accepts only plain numbers and
+/// strings, and fails without a message on anything else.
+fn fmtInt64(comptime leaf: bool, l: *Thread, args: []const Value, arg: u32) Error!i64 {
+    const v = args[arg - 1];
+    if (v.tag == .integer) return v.asInt();
+    if (leaf) return error.LusError;
+    return aux.checkInt(l, arg);
+}
+
+fn fmtFloat64(comptime leaf: bool, l: *Thread, args: []const Value, arg: u32) Error!f64 {
+    const v = args[arg - 1];
+    if (v.tag == .float) return v.asFloat();
+    if (v.tag == .integer) return @floatFromInt(v.asInt());
+    if (leaf) return error.LusError;
+    return aux.checkFloat(l, arg);
+}
+
+fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, args: []const Value) Error!void {
+    const top: u32 = @intCast(args.len);
     var arg: u32 = 1;
     var i: usize = 0;
     while (i < fmt.len) {
@@ -1920,7 +1962,7 @@ fn format(l: *Thread) Error!u32 {
             continue;
         }
         arg += 1;
-        if (arg > top) return aux.argError(l, arg, "no value", .{});
+        if (arg > top) return if (leaf) error.LusError else aux.argError(l, arg, "no value", .{});
         var k = i;
         while (k < fmt.len and std.mem.indexOfScalar(u8, "-+#0 123456789.", fmt[k]) != null) k += 1;
         const spec = fmt[i..k];
@@ -1932,11 +1974,11 @@ fn format(l: *Thread) Error!u32 {
         switch (conv) {
             'c' => {
                 const sp = try parseSpec(l, form, spec, flags_char, false);
-                const c = try aux.checkInt(l, arg);
+                const c = try fmtInt64(leaf, l, args, arg);
                 if (c < 0 or c > 0x10FFFF) return aux.argError(l, arg, "value out of range", .{});
                 var tmp: [4]u8 = undefined;
                 const n = wtf8.encode(@intCast(c), &tmp);
-                try pad(&b, sp, "", tmp[0..n], 1, false);
+                try pad(b, sp, "", tmp[0..n], 1, false);
             },
             'd', 'i', 'u', 'o', 'x', 'X' => {
                 const flags = switch (conv) {
@@ -1944,48 +1986,53 @@ fn format(l: *Thread) Error!u32 {
                     'u' => flags_uint,
                     else => flags_hex,
                 };
-                const v = l.arg(arg);
+                const v = args[arg - 1];
                 if (v.tag == .bigint and (conv == 'd' or conv == 'i')) {
+                    if (leaf) return error.LusError;
                     // Arbitrary precision integers print all their digits.
                     const sp = try parseSpec(l, form, spec, flags, true);
                     const str = numeric.bigToString(l.g.gpa, v.as(numeric.BigInt)) catch return l.raiseMem();
                     defer l.g.gpa.free(str);
                     const neg = str.len > 0 and str[0] == '-';
-                    try fmtIntDigits(&b, sp, conv, neg, if (neg) str[1..] else str);
+                    try fmtIntDigits(b, sp, conv, neg, if (neg) str[1..] else str);
                 } else {
-                    const n = try aux.checkInt(l, arg);
+                    const n = try fmtInt64(leaf, l, args, arg);
                     const sp = try parseSpec(l, form, spec, flags, true);
-                    try fmtInt(&b, sp, conv, n);
+                    try fmtInt(b, sp, conv, n);
                 }
             },
             'a', 'A' => {
                 const sp = try parseSpec(l, form, spec, flags_float, true);
-                try fmtHexFloat(&b, sp, conv, try aux.checkFloat(l, arg));
+                try fmtHexFloat(b, sp, conv, try fmtFloat64(leaf, l, args, arg));
             },
             'e', 'E', 'f', 'F', 'g', 'G' => {
-                const f = try aux.checkFloat(l, arg);
+                const f = try fmtFloat64(leaf, l, args, arg);
                 const sp = try parseSpec(l, form, spec, flags_float, true);
-                try fmtFloat(&b, sp, conv, f);
+                try fmtFloat(b, sp, conv, f);
             },
             'p' => {
                 const sp = try parseSpec(l, form, spec, flags_char, false);
-                const v = l.arg(arg);
+                const v = args[arg - 1];
                 if (v.tag.isCollectable()) {
                     var tmp: [24]u8 = undefined;
                     const s = std.fmt.bufPrint(&tmp, "0x{x}", .{v.payload}) catch unreachable;
-                    try pad(&b, sp, "", s, s.len, false);
+                    try pad(b, sp, "", s, s.len, false);
                 } else {
-                    try pad(&b, sp, "", "(null)", 6, false);
+                    try pad(b, sp, "", "(null)", 6, false);
                 }
             },
             'q' => {
+                if (leaf) return error.LusError;
                 if (spec.len != 0) return l.raiseFmt("specifier '%q' cannot have modifiers", .{});
-                try addLiteral(l, &b, arg);
+                try addLiteral(l, b, arg);
             },
             's' => {
-                const str = try ops.toString(l, l.arg(arg));
-                // Root the converted string in the argument slot.
-                l.stack[l.base() + arg - 1] = Value.obj(.string, str);
+                const sv = args[arg - 1];
+                if (leaf and sv.tag != .string and sv.tag != .integer and sv.tag != .float) return error.LusError;
+                const str = if (sv.tag == .string) sv.as(String) else try ops.toString(l, sv);
+                // Root the converted string in the argument slot. The
+                // leaf copies it before anything else allocates.
+                if (!leaf) l.stack[l.base() + arg - 1] = Value.obj(.string, str);
                 if (spec.len == 0) {
                     try b.append(str.bytes());
                 } else {
@@ -1996,13 +2043,12 @@ fn format(l: *Thread) Error!u32 {
                         to = charOffset(l, str, pr);
                         chars = pr;
                     };
-                    try pad(&b, sp, "", str.bytes()[0..to], chars, false);
+                    try pad(b, sp, "", str.bytes()[0..to], chars, false);
                 }
             },
             else => return l.raiseFmt("invalid conversion '{s}' to 'format'", .{form}),
         }
     }
-    return aux.ret(l, try b.finish());
 }
 
 // ---------------------------------------------------------------------
