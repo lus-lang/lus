@@ -94,6 +94,10 @@ pub const Task = struct {
     /// True for a thread whose native runs the scheduler while it waits.
     /// An event only sets `wake` on it.
     driver: bool = false,
+    /// True while the thread waits for a handle that the poller of the
+    /// system took no registration for. The scheduler polls such handles
+    /// itself (`pollLoose`).
+    loose: bool = false,
     /// Links of the run queue or of a list of waiters.
     prev: ?*Task = null,
     next: ?*Task = null,
@@ -167,6 +171,12 @@ pub const Sched = struct {
     timers: std.ArrayList(Timer) = .empty,
     ios: std.AutoHashMapUnmanaged(usize, IoEntry) = .empty,
     io_waiters: usize = 0,
+    /// How many of the waiters wait for a handle that the poller of the
+    /// system does not watch.
+    loose: usize = 0,
+    /// Counts the waits that ended, so a caller can tell whether a call
+    /// woke anything.
+    wakes: usize = 0,
     poller: Poller = .{},
     /// Set while the error of a detached coroutine that nothing collected
     /// stops the program. No handler catches an error while it is set.
@@ -460,8 +470,16 @@ fn register(g: *Global, r: *Task, leaf: *Task) void {
             const gop = s.ios.getOrPut(g.gpa, key) catch return wakeNow(g, r);
             if (!gop.found_existing) gop.value_ptr.* = .{};
             if (!s.poller.arm(g, leaf.handle, leaf.dir, gop.value_ptr)) {
-                if (!Poller.persistent and gop.value_ptr.waiters.head == null) _ = s.ios.remove(key);
-                return wakeNow(g, r);
+                if (!Poller.persistent) {
+                    if (gop.value_ptr.waiters.head == null) _ = s.ios.remove(key);
+                    return wakeNow(g, r);
+                }
+                // The poller of the system could not be created or took
+                // no registration, as when the process has no descriptor
+                // left. The scheduler polls this handle itself, so the
+                // wait keeps its deadline and the other coroutines run.
+                r.loose = true;
+                s.loose += 1;
             }
             gop.value_ptr.waiters.append(r);
             s.io_waiters += 1;
@@ -504,6 +522,10 @@ fn unregister(g: *Global, r: *Task) void {
                 s.io_waiters -= 1;
                 if (!Poller.persistent and e.waiters.head == null) _ = s.ios.remove(key);
             }
+            if (r.loose) {
+                r.loose = false;
+                s.loose -= 1;
+            }
         },
         .join => if (r.reg_target) |tt| tt.joiners.remove(r),
     }
@@ -521,6 +543,7 @@ fn enqueue(g: *Global, t: *Task, entry: Entry) void {
 
 /// Ends the wait of `r` with `w`.
 fn wake(g: *Global, r: *Task, w: Wake) void {
+    g.sched.wakes +%= 1;
     unregister(g, r);
     leafOf(r).wake = w;
     if (r.driver) return;
@@ -773,7 +796,7 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
         if (s.nlive == 0 and (l.task == null or !l.task.?.driver)) return;
         return l.raiseFmt("deadlock: every coroutine waits for another coroutine", .{});
     }
-    if (s.io_waiters > 0 or s.notified or (timeout orelse 1) != 0) s.poller.wait(g, timeout);
+    if (s.io_waiters > 0 or s.notified or (timeout orelse 1) != 0) pollWait(g, timeout);
     fireTimers(g);
 }
 
@@ -939,6 +962,66 @@ pub fn readyNow(handle: Handle, dir: Dir) bool {
     return pollOne(handle, dir, 0);
 }
 
+/// Waits for the next event, for at most `timeout` nanoseconds.
+fn pollWait(g: *Global, timeout: ?u64) void {
+    if (comptime Poller.persistent) {
+        if (g.sched.loose > 0) return pollLoose(g, timeout);
+    }
+    g.sched.poller.wait(g, timeout);
+}
+
+/// Sleeps for at most `limit_ms` milliseconds of `timeout`.
+fn nap(timeout: ?u64, limit_ms: i32) void {
+    var none: [0]posix.pollfd = .{};
+    _ = posix.poll(&none, @min(millisOf(timeout), limit_ms)) catch {};
+}
+
+/// The wait of a scheduler whose system poller is missing or took no
+/// registration for some handles. It asks `poll` about those handles and
+/// about the descriptor of the system poller, which is readable when the
+/// poller has events. A wait with nothing to watch sleeps until the next
+/// deadline.
+fn pollLoose(g: *Global, timeout: ?u64) void {
+    const s = &g.sched;
+    const pfd = s.poller.descriptor();
+    if (pfd >= 0) {
+        // The poller takes its pending registrations and reports what is
+        // ready already.
+        const before = s.wakes;
+        s.poller.wait(g, 0);
+        if (s.wakes != before) return;
+    }
+    var fds: std.ArrayList(posix.pollfd) = .empty;
+    defer fds.deinit(g.gpa);
+    var it = s.ios.iterator();
+    while (it.next()) |e| {
+        if (e.value_ptr.registered or e.value_ptr.waiters.head == null) continue;
+        const key = e.key_ptr.*;
+        fds.append(g.gpa, .{
+            .fd = @intCast(key >> 1),
+            .events = if (key & 1 != 0) posix.POLL.OUT else posix.POLL.IN,
+            .revents = 0,
+        }) catch {
+            nap(timeout, 10);
+            return wakeAllIo(g);
+        };
+    }
+    const nloose = fds.items.len;
+    if (pfd >= 0) fds.append(g.gpa, .{ .fd = pfd, .events = posix.POLL.IN, .revents = 0 }) catch {};
+    if (fds.items.len == 0 and timeout == null) return;
+    const n = posix.poll(fds.items, millisOf(timeout)) catch {
+        nap(timeout, 10);
+        return wakeAllIo(g);
+    };
+    if (n == 0) return;
+    for (fds.items[0..nloose]) |fd| {
+        if (fd.revents == 0) continue;
+        const dir: usize = @intFromBool(fd.events == posix.POLL.OUT);
+        wakeIo(g, (@as(usize, @intCast(fd.fd)) << 1) | dir);
+    }
+    if (fds.items.len > nloose and fds.items[nloose].revents != 0) s.poller.wait(g, 0);
+}
+
 const Poller = switch (os) {
     .macos, .ios, .tvos, .watchos, .visionos, .maccatalyst, .driverkit, .freebsd, .netbsd, .openbsd, .dragonfly => Kqueue,
     .linux => Epoll,
@@ -1013,8 +1096,12 @@ const Kqueue = struct {
         p.wait(g, 0);
     }
 
+    fn descriptor(p: *Kqueue) posix.fd_t {
+        return p.kq;
+    }
+
     fn wait(p: *Kqueue, g: *Global, timeout: ?u64) void {
-        if (!p.open(g)) return wakeAllIo(g);
+        if (!p.open(g)) return pollLoose(g, timeout);
         var ts: posix.timespec = undefined;
         const tsp: ?*const posix.timespec = if (timeout) |ns| blk: {
             ts = timespecOf(ns);
@@ -1136,8 +1223,12 @@ const Epoll = struct {
         return true;
     }
 
+    fn descriptor(p: *Epoll) posix.fd_t {
+        return p.ep;
+    }
+
     fn wait(p: *Epoll, g: *Global, timeout: ?u64) void {
-        if (!p.open()) return wakeAllIo(g);
+        if (!p.open()) return pollLoose(g, timeout);
         var events: [64]linux.epoll_event = undefined;
         const rc = linux.epoll_wait(p.ep, &events, events.len, millisOf(timeout));
         switch (linux.errno(rc)) {

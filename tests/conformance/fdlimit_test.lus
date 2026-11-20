@@ -1,0 +1,89 @@
+-- What the scheduler and `network.serve` do when the process has no
+-- file descriptor left (spec/design/coroutines.md). Each test runs a
+-- script in a child process whose shell lowers the descriptor limit, so
+-- the tests need a POSIX shell.
+pledge("load", "fs", "exec", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local windows = package.config:sub(1, 1) == "\\"
+local script_number = 0
+
+local function shell_quote(value)
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+-- Runs `source` with at most `limit` open descriptors and returns its
+-- output. A script that cannot bind a loopback socket prints
+-- "unavailable", which skips the test.
+local function run_limited(limit, source)
+    if windows then
+        skip("needs a POSIX shell")
+    end
+    script_number = script_number + 1
+    local path = `fdlimit_$(script_number).lus`
+    local file = assert(io.open(path, "wb"))
+    assert(file:write(source))
+    assert(file:close())
+    local command = `ulimit -n $(limit) && exec $(shell_quote(lus_bin)) $(shell_quote(path)) 2>&1`
+    local handle = assert(io.popen(command))
+    local output = handle:read("a")
+    handle:close()
+    catch fs.remove(path)
+    if string.find(output, "unavailable", 1, true) then
+        skip("loopback sockets unavailable")
+    end
+    return output
+end
+
+-- The first lines of every script: a connected pair of sockets, and then
+-- sockets that use up the descriptors that are left.
+local prelude = [[
+    pledge("network")
+    local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+    local bound, server = catch network.tcp.bind("127.0.0.1", 0)
+    if not bound then
+        print("unavailable")
+        return
+    end
+    local _, port = server:getsockname()
+    local client = network.tcp.connect("127.0.0.1", port)
+    local peer = server:accept()
+    local function use_up()
+        local hog = {}
+        while true do
+            local ok, sock = catch network.udp.open(0)
+            if not ok then
+                return hog
+            end
+            hog[#hog + 1] = sock
+        end
+    end
+]]
+
+-- The poller of the system needs a descriptor. Without one the scheduler
+-- polls the sockets itself: a timeout fires on time, the wait uses no
+-- processor time, and a byte that arrives wakes its reader.
+local function waits_work_without_a_descriptor_for_the_poller_test()
+    local output = run_limited(40, prelude .. [[
+        local hog = use_up()
+        local cpu = os.clock()
+        local reader = detach(create(function()
+            peer:settimeout(0.2)
+            return catch peer:receive(1)
+        end))
+        local ok, received, err = resume(reader)
+        print("timeout:", ok, received, (string.gsub(tostring(err), "^.*: ", "")))
+        print("idle:", os.clock() - cpu < 0.1)
+        local second = detach(create(function()
+            peer:settimeout(10)
+            return vector.tostring(peer:receive(1))
+        end))
+        local writer = detach(create(function()
+            yield()
+            client:send("x")
+        end))
+        print("byte:", resume(second))
+        print("writer:", resume(writer))
+    ]])
+    assert(output == "timeout:\ttrue\tfalse\treceive timeout\nidle:\ttrue\nbyte:\ttrue\tx\nwriter:\ttrue\n", output)
+end
