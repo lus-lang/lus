@@ -12,7 +12,9 @@
 //! interpreter running the tests.
 //!
 //! Each file runs in its own child process inside a fresh temporary
-//! directory, with a timeout, and files run in parallel.
+//! directory, and files run in parallel. The result of a file is printed
+//! as soon as it ends. A file that writes no output for the timeout is
+//! reported as timed out, and every process it started is killed.
 
 const std = @import("std");
 const lus = @import("../lus.zig");
@@ -154,92 +156,305 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     const exe = try std.process.executablePathAlloc(io, gpa);
     defer gpa.free(exe);
     const results = try gpa.alloc(FileResult, files.items.len);
-    defer {
-        for (results) |*r| {
-            r.report.deinit(gpa);
-            r.records.deinit(gpa);
-        }
-        gpa.free(results);
-    }
     for (results, files.items) |*r, f| r.* = .{ .path = f };
+    // Every file can need a worker of its own when the workers before it
+    // were left behind, so there is a slot per file.
+    const slots = try gpa.alloc(Slot, results.len);
+    for (slots) |*s| s.* = .{};
+    var pool: Pool = .{ .gpa = gpa, .io = io, .exe = exe, .o = o, .results = results, .slots = slots };
     const jobs = if (o.jobs > 0) o.jobs else @max(std.Thread.getCpuCount() catch 4, 1);
-    var next = std.atomic.Value(usize).init(0);
-    const Worker = struct {
-        fn work(ctx: *const Ctx) void {
-            while (true) {
-                const idx = ctx.next.fetchAdd(1, .monotonic);
-                if (idx >= ctx.results.len) return;
-                runChild(ctx, &ctx.results[idx]) catch |e| {
-                    ctx.results[idx].crashed = true;
-                    ctx.results[idx].report.print(ctx.gpa, "runner error: {s}\n", .{@errorName(e)}) catch {};
-                };
-            }
-        }
-    };
-    const ctx: Ctx = .{ .gpa = gpa, .io = io, .exe = exe, .results = results, .next = &next, .o = o };
-    var threads: std.ArrayList(std.Thread) = .empty;
-    defer threads.deinit(gpa);
-    var t: usize = 0;
-    while (t < @min(jobs, results.len)) : (t += 1) {
-        try threads.append(gpa, try std.Thread.spawn(.{}, Worker.work, .{&ctx}));
-    }
-    for (threads.items) |th| th.join();
+    pool.lock();
+    while (pool.workers < @min(jobs, results.len)) try pool.startWorker();
+    pool.unlock();
+    pool.watch();
 
-    // Report.
     var passed: usize = 0;
     var failed: usize = 0;
     var skipped: usize = 0;
     var bad_files: usize = 0;
-    var report: std.ArrayList(u8) = .empty;
-    defer report.deinit(gpa);
+    var broken: usize = 0;
     for (results) |*r| {
         passed += r.passed;
         failed += r.failed;
         skipped += r.skipped;
-        const ok = r.failed == 0 and !r.crashed and !r.timed_out;
-        if (!ok) bad_files += 1;
-        if (o.json) {
-            try report.appendSlice(gpa, r.records.items);
-            continue;
-        }
-        const mark = if (ok) "ok  " else "FAIL";
-        try report.print(gpa, "{s} {s} ({d} passed", .{ mark, r.path, r.passed });
-        if (r.failed > 0) try report.print(gpa, ", {d} failed", .{r.failed});
-        if (r.skipped > 0) try report.print(gpa, ", {d} skipped", .{r.skipped});
-        try report.print(gpa, ", {d} ms)\n", .{r.millis});
-        if (!ok or o.verbose) try report.appendSlice(gpa, r.report.items);
-    }
-    if (!o.json) {
-        try report.print(gpa, "\n{d} files, {d} passed, {d} failed, {d} skipped", .{ results.len, passed, failed, skipped });
+        if (r.failed > 0 or r.crashed or r.timed_out) bad_files += 1;
         // A file that crashed, timed out, or failed to load runs no test,
         // so the summary counts it apart from failed tests.
-        var broken: usize = 0;
-        for (results) |*r| {
-            if (r.crashed or r.timed_out) broken += 1;
-        }
+        if (r.crashed or r.timed_out) broken += 1;
+    }
+    var report: std.ArrayList(u8) = .empty;
+    defer report.deinit(gpa);
+    if (!o.json) {
+        try report.print(gpa, "\n{d} files, {d} passed, {d} failed, {d} skipped", .{ results.len, passed, failed, skipped });
         if (broken > 0) try report.print(gpa, ", {d} {s} with errors", .{ broken, if (broken == 1) "file" else "files" });
         try report.append(gpa, '\n');
     }
     std.Io.File.stdout().writeStreamingAll(io, report.items) catch {};
-    return if (bad_files == 0) 0 else 1;
+    const code: u8 = if (bad_files == 0) 0 else 1;
+    // A worker left behind may still hold its file, so the process ends
+    // here without waiting for it or freeing what it might touch.
+    if (pool.left_behind) std.process.exit(code);
+    for (pool.threads.items) |th| th.join();
+    pool.threads.deinit(gpa);
+    gpa.free(slots);
+    for (results) |*r| {
+        r.report.deinit(gpa);
+        r.records.deinit(gpa);
+    }
+    gpa.free(results);
+    return code;
 }
 
-const Ctx = struct {
+/// How long a file that was killed for its timeout has to end before
+/// the runner reports it and moves on without its worker.
+const grace_ns: i96 = 5 * std.time.ns_per_s;
+
+fn nowNs(io: std.Io) i96 {
+    return std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+}
+
+/// What the workers and the watchdog share. `mutex` guards every field
+/// after it and the slots.
+const Pool = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     exe: []const u8,
-    results: []FileResult,
-    next: *std.atomic.Value(usize),
     o: *Options,
+    results: []FileResult,
+    slots: []Slot,
+    mutex: std.Io.Mutex = .init,
+    /// The index of the next file to pool.
+    next: usize = 0,
+    /// How many files have been reported.
+    finished: usize = 0,
+    /// How many slots have a worker.
+    workers: usize = 0,
+    /// True when the watchdog reported a file whose worker never came back.
+    left_behind: bool = false,
+    threads: std.ArrayList(std.Thread) = .empty,
+
+    fn lock(pool: *Pool) void {
+        pool.mutex.lockUncancelable(pool.io);
+    }
+
+    fn unlock(pool: *Pool) void {
+        pool.mutex.unlock(pool.io);
+    }
+
+    /// Starts a worker on the next free slot. The caller holds the lock.
+    fn startWorker(pool: *Pool) !void {
+        const index = pool.workers;
+        try pool.threads.ensureUnusedCapacity(pool.gpa, 1);
+        pool.threads.appendAssumeCapacity(try std.Thread.spawn(.{}, work, .{ pool, &pool.slots[index] }));
+        pool.workers += 1;
+    }
+
+    /// Prints the result of a file as soon as it is known. Each result
+    /// is one unbuffered write, so it reaches a pipe or a log at once.
+    /// The caller holds the lock.
+    fn publish(pool: *Pool, r: *const FileResult) void {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(pool.gpa);
+        formatResult(pool.gpa, pool.o, r, &text) catch {};
+        std.Io.File.stdout().writeStreamingAll(pool.io, text.items) catch {};
+        pool.finished += 1;
+    }
+
+    /// Records that the file of `slot` made progress, which restarts its
+    /// timeout.
+    fn touch(pool: *Pool, slot: *Slot) void {
+        pool.lock();
+        defer pool.unlock();
+        slot.active_at = nowNs(pool.io);
+    }
+
+    fn work(pool: *Pool, slot: *Slot) void {
+        while (true) {
+            pool.lock();
+            if (slot.left or pool.next >= pool.results.len) {
+                pool.unlock();
+                return;
+            }
+            const index = pool.next;
+            pool.next += 1;
+            slot.* = .{ .file = index, .active_at = nowNs(pool.io) };
+            pool.unlock();
+            var r: FileResult = .{ .path = pool.results[index].path };
+            runChild(pool, slot, &r) catch |e| {
+                r.crashed = true;
+                r.report.print(pool.gpa, "runner error: {s}\n", .{@errorName(e)}) catch {};
+            };
+            pool.lock();
+            const left = slot.left;
+            if (!left) {
+                pool.results[index] = r;
+                pool.publish(&pool.results[index]);
+                slot.file = null;
+            }
+            pool.unlock();
+            if (left) {
+                r.report.deinit(pool.gpa);
+                r.records.deinit(pool.gpa);
+                return;
+            }
+        }
+    }
+
+    /// Runs on the main thread until every file is reported. A file
+    /// whose child shows no progress for the timeout has its whole
+    /// process tree killed. When its worker still has not come back after
+    /// the grace period, because a call it made blocks in the system,
+    /// the file is reported as timed out and a new worker takes the rest
+    /// of the files.
+    fn watch(pool: *Pool) void {
+        const timeout_ns = @as(i96, pool.o.timeout_s) * std.time.ns_per_s;
+        while (true) {
+            pool.lock();
+            if (pool.finished == pool.results.len) {
+                pool.unlock();
+                return;
+            }
+            const t = nowNs(pool.io);
+            for (pool.slots[0..pool.workers]) |*slot| {
+                const index = slot.file orelse continue;
+                if (slot.left) continue;
+                if (slot.killed_at) |k| {
+                    if (t - k < grace_ns) continue;
+                    slot.left = true;
+                    slot.file = null;
+                    pool.left_behind = true;
+                    const r = &pool.results[index];
+                    r.timed_out = true;
+                    r.report.print(pool.gpa, "  timed out after {d} s, and the runner left it behind when it did not stop\n", .{pool.o.timeout_s}) catch {};
+                    pool.publish(r);
+                    if (pool.next < pool.results.len) pool.startWorker() catch pool.failRest();
+                } else if (t - slot.active_at >= timeout_ns) {
+                    slot.killed_at = t;
+                    if (slot.tree) |tree| tree.kill();
+                }
+            }
+            pool.unlock();
+            pool.io.sleep(.fromMilliseconds(50), .awake) catch {};
+        }
+    }
+
+    /// Reports every file not yet started as a runner error, when no
+    /// worker could be started for them. The caller holds the lock.
+    fn failRest(pool: *Pool) void {
+        while (pool.next < pool.results.len) : (pool.next += 1) {
+            const r = &pool.results[pool.next];
+            r.crashed = true;
+            r.report.print(pool.gpa, "runner error: no worker could start\n", .{}) catch {};
+            pool.publish(r);
+        }
+    }
 };
 
-fn runChild(ctx: *const Ctx, r: *FileResult) !void {
-    const gpa = ctx.gpa;
-    const io = ctx.io;
+/// The file a worker runs and what the watchdog knows about it.
+const Slot = struct {
+    file: ?usize = null,
+    /// When the file started or last wrote output.
+    active_at: i96 = 0,
+    /// The processes of the file, once its child runs.
+    tree: ?ProcessTree = null,
+    /// When the watchdog killed the processes of the file.
+    killed_at: ?i96 = null,
+    /// True when the watchdog reported the file without its worker.
+    left: bool = false,
+};
+
+const windows = @import("builtin").os.tag == .windows;
+
+/// The processes that one test file starts. The child that runs a file
+/// leads a process group of its own on POSIX systems and runs in a job
+/// object on Windows. Every process it starts through `io.popen` or
+/// `os.execute` joins that group or job, so the runner can stop all of
+/// them when the file times out and when it ends.
+const ProcessTree = struct {
+    id: if (windows) std.os.windows.HANDLE else std.posix.pid_t,
+
+    /// Takes in a child that was started suspended on Windows and lets
+    /// it pool. Returns null when no job object could hold it, and the
+    /// child then runs without one.
+    fn adopt(child: *std.process.Child) ?ProcessTree {
+        if (comptime !windows) return .{ .id = child.id.? };
+        defer _ = win.ResumeThread(child.thread_handle);
+        const job = win.CreateJobObjectW(null, null) orelse return null;
+        var limits = std.mem.zeroes(win.ExtendedLimit);
+        limits.basic.LimitFlags = win.kill_on_job_close;
+        if (!win.SetInformationJobObject(job, win.extended_limit_information, &limits, @sizeOf(win.ExtendedLimit)).toBool() or
+            !win.AssignProcessToJobObject(job, child.id.?).toBool())
+        {
+            std.os.windows.CloseHandle(job);
+            return null;
+        }
+        return .{ .id = job };
+    }
+
+    fn kill(tree: ProcessTree) void {
+        if (comptime windows) {
+            _ = win.TerminateJobObject(tree.id, 124);
+        } else {
+            _ = std.posix.system.kill(-tree.id, .KILL);
+        }
+    }
+
+    /// Kills what remains of the tree once its child has ended.
+    fn release(tree: ProcessTree) void {
+        tree.kill();
+        if (comptime windows) std.os.windows.CloseHandle(tree.id);
+    }
+};
+
+const win = if (windows) struct {
+    const w = std.os.windows;
+    const kill_on_job_close: u32 = 0x2000;
+    const extended_limit_information: c_int = 9;
+    const BasicLimit = extern struct {
+        PerProcessUserTimeLimit: i64,
+        PerJobUserTimeLimit: i64,
+        LimitFlags: u32,
+        MinimumWorkingSetSize: usize,
+        MaximumWorkingSetSize: usize,
+        ActiveProcessLimit: u32,
+        Affinity: usize,
+        PriorityClass: u32,
+        SchedulingClass: u32,
+    };
+    const ExtendedLimit = extern struct {
+        basic: BasicLimit,
+        io_counters: [6]u64,
+        ProcessMemoryLimit: usize,
+        JobMemoryLimit: usize,
+        PeakProcessMemoryUsed: usize,
+        PeakJobMemoryUsed: usize,
+    };
+    extern "kernel32" fn CreateJobObjectW(attributes: ?*anyopaque, name: ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
+    extern "kernel32" fn SetInformationJobObject(job: w.HANDLE, class: c_int, info: *const anyopaque, len: u32) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn AssignProcessToJobObject(job: w.HANDLE, process: w.HANDLE) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn TerminateJobObject(job: w.HANDLE, code: u32) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn ResumeThread(thread: w.HANDLE) callconv(.winapi) u32;
+} else struct {};
+
+/// Appends the lines that report one file.
+fn formatResult(gpa: std.mem.Allocator, o: *const Options, r: *const FileResult, text: *std.ArrayList(u8)) !void {
+    if (o.json) return text.appendSlice(gpa, r.records.items);
+    const ok = r.failed == 0 and !r.crashed and !r.timed_out;
+    const mark = if (ok) "ok  " else "FAIL";
+    try text.print(gpa, "{s} {s} ({d} passed", .{ mark, r.path, r.passed });
+    if (r.failed > 0) try text.print(gpa, ", {d} failed", .{r.failed});
+    if (r.skipped > 0) try text.print(gpa, ", {d} skipped", .{r.skipped});
+    try text.print(gpa, ", {d} ms)\n", .{r.millis});
+    if (!ok or o.verbose) try text.appendSlice(gpa, r.report.items);
+}
+
+fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
+    const gpa = pool.gpa;
+    const io = pool.io;
     const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, r.path, gpa);
     defer gpa.free(abs);
     // A fresh working directory per file.
-    const tmp_root = ctx.o.tmp_root;
+    const tmp_root = pool.o.tmp_root;
     var rnd: [8]u8 = undefined;
     io.random(&rnd);
     const dir = try std.fmt.allocPrint(gpa, "{s}/lus-test-{x}", .{ std.mem.trimEnd(u8, tmp_root, "/"), std.mem.readInt(u64, &rnd, .little) });
@@ -248,30 +463,67 @@ fn runChild(ctx: *const Ctx, r: *FileResult) !void {
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, &.{ ctx.exe, "test", "--run-one", abs });
-    if (ctx.o.update) try argv.append(gpa, "-u");
-    if (ctx.o.filter) |f| try argv.appendSlice(gpa, &.{ "--filter", f });
+    try argv.appendSlice(gpa, &.{ pool.exe, "test", "--run-one", abs });
+    if (pool.o.update) try argv.append(gpa, "-u");
+    if (pool.o.filter) |f| try argv.appendSlice(gpa, &.{ "--filter", f });
     const start = std.Io.Clock.Timestamp.now(io, .awake);
-    const res = std.process.run(gpa, io, .{
+    var child = try std.process.spawn(io, .{
         .argv = argv.items,
         .cwd = .{ .path = dir },
-        .timeout = .{ .duration = .{ .raw = .fromSeconds(ctx.o.timeout_s), .clock = .awake } },
-    }) catch |e| {
-        if (e == error.Timeout) {
-            r.timed_out = true;
-            try r.report.print(gpa, "  timed out after {d} s\n", .{ctx.o.timeout_s});
-            return;
-        }
-        return e;
-    };
-    defer gpa.free(res.stdout);
-    defer gpa.free(res.stderr);
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .pgid = if (comptime windows) null else 0,
+        .start_suspended = windows,
+    });
+    defer if (child.id != null) child.kill(io);
+    const tree = ProcessTree.adopt(&child);
+    {
+        pool.lock();
+        defer pool.unlock();
+        slot.tree = tree;
+        if (slot.killed_at != null) if (tree) |t| t.kill();
+    }
+    // Every way out kills what remains of the processes of the file.
+    defer {
+        pool.lock();
+        defer pool.unlock();
+        slot.tree = null;
+        if (tree) |t| t.release();
+    }
+
+    var streams: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var reader: std.Io.File.MultiReader = undefined;
+    reader.init(gpa, io, streams.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer reader.deinit();
+    // On an error the processes die before the reader is torn down, so
+    // no read it still has pending waits on a writer that lives on.
+    errdefer if (tree) |t| t.kill();
+    // The reads wait without a timeout. The watchdog kills the processes
+    // of a file that stops making progress, which closes the pipes.
+    while (reader.fill(64, .none)) |_| {
+        pool.touch(slot);
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+    try reader.checkAnyError();
+    const term = try child.wait(io);
+    const stdout = try reader.toOwnedSlice(0);
+    defer gpa.free(stdout);
+    const stderr = try reader.toOwnedSlice(1);
+    defer gpa.free(stderr);
     const end = std.Io.Clock.Timestamp.now(io, .awake);
     r.millis = @intCast(@divTrunc(start.durationTo(end).raw.nanoseconds, std.time.ns_per_ms));
-    // Parse result records; everything else is test output.
+    {
+        pool.lock();
+        defer pool.unlock();
+        r.timed_out = slot.killed_at != null;
+    }
+    // Parse the result records. Everything else is test output.
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(gpa);
-    var lines = std.mem.splitScalar(u8, res.stdout, '\n');
+    var lines = std.mem.splitScalar(u8, stdout, '\n');
     while (lines.next()) |line| {
         if (std.mem.startsWith(u8, line, "\x1e")) {
             const rec = line[1..];
@@ -299,17 +551,27 @@ fn runChild(ctx: *const Ctx, r: *FileResult) !void {
             try output.append(gpa, '\n');
         }
     }
-    const clean = switch (res.term) {
-        .exited => |code| code == 0 or code == 1,
-        else => false,
-    };
-    if (!clean or (r.passed + r.failed + r.skipped == 0 and res.stderr.len > 0)) {
-        r.crashed = !clean or r.failed == 0;
-        try r.report.print(gpa, "  file error:\n", .{});
-        var el = std.mem.splitScalar(u8, std.mem.trimEnd(u8, res.stderr, "\n"), '\n');
-        while (el.next()) |m| try r.report.print(gpa, "       {s}\n", .{m});
+    if (r.timed_out) {
+        // The tests reported above ended, and the next one never did.
+        try r.report.print(gpa, "  timed out after {d} s without output\n", .{pool.o.timeout_s});
+    } else {
+        const clean = switch (term) {
+            .exited => |code| code == 0 or code == 1,
+            else => false,
+        };
+        if (!clean or (r.passed + r.failed + r.skipped == 0 and stderr.len > 0)) {
+            r.crashed = !clean or r.failed == 0;
+            try r.report.print(gpa, "  file error:\n", .{});
+        }
     }
-    if ((r.failed > 0 or r.crashed) and output.items.len > 0) {
+    if (r.timed_out or r.crashed) {
+        if (stderr.len > 0) {
+            if (r.timed_out) try r.report.print(gpa, "  standard error:\n", .{});
+            var el = std.mem.splitScalar(u8, std.mem.trimEnd(u8, stderr, "\n"), '\n');
+            while (el.next()) |m| try r.report.print(gpa, "       {s}\n", .{m});
+        }
+    }
+    if ((r.failed > 0 or r.crashed or r.timed_out) and output.items.len > 0) {
         try r.report.print(gpa, "  output:\n", .{});
         var ol = std.mem.splitScalar(u8, std.mem.trimEnd(u8, output.items, "\n"), '\n');
         while (ol.next()) |m| try r.report.print(gpa, "       {s}\n", .{m});
