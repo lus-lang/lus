@@ -2141,6 +2141,9 @@ pub const Lower = struct {
             .ty = .table,
             .a = try b.kint(nb),
             .b = try b.kint(nc),
+            // The inline cache entry of the instruction, which says how
+            // the lists of the site fit (`ops.learnListKind`).
+            .c = try b.kint(@bitCast(@as(u64, @intFromPtr(&b.fr.proto.ic[b.pc])))),
             .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newTable))),
             .flags = .{ .thread = true },
         });

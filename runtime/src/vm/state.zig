@@ -938,6 +938,9 @@ pub const FirstSetCache = struct {
 pub const NewTableSite = struct {
     table: ?*Table = null,
     ins: ?*u32 = null,
+    /// The inline cache entry of the instruction, which learns the kind
+    /// of its lists (`object.IcEntry.lists_words`).
+    ic: ?*object.IcEntry = null,
     cycle: u64 = 0,
 
     /// The most hash entries a constructor learns to make room for.
@@ -1055,9 +1058,21 @@ pub fn newListIn(g: *Global, vals: []const Value) Allocator.Error!*Table {
 }
 
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
+    return newTableSlotsIn(g, narr, nhash, @sizeOf(Value));
+}
+
+/// `newTableIn` for the constructor whose inline cache entry is `ic`. A
+/// constructor whose lists all fit an unboxed kind so far keeps its list
+/// in one word per slot in the cell.
+pub inline fn newTableAt(g: *Global, narr: usize, nhash: usize, ic: *const object.IcEntry) Allocator.Error!*Table {
+    const slot: usize = if (narr > 0 and ic.own == object.IcEntry.lists_words) @sizeOf(u64) else @sizeOf(Value);
+    return newTableSlotsIn(g, narr, nhash, slot);
+}
+
+fn newTableSlotsIn(g: *Global, narr: usize, nhash: usize, slot: usize) Allocator.Error!*Table {
     gc.maybeCollect(g);
     // Small parts of known size live in the cell of the table itself.
-    const units = table.inlineUnits(narr, nhash);
+    const units = table.inlineUnitsSlots(narr, nhash, slot);
     const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16);
     t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
     if (units > 0) {

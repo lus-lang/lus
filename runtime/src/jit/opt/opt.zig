@@ -998,9 +998,12 @@ pub const rt = struct {
     /// A new table, as `state.newTableIn` makes it, without the
     /// collector check, which optimized code makes first. Returns null
     /// when memory ran out.
-    pub fn newTable(l: *Thread, narr: usize, nhash: usize) callconv(.c) ?*Table {
+    pub fn newTable(l: *Thread, narr: usize, nhash: usize, ic: ?*const object.IcEntry) callconv(.c) ?*Table {
         const g = l.g;
-        const units = table.inlineUnits(narr, nhash);
+        // A site whose lists fit an unboxed kind keeps them in one word
+        // per slot (`state.newTableAt`).
+        const words = narr > 0 and ic != null and ic.?.own == object.IcEntry.lists_words;
+        const units = table.inlineUnitsSlots(narr, nhash, if (words) @sizeOf(u64) else @sizeOf(Value));
         const t = gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16) catch return null;
         t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
         if (units > 0) {
@@ -1019,7 +1022,7 @@ pub const rt = struct {
     pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(.c) ?*Table {
         const g = l.g;
         g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * 16;
-        return newTable(l, narr, nhash);
+        return newTable(l, narr, nhash, null);
     }
 
     pub fn tableLength(t: *Table) callconv(.c) i64 {
