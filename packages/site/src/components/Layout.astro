@@ -7,6 +7,7 @@ import "@fontsource-variable/intel-one-mono/wght-italic.css"
 
 import "../styles/global.css"
 import SiteHeader from "./SiteHeader.astro"
+import CubeField from "./CubeField.astro"
 
 interface Props {
   title?: string
@@ -58,9 +59,12 @@ const canonicalUrl = new URL(
     <SiteHeader unstable={Astro.props.unstable} />
     <slot />
     <footer>
-      <div class="footer-inner">
-        <a href="/" class="footer-wordmark">lus.dev</a>
-        <a href="/manual/license">0BSD</a>
+      <div class="footer-wrap">
+        <CubeField rows={1} cols={84} at={0.18} amp={1.2} seed={5} signal="none" />
+        <div class="footer-inner">
+          <a href="/" class="footer-wordmark">lus.dev</a>
+          <a href="/manual/license">0BSD</a>
+        </div>
       </div>
     </footer>
   </body>
@@ -70,10 +74,19 @@ const canonicalUrl = new URL(
   @reference "../styles/global.css";
 
   footer {
-    @apply mt-auto border-t border-rule;
+    @apply mt-auto pt-16;
+
+    /* a low field closes every page, standing on the footer rule */
+    .footer-wrap {
+      @apply max-w-[1240px] mx-auto px-4 md:px-6;
+
+      > :global(.cube-field) {
+        @apply opacity-50;
+      }
+    }
 
     .footer-inner {
-      @apply max-w-[1240px] mx-auto px-4 md:px-6 pt-2.5 pb-10 flex justify-between font-mono text-xs text-ink-3;
+      @apply border-t border-rule pt-2.5 pb-10 flex justify-between font-mono text-xs text-ink-3;
     }
 
     a {

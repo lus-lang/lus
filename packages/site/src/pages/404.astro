@@ -1,5 +1,6 @@
 ---
 import Layout from "../components/Layout.astro"
+import CubeField from "../components/CubeField.astro"
 ---
 
 <Layout
@@ -23,11 +24,16 @@ import Layout from "../components/Layout.astro"
         <li><a href="/">Home</a></li>
       </ul>
     </section>
+    <CubeField class="lost" cols={44} at={0.5} amp={3} seed={3} signal="fallen" />
   </main>
 </Layout>
 
 <style>
   @reference "../styles/global.css";
+
+  :global(.lost) {
+    @apply mt-16;
+  }
 
   .lead {
     @apply text-xl text-ink-2 mb-3 max-w-[48.5rem];

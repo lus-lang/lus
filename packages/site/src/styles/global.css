@@ -237,9 +237,19 @@ body::before {
   }
 }
 
-/* a section opens on one 2px rule under its title */
+/* a section opens on one 2px rule under its title, marked like a ruler
+   at the twelve columns of the measure */
 .part > .sech {
   @apply border-b-2 border-rule mb-3;
+  background:
+    repeating-linear-gradient(
+        to right,
+        var(--color-rule) 0 1px,
+        transparent 1px calc(100% / 12)
+      )
+      left bottom / 100% 5px no-repeat,
+    linear-gradient(var(--color-rule), var(--color-rule)) right bottom / 1px
+      5px no-repeat;
 }
 
 /* code figure: tint block under the 2px spine, mono caption on top, with
@@ -556,6 +566,12 @@ html.unstable {
       @apply text-ink-red/70 border-b-ink-red/30;
     }
   }
+}
+
+/* dual-theme code: Shiki writes light weights and styles as variables */
+.astro-code span {
+  font-style: var(--shiki-light-font-style, inherit);
+  font-weight: var(--shiki-light-font-weight, inherit);
 }
 
 /* night code: Shiki writes the night theme as --shiki-dark variables */

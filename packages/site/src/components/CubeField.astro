@@ -12,9 +12,24 @@ interface Props {
   /** rows of bars receding from the reader, and bars per row */
   rows?: number
   cols?: number
+  /** where the swell peaks along the field, from 0 to 1, and its height */
+  at?: number
+  amp?: number
+  /** varies the grain of the skyline */
+  seed?: number
+  /** "cap" crowns the peak with the lime cube, "fallen" drops it to the
+      ground in front of the field, "none" leaves the field plain */
+  signal?: "cap" | "fallen" | "none"
 }
 
-const { rows = 3, cols = 52 } = Astro.props
+const {
+  rows = 3,
+  cols = 52,
+  at = 0.72,
+  amp = 3.6,
+  seed = 0,
+  signal = "cap",
+} = Astro.props
 const S = 22 // cube edge in px
 const D = S * 0.62 // depth of one row on screen
 const dx = D * Math.cos(Math.PI / 5)
@@ -28,9 +43,9 @@ function hash(n: number) {
 
 function height(i: number, j: number) {
   const t = j / (cols - 1)
-  const swell = 3.6 * Math.exp(-((t - 0.72) ** 2) / 0.012)
-  const roll = 0.9 * Math.sin(t * Math.PI * 2.4 + 0.6) + 0.9
-  const grain = hash(j * 7 + i * 131) * 1.3
+  const swell = amp * Math.exp(-((t - at) ** 2) / 0.012)
+  const roll = 0.9 * Math.sin(t * Math.PI * 2.4 + 0.6 + seed) + 0.9
+  const grain = hash(j * 7 + i * 131 + seed * 977) * 1.3
   const back = i * 0.7
   return Math.max(1, Math.round(0.6 + swell + roll + grain + back))
 }
@@ -54,8 +69,9 @@ bars.sort((a, b) => b.i - a.i || a.j - b.j)
 
 const maxH = Math.max(...bars.map((b) => b.h))
 const width = cols * S + rows * dx + 2
-const heightPx = (maxH + 0.2) * S + rows * dy + 2
-const baseY = heightPx - 1
+const heightPx =
+  (maxH + 0.2) * S + rows * dy + 2 + (signal === "fallen" ? 1.6 * dy + 2 : 0)
+const baseY = heightPx - 1 - (signal === "fallen" ? 1.6 * dy + 2 : 0)
 
 function point(i: number, j: number, k: number) {
   return [1 + j * S + i * dx, baseY - k * S - i * dy]
@@ -97,7 +113,10 @@ function prism(i: number, j: number, k0: number, k1: number) {
 
 const shapes = bars.flatMap((b) => {
   const row = `r${b.i}`
-  if (b === peak) {
+  if (b === peak && signal === "fallen") {
+    return [{ ...prism(b.i, b.j, 0, b.h - 1), lime: false, row }]
+  }
+  if (b === peak && signal === "cap") {
     return [
       { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row },
       { ...prism(b.i, b.j, b.h - 1, b.h), lime: true, row },
@@ -106,9 +125,20 @@ const shapes = bars.flatMap((b) => {
   return [{ ...prism(b.i, b.j, 0, b.h), lime: false, row }]
 })
 
+// a fallen cube lies on the ground before the front row, a few bars on
+const fallenAt = { i: -1.6, j: Math.min(cols - 2, peak.j + 4), k: 0 }
+if (signal === "fallen") {
+  shapes.push({
+    ...prism(fallenAt.i, fallenAt.j, 0, 1),
+    lime: true,
+    row: "r0",
+  })
+}
+
 // the signal light: a grainy glow centered on the lime cube
-const [gx, gy] = point(peak.i + 0.5, peak.j + 0.5, peak.h - 0.5)
-const uid = `cf${cols}x${rows}`
+const lit = signal === "fallen" ? fallenAt : { i: peak.i, j: peak.j, k: peak.h - 1 }
+const [gx, gy] = point(lit.i + 0.5, lit.j + 0.5, lit.k + 0.5)
+const uid = `cf${cols}x${rows}s${seed}${signal}`
 ---
 
 <svg
@@ -137,7 +167,7 @@ const uid = `cf${cols}x${rows}`
       <feComposite in="SourceGraphic" in2="speckle" operator="in" />
     </filter>
   </defs>
-  <ellipse
+  {signal !== "none" && <ellipse
     class="glow"
     cx={gx.toFixed(1)}
     cy={gy.toFixed(1)}
@@ -145,7 +175,7 @@ const uid = `cf${cols}x${rows}`
     ry={(S * 5).toFixed(0)}
     fill={`url(#${uid}-glow)`}
     filter={`url(#${uid}-grain)`}
-  />
+  />}
   {
     shapes.map((f) => (
       <g class:list={[f.row, { lime: f.lime }]}>
