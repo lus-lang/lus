@@ -107,6 +107,15 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         .float => if (std.math.isNan(k.asFloat())) return l.raiseRun("table index is NaN", .{}),
         else => {},
     }
+    if (k.tag == .string) {
+        const s = k.as(String);
+        // Every short string key is interned, so lookups find it by
+        // pointer.
+        if (!s.flags.interned and s.len <= String.short_max) {
+            const interned = state.intern(l.g, s) catch return l.raiseMem();
+            return rawSet(l, t, Value.obj(.string, interned), val);
+        }
+    }
     const hlen = t.hash_len;
     const alen = t.asize;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
@@ -417,8 +426,9 @@ pub fn rawEqual(l: *Thread, a: Value, b: Value) bool {
 }
 
 fn stringEqual(x: *String, y: *String) bool {
-    // Short strings are interned, so distinct pointers mean distinct
-    // strings unless both are long.
+    // Two interned strings are equal exactly when they are the same
+    // object. Long strings and the short results of concatenation are
+    // not interned, and compare by content.
     if (x.flags.interned and y.flags.interned) return false;
     return x.len == y.len and x.hash == y.hash and std.mem.eql(u8, x.bytes(), y.bytes());
 }
@@ -848,7 +858,7 @@ pub inline fn joinShort(l: *Thread, parts: []const Value, last: Value) Error!?Va
             chars += len;
         } else return null;
     }
-    const r = state.newStringKnown(l.g, tmp[0..n], ascii, chars) catch return l.raiseMem();
+    const r = state.newStringFresh(l.g, tmp[0..n], ascii, chars) catch return l.raiseMem();
     return Value.obj(.string, r);
 }
 
@@ -886,7 +896,7 @@ pub inline fn longResult(room: usize) bool {
 /// otherwise.
 pub fn finishConcat(g: *state.Global, sb: *state.StringBuffer, gpa: std.mem.Allocator, buf: *std.ArrayList(u8), ascii: bool, chars: usize) std.mem.Allocator.Error!*String {
     if (gpa.ptr == @as(*anyopaque, sb)) return state.stringFromBuffer(g, sb, buf, ascii, chars);
-    return state.newStringKnown(g, buf.items, ascii, chars);
+    return state.newStringFresh(g, buf.items, ascii, chars);
 }
 
 /// Size of the stack buffers that hold short concatenation results

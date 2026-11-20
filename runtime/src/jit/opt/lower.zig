@@ -2518,6 +2518,10 @@ pub const Lower = struct {
                 const v = try b.typed(ra, t);
                 b.specialized += 1;
                 if (t != .string) return b.fixedBranch(false, k);
+                // Pointers decide only between interned strings, and the
+                // constant is interned. A string becomes interned at most
+                // once and never stops being so.
+                _ = try b.guard(.{ .op = .gbit, .cls = .fixed, .a = v, .imm = @offsetOf(String, "flags"), .aux = @as(u64, @bitOffsetOf(String.Flags, "interned")) | (1 << 8) });
                 return b.branch(.{ .op = .bri, .cond = @backingInt(ir.Cond.eq), .a = v, .imm = @bitCast(@as(u64, kv.address())) }, k);
             },
             else => return b.generic(b.pc, last),

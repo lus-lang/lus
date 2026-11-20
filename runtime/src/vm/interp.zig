@@ -2255,7 +2255,7 @@ fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {
         if (v.tag != .string and !v.isNumber()) v = Value.obj(.string, try ops.toString(l, v));
         try ops.appendForConcat(l, gpa, &buf, v, &ascii, &chars);
     }
-    const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
+    const s = state.newStringFresh(l.g, buf.items, ascii, chars) catch return l.raiseMem();
     return Value.obj(.string, s);
 }
 
