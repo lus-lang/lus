@@ -1,7 +1,10 @@
 //! Table implementation: an array part for keys 1..n plus a hash part with
 //! open addressing and linear probing. Dead entries keep their key with a
 //! nil value until the next rehash, so `next` stays valid while a program
-//! clears fields during traversal, as Lua requires.
+//! clears fields during traversal, as Lua requires. Lookups compare the
+//! key of every node they pass, dead ones included, so the collector
+//! keeps the keys that compare by content (strings, bigints, decimals)
+//! alive in dead nodes (`gc.zig`, `markDeadKey`).
 //!
 //! The array part specializes by element kind (`Table.ArrayKind`). An
 //! array of integers or of floats stores bare 64-bit words, and every

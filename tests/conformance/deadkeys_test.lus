@@ -1,0 +1,185 @@
+-- Dead hash nodes. A key whose value becomes nil keeps its node until the
+-- next rehash, so that `next` continues from a key removed during a
+-- traversal. Every lookup that probes past such a node compares its key
+-- with the one it looks for, and strings longer than 40 bytes and bigints
+-- compare by content. The collector therefore keeps those keys alive as
+-- long as their nodes. Each test removes keys, runs collections, fills the
+-- freed cells with new objects, and checks lookups and traversals.
+
+-- A string of 61 bytes, which is never interned.
+local function long(prefix, i)
+    return string.rep(prefix, 60) .. tostring(i % 10)
+end
+
+local function count(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+-- A table whose hash part has 64 nodes and holds 24 keys.
+local function roomy()
+    local t = {}
+    for i = 1, 24 do t["p" .. i] = true end
+    return t
+end
+
+local function a_removed_long_string_key_stays_distinct_from_its_successor_test()
+    for _ = 1, 5 do
+        local t = roomy()
+        for i = 1, 10 do t[long("k", i)] = i end
+        for i = 1, 10 do t[long("k", i)] = nil end
+        collectgarbage()
+        -- Other strings of the same size take the cells freed so far.
+        local hold = {}
+        for i = 1, 300 do hold[i] = long("q", i) end
+        local keys = {}
+        for i = 1, 10 do
+            keys[i] = long("k", i)
+            t[keys[i]] = i
+        end
+        hold = nil
+        collectgarbage()
+        -- Strings with the text of the keys take the cells freed now.
+        local again = {}
+        for i = 1, 300 do again[i] = long("k", i) end
+        for i = 1, 10 do
+            assert(t[keys[i]] == i)
+            assert(t[long("k", i)] == i)
+            assert(rawget(t, again[i]) == i)
+        end
+        assert(count(t) == 34)
+        local seen = 0
+        for k, v in pairs(t) do
+            if v ~= true then
+                assert(k == long("k", v))
+                seen = seen + 1
+            end
+        end
+        assert(seen == 10)
+    end
+end
+
+local function a_removed_bigint_key_stays_distinct_from_its_successor_test()
+    local base = 123456789012345678901234567890n
+    for _ = 1, 5 do
+        local t = roomy()
+        for i = 1, 10 do t[base + i] = i end
+        for i = 1, 10 do t[base + i] = nil end
+        collectgarbage()
+        local hold = {}
+        for i = 1, 300 do hold[i] = base * 3n + i end
+        local keys = {}
+        for i = 1, 10 do
+            keys[i] = base + i
+            t[keys[i]] = i
+        end
+        hold = nil
+        collectgarbage()
+        local again = {}
+        for i = 1, 300 do again[i] = base + (i % 10 + 1) end
+        for i = 1, 10 do
+            assert(t[keys[i]] == i)
+            assert(t[base + i] == i)
+        end
+        assert(count(t) == 34)
+    end
+end
+
+local function a_traversal_that_removes_keys_survives_collections_test()
+    local t = {}
+    for i = 1, 200 do
+        t[long("t", i) .. i] = i
+        t["short" .. i] = i
+        t[123456789012345678901234567890n + i] = i
+    end
+    local visited = 0
+    for k, v in pairs(t) do
+        t[k] = nil
+        visited = visited + 1
+        if visited % 7 == 0 then
+            collectgarbage()
+            -- New strings with the text of removed keys.
+            local junk = {}
+            for i = 1, 50 do junk[i] = long("t", i) .. i end
+        end
+    end
+    assert(visited == 600)
+    assert(next(t) == nil)
+end
+
+local function removing_and_adding_interned_keys_under_collections_test()
+    for _, mode in ipairs({"incremental", "generational"}) do
+        local old = collectgarbage(mode)
+        local t = {}
+        local live = {}
+        local seed = 12345
+        for step = 1, 20000 do
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            local i = seed % 400 + 1
+            -- Half of the keys are interned and half compare by content.
+            local k = i % 2 == 0 and ("key" .. i) or (long("s", i) .. "_" .. i)
+            if live[i] then
+                assert(t[k] == live[i])
+                t[k] = nil
+                live[i] = nil
+            else
+                assert(t[k] == nil)
+                t[k] = step
+                live[i] = step
+            end
+            if step % 500 == 0 then collectgarbage() end
+            if step % 97 == 0 then collectgarbage("step") end
+        end
+        local n = 0
+        for k, v in pairs(t) do
+            n = n + 1
+            local i = tonumber(k:match("%d+$"))
+            assert(live[i] == v)
+        end
+        local expected = 0
+        for _ in pairs(live) do expected = expected + 1 end
+        assert(n == expected)
+        collectgarbage(old)
+    end
+end
+
+local function a_weak_table_keeps_the_string_keys_of_its_dead_nodes_test()
+    for _, wm in ipairs({"k", "v", "kv"}) do
+        local t = setmetatable(roomy(), {__mode = wm})
+        for i = 1, 10 do t[long("w", i)] = i end
+        for i = 1, 10 do t[long("w", i)] = nil end
+        collectgarbage()
+        local hold = {}
+        for i = 1, 300 do hold[i] = long("x", i) end
+        local keys = {}
+        for i = 1, 10 do
+            keys[i] = long("w", i)
+            t[keys[i]] = i
+        end
+        hold = nil
+        collectgarbage()
+        local again = {}
+        for i = 1, 300 do again[i] = long("w", i) end
+        for i = 1, 10 do assert(t[keys[i]] == i) end
+        assert(count(t) == 34)
+    end
+end
+
+local function a_field_store_reuses_the_node_of_a_removed_key_test()
+    -- The inline caches of field accesses predict nodes by index and
+    -- compare the address of the key.
+    local function set(t, v) t.alpha = v; t.beta = v end
+    local function get(t) return t.alpha, t.beta end
+    for round = 1, 300 do
+        local t = {alpha = 1, beta = 2, gamma = 3}
+        set(t, nil)
+        if round % 50 == 0 then collectgarbage() end
+        local a, b = get(t)
+        assert(a == nil and b == nil)
+        set(t, round)
+        a, b = get(t)
+        assert(a == round and b == round and t.gamma == 3)
+        assert(count(t) == 3)
+    end
+end
