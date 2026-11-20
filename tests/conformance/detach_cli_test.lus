@@ -1,0 +1,141 @@
+-- What the `lus` command does with detached coroutines
+-- (spec/design/coroutines.md): it runs them to their end after the main
+-- chunk, it stops with the error of one that failed when nothing
+-- collected that error, and it closes the ones that remain when it exits
+-- early. Each test runs a script in a child process.
+pledge("load", "fs", "exec", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local script_number = 0
+
+local function run_script(source)
+    script_number = script_number + 1
+    local path = `detach_cli_$(script_number).lus`
+    local file = assert(io.open(path, "wb"))
+    assert(file:write(source))
+    assert(file:close())
+    local handle = assert(io.popen(`'$(lus_bin)' '$(path)' 2>&1`))
+    local output = handle:read("a")
+    local done = handle:close()
+    catch fs.remove(path)
+    return done == true or done == 0, output
+end
+
+local function lus_runs_the_coroutines_after_the_main_chunk_test()
+    local ok, output = run_script([[
+        local function body(name)
+            for i = 1, 2 do
+                print(name, i)
+                coroutine.yield()
+            end
+        end
+        coroutine.detach(coroutine.create(body), "a")
+        coroutine.detach(coroutine.create(body), "b")
+        print("main ends")
+    ]])
+    assert(ok, output)
+    assert(output == "main ends\na\t1\nb\t1\na\t2\nb\t2\n", output)
+end
+
+local function lus_stops_with_an_error_nothing_collected_test()
+    local ok, output = run_script([[
+        local function inner()
+            error("nobody collected this")
+        end
+        coroutine.detach(coroutine.create(function()
+            coroutine.yield()
+            inner()
+        end))
+        coroutine.detach(coroutine.create(function()
+            for i = 1, 3 do coroutine.yield() end
+            print("the others finish")
+        end))
+    ]])
+    assert(not ok, output)
+    assert(string.find(output, "the others finish", 1, true), output)
+    assert(string.find(output, "nobody collected this", 1, true), output)
+    assert(string.find(output, "stack traceback", 1, true), output)
+    assert(string.find(output, "'inner'", 1, true), output)
+end
+
+local function lus_ends_cleanly_when_the_error_was_collected_test()
+    local ok, output = run_script([[
+        local co = coroutine.detach(coroutine.create(function()
+            error("collected", 0)
+        end))
+        print(coroutine.resume(co))
+        co = nil
+        collectgarbage()
+        collectgarbage()
+        print("clean")
+    ]])
+    assert(ok, output)
+    assert(output == "false\tcollected\nclean\n", output)
+end
+
+local function lus_ends_cleanly_when_close_collected_the_error_test()
+    local ok, output = run_script([[
+        local co = coroutine.detach(coroutine.create(function()
+            error("closed away", 0)
+        end))
+        local step = coroutine.detach(coroutine.create(function() coroutine.yield() end))
+        coroutine.resume(step)
+        print(coroutine.close(co))
+    ]])
+    assert(ok, output)
+    assert(output == "false\tclosed away\n", output)
+end
+
+local function the_collector_stops_the_program_with_the_error_test()
+    local ok, output = run_script([[
+        local function start()
+            coroutine.detach(coroutine.create(function()
+                error("lost for good")
+            end))
+        end
+        start()
+        local step = coroutine.detach(coroutine.create(function() coroutine.yield() end))
+        coroutine.resume(step)
+        local function work()
+            local ok = catch (function()
+                for i = 1, 10 do
+                    collectgarbage()
+                    local t = {}
+                end
+            end)()
+            print("a handler caught it")
+        end
+        work()
+        print("the program went on")
+    ]])
+    assert(not ok, output)
+    assert(string.find(output, "lost for good", 1, true), output)
+    assert(string.find(output, "stack traceback", 1, true), output)
+    assert(not string.find(output, "a handler caught it", 1, true), output)
+    assert(not string.find(output, "the program went on", 1, true), output)
+end
+
+local function close_variables_run_when_lus_exits_early_test()
+    local ok, output = run_script([[
+        coroutine.detach(coroutine.create(function()
+            local a <close> = setmetatable({}, { __close = function() print("closed at exit") end })
+            while true do coroutine.yield() end
+        end))
+        local step = coroutine.detach(coroutine.create(function() coroutine.yield() end))
+        coroutine.resume(step)
+        error("main fails")
+    ]])
+    assert(not ok, output)
+    assert(string.find(output, "main fails", 1, true), output)
+    assert(string.find(output, "closed at exit", 1, true), output)
+end
+
+local function a_circle_of_waiters_ends_lus_with_a_deadlock_test()
+    local ok, output = run_script([[
+        local a, b
+        a = coroutine.detach(coroutine.create(function() return coroutine.resume(b) end))
+        b = coroutine.detach(coroutine.create(function() return coroutine.resume(a) end))
+    ]])
+    assert(not ok, output)
+    assert(string.find(output, "deadlock", 1, true), output)
+end
