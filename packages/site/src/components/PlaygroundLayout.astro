@@ -65,6 +65,16 @@ const description =
   /* the run bar sits on the tint surface between the header and the panes */
   .toolbar {
     @apply flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 bg-tint shrink-0;
+    /* the bar stands on the ticked section rule, over its tint */
+    border-bottom: 1px solid var(--color-rule);
+    background:
+      repeating-linear-gradient(
+          to right,
+          var(--color-rule) 0 1px,
+          transparent 1px calc(100% / 12)
+        )
+        left bottom / 100% 5px no-repeat,
+      var(--color-tint);
   }
 
   .toolbar-left {
