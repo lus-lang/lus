@@ -1,0 +1,6 @@
+-- A second file like stuck.lus, so two workers are left behind in the
+-- same pass of the watchdog.
+pledge("exec")
+
+os.execute("perl -e 'use POSIX; setsid(); sleep 10' &")
+while true do end

@@ -59,7 +59,8 @@ The options are the following.
 | `-u`, `--update` | Rewrite snapshots that no longer match. |
 | `--json` | Print one JSON record per test with the fields `status`, `name`, and `message`. |
 | `--jobs N` | Run at most `N` files at once. The default is the number of processors. |
-| `--timeout S` | Stop a file that runs longer than `S` seconds. The default is 60. |
+| `--timeout S` | Stop a file that writes no output for `S` seconds. The default is 60. |
+| `--file-timeout S` | Stop a file that runs longer than `S` seconds in all, even while it writes output. The default is ten times the timeout. |
 
 The exit status is 0 when every file passes and 1 when a test fails, a file crashes, or a file times out.
 

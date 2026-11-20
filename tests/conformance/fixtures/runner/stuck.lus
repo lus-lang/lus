@@ -1,0 +1,7 @@
+-- A file that starts a process in a session of its own, which keeps the
+-- output pipes of the file open after the runner kills its process group,
+-- and then never ends. The runner leaves its worker behind.
+pledge("exec")
+
+os.execute("perl -e 'use POSIX; setsid(); sleep 10' &")
+while true do end

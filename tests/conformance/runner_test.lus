@@ -1,0 +1,60 @@
+--[[
+    The timeouts of `lus test`. Each case runs the runner on fixture files
+    in a subprocess and reads its report. A file that writes no output for
+    the timeout is stopped, and so is a file that runs longer than the file
+    timeout while it writes output. A file whose worker never comes back is
+    reported with the time it ran, and any number of such files leave the
+    runner able to finish the rest.
+]]
+
+pledge("exec", "env=LUS_EXE")
+
+local LUS = os.getenv("LUS_EXE")
+local windows = package.config:sub(1, 1) == "\\"
+local FIX = TEST_DIR .. "/fixtures/runner/"
+
+-- Runs `lus test` with the given options on fixture files and returns its
+-- report and whether it exited with status 0.
+local function run_tests(options, ...)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local cmd = `"$LUS" test $options`
+    for _, name in ipairs({...}) do
+        cmd = cmd .. ` "$FIX$name"`
+    end
+    local f = io.popen(cmd .. " 2>&1")
+    local report = f:read("a")
+    local ok = f:close()
+    return report, ok == true
+end
+
+local function file_line(report, name)
+    for line in report:gmatch("[^\n]+") do
+        if line:find(name, 1, true) and (line:find("^ok") or line:find("^FAIL")) then return line end
+    end
+end
+
+local function a_chatty_file_stops_at_the_file_timeout_test()
+    local report, ok = run_tests("--timeout 30 --file-timeout 1", "chatty.lus")
+    assert(not ok, report)
+    assert(report:find("timed out after running for the file timeout of 1 s", 1, true), report)
+    assert(file_line(report, "chatty.lus"):find("^FAIL"), report)
+end
+
+local function two_files_left_behind_in_one_pass_test()
+    if windows then skip("the fixture detaches a process with POSIX setsid") end
+    if not os.execute("command -v perl >/dev/null 2>&1") then skip("needs perl") end
+    local report, ok = run_tests("--jobs 2 --timeout 1", "stuck.lus", "stuck2.lus", "waiting.lus")
+    assert(not ok, report)
+    assert(not report:find("panic", 1, true), report)
+    assert(file_line(report, "waiting.lus"):find("^ok"), report)
+    for _, name in ipairs({"stuck.lus", "stuck2.lus"}) do
+        local line = file_line(report, name)
+        assert(line and line:find("^FAIL"), report)
+        -- The time reported is the time the file ran before the runner
+        -- left it behind.
+        local ms = tonumber(line:match("(%d+) ms%)"))
+        assert(ms and ms >= 1000, line)
+    end
+    assert(report:find("left it behind", 1, true), report)
+    assert(report:find("3 files, 1 passed", 1, true), report)
+end

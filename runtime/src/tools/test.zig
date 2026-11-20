@@ -13,8 +13,9 @@
 //!
 //! Each file runs in its own child process inside a fresh temporary
 //! directory, and files run in parallel. The result of a file is printed
-//! as soon as it ends. A file that writes no output for the timeout is
-//! reported as timed out, and every process it started is killed.
+//! as soon as it ends. A file that writes no output for the timeout, or
+//! that runs longer than the file timeout, is reported as timed out, and
+//! every process it started is killed.
 
 const std = @import("std");
 const lus = @import("../lus.zig");
@@ -38,10 +39,17 @@ const Options = struct {
     json: bool = false,
     jobs: usize = 0,
     timeout_s: i64 = 60,
+    /// The longest a file may run in all, output or not. Ten times the
+    /// timeout unless `--file-timeout` sets it.
+    file_timeout_s: ?i64 = null,
     verbose: bool = false,
     /// Run the `lus` code blocks of Markdown files instead of test files.
     doc: bool = false,
     tmp_root: []const u8 = "/tmp",
+
+    fn fileTimeout(o: *const Options) i64 {
+        return o.file_timeout_s orelse o.timeout_s *| 10;
+    }
 };
 
 pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
@@ -83,6 +91,9 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         } else if (std.mem.eql(u8, a, "--timeout") and i + 1 < args.len) {
             i += 1;
             o.timeout_s = try std.fmt.parseInt(i64, args[i], 10);
+        } else if (std.mem.eql(u8, a, "--file-timeout") and i + 1 < args.len) {
+            i += 1;
+            o.file_timeout_s = try std.fmt.parseInt(i64, args[i], 10);
         } else {
             try o.paths.append(gpa, a);
         }
@@ -157,14 +168,10 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     defer gpa.free(exe);
     const results = try gpa.alloc(FileResult, files.items.len);
     for (results, files.items) |*r, f| r.* = .{ .path = f };
-    // Every file can need a worker of its own when the workers before it
-    // were left behind, so there is a slot per file.
-    const slots = try gpa.alloc(Slot, results.len);
-    for (slots) |*s| s.* = .{};
-    var pool: Pool = .{ .gpa = gpa, .io = io, .exe = exe, .o = o, .results = results, .slots = slots };
     const jobs = if (o.jobs > 0) o.jobs else @max(std.Thread.getCpuCount() catch 4, 1);
+    var pool: Pool = .{ .gpa = gpa, .io = io, .exe = exe, .o = o, .results = results, .jobs = @min(jobs, results.len) };
     pool.lock();
-    while (pool.workers < @min(jobs, results.len)) try pool.startWorker();
+    while (pool.live < pool.jobs) try pool.startWorker();
     pool.unlock();
     pool.watch();
 
@@ -196,7 +203,8 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     if (pool.left_behind) std.process.exit(code);
     for (pool.threads.items) |th| th.join();
     pool.threads.deinit(gpa);
-    gpa.free(slots);
+    for (pool.slots.items) |slot| gpa.destroy(slot);
+    pool.slots.deinit(gpa);
     for (results) |*r| {
         r.report.deinit(gpa);
         r.records.deinit(gpa);
@@ -221,14 +229,19 @@ const Pool = struct {
     exe: []const u8,
     o: *Options,
     results: []FileResult,
-    slots: []Slot,
+    /// How many files run at once.
+    jobs: usize,
     mutex: std.Io.Mutex = .init,
+    /// One slot per worker ever started, including the workers left
+    /// behind. Each slot is allocated on its own, so its address stays
+    /// valid for its worker while the list grows.
+    slots: std.ArrayList(*Slot) = .empty,
     /// The index of the next file to pool.
     next: usize = 0,
     /// How many files have been reported.
     finished: usize = 0,
-    /// How many slots have a worker.
-    workers: usize = 0,
+    /// How many workers run and were not left behind.
+    live: usize = 0,
     /// True when the watchdog reported a file whose worker never came back.
     left_behind: bool = false,
     threads: std.ArrayList(std.Thread) = .empty,
@@ -241,12 +254,16 @@ const Pool = struct {
         pool.mutex.unlock(pool.io);
     }
 
-    /// Starts a worker on the next free slot. The caller holds the lock.
+    /// Starts a worker on a slot of its own. The caller holds the lock.
     fn startWorker(pool: *Pool) !void {
-        const index = pool.workers;
+        const slot = try pool.gpa.create(Slot);
+        errdefer pool.gpa.destroy(slot);
+        slot.* = .{};
+        try pool.slots.ensureUnusedCapacity(pool.gpa, 1);
         try pool.threads.ensureUnusedCapacity(pool.gpa, 1);
-        pool.threads.appendAssumeCapacity(try std.Thread.spawn(.{}, work, .{ pool, &pool.slots[index] }));
-        pool.workers += 1;
+        pool.threads.appendAssumeCapacity(try std.Thread.spawn(.{}, work, .{ pool, slot }));
+        pool.slots.appendAssumeCapacity(slot);
+        pool.live += 1;
     }
 
     /// Prints the result of a file as soon as it is known. Each result
@@ -277,7 +294,8 @@ const Pool = struct {
             }
             const index = pool.next;
             pool.next += 1;
-            slot.* = .{ .file = index, .active_at = nowNs(pool.io) };
+            const now = nowNs(pool.io);
+            slot.* = .{ .file = index, .started_at = now, .active_at = now };
             pool.unlock();
             var r: FileResult = .{ .path = pool.results[index].path };
             runChild(pool, slot, &r) catch |e| {
@@ -301,13 +319,14 @@ const Pool = struct {
     }
 
     /// Runs on the main thread until every file is reported. A file
-    /// whose child shows no progress for the timeout has its whole
-    /// process tree killed. When its worker still has not come back after
-    /// the grace period, because a call it made blocks in the system,
-    /// the file is reported as timed out and a new worker takes the rest
-    /// of the files.
+    /// whose child shows no progress for the timeout, or runs longer than
+    /// the file timeout, has its whole process tree killed. When its
+    /// worker still has not come back after the grace period, because a
+    /// call it made blocks in the system, the file is reported as timed
+    /// out and a new worker takes its place for the rest of the files.
     fn watch(pool: *Pool) void {
         const timeout_ns = @as(i96, pool.o.timeout_s) * std.time.ns_per_s;
+        const file_timeout_ns = @as(i96, pool.o.fileTimeout()) * std.time.ns_per_s;
         while (true) {
             pool.lock();
             if (pool.finished == pool.results.len) {
@@ -315,7 +334,7 @@ const Pool = struct {
                 return;
             }
             const t = nowNs(pool.io);
-            for (pool.slots[0..pool.workers]) |*slot| {
+            for (pool.slots.items) |slot| {
                 const index = slot.file orelse continue;
                 if (slot.left) continue;
                 if (slot.killed_at) |k| {
@@ -323,15 +342,27 @@ const Pool = struct {
                     slot.left = true;
                     slot.file = null;
                     pool.left_behind = true;
+                    pool.live -= 1;
                     const r = &pool.results[index];
                     r.timed_out = true;
-                    r.report.print(pool.gpa, "  timed out after {d} s, and the runner left it behind when it did not stop\n", .{pool.o.timeout_s}) catch {};
+                    r.millis = @intCast(@divTrunc(t - slot.started_at, std.time.ns_per_ms));
+                    timeoutReport(pool.gpa, pool.o, slot.cause, &r.report) catch {};
+                    r.report.appendSlice(pool.gpa, "  the runner left it behind when it did not stop\n") catch {};
                     pool.publish(r);
-                    if (pool.next < pool.results.len) pool.startWorker() catch pool.failRest();
-                } else if (t - slot.active_at >= timeout_ns) {
+                } else if (t - slot.active_at >= timeout_ns or t - slot.started_at >= file_timeout_ns) {
                     slot.killed_at = t;
+                    slot.cause = if (t - slot.active_at >= timeout_ns) .silent else .total;
                     if (slot.tree) |tree| tree.kill();
                 }
+            }
+            // Workers left behind no longer count, so new ones take the
+            // rest of the files. They start after the scan, so the scan
+            // never sees a slot it added.
+            while (pool.live < pool.jobs and pool.next < pool.results.len) {
+                pool.startWorker() catch {
+                    if (pool.live == 0) pool.failRest();
+                    break;
+                };
             }
             pool.unlock();
             pool.io.sleep(.fromMilliseconds(50), .awake) catch {};
@@ -350,15 +381,34 @@ const Pool = struct {
     }
 };
 
+/// Why the watchdog stopped a file.
+const Cause = enum {
+    /// The file wrote no output for the timeout.
+    silent,
+    /// The file ran longer than the file timeout.
+    total,
+};
+
+/// The line that reports why a file timed out.
+fn timeoutReport(gpa: std.mem.Allocator, o: *const Options, cause: Cause, report: *std.ArrayList(u8)) !void {
+    switch (cause) {
+        .silent => try report.print(gpa, "  timed out after {d} s without output\n", .{o.timeout_s}),
+        .total => try report.print(gpa, "  timed out after running for the file timeout of {d} s\n", .{o.fileTimeout()}),
+    }
+}
+
 /// The file a worker runs and what the watchdog knows about it.
 const Slot = struct {
     file: ?usize = null,
+    /// When the file started.
+    started_at: i96 = 0,
     /// When the file started or last wrote output.
     active_at: i96 = 0,
     /// The processes of the file, once its child runs.
     tree: ?ProcessTree = null,
-    /// When the watchdog killed the processes of the file.
+    /// When the watchdog killed the processes of the file, and why.
     killed_at: ?i96 = null,
+    cause: Cause = .silent,
     /// True when the watchdog reported the file without its worker.
     left: bool = false,
 };
@@ -515,10 +565,12 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
     defer gpa.free(stderr);
     const end = std.Io.Clock.Timestamp.now(io, .awake);
     r.millis = @intCast(@divTrunc(start.durationTo(end).raw.nanoseconds, std.time.ns_per_ms));
+    var cause: Cause = .silent;
     {
         pool.lock();
         defer pool.unlock();
         r.timed_out = slot.killed_at != null;
+        cause = slot.cause;
     }
     // Parse the result records. Everything else is test output.
     var output: std.ArrayList(u8) = .empty;
@@ -553,7 +605,7 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
     }
     if (r.timed_out) {
         // The tests reported above ended, and the next one never did.
-        try r.report.print(gpa, "  timed out after {d} s without output\n", .{pool.o.timeout_s});
+        try timeoutReport(gpa, pool.o, cause, &r.report);
     } else {
         const clean = switch (term) {
             .exited => |code| code == 0 or code == 1,

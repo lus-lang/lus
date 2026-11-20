@@ -1,0 +1,8 @@
+-- A file that writes a line every few milliseconds and never ends, so only
+-- the file timeout stops it.
+while true do
+    io.stdout:write("tick\n")
+    io.stdout:flush()
+    local t = os.clock()
+    while os.clock() - t < 0.01 do end
+end

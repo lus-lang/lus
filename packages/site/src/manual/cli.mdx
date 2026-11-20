@@ -62,7 +62,8 @@ Runs the tests in the named files, or in every `*_test.lus` file below the named
 | `-u`, `--update` | Rewrite snapshots that no longer match. |
 | `--json` | Print one JSON record per test. |
 | `--jobs N` | Run at most N files at once (default: the number of processors). |
-| `--timeout S` | Stop a file after S seconds (default: 60). |
+| `--timeout S` | Stop a file that writes no output for S seconds (default: 60). |
+| `--file-timeout S` | Stop a file that runs longer than S seconds in all (default: ten times the timeout). |
 
 ## lus fmt
 
