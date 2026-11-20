@@ -288,7 +288,8 @@ const Wait = enum { ready, timeout, failed };
 /// Waits until `handle` is readable (or writable) for at most
 /// `timeout_ms` milliseconds. A negative timeout does not wait.
 fn waitHandle(handle: net.Socket.Handle, for_write: bool, timeout_ms: i32) Wait {
-    if (timeout_ms < 0 or is_windows) return .ready;
+    if (timeout_ms < 0) return .ready;
+    if (is_windows) return if (sched.pollOne(handle, if (for_write) .write else .read, timeout_ms)) .ready else .timeout;
     var fds = [_]posix.pollfd{.{
         .fd = handle,
         .events = if (for_write) posix.POLL.OUT else posix.POLL.IN,

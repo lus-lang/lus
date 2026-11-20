@@ -35,7 +35,7 @@ Each state has one scheduler.
 
 - The run queue is a list of coroutines in the order in which they became ready. A pass runs the coroutines that were queued when it started, so a coroutine that yields in a loop takes one turn per pass.
 - Deadlines live in a binary heap on the monotonic clock. Each waiter knows its index in the heap, so a wait that ends early removes its deadline at once. A socket timeout is such a deadline, and the native that runs again after it raises the error it always raised (`"receive timeout"`, `"send timeout"`, `"sendto timeout"`, `"accept timeout"`).
-- The poller reports sockets that became readable or writable. It is kqueue on macOS and the BSDs, epoll on Linux, `WSAPoll` on Windows, and `poll` on other POSIX systems. The WebAssembly build has no sockets, and its poller sleeps until the next deadline with a clock subscription of `poll_oneoff`.
+- The poller reports sockets that became readable or writable. It is kqueue on macOS and the BSDs, epoll on Linux, a poll request to the AFD driver on Windows, and `poll` on other POSIX systems. The WebAssembly build has no sockets, and its poller sleeps until the next deadline with a clock subscription of `poll_oneoff`.
 
 After each pass the scheduler asks the poller once. It waits there without a limit when nothing is ready, until the next deadline when one exists, and not at all when coroutines are queued. Coroutines that only wait for each other can never continue, and the thread that would wait for them receives a deadlock error.
 
@@ -116,4 +116,4 @@ Two findings shaped the code.
 
 ## Later phases
 
-The scheduler is built for more suspension points than the sockets it has now: `worker.receive` and the worker inbox through `sched.enableNotify`, `network.fetch` and TLS, name resolution, and SQLite on a thread pool. `network.serve` will gain a `workers` option that shares one port among several states. The Windows poller is `WSAPoll`. It builds, and it has yet to run on a Windows machine with the socket handles that the Zig standard library creates there. When `WSAPoll` refuses a handle, the operation blocks in its system call, as every operation did on Windows before this work.
+The scheduler is built for more suspension points than the sockets it has now: `worker.receive` and the worker inbox through `sched.enableNotify`, `network.fetch` and TLS, name resolution, and SQLite on a thread pool. `network.serve` will gain a `workers` option that shares one port among several states. The Windows poller sends `IOCTL_AFD_POLL` to the AFD driver. The Zig standard library opens each socket on Windows as an AFD endpoint that Winsock never registers, and the driver polls those handles directly. The same request bounds the timeout of a socket when no coroutine is detached. It builds, and it has yet to run on a Windows machine. When the driver refuses a request, the operation blocks in its system call.

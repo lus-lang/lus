@@ -868,9 +868,12 @@ pub fn deinit(g: *Global) void {
 // Pollers
 
 /// Waits on one handle without the poller of the scheduler, for a thread
-/// that blocks while no detached coroutine exists.
-fn pollOne(handle: Handle, dir: Dir, timeout_ms: i32) bool {
-    if (is_windows or is_wasi) return true;
+/// that blocks while no detached coroutine exists. Returns false when the
+/// time ran out, and true when the handle is ready or the system cannot
+/// tell, in which case the operation blocks in its own system call.
+pub fn pollOne(handle: Handle, dir: Dir, timeout_ms: i32) bool {
+    if (is_wasi) return true;
+    if (is_windows) return afd.pollOne(handle, dir, timeout_ms);
     var fds = [_]posix.pollfd{.{
         .fd = handle,
         .events = if (dir == .write) posix.POLL.OUT else posix.POLL.IN,
@@ -883,17 +886,13 @@ fn pollOne(handle: Handle, dir: Dir, timeout_ms: i32) bool {
 /// True when `handle` is readable or writable now.
 pub fn readyNow(handle: Handle, dir: Dir) bool {
     if (is_wasi) return true;
-    if (is_windows) {
-        var fds = [_]WsaPoll.Fd{.{ .fd = @intFromPtr(handle), .events = if (dir == .write) WsaPoll.wrnorm else WsaPoll.rdnorm, .revents = 0 }};
-        return WsaPoll.WSAPoll(&fds, 1, 0) != 0;
-    }
     return pollOne(handle, dir, 0);
 }
 
 const Poller = switch (os) {
     .macos, .ios, .tvos, .watchos, .visionos, .maccatalyst, .driverkit, .freebsd, .netbsd, .openbsd, .dragonfly => Kqueue,
     .linux => Epoll,
-    .windows => WsaPoll,
+    .windows => AfdPoll,
     .wasi => WasiClock,
     else => PosixPoll,
 };
@@ -1195,43 +1194,135 @@ const PosixPoll = struct {
     }
 };
 
-/// WSAPoll. A call that fails wakes every waiter, and each operation
-/// then blocks in its own system call.
-const WsaPoll = struct {
-    const persistent = false;
-    const Fd = extern struct { fd: usize, events: i16, revents: i16 };
-    const rdnorm: i16 = 0x0100;
-    const wrnorm: i16 = 0x0010;
-    extern "ws2_32" fn WSAPoll(fds: [*]Fd, nfds: u32, timeout: i32) callconv(.winapi) i32;
+/// Polling through the AFD driver. The standard library opens every
+/// socket on Windows as an AFD endpoint of its own, which Winsock never
+/// registers, so `WSAPoll` refuses those handles. `IOCTL_AFD_POLL` takes
+/// them directly and works like `poll`: it takes a list of handles, each
+/// with the events it waits for, and reports the ones that became ready.
+const afd = if (is_windows) struct {
+    const w = std.os.windows;
+    const receive: u32 = 0x0001;
+    const send: u32 = 0x0004;
+    const disconnect: u32 = 0x0008;
+    const abort: u32 = 0x0010;
+    const accept: u32 = 0x0080;
+    const connect_fail: u32 = 0x0100;
+    const infinite: u32 = 0xFFFF_FFFF;
 
-    fn arm(_: *WsaPoll, _: *Global, _: Handle, _: Dir, _: *IoEntry) bool {
+    /// The header of an AFD_POLL_INFO. The handle entries follow it.
+    const Info = extern struct { timeout: i64, count: u32, exclusive: u32 };
+    const HandleInfo = extern struct { handle: w.HANDLE, events: u32, status: i32 };
+
+    extern "kernel32" fn CreateEventW(attributes: ?*anyopaque, manual_reset: w.BOOL, initial_state: w.BOOL, name: ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
+    extern "kernel32" fn WaitForSingleObject(handle: w.HANDLE, ms: u32) callconv(.winapi) u32;
+    extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
+
+    /// The events that end a wait in direction `dir`. A connection that
+    /// was reset or failed to open ends a wait in either direction, so the
+    /// operation runs again and reports the error.
+    fn eventsFor(dir: Dir) u32 {
+        const failed = abort | connect_fail;
+        return failed | (if (dir == .write) send else receive | accept | disconnect);
+    }
+
+    /// The length in 8-byte words of an AFD_POLL_INFO with `n` entries.
+    fn words(n: usize) usize {
+        return (@sizeOf(Info) + n * @sizeOf(HandleInfo) + 7) / 8;
+    }
+
+    fn entries(buf: []u64) [*]HandleInfo {
+        return @ptrCast(@alignCast(@as([*]u8, @ptrCast(buf.ptr)) + @sizeOf(Info)));
+    }
+
+    /// Polls the first `n` entries of `buf` for at most `timeout_ms`
+    /// milliseconds, or without end when it is negative. Returns how many
+    /// entries are ready, which the driver moves to the front of the list,
+    /// or null when the driver refused the request.
+    fn request(buf: []u64, n: usize, timeout_ms: i32) ?usize {
+        const info: *Info = @ptrCast(buf.ptr);
+        // The driver never times out by itself. The wait on the event
+        // below bounds the request instead.
+        info.* = .{ .timeout = std.math.maxInt(i64), .count = @intCast(n), .exclusive = 0 };
+        const size: u32 = @intCast(@sizeOf(Info) + n * @sizeOf(HandleInfo));
+        const target = entries(buf)[0].handle;
+        const event = CreateEventW(null, .TRUE, .FALSE, null) orelse return null;
+        defer w.CloseHandle(event);
+        var iosb: w.IO_STATUS_BLOCK = undefined;
+        switch (w.ntdll.NtDeviceIoControlFile(target, event, null, null, &iosb, w.IOCTL.AFD.POLL, @ptrCast(buf.ptr), size, @ptrCast(buf.ptr), size)) {
+            .SUCCESS => {},
+            .PENDING => {
+                const ms: u32 = if (timeout_ms < 0) infinite else @intCast(timeout_ms);
+                if (WaitForSingleObject(event, ms) != 0) {
+                    // The time ran out. The request still owns the buffer
+                    // until it ends, canceled or completed in the meantime.
+                    var cancel_iosb: w.IO_STATUS_BLOCK = undefined;
+                    _ = w.ntdll.NtCancelIoFileEx(target, &iosb, &cancel_iosb);
+                    _ = WaitForSingleObject(event, infinite);
+                }
+            },
+            else => return null,
+        }
+        return switch (iosb.u.Status) {
+            .SUCCESS => info.count,
+            .CANCELLED => 0,
+            else => null,
+        };
+    }
+
+    /// Waits until one handle is ready, as `sched.pollOne` does elsewhere.
+    /// A request the driver refuses reports the handle as ready, so the
+    /// operation blocks in its own system call.
+    fn pollOne(handle: Handle, dir: Dir, timeout_ms: i32) bool {
+        var buf: [words(1)]u64 = undefined;
+        entries(&buf)[0] = .{ .handle = handle, .events = eventsFor(dir), .status = 0 };
+        const n = request(&buf, 1, timeout_ms) orelse return true;
+        return n != 0;
+    }
+} else struct {};
+
+/// The poller of Windows, which polls through the AFD driver (`afd`). A
+/// request that fails wakes every waiter, and each operation then blocks
+/// in its own system call.
+const AfdPoll = struct {
+    const persistent = false;
+
+    fn arm(_: *AfdPoll, _: *Global, _: Handle, _: Dir, _: *IoEntry) bool {
         return true;
     }
 
-    fn wait(_: *WsaPoll, g: *Global, timeout: ?u64) void {
+    fn wait(_: *AfdPoll, g: *Global, timeout: ?u64) void {
         var keys: std.ArrayList(usize) = .empty;
         defer keys.deinit(g.gpa);
         if (!collectKeys(g, &keys)) return wakeAllIo(g);
-        if (keys.items.len == 0) return;
-        const fds = g.gpa.alloc(Fd, keys.items.len) catch return wakeAllIo(g);
-        defer g.gpa.free(fds);
-        for (keys.items, fds) |key, *fd| {
-            fd.* = .{ .fd = key >> 1, .events = if (key & 1 != 0) wrnorm else rdnorm, .revents = 0 };
+        if (keys.items.len == 0) {
+            // Only timers are waiting.
+            if (timeout != null) afd.Sleep(@intCast(millisOf(timeout)));
+            return;
         }
-        const n = WSAPoll(fds.ptr, @intCast(fds.len), millisOf(timeout));
-        if (n < 0) return wakeAllIo(g);
-        if (n == 0) return;
-        for (keys.items, fds) |key, fd| {
-            if (fd.revents != 0) wakeIo(g, key);
+        const buf = g.gpa.alloc(u64, afd.words(keys.items.len)) catch return wakeAllIo(g);
+        defer g.gpa.free(buf);
+        const list = afd.entries(buf);
+        for (keys.items, 0..) |key, i| {
+            const dir: Dir = @fromBackingInt(@intCast(@as(u1, @truncate(key))));
+            list[i] = .{ .handle = @ptrFromInt(key >> 1), .events = afd.eventsFor(dir), .status = 0 };
+        }
+        const n = afd.request(buf, keys.items.len, millisOf(timeout)) orelse return wakeAllIo(g);
+        // A ready handle wakes its waiters in both directions. A waiter
+        // woken early finds that its operation would still block and
+        // waits again.
+        for (list[0..n]) |ready| {
+            const key = handleBits(ready.handle) << 1;
+            wakeIo(g, key);
+            wakeIo(g, key | 1);
         }
     }
 
-    fn enableWake(_: *WsaPoll, _: *Global) bool {
+    fn enableWake(_: *AfdPoll, _: *Global) bool {
         return false;
     }
-    fn wake(_: *WsaPoll) void {}
-    fn forget(_: *WsaPoll, _: Handle) void {}
-    fn deinit(_: *WsaPoll, _: *Global) void {}
+    fn wake(_: *AfdPoll) void {}
+    fn forget(_: *AfdPoll, _: Handle) void {}
+    fn deinit(_: *AfdPoll, _: *Global) void {}
 };
 
 /// WASI has no sockets here, so its poller only sleeps until the next
