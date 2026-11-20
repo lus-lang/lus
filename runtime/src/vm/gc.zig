@@ -313,6 +313,9 @@ pub const State = struct {
     growing: bool = false,
     /// Minor collections since the last major one.
     minors: u32 = 0,
+    /// Set when the last minor collection freed less than `majorminor`
+    /// percent of what the program allocated before it.
+    poor_minor: bool = false,
     stepmul: usize = 200,
     stepsize: usize = 200 * @sizeOf(object.Table),
     minormul: usize = 20,
@@ -375,11 +378,7 @@ fn setThresholdFrom(g: *Global, live: usize) void {
     const s = &g.gcs;
     // The products are formed in 64 bits, since they overflow a 32-bit
     // usize once the heap passes a few dozen megabytes.
-    // In generational mode a growing heap keeps the usual goal: minor
-    // collections, and the one that follows each major collection, see
-    // a program turn from building to discarding long before a doubled
-    // goal would.
-    const pause: u64 = if (s.growing and s.mode != .generational) @as(u64, g.pause) * 2 else g.pause;
+    const pause: u64 = if (s.growing) @as(u64, g.pause) * 2 else g.pause;
     const goal: u64 = @as(u64, live) * pause / 100;
     // An incremental cycle starts early enough to finish marking before
     // the goal. A major collection in generational mode marks in one
@@ -727,24 +726,30 @@ fn finishSweep(g: *Global) void {
         s.major_pending = s.gen_base != 0 and @as(u64, freed) * 100 < @as(u64, allocated) * s.majorminor;
         s.gen_base = live;
         s.minors = 0;
+        s.poor_minor = false;
         // A program that built its data a moment ago may now discard
         // most of what it allocates. The minor collection that follows,
         // after the usual young allocation, tells the two apart much
         // sooner than the next major collection would.
         s.major_pending = false;
-    } else if (@as(u64, s.heap_at_mark -| live) * 100 < @as(u64, s.heap_at_mark -| before) * s.majorminor) {
-        // A minor collection that frees less than `majorminor` percent of
-        // what the program allocated since the previous collection traced
-        // young objects that live on, and those die old. Major
-        // collections at the usual goal then serve better, until the
-        // minor collection after one of them frees enough again.
+    } else if (poorMinor(s, live, before) and s.poor_minor) {
+        // Two minor collections in a row that freed less than
+        // `majorminor` percent of what the program allocated before each
+        // of them traced young objects that live on, and those die old.
+        // Major collections at the usual goal then serve better, until
+        // the minor collection after one of them frees enough again. A
+        // single such minor collection may only have met a large result
+        // that the program keeps, such as text it just joined.
+        s.poor_minor = false;
         s.major_pending = true;
         return setThresholdFrom(g, s.gen_base);
     } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
+        s.poor_minor = false;
         // The old generation grew too much since the last major
         // collection.
         s.major_pending = true;
     } else {
+        s.poor_minor = poorMinor(s, live, before);
         // Old objects die only in major collections. A program sees
         // that through finalizers and weak tables, so while it has
         // either, a major collection runs after a bounded number of
@@ -765,6 +770,13 @@ fn finishSweep(g: *Global) void {
         return setThreshold(g);
     }
     setMinorThreshold(g);
+}
+
+/// True when the minor collection that just ended freed less than
+/// `majorminor` percent of what the program allocated since the
+/// collection before it, which left `before` bytes.
+fn poorMinor(s: *const State, live: usize, before: usize) bool {
+    return @as(u64, s.heap_at_mark -| live) * 100 < @as(u64, s.heap_at_mark -| before) * s.majorminor;
 }
 
 /// The next minor collection runs after the program allocates
