@@ -1465,6 +1465,13 @@ fn addValue(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usiz
             break :blk try ops.call1(l, repl, args[0..n]);
         },
         .table => blk: {
+            // A table without a metatable is read directly, keyed by the
+            // matched text when the pattern has no captures. Nothing
+            // allocates between making the key and reading the table.
+            if (m.level == 0 and repl.as(Table).metatable == null) {
+                const key = try substring(l, str, s, e);
+                break :blk vmtable.get(repl.as(Table), key);
+            }
             try pushCapture(l, str, m, 0, s, e);
             break :blk try ops.index(l, repl, l.stack[base]);
         },
@@ -1545,6 +1552,28 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
+    if (first) |set| {
+        // A pattern that is one class that must match once, such as
+        // `[&<>]`, matches exactly the bytes in its start set, one at a
+        // time, so the search needs no matcher.
+        if ((m.classEnd(pstart) catch 0) == pat.len) {
+            m.reset(0, 0);
+            var n: i64 = 0;
+            var copied: usize = 0;
+            var changed = false;
+            while (n < max_s) {
+                const at = skipTo(src, copied, set);
+                if (at == src.len) break;
+                n += 1;
+                try b.append(src[copied..at]);
+                changed = (try addValue(l, &b, s, &m, at, at + 1, kind, repl)) or changed;
+                copied = at + 1;
+            }
+            if (!changed) return .{ .str = Value.obj(.string, s), .n = n };
+            try b.append(src[copied..]);
+            return .{ .str = try b.finish(), .n = n };
+        }
+    }
     var pos: usize = 0;
     var cpos: usize = 0;
     // Source text before `copied` is already in the builder. Unmatched
