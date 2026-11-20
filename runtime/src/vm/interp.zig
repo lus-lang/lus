@@ -719,9 +719,12 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             // Registers above the target are dead here, so a collection
             // triggered by this allocation must not keep their values.
             l.top = c.fr.base + a + 1;
-            const t = l.newTable(nb, nc);
+            const t = try l.newTable(nb, nc);
             l.top = c.fr.base + c.cl().proto.max_stack;
-            c.bp[a] = Value.obj(.table, try t);
+            c.bp[a] = Value.obj(.table, t);
+            // Remember the site, so that the table teaches it a bigger
+            // hash part when it grows right after (`ops.learnTableSize`).
+            l.g.new_table = .{ .table = t, .ins = @constCast(&c.code[pc - 1]), .cycle = l.g.cycles };
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .self => {

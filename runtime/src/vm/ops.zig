@@ -5,6 +5,7 @@
 //! bit or decline.
 
 const std = @import("std");
+const opc = @import("../compile/opcodes.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
@@ -106,8 +107,31 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         .float => if (std.math.isNan(k.asFloat())) return l.raiseRun("table index is NaN", .{}),
         else => {},
     }
+    const hlen = t.hash.len;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
+    if (t.hash.len != hlen) learnTableSize(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
+}
+
+/// Size feedback for constructors. When the hash part of the table that
+/// the last `newtable` instruction made grows, before a collection ends,
+/// the instruction learns to make room for the keys the table holds now,
+/// up to `max_learned`. Records that a program builds field by field,
+/// such as `{}` followed by stores or `{key = k}` followed by more
+/// fields, then get their final hash part at construction. The C operand
+/// of `newtable` is only a size hint, so every tier stays correct with
+/// any value there. Tiers that compiled the instruction keep the hint
+/// they saw.
+noinline fn learnTableSize(g: *state.Global, t: *Table) void {
+    const site = &g.new_table;
+    if (site.table != t or site.cycle != g.cycles) return;
+    const used = t.hash_used;
+    if (used > state.NewTableSite.max_learned) {
+        site.table = null;
+        return;
+    }
+    const ins = site.ins.?;
+    if (used > opc.c(ins.*)) opc.setC(ins, @intCast(used));
 }
 
 // ---------------------------------------------------------------------

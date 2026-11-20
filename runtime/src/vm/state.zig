@@ -319,6 +319,12 @@ pub const Global = struct {
     /// Allocation points seen, for the GC stress build.
     stress_tick: u32 = 0,
     cycles: u64 = 0,
+    /// The table the last `newtable` instruction made, with that
+    /// instruction, for the size feedback of constructors (`ops.rawSet`).
+    /// It is valid only during the collection cycle it was made in, since
+    /// the function that holds the instruction stays alive until the next
+    /// mark ends.
+    new_table: NewTableSite = .{},
     /// The last pattern whose start bytes a search computed, by its text
     /// (`firstSet` in `lib/string.zig`).
     first_set: FirstSetCache = .{},
@@ -883,6 +889,15 @@ pub const FirstSetCache = struct {
     len: usize = std.math.maxInt(usize),
     start: usize = 0,
     set: ?u128 = null,
+};
+
+pub const NewTableSite = struct {
+    table: ?*Table = null,
+    ins: ?*u32 = null,
+    cycle: u64 = 0,
+
+    /// The most hash entries a constructor learns to make room for.
+    pub const max_learned = 8;
 };
 
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
