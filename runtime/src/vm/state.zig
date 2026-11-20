@@ -950,6 +950,7 @@ pub fn createSeeded(gpa: Allocator, io: std.Io, seed_opt: ?u64) !*Global {
     g.parent_gpa = gpa;
     g.counter = .{ .child = gpa };
     g.gpa = g.counter.allocator();
+    errdefer destroy(g);
     g.gc_stopped = true; // no collection until the state is fully built
     g.memerr = try newStringKnown(g, "not enough memory", true, 17);
     try g.fixed.append(g.gpa, &g.memerr.hdr);
@@ -975,4 +976,12 @@ pub fn destroy(g: *Global) void {
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
     g.parent_gpa.destroy(g);
+}
+
+test "a state that fails to build frees what it allocated" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn build(gpa: Allocator) !void {
+            destroy(try create(gpa, std.testing.io));
+        }
+    }.build, .{});
 }

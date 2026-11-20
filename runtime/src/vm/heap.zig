@@ -15,6 +15,7 @@
 //! one test.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const gc = @import("gc.zig");
 const state_mod = @import("state.zig");
 const Header = gc.Header;
@@ -108,9 +109,24 @@ pub const Page = struct {
 pub const Segment = struct {
     pages: [pages_per_segment]Page,
     next: ?*Segment,
+    /// The start of the block the backing allocator returned, which is
+    /// the segment itself unless the segment was carved from a larger
+    /// block (`over_allocate`).
+    block: [*]u8,
     /// Pages of this segment that hold a size class.
     used: u8,
 };
+
+/// Whether segments are carved from a larger block with page alignment
+/// instead of requested at segment alignment. On Windows the page
+/// allocator of the standard library meets an alignment above the 64 KB
+/// allocation granularity of the system only when the system happens to
+/// place the block there, and fails with OutOfMemory otherwise. A block
+/// of twice the segment size less one page holds an aligned segment
+/// wherever it starts, and the heap never touches the pages around it.
+const over_allocate = builtin.os.tag == .windows;
+const block_align: std.mem.Alignment = if (over_allocate) .fromByteUnits(std.heap.page_size_min) else .fromByteUnits(segment_size);
+const block_size = if (over_allocate) 2 * segment_size - std.heap.page_size_min else segment_size;
 
 comptime {
     std.debug.assert(@sizeOf(Segment) <= page_size);
@@ -309,8 +325,10 @@ inline fn segmentOf(p: *Page) *Segment {
 
 fn newSegment(g: *Global) Allocator.Error!void {
     const h = &g.heap;
-    const mem = g.parent_gpa.rawAlloc(segment_size, .fromByteUnits(segment_size), @returnAddress()) orelse return error.OutOfMemory;
-    const seg: *Segment = @ptrCast(@alignCast(mem));
+    const block = g.parent_gpa.rawAlloc(block_size, block_align, @returnAddress()) orelse return error.OutOfMemory;
+    const start = std.mem.alignForward(usize, @intFromPtr(block), segment_size);
+    const seg: *Segment = @ptrFromInt(start);
+    seg.block = block;
     seg.next = h.segments;
     seg.used = 0;
     h.segments = seg;
@@ -486,8 +504,7 @@ pub fn releaseSegments(g: *Global) void {
         if (s.used == 0 and kept_empty) {
             link.* = s.next;
             h.nsegments -= 1;
-            const mem: [*]u8 = @ptrCast(s);
-            g.parent_gpa.rawFree(mem[0..segment_size], .fromByteUnits(segment_size), @returnAddress());
+            freeSegment(g, s);
             continue;
         }
         if (s.used == 0) kept_empty = true;
@@ -543,10 +560,13 @@ pub fn freeAll(g: *Global) void {
     var seg = h.segments;
     while (seg) |s| {
         seg = s.next;
-        const mem: [*]u8 = @ptrCast(s);
-        g.parent_gpa.rawFree(mem[0..segment_size], .fromByteUnits(segment_size), @returnAddress());
+        freeSegment(g, s);
     }
     h.* = .{};
+}
+
+fn freeSegment(g: *Global, s: *Segment) void {
+    g.parent_gpa.rawFree(s.block[0..block_size], block_align, @returnAddress());
 }
 
 test "size classes cover every small size" {
