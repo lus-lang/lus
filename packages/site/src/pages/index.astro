@@ -227,7 +227,8 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </aside>
     </section>
 
-    <CubeField class="horizon" />
+    <CubeField class="horizon wide" />
+    <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
 
     <section class="part">
       <div class="sech"><h2>Download</h2></div>
@@ -396,8 +397,17 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   /* the horizon: a full-width field of cube bars under the masthead */
-  :global(.horizon) {
+  :global(svg.horizon) {
     @apply mt-6 -mb-6;
+  }
+
+  /* phones get a shorter field, so the bars keep their scale */
+  :global(svg.horizon.narrow) {
+    @apply sm:hidden;
+  }
+
+  :global(svg.horizon.wide) {
+    @apply max-sm:hidden;
   }
 
   /* news rail, set as a ledger */
