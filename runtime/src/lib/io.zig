@@ -457,6 +457,12 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
             if (h.child == null) h.file.close(l.g.io);
             var code: i64 = 0;
             if (h.child) |*c| {
+                // The child sees the end of its input before the wait, as
+                // with pclose, so a child that reads until then can exit.
+                if (c.stdin) |f| {
+                    f.close(l.g.io);
+                    c.stdin = null;
+                }
                 const term = c.wait(l.g.io) catch return aux.retNil(l);
                 code = switch (term) {
                     .exited => |x| x,
@@ -698,12 +704,7 @@ fn popen(l: *Thread) Error!u32 {
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
     if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
-    const argv = [_][]const u8{ "/bin/sh", "-c", cmd };
-    const child = std.process.spawn(l.g.io, .{
-        .argv = &argv,
-        .stdin = if (reading) .inherit else .pipe,
-        .stdout = if (reading) .pipe else .inherit,
-    }) catch return failResult(l, "cannot run command");
+    const child = @import("shell.zig").spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin) catch return failResult(l, "cannot run command");
     const f = if (reading) child.stdout.? else child.stdin.?;
     const hv = try newHandle(l, .{ .file = f, .kind = .pipe, .readable = reading, .writable = !reading, .child = child });
     return aux.ret(l, hv);

@@ -76,4 +76,5 @@ test {
     _ = @import("tools/debug.zig");
     _ = @import("tools/dap.zig");
     _ = @import("lib/init.zig");
+    _ = @import("lib/shell.zig");
 }

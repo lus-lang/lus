@@ -205,11 +205,7 @@ fn spawnShell(l: *Thread) Error!u32 {
     if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for os.execute", .{});
     const io = l.g.io;
     out.flushAll(l.g);
-    const argv: []const []const u8 = if (builtin.os.tag == .windows)
-        &.{ "cmd.exe", "/c", c }
-    else
-        &.{ "/bin/sh", "-c", c };
-    var child = std.process.spawn(io, .{ .argv = argv }) catch |e| return fileError(l, null, e);
+    var child = @import("shell.zig").spawn(io, l.g.gpa, c, .none) catch |e| return fileError(l, null, e);
     const term = child.wait(io) catch |e| return fileError(l, null, e);
     switch (term) {
         .exited => |code| {
