@@ -63,3 +63,11 @@ $tag = "${RELEASE_TAG}"
 curl.exe -LO ${DOWNLOAD}/$tag/lus-$tag-x86_64-windows.zip
 Expand-Archive lus-$tag-x86_64-windows.zip lus
 .\\lus\\bin\\lus.exe -v`
+
+/*
+** The prompt the homepage offers beside the installer, for readers who
+** work through a coding agent. It names every command and page it uses
+** and ends on an assessment, the first phase of the lus-rewrite skill.
+** .agents/prompt.md holds the longer prompts of /agents.
+*/
+export const AGENT_PROMPT = `Install Lus (${INSTALL_SH}), run \`lus agents init\` here, read https://lus.dev/llms.txt, and tell me where Lus would help this project. Change nothing yet.`

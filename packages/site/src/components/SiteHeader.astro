@@ -21,6 +21,7 @@ const navLinks = [
   { href: "/playground", label: "playground" },
   { href: "/examples", label: "examples" },
   { href: "/manual", label: "manual" },
+  { href: "/agents", label: "agents" },
   { href: "/news", label: "news" },
 ]
 
@@ -138,16 +139,16 @@ function isActive(href: string) {
       }
 
       nav {
-        @apply text-xs flex-nowrap gap-0;
+        @apply text-[11px] flex-nowrap gap-0;
 
         a {
-          @apply px-1.5 py-2.5;
+          @apply px-1 py-2.5;
         }
       }
     }
   }
 
-  /* the smallest phones keep all five links on one line */
+  /* the smallest phones keep all six links on one line */
   @media (max-width: 360px) {
     .site-header {
       .header-inner {
@@ -155,7 +156,7 @@ function isActive(href: string) {
       }
 
       nav a {
-        @apply px-[3px];
+        @apply px-[2px] text-[10.5px];
       }
     }
   }

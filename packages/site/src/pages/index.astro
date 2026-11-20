@@ -10,106 +10,83 @@ import ReleaseStrip from "../components/ReleaseStrip.astro"
 import Benchmarks from "../components/Benchmarks.astro"
 import CubeField from "../components/CubeField.astro"
 
-import { INSTALL_SH, WINDOWS_INSTALLER_URL, RELEASE_TAG } from "../lib/install"
+import { INSTALL_SH, AGENT_PROMPT, WINDOWS_INSTALLER_URL, RELEASE_TAG } from "../lib/install"
+import { leadLine, standings, type BenchData } from "../lib/lead"
+import results from "../data/benchmarks.json"
 import { fmtDate } from "../lib/date"
-import { playgroundHref } from "../lib/playground-link"
 
 const allNews = await getCollection("news")
 const news = allNews
   .toSorted((a, b) => b.data.date.getTime() - a.data.date.getTime())
   .slice(0, 5)
 
-// six facets of the language, each linking into the guide; blurbs are
-// factual descriptions (see the copy rules in the site memory: objective,
-// standalone, distinctive facets only)
-const features = [
-  {
-    name: "permissions",
-    file: "sandbox.lus",
-    href: "/manual/guide#permissions",
-    unstable: false,
-    blurb:
-      "Scripts run under deny-by-default permissions. pledge grants capabilities at runtime and can seal the set.",
-    code: `pledge("fs:read=/var/log/*")   -- read access to logs only
-pledge("network:http")
-pledge("seal")                 -- lock the permission set
+// what Lus does for a program, each chapter one sentence and one piece of
+// evidence. The speed line comes from the benchmark data (lib/lead.ts).
+const benchmarks = results as unknown as BenchData
+const speed = standings(benchmarks)
+
+const permissionsCode = `pledge("fs:read=./data/*")
+pledge("network:http=api.example.com")
+pledge("seal")
 
 local ok = catch fs.list("/home")
--- ok == false: outside the pledged set`,
+-- ok == false: outside the pledged set`
+
+const concurrencyCode = `network.serve("0.0.0.0", 8080, function(req)
+    -- waiting here pauses this request only
+    local status, body =
+        network.fetch("http://inventory" .. req.path)
+    return status, body
+end)`
+
+const everywhereCode = `lus app.lus             # script
+lus build app.lus       # executable
+lus test                # tests
+cc host.c -llus         # C host
+npm install lus-wasm    # browser`
+
+const batteries = [
+  "JSON", "CSV", "SQLite", "HTTP client", "HTTP server", "TCP", "UDP", "TLS",
+  "gzip", "zstd", "brotli", "lz4", "time zones", "bigints", "decimals",
+  "workers", "test runner", "formatter", "checker", "debugger", "bundler",
+]
+
+const chapters = [
+  {
+    name: "fast",
+    title: "Faster than the runtimes you use today",
+    href: "#benchmarks",
+    blurb: `A two-tier JIT and a generational, parallel collector. ${leadLine(benchmarks)}`,
   },
   {
-    name: "queries",
-    file: "adults.lus",
-    href: "/manual/guide#query",
-    unstable: true,
-    blurb:
-      "An @ expression builds a first-class query with a fixed logical pipeline. It is evaluated each time it is iterated.",
-    code: `local adults =
-    @people as p
-     where p.age > 18
-     select p.name, p.age
-     order by p.age desc
-
-for row in query(adults) do
-    print(row.name, row.age)
-end`,
+    name: "batteries",
+    title: "Everything in one binary",
+    href: "/manual/api",
+    blurb: "One executable of about 7 MB carries the runtime, the libraries most projects install, and the tools.",
   },
   {
-    name: "sqlite",
-    file: "users.lus",
-    href: "/manual/guide#sqlite",
-    unstable: true,
-    blurb:
-      "io.sqlite opens file-backed or in-memory databases. A database table serves as a query source and receives the query as parameterized SQL.",
-    code: `local db <close> = io.sqlite("app.db")
-
-db:run("INSERT INTO users (name, age) VALUES (?, ?)",
-    "Alice", 30)
-
-for u in query(@db.users as u
-        where u.age >= 18 select u.name) do
-    print(u.name)
-end`,
+    name: "permissions",
+    title: "Every program states what it touches",
+    href: "/manual/acquis-10",
+    blurb: "Programs start with no access to files, network, processes, or environment, and pledge what they need.",
   },
   {
     name: "concurrency",
-    file: "pool.lus",
-    href: "/manual/guide#workers",
-    unstable: false,
-    blurb:
-      "A worker runs a script in a separate interpreter state on the thread pool and exchanges messages with its parent.",
-    code: `local w = worker.create("crunch.lus", { data = "input" })
-worker.send(w, "start")
-
-while result = worker.receive(w) do
-    print(result)
-end`,
+    title: "Thousands of connections, plain code",
+    href: "/manual/acquis-43",
+    blurb: "Sockets suspend only the coroutine that waits, so a server reads top to bottom.",
   },
   {
-    name: "time",
-    file: "zones.lus",
-    href: "/manual/guide#time",
-    unstable: true,
-    blurb:
-      "The time library separates absolute instants, civil datetimes, and durations. Named zones resolve from tzdata embedded in the runtime.",
-    code: `local now = time.now()     -- instant
-local later = now + time.hours(72)
-local ny = time.zone("America/New_York")
-
-print(later:at(ny):iso())  -- wall clock in New York`,
+    name: "everywhere",
+    title: "Script, server, executable, library, browser",
+    href: "/manual/cli",
+    blurb: "The same code runs as a script, ships as one file, embeds in C and Zig hosts, and runs in the browser.",
   },
   {
-    name: "binary data",
-    file: "pack.lus",
-    href: "/manual/guide#vector",
-    unstable: false,
-    blurb:
-      "A vector is a mutable byte buffer. vector.archive reads and writes gzip, zstd, brotli, and lz4.",
-    code: `local v = vector.create(16)
-vector.pack(v, 0, "I4I4I4I4", 1, 2, 3, 4)
-
-local packed = vector.archive.zstd.compress(v)
-local restored = vector.archive.zstd.decompress(packed)`,
+    name: "agents",
+    title: "Your agent already knows how",
+    href: "/agents",
+    blurb: "Skills, Markdown documentation, and a checker with structured output let any coding agent write, test, and port Lus.",
   },
 ]
 
@@ -192,21 +169,31 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
             A small, productive programming language designed to be picked up
             easily by programmers and put to good use right away.
           </p>
+          <div class="seg" role="group" aria-label="Install with">
+            <button type="button" data-via="shell" aria-pressed="true">shell</button>
+            <button type="button" data-via="agent" aria-pressed="false">agent</button>
+          </div>
           <div class="install crop" id="install-unix">
             <span class="plat" id="install-platform">linux · x64</span>
             <code id="install-shell">{INSTALL_SH}</code>
-            <button type="button" id="install-copy">copy</button>
+            <button type="button" data-copy="install-shell">copy</button>
           </div>
           <div class="install crop" id="install-windows" hidden>
             <span class="plat">windows · x64</span>
             <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
+          </div>
+          <div class="install crop agent" id="install-agent" hidden>
+            <span class="plat">prompt</span>
+            <code id="agent-prompt">{AGENT_PROMPT}</code>
+            <button type="button" data-copy="agent-prompt">copy</button>
           </div>
           <div class="row">
             <a class="btn solid" href="/manual/getting-started">Get started →</a>
             <a class="btn" href="/playground">Open the playground</a>
             <span class="alt">
               <a href="/manual/getting-started">other platforms</a> ·
-              <a href="/manual/compiling">build from source</a>
+              <a href="/manual/compiling">build from source</a> ·
+              <a href="/agents">for agents</a>
             </span>
           </div>
         </div>
@@ -256,27 +243,64 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </nav>
     </section>
 
-    <section class="part" id="glance">
-      <div class="sech"><h2>Lus at a glance</h2></div>
+    <section class="part" id="software">
+      <div class="sech"><h2>In your software</h2></div>
       <div class="chapters">
         {
-          features.map((f, i) => (
+          chapters.map((c, i) => (
             <article class="chap">
               <div class="no">{String(i + 1).padStart(2, "0")}</div>
-              <h3>
-                <a href={f.href}>{f.name}</a>
-                {f.unstable && <span class="tag red">unstable</span>}
-              </h3>
-              <p>{f.blurb}</p>
-              <figure class="figure crop">
-                <figcaption>
-                  <span>
-                    fig. {i + 1} · {f.file}
-                  </span>
-                  <a href={playgroundHref(f.code)}>▶ run</a>
-                </figcaption>
-                <Code lang={lusGrammar as any} themes={codeThemes as any} code={f.code} />
-              </figure>
+              <h3><a href={c.href}>{c.title}</a></h3>
+              <p>{c.blurb}</p>
+              {c.name === "fast" && (
+                <figure class="figure crop">
+                  <figcaption>
+                    <span>fig. 1 · speed of lus</span>
+                    <a href="#benchmarks">all results ↓</a>
+                  </figcaption>
+                  <ol class="ratios">
+                    {speed.map((s) => (
+                      <li class:list={{ ahead: s.speedup >= 1 }}>
+                        <span>{s.name}</span>
+                        <i aria-hidden="true" />
+                        <b>{s.speedup >= 1 ? `${s.speedup.toFixed(2)}× faster` : `${(1 / s.speedup).toFixed(2)}× slower`}</b>
+                      </li>
+                    ))}
+                  </ol>
+                </figure>
+              )}
+              {c.name === "batteries" && (
+                <figure class="figure crop">
+                  <figcaption><span>fig. 2 · built in</span><a href="/manual/api">reference →</a></figcaption>
+                  <ul class="kit">
+                    {batteries.map((b) => <li>{b}</li>)}
+                  </ul>
+                </figure>
+              )}
+              {c.name === "permissions" && (
+                <figure class="figure crop">
+                  <figcaption><span>fig. 3 · sandbox.lus</span></figcaption>
+                  <Code lang={lusGrammar as any} themes={codeThemes as any} code={permissionsCode} />
+                </figure>
+              )}
+              {c.name === "concurrency" && (
+                <figure class="figure crop">
+                  <figcaption><span>fig. 4 · server.lus</span></figcaption>
+                  <Code lang={lusGrammar as any} themes={codeThemes as any} code={concurrencyCode} />
+                </figure>
+              )}
+              {c.name === "everywhere" && (
+                <figure class="figure crop">
+                  <figcaption><span>fig. 5 · one runtime, five targets</span></figcaption>
+                  <Code lang="sh" themes={codeThemes as any} code={everywhereCode} />
+                </figure>
+              )}
+              {c.name === "agents" && (
+                <figure class="figure crop">
+                  <figcaption><span>fig. 6 · prompt</span><a href="/agents">what this does →</a></figcaption>
+                  <p class="prompt">{AGENT_PROMPT}</p>
+                </figure>
+              )}
             </article>
           ))
         }
@@ -304,14 +328,30 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     document.getElementById("install-unix").hidden = true
     document.getElementById("install-windows").hidden = false
   }
-  const copy = document.getElementById("install-copy")
-  copy.addEventListener("click", () => {
-    navigator.clipboard
-      .writeText(document.getElementById("install-shell").textContent)
-      .then(() => {
-        copy.textContent = "copied"
-      })
-  })
+  for (const button of document.querySelectorAll("[data-copy]")) {
+    button.addEventListener("click", () => {
+      navigator.clipboard
+        .writeText(document.getElementById(button.dataset.copy).textContent)
+        .then(() => {
+          button.textContent = "copied"
+        })
+    })
+  }
+  // shell or agent: the switch shows one install box. The shell side keeps
+  // the platform choice made above.
+  const shellBox = document.getElementById(
+    plat.includes("win") ? "install-windows" : "install-unix",
+  )
+  const agentBox = document.getElementById("install-agent")
+  const via = document.querySelectorAll(".seg [data-via]")
+  for (const button of via) {
+    button.addEventListener("click", () => {
+      const agent = button.dataset.via === "agent"
+      shellBox.hidden = agent
+      agentBox.hidden = !agent
+      for (const b of via) b.setAttribute("aria-pressed", String(b === button))
+    })
+  }
 </script>
 
 <style>
@@ -351,8 +391,25 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     @apply text-xl leading-[1.4] text-ink-2 max-w-[44ch] mt-5;
   }
 
+  /* shell or agent: a toggle over the install box */
+  .seg {
+    @apply inline-flex mt-[22px] border border-ink/30 rounded-[4px] overflow-hidden;
+
+    button {
+      @apply font-mono text-xs bg-field px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
+
+      &:focus-visible {
+        outline-offset: -2px;
+      }
+
+      &[aria-pressed="true"] {
+        @apply bg-solid text-on-solid;
+      }
+    }
+  }
+
   .install {
-    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md bg-field;
+    @apply flex mt-2 max-w-[620px] border border-ink rounded-md bg-field;
 
     &[hidden] {
       display: none;
@@ -377,6 +434,11 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
     button {
       @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer rounded-r-[5px] hover:bg-accent-soft;
+    }
+
+    /* the prompt is a sentence, so it wraps */
+    &.agent code {
+      @apply whitespace-normal leading-[1.5];
     }
   }
 
@@ -574,6 +636,36 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     .chapters {
       @apply grid-cols-2;
     }
+  }
+
+  /* the speed readout: one runtime per row, the factor on the right */
+  .ratios {
+    @apply list-none m-0 px-3 pt-1.5 pb-2.5 font-mono text-[13px] leading-[1.6] space-y-0;
+
+    li {
+      @apply flex items-baseline gap-1.5;
+    }
+
+    i {
+      @apply flex-1 min-w-3;
+    }
+
+    b {
+      @apply font-semibold text-figure-ink-3 tabular-nums;
+    }
+
+    .ahead b {
+      @apply text-figure-ink;
+    }
+  }
+
+  /* the batteries: a dense set of mono labels */
+  .kit {
+    @apply list-none m-0 px-3 pt-1.5 pb-2.5 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[13px] leading-[1.6];
+  }
+
+  .figure .prompt {
+    @apply m-0 px-3 pt-1.5 pb-2.5 font-mono text-[13px] leading-[1.6];
   }
 
   /* the chapter under the pointer lights its numeral */

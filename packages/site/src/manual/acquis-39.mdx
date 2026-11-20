@@ -2,11 +2,11 @@
 order: 139
 title: "Acquis 39 - Developer Tools"
 acquis: true
-shortdesc: "The fmt, check, doc, ast, build, and compile subcommands of the lus executable."
+shortdesc: "The fmt, check, doc, ast, build, compile, help, and agents subcommands of the lus executable."
 draft: true
 ---
 
-The `lus` executable carries the everyday tools of a Lus project as subcommands. `lus fmt` formats source, `lus check` reports errors and lint warnings, `lus doc` generates API documentation from doc comments, `lus ast` prints syntax trees, `lus build` turns a script into a standalone executable, and `lus compile` turns it into a binary chunk. Every tool uses the same parser as the interpreter, so they all agree on what a program means.
+The `lus` executable carries the everyday tools of a Lus project as subcommands. `lus fmt` formats source, `lus check` reports errors and lint warnings, `lus doc` generates API documentation from doc comments, `lus ast` prints syntax trees, `lus build` turns a script into a standalone executable, `lus compile` turns it into a binary chunk, `lus help` prints the standard library reference, and `lus agents init` sets a project up for coding agents. Every tool uses the same parser as the interpreter, so they all agree on what a program means.
 
 ```
 lus fmt     format source files
@@ -15,9 +15,11 @@ lus doc     generate API documentation from doc comments
 lus ast     print the syntax tree of a file as JSON
 lus build   bundle a script into a standalone executable
 lus compile compile a script to a binary chunk
+lus help    print the standard library reference for a name
+lus agents  set a project up for coding agents
 ```
 
-The tools that read source accept file names, and with no file, or with the file `-`, they read standard input. Their exit status is 0 on success, 1 when they report a problem in the input, and 2 for a usage or I/O error.
+The tools that read source accept file names, and with no file, or with the file `-`, they read standard input. `lus fmt` and `lus check` also accept directories, which stand for every `.lus` file below them, leaving out `node_modules`, `.git`, `zig-out`, and `.zig-cache`. Their exit status is 0 on success, 1 when they report a problem in the input, and 2 for a usage or I/O error.
 
 ## Formatting
 
@@ -48,6 +50,16 @@ messy.lus:5:1: warning: global 'total' is assigned without a 'global' declaratio
 Errors are programs the compiler rejects, such as an assignment to a constant, a `goto` without a visible label, or a `continue` outside every loop. Warnings are programs that run but probably do not do what their author meant, such as unused locals, shadowed names, and unreachable code, along with Lua idioms that a Lus feature expresses directly, such as copying fields one by one where [`from`](/manual/acquis-4) does it in one statement or spelling out nil checks that [optional chaining](/manual/acquis-2) covers. `lus check --list` prints every diagnostic code with its severity and summary. A name that starts with an underscore is exempt from the unused checks.
 
 `--json` prints all diagnostics as one JSON array of objects with the fields `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`, and `message`, for editors and other tools.
+
+A file whose name ends in `_test.lus` is checked as a [test file](/manual/acquis-38). The helpers `snapshot`, `raises`, `same`, `skip`, and `TEST_DIR` count as defined, and the top-level `NAME_test` functions and `NAME_cases` tables that the runner reads count as used.
+
+A syntax error on a construct from another language names the Lus spelling, which helps people and coding agents who reach for habits of other languages.
+
+```
+total.lus:2:7: error: syntax error near '+' (update a variable with 'x = x + y') [syntax]
+```
+
+The hints cover compound assignment, `++`, `!=`, `!`, `&&`, `||`, and `//` comments, and `undefined-global` on `null` points to `nil`.
 
 ## Documentation
 
@@ -114,6 +126,22 @@ The executable is a copy of the running `lus` with the compiled chunks appended.
 lus compile -o report.lusc report.lus
 lus report.lusc data.csv
 ```
+
+## Reference
+
+`lus help NAME` prints the signature, the permissions the call needs, the stability, and the description of a standard library entry, from documentation compiled into the executable, so it always matches the running version. `lus help MODULE` lists a module with one line per entry, `lus help` lists the modules, and `lus help --search TEXT` finds the entries whose name or description mentions `TEXT`. A name that matches nothing lists the names that contain it.
+
+```
+$ lus help network.serve
+network.serve(host, port, handler, options?)
+needs network:server, network:tcp
+
+Serves HTTP/1.1 on `host` and `port` and calls `handler` for every request. ...
+```
+
+## Agents
+
+`lus agents init [DIR]` writes the agent skills of the running version into `DIR/.agents/skills`, the folder that coding agents across tools read. It links `.claude/skills` to that folder, or links each skill into it when `.claude/skills` is already a directory, and copies the skills where the system refuses symbolic links. It then adds a short Lus section to `AGENTS.md`, creating the file if needed. Running it again updates the skills and leaves everything else as it is. [The agents page](/agents) lists the skills and the prompts to start from.
 
 ---
 

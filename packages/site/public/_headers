@@ -1,3 +1,13 @@
 # The installer script must read as plain text in browsers and curl
 /install.sh
   Content-Type: text/x-shellscript; charset=utf-8
+
+# The documentation for agents reads as text in browsers and fetch tools
+/llms.txt
+  Content-Type: text/plain; charset=utf-8
+/llms-full.txt
+  Content-Type: text/plain; charset=utf-8
+/llms-small.txt
+  Content-Type: text/plain; charset=utf-8
+/*.md
+  Content-Type: text/markdown; charset=utf-8

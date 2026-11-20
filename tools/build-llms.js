@@ -9,6 +9,8 @@
 //   manual/NAME.md           each manual page as Markdown
 //   manual/api.md            the standard library reference
 //   agents/skills/...        the skills, verbatim
+//   agents.md                the agent entry page: prompts, skills, files
+//   benchmarks.md            the cross-language benchmarks as tables
 // With --out the files are written below DIR. With --check they are built
 // and validated, and nothing is written.
 
@@ -237,6 +239,96 @@ function shiftHeadings(markdown) {
 }
 
 // ---------------------------------------------------------------------
+// The agent entry page and the benchmarks
+
+// The prompts of .agents/prompt.md: one per second-level heading, with
+// the text of its first fenced block.
+function loadPrompts(root = ROOT) {
+  const text = fs.readFileSync(path.join(root, ".agents", "prompt.md"), "utf8").replace(/\r\n/g, "\n");
+  const prompts = [];
+  for (const part of text.split(/^## /m).slice(1)) {
+    const title = part.slice(0, part.indexOf("\n")).trim();
+    const block = part.match(/```\w*\n([\s\S]*?)\n```/);
+    if (block) prompts.push({title, text: block[1]});
+  }
+  return prompts;
+}
+
+function skillDescription(text) {
+  const m = text.match(/^---\n[\s\S]*?^description:\s*(.+)$/m);
+  return m ? m[1].trim() : "";
+}
+
+function renderAgents(prompts, skills) {
+  const lines = [
+    "# Lus for agents",
+    "",
+    "> Everything a coding agent needs to write, test, and port Lus: prompts to start from, skills to install, and the documentation in Markdown.",
+    "",
+    "## Prompts",
+    "",
+    "Paste one of these into a coding agent. Each prompt names every command and page it uses.",
+    "",
+  ];
+  for (const p of prompts) lines.push(`### ${p.title}`, "", "```text", p.text, "```", "");
+  lines.push(
+    "## Skills",
+    "",
+    "`lus agents init` writes the skills of the installed runtime into `.agents/skills/` of a project, links `.claude/skills` to them, and adds a Lus section to `AGENTS.md`. `lus help NAME` prints the reference for any standard library function from the same runtime.",
+    "",
+  );
+  for (const [name, text] of skills) lines.push(`- [${name}](${SITE}/agents/skills/${name}/SKILL.md): ${skillDescription(text)}`);
+  lines.push(
+    "",
+    "## Documentation",
+    "",
+    `- [llms.txt](${SITE}/llms.txt): The index of the documentation.`,
+    `- [llms-small.txt](${SITE}/llms-small.txt): The differences from Lua and every function signature, sized for a small context.`,
+    `- [llms-full.txt](${SITE}/llms-full.txt): The whole manual and the API reference in one file.`,
+    `- Every manual page has a Markdown twin at the same address with \`.md\` appended, such as [the guide](${SITE}/manual/guide.md).`,
+    "",
+  );
+  return lines.join("\n");
+}
+
+function listText(items) {
+  if (items.length <= 2) return items.join(" and ");
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function renderBenchmarks(data) {
+  const ids = ["lus", ...Object.keys(data.runtimes).filter((id) => id !== "lus")];
+  const names = ids.map((id) => data.runtimes[id].name);
+  const table = (key, fmt) => {
+    const rows = [`| program | ${names.join(" | ")} |`, `| --- |${ids.map(() => " ---: |").join("")}`];
+    for (const program of Object.keys(data.programs).sort(compareText)) {
+      const cells = ids.map((id) => {
+        const c = data.programs[program][id];
+        return c && c.ok !== false && typeof c[key] === "number" ? fmt(c[key]) : "n/a";
+      });
+      rows.push(`| ${program} | ${cells.join(" | ")} |`);
+    }
+    return rows.join("\n");
+  };
+  return [
+    "# Benchmarks",
+    "",
+    `> Lus against ${listText(names.slice(1))} on ${Object.keys(data.programs).length} programs of the cross-language suite in \`tests/bench/compare\`.`,
+    "",
+    `Measured on ${data.device.cpu} with ${data.device.cores} cores and ${data.device.memory_gb} GB under ${data.os}, best of ${data.runs} runs. Each program does the same work in every language, and the suite checks that every runtime prints the same output.`,
+    "",
+    "## Best wall time in seconds, lower is better",
+    "",
+    table("best_s", (v) => v.toFixed(2)),
+    "",
+    "## Peak memory in MB, lower is better",
+    "",
+    table("peak_rss_mb", (v) => String(Math.round(v))),
+    "",
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------
 // Assembly
 
 function build(root = ROOT) {
@@ -260,6 +352,15 @@ function build(root = ROOT) {
     const rel = path.relative(agents, file).split(path.sep).join("/");
     files.set(`agents/${rel}`, fs.readFileSync(file, "utf8"));
   }
+
+  const skills = [];
+  for (const [name, text] of files) {
+    const m = name.match(/^agents\/skills\/([^/]+)\/SKILL\.md$/);
+    if (m) skills.push([m[1], text]);
+  }
+  files.set("agents.md", renderAgents(loadPrompts(root), skills));
+  const bench = path.join(root, "packages", "site", "src", "data", "benchmarks.json");
+  files.set("benchmarks.md", renderBenchmarks(JSON.parse(fs.readFileSync(bench, "utf8"))));
 
   const order = [
     ...LEAD_PAGES,
@@ -322,8 +423,6 @@ function outsideFences(markdown) {
   });
 }
 
-// Pages the site serves that this generator does not build.
-const SITE_PAGES = new Set(["agents.md", "benchmarks.md"]);
 
 function validate({files, stdlib}) {
   const problems = [];
@@ -346,7 +445,7 @@ function validate({files, stdlib}) {
     });
     for (const m of text.matchAll(/\]\((https:\/\/lus\.dev\/[^)#\s]+\.(?:md|txt))[)#]/g)) {
       const target = m[1].slice(SITE.length + 1);
-      if (!files.has(target) && !SITE_PAGES.has(target)) problems.push(`${name}: link to missing ${m[1]}`);
+      if (!files.has(target)) problems.push(`${name}: link to missing ${m[1]}`);
     }
   }
   return problems;
@@ -378,4 +477,4 @@ if (require.main === module) {
   process.exitCode = main();
 }
 
-module.exports = {build, validate, signature, mdxToMarkdown, rewriteLinks, estimateTokens, SMALL_TOKEN_BUDGET};
+module.exports = {build, validate, loadPrompts, signature, mdxToMarkdown, rewriteLinks, estimateTokens, SMALL_TOKEN_BUDGET};

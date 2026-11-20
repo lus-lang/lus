@@ -90,6 +90,7 @@ const sidebarToc = headings
   unstable={page.data.draft}
   measure
   toc={sidebarToc}
+  markdown={`/manual/${page.id}.md`}
 >
   {
     page.data.acquis && (
@@ -143,6 +144,7 @@ const sidebarToc = headings
     )
   }
   <rendered.Content />
+  <p class="twin label"><a href={`/manual/${page.id}.md`}>this page as markdown</a></p>
   {
     (prev || next) && (
       <nav class="pager" aria-label="Manual pages">
@@ -169,6 +171,14 @@ const sidebarToc = headings
 
 <style>
   @reference "../../styles/global.css";
+
+  .twin {
+    @apply mt-10;
+
+    a {
+      @apply normal-case tracking-normal font-normal text-ink-2 no-underline hover:text-ink hover:bg-accent-soft;
+    }
+  }
 
   .crumb {
     @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 pt-2;

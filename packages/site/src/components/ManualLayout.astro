@@ -11,8 +11,10 @@ interface Props {
   measure?: boolean
   /** current page h2 headings, rendered under the active sidebar link */
   toc?: TocItem[]
+  /** the page's Markdown twin */
+  markdown?: string
 }
-const { title, unstable, measure, toc } = Astro.props
+const { title, unstable, measure, toc, markdown } = Astro.props
 
 const manual = await getCollection("manual")
 
@@ -63,7 +65,7 @@ groups
   )
 ---
 
-<Layout title={title} unstable={unstable}>
+<Layout title={title} unstable={unstable} markdown={markdown}>
   <main id="main">
     <section class="manual-shell">
       <article class:list={["flex-1 min-w-0", { measured: measure }]}>

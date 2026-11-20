@@ -1,0 +1,184 @@
+---
+/*
+** /agents: the entry point for readers who work through a coding agent.
+** Its prompts come from .agents/prompt.md and its skills from
+** .agents/skills, through the same build as /agents.md (lib/llms.ts).
+*/
+import Layout from "../components/Layout.astro"
+import { llmsFiles } from "../lib/llms"
+
+const files = llmsFiles()
+// the prompts of .agents/prompt.md, the first of which the masthead offers
+const prompts: { title: string; text: string }[] = []
+for (const part of (files.get("agents.md") ?? "").split(/^### /m).slice(1)) {
+  const title = part.slice(0, part.indexOf("\n")).trim()
+  const block = part.match(/```text\n([\s\S]*?)\n```/)
+  if (block) prompts.push({ title, text: block[1] })
+}
+
+const skills = [...files.entries()]
+  .map(([name, text]) => ({ m: name.match(/^agents\/skills\/([^/]+)\/SKILL\.md$/), text }))
+  .filter((s) => s.m)
+  .map((s) => ({
+    name: s.m![1],
+    description: s.text.match(/^description:\s*(.+)$/m)?.[1] ?? "",
+  }))
+  .toSorted((a, b) => a.name.length - b.name.length)
+
+const docs = [
+  { href: "/llms.txt", name: "llms.txt", desc: "index of the documentation" },
+  { href: "/llms-small.txt", name: "llms-small.txt", desc: "differences from Lua and every signature" },
+  { href: "/llms-full.txt", name: "llms-full.txt", desc: "the whole manual in one file" },
+  { href: "/manual/guide.md", name: "/manual/*.md", desc: "every manual page as Markdown" },
+  { href: "/agents.md", name: "agents.md", desc: "this page as Markdown" },
+]
+---
+
+<Layout
+  title="Agents"
+  description="Prompts, skills, and Markdown documentation for coding agents that write, test, and port Lus."
+>
+  <main id="main">
+    <section>
+      <div class="title-row"><h1 class="page-title">Agents</h1></div>
+      <p class="intro">
+        Hand Lus to a coding agent. Each prompt names every command and page
+        it uses, so you can read them first.
+      </p>
+    </section>
+
+    <section class="part">
+      <div class="sech"><h2>Prompts</h2></div>
+      <div class="prompts">
+        {
+          prompts.map((p, i) => (
+            <figure class="figure crop">
+              <figcaption>
+                <span>{String(i + 1).padStart(2, "0")} · {p.title}</span>
+                <button type="button" class="copy" data-copy={`prompt-${i}`}>copy</button>
+              </figcaption>
+              <p class="prompt" id={`prompt-${i}`}>{p.text}</p>
+            </figure>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="part">
+      <div class="sech"><h2>Skills</h2><span class="label">lus agents init</span></div>
+      <p class="lede">
+        <code>lus agents init</code> writes the skills of the installed runtime
+        into <code>.agents/skills/</code>, links <code>.claude/skills</code> to
+        them, and adds a Lus section to <code>AGENTS.md</code>.
+        <code>lus help NAME</code> prints the reference for any function from
+        the same runtime.
+      </p>
+      <dl class="ledger">
+        {
+          skills.map((s) => (
+            <>
+              <dt><a href={`/agents/skills/${s.name}/SKILL.md`}>{s.name}</a></dt>
+              <dd>{s.description}</dd>
+            </>
+          ))
+        }
+      </dl>
+    </section>
+
+    <section class="part">
+      <div class="sech"><h2>Documentation</h2><span class="label">markdown</span></div>
+      <nav class="index" aria-label="Documentation for agents">
+        {
+          docs.map((d) => (
+            <a href={d.href}>
+              <b>{d.name}</b>
+              <i aria-hidden="true" />
+              <span>{d.desc}</span>
+            </a>
+          ))
+        }
+      </nav>
+    </section>
+  </main>
+</Layout>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-copy]")) {
+    button.addEventListener("click", () => {
+      const text = document.getElementById(button.dataset.copy!)?.textContent ?? ""
+      navigator.clipboard.writeText(text).then(() => {
+        button.textContent = "copied"
+      })
+    })
+  }
+</script>
+
+<style>
+  @reference "../styles/global.css";
+
+  .intro,
+  .lede {
+    @apply text-ink-2 max-w-[48.5rem];
+  }
+
+  .prompts {
+    @apply grid grid-cols-1 gap-6 pt-2;
+  }
+
+  @media (min-width: 900px) {
+    .prompts {
+      @apply grid-cols-3;
+    }
+  }
+
+  .prompt {
+    @apply m-0 px-3 pt-1.5 pb-2.5 font-mono text-[13px] leading-[1.6] whitespace-pre-wrap;
+  }
+
+  .copy {
+    @apply font-mono text-[11px] normal-case tracking-normal bg-transparent border-0 p-0 cursor-pointer text-figure-link hover:text-figure-ink;
+  }
+
+  .ledger {
+    @apply grid gap-x-6 gap-y-1.5 m-0 max-w-[48.5rem];
+    grid-template-columns: max-content minmax(0, 1fr);
+
+    dt {
+      @apply font-mono font-semibold text-sm;
+    }
+
+    dt a {
+      @apply no-underline text-ink hover:bg-accent-soft;
+    }
+
+    dd {
+      @apply m-0 text-sm text-ink-2;
+    }
+  }
+
+  .index {
+    @apply grid grid-cols-1 max-w-[48.5rem];
+
+    a {
+      @apply flex items-baseline gap-1.5 py-1 no-underline font-normal text-[13px] text-ink hover:bg-accent-soft hover:text-ink;
+    }
+
+    b {
+      @apply font-mono font-semibold whitespace-nowrap;
+    }
+
+    i {
+      @apply flex-1 min-w-3;
+    }
+
+    span {
+      @apply text-ink-3 text-right;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .ledger {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

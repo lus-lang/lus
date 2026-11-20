@@ -3,7 +3,7 @@ order: 4
 title: CLI
 icon: terminal
 group: use
-shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, compile, and debug."
+shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, compile, debug, help, and agents."
 ---
 
 ## lus
@@ -26,6 +26,8 @@ The `lus` executable runs scripts and carries the tools of a Lus project as comm
 | `build` | Bundle a script into a standalone executable. |
 | `compile` | Compile a script to a binary chunk. |
 | `debug` | Run a script under the Debug Adapter Protocol. |
+| `help` | Print the standard library reference for a name. |
+| `agents` | Set a project up for coding agents. |
 
 ### Options
 
@@ -68,10 +70,10 @@ Runs the tests in the named files, or in every `*_test.lus` file below the named
 ## lus fmt
 
 ```
-lus fmt [--check] [--write] [--indent N] [file ...]
+lus fmt [--check] [--write] [--indent N] [path ...]
 ```
 
-Prints the formatted text of each file to standard output. With no file, or with the file `-`, it reads standard input.
+Prints the formatted text of each file to standard output. A directory stands for every `.lus` file below it. With no file, or with the file `-`, it reads standard input.
 
 | Option | Effect |
 | --- | --- |
@@ -82,10 +84,10 @@ Prints the formatted text of each file to standard output. With no file, or with
 ## lus check
 
 ```
-lus check [--json] [--list] [file ...]
+lus check [--json] [--list] [path ...]
 ```
 
-Parses, lints, and compiles each file without running it and prints each problem as `file:line:column: severity: message [code]`. The exit status is 1 when anything is reported.
+Parses, lints, and compiles each file without running it and prints each problem as `file:line:column: severity: message [code]`. A directory stands for every `.lus` file below it, and files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when anything is reported.
 
 | Option | Effect |
 | --- | --- |
@@ -160,5 +162,25 @@ Runs a script under the Debug Adapter Protocol for editors such as VS Code. [Acq
 | `--stdio` | Speak the protocol on standard input and output (the default). |
 | `--port N` | Accept one client on `127.0.0.1:N`. |
 | `-P perm`, `--pledge perm` | Grant a permission to the program. |
+
+## lus help
+
+```
+lus help [name | module | --search text]
+```
+
+Prints the standard library reference compiled into the executable, so it matches the running version. A name such as `string.find` or `tcp_socket:receive` prints the signature, the permissions the call needs, the stability, and the description. A module such as `fs.path` lists its entries, and no argument lists the modules. A name that matches nothing lists the names that contain it, with exit status 1.
+
+| Option | Effect |
+| --- | --- |
+| `--search text`, `-s text` | List the entries whose name or description mentions `text`. |
+
+## lus agents
+
+```
+lus agents init [dir]
+```
+
+Writes the agent skills of the running version into `dir/.agents/skills`, the current directory by default, links `.claude/skills` to them, and adds a Lus section to `AGENTS.md`. Running it again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
 
 Building the executable itself is covered in [Compiling Lus](/manual/compiling).

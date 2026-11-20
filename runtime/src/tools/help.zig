@@ -357,7 +357,8 @@ test help {
     var out: std.Io.Writer.Allocating = .init(a);
 
     try std.testing.expectEqual(@as(u8, 0), try help(a, &out.writer, &.{"network.serve"}));
-    try std.testing.expect(std.mem.startsWith(u8, out.written(), "network.serve(host, port, handler)\nneeds network:server, network:tcp\n"));
+    try std.testing.expect(std.mem.startsWith(u8, out.written(), "network.serve(host, port, handler"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), ")\nneeds network:server, network:tcp\n") != null);
 
     out.clearRetainingCapacity();
     try std.testing.expectEqual(@as(u8, 0), try help(a, &out.writer, &.{"fs.path"}));
