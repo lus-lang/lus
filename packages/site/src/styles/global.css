@@ -182,6 +182,29 @@ main {
   @apply max-w-[1240px] w-full mx-auto px-4 md:px-6 py-6 space-y-8;
 }
 
+/* paper grain: a still fractal noise behind every page, like print stock */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.045;
+}
+
+@media (prefers-color-scheme: dark) {
+  body::before {
+    filter: invert(1);
+    opacity: 0.035;
+  }
+}
+
+:root.night body::before {
+  filter: invert(1);
+  opacity: 0.035;
+}
+
 /* page title: the display h1 that opens every page below the masthead */
 @utility page-title {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
@@ -219,9 +242,23 @@ main {
   @apply border-b-2 border-rule mb-3;
 }
 
-/* code figure: tint block under the 2px spine, mono caption on top */
+/* code figure: tint block under the 2px spine, mono caption on top, with
+   registration marks at its four corners like a plate on a proof sheet */
 .figure {
-  @apply bg-figure text-figure-ink border-t-2 border-rule m-0;
+  @apply relative bg-figure text-figure-ink border-t-2 border-rule m-0;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+    pointer-events: none;
+    --mark: linear-gradient(var(--color-ink-3), var(--color-ink-3));
+    background:
+      var(--mark) top left / 3px 3px no-repeat,
+      var(--mark) top right / 3px 3px no-repeat,
+      var(--mark) bottom left / 3px 3px no-repeat,
+      var(--mark) bottom right / 3px 3px no-repeat;
+  }
 
   figcaption {
     @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-figure-ink-3 px-3 pt-1.5;

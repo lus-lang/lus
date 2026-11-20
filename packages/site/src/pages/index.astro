@@ -8,6 +8,7 @@ import codeThemes from "../lib/code-themes.mjs"
 import Layout from "../components/Layout.astro"
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 import Benchmarks from "../components/Benchmarks.astro"
+import CubeField from "../components/CubeField.astro"
 
 import { INSTALL_SH, WINDOWS_INSTALLER_URL, RELEASE_TAG } from "../lib/install"
 import { fmtDate } from "../lib/date"
@@ -226,6 +227,8 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </aside>
     </section>
 
+    <CubeField class="horizon" />
+
     <section class="part">
       <div class="sech"><h2>Download</h2></div>
       <ReleaseStrip />
@@ -392,9 +395,15 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
+  /* the horizon: a full-width field of cube bars under the masthead */
+  :global(.horizon) {
+    @apply mt-6 -mb-6;
+  }
+
   /* news rail, set as a ledger */
   .rail {
     @apply flex flex-col justify-end pl-5;
+
 
     .rail-head {
       @apply flex justify-between mb-1.5;
