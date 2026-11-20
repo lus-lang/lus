@@ -119,49 +119,88 @@ fn spawnWindows(gpa: std.mem.Allocator, command: []const u8, pipe: Pipe) SpawnEr
     @memcpy(app[0..sys.len], sys);
     @memcpy(app[sys.len..], suffix);
 
-    // The child end of the pipe is inheritable and the parent end is not.
+    // Both ends of the pipe start without the inherit flag. The child
+    // inherits exactly its three standard handles through a handle list,
+    // so it never picks up a handle that another thread made inheritable
+    // for a child of its own. Every handle in the list is an inheritable
+    // duplicate that lives only until CreateProcessW returns.
     var ends: [2]w.HANDLE = undefined;
     if (pipe != .none) {
-        const sa: w.SECURITY_ATTRIBUTES = .{ .nLength = @sizeOf(w.SECURITY_ATTRIBUTES), .lpSecurityDescriptor = null, .bInheritHandle = .TRUE };
-        if (!win.CreatePipe(&ends[0], &ends[1], &sa, 0).toBool()) return error.SystemResources;
-        const parent_end = if (pipe == .stdout) ends[0] else ends[1];
-        if (!win.SetHandleInformation(parent_end, win.HANDLE_FLAG_INHERIT, 0).toBool()) {
-            w.CloseHandle(ends[0]);
-            w.CloseHandle(ends[1]);
-            return error.SystemResources;
+        if (!win.CreatePipe(&ends[0], &ends[1], null, 0).toBool()) return error.SystemResources;
+    }
+    const parent_end: ?w.HANDLE = switch (pipe) {
+        .none => null,
+        .stdin => ends[1],
+        .stdout => ends[0],
+    };
+    const child_end: ?w.HANDLE = switch (pipe) {
+        .none => null,
+        .stdin => ends[0],
+        .stdout => ends[1],
+    };
+    // The parent closes its copy of the child end once the child has
+    // been created, or on failure, and keeps the parent end on success.
+    defer if (child_end) |h| w.CloseHandle(h);
+    errdefer if (parent_end) |h| w.CloseHandle(h);
+
+    const params = w.peb().ProcessParameters;
+    const std_in = win.inheritable(if (pipe == .stdin) child_end else params.hStdInput);
+    defer if (std_in) |h| w.CloseHandle(h);
+    const std_out = win.inheritable(if (pipe == .stdout) child_end else params.hStdOutput);
+    defer if (std_out) |h| w.CloseHandle(h);
+    const std_err = win.inheritable(params.hStdError);
+    defer if (std_err) |h| w.CloseHandle(h);
+    // The pipe end the child needs must reach it.
+    if (pipe == .stdin and std_in == null) return error.SystemResources;
+    if (pipe == .stdout and std_out == null) return error.SystemResources;
+
+    var list: [3]w.HANDLE = undefined;
+    var count: usize = 0;
+    for ([_]?w.HANDLE{ std_in, std_out, std_err }) |h| {
+        if (h) |v| {
+            list[count] = v;
+            count += 1;
         }
     }
-    const params = w.peb().ProcessParameters;
-    var si: w.STARTUPINFOW = .{
-        .cb = @sizeOf(w.STARTUPINFOW),
-        .lpReserved = null,
-        .lpDesktop = null,
-        .lpTitle = null,
-        .dwX = 0,
-        .dwY = 0,
-        .dwXSize = 0,
-        .dwYSize = 0,
-        .dwXCountChars = 0,
-        .dwYCountChars = 0,
-        .dwFillAttribute = 0,
-        .dwFlags = w.STARTF_USESTDHANDLES,
-        .wShowWindow = 0,
-        .cbReserved2 = 0,
-        .lpReserved2 = null,
-        .hStdInput = if (pipe == .stdin) ends[0] else params.hStdInput,
-        .hStdOutput = if (pipe == .stdout) ends[1] else params.hStdOutput,
-        .hStdError = params.hStdError,
+    var attr_size: usize = 0;
+    _ = win.InitializeProcThreadAttributeList(null, 1, 0, &attr_size);
+    const attr_mem = try gpa.alignedAlloc(u8, .of(usize), @max(attr_size, 1));
+    defer gpa.free(attr_mem);
+    const attrs: *anyopaque = attr_mem.ptr;
+    if (!win.InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size).toBool()) return error.SystemResources;
+    defer win.DeleteProcThreadAttributeList(attrs);
+    if (count > 0 and !win.UpdateProcThreadAttribute(attrs, 0, win.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &list, count * @sizeOf(w.HANDLE), null, null).toBool())
+        return error.SystemResources;
+
+    var si: win.STARTUPINFOEXW = .{
+        .info = .{
+            .cb = @sizeOf(win.STARTUPINFOEXW),
+            .lpReserved = null,
+            .lpDesktop = null,
+            .lpTitle = null,
+            .dwX = 0,
+            .dwY = 0,
+            .dwXSize = 0,
+            .dwYSize = 0,
+            .dwXCountChars = 0,
+            .dwYCountChars = 0,
+            .dwFillAttribute = 0,
+            .dwFlags = w.STARTF_USESTDHANDLES,
+            .wShowWindow = 0,
+            .cbReserved2 = 0,
+            .lpReserved2 = null,
+            .hStdInput = std_in,
+            .hStdOutput = std_out,
+            .hStdError = std_err,
+        },
+        .attribute_list = attrs,
     };
     var pi: w.PROCESS.INFORMATION = undefined;
-    const ok = w.kernel32.CreateProcessW(app.ptr, line_w.ptr, null, null, .TRUE, .{}, null, null, &si, &pi).toBool();
-    const err = if (ok) w.Win32Error.SUCCESS else w.GetLastError();
-    // The child holds its own copy of its end.
-    if (pipe == .stdout) w.CloseHandle(ends[1]);
-    if (pipe == .stdin) w.CloseHandle(ends[0]);
-    if (!ok) {
-        if (pipe == .stdout) w.CloseHandle(ends[0]);
-        if (pipe == .stdin) w.CloseHandle(ends[1]);
-        return switch (err) {
+    // With a handle list, bInheritHandles lets the child inherit only the
+    // handles of the list.
+    const inherit: w.BOOL = if (count > 0) .TRUE else .FALSE;
+    if (!w.kernel32.CreateProcessW(app.ptr, line_w.ptr, null, null, inherit, .{ .extended_startupinfo_present = true }, null, null, &si.info, &pi).toBool()) {
+        return switch (w.GetLastError()) {
             .FILE_NOT_FOUND, .PATH_NOT_FOUND => error.FileNotFound,
             .ACCESS_DENIED => error.AccessDenied,
             .FILENAME_EXCED_RANGE => error.NameTooLong,
@@ -171,8 +210,8 @@ fn spawnWindows(gpa: std.mem.Allocator, command: []const u8, pipe: Pipe) SpawnEr
     return .{
         .id = pi.hProcess,
         .thread_handle = pi.hThread,
-        .stdin = if (pipe == .stdin) .{ .handle = ends[1], .flags = .{ .nonblocking = false } } else null,
-        .stdout = if (pipe == .stdout) .{ .handle = ends[0], .flags = .{ .nonblocking = false } } else null,
+        .stdin = if (pipe == .stdin) .{ .handle = parent_end.?, .flags = .{ .nonblocking = false } } else null,
+        .stdout = if (pipe == .stdout) .{ .handle = parent_end.?, .flags = .{ .nonblocking = false } } else null,
         .stderr = null,
         .request_resource_usage_statistics = false,
     };
