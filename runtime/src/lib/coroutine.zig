@@ -330,12 +330,21 @@ fn handleStop(co: *Thread, e: anyerror) Outcome {
 /// the final error, or null when everything closed cleanly.
 fn closeThread(co: *Thread) ?Value {
     sched.abandonWait(co);
+    // The results or the error that waiters still read. The end of a
+    // detached coroutine woke them, and they run after this close.
+    var owed: u32 = 0;
+    var owed_err: ?Value = null;
     if (sched.taskOf(co)) |t| {
         // Closing a detached coroutine collects its error and drops the
-        // results it kept.
+        // results that no waiter reads anymore.
         if (t.detached) {
             t.collected = true;
-            t.nres = 0;
+            if (t.fin_waiters > 0) {
+                owed = t.nres;
+                if (t.outcome == .failed) owed_err = co.err;
+            } else {
+                t.nres = 0;
+            }
         }
     }
     var err: ?Value = if (co.status == .err) co.err else null;
@@ -351,9 +360,14 @@ fn closeThread(co: *Thread) ?Value {
     }
     co.frames.items.len = 0;
     co.tbc.items.len = 0;
-    co.top = 0;
+    // A coroutine that returned has no frames, so its results are still
+    // at the top of its stack. They move to the bottom.
+    const from = co.top - owed;
+    var i: u32 = 0;
+    while (i < owed) : (i += 1) co.stack[i] = co.stack[from + i];
+    co.top = owed;
     co.status = .dead;
-    co.err = .nil;
+    co.err = owed_err orelse .nil;
     return err;
 }
 
