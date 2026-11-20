@@ -7,12 +7,11 @@ pledge("network")
 local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
 local status, close = coroutine.status, coroutine.close
 
--- The server reports handler errors through `warn`. The tests record what
--- it reports. The server reads `warn` when it first serves, so this runs
--- before any test.
-local warnings = {}
-_G.warn = function(...)
-    warnings[#warnings + 1] = table.concat({ ... })
+-- The server passes the errors of a handler to the `on_error` function
+-- of its options. The tests record them.
+local reported = {}
+local function record(err)
+    reported[#reported + 1] = err
 end
 
 local function txt(v)
@@ -45,10 +44,10 @@ local function listen()
 end
 
 -- Serves `handler` on a free port while `body(port)` runs, then stops
--- the server.
-local function serving(handler, body)
+-- the server. `options` are the options of `network.serve`.
+local function serving(handler, body, options)
     local server, port = listen()
-    local co = spawn(network.serve, server, handler)
+    local co = spawn(network.serve, server, handler, options or { on_error = record })
     local ok, err = catch body(port)
     assert(close(co))
     server:close()
@@ -222,6 +221,109 @@ local function a_chunked_body_keeps_its_bytes_test()
         exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1\r\n \r\na\r\nchunked \r\n\r\n0\r\n\r\n")
     end)
     assert(seen == "hello chunked \r\n")
+end
+
+-- A chunked body leaves the buffer of the connection as it is decoded,
+-- whatever the sizes of its chunks and of the pieces it arrives in.
+local function a_chunked_body_of_many_small_chunks_test()
+    local seen
+    serving(function(req)
+        seen = txt(req.body)
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local parts, expected = {}, {}
+        for i = 1, 20000 do
+            local byte = string.char(97 + i % 26)
+            parts[i] = "1\r\n" .. byte .. "\r\n"
+            expected[i] = byte
+        end
+        expected = table.concat(expected)
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. table.concat(parts) .. "0\r\n\r\n")
+        assert(r.status == 200 and r.body == "20000")
+        assert(seen == expected)
+        -- The next request on the connection starts where the body ended.
+        r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 2\r\n\r\nok")
+        assert(r.status == 200 and r.body == "2" and seen == "ok")
+    end)
+end
+
+local function a_large_chunk_that_arrives_in_pieces_test()
+    local seen
+    serving(function(req)
+        seen = txt(req.body)
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local first = string.rep("0123456789abcdef", 20000)
+        local second = string.rep("z", 70001)
+        local body = string.format("%x;note=one\r\n", #first) .. first .. "\r\n"
+            .. string.format("%X\r\n", #second) .. second .. "\r\n0\r\nX-Trailer: yes\r\n\r\n"
+        sock:send("POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n")
+        -- The pieces end inside chunk lines, inside data, and between the
+        -- two bytes of a line end.
+        local at = 1
+        local sizes = { 1, 2, 7, 100000, 3, 219999, 1, 1, 9, 69990, 5, 2, 4 }
+        local turn = 0
+        while at <= #body do
+            turn = turn + 1
+            local size = sizes[(turn - 1) % #sizes + 1]
+            sock:send(string.sub(body, at, at + size - 1))
+            at = at + size
+            -- The server reads the piece before the next one is sent.
+            assert(resume(spawn(yield)))
+        end
+        local r = read_response(sock)
+        assert(r.status == 200 and r.body == "390001", r.body)
+        assert(seen == first .. second)
+    end)
+end
+
+-- The framing of a chunked body is limited to 64 KiB and 8 bytes more for
+-- every byte of the body, so chunk extensions cannot outgrow the body.
+local function chunk_extensions_within_the_limit_are_accepted_test()
+    serving(function(req)
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local chunk = "1;" .. string.rep("e", 1000) .. "\r\na\r\n"
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. string.rep(chunk, 60) .. "0\r\n\r\n")
+        assert(r.status == 200 and r.body == "60")
+    end)
+end
+
+local function chunk_extensions_over_the_limit_are_refused_test()
+    local called = false
+    serving(function(req)
+        called = true
+    end, function(port)
+        local sock <close> = connect(port)
+        -- Every chunk spends 1006 bytes on one byte of the body. The line
+        -- of the chunk 66 goes over the limit.
+        local chunk = "1;" .. string.rep("e", 1000) .. "\r\na\r\n"
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. string.rep(chunk, 66))
+        assert(r.status == 413 and r.headers.connection == "close", `status $(r.status)`)
+        assert(at_end(sock))
+        -- A chunk line without an end is refused once it is too long.
+        local endless <close> = connect(port)
+        r = exchange(endless, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n1;"
+            .. string.rep("e", 1100))
+        assert(r.status == 400)
+        -- So is a complete line that is too long.
+        local long <close> = connect(port)
+        r = exchange(long, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n1;"
+            .. string.rep("e", 1100) .. "\r\n")
+        assert(r.status == 400)
+        -- Trailers count as framing.
+        local trailers <close> = connect(port)
+        r = exchange(trailers, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
+            .. string.rep("X-T: " .. string.rep("t", 990) .. "\r\n", 66))
+        assert(r.status == 431)
+    end)
+    assert(not called)
 end
 
 local function a_request_that_arrives_in_pieces_test()
@@ -483,7 +585,7 @@ local function a_404_keeps_the_connection_test()
 end
 
 local function a_handler_error_answers_500_and_closes_test()
-    warnings = {}
+    reported = {}
     serving(function(req)
         if req.path == "/fail" then
             error("the handler broke")
@@ -499,21 +601,20 @@ local function a_handler_error_answers_500_and_closes_test()
         local next <close> = connect(port)
         assert(exchange(next, get("/ok")).body == "fine")
     end)
-    assert(#warnings == 1, tostring(#warnings))
-    assert(string.find(warnings[1], "^network%.serve: serve_test%.lus:%d+: the handler broke$"), warnings[1])
+    assert(#reported == 1, tostring(#reported))
+    assert(string.find(reported[1], "^serve_test%.lus:%d+: the handler broke$"), reported[1])
 end
 
-local function a_handler_error_object_is_reported_as_text_test()
-    warnings = {}
+local function on_error_receives_the_error_value_test()
+    reported = {}
+    local failure = { code = 7 }
     serving(function(req)
-        error(setmetatable({}, { __tostring = function()
-            return "custom failure"
-        end }))
+        error(failure)
     end, function(port)
         local sock <close> = connect(port)
         assert(exchange(sock, get("/")).status == 500)
     end)
-    assert(#warnings == 1 and warnings[1] == "network.serve: custom failure", warnings[1])
+    assert(#reported == 1 and reported[1] == failure)
 end
 
 local invalid_results_cases = {
@@ -530,14 +631,14 @@ local invalid_results_cases = {
 }
 
 local function invalid_results_test(handler, message)
-    warnings = {}
+    reported = {}
     serving(handler, function(port)
         local sock <close> = connect(port)
         local r = exchange(sock, get("/"))
         assert(r.status == 500 and r.body == "" and r.headers["x-b"] == nil)
         assert(at_end(sock))
     end)
-    assert(#warnings == 1 and string.find(warnings[1], message), warnings[1])
+    assert(#reported == 1 and string.find(reported[1], message), reported[1])
 end
 
 local function a_handler_may_suspend_test()
@@ -589,6 +690,39 @@ local function a_handler_may_use_sockets_test()
     upstream:close()
 end
 
+-- A handler that waits inside a native callback keeps its coroutine on
+-- the stack for that wait alone. The connection suspends again between
+-- requests, so the server goes on accepting below it.
+local function a_handler_that_waits_inside_a_native_call_test()
+    local upstream, upstream_port = listen()
+    local echo = spawn(function()
+        while true do
+            local sock <close> = upstream:accept()
+            sock:send(string.upper(txt(sock:receive("*l"))) .. "\n")
+        end
+    end)
+    serving(function(req)
+        if req.path == "/plain" then
+            return 200, "plain"
+        end
+        return 200, (string.gsub("x", "x", function()
+            local sock <close> = connect(upstream_port)
+            sock:send(req.path .. "\n")
+            return txt(sock:receive("*l"))
+        end))
+    end, function(port)
+        local first <close> = connect(port)
+        assert(exchange(first, get("/callback")).body == "/CALLBACK")
+        -- The first connection idles while a second one is served.
+        local second <close> = connect(port)
+        second:settimeout(2)
+        assert(exchange(second, get("/plain")).body == "plain")
+        assert(exchange(first, get("/plain")).body == "plain")
+    end)
+    assert(close(echo))
+    upstream:close()
+end
+
 local function many_clients_at_once_test()
     serving(function(req)
         return 200, `$(req.method) $(req.path)`
@@ -632,6 +766,13 @@ local refused_cases = {
     length_and_chunked = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n", 400 },
     unknown_encoding = { "POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 501 },
     bad_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n", 400 },
+    chunk_size_with_a_sign = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n+3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_with_an_underscore = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1_0\r\n0123456789abcdef\r\n0\r\n\r\n", 400 },
+    chunk_size_with_a_prefix = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0x3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_after_a_space = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n 3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_too_long = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n00000000000000003\r\nabc\r\n0\r\n\r\n", 400 },
+    line_feed_in_a_chunk_extension = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3;a=\nb\r\nabc\r\n0\r\n\r\n", 400 },
+    line_feed_after_a_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\nabc\r\n0\r\n\r\n", 400 },
     bad_chunk_end = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcde\r\n", 400 },
     body_over_the_limit = { "POST / HTTP/1.1\r\nContent-Length: 16777217\r\n\r\n", 413 },
     huge_length = { "POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n", 413 },
@@ -732,6 +873,133 @@ local function empty_lines_before_a_request_are_skipped_test()
         local r = exchange(sock, "\r\n\r\n" .. get("/after"))
         assert(r.status == 200 and r.body == "/after")
     end)
+end
+
+-- ===== Options =====
+
+-- A connection that makes no progress for the idle timeout closes. One
+-- that waits between two requests closes without a word, and one that
+-- stopped inside a request is told why.
+local function an_idle_connection_closes_test()
+    serving(function(req)
+        return 200, "ok"
+    end, function(port)
+        local silent <close> = connect(port)
+        local partial <close> = connect(port)
+        local kept <close> = connect(port)
+        partial:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 10\r\n\r\nhalf")
+        assert(exchange(kept, get("/")).body == "ok")
+        assert(at_end(silent))
+        local r = read_response(partial)
+        assert(r.status == 408 and r.reason == "Request Timeout" and r.headers.connection == "close")
+        assert(at_end(partial))
+        assert(at_end(kept))
+    end, { idle_timeout = 0.05 })
+end
+
+local function a_busy_connection_outlives_the_idle_timeout_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local sock <close> = connect(port)
+        local idle = listen()
+        idle:settimeout(0.06)
+        -- Each request arrives within the timeout of 0.5 s, over 0.6 s.
+        for i = 1, 10 do
+            assert(exchange(sock, get(`/$(i)`)).body == `/$(i)`)
+            catch idle:accept()
+        end
+        idle:close()
+    end, { idle_timeout = 0.5 })
+end
+
+local function a_slow_reader_loses_its_connection_test()
+    serving(function(req)
+        return 200, string.rep("x", 8 * 1024 * 1024)
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send(get("/"))
+        -- The client reads nothing for longer than the timeout, and the
+        -- server closes the connection in the middle of the body.
+        local idle = listen()
+        idle:settimeout(0.3)
+        catch idle:accept()
+        idle:close()
+        local all = sock:receive("*a", 64 * 1024 * 1024)
+        assert(#all > 0 and #all < 8 * 1024 * 1024, tostring(#all))
+    end, { idle_timeout = 0.05 })
+end
+
+-- The server keeps `max_connections` connections open. The next one
+-- waits in the queue of the system until one of them closes.
+local function connections_over_the_limit_wait_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local first = connect(port)
+        local second <close> = connect(port)
+        assert(exchange(first, get("/first")).body == "/first")
+        assert(exchange(second, get("/second")).body == "/second")
+        local third <close> = connect(port)
+        third:send(get("/third"))
+        third:settimeout(0.05)
+        raises(function()
+            third:receive(1)
+        end, "receive timeout")
+        -- The first two still work while the third waits.
+        assert(exchange(second, get("/again")).body == "/again")
+        first:close()
+        third:settimeout(10)
+        assert(read_response(third).body == "/third")
+    end, { max_connections = 2 })
+end
+
+local function closing_the_server_ends_a_serve_at_its_limit_test()
+    local server, port = listen()
+    local co = spawn(network.serve, server, function(req)
+        return 200, "ok"
+    end, { max_connections = 1 })
+    local sock <close> = connect(port)
+    assert(exchange(sock, get("/")).body == "ok")
+    -- The server waits for this connection to close before it accepts.
+    assert(status(co) == "suspended")
+    server:close()
+    local ok, err = resume(co)
+    assert(not ok and string.find(err, "attempt to use a closed server", 1, true), tostring(err))
+end
+
+local bad_options_cases = {
+    not_a_table = { "options", "table expected" },
+    unknown = { { timeout = 1 }, "unknown option 'timeout'" },
+    unknown_index = { { 1 }, "unknown option '1'" },
+    idle_text = { { idle_timeout = "soon" }, "idle_timeout must be a number of seconds" },
+    idle_zero = { { idle_timeout = 0 }, "idle_timeout must be positive" },
+    max_zero = { { max_connections = 0 }, "max_connections must be a positive integer" },
+    max_float = { { max_connections = 1.5 }, "max_connections must be a positive integer" },
+    on_error_text = { { on_error = "print" }, "on_error must be a function" },
+}
+
+local function bad_options_test(options, message)
+    local server = listen()
+    local err = raises(function()
+        network.serve(server, function() end, options)
+    end, message)
+    assert(string.find(err, "bad argument #3", 1, true), err)
+    raises(function()
+        network.serve("127.0.0.1", 0, function() end, options)
+    end, "bad argument #4")
+    server:close()
+end
+
+local function options_are_optional_test()
+    for _, options in ipairs({ {}, { idle_timeout = -1 }, { idle_timeout = 2.5, max_connections = 3, on_error = record } }) do
+        serving(function(req)
+            return 200, "ok"
+        end, function(port)
+            local sock <close> = connect(port)
+            assert(exchange(sock, get("/")).body == "ok")
+        end, options)
+    end
 end
 
 -- ===== serve itself =====

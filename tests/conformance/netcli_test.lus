@@ -1,0 +1,171 @@
+-- What a program that uses sockets shows from outside: what the
+-- scheduler and `network.serve` do when the process has no file
+-- descriptor left, and what `network.serve` writes to standard error
+-- (spec/design/coroutines.md). Each test runs a script in a child
+-- process. A shell lowers the descriptor limit of that process, so the
+-- tests need a POSIX shell.
+pledge("load", "fs", "exec", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local windows = package.config:sub(1, 1) == "\\"
+local script_number = 0
+
+local function shell_quote(value)
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+-- Runs `source` with at most `limit` open descriptors and returns its
+-- output. A script that cannot bind a loopback socket prints
+-- "unavailable", which skips the test.
+local function run_limited(limit, source)
+    if windows then
+        skip("needs a POSIX shell")
+    end
+    script_number = script_number + 1
+    local path = `netcli_$(script_number).lus`
+    local file = assert(io.open(path, "wb"))
+    assert(file:write(source))
+    assert(file:close())
+    local command = `ulimit -n $(limit) && exec $(shell_quote(lus_bin)) $(shell_quote(path)) 2>&1`
+    local handle = assert(io.popen(command))
+    local output = handle:read("a")
+    handle:close()
+    catch fs.remove(path)
+    if string.find(output, "unavailable", 1, true) then
+        skip("loopback sockets unavailable")
+    end
+    return output
+end
+
+-- The first lines of every script: a connected pair of sockets, and then
+-- sockets that use up the descriptors that are left.
+local prelude = [[
+    pledge("network")
+    local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+    local bound, server = catch network.tcp.bind("127.0.0.1", 0)
+    if not bound then
+        print("unavailable")
+        return
+    end
+    local _, port = server:getsockname()
+    local client = network.tcp.connect("127.0.0.1", port)
+    local peer = server:accept()
+    local function use_up()
+        local hog = {}
+        while true do
+            local ok, sock = catch network.udp.open(0)
+            if not ok then
+                return hog
+            end
+            hog[#hog + 1] = sock
+        end
+    end
+]]
+
+-- The poller of the system needs a descriptor. Without one the scheduler
+-- polls the sockets itself: a timeout fires on time, the wait uses no
+-- processor time, and a byte that arrives wakes its reader.
+local function waits_work_without_a_descriptor_for_the_poller_test()
+    local output = run_limited(40, prelude .. [[
+        local hog = use_up()
+        local cpu = os.clock()
+        local reader = detach(create(function()
+            peer:settimeout(0.2)
+            return catch peer:receive(1)
+        end))
+        local ok, received, err = resume(reader)
+        print("timeout:", ok, received, (string.gsub(tostring(err), "^.*: ", "")))
+        print("idle:", os.clock() - cpu < 0.1)
+        local second = detach(create(function()
+            peer:settimeout(10)
+            return vector.tostring(peer:receive(1))
+        end))
+        local writer = detach(create(function()
+            yield()
+            client:send("x")
+        end))
+        print("byte:", resume(second))
+        print("writer:", resume(writer))
+    ]])
+    assert(output == "timeout:\ttrue\tfalse\treceive timeout\nidle:\ttrue\nbyte:\ttrue\tx\nwriter:\ttrue\n", output)
+end
+
+-- A server that cannot accept for lack of a descriptor waits and accepts
+-- again once connections have closed.
+local function serve_goes_on_after_the_descriptors_ran_out_test()
+    local output = run_limited(48, prelude .. [[
+        client:close()
+        peer:close()
+        local serving = detach(create(network.serve), server, function(req)
+            return 200, "ok"
+        end)
+        local held = {}
+        local dialer = detach(create(function()
+            for i = 1, 100 do
+                local ok, sock = catch network.tcp.connect("127.0.0.1", port)
+                if not ok then
+                    return i
+                end
+                held[i] = sock
+                yield()
+            end
+            return "unlimited"
+        end))
+        local _, failed_at = resume(dialer)
+        print("connects failed:", type(failed_at) == "number")
+        -- The server tries to accept the connections in its queue.
+        for i = 1, 10 do
+            resume(detach(create(yield)))
+        end
+        print("server:", coroutine.status(serving))
+        for _, sock in ipairs(held) do
+            sock:close()
+        end
+        local last = detach(create(function()
+            local sock = network.tcp.connect("127.0.0.1", port)
+            sock:settimeout(10)
+            sock:send("GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+            local reply = vector.tostring(sock:receive("*a"))
+            sock:close()
+            return string.sub(reply, 1, 15), string.sub(reply, -2)
+        end))
+        print("request:", resume(last))
+        print("server:", coroutine.status(serving))
+        coroutine.close(serving)
+    ]])
+    assert(output == "connects failed:\ttrue\nserver:\tsuspended\nrequest:\ttrue\tHTTP/1.1 200 OK\tok\nserver:\tsuspended\n", output)
+end
+
+-- A program that gives `network.serve` no `on_error` function reads the
+-- errors of its handler on standard error.
+local function serve_writes_handler_errors_to_standard_error_test()
+    local output = run_limited(256, prelude .. [[
+        local function request(path, options)
+            local serving = detach(create(network.serve), server, function(req)
+                error("the handler broke at " .. req.path)
+            end, options)
+            local sock = network.tcp.connect("127.0.0.1", port)
+            sock:settimeout(10)
+            sock:send("GET " .. path .. " HTTP/1.1\r\nHost: test\r\n\r\n")
+            local reply = vector.tostring(sock:receive("*a"))
+            sock:close()
+            coroutine.close(serving)
+            io.stderr:write("status ", string.sub(reply, 10, 12), "\n")
+        end
+        request("/default")
+        request("/quiet", { on_error = function() end })
+        request("/broken", { on_error = function() error("the reporter broke", 0) end })
+    ]])
+    local lines = {}
+    for line in string.gmatch(output, "[^\n]+") do
+        lines[#lines + 1] = (string.gsub(line, "netcli_%d+%.lus:%d+", "script"))
+    end
+    assert(table.concat(lines, "\n") == table.concat({
+        "lus: network.serve: script: the handler broke at /default",
+        "status 500",
+        "status 500",
+        "lus: network.serve: the reporter broke",
+        "lus: network.serve: script: the handler broke at /broken",
+        "status 500",
+    }, "\n"), output)
+end

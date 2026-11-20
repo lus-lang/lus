@@ -35,7 +35,23 @@ const max_head = 64 * 1024;
 const max_headers = 128;
 /// A request body holds at most 16 MiB.
 const max_body = 16 * 1024 * 1024;
+/// The line that starts a chunk, with its size and its extensions, fits
+/// in 1 KiB.
+const max_chunk_line = 1024;
+/// The framing of a chunked body is its chunk lines, the line ends after
+/// the chunks, and its trailers. A body may spend 64 KiB on it, and 8
+/// bytes more for every byte it carries.
+const max_framing = max_head;
+const framing_per_byte = 8;
 const default_backlog = 128;
+/// A connection that makes no progress for a minute closes, unless the
+/// options of `serve` say otherwise.
+const default_idle_ms = 60 * 1000;
+/// The upper end of the default for `max_connections`.
+const default_max_connections = 65536;
+/// How long `serve` waits before it accepts again after the system ran
+/// out of descriptors or memory.
+const accept_retry_ms = 100;
 const connection_key = "network.serve.connection";
 
 const Span = struct { off: u32 = 0, len: u32 = 0 };
@@ -54,10 +70,19 @@ pub const Http = struct {
     headers: std.ArrayList(Header) = .empty,
     framing: enum { none, length, chunked } = .none,
     length: usize = 0,
-    /// Where the next chunk of a chunked body starts.
+    /// How far the buffer of the socket is read. A chunked body leaves
+    /// the buffer as it is decoded, so the buffer holds the head and the
+    /// bytes that arrived after this point.
     cpos: usize = 0,
     /// The body of a chunked request, decoded so far.
     body: std.ArrayList(u8) = .empty,
+    /// What a chunked body continues with: the line of a chunk, its data,
+    /// the line end after the data, or the trailers.
+    chunk: enum { line, data, end, trailers } = .line,
+    /// The bytes of the current chunk that have not arrived.
+    chunk_left: usize = 0,
+    /// The bytes of framing that the chunked body has spent.
+    framing_bytes: usize = 0,
     keep: bool = true,
     head: bool = false,
     /// The response being written and how much of it was sent.
@@ -81,6 +106,9 @@ pub const Http = struct {
         h.length = 0;
         h.cpos = 0;
         h.body.clearRetainingCapacity();
+        h.chunk = .line;
+        h.chunk_left = 0;
+        h.framing_bytes = 0;
     }
 };
 
@@ -96,10 +124,16 @@ fn httpOf(l: *Thread, s: *net.Socket) Error!*Http {
 // network.serve
 
 const connection_src =
-    \\local readrequest, respond = ...
-    \\local tostring = tostring
-    \\local warn = warn or function() end
-    \\local function exchange(conn, handler)
+    \\local readrequest, respond, stderr = ...
+    \\local function report(on_error, err)
+    \\    if on_error then
+    \\        local ok, failure = catch on_error(err)
+    \\        if ok then return end
+    \\        stderr(failure)
+    \\    end
+    \\    stderr(err)
+    \\end
+    \\local function exchange(conn, handler, on_error)
     \\    while true do
     \\        local req, keep, head = readrequest(conn)
     \\        if not req then
@@ -108,25 +142,36 @@ const connection_src =
     \\        end
     \\        local ok, status, body, headers = catch handler(req)
     \\        if not ok then
-    \\            warn("network.serve: ", tostring(status))
+    \\            report(on_error, status)
     \\            respond(conn, 500, nil, nil, false, false)
     \\            return
     \\        end
     \\        local valid, alive = catch respond(conn, status, body, headers, keep, head)
     \\        if not valid then
-    \\            warn("network.serve: ", tostring(alive))
+    \\            report(on_error, alive)
     \\            respond(conn, 500, nil, nil, false, false)
     \\            return
     \\        end
     \\        if not (alive and keep) then return end
     \\    end
     \\end
-    \\return function(sock, handler)
+    \\return function(sock, handler, on_error)
     \\    local conn <close> = sock
-    \\    local ok, err = catch exchange(conn, handler)
-    \\    if not ok then warn("network.serve: ", tostring(err)) end
+    \\    local ok, err = catch exchange(conn, handler, on_error)
+    \\    if not ok then report(on_error, err) end
     \\end
 ;
+
+/// stderr(err): writes an error of a handler to standard error, in the
+/// form that `lus` gives the error that ends a program.
+fn reportError(l: *Thread) Error!u32 {
+    const g = l.g;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(g.gpa);
+    buf.print(g.gpa, "lus: network.serve: {s}\n", .{api.errorMessage(l, l.arg(1))}) catch return l.raiseMem();
+    @import("out.zig").stderr(g, buf.items);
+    return 0;
+}
 
 /// The function every connection coroutine runs, compiled on first use.
 fn connectionFn(l: *Thread) Error!Value {
@@ -140,19 +185,21 @@ fn connectionFn(l: *Thread) Error!Value {
     try l.push(read);
     const write = try aux.native(l, respond, "respond");
     try l.push(write);
-    const f = try ops.call1(l, chunk, &.{ read, write });
+    const report = try aux.native(l, reportError, "stderr");
+    try l.push(report);
+    const f = try ops.call1(l, chunk, &.{ read, write, report });
     try l.push(f);
     try aux.setField(l, g.registry.as(Table), connection_key, f);
     g.ext.put(g.gpa, connection_key, f.as(object.Closure)) catch return l.raiseMem();
     return f;
 }
 
-/// network.serve(host, port, handler), or network.serve(server, handler)
-/// with a server from `network.tcp.bind`.
+/// network.serve(host, port, handler, options), or network.serve(server,
+/// handler, options) with a server from `network.tcp.bind`.
 pub fn serve(l: *Thread) Error!u32 {
     if (!sched.restarted(l)) try setup(l);
-    // The arguments are now the server, the handler, and whether `serve`
-    // bound the server itself.
+    // The arguments are now the server, the handler, whether `serve`
+    // bound the server itself, and the `on_error` function or nil.
     const base = l.base();
     const s = net.toObject(l, net.Server, net.server_name, l.stack[base]).?;
     const owned = l.stack[base + 2].tag == .true;
@@ -180,16 +227,64 @@ fn closeOwned(g: *state.Global, ctx: *anyopaque) void {
     net.closeServerIn(g, @ptrCast(@alignCast(ctx)));
 }
 
+/// What the options table of `serve` holds.
+const Options = struct {
+    idle_ms: i32 = default_idle_ms,
+    max_connections: u32,
+    on_error: Value = .nil,
+};
+
+/// Half of the descriptors the process may open, so that a server at its
+/// limit leaves the other half to the handlers and the rest of the
+/// program.
+fn defaultMaxConnections() u32 {
+    if (comptime @import("builtin").os.tag == .windows) return 8192;
+    const limit = std.posix.getrlimit(.NOFILE) catch return 512;
+    return @intCast(std.math.clamp(limit.cur / 2, 16, default_max_connections));
+}
+
+/// Reads the options table in argument `i`, when there is one.
+fn readOptions(l: *Thread, i: u32) Error!Options {
+    var o: Options = .{ .max_connections = defaultMaxConnections() };
+    if (!l.hasArg(i) or l.arg(i).isNil()) return o;
+    const t = try aux.checkTable(l, i);
+    var key: Value = .nil;
+    while (table.next(t, key) catch null) |e| : (key = e.key) {
+        const name = if (e.key.tag == .string) e.key.as(object.String).bytes() else "";
+        if (std.mem.eql(u8, name, "idle_timeout")) {
+            const secs: f64 = switch (e.val.tag) {
+                .integer => @floatFromInt(e.val.asInt()),
+                .float => e.val.asFloat(),
+                else => return aux.argError(l, i, "idle_timeout must be a number of seconds", .{}),
+            };
+            if (std.math.isNan(secs) or secs == 0) return aux.argError(l, i, "idle_timeout must be positive, or negative for no timeout", .{});
+            const ms = @ceil(secs * 1000);
+            o.idle_ms = if (secs < 0) -1 else if (ms >= std.math.maxInt(i32)) std.math.maxInt(i32) else @intFromFloat(ms);
+        } else if (std.mem.eql(u8, name, "max_connections")) {
+            if (e.val.tag != .integer or e.val.asInt() < 1) return aux.argError(l, i, "max_connections must be a positive integer", .{});
+            o.max_connections = @intCast(@min(e.val.asInt(), std.math.maxInt(u32)));
+        } else if (std.mem.eql(u8, name, "on_error")) {
+            if (e.val.tag != .closure and e.val.tag != .native) return aux.argError(l, i, "on_error must be a function", .{});
+            o.on_error = e.val;
+        } else {
+            return aux.argError(l, i, "unknown option '{s}'", .{api.errorMessage(l, e.key)});
+        }
+    }
+    return o;
+}
+
 fn setup(l: *Thread) Error!void {
     var hp: [512]u8 = undefined;
     var handler: Value = undefined;
     var server: Value = undefined;
     var owned = false;
+    var options: Options = undefined;
     // The connection function compiles before anything is bound.
     _ = try connectionFn(l);
     if (net.toObject(l, net.Server, net.server_name, l.arg(1))) |_| {
         const s = try net.checkServer(l, 1);
         handler = try aux.checkFunction(l, 2);
+        options = try readOptions(l, 3);
         var ip: [64]u8 = undefined;
         const a = s.server.socket.address;
         try pledge.require(l, "network:server", net.hostPort(&hp, net.formatIp(&ip, a), a.getPort()));
@@ -198,17 +293,22 @@ fn setup(l: *Thread) Error!void {
         const host = try aux.checkBytes(l, 1);
         const port = try net.checkPort(l, 2, true);
         handler = try aux.checkFunction(l, 3);
+        options = try readOptions(l, 4);
         try pledge.require(l, "network:server", net.hostPort(&hp, host, port));
         _ = try net.bindServer(l, host, port, default_backlog);
         server = l.stack[l.top - 1];
         owned = true;
     }
+    const s = net.toObject(l, net.Server, net.server_name, server).?;
+    s.idle_ms = options.idle_ms;
+    s.max_live = options.max_connections;
     const base = l.base();
-    try l.ensure(4);
+    try l.ensure(5);
     l.stack[base] = server;
     l.stack[base + 1] = handler;
     l.stack[base + 2] = Value.boolean(owned);
-    l.top = base + 3;
+    l.stack[base + 3] = options.on_error;
+    l.top = base + 4;
 }
 
 fn acceptLoop(l: *Thread, s: *net.Server) Error!u32 {
@@ -216,22 +316,40 @@ fn acceptLoop(l: *Thread, s: *net.Server) Error!u32 {
     const base = l.base();
     while (true) {
         if (s.closed) return l.raiseFmt("attempt to use a closed server", .{});
-        _ = net.acceptOne(l, s) catch |e| switch (e) {
+        if (s.live >= s.max_live) {
+            // The next connection stays in the queue of the system until
+            // one of the open ones closes.
+            s.full = true;
+            try sched.waitNotify(l);
+            continue;
+        }
+        const sock = net.acceptOne(l, s) catch |e| switch (e) {
             error.LusError, error.MetaCall => |x| return x,
             error.ConnectionAborted => continue,
+            // The system has no descriptor or no memory for the
+            // connection now. It may have one once a connection closes,
+            // and after a moment in any case.
+            error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded, error.SystemResources => {
+                s.full = true;
+                try sched.waitNotifyFor(l, accept_retry_ms);
+                continue;
+            },
             else => return l.raiseFmt("accept: {s}", .{net.errText(e)}),
         };
+        sock.owner = s;
+        s.live += 1;
+        sock.timeout_ms = s.idle_ms;
         // The socket is on the stack. Its connection gets a coroutine.
-        const sock = l.stack[l.top - 1];
         const co = try coroutine.newCoroutine(l, try connectionFn(l));
         try l.push(Value.obj(.thread, co));
-        try co.ensure(3);
-        co.stack[1] = sock;
+        try co.ensure(4);
+        co.stack[1] = l.stack[l.top - 2];
         co.stack[2] = l.stack[base + 1];
-        co.top = 3;
+        co.stack[3] = l.stack[base + 3];
+        co.top = 4;
         const t = try sched.ensureTask(co);
-        sched.attach(g, t, .fresh, 2);
-        l.top = base + 3;
+        sched.attach(g, t, .fresh, 3);
+        l.top = base + 4;
         // The connections that are ready run before the next accept.
         try sched.pass(l);
     }
@@ -350,41 +468,95 @@ fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
     return 0;
 }
 
-/// Decodes the chunks of a chunked body that the buffer holds in full.
-fn parseChunks(l: *Thread, h: *Http, buf: []const u8) Error!Parse {
-    const gpa = l.g.gpa;
-    while (true) {
-        const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
-            if (buf.len - h.cpos > 1024) return .{ .bad = 400 };
-            return .{ .more = 4096 };
-        };
-        var digits = buf[h.cpos..eol];
-        if (std.mem.indexOfScalar(u8, digits, ';')) |semi| digits = digits[0..semi];
-        digits = std.mem.trim(u8, digits, " \t");
-        if (digits.len == 0 or digits.len > 16) return .{ .bad = 400 };
-        const size = std.fmt.parseInt(usize, digits, 16) catch return .{ .bad = 400 };
-        const data = eol + 2;
-        if (size == 0) {
-            // Trailer lines follow the last chunk, up to an empty line.
-            var pos = data;
-            while (true) {
-                const tl = std.mem.indexOfPos(u8, buf, pos, "\r\n") orelse {
-                    if (buf.len - data > max_head) return .{ .bad = 431 };
-                    return .{ .more = 4096 };
-                };
-                if (tl == pos) {
-                    h.cpos = pos + 2;
-                    return .done;
-                }
-                pos = tl + 2;
-            }
-        }
-        if (size > max_body or h.body.items.len + size > max_body) return .{ .bad = 413 };
-        if (buf.len < data + size + 2) return .{ .more = @min(data + size + 2 - buf.len, 65536) };
-        if (buf[data + size] != '\r' or buf[data + size + 1] != '\n') return .{ .bad = 400 };
-        h.body.appendSlice(gpa, buf[data..][0..size]) catch return l.raiseMem();
-        h.cpos = data + size + 2;
+/// The size that the line of a chunk gives, or null for a malformed
+/// line. The size is hexadecimal digits alone. Extensions follow it after
+/// a semicolon and hold no control character other than a tab, so a line
+/// feed without its carriage return is refused.
+fn chunkSize(line: []const u8) ?usize {
+    var digits = line;
+    var ext: []const u8 = "";
+    if (std.mem.indexOfScalar(u8, line, ';')) |semi| {
+        digits = line[0..semi];
+        ext = line[semi..];
     }
+    digits = std.mem.trimEnd(u8, digits, " \t");
+    if (digits.len == 0 or digits.len > 2 * @sizeOf(usize)) return null;
+    var size: usize = 0;
+    for (digits) |c| {
+        const d = std.fmt.charToDigit(c, 16) catch return null;
+        size = size * 16 + d;
+    }
+    for (ext) |c| {
+        if ((c < ' ' and c != '\t') or c == 0x7f) return null;
+    }
+    return size;
+}
+
+/// Decodes what the buffer holds of a chunked body into `h.body`, and
+/// takes the decoded bytes out of the buffer. The buffer therefore never
+/// holds more than the head and what one read brought.
+fn parseChunks(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
+    const gpa = l.g.gpa;
+    const buf = s.buf.items;
+    const result: Parse = step: while (true) {
+        switch (h.chunk) {
+            .line => {
+                const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
+                    if (buf.len - h.cpos > max_chunk_line) break :step .{ .bad = 400 };
+                    break :step .{ .more = 4096 };
+                };
+                const line = buf[h.cpos..eol];
+                if (line.len > max_chunk_line) break :step .{ .bad = 400 };
+                const size = chunkSize(line) orelse break :step .{ .bad = 400 };
+                h.cpos = eol + 2;
+                h.framing_bytes += line.len + 2;
+                if (size == 0) {
+                    h.chunk = .trailers;
+                    continue;
+                }
+                if (size > max_body - h.body.items.len) break :step .{ .bad = 413 };
+                // The line end after the data counts with its chunk.
+                h.framing_bytes += 2;
+                if (h.framing_bytes > max_framing + framing_per_byte * (h.body.items.len + size)) break :step .{ .bad = 413 };
+                h.chunk_left = size;
+                h.chunk = .data;
+            },
+            .data => {
+                const n = @min(h.chunk_left, buf.len - h.cpos);
+                h.body.appendSlice(gpa, buf[h.cpos..][0..n]) catch return l.raiseMem();
+                h.cpos += n;
+                h.chunk_left -= n;
+                if (h.chunk_left > 0) break :step .{ .more = @min(h.chunk_left + 2, 65536) };
+                h.chunk = .end;
+            },
+            .end => {
+                if (buf.len - h.cpos < 2) break :step .{ .more = 4096 };
+                if (buf[h.cpos] != '\r' or buf[h.cpos + 1] != '\n') break :step .{ .bad = 400 };
+                h.cpos += 2;
+                h.chunk = .line;
+            },
+            // Trailer lines follow the last chunk, up to an empty line.
+            .trailers => {
+                const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
+                    if (h.framing_bytes + (buf.len - h.cpos) > max_framing + framing_per_byte * h.body.items.len) break :step .{ .bad = 431 };
+                    break :step .{ .more = 4096 };
+                };
+                const len = eol - h.cpos;
+                h.cpos = eol + 2;
+                h.framing_bytes += len + 2;
+                if (h.framing_bytes > max_framing + framing_per_byte * h.body.items.len) break :step .{ .bad = 431 };
+                if (len == 0) break :step .done;
+            },
+        }
+    };
+    if (result == .more and h.cpos > h.head_end) {
+        // The head stays, since the request table is built from it.
+        const rest = buf.len - h.cpos;
+        std.mem.copyForwards(u8, s.buf.items[h.head_end..][0..rest], buf[h.cpos..]);
+        s.buf.items.len = h.head_end + rest;
+        h.cpos = h.head_end;
+    }
+    return result;
 }
 
 fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
@@ -426,7 +598,7 @@ fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
             h.cpos = need;
             return .done;
         },
-        .chunked => return parseChunks(l, h, buf),
+        .chunked => return parseChunks(l, s, h),
     }
 }
 
@@ -445,12 +617,26 @@ fn readRequest(l: *Thread) Error!u32 {
     const h = try httpOf(l, s);
     while (true) {
         switch (try parse(l, s, h)) {
-            .more => |n| switch (try net.fill(l, s, n)) {
-                .got => {},
-                .eof, .fail => {
+            .more => |n| {
+                const got = (try net.tryFill(l, s, n)) orelse {
+                    // The connection made no progress for the idle
+                    // timeout. One that waits between two requests closes
+                    // quietly, and one that stopped inside a request
+                    // learns why.
+                    const idle = h.head_end == 0 and s.buf.items.len == 0;
                     h.nextRequest();
-                    return aux.retNil(l);
-                },
+                    try l.push(.nil);
+                    if (idle) return 1;
+                    try l.push(Value.int(408));
+                    return 2;
+                };
+                switch (got) {
+                    .got => {},
+                    .eof, .fail => {
+                        h.nextRequest();
+                        return aux.retNil(l);
+                    },
+                }
             },
             .bad => |status| {
                 h.nextRequest();
@@ -664,9 +850,17 @@ fn respond(l: *Thread) Error!u32 {
     while (h.out_off < h.out.items.len) {
         const rest = h.out.items[h.out_off..];
         switch (net.trySend(l, s, rest)) {
-            .n => |n| h.out_off += n,
+            .n => |n| {
+                h.out_off += n;
+                sched.opDone(l);
+            },
             .again => {
-                try net.awaitIo(l, handle, .write, s.timeout_ms, "send");
+                // A reader that takes nothing for the idle timeout loses
+                // the connection.
+                if (!try sched.waitIo(l, handle, .write, s.timeout_ms)) {
+                    sent = false;
+                    break;
+                }
                 try net.stillOpen(l, s);
             },
             .fail => {

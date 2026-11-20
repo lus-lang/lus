@@ -3094,11 +3094,23 @@ The handler receives one table per request:
 
 The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds `Date`, `Content-Length`, and `Connection: close` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
 
-When the handler raises an error, or returns values that make no response, the server answers 500, reports the error through `warn`, and closes the connection.
+When the handler raises an error, or returns values that make no response, the server answers 500, reports the error, and closes the connection. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
 
-The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
+`options` is a table with any of these fields:
 
-`network.serve(server, handler)` serves on a server that `network.tcp.bind` returned. That form lets a program bind port `0` and read the selected port with `getsockname` before it serves. A server that `serve` bound itself closes when `serve` ends, which happens when the coroutine that called it is closed or when accepting a connection fails.
+| Field | Value |
+| --- | --- |
+| `idle_timeout` | How many seconds a connection may spend without progress, which defaults to 60. A negative value lets a connection wait without limit. |
+| `max_connections` | How many connections the server keeps open at once. It defaults to half of the file descriptors that the process may open, and to 65536 at most. |
+| `on_error` | A function that receives the error of a handler in place of the line on standard error. |
+
+A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of a request is answered with 408 and closes, and one that stops reading its response closes as well. A handler may take as long as it needs.
+
+While `max_connections` connections are open, further clients wait in the queue of the system, and the server accepts the next one when a connection closes. When the system has no file descriptor or no memory left for a new connection, the server waits for a connection to close, or for a moment, and accepts again.
+
+The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
+
+`network.serve(server, handler, options)` serves on a server that `network.tcp.bind` returned. That form lets a program bind port `0` and read the selected port with `getsockname` before it serves. A server that `serve` bound itself closes when `serve` ends, which happens when the coroutine that called it is closed or when accepting a connection fails for a reason other than a shortage of descriptors or memory.
 
 Requires the `network:server` permission for the address, and `network:tcp` to bind it.
 
@@ -3130,6 +3142,11 @@ end)
       {
         name = "handler",
         type = "function",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = "network",
@@ -7508,7 +7525,7 @@ Emits a warning by concatenating all arguments (which must be strings) and sendi
   ["worker.create"] = {
     children = {},
     description = [[
-Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. Requires `load` and authorized `fs:read` pledges for the script path.
+Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. The worker runs its script and then the coroutines that the script detached, as `lus` does for a program, and it ends when the last of them has ended. Requires `load` and authorized `fs:read` pledges for the script path.
 
 ```lus
 local w = worker.create("worker.lus", "hello", 42)
@@ -7566,7 +7583,9 @@ Available inside a worker state. Serializes and appends `value` to the worker's 
   ["worker.peek"] = {
     children = {},
     description = [[
-Available inside a worker state. Blocks until it can deserialize and return the next inbox value sent by the parent with `worker.send`.]],
+Available inside a worker state. Blocks until it can deserialize and return the next inbox value sent by the parent with `worker.send`.
+
+`peek` is a suspension point. Inside a detached coroutine it suspends the coroutine while it waits, and anywhere else the detached coroutines of the worker run while it waits (see `coroutine.detach`).]],
     kind = "function",
     module = "worker",
     name = "worker.peek",
@@ -7587,6 +7606,10 @@ Available inside a worker state. Blocks until it can deserialize and return the 
     children = {},
     description = [[
 Performs a blocking selection over one or more workers. It waits until at least one worker has a message or reaches a terminal state, then returns one aligned value per argument. A ready message is deserialized, while a worker without a message contributes `nil`. A worker script error propagates from this call.
+
+A worker ends once its script has returned and the coroutines that the script detached have ended (see `coroutine.detach`). The error of a detached coroutine that failed with nothing left to collect it is the error of the worker, and it propagates from this call like a script error.
+
+`receive` is a suspension point. Inside a detached coroutine it suspends the coroutine while it waits, and anywhere else the detached coroutines of the state run while it waits.
 
 ```lus nocheck
 local msg = worker.receive(w)

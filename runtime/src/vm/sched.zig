@@ -33,8 +33,9 @@ pub const Dir = enum(u1) { read, write };
 /// What a thread waits for. `inner` is a thread whose `coroutine.resume`
 /// waits for the coroutine it resumed, which waits in turn. `pass` is a
 /// native that lets the other coroutines run and continues on its next
-/// turn.
-pub const Kind = enum(u8) { none, io, join, inner, pass };
+/// turn. `notify` is a native that waits for a call of `notify` from
+/// another thread.
+pub const Kind = enum(u8) { none, io, join, inner, pass, notify };
 
 /// Why a waiting native runs again.
 pub const Wake = enum(u8) { none, ready, timeout };
@@ -76,6 +77,11 @@ pub const Task = struct {
     /// What the native keeps across its runs: a count and a pointer with
     /// the routine that releases it when the wait is abandoned.
     progress: usize = 0,
+    /// The deadline of the operation that the native in frame `op_frame`
+    /// waits for, or zero. It outlives the single waits of the operation,
+    /// so a wait that ends early continues toward the same deadline.
+    op_deadline: u64 = 0,
+    op_frame: u32 = 0,
     ctx: ?*anyopaque = null,
     cancel: ?*const fn (g: *Global, ctx: *anyopaque) void = null,
 
@@ -89,6 +95,10 @@ pub const Task = struct {
     /// True for a thread whose native runs the scheduler while it waits.
     /// An event only sets `wake` on it.
     driver: bool = false,
+    /// True while the thread waits for a handle that the poller of the
+    /// system took no registration for. The scheduler polls such handles
+    /// itself (`pollLoose`).
+    loose: bool = false,
     /// Links of the run queue or of a list of waiters.
     prev: ?*Task = null,
     next: ?*Task = null,
@@ -162,6 +172,12 @@ pub const Sched = struct {
     timers: std.ArrayList(Timer) = .empty,
     ios: std.AutoHashMapUnmanaged(usize, IoEntry) = .empty,
     io_waiters: usize = 0,
+    /// How many of the waiters wait for a handle that the poller of the
+    /// system does not watch.
+    loose: usize = 0,
+    /// Counts the waits that ended, so a caller can tell whether a call
+    /// woke anything.
+    wakes: usize = 0,
     poller: Poller = .{},
     /// Set while the error of a detached coroutine that nothing collected
     /// stops the program. No handler catches an error while it is set.
@@ -171,9 +187,15 @@ pub const Sched = struct {
     /// Set once the state released the scheduler.
     released: bool = false,
     /// Set once `enableNotify` gave other threads a way to wake the
-    /// scheduler. A scheduler with nothing else to wait for then waits
-    /// for them.
+    /// scheduler.
     notified: bool = false,
+    /// The threads that wait for a call of `notify`. A scheduler with
+    /// nothing else to wait for waits for that call while the list holds
+    /// a thread.
+    notify_waiters: List = .{},
+    nnotify: usize = 0,
+    /// Set by `notify` from any thread, and taken by the scheduler.
+    signalled: std.atomic.Value(bool) = .init(false),
 };
 
 pub inline fn taskOf(l: *Thread) ?*Task {
@@ -250,34 +272,77 @@ pub fn saveProgress(l: *Thread, n: usize) Error!void {
     (try ensureTask(l)).progress = n;
 }
 
+/// The deadline of the operation that the running native of `l` waits
+/// for, which starts `timeout_ns` after `at` when this is its first wait.
+/// The frame of the native carries a mark while the record of its thread
+/// holds the deadline, so the next call starts a deadline of its own.
+fn opDeadline(l: *Thread, t: *Task, at: u64, timeout_ns: u64) u64 {
+    const depth: u32 = @intCast(l.frames.items.len);
+    const fr = l.frame();
+    if (fr.native == null) return at + timeout_ns;
+    if (fr.wait_mark != 0 and t.op_frame == depth and t.op_deadline != 0) return t.op_deadline;
+    t.op_deadline = at + timeout_ns;
+    t.op_frame = depth;
+    fr.wait_mark = 1;
+    return t.op_deadline;
+}
+
+/// Ends the deadline of the operation that the native of `l` waited for,
+/// once the operation made progress. The next wait of the same call
+/// starts a new deadline, as each read of a socket has a timeout of its
+/// own.
+pub inline fn opDone(l: *Thread) void {
+    if (l.task) |t| t.op_deadline = 0;
+}
+
 /// Waits until `handle` is readable or writable, for at most
 /// `timeout_ms` milliseconds when that is positive. A zero timeout
 /// never waits. Returns true when the handle is ready and false when the
 /// time ran out. In a thread that can suspend, it returns the error that
 /// suspends the thread, and the native that runs again calls it again if
-/// its operation still would block.
+/// its operation still would block. The time runs from the first wait of
+/// an operation: a native that finds its operation still blocked after a
+/// wake waits for the rest of the same timeout.
 pub fn waitIo(l: *Thread, handle: Handle, dir: Dir, timeout_ms: i32) Error!bool {
     const g = l.g;
     if (timeout_ms == 0) return false;
     if (l.task) |t| {
-        if (t.restarted and t.wake == .timeout) {
+        // The deadline of this wait fired before the native ran again.
+        if (t.restarted and t.wake == .timeout and t.kind == .io) {
             t.wake = .none;
+            t.op_deadline = 0;
             return false;
         }
         t.wake = .none;
     }
-    if (!active(g)) {
-        // No coroutine could run in the meantime.
-        return pollOne(handle, dir, timeout_ms);
-    }
+    // No coroutine could run while a thread waits without a scheduler.
+    if (timeout_ms < 0 and !active(g)) return pollOne(handle, dir, -1);
     const t = try ensureTask(l);
+    var deadline: u64 = 0;
+    var left_ms: i32 = -1;
+    if (timeout_ms > 0) {
+        const at = now(g);
+        deadline = opDeadline(l, t, at, @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms);
+        if (deadline <= at) {
+            t.op_deadline = 0;
+            return false;
+        }
+        left_ms = millisOf(deadline - at);
+    }
+    if (!active(g)) {
+        const ready = pollOne(handle, dir, left_ms);
+        if (!ready) t.op_deadline = 0;
+        return ready;
+    }
     t.kind = .io;
     t.handle = handle;
     t.dir = dir;
     t.target = null;
-    t.deadline = if (timeout_ms > 0) now(g) + @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms else 0;
+    t.deadline = deadline;
     if (canSuspend(l)) return suspendThread(l, t);
-    return block(l, t);
+    const ready = try block(l, t);
+    if (!ready) t.op_deadline = 0;
+    return ready;
 }
 
 /// Waits until the detached coroutine `co` ends. Returns when it has
@@ -290,6 +355,39 @@ pub fn waitJoin(l: *Thread, co: *Thread) Error!void {
     t.deadline = 0;
     if (canSuspend(l)) return suspendThread(l, t);
     _ = try block(l, t);
+}
+
+/// Waits until another thread calls `notify`, after `enableNotify`. The
+/// call wakes every thread that waits this way, and each native then
+/// looks at what it waits for and waits again when that is not there
+/// yet. A native reads its condition before it calls this, in the thread
+/// of the state, so a `notify` that follows a change of the condition
+/// always ends the wait. Returns once the call arrived, or the error
+/// that suspends the thread.
+pub fn waitNotify(l: *Thread) Error!void {
+    return waitNotifyFor(l, -1);
+}
+
+/// Waits as `waitNotify` does, for at most `timeout_ms` milliseconds
+/// when that is positive. The native looks at what it waits for after
+/// either end of the wait.
+pub fn waitNotifyFor(l: *Thread, timeout_ms: i32) Error!void {
+    const t = try ensureTask(l);
+    t.wake = .none;
+    t.kind = .notify;
+    t.target = null;
+    t.deadline = if (timeout_ms > 0) now(l.g) + @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms else 0;
+    if (canSuspend(l)) return suspendThread(l, t);
+    _ = try block(l, t);
+}
+
+/// Runs the threads that wait in `waitNotify` again, from the thread of
+/// the state. A native calls it after it changed what one of them waits
+/// for.
+pub fn signal(g: *Global) void {
+    const s = &g.sched;
+    if (s.released) return;
+    while (s.notify_waiters.head) |t| wake(g, t, .ready);
 }
 
 /// Lets the coroutines that are ready run before the native of `l`
@@ -353,6 +451,7 @@ pub fn clearWait(g: *Global, t: *Task) void {
     t.target = null;
     t.wake = .none;
     t.deadline = 0;
+    t.op_deadline = 0;
     t.progress = 0;
     t.restarted = false;
 }
@@ -412,8 +511,16 @@ fn register(g: *Global, r: *Task, leaf: *Task) void {
             const gop = s.ios.getOrPut(g.gpa, key) catch return wakeNow(g, r);
             if (!gop.found_existing) gop.value_ptr.* = .{};
             if (!s.poller.arm(g, leaf.handle, leaf.dir, gop.value_ptr)) {
-                if (!Poller.persistent and gop.value_ptr.waiters.head == null) _ = s.ios.remove(key);
-                return wakeNow(g, r);
+                if (!Poller.persistent) {
+                    if (gop.value_ptr.waiters.head == null) _ = s.ios.remove(key);
+                    return wakeNow(g, r);
+                }
+                // The poller of the system could not be created or took
+                // no registration, as when the process has no descriptor
+                // left. The scheduler polls this handle itself, so the
+                // wait keeps its deadline and the other coroutines run.
+                r.loose = true;
+                s.loose += 1;
             }
             gop.value_ptr.waiters.append(r);
             s.io_waiters += 1;
@@ -429,10 +536,17 @@ fn register(g: *Global, r: *Task, leaf: *Task) void {
             r.reg = .join;
             r.reg_target = tt;
         },
+        .notify => {
+            s.notify_waiters.append(r);
+            s.nnotify += 1;
+            r.reg = .notify;
+        },
         .none, .inner, .pass => return wakeNow(g, r),
     }
     if (leaf.deadline != 0) addTimer(g, r, leaf.deadline);
-    if (r.detached) r.place = .waiting;
+    // A detached coroutine whose native runs the scheduler itself keeps
+    // its place: it is still running, with its native on the stack.
+    if (r.detached and !r.driver) r.place = .waiting;
 }
 
 /// Wakes a thread whose wait could not be recorded. Its native runs
@@ -454,8 +568,16 @@ fn unregister(g: *Global, r: *Task) void {
                 s.io_waiters -= 1;
                 if (!Poller.persistent and e.waiters.head == null) _ = s.ios.remove(key);
             }
+            if (r.loose) {
+                r.loose = false;
+                s.loose -= 1;
+            }
         },
         .join => if (r.reg_target) |tt| tt.joiners.remove(r),
+        .notify => {
+            s.notify_waiters.remove(r);
+            s.nnotify -= 1;
+        },
     }
     r.reg = .none;
     r.reg_target = null;
@@ -471,6 +593,7 @@ fn enqueue(g: *Global, t: *Task, entry: Entry) void {
 
 /// Ends the wait of `r` with `w`.
 fn wake(g: *Global, r: *Task, w: Wake) void {
+    g.sched.wakes +%= 1;
     unregister(g, r);
     leafOf(r).wake = w;
     if (r.driver) return;
@@ -709,6 +832,7 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
         s.queued -= 1;
         try runTask(g, l, t);
     }
+    takeNotify(g);
     var timeout: ?u64 = null;
     // The coroutines that just ran may have ended the wait of the caller.
     const woken = if (l.task) |me| me.driver and me.wake != .none else false;
@@ -719,11 +843,12 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
         const t = now(g);
         timeout = if (d > t) d - t else 0;
     }
-    if (timeout == null and s.io_waiters == 0 and !s.notified) {
+    if (timeout == null and s.io_waiters == 0 and s.nnotify == 0) {
         if (s.nlive == 0 and (l.task == null or !l.task.?.driver)) return;
         return l.raiseFmt("deadlock: every coroutine waits for another coroutine", .{});
     }
-    if (s.io_waiters > 0 or s.notified or (timeout orelse 1) != 0) s.poller.wait(g, timeout);
+    if (s.io_waiters > 0 or s.nnotify > 0 or (timeout orelse 1) != 0) pollWait(g, timeout);
+    takeNotify(g);
     fireTimers(g);
 }
 
@@ -733,6 +858,18 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
 pub fn drain(l: *Thread) Error!void {
     const g = l.g;
     while (g.sched.nlive > 0) try step(g, l, true);
+    try reportUncollected(l);
+}
+
+/// Runs detached coroutines as `drain` does, for as long as `go` returns
+/// true. It asks `go` before every wait, so a call of `notify` from
+/// another thread makes it ask again.
+pub fn drainWhile(l: *Thread, ctx: *anyopaque, go: *const fn (ctx: *anyopaque) bool) Error!void {
+    const g = l.g;
+    while (g.sched.nlive > 0) {
+        if (!go(ctx)) return;
+        try step(g, l, true);
+    }
     try reportUncollected(l);
 }
 
@@ -797,10 +934,19 @@ pub fn enableNotify(g: *Global) bool {
 }
 
 /// Wakes the scheduler of `g` from any thread, after `enableNotify`. The
-/// poller returns from its wait, and the scheduler looks at its queues
-/// again.
+/// poller returns from its wait, and the scheduler runs the threads that
+/// wait in `waitNotify`. Calls that arrive before the scheduler looks
+/// count as one.
 pub fn notify(g: *Global) void {
-    g.sched.poller.wake();
+    if (!g.sched.signalled.swap(true, .acq_rel)) g.sched.poller.wake();
+}
+
+/// Wakes the threads that wait for `notify` when a call arrived.
+fn takeNotify(g: *Global) void {
+    const s = &g.sched;
+    if (!s.notified) return;
+    if (!s.signalled.swap(false, .acq_rel)) return;
+    while (s.notify_waiters.head) |t| wake(g, t, .ready);
 }
 
 // ---------------------------------------------------------------------
@@ -889,6 +1035,66 @@ pub fn readyNow(handle: Handle, dir: Dir) bool {
     return pollOne(handle, dir, 0);
 }
 
+/// Waits for the next event, for at most `timeout` nanoseconds.
+fn pollWait(g: *Global, timeout: ?u64) void {
+    if (comptime Poller.persistent) {
+        if (g.sched.loose > 0) return pollLoose(g, timeout);
+    }
+    g.sched.poller.wait(g, timeout);
+}
+
+/// Sleeps for at most `limit_ms` milliseconds of `timeout`.
+fn nap(timeout: ?u64, limit_ms: i32) void {
+    var none: [0]posix.pollfd = .{};
+    _ = posix.poll(&none, @min(millisOf(timeout), limit_ms)) catch {};
+}
+
+/// The wait of a scheduler whose system poller is missing or took no
+/// registration for some handles. It asks `poll` about those handles and
+/// about the descriptor of the system poller, which is readable when the
+/// poller has events. A wait with nothing to watch sleeps until the next
+/// deadline.
+fn pollLoose(g: *Global, timeout: ?u64) void {
+    const s = &g.sched;
+    const pfd = s.poller.descriptor();
+    if (pfd >= 0) {
+        // The poller takes its pending registrations and reports what is
+        // ready already.
+        const before = s.wakes;
+        s.poller.wait(g, 0);
+        if (s.wakes != before) return;
+    }
+    var fds: std.ArrayList(posix.pollfd) = .empty;
+    defer fds.deinit(g.gpa);
+    var it = s.ios.iterator();
+    while (it.next()) |e| {
+        if (e.value_ptr.registered or e.value_ptr.waiters.head == null) continue;
+        const key = e.key_ptr.*;
+        fds.append(g.gpa, .{
+            .fd = @intCast(key >> 1),
+            .events = if (key & 1 != 0) posix.POLL.OUT else posix.POLL.IN,
+            .revents = 0,
+        }) catch {
+            nap(timeout, 10);
+            return wakeAllIo(g);
+        };
+    }
+    const nloose = fds.items.len;
+    if (pfd >= 0) fds.append(g.gpa, .{ .fd = pfd, .events = posix.POLL.IN, .revents = 0 }) catch {};
+    if (fds.items.len == 0 and timeout == null) return;
+    const n = posix.poll(fds.items, millisOf(timeout)) catch {
+        nap(timeout, 10);
+        return wakeAllIo(g);
+    };
+    if (n == 0) return;
+    for (fds.items[0..nloose]) |fd| {
+        if (fd.revents == 0) continue;
+        const dir: usize = @intFromBool(fd.events == posix.POLL.OUT);
+        wakeIo(g, (@as(usize, @intCast(fd.fd)) << 1) | dir);
+    }
+    if (fds.items.len > nloose and fds.items[nloose].revents != 0) s.poller.wait(g, 0);
+}
+
 const Poller = switch (os) {
     .macos, .ios, .tvos, .watchos, .visionos, .maccatalyst, .driverkit, .freebsd, .netbsd, .openbsd, .dragonfly => Kqueue,
     .linux => Epoll,
@@ -963,8 +1169,12 @@ const Kqueue = struct {
         p.wait(g, 0);
     }
 
+    fn descriptor(p: *Kqueue) posix.fd_t {
+        return p.kq;
+    }
+
     fn wait(p: *Kqueue, g: *Global, timeout: ?u64) void {
-        if (!p.open(g)) return wakeAllIo(g);
+        if (!p.open(g)) return pollLoose(g, timeout);
         var ts: posix.timespec = undefined;
         const tsp: ?*const posix.timespec = if (timeout) |ns| blk: {
             ts = timespecOf(ns);
@@ -1086,8 +1296,12 @@ const Epoll = struct {
         return true;
     }
 
+    fn descriptor(p: *Epoll) posix.fd_t {
+        return p.ep;
+    }
+
     fn wait(p: *Epoll, g: *Global, timeout: ?u64) void {
-        if (!p.open()) return wakeAllIo(g);
+        if (!p.open()) return pollLoose(g, timeout);
         var events: [64]linux.epoll_event = undefined;
         const rc = linux.epoll_wait(p.ep, &events, events.len, millisOf(timeout));
         switch (linux.errno(rc)) {
@@ -1215,6 +1429,8 @@ const afd = if (is_windows) struct {
 
     extern "kernel32" fn CreateEventW(attributes: ?*anyopaque, manual_reset: w.BOOL, initial_state: w.BOOL, name: ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
     extern "kernel32" fn WaitForSingleObject(handle: w.HANDLE, ms: u32) callconv(.winapi) u32;
+    extern "kernel32" fn WaitForMultipleObjects(count: u32, handles: [*]const w.HANDLE, wait_all: w.BOOL, ms: u32) callconv(.winapi) u32;
+    extern "kernel32" fn SetEvent(handle: w.HANDLE) callconv(.winapi) w.BOOL;
     extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
 
     /// The events that end a wait in direction `dir`. A connection that
@@ -1237,8 +1453,9 @@ const afd = if (is_windows) struct {
     /// Polls the first `n` entries of `buf` for at most `timeout_ms`
     /// milliseconds, or without end when it is negative. Returns how many
     /// entries are ready, which the driver moves to the front of the list,
-    /// or null when the driver refused the request.
-    fn request(buf: []u64, n: usize, timeout_ms: i32) ?usize {
+    /// or null when the driver refused the request. A signal on `waker`
+    /// ends the wait early, like the end of the time.
+    fn request(buf: []u64, n: usize, timeout_ms: i32, waker: ?w.HANDLE) ?usize {
         const info: *Info = @ptrCast(buf.ptr);
         // The driver never times out by itself. The wait on the event
         // below bounds the request instead.
@@ -1252,7 +1469,11 @@ const afd = if (is_windows) struct {
             .SUCCESS => {},
             .PENDING => {
                 const ms: u32 = if (timeout_ms < 0) infinite else @intCast(timeout_ms);
-                if (WaitForSingleObject(event, ms) != 0) {
+                const done = if (waker) |wk| blk: {
+                    const both = [_]w.HANDLE{ event, wk };
+                    break :blk WaitForMultipleObjects(2, &both, .FALSE, ms) == 0;
+                } else WaitForSingleObject(event, ms) == 0;
+                if (!done) {
                     // The time ran out. The request still owns the buffer
                     // until it ends, canceled or completed in the meantime.
                     var cancel_iosb: w.IO_STATUS_BLOCK = undefined;
@@ -1275,7 +1496,7 @@ const afd = if (is_windows) struct {
     fn pollOne(handle: Handle, dir: Dir, timeout_ms: i32) bool {
         var buf: [words(1)]u64 = undefined;
         entries(&buf)[0] = .{ .handle = handle, .events = eventsFor(dir), .status = 0 };
-        const n = request(&buf, 1, timeout_ms) orelse return true;
+        const n = request(&buf, 1, timeout_ms, null) orelse return true;
         return n != 0;
     }
 } else struct {};
@@ -1286,17 +1507,26 @@ const afd = if (is_windows) struct {
 const AfdPoll = struct {
     const persistent = false;
 
+    /// The event that other threads signal, which resets when a wait
+    /// takes it.
+    waker: ?std.os.windows.HANDLE = null,
+
     fn arm(_: *AfdPoll, _: *Global, _: Handle, _: Dir, _: *IoEntry) bool {
         return true;
     }
 
-    fn wait(_: *AfdPoll, g: *Global, timeout: ?u64) void {
+    fn wait(p: *AfdPoll, g: *Global, timeout: ?u64) void {
         var keys: std.ArrayList(usize) = .empty;
         defer keys.deinit(g.gpa);
         if (!collectKeys(g, &keys)) return wakeAllIo(g);
         if (keys.items.len == 0) {
-            // Only timers are waiting.
-            if (timeout != null) afd.Sleep(@intCast(millisOf(timeout)));
+            // Only timers and other threads end this wait.
+            const ms: u32 = if (timeout == null) afd.infinite else @intCast(millisOf(timeout));
+            if (p.waker) |wk| {
+                _ = afd.WaitForSingleObject(wk, ms);
+            } else if (timeout != null) {
+                afd.Sleep(ms);
+            }
             return;
         }
         const buf = g.gpa.alloc(u64, afd.words(keys.items.len)) catch return wakeAllIo(g);
@@ -1306,7 +1536,7 @@ const AfdPoll = struct {
             const dir: Dir = @fromBackingInt(@intCast(@as(u1, @truncate(key))));
             list[i] = .{ .handle = @ptrFromInt(key >> 1), .events = afd.eventsFor(dir), .status = 0 };
         }
-        const n = afd.request(buf, keys.items.len, millisOf(timeout)) orelse return wakeAllIo(g);
+        const n = afd.request(buf, keys.items.len, millisOf(timeout), p.waker) orelse return wakeAllIo(g);
         // A ready handle wakes its waiters in both directions. A waiter
         // woken early finds that its operation would still block and
         // waits again.
@@ -1317,12 +1547,22 @@ const AfdPoll = struct {
         }
     }
 
-    fn enableWake(_: *AfdPoll, _: *Global) bool {
-        return false;
+    fn enableWake(p: *AfdPoll, _: *Global) bool {
+        if (p.waker != null) return true;
+        p.waker = afd.CreateEventW(null, .FALSE, .FALSE, null);
+        return p.waker != null;
     }
-    fn wake(_: *AfdPoll) void {}
+
+    fn wake(p: *AfdPoll) void {
+        if (p.waker) |wk| _ = afd.SetEvent(wk);
+    }
+
     fn forget(_: *AfdPoll, _: Handle) void {}
-    fn deinit(_: *AfdPoll, _: *Global) void {}
+
+    fn deinit(p: *AfdPoll, _: *Global) void {
+        if (p.waker) |wk| std.os.windows.CloseHandle(wk);
+        p.waker = null;
+    }
 };
 
 /// WASI has no sockets here, so its poller only sleeps until the next
@@ -1381,7 +1621,7 @@ test "timers fire in the order of their deadlines" {
 }
 
 test "another thread wakes the poller" {
-    if (is_windows or is_wasi) return;
+    if (is_wasi) return;
     const g = try state.create(std.testing.allocator, std.testing.io);
     defer state.destroy(g);
     try std.testing.expect(enableNotify(g));

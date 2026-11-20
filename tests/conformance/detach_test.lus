@@ -762,6 +762,58 @@ local function close_cancels_a_coroutine_that_never_ran_test()
     assert(close(co) == true)
 end
 
+-- Every waiter that the end of a coroutine woke receives its results,
+-- also when one of them closes the coroutine before the others ran.
+local function close_keeps_the_results_for_woken_waiters_test()
+    local co = spawn(function()
+        yield()
+        yield()
+        return "first", { 1, 2 }, nil
+    end)
+    local got = {}
+    local hasty = spawn(function()
+        got.hasty = pack(resume(co))
+        got.closed = pack(close(co))
+    end)
+    local late = spawn(function()
+        got.late = pack(resume(co))
+    end)
+    local last = spawn(function()
+        got.last = pack(resume(co))
+    end)
+    assert(resume(hasty) and resume(late) and resume(last))
+    assert(got.closed.n == 1 and got.closed[1] == true)
+    for _, name in ipairs({ "hasty", "late", "last" }) do
+        local r = got[name]
+        assert(r.n == 4 and r[1] == true and r[2] == "first" and r[3][2] == 2 and r[4] == nil, name)
+    end
+    assert(got.hasty[3] == got.late[3] and got.late[3] == got.last[3])
+    local r = pack(resume(co))
+    assert(r.n == 2 and r[1] == false and r[2] == "cannot resume dead coroutine")
+end
+
+local function close_keeps_the_error_for_woken_waiters_test()
+    local co = spawn(function()
+        yield()
+        error({ code = 7 })
+    end)
+    local got = {}
+    local hasty = spawn(function()
+        got.hasty = pack(resume(co))
+        got.closed = pack(close(co))
+    end)
+    local late = spawn(function()
+        got.late = pack(resume(co))
+    end)
+    assert(resume(hasty) and resume(late))
+    assert(got.hasty.n == 2 and got.hasty[1] == false and got.hasty[2].code == 7)
+    assert(got.closed.n == 2 and got.closed[1] == false and got.closed[2] == got.hasty[2])
+    assert(got.late.n == 2 and got.late[1] == false and got.late[2] == got.hasty[2])
+    collectgarbage()
+    local r = pack(resume(co))
+    assert(r.n == 2 and r[1] == false and r[2] == "cannot resume dead coroutine")
+end
+
 local function close_runs_the_pending_close_variables_test()
     local log = {}
     local target = spawn(function()
