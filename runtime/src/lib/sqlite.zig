@@ -83,6 +83,7 @@ pub const c = struct {
     pub const OPEN_WAL = 0x80000;
 
     pub const ACCESS_READWRITE = 1;
+    pub const ACCESS_READ = 2;
     pub const SHM_LOCK = 2;
     pub const SHM_EXCLUSIVE = 8;
 
@@ -322,11 +323,25 @@ const BoundShm = extern struct {
 /// would need creating, which raises a clear fs:write denial.
 fn bindReadonlyShm(f: *PFile) c_int {
     if (!f.owner.readonly or f.shm_bound) return c.OK;
-    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return c.OK;
+    if (builtin.os.tag == .wasi) return c.OK;
     var buf: [path_cap + 8]u8 = undefined;
     const p = sidecar(buf[0 .. buf.len - 1], f.pathSlice(), "-shm") orelse return c.CANTOPEN;
     buf[p.len] = 0;
     const zpath: [*:0]const u8 = @ptrCast(&buf);
+    if (builtin.os.tag == .windows) {
+        // The win32 VFS opens the -shm file with OPEN_ALWAYS even under
+        // readonly_shm, so it would create a missing file. The connection
+        // checks that the file exists first and needs fs:write otherwise.
+        // ACCESS_READ, unlike ACCESS_EXISTS, counts an empty file.
+        var exists: c_int = 0;
+        const vfs = f.owner.real;
+        if (vfs.xAccess.?(vfs, zpath, c.ACCESS_READ, &exists) != c.OK or exists == 0) {
+            f.owner.deny("fs:write", p);
+            return c.PERM;
+        }
+        f.shm_bound = true;
+        return c.OK;
+    }
     const fd = std.c.open(zpath, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true });
     if (fd < 0) {
         f.owner.deny("fs:write", p);
@@ -449,13 +464,15 @@ fn ioShmMap(file: *c.File, page: c_int, size: c_int, write: c_int, out: *?*anyop
     const m = realMethods(f);
     if (m.iVersion < 2 or m.xShmMap == null) return c.IOERR_SHMMAP;
     if (!shmAllowed(f, false)) return c.IOERR_SHMMAP;
-    // The win32 VFS ignores readonly_shm and maps the WAL index writable, and
-    // a reader of a writable index updates its read marks under exclusive
-    // locks. A read-only connection there maps each page read-only through
-    // the VFS and answers SQLITE_READONLY. A write request from a read-only
-    // connection records no denial, since SQLite treats the answer as part
-    // of a read.
+    // A read-only connection on Windows opens the WAL index through the
+    // readonly_shm parameter, which the win32 VFS honors by opening the
+    // -shm file with read access only. The connection asks for each page
+    // without write access and answers SQLITE_READONLY. A write request
+    // records no denial, since SQLite treats the answer as part of a read.
     if (f.owner.readonly and builtin.os.tag == .windows) {
+        // The win32 VFS would create a missing -shm file, so a missing
+        // file fails here with a fs:write denial.
+        if (bindReadonlyShm(f) != c.OK) return c.IOERR_SHMOPEN;
         // The answer SQLITE_READONLY with a mapped page tells SQLite that
         // the index is valid and read-only, which is what the unix VFS
         // reports under readonly_shm. SQLite then reads the mapping and
