@@ -1,0 +1,30 @@
+-- gsub with a pattern that is one required class, such as an escaping
+-- set, replaces each byte of the class, whatever the replacement is.
+
+local E = { ["&"] = "&amp;", ["<"] = "&lt;" }
+
+-- a table replaces every byte of the set
+local function table_replacement_test()
+    assert(("a&b<c"):gsub("[&<]", E) == "a&amp;b&lt;c")
+    assert(("abc"):gsub("[xyz]", "!") == "abc")
+end
+
+-- the limit counts replacements
+local function limit_test()
+    local s, n = ("a&b<c&"):gsub("[&<]", E, 2)
+    assert(s == "a&amp;b&lt;c&" and n == 2)
+end
+
+-- %0 and %1 name the whole match when the pattern has no captures
+local function string_replacement_test()
+    assert(("hello"):gsub("[aeiou]", "%0%0") == "heelloo")
+    assert(("hello"):gsub("[aeiou]", "%1") == "hello")
+end
+
+-- functions, __index, and false values behave as for any pattern
+local function other_replacements_test()
+    assert(("x1y2"):gsub("%d", function(d) return "<" .. d .. ">" end) == "x<1>y<2>")
+    local mt = setmetatable({}, { __index = function(_, k) return k:upper() end })
+    assert(("abc"):gsub("[ac]", mt) == "AbC")
+    assert(("a.b"):gsub("[.]", { ["."] = false }) == "a.b")
+end

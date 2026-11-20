@@ -40,6 +40,9 @@ const Label = A.Label;
 const tag_int: u8 = @backingInt(Tag.integer);
 const tag_float: u8 = @backingInt(Tag.float);
 const tag_string: u8 = @backingInt(Tag.string);
+/// The flag byte of a string and the bit that marks it interned.
+const string_flags: i32 = @offsetOf(object.String, "flags");
+const string_interned_bit: u3 = @bitOffsetOf(object.String.Flags, "interned");
 const tag_table: u8 = @backingInt(Tag.table);
 const tag_closure: u8 = @backingInt(Tag.closure);
 const tag_nil: u8 = @backingInt(Tag.nil);
@@ -1098,6 +1101,55 @@ pub const Emitter = struct {
         a.jumpIfByte(.ne, .{ .base = tags, .disp = tl.tag_key }, tag_string, other_key);
     }
 
+    /// R[dst] = R[tr][R[kr]] for a table in `tr` and a string in `kr`,
+    /// by probing the hash part inline as `table.findStr` does, when the
+    /// key is interned and the part has room. It continues at `done` with
+    /// the value, or with nil for an absent key of a table whose
+    /// metatable lacks `__index`, and falls through to the helper for
+    /// everything else.
+    fn probeStr(e: *Emitter, tr: u32, kr: u32, dst: u32, done: Label) void {
+        const a = &e.a;
+        const call = a.newLabel();
+        const loop = a.newLabel();
+        const next = a.newLabel();
+        const same = a.newLabel();
+        const absent = a.newLabel();
+        const nil_result = a.newLabel();
+        a.load64(A.t0, slot(tr));
+        a.load64(A.t6, slot(kr));
+        a.jumpIfBit(.{ .base = A.t6, .disp = string_flags }, string_interned_bit, false, call);
+        // A full part has no empty node to end the probe.
+        a.load32(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
+        a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
+        a.jumpIf(.hs, A.t1, A.t2, call);
+        a.addImm(A.t2, -1);
+        a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+        a.load32(A.t1, .{ .base = A.t6, .disp = @offsetOf(object.String, "hash") });
+        a.bind(loop);
+        a.@"and"(A.t1, A.t2);
+        e.nodeTags(A.t4, A.t3, A.t1);
+        a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.tag_key }, tag_nil, absent);
+        a.addScaled(A.t5, A.t3, A.t1, tl.node_shift);
+        a.jumpIfMem(.eq, A.t6, .{ .base = A.t5, .disp = tl.node_key }, same);
+        a.bind(next);
+        a.addImm(A.t1, 1);
+        a.jmp(loop);
+        a.bind(same);
+        a.jumpIfByte(.ne, .{ .base = A.t4, .disp = tl.tag_key }, tag_string, next);
+        a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.tag_val }, tag_nil, absent);
+        e.loadNodeVal(slot(dst), A.t5, A.t4, A.t2, A.t3);
+        a.jmp(done);
+        // Absent, or present with nil: nil unless `__index` may apply.
+        a.bind(absent);
+        a.load64(A.t1, .{ .base = A.t0, .disp = tl.metatable });
+        a.jumpIfImm(.eq, A.t1, 0, nil_result);
+        a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, false, call);
+        a.bind(nil_result);
+        e.storeConst(dst, .nil);
+        a.jmp(done);
+        a.bind(call);
+    }
+
     /// The value of the node at `node`, whose tags are at `tags`, to the
     /// value at `dst`, through `tmp` and `tmp2`.
     fn loadNodeVal(e: *Emitter, dst: Mem, node: A.Reg, tags: A.Reg, tmp: A.Reg, tmp2: A.Reg) void {
@@ -1559,6 +1611,7 @@ pub const Emitter = struct {
                 if (t.key_tag) |tag| {
                     const slow = a.newLabel();
                     a.jumpIfByte(.ne, tagOf(t.key.reg), tag, slow);
+                    if (t.helper == @intFromPtr(&helpers.getStr)) e.probeStr(t.t.reg, t.key.reg, t.v.reg, c.resume_at);
                     e.tableCall(c.pc, t.helper, t.t, t.key, t.v);
                     a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
                     a.bind(slow);
