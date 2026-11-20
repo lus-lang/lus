@@ -366,6 +366,47 @@ pub fn splitParent(p: []const u8, rules: PathRules) struct { []const u8, []const
     return .{ if (root > 0) p[0..root] else ".", p[root..] };
 }
 
+/// The final component as Win32 opens it: without its trailing dots and
+/// spaces. The components `.` and `..` stay as they are.
+pub fn win32Component(base: []const u8, rules: PathRules) []const u8 {
+    if (!rules.windows or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return base;
+    return std.mem.trimEnd(u8, base, ". ");
+}
+
+/// The names Win32 opens as devices in any directory, whatever extension
+/// follows them. The digits include the superscripts one to three.
+const dos_devices = [_][]const u8{ "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$" };
+const dos_ports = [_][]const u8{ "COM", "LPT" };
+const dos_digits = [_][]const u8{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "\xc2\xb9", "\xc2\xb2", "\xc2\xb3" };
+
+/// Whether Win32 opens the final component `base` as a device: the part
+/// before its first dot, without trailing spaces, is a device name in any
+/// case once the trailing dots and spaces of the component are gone.
+pub fn isDosDevice(base: []const u8) bool {
+    const name = win32Component(base, .win);
+    const stem = std.mem.trimEnd(u8, name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len], " ");
+    for (dos_devices) |d| if (std.ascii.eqlIgnoreCase(stem, d)) return true;
+    for (dos_ports) |port| {
+        if (stem.len <= port.len or !std.ascii.eqlIgnoreCase(stem[0..port.len], port)) continue;
+        for (dos_digits) |d| if (std.mem.eql(u8, stem[port.len..], d)) return true;
+    }
+    return false;
+}
+
+/// Whether a path whose separators are `/` names an ordinary file under
+/// the given rules. Under the Windows rules a colon after the drive or the
+/// share names an alternate data stream, and a final component that is a
+/// device name opens a device in any directory, so neither ever matches a
+/// grant. Every path is ordinary under the POSIX rules.
+pub fn isOrdinaryPath(p: []const u8, rules: PathRules) bool {
+    if (!rules.windows) return true;
+    const root = rootLen(p, rules);
+    if (std.mem.indexOfScalar(u8, p[root..], ':') != null) return false;
+    const trimmed = std.mem.trimEnd(u8, p, "/");
+    if (trimmed.len <= root) return true;
+    return !isDosDevice(splitParent(trimmed, rules)[1]);
+}
+
 /// Joins a resolved directory and a final component with one `/`.
 fn joinPath(gpa: Allocator, dir: []const u8, base: []const u8) ?[]u8 {
     if (base.len == 0) return gpa.dupe(u8, dir) catch null;
@@ -411,11 +452,19 @@ pub fn canonicalize(g: *Global, path: []const u8) ?[]u8 {
 fn canonicalizeWith(gpa: Allocator, path: []const u8, rules: PathRules, resolver: anytype) ?[]u8 {
     const norm = normalizeSeparators(gpa, path, rules) catch return null;
     defer gpa.free(norm);
-    if (resolver.resolve(norm)) |r| return r else |_| {}
+    if (!isOrdinaryPath(norm, rules)) return null;
+    if (resolver.resolve(norm)) |r| return ordinaryOrNull(gpa, r, rules) else |_| {}
     const parent, const base = splitParent(norm, rules);
     const rp = resolver.resolve(parent) catch return null;
     defer gpa.free(rp);
-    return joinPath(gpa, rp, base);
+    return ordinaryOrNull(gpa, joinPath(gpa, rp, win32Component(base, rules)) orelse return null, rules);
+}
+
+/// `p` when it names an ordinary file, otherwise null after freeing it.
+fn ordinaryOrNull(gpa: Allocator, p: []u8, rules: PathRules) ?[]u8 {
+    if (isOrdinaryPath(p, rules)) return p;
+    gpa.free(p);
+    return null;
 }
 
 /// Canonical path of a link itself: its parent resolves, its final
@@ -428,12 +477,13 @@ pub fn canonicalizeLink(g: *Global, path: []const u8) ?[]u8 {
 fn canonicalizeLinkWith(gpa: Allocator, path: []const u8, rules: PathRules, resolver: anytype) ?[]u8 {
     const norm = normalizeSeparators(gpa, path, rules) catch return null;
     defer gpa.free(norm);
+    if (!isOrdinaryPath(norm, rules)) return null;
     const trimmed = std.mem.trimEnd(u8, norm, "/");
     const parent, const base = splitParent(trimmed, rules);
     if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return canonicalizeWith(gpa, path, rules, resolver);
     const rp = resolver.resolve(parent) catch return null;
     defer gpa.free(rp);
-    return joinPath(gpa, rp, base);
+    return ordinaryOrNull(gpa, joinPath(gpa, rp, win32Component(base, rules)) orelse return null, rules);
 }
 
 /// Canonicalizes a granted path pattern. The directory part before the
@@ -799,4 +849,44 @@ test "canonical paths under the Windows rules" {
     try std.testing.expectEqualStrings("C:/Temp/lus-test-1/h3c3/blocked-link", link);
     // Grants and requests compare without regard to case.
     try std.testing.expect(globMatchCase("C:/Temp/lus-test-1/baselib_*", "c:/temp/LUS-TEST-1/baselib_1/a", true));
+}
+
+test "device names and streams under the Windows rules" {
+    const gpa = std.testing.allocator;
+    const f: FakeFs = .{ .gpa = gpa, .rules = .win, .files = &.{
+        .{ "C:/", "C:/" },
+        .{ "C:/Work", "C:/Work" },
+        .{ "C:/Work/a.lus", "C:/Work/a.lus" },
+        .{ ".", "C:/Work" },
+    } };
+    // A device name as the final component, in any case and with any
+    // extension, trailing dots, or trailing spaces, never canonicalizes.
+    for ([_][]const u8{
+        "C:/Work/CON",    "C:/Work/con",      "C:\\Work\\NUL",   "C:/Work/PRN",         "C:/Work/aux",
+        "C:/Work/COM1",   "C:/Work/com9",     "C:/Work/LPT1",    "C:/Work/lpt9",        "C:/Work/COM0",
+        "C:/Work/CONIN$", "C:/Work/conout$",  "C:/Work/con.txt", "C:/Work/NUL.tar.gz",  "C:/Work/CON.",
+        "C:/Work/CON ",   "C:/Work/con .txt", "C:/Work/AUX. . ", "C:/Work/COM\xc2\xb9", "C:/Work/lpt\xc2\xb3.log",
+        "con",            "./nul.txt",        "C:/Work/con/",
+    }) |p| {
+        try expectCanonical(f, p, null);
+        try std.testing.expect(canonicalizeLinkWith(gpa, p, .win, f) == null);
+    }
+    // Names that only start like a device are ordinary files.
+    try expectCanonical(f, "C:/Work/CONSOLE", "C:/Work/CONSOLE");
+    try expectCanonical(f, "C:/Work/COM10", "C:/Work/COM10");
+    try expectCanonical(f, "C:/Work/xcon.txt", "C:/Work/xcon.txt");
+    try expectCanonical(f, "C:/Work/COM", "C:/Work/COM");
+    // A colon after the drive names an alternate data stream.
+    try expectCanonical(f, "C:/Work/a.lus:x.txt", null);
+    try expectCanonical(f, "C:/Work/b.txt:$DATA", null);
+    try expectCanonical(f, "a.lus:x.txt", null);
+    try std.testing.expect(canonicalizeLinkWith(gpa, "C:/Work/a.lus:x.txt", .win, f) == null);
+    // The fallback opens what Win32 opens, without trailing dots and spaces.
+    try expectCanonical(f, "C:/Work/new.txt. .", "C:/Work/new.txt");
+    try expectCanonical(f, "C:/Work/new ", "C:/Work/new");
+    // The POSIX rules treat these names as ordinary files.
+    const pf: FakeFs = .{ .gpa = gpa, .rules = .posix, .files = &.{.{ "/work", "/work" }} };
+    try expectCanonical(pf, "/work/CON", "/work/CON");
+    try expectCanonical(pf, "/work/a:b.txt", "/work/a:b.txt");
+    try expectCanonical(pf, "/work/x. ", "/work/x. ");
 }
