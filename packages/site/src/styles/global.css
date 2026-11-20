@@ -210,18 +210,17 @@ body::before {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
 }
 
-/* title row: a page title with its own small cube field on the right,
-   standing on the title's baseline */
+/* title row: a page title with a skyline of the page's own entries on the
+   right, one bar each, both standing on a hairline */
 .title-row {
-  @apply flex items-end gap-8;
+  @apply flex items-end gap-8 border-b border-rule mb-4;
 
   > :first-child {
-    @apply shrink-0;
+    @apply shrink-0 pb-3;
   }
 
   > svg.cube-field {
-    @apply hidden md:block ml-auto w-[min(46%,520px)] mb-3;
-    mask: linear-gradient(to right, transparent, #000 30%);
+    @apply hidden md:block ml-auto w-[min(36%,400px)];
   }
 }
 
@@ -272,17 +271,22 @@ body::before {
 .figure {
   @apply relative bg-figure text-figure-ink border-t-2 border-rule m-0;
 
+  /* crop marks: an L of hairlines at each corner, open to the figure */
   &::after {
     content: "";
     position: absolute;
-    inset: -7px;
+    inset: -6px;
     pointer-events: none;
     --mark: linear-gradient(var(--color-ink-3), var(--color-ink-3));
     background:
-      var(--mark) top left / 3px 3px no-repeat,
-      var(--mark) top right / 3px 3px no-repeat,
-      var(--mark) bottom left / 3px 3px no-repeat,
-      var(--mark) bottom right / 3px 3px no-repeat;
+      var(--mark) top left / 9px 1px no-repeat,
+      var(--mark) top left / 1px 9px no-repeat,
+      var(--mark) top right / 9px 1px no-repeat,
+      var(--mark) top right / 1px 9px no-repeat,
+      var(--mark) bottom left / 9px 1px no-repeat,
+      var(--mark) bottom left / 1px 9px no-repeat,
+      var(--mark) bottom right / 9px 1px no-repeat,
+      var(--mark) bottom right / 1px 9px no-repeat;
   }
 
   figcaption {

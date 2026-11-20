@@ -1,6 +1,7 @@
 ---
 import codeThemes from "../lib/code-themes.mjs"
 import CubeField from "../components/CubeField.astro"
+import { skyline } from "../lib/skyline"
 import { Code } from "astro:components"
 // @ts-ignore
 import lusGrammar from "../../../textmate/lus.tmLanguage.json"
@@ -50,6 +51,8 @@ for (const [path, content] of Object.entries(exampleFiles)) {
 }
 
 examples.sort((a, b) => a.title.localeCompare(b.title))
+
+const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").length))
 ---
 
 <Layout
@@ -60,7 +63,7 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
     <section>
       <div class="title-row">
         <h1 class="page-title">Examples</h1>
-        <CubeField rows={2} cols={30} at={0.55} amp={2.6} seed={17} />
+        <CubeField rows={1} heights={skylineHeights} glow={false} />
       </div>
       <div class="intro">
         <p>

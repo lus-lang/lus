@@ -288,22 +288,22 @@ const modes: {
     @apply text-ink-3;
   }
 
-  /* each bar is a segmented meter: 3px cells with 1px gaps, faint for
-     the scale and solid for the reading */
+  /* each bar is a segmented meter of square cells, like a row of cubes:
+     faint for the scale and solid for the reading */
   .bar {
     @apply block h-[5px] mt-[3px] relative;
     background: repeating-linear-gradient(
       to right,
-      color-mix(in oklab, var(--color-ink) 10%, transparent) 0 3px,
-      transparent 3px 4px
+      color-mix(in oklab, var(--color-ink) 7%, transparent) 0 5px,
+      transparent 5px 6px
     );
 
     i {
       @apply absolute inset-y-0 left-0;
       background: repeating-linear-gradient(
         to right,
-        var(--color-ink-2) 0 3px,
-        transparent 3px 4px
+        var(--color-ink-2) 0 5px,
+        transparent 5px 6px
       );
     }
   }
@@ -311,8 +311,8 @@ const modes: {
   td.lus .bar i {
     background: repeating-linear-gradient(
       to right,
-      var(--color-link) 0 3px,
-      transparent 3px 4px
+      var(--color-link) 0 5px,
+      transparent 5px 6px
     );
   }
 

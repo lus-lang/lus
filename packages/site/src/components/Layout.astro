@@ -7,7 +7,6 @@ import "@fontsource-variable/intel-one-mono/wght-italic.css"
 
 import "../styles/global.css"
 import SiteHeader from "./SiteHeader.astro"
-import CubeField from "./CubeField.astro"
 
 interface Props {
   title?: string
@@ -60,7 +59,6 @@ const canonicalUrl = new URL(
     <slot />
     <footer>
       <div class="footer-wrap">
-        <CubeField rows={1} cols={84} at={0.18} amp={1.2} seed={5} signal="none" />
         <div class="footer-inner">
           <a href="/" class="footer-wordmark">lus.dev</a>
           <a href="/manual/license">0BSD</a>
@@ -76,17 +74,22 @@ const canonicalUrl = new URL(
   footer {
     @apply mt-auto pt-16;
 
-    /* a low field closes every page, standing on the footer rule */
     .footer-wrap {
       @apply max-w-[1240px] mx-auto px-4 md:px-6;
-
-      > :global(.cube-field) {
-        @apply opacity-50;
-      }
     }
 
+    /* the closing rule carries the same ruler ticks as section rules */
     .footer-inner {
       @apply border-t border-rule pt-2.5 pb-10 flex justify-between font-mono text-xs text-ink-3;
+      background:
+        repeating-linear-gradient(
+            to right,
+            var(--color-rule) 0 1px,
+            transparent 1px calc(100% / 12)
+          )
+          left top / 100% 5px no-repeat,
+        linear-gradient(var(--color-rule), var(--color-rule)) right top / 1px
+          5px no-repeat;
     }
 
     a {

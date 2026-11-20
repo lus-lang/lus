@@ -1,6 +1,7 @@
 ---
 import ManualLayout from "../../components/ManualLayout.astro"
 import CubeField from "../../components/CubeField.astro"
+import { skyline } from "../../lib/skyline"
 import { getCollection } from "astro:content"
 
 const manual = await getCollection("manual")
@@ -45,12 +46,14 @@ byKey.reference.unshift(
     shortdesc: "The embedding interface: core, auxiliary, workers, permissions.",
   },
 )
+
+const skylineHeights = skyline(manual.filter((p) => !p.data.acquis && p.data.group).map((p) => (p.body ?? "").length))
 ---
 
 <ManualLayout title="Manual" measure>
   <div class="title-row">
         <h1>Manual</h1>
-        <CubeField rows={2} cols={30} at={0.8} amp={2.6} seed={23} />
+        <CubeField rows={1} heights={skylineHeights} glow={false} />
       </div>
   {
     groups.map((group) => (

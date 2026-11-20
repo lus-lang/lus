@@ -227,7 +227,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </aside>
     </section>
 
-    <CubeField class="horizon wide" />
+    <CubeField class="horizon wide" amp={6.5} />
     <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
 
     <section class="part">
@@ -396,9 +396,30 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
+  /* night only: a bloom of the lime light behind the masthead's right
+     half, the same light that glows on the horizon */
+  @media (prefers-color-scheme: dark) {
+    .mast {
+      @apply relative isolate;
+
+      &::before {
+        content: "";
+        position: absolute;
+        inset: -40px -24px -120px 30%;
+        z-index: -1;
+        pointer-events: none;
+        background: radial-gradient(
+          ellipse 70% 80% at 70% 60%,
+          color-mix(in oklab, var(--color-accent) 9%, transparent),
+          transparent 70%
+        );
+      }
+    }
+  }
+
   /* the horizon: a full-width field of cube bars under the masthead */
   :global(svg.horizon) {
-    @apply mt-6 -mb-6;
+    @apply mt-6 mb-0 border-b-2 border-rule;
   }
 
   /* phones get a shorter field, so the bars keep their scale */
@@ -406,13 +427,14 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     @apply sm:hidden;
   }
 
+  /* the wide field rises into the space under the news rail */
   :global(svg.horizon.wide) {
-    @apply max-sm:hidden;
+    @apply max-sm:hidden -mt-24;
   }
 
   /* news rail, set as a ledger */
   .rail {
-    @apply flex flex-col justify-end pl-5;
+    @apply flex flex-col justify-start pl-5 pt-3;
 
 
     .rail-head {
@@ -493,14 +515,17 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   /* each chapter spans three rows of the spread and shares them with its
      neighbour through subgrid, so paired figures start on one line */
   .chap {
-    @apply grid gap-x-3.5 pt-4 pb-[18px];
-    grid-template-columns: 44px minmax(0, 1fr);
+    @apply grid gap-x-4 pt-4 pb-[18px];
+    grid-template-columns: 68px minmax(0, 1fr);
     grid-row: span 3;
     grid-template-rows: subgrid;
 
+    /* oversized ghost numerals, hung beside the chapter like plate
+       numbers */
     .no {
-      @apply font-display font-extrabold text-[30px] leading-none tracking-[-0.05em] row-span-3;
-      align-self: baseline;
+      @apply font-display font-extrabold text-[56px] leading-[0.8] tracking-[-0.06em] row-span-3 tabular-nums;
+      color: color-mix(in oklab, var(--color-ink) 16%, transparent);
+      align-self: start;
     }
 
     h3 {
