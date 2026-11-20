@@ -10,6 +10,7 @@ const table = @import("../vm/table.zig");
 const ops = @import("../vm/ops.zig");
 const numeric = @import("../vm/numeric.zig");
 const wtf8 = @import("../vm/wtf8.zig");
+const gc = @import("../vm/gc.zig");
 const aux = @import("auxlib.zig");
 const Value = value.Value;
 const Thread = state.Thread;
@@ -18,6 +19,33 @@ const Table = object.Table;
 const String = object.String;
 
 const max_depth = 1000;
+
+/// The parser and the writer scan strings this many bytes at a time.
+const scan_block = 16;
+const SV = @Vector(scan_block, u8);
+
+/// Whether every byte of the block is printable ASCII other than a
+/// quote and a backslash. Those bytes go through the parser unchanged.
+inline fn plainBlock(v: SV) bool {
+    // A byte from 0x20 through 0x7F maps to 0 through 0x5F.
+    const shifted = v -% @as(SV, @splat(0x20));
+    const in_range = @reduce(.Max, shifted) < 0x60;
+    const quote = @reduce(.Or, v == @as(SV, @splat('"')));
+    const bslash = @reduce(.Or, v == @as(SV, @splat('\\')));
+    return in_range and !quote and !bslash;
+}
+
+/// Whether the writer copies every byte of the block unchanged: printable
+/// ASCII other than a quote, a backslash, and DEL, or bytes of multi-byte
+/// characters other than 0xED, the lead byte of a surrogate.
+inline fn verbatimBlock(v: SV) bool {
+    const control = @reduce(.Min, v) < 0x20;
+    const quote = @reduce(.Or, v == @as(SV, @splat('"')));
+    const bslash = @reduce(.Or, v == @as(SV, @splat('\\')));
+    const del = @reduce(.Or, v == @as(SV, @splat(0x7F)));
+    const ed = @reduce(.Or, v == @as(SV, @splat(0xED)));
+    return !control and !quote and !bslash and !del and !ed;
+}
 
 pub fn open(l: *Thread) Error!void {
     try aux.setGlobal(l, "tojson", try aux.native(l, tojson, "tojson"));
@@ -75,18 +103,36 @@ const Parser = struct {
         p.i += 1; // opening quote
         p.buf.clearRetainingCapacity();
         const start = p.i;
-        // Fast path: no escapes.
-        while (p.i < p.s.len) {
-            const c = p.s[p.i];
+        // Fast path: no escapes. The scan skips a block at a time while
+        // every byte is printable ASCII other than a quote or a
+        // backslash, and it notes whether any byte is not ASCII, so an
+        // ASCII string needs no second pass to validate and count.
+        var high = false;
+        const s = p.s;
+        var i = p.i;
+        while (true) {
+            while (i + scan_block <= s.len) {
+                const v: SV = s[i..][0..scan_block].*;
+                if (!plainBlock(v)) break;
+                i += scan_block;
+            }
+            if (i >= s.len) break;
+            const c = s[i];
             if (c == '"') {
-                const raw = p.s[start..p.i];
-                p.i += 1;
+                const raw = s[start..i];
+                p.i = i + 1;
+                if (!high) return p.mkAscii(raw);
                 return p.mkString(raw);
             }
             if (c == '\\') break;
-            if (c < 0x20) return p.fail("control character in string", .{});
-            p.i += 1;
+            if (c < 0x20) {
+                p.i = i;
+                return p.fail("control character in string", .{});
+            }
+            if (c >= 0x80) high = true;
+            i += 1;
         }
+        p.i = i;
         p.buf.appendSlice(gpa, p.s[start..p.i]) catch return p.l.raiseMem();
         while (p.i < p.s.len) {
             const c = p.s[p.i];
@@ -139,6 +185,10 @@ const Parser = struct {
         return p.fail("unterminated string", .{});
     }
 
+    fn mkAscii(p: *Parser, bytes: []const u8) Error!Value {
+        return Value.obj(.string, state.newStringKnown(p.l.g, bytes, true, bytes.len) catch return p.l.raiseMem());
+    }
+
     fn mkString(p: *Parser, bytes: []const u8) Error!Value {
         const a = wtf8.analyze(bytes);
         if (!a.valid) return p.fail("invalid UTF-8 in string", .{});
@@ -147,6 +197,29 @@ const Parser = struct {
 
     fn number(p: *Parser) Error!Value {
         const start = p.i;
+        // Fast path: an integer of at most 18 digits, which cannot
+        // overflow, followed by a byte that cannot continue a number.
+        {
+            var i = p.i;
+            const neg = p.s[i] == '-';
+            if (neg) i += 1;
+            const first = i;
+            var acc: i64 = 0;
+            while (i < p.s.len and i - first < 18) : (i += 1) {
+                const d = p.s[i] -% '0';
+                if (d > 9) break;
+                acc = acc * 10 + d;
+            }
+            const n = i - first;
+            const lead_ok = n == 1 or (n > 1 and p.s[first] != '0');
+            if (lead_ok and (i >= p.s.len or switch (p.s[i]) {
+                '0'...'9', '.', 'e', 'E' => false,
+                else => true,
+            })) {
+                p.i = i;
+                return Value.int(if (neg) -acc else acc);
+            }
+        }
         if (p.s[p.i] == '-') p.i += 1;
         if (p.i >= p.s.len or !std.ascii.isDigit(p.s[p.i])) return p.fail("invalid number", .{});
         if (p.s[p.i] == '0' and p.i + 1 < p.s.len and std.ascii.isDigit(p.s[p.i + 1])) return p.fail("leading zeros not allowed", .{});
@@ -204,102 +277,135 @@ const Parser = struct {
         };
     }
 
+    /// An open container. Its values wait on the Lus stack above the slot
+    /// `base`, keys and values alternating for an object, and the table
+    /// is made at its exact size when the container closes. A container
+    /// with more than `flush_at` waiting values moves them into its table
+    /// early, so the stack stays small. The table lives in the slot
+    /// `base` once it exists.
     const Frame = struct {
-        t: *Table,
+        base: u32,
         is_array: bool,
-        n: i64 = 0,
-        key: Value = .nil,
+        t: ?*Table = null,
+        /// Array elements already moved into the table.
+        n: usize = 0,
     };
+
+    const flush_at = 1024;
+    const tight_room = 4 * flush_at;
+
+    /// Moves the waiting values of `f` into its table, making the table
+    /// when it does not exist yet. `last` is true at the close of the
+    /// container. A long array grows by doubling, as stores grow it.
+    fn flush(p: *Parser, f: *Frame, last: bool) Error!void {
+        const l = p.l;
+        const gpa = l.g.gpa;
+        const first = f.base + 1;
+        const count = l.top - first;
+        if (f.is_array) {
+            if (f.t == null) {
+                // Making the table can collect, and the waiting values
+                // are on the stack, which keeps them alive.
+                const t = try l.newTable(count, 0);
+                l.stack[f.base] = Value.obj(.table, t);
+                f.t = t;
+            }
+            const t = f.t.?;
+            const end = f.n + count;
+            if (end > t.asize) {
+                const grow = if (last) end else @max(end, t.asize * 2);
+                table.resize(gpa, t, grow, t.hash_used) catch return l.raiseMem();
+            }
+            table.storeList(gpa, t, f.n, l.stack[first..][0..count]) catch return l.raiseMem();
+            f.n = end;
+            gc.barrierBack(l.g, &t.hdr);
+        } else {
+            const pairs = count / 2;
+            if (f.t == null) {
+                const t = try l.newTable(0, pairs);
+                l.stack[f.base] = Value.obj(.table, t);
+                f.t = t;
+            }
+            const t = f.t.?;
+            var i: usize = 0;
+            while (i < pairs) : (i += 1) {
+                const k = &l.stack[first + 2 * i];
+                const v = &l.stack[first + 2 * i + 1];
+                if (table.storeStr(t, k, v) == null)
+                    table.set(gpa, t, k.*, v.*) catch return l.raiseMem();
+            }
+            t.tm_absent = 0;
+            gc.barrierBack(l.g, &t.hdr);
+        }
+        l.top = first;
+    }
 
     fn parse(p: *Parser) Error!Value {
         const l = p.l;
         var stack: std.ArrayList(Frame) = .empty;
         defer stack.deinit(l.g.gpa);
-        // Open containers are anchored on the Lus stack so they stay
-        // reachable while the parse allocates. A closed container stays
-        // anchored until its parent holds it, and then gives its slot
-        // back, so the slots in use follow the nesting depth.
+        // Every value read waits on the Lus stack, which keeps it
+        // reachable while the parse allocates, until its container
+        // closes. A closed container ends in the slot of its table, which
+        // is where its parent expects its next value.
         const anchor = l.top;
         defer l.top = anchor;
-        var result: Value = .nil;
-        var v: Value = undefined;
-        // Whether `v` is a closed container still anchored in the top slot.
-        var v_anchored = false;
         outer: while (true) {
             // Read a value: scalar, or open a container.
             if (try p.scalar()) |sv| {
-                v = sv;
-                v_anchored = false;
+                try l.push(sv);
             } else {
                 const c = p.s[p.i];
                 p.i += 1;
                 if (stack.items.len >= max_depth) return p.fail("maximum nesting depth exceeded", .{});
-                const t = try l.newTable(0, 0);
-                try l.push(Value.obj(.table, t));
-                stack.append(l.g.gpa, .{ .t = t, .is_array = c == '[' }) catch return l.raiseMem();
+                try l.push(.nil);
+                stack.append(l.g.gpa, .{ .base = l.top - 1, .is_array = c == '[' }) catch return l.raiseMem();
                 const top = &stack.items[stack.items.len - 1];
-                if (c == '[') {
-                    if (p.peek() == ']') {
-                        p.i += 1;
-                        v = Value.obj(.table, t);
-                        v_anchored = true;
-                        _ = stack.pop();
-                    } else continue :outer;
+                const close: u8 = if (c == '[') ']' else '}';
+                if (p.peek() == close) {
+                    p.i += 1;
+                    try p.flush(top, true);
+                    _ = stack.pop();
+                } else if (c == '[') {
+                    continue :outer;
                 } else {
-                    if (p.peek() == '}') {
-                        p.i += 1;
-                        v = Value.obj(.table, t);
-                        v_anchored = true;
-                        _ = stack.pop();
-                    } else {
-                        if (p.peek() != '"') return p.fail("expected string key in object", .{});
-                        top.key = try p.string();
-                        try p.expect(':', "after object key");
-                        continue :outer;
-                    }
+                    if (p.peek() != '"') return p.fail("expected string key in object", .{});
+                    try l.push(try p.string());
+                    try p.expect(':', "after object key");
+                    continue :outer;
                 }
             }
-            // Deliver v to the enclosing container, closing finished ones.
+            // The value is on the stack. Continue its container, closing
+            // finished ones.
             while (true) {
-                if (stack.items.len == 0) {
-                    result = v;
-                    break :outer;
-                }
+                if (stack.items.len == 0) break :outer;
                 const f = &stack.items[stack.items.len - 1];
+                // Close to the stack limit every value moves into its
+                // table at once, so the parse needs stack only for the
+                // containers still open.
+                if (l.top - f.base > flush_at or l.top + tight_room > Thread.max_stack) try p.flush(f, false);
                 if (f.is_array) {
-                    f.n += 1;
-                    if (!v.isNil()) try ops.rawSet(l, f.t, Value.int(f.n), v);
-                    if (v_anchored) {
-                        l.top -= 1;
-                        v_anchored = false;
-                    }
                     if (p.peek() == ',') {
                         p.i += 1;
                         continue :outer;
                     }
                     try p.expect(']', "after array element");
                 } else {
-                    try ops.rawSet(l, f.t, f.key, v);
-                    if (v_anchored) {
-                        l.top -= 1;
-                        v_anchored = false;
-                    }
                     if (p.peek() == ',') {
                         p.i += 1;
                         if (p.peek() != '"') return p.fail("expected string key", .{});
-                        f.key = try p.string();
+                        try l.push(try p.string());
                         try p.expect(':', "after object key");
                         continue :outer;
                     }
                     try p.expect('}', "after object value");
                 }
-                v = Value.obj(.table, f.t);
-                v_anchored = true;
+                try p.flush(f, true);
                 _ = stack.pop();
             }
         }
         if (p.peek() != null) return p.fail("unexpected trailing characters", .{});
-        return result;
+        return l.stack[anchor];
     }
 };
 
@@ -327,23 +433,82 @@ fn fromjson(l: *Thread) Error!u32 {
 // ---------------------------------------------------------------------
 // Writing
 
-const Writer = struct {
-    l: *Thread,
-    out: std.ArrayList(u8) = .empty,
-    filter: Value,
-    /// Tables on the current path, for cycle detection.
-    path: std.AutoHashMapUnmanaged(usize, void) = .empty,
-    depth: usize = 0,
+/// The output of the writer in blocks of fixed size, so that a long
+/// result never moves while it grows. The string is made at its exact
+/// size at the end, and the blocks are copied into it once.
+const Blocks = struct {
+    full: std.ArrayList([]u8) = .empty,
+    cur: []u8 = &.{},
+    n: usize = 0,
 
-    fn write(w: *Writer, b: []const u8) Error!void {
-        w.out.appendSlice(w.l.g.gpa, b) catch return w.l.raiseMem();
+    const size = 64 * 1024;
+
+    fn write(o: *Blocks, gpa: std.mem.Allocator, b: []const u8) !void {
+        var rest = b;
+        while (true) {
+            const k = @min(rest.len, o.cur.len - o.n);
+            @memcpy(o.cur[o.n..][0..k], rest[0..k]);
+            o.n += k;
+            rest = rest[k..];
+            if (rest.len == 0) return;
+            try o.full.ensureUnusedCapacity(gpa, 1);
+            const next = try gpa.alloc(u8, size);
+            if (o.cur.len > 0) o.full.appendAssumeCapacity(o.cur);
+            o.cur = next;
+            o.n = 0;
+        }
     }
 
-    fn str(w: *Writer, s: []const u8) Error!void {
-        const gpa = w.l.g.gpa;
-        w.out.append(gpa, '"') catch return w.l.raiseMem();
+    fn len(o: *const Blocks) usize {
+        return o.full.items.len * size + o.n;
+    }
+
+    fn deinit(o: *Blocks, gpa: std.mem.Allocator) void {
+        for (o.full.items) |b| gpa.free(b);
+        o.full.deinit(gpa);
+        gpa.free(o.cur);
+    }
+};
+
+const Writer = struct {
+    l: *Thread,
+    out: Blocks = .{},
+    filter: Value,
+    /// Tables on the current path, for cycle detection. The path is as
+    /// long as the nesting, which `max_depth` bounds.
+    path: std.ArrayList(*Table) = .empty,
+    depth: usize = 0,
+    /// Continuation bytes written so far, so the result needs no second
+    /// pass to count its characters.
+    cont: usize = 0,
+
+    fn write(w: *Writer, b: []const u8) Error!void {
+        w.out.write(w.l.g.gpa, b) catch return w.l.raiseMem();
+    }
+
+    fn onPath(w: *Writer, t: *Table) bool {
+        return std.mem.indexOfScalar(*Table, w.path.items, t) != null;
+    }
+
+    fn str(w: *Writer, s: *String) Error!void {
+        const b = s.bytes();
+        if (!s.flags.ascii) w.cont += b.len - s.chars;
+        return w.strBytes(b);
+    }
+
+    fn strBytes(w: *Writer, s: []const u8) Error!void {
+        try w.write("\"");
         var i: usize = 0;
         while (i < s.len) {
+            // Copy the run of bytes that need no escape a block at a time.
+            const run = i;
+            while (i + scan_block <= s.len and verbatimBlock(s[i..][0..scan_block].*)) i += scan_block;
+            while (i < s.len) : (i += 1) switch (s[i]) {
+                0...0x1F, '"', '\\', 0x7F, 0xED => break,
+                else => {},
+            };
+            if (i > run) try w.write(s[run..i]);
+            if (i >= s.len) break;
             const c = s[i];
             switch (c) {
                 '"' => try w.write("\\\""),
@@ -353,38 +518,62 @@ const Writer = struct {
                 '\t' => try w.write("\\t"),
                 0x08 => try w.write("\\b"),
                 0x0c => try w.write("\\f"),
-                0...7, 11, 14...31, 127 => w.out.print(gpa, "\\u{x:0>4}", .{c}) catch return w.l.raiseMem(),
-                else => {
-                    if (c >= 0x80) {
-                        const d = wtf8.decodeValid(s, i);
-                        if (d.cp >= 0xD800 and d.cp <= 0xDFFF) {
-                            // Lone surrogates are escaped so the output is
-                            // valid UTF-8.
-                            w.out.print(gpa, "\\u{x:0>4}", .{d.cp}) catch return w.l.raiseMem();
-                        } else {
-                            try w.write(s[i .. i + d.len]);
-                        }
-                        i += d.len;
-                        continue;
+                0xED => {
+                    const d = wtf8.decodeValid(s, i);
+                    if (d.cp >= 0xD800 and d.cp <= 0xDFFF) {
+                        // Lone surrogates are escaped so the output is
+                        // valid UTF-8. The three bytes of the character,
+                        // two of them continuation bytes, become six
+                        // ASCII bytes.
+                        w.cont -= 2;
+                        try w.escapeUnit(d.cp);
+                    } else {
+                        try w.write(s[i .. i + d.len]);
                     }
-                    w.out.append(gpa, c) catch return w.l.raiseMem();
+                    i += d.len;
+                    continue;
                 },
+                else => try w.escapeUnit(c),
             }
             i += 1;
         }
-        w.out.append(gpa, '"') catch return w.l.raiseMem();
+        try w.write("\"");
+    }
+
+    /// Writes `\\u` and the four hex digits of `u`.
+    fn escapeUnit(w: *Writer, u: u21) Error!void {
+        var tmp: [6]u8 = undefined;
+        return w.write(std.fmt.bufPrint(&tmp, "\\u{x:0>4}", .{u}) catch unreachable);
+    }
+
+    fn int(w: *Writer, x: i64) Error!void {
+        var buf: [20]u8 = undefined;
+        var i = ops.intDigits(&buf, @abs(x));
+        if (x < 0) {
+            i -= 1;
+            buf[i] = '-';
+        }
+        return w.write(buf[i..]);
     }
 
     fn number(w: *Writer, v: Value) Error!void {
         const gpa = w.l.g.gpa;
         switch (v.tag) {
-            .integer => w.out.print(gpa, "{d}", .{v.asInt()}) catch return w.l.raiseMem(),
+            .integer => try w.int(v.asInt()),
             .float => {
                 const f = v.asFloat();
                 if (std.math.isNan(f) or std.math.isInf(f)) return w.write("null");
-                ops.formatG(gpa, &w.out, f, 17) catch return w.l.raiseMem();
+                var tmp: std.ArrayList(u8) = .empty;
+                defer tmp.deinit(gpa);
+                ops.formatG(gpa, &tmp, f, 17) catch return w.l.raiseMem();
+                try w.write(tmp.items);
             },
-            else => ops.numberToBuf(gpa, &w.out, v) catch return w.l.raiseMem(),
+            else => {
+                var tmp: std.ArrayList(u8) = .empty;
+                defer tmp.deinit(gpa);
+                ops.numberToBuf(gpa, &tmp, v) catch return w.l.raiseMem();
+                try w.write(tmp.items);
+            },
         }
     }
 
@@ -408,7 +597,7 @@ const Writer = struct {
             const k = state.newStringKnown(w.l.g, "__json", true, 6) catch return w.l.raiseMem();
             const j = table.getStr(mt, k);
             if (j.isNil()) break;
-            if (w.path.contains(@intFromPtr(cur.as(Table)))) return w.l.raiseFmt("circular reference detected in table", .{});
+            if (w.onPath(cur.as(Table))) return w.l.raiseFmt("circular reference detected in table", .{});
             steps += 1;
             if (w.depth + steps > max_depth) return w.l.raiseFmt("maximum nesting depth exceeded", .{});
             const r = try ops.call1(w.l, j, &.{cur});
@@ -429,7 +618,7 @@ const Writer = struct {
             .true => try w.write("true"),
             .false => try w.write("false"),
             .integer, .float, .bigint, .decimal => try w.number(v),
-            .string => try w.str(v.as(String).bytes()),
+            .string => try w.str(v.as(String)),
             .table => try w.tableValue(v.as(Table)),
             else => try w.write("null"),
         }
@@ -437,57 +626,70 @@ const Writer = struct {
 
     fn tableValue(w: *Writer, t: *Table) Error!void {
         const l = w.l;
-        const key = @intFromPtr(t);
-        if (w.path.contains(key)) return l.raiseFmt("circular reference detected in table", .{});
+        if (w.onPath(t)) return l.raiseFmt("circular reference detected in table", .{});
         if (w.depth >= max_depth) return l.raiseFmt("maximum nesting depth exceeded", .{});
         // The writer recurses natively, so each level is charged against
         // the interpreter's native call budget and deep nesting raises a
         // catchable C stack overflow.
         if (l.g.native_depth >= Thread.max_ncalls) return l.raiseFmt("C stack overflow", .{});
-        w.path.put(l.g.gpa, key, {}) catch return l.raiseMem();
+        w.path.append(l.g.gpa, t) catch return l.raiseMem();
         w.depth += 1;
         l.g.native_depth += 1;
         defer {
-            _ = w.path.remove(key);
+            _ = w.path.pop();
             w.depth -= 1;
             l.g.native_depth -= 1;
         }
-        // Array detection: the key set is exactly 1..n.
-        var count: i64 = 0;
-        var only_ints = true;
+        // Array detection: the key set is exactly 1..n. The first key
+        // that is not a positive integer settles that the table is an
+        // object.
+        var count: usize = 0;
         var max: i64 = 0;
-        var k: Value = .nil;
-        while (table.next(t, k) catch null) |kv| : (k = kv.key) {
-            count += 1;
-            if (kv.key.tag == .integer and kv.key.asInt() >= 1) {
-                max = @max(max, kv.key.asInt());
-            } else only_ints = false;
+        var is_object = false;
+        for (0..t.asize) |idx| {
+            if (!table.arrayIsNil(t, idx)) {
+                count += 1;
+                max = @intCast(idx + 1);
+            }
         }
-        if (count == 0 or (only_ints and max == count)) {
+        for (t.hash) |n| {
+            if (n.key.tag == .nil or n.val.isNil()) continue;
+            if (n.key.tag == .integer and n.key.asInt() >= 1) {
+                count += 1;
+                max = @max(max, n.key.asInt());
+            } else {
+                is_object = true;
+                break;
+            }
+        }
+        if (!is_object and max == count) {
             try w.write("[");
             var i: i64 = 1;
-            var first = true;
             while (i <= max) : (i += 1) {
                 const raw = table.getInt(t, i);
                 var item = (try w.transform(Value.int(i), raw)) orelse Value.nil;
                 if (!serializable(item)) item = .nil;
-                if (!first) try w.write(",");
-                first = false;
+                if (i > 1) try w.write(",");
                 try w.value_(item);
             }
             try w.write("]");
             return;
         }
+        // An object writes its string keys in the order of `next`, which
+        // visits the hash part by node. A filter or `__json` function
+        // runs Lus code that may change the table, so every step reads
+        // the hash part again.
         try w.write("{");
         var first = true;
-        k = .nil;
-        while (table.next(t, k) catch null) |kv| : (k = kv.key) {
-            if (kv.key.tag != .string) continue;
-            const item = (try w.transform(kv.key, kv.val)) orelse continue;
+        var h: usize = 0;
+        while (h < t.hash.len) : (h += 1) {
+            const n = t.hash[h];
+            if (n.key.tag != .string or n.val.isNil()) continue;
+            const item = (try w.transform(n.key, n.val)) orelse continue;
             if (!serializable(item)) continue;
             if (!first) try w.write(",");
             first = false;
-            try w.str(kv.key.as(String).bytes());
+            try w.str(n.key.as(String));
             try w.write(":");
             try w.value_(item);
         }
@@ -504,5 +706,19 @@ fn tojson(l: *Thread) Error!u32 {
     defer w.path.deinit(l.g.gpa);
     const root = (try w.transform(.nil, v)) orelse Value.nil;
     try w.value_(if (Writer.serializable(root)) root else .nil);
-    return aux.retStr(l, w.out.items);
+    const o = &w.out;
+    const len = o.len();
+    const ascii = w.cont == 0;
+    const chars = len - w.cont;
+    if (o.full.items.len == 0) return aux.ret(l, Value.obj(.string, state.newStringKnown(l.g, o.cur[0..o.n], ascii, chars) catch return l.raiseMem()));
+    const r = state.newLongUninit(l.g, len) catch return l.raiseMem();
+    const dst = r.bytesMut();
+    var at: usize = 0;
+    for (o.full.items) |b| {
+        @memcpy(dst[at..][0..b.len], b);
+        at += b.len;
+    }
+    @memcpy(dst[at..][0..o.n], o.cur[0..o.n]);
+    state.finishLong(l.g, r, ascii, chars);
+    return aux.ret(l, Value.obj(.string, r));
 }
