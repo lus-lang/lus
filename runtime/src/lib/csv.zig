@@ -139,7 +139,7 @@ const Parser = struct {
                 const t = r.?;
                 // A long row grows by doubling, like any array.
                 if (stored + count > t.asize and !last)
-                    table.resize(gpa, t, @max(stored + count, 2 * t.asize), t.hash_used) catch return l.raiseMem();
+                    table.resize(gpa, t, @max(stored + count, 2 * @as(usize, t.asize)), t.hash_used) catch return l.raiseMem();
                 table.storeList(gpa, t, stored, l.stack[slot + 1 ..][0..count]) catch return l.raiseMem();
                 stored += count;
                 l.top = slot + 1;
@@ -158,7 +158,7 @@ const Parser = struct {
         gc.barrierBack(l.g, &t.hdr);
         p.width = stored;
         const rv = Value.obj(.table, t);
-        if (n >= 1 and n <= rows.asize and !rows.readonly and rows.metatable == null and table.arrayStoreFast(rows, @intCast(n - 1), rv)) {
+        if (n >= 1 and n <= rows.asize and !rows.isReadonly() and rows.metatable == null and table.arrayStoreFast(rows, @intCast(n - 1), rv)) {
             gc.barrierBack(l.g, &rows.hdr);
         } else try ops.rawSet(l, rows, Value.int(n), rv);
     }

@@ -239,44 +239,81 @@ pub const Node = extern struct {
     val: u64 = 0,
 };
 
+/// A table takes 48 bytes on 64-bit targets: the header, whose spare
+/// bytes hold the read-only flag (`spare8`) and the hint of the length
+/// (`spare32`), then three pointers and the small fields below.
 pub const Table = struct {
     hdr: Header,
     /// Bit k set means metamethod k is known to be absent. Cleared on any
     /// store into the table.
     tm_absent: u16 = 0,
-    log2_hash: u8 = 0,
     /// Element kind of the array part. See `ArrayKind`.
     kind: ArrayKind = .none,
+    cell: Cell = .{},
     metatable: ?*Table = null,
     /// Array part, indices 1..asize. Holds `asize` words when the kind is
     /// unboxed and `asize` values when it is `boxed`. Use `words` and
     /// `values` to view it.
     array_ptr: [*]u64 = empty_words,
-    asize: usize = 0,
-    /// Hash part with open addressing and linear probing. Length is a
-    /// power of two, or zero. The nodes hold payloads, and the tags of
-    /// node i sit at the bytes `2 * (i + 1)` (key) and `2 * i + 1`
+    /// Hash part with open addressing and linear probing, of `hash_len`
+    /// nodes, a power of two, or zero. The nodes hold payloads, and the
+    /// tags of node i sit at the bytes `2 * (i + 1)` (key) and `2 * i + 1`
     /// (value) below the first node, in the tag area that
-    /// `table.tagBytes` sizes. Use `key`, `val`, and their setters.
-    hash: []Node = &.{},
+    /// `table.tagBytes` sizes. Use `nodes`, `key`, `val`, and their
+    /// setters.
+    hash_ptr: [*]Node = empty_nodes,
+    asize: u32 = 0,
+    hash_len: u32 = 0,
     /// Live plus dead slots in the hash part (dead slots keep their key).
     hash_used: u32 = 0,
-    /// Next free search position used by `next` scanning heuristics.
-    weak_mode: WeakMode = .none,
+
+    /// The size of the storage that trails the table in its own cell, and
+    /// the weak mode.
+    pub const Cell = packed struct(u8) {
+        /// Size in 16-byte units of the storage that trails the table in
+        /// its own cell. A table created with known sizes holds its first
+        /// parts there, and parts that outgrow it move to the backing
+        /// allocator. At most 512 bytes.
+        inline_units: u6 = 0,
+        weak_mode: WeakMode = .none,
+    };
+
+    pub const empty_nodes: [*]Node = @ptrFromInt(@alignOf(Node));
+
+    /// The nodes of the hash part.
+    pub inline fn nodes(t: *const Table) []Node {
+        return t.hash_ptr[0..t.hash_len];
+    }
+    pub inline fn setNodes(t: *Table, h: []Node) void {
+        t.hash_ptr = if (h.len == 0) empty_nodes else h.ptr;
+        t.hash_len = @intCast(h.len);
+    }
     /// Read-only tables (such as `flags`) reject every store.
-    readonly: bool = false,
+    pub inline fn isReadonly(t: *const Table) bool {
+        return t.hdr.spare8 != 0;
+    }
+    pub inline fn setReadonly(t: *Table, ro: bool) void {
+        t.hdr.spare8 = @intFromBool(ro);
+    }
     /// The border that the length operator last found in the array part.
     /// It is only a starting guess and is checked before every use.
-    len_hint: u32 = 0,
-    /// Size in 16-byte units of the storage that trails the table in its
-    /// own cell. A table created with known sizes holds its first parts
-    /// there, and parts that outgrow it move to the backing allocator.
-    inline_units: u16 = 0,
+    pub inline fn lenHint(t: *const Table) u32 {
+        return t.hdr.spare32;
+    }
+    pub inline fn setLenHint(t: *Table, n: u32) void {
+        t.hdr.spare32 = n;
+    }
+    pub inline fn weakMode(t: *const Table) WeakMode {
+        return t.cell.weak_mode;
+    }
+    pub inline fn setWeakMode(t: *Table, m: WeakMode) void {
+        t.cell.weak_mode = m;
+    }
 
     /// The tag bytes of node `i`: the tag of its key, then the tag of
     /// its value.
     pub inline fn tagPair(t: *const Table, i: usize) *[2]u8 {
-        const base: [*]u8 = @ptrCast(t.hash.ptr);
+        const base: [*]u8 = @ptrCast(t.hash_ptr);
         return @ptrCast(base - 2 * (i + 1));
     }
     pub inline fn keyTag(t: *const Table, i: usize) value.Tag {
@@ -287,11 +324,11 @@ pub const Table = struct {
     }
     /// The key of node `i`, nil for a node that never held one.
     pub inline fn key(t: *const Table, i: usize) Value {
-        return Value.make(t.hash[i].key, t.keyTag(i));
+        return Value.make(t.hash_ptr[i].key, t.keyTag(i));
     }
     /// The value of node `i`, nil for an empty node or a dead entry.
     pub inline fn val(t: *const Table, i: usize) Value {
-        return Value.make(t.hash[i].val, t.valTag(i));
+        return Value.make(t.hash_ptr[i].val, t.valTag(i));
     }
     /// The key and the value of node `i`.
     pub inline fn entry(t: *const Table, i: usize) Entry {
@@ -299,19 +336,19 @@ pub const Table = struct {
     }
     pub const Entry = struct { key: Value, val: Value };
     pub inline fn setKey(t: *Table, i: usize, k: Value) void {
-        t.hash[i].key = k.payload;
+        t.hash_ptr[i].key = k.payload;
         t.tagPair(i)[0] = @backingInt(k.tag);
     }
     pub inline fn setVal(t: *Table, i: usize, v: Value) void {
-        t.hash[i].val = v.payload;
+        t.hash_ptr[i].val = v.payload;
         t.tagPair(i)[1] = @backingInt(v.tag);
     }
     /// True when node `i` holds the string `s` as its key.
     pub inline fn keyIsStr(t: *const Table, i: usize, s: *const String) bool {
-        return t.hash[i].key == @intFromPtr(s) and t.keyTag(i) == .string;
+        return t.hash_ptr[i].key == @intFromPtr(s) and t.keyTag(i) == .string;
     }
 
-    pub const WeakMode = enum(u8) { none, keys, values, both };
+    pub const WeakMode = enum(u2) { none, keys, values, both };
 
     /// What the array part stores. An unboxed part (`none`, `int`,
     /// `float`, or `string`) holds one 64-bit word per slot: the payload
@@ -339,7 +376,7 @@ pub const Table = struct {
     /// The storage that trails the table in its cell.
     pub inline fn inlineBytes(t: *Table) []u8 {
         const base: [*]u8 = @ptrCast(t);
-        return (base + @sizeOf(Table))[0 .. @as(usize, t.inline_units) * 16];
+        return (base + @sizeOf(Table))[0 .. @as(usize, t.cell.inline_units) * 16];
     }
     /// True when `p` points into the storage that trails the table.
     pub inline fn ownsInline(t: *Table, p: *const anyopaque) bool {

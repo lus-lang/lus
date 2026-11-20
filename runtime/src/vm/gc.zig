@@ -21,7 +21,7 @@ const Global = state_mod.Global;
 const Thread = state_mod.Thread;
 const Allocator = std.mem.Allocator;
 
-pub const Header = struct {
+pub const Header = extern struct {
     /// Every object starts with its header, and a header pointer converts
     /// to the object pointer. Struct layout places the most aligned fields
     /// first, so the header takes the largest alignment of any object
@@ -33,6 +33,12 @@ pub const Header = struct {
     flags: Flags = .{},
     /// Set on objects that wait for (or already ran) their finalizer.
     finalize: Finalize = .none,
+    /// Bytes that the alignment of the header leaves over, which an
+    /// object type may use. The struct is extern, so these fields fill
+    /// the bytes after the tag in this order. Tables keep their read-only flag and the hint
+    /// of their length here (`object.Table`).
+    spare8: u8 = 0,
+    spare32: u32 = 0,
 
     pub const Flags = packed struct(u8) {
         /// Set while the object is black: marked and traced in the
@@ -93,7 +99,7 @@ inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usiz
 pub fn objectSize(h: *Header) usize {
     return switch (h.tag) {
         .string => h.as(object.String).cellSize(),
-        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).inline_units) * 16,
+        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).cell.inline_units) * 16,
         .closure => object.Closure.allocSize(h.as(object.Closure).nupvals),
         .native => state_mod.Native.allocSize(h.as(state_mod.Native).nupvals),
         .userdata => object.Userdata.allocSize(h.as(object.Userdata).size, h.as(object.Userdata).nuser),
@@ -188,7 +194,7 @@ const big_table = 1024;
 
 fn barrierTableSlow(g: *Global, t: *object.Table, key: Value, val: Value) void {
     const s = &g.gcs;
-    if (t.weak_mode == .none and t.asize + t.hash.len >= big_table and isMarked(&t.hdr)) {
+    if (t.weakMode() == .none and @as(usize, t.asize) + t.hash_len >= big_table and isMarked(&t.hdr)) {
         if (s.phase == .propagate) {
             markGray(g, key);
             markGray(g, val);
@@ -1176,15 +1182,15 @@ fn MarkerOf(comptime par: bool) type {
             // An unboxed array part holds numbers, which tracing skips, or
             // strings, which it marks without tracing.
             const arr: []const Value = if (t.kind == .boxed) t.values() else &.{};
-            m.work += arr.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
+            m.work += arr.len * @sizeOf(Value) + @as(usize, t.hash_len) * @sizeOf(object.Node);
             if (t.kind == .string) m.markStrings(t.words());
             if (t.metatable) |mt| m.markObject(&mt.hdr);
             const mode = weakModeOf(m.g, t);
-            if (!m.verifying) t.weak_mode = mode;
+            if (!m.verifying) t.setWeakMode(mode);
             switch (mode) {
                 .none => {
                     for (arr) |v| m.markValue(v);
-                    for (0..t.hash.len) |hi| {
+                    for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markValue(n.key);
@@ -1194,7 +1200,7 @@ fn MarkerOf(comptime par: bool) type {
                 .values => {
                     // Keys are strong, values are weak.
                     for (arr) |v| m.markIfValueLike(v);
-                    for (0..t.hash.len) |hi| {
+                    for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markValue(n.key);
@@ -1205,7 +1211,7 @@ fn MarkerOf(comptime par: bool) type {
                 .keys => {
                     // Ephemeron: a value is reachable only through its key.
                     for (arr) |v| m.markValue(v);
-                    for (0..t.hash.len) |hi| {
+                    for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markIfValueLike(n.key);
@@ -1218,7 +1224,7 @@ fn MarkerOf(comptime par: bool) type {
                 },
                 .both => {
                     for (arr) |v| m.markIfValueLike(v);
-                    for (0..t.hash.len) |hi| {
+                    for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markIfValueLike(n.key);
@@ -1241,7 +1247,7 @@ fn MarkerOf(comptime par: bool) type {
             while (changed) {
                 changed = false;
                 for (m.g.gcs.ephemerons.items) |t| {
-                    for (0..t.hash.len) |hi| {
+                    for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         if (isMarkedOrNotCollectable(n.key) and n.val.tag.isCollectable() and !isMarked(n.val.header())) {
@@ -1275,16 +1281,16 @@ fn MarkerOf(comptime par: bool) type {
 
         fn clearWeak(m: *M) void {
             for (m.g.gcs.weak.items) |t| {
-                if ((t.weak_mode == .values or t.weak_mode == .both) and t.kind == .boxed) {
+                if ((t.weakMode() == .values or t.weakMode() == .both) and t.kind == .boxed) {
                     for (t.values()) |*v| {
                         if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
                     }
                 }
-                for (0..t.hash.len) |hi| {
+                for (0..t.hash_len) |hi| {
                     const n = t.entry(hi);
                     if (n.val.isNil()) continue;
-                    const key_dead = (t.weak_mode == .keys or t.weak_mode == .both) and !isMarkedOrNotCollectable(n.key);
-                    const val_dead = (t.weak_mode == .values or t.weak_mode == .both) and (!isMarkedOrNotCollectable(n.val) or isFinalizedObject(n.val));
+                    const key_dead = (t.weakMode() == .keys or t.weakMode() == .both) and !isMarkedOrNotCollectable(n.key);
+                    const val_dead = (t.weakMode() == .values or t.weakMode() == .both) and (!isMarkedOrNotCollectable(n.val) or isFinalizedObject(n.val));
                     if (key_dead or val_dead) t.setVal(hi, .nil);
                 }
             }

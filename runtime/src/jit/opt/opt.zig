@@ -1002,7 +1002,7 @@ pub const rt = struct {
         const g = l.g;
         const units = table.inlineUnits(narr, nhash);
         const t = gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16) catch return null;
-        t.* = .{ .hdr = t.hdr, .inline_units = @intCast(units) };
+        t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
         if (units > 0) {
             table.initInline(t, narr, nhash);
         } else if (narr > 0 or nhash > 0) {

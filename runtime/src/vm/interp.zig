@@ -1830,7 +1830,7 @@ inline fn noNewindexMeta(t: *Table) bool {
 /// predicts before probing, and records where the key was found.
 inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
     const i: usize = slot.*;
-    if (i < tab.hash.len and tab.keyIsStr(i, s)) return tab.val(i);
+    if (i < tab.hash_len and tab.keyIsStr(i, s)) return tab.val(i);
     const idx = table.findStr(tab, s) orelse return .nil;
     if (idx < object.IcEntry.none) slot.* = @intCast(idx);
     return tab.val(idx);
@@ -1898,11 +1898,11 @@ pub const fast = struct {
         // value out of a temporary, which the general path below needs
         // because its value may also be nil.
         const i: usize = ic.own;
-        if (i < tab.hash.len and tab.hash[i].key == key.payload) {
+        if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload) {
             // Both tags with one load.
             const tags = tab.tagPair(i).*;
             if (tags[0] == @backingInt(value.Tag.string) and tags[1] != @backingInt(value.Tag.nil)) {
-                out.* = Value.make(tab.hash[i].val, @fromBackingInt(tags[1]));
+                out.* = Value.make(tab.hash_ptr[i].val, @fromBackingInt(tags[1]));
                 return true;
             }
         }
@@ -1928,9 +1928,9 @@ pub const fast = struct {
     pub inline fn setStr(l: *Thread, ic: *object.IcEntry, t: *const Value, key: *const Value, v: *const Value) bool {
         if (t.tag != .table) return false;
         const tab = t.as(Table);
-        if (tab.readonly or !noNewindexMeta(tab)) return false;
+        if (tab.isReadonly() or !noNewindexMeta(tab)) return false;
         const i: usize = ic.own;
-        if (i < tab.hash.len and tab.hash[i].key == key.payload and tab.keyTag(i) == .string) {
+        if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload and tab.keyTag(i) == .string) {
             tab.setVal(i, v.*);
             if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
         } else if (table.storeStr(tab, key, v)) |idx| {
@@ -1958,7 +1958,7 @@ pub const fast = struct {
     /// does not fit the kind of the array part takes the general path,
     /// which boxes the part.
     pub inline fn setArray(l: *Thread, tab: *Table, i: i64, v: *const Value) bool {
-        if (i >= 1 and i <= tab.asize and !tab.readonly and noNewindexMeta(tab) and
+        if (i >= 1 and i <= tab.asize and !tab.isReadonly() and noNewindexMeta(tab) and
             table.arrayStoreAt(tab, @intCast(i - 1), v))
         {
             // An integer key never names a metamethod, so the absence
@@ -2069,17 +2069,17 @@ pub const fast = struct {
 /// in the string library, which runs inline without a call.
 inline fn inheritedHit(l: *Thread, mt: *Table, key: *String, ic: *object.IcEntry, out: *Value) bool {
     const i: usize = ic.index;
-    if (i >= mt.hash.len) return false;
+    if (i >= mt.hash_len) return false;
     const name = l.g.tm_names[@backingInt(state.TM.index)].?;
-    if (mt.hash[i].key != @intFromPtr(name)) return false;
+    if (mt.hash_ptr[i].key != @intFromPtr(name)) return false;
     const mtags = mt.tagPair(i).*;
     if (mtags[0] != @backingInt(value.Tag.string) or mtags[1] != @backingInt(value.Tag.table)) return false;
-    const h: *Table = @ptrFromInt(@as(usize, @intCast(mt.hash[i].val)));
+    const h: *Table = @ptrFromInt(@as(usize, @intCast(mt.hash_ptr[i].val)));
     const j: usize = ic.holder;
-    if (j >= h.hash.len or h.hash[j].key != @intFromPtr(key)) return false;
+    if (j >= h.hash_len or h.hash_ptr[j].key != @intFromPtr(key)) return false;
     const tags = h.tagPair(j).*;
     if (tags[0] != @backingInt(value.Tag.string) or tags[1] == @backingInt(value.Tag.nil)) return false;
-    out.* = Value.make(h.hash[j].val, @fromBackingInt(tags[1]));
+    out.* = Value.make(h.hash_ptr[j].val, @fromBackingInt(tags[1]));
     return true;
 }
 

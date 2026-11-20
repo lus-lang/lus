@@ -181,7 +181,7 @@ pub fn box(gpa: Allocator, t: *Table) Error!void {
     if (t.kind == .boxed) return;
     const cell = t.inlineBytes();
     const room = @intFromPtr(cell.ptr) + cell.len -| @intFromPtr(t.array_ptr);
-    if (t.asize > 0 and t.ownsInline(t.array_ptr) and room >= t.asize * @sizeOf(Value)) {
+    if (t.asize > 0 and t.ownsInline(t.array_ptr) and room >= @as(usize, t.asize) * @sizeOf(Value)) {
         // An array part in the cell that reserves a full value per slot
         // boxes in place. Slot i moves from word i to words 2i and 2i+1,
         // and walking down never overwrites a word before it is read. A
@@ -205,7 +205,7 @@ pub fn box(gpa: Allocator, t: *Table) Error!void {
 /// Releases the array and hash parts of a dead table.
 pub fn freeParts(gpa: Allocator, t: *Table) void {
     freeArray(gpa, t, t.kind, t.array_ptr, t.asize);
-    freeHash(gpa, t, t.hash);
+    freeHash(gpa, t, t.nodes());
 }
 
 fn freeHash(gpa: Allocator, t: *Table, h: []Node) void {
@@ -295,17 +295,17 @@ pub fn getStr(t: *Table, s: *object.String) Value {
 /// Index of the hash slot holding the string key `s` (live or dead), or
 /// null.
 pub inline fn findStr(t: *Table, s: *object.String) ?usize {
-    if (t.hash.len == 0) return null;
+    if (t.hash_len == 0) return null;
     // A small hash part may be full, and a probe for an absent key would
     // then find no empty node to stop at.
-    if (t.hash_used >= t.hash.len) return findStrFull(t, s);
-    const mask = t.hash.len - 1;
+    if (t.hash_used >= t.hash_len) return findStrFull(t, s);
+    const mask = t.hash_len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
         const kt = t.keyTag(i);
         if (kt == .string) {
-            if (t.hash[i].key == @intFromPtr(s)) return i;
-            if (!s.flags.interned and longStrEqual(t.hash[i].key, s)) return i;
+            if (t.hash_ptr[i].key == @intFromPtr(s)) return i;
+            if (!s.flags.interned and longStrEqual(t.hash_ptr[i].key, s)) return i;
         }
         if (kt == .nil) return null;
     }
@@ -314,12 +314,12 @@ pub inline fn findStr(t: *Table, s: *object.String) ?usize {
 /// `findStr` in a hash part with a key in every node, which visits every
 /// node at most once.
 noinline fn findStrFull(t: *Table, s: *object.String) ?usize {
-    const mask = t.hash.len - 1;
+    const mask = t.hash_len - 1;
     var i: usize = s.hash & mask;
-    for (0..t.hash.len) |_| {
+    for (0..t.hash_len) |_| {
         if (t.keyTag(i) == .string) {
-            if (t.hash[i].key == @intFromPtr(s)) return i;
-            if (!s.flags.interned and longStrEqual(t.hash[i].key, s)) return i;
+            if (t.hash_ptr[i].key == @intFromPtr(s)) return i;
+            if (!s.flags.interned and longStrEqual(t.hash_ptr[i].key, s)) return i;
         }
         i = (i + 1) & mask;
     }
@@ -350,22 +350,22 @@ pub const full_max = 4;
 /// the general path, leaving the table unchanged. The caller resets the
 /// metamethod cache and runs the write barrier.
 pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
-    if (t.hash.len == 0) return null;
+    if (t.hash_len == 0) return null;
     const s = key.as(object.String);
     // A full part has no empty node to end the probe, and the general
     // path takes the store.
-    if (t.hash_used >= t.hash.len) return null;
-    const mask = t.hash.len - 1;
+    if (t.hash_used >= t.hash_len) return null;
+    const mask = t.hash_len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
         const kt = t.keyTag(i);
         if (kt == .string) {
-            if (t.hash[i].key == @intFromPtr(s)) break;
+            if (t.hash_ptr[i].key == @intFromPtr(s)) break;
             if (!s.flags.interned) return null;
         } else if (kt == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
-            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash.len)) return null;
+            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash_len)) return null;
             t.setKey(i, key.*);
             t.hash_used += 1;
             break;
@@ -392,9 +392,9 @@ fn getHash(t: *Table, k: Value) Value {
 
 /// Index of the slot holding `k` (live or dead), or null.
 pub fn findSlot(t: *Table, k: Value) ?usize {
-    if (t.hash.len == 0) return null;
-    if (t.hash_used >= t.hash.len) return findSlotFull(t, k);
-    const mask = t.hash.len - 1;
+    if (t.hash_len == 0) return null;
+    if (t.hash_used >= t.hash_len) return findSlotFull(t, k);
+    const mask = t.hash_len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
     while (true) : (i = (i + 1) & mask) {
         if (t.keyTag(i) == .nil) return null;
@@ -405,9 +405,9 @@ pub fn findSlot(t: *Table, k: Value) ?usize {
 /// `findSlot` in a hash part with a key in every node, which visits every
 /// node at most once.
 noinline fn findSlotFull(t: *Table, k: Value) ?usize {
-    const mask = t.hash.len - 1;
+    const mask = t.hash_len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
-    for (0..t.hash.len) |_| {
+    for (0..t.hash_len) |_| {
         if (keyEqual(t.key(i), k)) return i;
         i = (i + 1) & mask;
     }
@@ -432,7 +432,7 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
     }
     if (val.isNil()) return; // storing nil under an absent key is a no-op
     // New key. Grow when the hash part has no room for it.
-    if (t.hash.len == 0 or !hashRoom(t.hash_used, t.hash.len)) {
+    if (t.hash_len == 0 or !hashRoom(t.hash_used, t.hash_len)) {
         try rehash(gpa, t, k, val);
         // The key may now belong in the array part.
         if (k.tag == .integer) {
@@ -456,7 +456,7 @@ pub fn setStr(gpa: Allocator, t: *Table, s: *object.String, val: Value) Error!vo
 }
 
 fn insertNew(t: *Table, k: Value, val: Value) void {
-    const mask = t.hash.len - 1;
+    const mask = t.hash_len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
     while (t.keyTag(i) != .nil) : (i = (i + 1) & mask) {}
     t.setKey(i, k);
@@ -478,7 +478,7 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
             total_int += 1;
         }
     }
-    for (0..t.hash.len) |h| {
+    for (0..t.hash_len) |h| {
         if (t.keyTag(h) == .nil or t.valTag(h) == .nil) continue;
         total += 1;
         if (t.keyTag(h) == .integer) {
@@ -576,11 +576,10 @@ pub fn inlineUnitsSlots(narr: usize, nhash: usize, slot: usize) usize {
 pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
     const hsize = hashSizeExact(nhash);
     const mem = t.inlineBytes();
-    if (hsize > 0) t.hash = hashIn(mem.ptr, hsize);
-    t.log2_hash = if (hsize == 0) 0 else @intCast(std.math.log2_int(usize, hsize));
+    if (hsize > 0) t.setNodes(hashIn(mem.ptr, hsize));
     if (narr == 0) return;
     t.array_ptr = @ptrCast(@alignCast(mem.ptr + (if (hsize == 0) 0 else hashBytes(hsize))));
-    t.asize = narr;
+    t.asize = @intCast(narr);
     @memset(t.words(), hole);
 }
 
@@ -602,9 +601,9 @@ fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value
     const old_kind = t.kind;
     const old_ptr = t.array_ptr;
     const old_n = t.asize;
-    const old_hash = t.hash;
+    const old_hash = t.nodes();
     // The old hash part, read through the accessors of a table.
-    const oh: Table = .{ .hdr = t.hdr, .hash = old_hash };
+    const oh: Table = .{ .hdr = t.hdr, .hash_ptr = old_hash.ptr, .hash_len = @intCast(old_hash.len) };
     var kind = old_kind;
     for (0..old_hash.len) |h| {
         if (oh.keyTag(h) != .integer or oh.valTag(h) == .nil) continue;
@@ -630,7 +629,7 @@ fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value
     const old: Table = .{ .hdr = t.hdr, .kind = old_kind, .array_ptr = old_ptr, .asize = old_n };
     t.kind = kind;
     t.array_ptr = new_ptr;
-    t.asize = asize;
+    t.asize = @intCast(asize);
     if (grown != null) {
         if (kind == .boxed) @memset(t.values()[old_n..], .nil) else @memset(t.words()[old_n..], hole);
     } else if (!reuse) {
@@ -649,9 +648,8 @@ fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value
             @memset(dst[keep..], hole);
         }
     }
-    t.hash = new_hash;
+    t.setNodes(new_hash);
     t.hash_used = 0;
-    t.log2_hash = if (hsize == 0) 0 else @intCast(std.math.log2_int(usize, hsize));
     // Move array entries that no longer fit into the hash part.
     if (old_n > asize) {
         for (asize..old_n) |idx| {
@@ -704,11 +702,11 @@ pub fn length(t: *Table) i64 {
     if (n > 0 and arrayIsNil(t, n - 1)) {
         // The previous border, or the one just after it when a value was
         // appended, is usually still a border.
-        const h: usize = t.len_hint;
+        const h: usize = t.lenHint();
         if (h < n and arrayIsNil(t, h)) {
             if (h == 0 or !arrayIsNil(t, h - 1)) return @intCast(h);
         } else if (h + 1 < n and arrayIsNil(t, h + 1)) {
-            t.len_hint = @intCast(h + 1);
+            t.setLenHint(@intCast(h + 1));
             return @intCast(h + 1);
         }
         // Binary search for a border inside the array part.
@@ -718,10 +716,10 @@ pub fn length(t: *Table) i64 {
             const m = (lo + hi) / 2;
             if (arrayIsNil(t, m - 1)) hi = m else lo = m;
         }
-        t.len_hint = @intCast(lo);
+        t.setLenHint(@intCast(lo));
         return @intCast(lo);
     }
-    if (t.hash.len == 0) return @intCast(n);
+    if (t.hash_len == 0) return @intCast(n);
     // Continue into the hash part with unbounded search.
     var j: i64 = @intCast(n + 1);
     if (getHash(t, Value.int(j)).isNil()) return @intCast(n);
@@ -764,7 +762,7 @@ pub fn next(t: *Table, key: Value) Error!?NextResult {
         if (!v.isNil()) return .{ .key = Value.int(@intCast(i + 1)), .val = v };
     }
     var h = i - t.asize;
-    while (h < t.hash.len) : (h += 1) {
+    while (h < t.hash_len) : (h += 1) {
         if (t.keyTag(h) != .nil and t.valTag(h) != .nil) return .{ .key = t.key(h), .val = t.val(h) };
     }
     return null;
@@ -786,7 +784,7 @@ pub const layout = struct {
     pub const array_ptr: i32 = @offsetOf(Table, "array_ptr");
     pub const asize: i32 = @offsetOf(Table, "asize");
     pub const hash_used: i32 = @offsetOf(Table, "hash_used");
-    pub const readonly: i32 = @offsetOf(Table, "readonly");
+    pub const readonly: i32 = @offsetOf(Table, "hdr") + @offsetOf(gc.Header, "spare8");
     /// Bit of the flag byte that the write barrier tests.
     pub const barrier_bit: u3 = @bitOffsetOf(gc.Header.Flags, "barrier");
 
@@ -821,11 +819,11 @@ pub const layout = struct {
     /// language leaves the layout of a slice open, so they are measured.
     pub fn hashPtr() i32 {
         var t: Table = undefined;
-        return @intCast(@intFromPtr(&t.hash.ptr) - @intFromPtr(&t));
+        return @intCast(@intFromPtr(&t.hash_ptr) - @intFromPtr(&t));
     }
     pub fn hashLen() i32 {
         var t: Table = undefined;
-        return @intCast(@intFromPtr(&t.hash.len) - @intFromPtr(&t));
+        return @intCast(@intFromPtr(&t.hash_len) - @intFromPtr(&t));
     }
 
     comptime {
@@ -842,8 +840,11 @@ pub const layout = struct {
         assert(@backingInt(ArrayKind.int) < @backingInt(ArrayKind.string) and @backingInt(ArrayKind.float) < @backingInt(ArrayKind.string));
         assert(@FieldType(Table, "tm_absent") == u16);
         assert(@FieldType(Table, "hash_used") == u32);
-        assert(@FieldType(Table, "asize") == usize);
-        assert(@FieldType(Table, "readonly") == bool);
+        assert(@FieldType(Table, "asize") == u32);
+        assert(@FieldType(Table, "hash_len") == u32);
+        assert(@sizeOf(usize) != 8 or @sizeOf(Table) == 48);
+        assert(@sizeOf(gc.Header.Flags) == 1 and @offsetOf(gc.Header, "tag") == 0);
+        assert(@FieldType(gc.Header, "spare8") == u8);
         assert(@sizeOf(ArrayKind) == 1);
         assert(@sizeOf(gc.Header.Flags) == 1);
     }

@@ -372,7 +372,7 @@ const Parser = struct {
             const t = f.t.?;
             const end = f.n + count;
             if (end > t.asize) {
-                const grow = if (last) end else @max(end, t.asize * 2);
+                const grow = if (last) end else @max(end, @as(usize, t.asize) * 2);
                 table.resize(gpa, t, grow, t.hash_used) catch return l.raiseMem();
             }
             table.storeList(gpa, t, f.n, l.stack[first..][0..count]) catch return l.raiseMem();
@@ -712,7 +712,7 @@ const Writer = struct {
                 max = @intCast(idx + 1);
             }
         }
-        for (0..t.hash.len) |hi| {
+        for (0..t.hash_len) |hi| {
             const n = t.entry(hi);
             if (n.key.tag == .nil or n.val.isNil()) continue;
             if (n.key.tag == .integer and n.key.asInt() >= 1) {
@@ -746,10 +746,10 @@ const Writer = struct {
         try w.write("{");
         var first = true;
         var h: usize = 0;
-        while (h < t.hash.len) : (h += 1) {
+        while (h < t.hash_len) : (h += 1) {
             const n = t.entry(h);
             if (n.key.tag != .string or n.val.isNil()) continue;
-            const parts = t.hash;
+            const parts = t.nodes();
             const fresh = w.mayRun(n.val);
             if (fresh) try l.push(n.key);
             defer if (fresh) {
@@ -764,7 +764,7 @@ const Writer = struct {
                     try w.item_(item, fresh);
                 }
             }
-            if (fresh and (t.hash.ptr != parts.ptr or t.hash.len != parts.len)) {
+            if (fresh and (t.hash_ptr != parts.ptr or t.hash_len != parts.len)) {
                 h = table.findSlot(t, n.key) orelse break;
             }
         }

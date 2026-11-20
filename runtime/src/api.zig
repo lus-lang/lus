@@ -256,7 +256,7 @@ pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
     defer l.top -= 1;
     var it = map.iterator();
     while (it.next()) |e| try ops.rawSet(l, data, try l.newStringValue(e.key_ptr.*), e.value_ptr.*);
-    data.readonly = true;
+    data.setReadonly(true);
     try @import("lib/auxlib.zig").setGlobal(l, "flags", Value.obj(.table, data));
 }
 
@@ -284,11 +284,11 @@ pub fn freezeEnv(l: *Thread) void {
 fn freezeTable(t: *object.Table, skip: ?*object.Table, depth: u32) void {
     const table = @import("vm/table.zig");
     if (t == skip) return;
-    t.readonly = true;
+    t.setReadonly(true);
     if (depth == 0) return;
     var key: Value = .nil;
     while (table.next(t, key) catch null) |e| : (key = e.key) {
-        if (e.val.tag == .table and !e.val.as(object.Table).readonly) freezeTable(e.val.as(object.Table), skip, depth - 1);
+        if (e.val.tag == .table and !e.val.as(object.Table).isReadonly()) freezeTable(e.val.as(object.Table), skip, depth - 1);
     }
 }
 
