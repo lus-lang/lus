@@ -33,7 +33,7 @@ const object = @import("object.zig");
 const table = @import("table.zig");
 const ops = @import("ops.zig");
 const qgen = @import("../compile/query_gen.zig");
-const aux = @import("../lib/aux.zig");
+const aux = @import("../lib/auxlib.zig");
 // A build without SQLite (`-Dsqlite=false`) has no table references, so
 // every source is classified as memory or metamethod.
 const sqlite = if (@import("build_options").sqlite) @import("../lib/sqlite.zig") else struct {

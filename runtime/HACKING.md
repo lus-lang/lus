@@ -31,7 +31,7 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 
 ## Writing a native function
 
-A native is `fn (l: *Thread) Error!u32`. Its arguments are `l.arg(1)` through `l.arg(l.argCount())`. It pushes its results with `l.push` and returns how many it pushed. The helpers in `lib/aux.zig` check arguments and format every "bad argument" error, so always use them (`checkInt`, `checkString`, `checkBytes`, `optInt`, `checkTable`, `argError`, `typeError`, `ret`, `retStr`, `retFail`, `newLib`, `setField`).
+A native is `fn (l: *Thread) Error!u32`. Its arguments are `l.arg(1)` through `l.arg(l.argCount())`. It pushes its results with `l.push` and returns how many it pushed. The helpers in `lib/auxlib.zig` check arguments and format every "bad argument" error, so always use them (`checkInt`, `checkString`, `checkBytes`, `optInt`, `checkTable`, `argError`, `typeError`, `ret`, `retStr`, `retFail`, `newLib`, `setField`).
 
 Errors are raised with `l.raiseFmt`, which prefixes the position of the calling Lus code, or with `l.raise(value)` for an arbitrary error value. A native that calls back into Lus uses `ops.call1` or `ops.callN`.
 

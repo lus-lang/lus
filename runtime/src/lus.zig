@@ -32,7 +32,7 @@ pub const bundle = @import("bundle.zig");
 pub const tools = @import("tools.zig");
 
 pub const lib = struct {
-    pub const aux = @import("lib/aux.zig");
+    pub const aux = @import("lib/auxlib.zig");
     pub const base = @import("lib/base.zig");
     pub const out = @import("lib/out.zig");
     pub const package = @import("lib/package.zig");

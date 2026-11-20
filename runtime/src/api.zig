@@ -219,7 +219,7 @@ pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
     var it = map.iterator();
     while (it.next()) |e| try ops.rawSet(l, data, try l.newStringValue(e.key_ptr.*), e.value_ptr.*);
     data.readonly = true;
-    try @import("lib/aux.zig").setGlobal(l, "flags", Value.obj(.table, data));
+    try @import("lib/auxlib.zig").setGlobal(l, "flags", Value.obj(.table, data));
 }
 
 /// Grants the command line permissions (`-P`). Pledge arrives with the

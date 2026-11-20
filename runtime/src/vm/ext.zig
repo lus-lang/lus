@@ -198,7 +198,7 @@ fn enumToString(l: *Thread) Error!u32 {
 
 /// Installs the metatable shared by every enum member.
 pub fn openEnums(l: *Thread) Error!void {
-    const aux = @import("../lib/aux.zig");
+    const aux = @import("../lib/auxlib.zig");
     const mt = try l.newTable(0, 5);
     try aux.setField(l, mt, "__index", try aux.native(l, enumIndex, "enum_index"));
     try aux.setField(l, mt, "__lt", try aux.native(l, enumLt, "enum_lt"));

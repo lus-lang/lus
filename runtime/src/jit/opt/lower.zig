@@ -3306,7 +3306,7 @@ pub const Lower = struct {
     }
 
     const natives = struct {
-        const aux = @import("../../lib/aux.zig");
+        const aux = @import("../../lib/auxlib.zig");
         fn find(comptime funcs: []const aux.Reg, comptime name: []const u8) state.NativeFn {
             inline for (funcs) |r| {
                 if (comptime std.mem.eql(u8, r.name, name)) return r.func;
