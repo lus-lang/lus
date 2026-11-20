@@ -76,6 +76,11 @@ pub const Task = struct {
     /// What the native keeps across its runs: a count and a pointer with
     /// the routine that releases it when the wait is abandoned.
     progress: usize = 0,
+    /// The deadline of the operation that the native in frame `op_frame`
+    /// waits for, or zero. It outlives the single waits of the operation,
+    /// so a wait that ends early continues toward the same deadline.
+    op_deadline: u64 = 0,
+    op_frame: u32 = 0,
     ctx: ?*anyopaque = null,
     cancel: ?*const fn (g: *Global, ctx: *anyopaque) void = null,
 
@@ -250,34 +255,76 @@ pub fn saveProgress(l: *Thread, n: usize) Error!void {
     (try ensureTask(l)).progress = n;
 }
 
+/// The deadline of the operation that the running native of `l` waits
+/// for, which starts `timeout_ns` after `at` when this is its first wait.
+/// The frame of the native carries a mark while the record of its thread
+/// holds the deadline, so the next call starts a deadline of its own.
+fn opDeadline(l: *Thread, t: *Task, at: u64, timeout_ns: u64) u64 {
+    const depth: u32 = @intCast(l.frames.items.len);
+    const fr = l.frame();
+    if (fr.native == null) return at + timeout_ns;
+    if (fr.wait_mark != 0 and t.op_frame == depth and t.op_deadline != 0) return t.op_deadline;
+    t.op_deadline = at + timeout_ns;
+    t.op_frame = depth;
+    fr.wait_mark = 1;
+    return t.op_deadline;
+}
+
+/// Ends the deadline of the operation that the native of `l` waited for,
+/// once the operation made progress. The next wait of the same call
+/// starts a new deadline, as each read of a socket has a timeout of its
+/// own.
+pub inline fn opDone(l: *Thread) void {
+    if (l.task) |t| t.op_deadline = 0;
+}
+
 /// Waits until `handle` is readable or writable, for at most
 /// `timeout_ms` milliseconds when that is positive. A zero timeout
 /// never waits. Returns true when the handle is ready and false when the
 /// time ran out. In a thread that can suspend, it returns the error that
 /// suspends the thread, and the native that runs again calls it again if
-/// its operation still would block.
+/// its operation still would block. The time runs from the first wait of
+/// an operation: a native that finds its operation still blocked after a
+/// wake waits for the rest of the same timeout.
 pub fn waitIo(l: *Thread, handle: Handle, dir: Dir, timeout_ms: i32) Error!bool {
     const g = l.g;
     if (timeout_ms == 0) return false;
     if (l.task) |t| {
         if (t.restarted and t.wake == .timeout) {
             t.wake = .none;
+            t.op_deadline = 0;
             return false;
         }
         t.wake = .none;
     }
-    if (!active(g)) {
-        // No coroutine could run in the meantime.
-        return pollOne(handle, dir, timeout_ms);
-    }
+    // No coroutine could run while a thread waits without a scheduler.
+    if (timeout_ms < 0 and !active(g)) return pollOne(handle, dir, -1);
     const t = try ensureTask(l);
+    var deadline: u64 = 0;
+    var left_ms: i32 = -1;
+    if (timeout_ms > 0) {
+        const at = now(g);
+        deadline = opDeadline(l, t, at, @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms);
+        if (deadline <= at) {
+            t.op_deadline = 0;
+            return false;
+        }
+        left_ms = millisOf(deadline - at);
+    }
+    if (!active(g)) {
+        const ready = pollOne(handle, dir, left_ms);
+        if (!ready) t.op_deadline = 0;
+        return ready;
+    }
     t.kind = .io;
     t.handle = handle;
     t.dir = dir;
     t.target = null;
-    t.deadline = if (timeout_ms > 0) now(g) + @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms else 0;
+    t.deadline = deadline;
     if (canSuspend(l)) return suspendThread(l, t);
-    return block(l, t);
+    const ready = try block(l, t);
+    if (!ready) t.op_deadline = 0;
+    return ready;
 }
 
 /// Waits until the detached coroutine `co` ends. Returns when it has
@@ -353,6 +400,7 @@ pub fn clearWait(g: *Global, t: *Task) void {
     t.target = null;
     t.wake = .none;
     t.deadline = 0;
+    t.op_deadline = 0;
     t.progress = 0;
     t.restarted = false;
 }

@@ -664,7 +664,10 @@ fn respond(l: *Thread) Error!u32 {
     while (h.out_off < h.out.items.len) {
         const rest = h.out.items[h.out_off..];
         switch (net.trySend(l, s, rest)) {
-            .n => |n| h.out_off += n,
+            .n => |n| {
+                h.out_off += n;
+                sched.opDone(l);
+            },
             .again => {
                 try net.awaitIo(l, handle, .write, s.timeout_ms, "send");
                 try net.stillOpen(l, s);

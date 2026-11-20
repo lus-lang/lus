@@ -856,7 +856,10 @@ fn socketSend(l: *Thread) Error!u32 {
             continue;
         }
         switch (trySend(l, s, data[total..][0..chunk])) {
-            .n => |n| total += n,
+            .n => |n| {
+                total += n;
+                sched.opDone(l);
+            },
             .again => {
                 try sched.saveProgress(l, total);
                 try awaitIo(l, h, .write, s.timeout_ms, "send");
@@ -882,6 +885,7 @@ pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
         switch (tryRecv(l, s, dst)) {
             .n => |got| {
                 n = got;
+                sched.opDone(l);
                 break;
             },
             // The bytes already read stay in the buffer of the socket, so

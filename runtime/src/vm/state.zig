@@ -441,7 +441,9 @@ pub const Frame = extern struct {
     /// On a lean frame, the address in native code where the caller
     /// continues.
     resume_at: usize = 0,
-    _reserved: usize = 0,
+    /// On the frame of a native, nonzero once the call waited with a
+    /// deadline that its scheduler record still holds (`sched.waitIo`).
+    wait_mark: usize = 0,
 
     /// The word that holds the flags and the finish action, as a lean
     /// frame has it.
