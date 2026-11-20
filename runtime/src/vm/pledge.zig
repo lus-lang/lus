@@ -236,12 +236,20 @@ pub fn discard(gpa: Allocator, p: *anyopaque) void {
 /// one byte. Greedy with single-star backtracking: O(|s| * |p|) worst
 /// case, never exponential.
 pub fn globMatch(pattern: []const u8, s: []const u8) bool {
+    return globMatchCase(pattern, s, false);
+}
+
+/// `globMatch`, comparing ASCII letters without regard to case when `fold`
+/// is set.
+pub fn globMatchCase(pattern: []const u8, s: []const u8, fold: bool) bool {
     var p: usize = 0;
     var i: usize = 0;
     var star_p: ?usize = null;
     var star_i: usize = 0;
     while (i < s.len) {
-        if (p < pattern.len and (pattern[p] == '?' or pattern[p] == s[i])) {
+        if (p < pattern.len and (pattern[p] == '?' or pattern[p] == s[i] or
+            (fold and std.ascii.toLower(pattern[p]) == std.ascii.toLower(s[i]))))
+        {
             p += 1;
             i += 1;
         } else if (p < pattern.len and pattern[p] == '*') {
@@ -293,9 +301,81 @@ pub fn hostMatch(granted: []const u8, requested: []const u8) bool {
     return true;
 }
 
-/// The absolute path of an existing file. WASI has no realpath, and its
-/// file system has no symbolic links to resolve, so there the path resolves
-/// lexically against the root.
+// ---------------------------------------------------------------------
+// Paths
+
+/// The path rules of a file system. Canonical paths use `/` as their only
+/// separator under both rules. Windows paths also accept `\` on input,
+/// start with a drive (`C:/`) or a UNC share (`//server/share/`), and
+/// match without regard to ASCII case, as NTFS does by default. The rules
+/// are a parameter so the unit tests cover both on every host.
+pub const PathRules = struct {
+    windows: bool,
+
+    pub const posix: PathRules = .{ .windows = false };
+    pub const win: PathRules = .{ .windows = true };
+};
+
+/// The rules of the file system the runtime runs on.
+pub const host_rules: PathRules = .{ .windows = @import("builtin").os.tag == .windows };
+
+/// Whether `v` is a valid value for a path capability: an absolute path,
+/// or a path that starts with `.` and resolves against the working
+/// directory.
+pub fn isPathValue(v: []const u8, rules: PathRules) bool {
+    if (v.len == 0) return false;
+    if (v[0] == '/' or v[0] == '.') return true;
+    if (!rules.windows) return false;
+    if (v[0] == '\\') return true;
+    return v.len >= 3 and std.ascii.isAlphabetic(v[0]) and v[1] == ':' and (v[2] == '/' or v[2] == '\\');
+}
+
+/// A copy of `path` with every separator written as `/`.
+pub fn normalizeSeparators(gpa: Allocator, path: []const u8, rules: PathRules) Allocator.Error![]u8 {
+    const r = try gpa.dupe(u8, path);
+    if (rules.windows) std.mem.replaceScalar(u8, r, '\\', '/');
+    return r;
+}
+
+/// The length of the root of a path whose separators are `/`: the leading
+/// slash, a drive with its slash (`C:/`), or a UNC share with its slash
+/// (`//server/share/`). Zero for a relative path.
+pub fn rootLen(p: []const u8, rules: PathRules) usize {
+    if (rules.windows) {
+        if (p.len >= 2 and std.ascii.isAlphabetic(p[0]) and p[1] == ':')
+            return if (p.len >= 3 and p[2] == '/') 3 else 2;
+        if (p.len >= 2 and p[0] == '/' and p[1] == '/') {
+            var i: usize = 2;
+            // The server name, then the share name, each with its slash.
+            for (0..2) |_| {
+                while (i < p.len and p[i] != '/') i += 1;
+                if (i < p.len) i += 1;
+            }
+            return i;
+        }
+    }
+    return if (p.len > 0 and p[0] == '/') 1 else 0;
+}
+
+/// Splits a path whose separators are `/` into its parent directory and
+/// its final component. A path with one component has the parent `.`,
+/// and a component right under the root has the root as its parent.
+pub fn splitParent(p: []const u8, rules: PathRules) struct { []const u8, []const u8 } {
+    const root = rootLen(p, rules);
+    if (std.mem.lastIndexOfScalar(u8, p[root..], '/')) |sl| return .{ p[0 .. root + sl], p[root + sl + 1 ..] };
+    return .{ if (root > 0) p[0..root] else ".", p[root..] };
+}
+
+/// Joins a resolved directory and a final component with one `/`.
+fn joinPath(gpa: Allocator, dir: []const u8, base: []const u8) ?[]u8 {
+    if (base.len == 0) return gpa.dupe(u8, dir) catch null;
+    const sep: []const u8 = if (std.mem.endsWith(u8, dir, "/")) "" else "/";
+    return std.mem.concat(gpa, u8, &.{ dir, sep, base }) catch null;
+}
+
+/// The absolute path of an existing file, with `/` separators. WASI has
+/// no realpath, and its file system has no symbolic links to resolve, so
+/// there the path resolves lexically against the root.
 fn realPath(g: *Global, path: []const u8) ![]u8 {
     const cwd = std.Io.Dir.cwd();
     if (@import("builtin").os.tag == .wasi) {
@@ -306,75 +386,96 @@ fn realPath(g: *Global, path: []const u8) ![]u8 {
     // slice of the right length.
     const r = try cwd.realPathFileAlloc(g.io, path, g.gpa);
     defer g.gpa.free(r);
-    return g.gpa.dupe(u8, r);
+    return normalizeSeparators(g.gpa, r, host_rules);
 }
+
+/// Resolves paths on the host file system. The path functions below take
+/// any value with a `resolve` method that returns the absolute path of an
+/// existing file with `/` separators, so tests can supply a file system of
+/// their own.
+const HostResolver = struct {
+    g: *Global,
+
+    fn resolve(r: HostResolver, path: []const u8) ![]u8 {
+        return realPath(r.g, path);
+    }
+};
 
 /// Canonical absolute path: realpath when the file exists, otherwise the
 /// realpath of its parent plus the final component. Returns null when the
 /// path cannot be resolved (which callers treat as denied).
 pub fn canonicalize(g: *Global, path: []const u8) ?[]u8 {
-    const gpa = g.gpa;
-    if (realPath(g, path)) |r| {
-        defer gpa.free(r);
-        return gpa.dupe(u8, r) catch null;
-    } else |_| {}
-    const slash = std.mem.lastIndexOfScalar(u8, path, '/');
-    const parent = if (slash) |sl| (if (sl == 0) "/" else path[0..sl]) else ".";
-    const base = if (slash) |sl| path[sl + 1 ..] else path;
-    const rp = realPath(g, parent) catch return null;
+    return canonicalizeWith(g.gpa, path, host_rules, HostResolver{ .g = g });
+}
+
+fn canonicalizeWith(gpa: Allocator, path: []const u8, rules: PathRules, resolver: anytype) ?[]u8 {
+    const norm = normalizeSeparators(gpa, path, rules) catch return null;
+    defer gpa.free(norm);
+    if (resolver.resolve(norm)) |r| return r else |_| {}
+    const parent, const base = splitParent(norm, rules);
+    const rp = resolver.resolve(parent) catch return null;
     defer gpa.free(rp);
-    return std.fs.path.join(gpa, &.{ rp, base }) catch null;
+    return joinPath(gpa, rp, base);
 }
 
 /// Canonical path of a link itself: its parent resolves, its final
 /// component does not, so an operation on a symbolic link is checked
 /// against the link's own location rather than its target.
 pub fn canonicalizeLink(g: *Global, path: []const u8) ?[]u8 {
-    const gpa = g.gpa;
-    const trimmed = std.mem.trimEnd(u8, path, "/");
-    const slash = std.mem.lastIndexOfScalar(u8, trimmed, '/');
-    const parent = if (slash) |sl| (if (sl == 0) "/" else trimmed[0..sl]) else ".";
-    const base = if (slash) |sl| trimmed[sl + 1 ..] else trimmed;
-    if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return canonicalize(g, path);
-    const rp = realPath(g, parent) catch return null;
+    return canonicalizeLinkWith(g.gpa, path, host_rules, HostResolver{ .g = g });
+}
+
+fn canonicalizeLinkWith(gpa: Allocator, path: []const u8, rules: PathRules, resolver: anytype) ?[]u8 {
+    const norm = normalizeSeparators(gpa, path, rules) catch return null;
+    defer gpa.free(norm);
+    const trimmed = std.mem.trimEnd(u8, norm, "/");
+    const parent, const base = splitParent(trimmed, rules);
+    if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return canonicalizeWith(gpa, path, rules, resolver);
+    const rp = resolver.resolve(parent) catch return null;
     defer gpa.free(rp);
-    return std.fs.path.join(gpa, &.{ rp, base }) catch null;
+    return joinPath(gpa, rp, base);
 }
 
 /// Canonicalizes a granted path pattern. The directory part before the
 /// first wildcard (or the whole path without one) resolves through its
 /// deepest existing ancestor, so a grant made before its directory exists
 /// stays attached to the right place.
-fn canonicalPattern(g: *Global, pattern: []const u8, keep_last: bool) []u8 {
-    const gpa = g.gpa;
-    if (pattern.len == 0 or (pattern[0] != '/' and pattern[0] != '.')) return gpa.dupe(u8, pattern) catch @panic("oom");
+fn canonicalPattern(g: *Global, raw: []const u8, keep_last: bool) []u8 {
+    return canonicalPatternWith(g.gpa, raw, keep_last, host_rules, HostResolver{ .g = g }) catch @panic("oom");
+}
+
+fn canonicalPatternWith(gpa: Allocator, raw: []const u8, keep_last: bool, rules: PathRules, resolver: anytype) Allocator.Error![]u8 {
+    const pattern = try normalizeSeparators(gpa, raw, rules);
+    if (!isPathValue(pattern, rules)) return pattern;
     const wild = std.mem.indexOfAny(u8, pattern, "*?") orelse pattern.len;
     // Split at the last separator before the first wildcard.
     const head = pattern[0..wild];
-    var cut = std.mem.lastIndexOfScalar(u8, head, '/') orelse return gpa.dupe(u8, pattern) catch @panic("oom");
+    var cut = std.mem.lastIndexOfScalar(u8, head, '/') orelse return pattern;
     if (wild == pattern.len and !keep_last) cut = pattern.len; // no wildcard: resolve it all
+    const root = rootLen(pattern, rules);
     var dir_end = cut;
     while (true) {
-        const dir = if (dir_end == 0) "/" else pattern[0..dir_end];
-        if (realPath(g, dir)) |rp| {
+        // A walk that reaches the root resolves the root itself.
+        const at_root = root > 0 and dir_end <= root;
+        const dir = if (at_root) pattern[0..root] else pattern[0..dir_end];
+        if (resolver.resolve(dir)) |rp| {
             defer gpa.free(rp);
+            defer gpa.free(pattern);
             var rest = pattern[dir_end..];
-            // The root resolves to "/", which already ends in a separator.
+            // A root resolves to a path that already ends in a separator.
             if (std.mem.endsWith(u8, rp, "/") and rest.len > 0 and rest[0] == '/') rest = rest[1..];
-            if (rest.len > 0 and rest[0] != '/' and !std.mem.endsWith(u8, rp, "/")) return std.mem.concat(gpa, u8, &.{ rp, "/", rest }) catch @panic("oom");
-            return std.mem.concat(gpa, u8, &.{ rp, rest }) catch @panic("oom");
+            if (rest.len > 0 and rest[0] != '/' and !std.mem.endsWith(u8, rp, "/")) return std.mem.concat(gpa, u8, &.{ rp, "/", rest });
+            return std.mem.concat(gpa, u8, &.{ rp, rest });
         } else |_| {}
-        const up = std.mem.lastIndexOfScalar(u8, pattern[0..dir_end], '/') orelse return gpa.dupe(u8, pattern) catch @panic("oom");
-        if (up == dir_end) return gpa.dupe(u8, pattern) catch @panic("oom");
-        dir_end = up;
-        if (dir_end == 0) dir_end = 0;
+        if (at_root) return pattern;
+        dir_end = std.mem.lastIndexOfScalar(u8, pattern[0..dir_end], '/') orelse return pattern;
     }
 }
 
 fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, canon_req: ?[]const u8) bool {
     return switch (cap.kind) {
         .none => true,
-        .path => if (canon_req) |c| globMatch(granted, c) else false,
+        .path => if (canon_req) |c| globMatchCase(granted, c, host_rules.windows) else false,
         .host => hostMatch(granted, requested),
         .pattern => globMatch(granted, requested),
         .custom => if (cap.match) |m| m(cap.ctx, granted, requested) else false,
@@ -494,7 +595,7 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
             if (!ok) return l.raiseFmt("invalid {s} subpermission '{s}'", .{ parts[0], parts[1] });
         }
         if (cap.kind == .path) if (val) |v| {
-            if (v[0] != '/' and v[0] != '.') return l.raiseFmt("filesystem permission values must be an absolute path or start with '.' (got '{s}')", .{v});
+            if (!isPathValue(v, host_rules)) return l.raiseFmt("filesystem permission values must be an absolute path or start with '.' (got '{s}')", .{v});
         };
     }
     if (setOf(l)) |s| if (s.sealed) return .refused;
@@ -587,4 +688,115 @@ test "glob" {
     try std.testing.expect(globMatch("a?c", "abc"));
     try std.testing.expect(!globMatch("/tmp/*.lus", "/tmp/a.txt"));
     try std.testing.expect(globMatch("*", ""));
+}
+
+/// A file system for the path tests: the paths that exist, each with its
+/// resolved form.
+const FakeFs = struct {
+    gpa: Allocator,
+    rules: PathRules,
+    files: []const [2][]const u8,
+
+    fn resolve(f: FakeFs, path: []const u8) ![]u8 {
+        const p = if (path.len > (rootLen(path, f.rules))) std.mem.trimEnd(u8, path, "/") else path;
+        for (f.files) |e| {
+            const same = if (f.rules.windows) std.ascii.eqlIgnoreCase(e[0], p) else std.mem.eql(u8, e[0], p);
+            if (same) return f.gpa.dupe(u8, e[1]);
+        }
+        return error.FileNotFound;
+    }
+};
+
+fn expectPattern(f: FakeFs, raw: []const u8, keep_last: bool, want: []const u8) !void {
+    const got = try canonicalPatternWith(f.gpa, raw, keep_last, f.rules, f);
+    defer f.gpa.free(got);
+    try std.testing.expectEqualStrings(want, got);
+}
+
+fn expectCanonical(f: FakeFs, raw: []const u8, want: ?[]const u8) !void {
+    const got = canonicalizeWith(f.gpa, raw, f.rules, f);
+    defer if (got) |g| f.gpa.free(g);
+    if (want) |w| try std.testing.expectEqualStrings(w, got orelse return error.TestUnexpectedResult) else try std.testing.expect(got == null);
+}
+
+test "path values" {
+    const W = PathRules.win;
+    const P = PathRules.posix;
+    try std.testing.expect(isPathValue("/tmp", P));
+    try std.testing.expect(isPathValue("./x", P));
+    try std.testing.expect(!isPathValue("C:/x", P));
+    try std.testing.expect(!isPathValue("x", P));
+    try std.testing.expect(isPathValue("C:\\x", W));
+    try std.testing.expect(isPathValue("d:/x", W));
+    try std.testing.expect(isPathValue("\\\\server\\share", W));
+    try std.testing.expect(isPathValue(".\\x", W));
+    try std.testing.expect(!isPathValue("C:x", W));
+    try std.testing.expect(!isPathValue("x", W));
+    try std.testing.expectEqual(@as(usize, 1), rootLen("/a/b", P));
+    try std.testing.expectEqual(@as(usize, 0), rootLen("C:/a", P));
+    try std.testing.expectEqual(@as(usize, 3), rootLen("C:/a", W));
+    try std.testing.expectEqual(@as(usize, 2), rootLen("C:a", W));
+    try std.testing.expectEqual(@as(usize, 12), rootLen("//srv/share/a", W));
+    try std.testing.expectEqual(@as(usize, 11), rootLen("//srv/share", W));
+    const a = splitParent("C:/x", W);
+    try std.testing.expectEqualStrings("C:/", a[0]);
+    try std.testing.expectEqualStrings("x", a[1]);
+    const b = splitParent("/x", P);
+    try std.testing.expectEqualStrings("/", b[0]);
+    const c = splitParent("x", W);
+    try std.testing.expectEqualStrings(".", c[0]);
+    try std.testing.expect(globMatchCase("C:/Work/*", "c:/work/A.txt", true));
+    try std.testing.expect(!globMatchCase("/Work/*", "/work/a", false));
+}
+
+test "canonical paths under the POSIX rules" {
+    const gpa = std.testing.allocator;
+    const f: FakeFs = .{ .gpa = gpa, .rules = .posix, .files = &.{
+        .{ "/", "/" },
+        .{ ".", "/work" },
+        .{ "/tmp", "/private/tmp" },
+        .{ "./sub", "/work/sub" },
+    } };
+    try expectPattern(f, "/tmp/*", false, "/private/tmp/*");
+    try expectPattern(f, "./*", false, "/work/*");
+    try expectPattern(f, "./sub/a.txt", false, "/work/sub/a.txt");
+    try expectPattern(f, "./sub/a.txt", true, "/work/sub/a.txt");
+    try expectPattern(f, "/none/deeper/*", false, "/none/deeper/*");
+    try expectPattern(f, "./missing/x*", false, "/work/missing/x*");
+    try expectCanonical(f, "new.txt", "/work/new.txt");
+    try expectCanonical(f, "/tmp", "/private/tmp");
+    try expectCanonical(f, "/tmp/new", "/private/tmp/new");
+    try expectCanonical(f, "/nope/new", null);
+}
+
+test "canonical paths under the Windows rules" {
+    const gpa = std.testing.allocator;
+    const f: FakeFs = .{ .gpa = gpa, .rules = .win, .files = &.{
+        .{ "D:/", "D:/" },
+        .{ ".", "C:/Temp/lus-test-1" },
+        .{ "D:/a/lus/tests/conformance", "D:/a/lus/tests/conformance" },
+        .{ "D:/a/lus/tests/conformance/fixtures/flags", "D:/a/lus/tests/conformance/fixtures/flags" },
+        .{ "//srv/share/", "//srv/share/" },
+        .{ "./h3c3", "C:/Temp/lus-test-1/h3c3" },
+        .{ "h3c3", "C:/Temp/lus-test-1/h3c3" },
+    } };
+    // Mixed separators, as a test directory joined with "/" produces.
+    try expectPattern(f, "D:\\a\\lus\\tests\\conformance/fixtures/flags", false, "D:/a/lus/tests/conformance/fixtures/flags");
+    try expectPattern(f, "D:\\a\\lus\\tests\\conformance/*", false, "D:/a/lus/tests/conformance/*");
+    try expectPattern(f, "d:/A/LUS/tests/conformance/*", false, "D:/a/lus/tests/conformance/*");
+    try expectPattern(f, "./baselib_*", false, "C:/Temp/lus-test-1/baselib_*");
+    try expectPattern(f, ".\\h3c3\\allowed-link", true, "C:/Temp/lus-test-1/h3c3/allowed-link");
+    // A walk up to the drive or the share resolves the root itself.
+    try expectPattern(f, "D:/missing/deeper/*", false, "D:/missing/deeper/*");
+    try expectPattern(f, "D:\\x\\*", false, "D:/x/*");
+    try expectPattern(f, "\\\\srv\\share\\dir\\*", false, "//srv/share/dir/*");
+    try expectCanonical(f, "fs2_x1795137734", "C:/Temp/lus-test-1/fs2_x1795137734");
+    try expectCanonical(f, "h3c3\\allowed-link", "C:/Temp/lus-test-1/h3c3/allowed-link");
+    try expectCanonical(f, "D:\\new.txt", "D:/new.txt");
+    try expectCanonical(f, "D:\\a\\lus\\tests\\conformance\\fixtures\\flags", "D:/a/lus/tests/conformance/fixtures/flags");
+    const link = canonicalizeLinkWith(gpa, "h3c3\\blocked-link\\", .win, f).?;
+    defer gpa.free(link);
+    try std.testing.expectEqualStrings("C:/Temp/lus-test-1/h3c3/blocked-link", link);
+    // Grants and requests compare without regard to case.
+    try std.testing.expect(globMatchCase("C:/Temp/lus-test-1/baselib_*", "c:/temp/LUS-TEST-1/baselib_1/a", true));
 }

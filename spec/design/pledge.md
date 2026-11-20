@@ -29,6 +29,12 @@ A capability has a name, a list of subcapabilities, and a value kind. The value 
 
 The runtime registers its own capabilities through the same registry that extensions use: `fs` (with `read`, `write`, `exec`), `network` (with `tcp`, `udp`, `http`, `tls`), `exec`, `env`, `load`, `ffi`, `worker`, and `seal`.
 
+## Path values
+
+A path value is an absolute path or a path that starts with `.`, which resolves against the working directory. The directory part of a granted value, up to its first wildcard, resolves through its deepest existing ancestor when the grant is made. A requested path resolves through its symbolic links, or through its parent directory when the file does not exist yet. Both sides then use `/` as their only separator.
+
+On Windows a path value may also start with a drive (`C:\` or `C:/`), a UNC share (`\\server\share`), or a single separator, and `\` and `/` are both separators, so a value such as `D:\a\tests/fixtures/*` that joins a native directory with `/` is valid. A walk up the directory part stops at the drive or the share. Windows paths match without regard to ASCII case, because NTFS compares names that way by default. The resolved parts of both sides carry the case stored on disk, so the rule only decides components that do not exist yet. A non ASCII name that differs from the grant only in case is denied.
+
 ## Registering a capability
 
 An extension module registers a capability from Zig or from C. The C form is:
