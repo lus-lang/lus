@@ -1,5 +1,5 @@
 
-pledge("load", "fs", "exec")
+pledge("load", "fs", "exec", "env=LUS_EXE")
 
 
 local function io_tempfile_test()
@@ -34,6 +34,39 @@ local function io_popen_test()
     -- popen output might contain trailing newline
     assert(string.find(s, "hello"))
     f:close()
+end
+
+local windows = package.config:sub(1, 1) == "\\"
+
+local function closing_a_pipe_stops_a_writer_that_never_ends_test()
+    -- The writer runs until a write fails. On Windows it is the interpreter
+    -- itself, since an endless loop in cmd.exe goes on after its writes fail.
+    local cmd = "yes"
+    if windows then
+        local lus = os.getenv("LUS_EXE")
+        if lus == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+        cmd = `"$lus" -e "while true do assert(io.write('y\\n')) end"`
+    end
+    local f = assert(io.popen(cmd, "r"))
+    assert(f:read("l") == "y")
+    -- Closing returns once the writer has ended on its broken pipe.
+    local ok, kind = f:close()
+    assert(not ok)
+    assert(kind == "exit" or kind == "signal", kind)
+end
+
+local function exit_codes_keep_all_their_bits_test()
+    if windows then
+        local ok, kind, code = os.execute("exit /b 256")
+        assert(ok == nil and kind == "exit" and code == 256, code)
+        ok, kind, code = io.popen("exit /b 65536"):close()
+        assert(ok == nil and kind == "exit" and code == 65536, code)
+    else
+        local ok, kind, code = os.execute("exit 3")
+        assert(ok == nil and kind == "exit" and code == 3, code)
+        ok, kind, code = io.popen("exit 7"):close()
+        assert(ok == nil and kind == "exit" and code == 7, code)
+    end
 end
 
 local function file_seek_test()

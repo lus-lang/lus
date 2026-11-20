@@ -36,11 +36,69 @@ pub fn windowsCommandLine(gpa: std.mem.Allocator, command: []const u8) std.mem.A
     return std.mem.concat(gpa, u8, &.{ "cmd.exe /s /c \"", command, "\"" });
 }
 
+/// How a child ended. An exit code keeps all its bits, which on Windows
+/// are 32, so a code such as 256 or an NTSTATUS crash code never reads as
+/// success.
+pub const Status = union(enum) {
+    exited: u32,
+    signal: u32,
+
+    pub fn success(s: Status) bool {
+        return s == .exited and s.exited == 0;
+    }
+};
+
+/// Waits for `child` and reports how it ended. The standard library keeps
+/// only the low byte of a Windows exit code, so on Windows the full code
+/// is read with GetExitCodeProcess before the wait closes the handles.
+pub fn wait(io: std.Io, child: *std.process.Child) std.process.Child.WaitError!Status {
+    const full: ?u32 = if (comptime windows) win.exitCode(child.id.?) else null;
+    const term = try child.wait(io);
+    if (full) |code| return .{ .exited = code };
+    return switch (term) {
+        .exited => |code| .{ .exited = code },
+        .signal, .stopped => |sig| .{ .signal = @intCast(@backingInt(sig)) },
+        .unknown => |code| .{ .exited = code },
+    };
+}
+
 const win = if (windows) struct {
     const w = std.os.windows;
     const HANDLE_FLAG_INHERIT: w.DWORD = 0x1;
+    const DUPLICATE_SAME_ACCESS: w.DWORD = 0x2;
+    const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x20002;
+    const INFINITE: u32 = 0xFFFFFFFF;
+    const STARTUPINFOEXW = extern struct {
+        info: w.STARTUPINFOW,
+        attribute_list: ?*anyopaque,
+    };
     extern "kernel32" fn CreatePipe(read: *w.HANDLE, write: *w.HANDLE, attributes: ?*const w.SECURITY_ATTRIBUTES, size: w.DWORD) callconv(.winapi) w.BOOL;
     extern "kernel32" fn SetHandleInformation(object: w.HANDLE, mask: w.DWORD, flags: w.DWORD) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn DuplicateHandle(source_process: w.HANDLE, source: w.HANDLE, target_process: w.HANDLE, target: *w.HANDLE, access: w.DWORD, inherit: w.BOOL, options: w.DWORD) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn InitializeProcThreadAttributeList(list: ?*anyopaque, count: w.DWORD, flags: w.DWORD, size: *usize) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn UpdateProcThreadAttribute(list: *anyopaque, flags: w.DWORD, attribute: usize, value: *const anyopaque, size: usize, previous: ?*anyopaque, return_size: ?*usize) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn DeleteProcThreadAttributeList(list: *anyopaque) callconv(.winapi) void;
+    extern "kernel32" fn GetExitCodeProcess(process: w.HANDLE, code: *w.DWORD) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn WaitForSingleObject(handle: w.HANDLE, ms: u32) callconv(.winapi) u32;
+
+    /// The exit code of a process, once it has ended.
+    fn exitCode(process: w.HANDLE) ?u32 {
+        _ = WaitForSingleObject(process, INFINITE);
+        var code: w.DWORD = 0;
+        if (!GetExitCodeProcess(process, &code).toBool()) return null;
+        return code;
+    }
+
+    /// An inheritable duplicate of `h`, or null for a missing handle or
+    /// when it cannot be duplicated.
+    fn inheritable(h: ?w.HANDLE) ?w.HANDLE {
+        const src = h orelse return null;
+        if (src == w.INVALID_HANDLE_VALUE) return null;
+        var dup: w.HANDLE = undefined;
+        const self = w.GetCurrentProcess();
+        if (!DuplicateHandle(self, src, self, &dup, 0, .TRUE, DUPLICATE_SAME_ACCESS).toBool()) return null;
+        return dup;
+    }
 } else struct {};
 
 fn spawnWindows(gpa: std.mem.Allocator, command: []const u8, pipe: Pipe) SpawnError!std.process.Child {

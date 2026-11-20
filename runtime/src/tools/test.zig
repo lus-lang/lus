@@ -31,6 +31,7 @@ const Thread = lus.vm.state.Thread;
 const Table = lus.vm.object.Table;
 const String = lus.vm.object.String;
 const Error = lus.vm.state.Error;
+const shell = @import("../lib/shell.zig");
 
 const Options = struct {
     paths: std.ArrayList([]const u8) = .empty,
@@ -599,7 +600,7 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
             slot.tree = null;
         }
     }
-    const term = try child.wait(io);
+    const status = try shell.wait(io, &child);
     const stdout = try reader.toOwnedSlice(0);
     defer gpa.free(stdout);
     const stderr = try reader.toOwnedSlice(1);
@@ -648,9 +649,11 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
         // The tests reported above ended, and the next one never did.
         try timeoutReport(gpa, pool.o, cause, &r.report);
     } else {
-        const clean = switch (term) {
+        // The full exit code counts, so a Windows code such as 256 or a
+        // crash code is never clean.
+        const clean = switch (status) {
             .exited => |code| code == 0 or code == 1,
-            else => false,
+            .signal => false,
         };
         if (!clean or (r.passed + r.failed + r.skipped == 0 and stderr.len > 0)) {
             r.crashed = !clean or r.failed == 0;

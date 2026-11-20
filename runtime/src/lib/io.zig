@@ -14,6 +14,7 @@ const gc = @import("../vm/gc.zig");
 const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const aux = @import("auxlib.zig");
+const shell = @import("shell.zig");
 const out = @import("out.zig");
 const vector = @import("vector.zig");
 const lexer = @import("../syntax/lexer.zig");
@@ -453,27 +454,25 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
         },
         .pipe => {
             h.closed = true;
-            // Waiting on the child also closes its pipe.
             if (h.child == null) h.file.close(l.g.io);
-            var code: i64 = 0;
+            var status: shell.Status = .{ .exited = 0 };
             if (h.child) |*c| {
-                // The child sees the end of its input before the wait, as
-                // with pclose, so a child that reads until then can exit.
+                // Both ends close before the wait, as with pclose. A child
+                // that reads sees the end of its input and can exit, and a
+                // child that still writes gets SIGPIPE on POSIX systems or
+                // a broken pipe on Windows instead of blocking forever.
                 if (c.stdin) |f| {
                     f.close(l.g.io);
                     c.stdin = null;
                 }
-                const term = c.wait(l.g.io) catch return aux.retNil(l);
-                code = switch (term) {
-                    .exited => |x| x,
-                    else => -1,
-                };
+                if (c.stdout) |f| {
+                    f.close(l.g.io);
+                    c.stdout = null;
+                }
+                status = shell.wait(l.g.io, c) catch return aux.retNil(l);
             }
             h.rbuf.deinit(l.g.gpa);
-            try l.push(Value.boolean(code == 0));
-            try l.push(try l.newStringValue("exit"));
-            try l.push(Value.int(code));
-            return 3;
+            return pushStatus(l, status);
         },
         .file => {
             h.closed = true;
@@ -482,6 +481,23 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
             return aux.retBool(l, true);
         },
     }
+}
+
+/// Pushes the results of `os.execute` and of closing a pipe: true or nil,
+/// then "exit" and the exit code or "signal" and the signal number.
+pub fn pushStatus(l: *Thread, status: shell.Status) Error!u32 {
+    try l.push(if (status.success()) .true else .nil);
+    switch (status) {
+        .exited => |code| {
+            try l.push(try l.newStringValue("exit"));
+            try l.push(Value.int(code));
+        },
+        .signal => |sig| {
+            try l.push(try l.newStringValue("signal"));
+            try l.push(Value.int(sig));
+        },
+    }
+    return 3;
 }
 
 fn ioClose(l: *Thread) Error!u32 {
@@ -704,7 +720,7 @@ fn popen(l: *Thread) Error!u32 {
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
     if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
-    const child = @import("shell.zig").spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin) catch return failResult(l, "cannot run command");
+    const child = shell.spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin) catch return failResult(l, "cannot run command");
     const f = if (reading) child.stdout.? else child.stdin.?;
     const hv = try newHandle(l, .{ .file = f, .kind = .pipe, .readable = reading, .writable = !reading, .child = child });
     return aux.ret(l, hv);

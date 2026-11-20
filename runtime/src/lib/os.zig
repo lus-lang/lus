@@ -205,26 +205,10 @@ fn spawnShell(l: *Thread) Error!u32 {
     if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for os.execute", .{});
     const io = l.g.io;
     out.flushAll(l.g);
-    var child = @import("shell.zig").spawn(io, l.g.gpa, c, .none) catch |e| return fileError(l, null, e);
-    const term = child.wait(io) catch |e| return fileError(l, null, e);
-    switch (term) {
-        .exited => |code| {
-            try l.push(if (code == 0) .true else .nil);
-            try l.push(try l.newStringValue("exit"));
-            try l.push(Value.int(code));
-        },
-        .signal, .stopped => |sig| {
-            try l.push(.nil);
-            try l.push(try l.newStringValue("signal"));
-            try l.push(Value.int(@backingInt(sig)));
-        },
-        .unknown => |code| {
-            try l.push(.nil);
-            try l.push(try l.newStringValue("exit"));
-            try l.push(Value.int(code));
-        },
-    }
-    return 3;
+    const shell = @import("shell.zig");
+    var child = shell.spawn(io, l.g.gpa, c, .none) catch |e| return fileError(l, null, e);
+    const status = shell.wait(io, &child) catch |e| return fileError(l, null, e);
+    return @import("io.zig").pushStatus(l, status);
 }
 
 // ---------------------------------------------------------------------
