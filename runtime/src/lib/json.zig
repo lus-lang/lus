@@ -191,7 +191,9 @@ const Parser = struct {
     /// document tend to repeat their keys. Every cached key waits on the
     /// stack or sits in a table of the result, which keeps it alive. A
     /// key whose value is null is never stored, so `flush` drops it from
-    /// the cache.
+    /// the cache. A repeated key replaces a value, which may be a
+    /// container that held keys of the cache, so `flush` empties the
+    /// cache when an object has a repeated key.
     fn key(p: *Parser) Error!Value {
         const s = p.s;
         const start = p.i + 1;
@@ -207,6 +209,7 @@ const Parser = struct {
         if (slot.*) |k| {
             if (k.len == text.len and std.mem.eql(u8, k.bytes(), text)) {
                 p.i = i + 1;
+                gc.touchInterned(p.l.g, k);
                 return Value.obj(.string, k);
             }
         }
@@ -372,14 +375,19 @@ const Parser = struct {
                 f.t = t;
             }
             const t = f.t.?;
+            // Every key that is new adds one node. Fewer nodes mean that a
+            // key repeated and its earlier value is gone.
+            const used = t.hash_used;
+            var added: usize = 0;
             var i: usize = 0;
             while (i < pairs) : (i += 1) {
                 const k = &l.stack[first + 2 * i];
                 const v = &l.stack[first + 2 * i + 1];
-                if (v.isNil()) p.forget(k.as(String));
+                if (v.isNil()) p.forget(k.as(String)) else added += 1;
                 if (table.storeStr(t, k, v) == null)
                     table.set(gpa, t, k.*, v.*) catch return l.raiseMem();
             }
+            if (t.hash_used != used + added) p.keys = @splat(null);
             t.tm_absent = 0;
             gc.barrierBack(l.g, &t.hdr);
         }
@@ -658,6 +666,24 @@ const Writer = struct {
         return cur;
     }
 
+    /// Whether writing `v` under its key may run Lus code: there is a
+    /// filter, or `v` is a table with a metatable, which may hold
+    /// `__json`.
+    inline fn mayRun(w: *Writer, v: Value) bool {
+        return !w.filter.isNil() or (v.tag == .table and v.as(Table).metatable != null);
+    }
+
+    /// Writes `item`, which a filter or `__json` returned when `fresh` is
+    /// true. Such a table may be reachable from nothing else, and the Lus
+    /// code that runs while it is written may collect, so the stack keeps
+    /// it alive.
+    inline fn item_(w: *Writer, item: Value, fresh: bool) Error!void {
+        if (!fresh or item.tag != .table) return w.value_(item);
+        try w.l.push(item);
+        defer w.l.top -= 1;
+        return w.value_(item);
+    }
+
     fn value_(w: *Writer, v: Value) Error!void {
         switch (v.tag) {
             .nil => try w.write("null"),
@@ -713,31 +739,45 @@ const Writer = struct {
             var i: i64 = 1;
             while (i <= max) : (i += 1) {
                 const raw = table.getInt(t, i);
+                const fresh = w.mayRun(raw);
                 var item = (try w.transform(Value.int(i), raw)) orelse Value.nil;
                 if (!serializable(item)) item = .nil;
                 if (i > 1) try w.write(",");
-                try w.value_(item);
+                try w.item_(item, fresh);
             }
             try w.write("]");
             return;
         }
         // An object writes its string keys in the order of `next`, which
         // visits the hash part by node. A filter or `__json` function
-        // runs Lus code that may change the table, so every step reads
-        // the hash part again.
+        // runs Lus code that may change the table. The stack keeps the
+        // key alive while that code runs, and when the code moved the
+        // hash part, the walk finds the key again and continues after
+        // it, as `next` would, or ends when the key is gone.
         try w.write("{");
         var first = true;
         var h: usize = 0;
         while (h < t.hash.len) : (h += 1) {
             const n = t.hash[h];
             if (n.key.tag != .string or n.val.isNil()) continue;
-            const item = (try w.transform(n.key, n.val)) orelse continue;
-            if (!serializable(item)) continue;
-            if (!first) try w.write(",");
-            first = false;
-            try w.str(n.key.as(String));
-            try w.write(":");
-            try w.value_(item);
+            const parts = t.hash;
+            const fresh = w.mayRun(n.val);
+            if (fresh) try l.push(n.key);
+            defer if (fresh) {
+                l.top -= 1;
+            };
+            if (try w.transform(n.key, n.val)) |item| {
+                if (serializable(item)) {
+                    if (!first) try w.write(",");
+                    first = false;
+                    try w.str(n.key.as(String));
+                    try w.write(":");
+                    try w.item_(item, fresh);
+                }
+            }
+            if (fresh and (t.hash.ptr != parts.ptr or t.hash.len != parts.len)) {
+                h = table.findSlot(t, n.key) orelse break;
+            }
         }
         try w.write("}");
     }
@@ -750,8 +790,9 @@ fn tojson(l: *Thread) Error!u32 {
     var w: Writer = .{ .l = l, .filter = filter };
     defer w.out.deinit(l.g.gpa);
     defer w.path.deinit(l.g.gpa);
+    const fresh = w.mayRun(v);
     const root = (try w.transform(.nil, v)) orelse Value.nil;
-    try w.value_(if (Writer.serializable(root)) root else .nil);
+    try w.item_(if (Writer.serializable(root)) root else .nil, fresh);
     const o = &w.out;
     const len = o.len();
     const ascii = w.cont == 0;

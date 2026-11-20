@@ -1385,3 +1385,61 @@ return fill`)()
     local t = fill(lo, text)
     assert(#t == 10000 and t[10000].a[2].b == 2)
 end
+
+-- a repeated key that replaces a container leaves no key of that
+-- container behind for later objects, wherever the collector stands
+-- when the later object reads the key
+local function repeated_key_replacing_a_container_test()
+    local pad = "_padding_for_the_key_cache"
+    for round = 1, 600 do
+        local filler = {}
+        for i = 1, round % 200 do
+            filler[i] = `"$(string.char(65 + i % 26, 65 + (i // 26) % 26, 97 + round % 26))"`
+        end
+        local n = round % 50 + 10
+        local doc = `[{"a":{"kq$(n)$(pad)":1},"a":2},[$(table.concat(filler, ","))],{"kq$(n)$(pad)":3}]`
+        filler = nil
+        local t = fromjson(doc)
+        collectgarbage()
+        local junk = {}
+        for i = 1, 200 do junk[i] = `x$(i)$(pad)` end
+        collectgarbage()
+        local want = `kq$(n)$(pad)`
+        assert(t[1].a == 2)
+        assert(next(t[3]) == want and t[3][want] == 3)
+    end
+end
+
+-- a filter that adds keys while an object is written, which moves the
+-- hash part, never writes a key twice
+local function filter_that_grows_the_object_writes_each_key_once_test()
+    local t = { a = 1, b = 2, c = 3 }
+    local grown = false
+    local text = tojson(t, function(k, v)
+        if not grown and k ~= nil then
+            grown = true
+            for i = 1, 64 do t["extra" .. i] = i end
+        end
+        return v
+    end)
+    local seen = {}
+    for key in text:gmatch('"(%w+)":') do
+        assert(not seen[key], key)
+        seen[key] = true
+    end
+end
+
+-- tables that a filter makes stay alive while they are written
+local function tables_made_by_a_filter_survive_collections_test()
+    local src = {}
+    for i = 1, 50 do src[i] = i end
+    local text = tojson(src, function(k, v)
+        if math.type(k) == "integer" then
+            collectgarbage("collect")
+            return { n = v, s = `item$(v)` }
+        end
+        return v
+    end)
+    local back = fromjson(text)
+    assert(#back == 50 and back[50].n == 50 and back[50].s == "item50")
+end
