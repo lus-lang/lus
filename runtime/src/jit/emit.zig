@@ -45,6 +45,9 @@ const tag_closure: u8 = @backingInt(Tag.closure);
 const tag_nil: u8 = @backingInt(Tag.nil);
 const Frame = state.Frame;
 const tl = table.layout;
+/// Whether native code reads and writes hash nodes inline. While it
+/// does not, every field access calls its helper.
+const node_inline = false;
 const il = interp.layout;
 const frame_size: i32 = @sizeOf(Frame);
 const frame_shift: u6 = std.math.log2_int(usize, @sizeOf(Frame));
@@ -1083,6 +1086,7 @@ pub const Emitter = struct {
     /// `interp.lookupIc` makes before it trusts a prediction.
     fn predictedNode(e: *Emitter, slot_addr: usize, tab: A.Reg, key: *object.String, node: A.Reg, tmp: A.Reg, out_of_range: Label, other_key: Label) void {
         const a = &e.a;
+        if (!node_inline) return a.jmp(out_of_range);
         a.movImm(node, slot_addr);
         a.load16(node, .{ .base = node });
         a.jumpIfMem(.hs, node, .{ .base = tab, .disp = e.lay.hash_len }, out_of_range);
@@ -1545,6 +1549,7 @@ pub const Emitter = struct {
                 const s = key.as(object.String);
                 const v = t.v.reg;
                 const kw: *const [2]u64 = @ptrCast(&e.p.constants[t.key.konst]);
+                if (!node_inline) a.jmp(helper);
                 a.jumpIfByte(.ne, .{ .base = A.t1, .disp = tl.node_key + tl.value_tag }, tag_nil, helper);
                 a.jumpIfByte(.eq, tagOf(v), tag_nil, helper);
                 a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
@@ -1605,7 +1610,7 @@ pub const Emitter = struct {
                 // small hash part may be full, so the probe also ends
                 // after visiting every node, counted down in t5.
                 a.bind(m.chain);
-                if (!s.flags.interned) {
+                if (!s.flags.interned or !node_inline) {
                     a.jmp(helper);
                 } else {
                     const loop = a.newLabel();

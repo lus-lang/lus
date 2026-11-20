@@ -230,9 +230,13 @@ inline fn mum(a: u64, b: u64) u64 {
 // ---------------------------------------------------------------------
 // Tables
 
-pub const Node = struct {
-    key: Value,
-    val: Value,
+/// A node of a hash part: the payloads of its key and its value. The tags
+/// of the key and the value live apart, in the tag bytes that sit below
+/// the first node (`Table.keyTag`), so a node takes 16 bytes instead of
+/// the 32 of two full values.
+pub const Node = extern struct {
+    key: u64 = 0,
+    val: u64 = 0,
 };
 
 pub const Table = struct {
@@ -250,7 +254,10 @@ pub const Table = struct {
     array_ptr: [*]u64 = empty_words,
     asize: usize = 0,
     /// Hash part with open addressing and linear probing. Length is a
-    /// power of two, or zero.
+    /// power of two, or zero. The nodes hold payloads, and the tags of
+    /// node i sit at the bytes `2 * (i + 1)` (key) and `2 * i + 1`
+    /// (value) below the first node, in the tag area that
+    /// `table.tagBytes` sizes. Use `key`, `val`, and their setters.
     hash: []Node = &.{},
     /// Live plus dead slots in the hash part (dead slots keep their key).
     hash_used: u32 = 0,
@@ -265,6 +272,44 @@ pub const Table = struct {
     /// own cell. A table created with known sizes holds its first parts
     /// there, and parts that outgrow it move to the backing allocator.
     inline_units: u16 = 0,
+
+    /// The tag bytes of node `i`: the tag of its key, then the tag of
+    /// its value.
+    pub inline fn tagPair(t: *const Table, i: usize) *[2]u8 {
+        const base: [*]u8 = @ptrCast(t.hash.ptr);
+        return @ptrCast(base - 2 * (i + 1));
+    }
+    pub inline fn keyTag(t: *const Table, i: usize) value.Tag {
+        return @fromBackingInt(t.tagPair(i)[0]);
+    }
+    pub inline fn valTag(t: *const Table, i: usize) value.Tag {
+        return @fromBackingInt(t.tagPair(i)[1]);
+    }
+    /// The key of node `i`, nil for a node that never held one.
+    pub inline fn key(t: *const Table, i: usize) Value {
+        return Value.make(t.hash[i].key, t.keyTag(i));
+    }
+    /// The value of node `i`, nil for an empty node or a dead entry.
+    pub inline fn val(t: *const Table, i: usize) Value {
+        return Value.make(t.hash[i].val, t.valTag(i));
+    }
+    /// The key and the value of node `i`.
+    pub inline fn entry(t: *const Table, i: usize) Entry {
+        return .{ .key = t.key(i), .val = t.val(i) };
+    }
+    pub const Entry = struct { key: Value, val: Value };
+    pub inline fn setKey(t: *Table, i: usize, k: Value) void {
+        t.hash[i].key = k.payload;
+        t.tagPair(i)[0] = @backingInt(k.tag);
+    }
+    pub inline fn setVal(t: *Table, i: usize, v: Value) void {
+        t.hash[i].val = v.payload;
+        t.tagPair(i)[1] = @backingInt(v.tag);
+    }
+    /// True when node `i` holds the string `s` as its key.
+    pub inline fn keyIsStr(t: *const Table, i: usize, s: *const String) bool {
+        return t.hash[i].key == @intFromPtr(s) and t.keyTag(i) == .string;
+    }
 
     pub const WeakMode = enum(u8) { none, keys, values, both };
 

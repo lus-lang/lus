@@ -205,7 +205,49 @@ pub fn freeParts(gpa: Allocator, t: *Table) void {
 }
 
 fn freeHash(gpa: Allocator, t: *Table, h: []Node) void {
-    if (h.len > 0 and !t.ownsInline(h.ptr)) gpa.free(h);
+    if (h.len > 0 and !t.ownsInline(h.ptr)) gpa.rawFree(hashBlock(h), .of(Node), @returnAddress());
+}
+
+/// Bytes of the tag area below the nodes of a hash part of `n` nodes: two
+/// tag bytes per node, rounded up so that the nodes stay aligned.
+pub inline fn tagBytes(n: usize) usize {
+    return std.mem.alignForward(usize, 2 * n, @alignOf(Node));
+}
+
+/// Bytes of a hash part of `n` nodes with its tag area.
+pub inline fn hashBytes(n: usize) usize {
+    return tagBytes(n) + n * @sizeOf(Node);
+}
+
+/// The block of a hash part, from the start of its tag area.
+inline fn hashBlock(h: []Node) []u8 {
+    const base: [*]u8 = @ptrCast(h.ptr);
+    return (base - tagBytes(h.len))[0..hashBytes(h.len)];
+}
+
+/// Lays out an empty hash part of `n` nodes in `mem`, which holds
+/// `hashBytes(n)` bytes. A node whose key tag is nil is empty, and every
+/// reader tests the tag before it trusts a payload, so only the tag area
+/// is cleared: zero bytes are nil tags.
+inline fn hashIn(mem: [*]u8, n: usize) []Node {
+    // A part of up to eight nodes clears its tags with one or two stores
+    // instead of a call to memset.
+    switch (n) {
+        inline 1, 2, 4, 8 => |c| {
+            const words: [*]u64 = @ptrCast(@alignCast(mem));
+            inline for (0..comptime tagBytes(c) / 8) |k| words[k] = 0;
+        },
+        else => @memset(mem[0..tagBytes(n)], 0),
+    }
+    const nodes: [*]Node = @ptrCast(@alignCast(mem + tagBytes(n)));
+    return nodes[0..n];
+}
+
+/// Allocates an empty hash part of `n` nodes.
+fn allocHash(gpa: Allocator, n: usize) Error![]Node {
+    if (n == 0) return &.{};
+    const mem = gpa.rawAlloc(hashBytes(n), .of(Node), @returnAddress()) orelse return error.OutOfMemory;
+    return hashIn(mem, n);
 }
 
 fn freeArray(gpa: Allocator, t: *Table, kind: ArrayKind, ptr: [*]u64, n: usize) void {
@@ -243,7 +285,7 @@ pub fn getInt(t: *Table, k: i64) Value {
 
 pub fn getStr(t: *Table, s: *object.String) Value {
     const idx = findStr(t, s) orelse return .nil;
-    return t.hash[idx].val;
+    return t.val(idx);
 }
 
 /// Index of the hash slot holding the string key `s` (live or dead), or
@@ -256,12 +298,12 @@ pub inline fn findStr(t: *Table, s: *object.String) ?usize {
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
-        const n = &t.hash[i];
-        if (n.key.tag == .string) {
-            if (n.key.payload == @intFromPtr(s)) return i;
-            if (!s.flags.interned and longStrEqual(n.key, s)) return i;
+        const kt = t.keyTag(i);
+        if (kt == .string) {
+            if (t.hash[i].key == @intFromPtr(s)) return i;
+            if (!s.flags.interned and longStrEqual(t.hash[i].key, s)) return i;
         }
-        if (n.key.tag == .nil) return null;
+        if (kt == .nil) return null;
     }
 }
 
@@ -271,10 +313,9 @@ noinline fn findStrFull(t: *Table, s: *object.String) ?usize {
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
     for (0..t.hash.len) |_| {
-        const n = &t.hash[i];
-        if (n.key.tag == .string) {
-            if (n.key.payload == @intFromPtr(s)) return i;
-            if (!s.flags.interned and longStrEqual(n.key, s)) return i;
+        if (t.keyTag(i) == .string) {
+            if (t.hash[i].key == @intFromPtr(s)) return i;
+            if (!s.flags.interned and longStrEqual(t.hash[i].key, s)) return i;
         }
         i = (i + 1) & mask;
     }
@@ -282,8 +323,8 @@ noinline fn findStrFull(t: *Table, s: *object.String) ?usize {
 }
 
 /// Long strings are not interned: equal contents, distinct objects.
-inline fn longStrEqual(k: Value, s: *object.String) bool {
-    const o = k.as(object.String);
+inline fn longStrEqual(k: u64, s: *object.String) bool {
+    const o: *object.String = @ptrFromInt(@as(usize, @intCast(k)));
     return !o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes());
 }
 
@@ -313,20 +354,20 @@ pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
     const mask = t.hash.len - 1;
     var i: usize = s.hash & mask;
     while (true) : (i = (i + 1) & mask) {
-        const n = &t.hash[i];
-        if (n.key.tag == .string) {
-            if (n.key.payload == @intFromPtr(s)) break;
+        const kt = t.keyTag(i);
+        if (kt == .string) {
+            if (t.hash[i].key == @intFromPtr(s)) break;
             if (!s.flags.interned) return null;
-        } else if (n.key.tag == .nil) {
+        } else if (kt == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
             if (val.tag == .nil or !hashRoom(t.hash_used, t.hash.len)) return null;
-            n.key = key.*;
+            t.setKey(i, key.*);
             t.hash_used += 1;
             break;
         }
     }
-    t.hash[i].val = val.*;
+    t.setVal(i, val.*);
     return i;
 }
 
@@ -342,7 +383,7 @@ pub fn get(t: *Table, key: Value) Value {
 
 fn getHash(t: *Table, k: Value) Value {
     const idx = findSlot(t, k) orelse return .nil;
-    return t.hash[idx].val;
+    return t.val(idx);
 }
 
 /// Index of the slot holding `k` (live or dead), or null.
@@ -352,9 +393,8 @@ pub fn findSlot(t: *Table, k: Value) ?usize {
     const mask = t.hash.len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
     while (true) : (i = (i + 1) & mask) {
-        const n = &t.hash[i];
-        if (n.key.tag == .nil) return null;
-        if (keyEqual(n.key, k)) return i;
+        if (t.keyTag(i) == .nil) return null;
+        if (keyEqual(t.key(i), k)) return i;
     }
 }
 
@@ -364,7 +404,7 @@ noinline fn findSlotFull(t: *Table, k: Value) ?usize {
     const mask = t.hash.len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
     for (0..t.hash.len) |_| {
-        if (keyEqual(t.hash[i].key, k)) return i;
+        if (keyEqual(t.key(i), k)) return i;
         i = (i + 1) & mask;
     }
     return null;
@@ -383,7 +423,7 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
         if (i >= 1 and i <= t.asize) return arrayStore(gpa, t, @intCast(i - 1), val);
     }
     if (findSlot(t, k)) |idx| {
-        t.hash[idx].val = val;
+        t.setVal(idx, val);
         return;
     }
     if (val.isNil()) return; // storing nil under an absent key is a no-op
@@ -414,8 +454,9 @@ pub fn setStr(gpa: Allocator, t: *Table, s: *object.String, val: Value) Error!vo
 fn insertNew(t: *Table, k: Value, val: Value) void {
     const mask = t.hash.len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
-    while (t.hash[i].key.tag != .nil) : (i = (i + 1) & mask) {}
-    t.hash[i] = .{ .key = k, .val = val };
+    while (t.keyTag(i) != .nil) : (i = (i + 1) & mask) {}
+    t.setKey(i, k);
+    t.setVal(i, val);
     t.hash_used += 1;
 }
 
@@ -433,11 +474,11 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
             total_int += 1;
         }
     }
-    for (t.hash) |n| {
-        if (n.key.tag == .nil or n.val.isNil()) continue;
+    for (0..t.hash.len) |h| {
+        if (t.keyTag(h) == .nil or t.valTag(h) == .nil) continue;
         total += 1;
-        if (n.key.tag == .integer) {
-            const k = n.key.asInt();
+        if (t.keyTag(h) == .integer) {
+            const k = t.key(h).asInt();
             if (k >= 1 and k <= 1 << 40) {
                 nums[ceilLog2(@intCast(k))] += 1;
                 total_int += 1;
@@ -514,7 +555,7 @@ const max_inline = 512;
 pub fn inlineUnits(narr: usize, nhash: usize) usize {
     if (narr == 0 and nhash == 0) return 0;
     if (narr > max_inline or nhash > max_inline) return 0;
-    const bytes = hashSizeExact(nhash) * @sizeOf(Node) + narr * @sizeOf(Value);
+    const bytes = hashBytes(hashSizeExact(nhash)) + narr * @sizeOf(Value);
     if (bytes > max_inline) return 0;
     return std.math.divCeil(usize, bytes, 16) catch unreachable;
 }
@@ -524,21 +565,10 @@ pub fn inlineUnits(narr: usize, nhash: usize) usize {
 pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
     const hsize = hashSizeExact(nhash);
     const mem = t.inlineBytes();
-    const nodes: [*]Node = @ptrCast(@alignCast(mem.ptr));
-    t.hash = nodes[0..hsize];
-    // The parts of small records clear with a few stores instead of a
-    // call to memset.
-    const empty: Node = .{ .key = .nil, .val = .nil };
-    switch (hsize) {
-        0 => {},
-        1 => nodes[0..1].* = @splat(empty),
-        2 => nodes[0..2].* = @splat(empty),
-        4 => nodes[0..4].* = @splat(empty),
-        else => @memset(t.hash, empty),
-    }
+    if (hsize > 0) t.hash = hashIn(mem.ptr, hsize);
     t.log2_hash = if (hsize == 0) 0 else @intCast(std.math.log2_int(usize, hsize));
     if (narr == 0) return;
-    t.array_ptr = @ptrCast(@alignCast(mem.ptr + hsize * @sizeOf(Node)));
+    t.array_ptr = @ptrCast(@alignCast(mem.ptr + (if (hsize == 0) 0 else hashBytes(hsize))));
     t.asize = narr;
     @memset(t.words(), hole);
 }
@@ -562,19 +592,20 @@ fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value
     const old_ptr = t.array_ptr;
     const old_n = t.asize;
     const old_hash = t.hash;
+    // The old hash part, read through the accessors of a table.
+    const oh: Table = .{ .hdr = t.hdr, .hash = old_hash };
     var kind = old_kind;
-    for (old_hash) |n| {
-        if (n.key.tag != .integer or n.val.isNil()) continue;
-        const i = n.key.asInt();
-        if (i >= 1 and i <= asize) kind = joinKind(kind, n.val);
+    for (0..old_hash.len) |h| {
+        if (oh.keyTag(h) != .integer or oh.valTag(h) == .nil) continue;
+        const i = oh.key(h).asInt();
+        if (i >= 1 and i <= asize) kind = joinKind(kind, oh.val(h));
     }
     if (key.tag == .integer and key.asInt() >= 1 and key.asInt() <= asize) kind = joinKind(kind, val);
     // Allocate both parts before changing the table, so that running out
     // of memory leaves it intact. The hash part comes first, because a
     // growing array part may move in place.
-    const new_hash = try gpa.alloc(Node, hsize);
-    errdefer gpa.free(new_hash);
-    for (new_hash) |*n| n.* = .{ .key = .nil, .val = .nil };
+    const new_hash = try allocHash(gpa, hsize);
+    errdefer if (new_hash.len > 0) gpa.rawFree(hashBlock(new_hash), .of(Node), @returnAddress());
     const reuse = asize == old_n and kind == old_kind;
     // An array part in the backing allocator that grows and keeps its
     // kind is reallocated, which can extend it without a copy.
@@ -617,9 +648,9 @@ fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value
             if (!v.isNil()) reinsert(t, Value.int(@intCast(idx + 1)), v);
         }
     }
-    for (old_hash) |n| {
-        if (n.key.tag == .nil or n.val.isNil()) continue;
-        reinsert(t, n.key, n.val);
+    for (0..old_hash.len) |h| {
+        if (oh.keyTag(h) == .nil or oh.valTag(h) == .nil) continue;
+        reinsert(t, oh.key(h), oh.val(h));
     }
     if (!reuse and grown == null) freeArray(gpa, t, old_kind, old_ptr, old_n);
     freeHash(gpa, t, old_hash);
@@ -723,8 +754,7 @@ pub fn next(t: *Table, key: Value) Error!?NextResult {
     }
     var h = i - t.asize;
     while (h < t.hash.len) : (h += 1) {
-        const n = t.hash[h];
-        if (n.key.tag != .nil and !n.val.isNil()) return .{ .key = n.key, .val = n.val };
+        if (t.keyTag(h) != .nil and t.valTag(h) != .nil) return .{ .key = t.key(h), .val = t.val(h) };
     }
     return null;
 }
@@ -749,11 +779,15 @@ pub const layout = struct {
     /// Bit of the flag byte that the write barrier tests.
     pub const barrier_bit: u3 = @bitOffsetOf(gc.Header.Flags, "barrier");
 
-    /// A hash node is `1 << node_shift` bytes, and its key and value are
-    /// values at these offsets.
+    /// A hash node is `1 << node_shift` bytes and holds the payloads of
+    /// its key and value at these offsets. The tags of node i are the
+    /// bytes at `tag_key - 2 * i` and `tag_val - 2 * i` from the first
+    /// node, below it.
     pub const node_shift: u6 = std.math.log2_int(usize, @sizeOf(Node));
     pub const node_key: i32 = @offsetOf(Node, "key");
     pub const node_val: i32 = @offsetOf(Node, "val");
+    pub const tag_key: i32 = -2;
+    pub const tag_val: i32 = -1;
 
     /// A value is its payload word followed by a word whose first byte is
     /// the tag. A boxed array slot is a value, and an unboxed slot is one

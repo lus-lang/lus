@@ -35,6 +35,9 @@ const Tag = value.Tag;
 const Op = opc.Op;
 const Step = interp.Step;
 const tl = table.layout;
+/// Whether native code reads and writes hash nodes inline. While it
+/// does not, every field access calls its helper.
+const node_inline = false;
 const il = interp.layout;
 
 const tag_nil: u8 = @backingInt(Tag.nil);
@@ -2058,6 +2061,7 @@ const Emitter = struct {
     /// string `key`. This is the test that `interp.lookupIc` makes before
     /// it trusts a prediction.
     fn predictedNode(e: *Emitter, slot_addr: usize, tab: u32, key: *object.String, node: u32, depth: u32) void {
+        if (!node_inline) return e.br(depth);
         e.u32c(@intCast(slot_addr));
         e.mem(W.i32_load16_u, 1, 0);
         e.tee(node);

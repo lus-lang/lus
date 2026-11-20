@@ -539,7 +539,8 @@ fn materialize(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, out: *[max_v
     for (u.virts[s.virts..][0..s.nvirts], 0..) |v, i| {
         const t = rt.newVirtualTable(l, 0, v.nc) orelse return null;
         for (u.vfields[v.fields..][0..v.count]) |x| {
-            t.hash[x.node] = .{ .key = Value.make(x.key, .string), .val = valueOf(x.val, regs) };
+            t.setKey(x.node, Value.make(x.key, .string));
+            t.setVal(x.node, valueOf(x.val, regs));
         }
         t.hash_used = v.count;
         // The metatable was checked for a finalizer when the program

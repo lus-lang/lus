@@ -1184,7 +1184,8 @@ fn MarkerOf(comptime par: bool) type {
             switch (mode) {
                 .none => {
                     for (arr) |v| m.markValue(v);
-                    for (t.hash) |n| {
+                    for (0..t.hash.len) |hi| {
+                        const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markValue(n.key);
                         m.markValue(n.val);
@@ -1193,7 +1194,8 @@ fn MarkerOf(comptime par: bool) type {
                 .values => {
                     // Keys are strong, values are weak.
                     for (arr) |v| m.markIfValueLike(v);
-                    for (t.hash) |n| {
+                    for (0..t.hash.len) |hi| {
+                        const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markValue(n.key);
                         m.markIfValueLike(n.val);
@@ -1203,7 +1205,8 @@ fn MarkerOf(comptime par: bool) type {
                 .keys => {
                     // Ephemeron: a value is reachable only through its key.
                     for (arr) |v| m.markValue(v);
-                    for (t.hash) |n| {
+                    for (0..t.hash.len) |hi| {
+                        const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markIfValueLike(n.key);
                         if (m.verifying and isMarkedOrNotCollectable(n.key)) m.markValue(n.val);
@@ -1215,7 +1218,8 @@ fn MarkerOf(comptime par: bool) type {
                 },
                 .both => {
                     for (arr) |v| m.markIfValueLike(v);
-                    for (t.hash) |n| {
+                    for (0..t.hash.len) |hi| {
+                        const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         m.markIfValueLike(n.key);
                         m.markIfValueLike(n.val);
@@ -1237,7 +1241,8 @@ fn MarkerOf(comptime par: bool) type {
             while (changed) {
                 changed = false;
                 for (m.g.gcs.ephemerons.items) |t| {
-                    for (t.hash) |n| {
+                    for (0..t.hash.len) |hi| {
+                        const n = t.entry(hi);
                         if (n.val.isNil()) continue;
                         if (isMarkedOrNotCollectable(n.key) and n.val.tag.isCollectable() and !isMarked(n.val.header())) {
                             m.markValue(n.val);
@@ -1275,11 +1280,12 @@ fn MarkerOf(comptime par: bool) type {
                         if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
                     }
                 }
-                for (t.hash) |*n| {
+                for (0..t.hash.len) |hi| {
+                    const n = t.entry(hi);
                     if (n.val.isNil()) continue;
                     const key_dead = (t.weak_mode == .keys or t.weak_mode == .both) and !isMarkedOrNotCollectable(n.key);
                     const val_dead = (t.weak_mode == .values or t.weak_mode == .both) and (!isMarkedOrNotCollectable(n.val) or isFinalizedObject(n.val));
-                    if (key_dead or val_dead) n.val = .nil;
+                    if (key_dead or val_dead) t.setVal(hi, .nil);
                 }
             }
         }

@@ -1830,13 +1830,10 @@ inline fn noNewindexMeta(t: *Table) bool {
 /// predicts before probing, and records where the key was found.
 inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
     const i: usize = slot.*;
-    if (i < tab.hash.len) {
-        const n = &tab.hash[i];
-        if (n.key.payload == @intFromPtr(s) and n.key.tag == .string) return n.val;
-    }
+    if (i < tab.hash.len and tab.keyIsStr(i, s)) return tab.val(i);
     const idx = table.findStr(tab, s) orelse return .nil;
     if (idx < object.IcEntry.none) slot.* = @intCast(idx);
-    return tab.hash[idx].val;
+    return tab.val(idx);
 }
 
 /// R[a] = t[key] for a string key.
@@ -1901,20 +1898,18 @@ pub const fast = struct {
         // value out of a temporary, which the general path below needs
         // because its value may also be nil.
         const i: usize = ic.own;
-        if (i < tab.hash.len) {
-            const n = &tab.hash[i];
-            if (n.key.payload == key.payload and n.key.tag == .string and n.val.tag != .nil) {
-                out.* = n.val;
+        if (i < tab.hash.len and tab.hash[i].key == key.payload) {
+            // Both tags with one load.
+            const tags = tab.tagPair(i).*;
+            if (tags[0] == @backingInt(value.Tag.string) and tags[1] != @backingInt(value.Tag.nil)) {
+                out.* = Value.make(tab.hash[i].val, @fromBackingInt(tags[1]));
                 return true;
             }
         }
-        // The value is copied from its node, or nil is stored, so that
-        // no copy of it passes through memory.
         if (table.findStr(tab, key.as(String))) |idx| {
             if (idx < object.IcEntry.none) ic.own = @intCast(idx);
-            const n = &tab.hash[idx];
-            if (n.val.tag != .nil) {
-                out.* = n.val;
+            if (tab.valTag(idx) != .nil) {
+                out.* = tab.val(idx);
                 return true;
             }
         }
@@ -1935,8 +1930,8 @@ pub const fast = struct {
         const tab = t.as(Table);
         if (tab.readonly or !noNewindexMeta(tab)) return false;
         const i: usize = ic.own;
-        if (i < tab.hash.len and tab.hash[i].key.payload == key.payload and tab.hash[i].key.tag == .string) {
-            tab.hash[i].val = v.*;
+        if (i < tab.hash.len and tab.hash[i].key == key.payload and tab.keyTag(i) == .string) {
+            tab.setVal(i, v.*);
             if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
         } else if (table.storeStr(tab, key, v)) |idx| {
             if (idx < object.IcEntry.none) ic.own = @intCast(idx);
@@ -2075,15 +2070,16 @@ pub const fast = struct {
 inline fn inheritedHit(l: *Thread, mt: *Table, key: *String, ic: *object.IcEntry, out: *Value) bool {
     const i: usize = ic.index;
     if (i >= mt.hash.len) return false;
-    const hn = &mt.hash[i];
     const name = l.g.tm_names[@backingInt(state.TM.index)].?;
-    if (hn.key.payload != @intFromPtr(name) or hn.key.tag != .string or hn.val.tag != .table) return false;
-    const h = hn.val.as(Table);
+    if (mt.hash[i].key != @intFromPtr(name)) return false;
+    const mtags = mt.tagPair(i).*;
+    if (mtags[0] != @backingInt(value.Tag.string) or mtags[1] != @backingInt(value.Tag.table)) return false;
+    const h: *Table = @ptrFromInt(@as(usize, @intCast(mt.hash[i].val)));
     const j: usize = ic.holder;
-    if (j >= h.hash.len) return false;
-    const n = &h.hash[j];
-    if (n.key.payload != @intFromPtr(key) or n.key.tag != .string or n.val.tag == .nil) return false;
-    out.* = n.val;
+    if (j >= h.hash.len or h.hash[j].key != @intFromPtr(key)) return false;
+    const tags = h.tagPair(j).*;
+    if (tags[0] != @backingInt(value.Tag.string) or tags[1] == @backingInt(value.Tag.nil)) return false;
+    out.* = Value.make(h.hash[j].val, @fromBackingInt(tags[1]));
     return true;
 }
 

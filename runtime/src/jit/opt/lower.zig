@@ -38,6 +38,9 @@ const Flow = flow_mod.Flow;
 const Cfg = flow_mod.Cfg;
 const RegSet = flow_mod.RegSet;
 const tl = table.layout;
+/// Whether optimized code reads and writes hash nodes inline. While it
+/// does not, every field access takes the general path.
+const node_inline = false;
 const il = interp.layout;
 
 /// `NotDirect` means that the function needs its frame while it runs,
@@ -1847,16 +1850,16 @@ pub const Lower = struct {
         // another key.
         if (st.hash.len > 4 and st.hash_used >= st.hash.len) return false;
         for (0..@min(st.hash.len, 4)) |_| {
-            const n = &st.hash[i];
+            const nk = st.key(i);
             const off: i32 = @intCast(i << tl.node_shift);
-            if (n.key.tag == .nil) {
+            if (nk.tag == .nil) {
                 _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.nil), .c = g });
                 return true;
             }
-            if (n.key.tag != .string) return false;
-            if (n.key.payload == @intFromPtr(key_str)) return false;
+            if (nk.tag != .string) return false;
+            if (nk.payload == @intFromPtr(key_str)) return false;
             const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
-            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(n.key.payload), .c = g });
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(nk.payload), .c = g });
             _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.string), .c = g });
             i = (i + 1) & mask;
         }
@@ -1868,9 +1871,10 @@ pub const Lower = struct {
     /// the table itself, or the table that `__index` of its metatable
     /// names. Returns null when the lookup needs the general path.
     fn fieldLoad(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!?Loaded {
+        if (!node_inline) return null;
         if (!key_str.flags.interned) return null;
         if (table.findStr(st, key_str)) |idx| {
-            const v = st.hash[idx].val;
+            const v = st.val(idx);
             if (v.isNil()) return null;
             const n = try b.hashNode(t, idx, key_str);
             return .{ .ref = try b.loadValue(n.hp, n.off + tl.node_val, v, .node_val, n.dep), .sample = Sample.of(v) };
@@ -1893,10 +1897,10 @@ pub const Lower = struct {
     fn reachable(b: *Lower, mt: *Table, key_str: *String) bool {
         const index_name = b.l.g.tm_names[@backingInt(state.TM.index)].?;
         const hidx = table.findStr(mt, index_name) orelse return false;
-        const h = mt.hash[hidx].val;
+        const h = mt.val(hidx);
         if (h.tag != .table) return false;
         const idx2 = table.findStr(h.as(Table), key_str) orelse return false;
-        return !h.as(Table).hash[idx2].val.isNil();
+        return !h.as(Table).val(idx2).isNil();
     }
 
     /// The lookup of a key that a table lacks, through the metatable
@@ -1906,10 +1910,10 @@ pub const Lower = struct {
         if (!b.reachable(mt, key_str)) return null;
         const index_name = b.l.g.tm_names[@backingInt(state.TM.index)].?;
         const hidx = table.findStr(mt, index_name).?;
-        const h = mt.hash[hidx].val;
+        const h = mt.val(hidx);
         const holder = h.as(Table);
         const idx2 = table.findStr(holder, key_str).?;
-        const v2 = holder.hash[idx2].val;
+        const v2 = holder.val(idx2);
         const n1 = try b.hashNode(m, hidx, index_name);
         const hv = try b.loadValue(n1.hp, n1.off + tl.node_val, h, .node_val, n1.dep);
         const n2 = try b.hashNode(hv, idx2, key_str);
@@ -1951,16 +1955,17 @@ pub const Lower = struct {
     /// strings share names a table as `__index`, and that table holds
     /// the method.
     fn stringMethod(b: *Lower, ra: u32, rb: u32, key_str: *String) Error!bool {
+        if (!node_inline) return false;
         const g = b.l.g;
         if (!key_str.flags.interned) return false;
         const slot_ptr = &g.type_metatables[value.typeSlot(.string)];
         const mt = slot_ptr.* orelse return false;
         const index_name = g.tm_names[@backingInt(state.TM.index)].?;
         const hidx = table.findStr(mt, index_name) orelse return false;
-        const h = mt.hash[hidx].val;
+        const h = mt.val(hidx);
         if (h.tag != .table) return false;
         const idx2 = table.findStr(h.as(Table), key_str) orelse return false;
-        const v2 = h.as(Table).hash[idx2].val;
+        const v2 = h.as(Table).val(idx2);
         if (v2.isNil()) return false;
         const sv = try b.typed(rb, .string);
         const recv_sample = b.fr.regs[rb].sample;
@@ -2013,6 +2018,7 @@ pub const Lower = struct {
     }
 
     fn setField(b: *Lower, src: TableSrc, key_v: Value, rv: u32) Error!bool {
+        if (!node_inline) return false;
         if (key_v.tag != .string) return false;
         const key_str = key_v.as(String);
         if (!key_str.flags.interned) return false;
@@ -2075,7 +2081,7 @@ pub const Lower = struct {
         if (b.marks() != 0) return false;
         // A record constructor allocates nothing yet. The table exists
         // as its fields until something needs the table itself.
-        if (nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
+        if (node_inline and nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
             const hsize: u32 = @intCast(table.hashSizeExact(nc));
             _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * 16), .snap = try b.snap() });
             const ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = nc });
@@ -2100,7 +2106,7 @@ pub const Lower = struct {
         try b.setReg(ra, t, Sample.tagged(.table));
         b.fresh = null;
         const units = table.inlineUnits(nb, nc);
-        if (nb == 0 and nc > 0 and units > 0) {
+        if (node_inline and nb == 0 and nc > 0 and units > 0) {
             const hsize: u32 = @intCast(table.hashSizeExact(nc));
             b.fresh = .{ .ref = t, .mask = hsize - 1 };
         }

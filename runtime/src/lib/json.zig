@@ -701,7 +701,8 @@ const Writer = struct {
                 max = @intCast(idx + 1);
             }
         }
-        for (t.hash) |n| {
+        for (0..t.hash.len) |hi| {
+            const n = t.entry(hi);
             if (n.key.tag == .nil or n.val.isNil()) continue;
             if (n.key.tag == .integer and n.key.asInt() >= 1) {
                 count += 1;
@@ -735,7 +736,7 @@ const Writer = struct {
         var first = true;
         var h: usize = 0;
         while (h < t.hash.len) : (h += 1) {
-            const n = t.hash[h];
+            const n = t.entry(h);
             if (n.key.tag != .string or n.val.isNil()) continue;
             const parts = t.hash;
             const fresh = w.mayRun(n.val);

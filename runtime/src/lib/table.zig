@@ -527,8 +527,8 @@ fn compact(l: *Thread) Error!u32 {
     var asize = t.asize;
     while (asize > 0 and table.arrayIsNil(t, asize - 1)) asize -= 1;
     var live: usize = 0;
-    for (t.hash) |n| {
-        if (n.key.tag != .nil and !n.val.isNil()) live += 1;
+    for (0..t.hash.len) |h| {
+        if (t.keyTag(h) != .nil and t.valTag(h) != .nil) live += 1;
     }
     table.resize(l.g.gpa, t, asize, live) catch return l.raiseMem();
     l.top = l.base() + 1;
