@@ -1023,6 +1023,47 @@ print(next_id())  --> 3
 
 [`coroutine.close`](/manual/api#coroutine.close) terminates a suspended coroutine, running any pending to-be-closed variables (those declared with the `<close>` attribute). After closing, the coroutine enters the `"dead"` state.
 
+### Detached coroutines
+
+[`coroutine.detach`](/manual/api#coroutine.detach) hands a suspended coroutine to the runtime, which then resumes it by itself. The extra arguments start the coroutine, and `detach` returns the coroutine at once. Detached coroutines take turns in the order in which they became ready. Inside one, [`coroutine.yield`](/manual/api#coroutine.yield) gives the next turn to the others and returns no values.
+
+```lus
+local function count(name, n)
+    for i = 1, n do
+        print(name, i)
+        coroutine.yield()
+    end
+    return name .. " is done"
+end
+
+local a = coroutine.detach(coroutine.create(count), "a", 2)
+local b = coroutine.detach(coroutine.create(count), "b", 2)
+
+print(coroutine.resume(a))  --> a 1, b 1, a 2, b 2, then: true  a is done
+print(coroutine.resume(b))  --> true  b is done
+```
+
+[`coroutine.resume`](/manual/api#coroutine.resume) on a detached coroutine waits until it has ended and returns what `resume` always returns for a coroutine that ends: `true` and the results of the body, or `false` and the error. A coroutine that ends before anything resumes it keeps its results until the first `resume` collects them, and a later `resume` finds a dead coroutine. [`coroutine.close`](/manual/api#coroutine.close) cancels a detached coroutine and runs its pending to-be-closed variables.
+
+A blocking operation inside a detached coroutine, such as `receive` on a socket, suspends that coroutine while the others run. The same operation in the main chunk keeps the main chunk waiting and runs the detached coroutines in the meantime. When the main chunk returns, `lus` keeps running the detached coroutines until every one of them has ended.
+
+```lus
+local results = {}
+local tasks = {}
+for i = 1, 3 do
+    tasks[i] = coroutine.detach(coroutine.create(function()
+        coroutine.yield()
+        results[i] = i * i
+    end))
+end
+for i = 1, 3 do
+    assert(coroutine.resume(tasks[i]))
+end
+print(table.concat(results, " "))  --> 1 4 9
+```
+
+The error of a detached coroutine belongs to whoever resumes or closes it. When a detached coroutine fails and nothing collects its error, `lus` stops with that error and the traceback of the coroutine, either once the remaining coroutines have ended or when the collector frees the coroutine. [Acquis 43](/manual/acquis-43) describes detached coroutines in full.
+
 ## String patterns
 
 Lus uses its own pattern language for string matching, which is lighter than full regular expressions but covers most common use cases.
@@ -1321,6 +1362,23 @@ local sock = network.tcp.connect("example.com", 80)
 ```
 
 `network.fetch(url, method, headers, body)` uses positional optional arguments and returns the status code, the response body as a vector, and lowercase response headers. The method defaults to `"GET"`, and response bodies are capped at 64 MiB. A text body is decoded with `vector.tostring(body)`.
+
+Connecting, accepting, sending, and receiving wait for the network. Inside a [detached coroutine](#detached-coroutines) each of them suspends the coroutine until its socket is ready, so one program holds many connections at once. A timeout set with `settimeout` raises the same `"receive timeout"`, `"send timeout"`, and `"accept timeout"` errors in every case.
+
+`network.serve(host, port, handler)` is an HTTP/1.1 server built on those coroutines. It runs every connection in a detached coroutine and calls the handler with a table that holds the `method`, `path`, `query`, `headers`, and `body` of each request. The handler returns `status, body, headers`, in the order in which `network.fetch` returns them.
+
+```lus nocheck
+pledge("network")
+
+network.serve("127.0.0.1", 8080, function(req)
+    if req.path ~= "/" then
+        return 404, "not found\n"
+    end
+    return 200, "hello\n", { ["Content-Type"] = "text/plain" }
+end)
+```
+
+`serve` blocks its caller while the server runs. A handler that raises an error answers 500, and the server reports the error through `warn` and closes that connection.
 
 TCP sockets support `send`, `receive`, `settimeout`, and `close`. Every receive returns a vector. A numeric receive reads up to 1 MiB. `receive("*l", max_bytes)` reads a line with a 1 MiB default limit. `receive("*a", max_bytes)` reads through EOF with a 64 MiB default limit. Exceeding a line or all-data limit closes the connection and raises `"receive limit exceeded"`. TCP servers and UDP sockets expose `getsockname()` so a bind to port `0` can report the selected address and port. UDP receives default to 8 KiB and accept a maximum size of 1 MiB. [Acquis 9](/manual/acquis-9) documents the socket methods.
 

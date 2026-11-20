@@ -27,6 +27,9 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Added `io.sqlite`, an embedded SQLite database with prepared statements, placeholder-only parameter binding, transactions, WAL journaling, and pledge-checked file access that covers the sidecar files.
 - Added `getsockname` to TCP sockets, TCP servers, and UDP sockets, so code that binds port `0` can discover the selected address and port.
 - TCP line and all-data receives are bounded. Lines default to 1 MiB and all-data reads to 64 MiB, and the optional `max_bytes` argument sets the limit per call.
+- Added detached coroutines. `coroutine.detach(co, ...)` hands a coroutine to the runtime, which resumes it whenever what it waits for is ready. Inside a detached coroutine `coroutine.yield` gives the next turn to the others, `coroutine.resume` on a detached coroutine waits for its end and returns what `resume` returns for any coroutine that ends, and `coroutine.close` cancels it. A detached coroutine that fails with nothing left to collect its error stops the program with that error and its traceback.
+- TCP `connect`, `accept`, `send`, and `receive` and UDP `receive` and `sendto` are suspension points. Inside a detached coroutine they suspend the coroutine while its socket is not ready, and anywhere else they run the detached coroutines while their caller waits. Socket timeouts raise the same errors as before.
+- Added `network.serve(host, port, handler)`, an HTTP/1.1 server with keep-alive that runs every connection in a detached coroutine. The handler receives `{ method, path, query, headers, body }` and returns `status, body, headers`. It reads `Content-Length` and chunked request bodies, answers 500 when the handler fails, and limits headers to 64 KiB and bodies to 16 MiB. `network.serve(server, handler)` serves on a server from `network.tcp.bind`.
 
 ### Tools
 
@@ -41,12 +44,14 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Added `--dis`, which prints the bytecode of a script.
 - `--include path[:alias]` compiles modules at startup, so `require` loads them without the `load` or `fs` pledges.
 - The browser playground runs programs in a dedicated Web Worker with a five-second execution limit and a 256 KiB output limit.
+- `lus` keeps running the detached coroutines of a program after its main chunk returns, until every one of them has ended.
 - The language server reports its version as `2.0.0-dev`.
 
 ### Embedding
 
 - Added `lus.h`, the C embedding interface of the 2.0 runtime. It is stack based, every fallible function returns a status and leaves the error value in place of its result, references keep values alive outside the stack, and userdata carry host memory with registered metatables.
 - Added the host permission policy to the embedding interface: `lus_grant`, `lus_reject`, and `lus_seal` set the starting permissions, `lus_onrequest` decides script pledges interactively, `lus_defcapability` declares new capabilities, and `lus_require` and `lus_allowed` check them.
+- Added `lus_runpending`, which runs the detached coroutines of a state for one pass or to their end, and `lus_pending`, which counts them. `lus_close` closes the coroutines that remain.
 - `zig build lib` produces the static and shared `liblus` with the vendored SQLite, Zstandard, and Brotli sources compiled in, so a host links one library.
 - Added the `lus-wasm` package, which runs the runtime compiled to `wasm32-wasi` in browsers, web workers, and Node through a dependency-free JavaScript host. The playground and the VS Code extension run on it.
 
