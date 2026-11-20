@@ -2,6 +2,7 @@
 // template: render an HTML report for generated items with escaping,
 // built with an array and implode.
 
+ini_set("memory_limit", "-1");
 $N = isset($argv[1]) ? (int)$argv[1] : 1000000;
 
 $state = 42;
