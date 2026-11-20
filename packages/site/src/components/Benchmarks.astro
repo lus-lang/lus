@@ -154,11 +154,12 @@ const modes: {
     modes.map((m) => (
       <div class="mode" data-show={m.mode}>
         <div class="scroll">
+          <p class="label skyline-label" aria-hidden="true">{m.caption}</p>
           <div class="skyline">
             <CubeField rows={1} heights={skylines[m.mode]} limeAt={0} glow={false} light={false} unit={0.16} depth={0.22} />
           </div>
           <table>
-            <caption>{m.caption}</caption>
+            <caption class="sr-only">{m.caption}</caption>
             <thead>
               <tr>
                 <th scope="col">program</th>
@@ -268,8 +269,17 @@ const modes: {
   }
 
   /* the runtime skyline stands over the runtime columns, one bar each */
+  /* the bars stand directly on the runtime names */
+  .skyline + table thead th {
+    @apply pt-0;
+  }
+
+  .skyline-label {
+    @apply min-w-[760px] pt-2 m-0;
+  }
+
   .skyline {
-    @apply min-w-[760px] pt-2 pl-[92px];
+    @apply min-w-[760px] pt-1 pl-[92px];
 
     :global(svg) {
       @apply w-full;
@@ -323,17 +333,32 @@ const modes: {
   }
 
   /* the Lus column is lit from above: its wash fades row by row, like the
-     light of the lime cube on the field */
+     light of the lime cube on the field, and keeps fading into the http
+     table */
   tr {
     --r: 0;
+  }
+
+  table.http tbody tr {
+    --r: 7;
   }
 
   .lus {
     background: color-mix(
       in oklab,
-      var(--color-accent) calc(30% - var(--r) * 3.5%),
+      var(--color-accent) calc(22% - var(--r) * 2.5%),
       transparent
     );
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .lus {
+      background: color-mix(
+        in oklab,
+        var(--color-accent) calc(14% - var(--r) * 1.5%),
+        transparent
+      );
+    }
   }
 
   th.lus {

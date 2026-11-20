@@ -330,6 +330,11 @@ body::before {
   pre code {
     @apply bg-transparent border-t-0 text-[13px] leading-[1.6] pt-1.5 pb-2.5 px-3;
     scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  /* the scrollbar shows only while the reader is over the figure */
+  &:hover pre code {
     scrollbar-color: color-mix(in oklab, var(--color-figure-ink) 30%, transparent)
       transparent;
   }
