@@ -224,6 +224,109 @@ local function a_chunked_body_keeps_its_bytes_test()
     assert(seen == "hello chunked \r\n")
 end
 
+-- A chunked body leaves the buffer of the connection as it is decoded,
+-- whatever the sizes of its chunks and of the pieces it arrives in.
+local function a_chunked_body_of_many_small_chunks_test()
+    local seen
+    serving(function(req)
+        seen = txt(req.body)
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local parts, expected = {}, {}
+        for i = 1, 20000 do
+            local byte = string.char(97 + i % 26)
+            parts[i] = "1\r\n" .. byte .. "\r\n"
+            expected[i] = byte
+        end
+        expected = table.concat(expected)
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. table.concat(parts) .. "0\r\n\r\n")
+        assert(r.status == 200 and r.body == "20000")
+        assert(seen == expected)
+        -- The next request on the connection starts where the body ended.
+        r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 2\r\n\r\nok")
+        assert(r.status == 200 and r.body == "2" and seen == "ok")
+    end)
+end
+
+local function a_large_chunk_that_arrives_in_pieces_test()
+    local seen
+    serving(function(req)
+        seen = txt(req.body)
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local first = string.rep("0123456789abcdef", 20000)
+        local second = string.rep("z", 70001)
+        local body = string.format("%x;note=one\r\n", #first) .. first .. "\r\n"
+            .. string.format("%X\r\n", #second) .. second .. "\r\n0\r\nX-Trailer: yes\r\n\r\n"
+        sock:send("POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n")
+        -- The pieces end inside chunk lines, inside data, and between the
+        -- two bytes of a line end.
+        local at = 1
+        local sizes = { 1, 2, 7, 100000, 3, 219999, 1, 1, 9, 69990, 5, 2, 4 }
+        local turn = 0
+        while at <= #body do
+            turn = turn + 1
+            local size = sizes[(turn - 1) % #sizes + 1]
+            sock:send(string.sub(body, at, at + size - 1))
+            at = at + size
+            -- The server reads the piece before the next one is sent.
+            assert(resume(spawn(yield)))
+        end
+        local r = read_response(sock)
+        assert(r.status == 200 and r.body == "390001", r.body)
+        assert(seen == first .. second)
+    end)
+end
+
+-- The framing of a chunked body is limited to 64 KiB and 8 bytes more for
+-- every byte of the body, so chunk extensions cannot outgrow the body.
+local function chunk_extensions_within_the_limit_are_accepted_test()
+    serving(function(req)
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local chunk = "1;" .. string.rep("e", 1000) .. "\r\na\r\n"
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. string.rep(chunk, 60) .. "0\r\n\r\n")
+        assert(r.status == 200 and r.body == "60")
+    end)
+end
+
+local function chunk_extensions_over_the_limit_are_refused_test()
+    local called = false
+    serving(function(req)
+        called = true
+    end, function(port)
+        local sock <close> = connect(port)
+        -- Every chunk spends 1006 bytes on one byte of the body. The line
+        -- of the chunk 66 goes over the limit.
+        local chunk = "1;" .. string.rep("e", 1000) .. "\r\na\r\n"
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. string.rep(chunk, 66))
+        assert(r.status == 413 and r.headers.connection == "close", `status $(r.status)`)
+        assert(at_end(sock))
+        -- A chunk line without an end is refused once it is too long.
+        local endless <close> = connect(port)
+        r = exchange(endless, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n1;"
+            .. string.rep("e", 1100))
+        assert(r.status == 400)
+        -- So is a complete line that is too long.
+        local long <close> = connect(port)
+        r = exchange(long, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n1;"
+            .. string.rep("e", 1100) .. "\r\n")
+        assert(r.status == 400)
+        -- Trailers count as framing.
+        local trailers <close> = connect(port)
+        r = exchange(trailers, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
+            .. string.rep("X-T: " .. string.rep("t", 990) .. "\r\n", 66))
+        assert(r.status == 431)
+    end)
+    assert(not called)
+end
+
 local function a_request_that_arrives_in_pieces_test()
     local seen
     serving(function(req)
@@ -665,6 +768,13 @@ local refused_cases = {
     length_and_chunked = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n", 400 },
     unknown_encoding = { "POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 501 },
     bad_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n", 400 },
+    chunk_size_with_a_sign = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n+3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_with_an_underscore = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1_0\r\n0123456789abcdef\r\n0\r\n\r\n", 400 },
+    chunk_size_with_a_prefix = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0x3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_after_a_space = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n 3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_too_long = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n00000000000000003\r\nabc\r\n0\r\n\r\n", 400 },
+    line_feed_in_a_chunk_extension = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3;a=\nb\r\nabc\r\n0\r\n\r\n", 400 },
+    line_feed_after_a_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\nabc\r\n0\r\n\r\n", 400 },
     bad_chunk_end = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcde\r\n", 400 },
     body_over_the_limit = { "POST / HTTP/1.1\r\nContent-Length: 16777217\r\n\r\n", 413 },
     huge_length = { "POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n", 413 },

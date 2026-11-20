@@ -35,6 +35,14 @@ const max_head = 64 * 1024;
 const max_headers = 128;
 /// A request body holds at most 16 MiB.
 const max_body = 16 * 1024 * 1024;
+/// The line that starts a chunk, with its size and its extensions, fits
+/// in 1 KiB.
+const max_chunk_line = 1024;
+/// The framing of a chunked body is its chunk lines, the line ends after
+/// the chunks, and its trailers. A body may spend 64 KiB on it, and 8
+/// bytes more for every byte it carries.
+const max_framing = max_head;
+const framing_per_byte = 8;
 const default_backlog = 128;
 const connection_key = "network.serve.connection";
 
@@ -54,10 +62,19 @@ pub const Http = struct {
     headers: std.ArrayList(Header) = .empty,
     framing: enum { none, length, chunked } = .none,
     length: usize = 0,
-    /// Where the next chunk of a chunked body starts.
+    /// How far the buffer of the socket is read. A chunked body leaves
+    /// the buffer as it is decoded, so the buffer holds the head and the
+    /// bytes that arrived after this point.
     cpos: usize = 0,
     /// The body of a chunked request, decoded so far.
     body: std.ArrayList(u8) = .empty,
+    /// What a chunked body continues with: the line of a chunk, its data,
+    /// the line end after the data, or the trailers.
+    chunk: enum { line, data, end, trailers } = .line,
+    /// The bytes of the current chunk that have not arrived.
+    chunk_left: usize = 0,
+    /// The bytes of framing that the chunked body has spent.
+    framing_bytes: usize = 0,
     keep: bool = true,
     head: bool = false,
     /// The response being written and how much of it was sent.
@@ -81,6 +98,9 @@ pub const Http = struct {
         h.length = 0;
         h.cpos = 0;
         h.body.clearRetainingCapacity();
+        h.chunk = .line;
+        h.chunk_left = 0;
+        h.framing_bytes = 0;
     }
 };
 
@@ -350,41 +370,95 @@ fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
     return 0;
 }
 
-/// Decodes the chunks of a chunked body that the buffer holds in full.
-fn parseChunks(l: *Thread, h: *Http, buf: []const u8) Error!Parse {
-    const gpa = l.g.gpa;
-    while (true) {
-        const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
-            if (buf.len - h.cpos > 1024) return .{ .bad = 400 };
-            return .{ .more = 4096 };
-        };
-        var digits = buf[h.cpos..eol];
-        if (std.mem.indexOfScalar(u8, digits, ';')) |semi| digits = digits[0..semi];
-        digits = std.mem.trim(u8, digits, " \t");
-        if (digits.len == 0 or digits.len > 16) return .{ .bad = 400 };
-        const size = std.fmt.parseInt(usize, digits, 16) catch return .{ .bad = 400 };
-        const data = eol + 2;
-        if (size == 0) {
-            // Trailer lines follow the last chunk, up to an empty line.
-            var pos = data;
-            while (true) {
-                const tl = std.mem.indexOfPos(u8, buf, pos, "\r\n") orelse {
-                    if (buf.len - data > max_head) return .{ .bad = 431 };
-                    return .{ .more = 4096 };
-                };
-                if (tl == pos) {
-                    h.cpos = pos + 2;
-                    return .done;
-                }
-                pos = tl + 2;
-            }
-        }
-        if (size > max_body or h.body.items.len + size > max_body) return .{ .bad = 413 };
-        if (buf.len < data + size + 2) return .{ .more = @min(data + size + 2 - buf.len, 65536) };
-        if (buf[data + size] != '\r' or buf[data + size + 1] != '\n') return .{ .bad = 400 };
-        h.body.appendSlice(gpa, buf[data..][0..size]) catch return l.raiseMem();
-        h.cpos = data + size + 2;
+/// The size that the line of a chunk gives, or null for a malformed
+/// line. The size is hexadecimal digits alone. Extensions follow it after
+/// a semicolon and hold no control character other than a tab, so a line
+/// feed without its carriage return is refused.
+fn chunkSize(line: []const u8) ?usize {
+    var digits = line;
+    var ext: []const u8 = "";
+    if (std.mem.indexOfScalar(u8, line, ';')) |semi| {
+        digits = line[0..semi];
+        ext = line[semi..];
     }
+    digits = std.mem.trimEnd(u8, digits, " \t");
+    if (digits.len == 0 or digits.len > 2 * @sizeOf(usize)) return null;
+    var size: usize = 0;
+    for (digits) |c| {
+        const d = std.fmt.charToDigit(c, 16) catch return null;
+        size = size * 16 + d;
+    }
+    for (ext) |c| {
+        if ((c < ' ' and c != '\t') or c == 0x7f) return null;
+    }
+    return size;
+}
+
+/// Decodes what the buffer holds of a chunked body into `h.body`, and
+/// takes the decoded bytes out of the buffer. The buffer therefore never
+/// holds more than the head and what one read brought.
+fn parseChunks(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
+    const gpa = l.g.gpa;
+    const buf = s.buf.items;
+    const result: Parse = step: while (true) {
+        switch (h.chunk) {
+            .line => {
+                const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
+                    if (buf.len - h.cpos > max_chunk_line) break :step .{ .bad = 400 };
+                    break :step .{ .more = 4096 };
+                };
+                const line = buf[h.cpos..eol];
+                if (line.len > max_chunk_line) break :step .{ .bad = 400 };
+                const size = chunkSize(line) orelse break :step .{ .bad = 400 };
+                h.cpos = eol + 2;
+                h.framing_bytes += line.len + 2;
+                if (size == 0) {
+                    h.chunk = .trailers;
+                    continue;
+                }
+                if (size > max_body - h.body.items.len) break :step .{ .bad = 413 };
+                // The line end after the data counts with its chunk.
+                h.framing_bytes += 2;
+                if (h.framing_bytes > max_framing + framing_per_byte * (h.body.items.len + size)) break :step .{ .bad = 413 };
+                h.chunk_left = size;
+                h.chunk = .data;
+            },
+            .data => {
+                const n = @min(h.chunk_left, buf.len - h.cpos);
+                h.body.appendSlice(gpa, buf[h.cpos..][0..n]) catch return l.raiseMem();
+                h.cpos += n;
+                h.chunk_left -= n;
+                if (h.chunk_left > 0) break :step .{ .more = @min(h.chunk_left + 2, 65536) };
+                h.chunk = .end;
+            },
+            .end => {
+                if (buf.len - h.cpos < 2) break :step .{ .more = 4096 };
+                if (buf[h.cpos] != '\r' or buf[h.cpos + 1] != '\n') break :step .{ .bad = 400 };
+                h.cpos += 2;
+                h.chunk = .line;
+            },
+            // Trailer lines follow the last chunk, up to an empty line.
+            .trailers => {
+                const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
+                    if (h.framing_bytes + (buf.len - h.cpos) > max_framing + framing_per_byte * h.body.items.len) break :step .{ .bad = 431 };
+                    break :step .{ .more = 4096 };
+                };
+                const len = eol - h.cpos;
+                h.cpos = eol + 2;
+                h.framing_bytes += len + 2;
+                if (h.framing_bytes > max_framing + framing_per_byte * h.body.items.len) break :step .{ .bad = 431 };
+                if (len == 0) break :step .done;
+            },
+        }
+    };
+    if (result == .more and h.cpos > h.head_end) {
+        // The head stays, since the request table is built from it.
+        const rest = buf.len - h.cpos;
+        std.mem.copyForwards(u8, s.buf.items[h.head_end..][0..rest], buf[h.cpos..]);
+        s.buf.items.len = h.head_end + rest;
+        h.cpos = h.head_end;
+    }
+    return result;
 }
 
 fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
@@ -426,7 +500,7 @@ fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
             h.cpos = need;
             return .done;
         },
-        .chunked => return parseChunks(l, h, buf),
+        .chunked => return parseChunks(l, s, h),
     }
 }
 
