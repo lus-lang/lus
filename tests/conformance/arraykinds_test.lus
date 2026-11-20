@@ -618,3 +618,33 @@ local function library_functions_on_lists_of_tables_test()
     parsed[3] = {a = 3}
     assert(parsed[1].a == 1 and parsed[3].a == 3)
 end
+
+local function a_constructor_whose_lists_change_kind_keeps_every_value_test()
+    local function make(i, x) return {x, x} end
+    local out = {}
+    for i = 1, 400 do out[i] = make(i, "s" .. i) end
+    for i = 401, 800 do out[i] = make(i, {i}) end
+    for i = 801, 1200 do out[i] = make(i, i) end
+    collectgarbage()
+    for i = 1, 400 do assert(out[i][1] == "s" .. i and out[i][2] == "s" .. i) end
+    for i = 401, 800 do assert(out[i][1][1] == i and out[i][2][1] == i) end
+    for i = 801, 1200 do assert(out[i][1] == i and out[i][2] == i) end
+end
+
+local function constructor_lists_that_box_after_construction_keep_their_values_test()
+    local function make(i) return {i, i + 1, i + 2} end
+    local out = {}
+    for i = 1, 500 do
+        local t = make(i)
+        if i % 3 == 0 then t[2] = "two" end
+        if i % 5 == 0 then t[4] = {i} end
+        out[i] = t
+    end
+    collectgarbage()
+    for i = 1, 500 do
+        local t = out[i]
+        assert(t[1] == i and t[3] == i + 2)
+        assert(t[2] == (i % 3 == 0 and "two" or i + 1))
+        if i % 5 == 0 then assert(t[4][1] == i) end
+    end
+end

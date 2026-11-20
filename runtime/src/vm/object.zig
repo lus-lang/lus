@@ -640,6 +640,14 @@ pub const IcEntry = extern struct {
     _pad: u16 = 0,
 
     pub const none: u16 = 0xFFFF;
+
+    /// For a `newtable` instruction, `own` records the lists that its
+    /// tables held: none seen yet, only lists that fit an unboxed kind,
+    /// which the next tables keep in one word per slot, or one that
+    /// boxed, after which the site reserves full values for good.
+    pub const lists_unknown: u16 = none;
+    pub const lists_words: u16 = 1;
+    pub const lists_boxed: u16 = 2;
 };
 
 pub const Upvalue = struct {

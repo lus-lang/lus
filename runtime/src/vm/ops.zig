@@ -118,8 +118,10 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
     }
     const hlen = t.hash_len;
     const alen = t.asize;
+    const kind = t.kind;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
     if (t.hash_len != hlen or t.asize != alen) learnTableSize(l.g, t);
+    if (t.kind != kind and t.kind == .boxed) learnListKind(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
 
@@ -148,6 +150,23 @@ noinline fn learnTableSize(g: *state.Global, t: *Table) void {
     const ins = site.ins.?;
     if (used > opc.c(ins.*)) opc.setC(ins, @intCast(used));
     if (elems > opc.b(ins.*)) opc.setB(ins, @intCast(elems));
+}
+
+/// Kind feedback for constructors. When the table that the last
+/// `newtable` instruction made holds a list, before a collection ends,
+/// the instruction learns whether its lists fit an unboxed kind, so that
+/// the next tables keep them in one word per slot in their cells. A list
+/// that boxes marks the site for good, so that a site whose lists differ
+/// never moves one part after another to the backing allocator.
+pub fn learnListKind(g: *state.Global, t: *Table) void {
+    const site = &g.new_table;
+    if (site.table != t or site.cycle != g.cycles) return;
+    const ic = site.ic orelse return;
+    if (t.kind == .boxed) {
+        ic.own = object.IcEntry.lists_boxed;
+    } else if (t.kind != .none and ic.own == object.IcEntry.lists_unknown) {
+        ic.own = object.IcEntry.lists_words;
+    }
 }
 
 // ---------------------------------------------------------------------

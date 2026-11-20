@@ -719,12 +719,14 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             // Registers above the target are dead here, so a collection
             // triggered by this allocation must not keep their values.
             l.top = c.fr.base + a + 1;
-            const t = try l.newTable(nb, nc);
+            const site_ic = &c.ic(mode)[pc - 1];
+            const t = state.newTableAt(l.g, nb, nc, site_ic) catch return l.raiseMem();
             l.top = c.fr.base + c.cl().proto.max_stack;
             c.bp[a] = Value.obj(.table, t);
             // Remember the site, so that the table teaches it a bigger
-            // hash part when it grows right after (`ops.learnTableSize`).
-            l.g.new_table = .{ .table = t, .ins = @constCast(&c.code[pc - 1]), .cycle = l.g.cycles };
+            // hash part when it grows right after (`ops.learnTableSize`),
+            // and the kind of its lists (`ops.learnListKind`).
+            l.g.new_table = .{ .table = t, .ins = @constCast(&c.code[pc - 1]), .ic = site_ic, .cycle = l.g.cycles };
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .self => {
@@ -1269,6 +1271,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             c.fr.pc = pc;
             table.storeList(l.g.gpa, t, start, l.stack[first..][0..n]) catch return l.raiseMem();
             gc.barrierBack(l.g, &t.hdr);
+            ops.learnListKind(l.g, t);
             l.top = c.fr.base + c.cl().proto.max_stack;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
