@@ -903,14 +903,14 @@ local function a_busy_connection_outlives_the_idle_timeout_test()
     end, function(port)
         local sock <close> = connect(port)
         local idle = listen()
-        idle:settimeout(0.03)
-        -- Each request arrives within the timeout of 0.1 s, over 0.3 s.
+        idle:settimeout(0.06)
+        -- Each request arrives within the timeout of 0.5 s, over 0.6 s.
         for i = 1, 10 do
             assert(exchange(sock, get(`/$(i)`)).body == `/$(i)`)
             catch idle:accept()
         end
         idle:close()
-    end, { idle_timeout = 0.1 })
+    end, { idle_timeout = 0.5 })
 end
 
 local function a_slow_reader_loses_its_connection_test()

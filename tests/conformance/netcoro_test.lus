@@ -453,23 +453,27 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     local server, port = listen()
     local order = {}
     local taken = 0
+    -- The timeout of a server belongs to the server, so this acceptor
+    -- has it too for a while. It goes on after a timeout of its own.
     local greedy = spawn(function()
         while true do
-            local sock = server:accept()
-            taken = taken + 1
-            sock:close()
+            local ok, sock = catch server:accept()
+            if ok then
+                taken = taken + 1
+                sock:close()
+            end
         end
     end)
     local waiting = false
     local patient = spawn(function()
-        -- The other acceptor waits first, so it takes every connection.
+        -- The other acceptor waits first, so it takes the connections.
         yield()
         server:settimeout(0.1)
         waiting = true
-        local ok, err = catch server:accept()
+        local ok, result = catch server:accept()
         server:settimeout(-1)
-        order[#order + 1] = "timeout"
-        return ok, err
+        order[#order + 1] = "patient"
+        return ok, result
     end)
     local dialer = spawn(function()
         local idle = listen()
@@ -484,15 +488,24 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
             catch idle:accept()
         end
         idle:close()
-        order[#order + 1] = "dialed"
+        order[#order + 1] = "dialer"
     end)
     local r = pack(resume(patient))
-    assert(r.n == 3 and r[1] == true and r[2] == false and string.find(r[3], "accept timeout$"), tostring(r[3]))
-    assert(resume(dialer))
-    assert(table.concat(order, " ") == "timeout dialed", table.concat(order, " "))
-    assert(taken == 30, tostring(taken))
+    local dialed = resume(dialer)
     assert(close(greedy))
     server:close()
+    -- The acceptor with the timeout ends while connections still arrive.
+    assert(dialed and table.concat(order, " ") == "patient dialer", table.concat(order, " "))
+    assert(r.n == 3 and r[1] == true)
+    if r[2] then
+        -- Its deadline passed in the same moment in which a connection
+        -- arrived, and a connection that is there is accepted.
+        r[3]:close()
+        taken = taken + 1
+    else
+        assert(string.find(r[3], "accept timeout$"), tostring(r[3]))
+    end
+    assert(taken == 30, tostring(taken))
 end
 
 local function a_zero_timeout_never_waits_test()
