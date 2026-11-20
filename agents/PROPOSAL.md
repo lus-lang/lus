@@ -1,0 +1,201 @@
+# Lus for agents: proposal
+
+Status: draft for review. Once the decisions below are settled, the accepted parts move to `spec/design/agents.md` as the design note, and this file is removed.
+
+## Premise
+
+More and more code is written by agents and read by nobody. A person adopts a language today by asking an agent to use it, so Lus wins adoption when agents write correct Lus on the first try, find out fast when they did not, and can move an existing project onto Lus safely. This proposal covers four parts: what Lus ships for agents, a skill that rewrites projects in Lus, a site entrance for people who work through an agent, and a homepage about what Lus does for software.
+
+## 1. Skills and documentation for agents
+
+### How tools publish for agents today
+
+The conventions have settled into four layers, and the projects that agents handle best ship all of them.
+
+| Layer | What it is | Who ships it |
+| --- | --- | --- |
+| `llms.txt` | A Markdown index at the site root: a title, a summary, and sections of links to Markdown pages. Variants carry the whole documentation (`llms-full.txt`) or a version sized for small contexts (`llms-small.txt`, `llms-medium.txt`). | Svelte ships all four sizes. Deno ships an index, a full file, and an AI entry page that links every agent resource. Context7 indexes `llms.txt` files and reads a `context7.json` in the repository. |
+| Markdown pages | Every documentation page also served as Markdown at a predictable URL, often with a "copy as Markdown" button. | Most documentation platforms now do this by default. |
+| Agent skills | A folder with a `SKILL.md` whose frontmatter `name` and `description` tell the agent when to load it, plus reference files it reads on demand. Anthropic published the format as an open standard in December 2025, and the Agentic AI Foundation now maintains it. Claude Code, Codex, Cursor, GitHub Copilot, VS Code, and Gemini CLI read it. `.agents/skills/` in a repository is becoming the shared discovery path. | Deno keeps its skills in a separate repository. Svelte publishes skills alongside its documentation. |
+| MCP servers | Tools an agent calls over a protocol, such as documentation search or a checker. | Svelte runs an MCP server whose autofixer statically checks generated components for common model mistakes. |
+
+Project rule files such as `AGENTS.md` and `CLAUDE.md` sit beside these as per-repository instructions, and a skill installer usually adds a line to them.
+
+### What Lus ships
+
+Lus has an advantage most languages lack: the documentation, the checker, and the runtime come from one repository and one release. The proposal is to ship the agent layer from the same place, versioned with the binary.
+
+| Artifact | Source | Built by | Served at |
+| --- | --- | --- | --- |
+| `llms.txt` | `agents/llms.txt`, curated by hand, with links checked | site build | `lus.dev/llms.txt` |
+| `llms-full.txt` | the guide, every acquis, the CLI page, and the API reference from `spec/stdlib` | `tools/build-llms.js` | `lus.dev/llms-full.txt` |
+| `llms-small.txt` | `agents/skills/lus/references/language.md` and one line per stdlib function: signature, permissions, stability | `tools/build-llms.js` | `lus.dev/llms-small.txt` |
+| Markdown pages | every manual page with MDX components rendered to Markdown | `tools/build-llms.js` | `lus.dev/manual/NAME.md` |
+| Skills `lus` and `lus-rewrite` | `agents/skills/` | copied as is | `lus.dev/agents/skills/`, the GitHub repository, and inside the `lus` binary |
+| Agent entry page | `agents/prompt.md` and a short intro | site build | `lus.dev/agents` and `lus.dev/agents.md` |
+| `context7.json` | repository root | by hand | read by Context7 |
+
+Measured on the current tree, the manual and the stdlib spec together hold about 425 KB of text, roughly 105,000 tokens, which suits `llms-full.txt`. The stdlib spec alone is 116 KB and compresses to 25 KB with zstd.
+
+#### Where the files live
+
+A new top-level `agents/` folder holds everything agents consume directly: the skills, the curated `llms.txt`, and the prompts. The folder sits outside `spec/` because the spec is the normative description of the language, and outside `packages/site` because the same files ship in the binary, the repository, and skill registries as well as the site. Skill installers that read a GitHub repository find `agents/skills/*/SKILL.md` by path. The generated files are build outputs of the site, produced by Astro endpoints the same way `install.sh.ts` serves `packaging/install/install.sh`, so nothing generated is committed and nothing goes stale.
+
+#### Skills in the binary
+
+`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` and `.claude/skills/` of the current project, and adds a short Lus section to `AGENTS.md`. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The cost is about 130 KB of compressed text in a 6.7 MB executable.
+
+#### Prototypes in this branch
+
+- [`agents/skills/lus/SKILL.md`](skills/lus/SKILL.md) teaches the check, format, and test loop, the file header with `global` and `pledge`, the standard library map, and the idioms the checker expects. [`references/language.md`](skills/lus/references/language.md) lists every difference from Lua that changes generated code, with runnable examples.
+- [`agents/skills/lus-rewrite/`](skills/lus-rewrite/SKILL.md) is the rewrite skill from part 2.
+- [`agents/llms.txt`](llms.txt) is the sample index, grouped by task.
+- [`agents/prompt.md`](prompt.md) holds the prompts for part 3.
+
+### Keeping it in sync
+
+- `tools/build-llms.js` reads the same frontmatter as `tools/build-lsp.js`, so the language server, the grammar, and the agent documentation share one source. The `pledges` and `stability` fields in `spec/stdlib` go straight into `llms-small.txt`.
+- `tools/build-llms.test.js` checks that every stdlib entry appears in `llms-small.txt`, that every link in `llms.txt` resolves to a page the site builds, that no MDX syntax survives into Markdown output, and that `llms-small.txt` stays under 25,000 tokens. It runs in `mise run gen:check`.
+- `mise run test` adds `lus test --doc ../agents` beside the manual and the spec, so every code block in the skills runs under each JIT mode on every change. Writing these prototypes already caught three mistakes this way: a `+=` that Lus does not parse, a missing `assert` in a `global` declaration, and a `$` that needed escaping in an interpolated string.
+- `node tools/lint-repo.js` covers `agents/` like the rest of the repository.
+- A shortdesc audit fixes manual frontmatter that the index quotes, such as the description of acquis 12, which still names command line options that became `lus ast`.
+
+### Fast feedback for agents
+
+The tools an agent calls after every edit decide how quickly it converges. `lus check --json`, `lus test --json`, and `lus fmt --check` already give structured, stable output. Building the prototypes surfaced these gaps, in order of value.
+
+1. **Directories.** `lus check src` and `lus fmt --check src` report `cannot read src (IsDir)`. Agents pass directories by habit, and both commands should walk them like `lus test` does.
+2. **Test files in the checker.** `lus check` reports a local `parity_test` as an unused function and does not know the test globals `snapshot`, `raises`, `same`, `skip`, and `TEST_DIR`. It should apply the test conventions to `*_test.lus` files.
+3. **Hints for common model mistakes.** A parse error on `+=`, `!=`, or `null` should say what Lus spells there, such as ``Lus assigns with `=`. Write `x = x + 1`.`` This is the cheapest accuracy gain available.
+4. **`lus check --fix`** applies the rewrites that `deprecated-pcall`, `use-from`, `use-optional-chain`, and `use-if-assign` already detect.
+5. **Inferred permissions.** The spec records which permissions each function needs. `lus check --pledges FILE` prints the narrowest pledge line for a file, and a `missing-pledge` warning flags a call that no pledge in the file covers. This turns the most common runtime failure of generated Lus into a compile-time message.
+6. **Documentation links.** Each diagnostic in `--json` output gains a `docs` field with the URL of its explanation.
+7. **Named cases.** A case table with string keys names each run after its key, so a parity failure reads `parity_test[empty.txt]` and the agent sees which input broke.
+
+### Measuring whether it works
+
+`tests/agents/` holds a small set of tasks, each a prompt plus hidden acceptance tests: write a CSV summarizer, serve a JSON API, port a 200-line Python script. A runner gives each task to a headless agent with only the Lus skill installed and records whether `lus check` is clean and the hidden tests pass, with and without the skill. It never gates a merge, like the benchmarks, and it shows which skill edits actually help.
+
+### MCP
+
+An MCP server comes last. Coding agents already run shell commands, and the skill plus the JSON output of the CLI covers them. A `lus mcp` command becomes worthwhile for chat clients without a shell: it would expose `check`, `fmt`, `test`, `help`, and a `run` tool that executes code under an explicit pledge set, which the permission system makes safe to offer.
+
+## 2. The rewrite skill
+
+The prototype is [`agents/skills/lus-rewrite/SKILL.md`](skills/lus-rewrite/SKILL.md) with three references: the [decision rubric](skills/lus-rewrite/references/rubric.md), the [parity harness templates](skills/lus-rewrite/references/harness.md), and a [porting map](skills/lus-rewrite/references/porting.md) from common libraries to the Lus standard library.
+
+### Phases
+
+| Phase | Work | Artifact in `.lus-rewrite/` | Checkpoint |
+| --- | --- | --- | --- |
+| 0. Assess | Read the code, list interfaces and dependencies, apply the rubric, list every improvement with evidence | `assessment.md` with a verdict | The user decides whether to continue. |
+| 1. Preview | Port one leaf module that shows a clear gain, checked and formatted, beside the original | `preview/` and its README | The user sees real Lus for their code. |
+| 2. Harness | Inventory behaviors, build a corpus, record the original into golden files, prove the harness passes on the original and fails on an altered golden file | `behaviors.md`, `harness/`, `progress.md` | The harness is trusted. |
+| 3. Port | Slices in dependency order, each with unit tests, a narrow pledge, and a green harness. Dependencies decided one by one. | source files, `dependencies.md`, `progress.md` | Each slice is marked done with its harness result. |
+| 4. Measure | Final harness run, time, memory, and shipped size against the original, `lus build` | `report.md` | The user decides when to retire the original. |
+
+### When not to rewrite
+
+The rubric begins with hard stops, and one yes ends the in-place rewrite. A project that other programs link against or import in its own language, such as a C++ library or an npm package, keeps its language, because a rewrite would break every user. The skill then offers a fork under a new name, a new major version announced as a language change, or a Lus companion such as a command line front end that embeds the library through `lus.h`. A project whose core lives in one ecosystem, such as a GUI toolkit or a GPU framework, gets a partial verdict that moves only the scripting, tooling, or service layer. In every case the user still receives the table of improvements Lus would bring, since that is what they asked for.
+
+### Proving sameness
+
+The harness records the original once and keeps the recordings, so it outlives the original program. It is a set of ordinary `*_test.lus` files: a recorder runs the original over each case with `io.popen` and stores output and exit status, and a parity test runs the port through a case table and compares. The power assert shows both outputs on a mismatch. I ran the templates verbatim on a toy project: the harness passed, then caught a deliberately broken port with both outputs shown.
+
+The same run found a runtime bug. Reading standard input with `io.lines()` makes the current ReleaseSafe build print `error(SafeAllocator): leaked ... len: 98432` to standard error at exit, which breaks any parity check that captures standard error. That belongs to the runtime workstreams and is noted for them.
+
+## 3. A site entrance for people who use agents
+
+This lands after the website 2.0 restyle merges, and follows its "Field instrument" design. Nothing in `packages/site` changes before then.
+
+### The install block
+
+The masthead install block gains a two-way switch: `shell` and `agent`. The shell side keeps today's `curl -fsSL https://lus.dev/install.sh | sh`. The agent side holds one prompt in the same monospace box, with the same copy button.
+
+```text
+Install Lus (curl -fsSL https://lus.dev/install.sh | sh), run `lus agents init` here, read lus.dev/llms.txt, and tell me where Lus would help this project. Change nothing yet.
+```
+
+The prompt names every command and URL it uses, so a careful reader can check them first, and it ends on a request for an assessment, which is the first phase of the rewrite skill and the safest first step for any codebase. Under the box, one link reads `what this does`, and it opens `/agents`.
+
+### The agents page
+
+`/agents`, also served as `/agents.md`, is the single entry point for agent resources, in the spirit of the AI entry page of Deno: the three prompts from `agents/prompt.md`, `lus agents init` and the registry install lines, links to `llms.txt` and its variants, the skills with their contents, and the rules for agents that work in this repository. The site header gains an `agents` link beside `manual`.
+
+### Every page as Markdown
+
+Each manual page gets a `copy as Markdown` control in the restyle's quiet style, and its Markdown twin lives at the same path with `.md` appended. An agent that lands on any page can read it in full without parsing HTML.
+
+## 4. The homepage
+
+The approved order stays: intro with install and news, then download, then the documentation index. The sections below replace "Lus at a glance" and speak about what Lus does for a program. Each section is a heading, one sentence, and one piece of evidence: a number, a short code block, or a list. The copy follows the site style of compact facts.
+
+### Fast
+
+**Heading:** Fast where programs spend their time
+**Line:** A two-tier JIT and a generational, parallel collector, measured on six everyday programs against the runtimes you already use.
+**Evidence:** The benchmarks section the restyle already renders from `benchmarks.json`, unchanged. The copy states the method and lets the chart speak. Today Lus is faster than Python on all six programs and faster than Node.js on three. The line gains a comparative claim only when the data supports it.
+
+### Batteries
+
+**Heading:** Everything in one binary
+**Line:** The libraries most projects install come with the runtime.
+**Evidence:** A dense list: JSON · CSV · SQLite · HTTP client and server · TCP · UDP · TLS · gzip · zstd · brotli · lz4 · time zones · bigints and decimals · workers · test runner · formatter · checker · debugger · bundler.
+
+### Permissions
+
+**Heading:** Every program states what it touches
+**Line:** Scripts start with no access to files, network, processes, or environment, and pledge what they need.
+**Evidence:**
+
+```lus nocheck
+pledge("fs:read=./data/*", "network:http=api.example.com")
+pledge("seal")
+```
+
+### Concurrency
+
+**Heading:** Thousands of connections, plain code
+**Line:** Sockets suspend only the coroutine that waits, so a server reads top to bottom.
+**Evidence:**
+
+```lus nocheck
+network.serve("0.0.0.0", 8080, function(req)
+    local status, body = network.fetch("http://inventory.internal" .. req.path)
+    return status, body
+end)
+```
+
+### Everywhere
+
+**Heading:** Script, server, executable, library, browser
+**Line:** The same code runs as a script, ships as one file with `lus build`, embeds in C and Zig hosts through `lus.h`, and runs in the browser as WebAssembly.
+**Evidence:** Five short labeled commands, one per target.
+
+### Small
+
+**Heading:** About 7 MB, nothing else to install
+**Line:** One executable carries the runtime, the libraries, and the tools.
+**Evidence:** The size of the release archive for the visitor's platform, read from the release data at build time.
+
+### Built for agents
+
+**Heading:** Your agent already knows how
+**Line:** Skills, Markdown documentation, and a checker with structured output let any coding agent write, test, and port Lus.
+**Evidence:** The agent prompt from the masthead and a link to `/agents`.
+
+## Roadmap
+
+1. **Now, in this repository.** Settle the decisions below. Land `agents/` with the skills and `llms.txt`, add `lus test --doc ../agents` to `mise run test`, and write `tools/build-llms.js` with its tests.
+2. **Runtime.** Directories in `check` and `fmt`, the test-aware checker, hints for common mistakes, `lus agents init`, `lus help`, `check --pledges` with `missing-pledge`, `check --fix`, documentation links in diagnostics, named cases.
+3. **Site, after the restyle merges.** Generated `llms*.txt` and Markdown pages, the `/agents` page, the masthead switch, and the new homepage sections.
+4. **Reach.** The agent task suite, `context7.json`, listings in skill registries, and `lus mcp`.
+
+## Decisions for review
+
+1. Is a top-level `agents/` folder the right home, with the decision record moving to `spec/design/agents.md` once accepted?
+2. Should the binary embed the skills and the reference (`lus agents init`, `lus help`), at a cost of about 130 KB?
+3. Should the masthead prompt install Lus itself, or only point the agent at `/agents` and let it propose the install?
+4. Should the advantage sections fully replace "Lus at a glance", or should one compact strip of syntax remain below them?
+5. How should the speed section read while Bun leads most programs in the suite?
+6. Is `lus mcp` worth building early for chat clients, or does it wait for the rest?
