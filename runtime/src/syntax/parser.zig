@@ -118,9 +118,41 @@ pub const Parser = struct {
     fn errNear(p: *Parser, comptime fmt: []const u8, args: anytype) Error {
         const t = p.cur();
         const near = try p.tokenDesc(t);
-        const msg = try wtf8.escapeInvalid(p.arena, try std.fmt.allocPrint(p.arena, fmt ++ " near {s}", args ++ .{near}));
+        const base = try std.fmt.allocPrint(p.arena, fmt ++ " near {s}", args ++ .{near});
+        const full = if (p.hint()) |h| try std.fmt.allocPrint(p.arena, "{s} ({s})", .{ base, h }) else base;
+        const msg = try wtf8.escapeInvalid(p.arena, full);
         p.diag = .{ .message = msg, .line = t.line, .span = t.span, .tok = p.pos };
         return error.SyntaxError;
+    }
+
+    /// The Lus spelling of a construct from another language that the
+    /// current token starts, for the message of a syntax error there.
+    fn hint(p: *Parser) ?[]const u8 {
+        const t = p.cur();
+        const next = p.toks[@min(p.pos + 1, p.toks.len - 1)];
+        const adjacent = next.span.start == t.span.end;
+        const starts_line = p.pos == 0 or p.toks[p.pos - 1].line < t.line;
+        if (adjacent and next.tag == .assign) return switch (t.tag) {
+            .plus => "update a variable with 'x = x + y'",
+            .minus => "update a variable with 'x = x - y'",
+            .star => "update a variable with 'x = x * y'",
+            .slash => "update a variable with 'x = x / y'",
+            .idiv => "update a variable with 'x = x // y'",
+            .percent => "update a variable with 'x = x % y'",
+            .caret => "update a variable with 'x = x ^ y'",
+            .concat => "update a variable with 'x = x .. y'",
+            .amp => "update a variable with 'x = x & y'",
+            .pipe => "update a variable with 'x = x | y'",
+            else => null,
+        };
+        if (adjacent and t.tag == .plus and next.tag == .plus) return "increment with 'x = x + 1'";
+        // `a && b` parses `a & ` and fails at the second `&`.
+        const prev = if (p.pos > 0) p.toks[p.pos - 1] else t;
+        const doubled = p.pos > 0 and prev.span.end == t.span.start and prev.tag == t.tag;
+        if (t.tag == .amp and ((adjacent and next.tag == .amp) or doubled)) return "logical and is written 'and'";
+        if (t.tag == .pipe and ((adjacent and next.tag == .pipe) or doubled)) return "logical or is written 'or'";
+        if (t.tag == .idiv and starts_line) return "comments start with '--'";
+        return null;
     }
 
     /// Semantic error at the last consumed token, without a `near` part.
@@ -1453,6 +1485,12 @@ test "parse extensions" {
 
 test "parse errors" {
     try parseErr("t?.a = 1", "syntax error near '='");
+    try parseErr("local x = 1 x += 1", "syntax error near '+' (update a variable with 'x = x + y')");
+    try parseErr("local x = 1 x ..= 'a'", "syntax error near '..' (update a variable with 'x = x .. y')");
+    try parseErr("x++", "syntax error near '+' (increment with 'x = x + 1')");
+    try parseErr("// note", "unexpected symbol near '//' (comments start with '--')");
+    try parseErr("local a = 1 && 2", "near '&' (logical and is written 'and')");
+    try parseErr("local a = 1 || 2", "near '|' (logical or is written 'or')");
     try parseErr("local x = do provide 1; end", "'end' expected near ';'");
     try parseErr("provide 1", "'provide' outside do expression");
     try parseErr("local e = enum a, b, end", "<name> expected near 'end'");

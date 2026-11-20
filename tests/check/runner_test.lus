@@ -1,0 +1,23 @@
+-- A test file: the runner reads its tests and case tables, and defines its helpers.
+local function add(a, b)
+    return a + b
+end
+
+local add_cases = {
+    { 1, 2, 3 },
+    { 2, 2, 4 },
+}
+
+local function add_test(a, b, want)
+    assert(same({ add(a, b) }, { want }))
+end
+
+local function failure_test()
+    raises(function() error("boom") end, "boom")
+    assert(TEST_DIR ~= nil)
+end
+
+local function helper()
+    skip("never called")
+    snapshot(1)
+end

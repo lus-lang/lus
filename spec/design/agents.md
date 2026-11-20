@@ -62,11 +62,11 @@ The `.agents/` folder at the repository root holds everything agents consume dir
 
 ### Fast feedback for agents
 
-The tools an agent calls after every edit decide how quickly it converges. `lus check --json`, `lus test --json`, and `lus fmt --check` already give structured, stable output. Writing the skills surfaced these gaps, in order of value.
+The tools an agent calls after every edit decide how quickly it converges. `lus check --json`, `lus test --json`, and `lus fmt --check` already give structured, stable output. Writing the skills surfaced the gaps below, in order of value. The first three are in place.
 
-1. **Directories.** `lus check src` and `lus fmt --check src` report `cannot read src (IsDir)`. Agents pass directories by habit, and both commands should walk them like `lus test` does.
-2. **Test files in the checker.** `lus check` reports a local `parity_test` as an unused function and does not know the test globals `snapshot`, `raises`, `same`, `skip`, and `TEST_DIR`. It should apply the test conventions to `*_test.lus` files.
-3. **Hints for common model mistakes.** A parse error on `+=`, `!=`, or `null` should say what Lus spells there, such as ``Lus assigns with `=`. Write `x = x + 1`.`` This is the cheapest accuracy gain available.
+1. **Directories.** Agents pass directories by habit. `lus check src` and `lus fmt --check src` read every `.lus` file below `src`, in sorted order, and leave out `node_modules`, `.git`, `zig-out`, and `.zig-cache`.
+2. **Test files in the checker.** `lus check` applies the test conventions to `*_test.lus` files. The helpers `snapshot`, `raises`, `same`, `skip`, and `TEST_DIR` count as defined, and the top-level locals `NAME_test` and `NAME_cases` that the runner reads count as used.
+3. **Hints for common model mistakes.** A syntax error on a construct from another language names the Lus spelling: `x += 1` reads `syntax error near '+' (update a variable with 'x = x + y')`. The hints cover compound assignment for every binary operator, `++`, `!=`, `!`, `&&`, `||`, and `//` comments, and `undefined-global` on `null` points to `nil`.
 4. **`lus check --fix`** applies the rewrites that `deprecated-pcall`, `use-from`, `use-optional-chain`, and `use-if-assign` already detect.
 5. **Inferred permissions.** The spec records which permissions each function needs. `lus check --pledges FILE` prints the narrowest pledge line for a file, and a `missing-pledge` warning flags a call that no pledge in the file covers. This turns the most common runtime failure of generated Lus into a compile-time message.
 6. **Documentation links.** Each diagnostic in `--json` output gains a `docs` field with the URL of its explanation.
@@ -186,8 +186,8 @@ end)
 
 ## Roadmap
 
-1. **Repository.** The skills, `llms.txt`, and the prompts in `.agents/`, with `lus test --doc ../.agents` in `mise run test`. Next comes `tools/build-llms.js` with its tests.
-2. **Runtime.** Directories in `check` and `fmt`, the test-aware checker, hints for common mistakes, `lus agents init`, `lus help`, `check --pledges` with `missing-pledge`, `check --fix`, documentation links in diagnostics, named cases.
+1. **Repository.** The skills, `llms.txt`, and the prompts in `.agents/`, with `lus test --doc ../.agents` in `mise run test`. `tools/build-llms.js` builds every agent file into a directory with `pnpm run llms -- --out DIR`, `mise run gen:check` validates its output, and `tools/build-llms.test.js` runs in `pnpm run test:tools`. Today `llms-small.txt` holds about 7,700 tokens and `llms-full.txt` about 95,000.
+2. **Runtime.** Directories in `check` and `fmt`, the test-aware checker, and hints for common mistakes are in place. Next come `lus agents init`, `lus help`, `check --pledges` with `missing-pledge`, `check --fix`, documentation links in diagnostics, named cases.
 3. **Site, after the restyle merges.** Generated `llms*.txt` and Markdown pages, the `/agents` page, the masthead switch, and the new homepage sections.
 4. **Reach.** The agent task suite, `context7.json`, listings in skill registries, and `lus mcp`.
 

@@ -4,7 +4,8 @@
   "packageManager": "pnpm@10.18.0",
   "scripts": {
     "gen": "node tools/build-lsp.js && node tools/build-grammar.js",
-    "gen:check": "node tools/build-lsp.js --check && node tools/build-grammar.js --check",
-    "test:tools": "node tools/build-lsp.test.js && node tools/build-grammar.test.js"
+    "gen:check": "node tools/build-lsp.js --check && node tools/build-grammar.js --check && node tools/build-llms.js",
+    "test:tools": "node tools/build-lsp.test.js && node tools/build-grammar.test.js && node tools/build-llms.test.js",
+    "llms": "node tools/build-llms.js"
   }
 }

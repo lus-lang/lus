@@ -83,7 +83,7 @@ Before posting an issue or committing prose, run `node tools/lint-repo.js`, grep
 
 ### Spec → Language Server Pipeline
 
-`spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node tools/build-lsp.js` generates `packages/language-server/analysis/stdlib_data.lus`, which the language server uses for completions, hover, and linting. `node tools/build-grammar.js` generates both TextMate grammar copies from the same spec.
+`spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node tools/build-lsp.js` generates `packages/language-server/analysis/stdlib_data.lus`, which the language server uses for completions, hover, and linting. `node tools/build-grammar.js` generates both TextMate grammar copies from the same spec. `node tools/build-llms.js --out DIR` builds the agent documentation from the spec, the manual, and `.agents/`: `llms.txt`, `llms-full.txt`, `llms-small.txt`, and a Markdown copy of every manual page.
 
 ## Picking the right models for workflows and subagents
 

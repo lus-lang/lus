@@ -1,0 +1,2 @@
+-- args: dir
+-- A directory argument checks every .lus file below it, in order.

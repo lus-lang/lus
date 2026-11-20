@@ -315,6 +315,10 @@ pub const Lexer = struct {
                     // Quote a whole character, such as a letter outside
                     // ASCII, rather than its first byte.
                     if (wtf8.decodeAt(lx.src, start)) |d| lx.pos = start + d.len;
+                    if (c == '!') {
+                        const hint = if (lx.pos < lx.src.len and lx.src[lx.pos] == '=') "not equal is written '~='" else "negation is written 'not'";
+                        return lx.fail(start, "unexpected symbol near '!' ({s})", .{hint});
+                    }
                     return lx.fail(start, "unexpected symbol near '{s}'", .{lx.nearText(start)});
                 },
             }

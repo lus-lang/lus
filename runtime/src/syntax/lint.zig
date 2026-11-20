@@ -41,6 +41,10 @@ pub const Options = struct {
     /// Names the runtime defines in the global table. A free name in this
     /// set is not reported as undefined.
     builtins: ?*const std.StringHashMapUnmanaged(void) = null,
+    /// The file is a test file (`*_test.lus`). Its top-level locals named
+    /// `NAME_test` and `NAME_cases` are read by the test runner, so they
+    /// count as used.
+    test_file: bool = false,
 };
 
 /// Every code `lint` can report, with its severity and a summary. The
@@ -124,6 +128,7 @@ const Linter = struct {
             };
             if (ignored or b.close or b.cond or b.reads > 0) continue;
             if (b.kind == .param and std.mem.eql(u8, b.name, "self")) continue;
+            if (l.opts.test_file and l.isTestEntry(b)) continue;
             switch (b.kind) {
                 .param => try l.report(b.span, .warning, "unused-param", "unused parameter '{s}'", .{b.name}),
                 .loop_var => try l.report(b.span, .warning, "unused-loop-var", "unused loop variable '{s}'", .{b.name}),
@@ -134,6 +139,19 @@ const Linter = struct {
                     try l.report(b.span, .warning, "unused-local", "unused local '{s}'", .{b.name}),
             }
         }
+    }
+
+    /// A top-level local of a test file that the runner reads: a test
+    /// function `NAME_test` or a case table `NAME_cases`.
+    fn isTestEntry(l: *Linter, b: *const resolve.Binding) bool {
+        const named = std.mem.endsWith(u8, b.name, "_test") or std.mem.endsWith(u8, b.name, "_cases");
+        if (!named) return false;
+        for (l.chunk.block.stats) |s| switch (s.kind) {
+            .local_function => |lf| if (lf.name.span.start == b.span.start) return true,
+            .local => |loc| for (loc.names) |n| if (n.name.span.start == b.span.start) return true,
+            else => {},
+        };
+        return false;
     }
 
     fn references(l: *Linter) Allocator.Error!void {
@@ -168,7 +186,11 @@ const Linter = struct {
             if (l.opts.builtins) |set| if (set.contains(ref.name)) continue;
             if (std.mem.eql(u8, ref.name, "flags")) continue;
             if ((try warned_undefined.fetchPut(l.arena, ref.name, {})) == null) {
-                try l.report(ref.span, .warning, "undefined-global", "undefined global '{s}'", .{ref.name});
+                if (std.mem.eql(u8, ref.name, "null")) {
+                    try l.report(ref.span, .warning, "undefined-global", "undefined global 'null' (the absent value is written 'nil')", .{});
+                } else {
+                    try l.report(ref.span, .warning, "undefined-global", "undefined global '{s}'", .{ref.name});
+                }
             }
         }
     }

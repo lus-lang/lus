@@ -1,0 +1,3 @@
+-- Model mistakes get the Lus spelling in the message.
+local total = 0
+total += 1
