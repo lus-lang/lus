@@ -1,0 +1,85 @@
+-- lru: simulate a cache service with an LRU cache of fixed capacity.
+local n = tonumber(arg and arg[1]) or 4000000
+local CAPACITY = 50000
+
+local state = 42
+local function rand(m)
+    state = (state * 48271) % 2147483647
+    return state % m
+end
+
+-- The cache is a hash map from key to node plus a doubly linked list of
+-- nodes, most recently used first. head and tail are sentinels.
+local map = {}
+local count = 0
+local head = {}
+local tail = {}
+head.next = tail
+tail.prev = head
+local evictions = 0
+
+local function unlink(node)
+    node.prev.next = node.next
+    node.next.prev = node.prev
+end
+
+local function push_front(node)
+    node.prev = head
+    node.next = head.next
+    head.next.prev = node
+    head.next = node
+end
+
+local function get(key)
+    local node = map[key]
+    if node == nil then return nil end
+    unlink(node)
+    push_front(node)
+    return node.value
+end
+
+local function put(key, value)
+    local node = map[key]
+    if node ~= nil then
+        node.value = value
+        unlink(node)
+        push_front(node)
+        return
+    end
+    if count == CAPACITY then
+        local old = tail.prev
+        unlink(old)
+        map[old.key] = nil
+        count = count - 1
+        evictions = evictions + 1
+    end
+    node = { key = key, value = value }
+    push_front(node)
+    map[key] = node
+    count = count + 1
+end
+
+local hits, misses = 0, 0
+for i = 1, n do
+    local key = "k" .. rand(rand(200000) + 1)
+    if rand(10) < 8 then
+        local value = get(key)
+        if value ~= nil then
+            hits = hits + 1
+            value.hits = value.hits + 1
+        else
+            misses = misses + 1
+            put(key, { key = key, size = rand(4096), hits = 0 })
+        end
+    else
+        put(key, { key = key, size = rand(4096), hits = 0 })
+    end
+end
+
+local sum = 0
+local node = head.next
+while node ~= tail do
+    sum = (sum + node.value.size) % 1000000007
+    node = node.next
+end
+print(string.format("lru %d %d %d %d", hits, misses, evictions, sum))

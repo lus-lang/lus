@@ -1,0 +1,41 @@
+-- JSON encode and decode round trip over generated records.
+
+local N = tonumber((...)) or 1000000
+
+local state = 42
+local function rand(n)
+    state = (state * 48271) % 2147483647
+    return state % n
+end
+
+local records = {}
+for i = 1, N do
+    local name = `user$(rand(100000))`
+    local age = rand(90)
+    local active = rand(2) == 1
+    local t1 = `t$(rand(50))`
+    local t2 = `t$(rand(50))`
+    local score = rand(1000000)
+    records[i] = { id = i, name = name, age = age, active = active, tags = { t1, t2 }, score = score }
+end
+
+local text = tojson(records)
+local back = fromjson(text)
+
+local active, agesum, scoresum, ntags = 0, 0, 0, 0
+local seen = {}
+for _, r in ipairs(back) do
+    if r.active then
+        active = active + 1
+    end
+    agesum = agesum + r.age
+    scoresum = scoresum + r.score
+    for _, tag in ipairs(r.tags) do
+        if not seen[tag] then
+            seen[tag] = true
+            ntags = ntags + 1
+        end
+    end
+end
+
+print(`json $active $agesum $(scoresum % 1000000007) $ntags $(#text)`)
