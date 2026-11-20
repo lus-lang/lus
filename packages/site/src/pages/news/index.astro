@@ -1,5 +1,6 @@
 ---
 import Layout from "../../components/Layout.astro"
+import CubeField from "../../components/CubeField.astro"
 import { getCollection } from "astro:content"
 import { fmtDate } from "../../lib/date"
 
@@ -15,7 +16,10 @@ const sorted = news.toSorted(
 >
     <main id="main">
         <section>
-            <h1 class="page-title">News</h1>
+            <div class="title-row">
+        <h1 class="page-title">News</h1>
+        <CubeField rows={2} cols={30} at={0.3} amp={2.6} seed={11} />
+      </div>
             <p class="news-intro">
                 Release notes and announcements from the Lus project.
             </p>

@@ -1,5 +1,6 @@
 ---
 import ManualLayout from "../../components/ManualLayout.astro"
+import CubeField from "../../components/CubeField.astro"
 import { getCollection } from "astro:content"
 
 const manual = await getCollection("manual")
@@ -47,7 +48,10 @@ byKey.reference.unshift(
 ---
 
 <ManualLayout title="Manual" measure>
-  <h1>Manual</h1>
+  <div class="title-row">
+        <h1>Manual</h1>
+        <CubeField rows={2} cols={30} at={0.8} amp={2.6} seed={23} />
+      </div>
   {
     groups.map((group) => (
       <>

@@ -210,6 +210,21 @@ body::before {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
 }
 
+/* title row: a page title with its own small cube field on the right,
+   standing on the title's baseline */
+.title-row {
+  @apply flex items-end gap-8;
+
+  > :first-child {
+    @apply shrink-0;
+  }
+
+  > svg.cube-field {
+    @apply hidden md:block ml-auto w-[min(46%,520px)] mb-3;
+    mask: linear-gradient(to right, transparent, #000 30%);
+  }
+}
+
 /* long-form prose outside the manual: chapters open over one 2px rule */
 .prose {
   @apply space-y-2 max-w-[48.5rem];
