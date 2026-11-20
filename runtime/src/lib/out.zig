@@ -11,6 +11,9 @@ pub const Out = struct {
     file: std.Io.File,
     /// The buffering mode set by `setvbuf`.
     mode: Mode = .full,
+    /// The first write error since the last one `io.write` or `flush`
+    /// reported. `print` and the runtime's own writes leave it in place.
+    failed: ?anyerror = null,
 
     pub const Mode = enum { no, line, full };
 
@@ -22,19 +25,29 @@ pub const Out = struct {
         };
         if (o.buf.items.len + bytes.len > 1 << 16) o.flush(g);
         if (bytes.len >= 1 << 16) {
-            o.file.writeStreamingAll(g.io, bytes) catch {};
+            o.file.writeStreamingAll(g.io, bytes) catch |e| o.fail(e);
             return;
         }
         o.buf.appendSlice(g.gpa, bytes) catch {
             o.flush(g);
-            o.file.writeStreamingAll(g.io, bytes) catch {};
+            o.file.writeStreamingAll(g.io, bytes) catch |e| o.fail(e);
         };
     }
 
     pub fn flush(o: *Out, g: *Global) void {
         if (o.buf.items.len == 0) return;
-        o.file.writeStreamingAll(g.io, o.buf.items) catch {};
+        o.file.writeStreamingAll(g.io, o.buf.items) catch |e| o.fail(e);
         o.buf.clearRetainingCapacity();
+    }
+
+    fn fail(o: *Out, e: anyerror) void {
+        if (o.failed == null) o.failed = e;
+    }
+
+    /// Returns and clears the recorded write error.
+    pub fn takeError(o: *Out) ?anyerror {
+        defer o.failed = null;
+        return o.failed;
     }
 };
 

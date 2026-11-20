@@ -341,7 +341,11 @@ fn doWrite(l: *Thread, h: *Handle, first: u32, self: Value) Error!u32 {
 
 fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
     switch (h.kind) {
-        .stdout => out.stdout(l.g).write(l.g, bytes),
+        .stdout => {
+            const o = out.stdout(l.g);
+            o.write(l.g, bytes);
+            if (o.takeError()) |e| return ioError(l, e);
+        },
         .stderr => out.stderr(l.g, bytes),
         .file => {
             if (h.append) h.pos = h.file.length(l.g.io) catch h.pos;
@@ -555,7 +559,11 @@ fn fWrite(l: *Thread) Error!u32 {
 
 fn fFlush(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
-    if (h.kind == .stdout) out.flushAll(l.g);
+    if (h.kind == .stdout) {
+        const o = out.stdout(l.g);
+        o.flush(l.g);
+        if (o.takeError()) |e| return ioError(l, e);
+    }
     return aux.ret(l, l.arg(1));
 }
 
@@ -564,7 +572,11 @@ fn ioFlush(l: *Thread) Error!u32 {
     const v = try getDefault(l, "io.output");
     const h = toHandle(l, v).?;
     if (h.closed) return l.raiseFmt("default output file is closed", .{});
-    if (h.kind == .stdout) out.flushAll(l.g);
+    if (h.kind == .stdout) {
+        const o = out.stdout(l.g);
+        o.flush(l.g);
+        if (o.takeError()) |e| return ioError(l, e);
+    }
     return aux.retBool(l, true);
 }
 
