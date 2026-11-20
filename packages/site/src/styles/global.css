@@ -241,6 +241,16 @@ body::before {
       5px no-repeat;
 }
 
+/* readers who ask for more contrast get the drawing without its texture:
+   no paper grain, glow, or wash */
+@media (prefers-contrast: more) {
+  body::before,
+  .cube-field .glow,
+  .cube-field .wash {
+    display: none;
+  }
+}
+
 /* page title: the display h1 that opens every page below the masthead */
 @utility page-title {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
