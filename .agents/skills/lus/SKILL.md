@@ -50,7 +50,7 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 | Exact numbers | `123n` bigints, `1.50d` decimals |
 | Standalone executable | `lus build app.lus -o app -P network` |
 
-Signatures and behavior for every function are in the reference at https://lus.dev/manual/api and in the compact index at https://lus.dev/llms.txt. Functions marked unstable there may change between releases. Mention it when you depend on one.
+`lus help NAME` prints the signature, required permissions, stability, and description of any function, such as `lus help network.serve`, from documentation built into the installed runtime. `lus help MODULE` lists a module, and `lus help --search TEXT` finds an entry. Functions marked unstable may change between releases. Mention it when you depend on one.
 
 ## Idioms the checker expects
 
@@ -82,4 +82,4 @@ end
 
 ## When something is unclear
 
-Prefer the documentation shipped with the installed runtime over memory, since Lus changes between releases. `lus --version` prints the version. The full reference for one release is at https://lus.dev/llms-full.txt.
+Prefer the documentation shipped with the installed runtime over memory, since Lus changes between releases. `lus help` answers from that documentation, and `lus --version` prints the version. The full manual is at https://lus.dev/llms-full.txt. `lus agents init` refreshes these skills to match the installed runtime.

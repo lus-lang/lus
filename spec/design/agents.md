@@ -43,7 +43,7 @@ The `.agents/` folder at the repository root holds everything agents consume dir
 
 #### Skills in the binary
 
-`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` of the current project, links `.claude/skills` to that folder, and adds a short Lus section to `AGENTS.md`. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The cost is about 130 KB of compressed text in a 6.7 MB executable.
+`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` of the current project, links `.claude/skills` to that folder, and adds a short Lus section to `AGENTS.md`. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The stdlib spec and the skills add about 205 KB to a 6.8 MB executable, embedded as plain text by a module that `build.zig` generates. `lus help MODULE` lists a module, and `lus help --search TEXT` searches names and descriptions. Both commands are in place.
 
 #### The skills
 
@@ -187,14 +187,14 @@ end)
 ## Roadmap
 
 1. **Repository.** The skills, `llms.txt`, and the prompts in `.agents/`, with `lus test --doc ../.agents` in `mise run test`. `tools/build-llms.js` builds every agent file into a directory with `pnpm run llms -- --out DIR`, `mise run gen:check` validates its output, and `tools/build-llms.test.js` runs in `pnpm run test:tools`. Today `llms-small.txt` holds about 7,700 tokens and `llms-full.txt` about 95,000.
-2. **Runtime.** Directories in `check` and `fmt`, the test-aware checker, and hints for common mistakes are in place. Next come `lus agents init`, `lus help`, `check --pledges` with `missing-pledge`, `check --fix`, documentation links in diagnostics, named cases.
+2. **Runtime.** Directories in `check` and `fmt`, the test-aware checker, hints for common mistakes, `lus agents init`, and `lus help` are in place. Next come `check --pledges` with `missing-pledge`, `check --fix`, documentation links in diagnostics, named cases.
 3. **Site, after the restyle merges.** Generated `llms*.txt` and Markdown pages, the `/agents` page, the masthead switch, and the new homepage sections.
 4. **Reach.** The agent task suite, `context7.json`, listings in skill registries, and `lus mcp`.
 
 ## Decisions
 
 1. The skills live in `.agents/skills/`, the shared discovery path, and `.claude/skills` is a symbolic link to that folder. The index and the prompts sit beside them in `.agents/`.
-2. The binary embeds the skills and the reference, for `lus agents init` and `lus help`, at a cost of about 130 KB.
+2. The binary embeds the skills and the reference, for `lus agents init` and `lus help`, at a cost of about 205 KB.
 3. The masthead prompt installs Lus, runs `lus agents init`, and asks for an assessment with no changes.
 4. The advantage sections replace "Lus at a glance" entirely.
 5. The speed section is written for Lus leading every program in the suite, with the named runtimes derived from the benchmark data.

@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
         .sanitize_thread = if (tsan) true else null,
     });
     lus_mod.addOptions("build_options", options);
+    lus_mod.addImport("agent_docs", agentDocsModule(b));
     linkSystemLibraries(lus_mod, target);
     if (features.archive) lus_mod.linkLibrary(compressionLibrary(b, target));
     if (features.sqlite) lus_mod.linkLibrary(sqliteLibrary(b, target));
@@ -195,6 +196,55 @@ fn fixtureSuite(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
             step.dependOn(&run.step);
         }
     }
+}
+
+/// The documentation that `lus help` and `lus agents init` read: every
+/// entry of `../spec/stdlib` and every file of the agent skills in
+/// `../.agents/skills`, embedded in a generated module whose `stdlib`
+/// and `skills` lists pair a relative path with the file contents.
+fn agentDocsModule(b: *std.Build) *std.Build.Module {
+    const wf = b.addWriteFiles();
+    var src: std.ArrayList(u8) = .empty;
+    const w = struct {
+        fn line(list: *std.ArrayList(u8), bb: *std.Build, comptime fmt: []const u8, args: anytype) void {
+            list.appendSlice(bb.allocator, bb.fmt(fmt, args)) catch @panic("OOM");
+        }
+    };
+    w.line(&src, b, "pub const File = struct {{ path: []const u8, data: []const u8 }};\n", .{});
+    const groups = [_]struct { name: []const u8, rel: []const u8 }{
+        .{ .name = "stdlib", .rel = "../spec/stdlib" },
+        .{ .name = "skills", .rel = "../.agents/skills" },
+    };
+    for (groups) |g| {
+        b.dependOnDirectoryContents(b.path(g.rel));
+        w.line(&src, b, "pub const {s} = [_]File{{\n", .{g.name});
+        const root = b.root.join(b.allocator, g.rel) catch @panic("OOM");
+        var dir = root.root_dir.handle.openDir(b.graph.io, root.sub_path, .{ .iterate = true }) catch |e| {
+            std.debug.panic("cannot open {s}: {s}", .{ g.rel, @errorName(e) });
+        };
+        defer dir.close(b.graph.io);
+        var names: std.ArrayList([]const u8) = .empty;
+        var walker = dir.walk(b.allocator) catch @panic("OOM");
+        defer walker.deinit();
+        while (walker.next(b.graph.io) catch null) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".md")) continue;
+            const rel = std.mem.replaceOwned(u8, b.allocator, entry.path, "\\", "/") catch @panic("OOM");
+            names.append(b.allocator, rel) catch @panic("OOM");
+        }
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lt(_: void, x: []const u8, y: []const u8) bool {
+                return std.mem.order(u8, x, y) == .lt;
+            }
+        }.lt);
+        for (names.items) |rel| {
+            const dest = b.fmt("{s}/{s}", .{ g.name, rel });
+            _ = wf.addCopyFile(b.path(b.fmt("{s}/{s}", .{ g.rel, rel })), dest);
+            w.line(&src, b, "    .{{ .path = \"{s}\", .data = @embedFile(\"{s}\") }},\n", .{ rel, dest });
+        }
+        w.line(&src, b, "}};\n", .{});
+    }
+    const root = wf.add("agent_docs.zig", src.items);
+    return b.createModule(.{ .root_source_file = root });
 }
 
 /// The embedding library rooted at `src/capi.zig`. The vendored C sources

@@ -4,7 +4,7 @@
 //!   lus <command> [arguments]
 //!
 //! Commands: run (default), test, fmt, check, ast, doc, debug, build,
-//! compile.
+//! compile, help, agents.
 
 const std = @import("std");
 const pledge = @import("lus").vm.pledge;
@@ -31,6 +31,8 @@ const usage =
     \\  debug     run a script under the debug adapter protocol
     \\  build     bundle a script into a standalone executable
     \\  compile   compile a script to a binary chunk
+    \\  help      print the standard library reference for a name
+    \\  agents    set a project up for coding agents (agents init)
     \\
     \\Options:
     \\  -e stat          execute string 'stat'
@@ -231,7 +233,7 @@ pub fn main(init: std.process.Init) !u8 {
     // Subcommands.
     if (args.len >= 2) {
         const cmd = args[1];
-        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile" };
+        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents" };
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
         }
