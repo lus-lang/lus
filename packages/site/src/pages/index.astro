@@ -182,10 +182,15 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
             <span class="plat">windows · x64</span>
             <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
           </div>
-          <div class="install crop agent" id="install-agent">
-            <span class="plat">prompt</span>
-            <code id="agent-prompt">{AGENT_PROMPT}</code>
-            <button type="button" data-copy="agent-prompt">copy</button>
+          <div class="agent" id="install-agent">
+            <div class="prompt-box crop">
+              <p id="agent-prompt">{AGENT_PROMPT}</p>
+              <button type="button" data-copy="agent-prompt">copy prompt</button>
+            </div>
+            <div class="prompt-links">
+              <a href="/agents/skills/lus/SKILL.md">SKILL.md</a>
+              <a href="/agents">what this does →</a>
+            </div>
           </div>
           <div class="row">
             <a class="btn solid" href="/manual/getting-started">Get started →</a>
@@ -433,10 +438,43 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     button {
       @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer rounded-r-[5px] hover:bg-accent-soft;
     }
+  }
 
-    /* the prompt is a sentence, so it wraps */
-    &.agent code {
-      @apply whitespace-normal leading-[1.5];
+  .agent[hidden] {
+    display: none;
+  }
+
+  /* the agent prompt: a few lines of the prompt that scroll, fading out
+     under a solid copy button in the corner */
+  .prompt-box {
+    @apply relative mt-2 max-w-[620px] border border-ink rounded-md bg-field;
+
+    p {
+      @apply m-0 font-mono text-[13px] leading-[1.6] px-3 pt-2.5 pb-11 max-h-[8.5rem] overflow-y-auto;
+      scrollbar-width: thin;
+    }
+
+    /* the fade over the last lines, under the button */
+    &::before {
+      content: "";
+      @apply absolute inset-x-px bottom-px h-12 rounded-b-[5px] pointer-events-none;
+      background: linear-gradient(to bottom, transparent, var(--color-field) 70%);
+    }
+
+    button {
+      @apply absolute right-2 bottom-2 font-mono text-xs font-semibold px-3 py-1.5 rounded-[4px] cursor-pointer bg-solid text-on-solid hover:bg-solid/85;
+
+      &:focus-visible {
+        outline-offset: 2px;
+      }
+    }
+  }
+
+  .prompt-links {
+    @apply flex justify-between max-w-[620px] font-mono text-xs pt-1.5;
+
+    a {
+      @apply font-normal text-ink-2 no-underline py-1 hover:text-ink hover:bg-accent-soft;
     }
   }
 
