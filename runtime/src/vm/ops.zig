@@ -786,6 +786,27 @@ fn joinStrings(l: *Thread, parts: []const Value, last: Value) Error!Value {
     return joinGeneral(l, parts, last);
 }
 
+/// Copies `src` to the start of `dst`, which does not overlap it. A copy
+/// of up to 16 bytes takes two overlapping moves of a word or half a
+/// word, without a call, which suits the short pieces that strings are
+/// built from.
+pub inline fn copyBytes(dst: []u8, src: []const u8) void {
+    const n = src.len;
+    if (n > 16) {
+        @memcpy(dst[0..n], src);
+    } else if (n >= 8) {
+        dst[0..8].* = src[0..8].*;
+        dst[n - 8 ..][0..8].* = src[n - 8 ..][0..8].*;
+    } else if (n >= 4) {
+        dst[0..4].* = src[0..4].*;
+        dst[n - 4 ..][0..4].* = src[n - 4 ..][0..4].*;
+    } else if (n > 0) {
+        dst[0] = src[0];
+        dst[n / 2] = src[n / 2];
+        dst[n - 1] = src[n - 1];
+    }
+}
+
 /// The longest result `joinShort` builds.
 const short_join = 64;
 
@@ -810,7 +831,7 @@ pub inline fn joinShort(l: *Thread, parts: []const Value, last: Value) Error!?Va
                 if (b.len > 0 and b[0] == 0xED) return null;
                 ascii = false;
             }
-            @memcpy(tmp[n..][0..b.len], b);
+            copyBytes(tmp[n..], b);
             n += b.len;
             chars += s.chars;
         } else if (v.tag == .integer) {
@@ -822,7 +843,7 @@ pub inline fn joinShort(l: *Thread, parts: []const Value, last: Value) Error!?Va
                 d[at] = '-';
             }
             const len = 20 - at;
-            @memcpy(tmp[n..][0..len], d[at..]);
+            copyBytes(tmp[n..], d[at..]);
             n += len;
             chars += len;
         } else return null;
@@ -901,7 +922,11 @@ pub fn appendForConcat(l: *Thread, gpa: std.mem.Allocator, buf: *std.ArrayList(u
                 }
             }
         }
-        buf.appendSlice(gpa, b) catch return l.raiseMem();
+        const room = buf.unusedCapacitySlice();
+        if (b.len <= room.len) {
+            copyBytes(room, b);
+            buf.items.len += b.len;
+        } else buf.appendSlice(gpa, b) catch return l.raiseMem();
         chars.* += s.chars;
         ascii.* = ascii.* and s.flags.ascii;
         return;

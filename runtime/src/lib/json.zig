@@ -506,7 +506,7 @@ const Writer = struct {
     inline fn write(w: *Writer, b: []const u8) Error!void {
         const room = w.out.unusedCapacitySlice();
         if (b.len <= room.len) {
-            @memcpy(room[0..b.len], b);
+            ops.copyBytes(room, b);
             w.out.items.len += b.len;
             return;
         }
