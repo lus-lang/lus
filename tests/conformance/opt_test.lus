@@ -1970,3 +1970,35 @@ local function long_loops_enter_optimized_code_midway_test()
     end
     assert(nested(3000) == 3000 * 1275 + 50 * 4501500)
 end
+
+local function an_inline_result_lands_in_a_register_a_later_loop_closes_test()
+    -- The generic loop below keeps its closing value in the register
+    -- that `i` uses in the numeric loop, and the call of `rnd` is
+    -- compiled inline on a path that reaches `long` with `i` unread.
+    local function long(prefix, i)
+        return prefix .. tostring(i % 10)
+    end
+    local function run()
+        local total = 0
+        for round = 1, 3 do
+            local t = {}
+            local seed = 12345
+            local function rnd(n)
+                seed = seed + 1
+                return seed % n + 1
+            end
+            for step = 1, 40 do
+                local i = rnd(400)
+                local k = i % 2 == 0 and ("key" .. i) or (long("s", i) .. "_" .. i)
+                t[k] = step
+            end
+            local n = 0
+            for k, v in pairs(t) do
+                n = n + 1
+            end
+            total = total + n
+        end
+        return total
+    end
+    assert(run() == 120)
+end

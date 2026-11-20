@@ -3360,6 +3360,19 @@ pub const Lower = struct {
                 while (k < want) : (k += 1) {
                     regs[ra + k] = .{ .val = try b.emitIn(ret.from, .{ .op = .knil, .ty = .nil }), .in_slot = false, .sample = Sample.of(.nil) };
                 }
+                // A captured register lives in its slot, so a result
+                // that lands in one is stored on the way back.
+                k = 0;
+                while (k < want and ra + k < regs.len) : (k += 1) {
+                    const cr = ra + k;
+                    // A result of unknown type is in the slot already.
+                    if (!b.captured(cr) or regs[cr].val == ir.none) continue;
+                    if (vobjIn(ret.vobjs, regs[cr].val) != null) return error.Unsupported;
+                    _ = try b.emitIn(ret.from, .{ .op = .sstore, .cls = .upval, .a = regs[cr].val, .imm = b.slotOf(cr) });
+                    try b.clobberSlot(b.slotOf(cr));
+                    b.clobber(.upval);
+                    regs[cr] = .{ .sample = regs[cr].sample };
+                }
             }
             incs[i] = .{ .from = ret.from, .regs = regs, .vobjs = ret.vobjs };
         }
