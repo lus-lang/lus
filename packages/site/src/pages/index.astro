@@ -47,12 +47,12 @@ npm install lus-wasm    # browser`
 
 // what ships in the executable, grouped by what a program does with it
 const batteries = [
-  { group: "data", items: "JSON, CSV, and SQLite", href: "/manual/acquis-33" },
-  { group: "network", items: "HTTP client and server, TCP, UDP, and TLS", href: "/manual/acquis-9" },
-  { group: "compression", items: "gzip, zstd, brotli, and lz4", href: "/manual/acquis-26" },
-  { group: "numbers", items: "bigints, decimals, and time zones", href: "/manual/acquis-36" },
-  { group: "concurrency", items: "detached coroutines and workers", href: "/manual/acquis-43" },
-  { group: "tools", items: "tests, formatter, checker, debugger, and bundler", href: "/manual/cli" },
+  { group: "data", items: "JSON, CSV, and SQLite", href: "/manual/data" },
+  { group: "network", items: "HTTP client and server, TCP, UDP, and TLS", href: "/manual/network" },
+  { group: "compression", items: "gzip, zstd, brotli, and lz4", href: "/manual/text" },
+  { group: "numbers", items: "bigints, decimals, and time zones", href: "/manual/guide#number" },
+  { group: "concurrency", items: "detached coroutines and workers", href: "/manual/concurrency" },
+  { group: "tools", items: "tests, formatter, checker, debugger, and bundler", href: "/manual/tools" },
 ]
 
 const chapters = [
@@ -71,13 +71,13 @@ const chapters = [
   {
     name: "permissions",
     title: "Every program states what it touches",
-    href: "/manual/acquis-10",
+    href: "/manual/permissions",
     blurb: "Programs start with no access to files, network, processes, or environment, and pledge what they need.",
   },
   {
     name: "concurrency",
     title: "Thousands of connections, plain code",
-    href: "/manual/acquis-43",
+    href: "/manual/concurrency",
     blurb: "Sockets suspend only the coroutine that waits, so a server reads top to bottom.",
   },
   {

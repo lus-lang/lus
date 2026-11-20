@@ -267,7 +267,7 @@ local function enum_expression_compiles_in_return_position_test()
     assert(f() ~= nil)
 end
 
--- Acquis 5 says values from the same enum with the same name are equal, so a
+-- The guide says values from the same enum with the same name are equal, so a
 -- declaration with duplicate member names is rejected at compile time rather
 -- than producing two distinct members that share a name.
 local function duplicate_enum_member_names_are_rejected_test()

@@ -67,11 +67,11 @@ All Lus source files use `.lus` extension. Code blocks in documentation use ` ``
 
 ### Website Content
 
-Manual pages are MDX files in `packages/site/src/manual/`. Cross-references use `/manual/guide#section-slug` and `/manual/acquis-N` formats. The acquis pages document individual language features. The guide is the comprehensive reference.
+Manual pages are MDX files in `packages/site/src/manual/`. Cross-references use the `/manual/page#section-slug` format. The guide is the comprehensive reference for the language. The topic pages in the `library` and `use` groups, such as `/manual/permissions` and `/manual/testing`, document a library or a tool in full.
 
-### Writing Acquis and Documentation
+### Writing Documentation
 
-Acquis are tracked both as GitHub issues (label `📗 acquis`, assigned to a version milestone) and as MDX pages. Whenever you write an acquis, or any project prose (docs, changelog, spec `.md`, comments), follow these rules:
+Whenever you write any project prose (docs, changelog, spec `.md`, comments), follow these rules, and follow the style guide in `spec/design/style.md`:
 
 - **Frame everything positively.** Describe what the design is and does. Never describe it in terms of an alternative the reader has not seen. Phrasing like "there is no `tolist` method", "instead of a new global", "not an object", or "clauses rather than methods" implies an earlier proposal that exists only in your head, and the reader has no context for it. State the actual behavior instead ("the only way to run a query is the `query` iterator"). Comparisons to features that already ship, or to concepts every reader knows, are fine.
 - **No em dashes or en dashes.** Rewrite the sentence so the dash is unnecessary rather than swapping it for a hyphen. The repository is kept free of both, and `tools/lint-repo.js` enforces it.

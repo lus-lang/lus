@@ -8,7 +8,7 @@
   also pins the position prefix rules for each error() level using loaded
   chunks with controlled names and line numbers, rethrow idempotence at
   level 0, assert() message pass-through, and the bracketed catch[handler]
-  form from acquis 20.
+  form of catch handlers.
 ]]
 
 

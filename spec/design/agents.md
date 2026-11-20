@@ -28,7 +28,7 @@ Lus has an advantage most languages lack: the documentation, the checker, and th
 | Artifact | Source | Built by | Served at |
 | --- | --- | --- | --- |
 | `llms.txt` | `.agents/llms.txt`, curated by hand, with links checked | site build | `lus.dev/llms.txt` |
-| `llms-full.txt` | the guide, every acquis, the CLI page, and the API reference from `spec/stdlib` | `tools/build-llms.js` | `lus.dev/llms-full.txt` |
+| `llms-full.txt` | the guide, the CLI page, the topic pages, and the API reference from `spec/stdlib` | `tools/build-llms.js` | `lus.dev/llms-full.txt` |
 | `llms-small.txt` | `.agents/skills/lus/references/language.md` and one line per stdlib function: signature, permissions, stability | `tools/build-llms.js` | `lus.dev/llms-small.txt` |
 | Markdown pages | every manual page with MDX components rendered to Markdown | `tools/build-llms.js` | `lus.dev/manual/NAME.md` |
 | Skills `lus` and `lus-rewrite` | `.agents/skills/` | copied as is | `lus.dev/agents/skills/`, the GitHub repository, and inside the `lus` binary |
@@ -58,7 +58,7 @@ The `.agents/` folder at the repository root holds everything agents consume dir
 - `tools/build-llms.test.js` checks that every stdlib entry appears in `llms-small.txt`, that every link in `llms.txt` resolves to a page the site builds, that no MDX syntax survives into Markdown output, and that `llms-small.txt` stays under 25,000 tokens. It runs in `mise run gen:check`.
 - `mise run test` runs `lus test --doc ../.agents` beside the manual and the spec, so every code block in the skills runs on every change. Writing the skills already caught three mistakes this way: a `+=` that Lus does not parse, a missing `assert` in a `global` declaration, and a `$` that needed escaping in an interpolated string.
 - `node tools/lint-repo.js` covers `.agents/` like the rest of the repository.
-- A shortdesc audit fixes manual frontmatter that the index quotes, such as the description of acquis 12, which still names command line options that became `lus ast`.
+- A shortdesc audit fixes manual frontmatter that the index quotes, such as a description that still names command line options that became `lus ast`.
 
 ### Fast feedback for agents
 

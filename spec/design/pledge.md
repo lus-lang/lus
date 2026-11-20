@@ -4,7 +4,7 @@ Pledge is the capability system of Lus. A script states the capabilities it need
 
 ## Script syntax
 
-The script syntax is the one documented in acquis 10:
+The script syntax is the one documented on the [Permissions](/manual/permissions) page:
 
 ```lus
 pledge("fs:read=/tmp/*")   -- grant a capability with a value
@@ -13,7 +13,7 @@ pledge("~exec")            -- reject a capability permanently
 pledge("seal")             -- forbid any further change
 ```
 
-`pledge` accepts several strings in one call and returns `true` when every grant succeeds. A coroutine starts with the permission set of its creator, and changes inside it stay local to it. On the command line, `-P` and `--pledge` grant capabilities before the script runs.
+`pledge` accepts several strings in one call and returns one boolean per string, in order, which is `true` where that grant succeeded. A coroutine starts with the permission set of its creator, and changes inside it stay local to it. On the command line, `-P` and `--pledge` grant capabilities before the script runs.
 
 ## Capabilities
 

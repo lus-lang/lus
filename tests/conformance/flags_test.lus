@@ -1,7 +1,7 @@
 pledge("load", "exec", "env=LUS_EXE", "fs:read=" .. TEST_DIR .. "/fixtures/flags", "fs:read=" .. TEST_DIR .. "/fixtures/flags/*")
 
 --[[
-    Test suite for the flags feature (Acquis: flags).
+    Test suite for the flags feature.
 
     The flags table is populated from the command line, and `lus test` passes
     no flags to a test file. The cases therefore live in fixtures/flags/cases.lus,

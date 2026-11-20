@@ -1,0 +1,224 @@
+---
+order: 70
+title: SQLite
+icon: database
+group: library
+draft: true
+shortdesc: "File-backed and in-memory SQLite databases with bound parameters, prepared statements, transactions, and permission checks on every file operation."
+---
+
+The runtime embeds SQLite, a relational database engine stored in a single file. [`io.sqlite`](/manual/api#io.sqlite) opens a file-backed or in-memory database and returns a database handle, which runs SQL with bound parameters and returns rows as tables. The engine is compiled into the `lus` executable, so a program needs no system package or external library.
+
+## Opening a database
+
+`io.sqlite(path, mode)` opens the database at `path` and returns a database handle. The path `":memory:"` opens a private in-memory database. The optional `mode` is one of two strings:
+
+- `"rw"`, the default, reads and writes, and creates the file when it does not exist.
+- `"r"` opens the database read-only.
+
+Any other mode raises the error `invalid mode`. A URI filename such as `file:app.db?mode=ro` raises the error `URI filenames are not supported`.
+
+A file-backed database needs filesystem [permissions](/manual/permissions), which the [Permissions](#permissions) section describes. The following program pledges access to `app.db` and its sidecar files, creates a table, and inserts and reads a row.
+
+```lus
+global io, pledge, print
+
+pledge("fs:read=./app.db*", "fs:write=./app.db*", "seal")
+
+local db <close> = io.sqlite("app.db")
+db:exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+db:run("INSERT INTO users (name) VALUES (?)", "Alice")
+
+for row in db:query("SELECT id, name FROM users WHERE name = ?", "Alice") do
+    print(row.id, row.name)  --> 1  Alice
+end
+```
+
+## Running statements
+
+The handle runs SQL through six methods:
+
+- `db:exec(sql)` runs one or more statements, separated by semicolons in the SQL text, for their side effects. It takes no parameters.
+- `db:run(sql, ...)` runs a single statement with bound parameters and returns two integers: the number of rows the statement changed and the row id of the last inserted row.
+- `db:query(sql, ...)` runs a single statement with bound parameters and returns an iterator over the result rows. Each row is a table keyed by column name.
+- `db:prepare(sql)` compiles a statement once and returns it. The statement's `stmt:run(...)` and `stmt:query(...)` execute it with fresh bindings and return what `db:run` and `db:query` return.
+- `db:transaction(fn)` runs `fn` inside a transaction. If `fn` returns, the transaction commits and `db:transaction` returns every value that `fn` returned. If `fn` raises an error, the transaction rolls back and the error propagates.
+- `db:close()` closes the handle.
+
+```lus
+global io, ipairs, print, table
+
+local db <close> = io.sqlite(":memory:")
+db:exec([[
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER);
+    CREATE INDEX users_age ON users (age);
+]])
+
+local insert = db:prepare("INSERT INTO users (name, age) VALUES (?, ?)")
+db:transaction(function()
+    for _, person in ipairs({ {"Alice", 30}, {"Bob", 17}, {"Carol", 41} }) do
+        insert:run(person[1], person[2])
+    end
+end)
+
+print(db:run("UPDATE users SET age = age + 1 WHERE age < ?", 40))  --> 2  3
+
+local adults = db:prepare("SELECT name FROM users WHERE age >= ? ORDER BY name")
+local names = {}
+for row in adults:query(18) do
+    names[#names + 1] = row.name
+end
+print(table.concat(names, " "))  --> Alice Bob Carol
+```
+
+A transaction that raises an error leaves the database as it was before the transaction began.
+
+```lus
+global error, io, print
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE log (line TEXT)")
+
+print(db:transaction(function()
+    db:run("INSERT INTO log VALUES ('kept')")
+    return "done"
+end))                                         --> done
+
+print(catch db:transaction(function()
+    db:run("INSERT INTO log VALUES ('dropped')")
+    error("abort")
+end))                                         --> false  ...: abort
+
+for row in db:query("SELECT count(*) AS n FROM log") do
+    print(row.n)                              --> 1
+end
+```
+
+An error in the SQL itself, such as an unknown column, raises an error object that holds the message of SQLite.
+
+```lus
+global io, print
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE t (n INTEGER)")
+print(catch db:run("SELECT missing FROM t"))  --> false  no such column: missing
+```
+
+## Parameters
+
+Placeholders carry every value into a statement, so text that came from interpolation or concatenation reaches the database as data and never as SQL. A statement uses one of two placeholder styles:
+
+- A positional `?` binds the extra arguments of `run` or `query` in order.
+- A named placeholder, written `:name`, `@name`, or `$name`, binds from a single table argument keyed by the bare name.
+
+A statement must use one style. A statement that mixes them raises the error `statement mixes named and positional parameters`. Numbered placeholders such as `?1` raise the error `numbered parameters are not supported`. A statement given fewer values than it has positional placeholders raises an error that states both counts.
+
+```lus
+global io, print
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE users (name TEXT, age INTEGER)")
+db:run("INSERT INTO users VALUES (?, ?)", "Alice", 30)
+db:run("INSERT INTO users VALUES (:name, :age)", { name = "Bob", age = 25 })
+
+for row in db:query("SELECT name FROM users WHERE age < $limit", { limit = 28 }) do
+    print(row.name)                                        --> Bob
+end
+
+print(catch db:run("INSERT INTO users VALUES (?1, 0)", "x"))  --> false  ...: numbered parameters are not supported
+```
+
+## Types
+
+Values map between Lus and SQLite in both directions:
+
+| Lus value | Binds as | Reads back as |
+|---|---|---|
+| `nil` | `NULL` | an absent field |
+| `true`, `false` | `1`, `0` | the integer `1` or `0` |
+| integer | `INTEGER` | integer |
+| float | `REAL` | float |
+| string | `TEXT` | string |
+| [`vector`](/manual/text#vectors) | `BLOB` | vector |
+
+Binding NaN stores `NULL`, as SQLite does. A `NULL` column is absent from its row table, so reading it gives `nil`. A `TEXT` value that is not valid UTF-8 raises an error when the row is read, and the message names the column and the byte offset. Selecting such a value as a `BLOB` reads its bytes as a vector.
+
+```lus
+global io, print, type, vector
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE files (name TEXT, data BLOB, ok, size REAL)")
+db:run("INSERT INTO files VALUES (?, ?, ?, ?)", "a.bin", vector.fromstring("\u{0}\u{1}"), true, 0 / 0)
+
+for row in db:query("SELECT * FROM files") do
+    print(row.name, type(row.data), #row.data, row.ok, row.size)  --> a.bin  vector  2  1  nil
+end
+```
+
+## Queries over tables
+
+Indexing a handle with a name that is not one of its methods yields a table reference, which serves as the source of an [`@` query expression](/manual/guide#query). The [`query`](/manual/api#query) iterator pushes the conditions it can translate down to SQLite as a parameterized `SELECT`, with the same protection that hand-written placeholders give. The table reference keeps its database alive.
+
+```lus
+global io, print, query
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE users (name TEXT, age INTEGER)")
+db:run("INSERT INTO users VALUES (?, ?)", "Alice", 30)
+db:run("INSERT INTO users VALUES (?, ?)", "Bob", 12)
+
+local min = 18
+for row in query(@db.users as u where u.age >= min select u.name) do
+    print(row.name)  --> Alice
+end
+```
+
+## Lifetime
+
+A database handle manages its native resources the same way the file handles of [`io.open`](/manual/api#io.open) do. It carries a `__close` metamethod, so a to-be-closed variable such as `local db <close> = io.sqlite(path)` closes the database when its block exits, including an exit through an error. It also carries a `__gc` finalizer, which closes a handle that a program leaves open. An explicit `db:close()` closes a handle that outlives a single block. Closing a database finalizes its live statements first.
+
+Prepared statements follow the same rules through `stmt:close()`, their own `__close` metamethod, and finalization. A closed statement raises the error `attempt to use a closed statement`. A query iteration holds a cursor that is itself a to-be-closed value, so a `break` out of the loop releases the statement at once.
+
+## Permissions
+
+`io.sqlite` opens files through the `io` library, so it is gated by the same value-scoped [pledges](/manual/permissions) as `io.open`. Opening a file-backed database checks its path against `fs:read`, and, in mode `"rw"`, against `fs:write`. A pledge-aware SQLite VFS on each connection then authorizes every operation on the main file and on its `-journal`, `-wal`, and `-shm` sidecar files when SQLite performs it. A pledge written as `fs:write=./app.db*` covers the database and its sidecars together.
+
+A writable connection runs in WAL mode, and it requires `fs:write` for creating, deleting, and extending files and for every other write to the main file or a sidecar.
+
+A connection in mode `"r"` requires only `fs:read`. It reads existing WAL and SHM files through read-only objects, takes shared coordination locks, and reads the WAL index, including when a writable connection in the same process already owns the SHM state. It never initializes, truncates, extends, deletes, or writes the SHM file, and it never takes an exclusive SHM lock. A sidecar state that needs creation or recovery raises an `fs:write` permission error. A write through a read-only connection raises the error `attempt to write a readonly database`.
+
+An in-memory database needs no filesystem pledge, so `":memory:"` works in sealed programs and in tests.
+
+```lus
+global io, pledge, print
+
+pledge("seal")
+
+print(catch io.sqlite("app.db", "r"))  --> false  ...: permission "fs:read" denied for 'app.db'
+
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE t (n INTEGER)")
+print(db:run("INSERT INTO t VALUES (?)", 42))  --> 1  1
+```
+
+The runtime confines SQLite to the paths that the pledge checks cover:
+
+- Temporary structures, such as statement journals and sort trees, live in memory.
+- `ATTACH` and `VACUUM INTO` raise an authorization error. A plain `VACUUM` runs.
+- The path-changing PRAGMAs `data_store_directory`, `temp_store_directory`, and `lock_proxy_file` are denied in any letter case.
+- Loading SQLite extensions is compiled out.
+
+## Workers
+
+SQLite calls run synchronously on the calling thread. Database work that should run beside other computation can move to a [worker](/manual/concurrency). A database handle lives in the interpreter state that opened it and cannot be sent in a worker message, so a worker uses a database by opening the same authorized path itself. WAL mode lets several readers work while one connection writes.
+
+## Builds
+
+The embedded engine is the SQLite amalgamation, built with its math functions enabled. A runtime built with `zig build -Dsqlite=false` leaves out SQLite and `io.sqlite`. The WebAssembly build includes SQLite without the write-ahead log, since WASI provides no shared memory, and uses the dot-file locking of SQLite.
+
+## Related pages
+
+- [Permissions](/manual/permissions) describes `pledge` and the `fs:read` and `fs:write` permissions.
+- [Text and bytes](/manual/text) describes the strings and vectors that `TEXT` and `BLOB` columns hold.
+- [Data formats](/manual/data) covers JSON and CSV for data that lives in files.
+- [Concurrency](/manual/concurrency) covers workers and detached coroutines.

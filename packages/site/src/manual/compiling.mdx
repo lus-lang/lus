@@ -65,7 +65,7 @@ This step writes the static library `liblus.a`, the shared `liblus`, and the hea
 cc -o myapp myapp.c -Izig-out/include zig-out/lib/liblus.a
 ```
 
-[Embedding Lus](/manual/guide#embedding-lus) in the Guide introduces the interface, and [Acquis 41](/manual/acquis-41) documents it in full.
+[Embedding Lus](/manual/guide#embedding-lus) in the Guide introduces the interface, and [Embedding](/manual/embedding) documents it in full.
 
 ## WebAssembly
 
@@ -73,4 +73,4 @@ cc -o myapp myapp.c -Izig-out/include zig-out/lib/liblus.a
 zig build wasm
 ```
 
-This step writes `zig-out/wasm/lus.wasm`, a WASI module that exports the embedding interface. The `lus-wasm` package in `packages/wasm` runs it in browsers, web workers, and Node, as described in [Acquis 42](/manual/acquis-42).
+This step writes `zig-out/wasm/lus.wasm`, a WASI module that exports the embedding interface. The `lus-wasm` package in `packages/wasm` runs it in browsers, web workers, and Node, as described in [WebAssembly](/manual/webassembly).

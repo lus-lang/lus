@@ -76,8 +76,9 @@ for (const name of ["llms.txt", "llms-full.txt", "llms-small.txt", "manual/api.m
 }
 assert.ok(estimateTokens(result.files.get("llms-small.txt")) <= SMALL_TOKEN_BUDGET);
 const full = result.files.get("llms-full.txt");
-for (const page of result.pages) {
-  if (/^acquis-\d+$/.test(page.id)) assert.ok(full.includes(`## ${page.meta.title}\n`), `llms-full.txt lacks ${page.id}`);
+for (const id of ["guide", "permissions", "network", "testing"]) {
+  const page = result.pages.find((p) => p.id === id);
+  assert.ok(page && full.includes(`## ${page.meta.title}\n`), `llms-full.txt lacks ${id}`);
 }
 for (const e of result.stdlib) {
   assert.ok(result.files.get("manual/api.md").includes(`### ${e.name}\n`), `api.md lacks ${e.name}`);

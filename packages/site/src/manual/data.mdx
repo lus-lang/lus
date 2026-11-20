@@ -1,0 +1,415 @@
+---
+order: 60
+title: Data formats
+icon: braces
+group: library
+shortdesc: "JSON and CSV parsing and serialization, and the table and string functions that aggregate, transform, and split data."
+---
+
+Lus reads and writes JSON and CSV with four global functions, [`fromjson`](/manual/api#fromjson), [`tojson`](/manual/api#tojson), [`fromcsv`](/manual/api#fromcsv), and [`tocsv`](/manual/api#tocsv). The [`table`](/manual/api#table-library) and [`string`](/manual/api#string-library) libraries add functions that aggregate, transform, group, split, and trim the data once it is in tables and strings.
+
+## JSON
+
+`fromjson` parses RFC 8259 JSON into Lus values, and `tojson` serializes a Lus value as JSON text.
+
+```lus
+global fromjson, print, tojson
+
+local data = fromjson('{"name": "Alice", "scores": [95, 87]}')
+print(data.name, data.scores[2])     --> Alice  87
+
+local back = fromjson(tojson(data))
+print(back.name, #back.scores)       --> Alice  2
+```
+
+### Parsing
+
+`fromjson(s, options)` parses one complete JSON value from `s`, and the whole input must be valid. A numeric argument is converted to its textual form before parsing. Any other argument type raises a type error. JSON values map to Lus values as follows:
+
+- `null` becomes `nil`.
+- `true` and `false` become booleans.
+- A number written with integer syntax becomes an integer, and a number with a decimal point or an exponent becomes a float.
+- A string becomes a string.
+- An array becomes a table with integer keys from 1.
+- An object becomes a table with string keys. If an object repeats a key, the last value wins.
+
+```lus
+global fromjson, math, print
+
+print(math.type(fromjson("42")), math.type(fromjson("1e2")))  --> integer  float
+print(fromjson("null"), fromjson("true"), fromjson('"hi"'))   --> nil  true  hi
+print(fromjson('{"a": 1, "a": 2}').a)                         --> 2
+```
+
+JSON null maps to `nil`, so a null object field is absent from the resulting table and a null array element leaves a hole. A parse and serialize cycle therefore changes the structure of JSON that contains null values.
+
+```lus
+global fromjson, print, tojson
+
+local row = fromjson('[1, null, 3]')
+print(row[1], row[2], row[3])                 --> 1  nil  3
+print(tojson(fromjson('{"a": null}')))        --> []
+```
+
+The optional `options` table takes the boolean field `exact`. With `exact` set, an integer that overflows 64 bits decodes as a bigint, and a number with a fraction or an exponent decodes as a decimal. `tojson` writes both subtypes back with their exact digits, so `exact` preserves numbers such as prices and identifiers through a round trip. The guide describes [bigints and decimals](/manual/guide#number).
+
+```lus
+global fromjson, math, print, tojson
+
+local price = fromjson('{"price": 19.90}', { exact = true }).price
+print(math.type(price), price, tojson(price))  --> decimal  19.90  19.90
+
+local id = fromjson("123456789012345678901234567890", { exact = true })
+print(math.type(id), tojson(id))               --> bigint  123456789012345678901234567890
+```
+
+Without `exact`, a number outside the range of a 64-bit integer or a float raises an error. Invalid syntax, trailing data after the value, and nesting deeper than 1,000 arrays and objects also raise errors. The message names the 1-based byte position of the problem.
+
+```lus
+global fromjson, print
+
+print(catch fromjson('{"invalid}'))             --> false  JSON parse error at position 11: unterminated string
+print(catch fromjson("[1] x"))                  --> false  JSON parse error at position 5: unexpected trailing characters
+print(catch fromjson("99999999999999999999"))   --> false  JSON parse error at position 1: number out of range
+```
+
+### Serializing
+
+`tojson(value, filter)` returns a string. A table whose complete key set is the contiguous integer range from 1 through `n` becomes a JSON array, and the empty table becomes `[]`. Every other table becomes an object, which keeps its string keys and omits keys of every other type. A table with integer keys that leave a gap is therefore an object with no members.
+
+```lus
+global print, tojson
+
+print(tojson({10, 20, 30}))           --> [10,20,30]
+print(tojson({}))                     --> []
+print(tojson({1, 2, name = "pair"}))  --> {"name":"pair"}
+print(tojson({[1] = "a", [3] = "c"}))  --> {}
+```
+
+The order of the members of an object is unspecified. Code that consumes an object parses it and reads its fields by name.
+
+Numbers serialize as follows:
+
+- An integer, a bigint, or a decimal is written with its exact digits.
+- A float with a whole value is written without a decimal point, so it parses back as an integer.
+- Any other float is written with 17 significant digits, which parse back to the same float.
+- An infinity or NaN becomes `null`.
+
+```lus
+global math, print, tojson
+
+print(tojson(3.0), tojson(0.1))               --> 3  0.10000000000000001
+print(tojson(math.huge), tojson(0 / 0))       --> null  null
+```
+
+Functions, threads, userdata, vectors, and enum values have no JSON form. Each becomes `null` at the root or in an array, and an object field that holds one is omitted.
+
+```lus
+global print, tojson
+
+local status = enum ready, done end
+print(tojson(status.ready))            --> null
+print(tojson({status.ready}))          --> [null]
+print(tojson({status = status.ready})) --> {}
+```
+
+A table that appears several times in an acyclic structure is written by value each time it appears. A table that contains itself, directly or through other tables, raises the error `circular reference detected in table`.
+
+```lus
+global print, tojson
+
+local child = {value = 1}
+print(tojson({child, child}))  --> [{"value":1},{"value":1}]
+
+local cycle = {}
+cycle.self = cycle
+print(catch tojson(cycle))     --> false  ...: circular reference detected in table
+```
+
+Serialization enforces the same ceiling of 1,000 nested levels as parsing. It also follows the C-call limit of the interpreter, which stops a table nested about 200 levels deep with the error `C stack overflow` before the ceiling applies.
+
+### Filters
+
+The optional `filter` function of `tojson` transforms values or omits them. `tojson` first calls it with the key `nil` and the root value, then with each integer key of an array and each string key of an object, together with the value at that key. The filter returns the value to serialize in its place. A returned table is traversed and filtered in turn.
+
+If the filter returns `nil`, the field is omitted from an object, the element becomes `null` in an array, and the root becomes `null`. An error raised in the filter propagates from `tojson`.
+
+```lus
+global print, tojson
+
+local user = {name = "Alice", password = "secret"}
+print(tojson(user, function(key, value)
+    if key == "password" then return nil end
+    return value
+end))                                    --> {"name":"Alice"}
+
+print(tojson({1, 2, 3}, function(key, value)
+    if key == 2 then return nil end
+    return value
+end))                                    --> [1,null,3]
+```
+
+### The `__json` metamethod
+
+A table whose metatable has a `__json` field serializes as the value that `__json` returns when called with the table. The returned value follows the same rules and may have a `__json` metamethod of its own. If `__json` returns `nil`, the table serializes as `null`. An error raised in the metamethod propagates from `tojson`.
+
+```lus
+global fromjson, print, setmetatable, tojson
+
+local Point = {}
+Point.__index = Point
+Point.__json = function(self)
+    return {x = self.x, y = self.y}
+end
+
+local point = setmetatable({x = 10, y = 20, internal = "data"}, Point)
+local decoded = fromjson(tojson(point))
+print(decoded.x, decoded.y, decoded.internal)  --> 10  20  nil
+```
+
+Booleans, numbers that keep their subtype, strings, contiguous arrays, and string-keyed objects round trip unchanged. A program that needs a value for JSON null distinct from `nil` represents it with a value of its own, such as a table with a `__json` metamethod that returns `nil`.
+
+## CSV
+
+`fromcsv` parses CSV text into a table of rows, and `tocsv` writes a table of rows as CSV text. Both follow RFC 4180.
+
+### Parsing CSV
+
+`fromcsv(s, headers, delimiter)` returns a table with one entry per row. Each row is a sequential table of strings, and fields are never converted to numbers. A numeric argument is parsed as its textual form, and any other type that is not a string raises a type error.
+
+```lus
+global fromcsv, print
+
+local data = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London")
+print(#data, data[1][1], data[2][1], data[2][2])  --> 3  name  Alice  30
+```
+
+When `headers` is `true`, the first row names the columns, and each later row becomes a table keyed by those names. A row with fewer fields than the header leaves the missing names absent, and a field beyond the last name is dropped.
+
+```lus
+global fromcsv, print
+
+local people = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London", true)
+print(#people, people[1].name, people[1].age, people[2].city)  --> 2  Alice  30  London
+```
+
+A field that contains the delimiter, a line break, or a double quote is enclosed in double quotes. A double quote inside a quoted field is written twice. Rows end with a line feed or with a carriage return followed by a line feed, and a final line break adds no row. An empty line inside the text is a row with one empty field.
+
+```lus
+global fromcsv, print
+
+local data = fromcsv('"hello, world","she said ""hi"""\r\n"two\nlines",x')
+print(data[1][1], data[1][2])  --> hello, world  she said "hi"
+print(#data, data[2][2])       --> 2  x
+```
+
+The optional `delimiter` is a single character and defaults to `","`. A longer delimiter raises an error.
+
+```lus
+global fromcsv, print
+
+local data = fromcsv("name\tage\nAlice\t30", false, "\t")
+print(data[2][1], data[2][2])  --> Alice  30
+```
+
+An unterminated quoted field, and a character other than the delimiter or a line break after the closing quote of a field, raise an error that names the byte position.
+
+```lus
+global fromcsv, print
+
+print(catch fromcsv('"unterminated'))  --> false  ...: CSV parse error at position 14: unterminated quoted field
+print(catch fromcsv('"a"b,c'))         --> false  ...: CSV parse error at position 4: unexpected character after quoted field
+```
+
+### Writing CSV
+
+`tocsv(rows, delimiter)` returns a string with one line per row, and every line, the last included, ends with a line feed. Each row must be a table. A row that is not a table raises the error `row N is not a table`.
+
+```lus
+global print, tocsv
+
+local csv = tocsv({
+    {"name", "age"},
+    {"Alice", 30},
+})
+print(csv == "name,age\nAlice,30\n")  --> true
+```
+
+`tostring` converts each value that is not a string. The number of fields in a row is its length as the `#` operator reports it, and a `nil` inside that length becomes an empty field. A `nil` can end the length of a row early, so an empty field is written most reliably as `""`. A field that contains the delimiter, a line break, or a double quote is enclosed in double quotes, with each inner double quote written twice.
+
+```lus
+global print, tocsv
+
+print(tocsv({{1, true, 3.14}}) == "1,true,3.14\n")                    --> true
+print(tocsv({{"a", "", "c"}}) == "a,,c\n")                            --> true
+print(tocsv({{"hello, world", 'say "hi"'}}) == '"hello, world","say ""hi"""\n')  --> true
+```
+
+The optional `delimiter` is a single character and defaults to `","`.
+
+```lus
+global print, tocsv
+
+print(tocsv({{"a", "b"}, {"c", "d"}}, "\t") == "a\tb\nc\td\n")  --> true
+```
+
+## Table functions
+
+The `table` library has functions that compute statistics over arrays and build new tables from old ones. Each reads its array argument from index 1 to the length that `#` reports.
+
+### Statistics
+
+[`table.sum`](/manual/api#table.sum), [`table.mean`](/manual/api#table.mean), [`table.median`](/manual/api#table.median), and [`table.stdev`](/manual/api#table.stdev) consider the numeric values of an array. A string that names a number counts as that number, and every other value is skipped. Each function returns a float:
+
+- `table.sum` returns the sum, and `0.0` for an array with no numeric values.
+- `table.mean` returns the arithmetic mean.
+- `table.median` returns the middle value of the sorted numbers, or the mean of the two middle values when their count is even. It leaves the array unchanged.
+- `table.stdev(array, sample)` returns the population standard deviation, which divides by the count `n`. When `sample` is `true`, it returns the sample standard deviation, which divides by `n - 1`.
+
+`table.mean`, `table.median`, and `table.stdev` return NaN when the array has no numeric values.
+
+```lus
+global print, table
+
+print(table.sum({1, 2, 3, 4, 5}), table.sum({1, "skip", "2"}))  --> 15.0  3.0
+print(table.mean({10, 20}), table.median({5, 1, 3, 2, 4}))      --> 15.0  3.0
+print(table.median({1, 2, 3, 4}), table.mean({}))               --> 2.5  nan
+
+local values = {2, 4, 4, 4, 5, 5, 7, 9}
+print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.1380899352993952
+```
+
+The sums inside `table.sum`, `table.mean`, and `table.stdev` add in a fixed order through eight accumulators, so the result is the same on every platform and for every way the table is stored. The API entries give the order.
+
+### Transforming arrays
+
+[`table.map(array, func)`](/manual/api#table.map) returns a new table whose element `i` is `func(array[i], i)`. A call that returns `nil` leaves a hole at that index. [`table.filter(array, predicate)`](/manual/api#table.filter) returns a new dense array of the elements for which `predicate(element)` returns a truthy value. Neither changes its argument.
+
+```lus
+global print, table
+
+local doubled = table.map({1, 2, 3}, function(x) return x * 2 end)
+print(doubled[1], doubled[2], doubled[3])  --> 2  4  6
+
+local evens = table.filter({1, 2, 3, 4, 5}, function(x) return x % 2 == 0 end)
+print(#evens, evens[1], evens[2])          --> 2  2  4
+```
+
+[`table.reduce(array, func, initial)`](/manual/api#table.reduce) folds the array into one value. It calls `func(accumulator, element, index)` for each element and keeps the result as the next accumulator. If `initial` is absent, the first element is the starting accumulator and the fold begins at the second element. An empty array with no `initial` raises an error.
+
+```lus
+global print, table
+
+print(table.reduce({1, 2, 3, 4, 5}, function(acc, x) return acc + x end, 0))  --> 15
+print(table.reduce({1, 2, 3, 4}, function(acc, x) return acc * x end))       --> 24
+print(catch table.reduce({}, function(acc, x) return acc end))              --> false  ...: 'reduce' on empty table with no initial value
+```
+
+### Grouping and sorting
+
+[`table.groupby(array, keyfunc)`](/manual/api#table.groupby) returns a new table that maps each result of `keyfunc(element)` to an array of the elements that produced it, in their original order. A key function that returns `nil` raises the error `table index is nil`.
+
+```lus
+global print, table
+
+local people = {
+    {name = "Alice", dept = "eng"},
+    {name = "Bob", dept = "sales"},
+    {name = "Charlie", dept = "eng"},
+}
+
+local byDept = table.groupby(people, function(p) return p.dept end)
+print(#byDept.eng, #byDept.sales, byDept.eng[2].name)  --> 2  1  Charlie
+```
+
+[`table.sortby(array, keyfunc, asc)`](/manual/api#table.sortby) sorts the array in place by the key that `keyfunc` returns for each element, and returns nothing. It calls `keyfunc` once per element and compares the keys with `<`. The sort is stable, so elements with equal keys keep their relative order. When `asc` is `false`, the order is descending. Otherwise it is ascending.
+
+```lus
+global print, table
+
+local people = {
+    {name = "Charlie", age = 35},
+    {name = "Alice", age = 30},
+    {name = "Bob", age = 25},
+}
+
+table.sortby(people, function(p) return p.age end)
+print(people[1].name, people[3].name)  --> Bob  Charlie
+
+table.sortby(people, function(p) return p.age end, false)
+print(people[1].name)                  --> Charlie
+```
+
+### Combining arrays
+
+[`table.zip(...)`](/manual/api#table.zip) combines several arrays element by element into an array of tuples, where tuple `i` is `{t1[i], t2[i], ...}`. The result is as long as the shortest argument. [`table.unzip(tuples)`](/manual/api#table.unzip) does the reverse and returns one array per position. The number of arrays it returns is the length of the first tuple, and it returns nothing for an empty table.
+
+```lus
+global print, table
+
+local zipped = table.zip({"Alice", "Bob", "Charlie"}, {30, 25})
+print(#zipped, zipped[1][1], zipped[2][2])  --> 2  Alice  25
+
+local names, ages = table.unzip({{"Alice", 30}, {"Bob", 25}})
+print(names[2], ages[1])                    --> Bob  30
+```
+
+### Matrices
+
+A matrix is an array of rows, each an array of the same length. [`table.transpose(matrix)`](/manual/api#table.transpose) returns a new matrix in which `result[i][j]` is `matrix[j][i]`. Rows of different lengths raise the error `non-rectangular matrix in 'transpose'`. [`table.reshape(array, rows, cols)`](/manual/api#table.reshape) arranges a flat array into a matrix of `rows` rows and `cols` columns in row-major order. The length of the array must equal `rows * cols`, and any other length raises an error.
+
+```lus
+global print, table
+
+local t = table.transpose({{1, 2, 3}, {4, 5, 6}})
+print(#t, t[1][2], t[3][1])                  --> 3  4  3
+
+local m = table.reshape({1, 2, 3, 4, 5, 6}, 2, 3)
+print(#m, m[1][3], m[2][1])                  --> 2  3  4
+print(catch table.reshape({1, 2, 3}, 2, 2))  --> false  ...: array length 3 does not match 2 x 2
+```
+
+## String functions
+
+[`string.split(s, delimiter)`](/manual/api#string.split) splits a string on a literal delimiter, which may be several characters long, and returns an array of the pieces. Consecutive delimiters, and a delimiter at either end, produce empty strings. An empty delimiter splits the string into its characters.
+
+```lus
+global print, string
+
+local parts = string.split("apple,banana,cherry", ",")
+print(#parts, parts[1], parts[3])         --> 3  apple  cherry
+
+local dirs = string.split("a//b", "/")
+print(#dirs, dirs[2] == "")               --> 3  true
+
+local chars = ("héllo"):split("")
+print(#chars, chars[2])                   --> 5  é
+```
+
+[`string.join(t, delimiter)`](/manual/api#string.join) joins the elements of an array with the delimiter between them and converts values that are not strings with `tostring`. An empty array produces the empty string. The delimiter is required.
+
+```lus
+global print, string
+
+print(string.join({"hello", "world"}, " "))   --> hello world
+print(string.join({1, true, 2.5}, ","))       --> 1,true,2.5
+print(string.join({}, ",") == "")             --> true
+```
+
+[`string.trim`](/manual/api#string.trim) removes characters from both ends of a string, [`string.ltrim`](/manual/api#string.ltrim) from the start, and [`string.rtrim`](/manual/api#string.rtrim) from the end. Without a second argument they remove spaces, tabs, line feeds, and carriage returns. With a string of characters as the second argument, they remove every character of that set instead.
+
+```lus
+global print, string
+
+print("[" .. string.trim("  hello  ") .. "]")   --> [hello]
+print("[" .. string.ltrim("  hello  ") .. "]")  --> [hello  ]
+print("[" .. string.rtrim("  hello  ") .. "]")  --> [  hello]
+print(string.trim("xyhixy", "yx"), string.trim("éhié", "é"))  --> hi  hi
+```
+
+## Related pages
+
+- [Text and bytes](/manual/text) covers strings, vectors, transcoding, and compression.
+- [SQLite](/manual/sqlite) stores tabular data in a database.
+- [Filesystem](/manual/filesystem) reads and writes the files that hold JSON and CSV.
+- The [guide](/manual/guide#query) describes `@` query expressions, which filter, project, and sort tables of records.

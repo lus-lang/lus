@@ -1,4 +1,4 @@
--- Worker library tests (Acquis 11)
+-- Worker library tests
 
 local WDIR1 = TEST_DIR .. "/fixtures/worker/"
 

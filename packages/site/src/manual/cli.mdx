@@ -40,9 +40,9 @@ The `lus` executable runs scripts and carries the tools of a Lus project as comm
 | `-v`, `--version` | Show version information. |
 | `-E` | Ignore environment variables such as `LUS_PATH`. |
 | `-W` | Turn warnings on. |
-| `-P perm`, `--pledge perm` | Grant a [permission](/manual/acquis-10), such as `-Pfs:read` or `-Pnetwork`. |
-| `-F name[=value]`, `--flag name[=value]` | Define a readonly [compile-time flag](/manual/acquis-28). No value means `true`, a numeric value is a number, and anything else is a string. |
-| `--include path[:alias]` | [Preinclude](/manual/acquis-29) a module file or directory so `require` finds it without `load` or `fs` permissions. |
+| `-P perm`, `--pledge perm` | Grant a [permission](/manual/permissions), such as `-Pfs:read` or `-Pnetwork`. |
+| `-F name[=value]`, `--flag name[=value]` | Define a readonly [compile-time flag](/manual/guide#compile-time-flags). No value means `true`, a numeric value is a number, and anything else is a string. |
+| `--include path[:alias]` | [Preinclude](/manual/guide#preincluded-modules) a module file or directory so `require` finds it without `load` or `fs` permissions. |
 | `--readonly-env` | Freeze `_ENV` and the module tables after startup. |
 | `--gc-pause N` | Let the heap grow by N percent of its live size before a collection starts. Lower values trade CPU for lower peak memory. |
 | `--dis` | Print the bytecode of the script instead of running it. The script compiles exactly as it would run, so the listing reflects the flags given with `-F`. |
@@ -55,7 +55,7 @@ The `lus` executable runs scripts and carries the tools of a Lus project as comm
 lus test [options] [path ...]
 ```
 
-Runs the tests in the named files, or in every `*_test.lus` file below the named directories, the current directory by default. Each file runs in its own process and temporary directory, and files run in parallel. [Acquis 38](/manual/acquis-38) describes how to write tests.
+Runs the tests in the named files, or in every `*_test.lus` file below the named directories, the current directory by default. Each file runs in its own process and temporary directory, and files run in parallel. [Testing](/manual/testing) describes how to write tests.
 
 | Option | Effect |
 | --- | --- |
@@ -113,7 +113,7 @@ Generates reference documentation from `---` doc comments, one module per file.
 lus ast [--no-comments] [--no-recover] file
 ```
 
-Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/manual/acquis-12) returns.
+Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/manual/api#debug.parse) returns.
 
 | Option | Effect |
 | --- | --- |
@@ -126,7 +126,7 @@ Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/man
 lus build [options] script
 ```
 
-Bundles a script and every module it requires by a literal name into a standalone executable. [Acquis 39](/manual/acquis-39) describes the bundle.
+Bundles a script and every module it requires by a literal name into a standalone executable. [Developer tools](/manual/tools) describes the bundle.
 
 | Option | Effect |
 | --- | --- |
@@ -155,7 +155,7 @@ Compiles a script to a binary chunk, the same chunk that [`string.dump`](/manual
 lus debug [--stdio | --port N] [-P perm]... [script [args]]
 ```
 
-Runs a script under the Debug Adapter Protocol for editors such as VS Code. [Acquis 40](/manual/acquis-40) describes the debugger.
+Runs a script under the Debug Adapter Protocol for editors such as VS Code. [Developer tools](/manual/tools#debugger) describes the debugger.
 
 | Option | Effect |
 | --- | --- |

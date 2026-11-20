@@ -261,7 +261,7 @@ local function walk_expr(node, s)
     end
 
   elseif ntype == "doexpr" then
-    -- Do expression: creates a scope (acquis 23)
+    -- Do expression: creates a scope
     local doexpr_scope = new_scope("doexpr", s, node)
     if node.children then
       walk_children(node.children, doexpr_scope)
@@ -631,7 +631,7 @@ walk_node = function(node, s)
     end
 
   elseif ntype == "if" then
-    -- Check for if-assignment (acquis 3): cond is an assign node
+    -- Check for if-assignment: cond is an assign node
     -- whose lhs names are scoped to the entire if block
     local if_scope = new_scope("if", s, node)
     -- Track catch-assignment siblings for narrowing in then-block
@@ -761,7 +761,7 @@ walk_node = function(node, s)
     end
 
   elseif ntype == "while" then
-    -- Check for while-assignment (acquis 13)
+    -- Check for while-assignment
     local while_scope = new_scope("block", s, node)
     if node.cond and node.cond.type == "assign" then
       walk_expr_list(node.cond.rhs, s)

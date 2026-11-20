@@ -2,7 +2,7 @@ pledge("load")
 
 -- ===== fs2 =====
 --[[
-    Tests for the fs module (Acquis: filesystem), run against a namespaced
+    Tests for the fs module, run against a namespaced
     temporary tree: directory iteration on empty
     and nested directories, the two return values of fs.type, error returns
     on missing paths, path edge cases including trailing separators and dot
