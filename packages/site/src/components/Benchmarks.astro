@@ -86,8 +86,9 @@ function row(
 }
 
 // a skyline of the runtimes: one bar per column, its height the geometric
-// mean of the runtime's standing in each program (1 for the best), on a
-// scale of one to eight cubes. Higher is better in both modes.
+// mean of the runtime's cost relative to the best in each program (1 for
+// the best), on a log scale of one cube per doubling after the first.
+// Lower is better, like the tables beneath it.
 function standing(key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", httpHigher: boolean) {
   const rowsOf = [
     ...programs.map((p) => ({ cells: data.programs[p], key, higher: false })),
@@ -104,10 +105,10 @@ function standing(key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", ht
       if (!own || own.ok === false || typeof own[r.key] !== "number") continue
       const v = own[r.key] as number
       const best = r.higher ? Math.max(...values) : Math.min(...values)
-      scores.push(r.higher ? v / best : best / v)
+      scores.push(r.higher ? best / v : v / best)
     }
     const g = Math.exp(scores.reduce((a, s) => a + Math.log(s), 0) / scores.length)
-    return 1 + Math.round(g * 7)
+    return 1 + Math.round(Math.log2(g) * 3)
   })
 }
 
