@@ -991,6 +991,32 @@ pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8),
     return s;
 }
 
+/// Creates a table that holds the list `vals` in its array part, as a
+/// parser makes it once it read every value. A list whose values all fit
+/// an unboxed kind keeps one word per slot in the cell of its table,
+/// where a constructor reserves a full value per slot so that the part
+/// can box in place.
+pub fn newListIn(g: *Global, vals: []const Value) Allocator.Error!*Table {
+    var kind: Table.ArrayKind = .none;
+    for (vals) |v| kind = table.joinKind(kind, v);
+    if (kind == .boxed or vals.len == 0) {
+        const t = try newTableIn(g, vals.len, 0);
+        table.storeList(g.gpa, t, 0, vals) catch return error.OutOfMemory;
+        return t;
+    }
+    gc.maybeCollect(g);
+    const units = table.inlineUnitsSlots(vals.len, 0, @sizeOf(u64));
+    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16);
+    t.* = .{ .hdr = t.hdr, .inline_units = @intCast(units) };
+    if (units > 0) {
+        table.initInline(t, vals.len, 0);
+    } else {
+        table.resize(g.gpa, t, vals.len, 0) catch return error.OutOfMemory;
+    }
+    table.storeList(g.gpa, t, 0, vals) catch return error.OutOfMemory;
+    return t;
+}
+
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
     gc.maybeCollect(g);
     // Small parts of known size live in the cell of the table itself.

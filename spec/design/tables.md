@@ -62,7 +62,7 @@ A node of 32 bytes held two full values, and native code copied a value with one
 
 ## Storage in the table cell
 
-A table created with known sizes, as every constructor and `table.create` create them, keeps its first parts in its own cell when they fit in 512 bytes: the tag area and the nodes of the hash part first, then the array part. Building a small record or a short list then takes one allocation from the page heap, where separate parts would take one or two more from the backing allocator. The array part there reserves 16 bytes per slot, so an unboxed part boxes in place by walking down from the last slot. A part that outgrows the cell moves to the backing allocator as before, and the space it leaves stays with the cell until the table dies.
+A table created with known sizes, as every constructor and `table.create` create them, keeps its first parts in its own cell when they fit in 512 bytes: the tag area and the nodes of the hash part first, then the array part. Building a small record or a short list then takes one allocation from the page heap, where separate parts would take one or two more from the backing allocator. The array part there reserves 16 bytes per slot, so an unboxed part boxes in place by walking down from the last slot. A part that outgrows the cell moves to the backing allocator as before, and the space it leaves stays with the cell until the table dies. A list that a parser makes once it read every value, as `fromjson` makes its arrays, takes one word per slot in the cell when every value fits an unboxed kind. Such a part boxes into the backing allocator. The two-string lists of the `json` program take 80 bytes each where they took 96, which lowers its live data by 15 MB.
 
 ## Barriers and the collector
 

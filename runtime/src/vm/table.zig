@@ -179,10 +179,14 @@ pub fn arrayStore(gpa: Allocator, t: *Table, idx: usize, v: Value) Error!void {
 /// Makes the array part boxed. Every slot keeps its value.
 pub fn box(gpa: Allocator, t: *Table) Error!void {
     if (t.kind == .boxed) return;
-    if (t.asize > 0 and t.ownsInline(t.array_ptr)) {
-        // An array part in the cell reserves a full value per slot, so it
+    const cell = t.inlineBytes();
+    const room = @intFromPtr(cell.ptr) + cell.len -| @intFromPtr(t.array_ptr);
+    if (t.asize > 0 and t.ownsInline(t.array_ptr) and room >= t.asize * @sizeOf(Value)) {
+        // An array part in the cell that reserves a full value per slot
         // boxes in place. Slot i moves from word i to words 2i and 2i+1,
-        // and walking down never overwrites a word before it is read.
+        // and walking down never overwrites a word before it is read. A
+        // part that reserves one word per slot moves to the backing
+        // allocator, and its words stay with the cell.
         const vals: [*]Value = @ptrCast(t.array_ptr);
         var i = t.asize;
         while (i > 0) {
@@ -192,7 +196,7 @@ pub fn box(gpa: Allocator, t: *Table) Error!void {
     } else if (t.asize > 0) {
         const vals = try gpa.alloc(Value, t.asize);
         for (vals, t.words()) |*d, w| d.* = unboxWord(t.kind, w);
-        gpa.free(t.words());
+        if (!t.ownsInline(t.array_ptr)) gpa.free(t.words());
         t.array_ptr = @ptrCast(vals.ptr);
     }
     t.kind = .boxed;
@@ -553,9 +557,16 @@ const max_inline = 512;
 /// cell, or zero when the parts are too big for it. The array part
 /// reserves a full value per slot so that it can box in place.
 pub fn inlineUnits(narr: usize, nhash: usize) usize {
+    return inlineUnitsSlots(narr, nhash, @sizeOf(Value));
+}
+
+/// `inlineUnits` for an array part that reserves `slot` bytes per slot:
+/// a full value, or one word for a list whose values all fit an unboxed
+/// kind.
+pub fn inlineUnitsSlots(narr: usize, nhash: usize, slot: usize) usize {
     if (narr == 0 and nhash == 0) return 0;
     if (narr > max_inline or nhash > max_inline) return 0;
-    const bytes = hashBytes(hashSizeExact(nhash)) + narr * @sizeOf(Value);
+    const bytes = hashBytes(hashSizeExact(nhash)) + narr * slot;
     if (bytes > max_inline) return 0;
     return std.math.divCeil(usize, bytes, 16) catch unreachable;
 }

@@ -555,3 +555,18 @@ local function weak_tables_keep_strings_in_their_array_parts_test()
     collectgarbage()
     for i = 1, 100 do assert(w[i] == "weak" .. i) end
 end
+
+local function a_parsed_list_boxes_and_keeps_its_values_test()
+    local s = fromjson('["a", "b", "c"]')
+    local n = fromjson("[1, 2, 3]")
+    local f = fromjson("[1.5, 2.5]")
+    s[2] = {2}
+    n[3] = "three"
+    f[1] = true
+    collectgarbage()
+    assert(s[1] == "a" and s[2][1] == 2 and s[3] == "c" and #s == 3)
+    assert(n[1] == 1 and n[2] == 2 and n[3] == "three")
+    assert(f[1] == true and f[2] == 2.5)
+    s[4] = "d"
+    assert(#s == 4 and s[4] == "d")
+end

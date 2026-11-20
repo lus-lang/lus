@@ -351,6 +351,17 @@ const Parser = struct {
         const first = f.base + 1;
         const count = l.top - first;
         if (f.is_array) {
+            if (f.t == null and last) {
+                // A whole array at once. Making the table can collect, and
+                // the values are on the stack, which keeps them alive.
+                const t = state.newListIn(l.g, l.stack[first..][0..count]) catch return l.raiseMem();
+                l.stack[f.base] = Value.obj(.table, t);
+                f.t = t;
+                f.n = count;
+                gc.barrierBack(l.g, &t.hdr);
+                l.top = first;
+                return;
+            }
             if (f.t == null) {
                 // Making the table can collect, and the waiting values
                 // are on the stack, which keeps them alive.
