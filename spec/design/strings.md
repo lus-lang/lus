@@ -63,3 +63,34 @@ Files opened in binary mode (`"rb"`, `"wb"`, and so on) read and write vectors. 
 ## Interpolation
 
 String interpolation produces a string. Interpolating a vector raises an error, because a vector holds bytes rather than text. Programs decode it explicitly with `vector.tostring`.
+
+## Building long results
+
+A result whose length is known before its bytes are written goes straight into its string. `state.newLongUninit` allocates a long string, the caller writes the bytes without allocating anything else, and `state.finishLong` sets the character count and the hash. `table.concat` sizes its result in a first pass over the table, and when every piece is a string the length is exact, so a long result is written in place and never passes through a buffer. A piece that starts with a trail surrogate may pair with the piece before it, and such a list takes the general path, which joins the pair.
+
+`tojson` learns its length only at the end, so it writes into blocks of 64 KB and copies them once into a string of the exact size. The blocks never move while the text grows, and the string holds no unused capacity.
+
+## Pattern searches
+
+A search that does not start at an anchor tries the pattern at every position. When the pattern begins with a literal text, the search jumps between occurrences of that text. When it begins instead with a single class that must match once, such as `[&<>"']` or `%a+`, the bytewise matcher computes the set of bytes that class accepts and skips every byte outside it before it starts a match. `find`, `match`, `gmatch`, and `gsub` share this. On `template` from the cross-language suite, which escapes a million titles with `gsub(s, "[&<>\"']", ESC)`, the skip together with the decimal fast paths below took the run from 1.38 s to 1.15 s.
+
+`string.format` writes `%d`, `%i`, and `%u` with a table of digit pairs, and `tonumber` and arithmetic coercion read a plain decimal integer of at most 18 digits directly, without the lexer. `ops.intDigits` is the one integer writer that concatenation, `string.format`, and `tojson` use.
+
+## JSON and CSV
+
+The JSON parser keeps the values of every open container on the Lus stack, which roots them for the collector, and makes the table at its exact size when the container closes: an array with `storeList`, an object with one store per key into a hash part sized for all of them. A container with more than 1024 waiting values moves them into its table early, and near the stack limit every value moves at once, so a parse needs stack only for the containers that are still open. String scanning checks 16 bytes at a time for a quote, a backslash, a control character, or a byte that is not ASCII, and an ASCII string goes to the string table without a second pass to validate and count it. Integers of at most 18 digits are read as they are scanned.
+
+The writer copies runs of bytes that need no escape 16 at a time, writes integers with `ops.intDigits`, and counts the continuation bytes it writes, so the result needs no pass to count its characters. It decides between array and object from the table parts directly, stopping at the first key that is not a positive integer, and it walks the hash part by node in the order of `next`. The path of open tables, for cycle detection, is a short list.
+
+`fromcsv` cuts its fields from a string, which is valid WTF-8 already, so a field needs no validation, and an ASCII source makes every field ASCII. The fields of a row wait on the stack and the row table is made at its exact size.
+
+Wall times in seconds for the cross-language programs, best of three alternating runs on an Apple silicon Mac that other work was loading, with peak resident memory. The JSON phases alone went from 0.36 s to 0.19 s for `tojson` and from 0.50 s to 0.23 s for `fromjson`.
+
+| program | before | after | peak before | peak after |
+|---|---:|---:|---:|---:|
+| json | 1.23 | 0.88 | 1109 MB | 1078 MB |
+| csv | 1.65 | 1.31 | 1129 MB | 980 MB |
+| template | 1.39 | 1.11 | 1061 MB | 960 MB |
+| wordfreq | 1.20 | 1.13 | 656 MB | 588 MB |
+| logs | 1.12 | 1.09 | 527 MB | 526 MB |
+
