@@ -1,13 +1,21 @@
 ---
 import ManualLayout from "../../../components/ManualLayout.astro"
 import ApiReference from "../../../components/ApiReference.astro"
+import CubeField from "../../../components/CubeField.astro"
+import { skyline } from "../../../lib/skyline"
 import { getCapiSections } from "../../../lib/api"
 
 const sections = await getCapiSections()
+
+// the reference readout: one bar per module, sized by its entries
+const moduleHeights = skyline(sections.map((s) => s.entries.length))
 ---
 
 <ManualLayout title="C API">
-  <h1>C API reference</h1>
+  <div class="title-row">
+    <h1>C API reference</h1>
+    <CubeField rows={1} heights={moduleHeights} glow={false} scale={0.7} />
+  </div>
 
   <ApiReference sections={sections} />
 

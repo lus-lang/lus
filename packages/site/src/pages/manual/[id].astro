@@ -57,7 +57,16 @@ const sidebarToc = headings
 
 // the chapter's readout: one bar per h2 section, sized by its length
 const sections = (page.body ?? "").split(/^## /m).slice(1)
-const sectionHeights = sections.length >= 4 ? skyline(sections.map((t) => t.length)) : null
+// the acquis index reads every acquis instead, one bar each
+const acquisPages = manual
+  .filter((p) => p.data.acquis)
+  .toSorted((a, b) => a.data.order - b.data.order)
+const sectionHeights =
+  page.id === "acquis"
+    ? skyline(acquisPages.map((p) => (p.body ?? "").length))
+    : sections.length >= 4
+      ? skyline(sections.map((t) => t.length))
+      : null
 ---
 
 <ManualLayout
