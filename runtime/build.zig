@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
         .sanitize_thread = if (tsan) true else null,
     });
     lus_mod.addOptions("build_options", options);
+    linkSystemLibraries(lus_mod, target);
     if (features.archive) lus_mod.linkLibrary(compressionLibrary(b, target));
     if (features.sqlite) lus_mod.linkLibrary(sqliteLibrary(b, target));
 
@@ -208,7 +209,18 @@ fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
     });
     if (vendorModule(b, target, .{ .archive = features.archive, .sqlite = features.sqlite })) |v| mod.addImport("vendor", v);
     mod.addOptions("build_options", options);
+    linkSystemLibraries(mod, target);
     return b.addLibrary(.{ .name = "lus", .linkage = linkage, .root_module = mod });
+}
+
+/// Links the system libraries the runtime calls beyond those every
+/// program gets. On Windows the TLS client of the standard library reads
+/// the certificate store through crypt32. An executable written in Zig
+/// finds that library on its own, but a static library does not record
+/// it, so declaring it here lets every artifact that links the runtime,
+/// C hosts included, link it as well.
+fn linkSystemLibraries(mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    if (target.result.os.tag == .windows) mod.linkSystemLibrary("crypt32", .{});
 }
 
 /// The libraries a build includes. A null field takes the default for the
