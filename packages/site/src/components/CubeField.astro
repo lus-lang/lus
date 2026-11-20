@@ -172,21 +172,23 @@ interface Shape {
   lime: boolean
   row: string
   lit: number
+  /** the bar's column, for data fields that pair bars with columns */
+  j: number
 }
 
 const shapes: Shape[] = bars.flatMap((b) => {
   const row = `r${b.i}`
   const lit = b === peak ? 0 : litBy(b)
   if (b === peak && signal === "fallen") {
-    return [{ ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0 }]
+    return [{ ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0, j: b.j }]
   }
   if (b === peak && signal === "cap") {
     return [
-      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0 },
-      { ...prism(b.i, b.j, b.h - 1, b.h), lime: true, row, lit: 0 },
+      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0, j: b.j },
+      { ...prism(b.i, b.j, b.h - 1, b.h), lime: true, row, lit: 0, j: b.j },
     ]
   }
-  return [{ ...prism(b.i, b.j, 0, b.h), lime: false, row, lit }]
+  return [{ ...prism(b.i, b.j, 0, b.h), lime: false, row, lit, j: b.j }]
 })
 
 if (fallen) {
@@ -195,6 +197,7 @@ if (fallen) {
     lime: true,
     row: "r0",
     lit: 0,
+    j: fallenAt.j,
   })
 }
 
@@ -263,6 +266,7 @@ const lightOn = glow && signal !== "none"
       <g
         class:list={[f.row, { lime: f.lime }]}
         style={f.lit > 0 ? `--lit:${f.lit.toFixed(2)}` : undefined}
+        data-j={heights ? f.j : undefined}
       >
         <polygon points={f.front} />
         <polygon points={f.side} />

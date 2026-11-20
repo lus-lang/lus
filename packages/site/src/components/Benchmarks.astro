@@ -163,8 +163,8 @@ const modes: {
             <thead>
               <tr>
                 <th scope="col">program</th>
-                {runtimes.map((id) => (
-                  <th scope="col" class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                {runtimes.map((id, ci) => (
+                  <th scope="col" data-col={ci} class:list={{ lus: id === "lus" }}>{label(id)}</th>
                 ))}
               </tr>
             </thead>
@@ -172,8 +172,8 @@ const modes: {
               {m.rows.map((r, ri) => (
                 <tr style={`--r:${ri + 1}`}>
                   <th scope="row">{r.name}</th>
-                  {r.cells.map((c) => (
-                    <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
+                  {r.cells.map((c, ci) => (
+                    <td data-col={ci} class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
                       <b>{c.text}</b>
                       {c.value !== null && (
                         <span class="bar">
@@ -192,16 +192,16 @@ const modes: {
               <thead>
                 <tr>
                   <td />
-                  {runtimes.map((id) => (
-                    <th scope="col" class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                  {runtimes.map((id, ci) => (
+                    <th scope="col" data-col={ci} class:list={{ lus: id === "lus" }}>{label(id)}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <th scope="row">{m.http.name}</th>
-                  {m.http.cells.map((c) => (
-                    <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
+                  {m.http.cells.map((c, ci) => (
+                    <td data-col={ci} class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
                       <b>{c.text}</b>
                       {c.value !== null && (
                         <span class="bar">
@@ -229,6 +229,25 @@ const modes: {
         for (const b of buttons) b.setAttribute("aria-pressed", String(b === button))
       })
     }
+  }
+
+  // pointing at a runtime's column lights its bar in the skyline and its
+  // cells in both tables, as a repaint
+  for (const mode of document.querySelectorAll<HTMLElement>(".bench .mode")) {
+    let lit: string | null = null
+    const paint = (col: string | null) => {
+      if (col === lit) return
+      for (const el of mode.querySelectorAll(".hl")) el.classList.remove("hl")
+      lit = col
+      if (col === null) return
+      for (const el of mode.querySelectorAll(`[data-col="${col}"], .skyline g[data-j="${col}"]`))
+        el.classList.add("hl")
+    }
+    mode.addEventListener("pointerover", (ev) => {
+      const cell = (ev.target as Element).closest<HTMLElement>("[data-col]")
+      paint(cell ? cell.dataset.col! : null)
+    })
+    mode.addEventListener("pointerleave", () => paint(null))
   }
 </script>
 
@@ -363,6 +382,23 @@ const modes: {
 
   th.lus {
     @apply text-ink;
+  }
+
+  /* the column under the pointer, and its bar */
+  .hl {
+    background: var(--color-accent-soft);
+  }
+
+  th.hl {
+    @apply text-ink;
+  }
+
+  .skyline :global(g.hl:not(.lime) polygon:nth-of-type(3)) {
+    fill: var(--color-accent-soft);
+  }
+
+  .skyline :global(g.hl:not(.lime) polygon:nth-of-type(1)) {
+    fill: color-mix(in oklab, var(--color-accent) 25%, var(--color-tint));
   }
 
   td.best b {
