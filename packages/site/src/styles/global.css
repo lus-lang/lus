@@ -29,8 +29,9 @@
 **    user events. No box shadows.
 **  - Rules are few. Each section title stands on the ruled utility, one
 **    2px rule ticked at the twelve columns of the measure. Code figures
-**    carry the same 2px rule on top and sit between crop marks (.crop),
-**    as does the install box. The header closes with a 2px rule and the
+**    and the install box sit between crop marks (.crop). The marks are
+**    the frame, so whatever stands between them is a square fill with no
+**    border of its own. The header closes with a 2px rule and the
 **    footer opens on a ticked 1px rule. Rows, ledgers, indexes, and
 **    tables separate by spacing, never by lines. Data bars are segmented
 **    meters of square cells, and they are data, not rules.
@@ -374,6 +375,9 @@ details[open] > summary::before {
    a plate on a proof sheet */
 .crop {
   position: relative;
+  /* the marks frame the element, which carries no border or radius */
+  border: 0;
+  border-radius: 0;
 
   &::after {
     content: "";
@@ -393,10 +397,10 @@ details[open] > summary::before {
   }
 }
 
-/* code figure: tint block under the 2px spine, mono caption on top, set
+/* code figure: a square tint block with a mono caption on top, set
    between crop marks */
 .figure {
-  @apply relative bg-figure text-figure-ink border-t-2 border-rule m-0;
+  @apply relative bg-figure text-figure-ink m-0;
 
 
   figcaption {
