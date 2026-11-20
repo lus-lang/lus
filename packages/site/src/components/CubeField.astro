@@ -112,11 +112,15 @@ const baseY = heightPx - 1 - ground
 function point(i: number, j: number, k: number) {
   return [1 + j * S + i * dx, baseY - k * unit * S - i * dy]
 }
+// one decimal, without a trailing zero, keeps the markup small
+function n(v: number) {
+  return String(Math.round(v * 10) / 10)
+}
 function poly(pts: number[][]) {
-  return pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ")
+  return pts.map(([x, y]) => `${n(x)},${n(y)}`).join(" ")
 }
 function line(a: number[], b: number[]) {
-  return `M${a[0].toFixed(1)},${a[1].toFixed(1)}L${b[0].toFixed(1)},${b[1].toFixed(1)}`
+  return `M${n(a[0])},${n(a[1])}L${n(b[0])},${n(b[1])}`
 }
 
 // one prism from k0 to k1: front, right side, and top, ticked per unit
@@ -260,16 +264,19 @@ const lightOn = glow && signal !== "none"
         class:list={[f.row, { lime: f.lime }]}
         style={f.lit > 0 ? `--lit:${f.lit.toFixed(2)}` : undefined}
       >
-        <polygon class="f" points={f.front} />
-        <polygon class="s" points={f.side} />
-        <polygon class="t" points={f.top} />
-        {f.ticks && <path class="tick" d={f.ticks} />}
+        <polygon points={f.front} />
+        <polygon points={f.side} />
+        <polygon points={f.top} />
+        {f.ticks && <path d={f.ticks} />}
       </g>
     ))
   }
 </svg>
 
-<style>
+<style is:global>
+  /* global, keyed by .cube-field, so the many shapes carry no scope
+     attribute. Each bar draws its front, side, and top in that order, so
+     position names the face. */
   .cube-field {
     display: block;
     width: 100%;
@@ -277,12 +284,12 @@ const lightOn = glow && signal !== "none"
     overflow: visible;
   }
 
-  g {
+  .cube-field g {
     --lit: 0;
   }
 
   /* one hairline weight at any size */
-  polygon {
+  .cube-field polygon {
     stroke: color-mix(in oklab, var(--color-ink) 36%, transparent);
     stroke-width: 1;
     stroke-linejoin: round;
@@ -291,7 +298,7 @@ const lightOn = glow && signal !== "none"
 
   /* faces: tint fronts, paper tops, shaded sides, each warmed by the light
      of the lime cube in proportion to --lit */
-  .f {
+  .cube-field polygon:nth-of-type(1) {
     fill: color-mix(
       in oklab,
       var(--color-accent) calc(var(--lit) * 18%),
@@ -299,7 +306,7 @@ const lightOn = glow && signal !== "none"
     );
   }
 
-  .t {
+  .cube-field polygon:nth-of-type(3) {
     fill: color-mix(
       in oklab,
       var(--color-accent) calc(var(--lit) * 40%),
@@ -307,7 +314,7 @@ const lightOn = glow && signal !== "none"
     );
   }
 
-  .s {
+  .cube-field polygon:nth-of-type(2) {
     fill: color-mix(
       in oklab,
       var(--color-accent) calc(var(--lit) * 14%),
@@ -316,65 +323,65 @@ const lightOn = glow && signal !== "none"
   }
 
   /* the back rows recede */
-  .r1 polygon {
+  .cube-field .r1 polygon {
     stroke: color-mix(in oklab, var(--color-ink) 22%, transparent);
   }
 
-  .r2 polygon,
-  .r3 polygon {
+  .cube-field .r2 polygon,
+  .cube-field .r3 polygon {
     stroke: color-mix(in oklab, var(--color-ink) 14%, transparent);
   }
 
-  .tick {
+  .cube-field g path {
     fill: none;
     stroke: color-mix(in oklab, var(--color-ink) 12%, transparent);
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
   }
 
-  .lime .f {
+  .cube-field .lime polygon:nth-of-type(1) {
     fill: var(--color-accent);
   }
 
-  .lime .t {
+  .cube-field .lime polygon:nth-of-type(3) {
     fill: color-mix(in oklab, var(--color-accent) 60%, white);
   }
 
-  .lime .s {
+  .cube-field .lime polygon:nth-of-type(2) {
     fill: var(--color-accent-strong);
   }
 
-  .lime polygon {
+  .cube-field .lime polygon {
     stroke: color-mix(in oklab, var(--color-ink) 50%, transparent);
   }
 
   /* the glow shines only at night: on paper the speckle reads as dust,
      and the lime cube with its lit neighbors carries the signal */
-  .g0 {
+  .cube-field .g0 {
     stop-color: var(--color-accent);
     stop-opacity: 0;
   }
 
-  .g1 {
+  .cube-field .g1 {
     stop-color: var(--color-accent);
     stop-opacity: 0;
   }
 
-  .g2 {
+  .cube-field .g2 {
     stop-color: var(--color-accent);
     stop-opacity: 0;
   }
 
   @media (prefers-color-scheme: dark) {
-    .g0 {
+    .cube-field .g0 {
       stop-opacity: 0.6;
     }
 
-    .g1 {
+    .cube-field .g1 {
       stop-opacity: 0.18;
     }
 
-    .f {
+    .cube-field polygon:nth-of-type(1) {
       fill: color-mix(
         in oklab,
         var(--color-accent) calc(var(--lit) * 22%),
@@ -382,7 +389,7 @@ const lightOn = glow && signal !== "none"
       );
     }
 
-    .t {
+    .cube-field polygon:nth-of-type(3) {
       fill: color-mix(
         in oklab,
         var(--color-accent) calc(var(--lit) * 45%),
@@ -390,7 +397,7 @@ const lightOn = glow && signal !== "none"
       );
     }
 
-    .s {
+    .cube-field polygon:nth-of-type(2) {
       fill: color-mix(
         in oklab,
         var(--color-accent) calc(var(--lit) * 16%),
@@ -398,20 +405,20 @@ const lightOn = glow && signal !== "none"
       );
     }
 
-    polygon {
+    .cube-field polygon {
       stroke: color-mix(in oklab, var(--color-ink) 24%, transparent);
     }
 
-    .r1 polygon {
+    .cube-field .r1 polygon {
       stroke: color-mix(in oklab, var(--color-ink) 16%, transparent);
     }
 
-    .r2 polygon,
-    .r3 polygon {
+    .cube-field .r2 polygon,
+    .cube-field .r3 polygon {
       stroke: color-mix(in oklab, var(--color-ink) 10%, transparent);
     }
 
-    .tick {
+    .cube-field g path {
       stroke: color-mix(in oklab, var(--color-ink) 7%, transparent);
     }
   }
