@@ -1,5 +1,6 @@
 ---
 import PlaygroundLayout from "../components/PlaygroundLayout.astro"
+import CubeField from "../components/CubeField.astro"
 
 // Import all .lus files from examples/
 const exampleFiles = import.meta.glob("../../../../examples/*.lus", {
@@ -98,6 +99,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       tabindex="0"
     >
     </div>
+    <CubeField class="pane-horizon" rows={2} cols={40} at={0.8} amp={2.4} seed={9} signal="none" />
   </div>
 </PlaygroundLayout>
 
@@ -573,7 +575,17 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   }
 
   .output-content {
-    @apply flex-1 overflow-y-auto px-4 py-3 font-mono text-sm;
+    @apply relative z-10 flex-1 overflow-y-auto px-4 py-3 font-mono text-sm;
+  }
+
+  /* a quiet horizon under the output, behind any text that reaches it.
+     The playground's lime belongs to the run button, so it has no cube */
+  .output-pane {
+    @apply relative;
+  }
+
+  :global(svg.pane-horizon) {
+    @apply absolute bottom-0 inset-x-0 opacity-40 pointer-events-none max-md:hidden;
   }
 
   :global(.output-line) {
