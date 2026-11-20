@@ -22,6 +22,8 @@ Write in the present tense. Behavior happens now, every time. The past tense bel
 
 The register is plain and dry. A sentence earns trust by being exact, so it carries no enthusiasm: no exclamation marks, and none of "handy", "simply", "just", "easily", "powerful", "blazing", or "seamless". A strong claim that a measurement supports is stated flatly. A claim with weaker evidence carries a precise hedge such as "usually", "on these benchmarks", or "as far as we know", and nothing vaguer.
 
+Prose describes the subject, never the qualities of the page itself. A reader judges for themselves whether examples run, whether a page is complete, or whether it is easy to follow, so sentences such as "every example runs as written" or "this page explains clearly" carry no information and stay out.
+
 ## 3. Sentences
 
 A sentence opens with its subject and makes one claim. Most sentences run between 10 and 25 words. A long sentence that lists several facts splits into one sentence per fact.
@@ -135,7 +137,7 @@ The opening of the guide addressed the reader with enthusiasm and promised more 
 
 The rewrite states what the page covers and how it is arranged:
 
-> The guide is the complete reference for the Lus language. It describes every value type, operator, and statement, then functions, tables, coroutines, errors, the standard library, and the tools. Each rule is followed by an example that runs as written.
+> The guide is the complete reference for the Lus language. It describes every value type, operator, and statement, then functions, tables, coroutines, errors, the standard library, and the tools.
 
 The description of optional chaining used an undefined term, put a rule in a parenthesis, and described the feature by what it avoids:
 
