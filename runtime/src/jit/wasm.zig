@@ -2001,21 +2001,10 @@ const Emitter = struct {
                 e.gotoIf(pc + 2);
             },
             .string => {
-                // Two interned strings are equal exactly when they are
-                // the same object, and a string that is not interned is
-                // longer than any interned one.
-                if (!k.as(object.String).flags.interned) return e.step();
-                // equal = tag is string and payload matches
-                e.tagOf(x);
-                e.i32c(tag_string);
-                e.op(W.i32_eq);
-                e.get(L.bp);
-                e.load64(slotOff(x));
-                e.i64c(@bitCast(k.payload));
-                e.op(W.i64_eq);
-                e.op(W.i32_and);
-                if (c) e.op(W.i32_eqz);
-                e.gotoIf(pc + 2);
+                // A string that is not interned may equal an interned
+                // one, so the step routine compares strings, which keeps
+                // this template small.
+                e.step();
             },
             else => e.step(),
         }

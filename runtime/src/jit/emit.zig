@@ -1475,14 +1475,19 @@ pub const Emitter = struct {
             },
             .string => {
                 // Two interned strings are equal exactly when they are
-                // the same object, and a string that is not interned is
-                // longer than any interned one.
+                // the same object. The constant is interned, so an
+                // operand that is another object can equal it only when
+                // the operand is not interned, and the step routine
+                // compares the bytes then.
                 if (!k.as(object.String).flags.interned) return e.step(pc, true);
                 const differ = if (c) skip else e.at(pc + 1);
+                const same = if (c) e.at(pc + 1) else skip;
                 a.jumpIfByte(.ne, tagOf(x), tag_string, differ);
                 a.load64(A.t0, slot(x));
                 a.movImm(A.t1, k.payload);
-                a.jumpIf(if (c) .ne else .eq, A.t0, A.t1, skip);
+                a.jumpIf(.eq, A.t0, A.t1, same);
+                a.jumpIfBit(.{ .base = A.t0, .disp = string_flags }, string_interned_bit, false, e.coldStep(pc));
+                a.jmp(differ);
             },
             else => e.step(pc, true),
         }

@@ -876,8 +876,40 @@ noinline fn newAsciiChar(g: *Global, c: u8) Allocator.Error!*String {
 }
 
 /// Allocates a string with hash `h` that `newStringKnown` did not find.
+/// Creates a string from valid WTF-8 bytes without interning it, for the
+/// results of concatenation, which are often used once and dropped. A
+/// short one is interned when it becomes a table key (`intern`), and it
+/// compares by content with the interned strings until then.
+pub fn newStringFresh(g: *Global, b: []const u8, ascii: bool, chars: usize) Allocator.Error!*String {
+    // The shortest results, such as keys and small tokens, repeat often,
+    // so interning them at once shares one object and lets lookups
+    // compare pointers.
+    if (b.len <= fresh_min) return newStringKnown(g, b, ascii, chars);
+    return createStringAs(g, b, ascii, chars, object.hashBytes(g.seed, b), false);
+}
+
+/// The length up to which `newStringFresh` interns at once.
+pub const fresh_min = 16;
+
+/// The interned string with the text of `s`, a short string that is not
+/// interned: the one the string table holds, or `s` itself, which joins
+/// the table.
+pub noinline fn intern(g: *Global, s: *String) Allocator.Error!*String {
+    std.debug.assert(!s.flags.interned and s.len <= String.short_max);
+    if (g.strings.find(s.bytes(), s.hash)) |twin| {
+        gc.touchInterned(g, twin);
+        return twin;
+    }
+    try g.strings.insert(g.gpa, s);
+    s.flags.interned = true;
+    return s;
+}
+
 noinline fn createString(g: *Global, b: []const u8, ascii: bool, chars: usize, h: u32) Allocator.Error!*String {
-    const short = b.len <= String.short_max;
+    return createStringAs(g, b, ascii, chars, h, b.len <= String.short_max);
+}
+
+inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h: u32, short: bool) Allocator.Error!*String {
     gc.maybeCollect(g);
     const s = try gc.allocUninit(g, String, .string, String.allocSize(b.len));
     s.len = @intCast(b.len);

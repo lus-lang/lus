@@ -150,7 +150,7 @@ fn enumIndex(l: *Thread) Error!u32 {
         .string => {
             const name = k.as(String);
             for (root.names, 0..) |n, i| {
-                if (n == name) {
+                if (n == name or (n.len == name.len and n.hash == name.hash and std.mem.eql(u8, n.bytes(), name.bytes()))) {
                     try l.push(Value.obj(.enum_value, try enumMember(l, root, i)));
                     return 1;
                 }

@@ -81,10 +81,12 @@ fn bigEqual(x: *const numeric.BigInt, y: *const numeric.BigInt) bool {
     return x.positive == y.positive and std.mem.eql(numeric.Limb, x.limbs(), y.limbs());
 }
 
-/// Short strings are interned, so equal short strings are the same object.
-/// Long strings are not, so they compare by content.
+/// Two interned strings are equal exactly when they are the same object.
+/// Any other pair of strings compares by content: long strings, and the
+/// short results of concatenation, which are interned only when they
+/// become table keys (`ops.rawSet`).
 fn longStringEqual(x: *object.String, y: *object.String) bool {
-    if (x.flags.interned or y.flags.interned) return false;
+    if (x.flags.interned and y.flags.interned) return false;
     return x.len == y.len and x.hash == y.hash and std.mem.eql(u8, x.bytes(), y.bytes());
 }
 
@@ -329,10 +331,10 @@ noinline fn findStrFull(t: *Table, s: *object.String) ?usize {
     return null;
 }
 
-/// Long strings are not interned: equal contents, distinct objects.
+/// Whether the key `k` holds the same text as `s`, which is not interned.
 inline fn longStrEqual(k: u64, s: *object.String) bool {
     const o: *object.String = @ptrFromInt(@as(usize, @intCast(k)));
-    return !o.flags.interned and o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes());
+    return o.len == s.len and o.hash == s.hash and std.mem.eql(u8, o.bytes(), s.bytes());
 }
 
 /// True when a hash part of `len` nodes, `used` of which hold a key, has
@@ -374,7 +376,8 @@ pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
         } else if (kt == .nil) {
             // Absent. Linear probing inserts a new key at the first free
             // slot of its probe sequence, which is this one.
-            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash_len)) return null;
+            // Every short key is interned, which `ops.rawSet` sees to.
+            if (val.tag == .nil or !hashRoom(t.hash_used, t.hash_len) or !s.flags.interned) return null;
             t.setKey(i, key.*);
             t.hash_used += 1;
             break;
