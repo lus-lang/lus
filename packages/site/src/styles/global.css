@@ -205,6 +205,21 @@ body::before {
   opacity: 0.035;
 }
 
+/* the section rule: 2px, marked like a ruler at the twelve columns of the
+   measure. Every section title stands on it. */
+@utility ruled {
+  border-bottom: 2px solid var(--color-rule);
+  background:
+    repeating-linear-gradient(
+        to right,
+        var(--color-rule) 0 1px,
+        transparent 1px calc(100% / 12)
+      )
+      left bottom / 100% 5px no-repeat,
+    linear-gradient(var(--color-rule), var(--color-rule)) right bottom / 1px
+      5px no-repeat;
+}
+
 /* page title: the display h1 that opens every page below the masthead */
 @utility page-title {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
@@ -229,7 +244,7 @@ body::before {
   @apply space-y-2 max-w-[48.5rem];
 
   h2 {
-    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] border-b-2 border-rule pb-2.5 mt-14 mb-3;
+    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] ruled pb-2.5 mt-14 mb-3;
   }
 
   h3 {
@@ -251,27 +266,16 @@ body::before {
   }
 }
 
-/* a section opens on one 2px rule under its title, marked like a ruler
-   at the twelve columns of the measure */
+/* a section opens on one 2px rule under its title */
 .part > .sech {
-  @apply border-b-2 border-rule mb-3;
-  background:
-    repeating-linear-gradient(
-        to right,
-        var(--color-rule) 0 1px,
-        transparent 1px calc(100% / 12)
-      )
-      left bottom / 100% 5px no-repeat,
-    linear-gradient(var(--color-rule), var(--color-rule)) right bottom / 1px
-      5px no-repeat;
+  @apply ruled mb-3;
 }
 
-/* code figure: tint block under the 2px spine, mono caption on top, with
-   registration marks at its four corners like a plate on a proof sheet */
-.figure {
-  @apply relative bg-figure text-figure-ink border-t-2 border-rule m-0;
+/* crop marks: an L of hairlines at each corner, open to the element, like
+   a plate on a proof sheet */
+.crop {
+  position: relative;
 
-  /* crop marks: an L of hairlines at each corner, open to the figure */
   &::after {
     content: "";
     position: absolute;
@@ -288,6 +292,13 @@ body::before {
       var(--mark) bottom right / 9px 1px no-repeat,
       var(--mark) bottom right / 1px 9px no-repeat;
   }
+}
+
+/* code figure: tint block under the 2px spine, mono caption on top, set
+   between crop marks */
+.figure {
+  @apply relative bg-figure text-figure-ink border-t-2 border-rule m-0;
+
 
   figcaption {
     @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-figure-ink-3 px-3 pt-1.5;

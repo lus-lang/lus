@@ -133,8 +133,8 @@ const modes: {
               </tr>
             </thead>
             <tbody>
-              {m.rows.map((r) => (
-                <tr>
+              {m.rows.map((r, ri) => (
+                <tr style={`--r:${ri + 1}`}>
                   <th scope="row">{r.name}</th>
                   {r.cells.map((c) => (
                     <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
@@ -272,8 +272,18 @@ const modes: {
     @apply font-semibold text-ink;
   }
 
+  /* the Lus column is lit from above: its wash fades row by row, like the
+     light of the lime cube on the field */
+  tr {
+    --r: 0;
+  }
+
   .lus {
-    @apply bg-accent-soft;
+    background: color-mix(
+      in oklab,
+      var(--color-accent) calc(30% - var(--r) * 3.5%),
+      transparent
+    );
   }
 
   th.lus {

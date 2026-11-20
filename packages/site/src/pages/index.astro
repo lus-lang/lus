@@ -189,12 +189,12 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
           A small, productive programming language designed to be picked up
           easily by programmers and put to good use right away.
         </p>
-        <div class="install" id="install-unix">
+        <div class="install crop" id="install-unix">
           <span class="plat" id="install-platform">linux · x64</span>
           <code id="install-shell">{INSTALL_SH}</code>
           <button type="button" id="install-copy">copy</button>
         </div>
-        <div class="install" id="install-windows" hidden>
+        <div class="install crop" id="install-windows" hidden>
           <span class="plat">windows · x64</span>
           <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
         </div>
@@ -264,7 +264,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
                 {f.unstable && <span class="tag red">unstable</span>}
               </h3>
               <p>{f.blurb}</p>
-              <figure class="figure">
+              <figure class="figure crop">
                 <figcaption>
                   <span>
                     fig. {i + 1} · {f.file}
@@ -348,14 +348,14 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   .install {
-    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md overflow-hidden bg-field;
+    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md bg-field;
 
     &[hidden] {
       display: none;
     }
 
     .plat {
-      @apply font-mono text-[11px] font-semibold uppercase bg-accent-soft px-2.5 flex items-center border-r border-ink/30 whitespace-nowrap;
+      @apply font-mono text-[11px] font-semibold uppercase bg-accent-soft px-2.5 flex items-center border-r border-ink/30 whitespace-nowrap rounded-l-[5px];
     }
 
     code {
@@ -372,7 +372,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
 
     button {
-      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer hover:bg-accent-soft;
+      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer rounded-r-[5px] hover:bg-accent-soft;
     }
   }
 
@@ -429,7 +429,9 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
   /* the wide field rises into the space under the news rail */
   :global(svg.horizon.wide) {
-    @apply max-sm:hidden -mt-24;
+    @apply max-sm:hidden;
+    /* rises fully only where the masthead is wide enough to hold it */
+    margin-top: calc(-1 * clamp(0px, (100vw - 1040px) * 0.5, 96px));
   }
 
   /* news rail, set as a ledger */

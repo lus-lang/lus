@@ -118,7 +118,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
                   {ex.blurb && <p>{ex.blurb}</p>}
                 </div>
               </div>
-              <figure class="figure">
+              <figure class="figure crop">
                 <figcaption>
                   <span>fig. {i + 1} · {ex.name}.lus</span>
                   {ex.playground ? (
@@ -186,11 +186,13 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
 
   .example {
     @apply grid gap-x-3.5 min-w-0 scroll-mt-4;
-    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-columns: 68px minmax(0, 1fr);
 
+    /* ghost numerals, as on the homepage chapters */
     .no {
-      @apply font-display font-extrabold text-[30px] leading-none tracking-[-0.05em];
-      align-self: baseline;
+      @apply font-display font-extrabold text-[56px] leading-[0.8] tracking-[-0.06em] tabular-nums;
+      color: color-mix(in oklab, var(--color-ink) 16%, transparent);
+      align-self: start;
     }
 
     .head {
@@ -230,7 +232,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
 
       .side {
         @apply sticky top-4 self-start grid gap-x-3.5;
-        grid-template-columns: 44px minmax(0, 1fr);
+        grid-template-columns: 68px minmax(0, 1fr);
       }
 
       .figure {
