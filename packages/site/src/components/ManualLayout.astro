@@ -136,6 +136,10 @@ groups
 
   aside {
     @apply min-w-52 w-1/6 sticky top-4 self-start pr-4 max-h-[calc(100vh-2rem)] overflow-y-auto;
+    /* a quiet scrollbar where the outline is longer than the screen */
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--color-ink) 25%, transparent)
+      transparent;
   }
 
   :global(html.unstable) {
