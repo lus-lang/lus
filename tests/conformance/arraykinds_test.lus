@@ -570,3 +570,51 @@ local function a_parsed_list_boxes_and_keeps_its_values_test()
     s[4] = "d"
     assert(#s == 4 and s[4] == "d")
 end
+
+local function a_list_of_tables_keeps_its_tables_through_collections_test()
+    local t = {}
+    for i = 1, 3000 do t[i] = {i, name = "n" .. i} end
+    collectgarbage()
+    for i = 1, 3000, 7 do assert(t[i][1] == i and t[i].name == "n" .. i) end
+    t[5] = "five"
+    collectgarbage()
+    assert(t[5] == "five" and t[6][1] == 6 and #t == 3000)
+end
+
+local function tables_stored_while_the_collector_runs_survive_test()
+    local t = {{0}}
+    for round = 1, 20 do
+        for i = 1, 400 do t[i] = {round, i} end
+        local junk = {}
+        for i = 1, 200 do junk[i] = {i} end
+        collectgarbage("step")
+    end
+    collectgarbage()
+    for i = 1, 400 do assert(t[i][1] == 20 and t[i][2] == i) end
+end
+
+local function a_weak_list_of_tables_drops_unreachable_tables_test()
+    local keep = {}
+    local w = setmetatable({}, {__mode = "v"})
+    for i = 1, 100 do
+        local x = {i}
+        w[i] = x
+        if i % 2 == 0 then keep[#keep + 1] = x end
+    end
+    collectgarbage()
+    collectgarbage()
+    for i = 1, 100 do
+        if i % 2 == 0 then assert(w[i] ~= nil and w[i][1] == i) else assert(w[i] == nil) end
+    end
+end
+
+local function library_functions_on_lists_of_tables_test()
+    local t = {{3}, {1}, {2}}
+    table.sort(t, function(a, b) return a[1] < b[1] end)
+    assert(t[1][1] == 1 and t[2][1] == 2 and t[3][1] == 3)
+    table.insert(t, 1, {0})
+    assert(table.remove(t)[1] == 3 and #t == 3 and t[1][1] == 0)
+    local parsed = fromjson('[{"a": 1}, {"a": 2}]')
+    parsed[3] = {a = 3}
+    assert(parsed[1].a == 1 and parsed[3].a == 3)
+end

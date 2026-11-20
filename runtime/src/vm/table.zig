@@ -130,7 +130,7 @@ pub inline fn arrayIsNil(t: *const Table, idx: usize) bool {
 
 /// True for the tags of the values an unboxed array part can hold.
 inline fn unboxable(tag: value.Tag) bool {
-    return tag == .integer or tag == .float or tag == .string;
+    return tag == .integer or tag == .float or tag == .string or tag == .table;
 }
 
 /// The kind an array part of kind `k` needs to also hold `v`.
@@ -847,6 +847,7 @@ pub const layout = struct {
         assert(@backingInt(ArrayKind.int) == @backingInt(value.Tag.integer));
         assert(@backingInt(ArrayKind.float) == @backingInt(value.Tag.float));
         assert(@backingInt(ArrayKind.string) == @backingInt(value.Tag.string));
+        assert(@backingInt(ArrayKind.table) == @backingInt(value.Tag.table) and @backingInt(ArrayKind.string) < @backingInt(ArrayKind.table));
         // Native code tells a `string` part from a numeric one by the
         // order of their kinds.
         assert(@backingInt(ArrayKind.int) < @backingInt(ArrayKind.string) and @backingInt(ArrayKind.float) < @backingInt(ArrayKind.string));
