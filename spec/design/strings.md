@@ -70,6 +70,10 @@ Files opened in binary mode (`"rb"`, `"wb"`, and so on) read and write vectors. 
 
 String interpolation produces a string. Interpolating a vector raises an error, because a vector holds bytes rather than text. Programs decode it explicitly with `vector.tostring`.
 
+## Short concatenations
+
+Most concatenations and interpolations join a few strings and integers into a short result, such as a prefix and a number. `ops.joinShort` writes such a result into a 64-byte buffer on the stack, with integers written by `ops.intDigits`, and hands it to the string table. A float, an exact number, a longer result, or a piece that starts with a trail surrogate goes to the general join, which formats any number and joins surrogate pairs. `"k" .. n` took 33 ns before and takes 14.5 ns, whether the result is new or already in the table. The csv program, which interpolates two million rows, retires 12 percent fewer instructions, and lru, which builds four million keys, runs 4 percent faster.
+
 ## Building long results
 
 A result whose length is known before its bytes are written goes straight into its string. `state.newLongUninit` allocates a long string, the caller writes the bytes without allocating anything else, and `state.finishLong` sets the character count and the hash. `table.concat` sizes its result in a first pass over the table, and when every piece is a string the length is exact, so a long result is written in place and never passes through a buffer. A piece that starts with a trail surrogate may pair with the piece before it, and such a list takes the general path, which joins the pair.

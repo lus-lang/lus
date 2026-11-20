@@ -2235,6 +2235,9 @@ fn metaCompare(l: *Thread, comptime which: enum { eq, lt, le }, x: Value, y: Val
 }
 
 fn interpolate(l: *Thread, first: u32, n: u32) Error!Value {
+    if (n > 0) {
+        if (try ops.joinShort(l, l.stack[first..][0 .. n - 1], l.stack[first + n - 1])) |v| return v;
+    }
     // Short results are built on the stack, and the parts that are
     // already strings or numbers size the buffer up front.
     var stack: [ops.concat_stack]u8 = undefined;

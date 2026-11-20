@@ -782,6 +782,56 @@ fn isStringLike(v: Value) bool {
 }
 
 fn joinStrings(l: *Thread, parts: []const Value, last: Value) Error!Value {
+    if (try joinShort(l, parts, last)) |v| return v;
+    return joinGeneral(l, parts, last);
+}
+
+/// The longest result `joinShort` builds.
+const short_join = 64;
+
+/// Joins strings and integers whose result fits `short_join` bytes in a
+/// buffer on the stack, which is most concatenations, such as a prefix
+/// and a number. Returns null for anything else: a float or exact number,
+/// a longer result, or a piece that starts with a trail surrogate, which
+/// may join the piece before it. `joinGeneral` handles those.
+pub inline fn joinShort(l: *Thread, parts: []const Value, last: Value) Error!?Value {
+    var tmp: [short_join]u8 = undefined;
+    var n: usize = 0;
+    var ascii = true;
+    var chars: usize = 0;
+    var i: usize = 0;
+    while (i <= parts.len) : (i += 1) {
+        const v = if (i < parts.len) parts[i] else last;
+        if (v.tag == .string) {
+            const s = v.as(String);
+            const b = s.bytes();
+            if (b.len > short_join - n) return null;
+            if (!s.flags.ascii) {
+                if (b.len > 0 and b[0] == 0xED) return null;
+                ascii = false;
+            }
+            @memcpy(tmp[n..][0..b.len], b);
+            n += b.len;
+            chars += s.chars;
+        } else if (v.tag == .integer) {
+            if (short_join - n < 21) return null;
+            var d: [20]u8 = undefined;
+            var at = intDigits(&d, @abs(v.asInt()));
+            if (v.asInt() < 0) {
+                at -= 1;
+                d[at] = '-';
+            }
+            const len = 20 - at;
+            @memcpy(tmp[n..][0..len], d[at..]);
+            n += len;
+            chars += len;
+        } else return null;
+    }
+    const r = state.newStringKnown(l.g, tmp[0..n], ascii, chars) catch return l.raiseMem();
+    return Value.obj(.string, r);
+}
+
+fn joinGeneral(l: *Thread, parts: []const Value, last: Value) Error!Value {
     var stack: [concat_stack]u8 = undefined;
     var first = std.heap.BufferFirstAllocator.init(&stack, l.g.gpa);
     var sb: state.StringBuffer = .{ .g = l.g };
