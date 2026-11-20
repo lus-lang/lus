@@ -16,7 +16,6 @@ const toggles = darwin and builtin.cpu.arch == .aarch64;
 
 extern "c" fn pthread_jit_write_protect_np(enabled: c_int) void;
 extern "c" fn sys_icache_invalidate(start: *anyopaque, len: usize) void;
-extern fn __clear_cache(start: usize, end: usize) callconv(.c) void;
 
 const chunk_size = 1 << 20;
 const block_align = 16;
@@ -135,8 +134,46 @@ pub fn install(block: []u8, code: []const u8) void {
     if (darwin) {
         sys_icache_invalidate(block.ptr, code.len);
     } else if (builtin.cpu.arch == .aarch64) {
-        __clear_cache(@intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len);
+        syncCode(@intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len);
     }
+}
+
+/// Makes every core fetch the bytes just written to `start..end`, on an
+/// aarch64 system other than Darwin. The data cache lines are cleaned,
+/// the instruction cache lines are invalidated, and a barrier follows
+/// each loop. The barrier after the invalidation is what makes it
+/// complete on every core before the new code runs. The `__clear_cache`
+/// of the compiler runtime leaves that barrier out, and code installed
+/// through it ran stale instructions now and then on a busy machine.
+fn syncCode(start: u64, end: u64) void {
+    const ctr = asm volatile ("mrs %[ctr], ctr_el0"
+        : [ctr] "=r" (-> u64),
+    );
+    // With the IDC bit set the data cache needs no cleaning.
+    if ((ctr >> 28) & 1 == 0) {
+        const line = @as(u64, 4) << @intCast((ctr >> 16) & 15);
+        var addr = start & ~(line - 1);
+        while (addr < end) : (addr += line) {
+            asm volatile ("dc cvau, %[addr]"
+                :
+                : [addr] "r" (addr),
+            );
+        }
+    }
+    asm volatile ("dsb ish");
+    // With the DIC bit set the instruction cache needs no invalidation.
+    if ((ctr >> 29) & 1 == 0) {
+        const line = @as(u64, 4) << @intCast(ctr & 15);
+        var addr = start & ~(line - 1);
+        while (addr < end) : (addr += line) {
+            asm volatile ("ic ivau, %[addr]"
+                :
+                : [addr] "r" (addr),
+            );
+        }
+        asm volatile ("dsb ish");
+    }
+    asm volatile ("isb");
 }
 
 test "arena reuses and merges blocks" {
