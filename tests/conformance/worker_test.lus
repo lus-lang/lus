@@ -438,14 +438,16 @@ worker.message(tostring(err))
 
 -- Reads a file inside the parent's fs grant to confirm positive inheritance.
 scripts["wfsread"] = [==[
-local f = io.open("@@TESTDIR@@", "r")
+local f = io.open(@@TESTDIR@@, "r")
 worker.message(f ~= nil)
 if f then f:close() end
 ]==]
 
 -- The worker reads this test file, which sits inside the parent's read grant.
+-- The path is quoted with %q, so the backslashes of a Windows path survive as
+-- literal characters.
 scripts["wfsread"] = (string.gsub(scripts["wfsread"], "@@TESTDIR@@", function()
-    return TEST_DIR .. "/worker_test.lus"
+    return string.format("%q", TEST_DIR .. "/worker_test.lus")
 end))
 
 -- Tries to send a function via worker.message, which cannot be serialized.

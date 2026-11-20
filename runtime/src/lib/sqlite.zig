@@ -212,7 +212,11 @@ pub const c = struct {
 // heap. A denial is recorded in the VFS and turned into the standard
 // permission error once control is back in the binding.
 
-const path_cap = 1024;
+/// The longest full pathname the wrapper handles. It must exceed the
+/// `mxPathname` of the platform VFS: 512 bytes on POSIX systems, and 1040
+/// on Windows, whose VFS allows MAX_PATH characters of up to four UTF-8
+/// bytes each.
+const path_cap = 2048;
 
 const Owner = struct {
     vfs: c.Vfs,

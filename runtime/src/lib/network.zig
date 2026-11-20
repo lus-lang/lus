@@ -409,9 +409,11 @@ fn noSigpipe(handle: net.Socket.Handle) void {
     }
 }
 
-/// The local address of a socket, through getsockname.
-fn localAddress(handle: net.Socket.Handle, fallback: net.IpAddress) net.IpAddress {
-    if (comptime is_windows) return fallback;
+/// The local address of a socket, through getsockname. On Windows the
+/// AFD driver reports it, since the standard library opens sockets as AFD
+/// endpoints that Winsock never registers.
+fn localAddress(io: Io, handle: net.Socket.Handle, fallback: net.IpAddress) net.IpAddress {
+    if (comptime is_windows) return afd.localAddress(io, handle) orelse fallback;
     var storage: Io.Threaded.PosixAddress = undefined;
     var len: posix.socklen_t = @sizeOf(Io.Threaded.PosixAddress);
     if (posix.errno(posix.system.getsockname(handle, &storage.any, &len)) != .SUCCESS) return fallback;
@@ -547,7 +549,7 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.
         c.fd = -1;
         setNonblocking(fd, false);
         noSigpipe(fd);
-        return .{ .{ .socket = .{ .handle = fd, .address = localAddress(fd, a.*) } }, a.* };
+        return .{ .{ .socket = .{ .handle = fd, .address = localAddress(l.g.io, fd, a.*) } }, a.* };
     }
     return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
 }
@@ -557,12 +559,13 @@ const ListenError = error{ AccessDenied, AddressInUse, AddressUnavailable, Addre
 /// Creates a listening TCP socket. On POSIX systems it sets SO_REUSEADDR
 /// alone, so a port can be bound again right after a close while a second
 /// live bind still fails. `std.Io` would also set SO_REUSEPORT, which lets
-/// two sockets bind the same port.
+/// two sockets bind the same port. On Windows the socket binds for
+/// exclusive use, so a second bind fails there too.
 const Stage = enum { bind, listen };
 
 fn listenTcp(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {
     stage.* = .bind;
-    if (comptime is_windows) return addr.listen(io, .{ .kernel_backlog = backlog });
+    if (comptime is_windows) return afd.listen(io, addr, backlog, stage);
     const Threaded = Io.Threaded;
     const family = Threaded.posixAddressFamily(addr);
     const cloexec: u32 = if (Threaded.socket_flags_unsupported) 0 else posix.SOCK.CLOEXEC;
@@ -603,6 +606,132 @@ fn listenTcp(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !n
     if (posix.errno(posix.system.getsockname(fd, &storage.any, &len)) != .SUCCESS) return error.Unexpected;
     return .{ .socket = .{ .handle = fd, .address = Threaded.addressFromPosix(&storage) }, .options = {} };
 }
+
+/// TCP sockets through the AFD driver, for what `std.Io` leaves out on
+/// Windows. The standard library opens every socket as an AFD endpoint
+/// and binds a listening socket with the shared mode of SO_REUSEADDR, so
+/// a second socket could bind the same port. These listeners bind with
+/// the exclusive mode of SO_EXCLUSIVEADDRUSE instead.
+const afd = if (is_windows) struct {
+    const w = std.os.windows;
+    const Threaded = Io.Threaded;
+
+    /// The share mode of a bind request that matches SO_EXCLUSIVEADDRUSE.
+    const share_exclusive: w.AFD.BIND_INFO.MODE = @fromBackingInt(@intCast(3));
+    /// SO_EXCLUSIVEADDRUSE, which Winsock defines as `~SO_REUSEADDR`.
+    const so_exclusiveaddruse: u32 = ~@as(u32, w.ws2_32.SO.REUSEADDR);
+
+    fn request(io: Io, handle: net.Socket.Handle, code: w.CTL_CODE, in: []const u8, out: []u8) !w.IO_STATUS_BLOCK {
+        const r = try io.operate(.{ .device_io_control = .{
+            .file = .{ .handle = handle, .flags = .{ .nonblocking = true } },
+            .code = code,
+            .in = in,
+            .out = out,
+        } });
+        return r.device_io_control;
+    }
+
+    fn control(io: Io, handle: net.Socket.Handle, code: w.CTL_CODE, in: []const u8, out: []u8) !w.NTSTATUS {
+        return (try request(io, handle, code, in, out)).u.Status;
+    }
+
+    /// Opens a TCP endpoint for the family of `addr`, as `std.Io` does.
+    fn openStream(addr: *const net.IpAddress) !net.Socket.Handle {
+        var handle: w.HANDLE = undefined;
+        var iosb: w.IO_STATUS_BLOCK = undefined;
+        const status = w.ntdll.NtCreateFile(
+            &handle,
+            .{
+                .STANDARD = .{ .RIGHTS = .{ .WRITE_DAC = true }, .SYNCHRONIZE = true },
+                .GENERIC = .{ .WRITE = true, .READ = true },
+            },
+            &.{
+                .ObjectName = @constCast(&w.UNICODE_STRING.init(
+                    w.AFD.DEVICE_NAME ++ .{ '\\', 'E', 'n', 'd', 'p', 'o', 'i', 'n', 't' },
+                )),
+            },
+            &iosb,
+            null,
+            .{},
+            .{ .READ = true, .WRITE = true },
+            .OPEN_IF,
+            .{ .IO = .ASYNCHRONOUS },
+            &w.AFD.OPEN_PACKET.FULL_EA_INFORMATION{ .Value = .{
+                .EndpointType = .{},
+                .GroupID = 0,
+                .AddressFamily = Threaded.posixAddressFamily(addr),
+                .SocketType = posix.SOCK.STREAM,
+                .Protocol = posix.IPPROTO.TCP,
+                .TransportDeviceNameLength = 0,
+                .TransportDeviceName = undefined,
+            } },
+            @sizeOf(w.AFD.OPEN_PACKET.FULL_EA_INFORMATION),
+        );
+        return switch (status) {
+            .SUCCESS => handle,
+            .PROTOCOL_NOT_SUPPORTED => error.AddressFamilyUnsupported,
+            .INSUFFICIENT_RESOURCES => error.SystemResources,
+            else => error.Unexpected,
+        };
+    }
+
+    fn listen(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {
+        const handle = try openStream(addr);
+        errdefer w.CloseHandle(handle);
+        // The option and the share mode of the bind ask for the same
+        // exclusivity. A driver that refuses the option still honors the
+        // share mode.
+        const one: w.BOOL = .TRUE;
+        _ = control(io, handle, w.IOCTL.AFD.SOCKOPT, std.mem.asBytes(&w.AFD.SOCKOPT_INFO{
+            .mode = .set,
+            .level = w.ws2_32.SOL.SOCKET,
+            .optname = so_exclusiveaddruse,
+            .optval = &one,
+            .optlen = @sizeOf(w.BOOL),
+        }), &.{}) catch {};
+        const Bind = extern struct { info: w.AFD.BIND_INFO, address: Threaded.PosixAddress };
+        var bind: Bind = .{ .info = .{ .Mode = share_exclusive }, .address = undefined };
+        const len = Threaded.addressToPosix(addr, &bind.address);
+        const in = @as([]const u8, @ptrCast(&bind))[0 .. @offsetOf(Bind, "address") + len];
+        const out = @as([]u8, @ptrCast(&bind.address))[0..len];
+        switch (try control(io, handle, w.IOCTL.AFD.BIND, in, out)) {
+            .SUCCESS => {},
+            .SHARING_VIOLATION, .ADDRESS_ALREADY_EXISTS => return error.AddressInUse,
+            .ACCESS_DENIED => return error.AccessDenied,
+            .INVALID_ADDRESS_COMPONENT, .INVALID_ADDRESS => return error.AddressUnavailable,
+            .INSUFFICIENT_RESOURCES => return error.SystemResources,
+            else => return error.Unexpected,
+        }
+        stage.* = .listen;
+        const info: w.AFD.LISTEN_INFO = .{ .UseSAN = .FALSE, .MaximumConnectionQueue = backlog, .UseDelayedAcceptance = .FALSE };
+        switch (try control(io, handle, w.IOCTL.AFD.START_LISTEN, std.mem.asBytes(&info), &.{})) {
+            .SUCCESS => {},
+            .INSUFFICIENT_RESOURCES => return error.SystemResources,
+            else => return error.Unexpected,
+        }
+        return .{
+            .socket = .{ .handle = handle, .address = Threaded.addressFromPosix(&bind.address) },
+            .options = .{ .mode = .stream, .protocol = .tcp },
+        };
+    }
+
+    /// The local address of an endpoint, through IOCTL_AFD_GET_ADDRESS,
+    /// which fills in a socket address as getsockname does. Null unless
+    /// the driver reports a whole IPv4 or IPv6 address.
+    fn localAddress(io: Io, handle: net.Socket.Handle) ?net.IpAddress {
+        var storage: Threaded.PosixAddress = undefined;
+        @memset(std.mem.asBytes(&storage), 0);
+        const iosb = request(io, handle, w.IOCTL.AFD.GET_ADDRESS, &.{}, std.mem.asBytes(&storage)) catch return null;
+        if (iosb.u.Status != .SUCCESS) return null;
+        const size: usize = switch (storage.any.family) {
+            posix.AF.INET => @sizeOf(posix.sockaddr.in),
+            posix.AF.INET6 => @sizeOf(posix.sockaddr.in6),
+            else => return null,
+        };
+        if (iosb.Information != size) return null;
+        return Threaded.addressFromPosix(&storage);
+    }
+} else struct {};
 
 /// Formats the numeric address of `a` without its port.
 pub fn formatIp(buf: []u8, a: net.IpAddress) []const u8 {
@@ -661,10 +790,13 @@ fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Strea
     const list = try resolve(l, host, port, null, &addrs);
     var last: anyerror = error.ConnectionRefused;
     for (list) |*a| {
-        const stream = a.connect(l.g.io, .{ .mode = .stream, .protocol = .tcp }) catch |e| {
+        var stream = a.connect(l.g.io, .{ .mode = .stream, .protocol = .tcp }) catch |e| {
             last = e;
             continue;
         };
+        // The standard library on Windows reports the wildcard address the
+        // socket was bound to before it connected.
+        if (comptime is_windows) stream.socket.address = localAddress(l.g.io, stream.socket.handle, stream.socket.address);
         noSigpipe(stream.socket.handle);
         return .{ stream, a.* };
     }
@@ -953,7 +1085,7 @@ pub fn acceptOne(l: *Thread, s: *Server) !*Socket {
     const stream = try s.server.accept(l.g.io);
     errdefer stream.close(l.g.io);
     noSigpipe(stream.socket.handle);
-    const local = localAddress(stream.socket.handle, s.server.socket.address);
+    const local = localAddress(l.g.io, stream.socket.handle, s.server.socket.address);
     return newObject(l, Socket, socket_name, .{ .stream = stream, .local = local, .peer = stream.socket.address });
 }
 
