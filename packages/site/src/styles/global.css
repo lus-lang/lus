@@ -11,9 +11,17 @@
 **
 ** Its one image is the cube field (components/CubeField.astro): bars of
 ** cubes, the shape of the Lus mark, drawn as SVG at build time. Where a
-** page has data, the field reads it, one bar per entry. The lime cube is
-** the signal, its light tints the bars nearest it, and at most one field
-** per page glows.
+** page has data, the field reads it, one bar per entry: the title
+** readouts of the index pages, chapters, and references, and the runtime
+** skyline over the benchmarks (relative cost, lower is better). Readout
+** bars link to their entries, and pointing at an entry in the page's
+** list lights its bar (scripts/readout-hover.ts). Elsewhere the field is
+** a landscape: the homepage horizon, a cover seeded per news article, and
+** the 404 page, where the lime cube has fallen and left a dashed ghost.
+** The lime cube is the signal. Its light tints the bars nearest it, as a
+** smooth wash on paper and a grain glow at night, and at most one field
+** per page carries it. Small cubes mark disclosures (plain closed, inked
+** open), the footer, and a hovered row whose bar can light.
 **
 ** Ground rules:
 **  - No motion. No transitions, animations, keyframes, smooth scroll, or
