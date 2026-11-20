@@ -51,7 +51,8 @@
 **        (lib/code-themes.mjs), paper in light and night in dark.
 **      rule: the color of the section rules.
 **  - Radius: 3px on chips and tags, 4px on nav pills and toggles, 6px on
-**    buttons and the install box.
+**    buttons. The install box is square and borderless, held by its crop
+**    marks.
 **  - Lime budget: fills only small meaningful surfaces (the version chip,
 **    the stable tag, the best value in a data row, selection). Large
 **    surfaces never turn lime.

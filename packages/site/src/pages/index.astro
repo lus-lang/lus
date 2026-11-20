@@ -416,14 +416,14 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   .install {
-    @apply flex mt-2 max-w-[620px] border border-ink rounded-md bg-field;
+    @apply flex mt-2 max-w-[620px] bg-field;
 
     &[hidden] {
       display: none;
     }
 
     .plat {
-      @apply font-mono text-[11px] font-semibold uppercase bg-accent-soft px-2.5 flex items-center border-r border-ink/30 whitespace-nowrap rounded-l-[5px];
+      @apply font-mono text-[11px] font-semibold uppercase bg-accent-soft px-2.5 flex items-center border-r border-ink/30 whitespace-nowrap;
     }
 
     code {
@@ -440,7 +440,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
 
     button {
-      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer rounded-r-[5px] hover:bg-accent-soft;
+      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer hover:bg-accent-soft;
     }
   }
 
@@ -451,7 +451,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   /* the agent prompt: a few lines of the prompt that scroll, fading out
      under a solid copy button in the corner */
   .prompt-box {
-    @apply relative mt-2 max-w-[620px] border border-ink rounded-md bg-field;
+    @apply relative mt-2 max-w-[620px] bg-field;
 
     p {
       @apply m-0 font-mono text-[13px] leading-[1.6] px-3 pt-2.5 pb-11 max-h-[8.5rem] overflow-y-auto;
@@ -461,7 +461,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     /* the fade over the last lines, under the button */
     &::before {
       content: "";
-      @apply absolute inset-x-px bottom-px h-12 rounded-b-[5px] pointer-events-none;
+      @apply absolute inset-x-0 bottom-0 h-12 pointer-events-none;
       background: linear-gradient(to bottom, transparent, var(--color-field) 70%);
     }
 
