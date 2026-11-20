@@ -5,7 +5,7 @@
     "memory_gb": 36
   },
   "os": "macOS 27.2.1",
-  "date": "2026-11-20T19:20:19.453Z",
+  "date": "2026-11-20T21:27:38.472Z",
   "runs": 7,
   "size": "full",
   "runtimes": {
@@ -49,391 +49,391 @@
   "programs": {
     "csv": {
       "lus": {
-        "best_s": 0.624,
-        "median_s": 0.689,
-        "peak_rss_mb": 525.3,
+        "best_s": 0.617,
+        "median_s": 0.624,
+        "peak_rss_mb": 509.5,
         "ok": true
       },
       "lua": {
-        "best_s": 3.837,
-        "median_s": 4.186,
-        "peak_rss_mb": 571.2,
+        "best_s": 3.738,
+        "median_s": 3.774,
+        "peak_rss_mb": 573.1,
         "ok": true
       },
       "luajit": {
-        "best_s": 2.467,
-        "median_s": 2.745,
-        "peak_rss_mb": 483.9,
+        "best_s": 2.439,
+        "median_s": 2.473,
+        "peak_rss_mb": 483.8,
         "ok": true
       },
       "luau": {
-        "best_s": 2.498,
-        "median_s": 2.795,
-        "peak_rss_mb": 828.1,
+        "best_s": 2.467,
+        "median_s": 2.497,
+        "peak_rss_mb": 833.6,
         "ok": true
       },
       "python": {
-        "best_s": 2.306,
-        "median_s": 2.416,
-        "peak_rss_mb": 1103,
+        "best_s": 2.26,
+        "median_s": 2.286,
+        "peak_rss_mb": 1102.9,
         "ok": true
       },
       "node": {
-        "best_s": 1.627,
-        "median_s": 1.683,
-        "peak_rss_mb": 1008.6,
+        "best_s": 1.555,
+        "median_s": 1.638,
+        "peak_rss_mb": 1008.5,
         "ok": true
       },
       "bun": {
-        "best_s": 0.818,
-        "median_s": 0.852,
-        "peak_rss_mb": 1379.3,
+        "best_s": 0.816,
+        "median_s": 0.821,
+        "peak_rss_mb": 1385.6,
         "ok": true
       },
       "ruby": {
-        "best_s": 5.399,
-        "median_s": 5.523,
-        "peak_rss_mb": 1103.7,
+        "best_s": 5.248,
+        "median_s": 5.274,
+        "peak_rss_mb": 1103.8,
         "ok": true
       },
       "php": {
-        "best_s": 1.284,
-        "median_s": 1.333,
-        "peak_rss_mb": 992.7,
+        "best_s": 1.279,
+        "median_s": 1.288,
+        "peak_rss_mb": 992.8,
         "ok": true
       }
     },
     "json": {
       "lus": {
-        "best_s": 0.492,
-        "median_s": 0.523,
-        "peak_rss_mb": 741.1,
+        "best_s": 0.488,
+        "median_s": 0.492,
+        "peak_rss_mb": 709.8,
         "ok": true
       },
       "lua": {
-        "best_s": 7.898,
-        "median_s": 8.208,
-        "peak_rss_mb": 1331,
+        "best_s": 7.464,
+        "median_s": 7.513,
+        "peak_rss_mb": 1333.3,
         "ok": true
       },
       "luajit": {
-        "best_s": 4.646,
-        "median_s": 4.852,
-        "peak_rss_mb": 937.9,
+        "best_s": 4.209,
+        "median_s": 4.29,
+        "peak_rss_mb": 942.1,
         "ok": true
       },
       "luau": {
-        "best_s": 4.901,
-        "median_s": 5.087,
+        "best_s": 4.467,
+        "median_s": 4.539,
         "peak_rss_mb": 2101.6,
         "ok": true
       },
       "python": {
-        "best_s": 2.205,
-        "median_s": 2.267,
+        "best_s": 2.193,
+        "median_s": 2.196,
         "peak_rss_mb": 1243.7,
         "ok": true
       },
       "node": {
-        "best_s": 0.941,
-        "median_s": 0.997,
-        "peak_rss_mb": 842.2,
+        "best_s": 0.924,
+        "median_s": 0.93,
+        "peak_rss_mb": 842.4,
         "ok": true
       },
       "bun": {
-        "best_s": 0.629,
-        "median_s": 0.631,
-        "peak_rss_mb": 823.6,
+        "best_s": 0.604,
+        "median_s": 0.608,
+        "peak_rss_mb": 823.8,
         "ok": true
       },
       "ruby": {
-        "best_s": 1.868,
-        "median_s": 1.892,
-        "peak_rss_mb": 938.3,
+        "best_s": 1.811,
+        "median_s": 1.82,
+        "peak_rss_mb": 938.4,
         "ok": true
       },
       "php": {
-        "best_s": 0.867,
-        "median_s": 0.878,
+        "best_s": 0.838,
+        "median_s": 0.847,
         "peak_rss_mb": 1669.6,
         "ok": true
       }
     },
     "logs": {
       "lus": {
-        "best_s": 0.79,
-        "median_s": 0.808,
+        "best_s": 0.721,
+        "median_s": 0.73,
         "peak_rss_mb": 451.9,
         "ok": true
       },
       "lua": {
-        "best_s": 1.831,
-        "median_s": 1.846,
-        "peak_rss_mb": 519.6,
+        "best_s": 1.632,
+        "median_s": 1.661,
+        "peak_rss_mb": 520.8,
         "ok": true
       },
       "luajit": {
-        "best_s": 1.6,
-        "median_s": 1.628,
+        "best_s": 1.415,
+        "median_s": 1.424,
         "peak_rss_mb": 446.2,
         "ok": true
       },
       "luau": {
-        "best_s": 1.843,
-        "median_s": 1.858,
-        "peak_rss_mb": 598.8,
+        "best_s": 1.638,
+        "median_s": 1.646,
+        "peak_rss_mb": 598.6,
         "ok": true
       },
       "python": {
-        "best_s": 1.875,
-        "median_s": 1.898,
-        "peak_rss_mb": 443.7,
+        "best_s": 1.795,
+        "median_s": 1.805,
+        "peak_rss_mb": 441.8,
         "ok": true
       },
       "node": {
-        "best_s": 1.416,
-        "median_s": 1.604,
-        "peak_rss_mb": 802.9,
+        "best_s": 1.28,
+        "median_s": 1.295,
+        "peak_rss_mb": 803.5,
         "ok": true
       },
       "bun": {
-        "best_s": 0.974,
-        "median_s": 0.99,
-        "peak_rss_mb": 982,
+        "best_s": 0.896,
+        "median_s": 0.906,
+        "peak_rss_mb": 976.2,
         "ok": true
       },
       "ruby": {
-        "best_s": 2.081,
-        "median_s": 2.092,
-        "peak_rss_mb": 466.7,
+        "best_s": 1.948,
+        "median_s": 1.955,
+        "peak_rss_mb": 466.8,
         "ok": true
       },
       "php": {
-        "best_s": 0.58,
-        "median_s": 0.586,
+        "best_s": 0.546,
+        "median_s": 0.552,
         "peak_rss_mb": 636.2,
         "ok": true
       }
     },
     "lru": {
       "lus": {
-        "best_s": 0.908,
-        "median_s": 1.012,
-        "peak_rss_mb": 62.9,
+        "best_s": 0.876,
+        "median_s": 0.889,
+        "peak_rss_mb": 62,
         "ok": true
       },
       "lua": {
-        "best_s": 2.948,
-        "median_s": 3.138,
-        "peak_rss_mb": 64.4,
+        "best_s": 2.575,
+        "median_s": 2.701,
+        "peak_rss_mb": 61.1,
         "ok": true
       },
       "luajit": {
-        "best_s": 1.63,
-        "median_s": 1.696,
-        "peak_rss_mb": 143.9,
+        "best_s": 1.479,
+        "median_s": 1.53,
+        "peak_rss_mb": 116.3,
         "ok": true
       },
       "luau": {
-        "best_s": 1.726,
-        "median_s": 1.848,
+        "best_s": 1.498,
+        "median_s": 1.527,
         "peak_rss_mb": 120.6,
         "ok": true
       },
       "python": {
-        "best_s": 3.12,
-        "median_s": 3.317,
-        "peak_rss_mb": 49.1,
+        "best_s": 2.862,
+        "median_s": 2.94,
+        "peak_rss_mb": 45.1,
         "ok": true
       },
       "node": {
-        "best_s": 1.425,
-        "median_s": 1.46,
-        "peak_rss_mb": 156.3,
+        "best_s": 1.321,
+        "median_s": 1.333,
+        "peak_rss_mb": 156.5,
         "ok": true
       },
       "bun": {
-        "best_s": 1.011,
-        "median_s": 1.166,
-        "peak_rss_mb": 225.6,
+        "best_s": 0.939,
+        "median_s": 0.947,
+        "peak_rss_mb": 176.7,
         "ok": true
       },
       "ruby": {
-        "best_s": 2.036,
-        "median_s": 2.118,
+        "best_s": 1.896,
+        "median_s": 1.909,
         "peak_rss_mb": 51.9,
         "ok": true
       },
       "php": {
-        "best_s": 1.188,
-        "median_s": 1.247,
+        "best_s": 1.121,
+        "median_s": 1.123,
         "peak_rss_mb": 45.4,
         "ok": true
       }
     },
     "template": {
       "lus": {
-        "best_s": 0.595,
-        "median_s": 0.602,
-        "peak_rss_mb": 755.8,
+        "best_s": 0.56,
+        "median_s": 0.562,
+        "peak_rss_mb": 751.8,
         "ok": true
       },
       "lua": {
-        "best_s": 2.08,
-        "median_s": 2.126,
-        "peak_rss_mb": 702,
+        "best_s": 1.957,
+        "median_s": 1.985,
+        "peak_rss_mb": 704,
         "ok": true
       },
       "luajit": {
-        "best_s": 2.178,
-        "median_s": 2.238,
+        "best_s": 2.036,
+        "median_s": 2.063,
         "peak_rss_mb": 876.3,
         "ok": true
       },
       "luau": {
-        "best_s": 1.787,
-        "median_s": 1.804,
-        "peak_rss_mb": 1155.7,
+        "best_s": 1.686,
+        "median_s": 1.697,
+        "peak_rss_mb": 1150.6,
         "ok": true
       },
       "python": {
-        "best_s": 1.928,
-        "median_s": 1.955,
+        "best_s": 1.869,
+        "median_s": 1.882,
         "peak_rss_mb": 686.2,
         "ok": true
       },
       "node": {
-        "best_s": 1.463,
-        "median_s": 1.478,
-        "peak_rss_mb": 1084.5,
+        "best_s": 1.201,
+        "median_s": 1.421,
+        "peak_rss_mb": 1127,
         "ok": true
       },
       "bun": {
-        "best_s": 0.676,
-        "median_s": 0.685,
-        "peak_rss_mb": 1136.8,
+        "best_s": 0.657,
+        "median_s": 0.66,
+        "peak_rss_mb": 1128.4,
         "ok": true
       },
       "ruby": {
-        "best_s": 1.67,
-        "median_s": 1.682,
-        "peak_rss_mb": 536.7,
+        "best_s": 1.623,
+        "median_s": 1.687,
+        "peak_rss_mb": 536.6,
         "ok": true
       },
       "php": {
-        "best_s": 0.66,
-        "median_s": 0.663,
+        "best_s": 0.643,
+        "median_s": 0.648,
         "peak_rss_mb": 1100.2,
         "ok": true
       }
     },
     "wordfreq": {
       "lus": {
-        "best_s": 1.074,
-        "median_s": 1.079,
+        "best_s": 1.004,
+        "median_s": 1.007,
         "peak_rss_mb": 331.4,
         "ok": true
       },
       "lua": {
-        "best_s": 2.016,
-        "median_s": 2.04,
-        "peak_rss_mb": 549,
+        "best_s": 1.853,
+        "median_s": 1.868,
+        "peak_rss_mb": 547.5,
         "ok": true
       },
       "luajit": {
-        "best_s": 1.159,
-        "median_s": 1.195,
+        "best_s": 1.055,
+        "median_s": 1.062,
         "peak_rss_mb": 458.3,
         "ok": true
       },
       "luau": {
-        "best_s": 1.647,
-        "median_s": 1.656,
-        "peak_rss_mb": 1205.2,
+        "best_s": 1.521,
+        "median_s": 1.531,
+        "peak_rss_mb": 1204.7,
         "ok": true
       },
       "python": {
-        "best_s": 4.787,
-        "median_s": 4.821,
-        "peak_rss_mb": 827.6,
+        "best_s": 4.467,
+        "median_s": 4.52,
+        "peak_rss_mb": 829.2,
         "ok": true
       },
       "node": {
-        "best_s": 2.972,
-        "median_s": 3.014,
-        "peak_rss_mb": 919.7,
+        "best_s": 2.722,
+        "median_s": 2.729,
+        "peak_rss_mb": 874.3,
         "ok": true
       },
       "bun": {
-        "best_s": 2.096,
-        "median_s": 2.115,
-        "peak_rss_mb": 1239.4,
+        "best_s": 1.924,
+        "median_s": 1.94,
+        "peak_rss_mb": 1150.3,
         "ok": true
       },
       "ruby": {
-        "best_s": 3.99,
-        "median_s": 4.022,
-        "peak_rss_mb": 96.2,
+        "best_s": 3.675,
+        "median_s": 3.682,
+        "peak_rss_mb": 96.1,
         "ok": true
       },
       "php": {
-        "best_s": 1.222,
-        "median_s": 1.233,
-        "peak_rss_mb": 684.3,
+        "best_s": 1.145,
+        "median_s": 1.153,
+        "peak_rss_mb": 684,
         "ok": true
       }
     }
   },
   "http": {
     "lus": {
-      "rps": 132575,
-      "p50_ms": 0.485,
-      "p99_ms": 0.64,
+      "rps": 139598,
+      "p50_ms": 0.473,
+      "p99_ms": 0.525,
       "errors": 0,
       "idle_rss_mb": 3.8,
-      "peak_rss_mb": 7.6,
+      "peak_rss_mb": 8.1,
       "ok": true
     },
     "python": {
-      "rps": 24319,
-      "p50_ms": 2.09,
-      "p99_ms": 9.3,
+      "rps": 26525,
+      "p50_ms": 1.786,
+      "p99_ms": 8.111,
       "errors": 0,
-      "idle_rss_mb": 23.4,
-      "peak_rss_mb": 28.1,
+      "idle_rss_mb": 23.2,
+      "peak_rss_mb": 26.9,
       "ok": true
     },
     "node": {
-      "rps": 95830,
-      "p50_ms": 0.626,
-      "p99_ms": 1.34,
+      "rps": 101875,
+      "p50_ms": 0.596,
+      "p99_ms": 1.219,
       "errors": 0,
       "idle_rss_mb": 43.8,
-      "peak_rss_mb": 83,
+      "peak_rss_mb": 82.8,
       "ok": true
     },
     "bun": {
-      "rps": 124145,
-      "p50_ms": 0.493,
-      "p99_ms": 1.054,
+      "rps": 129524,
+      "p50_ms": 0.428,
+      "p99_ms": 0.919,
       "errors": 0,
       "idle_rss_mb": 24.8,
-      "peak_rss_mb": 36.7,
+      "peak_rss_mb": 36.5,
       "ok": true
     },
     "ruby": {
-      "rps": 66834,
-      "p50_ms": 0.812,
-      "p99_ms": 2.138,
+      "rps": 72776,
+      "p50_ms": 0.807,
+      "p99_ms": 1.577,
       "errors": 0,
-      "idle_rss_mb": 19.2,
-      "peak_rss_mb": 27,
+      "idle_rss_mb": 19.1,
+      "peak_rss_mb": 26.7,
       "ok": true
     },
     "php": {
-      "rps": 162177,
-      "p50_ms": 0.405,
-      "p99_ms": 0.835,
+      "rps": 170880,
+      "p50_ms": 0.404,
+      "p99_ms": 0.823,
       "errors": 0,
       "idle_rss_mb": 28.5,
       "peak_rss_mb": 29.6,
