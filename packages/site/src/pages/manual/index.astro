@@ -63,7 +63,7 @@ const skylineLinks = skylinePages.map((p) => `/manual/${p.id}`)
         <h2>{group.label}</h2>
         <div class="hub-rows">
           {group.rows.map((row) => (
-            <a class="hub-row cube-hover" href={row.href}>
+            <a class="hub-row cube-hover" href={row.href} data-bar={skylineLinks.indexOf(row.href)}>
               <span class="hub-title">{row.title}</span>
               <i aria-hidden="true" />
               <span class="hub-desc">{row.shortdesc}</span>

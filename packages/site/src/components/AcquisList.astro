@@ -12,6 +12,9 @@ function split(title: string) {
   return m ? { no: m[1], name: m[2] ?? "" } : { no: "", name: title }
 }
 
+// each acquis's column in the title readout, which reads them in order
+const barOf = new Map(acquis.map((p, i) => [p.id, i]))
+
 const columns = [
   { label: "Stable", red: false, pages: acquis.filter((p) => !p.data.draft) },
   { label: "Unstable", red: true, pages: acquis.filter((p) => p.data.draft) },
@@ -30,7 +33,7 @@ const columns = [
             const { no, name } = split(p.data.title)
             return (
               <li>
-                <a href={`/manual/${p.id}`}>
+                <a href={`/manual/${p.id}`} data-bar={barOf.get(p.id)}>
                   <span class="k">{no}</span>
                   <span class="t">
                     {name && <b>{name}</b>}

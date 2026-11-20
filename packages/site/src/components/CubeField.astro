@@ -371,11 +371,13 @@ const lightOn = glow && signal !== "none"
   }
 
   /* a linked bar lights its top under the pointer */
-  .cube-field a:hover g:not(.lime) polygon:nth-of-type(3) {
+  .cube-field a:hover g:not(.lime) polygon:nth-of-type(3),
+  .cube-field g.hl:not(.lime) polygon:nth-of-type(3) {
     fill: var(--color-accent);
   }
 
-  .cube-field a:hover g:not(.lime) polygon:nth-of-type(1) {
+  .cube-field a:hover g:not(.lime) polygon:nth-of-type(1),
+  .cube-field g.hl:not(.lime) polygon:nth-of-type(1) {
     fill: var(--color-accent-soft);
   }
 

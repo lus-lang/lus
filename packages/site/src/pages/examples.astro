@@ -94,7 +94,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
       <nav class="jump" aria-label="Examples">
         {
           examples.map((ex, i) => (
-            <a href={`#${ex.name}`}>
+            <a href={`#${ex.name}`} data-bar={i}>
               <span class="k">{String(i + 1).padStart(2, "0")}</span>
               {ex.title}
             </a>

@@ -60,7 +60,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
 </details>
 
 <nav class="api-modules" aria-label="Reference sections">
-  {sections.map((section) => <a href={`#${section.id}`}>{section.title}</a>)}
+  {sections.map((section, i) => <a href={`#${section.id}`} data-bar={i}>{section.title}</a>)}
 </nav>
 
 <div class="api-index">

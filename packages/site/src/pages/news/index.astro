@@ -28,8 +28,8 @@ const skylineHeights = skyline(sorted.toReversed().map((item) => (item.body ?? "
             </p>
             <div class="news-list">
                 {
-                    sorted.map((item) => (
-                        <a href={`/news/${item.id}`} class="news-row cube-hover">
+                    sorted.map((item, i) => (
+                        <a href={`/news/${item.id}`} class="news-row cube-hover" data-bar={sorted.length - 1 - i}>
                             <time class="date" datetime={fmtDate(item.data.date)}>
                                 {fmtDate(item.data.date)}
                             </time>
