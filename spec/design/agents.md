@@ -39,11 +39,11 @@ Measured on the current tree, the manual and the stdlib spec together hold about
 
 #### Where the files live
 
-The `.agents/` folder at the repository root holds everything agents consume directly: the skills, the curated `llms.txt`, and the prompts. `.agents/skills/` is the shared discovery path that agents across tools read, so an agent working in the Lus repository itself loads the Lus skills, and skill installers that read a GitHub repository find them at the same path. For tools that read only their own folder, `.claude/skills/lus` and `.claude/skills/lus-rewrite` are symbolic links into `.agents/skills/`, so each skill has one copy. The same files ship in the binary, the repository, skill registries, and the site. The generated files are build outputs of the site, produced by Astro endpoints the same way `install.sh.ts` serves `packaging/install/install.sh`, so nothing generated is committed and nothing goes stale.
+The `.agents/` folder at the repository root holds everything agents consume directly: the skills, the curated `llms.txt`, and the prompts. `.agents/skills/` is the shared discovery path that agents across tools read, so an agent working in the Lus repository itself loads the Lus skills, and skill installers that read a GitHub repository find them at the same path. For tools that read only their own folder, `.claude/skills` is a symbolic link to `.agents/skills`, so each skill has one copy. The same files ship in the binary, the repository, skill registries, and the site. The generated files are build outputs of the site, produced by Astro endpoints the same way `install.sh.ts` serves `packaging/install/install.sh`, so nothing generated is committed and nothing goes stale.
 
 #### Skills in the binary
 
-`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` of the current project, links them from `.claude/skills/`, and adds a short Lus section to `AGENTS.md`. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The cost is about 130 KB of compressed text in a 6.7 MB executable.
+`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` of the current project, links `.claude/skills` to that folder, and adds a short Lus section to `AGENTS.md`. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The cost is about 130 KB of compressed text in a 6.7 MB executable.
 
 #### The skills
 
@@ -193,7 +193,7 @@ end)
 
 ## Decisions
 
-1. The skills live in `.agents/skills/`, the shared discovery path, and `.claude/skills/` links to them. The index and the prompts sit beside them in `.agents/`.
+1. The skills live in `.agents/skills/`, the shared discovery path, and `.claude/skills` is a symbolic link to that folder. The index and the prompts sit beside them in `.agents/`.
 2. The binary embeds the skills and the reference, for `lus agents init` and `lus help`, at a cost of about 130 KB.
 3. The masthead prompt installs Lus, runs `lus agents init`, and asks for an assessment with no changes.
 4. The advantage sections replace "Lus at a glance" entirely.

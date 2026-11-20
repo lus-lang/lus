@@ -7,6 +7,6 @@ This folder holds what coding agents read to work with Lus: the skills, the cura
 - `llms.txt` is the index served at `lus.dev/llms.txt`.
 - `prompt.md` holds the prompts shown on `lus.dev/agents`.
 
-`.agents/skills/` is the discovery path that agents across tools read. `.claude/skills/lus` and `.claude/skills/lus-rewrite` are symbolic links to the same folders.
+`.agents/skills/` is the discovery path that agents across tools read. `.claude/skills` is a symbolic link to it.
 
 Every `lus` code block in this folder runs under `lus test --doc`. From `runtime/`, run `zig-out/bin/lus test --doc ../.agents`.

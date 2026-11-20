@@ -17,7 +17,7 @@ Monorepository for the Lus programming language, a Lua 5.5 derivative. The runti
 - **`/examples`**: Runnable examples, shown on the site and in the playground
 - **`/packaging`**: Install scripts, release anchors, third-party notices, and dependency licenses
 - **`/tools`**: Generators (spec to LSP data, spec to grammar) and the repository lint
-- **`/.agents`**: Agent skills (`lus`, `lus-rewrite`), the `llms.txt` index, and agent prompts. `.claude/skills/` links into `.agents/skills/`, and `spec/design/agents.md` describes the design
+- **`/.agents`**: Agent skills (`lus`, `lus-rewrite`), the `llms.txt` index, and agent prompts. `.claude/skills` is a symbolic link to `.agents/skills`, and `spec/design/agents.md` describes the design
 
 The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. In a fresh clone, run `mise trust` once so mise reads `mise.toml`, then `mise install` for the toolchain. Run `mise tasks` to list the tasks.
 
