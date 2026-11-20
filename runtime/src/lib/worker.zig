@@ -143,9 +143,9 @@ const Encoder = struct {
             .float => .{ .float = v.asFloat() },
             .string => blk: {
                 const s = v.as(String);
-                if (s.len > blob.min_len) if (try e.blobIndex(s)) |i| break :blk .{ .shared = .{ .index = i, .ascii = s.flags.ascii, .chars = s.chars } };
+                if (s.len > blob.min_len) if (try e.blobIndex(s)) |i| break :blk .{ .shared = .{ .index = i, .ascii = s.flags().ascii, .chars = s.chars() } };
                 const bytes = e.arena.dupe(u8, s.bytes()) catch return l.raiseMem();
-                break :blk .{ .string = .{ .bytes = bytes, .ascii = s.flags.ascii, .chars = s.chars } };
+                break :blk .{ .string = .{ .bytes = bytes, .ascii = s.flags().ascii, .chars = s.chars() } };
             },
             .bigint => blk: {
                 const b = v.as(numeric.BigInt);

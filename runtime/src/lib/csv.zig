@@ -27,7 +27,7 @@ pub fn open(l: *Thread) Error!void {
 fn checkDelimiter(l: *Thread, i: u32) Error![]const u8 {
     if (l.arg(i).isNil()) return ",";
     const s = try aux.checkString(l, i);
-    if (s.chars != 1) return aux.argError(l, i, "delimiter must be a single character", .{});
+    if (s.chars() != 1) return aux.argError(l, i, "delimiter must be a single character", .{});
     return s.bytes();
 }
 
@@ -174,7 +174,7 @@ fn fromcsv(l: *Thread) Error!u32 {
 
     const rows = try l.newTable(0, 0);
     try l.push(Value.obj(.table, rows));
-    var p: Parser = .{ .l = l, .src = input, .ascii = l.arg(1).as(object.String).flags.ascii, .delim = delim };
+    var p: Parser = .{ .l = l, .src = input, .ascii = l.arg(1).as(object.String).flags().ascii, .delim = delim };
     defer p.field.deinit(l.g.gpa);
     var nrows: i64 = 0;
     if (input.len > 0) {

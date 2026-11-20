@@ -41,7 +41,7 @@ const tag_int: u8 = @backingInt(Tag.integer);
 const tag_float: u8 = @backingInt(Tag.float);
 const tag_string: u8 = @backingInt(Tag.string);
 /// The flag byte of a string and the bit that marks it interned.
-const string_flags: i32 = @offsetOf(object.String, "flags");
+const string_flags: i32 = object.String.flags_offset;
 const string_interned_bit: u3 = @bitOffsetOf(object.String.Flags, "interned");
 const tag_table: u8 = @backingInt(Tag.table);
 const tag_closure: u8 = @backingInt(Tag.closure);
@@ -587,7 +587,7 @@ pub const Emitter = struct {
                 const done = a.newLabel();
                 a.jumpIfByte(.ne, tagOf(rb), tag_string, e.addCold(pc, .{ .length = .{ .x = rb, .dst = ra } }, done));
                 a.load64(A.t0, slot(rb));
-                a.load32(A.t0, .{ .base = A.t0, .disp = @offsetOf(object.String, "chars") });
+                a.load32(A.t0, .{ .base = A.t0, .disp = object.String.chars_offset });
                 a.store64(A.t0, slot(ra));
                 e.storeTag(ra, tag_int);
                 a.bind(done);
@@ -1284,7 +1284,7 @@ pub const Emitter = struct {
         const key = e.p.constants[kb].as(object.String);
         // A constructor stores into a fresh table, where the predicted
         // node is still empty.
-        const other_key = if (key.flags.interned) e.addCold(pc, .{ .field_insert = call }, done) else miss;
+        const other_key = if (key.flags().interned) e.addCold(pc, .{ .field_insert = call }, done) else miss;
         e.loadTable(t, miss);
         e.guardRawStore(A.t0, A.t1, miss);
         e.predictedNode(e.prediction(pc, il.ic_own), A.t0, key, A.t1, A.t2, A.t3, miss, other_key);
@@ -1538,7 +1538,7 @@ pub const Emitter = struct {
                 // operand that is another object can equal it only when
                 // the operand is not interned, and the step routine
                 // compares the bytes then.
-                if (!k.as(object.String).flags.interned) return e.step(pc, true);
+                if (!k.as(object.String).flags().interned) return e.step(pc, true);
                 const differ = if (c) skip else e.at(pc + 1);
                 const same = if (c) e.at(pc + 1) else skip;
                 a.jumpIfByte(.ne, tagOf(x), tag_string, differ);
@@ -1759,7 +1759,7 @@ pub const Emitter = struct {
                 // small hash part may be full, so the probe also ends
                 // after visiting every node, counted down in t5.
                 a.bind(m.chain);
-                if (!s.flags.interned) {
+                if (!s.flags().interned) {
                     a.jmp(helper);
                 } else {
                     const loop = a.newLabel();

@@ -118,8 +118,8 @@ pub fn releaseObject(g: *Global, h: *Header) void {
     switch (h.tag) {
         .string => {
             const s = h.as(object.String);
-            if (s.flags.interned) g.strings.remove(s);
-            if (s.flags.shared or s.flags.cached) @import("blob.zig").drop(g, s);
+            if (s.flags().interned) g.strings.remove(s);
+            if (s.flags().shared or s.flags().cached) @import("blob.zig").drop(g, s);
             s.freeExtra(gpa);
         },
         .table => {

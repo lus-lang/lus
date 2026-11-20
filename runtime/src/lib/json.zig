@@ -534,7 +534,7 @@ const Writer = struct {
 
     fn str(w: *Writer, s: *String) Error!void {
         const b = s.bytes();
-        if (!s.flags.ascii) w.cont += b.len - s.chars;
+        if (!s.flags().ascii) w.cont += b.len - s.chars();
         return w.strBytes(b);
     }
 

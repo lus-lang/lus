@@ -71,7 +71,7 @@ fn cpAt(l: *Thread, s: *String, ci: usize) u21 {
 
 fn len(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const n: usize = s.chars;
+    const n: usize = s.chars();
     var posi = posrelat(try aux.optInt(l, 2, 1), n);
     var posj = posrelat(try aux.optInt(l, 3, -1), n);
     const lax = l.arg(4).truthy();
@@ -80,7 +80,7 @@ fn len(l: *Thread) Error!u32 {
     posj -= 1;
     if (!(posj < @as(i64, @intCast(n)))) return aux.argError(l, 3, "final position out of bounds", .{});
     if (posi > posj) return aux.retInt(l, 0);
-    if (!lax and !s.flags.ascii) {
+    if (!lax and !s.flags().ascii) {
         // Only lone surrogates can be invalid in a WTF-8 string.
         const b = s.bytes();
         var off = s.byteOffset(&l.g.gpa, @intCast(posi));
@@ -100,7 +100,7 @@ fn len(l: *Thread) Error!u32 {
 
 fn codepoint(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const n: usize = s.chars;
+    const n: usize = s.chars();
     const posi = posrelat(try aux.optInt(l, 2, 1), n);
     const pose = posrelat(try aux.optInt(l, 3, posi), n);
     const lax = l.arg(4).truthy();
@@ -159,7 +159,7 @@ fn char(l: *Thread) Error!u32 {
 
 fn offset(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
-    const slen: i64 = s.chars;
+    const slen: i64 = s.chars();
     const n = try aux.checkInt(l, 2);
     const default: i64 = if (n >= 0) 1 else slen + 1;
     var posi = posrelat(try aux.optInt(l, 3, default), @intCast(slen));
@@ -185,7 +185,7 @@ fn iterAux(l: *Thread, strict: bool) Error!u32 {
     const s = try aux.checkString(l, 1);
     const ctl = l.arg(2);
     const i: i64 = if (ctl.tag == .integer) ctl.asInt() else 0;
-    if (i < 0 or i >= s.chars) return 0;
+    if (i < 0 or i >= s.chars()) return 0;
     const cp = cpAt(l, s, @intCast(i));
     if (strict and isSurrogate(cp)) return l.raiseFmt(msg_invalid, .{});
     try l.push(Value.int(i + 1));

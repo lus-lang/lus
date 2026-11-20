@@ -1037,14 +1037,14 @@ pub const rt = struct {
     /// The code point of character `i` of `s`, as `string.byte(s, i)`
     /// returns it, or minus one for a position outside the string.
     pub fn stringByte(l: *Thread, s: *object.String, i: i64) callconv(.c) i64 {
-        const n: i64 = s.chars;
+        const n: i64 = s.chars();
         const pos: i64 = if (i > 0) i else if (i == 0 or i < -n) 1 else n + i + 1;
         // The end position is the start position, clipped like the
         // library function clips it.
         const end: i64 = if (i > n) n else if (i >= 0) i else if (i < -n) 0 else n + i + 1;
         if (pos > end or pos < 1 or pos > n) return -1;
         const src = s.bytes();
-        if (s.flags.ascii) return src[@intCast(pos - 1)];
+        if (s.flags().ascii) return src[@intCast(pos - 1)];
         const off = s.byteOffset(&l.g.gpa, @intCast(pos - 1));
         return @import("../../vm/wtf8.zig").decodeValid(src, off).cp;
     }

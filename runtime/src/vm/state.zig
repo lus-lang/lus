@@ -822,12 +822,14 @@ pub fn newStringIn(g: *Global, b: []const u8) (Allocator.Error || error{InvalidU
 pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
     std.debug.assert(len > String.short_max);
     gc.maybeCollect(g);
-    const s = try gc.allocUninit(g, String, .string, String.allocSize(len));
+    // The contents are not known yet, so the cell keeps a breadcrumb
+    // slot in case they are non-ASCII.
+    const s = try gc.allocUninit(g, String, .string, String.allocSizeWith(len, true));
     s.len = @intCast(len);
-    s.chars = 0;
+    s.setChars(0);
     s.hash = 0;
-    s.flags = .{};
-    s.crumbs = null;
+    s.flags().* = .{ .crumb_slot = true };
+    s.initCrumbs();
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + len] = 0;
     return s;
@@ -836,8 +838,8 @@ pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
 /// Completes a string from `newLongUninit` once its bytes, valid WTF-8,
 /// are written.
 pub fn finishLong(g: *Global, s: *String, ascii: bool, chars: usize) void {
-    s.chars = @intCast(chars);
-    s.flags.ascii = ascii;
+    s.setChars(@intCast(chars));
+    s.flags().ascii = ascii;
     s.hash = object.hashBytes(g.seed, s.bytesMut());
 }
 
@@ -895,13 +897,13 @@ pub const fresh_min = 16;
 /// interned: the one the string table holds, or `s` itself, which joins
 /// the table.
 pub noinline fn intern(g: *Global, s: *String) Allocator.Error!*String {
-    std.debug.assert(!s.flags.interned and s.len <= String.short_max);
+    std.debug.assert(!s.flags().interned and s.len <= String.short_max);
     if (g.strings.find(s.bytes(), s.hash)) |twin| {
         gc.touchInterned(g, twin);
         return twin;
     }
     try g.strings.insert(g.gpa, s);
-    s.flags.interned = true;
+    s.flags().interned = true;
     return s;
 }
 
@@ -911,12 +913,13 @@ noinline fn createString(g: *Global, b: []const u8, ascii: bool, chars: usize, h
 
 inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h: u32, short: bool) Allocator.Error!*String {
     gc.maybeCollect(g);
-    const s = try gc.allocUninit(g, String, .string, String.allocSize(b.len));
+    const slot = String.needsCrumbs(ascii, chars);
+    const s = try gc.allocUninit(g, String, .string, String.allocSizeWith(b.len, slot));
     s.len = @intCast(b.len);
-    s.chars = @intCast(chars);
+    s.setChars(@intCast(chars));
     s.hash = h;
-    s.flags = .{ .ascii = ascii, .interned = short };
-    s.crumbs = null;
+    s.flags().* = .{ .ascii = ascii, .interned = short, .crumb_slot = slot };
+    s.initCrumbs();
     @memcpy(s.bytesMut(), b);
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + b.len] = 0;
@@ -1001,7 +1004,9 @@ pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8),
         list.* = .empty;
     }
     const n = list.items.len;
-    if (String.allocSize(n) <= @import("heap.zig").max_small) {
+    // A string that may build breadcrumbs needs a slot after its bytes,
+    // which the buffer lacks, so it is copied.
+    if (String.allocSize(n) <= @import("heap.zig").max_small or String.needsCrumbs(ascii, chars)) {
         return newStringKnown(g, list.items, ascii, chars);
     }
     gc.maybeCollect(g);
@@ -1015,10 +1020,10 @@ pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8),
     const s: *String = @ptrCast(@alignCast(mem));
     s.hdr = .{ .tag = .string, .flags = .{ .large = true } };
     s.len = @intCast(n);
-    s.chars = @intCast(chars);
-    s.flags = .{ .ascii = ascii };
+    s.setChars(@intCast(chars));
+    s.flags().* = .{ .ascii = ascii };
     s.hash = object.hashBytes(g.seed, s.bytes());
-    s.crumbs = null;
+    s.initCrumbs();
     mem[StringBuffer.head + n] = 0;
     return s;
 }

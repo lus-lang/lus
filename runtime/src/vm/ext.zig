@@ -41,7 +41,7 @@ pub fn slice(l: *Thread, obj: Value, from: Value, to: Value) Error!Value {
     switch (obj.tag) {
         .string => {
             const s = obj.as(String);
-            const len: i64 = s.chars;
+            const len: i64 = s.chars();
             var i = (try sliceBound(l, from)) orelse 1;
             var j = (try sliceBound(l, to)) orelse len;
             if (i < 1) i = 1;
@@ -99,7 +99,7 @@ fn sliceMetamethod(l: *Thread, obj: Value) Value {
 pub fn substring(l: *Thread, s: *String, ci: usize, cj: usize) Error!Value {
     const b0 = s.byteOffset(&l.g.gpa, ci);
     const b1 = s.byteOffset(&l.g.gpa, cj);
-    const str = state.newStringKnown(l.g, s.bytes()[b0..b1], s.flags.ascii or (cj - ci == b1 - b0), cj - ci) catch return l.raiseMem();
+    const str = state.newStringKnown(l.g, s.bytes()[b0..b1], s.flags().ascii or (cj - ci == b1 - b0), cj - ci) catch return l.raiseMem();
     return Value.obj(.string, str);
 }
 
