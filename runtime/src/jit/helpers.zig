@@ -6,6 +6,7 @@
 const std = @import("std");
 const state = @import("../vm/state.zig");
 const interp = @import("../vm/interp.zig");
+const ops = @import("../vm/ops.zig");
 const opc = @import("../compile/opcodes.zig");
 const Thread = state.Thread;
 const Op = opc.Op;
@@ -54,6 +55,17 @@ const jit = @import("jit.zig");
 const Value = value.Value;
 const IcEntry = object.IcEntry;
 const Closure = object.Closure;
+
+/// R[A] = R[A] .. ... .. R[A+n-1] for a short result of strings and
+/// integers (`ops.joinShort`), written to `r[0]`. Returns 1 when it ran
+/// and 0 when the step routine must run the instruction, which also
+/// raises any error.
+pub fn concatShort(l: *Thread, r: [*]Value, n: usize) callconv(.c) usize {
+    if (n == 0) return 0;
+    const v = (ops.joinShort(l, r[0 .. n - 1], r[n - 1]) catch return 0) orelse return 0;
+    r[0] = v;
+    return 1;
+}
 
 /// A step of a generic `for` over `next` or `ipairs` (`interp.stepIterator`).
 /// Returns 1 when it ran and 0 when the step routine must make the call.

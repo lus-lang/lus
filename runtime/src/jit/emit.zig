@@ -557,6 +557,18 @@ pub const Emitter = struct {
                 e.arraySet(pc, rc, e.coldStep(pc), miss, done);
                 a.bind(done);
             },
+            .concat, .interp => {
+                // A short join of strings and integers runs without the
+                // step routine. Anything else takes it.
+                const done = a.newLabel();
+                a.mov(A.args[0], A.thread);
+                a.lea(A.args[1], slot(ra));
+                a.movImm(A.args[2], rb);
+                a.call(@intFromPtr(&helpers.concatShort));
+                a.jumpIfImm(.ne, A.ret0, 0, done);
+                e.step(pc, true);
+                a.bind(done);
+            },
             .tforcall => {
                 // `next` and `ipairs` over plain tables step without a
                 // native frame. Anything else takes the step routine.
@@ -1150,6 +1162,53 @@ pub const Emitter = struct {
         a.bind(call);
     }
 
+    /// R[tr][R[kr]] = R[vr] for a table in `tr` and a string in `kr` that
+    /// the table already holds as a key, live or dead, by probing the
+    /// hash part inline as `table.storeStr` does. The store must be raw
+    /// and the key interned, and the part must have room. A new key, and
+    /// everything else, falls through to the helper.
+    fn probeStoreStr(e: *Emitter, tr: u32, kr: u32, vr: u32, done: Label) void {
+        const a = &e.a;
+        const call = a.newLabel();
+        const loop = a.newLabel();
+        const next = a.newLabel();
+        const same = a.newLabel();
+        a.load64(A.t0, slot(tr));
+        e.guardRawStore(A.t0, A.t1, call);
+        a.load64(A.t6, slot(kr));
+        a.jumpIfBit(.{ .base = A.t6, .disp = string_flags }, string_interned_bit, false, call);
+        a.load32(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
+        a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
+        a.jumpIf(.hs, A.t1, A.t2, call);
+        a.addImm(A.t2, -1);
+        a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+        a.load32(A.t1, .{ .base = A.t6, .disp = @offsetOf(object.String, "hash") });
+        a.bind(loop);
+        a.@"and"(A.t1, A.t2);
+        e.nodeTags(A.t4, A.t3, A.t1);
+        a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.tag_key }, tag_nil, call);
+        a.addScaled(A.t5, A.t3, A.t1, tl.node_shift);
+        a.jumpIfMem(.eq, A.t6, .{ .base = A.t5, .disp = tl.node_key }, same);
+        a.bind(next);
+        a.addImm(A.t1, 1);
+        a.jmp(loop);
+        a.bind(same);
+        a.jumpIfByte(.ne, .{ .base = A.t4, .disp = tl.tag_key }, tag_string, next);
+        e.storeNodeVal(slot(vr), A.t5, A.t4, A.t2);
+        a.storeImm16(.{ .base = A.t0, .disp = tl.tm_absent }, 0);
+        // The barrier: a collectable value stored into a black table.
+        a.load8(A.t2, tagOf(vr));
+        a.jumpIfImm(.lo, A.t2, tag_string, done);
+        a.jumpIfBit(.{ .base = A.t0, .disp = tl.flags }, tl.barrier_bit, false, done);
+        a.mov(A.args[1], A.t0);
+        a.movImm(A.args[2], 0);
+        a.lea(A.args[3], slot(vr));
+        a.mov(A.args[0], A.thread);
+        a.call(@intFromPtr(&helpers.barrierTable));
+        a.jmp(done);
+        a.bind(call);
+    }
+
     /// The value of the node at `node`, whose tags are at `tags`, to the
     /// value at `dst`, through `tmp` and `tmp2`.
     fn loadNodeVal(e: *Emitter, dst: Mem, node: A.Reg, tags: A.Reg, tmp: A.Reg, tmp2: A.Reg) void {
@@ -1617,6 +1676,7 @@ pub const Emitter = struct {
                     const slow = a.newLabel();
                     a.jumpIfByte(.ne, tagOf(t.key.reg), tag, slow);
                     if (t.helper == @intFromPtr(&helpers.getStr)) e.probeStr(t.t.reg, t.key.reg, t.v.reg, c.resume_at);
+                    if (t.helper == @intFromPtr(&helpers.setStr)) e.probeStoreStr(t.t.reg, t.key.reg, t.v.reg, c.resume_at);
                     e.tableCall(c.pc, t.helper, t.t, t.key, t.v);
                     a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
                     a.bind(slow);
