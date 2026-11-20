@@ -384,7 +384,7 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
     if (val.isNil()) return; // storing nil under an absent key is a no-op
     // New key. Grow when the hash part has no room for it.
     if (t.hash.len == 0 or !hashRoom(t.hash_used, t.hash.len)) {
-        try rehash(gpa, t, k);
+        try rehash(gpa, t, k, val);
         // The key may now belong in the array part.
         if (k.tag == .integer) {
             const i = k.asInt();
@@ -417,7 +417,7 @@ fn insertNew(t: *Table, k: Value, val: Value) void {
 /// Recomputes the sizes of both parts so that the array part is the
 /// largest power of two that is more than half full, then reinserts every
 /// live entry. `extra` is the key about to be inserted.
-fn rehash(gpa: Allocator, t: *Table, extra: Value) Error!void {
+fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void {
     // nums[b] counts integer keys k with 2^(b-1) < k <= 2^b.
     var nums: [64]u32 = @splat(0);
     var total_int: u32 = 0;
@@ -462,7 +462,7 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value) Error!void {
         twotoi *= 2;
     }
     const hash_count = total + countArray(t) - @as(u32, @intCast(na));
-    try resize(gpa, t, best, hash_count);
+    try resizeWith(gpa, t, best, hash_count, extra, extra_val);
 }
 
 fn countArray(t: *Table) u32 {
@@ -543,6 +543,14 @@ pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
 /// kind unless an entry that moves into it from the hash part does not
 /// fit, in which case it becomes boxed.
 pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void {
+    return resizeWith(gpa, t, asize, hcount, .nil, .nil);
+}
+
+/// `resize` for a store of `val` under `key` that follows it. When the key
+/// lands in the new array part, the part takes a kind that admits the
+/// value, so a new array part that receives a string is made boxed
+/// instead of made unboxed and boxed again.
+fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     const hsize = hashSizeFor(hcount);
     const old_kind = t.kind;
     const old_ptr = t.array_ptr;
@@ -554,6 +562,7 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
         const i = n.key.asInt();
         if (i >= 1 and i <= asize) kind = joinKind(kind, n.val);
     }
+    if (key.tag == .integer and key.asInt() >= 1 and key.asInt() <= asize) kind = joinKind(kind, val);
     // Allocate both parts before changing the table, so that running out
     // of memory leaves it intact. The hash part comes first, because a
     // growing array part may move in place.

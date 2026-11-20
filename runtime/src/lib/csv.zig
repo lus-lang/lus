@@ -9,6 +9,8 @@ const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
 const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
+const table = @import("../vm/table.zig");
+const gc = @import("../vm/gc.zig");
 const aux = @import("auxlib.zig");
 const Value = value.Value;
 const Thread = state.Thread;
@@ -35,9 +37,13 @@ fn checkDelimiter(l: *Thread, i: u32) Error![]const u8 {
 const Parser = struct {
     l: *Thread,
     src: []const u8,
+    /// The source is ASCII, so every field is.
+    ascii: bool,
     pos: usize = 0,
     delim: []const u8,
     field: std.ArrayList(u8) = .empty,
+    /// The column count of the last row, which sizes the next one.
+    width: usize = 0,
 
     fn atDelim(p: *const Parser) bool {
         return std.mem.startsWith(u8, p.src[p.pos..], p.delim);
@@ -52,6 +58,18 @@ const Parser = struct {
     fn fail(p: *Parser, msg: []const u8) Error {
         const at = wtf8.analyze(p.src[0..p.pos]).chars + 1;
         return p.l.raiseFmt("CSV parse error at position {d}: {s}", .{ at, msg });
+    }
+
+    /// A string of field text. The source is a string, so it is valid
+    /// WTF-8, and a field cut from it at ASCII bytes is valid as well.
+    fn make(p: *Parser, bytes: []const u8) Error!Value {
+        var ascii = p.ascii;
+        var chars = bytes.len;
+        if (!ascii) {
+            ascii = wtf8.asciiPrefix(bytes) == bytes.len;
+            if (!ascii) chars = wtf8.countChars(bytes);
+        }
+        return Value.obj(.string, state.newStringKnown(p.l.g, bytes, ascii, chars) catch return p.l.raiseMem());
     }
 
     /// Parses a quoted field. `pos` is at the opening quote on entry and
@@ -70,7 +88,7 @@ const Parser = struct {
                 p.field.append(gpa, '"') catch return p.l.raiseMem();
                 p.pos += 1;
             } else {
-                return p.l.newStringValue(p.field.items);
+                return p.make(p.field.items);
             }
         }
         p.pos = p.src.len;
@@ -79,24 +97,55 @@ const Parser = struct {
 
     fn unquoted(p: *Parser) Error!Value {
         const start = p.pos;
-        while (!p.atFieldEnd()) p.pos += 1;
-        return p.l.newStringValue(p.src[start..p.pos]);
+        if (p.delim.len == 1) {
+            const d = p.delim[0];
+            var i = p.pos;
+            while (i < p.src.len) : (i += 1) {
+                const c = p.src[i];
+                if (c == d or c == '\n' or c == '\r') break;
+            }
+            p.pos = i;
+        } else {
+            while (!p.atFieldEnd()) p.pos += 1;
+        }
+        return p.make(p.src[start..p.pos]);
     }
 
-    /// Parses one row into a new table and stores it at `rows[n]`.
+    /// Parses one row into a new table and stores it at `rows[n]`. The
+    /// fields wait on the stack, which keeps them alive, and the row is
+    /// made at its exact size. A row with more than `flush_at` fields
+    /// moves them into its table in batches.
     fn row(p: *Parser, rows: *Table, n: i64) Error!void {
         const l = p.l;
-        const r = try l.newTable(4, 0);
-        try l.push(Value.obj(.table, r));
-        defer l.top -= 1;
-        var col: i64 = 1;
-        while (true) : (col += 1) {
+        const gpa = l.g.gpa;
+        const slot = l.top;
+        try l.push(.nil);
+        defer l.top = slot;
+        var r: ?*Table = null;
+        var stored: usize = 0;
+        while (true) {
             const is_quoted = p.pos < p.src.len and p.src[p.pos] == '"';
             const f = if (is_quoted) try p.quoted() else try p.unquoted();
             if (is_quoted and !p.atFieldEnd()) return p.fail("unexpected character after quoted field");
-            try ops.rawSet(l, r, Value.int(col), f);
+            try l.push(f);
+            const last = p.pos >= p.src.len or !p.atDelim();
+            if (last or l.top - slot > flush_at) {
+                const count = l.top - slot - 1;
+                if (r == null) {
+                    const t = try l.newTable(if (last) count else @max(count, p.width), 0);
+                    l.stack[slot] = Value.obj(.table, t);
+                    r = t;
+                }
+                const t = r.?;
+                // A long row grows by doubling, like any array.
+                if (stored + count > t.asize and !last)
+                    table.resize(gpa, t, @max(stored + count, 2 * t.asize), t.hash_used) catch return l.raiseMem();
+                table.storeList(gpa, t, stored, l.stack[slot + 1 ..][0..count]) catch return l.raiseMem();
+                stored += count;
+                l.top = slot + 1;
+            }
             if (p.pos >= p.src.len) break;
-            if (p.atDelim()) {
+            if (!last) {
                 p.pos += p.delim.len;
                 continue;
             }
@@ -105,8 +154,16 @@ const Parser = struct {
             if (p.pos < p.src.len and p.src[p.pos] == '\n') p.pos += 1;
             break;
         }
-        try ops.rawSet(l, rows, Value.int(n), Value.obj(.table, r));
+        const t = r.?;
+        gc.barrierBack(l.g, &t.hdr);
+        p.width = stored;
+        const rv = Value.obj(.table, t);
+        if (n >= 1 and n <= rows.asize and !rows.readonly and rows.metatable == null and table.arrayStoreFast(rows, @intCast(n - 1), rv)) {
+            gc.barrierBack(l.g, &rows.hdr);
+        } else try ops.rawSet(l, rows, Value.int(n), rv);
     }
+
+    const flush_at = 256;
 };
 
 fn fromcsv(l: *Thread) Error!u32 {
@@ -117,7 +174,7 @@ fn fromcsv(l: *Thread) Error!u32 {
 
     const rows = try l.newTable(0, 0);
     try l.push(Value.obj(.table, rows));
-    var p: Parser = .{ .l = l, .src = input, .delim = delim };
+    var p: Parser = .{ .l = l, .src = input, .ascii = l.arg(1).as(object.String).flags.ascii, .delim = delim };
     defer p.field.deinit(l.g.gpa);
     var nrows: i64 = 0;
     if (input.len > 0) {

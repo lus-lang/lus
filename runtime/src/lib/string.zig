@@ -1090,6 +1090,37 @@ fn literalPrefix(pat: []const u8, p_in: usize) []const u8 {
     return pat[start..p];
 }
 
+/// The ASCII bytes that can start a match of `pat` from byte `p`, for
+/// the bytewise matcher, or null when the pattern does not settle them.
+/// A pattern that starts, after any opening captures, with a class that
+/// must match once settles them, and the search loops then skip every
+/// byte outside the set without starting a match there.
+fn firstSet(pat: []const u8, p_in: usize) ?u128 {
+    var p = p_in;
+    while (p < pat.len and pat[p] == '(') {
+        p += 1;
+        if (p < pat.len and pat[p] == ')') p += 1;
+    }
+    if (p >= pat.len) return null;
+    switch (pat[p]) {
+        ')', '.' => return null,
+        '$' => if (p + 1 == pat.len) return null,
+        '%' => if (p + 1 >= pat.len or pat[p + 1] == 'b' or pat[p + 1] == 'f' or std.ascii.isDigit(pat[p + 1])) return null,
+        else => {},
+    }
+    var m = MatcherFor(true).init("", pat, true);
+    const ep = m.classEnd(p) catch return null;
+    if (ep < pat.len and (pat[ep] == '*' or pat[ep] == '?' or pat[ep] == '-')) return null;
+    return m.classSet(p, ep);
+}
+
+/// The first byte at or after `pos` that is in `set`, or `src.len`.
+inline fn skipTo(src: []const u8, pos: usize, set: u128) usize {
+    var i = pos;
+    while (i < src.len and (set >> @intCast(src[i])) & 1 == 0) i += 1;
+    return i;
+}
+
 fn patternError(l: *Thread, m: anytype, e: PatternError) Error {
     return switch (e) {
         error.TooComplex => l.raiseFmt("pattern too complex", .{}),
@@ -1155,12 +1186,19 @@ fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize,
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
+    const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSet(pat, pstart) else null;
     var s1 = init_b;
     var c1 = init_c;
     while (true) {
         if (prefix.len > 0) {
             const at = std.mem.indexOfPos(u8, src, s1, prefix) orelse break;
             c1 += charsIn(s, src[s1..at]);
+            s1 = at;
+        } else if (first) |set| {
+            // The source is ASCII, so bytes are characters.
+            const at = skipTo(src, s1, set);
+            if (at == src.len) break;
+            c1 += at - s1;
             s1 = at;
         }
         m.reset(s1, c1);
@@ -1228,6 +1266,7 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
     const pat = p.bytes();
     var m = M.init(src, pat, s.flags.ascii);
     const prefix = literalPrefix(pat, 0);
+    const first: ?u128 = if (M == MatcherFor(true) and prefix.len == 0) firstSet(pat, 0) else null;
     var pos: usize = @intCast(ups[gm_pos].asInt());
     var c: usize = @intCast(ups[gm_char].asInt());
     const last = ups[gm_last].asInt();
@@ -1235,6 +1274,11 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
         if (prefix.len > 0) {
             const at = std.mem.indexOfPos(u8, src, pos, prefix) orelse break;
             c += charsIn(s, src[pos..at]);
+            pos = at;
+        } else if (first) |set| {
+            const at = skipTo(src, pos, set);
+            if (at == src.len) break;
+            c += at - pos;
             pos = at;
         }
         m.reset(pos, c);
@@ -1345,6 +1389,7 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
+    const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSet(pat, pstart) else null;
     var m = M.init(src, pat, s.flags.ascii);
     var b: Builder = undefined;
     b.init(l);
@@ -1361,6 +1406,11 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
         if (prefix.len > 0) {
             const at = std.mem.indexOfPos(u8, src, pos, prefix) orelse break;
             cpos += charsIn(s, src[pos..at]);
+            pos = at;
+        } else if (first) |set| {
+            const at = skipTo(src, pos, set);
+            if (at == src.len) break;
+            cpos += at - pos;
             pos = at;
         }
         m.reset(pos, cpos);
@@ -1506,16 +1556,18 @@ fn fmtIntDigits(b: *Builder, spec: Spec, conv: u8, negative: bool, digits_in: []
 fn fmtInt(b: *Builder, spec: Spec, conv: u8, n: i64) Error!void {
     var buf: [32]u8 = undefined;
     const bits: u64 = @bitCast(n);
+    if (conv != 'o' and conv != 'x' and conv != 'X') {
+        const u: u64 = if (conv == 'u') bits else @abs(n);
+        const start = ops.intDigits(buf[0..20], u);
+        return fmtIntDigits(b, spec, conv, conv != 'u' and n < 0, buf[start..20]);
+    }
     const digits = switch (conv) {
-        'd', 'i' => std.fmt.bufPrint(&buf, "{d}", .{@abs(n)}),
-        'u' => std.fmt.bufPrint(&buf, "{d}", .{bits}),
         'o' => std.fmt.bufPrint(&buf, "{o}", .{bits}),
         'x' => std.fmt.bufPrint(&buf, "{x}", .{bits}),
         'X' => std.fmt.bufPrint(&buf, "{X}", .{bits}),
         else => unreachable,
     } catch unreachable;
-    const negative = (conv == 'd' or conv == 'i') and n < 0;
-    return fmtIntDigits(b, spec, conv, negative, digits);
+    return fmtIntDigits(b, spec, conv, false, digits);
 }
 
 /// The %e, %f, and %g conversions (and their uppercase forms).

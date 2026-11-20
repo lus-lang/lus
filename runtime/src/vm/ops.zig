@@ -337,7 +337,22 @@ pub fn toNumberCoerce(v: Value) ?Value {
     switch (v.tag) {
         .integer, .float, .bigint, .decimal => return v,
         .string => {
-            const s = std.mem.trim(u8, v.as(String).bytes(), " \t\n\r\x0b\x0c");
+            // A plain decimal integer of at most 18 digits, which cannot
+            // overflow, is the common case and converts directly.
+            const raw = v.as(String).bytes();
+            if (raw.len > 0 and raw.len <= 18) {
+                const neg = raw[0] == '-';
+                const digits = raw[@intFromBool(neg)..];
+                if (digits.len > 0) {
+                    var acc: i64 = 0;
+                    for (digits) |c| {
+                        const d = c -% '0';
+                        if (d > 9) break;
+                        acc = acc * 10 + d;
+                    } else return Value.int(if (neg) -acc else acc);
+                }
+            }
+            const s = std.mem.trim(u8, raw, " \t\n\r\x0b\x0c");
             const n = lexer.parseNumber(s) orelse return null;
             return switch (n) {
                 .integer => |i| Value.int(i),
@@ -473,6 +488,37 @@ pub fn length(l: *Thread, v: Value) Error!Value {
 // ---------------------------------------------------------------------
 // Strings
 
+/// Writes the decimal digits of `u` at the end of `tmp`, two at a time,
+/// and returns the index of the first digit. The room before that index
+/// takes a sign.
+pub fn intDigits(tmp: *[20]u8, u_in: u64) usize {
+    var u = u_in;
+    var i: usize = tmp.len;
+    while (u >= 100) {
+        const r: usize = @intCast(u % 100);
+        u /= 100;
+        i -= 2;
+        tmp[i..][0..2].* = digit_pairs[r * 2 ..][0..2].*;
+    }
+    if (u >= 10) {
+        i -= 2;
+        tmp[i..][0..2].* = digit_pairs[@as(usize, @intCast(u)) * 2 ..][0..2].*;
+    } else {
+        i -= 1;
+        tmp[i] = '0' + @as(u8, @intCast(u));
+    }
+    return i;
+}
+
+const digit_pairs = blk: {
+    var d: [200]u8 = undefined;
+    for (0..100) |k| {
+        d[2 * k] = '0' + k / 10;
+        d[2 * k + 1] = '0' + k % 10;
+    }
+    break :blk d;
+};
+
 /// Formats a number the way `tostring` does.
 pub fn numberToBuf(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value) !void {
     switch (v.tag) {
@@ -480,14 +526,7 @@ pub fn numberToBuf(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value) !v
             // Integers are the most common number in concatenations, so
             // they skip the general formatter.
             var tmp: [20]u8 = undefined;
-            var u: u64 = @abs(v.asInt());
-            var i: usize = tmp.len;
-            while (true) {
-                i -= 1;
-                tmp[i] = @intCast('0' + u % 10);
-                u /= 10;
-                if (u == 0) break;
-            }
+            var i = intDigits(&tmp, @abs(v.asInt()));
             if (v.asInt() < 0) {
                 i -= 1;
                 tmp[i] = '-';

@@ -215,6 +215,13 @@ fn move(l: *Thread) Error!u32 {
     return 1;
 }
 
+/// Whether `s` joins any piece before it without changing either: it does
+/// not start with a trail surrogate, which would pair with a lead
+/// surrogate at the end of that piece.
+fn joinsPlainly(s: *String) bool {
+    return s.flags.ascii or @import("../vm/wtf8.zig").leadingTrailSurrogate(s.bytes()) == null;
+}
+
 fn concat(l: *Thread) Error!u32 {
     const t = l.arg(1);
     var last = try getn(l, 1, tab_r);
@@ -234,14 +241,50 @@ fn concat(l: *Thread) Error!u32 {
         const tab = t.as(Table);
         const sep_room = if (sep_given) ops.concatRoom(sep) else 0;
         var room: usize = 0;
+        // When every piece is a string, the room is the exact length, and
+        // a long result is written straight into its string. A piece
+        // that starts with a trail surrogate may join the piece before
+        // it, and it takes the general path.
+        var exact = !sep_given or joinsPlainly(sep.as(String));
+        var ascii_all = !sep_given or sep.as(String).flags.ascii;
+        var chars_all: usize = 0;
         var j = i;
         while (true) : (j += 1) {
             const v = table.getInt(tab, j);
             // A value that cannot be joined raises an error below.
-            if (v.tag != .string and !v.isNumber()) break;
+            if (v.tag != .string and !v.isNumber()) {
+                exact = false;
+                break;
+            }
             room += ops.concatRoom(v);
+            if (v.tag == .string) {
+                const str = v.as(String);
+                exact = exact and joinsPlainly(str);
+                ascii_all = ascii_all and str.flags.ascii;
+                chars_all += str.chars;
+            } else exact = false;
             if (j == last) break;
             room += sep_room;
+            if (sep_given) chars_all += sep.as(String).chars;
+        }
+        if (exact and room > String.short_max) {
+            const r = state.newLongUninit(l.g, room) catch return l.raiseMem();
+            const dst = r.bytesMut();
+            var at: usize = 0;
+            j = i;
+            while (true) : (j += 1) {
+                const b = table.getInt(tab, j).as(String).bytes();
+                @memcpy(dst[at..][0..b.len], b);
+                at += b.len;
+                if (j == last) break;
+                if (sep_given) {
+                    const sb = sep.as(String).bytes();
+                    @memcpy(dst[at..][0..sb.len], sb);
+                    at += sb.len;
+                }
+            }
+            state.finishLong(l.g, r, ascii_all, chars_all);
+            return aux.ret(l, Value.obj(.string, r));
         }
         buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();
     }
