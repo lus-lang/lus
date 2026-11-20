@@ -521,7 +521,7 @@ pre.astro-code {
 
 /* deep-link landing indication */
 :is(h1, h2, h3, h4)[id]:target {
-  background: var(--color-accent-soft);
+  background-color: var(--color-accent-soft);
 }
 
 .copy-btn {
@@ -685,7 +685,7 @@ html.unstable {
   }
 
   :is(h1, h2, h3, h4)[id]:target {
-    background: var(--color-accent-soft-red);
+    background-color: var(--color-accent-soft-red);
   }
 
   blockquote {
