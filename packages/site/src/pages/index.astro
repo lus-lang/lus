@@ -45,10 +45,14 @@ lus test                # tests
 cc host.c -llus         # C host
 npm install lus-wasm    # browser`
 
+// what ships in the executable, grouped by what a program does with it
 const batteries = [
-  "JSON", "CSV", "SQLite", "HTTP client", "HTTP server", "TCP", "UDP", "TLS",
-  "gzip", "zstd", "brotli", "lz4", "time zones", "bigints", "decimals",
-  "workers", "test runner", "formatter", "checker", "debugger", "bundler",
+  { group: "data", items: "JSON, CSV, and SQLite", href: "/manual/acquis-33" },
+  { group: "network", items: "HTTP client and server, TCP, UDP, and TLS", href: "/manual/acquis-9" },
+  { group: "compression", items: "gzip, zstd, brotli, and lz4", href: "/manual/acquis-26" },
+  { group: "numbers", items: "bigints, decimals, and time zones", href: "/manual/acquis-36" },
+  { group: "concurrency", items: "detached coroutines and workers", href: "/manual/acquis-43" },
+  { group: "tools", items: "tests, formatter, checker, debugger, and bundler", href: "/manual/cli" },
 ]
 
 const chapters = [
@@ -277,7 +281,14 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
                 <figure class="figure crop">
                   <figcaption><a href="/manual/api">reference →</a></figcaption>
                   <ul class="kit">
-                    {batteries.map((b) => <li>{b}</li>)}
+                    {batteries.map((b) => (
+                      <li>
+                        <a href={b.href}>
+                          <span class="group">{b.group}</span>
+                          <span>{b.items}</span>
+                        </a>
+                      </li>
+                    ))}
                   </ul>
                 </figure>
               )}
@@ -705,9 +716,24 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
-  /* the batteries: a dense set of mono labels */
+  /* the batteries: a ledger of what ships, a mono group beside prose */
   .kit {
-    @apply list-none m-0 px-3 pt-1.5 pb-2.5 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[13px] leading-[1.6];
+    @apply grid list-none m-0 px-3 pt-1 pb-2.5 space-y-0;
+    grid-template-columns: max-content minmax(0, 1fr);
+
+    li,
+    a {
+      @apply grid col-span-2;
+      grid-template-columns: subgrid;
+    }
+
+    a {
+      @apply gap-x-4 py-1 no-underline font-normal text-sm text-figure-ink hover:bg-figure-wash hover:text-figure-ink;
+    }
+
+    .group {
+      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-figure-ink-3 self-baseline;
+    }
   }
 
   .figure .prompt {
