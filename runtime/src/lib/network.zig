@@ -385,8 +385,7 @@ pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .write)) return .again;
-        const n = writeSome(l.g.io, handle, data) catch |e| return .{ .fail = e };
-        return .{ .n = n };
+        return afd.sendNow(l.g.io, handle, data);
     }
     unblock(s);
     const flags: u32 = posix.MSG.DONTWAIT | if (@hasDecl(posix.MSG, "NOSIGNAL")) posix.MSG.NOSIGNAL else 0;
@@ -689,22 +688,23 @@ const afd = if (is_windows) struct {
         };
     }
 
-    fn listen(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {
-        const handle = try openStream(addr);
-        errdefer w.CloseHandle(handle);
-        // The option and the share mode of the bind ask for the same
-        // exclusivity. A driver that refuses the option still honors the
-        // share mode.
+    /// Sets a boolean socket option. A driver that refuses it leaves the
+    /// endpoint as it was.
+    fn enable(io: Io, handle: net.Socket.Handle, optname: u32) void {
         const one: w.BOOL = .TRUE;
         _ = control(io, handle, w.IOCTL.AFD.SOCKOPT, std.mem.asBytes(&w.AFD.SOCKOPT_INFO{
             .mode = .set,
             .level = w.ws2_32.SOL.SOCKET,
-            .optname = so_exclusiveaddruse,
+            .optname = optname,
             .optval = &one,
             .optlen = @sizeOf(w.BOOL),
         }), &.{}) catch {};
+    }
+
+    /// Binds an endpoint to `addr` and returns the address it received.
+    fn bindTo(io: Io, handle: net.Socket.Handle, addr: *const net.IpAddress, mode: w.AFD.BIND_INFO.MODE) !net.IpAddress {
         const Bind = extern struct { info: w.AFD.BIND_INFO, address: Threaded.PosixAddress };
-        var bind: Bind = .{ .info = .{ .Mode = share_exclusive }, .address = undefined };
+        var bind: Bind = .{ .info = .{ .Mode = mode }, .address = undefined };
         const len = Threaded.addressToPosix(addr, &bind.address);
         const in = @as([]const u8, @ptrCast(&bind))[0 .. @offsetOf(Bind, "address") + len];
         const out = @as([]u8, @ptrCast(&bind.address))[0..len];
@@ -716,6 +716,213 @@ const afd = if (is_windows) struct {
             .INSUFFICIENT_RESOURCES => return error.SystemResources,
             else => return error.Unexpected,
         }
+        return Threaded.addressFromPosix(&bind.address);
+    }
+
+    /// The flag of a send request that makes the driver answer at once: it
+    /// takes what its buffer has room for, or reports that the endpoint is
+    /// not ready. Winsock sets it for a socket in non-blocking mode.
+    const immediate: u32 = 0x4;
+    /// The most bytes one send request carries, so that a send on a
+    /// driver that queues a whole request stays short.
+    const send_chunk = 64 * 1024;
+
+    /// Writes what the endpoint takes now of `data`.
+    fn sendNow(io: Io, handle: net.Socket.Handle, data: []const u8) Try {
+        if (data.len == 0) return .{ .n = 0 };
+        const part = data[0..@min(data.len, send_chunk)];
+        const bufs = [_]w.AFD.WSABUF(.@"const"){.{ .len = @intCast(part.len), .buf = part.ptr }};
+        const plain: u32 = @bitCast(w.AFD{ .NO_FAST_IO = true, .OVERLAPPED = true });
+        const info: w.AFD.SEND_INFO = .{
+            .BufferArray = &bufs,
+            .BufferCount = 1,
+            .AfdFlags = @bitCast(plain | immediate),
+            .TdiFlags = .{},
+        };
+        const iosb = request(io, handle, w.IOCTL.AFD.SEND, std.mem.asBytes(&info), &.{}) catch |e| return .{ .fail = e };
+        return switch (iosb.u.Status) {
+            .SUCCESS => if (iosb.Information == 0) .again else .{ .n = iosb.Information },
+            .DEVICE_NOT_READY, .CANT_WAIT => .again,
+            .INSUFFICIENT_RESOURCES => .{ .fail = error.SystemResources },
+            .CONNECTION_RESET, .CONNECTION_ABORTED, .REMOTE_DISCONNECT, .LOCAL_DISCONNECT => .{ .fail = error.ConnectionResetByPeer },
+            .IO_TIMEOUT => .{ .fail = error.ConnectionTimedOut },
+            else => .{ .fail = error.Unexpected },
+        };
+    }
+
+    extern "kernel32" fn CreateEventW(attributes: ?*anyopaque, manual_reset: w.BOOL, initial_state: w.BOOL, name: ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
+    extern "kernel32" fn WaitForSingleObject(handle: w.HANDLE, ms: u32) callconv(.winapi) u32;
+
+    /// How long a connection attempt waits before it looks at its request
+    /// again, in milliseconds. The poll for the endpoint ends the wait
+    /// earlier when the driver reports the end of the attempt there.
+    const connect_tick_ms = 20;
+
+    /// A connection attempt that waits through the scheduler. It lives in
+    /// the scheduler record of its thread, like `Connecting`. The connect
+    /// request stays with the driver while the thread waits, so the
+    /// record holds what the request writes to: its status block and the
+    /// event that the driver sets when the request ends.
+    const Attempt = struct {
+        const Target = extern struct { reserved: [3]usize = @splat(0), address: Threaded.PosixAddress };
+
+        addrs: [max_addresses]net.IpAddress = undefined,
+        n: usize = 0,
+        i: usize = 0,
+        last: anyerror = error.ConnectionRefused,
+        handle: ?w.HANDLE = null,
+        event: ?w.HANDLE = null,
+        /// True while the driver holds the request.
+        pending: bool = false,
+        iosb: w.IO_STATUS_BLOCK = undefined,
+        target: Target = .{ .address = undefined },
+        local: net.IpAddress = undefined,
+
+        fn release(g: *state.Global, ctx: *anyopaque) void {
+            const c: *Attempt = @ptrCast(@alignCast(ctx));
+            c.drop(g);
+            if (c.event) |e| w.CloseHandle(e);
+            g.gpa.destroy(c);
+        }
+
+        /// Ends the attempt on the current address. A request that the
+        /// driver still holds is canceled, and the driver has let go of
+        /// the status block once the event is set.
+        fn drop(c: *Attempt, g: *state.Global) void {
+            const h = c.handle orelse return;
+            if (c.pending) {
+                var cancel_iosb: w.IO_STATUS_BLOCK = undefined;
+                _ = w.ntdll.NtCancelIoFileEx(h, &c.iosb, &cancel_iosb);
+                _ = WaitForSingleObject(c.event.?, 0xFFFF_FFFF);
+                c.pending = false;
+            }
+            sched.forget(g, h);
+            w.CloseHandle(h);
+            c.handle = null;
+        }
+
+        /// Opens an endpoint and hands the driver a connect request for
+        /// `a` that it completes later.
+        fn start(c: *Attempt, io: Io, a: *const net.IpAddress) !void {
+            if (c.event == null) c.event = CreateEventW(null, .TRUE, .FALSE, null) orelse return error.SystemResources;
+            const h = try openStream(a);
+            errdefer w.CloseHandle(h);
+            enable(io, h, w.ws2_32.SO.REUSE_UNICASTPORT);
+            const any: net.IpAddress = switch (a.*) {
+                .ip4 => .{ .ip4 = .unspecified(0) },
+                .ip6 => .{ .ip6 = .unspecified(0) },
+            };
+            c.local = try bindTo(io, h, &any, .Active);
+            c.target = .{ .address = undefined };
+            const len = Threaded.addressToPosix(a, &c.target.address);
+            const size: u32 = @intCast(@offsetOf(Target, "address") + len);
+            // The call resets the event before it queues the request.
+            const status = w.ntdll.NtDeviceIoControlFile(h, c.event.?, null, null, &c.iosb, w.IOCTL.AFD.CONNECT, &c.target, size, null, 0);
+            c.pending = status == .PENDING;
+            // A request that the driver refused at once wrote no status.
+            if (status != .PENDING and status != .SUCCESS) c.iosb.u.Status = status;
+            c.handle = h;
+        }
+
+        /// True once the driver ended the request.
+        fn done(c: *Attempt) bool {
+            if (!c.pending) return true;
+            if (WaitForSingleObject(c.event.?, 0) != 0) return false;
+            c.pending = false;
+            return true;
+        }
+
+        /// The error the request ended with, or null when it connected.
+        fn result(c: *Attempt) ?anyerror {
+            return switch (c.iosb.u.Status) {
+                .SUCCESS => null,
+                .CONNECTION_REFUSED, .PORT_CONNECTION_REFUSED => error.ConnectionRefused,
+                .IO_TIMEOUT, .TIMEOUT => error.ConnectionTimedOut,
+                .NETWORK_UNREACHABLE => error.NetworkUnreachable,
+                .HOST_UNREACHABLE => error.HostUnreachable,
+                .INSUFFICIENT_RESOURCES => error.SystemResources,
+                .CONNECTION_RESET, .CONNECTION_ABORTED => error.ConnectionResetByPeer,
+                else => error.Unexpected,
+            };
+        }
+    };
+
+    /// `connectHost` for a thread that shares the state with detached
+    /// coroutines. The connect request of each address goes to the driver
+    /// without waiting for its end, and the thread waits through the
+    /// scheduler until the driver set the event of the request. An
+    /// address whose request cannot be made this way, or ends in a way
+    /// the driver does not explain, connects through the standard
+    /// library, which waits in the call.
+    fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+        const g = l.g;
+        const io = g.io;
+        const t = try sched.ensureTask(l);
+        var c: *Attempt = undefined;
+        if (sched.restarted(l) and t.ctx != null) {
+            c = @ptrCast(@alignCast(t.ctx.?));
+        } else {
+            c = g.gpa.create(Attempt) catch return l.raiseMem();
+            c.* = .{};
+            errdefer g.gpa.destroy(c);
+            c.n = (try resolve(l, host, port, null, &c.addrs)).len;
+            t.ctx = c;
+            t.cancel = Attempt.release;
+        }
+        // Every way out other than a suspension ends the attempt.
+        defer if (!l.yielding) {
+            t.ctx = null;
+            t.cancel = null;
+            Attempt.release(g, c);
+        };
+        while (c.i < c.n) {
+            const a = &c.addrs[c.i];
+            var failed: ?anyerror = null;
+            if (c.handle == null) c.start(io, a) catch {
+                failed = error.Unexpected;
+            };
+            if (failed == null) {
+                if (!c.done()) {
+                    // Each wait is short and has a deadline of its own.
+                    sched.opDone(l);
+                    _ = try sched.waitIo(l, c.handle.?, .write, connect_tick_ms);
+                    continue;
+                }
+                failed = c.result();
+            }
+            if (failed) |e| {
+                c.drop(g);
+                c.last = e;
+                // A request that ended in a way the driver does not
+                // explain is made again by the standard library.
+                if (e == error.Unexpected) {
+                    if (a.connect(io, .{ .mode = .stream, .protocol = .tcp })) |connected| {
+                        var stream = connected;
+                        stream.socket.address = afd.localAddress(io, stream.socket.handle) orelse stream.socket.address;
+                        return .{ stream, a.* };
+                    } else |e2| {
+                        c.last = e2;
+                    }
+                }
+                c.i += 1;
+                continue;
+            }
+            const handle = c.handle.?;
+            sched.forget(g, handle);
+            c.handle = null;
+            return .{ .{ .socket = .{ .handle = handle, .address = afd.localAddress(io, handle) orelse c.local } }, a.* };
+        }
+        return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+    }
+
+    fn listen(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {
+        const handle = try openStream(addr);
+        errdefer w.CloseHandle(handle);
+        // The option and the share mode of the bind ask for the same
+        // exclusivity. A driver that refuses the option still honors the
+        // share mode.
+        enable(io, handle, so_exclusiveaddruse);
+        const bound = try bindTo(io, handle, addr, share_exclusive);
         stage.* = .listen;
         const info: w.AFD.LISTEN_INFO = .{ .UseSAN = .FALSE, .MaximumConnectionQueue = backlog, .UseDelayedAcceptance = .FALSE };
         switch (try control(io, handle, w.IOCTL.AFD.START_LISTEN, std.mem.asBytes(&info), &.{})) {
@@ -724,7 +931,7 @@ const afd = if (is_windows) struct {
             else => return error.Unexpected,
         }
         return .{
-            .socket = .{ .handle = handle, .address = Threaded.addressFromPosix(&bind.address) },
+            .socket = .{ .handle = handle, .address = bound },
             .options = .{ .mode = .stream, .protocol = .tcp },
         };
     }
@@ -799,7 +1006,10 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
 /// Connects to the first address of `host` that accepts, raising "cannot
 /// connect" when none does.
 fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
-    if (!is_windows and (sched.active(l.g) or sched.restarted(l))) return connectScheduled(l, host, port);
+    if (sched.active(l.g) or sched.restarted(l)) {
+        if (comptime is_windows) return afd.connectScheduled(l, host, port);
+        return connectScheduled(l, host, port);
+    }
     var addrs: [max_addresses]net.IpAddress = undefined;
     const list = try resolve(l, host, port, null, &addrs);
     var last: anyerror = error.ConnectionRefused;
