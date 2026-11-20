@@ -1426,6 +1426,7 @@ noinline fn growFrames(l: *Thread) Error!void {
 /// that nothing waits for it across the call.
 pub inline fn callLeaf(l: *Thread, c: *const Ctx, nat: *state.Native, slot: [*]Value, func: u32, nargs: u32, want: i32) bool {
     const leaf = nat.leaf orelse return false;
+    if (nat.leaf_first and (want < 0 or want > 1)) return false;
     // The stack top covers the arguments, which keeps them alive if the
     // leaf allocates.
     l.top = func + 1 + nargs;
@@ -1446,7 +1447,8 @@ pub inline fn callLeaf(l: *Thread, c: *const Ctx, nat: *state.Native, slot: [*]V
 /// arguments above `func`, leaving its results at `func` adjusted to
 /// `want`.
 pub inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, want: i32) (Error || YieldError)!void {
-    if (nat.leaf) |leaf| {
+    if (nat.leaf != null and (!nat.leaf_first or (want >= 0 and want <= 1))) {
+        const leaf = nat.leaf.?;
         // The common case runs without a frame and leaves its one result
         // at `func`, as a return would. The stack top covers the
         // arguments, which keeps them alive if the leaf allocates.

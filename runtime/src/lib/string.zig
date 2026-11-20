@@ -34,10 +34,10 @@ const Allocator = std.mem.Allocator;
 pub const funcs = [_]aux.Reg{
     .{ .name = "byte", .func = byte, .leaf = byteLeaf },
     .{ .name = "char", .func = char },
-    .{ .name = "find", .func = find },
+    .{ .name = "find", .func = find, .leaf = findLeaf, .leaf_first = true },
     .{ .name = "format", .func = format },
     .{ .name = "gmatch", .func = gmatch },
-    .{ .name = "gsub", .func = gsub },
+    .{ .name = "gsub", .func = gsub, .leaf = gsubLeaf, .leaf_first = true },
     .{ .name = "join", .func = join },
     .{ .name = "len", .func = len },
     .{ .name = "lower", .func = lower, .leaf = lowerLeaf },
@@ -1254,10 +1254,14 @@ fn findAux(l: *Thread, is_find: bool) Error!u32 {
     return findWith(Matcher, l, s, p, init_b, init_c, is_find);
 }
 
-fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize, init_c: usize, is_find: bool) Error!u32 {
+const Found = struct { start_b: usize, start_c: usize, end: usize };
+
+/// Searches `s` for the pattern from byte `init_b`, which is character
+/// `init_c`, with the matcher `m`, which holds the captures of the match
+/// it returns.
+fn search(comptime M: type, l: *Thread, m: *M, s: *String, p: *String, init_b: usize, init_c: usize) Error!?Found {
     const src = s.bytes();
     const pat = p.bytes();
-    var m = M.init(src, pat, s.flags.ascii);
     const anchor = pat.len > 0 and pat[0] == '^';
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
@@ -1277,20 +1281,60 @@ fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize,
             s1 = at;
         }
         m.reset(s1, c1);
-        const res = m.match(s1, pstart) catch |err| return patternError(l, &m, err);
-        if (res) |e| {
-            if (is_find) {
-                try l.push(Value.int(@intCast(c1 + 1)));
-                try l.push(Value.int(@intCast(m.charIndex(e))));
-                return 2 + try pushCaptures(l, s, &m, null, 0);
-            }
-            return pushCaptures(l, s, &m, s1, e);
-        }
+        const res = m.match(s1, pstart) catch |err| return patternError(l, m, err);
+        if (res) |e| return .{ .start_b = s1, .start_c = c1, .end = e };
         if (s1 >= src.len or anchor) break;
         s1 += wtf8.seqLen(src[s1]);
         c1 += 1;
     }
-    return aux.retNil(l);
+    return null;
+}
+
+fn findWith(comptime M: type, l: *Thread, s: *String, p: *String, init_b: usize, init_c: usize, is_find: bool) Error!u32 {
+    var m = M.init(s.bytes(), p.bytes(), s.flags.ascii);
+    const f = (try search(M, l, &m, s, p, init_b, init_c)) orelse return aux.retNil(l);
+    if (is_find) {
+        try l.push(Value.int(@intCast(f.start_c + 1)));
+        try l.push(Value.int(@intCast(m.charIndex(f.end))));
+        return 2 + try pushCaptures(l, s, &m, null, 0);
+    }
+    return pushCaptures(l, s, &m, f.start_b, f.end);
+}
+
+/// `find` for a caller that wants only the start, without a frame. The
+/// start needs no captures. Every error takes the full native.
+fn findLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    if (nargs < 2 or nargs > 4 or args[0].tag != .string or args[1].tag != .string) return state.leaf_miss;
+    var init: i64 = 1;
+    if (nargs >= 3) switch (args[2].tag) {
+        .integer => init = args[2].asInt(),
+        .nil => {},
+        else => return state.leaf_miss,
+    };
+    const plain = nargs == 4 and args[3].truthy();
+    const s = args[0].as(String);
+    const p = args[1].as(String);
+    const init_c = posRelat(init, s.chars) - 1;
+    if (init_c > s.chars) return .nil;
+    const src = s.bytes();
+    const pat = p.bytes();
+    const init_b = charOffset(l, s, init_c);
+    if (plain or noSpecials(pat)) {
+        const rel = std.mem.indexOf(u8, src[init_b..], pat) orelse return .nil;
+        return Value.int(@intCast(init_c + charsIn(s, src[init_b..][0..rel]) + 1));
+    }
+    const top = l.top;
+    const f = (if (bothAscii(s, p)) blk: {
+        var m = MatcherFor(true).init(src, pat, s.flags.ascii);
+        break :blk search(MatcherFor(true), l, &m, s, p, init_b, init_c);
+    } else blk: {
+        var m = Matcher.init(src, pat, s.flags.ascii);
+        break :blk search(Matcher, l, &m, s, p, init_b, init_c);
+    }) catch {
+        l.top = top;
+        return state.leaf_miss;
+    };
+    return if (f) |x| Value.int(@intCast(x.start_c + 1)) else .nil;
 }
 
 fn find(l: *Thread) Error!u32 {
@@ -1406,8 +1450,7 @@ fn addString(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usi
 /// Appends the replacement for the match `s..e`. Returns false when the
 /// function or table produced nil or false, which keeps the original
 /// text.
-fn addValue(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usize, kind: ReplKind) Error!bool {
-    const repl = l.arg(3);
+fn addValue(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usize, kind: ReplKind, repl: Value) Error!bool {
     const base = l.top;
     const r: Value = switch (kind) {
         .string => {
@@ -1454,11 +1497,44 @@ fn gsub(l: *Thread) Error!u32 {
         else => return aux.typeError(l, 3, "string/function/table"),
     };
     const max_s = try aux.optInt(l, 4, @as(i64, s.chars) + 1);
-    if (bothAscii(s, p)) return gsubWith(MatcherFor(true), l, s, p, kind, max_s);
-    return gsubWith(Matcher, l, s, p, kind, max_s);
+    const r = if (bothAscii(s, p))
+        try gsubWith(MatcherFor(true), l, s, p, kind, l.arg(3), max_s)
+    else
+        try gsubWith(Matcher, l, s, p, kind, l.arg(3), max_s);
+    try l.push(r.str);
+    try l.push(Value.int(r.n));
+    return 2;
 }
 
-fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind, max_s: i64) Error!u32 {
+/// `gsub` for a caller that wants only the resulting string, without a
+/// frame: a string replacement, or a table without a metatable, whose
+/// lookups run no Lus code. Anything else, and every error, takes the
+/// full native.
+fn gsubLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    if (nargs != 3 or args[0].tag != .string or args[1].tag != .string) return state.leaf_miss;
+    const repl = args[2];
+    const kind: ReplKind = switch (repl.tag) {
+        .string => .string,
+        .table => if (repl.as(Table).metatable == null) .table else return state.leaf_miss,
+        else => return state.leaf_miss,
+    };
+    const s = args[0].as(String);
+    const p = args[1].as(String);
+    const top = l.top;
+    const max_s = @as(i64, s.chars) + 1;
+    const r = (if (bothAscii(s, p))
+        gsubWith(MatcherFor(true), l, s, p, kind, repl, max_s)
+    else
+        gsubWith(Matcher, l, s, p, kind, repl, max_s)) catch {
+        l.top = top;
+        return state.leaf_miss;
+    };
+    return r.str;
+}
+
+const GsubResult = struct { str: Value, n: i64 };
+
+fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind, repl: Value, max_s: i64) Error!GsubResult {
     const src = s.bytes();
     const pat = p.bytes();
     const anchor = pat.len > 0 and pat[0] == '^';
@@ -1494,7 +1570,7 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
             const e = res.?;
             n += 1;
             try b.append(src[copied..pos]);
-            changed = (try addValue(l, &b, s, &m, pos, e, kind)) or changed;
+            changed = (try addValue(l, &b, s, &m, pos, e, kind, repl)) or changed;
             cpos = m.charIndex(e);
             pos = e;
             copied = e;
@@ -1505,14 +1581,9 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
         } else break;
         if (anchor) break;
     }
-    if (!changed) {
-        try l.push(Value.obj(.string, s));
-    } else {
-        try b.append(src[copied..]);
-        try l.push(try b.finish());
-    }
-    try l.push(Value.int(n));
-    return 2;
+    if (!changed) return .{ .str = Value.obj(.string, s), .n = n };
+    try b.append(src[copied..]);
+    return .{ .str = try b.finish(), .n = n };
 }
 
 // ---------------------------------------------------------------------

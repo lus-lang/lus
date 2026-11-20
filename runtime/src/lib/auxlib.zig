@@ -20,6 +20,8 @@ pub const Reg = struct {
     func: state.NativeFn,
     /// The frameless fast part of `func` (`state.LeafFn`), if any.
     leaf: ?state.LeafFn = null,
+    /// The leaf computes only the first result (`state.Native.leaf_first`).
+    leaf_first: bool = false,
 };
 
 /// True on targets that can start processes. WASI has no process
@@ -222,6 +224,7 @@ pub fn setFuncs(l: *Thread, t: *Table, funcs: []const Reg) Error!void {
     for (funcs) |f| {
         const n = state.newNative(l.g, f.func, f.name, 0) catch return l.raiseMem();
         n.leaf = f.leaf;
+        n.leaf_first = f.leaf_first;
         try setField(l, t, f.name, Value.obj(.native, n));
     }
 }

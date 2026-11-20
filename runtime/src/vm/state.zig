@@ -93,6 +93,9 @@ pub const Native = struct {
     /// The frameless fast part of `func`, when it has one.
     leaf: ?LeafFn = null,
     nupvals: u32 = 0,
+    /// The leaf computes only the first result of `func`, so it runs only
+    /// for a call that wants at most one result.
+    leaf_first: bool = false,
 
     pub inline fn upvalues(n: *Native) []Value {
         const base: [*]u8 = @ptrCast(n);
@@ -1010,6 +1013,7 @@ pub fn newNative(g: *Global, f: NativeFn, name: ?[]const u8, nup: u32) Allocator
     const n = try gc.allocUninit(g, Native, .native, Native.allocSize(nup));
     n.func = f;
     n.leaf = null;
+    n.leaf_first = false;
     n.nupvals = nup;
     n.name = name_str;
     for (n.upvalues()) |*v| v.* = .nil;
