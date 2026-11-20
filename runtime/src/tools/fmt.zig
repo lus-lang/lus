@@ -4,8 +4,9 @@
 //!
 //! By default the formatted text of every file is printed to standard
 //! output. `--write` rewrites the files that change in place. `--check`
-//! writes nothing and lists the files that would change. With no file, or
-//! with the file `-`, the source is read from standard input.
+//! writes nothing and lists the files that would change. A directory
+//! argument stands for every `.lus` file below it. With no file, or with
+//! the file `-`, the source is read from standard input.
 //!
 //! The exit status is 0 when every file was formatted (or, with
 //! `--check`, is already formatted), 1 when a file would change or cannot
@@ -15,6 +16,7 @@ const std = @import("std");
 const lus = @import("../lus.zig");
 const astexport = @import("../syntax/astexport.zig");
 const format = @import("../syntax/format.zig");
+const paths = @import("paths.zig");
 const ast = lus.syntax.ast;
 const api = lus.api;
 const codegen = lus.compile.codegen;
@@ -26,7 +28,8 @@ const usage =
     \\  --write     rewrite the files in place
     \\  --indent N  spaces per indentation level (default 4)
     \\
-    \\With no FILE, or when FILE is -, read standard input.
+    \\A directory stands for every .lus file below it. With no FILE, or
+    \\when FILE is -, read standard input.
     \\
 ;
 
@@ -72,8 +75,13 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     defer api.close(l);
     const checker: astexport.Checker = .{ .ctx = l.g, .check = checkChunk };
 
+    var names_arena = std.heap.ArenaAllocator.init(gpa);
+    defer names_arena.deinit();
+    var expanded: std.ArrayList([]const u8) = .empty;
+    for (files.items) |file| try paths.expand(names_arena.allocator(), io, file, &expanded);
+
     var status: u8 = 0;
-    for (files.items) |file| {
+    for (expanded.items) |file| {
         const from_stdin = std.mem.eql(u8, file, "-");
         const src = readSource(gpa, io, file, from_stdin) catch |e| {
             std.debug.print("lus fmt: cannot read {s} ({s})\n", .{ file, @errorName(e) });

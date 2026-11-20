@@ -1,0 +1,63 @@
+# Lus
+
+> Lus is a small, fast programming language derived from Lua 5.5. One executable of about 7 MB runs scripts and carries a test runner, formatter, checker, documentation generator, debugger, and bundler. The standard library covers JSON, CSV, SQLite, HTTP clients and servers, TCP, UDP, TLS, compression, time zones, and threads. Every script runs with no permissions until it pledges the ones it needs.
+
+Agents writing Lus should install the `lus` skill below, then work in a loop of `lus check --json`, `lus fmt --write`, and `lus test --json`. Lus differs from Lua in a few places that matter for generated code: `catch` replaces `pcall`, strings are text indexed by character, raw bytes are vectors, and I/O functions raise an error until the script calls `pledge`. Each link below is a Markdown page. The documentation describes Lus 2.0.
+
+## Start here
+
+- [Getting started](https://lus.dev/manual/getting-started.md): Install the binary and run a first program.
+- [Coming from Lua](https://lus.dev/manual/adapting.md): Every difference from Lua 5.5, and how `lus check` finds Lua idioms.
+- [Guide](https://lus.dev/manual/guide.md): The full language reference in one page.
+- [CLI](https://lus.dev/manual/cli.md): Every `lus` command and option.
+
+## Agent skills
+
+- [lus](https://lus.dev/agents/skills/lus/SKILL.md): Write, check, format, and test Lus code.
+- [lus-rewrite](https://lus.dev/agents/skills/lus-rewrite/SKILL.md): Assess a project for Lus, preview it, and port it behind a parity harness.
+- [Install the skills](https://lus.dev/agents.md): `lus agents init` in a project, or the skills registry of your agent.
+
+## Standard library
+
+- [API reference](https://lus.dev/manual/api.md): Every function, with parameters, return values, required permissions, and stability.
+- [Permissions](https://lus.dev/manual/acquis-10.md): `pledge`, permission names and values, and `seal`.
+- [JSON](https://lus.dev/manual/acquis-6.md): `fromjson` and `tojson`, with filters and exact numbers.
+- [CSV](https://lus.dev/manual/acquis-24.md): `fromcsv` and `tocsv`.
+- [SQLite](https://lus.dev/manual/acquis-33.md): `io.sqlite`, prepared statements, and transactions.
+- [Network](https://lus.dev/manual/acquis-9.md): `network.fetch`, TCP, and UDP with bounded receives.
+- [Detached coroutines and HTTP server](https://lus.dev/manual/acquis-43.md): `coroutine.detach` and `network.serve`.
+- [Workers](https://lus.dev/manual/acquis-11.md): Interpreter states on a thread pool with message passing.
+- [Filesystem](https://lus.dev/manual/acquis-7.md): The `fs` library and `fs.path`.
+- [Time](https://lus.dev/manual/acquis-30.md): Instants, durations, and zoned times with embedded tzdata.
+- [Text and bytes](https://lus.dev/manual/acquis-37.md): WTF-8 strings measured in characters, and vectors for binary data.
+- [Compression](https://lus.dev/manual/acquis-26.md): gzip, deflate, zstd, brotli, and lz4 through `vector.archive`.
+- [Data processing](https://lus.dev/manual/acquis-25.md): Extensions to the table and string modules.
+
+## Language
+
+- [Catch](https://lus.dev/manual/acquis-1.md) and [catch handlers](https://lus.dev/manual/acquis-20.md): Expression-level error handling.
+- [Optional chaining](https://lus.dev/manual/acquis-2.md): The `?` suffix operator.
+- [If-assignment](https://lus.dev/manual/acquis-3.md) and [while-assignment](https://lus.dev/manual/acquis-13.md): Variables scoped to a condition.
+- [Destructuring](https://lus.dev/manual/acquis-4.md): `local a, b from t`.
+- [String interpolation](https://lus.dev/manual/acquis-21.md): Backtick strings with `$name` and `$(expr)`.
+- [Do expressions](https://lus.dev/manual/acquis-23.md): Blocks that `provide` a value.
+- [Enums](https://lus.dev/manual/acquis-5.md), [slices](https://lus.dev/manual/acquis-16.md), and [local groups](https://lus.dev/manual/acquis-18.md).
+- [Continue and range](https://lus.dev/manual/acquis-35.md): `continue` and `range(start, limit, step)`.
+- [Bigints and decimals](https://lus.dev/manual/acquis-36.md): `123n` and `1.50d`.
+- [Queries](https://lus.dev/manual/acquis-34.md): First-class queries over tables and databases. Unstable.
+
+## Tools
+
+- [Testing](https://lus.dev/manual/acquis-38.md): `lus test`, case tables, power asserts, and snapshots.
+- [Developer tools](https://lus.dev/manual/acquis-39.md): `lus fmt`, `lus check`, `lus doc`, `lus ast`, `lus build`, and `lus compile`.
+- [Standalone binaries](https://lus.dev/manual/acquis-19.md): One executable with the script, its modules, and its permissions.
+- [Debugger](https://lus.dev/manual/acquis-40.md): `lus debug` over the Debug Adapter Protocol.
+
+## Optional
+
+- [Full documentation](https://lus.dev/llms-full.txt): The guide, every acquis, and the API reference in one file.
+- [Compact documentation](https://lus.dev/llms-small.txt): The language differences and every function signature, sized for a small context.
+- [Embedding API](https://lus.dev/manual/acquis-41.md): The `lus.h` C interface for host programs.
+- [WebAssembly](https://lus.dev/manual/acquis-42.md): The runtime as a WASI module with a JavaScript host.
+- [Flags](https://lus.dev/manual/acquis-28.md), [preinclusion](https://lus.dev/manual/acquis-29.md), and [readonly environment](https://lus.dev/manual/acquis-27.md): Build and startup options.
+- [Benchmarks](https://lus.dev/benchmarks.md): Lus against Node.js, Bun, Python, Ruby, PHP, and Lua on six programs, with the method.

@@ -9,6 +9,11 @@
 //! and `message`, so editors and the language server can read it.
 //! `--list` prints every diagnostic code with its severity and summary.
 //!
+//! A directory argument stands for every `.lus` file below it. A file
+//! whose name ends in `_test.lus` is checked as a test file: the helpers
+//! of `lus test` count as defined and the tests and case tables it
+//! declares count as used.
+//!
 //! With no file, or with the file `-`, the source is read from standard
 //! input. The exit status is 0 when nothing is reported, 1 when a
 //! diagnostic is reported, and 2 for a usage or I/O problem.
@@ -16,6 +21,7 @@
 const std = @import("std");
 const lus = @import("../lus.zig");
 const lint = @import("../syntax/lint.zig");
+const paths = @import("paths.zig");
 const astexport = @import("../syntax/astexport.zig");
 const lexer = lus.syntax.lexer;
 const parser = lus.syntax.parser;
@@ -31,9 +37,13 @@ const usage =
     \\  --json  print the diagnostics as a JSON array
     \\  --list  print every diagnostic code and exit
     \\
-    \\With no FILE, or when FILE is -, read standard input.
+    \\A directory stands for every .lus file below it. With no FILE, or
+    \\when FILE is -, read standard input.
     \\
 ;
+
+/// The globals `lus test` defines in a test file.
+pub const test_globals = [_][]const u8{ "raises", "same", "skip", "snapshot", "TEST_DIR" };
 
 const Entry = struct {
     file: []const u8,
@@ -73,10 +83,15 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const builtins = try globalNames(arena, l.g);
+    var test_builtins = try builtins.clone(arena);
+    for (test_globals) |name| try test_builtins.put(arena, name, {});
+
+    var expanded: std.ArrayList([]const u8) = .empty;
+    for (files.items) |file| try paths.expand(arena, io, file, &expanded);
 
     var entries: std.ArrayList(Entry) = .empty;
     var status: u8 = 0;
-    for (files.items) |file| {
+    for (expanded.items) |file| {
         const from_stdin = std.mem.eql(u8, file, "-");
         const src = readSource(arena, io, file, from_stdin) catch |e| {
             std.debug.print("lus check: cannot read {s} ({s})\n", .{ file, @errorName(e) });
@@ -85,7 +100,9 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         };
         const display = if (from_stdin) "<stdin>" else file;
         const chunkname = if (from_stdin) "=stdin" else try std.fmt.allocPrint(arena, "@{s}", .{file});
-        for (try checkSource(gpa, arena, l.g, src, chunkname, &builtins)) |d| {
+        const is_test = !from_stdin and paths.isTestFile(file);
+        const opts: lint.Options = .{ .builtins = if (is_test) &test_builtins else &builtins, .test_file = is_test };
+        for (try checkSource(gpa, arena, l.g, src, chunkname, opts)) |d| {
             try entries.append(arena, .{ .file = display, .d = d });
         }
     }
@@ -108,7 +125,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
 /// Parses, lints, and compiles one source. A syntax error stops the
 /// file. Otherwise the lint results come first and the compiler adds
 /// the error it found, unless a lint error already covers its line.
-pub fn checkSource(gpa: std.mem.Allocator, arena: std.mem.Allocator, g: *lus.vm.state.Global, src: []const u8, chunkname: []const u8, builtins: *const std.StringHashMapUnmanaged(void)) ![]lint.Diagnostic {
+pub fn checkSource(gpa: std.mem.Allocator, arena: std.mem.Allocator, g: *lus.vm.state.Global, src: []const u8, chunkname: []const u8, opts: lint.Options) ![]lint.Diagnostic {
     var lx = lexer.Lexer.init(gpa, arena, src);
     defer lx.deinit();
     const lexed = lx.run() catch |e| switch (e) {
@@ -127,7 +144,7 @@ pub fn checkSource(gpa: std.mem.Allocator, arena: std.mem.Allocator, g: *lus.vm.
         else => return e,
     };
     var list: std.ArrayList(lint.Diagnostic) = .empty;
-    try list.appendSlice(arena, try lint.lint(arena, chunk, .{ .builtins = builtins }));
+    try list.appendSlice(arena, try lint.lint(arena, chunk, opts));
 
     const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname });
     switch (r) {

@@ -1,0 +1,2 @@
+dir/a.lus:1:7: warning: unused local 'unused' [unused-local]
+dir/nested/b.lus:1:15: warning: undefined global 'null' (the absent value is written 'nil') [undefined-global]

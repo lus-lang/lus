@@ -17,6 +17,7 @@ Monorepository for the Lus programming language, a Lua 5.5 derivative. The runti
 - **`/examples`**: Runnable examples, shown on the site and in the playground
 - **`/packaging`**: Install scripts, release anchors, third-party notices, and dependency licenses
 - **`/tools`**: Generators (spec to LSP data, spec to grammar) and the repository lint
+- **`/.agents`**: Agent skills (`lus`, `lus-rewrite`), the `llms.txt` index, and agent prompts. `.claude/skills` is a symbolic link to `.agents/skills`, and `spec/design/agents.md` describes the design
 
 The JavaScript packages form one pnpm workspace with a single lockfile at the root. mise pins the toolchain and is the task runner. In a fresh clone, run `mise trust` once so mise reads `mise.toml`, then `mise install` for the toolchain. Run `mise tasks` to list the tasks.
 
@@ -42,7 +43,7 @@ mise run wasm:test     # build lus.wasm and run its host tests
 mise run wasm:conformance
 ```
 
-The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test ../tests/conformance ../packages/language-server/tests` from `runtime/`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec` runs the code blocks of the manual and the spec.
+The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test ../tests/conformance ../packages/language-server/tests` from `runtime/`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec ../.agents` runs the code blocks of the manual, the spec, and the agent skills.
 
 ### Website
 
@@ -82,7 +83,7 @@ Before posting an issue or committing prose, run `node tools/lint-repo.js`, grep
 
 ### Spec → Language Server Pipeline
 
-`spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node tools/build-lsp.js` generates `packages/language-server/analysis/stdlib_data.lus`, which the language server uses for completions, hover, and linting. `node tools/build-grammar.js` generates both TextMate grammar copies from the same spec.
+`spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node tools/build-lsp.js` generates `packages/language-server/analysis/stdlib_data.lus`, which the language server uses for completions, hover, and linting. `node tools/build-grammar.js` generates both TextMate grammar copies from the same spec. `node tools/build-llms.js --out DIR` builds the agent documentation from the spec, the manual, and `.agents/`: `llms.txt`, `llms-full.txt`, `llms-small.txt`, and a Markdown copy of every manual page.
 
 ## Picking the right models for workflows and subagents
 
