@@ -225,8 +225,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
     </div>
 
-    <section class="part" id="download">
-      <div class="sech"><h2>Download</h2></div>
+    <section class="part download" id="download" aria-label="Download">
       <ReleaseStrip />
     </section>
 
@@ -542,6 +541,12 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
         transparent
       );
     }
+  }
+
+  /* the releases stand on the horizon's rule, which serves as their
+     section rule */
+  .download {
+    @apply pt-3;
   }
 
   /* the horizon: a full-width field of cube bars under the masthead */
