@@ -793,6 +793,32 @@ pub fn newStringIn(g: *Global, b: []const u8) (Allocator.Error || error{InvalidU
     return newStringKnown(g, b, a.ascii, a.chars);
 }
 
+/// Allocates a long string of `len` bytes, more than `String.short_max`,
+/// whose bytes the caller writes before anything else allocates, and
+/// then passes to `finishLong`. A result whose length is known up front
+/// is written in place this way, without a buffer to copy from.
+pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
+    std.debug.assert(len > String.short_max);
+    gc.maybeCollect(g);
+    const s = try gc.allocUninit(g, String, .string, String.allocSize(len));
+    s.len = @intCast(len);
+    s.chars = 0;
+    s.hash = 0;
+    s.flags = .{};
+    s.crumbs = null;
+    const base: [*]u8 = @ptrCast(s);
+    base[@sizeOf(String) + len] = 0;
+    return s;
+}
+
+/// Completes a string from `newLongUninit` once its bytes, valid WTF-8,
+/// are written.
+pub fn finishLong(g: *Global, s: *String, ascii: bool, chars: usize) void {
+    s.chars = @intCast(chars);
+    s.flags.ascii = ascii;
+    s.hash = object.hashBytes(g.seed, s.bytesMut());
+}
+
 /// Creates a string from bytes already known to be valid WTF-8.
 pub inline fn newStringKnown(g: *Global, b: []const u8, ascii: bool, chars: usize) Allocator.Error!*String {
     // A short string that already exists is found inline. Creating a
