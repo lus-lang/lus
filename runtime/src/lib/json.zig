@@ -61,6 +61,7 @@ const Parser = struct {
     i: usize = 0,
     exact: bool,
     buf: std.ArrayList(u8) = .empty,
+    keys: [256]?*String = @splat(null),
 
     fn fail(p: *Parser, comptime fmt: []const u8, args: anytype) Error {
         var tmp: [160]u8 = undefined;
@@ -185,6 +186,43 @@ const Parser = struct {
         return p.fail("unterminated string", .{});
     }
 
+    /// Parses an object key. Short ASCII keys without escapes come from a
+    /// small cache of the keys this parse has made, because objects in a
+    /// document tend to repeat their keys. Every cached key waits on the
+    /// stack or sits in a table of the result, which keeps it alive. A
+    /// key whose value is null is never stored, so `flush` drops it from
+    /// the cache.
+    fn key(p: *Parser) Error!Value {
+        const s = p.s;
+        const start = p.i + 1;
+        var i = start;
+        const limit = @min(s.len, start + max_cached_key);
+        while (i < limit) : (i += 1) {
+            const c = s[i];
+            if (c == '"') break;
+            if (c == '\\' or c < 0x20 or c >= 0x80) return p.string();
+        } else return p.string();
+        const text = s[start..i];
+        const slot = &p.keys[keySlot(text)];
+        if (slot.*) |k| {
+            if (k.len == text.len and std.mem.eql(u8, k.bytes(), text)) {
+                p.i = i + 1;
+                return Value.obj(.string, k);
+            }
+        }
+        p.i = i + 1;
+        const v = try p.mkAscii(text);
+        slot.* = v.as(String);
+        return v;
+    }
+
+    const max_cached_key = 32;
+
+    fn keySlot(text: []const u8) usize {
+        if (text.len == 0) return 0;
+        return (text.len *% 31 +% @as(usize, text[0]) *% 7 +% text[text.len - 1] *% 3 +% text[text.len / 2]) & 255;
+    }
+
     fn mkAscii(p: *Parser, bytes: []const u8) Error!Value {
         return Value.obj(.string, state.newStringKnown(p.l.g, bytes, true, bytes.len) catch return p.l.raiseMem());
     }
@@ -291,6 +329,13 @@ const Parser = struct {
         n: usize = 0,
     };
 
+    /// Drops `k` from the key cache.
+    fn forget(p: *Parser, k: *String) void {
+        if (k.len > max_cached_key) return;
+        const slot = &p.keys[keySlot(k.bytes())];
+        if (slot.* == k) slot.* = null;
+    }
+
     const flush_at = 1024;
     const tight_room = 4 * flush_at;
 
@@ -331,6 +376,7 @@ const Parser = struct {
             while (i < pairs) : (i += 1) {
                 const k = &l.stack[first + 2 * i];
                 const v = &l.stack[first + 2 * i + 1];
+                if (v.isNil()) p.forget(k.as(String));
                 if (table.storeStr(t, k, v) == null)
                     table.set(gpa, t, k.*, v.*) catch return l.raiseMem();
             }
@@ -370,7 +416,7 @@ const Parser = struct {
                     continue :outer;
                 } else {
                     if (p.peek() != '"') return p.fail("expected string key in object", .{});
-                    try l.push(try p.string());
+                    try l.push(try p.key());
                     try p.expect(':', "after object key");
                     continue :outer;
                 }
@@ -394,7 +440,7 @@ const Parser = struct {
                     if (p.peek() == ',') {
                         p.i += 1;
                         if (p.peek() != '"') return p.fail("expected string key", .{});
-                        try l.push(try p.string());
+                        try l.push(try p.key());
                         try p.expect(':', "after object key");
                         continue :outer;
                     }
