@@ -1859,7 +1859,7 @@ When called with a filename, opens that file and sets it as the default output. 
   ["io.popen"] = {
     children = {},
     description = [[
-Starts program `prog` in a separate process and returns a file handle. Mode `"r"`, the default, reads the program's output. Mode `"w"` writes to its input. The command runs in the system shell: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. Closing the handle closes the pipe to the program's input and waits for the program to exit.
+Starts program `prog` in a separate process and returns a file handle. Mode `"r"`, the default, reads the program's output. Mode `"w"` writes to its input. The command runs in the system shell: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. Closing the handle closes the pipe in both directions and waits for the program to exit. A program that still writes its output when the handle closes then stops on a broken pipe, which on POSIX systems is the signal `SIGPIPE`. Closing returns the same three results as `os.execute`.
 
 **Requires pledge:** `exec`]],
     kind = "function",
@@ -3424,7 +3424,7 @@ Returns the difference `t2 - t1` in seconds, where `t1` and `t2` are values retu
   ["os.execute"] = {
     children = {},
     description = [[
-Passes `command` to the operating system shell for execution: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. Returns `true` (or `nil` on failure), an exit type string (`"exit"` or `"signal"`), and the exit or signal number.
+Passes `command` to the operating system shell for execution: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. Returns `true` (or `nil` on failure), an exit type string (`"exit"` or `"signal"`), and the exit or signal number. On Windows the exit number is the full 32-bit exit code of the process, so a crash code such as `3221225477` reads as a failure.
 
 **Requires pledge:** `exec`]],
     kind = "function",
