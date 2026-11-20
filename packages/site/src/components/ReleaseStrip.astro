@@ -61,8 +61,11 @@ function downloads(release: ReleaseInfo) {
 <style>
   @reference "../styles/global.css";
 
+  /* the rows set their columns by the strip's own width, so the strip
+     fits the homepage and the narrower manual column alike */
   .release-strip {
     @apply font-mono text-xs;
+    container-type: inline-size;
   }
 
   .release-row {
@@ -93,7 +96,7 @@ function downloads(release: ReleaseInfo) {
     }
 
     /* on the measure: tag, version over two columns, date, links */
-    @media (min-width: 1024px) {
+    @container (min-width: 960px) {
       display: grid;
       grid-template-columns: 1fr 2fr 1fr 8fr;
       column-gap: 0;

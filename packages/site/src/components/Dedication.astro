@@ -4,6 +4,7 @@ import Napoleon from "../assets/napoleon.jpg"
 ---
 
 <aside class="dedication">
+  <span class="plate crop">
   <Image
     src={Napoleon}
     alt="Napoléon Bonaparte"
@@ -12,6 +13,7 @@ import Napoleon from "../assets/napoleon.jpg"
     loading="lazy"
     class="dedication-image"
   />
+  </span>
   <div class="dedication-body">
     <slot />
   </div>
@@ -23,8 +25,13 @@ import Napoleon from "../assets/napoleon.jpg"
   .dedication {
     @apply bg-tint p-5 my-8 max-w-3xl;
 
+    /* the engraving is set as a plate between crop marks */
+    .plate {
+      @apply float-right ml-6 mb-3 mt-1 mr-1 block max-sm:float-none max-sm:ml-0 max-sm:mb-4 max-sm:inline-block;
+    }
+
     .dedication-image {
-      @apply float-right ml-4 mb-2 max-sm:float-none max-sm:ml-0 max-sm:mb-4;
+      @apply block;
     }
 
     .dedication-eyebrow {
