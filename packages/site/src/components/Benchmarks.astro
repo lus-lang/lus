@@ -126,16 +126,16 @@ const modes: {
             <caption>{m.caption}</caption>
             <thead>
               <tr>
-                <th>program</th>
+                <th scope="col">program</th>
                 {runtimes.map((id) => (
-                  <th class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                  <th scope="col" class:list={{ lus: id === "lus" }}>{label(id)}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {m.rows.map((r) => (
                 <tr>
-                  <td>{r.name}</td>
+                  <th scope="row">{r.name}</th>
                   {r.cells.map((c) => (
                     <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
                       <b>{c.text}</b>
@@ -150,22 +150,20 @@ const modes: {
               ))}
             </tbody>
           </table>
-        </div>
         {m.http && (
-          <div class="scroll">
-            <table>
+            <table class="http">
               <caption>{m.httpCaption}</caption>
               <thead>
                 <tr>
-                  <th />
+                  <td />
                   {runtimes.map((id) => (
-                    <th class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                    <th scope="col" class:list={{ lus: id === "lus" }}>{label(id)}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td>{m.http.name}</td>
+                  <th scope="row">{m.http.name}</th>
                   {m.http.cells.map((c) => (
                     <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
                       <b>{c.text}</b>
@@ -179,8 +177,8 @@ const modes: {
                 </tr>
               </tbody>
             </table>
-          </div>
         )}
+        </div>
       </div>
     ))
   }
@@ -211,6 +209,10 @@ const modes: {
     button {
       @apply font-mono text-xs bg-white px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
 
+      &:focus-visible {
+        outline-offset: -2px;
+      }
+
       &[aria-pressed="true"] {
         @apply bg-ink text-accent;
       }
@@ -239,17 +241,31 @@ const modes: {
     caption-side: top;
   }
 
+  table.http {
+    @apply mt-[18px] border-t border-ink;
+  }
+
   th {
     @apply font-mono text-xs font-semibold normal-case tracking-normal text-ink-3 px-1.5 pt-1.5 pb-1 border-b-ink/30;
   }
 
-  td {
-    @apply px-1.5 py-[5px] border-b-ink/15 align-bottom;
+  td,
+  th[scope="row"] {
+    @apply px-1.5 py-[5px] border-b border-b-ink/15 align-bottom font-normal text-ink text-xs;
   }
 
+  /* program names stay in view while the table scrolls on phones */
   th:first-child,
   td:first-child {
-    @apply w-[92px] pl-0;
+    @apply w-[92px] pl-0 sticky left-0 z-10 bg-paper;
+  }
+
+  /* on the measure: three grid columns of names, one per runtime */
+  @media (min-width: 900px) {
+    th:first-child,
+    td:first-child {
+      width: 25%;
+    }
   }
 
   td b {

@@ -73,11 +73,11 @@ function downloads(release: ReleaseInfo) {
     }
 
     .rel-version {
-      @apply font-semibold text-[13px] text-ink min-w-[150px];
+      @apply font-semibold text-[13px] text-ink;
     }
 
     .rel-date {
-      @apply text-ink-3 min-w-[84px];
+      @apply text-ink-3;
     }
 
     .rel-none {
@@ -85,10 +85,29 @@ function downloads(release: ReleaseInfo) {
     }
 
     .rel-links {
-      @apply flex flex-wrap gap-x-3 gap-y-1 sm:ml-auto;
+      @apply flex flex-wrap gap-x-3 gap-y-0 sm:ml-auto;
 
       a {
-        @apply font-normal no-underline text-link hover:text-ink hover:underline;
+        @apply font-normal no-underline text-link py-1 hover:text-ink hover:underline;
+      }
+    }
+
+    /* on the measure: tag, version over two columns, date, links */
+    @media (min-width: 640px) {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr 8fr;
+      column-gap: 0;
+
+      .tag {
+        justify-self: start;
+      }
+
+      .rel-links {
+        justify-self: end;
+      }
+
+      .rel-none {
+        grid-column: 2 / -1;
       }
     }
 

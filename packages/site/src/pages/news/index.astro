@@ -15,7 +15,7 @@ const sorted = news.toSorted(
 >
     <main id="main">
         <section>
-            <h1>News</h1>
+            <h1 class="page-title">News</h1>
             <p class="news-intro">
                 Release notes and announcements from the Lus project.
             </p>
@@ -39,19 +39,19 @@ const sorted = news.toSorted(
     @reference "../../styles/global.css";
 
     .news-intro {
-        @apply text-ink/80 mb-4;
+        @apply text-ink-2 mb-5;
     }
 
-    /* strict reverse chronology: one framed column, no card grid */
+    /* strict reverse chronology, set as a ledger */
     .news-list {
-        @apply border border-ink/15 rounded-lg overflow-hidden bg-paper divide-y divide-ink/10 max-w-3xl;
+        @apply border-t border-ink max-w-3xl;
     }
 
     .news-row {
-        @apply flex items-baseline gap-4 px-3 py-2 no-underline font-normal hover:bg-accent-soft;
+        @apply flex items-baseline gap-4 py-1.5 border-b border-ink/15 no-underline font-normal hover:bg-accent-soft;
 
         .date {
-            @apply text-sm text-ink/70 font-mono shrink-0 w-28;
+            @apply text-xs text-ink-3 font-mono shrink-0 w-24;
         }
 
         .title {

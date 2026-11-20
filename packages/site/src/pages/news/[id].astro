@@ -22,8 +22,8 @@ const rendered = await render(page)
   <main id="main">
     <section>
       <a href="/news" class="back-link">← Back to news</a>
-      <article>
-        <h1>{page.data.title}</h1>
+      <article class="prose">
+        <h1 class="page-title">{page.data.title}</h1>
         <p class="date">
           <time datetime={fmtDate(page.data.date)}>{fmtDate(page.data.date)}</time>
         </p>
@@ -37,14 +37,10 @@ const rendered = await render(page)
   @reference "../../styles/global.css";
 
   .back-link {
-    @apply text-sm text-link font-normal no-underline hover:bg-accent-soft mb-3 inline-block;
+    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-link no-underline hover:text-ink inline-block pt-2;
   }
 
-  article {
-    @apply space-y-2 max-w-[80ch];
-
-    .date {
-      @apply text-sm text-ink/70 font-mono;
-    }
+  article .date {
+    @apply font-mono text-xs text-ink-3 pb-2 border-b-2 border-ink mb-4;
   }
 </style>

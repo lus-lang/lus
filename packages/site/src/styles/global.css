@@ -134,9 +134,34 @@ main {
   opacity: 0.5;
 }
 
+/* phones keep a 3-column measure: twelve narrow columns read as noise */
 @media (max-width: 767px) {
   .cols-bg {
     --gut: 16px;
+    background: repeating-linear-gradient(
+      to right,
+      color-mix(in oklab, var(--color-ink) 14%, transparent) 0 1px,
+      transparent 1px calc((100vw - 2 * var(--gut)) / 3)
+    );
+    background-position: var(--gut) 0;
+  }
+}
+
+/* page title: the display h1 that opens every page below the masthead */
+.page-title {
+  @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
+}
+
+/* long-form prose outside the manual: chapters open on a 1px ink rule */
+.prose {
+  @apply space-y-2 max-w-[48.5rem];
+
+  h2 {
+    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] border-t border-ink pt-2 mt-10;
+  }
+
+  h3 {
+    @apply font-display text-lg font-bold tracking-[-0.02em] mt-6;
   }
 }
 
@@ -162,7 +187,7 @@ main {
     @apply flex justify-between gap-3 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-3 px-3 pt-1.5;
 
     a {
-      @apply normal-case tracking-normal no-underline font-normal text-link hover:text-ink;
+      @apply normal-case tracking-normal no-underline font-normal text-link px-1.5 -mx-1.5 py-1 -my-1 hover:text-ink;
     }
   }
 
@@ -171,7 +196,15 @@ main {
   }
 
   pre code {
-    @apply bg-transparent border-t-0 text-[13px] leading-[1.6] pt-1.5 pb-2.5 pl-3 pr-10;
+    @apply bg-transparent border-t-0 text-[13px] leading-[1.6] pt-1.5 pb-2.5 px-3;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--color-ink) 30%, transparent)
+      transparent;
+  }
+
+  /* the caption carries the run link, so figures go without a copy button */
+  .copy-btn {
+    display: none;
   }
 }
 

@@ -145,7 +145,7 @@ function isActive(href: string) {
       @apply ml-auto flex flex-wrap items-center justify-end gap-0.5 font-mono text-[13px];
 
       a {
-        @apply no-underline font-normal text-ink-2 px-2.5 py-1 rounded-[4px] hover:bg-accent-soft hover:text-ink;
+        @apply no-underline font-normal text-ink-2 px-2.5 py-1.5 rounded-[4px] hover:bg-accent-soft hover:text-ink;
 
         &.active {
           @apply bg-ink text-accent hover:bg-ink hover:text-accent;
@@ -176,10 +176,10 @@ function isActive(href: string) {
     }
 
     header nav {
-      @apply text-xs;
+      @apply text-xs flex-nowrap gap-0;
 
       a {
-        @apply px-1.5;
+        @apply px-1;
       }
     }
   }

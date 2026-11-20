@@ -319,12 +319,16 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
   /* masthead: pitch on 8 columns, news rail on 4 */
   .mast {
-    @apply grid gap-8 pt-10 pb-7;
+    @apply grid gap-0 pt-10 pb-4;
     grid-template-columns: minmax(0, 8fr) minmax(0, 4fr);
   }
 
+  .pitch {
+    @apply pr-8;
+  }
+
   h1 {
-    @apply font-display font-extrabold flex items-start gap-3 m-0;
+    @apply font-display font-extrabold flex items-start gap-3 m-0 -ml-[0.03em];
     font-size: clamp(96px, 13vw, 168px);
     line-height: 0.8;
     letter-spacing: -0.065em;
@@ -340,7 +344,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   .install {
-    @apply flex mt-5 max-w-[620px] border border-ink rounded-md overflow-hidden bg-white;
+    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md overflow-hidden bg-white;
 
     &[hidden] {
       display: none;
@@ -352,6 +356,11 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
     code {
       @apply flex-1 font-mono text-sm bg-transparent rounded-none px-3 py-2.5 whitespace-nowrap overflow-x-auto;
+      scrollbar-width: none;
+    }
+
+    :is(button, > a, code):focus-visible {
+      outline-offset: -2px;
     }
 
     > a {
@@ -391,7 +400,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       @apply flex justify-between mb-1.5;
 
       a {
-        @apply normal-case tracking-normal font-normal text-ink-2 no-underline hover:text-ink;
+        @apply normal-case tracking-normal font-normal text-ink-2 no-underline py-1 -my-1 hover:text-ink;
       }
     }
   }
@@ -412,12 +421,13 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
-  /* standard library index, set like the index of a book */
+  /* standard library index, set like the index of a book: four columns
+     on the measure, filled top to bottom */
   .index {
-    @apply columns-2 md:columns-4 gap-6 border-t border-ink pt-1.5;
+    @apply grid grid-cols-1 border-t border-ink pt-1.5;
 
     a {
-      @apply flex items-baseline gap-1.5 py-1 no-underline font-normal text-[13px] text-ink break-inside-avoid hover:text-ink;
+      @apply flex items-baseline gap-1.5 py-1 no-underline font-normal text-[13px] text-ink hover:bg-accent-soft hover:text-ink;
     }
 
     b {
@@ -431,28 +441,52 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     span {
       @apply text-ink-3 text-right;
     }
+  }
 
-    a:hover b {
-      @apply bg-accent;
+  @media (min-width: 521px) {
+    .index {
+      @apply grid-cols-2 gap-x-6;
+    }
+  }
+
+  @media (min-width: 900px) {
+    .index {
+      @apply gap-x-0;
+      grid-auto-flow: column;
+      grid-template-rows: repeat(4, auto);
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+
+      a {
+        @apply pr-6;
+      }
+
+      a:nth-child(n + 13) {
+        @apply pr-0;
+      }
     }
   }
 
   /* chapters: two-up spreads of number, text, and figure */
   .chapters {
-    @apply grid grid-cols-1 md:grid-cols-2 border-t border-ink;
+    @apply grid grid-cols-1 border-t border-ink;
   }
 
+  /* each chapter spans three rows of the spread and shares them with its
+     neighbour through subgrid, so paired figures start on one line */
   .chap {
     @apply grid gap-x-3.5 pt-4 pb-[18px] border-b border-ink/30;
     grid-template-columns: 44px minmax(0, 1fr);
-    grid-template-rows: auto auto 1fr;
+    grid-row: span 3;
+    grid-template-rows: subgrid;
 
     .no {
       @apply font-display font-extrabold text-[30px] leading-none tracking-[-0.05em] row-span-3;
+      align-self: baseline;
     }
 
     h3 {
       @apply font-display font-bold text-lg tracking-[-0.02em] flex items-center gap-2 m-0;
+      align-self: baseline;
 
       a {
         @apply no-underline font-bold text-ink hover:bg-accent-soft;
@@ -467,12 +501,13 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       @apply text-sm text-ink-2 mt-0.5 mb-2.5;
     }
 
-    .figure {
-      @apply self-start;
-    }
   }
 
-  @media (min-width: 768px) {
+  @media (min-width: 900px) {
+    .chapters {
+      @apply grid-cols-2;
+    }
+
     .chap:nth-child(odd) {
       @apply pr-6 border-r;
     }
@@ -488,7 +523,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
 
     .rail {
-      @apply border-l-0 pl-0;
+      @apply border-l-0 pl-0 pt-7;
     }
   }
 
@@ -496,6 +531,8 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     .chap {
       @apply gap-x-2.5;
       grid-template-columns: auto minmax(0, 1fr);
+
+      grid-row: auto;
       grid-template-rows: auto;
 
       .no {
