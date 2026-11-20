@@ -456,7 +456,16 @@ fn ioShmMap(file: *c.File, page: c_int, size: c_int, write: c_int, out: *?*anyop
     // readonly_shm, which reads the index through the file under shared
     // locks only. A write request records no denial, since SQLite treats
     // the answer as part of a read.
-    if (f.owner.readonly and (write != 0 or builtin.os.tag == .windows)) return c.READONLY;
+    if (f.owner.readonly and builtin.os.tag == .windows) {
+        // The win32 VFS opens its shared memory node in xShmMap, and the
+        // shared locks of the read path need that node, so the map goes
+        // through once before the answer.
+        var view: ?*anyopaque = null;
+        const rc = m.xShmMap.?(f.real, page, size, 0, &view);
+        if (rc != c.OK and rc & 0xff != c.READONLY) return rc;
+        return c.READONLY;
+    }
+    if (write != 0 and f.owner.readonly) return c.READONLY;
     if (!f.owner.readonly and !shmAllowed(f, true)) return c.IOERR_SHMMAP;
     if (bindReadonlyShm(f) != c.OK) return c.IOERR_SHMOPEN;
     return m.xShmMap.?(f.real, page, size, write, out);
