@@ -513,7 +513,7 @@ pre {
   @apply relative;
 
   code {
-    @apply block overflow-x-auto bg-figure text-figure-ink border-t-2 border-rule py-2 pl-3 pr-10 text-[13px] leading-[1.6];
+    @apply block overflow-x-auto bg-figure text-figure-ink py-2 pl-3 pr-10 text-[13px] leading-[1.6];
   }
 }
 
@@ -545,7 +545,7 @@ pre.astro-code {
 }
 
 .copy-btn {
-  @apply absolute top-2 right-1.5 border border-ink/30 rounded-[4px] bg-field p-1 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
+  @apply absolute top-2 right-1.5 rounded-[4px] bg-field p-1 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
 }
 
 .copy-btn.copied {
@@ -565,7 +565,7 @@ li {
 }
 
 blockquote {
-  @apply border-l-2 border-ink bg-tint px-3 py-2 text-ink;
+  @apply bg-tint px-3 py-2 text-ink;
 }
 
 .table-wrap {

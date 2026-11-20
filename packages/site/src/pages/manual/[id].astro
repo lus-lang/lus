@@ -111,28 +111,31 @@ const sidebarToc = headings
   }
   {
     headings.length > 2 && (
-      <details class="toc" open={headings.length <= 24}>
-        <summary>Contents ({headings.length})</summary>
-        <ol>
-          {toc.map((section) => (
-            <li class="toc-h2">
-              <a
-                href={`#${section.slug}`}
-                data-bar={barsAreSections && h2Slugs.includes(`#${section.slug}`) ? h2Slugs.indexOf(`#${section.slug}`) : undefined}
-              >{section.text}</a>
-              {section.children.length > 0 && (
-                <ol>
-                  {section.children.map((child) => (
-                    <li class="toc-h3">
-                      <a href={`#${child.slug}`}>{child.text}</a>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </li>
-          ))}
-        </ol>
-      </details>
+      <nav class="toc" aria-label="Contents" data-toc>
+        <p class="toc-label">Contents</p>
+        <div class="toc-body">
+          <ol>
+            {toc.map((section) => (
+              <li class="toc-h2">
+                <a
+                  href={`#${section.slug}`}
+                  data-bar={barsAreSections && h2Slugs.includes(`#${section.slug}`) ? h2Slugs.indexOf(`#${section.slug}`) : undefined}
+                >{section.text}</a>
+                {section.children.length > 0 && (
+                  <ol>
+                    {section.children.map((child) => (
+                      <li class="toc-h3">
+                        <a href={`#${child.slug}`}>{child.text}</a>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <button type="button" class="toc-more" data-toc-more hidden>show all</button>
+      </nav>
     )
   }
   {
@@ -144,22 +147,20 @@ const sidebarToc = headings
     )
   }
   <rendered.Content />
-  <p class="twin label"><a href={`/manual/${page.id}.md`}>this page as markdown</a></p>
+  <a class="twin" href={`/manual/${page.id}.md`}>This page as Markdown</a>
   {
     (prev || next) && (
       <nav class="pager" aria-label="Manual pages">
         {prev ? (
           <a rel="prev" href={`/manual/${prev.id}`} class="pager-link">
-            <span class="pager-label">← previous</span>
-            <span class="pager-title">{prev.data.title}</span>
+            <span aria-hidden="true">←</span> {prev.data.title}
           </a>
         ) : (
           <span />
         )}
         {next ? (
           <a rel="next" href={`/manual/${next.id}`} class="pager-link pager-right">
-            <span class="pager-label">next →</span>
-            <span class="pager-title">{next.data.title}</span>
+            {next.data.title} <span aria-hidden="true">→</span>
           </a>
         ) : (
           <span />
@@ -172,12 +173,10 @@ const sidebarToc = headings
 <style>
   @reference "../../styles/global.css";
 
+  /* the Markdown twin is for agents and tools: hidden like the skip link,
+     shown only when keyboard focus reaches it */
   .twin {
-    @apply mt-10;
-
-    a {
-      @apply normal-case tracking-normal font-normal text-ink-2 no-underline hover:text-ink hover:bg-accent-soft;
-    }
+    @apply sr-only focus:not-sr-only focus:inline-block focus:mt-10 focus:font-mono focus:text-xs focus:text-ink focus:bg-accent-soft focus:px-2 focus:py-1;
   }
 
   .crumb {
@@ -189,7 +188,7 @@ const sidebarToc = headings
   }
 
   .draft-notice {
-    @apply border-t-2 border-ink-red bg-tint-red text-ink-red font-semibold px-3 py-1.5 mb-3 text-sm;
+    @apply bg-tint-red text-ink-red font-semibold px-3 py-1.5 mb-3 text-sm;
 
     a {
       @apply text-link-red;
@@ -199,8 +198,8 @@ const sidebarToc = headings
   .toc {
     @apply mb-6;
 
-    summary {
-      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 cursor-pointer select-none py-2;
+    .toc-label {
+      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 py-2 m-0;
     }
 
     ol {
@@ -226,25 +225,37 @@ const sidebarToc = headings
     a {
       @apply text-ink-2 font-normal no-underline hover:bg-accent-soft hover:text-ink;
     }
+
+    /* a long outline shows its first lines and fades to transparent, as
+       the agent prompt on the homepage does */
+    &.long:not(.open) .toc-body {
+      @apply max-h-[11rem] overflow-hidden;
+      mask-image: linear-gradient(to bottom, black 55%, transparent);
+    }
+
+    .toc-more[hidden] {
+      display: none;
+    }
+
+    .toc-more {
+      @apply font-mono text-xs bg-transparent border-0 p-0 py-1 cursor-pointer text-ink-2 hover:text-ink hover:bg-accent-soft;
+    }
+
+    &.open .toc-more {
+      display: none;
+    }
   }
 
+  /* previous and next: the titles, an arrow pointing the way */
   .pager {
-    @apply grid grid-cols-1 sm:grid-cols-2 mt-14 border-t-2 border-rule;
+    @apply grid grid-cols-1 sm:grid-cols-2 gap-x-6 mt-14;
 
     .pager-link {
-      @apply flex flex-col gap-0.5 py-2 no-underline hover:bg-accent-soft;
+      @apply self-start justify-self-start py-2 no-underline font-display font-bold text-lg tracking-[-0.02em] text-ink hover:bg-accent-soft hover:text-ink;
     }
 
     .pager-right {
-      @apply sm:text-right;
-    }
-
-    .pager-label {
-      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3;
-    }
-
-    .pager-title {
-      @apply font-display font-bold text-lg tracking-[-0.02em] text-ink;
+      @apply sm:justify-self-end;
     }
   }
 
@@ -254,9 +265,7 @@ const sidebarToc = headings
     }
 
     .toc {
-      @apply border-ink-red;
-
-      summary {
+      .toc-label {
         @apply text-ink-red/70;
       }
 
@@ -267,23 +276,24 @@ const sidebarToc = headings
     }
 
     .pager {
-      @apply border-ink-red;
-
       .pager-link {
-        @apply hover:bg-accent-soft-red;
-      }
-
-      .pager-right {
-        @apply sm:border-ink-red/30;
-      }
-
-      .pager-label {
-        @apply text-ink-red/70;
-      }
-
-      .pager-title {
-        @apply text-ink-red;
+        @apply text-ink-red hover:bg-accent-soft-red;
       }
     }
   }
 </style>
+
+<script>
+  // an outline taller than about ten lines shows its start and fades, and
+  // "show all" opens it. Readers without scripts see the whole outline.
+  for (const toc of document.querySelectorAll<HTMLElement>("[data-toc]")) {
+    const body = toc.querySelector<HTMLElement>(".toc-body")
+    const more = toc.querySelector<HTMLButtonElement>("[data-toc-more]")
+    if (!body || !more || body.scrollHeight <= 240) continue
+    toc.classList.add("long")
+    more.hidden = false
+    more.addEventListener("click", () => {
+      toc.classList.add("open")
+    })
+  }
+</script>
