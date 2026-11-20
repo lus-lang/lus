@@ -354,20 +354,32 @@ fn releasePage(g: *Global, p: *Page) void {
     segmentOf(p).used -= 1;
 }
 
+/// The alignment of large objects, which every object header needs. On
+/// 64-bit targets it stays within what `malloc` guarantees, so the C
+/// allocator serves large objects with plain `malloc` and can grow a
+/// block with `realloc` (`state.StringBuffer`).
+pub const large_align: std.mem.Alignment = .of(Header);
+
 /// Allocates a large object from the backing allocator.
 pub fn allocLarge(g: *Global, size: usize) Allocator.Error![*]u8 {
-    const mem = g.gpa.rawAlloc(size, .@"16", @returnAddress()) orelse return error.OutOfMemory;
+    const mem = g.gpa.rawAlloc(size, large_align, @returnAddress()) orelse return error.OutOfMemory;
     g.heap.large_young.append(g.gpa, @ptrCast(@alignCast(mem))) catch {
-        g.gpa.rawFree(mem[0..size], .@"16", @returnAddress());
+        g.gpa.rawFree(mem[0..size], large_align, @returnAddress());
         return error.OutOfMemory;
     };
     return mem;
 }
 
+/// Records a block of the backing allocator that becomes a large object
+/// in place. The caller still owns the block when this fails.
+pub fn adoptLarge(g: *Global, mem: [*]u8) Allocator.Error!void {
+    try g.heap.large_young.append(g.gpa, @ptrCast(@alignCast(mem)));
+}
+
 pub fn freeLarge(g: *Global, h: *Header) void {
     const size = gc.objectSize(h);
     const base: [*]u8 = @ptrCast(h);
-    g.gpa.rawFree(base[0..size], .@"16", @returnAddress());
+    g.gpa.rawFree(base[0..size], large_align, @returnAddress());
 }
 
 /// Returns the remaining free cells of every allocation page to their

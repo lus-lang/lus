@@ -902,6 +902,86 @@ pub const NewTableSite = struct {
     pub const max_learned = 8;
 };
 
+/// An allocator for byte buffers whose contents may become a long string
+/// without a copy. Every block it hands out sits behind room for a string
+/// header and before room for the terminating zero, so `stringFromBuffer`
+/// turns a buffer longer than the largest small object into a large
+/// string in place. Building a long result, such as the text of
+/// `table.concat`, then holds its bytes once instead of twice.
+pub const StringBuffer = struct {
+    g: *Global,
+
+    const head = @sizeOf(String);
+    const block_align = @import("heap.zig").large_align;
+
+    pub fn allocator(self: *StringBuffer) Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: Allocator.VTable = .{ .alloc = alloc, .resize = resize, .remap = remap, .free = free };
+
+    inline fn block(memory: []u8) []u8 {
+        return (memory.ptr - head)[0 .. head + memory.len + 1];
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, _: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *StringBuffer = @ptrCast(@alignCast(ctx));
+        const p = self.g.gpa.rawAlloc(head + len + 1, block_align, ra) orelse return null;
+        return p + head;
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *StringBuffer = @ptrCast(@alignCast(ctx));
+        return self.g.gpa.rawResize(block(memory), block_align, head + new_len + 1, ra);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *StringBuffer = @ptrCast(@alignCast(ctx));
+        const p = self.g.gpa.rawRemap(block(memory), block_align, head + new_len + 1, ra) orelse return null;
+        return p + head;
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, _: std.mem.Alignment, ra: usize) void {
+        const self: *StringBuffer = @ptrCast(@alignCast(ctx));
+        self.g.gpa.rawFree(block(memory), block_align, ra);
+    }
+};
+
+/// Creates a string from the bytes of `list`, whose memory comes from the
+/// allocator of `sb`, and leaves `list` empty. A result too long for a
+/// small cell becomes the string in place: its block takes the header
+/// and joins the large objects. A buffer with more than an eighth of its
+/// capacity unused is copied instead, so the string does not keep the
+/// slack for its whole life.
+pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8), ascii: bool, chars: usize) Allocator.Error!*String {
+    const a = sb.allocator();
+    defer {
+        list.deinit(a);
+        list.* = .empty;
+    }
+    const n = list.items.len;
+    if (String.allocSize(n) <= @import("heap.zig").max_small or list.capacity - n > list.capacity / 8) {
+        return newStringKnown(g, list.items, ascii, chars);
+    }
+    gc.maybeCollect(g);
+    if (list.capacity != n) {
+        if (!a.resize(list.allocatedSlice(), n)) return newStringKnown(g, list.items, ascii, chars);
+        list.capacity = n;
+    }
+    const mem = list.items.ptr - StringBuffer.head;
+    try @import("heap.zig").adoptLarge(g, mem);
+    list.* = .empty;
+    const s: *String = @ptrCast(@alignCast(mem));
+    s.hdr = .{ .tag = .string, .flags = .{ .large = true } };
+    s.len = @intCast(n);
+    s.chars = @intCast(chars);
+    s.flags = .{ .ascii = ascii };
+    s.hash = object.hashBytes(g.seed, s.bytes());
+    s.crumbs = null;
+    mem[StringBuffer.head + n] = 0;
+    return s;
+}
+
 pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table {
     gc.maybeCollect(g);
     // Small parts of known size live in the cell of the table itself.

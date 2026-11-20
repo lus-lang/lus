@@ -232,7 +232,8 @@ fn concat(l: *Thread) Error!u32 {
     last = try aux.optInt(l, 4, last);
     var stack: [ops.concat_stack]u8 = undefined;
     var first = std.heap.BufferFirstAllocator.init(&stack, l.g.gpa);
-    const gpa = first.allocator();
+    var strbuf: state.StringBuffer = .{ .g = l.g };
+    var gpa = first.allocator();
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
     // A table without a metatable is read twice: once to size the result,
@@ -286,6 +287,8 @@ fn concat(l: *Thread) Error!u32 {
             state.finishLong(l.g, r, ascii_all, chars_all);
             return aux.ret(l, Value.obj(.string, r));
         }
+        // A long result is built where its string will live.
+        if (ops.longResult(room)) gpa = strbuf.allocator();
         buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();
     }
     var ascii = true;
@@ -299,7 +302,7 @@ fn concat(l: *Thread) Error!u32 {
         if (i == last) break; // also avoids overflow when last is maxinteger
         if (sep_given) try ops.appendForConcat(l, gpa, &buf, sep, &ascii, &chars);
     }
-    const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
+    const s = ops.finishConcat(l.g, &strbuf, gpa, &buf, ascii, chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, s));
 }
 

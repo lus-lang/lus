@@ -784,21 +784,38 @@ fn isStringLike(v: Value) bool {
 fn joinStrings(l: *Thread, parts: []const Value, last: Value) Error!Value {
     var stack: [concat_stack]u8 = undefined;
     var first = std.heap.BufferFirstAllocator.init(&stack, l.g.gpa);
-    const gpa = first.allocator();
+    var sb: state.StringBuffer = .{ .g = l.g };
+    var gpa = first.allocator();
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
     // Reserve the whole result at once. A number takes at most
     // `number_room` bytes unless it is a big integer or a decimal, which
-    // grow the buffer as needed.
+    // grow the buffer as needed. A long result is built where its string
+    // will live.
     var room = concatRoom(last);
     for (parts) |p| room += concatRoom(p);
+    if (longResult(room)) gpa = sb.allocator();
     buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();
     var ascii = true;
     var chars: usize = 0;
     for (parts) |p| try appendForConcat(l, gpa, &buf, p, &ascii, &chars);
     try appendForConcat(l, gpa, &buf, last, &ascii, &chars);
-    const s = state.newStringKnown(l.g, buf.items, ascii, chars) catch return l.raiseMem();
+    const s = finishConcat(l.g, &sb, gpa, &buf, ascii, chars) catch return l.raiseMem();
     return Value.obj(.string, s);
+}
+
+/// True when a concatenation reserving `room` bytes builds its result in
+/// a `state.StringBuffer`, because the result may be a large object.
+pub inline fn longResult(room: usize) bool {
+    return String.allocSize(room) > @import("heap.zig").max_small;
+}
+
+/// Creates the string of a concatenation built in `buf`, whose allocator
+/// is `gpa`: in place when `gpa` is the allocator of `sb`, and as a copy
+/// otherwise.
+pub fn finishConcat(g: *state.Global, sb: *state.StringBuffer, gpa: std.mem.Allocator, buf: *std.ArrayList(u8), ascii: bool, chars: usize) std.mem.Allocator.Error!*String {
+    if (gpa.ptr == @as(*anyopaque, sb)) return state.stringFromBuffer(g, sb, buf, ascii, chars);
+    return state.newStringKnown(g, buf.items, ascii, chars);
 }
 
 /// Size of the stack buffers that hold short concatenation results

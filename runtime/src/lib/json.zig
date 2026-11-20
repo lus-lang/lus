@@ -487,46 +487,11 @@ fn fromjson(l: *Thread) Error!u32 {
 // ---------------------------------------------------------------------
 // Writing
 
-/// The output of the writer in blocks of fixed size, so that a long
-/// result never moves while it grows. The string is made at its exact
-/// size at the end, and the blocks are copied into it once.
-const Blocks = struct {
-    full: std.ArrayList([]u8) = .empty,
-    cur: []u8 = &.{},
-    n: usize = 0,
-
-    const size = 64 * 1024;
-
-    fn write(o: *Blocks, gpa: std.mem.Allocator, b: []const u8) !void {
-        var rest = b;
-        while (true) {
-            const k = @min(rest.len, o.cur.len - o.n);
-            @memcpy(o.cur[o.n..][0..k], rest[0..k]);
-            o.n += k;
-            rest = rest[k..];
-            if (rest.len == 0) return;
-            try o.full.ensureUnusedCapacity(gpa, 1);
-            const next = try gpa.alloc(u8, size);
-            if (o.cur.len > 0) o.full.appendAssumeCapacity(o.cur);
-            o.cur = next;
-            o.n = 0;
-        }
-    }
-
-    fn len(o: *const Blocks) usize {
-        return o.full.items.len * size + o.n;
-    }
-
-    fn deinit(o: *Blocks, gpa: std.mem.Allocator) void {
-        for (o.full.items) |b| gpa.free(b);
-        o.full.deinit(gpa);
-        gpa.free(o.cur);
-    }
-};
-
 const Writer = struct {
     l: *Thread,
-    out: Blocks = .{},
+    /// The text, built where its string will live when it is long.
+    out: std.ArrayList(u8) = .empty,
+    sb: state.StringBuffer,
     filter: Value,
     /// Tables on the current path, for cycle detection. The path is as
     /// long as the nesting, which `max_depth` bounds.
@@ -537,7 +502,7 @@ const Writer = struct {
     cont: usize = 0,
 
     fn write(w: *Writer, b: []const u8) Error!void {
-        w.out.write(w.l.g.gpa, b) catch return w.l.raiseMem();
+        w.out.appendSlice(w.sb.allocator(), b) catch return w.l.raiseMem();
     }
 
     fn onPath(w: *Writer, t: *Table) bool {
@@ -787,25 +752,13 @@ fn tojson(l: *Thread) Error!u32 {
     const v = try aux.checkAny(l, 1);
     const filter = l.arg(2);
     if (!filter.isNil() and filter.tag != .closure and filter.tag != .native) return aux.typeError(l, 2, "function");
-    var w: Writer = .{ .l = l, .filter = filter };
-    defer w.out.deinit(l.g.gpa);
+    var w: Writer = .{ .l = l, .filter = filter, .sb = .{ .g = l.g } };
+    defer w.out.deinit(w.sb.allocator());
     defer w.path.deinit(l.g.gpa);
     const fresh = w.mayRun(v);
     const root = (try w.transform(.nil, v)) orelse Value.nil;
     try w.item_(if (Writer.serializable(root)) root else .nil, fresh);
-    const o = &w.out;
-    const len = o.len();
-    const ascii = w.cont == 0;
-    const chars = len - w.cont;
-    if (o.full.items.len == 0) return aux.ret(l, Value.obj(.string, state.newStringKnown(l.g, o.cur[0..o.n], ascii, chars) catch return l.raiseMem()));
-    const r = state.newLongUninit(l.g, len) catch return l.raiseMem();
-    const dst = r.bytesMut();
-    var at: usize = 0;
-    for (o.full.items) |b| {
-        @memcpy(dst[at..][0..b.len], b);
-        at += b.len;
-    }
-    @memcpy(dst[at..][0..o.n], o.cur[0..o.n]);
-    state.finishLong(l.g, r, ascii, chars);
+    const chars = w.out.items.len - w.cont;
+    const r = state.stringFromBuffer(l.g, &w.sb, &w.out, w.cont == 0, chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, r));
 }
