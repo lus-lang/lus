@@ -422,7 +422,7 @@ pub fn sweepPage(g: *Global, p: *Page) void {
             dead &= dead - 1;
             const cell: *FreeCell = @ptrFromInt(base + (lo + bit) * granule);
             if (!cell.hdr.flags.free) {
-                gc.releaseObject(g, &cell.hdr);
+                if (gc.needsRelease(&cell.hdr)) gc.releaseObject(g, &cell.hdr);
                 // Safe builds poison dead cells, so a use after free shows
                 // up as garbage instead of a plausible object.
                 if (std.debug.runtime_safety) {

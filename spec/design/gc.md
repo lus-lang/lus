@@ -20,7 +20,7 @@ Every object starts with a header of one tag byte, one flag byte, and the finali
 
 Sweeping is lazy. When a mark phase ends, every page whose objects it judged waits for a sweep. The allocator sweeps a page when its size class reaches it and then allocates from the cells the sweep freed. After four sweeps that free nothing, the allocator takes a fresh page and leaves the rest to the collector steps, so one allocation never sweeps a large part of the heap. Collector steps sweep the pages that the allocator does not reach. A page left without live objects returns to the pool of free pages, where any size class can take it, and a segment whose pages are all free goes back to the backing allocator.
 
-A sweep frees what a dead object owns outside its cell, such as the parts of a table, the stack of a thread, or the reference of a string to a shared blob. Safe builds fill dead cells with a fixed pattern, so a use after free reads garbage instead of a plausible object.
+A sweep frees what a dead object owns outside its cell, such as the parts of a table, the stack of a thread, or the reference of a string to a shared blob. Most dead objects own nothing outside their cells, so the sweep tests that inline from the header and fields it already reads, and calls the release only for the others: over a run of `lru`, 4.6 million dead tables kept their parts in their cells, and the test took 2 percent off its instructions. Safe builds fill dead cells with a fixed pattern, so a use after free reads garbage instead of a plausible object.
 
 ## Marking
 

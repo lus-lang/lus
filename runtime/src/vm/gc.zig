@@ -113,6 +113,24 @@ pub fn objectSize(h: *Header) usize {
 
 /// Releases what a dead object owns outside its cell. The cell itself
 /// goes back to its page, or the large object to the backing allocator.
+/// True when a dead object owns something outside its cell, which
+/// `releaseObject` must release, or is a string in the string table. A
+/// sweep tests it inline, since most dead objects own nothing: a table
+/// whose parts live in its cell, or a string that is not interned.
+pub inline fn needsRelease(h: *Header) bool {
+    switch (h.tag) {
+        .table => {
+            const t = h.as(object.Table);
+            return (t.asize > 0 and !t.ownsInline(t.array_ptr)) or (t.hash_len > 0 and !t.ownsInline(t.hash_ptr));
+        },
+        .string => {
+            const f = h.as(object.String).flags().*;
+            return f.interned or f.shared or f.cached or f.crumb_slot;
+        },
+        else => return true,
+    }
+}
+
 pub fn releaseObject(g: *Global, h: *Header) void {
     const gpa = g.gpa;
     switch (h.tag) {
