@@ -2190,6 +2190,12 @@ pub const Lower = struct {
                 }
                 return true;
             },
+            .string => {
+                const w = try b.pure(.{ .op = .loadx, .ty = .string, .cls = .elem, .a = e.ap, .b = e.zi, .aux = tl.word_shift, .c = e.dep });
+                _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = w, .imm = @bitCast(tl.nil_word) });
+                try b.setReg(ra, w, Sample.tagged(.string));
+                return true;
+            },
             .boxed => {
                 // The sample of the slot, or of the first slot that
                 // holds something, predicts the type.
@@ -2307,6 +2313,7 @@ pub const Lower = struct {
         return switch (kind) {
             .int => ty == .int,
             .float => ty == .float,
+            .string => ty == .string,
             .boxed => ty != .nil or true,
             .none => false,
         };
@@ -2330,6 +2337,12 @@ pub const Lower = struct {
             .int, .float => {
                 b.clobber(.elem);
                 _ = try b.emit(.{ .op = .storex, .cls = .elem, .a = ap, .b = zi, .c = bits, .aux = tl.word_shift });
+            },
+            // A string is its pointer, which never equals the nil word.
+            .string => {
+                b.clobber(.elem);
+                _ = try b.emit(.{ .op = .storex, .cls = .elem, .a = ap, .b = zi, .c = v, .aux = tl.word_shift });
+                _ = try b.emit(.{ .op = .barrier, .a = t, .b = v });
             },
             .boxed => {
                 const ea = try b.pure(.{ .op = .addsh, .ty = .int, .a = ap, .b = zi, .imm = tl.value_shift });

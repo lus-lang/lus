@@ -1044,6 +1044,14 @@ fn MarkerOf(comptime par: bool) type {
             if (!m.push(h)) m.traverse(h);
         }
 
+        /// Marks the strings of an array part of kind `string`. Strings
+        /// reference nothing, so none of them goes on the gray stack.
+        fn markStrings(m: *M, words: []const u64) void {
+            for (words) |w| {
+                if (w != object.Table.hole) m.markObject(Value.make(w, .string).header());
+            }
+        }
+
         fn markRoots(m: *M) void {
             const g = m.g;
             m.markObject(&g.main_thread.hdr);
@@ -1155,9 +1163,11 @@ fn MarkerOf(comptime par: bool) type {
 
         fn traverseTable(m: *M, t: *object.Table) void {
             const s = &m.g.gcs;
-            // An unboxed array part holds only numbers, so tracing skips it.
+            // An unboxed array part holds numbers, which tracing skips, or
+            // strings, which it marks without tracing.
             const arr: []const Value = if (t.kind == .boxed) t.values() else &.{};
             m.work += arr.len * @sizeOf(Value) + t.hash.len * @sizeOf(object.Node);
+            if (t.kind == .string) m.markStrings(t.words());
             if (t.metatable) |mt| m.markObject(&mt.hdr);
             const mode = weakModeOf(m.g, t);
             if (!m.verifying) t.weak_mode = mode;

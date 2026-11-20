@@ -2340,9 +2340,9 @@ const Emitter = struct {
         e.i32c(tl.kind_boxed);
         e.op(W.i32_eq);
         e.brIf(0);
-        // An unboxed part takes a number of its own kind whose bits are
-        // not the nil word. Anything else changes the part or writes the
-        // nil word, which the step routine does.
+        // An unboxed part takes a number or string of its own kind whose
+        // bits are not the nil word. Anything else changes the part or
+        // writes the nil word, which the step routine does.
         e.get(L.t2);
         e.tagOf(rc);
         e.op(W.i32_ne);
@@ -2360,6 +2360,8 @@ const Emitter = struct {
         e.get(L.t1);
         e.get(L.x1);
         e.store64(0);
+        // A part of kind `string` holds collectable values.
+        e.tableBarrier(rc);
         e.br(3);
         e.end();
         e.elementAddr(tl.value_shift);

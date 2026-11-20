@@ -1201,9 +1201,9 @@ pub const Emitter = struct {
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
         a.load8(A.t4, tagOf(v));
         a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
-        // An unboxed part takes a number of its own kind whose bits are
-        // not the nil word. Anything else changes the part or writes the
-        // nil word, which the helper does.
+        // An unboxed part takes a number or string of its own kind whose
+        // bits are not the nil word. Anything else changes the part or
+        // writes the nil word, which the helper does.
         a.jumpIf(.ne, A.t3, A.t4, miss);
         a.jumpIfImm(.eq, A.t3, tl.kind_none, miss);
         a.load64(A.t5, slot(v));
@@ -1211,6 +1211,12 @@ pub const Emitter = struct {
         a.jumpIf(.eq, A.t5, A.t6, miss);
         a.addScaled(A.t2, A.t2, A.t1, tl.word_shift);
         a.store64(A.t5, .{ .base = A.t2 });
+        // A part of kind `string` holds collectable values, and its kind,
+        // which equals the tag of the value, is the only one at or above
+        // the tag of strings. Numbers leave by the one branch they took
+        // before.
+        a.jumpIfImm(.lo, A.t3, tag_string, done);
+        a.jumpIfBit(.{ .base = A.t0, .disp = tl.flags }, tl.barrier_bit, true, e.addCold(pc, .{ .barrier_table = .{ .v = v, .key = null } }, done));
         a.jmp(done);
         a.bind(boxed);
         a.addScaled(A.t2, A.t2, A.t1, tl.value_shift);

@@ -12,18 +12,19 @@ A table created for a known number of keys, as a constructor creates it, sizes a
 
 ## Element kinds
 
-The array part has one of four kinds.
+The array part has one of five kinds.
 
 - `none`: every slot is nil.
 - `int`: every slot is nil or an integer.
 - `float`: every slot is nil or a float.
+- `string`: every slot is nil or a string.
 - `boxed`: slots hold arbitrary values.
 
-The first three kinds are unboxed. They store one 64-bit word per slot, the payload of the integer or float, which halves the memory of numeric arrays. A boxed part stores a full 16-byte value per slot.
+The first four kinds are unboxed. They store one 64-bit word per slot, the payload of the integer, float, or string, which halves the memory of numeric arrays and of lists of strings. A boxed part stores a full 16-byte value per slot.
 
 Nil is the word `0x7FF4000000000000` in an unboxed part. As a float it is a signaling NaN, which no arithmetic produces. As an integer it is a large positive number that programs rarely store. Storing a number with exactly these bits makes the part boxed, so every integer and every float bit pattern survives a round trip through a table.
 
-A load from an unboxed part compares the word with the nil word and otherwise rebuilds the value from the word and the kind. The integer codes of the `int` and `float` kinds equal the value tags they hold, so the rebuild is a single store of the word and the tag.
+The payload of a string is its address, which never equals the nil word. A load from an unboxed part compares the word with the nil word and otherwise rebuilds the value from the word and the kind. The integer codes of the unboxed kinds equal the value tags they hold, so the rebuild is a single store of the word and the tag.
 
 ### Transitions
 
@@ -32,6 +33,7 @@ A new array part starts as `none`. A store follows these rules.
 - Storing nil into an unboxed part writes the nil word and keeps the kind.
 - Storing an integer into a `none` or `int` part makes or keeps it `int`.
 - Storing a float into a `none` or `float` part makes or keeps it `float`.
+- Storing a string into a `none` or `string` part makes or keeps it `string`.
 - Every other store makes the part `boxed` first.
 
 So an integer stored into a `float` part, or a float stored into an `int` part, boxes the part. This keeps the integer and float subtypes apart, which `math.type` and the formatting of numbers can observe. A part never narrows back to an unboxed kind, even if a program later stores only numbers into it again. A rehash keeps the kind of the part, and when a hash entry with an integer key moves into the array part, the rehash computes the kind that admits every entry before it allocates the new part. An array part of length zero keeps its kind as well, so a table that once held strings in its array part starts boxed when its array part grows again.
@@ -54,9 +56,11 @@ A table created with known sizes, as every constructor and `table.create` create
 
 ## Barriers and the collector
 
-Integers and floats are not collectable, so a store into an unboxed part never runs the write barrier. Boxing a part copies only numbers and nil, so the conversion needs no barrier either. The store that caused it then runs the usual table barrier for its value. A table that is black or old when its part boxes is therefore handled exactly like any other table that receives a collectable value.
+Integers and floats are not collectable, so a store of a number into an unboxed part never runs the write barrier. A store into a `string` part runs the usual table barrier for its string, in the interpreter and in both tiers of native code, which test the tag of the stored value after every unboxed store. Boxing a part copies values that the table already holds, so the conversion needs no barrier. The store that caused it then runs the usual table barrier for its value. A table that is black or old when its part boxes is therefore handled exactly like any other table that receives a collectable value.
 
-The marker traces only boxed array parts. An unboxed part adds nothing to the mark work, and a large numeric array no longer makes the marker read every slot. Weak tables never clear numbers, so unboxed parts of weak tables need no clearing either. The forward barrier for large tables counts the slots of the array part whatever its kind.
+The marker traces only boxed array parts. A numeric part adds nothing to the mark work, and a large numeric array never makes the marker read every slot. A `string` part has every string it holds marked, and since strings reference nothing, none of them goes on the gray stack. Weak tables never clear numbers or strings, so unboxed parts of weak tables need no clearing either.
+
+Lists of strings are common: the lines of a file, the fields of a CSV row, the words of a text, the pieces a program joins with `table.concat`. In the cross-language suite the `string` kind took the peak resident memory of `wordfreq`, whose list of 21.6 million words has an array part of 33.5 million slots, from 588 to 332 MB, and of `csv`, whose two million rows each hold six strings, from 917 to 749 MB. Times stayed within the noise of the machine. The forward barrier for large tables counts the slots of the array part whatever its kind.
 
 The parts that trail a table in its cell belong to the cell. Sweeping a dead table frees only the parts that live in the backing allocator, and the size of a table object includes its trailing storage.
 

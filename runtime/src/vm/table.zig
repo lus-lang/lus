@@ -123,10 +123,15 @@ pub inline fn arrayIsNil(t: *const Table, idx: usize) bool {
     return t.array_ptr[idx] == hole;
 }
 
+/// True for the tags of the values an unboxed array part can hold.
+inline fn unboxable(tag: value.Tag) bool {
+    return tag == .integer or tag == .float or tag == .string;
+}
+
 /// The kind an array part of kind `k` needs to also hold `v`.
 pub inline fn joinKind(k: ArrayKind, v: Value) ArrayKind {
     if (k == .boxed or v.tag == .nil) return k;
-    if ((v.tag == .integer or v.tag == .float) and v.payload != hole) {
+    if (unboxable(v.tag) and v.payload != hole) {
         const vk: ArrayKind = @fromBackingInt(@intCast(@backingInt(v.tag)));
         if (k == .none or k == vk) return vk;
     }
@@ -155,7 +160,7 @@ pub inline fn arrayStoreAt(t: *Table, idx: usize, v: *const Value) bool {
         return true;
     }
     // What `joinKind` decides, on the two words of the value.
-    if ((tag != .integer and tag != .float) or w == hole) return false;
+    if (!unboxable(tag) or w == hole) return false;
     const vk: ArrayKind = @fromBackingInt(@intCast(@backingInt(tag)));
     if (t.kind != .none and t.kind != vk) return false;
     t.kind = vk;
@@ -548,8 +553,9 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 
 /// `resize` for a store of `val` under `key` that follows it. When the key
 /// lands in the new array part, the part takes a kind that admits the
-/// value, so a new array part that receives a string is made boxed
-/// instead of made unboxed and boxed again.
+/// value, so a new array part that receives a table is made boxed
+/// instead of made unboxed and boxed again, and one that receives a
+/// string takes the `string` kind.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     const hsize = hashSizeFor(hcount);
     const old_kind = t.kind;
@@ -782,6 +788,10 @@ pub const layout = struct {
         assert(@backingInt(ArrayKind.none) == @backingInt(value.Tag.nil));
         assert(@backingInt(ArrayKind.int) == @backingInt(value.Tag.integer));
         assert(@backingInt(ArrayKind.float) == @backingInt(value.Tag.float));
+        assert(@backingInt(ArrayKind.string) == @backingInt(value.Tag.string));
+        // Native code tells a `string` part from a numeric one by the
+        // order of their kinds.
+        assert(@backingInt(ArrayKind.int) < @backingInt(ArrayKind.string) and @backingInt(ArrayKind.float) < @backingInt(ArrayKind.string));
         assert(@FieldType(Table, "tm_absent") == u16);
         assert(@FieldType(Table, "hash_used") == u32);
         assert(@FieldType(Table, "asize") == usize);

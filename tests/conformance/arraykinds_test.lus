@@ -474,3 +474,84 @@ local function many_small_tables_survive_collections_test()
         assert(e[1] == i and e[2] == i + 0.5 and e.name == "n" .. i and e[3][1] == i)
     end
 end
+
+-- ============================================================
+-- Strings
+-- ============================================================
+
+local function a_list_of_strings_keeps_its_strings_through_collections_test()
+    local t = {}
+    for i = 1, 3000 do t[i] = "s" .. i .. string.rep("x", i % 50) end
+    collectgarbage()
+    for i = 1, 3000 do
+        local s = "s" .. i .. string.rep("x", i % 50)
+        assert(t[i] == s, `index {i}`)
+    end
+    assert(#t == 3000)
+    assert(table.concat(t, ",", 1, 3):sub(1, 2) == "s1")
+end
+
+local function strings_mixed_with_other_values_keep_every_value_test()
+    local t = {"a", "b", "c"}
+    t[2] = 2
+    t[4] = "d"
+    t[5] = {5}
+    collectgarbage()
+    assert(t[1] == "a" and t[2] == 2 and math.type(t[2]) == "integer" and t[3] == "c" and t[4] == "d" and t[5][1] == 5)
+    local u = {1, 2, 3}
+    u[2] = "two"
+    assert(u[1] == 1 and u[2] == "two" and u[3] == 3)
+end
+
+local function holes_and_nil_stores_in_a_list_of_strings_test()
+    local t = {"a", "b", "c", "d"}
+    t[2] = nil
+    t[4] = nil
+    collectgarbage()
+    assert(t[1] == "a" and t[2] == nil and t[3] == "c" and t[4] == nil)
+    t[2] = "B"
+    assert(t[2] == "B")
+    local n = 0
+    for k, v in pairs(t) do
+        n = n + 1
+        assert(math.type(k) == "integer" and type(v) == "string")
+    end
+    assert(n == 3)
+end
+
+local function strings_stored_while_the_collector_runs_survive_test()
+    local t = {"start"}
+    for round = 1, 20 do
+        for i = 1, 500 do
+            t[i] = "r" .. round .. ":" .. i
+            local junk = {i, tostring(i)}
+        end
+        collectgarbage("step")
+    end
+    collectgarbage()
+    for i = 1, 500 do assert(t[i] == "r20:" .. i) end
+end
+
+local function library_functions_on_lists_of_strings_test()
+    local t = {"pear", "apple", "fig", "kiwi"}
+    table.sort(t)
+    check_seq(t, {"apple", "fig", "kiwi", "pear"}, 4)
+    table.insert(t, 1, "date")
+    table.insert(t, "plum")
+    assert(table.remove(t, 2) == "apple")
+    check_seq(t, {"date", "fig", "kiwi", "pear", "plum"}, 5)
+    local m = table.move(t, 2, 4, 1, {})
+    check_seq(m, {"fig", "kiwi", "pear"}, 3)
+    local a, b, c = table.unpack(t, 1, 3)
+    assert(a == "date" and b == "fig" and c == "kiwi")
+    assert(table.concat(t, " ") == "date fig kiwi pear plum")
+    local nums = {"1", "2", "3.5"}
+    assert(table.sum(nums) == 6.5)
+end
+
+local function weak_tables_keep_strings_in_their_array_parts_test()
+    local w = setmetatable({}, {__mode = "v"})
+    for i = 1, 100 do w[i] = "weak" .. i end
+    collectgarbage()
+    for i = 1, 100 do assert(w[i] == "weak" .. i) end
+end
