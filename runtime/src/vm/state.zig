@@ -156,11 +156,11 @@ const tag_count = @as(usize, @backingInt(Tag.upvalue)) + 1;
 // String interning set
 
 pub const StringSet = struct {
-    /// Open addressing with linear probing, kept at most a quarter full
-    /// so that most lookups end at their first slot. Each slot packs the
-    /// string pointer with the top 16 bits of its hash, so a probe that
-    /// passes other strings compares hashes without loading those
-    /// strings.
+    /// Open addressing with linear probing, kept at most half full. A
+    /// lookup reads two neighboring slots at once, so most lookups end at
+    /// their first pair. Each slot packs the string pointer with the top
+    /// 16 bits of its hash, so a probe that passes other strings compares
+    /// hashes without loading those strings.
     slots: []u64 = &.{},
     count: usize = 0,
 
@@ -226,7 +226,7 @@ pub const StringSet = struct {
     }
 
     fn insert(s: *StringSet, gpa: Allocator, str: *String) !void {
-        if ((s.count + 1) * 4 > s.slots.len) try s.resize(gpa, @max(256, s.slots.len * 2));
+        if ((s.count + 1) * 2 > s.slots.len) try s.resize(gpa, @max(256, s.slots.len * 2));
         s.place(str);
         s.count += 1;
     }
@@ -246,11 +246,11 @@ pub const StringSet = struct {
         if (old.len > 0) gpa.free(old);
     }
 
-    /// Halves the set while it is less than a sixteenth full, after a
+    /// Halves the set while it is less than an eighth full, after a
     /// collection freed many strings.
     pub fn shrink(s: *StringSet, gpa: Allocator) void {
         var n = s.slots.len;
-        while (n > 256 and s.count * 16 < n) n /= 2;
+        while (n > 256 and s.count * 8 < n) n /= 2;
         if (n == s.slots.len) return;
         s.resize(gpa, n) catch {};
     }
