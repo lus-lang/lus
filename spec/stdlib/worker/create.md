@@ -13,7 +13,7 @@ vararg: true
 returns: worker
 ---
 
-Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. Requires `load` and authorized `fs:read` pledges for the script path.
+Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. The worker runs its script and then the coroutines that the script detached, as `lus` does for a program, and it ends when the last of them has ended. Requires `load` and authorized `fs:read` pledges for the script path.
 
 ```lus
 local w = worker.create("worker.lus", "hello", 42)

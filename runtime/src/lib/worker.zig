@@ -19,6 +19,13 @@
 //! its domain, the per-state record of the workers it created. Nothing
 //! polls: every wait sleeps on a condition variable.
 //!
+//! In a state with detached coroutines, `worker.receive` and
+//! `worker.peek` are suspension points (`spec/design/coroutines.md`).
+//! They wait through the scheduler of the state, and whoever changes a
+//! mailbox also wakes that scheduler from its own thread
+//! (`sched.notify`), so the other coroutines run while one waits for a
+//! message.
+//!
 //! When the creating state closes, it marks every worker as shutting down,
 //! wakes those parked in `worker.peek`, and joins all threads. A woken
 //! `worker.peek` raises an error that no `catch` intercepts, so the worker
@@ -33,6 +40,7 @@ const ops = @import("../vm/ops.zig");
 const gc = @import("../vm/gc.zig");
 const numeric = @import("../vm/numeric.zig");
 const pledge = @import("../vm/pledge.zig");
+const sched = @import("../vm/sched.zig");
 const blob = @import("../vm/blob.zig");
 const api = @import("../api.zig");
 const aux = @import("auxlib.zig");
@@ -301,6 +309,9 @@ const Worker = struct {
     in_cond: Io.Condition = .init,
     inbox: Queue = .{},
     shutdown: bool = false,
+    /// The state of the worker, once its `worker.peek` waits through the
+    /// scheduler. Whoever changes the inbox wakes that scheduler.
+    waker: ?*Global = null,
     /// The domain of the workers this worker created, so a shutdown can
     /// wake it while it waits in `worker.receive`.
     child_domain: ?*Domain = null,
@@ -356,12 +367,29 @@ const Domain = struct {
     ev_mutex: Io.Mutex = .init,
     ev_cond: Io.Condition = .init,
     epoch: u64 = 0,
+    /// The state that owns the domain, once its `worker.receive` waits
+    /// through the scheduler. Guarded by `ev_mutex`.
+    waker: ?*Global = null,
 
     fn notify(d: *Domain) void {
         d.ev_mutex.lockUncancelable(d.io);
         d.epoch +%= 1;
         d.ev_cond.broadcast(d.io);
+        if (d.waker) |g| sched.notify(g);
         d.ev_mutex.unlock(d.io);
+    }
+
+    /// Makes every later event of the domain wake the scheduler of `g`,
+    /// the state that owns the domain. Returns false when the system
+    /// gives the scheduler no wake source, and waits then sleep on the
+    /// condition.
+    fn wakes(d: *Domain, g: *Global) bool {
+        if (d.waker != null) return true;
+        if (!sched.enableNotify(g)) return false;
+        d.ev_mutex.lockUncancelable(d.io);
+        d.waker = g;
+        d.ev_mutex.unlock(d.io);
+        return true;
     }
 
     fn currentEpoch(d: *Domain) u64 {
@@ -437,6 +465,7 @@ pub fn closeState(g: *Global) void {
         w.in_mutex.lockUncancelable(io);
         w.shutdown = true;
         w.in_cond.broadcast(io);
+        if (w.waker) |wg| sched.notify(wg);
         if (w.child_domain) |cd| cd.notify();
         w.in_mutex.unlock(io);
     }
@@ -496,6 +525,10 @@ fn run(w: *Worker, msg: *?[]u8) void {
     const l = api.newStateSeeded(gpa, io, w.seed) catch return fail(msg, gpa, "failed to create worker state");
     const g = l.g;
     defer {
+        // The inbox outlives the state, so it forgets the scheduler.
+        w.in_mutex.lockUncancelable(io);
+        w.waker = null;
+        w.in_mutex.unlock(io);
         out.deinit(g);
         api.close(l);
     }
@@ -528,6 +561,27 @@ fn run(w: *Worker, msg: *?[]u8) void {
     }
     if (!api.pcall(l, @intCast(w.args.len), 0)) return fail(msg, gpa, api.errorMessage(l, l.stack[l.top - 1]));
     l.top = base;
+    // The coroutines that the body detached run to their end, as they do
+    // after the main chunk of a program. The error of one that failed
+    // with nothing left to collect it is the error of the worker.
+    // A shutdown ends the wait, and the state then closes the coroutines
+    // that remain. It reaches a scheduler that waits for a socket through
+    // the wake source of the scheduler.
+    if (sched.active(g) and sched.enableNotify(g)) {
+        w.in_mutex.lockUncancelable(io);
+        w.waker = g;
+        w.in_mutex.unlock(io);
+    }
+    sched.drainWhile(l, w, running) catch return fail(msg, gpa, api.errorMessage(l, l.err));
+}
+
+/// True until the creator of the worker `ctx` shuts it down.
+fn running(ctx: *anyopaque) bool {
+    const w: *Worker = @ptrCast(@alignCast(ctx));
+    const io = w.domain.io;
+    w.in_mutex.lockUncancelable(io);
+    defer w.in_mutex.unlock(io);
+    return !w.shutdown;
 }
 
 /// Adds the worker-side functions to the `worker` table of a worker state.
@@ -554,17 +608,43 @@ fn message(l: *Thread) Error!u32 {
     return 0;
 }
 
-/// worker.peek(): blocks until the creator sends a value and returns it.
+/// True when a wait for the inbox of `w` goes through the scheduler of
+/// its state `g`: detached coroutines exist, and the system gives the
+/// scheduler a wake source. Every later change of the inbox then wakes
+/// that scheduler.
+fn inboxWakes(w: *Worker, g: *Global) bool {
+    if (!sched.active(g)) return false;
+    if (w.waker != null) return true;
+    if (!sched.enableNotify(g)) return false;
+    w.in_mutex.lockUncancelable(g.io);
+    w.waker = g;
+    w.in_mutex.unlock(g.io);
+    return true;
+}
+
+/// worker.peek(): waits until the creator sends a value and returns it.
+/// The detached coroutines of the worker run while it waits.
 fn peek(l: *Thread) Error!u32 {
     const w = selfOf(l.g) orelse return l.raiseFmt("worker.peek called outside worker context", .{});
     const io = l.g.io;
-    w.in_mutex.lockUncancelable(io);
-    while (w.inbox.head == null and !w.shutdown) w.in_cond.waitUncancelable(io, &w.in_mutex);
-    const p = w.inbox.pop();
-    w.in_mutex.unlock(io);
-    const pk = p orelse return halt(l, "worker.peek");
-    defer pk.destroy(l.g.parent_gpa);
-    return aux.ret(l, try decode(l, pk));
+    while (true) {
+        const scheduled = inboxWakes(w, l.g);
+        w.in_mutex.lockUncancelable(io);
+        if (!scheduled) {
+            while (w.inbox.head == null and !w.shutdown) w.in_cond.waitUncancelable(io, &w.in_mutex);
+        }
+        const p = w.inbox.pop();
+        const stop = w.shutdown;
+        w.in_mutex.unlock(io);
+        if (p) |pk| {
+            defer pk.destroy(l.g.parent_gpa);
+            return aux.ret(l, try decode(l, pk));
+        }
+        if (stop) return halt(l, "worker.peek");
+        // The inbox was empty a moment ago, so the next value or the
+        // shutdown wakes the scheduler.
+        try sched.waitNotify(l);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -694,6 +774,7 @@ fn send(l: *Thread) Error!u32 {
     w.in_mutex.lockUncancelable(l.g.io);
     w.inbox.push(p);
     w.in_cond.signal(l.g.io);
+    if (w.waker) |wg| sched.notify(wg);
     w.in_mutex.unlock(l.g.io);
     return 0;
 }
@@ -701,7 +782,8 @@ fn send(l: *Thread) Error!u32 {
 /// worker.receive(w1, ...): waits until one of the workers has a message
 /// or all of them have finished. Returns one value per worker, the
 /// message in the ready worker's position and nil elsewhere. An error
-/// in a worker is raised here.
+/// in a worker is raised here. The detached coroutines of the state run
+/// while it waits.
 fn receive(l: *Thread) Error!u32 {
     const n = l.argCount();
     if (n == 0) return l.raiseFmt("expected at least one worker", .{});
@@ -711,6 +793,9 @@ fn receive(l: *Thread) Error!u32 {
     const io = l.g.io;
     const self = selfOf(l.g);
     while (true) {
+        // The outboxes are read after this, so an event that follows the
+        // reading wakes the scheduler.
+        const scheduled = sched.active(l.g) and d.wakes(l.g);
         const seen = d.currentEpoch();
         var all_dead = true;
         i = 1;
@@ -745,7 +830,7 @@ fn receive(l: *Thread) Error!u32 {
             return n;
         }
         if (self) |w| try checkShutdown(l, w, "worker.receive");
-        d.waitPast(seen);
+        if (scheduled) try sched.waitNotify(l) else d.waitPast(seen);
         if (self) |w| try checkShutdown(l, w, "worker.receive");
     }
 }

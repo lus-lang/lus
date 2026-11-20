@@ -43,7 +43,13 @@ On kqueue and epoll a socket is registered once, edge triggered, and stays regis
 
 A TCP socket switches to non-blocking mode the first time an operation on it must not block. A send with `MSG_DONTWAIT` alone still blocks on macOS once it has written a part of its data, and a single mode for both directions keeps the paths the same on every system. While no detached coroutine exists and no timeout is set, an operation blocks in its system call exactly as before, so programs that use no coroutines make the same system calls they always made.
 
-`sched.enableNotify` gives other threads a way to wake a scheduler that waits in its poller: a user event of kqueue, an eventfd of epoll, or a pipe. Nothing uses it yet. It is there for the worker inbox, which wakes the loop from another thread.
+`sched.enableNotify` gives other threads a way to wake a scheduler that waits in its poller: a user event of kqueue, an eventfd of epoll, a pipe, or an event object on Windows. `sched.notify` sets a flag and triggers that source from any thread, and calls that arrive before the scheduler looks count as one. A native that waits for another thread calls `sched.waitNotify`. Every such waiter runs again after a `notify`, looks at what it waits for, and waits again when that is not there yet. A native reads its condition in the thread of the state before it waits, and the other thread changes the condition before it calls `notify`, so a change always ends the wait.
+
+## Workers
+
+`worker.receive` and `worker.peek` are suspension points (`runtime/src/lib/worker.zig`). In a state with detached coroutines they wait with `sched.waitNotify`. The domain of a creator and the inbox of a worker each remember the state whose scheduler they wake, from the first such wait on, and whoever changes a mailbox calls `sched.notify` for that state under the lock of the mailbox. In a state without detached coroutines both functions sleep on their condition variable, so a program that uses workers alone makes the system calls it always made. The same holds on a system that gives the scheduler no wake source.
+
+A worker runs the coroutines that its body detached after the body has returned, as `lus` does after the main chunk, and it ends when the last of them has ended. The error of one that failed with nothing left to collect it becomes the error of the worker, which the next `worker.receive` of the creator raises. When the creator closes, it shuts its workers down and wakes their schedulers. A worker that still runs coroutines then stops waiting and closes them with its state.
 
 ## The collector
 
@@ -116,4 +122,4 @@ Two findings shaped the code.
 
 ## Later phases
 
-The scheduler is built for more suspension points than the sockets it has now: `worker.receive` and the worker inbox through `sched.enableNotify`, `network.fetch` and TLS, name resolution, and SQLite on a thread pool. `network.serve` will gain a `workers` option that shares one port among several states. The Windows poller sends `IOCTL_AFD_POLL` to the AFD driver. The Zig standard library opens each socket on Windows as an AFD endpoint that Winsock never registers, and the driver polls those handles directly. The same request bounds the timeout of a socket when no coroutine is detached. It builds, and it has yet to run on a Windows machine. When the driver refuses a request, the operation blocks in its system call.
+The scheduler is built for more suspension points than the sockets and the worker mailboxes it has now: `network.fetch` and TLS, name resolution, and SQLite on a thread pool. `network.serve` will gain a `workers` option that shares one port among several states. The Windows poller sends `IOCTL_AFD_POLL` to the AFD driver. The Zig standard library opens each socket on Windows as an AFD endpoint that Winsock never registers, and the driver polls those handles directly. The same request bounds the timeout of a socket when no coroutine is detached. It builds, and it has yet to run on a Windows machine. When the driver refuses a request, the operation blocks in its system call.

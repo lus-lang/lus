@@ -7508,7 +7508,7 @@ Emits a warning by concatenating all arguments (which must be strings) and sendi
   ["worker.create"] = {
     children = {},
     description = [[
-Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. Requires `load` and authorized `fs:read` pledges for the script path.
+Spawns a new worker running the script at `path`. Optional varargs are serialized and become the script's initial `...` values. Returns a worker handle. The worker runs its script and then the coroutines that the script detached, as `lus` does for a program, and it ends when the last of them has ended. Requires `load` and authorized `fs:read` pledges for the script path.
 
 ```lus
 local w = worker.create("worker.lus", "hello", 42)
@@ -7566,7 +7566,9 @@ Available inside a worker state. Serializes and appends `value` to the worker's 
   ["worker.peek"] = {
     children = {},
     description = [[
-Available inside a worker state. Blocks until it can deserialize and return the next inbox value sent by the parent with `worker.send`.]],
+Available inside a worker state. Blocks until it can deserialize and return the next inbox value sent by the parent with `worker.send`.
+
+`peek` is a suspension point. Inside a detached coroutine it suspends the coroutine while it waits, and anywhere else the detached coroutines of the worker run while it waits (see `coroutine.detach`).]],
     kind = "function",
     module = "worker",
     name = "worker.peek",
@@ -7587,6 +7589,10 @@ Available inside a worker state. Blocks until it can deserialize and return the 
     children = {},
     description = [[
 Performs a blocking selection over one or more workers. It waits until at least one worker has a message or reaches a terminal state, then returns one aligned value per argument. A ready message is deserialized, while a worker without a message contributes `nil`. A worker script error propagates from this call.
+
+A worker ends once its script has returned and the coroutines that the script detached have ended (see `coroutine.detach`). The error of a detached coroutine that failed with nothing left to collect it is the error of the worker, and it propagates from this call like a script error.
+
+`receive` is a suspension point. Inside a detached coroutine it suspends the coroutine while it waits, and anywhere else the detached coroutines of the state run while it waits.
 
 ```lus nocheck
 local msg = worker.receive(w)
