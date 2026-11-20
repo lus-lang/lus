@@ -6,7 +6,17 @@
 pledge("load", "fs", "exec", "env")
 
 local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local windows = package.config:sub(1, 1) == "\\"
 local script_number = 0
+
+-- cmd.exe quotes with double quotes alone, and a POSIX shell takes any
+-- text between single quotes as it is.
+local function shell_quote(value)
+    if windows then
+        return '"' .. value .. '"'
+    end
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
 
 local function run_script(source)
     script_number = script_number + 1
@@ -14,7 +24,7 @@ local function run_script(source)
     local file = assert(io.open(path, "wb"))
     assert(file:write(source))
     assert(file:close())
-    local handle = assert(io.popen(`'$(lus_bin)' '$(path)' 2>&1`))
+    local handle = assert(io.popen(`$(shell_quote(lus_bin)) $(shell_quote(path)) 2>&1`))
     local output = handle:read("a")
     local done = handle:close()
     catch fs.remove(path)
