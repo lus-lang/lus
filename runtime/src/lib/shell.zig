@@ -57,7 +57,8 @@ pub fn wait(io: std.Io, child: *std.process.Child) std.process.Child.WaitError!S
     if (full) |code| return .{ .exited = code };
     return switch (term) {
         .exited => |code| .{ .exited = code },
-        .signal, .stopped => |sig| .{ .signal = @intCast(@backingInt(sig)) },
+        // WASI has no signals, so its signal payload is void.
+        .signal, .stopped => |sig| .{ .signal = if (@TypeOf(sig) == void) 0 else @intCast(@backingInt(sig)) },
         .unknown => |code| .{ .exited = code },
     };
 }
