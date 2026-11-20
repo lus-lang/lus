@@ -37,7 +37,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "rawset", .func = rawset },
     .{ .name = "select", .func = select },
     .{ .name = "setmetatable", .func = setmetatable, .leaf = setmetatableLeaf },
-    .{ .name = "tonumber", .func = tonumber },
+    .{ .name = "tonumber", .func = tonumber, .leaf = tonumberLeaf },
     .{ .name = "tostring", .func = tostring },
     .{ .name = "type", .func = @"type" },
     .{ .name = "warn", .func = warn },
@@ -90,6 +90,15 @@ fn @"type"(l: *Thread) Error!u32 {
 fn tostring(l: *Thread) Error!u32 {
     const v = try aux.checkAny(l, 1);
     return aux.ret(l, Value.obj(.string, try ops.toString(l, v)));
+}
+
+/// `tonumber` of one number or string, without a frame.
+fn tonumberLeaf(_: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    if (nargs != 1) return state.leaf_miss;
+    const v = args[0];
+    if (v.tag == .integer or v.tag == .float) return v;
+    if (v.tag != .string) return state.leaf_miss;
+    return ops.toNumberCoerce(v) orelse .nil;
 }
 
 fn tonumber(l: *Thread) Error!u32 {

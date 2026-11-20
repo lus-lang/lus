@@ -32,7 +32,7 @@ const Table = object.Table;
 const Allocator = std.mem.Allocator;
 
 pub const funcs = [_]aux.Reg{
-    .{ .name = "byte", .func = byte },
+    .{ .name = "byte", .func = byte, .leaf = byteLeaf },
     .{ .name = "char", .func = char },
     .{ .name = "find", .func = find },
     .{ .name = "format", .func = format },
@@ -40,7 +40,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "gsub", .func = gsub },
     .{ .name = "join", .func = join },
     .{ .name = "len", .func = len },
-    .{ .name = "lower", .func = lower },
+    .{ .name = "lower", .func = lower, .leaf = lowerLeaf },
     .{ .name = "ltrim", .func = ltrim },
     .{ .name = "match", .func = match },
     .{ .name = "rep", .func = rep },
@@ -50,7 +50,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "split", .func = split },
     .{ .name = "sub", .func = sub, .leaf = subLeaf },
     .{ .name = "trim", .func = trim },
-    .{ .name = "upper", .func = upper },
+    .{ .name = "upper", .func = upper, .leaf = upperLeaf },
 };
 
 /// Creates the `string` table, publishes it as a global, and installs the
@@ -296,12 +296,8 @@ inline fn subRange(l: *Thread, s: *String, start: usize, end: usize) Allocator.E
 /// Maps ASCII letters with `f` and leaves every other byte unchanged.
 /// Bytes of multi-byte characters are never ASCII letters, so the
 /// character count and ASCII flag carry over.
-fn mapAscii(l: *Thread, comptime first: u8) Error!u32 {
-    const s = try aux.checkString(l, 1);
-    const src = s.bytes();
-    var sc: Scratch = .{};
-    defer sc.deinit(l);
-    const buf = try sc.get(l, src.len);
+/// Maps the case of the ASCII letters of `src` into `buf`.
+fn mapCase(comptime first: u8, src: []const u8, buf: []u8) void {
     // Flipping bit 0x20 maps between the cases. A letter of the case
     // being mapped is one of the 26 bytes from `first`, which a single
     // unsigned comparison tests.
@@ -317,8 +313,56 @@ fn mapAscii(l: *Thread, comptime first: u8) Error!u32 {
         const c = src[i];
         buf[i] = if (c -% first < 26) c ^ 0x20 else c;
     }
+}
+
+fn mapAscii(l: *Thread, comptime first: u8) Error!u32 {
+    const s = try aux.checkString(l, 1);
+    const src = s.bytes();
+    var sc: Scratch = .{};
+    defer sc.deinit(l);
+    const buf = try sc.get(l, src.len);
+    mapCase(first, src, buf);
     const r = state.newStringKnown(l.g, buf, s.flags.ascii, s.chars) catch return l.raiseMem();
     return aux.ret(l, Value.obj(.string, r));
+}
+
+/// `upper` or `lower` of a string of up to `stack_len` bytes, without a
+/// frame.
+fn mapLeaf(comptime first: u8, l: *Thread, args: [*]const Value, nargs: u32) Value {
+    if (nargs != 1 or args[0].tag != .string) return state.leaf_miss;
+    const s = args[0].as(String);
+    const src = s.bytes();
+    if (src.len > stack_len) return state.leaf_miss;
+    var buf: [stack_len]u8 = undefined;
+    mapCase(first, src, buf[0..src.len]);
+    const r = state.newStringKnown(l.g, buf[0..src.len], s.flags.ascii, s.chars) catch return state.leaf_miss;
+    return Value.obj(.string, r);
+}
+
+fn upperLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    return mapLeaf('a', l, args, nargs);
+}
+
+fn lowerLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    return mapLeaf('A', l, args, nargs);
+}
+
+/// `string.byte(s, i)` for one byte of an ASCII string, without a frame.
+/// A position outside the string returns no value, which the full native
+/// does.
+fn byteLeaf(_: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
+    if (nargs < 1 or nargs > 2 or args[0].tag != .string) return state.leaf_miss;
+    const s = args[0].as(String);
+    if (!s.flags.ascii) return state.leaf_miss;
+    var i: i64 = 1;
+    if (nargs == 2) {
+        if (args[1].tag != .integer) return state.leaf_miss;
+        i = args[1].asInt();
+    }
+    const n: i64 = s.len;
+    if (i < 0) i += n + 1;
+    if (i < 1 or i > n) return state.leaf_miss;
+    return Value.int(s.bytes()[@intCast(i - 1)]);
 }
 
 fn upper(l: *Thread) Error!u32 {
