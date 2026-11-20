@@ -669,11 +669,11 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .getindex => {
             const a = opc.a(ins);
-            const t = c.bp[opc.b(ins)];
+            const t = &c.bp[opc.b(ins)];
             const i: i64 = opc.c(ins);
-            if (fast.getIndex(&t, i, &c.bp[a])) continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            if (fast.getIndex(t, i, &c.bp[a])) continue :sw try fetch(l, &c, &pc, &ins, hooked);
             c.fr.pc = pc;
-            const v = try metaIndex(l, t, Value.int(i), a);
+            const v = try metaIndex(l, t.*, Value.int(i), a);
             c.refresh(l, mode);
             c.bp[a] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -789,7 +789,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .addi => {
             const a = opc.a(ins);
-            const x = c.bp[opc.b(ins)];
+            const x = &c.bp[opc.b(ins)];
             const imm = opc.sc(ins);
             if (x.tag == .integer) {
                 c.bp[a] = Value.int(x.asInt() +% imm);
@@ -798,7 +798,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             } else {
                 @branchHint(.cold);
                 c.fr.pc = pc;
-                const r = try metaArith(l, .add, x, Value.int(imm), a);
+                const r = try metaArith(l, .add, x.*, Value.int(imm), a);
                 c.refresh(l, mode);
                 c.bp[a] = r;
             }
@@ -807,13 +807,13 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
 
         .unm => {
             const a = opc.a(ins);
-            const x = c.bp[opc.b(ins)];
+            const x = &c.bp[opc.b(ins)];
             switch (x.tag) {
                 .integer => c.bp[a] = Value.int(0 -% x.asInt()),
                 .float => c.bp[a] = Value.float(-x.asFloat()),
                 else => {
                     c.fr.pc = pc;
-                    const r = try metaArith(l, .unm, x, x, a);
+                    const r = try metaArith(l, .unm, x.*, x.*, a);
                     c.refresh(l, mode);
                     c.bp[a] = r;
                 },
@@ -822,12 +822,12 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .bnot => {
             const a = opc.a(ins);
-            const x = c.bp[opc.b(ins)];
+            const x = &c.bp[opc.b(ins)];
             if (x.tag == .integer) {
                 c.bp[a] = Value.int(~x.asInt());
             } else {
                 c.fr.pc = pc;
-                const r = try metaArith(l, .bnot, x, x, a);
+                const r = try metaArith(l, .bnot, x.*, x.*, a);
                 c.refresh(l, mode);
                 c.bp[a] = r;
             }
@@ -839,10 +839,10 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .len => {
             const a = opc.a(ins);
-            const x = c.bp[opc.b(ins)];
-            if (!fast.length(&x, &c.bp[a])) {
+            const x = &c.bp[opc.b(ins)];
+            if (!fast.length(x, &c.bp[a])) {
                 c.fr.pc = pc;
-                const r = try metaLength(l, x, a);
+                const r = try metaLength(l, x.*, a);
                 c.refresh(l, mode);
                 c.bp[a] = r;
             }

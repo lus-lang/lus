@@ -97,16 +97,16 @@ fn sliceMetamethod(l: *Thread, obj: Value) Value {
 
 /// Characters [ci, cj) of `s` as a new string.
 pub fn substring(l: *Thread, s: *String, ci: usize, cj: usize) Error!Value {
-    const b0 = s.byteOffset(l.g.gpa, ci);
-    const b1 = s.byteOffset(l.g.gpa, cj);
+    const b0 = s.byteOffset(&l.g.gpa, ci);
+    const b1 = s.byteOffset(&l.g.gpa, cj);
     const str = state.newStringKnown(l.g, s.bytes()[b0..b1], s.flags.ascii or (cj - ci == b1 - b0), cj - ci) catch return l.raiseMem();
     return Value.obj(.string, str);
 }
 
 fn reversedSubstring(l: *Thread, s: *String, ci: usize, cj: usize) Error!Value {
     const gpa = l.g.gpa;
-    const b0 = s.byteOffset(gpa, ci);
-    const b1 = s.byteOffset(gpa, cj);
+    const b0 = s.byteOffset(&l.g.gpa, ci);
+    const b1 = s.byteOffset(&l.g.gpa, cj);
     const src = s.bytes()[b0..b1];
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);

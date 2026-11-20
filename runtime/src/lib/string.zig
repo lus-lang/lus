@@ -102,7 +102,7 @@ fn substringKnown(l: *Thread, s: *String, from: usize, to: usize, chars: usize) 
 /// Byte offset of the character at zero-based index `ci` of `s`, where
 /// `ci` may equal the character count (`String.byteOffset`).
 inline fn charOffset(l: *Thread, s: *String, ci: usize) usize {
-    return s.byteOffset(l.g.gpa, ci);
+    return s.byteOffset(&l.g.gpa, ci);
 }
 
 /// Translates a relative initial position (negative counts back from the

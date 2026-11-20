@@ -1044,7 +1044,7 @@ pub const rt = struct {
         if (pos > end or pos < 1 or pos > n) return -1;
         const src = s.bytes();
         if (s.flags.ascii) return src[@intCast(pos - 1)];
-        const off = s.byteOffset(l.g.gpa, @intCast(pos - 1));
+        const off = s.byteOffset(&l.g.gpa, @intCast(pos - 1));
         return @import("../../vm/wtf8.zig").decodeValid(src, off).cp;
     }
 };

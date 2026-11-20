@@ -80,7 +80,7 @@ pub const String = struct {
     /// the remaining characters with the vectorized `wtf8.advance`. The
     /// remembered positions make a scan that moves forward through a
     /// string cost the distance it moves.
-    pub inline fn byteOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
+    pub inline fn byteOffset(s: *String, gpa: *const std.mem.Allocator, ci: usize) usize {
         if (s.flags.ascii or ci == 0) return ci;
         if (ci >= s.chars) return s.len;
         if (s.chars <= crumb_step) return wtf8.advance(s.bytes(), 0, ci);
@@ -156,8 +156,8 @@ pub const String = struct {
 
     /// `byteOffset` on the first indexed access, which builds the
     /// breadcrumbs.
-    noinline fn firstOffset(s: *String, gpa: std.mem.Allocator, ci: usize) usize {
-        s.buildCrumbs(gpa);
+    noinline fn firstOffset(s: *String, gpa: *const std.mem.Allocator, ci: usize) usize {
+        s.buildCrumbs(gpa.*);
         const cr = s.crumbs orelse return wtf8.advance(s.bytes(), 0, ci);
         return s.crumbOffset(cr, ci, 0, 0, 0);
     }

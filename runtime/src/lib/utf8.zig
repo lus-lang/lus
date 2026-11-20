@@ -65,7 +65,7 @@ fn isSurrogate(cp: u21) bool {
 
 /// Code point of the character at zero-based character index `ci`.
 fn cpAt(l: *Thread, s: *String, ci: usize) u21 {
-    const off = s.byteOffset(l.g.gpa, ci);
+    const off = s.byteOffset(&l.g.gpa, ci);
     return wtf8.decodeValid(s.bytes(), off).cp;
 }
 
@@ -83,7 +83,7 @@ fn len(l: *Thread) Error!u32 {
     if (!lax and !s.flags.ascii) {
         // Only lone surrogates can be invalid in a WTF-8 string.
         const b = s.bytes();
-        var off = s.byteOffset(l.g.gpa, @intCast(posi));
+        var off = s.byteOffset(&l.g.gpa, @intCast(posi));
         var ci = posi;
         while (ci <= posj) : (ci += 1) {
             const d = wtf8.decodeValid(b, off);
@@ -113,7 +113,7 @@ fn codepoint(l: *Thread) Error!u32 {
     const count: u32 = @intCast(pose - posi + 1);
     try l.ensure(count);
     const b = s.bytes();
-    var off = s.byteOffset(l.g.gpa, @intCast(posi - 1));
+    var off = s.byteOffset(&l.g.gpa, @intCast(posi - 1));
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const d = wtf8.decodeValid(b, off);

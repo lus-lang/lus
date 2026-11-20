@@ -203,7 +203,10 @@ pub const StringSet = struct {
             const ym = y & ~addr_mask == tag;
             if (xm or ym) {
                 const p = strOf(if (xm) x else y);
-                if (p.hash == h and p.len == b.len and shortEql(p.bytes().ptr, b)) return p;
+                // The slot tag already matched 16 bits of the hash, and
+                // the bytes decide equality, so a hit compares only the
+                // length and the bytes.
+                if (p.len == b.len and shortEql(p.bytes().ptr, b)) return p;
                 // A hash that matches only in its top bits is rare, so the
                 // slots are compared again one at a time.
                 return s.findFrom(b, h, i);
