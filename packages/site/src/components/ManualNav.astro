@@ -77,7 +77,7 @@ const { groups, toc } = Astro.props
   }
 
   .sidebar-link {
-    @apply block px-2 py-[3px] -mx-2 no-underline text-ink-2 font-normal text-sm rounded-[4px] hover:bg-accent-soft hover:text-ink;
+    @apply block self-start px-2 py-[3px] -mx-2 no-underline text-ink-2 font-normal text-sm rounded-[4px] hover:bg-accent-soft hover:text-ink;
 
     &.active {
       @apply bg-solid text-on-solid font-semibold hover:bg-solid hover:text-on-solid;
@@ -86,10 +86,10 @@ const { groups, toc } = Astro.props
 
   /* in-page contents of the current chapter: instant jumps, no JS */
   .sidebar-toc {
-    @apply list-none pl-0 my-1 ml-0.5 border-l border-ink/30 space-y-0;
+    @apply list-none pl-0 my-1 ml-2 space-y-0;
 
     a {
-      @apply block font-mono text-xs font-normal no-underline text-ink-3 pl-2.5 py-[3px] hover:bg-accent-soft hover:text-ink;
+      @apply block font-mono text-xs font-normal no-underline text-ink-3 pl-2 py-[3px] hover:bg-accent-soft hover:text-ink;
     }
   }
 
@@ -107,8 +107,6 @@ const { groups, toc } = Astro.props
     }
 
     .sidebar-toc {
-      @apply border-ink-red/30;
-
       a {
         @apply text-ink-red/70 hover:bg-accent-soft-red hover:text-ink-red;
       }

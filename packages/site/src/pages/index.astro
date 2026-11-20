@@ -520,6 +520,15 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   @media (max-width: 520px) {
+    .row .alt {
+      @apply ml-0 basis-full pt-1;
+    }
+
+    .install code {
+      @apply text-[13px];
+      overscroll-behavior-x: contain;
+    }
+
     .chap {
       @apply gap-x-2.5;
       grid-template-columns: auto minmax(0, 1fr);

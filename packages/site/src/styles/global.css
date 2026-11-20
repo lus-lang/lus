@@ -28,8 +28,9 @@
 **        lime text strength. on-accent is the text on any lime fill.
 **      solid, on-solid: the filled state of a button, nav pill, or
 **        toggle (ink with lime text in light, lime with ink in dark).
-**      figure, figure-ink: code figures, light in both schemes because
-**        the code theme is written for paper.
+**      figure, figure-ink, figure-ink-3, figure-link, figure-wash,
+**        figure-red: code figures and their captions, light in both
+**        schemes because the code theme is written for paper.
 **      rule: the color of the section rules.
 **  - Radius: 3px on chips and tags, 4px on nav pills and toggles, 6px on
 **    buttons, the install box, and dark figures.
@@ -60,7 +61,8 @@
 **    bg-accent-soft-red text-ink-red, lua = bg-sky-200 text-sky-900,
 **    deprecated = bg-yellow-200 text-yellow-900, removed = bg-neutral-200
 **    text-neutral-700 (names strike through), fastcall = bg-violet-200
-**    text-violet-900. The legend renders these exact chips.
+**    text-violet-900. Pledge chips use the lus colors with a hover fill
+**    of accent. The legend renders these exact chips.
 */
 
 @theme {
@@ -86,6 +88,10 @@
   --color-on-solid: oklch(87% 0.22 128);
   --color-figure: oklch(95.5% 0.016 115);
   --color-figure-ink: oklch(21% 0.045 132);
+  --color-figure-ink-3: oklch(52% 0.03 125);
+  --color-figure-link: oklch(42% 0.13 135);
+  --color-figure-wash: oklch(95% 0.07 122);
+  --color-figure-red: oklch(96% 0.015 20);
   --color-rule: oklch(21% 0.045 132);
 
   /* the unstable channel */
@@ -149,11 +155,11 @@ main {
 }
 
 /* page title: the display h1 that opens every page below the masthead */
-.page-title {
+@utility page-title {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
 }
 
-/* long-form prose outside the manual: chapters open on a 1px ink rule */
+/* long-form prose outside the manual: chapters open over one 2px rule */
 .prose {
   @apply space-y-2 max-w-[48.5rem];
 
@@ -176,7 +182,7 @@ main {
   @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 pt-14 pb-2.5;
 
   h2 {
-    @apply font-display text-[28px] leading-none font-bold tracking-[-0.035em] m-0;
+    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] m-0;
   }
 }
 
@@ -190,14 +196,14 @@ main {
   @apply bg-figure text-figure-ink border-t-2 border-ink m-0;
 
   figcaption {
-    @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-3 px-3 pt-1.5;
+    @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-figure-ink-3 px-3 pt-1.5;
 
     > * {
       @apply whitespace-nowrap;
     }
 
     a {
-      @apply normal-case tracking-normal no-underline font-normal text-link px-1.5 -mx-1.5 py-1 -my-1 hover:text-ink;
+      @apply normal-case tracking-normal no-underline font-normal text-figure-link px-1.5 -mx-1.5 py-1 -my-1 hover:text-figure-ink;
     }
   }
 
@@ -208,7 +214,7 @@ main {
   pre code {
     @apply bg-transparent border-t-0 text-[13px] leading-[1.6] pt-1.5 pb-2.5 px-3;
     scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklab, var(--color-ink) 30%, transparent)
+    scrollbar-color: color-mix(in oklab, var(--color-figure-ink) 30%, transparent)
       transparent;
   }
 
@@ -305,7 +311,7 @@ pre.astro-code {
 
 /* self-link affordance on headings: always visible (touch parity) */
 .heading-anchor {
-  @apply font-mono font-normal no-underline text-ink-3 ml-2 hover:text-ink hover:bg-accent-soft;
+  @apply font-mono font-normal no-underline text-ink-3 ml-2 text-[0.6em] align-middle hover:text-ink hover:bg-accent-soft;
 }
 
 /* deep-link landing indication */
@@ -365,7 +371,7 @@ table {
 
 /* reference badge palette; see grammar header; legend renders these chips */
 .api-badge {
-  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 rounded-sm shrink-0;
+  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 rounded-[3px] shrink-0;
 }
 
 .api-badge-lus {
@@ -495,21 +501,13 @@ html.unstable {
       @apply rounded-none;
     }
 
-    .figure figcaption {
-      color: oklch(52% 0.03 125);
-
-      a {
-        color: oklch(42% 0.13 135);
-      }
-    }
-
     .copy-btn {
-      @apply bg-white border-black/20 text-[oklch(21%_0.045_132)];
+      @apply bg-white border-black/20 text-figure-ink hover:bg-figure-wash active:bg-figure-wash;
     }
 
     /* unstable figures stay paper too, with a red cast */
     &.unstable pre code {
-      background: oklch(96% 0.015 20);
+      @apply bg-figure-red;
     }
   }
 }
