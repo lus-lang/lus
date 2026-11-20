@@ -345,6 +345,9 @@ const modes: {
     th:first-child,
     td:first-child {
       width: 25%;
+      /* the table never scrolls here, so names need no backing */
+      position: static;
+      background: transparent;
     }
   }
 

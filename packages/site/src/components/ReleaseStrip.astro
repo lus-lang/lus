@@ -75,8 +75,9 @@ function downloads(release: ReleaseInfo) {
       @apply min-w-[62px];
     }
 
+    /* versions share a width, so the dates line up */
     .rel-version {
-      @apply font-semibold text-[13px] text-ink;
+      @apply font-semibold text-[13px] text-ink min-w-[16ch];
     }
 
     .rel-date {
