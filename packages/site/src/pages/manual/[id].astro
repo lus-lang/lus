@@ -51,9 +51,6 @@ for (const h of headings) {
 
 // h2-level outline for the sticky sidebar (survives scrolling, unlike
 // the collapsible contents box)
-const sidebarToc = headings
-  .filter((h) => h.depth === 2)
-  .map((h) => ({ slug: h.slug, text: h.text }))
 
 // the chapter's readout: one bar per h2 section, sized by its length
 const sections = (page.body ?? "").split(/^## /m).slice(1)
@@ -75,6 +72,17 @@ const sectionHeights =
     : sections.length >= 4
       ? skyline(sections.map((t) => t.length))
       : null
+
+// the outline pairs each h2 with its readout bar when the readout reads
+// this page's own sections
+const barsAreSections = sectionHeights !== null && sectionLinks === h2Slugs
+const sidebarToc = headings
+  .filter((h) => h.depth === 2)
+  .map((h, i) => ({
+    slug: h.slug,
+    text: h.text,
+    bar: barsAreSections ? i : undefined,
+  }))
 ---
 
 <ManualLayout
@@ -105,9 +113,9 @@ const sectionHeights =
       <details class="toc" open={headings.length <= 24}>
         <summary>Contents ({headings.length})</summary>
         <ol>
-          {toc.map((section) => (
+          {toc.map((section, i) => (
             <li class="toc-h2">
-              <a href={`#${section.slug}`}>{section.text}</a>
+              <a href={`#${section.slug}`} data-bar={barsAreSections ? i : undefined}>{section.text}</a>
               {section.children.length > 0 && (
                 <ol>
                   {section.children.map((child) => (

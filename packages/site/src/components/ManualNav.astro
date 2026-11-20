@@ -13,6 +13,8 @@ export interface NavLink {
 export interface TocItem {
   slug: string
   text: string
+  /** the section's column in the title readout, when the page has one */
+  bar?: number
 }
 
 export interface NavGroup {
@@ -52,7 +54,7 @@ const { groups, toc } = Astro.props
                   <ol class="sidebar-toc">
                     {toc.map((item) => (
                       <li>
-                        <a href={`#${item.slug}`}>{item.text}</a>
+                        <a href={`#${item.slug}`} data-bar={item.bar}>{item.text}</a>
                       </li>
                     ))}
                   </ol>
