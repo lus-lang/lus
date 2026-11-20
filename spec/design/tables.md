@@ -40,6 +40,14 @@ The interpreter stores into an array slot inline when the value fits the kind. A
 
 Traversal order does not depend on the kind. `next` walks the array part from index 1 and then the hash part, and a store that boxes the part during a traversal keeps every value at its index, so the traversal continues from the same key.
 
+## Constructor size feedback
+
+The C operand of `NEWTABLE` is the number of fields of the constructor, and it is only a hint for the size of the hash part. The interpreter remembers the table that the last `NEWTABLE` made, with the instruction and the collection cycle. When a store makes the hash part of that same table grow before the cycle ends, `ops.rawSet` raises the C hint of the instruction to the number of keys the table holds, and when the array part grows, it raises the B hint to the number of elements, each up to eight. A list such as `local escaped = {}` followed by `escaped[j] = v` for a few values then gets its array part at construction too. The function that holds the instruction is alive until the next mark phase ends, so the instruction is safe to write during the cycle. A record that a program builds field by field, as `{}` followed by stores or `{key = k, value = v}` followed by `prev` and `next`, then gets its final hash part in its cell at construction, one allocation instead of two with a rehash between them. Code that a JIT tier compiled keeps the hint it read, which is correct with any hint.
+
+On a loop that builds four million such nodes, the interpreter went from 0.218 s to 0.094 s. `lru` from the cross-language suite went from 1.83 s to 1.50 s. It allocates fewer bytes per node, and its peak memory still rose from about 400 MB to 530 MB, because its collections start later in terms of operations. Its live data is about 35 MB, so the peak there follows the pacing of the generational collector.
+
+A store that creates an array part for a value other than a number allocates the part boxed, so the value lands with one allocation.
+
 ## Storage in the table cell
 
 A table created with known sizes, as every constructor and `table.create` create them, keeps its first parts in its own cell when they fit in 512 bytes: the hash part first, then the array part. Building a small record or a short list then takes one allocation from the page heap, where separate parts would take one or two more from the backing allocator. The array part there reserves 16 bytes per slot, so an unboxed part boxes in place by walking down from the last slot. A part that outgrows the cell moves to the backing allocator as before, and the space it leaves stays with the cell until the table dies.
