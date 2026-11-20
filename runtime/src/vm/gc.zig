@@ -313,10 +313,6 @@ pub const State = struct {
     growing: bool = false,
     /// Minor collections since the last major one.
     minors: u32 = 0,
-    /// Set while the minor collection that follows a major one, which
-    /// left the collector with major collections, tests whether minor
-    /// collections pay again.
-    probe: bool = false,
     stepmul: usize = 200,
     stepsize: usize = 200 * @sizeOf(object.Table),
     minormul: usize = 20,
@@ -385,7 +381,10 @@ fn setThresholdFrom(g: *Global, live: usize) void {
     // goal would.
     const pause: u64 = if (s.growing and s.mode != .generational) @as(u64, g.pause) * 2 else g.pause;
     const goal: u64 = @as(u64, live) * pause / 100;
-    const during: u64 = @as(u64, live) * 100 / @max(s.stepmul, 1);
+    // An incremental cycle starts early enough to finish marking before
+    // the goal. A major collection in generational mode marks in one
+    // stop, so it starts at the goal.
+    const during: u64 = if (s.mode == .generational) 0 else @as(u64, live) * 100 / @max(s.stepmul, 1);
     const start = @max(goal -| during, @as(u64, live) + s.stepsize);
     const t: u64 = @max(start, 256 * 1024, @as(u64, g.counter.bytes) + s.stepsize);
     g.threshold = @intCast(@min(t, std.math.maxInt(usize)));
@@ -729,19 +728,18 @@ fn finishSweep(g: *Global) void {
         s.gen_base = live;
         s.minors = 0;
         // A program that built its data a moment ago may now discard
-        // most of what it allocates. One minor collection, after the
-        // usual young allocation, tells the two apart much sooner than
-        // the next major collection would.
-        s.probe = s.major_pending;
+        // most of what it allocates. The minor collection that follows,
+        // after the usual young allocation, tells the two apart much
+        // sooner than the next major collection would.
         s.major_pending = false;
-    } else if (s.probe) {
-        s.probe = false;
-        const allocated = s.heap_at_mark -| s.gen_base;
-        const freed = s.heap_at_mark -| live;
-        if (@as(u64, freed) * 100 < @as(u64, allocated) * s.majorminor) {
-            s.major_pending = true;
-            return setThresholdFrom(g, s.gen_base);
-        }
+    } else if (@as(u64, s.heap_at_mark -| live) * 100 < @as(u64, s.heap_at_mark -| before) * s.majorminor) {
+        // A minor collection that frees less than `majorminor` percent of
+        // what the program allocated since the previous collection traced
+        // young objects that live on, and those die old. Major
+        // collections at the usual goal then serve better, until the
+        // minor collection after one of them frees enough again.
+        s.major_pending = true;
+        return setThresholdFrom(g, s.gen_base);
     } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
         // The old generation grew too much since the last major
         // collection.
