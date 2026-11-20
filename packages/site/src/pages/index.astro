@@ -232,12 +232,12 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     <CubeField class="horizon wide" amp={6.5} />
     <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
 
-    <section class="part">
+    <section class="part" id="download">
       <div class="sech"><h2>Download</h2></div>
       <ReleaseStrip />
     </section>
 
-    <section class="part">
+    <section class="part" id="documentation">
       <div class="sech">
         <h2>Documentation</h2><span class="label">standard library</span>
       </div>
@@ -254,7 +254,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </nav>
     </section>
 
-    <section class="part">
+    <section class="part" id="glance">
       <div class="sech"><h2>Lus at a glance</h2></div>
       <div class="chapters">
         {
