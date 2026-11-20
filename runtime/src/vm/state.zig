@@ -360,6 +360,8 @@ pub const Global = struct {
     debugger: ?*const Debugger = null,
     /// The JIT of this state: its settings and its executable memory.
     jit: @import("../jit/jit.zig").State = .{},
+    /// The scheduler of detached coroutines (`sched.zig`).
+    sched: @import("sched.zig").Sched = .{},
 };
 
 /// The native hook entry point used by `lus debug`. Every thread created
@@ -506,7 +508,9 @@ pub const Frame = extern struct {
 pub const Status = enum(u8) { ok, suspended, running, normal, dead, err };
 
 pub const Thread = struct {
-    hdr: gc.Header,
+    /// The header is the most aligned field, which puts it first whatever
+    /// order the other fields take. Heap cells are aligned to 16 bytes.
+    hdr: gc.Header align(16),
     g: *Global,
     stack: []Value = &.{},
     top: u32 = 0,
@@ -522,6 +526,8 @@ pub const Thread = struct {
     ncalls: u32 = 0,
     /// The thread that resumed this one.
     resumer: ?*Thread = null,
+    /// The scheduler record of a thread that waited or was detached.
+    task: ?*@import("sched.zig").Task = null,
     /// Values passed across resume and yield.
     transfer: u32 = 0,
     /// Set by `coroutine.yield` so the call machinery unwinds to `resume`.
@@ -532,6 +538,9 @@ pub const Thread = struct {
     meta_finish: ?Finish = null,
     /// Set when a coroutine closes itself, to end its resume cleanly.
     self_closed: bool = false,
+    /// Set on a coroutine whose resumer passes a wait on to its own
+    /// resumer (`sched.canSuspend`).
+    resumer_passes: bool = false,
     /// Debug hook state (debug.sethook). The hook function itself lives in
     /// the registry. `hook_mask` combines the `hook_*` bits.
     hook_mask: u8 = 0,
@@ -967,7 +976,10 @@ pub fn createSeeded(gpa: Allocator, io: std.Io, seed_opt: ?u64) !*Global {
 
 pub fn destroy(g: *Global) void {
     const gpa = g.gpa;
+    const sched = @import("sched.zig");
+    sched.release(g);
     gc.freeAll(g);
+    sched.deinit(g);
     @import("../jit/jit.zig").deinit(g);
     g.strings.deinit(gpa);
     g.blobs.deinit(gpa);

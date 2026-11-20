@@ -1,0 +1,211 @@
+---
+order: 143
+title: "Acquis 43 - Detached Coroutines"
+acquis: true
+shortdesc: "Coroutines that the runtime resumes when their sockets are ready, and an HTTP server built on them."
+draft: true
+---
+
+A coroutine can be handed to the runtime, which then resumes it whenever what it waits for is ready. Such a coroutine is detached. Blocking operations inside it suspend it while other coroutines run, so a single program serves many network connections at once with ordinary sequential code. `network.serve` is an HTTP server built this way.
+
+## Detaching a coroutine
+
+`coroutine.detach(co, ...)` hands the suspended coroutine `co` to the runtime and returns `co`. The extra arguments are the arguments of the coroutine body.
+
+```lus
+local function greet(name)
+    print("hello, " .. name)
+    return #name
+end
+
+local co = coroutine.detach(coroutine.create(greet), "world")
+print(coroutine.status(co))   --> suspended
+print(coroutine.resume(co))   --> hello, world, then: true  5
+```
+
+`detach` returns at once, and the coroutine starts on its next turn. Detached coroutines take turns in the order in which they became ready. A coroutine that already ran and yielded can be detached too, and the extra arguments then become the results of its pending `coroutine.yield`. Detaching a coroutine that is running, normal, dead, or already detached raises an error, and so does detaching the main thread.
+
+## Taking turns
+
+Inside a detached coroutine, `coroutine.yield` gives the next turn to the other detached coroutines. The runtime resumes the coroutine when its turn comes again. The arguments of `yield` are dropped, and `yield` returns no values.
+
+```lus
+local log = {}
+local function step(name)
+    for i = 1, 2 do
+        log[#log + 1] = name .. i
+        coroutine.yield()
+    end
+end
+
+local a = coroutine.detach(coroutine.create(step), "a")
+local b = coroutine.detach(coroutine.create(step), "b")
+coroutine.resume(a)
+coroutine.resume(b)
+print(table.concat(log, " "))   --> a1 b1 a2 b2
+```
+
+A plain coroutine keeps its usual meaning inside a detached one. A generator made with `coroutine.wrap` or driven with `coroutine.resume` yields its values to the code that resumed it, as it always does.
+
+## Waiting for the end
+
+`coroutine.resume(co)` on a detached coroutine waits until `co` has ended. It then returns exactly what `resume` returns for any coroutine that ends: `true` and the results of the body, or `false` and the error. Extra arguments passed to `resume` are ignored.
+
+```lus
+local ok = coroutine.detach(coroutine.create(function()
+    return "a", "b"
+end))
+local bad = coroutine.detach(coroutine.create(function()
+    error("failed", 0)
+end))
+
+print(coroutine.resume(ok))    --> true   a   b
+print(coroutine.resume(bad))   --> false  failed
+print(coroutine.resume(ok))    --> false  cannot resume dead coroutine
+```
+
+A detached coroutine that ends before anything resumes it keeps its results, or its error, until the first `resume` collects them. Every caller that was already waiting when the coroutine ended receives them as well. A later `resume` finds a dead coroutine.
+
+A detached coroutine that resumes another one is suspended while it waits. Code outside detached coroutines, such as the main chunk, runs the detached coroutines of the program while it waits. Coroutines that only wait for each other can never continue, and the caller that would wait for them forever receives an error that names the deadlock.
+
+## Cancelling
+
+`coroutine.close(co)` cancels a detached coroutine. The runtime stops resuming it, its pending to-be-closed variables are closed, and it is dead afterwards. Callers that were waiting for it in `resume` receive `false` and `"cannot resume dead coroutine"`.
+
+```lus
+local log = {}
+local co = coroutine.detach(coroutine.create(function()
+    local mark <close> = setmetatable({}, { __close = function()
+        log[#log + 1] = "closed"
+    end })
+    while true do
+        coroutine.yield()
+    end
+end))
+
+local other = coroutine.detach(coroutine.create(function()
+    coroutine.yield()
+end))
+coroutine.resume(other)
+
+print(coroutine.close(co), log[1])   --> true  closed
+print(coroutine.status(co))          --> dead
+```
+
+## Suspension points
+
+Operations that wait for the network are suspension points: `network.tcp.connect`, `accept` on a server, `send` and `receive` on a TCP socket, and `receive` and `sendto` on a UDP socket. Inside a detached coroutine, such an operation suspends the coroutine until its socket is ready, and the other coroutines run in the meantime. `coroutine.status` reports `"suspended"` for a coroutine that waits this way.
+
+```lus nocheck
+pledge("network")
+
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+
+-- Every connection gets a coroutine that echoes its lines.
+local acceptor = coroutine.detach(coroutine.create(function()
+    while true do
+        local sock = server:accept()
+        coroutine.detach(coroutine.create(function(conn)
+            local closing <close> = conn
+            while true do
+                local line = conn:receive("*l")
+                if #line == 0 then
+                    break
+                end
+                conn:send(vector.tostring(line) .. "\n")
+            end
+        end), sock)
+    end
+end))
+
+local sock = network.tcp.connect("127.0.0.1", port)
+sock:send("ping\n")
+print(vector.tostring(sock:receive("*l")))   --> ping
+sock:close()
+coroutine.close(acceptor)
+server:close()
+```
+
+The same operations keep their meaning everywhere else. In the main chunk, or in a plain coroutine that no detached coroutine resumed, they block their caller as before, and they run the detached coroutines while they wait. In the example above the `receive` of the main chunk is what lets the acceptor and the connection run.
+
+A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it. A line iterator written with `coroutine.wrap` therefore works unchanged on a connection that a detached coroutine serves.
+
+A timeout set with `settimeout` bounds each wait and raises `"receive timeout"`, `"send timeout"`, `"sendto timeout"`, or `"accept timeout"` when it runs out. A zero timeout never waits.
+
+An operation called from a function that the runtime calls back from native code, such as the comparison function of `table.sort`, keeps its coroutine running and runs the other coroutines while it waits.
+
+## Errors nobody collects
+
+The error of a detached coroutine belongs to whoever resumes or closes it. When a detached coroutine fails and nothing collects its error, the program stops with that error and the traceback of the coroutine. That happens when `lus` has finished running the coroutines after the main chunk, or earlier, when the collector finds the failed coroutine unreachable. Results that nothing collects are dropped silently.
+
+## After the main chunk
+
+When the main chunk returns, `lus` keeps running the detached coroutines until every one of them has ended. A program whose main chunk only starts coroutines therefore runs to completion.
+
+```lus nocheck
+coroutine.detach(coroutine.create(function()
+    for i = 1, 3 do
+        print("tick", i)
+        coroutine.yield()
+    end
+end))
+print("the main chunk is done")
+--> the main chunk is done
+--> tick 1
+--> tick 2
+--> tick 3
+```
+
+A host that [embeds Lus](/manual/acquis-41) calls `lus_runpending(L, wait)` for the same effect. With `wait` nonzero it runs the coroutines until none is left. With `wait` zero it runs the ones that are ready and returns, which suits a host with an event loop of its own. `lus_pending` returns how many detached coroutines have not ended, and `lus_close` closes the ones that remain.
+
+## An HTTP server
+
+`network.serve(host, port, handler)` serves HTTP/1.1 with keep-alive connections. It runs every connection in a detached coroutine and calls `handler` for each request.
+
+```lus nocheck
+pledge("network")
+
+network.serve("127.0.0.1", 8080, function(req)
+    if req.method == "GET" and req.path == "/" then
+        return 200, "hello\n", { ["Content-Type"] = "text/plain" }
+    end
+    return 404, "not found\n"
+end)
+```
+
+The handler receives a table with five fields.
+
+| Field | Value |
+| --- | --- |
+| `method` | The request method, such as `"GET"`. |
+| `path` | The request target up to the first `?`, as the client sent it. |
+| `query` | The text after the first `?`, or the empty string. |
+| `headers` | A table from lowercase header names to their values. |
+| `body` | The request body as a vector. |
+
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. The status defaults to 200, the body is a string or a vector, and the headers are a table. The server adds the `Date`, `Content-Length`, and `Connection` headers that the handler leaves out. A handler may wait for the network itself, and the other connections run while it does.
+
+A handler that raises an error answers 500. The server reports the error through `warn` and closes that connection, and the other connections continue. Request bodies arrive with a `Content-Length` or in chunks. The request line and headers are limited to 64 KiB, and a body to 16 MiB.
+
+`serve` blocks its caller while the server runs. `network.serve(server, handler)` serves on a server from `network.tcp.bind`, which lets a program bind port `0` and read the selected port first. Serving requires the `network:server` permission, and binding requires `network:tcp`.
+
+---
+
+## Motivation
+
+### One model for concurrency
+
+A program that talks to many peers needs to wait for all of them at once. Coroutines already express a task that pauses and continues, with its local variables and its position kept in between. Letting the runtime resume a coroutine when its socket is ready turns that existing concept into the concurrency model, with the same functions the language has always had.
+
+### Sequential code
+
+A connection handler reads a request, computes, and writes a response. Written as a coroutine, it is that sequence of calls, with ordinary loops, local variables, error handling with `catch`, and to-be-closed variables that release the socket on every path. The waiting happens inside `receive` and `send`.
+
+### The same functions everywhere
+
+A function that reads from a socket works in the main chunk, in a plain coroutine, and in a detached coroutine. Libraries are written once, and a program moves a task into a detached coroutine by wrapping the call. `coroutine.resume` keeps a single meaning as well: it returns `true` and the values, or `false` and the error.
+
+### Errors that surface
+
+A task that fails silently hides bugs. The error of a detached coroutine reaches the code that resumes or closes it, and an error that nothing collects stops the program with the traceback of the coroutine that raised it.

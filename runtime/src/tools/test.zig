@@ -413,6 +413,12 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
         reportFileError(l);
         return 2;
     }
+    // Coroutines that the top-level code detached end before the tests.
+    l.err_traceback = null;
+    if (!api.runPending(l, true)) {
+        reportFileError(l);
+        return 2;
+    }
     // The registry of tests stays on the stack so it remains rooted while
     // the tests run and allocate.
     const registry = l.stack[base];
@@ -542,6 +548,10 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
     };
     if (ok) ok = api.pcall(l, 0, 0);
     if (!ok) msg = try gpa.dupe(u8, api.errorMessage(l, l.stack[l.top - 1]));
+    if (ok and !api.runPending(l, true)) {
+        ok = false;
+        msg = try gpa.dupe(u8, api.errorMessage(l, l.err));
+    }
     api.close(l);
     writeRecord(gpa, io, if (ok) "pass" else "fail", name, msg);
     return ok;
@@ -585,8 +595,15 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
     l.err_traceback = null;
     const pledge = lus.vm.pledge;
     const saved = pledge.save(l);
-    const ok = api.pcall(l, nargs, 0);
-    const err: Value = if (ok) .nil else l.stack[l.top - 1];
+    var ok = api.pcall(l, nargs, 0);
+    var err: Value = if (ok) .nil else l.stack[l.top - 1];
+    // A test ends when the coroutines it detached have ended. One that
+    // failed with nothing left to collect its error fails the test.
+    if (!api.runPending(l, true) and ok) {
+        ok = false;
+        err = l.err;
+        l.push(err) catch {};
+    }
     pledge.restore(l, saved);
     var status: []const u8 = "pass";
     var msg: []const u8 = "";

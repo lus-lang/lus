@@ -10,6 +10,7 @@ const state = @import("vm/state.zig");
 const interp = @import("vm/interp.zig");
 const ops = @import("vm/ops.zig");
 const gc = @import("vm/gc.zig");
+const sched = @import("vm/sched.zig");
 const codegen = @import("compile/codegen.zig");
 const Value = value.Value;
 const Thread = state.Thread;
@@ -50,7 +51,10 @@ pub fn openLibs(l: *Thread) Error!void {
 
 pub fn close(l: *Thread) void {
     const g = l.g;
-    // Finalizers run first, while worker handles still reach their domain.
+    // Detached coroutines close first, which runs their pending
+    // to-be-closed variables while everything they use is alive.
+    closeCoroutines(g);
+    // Finalizers run next, while worker handles still reach their domain.
     // Then workers created by this state stop before anything is freed.
     finalizeAll(g);
     if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
@@ -74,6 +78,7 @@ pub fn close(l: *Thread) void {
 pub fn closeForExit(l: *Thread) void {
     if (std.debug.runtime_safety) return close(l);
     const g = l.g;
+    closeCoroutines(g);
     finalizeAll(g);
     if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
     @import("lib/out.zig").deinit(g);
@@ -151,11 +156,44 @@ pub fn pcall(l: *Thread, nargs: u32, want: i32) bool {
         interp.unwindTo(l, depth);
         l.tbc.items.len = @min(l.tbc.items.len, tbc_len);
         l.ncalls = ncalls;
+        // An error that stops the program ends at the outermost call.
+        if (l.g.native_depth == 0) l.g.sched.fatal = false;
         l.stack[func] = l.err;
         l.top = func + 1;
         return false;
     };
     return true;
+}
+
+/// Runs the detached coroutines of the state. With `wait` set it runs
+/// them until none is left, as `lus` does after the main chunk, and then
+/// reports the error of a coroutine that failed with nothing left to
+/// collect it. Without it, it runs the coroutines that are ready and
+/// returns. On error it returns false with the error value in `l.err`
+/// and, for the error of a coroutine, its traceback in
+/// `l.err_traceback`.
+pub fn runPending(l: *Thread, wait: bool) bool {
+    const r = if (wait) sched.drain(l) else sched.poll(l);
+    r catch {
+        if (l.g.native_depth == 0) l.g.sched.fatal = false;
+        return false;
+    };
+    return true;
+}
+
+/// The number of detached coroutines that have not ended.
+pub fn pendingCoroutines(l: *Thread) usize {
+    return sched.pending(l.g);
+}
+
+/// Closes every detached coroutine that has not ended, from the main
+/// thread with nothing else running.
+fn closeCoroutines(g: *state.Global) void {
+    const main = g.main_thread;
+    main.top = 0;
+    main.frames.items.len = 0;
+    main.tbc.items.len = 0;
+    sched.closeAll(g);
 }
 
 /// Converts the error value at the top of the stack into a message.

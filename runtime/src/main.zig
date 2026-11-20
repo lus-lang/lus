@@ -501,6 +501,12 @@ fn runChunk(l: *Thread, src: []const u8, name: []const u8, script_args: []const 
         return false;
     }
     l.top = base;
+    // The chunk is done. The coroutines it detached run to their end.
+    l.err_traceback = null;
+    if (!api.runPending(l, true)) {
+        reportError(l);
+        return false;
+    }
     return true;
 }
 
@@ -565,6 +571,8 @@ fn repl(l: *Thread, io: std.Io) !void {
         };
         pending.clearRetainingCapacity();
         if (!api.pcall(l, 0, -1)) {
+            reportError(l);
+        } else if (!api.runPending(l, true)) {
             reportError(l);
         } else if (l.top > base) {
             const prn = try lus.lib.aux.getField(l, l.g.globals.as(lus.vm.object.Table), "print");

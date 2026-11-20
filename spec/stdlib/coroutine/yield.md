@@ -10,3 +10,5 @@ returns: any
 ---
 
 Suspends the running coroutine. Arguments to `yield` become the extra return values of the `resume` that restarted this coroutine.
+
+In a coroutine given to `coroutine.detach`, `yield` lets the other detached coroutines run. The runtime resumes the coroutine on its next turn, the arguments are dropped, and `yield` returns no values.

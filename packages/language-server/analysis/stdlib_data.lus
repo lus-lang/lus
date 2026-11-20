@@ -152,6 +152,7 @@ Controls the garbage collector. The `opt` argument selects the operation:
     children = {
       "coroutine.close",
       "coroutine.create",
+      "coroutine.detach",
       "coroutine.isyieldable",
       "coroutine.resume",
       "coroutine.running",
@@ -169,7 +170,9 @@ Controls the garbage collector. The `opt` argument selects the operation:
   ["coroutine.close"] = {
     children = {},
     description = [[
-Closes coroutine `co`, putting it in a dead state. If the coroutine was suspended with pending to-be-closed variables, those variables are closed. Returns `true` on success, or `false` plus an error message if closing a variable raises an error.]],
+Closes coroutine `co`, putting it in a dead state. If the coroutine was suspended with pending to-be-closed variables, those variables are closed. Returns `true` on success, or `false` plus an error message if closing a variable raises an error.
+
+Closing a coroutine given to `coroutine.detach` cancels it: the runtime stops resuming it, its pending to-be-closed variables are closed, and callers that wait for it in `resume` receive `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that failed returns `false` plus its error, which counts as collecting that error.]],
     kind = "function",
     module = "coroutine",
     name = "coroutine.close",
@@ -216,6 +219,53 @@ Creates and returns a suspended coroutine from function `f`. `coroutine.resume` 
     source = "stdlib/coroutine/create.md",
     stability = "stable",
   },
+  ["coroutine.detach"] = {
+    children = {},
+    description = [[
+Hands the suspended coroutine `co` to the runtime and returns `co`. The runtime resumes the coroutine by itself: the first time with the extra arguments, and afterwards whenever what the coroutine waits for is ready. For a coroutine that has not started, the extra arguments are the arguments of its body. For a coroutine that already ran and yielded, they are the results of its pending `coroutine.yield`.
+
+`detach` returns at once and the coroutine starts on its next turn. Detached coroutines take turns in the order in which they became ready. Inside a detached coroutine, a blocking operation such as `receive` on a socket suspends the coroutine while the other coroutines run, and `coroutine.yield` gives the next turn to the others.
+
+`coroutine.resume(co)` waits until a detached coroutine has ended and returns what `resume` returns for a coroutine that ends: `true` and the results of the body, or `false` and the error. `coroutine.close(co)` cancels it.
+
+Raises an error when `co` is running, normal, dead, already detached, or the main thread.
+
+```lus
+local function worker(name, count)
+    for i = 1, count do
+        print(name, i)
+        coroutine.yield()
+    end
+    return name .. " is done"
+end
+
+local a = coroutine.detach(coroutine.create(worker), "a", 2)
+local b = coroutine.detach(coroutine.create(worker), "b", 2)
+print(coroutine.resume(a)) -- a 1, b 1, a 2, b 2, then: true  a is done
+print(coroutine.resume(b)) -- true  b is done
+```]],
+    kind = "function",
+    module = "coroutine",
+    name = "coroutine.detach",
+    origin = "lus",
+    params = {
+      {
+        name = "co",
+        type = "thread",
+      },
+    },
+    parent = "coroutine",
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "detach",
+    since = "2.0.0",
+    source = "stdlib/coroutine/detach.md",
+    stability = "stable",
+    vararg = true,
+  },
   ["coroutine.isyieldable"] = {
     children = {},
     description = [[
@@ -241,7 +291,9 @@ Returns `true` if the running coroutine can yield. A coroutine is not yieldable 
     description = [[
 Starts or resumes execution of coroutine `co`. On the first resume, the extra arguments are passed to the coroutine body function. On subsequent resumes, the extra arguments become the results of the yield that suspended the coroutine.
 
-Returns `true` plus any values passed to `yield` or returned by the body, or `false` plus an error message on failure.]],
+Returns `true` plus any values passed to `yield` or returned by the body, or `false` plus an error message on failure.
+
+For a coroutine given to `coroutine.detach`, `resume` waits until the coroutine has ended and returns `true` plus the results of its body, or `false` plus its error. The extra arguments are ignored. A coroutine that ended earlier keeps its results until the first `resume` collects them, and every caller that was already waiting when it ended receives them too. A later `resume` returns `false` and `"cannot resume dead coroutine"`, as it does for any dead coroutine. While it waits, a detached caller is suspended, and any other caller runs the detached coroutines of the program.]],
     kind = "function",
     module = "coroutine",
     name = "coroutine.resume",
@@ -287,7 +339,9 @@ Returns the running coroutine and a boolean. The boolean is `true` if the runnin
   ["coroutine.status"] = {
     children = {},
     description = [[
-Returns the status of coroutine `co` as a string: `"running"`, `"suspended"`, `"normal"`, or `"dead"`.]],
+Returns the status of coroutine `co` as a string: `"running"`, `"suspended"`, `"normal"`, or `"dead"`.
+
+A coroutine given to `coroutine.detach` reports `"suspended"` while it waits for its turn, for a socket, or for another coroutine, and `"dead"` once it has ended.]],
     kind = "function",
     module = "coroutine",
     name = "coroutine.status",
@@ -337,7 +391,9 @@ Creates a coroutine from function `f` and returns a function that resumes it eac
   ["coroutine.yield"] = {
     children = {},
     description = [[
-Suspends the running coroutine. Arguments to `yield` become the extra return values of the `resume` that restarted this coroutine.]],
+Suspends the running coroutine. Arguments to `yield` become the extra return values of the `resume` that restarted this coroutine.
+
+In a coroutine given to `coroutine.detach`, `yield` lets the other detached coroutines run. The runtime resumes the coroutine on its next turn, the arguments are dropped, and `yield` returns no values.]],
     kind = "function",
     module = "coroutine",
     name = "coroutine.yield",
@@ -2956,6 +3012,7 @@ Returns `true` if integer `m` is below integer `n` when compared as unsigned int
   ["network"] = {
     children = {
       "network.fetch",
+      "network.serve",
       "network.tcp",
       "network.udp",
     },
@@ -3020,13 +3077,81 @@ Performs an HTTP or HTTPS request using positional optional arguments. `method` 
     source = "stdlib/network/fetch.md",
     stability = "stable",
   },
+  ["network.serve"] = {
+    children = {},
+    description = [[
+Serves HTTP/1.1 on `host` and `port` and calls `handler` for every request. `serve` blocks its caller for as long as the server runs. It accepts connections in a loop, and each connection runs in a coroutine of its own that the runtime resumes whenever its socket is ready (see `coroutine.detach`), so a slow client never holds up the others. Connections stay open between requests unless the client asks to close them.
+
+The handler receives one table per request:
+
+| Field | Value |
+| --- | --- |
+| `method` | The request method, such as `"GET"`. |
+| `path` | The request target up to the first `?`, as the client sent it. |
+| `query` | The text after the first `?`, or the empty string. |
+| `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
+| `body` | The request body as a vector, which is empty for a request without a body. |
+
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds `Date`, `Content-Length`, and `Connection: close` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+
+When the handler raises an error, or returns values that make no response, the server answers 500, reports the error through `warn`, and closes the connection.
+
+The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
+
+`network.serve(server, handler)` serves on a server that `network.tcp.bind` returned. That form lets a program bind port `0` and read the selected port with `getsockname` before it serves. A server that `serve` bound itself closes when `serve` ends, which happens when the coroutine that called it is closed or when accepting a connection fails.
+
+Requires the `network:server` permission for the address, and `network:tcp` to bind it.
+
+```lus nocheck
+pledge("network")
+
+network.serve("127.0.0.1", 8080, function(req)
+    if req.path ~= "/" then
+        return 404, "not found\n"
+    end
+    return 200, "hello\n", { ["Content-Type"] = "text/plain" }
+end)
+```
+
+**Requires pledges:** `network:server`, `network:tcp`]],
+    kind = "function",
+    module = "network",
+    name = "network.serve",
+    origin = "lus",
+    params = {
+      {
+        name = "host",
+        type = "string",
+      },
+      {
+        name = "port",
+        type = "integer",
+      },
+      {
+        name = "handler",
+        type = "function",
+      },
+    },
+    parent = "network",
+    pledges = {
+      "network:server",
+      "network:tcp",
+    },
+    returns = {},
+    short_name = "serve",
+    since = "2.0.0",
+    source = "stdlib/network/serve.md",
+    stability = "stable",
+  },
   ["network.tcp"] = {
     children = {
       "network.tcp.bind",
       "network.tcp.connect",
     },
     description = [[
-The `network.tcp` sub-module.]],
+The `network.tcp` sub-module.
+
+`connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases.]],
     kind = "module",
     module = "network",
     name = "network.tcp",
@@ -3115,7 +3240,9 @@ Connects to a TCP server at `host` and `port`. Returns a TCP socket for reading 
       "network.udp.open",
     },
     description = [[
-The `network.udp` sub-module.]],
+The `network.udp` sub-module.
+
+`receive` and `sendto` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and anywhere else they block their caller and run the detached coroutines while they wait.]],
     kind = "module",
     module = "network",
     name = "network.udp",

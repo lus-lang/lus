@@ -1,0 +1,834 @@
+-- `network.serve`: an HTTP/1.1 server whose connections each run in a
+-- detached coroutine (spec/stdlib/network/serve.md). The tests talk to it
+-- over loopback sockets bound to port 0, with requests written by hand so
+-- that every byte on the wire is known.
+pledge("network")
+
+local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+local status, close = coroutine.status, coroutine.close
+
+-- The server reports handler errors through `warn`. The tests record what
+-- it reports. The server reads `warn` when it first serves, so this runs
+-- before any test.
+local warnings = {}
+_G.warn = function(...)
+    warnings[#warnings + 1] = table.concat({ ... })
+end
+
+local function txt(v)
+    if type(v) == "vector" then
+        return vector.tostring(v)
+    end
+    return v
+end
+
+local function spawn(f, ...)
+    return detach(create(f), ...)
+end
+
+local function denied(err)
+    local text = tostring(err)
+    return string.find(text, "ermission denied", 1, true) or string.find(text, "not permitted", 1, true)
+        or string.find(text, "EPERM", 1, true)
+end
+
+local function listen()
+    local ok, server = catch network.tcp.bind("127.0.0.1", 0)
+    if not ok then
+        if denied(server) then
+            skip("loopback sockets unavailable")
+        end
+        error(server, 0)
+    end
+    local _, port = server:getsockname()
+    return server, port
+end
+
+-- Serves `handler` on a free port while `body(port)` runs, then stops
+-- the server.
+local function serving(handler, body)
+    local server, port = listen()
+    local co = spawn(network.serve, server, handler)
+    local ok, err = catch body(port)
+    assert(close(co))
+    server:close()
+    if not ok then
+        error(err, 0)
+    end
+end
+
+local function connect(port)
+    local sock = network.tcp.connect("127.0.0.1", port)
+    sock:settimeout(10)
+    return sock
+end
+
+-- Reads one response. The body is as long as Content-Length says.
+local function read_response(sock, no_body)
+    local line = txt(sock:receive("*l"))
+    local code, reason = string.match(line, "^HTTP/1%.1 (%d%d%d) (.*)$")
+    assert(code, "bad status line: " .. line)
+    local headers = {}
+    local count = 0
+    while true do
+        local header = txt(sock:receive("*l"))
+        if header == "" then
+            break
+        end
+        local name, value = string.match(header, "^([^:]+): (.*)$")
+        assert(name, "bad header line: " .. header)
+        headers[string.lower(name)] = value
+        count = count + 1
+    end
+    local length = tonumber(headers["content-length"] or "0")
+    local body = ""
+    if length > 0 and not no_body then
+        body = txt(sock:receive(length))
+    end
+    return { status = tonumber(code), reason = reason, headers = headers, body = body, count = count }
+end
+
+local function exchange(sock, request, no_body)
+    assert(sock:send(request) == #request)
+    return read_response(sock, no_body)
+end
+
+-- True when the peer closed the connection.
+local function at_end(sock)
+    return #sock:receive(1) == 0
+end
+
+local function get(path)
+    return "GET " .. path .. " HTTP/1.1\r\nHost: test\r\n\r\n"
+end
+
+-- ===== Requests =====
+
+local function the_handler_receives_the_request_test()
+    local seen
+    serving(function(req)
+        seen = req
+        return 200, "ok"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "GET /some/path?x=1&y=two HTTP/1.1\r\nHost: example.test\r\nX-Custom:  padded value \r\nACCEPT: */*\r\n\r\n")
+        assert(r.status == 200 and r.body == "ok")
+    end)
+    assert(seen.method == "GET" and seen.path == "/some/path" and seen.query == "x=1&y=two")
+    assert(type(seen.headers) == "table")
+    assert(seen.headers.host == "example.test")
+    assert(seen.headers["x-custom"] == "padded value")
+    assert(seen.headers.accept == "*/*" and seen.headers.ACCEPT == nil)
+    assert(type(seen.body) == "vector" and #seen.body == 0)
+    local keys = {}
+    for k in pairs(seen) do
+        keys[#keys + 1] = k
+    end
+    table.sort(keys)
+    assert(table.concat(keys, " ") == "body headers method path query")
+end
+
+local function a_request_without_a_query_has_an_empty_query_test()
+    local seen
+    serving(function(req)
+        seen = req
+    end, function(port)
+        local sock <close> = connect(port)
+        assert(exchange(sock, get("/plain")).status == 200)
+        assert(seen.path == "/plain" and seen.query == "")
+        assert(exchange(sock, get("/empty?")).status == 200)
+        assert(seen.path == "/empty" and seen.query == "")
+        assert(exchange(sock, get("/a%20b?q=%3F")).status == 200)
+        assert(seen.path == "/a%20b" and seen.query == "q=%3F")
+    end)
+end
+
+local function repeated_headers_join_with_a_comma_test()
+    local seen
+    serving(function(req)
+        seen = req.headers
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, "GET / HTTP/1.1\r\nHost: test\r\nCookie: a=1\r\ncookie: b=2\r\nCOOKIE: c=3\r\n\r\n")
+    end)
+    assert(seen.cookie == "a=1, b=2, c=3")
+end
+
+local function a_body_with_a_content_length_test()
+    local seen
+    serving(function(req)
+        seen = req
+        return 201, req.body
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST /items HTTP/1.1\r\nHost: test\r\nContent-Length: 11\r\n\r\nhello\0world")
+        assert(r.status == 201 and r.reason == "Created" and r.body == "hello\0world")
+    end)
+    assert(seen.method == "POST" and type(seen.body) == "vector" and #seen.body == 11)
+    assert(txt(seen.body) == "hello\0world")
+end
+
+local function a_body_of_arbitrary_bytes_test()
+    local bytes = vector.create(256)
+    for i = 0, 255 do
+        bytes:set(i, i)
+    end
+    local seen
+    serving(function(req)
+        seen = req.body
+        return 200, req.body
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send("PUT /raw HTTP/1.1\r\nHost: test\r\nContent-Length: 256\r\n\r\n")
+        sock:send(bytes)
+        local line = txt(sock:receive("*l"))
+        assert(line == "HTTP/1.1 200 OK")
+        while #sock:receive("*l") > 0 do
+        end
+        local echoed = sock:receive(256)
+        for i = 0, 255 do
+            assert(echoed:get(i) == i)
+        end
+    end)
+    assert(#seen == 256 and seen:get(255) == 255)
+end
+
+local function a_chunked_body_test()
+    local seen
+    serving(function(req)
+        seen = req
+        return 200, `$(#req.body)`
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST /upload HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .. "5\r\nhello\r\n"
+            .. "1;name=value\r\n \r\n"
+            .. "A\r\nchunked \r\n\r\n"
+            .. "0\r\nTrailer: ignored\r\n\r\n")
+        assert(r.status == 200 and r.body == "16")
+        -- The connection continues after the trailers.
+        r = exchange(sock, "POST /again HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+        assert(r.status == 200 and r.body == "0")
+    end)
+    assert(seen.path == "/again")
+end
+
+local function a_chunked_body_keeps_its_bytes_test()
+    local seen
+    serving(function(req)
+        seen = txt(req.body)
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1\r\n \r\na\r\nchunked \r\n\r\n0\r\n\r\n")
+    end)
+    assert(seen == "hello chunked \r\n")
+end
+
+local function a_request_that_arrives_in_pieces_test()
+    local seen
+    serving(function(req)
+        seen = req
+        return 200, txt(req.body)
+    end, function(port)
+        local sock <close> = connect(port)
+        local pieces = {
+            "PO", "ST /slow?a=b HT", "TP/1.1\r", "\nHost: te", "st\r\nTransfer-Enc", "oding: chunked\r\n\r", "\n3",
+            "\r\nabc\r", "\n4\r\nde", "fg\r\n", "0\r", "\n\r", "\n",
+        }
+        local sender = spawn(function()
+            for _, piece in ipairs(pieces) do
+                sock:send(piece)
+                for _ = 1, 3 do
+                    yield()
+                end
+            end
+        end)
+        assert(resume(sender))
+        local r = read_response(sock)
+        assert(r.status == 200 and r.body == "abcdefg")
+    end)
+    assert(seen.method == "POST" and seen.path == "/slow" and seen.query == "a=b")
+end
+
+local function a_large_body_test()
+    local payload = string.rep("0123456789abcdef", 65536)
+    local length
+    serving(function(req)
+        length = #req.body
+        return 200, string.sub(txt(req.body), -32)
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST /big HTTP/1.1\r\nHost: test\r\nContent-Length: " .. #payload .. "\r\n\r\n" .. payload)
+        assert(r.status == 200 and r.body == string.rep("0123456789abcdef", 2))
+    end)
+    assert(length == #payload)
+end
+
+local function expect_continue_gets_an_interim_response_test()
+    serving(function(req)
+        return 200, txt(req.body)
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
+        assert(txt(sock:receive("*l")) == "HTTP/1.1 100 Continue")
+        assert(txt(sock:receive("*l")) == "")
+        sock:send("body")
+        local r = read_response(sock)
+        assert(r.status == 200 and r.body == "body")
+    end)
+end
+
+-- ===== Responses =====
+
+local function the_response_carries_status_body_and_headers_test()
+    serving(function(req)
+        return 418, "short and stout", { ["Content-Type"] = "text/plain", ["X-Count"] = 3 }
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.status == 418 and r.reason == "I'm a teapot" and r.body == "short and stout")
+        assert(r.headers["content-type"] == "text/plain" and r.headers["x-count"] == "3")
+        assert(r.headers["content-length"] == "15")
+        assert(string.find(r.headers.date, "^%a%a%a, %d%d %a%a%a %d%d%d%d %d%d:%d%d:%d%d GMT$"), r.headers.date)
+        assert(r.headers.connection == nil)
+    end)
+end
+
+local function a_handler_that_returns_nothing_answers_200_test()
+    serving(function(req) end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.status == 200 and r.reason == "OK" and r.body == "" and r.headers["content-length"] == "0")
+    end)
+end
+
+local function the_body_may_be_a_vector_test()
+    serving(function(req)
+        return 200, vector.fromstring("from a vector")
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.status == 200 and r.body == "from a vector")
+    end)
+end
+
+local function a_status_without_a_body_test()
+    serving(function(req)
+        if req.path == "/204" then
+            return 204, "dropped"
+        end
+        return 304
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/204"))
+        assert(r.status == 204 and r.reason == "No Content" and r.headers["content-length"] == nil)
+        r = exchange(sock, get("/304"))
+        assert(r.status == 304 and r.headers["content-length"] == nil)
+        -- No body bytes were sent, so the next response parses.
+        r = exchange(sock, get("/204"))
+        assert(r.status == 204)
+    end)
+end
+
+local function an_unknown_status_gets_a_class_reason_test()
+    serving(function(req)
+        return tonumber(string.sub(req.path, 2))
+    end, function(port)
+        local sock <close> = connect(port)
+        assert(exchange(sock, get("/299")).reason == "Success")
+        assert(exchange(sock, get("/399")).reason == "Redirection")
+        assert(exchange(sock, get("/499")).reason == "Client Error")
+        assert(exchange(sock, get("/599")).reason == "Server Error")
+    end)
+end
+
+local function a_handler_sets_its_own_length_and_date_test()
+    serving(function(req)
+        return 200, "abc", { ["content-length"] = "3", date = "yesterday", connection = "keep-alive" }
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.body == "abc" and r.headers.date == "yesterday" and r.headers.connection == "keep-alive")
+        assert(r.count == 3)
+    end)
+end
+
+local function head_gets_the_headers_without_the_body_test()
+    serving(function(req)
+        return 200, "twelve bytes"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "HEAD /thing HTTP/1.1\r\nHost: test\r\n\r\n", true)
+        assert(r.status == 200 and r.headers["content-length"] == "12")
+        -- The body of the HEAD response was not sent.
+        r = exchange(sock, get("/thing"))
+        assert(r.status == 200 and r.body == "twelve bytes")
+    end)
+end
+
+local function a_large_response_reaches_a_slow_reader_test()
+    local payload = string.rep("abcdefghijklmnopqrstuvwxyz012345", 65536)
+    serving(function(req)
+        return 200, payload
+    end, function(port)
+        local reader = spawn(function()
+            local sock <close> = connect(port)
+            sock:send(get("/big"))
+            while #sock:receive("*l") > 0 do
+            end
+            local parts = {}
+            local total = 0
+            while total < #payload do
+                local chunk = sock:receive(math.min(100000, #payload - total))
+                assert(#chunk > 0)
+                parts[#parts + 1] = txt(chunk)
+                total = total + #chunk
+                yield()
+            end
+            return table.concat(parts)
+        end)
+        local ok, body = resume(reader)
+        assert(ok and body == payload)
+    end)
+end
+
+-- ===== Keep-alive =====
+
+local function a_connection_serves_many_requests_test()
+    local served = 0
+    serving(function(req)
+        served = served + 1
+        return 200, `$(req.path) $(served)`
+    end, function(port)
+        local sock <close> = connect(port)
+        for i = 1, 25 do
+            local r = exchange(sock, get("/r" .. i))
+            assert(r.status == 200 and r.body == `/r$(i) $(i)`, r.body)
+        end
+    end)
+    assert(served == 25)
+end
+
+local function pipelined_requests_answer_in_order_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send(get("/first") .. get("/second") .. get("/third"))
+        assert(read_response(sock).body == "/first")
+        assert(read_response(sock).body == "/second")
+        assert(read_response(sock).body == "/third")
+    end)
+end
+
+local function connection_close_ends_the_connection_test()
+    serving(function(req)
+        return 200, "bye"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+        assert(r.status == 200 and r.body == "bye" and r.headers.connection == "close")
+        assert(at_end(sock))
+    end)
+end
+
+local function http_1_0_closes_unless_it_asks_to_stay_test()
+    serving(function(req)
+        return 200, "old"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "GET / HTTP/1.0\r\n\r\n")
+        assert(r.status == 200 and r.headers.connection == "close")
+        assert(at_end(sock))
+        local stay <close> = connect(port)
+        r = exchange(stay, "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")
+        assert(r.status == 200 and r.headers.connection == nil)
+        r = exchange(stay, "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")
+        assert(r.status == 200 and r.body == "old")
+    end)
+end
+
+local function a_client_that_leaves_ends_its_connection_test()
+    local served = 0
+    serving(function(req)
+        served = served + 1
+    end, function(port)
+        for _ = 1, 10 do
+            local sock = connect(port)
+            assert(exchange(sock, get("/")).status == 200)
+            sock:close()
+        end
+        -- A connection that opens and sends nothing ends as well.
+        local idle = connect(port)
+        idle:close()
+    end)
+    assert(served == 10)
+end
+
+-- ===== Handlers =====
+
+local function a_404_keeps_the_connection_test()
+    serving(function(req)
+        if req.path == "/here" then
+            return 200, "found"
+        end
+        return 404, "no such page"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/nowhere"))
+        assert(r.status == 404 and r.reason == "Not Found" and r.body == "no such page")
+        r = exchange(sock, get("/here"))
+        assert(r.status == 200 and r.body == "found")
+    end)
+end
+
+local function a_handler_error_answers_500_and_closes_test()
+    warnings = {}
+    serving(function(req)
+        if req.path == "/fail" then
+            error("the handler broke")
+        end
+        return 200, "fine"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/fail"))
+        assert(r.status == 500 and r.reason == "Internal Server Error" and r.body == "")
+        assert(r.headers.connection == "close")
+        assert(at_end(sock))
+        -- The server keeps serving.
+        local next <close> = connect(port)
+        assert(exchange(next, get("/ok")).body == "fine")
+    end)
+    assert(#warnings == 1, tostring(#warnings))
+    assert(string.find(warnings[1], "^network%.serve: serve_test%.lus:%d+: the handler broke$"), warnings[1])
+end
+
+local function a_handler_error_object_is_reported_as_text_test()
+    warnings = {}
+    serving(function(req)
+        error(setmetatable({}, { __tostring = function()
+            return "custom failure"
+        end }))
+    end, function(port)
+        local sock <close> = connect(port)
+        assert(exchange(sock, get("/")).status == 500)
+    end)
+    assert(#warnings == 1 and warnings[1] == "network.serve: custom failure", warnings[1])
+end
+
+local invalid_results_cases = {
+    status_text = { function() return "200" end, "invalid status" },
+    status_range = { function() return 99 end, "invalid status" },
+    status_float = { function() return 200.5 end, "invalid status" },
+    body_table = { function() return 200, {} end, "invalid body" },
+    body_number = { function() return 200, 42 end, "invalid body" },
+    headers_text = { function() return 200, "x", "Content-Type: text/plain" end, "invalid headers" },
+    header_name_number = { function() return 200, "x", { [1] = "v" } end, "invalid header name" },
+    header_name_space = { function() return 200, "x", { ["bad name"] = "v" } end, "invalid header name" },
+    header_value_table = { function() return 200, "x", { ["x-a"] = {} } end, "invalid value for the header 'x%-a'" },
+    header_value_newline = { function() return 200, "x", { ["x-a"] = "one\r\nx-b: two" } end, "invalid header value" },
+}
+
+local function invalid_results_test(handler, message)
+    warnings = {}
+    serving(handler, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.status == 500 and r.body == "" and r.headers["x-b"] == nil)
+        assert(at_end(sock))
+    end)
+    assert(#warnings == 1 and string.find(warnings[1], message), warnings[1])
+end
+
+local function a_handler_may_suspend_test()
+    local running = 0
+    local most = 0
+    serving(function(req)
+        running = running + 1
+        most = math.max(most, running)
+        for _ = 1, 20 do
+            yield()
+        end
+        running = running - 1
+        return 200, req.path
+    end, function(port)
+        local clients = {}
+        for i = 1, 8 do
+            clients[i] = spawn(function()
+                local sock <close> = connect(port)
+                return exchange(sock, get("/c" .. i)).body
+            end)
+        end
+        for i = 1, 8 do
+            local ok, body = resume(clients[i])
+            assert(ok and body == "/c" .. i, tostring(body))
+        end
+    end)
+    -- The handlers of several connections ran at the same time.
+    assert(most > 1, `at most $(most) handlers ran at once`)
+end
+
+local function a_handler_may_use_sockets_test()
+    local upstream, upstream_port = listen()
+    local echo = spawn(function()
+        while true do
+            local sock <close> = upstream:accept()
+            sock:send(string.upper(txt(sock:receive("*l"))) .. "\n")
+        end
+    end)
+    serving(function(req)
+        local sock <close> = connect(upstream_port)
+        sock:send(req.path .. "\n")
+        return 200, txt(sock:receive("*l"))
+    end, function(port)
+        local sock <close> = connect(port)
+        assert(exchange(sock, get("/shout")).body == "/SHOUT")
+        assert(exchange(sock, get("/again")).body == "/AGAIN")
+    end)
+    assert(close(echo))
+    upstream:close()
+end
+
+local function many_clients_at_once_test()
+    serving(function(req)
+        return 200, `$(req.method) $(req.path)`
+    end, function(port)
+        local clients = {}
+        for i = 1, 48 do
+            clients[i] = spawn(function()
+                local sock <close> = connect(port)
+                for j = 1, 10 do
+                    local r = exchange(sock, get(`/client/$(i)/$(j)`))
+                    if r.status ~= 200 or r.body ~= `GET /client/$(i)/$(j)` then
+                        return false, r.body
+                    end
+                end
+                return true
+            end)
+        end
+        for i = 1, 48 do
+            local ok, good, body = resume(clients[i])
+            assert(ok and good, tostring(body))
+        end
+    end)
+end
+
+-- ===== Limits and malformed requests =====
+
+local refused_cases = {
+    no_version = { "GET /\r\n\r\n", 400 },
+    lowercase_version = { "GET / http/1.1\r\n\r\n", 400 },
+    http_2 = { "GET / HTTP/2.0\r\n\r\n", 505 },
+    empty_method = { " / HTTP/1.1\r\n\r\n", 400 },
+    bad_method = { "G(T / HTTP/1.1\r\n\r\n", 400 },
+    space_in_target = { "GET /a b HTTP/1.1\r\n\r\n", 400 },
+    header_without_colon = { "GET / HTTP/1.1\r\nHost test\r\n\r\n", 400 },
+    header_with_empty_name = { "GET / HTTP/1.1\r\n: value\r\n\r\n", 400 },
+    space_before_colon = { "GET / HTTP/1.1\r\nHost : test\r\n\r\n", 400 },
+    folded_header = { "GET / HTTP/1.1\r\nX-A: one\r\n two\r\n\r\n", 400 },
+    bad_length = { "POST / HTTP/1.1\r\nContent-Length: 12x\r\n\r\n", 400 },
+    negative_length = { "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n", 400 },
+    two_lengths = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n", 400 },
+    length_and_chunked = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n", 400 },
+    unknown_encoding = { "POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 501 },
+    bad_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n", 400 },
+    bad_chunk_end = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcde\r\n", 400 },
+    body_over_the_limit = { "POST / HTTP/1.1\r\nContent-Length: 16777217\r\n\r\n", 413 },
+    huge_length = { "POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n", 413 },
+    chunk_over_the_limit = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1000001\r\n", 413 },
+    unknown_expectation = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nExpect: something\r\n\r\n", 417 },
+    -- The byte 1 stands for 0xFF and the byte 2 for 0xC3, which make the
+    -- text invalid UTF-8 once `refused_test` puts them in.
+    invalid_utf8_in_target = { "GET /\1 HTTP/1.1\r\n\r\n", 400 },
+    invalid_utf8_in_header = { "GET / HTTP/1.1\r\nX-A: \2\r\n\r\n", 400 },
+}
+
+local function refused_test(request, expected)
+    if string.find(request, "[\1\2]") then
+        local raw = vector.fromstring(request)
+        for i = 0, #raw - 1 do
+            if raw:get(i) == 1 then
+                raw:set(i, 0xFF)
+            elseif raw:get(i) == 2 then
+                raw:set(i, 0xC3)
+            end
+        end
+        request = raw
+    end
+    local called = false
+    serving(function(req)
+        called = true
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, request)
+        assert(r.status == expected, `status $(r.status)`)
+        assert(r.headers.connection == "close" and r.body == "")
+        assert(at_end(sock))
+    end)
+    assert(not called)
+end
+
+local function a_body_at_the_limit_is_accepted_by_its_length_test()
+    -- The declared length is the limit itself. The server waits for the
+    -- body instead of refusing it, so the client sees no response yet.
+    serving(function(req) end, function(port)
+        local sock <close> = connect(port)
+        sock:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 16777216\r\n\r\n")
+        sock:settimeout(0.05)
+        raises(function()
+            sock:receive(1)
+        end, "receive timeout")
+    end)
+end
+
+local function headers_over_the_limit_are_refused_test()
+    serving(function(req) end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "GET / HTTP/1.1\r\nHost: test\r\nX-Big: " .. string.rep("a", 70000) .. "\r\n\r\n")
+        assert(r.status == 431 and r.reason == "Request Header Fields Too Large")
+        assert(at_end(sock))
+        -- A header block that never ends is refused once it is too long.
+        local endless <close> = connect(port)
+        endless:send("GET / HTTP/1.1\r\n" .. string.rep("X-A: b\r\n", 9000))
+        r = read_response(endless)
+        assert(r.status == 431)
+    end)
+end
+
+local function headers_just_under_the_limit_are_accepted_test()
+    local seen
+    serving(function(req)
+        seen = #req.headers["x-big"]
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "GET / HTTP/1.1\r\nHost: test\r\nX-Big: " .. string.rep("a", 60000) .. "\r\n\r\n")
+        assert(r.status == 200)
+    end)
+    assert(seen == 60000)
+end
+
+local function too_many_headers_are_refused_test()
+    serving(function(req)
+        return 200, `$(req.headers["x-128"])`
+    end, function(port)
+        local lines = {}
+        for i = 1, 128 do
+            lines[i] = "X-" .. i .. ": " .. i .. "\r\n"
+        end
+        local sock <close> = connect(port)
+        local r = exchange(sock, "GET / HTTP/1.1\r\n" .. table.concat(lines) .. "\r\n")
+        assert(r.status == 200 and r.body == "128")
+        local over <close> = connect(port)
+        r = exchange(over, "GET / HTTP/1.1\r\n" .. table.concat(lines) .. "X-129: 129\r\n\r\n")
+        assert(r.status == 431)
+    end)
+end
+
+local function empty_lines_before_a_request_are_skipped_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "\r\n\r\n" .. get("/after"))
+        assert(r.status == 200 and r.body == "/after")
+    end)
+end
+
+-- ===== serve itself =====
+
+local function serve_blocks_its_caller_test()
+    local server, port = listen()
+    local served = 0
+    local client = spawn(function()
+        local sock <close> = connect(port)
+        for i = 1, 3 do
+            assert(exchange(sock, get("/" .. i)).status == 200)
+        end
+        -- Closing the server ends `serve` in the main chunk.
+        server:close()
+        return "client done"
+    end)
+    local err = raises(function()
+        network.serve(server, function(req)
+            served = served + 1
+        end)
+    end, "attempt to use a closed server")
+    assert(served == 3)
+    local ok, text = resume(client)
+    assert(ok and text == "client done")
+end
+
+local function serve_binds_a_host_and_a_port_test()
+    -- A free port comes from a bind that is closed again. Another process
+    -- may take the port in between, so the test picks again when that
+    -- happens.
+    local co, port
+    for _ = 1, 20 do
+        local probe, candidate = listen()
+        probe:close()
+        co = spawn(network.serve, "127.0.0.1", candidate, function(req)
+            return 200, "bound"
+        end)
+        local warm = spawn(function()
+            yield()
+        end)
+        assert(resume(warm))
+        if status(co) == "suspended" then
+            port = candidate
+            break
+        end
+        local ok, err = resume(co)
+        assert(not ok and string.find(err, "Address already in use", 1, true), tostring(err))
+    end
+    assert(port, "no free port")
+    do
+        local sock <close> = connect(port)
+        assert(exchange(sock, get("/")).body == "bound")
+    end
+    -- Cancelling `serve` closes the server it bound.
+    assert(close(co))
+    local keep = spawn(function()
+        yield()
+    end)
+    local attempt = spawn(function()
+        return catch network.tcp.connect("127.0.0.1", port)
+    end)
+    local ok, connected, err = resume(attempt)
+    assert(ok and connected == false and string.find(err, "cannot connect", 1, true), tostring(err))
+    assert(resume(keep))
+end
+
+local function serve_checks_its_arguments_test()
+    raises(function()
+        network.serve()
+    end, "bad argument #1")
+    raises(function()
+        network.serve("127.0.0.1", 0)
+    end, "bad argument #3")
+    raises(function()
+        network.serve("127.0.0.1", "eighty", function() end)
+    end, "bad argument #2")
+    raises(function()
+        network.serve("127.0.0.1", 70000, function() end)
+    end, "port out of range")
+    local server = listen()
+    raises(function()
+        network.serve(server, "not a function")
+    end, "bad argument #2")
+    server:close()
+    raises(function()
+        network.serve(server, function() end)
+    end, "attempt to use a closed server")
+end
+
+local function serve_needs_the_server_permission_test()
+    local server, port = listen()
+    pledge("~network:server")
+    local err = raises(function()
+        network.serve(server, function() end)
+    end, "network:server")
+    raises(function()
+        network.serve("127.0.0.1", port + 1, function() end)
+    end, "network:server")
+    server:close()
+end

@@ -21,7 +21,7 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 
 - `src/syntax`: lexer, syntax tree, parser, tree walker.
 - `src/compile`: code generator, bytecode format, disassembler, binary chunks (`dump.zig`).
-- `src/vm`: values, objects, strings (WTF-8), tables, the collector, the interpreter, generic operations (`ops.zig`), debug information, pledge.
+- `src/vm`: values, objects, strings (WTF-8), tables, the collector, the interpreter, generic operations (`ops.zig`), debug information, pledge, and the scheduler of detached coroutines (`sched.zig`).
 - `src/jit/opt`: the optimizing tier. `opt.zig` holds its policy, the exits, and the routines optimized code calls, `flow.zig` the bytecode analysis, `lower.zig` the builder of the intermediate representation in `ir.zig`, `passes.zig` the passes, `regalloc.zig` the register allocator, and `codegen.zig` the code generator for both targets.
 - `src/jit`: the baseline JIT. `jit.zig` holds the tier-up policy and the hand-over between the tiers, `emit.zig` the templates, `a64.zig` and `x64.zig` the assemblers, `helpers.zig` the routines native code calls, and `mem.zig` the executable memory. `wasm.zig` is the backend of the WebAssembly build, which emits a WebAssembly module per function.
 - `src/lib`: the standard library, one file per module, opened from `lib/init.zig`.
@@ -36,6 +36,20 @@ A native is `fn (l: *Thread) Error!u32`. Its arguments are `l.arg(1)` through `l
 Errors are raised with `l.raiseFmt`, which prefixes the position of the calling Lus code, or with `l.raise(value)` for an arbitrary error value. A native that calls back into Lus uses `ops.call1` or `ops.callN`.
 
 Every heap allocation can trigger a collection. A freshly created object is safe while nothing else is allocated, so keep new objects reachable (push them on the stack, or store them into a rooted table) before allocating again.
+
+## Natives that wait
+
+A native that would block waits through the scheduler (`vm/sched.zig`, `../spec/design/coroutines.md`). It first tries its operation without waiting. When the operation reports that it would block, the native calls `sched.waitIo` with the handle, the direction, and the timeout, and tries again when that returns true. `sched.waitJoin` waits for the end of a detached coroutine, and `sched.pass` lets the other coroutines run.
+
+Inside a detached coroutine these calls return the error that suspends the thread, with `l.yielding` set. The native passes that error on with `try`, like any other error, and never catches it. The frame of the native stays on the stack, and when the wait is over `interp.restartNative` calls the native again with the same arguments. A native that waits therefore follows three rules.
+
+- It runs from its start again after every wait. What it has done so far lives outside its locals: in the object it works on (the receive buffer of a socket), in `sched.saveProgress` and `sched.progress` (a count, such as the bytes a send already wrote), or in the `ctx` of its scheduler record with a `cancel` routine that releases it when the coroutine is closed (`Connecting` in `lib/network.zig`).
+- It pushes nothing that the next run must find gone. The stack top at the wait is the stack top of the next run, so a native may also keep values in its own argument slots across runs, as `serve` does.
+- Cleanup that must wait for the real end of the call checks `l.yielding` first, as in `defer if (!l.yielding) release()`.
+
+Anywhere else the same calls keep the native on the stack, run the scheduler until the event arrives, and return. Other coroutines ran in the meantime, so the native checks that the object it waits on is still open before it touches it again (`stillOpen` in `lib/network.zig`). A handle that is about to close goes through `sched.forget` first, which wakes its waiters.
+
+After a change to the scheduler or to a native that waits, run `detach_test.lus`, `netcoro_test.lus`, and `serve_test.lus` under every JIT mode and in a `-Dgc-stress=97 -Dgc-verify=true` build, and run the suite on Linux as well, where the poller is epoll.
 
 ## Strings and bytes
 

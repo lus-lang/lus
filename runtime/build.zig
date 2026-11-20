@@ -111,7 +111,7 @@ pub fn build(b: *std.Build) void {
 
     // Small C hosts that exercise every part of the embedding interface.
     const embed_step = b.step("test-embed", "Build and run the C embedding tests");
-    const embed_tests = [_][]const u8{ "state", "values", "tables", "functions", "userdata", "errors", "pledge", "shared" };
+    const embed_tests = [_][]const u8{ "state", "values", "tables", "functions", "userdata", "errors", "pledge", "coroutines", "shared" };
     for (embed_tests) |name| {
         const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
         mod.addIncludePath(b.path("include"));

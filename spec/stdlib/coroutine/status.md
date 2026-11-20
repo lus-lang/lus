@@ -12,3 +12,5 @@ returns: string
 ---
 
 Returns the status of coroutine `co` as a string: `"running"`, `"suspended"`, `"normal"`, or `"dead"`.
+
+A coroutine given to `coroutine.detach` reports `"suspended"` while it waits for its turn, for a socket, or for another coroutine, and `"dead"` once it has ended.

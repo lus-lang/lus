@@ -454,6 +454,15 @@ pub fn runFinalizers(l: *Thread) Error!void {
         const v = switch (h.tag) {
             .table => Value.obj(.table, h),
             .userdata => Value.obj(.userdata, h),
+            .thread => {
+                // A detached coroutine failed and became unreachable
+                // before anything collected its error, which stops the
+                // program.
+                const sched = @import("../vm/sched.zig");
+                if (g.sched.closing) continue;
+                if (sched.uncollected(h.as(Thread))) |t| return sched.raiseUncollected(l, t);
+                continue;
+            },
             else => continue,
         };
         const tm = l.metamethod(v, .gc);
@@ -504,7 +513,7 @@ fn load(l: *Thread) Error!u32 {
         errdefer buf.deinit(l.g.gpa);
         readChunk(l, chunk, &buf) catch |e| switch (e) {
             // A state shutting down unwinds through every protection.
-            error.LusError => if (l.g.halting) return e else {
+            error.LusError => if (l.g.halting or l.g.sched.fatal) return e else {
                 const msg = l.err;
                 try l.push(.nil);
                 try l.push(msg);
