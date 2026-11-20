@@ -203,7 +203,7 @@ pub fn hoist(f: *ir.Func, cfg: *Cfg, loops: []const lower.Lower.LoopInfo, marks:
                 defined_in[r] = true;
                 const inst = f.at(r);
                 switch (inst.op) {
-                    .store, .storex, .copy_s2m, .copy_m2m => {
+                    .store, .storex, .copy_s2m, .copy_s2n, .copy_m2m => {
                         if (!inst.flags.fresh) w.classes[@backingInt(inst.cls)] = true;
                     },
                     .sstore, .scopy, .copy_m2s => {
@@ -321,7 +321,7 @@ fn dedupe(f: *ir.Func, blk: BlockId) !void {
         const inst = f.at(r);
         switch (inst.op) {
             // Writes end what the earlier loads of the block know.
-            .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .callc, .gccheck, .generic, .barrier, .dcall, .darg, .dres, .dgate, .dlimit, .param => {
+            .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_s2n, .copy_m2m, .callc, .gccheck, .generic, .barrier, .dcall, .darg, .dres, .dgate, .dlimit, .param => {
                 seen.clearRetainingCapacity();
                 try keep.append(arena, r);
                 continue;
@@ -354,7 +354,7 @@ fn dedupe(f: *ir.Func, blk: BlockId) !void {
 
 fn hasEffect(i: *const ir.Inst) bool {
     return switch (i.op) {
-        .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_m2m, .barrier, .gccheck, .darg, .dcall => true,
+        .sstore, .scopy, .store, .storex, .copy_m2s, .copy_s2m, .copy_s2n, .copy_m2m, .barrier, .gccheck, .darg, .dcall => true,
         .callc => !i.flags.pure,
         .phi => false,
         else => i.isGuard() or i.isTerminator(),

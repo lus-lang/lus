@@ -186,6 +186,10 @@ pub const Op = enum(u8) {
     copy_m2s,
     copy_s2m,
     copy_m2m,
+    /// Copies a value from a register slot to a hash node: the payload to
+    /// [a + imm] and the tag byte to [a + the high half of aux]. The low
+    /// half of aux is the slot.
+    copy_s2n,
     // Guards. Each leaves optimized code through its snapshot when its
     // condition fails.
     guard,

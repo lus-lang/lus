@@ -38,9 +38,12 @@ const Flow = flow_mod.Flow;
 const Cfg = flow_mod.Cfg;
 const RegSet = flow_mod.RegSet;
 const tl = table.layout;
-/// Whether optimized code reads and writes hash nodes inline. While it
-/// does not, every field access takes the general path.
-const node_inline = false;
+/// The displacement of the tags of node `idx` from the first node of a
+/// hash part. The tag of the key is at `tl.tag_key` from there, and the
+/// tag of the value at `tl.tag_val`.
+fn tagDisp(idx: usize) i32 {
+    return -@as(i32, @intCast(idx << tl.tag_shift));
+}
 const il = interp.layout;
 
 /// `NotDirect` means that the function needs its frame while it runs,
@@ -365,7 +368,7 @@ pub const Lower = struct {
             for (blk.insts.items) |r| {
                 const i = f.at(r);
                 switch (i.op) {
-                    .sload, .gslot, .sstore, .scopy, .copy_m2s, .copy_s2m, .brtruthy, .brtag, .generic, .gccheck => return b.notDirect(@tagName(i.op), 0),
+                    .sload, .gslot, .sstore, .scopy, .copy_m2s, .copy_s2m, .copy_s2n, .brtruthy, .brtag, .generic, .gccheck => return b.notDirect(@tagName(i.op), 0),
                     .barrier => {
                         if (i.aux & 3 == 2) return b.notDirect("barrier", 0);
                         writes |= classBit(.gc);
@@ -579,17 +582,24 @@ pub const Lower = struct {
 
     /// Stores the typed value `v` as a whole value at [base + disp].
     fn storeValue(b: *Lower, base: Ref, disp: i32, v: Ref, cls: ir.Class, fresh: bool) Error!void {
+        return b.storeValueAt(base, disp, disp + 8, 8, v, cls, fresh);
+    }
+
+    /// `storeValue` for a value whose payload goes to `disp` and whose
+    /// tag goes to `tdisp`, as a word, or as a byte when `tsize` is 1, as
+    /// in a hash node.
+    fn storeValueAt(b: *Lower, base: Ref, disp: i32, tdisp: i32, tsize: u8, v: Ref, cls: ir.Class, fresh: bool) Error!void {
         const ty = b.tyOf(v);
         var tag_store: Ref = undefined;
         switch (ty) {
             .nil => {
                 _ = try b.store(base, disp, try b.kint(0), 8, cls, fresh);
-                tag_store = try b.store(base, disp + 8, try b.kint(0), 8, cls, fresh);
+                tag_store = try b.store(base, tdisp, try b.kint(0), tsize, cls, fresh);
             },
             .boolean => {
                 _ = try b.store(base, disp, try b.kint(0), 8, cls, fresh);
                 const tag = try b.pure(.{ .op = .addi, .ty = .int, .a = v, .imm = @backingInt(Tag.false) });
-                tag_store = try b.store(base, disp + 8, tag, 8, cls, fresh);
+                tag_store = try b.store(base, tdisp, tag, tsize, cls, fresh);
                 // The payload word is not the boolean.
                 const stale: Inst = .{ .op = .load, .ty = .int, .size = 8, .cls = cls, .a = base, .imm = disp };
                 _ = b.cse.remove(b.keyOf(&stale));
@@ -598,12 +608,12 @@ pub const Lower = struct {
             else => {
                 // The payload first, so that the tag store leaves its
                 // load known.
-                tag_store = try b.store(base, disp + 8, try b.kint(@backingInt(ty)), 8, cls, fresh);
+                tag_store = try b.store(base, tdisp, try b.kint(@backingInt(ty)), tsize, cls, fresh);
                 _ = try b.store(base, disp, v, 8, cls, fresh);
             },
         }
         // The tag that was stored is known.
-        const probe: Inst = .{ .op = .gtag, .cls = cls, .a = base, .imm = disp + 8, .aux = ty.guardTag(), .cond = @backingInt(ir.Cond.eq) };
+        const probe: Inst = .{ .op = .gtag, .cls = cls, .a = base, .imm = tdisp, .aux = ty.guardTag(), .cond = @backingInt(ir.Cond.eq) };
         try b.cse.put(b.arena, b.keyOf(&probe), tag_store);
     }
 
@@ -1747,13 +1757,19 @@ pub const Lower = struct {
 
     /// Loads the value at [base + disp] as the type the sample predicts.
     fn loadValue(b: *Lower, base: Ref, disp: i32, sample: Value, cls: ir.Class, dep: Ref) Error!Ref {
+        return b.loadValueAt(base, disp, disp + 8, sample, cls, dep);
+    }
+
+    /// `loadValue` for a value whose payload is at `disp` and whose tag
+    /// is the byte at `tdisp`, as in a hash node.
+    fn loadValueAt(b: *Lower, base: Ref, disp: i32, tdisp: i32, sample: Value, cls: ir.Class, dep: Ref) Error!Ref {
         const ty = Ty.fromTag(sample.tag);
         if (ty == .void) return error.Unsupported;
-        const g = try b.guard(.{ .op = .gtag, .cls = cls, .cond = @backingInt(ir.Cond.eq), .a = base, .imm = disp + 8, .aux = ty.guardTag(), .c = dep });
+        const g = try b.guard(.{ .op = .gtag, .cls = cls, .cond = @backingInt(ir.Cond.eq), .a = base, .imm = tdisp, .aux = ty.guardTag(), .c = dep });
         return switch (ty) {
             .nil => try b.knil(),
             .boolean => blk: {
-                const tag = try b.load(base, disp + 8, .int, 1, cls, g);
+                const tag = try b.load(base, tdisp, .int, 1, cls, g);
                 break :blk try b.pure(.{ .op = .addi, .ty = .boolean, .a = tag, .imm = -@as(i64, @backingInt(Tag.false)) });
             },
             else => try b.load(base, disp, ty, 8, cls, g),
@@ -1811,8 +1827,18 @@ pub const Lower = struct {
 
     const Node = struct {
         hp: Ref,
+        /// Displacement of the node from `hp`.
         off: i32,
+        /// Displacement of its tags from `hp`.
+        tags: i32,
         dep: Ref,
+
+        fn val(n: Node) i32 {
+            return n.off + tl.node_val;
+        }
+        fn valTag(n: Node) i32 {
+            return n.tags + tl.tag_val;
+        }
     };
 
     /// The hash node `idx` of table `t`, proven to exist and to hold the
@@ -1824,8 +1850,8 @@ pub const Lower = struct {
         const off: i32 = @intCast(idx << tl.node_shift);
         const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(@as(u64, @intFromPtr(key_str))), .c = g });
-        const g2 = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.string), .c = g });
-        return .{ .hp = hp, .off = off, .dep = g2 };
+        const g2 = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = tagDisp(idx) + tl.tag_key, .aux = @backingInt(Tag.string), .c = g });
+        return .{ .hp = hp, .off = off, .tags = tagDisp(idx), .dep = g2 };
     }
 
     const Loaded = struct {
@@ -1853,14 +1879,14 @@ pub const Lower = struct {
             const nk = st.key(i);
             const off: i32 = @intCast(i << tl.node_shift);
             if (nk.tag == .nil) {
-                _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.nil), .c = g });
+                _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = tagDisp(i) + tl.tag_key, .aux = @backingInt(Tag.nil), .c = g });
                 return true;
             }
             if (nk.tag != .string) return false;
             if (nk.payload == @intFromPtr(key_str)) return false;
             const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(nk.payload), .c = g });
-            _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = off + tl.node_key + 8, .aux = @backingInt(Tag.string), .c = g });
+            _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = tagDisp(i) + tl.tag_key, .aux = @backingInt(Tag.string), .c = g });
             i = (i + 1) & mask;
         }
         // Every node was visited when the part is that small.
@@ -1871,13 +1897,12 @@ pub const Lower = struct {
     /// the table itself, or the table that `__index` of its metatable
     /// names. Returns null when the lookup needs the general path.
     fn fieldLoad(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!?Loaded {
-        if (!node_inline) return null;
         if (!key_str.flags.interned) return null;
         if (table.findStr(st, key_str)) |idx| {
             const v = st.val(idx);
             if (v.isNil()) return null;
             const n = try b.hashNode(t, idx, key_str);
-            return .{ .ref = try b.loadValue(n.hp, n.off + tl.node_val, v, .node_val, n.dep), .sample = Sample.of(v) };
+            return .{ .ref = try b.loadValueAt(n.hp, n.val(), n.valTag(), v, .node_val, n.dep), .sample = Sample.of(v) };
         }
         // The key is absent, so the metatable decides.
         const mt = st.metatable orelse {
@@ -1915,9 +1940,9 @@ pub const Lower = struct {
         const idx2 = table.findStr(holder, key_str).?;
         const v2 = holder.val(idx2);
         const n1 = try b.hashNode(m, hidx, index_name);
-        const hv = try b.loadValue(n1.hp, n1.off + tl.node_val, h, .node_val, n1.dep);
+        const hv = try b.loadValueAt(n1.hp, n1.val(), n1.valTag(), h, .node_val, n1.dep);
         const n2 = try b.hashNode(hv, idx2, key_str);
-        return .{ .ref = try b.loadValue(n2.hp, n2.off + tl.node_val, v2, .node_val, n2.dep), .sample = Sample.of(v2) };
+        return .{ .ref = try b.loadValueAt(n2.hp, n2.val(), n2.valTag(), v2, .node_val, n2.dep), .sample = Sample.of(v2) };
     }
 
     fn getField(b: *Lower, ra: u32, src: TableSrc, key_v: Value) Error!bool {
@@ -1955,7 +1980,6 @@ pub const Lower = struct {
     /// strings share names a table as `__index`, and that table holds
     /// the method.
     fn stringMethod(b: *Lower, ra: u32, rb: u32, key_str: *String) Error!bool {
-        if (!node_inline) return false;
         const g = b.l.g;
         if (!key_str.flags.interned) return false;
         const slot_ptr = &g.type_metatables[value.typeSlot(.string)];
@@ -1972,9 +1996,9 @@ pub const Lower = struct {
         const m = try b.load(try b.kint(@bitCast(@as(u64, @intFromPtr(slot_ptr)))), 0, .table, 8, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
         const n1 = try b.hashNode(m, hidx, index_name);
-        const hv = try b.loadValue(n1.hp, n1.off + tl.node_val, h, .node_val, n1.dep);
+        const hv = try b.loadValueAt(n1.hp, n1.val(), n1.valTag(), h, .node_val, n1.dep);
         const n2 = try b.hashNode(hv, idx2, key_str);
-        const v = try b.loadValue(n2.hp, n2.off + tl.node_val, v2, .node_val, n2.dep);
+        const v = try b.loadValueAt(n2.hp, n2.val(), n2.valTag(), v2, .node_val, n2.dep);
         try b.setReg(ra + 1, sv, recv_sample);
         try b.setReg(ra, v, Sample.of(v2));
         return true;
@@ -2017,8 +2041,23 @@ pub const Lower = struct {
         }
     }
 
+    /// `storeReg` into the value of a hash node, whose payload is at
+    /// `disp` from `base` and whose tag is the byte at `tdisp`.
+    fn storeRegNode(b: *Lower, base: Ref, disp: i32, tdisp: i32, rv: u32, owner: Ref) Error!void {
+        if (b.staticTy(rv)) |ty| {
+            const v = try b.typed(rv, ty);
+            try b.storeValueAt(base, disp, tdisp, 1, v, .node_val, false);
+            if (ty.collectable()) _ = try b.emit(.{ .op = .barrier, .a = owner, .b = v });
+        } else {
+            try b.flush(rv);
+            b.clobber(.node_val);
+            const sl: u32 = @bitCast(@as(i32, @intCast(b.slotOf(rv))));
+            _ = try b.emit(.{ .op = .copy_s2n, .cls = .node_val, .a = base, .imm = disp, .aux = (@as(u64, @as(u32, @bitCast(tdisp))) << 32) | sl });
+            _ = try b.emit(.{ .op = .barrier, .a = owner, .aux = @as(u64, @bitCast(b.slotOf(rv))) << 8 | 2 });
+        }
+    }
+
     fn setField(b: *Lower, src: TableSrc, key_v: Value, rv: u32) Error!bool {
-        if (!node_inline) return false;
         if (key_v.tag != .string) return false;
         const key_str = key_v.as(String);
         if (!key_str.flags.interned) return false;
@@ -2033,7 +2072,7 @@ pub const Lower = struct {
         const idx = table.findStr(t.sample, key_str) orelse return false;
         if (!try b.rawStore(t)) return false;
         const n = try b.hashNode(t.ref, idx, key_str);
-        try b.storeReg(n.hp, n.off + tl.node_val, rv, .node_val, t.ref, 0, false);
+        try b.storeRegNode(n.hp, n.val(), n.valTag(), rv, t.ref);
         b.clobber(.tab_absent);
         _ = try b.emit(.{ .op = .store, .size = 2, .cls = .tab_absent, .a = t.ref, .b = try b.kint(0), .imm = tl.tm_absent });
         return true;
@@ -2062,17 +2101,20 @@ pub const Lower = struct {
             if (!taken) break;
         }
         if (at == null and !table.hashRoom(fz.used, len)) return false;
-        const base: i32 = @intCast(@sizeOf(Table) + (@as(usize, at orelse i) << tl.node_shift));
+        const nodes: i32 = @intCast(@sizeOf(Table) + table.tagBytes(len));
+        const node = at orelse i;
+        const base: i32 = nodes + @as(i32, @intCast(@as(usize, node) << tl.node_shift));
+        const tags: i32 = nodes + tagDisp(node);
         const v = try b.typed(rv, ty);
         if (at == null) {
             _ = try b.store(fz.ref, base + tl.node_key, try b.kptr(.string, @intFromPtr(key_str)), 8, .node_key, true);
-            _ = try b.store(fz.ref, base + tl.node_key + 8, try b.kint(@backingInt(Tag.string)), 8, .node_key, true);
+            _ = try b.store(fz.ref, tags + tl.tag_key, try b.kint(@backingInt(Tag.string)), 1, .node_key, true);
             fz.keys[fz.used] = key_str;
             fz.nodes[fz.used] = i;
             fz.used += 1;
             _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = fz.ref, .b = try b.kint(fz.used), .imm = tl.hash_used, .flags = .{ .fresh = true } });
         }
-        try b.storeValue(fz.ref, base + tl.node_val, v, .node_val, true);
+        try b.storeValueAt(fz.ref, base + tl.node_val, tags + tl.tag_val, 1, v, .node_val, true);
         _ = try b.emit(.{ .op = .barrier, .a = fz.ref, .b = v, .imm = @bitCast(@as(u64, @intFromPtr(key_str))) });
         return true;
     }
@@ -2081,7 +2123,7 @@ pub const Lower = struct {
         if (b.marks() != 0) return false;
         // A record constructor allocates nothing yet. The table exists
         // as its fields until something needs the table itself.
-        if (node_inline and nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
+        if (nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
             const hsize: u32 = @intCast(table.hashSizeExact(nc));
             _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * 16), .snap = try b.snap() });
             const ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = nc });
@@ -2106,7 +2148,7 @@ pub const Lower = struct {
         try b.setReg(ra, t, Sample.tagged(.table));
         b.fresh = null;
         const units = table.inlineUnits(nb, nc);
-        if (node_inline and nb == 0 and nc > 0 and units > 0) {
+        if (nb == 0 and nc > 0 and units > 0) {
             const hsize: u32 = @intCast(table.hashSizeExact(nc));
             b.fresh = .{ .ref = t, .mask = hsize - 1 };
         }
@@ -2725,11 +2767,13 @@ pub const Lower = struct {
         _ = try b.emit(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = t, .imm = 0, .snap = snap_id });
         _ = b.vobjs.swapRemove(vi);
         var fz: Fresh = .{ .ref = t, .mask = v.mask, .used = v.used, .metatable = v.mt != ir.none };
+        const nodes: i32 = @intCast(@sizeOf(Table) + table.tagBytes(v.mask + 1));
         for (v.keys[0..v.used], v.nodes[0..v.used], v.vals[0..v.used], 0..) |k, nidx, val, i| {
-            const base: i32 = @intCast(@sizeOf(Table) + (@as(usize, nidx) << tl.node_shift));
+            const base: i32 = nodes + @as(i32, @intCast(@as(usize, nidx) << tl.node_shift));
+            const tags: i32 = nodes + tagDisp(nidx);
             _ = try b.store(t, base + tl.node_key, try b.kptr(.string, @intFromPtr(k)), 8, .node_key, true);
-            _ = try b.store(t, base + tl.node_key + 8, try b.kint(@backingInt(Tag.string)), 8, .node_key, true);
-            try b.storeValue(t, base + tl.node_val, val, .node_val, true);
+            _ = try b.store(t, tags + tl.tag_key, try b.kint(@backingInt(Tag.string)), 1, .node_key, true);
+            try b.storeValueAt(t, base + tl.node_val, tags + tl.tag_val, 1, val, .node_val, true);
             _ = try b.emit(.{ .op = .barrier, .a = t, .b = val, .imm = @bitCast(@as(u64, @intFromPtr(k))) });
             fz.keys[i] = k;
             fz.nodes[i] = nidx;

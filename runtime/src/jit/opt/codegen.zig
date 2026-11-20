@@ -1117,6 +1117,15 @@ pub const Codegen = struct {
                 const base = c.g(i.a, sc0);
                 a.copy16(.{ .base = base, .disp = @intCast(i.imm) }, slot(@bitCast(i.aux)));
             },
+            .copy_s2n => {
+                const base = c.g(i.a, sc0);
+                const s: i64 = @as(i32, @bitCast(@as(u32, @truncate(i.aux))));
+                const tdisp: i32 = @bitCast(@as(u32, @truncate(i.aux >> 32)));
+                a.load64(sc1, slot(s));
+                a.store64(sc1, .{ .base = base, .disp = @intCast(i.imm) });
+                a.load8(sc1, tagOf(s));
+                a.store8(sc1, .{ .base = base, .disp = tdisp });
+            },
             .copy_m2m => {
                 const d = c.g(i.a, sc0);
                 const s = c.g(i.b, sc1);
