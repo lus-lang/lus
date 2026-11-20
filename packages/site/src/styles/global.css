@@ -362,6 +362,11 @@ details[open] > summary::before {
   @apply ruled mb-3;
 }
 
+/* a section reached by a link keeps a little paper above its title */
+.part[id] {
+  scroll-margin-top: 1rem;
+}
+
 /* crop marks: an L of hairlines at each corner, open to the element, like
    a plate on a proof sheet */
 .crop {
