@@ -337,7 +337,22 @@ pub fn toNumberCoerce(v: Value) ?Value {
     switch (v.tag) {
         .integer, .float, .bigint, .decimal => return v,
         .string => {
-            const s = std.mem.trim(u8, v.as(String).bytes(), " \t\n\r\x0b\x0c");
+            // A plain decimal integer of at most 18 digits, which cannot
+            // overflow, is the common case and converts directly.
+            const raw = v.as(String).bytes();
+            if (raw.len > 0 and raw.len <= 18) {
+                const neg = raw[0] == '-';
+                const digits = raw[@intFromBool(neg)..];
+                if (digits.len > 0) {
+                    var acc: i64 = 0;
+                    for (digits) |c| {
+                        const d = c -% '0';
+                        if (d > 9) break;
+                        acc = acc * 10 + d;
+                    } else return Value.int(if (neg) -acc else acc);
+                }
+            }
+            const s = std.mem.trim(u8, raw, " \t\n\r\x0b\x0c");
             const n = lexer.parseNumber(s) orelse return null;
             return switch (n) {
                 .integer => |i| Value.int(i),
