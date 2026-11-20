@@ -30,9 +30,10 @@ pub const max_small = 2048;
 const granules_per_page = page_size / granule;
 pub const bitmap_words = granules_per_page / 64;
 
-/// Size classes in granules. Classes grow by a quarter past 128 bytes,
-/// which bounds internal fragmentation by 20 percent.
-pub const class_granules = [_]u16{ 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128 };
+/// Size classes in granules: every granule up to 256 bytes, which holds
+/// small records with their hash parts exactly, then classes that grow by
+/// a quarter, which bounds internal fragmentation by 20 percent.
+pub const class_granules = [_]u16{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128 };
 pub const class_count = class_granules.len;
 
 const class_of_granules: [max_small / granule + 1]u8 = blk: {
