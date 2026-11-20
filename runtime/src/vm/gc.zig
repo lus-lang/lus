@@ -1117,6 +1117,13 @@ fn MarkerOf(comptime par: bool) type {
             if (!m.push(h)) m.traverse(h);
         }
 
+        /// Marks the tables of an array part of kind `table`.
+        fn markTables(m: *M, words: []const u64) void {
+            for (words) |w| {
+                if (w != object.Table.hole) m.markValue(Value.make(w, .table));
+            }
+        }
+
         /// Marks the strings of an array part of kind `string`. Strings
         /// reference nothing, so none of them goes on the gray stack.
         fn markStrings(m: *M, words: []const u64) void {
@@ -1236,14 +1243,19 @@ fn MarkerOf(comptime par: bool) type {
 
         fn traverseTable(m: *M, t: *object.Table) void {
             const s = &m.g.gcs;
-            // An unboxed array part holds numbers, which tracing skips, or
-            // strings, which it marks without tracing.
+            // An unboxed array part holds numbers, which tracing skips,
+            // strings, which it marks without tracing, or tables, which
+            // are strong unless the values of the table are weak.
             const arr: []const Value = if (t.kind == .boxed) t.values() else &.{};
             m.work += arr.len * @sizeOf(Value) + @as(usize, t.hash_len) * @sizeOf(object.Node);
             if (t.kind == .string) m.markStrings(t.words());
             if (t.metatable) |mt| m.markObject(&mt.hdr);
             const mode = weakModeOf(m.g, t);
             if (!m.verifying) t.setWeakMode(mode);
+            if (t.kind == .table) {
+                m.work += t.words().len * @sizeOf(u64);
+                if (mode == .none or mode == .keys) m.markTables(t.words());
+            }
             switch (mode) {
                 .none => {
                     for (arr) |v| m.markValue(v);
@@ -1364,6 +1376,13 @@ fn MarkerOf(comptime par: bool) type {
                 if ((t.weakMode() == .values or t.weakMode() == .both) and t.kind == .boxed) {
                     for (t.values()) |*v| {
                         if (!isMarkedOrNotCollectable(v.*) or isFinalizedObject(v.*)) v.* = .nil;
+                    }
+                }
+                if ((t.weakMode() == .values or t.weakMode() == .both) and t.kind == .table) {
+                    for (t.words()) |*w| {
+                        if (w.* == object.Table.hole) continue;
+                        const v = Value.make(w.*, .table);
+                        if (!isMarkedOrNotCollectable(v) or isFinalizedObject(v)) w.* = object.Table.hole;
                     }
                 }
                 for (0..t.hash_len) |hi| {

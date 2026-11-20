@@ -606,7 +606,7 @@ fn accumulate(l: *Thread, len: i64, comptime term: Term, m: f64) Error!Lanes {
             .boxed => for (t.values()[0..n], 1..) |v, k| {
                 if (numericValue(l, v)) |x| a.add(term, @intCast(k), x, m);
             },
-            .string => for (0..n) |k| {
+            .string, .table => for (0..n) |k| {
                 if (numericValue(l, table.arrayGet(t, k))) |x| a.add(term, @intCast(k + 1), x, m);
             },
         }

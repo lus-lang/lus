@@ -2249,10 +2249,11 @@ pub const Lower = struct {
                 }
                 return true;
             },
-            .string => {
-                const w = try b.pure(.{ .op = .loadx, .ty = .string, .cls = .elem, .a = e.ap, .b = e.zi, .aux = tl.word_shift, .c = e.dep });
+            .string, .table => {
+                const tag: Tag = if (e.kind == .string) .string else .table;
+                const w = try b.pure(.{ .op = .loadx, .ty = Ty.fromTag(tag), .cls = .elem, .a = e.ap, .b = e.zi, .aux = tl.word_shift, .c = e.dep });
                 _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = w, .imm = @bitCast(tl.nil_word) });
-                try b.setReg(ra, w, Sample.tagged(.string));
+                try b.setReg(ra, w, Sample.tagged(tag));
                 return true;
             },
             .boxed => {
@@ -2373,6 +2374,7 @@ pub const Lower = struct {
             .int => ty == .int,
             .float => ty == .float,
             .string => ty == .string,
+            .table => ty == .table,
             .boxed => ty != .nil or true,
             .none => false,
         };
@@ -2397,8 +2399,9 @@ pub const Lower = struct {
                 b.clobber(.elem);
                 _ = try b.emit(.{ .op = .storex, .cls = .elem, .a = ap, .b = zi, .c = bits, .aux = tl.word_shift });
             },
-            // A string is its pointer, which never equals the nil word.
-            .string => {
+            // A string or a table is its pointer, which never equals the
+            // nil word.
+            .string, .table => {
                 b.clobber(.elem);
                 _ = try b.emit(.{ .op = .storex, .cls = .elem, .a = ap, .b = zi, .c = v, .aux = tl.word_shift });
                 _ = try b.emit(.{ .op = .barrier, .a = t, .b = v });

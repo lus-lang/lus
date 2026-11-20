@@ -2393,7 +2393,7 @@ const Emitter = struct {
         e.get(L.t1);
         e.get(L.x1);
         e.store64(0);
-        // A part of kind `string` holds collectable values.
+        // Parts of kind `string` and `table` hold collectable values.
         e.tableBarrier(rc);
         e.br(3);
         e.end();

@@ -406,10 +406,11 @@ pub const Table = struct {
     pub const WeakMode = enum(u2) { none, keys, values, both };
 
     /// What the array part stores. An unboxed part (`none`, `int`,
-    /// `float`, or `string`) holds one 64-bit word per slot: the payload
-    /// of an integer, a float, or a string, or `hole` for nil. A `none`
+    /// `float`, `string`, or `table`) holds one 64-bit word per slot: the
+    /// payload of an integer, a float, a string, or a table, or `hole` for
+    /// nil. A `none`
     /// part holds only holes. The kind starts as `none`, takes the kind
-    /// of the first number or string stored, and becomes `boxed` on the
+    /// of the first number, string, or table stored, and becomes `boxed` on the
     /// first store that does not fit. It never narrows back. The integer
     /// values of the unboxed kinds equal the value tags they hold, so a
     /// load rebuilds a value from the word and the kind alone.
@@ -418,6 +419,7 @@ pub const Table = struct {
         int = @backingInt(value.Tag.integer),
         float = @backingInt(value.Tag.float),
         string = @backingInt(value.Tag.string),
+        table = @backingInt(value.Tag.table),
         boxed = 0xFF,
     };
 
