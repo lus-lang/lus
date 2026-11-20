@@ -8,6 +8,7 @@
 */
 import results from "../data/benchmarks.json"
 import CubeField from "./CubeField.astro"
+import { columnOrder } from "../lib/bench-order"
 
 interface Cell {
   ok?: boolean
@@ -26,11 +27,13 @@ const data = results as unknown as {
   http?: Record<string, Cell>
 }
 
-// Lus leads, the others keep the order of the harness
-const runtimes = [
-  "lus",
-  ...Object.keys(data.runtimes).filter((id) => id !== "lus"),
-]
+// Lus leads, the others follow from best to worst for the metric shown,
+// by the geometric mean of their results across the programs
+// (lib/bench-order.ts), so time and memory each have their own order
+const orders: Record<Mode, string[]> = {
+  time: columnOrder(data, "best_s"),
+  memory: columnOrder(data, "peak_rss_mb"),
+}
 const label = (id: string) =>
   (data.runtimes[id]?.name ?? id).replace(/\.js$/, "")
 
@@ -56,6 +59,7 @@ interface Row {
 // one row of cells: the best value takes the signal, bars scale to the
 // largest value in the row
 function row(
+  runtimes: string[],
   name: string,
   source: Record<string, Cell>,
   key: keyof Cell,
@@ -89,7 +93,7 @@ function row(
 // mean of the runtime's cost relative to the best in each program (1 for
 // the best), on a log scale of one cube per doubling after the first.
 // Lower is better, like the tables beneath it.
-function standing(key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", httpHigher: boolean) {
+function standing(runtimes: string[], key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", httpHigher: boolean) {
   const rowsOf = [
     ...programs.map((p) => ({ cells: data.programs[p], key, higher: false })),
     ...(data.http ? [{ cells: data.http, key: http, higher: httpHigher }] : []),
@@ -113,12 +117,13 @@ function standing(key: "best_s" | "peak_rss_mb", http: "rps" | "peak_rss_mb", ht
 }
 
 const skylines = {
-  time: standing("best_s", "rps", true),
-  memory: standing("peak_rss_mb", "peak_rss_mb", false),
+  time: standing(orders.time, "best_s", "rps", true),
+  memory: standing(orders.memory, "peak_rss_mb", "peak_rss_mb", false),
 }
 
 const modes: {
   mode: Mode
+  order: string[]
   caption: string
   rows: Row[]
   httpCaption: string
@@ -126,18 +131,20 @@ const modes: {
 }[] = [
   {
     mode: "time",
+    order: orders.time,
     caption: "best wall time, lower is better",
-    rows: programs.map((p) => row(p, data.programs[p], "best_s", fmtTime)),
+    rows: programs.map((p) => row(orders.time, p, data.programs[p], "best_s", fmtTime)),
     httpCaption:
       "http server, requests per second at 64 connections, higher is better",
-    http: data.http ? row("http", data.http, "rps", fmtRps, true) : null,
+    http: data.http ? row(orders.time, "http", data.http, "rps", fmtRps, true) : null,
   },
   {
     mode: "memory",
+    order: orders.memory,
     caption: "peak memory, lower is better",
-    rows: programs.map((p) => row(p, data.programs[p], "peak_rss_mb", fmtMem)),
+    rows: programs.map((p) => row(orders.memory, p, data.programs[p], "peak_rss_mb", fmtMem)),
     httpCaption: "http server, peak memory under load, lower is better",
-    http: data.http ? row("http", data.http, "peak_rss_mb", fmtMem) : null,
+    http: data.http ? row(orders.memory, "http", data.http, "peak_rss_mb", fmtMem) : null,
   },
 ]
 ---
@@ -164,7 +171,7 @@ const modes: {
             <thead>
               <tr>
                 <th scope="col">program</th>
-                {runtimes.map((id, ci) => (
+                {m.order.map((id, ci) => (
                   <th scope="col" data-col={ci} class:list={{ lus: id === "lus" }}>{label(id)}</th>
                 ))}
               </tr>
@@ -193,7 +200,7 @@ const modes: {
               <thead>
                 <tr>
                   <td />
-                  {runtimes.map((id, ci) => (
+                  {m.order.map((id, ci) => (
                     <th scope="col" data-col={ci} class:list={{ lus: id === "lus" }}>{label(id)}</th>
                   ))}
                 </tr>
