@@ -468,6 +468,10 @@ pub const Assembler = struct {
     pub fn addScaled(a: *Assembler, dst: Reg, b: Reg, index: Reg, shift: u6) void {
         a.word(0x8B000000 | index.n() << 16 | @as(u32, shift) << 10 | b.n() << 5 | dst.n());
     }
+    /// dst = b - (index << shift).
+    pub fn subScaled(a: *Assembler, dst: Reg, b: Reg, index: Reg, shift: u6) void {
+        a.word(0xCB000000 | index.n() << 16 | @as(u32, shift) << 10 | b.n() << 5 | dst.n());
+    }
 
     // -----------------------------------------------------------------
     // Integer arithmetic. Each operation computes dst = dst op src.

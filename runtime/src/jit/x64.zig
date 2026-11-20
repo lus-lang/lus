@@ -391,6 +391,17 @@ pub const Assembler = struct {
         a.add(s0, b);
         a.mov(dst, s0);
     }
+    /// dst = b - (index << shift).
+    pub fn subScaled(a: *Assembler, dst: Reg, b: Reg, index: Reg, shift: u6) void {
+        a.mov(s0, index);
+        a.rex(true, 0, s0.n());
+        a.byte(0xC1);
+        a.modrr(4, s0.n());
+        a.byte(shift);
+        a.neg(s0);
+        a.add(s0, b);
+        a.mov(dst, s0);
+    }
 
     // -----------------------------------------------------------------
     // Integer arithmetic. Each operation computes dst = dst op src.

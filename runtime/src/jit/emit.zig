@@ -45,9 +45,6 @@ const tag_closure: u8 = @backingInt(Tag.closure);
 const tag_nil: u8 = @backingInt(Tag.nil);
 const Frame = state.Frame;
 const tl = table.layout;
-/// Whether native code reads and writes hash nodes inline. While it
-/// does not, every field access calls its helper.
-const node_inline = false;
 const il = interp.layout;
 const frame_size: i32 = @sizeOf(Frame);
 const frame_shift: u6 = std.math.log2_int(usize, @sizeOf(Frame));
@@ -1080,21 +1077,48 @@ pub const Emitter = struct {
     }
 
     /// node = the hash node of the table in `tab` that the slot
-    /// prediction at `slot_addr` names. Branches to `out_of_range` when
-    /// the table has no such node, and to `other_key` when the node holds
-    /// another key than the string `key`. This is the test that
-    /// `interp.lookupIc` makes before it trusts a prediction.
-    fn predictedNode(e: *Emitter, slot_addr: usize, tab: A.Reg, key: *object.String, node: A.Reg, tmp: A.Reg, out_of_range: Label, other_key: Label) void {
+    /// prediction at `slot_addr` names, and tags = the address from which
+    /// its tags are at `tl.tag_key` and `tl.tag_val`. Branches to
+    /// `out_of_range` when the table has no such node, and to `other_key`
+    /// when the node holds another key than the string `key`, with both
+    /// addresses computed. This is the test that `interp.lookupIc` makes
+    /// before it trusts a prediction.
+    fn predictedNode(e: *Emitter, slot_addr: usize, tab: A.Reg, key: *object.String, node: A.Reg, tags: A.Reg, tmp: A.Reg, out_of_range: Label, other_key: Label) void {
         const a = &e.a;
-        if (!node_inline) return a.jmp(out_of_range);
         a.movImm(node, slot_addr);
         a.load16(node, .{ .base = node });
         a.jumpIfMem(.hs, node, .{ .base = tab, .disp = e.lay.hash_len }, out_of_range);
         a.load64(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
+        a.subScaled(tags, tmp, node, tl.tag_shift);
         a.addScaled(node, tmp, node, tl.node_shift);
         a.movImm(tmp, @intFromPtr(key));
         a.jumpIfMem(.ne, tmp, .{ .base = node, .disp = tl.node_key }, other_key);
-        a.jumpIfByte(.ne, .{ .base = node, .disp = tl.node_key + tl.value_tag }, tag_string, other_key);
+        a.jumpIfByte(.ne, .{ .base = tags, .disp = tl.tag_key }, tag_string, other_key);
+    }
+
+    /// The value of the node at `node`, whose tags are at `tags`, to the
+    /// value at `dst`, through `tmp` and `tmp2`.
+    fn loadNodeVal(e: *Emitter, dst: Mem, node: A.Reg, tags: A.Reg, tmp: A.Reg, tmp2: A.Reg) void {
+        const a = &e.a;
+        a.load64(tmp, .{ .base = node, .disp = tl.node_val });
+        a.load8(tmp2, .{ .base = tags, .disp = tl.tag_val });
+        a.storePair64(tmp, tmp2, dst);
+    }
+
+    /// The value at `src` to the node at `node`, whose tags are at
+    /// `tags`, through `tmp`.
+    fn storeNodeVal(e: *Emitter, src: Mem, node: A.Reg, tags: A.Reg, tmp: A.Reg) void {
+        const a = &e.a;
+        a.load64(tmp, src);
+        a.store64(tmp, .{ .base = node, .disp = tl.node_val });
+        a.load8(tmp, .{ .base = src.base, .disp = src.disp + tl.value_tag });
+        a.store8(tmp, .{ .base = tags, .disp = tl.tag_val });
+    }
+
+    /// tags = the address from which the tags of node `index` of the hash
+    /// part at `hp` are at `tl.tag_key` and `tl.tag_val`.
+    fn nodeTags(e: *Emitter, tags: A.Reg, hp: A.Reg, index: A.Reg) void {
+        e.a.subScaled(tags, hp, index, tl.tag_shift);
     }
 
     /// Address of a slot prediction of the instruction at `pc`.
@@ -1131,10 +1155,10 @@ pub const Emitter = struct {
         const done = a.newLabel();
         const miss = e.addCold(pc, .{ .table = .{ .helper = @intFromPtr(&helpers.getStr), .t = t, .key = .{ .konst = kc }, .v = .{ .reg = dst } } }, done);
         e.loadTable(t, miss);
-        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, miss, miss);
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, miss, miss);
         // A nil value may have an `__index` to follow.
-        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = tl.node_val + tl.value_tag }, tag_nil, miss);
-        a.copy16(slot(dst), .{ .base = A.t1, .disp = tl.node_val });
+        a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.tag_val }, tag_nil, miss);
+        e.loadNodeVal(slot(dst), A.t1, A.t2, A.t3, A.t4);
         a.bind(done);
     }
 
@@ -1150,8 +1174,8 @@ pub const Emitter = struct {
         const other_key = if (key.flags.interned) e.addCold(pc, .{ .field_insert = call }, done) else miss;
         e.loadTable(t, miss);
         e.guardRawStore(A.t0, A.t1, miss);
-        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, key, A.t1, A.t2, miss, other_key);
-        a.copy16(.{ .base = A.t1, .disp = tl.node_val }, slot(v));
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, key, A.t1, A.t2, A.t3, miss, other_key);
+        e.storeNodeVal(slot(v), A.t1, A.t2, A.t3);
         a.storeImm16(.{ .base = A.t0, .disp = tl.tm_absent }, 0);
         e.tableBarrier(pc, v, done);
         a.bind(done);
@@ -1170,9 +1194,9 @@ pub const Emitter = struct {
         a.copy16(slot(ra + 1), slot(rb));
         a.jumpIfByte(.ne, tagOf(rb), tag_table, other);
         a.load64(A.t0, slot(rb));
-        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, chain, chain);
-        a.jumpIfByte(.eq, .{ .base = A.t1, .disp = tl.node_val + tl.value_tag }, tag_nil, miss);
-        a.copy16(slot(ra), .{ .base = A.t1, .disp = tl.node_val });
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, chain, chain);
+        a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.tag_val }, tag_nil, miss);
+        e.loadNodeVal(slot(ra), A.t1, A.t2, A.t3, A.t4);
         a.bind(done);
     }
 
@@ -1548,9 +1572,8 @@ pub const Emitter = struct {
                 const key = e.p.constants[t.key.konst];
                 const s = key.as(object.String);
                 const v = t.v.reg;
-                const kw: *const [2]u64 = @ptrCast(&e.p.constants[t.key.konst]);
-                if (!node_inline) a.jmp(helper);
-                a.jumpIfByte(.ne, .{ .base = A.t1, .disp = tl.node_key + tl.value_tag }, tag_nil, helper);
+                // t1 and t2 hold the predicted node and its tags.
+                a.jumpIfByte(.ne, .{ .base = A.t2, .disp = tl.tag_key }, tag_nil, helper);
                 a.jumpIfByte(.eq, tagOf(v), tag_nil, helper);
                 a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
                 a.addImm(A.t2, -1);
@@ -1561,11 +1584,14 @@ pub const Emitter = struct {
                 a.@"and"(A.t3, A.t2);
                 a.addScaled(A.t5, A.t4, A.t3, tl.node_shift);
                 a.jumpIf(.eq, A.t5, A.t1, reached);
-                a.jumpIfByte(.eq, .{ .base = A.t5, .disp = tl.node_key + tl.value_tag }, tag_nil, helper);
                 a.jumpIfMem(.eq, A.t6, .{ .base = A.t5, .disp = tl.node_key }, helper);
+                e.nodeTags(A.t5, A.t4, A.t3);
+                a.jumpIfByte(.eq, .{ .base = A.t5, .disp = tl.tag_key }, tag_nil, helper);
                 a.addImm(A.t3, 1);
                 a.jmp(loop);
                 a.bind(reached);
+                // t6 = the tags of the node the key goes into.
+                e.nodeTags(A.t6, A.t4, A.t3);
                 // Room: (used + 1) * 4 <= len * 3, where t2 = len - 1.
                 a.load32(A.t3, .{ .base = A.t0, .disp = tl.hash_used });
                 a.addImm(A.t3, 1);
@@ -1578,9 +1604,10 @@ pub const Emitter = struct {
                 a.add(A.t5, A.t2);
                 a.jumpIf(.hi, A.t4, A.t5, helper);
                 a.store32(A.t3, .{ .base = A.t0, .disp = tl.hash_used });
-                a.storeImm64(.{ .base = A.t1, .disp = tl.node_key }, kw[0]);
-                a.storeImm64(.{ .base = A.t1, .disp = tl.node_key + tl.value_tag }, kw[1]);
-                a.copy16(.{ .base = A.t1, .disp = tl.node_val }, slot(v));
+                a.storeImm64(.{ .base = A.t1, .disp = tl.node_key }, @intFromPtr(s));
+                a.movImm(A.t5, tag_string);
+                a.store8(A.t5, .{ .base = A.t6, .disp = tl.tag_key });
+                e.storeNodeVal(slot(v), A.t1, A.t6, A.t5);
                 a.storeImm16(.{ .base = A.t0, .disp = tl.tm_absent }, 0);
                 // The table now holds the key, so the barrier runs for
                 // the key and the value whatever the value is.
@@ -1610,7 +1637,7 @@ pub const Emitter = struct {
                 // small hash part may be full, so the probe also ends
                 // after visiting every node, counted down in t5.
                 a.bind(m.chain);
-                if (!s.flags.interned or !node_inline) {
+                if (!s.flags.interned) {
                     a.jmp(helper);
                 } else {
                     const loop = a.newLabel();
@@ -1623,8 +1650,9 @@ pub const Emitter = struct {
                     a.movImm(A.t6, @intFromPtr(s));
                     a.bind(loop);
                     a.@"and"(A.t1, A.t2);
+                    e.nodeTags(A.t4, A.t3, A.t1);
+                    a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.tag_key }, tag_nil, in_metatable);
                     a.addScaled(A.t4, A.t3, A.t1, tl.node_shift);
-                    a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.node_key + tl.value_tag }, tag_nil, in_metatable);
                     a.jumpIfMem(.eq, A.t6, .{ .base = A.t4, .disp = tl.node_key }, helper);
                     a.addImm(A.t1, 1);
                     a.addImm(A.t5, -1);
@@ -1639,12 +1667,12 @@ pub const Emitter = struct {
                 a.bind(have_metatable);
                 a.jumpIfImm(.eq, A.t1, 0, helper);
                 a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, true, helper);
-                e.predictedNode(e.prediction(c.pc, il.ic_index), A.t1, g.tm_names[@backingInt(state.TM.index)].?, A.t2, A.t3, helper, helper);
-                a.jumpIfByte(.ne, .{ .base = A.t2, .disp = tl.node_val + tl.value_tag }, tag_table, helper);
+                e.predictedNode(e.prediction(c.pc, il.ic_index), A.t1, g.tm_names[@backingInt(state.TM.index)].?, A.t2, A.t4, A.t3, helper, helper);
+                a.jumpIfByte(.ne, .{ .base = A.t4, .disp = tl.tag_val }, tag_table, helper);
                 a.load64(A.t1, .{ .base = A.t2, .disp = tl.node_val });
-                e.predictedNode(e.prediction(c.pc, il.ic_holder), A.t1, s, A.t2, A.t3, helper, helper);
-                a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.node_val + tl.value_tag }, tag_nil, helper);
-                a.copy16(slot(dst), .{ .base = A.t2, .disp = tl.node_val });
+                e.predictedNode(e.prediction(c.pc, il.ic_holder), A.t1, s, A.t2, A.t4, A.t3, helper, helper);
+                a.jumpIfByte(.eq, .{ .base = A.t4, .disp = tl.tag_val }, tag_nil, helper);
+                e.loadNodeVal(slot(dst), A.t2, A.t4, A.t3, A.t5);
                 a.jmp(c.resume_at);
                 a.bind(helper);
                 e.tableHelper(c.pc, m.call, c.resume_at);

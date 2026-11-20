@@ -788,6 +788,9 @@ pub const layout = struct {
     pub const node_val: i32 = @offsetOf(Node, "val");
     pub const tag_key: i32 = -2;
     pub const tag_val: i32 = -1;
+    /// The tags of node i are `2 * i = i << tag_shift` bytes below those
+    /// of node 0.
+    pub const tag_shift: u6 = 1;
 
     /// A value is its payload word followed by a word whose first byte is
     /// the tag. A boxed array slot is a value, and an unboxed slot is one
