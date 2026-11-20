@@ -35,9 +35,6 @@ const Tag = value.Tag;
 const Op = opc.Op;
 const Step = interp.Step;
 const tl = table.layout;
-/// Whether native code reads and writes hash nodes inline. While it
-/// does not, every field access calls its helper.
-const node_inline = false;
 const il = interp.layout;
 
 const tag_nil: u8 = @backingInt(Tag.nil);
@@ -285,6 +282,7 @@ const W = struct {
     const i32_store = 0x36;
     const i64_store = 0x37;
     const f64_store = 0x39;
+    const i32_store8 = 0x3a;
     const i32_store16 = 0x3b;
     const i32_const = 0x41;
     const i64_const = 0x42;
@@ -2056,12 +2054,12 @@ const Emitter = struct {
     }
 
     /// `node` = the hash node of the table in `tab` that the slot
-    /// prediction at `slot_addr` names. Branches `depth` out when the
-    /// table has no such node or the node holds another key than the
-    /// string `key`. This is the test that `interp.lookupIc` makes before
-    /// it trusts a prediction.
-    fn predictedNode(e: *Emitter, slot_addr: usize, tab: u32, key: *object.String, node: u32, depth: u32) void {
-        if (!node_inline) return e.br(depth);
+    /// prediction at `slot_addr` names, and `tags` = the address of the
+    /// tag of its key, which the tag of its value follows. Branches
+    /// `depth` out when the table has no such node or the node holds
+    /// another key than the string `key`. This is the test that
+    /// `interp.lookupIc` makes before it trusts a prediction.
+    fn predictedNode(e: *Emitter, slot_addr: usize, tab: u32, key: *object.String, node: u32, tags: u32, depth: u32) void {
         e.u32c(@intCast(slot_addr));
         e.mem(W.i32_load16_u, 1, 0);
         e.tee(node);
@@ -2069,6 +2067,18 @@ const Emitter = struct {
         e.load32(e.lay.hash_len);
         e.op(W.i32_ge_u);
         e.brIf(depth);
+        // The tags of node i are 2 * i bytes below those of node 0. A
+        // memory offset is unsigned, so the address itself points at the
+        // tag of the key.
+        e.get(tab);
+        e.load32(e.lay.hash_ptr);
+        e.get(node);
+        e.i32c(tl.tag_shift);
+        e.op(W.i32_shl);
+        e.op(W.i32_sub);
+        e.i32c(tl.tag_key);
+        e.op(W.i32_add);
+        e.set(tags);
         e.get(tab);
         e.load32(e.lay.hash_ptr);
         e.get(node);
@@ -2080,11 +2090,41 @@ const Emitter = struct {
         e.i64c(@intCast(@intFromPtr(key)));
         e.op(W.i64_ne);
         e.brIf(depth);
-        e.get(node);
-        e.load8(@intCast(tl.node_key + tl.value_tag));
+        e.get(tags);
+        e.load8(0);
         e.i32c(tag_string);
         e.op(W.i32_ne);
         e.brIf(depth);
+    }
+
+    /// The offset of the tag of a value from the tag of its key.
+    const val_tag: u32 = tl.tag_val - tl.tag_key;
+
+    /// R at `dst` = the value of the node at `node`, whose key tag is at
+    /// `tags`.
+    fn loadNodeVal(e: *Emitter, dst: u32, node: u32, tags: u32) void {
+        e.get(L.bp);
+        e.get(node);
+        e.load64(@intCast(tl.node_val));
+        e.store64(dst);
+        e.get(L.bp);
+        e.get(tags);
+        e.load8(val_tag);
+        e.op(W.i64_extend_i32_u);
+        e.store64(dst + @as(u32, @intCast(tl.value_tag)));
+    }
+
+    /// The value of R at `src` to the node at `node`, whose key tag is at
+    /// `tags`.
+    fn storeNodeVal(e: *Emitter, src: u32, node: u32, tags: u32) void {
+        e.get(node);
+        e.get(L.bp);
+        e.load64(src);
+        e.store64(@intCast(tl.node_val));
+        e.get(tags);
+        e.get(L.bp);
+        e.load8(src + @as(u32, @intCast(tl.value_tag)));
+        e.mem(W.i32_store8, 0, val_tag);
     }
 
     fn prediction(e: *Emitter, comptime offset: usize) usize {
@@ -2153,14 +2193,14 @@ const Emitter = struct {
         e.block(); // done
         e.block(); // miss
         e.loadTable(t, 0);
-        e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kc].as(object.String), L.t1, 0);
+        e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kc].as(object.String), L.t1, L.t2, 0);
         // A nil value may have an `__index` to follow.
-        e.get(L.t1);
-        e.load8(@intCast(tl.node_val + tl.value_tag));
+        e.get(L.t2);
+        e.load8(val_tag);
         e.i32c(tag_nil);
         e.op(W.i32_eq);
         e.brIf(0);
-        e.copy16(L.bp, slotOff(dst), L.t1, @intCast(tl.node_val));
+        e.loadNodeVal(slotOff(dst), L.t1, L.t2);
         e.br(1);
         e.end();
         e.tableHelper(@intFromPtr(&helpers.getStr), t, .{ .konst = kc }, .{ .reg = dst }, 0);
@@ -2174,8 +2214,8 @@ const Emitter = struct {
         e.block(); // miss
         e.loadTable(t, 0);
         e.guardRawStore(L.t0, 0);
-        e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kb].as(object.String), L.t1, 0);
-        e.copy16(L.t1, @intCast(tl.node_val), L.bp, slotOff(v));
+        e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kb].as(object.String), L.t1, L.t2, 0);
+        e.storeNodeVal(slotOff(v), L.t1, L.t2);
         e.get(L.t0);
         e.i32c(0);
         e.mem(W.i32_store16, 1, @intCast(tl.tm_absent));
@@ -2195,13 +2235,13 @@ const Emitter = struct {
         e.block(); // done
         e.block(); // miss
         e.loadTable(.{ .reg = rb }, 0);
-        e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kc].as(object.String), L.t1, 0);
-        e.get(L.t1);
-        e.load8(@intCast(tl.node_val + tl.value_tag));
+        e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kc].as(object.String), L.t1, L.t2, 0);
+        e.get(L.t2);
+        e.load8(val_tag);
         e.i32c(tag_nil);
         e.op(W.i32_eq);
         e.brIf(0);
-        e.copy16(L.bp, slotOff(ra), L.t1, @intCast(tl.node_val));
+        e.loadNodeVal(slotOff(ra), L.t1, L.t2);
         e.br(1);
         e.end();
         e.tableHelper(@intFromPtr(&helpers.getStr), .{ .reg = ra + 1 }, .{ .konst = kc }, .{ .reg = ra }, 0);
