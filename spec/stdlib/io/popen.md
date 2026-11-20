@@ -15,4 +15,4 @@ params:
 returns: userdata|nil
 ---
 
-Starts program `prog` in a separate process and returns a file handle. Mode `"r"`, the default, reads the program's output. Mode `"w"` writes to its input. The command runs in the system shell: `/bin/sh -c` on POSIX systems, and `cmd.exe /c` with the command appended verbatim on Windows, as C's `popen` does. Closing the handle closes the pipe to the program's input and waits for the program to exit.
+Starts program `prog` in a separate process and returns a file handle. Mode `"r"`, the default, reads the program's output. Mode `"w"` writes to its input. The command runs in the system shell: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. Closing the handle closes the pipe to the program's input and waits for the program to exit.

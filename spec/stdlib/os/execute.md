@@ -13,4 +13,4 @@ params:
 returns: boolean|nil
 ---
 
-Passes `command` to the operating system shell for execution: `/bin/sh -c` on POSIX systems, and `cmd.exe /c` with the command appended verbatim on Windows. Returns `true` (or `nil` on failure), an exit type string (`"exit"` or `"signal"`), and the exit or signal number.
+Passes `command` to the operating system shell for execution: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. Returns `true` (or `nil` on failure), an exit type string (`"exit"` or `"signal"`), and the exit or signal number.

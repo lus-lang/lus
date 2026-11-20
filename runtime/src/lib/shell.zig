@@ -1,8 +1,8 @@
 //! Running a command through the system shell, for `io.popen` and
 //! `os.execute`. POSIX systems run `/bin/sh -c command`. Windows runs
-//! `cmd.exe /c command` with the command appended to the command line
-//! verbatim, as the C library's `_popen` and `system` do, so quoting,
-//! redirection, and pipes follow the rules of `cmd.exe`.
+//! `cmd.exe /s /c "command"`, which hands `cmd.exe` the command exactly as
+//! written, so quoting, redirection, and pipes follow the rules of
+//! `cmd.exe`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -26,11 +26,14 @@ pub fn spawn(io: std.Io, gpa: std.mem.Allocator, command: []const u8, pipe: Pipe
     });
 }
 
-/// The command line `cmd.exe /c command`. Arguments built by the standard
-/// library spawner are quoted for `CommandLineToArgvW`, which `cmd.exe`
-/// does not use, so the command line is assembled here.
+/// The command line `cmd.exe /s /c "command"`. With `/s`, `cmd.exe` removes
+/// the first and the last quote of the text after `/c` and runs the rest,
+/// so the surrounding quotes give back the command unchanged whatever
+/// quotes it holds. Arguments built by the standard library spawner are
+/// quoted for `CommandLineToArgvW`, which `cmd.exe` does not use, so the
+/// command line is assembled here.
 pub fn windowsCommandLine(gpa: std.mem.Allocator, command: []const u8) std.mem.Allocator.Error![]u8 {
-    return std.mem.concat(gpa, u8, &.{ "cmd.exe /c ", command });
+    return std.mem.concat(gpa, u8, &.{ "cmd.exe /s /c \"", command, "\"" });
 }
 
 const win = if (windows) struct {
@@ -121,5 +124,5 @@ test "windows command line" {
     const gpa = std.testing.allocator;
     const line = try windowsCommandLine(gpa, "\"C:\\a b\\lus.exe\" -v 2>&1");
     defer gpa.free(line);
-    try std.testing.expectEqualStrings("cmd.exe /c \"C:\\a b\\lus.exe\" -v 2>&1", line);
+    try std.testing.expectEqualStrings("cmd.exe /s /c \"\"C:\\a b\\lus.exe\" -v 2>&1\"", line);
 }
