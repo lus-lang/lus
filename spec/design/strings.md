@@ -42,6 +42,12 @@ What a view could save at most was measured by letting `string.sub` and the capt
 
 `unicode.lus` takes the same 148 000 substrings again and again. Interning finds each of them and allocates nothing, where a string per call makes two million objects for the collector, so the fresh strings are 21 percent slower. `strings.lus` captures a million different words from one long subject, each of which is found in a string table of a million entries that no cache holds, and skipping that lookup is 20 percent faster. The gain there comes from leaving a short string out of the string table, which is a change to what a string is and to every pointer comparison of strings, and it is the allocation, which a view needs as well, that loses on `unicode.lus`. Views are therefore kept out. A program that slices long substrings out of long text copies and hashes each of them, and a bench case of that kind is what would justify views of long results or a hash computed on first use.
 
+## Long results
+
+`table.concat`, the concatenation operator, and `tojson` build a long result in a buffer whose block keeps room for a string header in front of the bytes and for the terminating zero after them. When the result is too long for a small cell, the block takes the header and becomes the string as a large object, so the bytes are held once. A buffer with more than an eighth of its capacity unused is copied into a string of its exact size instead, so the string does not keep the slack for its whole life. A short result is interned as usual. In the cross-language suite this lowered the peak resident memory of `template`, which joins a 100 MB page, from 947 to 846 MB of heap, and of `wordfreq`, which joins a 70 MB text, from 656 to 588 MB.
+
+Large objects take the alignment of the object header. On 64-bit targets that stays within what `malloc` guarantees, so the C allocator grows such a buffer with `realloc`. With a 16-byte alignment, above the 8 bytes that `malloc` guarantees on Apple silicon, the allocator could only allocate a new block, copy, and free the old one at every growth, and `tojson` of 50 MB of text peaked 145 MB higher.
+
 ## Concatenation
 
 Concatenating a string that ends with a lead surrogate and a string that starts with a trail surrogate joins the pair into one supplementary character, as WTF-8 requires. Every other concatenation is a plain byte join.

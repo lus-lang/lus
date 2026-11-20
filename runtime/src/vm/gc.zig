@@ -379,7 +379,11 @@ fn setThresholdFrom(g: *Global, live: usize) void {
     const s = &g.gcs;
     // The products are formed in 64 bits, since they overflow a 32-bit
     // usize once the heap passes a few dozen megabytes.
-    const pause: u64 = if (s.growing) @as(u64, g.pause) * 2 else g.pause;
+    // In generational mode a growing heap keeps the usual goal: minor
+    // collections, and the one that follows each major collection, see
+    // a program turn from building to discarding long before a doubled
+    // goal would.
+    const pause: u64 = if (s.growing and s.mode != .generational) @as(u64, g.pause) * 2 else g.pause;
     const goal: u64 = @as(u64, live) * pause / 100;
     const during: u64 = @as(u64, live) * 100 / @max(s.stepmul, 1);
     const start = @max(goal -| during, @as(u64, live) + s.stepsize);
