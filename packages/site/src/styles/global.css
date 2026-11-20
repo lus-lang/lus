@@ -54,8 +54,9 @@
 **  - Red is the unstable channel and errors, never decoration. The red
 **    mirror covers what renders under html.unstable: global primitives,
 **    Layout chrome and ManualLayout.
-**  - The playground keeps its own dark chrome in both schemes and opts
-**    out of the night tokens with html.fixed-scheme.
+**  - The playground is always night: html.night applies the night tokens
+**    whatever the reader's scheme, and its editor uses the night code
+**    theme (lib/code-theme-night.mjs).
 **  - Reference badge palette lives here as .api-badge-* (sanctioned
 **    exceptions): lus = bg-accent-soft text-ink, unstable =
 **    bg-accent-soft-red text-ink-red, lua = bg-sky-200 text-sky-900,
@@ -103,9 +104,31 @@
   --color-link-red: oklch(45% 0.15 25);
 }
 
-/* night: the dark scheme, from the reader's preference */
+/* night: the dark scheme, from the reader's preference, and always on
+   pages that set html.night (the playground) */
+:root.night {
+  color-scheme: dark;
+  --color-paper: oklch(19% 0.03 132);
+  --color-tint: oklch(24% 0.035 132);
+  --color-ink: oklch(95% 0.03 115);
+  --color-ink-2: oklch(80% 0.03 120);
+  --color-ink-3: oklch(68% 0.03 125);
+  --color-link: oklch(87% 0.2 128);
+  --color-accent-soft: oklch(30% 0.07 130);
+  --color-field: oklch(24% 0.035 132);
+  --color-solid: oklch(87% 0.22 128);
+  --color-on-solid: oklch(19% 0.03 132);
+  --color-on-accent: oklch(19% 0.03 132);
+  --color-rule: oklch(95% 0.03 115 / 0.35);
+
+  --color-ink-red: oklch(88% 0.05 25);
+  --color-tint-red: oklch(24% 0.04 25);
+  --color-accent-soft-red: oklch(32% 0.07 25);
+  --color-link-red: oklch(76% 0.13 25);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root:not(.fixed-scheme) {
+  :root {
     color-scheme: dark;
     --color-paper: oklch(19% 0.03 132);
     --color-tint: oklch(24% 0.035 132);
@@ -135,10 +158,6 @@
 
 html.unstable :focus-visible {
   outline-color: var(--color-ink-red);
-}
-
-.dark-chrome :focus-visible {
-  outline-color: var(--color-accent);
 }
 
 ::selection {
@@ -495,7 +514,7 @@ html.unstable {
 
 /* night figures are paper cards: the code theme is written for paper */
 @media (prefers-color-scheme: dark) {
-  :root:not(.fixed-scheme) {
+  :root {
     .figure,
     pre code {
       @apply border-t-0 rounded-md;

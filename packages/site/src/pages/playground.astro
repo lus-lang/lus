@@ -56,7 +56,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
   <div class="pane editor-pane">
     <div class="pane-header">
-      <h2>Code</h2>
+      <h2 class="label">code</h2>
       <select
         id="example-select"
         class="example-select"
@@ -86,7 +86,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   </div>
   <div class="pane output-pane">
     <div class="pane-header">
-      <h2>Output</h2>
+      <h2 class="label">output</h2>
       <span class="kbd-hint" aria-hidden="true">⌘/Ctrl + ↵ to run</span>
     </div>
     <div
@@ -114,6 +114,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 <script>
   // @ts-nocheck
   import { init } from "modern-monaco"
+  import nightTheme from "../lib/code-theme-night.mjs"
   import { registerSyntax } from "modern-monaco/core"
   //@ts-ignore
   import { grammars } from "modern-monaco/shiki"
@@ -262,9 +263,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
           if (clearOnReady) clearOutput()
           setRuntimeState("ready")
           versionTag.textContent = release.isStable ? "stable" : "unstable"
-          versionTag.className = release.isStable
-            ? "tag stable"
-            : "tag unstable"
+          versionTag.className = release.isStable ? "tag" : "tag red"
           resolveOnce()
           return
         }
@@ -333,7 +332,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
   async function initEditor() {
     monaco = await init({
-      defaultTheme: "github-dark-default",
+      defaultTheme: nightTheme as any,
     })
 
     editorContainer.textContent = ""
@@ -350,7 +349,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
       stickyScroll: { enabled: false },
       fontSize: 14,
       fontFamily:
-        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        '"Intel One Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace',
       lineNumbers: "on",
       scrollBeyondLastLine: false,
       wordWrap: "on",
@@ -482,76 +481,49 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 <style>
   @reference "../styles/global.css";
 
-  /* dark chrome is flat (nothing to seat into); pressed states are
-     paint-only, per the zero-motion grammar */
+  /* controls follow the site's buttons: solid run, outline clear, red stop */
+  .btn-run,
+  .btn-stop,
+  .btn-clear {
+    @apply font-semibold text-sm px-3 py-1 rounded-md border cursor-pointer select-none;
+  }
+
   .btn-run {
-    @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent bg-accent text-ink select-none;
-
-    &:hover {
-      @apply bg-ink text-accent;
-    }
-
-    &:active {
-      @apply bg-accent-soft border-accent-soft text-ink;
-    }
+    @apply bg-solid border-solid text-on-solid hover:bg-solid/85;
 
     &:disabled {
-      @apply bg-transparent text-accent/40 border-accent/30 cursor-not-allowed;
+      @apply bg-transparent border-ink/30 text-ink-3 cursor-not-allowed;
     }
   }
 
   .btn-clear {
-    @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent/40 bg-transparent text-accent-soft select-none hover:bg-accent/10 hover:border-accent/70;
-
-    &:active {
-      @apply bg-accent/20 border-accent;
-    }
+    @apply bg-transparent border-ink/40 text-ink hover:bg-accent-soft;
   }
 
   .btn-stop {
-    @apply px-3 py-1 font-bold text-sm cursor-pointer border-2 border-accent-red bg-accent-red text-ink-red select-none;
-
-    &:hover {
-      @apply bg-ink-red text-accent-red;
-    }
-
-    &:active {
-      @apply bg-transparent text-accent-red;
-    }
+    @apply bg-transparent border-link-red text-link-red hover:bg-accent-soft-red;
 
     &:disabled {
-      @apply bg-transparent text-accent-red/40 border-accent-red/30 cursor-not-allowed;
+      @apply border-ink/30 text-ink-3 cursor-not-allowed hover:bg-transparent;
     }
   }
 
-  .version-select {
-    @apply bg-ink text-tint border-2 border-accent/40 px-2 py-1 text-sm cursor-pointer;
+  .version-select,
+  .example-select {
+    @apply bg-field text-ink border border-ink/30 rounded-[4px] font-mono text-xs px-2 py-1 cursor-pointer;
 
     &:disabled {
-      @apply text-tint/40 border-accent/20 cursor-not-allowed;
+      @apply text-ink-3 cursor-not-allowed;
     }
   }
 
   .example-select {
-    @apply bg-ink text-tint border-2 border-accent/40 px-2 py-0.5 text-xs cursor-pointer ml-2;
-  }
-
-  .tag {
-    @apply px-2 py-0.5 text-xs font-bold uppercase;
-
-    &:global(.stable) {
-      @apply bg-accent text-ink;
-    }
-
-    &:global(.unstable) {
-      @apply bg-accent-red text-ink-red;
-    }
+    @apply ml-2 py-0.5;
   }
 
   .pane {
-    /* my-0 defeats the page-shell space-y child margin, which has no
-       specificity but would otherwise knock the second pane out of
-       line with the first */
+    /* my-0 defeats the page-shell space-y child margin, which would
+       otherwise knock the second pane out of line with the first */
     @apply flex-1 flex flex-col min-h-0 min-w-0 my-0;
   }
 
@@ -560,22 +532,26 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   }
 
   .pane-header {
-    @apply px-3 py-1.5 bg-ink text-accent text-sm font-bold uppercase tracking-wide border-b-2 border-accent/20 shrink-0 flex items-center;
+    @apply px-4 h-9 shrink-0 flex items-center;
+
+    h2 {
+      @apply m-0;
+    }
   }
 
   .editor-pane {
-    @apply border-b-2 md:border-b-0 md:border-r-2 border-accent/20;
+    @apply border-b md:border-b-0 md:border-r border-ink/15;
   }
 
   .kbd-hint {
-    @apply ml-auto font-mono text-xs normal-case tracking-normal text-accent/80 border border-accent/30 px-1.5 py-0.5;
+    @apply ml-auto font-mono text-xs text-ink-3;
   }
 
   #code-editor {
     @apply flex-1 w-full;
 
     .editor-loading {
-      @apply p-3 text-sm text-accent/80 italic;
+      @apply px-4 py-3 text-sm text-ink-3 italic;
     }
   }
 
@@ -597,11 +573,11 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   }
 
   .output-content {
-    @apply flex-1 overflow-y-auto p-3 font-mono text-sm;
+    @apply flex-1 overflow-y-auto px-4 py-3 font-mono text-sm;
   }
 
   :global(.output-line) {
-    @apply whitespace-pre-wrap break-all text-tint;
+    @apply whitespace-pre-wrap break-all text-ink;
 
     /* deliberate blank output lines keep their height */
     &:global(:empty)::after {
@@ -609,11 +585,11 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
     }
 
     &:global(.system) {
-      @apply text-accent italic;
+      @apply text-ink-3 italic;
     }
 
     &:global(.error) {
-      @apply text-accent-red;
+      @apply text-link-red;
     }
   }
 </style>
