@@ -605,8 +605,14 @@ table {
   .legend-wrap,
   .toc,
   .api-index,
-  .unstable-banner {
+  .unstable-banner,
+  .cube-field {
     display: none !important;
+  }
+
+  /* print stock has its own grain */
+  body::before {
+    display: none;
   }
 
   pre code {
