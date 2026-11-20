@@ -151,6 +151,9 @@ const Builder = struct {
         b.l = l;
         b.buf = .empty;
         b.first = .init(&b.stack, l.g.gpa);
+        // The stack buffer is the first capacity, so short results never
+        // call the allocator.
+        b.buf.ensureTotalCapacityPrecise(b.gpa(), stack_len) catch {};
     }
 
     fn gpa(b: *Builder) Allocator {
@@ -161,7 +164,19 @@ const Builder = struct {
         b.buf.deinit(b.gpa());
     }
 
-    fn append(b: *Builder, bytes: []const u8) Error!void {
+    /// Appends `bytes`. A piece that fits the room left and cannot join a
+    /// surrogate is copied inline, which is nearly every piece.
+    inline fn append(b: *Builder, bytes: []const u8) Error!void {
+        const room = b.buf.unusedCapacitySlice();
+        if (bytes.len <= room.len and (bytes.len == 0 or bytes[0] != 0xED)) {
+            @memcpy(room[0..bytes.len], bytes);
+            b.buf.items.len += bytes.len;
+            return;
+        }
+        return b.appendSlow(bytes);
+    }
+
+    noinline fn appendSlow(b: *Builder, bytes: []const u8) Error!void {
         const a = b.gpa();
         if (bytes.len >= 3 and bytes[0] == 0xED) {
             if (wtf8.leadingTrailSurrogate(bytes)) |trail| {

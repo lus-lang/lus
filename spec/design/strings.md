@@ -76,6 +76,8 @@ A search that does not start at an anchor tries the pattern at every position. W
 
 The state keeps the last pattern whose start bytes it computed, keyed by the text of the pattern, so a loop that calls `gsub` with the same pattern computes them once. The strings of single ASCII characters, which captures and `string.sub` produce often, are made fixed the first time and `newStringKnown` returns them without a lookup. These took `template` from 1.20 s to 1.09 s, best of three alternating runs on a loaded machine.
 
+The builder behind `string.format`, `gsub`, and the other functions that assemble a result starts with its 512-byte stack buffer as capacity and copies a piece that fits inline, so a short result never calls the allocator or a copy routine. It retires 3 percent fewer instructions on `template` and `logs` with the JIT off.
+
 `string.format` writes `%d`, `%i`, and `%u` with a table of digit pairs, and `tonumber` and arithmetic coercion read a plain decimal integer of at most 18 digits directly, without the lexer. `ops.intDigits` is the one integer writer that concatenation, `string.format`, and `tojson` use.
 
 ## JSON and CSV
