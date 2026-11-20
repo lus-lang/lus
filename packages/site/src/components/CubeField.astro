@@ -99,7 +99,10 @@ for (let i = 0; i < rows; i++) {
 const peak =
   limeAt !== undefined
     ? bars.find((b) => b.i === 0 && b.j === limeAt)!
-    : bars.reduce((a, b) => (b.h > a.h || (b.h === a.h && b.i < a.i) ? b : a))
+    : bars
+        // a fallen cube leaves its gap in the front row, where it shows
+        .filter((b) => signal !== "fallen" || b.i === 0)
+        .reduce((a, b) => (b.h > a.h || (b.h === a.h && b.i < a.i) ? b : a))
 
 // painter's order: the back row first, each row left to right
 bars.sort((a, b) => b.i - a.i || a.j - b.j)
@@ -183,7 +186,11 @@ const shapes: Shape[] = bars.flatMap((b) => {
   const row = `r${b.i}`
   const lit = b === peak ? 0 : litBy(b)
   if (b === peak && signal === "fallen") {
-    return [{ ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0, j: b.j }]
+    // the place the cube fell from keeps a ghost of it
+    return [
+      { ...prism(b.i, b.j, 0, b.h - 1), lime: false, row, lit: light ? 0.5 : 0, j: b.j },
+      { ...prism(b.i, b.j, b.h - 1, b.h), lime: false, row: `${row} ghost`, lit: 0, j: b.j },
+    ]
   }
   if (b === peak && signal === "cap") {
     return [
@@ -368,6 +375,13 @@ const lightOn = glow && signal !== "none"
 
   .cube-field .lime polygon:nth-of-type(2) {
     fill: var(--color-accent-strong);
+  }
+
+  /* the ghost of a fallen cube: an outline in dashes, unfilled */
+  .cube-field .ghost polygon {
+    fill: none;
+    stroke: var(--color-link);
+    stroke-dasharray: 3 2;
   }
 
   /* a linked bar lights its top under the pointer */
