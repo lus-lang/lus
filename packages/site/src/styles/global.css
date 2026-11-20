@@ -506,5 +506,10 @@ html.unstable {
     .copy-btn {
       @apply bg-white border-black/20 text-[oklch(21%_0.045_132)];
     }
+
+    /* unstable figures stay paper too, with a red cast */
+    &.unstable pre code {
+      background: oklch(96% 0.015 20);
+    }
   }
 }
