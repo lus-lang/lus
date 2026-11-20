@@ -1,0 +1,292 @@
+---
+/*
+** Benchmarks: the cross-language suite of tests/bench/compare, rendered
+** from a copy of its results.json. Every runtime, program, and number
+** comes from the data, so a new run of the harness only needs a fresh
+** copy of the file. Both modes render on the server and the toggle only
+** switches which one shows, so readers without scripts see wall time.
+*/
+import results from "../data/benchmarks.json"
+
+interface Cell {
+  ok?: boolean
+  best_s?: number
+  peak_rss_mb?: number
+  rps?: number
+}
+
+type Mode = "time" | "memory"
+
+const data = results as unknown as {
+  device: { cpu: string; cores: number; memory_gb: number }
+  os: string
+  runtimes: Record<string, { name: string }>
+  programs: Record<string, Record<string, Cell>>
+  http?: Record<string, Cell>
+}
+
+// Lus leads, the others keep the order of the harness
+const runtimes = [
+  "lus",
+  ...Object.keys(data.runtimes).filter((id) => id !== "lus"),
+]
+const label = (id: string) =>
+  (data.runtimes[id]?.name ?? id).replace(/\.js$/, "")
+
+const programs = Object.keys(data.programs).toSorted()
+
+const device = [
+  data.device.cpu,
+  `${data.device.cores} cores`,
+  `${data.device.memory_gb} GB`,
+  data.os,
+].join(" · ")
+
+const fmtTime = (s: number) => `${s.toFixed(2)} s`
+const fmtMem = (mb: number) =>
+  mb >= 1000 ? `${(mb / 1000).toFixed(2)} GB` : `${Math.round(mb)} MB`
+const fmtRps = (rps: number) => `${Math.round(rps / 1000)}k`
+
+interface Row {
+  name: string
+  cells: { id: string; value: number | null; text: string; best: boolean; width: number }[]
+}
+
+// one row of cells: the best value takes the signal, bars scale to the
+// largest value in the row
+function row(
+  name: string,
+  source: Record<string, Cell>,
+  key: keyof Cell,
+  fmt: (v: number) => string,
+  higherIsBetter = false,
+): Row {
+  const values = runtimes.map((id) => {
+    const cell = source[id]
+    const v = cell && cell.ok !== false ? cell[key] : undefined
+    return typeof v === "number" ? v : null
+  })
+  const present = values.filter((v): v is number => v !== null)
+  const best = higherIsBetter ? Math.max(...present) : Math.min(...present)
+  const top = Math.max(...present)
+  return {
+    name,
+    cells: runtimes.map((id, i) => {
+      const v = values[i]
+      return {
+        id,
+        value: v,
+        text: v === null ? "n/a" : fmt(v),
+        best: v === best,
+        width: v === null ? 0 : (v / top) * 100,
+      }
+    }),
+  }
+}
+
+const modes: {
+  mode: Mode
+  caption: string
+  rows: Row[]
+  httpCaption: string
+  http: Row | null
+}[] = [
+  {
+    mode: "time",
+    caption: "best wall time, lower is better",
+    rows: programs.map((p) => row(p, data.programs[p], "best_s", fmtTime)),
+    httpCaption:
+      "http server, requests per second at 64 connections, higher is better",
+    http: data.http ? row("http", data.http, "rps", fmtRps, true) : null,
+  },
+  {
+    mode: "memory",
+    caption: "peak memory, lower is better",
+    rows: programs.map((p) => row(p, data.programs[p], "peak_rss_mb", fmtMem)),
+    httpCaption: "http server, peak memory under load, lower is better",
+    http: data.http ? row("http", data.http, "peak_rss_mb", fmtMem) : null,
+  },
+]
+---
+
+<section class="bench" data-mode="time">
+  <div class="sech">
+    <h2>Benchmarks</h2>
+    <span class="label">{device}</span>
+    <span class="seg" role="group" aria-label="Measurement">
+      <button type="button" data-set="time" aria-pressed="true">time</button>
+      <button type="button" data-set="memory" aria-pressed="false">memory</button>
+    </span>
+  </div>
+  {
+    modes.map((m) => (
+      <div class="mode" data-show={m.mode}>
+        <div class="scroll">
+          <table>
+            <caption>{m.caption}</caption>
+            <thead>
+              <tr>
+                <th>program</th>
+                {runtimes.map((id) => (
+                  <th class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {m.rows.map((r) => (
+                <tr>
+                  <td>{r.name}</td>
+                  {r.cells.map((c) => (
+                    <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
+                      <b>{c.text}</b>
+                      {c.value !== null && (
+                        <span class="bar">
+                          <i style={`width:${c.width.toFixed(1)}%`} />
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {m.http && (
+          <div class="scroll">
+            <table>
+              <caption>{m.httpCaption}</caption>
+              <thead>
+                <tr>
+                  <th />
+                  {runtimes.map((id) => (
+                    <th class:list={{ lus: id === "lus" }}>{label(id)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>{m.http.name}</td>
+                  {m.http.cells.map((c) => (
+                    <td class:list={{ lus: c.id === "lus", best: c.best, na: c.value === null }}>
+                      <b>{c.text}</b>
+                      {c.value !== null && (
+                        <span class="bar">
+                          <i style={`width:${c.width.toFixed(1)}%`} />
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    ))
+  }
+</section>
+
+<script>
+  for (const bench of document.querySelectorAll<HTMLElement>(".bench")) {
+    const buttons = bench.querySelectorAll<HTMLButtonElement>(".seg button")
+    for (const button of buttons) {
+      button.addEventListener("click", () => {
+        bench.dataset.mode = button.dataset.set
+        for (const b of buttons) b.setAttribute("aria-pressed", String(b === button))
+      })
+    }
+  }
+</script>
+
+<style>
+  @reference "../styles/global.css";
+
+  .bench {
+    @apply space-y-0;
+  }
+
+  .seg {
+    @apply ml-auto flex border border-ink/30 rounded-[4px] overflow-hidden;
+
+    button {
+      @apply font-mono text-xs bg-white px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
+
+      &[aria-pressed="true"] {
+        @apply bg-ink text-accent;
+      }
+    }
+  }
+
+  .mode {
+    @apply border-t border-ink;
+  }
+
+  .bench[data-mode="time"] .mode[data-show="memory"],
+  .bench[data-mode="memory"] .mode[data-show="time"] {
+    display: none;
+  }
+
+  .scroll {
+    @apply overflow-x-auto;
+  }
+
+  table {
+    @apply my-0 font-mono text-xs table-fixed min-w-[760px];
+  }
+
+  caption {
+    @apply text-left font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 pt-2 pb-0.5;
+    caption-side: top;
+  }
+
+  th {
+    @apply font-mono text-xs font-semibold normal-case tracking-normal text-ink-3 px-1.5 pt-1.5 pb-1 border-b-ink/30;
+  }
+
+  td {
+    @apply px-1.5 py-[5px] border-b-ink/15 align-bottom;
+  }
+
+  th:first-child,
+  td:first-child {
+    @apply w-[92px] pl-0;
+  }
+
+  td b {
+    @apply font-semibold text-ink;
+  }
+
+  .lus {
+    @apply bg-accent-soft;
+  }
+
+  th.lus {
+    @apply text-ink;
+  }
+
+  td.best b {
+    @apply bg-accent px-[3px] rounded-[2px];
+  }
+
+  td.na {
+    @apply text-ink-3;
+  }
+
+  .bar {
+    @apply block h-[3px] bg-ink/15 mt-[3px] relative;
+
+    i {
+      @apply absolute inset-y-0 left-0 bg-ink-2;
+    }
+  }
+
+  td.lus .bar i {
+    @apply bg-link;
+  }
+
+  @media (max-width: 640px) {
+    .seg {
+      @apply ml-0;
+    }
+  }
+</style>

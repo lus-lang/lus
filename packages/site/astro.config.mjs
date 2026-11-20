@@ -12,6 +12,7 @@ import mdx from "@astrojs/mdx"
 import sitemap from "@astrojs/sitemap"
 
 import lusGrammar from "../textmate/lus.tmLanguage.json"
+import codeTheme from "./src/lib/code-theme.mjs"
 
 /**
  * Wrap every table in a focusable horizontal-scroll container so wide
@@ -118,7 +119,8 @@ export default defineConfig({
       ],
     }),
     shikiConfig: {
-      theme: "github-light",
+      // @ts-ignore
+      theme: codeTheme,
       langs: [
         // @ts-ignore
         {

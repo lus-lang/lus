@@ -1,4 +1,5 @@
 ---
+import codeTheme from "../lib/code-theme.mjs"
 import { Code } from "astro:components"
 // @ts-ignore
 import lusGrammar from "../../../textmate/lus.tmLanguage.json"
@@ -109,7 +110,7 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
                 )}
               </header>
               {ex.blurb && <p class="ex-blurb">{ex.blurb}</p>}
-              <Code lang={lusGrammar as any} theme="github-light" code={ex.content} />
+              <Code lang={lusGrammar as any} theme={codeTheme as any} code={ex.content} />
               <footer>
                 {ex.playground ? (
                   <Button

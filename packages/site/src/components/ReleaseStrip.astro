@@ -37,7 +37,7 @@ function downloads(release: ReleaseInfo) {
   {
     channels.map(({ name, release }) => (
       <div class="release-row" data-channel={name}>
-        <span class="rel-chip">{name}</span>
+        <span class:list={["tag", { red: name === "unstable" }]}>{name}</span>
         {release ? (
           <>
             <span class="rel-version">{release.version}</span>
@@ -62,58 +62,38 @@ function downloads(release: ReleaseInfo) {
   @reference "../styles/global.css";
 
   .release-strip {
-    @apply border border-ink/15 rounded-lg overflow-hidden bg-paper divide-y divide-ink/10;
+    @apply border-t-2 border-ink border-b border-b-ink/30 font-mono text-xs;
   }
 
   .release-row {
-    @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2;
+    @apply flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 border-b border-ink/15 last:border-b-0;
 
-    .rel-chip {
-      @apply font-mono text-[10px] font-bold uppercase rounded-sm px-1.5 py-0.5;
-    }
-
-    &[data-channel="stable"] .rel-chip {
-      @apply bg-accent text-ink;
-    }
-
-    &[data-channel="unstable"] .rel-chip {
-      @apply bg-accent-red text-ink-red;
+    .tag {
+      @apply min-w-[62px];
     }
 
     .rel-version {
-      @apply font-mono font-bold text-sm;
+      @apply font-semibold text-[13px] text-ink min-w-[150px];
     }
 
     .rel-date {
-      @apply font-mono text-xs text-ink/70;
+      @apply text-ink-3 min-w-[84px];
     }
 
     .rel-none {
-      @apply text-sm text-ink/70;
+      @apply text-ink-3;
     }
 
     .rel-links {
-      @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-sm sm:ml-auto;
+      @apply flex flex-wrap gap-x-3 gap-y-1 sm:ml-auto;
 
       a {
-        @apply font-normal no-underline text-link hover:bg-accent-soft px-0.5 py-0.5;
+        @apply font-normal no-underline text-link hover:text-ink hover:underline;
       }
     }
 
-    &[data-channel="unstable"] {
-      .rel-version,
-      .rel-date,
-      .rel-none {
-        @apply text-ink-red/80;
-      }
-
-      .rel-version {
-        @apply text-ink-red;
-      }
-
-      .rel-links a {
-        @apply text-link-red hover:bg-accent-soft-red;
-      }
+    &[data-channel="unstable"] .rel-links a {
+      @apply text-link-red hover:text-ink-red;
     }
   }
 </style>
