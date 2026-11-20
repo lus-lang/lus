@@ -215,16 +215,21 @@ const Parser = struct {
         const l = p.l;
         var stack: std.ArrayList(Frame) = .empty;
         defer stack.deinit(l.g.gpa);
-        // Containers are anchored on the Lus stack so they stay reachable
-        // while the parse allocates.
+        // Open containers are anchored on the Lus stack so they stay
+        // reachable while the parse allocates. A closed container stays
+        // anchored until its parent holds it, and then gives its slot
+        // back, so the slots in use follow the nesting depth.
         const anchor = l.top;
         defer l.top = anchor;
         var result: Value = .nil;
         var v: Value = undefined;
+        // Whether `v` is a closed container still anchored in the top slot.
+        var v_anchored = false;
         outer: while (true) {
             // Read a value: scalar, or open a container.
             if (try p.scalar()) |sv| {
                 v = sv;
+                v_anchored = false;
             } else {
                 const c = p.s[p.i];
                 p.i += 1;
@@ -237,12 +242,14 @@ const Parser = struct {
                     if (p.peek() == ']') {
                         p.i += 1;
                         v = Value.obj(.table, t);
+                        v_anchored = true;
                         _ = stack.pop();
                     } else continue :outer;
                 } else {
                     if (p.peek() == '}') {
                         p.i += 1;
                         v = Value.obj(.table, t);
+                        v_anchored = true;
                         _ = stack.pop();
                     } else {
                         if (p.peek() != '"') return p.fail("expected string key in object", .{});
@@ -262,6 +269,10 @@ const Parser = struct {
                 if (f.is_array) {
                     f.n += 1;
                     if (!v.isNil()) try ops.rawSet(l, f.t, Value.int(f.n), v);
+                    if (v_anchored) {
+                        l.top -= 1;
+                        v_anchored = false;
+                    }
                     if (p.peek() == ',') {
                         p.i += 1;
                         continue :outer;
@@ -269,6 +280,10 @@ const Parser = struct {
                     try p.expect(']', "after array element");
                 } else {
                     try ops.rawSet(l, f.t, f.key, v);
+                    if (v_anchored) {
+                        l.top -= 1;
+                        v_anchored = false;
+                    }
                     if (p.peek() == ',') {
                         p.i += 1;
                         if (p.peek() != '"') return p.fail("expected string key", .{});
@@ -279,6 +294,7 @@ const Parser = struct {
                     try p.expect('}', "after object value");
                 }
                 v = Value.obj(.table, f.t);
+                v_anchored = true;
                 _ = stack.pop();
             }
         }

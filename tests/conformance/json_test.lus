@@ -1358,3 +1358,30 @@ end
 local function a_key_containing_a_newline_is_escaped_test()
     assert(tojson({["x\ny"] = 1}) == '{"x\\ny":1}')
 end
+
+-- decoding anchors only the containers still open, so a long array of
+-- containers fits in the stack left near the stack limit
+local function decoding_needs_stack_only_for_open_containers_test()
+    local names, zeros = {}, {}
+    for i = 1, 190 do
+        names[i] = "v" .. i
+        zeros[i] = "0"
+    end
+    local fill = load(`local fill
+fill = function(depth, text)
+    local $(table.concat(names, ", ")) = $(table.concat(zeros, ", "))
+    if depth == 0 then return fromjson(text) end
+    return (fill(depth - 1, text))
+end
+return fill`)()
+    -- the deepest recursion that still decodes an empty array
+    local lo, hi = 0, 20000
+    while lo < hi do
+        local mid = (lo + hi + 1) // 2
+        if catch fill(mid, "[]") then lo = mid else hi = mid - 1 end
+    end
+    assert(lo > 0)
+    local text = "[" .. string.rep('{"a":[1,{"b":2}]}', 10000, ",") .. "]"
+    local t = fill(lo, text)
+    assert(#t == 10000 and t[10000].a[2].b == 2)
+end
