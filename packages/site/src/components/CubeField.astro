@@ -150,10 +150,10 @@ function prism(i: number, j: number, k0: number, k1: number) {
     point(i + 1, j, k1),
   ])
   let ticks = ""
-  // flat units are slabs, not cubes, and go unticked
-  for (let k = k0 + 1; unit >= 0.5 && k < k1; k++) {
+  // flat units are graduated on the front face only, like a meter
+  for (let k = k0 + 1; k < k1; k++) {
     ticks += line(point(i, j, k), point(i, j + 1, k))
-    ticks += line(point(i, j + 1, k), point(i + 1, j + 1, k))
+    if (unit >= 0.5) ticks += line(point(i, j + 1, k), point(i + 1, j + 1, k))
   }
   return { front, side, top, ticks }
 }

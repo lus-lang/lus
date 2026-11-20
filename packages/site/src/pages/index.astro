@@ -63,9 +63,11 @@ end`,
       "io.sqlite opens file-backed or in-memory databases. A database table serves as a query source and receives the query as parameterized SQL.",
     code: `local db <close> = io.sqlite("app.db")
 
-db:run("INSERT INTO users (name, age) VALUES (?, ?)", "Alice", 30)
+db:run("INSERT INTO users (name, age) VALUES (?, ?)",
+    "Alice", 30)
 
-for u in query(@db.users as u where u.age >= 18 select u.name) do
+for u in query(@db.users as u
+        where u.age >= 18 select u.name) do
     print(u.name)
 end`,
   },
@@ -90,11 +92,11 @@ end`,
     unstable: true,
     blurb:
       "The time library separates absolute instants, civil datetimes, and durations. Named zones resolve from tzdata embedded in the runtime.",
-    code: `local now = time.now()                    -- instant
+    code: `local now = time.now()     -- instant
 local later = now + time.hours(72)
 local ny = time.zone("America/New_York")
 
-print(later:at(ny):iso())                 -- wall clock in New York`,
+print(later:at(ny):iso())  -- wall clock in New York`,
   },
   {
     name: "binary data",
@@ -242,7 +244,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       <nav class="index" aria-label="Standard library modules">
         {
           stdlibMap.map((mod) => (
-            <a href={mod.href} class="cube-hover">
+            <a href={mod.href}>
               <b>{mod.name}</b>
               <i aria-hidden="true" />
               <span>{mod.desc}</span>

@@ -394,13 +394,6 @@ const modes: {
     @apply text-ink;
   }
 
-  .skyline :global(g.hl:not(.lime) polygon:nth-of-type(3)) {
-    fill: var(--color-accent-soft);
-  }
-
-  .skyline :global(g.hl:not(.lime) polygon:nth-of-type(1)) {
-    fill: color-mix(in oklab, var(--color-accent) 25%, var(--color-tint));
-  }
 
   td.best b {
     @apply bg-accent text-on-accent px-[3px] rounded-[2px];
