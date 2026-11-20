@@ -7,12 +7,11 @@ pledge("network")
 local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
 local status, close = coroutine.status, coroutine.close
 
--- The server reports handler errors through `warn`. The tests record what
--- it reports. The server reads `warn` when it first serves, so this runs
--- before any test.
-local warnings = {}
-_G.warn = function(...)
-    warnings[#warnings + 1] = table.concat({ ... })
+-- The server passes the errors of a handler to the `on_error` function
+-- of its options. The tests record them.
+local reported = {}
+local function record(err)
+    reported[#reported + 1] = err
 end
 
 local function txt(v)
@@ -45,10 +44,10 @@ local function listen()
 end
 
 -- Serves `handler` on a free port while `body(port)` runs, then stops
--- the server.
-local function serving(handler, body)
+-- the server. `options` are the options of `network.serve`.
+local function serving(handler, body, options)
     local server, port = listen()
-    local co = spawn(network.serve, server, handler)
+    local co = spawn(network.serve, server, handler, options or { on_error = record })
     local ok, err = catch body(port)
     assert(close(co))
     server:close()
@@ -586,7 +585,7 @@ local function a_404_keeps_the_connection_test()
 end
 
 local function a_handler_error_answers_500_and_closes_test()
-    warnings = {}
+    reported = {}
     serving(function(req)
         if req.path == "/fail" then
             error("the handler broke")
@@ -602,21 +601,20 @@ local function a_handler_error_answers_500_and_closes_test()
         local next <close> = connect(port)
         assert(exchange(next, get("/ok")).body == "fine")
     end)
-    assert(#warnings == 1, tostring(#warnings))
-    assert(string.find(warnings[1], "^network%.serve: serve_test%.lus:%d+: the handler broke$"), warnings[1])
+    assert(#reported == 1, tostring(#reported))
+    assert(string.find(reported[1], "^serve_test%.lus:%d+: the handler broke$"), reported[1])
 end
 
-local function a_handler_error_object_is_reported_as_text_test()
-    warnings = {}
+local function on_error_receives_the_error_value_test()
+    reported = {}
+    local failure = { code = 7 }
     serving(function(req)
-        error(setmetatable({}, { __tostring = function()
-            return "custom failure"
-        end }))
+        error(failure)
     end, function(port)
         local sock <close> = connect(port)
         assert(exchange(sock, get("/")).status == 500)
     end)
-    assert(#warnings == 1 and warnings[1] == "network.serve: custom failure", warnings[1])
+    assert(#reported == 1 and reported[1] == failure)
 end
 
 local invalid_results_cases = {
@@ -633,14 +631,14 @@ local invalid_results_cases = {
 }
 
 local function invalid_results_test(handler, message)
-    warnings = {}
+    reported = {}
     serving(handler, function(port)
         local sock <close> = connect(port)
         local r = exchange(sock, get("/"))
         assert(r.status == 500 and r.body == "" and r.headers["x-b"] == nil)
         assert(at_end(sock))
     end)
-    assert(#warnings == 1 and string.find(warnings[1], message), warnings[1])
+    assert(#reported == 1 and string.find(reported[1], message), reported[1])
 end
 
 local function a_handler_may_suspend_test()
@@ -875,6 +873,119 @@ local function empty_lines_before_a_request_are_skipped_test()
         local r = exchange(sock, "\r\n\r\n" .. get("/after"))
         assert(r.status == 200 and r.body == "/after")
     end)
+end
+
+-- ===== Options =====
+
+-- A connection that makes no progress for the idle timeout closes. One
+-- that waits between two requests closes without a word, and one that
+-- stopped inside a request is told why.
+local function an_idle_connection_closes_test()
+    serving(function(req)
+        return 200, "ok"
+    end, function(port)
+        local silent <close> = connect(port)
+        local partial <close> = connect(port)
+        local kept <close> = connect(port)
+        partial:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 10\r\n\r\nhalf")
+        assert(exchange(kept, get("/")).body == "ok")
+        assert(at_end(silent))
+        local r = read_response(partial)
+        assert(r.status == 408 and r.reason == "Request Timeout" and r.headers.connection == "close")
+        assert(at_end(partial))
+        assert(at_end(kept))
+    end, { idle_timeout = 0.05 })
+end
+
+local function a_busy_connection_outlives_the_idle_timeout_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local sock <close> = connect(port)
+        local idle = listen()
+        idle:settimeout(0.03)
+        -- Each request arrives within the timeout of 0.1 s, over 0.3 s.
+        for i = 1, 10 do
+            assert(exchange(sock, get(`/$(i)`)).body == `/$(i)`)
+            catch idle:accept()
+        end
+        idle:close()
+    end, { idle_timeout = 0.1 })
+end
+
+local function a_slow_reader_loses_its_connection_test()
+    serving(function(req)
+        return 200, string.rep("x", 8 * 1024 * 1024)
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send(get("/"))
+        -- The client reads nothing for longer than the timeout, and the
+        -- server closes the connection in the middle of the body.
+        local idle = listen()
+        idle:settimeout(0.3)
+        catch idle:accept()
+        idle:close()
+        local all = sock:receive("*a", 64 * 1024 * 1024)
+        assert(#all > 0 and #all < 8 * 1024 * 1024, tostring(#all))
+    end, { idle_timeout = 0.05 })
+end
+
+-- The server keeps `max_connections` connections open. The next one
+-- waits in the queue of the system until one of them closes.
+local function connections_over_the_limit_wait_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local first = connect(port)
+        local second <close> = connect(port)
+        assert(exchange(first, get("/first")).body == "/first")
+        assert(exchange(second, get("/second")).body == "/second")
+        local third <close> = connect(port)
+        third:send(get("/third"))
+        third:settimeout(0.05)
+        raises(function()
+            third:receive(1)
+        end, "receive timeout")
+        -- The first two still work while the third waits.
+        assert(exchange(second, get("/again")).body == "/again")
+        first:close()
+        third:settimeout(10)
+        assert(read_response(third).body == "/third")
+    end, { max_connections = 2 })
+end
+
+local bad_options_cases = {
+    not_a_table = { "options", "table expected" },
+    unknown = { { timeout = 1 }, "unknown option 'timeout'" },
+    unknown_index = { { 1 }, "unknown option '1'" },
+    idle_text = { { idle_timeout = "soon" }, "idle_timeout must be a number of seconds" },
+    idle_zero = { { idle_timeout = 0 }, "idle_timeout must be positive" },
+    max_zero = { { max_connections = 0 }, "max_connections must be a positive integer" },
+    max_float = { { max_connections = 1.5 }, "max_connections must be a positive integer" },
+    on_error_text = { { on_error = "print" }, "on_error must be a function" },
+}
+
+local function bad_options_test(options, message)
+    local server = listen()
+    local err = raises(function()
+        network.serve(server, function() end, options)
+    end, message)
+    assert(string.find(err, "bad argument #3", 1, true), err)
+    raises(function()
+        network.serve("127.0.0.1", 0, function() end, options)
+    end, "bad argument #4")
+    server:close()
+end
+
+local function options_are_optional_test()
+    for _, options in ipairs({ {}, { idle_timeout = -1 }, { idle_timeout = 2.5, max_connections = 3, on_error = record } }) do
+        serving(function(req)
+            return 200, "ok"
+        end, function(port)
+            local sock <close> = connect(port)
+            assert(exchange(sock, get("/")).body == "ok")
+        end, options)
+    end
 end
 
 -- ===== serve itself =====

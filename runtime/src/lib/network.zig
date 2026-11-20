@@ -79,6 +79,10 @@ pub const Socket = struct {
     /// The state of the HTTP exchange that `network.serve` runs on this
     /// connection.
     http: ?*@import("serve.zig").Http = null,
+    /// The server whose `network.serve` accepted this connection. The
+    /// coroutine of the connection keeps that server alive, and the
+    /// socket leaves the count of the server when it closes.
+    owner: ?*Server = null,
 };
 
 /// A listening TCP socket.
@@ -86,6 +90,16 @@ pub const Server = struct {
     server: net.Server,
     timeout_ms: i32 = -1,
     closed: bool = false,
+    // What `network.serve` keeps for the server it serves on.
+    /// The connections it accepted that are still open.
+    live: u32 = 0,
+    /// How many connections it keeps open at once.
+    max_live: u32 = 0,
+    /// The timeout it gives every connection, in milliseconds.
+    idle_ms: i32 = -1,
+    /// True while it waits for a connection to close before it accepts
+    /// the next one.
+    full: bool = false,
 };
 
 /// A UDP socket. An unbound socket holds a placeholder bound to an
@@ -876,6 +890,12 @@ pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
 /// the socket timeout. Raises "receive timeout" when it expires.
 pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
+    return (try tryFill(l, s, max)) orelse l.raiseFmt("receive timeout", .{});
+}
+
+/// Reads up to `max` more bytes into the socket buffer, waiting at most
+/// the socket timeout. Returns null when it expires.
+pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
     s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
     const dst = s.buf.unusedCapacitySlice()[0..max];
     var n: usize = 0;
@@ -891,10 +911,10 @@ pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
             // The bytes already read stay in the buffer of the socket, so
             // the receive that runs again continues from them.
             .again => {
-                try awaitIo(l, s.stream.socket.handle, .read, s.timeout_ms, "receive");
+                if (!try sched.waitIo(l, s.stream.socket.handle, .read, s.timeout_ms)) return null;
                 try stillOpen(l, s);
                 // The buffer may have moved while other coroutines ran.
-                return fill(l, s, max);
+                return tryFill(l, s, max);
             },
             .fail => |e| return .{ .fail = e },
         }
@@ -1015,6 +1035,15 @@ fn closeSocket(l: *Thread, s: *Socket) void {
 fn releaseSocket(l: *Thread, s: *Socket) void {
     sched.forget(l.g, s.stream.socket.handle);
     s.stream.close(l.g.io);
+    if (s.owner) |server| {
+        s.owner = null;
+        server.live -= 1;
+        // A `network.serve` that waits for a free place accepts again.
+        if (server.full) {
+            server.full = false;
+            sched.signal(l.g);
+        }
+    }
     s.buf.deinit(l.g.gpa);
     s.buf = .empty;
     if (s.http) |h| {

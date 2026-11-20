@@ -307,7 +307,8 @@ pub fn waitIo(l: *Thread, handle: Handle, dir: Dir, timeout_ms: i32) Error!bool 
     const g = l.g;
     if (timeout_ms == 0) return false;
     if (l.task) |t| {
-        if (t.restarted and t.wake == .timeout) {
+        // The deadline of this wait fired before the native ran again.
+        if (t.restarted and t.wake == .timeout and t.kind == .io) {
             t.wake = .none;
             t.op_deadline = 0;
             return false;
@@ -364,13 +365,29 @@ pub fn waitJoin(l: *Thread, co: *Thread) Error!void {
 /// always ends the wait. Returns once the call arrived, or the error
 /// that suspends the thread.
 pub fn waitNotify(l: *Thread) Error!void {
+    return waitNotifyFor(l, -1);
+}
+
+/// Waits as `waitNotify` does, for at most `timeout_ms` milliseconds
+/// when that is positive. The native looks at what it waits for after
+/// either end of the wait.
+pub fn waitNotifyFor(l: *Thread, timeout_ms: i32) Error!void {
     const t = try ensureTask(l);
     t.wake = .none;
     t.kind = .notify;
     t.target = null;
-    t.deadline = 0;
+    t.deadline = if (timeout_ms > 0) now(l.g) + @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms else 0;
     if (canSuspend(l)) return suspendThread(l, t);
     _ = try block(l, t);
+}
+
+/// Runs the threads that wait in `waitNotify` again, from the thread of
+/// the state. A native calls it after it changed what one of them waits
+/// for.
+pub fn signal(g: *Global) void {
+    const s = &g.sched;
+    if (s.released) return;
+    while (s.notify_waiters.head) |t| wake(g, t, .ready);
 }
 
 /// Lets the coroutines that are ready run before the native of `l`

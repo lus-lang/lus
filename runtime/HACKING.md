@@ -39,7 +39,7 @@ Every heap allocation can trigger a collection. A freshly created object is safe
 
 ## Natives that wait
 
-A native that would block waits through the scheduler (`vm/sched.zig`, `../spec/design/coroutines.md`). It first tries its operation without waiting. When the operation reports that it would block, the native calls `sched.waitIo` with the handle, the direction, and the timeout, and tries again when that returns true. `sched.waitJoin` waits for the end of a detached coroutine, and `sched.pass` lets the other coroutines run.
+A native that would block waits through the scheduler (`vm/sched.zig`, `../spec/design/coroutines.md`). It first tries its operation without waiting. When the operation reports that it would block, the native calls `sched.waitIo` with the handle, the direction, and the timeout, and tries again when that returns true. `sched.waitJoin` waits for the end of a detached coroutine, `sched.waitNotify` waits for a `sched.notify` from another thread or a `sched.signal` from this one, and `sched.pass` lets the other coroutines run. A timeout runs from the first `waitIo` of a call, and a native calls `sched.opDone` when its operation made progress, so that the next wait of the same call has a timeout of its own.
 
 Inside a detached coroutine these calls return the error that suspends the thread, with `l.yielding` set. The native passes that error on with `try`, like any other error, and never catches it. The frame of the native stays on the stack, and when the wait is over `interp.restartNative` calls the native again with the same arguments. A native that waits therefore follows three rules.
 
@@ -49,7 +49,7 @@ Inside a detached coroutine these calls return the error that suspends the threa
 
 Anywhere else the same calls keep the native on the stack, run the scheduler until the event arrives, and return. Other coroutines ran in the meantime, so the native checks that the object it waits on is still open before it touches it again (`stillOpen` in `lib/network.zig`). A handle that is about to close goes through `sched.forget` first, which wakes its waiters.
 
-After a change to the scheduler or to a native that waits, run `detach_test.lus`, `netcoro_test.lus`, and `serve_test.lus` under every JIT mode and in a `-Dgc-stress=97 -Dgc-verify=true` build, and run the suite on Linux as well, where the poller is epoll.
+After a change to the scheduler or to a native that waits, run `detach_test.lus`, `netcoro_test.lus`, `serve_test.lus`, `workercoro_test.lus`, and `netcli_test.lus` under every JIT mode and in a `-Dgc-stress=97 -Dgc-verify=true` build, and run the suite on Linux as well, where the poller is epoll.
 
 ## Strings and bytes
 
