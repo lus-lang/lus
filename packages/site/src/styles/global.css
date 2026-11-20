@@ -6,19 +6,29 @@
 ** The site reads like a printed instrument manual with the margins left
 ** generous. Paper carries ink, whitespace carries the structure, and lime
 ** is a signal that marks the one thing that matters on a surface. It is
-** flat, still, and compact, with one rule per section. Light is "quiet",
-** dark is "night", and the page follows the reader's color scheme.
+** still and compact, with one rule per section. Light is "quiet", dark is
+** "night", and the page follows the reader's color scheme.
+**
+** Its one image is the cube field (components/CubeField.astro): bars of
+** cubes, the shape of the Lus mark, drawn as SVG at build time. Where a
+** page has data, the field reads it, one bar per entry. The lime cube is
+** the signal, its light tints the bars nearest it, and at most one field
+** per page glows.
 **
 ** Ground rules:
 **  - No motion. No transitions, animations, keyframes, smooth scroll, or
 **    timer-driven repaints. State changes are instant repaints caused by
 **    user events. No box shadows.
-**  - Rules are few. Each section opens with its display title over one
-**    2px ink rule (.sech in a .part, h2 in prose). Code figures carry the
-**    same 2px rule on top.
-**    The header and footer close the page with 2px and 1px rules. Rows,
-**    ledgers, indexes, and tables separate by spacing, never by lines.
-**    Data bars in tables are data, not rules.
+**  - Rules are few. Each section title stands on the ruled utility, one
+**    2px rule ticked at the twelve columns of the measure. Code figures
+**    carry the same 2px rule on top and sit between crop marks (.crop),
+**    as does the install box. The header closes with a 2px rule and the
+**    footer opens on a ticked 1px rule. Rows, ledgers, indexes, and
+**    tables separate by spacing, never by lines. Data bars are segmented
+**    meters of square cells, and they are data, not rules.
+**  - Print texture: a still paper grain sits behind every page
+**    (body::before). The homepage horizon glows through a grain filter,
+**    and the night masthead carries a faint lime bloom.
 **  - Tokens describe roles, so both schemes share every class:
 **      paper, tint: page and quiet surface. field: controls that take
 **        input or a click (white in light).
@@ -41,7 +51,8 @@
 **    the accent-soft wash. Prose links keep a lime underline. Focus is a
 **    2px ink outline.
 **  - Type: Bricolage Grotesque (font-display) sets the wordmark, page
-**    titles, section titles, chapter numbers, and chapter titles. Intel
+**    titles, section titles, chapter numbers, and chapter titles. Chapter
+**    and example numbers are ghost numerals, 56px at 16% ink. Intel
 **    One Mono sets code, labels, nav, dates, captions, and data. Atkinson
 **    Hyperlegible Next sets prose. Labels are mono, 11px, uppercase,
 **    tracked .1em, ink-3.
