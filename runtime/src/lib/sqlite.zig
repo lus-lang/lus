@@ -450,19 +450,18 @@ fn ioShmMap(file: *c.File, page: c_int, size: c_int, write: c_int, out: *?*anyop
     if (m.iVersion < 2 or m.xShmMap == null) return c.IOERR_SHMMAP;
     if (!shmAllowed(f, false)) return c.IOERR_SHMMAP;
     // The win32 VFS ignores readonly_shm and maps the WAL index writable, and
-    // a reader of a shared index writes its read marks under exclusive
-    // locks. Answering SQLITE_READONLY to every map of a read-only
-    // connection there puts SQLite on the path the unix VFS takes with
-    // readonly_shm, which reads the index through the file under shared
-    // locks only. A write request records no denial, since SQLite treats
-    // the answer as part of a read.
+    // a reader of a writable index updates its read marks under exclusive
+    // locks. A read-only connection there maps each page read-only through
+    // the VFS and answers SQLITE_READONLY. A write request from a read-only
+    // connection records no denial, since SQLite treats the answer as part
+    // of a read.
     if (f.owner.readonly and builtin.os.tag == .windows) {
-        // The win32 VFS opens its shared memory node in xShmMap, and the
-        // shared locks of the read path need that node, so the map goes
-        // through once before the answer.
-        var view: ?*anyopaque = null;
-        const rc = m.xShmMap.?(f.real, page, size, 0, &view);
-        if (rc != c.OK and rc & 0xff != c.READONLY) return rc;
+        // The answer SQLITE_READONLY with a mapped page tells SQLite that
+        // the index is valid and read-only, which is what the unix VFS
+        // reports under readonly_shm. SQLite then reads the mapping and
+        // never takes the exclusive locks that update read marks.
+        const rc = m.xShmMap.?(f.real, page, size, 0, out);
+        if (rc != c.OK) return rc;
         return c.READONLY;
     }
     if (write != 0 and f.owner.readonly) return c.READONLY;
