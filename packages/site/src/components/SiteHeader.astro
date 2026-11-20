@@ -147,6 +147,19 @@ function isActive(href: string) {
     }
   }
 
+  /* the smallest phones keep all five links on one line */
+  @media (max-width: 360px) {
+    .site-header {
+      .header-inner {
+        @apply px-3 gap-1;
+      }
+
+      nav a {
+        @apply px-[3px];
+      }
+    }
+  }
+
   :global(html.unstable) .site-header {
     @apply border-ink-red;
 

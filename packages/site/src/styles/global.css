@@ -512,6 +512,7 @@ pre.astro-code {
 
 :not(pre) > code {
   @apply font-mono text-[0.9em] bg-tint px-1 rounded-[3px];
+  overflow-wrap: anywhere;
 }
 
 /* self-link affordance on headings: always visible (touch parity) */
