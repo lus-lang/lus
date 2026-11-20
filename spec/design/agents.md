@@ -128,7 +128,7 @@ Each manual page gets a `copy as Markdown` control in the restyle's quiet style,
 
 ## 4. The homepage
 
-The approved order stays: intro with install and news, then download, then the documentation index. The sections below take the place of "Lus at a glance" entirely and speak about what Lus does for a program. Syntax lives in the manual and the playground. Each section is a heading, one sentence, and one piece of evidence: a number, a short code block, or a list. The copy follows the site style of compact facts.
+The page reads in this order: the masthead with the agent prompt and the news, the releases standing on the horizon rule, the standard library index, the benchmarks, then the sections below. The sections below take the place of "Lus at a glance" entirely and speak about what Lus does for a program. Syntax lives in the manual and the playground. Each section is a heading, one sentence, and one piece of evidence: a number, a short code block, or a list. The copy follows the site style of compact facts.
 
 ### Fast
 

@@ -231,7 +231,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
     <section class="part" id="documentation">
       <div class="sech">
-        <h2>Documentation</h2><span class="label">standard library</span>
+        <h2>Standard library</h2>
       </div>
       <nav class="index" aria-label="Standard library modules">
         {
@@ -246,6 +246,8 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </nav>
     </section>
 
+    <Benchmarks />
+
     <section class="part" id="software">
       <div class="sech"><h2>In your software</h2></div>
       <div class="chapters">
@@ -259,7 +261,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
                 <figure class="figure crop">
                   <figcaption>
                     <span>fig. 1 · speed of lus</span>
-                    <a href="#benchmarks">all results ↓</a>
+                    <a href="#benchmarks">all results ↑</a>
                   </figcaption>
                   <ol class="ratios">
                     {speed.map((s) => (
@@ -310,7 +312,6 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       </div>
     </section>
 
-    <Benchmarks />
   </main>
 </Layout>
 
