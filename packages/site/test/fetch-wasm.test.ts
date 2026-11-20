@@ -108,6 +108,7 @@ async function runFetch(fixture, outputDirectory, options = {}) {
     outputDirectory,
     log() {},
     localWasmPath: null,
+    githubToken: null,
     ...options,
   })
 }
@@ -199,6 +200,28 @@ test("skips releases without a WebAssembly module", async () => {
       assert.deepEqual(fixture.requests, ["/api/releases"])
     })
   })
+})
+
+test("authorizes the release listing when a token is set", async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, headers: init.headers })
+    return { ok: true, json: async () => [] }
+  }
+  await withOutputDirectory(async (outputDirectory) => {
+    const options = {
+      releasesUrl: "https://example.test/releases",
+      outputDirectory,
+      fetchImpl,
+      log() {},
+      localWasmPath: null,
+    }
+    await fetchWasmReleases({ ...options, githubToken: "token-1" })
+    await fetchWasmReleases({ ...options, githubToken: null })
+  })
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].headers.Authorization, "Bearer token-1")
+  assert.equal(calls[1].headers.Authorization, undefined)
 })
 
 test("stages a local build as the unstable channel", async () => {

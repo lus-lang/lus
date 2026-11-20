@@ -288,13 +288,18 @@ async function downloadRelease(release, { fetchImpl, hashFactory, log }) {
   return { version: release.tag_name, wasm }
 }
 
-async function fetchReleases(releasesUrl, fetchImpl) {
-  const response = await fetchImpl(releasesUrl, {
-    headers: {
-      Accept: "application/vnd.github.v3+json",
-      "User-Agent": "lus-site-build",
-    },
-  })
+/**
+ * Lists the releases. A token, such as the GITHUB_TOKEN of a GitHub
+ * Actions job, raises the rate limit of the API above the limit that
+ * anonymous requests from a shared runner address share.
+ */
+async function fetchReleases(releasesUrl, fetchImpl, githubToken) {
+  const headers = {
+    Accept: "application/vnd.github.v3+json",
+    "User-Agent": "lus-site-build",
+  }
+  if (githubToken) headers.Authorization = `Bearer ${githubToken}`
+  const response = await fetchImpl(releasesUrl, { headers })
   if (!response.ok) {
     throw new Error(`GitHub API error: ${response.status}`)
   }
@@ -314,13 +319,14 @@ export async function fetchWasmReleases({
   log = console.log,
   localWasmPath = process.env.LUS_SITE_LOCAL_WASM ?? LOCAL_WASM,
   localVersion = localRuntimeVersion,
+  githubToken = process.env.GITHUB_TOKEN,
 } = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("The fetch implementation is unavailable")
   }
 
   log("Fetching releases from GitHub...")
-  const releases = await fetchReleases(releasesUrl, fetchImpl)
+  const releases = await fetchReleases(releasesUrl, fetchImpl, githubToken)
   const sorted = releases.filter(isWasiRelease).sort(
     (a, b) =>
       new Date(b.published_at).getTime() - new Date(a.published_at).getTime(),
