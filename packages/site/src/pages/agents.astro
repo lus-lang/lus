@@ -65,8 +65,10 @@ const docs = [
     </section>
 
     <section class="part">
-      <div class="sech"><h2>Skills</h2><span class="label">lus agents init</span></div>
+      <div class="sech"><h2>Skills</h2></div>
       <p class="lede">
+        In Claude Code, <code>claude plugin install lus --marketplace lus-lang/lus</code>
+        installs the skills as a plugin. In any other agent,
         <code>lus agents init</code> writes the skills of the installed runtime
         into <code>.agents/skills/</code>, links <code>.claude/skills</code> to
         them, and adds a Lus section to <code>AGENTS.md</code>.

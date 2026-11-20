@@ -1,0 +1,16 @@
+{
+  "name": "lus",
+  "description": "Write, check, format, and test Lus code, and port projects to Lus behind a parity harness.",
+  "author": {
+    "name": "Lus",
+    "url": "https://lus.dev"
+  },
+  "homepage": "https://lus.dev/agents",
+  "repository": "https://github.com/lus-lang/lus",
+  "license": "0BSD",
+  "keywords": [
+    "lus",
+    "lua",
+    "skills"
+  ]
+}

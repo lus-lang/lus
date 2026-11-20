@@ -113,10 +113,10 @@ This lands after the website 2.0 restyle merges, and follows its "Field instrume
 The masthead install block carries a two-way switch: `agent` and `shell`, with the agent side shown first. The agent side holds one prompt in a monospace box with a copy button. The shell side holds `curl -fsSL https://lus.dev/install.sh | sh`, or the Windows installer on Windows.
 
 ```text
-Install Lus (curl -fsSL https://lus.dev/install.sh | sh), run `lus agents init` here, read lus.dev/llms.txt, and tell me where Lus would help this project. Change nothing yet.
+Install Lus with `curl -fsSL https://lus.dev/install.sh | sh`. Then add the Lus skills. In Claude Code, run `claude plugin install lus --marketplace lus-lang/lus`. In any other agent, run `lus agents init` in this project. Use one method. You can read the skill first at https://lus.dev/agents/skills/lus/SKILL.md. Then use the lus skill to look at this project and tell me where Lus would help. Change nothing yet.
 ```
 
-The prompt names every command and URL it uses, so a careful reader can check them first, and it ends on a request for an assessment, which is the first phase of the rewrite skill and the safest first step for any codebase. Under the box, one link reads `what this does`, and it opens `/agents`.
+The prompt installs the skills the way each agent expects. Claude Code takes them as a plugin from the marketplace in `.claude-plugin/marketplace.json`, whose one plugin is the `.agents` folder itself. Every other agent takes them from `lus agents init`, which needs nothing beyond the runtime the first sentence installs. The prompt links the skill so the agent, or a careful reader, can read it before installing, and it ends on a request for an assessment, which is the first phase of the rewrite skill and the safest first step for any codebase. Under the box, one link reads `what this does`, and it opens `/agents`.
 
 ### The agents page
 
@@ -195,7 +195,7 @@ end)
 
 1. The skills live in `.agents/skills/`, the shared discovery path, and `.claude/skills` is a symbolic link to that folder. The index and the prompts sit beside them in `.agents/`.
 2. The binary embeds the skills and the reference, for `lus agents init` and `lus help`, at a cost of about 205 KB.
-3. The masthead prompt installs Lus, runs `lus agents init`, and asks for an assessment with no changes.
+3. The masthead prompt installs Lus, installs the skills as a Claude Code plugin or with `lus agents init`, links the skill to read first, and asks for an assessment with no changes.
 4. The advantage sections replace "Lus at a glance" entirely.
 5. The speed section is written for Lus leading every program in the suite, with the named runtimes derived from the benchmark data.
 6. `lus mcp` comes last, after the skills, the runtime work, and the site.

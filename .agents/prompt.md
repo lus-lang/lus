@@ -5,13 +5,13 @@ Paste one of these into a coding agent such as Claude Code, Codex, Cursor, or Ge
 ## Try Lus here
 
 ```text
-Install Lus (curl -fsSL https://lus.dev/install.sh | sh), run `lus agents init` here, read https://lus.dev/llms.txt, and tell me where Lus would help this project. Change nothing yet.
+Install Lus with `curl -fsSL https://lus.dev/install.sh | sh`. Then add the Lus skills. In Claude Code, run `claude plugin install lus --marketplace lus-lang/lus`. In any other agent, run `lus agents init` in this project. Use one method. You can read the skill first at https://lus.dev/agents/skills/lus/SKILL.md. Then use the lus skill to look at this project and tell me where Lus would help. Change nothing yet.
 ```
 
 ## Write something new
 
 ```text
-Install Lus (curl -fsSL https://lus.dev/install.sh | sh) and run `lus agents init` here. Using the lus skill, write a small program that does the following, with tests, and run `lus check`, `lus fmt`, and `lus test` until they pass:
+Install Lus with `curl -fsSL https://lus.dev/install.sh | sh`. Then add the Lus skills. In Claude Code, run `claude plugin install lus --marketplace lus-lang/lus`. In any other agent, run `lus agents init` in this project. Use one method. You can read the skill first at https://lus.dev/agents/skills/lus/SKILL.md. Then use the lus skill to write the program below, with tests, and run `lus check`, `lus fmt`, and `lus test` until they pass.
 
 <describe the program>
 ```
@@ -19,5 +19,5 @@ Install Lus (curl -fsSL https://lus.dev/install.sh | sh) and run `lus agents ini
 ## Rewrite a project
 
 ```text
-Install Lus (curl -fsSL https://lus.dev/install.sh | sh) and run `lus agents init` here. Follow the lus-rewrite skill. Start with the assessment and stop after it so I can decide.
+Install Lus with `curl -fsSL https://lus.dev/install.sh | sh`. Then add the Lus skills. In Claude Code, run `claude plugin install lus --marketplace lus-lang/lus`. In any other agent, run `lus agents init` in this project. Use one method. You can read the skill first at https://lus.dev/agents/skills/lus/SKILL.md. Then follow the lus-rewrite skill for this project. Start with the assessment and stop after it so I can decide.
 ```

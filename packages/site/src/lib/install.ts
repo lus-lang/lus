@@ -66,8 +66,10 @@ Expand-Archive lus-$tag-x86_64-windows.zip lus
 
 /*
 ** The prompt the homepage offers beside the installer, for readers who
-** work through a coding agent. It names every command and page it uses
-** and ends on an assessment, the first phase of the lus-rewrite skill.
-** .agents/prompt.md holds the longer prompts of /agents.
+** work through a coding agent. It installs Lus and its skills, as a
+** plugin in Claude Code and with `lus agents init` in any other agent,
+** links the skill to read first, and ends on an assessment, the first
+** phase of the lus-rewrite skill. It is the first prompt of
+** .agents/prompt.md, which also holds the other prompts of /agents.
 */
-export const AGENT_PROMPT = `Install Lus (${INSTALL_SH}), run \`lus agents init\` here, read https://lus.dev/llms.txt, and tell me where Lus would help this project. Change nothing yet.`
+export const AGENT_PROMPT = `Install Lus with \`${INSTALL_SH}\`. Then add the Lus skills. In Claude Code, run \`claude plugin install lus --marketplace lus-lang/lus\`. In any other agent, run \`lus agents init\` in this project. Use one method. You can read the skill first at https://lus.dev/agents/skills/lus/SKILL.md. Then use the lus skill to look at this project and tell me where Lus would help. Change nothing yet.`

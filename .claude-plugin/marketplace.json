@@ -1,0 +1,20 @@
+{
+  "name": "lus-lang",
+  "owner": {
+    "name": "Lus",
+    "url": "https://lus.dev"
+  },
+  "metadata": {
+    "description": "Skills for writing, testing, and porting Lus code."
+  },
+  "plugins": [
+    {
+      "name": "lus",
+      "source": "./.agents",
+      "description": "Write, check, format, and test Lus code, and port projects to Lus behind a parity harness.",
+      "homepage": "https://lus.dev/agents",
+      "license": "0BSD",
+      "category": "development"
+    }
+  ]
+}
