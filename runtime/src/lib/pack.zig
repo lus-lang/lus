@@ -12,6 +12,9 @@ const aux = @import("auxlib.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
+
+/// The size of a C long: four bytes on Windows and eight elsewhere.
+const c_long_size: usize = if (@import("builtin").os.tag == .windows) 4 else 8;
 const String = object.String;
 
 const max_int_size = 16;
@@ -65,8 +68,10 @@ pub const Parser = struct {
                 'B' => it = .{ .kind = .uint, .size = 1 },
                 'h' => it = .{ .kind = .int, .size = 2 },
                 'H' => it = .{ .kind = .uint, .size = 2 },
-                'l', 'j' => it = .{ .kind = .int, .size = 8 },
-                'L', 'J', 'T' => it = .{ .kind = .uint, .size = 8 },
+                'l' => it = .{ .kind = .int, .size = c_long_size },
+                'L' => it = .{ .kind = .uint, .size = c_long_size },
+                'j' => it = .{ .kind = .int, .size = 8 },
+                'J', 'T' => it = .{ .kind = .uint, .size = 8 },
                 'f' => it = .{ .kind = .float, .size = 4 },
                 'n', 'd' => it = .{ .kind = if (opt == 'n') .number else .double, .size = 8 },
                 'i' => it = .{ .kind = .int, .size = try p.getNumLimit(4) },

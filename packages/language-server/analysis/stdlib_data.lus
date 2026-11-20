@@ -3509,7 +3509,7 @@ Returns a temporary file name suitable for use as a temporary file.
   ["package.config"] = {
     children = {},
     description = [[
-A string describing some compile-time configurations for packages.]],
+A string describing some compile-time configurations for packages. Its first line is the directory separator, `\` on Windows and `/` elsewhere, which `require` and `package.searchpath` put in place of each dot of a module name.]],
     kind = "variable",
     module = "package",
     name = "package.config",

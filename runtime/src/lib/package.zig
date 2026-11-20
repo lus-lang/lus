@@ -17,6 +17,10 @@ const String = object.String;
 
 pub const default_path = "./?.lus;./?/init.lus;./?.lua;./?/init.lua";
 
+/// The directory separator that replaces the dots of a module name, and the
+/// first line of `package.config`, as in Lua.
+const dirsep = if (@import("builtin").os.tag == .windows) "\\" else "/";
+
 /// A module preincluded at startup with the CLI option `--include`. The
 /// sources are read once under full authority and kept in memory, so
 /// pledged code and worker states require them without file access.
@@ -46,7 +50,7 @@ pub fn open(l: *Thread) Error!void {
     const path = envPath(l) orelse default_path;
     try aux.setField(l, pkg, "path", try l.newStringValue(path));
     try aux.setField(l, pkg, "cpath", try l.newStringValue(""));
-    try aux.setField(l, pkg, "config", try l.newStringValue("/\n;\n?\n!\n-\n"));
+    try aux.setField(l, pkg, "config", try l.newStringValue(dirsep ++ "\n;\n?\n!\n-\n"));
     const loaded = try l.newTable(0, 16);
     try aux.setField(l, pkg, "loaded", Value.obj(.table, loaded));
     // require uses the registry copy, so reassigning package.loaded does
@@ -145,14 +149,14 @@ pub fn searchSep(l: *Thread, name: []const u8, path: []const u8, sep: []const u8
 
 /// Searches with the default separators, as `require` does.
 pub fn search(l: *Thread, name: []const u8, path: []const u8, tried: *std.ArrayList(u8)) Error!?[]u8 {
-    return searchSep(l, name, path, ".", "/", tried);
+    return searchSep(l, name, path, ".", dirsep, tried);
 }
 
 fn searchpath(l: *Thread) Error!u32 {
     const name = try aux.checkBytes(l, 1);
     const path = try aux.checkBytes(l, 2);
     const sep = (try aux.optString(l, 3, ".")).?;
-    const rep = (try aux.optString(l, 4, "/")).?;
+    const rep = (try aux.optString(l, 4, dirsep)).?;
     var tried: std.ArrayList(u8) = .empty;
     defer tried.deinit(l.g.gpa);
     if (try searchSep(l, name, path, sep, rep, &tried)) |f| {

@@ -8,4 +8,4 @@ origin: lua
 type: string
 ---
 
-A string describing some compile-time configurations for packages.
+A string describing some compile-time configurations for packages. Its first line is the directory separator, `\` on Windows and `/` elsewhere, which `require` and `package.searchpath` put in place of each dot of a module name.
