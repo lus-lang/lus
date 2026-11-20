@@ -2,6 +2,7 @@
 import Layout from "../../components/Layout.astro"
 import { getCollection, render } from "astro:content"
 import { fmtDate } from "../../lib/date"
+import CubeField from "../../components/CubeField.astro"
 
 export async function getStaticPaths() {
   const news = await getCollection("news")
@@ -13,6 +14,12 @@ export async function getStaticPaths() {
 
 const { page } = Astro.props
 const rendered = await render(page)
+
+// each article gets its own cover: a field seeded by its id, the way a
+// print run gets its own plate
+let seed = 0
+for (const ch of page.id) seed = (seed * 31 + ch.charCodeAt(0)) % 997
+const peakAt = 0.25 + (seed % 50) / 100
 ---
 
 <Layout
@@ -22,6 +29,7 @@ const rendered = await render(page)
   <main id="main">
     <section>
       <a href="/news" class="back-link">← Back to news</a>
+      <CubeField class="cover" cols={44} at={peakAt} amp={2.8} seed={seed} />
       <article class="prose">
         <h1 class="page-title">{page.data.title}</h1>
         <p class="date">
@@ -35,6 +43,10 @@ const rendered = await render(page)
 
 <style>
   @reference "../../styles/global.css";
+
+  :global(svg.cover) {
+    @apply max-w-[48.5rem] mt-6 mb-2;
+  }
 
   .back-link {
     @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-link no-underline hover:text-ink inline-block pt-2;

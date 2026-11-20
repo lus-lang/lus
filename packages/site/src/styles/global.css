@@ -236,6 +236,17 @@ body::before {
   @apply font-display font-extrabold text-[44px] leading-[0.95] tracking-[-0.045em] pt-2 pb-3 m-0;
 }
 
+/* prose bullets are small cubes, the unit of the field */
+:is(.prose, article.measured) ul:not([class]) {
+  list-style-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2710%27%20height%3D%2711%27%20viewBox%3D%270%200%2010%2011%27%3E%3Cpath%20d%3D%27M5%20.5%209.5%203%205%205.5%20.5%203Z%27%20fill%3D%27%23f9f9f2%27%20stroke%3D%27%23737b68%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M.5%203%205%205.5V10.5L.5%208Z%27%20fill%3D%27%23d9ddcc%27%20stroke%3D%27%23737b68%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M9.5%203%205%205.5V10.5L9.5%208Z%27%20fill%3D%27%23b8bfa8%27%20stroke%3D%27%23737b68%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :is(.prose, article.measured) ul:not([class]) {
+    list-style-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2710%27%20height%3D%2711%27%20viewBox%3D%270%200%2010%2011%27%3E%3Cpath%20d%3D%27M5%20.5%209.5%203%205%205.5%20.5%203Z%27%20fill%3D%27%232a3520%27%20stroke%3D%27%23949c88%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M.5%203%205%205.5V10.5L.5%208Z%27%20fill%3D%27%231d2715%27%20stroke%3D%27%23949c88%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M9.5%203%205%205.5V10.5L9.5%208Z%27%20fill%3D%27%23141c0d%27%20stroke%3D%27%23949c88%27%20stroke-width%3D%27.6%27%20stroke-linejoin%3D%27round%27/%3E%3C/svg%3E");
+  }
+}
+
 /* title row: a page title with a skyline of the page's own entries on the
    right, one bar each, both standing on a hairline */
 .title-row {
