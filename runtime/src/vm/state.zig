@@ -949,10 +949,12 @@ pub const StringBuffer = struct {
 
 /// Creates a string from the bytes of `list`, whose memory comes from the
 /// allocator of `sb`, and leaves `list` empty. A result too long for a
-/// small cell becomes the string in place: its block takes the header
-/// and joins the large objects. A buffer with more than an eighth of its
-/// capacity unused is copied instead, so the string does not keep the
-/// slack for its whole life.
+/// small cell becomes the string in place: its block shrinks to the
+/// string and joins the large objects. An allocator that shrinks a block
+/// without moving it may keep the unused capacity of a buffer that grew,
+/// at most a third of it, with the string. That costs less than a copy,
+/// which holds the whole buffer and the string at once and leaves the
+/// buffer to an allocator that may keep it resident.
 pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8), ascii: bool, chars: usize) Allocator.Error!*String {
     const a = sb.allocator();
     defer {
@@ -960,7 +962,7 @@ pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8),
         list.* = .empty;
     }
     const n = list.items.len;
-    if (String.allocSize(n) <= @import("heap.zig").max_small or list.capacity - n > list.capacity / 8) {
+    if (String.allocSize(n) <= @import("heap.zig").max_small) {
         return newStringKnown(g, list.items, ascii, chars);
     }
     gc.maybeCollect(g);
