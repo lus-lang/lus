@@ -308,14 +308,15 @@ details[open] > summary::before {
 /* title row: a page title with a skyline of the page's own entries on the
    right, one bar each, both standing on a hairline */
 .title-row {
-  @apply flex items-end gap-8 border-b border-rule mb-4;
+  @apply flex flex-wrap md:flex-nowrap items-end gap-x-8 border-b border-rule mb-4;
 
   > :first-child {
-    @apply min-w-0 pb-3;
+    @apply min-w-0 pb-3 basis-full md:basis-auto;
   }
 
+  /* on phones the readout stands under the title, on the same rule */
   > svg.cube-field {
-    @apply hidden md:block ml-auto shrink-0 max-w-[50%];
+    @apply block md:ml-auto shrink-0 max-w-full md:max-w-[50%];
   }
 }
 
