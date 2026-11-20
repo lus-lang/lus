@@ -1087,7 +1087,9 @@ pub const Emitter = struct {
         const a = &e.a;
         a.movImm(node, slot_addr);
         a.load16(node, .{ .base = node });
-        a.jumpIfMem(.hs, node, .{ .base = tab, .disp = e.lay.hash_len }, out_of_range);
+        // The length is 32 bits wide.
+        a.load32(tmp, .{ .base = tab, .disp = e.lay.hash_len });
+        a.jumpIf(.hs, node, tmp, out_of_range);
         a.load64(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
         a.subScaled(tags, tmp, node, tl.tag_shift);
         a.addScaled(node, tmp, node, tl.node_shift);
@@ -1208,7 +1210,8 @@ pub const Emitter = struct {
         const a = &e.a;
         const boxed = a.newLabel();
         // An index below one wrapped around to a large unsigned number.
-        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, outside);
+        a.load32(A.t2, .{ .base = A.t0, .disp = tl.asize });
+        a.jumpIf(.hs, A.t1, A.t2, outside);
         a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
         a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
@@ -1235,7 +1238,8 @@ pub const Emitter = struct {
     fn arraySet(e: *Emitter, pc: u32, v: u32, outside: Label, miss: Label, done: Label) void {
         const a = &e.a;
         const boxed = a.newLabel();
-        a.jumpIfMem(.hs, A.t1, .{ .base = A.t0, .disp = tl.asize }, outside);
+        a.load32(A.t2, .{ .base = A.t0, .disp = tl.asize });
+        a.jumpIf(.hs, A.t1, A.t2, outside);
         e.guardRawStore(A.t0, A.t2, miss);
         a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
@@ -1575,7 +1579,7 @@ pub const Emitter = struct {
                 // t1 and t2 hold the predicted node and its tags.
                 a.jumpIfByte(.ne, .{ .base = A.t2, .disp = tl.tag_key }, tag_nil, helper);
                 a.jumpIfByte(.eq, tagOf(v), tag_nil, helper);
-                a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
+                a.load32(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
                 a.addImm(A.t2, -1);
                 a.load64(A.t4, .{ .base = A.t0, .disp = e.lay.hash_ptr });
                 a.movImm(A.t3, s.hash);
@@ -1641,7 +1645,7 @@ pub const Emitter = struct {
                     a.jmp(helper);
                 } else {
                     const loop = a.newLabel();
-                    a.load64(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
+                    a.load32(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
                     a.jumpIfImm(.eq, A.t2, 0, in_metatable);
                     a.mov(A.t5, A.t2);
                     a.addImm(A.t2, -1);

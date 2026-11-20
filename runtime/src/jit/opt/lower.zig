@@ -1844,7 +1844,7 @@ pub const Lower = struct {
     /// The hash node `idx` of table `t`, proven to exist and to hold the
     /// string `key`.
     fn hashNode(b: *Lower, t: Ref, idx: usize, key_str: *String) Error!Node {
-        const len = try b.load(t, b.hash_len, .int, 8, .tab_hash, ir.none);
+        const len = try b.load(t, b.hash_len, .int, 4, .tab_hash, ir.none);
         const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.hi), .a = len, .imm = @intCast(idx) });
         const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, ir.none);
         const off: i32 = @intCast(idx << tl.node_shift);
@@ -1865,17 +1865,17 @@ pub const Lower = struct {
     /// the first empty node. Returns false when the sample does not
     /// prove the absence in a few steps.
     fn absent(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!bool {
-        const len = try b.load(t, b.hash_len, .int, 8, .tab_hash, ir.none);
-        const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = len, .imm = @intCast(st.hash.len) });
-        if (st.hash.len == 0) return true;
+        const len = try b.load(t, b.hash_len, .int, 4, .tab_hash, ir.none);
+        const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = len, .imm = @intCast(st.hash_len) });
+        if (st.hash_len == 0) return true;
         const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, ir.none);
-        const mask = st.hash.len - 1;
+        const mask = st.hash_len - 1;
         var i: usize = key_str.hash & mask;
         // A hash part may hold a key in every node, so the walk visits
         // each node at most once. Then every node is proven to hold
         // another key.
-        if (st.hash.len > 4 and st.hash_used >= st.hash.len) return false;
-        for (0..@min(st.hash.len, 4)) |_| {
+        if (st.hash_len > 4 and st.hash_used >= st.hash_len) return false;
+        for (0..@min(st.hash_len, 4)) |_| {
             const nk = st.key(i);
             const off: i32 = @intCast(i << tl.node_shift);
             if (nk.tag == .nil) {
@@ -1890,7 +1890,7 @@ pub const Lower = struct {
             i = (i + 1) & mask;
         }
         // Every node was visited when the part is that small.
-        return st.hash.len <= 4;
+        return st.hash_len <= 4;
     }
 
     /// t[key] for a string key, along the path that the sample takes:
@@ -2010,7 +2010,7 @@ pub const Lower = struct {
     /// of table.
     fn rawStore(b: *Lower, t: TableRef) Error!bool {
         const st = t.sample;
-        if (st.readonly) return false;
+        if (st.isReadonly()) return false;
         const bit: u16 = @as(u16, 1) << il.absent_newindex;
         if (st.metatable) |mt| if (mt.tm_absent & bit == 0) return false;
         const ro = try b.load(t.ref, tl.readonly, .int, 1, .tab_meta, ir.none);
@@ -2202,7 +2202,7 @@ pub const Lower = struct {
                 at = c - 1;
             },
         }
-        const asize = try b.load(t.ref, tl.asize, .int, 8, .tab_array, ir.none);
+        const asize = try b.load(t.ref, tl.asize, .int, 4, .tab_array, ir.none);
         const zi = try b.pure(.{ .op = .addi, .ty = .int, .a = key_ref, .imm = -1 });
         var dep: Ref = ir.none;
         if (bounds) {
@@ -2298,7 +2298,7 @@ pub const Lower = struct {
             const kind = try b.load(t.ref, tl.kind, .int, 1, .tab_array, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = kind, .imm = @backingInt(st.kind) });
             const bits = try b.storeBits(st.kind, v);
-            const asize = try b.load(t.ref, tl.asize, .int, 8, .tab_array, ir.none);
+            const asize = try b.load(t.ref, tl.asize, .int, 4, .tab_array, ir.none);
             const zi = try b.pure(.{ .op = .addi, .ty = .int, .a = key_ref, .imm = -1 });
             const ap = try b.load(t.ref, tl.array_ptr, .int, 8, .tab_array, ir.none);
             const fast = try b.f.newBlock();

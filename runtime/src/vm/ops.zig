@@ -100,17 +100,17 @@ pub inline fn normKey(l: *Thread, key: Value) Error!Value {
 }
 
 pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
-    if (t.readonly) return l.raiseRun("attempt to modify a readonly table", .{});
+    if (t.isReadonly()) return l.raiseRun("attempt to modify a readonly table", .{});
     const k = try normKey(l, key);
     switch (k.tag) {
         .nil => return l.raiseRun("table index is nil", .{}),
         .float => if (std.math.isNan(k.asFloat())) return l.raiseRun("table index is NaN", .{}),
         else => {},
     }
-    const hlen = t.hash.len;
+    const hlen = t.hash_len;
     const alen = t.asize;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
-    if (t.hash.len != hlen or t.asize != alen) learnTableSize(l.g, t);
+    if (t.hash_len != hlen or t.asize != alen) learnTableSize(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
 
