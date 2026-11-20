@@ -954,6 +954,20 @@ local function connections_over_the_limit_wait_test()
     end, { max_connections = 2 })
 end
 
+local function closing_the_server_ends_a_serve_at_its_limit_test()
+    local server, port = listen()
+    local co = spawn(network.serve, server, function(req)
+        return 200, "ok"
+    end, { max_connections = 1 })
+    local sock <close> = connect(port)
+    assert(exchange(sock, get("/")).body == "ok")
+    -- The server waits for this connection to close before it accepts.
+    assert(status(co) == "suspended")
+    server:close()
+    local ok, err = resume(co)
+    assert(not ok and string.find(err, "attempt to use a closed server", 1, true), tostring(err))
+end
+
 local bad_options_cases = {
     not_a_table = { "options", "table expected" },
     unknown = { { timeout = 1 }, "unknown option 'timeout'" },

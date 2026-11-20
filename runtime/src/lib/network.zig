@@ -1341,6 +1341,12 @@ pub fn closeServerIn(g: *state.Global, s: *Server) void {
     sched.forget(g, s.server.socket.handle);
     s.server.socket.close(g.io);
     s.closed = true;
+    // A `network.serve` that waits for a free place finds the server
+    // closed.
+    if (s.full) {
+        s.full = false;
+        sched.signal(g);
+    }
 }
 
 fn serverClose(l: *Thread) Error!u32 {
