@@ -343,6 +343,53 @@ local function a_socket_wait_inside_a_native_call_runs_the_scheduler_test()
     stop()
 end
 
+-- A wait inside a native callback keeps the coroutine on the stack once.
+-- The waits that follow the callback suspend the coroutine again, so the
+-- threads below it on the native stack go on.
+local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test()
+    local server, port = listen()
+    local client <close> = connect(port)
+    local peer <close> = server:accept()
+    local order = {}
+    local reader = spawn(function()
+        local first = true
+        table.sort({ 3, 1, 2 }, function(a, b)
+            if first then
+                first = false
+                peer:settimeout(0.02)
+                local ok, err = catch peer:receive(1)
+                assert(not ok and string.find(err, "receive timeout", 1, true))
+            end
+            return a < b
+        end)
+        order[#order + 1] = "sorted"
+        peer:settimeout(10)
+        local byte = txt(peer:receive(1))
+        order[#order + 1] = "received " .. byte
+        return byte
+    end)
+    local ticker = spawn(function()
+        while #order == 0 do
+            yield()
+        end
+        for i = 1, 3 do
+            yield()
+        end
+        order[#order + 1] = "ticker done"
+        return "ticks"
+    end)
+    -- The main chunk waits for the ticker below the reader. It continues
+    -- while the reader waits for its byte, which arrives afterwards.
+    local ok, ticks = resume(ticker)
+    assert(ok and ticks == "ticks")
+    assert(status(reader) == "suspended")
+    client:send("x")
+    local ok2, byte = resume(reader)
+    assert(ok2 and byte == "x")
+    assert(table.concat(order, ", ") == "sorted, ticker done, received x", table.concat(order, ", "))
+    server:close()
+end
+
 -- ===== Timeouts =====
 
 -- Accepts connections and keeps them open without sending anything.

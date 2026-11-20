@@ -432,7 +432,9 @@ fn register(g: *Global, r: *Task, leaf: *Task) void {
         .none, .inner, .pass => return wakeNow(g, r),
     }
     if (leaf.deadline != 0) addTimer(g, r, leaf.deadline);
-    if (r.detached) r.place = .waiting;
+    // A detached coroutine whose native runs the scheduler itself keeps
+    // its place: it is still running, with its native on the stack.
+    if (r.detached and !r.driver) r.place = .waiting;
 }
 
 /// Wakes a thread whose wait could not be recorded. Its native runs

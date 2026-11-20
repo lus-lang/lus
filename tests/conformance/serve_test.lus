@@ -589,6 +589,39 @@ local function a_handler_may_use_sockets_test()
     upstream:close()
 end
 
+-- A handler that waits inside a native callback keeps its coroutine on
+-- the stack for that wait alone. The connection suspends again between
+-- requests, so the server goes on accepting below it.
+local function a_handler_that_waits_inside_a_native_call_test()
+    local upstream, upstream_port = listen()
+    local echo = spawn(function()
+        while true do
+            local sock <close> = upstream:accept()
+            sock:send(string.upper(txt(sock:receive("*l"))) .. "\n")
+        end
+    end)
+    serving(function(req)
+        if req.path == "/plain" then
+            return 200, "plain"
+        end
+        return 200, (string.gsub("x", "x", function()
+            local sock <close> = connect(upstream_port)
+            sock:send(req.path .. "\n")
+            return txt(sock:receive("*l"))
+        end))
+    end, function(port)
+        local first <close> = connect(port)
+        assert(exchange(first, get("/callback")).body == "/CALLBACK")
+        -- The first connection idles while a second one is served.
+        local second <close> = connect(port)
+        second:settimeout(2)
+        assert(exchange(second, get("/plain")).body == "plain")
+        assert(exchange(first, get("/plain")).body == "plain")
+    end)
+    assert(close(echo))
+    upstream:close()
+end
+
 local function many_clients_at_once_test()
     serving(function(req)
         return 200, `$(req.method) $(req.path)`
