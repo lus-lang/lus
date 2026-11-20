@@ -14,8 +14,8 @@
 **    timer-driven repaints. State changes are instant repaints caused by
 **    user events. No box shadows.
 **  - Rules are few. Each section opens with its display title over one
-**    2px ink rule (.sech in a .part, h2 in prose). Code figures carry a
-**    2px ink rule on top in light and sit as rounded paper cards in dark.
+**    2px ink rule (.sech in a .part, h2 in prose). Code figures carry the
+**    same 2px rule on top.
 **    The header and footer close the page with 2px and 1px rules. Rows,
 **    ledgers, indexes, and tables separate by spacing, never by lines.
 **    Data bars in tables are data, not rules.
@@ -28,12 +28,12 @@
 **        lime text strength. on-accent is the text on any lime fill.
 **      solid, on-solid: the filled state of a button, nav pill, or
 **        toggle (ink with lime text in light, lime with ink in dark).
-**      figure, figure-ink, figure-ink-3, figure-link, figure-wash,
-**        figure-red: code figures and their captions, light in both
-**        schemes because the code theme is written for paper.
+**      figure, figure-ink, figure-ink-3, figure-link, figure-wash: code
+**        figures and their captions. Code renders with a pair of themes
+**        (lib/code-themes.mjs), paper in light and night in dark.
 **      rule: the color of the section rules.
 **  - Radius: 3px on chips and tags, 4px on nav pills and toggles, 6px on
-**    buttons, the install box, and dark figures.
+**    buttons and the install box.
 **  - Lime budget: fills only small meaningful surfaces (the version chip,
 **    the stable tag, the best value in a data row, selection). Large
 **    surfaces never turn lime.
@@ -92,7 +92,6 @@
   --color-figure-ink-3: oklch(52% 0.03 125);
   --color-figure-link: oklch(42% 0.13 135);
   --color-figure-wash: oklch(95% 0.07 122);
-  --color-figure-red: oklch(96% 0.015 20);
   --color-rule: oklch(21% 0.045 132);
 
   /* the unstable channel */
@@ -120,6 +119,11 @@
   --color-on-solid: oklch(19% 0.03 132);
   --color-on-accent: oklch(19% 0.03 132);
   --color-rule: oklch(95% 0.03 115 / 0.35);
+  --color-figure: oklch(24% 0.035 132);
+  --color-figure-ink: oklch(95% 0.03 115);
+  --color-figure-ink-3: oklch(68% 0.03 125);
+  --color-figure-link: oklch(87% 0.2 128);
+  --color-figure-wash: oklch(30% 0.07 130);
 
   --color-ink-red: oklch(88% 0.05 25);
   --color-tint-red: oklch(24% 0.04 25);
@@ -142,6 +146,11 @@
     --color-on-solid: oklch(19% 0.03 132);
     --color-on-accent: oklch(19% 0.03 132);
     --color-rule: oklch(95% 0.03 115 / 0.35);
+    --color-figure: oklch(24% 0.035 132);
+    --color-figure-ink: oklch(95% 0.03 115);
+    --color-figure-ink-3: oklch(68% 0.03 125);
+    --color-figure-link: oklch(87% 0.2 128);
+    --color-figure-wash: oklch(30% 0.07 130);
 
     --color-ink-red: oklch(88% 0.05 25);
     --color-tint-red: oklch(24% 0.04 25);
@@ -212,7 +221,7 @@ main {
 
 /* code figure: tint block under the 2px spine, mono caption on top */
 .figure {
-  @apply bg-figure text-figure-ink border-t-2 border-ink m-0;
+  @apply bg-figure text-figure-ink border-t-2 border-rule m-0;
 
   figcaption {
     @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-figure-ink-3 px-3 pt-1.5;
@@ -312,7 +321,7 @@ pre {
   @apply relative;
 
   code {
-    @apply block overflow-x-auto bg-figure text-figure-ink border-t-2 border-ink py-2 pl-3 pr-10 text-[13px] leading-[1.6];
+    @apply block overflow-x-auto bg-figure text-figure-ink border-t-2 border-rule py-2 pl-3 pr-10 text-[13px] leading-[1.6];
   }
 }
 
@@ -512,25 +521,19 @@ html.unstable {
   }
 }
 
-/* night figures are paper cards: the code theme is written for paper */
+/* night code: Shiki writes the night theme as --shiki-dark variables */
+:root.night .astro-code,
+:root.night .astro-code span {
+  color: var(--shiki-dark) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
-    .figure,
-    pre code {
-      @apply border-t-0 rounded-md;
-    }
-
-    .figure pre code {
-      @apply rounded-none;
-    }
-
-    .copy-btn {
-      @apply bg-white border-black/20 text-figure-ink hover:bg-figure-wash active:bg-figure-wash;
-    }
-
-    /* unstable figures stay paper too, with a red cast */
-    &.unstable pre code {
-      @apply bg-figure-red;
-    }
+  .astro-code,
+  .astro-code span {
+    color: var(--shiki-dark) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
   }
 }

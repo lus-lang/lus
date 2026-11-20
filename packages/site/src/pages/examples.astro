@@ -1,5 +1,5 @@
 ---
-import codeTheme from "../lib/code-theme.mjs"
+import codeThemes from "../lib/code-themes.mjs"
 import { Code } from "astro:components"
 // @ts-ignore
 import lusGrammar from "../../../textmate/lus.tmLanguage.json"
@@ -129,7 +129,7 @@ examples.sort((a, b) => a.title.localeCompare(b.title))
                     </span>
                   )}
                 </figcaption>
-                <Code lang={lusGrammar as any} theme={codeTheme as any} code={ex.content} />
+                <Code lang={lusGrammar as any} themes={codeThemes as any} code={ex.content} />
               </figure>
             </article>
           ))

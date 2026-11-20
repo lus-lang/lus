@@ -3,7 +3,7 @@ import { getCollection } from "astro:content"
 import { Code } from "astro:components"
 // @ts-ignore
 import lusGrammar from "../../../textmate/lus.tmLanguage.json"
-import codeTheme from "../lib/code-theme.mjs"
+import codeThemes from "../lib/code-themes.mjs"
 
 import Layout from "../components/Layout.astro"
 import ReleaseStrip from "../components/ReleaseStrip.astro"
@@ -267,7 +267,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
                   </span>
                   <a href={playgroundHref(f.code)}>▶ run</a>
                 </figcaption>
-                <Code lang={lusGrammar as any} theme={codeTheme as any} code={f.code} />
+                <Code lang={lusGrammar as any} themes={codeThemes as any} code={f.code} />
               </figure>
             </article>
           ))
