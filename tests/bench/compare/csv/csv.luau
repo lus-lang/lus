@@ -1,0 +1,107 @@
+-- csv: generate CSV text, parse it with a hand-written RFC 4180 parser,
+-- and aggregate per region.
+
+local N = tonumber((...)) or 2000000
+
+local state = 42
+local function rand(n)
+    state = (state * 48271) % 2147483647
+    return state % n
+end
+
+local REGIONS = { "north", "south", "east", "west", "central", "coastal", "mountain", "island" }
+local WORDS = { "fragile", "gift", "urgent", "bulk", "sample" }
+
+local function generate(n)
+    local parts = { "id,region,product,quantity,price_cents,note\n" }
+    for id = 1, n do
+        local region = REGIONS[rand(8) + 1]
+        local product = rand(200)
+        local quantity = rand(20) + 1
+        local price = rand(100000)
+        local k = rand(10)
+        local note
+        if k == 0 then
+            note = '"big, ""rush"" order"'
+        elseif k < 4 then
+            note = ""
+        else
+            note = WORDS[rand(5) + 1]
+        end
+        parts[#parts + 1] = id .. "," .. region .. ",p" .. product .. "," .. quantity .. ","
+            .. price .. "," .. note .. "\n"
+    end
+    return table.concat(parts)
+end
+
+-- RFC 4180 parser: returns a list of rows, each a list of string fields.
+local function parse(s)
+    local rows = {}
+    local row = {}
+    local pos = 1
+    local len = #s
+    local find, sub, byte, gsub = string.find, string.sub, string.byte, string.gsub
+    while pos <= len do
+        local c = byte(s, pos)
+        local field, nextpos
+        if c == 34 then -- quoted field
+            local i = pos + 1
+            local hasq = false
+            while true do
+                local q = find(s, '"', i, true)
+                if not q then error("unterminated quoted field") end
+                if byte(s, q + 1) == 34 then
+                    hasq = true
+                    i = q + 2
+                else
+                    field = sub(s, pos + 1, q - 1)
+                    nextpos = q + 1
+                    break
+                end
+            end
+            if hasq then field = gsub(field, '""', '"') end
+        else
+            local d = find(s, "[,\n]", pos)
+            if not d then d = len + 1 end
+            field = sub(s, pos, d - 1)
+            nextpos = d
+        end
+        row[#row + 1] = field
+        local sep = byte(s, nextpos)
+        if sep == 44 then
+            pos = nextpos + 1
+            if pos > len then row[#row + 1] = "" end
+        else
+            rows[#rows + 1] = row
+            row = {}
+            pos = nextpos + 1
+        end
+    end
+    return rows
+end
+
+local text = generate(N)
+local rows = parse(text)
+
+local stats = {}
+for i = 1, #REGIONS do stats[REGIONS[i]] = { 0, 0, 0, 0 } end
+local commas = 0
+for i = 2, #rows do
+    local r = rows[i]
+    local st = stats[r[2]]
+    local q = tonumber(r[4])
+    local p = tonumber(r[5])
+    st[1] = st[1] + 1
+    st[2] = st[2] + q
+    st[3] = st[3] + q * p
+    if p > st[4] then st[4] = p end
+    if string.find(r[6], ",", 1, true) then commas = commas + 1 end
+end
+
+local out = { "csv" }
+for i = 1, #REGIONS do
+    local st = stats[REGIONS[i]]
+    out[#out + 1] = string.format("%d %d %d %d", st[1], st[2], st[3] % 1000000007, st[4])
+end
+out[#out + 1] = string.format("%d", commas)
+print(table.concat(out, " "))

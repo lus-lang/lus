@@ -1,0 +1,59 @@
+-- wordfreq: count word frequencies in a generated text.
+local n = tonumber((...)) or 10000000
+
+local state = 42
+local function rand(m)
+    state = (state * 48271) % 2147483647
+    return state % m
+end
+
+local letters = "abcdefghijklmnopqrstuvwxyz"
+local vocab = {}
+for k = 1, 5000 do
+    local len = 3 + rand(7)
+    local chars = {}
+    for j = 1, len do
+        local c = rand(26) + 1
+        local ch = letters:sub(c, c)
+        if rand(5) == 0 then ch = ch:upper() end
+        chars[j] = ch
+    end
+    vocab[k] = table.concat(chars)
+end
+
+local punct = { ",", ".", "!" }
+local parts = {}
+local np = 0
+for i = 1, n do
+    np = np + 1
+    parts[np] = vocab[rand(rand(5000) + 1) + 1]
+    if rand(12) == 0 then
+        np = np + 1
+        parts[np] = punct[rand(3) + 1]
+    end
+    np = np + 1
+    if i % 12 == 0 then parts[np] = "\n" else parts[np] = " " end
+end
+local text = table.concat(parts)
+
+
+local counts = {}
+local total = 0
+for w in text:gmatch("%a+") do
+    local lw = w:lower()
+    counts[lw] = (counts[lw] or 0) + 1
+    total = total + 1
+end
+
+local words = {}
+for w in pairs(counts) do words[#words + 1] = w end
+table.sort(words, function(a, b)
+    local ca, cb = counts[a], counts[b]
+    if ca ~= cb then return ca > cb end
+    return a < b
+end)
+
+local out = { "wordfreq", tostring(#words), tostring(total) }
+for i = 1, 10 do out[#out + 1] = string.format("%d", counts[words[i]]) end
+for i = 1, 3 do out[#out + 1] = words[i] end
+print(table.concat(out, " "))

@@ -1,0 +1,124 @@
+-- HTTP server benchmark: answers GET / with a small JSON document. The
+-- standard library offers blocking TCP sockets with timeouts, so this is
+-- a small HTTP/1.1 server that runs one coroutine per connection. Every
+-- socket polls with a zero timeout, and a connection with no complete
+-- line yet yields to the scheduler, which round-robins the coroutines
+-- and accepts new connections.
+pledge("network:tcp")
+
+local port = tonumber(arg[1]) or 8080
+local server = network.tcp.bind("127.0.0.1", port, 1024)
+server:settimeout(0)
+
+local tostr = vector.tostring
+local find, match, lower = string.find, string.match, string.lower
+local yield = coroutine.yield
+
+local not_found = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\r\nnot found\n"
+local counter = 0
+local handled = 0
+
+local function blocked(err)
+    return type(err) == "string" and find(err, "timeout", 1, true) ~= nil
+end
+
+-- Reads one line, yielding while the socket has no complete line.
+local function readline(sock)
+    while true do
+        local ok, line = catch sock:receive("*l")
+        if ok then return tostr(line) end
+        if not blocked(line) then error(line, 0) end
+        yield()
+    end
+end
+
+local function readbytes(sock, n)
+    while true do
+        local ok, err = catch sock:receive(n)
+        if ok then return end
+        if not blocked(err) then error(err, 0) end
+        yield()
+    end
+end
+
+local function serve(sock)
+    while true do
+        local line = readline(sock)
+        if line == "" then break end
+        local method, path = match(line, "^(%S+) (%S+)")
+        local length, close = 0, false
+        while true do
+            local header = readline(sock)
+            if header == "" then break end
+            local name, value = match(header, "^([^:]+):%s*(.-)%s*$")
+            if name then
+                name = lower(name)
+                if name == "content-length" then
+                    length = tonumber(value) or 0
+                elseif name == "connection" then
+                    close = lower(value) == "close"
+                end
+            end
+        end
+        if length > 0 then readbytes(sock, length) end
+        if method == "GET" and path == "/" then
+            counter = counter + 1
+            local body = tojson({message = "hello", n = counter})
+            sock:send(`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: $(#body)\r\n\r\n$body`)
+        else
+            sock:send(not_found)
+        end
+        handled = handled + 1
+        if close then break end
+    end
+end
+
+local function connection(sock)
+    catch serve(sock)
+    sock:close()
+end
+
+local conns = {}
+local idle = 0
+while true do
+    local before = handled
+    while true do
+        local ok, client = catch server:accept()
+        if not ok then break end
+        client:settimeout(0)
+        local co = coroutine.create(connection)
+        coroutine.resume(co, client)
+        conns[#conns + 1] = co
+        handled = handled + 1
+    end
+    local i = 1
+    while i <= #conns do
+        local co = conns[i]
+        coroutine.resume(co)
+        if coroutine.status(co) == "dead" then
+            conns[i] = conns[#conns]
+            conns[#conns] = nil
+        else
+            i = i + 1
+        end
+    end
+    if handled == before then
+        idle = idle + 1
+        -- After a stretch of passes with no work, wait on the listening
+        -- socket for a millisecond instead of spinning.
+        if idle > 2000 then
+            server:settimeout(0.001)
+            local ok, client = catch server:accept()
+            server:settimeout(0)
+            if ok then
+                client:settimeout(0)
+                local co = coroutine.create(connection)
+                coroutine.resume(co, client)
+                conns[#conns + 1] = co
+            end
+            idle = 0
+        end
+    else
+        idle = 0
+    end
+end
