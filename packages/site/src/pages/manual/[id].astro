@@ -1,6 +1,8 @@
 ---
 import ManualLayout from "../../components/ManualLayout.astro"
 import { getCollection, render } from "astro:content"
+import CubeField from "../../components/CubeField.astro"
+import { skyline } from "../../lib/skyline"
 
 export async function getStaticPaths() {
   const manual = await getCollection("manual")
@@ -52,6 +54,10 @@ for (const h of headings) {
 const sidebarToc = headings
   .filter((h) => h.depth === 2)
   .map((h) => ({ slug: h.slug, text: h.text }))
+
+// the chapter's readout: one bar per h2 section, sized by its length
+const sections = (page.body ?? "").split(/^## /m).slice(1)
+const sectionHeights = sections.length >= 4 ? skyline(sections.map((t) => t.length)) : null
 ---
 
 <ManualLayout
@@ -67,7 +73,16 @@ const sidebarToc = headings
       </nav>
     )
   }
-  <h1>{page.data.title}</h1>
+  {
+    sectionHeights ? (
+      <div class="title-row">
+        <h1>{page.data.title}</h1>
+        <CubeField rows={1} heights={sectionHeights} glow={false} scale={0.7} />
+      </div>
+    ) : (
+      <h1>{page.data.title}</h1>
+    )
+  }
   {
     headings.length > 2 && (
       <details class="toc" open={headings.length <= 24}>

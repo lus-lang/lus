@@ -235,7 +235,7 @@ body::before {
   }
 
   > svg.cube-field {
-    @apply hidden md:block ml-auto w-[min(36%,400px)];
+    @apply hidden md:block ml-auto;
   }
 }
 

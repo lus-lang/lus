@@ -36,6 +36,9 @@ interface Props {
   depth?: number
   /** whether the lime cube tints the bars around it */
   light?: boolean
+  /** a fixed scale, so a cube keeps one size from page to page; without
+      it the field fills its container's width */
+  scale?: number
 }
 
 const {
@@ -50,6 +53,7 @@ const {
   unit = 1,
   depth = 0.62,
   light = true,
+  scale,
 } = Astro.props
 const cols = heights ? heights.length : (Astro.props.cols ?? 52)
 
@@ -197,6 +201,7 @@ const lightOn = glow && signal !== "none"
   class:list={["cube-field", Astro.props.class]}
   viewBox={`0 0 ${width.toFixed(0)} ${heightPx.toFixed(0)}`}
   preserveAspectRatio="xMidYMax meet"
+  style={scale ? `width:${(width * scale).toFixed(0)}px;max-width:100%` : undefined}
   aria-hidden="true"
   focusable="false"
 >
