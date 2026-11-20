@@ -55,6 +55,12 @@ const Value = value.Value;
 const IcEntry = object.IcEntry;
 const Closure = object.Closure;
 
+/// A step of a generic `for` over `next` or `ipairs` (`interp.stepIterator`).
+/// Returns 1 when it ran and 0 when the step routine must make the call.
+pub fn tforStep(l: *Thread, rp: [*]Value, want: usize) callconv(.c) usize {
+    return @intFromBool(interp.stepIterator(l, rp, @intCast(want)));
+}
+
 pub fn getStr(l: *Thread, t: *const Value, key: *const Value, ic: *IcEntry, out: *Value) callconv(.c) usize {
     return @intFromBool(!interp.fast.getStr(l, ic, t, key, out));
 }

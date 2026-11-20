@@ -59,6 +59,9 @@ pub fn open(l: *Thread) Error!void {
     const r = try aux.getField(l, globals, "range");
     g.fixed.append(g.gpa, r.header()) catch return l.raiseMem();
     g.ext.put(g.gpa, "range", @ptrFromInt(r.address())) catch return l.raiseMem();
+    // The generic `for` steps these iterators itself (`interp.tforcall`).
+    g.iter_next = next;
+    g.iter_ipairs = ipairsAux;
 }
 
 fn print(l: *Thread) Error!u32 {

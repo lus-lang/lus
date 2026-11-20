@@ -554,6 +554,18 @@ pub const Emitter = struct {
                 e.arraySet(pc, rc, e.coldStep(pc), miss, done);
                 a.bind(done);
             },
+            .tforcall => {
+                // `next` and `ipairs` over plain tables step without a
+                // native frame. Anything else takes the step routine.
+                const done = a.newLabel();
+                a.mov(A.args[0], A.thread);
+                a.lea(A.args[1], slot(ra));
+                a.movImm(A.args[2], opc.c(ins));
+                a.call(@intFromPtr(&helpers.tforStep));
+                a.jumpIfImm(.ne, A.ret0, 0, done);
+                e.step(pc, true);
+                a.bind(done);
+            },
             .len => {
                 // The character count of a string is a field of it. A
                 // table takes the helper, which searches for a border.

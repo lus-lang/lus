@@ -109,6 +109,10 @@ The other benchmarks run the same instructions as before. The set is small on pu
 
 A native may name a leaf, a routine that runs its common call without a frame (`jit.md`). A leaf has the C calling convention, so its result comes back as two words in two registers and goes to the stack with one store of a pair. `string.sub` on a string of mixed text also remembers where its last range started and ended, and a range that starts within sixteen characters after the last one is found from there (`strings.md`). Together they took `unicode` from 0.042 to 0.033 seconds. Most of that came from the second change, because every call had been waiting for the positions that the call before it stored.
 
+## Generic `for` over tables
+
+`TFORCALL` calls the iterator of a generic `for` with the state and the control value. When the iterator is the native behind `next`, over any table, or the iterator that `ipairs` returns, over a table without a metatable, the instruction steps the table itself with `table.next` or `table.getInt` and writes the results where the call would have, with no native frame. Any other case, an invalid key for `next` among them, calls the native, which raises its usual error. The step reads the iterator, the state, and the control value where they are, without first copying them to the call registers. The hooked loop always makes the call, so call hooks see it. Baseline code, and the optimizing tier through its baseline template, calls the same step as `helpers.tforStep` and takes the step routine only when it declines. Summing a table of a thousand integers twenty thousand times with `ipairs` went from 0.220 s to 0.097 s with the JIT off and from 0.265 s to 0.082 s with it on, and walking a thousand string keys five thousand times with `pairs` from 0.103 s to 0.055 s.
+
 ## Where the loop stands
 
 `tests/bench/README.md` has the table. `fib` and `unicode` were the two benchmarks on which the interpreter of LuaJIT led this one, by 0.047 s to 0.036 s and by 0.042 s to 0.032 s.

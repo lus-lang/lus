@@ -325,6 +325,10 @@ pub const Global = struct {
     /// the function that holds the instruction stays alive until the next
     /// mark ends.
     new_table: NewTableSite = .{},
+    /// The natives behind `next` and the iterator of `ipairs`, which the
+    /// generic `for` runs inline over a plain table.
+    iter_next: ?NativeFn = null,
+    iter_ipairs: ?NativeFn = null,
     /// The last pattern whose start bytes a search computed, by its text
     /// (`firstSet` in `lib/string.zig`).
     first_set: FirstSetCache = .{},

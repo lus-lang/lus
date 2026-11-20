@@ -1208,6 +1208,10 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             l.top = r + 4 + 3;
             const want: i32 = opc.c(ins);
             const iter = l.stack[r + 4];
+            if (!hooked and stepIterator(l, l.stack[r..].ptr, @intCast(want))) {
+                l.top = c.fr.base + c.cl().proto.max_stack;
+                continue :sw try fetch(l, &c, &pc, &ins, hooked);
+            }
             const kind: CallKind = if (iter.tag == .native) blk: {
                 try callNative(l, iter.as(state.Native), r + 4, 2, want);
                 break :blk .done;
@@ -2143,6 +2147,46 @@ fn getSlow(l: *Thread, t: Value, key: Value, dest: u8) Error!Value {
         if (!v.isNil() or tab.metatable == null) return v;
     }
     return metaIndex(l, t, key, dest);
+}
+
+/// One step of a generic `for` whose iterator is `next` over a table or
+/// the iterator of `ipairs` over a table without a metatable, run without
+/// calling the native. `rp` points at the iterator, followed by the state
+/// and the control value, and the results go to `rp[4..]` as the call
+/// would put them. Returns false, changing nothing, when the native must
+/// run, which raises the errors.
+pub inline fn stepIterator(l: *Thread, rp: [*]Value, want: u32) bool {
+    if (rp[0].tag != .native) return false;
+    const f = rp[0].as(state.Native);
+    const s = rp[1..];
+    const t = s[0];
+    if (t.tag != .table) return false;
+    var k: Value = undefined;
+    var v: Value = undefined;
+    if (f.func == l.g.iter_ipairs) {
+        const tab = t.as(Table);
+        if (tab.metatable != null or s[1].tag != .integer) return false;
+        const i = s[1].asInt() +% 1;
+        k = Value.int(i);
+        v = table.getInt(tab, i);
+    } else if (f.func == l.g.iter_next) {
+        const kv = table.next(t.as(Table), table.normalizeKey(s[1])) catch return false;
+        if (kv) |x| {
+            k = x.key;
+            v = x.val;
+        } else v = .nil;
+    } else return false;
+    const out = rp[4..];
+    if (v.isNil()) {
+        for (out[0..@max(want, 1)]) |*o| o.* = .nil;
+    } else {
+        out[0] = k;
+        if (want >= 2) out[1] = v;
+        if (want > 2) {
+            for (out[2..want]) |*o| o.* = .nil;
+        }
+    }
+    return true;
 }
 
 fn setSlow(l: *Thread, t: Value, key: Value, v: Value) Error!void {
