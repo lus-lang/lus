@@ -397,14 +397,15 @@ details[open] > summary::before {
   }
 }
 
-/* code figure: a square tint block with a mono caption on top, set
+/* code figure: a square tint block, its links in a mono caption on top, set
    between crop marks */
 .figure {
   @apply relative bg-figure text-figure-ink m-0;
 
 
+  /* the caption carries the figure's links, set to the right */
   figcaption {
-    @apply flex flex-wrap justify-between gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-figure-ink-3 px-3 pt-1.5;
+    @apply flex flex-wrap justify-end gap-x-3 font-mono text-[11px] uppercase tracking-[0.08em] text-figure-ink-3 px-3 pt-1.5;
 
     > * {
       @apply whitespace-nowrap;
@@ -421,6 +422,12 @@ details[open] > summary::before {
 
   pre code {
     @apply bg-transparent border-t-0 text-[13px] leading-[1.6] pt-1.5 pb-2.5 px-3;
+  }
+
+  /* a figure without a caption opens with the same paper above its
+     first line as below its last */
+  &:not(:has(figcaption)) pre code {
+    @apply pt-2.5;
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
   }

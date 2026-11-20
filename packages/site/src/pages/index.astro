@@ -260,7 +260,6 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
               {c.name === "fast" && (
                 <figure class="figure crop">
                   <figcaption>
-                    <span>fig. 1 · speed of lus</span>
                     <a href="#benchmarks">all results ↑</a>
                   </figcaption>
                   <ol class="ratios">
@@ -276,7 +275,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
               )}
               {c.name === "batteries" && (
                 <figure class="figure crop">
-                  <figcaption><span>fig. 2 · built in</span><a href="/manual/api">reference →</a></figcaption>
+                  <figcaption><a href="/manual/api">reference →</a></figcaption>
                   <ul class="kit">
                     {batteries.map((b) => <li>{b}</li>)}
                   </ul>
@@ -284,25 +283,22 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
               )}
               {c.name === "permissions" && (
                 <figure class="figure crop">
-                  <figcaption><span>fig. 3 · sandbox.lus</span></figcaption>
                   <Code lang={lusGrammar as any} themes={codeThemes as any} code={permissionsCode} />
                 </figure>
               )}
               {c.name === "concurrency" && (
                 <figure class="figure crop">
-                  <figcaption><span>fig. 4 · server.lus</span></figcaption>
                   <Code lang={lusGrammar as any} themes={codeThemes as any} code={concurrencyCode} />
                 </figure>
               )}
               {c.name === "everywhere" && (
                 <figure class="figure crop">
-                  <figcaption><span>fig. 5 · one runtime, five targets</span></figcaption>
                   <Code lang="sh" themes={codeThemes as any} code={everywhereCode} />
                 </figure>
               )}
               {c.name === "agents" && (
                 <figure class="figure crop">
-                  <figcaption><span>fig. 6 · prompt</span><a href="/agents">what this does →</a></figcaption>
+                  <figcaption><a href="/agents">what this does →</a></figcaption>
                   <p class="prompt">{AGENT_PROMPT}</p>
                 </figure>
               )}
