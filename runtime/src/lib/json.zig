@@ -501,7 +501,19 @@ const Writer = struct {
     /// pass to count its characters.
     cont: usize = 0,
 
-    fn write(w: *Writer, b: []const u8) Error!void {
+    /// Appends `b`, inline when it fits the room left, which is nearly
+    /// every piece.
+    inline fn write(w: *Writer, b: []const u8) Error!void {
+        const room = w.out.unusedCapacitySlice();
+        if (b.len <= room.len) {
+            @memcpy(room[0..b.len], b);
+            w.out.items.len += b.len;
+            return;
+        }
+        return w.writeSlow(b);
+    }
+
+    noinline fn writeSlow(w: *Writer, b: []const u8) Error!void {
         w.out.appendSlice(w.sb.allocator(), b) catch return w.l.raiseMem();
     }
 
