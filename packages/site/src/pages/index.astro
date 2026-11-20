@@ -184,53 +184,55 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
 <Layout>
   <main id="main" class="home">
-    <section class="mast">
-      <div class="pitch">
-        <h1>Lus<span class="chip">{versionChip}</span></h1>
-        <p class="sub">
-          A small, productive programming language designed to be picked up
-          easily by programmers and put to good use right away.
-        </p>
-        <div class="install crop" id="install-unix">
-          <span class="plat" id="install-platform">linux · x64</span>
-          <code id="install-shell">{INSTALL_SH}</code>
-          <button type="button" id="install-copy">copy</button>
+    <div class="band night">
+      <section class="mast">
+        <div class="pitch">
+          <h1>Lus<span class="chip">{versionChip}</span></h1>
+          <p class="sub">
+            A small, productive programming language designed to be picked up
+            easily by programmers and put to good use right away.
+          </p>
+          <div class="install crop" id="install-unix">
+            <span class="plat" id="install-platform">linux · x64</span>
+            <code id="install-shell">{INSTALL_SH}</code>
+            <button type="button" id="install-copy">copy</button>
+          </div>
+          <div class="install crop" id="install-windows" hidden>
+            <span class="plat">windows · x64</span>
+            <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
+          </div>
+          <div class="row">
+            <a class="btn solid" href="/manual/getting-started">Get started →</a>
+            <a class="btn" href="/playground">Open the playground</a>
+            <span class="alt">
+              <a href="/manual/getting-started">other platforms</a> ·
+              <a href="/manual/compiling">build from source</a>
+            </span>
+          </div>
         </div>
-        <div class="install crop" id="install-windows" hidden>
-          <span class="plat">windows · x64</span>
-          <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
-        </div>
-        <div class="row">
-          <a class="btn solid" href="/manual/getting-started">Get started →</a>
-          <a class="btn" href="/playground">Open the playground</a>
-          <span class="alt">
-            <a href="/manual/getting-started">other platforms</a> ·
-            <a href="/manual/compiling">build from source</a>
-          </span>
-        </div>
-      </div>
 
-      <aside class="rail">
-        <div class="label rail-head">
-          <span>news</span><a href="/news">all →</a>
-        </div>
-        <ol class="ledger">
-          {
-            news.map((item) => (
-              <li>
-                <time datetime={fmtDate(item.data.date)}>
-                  {fmtDate(item.data.date)}
-                </time>
-                <a href={`/news/${item.id}`}>{item.data.title}</a>
-              </li>
-            ))
-          }
-        </ol>
-      </aside>
-    </section>
+        <aside class="rail">
+          <div class="label rail-head">
+            <span>news</span><a href="/news">all →</a>
+          </div>
+          <ol class="ledger">
+            {
+              news.map((item) => (
+                <li>
+                  <time datetime={fmtDate(item.data.date)}>
+                    {fmtDate(item.data.date)}
+                  </time>
+                  <a href={`/news/${item.id}`}>{item.data.title}</a>
+                </li>
+              ))
+            }
+          </ol>
+        </aside>
+      </section>
 
-    <CubeField class="horizon wide" amp={6.5} />
-    <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
+      <CubeField class="horizon wide" amp={6.5} />
+      <CubeField class="horizon narrow" cols={16} at={0.66} seed={2} />
+    </div>
 
     <section class="part" id="download">
       <div class="sech"><h2>Download</h2></div>
@@ -398,24 +400,41 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
-  /* night only: a bloom of the lime light behind the masthead's right
-     half, the same light that glows on the horizon */
-  @media (prefers-color-scheme: dark) {
-    .mast {
-      @apply relative isolate;
+  /* the masthead stands in a night band in every scheme, bled to the
+     edges of the window and grained like the night paper */
+  .band {
+    @apply relative isolate bg-paper text-ink;
+    margin-inline: calc(50% - 50vw);
+    padding-inline: calc(50vw - 50%);
 
-      &::before {
-        content: "";
-        position: absolute;
-        inset: -40px -24px -120px 30%;
-        z-index: -1;
-        pointer-events: none;
-        background: radial-gradient(
-          closest-side at 62% 64%,
-          color-mix(in oklab, var(--color-accent) 10%, transparent),
-          transparent
-        );
-      }
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+      filter: invert(1);
+      opacity: 0.05;
+    }
+  }
+
+  /* a bloom of the lime light behind the masthead's right half, the same
+     light that glows on the horizon */
+  .mast {
+    @apply relative isolate;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: -40px -24px -120px 30%;
+      z-index: -1;
+      pointer-events: none;
+      background: radial-gradient(
+        closest-side at 62% 64%,
+        color-mix(in oklab, var(--color-accent) 10%, transparent),
+        transparent
+      );
     }
   }
 

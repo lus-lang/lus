@@ -75,7 +75,8 @@
 **    Layout chrome and ManualLayout.
 **  - The playground is always night: html.night applies the night tokens
 **    whatever the reader's scheme, and its editor uses the night code
-**    theme (lib/code-theme-night.mjs).
+**    theme (lib/code-theme-night.mjs). The class works on any element,
+**    so the homepage masthead stands in a night band on paper too.
 **  - Reference badge palette lives here as .api-badge-* (sanctioned
 **    exceptions): lus = bg-accent-soft text-ink, unstable =
 **    bg-accent-soft-red text-ink-red, lua = bg-sky-200 text-sky-900,
@@ -123,8 +124,9 @@
 }
 
 /* night: the dark scheme, from the reader's preference, and always on
-   pages that set html.night (the playground) */
-:root.night {
+   pages that set html.night (the playground) and inside any element that
+   carries .night (the homepage masthead) */
+.night {
   color-scheme: dark;
   --color-paper: oklch(19% 0.03 132);
   --color-tint: oklch(24% 0.035 132);
