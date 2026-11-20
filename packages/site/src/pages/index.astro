@@ -584,8 +584,9 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
       grid-row: auto;
       grid-template-rows: auto;
 
+      /* small numbers read in label ink, the ghost needs size */
       .no {
-        @apply row-span-1 text-lg leading-[1.4];
+        @apply row-span-1 text-lg leading-[1.4] text-ink-3;
       }
 
       p,
