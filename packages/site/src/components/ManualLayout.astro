@@ -137,7 +137,9 @@ groups
   }
 
   aside {
-    @apply min-w-52 w-1/6 sticky top-4 self-start pr-4 max-h-[calc(100vh-2rem)] overflow-y-auto;
+    /* the scroll area reaches 8px left of the column, so the wash of a
+       link, which extends 8px left of its text, is never clipped */
+    @apply min-w-52 w-1/6 sticky top-4 self-start pl-2 -ml-2 pr-4 max-h-[calc(100vh-2rem)] overflow-y-auto;
     /* a quiet scrollbar where the outline is longer than the screen */
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--color-ink) 25%, transparent)

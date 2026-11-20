@@ -112,7 +112,12 @@ const sidebarToc = headings
   {
     headings.length > 2 && (
       <nav class="toc" aria-label="Contents" data-toc>
-        <p class="toc-label">Contents</p>
+        <p class="toc-label">
+          Contents
+          <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-label="Show all contents" hidden>
+            <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" /></svg>
+          </button>
+        </p>
         <div class="toc-body">
           <ol>
             {toc.map((section) => (
@@ -134,7 +139,6 @@ const sidebarToc = headings
             ))}
           </ol>
         </div>
-        <button type="button" class="toc-more" data-toc-more hidden>show all</button>
       </nav>
     )
   }
@@ -199,7 +203,7 @@ const sidebarToc = headings
     @apply mb-6;
 
     .toc-label {
-      @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 py-2 m-0;
+      @apply flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 py-2 m-0;
     }
 
     ol {
@@ -233,16 +237,17 @@ const sidebarToc = headings
       mask-image: linear-gradient(to bottom, black 55%, transparent);
     }
 
-    .toc-more[hidden] {
-      display: none;
+    /* the chevron opens a long outline and closes it again */
+    .toc-toggle {
+      @apply inline-flex items-center justify-center w-5 h-5 bg-transparent border-0 p-0 rounded-[3px] cursor-pointer text-ink-3 hover:text-ink hover:bg-accent-soft;
+
+      &[hidden] {
+        display: none;
+      }
     }
 
-    .toc-more {
-      @apply font-mono text-xs bg-transparent border-0 p-0 py-1 cursor-pointer text-ink-2 hover:text-ink hover:bg-accent-soft;
-    }
-
-    &.open .toc-more {
-      display: none;
+    &.open .toc-toggle svg {
+      rotate: 180deg;
     }
   }
 
@@ -285,15 +290,18 @@ const sidebarToc = headings
 
 <script>
   // an outline taller than about ten lines shows its start and fades, and
-  // "show all" opens it. Readers without scripts see the whole outline.
+  // the chevron beside the label opens and closes it. Readers without
+  // scripts see the whole outline.
   for (const toc of document.querySelectorAll<HTMLElement>("[data-toc]")) {
     const body = toc.querySelector<HTMLElement>(".toc-body")
-    const more = toc.querySelector<HTMLButtonElement>("[data-toc-more]")
-    if (!body || !more || body.scrollHeight <= 240) continue
+    const toggle = toc.querySelector<HTMLButtonElement>("[data-toc-toggle]")
+    if (!body || !toggle || body.scrollHeight <= 240) continue
     toc.classList.add("long")
-    more.hidden = false
-    more.addEventListener("click", () => {
-      toc.classList.add("open")
+    toggle.hidden = false
+    toggle.addEventListener("click", () => {
+      const open = toc.classList.toggle("open")
+      toggle.setAttribute("aria-expanded", String(open))
+      toggle.setAttribute("aria-label", open ? "Show fewer contents" : "Show all contents")
     })
   }
 </script>
