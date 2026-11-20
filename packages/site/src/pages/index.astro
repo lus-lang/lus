@@ -335,7 +335,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     font-variation-settings: "opsz" 96;
 
     .chip {
-      @apply font-mono text-base font-semibold tracking-normal leading-normal mt-2.5 px-2 py-0.5 rounded-[3px] bg-accent text-ink;
+      @apply font-mono text-base font-semibold tracking-normal leading-normal mt-2.5 px-2 py-0.5 rounded-[3px] bg-accent text-on-accent;
     }
   }
 
@@ -344,7 +344,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   .install {
-    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md overflow-hidden bg-white;
+    @apply flex mt-[22px] max-w-[620px] border border-ink rounded-md overflow-hidden bg-field;
 
     &[hidden] {
       display: none;
@@ -368,7 +368,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
 
     button {
-      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-white px-3 cursor-pointer hover:bg-accent-soft;
+      @apply font-mono text-xs font-semibold border-l border-ink/30 bg-field px-3 cursor-pointer hover:bg-accent-soft;
     }
   }
 
@@ -388,13 +388,13 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     @apply inline-flex gap-1.5 font-semibold text-sm px-3.5 py-[7px] rounded-md no-underline border border-ink text-ink hover:bg-accent-soft hover:text-ink;
 
     &.solid {
-      @apply bg-ink text-accent hover:bg-ink-2 hover:text-accent;
+      @apply bg-solid border-solid text-on-solid hover:bg-solid/85 hover:text-on-solid;
     }
   }
 
   /* news rail, set as a ledger */
   .rail {
-    @apply flex flex-col justify-end border-l border-ink/30 pl-5;
+    @apply flex flex-col justify-end pl-5;
 
     .rail-head {
       @apply flex justify-between mb-1.5;
@@ -409,7 +409,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     @apply list-none p-0 m-0 space-y-0;
 
     li {
-      @apply flex gap-2.5 items-baseline py-1 border-b border-dotted border-ink/30 text-sm;
+      @apply flex gap-2.5 items-baseline py-1 text-sm;
     }
 
     time {
@@ -424,7 +424,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   /* standard library index, set like the index of a book: four columns
      on the measure, filled top to bottom */
   .index {
-    @apply grid grid-cols-1 border-t border-ink pt-1.5;
+    @apply grid grid-cols-1;
 
     a {
       @apply flex items-baseline gap-1.5 py-1 no-underline font-normal text-[13px] text-ink hover:bg-accent-soft hover:text-ink;
@@ -435,7 +435,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
 
     i {
-      @apply flex-1 min-w-3 border-b border-dotted border-ink/30 -translate-y-[3px];
+      @apply flex-1 min-w-3;
     }
 
     span {
@@ -468,13 +468,13 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
   /* chapters: two-up spreads of number, text, and figure */
   .chapters {
-    @apply grid grid-cols-1 border-t border-ink;
+    @apply grid grid-cols-1 gap-x-12 gap-y-2;
   }
 
   /* each chapter spans three rows of the spread and shares them with its
      neighbour through subgrid, so paired figures start on one line */
   .chap {
-    @apply grid gap-x-3.5 pt-4 pb-[18px] border-b border-ink/30;
+    @apply grid gap-x-3.5 pt-4 pb-[18px];
     grid-template-columns: 44px minmax(0, 1fr);
     grid-row: span 3;
     grid-template-rows: subgrid;
@@ -506,14 +506,6 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   @media (min-width: 900px) {
     .chapters {
       @apply grid-cols-2;
-    }
-
-    .chap:nth-child(odd) {
-      @apply pr-6 border-r;
-    }
-
-    .chap:nth-child(even) {
-      @apply pl-6;
     }
   }
 

@@ -7,7 +7,6 @@ import "@fontsource-variable/intel-one-mono"
 import "@fontsource-variable/intel-one-mono/wght-italic.css"
 
 import "../styles/global.css"
-import "../styles/looks.css"
 import logo from "../assets/logo.svg"
 import logoUnstable from "../assets/logo-unstable.svg"
 
@@ -66,16 +65,10 @@ function isActive(href: string) {
     <meta name="twitter:image" content="https://lus.dev/banner.png" />
 
     <title>{fullTitle}</title>
-    {
-      import.meta.env.DEV && (
-        <script is:inline set:html={`try{const q=new URLSearchParams(location.search).get("look");const l=q||localStorage.getItem("look");if(q)localStorage.setItem("look",q);if(l&&l!=="field")document.documentElement.dataset.look=l}catch{}`} />
-      )
-    }
     <script src="../scripts/copy-code.ts"></script>
   </head>
   <body>
     <a href="#main" class="skip-link">Skip to content</a>
-    <div class="cols-bg" aria-hidden="true"></div>
     <header>
       <div class="header-inner">
         <a href="/" class="brand" aria-label="Lus, home">
@@ -122,16 +115,6 @@ function isActive(href: string) {
         <a href="/manual/license">0BSD</a>
       </div>
     </footer>
-    {
-      import.meta.env.DEV && (
-        <div class="look-switch" aria-label="Workshop look">
-          {["field", "quiet", "margin", "soft", "night"].map((l) => (
-            <button type="button" data-look-set={l}>{l}</button>
-          ))}
-          <script is:inline set:html={`for(const b of document.querySelectorAll("[data-look-set]")){const cur=document.documentElement.dataset.look||"field";b.toggleAttribute("data-on",b.dataset.lookSet===cur);b.onclick=()=>{localStorage.setItem("look",b.dataset.lookSet);location.reload()}}`} />
-        </div>
-      )
-    }
   </body>
 </html>
 
@@ -139,7 +122,7 @@ function isActive(href: string) {
   @reference "../styles/global.css";
 
   header {
-    @apply bg-paper border-b-2 border-ink;
+    @apply bg-paper border-b-2 border-rule;
 
     .header-inner {
       @apply max-w-[1240px] mx-auto px-4 md:px-6 h-12 flex items-center gap-4;
@@ -164,14 +147,14 @@ function isActive(href: string) {
         @apply no-underline font-normal text-ink-2 px-2.5 py-1.5 rounded-[4px] hover:bg-accent-soft hover:text-ink;
 
         &.active {
-          @apply bg-ink text-accent hover:bg-ink hover:text-accent;
+          @apply bg-solid text-on-solid hover:bg-solid hover:text-on-solid;
         }
       }
     }
   }
 
   footer {
-    @apply mt-auto border-t-2 border-ink;
+    @apply mt-auto border-t border-rule;
 
     .footer-inner {
       @apply max-w-[1240px] mx-auto px-4 md:px-6 pt-2.5 pb-10 flex justify-between font-mono text-xs text-ink-3;
@@ -197,18 +180,6 @@ function isActive(href: string) {
       a {
         @apply px-1;
       }
-    }
-  }
-
-  .look-switch {
-    @apply fixed bottom-3 left-3 z-50 flex font-mono text-xs bg-white border border-ink rounded-md overflow-hidden;
-
-    button {
-      @apply px-2 py-1 cursor-pointer text-ink;
-    }
-
-    button[data-on] {
-      @apply bg-ink text-accent;
     }
   }
 

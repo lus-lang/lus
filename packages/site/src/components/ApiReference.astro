@@ -194,4 +194,21 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
       }
     }
   }
+
+  /* night: the reference hues lighten to stay legible on the ink page */
+  @media (prefers-color-scheme: dark) {
+    .api-index p a {
+      &[data-from="lua"] {
+        @apply text-sky-300 hover:bg-sky-950;
+      }
+
+      &[data-from="removed"] {
+        @apply text-neutral-400 hover:bg-neutral-800;
+      }
+
+      &[data-from="deprecated"] {
+        @apply text-yellow-300 hover:bg-yellow-950;
+      }
+    }
+  }
 </style>

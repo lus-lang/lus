@@ -73,14 +73,14 @@ const { groups, toc } = Astro.props
   }
 
   .sidebar-label {
-    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 mt-4 mb-1 pb-1 border-b border-ink first:mt-0;
+    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 mt-5 mb-1 first:mt-0;
   }
 
   .sidebar-link {
     @apply block px-2 py-[3px] -mx-2 no-underline text-ink-2 font-normal text-sm rounded-[4px] hover:bg-accent-soft hover:text-ink;
 
     &.active {
-      @apply bg-ink text-accent font-semibold hover:bg-ink hover:text-accent;
+      @apply bg-solid text-on-solid font-semibold hover:bg-solid hover:text-on-solid;
     }
   }
 

@@ -144,7 +144,7 @@ const sidebarToc = headings
   }
 
   .toc {
-    @apply border-y border-ink mb-6;
+    @apply mb-6;
 
     summary {
       @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 cursor-pointer select-none py-2;
@@ -176,14 +176,14 @@ const sidebarToc = headings
   }
 
   .pager {
-    @apply grid grid-cols-1 sm:grid-cols-2 mt-12 border-t-2 border-ink;
+    @apply grid grid-cols-1 sm:grid-cols-2 mt-14 border-t-2 border-rule;
 
     .pager-link {
       @apply flex flex-col gap-0.5 py-2 no-underline hover:bg-accent-soft;
     }
 
     .pager-right {
-      @apply sm:text-right sm:border-l sm:border-ink/30;
+      @apply sm:text-right;
     }
 
     .pager-label {

@@ -1,61 +1,60 @@
 @import "tailwindcss";
 
 /*
-** Lus design system: "Field instrument".
+** Lus design system: "Quiet instrument".
 **
-** The site reads like a printed instrument manual. Paper carries ink,
-** structure comes from rules, and lime is a signal that marks the one
-** thing that matters on a surface. Everything is light, flat, still, and
-** dense.
+** The site reads like a printed instrument manual with the margins left
+** generous. Paper carries ink, whitespace carries the structure, and lime
+** is a signal that marks the one thing that matters on a surface. It is
+** flat, still, and compact, with one rule per section. Light is "quiet",
+** dark is "night", and the page follows the reader's color scheme.
 **
 ** Ground rules:
 **  - No motion. No transitions, animations, keyframes, smooth scroll, or
 **    timer-driven repaints. State changes are instant repaints caused by
-**    user events. No box shadows. Depth comes from rules and surfaces.
-**  - Surfaces: paper (warm off-white) is the page. tint is the figure
-**    surface for code and quiet panels. white is reserved for controls
-**    that take input or a click (install box, search, segmented toggles).
-**  - Rules carry the structure, on a fixed ladder:
-**      2px ink: the spine. Header bottom, footer top, the top edge of a
-**        code figure, and the opening rule of a download or data block.
-**      1px ink: the top of a chapter list, index, or table.
-**      ink/30: frames of controls and the vertical rail divider.
-**      ink/15: row separators and inner dividers. Dotted ink/30 for
-**        ledgers and index leaders.
-**    A faint 12-column measure (.cols-bg) sits behind every page.
+**    user events. No box shadows.
+**  - Rules are few. Each section opens with its display title over one
+**    2px ink rule (.sech in a .part, h2 in prose). Code figures carry a
+**    2px ink rule on top in light and sit as rounded paper cards in dark.
+**    The header and footer close the page with 2px and 1px rules. Rows,
+**    ledgers, indexes, and tables separate by spacing, never by lines.
+**    Data bars in tables are data, not rules.
+**  - Tokens describe roles, so both schemes share every class:
+**      paper, tint: page and quiet surface. field: controls that take
+**        input or a click (white in light).
+**      ink, ink-2, ink-3: text, secondary prose, labels and metadata.
+**        ink-3 is the floor for any text.
+**      accent, accent-soft, link: the lime signal, its hover wash, and
+**        lime text strength. on-accent is the text on any lime fill.
+**      solid, on-solid: the filled state of a button, nav pill, or
+**        toggle (ink with lime text in light, lime with ink in dark).
+**      figure, figure-ink: code figures, light in both schemes because
+**        the code theme is written for paper.
+**      rule: the color of the section rules.
 **  - Radius: 3px on chips and tags, 4px on nav pills and toggles, 6px on
-**    buttons and the install box. Figures, tables, and lists are square.
-**  - Lime budget: accent fills only small meaningful surfaces (the
-**    version chip, the stable tag, the best value in a data row, the
-**    active nav pill text on ink, selection). accent-soft is the hover
-**    wash and the highlight of the Lus column. link (lime text strength)
-**    is the color of functional links and keywords. Large surfaces never
-**    turn lime.
-**  - Interactive grammar: hover repaints, never moves. Rows and links
-**    take the accent-soft wash. Solid buttons are ink with lime text and
-**    lighten on hover. Prose links keep a lime underline and darken to
-**    ink. Focus is a 2px ink outline.
-**  - Type: Bricolage Grotesque (font-display) sets the wordmark, h1, h2,
-**    chapter numbers, and chapter titles. Intel One Mono sets code, every
-**    label, nav, dates, captions, and data. Atkinson Hyperlegible Next
-**    sets prose. Labels are mono, 11px, uppercase, tracked .1em, ink-3.
-**  - Code is shown as a figure: a tint block under a 2px ink rule with a
-**    mono caption ("fig. 1 · sandbox.lus"). The tint and the scroll
-**    context live on the inner code element.
-**  - Ink ladder: ink for text, ink-2 for secondary prose, ink-3 for
-**    labels, captions, and metadata. ink-3 is the floor for any text.
-**  - Spacing comes from the Tailwind scale, kept compact: section heads
-**    pt-7 pb-3, rows py-1 to py-1.5, figures px-3. The page shell is
+**    buttons, the install box, and dark figures.
+**  - Lime budget: fills only small meaningful surfaces (the version chip,
+**    the stable tag, the best value in a data row, selection). Large
+**    surfaces never turn lime.
+**  - Interactive grammar: hover repaints, never moves. Rows and links take
+**    the accent-soft wash. Prose links keep a lime underline. Focus is a
+**    2px ink outline.
+**  - Type: Bricolage Grotesque (font-display) sets the wordmark, page
+**    titles, section titles, chapter numbers, and chapter titles. Intel
+**    One Mono sets code, labels, nav, dates, captions, and data. Atkinson
+**    Hyperlegible Next sets prose. Labels are mono, 11px, uppercase,
+**    tracked .1em, ink-3.
+**  - Spacing: sections open 56px below the last, titles sit 10px over
+**    their rule with 12px below it. Rows py-1 to py-1.5. The page shell is
 **    max-w-[1240px] with a 24px gutter (16px on phones).
-**  - Measure: long-form prose (manual chapters, news) caps at 80ch via
-**    `measured` (48.5rem, fixed so headings and rules share the prose
-**    edge). Reference pages run full width.
+**  - Measure: long-form prose (manual chapters, news) caps at 48.5rem,
+**    80ch of the body face, fixed so headings and rules share its edge.
+**    Reference pages run full width.
 **  - Red is the unstable channel and errors, never decoration. The red
 **    mirror covers what renders under html.unstable: global primitives,
 **    Layout chrome, ManualLayout, Button and Card with data-color="red".
-**  - The playground is the one dark surface: bg-ink with tint text, lime
-**    controls and headers, accent/20 to accent/40 hairlines, and
-**    text-accent-red for errors.
+**  - The playground keeps its own dark chrome in both schemes and opts
+**    out of the night tokens with html.fixed-scheme.
 **  - Reference badge palette lives here as .api-badge-* (sanctioned
 **    exceptions): lus = bg-accent-soft text-ink, unstable =
 **    bg-accent-soft-red text-ink-red, lua = bg-sky-200 text-sky-900,
@@ -80,6 +79,15 @@
   --color-accent-soft: oklch(95% 0.07 122);
   --color-link: oklch(42% 0.13 135);
 
+  /* roles that flip with the scheme */
+  --color-field: #ffffff;
+  --color-on-accent: oklch(21% 0.045 132);
+  --color-solid: oklch(21% 0.045 132);
+  --color-on-solid: oklch(87% 0.22 128);
+  --color-figure: oklch(95.5% 0.016 115);
+  --color-figure-ink: oklch(21% 0.045 132);
+  --color-rule: oklch(21% 0.045 132);
+
   /* the unstable channel */
   --color-ink-red: oklch(30% 0.1 25);
   --color-tint-red: oklch(97% 0.013 17);
@@ -87,6 +95,30 @@
   --color-accent-strong-red: oklch(70.4% 0.191 22.216);
   --color-accent-soft-red: oklch(94% 0.035 20);
   --color-link-red: oklch(45% 0.15 25);
+}
+
+/* night: the dark scheme, from the reader's preference */
+@media (prefers-color-scheme: dark) {
+  :root:not(.fixed-scheme) {
+    color-scheme: dark;
+    --color-paper: oklch(19% 0.03 132);
+    --color-tint: oklch(24% 0.035 132);
+    --color-ink: oklch(95% 0.03 115);
+    --color-ink-2: oklch(80% 0.03 120);
+    --color-ink-3: oklch(68% 0.03 125);
+    --color-link: oklch(87% 0.2 128);
+    --color-accent-soft: oklch(30% 0.07 130);
+    --color-field: oklch(24% 0.035 132);
+    --color-solid: oklch(87% 0.22 128);
+    --color-on-solid: oklch(19% 0.03 132);
+    --color-on-accent: oklch(19% 0.03 132);
+    --color-rule: oklch(95% 0.03 115 / 0.35);
+
+    --color-ink-red: oklch(88% 0.05 25);
+    --color-tint-red: oklch(24% 0.04 25);
+    --color-accent-soft-red: oklch(32% 0.07 25);
+    --color-link-red: oklch(76% 0.13 25);
+  }
 }
 
 /* keyboard focus: visible, chunky, on-brand */
@@ -105,7 +137,7 @@ html.unstable :focus-visible {
 
 ::selection {
   background: var(--color-accent);
-  color: var(--color-ink);
+  color: var(--color-on-accent);
 }
 
 body {
@@ -114,37 +146,6 @@ body {
 
 main {
   @apply max-w-[1240px] w-full mx-auto px-4 md:px-6 py-6 space-y-8;
-}
-
-/* the faint 12-column measure behind every page */
-.cols-bg {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  --gut: 24px;
-  background: repeating-linear-gradient(
-    to right,
-    color-mix(in oklab, var(--color-ink) 14%, transparent) 0 1px,
-    transparent 1px calc((min(100vw, 1240px) - 2 * var(--gut)) / 12)
-  );
-  background-position: max(var(--gut), calc((100vw - 1240px) / 2 + var(--gut)))
-    0;
-  mask: linear-gradient(transparent, #000 120px, #000 70%, transparent);
-  opacity: 0.5;
-}
-
-/* phones keep a 3-column measure: twelve narrow columns read as noise */
-@media (max-width: 767px) {
-  .cols-bg {
-    --gut: 16px;
-    background: repeating-linear-gradient(
-      to right,
-      color-mix(in oklab, var(--color-ink) 14%, transparent) 0 1px,
-      transparent 1px calc((100vw - 2 * var(--gut)) / 3)
-    );
-    background-position: var(--gut) 0;
-  }
 }
 
 /* page title: the display h1 that opens every page below the masthead */
@@ -157,7 +158,7 @@ main {
   @apply space-y-2 max-w-[48.5rem];
 
   h2 {
-    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] border-t border-ink pt-2 mt-10;
+    @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] border-b-2 border-rule pb-2.5 mt-14 mb-3;
   }
 
   h3 {
@@ -172,16 +173,21 @@ main {
 
 /* section head: display h2 with an optional label on its baseline */
 .sech {
-  @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 pt-7 pb-3;
+  @apply flex flex-wrap items-baseline gap-x-3 gap-y-1 pt-14 pb-2.5;
 
   h2 {
     @apply font-display text-[28px] leading-none font-bold tracking-[-0.035em] m-0;
   }
 }
 
+/* a section opens on one 2px rule under its title */
+.part > .sech {
+  @apply border-b-2 border-rule mb-3;
+}
+
 /* code figure: tint block under the 2px spine, mono caption on top */
 .figure {
-  @apply bg-tint border-t-2 border-ink m-0;
+  @apply bg-figure text-figure-ink border-t-2 border-ink m-0;
 
   figcaption {
     @apply flex justify-between gap-3 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-3 px-3 pt-1.5;
@@ -210,7 +216,7 @@ main {
 
 /* tags: the stable or unstable state of a release or feature */
 .tag {
-  @apply inline-block font-mono text-[10px] font-semibold uppercase rounded-[3px] px-1.5 py-px bg-accent text-ink text-center;
+  @apply inline-block font-mono text-[10px] font-semibold uppercase rounded-[3px] px-1.5 py-px bg-accent text-on-accent text-center;
 
   &.red {
     @apply bg-accent-soft-red text-link-red;
@@ -222,7 +228,7 @@ a {
 }
 
 .skip-link {
-  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-ink focus:rounded-md focus:px-4 focus:py-2 focus:font-semibold focus:no-underline;
+  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-on-accent focus:rounded-md focus:px-4 focus:py-2 focus:font-semibold focus:no-underline;
 }
 
 section {
@@ -269,7 +275,7 @@ pre {
   @apply relative;
 
   code {
-    @apply block overflow-x-auto bg-tint border-t-2 border-ink py-2 pl-3 pr-10 text-[13px] leading-[1.6];
+    @apply block overflow-x-auto bg-figure text-figure-ink border-t-2 border-ink py-2 pl-3 pr-10 text-[13px] leading-[1.6];
   }
 }
 
@@ -300,11 +306,11 @@ pre.astro-code {
 }
 
 .copy-btn {
-  @apply absolute top-2 right-1.5 border border-ink/30 rounded-[4px] bg-white p-1 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
+  @apply absolute top-2 right-1.5 border border-ink/30 rounded-[4px] bg-field p-1 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
 }
 
 .copy-btn.copied {
-  @apply bg-accent;
+  @apply bg-accent text-on-accent;
 }
 
 ul {
@@ -324,7 +330,7 @@ blockquote {
 }
 
 .table-wrap {
-  @apply overflow-x-auto my-3 border-t border-ink;
+  @apply overflow-x-auto my-3;
 
   table {
     @apply my-0;
@@ -336,11 +342,11 @@ table {
 
   th,
   td {
-    @apply border-b border-ink/15 px-2 py-1 text-left align-top;
+    @apply px-2 py-1 text-left align-top;
   }
 
   th {
-    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 border-b-ink/30;
+    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3;
   }
 
   th:first-child,
@@ -465,6 +471,32 @@ html.unstable {
 
     th {
       @apply text-ink-red/70 border-b-ink-red/30;
+    }
+  }
+}
+
+/* night figures are paper cards: the code theme is written for paper */
+@media (prefers-color-scheme: dark) {
+  :root:not(.fixed-scheme) {
+    .figure,
+    pre code {
+      @apply border-t-0 rounded-md;
+    }
+
+    .figure pre code {
+      @apply rounded-none;
+    }
+
+    .figure figcaption {
+      color: oklch(52% 0.03 125);
+
+      a {
+        color: oklch(42% 0.13 135);
+      }
+    }
+
+    .copy-btn {
+      @apply bg-white border-black/20 text-[oklch(21%_0.045_132)];
     }
   }
 }

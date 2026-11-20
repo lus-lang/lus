@@ -207,20 +207,20 @@ const modes: {
     @apply ml-auto flex border border-ink/30 rounded-[4px] overflow-hidden;
 
     button {
-      @apply font-mono text-xs bg-white px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
+      @apply font-mono text-xs bg-field px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
 
       &:focus-visible {
         outline-offset: -2px;
       }
 
       &[aria-pressed="true"] {
-        @apply bg-ink text-accent;
+        @apply bg-solid text-on-solid;
       }
     }
   }
 
   .mode {
-    @apply border-t border-ink;
+    @apply mt-0;
   }
 
   .bench[data-mode="time"] .mode[data-show="memory"],
@@ -242,16 +242,16 @@ const modes: {
   }
 
   table.http {
-    @apply mt-[18px] border-t border-ink;
+    @apply mt-[18px];
   }
 
   th {
-    @apply font-mono text-xs font-semibold normal-case tracking-normal text-ink-3 px-1.5 pt-1.5 pb-1 border-b-ink/30;
+    @apply font-mono text-xs font-semibold normal-case tracking-normal text-ink-3 px-1.5 pt-1.5 pb-1;
   }
 
   td,
   th[scope="row"] {
-    @apply px-1.5 py-[5px] border-b border-b-ink/15 align-bottom font-normal text-ink text-xs;
+    @apply px-1.5 py-[5px] align-bottom font-normal text-ink text-xs;
   }
 
   /* program names stay in view while the table scrolls on phones */
@@ -281,7 +281,7 @@ const modes: {
   }
 
   td.best b {
-    @apply bg-accent px-[3px] rounded-[2px];
+    @apply bg-accent text-on-accent px-[3px] rounded-[2px];
   }
 
   td.na {
