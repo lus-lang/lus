@@ -23,7 +23,11 @@ pub fn expand(arena: std.mem.Allocator, io: std.Io, path: []const u8, files: *st
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".lus")) continue;
         if (skipped(entry.path)) continue;
-        try files.append(arena, try std.fs.path.join(arena, &.{ path, entry.path }));
+        // Paths are joined with forward slashes on every system, which
+        // Windows accepts, so diagnostics read the same everywhere.
+        const joined = try std.fs.path.join(arena, &.{ path, entry.path });
+        std.mem.replaceScalar(u8, joined, '\\', '/');
+        try files.append(arena, joined);
     }
     std.mem.sort([]const u8, files.items[first..], {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
