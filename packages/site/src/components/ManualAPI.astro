@@ -66,8 +66,9 @@ function haystack(d: any, from: From) {
     @apply scroll-mt-20;
   }
 
+  /* signatures wrap on narrow screens rather than widen the page */
   .api-heading {
-    @apply flex items-baseline pb-1;
+    @apply flex flex-wrap items-baseline pb-1;
   }
 
   .api-name {
@@ -75,11 +76,13 @@ function haystack(d: any, from: From) {
   }
 
   .api-params {
-    @apply font-mono text-sm text-link;
+    @apply font-mono text-sm text-link min-w-0;
+    overflow-wrap: anywhere;
   }
 
   .api-returns {
-    @apply font-mono text-sm text-ink-3;
+    @apply font-mono text-sm text-ink-3 min-w-0;
+    overflow-wrap: anywhere;
   }
 
   .api-param-optional {

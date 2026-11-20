@@ -187,6 +187,8 @@ html.unstable :focus-visible {
 
 body {
   @apply font-sans text-ink bg-paper min-h-screen flex flex-col antialiased text-[15px] leading-[1.55];
+  /* light that spills past the measure is clipped, never scrolled to */
+  overflow-x: clip;
 }
 
 main {
@@ -299,11 +301,11 @@ details[open] > summary::before {
   @apply flex items-end gap-8 border-b border-rule mb-4;
 
   > :first-child {
-    @apply shrink-0 pb-3;
+    @apply min-w-0 pb-3;
   }
 
   > svg.cube-field {
-    @apply hidden md:block ml-auto;
+    @apply hidden md:block ml-auto shrink-0 max-w-[50%];
   }
 }
 
