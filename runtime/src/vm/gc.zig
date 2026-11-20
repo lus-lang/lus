@@ -120,6 +120,7 @@ pub fn releaseObject(g: *Global, h: *Header) void {
             @import("table.zig").freeParts(gpa, h.as(object.Table));
         },
         .thread => {
+            @import("sched.zig").threadFreed(g, h.as(Thread));
             @import("pledge.zig").release(h.as(Thread));
             h.as(Thread).deinitStack();
         },
@@ -1005,6 +1006,8 @@ fn MarkerOf(comptime par: bool) type {
             for (g.fixed.items) |h| m.markObject(h);
             // Objects waiting in the finalizer queue stay alive.
             for (g.tobefnz.items) |h| m.markObject(h);
+            // So do the coroutines that the scheduler runs.
+            @import("sched.zig").markRoots(g, m);
         }
 
         /// Traces the gray stack until it is empty, on several threads

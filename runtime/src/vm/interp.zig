@@ -398,7 +398,7 @@ pub fn execute(l: *Thread, stop: usize) (Error || YieldError)!void {
 fn handleError(l: *Thread, stop: usize) bool {
     // A coroutine closing itself unwinds past every handler.
     if (l.self_closed) return false;
-    if (l.g.halting) return false;
+    if (l.g.halting or l.g.sched.fatal) return false;
     var i = l.frames.items.len;
     while (i > stop) {
         i -= 1;
@@ -1468,6 +1468,37 @@ pub inline fn callNative(l: *Thread, nat: *state.Native, func: u32, nargs: u32, 
         return e;
     };
     try poscall(l, nres);
+}
+
+/// Calls the native of the top frame again, for a thread that suspended
+/// inside it to wait (`sched.zig`). Its arguments are still on the stack.
+/// The call ends the way a call from the interpreter ends: the results
+/// replace the frame, an error looks for a handler in the Lus frames
+/// below, and a native that waits again leaves its frame in place.
+pub fn restartNative(l: *Thread) (Error || YieldError)!void {
+    const sched = @import("sched.zig");
+    const fr = l.frame();
+    const nat = fr.native.?;
+    const want = fr.want;
+    const t = sched.taskOf(l).?;
+    l.top = fr.base + t.saved_top;
+    l.meta_finish = null;
+    t.restarted = true;
+    const r = nat.func(l);
+    t.restarted = false;
+    const nres = r catch |e| {
+        if (l.status == .suspended and l.yielding) return error.Yield;
+        sched.clearWait(l.g, t);
+        if (l.g.debugger) |d| d.raised(d.ctx, l);
+        if (!handleError(l, 0)) return e;
+        return;
+    };
+    sched.clearWait(l.g, t);
+    try poscall(l, nres);
+    if (want >= 0 and l.frames.items.len > 0) {
+        const caller = l.frame();
+        if (caller.closure) |cl| l.top = caller.base + cl.proto.max_stack;
+    }
 }
 
 /// Pushes a frame for a call to a Lus function with fixed parameters. The

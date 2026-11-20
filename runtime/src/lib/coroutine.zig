@@ -2,6 +2,12 @@
 //! frame list. Resuming runs the interpreter on that thread. Yielding
 //! unwinds the interpreter back to `resume` while every frame stays in
 //! place, so a later resume continues exactly where the yield happened.
+//!
+//! A coroutine that `detach` handed to the scheduler runs whenever what
+//! it waits for is ready (`vm/sched.zig`, `spec/design/coroutines.md`). A
+//! coroutine that suspends inside a blocking native unwinds like a yield.
+//! `resume` passes such a wait on to its own resumer and runs the native
+//! again when the wait is over.
 
 const std = @import("std");
 const value = @import("../vm/value.zig");
@@ -10,6 +16,7 @@ const state = @import("../vm/state.zig");
 const interp = @import("../vm/interp.zig");
 const ops = @import("../vm/ops.zig");
 const gc = @import("../vm/gc.zig");
+const sched = @import("../vm/sched.zig");
 const aux = @import("auxlib.zig");
 const Value = value.Value;
 const Thread = state.Thread;
@@ -24,6 +31,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "isyieldable", .func = isyieldable },
     .{ .name = "wrap", .func = wrap },
     .{ .name = "close", .func = close },
+    .{ .name = "detach", .func = detach },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -55,58 +63,97 @@ fn create(l: *Thread) Error!u32 {
 /// Resumes `co` with `nargs` values taken from the top of `l`'s stack.
 /// On success the yielded or returned values are moved to `l` and their
 /// count is returned. On error, returns error.LusError with the error
-/// value in `l.err` and `co` marked dead.
+/// value in `l.err` and `co` marked dead. When `co` suspends to wait, or
+/// when `l` waits for a detached `co`, the error it returns suspends `l`
+/// in turn with `l.yielding` set, and the caller passes it on untouched.
 pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
-    if (co.status != .suspended) {
-        const what = switch (co.status) {
-            .dead, .err => "cannot resume dead coroutine",
-            .running => "cannot resume non-suspended coroutine",
-            else => "cannot resume non-suspended coroutine",
-        };
-        l.top -= nargs;
-        return l.raise(try l.newStringValue(what));
+    // Only a coroutine that waited or was detached has a scheduler
+    // record, so a plain resume pays one test for all of this.
+    if (sched.taskOf(co)) |t| {
+        @branchHint(.unlikely);
+        return resumeScheduled(l, co, nargs, t);
     }
-    if (l.ncalls >= Thread.max_ncalls or l.g.native_depth >= Thread.max_ncalls) {
+    if (co.status != .suspended) return notSuspended(l, co, nargs);
+    return resumeWith(l, co, nargs, if (co.frames.items.len == 0) .fresh else .results);
+}
+
+fn notSuspended(l: *Thread, co: *Thread, nargs: u32) Error {
+    @branchHint(.cold);
+    const what = switch (co.status) {
+        .dead, .err => "cannot resume dead coroutine",
+        else => "cannot resume non-suspended coroutine",
+    };
+    l.top -= nargs;
+    return l.raise(try l.newStringValue(what));
+}
+
+/// `resumeCo` for a coroutine with a scheduler record: one that is
+/// detached, or one that suspended inside a native at some point.
+noinline fn resumeScheduled(l: *Thread, co: *Thread, nargs: u32, t: *sched.Task) Error!u32 {
+    if (t.detached) {
+        // A detached coroutine takes no values. The caller waits for its
+        // end.
         l.top -= nargs;
+        return joinDetached(l, co, t);
+    }
+    if (co.status != .suspended) return notSuspended(l, co, nargs);
+    if (t.kind != .none) {
+        // The coroutine suspended inside a native. The thread that
+        // resumed it runs that native again.
+        if (co.resumer) |r| {
+            if (r != l and sched.awaits(r, co)) {
+                l.top -= nargs;
+                return l.raise(try l.newStringValue("cannot resume non-suspended coroutine"));
+            }
+        }
+        l.top -= nargs;
+        return resumeWith(l, co, 0, .restart);
+    }
+    return resumeWith(l, co, nargs, if (co.frames.items.len == 0) .fresh else .results);
+}
+
+/// Runs the suspended coroutine `co` from `l` with `n` values from the
+/// top of the stack of `l`.
+inline fn resumeWith(l: *Thread, co: *Thread, n: u32, mode: sched.Entry) Error!u32 {
+    if (l.ncalls >= Thread.max_ncalls or l.g.native_depth >= Thread.max_ncalls) {
+        l.top -= n;
         return l.raiseFmt("C stack overflow", .{});
     }
     // Move the arguments to the coroutine.
-    co.ensure(nargs + 1) catch {
-        l.top -= nargs;
+    co.ensure(n + 1) catch {
+        l.top -= n;
         return l.raise(co.err);
     };
-    const src = l.top - nargs;
+    const src = l.top - n;
     var i: u32 = 0;
-    while (i < nargs) : (i += 1) co.stack[co.top + i] = l.stack[src + i];
-    co.top += nargs;
+    while (i < n) : (i += 1) co.stack[co.top + i] = l.stack[src + i];
+    co.top += n;
     l.top = src;
-    const fresh = co.frames.items.len == 0;
     co.status = .running;
     co.resumer = l;
+    co.resumer_passes = true;
     l.status = .normal;
     l.ncalls += 1;
     l.g.native_depth += 1;
-    defer {
-        l.ncalls -= 1;
-        l.g.native_depth -= 1;
-        l.status = .running;
-    }
-    const outcome = runCo(co, fresh, nargs);
-    co.resumer = null;
+    const outcome = runCo(co, mode, n);
+    l.ncalls -= 1;
+    l.g.native_depth -= 1;
+    l.status = .running;
     switch (outcome) {
-        .yielded, .returned => {
-            // Values at the top of the coroutine stack go back to `l`.
-            const n = co.transfer;
-            const from = co.top - n;
-            try l.ensure(n + 1);
-            i = 0;
-            while (i < n) : (i += 1) l.stack[l.top + i] = co.stack[from + i];
-            l.top += n;
-            co.top = from;
-            if (outcome == .returned) co.status = .dead else co.status = .suspended;
-            return n;
+        .yielded => {
+            if (sched.taskOf(co)) |t| {
+                @branchHint(.unlikely);
+                if (t.kind != .none) return passWait(l, co);
+            }
+            co.resumer = null;
+            return takeResults(l, co, .suspended);
+        },
+        .returned => {
+            co.resumer = null;
+            return takeResults(l, co, .dead);
         },
         .failed => {
+            co.resumer = null;
             // The error stays on the coroutine until close() reports it.
             co.status = .err;
             return l.raise(co.err);
@@ -114,31 +161,137 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
     }
 }
 
-const Outcome = enum { yielded, returned, failed };
+/// The coroutine `co` that `l` resumed waits, so `l` waits for it. The
+/// scheduler finds what to wait for through `l`.
+noinline fn passWait(l: *Thread, co: *Thread) Error {
+    co.status = .suspended;
+    const me = try sched.ensureTask(l);
+    me.kind = .inner;
+    me.target = co;
+    return sched.suspendThread(l, me);
+}
 
-fn runCo(co: *Thread, fresh: bool, nargs: u32) Outcome {
-    if (fresh) {
-        const kind = interp.precall(co, 0, nargs, -1) catch |e| return handleStop(co, e);
-        if (kind == .done) {
-            co.transfer = co.top;
-            return .returned;
+/// True when `co` suspended inside a native to wait.
+inline fn waiting(co: *Thread) bool {
+    const t = sched.taskOf(co) orelse return false;
+    return t.kind != .none;
+}
+
+/// Moves the values at the top of the stack of `co` to `l`.
+inline fn takeResults(l: *Thread, co: *Thread, status_after: state.Status) Error!u32 {
+    const n = co.transfer;
+    const from = co.top - n;
+    try l.ensure(n + 1);
+    var i: u32 = 0;
+    while (i < n) : (i += 1) l.stack[l.top + i] = co.stack[from + i];
+    l.top += n;
+    co.top = from;
+    co.status = status_after;
+    return n;
+}
+
+/// `resume` on the detached coroutine `co`: waits until it ends and
+/// returns what a plain resume returns for a coroutine that ends. The
+/// first resume after the end collects the results or the error, and so
+/// does every thread that was already waiting. A later resume finds a
+/// dead coroutine.
+fn joinDetached(l: *Thread, co: *Thread, t: *sched.Task) Error!u32 {
+    if (co == l) return l.raise(try l.newStringValue("cannot resume non-suspended coroutine"));
+    var waiter = sched.joined(l, co);
+    if (t.place != .done) {
+        const can = sched.canSuspend(l);
+        // A coroutine below `l` on the native stack cannot end while `l`
+        // keeps the stack.
+        if (!can and t.place == .running) return l.raise(try l.newStringValue("cannot resume non-suspended coroutine"));
+        try sched.waitJoin(l, co);
+        waiter = true;
+    }
+    const me = sched.taskOf(l);
+    if (waiter) {
+        if (t.fin_waiters > 0) t.fin_waiters -= 1;
+        // The native that waited without suspending forgets its wait
+        // here. A native that ran again forgets it when it returns.
+        if (me) |m| {
+            if (!m.restarted) sched.clearWait(l.g, m);
         }
-        if (co.hook_mask & Thread.hook_call != 0) interp.callHook(co, "call", null) catch |e| return handleStop(co, e);
-    } else {
-        // Finish the pending `yield` call: its results are the resume
-        // arguments now at the top of the stack.
-        const fr = co.frame();
-        const want = fr.want;
-        interp.poscall(co, nargs) catch return .failed;
-        if (co.frames.items.len > 0) {
-            const top_fr = co.frame();
-            if (top_fr.closure) |cl| {
-                if (want >= 0) co.top = top_fr.base + cl.proto.max_stack;
+    } else if (t.collected) {
+        return l.raise(try l.newStringValue("cannot resume dead coroutine"));
+    }
+    t.collected = true;
+    switch (t.outcome) {
+        .returned => {
+            const n = t.nres;
+            const from = co.top - n;
+            try l.ensure(n + 1);
+            var i: u32 = 0;
+            while (i < n) : (i += 1) l.stack[l.top + i] = co.stack[from + i];
+            l.top += n;
+            if (t.fin_waiters == 0) {
+                co.top = from;
+                t.nres = 0;
             }
-        } else {
-            co.transfer = co.top;
-            return .returned;
-        }
+            return n;
+        },
+        .failed => return l.raise(co.err),
+        .cancelled, .pending => return l.raise(try l.newStringValue("cannot resume dead coroutine")),
+    }
+}
+
+/// Runs the detached coroutine `co` from the thread `l` that runs the
+/// scheduler. `nargs` values for it are at the top of its stack.
+pub fn runDetached(l: *Thread, co: *Thread, mode: sched.Entry, nargs: u32) Outcome {
+    const saved = l.status;
+    co.status = .running;
+    co.resumer = l;
+    co.resumer_passes = false;
+    l.status = .normal;
+    l.ncalls += 1;
+    l.g.native_depth += 1;
+    const outcome = runCo(co, mode, nargs);
+    l.ncalls -= 1;
+    l.g.native_depth -= 1;
+    l.status = saved;
+    co.resumer = null;
+    return outcome;
+}
+
+pub const Outcome = enum { yielded, returned, failed };
+
+inline fn runCo(co: *Thread, mode: sched.Entry, nargs: u32) Outcome {
+    switch (mode) {
+        .fresh => {
+            const kind = interp.precall(co, 0, nargs, -1) catch |e| return handleStop(co, e);
+            if (kind == .done) {
+                co.transfer = co.top;
+                return .returned;
+            }
+            if (co.hook_mask & Thread.hook_call != 0) interp.callHook(co, "call", null) catch |e| return handleStop(co, e);
+        },
+        .results => {
+            // Finish the pending `yield` call: its results are the resume
+            // arguments now at the top of the stack.
+            const fr = co.frame();
+            const want = fr.want;
+            interp.poscall(co, nargs) catch return .failed;
+            if (co.frames.items.len > 0) {
+                const top_fr = co.frame();
+                if (top_fr.closure) |cl| {
+                    if (want >= 0) co.top = top_fr.base + cl.proto.max_stack;
+                }
+            } else {
+                co.transfer = co.top;
+                return .returned;
+            }
+        },
+        .restart => {
+            // The coroutine suspended inside a native to wait. The native
+            // runs again and continues the call.
+            interp.restartNative(co) catch |e| return handleStop(co, e);
+            if (co.frames.items.len == 0) {
+                co.transfer = co.top;
+                return .returned;
+            }
+        },
     }
     if (co.frames.items.len > 0) {
         interp.execute(co, 0) catch |e| return handleStop(co, e);
@@ -176,6 +329,15 @@ fn handleStop(co: *Thread, e: anyerror) Outcome {
 /// variables with the pending error (if any) and marks it dead. Returns
 /// the final error, or null when everything closed cleanly.
 fn closeThread(co: *Thread) ?Value {
+    sched.abandonWait(co);
+    if (sched.taskOf(co)) |t| {
+        // Closing a detached coroutine collects its error and drops the
+        // results it kept.
+        if (t.detached) {
+            t.collected = true;
+            t.nres = 0;
+        }
+    }
     var err: ?Value = if (co.status == .err) co.err else null;
     co.err = .nil;
     if (co.frames.items.len > 0) {
@@ -195,12 +357,26 @@ fn closeThread(co: *Thread) ?Value {
     return err;
 }
 
+/// Closes a detached coroutine that the scheduler gave up, as the end of
+/// a state does.
+pub fn closeCancelled(co: *Thread) void {
+    _ = closeThread(co);
+}
+
+/// True when an error of `l` leaves through every handler: the thread
+/// suspends to wait, the state stops, or an error nothing collected
+/// stops the program.
+inline fn passes(l: *Thread) bool {
+    return l.yielding or l.g.halting or l.g.sched.fatal;
+}
+
 fn @"resume"(l: *Thread) Error!u32 {
     const co = try checkCo(l, 1);
     const nargs = l.argCount() - 1;
     const n = resumeCo(l, co, nargs) catch {
-        // A stopping worker unwinds through coroutines as well.
-        if (l.g.halting) return error.LusError;
+        // A wait suspends this thread as well, and a stopping worker
+        // unwinds through coroutines.
+        if (passes(l)) return error.LusError;
         const err = l.err;
         try l.push(.false);
         try l.push(err);
@@ -259,6 +435,7 @@ fn wrapAux(l: *Thread) Error!u32 {
     const co = nat.upvalues()[0].as(Thread);
     const nargs = l.argCount();
     return resumeCo(l, co, nargs) catch {
+        if (passes(l)) return error.LusError;
         var err = l.err;
         if (co.status == .err) {
             // Close the failed coroutine, then propagate its error with
@@ -302,10 +479,46 @@ fn close(l: *Thread) Error!u32 {
         .suspended, .dead, .err => {},
         else => return l.raiseFmt("cannot close a {s} coroutine", .{statusName(l, co)}),
     }
+    // A detached coroutine that has not ended leaves the scheduler first.
+    if (sched.taskOf(co)) |t| {
+        if (t.detached) sched.cancel(l.g, t);
+    }
     if (closeThread(co)) |err| {
         try l.push(.false);
         try l.push(err);
         return 2;
     }
     return aux.retBool(l, true);
+}
+
+/// coroutine.detach(co, ...): hands the suspended coroutine `co` to the
+/// scheduler, which resumes it with the extra arguments and then
+/// whenever what it waits for is ready. Returns `co`.
+fn detach(l: *Thread) Error!u32 {
+    const co = try checkCo(l, 1);
+    if (co == l.g.main_thread) return l.raiseFmt("cannot detach the main thread", .{});
+    if (sched.taskOf(co)) |t| {
+        if (t.detached) return l.raiseFmt("cannot detach a detached coroutine", .{});
+    }
+    if (co == l or co.status != .suspended) return l.raiseFmt("cannot detach a {s} coroutine", .{statusName(l, co)});
+    const nargs = l.argCount() - 1;
+    var entry: sched.Entry = if (co.frames.items.len == 0) .fresh else .results;
+    var n = nargs;
+    if (waiting(co)) {
+        if (co.resumer) |r| {
+            if (sched.awaits(r, co)) return l.raiseFmt("cannot detach a normal coroutine", .{});
+        }
+        entry = .restart;
+        n = 0;
+    }
+    const t = try sched.ensureTask(co);
+    co.ensure(n + 1) catch return l.raise(co.err);
+    const src = l.base() + 1;
+    var i: u32 = 0;
+    while (i < n) : (i += 1) co.stack[co.top + i] = l.stack[src + i];
+    co.top += n;
+    co.resumer = null;
+    sched.attach(l.g, t, entry, n);
+    l.top = l.base() + 1;
+    return 1;
 }

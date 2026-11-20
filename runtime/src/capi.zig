@@ -129,6 +129,8 @@ fn protect(l: *Thread, reset: u32, comptime f: anytype, args: anytype) c_int {
         interp.unwindTo(l, depth);
         l.tbc.items.len = @min(l.tbc.items.len, tbc_len);
         l.ncalls = ncalls;
+        // An error that stops the program ends at the outermost call.
+        if (l.g.native_depth == 0) l.g.sched.fatal = false;
         l.top = reset;
         pushErr(l);
         return errStatus(l);
@@ -875,6 +877,22 @@ export fn lus_pcall(l: *Thread, nargs: c_int, nresults: c_int) c_int {
     defer l.want_traceback = saved_tb;
     if (api.pcall(l, na, want)) return LUS_OK;
     return errStatus(l);
+}
+
+/// Runs the detached coroutines of the state. With `wait` nonzero it runs
+/// them until none is left and then reports the error of a coroutine
+/// that failed with nothing left to collect it. With `wait` zero it runs
+/// the coroutines that are ready and returns.
+export fn lus_runpending(l: *Thread, wait: c_int) c_int {
+    l.err_traceback = null;
+    if (api.runPending(l, wait != 0)) return LUS_OK;
+    pushErr(l);
+    return errStatus(l);
+}
+
+/// The number of detached coroutines that have not ended.
+export fn lus_pending(l: *Thread) c_int {
+    return @intCast(@min(api.pendingCoroutines(l), std.math.maxInt(c_int)));
 }
 
 export fn lus_traceback(l: *Thread) ?[*:0]const u8 {

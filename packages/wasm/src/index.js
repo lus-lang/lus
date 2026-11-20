@@ -328,6 +328,8 @@ export class Lus {
             for (const a of args) this.pushString(l, a);
             status = x.lus_pcall(l, args.length, 0);
           }
+          // The coroutines that the program detached run to their end.
+          if (status === LUS_OK) status = x.lus_runpending(l, 1);
           if (status !== LUS_OK) {
             ({ message: error, traceback } = this.takeError(l));
             exitCode = 1;
@@ -410,6 +412,7 @@ export class Lus {
           status = this.loadChunk(l, code, "=(playground)");
           if (status === LUS_OK) status = x.lus_pcall(l, 0, 0);
         }
+        if (status === LUS_OK) status = x.lus_runpending(l, 1);
         x.lus_wasm_flush(l);
         if (status !== LUS_OK) tail = this.takeError(l).message;
         x.lus_settop(l, 0);

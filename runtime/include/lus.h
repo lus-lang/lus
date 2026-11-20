@@ -91,9 +91,10 @@ typedef int (*lus_CFunction)(lus_State *L);
 lus_State *lus_newstate(void);
 
 /*
-** Runs the finalizers of every object that still has one, stops the
-** workers the state started, and frees the state. L must be the state
-** returned by lus_newstate.
+** Closes the detached coroutines that have not ended, which runs their
+** pending to-be-closed variables, runs the finalizers of every object
+** that still has one, stops the workers the state started, and frees the
+** state. L must be the state returned by lus_newstate.
 */
 void lus_close(lus_State *L);
 
@@ -405,9 +406,24 @@ int lus_loadfile(lus_State *L, const char *path);
 int lus_pcall(lus_State *L, int nargs, int nresults);
 
 /*
-** Returns the stack traceback of the last error caught by lus_pcall, or
-** NULL when that error had none. The text stays valid until the next call
-** of lus_pcall on L.
+** Runs the coroutines that coroutine.detach handed to the runtime. With
+** wait nonzero it runs them until none is left, as the lus command does
+** after the main chunk. With wait zero it runs the coroutines that are
+** ready and returns, so a host with an event loop of its own calls it
+** whenever it has time. On failure it pushes the error value and returns
+** the status. That happens when a detached coroutine failed and nothing
+** collected its error, and lus_traceback then returns the traceback of
+** that coroutine. L is the main state, outside any call.
+*/
+int lus_runpending(lus_State *L, int wait);
+
+/* Returns the number of detached coroutines that have not ended. */
+int lus_pending(lus_State *L);
+
+/*
+** Returns the stack traceback of the last error caught by lus_pcall or
+** reported by lus_runpending, or NULL when that error had none. The text
+** stays valid until the next call of either on L.
 */
 const char *lus_traceback(lus_State *L);
 

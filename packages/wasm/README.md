@@ -55,7 +55,7 @@ import { Lus } from "lus-wasm/browser";
 const lus = await Lus.load(new URL("/wasm/lus.wasm", location.href));
 ```
 
-`run(source, options)` runs a whole program in a fresh state and closes it afterwards. The options are `args` (passed as `...` and `arg`), `pledges` (host grants, like `lus -P`), `stdin`, `files` (written to the file system first), `chunkname`, and `maxOutputBytes`. The result separates standard output and standard error and also gives them interleaved in write order as `output`. When the program fails, `error` holds the message and `traceback` the stack traceback. A call to `os.exit` sets `exitCode`.
+`run(source, options)` runs a whole program in a fresh state and closes it afterwards. The options are `args` (passed as `...` and `arg`), `pledges` (host grants, like `lus -P`), `stdin`, `files` (written to the file system first), `chunkname`, and `maxOutputBytes`. The result separates standard output and standard error and also gives them interleaved in write order as `output`. When the program fails, `error` holds the message and `traceback` the stack traceback. A call to `os.exit` sets `exitCode`. Like the `lus` command, `run` keeps running the coroutines that the program detached until every one of them has ended, and so does `execute`.
 
 The host also keeps the interface of the legacy emscripten glue, so the current consumers change little:
 

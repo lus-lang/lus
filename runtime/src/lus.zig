@@ -66,6 +66,7 @@ test {
     _ = vm.pledge;
     _ = @import("jit/jit.zig");
     _ = @import("vm/heapcount.zig");
+    _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
     _ = compile.opcodes;
     _ = compile.codegen;

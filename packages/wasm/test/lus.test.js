@@ -33,6 +33,23 @@ describe("run", () => {
     assert.match(r.traceback, /\(playground\):4: in main chunk/);
   });
 
+  test("runs detached coroutines after the main chunk", () => {
+    const r = lus.run(
+      'local function body(name)\n  for i = 1, 2 do\n    print(name, i)\n    coroutine.yield()\n  end\nend\n' +
+        'coroutine.detach(coroutine.create(body), "a")\ncoroutine.detach(coroutine.create(body), "b")\nprint("main ends")\n',
+    );
+    assert.equal(r.ok, true);
+    assert.equal(r.stdout, "main ends\na\t1\nb\t1\na\t2\nb\t2\n");
+  });
+
+  test("reports the error of a detached coroutine that nothing collected", () => {
+    const r = lus.run('coroutine.detach(coroutine.create(function()\n  error("lost")\nend))\nprint("main ends")\n');
+    assert.equal(r.ok, false);
+    assert.equal(r.stdout, "main ends\n");
+    assert.equal(r.error, "(playground):2: lost");
+    assert.match(r.traceback, /^stack traceback:/);
+  });
+
   test("reports a syntax error", () => {
     const r = lus.run("local = 1");
     assert.equal(r.ok, false);
