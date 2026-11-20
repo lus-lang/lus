@@ -110,7 +110,7 @@ This lands after the website 2.0 restyle merges, and follows its "Field instrume
 
 ### The install block
 
-The masthead install block gains a two-way switch: `shell` and `agent`. The shell side keeps today's `curl -fsSL https://lus.dev/install.sh | sh`. The agent side holds one prompt in the same monospace box, with the same copy button.
+The masthead install block carries a two-way switch: `agent` and `shell`, with the agent side shown first. The agent side holds one prompt in a monospace box with a copy button. The shell side holds `curl -fsSL https://lus.dev/install.sh | sh`, or the Windows installer on Windows.
 
 ```text
 Install Lus (curl -fsSL https://lus.dev/install.sh | sh), run `lus agents init` here, read lus.dev/llms.txt, and tell me where Lus would help this project. Change nothing yet.
@@ -188,7 +188,7 @@ end)
 
 1. **Repository.** The skills, `llms.txt`, and the prompts in `.agents/`, with `lus test --doc ../.agents` in `mise run test`. `tools/build-llms.js` builds every agent file into a directory with `pnpm run llms -- --out DIR`, `mise run gen:check` validates its output, and `tools/build-llms.test.js` runs in `pnpm run test:tools`. Today `llms-small.txt` holds about 7,700 tokens and `llms-full.txt` about 95,000.
 2. **Runtime.** Directories in `check` and `fmt`, the test-aware checker, hints for common mistakes, `lus agents init`, and `lus help` are in place. Next come `check --pledges` with `missing-pledge`, `check --fix`, documentation links in diagnostics, named cases.
-3. **Site.** The site serves `llms.txt`, `llms-small.txt`, `llms-full.txt`, `agents.md`, `benchmarks.md`, the skills, and a Markdown twin of every manual page, all built by `tools/build-llms.js` through `packages/site/src/lib/llms.ts`. The masthead offers a shell and agent switch, the header links `/agents`, manual pages announce and link their Markdown twins, and the homepage section "In your software" replaces "Lus at a glance". Its speed line comes from `lib/lead.ts`, which names the runtimes Lus beats on every program in time and memory and otherwise states what was measured.
+3. **Site.** The site serves `llms.txt`, `llms-small.txt`, `llms-full.txt`, `agents.md`, `benchmarks.md`, the skills, and a Markdown twin of every manual page, all built by `tools/build-llms.js` through `packages/site/src/lib/llms.ts`. The masthead offers an agent and shell switch that opens on the agent prompt, the header links `/agents`, manual pages announce and link their Markdown twins, and the homepage section "In your software" replaces "Lus at a glance". Its speed line comes from `lib/lead.ts`, which names the runtimes Lus beats on every program in time and memory and otherwise states what was measured.
 4. **Reach.** The agent task suite, `context7.json`, listings in skill registries, and `lus mcp`.
 
 ## Decisions

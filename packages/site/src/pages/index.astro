@@ -170,10 +170,10 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
             easily by programmers and put to good use right away.
           </p>
           <div class="seg" role="group" aria-label="Install with">
-            <button type="button" data-via="shell" aria-pressed="true">shell</button>
-            <button type="button" data-via="agent" aria-pressed="false">agent</button>
+            <button type="button" data-via="agent" aria-pressed="true">agent</button>
+            <button type="button" data-via="shell" aria-pressed="false">shell</button>
           </div>
-          <div class="install crop" id="install-unix">
+          <div class="install crop" id="install-unix" hidden>
             <span class="plat" id="install-platform">linux · x64</span>
             <code id="install-shell">{INSTALL_SH}</code>
             <button type="button" data-copy="install-shell">copy</button>
@@ -182,7 +182,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
             <span class="plat">windows · x64</span>
             <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
           </div>
-          <div class="install crop agent" id="install-agent" hidden>
+          <div class="install crop agent" id="install-agent">
             <span class="plat">prompt</span>
             <code id="agent-prompt">{AGENT_PROMPT}</code>
             <button type="button" data-copy="agent-prompt">copy</button>
@@ -313,9 +313,9 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
 <script is:inline>
   // adjust the server-rendered linux install for the visitor's platform:
-  // macOS shares the same curl|sh line (label change only), Windows swaps
-  // the shell line for the installer download; no-JS readers keep the
-  // linux default plus the "other platforms" link
+  // macOS shares the same curl|sh line (label change only), and Windows
+  // shows the installer download on the shell side. Readers without
+  // scripts see the agent prompt and the "other platforms" link.
   const plat = (
     navigator.userAgentData?.platform ??
     navigator.platform ??
@@ -324,9 +324,6 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   if (plat.includes("mac")) {
     document.getElementById("install-platform").textContent =
       "macos · arm64"
-  } else if (plat.includes("win")) {
-    document.getElementById("install-unix").hidden = true
-    document.getElementById("install-windows").hidden = false
   }
   for (const button of document.querySelectorAll("[data-copy]")) {
     button.addEventListener("click", () => {
@@ -337,8 +334,9 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
         })
     })
   }
-  // shell or agent: the switch shows one install box. The shell side keeps
-  // the platform choice made above.
+  // agent or shell: the switch shows one install box, the agent prompt by
+  // default. The shell side shows the installer for the visitor's
+  // platform.
   const shellBox = document.getElementById(
     plat.includes("win") ? "install-windows" : "install-unix",
   )
