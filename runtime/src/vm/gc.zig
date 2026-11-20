@@ -1231,7 +1231,10 @@ fn MarkerOf(comptime par: bool) type {
                     for (arr) |v| m.markValue(v);
                     for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
-                        if (n.val.isNil()) continue;
+                        if (n.val.isNil()) {
+                            m.markDeadKey(n.key);
+                            continue;
+                        }
                         m.markValue(n.key);
                         m.markValue(n.val);
                     }
@@ -1241,7 +1244,10 @@ fn MarkerOf(comptime par: bool) type {
                     for (arr) |v| m.markIfValueLike(v);
                     for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
-                        if (n.val.isNil()) continue;
+                        if (n.val.isNil()) {
+                            m.markDeadKey(n.key);
+                            continue;
+                        }
                         m.markValue(n.key);
                         m.markIfValueLike(n.val);
                     }
@@ -1252,7 +1258,10 @@ fn MarkerOf(comptime par: bool) type {
                     for (arr) |v| m.markValue(v);
                     for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
-                        if (n.val.isNil()) continue;
+                        if (n.val.isNil()) {
+                            m.markDeadKey(n.key);
+                            continue;
+                        }
                         m.markIfValueLike(n.key);
                         if (m.verifying and isMarkedOrNotCollectable(n.key)) m.markValue(n.val);
                     }
@@ -1265,13 +1274,27 @@ fn MarkerOf(comptime par: bool) type {
                     for (arr) |v| m.markIfValueLike(v);
                     for (0..t.hash_len) |hi| {
                         const n = t.entry(hi);
-                        if (n.val.isNil()) continue;
+                        if (n.val.isNil()) {
+                            m.markDeadKey(n.key);
+                            continue;
+                        }
                         m.markIfValueLike(n.key);
                         m.markIfValueLike(n.val);
                     }
                     if (!m.verifying) m.remember(&s.weak, t);
                 },
             }
+        }
+
+        /// Marks the key of a dead node, one whose value is nil. The node
+        /// keeps its key until the next rehash, so that `next` continues
+        /// from a key removed during a traversal, and every lookup that
+        /// probes past the node compares its key with the one it looks
+        /// for. Strings and arbitrary-precision numbers compare by
+        /// content, so such a key stays alive as long as its node. Any
+        /// other key compares by address alone and is left to die.
+        fn markDeadKey(m: *M, k: Value) void {
+            if (isValueLike(k)) m.markValue(k);
         }
 
         /// Strings and arbitrary-precision numbers are values, not
