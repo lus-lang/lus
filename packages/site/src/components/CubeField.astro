@@ -214,6 +214,16 @@ if (fallen) {
 const [gx, gy] = point(source.i + 0.5, source.j + 0.5, source.k + 0.5)
 const uid = `cf${cols}x${rows}s${seed}${signal}`
 const lightOn = glow && signal !== "none"
+
+// consecutive shapes of one linked bar (a bar and its lime cap) share one
+// link, every other shape stands alone
+const runs: { href?: string; shapes: Shape[] }[] = []
+for (const f of shapes) {
+  const href = links && f.row === "r0" ? links[f.j] : undefined
+  const last = runs[runs.length - 1]
+  if (href && last?.href === href) last.shapes.push(f)
+  else runs.push({ href, shapes: [f] })
+}
 ---
 
 <svg
@@ -288,28 +298,27 @@ const lightOn = glow && signal !== "none"
     )
   }
   {
-    shapes.map((f) => {
-      const shape = (
-      <g
-        class:list={[f.row, { lime: f.lime }]}
-        style={f.lit > 0 ? `--lit:${f.lit.toFixed(2)}` : undefined}
-        data-j={heights ? f.j : undefined}
-      >
-        <polygon points={f.front} />
-        <polygon points={f.side} />
-        <polygon points={f.top} />
-        {f.ticks && <path d={f.ticks} />}
-      </g>
-      )
+    runs.map((run) => {
+      const drawn = run.shapes.map((f) => (
+        <g
+          class:list={[f.row, { lime: f.lime }]}
+          style={f.lit > 0 ? `--lit:${f.lit.toFixed(2)}` : undefined}
+          data-j={heights ? f.j : undefined}
+        >
+          <polygon points={f.front} />
+          <polygon points={f.side} />
+          <polygon points={f.top} />
+          {f.ticks && <path d={f.ticks} />}
+        </g>
+      ))
       // the links repeat navigation the page already offers, so they stay
       // out of the tab order like the rest of the drawing
-      const href = links && f.row === "r0" ? links[f.j] : undefined
-      return href ? (
-        <a href={href} tabindex="-1">
-          {shape}
+      return run.href ? (
+        <a href={run.href} tabindex="-1">
+          {drawn}
         </a>
       ) : (
-        shape
+        drawn
       )
     })
   }
