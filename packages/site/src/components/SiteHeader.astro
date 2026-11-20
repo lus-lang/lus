@@ -77,9 +77,21 @@ function isActive(href: string) {
 
     .header-inner {
       @apply max-w-[1240px] mx-auto px-4 md:px-6 h-12 flex items-center gap-4;
+      /* the spine is marked at the twelve columns of the measure, inside
+         the page gutters */
+      background:
+        repeating-linear-gradient(
+            to right,
+            var(--color-rule) 0 1px,
+            transparent 1px calc((100% - 3rem) / 12)
+          )
+          1.5rem bottom / calc(100% - 3rem) 5px no-repeat,
+        linear-gradient(var(--color-rule), var(--color-rule)) calc(100% - 1.5rem)
+          bottom / 1px 5px no-repeat;
 
       &.wide {
         @apply max-w-none px-4;
+        background: none;
       }
     }
 
@@ -105,6 +117,13 @@ function isActive(href: string) {
           @apply bg-solid text-on-solid hover:bg-solid hover:text-on-solid;
         }
       }
+    }
+  }
+
+  /* phones use a narrower gutter, so the spine goes unmarked there */
+  @media (max-width: 767px) {
+    .site-header .header-inner {
+      background: none;
     }
   }
 
