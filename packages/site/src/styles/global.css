@@ -552,6 +552,14 @@ table {
 
 /* unstable channel: red mirror */
 html.unstable {
+  --color-rule: var(--color-ink-red);
+
+  /* cube fields take the red ink, the lime cube stays the signal */
+  .cube-field {
+    --color-ink: var(--color-ink-red);
+    --color-tint: var(--color-tint-red);
+  }
+
   body {
     @apply text-ink-red;
   }
