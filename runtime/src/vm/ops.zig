@@ -108,15 +108,16 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         else => {},
     }
     const hlen = t.hash.len;
+    const alen = t.asize;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
-    if (t.hash.len != hlen) learnTableSize(l.g, t);
+    if (t.hash.len != hlen or t.asize != alen) learnTableSize(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
 
-/// Size feedback for constructors. When the hash part of the table that
-/// the last `newtable` instruction made grows, before a collection ends,
-/// the instruction learns to make room for the keys the table holds now,
-/// up to `max_learned`. Records that a program builds field by field,
+/// Size feedback for constructors. When the array or hash part of the
+/// table that the last `newtable` instruction made grows, before a
+/// collection ends, the instruction learns to make room for what the
+/// table holds now, up to `max_learned` slots in each part. Records that a program builds field by field,
 /// such as `{}` followed by stores or `{key = k}` followed by more
 /// fields, then get their final hash part at construction. The C operand
 /// of `newtable` is only a size hint, so every tier stays correct with
@@ -126,12 +127,18 @@ noinline fn learnTableSize(g: *state.Global, t: *Table) void {
     const site = &g.new_table;
     if (site.table != t or site.cycle != g.cycles) return;
     const used = t.hash_used;
-    if (used > state.NewTableSite.max_learned) {
+    const asize = t.asize;
+    if (used > state.NewTableSite.max_learned or asize > state.NewTableSite.max_learned) {
         site.table = null;
         return;
     }
+    // An array part grows to a power of two, and the hint takes the
+    // elements the part holds, so a list of three gets three slots.
+    var elems: usize = 0;
+    for (0..asize) |i| elems += @intFromBool(!table.arrayIsNil(t, i));
     const ins = site.ins.?;
     if (used > opc.c(ins.*)) opc.setC(ins, @intCast(used));
+    if (elems > opc.b(ins.*)) opc.setB(ins, @intCast(elems));
 }
 
 // ---------------------------------------------------------------------
