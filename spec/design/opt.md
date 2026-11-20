@@ -32,7 +32,7 @@ A function is a graph of blocks, and a block is a list of instructions (`ir.zig`
 
 The builder (`lower.zig`) walks the control flow graph in reverse postorder. For every register it knows either a typed value, or that the frame slot holds the register, possibly with a known type. Reading a register whose type is only predicted emits a guard on the slot and a load. Where control flow joins, registers that hold values of one type get a phi, and registers that disagree go back to their slots. A loop header creates its phis from the state in front of the loop, and the edge that closes the loop completes them. When the loop changes the type of a register, the builder starts over with that register kept in its slot across the loop.
 
-A type that was known before a baseline template is a prediction after it. The template may call anything, and the debug library can assign to a local of a suspended frame.
+A type that was known before a baseline template is a prediction after it. The template may call anything, and the debug library can assign to a local of a suspended frame. A register that the template writes is predicted by what its slot held when the build started, which inside a loop is what the same template wrote on the iteration before. The instructions that use such a register, an array access on the result of a lookup or arithmetic on the result of a call, then compile typed. In the aggregation loop of the csv program the baseline templates went from 57 to 33, and the loop from 0.146 s to 0.140 s.
 
 ### Snapshots
 

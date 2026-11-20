@@ -208,6 +208,9 @@ const class_count = @typeInfo(ir.Class).@"enum".field_values.len;
 pub const Lower = struct {
     arena: std.mem.Allocator,
     l: *Thread,
+    /// The base of the running frame of the root function, whose slots
+    /// hold what its registers held when the build started.
+    root_base: ?u32 = null,
     f: *ir.Func,
     persist: *Persist,
     fr: *Frame,
@@ -296,6 +299,7 @@ pub const Lower = struct {
             for (fr.regs, 0..) |*r, i| {
                 r.* = .{ .sample = Sample.of(l.stack[live_fr.base + i]) };
             }
+            b.root_base = live_fr.base;
         }
         try fr.incoming[cfg.entry].append(arena, try b.incomingOf(entry));
         try b.buildFrame();
@@ -1324,7 +1328,14 @@ pub const Lower = struct {
         var after = try b.arena.dupe(Reg, fr.regs);
         for (after, 0..) |*reg, i| {
             const r: u32 = @intCast(i);
-            if (e.writes.has(r) or b.captured(r) or !reg.in_slot) {
+            if (e.writes.has(r) and !b.captured(r)) {
+                // What the template writes is predicted by what the
+                // register held when the build started, which in a loop
+                // is the result of the same instruction on the iteration
+                // before. Every use of the prediction is guarded.
+                reg.* = .{};
+                if (b.root_base) |base| reg.sample = Sample.of(b.l.stack[base + r]);
+            } else if (b.captured(r) or !reg.in_slot) {
                 reg.* = .{};
             } else {
                 // The template may run code that assigns to a local of
