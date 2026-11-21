@@ -4,215 +4,144 @@ title: Guide to Lus
 draft: false
 icon: compass
 group: learn
-shortdesc: "The language from its first values to its internals, taught in order."
+shortdesc: "The Lus language, from its first values to the internals of its runtime."
 ---
 
 ## Welcome
 
-This guide teaches the Lus language from the beginning. It is written for readers who have programmed in some other language, and it assumes no knowledge of Lua. The sections are meant to be read in order, because each one uses only what the earlier ones have explained. The guide starts with values, variables, operators, and control flow. It continues with functions, tables, iteration, strings, and errors, then covers the features that build on them, and ends with the standard library, the tools, and the internals of the runtime. The [API reference](/manual/api) lists every function of the standard library with its exact rules.
+Lus is a small language for complete programs: scripts that sort out files and data, command line tools, and network servers. One executable, `lus`, runs a program and also formats, checks, tests, and debugs it.
 
 ### A first program
 
-The program below reads an order written in JSON, computes its total, and prints one sentence.
+Three friends share a dinner bill of 97.29 and want to know what each of them owes.
 
 ```lus
-local order = fromjson('{"item": "tea", "price": 4.5, "quantity": 3}')
-local total = order.price * order.quantity
+local bill = 97.29
+local people = 3
 
-print(`$(order.quantity) x $(order.item) costs $total`)   --> 3 x tea costs 13.5
+print(`Each of us pays $(bill / people)`)   --> Each of us pays 32.43
 ```
 
-The first line calls `fromjson`, a built-in function that turns JSON text into a Lus value, and stores the result in a variable named `order`. The second line multiplies two fields of the order. The last line builds a string between backticks, where `$total` and each `$( )` are replaced by a value, and `print` writes that string to the terminal. Every part of this program is explained in a later section.
+`local bill = 97.29` creates a variable named `bill` that holds 97.29, and the next line does the same for `people`. The text between backticks is a template, and `$( )` places the result of a calculation inside it. `print` writes the finished sentence to the terminal.
 
-To run the program, save it in a file named `order.lus` and pass the file to the `lus` command. [Getting started](/manual/getting-started) describes how to install the command.
+To run the program, save it as `bill.lus` and pass the file to `lus`. [Getting started](/manual/getting-started) shows how to install it.
 
 ```sh
-lus order.lus
+lus bill.lus
 ```
 
-### How to read the examples
+### Comments
 
-A _comment_ is text that Lus ignores. A comment starts with `--` and runs to the end of the line. A comment that starts with `--[[` runs until the next `]]`, which may be several lines later.
+Lus ignores everything from `--` to the end of the line, which leaves room for notes to the people who read the code. A comment that starts with `--[[` runs until the next `]]`, across as many lines as it needs.
 
 ```lus
--- This whole line is a comment.
-print("hello")   -- A comment can follow a statement.
+-- Prices include tax.
+local price = 4.50   -- per cup
 
 --[[
-    This comment covers
-    several lines.
+    The shop closes early on Sundays,
+    so the Sunday totals cover fewer hours.
 ]]
 ```
 
-In the examples of this guide, a comment that starts with `-->` shows what its line prints. When `print` receives several values it separates them with a tab, which the examples show as two spaces.
+In the examples that follow, a comment that starts with `-->` shows what its line prints. When `print` receives several values, it separates them with a tab, shown as two spaces.
 
 ```lus
-print(1 + 1)            --> 2
-print("one", "two")     --> one  two
+print(2 + 2)            --> 4
+print("tea", 4.50)      --> tea  4.5
 ```
-
-Statements need no terminator. Lus ignores indentation, and a long statement may continue over several lines.
 
 ## Values and types
 
-A _value_ is a piece of data that a program works with, such as the number `42`, the string `"tea"`, or `true`. Every value has a type, and the built-in function `type` returns the name of that type as a string.
+Everything a program works with is a _value_: the number `97.29`, the text `"tea"`, the answer `true`. Each value has a _type_, and the type decides what can be done with it. Numbers can be added, text can be searched, and asking whether `"tea"` is greater than `true` is a mistake that Lus reports with an error when the line runs.
 
-```lus
-print(type(42))        --> number
-print(type("tea"))     --> string
-print(type(true))      --> boolean
-print(type(nil))       --> nil
-```
-
-The type belongs to the value. A variable is a name for a value, and the same variable can name a number at one moment and a string at the next. Lus checks types when an operation runs, so adding a number to `true` raises an error at the moment the addition happens. An _error_ stops the program with a message unless the program catches it, as [Errors](/manual/guide#errors) describes.
-
-This section describes the four simplest types: `nil`, booleans, numbers, and strings. The last subsection names the other types and the sections that describe them.
+The type belongs to the value, not to the name. A name can hold a number now and text later.
 
 ### Nil
 
-The value `nil` means that there is no value. A variable that was never given a value holds `nil`, and a function that finds nothing to return usually returns `nil`.
+`nil` stands for the absence of a value. A name that was never given a value holds `nil`, and many functions return `nil` to say that they found nothing. `tonumber` reads a number out of text, for example from what a person typed, and gives back `nil` when the text is not a number.
 
 ```lus
-local answer
-print(answer)             --> nil
-print(tonumber("tea"))    --> nil
+print(tonumber("12"))       --> 12
+print(tonumber("twelve"))   --> nil
 ```
-
-The built-in function `tonumber` converts a string to a number, and it returns `nil` here because `"tea"` does not spell a number.
 
 ### Booleans
 
-The two boolean values are `true` and `false`. A comparison such as `1 < 2` produces a boolean, and statements such as `if` test one.
-
-A condition accepts a value of any type. The values `nil` and `false` are _falsy_, which means that they count as false in a condition. Every other value is _truthy_ and counts as true. The number `0` and the empty string `""` are truthy, which differs from several other languages. The example uses the `if` statement, which runs its body only when its condition counts as true and which [Control flow](#control-flow) describes.
+`true` and `false` are the answers to yes-or-no questions. A comparison produces one.
 
 ```lus
-if 0 then
-    print("0 is truthy")   --> 0 is truthy
-end
+local age = 17
+print(age >= 18)    --> false
 ```
+
+Wherever Lus expects a yes-or-no answer, it accepts any value. `false` and `nil` count as no and are called _falsy_. Every other value counts as yes and is called _truthy_, including `0` and the empty string `""`.
 
 ### Numbers
 
-All numbers have the type `number`. Within that type a number has one of four _subtypes_, and each subtype serves a different need.
+Most programs need only two kinds of numbers: whole numbers for counting, written `42`, and numbers with a fractional part for measuring, written `1.5`. Lus calls them _integers_ and _floats_. Two more kinds cover the cases where those fall short.
 
-| Subtype | What it is for | How to write it |
-| --- | --- | --- |
-| integer | Counts, positions, and identifiers. An integer is a 64-bit whole number. | `42`, `1_000_000`, `0xff` |
-| float | Measurements and scientific computation. A float is a 64-bit number with a fractional part, and it stores some fractions, such as 0.1, approximately. | `1.5`, `3.0`, `1e9` |
-| bigint | Whole numbers that are too large for an integer. A bigint has as many digits as it needs. | `42n`, `0xffn` |
-| decimal | Money and other quantities that must keep their decimal digits. A decimal is a number that keeps its exact fractional part. | `19.90d`, `3d` |
-
-A number written with only digits is an integer. A decimal point or an exponent makes it a float, so `3` is an integer and `3.0` and `3e0` are floats. The prefix `0x` writes an integer in hexadecimal. An underscore between two digits separates groups of digits and does not change the value. The suffix `n` makes a whole number a bigint, and the suffix `d` makes a number a decimal.
-
-The function [`math.type`](/manual/api#math.type) returns the subtype of a number.
+A float stores most fractions approximately, which is right for measurements and wrong for money. A _decimal_, written with a `d` after it, keeps its digits exactly as written.
 
 ```lus
-print(math.type(42))        --> integer
-print(math.type(42.0))      --> float
-print(math.type(42n))       --> bigint
-print(math.type(42.00d))    --> decimal
+print(0.1 + 0.2)      --> 0.30000000000000004
+print(0.1d + 0.2d)    --> 0.3
+print(19.90d)         --> 19.90
 ```
 
-A float always prints with a decimal point or an exponent, which makes it distinguishable from an integer. A decimal prints with the digits it was written with.
+An integer has a limit, around nine quintillion, and a calculation that passes it wraps around to a wrong answer. A _bigint_, written with an `n` after it, grows as large as the number needs. The product of the numbers from 1 to 25 shows the difference.
 
 ```lus
-print(1_000_000)    --> 1000000
-print(0xff)         --> 255
-print(1e3)          --> 1000.0
-print(123456789012345678901234567890n)   --> 123456789012345678901234567890
-print(19.90d)       --> 19.90
+print(15511210043330985984000000n)   --> 15511210043330985984000000
 ```
 
-Integers and floats are the fastest subtypes and fit most programs. A bigint is the right choice when a result can exceed the integer range, which ends at 9223372036854775807. A decimal is the right choice when the program must reproduce decimal arithmetic as a person would do it on paper, for example with prices. [Arithmetic](#arithmetic) describes how each subtype calculates and what happens when two subtypes meet in one operation.
-
-Several functions convert a number from one subtype to another.
-
-- [`math.tointeger(x)`](/manual/api#math.tointeger) returns `x` as an integer if `x` is a whole number that fits in an integer. Otherwise it returns `nil`.
-- [`math.floor(x)`](/manual/api#math.floor) and [`math.ceil(x)`](/manual/api#math.ceil) round a float down or up to an integer.
-- [`bigint(x)`](/manual/api#bigint) converts a whole number to a bigint.
-- [`decimal(x)`](/manual/api#decimal) converts a number to a decimal. A float converts to the shortest decimal that names it, so `decimal(0.1)` is `0.1d`.
-- [`tonumber(x)`](/manual/api#tonumber) converts a bigint or a decimal to the nearest float.
-
-```lus
-print(math.tointeger(3.0))    --> 3
-print(math.tointeger(3.5))    --> nil
-print(math.floor(3.7))        --> 3
-print(bigint(42))             --> 42
-print(decimal(0.1))           --> 0.1
-print(tonumber(2.50d))        --> 2.5
-```
+A number may contain underscores to make it easier to read, so `1_000_000` is one million. A float always prints with a decimal point, as in `3.0`, so it never looks like an integer. All four kinds share the type `number`. [Arithmetic](#arithmetic) shows how they combine.
 
 ### Strings
 
-A _string_ is a piece of text: a sequence of characters. A character is one Unicode code point, so `"héllo"` has five characters, whatever number of bytes its encoding takes. A string never changes after it is created. Every operation that seems to modify a string produces a new one.
-
-A string literal is written between double quotes or between single quotes. The two forms mean the same, which lets a string contain the other kind of quote.
+A _string_ is text. It is written between double quotes or single quotes, and either kind can hold the other.
 
 ```lus
 print("It's ready")          --> It's ready
 print('She said "now"')      --> She said "now"
 ```
 
-Inside quotes, a backslash starts an _escape sequence_ that stands for a character that is hard to type or that would end the string. The table lists the most used ones.
-
-| Escape | Character |
-| --- | --- |
-| `\n` | line break |
-| `\t` | tab |
-| `\\` | backslash |
-| `\"` and `\'` | double quote and single quote |
-| `\u{E9}` | the character with that hexadecimal Unicode number, here `é` |
+A backslash inside the quotes writes a character that is hard to type: `\n` for a line break, `\t` for a tab, `\\` for a backslash, and `\u{E9}` for the character with that Unicode number, here `é`.
 
 ```lus
-print("one\ntwo")
---> one
---> two
-print("caf\u{E9}")    --> café
+print("Name:\tAda\nRole:\tEngineer")
+--> Name:  Ada
+--> Role:  Engineer
 ```
 
-A _long string_ holds text that spans several lines or contains many quotes and backslashes. It starts with `[[` and ends with `]]`, and everything between them is taken as written, with no escape sequences. A line break directly after the opening `[[` is left out. Text that itself contains `]]` goes between `[=[` and `]=]`, with any number of equals signs as long as both ends match.
+Text that spans several lines, such as the help of a command line tool, goes between `[[` and `]]` and is kept exactly as written.
 
 ```lus
 local help = [[
-Usage: greet NAME
-A backslash such as \n stays as written.]]
+Usage: split TOTAL PEOPLE
+Divides a bill evenly.]]
 print(help)
---> Usage: greet NAME
---> A backslash such as \n stays as written.
-
-print([=[The pair ]] is ordinary text here.]=])   --> The pair ]] is ordinary text here.
+--> Usage: split TOTAL PEOPLE
+--> Divides a bill evenly.
 ```
 
-An _interpolated string_ builds text out of values, which is the common way to produce messages. It is written between backticks. Inside it, `$name` is replaced by the value of the variable `name`, and `$(expression)` is replaced by the value of any expression. An interpolated string may span several lines, and `\$` writes a dollar sign.
+Most strings in real programs are messages built from values, and backticks build them. `$name` inserts a variable, and `$( )` inserts the result of any expression.
 
 ```lus
 local name = "Ada"
 local unread = 3
 
-print(`Hello, $name!`)                       --> Hello, Ada!
-print(`You have $(unread + 1) messages.`)    --> You have 4 messages.
-print(`The price is \$5.`)                   --> The price is $5.
+print(`Hello, $name! You have $unread new messages.`)
+--> Hello, Ada! You have 3 new messages.
+print(`That is $(unread * 2) since yesterday.`)
+--> That is 6 since yesterday.
 ```
 
-A `$name` reads one variable name and stops there. Anything longer than a single name goes inside `$( )`.
-
-Each interpolated value is converted to text the way the built-in function `tostring` converts it. `tostring` turns any value into a string. In the other direction, `tonumber` reads a number from a string and returns `nil` if the string does not spell one, which is how a program checks text that a person typed.
-
-```lus
-print(tostring(42) == "42")    --> true
-print(tonumber("42") + 1)      --> 43
-print(tonumber("0x10"))        --> 16
-print(tonumber("forty"))       --> nil
-```
-
-[Strings and patterns](/manual/guide#strings-and-patterns) describes the functions that search, cut, and format strings.
+A string never changes once it exists. Functions that seem to change one, such as making it upper case, return a new string. [Strings and patterns](#strings-and-patterns) covers them.
 
 ### Other types
 
-The remaining types each have their own section. A _table_ is the one data structure of Lus, and it serves as array, dictionary, and record, as [Tables](/manual/guide#tables) describes. A _function_ is a piece of code that can be called, and it is a value like any other, as [Functions](/manual/guide#functions) describes.
-
-Four more types appear later in the guide. An [enum](/manual/guide#enums) is a fixed set of named choices. A [vector](/manual/text) is a buffer of bytes for binary data. A [coroutine](/manual/guide#coroutines) is a function call that can pause and continue later, and `type` names it `"thread"`. A [query](/manual/guide#queries) describes a search over lists of records. The last type, `userdata`, covers values that come from outside the language, such as an open file.
+A _table_ holds many values at once, as a list or as named fields, and is the subject of [Tables](#tables). A _function_ is code that can be called, as `print` and `tonumber` are, and [Functions](#functions) shows how to write one. The remaining types, enums, vectors, coroutines, queries, and userdata, each come with the feature that uses them.
 
 ## Variables
 
@@ -605,11 +534,11 @@ print(a ~= b)           --> true
 
 ## Control flow
 
-Statements run one after another, from the top of a file to the bottom. The statements in this section change that order. They run a block only under a condition, or they repeat a block.
+Statements run one after another, from the top of a file to the bottom. The statements below run a block only under a condition, or repeat it.
 
 ### `if` statements
 
-The `if` statement runs a block only when a condition is truthy. An `elseif` branch tests another condition when the ones before it failed, and the `else` branch runs when every condition failed. Both are optional, and a statement may have any number of `elseif` branches.
+The `if` statement runs a block only when its condition is [truthy](#booleans). An `elseif` branch tests another condition when the ones before it failed, and the `else` branch runs when every condition failed. Both are optional, and a statement may have any number of `elseif` branches.
 
 ```lus
 local temperature = 31
