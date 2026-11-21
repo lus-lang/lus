@@ -87,7 +87,7 @@ git push origin main 1.4.0@2.0
 
 ### Owner signatures
 
-An account registers public keys: SSH keys of type `ssh-ed25519`, or OpenPGP keys. Git signs commits and tags with either kind. Exactly two things must be signed by a key of the owner of the package: the tip commit of `main` that a push publishes, and each release tag. For each push, the server writes the owner's keys to an allowed signers file and a temporary keyring, then runs `git verify-commit` or `git verify-tag` for each ref it publishes. A signature by any other key, by a revoked key, or by a key registered after the signature was made refuses the ref.
+An account registers public keys: SSH keys of type `ssh-ed25519`, or OpenPGP public keys in ASCII armor. Git signs commits and tags with either kind. Exactly two things must be signed by a key of the owner of the package: the tip commit of `main` that a push publishes, and each release tag. For each push, the server writes the owner's SSH keys to an allowed signers file and imports the owner's OpenPGP keys into a keyring of their own in a temporary directory. It then runs `git verify-commit` or `git verify-tag` for each ref it publishes, which uses `ssh-keygen` or `gpg` as the signature requires. The server implements no signature format itself. An OpenPGP key that the keyring holds counts whatever its trust level in the web of trust, because the registration of the key is the trust. A signature by any other key, by a revoked key, or by a key registered after the signature was made refuses the ref.
 
 A commit that a web interface creates, such as a merge on GitHub, carries the signature of that service. Its key belongs to no account, so such a commit is refused as the tip of `main`. The owner publishes by pushing a signed commit on top of it, which `atmos publish` does.
 
@@ -187,7 +187,7 @@ return dates
 
 The header annotations are the following. `@package`, `@version`, `@lus`, and `@license` are required.
 
-- `@package NAME` names the package. It must equal the name of the main module file and the name of the repository on atmosphere, `git.atmosp.here/LINE/NAME.git`. An upstream repository may have any name, such as `lus-lang/atmos-NAME` in the [first deployment](#first-deployment).
+- `@package NAME` names the package. It must equal the name of the main module file and the name of the repository on atmosphere, `git.atmosp.here/LINE/NAME.git`. The repository of an official package on GitHub is named after the package by a fixed mapping: the prefix `atmos-`, then the package name with every `_` written as `-`. The package `html_template` therefore lives in `lus-lang/atmos-html-template`, and the server derives the package name from such a repository by removing the prefix and writing every `-` as `_`. Any other upstream repository may have any name.
 - `@version VERSION` gives the package version. At a tagged commit it must equal the version in the release tag.
 - `@lus LINE` gives the line. At a tagged commit it must equal the line in the release tag. `@lus 2.0.3` also sets `lus_min` to `2.0.3`.
 - `@license SPDX` gives the license as an SPDX identifier, such as `0BSD` or `MIT`.
@@ -297,7 +297,7 @@ The server keeps its state in one SQLite database. Its tables are `accounts`, `k
 
 ## First deployment
 
-The first deployment serves only the packages that the Lus project maintains. Each of them lives in a repository `lus-lang/atmos-NAME` on GitHub, which the Lus maintainers create and push to. The registry records that repository as the package's upstream in [redirect mode](#mirrors-and-redirects). The server fetches it when GitHub sends a push webhook and every hour, validates the fetched refs exactly as it validates a push, and stores the bundles, documents, and documentation of the releases that pass on its own disk. A clone of `git.atmosp.here/2.0/NAME.git` receives a redirect to GitHub. While the repositories are private, the server fetches them with a read-only token of the `lus-lang` organization.
+The first deployment serves only the packages that the Lus project maintains. Each of them lives in a repository `lus-lang/atmos-NAME` on GitHub, which the Lus maintainers create and push to. The registry records that repository as the package's upstream in [redirect mode](#mirrors-and-redirects). The server fetches it when GitHub sends a push webhook and every hour, validates the fetched refs exactly as it validates a push, and stores the bundles, documents, and documentation of the releases that pass on its own disk. A clone of `git.atmosp.here/2.0/NAME.git` receives a redirect to GitHub. The repositories are public, so the server fetches them without credentials. The optional setting `upstream_token` authenticates those fetches when the rate limit of GitHub requires it.
 
 Packages by other authors arrive when the registry opens accounts. They live on `git.atmosp.here` as [Publishing with git](#publishing-with-git) describes. The release documents, the documentation, and every address stay the same.
 
