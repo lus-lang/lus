@@ -1240,12 +1240,6 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             }
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
-        .rangeprep => {
-            // A loop over the builtin range with plain numbers skips the
-            // JMP to the generic copy and takes the FORPREP after it.
-            if (rangeArgs(l, c.bp + opc.a(ins))) pc += 1;
-            continue :sw try fetch(l, &c, &pc, &ins, hooked);
-        },
 
         .setlist => {
             const a = opc.a(ins);
@@ -2433,38 +2427,6 @@ fn forValue(l: *Thread, v: Value, what: []const u8) Error!Value {
         .bigint, .decimal => v,
         else => l.raiseFmt("'for' {s} value must be a number", .{what}),
     };
-}
-
-fn isBuiltinRange(l: *Thread, v: Value) bool {
-    return v.tag == .native and v.address() == l.g.range_native;
-}
-
-/// Writes the start, limit and step of `range(a [, b [, step]])`, whose
-/// arguments are at r+1..r+3, to the numeric loop layout at r+4..r+6 when
-/// r holds the builtin `range` and the arguments are integers or floats,
-/// with a step that is not zero or NaN. Returns false and changes nothing
-/// otherwise, and the generic loop then calls whatever r holds, which
-/// raises the errors of `range` itself.
-pub fn rangeArgs(l: *Thread, r: [*]Value) bool {
-    if (!isBuiltinRange(l, r[0])) return false;
-    const plain = struct {
-        fn f(v: Value) bool {
-            return v.tag == .integer or v.tag == .float;
-        }
-    }.f;
-    if (!plain(r[1])) return false;
-    if (!r[2].isNil() and !plain(r[2])) return false;
-    const step = if (r[3].isNil()) Value.int(1) else r[3];
-    if (!plain(step)) return false;
-    switch (step.tag) {
-        .integer => if (step.asInt() == 0) return false,
-        else => if (!(step.asFloat() != 0)) return false,
-    }
-    // range(n) counts from 1 to n.
-    r[4] = if (r[2].isNil()) Value.int(1) else r[1];
-    r[5] = if (r[2].isNil()) r[1] else r[2];
-    r[6] = step;
-    return true;
 }
 
 fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {

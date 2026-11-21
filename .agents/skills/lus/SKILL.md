@@ -59,7 +59,7 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 - `a?.b?.c` stops at the first nil.
 - `if x = find() then ... end` and `while line = read() do ... end` scope a variable to the block.
 - Backtick strings interpolate: `` `$name is $(age + 1)` ``.
-- `continue` skips to the next iteration. `for i in range(1, n) do` counts.
+- `continue` skips to the next iteration of a loop.
 - Strings are text indexed by character. Raw bytes are vectors, and network and binary file reads return vectors. Decode with `vector.tostring`.
 
 ## Testing

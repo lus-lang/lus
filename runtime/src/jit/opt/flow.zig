@@ -148,10 +148,6 @@ pub fn effects(p: *const Proto, pc: u32) Effects {
             e.uses.set(a + 4);
             e.writes.set(a + 2);
         },
-        .rangeprep => {
-            e.uses.setRange(a, a + 4);
-            e.writes.setRange(a + 4, a + 7);
-        },
         .setlist => {
             if (b != 0) e.uses.setRange(a, a + b + 1) else e.uses.setRange(a, top);
         },
@@ -213,11 +209,6 @@ pub fn successors(p: *const Proto, pc: u32, out: *[3]u32) []u32 {
         .tforprep => {
             out[0] = pc + 1 + opc.bx(ins);
             n = 1;
-        },
-        .rangeprep => {
-            out[0] = pc + 1;
-            out[1] = pc + 2;
-            n = 2;
         },
         .ret, .ret0, .ret1, .tailcall => {},
         .setlist => {

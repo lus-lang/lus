@@ -9,7 +9,6 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 ### Language
 
 - Added the `continue` statement, which starts the next iteration of the innermost `for`, `while`, or `repeat` loop. In a `repeat` loop it jumps to the `until` condition. `continue` is now a reserved word.
-- Added the global `range(a, b [, step])` and `range(n)` iterator. A `for` loop that calls `range` directly compiles to the same numeric loop as `for i = a, b, step`.
 - Added bigint and decimal numbers as subtypes of `number`, written with the literal suffixes `n` (`123n`, `0xffn`) and `d` (`1.50d`, `1e-2d`). The virtual machine handles them in every arithmetic, bitwise, and comparison operator, they compare by mathematical value with integers and floats, and they normalize to the same table keys. Mixing a decimal and a float raises an error that asks for an explicit conversion.
 - Added the `bigint` and `decimal` conversion functions. `math.type` reports `"bigint"` and `"decimal"`, and `math.tointeger` accepts every subtype.
 - Added the `{ exact = true }` option to `fromjson`, which decodes wide integers as bigints and fractional numbers as decimals. `tojson` writes both with their exact digits.

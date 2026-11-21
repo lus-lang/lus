@@ -25,8 +25,9 @@ const Allocator = std.mem.Allocator;
 
 pub const signature = "\x1bLus";
 /// Bumped whenever the instruction set changes. Version 2 added the
-/// immediate comparisons.
-const format_version: u8 = 3;
+/// immediate comparisons, and version 4 renumbered the opcodes after the
+/// generic loop instructions.
+const format_version: u8 = 4;
 
 const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration };
 

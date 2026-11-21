@@ -69,9 +69,9 @@ if first = items[1] then
     assert(first == "a")
 end
 
--- continue and range
+-- continue
 local total = 0
-for i in range(1, 10) do
+for i = 1, 10 do
     if i % 2 == 0 then continue end
     total = total + i
 end

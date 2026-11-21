@@ -332,9 +332,6 @@ pub const Global = struct {
     /// generic `for` runs inline over a plain table.
     iter_next: ?NativeFn = null,
     iter_ipairs: ?NativeFn = null,
-    /// The address of the builtin `range` native, which RANGEPREP compares
-    /// with the callee of a `for` loop. Zero until the base library opens.
-    range_native: usize = 0,
     /// The last pattern whose start bytes a search computed, by its text
     /// (`firstSet` in `lib/string.zig`).
     first_set: FirstSetCache = .{},

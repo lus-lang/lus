@@ -98,9 +98,6 @@ pub const Op = enum(u8) {
     tforprep, // generic for: create tbc for closing value, pc += Bx
     tforcall, // R[A+4], ..., R[A+3+C] = R[A](R[A+1], R[A+2])
     tforloop, // if R[A+4] ~= nil then { R[A+2] = R[A+4]; pc -= Bx }
-    rangeprep, // if R[A] is the builtin `range` and R[A+1..A+3] are plain
-    // numbers: R[A+4..A+6] = start, limit, step and pc += 1, past the JMP
-    // to the generic copy of the loop, to the FORPREP A+4
 
     setlist, // R[A][C+i] = R[A+i], 1 <= i <= B (B=0: up to top)
     closure, // R[A] = closure(KPROTO[Bx])

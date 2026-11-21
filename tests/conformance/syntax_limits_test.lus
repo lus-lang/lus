@@ -413,7 +413,6 @@ end
 local loop_bodies_up_to_the_jump_limit_compile_and_run_cases = {
     {"for i = 1, 2", 65534},
     {"for _ in pairs({ 1 })", 65533},
-    {"for i in range(2)", 65533},
 }
 
 local function loop_bodies_up_to_the_jump_limit_compile_and_run_test(head, n)
@@ -423,7 +422,6 @@ end
 local loop_bodies_past_the_jump_limit_are_rejected_cases = {
     {"for i = 1, 2", 65535},
     {"for _ in pairs({ 1 })", 65534},
-    {"for i in range(2)", 65534},
     {"for i = 1, 2", 100000},
 }
 
