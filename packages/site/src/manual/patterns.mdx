@@ -1,0 +1,640 @@
+---
+order: 5.7
+title: "Lua patterns in Lus"
+icon: replace
+group: learn
+shortdesc: "Common Lua idioms set beside the Lus forms that replace them, with the reason for each."
+---
+
+Lua programs share a set of idioms for errors, absent values, strings, loops, copies, and data. Lus has a direct form for most of them. Each section below shows a Lua idiom, says where it strains, and shows the Lus form that takes its place and why it reads or behaves better.
+
+The Lua code appears for comparison and runs only in Lua. [Lus and Lua](/manual/lua) explains the design decision behind each feature, and [Coming from Lua](/manual/adapting) lists what changes when a Lua program moves to Lus. `lus check` reports several of these idioms with a warning that names the Lus form, as [Lua idioms with a Lus form](/manual/tools#lua-idioms-with-a-lus-form) describes.
+
+## Protected calls
+
+Lua catches errors with `pcall`, which calls a function and returns `true` and its results or `false` and the error object. `xpcall` adds a message handler that receives the error object first. Both protect a function call, so protecting an expression means wrapping it in a closure:
+
+```lua
+local ok, port = pcall(function()
+    return tonumber(settings.port) + 1
+end)
+
+local ok, err = xpcall(load_settings, function(e)
+    return { cause = e, operation = "load settings" }
+end, "app.toml")
+```
+
+The closure costs an allocation each time the line runs, and it moves the code into another function. Inside it, `return` leaves the closure and the `...` of the enclosing function is out of reach, so code that moves into a `pcall` can change meaning. `xpcall` also places the handler between the function and its arguments, away from the call it protects.
+
+Lus protects the expression in place. [`catch`](/manual/guide#error-handling) evaluates the expression after it and returns `true` and every result, or exactly `false` and the error object:
+
+```lus
+local settings = { port = "8080" }
+
+local ok, port = catch tonumber(settings.port) + 1
+print(ok, port)          --> true  8081
+
+local failed, err = catch tonumber(settings.host) + 1
+print(failed, err)       --> false  ...: attempt to perform arithmetic on a nil value
+```
+
+A [catch handler](/manual/guide#catch-handlers) in brackets transforms the error object before `catch` returns it, and it stands next to the expression it protects:
+
+```lus
+local function describe(e)
+    return { cause = e, operation = "load settings" }
+end
+
+local function load_settings(path)
+    error(`cannot read $path`, 0)
+end
+
+local ok, err = catch[describe] load_settings("app.toml")
+print(ok, err.operation, err.cause)   --> false  load settings  cannot read app.toml
+```
+
+The protected expression reads the locals and the `...` of the enclosing function directly, and no closure is allocated. Lus defines neither `pcall` nor `xpcall`, and `lus check` reports each use with the warning `deprecated-pcall`.
+
+## Reading through absent values
+
+Lua reads a field of a value that may be `nil` by guarding each step with `and`:
+
+```lua
+local host = config and config.server and config.server.host or "localhost"
+local name = find_user(id) and find_user(id).name
+```
+
+The guard repeats every prefix, and it grows with the depth of the path. A prefix that is a call runs once for each repetition, so the second line calls `find_user` twice, or needs a temporary local.
+
+The [optional chaining](/manual/guide#optional-chaining) suffix `?` names each optional step once. If the value before `?` is falsy, the rest of the chain is skipped and the chain evaluates to that value. Each prefix runs once:
+
+```lus
+local calls = 0
+local function find_user(id)
+    calls = calls + 1
+    if id == 1 then return { name = "Ada" } end
+end
+
+print(find_user(1)?.name, find_user(2)?.name, calls)   --> Ada  nil  2
+
+local config = { server = {} }
+print(config?.server?.host or "localhost")             --> localhost
+```
+
+The same suffix guards a method call, as in `file?:read("l")`, and a function call, as in `on_done?(result)`. A chain that contains `?` is an expression, so a call made only for its effect keeps the `if` form of Lua or assigns its result. `lus check` reports `and` chains and nested `nil` checks that spell out a chain with the warning `use-optional-chain`.
+
+## Building strings
+
+Lua builds messages with the `..` operator or with `string.format`:
+
+```lua
+local msg = "user " .. name .. " has " .. count .. " items (" .. tostring(active) .. ")"
+local msg = string.format("user %s has %d items (%s)", name, count, tostring(active))
+```
+
+The `..` operator raises an error on `nil` and on booleans, so each such value needs a `tostring` call, and a value that is unexpectedly `nil` stops the program at the message that was meant to report it. A format string keeps each value away from the place where it appears, and the specifiers must match the arguments in number and order.
+
+A backtick string interpolates `$name` and `$(expr)` where they appear, and converts every value as `tostring` does, `nil` and booleans included:
+
+```lus
+local name, count, active = "ada", 3, true
+
+print(`user $name has $count items ($active)`)    --> user ada has 3 items (true)
+print(`next: $(count + 1), missing: $(nil)`)      --> next: 4, missing: nil
+print(`total: $(string.format("%.2f", 19.5))`)    --> total: 19.50
+```
+
+[`string.format`](/manual/api#string.format) keeps its place for padding and precision, and its result interpolates like any other value. The guide describes interpolation under [`string`](/manual/guide#string).
+
+## Values tested once
+
+Lua declares a value before the `if` or `while` that tests it, in the enclosing scope:
+
+```lua
+local value = env[name]
+if value then
+    return value, "env"
+end
+local fallback = defaults[name]
+if fallback then
+    return fallback, "default"
+end
+```
+
+Each local outlives its test and stays visible in the rest of the function, and a chain of fallbacks needs a new name and a new `if` for every step. A `while` loop that reads until a value runs out repeats the call that produces the value, once before the loop and once at its end.
+
+An [assignment condition](/manual/guide#if-elseif-else) declares the value in the test. The names live until the `end` of the statement, and an `elseif` may declare names of its own, so a chain of fallbacks stays flat:
+
+```lus
+local env = { PORT = "8080" }
+local defaults = { HOST = "localhost" }
+
+local function lookup(name)
+    if value = env[name] then
+        return value, "env"
+    elseif value = defaults[name] then
+        return value, "default"
+    end
+    return nil, "unset"
+end
+
+print(lookup("PORT"))   --> 8080  env
+print(lookup("HOST"))   --> localhost  default
+```
+
+The same form in a [`while`](/manual/guide#while) condition makes the call once per iteration:
+
+```lus
+local queue = { "first", "second" }
+while job = table.remove(queue, 1) do
+    print(job)          --> first, then second
+end
+```
+
+`lus check` reports a local that exists only for the test of the next `if` with the warning `use-if-assign`.
+
+## Skipping an iteration
+
+Lua 5.2 and later skip the rest of a loop body with `goto` and a label at its end:
+
+```lua
+for _, line in ipairs(lines) do
+    if line == "" then goto continue end
+    if line:sub(1, 1) == "#" then goto continue end
+    process(line)
+    ::continue::
+end
+```
+
+Every loop that skips carries a label at the end of its body. A label may not repeat a visible label of the same name, so a loop nested inside another that also skips needs a second label name.
+
+[`continue`](/manual/guide#break-continue-and-goto) skips to the next iteration of the innermost loop, in every kind of loop and at every depth:
+
+```lus
+local lines = { "alpha", "", "# note", "beta" }
+
+for _, line in ipairs(lines) do
+    if line == "" then continue end
+    if line:sub(1, 1) == "#" then continue end
+    print(line)          --> alpha, then beta
+end
+```
+
+In a `repeat` loop, a `continue` that would skip a local that the `until` condition reads is a compile error, so the condition never reads a variable that was not initialized. `continue` is a reserved word, and Lua code that uses it as a label renames the label.
+
+## Counting loops and iterators
+
+Lua counts with the numeric `for`, a statement with its own grammar. A loop that a program wants to store or pass to a function needs a hand-written iterator:
+
+```lua
+local function range(from, to, step)
+    step = step or 1
+    local i = from - step
+    return function()
+        i = i + step
+        if (step > 0 and i <= to) or (step < 0 and i >= to) then
+            return i
+        end
+    end
+end
+```
+
+Each such iterator allocates a closure, makes a call for every value, and handles the direction of the step by hand. A step of zero ends the loop above at once, without an error.
+
+The global function [`range`](/manual/api#range) counts from a start to a limit with an optional step. It returns an iterator function that a generic `for` consumes and that a variable or an argument can hold:
+
+```lus
+for i in range(1, 10, 3) do
+    io.write(i, " ")
+end
+print()                                    --> 1 4 7 10
+
+local function each(fn, ...)
+    for i in ... do fn(i) end
+end
+each(function(i) io.write(i * i, " ") end, range(3))
+print()                                    --> 1 4 9
+
+print(catch range(1, 5, 0))                --> false  ...: bad argument #3 to 'range' (step must not be zero)
+```
+
+The guide describes the loop under [Numeric for](/manual/guide#numeric-for).
+
+## Unpacking fields
+
+Lua copies fields into locals one assignment at a time:
+
+```lua
+local cfg = load_config()
+local host = cfg.host
+local port = cfg.port
+local timeout = cfg.timeout
+local insert, concat = table.insert, table.concat
+```
+
+Each name appears twice, once as the local and once as the field, and a source that is a call needs a temporary so that it runs only once.
+
+[`from` destructuring](/manual/guide#table-destructuring) lists the names once. Each name reads the field of the same name, and the source expression runs once however many names it fills:
+
+```lus
+local function load_config()
+    return { host = "localhost", port = 8080, timeout = 30 }
+end
+
+local host, port, timeout from load_config()
+print(host, port, timeout)       --> localhost  8080  30
+
+local insert, concat from table
+local parts = {}
+insert(parts, "a")
+insert(parts, "b")
+print(concat(parts, "+"))        --> a+b
+```
+
+The form works with `local`, with assignments to existing variables, in `global` declarations, and in conditions. `lus check` reports fields copied one by one into locals of the same names with the warning `use-from`.
+
+## Named constants
+
+Lua represents a fixed set of choices with strings or with a table of numbered constants:
+
+```lua
+local state = "suspended"
+if state == "suspnded" then resume() end
+
+local Status = { ACTIVE = 1, SUSPENDED = 2, CLOSED = 3 }
+if row.flags == Status.SUSPENDED then resume() end
+```
+
+A string choice compares equal to any string with the same text, so a misspelled choice is a different valid string and the test is false without a sign. A numbered constant compares equal to every other number of the same value, including a count or an identifier that happens to share it.
+
+An [`enum`](/manual/guide#enum) declares members that equal only themselves. Members order by their position in the declaration, work as table keys, and give their position to `tonumber`:
+
+```lus
+local Status = enum active, suspended, closed end
+
+local labels = {
+    [Status.active] = "Active",
+    [Status.suspended] = "Suspended",
+    [Status.closed] = "Closed",
+}
+
+local current = Status.suspended
+print(labels[current])                             --> Suspended
+print(current == "suspended", current == 2)        --> false  false
+print(current < Status.closed, tonumber(current))  --> true  2
+```
+
+`tostring` of a member gives an address, so text for display comes from a table keyed by member, as `labels` shows.
+
+## Text and bytes
+
+A Lua string is a sequence of bytes, so `#` and `string.sub` count bytes, and the `utf8` library finds the boundaries of characters:
+
+```lua
+local s = "héllo"
+print(#s)                                -- 6
+print(s:sub(1, 2))                       -- "h" and the first byte of "é"
+print(s:sub(1, utf8.offset(s, 3) - 1))   -- "hé"
+```
+
+Code that handles text calls `utf8.len` and `utf8.offset` at every position, and a position computed in bytes can cut a character in half. The same type also carries binary data, so a function that receives a string cannot tell which of the two it holds.
+
+A Lus string is text, and every string operation counts [characters](/manual/text#strings). Raw bytes live in a [vector](/manual/text#vectors), and binary reads, network reads, and [`string.pack`](/manual/api#string.pack) produce vectors:
+
+```lus
+local s = "héllo wörld"
+print(#s, s:sub(1, 2), s[7, 11])        --> 11  hé  wörld
+print(s:upper(), s:reverse())           --> HéLLO WöRLD  dlröw olléh
+
+local bytes = vector.fromstring(s)
+print(#bytes, vector.get(bytes, 1), vector.get(bytes, 2))  --> 13  195  169
+```
+
+[`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between the two, and the conversion is a visible call with a chosen error mode.
+
+## Copying tables
+
+Lua leaves deep copies to the program, and most projects carry a version of this function:
+
+```lua
+local function deepcopy(t, seen)
+    if type(t) ~= "table" then return t end
+    seen = seen or {}
+    if seen[t] then return seen[t] end
+    local copy = {}
+    seen[t] = copy
+    for k, v in pairs(t) do
+        copy[deepcopy(k, seen)] = deepcopy(v, seen)
+    end
+    return setmetatable(copy, getmetatable(t))
+end
+```
+
+The versions differ in whether they copy keys and metatables, and a version without the `seen` table recurses without end on a table that refers to itself.
+
+[`table.clone`](/manual/api#table.clone) makes a shallow copy, and `table.clone(t, true)` makes a deep copy that reproduces every shared reference and cycle:
+
+```lus
+local defaults = { name = "app", ports = { 80, 443 } }
+defaults.self = defaults
+
+local shallow = table.clone(defaults)
+local deep = table.clone(defaults, true)
+deep.ports[1] = 8080
+
+print(shallow.ports == defaults.ports, defaults.ports[1])  --> true  80
+print(deep.self == deep, deep.ports[1])                    --> true  8080
+```
+
+Both copies keep the metatable of the original. The guide describes copies under [Table cloning](/manual/guide#table-cloning).
+
+## Money and base 10 quantities
+
+Lua holds a fractional amount in a binary float, or scales every amount to integer cents:
+
+```lua
+local total = 0
+for _ = 1, 10 do total = total + 0.10 end
+print(total == 1.0)                    -- false
+print(string.format("%.2f", 2.675))    -- 2.67
+```
+
+A float cannot hold most decimal fractions exactly, so sums drift and rounding at the last digit goes the wrong way for values such as 2.675. Integer cents are exact, but every amount must be scaled at the edges of the program, and a rate such as 8.25 percent needs a scale of its own.
+
+A [decimal](/manual/guide#number), written with the suffix `d`, is an exact base 10 number that keeps the digits it was given. Addition, subtraction, and multiplication are exact:
+
+```lus
+local total = 0d
+for _ = 1, 10 do
+    total = total + 0.10d
+end
+print(total, total == 1)              --> 1.00  true
+
+local price = 19.99d
+print(price * 3, price * 0.0825d)     --> 59.97  1.649175
+print(catch price * 1.5)              --> false  ...: attempt to mix decimal and float in arithmetic
+```
+
+Arithmetic between a decimal and a float raises an error, so the choice between exact and approximate arithmetic stays visible, and [`decimal`](/manual/api#decimal) converts the float side explicitly. [`fromjson`](/manual/api#fromjson) with the option `{ exact = true }` reads prices as decimals, and `tojson` writes them back with the same digits.
+
+## JSON, CSV, and HTTP
+
+Lua reads JSON, CSV, and HTTP through third-party modules:
+
+```lua
+local json = require("dkjson")
+local http = require("socket.http")
+
+local body, code = http.request("https://api.example.com/items")
+local items = json.decode(body)
+
+for field in line:gmatch("[^,]+") do fields[#fields + 1] = field end
+```
+
+Each format is another dependency with its own API, and a module written in C needs a compiler for every platform it runs on. Hand-written parsing has edge cases of its own: the `gmatch` loop above drops empty fields and splits quoted fields that contain a comma.
+
+Lus ships these formats in the standard library. [`fromjson`](/manual/api#fromjson) and [`tojson`](/manual/api#tojson) read and write JSON, [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) read and write CSV as RFC 4180 defines it, and [`string.split`](/manual/api#string.split) keeps empty fields:
+
+```lus
+local data = fromjson('{"name": "Ada", "langs": ["lus", "lua"]}')
+print(data.name, #data.langs)                  --> Ada  2
+print(tojson({ ok = true }))                   --> {"ok":true}
+
+local rows = fromcsv('name,city\nAda,"London, UK"\nLinus,', true)
+print(rows[1].city, rows[2].city == "")        --> London, UK  true
+
+print(#string.split("a,,b", ","), string.trim("  x  "))  --> 3  x
+```
+
+[`network.fetch`](/manual/api#network.fetch) makes HTTP and HTTPS requests and returns the status, the body as a vector, and the headers. The following request reaches a remote host:
+
+```lus nocheck
+pledge("network:http=api.example.com/*")
+
+local status, body = network.fetch("https://api.example.com/v1/items")
+local items = fromjson(vector.tostring(body))
+```
+
+[Data formats](/manual/data) and [Network](/manual/network) describe both libraries in full.
+
+## Waiting for many sockets
+
+A Lua program that talks to many sockets at once uses an event library, and either registers callbacks or polls the sockets with `socket.select`:
+
+```lua
+local uv = require("luv")
+local client = uv.new_tcp()
+client:connect("127.0.0.1", 8080, function(err)
+    client:write("GET / HTTP/1.1\r\n\r\n")
+    client:read_start(function(err, chunk)
+        -- every chunk of the response arrives here
+    end)
+end)
+uv.run()
+```
+
+The logic of one request spreads across nested callbacks, its state lives in upvalues, and an error inside a callback never reaches a `pcall` around the code that started the request. A program that polls instead writes its own scheduler around the sockets.
+
+A [detached coroutine](/manual/concurrency#detached-coroutines) is a coroutine that the runtime resumes by itself. A blocking operation inside one, such as `receive` on a socket, suspends that coroutine while the others run, so each request is sequential code with ordinary loops, `catch`, and to-be-closed variables. The program below serves HTTP in one detached coroutine and makes two requests in two others:
+
+```lus
+pledge("network")
+
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 200, `page $(req.path)`
+end)
+
+local function get(path)
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    sock:send(`GET $path HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`)
+    return vector.tostring(sock:receive("*a")):match("\r\n\r\n(.*)$")
+end
+
+local a = coroutine.detach(coroutine.create(get), "/a")
+local b = coroutine.detach(coroutine.create(get), "/b")
+print(coroutine.resume(a))   --> true  page /a
+print(coroutine.resume(b))   --> true  page /b
+coroutine.close(serving)
+server:close()
+```
+
+`get` is the same function whether a detached coroutine, a plain coroutine, or the main chunk calls it. [`coroutine.resume`](/manual/api#coroutine.resume) on a detached coroutine waits for it to end and returns its results.
+
+## Sandboxing loaded code
+
+Lua limits loaded code through the environment table that `load` receives:
+
+```lua
+local env = { print = print, tonumber = tonumber, io = io }
+local chunk = load(source, "plugin", "t", env)
+chunk()
+```
+
+An environment controls which names the code sees, and every function placed in it brings its full authority. Passing `io` so that a plugin can read its input also lets it overwrite any file the process can write, and any library function that the sandbox calls acts with the same authority.
+
+Lus keeps environment tables and adds [permissions](/manual/permissions), which limit what an operation may do whoever calls it. A coroutine starts with the permissions of its creator, so a function that runs code with less authority creates a coroutine, rejects what the code must not use, and seals the set:
+
+```lus
+pledge("fs", "load")
+io.open("input.txt", "w"):write("42"):close()
+
+local function run_plugin(source)
+    local chunk = load(source, "plugin", "t", { io = io, tonumber = tonumber })
+    local co = coroutine.create(function()
+        pledge("~fs:write", "~load", "seal")
+        return chunk()
+    end)
+    return coroutine.resume(co)
+end
+
+print(run_plugin("return tonumber(io.open('input.txt'):read('a'))"))  --> true  42
+print(run_plugin("return io.open('input.txt', 'w')"))  --> false  plugin:1: permission "fs:write" denied for 'input.txt'
+```
+
+The rejections and the seal last as long as the coroutine, and the caller keeps its own permissions. [Permissions in coroutines](/manual/permissions#permissions-in-coroutines) describes the rule.
+
+## Slicing sequences
+
+Lua copies part of a sequence with `table.unpack` inside a constructor or with `table.move`, and part of a string with `string.sub`:
+
+```lua
+local middle = { table.unpack(list, 2, 4) }
+local tail = table.move(list, 3, #list, 1, {})
+```
+
+`table.unpack` places every element on the stack, so a long range fails with `too many results to unpack`, and `table.move` takes five arguments to express a copy.
+
+A [slice](/manual/guide#slices) `t[i, j]` copies the positions from `i` to `j` of a table, a string, or a vector, and either bound may be left out:
+
+```lus
+local list = { 10, 20, 30, 40, 50 }
+print(table.concat(list[2, 4], " "))   --> 20 30 40
+print(table.concat(list[3, ], " "))    --> 30 40 50
+print(("héllo")[2, 4])                 --> éll
+```
+
+A string slice counts characters and a vector slice counts bytes.
+
+## Computed values
+
+Lua computes a value that needs a few statements with a function that it calls at once:
+
+```lua
+local timeout = (function()
+    local value = tonumber(os.getenv("TIMEOUT"))
+    if value and value > 0 then return value end
+    return 30
+end)()
+```
+
+The function allocates a closure, and its `return` leaves the function, so the pattern cannot return from the enclosing function or break out of an enclosing loop.
+
+A [do expression](/manual/guide#do-expressions) is a block whose `provide` gives its value. Its locals stay inside the block, no closure is created, and a `return` or `break` inside it acts on the enclosing function or loop:
+
+```lus
+local raw = "45"
+local timeout = do
+    local value = tonumber(raw)
+    if value and value > 0 then provide value end
+    provide 30
+end
+print(timeout)   --> 45
+```
+
+## Filtering and sorting records
+
+Lua filters, projects, and orders a list of records with a loop and `table.sort`:
+
+```lua
+local big = {}
+for _, o in ipairs(orders) do
+    if o.total >= 100 then
+        big[#big + 1] = { customer = o.customer, total = o.total }
+    end
+end
+table.sort(big, function(a, b) return a.total > b.total end)
+```
+
+The intent is spread across a loop, a condition, a constructor, and a comparison function, and the same filter against a database is a separate SQL string.
+
+A [query](/manual/guide#queries) states the filter, the projection, and the order in clauses, and the [`query`](/manual/api#query) iterator runs it:
+
+```lus
+local orders = {
+    { customer = "Ada", total = 120 },
+    { customer = "Linus", total = 40 },
+    { customer = "Grace", total = 300 },
+}
+
+local big = @orders as o where o.total >= 100 select o.customer, o.total order by o.total desc
+
+for row in query(big) do
+    print(row.customer, row.total)   --> Grace  300, then Ada  120
+end
+```
+
+The same query over a table of a [SQLite](/manual/sqlite) database runs the comparisons of its `where` clause in SQLite as a parameterized `SELECT`.
+
+## Build switches
+
+Lua programs switch behavior with a global or an environment variable that they test at run time:
+
+```lua
+local DEBUG = os.getenv("APP_DEBUG") ~= nil
+if DEBUG then print("cache size", #cache) end
+```
+
+The test runs every time, and the code behind it stays in the compiled chunk whether or not it can ever run.
+
+The `-F` option of `lus` sets a [compile-time flag](/manual/guide#compile-time-flags) in the readonly `flags` table. An `if` whose condition is exactly `flags.NAME` or `not flags.NAME` is decided while the chunk compiles, and the branch that the flags rule out is discarded:
+
+```lus
+local cache = { 1, 2, 3 }
+if flags.verbose then
+    print("cache size", #cache)   -- compiled only with -Fverbose
+end
+print(flags.verbose)              --> nil
+```
+
+`lus build -F` bakes the flags into a standalone executable.
+
+## Checked assignments
+
+Lua checks the values stored into a variable either at every assignment or through a proxy table whose `__newindex` metamethod validates each store:
+
+```lua
+local settings = setmetatable({}, {
+    __newindex = function(t, k, v)
+        if k == "workers" and v <= 0 then error("workers must be positive") end
+        rawset(t, k, v)
+    end,
+})
+```
+
+The check lives far from the variable, the proxy works only for fields of a table, and a field that already exists bypasses `__newindex`.
+
+A [runtime attribute](/manual/guide#variable-attributes) names a function that runs on the initialization of a local and on every assignment to it in the function that declares it. An error in the function leaves the variable unchanged:
+
+```lus
+local function positive(name, value)
+    if value <= 0 then
+        error(`$name must be positive, got $value`, 0)
+    end
+    return value
+end
+
+local workers <positive> = 4
+print(catch do workers = 0 end)   --> false  workers must be positive, got 0
+print(workers)                    --> 4
+```
+
+The invariant sits at the declaration of the variable it protects.
+
+## Related pages
+
+- [Lus and Lua](/manual/lua) explains why Lus departs from Lua in each of these areas.
+- [Coming from Lua](/manual/adapting) is the migration reference for existing Lua code.
+- [Best practices](/manual/practices) gives guidance for structuring and tuning Lus programs.
+- [Guide to Lus](/manual/guide) is the complete reference for every feature above.

@@ -15,7 +15,7 @@ type Rendered = {
   Content: any | null
 }
 
-const renderedSections: { title: string; id: string; entries: Rendered[] }[] =
+const renderedSections: { title: string; id: string; page?: { href: string; title: string }; entries: Rendered[] }[] =
   []
 for (const section of sections) {
   const entries: Rendered[] = []
@@ -29,7 +29,7 @@ for (const section of sections) {
       entries.push({ data: entry.data, from, Content: null })
     }
   }
-  renderedSections.push({ title: section.title, id: section.id, entries })
+  renderedSections.push({ title: section.title, id: section.id, page: section.page, entries })
 }
 
 function fmtReturns(returns: string | { type: string; name?: string }[]) {
@@ -119,6 +119,13 @@ function haystack(d: any, from: From) {
     @apply space-y-2;
   }
 
+  .api-section-page {
+    @apply text-sm text-ink-3 -mt-1 mb-4;
+    a {
+      @apply underline;
+    }
+  }
+
   .api-section-title {
     @apply font-display text-[26px] leading-tight font-bold tracking-[-0.035em] mt-14 pb-2.5 mb-3 ruled;
   }
@@ -133,6 +140,11 @@ function haystack(d: any, from: From) {
   renderedSections.map((section) => (
     <section class="api-section" id={section.id}>
       <h2 class="api-section-title">{section.title}</h2>
+      {section.page && (
+        <p class="api-section-page">
+          Explained with examples in <a href={section.page.href}>{section.page.title}</a>.
+        </p>
+      )}
       {section.entries.map((entry) => {
         const d = entry.data
         const from = entry.from

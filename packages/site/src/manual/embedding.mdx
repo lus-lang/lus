@@ -115,7 +115,7 @@ The status codes are the following.
 | `LUS_ERRMEM` | The allocator failed. |
 | `LUS_ERRFILE` | A file could not be opened or read. |
 
-A program that detaches coroutines needs the host to run them. `lus_runpending` with a nonzero `wait` runs the detached coroutines until none is left, as the `lus` command does after the main chunk. With `wait` zero it runs the coroutines that are ready and returns, so a host with an event loop of its own calls it whenever it has time. `lus_pending` returns the number of detached coroutines that have not ended.
+A program that detaches coroutines needs the host to run them. [`lus_runpending`](/manual/api/c#lus_runpending) with a nonzero `wait` runs the detached coroutines until none is left, as the `lus` command does after the main chunk. With `wait` zero it runs the coroutines that are ready and returns, so a host with an event loop of its own calls it whenever it has time. [`lus_pending`](/manual/api/c#lus_pending) returns the number of detached coroutines that have not ended.
 
 ## Writing C functions
 

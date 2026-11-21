@@ -34,6 +34,8 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Guide](https://lus.dev/manual/guide.md): The complete language reference.
 - [Lus and Lua](https://lus.dev/manual/lua.md): Where Lus departs from Lua, and why.
 - [Lus and other runtimes](https://lus.dev/manual/runtimes.md): How the design of Lus compares with Bun, Node.js, Python, Ruby, PHP, and LuaJIT, with measurements.
+- [Lua patterns in Lus](https://lus.dev/manual/patterns.md): Common Lua idioms beside the Lus forms that replace them.
+- [Best practices](https://lus.dev/manual/practices.md): File layout, permissions, errors, concurrency, testing, and performance habits.
 - [Catch](https://lus.dev/manual/guide.md#error-handling) and [catch handlers](https://lus.dev/manual/guide.md#catch-handlers): Expression-level error handling.
 - [Optional chaining](https://lus.dev/manual/guide.md#optional-chaining): The `?` suffix operator.
 - [If-assignment](https://lus.dev/manual/guide.md#if-elseif-else) and [while-assignment](https://lus.dev/manual/guide.md#while): Variables scoped to a condition.

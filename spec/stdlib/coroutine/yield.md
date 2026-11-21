@@ -9,6 +9,19 @@ vararg: true
 returns: any
 ---
 
-Suspends the running coroutine. Arguments to `yield` become the extra return values of the `resume` that restarted this coroutine.
+`coroutine.yield(...)` suspends the running coroutine and returns the extra arguments of the `resume` that continues it.
 
-In a coroutine given to `coroutine.detach`, `yield` lets the other detached coroutines run. The runtime resumes the coroutine on its next turn, the arguments are dropped, and `yield` returns no values.
+The arguments of `yield` become the extra results of the [`coroutine.resume`](/manual/api#coroutine.resume) that ran the coroutine, after its leading `true`. When the coroutine is resumed again, `yield` returns the extra arguments of that `resume`.
+
+Yielding from the main thread raises `attempt to yield from outside a coroutine`. Yielding while a native function that does not support yielding is on the stack, such as the comparison function of `table.sort`, raises `attempt to yield across a C-call boundary`.
+
+```lus
+local co = coroutine.create(function()
+    local reply = coroutine.yield("ping")
+    print("got", reply)    --> got  pong
+end)
+print(coroutine.resume(co))           --> true  ping
+print(coroutine.resume(co, "pong"))   --> true
+```
+
+In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yield` lets the other detached coroutines run. The runtime resumes the coroutine on its next turn, the arguments are dropped, and `yield` returns no values. [`coroutine.isyieldable`](/manual/api#coroutine.isyieldable) tells whether a yield is possible.

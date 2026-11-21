@@ -11,4 +11,18 @@ params:
 vararg: true
 ---
 
-Emits a warning by concatenating all arguments (which must be strings) and sending the result to the warning system. Warnings beginning with `"@"` are control messages: `"@on"` enables and `"@off"` disables warnings.
+`warn(msg1, ...)` concatenates its arguments into one message and emits it as a warning, and returns no values.
+
+Each argument must be a string or a number, and any other value raises `bad argument #N to 'warn' (string expected, got TYPE)`. A call with no arguments raises `bad argument #1 to 'warn' (string expected, got no value)`.
+
+Warnings are off when `lus` starts, and the `-W` option turns them on. While they are on, `lus` writes each message to standard error as `Lus warning: MESSAGE`. A single argument that starts with `@` is a control message and is never written. `"@on"` turns warnings on, `"@off"` turns them off, and any other control message is ignored.
+
+```lus
+warn("@on")
+warn("cache size ", 512, " exceeds the limit")
+--> Lus warning: cache size 512 exceeds the limit
+warn("@off")
+warn("this warning is dropped")
+```
+
+An error raised in a `__gc` finalizer is written as a warning of the form `Lus warning: MESSAGE (error in __gc)`, even while warnings are off.

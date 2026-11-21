@@ -15,4 +15,18 @@ params:
 returns: string
 ---
 
-Removes trailing characters from string `s`. If `chars` is not provided, removes whitespace (space, tab, newline, carriage return). Otherwise removes all contiguous characters present in `chars` from the right.
+Returns a copy of `s` with the trailing whitespace removed, or with the trailing characters that belong to the set `chars` removed.
+
+`s` is the string to trim. A number is converted to its textual form first. `chars` is a string whose characters form the set to remove, in any order, and each of them is removed wherever it repeats at the end. It defaults to the ASCII whitespace characters: space, tab, newline, vertical tab, form feed, and carriage return.
+
+The result is a string. When every character of `s` belongs to the set, it is the empty string. An empty `chars` removes nothing.
+
+A `s` that is neither a string nor a number raises `bad argument #1 to 'string.rtrim' (string expected, got nil)` with its type.
+
+```lus
+print("[" .. string.rtrim("  hi \n") .. "]")   --> [  hi]
+print(string.rtrim("hi=-=", "-="))             --> hi
+print(string.rtrim("aéé", "é"))                --> a
+```
+
+`chars` holds whole characters, so it may contain characters outside ASCII. The default set keeps Unicode spaces such as U+00A0. [`string.ltrim`](/manual/api#string.ltrim) trims the start, and [`string.trim`](/manual/api#string.trim) trims both ends.

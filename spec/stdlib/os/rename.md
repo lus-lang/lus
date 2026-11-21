@@ -12,4 +12,4 @@ params:
     type: string
 ---
 
-Removed. Use `fs.move` instead.
+`os.rename` is a Lua function that Lus removed, so `os.rename` is `nil`. [`fs.move`](/manual/api#fs.move) takes its place and moves a file or a directory to a new path.

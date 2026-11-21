@@ -1,0 +1,121 @@
+---
+/*
+** RuntimeTable: one table of the cross-language results for the page
+** Lus and other runtimes, rendered from data/benchmarks.json so the page
+** follows every new run of tests/bench/compare. tools/build-llms.js
+** renders the same tables for the Markdown twin of the page.
+*/
+import results from "../data/benchmarks.json"
+
+interface Props {
+  metric: "time" | "memory" | "http"
+}
+
+interface Cell {
+  ok?: boolean
+  best_s?: number
+  peak_rss_mb?: number
+  rps?: number
+  p50_ms?: number
+  p99_ms?: number
+}
+
+const data = results as unknown as {
+  runtimes: Record<string, { name: string }>
+  programs: Record<string, Record<string, Cell>>
+  http?: Record<string, Cell>
+}
+
+const { metric } = Astro.props
+const columns = ["lus", "bun", "node", "php", "luajit", "python", "ruby"].filter(
+  (id) => data.runtimes[id],
+)
+const name = (id: string) => data.runtimes[id].name
+const servers: Record<string, string> = {
+  lus: "Lus, network.serve",
+  bun: "Bun, Bun.serve",
+  node: "Node.js, http",
+  python: "Python, ThreadingHTTPServer",
+}
+
+const key = metric === "time" ? "best_s" : "peak_rss_mb"
+const fmt = (v: number) => (metric === "time" ? v.toFixed(2) : String(Math.round(v)))
+const programs = Object.keys(data.programs).toSorted()
+const rows = programs.map((program) => {
+  const values = columns.map((id) => {
+    const c = data.programs[program][id]
+    return c && c.ok !== false && typeof c[key] === "number" ? (c[key] as number) : null
+  })
+  const best = Math.min(...values.filter((v): v is number => v !== null))
+  return { program, values, best }
+})
+
+const http = Object.entries(data.http ?? {})
+  .filter(([, c]) => c.ok !== false && typeof c.rps === "number")
+  .toSorted(([, a], [, b]) => (b.rps ?? 0) - (a.rps ?? 0))
+const bestOf = (k: keyof Cell, high: boolean) => {
+  const vs = http.map(([, c]) => c[k] as number)
+  return high ? Math.max(...vs) : Math.min(...vs)
+}
+const httpBest = {
+  rps: bestOf("rps", true),
+  p50: bestOf("p50_ms", false),
+  p99: bestOf("p99_ms", false),
+  mem: bestOf("peak_rss_mb", false),
+}
+const b = (on: boolean, text: string) => (on ? `<strong>${text}</strong>` : text)
+---
+
+<div class="table-wrap" tabindex="0" role="region" aria-label={`${metric} results`}>
+{
+  metric === "http" ? (
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th class="num">Requests per second</th>
+          <th class="num">Median latency</th>
+          <th class="num">99th percentile</th>
+          <th class="num">Peak memory</th>
+        </tr>
+      </thead>
+      <tbody>
+        {http.map(([id, c]) => (
+          <tr>
+            <td>{servers[id] ?? name(id)}</td>
+            <td class="num" set:html={b(c.rps === httpBest.rps, Math.round(c.rps!).toLocaleString("en-US"))} />
+            <td class="num" set:html={b(c.p50_ms === httpBest.p50, `${c.p50_ms!.toFixed(2)} ms`)} />
+            <td class="num" set:html={b(c.p99_ms === httpBest.p99, `${c.p99_ms!.toFixed(2)} ms`)} />
+            <td class="num" set:html={b(c.peak_rss_mb === httpBest.mem, `${c.peak_rss_mb!.toFixed(1)} MB`)} />
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  ) : (
+    <table>
+      <thead>
+        <tr>
+          <th>Program</th>
+          {columns.map((id) => <th class="num">{name(id)}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr>
+            <td>{row.program}</td>
+            {row.values.map((v) => (
+              <td class="num" set:html={v === null ? "n/a" : b(v === row.best, fmt(v))} />
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+</div>
+
+<style>
+  .num {
+    text-align: right;
+  }
+</style>
