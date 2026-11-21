@@ -36,7 +36,7 @@ Bitwise operators accept integers and bigints. On integers they act on 64 bits. 
 
 ## Comparison and equality
 
-All four subtypes compare by mathematical value. `1 == 1.0`, `1 == 1n`, and `1n == 1.00d` are all true. Comparing a decimal with a float compares their exact values, which is well defined even though arithmetic between them is an error. NaN compares unequal to everything.
+All four subtypes compare by mathematical value. `1 == 1.0`, `1 == 1n`, and `1n == 1.00d` are all true. Comparing a decimal with a float compares their exact values, which is well defined even though arithmetic between them is an error. NaN compares unequal to everything. Every NaN prints as `nan`. The sign bit of a NaN depends on the hardware that made it, since x86-64 sets it for `0/0` where arm64 clears it, so the runtime never prints it and a program prints the same text on every platform.
 
 ## Table keys
 

@@ -684,6 +684,10 @@ const Writer = struct {
         }
     }
 
+    /// The largest key of an array that may hold any number of holes. Past
+    /// it, an array must fill at least half of its keys.
+    const sparse_safe = 10;
+
     fn tableValue(w: *Writer, t: *Table) Error!void {
         const l = w.l;
         if (w.onPath(t)) return l.raiseFmt("circular reference detected in table", .{});
@@ -700,9 +704,10 @@ const Writer = struct {
             w.depth -= 1;
             l.g.native_depth -= 1;
         }
-        // Array detection: the key set is exactly 1..n. The first key
-        // that is not a positive integer settles that the table is an
-        // object.
+        // Array detection: every key is a positive integer. The array runs
+        // from 1 to the largest key and writes null in each hole. The
+        // first key that is not a positive integer settles that the table
+        // is an object.
         var count: usize = 0;
         var max: i64 = 0;
         var is_object = false;
@@ -728,11 +733,22 @@ const Writer = struct {
                 break;
             }
         }
-        if (!is_object and max == count) {
+        if (!is_object) {
+            // A largest key far beyond the number of elements would write
+            // mostly nulls, up to billions of them, so such a table raises
+            // an error instead.
+            if (max > sparse_safe and @divFloor(max, 2) > @as(i64, @intCast(count))) {
+                return l.raiseFmt("excessively sparse array (largest key {d} with {d} elements)", .{ max, count });
+            }
             try w.write("[");
             var i: i64 = 1;
             while (i <= max) : (i += 1) {
                 const raw = table.getInt(t, i);
+                if (raw.isNil()) {
+                    if (i > 1) try w.write(",");
+                    try w.write("null");
+                    continue;
+                }
                 const fresh = w.mayRun(raw);
                 var item = (try w.transform(Value.int(i), raw)) orelse Value.nil;
                 if (!serializable(item)) item = .nil;

@@ -87,15 +87,11 @@ const json = target(
     \\    if ok2 then
     \\        local ok3, v2 = catch fromjson(t)
     \\        if not ok3 then fail("tojson output does not parse:", t, v2) end
-    \\        -- An array with a null element has a hole, and an empty object is
-    \\        -- an empty table, so the first round trip may change the text
-    \\        -- (spec/stdlib/base/tojson.md). The second one must not.
+    \\        -- tojson writes null in every hole, so its output parses back to
+    \\        -- a value that formats to the same text. An empty object and a
+    \\        -- trailing null have no key, so v itself may differ from v2.
     \\        local t2 = tojson(v2)
-    \\        if t2 == t then
-    \\            if not same(v, v2) then fail("round trip changed the value of", t) end
-    \\        elseif tojson(fromjson(t2)) ~= t2 then
-    \\            fail("formatting does not settle:", t, t2, tojson(fromjson(t2)))
-    \\        end
+    \\        if t2 ~= t then fail("round trip changed", t, "to", t2) end
     \\    end
     \\    local ok4, pretty = catch tojson(v, { indent = 2 })
     \\    if ok4 and ok2 then
@@ -229,7 +225,11 @@ const strings = target(
     \\if S:sub(1, j) .. S:sub(j + 1) ~= S then fail("sub does not split at", j) end
     \\if S:sub(i, j) ~= S[i, j] and i >= 1 and j >= i then fail("slice and sub differ at", i, j) end
     \\if #S:upper() ~= n or #S:lower() ~= n and false then fail("case changed the length") end
-    \\if S:reverse():reverse() ~= S then fail("reverse is not an involution") end
+    \\-- Reversing puts a lone trail surrogate before a lone lead surrogate
+    \\-- into the order that joins them, so only text without lone
+    \\-- surrogates reverses back to itself.
+    \\if #S:reverse() > n then fail("reverse made the string longer") end
+    \\if utf8.len(S) and S:reverse():reverse() ~= S then fail("reverse is not an involution") end
     \\if S:rep(3, A) ~= S .. A .. S .. A .. S then fail("rep with a separator is wrong") end
     \\if vector.tostring(vector.fromstring(S)) ~= S then fail("vector round trip changed the string") end
     \\catch utf8.len(S) catch utf8.offset(S, i) catch utf8.codepoint(S, 1, -1)

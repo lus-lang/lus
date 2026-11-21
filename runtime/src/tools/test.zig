@@ -956,8 +956,12 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
     var ok = api.pcall(l, nargs, 0);
     var err: Value = if (ok) .nil else l.stack[l.top - 1];
     // A test ends when the coroutines it detached have ended. One that
-    // failed with nothing left to collect its error fails the test.
-    if (!api.runPending(l, true) and ok) {
+    // failed with nothing left to collect its error fails the test. A
+    // test that already failed closes the coroutines it left, which may
+    // wait for an event that its failure kept from happening.
+    if (!ok) {
+        api.closePending(l);
+    } else if (!api.runPending(l, true)) {
         ok = false;
         err = l.err;
         l.push(err) catch {};

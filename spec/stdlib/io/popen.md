@@ -34,4 +34,4 @@ local failing = io.popen("exit 3")
 print(failing:close())  --> nil  exit  3
 ```
 
-`proc:lines()` reads the output line by line and closes the handle at the end of the output. [`os.execute`](/manual/api#os.execute) runs a command without a pipe.
+`proc:lines()` reads the output line by line and leaves the handle open, so a later `proc:close()` waits for the program and returns its status. [`os.execute`](/manual/api#os.execute) runs a command without a pipe.

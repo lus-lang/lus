@@ -17,6 +17,9 @@ pub const fail_alloc = @import("build_options").fail_alloc;
 pub const inject = struct {
     pub var target: usize = 0;
     pub var sticky: bool = false;
+    /// Set by `LUS_FAIL_ALLOC_TRACE`: print the stack of each failed
+    /// allocation, to find where a sweep finding starts.
+    pub var trace: bool = false;
     pub var count: std.atomic.Value(usize) = .init(0);
 
     /// Whether the allocation being made must fail.
@@ -24,7 +27,12 @@ pub const inject = struct {
         if (!fail_alloc) return false;
         const n = count.fetchAdd(1, .monotonic) + 1;
         if (target == 0) return false;
-        return if (sticky) n >= target else n == target;
+        const hit = if (sticky) n >= target else n == target;
+        if (hit and trace) {
+            std.debug.print("lus: failing allocation {d}\n", .{n});
+            std.debug.dumpCurrentStackTrace(.{});
+        }
+        return hit;
     }
 };
 

@@ -2522,7 +2522,7 @@ The value maps to Lus as follows:
 - Integer syntax produces an integer, and syntax with a fraction or an exponent produces a float.
 - Strings become strings, and `true` and `false` become booleans.
 - Arrays become tables with integer keys from 1, and objects become tables with string keys.
-- JSON `null` becomes `nil`, so a null field is absent and a null array element leaves a hole.
+- JSON `null` becomes `nil`, so a null field is absent and a null array element leaves a hole. `tojson` writes `null` in that hole again, except at the end of an array, where the hole has no key.
 - An object with a duplicate key keeps the last value.
 
 With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back.
@@ -3432,7 +3432,7 @@ print(total)                       --> 30
 fs.remove(path)
 ```
 
-A file opened in text mode validates every line as UTF-8, as [`io.open`](/manual/api#io.open) describes. `file:lines(...)` reads an open handle the same way.
+A file opened in text mode validates every line as UTF-8, as [`io.open`](/manual/api#io.open) describes. `file:lines(...)` reads an open handle the same way, with one difference: it returns only the iterator and leaves the file open at the end of the input, as in Lua, so the program that opened the file closes it.
 
 **Requires pledge:** `fs:read`]],
     kind = "function",
@@ -3591,7 +3591,7 @@ local failing = io.popen("exit 3")
 print(failing:close())  --> nil  exit  3
 ```
 
-`proc:lines()` reads the output line by line and closes the handle at the end of the output. [`os.execute`](/manual/api#os.execute) runs a command without a pipe.
+`proc:lines()` reads the output line by line and leaves the handle open, so a later `proc:close()` waits for the program and returns its status. [`os.execute`](/manual/api#os.execute) runs a command without a pipe.
 
 **Requires pledge:** `exec`]],
     kind = "function",
@@ -7251,7 +7251,7 @@ The conversions treat the number subtypes as follows:
 - `%d` and `%i` write an integer in decimal. They accept an integer, a float or decimal with an integral value, a numeric string, and a bigint of any size, which they write exactly. `%u` is the same.
 - `%x`, `%X`, and `%o` write an integer in hexadecimal or octal. A negative integer is written as its 64-bit two's complement, and a bigint must fit in 64 bits.
 - `%c` writes the character whose code point is the argument.
-- `%f`, `%F`, `%e`, `%E`, `%g`, `%G`, `%a`, and `%A` write a float. A decimal is written from its exact digits under `%f`, `%e`, and `%g`, rounded half to even, so `string.format("%.2f", 2.675d)` is `"2.68"`. A bigint, and a decimal under `%a`, are first converted to the nearest float.
+- `%f`, `%F`, `%e`, `%E`, `%g`, `%G`, `%a`, and `%A` write a float. A decimal is written from its exact digits under `%f`, `%e`, and `%g`, rounded half to even, so `string.format("%.2f", 2.675d)` is `"2.68"`. A bigint, and a decimal under `%a`, are first converted to the nearest float. An infinity is written as `inf` and a NaN as `nan`, in capitals under the uppercase conversions. A NaN is written without a minus sign on every platform, and the `+` flag writes it as `+nan`.
 - `%s` writes any value as [`tostring`](/manual/api#tostring) converts it, so a `__tostring` metamethod applies. The width and the precision count characters.
 - `%q` writes a value as a Lus literal that reads back as the same value. A string is written in double quotes, with quotes, backslashes, and control characters escaped, and a newline is written as a backslash followed by a newline. An integer is written in decimal, except `math.mininteger`, which is written in hexadecimal. A finite float is written as a hexadecimal float, infinity as `1e9999`, and NaN as `(0/0)`. `nil`, `true`, and `false` are written as their keywords.
 
@@ -7773,7 +7773,7 @@ Returns a string with the characters of `s` in reverse order.
 
 `s` is the string to reverse. A number is converted to its textual form first.
 
-The result is a string with the same characters as `s`. The empty string reverses to itself.
+The result is a string with the same characters as `s`, with one exception. A lone trail surrogate followed by a lone lead surrogate comes out as the lead followed by the trail, and the two join into one supplementary character, as they do when two strings are concatenated. Such a result is one character shorter for each pair, and reversing it again does not give back `s`. Text without lone surrogates reverses back to itself. The empty string reverses to itself.
 
 An argument that is neither a string nor a number raises `bad argument #1 to 'string.reverse' (string expected, got nil)` with its type.
 
@@ -10130,7 +10130,7 @@ The parameter `value` is the value to serialize. The optional `filter` is a func
 
 Values map to JSON as follows:
 
-- A table whose complete key set is the contiguous integer range from 1 through `n` becomes an array. The empty table becomes `[]`.
+- A table whose keys are all positive integers becomes an array that runs from 1 through its largest key, with `null` in each missing position, so `{1, nil, 3}` becomes `[1,null,3]`. The empty table becomes `[]`. Trailing `nil` values have no key, so `{1, 2, nil}` becomes `[1,2]`. An array whose largest key is greater than 10 must hold more than half of its positions. A sparser one raises `excessively sparse array (largest key N with C elements)`.
 - Every other table becomes an object that keeps its string keys and omits keys of other types. The order of object members is unspecified.
 - Integers, and floats with an integral value, are written without a fraction, so `tojson(1.0)` is `"1"`. Other floats are written with the fewest significant digits, from 14 up to 17, that read back as the same float, so `tojson(0.1)` is `"0.1"`. Bigints and decimals are written with their exact digits.
 - Infinite and NaN floats become `null`.
@@ -10237,7 +10237,7 @@ print(tonumber(1.50d), math.type(tonumber(5n)))              --> 1.5  float
 The parameter `v` may be a value of any type. If `v` has a `__tostring` metamethod, `tostring` calls it with `v` and returns its result, converting a number result to a string. A result of any other type raises `'__tostring' must return a string`. Without the metamethod, the conversion depends on the type:
 
 - `nil` and booleans become `"nil"`, `"true"`, and `"false"`.
-- An integer prints in decimal. A float prints with 14 significant digits, or with the fewest digits up to 17 that read back as the same float when 14 do not, so `1 / 3` prints as `"0.3333333333333333"` and `0.1 + 0.2` as `"0.30000000000000004"`. A float always shows that it is a float, so `1.0` prints as `"1.0"` and large values use an exponent, as in `"1e+100"`.
+- An integer prints in decimal. A float prints with 14 significant digits, or with the fewest digits up to 17 that read back as the same float when 14 do not, so `1 / 3` prints as `"0.3333333333333333"` and `0.1 + 0.2` as `"0.30000000000000004"`. A float always shows that it is a float, so `1.0` prints as `"1.0"` and large values use an exponent, as in `"1e+100"`. The infinities print as `"inf"` and `"-inf"`. Every NaN prints as `"nan"`, whatever its sign bit, so the output is the same on every platform.
 - A bigint prints in decimal without its `n` suffix, and a decimal prints exactly its stored digits, so `tostring(1.50d)` is `"1.50"`.
 - A string returns unchanged.
 - Any other value prints as its type and its address, as in `"table: 0x000001049d7cf0"`. A table whose metatable has a string `__name` field uses that name in place of the type.

@@ -967,16 +967,18 @@ end
 
 -- holes and mixed keys.
 
--- A hole makes the key set non-contiguous, so the table serializes as an
--- object, and because its remaining keys are integers they are all dropped,
--- leaving an empty object. A pure trailing nil leaves a contiguous 1..n range
--- and stays an array.
+-- A table whose keys are all positive integers is an array up to its
+-- largest key, with null in each hole. A trailing nil has no key, so it
+-- leaves nothing. Any key that is not a positive integer makes an object,
+-- which keeps only string keys.
 -- tojson representation for holes and mixed keys
 local tojson_representation_for_holes_and_mixed_keys_cases = {
-    {{1, nil, 3}, "{}"},
-    {{[1] = 1, [2] = 2, [4] = 4}, "{}"},
+    {{1, nil, 3}, "[1,null,3]"},
+    {{[1] = 1, [2] = 2, [4] = 4}, "[1,2,null,4]"},
     {{1, 2, nil}, "[1,2]"},
-    {{[2] = "a"}, "{}"},
+    {{[2] = "a"}, "[null,\"a\"]"},
+    {{[10] = 1}, "[null,null,null,null,null,null,null,null,null,1]"},
+    {{nil, {nil, 2}}, "[null,[null,2]]"},
     {{[0] = "z"}, "{}"},
     {{[-1] = "n"}, "{}"},
     {{[1.5] = "x"}, "{}"},
@@ -989,6 +991,26 @@ local function tojson_representation_for_holes_and_mixed_keys_test(input, expect
 end
 
 -- a table mixing an array part and a string key keeps only the string keys
+-- null elements survive a round trip, except at the end of an array
+local function null_elements_survive_a_round_trip_test()
+    assert(tojson(fromjson("[1,null,3]")) == "[1,null,3]")
+    assert(tojson(fromjson("[null,null,true]")) == "[null,null,true]")
+    assert(tojson(fromjson("[[null,1],{\"a\":[null,2]}]")) == "[[null,1],{\"a\":[null,2]}]")
+    assert(tojson(fromjson("[1,null]")) == "[1]")
+end
+
+-- an excessively sparse array raises instead of writing mostly nulls
+local function an_excessively_sparse_array_raises_test()
+    local ok, err = catch tojson({ [11] = true })
+    assert(not ok)
+    assert(err:find("excessively sparse array (largest key 11 with 1 elements)", 1, true))
+    raises(function() tojson({ [2 ^ 53] = 1 }) end, "excessively sparse array")
+    -- Half full is enough.
+    local t = {}
+    for i = 2, 40, 2 do t[i] = i end
+    assert(tojson(t):sub(1, 9) == "[null,2,n")
+end
+
 local function a_table_mixing_an_array_part_and_a_string_key_keeps_only_the_string_ke_test()
     -- The integer indices are dropped because the presence of a string key
     -- forces object form, in which non-string keys are skipped.

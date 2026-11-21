@@ -358,12 +358,14 @@ fn acceptLoop(l: *Thread, s: *net.Server) Error!u32 {
         // The socket is on the stack. Its connection gets a coroutine.
         const co = try coroutine.newCoroutine(l, try connectionFn(l));
         try l.push(Value.obj(.thread, co));
-        try co.ensure(4);
+        // Growing the coroutine and giving it a task raise on the
+        // coroutine, so their errors move to this thread.
+        co.ensure(4) catch return l.raise(co.err);
         co.stack[1] = l.stack[l.top - 2];
         co.stack[2] = l.stack[base + 1];
         co.stack[3] = l.stack[base + 3];
         co.top = 4;
-        const t = try sched.ensureTask(co);
+        const t = sched.ensureTask(co) catch return l.raise(co.err);
         sched.attach(g, t, .fresh, 3);
         l.top = base + 4;
         // The connections that are ready run before the next accept.

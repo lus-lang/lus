@@ -212,7 +212,7 @@ end
 
 ## Detached coroutines in tests
 
-A test may start [detached coroutines](/manual/concurrency), for example to run a server and a client in one test. The runner waits for them as the `lus` command does at the end of a script, so a test ends when every coroutine it detached has ended. The coroutines that the top-level code detaches end before the first test runs. If a detached coroutine fails and nothing collects its error, the test that detached it fails with that error.
+A test may start [detached coroutines](/manual/concurrency), for example to run a server and a client in one test. The runner waits for them as the `lus` command does at the end of a script, so a test ends when every coroutine it detached has ended. The coroutines that the top-level code detaches end before the first test runs. If a detached coroutine fails and nothing collects its error, the test that detached it fails with that error. If the test itself fails, the runner closes the coroutines it detached that have not ended, as the end of a script closes them, so a coroutine that waits for a message the failed test never sent cannot stop the run.
 
 ## Doc tests
 

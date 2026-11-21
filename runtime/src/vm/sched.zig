@@ -980,8 +980,17 @@ pub fn threadFreed(g: *Global, l: *Thread) void {
 /// Closes every detached coroutine that has not ended, which runs their
 /// pending to-be-closed variables. A state does this when it closes.
 pub fn closeAll(g: *Global) void {
+    g.sched.closing = true;
+    closeLive(g);
+    release(g);
+}
+
+/// Closes every detached coroutine that has not ended and keeps the
+/// scheduler for coroutines detached later. `lus test` calls it after a
+/// test that failed, since the coroutines of that test may wait for
+/// events that never come.
+pub fn closeLive(g: *Global) void {
     const s = &g.sched;
-    s.closing = true;
     const coroutine = @import("../lib/coroutine.zig");
     var rounds: usize = 0;
     while (s.live) |t| : (rounds += 1) {
@@ -994,7 +1003,6 @@ pub fn closeAll(g: *Global) void {
         cancel(g, t);
         coroutine.closeCancelled(t.thread);
     }
-    release(g);
 }
 
 /// Ends the bookkeeping of the scheduler, before the heap is freed.

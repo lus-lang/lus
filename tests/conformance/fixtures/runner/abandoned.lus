@@ -1,0 +1,18 @@
+-- A test that fails while a coroutine it detached waits for a worker
+-- that never answers. The runner closes that coroutine and goes on.
+pledge("load", "fs:read=./*", "fs:write=./*")
+
+local function a_failed_test_leaves_a_waiting_coroutine_test()
+    local file = assert(io.open("./silent_worker.lus", "w"))
+    file:write("while worker.peek() ~= 'stop' do end")
+    file:close()
+    local w = worker.create("./silent_worker.lus")
+    coroutine.detach(coroutine.create(function()
+        return worker.receive(w)
+    end))
+    error("the test fails before it sends anything")
+end
+
+local function the_next_test_still_runs_test()
+    assert(1 + 1 == 2)
+end

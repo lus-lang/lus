@@ -1750,7 +1750,9 @@ fn fmtFloat(b: *Builder, spec: Spec, conv: u8, f: f64) Error!void {
     const l = b.l;
     const gpa = l.g.gpa;
     const upper_case = std.ascii.isUpper(conv);
-    const prefix = signPrefix(spec, std.math.signbit(f));
+    // A NaN has no meaningful sign, and its sign bit differs between
+    // platforms, so it formats as a positive value (`ops.formatFloat`).
+    const prefix = signPrefix(spec, std.math.signbit(f) and !std.math.isNan(f));
     if (!std.math.isFinite(f)) {
         const body = if (std.math.isNan(f))
             (if (upper_case) "NAN" else "nan")
@@ -1876,7 +1878,7 @@ fn fmtHexFloat(b: *Builder, spec: Spec, conv: u8, f: f64) Error!void {
     const l = b.l;
     const gpa = l.g.gpa;
     const upper_case = conv == 'A';
-    const sign = signPrefix(spec, std.math.signbit(f));
+    const sign = signPrefix(spec, std.math.signbit(f) and !std.math.isNan(f));
     if (!std.math.isFinite(f)) {
         const body = if (std.math.isNan(f))
             (if (upper_case) "NAN" else "nan")

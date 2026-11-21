@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
         .version = b.option([]const u8, "version", "The version the binary reports, such as 2.0.0-unstable.7 (default: the version in build.zig.zon)"),
         .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
+        .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -239,6 +240,14 @@ fn agentDocsModule(b: *std.Build) *std.Build.Module {
         var walker = dir.walk(b.allocator) catch @panic("OOM");
         defer walker.deinit();
         while (walker.next(b.graph.io) catch null) |entry| {
+            // The configure cache tracks the entries of one directory, not
+            // of the directories below it, so every directory of the tree
+            // is a dependency of its own. A file added to any of them then
+            // reaches `lus help` on the next build.
+            if (entry.kind == .directory) {
+                b.dependOnDirectoryContents(b.path(b.fmt("{s}/{s}", .{ g.rel, entry.path })));
+                continue;
+            }
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".md")) continue;
             const rel = std.mem.replaceOwned(u8, b.allocator, entry.path, "\\", "/") catch @panic("OOM");
             names.append(b.allocator, rel) catch @panic("OOM");
@@ -300,6 +309,7 @@ const Features = struct {
     op_profile: bool = false,
     version: ?[]const u8 = null,
     fail_alloc: bool = false,
+    fail_io: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -325,6 +335,7 @@ const Features = struct {
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
         options.addOption(bool, "fail_alloc", f.fail_alloc);
+        options.addOption(bool, "fail_io", f.fail_io);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.

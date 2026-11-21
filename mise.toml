@@ -59,6 +59,16 @@ description = "Build the runtime with allocation failure injection into runtime/
 dir = "runtime"
 run = "zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
 
+[tasks."build:io"]
+description = "Build the runtime with I/O fault injection into runtime/zig-out-io"
+dir = "runtime"
+run = "zig build -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
+
+[tasks.io]
+description = "Fail and shorten sampled file and socket operations of every conformance test"
+depends = ["build", "build:io"]
+run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --samples 20", "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 5"]
+
 [tasks.oom]
 description = "Fail sampled allocations of every conformance test and check for crashes, leaks, and hangs"
 depends = ["build", "build:oom"]

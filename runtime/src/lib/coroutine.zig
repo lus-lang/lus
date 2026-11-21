@@ -525,7 +525,8 @@ fn detach(l: *Thread) Error!u32 {
         entry = .restart;
         n = 0;
     }
-    const t = try sched.ensureTask(co);
+    // Both calls raise on the coroutine, so their errors move to `l`.
+    const t = sched.ensureTask(co) catch return l.raise(co.err);
     co.ensure(n + 1) catch return l.raise(co.err);
     const src = l.base() + 1;
     var i: u32 = 0;
