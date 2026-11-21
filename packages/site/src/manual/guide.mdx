@@ -1626,7 +1626,7 @@ The `--readonly-env` option freezes the global environment and the standard libr
 - Every table stored in `_ENV`, such as `math`, `string`, `table`, `io`, `os`, `fs`, `network`, `worker`, and `arg`.
 - Every table stored in those tables, such as `network.tcp` and `network.udp`.
 
-A write to a frozen table, including one through `rawset`, raises `attempt to modify a readonly table`. A new global is such a write, so a program under `--readonly-env` keeps its state in locals. Tables that the program creates stay writable. `package.loaded` also stays writable, because `require` stores every module it loads there, and the global bindings stay frozen around it:
+A write to a frozen table, including one through `rawset`, raises `attempt to modify a readonly table`, and so does `setmetatable` on a frozen table, because a metatable could redirect every access to it. A new global is such a write, so a program under `--readonly-env` keeps its state in locals. Tables that the program creates stay writable. `package.loaded` also stays writable, because `require` stores every module it loads there, and the global bindings stay frozen around it:
 
 ```lus nocheck
 -- lus --readonly-env script.lus

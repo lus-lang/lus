@@ -397,6 +397,21 @@ print(m.ok, m.replaced, m.err)
     fs.remove("readonly_main.lus")
 end
 
+local function readonly_env_keeps_the_metatables_of_frozen_tables_test()
+    write_file("readonly_meta.lus", [[
+for _, t in ipairs({ _G, string, math, flags }) do
+    print(catch setmetatable(t, {}))
+end
+print(getmetatable(_G) == nil, getmetatable(math) == nil)
+print((catch setmetatable({}, {})))
+]])
+    local _, out = run_command(lus_cmd .. " --readonly-env readonly_meta.lus")
+    local _, n = out:gsub("false\t[^\n]*attempt to modify a readonly table\n", "")
+    assert(n == 4, out)
+    assert(string.find(out, "true\ttrue\ntrue\n", 1, true), out)
+    fs.remove("readonly_meta.lus")
+end
+
 local function disassembly_folds_compile_time_flags_as_running_does_test()
     write_file("dis_flags.lus", 'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n')
     local _, ran = run_command(lus_cmd .. " -F FAST dis_flags.lus")

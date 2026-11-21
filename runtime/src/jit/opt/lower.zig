@@ -3701,9 +3701,12 @@ pub const Lower = struct {
             try b.guardNative(ra, f);
             const t = try b.typed(a1, .table);
             const mt = try b.typed(a1 + 1, .table);
-            // A table with a metatable may protect it.
+            // A table with a metatable may protect it, and a read-only
+            // table keeps the metatable it has.
             const old = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = old, .imm = 0 });
+            const ro = try b.load(t, tl.readonly, .int, 1, .tab_meta, ir.none);
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = ro, .imm = 0 });
             const bit: u8 = @backingInt(state.TM.gc);
             _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + bit / 8, .aux = @as(u64, bit % 8) | (1 << 8) });
             const is_fresh = if (b.fresh) |fz| fz.ref == t else false;

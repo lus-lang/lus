@@ -201,7 +201,7 @@ fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) V
     const t = tv.as(Table);
     const mt = mv.as(Table);
     const gc_bit = @as(u16, 1) << @backingInt(state.TM.gc);
-    if (t.metatable != null or mt.tm_absent & gc_bit == 0) return state.leaf_miss;
+    if (t.metatable != null or t.isReadonly() or mt.tm_absent & gc_bit == 0) return state.leaf_miss;
     t.metatable = mt;
     gc.barrierBack(l.g, &t.hdr);
     return tv;
@@ -213,6 +213,9 @@ noinline fn setmetatableSlow(l: *Thread) Error!u32 {
     const t = try aux.checkTable(l, 1);
     const mtv = l.arg(2);
     if (mtv.tag != .nil and mtv.tag != .table) return aux.typeError(l, 2, "nil or table");
+    // A metatable could redirect every access, so a read-only table keeps
+    // the one it has.
+    if (t.isReadonly()) return l.raiseRun("attempt to modify a readonly table", .{});
     if (t.metatable) |old| {
         if (!table.getStr(old, l.g.tm_names[@backingInt(state.TM.metatable)].?).isNil()) {
             return l.raiseFmt("cannot change a protected metatable", .{});
