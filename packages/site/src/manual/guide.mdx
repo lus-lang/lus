@@ -9,11 +9,11 @@ shortdesc: "Values, functions, tables, errors, concurrency, and the runtime of L
 
 ## Welcome
 
-Lus is a small language for complete programs: scripts that sort out files and data, command line tools, and network servers. One executable, `lus`, runs a program and also formats, checks, tests, and debugs it.
+Lus is a small language for scripts, command line tools, and network servers. The `lus` executable runs programs. It also formats, checks, tests, and debugs them.
 
 ### A first program
 
-Three friends share a dinner bill of 97.29 and want to know what each of them owes.
+Three friends share a dinner bill of 97.29. This program computes what each of them owes.
 
 ```lus
 local bill = 97.29
@@ -22,9 +22,9 @@ local people = 3
 print(`Each of us pays $(bill / people)`)   --> Each of us pays 32.43
 ```
 
-`local bill = 97.29` creates a variable named `bill` that holds 97.29, and the next line does the same for `people`. The text between backticks is a template, and `$( )` places the result of a calculation inside it. `print` writes the finished sentence to the terminal.
+`local bill = 97.29` creates a variable named `bill` that holds 97.29. The next line creates `people`. The text between backticks is a template. `$( )` inserts the result of a calculation into it. `print` writes the text to the terminal.
 
-To run the program, save it as `bill.lus` and pass the file to `lus`. [Getting started](/manual/getting-started) shows how to install it.
+Save the program as `bill.lus` and run it with `lus`. [Getting started](/manual/getting-started) shows how to install `lus`.
 
 ```sh
 lus bill.lus
@@ -32,7 +32,7 @@ lus bill.lus
 
 ### Comments
 
-Lus ignores everything from `--` to the end of the line, which leaves room for notes to the people who read the code. A comment that starts with `--[[` runs until the next `]]`, across as many lines as it needs.
+A comment is a note for people who read the code. Lus ignores everything from `--` to the end of the line. A comment that starts with `--[[` continues until the next `]]`, so it can span several lines.
 
 ```lus
 -- Prices include tax.
@@ -44,7 +44,7 @@ local price = 4.50   -- per cup
 ]]
 ```
 
-A comment that starts with `-->` shows what its line prints. When `print` receives several values, it separates them with a tab, shown as two spaces.
+A comment that starts with `-->` shows what its line prints. `print` separates several values with a tab, which the comments show as two spaces.
 
 ```lus
 print(2 + 2)            --> 4
@@ -53,13 +53,13 @@ print("tea", 4.50)      --> tea  4.5
 
 ## Values and types
 
-Everything a program works with is a _value_: the number `97.29`, the text `"tea"`, the answer `true`. Each value has a _type_, and the type decides what can be done with it. Numbers can be added, text can be searched, and asking whether `"tea"` is greater than `true` is a mistake that Lus reports with an error when the line runs.
+A _value_ is a piece of data, such as the number `97.29`, the text `"tea"`, or `true`. Every value has a _type_. The type determines the operations that apply to the value. Numbers can be added and text can be searched. Comparing the text `"tea"` with `true` is an error, which Lus reports when the line runs.
 
-A value carries its type with it, so a name can hold a number now and text later.
+The type belongs to the value. A variable can hold a number at one point and text later.
 
 ### Nil
 
-`nil` means that there is no value. A variable declared without a value holds `nil` until the program gives it one, which suits a result that is not known yet.
+`nil` means "no value". A variable that is declared without a value holds `nil`. This is useful for a result that is not known yet.
 
 ```lus
 local winner   -- decided when the race ends
@@ -68,20 +68,20 @@ print(winner)  --> nil
 
 ### Booleans
 
-`true` and `false` answer yes-or-no questions, such as whether a door is locked or whether a file was found. Comparisons such as `age >= 18` produce them, as [Comparison](#comparison) shows.
+The booleans are `true` and `false`. They are the answers to yes-or-no questions, such as whether a door is locked. Comparisons such as `age >= 18` produce booleans, as [Comparison](#comparison) shows.
 
 ```lus
 local door_locked = true
 print(door_locked)   --> true
 ```
 
-Wherever Lus expects a yes-or-no answer, it accepts any value. `false` and `nil` count as no and are called _falsy_. Every other value counts as yes and is called _truthy_, including `0` and the empty string `""`.
+A condition in Lus accepts any value. `false` and `nil` count as false and are called _falsy_. Every other value counts as true and is called _truthy_. This includes `0` and the empty string `""`.
 
 ### Numbers
 
-Most programs need only two kinds of numbers: whole numbers for counting, written `42`, and numbers with a fractional part for measuring, written `1.5`. Lus calls them _integers_ and _floats_. Two more kinds cover the cases where those fall short.
+Lus has four kinds of numbers, called the _subtypes_ of the type `number`. Most programs use two of them. An _integer_ is a whole number, such as `42`. A _float_ is a number with a fractional part, such as `1.5`.
 
-A float stores most fractions approximately, which is right for measurements and wrong for money. A _decimal_, written with a `d` after it, keeps its digits exactly as written.
+A float stores most fractions approximately. That is acceptable for measurements but wrong for money. A _decimal_ keeps its digits exactly. A decimal is written with a `d` after it.
 
 ```lus
 print(0.1 + 0.2)      --> 0.30000000000000004
@@ -89,44 +89,25 @@ print(0.1d + 0.2d)    --> 0.3
 print(19.90d)         --> 19.90
 ```
 
-An integer has a limit, around nine quintillion, and a calculation that passes it wraps around to a wrong answer. A _bigint_, written with an `n` after it, grows as large as the number needs.
+An integer has a limit of about nine quintillion. A calculation that passes the limit wraps around to a wrong answer. A _bigint_ has no limit. A bigint is written with an `n` after it.
 
 ```lus
 print(9223372036854775807 + 1)    --> -9223372036854775808
 print(9223372036854775807n + 1)   --> 9223372036854775808
 ```
 
-A number may contain underscores to make it easier to read, so `1_000_000` is one million. A float always prints with a decimal point, as in `3.0`, so it never looks like an integer. All four kinds share the type `number`, and Lus calls them the _subtypes_ of a number. [Arithmetic](#arithmetic) shows how they combine.
+Underscores make long numbers easier to read, so `1_000_000` is one million. A float always prints with a decimal point, as in `3.0`. [Arithmetic](#arithmetic) shows how the subtypes combine.
 
 ### Strings
 
-A _string_ is text. It is written between double quotes or single quotes, and either kind can hold the other.
+A _string_ is text. Strings can be written with single quotes, double quotes, or backticks. Single and double quotes are equivalent.
 
 ```lus
 print("It's ready")          --> It's ready
 print('She said "now"')      --> She said "now"
 ```
 
-A backslash inside the quotes writes a character that is hard to type: `\n` for a line break, `\t` for a tab, `\\` for a backslash, and `\u{E9}` for the character with that Unicode number, here `é`.
-
-```lus
-print("Name:\tAda\nRole:\tEngineer")
---> Name:  Ada
---> Role:  Engineer
-```
-
-Text that spans several lines, such as the help of a command line tool, goes between `[[` and `]]` and is kept exactly as written.
-
-```lus
-local help = [[
-Usage: split TOTAL PEOPLE
-Divides a bill evenly.]]
-print(help)
---> Usage: split TOTAL PEOPLE
---> Divides a bill evenly.
-```
-
-Most strings in real programs are messages built from values, and backticks build them. `$name` inserts a variable, and `$( )` inserts the result of any expression.
+A string in backticks can also contain values. `$name` inserts the value of a variable. `$( )` inserts the result of an expression.
 
 ```lus
 local name = "Ada"
@@ -138,29 +119,48 @@ print(`That is $(unread * 2) since yesterday.`)
 --> That is 6 since yesterday.
 ```
 
-A string never changes once it exists. Functions that seem to change one, such as making it upper case, return a new string, as [Strings and patterns](#strings-and-patterns) shows.
+A backslash in a string starts an _escape sequence_, which stands for a character that is hard to type. `\n` is a line break. `\t` is a tab. `\\` is a backslash. `\u{E9}` is the character with the Unicode number E9, which is `é`.
+
+```lus
+print("Name:\tAda\nRole:\tEngineer")
+--> Name:  Ada
+--> Role:  Engineer
+```
+
+A long string is written between `[[` and `]]`. It can span several lines. Its text is kept exactly as written. The help text of a command line tool is a typical long string.
+
+```lus
+local help = [[
+Usage: split TOTAL PEOPLE
+Divides a bill evenly.]]
+print(help)
+--> Usage: split TOTAL PEOPLE
+--> Divides a bill evenly.
+```
+
+A string cannot change after it is created. Functions that modify text, such as converting it to upper case, return a new string. [Strings and patterns](#strings-and-patterns) describes these functions.
 
 ### Other types
 
-A _table_ holds many values at once, as a list or as named fields ([Tables](#tables)). A _function_ is code that can be called, as `print` is ([Functions](#functions)). [Enums](#enums), [coroutines](#coroutines), and [queries](#queries) are types of their own, a _vector_ holds raw bytes, and a _userdata_ is an object that the runtime or a C library provides, such as an open file.
+A _table_ holds many values, as a list or as named fields. A _function_ is code that a program can call. [Tables](#tables) and [Functions](#functions) describe them. [Enums](#enums), [coroutines](#coroutines), and [queries](#queries) are also types. A _vector_ holds raw bytes. A _userdata_ is an object from the runtime or from a C library, such as an open file.
 
 ## Variables
 
-A _variable_ is a name for a value. A program uses variables to keep a value for later, to give it a meaningful name, and to change it as the work proceeds.
+A _variable_ is a name for a value. Variables keep values for later use. A good name also tells the reader what a value means.
 
 ### Local variables
 
-The `local` statement declares a variable and gives it its first value. An assignment, written with `=`, gives an existing variable a new value.
+The `local` statement declares a variable and gives it a first value. An assignment, written with `=`, gives an existing variable a new value.
 
 ```lus
-local count = 1
-print(count)          --> 1
+local visitors = 1
+print(visitors)          --> 1
 
-count = count + 1
-print(count)          --> 2
+visitors = visitors + 1
+print(visitors)          --> 2
 ```
 
-A declaration without a value leaves the variable `nil`. One statement can declare or assign several variables, with the names and the values separated by commas. A name without a matching value gets `nil`.
+A declaration without a value leaves the variable `nil`. One statement can declare or assign several variables, with commas between the names and between the values. A name without a matching value gets `nil`.
 
 ```lus
 local width, height = 80, 24
@@ -170,7 +170,7 @@ local first, second = "a"
 print(first, second)      --> a  nil
 ```
 
-An assignment computes every value on its right side before it changes any variable. Two variables therefore exchange their values in one statement.
+An assignment computes all the values on its right side before it changes any variable. This is how two variables exchange their values in one statement.
 
 ```lus
 local low, high = 9, 2
@@ -178,28 +178,28 @@ low, high = high, low
 print(low, high)          --> 2  9
 ```
 
-A name consists of letters, digits, and underscores, and it does not start with a digit. Upper and lower case letters are different, so `total` and `Total` are two names. The words that the language reserves, such as `local`, `if`, and `end`, cannot be names.
+A name consists of letters, digits, and underscores. It cannot start with a digit. Names are case sensitive, so `total` and `Total` are different names. Reserved words such as `local`, `if`, and `end` cannot be names.
 
 ### Blocks and scope
 
-A _block_ is a sequence of statements. A file is a block, and so is the body of every loop, conditional statement, and function. The statement `do ... end` creates a block and has no other effect.
+A _block_ is a sequence of statements. A file is a block. The body of a loop, of a conditional statement, or of a function is also a block. `do ... end` creates a block where one is needed.
 
-A local variable exists from the statement after its declaration to the end of the block that contains the declaration. That region is the _scope_ of the variable. Scope keeps a variable close to the code that uses it, so a name that one part of a program picked cannot disturb another part.
+The _scope_ of a local variable starts at the statement after its declaration and ends at the end of its block. Outside its scope, the name does not refer to the variable. Two parts of a program can therefore use the same name without interfering.
 
 ```lus
 local total = 0
 do
     local bonus = 5          -- bonus exists only inside this block
-    total = total + bonus    -- total is visible here, since this block is inside its scope
+    total = total + bonus    -- total is still in scope here
 end
 print(total)                 --> 5
 ```
 
-After the `end`, the name `bonus` no longer refers to that variable. A `do ... end` block is a good place for a temporary variable that only a few statements need.
+A `do ... end` block is useful for a temporary variable that only a few statements need.
 
 ### Shadowing
 
-A declaration may reuse the name of a variable that is already in scope. The new variable _shadows_ the earlier one, which means that the name refers to the new variable until the scope of the new variable ends. The earlier variable keeps its value and becomes visible again afterwards.
+A declaration can reuse the name of a variable that is already in scope. The new variable _shadows_ the old one until the end of its block. The old variable then becomes visible again with its value unchanged.
 
 ```lus
 local price = 20
@@ -210,11 +210,11 @@ end
 print(price)                    --> 20
 ```
 
-A new variable enters scope after its own declaration, so the `price` on the right side of the inner declaration is still the outer one. Shadowing therefore replaces a value with an adjusted form of itself for the length of one block, and the original comes back afterwards.
+The new variable enters scope after its own declaration. The `price` on the right side of the inner declaration is therefore still the outer one.
 
 ### Global variables
 
-A _global variable_ is visible in every block of every file of a program. The built-in functions are stored in global variables, which is why `print` works everywhere. A program creates a global variable by assigning to a name that has no `local` declaration, and a global that has no value reads as `nil`.
+A _global variable_ is visible in every file of a program. The built-in functions are global variables, so `print` works in every file. Assigning to a name that has no `local` declaration creates a global variable. A global that was never assigned is `nil`.
 
 ```lus
 attempts = 1          -- no local declaration, so attempts is a global
@@ -222,9 +222,9 @@ print(attempts)       --> 1
 print(retries)        --> nil
 ```
 
-Local variables are the better default. A local is confined to its block, so a reader sees everything that can change it, and Lus also reads and writes locals faster. Globals are for the few values that a whole program shares.
+Local variables are the better default. A local is only visible in its block, which makes it easy to find every place that changes it. Lus also reads and writes locals faster than globals. Globals are for the few values that the whole program shares.
 
-The rule that an undeclared name is a global has a cost. A misspelled name is also an undeclared name, so the misspelling becomes a new global that holds `nil`, and the program continues with a wrong value. The `global` statement removes that risk. It declares the globals that a file uses, and from that statement to the end of its block every other undeclared name is rejected.
+A misspelled name is also an undeclared name. The misspelling therefore creates a new global that holds `nil`. The program then continues with a wrong value. The `global` statement prevents this. It declares the globals that a file uses. After it, every other undeclared name in the block is an error.
 
 ```lus
 global print
@@ -234,9 +234,9 @@ attempts = attempts + 1
 print(attempts)       --> 1
 ```
 
-The built-in names are globals too, so the declaration lists `print` beside the program's own names. A `global` statement may give its variables a first value, as `global attempts = 0` does. That form also checks that the global has no value yet, and it stops the program with the error `global 'attempts' already defined` if another part of the program has defined it.
+The built-in names are globals too, so the declaration includes `print`. `global attempts = 0` also gives the global a first value. If another part of the program has already defined `attempts`, this declaration stops the program with the error `global 'attempts' already defined`.
 
-With the declarations in place, a misspelling is a _compile error_: an error that Lus reports when it loads the file, before any statement of the file runs.
+With these declarations, a misspelling is a _compile error_. Lus reports a compile error when it loads the file, before any statement runs.
 
 ```lus nocheck
 global print
@@ -245,11 +245,11 @@ global attempts = 0
 attemps = attempts + 1    -- compile error: variable 'attemps' not declared
 ```
 
-A file that never uses the `global` statement keeps the rule that every undeclared name is a global.
+A file without a `global` statement treats every undeclared name as a global.
 
 ### Constants
 
-An _attribute_ is a word in angle brackets after a variable name that changes how the variable behaves. The `<const>` attribute declares a variable that keeps its first value. It documents that a value is fixed, and it lets Lus enforce that. An assignment to the variable anywhere in its scope is a compile error.
+An _attribute_ is a word in angle brackets after a variable name. It changes how the variable behaves. A variable with the `<const>` attribute keeps its first value. Any assignment to it is a compile error.
 
 ```lus
 local MAX_RETRIES <const> = 3
@@ -262,13 +262,13 @@ local MAX_RETRIES <const> = 3
 MAX_RETRIES = 5           -- compile error: attempt to assign to const variable 'MAX_RETRIES'
 ```
 
-A global takes the attribute in the same way, as in `global VERSION <const> = "2.0"`. [Variable attributes](/manual/guide#variable-attributes) describes the other attributes.
+A global can be constant too, as in `global VERSION <const> = "2.0"`. [Variable attributes](#variable-attributes) describes the other attributes.
 
 ## Built-in functions
 
-A _function_ is a piece of work that a program asks for by name. The call writes the name followed by parentheses, and the values inside the parentheses are the _arguments_. Many functions give back a value, their _result_, which the program can store or use at once. `print` is one such function, and Lus has many more built in.
+A _function_ is a named piece of code. A program _calls_ a function by writing its name followed by parentheses. The values inside the parentheses are the _arguments_. Many functions return a value, called the _result_. `print` is one of many built-in functions.
 
-Text that a person types arrives as a string, even when it holds a number. `tonumber` reads the number out of it so that the program can calculate with it.
+`tonumber` converts text to a number. Input from a person or from a file is text, even when it contains digits, so a program converts it before it calculates.
 
 ```lus
 local typed = "42"
@@ -276,18 +276,18 @@ local count = tonumber(typed)
 print(count + 1)   --> 43
 ```
 
-A few built-in functions are used everywhere:
+These built-in functions are the most common:
 
-- `tonumber(text)` returns the number written in `text`, or `nil` when the text is not a number.
-- `tostring(value)` returns any value as text.
-- `type(value)` returns the name of the type of a value, which tells a program what it received when the value came from outside.
+- `tonumber(text)` returns the number in `text`, or `nil` if the text is not a number.
+- `tostring(value)` returns a value as text.
+- `type(value)` returns the name of the type of a value. A program uses it to check data that it did not create.
 
 ```lus
 print(tonumber("twelve"))                               --> nil
 print(type(tonumber("12")), type(tonumber("twelve")))   --> number  nil
 ```
 
-Most built-in functions belong to a _library_, a group named after its subject. Their names are written with a dot: `math.floor` is the function `floor` of the `math` library, which rounds a number down, and `string.upper` is the function `upper` of the `string` library, which capitalizes text. A library also holds constants, such as `math.pi`. [Tables](#tables-as-modules) explains what the dot means.
+Most built-in functions belong to a _library_. A library is a group of functions about one subject, such as `math` or `string`. The name of a library function has a dot: `math.floor` is the function `floor` in the `math` library. It rounds a number down. `string.upper` converts text to upper case. A library can also contain constants, such as `math.pi`.
 
 ```lus
 local minutes = 135
@@ -296,7 +296,7 @@ print(math.max(72, 95, 58))                --> 95
 print(string.upper("receipt"))             --> RECEIPT
 ```
 
-The [API reference](/manual/api) lists every built-in function, and `lus help NAME`, as in `lus help math.floor`, prints the entry for one function in a terminal.
+The [API reference](/manual/api) lists every built-in function. In a terminal, `lus help NAME` prints the entry for one function, as in `lus help math.floor`.
 
 ## Operators
 
@@ -304,7 +304,7 @@ An _operator_ combines one or two values into a new value. An _expression_ is an
 
 ### Arithmetic
 
-The arithmetic operators work on numbers.
+Lus has the usual arithmetic operators.
 
 | Operator | Meaning | Example | Result |
 | --- | --- | --- | --- |
@@ -319,7 +319,7 @@ The arithmetic operators work on numbers.
 
 #### Integers and floats
 
-If both operands of `+`, `-`, `*`, `//`, or `%` are integers, the result is an integer. If one operand is a float, Lus converts the other to a float and the result is a float. With integers and floats, the operators `/` and `^` always compute in floats, so `6 / 2` is `3.0`.
+If both operands of `+`, `-`, `*`, `//`, or `%` are integers, the result is an integer. If one operand is a float, the result is a float. With integers and floats, `/` and `^` always produce a float, so `6 / 2` is `3.0`.
 
 ```lus
 print(7 + 2)        --> 9
@@ -328,7 +328,7 @@ print(6 / 2)        --> 3.0
 print(2 ^ 10)       --> 1024.0
 ```
 
-Floor division rounds its result down to a whole number, toward negative infinity. The remainder is what floor division leaves over, so it has the sign of the right operand. Together they split a quantity into units, and `%` also tests divisibility, since a remainder of `0` means that the division is exact.
+Floor division rounds its result down, toward negative infinity. The remainder is what floor division leaves over. It has the sign of the right operand. Together, the two operators split a quantity into units, such as seconds into minutes and seconds. A remainder of `0` means that a division is exact.
 
 ```lus
 local seconds = 200
@@ -339,7 +339,7 @@ print(-7 % 2)           --> 1
 print(seconds % 2)      --> 0
 ```
 
-An integer has a limit, which the constant `math.maxinteger` holds. A result past it wraps around to the most negative integer, so a calculation that can grow that large uses bigints.
+The largest integer is `math.maxinteger`. A result past it wraps around to the most negative integer. A calculation that can grow that large needs bigints.
 
 ```lus
 print(math.maxinteger)        --> 9223372036854775807
@@ -351,7 +351,7 @@ Dividing an integer by zero with `//` or `%` raises an error. Float division by 
 
 #### Bigints
 
-A bigint calculates like an integer with no upper or lower limit. An operation between a bigint and an integer produces a bigint.
+A bigint behaves like an integer without limits. An operation between a bigint and an integer produces a bigint.
 
 ```lus
 print(2n ^ 100)             --> 1267650600228229401496703205376
@@ -361,7 +361,7 @@ print(7n // 2)              --> 3
 
 #### Decimals
 
-A decimal calculates in base 10, as a person does on paper, so its sums, differences, and products are exact. An operation between a decimal and an integer or a bigint produces a decimal. Division of decimals keeps up to 34 significant digits, and a result that needs more is rounded.
+A decimal computes in base 10, as a person does on paper. Its sums, differences, and products are exact. An operation between a decimal and an integer or a bigint produces a decimal. A division of decimals keeps up to 34 significant digits and rounds the rest.
 
 ```lus
 local price = 19.99d
@@ -381,9 +381,9 @@ The table gives the subtype of the result of `+`, `-`, `*`, `//`, and `%` for ev
 | **bigint** | bigint | float | bigint | decimal |
 | **decimal** | decimal | error | decimal | decimal |
 
-The operator `/` follows the same table, except that it produces a float whenever no operand is a decimal. The operator `^` produces a float when both operands are integers or floats. A bigint or a decimal raised to a whole number that is not negative stays exact, so `2n ^ 100` is a bigint and `1.5d ^ 2` is the decimal `2.25`.
+`/` follows the same table, except that it produces a float when no operand is a decimal. `^` produces a float when both operands are integers or floats. A bigint or a decimal raised to a positive whole number stays exact. For example, `2n ^ 100` is a bigint. `1.5d ^ 2` is the decimal `2.25`.
 
-A decimal and a float do not combine. A decimal exists to keep exact digits and a float is approximate, so Lus raises an error where the two meet and leaves the choice to the program. The program converts one side. `decimal(x)` turns a number into a decimal to continue exactly, and `tonumber(d)` turns a decimal into a float to continue approximately.
+A decimal is exact and a float is approximate. An operation between the two is an error, because Lus cannot know which of the two the program needs. The program converts one side first. `decimal(x)` converts a number to a decimal. `tonumber(d)` converts a decimal to a float.
 
 ```lus
 local price = 19.99d
@@ -399,11 +399,11 @@ print(19.99d * 0.5)    -- error: attempt to mix decimal and float in arithmetic
 
 #### Strings in arithmetic
 
-An arithmetic operator converts a string operand that spells a number, so `"10" + 5` is `15`. A call to `tonumber` states the conversion in the code and lets the program handle text that is not a number.
+An arithmetic operator converts a string that contains a number, so `"10" + 5` is `15`. An explicit `tonumber` is clearer. It also lets the program handle text that is not a number.
 
 ### Comparison
 
-The comparison operators compare two values and produce `true` or `false`.
+A comparison produces `true` or `false`.
 
 | Operator | Meaning |
 | --- | --- |
@@ -412,7 +412,7 @@ The comparison operators compare two values and produce `true` or `false`.
 | `<` and `>` | less than and greater than |
 | `<=` and `>=` | less than or equal and greater than or equal |
 
-Numbers compare by their mathematical value, whatever their subtypes.
+Numbers compare by value, whatever their subtypes.
 
 ```lus
 print(1 == 1.0)         --> true
@@ -421,31 +421,31 @@ print(2 < 2.5d)         --> true
 print(0.1d == 0.1)      --> false
 ```
 
-The last line is `false` because the float `0.1` is an approximation and is not exactly one tenth.
+The last line is `false` because the float `0.1` is only close to one tenth.
 
-Strings are equal if they hold the same characters. The ordering operators compare strings character by character, by Unicode number, so every upper case English letter comes before every lower case one.
+Two strings are equal if they have the same characters. `<` and the other ordering operators compare strings character by character, by Unicode number. Every upper case English letter therefore comes before every lower case one.
 
 ```lus
 print("apple" < "banana")    --> true
 print("Zebra" < "apple")     --> true
 ```
 
-Values of different types are never equal. The comparison `"10" == 10` is `false`, because one side is a string and the other is a number. An ordering comparison between a number and a string raises an error, so the program converts one side first.
+Values of different types are never equal, so `"10" == 10` is `false`. Ordering a number against a string is an error. The program converts one side first.
 
 ```lus
 print("10" == 10)              --> false
 print(tonumber("10") == 10)    --> true
 ```
 
-Tables and functions are equal only when both sides are the same object, which [Tables](/manual/guide#tables) explains.
+Two tables are equal only when they are the same table, as [Tables](#variables-refer-to-tables) explains. The same holds for functions.
 
 ### Logical operators
 
-The logical operators `and`, `or`, and `not` combine conditions. They treat their operands as [truthy or falsy](#booleans).
+The logical operators `and`, `or`, and `not` combine conditions. They treat each operand as [truthy or falsy](#booleans).
 
-The operator `not` produces `true` for a falsy operand and `false` for a truthy one.
+`not` produces `true` for a falsy operand and `false` for a truthy operand.
 
-The operator `and` evaluates to its left operand if that operand is falsy. Otherwise it evaluates to its right operand. The operator `or` evaluates to its left operand if that operand is truthy. Otherwise it evaluates to its right operand. Both operators therefore return one of their operands unchanged, and the result is a boolean only if that operand is one.
+`and` produces its left operand if that operand is falsy. Otherwise it produces its right operand. `or` produces its left operand if that operand is truthy. Otherwise it produces its right operand. The result is one of the operands, unchanged. It is a boolean only if that operand is a boolean.
 
 ```lus
 local age = 30
@@ -457,16 +457,16 @@ print(false and "unused")        --> false
 print(1 and 2)                   --> 2
 ```
 
-Both operators evaluate their right operand only when the left one has not already decided the result. A check can therefore guard the expression after it.
+`and` and `or` evaluate the right operand only when the left operand does not already decide the result. A check on the left can therefore protect the expression on the right.
 
 ```lus
 local divisor = 0
 print(divisor ~= 0 and 10 // divisor > 2)    --> false
 ```
 
-The division never runs here, because `divisor ~= 0` is `false` and decides the result.
+The division never runs, because `divisor ~= 0` is `false`.
 
-Since `or` returns its left operand when that operand is truthy, it supplies a default for a value that may be `nil`.
+`or` is the usual way to give a default to a value that may be `nil`.
 
 ```lus
 local requested
@@ -474,9 +474,9 @@ local size = requested or 10
 print(size)                      --> 10
 ```
 
-The default also replaces `false`, so a setting where `false` is a meaningful choice needs an explicit comparison with `nil`.
+The default also replaces `false`. A setting where `false` is a valid choice needs an explicit comparison with `nil`.
 
-Together, the two operators choose between two values. `condition and a or b` is `a` when the condition is truthy and `b` otherwise. The choice works only when `a` is truthy, because a falsy `a` makes `or` continue to `b`.
+Together, `and` and `or` choose between two values. `condition and a or b` is `a` when the condition is truthy. Otherwise it is `b`. This only works when `a` is truthy. A falsy `a` makes the expression produce `b`.
 
 ```lus
 local stock = 0
@@ -485,7 +485,7 @@ print(stock > 0 and "in stock" or "sold out")   --> sold out
 
 ### Concatenation
 
-The operator `..` joins two strings into a new string. A number operand is converted to a string first.
+`..` joins two strings into a new string. A number is converted to a string first.
 
 ```lus
 local name = "Ada"
@@ -493,11 +493,11 @@ print("Hello, " .. name)       --> Hello, Ada
 print("Total: " .. 42)         --> Total: 42
 ```
 
-Any other operand, such as `nil` or a boolean, raises an error. An [interpolated string](#strings) accepts every type and is usually easier to read when text and values alternate.
+Any other operand, such as `nil` or a boolean, is an error. A string in backticks accepts values of every type. It is usually easier to read when text and values alternate.
 
 ### Length
 
-The operator `#` before a string gives its length in characters.
+`#` before a string produces its length in characters.
 
 ```lus
 print(#"hello")    --> 5
@@ -505,11 +505,11 @@ print(#"héllo")    --> 5
 print(#"")         --> 0
 ```
 
-The same operator gives the number of elements of a table, as [Tables](/manual/guide#tables) describes.
+Before a list, `#` produces the number of items, as [Lists](#lists) shows.
 
 ### Bitwise operators
 
-The bitwise operators treat an integer as a row of 64 bits. Programs use them to keep several yes or no settings in one number, and to read and write binary formats.
+The bitwise operators work on the 64 bits of an integer. They store several yes-or-no settings in one number. They also read and write binary formats.
 
 | Operator | Meaning |
 | --- | --- |
@@ -520,7 +520,7 @@ The bitwise operators treat an integer as a row of 64 bits. Programs use them to
 | `<<` | shift the bits left |
 | `>>` | shift the bits right |
 
-The example stores three permissions in one integer, one bit for each.
+This example stores three permissions in one integer, with one bit for each.
 
 ```lus
 local READ <const> = 1 << 0
@@ -536,11 +536,11 @@ mode = mode & ~WRITE           -- clear the WRITE bit
 print(mode)                    --> 1
 ```
 
-A float operand must be a whole number, and Lus converts it to an integer. If either operand is a bigint, the operation has no limit of 64 bits and produces a bigint, so `1n << 64` is `18446744073709551616`.
+A float operand must be a whole number. Lus converts it to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit. `1n << 64` is `18446744073709551616`.
 
 ### Precedence
 
-When an expression holds several operators, _precedence_ decides which one applies first. The table lists the operators from the highest precedence to the lowest. Operators in the same row have the same precedence.
+_Precedence_ is the order in which the operators of an expression apply. The table lists the operators from the highest precedence to the lowest. Operators in the same row have the same precedence.
 
 | Precedence | Operators |
 | --- | --- |
@@ -556,7 +556,7 @@ When an expression holds several operators, _precedence_ decides which one appli
 
 Among the bitwise operators, the shifts apply first, then `&`, then `~`, then `|`.
 
-Operators of the same precedence apply from left to right, except `^` and `..`, which apply from right to left. Parentheses override precedence, and they also help the reader where the order is easy to get wrong.
+Operators of the same precedence apply from left to right. `^` and `..` are the exceptions. They apply from right to left. Parentheses override precedence. They also make an unclear order explicit.
 
 ```lus
 print(1 + 2 * 3)        --> 7
@@ -565,7 +565,7 @@ print(2 ^ 3 ^ 2)        --> 512.0
 print(-2 ^ 2)           --> -4.0
 ```
 
-Two rows of the table cause frequent mistakes. Exponentiation applies before negation, so `-2 ^ 2` is `-(2 ^ 2)`. The operator `not` applies before a comparison, so `not a == b` compares `not a` with `b`. The form that negates the comparison is `not (a == b)`, or the operator `~=`.
+Two rules cause frequent mistakes. Exponentiation applies before negation, so `-2 ^ 2` is `-(2 ^ 2)`. `not` applies before a comparison, so `not a == b` compares `not a` with `b`. To negate a comparison, write `not (a == b)` or use `~=`.
 
 ```lus
 local a, b = 1, 2
@@ -576,11 +576,11 @@ print(a ~= b)           --> true
 
 ## Control flow
 
-Statements run one after another, from the top of a file to the bottom. A conditional statement runs a block only when a condition holds, and a loop repeats a block.
+Statements run in order, from the top of a file to the bottom. An `if` statement runs a block only when a condition is true. A loop runs a block several times.
 
 ### `if` statements
 
-The `if` statement runs a block only when its condition is [truthy](#booleans). An `elseif` branch tests another condition when the ones before it failed, and the `else` branch runs when every condition failed. Both are optional, and a statement may have any number of `elseif` branches.
+The `if` statement runs a block when its condition is [truthy](#booleans). An `elseif` branch tests another condition if the previous conditions were falsy. The `else` branch runs if every condition was falsy. Both are optional. An `if` statement can have any number of `elseif` branches.
 
 ```lus
 local temperature = 31
@@ -594,11 +594,11 @@ else
 end
 ```
 
-Lus tests the conditions in order and runs the block of the first truthy one, then continues after the `end`. Each branch is a block, so a local variable declared in a branch ends with that branch.
+Lus tests the conditions in order. It runs the block of the first truthy condition and then continues after the `end`. Each branch is a block, so a local variable declared in a branch exists only in that branch.
 
 ### Conditions that declare variables
 
-A program often computes a value, tests it, and uses it only if the test passes. A condition can do all three. A condition of the form `name = expression` declares a local variable, gives it the value of the expression, and passes if that value is truthy.
+Programs often compute a value, test it, and use it only if the test passes. A condition of the form `name = expression` does all three. It declares a local variable with the value of the expression. The condition is true if that value is truthy.
 
 ```lus
 local input = "42"
@@ -610,9 +610,9 @@ else
 end
 ```
 
-`tonumber` returns `nil` for text that is not a number, so the first branch runs only with a usable `n`. The variable exists in every branch of the statement and ends at its `end`. With a plain `local n = tonumber(input)` before the `if`, the variable would stay in scope for the rest of the surrounding block.
+`tonumber` returns `nil` for text that is not a number. The first branch therefore runs only with a usable `n`. The variable exists in every branch of the `if` and ends at its `end`.
 
-A condition may declare several variables, which suits a function that returns several values. The condition passes only if every declared variable is truthy. The function `string.find` searches a string and returns the positions where the match starts and ends, or `nil` if it finds nothing.
+A condition can declare several variables, which is useful with a function that returns several values. The condition is true only if every declared variable is truthy. `string.find` searches a string. It returns the positions where the match starts and ends, or `nil` if there is no match.
 
 ```lus
 local line = "level=warn"
@@ -628,9 +628,9 @@ An `elseif` condition can declare variables in the same way.
 
 ### `while` loops
 
-The `while` loop tests its condition and runs its body if the condition is truthy, then tests again. It ends when the condition is falsy, so the body may run zero times. It fits a repetition whose number of passes is unknown at the start.
+The `while` loop repeats its body as long as its condition is truthy. It tests the condition before each pass, so the body may not run at all. A `while` loop is for repetition when the number of passes is not known in advance.
 
-An image that must fit a width of 1000 pixels is halved until it does, and the number of halvings depends on where it starts.
+This loop halves the width of an image until the image fits in 1000 pixels.
 
 ```lus
 local width = 4000
@@ -643,7 +643,7 @@ end
 print(width, halvings)   --> 1000  2
 ```
 
-The condition of a `while` loop can [declare variables](#conditions-that-declare-variables) as the condition of an `if` does. The loop evaluates the expression before every pass and ends when a declared variable is falsy. The loop below counts the fields of a line of comma-separated values by finding each comma. The third argument of `string.find` is the position where the search starts.
+A `while` condition can also [declare variables](#conditions-that-declare-variables). The expression is evaluated before every pass. The loop ends when a declared variable is falsy. This loop counts the fields of a line of comma-separated values by finding each comma. The third argument of `string.find` is the position where the search starts.
 
 ```lus
 local line = "tea,4.50,3,shelf 2"
@@ -657,11 +657,11 @@ end
 print(fields)   --> 4
 ```
 
-Without the declaring condition, the call to `string.find` would be written twice: once before the loop and once at the end of its body.
+Without the declaration in the condition, the call to `string.find` would appear twice: once before the loop and once at the end of its body.
 
 ### `repeat` loops
 
-The `repeat` loop runs its body first and tests its condition afterwards. It ends when the condition is truthy. It fits work that must happen at least once, such as counting the digits of a number: even `0` has one digit.
+The `repeat` loop runs its body first and tests its condition afterwards. It ends when the condition is truthy. The body therefore always runs at least once. Counting the digits of a number needs this, because even `0` has one digit.
 
 ```lus
 local n = 4096
@@ -673,9 +673,9 @@ until n == 0
 print(digits)   --> 4
 ```
 
-Started with `n = 0`, the body still runs once and the count is 1.
+With `n = 0`, the body runs once and the count is 1.
 
-The condition after `until` is inside the scope of the body, so it can read a local variable that the body declares. A program that retries a connection keeps the outcome of each attempt in such a variable.
+The condition after `until` can use the local variables of the body. In this example, the body records whether a connection attempt succeeded. The condition reads the result.
 
 ```lus
 local attempts = 0
@@ -689,7 +689,7 @@ print(attempts)   --> 3
 
 ### Numeric `for` loops
 
-The numeric `for` loop counts. It runs its body once for each value from a start to a stop, both included, and gives the body that value in a variable.
+The numeric `for` loop runs its body once for each number in a range. The loop variable holds the current number. The start and the stop are both included.
 
 ```lus
 for day = 1, 3 do
@@ -700,7 +700,7 @@ end
 --> day 3
 ```
 
-An optional third number is the step that is added after each pass. The default step is 1. A negative step counts down, and a float step produces floats.
+An optional third number is the step. The default step is 1. A negative step counts down. A float step produces floats.
 
 ```lus
 for seconds = 3, 1, -1 do
@@ -720,15 +720,15 @@ end
 --> 1.0
 ```
 
-The loop evaluates the start, the stop, and the step once, before the first pass. If the start is already past the stop, the body never runs. The loop variable is local to the body, and each pass gets its value from the loop, so the body cannot assign to it.
+The start, the stop, and the step are evaluated once, before the first pass. If the start is already past the stop, the body does not run. The loop variable is local to the body. The body cannot assign to it.
 
-The other form of `for` visits the elements of a table or the values that a function produces. [Iteration](/manual/guide#iteration) describes it.
+The other form of `for` goes through the items of a table, as [Iteration](#iteration) describes.
 
 ### `break` and `continue`
 
-Two statements change the course of a loop from inside its body. `break` ends the loop at once, and the program continues after the loop. `continue` ends the current pass and starts the next one. In a `while` or `repeat` loop, the next pass starts with the test of the condition.
+`break` ends a loop immediately. The program continues after the loop. `continue` skips the rest of the current pass and starts the next pass. In a `while` or `repeat` loop, the next pass starts with the test of the condition.
 
-The theatre below numbers its seats from 1 and has no seat 13. The loop hands out 15 tickets and stops.
+This theatre numbers its seats from 1 and has no seat 13. The loop sells 15 tickets.
 
 ```lus
 local sold = 0
@@ -744,11 +744,11 @@ for seat = 1, 20 do
 end
 ```
 
-Both statements act on the innermost loop that contains them. `continue` keeps the rest of a loop body free of an enclosing `if`, which helps when a pass has several reasons to stop early.
+`break` and `continue` apply to the innermost loop that contains them. With `continue`, the rest of the loop body does not need to be inside an `if`. This helps when a pass can end early for several reasons.
 
 ### `goto`
 
-The `goto` statement jumps to a _label_, which is a name written between double colons, as in `::done::`. Its main use is to leave several nested loops in one step, which `break` cannot do because it ends only the innermost loop.
+The `goto` statement jumps to a _label_. A label is a name between double colons, such as `::done::`. `goto` is mainly used to leave several nested loops at once. `break` only leaves the innermost loop.
 
 ```lus
 local target = 12
@@ -765,15 +765,15 @@ print("no pair found")
 ::found::
 ```
 
-A `goto` reaches a label in its own block or in a block that encloses it. It cannot jump into the scope of a local variable, so a label usually stands at the end of a block. Loops, `break`, and `continue` express most control flow more clearly, so `goto` is best kept for the cases they do not cover.
+A `goto` can jump to a label in its own block or in an enclosing block. It cannot jump into the scope of a local variable, so labels are usually at the end of a block. Loops, `break`, and `continue` are clearer in most cases. `goto` is for the remaining cases.
 
 ## Functions
 
-A _function_ is a piece of code that a program can run as many times as it needs, each time with different inputs. Functions keep a program short, because a calculation is written once, and readable, because the calculation has a name.
+A _function_ is a piece of code with a name. A program can call it many times with different inputs. A calculation in a function is written once. Its name says what it does.
 
 ### Declaring and calling
 
-A function declaration gives the function a name, lists its parameters between parentheses, and ends with `end`. The `return` statement ends the function and gives a result back to the caller. The following function computes the area of a rectangle.
+A function declaration has a name, a list of parameters in parentheses, and a body that ends with `end`. The `return` statement ends the function and returns a result. This function computes the area of a rectangle.
 
 ```lus
 local function area(width, height)
@@ -784,13 +784,13 @@ print(area(3, 4))   --> 12
 print(area(10, 2))  --> 20
 ```
 
-`local function` declares the function as a [local variable](/manual/guide#variables), which is visible from its declaration to the end of the enclosing block. Without `local`, the declaration assigns a global variable. Most functions of a program are local, and the functions that a file shares with other files go into a [module](/manual/guide#modules).
+`local function` declares the function as a [local variable](#local-variables). Most functions of a program are local. Functions that other files need go into a [module](#modules).
 
-A call is the name of the function followed by its arguments in parentheses. A call is an expression when its result is used, as in `print(area(3, 4))`, and a statement when it stands alone. A function that reaches its `end` without a `return` gives back no result. A call whose only argument is a string literal may omit the parentheses, so `print "ready"` is the same call as `print("ready")`.
+A call can be part of an expression, as in `print(area(3, 4))`, or a statement of its own. A function that reaches its `end` without a `return` returns no result. A call whose only argument is a string literal can omit the parentheses, so `print "ready"` is the same as `print("ready")`.
 
 ### Parameters and arguments
 
-A _parameter_ is a local variable of the function that receives one argument of the call. Lus matches arguments to parameters by position. A parameter without an argument holds `nil`, and an argument without a parameter is dropped.
+A _parameter_ is a local variable of the function. Each parameter holds one argument of the call, matched by position. A parameter without an argument is `nil`. An argument without a parameter is ignored.
 
 ```lus
 local function show(a, b)
@@ -801,7 +801,7 @@ show(1)        --> 1  nil
 show(1, 2, 3)  --> 1  2
 ```
 
-A missing argument is `nil`, so a function gives a parameter a default value with the `or` operator. The following function repeats a greeting once unless the caller asks for more.
+Because a missing argument is `nil`, `or` gives a parameter a default value. In this function, `times` is 1 when the call leaves it out.
 
 ```lus
 local function greet(name, times)
@@ -816,11 +816,11 @@ greet("Lin", 2)   --> Hello, Lin!
                   --> Hello, Lin!
 ```
 
-A parameter that accepts `false` as a meaningful value tests for `nil` with `if times == nil then` before it assigns the default, because `or` replaces `false` as well.
+`or` also replaces `false`. A parameter for which `false` is a valid value needs `if times == nil then` before the default is assigned.
 
 ### Multiple results
 
-A function can return several values at once, separated by commas. This suits a calculation that naturally produces more than one answer, such as a quotient with its remainder or a result with a status. The caller receives the values with a multiple assignment.
+A function can return several values, separated by commas. This is useful for a calculation with more than one answer, such as a quotient and its remainder. A multiple assignment receives the values.
 
 ```lus
 local function clock(seconds)
@@ -835,11 +835,11 @@ print(clock(7384), "end")    --> 2  end
 print((clock(7384)))         --> 2
 ```
 
-A caller takes as many results as it has variables. Extra results are dropped, and extra variables receive `nil`. A call keeps all of its results only when it is the last expression in a list of expressions, as in the first `print`. Anywhere else in a list, as before `"end"`, and inside parentheses, a call produces its first result only.
+An assignment takes as many results as it has variables. Extra results are ignored. Extra variables are `nil`. A call keeps all of its results only when it is the last expression in a list, as in the first `print`. Elsewhere in a list, as before `"end"`, a call produces only its first result. Parentheses around a call also keep only the first result.
 
 ### Variable arguments
 
-Some functions accept any number of arguments. `print` is one. A function that adds a prefix and passes the remaining arguments to `print` must accept any number of arguments too. Three dots as the last parameter accept every extra argument, and three dots in the body stand for those arguments, in order.
+Some functions accept any number of arguments, as `print` does. Three dots as the last parameter accept all the extra arguments. In the body, three dots stand for those arguments. This `log` function adds a prefix and passes the rest of its arguments to `print`.
 
 ```lus
 local function log(level, ...)
@@ -852,7 +852,7 @@ log("warn", "disk at", 91, "%")     --> [warn]  disk at  91  %
 
 ### Functions as values
 
-A function is a value, like a number or a string. A program can store it in a variable, pass it to another function, and return it from one. This lets one function leave a decision to its caller. The following `retry` function knows how to repeat an action until it succeeds, and the caller supplies the action.
+A function is a value, like a number or a string. It can be stored in a variable, passed to another function, and returned from one. The `retry` function repeats an action until the action succeeds. The action is a function that is passed as an argument.
 
 ```lus
 local function retry(attempts, action)
@@ -871,13 +871,13 @@ end)
 print(value, tries)  --> connected  3
 ```
 
-The expression `function(attempt) ... end` creates a function without giving it a name. It is the same kind of value that a declaration creates, and `local function f() end` declares the variable `f` and assigns such a function to it.
+The expression `function(attempt) ... end` creates a function without a name. A declaration such as `local function f() end` creates the same kind of value and stores it in the variable `f`.
 
 ### Functions that remember local variables
 
-A function can read and assign the local variables that are visible where it is written. It keeps that access for as long as the function itself exists, even after the block that declared the variables has ended. This gives a function private state that no other code can reach.
+A function can use the local variables that are in scope where it is written. It keeps them after their block has ended. This gives a function private state that no other code can reach.
 
-The following `counter` function returns a new function on each call. Each returned function has its own `count` variable, because each call of `counter` creates a new one.
+`counter` returns a new function on each call. Each call of `counter` creates a new `count` variable, so each returned function has its own count.
 
 ```lus
 local function counter()
@@ -894,7 +894,7 @@ print(next_ticket(), next_ticket(), next_ticket())  --> 1  2  3
 print(next_order())                               --> 1
 ```
 
-The same ability prepares a _callback_, a function that a program hands to other code to call later. The `logger` function below returns a function that remembers its `prefix`, so each part of a program gets a logging function that needs one argument, and the prefix is written once.
+This is also how a program prepares a _callback_, which is a function that other code calls later. `logger` returns a function that keeps its `prefix`. Each part of a program gets its own logging function. The prefix is written only once.
 
 ```lus
 local function logger(prefix)
@@ -909,7 +909,7 @@ db_log("connected")       --> [db] connected
 http_log("listening")     --> [http] listening
 ```
 
-Two functions written in the same block share the variables of that block. An assignment made by one is visible to the other, because both use the same variable.
+Two functions written in the same block share the variables of that block. When one function assigns a variable, the other sees the new value.
 
 ```lus
 local function account(balance)
@@ -929,7 +929,7 @@ print(report())  --> balance: 150
 
 ### Recursion
 
-A function may call itself. This fits problems that contain a smaller copy of themselves, such as walking a tree of folders or computing a factorial.
+A function can call itself. This is called _recursion_. It is useful for problems that contain a smaller version of themselves, such as a tree of folders or a factorial.
 
 ```lus
 local function factorial(n)
@@ -943,7 +943,7 @@ print(factorial(5))   --> 120
 print(factorial(20))  --> 2432902008176640000
 ```
 
-The `local function` form makes the name visible inside the body, which a recursive function needs. Every call that has not returned yet occupies memory, so a recursion that goes too deep raises the error `stack overflow`.
+`local function` makes the name visible inside the body, which a recursive function needs. Every call that has not returned uses memory. A recursion that goes too deep fails with the error `stack overflow`.
 
 ## Tables
 
