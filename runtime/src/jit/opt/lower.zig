@@ -187,8 +187,13 @@ pub const Persist = struct {
     self_rounds: u32 = 0,
 };
 
+/// What makes two instructions of a block the same. The class is part of
+/// the key because each class counts its versions on its own, so a load of
+/// a slot and a load of the same slot as a captured register can carry
+/// equal versions.
 const CseKey = struct {
     op: ir.Op,
+    cls: ir.Class,
     ty: Ty,
     cond: u8,
     size: u8,
@@ -507,7 +512,7 @@ pub const Lower = struct {
     }
 
     fn keyOf(b: *Lower, i: *const Inst) CseKey {
-        return .{ .op = i.op, .ty = i.ty, .cond = i.cond, .size = i.size, .a = i.a, .b = i.b, .imm = i.imm, .aux = i.aux, .ver = b.version(i) };
+        return .{ .op = i.op, .cls = i.cls, .ty = i.ty, .cond = i.cond, .size = i.size, .a = i.a, .b = i.b, .imm = i.imm, .aux = i.aux, .ver = b.version(i) };
     }
 
     /// Emits an instruction whose result depends only on its operands
