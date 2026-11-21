@@ -159,17 +159,31 @@ fn pushZoned(l: *Thread, span: Span, offset: i64) Error!*Userdata {
 }
 
 /// Resolves the wall clock time `naive` (seconds since the epoch as if
-/// UTC) through `zone`, pushes the zoned result and attaches the zone. One
-/// correction pass handles the usual daylight saving step. Gaps and
-/// overlaps resolve to a single deterministic side.
+/// UTC) through `zone`, pushes the zoned result and attaches the zone.
+/// The offsets around `naive` are the candidates. A time that two of them
+/// read takes the earlier instant, and a time in a gap, which none of them
+/// reads, moves forward by the length of the gap.
 fn pushZonedInZone(l: *Thread, naive: i64, frac: i32, zone: Value) Error!void {
     const z = zoneOf(zone);
-    var g = z.offsetAt(naive);
-    var utc = try ok(l, i64, tc.subChecked(naive, g));
-    const g2 = z.offsetAt(utc);
-    if (g2 != g) {
-        utc = try ok(l, i64, tc.subChecked(naive, g2));
-        g = g2;
+    const a = z.offsetAt(naive);
+    const b = z.offsetAt(try ok(l, i64, tc.subChecked(naive, a)));
+    const lo = @min(a, b);
+    const hi = @max(a, b);
+    const at_hi = try ok(l, i64, tc.subChecked(naive, hi));
+    const at_lo = try ok(l, i64, tc.subChecked(naive, lo));
+    var utc: i64 = undefined;
+    var g: i64 = undefined;
+    if (z.offsetAt(at_hi) == hi) {
+        utc = at_hi;
+        g = hi;
+    } else if (z.offsetAt(at_lo) == lo) {
+        utc = at_lo;
+        g = lo;
+    } else {
+        // In a gap, the offset before it applies, which lands past the
+        // gap, where the offset after it holds.
+        utc = at_lo;
+        g = z.offsetAt(at_lo);
     }
     const u = try pushZoned(l, .{ .sec = utc, .nsec = frac }, g);
     u.userValues()[0] = zone;
