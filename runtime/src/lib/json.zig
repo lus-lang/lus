@@ -607,7 +607,7 @@ const Writer = struct {
                 if (std.math.isNan(f) or std.math.isInf(f)) return w.write("null");
                 var tmp: std.ArrayList(u8) = .empty;
                 defer tmp.deinit(gpa);
-                ops.formatG(gpa, &tmp, f, 17) catch return w.l.raiseMem();
+                ops.formatRoundTrip(gpa, &tmp, f) catch return w.l.raiseMem();
                 try w.write(tmp.items);
             },
             else => {

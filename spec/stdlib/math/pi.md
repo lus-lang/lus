@@ -10,10 +10,10 @@ type: number
 
 The float closest to pi, 3.141592653589793.
 
-`math.pi` is a float. [`print`](/manual/api#print) writes it with 17 significant digits, as `3.1415926535897931`.
+`math.pi` is a float. [`print`](/manual/api#print) writes it with the fewest digits that read back as the same float, as `3.141592653589793`.
 
 ```lus
-print(math.pi)                    --> 3.1415926535897931
+print(math.pi)                    --> 3.141592653589793
 print(math.pi == 4 * math.atan(1))  --> true
 print(math.cos(math.pi))          --> -1.0
 ```

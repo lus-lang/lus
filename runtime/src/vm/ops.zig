@@ -648,15 +648,24 @@ pub fn formatFloat(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !voi
         return;
     }
     const start = buf.items.len;
-    try formatG(gpa, buf, f, 14);
-    // Use more digits when 14 do not read back as the same float.
-    const back = std.fmt.parseFloat(f64, buf.items[start..]) catch f;
-    if (back != f) {
-        buf.items.len = start;
-        try formatG(gpa, buf, f, 17);
-    }
+    try formatRoundTrip(gpa, buf, f);
     const s = buf.items[start..];
     if (std.mem.indexOfAny(u8, s, ".eEn") == null) try buf.appendSlice(gpa, ".0");
+}
+
+/// Writes the finite float `f` in the `%g` form with the fewest digits
+/// from 14 up that read back as the same float. 17 always do, and most
+/// floats need 14 at most.
+pub fn formatRoundTrip(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !void {
+    const start = buf.items.len;
+    var p: usize = 14;
+    while (true) : (p += 1) {
+        buf.items.len = start;
+        try formatG(gpa, buf, f, p);
+        if (p == 17) return;
+        const back = std.fmt.parseFloat(f64, buf.items[start..]) catch return;
+        if (back == f) return;
+    }
 }
 
 /// Significant digits of a finite nonzero |f| rounded half to even to `p`
@@ -999,7 +1008,7 @@ test "float formatting" {
     defer buf.deinit(gpa);
     const cases = [_]struct { f64, []const u8 }{
         .{ 1.0, "1.0" },                             .{ 0.1, "0.1" },       .{ 1e100, "1e+100" },
-        .{ 123456789012345.0, "123456789012345.0" }, .{ -2.5, "-2.5" },     .{ 1.0 / 3.0, "0.33333333333333331" },
+        .{ 123456789012345.0, "123456789012345.0" }, .{ -2.5, "-2.5" },     .{ 1.0 / 3.0, "0.3333333333333333" },
         .{ 1e15, "1e+15" },                          .{ 0.0001, "0.0001" }, .{ 0.00001, "1e-05" },
         .{ 3.14159, "3.14159" },
     };
