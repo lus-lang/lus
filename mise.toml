@@ -24,6 +24,10 @@ run = [
   "zig-out/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents",
 ]
 
+[tasks."test:linux"]
+description = "Run the conformance suite on Linux in the local Lima VM (LUS_LIMA_VM, default boring), on aarch64 and on x86-64 under qemu-user"
+run = "sh tools/test-linux.sh"
+
 [tasks."install:test"]
 description = "Run install.sh against a local release built from runtime/zig-out"
 depends = ["build"]
