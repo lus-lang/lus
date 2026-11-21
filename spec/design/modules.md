@@ -373,7 +373,7 @@ A dependency copied into a self-contained bundle keeps its own flags. The module
 
 ## 7. The language server
 
-Inside the string of a `require`, the language server completes atmosphere URLs when the `atmos` command is on `PATH`. It runs `atmos search --json --server SERVER PREFIX` for `https://atmosp.here` and for every server in the setting `lus.atmosphere.servers`, a list of base URLs of custom atmosphere servers. URL completion needs `atmos`. Hover over a remote require shows the package header from the cached release document. A permission that the header declares and the program never pledges is reported as a diagnostic.
+Inside the string of a `require`, the language server completes atmosphere URLs when the `atmos` command is on `PATH`. It runs `atmos search --json --server SERVER PREFIX` for `https://atmosp.here` and for every server in the setting `lus.atmosphere.servers`, a list of base URLs of custom atmosphere servers. URL completion needs `atmos`. The VSCode extension runs the language server as WebAssembly, which cannot start a process, so the extension asks `atmos` itself and reads the same setting.
 
 ## 8. WebAssembly
 

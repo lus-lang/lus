@@ -437,7 +437,7 @@ lus build -o app main.lus
 ./app first-argument
 ```
 
-The command compiles the script, finds every `require` whose argument is a string literal, and searches the module path for a file for each of those names, as `require` does. It compiles the files that it finds, then does the same for the modules that those files require. `LUS_PATH` changes the module path, as it does for the interpreter. When no file matches a name, the executable contains no module of that name, so `require` searches for the module when the program runs.
+The command compiles the script, finds every `require` whose argument is a string literal, and searches the module path for a file for each of those names, as `require` does. It compiles the files that it finds, then does the same for the modules that those files require. `LUS_PATH` changes the module path, as it does for the interpreter. When no file matches a name, the executable contains no module of that name, so `require` searches for the module when the program runs. A literal URL names a [remote module](/manual/guide#modules-from-the-network). `lus build` downloads it and bundles it with every module of its package, so the executable never contacts the network to load it.
 
 ### Including modules
 
