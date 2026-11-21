@@ -252,6 +252,7 @@ pub fn main(init: std.process.Init) !u8 {
 /// exits.
 fn setupFailAlloc(init: std.process.Init) void {
     const inject = lus.vm.heapcount.inject;
+    inject.trace = init.environ_map.get("LUS_FAIL_ALLOC_TRACE") != null;
     const v = init.environ_map.get("LUS_FAIL_ALLOC") orelse return;
     if (std.mem.eql(u8, v, "count")) {
         report_allocs = true;
