@@ -536,6 +536,11 @@ end
 -- stale scripts, so the failure is swallowed.
 catch fs.createdirectory(TMP)
 
+-- Raise a table, a number, and a table that cannot cross between states.
+scripts["tableerror"] = [==[error({ code = 42, msg = "bad" })]==]
+scripts["numbererror"] = [==[error(17)]==]
+scripts["funcerror"] = [==[error({ f = print })]==]
+
 -- Write every generated helper script to disk.
 local script_names = {}
 for name, src in pairs(scripts) do
@@ -1259,3 +1264,18 @@ local function a_worker_cannot_escalate_to_a_permission_the_parent_lacks_test()
 end
 
 ------------------------------------------------------------------------------
+
+
+-- An error value that is not a string reaches the creator as a copy, on
+-- every receive, and one that cannot cross arrives as its string form.
+local function a_table_error_arrives_as_a_table_test()
+    local w = worker.create(gen("tableerror"))
+    for _ = 1, 2 do
+        local ok, e = catch worker.receive(w)
+        assert(not ok and type(e) == "table" and e.code == 42 and e.msg == "bad")
+    end
+    local ok, e = catch worker.receive(worker.create(gen("numbererror")))
+    assert(not ok and e == 17)
+    ok, e = catch worker.receive(worker.create(gen("funcerror")))
+    assert(not ok and type(e) == "string" and e:find("table: ", 1, true), tostring(e))
+end
