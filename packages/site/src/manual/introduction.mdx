@@ -14,53 +14,51 @@ The language is [sovereign](#sovereignty), meaning that its built-in facilities 
 
 ## Background
 
-Lus is a _superset_ of Lua that builds on its minimalism and ease of use. It is a complete language with its own runtime and executes Lus source directly.
+Lus grew from Lua 5.5 and keeps its syntax, its values, and its minimalism. It is a complete language with its own runtime and executes Lus source directly. [Coming from Lua](/manual/adapting) lists the changes that existing Lua code may need, and [Lus and Lua](/manual/lua) explains why the two languages differ.
 
-This language was developed out of a need to bring Lua into the world of general-purpose programming. Lua focuses on embeddability first and runtime second, which has historically meant a limited standard library and a reliance on third-party packages for even basic tasks. However, even as we depart from Lua's simple scope, we still wish to retain its conciseness.
+This language was developed out of a need to bring Lua into the world of general-purpose programming. Lua focuses on embeddability first and runtime second, which has historically meant a limited standard library and a reliance on third-party packages for even basic tasks. Lus takes on that wider scope and keeps Lua's conciseness.
 
 Lus is a personal project of [Louka Ménard Blondin](https://louka.sh) and is maintained on a best-effort basis.
 
 ## Sovereignty
 
-_Language sovereignty_ is the agency a language expresses on three fronts: agency in its **implementation** (is the language limited by the environment it is embedded in?), agency in its **use** (do you need third-party libraries to do anything useful?), and agency in its **adoption** (does it take great mental effort to learn and use?).
+_Language sovereignty_ is the agency a language expresses on three fronts. The first is its **implementation**: how far the environment it runs in limits it. The second is its **use**: how much a program can do before it needs a third-party library. The third is its **adoption**: how much effort it takes to learn and use.
 
-Lus optimizes for all three by offering a good, cross-platform standard library that covers real programs, combined with Lua's pretty simple, useable syntax.
+Lus optimizes for all three by offering a cross-platform standard library that covers real programs, combined with Lua's small, readable syntax.
 
 ## Goals
 
 These are the design goals of Lus that drive the language's development.
 
-- **Boring is good.** The language should not implement every new trend in programming language theory.
+- **Boring is good.** The language adopts an idea once it has proven itself in practice, and leaves the latest trends in programming language theory to other languages.
 
-- **Use-first approach.** The language shouldn't be difficult to find, install, and use.
+- **Use-first approach.** The language is easy to find, install, and use.
 
-- **Solve real-world problems.** The language must be oriented towards productivity and not just theoretical purity.
+- **Solve real-world problems.** The language is oriented towards productivity, and practical needs come before theoretical purity.
 
-- **Sovereignty.** The language should be reasonably usable on its own without dependence on third-party runtimes or libraries.
+- **Sovereignty.** The language is usable on its own. One executable carries the runtime, the standard library, and the tools, so a program needs no third-party runtime or library to do useful work.
 
-- **Minimalism.** Lus should retain Lua's ease of adoption, with concise and readable syntax involving the smallest possible number of keywords.
+- **Minimalism.** Lus keeps Lua's ease of adoption, with concise and readable syntax and the smallest possible number of keywords.
 
-- **Strong release engineering.** The language should have stable, well-tested releases and not be in a constant state of flux.
+- **Explicit permissions.** A program states what it may touch. A script starts with no access to files, the network, processes, or the environment, and [pledges](/manual/permissions) each capability it uses, so its first lines show what it can reach.
 
-- **Backwards _embeddability_.** Lua was engineered to be highly embeddable, and while we focus on the sovereignty of the runtime, we also want to preserve the ease of integration that we inherited.
+- **Strong release engineering.** The language has stable, well-tested releases and a design that changes deliberately.
+
+- **Backwards _embeddability_.** Lua was engineered to be highly embeddable, and Lus keeps that ease of integration while it focuses on the sovereignty of the runtime. The runtime is written in Zig and exposes a C interface modeled on Lua's, so a host [embeds Lus](/manual/embedding) the way it embeds Lua. The same runtime also embeds in Zig programs and runs in the browser through [WebAssembly](/manual/webassembly).
 
 The following are **non-goals** of Lus.
 
-- **Strong typing.** The language should remain appreciative of Lua's strict adherence to dynamic typing.
+- **Strong typing.** The language keeps Lua's dynamic typing.
 
-- **_Other language syndrome._** Developers like to solve problems using patterns from languages they already know rather than implementing idiomatic solutions. Lus resists this and instead seeks language-proper solutions to its problems.
+- **_Other language syndrome._** Developers like to solve problems using patterns from languages they already know rather than implementing idiomatic solutions. Lus resists this and seeks solutions that belong to the language itself.
 
 - **Modules.** The require-based loader organizes code, while local variables and closures express scope and visibility.
 
-- **Native code generation.** Lus focuses on improving its existing interpreter rather than developing a compiler to generate native code, as is often found in other derivatives of Lua. This is not an opinion on the merits of native code generation, but rather a scope-fixing decision to limit the language's complexity.
-
-- **Event loops (`async`/`await`).** Event loops are too often an overcomplicated solution to the problem of concurrency in GIL, single-threaded languages. Lus instead supplements the existing system of coroutines with multi-threaded state workers based on M:N hybrid threading and message-passing, which are entirely sufficient for most use cases, including I/O and networking.
-
-- **Bureaucracy.** Lus doesn't committee to approve changes to the language, does not have an organization to plan its development, and does not have a foundation to manage its funding. It is a single-repository project dedicated to the public domain and maintained with as little processes as possible.
+- **Bureaucracy.** Lus has no committee to approve changes to the language, no organization to plan its development, and no foundation to manage its funding. It is a single-repository project dedicated to the public domain and maintained with as little process as possible.
 
 ## Contributing
 
-Contributions are welcome where they make the language better at what it already is, so bugfixes, optimizations, and test cases are appreciated. Feature requests are scrutinized and most likely declined, as design decisions stay with the author so the language remains coherent and moves quickly. Contributors should have a working knowledge of C, Lua, and Lus, and an understanding of how an interpreter and a garbage collector work.
+Contributions are welcome where they make the language better at what it already is, so bugfixes, optimizations, and test cases are appreciated. Feature requests are scrutinized and most likely declined, as design decisions stay with the author so the language remains coherent and moves quickly. Contributors should have a working knowledge of Zig, Lua, and Lus, and an understanding of how an interpreter and a garbage collector work.
 
 LLM use is permitted when the operator knows Lus and the implementation languages, understands the complete change, and carefully reviews everything that gets pushed. Every contribution receives extensive human investigation before it enters the repository.
 
