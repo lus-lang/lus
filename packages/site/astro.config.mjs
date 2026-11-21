@@ -51,6 +51,8 @@ export default defineConfig({
     // the numbered feature pages folded into the guide and the topic pages
     "/manual/acquis": "/manual/guide",
     "/manual/acquis-0": "/manual/introduction",
+    "/manual/adapting": "/manual/lua",
+    "/manual/patterns": "/manual/lua",
     "/manual/acquis-1": "/manual/guide#errors",
     "/manual/acquis-2": "/manual/guide#optional-chaining",
     "/manual/acquis-3": "/manual/guide#if-statements",
