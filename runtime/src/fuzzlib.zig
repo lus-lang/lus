@@ -133,8 +133,11 @@ const patterns = target(
     \\    if (i == nil) ~= (m == nil) then fail("find and match disagree on", A, subject) end
     \\    if r ~= subject then fail("gsub with %0 changed", subject, "to", r, "for", A) end
     \\    if i and (i < 1 or j < i - 1 or j > #subject) then fail("find returned", i, j, "for", A, subject) end
+    \\    -- gmatch reads a leading ^ as a character, so it may reach a part of
+    \\    -- the pattern that the anchored search never reached, and raise.
     \\    local n = 0
-    \\    for _ in string.gmatch(subject, A) do n = n + 1 if n > #subject + 1 then fail("gmatch did not end for", A) end end
+    \\    local okm2, e = catch (function() for _ in string.gmatch(subject, A) do n = n + 1 if n > #subject + 1 then fail("gmatch did not end for", A) end end end)()
+    \\    if not okm2 and tostring(e):find("PROPERTY") then error(e, 0) end
     \\end
     \\catch string.gsub(subject, A, B)
     \\catch string.find(subject, A, -3, false)

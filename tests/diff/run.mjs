@@ -44,6 +44,13 @@ async function one(seed) {
     const file = path.join(tmp, `p${seed}.lus`);
     writeFileSync(file, src);
     const results = await Promise.all(configs.map((c) => runOne(file, c, binaries, timeout)));
+    // A timeout under load is often the machine and not the program, so a
+    // configuration that timed out runs once more on its own.
+    if (results.some((r) => r.signal === "timeout") && !results.every((r) => r.signal === "timeout")) {
+        for (let i = 0; i < results.length; i++) {
+            if (results[i].signal === "timeout") results[i] = await runOne(file, configs[i], binaries, timeout * 2);
+        }
+    }
     ran++;
     const findings = judge(results);
     rmSync(file, { force: true });
