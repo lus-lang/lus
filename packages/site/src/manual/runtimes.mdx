@@ -1,0 +1,111 @@
+---
+order: 5.6
+title: "Lus and other runtimes"
+icon: scale
+group: learn
+shortdesc: "How the design of Lus compares with Bun, Node.js, Python, Ruby, PHP, and LuaJIT, with the measurements behind each claim."
+---
+
+Lus is a dynamic language for complete programs, the same niche as JavaScript on Bun and Node.js, Python, Ruby, and PHP. This page explains the design decisions that set Lus apart from those runtimes and from LuaJIT, and what each decision costs. Every claim about speed or memory rests on the cross-language suite described below.
+
+## The measurements
+
+The suite in `tests/bench/compare` holds six programs, each written once per language in its idiomatic style with its standard library first, and an HTTP server. Every program generates the same input in process and prints a checksum, and the harness checks that every runtime prints the same line before it times anything. The figures below were measured on 20 November 2026 on an Apple M4 Max with 14 cores and 36 GB under macOS 27.2.1, best of 7 runs. Lus is a ReleaseFast build with its default JIT tiers, Ruby runs with YJIT, and PHP runs with opcache and its tracing JIT. The [benchmarks](/#benchmarks) on the home page and [benchmarks.md](/benchmarks.md) always show the latest run of the suite.
+
+The wall time of each program, in seconds, shows Lus first on five of the six programs and PHP first on `logs`.
+
+| Program | Lus | Bun | Node.js | PHP | LuaJIT | Python | Ruby |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| csv | **0.62** | 0.82 | 1.56 | 1.28 | 2.44 | 2.26 | 5.25 |
+| json | **0.49** | 0.60 | 0.92 | 0.84 | 4.21 | 2.19 | 1.81 |
+| logs | 0.72 | 0.90 | 1.28 | **0.55** | 1.42 | 1.80 | 1.95 |
+| lru | **0.88** | 0.94 | 1.32 | 1.12 | 1.48 | 2.86 | 1.90 |
+| template | **0.56** | 0.66 | 1.20 | 0.64 | 2.04 | 1.87 | 1.62 |
+| wordfreq | **1.00** | 1.92 | 2.72 | 1.15 | 1.06 | 4.47 | 3.68 |
+
+The peak resident memory of each program, in megabytes, shows Lus below Bun and Node.js on every program. Python, Ruby, PHP, and LuaJIT each use less memory than Lus on at least one program.
+
+| Program | Lus | Bun | Node.js | PHP | LuaJIT | Python | Ruby |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| csv | 510 | 1386 | 1008 | 993 | **484** | 1103 | 1104 |
+| json | **710** | 824 | 842 | 1670 | 942 | 1244 | 938 |
+| logs | 452 | 976 | 804 | 636 | 446 | **442** | 467 |
+| lru | 62 | 177 | 156 | **45** | 116 | **45** | 52 |
+| template | 752 | 1128 | 1127 | 1100 | 876 | 686 | **537** |
+| wordfreq | 331 | 1150 | 874 | 684 | 458 | 829 | **96** |
+
+The HTTP server answers each request with a JSON document built for that request, under 64 keep-alive connections. LuaJIT has no sockets in its standard library and takes part in the compute programs only.
+
+| Server | Requests per second | Median latency | 99th percentile | Peak memory |
+|---|---:|---:|---:|---:|
+| PHP | **170,880** | **0.40 ms** | 0.82 ms | 29.6 MB |
+| Lus, `network.serve` | 139,598 | 0.47 ms | **0.53 ms** | **8.1 MB** |
+| Bun, `Bun.serve` | 129,524 | 0.43 ms | 0.92 ms | 36.5 MB |
+| Node.js, `http` | 101,875 | 0.60 ms | 1.22 ms | 82.8 MB |
+| Ruby | 72,776 | 0.81 ms | 1.58 ms | 26.7 MB |
+| Python, `ThreadingHTTPServer` | 26,525 | 1.79 ms | 8.11 ms | 26.9 MB |
+
+## A small language
+
+JavaScript, Python, Ruby, and PHP are large languages. Each has classes, several ways to define a function, and decades of syntax that a runtime must keep working. Lus keeps the grammar of Lua, where one table type serves as array, record, object, and module, and functions are the only unit of behavior. A Lus program therefore has few constructs to read, and the runtime has few to make fast.
+
+The small grammar is also why one person can build three compilers for it. The interpreter, the baseline JIT, and the optimizing tier share the definition of every instruction, so a construct that the optimizing tier compiles behaves exactly as it does in the interpreter. A larger language spreads the same effort over more constructs.
+
+The cost is expressiveness that some programmers expect. Lus has no classes, no static types, and no decorators. A program builds objects from tables and metatables, as a Lua program does.
+
+## One executable
+
+A Lus program needs the `lus` executable and nothing else. The standard library covers JSON, CSV, SQLite, HTTP clients and servers, sockets, the filesystem, compression, and time zones, and the same executable formats, checks, tests, and debugs code. It is about 7 MB.
+
+Python and PHP share this view of a large standard library, and Bun ships its runtime, package manager, bundler, and test runner as one executable too. Node.js and Ruby lean on their package registries for formats, databases, and tooling. LuaJIT inherits the small library of Lua 5.1 and leaves the rest to C libraries that the host or the program loads.
+
+A program that depends only on the executable keeps working as long as the executable does, and needs no install step on a new machine. The cost is size and scope: the runtime carries code for formats a given program never touches, and a library that the standard library lacks has to be written in Lus or embedded from C.
+
+## Concurrency without colored functions
+
+Bun, Node.js, and Python mark a function that waits with `async`, and every caller of such a function has to `await` it. Lus marks nothing. A socket read inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine, and the scheduler resumes it when the socket is ready. The same function runs unchanged in the main chunk, in a plain coroutine, and in a detached one, so a library never comes in two versions.
+
+Parallelism comes from [workers](/manual/concurrency#workers). Each worker is a complete state with its own heap and collector on its own operating system thread, and workers exchange messages. Python holds a global interpreter lock in its default build, and Ruby holds a global VM lock, so threads in either share one core for interpreted code. Lus workers share nothing, so no lock exists to hold, and no collection stops more than one thread.
+
+The HTTP results show the effect. `network.serve` runs every connection in a detached coroutine on one thread, and its 99th percentile latency is the lowest of the six servers. PHP serves about 22 percent more requests per second, and Bun and PHP answer the median request faster.
+
+## Memory
+
+Lus uses less memory than Bun and Node.js on every program of the suite, between 1.2 and 3.5 times less than Bun. The runtime is laid out to hold data compactly:
+
+- A value takes 16 bytes, and integers and floats live inside it, so a number never allocates.
+- A table header takes 48 bytes, and a table with a small known size keeps its parts in the same allocation.
+- Strings hold WTF-8, one byte per ASCII character, and short strings are interned, so a repeated key or word is stored once.
+- The collector is generational and non-moving, with pages sized by class, so a program that holds its data steadily stays close to the size of that data.
+
+The memory of the HTTP server follows from the same decisions. A suspended detached coroutine with its stack takes about 1.6 KB, and the server peaked at 8.1 MB under load, a quarter of PHP and a tenth of Node.js.
+
+Several runtimes use less memory than Lus on some programs. Ruby runs `wordfreq` in 96 MB against 331 MB for Lus. Python and PHP run `lru` in 45 MB against 62 MB. LuaJIT, whose values take 8 bytes, uses slightly less memory than Lus on `csv` and `logs`, and Python does on `logs` and `template`.
+
+## Speed
+
+Lus runs code in an interpreter, compiles hot functions with a baseline JIT, and compiles code that stays hot with an optimizing tier that keeps values unboxed in machine registers. Bun, Node.js, LuaJIT, Ruby with YJIT, and PHP with its tracing JIT compile to native code as well, and Python 3.14 runs in its interpreter by default. The tables above therefore compare compilers in every column but one.
+
+Lus is faster than Bun on all six programs, by 7 percent on `lru` and by 92 percent on `wordfreq`. It is faster than Node.js, Python, Ruby, and LuaJIT on all six. The JSON and CSV codecs and the string functions are written in Zig, the language of the runtime, so a program that spends its time in them runs compiled library code.
+
+PHP finishes `logs` in 0.55 seconds against 0.72 for Lus. That program parses each line with one regular expression, which PHP hands to PCRE, a regular expression library that compiles each pattern to native code.
+
+## Permissions
+
+A Lus script starts with no access to files, the network, processes, or the environment, and [pledges](/manual/permissions) what it uses. Node.js has a permission model that a flag turns on, and Bun, Python, Ruby, PHP, and LuaJIT give every script the full authority of its user. A Lus program therefore states its reach in its first lines, and a dependency cannot reach further than the program that loads it.
+
+## Embedding
+
+Lus keeps the embedding model of Lua. A host links one library, creates a state, and exchanges values with it through a stack in the C interface `lus.h`, as [Embedding](/manual/embedding) describes. Python and Ruby can be embedded through their C interfaces, and V8 and JavaScriptCore through C++ interfaces, but each of them carries a much larger runtime into the host. LuaJIT embeds as easily as Lus and is smaller, with the smaller library of Lua 5.1.
+
+## Choosing a runtime
+
+The decisions above suit some programs better than others.
+
+- **Lus** suits scripts, command line tools, and services that should run from one file, start with only the access they declare, and use little memory.
+- **Bun and Node.js** suit programs that need the npm ecosystem or share code with a browser.
+- **Python** suits programs that need its scientific and machine learning libraries.
+- **Ruby and PHP** suit web applications built on their frameworks. PHP also serves plain HTTP faster than Lus today.
+- **LuaJIT** suits hosts that embed Lua 5.1 code and need its FFI.
+
+[Lus and Lua](/manual/lua) explains where Lus departs from Lua, and [Coroutines and workers](/manual/concurrency) describes detached coroutines and workers in full.
