@@ -7,15 +7,20 @@
 ; AppVer is the release version and NumVer its numeric x.y.z part, which
 ; the Windows version resource requires.
 ;
-; The installer copies the archive as it is: bin\lus.exe with lus.dll,
-; the embedding libraries in lib, lus.h in include, and the license
-; texts. It adds {app}\bin to PATH.
+; The installer lays the release out as the Lus home that `lus version`
+; manages (spec/tools/version.md). It copies the archive as it is into
+; {app}\versions\<version>: bin\lus.exe with lus.dll, the embedding
+; libraries in lib, lus.h in include, and the license texts. It copies
+; lus.exe to {app}\bin, writes the version to {app}\default and the
+; channel to the version's channel file, and adds {app}\bin to PATH.
 ;
-; Per user by default: installs to {localappdata}\Programs\Lus and edits
-; the user PATH, with no admin rights and no UAC prompt. Run with
-; /ALLUSERS from an elevated prompt for a machine-wide install
-; (Program Files and the system PATH). Standard silent flags apply:
-; /VERYSILENT /SUPPRESSMSGBOXES.
+; Per user by default: installs to {localappdata}\lus, the default Lus
+; home on Windows, and edits the user PATH, with no admin rights and no
+; UAC prompt. Run with /ALLUSERS from an elevated prompt for a
+; machine-wide install in Program Files with the system PATH. `lus
+; version` manages the per-user home, so a machine-wide install is
+; outside its reach unless LUS_HOME names it. Standard silent flags
+; apply: /VERYSILENT /SUPPRESSMSGBOXES.
 
 #ifndef AppVer
   #define AppVer "0.0.0"
@@ -35,9 +40,9 @@ AppPublisher=The Lus Project
 AppPublisherURL=https://lus.dev
 AppSupportURL=https://lus.dev/manual
 LicenseFile={#Archive}\LICENSE.md
-; {autopf} resolves per install mode: {localappdata}\Programs in
-; per-user mode, and C:\Program Files under /ALLUSERS.
-DefaultDirName={autopf}\Lus
+; {localappdata}\lus in per-user mode, C:\Program Files\Lus under
+; /ALLUSERS.
+DefaultDirName={code:DefaultHome}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
@@ -52,13 +57,23 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\bin\lus.exe
 
 [Files]
-Source: "{#Archive}\*"; DestDir: "{app}"; Excludes: "*.pdb"; \
+Source: "{#Archive}\*"; DestDir: "{app}\versions\{#AppVer}"; Excludes: "*.pdb"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#Archive}\bin\lus.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
 ; Releases before 2.0 placed lus.exe and lusc.exe directly in {app}.
 [InstallDelete]
 Type: files; Name: "{app}\lus.exe"
 Type: files; Name: "{app}\lusc.exe"
+
+; The uninstaller removes the versions that `lus version` installed and
+; the module cache, which the installer did not copy.
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\versions"
+Type: filesandordirs; Name: "{app}\cache"
+Type: filesandordirs; Name: "{app}\index"
+Type: files; Name: "{app}\default"
+Type: files; Name: "{app}\lock"
 
 ; Append {app}\bin to PATH in the hive matching the install mode. The
 ; NeedsAddPath gate keeps reinstalls and upgrades from duplicating the
@@ -72,6 +87,24 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
   Check: IsAdminInstallMode and NeedsAddPath(ExpandConstant('{app}\bin'))
 
 [Code]
+function DefaultHome(Param: String): String;
+begin
+  if IsAdminInstallMode then Result := ExpandConstant('{autopf}\Lus')
+  else Result := ExpandConstant('{localappdata}\lus');
+end;
+
+{ Records the installed version as the default and its channel, as
+  `lus version install` does. }
+procedure WriteHomeFiles;
+var
+  Channel: String;
+begin
+  if Pos('-unstable', '{#AppVer}') > 0 then Channel := 'unstable'
+  else Channel := 'stable';
+  SaveStringToFile(ExpandConstant('{app}\versions\{#AppVer}\channel'), Channel + #10, False);
+  SaveStringToFile(ExpandConstant('{app}\default'), '{#AppVer}' + #10, False);
+end;
+
 function PathRegRoot: Integer;
 begin
   if IsAdminInstallMode then Result := HKEY_LOCAL_MACHINE
@@ -127,7 +160,10 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
     RemovePath(ExpandConstant('{app}'));
+    WriteHomeFiles;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

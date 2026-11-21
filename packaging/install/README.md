@@ -28,14 +28,26 @@ SHA-256 digest of every asset in `SHA256SUMS`.
   one release. The script is POSIX sh, because it also runs on the BSDs
   and illumos, where it prints build-from-source guidance.
 
+  The script installs into the Lus home, the directory that `lus version`
+  manages (`spec/tools/version.md`). It is `$LUS_HOME`, by default
+  `~/.lus`, and `--home DIR` selects another. The archive goes to
+  `versions/<version>` with a `channel` file, `bin/lus` links to it, and
+  `default` names it, each through a rename. The script then adds
+  `$LUS_HOME/bin` to `PATH` in the profile of the user's shell, once,
+  unless that directory is already on `PATH` or `--no-modify-path` (or
+  `LUS_NO_MODIFY_PATH=1`) is given. No step needs `sudo`.
+
 - **`lus.iss`** is the Inno Setup script for `lus-setup.exe`, the Windows
   installer. The `windows-installer` job of the release workflow unpacks
   the `x86_64-windows` archive into `packaging/install/archive`, compiles
   the script with ISCC, and round-trips a silent install and uninstall as a
   smoke test before the installer joins the draft release. The installer
-  copies the archive contents and adds its `bin` directory to `PATH`.
-  Installation is per user by default, and `/ALLUSERS` selects a
-  machine-wide installation.
+  lays the archive out as the Lus home: it copies the archive into
+  `versions\<version>`, copies `lus.exe` to `bin`, writes `default` and
+  the `channel` file, and adds `bin` to `PATH`. Installation is per user
+  by default, into `%LOCALAPPDATA%\lus`, the default Lus home on Windows.
+  `/ALLUSERS` selects a machine-wide installation in Program Files, which
+  `lus version` manages only when `LUS_HOME` names it.
 
 ## Testing
 
@@ -44,7 +56,9 @@ certificate in `fixtures`. The release holds an archive built from
 `runtime/zig-out`, so the runtime is built first. The test installs from a
 pinned version and from the latest release, runs the installed `lus`, and
 checks that a tampered archive and a release without an archive for the
-host are both rejected.
+host are both rejected. It also checks the layout of the Lus home, that
+the installed `lus version` lists what the script installed, and that the
+shell profile gains one `PATH` line.
 
 ```sh
 (cd runtime && zig build -Doptimize=ReleaseSafe)

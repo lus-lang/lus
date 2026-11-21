@@ -2,15 +2,19 @@
 # The Lus installer, served at https://lus.dev/install.sh
 #
 # Downloads the release archive for this machine from a GitHub release of
-# lus-lang/lus and installs the `lus` executable from it.
+# lus-lang/lus and installs it into the Lus home, the directory that
+# `lus version` manages (spec/tools/version.md).
 #
 #   curl -fsSL https://lus.dev/install.sh | sh
 #
 # A release publishes one archive per target, named
 # lus-<tag>-<target>.tar.gz, beside a SHA256SUMS manifest. The script
 # picks the archive for this machine, checks it against SHA256SUMS before
-# unpacking it, and writes $INSTALL_DIR/lus with an atomic rename. sudo is
-# used only for that copy, and only when the directory is not writable.
+# unpacking it, and unpacks it into $LUS_HOME/versions/<version>. It then
+# makes that version the default: $LUS_HOME/bin/lus links to it and
+# $LUS_HOME/default names it. The Lus home is $LUS_HOME, by default
+# ~/.lus. The script adds $LUS_HOME/bin to PATH in the shell profile
+# unless that directory is already on PATH or --no-modify-path is given.
 #
 # Platforms without prebuilt archives (the BSDs, illumos, and other CPU
 # architectures) get pointed at the build-from-source manual.
@@ -31,13 +35,15 @@ The Lus installer.
 
 Usage:
   curl -fsSL https://lus.dev/install.sh | sh
-  sh install.sh [--version TAG] [--dir DIR]
+  sh install.sh [--version TAG] [--home DIR] [--no-modify-path]
 
 Options:
   --version TAG   install a specific release, such as v2.0.0 or 2.0.0
                   (env: LUS_VERSION). The default is the latest release.
-  --dir DIR       install directory, default /usr/local/bin
-                  (env: LUS_INSTALL_DIR)
+  --home DIR      the Lus home, default ~/.lus (env: LUS_HOME)
+  --no-modify-path
+                  leave the shell profile unchanged
+                  (env: LUS_NO_MODIFY_PATH=1)
   LUS_RELEASE_BASE_URL selects an HTTPS release mirror that serves
                   SHA256SUMS and the archives of one release
   -h, --help      show this help
@@ -181,50 +187,81 @@ extract() {
   fi
 }
 
-# Run a command, under sudo when install_binary decided it's needed.
-run() {
-  if [ -n "$SUDO" ]; then
-    sudo "$@"
-  else
-    "$@"
-  fi
+# version_of ASSET: print the version that the archive name carries,
+# lus-v2.0.3-TARGET.tar.gz giving 2.0.3.
+version_of() {
+  v=${1#lus-v}
+  printf '%s\n' "${v%-"$TARGET".tar.gz}"
 }
 
-# Place the executable under a temporary name, then rename it over
-# $INSTALL_DIR/lus so a running lus never sees a partial file.
-install_binary() {
-  SUDO=""
-  if ! mkdir -p "$INSTALL_DIR" 2>/dev/null || [ ! -w "$INSTALL_DIR" ]; then
-    if [ "$(id -u)" = "0" ]; then
-      die "cannot write to $INSTALL_DIR"
-    fi
-    if ! need sudo; then
-      die "cannot write to $INSTALL_DIR and sudo is unavailable
-Re-run with --dir DIR (or LUS_INSTALL_DIR=DIR) pointing at a writable directory."
-    fi
-    info "sudo is required to write to $INSTALL_DIR"
-    SUDO="sudo"
-    run mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
+# install_version DIR VERSION: move the unpacked archive DIR into
+# $LUS_HOME/versions/VERSION and make it the default. Each step ends in
+# a rename, so an interrupted install leaves the previous state.
+install_version() {
+  mkdir -p "$LUS_HOME/versions" "$LUS_HOME/bin" || die "cannot create $LUS_HOME"
+  case "$2" in
+    *-unstable*) channel=unstable ;;
+    *) channel=stable ;;
+  esac
+  printf '%s\n' "$channel" > "$1/channel" || die "cannot write $1/channel"
+  dest="$LUS_HOME/versions/$2"
+  staged="$LUS_HOME/versions/.tmp-$$"
+  rm -rf "$staged"
+  mv "$1" "$staged" || cp -R "$1" "$staged" || die "cannot copy into $LUS_HOME"
+  if [ -e "$dest" ]; then
+    old="$LUS_HOME/versions/.old-$$"
+    mv "$dest" "$old" || die "cannot replace $dest"
+    mv "$staged" "$dest" || die "cannot install $dest"
+    rm -rf "$old"
+  else
+    mv "$staged" "$dest" || die "cannot install $dest"
   fi
+  link_tmp="$LUS_HOME/bin/.lus.tmp.$$"
+  rm -f "$link_tmp"
+  ln -s "../versions/$2/bin/lus" "$link_tmp" &&
+    mv -f "$link_tmp" "$LUS_HOME/bin/lus" ||
+    die "cannot link $LUS_HOME/bin/lus"
+  printf '%s\n' "$2" > "$LUS_HOME/.default.tmp.$$" &&
+    mv -f "$LUS_HOME/.default.tmp.$$" "$LUS_HOME/default" ||
+    die "cannot write $LUS_HOME/default"
+}
 
-  lus_tmp="$INSTALL_DIR/.lus.tmp.$$"
-  if ! {
-    run cp "$1" "$lus_tmp" &&
-    run chmod 755 "$lus_tmp" &&
-    run mv "$lus_tmp" "$INSTALL_DIR/lus"
-  }; then
-    run rm -f "$lus_tmp" 2>/dev/null
-    die "failed to install to $INSTALL_DIR/lus"
+# modify_path: add $LUS_HOME/bin to PATH in the profile of the user's
+# shell, once.
+modify_path() {
+  bin="$LUS_HOME/bin"
+  case ":$PATH:" in
+    *":$bin:"*) return ;;
+  esac
+  if [ "$MODIFY_PATH" = "0" ]; then
+    warn "$bin is not on your PATH. Add it to your shell profile."
+    return
   fi
+  case "${SHELL:-}" in
+    */zsh)  profile="$HOME/.zshrc"; line="export PATH=\"$bin:\$PATH\"" ;;
+    */bash) profile="$HOME/.bashrc"; line="export PATH=\"$bin:\$PATH\"" ;;
+    */fish) profile="$HOME/.config/fish/config.fish"; line="fish_add_path \"$bin\"" ;;
+    *)      profile="$HOME/.profile"; line="export PATH=\"$bin:\$PATH\"" ;;
+  esac
+  if [ -f "$profile" ] && grep -F "$bin" "$profile" >/dev/null 2>&1; then
+    return
+  fi
+  mkdir -p "$(dirname "$profile")" &&
+    printf '\n# Lus\n%s\n' "$line" >> "$profile" ||
+    { warn "cannot update $profile. Add $bin to your PATH."; return; }
+  info "added $bin to PATH in $profile. Open a new shell to use it."
 }
 
 main() {
-  INSTALL_DIR="${LUS_INSTALL_DIR:-/usr/local/bin}"
+  LUS_HOME="${LUS_HOME:-${HOME:?HOME is not set}/.lus}"
   VERSION="${LUS_VERSION:-}"
+  MODIFY_PATH=1
+  [ "${LUS_NO_MODIFY_PATH:-}" = "1" ] && MODIFY_PATH=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --dir)     [ $# -ge 2 ] || die "--dir needs a value"; INSTALL_DIR=$2; shift 2 ;;
+      --home)    [ $# -ge 2 ] || die "--home needs a value"; LUS_HOME=$2; shift 2 ;;
+      --no-modify-path) MODIFY_PATH=0; shift ;;
       --version) [ $# -ge 2 ] || die "--version needs a value"; VERSION=$2; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *)         die "unknown option: $1 (try --help)" ;;
@@ -272,15 +309,15 @@ main() {
     xattr -c "$BINARY" 2>/dev/null || true
   fi
 
-  install_binary "$BINARY"
-
-  info "installed: $INSTALL_DIR/lus"
-  "$INSTALL_DIR/lus" -v
-
-  case ":$PATH:" in
-    *":$INSTALL_DIR:"*) ;;
-    *) warn "$INSTALL_DIR is not on your PATH. Add it to your shell profile." ;;
+  INSTALLED=$(version_of "$ASSET")
+  case "$INSTALLED" in
+    ""|*[!A-Za-z0-9.-]*) die "cannot read a version from $ASSET" ;;
   esac
+  install_version "$WORKDIR/archive" "$INSTALLED"
+
+  info "installed: $LUS_HOME/versions/$INSTALLED"
+  "$LUS_HOME/bin/lus" -v
+  modify_path
 }
 
 # Everything above only defines functions. Nothing runs until here,

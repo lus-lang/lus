@@ -31,7 +31,9 @@ Every archive holds the `lus` interpreter, the embedding libraries, and the `lus
 
 The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture.
 
-On Linux and macOS, the `install.sh` script downloads the archive for the machine it runs on and checks it against `SHA256SUMS`, then installs `bin/lus`. On Windows, `lus-setup.exe` installs the contents of the x86_64 archive and adds `lus` to `PATH`, for the current user by default. Run it with `/ALLUSERS` from an elevated prompt to install for every user.
+On Linux and macOS, the `install.sh` script downloads the archive for the machine it runs on and checks it against `SHA256SUMS`. It then unpacks the archive into `~/.lus/versions` and adds `~/.lus/bin` to `PATH` in the profile of the shell. On Windows, `lus-setup.exe` installs the x86_64 archive into `%LOCALAPPDATA%\lus` the same way and adds its `bin` directory to `PATH`. It installs for the current user by default. Run it with `/ALLUSERS` from an elevated prompt to install for every user.
+
+Both installers lay the files out as [`lus version`](/manual/cli#lus-version) expects, so `lus version install` adds further releases beside the first one. `lus version` reads the signed release index at `https://lus.dev/releases/index.json`. It verifies the Ed25519 signature of the index and the SHA-256 digest of each archive before it installs anything.
 
 ## Archive layout
 

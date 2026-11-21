@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import https from "node:https";
 import os from "node:os";
@@ -120,7 +120,8 @@ after(async () => {
 function run(command, args, extraEnvironment = {}) {
   const environment = { ...process.env };
   delete environment.LUS_VERSION;
-  delete environment.LUS_INSTALL_DIR;
+  delete environment.LUS_HOME;
+  delete environment.LUS_NO_MODIFY_PATH;
   Object.assign(environment, {
     LUS_RELEASE_BASE_URL: baseUrl,
     CURL_CA_BUNDLE: certificate,
@@ -148,8 +149,15 @@ async function freshDirectory(name) {
   return directory;
 }
 
+// Checks the layout that `lus version` manages (spec/tools/version.md):
+// the archive under versions/, the channel file, the default, and the
+// bin/lus link.
 async function checkInstalled(directory) {
-  const lus = path.join(directory, "lus");
+  const lus = path.join(directory, "bin", "lus");
+  assert.equal(readlinkSync(lus), path.join("..", "versions", version, "bin", "lus"));
+  assert.equal(readFileSync(path.join(directory, "default"), "utf8"), `${version}\n`);
+  const channel = version.includes("-unstable") ? "unstable" : "stable";
+  assert.equal(readFileSync(path.join(directory, "versions", version, "channel"), "utf8"), `${channel}\n`);
   const reported = await run(lus, ["-v"]);
   assert.equal(reported.status, 0, reported.stderr);
   assert.ok(
@@ -167,7 +175,7 @@ async function checkInstalled(directory) {
 test("installs lus from a pinned release", { skip }, async () => {
   const directory = await freshDirectory("pinned");
   requests.length = 0;
-  const result = await run("sh", [installer, "--version", version, "--dir", directory]);
+  const result = await run("sh", [installer, "--version", version, "--home", directory, "--no-modify-path"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /checksum verified/);
   assert.deepEqual(requests, ["/release/SHA256SUMS", `/release/${asset}`]);
@@ -177,7 +185,7 @@ test("installs lus from a pinned release", { skip }, async () => {
 test("finds the latest archive for this host in SHA256SUMS", { skip }, async () => {
   const directory = await freshDirectory("latest");
   requests.length = 0;
-  const result = await run("sh", [installer], { LUS_INSTALL_DIR: directory });
+  const result = await run("sh", [installer], { LUS_HOME: directory, LUS_NO_MODIFY_PATH: "1" });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.deepEqual(requests, ["/release/SHA256SUMS", `/release/${asset}`]);
   await checkInstalled(directory);
@@ -189,10 +197,11 @@ test("rejects an archive that does not match SHA256SUMS", { skip }, async () => 
   const original = release[asset];
   release[asset] = Buffer.concat([original, Buffer.from([0])]);
   try {
-    const result = await run("sh", [installer, "--version", tag, "--dir", directory]);
+    const result = await run("sh", [installer, "--version", tag, "--home", directory]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /checksum mismatch/);
-    assert.equal(existsSync(path.join(directory, "lus")), false);
+    assert.equal(existsSync(path.join(directory, "bin", "lus")), false);
+    assert.equal(existsSync(path.join(directory, "versions", version)), false);
   } finally {
     release[asset] = original;
   }
@@ -209,11 +218,46 @@ test("rejects a release with no archive for this host", { skip }, async () => {
       .join("\n"),
   );
   try {
-    const result = await run("sh", [installer, "--dir", directory]);
+    const result = await run("sh", [installer, "--home", directory]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, new RegExp(`no single archive for ${target}`));
-    assert.equal(existsSync(path.join(directory, "lus")), false);
+    assert.equal(existsSync(path.join(directory, "bin", "lus")), false);
   } finally {
     release.SHA256SUMS = sums;
   }
+});
+
+test("the installed lus manages itself with lus version", { skip }, async () => {
+  const directory = await freshDirectory("managed");
+  const result = await run("sh", [installer, "--home", directory, "--no-modify-path"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const lus = path.join(directory, "bin", "lus");
+  const list = await run(lus, ["version", "list", "--json"], { LUS_HOME: directory });
+  assert.equal(list.status, 0, list.stderr);
+  const value = JSON.parse(list.stdout);
+  assert.equal(value.default, version);
+  assert.deepEqual(value.versions.map((v) => v.version), [version]);
+});
+
+test("adds the Lus home to PATH in the shell profile once", { skip }, async () => {
+  const fakeHome = await freshDirectory("home");
+  await mkdir(fakeHome, { recursive: true });
+  const environment = { HOME: fakeHome, SHELL: "/bin/zsh", PATH: "/usr/bin:/bin" };
+  for (let i = 0; i < 2; i++) {
+    const result = await run("sh", [installer], environment);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+  const profile = readFileSync(path.join(fakeHome, ".zshrc"), "utf8");
+  const bin = path.join(fakeHome, ".lus", "bin");
+  assert.equal(profile.split(bin).length - 1, 1, profile);
+  await checkInstalled(path.join(fakeHome, ".lus"));
+});
+
+test("leaves the shell profile alone with --no-modify-path", { skip }, async () => {
+  const fakeHome = await freshDirectory("home-untouched");
+  await mkdir(fakeHome, { recursive: true });
+  const result = await run("sh", [installer, "--no-modify-path"], { HOME: fakeHome, SHELL: "/bin/zsh", PATH: "/usr/bin:/bin" });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /is not on your PATH/);
+  assert.equal(existsSync(path.join(fakeHome, ".zshrc")), false);
 });

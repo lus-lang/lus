@@ -31,6 +31,9 @@ pub const vm = struct {
 pub const api = @import("api.zig");
 pub const bundle = @import("bundle.zig");
 pub const tools = @import("tools.zig");
+pub const semver = @import("semver.zig");
+pub const httpc = @import("httpc.zig");
+pub const signed = @import("signed.zig");
 
 pub const lib = struct {
     pub const aux = @import("lib/auxlib.zig");
@@ -39,6 +42,7 @@ pub const lib = struct {
     pub const package = @import("lib/package.zig");
     pub const term = @import("lib/term.zig");
     pub const serve = @import("lib/serve.zig");
+    pub const crypto = @import("lib/crypto.zig");
 };
 
 pub const compile = struct {
@@ -50,6 +54,9 @@ pub const compile = struct {
 
 test {
     _ = lib.serve;
+    _ = semver;
+    _ = httpc;
+    _ = signed;
     _ = syntax.token;
     _ = syntax.lexer;
     _ = syntax.parser;

@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
         .archive = b.option(bool, "archive", "Include vector.archive compression (default: true)"),
         .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
+        .version = b.option([]const u8, "version", "The version the binary reports, such as 2.0.0-unstable.7 (default: the version in build.zig.zon)"),
         .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
@@ -86,6 +87,16 @@ pub fn build(b: *std.Build) void {
     debug_run.addFileInput(b.path("../tests/debug/fixture.lus"));
     debug_run.addFileInput(b.path("../tests/debug/coroutine.lus"));
     debug_step.dependOn(&debug_run.step);
+
+    // `lus version` and `lus +REQUEST` against a release served on
+    // loopback by ../tests/version (needs node).
+    const version_step = b.step("test-version", "Run the version manager against a loopback release server");
+    const version_run = b.addSystemCommand(&.{"node"});
+    version_run.setName("lus version (loopback release)");
+    version_run.addFileArg(b.path("../tests/version/version.test.mjs"));
+    version_run.addArtifactArg(exe);
+    version_run.addFileInput(b.path("../tests/lib/release.mjs"));
+    version_step.dependOn(&version_run.step);
 
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
@@ -287,6 +298,7 @@ const Features = struct {
     archive: ?bool = null,
     jit: bool = true,
     op_profile: bool = false,
+    version: ?[]const u8 = null,
     fail_alloc: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
@@ -313,9 +325,10 @@ const Features = struct {
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
         options.addOption(bool, "fail_alloc", f.fail_alloc);
-        // The version of the package, which `lus -v` and the User-Agent of
-        // network.fetch report.
-        options.addOption([]const u8, "version", @import("build.zig.zon").version);
+        // The version that `lus -v` and the User-Agent of network.fetch
+        // report. A release of an unstable channel sets it with `-Dversion`,
+        // and every other build takes the version in build.zig.zon.
+        options.addOption([]const u8, "version", f.version orelse @import("build.zig.zon").version);
         return options;
     }
 };

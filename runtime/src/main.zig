@@ -231,10 +231,16 @@ pub fn main(init: std.process.Init) !u8 {
         return runBundle(init, b, args);
     }
 
+    // `lus +REQUEST ARGS...` runs another installed version. Only the
+    // first argument is read this way (`spec/tools/version.md`).
+    if (args.len >= 2 and args[1].len > 1 and args[1][0] == '+') {
+        return lus.tools.plus(init, args[1][1..], args[2..]);
+    }
+
     // Subcommands.
     if (args.len >= 2) {
         const cmd = args[1];
-        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents" };
+        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents", "version" };
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) {
                 defer reportAllocs();
