@@ -1,0 +1,3 @@
+package.lus:1:1: error: the package header lacks @license [package-header]
+package.lus:11:1: warning: a package must not call pledge at the top level, which acts on the permissions of the program [package-pledge]
+package.lus:14:14: warning: the package header declares no flag 'loud' [package-flag]

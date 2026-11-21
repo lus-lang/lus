@@ -354,7 +354,7 @@ local dates = {}
 
 The text before the first annotation is the description, in Markdown. The annotations are the following.
 
-- `@package NAME` names the package. A name has 2 to 40 characters from `a-z`, `0-9`, and `_`, and starts with a letter, so it is a valid Lus identifier. It equals the file name of the main module. Required.
+- `@package NAME` names the package. A name has 2 to 40 characters from `a-z`, `0-9`, and `_`. It starts with a letter, so it is a valid Lus identifier. It equals the file name of the main module. Required.
 - `@version VERSION` is the version of the package, `MAJOR.MINOR.PATCH`. Required.
 - `@lus LINE` is the Lus line the package runs on, such as `2.0`. `@lus 2.0.3` also sets the oldest release of the line, `lus_min`. Required.
 - `@license EXPR` is an SPDX license expression. Required.
@@ -373,7 +373,7 @@ A dependency copied into a self-contained bundle keeps its own flags. The module
 
 ## 7. The language server
 
-Inside the string of a `require`, the language server completes atmosphere URLs when the `atmos` command is on `PATH`. It runs `atmos search --json --server SERVER PREFIX` for `https://atmosp.here` and for every server in the setting `lus.atmosphere.servers`, a list of base URLs of custom atmosphere servers. URL completion needs `atmos`. Hover over a remote require shows the package header from the cached release document. A permission that the header declares and the program never pledges is reported as a diagnostic.
+Inside the string of a `require`, the language server completes atmosphere URLs when the `atmos` command is on `PATH`. It runs `atmos search --json --server SERVER PREFIX` for `https://atmosp.here` and for every server in the setting `lus.atmosphere.servers`, a list of base URLs of custom atmosphere servers. URL completion needs `atmos`. The VSCode extension runs the language server as WebAssembly, which cannot start a process, so the extension asks `atmos` itself and reads the same setting.
 
 ## 8. WebAssembly
 

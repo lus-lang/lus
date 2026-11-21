@@ -67,6 +67,9 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "use-optional-chain", .severity = .warning, .summary = "Nested nil checks or an and-chain spell out optional chaining." },
     .{ .code = "use-if-assign", .severity = .warning, .summary = "A local exists only for the truth test of the next if." },
     .{ .code = "doc-unknown-param", .severity = .warning, .summary = "A doc comment documents a parameter the function does not have." },
+    .{ .code = "package-flag", .severity = .warning, .summary = "A package reads a flag that its header does not declare." },
+    .{ .code = "package-pledge", .severity = .warning, .summary = "A package calls pledge at the top level, which acts on the permissions of the program." },
+    .{ .code = "package-header", .severity = .@"error", .summary = "A package header lacks a required annotation or has a malformed one." },
     .{ .code = "assign-const", .severity = .@"error", .summary = "A constant, a close variable, or a loop control variable is assigned." },
     .{ .code = "undeclared-global", .severity = .@"error", .summary = "A free name is used in the scope of a named global declaration." },
     .{ .code = "undefined-label", .severity = .@"error", .summary = "A goto names no visible label." },
@@ -84,6 +87,8 @@ const Linter = struct {
     out: std.ArrayList(Diagnostic) = .empty,
     /// Free names assigned somewhere in the file.
     assigned: std.StringHashMapUnmanaged(void) = .empty,
+    /// Reads `flags.NAME` of the reserved global `flags`.
+    flag_reads: std.ArrayList(*ast.Expr) = .empty,
     /// Bodies of function and do expressions, checked as blocks of their
     /// own after the main walk.
     nested: std.ArrayList(Nested) = .empty,
@@ -519,8 +524,77 @@ const Linter = struct {
     fn collectCall(l: *Linter, slot: **ast.Expr) anyerror!void {
         const e = slot.*;
         if (e.kind == .call and l.isFree(e.kind.call.callee, "pledge")) try l.calls.append(l.arena, e);
+        if (e.kind == .index and e.kind.index.key.kind == .string and l.isFree(e.kind.index.obj, "flags")) try l.flag_reads.append(l.arena, e);
+    }
+
+    /// The checks of a package header (`spec/design/modules.md`, section
+    /// 6). They apply to a file whose module comment holds a package
+    /// annotation.
+    fn packageHeader(l: *Linter) Allocator.Error!void {
+        const md = (try l.docs.moduleDoc(l.arena)) orelse return;
+        const pkg = md.package orelse return;
+        const at = lineSpan(l.chunk.source, md.line);
+        const required = [_]struct { v: ?[]const u8, tag: []const u8 }{
+            .{ .v = pkg.name, .tag = "@package" },
+            .{ .v = pkg.version, .tag = "@version" },
+            .{ .v = pkg.lus, .tag = "@lus" },
+            .{ .v = pkg.license, .tag = "@license" },
+        };
+        for (required) |r| if (r.v == null) try l.report(at, .@"error", "package-header", "the package header lacks {s}", .{r.tag});
+        if (pkg.name) |n| if (!validPackageName(n))
+            try l.report(at, .@"error", "package-header", "the package name '{s}' must be 2 to 40 characters from a-z, 0-9, and _, starting with a letter", .{n});
+        if (pkg.version) |v| if (!validVersion(v))
+            try l.report(at, .@"error", "package-header", "the package version '{s}' must be MAJOR.MINOR.PATCH", .{v});
+        if (pkg.lus) |v| if (!validLine(v))
+            try l.report(at, .@"error", "package-header", "@lus '{s}' must be a line such as 2.0, or a release such as 2.0.3", .{v});
+        // A top-level pledge runs when the program loads the package.
+        for (l.chunk.block.stats) |st| switch (st.kind) {
+            .expr => |e| if (e.kind == .call and l.isFree(e.kind.call.callee, "pledge"))
+                try l.report(e.span, .warning, "package-pledge", "a package must not call pledge at the top level, which acts on the permissions of the program", .{}),
+            else => {},
+        };
+        for (l.flag_reads.items) |e| {
+            const name = e.kind.index.key.kind.string;
+            if (pkg.flag(name) == null) try l.report(e.span, .warning, "package-flag", "the package header declares no flag '{s}'", .{name});
+        }
     }
 };
+
+/// The span of the first character of `line`.
+fn lineSpan(src: []const u8, line: u32) Span {
+    var cur: u32 = 1;
+    var i: u32 = 0;
+    while (i < src.len and cur < line) : (i += 1) {
+        if (src[i] == '\n') cur += 1;
+    }
+    return .{ .start = i, .end = i };
+}
+
+fn validPackageName(n: []const u8) bool {
+    if (n.len < 2 or n.len > 40 or !std.ascii.isLower(n[0])) return false;
+    for (n) |c| if (!(std.ascii.isLower(c) or std.ascii.isDigit(c) or c == '_')) return false;
+    return true;
+}
+
+fn allDigits(t: []const u8) bool {
+    if (t.len == 0) return false;
+    for (t) |c| if (!std.ascii.isDigit(c)) return false;
+    return true;
+}
+
+fn validVersion(v: []const u8) bool {
+    var it = std.mem.splitScalar(u8, v, '.');
+    var n: usize = 0;
+    while (it.next()) |part| : (n += 1) if (!allDigits(part)) return false;
+    return n == 3;
+}
+
+fn validLine(v: []const u8) bool {
+    var it = std.mem.splitScalar(u8, v, '.');
+    var n: usize = 0;
+    while (it.next()) |part| : (n += 1) if (!allDigits(part)) return false;
+    return n == 2 or n == 3;
+}
 
 /// Structural equality of side-effect-free expressions: names, constant
 /// literals, and field accesses built from them.
@@ -598,6 +672,7 @@ pub fn lint(arena: Allocator, chunk: ast.Chunk, opts: Options) Allocator.Error![
     const vc: walk.Visitor(*Linter) = .{ .ctx = &l, .func = Linter.collectCall };
     vc.block(chunk.block) catch return error.OutOfMemory;
     try l.pledges();
+    try l.packageHeader();
 
     try l.block(chunk.block, .none);
     var i: usize = 0;
@@ -637,6 +712,29 @@ fn expectCodes(src: []const u8, want: []const u8) !void {
     const got = try lintCodes(src);
     defer testing.allocator.free(got);
     try testing.expectEqualStrings(want, got);
+}
+
+test "package header checks" {
+    try expectCodes(
+        \\--- A package.
+        \\--- @package dates
+        \\--- @version 1.4.1
+        \\--- @lus 2.0
+        \\--- @license 0BSD
+        \\--- @flag strict boolean Reject unknown fields.
+        \\
+        \\global flags, pledge
+        \\pledge("fs:read")
+        \\local a = flags.strict
+        \\local b = flags.loud
+        \\return { a = a, b = b }
+    , "package-pledge package-flag");
+    try expectCodes(
+        \\--- @package Dates
+        \\--- @version 1.4
+        \\
+        \\return {}
+    , "package-header package-header package-header package-header");
 }
 
 test "lint bindings" {

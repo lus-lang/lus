@@ -3,6 +3,7 @@ import {
   LanguageClient,
   LanguageClientOptions,
 } from "vscode-languageclient/node";
+import { registerAtmosphereCompletion } from "./atmosphere";
 import { registerDebugger } from "./debugAdapter";
 import {
   createWasmTransports,
@@ -209,6 +210,7 @@ export async function activate(
   context.subscriptions.push(lifecycleChannel);
   lifecycleLog = new LifecycleLog(lifecycleChannel);
   registerDebugger(context);
+  registerAtmosphereCompletion(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("lus.restartLanguageServer", async () => {

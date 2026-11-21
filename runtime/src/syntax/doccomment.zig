@@ -17,6 +17,13 @@
 //! in the specification frontmatter. A line indented under an annotation
 //! continues its description. Every other line is free Markdown text.
 //!
+//! The doc comment at the start of the main module of a package is its
+//! package header (`spec/design/modules.md`, section 6). `@package NAME`,
+//! `@version VERSION`, `@lus LINE`, `@license EXPR`, `@flag NAME TYPE
+//! [DEFAULT] DESCRIPTION`, `@permission PLEDGE DESCRIPTION`, `@includes
+//! NAME URL VERSION`, `@homepage URL`, and `@repository URL` fill its
+//! `package` field.
+//!
 //! The language server shows the comment above a declaration on hover, so
 //! the same comments serve the editor, `lus check`, and `lus doc`.
 
@@ -39,6 +46,61 @@ pub const Return = struct {
     description: []const u8 = "",
 };
 
+/// A build flag that a package declares.
+pub const Flag = struct {
+    name: []const u8,
+    /// `boolean`, `number`, `string`, or a list of strings such as
+    /// `"fast"|"small"`.
+    type: []const u8,
+    /// The default as written, or null.
+    default: ?[]const u8 = null,
+    description: []const u8 = "",
+    line: u32 = 0,
+};
+
+pub const Permission = struct {
+    pledge: []const u8,
+    description: []const u8 = "",
+};
+
+/// A dependency copied into a self-contained bundle.
+pub const Include = struct {
+    name: []const u8,
+    url: []const u8,
+    version: []const u8,
+};
+
+/// The package header of a main module.
+pub const Package = struct {
+    name: ?[]const u8 = null,
+    version: ?[]const u8 = null,
+    lus: ?[]const u8 = null,
+    license: ?[]const u8 = null,
+    homepage: ?[]const u8 = null,
+    repository: ?[]const u8 = null,
+    flags: []Flag = &.{},
+    permissions: []Permission = &.{},
+    includes: []Include = &.{},
+
+    pub fn flag(p: Package, name: []const u8) ?Flag {
+        for (p.flags) |f| if (std.mem.eql(u8, f.name, name)) return f;
+        return null;
+    }
+};
+
+/// Whether `word` is a default for a flag of type `ty`: `true` or `false`
+/// for a boolean, a numeral for a number, and a double-quoted string for a
+/// string or a list of strings.
+fn isFlagDefault(ty: []const u8, word: []const u8) bool {
+    if (word.len == 0) return false;
+    if (std.mem.eql(u8, ty, "boolean")) return std.mem.eql(u8, word, "true") or std.mem.eql(u8, word, "false");
+    if (std.mem.eql(u8, ty, "number")) {
+        _ = std.fmt.parseFloat(f64, word) catch return false;
+        return true;
+    }
+    return word.len >= 2 and word[0] == '"' and word[word.len - 1] == '"';
+}
+
 pub const Doc = struct {
     /// First and last line of the comment.
     line: u32,
@@ -49,6 +111,8 @@ pub const Doc = struct {
     returns: []Return = &.{},
     since: ?[]const u8 = null,
     stability: ?[]const u8 = null,
+    /// The package header, when the comment holds a package annotation.
+    package: ?Package = null,
 
     pub fn param(d: Doc, name: []const u8) ?Param {
         for (d.params) |p| if (std.mem.eql(u8, p.name, name)) return p;
@@ -201,6 +265,11 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
     var text: std.ArrayList(u8) = .empty;
     var params: std.ArrayList(Param) = .empty;
     var returns: std.ArrayList(Return) = .empty;
+    var flags: std.ArrayList(Flag) = .empty;
+    var perms: std.ArrayList(Permission) = .empty;
+    var includes: std.ArrayList(Include) = .empty;
+    var pkg: Package = .{};
+    var has_pkg = false;
     var doc: Doc = .{ .line = first_line, .end_line = end_line, .text = "" };
     // The description a continuation line extends.
     const Last = enum { none, param, ret };
@@ -250,6 +319,44 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
                 doc.stability = nextWord(tag.rest).word;
                 last = .none;
                 continue;
+            } else if (packageField(&pkg, tag.word)) |field| {
+                field.* = nextWord(tag.rest).word;
+                has_pkg = true;
+                last = .none;
+                continue;
+            } else if (std.mem.eql(u8, tag.word, "@flag")) {
+                const name = nextWord(tag.rest);
+                const ty = nextWord(name.rest);
+                var f: Flag = .{ .name = name.word, .type = ty.word, .line = lno, .description = ty.rest };
+                const dflt = nextWord(ty.rest);
+                if (isFlagDefault(ty.word, dflt.word)) {
+                    f.default = dflt.word;
+                    f.description = dflt.rest;
+                }
+                if (f.name.len > 0 and f.type.len > 0) {
+                    try flags.append(arena, f);
+                    has_pkg = true;
+                    last = .none;
+                    continue;
+                }
+            } else if (std.mem.eql(u8, tag.word, "@permission")) {
+                const pl = nextWord(tag.rest);
+                if (pl.word.len > 0) {
+                    try perms.append(arena, .{ .pledge = pl.word, .description = pl.rest });
+                    has_pkg = true;
+                    last = .none;
+                    continue;
+                }
+            } else if (std.mem.eql(u8, tag.word, "@includes")) {
+                const name = nextWord(tag.rest);
+                const url = nextWord(name.rest);
+                const ver = nextWord(url.rest);
+                if (ver.word.len > 0) {
+                    try includes.append(arena, .{ .name = name.word, .url = url.word, .version = ver.word });
+                    has_pkg = true;
+                    last = .none;
+                    continue;
+                }
             }
         }
         // An indented line continues the previous annotation.
@@ -269,7 +376,53 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
     doc.text = std.mem.trim(u8, text.items, " \t\n");
     doc.params = params.items;
     doc.returns = returns.items;
+    if (has_pkg) {
+        pkg.flags = flags.items;
+        pkg.permissions = perms.items;
+        pkg.includes = includes.items;
+        doc.package = pkg;
+    }
     return doc;
+}
+
+/// The field of the package header that a one-word annotation fills.
+fn packageField(p: *Package, word: []const u8) ?*?[]const u8 {
+    if (std.mem.eql(u8, word, "@package")) return &p.name;
+    if (std.mem.eql(u8, word, "@version")) return &p.version;
+    if (std.mem.eql(u8, word, "@lus")) return &p.lus;
+    if (std.mem.eql(u8, word, "@license")) return &p.license;
+    if (std.mem.eql(u8, word, "@homepage")) return &p.homepage;
+    if (std.mem.eql(u8, word, "@repository")) return &p.repository;
+    return null;
+}
+
+test "parse a package header" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const lines = [_][]const u8{
+        "Parses dates.",
+        "@package dates",
+        "@version 1.4.1",
+        "@lus 2.0",
+        "@license 0BSD",
+        "@flag tzdata string Path of a time zone database.",
+        "@flag strict boolean false Reject unknown fields.",
+        "@flag mode \"fast\"|\"small\" \"fast\" The tradeoff.",
+        "@permission fs:read=/usr/share/zoneinfo/* Reads the time zone database.",
+        "@includes strings https://atmosp.here/2.0/strings.lus 1.0.0",
+    };
+    const d = try parse(arena_state.allocator(), &lines, 1, 10);
+    try testing.expectEqualStrings("Parses dates.", d.text);
+    const p = d.package.?;
+    try testing.expectEqualStrings("dates", p.name.?);
+    try testing.expectEqualStrings("2.0", p.lus.?);
+    try testing.expectEqual(@as(usize, 3), p.flags.len);
+    try testing.expect(p.flags[0].default == null);
+    try testing.expectEqualStrings("Path of a time zone database.", p.flags[0].description);
+    try testing.expectEqualStrings("false", p.flags[1].default.?);
+    try testing.expectEqualStrings("\"fast\"", p.flags[2].default.?);
+    try testing.expectEqualStrings("fs:read=/usr/share/zoneinfo/*", p.permissions[0].pledge);
+    try testing.expectEqualStrings("1.0.0", p.includes[0].version);
 }
 
 const testing = std.testing;

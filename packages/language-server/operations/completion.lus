@@ -7,6 +7,7 @@ local document = require("lus-language.document")
 local types_mod = require("lus-language.analysis.types")
 local pos_util = require("lus-language.util.position")
 local stdlib_data = require("lus-language.analysis.stdlib_data")
+local atmosphere = require("lus-language.analysis.atmosphere")
 
 local completion = {}
 
@@ -93,6 +94,12 @@ local function get_context(text, line, col)
   -- Get text up to cursor column
   local before = string.sub(line_text, 1, col - 1)
 
+  -- Inside the string of a require: complete module URLs
+  local typed = string.match(before, "require%s*%(?%s*[\"']([^\"']*)$")
+  if typed then
+    return "require_string", typed
+  end
+
   -- Check for global statement: global name1, name2, ...
   if string.match(before, "^%s*global%s+") then
     -- Extract the last word being typed after global (or after a comma)
@@ -164,6 +171,31 @@ function completion.compute(uri, position)
     doc.text, doc.line_index, position.line, position.character)
 
   local context, value = get_context(doc.text, line, col)
+
+  if context == "require_string" then
+    -- Atmosphere URLs replace the whole string typed so far, which holds
+    -- characters that are not part of a word.
+    local items = {}
+    local start = pos_util.offset_to_line_col(
+      doc.line_index, doc.line_index[line] + col - 1 - #value, doc.text)
+    for _, pkg in ipairs(atmosphere.complete(value)) do
+      items[#items + 1] = {
+        label = pkg.url,
+        kind = KIND.Module,
+        detail = pkg.version and (pkg.name or "") .. " " .. pkg.version or pkg.name,
+        documentation = pkg.description,
+        filterText = pkg.url,
+        textEdit = {
+          range = {
+            start = start,
+            ["end"] = position,
+          },
+          newText = pkg.url,
+        },
+      }
+    end
+    return items
+  end
 
   if context == "global_decl" then
     -- Inside a `global` statement: suggest known environment globals

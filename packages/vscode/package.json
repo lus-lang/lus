@@ -84,6 +84,14 @@
           "type": "string",
           "default": "lus",
           "markdownDescription": "The `lus` command used to debug programs. A relative path with a directory part is relative to the workspace folder."
+        },
+        "lus.atmosphere.servers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Base URLs of package servers that speak the atmosphere protocol, such as `https://pkgs.example.com`. Completion inside `require` offers their packages beside those of `https://atmosp.here`, through the `atmos` command."
         }
       }
     },

@@ -32,6 +32,10 @@ The `code` command also installs the file. Replace `version` with the version of
 code --install-extension lus-version.vsix
 ```
 
+### Package completion
+
+Inside the string of a `require`, the extension completes the URLs of packages on `atmosp.here` when the `atmos` command is installed. The setting `lus.atmosphere.servers` adds the base URLs of other package servers, such as `https://pkgs.example.com`, whose packages the completion offers too.
+
 ### Debugging
 
 The extension registers the `lus` debugger, so **Run and Debug** works on any `.lus` file. The debugger runs the program with a local installation of `lus`, which it starts as `lus debug`. The `lus.executablePath` setting names the command to start and defaults to `lus`, which must then be in a directory of the `PATH`. A launch configuration in `.vscode/launch.json` sets the program, its arguments, its working directory, and the permissions it receives:

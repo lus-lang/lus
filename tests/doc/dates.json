@@ -1,0 +1,9 @@
+{
+  "name": "dates",
+  "kind": "module",
+  "description": "Parses, formats, and compares dates in ISO 8601.",
+  "package": {"name": "dates", "version": "1.4.1", "lus": "2.0", "license": "0BSD", "homepage": null, "repository": "https://github.com/example/dates", "flags": [{"name": "tzdata", "type": "string", "default": null, "description": "Path of a time zone database to use in place of the system one."}, {"name": "strict", "type": "boolean", "default": "false", "description": "Reject fields that ISO 8601 does not define."}], "permissions": [{"pledge": "fs:read=/usr/share/zoneinfo/*", "description": "Reads the system time zone database."}], "includes": [{"name": "strings", "url": "https://atmosp.here/2.0/strings.lus", "version": "1.0.0"}]},
+  "entries": [
+    {"name": "dates.parse", "module": "dates", "kind": "function", "params": [{"name": "text", "type": "string", "description": "The date in ISO 8601."}], "returns": [{"type": "table", "description": "The date."}], "line": 18, "description": "Parses a date."}
+  ]
+}
