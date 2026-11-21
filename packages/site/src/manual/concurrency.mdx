@@ -6,9 +6,9 @@ group: library
 shortdesc: "Detached coroutines that the runtime resumes when their sockets are ready and workers that run scripts in parallel and exchange messages."
 ---
 
-Lus has two ways to do several things at once. Each solves a different problem.
+Lus runs several tasks at once with detached coroutines or with workers, which solve different problems.
 
-A _detached coroutine_ is for waiting on many things at once. A program that serves a hundred network connections spends most of its time waiting for one of them to send something. With detached coroutines, the code for each connection is ordinary code that reads, computes, and writes. Lus switches to another connection whenever one has to wait. All detached coroutines run in one thread and share the variables of the program.
+A _detached coroutine_ is for waiting on many things at once. A program that serves a hundred network connections spends most of its time waiting for one of them to send something. With detached coroutines, the code for each connection is ordinary code that reads, computes, and writes, while Lus switches to another connection whenever one has to wait. All detached coroutines run in one thread and share the variables of the program.
 
 A _worker_ is for computing on several processor cores at once. A worker runs a script on a thread of its own, in parallel with the program that created it. It has its own variables and exchanges messages with its creator, so two workers never change the same data.
 
@@ -25,13 +25,13 @@ The choice depends on what the task spends its time on. A task that mostly waits
 | A long computation inside it | Delays every other coroutine | Delays nothing else |
 | Cost of each one | Small, so a program may run thousands | A thread and separate memory, so a program runs a few |
 
-A program may use both. A server runs its connections as detached coroutines and gives heavy computations to workers. Waiting for a worker suspends only the coroutine that waits, as [Detached coroutines in a worker](#detached-coroutines-in-a-worker) and [Suspension points](#suspension-points) describe.
+A program may use both, such as a server that runs its connections as detached coroutines and gives heavy computations to workers. Waiting for a worker suspends only the coroutine that waits, as [Detached coroutines in a worker](#detached-coroutines-in-a-worker) and [Suspension points](#suspension-points) describe.
 
 ## Detached coroutines
 
-A coroutine is a function that can pause in the middle and continue later. [Coroutines](/manual/guide#coroutines) in the guide introduces them. A program continues a plain coroutine itself, with `coroutine.resume`. Lus continues a detached coroutine. Whenever a detached coroutine waits for a socket or a worker, Lus pauses it and runs the other detached coroutines. Lus continues it when the socket or the worker is ready.
+A coroutine is a function that can pause in the middle and continue later, as [Coroutines](/manual/guide#coroutines) in the guide describes. A program continues a plain coroutine itself with `coroutine.resume`, but Lus continues a detached coroutine. Whenever a detached coroutine waits for a socket or a worker, Lus pauses it, runs the other detached coroutines, and continues it when the socket or the worker is ready.
 
-The following server answers each line a client sends with the same line in capitals. It detaches one coroutine that accepts connections and one more for each connection. The first client connects and stays silent. The second client still gets its answer at once. A server that handled one connection at a time would wait for the first client and never reach the second.
+The following server answers each line a client sends with the same line in capitals. It detaches one coroutine that accepts connections and one more for each connection. While the first client stays silent, the second client still gets its answer at once. A server that handled one connection at a time would wait for the first client and never reach the second.
 
 ```lus
 pledge("network")
@@ -70,11 +70,11 @@ server:close()
 
 The function `serve` is plain sequential code with a loop, local variables, and a `<close>` variable that closes the connection on every path. The waiting happens inside `accept` and `receive`. [`network.serve`](/manual/network#http-server) is an HTTP server that works the same way.
 
-Detached coroutines run one at a time. Each runs until it waits, yields, or ends. Then the next one that is ready runs. Code between two waits is therefore never interrupted, so coroutines can share tables without locks.
+Detached coroutines run one at a time. Each runs until it waits, yields, or ends, then the next one that is ready runs. Code between two waits is therefore never interrupted, so coroutines can share tables without locks.
 
 ### Detaching a coroutine
 
-[`coroutine.detach(co, ...)`](/manual/api#coroutine.detach) detaches the suspended coroutine `co` and returns `co`. From then on, Lus resumes the coroutine. For a coroutine that has not started, the extra arguments are the arguments of its function. For a coroutine that already ran and yielded, they become the results of the `coroutine.yield` it is paused in. The following program detaches a coroutine with one argument. It collects the result with `coroutine.resume`, which [Waiting for a detached coroutine](#waiting-for-a-detached-coroutine) describes.
+[`coroutine.detach(co, ...)`](/manual/api#coroutine.detach) detaches the suspended coroutine `co` and returns `co`. From then on, Lus resumes the coroutine. For a coroutine that has not started, the extra arguments are the arguments of its function. For a coroutine that already ran and yielded, they become the results of the `coroutine.yield` it is paused in. The following program detaches a coroutine with one argument and collects the result with `coroutine.resume`, which [Waiting for a detached coroutine](#waiting-for-a-detached-coroutine) describes.
 
 ```lus
 local function greet(name)
@@ -95,7 +95,7 @@ Detaching raises an error when `co` is the main thread, or when it is running, n
 
 ### Yielding during long computations
 
-Only one coroutine runs at a time, so a detached coroutine that computes for a long time delays all the others. A call to [`coroutine.yield`](/manual/api#coroutine.yield) inside such a computation lets the other detached coroutines run. Lus continues the coroutine after them. Detached coroutines run in the order in which they became ready. Inside a detached coroutine, `yield` discards its arguments and returns no values.
+Only one coroutine runs at a time, so a detached coroutine that computes for a long time delays all the others. A call to [`coroutine.yield`](/manual/api#coroutine.yield) inside such a computation lets the other detached coroutines run before Lus continues the coroutine. Detached coroutines run in the order in which they became ready. Inside a detached coroutine, `yield` discards its arguments and returns no values.
 
 In the following program, two coroutines take turns because each one yields after every step.
 
@@ -115,7 +115,7 @@ coroutine.resume(b)
 print(table.concat(log, " "))   --> a1 b1 a2 b2
 ```
 
-A plain coroutine works as usual inside a detached one. A generator made with [`coroutine.wrap`](/manual/api#coroutine.wrap), or run with `coroutine.resume`, yields its values to the code that resumed it. The following detached coroutine collects three numbers from a generator.
+A plain coroutine works as usual inside a detached one, so a generator made with [`coroutine.wrap`](/manual/api#coroutine.wrap), or run with `coroutine.resume`, yields its values to the code that resumed it. The following detached coroutine collects three numbers from a generator.
 
 ```lus
 local task = coroutine.detach(coroutine.create(function()
@@ -136,7 +136,7 @@ print(coroutine.resume(task))   --> true  1,2,3
 
 ### Waiting for a detached coroutine
 
-A program gets the result of a detached coroutine, or waits until it has finished, with [`coroutine.resume(co)`](/manual/api#coroutine.resume). On a detached coroutine, `resume` waits until `co` has ended. It then returns what `resume` returns for any coroutine that ends: `true` and the results of the function, or `false` and the error object. Extra arguments passed to `resume` are ignored.
+A program waits for a detached coroutine and gets its result with [`coroutine.resume(co)`](/manual/api#coroutine.resume). On a detached coroutine, `resume` waits until `co` has ended, then returns `true` and the results of the function, or `false` and the error object. Extra arguments passed to `resume` are ignored.
 
 The following program waits for a coroutine that succeeds and for one that fails.
 
@@ -155,13 +155,13 @@ print(coroutine.resume(ok))    --> false  cannot resume dead coroutine
 
 A detached coroutine that ends before anything resumes it keeps its results, or its error, until the first `resume` collects them. Every caller that was already waiting when the coroutine ended receives them as well. A later `resume` returns `false` and `"cannot resume dead coroutine"`.
 
-A detached coroutine that resumes another detached coroutine is suspended while it waits. `coroutine.status` reports `"suspended"` for it. The main chunk runs the detached coroutines of the program while it waits. When the coroutines that are left can only wait for each other, none of them can continue. The waiting `resume` then returns `false` and `"deadlock: every coroutine waits for another coroutine"`.
+A detached coroutine that resumes another detached coroutine is suspended while it waits, so `coroutine.status` reports `"suspended"` for it. The main chunk runs the detached coroutines of the program while it waits. When the coroutines that are left can only wait for each other, none of them can continue, so the waiting `resume` returns `false` and `"deadlock: every coroutine waits for another coroutine"`.
 
 ### Cancelling
 
-[`coroutine.close(co)`](/manual/api#coroutine.close) cancels a detached coroutine that is no longer needed, such as the accept loop of a server that shuts down. Lus stops the coroutine and closes its pending `<close>` variables. The status of the coroutine becomes `"dead"`. `close` returns `true`. Callers that were waiting for the coroutine in `resume` receive `false` and `"cannot resume dead coroutine"`.
+[`coroutine.close(co)`](/manual/api#coroutine.close) cancels a detached coroutine that is no longer needed, such as the accept loop of a server that shuts down. Lus stops the coroutine, closes its pending `<close>` variables, and sets its status to `"dead"`, then `close` returns `true`. Callers that were waiting for the coroutine in `resume` receive `false` and `"cannot resume dead coroutine"`.
 
-In the following program, one coroutine cancels another. The `<close>` variable of the cancelled coroutine runs its cleanup.
+In the following program, one coroutine cancels another, whose `<close>` variable runs its cleanup.
 
 ```lus
 local log = {}
@@ -197,11 +197,11 @@ A _suspension point_ is an operation that waits for something outside the progra
 - [`worker.receive`](/manual/api#worker.receive).
 - [`worker.peek`](/manual/api#worker.peek) inside a worker.
 
-Inside a detached coroutine, a suspension point suspends the coroutine until it can continue. `coroutine.status` reports `"suspended"` for the coroutine during the wait. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller. The detached coroutines run during the wait. In the server example of [Detached coroutines](#detached-coroutines), the acceptor and the connections run during the `receive` calls of the main chunk.
+Inside a detached coroutine, a suspension point suspends the coroutine until it can continue. During the wait, `coroutine.status` reports `"suspended"` for it. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller while the detached coroutines run. In the server example of [Detached coroutines](#detached-coroutines), the acceptor and the connections run during the `receive` calls of the main chunk.
 
-Every other operation that takes time blocks the whole program, detached coroutines included. Reading and writing files, SQLite, and `os.execute` block in this way. [`network.fetch`](/manual/api#network.fetch) behaves in both ways. In the top-level code of a script, the detached coroutines run while `fetch` waits, as they do at a suspension point. Inside a detached coroutine, `fetch` blocks the whole program.
+Every other operation that takes time, such as reading and writing files, SQLite calls, or `os.execute`, blocks the whole program, detached coroutines included. [`network.fetch`](/manual/api#network.fetch) behaves in both ways. The detached coroutines run while `fetch` waits in the top-level code of a script, as they do at a suspension point, but a `fetch` inside a detached coroutine blocks the whole program.
 
-A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it. A line iterator written with `coroutine.wrap` therefore works unchanged on a connection that a detached coroutine serves. A suspension point reached inside a function that a library function calls back, such as the comparison function of `table.sort`, cannot suspend its coroutine. It blocks the coroutine. The other coroutines run during the wait.
+A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it. A line iterator written with `coroutine.wrap` therefore works unchanged on a connection that a detached coroutine serves. A suspension point reached inside a function that a library function calls back, such as the comparison function of `table.sort`, cannot suspend its coroutine, so it blocks the coroutine while the other coroutines run.
 
 A timeout set with `settimeout` limits each wait and raises `"receive timeout"`, `"send timeout"`, `"sendto timeout"`, or `"accept timeout"` when it runs out. A zero timeout never waits. [Timeouts](/manual/network#timeouts) describes the timeouts of sockets.
 
@@ -246,7 +246,7 @@ A host program that [embeds Lus](/manual/embedding) calls `lus_runpending(L, wai
 
 A worker runs a script in parallel with the program that created it, on another processor core when one is free. A program uses workers to finish a computation sooner by splitting it, or to keep answering requests while a long computation runs.
 
-Each worker has its own global variables and its own memory. It shares no values with its creator. The two exchange copies of values as messages. Because of this separation, workers are safe to run in parallel. No worker can change a table that another one is reading.
+Each worker has its own global variables and its own memory. It shares no values with its creator, so the two exchange copies of values as messages. Because no worker can change a table that another one is reading, workers are safe to run in parallel.
 
 The following program counts the prime numbers below two million. It splits the range into four parts and gives each part to a worker, so the four parts are counted at the same time.
 
@@ -289,7 +289,7 @@ Workers run in the process of their creator. [Permissions of a worker](#permissi
 
 ### Creating a worker
 
-[`worker.create(path, ...)`](/manual/api#worker.create) starts a worker that runs the script at `path` and returns a handle to it. The extra arguments are copied to the worker and become the values of `...` in the script. A script that cannot be read makes the worker fail. The first `worker.receive` then raises the error `"cannot open worker script 'PATH': REASON"`.
+[`worker.create(path, ...)`](/manual/api#worker.create) starts a worker that runs the script at `path` and returns a handle to it. The extra arguments are copied to the worker and become the values of `...` in the script. A script that cannot be read makes the worker fail, so the first `worker.receive` raises the error `"cannot open worker script 'PATH': REASON"`.
 
 [`worker.status(handle)`](/manual/api#worker.status) returns `"running"` while the worker runs and `"dead"` after it has finished or failed.
 
@@ -364,7 +364,7 @@ fs.remove(script)
 
 `nil`, booleans, numbers of every kind, strings, tables, and vectors may be passed to `worker.create` and sent as messages. Every other type, such as functions, coroutines, userdata, enum values, and queries, raises an error such as `"cannot serialize function to worker"`.
 
-A table arrives as a copy, so the receiver never changes the table of the sender. The copy keeps the structure of the original. Two references to one table arrive as two references to one copy. A table that contains itself arrives as a copy that contains itself. The copy has no metatable. Tables may nest up to 100 levels. A deeper table raises `"table nesting too deep for serialization"`.
+A table arrives as a copy, so the receiver never changes the table of the sender. The copy keeps the structure of the original, so two references to one table arrive as two references to one copy. The copy has no metatable. A table that contains itself arrives as a copy that contains itself. A table nested deeper than 100 levels raises `"table nesting too deep for serialization"`.
 
 The following worker checks that the table it receives kept both kinds of reference.
 
@@ -384,7 +384,7 @@ print(worker.receive(worker.create(script, value)))   --> true
 fs.remove(script)
 ```
 
-A vector is moved, which makes sending a large buffer of bytes cheap. The receiver gets the bytes. The vector of the sender becomes empty. Sending it again raises `"cannot send a vector that was transferred to another worker"`. `vector.tostring` on it raises an error that says the vector was transferred to another worker. A sender that still needs the bytes sends [`vector.clone`](/manual/api#vector.clone) of the vector.
+A vector is moved, which makes sending a large buffer of bytes cheap. The receiver gets the bytes, which leaves the vector of the sender empty. Sending that vector again raises `"cannot send a vector that was transferred to another worker"`, as does `vector.tostring` on it. A sender that still needs the bytes sends [`vector.clone`](/manual/api#vector.clone) of the vector.
 
 In the following program, the vector of the sender is empty after the worker has received its three bytes.
 
@@ -403,7 +403,7 @@ fs.remove(script)
 
 ### Errors in a worker
 
-An error that ends the script of a worker is raised in the creator by `worker.receive`. Every later `worker.receive` on that handle raises it again. The error object arrives as a string. A `catch` around the call captures it as usual. The following program catches the error of a worker that fails.
+An error that ends the script of a worker is raised in the creator by `worker.receive`, then again by every later `worker.receive` on that handle. The error object arrives as a string, which a `catch` around the call captures as usual. The following program catches the error of a worker that fails.
 
 ```lus
 pledge("fs", "load")
@@ -422,13 +422,13 @@ fs.remove(script)
 
 ### Permissions of a worker
 
-Creating a worker requires the `load` permission and `fs:read` for its script. The worker starts with a sealed copy of the permissions of its creator. It may therefore use everything its creator held when it created the worker. Every `pledge` inside the worker returns `false`. [Permissions in workers](/manual/permissions#permissions-in-workers) describes the rule.
+Creating a worker requires the `load` permission and `fs:read` for its script. The worker starts with a sealed copy of the permissions of its creator, so it may use everything its creator held when it created the worker. Because the copy is sealed, every `pledge` inside the worker returns `false`. [Permissions in workers](/manual/permissions#permissions-in-workers) describes the rule.
 
 ### Detached coroutines in a worker
 
-`worker.receive` and `worker.peek` are suspension points. A detached coroutine may therefore wait for a worker. A worker may also run detached coroutines of its own.
+Because `worker.receive` and `worker.peek` are suspension points, a detached coroutine may wait for a worker. A worker may also run detached coroutines of its own.
 
-In the creator, a detached coroutine that waits for a worker in `worker.receive` is suspended. The other coroutines run until the worker answers. A server uses this to give a long computation to a worker while it keeps serving its other connections. In the following program, the coroutine `ticking` runs while `waiting` waits for the worker.
+In the creator, a detached coroutine that waits for a worker in `worker.receive` is suspended, so the other coroutines run until the worker answers. A server uses this to give a long computation to a worker while it keeps serving its other connections. In the following program, the coroutine `ticking` runs while `waiting` waits for the worker.
 
 ```lus
 pledge("fs", "load")
@@ -461,11 +461,11 @@ print(table.concat(log, ", "))     --> tick 1, tick 2, tick 3, worker done
 fs.remove(script)
 ```
 
-Inside a worker, the script may detach coroutines of its own. The worker runs its script and then those coroutines, as `lus` does for a program. The worker ends when the last of them has ended. When a detached coroutine in a worker fails and nothing in the worker collects its error, that error becomes the error of the worker, which `worker.receive` then raises in the creator.
+A worker runs its script, then the coroutines that the script detached, as `lus` does for a program. The worker ends when the last of them has ended. When a detached coroutine in a worker fails and nothing in the worker collects its error, that error becomes the error of the worker, which `worker.receive` then raises in the creator.
 
 ## Related pages
 
-- [Network](/manual/network) describes the sockets whose operations are suspension points. It also describes the `network.serve` HTTP server, which runs every connection in a detached coroutine.
+- [Network](/manual/network) describes the sockets whose operations are suspension points and the `network.serve` HTTP server, which runs every connection in a detached coroutine.
 - [Permissions](/manual/permissions) describes how coroutines and workers inherit permissions.
 - [Coroutines](/manual/guide#coroutines) in the guide describes `coroutine.create`, `resume`, `yield`, and `wrap`.
 - [Embedding](/manual/embedding) describes `lus_runpending` and the rest of the C interface.

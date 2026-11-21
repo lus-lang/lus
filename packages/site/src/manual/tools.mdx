@@ -6,7 +6,7 @@ group: use
 shortdesc: "The formatter, checker, documentation generator, syntax trees, standalone executables, binary chunks, debugger, and reference built into lus."
 ---
 
-The `lus` executable includes the tools that a project needs besides the interpreter: a formatter, a checker, a documentation generator, a bundler, a debugger, and the library reference. A project installs nothing else. Every member of a team runs the same version of each tool. Each tool uses the parser of the interpreter, so it accepts exactly the programs that the interpreter accepts. It reports positions as the compiler does. The [CLI page](/manual/cli) lists the options of every command. [Testing](/manual/testing) describes `lus test`.
+The `lus` executable includes the tools that a project needs besides the interpreter: a formatter, a checker, a documentation generator, a bundler, a debugger, and the library reference. A project installs nothing else, so every member of a team runs the same version of each tool. Each tool uses the parser of the interpreter, so it accepts exactly the programs that the interpreter accepts and reports positions as the compiler does. The [CLI page](/manual/cli) lists the options of every command. [Testing](/manual/testing) describes `lus test`.
 
 The commands are the following.
 
@@ -30,18 +30,18 @@ The tools use the same exit statuses, so a script or a continuous integration jo
 
 ## Formatting
 
-`lus fmt` gives every file of a project the same layout, so nobody formats by hand. A diff then shows only the changes to the code. With no option, it prints the formatted text of each file to standard output. `--write` rewrites in place the files that change. `--check` changes nothing. It lists each file that is not formatted as `FILE: not formatted`. If it lists any file, it exits with status 1, so a continuous integration job can reject unformatted code. `--indent N` sets the width of one indentation level, which is 4 spaces by default.
+`lus fmt` gives every file of a project the same layout, so nobody formats by hand and a diff shows only the changes to the code. With no option, it prints the formatted text of each file to standard output. `--write` rewrites in place the files that change. `--check` changes nothing but lists each file that is not formatted as `FILE: not formatted`, then exits with status 1 if it listed any, so a continuous integration job can reject unformatted code. `--indent N` sets the width of one indentation level, which is 4 spaces by default.
 
 ```sh
 lus fmt --write src
 lus fmt --check src
 ```
 
-When a file does not parse, the formatter reports the syntax error and exits with status 1. The file stays unchanged. [`debug.format`](/manual/api#debug.format) runs the same formatter from Lus code.
+When a file does not parse, the formatter leaves it unchanged, reports the syntax error, and exits with status 1. [`debug.format`](/manual/api#debug.format) runs the same formatter from Lus code.
 
 ## Checking
 
-`lus check` finds mistakes before a program runs. Without it, a misspelled variable or an assignment to an undeclared global is found only when its line runs, which may be rare. The command parses, lints, and compiles each file without running it. It prints each problem as `file:line:column: severity: message [code]`, where the code names the diagnostic. The following file has two problems.
+`lus check` finds mistakes before a program runs. Without it, a misspelled variable or an assignment to an undeclared global is found only when its line runs, which may be rare. The command parses, lints, and compiles each file without running it and prints each problem as `file:line:column: severity: message [code]`, where the code names the diagnostic. The following file has two problems.
 
 ```lus
 local unused = 1
@@ -94,7 +94,7 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 
 ### A pledge after the seal
 
-After `pledge("seal")`, the [permissions](/manual/permissions) of a program can no longer change, so a later `pledge` grants nothing. `lus check` reports such a call. Without the warning, the operation that needs the permission fails later, far from the `pledge` that caused the failure.
+After `pledge("seal")`, the [permissions](/manual/permissions) of a program can no longer change, so a later `pledge` grants nothing. `lus check` reports such a call, because otherwise the operation that needs the permission fails later, far from the `pledge` that caused the failure.
 
 ```lus
 pledge("fs")
@@ -104,9 +104,9 @@ pledge("network")  -- pledge() after pledge("seal") has no effect, permissions a
 
 ### Lua idioms with a Lus form
 
-Four warnings report a Lua idiom that a Lus feature replaces. They are useful when porting Lua code. The message of each warning names the Lus feature.
+The following warnings, which are useful when porting Lua code, report a Lua idiom that a Lus feature replaces. The message of each warning names the Lus feature.
 
-Lus catches errors with the [`catch`](/manual/guide#errors) expression. It replaces the Lua functions `pcall` and `xpcall`. `lus check` reports a reference to either function.
+Lus catches errors with the [`catch`](/manual/guide#errors) expression, which replaces the Lua functions `pcall` and `xpcall`. `lus check` reports a reference to either function.
 
 ```lus nocheck
 local ok, err = pcall(risky)  -- 'pcall' no longer exists, use a 'catch' expression instead [deprecated-pcall]
@@ -130,7 +130,7 @@ if value then  -- local declaration can be moved to the if condition (use if-ass
 end
 ```
 
-The following form declares the local in the condition. The variable is then visible only in the body of the `if`, where it is used.
+The following form declares the local in the condition, so the variable is visible only in the body of the `if`, where it is used.
 
 ```lus
 local function lookup() return 42 end
@@ -139,7 +139,7 @@ if value = lookup() then
 end
 ```
 
-[Optional chaining](/manual/guide#tables) replaces an `and` chain that tests each step of a field access. It also replaces nested checks against `nil`.
+[Optional chaining](/manual/guide#tables) replaces an `and` chain that tests each step of a field access, as well as nested checks against `nil`.
 
 ```lus
 local cfg = { server = { port = 8080 } }
@@ -176,13 +176,13 @@ print(a, b, c)  --> 1  2  3
 
 ### Syntax hints
 
-When an operator from another language causes a syntax error, the message names the Lus spelling. This helps people and coding agents who write such an operator out of habit.
+When an operator from another language causes a syntax error, the message names the Lus spelling, which helps people and coding agents who write such an operator out of habit.
 
 ```
 total.lus:2:3: error: syntax error near '+' (update a variable with 'x = x + y') [syntax]
 ```
 
-The hints cover compound assignment such as `+=`, the increment `++`, the operators `!=`, `!`, `&&`, and `||`. They also cover comments that start with `//`. A read of the undefined global `null` reports `undefined-global` with the hint `the absent value is written 'nil'`.
+The hints cover compound assignment such as `+=`, the increment `++`, comments that start with `//`, and the operators `!=`, `!`, `&&`, and `||`. A read of the undefined global `null` reports `undefined-global` with the hint `the absent value is written 'nil'`.
 
 ### Test files and machine output
 
@@ -198,7 +198,7 @@ A file whose name ends in `_test.lus` is checked as a [test file](/manual/testin
 
 ## Documentation
 
-`lus doc` generates the reference documentation of a module from comments in its source. The description of a function is kept next to the function, so the two are changed together. A _doc comment_ is a run of `---` line comments or one `--[[- ... ]]` long comment. It is on lines of its own and ends on the line directly above a declaration. Its text is Markdown. A line that starts with an annotation such as `@param` describes one parameter, one result, or another property of the declaration.
+`lus doc` generates the reference documentation of a module from comments in its source. The description of a function is kept next to the function, so the two are changed together. A _doc comment_ is a run of `---` line comments or one `--[[- ... ]]` long comment, on lines of its own, that ends on the line directly above a declaration. Its text is Markdown, except that a line that starts with an annotation such as `@param` describes one parameter, one result, or another property of the declaration.
 
 ```lus
 --- Joins strings with a separator.
@@ -221,12 +221,12 @@ print(join(", ", 1, 2, 3))  --> 1, 2, 3
 
 The annotations are the following.
 
-- `@param NAME TYPE DESCRIPTION` documents a parameter. A `?` after the name or after the type makes the parameter optional. `...` documents unnamed variable arguments. Named variable arguments such as `...parts` are documented under their name without the dots.
+- `@param NAME TYPE DESCRIPTION` documents a parameter. A `?` after the name or after the type makes the parameter optional. `...` documents unnamed variable arguments, while named variable arguments such as `...parts` are documented under their name without the dots.
 - `@return TYPE DESCRIPTION` documents one result, in order. `@returns` is the same annotation.
 - `@since VERSION` records the release in which the entry appeared.
 - `@stability LEVEL` records how settled the entry is.
 
-A line indented under an annotation continues its description. Every other line is Markdown text.
+A line indented under an annotation continues its description, while every other line is Markdown text.
 
 ### Modules and entries
 
@@ -250,33 +250,33 @@ local function helper() end
 return M
 ```
 
-The name of an entry in the returned table starts with the name of the module. When this module is saved as `res.lus`, `lus doc` lists `res.open` with its comment and `res.close` without one. It omits the local `helper`.
+The name of an entry in the returned table starts with the name of the module. When this module is saved as `res.lus`, `lus doc` lists `res.open` with its comment and `res.close` without one but omits the local `helper`.
 
 ### Output
 
-By default, `lus doc` writes Markdown to standard output. The output starts with the frontmatter of the module and has one section per entry. `--format json` writes JSON. Each entry has the frontmatter fields of the [standard library specification](https://github.com/lus-lang/lus/tree/main/spec): `name`, `module`, `kind`, `params`, `vararg`, `returns`, `since`, `stability`, and `receiver`. It also has `description`, `line`, and a description for each parameter. `-o DIR` writes one file per module into the directory `DIR`. Each file is named `MODULE.md` or `MODULE.json`.
+By default, `lus doc` writes Markdown to standard output, starting with the frontmatter of the module and continuing with one section per entry. `--format json` writes JSON, in which each entry has the frontmatter fields of the [standard library specification](https://github.com/lus-lang/lus/tree/main/spec): `name`, `module`, `kind`, `params`, `vararg`, `returns`, `since`, `stability`, and `receiver`. It also has `description`, `line`, and a description for each parameter. `-o DIR` writes one file per module into the directory `DIR`, named `MODULE.md` or `MODULE.json`.
 
 ```sh
 lus doc -o docs src/*.lus
 lus doc --format json strings.lus
 ```
 
-Two other tools read doc comments. The language server shows the doc comment of a name when the pointer is over that name in an editor. `lus check` reports a `@param` that names no parameter as `doc-unknown-param`.
+Other tools read doc comments too. The language server shows the doc comment of a name when the pointer is over that name in an editor. `lus check` reports a `@param` that names no parameter as `doc-unknown-param`.
 
 ## Syntax trees
 
-A _syntax tree_ is the tree of nodes that the parser builds from source text, with one node per statement and expression. A program that analyzes or rewrites Lus code, such as a custom lint rule or a code generator, reads the tree, so it needs no parser of its own. Lus provides the tree in two forms. [`debug.parse`](/manual/api#debug.parse) returns it to a Lus program as nested tables. `lus ast FILE` prints the same tree as JSON for tools written in other languages. The [JSON schema of the tree](https://github.com/lus-lang/lus/blob/main/spec/language/ast.schema.json) describes every node.
+A _syntax tree_ is the tree of nodes that the parser builds from source text, with one node per statement and expression. A program that analyzes or rewrites Lus code, such as a custom lint rule or a code generator, reads the tree, so it needs no parser of its own. [`debug.parse`](/manual/api#debug.parse) returns the tree to a Lus program as nested tables, while `lus ast FILE` prints the same tree as JSON for tools written in other languages. The [JSON schema of the tree](https://github.com/lus-lang/lus/blob/main/spec/language/ast.schema.json) describes every node.
 
 ### `debug.parse`
 
-`debug.parse(code, chunkname, options)` parses a source string and returns its tree. The optional `chunkname` is the name of the chunk in error messages. Its default is `"=(parse)"`. The code may also be a vector of bytes.
+`debug.parse(code, chunkname, options)` parses a source string or a vector of bytes and returns its tree. The optional `chunkname`, which defaults to `"=(parse)"`, is the name of the chunk in error messages.
 
 ```lus
 local tree = debug.parse("local x = 1 + 2")
 print(tree.type, tree.line, tree.children[1].type)  --> chunk  1  local
 ```
 
-The `options` table has two boolean fields, both true by default. With `comments`, the root lists every comment in a `comments` array. With `recover`, the parser continues past a syntax error, which is useful to an editor that analyzes a file while it is being typed. A token that cannot start a statement becomes an `error_stat` node. Parsing resumes at the next statement. The root lists every error in its `errors` array. With `recover` set to `false`, `debug.parse` returns `nil` and the error message for a source that does not parse.
+The `options` table has the boolean fields `comments` and `recover`, both true by default. With `comments`, the root lists every comment in a `comments` array. With `recover`, the parser continues past a syntax error, which is useful to an editor that analyzes a file while it is being typed. A token that cannot start a statement then becomes an `error_stat` node, after which parsing resumes at the next statement. The root lists every error in its `errors` array. With `recover` set to `false`, `debug.parse` returns `nil` and the error message for a source that does not parse.
 
 ```lus
 local tree = debug.parse("local a = 1\n) 2\nlocal b = 3\n")
@@ -295,7 +295,7 @@ print(debug.parse("local = 1", "input.lus", { recover = false }))
 Each node is a table with the following fields.
 
 - `type` is the kind of node, such as `"chunk"`, `"local"`, or `"binop"`.
-- `line` and `column` are the position where the node starts. Both count from 1. A column is counted in bytes.
+- `line` and `column` are the position where the node starts, both counting from 1, with the column counted in bytes.
 - `endline` and `endcolumn` are the position of the last token of the node, when the node has one.
 - The other fields depend on the type of the node, such as `op`, `left`, and `right` for a `binop`.
 - `children` holds the statements of a block, the `elseif` and `else` nodes of an `if`, or the fields of a table. A list field is absent when the list is empty.
@@ -362,7 +362,7 @@ check_globals(debug.parse("local a = 1\ncount = a\n"), "input.lus")
 
 ### `lus ast`
 
-`lus ast FILE` prints the syntax tree of a file as JSON. The fields of every node are in a fixed order: `type`, `line`, `column`, the end position, the fields that depend on the type, and `children`. The root lists the comments of the file before its children. `--no-comments` omits the comments. With `--no-recover`, the command prints the first syntax error and exits with status 1. Without `--no-recover`, the command prints the tree of a file with syntax errors, including the `errors` array. The exit status is also 1.
+`lus ast FILE` prints the syntax tree of a file as JSON. The fields of every node are in a fixed order: `type`, `line`, `column`, the end position, the fields that depend on the type, and `children`. The root lists the comments of the file before its children, unless `--no-comments` omits them. For a file with syntax errors, the command prints the tree with its `errors` array and exits with status 1. With `--no-recover`, it prints the first syntax error in place of the tree and exits with status 1.
 
 ```sh
 lus ast app.lus > app.json
@@ -396,18 +396,18 @@ The following JSON is the first node of the tree that the command prints for the
 
 ## Standalone executables
 
-`lus build SCRIPT` turns a program into one executable file. The executable runs on a machine that has neither `lus` nor the source files, so distributing the program means copying one file. The executable has the name of the script without its extension, with `.exe` added on Windows. `-o FILE` gives it another name.
+`lus build SCRIPT` turns a program into one executable file. The executable runs on a machine that has neither `lus` nor the source files, so distributing the program means copying one file. The executable has the name of the script without its extension, with `.exe` added on Windows, unless `-o FILE` gives it another name.
 
 ```sh
 lus build -o app main.lus
 ./app first-argument
 ```
 
-The command compiles the script and finds every `require` whose argument is a string literal. It searches the module path for a file for each of those names, as `require` does. It compiles the files that it finds. It then does the same for the modules that those files require. `LUS_PATH` changes the module path, as it does for the interpreter. When no file matches a name, the executable contains no module of that name. `require` then searches for the module when the program runs.
+The command compiles the script, finds every `require` whose argument is a string literal, and searches the module path for a file for each of those names, as `require` does. It compiles the files that it finds, then does the same for the modules that those files require. `LUS_PATH` changes the module path, as it does for the interpreter. When no file matches a name, the executable contains no module of that name, so `require` searches for the module when the program runs.
 
 ### Including modules
 
-A program may compute the name of a module when it runs, for example to load a plugin chosen by a setting. `lus build` cannot find such a module in the source. `--include` bundles it. A file is bundled under its name without the extension.
+A program may compute the name of a module when it runs, for example to load a plugin chosen by a setting. `lus build` cannot find such a module in the source, so `--include` bundles it under the file name without the extension.
 
 ```sh
 lus build app.lus --include lib/utils.lus --include lib/config.lus
@@ -444,14 +444,14 @@ local sub = require("lib.sub.module")  -- lib/sub/module.lus
 
 The executable is a copy of the running `lus` with the compiled code of the program appended. `require` looks for a bundled module before it searches any file, so a file of the same name in the working directory never replaces a module of the program. Loading a bundled module needs no permission, as for the [preincluded modules](/manual/guide#modules) of the interpreter.
 
-The program runs with the permissions it pledges. It also holds the permissions given to `lus build` with `-P`, every time it runs. The values of the [build flags](/manual/guide#the-environment) given with `-F` are fixed in the bundled code.
+The program runs with the permissions it pledges plus the permissions given to `lus build` with `-P`, every time it runs. The values of the [build flags](/manual/guide#the-environment) given with `-F` are fixed in the bundled code.
 
 ```sh
 lus build app.lus -P fs:read -P network -F release
 ./app  # runs with fs:read and network, compiled with flags.release
 ```
 
-The executable passes every command line argument to the program, including arguments that look like options of `lus`. The program reads them from `arg` and `...` as a script does. `arg[0]` is the path of the executable.
+The executable passes every command line argument to the program, including arguments that look like options of `lus`. The program reads them from `arg` and `...` as a script does, with the path of the executable in `arg[0]`.
 
 ```lus nocheck
 -- ./app foo bar
@@ -462,7 +462,7 @@ print(...)     --> foo  bar
 
 ## Binary chunks
 
-A _binary chunk_ is a compiled function stored as bytes, in the form that [`string.dump`](/manual/api#string.dump) writes. Loading a binary chunk skips the parsing of source text. A binary chunk can also be distributed without its source. `lus compile SCRIPT` writes the compiled script as a binary chunk to `SCRIPT.lusc`, where `SCRIPT` is the script name without its extension, or to the file named by `-o`. `-s` omits debug information, which makes the chunk smaller and removes line numbers from its error messages. `-F` defines build flags as for `lus build`. Their values are fixed in the chunk.
+A _binary chunk_ is a compiled function stored as bytes, in the form that [`string.dump`](/manual/api#string.dump) writes. A binary chunk loads without parsing source text and can be distributed without its source. `lus compile SCRIPT` writes the compiled script as a binary chunk to `SCRIPT.lusc`, where `SCRIPT` is the script name without its extension, or to the file named by `-o`. `-s` omits debug information, which makes the chunk smaller and removes line numbers from its error messages. `-F` defines build flags as for `lus build`, with their values fixed in the chunk.
 
 ```sh
 lus compile -o report.lusc report.lus
@@ -481,7 +481,7 @@ print(double(21))  --> 42
 
 ## Debugger
 
-A debugger stops a running program at a chosen line and shows its variables and its call stack. This usually finds a bug faster than adding `print` calls. `lus debug` runs a script under the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), the protocol that VS Code and many other editors use to control debuggers. The _adapter_ is the part of the `lus` executable that implements the protocol. Any editor with a client for the protocol can set breakpoints in Lus code, step through it, and inspect its state.
+A debugger stops a running program at a chosen line and shows its variables and its call stack, which usually finds a bug faster than adding `print` calls. `lus debug` runs a script under the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), the protocol that VS Code and many other editors use to control debuggers. The _adapter_ is the part of the `lus` executable that implements the protocol, so any editor with a client for the protocol can set breakpoints in Lus code, step through it, and inspect its state.
 
 ### Running the adapter
 
@@ -491,7 +491,7 @@ An editor starts the adapter with the following command.
 lus debug [--stdio | --port N] [-P perm]... [SCRIPT [ARGS...]]
 ```
 
-By default, the adapter reads requests from standard input and writes its replies to standard output. Editors start it this way. `--port N` makes the adapter accept one client on `127.0.0.1:N`, for a client that connects to an adapter that is already running. The script is named on the command line or in the `program` field of the launch request. `-P` grants [permissions](/manual/permissions) to the program as `lus -P` does, so a debugging session can run with the same permissions as a normal run.
+By default, the adapter reads requests from standard input and writes its replies to standard output, which is how editors start it. `--port N` makes the adapter accept one client on `127.0.0.1:N`, for a client that connects to an adapter that is already running. The script is named on the command line or in the `program` field of the launch request. `-P` grants [permissions](/manual/permissions) to the program as `lus -P` does, so a debugging session can run with the same permissions as a normal run.
 
 The adapter sends the standard output and standard error of the program to the editor as output events. In stdio mode, the protocol uses the real standard input, so the program reads an empty standard input.
 
@@ -527,26 +527,26 @@ The fields of a launch configuration are the following.
 | `stopOnEntry` | Stop at the first line of the program. The default is `false`. |
 | `pledges` | The permissions granted to the program, as with `lus -P`. |
 
-The extension starts the `lus` found on the `PATH`. The setting `lus.executablePath` names another executable. A relative path with a directory part is resolved against the workspace folder.
+The extension starts the `lus` found on the `PATH`, unless the setting `lus.executablePath` names another executable. A relative path with a directory part is resolved against the workspace folder.
 
 ### Breakpoints and stepping
 
 The adapter supports the debugging features that editors offer for most languages.
 
-- **Breakpoints** stop on any line. A breakpoint may have a **condition**, a Lus expression that must be truthy for the breakpoint to stop the program. It may have a **hit count**. A plain number stops on exactly that hit. A number after one of the operators `>=`, `<=`, `>`, `<`, `==`, and `%` stops on the hits that satisfy the operator, so `%3` stops on every third hit. A breakpoint with a **log message** prints the message and lets the program continue. The adapter replaces each expression in braces with its value, as in `x is {x}`.
-- **Error breakpoints** have two filters. _Uncaught Errors_, on by default, stops on an error that no `catch` captures. _All Raised Errors_ stops on every error at the point where it is raised, including errors that a `catch` captures.
+- **Breakpoints** stop on any line. A breakpoint may have a **condition**, a Lus expression that must be truthy for the breakpoint to stop the program. It may have a **hit count**: a plain number stops on exactly that hit, while a number after one of the operators `>=`, `<=`, `>`, `<`, `==`, and `%` stops on the hits that satisfy the operator, so `%3` stops on every third hit. A breakpoint with a **log message** lets the program continue after printing the message, with each expression in braces replaced by its value, as in `x is {x}`.
+- **Error breakpoints** are set by filter. _Uncaught Errors_, on by default, stops on an error that no `catch` captures. _All Raised Errors_ stops on every error at the point where it is raised, including errors that a `catch` captures.
 - **Stepping** covers step over, step in, and step out, plus **pause** while the program runs. New breakpoints take effect immediately, even while the program runs.
 - **Call stacks** include coroutines. The frames of a coroutine are shown on top of the frames of the code that resumed it, so stepping out of a coroutine stops in the code that resumed it.
-- **Variables** appear in three scopes for each frame. _Locals_ holds the local variables of the function. _Upvalues_ holds the variables of enclosing functions that the function uses. _Globals_ holds the global variables. Tables and vectors expand in place.
+- **Variables** appear in the following scopes for each frame: _Locals_ holds the local variables of the function, _Upvalues_ holds the variables of enclosing functions that the function uses, and _Globals_ holds the global variables. Tables and vectors expand in place.
 - **Evaluation** runs expressions in the context of the selected frame, from the debug console and on hover.
 
 ### How the adapter works
 
-The adapter is native code inside the interpreter. It runs no Lus code in the program being debugged. During a debugging session, the interpreter calls the adapter at every new line. The adapter stops the program there if a breakpoint, a step, or a pause applies. The interpreter also calls the adapter for each error, before it searches for a `catch`. Machine code compiled by the JIT never runs during a debugging session, so a program runs slower under the debugger. The speed of a program that runs without the debugger is unchanged.
+The adapter is native code inside the interpreter that runs no Lus code in the program being debugged. During a debugging session, the interpreter calls the adapter at every new line, where the adapter stops the program if a breakpoint, a step, or a pause applies. The interpreter also calls the adapter for each error, before it searches for a `catch`. Machine code compiled by the JIT never runs during a debugging session, so a program runs slower under the debugger, while its speed without the debugger is unchanged.
 
-Stepping compares stack depths. The depth of a thread is the number of its frames plus the frames of every thread that resumed it. Step over stops at the next line at the same depth or a smaller one. Step out stops at the next line at a smaller depth. Step in stops at the next line at any depth.
+Stepping compares stack depths, where the depth of a thread is the number of its frames plus the frames of every thread that resumed it. Step over stops at the next line at the same depth or a smaller one. Step out stops at the next line at a smaller depth. Step in stops at the next line at any depth.
 
-While the program runs, a second thread reads the requests of the editor. The interpreter handles them between two lines. While the program is stopped, the interpreter waits for requests and answers them. The editor reads the stack and the variables and evaluates expressions during that time.
+While the program runs, a second thread reads the requests of the editor, which the interpreter handles between two lines. While the program is stopped, the interpreter waits for requests and answers them, so the editor can read the stack and the variables and evaluate expressions.
 
 ## Standard library reference
 
@@ -563,7 +563,7 @@ Serves HTTP/1.1 on `host` and `port`, calls `handler` for every request, and ret
 
 ## Agent setup
 
-A coding agent writes better Lus when the project contains instructions for the language and its tools. `lus agents init [DIR]` writes the agent skills of the running version into `DIR/.agents/skills`, the folder that coding agents of several vendors read. `DIR` defaults to the current directory. The command links `.claude/skills` to that folder. When `.claude/skills` is already a directory, the command links each skill into it. On a system that refuses symbolic links, it copies the skills. It then adds a short Lus section to `AGENTS.md`, which it creates if needed. Running the command again updates the skills and changes nothing else. [The agents page](/agents) lists the skills and the prompts to start from.
+A coding agent writes better Lus when the project contains instructions for the language and its tools. `lus agents init [DIR]` writes the agent skills of the running version into `DIR/.agents/skills`, the folder that coding agents of several vendors read, where `DIR` defaults to the current directory. The command then links `.claude/skills` to that folder, or links each skill into it when `.claude/skills` is already a directory. On a system that refuses symbolic links, it copies the skills. Last, it adds a short Lus section to `AGENTS.md`, creating the file if needed. Running the command again updates the skills and changes nothing else. [The agents page](/agents) lists the skills and the prompts to start from.
 
 ## Related pages
 
