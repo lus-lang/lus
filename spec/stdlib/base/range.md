@@ -25,7 +25,7 @@ The parameters describe the sequence:
 - `limit` is the last number the sequence may reach.
 - `step` is the difference between consecutive numbers and defaults to `1`. A negative `step` counts down.
 
-`range` returns one function. Each call of the function returns the next number, and `nil` once the number passes `limit`, so a sequence whose `start` already lies past `limit` is empty. The first number is `start` itself, and each later number is the sum of the previous one and `step`, so it takes the subtype that arithmetic gives. Integers, floats, bigints, and decimals all work, and a numeric string converts to a number. A `step` of zero raises `bad argument #3 to 'range' (step must not be zero)`, and an argument that is not a number raises `number expected`.
+`range` returns one function. Each call of the function returns the next number, and `nil` once the number passes `limit`, so a sequence whose `start` already lies past `limit` is empty. Over integers and floats the sequence follows the rules of the numeric `for`. An integer `start` and `step` give integers, and a float `start` or `step` makes every number a float. Bigints and decimals step with exact arithmetic, and a numeric string converts to a number. A `step` of zero raises `bad argument #3 to 'range' (step must not be zero)`, and an argument that is not a number raises `number expected`.
 
 ```lus
 for i in range(1, 5) do io.write(i, " ") end print()        --> 1 2 3 4 5
@@ -36,4 +36,4 @@ local next_even = range(2, 4, 2)
 print(next_even(), next_even(), next_even())                 --> 2  4  nil
 ```
 
-The iterator keeps its position in its own upvalues, so it works in a generic `for`, when stored and called directly, and when passed to other functions. A float `step` makes every number after the first a float, as in `range(1, 2, 0.5)`, which produces `1`, `1.5`, and `2.0`. The numeric `for` statement, `for i = start, limit, step`, counts the same sequence without a function call, as [Numeric for](/manual/guide#numeric-for) describes.
+The iterator keeps its position in its own upvalues, so it works in a generic `for`, when stored and called directly, and when passed to other functions. `range(1, 2, 0.5)` produces `1.0`, `1.5`, and `2.0`, and `range(math.maxinteger - 1, math.maxinteger)` produces two integers and ends. A `for` loop that calls the builtin `range` directly with integer or float arguments runs the numeric loop, `for i = start, limit, step`, without the function or its calls, as [Numeric for](/manual/guide#numeric-for) describes.

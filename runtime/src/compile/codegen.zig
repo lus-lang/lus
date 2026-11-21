@@ -211,6 +211,10 @@ pub const Compiler = struct {
     /// declaration applies, -2 when a named declaration excludes the name,
     /// or the absolute index of the collective `global *` that covers it.
     ginfo: i32 = -1,
+    /// How many fallback copies of `range` loops enclose the code being
+    /// compiled. Inside one, a `range` loop compiles as a plain generic
+    /// loop, so nesting never multiplies the copies.
+    range_fallbacks: u32 = 0,
 
     pub fn err(c: *Compiler, line: u32, comptime fmt: []const u8, args: anytype) Error {
         const name = @import("../syntax/parser.zig").chunkDisplay(c.arena, c.opts.chunkname);
@@ -2101,7 +2105,10 @@ fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
         .repeat_ => |r| try repeatStat(fs, r.body, r.cond, s.line),
         .if_ => |i| try ifStat(fs, i.clauses, i.else_, s.line),
         .numeric_for => |f| try numericFor(fs, f.name, f.start, f.limit, f.step, f.body, s.line),
-        .generic_for => |f| try genericFor(fs, f.names, f.exprs, f.body, s.line),
+        .generic_for => |f| if (rangeCall(fs, f.names, f.exprs)) |call|
+            try rangeFor(fs, f.names[0], call.callee, call.args, f.body, s.line)
+        else
+            try genericFor(fs, f.names, f.exprs, f.body, s.line),
         .return_ => |vals| try returnStat(fs, vals, s.line),
         .provide => |vals| try provideStat(fs, vals, s.line),
         .break_ => try newGoto(fs, "break", s.line, try jump(fs)),
@@ -2998,6 +3005,102 @@ fn numericFor(fs: *FuncState, name: ast.Name, start: *ast.Expr, limit: *ast.Expr
     _ = try newLocalVar(fs, name.text, .const_);
     try forBody(fs, base, line, 1, false, body, &outer);
     try leaveBlock(fs);
+}
+
+const RangeCall = struct { callee: *ast.Expr, args: []*ast.Expr };
+
+/// The call in `for name in range(a [, b [, step]])`, when the loop can
+/// take the numeric form: one loop variable, one to three arguments, and a
+/// last argument that yields exactly one value.
+fn rangeCall(fs: *FuncState, names: []ast.Name, exprs: []*ast.Expr) ?RangeCall {
+    if (fs.c.range_fallbacks > 0 or names.len != 1 or exprs.len != 1) return null;
+    const call = switch (exprs[0].kind) {
+        .call => |c| c,
+        else => return null,
+    };
+    if (call.args_kind != .parens or call.args.len < 1 or call.args.len > 3) return null;
+    switch (call.callee.kind) {
+        .name => |n| if (!std.mem.eql(u8, n.text, "range")) return null,
+        else => return null,
+    }
+    switch (call.args[call.args.len - 1].kind) {
+        .integer, .float, .name, .paren, .binop, .unop, .index => {},
+        else => return null,
+    }
+    return .{ .callee = call.callee, .args = call.args };
+}
+
+/// `for name in range(...)`. The callee and the arguments go to R[A] and
+/// the registers after it. RANGEPREP checks that R[A] is the builtin
+/// `range` and the arguments are plain numbers, writes the start, limit
+/// and step to R[A+4..A+6], and falls through to the FORPREP of the
+/// numeric loop over those registers, skipping the JMP between them.
+/// Anything else takes that JMP to a copy of the loop in the generic form,
+/// which calls R[A] with the arguments as written.
+fn rangeFor(fs: *FuncState, name: ast.Name, callee: *ast.Expr, args: []*ast.Expr, body: *ast.Block, line: u32) Error!void {
+    const base = fs.freereg;
+    try checkStack(fs, 5);
+    var e: ExpDesc = .{};
+    try expr(fs, callee, &e);
+    try exp2nextreg(fs, &e);
+    for (args) |arg| {
+        try expr(fs, arg, &e);
+        try exp2nextreg(fs, &e);
+    }
+    const nargs: u32 = @intCast(args.len);
+    if (nargs < 3) {
+        try loadNil(fs, fs.freereg, 3 - nargs);
+        try reserveRegs(fs, 3 - nargs);
+    }
+    fs.line = line;
+    try codeABC(fs, .rangeprep, base, 0, 0);
+    const to_generic = try jump(fs);
+
+    // The numeric form keeps the callee and the arguments below its state
+    // registers. The generic form closes R[A+3], which the optimizing tier
+    // keeps in its slot, so the numeric form leaves that register alone.
+    {
+        var outer: Block = undefined;
+        enterBlock(fs, &outer, true);
+        var i: u32 = 0;
+        while (i < 4) : (i += 1) _ = try newLocalVar(fs, "(range)", .regular);
+        try adjustLocalVars(fs, 4);
+        try reserveRegs(fs, 3);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        try adjustLocalVars(fs, 3);
+        _ = try newLocalVar(fs, name.text, .const_);
+        try forBody(fs, base + 4, line, 1, false, body, &outer);
+        try leaveBlock(fs);
+    }
+    const done = try jump(fs);
+
+    // The generic form, which RANGEPREP reaches with the callee and the
+    // arguments still in place.
+    try patchToHere(fs, to_generic);
+    {
+        fs.c.range_fallbacks += 1;
+        defer fs.c.range_fallbacks -= 1;
+        var outer: Block = undefined;
+        fs.freereg = base;
+        enterBlock(fs, &outer, true);
+        try reserveRegs(fs, 4);
+        try codeABC(fs, .call, base, nargs + 1, 5);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        _ = try newLocalVar(fs, "(for state)", .regular);
+        _ = try newLocalVar(fs, name.text, .const_);
+        try adjustLocalVars(fs, 4);
+        outer.upval = true;
+        outer.inside_tbc = true;
+        fs.needs_close = true;
+        try checkStack(fs, 3);
+        try forBody(fs, base, line, 1, true, body, &outer);
+        try leaveBlock(fs);
+    }
+    try patchToHere(fs, done);
 }
 
 fn genericFor(fs: *FuncState, names: []ast.Name, exprs: []*ast.Expr, body: *ast.Block, line: u32) Error!void {

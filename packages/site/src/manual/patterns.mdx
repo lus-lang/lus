@@ -201,7 +201,7 @@ end
 
 Each such iterator allocates a closure, makes a call for every value, and handles the direction of the step by hand. A step of zero ends the loop above at once, without an error.
 
-The global function [`range`](/manual/api#range) counts from a start to a limit with an optional step. It returns an iterator function that a generic `for` consumes and that a variable or an argument can hold:
+The global function [`range`](/manual/api#range) counts from a start to a limit with an optional step. A `for` loop that calls it directly runs the numeric loop, with no closure and no call per value. Elsewhere it returns an iterator function that a generic `for` consumes and that a variable or an argument can hold:
 
 ```lus
 for i in range(1, 10, 3) do
