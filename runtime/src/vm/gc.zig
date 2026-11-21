@@ -14,6 +14,7 @@ const value = @import("value.zig");
 const object = @import("object.zig");
 const state_mod = @import("state.zig");
 const heap = @import("heap.zig");
+const table = @import("table.zig");
 const gcpar = @import("gcpar.zig");
 const Value = value.Value;
 const Tag = value.Tag;
@@ -119,7 +120,9 @@ pub inline fn needsRelease(h: *Header) bool {
     switch (h.tag) {
         .table => {
             const t = h.as(object.Table);
-            return (t.asize > 0 and !t.ownsInline(t.array_ptr)) or (t.hash_len > 0 and !t.ownsInline(t.hash_ptr));
+            if (t.asize > 0 and !t.ownsInline(t.array_ptr)) return true;
+            if (t.isShaped()) return t.slotCap() > 0 and !t.ownsInline(t.hash_ptr);
+            return t.hash_len > 0 and !t.ownsInline(t.hash_ptr);
         },
         .string => {
             const f = h.as(object.String).flags().*;
@@ -1345,6 +1348,21 @@ fn MarkerOf(comptime par: bool) type {
                     if (!m.verifying) m.remember(&s.weak, t);
                 },
             }
+            if (t.isShaped()) m.traverseSlots(t, mode);
+        }
+
+        /// Marks the values in the slots of a shaped table. Its keys are
+        /// strings, which the state keeps alive and weak modes never
+        /// clear, so only weak values make a difference, and the table is
+        /// already on the list of weak tables then.
+        fn traverseSlots(m: *M, t: *object.Table, mode: object.Table.WeakMode) void {
+            const n: usize = table.shapeOf(t).n;
+            m.work += n * @sizeOf(u64);
+            const weak_values = mode == .values or mode == .both;
+            for (0..n) |i| {
+                const v = t.slotVal(i);
+                if (weak_values) m.markIfValueLike(v) else m.markValue(v);
+            }
         }
 
         /// Marks the key of a dead node, one whose value is nil. The node
@@ -1414,6 +1432,12 @@ fn MarkerOf(comptime par: bool) type {
                         if (w.* == object.Table.hole) continue;
                         const v = Value.make(w.*, .table);
                         if (!isMarkedOrNotCollectable(v) or isFinalizedObject(v)) w.* = object.Table.hole;
+                    }
+                }
+                if (t.isShaped() and (t.weakMode() == .values or t.weakMode() == .both)) {
+                    for (0..table.shapeOf(t).n) |i| {
+                        const v = t.slotVal(i);
+                        if (!isMarkedOrNotCollectable(v) or isFinalizedObject(v)) t.setSlot(i, .nil);
                     }
                 }
                 for (0..t.hash_len) |hi| {

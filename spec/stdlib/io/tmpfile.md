@@ -13,7 +13,7 @@ Creates a temporary file, opens it for reading and writing in text mode, and ret
 
 The function takes no arguments. It creates the file in the directory named by the `TMPDIR` environment variable, or in `/tmp` when the variable is unset, and removes its name from the directory at once. The file therefore has no path that another program could open, and its storage is released when the handle closes or the process ends.
 
-On success the call returns one handle opened in mode `"w+"`. A file that cannot be created raises an error. The call requires `fs:write`. Any grant of `fs:write` permits it, including one limited to other paths.
+On success the call returns one handle opened in mode `"w+"`. A file that cannot be created raises an error. The call requires `fs:write` for the path of the file it creates, so a grant limited to other paths raises an error such as `permission "fs:write" denied for '/tmp/lus_1f2e3d4c5b6a7980'`.
 
 The following example writes to a temporary file, seeks back to its start, and reads the contents.
 

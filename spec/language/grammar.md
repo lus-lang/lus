@@ -128,7 +128,7 @@ The accepted forms after validation are:
 
 | Form | Examples | Value |
 | --- | --- | --- |
-| decimal integer | `0`, `42`, `1_000` | integer. If it overflows 64 bits it becomes a float (`9223372036854775808` reads as `9.2233720368547758e+18`) |
+| decimal integer | `0`, `42`, `1_000` | integer. If it overflows 64 bits it becomes a float (`9223372036854775808` reads as `9.223372036854776e+18`) |
 | decimal float | `3.`, `.5`, `1e3`, `1.5e-2` | float |
 | hex integer | `0xFF`, `0xffffffffffffffff` | integer, wrapping modulo 2^64 (`0xffffffffffffffff` is `-1`) |
 | hex float | `0x1p4`, `0x1.8p1`, `0x.8p1`, `0x1.p3`, `0xA.8p0` | float with a binary exponent |

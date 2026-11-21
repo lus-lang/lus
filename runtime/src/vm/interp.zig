@@ -13,6 +13,7 @@ const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
 const table = @import("table.zig");
+const shape = @import("shape.zig");
 const ops = @import("ops.zig");
 const gc = @import("gc.zig");
 const jit = @import("../jit/jit.zig");
@@ -1240,23 +1241,9 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .rangeprep => {
-            // R[A] holds the iterator expression results. When R[A] is
-            // the builtin range, convert to an integer numeric loop:
-            // R[A..A+2] = start, count, step and skip to the numeric
-            // loop body following this instruction. Otherwise continue
-            // with the generic protocol at the offset in C.
-            const r = c.fr.base + opc.a(ins);
-            if (isBuiltinRange(l, l.stack[r])) {
-                c.fr.pc = pc;
-                if (try rangePrep(l, r)) {
-                    pc += opc.bx(ins) + 1;
-                } else {
-                    const lr = c.bp + opc.a(ins);
-                    if (lr[0].tag == .integer) try tierFor(l, &c, pc, @bitCast(lr[1].asInt()));
-                }
-            } else {
-                pc += opc.c(ins);
-            }
+            // A loop over the builtin range with plain numbers skips the
+            // JMP to the generic copy and takes the FORPREP after it.
+            if (rangeArgs(l, c.bp + opc.a(ins))) pc += 1;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -1833,6 +1820,15 @@ inline fn noNewindexMeta(t: *Table) bool {
 /// predicts before probing, and records where the key was found.
 inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
     const i: usize = slot.*;
+    if (tab.isShaped()) {
+        // A prediction names a slot of the shape, which holds the key
+        // when the shape says so.
+        const sh = table.shapeOf(tab);
+        if (i < sh.n and sh.keys[i] == s) return tab.slotVal(i);
+        const idx = sh.findText(s) orelse return .nil;
+        slot.* = @intCast(idx);
+        return tab.slotVal(idx);
+    }
     if (i < tab.hash_len and tab.keyIsStr(i, s)) return tab.val(i);
     const idx = table.findStr(tab, s) orelse return .nil;
     if (idx < object.IcEntry.none) slot.* = @intCast(idx);
@@ -1870,6 +1866,9 @@ pub const layout = struct {
     pub const ic_own: usize = @offsetOf(object.IcEntry, "own");
     pub const ic_index: usize = @offsetOf(object.IcEntry, "index");
     pub const ic_holder: usize = @offsetOf(object.IcEntry, "holder");
+    /// Byte offset of the shape id that comes with the `own` prediction,
+    /// 16 bits wide.
+    pub const ic_shape: usize = @offsetOf(object.IcEntry, "shape");
     /// Bits of `Table.tm_absent`.
     pub const absent_index: u4 = @backingInt(state.TM.index);
     pub const absent_newindex: u4 = @backingInt(state.TM.newindex);
@@ -1878,6 +1877,7 @@ pub const layout = struct {
         std.debug.assert(@FieldType(object.IcEntry, "own") == u16);
         std.debug.assert(@FieldType(object.IcEntry, "index") == u16);
         std.debug.assert(@FieldType(object.IcEntry, "holder") == u16);
+        std.debug.assert(@FieldType(object.IcEntry, "shape") == u16);
     }
 };
 
@@ -1896,24 +1896,50 @@ pub const fast = struct {
             return stringMethod(l, ic, key.as(String), out);
         }
         const tab = t.as(Table);
-        // The predicted node holds the key with a value: copy the value
-        // straight from the node. Testing the node in place keeps the
-        // value out of a temporary, which the general path below needs
-        // because its value may also be nil.
         const i: usize = ic.own;
-        if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload) {
-            // Both tags with one load.
-            const tags = tab.tagPair(i).*;
-            if (tags[0] == @backingInt(value.Tag.string) and tags[1] != @backingInt(value.Tag.nil)) {
-                out.* = Value.make(tab.hash_ptr[i].val, @fromBackingInt(tags[1]));
+        if (tab.hash_used == Table.shaped_bit | @as(u32, ic.shape) and i != object.IcEntry.none and table.shapeOf(tab).keys[i] == key.as(String)) {
+            // The table has the shape the cache saw, and the key, which
+            // a variable key may change, is the one in the predicted slot.
+            const tg = tab.slotTag(i);
+            if (tg != .nil) {
+                out.* = Value.make(tab.slotWords()[i], tg);
                 return true;
             }
-        }
-        if (table.findStr(tab, key.as(String))) |idx| {
-            if (idx < object.IcEntry.none) ic.own = @intCast(idx);
-            if (tab.valTag(idx) != .nil) {
-                out.* = tab.val(idx);
-                return true;
+        } else if (tab.isShaped()) {
+            // The cache records the slot of the key, or that the shape
+            // lacks it, which native code with a constant key trusts
+            // before it follows `__index`.
+            ic.shape = tab.shapeId();
+            if (table.shapeOf(tab).findText(key.as(String))) |idx| {
+                ic.own = @intCast(idx);
+                const v = tab.slotVal(idx);
+                if (!v.isNil()) {
+                    out.* = v;
+                    return true;
+                }
+            } else ic.own = object.IcEntry.none;
+        } else {
+            // The predicted node holds the key with a value: copy the
+            // value straight from the node. Testing the node in place
+            // keeps the value out of a temporary, which the general path
+            // below needs because its value may also be nil.
+            if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload) {
+                // Both tags with one load.
+                const tags = tab.tagPair(i).*;
+                if (tags[0] == @backingInt(value.Tag.string) and tags[1] != @backingInt(value.Tag.nil)) {
+                    out.* = Value.make(tab.hash_ptr[i].val, @fromBackingInt(tags[1]));
+                    return true;
+                }
+            }
+            if (table.findStr(tab, key.as(String))) |idx| {
+                if (idx < object.IcEntry.none) {
+                    ic.own = @intCast(idx);
+                    ic.shape = object.IcEntry.none;
+                }
+                if (tab.valTag(idx) != .nil) {
+                    out.* = tab.val(idx);
+                    return true;
+                }
             }
         }
         if (noIndexMeta(tab)) {
@@ -1933,11 +1959,52 @@ pub const fast = struct {
         const tab = t.as(Table);
         if (tab.isReadonly() or !noNewindexMeta(tab)) return false;
         const i: usize = ic.own;
-        if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload and tab.keyTag(i) == .string) {
+        if (tab.hash_used == Table.shaped_bit | @as(u32, ic.shape) and i != object.IcEntry.none and table.shapeOf(tab).keys[i] == key.as(String)) {
+            tab.setSlot(i, v.*);
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (tab.hash_used == Table.shaped_bit | @as(u32, ic.index) and ic.holder != object.IcEntry.none and
+            v.tag != .nil and i < tab.slotCap() and i + 1 == shape.get(ic.holder).n and shape.get(ic.holder).keys[i] == key.as(String))
+        {
+            // The store that the cache saw adding the key to a table of
+            // this shape: the table moves to the child shape, and the
+            // value goes into the new slot.
+            tab.setShapeId(ic.holder);
+            tab.setSlot(i, v.*);
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (tab.isShaped()) {
+            const s = key.as(String);
+            if (table.shapeOf(tab).findText(s)) |idx| {
+                // The transition the entry may record names another slot
+                // than `own` from now on, so it goes.
+                ic.own = @intCast(idx);
+                ic.shape = tab.shapeId();
+                ic.index = object.IcEntry.none;
+                ic.holder = object.IcEntry.none;
+                tab.setSlot(idx, v.*);
+            } else {
+                // A new key moves the table to the child shape. The cache
+                // records the move, so that the next table of this shape
+                // takes it inline.
+                if (v.tag == .nil or !s.flags().interned) return false;
+                const from = tab.shapeId();
+                const idx = (table.addShaped(l.g.gpa, tab, s, v.*) catch return false) orelse return false;
+                ic.index = from;
+                ic.holder = tab.shapeId();
+                ic.own = @intCast(idx);
+                ic.shape = tab.shapeId();
+                if (l.g.new_table.table == tab) ops.learnTableSizeFor(l.g, tab);
+            }
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload and tab.keyTag(i) == .string) {
             tab.setVal(i, v.*);
             if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
         } else if (table.storeStr(tab, key, v)) |idx| {
-            if (idx < object.IcEntry.none) ic.own = @intCast(idx);
+            if (idx < object.IcEntry.none) {
+                ic.own = @intCast(idx);
+                ic.shape = object.IcEntry.none;
+                ic.index = object.IcEntry.none;
+                ic.holder = object.IcEntry.none;
+            }
             // The store may have added the key itself.
             gc.barrierTable(l.g, tab, key.*, v.*);
         } else return false;
@@ -2369,18 +2436,35 @@ fn forValue(l: *Thread, v: Value, what: []const u8) Error!Value {
 }
 
 fn isBuiltinRange(l: *Thread, v: Value) bool {
-    if (v.tag != .native) return false;
-    const p = l.g.ext.get("range") orelse return false;
-    return @intFromPtr(p) == v.payload;
+    return v.tag == .native and v.address() == l.g.range_native;
 }
 
-/// Converts `range(a, b [, step])` arguments at r+1..r+3 into the numeric
-/// loop layout at r..r+3. Returns true when the loop is empty.
-fn rangePrep(l: *Thread, r: u32) Error!bool {
-    l.stack[r] = l.stack[r + 1];
-    l.stack[r + 1] = l.stack[r + 2];
-    l.stack[r + 2] = if (l.stack[r + 3].isNil()) Value.int(1) else l.stack[r + 3];
-    return forPrep(l, r);
+/// Writes the start, limit and step of `range(a [, b [, step]])`, whose
+/// arguments are at r+1..r+3, to the numeric loop layout at r+4..r+6 when
+/// r holds the builtin `range` and the arguments are integers or floats,
+/// with a step that is not zero or NaN. Returns false and changes nothing
+/// otherwise, and the generic loop then calls whatever r holds, which
+/// raises the errors of `range` itself.
+pub fn rangeArgs(l: *Thread, r: [*]Value) bool {
+    if (!isBuiltinRange(l, r[0])) return false;
+    const plain = struct {
+        fn f(v: Value) bool {
+            return v.tag == .integer or v.tag == .float;
+        }
+    }.f;
+    if (!plain(r[1])) return false;
+    if (!r[2].isNil() and !plain(r[2])) return false;
+    const step = if (r[3].isNil()) Value.int(1) else r[3];
+    if (!plain(step)) return false;
+    switch (step.tag) {
+        .integer => if (step.asInt() == 0) return false,
+        else => if (!(step.asFloat() != 0)) return false,
+    }
+    // range(n) counts from 1 to n.
+    r[4] = if (r[2].isNil()) Value.int(1) else r[1];
+    r[5] = if (r[2].isNil()) r[1] else r[2];
+    r[6] = step;
+    return true;
 }
 
 fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {

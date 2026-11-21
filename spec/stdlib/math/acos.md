@@ -22,7 +22,7 @@ An argument that is not a number raises `bad argument #1 to 'math.acos' (number 
 
 ```lus
 print(math.acos(1))      --> 0.0
-print(math.acos(-1))     --> 3.1415926535897931
+print(math.acos(-1))     --> 3.141592653589793
 print(math.acos(0.5d))   --> 1.0471975511965979
 print(math.acos(2))      --> nan
 ```

@@ -10,6 +10,7 @@ const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
 const table = @import("table.zig");
+const shape = @import("shape.zig");
 const numeric = @import("numeric.zig");
 const wtf8 = @import("wtf8.zig");
 const lexer = @import("../syntax/lexer.zig");
@@ -117,10 +118,12 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         }
     }
     const hlen = t.hash_len;
+    const shape_before = t.hash_used;
     const alen = t.asize;
     const kind = t.kind;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
-    if (t.hash_len != hlen or t.asize != alen) learnTableSize(l.g, t);
+    // A shaped table that took a new key has another shape.
+    if (t.hash_len != hlen or t.asize != alen or (t.isShaped() and t.hash_used != shape_before)) learnTableSize(l.g, t);
     if (t.kind != kind) learnListKind(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
@@ -134,10 +137,15 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
 /// of `newtable` is only a size hint, so every tier stays correct with
 /// any value there. Tiers that compiled the instruction keep the hint
 /// they saw.
+/// `learnTableSize` for a store that a fast path made.
+pub fn learnTableSizeFor(g: *state.Global, t: *Table) void {
+    learnTableSize(g, t);
+}
+
 noinline fn learnTableSize(g: *state.Global, t: *Table) void {
     const site = &g.new_table;
     if (site.table != t or site.cycle != g.cycles) return;
-    const used = t.hash_used;
+    const used = table.hashCount(t);
     const asize = t.asize;
     if (used > state.NewTableSite.max_learned or asize > state.NewTableSite.max_learned) {
         site.table = null;
@@ -150,6 +158,26 @@ noinline fn learnTableSize(g: *state.Global, t: *Table) void {
     const ins = site.ins.?;
     if (used > opc.c(ins.*)) opc.setC(ins, @intCast(used));
     if (elems > opc.b(ins.*)) opc.setB(ins, @intCast(elems));
+    if (t.isShaped()) if (site.ic) |ic| learnShape(ic, table.shapeOf(t));
+}
+
+/// Shape feedback for constructors: the instruction keeps the shape that
+/// its last table reached, so that the next tables start with it and
+/// every field store finds its slot. It moves only to a shape that adds
+/// keys to the one it has, so a site whose tables differ keeps the first
+/// one.
+fn learnShape(ic: *object.IcEntry, c: *shape.Shape) void {
+    if (ic.shape == object.IcEntry.none) {
+        ic.shape = c.id;
+        return;
+    }
+    var p: ?*shape.Shape = c.parent;
+    while (p) |ps| : (p = ps.parent) {
+        if (ps.id == ic.shape) {
+            ic.shape = c.id;
+            return;
+        }
+    }
 }
 
 /// Kind feedback for constructors. When the table that the last
@@ -302,7 +330,7 @@ pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
             .mul => Value.int(x *% y),
             .div => Value.float(@as(f64, @floatFromInt(x)) / @as(f64, @floatFromInt(y))),
             .mod => blk: {
-                if (y == 0) return l.raiseFmt("attempt to perform 'n%%0'", .{});
+                if (y == 0) return l.raiseFmt("attempt to perform 'n%0'", .{});
                 break :blk Value.int(imod(x, y));
             },
             .idiv => blk: {
@@ -620,15 +648,24 @@ pub fn formatFloat(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !voi
         return;
     }
     const start = buf.items.len;
-    try formatG(gpa, buf, f, 14);
-    // Use more digits when 14 do not read back as the same float.
-    const back = std.fmt.parseFloat(f64, buf.items[start..]) catch f;
-    if (back != f) {
-        buf.items.len = start;
-        try formatG(gpa, buf, f, 17);
-    }
+    try formatRoundTrip(gpa, buf, f);
     const s = buf.items[start..];
     if (std.mem.indexOfAny(u8, s, ".eEn") == null) try buf.appendSlice(gpa, ".0");
+}
+
+/// Writes the finite float `f` in the `%g` form with the fewest digits
+/// from 14 up that read back as the same float. 17 always do, and most
+/// floats need 14 at most.
+pub fn formatRoundTrip(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !void {
+    const start = buf.items.len;
+    var p: usize = 14;
+    while (true) : (p += 1) {
+        buf.items.len = start;
+        try formatG(gpa, buf, f, p);
+        if (p == 17) return;
+        const back = std.fmt.parseFloat(f64, buf.items[start..]) catch return;
+        if (back == f) return;
+    }
 }
 
 /// Significant digits of a finite nonzero |f| rounded half to even to `p`
@@ -971,7 +1008,7 @@ test "float formatting" {
     defer buf.deinit(gpa);
     const cases = [_]struct { f64, []const u8 }{
         .{ 1.0, "1.0" },                             .{ 0.1, "0.1" },       .{ 1e100, "1e+100" },
-        .{ 123456789012345.0, "123456789012345.0" }, .{ -2.5, "-2.5" },     .{ 1.0 / 3.0, "0.33333333333333331" },
+        .{ 123456789012345.0, "123456789012345.0" }, .{ -2.5, "-2.5" },     .{ 1.0 / 3.0, "0.3333333333333333" },
         .{ 1e15, "1e+15" },                          .{ 0.0001, "0.0001" }, .{ 0.00001, "1e-05" },
         .{ 3.14159, "3.14159" },
     };

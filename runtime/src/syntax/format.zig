@@ -33,8 +33,9 @@
 //! `$(x)` before a name character, and `\0` before a digit. This formatter
 //! writes all of those constructs out in full instead, and escapes the bytes
 //! of a string that are not UTF-8, so that formatting never changes what a
-//! program means. A shebang line and the bracket that opens a short comment
-//! such as `--[ note` are kept as they are.
+//! program means. A shebang line, a long comment, and a short comment that
+//! starts with punctuation, such as `--[ note` or the `-->` of an expected
+//! output, are kept as they are.
 
 const std = @import("std");
 const token = @import("token.zig");
@@ -251,9 +252,12 @@ const Formatter = struct {
         return f.lineOf(c.span.end);
     }
 
+    /// A short comment gets a space after `--` when its text starts with a
+    /// letter or a digit. Text that starts with punctuation is a marker,
+    /// such as the `-->` of an expected output, and stays as written.
     fn shortCommentText(f: *Formatter, text: []const u8) Error!void {
         try f.put("--");
-        if (text.len > 0 and text[0] != ' ' and text[0] != '-') try f.putc(' ');
+        if (text.len > 0 and (std.ascii.isAlphanumeric(text[0]) or text[0] >= 0x80)) try f.putc(' ');
         try f.put(text);
     }
 
@@ -271,16 +275,16 @@ const Formatter = struct {
             if (last_end > 0 and cl > last_end + 1) try f.nl();
             try f.emitIndent();
             if (c.long) {
-                // The text starts after the newline that follows the
-                // opening bracket, which the lexer skips.
-                const level = longLevel(c.text);
-                try f.put("--[");
-                try f.out.appendNTimes(f.arena, '=', level);
-                try f.put("[\n");
-                try f.put(c.text);
-                try f.putc(']');
-                try f.out.appendNTimes(f.arena, '=', level);
-                try f.putc(']');
+                // A long comment keeps its source text, brackets and
+                // layout included, with line breaks written as LF.
+                const raw = f.src[c.span.start..c.span.end];
+                var rest = raw;
+                while (std.mem.indexOfScalar(u8, rest, '\r')) |i| {
+                    try f.put(rest[0..i]);
+                    if (i + 1 >= rest.len or rest[i + 1] != '\n') try f.putc('\n');
+                    rest = rest[i + 1 ..];
+                }
+                try f.put(rest);
             } else {
                 try f.shortCommentText(c.text);
             }
@@ -909,12 +913,17 @@ const Formatter = struct {
     }
 
     /// Literal text of an interpolated string, with `$`, the backtick, and
-    /// the backslash escaped.
+    /// the backslash escaped. A carriage return is written as `\r`,
+    /// because a raw one would read back as a line break.
     fn interpText(f: *Formatter, s: []const u8) Error!void {
         for (s) |c| {
             switch (c) {
                 '$' => try f.putc('$'),
                 '`', '\\' => try f.putc('\\'),
+                '\r' => {
+                    try f.put("\\r");
+                    continue;
+                },
                 else => {},
             }
             try f.putc(c);
@@ -1231,20 +1240,6 @@ const Formatter = struct {
     }
 };
 
-/// The smallest long bracket level whose closing bracket does not occur
-/// in `text`. Level 0 unless the text holds `]]`.
-fn longLevel(text: []const u8) usize {
-    var level: usize = 0;
-    while (level < 16) : (level += 1) {
-        var buf: [18]u8 = undefined;
-        buf[0] = ']';
-        @memset(buf[1 .. 1 + level], '=');
-        buf[1 + level] = ']';
-        if (std.mem.indexOf(u8, text, buf[0 .. level + 2]) == null) return level;
-    }
-    return level;
-}
-
 fn isNameChar(c: u8) bool {
     return c == '_' or std.ascii.isAlphanumeric(c);
 }
@@ -1274,6 +1269,18 @@ test "format statements and comments" {
     try expectFormat("local x=1 -- one\n\n\nprint 'hi'", "local x = 1  -- one\n\nprint('hi')\n");
     try expectFormat("if a then b() elseif c then else d() end", "if a then\n    b()\nelseif c then\nelse\n    d()\nend\n");
     try expectFormat("--[[\nlong]]\nx = {1,2,3,4}", "--[[\nlong]]\nx = {\n    1,\n    2,\n    3,\n    4,\n}\n");
+}
+
+test "format escapes a carriage return in interpolated strings" {
+    try expectFormat("x = `a\\r\\n$(b)`", "x = `a\\r\n$b`\n");
+}
+
+test "format keeps comment markers and long comments as written" {
+    try expectFormat("print(1) --> 1", "print(1)  --> 1\n");
+    try expectFormat("--!marker\n--x\nf()", "--!marker\n-- x\nf()\n");
+    try expectFormat("--[[ one line ]]\nf()", "--[[ one line ]]\nf()\n");
+    try expectFormat("--[==[\na ]] b\n]==]\nf()", "--[==[\na ]] b\n]==]\nf()\n");
+    try expectFormat("--[[ a\r\nb ]]\nf()", "--[[ a\nb ]]\nf()\n");
 }
 
 test "format expressions" {

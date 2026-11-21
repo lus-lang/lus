@@ -243,6 +243,10 @@ const sigs = [_]Sig{
     .{ .params = &.{ .i32, .i32, .i32, .i32, .i32 }, .result = .i32 },
     // The call function of a module.
     .{ .params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .result = .i32 },
+    // The slot functions of a module: the table, the inline cache entry,
+    // and the address of the value, then the thread for a store.
+    .{ .params = &.{ .i32, .i32, .i32 }, .result = .i32 },
+    .{ .params = &.{ .i32, .i32, .i32, .i32 }, .result = .i32 },
 };
 const sig_code = 0;
 const sig_step = 1;
@@ -254,6 +258,8 @@ const sig_barrier = 6;
 const sig_barrier_table = 7;
 const sig_call = 8;
 const sig_module_call = 9;
+const sig_slot_get = 10;
+const sig_slot_set = 11;
 
 /// Opcodes of the WebAssembly instructions the emitter uses.
 const W = struct {
@@ -310,6 +316,7 @@ const W = struct {
     const i32_sub = 0x6b;
     const i32_mul = 0x6c;
     const i32_and = 0x71;
+    const i32_or = 0x72;
     const i32_shl = 0x74;
     const i64_add = 0x7c;
     const i64_sub = 0x7d;
@@ -503,6 +510,10 @@ const Emitter = struct {
     /// Offsets in the body of the calls of the call function of the
     /// module, whose index is known only once every import is.
     call_sites: std.ArrayList(u32) = .empty,
+    /// The same for the calls of the slot functions of the module, which
+    /// follow the call function (`slotGetFunction`).
+    slot_get_sites: std.ArrayList(u32) = .empty,
+    slot_set_sites: std.ArrayList(u32) = .empty,
 
     fn init(gpa: std.mem.Allocator, l: *Thread, p: *Proto) Emitter {
         return .{ .gpa = gpa, .p = p, .lay = .of(l), .out = .{ .gpa = gpa }, .n = @intCast(p.code.len) };
@@ -512,6 +523,8 @@ const Emitter = struct {
         e.out.list.deinit(e.gpa);
         e.imports.deinit(e.gpa);
         e.call_sites.deinit(e.gpa);
+        e.slot_get_sites.deinit(e.gpa);
+        e.slot_set_sites.deinit(e.gpa);
     }
 
     // -----------------------------------------------------------------
@@ -846,15 +859,33 @@ const Emitter = struct {
         const calls = e.call_sites.items.len > 0;
         const call_body = if (calls) e.callFunction() orelse return null else &.{};
         defer if (calls) e.gpa.free(call_body);
-        // The call function follows the main function.
+        const gets = e.slot_get_sites.items.len > 0;
+        const sets = e.slot_set_sites.items.len > 0;
+        const get_body = if (gets) e.slotGetFunction() orelse return null else &.{};
+        defer if (gets) e.gpa.free(get_body);
+        const set_body = if (sets) e.slotSetFunction() orelse return null else &.{};
+        defer if (sets) e.gpa.free(set_body);
+        if (e.oom) return null;
+        // The call function follows the main function, and the slot
+        // functions follow it.
         const call_index: u32 = @intCast(e.imports.items.len + 1);
-        for (e.call_sites.items) |at| {
-            var x = call_index;
-            for (body[at..][0..5], 0..) |*byte, i| {
-                byte.* = @as(u8, @truncate(x & 0x7f)) | @as(u8, if (i < 4) 0x80 else 0);
-                x >>= 7;
+        const get_index: u32 = call_index + @intFromBool(calls);
+        const set_index: u32 = get_index + @intFromBool(gets);
+        const Patch = struct { sites: []const u32, index: u32 };
+        for ([_]Patch{
+            .{ .sites = e.call_sites.items, .index = call_index },
+            .{ .sites = e.slot_get_sites.items, .index = get_index },
+            .{ .sites = e.slot_set_sites.items, .index = set_index },
+        }) |patch| {
+            for (patch.sites) |at| {
+                var x = patch.index;
+                for (body[at..][0..5], 0..) |*byte, i| {
+                    byte.* = @as(u8, @truncate(x & 0x7f)) | @as(u8, if (i < 4) 0x80 else 0);
+                    x >>= 7;
+                }
             }
         }
+        const nfuncs: u32 = 1 + @as(u32, @intFromBool(calls)) + @intFromBool(gets) + @intFromBool(sets);
         var m: Buf = .{ .gpa = e.gpa };
         var sec: Buf = .{ .gpa = e.gpa };
         defer sec.list.deinit(e.gpa);
@@ -902,9 +933,11 @@ const Emitter = struct {
 
         // The function and its export.
         sec.list.clearRetainingCapacity();
-        sec.uleb(1 + @as(u32, @intFromBool(calls)));
+        sec.uleb(nfuncs);
         sec.uleb(sig_code);
         if (calls) sec.uleb(sig_module_call);
+        if (gets) sec.uleb(sig_slot_get);
+        if (sets) sec.uleb(sig_slot_set);
         m.section(3, sec.list.items);
         sec.list.clearRetainingCapacity();
         sec.uleb(1);
@@ -915,7 +948,7 @@ const Emitter = struct {
 
         // The code.
         sec.list.clearRetainingCapacity();
-        sec.uleb(1 + @as(u32, @intFromBool(calls)));
+        sec.uleb(nfuncs);
         var locals: Buf = .{ .gpa = e.gpa };
         defer locals.list.deinit(e.gpa);
         locals.uleb(3);
@@ -934,6 +967,18 @@ const Emitter = struct {
             sec.bytes(&call_locals);
             sec.bytes(call_body);
         }
+        // Each slot function has two locals past its parameters.
+        const slot_locals = [_]u8{ 1, 2, @backingInt(Valtype.i32) };
+        if (gets) {
+            sec.uleb(slot_locals.len + get_body.len);
+            sec.bytes(&slot_locals);
+            sec.bytes(get_body);
+        }
+        if (sets) {
+            sec.uleb(slot_locals.len + set_body.len);
+            sec.bytes(&slot_locals);
+            sec.bytes(set_body);
+        }
         m.section(10, sec.list.items);
 
         if (m.oom or sec.oom or locals.oom) {
@@ -943,6 +988,140 @@ const Emitter = struct {
         e.out.list.deinit(e.gpa);
         e.out.list = m.list;
         return e.out.list.items;
+    }
+
+    /// Emits the body of the slot function that reads a field: given a
+    /// table, an inline cache entry, and the address of a register, it
+    /// copies the value of the predicted slot to the register and returns
+    /// one when the table has the shape that the entry names and the slot
+    /// holds a value (`interp.fast.getStr`). Otherwise it returns zero.
+    fn slotGetFunction(e: *Emitter) ?[]u8 {
+        const saved = e.out;
+        e.out = .{ .gpa = e.gpa };
+        const tab = 0;
+        const ic = 1;
+        const dst = 2;
+        const slot = 3;
+        const tagp = 4;
+        e.slotTest(tab, ic, slot, tagp);
+        e.get(tagp);
+        e.load8(0);
+        e.i32c(tag_nil);
+        e.op(W.i32_eq);
+        e.ifThen();
+        e.i32c(0);
+        e.op(W.@"return");
+        e.end();
+        e.get(dst);
+        e.get(slot);
+        e.load64(0);
+        e.store64(0);
+        e.get(dst);
+        e.get(tagp);
+        e.load8(0);
+        e.op(W.i64_extend_i32_u);
+        e.store64(@intCast(tl.value_tag));
+        e.i32c(1);
+        e.op(W.end);
+        const body = e.out.list.toOwnedSlice(e.gpa) catch null;
+        const oom = e.out.oom;
+        e.out = saved;
+        if (oom) return null;
+        return body;
+    }
+
+    /// Emits the body of the slot function that stores a field: given the
+    /// thread, a table, an inline cache entry, and the address of a
+    /// register, it stores the register into the predicted slot, clears
+    /// the metamethod cache, runs the barrier, and returns one, when the
+    /// table has the shape that the entry names. Otherwise it returns
+    /// zero.
+    fn slotSetFunction(e: *Emitter) ?[]u8 {
+        const saved = e.out;
+        e.out = .{ .gpa = e.gpa };
+        const l = 0;
+        const tab = 1;
+        const ic = 2;
+        const src = 3;
+        const slot = 4;
+        const tagp = 5;
+        e.slotTest(tab, ic, slot, tagp);
+        e.get(slot);
+        e.get(src);
+        e.load64(0);
+        e.store64(0);
+        e.get(tagp);
+        e.get(src);
+        e.load8(@intCast(tl.value_tag));
+        e.mem(W.i32_store8, 0, 0);
+        e.get(tab);
+        e.i32c(0);
+        e.mem(W.i32_store16, 1, @intCast(tl.tm_absent));
+        // The barrier: a collectable value stored into a black table.
+        e.get(src);
+        e.load8(@intCast(tl.value_tag));
+        e.i32c(tag_string);
+        e.op(W.i32_ge_u);
+        e.get(tab);
+        e.load8(@intCast(tl.flags));
+        e.i32c(@as(u8, 1) << tl.barrier_bit);
+        e.op(W.i32_and);
+        e.op(W.i32_and);
+        e.ifThen();
+        e.get(l);
+        e.get(tab);
+        e.i32c(0);
+        e.get(src);
+        e.call(@intFromPtr(&helpers.barrierTable), sig_barrier_table);
+        e.end();
+        e.i32c(1);
+        e.op(W.end);
+        const body = e.out.list.toOwnedSlice(e.gpa) catch null;
+        const oom = e.out.oom;
+        e.out = saved;
+        if (oom) return null;
+        return body;
+    }
+
+    /// Returns zero from a slot function unless the table `tab` has the
+    /// shape that the inline cache entry `ic` names and the entry predicts
+    /// a slot. Then `slot` = the address of the payload of the slot, and
+    /// `tagp` = the address of its tag.
+    fn slotTest(e: *Emitter, tab: u32, ic: u32, slot: u32, tagp: u32) void {
+        e.get(tab);
+        e.load32(@intCast(tl.hash_used));
+        e.get(ic);
+        e.mem(W.i32_load16_u, 1, @intCast(il.ic_shape));
+        e.u32c(tl.shaped_bit);
+        e.op(W.i32_or);
+        e.op(W.i32_ne);
+        e.ifThen();
+        e.i32c(0);
+        e.op(W.@"return");
+        e.end();
+        e.get(ic);
+        e.mem(W.i32_load16_u, 1, @intCast(il.ic_own));
+        e.tee(slot);
+        e.u32c(object.IcEntry.none);
+        e.op(W.i32_eq);
+        e.ifThen();
+        e.i32c(0);
+        e.op(W.@"return");
+        e.end();
+        e.get(tab);
+        e.load32(e.lay.hash_ptr);
+        e.get(slot);
+        e.op(W.i32_sub);
+        e.i32c(tl.slot_tag);
+        e.op(W.i32_add);
+        e.set(tagp);
+        e.get(tab);
+        e.load32(e.lay.hash_ptr);
+        e.get(slot);
+        e.i32c(tl.word_shift);
+        e.op(W.i32_shl);
+        e.op(W.i32_add);
+        e.set(slot);
     }
 
     /// Emits the body of the call function of the module and returns it,
@@ -2177,11 +2356,35 @@ const Emitter = struct {
         e.brIf(done_depth);
     }
 
+    /// A call of a slot function of the module, whose index is patched
+    /// in once the imports are known.
+    fn callSlot(e: *Emitter, sites: *std.ArrayList(u32)) void {
+        e.op(W.call);
+        sites.append(e.gpa, @intCast(e.out.list.items.len)) catch {
+            e.oom = true;
+        };
+        e.out.bytes(&.{ 0x80, 0x80, 0x80, 0x80, 0x00 });
+    }
+
+    /// Copies the value of the predicted slot of the shaped table in `tab`
+    /// to the register `dst` and branches `done` out, when the table has
+    /// the shape that the inline cache names and the slot holds a value
+    /// (`slotGetFunction`). The key is a constant, so the shape alone
+    /// proves that the slot holds it.
+    fn shapedGet(e: *Emitter, tab: u32, dst: u32, done: u32) void {
+        e.get(tab);
+        e.u32c(@intCast(@intFromPtr(&e.p.ic[e.cur])));
+        e.regAddr(dst);
+        e.callSlot(&e.slot_get_sites);
+        e.brIf(done);
+    }
+
     /// R[dst] = t[K[kc]] for a constant string key.
     fn fieldGet(e: *Emitter, t: Place, kc: u32, dst: u32) void {
         e.block(); // done
         e.block(); // miss
         e.loadTable(t, 0);
+        e.shapedGet(L.t0, dst, 1);
         e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kc].as(object.String), L.t1, L.t2, 0);
         // A nil value may have an `__index` to follow.
         e.get(L.t2);
@@ -2203,6 +2406,14 @@ const Emitter = struct {
         e.block(); // miss
         e.loadTable(t, 0);
         e.guardRawStore(L.t0, 0);
+        // A shaped table that the cache saw: the slot function stores the
+        // value, clears the metamethod cache, and runs the barrier.
+        e.get(L.l);
+        e.get(L.t0);
+        e.u32c(@intCast(@intFromPtr(&e.p.ic[e.cur])));
+        e.regAddr(v);
+        e.callSlot(&e.slot_set_sites);
+        e.brIf(1);
         e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kb].as(object.String), L.t1, L.t2, 0);
         e.storeNodeVal(slotOff(v), L.t1, L.t2);
         e.get(L.t0);
@@ -2224,6 +2435,7 @@ const Emitter = struct {
         e.block(); // done
         e.block(); // miss
         e.loadTable(.{ .reg = rb }, 0);
+        e.shapedGet(L.t0, ra, 1);
         e.predictedNode(e.prediction(il.ic_own), L.t0, e.p.constants[kc].as(object.String), L.t1, L.t2, 0);
         e.get(L.t2);
         e.load8(val_tag);

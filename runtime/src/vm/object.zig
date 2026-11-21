@@ -36,7 +36,10 @@ pub const String = struct {
         sent: bool = false,
         /// The cell has a slot for the pointer to breadcrumbs.
         crumb_slot: bool = false,
-        _pad: u2 = 0,
+        /// Some shape holds the string as a key, so the state keeps it
+        /// alive (`shape.zig`).
+        shape_key: bool = false,
+        _pad: u1 = 0,
     };
 
     /// The flags of the string, in the spare byte of its header.
@@ -320,7 +323,7 @@ pub const Table = struct {
     asize: u32 = 0,
     hash_len: u32 = 0,
     /// Live plus dead slots in the hash part (dead slots keep their key).
-    hash_used: u32 = 0,
+    hash_used: u32 = fresh_used,
 
     /// The size of the storage that trails the table in its own cell, and
     /// the weak mode.
@@ -337,7 +340,52 @@ pub const Table = struct {
     /// between the small size classes of the heap.
     pub const inline_unit = 8;
 
-    pub const empty_nodes: [*]Node = @ptrFromInt(@alignOf(Node));
+    /// The hash part or slots of a table without any. It points into a
+    /// static block whose bytes below it are zero, so the count of slots
+    /// that native code reads there is zero.
+    pub const empty_nodes: [*]Node = @ptrCast(&empty_block[1]);
+    var empty_block: [2]Node align(16) = @splat(.{ .key = 0, .val = 0 });
+
+    /// Set in `hash_used` of a shaped table, whose low 16 bits name its
+    /// shape. A shaped table has no hash nodes: `hash_len` is zero, and
+    /// `hash_ptr` points to its slots, one payload word each. The byte
+    /// just below the first slot holds the number of slots, and the tag
+    /// of slot i is the byte `i + 2` below the first slot.
+    pub const shaped_bit: u32 = 0x8000_0000;
+    /// `hash_used` of a new table: shaped, with the root shape, which
+    /// every state registers first.
+    pub const fresh_used: u32 = shaped_bit;
+
+    pub inline fn isShaped(t: *const Table) bool {
+        return t.hash_used & shaped_bit != 0;
+    }
+    pub inline fn shapeId(t: *const Table) u16 {
+        return @truncate(t.hash_used);
+    }
+    pub inline fn setShapeId(t: *Table, id: u16) void {
+        t.hash_used = shaped_bit | id;
+    }
+    /// The slots of a shaped table.
+    pub inline fn slotWords(t: *const Table) [*]u64 {
+        return @ptrCast(t.hash_ptr);
+    }
+    /// The number of slots of a shaped table.
+    pub inline fn slotCap(t: *const Table) usize {
+        const b: [*]const u8 = @ptrCast(t.hash_ptr);
+        return (b - 1)[0];
+    }
+    pub inline fn slotTag(t: *const Table, i: usize) value.Tag {
+        const b: [*]const u8 = @ptrCast(t.hash_ptr);
+        return @fromBackingInt(@intCast((b - 2 - i)[0]));
+    }
+    pub inline fn slotVal(t: *const Table, i: usize) Value {
+        return Value.make(t.slotWords()[i], t.slotTag(i));
+    }
+    pub inline fn setSlot(t: *Table, i: usize, v: Value) void {
+        const b: [*]u8 = @ptrCast(t.hash_ptr);
+        (b - 2 - i)[0] = @backingInt(v.tag);
+        t.slotWords()[i] = v.payload;
+    }
 
     /// The nodes of the hash part.
     pub inline fn nodes(t: *const Table) []Node {
@@ -641,7 +689,11 @@ pub const IcEntry = extern struct {
     index: u16 = none,
     /// The key in the table that `__index` names.
     holder: u16 = none,
-    _pad: u16 = 0,
+    /// The id of the shape of the table that `own` predicts a slot of, or
+    /// `none` when `own` predicts a hash node (`shape.zig`). With `own`
+    /// at `none`, the shape lacks the key. For a `newtable` instruction,
+    /// the shape its tables reach, which the next ones start with.
+    shape: u16 = none,
 
     pub const none: u16 = 0xFFFF;
 

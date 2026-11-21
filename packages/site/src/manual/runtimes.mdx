@@ -65,7 +65,7 @@ The cost is scope. The executable carries code for formats that a given program 
 
 ### Concurrency with coroutines and workers
 
-A Lus function that reads from a socket looks like any other function. A read from a socket inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine, and the runtime resumes it when data arrives. The same function runs unchanged in the main program, in a coroutine, and in a detached coroutine, so functions need no `async` marker and a library exists in one version. HTTP requests made with `network.fetch` block the thread, so a program that sends several requests at once sends them from workers. The HTTP server in the third table runs every connection as a detached coroutine on a single thread, and a suspended coroutine holds little memory, which is why the server stays small under load.
+A Lus function that reads from a socket looks like any other function. A read from a socket inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine, and the runtime resumes it when data arrives. The same function runs unchanged in the main program, in a coroutine, and in a detached coroutine, so functions need no `async` marker and a library exists in one version. `network.fetch` waits for one response at a time, so a program that sends several requests at once sends them from workers. The HTTP server in the third table runs every connection as a detached coroutine on a single thread, and a suspended coroutine holds little memory, which is why the server stays small under load.
 
 Parallel work runs in [workers](/manual/concurrency#workers). Each worker is a separate instance of the runtime on its own thread, with its own memory and its own garbage collector. Workers exchange messages and share no data, so they need no locks and a collection in one worker never pauses another.
 
@@ -73,7 +73,7 @@ Both have costs. Detached coroutines on one thread run one at a time, so a long 
 
 ### Compact memory layout
 
-The runtime stores data compactly. Integers and floats are stored directly in the variable or table slot that holds them, so arithmetic allocates nothing. An array whose elements are all integers, all floats, all strings, or all tables takes half the memory of an array of mixed values. A small table keeps its fields in the same block of memory as the table itself. A short string that occurs many times, such as a field name, is stored once.
+The runtime stores data compactly. Integers and floats are stored directly in the variable or table slot that holds them, so arithmetic allocates nothing. An array whose elements are all integers, all floats, all strings, or all tables takes half the memory of an array of mixed values. A small table keeps its fields in the same block of memory as the table itself. Records with the same string keys share those keys through a _shape_, so each record stores only its values. A short string that occurs many times, such as a field name, is stored once.
 
 The garbage collector is generational. It collects recently created objects often and long-lived objects rarely, so a program that holds a steady amount of data stays close to the size of that data. The collector never moves an object, so the pointers that a host program holds stay valid.
 

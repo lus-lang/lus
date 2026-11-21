@@ -316,7 +316,7 @@ pub const Global = struct {
     /// The allocator the state was created with, which owns the Global.
     parent_gpa: Allocator = undefined,
     threshold: usize = 1 << 20,
-    pause: usize = 200,
+    pause: usize = 175,
     gc_depth: u32 = 0,
     gc_stopped: bool = false,
     /// Allocation points seen, for the GC stress build.
@@ -332,6 +332,9 @@ pub const Global = struct {
     /// generic `for` runs inline over a plain table.
     iter_next: ?NativeFn = null,
     iter_ipairs: ?NativeFn = null,
+    /// The address of the builtin `range` native, which RANGEPREP compares
+    /// with the callee of a `for` loop. Zero until the base library opens.
+    range_native: usize = 0,
     /// The last pattern whose start bytes a search computed, by its text
     /// (`firstSet` in `lib/string.zig`).
     first_set: FirstSetCache = .{},
@@ -340,6 +343,12 @@ pub const Global = struct {
     /// a lookup.
     ascii_chars: [128]?*String = @splat(null),
     strings: StringSet = .{},
+    /// The shapes of this state's tables (`shape.zig`).
+    shapes: @import("shape.zig").Shapes = .{},
+    /// Set while the standard library opens. The tables it makes are
+    /// namespaces and metatables, which code reads by name, so they keep
+    /// their keys in hash parts from the start.
+    dict_tables: bool = false,
     seed: u64,
     registry: Value = .nil,
     /// The global environment table (`_G`).
@@ -1061,15 +1070,41 @@ pub fn newTableIn(g: *Global, narr: usize, nhash: usize) Allocator.Error!*Table 
     return newTableSlotsIn(g, narr, nhash, @sizeOf(Value));
 }
 
+/// A new table that keeps its keys in a hash part from the start, for a
+/// namespace such as a library, whose many keys no shape would hold.
+pub fn newDictIn(g: *Global, nhash: usize) Allocator.Error!*Table {
+    gc.maybeCollect(g);
+    const units = table.inlineUnitsDict(0, nhash, @sizeOf(Value));
+    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * Table.inline_unit);
+    t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) }, .hash_used = 0 };
+    if (units > 0) {
+        table.initInline(t, 0, nhash);
+    } else if (nhash > 0) {
+        table.resize(g.gpa, t, 0, nhash) catch return error.OutOfMemory;
+    }
+    return t;
+}
+
 /// `newTableIn` for the constructor whose inline cache entry is `ic`. A
 /// constructor whose lists all fit an unboxed kind so far keeps its list
 /// in one word per slot in the cell.
 pub inline fn newTableAt(g: *Global, narr: usize, nhash: usize, ic: *const object.IcEntry) Allocator.Error!*Table {
     const slot: usize = if (narr > 0 and ic.own == object.IcEntry.lists_words) @sizeOf(u64) else @sizeOf(Value);
+    if (ic.shape != object.IcEntry.none) return newShapedIn(g, narr, nhash, slot, ic.shape);
     return newTableSlotsIn(g, narr, nhash, slot);
 }
 
+/// A new table with the shape `id` that its constructor learned, and nil
+/// in every slot (`ops.learnShape`).
+noinline fn newShapedIn(g: *Global, narr: usize, nhash: usize, slot: usize, id: u16) Allocator.Error!*Table {
+    const sh = @import("shape.zig").get(id);
+    const t = try newTableSlotsIn(g, narr, @max(nhash, sh.n), slot);
+    if (t.isShaped() and t.slotCap() >= sh.n) t.setShapeId(id);
+    return t;
+}
+
 fn newTableSlotsIn(g: *Global, narr: usize, nhash: usize, slot: usize) Allocator.Error!*Table {
+    if (g.dict_tables and narr == 0) return newDictIn(g, nhash);
     gc.maybeCollect(g);
     // Small parts of known size live in the cell of the table itself.
     const units = table.inlineUnitsSlots(narr, nhash, slot);
@@ -1213,10 +1248,26 @@ pub fn createSeeded(gpa: Allocator, io: std.Io, seed_opt: ?u64) !*Global {
         g.tm_names[i] = s;
     }
     g.main_thread = try newThread(g);
-    g.registry = Value.obj(.table, try newTableIn(g, 0, 4));
-    g.globals = Value.obj(.table, try newTableIn(g, 0, 64));
+    g.registry = Value.obj(.table, try newDictIn(g, 4));
+    g.globals = Value.obj(.table, try newDictIn(g, 64));
     g.gc_stopped = false;
     return g;
+}
+
+/// The state whose counting allocator `gpa` is, or null for any other
+/// allocator. Every allocation of a state goes through its counting
+/// allocator, so table operations that make shapes find the state there.
+pub fn stateOf(gpa: Allocator) ?*Global {
+    const Counting = @import("heapcount.zig").Counting;
+    if (gpa.vtable != &Counting.vtable) return null;
+    const c: *Counting = @ptrCast(@alignCast(gpa.ptr));
+    return @alignCast(@fieldParentPtr("counter", c));
+}
+
+/// Keeps `key`, which a new shape holds, alive for as long as the state
+/// lives.
+pub fn pinKey(g: *Global, key: *String) Allocator.Error!void {
+    try g.fixed.append(g.gpa, &key.hdr);
 }
 
 pub fn destroy(g: *Global) void {
@@ -1232,7 +1283,7 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
-    g.counter.releaseKept();
+    g.shapes.deinit(g.gpa);
     g.parent_gpa.destroy(g);
 }
 

@@ -23,7 +23,7 @@ An argument that is not a number raises `bad argument #1 to 'math.asin' (number 
 ```lus
 print(math.asin(0))      --> 0.0
 print(math.asin(1))      --> 1.5707963267948966
-print(math.asin(0.5d))   --> 0.52359877559829893
+print(math.asin(0.5d))   --> 0.5235987755982989
 print(math.asin(2))      --> nan
 ```
 

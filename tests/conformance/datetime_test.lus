@@ -740,11 +740,11 @@ local function spring_forward_nonexistent_wall_time_resolves_to_the_summer_test(
     if not HAVE_ZONES then skip("no embedded tzdata") end
     local ny = time.zone("America/New_York")
     -- 2026-03-08 02:30 never occurs: the clock jumps 02:00 EST to 03:00 EDT.
-    -- The constructor resolves it with the after-gap offset (EDT, -04:00).
+    -- The constructor moves it forward by the hour of the gap, to 03:30 EDT.
     local z = time.zoned({ year = 2026, month = 3, day = 8, hour = 2,
                            minute = 30 }, ny)
     assert(z.offset == -4 * 3600)
-    assert(z:instant():iso() == "2026-03-08T06:30:00Z")
+    assert(z:instant():iso() == "2026-03-08T07:30:00Z")
 end
 
 local function fall_back_ambiguous_wall_time_resolves_to_the_earlier_offset_test()
@@ -772,11 +772,11 @@ end
 local function add_keeps_the_wall_clock_across_the_spring_forward_gap_test()
     if not HAVE_ZONES then skip("no embedded tzdata") end
     local ny = time.zone("America/New_York")
-    -- 01:30 EST plus one wall hour lands on 02:30, inside the gap, and the
-    -- gap resolves to EDT, so the offset flips rather than staying EST.
+    -- 01:30 EST plus one wall hour lands on 02:30, inside the gap, which
+    -- moves forward to 03:30 EDT.
     local pre = time.zoned({ year = 2026, month = 3, day = 8, hour = 1,
                              minute = 30 }, ny)
-    assert(pre:add{ hours = 1 }:iso() == "2026-03-08T02:30:00-04:00")
+    assert(pre:add{ hours = 1 }:iso() == "2026-03-08T03:30:00-04:00")
 end
 
 local function add_days_across_the_fall_back_keeps_the_wall_time_test()
@@ -911,3 +911,50 @@ local function format_z_reflects_the_value_s_own_offset_test()
     assert(z:format("%z") == "-0400")
 end
 
+
+-- ============================================================================
+-- a replaced user value reads as no zone
+-- ============================================================================
+
+-- debug.setuservalue can replace the slot that holds the zone of a zoned
+-- value. Anything but a zone then reads as no zone, and the value keeps
+-- its fixed offset.
+local function a_replaced_zone_slot_reads_as_no_zone_test()
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9 }, time.zone("America/New_York"))
+    debug.setuservalue(z, "not a zone")
+    assert(z:iso() == "2026-07-02T09:00:00-04:00")
+    assert(z:with({ hour = 10 }):iso() == "2026-07-02T10:00:00-04:00")
+    assert(z:format("%Y %z") == "2026 -0400")
+end
+
+-- ============================================================================
+-- daylight saving gaps and repeats
+-- ============================================================================
+
+-- A wall-clock time in a gap moves forward by the length of the gap, and a
+-- repeated one takes the earlier instant.
+local function gaps_move_forward_and_repeats_take_the_earlier_instant_test()
+    local ny = time.zone("America/New_York")
+    local gap = time.zoned({ year = 2026, month = 3, day = 8, hour = 2, minute = 30 }, ny)
+    assert(gap:iso() == "2026-03-08T03:30:00-04:00", gap:iso())
+    assert(gap.hour == 3 and gap.offset == -4 * 3600)
+    local rep = time.zoned({ year = 2026, month = 11, day = 1, hour = 1, minute = 30 }, ny)
+    assert(rep:iso() == "2026-11-01T01:30:00-04:00", rep:iso())
+    local before = time.zoned({ year = 2026, month = 3, day = 8, hour = 1, minute = 59 }, ny)
+    assert(before:iso() == "2026-03-08T01:59:00-05:00", before:iso())
+    local lh = time.zone("Australia/Lord_Howe")
+    local half = time.zoned({ year = 2026, month = 10, day = 4, hour = 2, minute = 15 }, lh)
+    assert(half:iso() == "2026-10-04T02:45:00+11:00", half:iso())
+    assert(gap:with({ minute = 0 }):iso() == "2026-03-08T03:00:00-04:00")
+end
+
+-- ============================================================================
+-- a pattern parse accounts for the whole text
+-- ============================================================================
+
+local function a_pattern_parse_rejects_trailing_text_test()
+    assert(time.parse("2026-07-02", "%Y-%m-%d"):iso() == "2026-07-02T00:00:00Z")
+    local ok, e = catch time.parse("2026-07-02x", "%Y-%m-%d")
+    assert(not ok and e:find("trailing characters in '2026-07-02x'", 1, true), e)
+    assert(time.parse("2026-07-02  ", "%Y-%m-%d "):iso() == "2026-07-02T00:00:00Z")
+end

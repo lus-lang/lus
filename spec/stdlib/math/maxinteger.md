@@ -16,7 +16,7 @@ The largest integer, 9223372036854775807, which is 2^63 - 1.
 print(math.maxinteger)                              --> 9223372036854775807
 print(math.maxinteger + 1 == math.mininteger)       --> true
 print(math.maxinteger + 1n)                         --> 9223372036854775808
-print(math.maxinteger + 0.0)                        --> 9.2233720368547758e+18
+print(math.maxinteger + 0.0)                        --> 9.223372036854776e+18
 ```
 
 A program that needs integers beyond 64 bits uses bigints, written with the suffix `n`, as the [`bigint`](/manual/api#bigint) entry describes.

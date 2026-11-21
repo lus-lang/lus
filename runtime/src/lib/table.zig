@@ -482,7 +482,7 @@ fn clone(l: *Thread) Error!u32 {
         l.top = map_slot + 1;
         return 1;
     }
-    const dst = try pushNewTable(l, src.asize, src.hash_used);
+    const dst = try pushNewTable(l, src.asize, table.hashCount(src));
     var k: Value = .nil;
     while (table.next(src, k) catch null) |kv| : (k = kv.key) {
         try ops.rawSet(l, dst, kv.key, kv.val);
@@ -505,7 +505,7 @@ fn cloneDeep(l: *Thread, src: *Table, map_t: *Table, depth: u32) Error!*Table {
         try l.push(existing);
         return existing.as(Table);
     }
-    const dst = try pushNewTable(l, src.asize, src.hash_used);
+    const dst = try pushNewTable(l, src.asize, table.hashCount(src));
     const dst_slot = l.top - 1;
     try ops.rawSet(l, map_t, key, Value.obj(.table, dst));
     var k: Value = .nil;
@@ -526,9 +526,12 @@ fn compact(l: *Thread) Error!u32 {
     const t = try aux.checkTable(l, 1);
     var asize = t.asize;
     while (asize > 0 and table.arrayIsNil(t, asize - 1)) asize -= 1;
-    var live: usize = 0;
-    for (0..t.hash_len) |h| {
-        if (t.keyTag(h) != .nil and t.valTag(h) != .nil) live += 1;
+    var live: usize = table.hashCount(t);
+    if (!t.isShaped()) {
+        live = 0;
+        for (0..t.hash_len) |h| {
+            if (t.keyTag(h) != .nil and t.valTag(h) != .nil) live += 1;
+        }
     }
     table.resize(l.g.gpa, t, asize, live) catch return l.raiseMem();
     l.top = l.base() + 1;

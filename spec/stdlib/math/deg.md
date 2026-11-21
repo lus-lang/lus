@@ -22,7 +22,7 @@ An argument that is not a number raises `bad argument #1 to 'math.deg' (number e
 
 ```lus
 print(math.deg(math.pi))   --> 180.0
-print(math.deg(1))         --> 57.295779513082323
+print(math.deg(1))         --> 57.29577951308232
 ```
 
 [`math.rad`](/manual/api#math.rad) converts the other way.

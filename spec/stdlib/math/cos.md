@@ -23,7 +23,7 @@ An argument that is not a number raises `bad argument #1 to 'math.cos' (number e
 ```lus
 print(math.cos(0))         --> 1.0
 print(math.cos(math.pi))   --> -1.0
-print(math.cos(1n))        --> 0.54030230586813977
+print(math.cos(1n))        --> 0.5403023058681398
 ```
 
 [`math.sin`](/manual/api#math.sin) and [`math.tan`](/manual/api#math.tan) compute the other ratios, [`math.acos`](/manual/api#math.acos) is the inverse, and [`math.rad`](/manual/api#math.rad) converts degrees to radians.

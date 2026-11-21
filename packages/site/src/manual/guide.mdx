@@ -1388,9 +1388,9 @@ end
 print()  --> 10 7 4 1
 ```
 
-A loop over `range` counts the same numbers as the numeric `for` with the same bounds. Write the numeric `for` when a loop only counts. Use `range` when the sequence itself is a value: when a function takes a sequence of numbers as an argument, or when a program stores the sequence and takes numbers from it over time.
+A `for` loop that calls `range` directly runs exactly the numeric `for` with the same bounds, at the same speed and with the same rules. A float start or step makes every value a float, so `range(1, 2, 0.5)` counts `1.0`, `1.5`, and `2.0`. The choice between the two forms of a counting loop is a matter of style. `range` is also useful when the sequence itself is a value: when a function takes a sequence of numbers as an argument, or when a program stores the sequence and takes numbers from it over time.
 
-`range` returns an iterator function. Each call of that function returns the next number, and `nil` after the last one. A function that loops over an iterator it receives works with `range` and with every other iterator, so the caller chooses the numbers.
+Outside a `for` loop, `range` returns an iterator function. Each call of that function returns the next number, and `nil` after the last one. A function that loops over an iterator it receives works with `range` and with every other iterator, so the caller chooses the numbers.
 
 ```lus
 local function squares(numbers)
@@ -3015,6 +3015,16 @@ stats = { count = 0, sum = 0 }
 print(stats.count, stats.sum, stats.max)   --> 0  0  9
 ```
 
+Assigning another group copies each of its fields into the field of the same name. Every field of the assigned group must also be a field of the target, and the other fields of the target keep their values.
+
+```lus
+local start <group> = { x = 0, y = 0 }
+local pos <group> = { x = 5, y = 7 }
+
+pos = start
+print(pos.x, pos.y)   --> 0  0
+```
+
 A field marked `<const>` cannot be reassigned, and a field marked `<group>` is a nested group with its own fields. Nesting is where the structure matters most. The `body` group below would otherwise need five separate names such as `body_position_x`.
 
 ```lus
@@ -3410,7 +3420,7 @@ The choice follows from what the task does with its time. A task that mostly wai
 
 The two combine. `worker.receive` is one of the operations that pauses a detached coroutine, so a server that handles each connection in a detached coroutine may pass a heavy computation to a worker and keep answering other connections while that coroutine waits for the result.
 
-[`network.fetch`](/manual/api#network.fetch) is the exception among the network operations. It waits for its whole response, and no coroutine runs during that wait. A program that sends several HTTP requests at the same time therefore calls `fetch` from one worker per request.
+[`network.fetch`](/manual/api#network.fetch) is the exception among the network operations. Called from the main chunk, it lets the detached coroutines run while it waits. Called inside a detached coroutine, it holds up every other coroutine until its response arrives. In both cases it waits for one response at a time, so a program that sends several HTTP requests at the same time calls `fetch` from one worker per request.
 
 [Coroutines and workers](/manual/concurrency) is the full description of both, including every operation that pauses a detached coroutine, timeouts, and the rules for values that cross between workers.
 
@@ -3635,7 +3645,7 @@ The `order by` clause of this query uses `pages`, a name that `select` gave with
 
 ### Filtering groups with `having`
 
-`where` decides which rows enter the groups, and it runs before any aggregate is computed, so it cannot ask about a count or a total. The `having` clause holds a condition on the groups. It runs after grouping and keeps the groups for which the condition is truthy. A condition in `having` repeats the aggregate, as in `having count(*) >= 2`, because the names that `as` gives are not visible there. The following query uses both: `where` keeps the books that have a rating, and `having` keeps the genres with at least two such books.
+`where` decides which rows enter the groups, and it runs before any aggregate is computed, so it cannot ask about a count or a total. The `having` clause holds a condition on the groups. It runs after grouping and keeps the groups for which the condition is truthy. A condition in `having` may name an aggregate directly, as in `having count(*) >= 2`, or use the name that `as` gave it in `select`, as in `having rated >= 2`. The following query uses both clauses: `where` keeps the books that have a rating, and `having` keeps the genres with at least two such books.
 
 ```lus
 local books = {
@@ -3650,7 +3660,7 @@ local well_rated = @books as b
     where b.rating
     select b.genre, count(*) as rated, avg(b.rating) as rating
     group by b.genre
-    having count(*) >= 2
+    having rated >= 2
 
 for row in query(well_rated) do
     print(row.genre, row.rated, row.rating)   --> scifi  2  4.5
@@ -3779,7 +3789,7 @@ A missing field reads as `nil`, and queries treat `nil` in a few fixed ways:
 - A comparison with `nil` is false. `where b.rating < 5` and `where b.rating ~= 5` both skip the books without a rating, and `where b.rating == nil` matches no row at all. The condition `where not b.rating` finds the rows where a field is missing.
 - `order by` places rows whose sort value is `nil` first in ascending order and last in descending order.
 - Aggregates ignore `nil` values. When a query keeps no rows, `count` yields `0` and every other aggregate yields `nil`.
-- A name that `select` gave with `as` is known to `order by` and to no other clause. In `having`, such a name refers to a variable of the surrounding code, which is usually `nil`, so the condition is false for every group. Write the aggregate itself in `having`.
+- A name that `select` gave with `as` is known to `order by` and `having` and to no other clause. In `where`, such a name refers to a variable of the surrounding code.
 
 ### Queries on a database
 
@@ -4115,6 +4125,7 @@ list[4] = 4                  -- tables that the program creates stay writable
 counter = 1                  -- error: creates a global
 math.pi = 3                  -- error: changes a library table
 print = nil                  -- error: replaces a global
+setmetatable(math, {})       -- error: a metatable could redirect every access
 ```
 
 A program that runs under `--readonly-env` keeps its state in local variables and in the tables of its modules, which stay writable.

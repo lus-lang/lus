@@ -293,3 +293,19 @@ local function nested_function_group_errors_test()
     local _, e3 = load("local z <group> = { b = 2 } local function f() return z end")
     assert(string.find(e3, "cannot pass local group", 1, true))
 end
+
+-- a group overwritten by another group takes the values of its fields
+local function overwrite_from_another_group_test()
+    local a <group> = { x = 1, y = 2 }
+    local b <group> = { x = 10, y = 20, z = 30 }
+    b = a
+    assert(b.x == 1 and b.y == 2 and b.z == 30)
+    a.x = 5
+    assert(b.x == 1)
+    local _, e1 = load("local a <group> = { x = 1, w = 2 } local b <group> = { x = 0 } b = a")
+    assert(string.find(e1, "'w' is not a field of group 'b'", 1, true), e1)
+    local _, e2 = load("local a <group> = { x = 1 } local b <group> = { x <const> = 0 } b = a")
+    assert(string.find(e2, "attempt to assign to const variable 'x'", 1, true), e2)
+    local _, e3 = load("local b <group> = { x = 0 } b = 5")
+    assert(string.find(e3, "group can only be assigned a constructor or another group", 1, true), e3)
+end

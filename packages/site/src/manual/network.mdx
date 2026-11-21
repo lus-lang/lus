@@ -70,12 +70,13 @@ end
 
 The remaining rules of `fetch` are these.
 
-- Every request carries the headers `Host`, `Connection: close`, and `User-Agent: Lus/1.0`, then the headers of the `headers` table, then `Content-Length` when the body is not empty. A header in the table is sent in addition to these, including one with the same name.
+- Every request carries the headers `Host`, `Connection: close`, and `User-Agent: Lus/1.0`, then the headers of the `headers` table, then `Content-Length` when the body is not empty. A header in the table replaces a default header of the same name, whatever its case.
+- A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body. A response header that appears more than once holds its values joined by `", "`.
 - HTTPS verifies the certificate of the server against the certificates of the system and raises an error when the verification fails.
 - A response body is limited to 64 MiB, and a larger body raises `"response body too large"`.
 - A URL with a scheme other than `http` or `https` raises `"invalid URL: URL"`. A URL, method, or header that contains a line break raises an error before anything is sent.
 
-While `network.fetch` waits for the response, nothing else in the program runs, including its [detached coroutines](/manual/concurrency#detached-coroutines). A program that needs several requests at the same time sends each from a [worker](/manual/concurrency#workers). A program that tests its own `network.serve` server sends the request through a TCP socket, as the example under [HTTP server](#http-server) does, because the server cannot answer while `fetch` blocks.
+While the main chunk waits in `network.fetch`, the program's [detached coroutines](/manual/concurrency#detached-coroutines) keep running. A program can therefore fetch from its own `network.serve` server. Inside a detached coroutine, `fetch` makes the whole program wait, the other detached coroutines included. A coroutine that talks to a server of the same program sends the request through a TCP socket, as the example under [HTTP server](#http-server) does. A program that needs several requests at the same time sends each from a [worker](/manual/concurrency#workers).
 
 ## TCP clients
 

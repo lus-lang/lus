@@ -53,12 +53,11 @@ pub fn open(l: *Thread) Error!void {
     try aux.setFuncs(l, globals, &funcs);
     try aux.setField(l, globals, "_G", g.globals);
     try aux.setField(l, globals, "_VERSION", try l.newStringValue("Lus 2.0"));
-    // `range` is recognized by the numeric loop lowering, which compares
-    // natives by address, so the builtin is fixed and its address is never
-    // reused.
+    // RANGEPREP recognizes `range` by the address of its native, so the
+    // builtin is fixed and its address is never reused.
     const r = try aux.getField(l, globals, "range");
     g.fixed.append(g.gpa, r.header()) catch return l.raiseMem();
-    g.ext.put(g.gpa, "range", @ptrFromInt(r.address())) catch return l.raiseMem();
+    g.range_native = r.address();
     // The generic `for` steps these iterators itself (`interp.tforcall`).
     g.iter_next = next;
     g.iter_ipairs = ipairsAux;
@@ -202,7 +201,7 @@ fn setmetatableLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) V
     const t = tv.as(Table);
     const mt = mv.as(Table);
     const gc_bit = @as(u16, 1) << @backingInt(state.TM.gc);
-    if (t.metatable != null or mt.tm_absent & gc_bit == 0) return state.leaf_miss;
+    if (t.metatable != null or t.isReadonly() or mt.tm_absent & gc_bit == 0) return state.leaf_miss;
     t.metatable = mt;
     gc.barrierBack(l.g, &t.hdr);
     return tv;
@@ -214,6 +213,9 @@ noinline fn setmetatableSlow(l: *Thread) Error!u32 {
     const t = try aux.checkTable(l, 1);
     const mtv = l.arg(2);
     if (mtv.tag != .nil and mtv.tag != .table) return aux.typeError(l, 2, "nil or table");
+    // A metatable could redirect every access, so a read-only table keeps
+    // the one it has.
+    if (t.isReadonly()) return l.raiseRun("attempt to modify a readonly table", .{});
     if (t.metatable) |old| {
         if (!table.getStr(old, l.g.tm_names[@backingInt(state.TM.metatable)].?).isNil()) {
             return l.raiseFmt("cannot change a protected metatable", .{});
@@ -326,9 +328,9 @@ fn ipairs(l: *Thread) Error!u32 {
     return 3;
 }
 
-/// The iterator `range` returns. It keeps the next value, the limit and
-/// the step in its upvalues, so it works in a generic `for` and when
-/// called on its own.
+/// The iterator `range` returns when a bigint or a decimal takes part. It
+/// keeps the next value, the limit and the step in its upvalues, so it
+/// works in a generic `for` and when called on its own.
 fn rangeAux(l: *Thread) Error!u32 {
     const ups = l.frame().native.?.upvalues();
     const cur = ups[0];
@@ -346,7 +348,10 @@ fn numericCompare(l: *Thread, a: Value, b: Value) ?std.math.Order {
 }
 
 /// `range(a, b [, step])` and `range(n)`, an iterator over a numeric
-/// sequence. Inside `for` it compiles to a numeric loop.
+/// sequence. A `for` loop that calls it directly runs the numeric loop
+/// instead (RANGEPREP in `vm/interp.zig`). Over integers and floats the
+/// iterator follows the same rules, and bigints and decimals step with
+/// exact arithmetic.
 fn range(l: *Thread) Error!u32 {
     var start = try aux.checkNumber(l, 1);
     var limit: Value = undefined;
@@ -356,12 +361,84 @@ fn range(l: *Thread) Error!u32 {
     } else limit = try aux.checkNumber(l, 2);
     const step = try aux.optNumber(l, 3, Value.int(1));
     if ((numericCompare(l, step, Value.int(0)) orelse .eq) == .eq) return aux.argError(l, 3, "step must not be zero", .{});
-    const n = state.newNative(l.g, rangeAux, "range_aux", 3) catch return l.raiseMem();
-    const ups = n.upvalues();
-    ups[0] = start;
-    ups[1] = limit;
-    ups[2] = step;
+    const plain = struct {
+        fn f(v: Value) bool {
+            return v.tag == .integer or v.tag == .float;
+        }
+    }.f;
+    var func: state.NativeFn = rangeAux;
+    var ups: [3]Value = .{ start, limit, step };
+    if (plain(start) and plain(limit) and plain(step)) {
+        if (start.tag == .integer and step.tag == .integer) {
+            func = rangeIntAux;
+            ups = rangeIntState(start.asInt(), limit, step.asInt());
+        } else {
+            func = rangeFloatAux;
+            ups = .{ Value.float(toF(start)), Value.float(toF(limit)), Value.float(toF(step)) };
+        }
+    }
+    const n = state.newNative(l.g, func, "range_aux", 3) catch return l.raiseMem();
+    @memcpy(n.upvalues()[0..3], &ups);
     return aux.ret(l, Value.obj(.native, n));
+}
+
+fn toF(v: Value) f64 {
+    return if (v.tag == .integer) @floatFromInt(v.asInt()) else v.asFloat();
+}
+
+/// The state of an integer range, as the numeric loop computes it: the
+/// next value, the number of values after it, and the step. A float limit
+/// is clipped to the integer range, and an empty range has no next value.
+fn rangeIntState(init: i64, limit_v: Value, step: i64) [3]Value {
+    const empty: [3]Value = .{ .nil, Value.int(0), Value.int(step) };
+    const limit: i64 = blk: {
+        if (limit_v.tag == .integer) break :blk limit_v.asInt();
+        const f = limit_v.asFloat();
+        if (std.math.isNan(f)) return empty;
+        if (step > 0) {
+            const fl = @floor(f);
+            if (fl >= 9.223372036854775807e18) break :blk std.math.maxInt(i64);
+            if (fl < -9.223372036854775808e18) return empty;
+            break :blk @intFromFloat(fl);
+        } else {
+            const fl = @ceil(f);
+            if (fl < -9.223372036854775808e18) break :blk std.math.minInt(i64);
+            if (fl >= 9.223372036854775807e18) return empty;
+            break :blk @intFromFloat(fl);
+        }
+    };
+    if (if (step > 0) init > limit else init < limit) return empty;
+    // The count is computed in unsigned arithmetic, so it never overflows.
+    const ui: u64 = @bitCast(init);
+    const ul: u64 = @bitCast(limit);
+    const count: u64 = if (step > 0)
+        (ul -% ui) / @as(u64, @intCast(step))
+    else
+        (ui -% ul) / (@as(u64, @bitCast(-(step + 1))) + 1);
+    return .{ Value.int(init), Value.int(@bitCast(count)), Value.int(step) };
+}
+
+fn rangeIntAux(l: *Thread) Error!u32 {
+    const ups = l.frame().native.?.upvalues();
+    const cur = ups[0];
+    if (cur.isNil()) return aux.retNil(l);
+    const left: u64 = @bitCast(ups[1].asInt());
+    if (left == 0) {
+        ups[0] = .nil;
+    } else {
+        ups[1] = Value.int(@bitCast(left - 1));
+        ups[0] = Value.int(cur.asInt() +% ups[2].asInt());
+    }
+    return aux.ret(l, cur);
+}
+
+fn rangeFloatAux(l: *Thread) Error!u32 {
+    const ups = l.frame().native.?.upvalues();
+    const cur = ups[0].asFloat();
+    const step = ups[2].asFloat();
+    if (if (step > 0) !(cur <= ups[1].asFloat()) else !(cur >= ups[1].asFloat())) return aux.retNil(l);
+    ups[0] = Value.float(cur + step);
+    return aux.ret(l, Value.float(cur));
 }
 
 fn bigint(l: *Thread) Error!u32 {

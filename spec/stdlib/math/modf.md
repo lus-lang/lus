@@ -34,4 +34,4 @@ print(math.modf(-3.75d))   --> -3  -0.75
 print(math.modf(1/0))      --> inf  0.0
 ```
 
-The fractional part of a float carries its rounding error, so `math.modf(3.7)` returns 3 and 0.70000000000000018. [`math.floor`](/manual/api#math.floor) and [`math.ceil`](/manual/api#math.ceil) round down and up, and [`math.fmod`](/manual/api#math.fmod) returns the remainder of a division.
+The fractional part of a float carries its rounding error, so `math.modf(3.7)` returns 3 and 0.7000000000000002. [`math.floor`](/manual/api#math.floor) and [`math.ceil`](/manual/api#math.ceil) round down and up, and [`math.fmod`](/manual/api#math.fmod) returns the remainder of a division.

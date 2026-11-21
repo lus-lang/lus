@@ -14,6 +14,7 @@ const state = @import("../../vm/state.zig");
 const object = @import("../../vm/object.zig");
 const value = @import("../../vm/value.zig");
 const table = @import("../../vm/table.zig");
+const shape = @import("../../vm/shape.zig");
 const gc = @import("../../vm/gc.zig");
 const interp = @import("../../vm/interp.zig");
 const opc = @import("../../compile/opcodes.zig");
@@ -537,12 +538,30 @@ fn materialize(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, out: *[max_v
     const g = l.g;
     const s = u.snaps[snap];
     for (u.virts[s.virts..][0..s.nvirts], 0..) |v, i| {
-        const t = rt.newVirtualTable(l, 0, v.nc) orelse return null;
-        for (u.vfields[v.fields..][0..v.count]) |x| {
-            t.setKey(x.node, Value.make(x.key, .string));
-            t.setVal(x.node, valueOf(x.val, regs));
+        // The keys in the order they arrived give the shape of the table,
+        // when shapes may hold them.
+        const fields = u.vfields[v.fields..][0..v.count];
+        var sh: ?*shape.Shape = &shape.root;
+        for (fields) |x| {
+            const cur = sh orelse break;
+            sh = g.shapes.transition(g.gpa, cur, @ptrFromInt(@as(usize, @intCast(x.key))), g) catch null;
         }
-        t.hash_used = v.count;
+        const t = if (sh) |shp| blk: {
+            const t = rt.newShapedTable(l, @max(v.count, @min(v.nc, shape.max_keys)), shp.id) orelse return null;
+            for (fields) |x| {
+                const slot = shp.find(@ptrFromInt(@as(usize, @intCast(x.key)))).?;
+                t.setSlot(slot, valueOf(x.val, regs));
+            }
+            break :blk t;
+        } else blk: {
+            const t = rt.newVirtualTable(l, 0, v.nc) orelse return null;
+            for (fields) |x| {
+                t.setKey(x.node, Value.make(x.key, .string));
+                t.setVal(x.node, valueOf(x.val, regs));
+            }
+            t.hash_used = v.count;
+            break :blk t;
+        };
         // The metatable was checked for a finalizer when the program
         // set it.
         if (v.mt.ty == .table) t.metatable = valueOf(v.mt, regs).as(Table);
@@ -1019,10 +1038,35 @@ pub const rt = struct {
     /// `newTable` for a record that optimized code kept unallocated
     /// until now. Its constructor already counted the table as sunk, so
     /// the count gives that back, and the allocation is charged once.
+    /// A record that optimized code kept unallocated until now, with the
+    /// shape `id` and `cap` empty slots in its cell, which the code then
+    /// fills. Its constructor already counted the table as sunk.
+    pub fn newShapedTable(l: *Thread, cap: usize, id: usize) callconv(.c) ?*Table {
+        const g = l.g;
+        const units = table.inlineUnitsSlots(0, cap, @sizeOf(Value));
+        g.jit.sunk -|= @sizeOf(Table) + units * Table.inline_unit;
+        const t = gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * Table.inline_unit) catch return null;
+        t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
+        table.initInline(t, 0, cap);
+        t.setShapeId(@intCast(id));
+        return t;
+    }
+
     pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(.c) ?*Table {
         const g = l.g;
         g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * Table.inline_unit;
-        return newTable(l, narr, nhash, null);
+        // Optimized code writes the fields of the record into hash nodes
+        // laid out as `table.hashSizeExact` sizes them, so the table is a
+        // dictionary.
+        const units = table.inlineUnitsDict(narr, nhash, @sizeOf(Value));
+        const t = gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * Table.inline_unit) catch return null;
+        t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) }, .hash_used = 0 };
+        if (units > 0) {
+            table.initInline(t, narr, nhash);
+        } else if (narr > 0 or nhash > 0) {
+            table.resize(g.gpa, t, narr, nhash) catch return null;
+        }
+        return t;
     }
 
     pub fn tableLength(t: *Table) callconv(.c) i64 {

@@ -177,7 +177,7 @@ print(jan31:add{ months = 1 }:iso())               --> 2026-02-28T00:00:00-05:00
 print(noon:with{ hour = 8, minute = 5 }:iso())     --> 2026-03-07T08:05:00-05:00
 ```
 
-When the clocks move forward, one hour of the day does not occur, and when they move back, one hour occurs twice. A zoned value built for a time in such an hour gets one of the two offsets around the change, and which one is unspecified.
+When the clocks move forward, one hour of the day does not occur, and when they move back, one hour occurs twice. A time in the skipped hour moves forward by the length of the skip, so 02:30 on the day New York jumps from 02:00 to 03:00 becomes 03:30 with the offset `-04:00`. A time in the repeated hour takes the earlier of its two instants, the one with the daylight saving offset.
 
 ## Formatting
 

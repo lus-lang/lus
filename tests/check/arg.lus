@@ -1,0 +1,3 @@
+-- The lus command defines arg for the script it runs, so a file without
+-- global declarations reads it freely.
+print(#arg)

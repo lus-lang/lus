@@ -46,6 +46,25 @@ pub const Decimal = struct {
         return d;
     }
 
+    /// The exact digits of the coefficient `coef` times ten to `e10`, as
+    /// a decimal number stores them. Takes ownership of `coef`, a string of
+    /// decimal digits.
+    pub fn fromCoefficient(gpa: Allocator, coef: []u8, e10: i32) Decimal {
+        var n = coef.len;
+        while (n > 0 and coef[n - 1] == '0') n -= 1;
+        var lead: usize = 0;
+        while (lead < n and coef[lead] == '0') lead += 1;
+        if (lead == n) {
+            gpa.free(coef);
+            return .{};
+        }
+        std.mem.copyForwards(u8, coef[0 .. n - lead], coef[lead..n]);
+        const exp: i32 = @as(i32, @intCast(coef.len - lead)) - 1 + e10;
+        var list: std.ArrayList(u8) = .fromOwnedSlice(coef);
+        list.items.len = n - lead;
+        return .{ .digits = list, .exp = exp };
+    }
+
     pub fn deinit(d: *Decimal, gpa: Allocator) void {
         d.digits.deinit(gpa);
     }

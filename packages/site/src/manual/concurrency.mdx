@@ -191,7 +191,7 @@ A _suspension point_ is an operation that waits for something outside the progra
 
 Inside a detached coroutine, a suspension point suspends the coroutine until it can continue, and `coroutine.status` reports `"suspended"` for it during the wait. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller and runs the detached coroutines during the wait. In the server at the top of [Detached coroutines](#detached-coroutines), the `receive` calls of the main chunk are what give the acceptor and the connections time to run.
 
-Every other operation that takes time blocks the whole program, detached coroutines included. This covers [`network.fetch`](/manual/api#network.fetch), reading and writing files, SQLite, and `os.execute`.
+Every other operation that takes time blocks the whole program, detached coroutines included. This covers reading and writing files, SQLite, and `os.execute`. [`network.fetch`](/manual/api#network.fetch) sits between the two groups. In the main chunk it runs the detached coroutines while it waits, like a suspension point, but inside a detached coroutine it blocks the whole program.
 
 A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it. A line iterator written with `coroutine.wrap` therefore works unchanged on a connection that a detached coroutine serves. A suspension point reached inside a function that a library function calls back, such as the comparison function of `table.sort`, cannot suspend its coroutine. It blocks the coroutine and runs the other coroutines during the wait.
 

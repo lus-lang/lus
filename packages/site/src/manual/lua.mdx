@@ -469,7 +469,7 @@ local function range(first, last, step)
 end
 ```
 
-Lus provides this function as the global `range`. `range(n)` counts from 1 to `n`, and `range(first, last, step)` counts from `first` to `last` inclusive by `step`, which defaults to 1 and may be negative. The arguments are numbers, and the result is an iterator function that a generic `for` consumes and that a variable or an argument can hold. A function that accepts any iterator therefore accepts a counting sequence too. A plain loop over numbers stays a numeric `for`.
+Lus provides this function as the global `range`. `range(n)` counts from 1 to `n`, and `range(first, last, step)` counts from `first` to `last` inclusive by `step`, which defaults to 1 and may be negative. The arguments are numbers, and the result is an iterator function that a generic `for` consumes and that a variable or an argument can hold. A function that accepts any iterator therefore accepts a counting sequence too. A `for` loop that calls `range` directly runs exactly the numeric `for`, with its speed and its rules, so either form suits a plain counting loop.
 
 ```lus
 local function sum(iter)

@@ -82,8 +82,10 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const builtins = try globalNames(arena, l.g);
+    var builtins = try globalNames(arena, l.g);
     var test_builtins = try builtins.clone(arena);
+    // The `lus` command defines `arg` for the script it runs.
+    try builtins.put(arena, "arg", {});
     for (test_globals) |name| try test_builtins.put(arena, name, {});
 
     var expanded: std.ArrayList([]const u8) = .empty;
