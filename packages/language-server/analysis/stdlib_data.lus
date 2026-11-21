@@ -605,6 +605,547 @@ In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yie
     stability = "stable",
     vararg = true,
   },
+  ["crypto"] = {
+    children = {
+      "crypto.equal",
+      "crypto.hash",
+      "crypto.hashpassword",
+      "crypto.hmac",
+      "crypto.keypair",
+      "crypto.random",
+      "crypto.sign",
+      "crypto.ulid",
+      "crypto.uuid",
+      "crypto.verify",
+      "crypto.verifypassword",
+    },
+    description = [[
+The `crypto` module computes SHA-2 and SHA-1 digests and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
+
+Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`crypto.hash`](/manual/api#crypto.hash) and [`crypto.hmac`](/manual/api#crypto.hmac) also return hex or base64 text on request, and [`string.transcode`](/manual/api#string.transcode) converts keys and signatures between vectors and text.
+
+The following example prints a SHA-256 digest in hex, then signs a message and checks the signature.
+
+```lus
+print(crypto.hash("sha256", "abc", "hex"))
+--> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+local secret, public = crypto.keypair()
+local sig = crypto.sign(secret, "release 2.0.0")
+print(crypto.verify(public, "release 2.0.0", sig))   --> true
+```
+
+The module requires no permission, so a chunk that renounced every permission with [`pledge`](/manual/api#pledge) can still use it. Every function is available in the WebAssembly build, where the secure random source is the `random_get` call of WASI. Every primitive comes from the Zig standard library. The [cryptography](/manual/crypto) page of the manual describes the module in full.]],
+    kind = "module",
+    module = "crypto",
+    name = "crypto",
+    origin = "lus",
+    parent = nil,
+    short_name = "crypto",
+    since = "2.0.0",
+    source = "stdlib/crypto/_module.md",
+    stability = "unstable",
+  },
+  ["crypto.equal"] = {
+    children = {},
+    description = [[
+Returns `true` when `a` and `b` hold the same bytes and `false` otherwise, in time that depends only on their lengths.
+
+- `a` and `b` are strings or vectors, in any combination. A string contributes its WTF-8 bytes. A number is converted to its textual form first.
+
+The comparison reads every byte even after a difference, so an attacker who measures the time of a comparison learns nothing about where a guess goes wrong. Use it to check MACs, tokens, and digests against a secret value. Inputs of different lengths return `false` at once, because lengths are not secret. A value that is neither a string, a number, nor a vector raises `bad argument #1 to 'equal' (string or vector expected, got table)` with its type, or the same error for argument 2.
+
+The following example compares a string with a vector that holds the same bytes, and two strings that differ.
+
+```lus
+print(crypto.equal("token", vector.fromstring("token")))   --> true
+print(crypto.equal("token", "tokem"))                      --> false
+print(crypto.equal("token", "tok"))                        --> false
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.equal",
+    origin = "lus",
+    params = {
+      {
+        name = "a",
+        type = "string|vector",
+      },
+      {
+        name = "b",
+        type = "string|vector",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "boolean",
+      },
+    },
+    short_name = "equal",
+    since = "2.0.0",
+    source = "stdlib/crypto/equal.md",
+    stability = "unstable",
+  },
+  ["crypto.hash"] = {
+    children = {},
+    description = [[
+Returns the digest of `data` under a hash function.
+
+- `algorithm` is `"sha256"`, `"sha512"`, or `"sha1"`.
+- `data` is the input. A string contributes its WTF-8 bytes. A number is converted to its textual form first.
+- `encoding` is `"hex"` or `"base64"`. When it is absent, the result is a vector.
+
+The result is a vector of 32 bytes for SHA-256, 64 bytes for SHA-512, and 20 bytes for SHA-1. With `encoding`, the result is that vector written as a string of lowercase hex digits or of base64 with padding. SHA-1 is broken for collision resistance, so it is for formats that require it, such as git object names, and never for new signatures.
+
+An unknown algorithm raises `bad argument #1 to 'hash' (invalid option 'md5')`. A `data` that is neither a string, a number, nor a vector raises `bad argument #2 to 'hash' (string or vector expected, got table)` with its type.
+
+The following example hashes the test message of FIPS 180 with each algorithm.
+
+```lus
+print(crypto.hash("sha256", "abc", "hex"))
+--> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+print(crypto.hash("sha1", "abc", "hex"))     --> a9993e364706816aba3e25717850c26c9cd0d89d
+print(#crypto.hash("sha512", "abc"))         --> 64
+print(crypto.hash("sha256", "", "base64"))   --> 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+```
+
+[`crypto.hmac`](/manual/api#crypto.hmac) computes a keyed digest with the same algorithms.]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.hash",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
+        type = "string",
+      },
+      {
+        name = "data",
+        type = "string|vector",
+      },
+      {
+        name = "encoding",
+        optional = true,
+        type = "string",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector|string",
+      },
+    },
+    short_name = "hash",
+    since = "2.0.0",
+    source = "stdlib/crypto/hash.md",
+    stability = "unstable",
+  },
+  ["crypto.hashpassword"] = {
+    children = {},
+    description = [[
+Hashes a password with Argon2id and returns the hash in PHC string format.
+
+- `password` is a string or a vector. A string contributes its WTF-8 bytes.
+- `options` is a table with the optional integer fields `memory`, the memory cost in KiB, `time`, the number of passes, and `parallelism`, the number of lanes.
+
+The defaults are the recommendation of OWASP: `memory = 19456`, `time = 2`, and `parallelism = 1`. Higher costs make each guess of an attacker slower and the hash slower to compute. `parallelism` must be from 1 to 255, `time` from 1 to 65536, and `memory` from 8 times `parallelism` to 4194304. A value outside its range raises `bad argument #2 to 'hashpassword' (option 'memory' out of range)` with the name of the option, and a value that is not an integer raises `bad argument #2 to 'hashpassword' (option 'memory' must be an integer)`.
+
+Each call draws a new salt of 16 bytes from the secure random source, so hashing the same password twice gives two different strings. The result has the form `$argon2id$v=19$m=19456,t=2,p=1$` followed by the salt and a hash of 32 bytes, both in base64 without padding. It records every parameter, so [`crypto.verifypassword`](/manual/api#crypto.verifypassword) needs only the password and the string. Store the string as it is.
+
+The following example hashes a password and checks two attempts against it.
+
+```lus
+local stored = crypto.hashpassword("correct horse battery staple")
+print(stored:sub(1, 30))                                           --> $argon2id$v=19$m=19456,t=2,p=1
+print(crypto.verifypassword("correct horse battery staple", stored))   --> true
+print(crypto.verifypassword("Tr0ub4dor&3", stored))                    --> false
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.hashpassword",
+    origin = "lus",
+    params = {
+      {
+        name = "password",
+        type = "string|vector",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "string",
+      },
+    },
+    short_name = "hashpassword",
+    since = "2.0.0",
+    source = "stdlib/crypto/hashpassword.md",
+    stability = "unstable",
+  },
+  ["crypto.hmac"] = {
+    children = {},
+    description = [[
+Returns the HMAC of `data` under `key`, as defined by RFC 2104.
+
+- `algorithm` is `"sha256"`, `"sha512"`, or `"sha1"`.
+- `key` is the secret key, a string or a vector of any length.
+- `data` is the message, a string or a vector.
+- `encoding` is `"hex"` or `"base64"`. When it is absent, the result is a vector.
+
+The result has the size of a digest of `algorithm`: 32 bytes for SHA-256, 64 bytes for SHA-512, and 20 bytes for SHA-1. A string `key` or `data` contributes its WTF-8 bytes, and a number is converted to its textual form first. The errors are those of [`crypto.hash`](/manual/api#crypto.hash), with `key` as argument 2 and `data` as argument 3.
+
+An HMAC proves that a message comes from a holder of the key, such as the signature of a webhook or of a JSON Web Token. Compare a received HMAC with the expected one through [`crypto.equal`](/manual/api#crypto.equal), whose running time reveals nothing about where they differ.
+
+The following example computes an HMAC and checks a received value against it.
+
+```lus
+local mac = crypto.hmac("sha256", "key", "The quick brown fox jumps over the lazy dog", "hex")
+print(mac)   --> f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+
+local received = "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+print(crypto.equal(mac, received))   --> true
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.hmac",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
+        type = "string",
+      },
+      {
+        name = "key",
+        type = "string|vector",
+      },
+      {
+        name = "data",
+        type = "string|vector",
+      },
+      {
+        name = "encoding",
+        optional = true,
+        type = "string",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector|string",
+      },
+    },
+    short_name = "hmac",
+    since = "2.0.0",
+    source = "stdlib/crypto/hmac.md",
+    stability = "unstable",
+  },
+  ["crypto.keypair"] = {
+    children = {},
+    description = [[
+Returns an Ed25519 secret key and its public key, as two vectors of 32 bytes.
+
+- `seed` is a vector of 32 bytes. When it is absent, the seed comes from the secure random source.
+
+The secret key is the seed itself, which is the private key of RFC 8032. `crypto.keypair(secret)` therefore returns the same secret key with its public key, which is how a program recovers the public key of a stored secret key. Keep the secret key private. The public key may be published.
+
+A `seed` that is not a vector of 32 bytes raises `bad argument #1 to 'keypair' (32-byte vector expected)`.
+
+The following example derives the public key of the first test vector of RFC 8032.
+
+```lus
+local seed = string.transcode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "hex", "binary")
+local secret, public = crypto.keypair(seed)
+print(string.transcode(public, "binary", "hex"))
+--> d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+```
+
+[`crypto.sign`](/manual/api#crypto.sign) signs with the secret key and [`crypto.verify`](/manual/api#crypto.verify) checks a signature with the public key.]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.keypair",
+    origin = "lus",
+    params = {
+      {
+        name = "seed",
+        optional = true,
+        type = "vector",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        name = "secret",
+        type = "vector",
+      },
+      {
+        name = "public",
+        type = "vector",
+      },
+    },
+    short_name = "keypair",
+    since = "2.0.0",
+    source = "stdlib/crypto/keypair.md",
+    stability = "unstable",
+  },
+  ["crypto.random"] = {
+    children = {},
+    description = [[
+Returns a new vector of `n` bytes read from the secure random source of the operating system.
+
+- `n` is the number of bytes, from 0 to 1048576.
+
+The source is `arc4random_buf` or `getrandom` on native targets and the `random_get` call of WASI in the WebAssembly build. Every call reads the source afresh, so the bytes are suitable for keys, salts, nonces, and session tokens. [`math.random`](/manual/api#math.random) is a separate generator that `math.randomseed` makes reproducible, so it is for simulations and never for secrets.
+
+An `n` outside the range raises `bad argument #1 to 'random' (size out of range)`. If the operating system cannot supply random bytes, the call raises `secure random source unavailable`.
+
+The following example makes a session token of 32 random bytes and writes it as hex.
+
+```lus
+local token = string.transcode(crypto.random(32), "binary", "hex")
+print(#token)          --> 64
+print(#crypto.random(0))   --> 0
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.random",
+    origin = "lus",
+    params = {
+      {
+        name = "n",
+        type = "integer",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "random",
+    since = "2.0.0",
+    source = "stdlib/crypto/random.md",
+    stability = "unstable",
+  },
+  ["crypto.sign"] = {
+    children = {},
+    description = [[
+Returns the Ed25519 signature of `message`, a vector of 64 bytes.
+
+- `secret` is a secret key from [`crypto.keypair`](/manual/api#crypto.keypair), a vector of 32 bytes.
+- `message` is a string or a vector of any length. A string contributes its WTF-8 bytes.
+
+Signing is deterministic, as RFC 8032 defines it, so the same key and message always give the same signature. A `secret` that is not a vector of 32 bytes raises `bad argument #1 to 'sign' (32-byte vector expected)`. A `message` that is neither a string, a number, nor a vector raises `bad argument #2 to 'sign' (string or vector expected, got table)` with its type.
+
+The following example signs a release manifest and writes the signature as base64.
+
+```lus
+local secret, public = crypto.keypair()
+local manifest = tojson({ name = "app", version = "1.4.0" })
+local sig = crypto.sign(secret, manifest)
+print(#sig)                                       --> 64
+print(#string.transcode(sig, "binary", "base64"))  --> 88
+print(crypto.verify(public, manifest, sig))       --> true
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.sign",
+    origin = "lus",
+    params = {
+      {
+        name = "secret",
+        type = "vector",
+      },
+      {
+        name = "message",
+        type = "string|vector",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "sign",
+    since = "2.0.0",
+    source = "stdlib/crypto/sign.md",
+    stability = "unstable",
+  },
+  ["crypto.ulid"] = {
+    children = {},
+    description = [[
+Returns a new ULID, a sortable identifier of 128 bits written as 26 characters.
+
+A ULID holds the Unix time in milliseconds in its first 48 bits and 80 bits from the secure random source after them. The text form is Crockford's base32 in uppercase, which leaves out the letters I, L, O, and U, so ULIDs sort as strings in the order of their times. Within one Lus state, each ULID is greater than the one before it. When two fall in the same millisecond, the second is the first plus one, as the ULID specification defines it. Each worker has a sequence of its own.
+
+The following example makes two ULIDs and checks their length and order.
+
+```lus
+local a, b = crypto.ulid(), crypto.ulid()
+print(#a, a < b)                     --> 26  true
+print(a:find("^[0-9A-HJKMNP-TV-Z]+$") ~= nil)   --> true
+```
+
+[`crypto.uuid`](/manual/api#crypto.uuid) returns UUIDs, the identifier format that most databases store natively.]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.ulid",
+    origin = "lus",
+    params = {},
+    parent = "crypto",
+    returns = {
+      {
+        type = "string",
+      },
+    },
+    short_name = "ulid",
+    since = "2.0.0",
+    source = "stdlib/crypto/ulid.md",
+    stability = "unstable",
+  },
+  ["crypto.uuid"] = {
+    children = {},
+    description = [[
+Returns a new UUID as defined by RFC 9562, as a string of 36 characters in the canonical lowercase form.
+
+- `version` is `4`, the default, or `7`.
+
+A version 4 UUID holds 122 bits from the secure random source, so it is unguessable. A version 7 UUID starts with the Unix time in milliseconds, then holds 74 more bits. Version 7 UUIDs sort by the time they were made, which keeps the index of a database table ordered as rows arrive. Within one Lus state, each version 7 UUID is greater than the one before it. When two fall in the same millisecond, the second is the first plus one, which is the monotonic method of RFC 9562, so the bits after the time are unguessable only for the first UUID of each millisecond. Each worker has a sequence of its own.
+
+A `version` other than 4 or 7 raises `bad argument #1 to 'uuid' (version 4 or 7 expected)`.
+
+The following example checks the version digit of each kind and the order of two version 7 UUIDs.
+
+```lus
+local id = crypto.uuid()
+print(#id, id:sub(15, 15))         --> 36  4
+local a, b = crypto.uuid(7), crypto.uuid(7)
+print(a:sub(15, 15), a < b)        --> 7  true
+```
+
+[`crypto.ulid`](/manual/api#crypto.ulid) returns a sortable identifier in a shorter text form.]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.uuid",
+    origin = "lus",
+    params = {
+      {
+        name = "version",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "string",
+      },
+    },
+    short_name = "uuid",
+    since = "2.0.0",
+    source = "stdlib/crypto/uuid.md",
+    stability = "unstable",
+  },
+  ["crypto.verify"] = {
+    children = {},
+    description = [[
+Returns `true` when `signature` is a valid Ed25519 signature of `message` by the holder of `public`, and `false` otherwise.
+
+- `public` is a public key from [`crypto.keypair`](/manual/api#crypto.keypair), a vector of 32 bytes.
+- `message` is the signed message, a string or a vector.
+- `signature` is a vector of 64 bytes.
+
+Verification is strict. It rejects a non-canonical signature, a non-canonical public key, and a public key of small order, so every strict verifier gives the same answer for the same input. Every invalid signature, including one made for another message or another key, returns `false`. The function raises only for an argument of the wrong type or size: `bad argument #1 to 'verify' (32-byte vector expected)` for the key and `bad argument #3 to 'verify' (64-byte vector expected)` for the signature.
+
+The following example checks the signature of the empty message from the first test vector of RFC 8032, then the same signature over another message.
+
+```lus
+local function bytes(hex)
+    return string.transcode(hex, "hex", "binary")
+end
+local public = bytes("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+local sig = bytes("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+print(crypto.verify(public, "", sig))    --> true
+print(crypto.verify(public, "x", sig))   --> false
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.verify",
+    origin = "lus",
+    params = {
+      {
+        name = "public",
+        type = "vector",
+      },
+      {
+        name = "message",
+        type = "string|vector",
+      },
+      {
+        name = "signature",
+        type = "vector",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "boolean",
+      },
+    },
+    short_name = "verify",
+    since = "2.0.0",
+    source = "stdlib/crypto/verify.md",
+    stability = "unstable",
+  },
+  ["crypto.verifypassword"] = {
+    children = {},
+    description = [[
+Returns `true` when `password` matches `hash`, a PHC string from [`crypto.hashpassword`](/manual/api#crypto.hashpassword), and `false` otherwise.
+
+- `password` is the attempt, a string or a vector.
+- `hash` is the stored PHC string.
+
+The function reads the algorithm, the parameters, and the salt from `hash`, recomputes the hash of `password`, and compares the two in constant time. It accepts the three variants `argon2id`, `argon2i`, and `argon2d` of version 19, so it also checks hashes made by other Argon2 implementations.
+
+A wrong password returns `false`. A `hash` that is not a well-formed PHC string raises `bad argument #2 to 'verifypassword' (invalid password hash)`, because it points to corrupt storage rather than a failed attempt. The same error covers a memory cost above 4194304 KiB or more than 65536 passes. Another algorithm raises `bad argument #2 to 'verifypassword' (unsupported password hash 'scrypt')` with its name.
+
+The following example checks a password against a hash from the reference implementation of Argon2.
+
+```lus
+local stored = "$argon2i$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG"
+print(crypto.verifypassword("password", stored))   --> true
+print(crypto.verifypassword("Password", stored))   --> false
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.verifypassword",
+    origin = "lus",
+    params = {
+      {
+        name = "password",
+        type = "string|vector",
+      },
+      {
+        name = "hash",
+        type = "string",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "boolean",
+      },
+    },
+    short_name = "verifypassword",
+    since = "2.0.0",
+    source = "stdlib/crypto/verifypassword.md",
+    stability = "unstable",
+  },
   ["debug"] = {
     children = {
       "debug.debug",

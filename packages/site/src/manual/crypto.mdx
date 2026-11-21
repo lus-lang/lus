@@ -1,0 +1,152 @@
+---
+order: 65
+title: Cryptography
+icon: key-round
+group: library
+shortdesc: "SHA-2 digests, HMAC, Ed25519 signatures, Argon2id password hashing, secure random bytes, and UUIDs and ULIDs."
+---
+
+The [`crypto`](/manual/api#crypto-library) library has the functions that programs need to check downloads, sign and verify data, store passwords, and make identifiers that no one can guess. Every function computes with values the program already holds, so the library requires no [permission](/manual/permissions).
+
+Digests, keys, signatures, and random output are raw bytes, so the library returns them as [vectors](/manual/text#vectors). Messages, keys for HMAC, and passwords may be strings or vectors. A string contributes its UTF-8 bytes.
+
+## Digests
+
+A _digest_ is a short, fixed-size fingerprint of any amount of data. The same data always gives the same digest. Any change to the data, even one bit, gives a different digest. Finding two inputs with the same digest is infeasible. A program uses a digest to check that a downloaded file matches the one its publisher released, or to name content by what it holds.
+
+[`crypto.hash`](/manual/api#crypto.hash) takes the name of an algorithm and the data. `"sha256"` gives a digest of 32 bytes and `"sha512"` one of 64 bytes. A third argument of `"hex"` or `"base64"` returns the digest as text in that encoding, which is the form that checksum files and lockfiles use.
+
+The following program checks a downloaded file against the checksum that its publisher listed.
+
+```lus
+global crypto, print
+
+local download = "lus 2.0.0 release archive"
+local published = "4a2a1d5e1c4f2f1c43c6c1e3b0f2d1b5f9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4"
+
+if crypto.hash("sha256", download, "hex") == published then
+    print("checksum matches")
+else
+    print("checksum differs")   --> checksum differs
+end
+```
+
+`"sha1"` gives a digest of 20 bytes. SHA-1 is broken: researchers have built two different files with the same SHA-1 digest. It exists for formats that require it, such as the object names of git, and never for new designs.
+
+## Message authentication
+
+A digest proves that data is intact, but anyone can compute the digest of altered data. An _HMAC_ is a digest that also depends on a secret key, so only a holder of the key can compute it. A server that shares a key with a client uses an HMAC to check that a request comes from that client and arrived unchanged. Webhooks and JSON Web Tokens are signed this way.
+
+[`crypto.hmac`](/manual/api#crypto.hmac) takes the algorithm, the key, and the message, then the same optional encoding as `crypto.hash`.
+
+A program compares a received HMAC with the expected one through [`crypto.equal`](/manual/api#crypto.equal). The time that `==` takes can depend on where two strings first differ, so it can reveal how much of a guess was right. An attacker who measures that time can find a valid HMAC one byte at a time. `crypto.equal` reads every byte of its inputs, so its running time depends only on their lengths.
+
+The following program checks the signature of a webhook request.
+
+```lus
+global crypto, print
+
+local secret = "whsec_5d1f0c2a"
+local body = [[{"event":"payment","amount":1200}]]
+
+-- The sender computes this and sends it in a header.
+local header = crypto.hmac("sha256", secret, body, "hex")
+
+local expected = crypto.hmac("sha256", secret, body, "hex")
+print(crypto.equal(header, expected))                   --> true
+print(crypto.equal(header, crypto.hmac("sha256", secret, body .. " ", "hex")))   --> false
+```
+
+## Signatures
+
+An HMAC needs a shared secret, so everyone who can check a message can also forge one. A _digital signature_ separates the two roles. The signer holds a _secret key_ and publishes the matching _public key_. Only the secret key can make a signature, and anyone with the public key can check it. Software publishers sign releases this way, so users can verify a download without trusting the server that delivered it.
+
+The library signs with Ed25519, the signature scheme of RFC 8032. [`crypto.keypair`](/manual/api#crypto.keypair) returns a new secret key and its public key, each a vector of 32 bytes. [`crypto.sign`](/manual/api#crypto.sign) returns the signature of a message, a vector of 64 bytes. [`crypto.verify`](/manual/api#crypto.verify) returns `true` when a signature is valid for the message and the public key, and `false` for every other signature.
+
+The following program signs a release manifest and checks the signature, then checks it again after the manifest was altered.
+
+```lus
+global crypto, print, tojson
+
+local secret, public = crypto.keypair()
+
+local manifest = tojson({ name = "app", version = "1.4.0" })
+local signature = crypto.sign(secret, manifest)
+
+print(crypto.verify(public, manifest, signature))     --> true
+
+local altered = tojson({ name = "app", version = "1.4.1" })
+print(crypto.verify(public, altered, signature))      --> false
+```
+
+A key or signature is often stored or sent as text. [`string.transcode`](/manual/api#string.transcode) converts a vector to hex or base64 and back. `crypto.keypair(secret)` returns the public key of a stored secret key.
+
+The following program writes a public key as hex, then reads it back and checks a signature with it.
+
+```lus
+global crypto, print, string
+
+local secret, public = crypto.keypair()
+local text = string.transcode(public, "binary", "hex")
+print(#text)                                            --> 64
+
+local restored = string.transcode(text, "hex", "binary")
+local signature = crypto.sign(secret, "hello")
+print(crypto.verify(restored, "hello", signature))      --> true
+```
+
+## Passwords
+
+A program that stores passwords must store them so that a stolen copy of the database does not reveal them. A digest such as SHA-256 is too fast for this. An attacker can try billions of guesses per second against it. A _password hash_ is slow on purpose, and it uses a large block of memory, which makes every guess expensive. A random _salt_ is mixed into each hash, so two users with the same password get different hashes.
+
+[`crypto.hashpassword`](/manual/api#crypto.hashpassword) hashes a password with Argon2id and returns a string that holds the algorithm, the cost, the salt, and the hash. Store that string as it is. [`crypto.verifypassword`](/manual/api#crypto.verifypassword) takes a password attempt and the stored string, then returns `true` when they match.
+
+The following program stores a password at sign-up and checks two login attempts.
+
+```lus
+global crypto, print
+
+local stored = crypto.hashpassword("correct horse battery staple")
+print(stored:sub(1, 9))                                                --> $argon2id
+
+print(crypto.verifypassword("correct horse battery staple", stored))   --> true
+print(crypto.verifypassword("correct horse battery stapler", stored))  --> false
+```
+
+The default cost uses 19 MiB of memory and takes a few tens of milliseconds, which is the recommendation of OWASP for a login. A second argument such as `{ memory = 65536, time = 3 }` raises the memory in KiB and the number of passes. The stored string records the cost, so hashes made with an old cost still verify after the default changes.
+
+## Random bytes
+
+A secret key, a salt, or a session token must be unpredictable to an attacker. [`crypto.random`](/manual/api#crypto.random) returns a vector of bytes from the secure random source of the operating system. [`math.random`](/manual/api#math.random) is a different generator, which a call to `math.randomseed` makes repeat the same numbers. That suits simulations and tests, but never secrets.
+
+The following program makes a session token of 32 random bytes in base64.
+
+```lus
+global crypto, print, string
+
+local token = string.transcode(crypto.random(32), "binary", "base64")
+print(#token)   --> 44
+```
+
+## Identifiers
+
+A _UUID_ is a 128-bit identifier written as 36 characters, such as `2f1a3c9e-8b4d-4f6a-9c2e-7d5b1a0e3f84`. Programs use UUIDs as keys for records that are created on many machines at once, since two machines never make the same one. [`crypto.uuid`](/manual/api#crypto.uuid) returns a version 4 UUID, which is random. `crypto.uuid(7)` returns a version 7 UUID, which starts with the current time. Version 7 UUIDs sort in the order they were made, so a database index on them stays ordered as rows arrive.
+
+A _ULID_ holds the same kind of value as a version 7 UUID in 26 characters of letters and digits, such as `01JD3F8W2MZ4K7Q9X5B6N1RTVC`. [`crypto.ulid`](/manual/api#crypto.ulid) returns one. ULIDs also sort by time, and they fit where a short identifier reads better, such as in a URL.
+
+The following program makes one identifier of each kind and checks that two version 7 UUIDs come out in order.
+
+```lus
+global crypto, print
+
+print(#crypto.uuid(), #crypto.ulid())          --> 36  26
+
+local first, second = crypto.uuid(7), crypto.uuid(7)
+print(first < second)                          --> true
+```
+
+## Related pages
+
+- [Text and bytes](/manual/text) describes vectors and the hex and base64 encodings of `string.transcode`.
+- [Permissions](/manual/permissions) describes the capabilities that other libraries require.
+- The [API reference](/manual/api#crypto-library) lists every function of the library with its errors.

@@ -347,6 +347,10 @@ pub const Global = struct {
     /// their keys in hash parts from the start.
     dict_tables: bool = false,
     seed: u64,
+    /// The last version 7 UUID and the last ULID that `crypto` made, which
+    /// keep successive identifiers increasing within one state.
+    uuid7_last: u128 = 0,
+    ulid_last: u128 = 0,
     registry: Value = .nil,
     /// The global environment table (`_G`).
     globals: Value = .nil,

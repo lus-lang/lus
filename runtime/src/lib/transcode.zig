@@ -301,7 +301,7 @@ fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool 
     return true;
 }
 
-fn encodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
+pub fn encodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
     const enc = std.base64.standard.Encoder;
     const n = enc.calcSize(src.len);
     try out.ensureUnusedCapacity(gpa, n);
@@ -349,7 +349,7 @@ fn decodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
     return true;
 }
 
-fn encodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
+pub fn encodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
     const digits = "0123456789abcdef";
     for (src) |c| try out.appendSlice(gpa, &.{ digits[c >> 4], digits[c & 15] });
 }

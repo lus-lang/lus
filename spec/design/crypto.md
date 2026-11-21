@@ -64,7 +64,7 @@ The default cost is the OWASP recommendation: 19 MiB of memory, 2 iterations, an
 
 ## Random bytes and comparison
 
-`crypto.random` reads the secure random source of the operating system: `getentropy` or `getrandom` on native targets, and `random_get` under WASI. If the source fails, the call raises `secure random source unavailable`. `n` must be between 0 and 2^20. The PRNG behind `math.random` is separate and stays reproducible under `math.randomseed`.
+`crypto.random` reads the secure random source of the operating system: `arc4random_buf` or `getrandom` on native targets, and `random_get` under WASI. If the source fails, the call raises `secure random source unavailable`. `n` must be between 0 and 2^20. The PRNG behind `math.random` is separate and stays reproducible under `math.randomseed`.
 
 `crypto.equal` takes two strings or vectors. Its running time depends only on their lengths, never on where they differ, so it is the comparison for MACs, tokens, and digests. Inputs of different lengths return `false` at once, since lengths are not secret.
 
