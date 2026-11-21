@@ -69,6 +69,7 @@ test {
     _ = @import("vm/heapcount.zig");
     _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
+    _ = @import("fuzzlib.zig");
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = @import("tools/compile.zig");
