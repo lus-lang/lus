@@ -9,6 +9,8 @@ const Thread = state.Thread;
 const Error = state.Error;
 
 pub fn openAll(l: *Thread) Error!void {
+    l.g.dict_tables = true;
+    defer l.g.dict_tables = false;
     try @import("base.zig").open(l);
     try @import("string.zig").open(l);
     try @import("table.zig").open(l);

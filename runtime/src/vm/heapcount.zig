@@ -29,7 +29,7 @@ pub const Counting = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
-    const vtable: Allocator.VTable = .{ .alloc = alloc, .resize = resize, .remap = remap, .free = free };
+    pub const vtable: Allocator.VTable = .{ .alloc = alloc, .resize = resize, .remap = remap, .free = free };
 
     inline fn isBig(self: *const Counting, len: usize) bool {
         return self.big_pages and len >= big_block;

@@ -16,6 +16,8 @@ const numeric = @import("numeric.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const gc = @import("gc.zig");
+const shape = @import("shape.zig");
+const Shape = shape.Shape;
 const Value = value.Value;
 const Table = object.Table;
 const Node = object.Node;
@@ -210,7 +212,140 @@ pub fn box(gpa: Allocator, t: *Table) Error!void {
 /// Releases the array and hash parts of a dead table.
 pub fn freeParts(gpa: Allocator, t: *Table) void {
     freeArray(gpa, t, t.kind, t.array_ptr, t.asize);
+    if (t.isShaped()) return freeSlots(gpa, t);
     freeHash(gpa, t, t.nodes());
+}
+
+// ---------------------------------------------------------------------
+// Shaped tables
+
+/// The shape of a shaped table.
+pub inline fn shapeOf(t: *const Table) *Shape {
+    return shape.get(t.shapeId());
+}
+
+/// The number of keys of `t`: the keys of its shape, or the nodes of its
+/// hash part that hold a key.
+pub inline fn hashCount(t: *const Table) usize {
+    return if (t.isShaped()) shapeOf(t).n else t.hash_used;
+}
+
+/// Bytes below the slots of a shaped table of `n` slots: the count byte,
+/// then one tag per slot, rounded up so that the slots stay aligned.
+pub inline fn slotTagBytes(n: usize) usize {
+    return std.mem.alignForward(usize, n + 1, @sizeOf(u64));
+}
+
+/// Bytes of the storage of a shaped table of `n` slots.
+pub inline fn slotBytes(n: usize) usize {
+    return if (n == 0) 0 else slotTagBytes(n) + n * @sizeOf(u64);
+}
+
+/// Lays out `n` empty slots in `mem`, which holds `slotBytes(n)` bytes.
+/// Zero tags are nil.
+inline fn slotsIn(mem: [*]u8, n: usize) [*]Node {
+    const tb = slotTagBytes(n);
+    @memset(mem[0..tb], 0);
+    mem[tb - 1] = @intCast(n);
+    return @ptrCast(@alignCast(mem + tb));
+}
+
+fn slotBlock(t: *const Table) []u8 {
+    const n = t.slotCap();
+    const base: [*]u8 = @ptrCast(t.hash_ptr);
+    return (base - slotTagBytes(n))[0..slotBytes(n)];
+}
+
+fn freeSlots(gpa: Allocator, t: *Table) void {
+    if (t.slotCap() > 0 and !t.ownsInline(t.hash_ptr)) gpa.rawFree(slotBlock(t), .of(u64), @returnAddress());
+}
+
+/// Gives a shaped table room for `want` slots, keeping its values.
+fn growSlots(gpa: Allocator, t: *Table, want: usize) Error!void {
+    const old_n = t.slotCap();
+    if (want <= old_n) return;
+    const n = @min(@max(want, old_n + old_n / 2, 2), shape.max_keys);
+    const mem = gpa.rawAlloc(slotBytes(n), .of(u64), @returnAddress()) orelse return error.OutOfMemory;
+    const slots = slotsIn(mem, n);
+    if (old_n > 0) {
+        const src: [*]const u8 = @ptrCast(t.hash_ptr);
+        const dst: [*]u8 = @ptrCast(slots);
+        // The tag of slot i is the byte `i + 2` below the slots.
+        @memcpy((dst - 1 - old_n)[0..old_n], (src - 1 - old_n)[0..old_n]);
+        @memcpy(@as([*]u64, @ptrCast(slots))[0..old_n], t.slotWords()[0..old_n]);
+    }
+    freeSlots(gpa, t);
+    t.hash_ptr = slots;
+}
+
+/// Gives a table without keys in its hash part room for `nhash` keys:
+/// slots when it is shaped and they fit a shape, a hash part otherwise.
+fn reserveKeys(gpa: Allocator, t: *Table, nhash: usize) Error!void {
+    if (t.isShaped()) {
+        if (nhash <= shape.max_keys) return growSlots(gpa, t, nhash);
+        return toDictionary(gpa, t, nhash);
+    }
+}
+
+/// Turns a shaped table into a dictionary with room for `extra` more
+/// keys. The table keeps its values. Running out of memory leaves it
+/// shaped.
+pub fn toDictionary(gpa: Allocator, t: *Table, extra: usize) Error!void {
+    if (!t.isShaped()) return;
+    const sh = shapeOf(t);
+    // Every key of the shape moves, with nil for an empty slot, so that
+    // `next` continues from a key that a traversal cleared.
+    const new_hash = try allocHash(gpa, hashSizeFor(sh.n + extra));
+    const old: Table = .{ .hdr = t.hdr, .cell = t.cell, .hash_ptr = t.hash_ptr };
+    t.setNodes(new_hash);
+    t.hash_used = 0;
+    for (0..sh.n) |i| insertNew(t, Value.obj(.string, sh.keys[i]), old.slotVal(i));
+    var o = old;
+    o.cell = t.cell;
+    if (o.slotCap() > 0 and !t.ownsInline(o.hash_ptr)) gpa.rawFree(slotBlock(&o), .of(u64), @returnAddress());
+}
+
+/// Stores `val` under the interned short string `s` of a shaped table.
+/// The table moves to the child shape for a new key, or becomes a
+/// dictionary when no shape may hold the key.
+fn setShaped(gpa: Allocator, t: *Table, s: *object.String, val: Value) Error!void {
+    const sh = shapeOf(t);
+    if (sh.find(s)) |i| return t.setSlot(i, val);
+    if (val.isNil()) return;
+    if (try childShape(gpa, sh, s)) |c| {
+        if (c.n > t.slotCap()) try growSlots(gpa, t, c.n);
+        t.setShapeId(c.id);
+        t.setSlot(sh.n, val);
+        return;
+    }
+    try toDictionary(gpa, t, 1);
+    return setHash(gpa, t, Value.obj(.string, s), val);
+}
+
+/// Adds the interned short string `s`, which the shape of the shaped
+/// table `t` lacks, with the value `val`, which is not nil. Returns the
+/// slot, or null when no shape may hold the key, leaving the table as it
+/// was.
+pub fn addShaped(gpa: Allocator, t: *Table, s: *object.String, val: Value) Error!?usize {
+    const sh = shapeOf(t);
+    const c = (try childShape(gpa, sh, s)) orelse return null;
+    if (c.n > t.slotCap()) try growSlots(gpa, t, c.n);
+    t.setShapeId(c.id);
+    t.setSlot(sh.n, val);
+    return sh.n;
+}
+
+/// The child of `sh` that adds `s`, or null when the state allows no
+/// such shape.
+fn childShape(gpa: Allocator, sh: *Shape, s: *object.String) Error!?*Shape {
+    const state = @import("state.zig");
+    const g = state.stateOf(gpa) orelse return null;
+    return g.shapes.transition(gpa, sh, s, g);
+}
+
+/// True when `k` may be a key of a shape: an interned short string.
+inline fn shapeKey(k: Value) bool {
+    return k.tag == .string and k.as(object.String).flags().interned;
 }
 
 fn freeHash(gpa: Allocator, t: *Table, h: []Node) void {
@@ -272,7 +407,7 @@ fn freeArray(gpa: Allocator, t: *Table, kind: ArrayKind, ptr: [*]u64, n: usize) 
 /// and vararg tables fill their array parts this way.
 pub fn storeList(gpa: Allocator, t: *Table, start: usize, vals: []const Value) Error!void {
     const last = start + vals.len;
-    if (last > t.asize) try resize(gpa, t, last, t.hash_used);
+    if (last > t.asize) try resize(gpa, t, last, hashCount(t));
     var kind = t.kind;
     for (vals) |v| kind = joinKind(kind, v);
     if (kind == .boxed) {
@@ -293,12 +428,17 @@ pub fn getInt(t: *Table, k: i64) Value {
 }
 
 pub fn getStr(t: *Table, s: *object.String) Value {
+    if (t.isShaped()) {
+        const i = shapeOf(t).findText(s) orelse return .nil;
+        return t.slotVal(i);
+    }
     const idx = findStr(t, s) orelse return .nil;
     return t.val(idx);
 }
 
 /// Index of the hash slot holding the string key `s` (live or dead), or
-/// null.
+/// null. A shaped table has no hash slots, so this finds nothing there
+/// (`getStr`, `shapeOf`).
 pub inline fn findStr(t: *Table, s: *object.String) ?usize {
     if (t.hash_len == 0) return null;
     // A small hash part may be full, and a probe for an absent key would
@@ -438,6 +578,18 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
         const i = k.asInt();
         if (i >= 1 and i <= t.asize) return arrayStore(gpa, t, @intCast(i - 1), val);
     }
+    if (t.isShaped()) {
+        if (shapeKey(k)) return setShaped(gpa, t, k.as(object.String), val);
+        if (val.isNil()) return;
+        if (k.tag == .integer and try growArrayShaped(gpa, t, k.asInt(), val)) return;
+        try toDictionary(gpa, t, 1);
+    }
+    return setHash(gpa, t, k, val);
+}
+
+/// `set` into the hash part of a dictionary, for a key outside the array
+/// part.
+fn setHash(gpa: Allocator, t: *Table, k: Value, val: Value) Error!void {
     if (findSlot(t, k)) |idx| {
         t.setVal(idx, val);
         return;
@@ -482,6 +634,17 @@ fn insertNew(t: *Table, k: Value, val: Value) void {
 /// part whose keys run without gaps from 1 grows by half instead
 /// (`dense_growth`).
 fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void {
+    const p = arrayPlan(t, extra);
+    const hash_count = p.total + countArray(t) - p.na;
+    try resizeWith(gpa, t, p.best, hash_count, extra, extra_val);
+}
+
+const ArrayPlan = struct { best: usize, na: u32, total: u32 };
+
+/// The array size that `rehash` picks for the keys of `t` and `extra`,
+/// with the integer keys that land in it (`na`) and the count of every
+/// key (`total`).
+fn arrayPlan(t: *Table, extra: Value) ArrayPlan {
     // nums[b] counts integer keys k with 2^(b-1) < k <= 2^b.
     var nums: [64]u32 = @splat(0);
     var total_int: u32 = 0;
@@ -561,8 +724,20 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
             na = total_int;
         }
     }
-    const hash_count = total + countArray(t) - @as(u32, @intCast(na));
-    try resizeWith(gpa, t, best, hash_count, extra, extra_val);
+    return .{ .best = best, .na = @intCast(na), .total = total };
+}
+
+/// Grows the array part of a shaped table to take the integer key `k`
+/// when `rehash` would put it there, and stores `val`. Returns false when
+/// the key belongs in a hash part, and the table becomes a dictionary.
+fn growArrayShaped(gpa: Allocator, t: *Table, k: i64, val: Value) Error!bool {
+    if (k < 1) return false;
+    const key = Value.int(k);
+    const p = arrayPlan(t, key);
+    if (@as(u64, @intCast(k)) > p.best or p.best < t.asize) return false;
+    try resizeWith(gpa, t, p.best, 0, key, val);
+    try arrayStore(gpa, t, @intCast(k - 1), val);
+    return true;
 }
 
 /// The array size from which a list grows by half instead of doubling.
@@ -602,6 +777,13 @@ pub fn hashSizeExact(hcount: usize) usize {
     return hashSizeFor(hcount);
 }
 
+/// Bytes that a new table reserves for `nhash` keys: slots when a shape
+/// holds that many keys, a hash part sized exactly otherwise.
+pub inline fn keyBytes(nhash: usize) usize {
+    if (nhash <= shape.max_keys) return slotBytes(nhash);
+    return hashBytes(hashSizeExact(nhash));
+}
+
 /// Largest storage, in bytes, that a new table keeps in its own cell:
 /// as many units as `Table.Cell` counts.
 const max_inline = std.math.maxInt(@FieldType(Table.Cell, "inline_units")) * Table.inline_unit;
@@ -620,6 +802,15 @@ pub fn inlineUnits(narr: usize, nhash: usize) usize {
 pub fn inlineUnitsSlots(narr: usize, nhash: usize, slot: usize) usize {
     if (narr == 0 and nhash == 0) return 0;
     if (narr > max_inline or nhash > max_inline) return 0;
+    const bytes = keyBytes(nhash) + narr * slot;
+    if (bytes > max_inline) return 0;
+    return std.math.divCeil(usize, bytes, Table.inline_unit) catch unreachable;
+}
+
+/// `inlineUnits` for a table that keeps its keys in a hash part.
+pub fn inlineUnitsDict(narr: usize, nhash: usize, slot: usize) usize {
+    if (narr == 0 and nhash == 0) return 0;
+    if (narr > max_inline or nhash > max_inline) return 0;
     const bytes = hashBytes(hashSizeExact(nhash)) + narr * slot;
     if (bytes > max_inline) return 0;
     return std.math.divCeil(usize, bytes, Table.inline_unit) catch unreachable;
@@ -628,11 +819,19 @@ pub fn inlineUnitsSlots(narr: usize, nhash: usize, slot: usize) usize {
 /// Lays out the parts of a fresh table in the storage of its cell, as
 /// `inlineUnits` sized it: the hash part first, then the array part.
 pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
-    const hsize = hashSizeExact(nhash);
     const mem = t.inlineBytes();
-    if (hsize > 0) t.setNodes(hashIn(mem.ptr, hsize));
+    var used: usize = 0;
+    if (nhash > 0 and nhash <= shape.max_keys and t.isShaped()) {
+        t.hash_ptr = slotsIn(mem.ptr, nhash);
+        used = slotBytes(nhash);
+    } else {
+        if (t.isShaped() and nhash > 0) t.hash_used = 0;
+        const hsize = hashSizeExact(nhash);
+        if (hsize > 0) t.setNodes(hashIn(mem.ptr, hsize));
+        used = if (hsize == 0) 0 else hashBytes(hsize);
+    }
     if (narr == 0) return;
-    t.array_ptr = @ptrCast(@alignCast(mem.ptr + (if (hsize == 0) 0 else hashBytes(hsize))));
+    t.array_ptr = @ptrCast(@alignCast(mem.ptr + used));
     t.asize = @intCast(narr);
     @memset(t.words(), hole);
 }
@@ -642,6 +841,9 @@ pub fn initInline(t: *Table, narr: usize, nhash: usize) void {
 /// kind unless an entry that moves into it from the hash part does not
 /// fit, in which case it becomes boxed.
 pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void {
+    // A shaped table keeps its keys in slots, which it grows for `hcount`
+    // keys, unless no shape holds that many.
+    if (t.isShaped()) try reserveKeys(gpa, t, hcount);
     return resizeWith(gpa, t, asize, hcount, .nil, .nil);
 }
 
@@ -651,6 +853,9 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 /// kind, one that receives a table takes the `table` kind, and one that
 /// receives a value no unboxed kind holds is made boxed directly.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
+    // Entries that leave the array part go to a hash part.
+    if (t.isShaped() and asize < t.asize) try toDictionary(gpa, t, t.asize - asize);
+    if (t.isShaped()) return resizeArray(gpa, t, asize, key, val);
     const hsize = hashSizeFor(hcount);
     const old_kind = t.kind;
     const old_ptr = t.array_ptr;
@@ -717,6 +922,48 @@ fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value
     }
     if (!reuse and grown == null) freeArray(gpa, t, old_kind, old_ptr, old_n);
     freeHash(gpa, t, old_hash);
+}
+
+/// `resizeWith` for a shaped table whose array part grows: its slots stay
+/// as they are.
+fn resizeArray(gpa: Allocator, t: *Table, asize: usize, key: Value, val: Value) Error!void {
+    std.debug.assert(asize >= t.asize);
+    const old_kind = t.kind;
+    const old_ptr = t.array_ptr;
+    const old_n = t.asize;
+    var kind = old_kind;
+    if (key.tag == .integer and key.asInt() >= 1 and key.asInt() <= asize) kind = joinKind(kind, val);
+    const reuse = asize == old_n and kind == old_kind;
+    if (reuse) return;
+    const grown = if (kind == old_kind and asize > old_n and old_n > 0 and !t.ownsInline(old_ptr)) growArray(gpa, kind, old_ptr, old_n, asize) else null;
+    var new_ptr = Table.empty_words;
+    if (grown) |p| {
+        new_ptr = p;
+    } else if (asize > 0) {
+        new_ptr = if (kind == .boxed) @ptrCast((try gpa.alloc(Value, asize)).ptr) else (try gpa.alloc(u64, asize)).ptr;
+    }
+    const old: Table = .{ .hdr = t.hdr, .kind = old_kind, .array_ptr = old_ptr, .asize = old_n };
+    t.kind = kind;
+    t.array_ptr = new_ptr;
+    t.asize = @intCast(asize);
+    if (grown != null) {
+        if (kind == .boxed) @memset(t.values()[old_n..], .nil) else @memset(t.words()[old_n..], hole);
+        return;
+    }
+    if (kind == .boxed) {
+        const dst = t.values();
+        if (old_kind == .boxed) {
+            @memcpy(dst[0..old_n], old.values()[0..old_n]);
+        } else {
+            for (dst[0..old_n], 0..) |*d, idx| d.* = arrayGet(&old, idx);
+        }
+        @memset(dst[old_n..], .nil);
+    } else {
+        const dst = t.words();
+        @memcpy(dst[0..old_n], old.words()[0..old_n]);
+        @memset(dst[old_n..], hole);
+    }
+    freeArray(gpa, t, old_kind, old_ptr, old_n);
 }
 
 /// Extends an array part of `n` slots of kind `kind` in the backing
@@ -805,6 +1052,10 @@ pub fn next(t: *Table, key: Value) Error!?NextResult {
         const k = normalizeKey(key);
         if (k.tag == .integer and k.asInt() >= 1 and k.asInt() <= t.asize) {
             start = @intCast(k.asInt());
+        } else if (t.isShaped()) {
+            if (k.tag != .string) return error.InvalidKey;
+            const idx = shapeOf(t).findText(k.as(object.String)) orelse return error.InvalidKey;
+            start = t.asize + idx + 1;
         } else {
             const idx = findSlot(t, k) orelse return error.InvalidKey;
             start = t.asize + idx + 1;
@@ -816,6 +1067,14 @@ pub fn next(t: *Table, key: Value) Error!?NextResult {
         if (!v.isNil()) return .{ .key = Value.int(@intCast(i + 1)), .val = v };
     }
     var h = i - t.asize;
+    if (t.isShaped()) {
+        // Slots in the order the shape added their keys.
+        const sh = shapeOf(t);
+        while (h < sh.n) : (h += 1) {
+            if (t.slotTag(h) != .nil) return .{ .key = Value.obj(.string, sh.keys[h]), .val = t.slotVal(h) };
+        }
+        return null;
+    }
     while (h < t.hash_len) : (h += 1) {
         if (t.keyTag(h) != .nil and t.valTag(h) != .nil) return .{ .key = t.key(h), .val = t.val(h) };
     }
@@ -854,6 +1113,12 @@ pub const layout = struct {
     /// The tags of node i are `2 * i = i << tag_shift` bytes below those
     /// of node 0.
     pub const tag_shift: u6 = 1;
+
+    /// A shaped table has `shaped_bit` and the id of its shape in
+    /// `hash_used`. Slot i holds the payload at `8 * i` from `hash_ptr`
+    /// and its tag at `slot_tag - i`.
+    pub const shaped_bit: u32 = Table.shaped_bit;
+    pub const slot_tag: i32 = -2;
 
     /// A value is its payload word followed by a word whose first byte is
     /// the tag. A boxed array slot is a value, and an unboxed slot is one

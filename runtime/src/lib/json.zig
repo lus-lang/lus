@@ -373,7 +373,7 @@ const Parser = struct {
             const end = f.n + count;
             if (end > t.asize) {
                 const grow = if (last) end else @max(end, @as(usize, t.asize) * 2);
-                table.resize(gpa, t, grow, t.hash_used) catch return l.raiseMem();
+                table.resize(gpa, t, grow, table.hashCount(t)) catch return l.raiseMem();
             }
             table.storeList(gpa, t, f.n, l.stack[first..][0..count]) catch return l.raiseMem();
             f.n = end;
@@ -388,7 +388,7 @@ const Parser = struct {
             const t = f.t.?;
             // Every key that is new adds one node. Fewer nodes mean that a
             // key repeated and its earlier value is gone.
-            const used = t.hash_used;
+            const used = table.hashCount(t);
             var added: usize = 0;
             var i: usize = 0;
             while (i < pairs) : (i += 1) {
@@ -398,7 +398,7 @@ const Parser = struct {
                 if (table.storeStr(t, k, v) == null)
                     table.set(gpa, t, k.*, v.*) catch return l.raiseMem();
             }
-            if (t.hash_used != used + added) p.keys = @splat(null);
+            if (table.hashCount(t) != used + added) p.keys = @splat(null);
             t.tm_absent = 0;
             gc.barrierBack(l.g, &t.hdr);
         }
@@ -712,6 +712,11 @@ const Writer = struct {
                 max = @intCast(idx + 1);
             }
         }
+        if (t.isShaped()) {
+            for (0..table.shapeOf(t).n) |i| {
+                if (t.slotTag(i) != .nil) is_object = true;
+            }
+        }
         for (0..t.hash_len) |hi| {
             const n = t.entry(hi);
             if (n.key.tag == .nil or n.val.isNil()) continue;
@@ -745,6 +750,47 @@ const Writer = struct {
         // it, as `next` would, or ends when the key is gone.
         try w.write("{");
         var first = true;
+        if (t.isShaped()) {
+            // The slots in the order of `next`. Code that a filter or
+            // `__json` runs may change the table, and then the walk
+            // continues from its key as `next` does.
+            const hu = t.hash_used;
+            const hp = t.hash_ptr;
+            var key: Value = .nil;
+            var idx: usize = 0;
+            while (true) {
+                var kv: ?table.NextResult = null;
+                if (t.hash_used == hu and t.hash_ptr == hp) {
+                    const sh = table.shapeOf(t);
+                    while (idx < sh.n and t.slotTag(idx) == .nil) idx += 1;
+                    if (idx < sh.n) {
+                        kv = .{ .key = Value.obj(.string, sh.keys[idx]), .val = t.slotVal(idx) };
+                        idx += 1;
+                    }
+                } else {
+                    kv = table.next(t, key) catch null;
+                }
+                const r = kv orelse break;
+                key = r.key;
+                if (r.key.tag != .string) continue;
+                const fresh = w.mayRun(r.val);
+                if (fresh) try l.push(r.key);
+                defer if (fresh) {
+                    l.top -= 1;
+                };
+                if (try w.transform(r.key, r.val)) |item| {
+                    if (serializable(item)) {
+                        if (!first) try w.write(",");
+                        first = false;
+                        try w.str(r.key.as(String));
+                        try w.write(":");
+                        try w.item_(item, fresh);
+                    }
+                }
+            }
+            try w.write("}");
+            return;
+        }
         var h: usize = 0;
         while (h < t.hash_len) : (h += 1) {
             const n = t.entry(h);
