@@ -13,6 +13,7 @@ The `lus` executable runs Lus programs. Its commands are the tools of a Lus proj
 ```
 lus [options] [script [args]]
 lus <command> [arguments]
+lus +VERSION [arguments]
 ```
 
 `lus script.lus` runs a script and passes the arguments after its name to it. The script reads them from `...` and from the table `arg`. With no script and no `-e`, `lus` starts an interactive session that runs each line as it is entered. When the first argument is the name of a command, `lus` runs that command.
@@ -30,6 +31,7 @@ lus <command> [arguments]
 | [`debug`](#lus-debug) | Run a script under a debugger. |
 | [`help`](#lus-help) | Print the standard library reference for a name. |
 | [`agents`](#lus-agents) | Set a project up for coding agents. |
+| [`version`](#lus-version) | Install, list, and select releases of Lus. |
 
 ### Options
 
@@ -61,6 +63,8 @@ The options come before the script name. `lus` passes everything after the scrip
 | `LUS_PATH` | The initial value of [`package.path`](/manual/api#package.path), the list of templates that `require` searches. |
 | `LUS_JIT` | The setting of the JIT compiler. `on`, the default, compiles the functions that run often. `off` interprets everything. `baseline` uses only the first tier. `eager` and `opt-eager` compile every function on its first call, which is useful for tests. |
 | `LUS_JIT_THRESHOLD` | How many calls and loop iterations a function makes before the JIT compiles it. Change it to measure how the threshold affects the speed of a program. |
+| `LUS_HOME` | The directory that holds installed releases and the module cache, by default `~/.lus`, or `%LOCALAPPDATA%\lus` on Windows. |
+| `LUS_RELEASE_URL` | The address of a mirror of the release index that [`lus version`](#lus-version) reads, in place of `https://lus.dev/releases/`. |
 | `LUS_GC_THREADS` | The number of threads that the garbage collector marks with. The default uses up to eight and leaves one processor free. A lower value, such as `1`, leaves more processor time to other programs on the machine. |
 
 ### Exit status
@@ -203,6 +207,43 @@ lus agents init [dir]
 ```
 
 Adds instructions for writing and testing Lus to a project, where coding agents read them. The command writes the agent skills of the running version into `dir/.agents/skills` and links `.claude/skills` to them. It also adds a Lus section to `AGENTS.md`. `dir` defaults to the current directory. Running the command again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
+
+## lus version
+
+```
+lus version [list [--remote [channel]] | install request | use request | remove version | which [request]] [--json]
+lus +request [arguments]
+```
+
+Installs releases of Lus side by side and selects the one that `lus` runs. A project written for an older release keeps running under that release while other projects use a newer one. The releases live in the Lus home, `~/.lus` by default, which [`LUS_HOME`](#environment-variables) changes. The installers put `~/.lus/bin` on `PATH`, where `lus` is the default release.
+
+A request names a release. `2.0.3` is that exact release. `2.0` is the newest installed or published `2.0.x`. `2` is the newest `2.x.y`. `stable` and `unstable` are the newest releases of the two channels. The unstable channel holds weekly builds of the development branch.
+
+| Command | Effect |
+| --- | --- |
+| `lus version` | Print the version of the running `lus`. |
+| `lus version list` | List the installed releases and mark the default. `--remote` lists the published releases of a channel instead. |
+| `lus version install request` | Download a release, verify its signature and digest, and install it. The first release installed becomes the default. |
+| `lus version use request` | Make an installed release the default. |
+| `lus version remove version` | Delete an installed release. The default release cannot be removed. |
+| `lus version which [request]` | Print the path of the executable of an installed release, by default the default release. |
+
+The following commands install the newest `2.0.x` release, make it the default, and print where it is.
+
+```bash
+lus version install 2.0
+lus version use 2.0
+lus version which
+```
+
+`lus +request` runs any command under another installed release. It must be the first argument. `lus +2.0 test` runs the tests of a project under the newest installed `2.0.x`, whatever the default is. `lus +request` never downloads, so a missing release fails with the command that installs it.
+
+```bash
+lus +2.0 test
+lus +unstable app.lus
+```
+
+`--json` prints one JSON object per command for scripts. The output, the exit statuses, and the layout of the Lus home are the same in every release from 2.0 on. The exit status is 0 on success, 1 when a download or a file operation fails, 2 for malformed arguments, 3 when no release matches the request, 4 when a signature or a digest does not verify, and 5 when `remove` names the default release.
 
 ## Related pages
 

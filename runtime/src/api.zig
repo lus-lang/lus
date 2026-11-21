@@ -18,7 +18,9 @@ const Global = state.Global;
 const Error = state.Error;
 
 /// The version of the runtime, as `lus -v` prints it.
-pub const version = "Lus 2.0.0-dev";
+/// The version that `lus -v` prints. A release build of an unstable
+/// channel sets it with `-Dversion` (`spec/tools/version.md`).
+pub const version = if (@import("build_options").version) |v| "Lus " ++ v else "Lus 2.0.0-dev";
 
 pub const Options = struct {
     /// Libraries to open. All by default.

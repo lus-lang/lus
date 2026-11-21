@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
         .archive = b.option(bool, "archive", "Include vector.archive compression (default: true)"),
         .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
+        .version = b.option([]const u8, "version", "The version the binary reports, such as 2.0.0-unstable.7 (default: the version in build.zig.zon)"),
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -85,6 +86,16 @@ pub fn build(b: *std.Build) void {
     debug_run.addFileInput(b.path("../tests/debug/fixture.lus"));
     debug_run.addFileInput(b.path("../tests/debug/coroutine.lus"));
     debug_step.dependOn(&debug_run.step);
+
+    // `lus version` and `lus +REQUEST` against a release served on
+    // loopback by ../tests/version (needs node).
+    const version_step = b.step("test-version", "Run the version manager against a loopback release server");
+    const version_run = b.addSystemCommand(&.{"node"});
+    version_run.setName("lus version (loopback release)");
+    version_run.addFileArg(b.path("../tests/version/version.test.mjs"));
+    version_run.addArtifactArg(exe);
+    version_run.addFileInput(b.path("../tests/lib/release.mjs"));
+    version_step.dependOn(&version_run.step);
 
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
@@ -286,6 +297,7 @@ const Features = struct {
     archive: ?bool = null,
     jit: bool = true,
     op_profile: bool = false,
+    version: ?[]const u8 = null,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -310,6 +322,7 @@ const Features = struct {
         options.addOption(bool, "archive", r.archive);
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
+        options.addOption(?[]const u8, "version", f.version);
         return options;
     }
 };

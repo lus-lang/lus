@@ -6,7 +6,12 @@ name: Release
 # are packaged on Linux, and the Windows installer is compiled and smoke
 # tested on Windows. The tag must match the version in
 # runtime/build.zig.zon. The release is created as a draft so a maintainer
-# reviews it before publishing.
+# reviews it before publishing. Publishing it runs release-index.yml, which
+# adds it to the signed index that `lus version` reads.
+#
+# unstable.yml calls this workflow with a tag vX.Y.Z-unstable.N, where
+# build.zig.zon holds X.Y.Z-dev. The binaries then report that version,
+# and the release is published at once as a prerelease.
 
 on:
   push:
@@ -16,6 +21,12 @@ on:
       tag:
         description: "Tag to build, for example v2.0.0"
         required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to build, such as v2.0.0-unstable.7"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -24,7 +35,7 @@ env:
   ZIG_VERSION: "0.17.1"
   NODE_VERSION: "24.7.0"
   PNPM_VERSION: "10.18.0"
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -40,14 +51,20 @@ jobs:
         shell: bash
         run: |
           version="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
-          if [ "v$version" != "$TAG" ]; then
+          # An unstable build of X.Y.Z-dev is tagged vX.Y.Z-unstable.N and
+          # stamps that version into the binaries.
+          if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-unstable\.[0-9]+$ && "$version" == "${BASH_REMATCH[1]}-dev" ]]; then
+            echo "VERSION_FLAG=-Dversion=${TAG#v}" >> "$GITHUB_ENV"
+          elif [ "v$version" != "$TAG" ]; then
             echo "tag $TAG does not match build.zig.zon version $version" >&2
             exit 1
+          else
+            echo "VERSION_FLAG=" >> "$GITHUB_ENV"
           fi
       - name: Test before building
         working-directory: runtime
         run: |
-          zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
+          zig build test test-embed test-bundle test-check test-doc test-version -Doptimize=ReleaseSafe
           zig build -Doptimize=ReleaseSafe
           zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -63,8 +80,8 @@ jobs:
           mkdir -p ../dist
           for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
             prefix="../out/$target"
-            zig build -Doptimize=ReleaseFast -Dtarget="$target" --prefix "$prefix"
-            zig build lib -Doptimize=ReleaseFast -Dtarget="$target" --prefix "$prefix"
+            zig build -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
+            zig build lib -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
             # The license of Lus and of every component compiled into the
             # archive ship at its root.
             cp ../LICENSE.md "$prefix/LICENSE.md"
@@ -82,7 +99,7 @@ jobs:
               *) tar -C "$prefix" -czf "../dist/$name.tar.gz" . ;;
             esac
           done
-          zig build wasm
+          zig build wasm $VERSION_FLAG
           cp zig-out/wasm/lus.wasm ../dist/lus.wasm
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -177,8 +194,9 @@ jobs:
             Get-Content setup.log
             throw "setup exited with $($setup.ExitCode)"
           }
-          $root = "$env:LOCALAPPDATA\Programs\Lus"
-          foreach ($file in "bin\lus.exe", "include\lus.h", "LICENSE.md", "THIRD_PARTY_NOTICES.md") {
+          $root = "$env:LOCALAPPDATA\lus"
+          $version = $env:TAG.Substring(1)
+          foreach ($file in "bin\lus.exe", "default", "versions\$version\bin\lus.exe", "versions\$version\channel", "versions\$version\include\lus.h", "versions\$version\LICENSE.md", "versions\$version\THIRD_PARTY_NOTICES.md") {
             if (-not (Test-Path "$root\$file")) {
               Get-Content setup.log
               throw "$file was not installed"
@@ -192,14 +210,17 @@ jobs:
           $output = & "$root\bin\lus.exe" hello.lus
           if ("$output" -ne "installer-source-ok") { throw "lus printed $output" }
           $userPath = (Get-ItemProperty HKCU:\Environment).Path
-          if ($userPath -notlike "*\Programs\Lus\bin*") {
+          if ($userPath -notlike "*\lus\bin*") {
             throw "user PATH was not updated: $userPath"
           }
+          $env:LUS_HOME = $root
+          $listed = & "$root\bin\lus.exe" version list --json | ConvertFrom-Json
+          if ($listed.default -ne $version) { throw "lus version list reported $($listed.default)" }
       - name: Silent uninstall smoke test
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $root = "$env:LOCALAPPDATA\Programs\Lus"
+          $root = "$env:LOCALAPPDATA\lus"
           Start-Process -Wait "$root\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES'
           # The uninstaller hands off to a copy of itself, so wait for the
           # files and the PATH entry to go.
@@ -207,7 +228,7 @@ jobs:
           while ($true) {
             $removed = -not (Test-Path "$root\bin\lus.exe")
             $userPath = (Get-ItemProperty HKCU:\Environment -ErrorAction SilentlyContinue).Path
-            if ($removed -and ($userPath -notlike "*\Programs\Lus*")) { break }
+            if ($removed -and ($userPath -notlike "*\lus\bin*")) { break }
             if ((Get-Date) -gt $deadline) { throw "uninstall did not complete" }
             Start-Sleep -Seconds 2
           }
@@ -250,6 +271,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$TAG" == *-unstable.* ]]; then
+            printf 'An unstable build of %s.\n' "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+            exit 0
+          fi
           # The notes are the CHANGELOG.md section of this version, from
           # its "## VERSION" heading to the next "## " heading. A
           # prerelease tag such as v2.0.0-rc.1 uses the section of 2.0.0.
@@ -277,4 +302,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$TAG" dist/* --draft --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          if [[ "$TAG" == *-unstable.* ]]; then
+            gh release create "$TAG" dist/* --prerelease --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" dist/* --draft --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi

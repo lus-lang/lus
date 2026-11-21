@@ -28,6 +28,7 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 - `src/tools`: `lus test` and the other developer tools, including `lus compile`, which writes a script as a binary chunk.
 - `src/api.zig`: the embedding interface used from Zig. `src/capi.zig`: the C interface declared in `include/lus.h`. `src/main.zig`: the CLI. `src/wasm.zig`: the root of the WebAssembly build, which exports the C interface.
 - `src/bundle.zig`: the payload format of standalone executables made by `lus build` (`src/tools/build.zig`).
+- `src/tools/version.zig`: `lus version` and `lus +VERSION` (`../spec/tools/version.md`). It uses `src/home.zig` for the Lus home, `src/httpc.zig` for downloads, `src/signed.zig` for signed documents, and `src/semver.zig` for version numbers. `src/release_keys.zig` holds the root keys that every binary trusts.
 
 ## Writing a native function
 

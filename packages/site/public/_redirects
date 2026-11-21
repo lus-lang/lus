@@ -1,0 +1,5 @@
+# The signed release index that `lus version` reads (spec/tools/version.md).
+# release-index.yml publishes both files as assets of the release-index
+# release. lus follows the redirect and verifies the signatures itself.
+/releases/index.json https://github.com/lus-lang/lus/releases/download/release-index/index.json 302
+/releases/keys.json https://github.com/lus-lang/lus/releases/download/release-index/keys.json 302

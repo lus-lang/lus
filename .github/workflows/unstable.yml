@@ -1,0 +1,59 @@
+name: Unstable
+
+# Publishes the unstable channel of `lus version` (spec/tools/version.md).
+# Every week, or on demand, the newest commit of the development branch
+# is tagged vX.Y.Z-unstable.N, where X.Y.Z-dev is the version in
+# runtime/build.zig.zon and N is the run number of this workflow, which
+# only grows. release.yml builds and publishes it as a prerelease, and
+# release-index.yml adds it to the signed release index.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unstable
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag the unstable build
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Create the tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
+          case "$version" in
+            *-dev) ;;
+            *) echo "build.zig.zon holds $version, and an unstable build needs X.Y.Z-dev" >&2; exit 1 ;;
+          esac
+          tag="v${version%-dev}-unstable.$GITHUB_RUN_NUMBER"
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build and publish
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit
+
+  index:
+    name: Add to the release index
+    needs: [tag, release]
+    uses: ./.github/workflows/release-index.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit

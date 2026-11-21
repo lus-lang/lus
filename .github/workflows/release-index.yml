@@ -1,0 +1,86 @@
+name: Release index
+
+# Adds a published release to the signed release index that `lus version`
+# reads at https://lus.dev/releases/index.json (spec/tools/version.md).
+# The site redirects that address to the assets of the release named
+# release-index, a prerelease that only this workflow changes, so
+# releases/latest never points at it.
+#
+# A maintainer publishing a draft stable release starts this workflow.
+# unstable.yml calls it for each unstable build, because a release that
+# the workflow token creates starts no other workflow.
+#
+# The signing key is the repository secret LUS_RELEASE_SIGNING_SEED with
+# the identifier LUS_RELEASE_SIGNING_KEY_ID. The root key signed the key
+# list in packaging/release/keys.json offline, and this workflow publishes
+# that file unchanged.
+
+on:
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to add, for example v2.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-index
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.7.0"
+  TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+jobs:
+  index:
+    name: Sign and publish the index
+    if: ${{ github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v2.') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build the index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LUS_RELEASE_SIGNING_SEED: ${{ secrets.LUS_RELEASE_SIGNING_SEED }}
+          LUS_RELEASE_SIGNING_KEY_ID: ${{ secrets.LUS_RELEASE_SIGNING_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f packaging/release/keys.json || { echo "packaging/release/keys.json is missing" >&2; exit 1; }
+          mkdir -p out
+          gh release download release-index --pattern index.json --dir prev 2>/dev/null || mkdir -p prev
+          gh release download "$TAG" --pattern SHA256SUMS --dir out
+          gh release view "$TAG" --json assets > out/assets.json
+          node tools/release-index.mjs index \
+            --tag "$TAG" \
+            --sums out/SHA256SUMS \
+            --assets out/assets.json \
+            --base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            --previous prev/index.json \
+            --out out/index.json
+          cp packaging/release/keys.json out/keys.json
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view release-index >/dev/null 2>&1; then
+            gh release create release-index --prerelease --title "Release index" \
+              --notes "The signed index of Lus releases that lus version reads. Only release-index.yml changes it."
+          fi
+          gh release upload release-index out/index.json out/keys.json --clobber

@@ -107,7 +107,7 @@ The manager learns about releases from the _release index_, a signed JSON docume
 ```json
 {
   "schema": 1,
-  "generated": "2027-02-01T12:00:00Z",
+  "signed": "2027-02-01T12:00:00Z",
   "key": "lus-release-2027-1",
   "channels": {"stable": "2.0.3", "unstable": "2.1.0-unstable.7"},
   "releases": [
@@ -124,12 +124,12 @@ The manager learns about releases from the _release index_, a signed JSON docume
 }
 ```
 
-The targets are named `aarch64-macos`, `x86_64-macos`, `aarch64-linux-musl`, `x86_64-linux-musl`, and `x86_64-windows`, which are the names of the release archives in `packaging/install`. A later release may add targets.
+The targets are named `aarch64-macos`, `x86_64-macos`, `aarch64-linux-musl`, `x86_64-linux-musl`, `x86_64-windows`, and `aarch64-windows`, which are the names of the release archives that `release.yml` builds. A later release may add targets.
 
 `install` verifies in three steps. It installs nothing unless all three pass.
 
 1. The index must carry a valid signature by a signing key of the Lus release process. Each binary embeds the root key of the release process, which signs the list of signing keys at `https://lus.dev/releases/keys.json`, as section 5 describes for atmosphere.
-2. The `generated` time of the index must not be older than the one in `index/seen`. This rejects an attacker who replays an old index to keep a user on a release with a known flaw. After the check, the manager records the new time.
+2. The `signed` time of the index must not be older than the one in `index/seen`. This rejects an attacker who replays an old index to keep a user on a release with a known flaw. After the check, the manager records the new time.
 3. The SHA-256 digest of the downloaded archive must equal the `sha256` of its asset. Its length must equal `size`.
 
 A new signing key needs only a new key list, which the root key signs. Key rotation therefore never strands an installed release.
@@ -213,10 +213,12 @@ Two kinds of servers provide remote modules.
 
 A remote module resolves the names it requires relative to itself. `require` finds the module that calls it from the chunk of the calling function, so a function defined in a remote module resolves relative to that module wherever it is called from.
 
-A name that is a URL loads that URL. A name of the standard library, or a name already in `package.loaded` or `package.preload`, loads as usual. Any other name `a.b` resolves as follows.
+A name that is a URL loads that URL. A name of a standard library module loads that module. Any other name `a.b` resolves as follows, before `package.loaded` and `package.preload` are consulted, so a module of the program with the same name never takes the place of a module of the package.
 
-- In a module of an atmosphere bundle, `a.b` is the file `a/b.lus` or `a/b/init.lus` at the root of the bundle. Its key in `package.loaded` is the URL of the package followed by `#a.b`, such as `https://atmosp.here/2.0/dates.lus#dates.zones`. A package keeps its modules below a directory named after it, such as `dates/zones.lus`, so the same name works in the package's own repository, where its root is on `package.path`.
+- In a module of an atmosphere bundle, `a.b` is the file `a/b.lus` or `a/b/init.lus` at the root of the bundle. Its key in `package.loaded` is the URL of the package followed by `#a.b`, such as `https://atmosp.here/2.0/dates.lus#dates.zones`. A package keeps its modules below a directory named after it, such as `dates/zones.lus`, so the same name works in the package's own repository, where its root is on `package.path`. A name that names no file of the bundle raises an error.
 - In a module from a generic server, `a.b` is the URL `a/b.lus` relative to the directory of the module's URL, then `a/b/init.lus`. Its key is that URL.
+
+A _self-contained bundle_ holds every package it depends on. The author copies each dependency to the root of the bundle as its own modules, such as `strings.lus` and `strings/`, and the package loads it with `require("strings")`, which the rule above resolves inside the bundle. `atmosp.here` accepts only self-contained bundles, so their release documents list no `requires` and their packages make no network request for code when they run.
 
 A remote module never loads a file from the local filesystem by name. A module from the network that could read local modules would run code that its author never saw.
 
@@ -289,9 +291,9 @@ An atmosphere module URL has one of two forms.
 - `https://HOST/LINE/NAME.lus` names the newest release of the package `NAME` for the line `LINE`, which is a Lus release line such as `2.0`, or `unstable`.
 - `https://HOST/LINE/NAME@VERSION.lus` names one release, which never changes.
 
-The first release of a package for a stable line fixes its major and minor version on that line. Every later release raises only the patch number. The server refuses any other release. A program that uses a line URL therefore receives fixes and never a change of interface. A change of interface reaches the next Lus line.
+An author publishes a release by pushing a signed tag named `VERSION@LINE`, such as `1.4.0@2.0`. The first release of a package for a stable line fixes its major and minor version on that line. Every later release raises only the patch number. The server refuses any other release. Deleting a tag withdraws its release: the line URL stops resolving to it, and its pinned URL answers with `"yanked": true`. A program that uses a line URL therefore receives fixes and never a change of interface. A change of interface reaches the next Lus line.
 
-The client enforces the rule as well. It records the version of the release that a line URL last resolved to. It accepts a later release document for that URL only when its version has the same major and minor version and a patch number at least as high. This also stops an attacker who replays an older signed document to hold a program on a release with a known flaw. A violation is an error that names both versions.
+The client enforces the rule as well. It records the version and the `signed` time of the release document that a line URL last resolved to. It accepts a later release document for that URL only when its version has the same major and minor version and its `signed` time is not older. A lower patch number is accepted, because withdrawing a release moves the line URL back to the newest release that still has a tag, and the server signs that document anew. The time check stops an attacker who replays an older signed document to hold a program on a release with a known flaw. A violation is an error that names both versions.
 
 ### Release documents
 
@@ -359,6 +361,7 @@ The text before the first annotation is the description, in Markdown. The annota
 - `@license EXPR` is an SPDX license expression. Required.
 - `@permission PLEDGE DESCRIPTION` declares a permission that functions of the package use, in the form `pledge` accepts, with the most precise value the package knows. One annotation per permission.
 - `@flag NAME TYPE [DEFAULT] DESCRIPTION` declares a build flag. `TYPE` is `boolean`, `number`, `string`, or a list of strings such as `"fast"|"small"`. One annotation per flag.
+- `@includes NAME URL VERSION` records a dependency copied into a self-contained bundle: its package name, the URL it came from, and its version. One annotation per dependency.
 - `@homepage URL` and `@repository URL` link to the project. Optional.
 
 A blank line separates the header from the first declaration, so the header documents the module and not that declaration. `lus doc` adds a `package` object with these fields to its JSON model and to the frontmatter of its Markdown output. `lus check` reports a header that lacks a required annotation (`package-header`), a read of a flag that the header does not declare (`package-flag`), and a top-level call of `pledge` in a module that has a header (`package-pledge`), which would act on the permissions of the program. These codes are stable, so the atmosphere server reports the same problems by the same names.
@@ -366,6 +369,8 @@ A blank line separates the header from the first declaration, so the header docu
 ### Build flags of a package
 
 A program passes a flag to a package with the package name as a prefix, as in `lus -F dates.tzdata=/opt/tz main.lus`. Inside the modules of `dates`, `flags.tzdata` is `"/opt/tz"`. The runtime compiles the modules of each bundle with a flags table of their own, which holds the flags that carry the package's prefix, with the prefix removed, and the declared defaults of the others. A package therefore sees only its own flags. The flags of two packages never collide with each other or with the program's flags. Branch removal by flags works in package modules as it does in the program. In the package's own repository the package is the program, so its flags have no prefix there.
+
+A dependency copied into a self-contained bundle keeps its own flags. The modules of a name that an `@includes` annotation of the main module lists, such as `dates.lus` and every file below `dates/`, compile with the flags that carry the prefix `dates.`. Every other module of the bundle compiles with the flags of the bundle's own package. `-F dates.tzdata=/opt/tz` therefore reaches `dates` whether the program loads it by URL or through a package that copied it.
 
 ## 7. The language server
 
