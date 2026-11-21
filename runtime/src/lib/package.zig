@@ -371,8 +371,7 @@ fn runLoader(l: *Thread, loaded: *Table, key: Value, loader: Value, extra: Value
 /// fingerprint of the result to `fp`, so a compiled chunk is shared only
 /// between states that see the same flags. String values stay on the
 /// stack while the caller compiles.
-pub fn packageFlags(l: *Thread, pkg: *const remote.Package, sub: ?[]const u8, map: *std.StringHashMapUnmanaged(Value), fp: *std.ArrayList(u8)) Error!void {
-    const gpa = l.g.gpa;
+pub fn packageFlags(l: *Thread, gpa: std.mem.Allocator, pkg: *const remote.Package, sub: ?[]const u8, map: *std.StringHashMapUnmanaged(Value), fp: *std.ArrayList(u8)) Error!void {
     const prefix = pkg.flagPrefix(sub);
     if (api.flagsTable(l.g)) |prog| {
         var it = prog.iterator();
@@ -425,8 +424,10 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
     const caller_url: ?[]const u8 = if (caller) |c| (if (remote.isUrl(c)) c[0 .. std.mem.indexOfScalar(u8, c, '#') orelse c.len] else null) else null;
     const is_url = remote.isUrl(name);
     if (!is_url and (caller_url == null or isBuiltinName(name))) return null;
-    const gpa = l.g.gpa;
     const st = remote.store orelse return l.raiseFmt("{s}", .{remote.unavailable});
+    // Every buffer here goes through the store, which writes its messages
+    // with its own allocator. The state's allocator is only for the state.
+    const gpa = st.gpa;
     var why: std.ArrayList(u8) = .empty;
     defer why.deinit(gpa);
 
@@ -516,7 +517,7 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
         st.unlock();
         return l.raiseMem();
     };
-    if (pkg.kind == .atmosphere) packageFlags(l, pkg, sub, &fmap, &cache_key) catch |e| {
+    if (pkg.kind == .atmosphere) packageFlags(l, gpa, pkg, sub, &fmap, &cache_key) catch |e| {
         st.unlock();
         return e;
     };
@@ -533,7 +534,7 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
         const r = @import("../compile/codegen.zig").compile(l.g, code, .{ .chunkname = chunkname, .flags = &fmap, .fold_flag_reads = true, .debug = l.g.debugger != null }) catch return l.raiseMem();
         switch (r) {
             .err => |msg| {
-                defer gpa.free(msg);
+                defer l.g.gpa.free(msg);
                 return l.raiseFmt("error loading module '{s}' from {s}:\n\t{s}", .{ name, pkg_url, msg });
             },
             .ok => |p| {
@@ -550,16 +551,19 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
     if (cached == null) {
         // Every later state loads the compiled chunk.
         if (loader.tag == .closure) {
-            if (@import("../compile/dump.zig").dump(gpa, loader.as(object.Closure).proto, false)) |bin| {
+            // The store outlives this state, so its entries use the
+            // allocator of the store.
+            const sg = gpa;
+            if (@import("../compile/dump.zig").dump(sg, loader.as(object.Closure).proto, false)) |bin| {
                 st.lock();
                 defer st.unlock();
                 if (!st.compiled.contains(cache_key.items)) {
-                    const k = gpa.dupe(u8, cache_key.items) catch null;
-                    if (k) |kk| st.compiled.put(gpa, kk, bin) catch {
-                        gpa.free(kk);
-                        gpa.free(bin);
-                    } else gpa.free(bin);
-                } else gpa.free(bin);
+                    const k = sg.dupe(u8, cache_key.items) catch null;
+                    if (k) |kk| st.compiled.put(sg, kk, bin) catch {
+                        sg.free(kk);
+                        sg.free(bin);
+                    } else sg.free(bin);
+                } else sg.free(bin);
             } else |_| {}
         }
     }

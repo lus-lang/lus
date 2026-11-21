@@ -167,6 +167,10 @@ pub const Index = struct {
 
 /// Where the index looks for modules and which files it may read.
 pub const Options = struct {
+    /// The allocator of the process, which owns the index. The index
+    /// outlives the state that builds it, so it must never use the
+    /// allocator of that state.
+    gpa: Allocator,
     /// The `package.path` that the program starts with.
     path: []const u8,
     /// Decides whether the command line could ever let the program read a
@@ -213,7 +217,7 @@ fn resolveName(gpa: Allocator, io: std.Io, name: []const u8, opts: Options) !?[]
 /// The index never runs code.
 pub fn build(l: *state.Thread, src: []const u8, chunkname: []const u8, opts: Options) !*Index {
     const g = l.g;
-    const gpa = g.gpa;
+    const gpa = opts.gpa;
     const io = g.io;
     const ix = try gpa.create(Index);
     errdefer gpa.destroy(ix);
@@ -300,7 +304,11 @@ pub fn build(l: *state.Thread, src: []const u8, chunkname: []const u8, opts: Opt
             defer g.gc_stopped = was_stopped;
             const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = mname, .flags = api.flagsTable(g) });
             switch (r) {
-                .err => |m| entry.err = m,
+                .err => |m| {
+                    // The compiler allocates the message with the state.
+                    defer g.gpa.free(m);
+                    entry.err = try gpa.dupe(u8, m);
+                },
                 .ok => |p| entry.chunk = dump.dump(gpa, p, false) catch |e| switch (e) {
                     error.OutOfMemory => return error.OutOfMemory,
                     // A module the binary format cannot hold compiles at
@@ -441,4 +449,30 @@ test "scan" {
     // A constant key on _G is not dynamic.
     try std.testing.expect(!(try scan(gpa, arena, "local p = _G.print\nlocal q = _G['print']", "=t")).?.dynamic);
     try std.testing.expect((try scan(gpa, arena, "local x = = 1", "=t")) == null);
+}
+
+test "the index outlives the state that builds it" {
+    // The CLI frees the index after it closes the state, so the index owns
+    // its memory through the allocator of the process.
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "good.lus", .data = "return { x = 1 }\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "bad.lus", .data = "local x = = 1\n" });
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const path = try std.fmt.allocPrint(gpa, "{s}/?.lus", .{dir});
+    defer gpa.free(path);
+    const l = try api.newState(gpa, io);
+    const Skip = struct {
+        fn none(_: []const u8) bool {
+            return false;
+        }
+    };
+    const ix = try build(l, "local g = require(\"good\")\nlocal b = require(\"bad\")\n", "=main", .{ .gpa = gpa, .path = path, .skip = Skip.none });
+    try std.testing.expectEqual(@as(usize, 2), ix.entries.items.len);
+    api.close(l);
+    ix.deinit();
+    gpa.destroy(ix);
 }
