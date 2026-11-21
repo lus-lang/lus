@@ -121,7 +121,7 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
     const kind = t.kind;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
     if (t.hash_len != hlen or t.asize != alen) learnTableSize(l.g, t);
-    if (t.kind != kind and t.kind == .boxed) learnListKind(l.g, t);
+    if (t.kind != kind) learnListKind(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
 
