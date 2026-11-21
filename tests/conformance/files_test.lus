@@ -96,3 +96,34 @@ local function written_text_reads_back_from_a_file_test()
     assert(content == "Hello Container")
     fs.remove(path)
 end
+
+-- file:lines leaves the file open at the end of the input and when a loop
+-- breaks, as in Lua. Only io.lines(path), which opened the file itself,
+-- closes it.
+local function file_lines_leaves_the_file_open_test()
+    local f = assert(io.open("./lines_open.txt", "w"))
+    f:write("a\nb\nc\n")
+    f:close()
+    local h = assert(io.open("./lines_open.txt"))
+    local n = 0
+    for _ in h:lines(65536) do n = n + 1 end
+    assert(n == 1)
+    assert(io.type(h) == "file")
+    assert(h:close() == true)
+    local g = assert(io.open("./lines_open.txt"))
+    for _ in g:lines() do break end
+    assert(g:read("l") == "b")
+    assert(g:close() == true)
+end
+
+-- proc:lines leaves the pipe open, so close returns the status of the
+-- program.
+local function popen_lines_then_close_returns_the_status_test()
+    if not os.execute() then skip("no shell") end
+    local p = assert(io.popen("printf 'x\\ny\\n'; exit 3"))
+    local k = 0
+    for _ in p:lines() do k = k + 1 end
+    assert(k == 2)
+    local ok, how, code = p:close()
+    assert(ok == nil and how == "exit" and code == 3)
+end

@@ -35,4 +35,4 @@ print(total)                       --> 30
 fs.remove(path)
 ```
 
-A file opened in text mode validates every line as UTF-8, as [`io.open`](/manual/api#io.open) describes. `file:lines(...)` reads an open handle the same way.
+A file opened in text mode validates every line as UTF-8, as [`io.open`](/manual/api#io.open) describes. `file:lines(...)` reads an open handle the same way, with one difference: it returns only the iterator and leaves the file open at the end of the input, as in Lua, so the program that opened the file closes it.

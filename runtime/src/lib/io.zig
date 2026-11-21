@@ -717,7 +717,11 @@ fn linesAux(l: *Thread) Error!u32 {
     return count;
 }
 
-fn makeLines(l: *Thread, hv: Value, close_at_eof: bool, first_fmt: u32) Error!u32 {
+/// Pushes the iterator of a `lines` call. `io.lines` also returns the file
+/// as the closing value of a generic `for`, which closes it when the loop
+/// ends. `file:lines()` returns only the iterator, since the program that
+/// opened the file closes it, as in Lua.
+fn makeLines(l: *Thread, hv: Value, close_at_eof: bool, closing: bool, first_fmt: u32) Error!u32 {
     const nargs = l.argCount();
     const nf: u32 = if (nargs >= first_fmt) nargs - first_fmt + 1 else 0;
     const n = state.newNative(l.g, linesAux, "lines", 2 + nf) catch return l.raiseMem();
@@ -726,6 +730,7 @@ fn makeLines(l: *Thread, hv: Value, close_at_eof: bool, first_fmt: u32) Error!u3
     var i: u32 = 0;
     while (i < nf) : (i += 1) n.upvalues()[2 + i] = l.arg(first_fmt + i);
     try l.push(Value.obj(.native, n));
+    if (!closing) return 1;
     try l.push(.nil);
     try l.push(.nil);
     try l.push(hv);
@@ -734,18 +739,18 @@ fn makeLines(l: *Thread, hv: Value, close_at_eof: bool, first_fmt: u32) Error!u3
 
 fn fLines(l: *Thread) Error!u32 {
     _ = try checkHandle(l, 1);
-    return makeLines(l, l.arg(1), false, 2);
+    return makeLines(l, l.arg(1), false, false, 2);
 }
 
 fn ioLines(l: *Thread) Error!u32 {
     if (l.arg(1).isNil()) {
         const v = try getDefault(l, "io.input");
-        return makeLines(l, v, false, 2);
+        return makeLines(l, v, false, true, 2);
     }
     const path = try aux.checkBytes(l, 1);
     try checkOpen(l, path, "r");
     const v = (try openFile(l, path, "r", false)) orelse return l.raise(l.err);
-    return makeLines(l, v, true, 2);
+    return makeLines(l, v, true, true, 2);
 }
 
 // --- processes and temporary files ------------------------------------
