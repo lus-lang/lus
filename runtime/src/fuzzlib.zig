@@ -87,7 +87,8 @@ const json = target(
     \\    if ok2 then
     \\        local ok3, v2 = catch fromjson(t)
     \\        if not ok3 then fail("tojson output does not parse:", t, v2) end
-    \\        -- tojson writes null in every hole, so its output parses back to
+    \\        -- tojson writes null in every hole of an array, and the decimal
+    \\        -- keys of a sparse table as strings, so its output parses back to
     \\        -- a value that formats to the same text. An empty object and a
     \\        -- trailing null have no key, so v itself may differ from v2.
     \\        local t2 = tojson(v2)

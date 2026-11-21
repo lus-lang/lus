@@ -87,7 +87,7 @@ print(catch fromjson("99999999999999999999"))   --> false  JSON parse error at p
 
 A Lus table can be a list or a record, while JSON has a separate form for each: an array and an object. `tojson` chooses the form from the keys of the table. The empty table and a table whose keys are all positive integers become JSON arrays. The array runs from 1 to the largest key, with `null` in each missing position, so a list with a `nil` in the middle keeps its length. Every other table becomes a JSON object that contains the string keys of the table and omits keys of every other type.
 
-A `nil` at the end of a list has no key, so it leaves no `null` behind. An array whose largest key is above 10 must fill more than half of its positions, so that a table such as `{[1000000] = true}` cannot produce a million `null` values. A sparser table raises an error.
+A `nil` at the end of a list has no key, so it leaves no `null` behind. When the largest key is above 10 and half or fewer of the positions up to it hold a value, the table becomes a JSON object instead, with the integer keys written as decimal strings in ascending order. A table such as `{[1000000] = true}` therefore becomes `{"1000000":true}` and not a million `null` values. The shape of the output then depends on the data, so a program that reads it back must accept both forms, or keep its lists dense.
 
 ```lus
 global print, tojson
