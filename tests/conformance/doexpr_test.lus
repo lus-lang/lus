@@ -291,3 +291,12 @@ end
 -- Finish
 -- =============================================================================
 
+
+-- a do expression initializes a const local, alone or after other values
+local function do_expression_initializes_a_const_local_test()
+    local x <const> = do provide 1 end
+    local a, b <const> = 5, do local t = 2 provide t * 3 end
+    assert(x == 1 and a == 5 and b == 6)
+    local _, e = load("local y <const> = do provide 1 end y = 2")
+    assert(e and e:find("attempt to assign to const variable 'y'", 1, true), e)
+end
