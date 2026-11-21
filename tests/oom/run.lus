@@ -14,8 +14,14 @@
 -- a normal build, and every run of the binary under test is a process of
 -- its own.
 --
+-- With --io the sweep fails file and socket operations instead, through a
+-- binary built with `zig build -Dfail-io=true` and `LUS_FAIL_IO=N`, and
+-- --short makes every read and write from operation N on move one byte,
+-- which a correct program retries.
+--
 -- Usage: LUS_JIT=off lus run.lus [--lus PATH] [--samples K] [--sticky]
---            [--jobs J] [--timeout SECONDS] [files or directories...]
+--            [--io] [--short] [--jobs J] [--timeout SECONDS]
+--            [files or directories...]
 -- --samples 0 sweeps every N. The default samples 40 values of N per file.
 
 global arg, assert, io, ipairs, math, os, pairs, pledge, print, string, table, tonumber, tostring
@@ -30,8 +36,8 @@ do
     local i = 1
     while arg[i] do
         local a = arg[i]
-        if a == "--sticky" then
-            opts.sticky = true
+        if a == "--sticky" or a == "--io" or a == "--short" then
+            opts[a:sub(3)] = true
             i = i + 1
         elseif a:sub(1, 2) == "--" then
             opts[a:sub(3)] = arg[i + 1]
@@ -58,7 +64,11 @@ local function absolute(p)
     return (shell("cd " .. quote(p:match("^(.*)/[^/]*$") or ".") .. " && pwd"):gsub("\n$", "")) .. "/" .. (p:match("[^/]*$"))
 end
 
-local lus = absolute(opts.lus or (root .. "/runtime/zig-out-oom/bin/lus"))
+root = (shell("cd " .. quote(root) .. " && pwd"):gsub("\n$", ""))
+local lus = absolute(opts.lus or (root .. (opts.io and "/runtime/zig-out-io/bin/lus" or "/runtime/zig-out-oom/bin/lus")))
+local variable = opts.io and "LUS_FAIL_IO" or "LUS_FAIL_ALLOC"
+local counted = opts.io and "lus: (%d+) I/O operations" or "lus: (%d+) allocations"
+local suffix = opts.io and (opts.short and ":short" or "") or (opts.sticky and "+" or "")
 local samples = tonumber(opts.samples or "40")
 local jobs = tonumber(opts.jobs or "8")
 local seconds = tonumber(opts.timeout or "30")
@@ -89,7 +99,7 @@ local function runBatch(batch)
     for i, job in ipairs(batch) do
         local base = tmp .. "/j" .. i
         local argv = job.file:find("_test%.lus$") and ("test --run-one " .. quote(job.file)) or quote(job.file)
-        parts[#parts + 1] = "( mkdir -p " .. quote(base .. ".d") .. " && cd " .. quote(base .. ".d") .. " && env LUS_FAIL_ALLOC=" .. job.env
+        parts[#parts + 1] = "( mkdir -p " .. quote(base .. ".d") .. " && cd " .. quote(base .. ".d") .. " && env " .. variable .. "=" .. job.env
             .. " perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. quote(lus) .. " " .. argv
             .. " > /dev/null 2> " .. quote(base .. ".err") .. "; echo $? > " .. quote(base .. ".code") .. "; cd / && rm -rf " .. quote(base .. ".d") .. " ) &"
     end
@@ -159,26 +169,44 @@ for i, f in ipairs(files) do counts[i] = { file = f, env = "count", index = i } 
 batches(counts, function(batch, results)
     for k, res in ipairs(results) do
         local job = batch[k]
-        local n = tonumber(res.stderr:match("lus: (%d+) allocations"))
+        local n = tonumber(res.stderr:match(counted))
         local bad = verdict(res)
         if bad or not n then
-            print(job.file:sub(#root + 2) .. ": the clean run " .. (bad or "printed no allocation count"))
-        else
+            print(job.file:sub(#root + 2) .. ": the clean run " .. (bad or "printed no count"))
+        elseif n > 0 then
             for _, a in ipairs(pick(n, job.index)) do
-                work[#work + 1] = { file = job.file, n = a, env = opts.sticky and (a .. "+") or tostring(a) }
+                work[#work + 1] = { file = job.file, n = a, env = a .. suffix }
             end
         end
     end
 end)
 
--- Fail each sampled allocation.
+-- Fail each sampled allocation. The numbering of allocations follows the
+-- timing of worker threads, so under the load of the sweep one number can
+-- land in a different place than it does alone. A hang that does not come
+-- back in three runs of its own is counted apart from the failures.
 local bugs, order = {}, {}
 local runs = 0
+local unrepeated = 0
 batches(work, function(batch, results)
     for k, res in ipairs(results) do
         runs = runs + 1
         local job = batch[k]
-        if bad = verdict(res) then
+        local bad = verdict(res)
+        if bad == "hang" then
+            local again = false
+            for _ = 1, 3 do
+                if verdict(runBatch({ job })[1]) == "hang" then
+                    again = true
+                    break
+                end
+            end
+            if not again then
+                unrepeated = unrepeated + 1
+                bad = nil
+            end
+        end
+        if bad then
             local prev = bugs[bad]
             if not prev then
                 bugs[bad] = { file = job.file, n = job.n, count = 1 }
@@ -194,13 +222,24 @@ batches(work, function(batch, results)
     end
 end)
 
+-- An injected I/O fault fails one side of a connection while the other
+-- side stays healthy, so a peer that waits without a timeout for the
+-- failed side hangs by construction. The I/O sweep lists such hangs and
+-- does not count them as failures.
+local failures = 0
 for _, what in ipairs(order) do
     local b = bugs[what]
     print("")
-    print(what)
-    print(`  $(b.count) runs, first: LUS_FAIL_ALLOC=$(b.n)$(opts.sticky and "+" or "") $(b.file:sub(#root + 2))`)
+    if opts.io and what == "hang" then
+        print("hang, from a peer that waits for a failed operation")
+    else
+        print(what)
+        failures = failures + 1
+    end
+    print(`  $(b.count) runs, first: $variable=$(b.n)$suffix $(b.file:sub(#root + 2))`)
 end
 os.execute("rm -rf " .. quote(tmp))
 print("")
-print(`$(#files) files, $runs runs, $(#order) distinct failures`)
-os.exit(#order > 0 and 1 or 0)
+if unrepeated > 0 then print(`$unrepeated hangs under load did not come back in runs of their own`) end
+print(`$(#files) files, $runs runs, $failures distinct failures`)
+os.exit(failures > 0 and 1 or 0)

@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
         .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
         .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
+        .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -288,6 +289,7 @@ const Features = struct {
     jit: bool = true,
     op_profile: bool = false,
     fail_alloc: bool = false,
+    fail_io: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -313,6 +315,7 @@ const Features = struct {
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
         options.addOption(bool, "fail_alloc", f.fail_alloc);
+        options.addOption(bool, "fail_io", f.fail_io);
         // The version of the package, which `lus -v` and the User-Agent of
         // network.fetch report.
         options.addOption([]const u8, "version", @import("build.zig.zon").version);
