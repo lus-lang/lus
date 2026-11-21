@@ -150,7 +150,8 @@ const format = target(
 // Numbers parse to values that print and parse back to themselves.
 const numbers = target(
     \\local n = tonumber(S)
-    \\if n and n == n then
+    \\-- As in Lua, an infinity prints as inf, which tonumber does not read.
+    \\if n and n == n and n ~= math.huge and n ~= -math.huge then
     \\    local n2 = tonumber(tostring(n))
     \\    if n2 ~= n or math.type(n2) ~= math.type(n) then fail("tonumber does not read back", S, tostring(n), tostring(n2)) end
     \\end
