@@ -66,6 +66,23 @@ print(pledge("network:http"))   --> false
 
 `lus check` reports a `pledge` that follows the seal with the code `pledge-after-seal`. The person who runs a script can also limit its permissions with `-P` on the command line, as [Granting from the command line](/manual/permissions#granting-from-the-command-line) describes.
 
+### Load dependencies, then restrict
+
+A package runs with the permissions of the program that loads it, so only the main program pledges restrictions and seals. A package documents the permissions its functions use in its header, so the program knows what to pledge. The program loads its dependencies first, while it still holds `load` and `network:http`, then rejects what it no longer needs and seals.
+
+```lus nocheck
+global pledge, require
+
+pledge("load", "network:http=atmosp.here", "fs:read=./data/*")
+
+local dates = require("https://atmosp.here/2.0/dates.lus")
+local csvx = require("https://atmosp.here/2.0/csvx.lus")
+
+pledge("~load", "~network", "seal")
+```
+
+A package never calls `pledge` to acquire a permission, since a program that has sealed would make that call fail. `lus check` reports a call of `pledge` at the top level of a package as `package-pledge`.
+
 ### Run untrusted parts with fewer permissions
 
 When a program runs code from a less trusted source, such as a plugin or a callback from a user, run that code in a coroutine that holds fewer permissions than the program. A coroutine starts with the permissions of its creator, but the rejections and the seal that it makes apply only inside it. The following function runs a plugin that may compute and read files but can never start a process or use the network.

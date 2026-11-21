@@ -112,6 +112,10 @@ The native runtime compiles the functions that run often to machine code. A WebA
 
 The variable `LUS_JIT` in `lus.env` sets the JIT mode of each state, as the environment variable of the same name does for the native runtime. The default is `on`, while `off` interprets every function and `eager` compiles every function on its first call. `LUS_JIT_THRESHOLD` sets the number of times a function runs before it compiles. The option `jit: false` of `Lus.load` creates a host without a compiler, so the module interprets every function.
 
+## Remote modules
+
+The WebAssembly build has no network library, so a `require` of a URL raises `remote modules are unavailable in this build`. A host page that wants a remote module fetches the file itself and stores a loader for it in `package.preload` before the program runs.
+
 ## Related pages
 
 - [Embedding](/manual/embedding) describes the `lus.h` interface that the module exports.

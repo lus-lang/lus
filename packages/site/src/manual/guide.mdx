@@ -3790,6 +3790,25 @@ lus build -o app main.lus
 
 `lus build` reads the source to find every call to `require` whose argument is a literal string, such as `require("shapes")`, then bundles those modules with `main.lus`. A module that the program loads under a computed name is added with `--include`, which takes the same forms as it does for `lus`. Inside the executable, `require` returns bundled modules from memory and needs no permission. [Developer tools](/manual/tools) describes `lus build` in full.
 
+### Modules from the network
+
+A program can use a package that someone else published without copying its files into the project. `require` takes the URL of a module and loads it from the network. The package registry of Lus is `atmosp.here`, where each package has a URL for each release line of Lus. The following program uses the package `dates` for Lus 2.0.
+
+```lus nocheck
+pledge("load", "network:http=atmosp.here")
+
+local dates = require("https://atmosp.here/2.0/dates.lus")
+print(dates.format(dates.parse("2027-03-01")))
+```
+
+The permission `network:http` for the host of the URL lets the program load modules from it. The permission `load` lets it run them. A program that loads modules from the network pledges both, as the first line shows.
+
+`lus` downloads a package once and keeps it in a cache in the Lus home, `~/.lus` by default. Later runs load it from the cache. Before a program starts, `lus` reads it for calls of `require` with a literal URL and downloads those packages at once, so the program never waits for the network in the middle of its work. A `require` whose URL is computed while the program runs still works, but `lus` prints a warning, because that download stops the program until it finishes.
+
+A URL such as `https://atmosp.here/2.0/dates.lus` always loads the newest release of `dates` for Lus 2.0. The registry accepts only releases that fix bugs under that URL, so a program keeps working when a package publishes a new release. A program that needs one exact release adds its version, as in `https://atmosp.here/2.0/dates@1.4.1.lus`. Every release on `atmosp.here` is signed. `lus` refuses a package whose signature or content does not match.
+
+Any web server can serve a module file. `require` downloads it and runs it. A module from such a server may require files beside it by name, as a local module requires files of its project.
+
 ## The environment
 
 The _environment_ of a piece of code is the set of global names it can use: `print`, `math`, `string`, and the globals of the program. Lus keeps these names in an ordinary table. A program may read that table, give a piece of code a different one, or make it read-only.

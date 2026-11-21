@@ -99,6 +99,16 @@ pub fn build(b: *std.Build) void {
     version_run.addFileInput(b.path("../tests/lib/release.mjs"));
     version_step.dependOn(&version_run.step);
 
+    // Remote requires against an atmosphere server and a generic server
+    // served on loopback by ../tests/remote (needs node).
+    const remote_step = b.step("test-remote", "Run remote requires against loopback module servers");
+    const remote_run = b.addSystemCommand(&.{"node"});
+    remote_run.setName("remote requires (loopback servers)");
+    remote_run.addFileArg(b.path("../tests/remote/remote.test.mjs"));
+    remote_run.addArtifactArg(exe);
+    remote_run.addFileInput(b.path("../tests/lib/release.mjs"));
+    remote_step.dependOn(&remote_run.step);
+
     const unit = b.addTest(.{ .root_module = lus_mod });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);

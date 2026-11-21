@@ -80,7 +80,12 @@ export function serve(routes) {
       res.end(JSON.stringify({ error: "not-found", message: `no route ${req.url}` }));
       return;
     }
-    const out = typeof r === "function" ? r(req) : { body: r };
+    const out =
+      typeof r === "function"
+        ? r(req)
+        : typeof r === "string" || Buffer.isBuffer(r)
+          ? { body: r }
+          : r;
     res.writeHead(out.status ?? 200, out.headers ?? {});
     res.end(out.body);
   });

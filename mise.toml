@@ -15,7 +15,7 @@ run = "zig build -Doptimize=ReleaseSafe"
 description = "Run the runtime unit, embedding, tool, and conformance tests"
 dir = "runtime"
 run = [
-  "zig build test test-embed test-bundle test-check test-doc test-debug test-version -Doptimize=ReleaseSafe",
+  "zig build test test-embed test-bundle test-check test-doc test-debug test-version test-remote -Doptimize=ReleaseSafe",
   "zig build -Doptimize=ReleaseSafe",
   "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "LUS_JIT=off zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",

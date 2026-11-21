@@ -30,6 +30,7 @@ Debug builds work but run slowly, because the debug allocator records a stack tr
 - `src/bundle.zig`: the payload format of standalone executables made by `lus build` (`src/tools/build.zig`).
 - `src/tools/version.zig`: `lus version` and `lus +VERSION` (`../spec/tools/version.md`). It uses `src/home.zig` for the Lus home, `src/httpc.zig` for downloads, `src/signed.zig` for signed documents, and `src/semver.zig` for version numbers. `src/release_keys.zig` holds the root keys that every binary trusts.
 - `src/modtree.zig`: the require tree. The CLI indexes the literal requires of the main chunk and compiles every module once before the program runs, and the file searcher of `require` loads a module from the index when it reaches the same file unchanged (`../spec/design/modules.md`, section 2). `lus build` uses its scan to bundle and to leave out unreached modules.
+- `src/remote.zig`: remote modules (`../spec/tools/atmosphere.md`). The process-wide store resolves a module URL through the module cache, the atmosphere protocol, or a generic server, and `require` in `lib/package.zig` checks the permissions and compiles each chunk once. `../tests/remote` drives it with loopback servers (`zig build test-remote`).
 
 ## Writing a native function
 
